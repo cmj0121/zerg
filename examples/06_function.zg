@@ -1,0 +1,58 @@
+#! /usr/bin/env zerg
+#
+# Functions
+
+# The `fn` keyword defines a function. Functions should define the specified types for parameters and return value.
+fn greet(name: str) -> str {
+	return "Hello, {name}!"
+}
+
+# The function may have default parameter values, which are used if the caller doesn't provide an argument for that
+# parameter.
+fn add(a: int, b: int = 0) -> int {
+	return a + b
+}
+
+# Also the function may return more than one value using tuple. The caller can unpack the returned tuple into multiple
+# variables. Note the use of `//` (floor division) rather than `/` — on integers `/` produces a `float`, so the quotient
+# must go through `//` to stay an `int` and satisfy the return type.
+fn divmod(a: int, b: int) -> tuple[int, int] {
+	return (a // b, a % b)
+}
+
+# Tuple patterns in `match`. A tuple pattern mirrors the literal form, so construction and destructuring share one
+# syntax. Patterns can mix literal subpatterns (`(0, b)` — the first element must equal 0) with plain bindings
+# (`(a, b)` — always matches, binds each element to the named variable); `_` ignores an element. As in every other
+# `match`, arms are statements and yield values via `return`, and the block is non-exhaustive — unmatched input
+# silently falls through the compiler-inserted `_ => nop`.
+fn describe(pair: tuple[int, int]) {
+	match pair {
+		(0, 0) => print "zero pair",
+		(0, b) => print "first is zero, second is {b}",
+		(a, 0) => print "second is zero, first is {a}",
+		(a, b) => print "{a} and {b}",
+	}
+}
+
+describe(divmod(10, 3))  # prints "3 and 1"
+
+# In case of a function want to do something side-effecting on the caller's variable, it can take a mutable reference
+# parameter, written `&mut T` in the signature. Two ergonomic rules apply:
+#
+#   - Inside the function body, the parameter is used as if it were a plain `T` — reads and writes auto-deref through
+#     the reference, and Zerg has no explicit `*x` deref operator.
+#   - At the call site, the argument is passed by name with no `&` sigil — the compiler auto-refs it. The argument
+#     MUST itself be a `mut` variable, otherwise the compiler raises an error (you cannot take a mutable reference to
+#     an immutable name).
+#
+# In the functional programming paradigm, it's generally recommended to avoid side effects and mutable state, and
+# the function should be pure, like
+#
+# ```zerg
+# fn increment(x: int) -> int {
+#     return x + 1
+# }
+# ```
+fn increment(x: &mut int) {
+	x = x + 1
+}

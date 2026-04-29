@@ -1,0 +1,39 @@
+#! /usr/bin/env zerg
+#
+# Strings
+#
+# The string is the immutable pre-defined type in Zerg, and it is used to represent text.
+
+name := "Zerg"     # The variable `name` is assigned the string literal "Zerg" and cannot be changed later.
+nick := "{name}y"  # The variable `nick` evaluates the interpolation at assignment time.
+
+template := r"Hi, {name}"  # The raw string that does not support interpolation or escape sequences.
+
+# The long multi-line string that preserves the formatting and can include newlines, tabs, and other whitespace
+# characters without needing escape sequences. It follow the syntax of triple double-quote, and it is useful for writing
+# long text or documentation.
+#
+# It also supports r""" syntax for raw multi-line string too.
+long_text := """
+	This is a multi-line string.
+	It can span multiple lines and preserve the formatting.
+	You can include newlines, tabs, and other whitespace characters without needing escape sequences.
+"""
+
+# The indexing operator `[]` allows you to access individual characters in a string by their position.
+#
+# It always returns the `rune` type, which is the Unicode code point of the character at the specified index. A string
+# is therefore treated as a sequence of Unicode code points, and indexing yields a code point rather than a byte or a
+# substring. `rune` is a distinct 32-bit integer primitive dedicated to Unicode — see `02_variables.zg` for the full
+# set of integer primitives (`byte`, `rune`, `int`). Because `rune` is its own type rather than an alias for `int` or
+# `byte`, mixing raw bytes and Unicode requires explicit conversion.
+ch := long_text[0]
+
+# The single-quoted character literal defaults to `byte` for ASCII and to `rune` for non-ASCII Unicode code
+# points (see `02_variables.zg`). Annotate when you want to override the default — typically to force an ASCII
+# character into a `rune` so a value can hold any Unicode code point uniformly.
+a: byte = 'A'      # explicit annotation that matches the default — `'A'` would also infer to `byte`.
+letter: rune = 'A' # override: force ASCII 'A' into a `rune` instead of the default `byte`.
+
+emoji: rune = '😀'  # explicit annotation that matches the default — non-ASCII literals already infer to `rune`.
+hant: rune = '漢'   # likewise: '漢' is a Unicode code point and defaults to `rune`.

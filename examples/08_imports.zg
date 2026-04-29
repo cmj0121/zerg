@@ -1,0 +1,32 @@
+#! /usr/bin/env zerg
+#
+# Module Imports
+#
+# You can import from stdlib, internal package or external git repository with `import` statement. The imported module's
+# public members are accessed via the module name.
+#
+# You can have multiple import statements to import multiple modules. For easy to maintain the code, it's recommended to
+# group all import statements together at the top of the file, and separate them into different sections for stdlib,
+# internal package and external git repository with a blank line.
+#
+# ```zerg
+# import (
+#	 "math"      # stdlib
+#	 "greeting"  # internal package
+#
+#	 "github.com/username/repo"  # external git repository
+# )
+# ```
+
+# Use import to load a module, then access its members with dot syntax.
+import "math"
+
+# or you can rename the module with `as` to avoid name conflicts or for convenience.
+import "greeting" as greet
+
+# You can also import the external git repository as the module, and the module name is the last
+# segment of the repository path.
+import "github.com/username/repo"
+
+# Access the imported module's public members with dot syntax.
+result := math.sqrt(16.0)

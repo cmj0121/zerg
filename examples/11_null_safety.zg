@@ -1,0 +1,45 @@
+#! /usr/bin/env zerg
+#
+# Null Safety
+#
+# Zerg provides the null safety feature to prevent null reference errors. In Zerg, the `nil` value represents the absence of
+# a value, and variables that can hold `nil` must be explicitly declared as nullable using the `?` syntax.
+#
+# The original motivation is for the Result[T, E] type, which is a common pattern for error handling. The Result type can
+# be defined as follows:
+#
+# ```zerg
+# enum Result[T, E] {
+#     Ok(T)
+#     Err(E)
+# }
+# ```
+#
+# The `Result[T, E]` type can be used to represent the result of an operation that can either succeed with a value of type
+# `T` or fail with an error of type `E`. The `?` syntax is the syntactic sugar for handling the `Result` type, allowing you
+# to easily propagate errors without having to write explicit error handling code. For example:
+fn divide(a: int, b: int) -> Result[int, str] {
+	return Err("Division by zero") if b == 0
+	return Ok(a // b)
+}
+
+# The caller can use the `?` operator to propagate the error if the result is an `Err`, or get the value if it's an `Ok`, like
+# the following example:
+fn calculate() -> Result[int, str] {
+	# The `?` operator will automatically propagate the error if `divide(10, 0)` returns an `Err`, and the function will return
+	# that error. If `divide(10, 0)` returns an `Ok` value, it will be assigned to `x`, and the function will continue to
+	# execute the next line, which returns `Ok(x * 2)`.
+	x := divide(10, 0)?
+	return Ok(x * 2)
+}
+
+# The `Option[T]` type is defined as a special case of `Result[T, nil]`, where the `Err` variant is always `nil`, and
+# the `Ok` variant should always be T. The `T?` syntax is the syntax sugar for `Option[T]`, which is itself the syntax
+# sugar for `Result[T, nil]`, so the following three declarations are equivalent:
+#
+# ```zerg
+# x: int?              = nil
+# x: Option[int]       = nil
+# x: Result[int, nil]  = Err(nil)
+# ```
+x: int? = nil

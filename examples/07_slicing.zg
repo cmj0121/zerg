@@ -1,0 +1,39 @@
+#! /usr/bin/env zerg
+#
+# Indexing and Slicing
+#
+# You can access the elements of a sequence type (like list or string) by their index, and you can also get a
+# subsequence (slice) of the sequence by specifying a range of indices. All of this are defined in the built-in
+# Slicer spec.
+
+array := [10, 20, 30, 40, 50]
+
+x := array[0]      # Access the first element of the array, which is 10.
+y := array[-1]     # Negative indices count from the end; -1 is the last element (50 here).
+z := array[1..3]   # Get a slice of the array from index 1 to index 3 (exclusive), which is [20, 30].
+u := array[..=2]   # Get a slice of the array from the beginning to index 2 (inclusive), which is [10, 20, 30].
+
+# A slice is a non-owning *view* into the original list — it shares storage with the source, not a fresh copy.
+# A view is scope-bound: the compiler refuses any code path where a view would outlive the list it references,
+# which falls out of the scope-owned memory rule (see the README). This matches `&mut T` shown in
+# `06_function.zg` — a handle to data, not a copy of it. Slicing is therefore cheap (no allocation) by default;
+# if you need an owned copy detached from the source's scope, call `.copy()`:
+#
+#     detached := array[1..3].copy()   # owned list[int] with its own storage
+#
+# The `..` range syntax here is the same `..` used for rest-binding in struct update (`09_struct.zg`), struct
+# destructuring (`09_struct.zg`), and list patterns (below) — one marker, one meaning ("the rest of something").
+
+# List patterns in `match` use the same `..` rest marker, and the bound rest is itself a view, consistent with
+# slicing. The arms below cover the common shapes: empty-list, exact-length, and head/tail decomposition. Other
+# forms available include `[first, .., last]` (first and last, middle ignored) and `[_, _, ..]` ("at least N
+# elements"). As elsewhere, `match` is a statement and non-exhaustive — unmatched lists fall through the
+# compiler-inserted `_ => nop`, so a trailing wildcard arm is optional.
+fn summarize(items: list[int]) {
+	match items {
+		[]             => print "empty",
+		[x]            => print "single: {x}",
+		[a, b]         => print "pair: {a}, {b}",
+		[head, ..tail] => print "head={head}, {tail.len()} more",   # tail is a view into items
+	}
+}

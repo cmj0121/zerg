@@ -1,0 +1,28 @@
+#! /usr/bin/env zerg
+#
+# Inline Assembly
+#
+# Zerg provides the inline assembly feature that allows you to write low-level assembly code directly within
+# your Zerg program. This is useful for performance-critical code or when you need to access specific hardware
+# features that are not exposed through the high-level language constructs.
+#
+# NOTE. The syntax of asm are follow GNU assembler (as) syntax, and the assembly code is written inside the asm
+# {  } block. The ${expr} syntax allows you to interpolate byte values from Zerg variables into the assembly code,
+# which can be useful for passing data from Zerg to the assembly code.
+
+msg: list[byte] = [0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x0A]
+
+asm {
+	mov x0, #1            // fd = stdout
+	mov x1, ${msg}        // buf = msg bytes
+	mov x2, #6            // len = 6
+	mov x16, #4           // syscall = write
+	svc #0x80             // trap to kernel
+}
+
+# Exit with code 0
+asm {
+	mov x0, #0            // exit code
+	mov x16, #1           // syscall = exit
+	svc #0x80
+}

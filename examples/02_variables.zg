@@ -1,0 +1,57 @@
+#! /usr/bin/env zerg
+#
+# `:=` declares with type inference; if Zerg cannot easily infer the type, the compiler refuses to guess and
+# raises a compile-time error. In that case, or when you want a type that differs from the default (see the
+# `byte`/`rune` note below), use the annotated form `name: Type = value` instead.
+#
+#  - Default is immutable.
+#  - `mut` allows reassignment.
+#  - `const` is a module-scope sealed name once declared, the name cannot be redeclared or shadowed in the module.
+#  - `pub` exposes a module-level declaration to other modules.
+#  - `mut`, `const`, and `pub` all compose with both `:=` and `: Type =` (e.g. `mut count: int = 0`).
+
+# `_` is the discard placeholder. In an assignment it throws the right-hand side away (no readable name is
+# bound); the same `_` shows up as the wildcard match pattern (`05_control_flow.zg`), an unused loop variable
+# (`12_concurrency.zg`), and inside destructuring patterns (`09_struct.zg`). Same idea everywhere: "I don't
+# care about this position".
+_ := "ignored"
+
+# The primary types of variables in Zerg include:
+flag  := true          # The primary boolean type to store true or false values.
+age   := 42            # The 64-bit signed integer type for whole numbers.
+ascii := 'A'           # The 8-bit unsigned integer type for ASCII characters, represented as a single character literal.
+word  := '世'          # The 32-bit `rune` type, reserved for Unicode code points, represented as a single character literal.
+name  := "Zerg"        # The immutable string type for sequences of characters, enclosed in double quotes.
+pi    := 3.14          # The 64-bit floating-point type for decimal numbers.
+
+# Zerg intentionally ships with only three integer primitives: `byte` (8-bit unsigned, for raw byte work), `rune`
+# (32-bit, reserved for Unicode code points), and `int` (64-bit signed, for general arithmetic). There is no `i16`,
+# `u32`, `f32`, etc. — code that needs a specific width beyond these (for FFI, parsing, encoding, or the inline asm
+# in `13_asm.zg`) is built by hand from `list[byte]`. The three primitives are distinct types, not aliases for each
+# other, so mixing them requires explicit conversion. This keeps the core type set small and makes the cost of
+# multi-width work visible at the call site rather than hidden behind a proliferation of named integer types.
+
+# A single-quoted character literal defaults to `byte` for ASCII (anything that fits in 8 bits) and to `rune` for
+# non-ASCII Unicode code points. Use the annotated form to override the default — e.g. when you want an ASCII
+# character to be treated as a `rune` for unified Unicode handling:
+upper: rune = 'A'    # force ASCII 'A' into a `rune` instead of the default `byte`.
+
+# The following are examples of integer literals in different numeral systems:
+hex := 0xFF           # Hexadecimal integer literal.
+bin := 0b1010_0011    # Binary integer literal with digit separator.
+oct := 0o755          # Octal integer literal.
+big := 1_000_000      # Integer literal with digit separator for readability.
+
+# The mutable variable `count` is initialized to 0 and can be reassigned later.
+mut count := 0     # mutable variable `count` initialized to 0 and can be reassigned later.
+count = count + 1  # Reassignment using standard addition.
+
+const MAX_ITEMS := 1024  # A constant named `MAX_ITEMS` that cannot be reassigned or shadowed in the module.
+pub const VERSION := "1.0"  # public + immutable + sealed: the canonical "public constant".
+pub default_lang := "en"    # public + immutable but not sealed; can be shadowed in the module.
+
+# The built-in collection types include: list, tuple, set, map, and channel.
+l := [1, 2, 3]          # The list literal with square brackets, which is an ordered collection of the same type of elements.
+s := {1, 2, 3}          # The set literal with curly braces, which is an unordered collection of unique elements.
+t := (1, "two", 3.0)    # The tuple literal with parentheses, which is an ordered collection of heterogeneous elements.
+m := {"a": 1, "b": 2}   # The map literal with curly braces and key-value pairs, which is a collection of key-value pairs.

@@ -1,0 +1,180 @@
+#! /usr/bin/env zerg
+#
+# Structs, implements, and enumerations
+
+import "math"
+
+# The private struct `Point` with two fields `x` and `y`, both of type `float`.
+# The `struct` keyword without `pub` means the name `Point` cannot be referenced from other modules — the type
+# itself is module-local. Struct visibility and method visibility (see the `impl Point` block below) are two
+# independent axes: a private struct can still have `pub` methods, which distinguishes "callable by any holder
+# of a Point" from "private helper callable only from within the struct itself via `this`".
+struct Point {
+	x: float
+	y: float
+}
+
+# The constructor to build the structure literal with field names and values.
+point := Point { x: 3.0, y: 4.0 }
+
+# And allow to construct the struct by copy from another struct with the same type, and override some
+# fields with new values.
+#
+# The .. syntax is called "struct update syntax" and it allows to create a new struct by copying an existing
+# one and overriding some fields.
+dup := Point { x : 1.0, .. point }
+
+# The Enumeration `Color` with three variants `Red`, `Green`, `Blue` and Custom with a tuple of three `int` values.
+#
+# The struct/enum variants can be defined as public or private, and the public variants can be accessed outside of
+# the module.
+pub enum Color {
+	# The following three variants are simple unit-like variants, which means they don't have any associated data
+	# and can be used as constants.
+	Red
+	Green
+	Blue
+
+	# The customizable variant `Custom` that can hold a tuple of three `int` values representing RGB color components.
+	# This allows you to create a color with specific RGB values.
+	Custom(int, int, int)
+}
+
+red  := Color.Red
+grey := Color.Custom(128, 128, 128)
+
+# The public function that allow to convert a `Color` enum instance to its red component.
+#
+# You may also define the function as a method in the `impl` block of the `Color` enum, and call it by dot syntax on the
+# `Color` instance, like `red.to_red()` or `grey.to_red()`.
+#
+# ```zerg
+# impl Color {
+#     pub fn to_red() -> int {
+#         match this {
+#             Color.Red => return 255,
+#             Color.Green => return 0,
+#             Color.Blue => return 0,
+#             Color.Custom(r, _, _) => return r,
+#         }
+#
+#         return 0  # fallback for unmatched variants (see the note below on non-exhaustive match)
+#     }
+# }
+# ```
+pub fn to_red(c: Color) -> int {
+	# The match also can be used to destructure the enum variants and extract the associated data. In this example,
+	# we match on the `Color` enum and return the red component of the color.
+	#
+	# `match` is always a statement in Zerg — it never produces a value. Arms that need to yield a value do so via
+	# `return`, assignment, or any other statement. See `05_control_flow.zg` for the full rule, including the
+	# compiler-inserted `_ => nop` that makes `match` non-exhaustive by default.
+	match c {
+		Color.Red => return 255,
+		Color.Green => return 0,
+		Color.Blue => return 0,
+		# The `_` is the reserved wildcard pattern that matches any value without binding it to a variable.
+		# Also it cannot be used in the same match arm with other patterns.
+		Color.Custom(r, _, _) => return r,
+	}
+
+	# Because `match` is non-exhaustive, execution continues past the block if no arm fired. A concrete return is
+	# required so the function always produces an `int`.
+	return 0
+}
+
+# "Or-pattern" equivalent via guard + `in`. Zerg has no dedicated `A | B =>` or-pattern form; instead, arms that share
+# a body for several alternatives use a binding (`c`) plus a guard (`if c in (...)`) that reuses the `in` membership
+# operator from `04_operator.zg`. Both `Color.Green` and `Color.Blue` map to "cool" below without duplicating the arm's
+# body, while `Color.Red` and `Color.Custom(_, _, _)` keep their own arms.
+fn temperature(c: Color) -> str {
+	match c {
+		Color.Red                           => return "warm",
+		c if c in (Color.Green, Color.Blue) => return "cool",
+		Color.Custom(_, _, _)               => return "custom",
+	}
+
+	return "unknown"
+}
+
+# Struct destructuring inside a match arm. A pattern can name a struct and break it into fields, mixing literal
+# subpatterns (`x: 0.0` — the arm fires only if that field equals 0.0) with plain bindings (`x` — always matches,
+# binds the field value to the name `x` for use inside the arm). The `..` rest pattern ignores any fields not
+# explicitly listed, mirroring the struct update syntax shown earlier (`Point { x: 1.0, .. point }`).
+#
+# The `classify` function demonstrates each form. Even though the final arm `Point { x, y }` binds both fields and
+# therefore matches every `Point`, `match` remains non-exhaustive from the compiler's perspective — it does not
+# perform case analysis on the patterns — so a trailing `return` is still required to satisfy the `-> str` signature.
+fn classify(p: Point) -> str {
+	match p {
+		Point { x: 0.0, y: 0.0 } => return "origin",
+		Point { x: 0.0, y }      => return "on y-axis at {y}",
+		Point { x, y: 0.0 }      => return "on x-axis at {x}",
+		Point { x, y }           => return "at ({x}, {y})",
+	}
+
+	return "unreachable"
+}
+
+# Nested patterns. Sub-patterns compose to any depth: struct patterns may appear inside enum patterns, enum patterns
+# inside tuple patterns, list patterns may contain any of these, and so on. Each sub-pattern position accepts exactly
+# what a top-level pattern accepts — literals, bindings, `_`, `..`, guards — so a reader only has to learn one pattern
+# language and apply it recursively.
+#
+# The `Shape` enum below wraps one or two `Point` values in its variants, and `describe_shape` reaches into the
+# payload directly (for example `Shape.Dot(Point { x: 0.0, y: 0.0 })`) instead of matching the variant first and then
+# destructuring its payload in a separate step.
+enum Shape {
+	Dot(Point)
+	Line(Point, Point)
+}
+
+fn describe_shape(s: Shape) -> str {
+	match s {
+		Shape.Dot(Point { x: 0.0, y: 0.0 })   => return "dot at origin",
+		Shape.Dot(Point { x, y })             => return "dot at ({x}, {y})",
+		Shape.Line(Point { x: 0.0, .. }, end) => return "line from y-axis to ({end.x}, {end.y})",
+		Shape.Line(start, end)                => return "line ({start.x},{start.y}) -> ({end.x},{end.y})",
+	}
+
+	return "unknown"
+}
+
+
+# Also the struct / enum can define the methods by `impl` block, and the method can be called by dot syntax on the
+# struct / enum instance.
+impl Point {
+	# The `pub` keyword makes the method part of the struct's public interface: any code that holds a `Point`
+	# instance can call it with dot syntax. Without `pub`, the method is private to the struct itself and can
+	# only be called from another method of the same struct (via `this`) — module-level code cannot reach it
+	# even though the struct is defined in the same module. This is orthogonal to whether the struct itself
+	# is `pub`: a private struct with `pub` methods still has those methods reachable by any in-module holder
+	# of a `Point`, while its private methods remain callable only from inside the struct.
+	pub fn distance() -> float {
+		# The `this` keyword refers to the instance of the struct that the method is being called on. In this example,
+		# it allows us to access the `x` and `y` fields of the `Point` instance.
+		#
+		# Note: without the `this` keyword, we would not be able to access the fields of the struct, and the method would
+		# not work correctly. The `this` keyword is essential for defining methods that operate on the data contained within
+		# the struct.
+		#
+		# NOTE: `sqrt` lives in the `math` module imported at the top of this file (see `08_imports.zg`).
+		return math.sqrt(this.x * this.x + this.y * this.y)
+	}
+
+	# You may also define the mutable method to update the instance itself, and it can be called by dot syntax on the struct
+	# instance, like `point.move(1.0, 2.0)`. The mutable method can only be called on the mutable instance, otherwise the Zerg
+	# will raise a compile-time error.
+	#
+	# ```zerg
+	# mut point := Point { x: 3.0, y: 4.0 }
+	# point.move(1.0, 2.0)  # This will update the `point` instance to have new values of x and y.
+	#
+	# dup := Point { .. point }
+	# dup.move(1.0, 2.0)  # This will raise compile-time error because `dup` is not mutable.
+	# ```
+	pub mut fn move(dx: float, dy: float) {
+		this.x = this.x + dx
+		this.y = this.y + dy
+	}
+}

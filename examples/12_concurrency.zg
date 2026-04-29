@@ -1,0 +1,63 @@
+#! /usr/bin/env zerg
+#
+# Concurrency
+#
+# Spawns a fire-and-forget task and communicates via channels and closures only capture immutable variables.
+
+fn spawn_bump(count: int) {
+	for i in 0..count {
+		# Spawn a new concurrent task using the `spawn` keyword. The task executes the provided function (fire-and-forget).
+		#
+		# The concurrent task will run independently of the main thread, not sharing any mutable state, and will not block
+		# the main thread.
+		spawn fn(id: int) {
+			print id
+		}(i)
+	}
+}
+
+
+fn fibonacci(n: int) {
+	# The channel is the runtime type and it can be used inside the concurrent task.
+	#
+	# You can send the data into channel by `ch <- value` and receive the data from channel by `<- ch`.
+	ch := chan[int]()
+
+	spawn fn() {
+		mut a := 0
+		mut b := 1
+
+		# Use `_` as the placeholder for the loop variable when it is not needed.
+		for _ in 0..n {
+			# always send the current value of `a` to the channel `ch`. The send operation will block if the channel is
+			# unbuffered.
+			#
+			# You can define the buffered channel by `chan[T](size)`, where `size` is the capacity of the buffer.
+			ch <- a
+
+			# The syntax sugar to swap the values of `a` and `b`, without redundant temporary variable.
+			a, b = b, a + b
+		}
+
+		# explicitly close the channel and return a nil value when trying to receive from the closed channel.
+		# Also can use `for v in ch` to receive all values from the channel until it is closed.
+		close(ch)
+	}()
+
+	# You can just iterate the channel `ch` to receive all values sent by the concurrent task until the channel is closed,
+	# and the loop will automatically break when the channel is closed and there are no more values to receive in the buffer.
+	#
+	# It is the syntax sugar for a loop that continuously receives values from the channel until it is closed.
+	#
+	# ```zerg
+	# for {
+	#     v := <- ch
+	#     break if v == nil
+	#
+	#     print v
+	# }
+	# ```
+	for v in ch {
+		print v
+	}
+}

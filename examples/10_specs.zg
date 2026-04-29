@@ -1,0 +1,142 @@
+#! /usr/bin/env zerg
+#
+# Specifications
+#
+# The `spec` keyword defines a contract that types can implement. The functions can accept any type that follow the
+# contract can call the functions defined in the spec. The spec is a powerful tool for defining interfaces and ensuring
+# that types adhere to a specific set of behaviors.
+#
+# It allows for polymorphism and code reuse, any function that accepts a instance of a spec is search by the following order:
+#
+#   1. The function implementation in the type itself for the spec.
+#   2. The default implementation defined in the spec, if there is any.
+#   3. Raise the `NotImplemented` error.
+
+# The `spec` keyword defines a specification, which is a contract that types can implement. Any type that implements a
+# spec must provide explicit implementations the spec's functions, the missing implementation will be considered as
+# `NotImplemented` and will raise an error if called. It is the syntax sugar for defining a large spec but only focus
+# on a few functions, and reduce the redundant non-implemented functions.
+#
+# For example, there is a struct `Point`. Without `impl Point for Printable {}`, the `Point` instance cannot be considered
+# as a `Printable` type, and Zerg will raise an compile-time error if you try to pass it to a function that required.
+#
+# Without well-implemented specs, like only implement the spec but not implement the required functions, the Zerg can
+# compile the code successfully, and treat the type as a `Printable` type, but it will raise a runtime error if you try
+# to call the function defined in the spec.
+spec Printable {
+	fn to_string() -> str
+}
+
+# You can define the spec with the generic type parameter, and the function can also use the generic type parameter.
+# The Iterator spec defines a contract for types that can be iterated over, and the `next` function is expected to return
+# the next value in the iteration, or `nil` if there are no more values to iterate over.
+#
+# Any type that implements `Iterator[T]` can be used directly in a `for n in m` loop. Built-in types like ranges and
+# channels implement this spec automatically, so `for i in 0..5` and `for v in ch` work out of the box.
+spec Iterator[T] {
+	fn next() -> T?
+}
+
+
+# The `spec` also can define the default implementation for the functions, for the functions that are not implemented by the
+# type, it will use the default implementation.
+spec Hashable {
+	fn hash() -> int {
+		return 0
+	}
+}
+
+# Specs are flat: one spec cannot extend or require another spec (there is no `spec Ord: Eq { ... }` form). If a function
+# needs a type that satisfies more than one spec, it expresses that at the call site with a multi-bound generic — for
+# example `fn sort[T: Eq + Ord](items: list[T])` — rather than baking the relationship into the spec definitions. This
+# keeps each spec self-contained and free of hidden coupling, at the cost of callers spelling out every spec they rely on.
+
+# The empty structure `Demo` is defined, and it implements the `Printable` spec. This means that any instance of `Demo` can be
+# treated as a `Printable` type.
+#
+# Each `impl Type for Spec` block names exactly one spec. A type that needs to satisfy multiple specs must write one separate
+# `impl` block per spec — there is no combined `impl Type for Spec1, Spec2 { ... }` form. This keeps each block self-contained
+# and makes it unambiguous which method belongs to which spec, at the cost of a little extra boilerplate.
+struct Demo {}
+
+impl Demo for Printable {
+	fn to_string() -> str {
+		return "This is a demo struct."
+	}
+}
+
+# The function `display` is a generic function that takes a type parameter `T` constrained by the `Printable` spec. This means
+# that any type `T` passed to the `display` function must follow the contract defined by the `Printable` spec.
+fn display[T: Printable](item: T) {
+	print item.to_string()
+}
+
+# The `Default` struct implements `Hashable` without providing the `hash` method. Because `Hashable` defines a default
+# implementation for `hash`, the missing method is considered implemented by the default, and calling `hash()` on a `Default`
+# instance is safe — it returns 0, the value from the default implementation.
+struct Default {}
+
+impl Default for Hashable {}
+
+# The `Counter` struct implements `Hashable` and provides its own `hash` method, which overrides the default implementation.
+# When `hash()` is called on a `Counter` instance, the overridden implementation is used instead of the default one. The
+# resolution order — type's own impl, then spec default, then `NotImplemented` — is applied per-method, so a single impl
+# block can mix overridden and inherited methods freely.
+struct Counter {
+	count: int
+}
+
+impl Counter for Hashable {
+	fn hash() -> int {
+		return this.count
+	}
+}
+
+print Default {}.hash()           # 0  — inherited from the spec default
+print Counter { count: 42 }.hash()  # 42 — overridden by the type's own impl
+
+# Multi-bound generic. A type parameter can be constrained by more than one spec using `+` as the separator, which reads
+# as "all of these specs must be satisfied". Because specs are flat (no inheritance), this is the only way to express a
+# combined requirement. Here `show` accepts any `T` that is both `Printable` and `Hashable`, and can therefore call
+# methods from either spec on the same value. `Counter` already impls `Hashable` above; an additional `impl` block makes
+# it `Printable` too, and each spec has its own block (see the "one spec per impl block" rule earlier).
+impl Counter for Printable {
+	fn to_string() -> str {
+		return "Counter({this.count})"
+	}
+}
+
+fn show[T: Printable + Hashable](x: T) {
+	print x.to_string()
+	print x.hash()
+}
+
+show(Counter { count: 7 })  # prints "Counter(7)" then 7
+
+# A spec can also be used directly as a type, not only as a generic bound. Writing `list[Printable]`, `item: Printable`,
+# or `fn f(x: Printable)` means "any concrete type that implements Printable", with the actual type resolved at runtime.
+# The compiler picks the dispatch strategy from context:
+#
+#   - Spec used as a bound (`fn f[T: Printable](x: T)`): monomorphized to the concrete `T` at each call site. No runtime
+#     lookup, no per-element type tag — the usual zero-cost generic.
+#   - Spec used as a type (`fn f(x: Printable)`, `list[Printable]`): dispatched at runtime via a vtable. Each value
+#     carries enough information for the runtime to find the correct method implementation.
+#
+# The second form lets a single collection hold values whose concrete types differ, as long as every value satisfies the
+# spec. Below, `items` mixes `Counter` and `Demo` — both implement `Printable`, but they are otherwise unrelated types.
+items: list[Printable] = [Counter { count: 1 }, Counter { count: 2 }, Demo {}]
+
+for item in items {
+	print item.to_string()  # dispatched at runtime — each element may be a different concrete type
+}
+
+# Finale: a deliberate runtime panic. The `Broken` struct implements `Printable` but provides no `to_string` method. The
+# compiler still treats `Broken` as `Printable` and compiles successfully, so the missing method only surfaces when it is
+# actually invoked — at which point the `NotImplemented` stub panics the current task. Placed last on purpose: every demo
+# above (default-impl inheritance, override, multi-bound generic, runtime polymorphism via `list[Printable]`) runs cleanly
+# before this line crashes the program.
+struct Broken {}
+
+impl Broken for Printable {}
+
+display(Broken {})  # runtime error: NotImplemented — program ends here

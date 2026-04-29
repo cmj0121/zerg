@@ -1,0 +1,5 @@
+#! /usr/bin/env zerg
+#
+# The first Zerg program that does nothing. It doesn't even print anything,
+# and only build the minimal possible Zerg program.
+nop

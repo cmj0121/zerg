@@ -136,9 +136,10 @@ hi def link zergRune                Character
 
 " Inside `"{name}"` interpolation, characters that don't match a more
 " specific contained group (typically the variable identifier itself)
-" render as Identifier so the interpolated expression stands out from
-" the surrounding string literal.
-hi def link zergStringInterp        Identifier
+" render as PreProc — softer than Special and matches the Python
+" f-string convention, while still standing out from the surrounding
+" String highlight.
+hi def link zergStringInterp        PreProc
 
 " Asm block content not matching a more specific contained group renders
 " plainly — most asm mnemonics and registers fall here.

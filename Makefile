@@ -1,6 +1,6 @@
-SUBDIR :=
+SUBDIR := editors
 
-.PHONY: all clean test run build upgrade help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade help $(SUBDIR)
 
 all: $(SUBDIR) 		# default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -14,6 +14,10 @@ test:				# run test
 run:				# run in the local environment
 
 build:				# build the binary/library
+
+install: $(SUBDIR)	# install editor integrations (use DEST=... to override)
+
+uninstall: $(SUBDIR)	# uninstall editor integrations
 
 upgrade:			# upgrade all the necessary packages
 	pre-commit autoupdate

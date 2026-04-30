@@ -64,16 +64,18 @@ syn region  zergStringInterp    contained matchgroup=zergStringInterpDelim
                               \ start=+{+ end=+}+
                               \ contains=TOP,zergComment,zergDocComment
 
-" Triple-quoted multi-line string. Defined before single-quote so the
-" longer delimiter wins on ambiguous opens.
-syn region  zergMultiString     start=+"""+ end=+"""+
-                              \ contains=zergStringEscape,zergStringInterp,@Spell
-
 " Raw string: r"..." — no escapes, no interpolation.
 syn region  zergRawString       matchgroup=zergRawStringDelim
                               \ start=+r"+ end=+"+ oneline
 
 syn region  zergString          start=+"+ skip=+\\"+ end=+"+ oneline
+                              \ contains=zergStringEscape,zergStringInterp,@Spell
+
+" Triple-quoted multi-line string. Defined LAST so on input `"""` it
+" wins over the single-quote zergString region (vim's region priority
+" is: later-defined item wins when multiple regions match at the same
+" position).
+syn region  zergMultiString     start=+"""+ end=+"""+
                               \ contains=zergStringEscape,zergStringInterp,@Spell
 
 " ── Runes ──────────────────────────────────────────────────
@@ -132,9 +134,14 @@ hi def link zergStringInterpDelim   Special
 
 hi def link zergRune                Character
 
-" Region containers — content inside that doesn't match a more specific
-" rule should render with normal text colour (no special styling).
-hi def link zergStringInterp        Normal
+" Inside `"{name}"` interpolation, characters that don't match a more
+" specific contained group (typically the variable identifier itself)
+" render as Identifier so the interpolated expression stands out from
+" the surrounding string literal.
+hi def link zergStringInterp        Identifier
+
+" Asm block content not matching a more specific contained group renders
+" plainly — most asm mnemonics and registers fall here.
 hi def link zergAsmBlock            Normal
 
 hi def link zergAsmComment          Comment

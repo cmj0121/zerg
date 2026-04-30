@@ -18,6 +18,11 @@ help:				# show this message
 		awk 'BEGIN {FS = ":.*?#"} {printf "    %-12s %s\n", $$1, $$2}'
 	@printf "\nCurrent DEST = $(DEST)\n"
 
-%.vim:
+# Pattern rule: the destination depends on the in-tree source so make
+# re-copies whenever the source is newer (e.g. after editing the syntax
+# file). Without the explicit prerequisite, `make install` would be a
+# no-op once the destination exists.
+$(DEST)/%.vim: %.vim
 	@install -d $(dir $@)
-	@install -m644 $(subst $(DEST)/,,$@) $@
+	@install -m644 $< $@
+	@echo "  install  $@"

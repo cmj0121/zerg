@@ -25,11 +25,17 @@ syn keyword zergKeyword         nop print spawn
 
 " ── Storage / declaration ──────────────────────────────────
 syn keyword zergStorageClass    pub mut const
-syn keyword zergStructure       struct enum spec impl
 
-" Function declaration: highlight name after `fn`
-syn keyword zergKeyword         fn nextgroup=zergFuncName skipwhite
-syn match   zergFuncName        contained "\<\h\w*\>"
+" Type and function declarations — the IDENT immediately following
+" any of `fn`, `struct`, `enum`, `spec` is captured as zergDeclName
+" and rendered with the same Function highlight (treating type names
+" and function names uniformly at their declaration site).
+" `impl` is intentionally excluded: the IDENT after `impl` references
+" an existing type rather than declaring a new one.
+syn keyword zergStructure       struct enum spec nextgroup=zergDeclName skipwhite
+syn keyword zergStructure       impl
+syn keyword zergKeyword         fn nextgroup=zergDeclName skipwhite
+syn match   zergDeclName        contained "\<\h\w*\>"
 
 " ── Constants and identifiers ──────────────────────────────
 syn keyword zergBoolean         true false
@@ -113,7 +119,7 @@ hi def link zergKeyword             Keyword
 hi def link zergStorageClass        StorageClass
 hi def link zergStructure           Structure
 
-hi def link zergFuncName            Function
+hi def link zergDeclName            Function
 
 hi def link zergBoolean             Boolean
 hi def link zergConstant            Constant

@@ -100,16 +100,53 @@ syn match   zergRune            "'\\[\"'\\nrt0{]'"
 syn match   zergRune            "'[^\\']'"
 
 " ── Inline asm block ───────────────────────────────────────
-" Inside asm, `#` is the ARM immediate prefix and must NOT be highlighted
-" as a Zerg comment. Use `//` for asm line comments. `${expr}` interpolates.
-syn region  zergAsmBlock        matchgroup=zergKeyword
-                              \ start=+\<asm\>\s*{+ end=+}+
-                              \ contains=zergAsmComment,zergAsmInterp,zergAsmImmediate
-syn match   zergAsmComment      contained "//.*$"
-syn match   zergAsmImmediate    contained "#-\?[0-9][0-9A-Fa-fx_]*\>"
+" ARM64 GNU as embedded inside `asm { ... }`. Recognises mnemonics,
+" registers, immediates (#imm), labels, directives, comments, and
+" strings. The `#` character is the ARM immediate prefix and must
+" NOT be treated as a Zerg comment, so the generic asm.vim cannot
+" be reused — these rules are tailored to ARM64.
+" `${expr}` interpolates Zerg-side syntax.
+
+syn keyword zergAsmTodo         contained TODO FIXME XXX NOTE
+
+" Mnemonic: any line-leading word. Defined first so a label (which
+" extends one char further to consume the `:`) wins on conflict.
+syn match   zergAsmMnemonic     contained "^\s*\zs\<\h\w*\>"
+
+" Label: line-leading word followed by `:`.
+syn match   zergAsmLabel        contained "^\s*\zs\<\h\w*\>:"he=e-1
+
+" Register: x0..x30, w0..w30, plus named registers.
+syn match   zergAsmRegister     contained "\c\<[xw]\d\+\>"
+syn match   zergAsmRegister     contained "\c\<\(sp\|lr\|pc\|fp\|xzr\|wzr\)\>"
+
+" Immediate: #-prefixed number (decimal, hex, binary).
+syn match   zergAsmImmediate    contained "#[+-]\?\(0[xX][0-9A-Fa-f_]\+\|0[bB][01_]\+\|\d[0-9_]*\)"
+
+" Directives: .text, .global, .word, etc.
+syn match   zergAsmDirective    contained "\.\h\w*"
+
+" Comments: `//` line, `/* */` block.
+syn match   zergAsmLineComment  contained "//.*$" contains=zergAsmTodo,@Spell
+syn region  zergAsmBlockComment contained start=+/\*+ end=+\*/+ contains=zergAsmTodo,@Spell
+
+" Numbers in non-immediate context (e.g. inside .word 0x100).
+syn match   zergAsmNumber       contained "\<0[xX][0-9A-Fa-f_]\+\>"
+syn match   zergAsmNumber       contained "\<0[bB][01_]\+\>"
+syn match   zergAsmNumber       contained "\<\d[0-9_]*\>"
+
+" String literals inside asm (e.g. `.ascii "msg"`).
+syn region  zergAsmString       contained start=+"+ skip=+\\"+ end=+"+ oneline
+
+" Zerg-side `${expr}` interpolation. Lives only inside asm blocks.
 syn region  zergAsmInterp       contained matchgroup=zergStringInterpDelim
                               \ start=+\${+ end=+}+
                               \ contains=TOP,zergComment,zergDocComment
+
+" The asm block region. `asm` itself highlights via matchgroup.
+syn region  zergAsmBlock        matchgroup=zergKeyword
+                              \ start=+\<asm\>\s*{+ end=+}+
+                              \ contains=zergAsmMnemonic,zergAsmLabel,zergAsmRegister,zergAsmImmediate,zergAsmDirective,zergAsmLineComment,zergAsmBlockComment,zergAsmNumber,zergAsmString,zergAsmInterp,zergAsmTodo
 
 " ── Operators (symbolic) ───────────────────────────────────
 " Multi-char first so the longer match wins.
@@ -161,12 +198,20 @@ hi def link zergRune                Character
 hi def link zergStringInterp        PreProc
 
 " Asm block content not matching a more specific contained group renders
-" plainly — most asm mnemonics and registers fall here.
+" plainly — punctuation (commas, brackets) and unrecognised tokens.
 hi def link zergAsmBlock            Normal
 
-hi def link zergAsmComment          Comment
-hi def link zergAsmInterp           Special
+hi def link zergAsmMnemonic         Statement
+hi def link zergAsmLabel            Label
+hi def link zergAsmRegister         Identifier
 hi def link zergAsmImmediate        Number
+hi def link zergAsmNumber           Number
+hi def link zergAsmDirective        PreProc
+hi def link zergAsmLineComment      Comment
+hi def link zergAsmBlockComment     Comment
+hi def link zergAsmString           String
+hi def link zergAsmTodo             Todo
+hi def link zergAsmInterp           Special
 
 let b:current_syntax = "zerg"
 

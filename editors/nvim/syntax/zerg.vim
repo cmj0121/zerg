@@ -27,15 +27,26 @@ syn keyword zergKeyword         nop print spawn
 syn keyword zergStorageClass    pub mut const
 
 " Type and function declarations — the IDENT immediately following
-" any of `fn`, `struct`, `enum`, `spec` is captured as zergDeclName
-" and rendered with the same Function highlight (treating type names
-" and function names uniformly at their declaration site).
-" `impl` is intentionally excluded: the IDENT after `impl` references
-" an existing type rather than declaring a new one.
-syn keyword zergStructure       struct enum spec nextgroup=zergDeclName skipwhite
+" any of `fn`, `struct`, `spec` is captured as zergDeclName and
+" rendered with the Function highlight. `enum` follows a separate
+" chain so that, after the enum name, a body region recognises
+" line-leading variant names. `impl` is intentionally excluded: the
+" IDENT after `impl` references an existing type rather than
+" declaring a new one.
+syn keyword zergStructure       struct spec nextgroup=zergDeclName skipwhite
+syn keyword zergStructure       enum nextgroup=zergEnumName skipwhite
 syn keyword zergStructure       impl
 syn keyword zergKeyword         fn nextgroup=zergDeclName skipwhite
 syn match   zergDeclName        contained "\<\h\w*\>"
+syn match   zergEnumName        contained "\<\h\w*\>"
+                              \ nextgroup=zergEnumBody skipwhite skipnl
+
+" Enum body — line-leading IDENT followed by `(`, end of line, or
+" `#` is a variant name. Type names and other content inside the
+" body keep their usual highlighting via the contains list.
+syn region  zergEnumBody        contained start=+{+ end=+}+
+                              \ contains=zergEnumVariant,zergType,zergComment,zergDocComment,zergStorageClass,zergKeyword,zergStructure,zergOperator,zergNumber,zergFloat,zergConstant,zergBoolean,zergSelf,zergString,zergMultiString,zergRawString,zergRune
+syn match   zergEnumVariant     contained "\v^\s*\zs<\h\w*>\ze\s*(\(|$|#)"
 
 " ── Constants and identifiers ──────────────────────────────
 syn keyword zergBoolean         true false
@@ -120,6 +131,8 @@ hi def link zergStorageClass        StorageClass
 hi def link zergStructure           Structure
 
 hi def link zergDeclName            Function
+hi def link zergEnumName            Function
+hi def link zergEnumVariant         Constant
 
 hi def link zergBoolean             Boolean
 hi def link zergConstant            Constant

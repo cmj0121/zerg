@@ -18,6 +18,29 @@ problems with simplicity.
 | strongly typed   | catch errors at compile time                        |
 | copy-by-value    | values are copied by default; compiler may optimize |
 
+## Roadmap
+
+Zerg has a long-term vision of being a general-purpose systems programming language, but the initial
+focus is on building a workable prototype with a minimal feature set:
+
+### Pre-1.0
+
+- [ ] **v0.0** — toolchain bootstrap.
+- [ ] **v0.1** — procedural core.
+- [ ] **v0.2** — composite data.
+- [ ] **v0.3** — borrow checking.
+- [ ] **v0.4** — polymorphism and errors.
+- [ ] **v0.5** — modules.
+- [ ] **v0.6** — generics and null-safety.
+- [ ] **v0.7** — concurrency runtime.
+- [ ] **v0.8** — standard library.
+- [ ] **v0.9** — developer tooling.
+- [ ] **v0.10** — hardening and language reference.
+- [ ] **v1.0** — source stability.
+
+A phase ships when each example's stdout matches between `zerg run` and `zerg build` — byte-identical
+for sequential code, equivalent under any valid scheduling for concurrent code.
+
 ## DDD (Dream-Driven Development)
 
 This project is based on the DDD (dream-driven development) methodology which means

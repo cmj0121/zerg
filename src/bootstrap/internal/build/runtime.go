@@ -51,8 +51,9 @@ static zerg_str zerg_str_concat(zerg_str a, zerg_str b) {
 }
 
 /* The four print helpers mirror PLAN.md's print format table: %lld for int,
-   %g for float (matches Go's strconv.FormatFloat(x, 'g', -1, 64) for finite
-   inputs), "true"/"false" for bool, raw bytes plus '\n' for str. */
+   %.17g for float (17 sig digits guarantees byte-identical output with Go's
+   strconv.FormatFloat(x, 'g', 17, 64) for every finite double), "true" /
+   "false" for bool, raw bytes plus '\n' for str. */
 static void zerg_print_int(int64_t x) { printf("%lld\n", (long long)x); }
 
 static void zerg_print_float(double x) {

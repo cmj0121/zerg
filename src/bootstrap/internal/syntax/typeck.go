@@ -926,7 +926,7 @@ func (c *checker) checkBlock(b *Block) error {
 // checkFnDecl walks a top-level function body.
 func (c *checker) checkFnDecl(fn *FnDecl) error {
 	if c.currentFn != nil {
-		return typeErr(fn.Pos, "nested functions are not supported at v0.1")
+		return typeErr(fn.Pos, "nested functions are not supported")
 	}
 	sig := c.fns[fn.Name]
 	c.currentFn = &sig
@@ -1204,7 +1204,7 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		e.setType(t)
 		return t, nil
 	case *RangeExpr:
-		return nil, typeErr(e.Pos, "range expressions cannot be used as values at v0.1")
+		return nil, typeErr(e.Pos, "range expressions cannot be used as values")
 	case *ListLit:
 		return c.checkListLit(e, hint)
 	case *TupleLit:
@@ -1506,7 +1506,7 @@ func (c *checker) checkUnary(e *UnaryExpr) (*Type, error) {
 func (c *checker) checkCall(e *CallExpr) (*Type, error) {
 	ident, ok := e.Callee.(*IdentExpr)
 	if !ok {
-		return nil, typeErr(e.Pos, "callee must be a function name at v0.1")
+		return nil, typeErr(e.Pos, "callee must be a function name")
 	}
 	sig, ok := c.fns[ident.Name]
 	if !ok {

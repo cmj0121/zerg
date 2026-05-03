@@ -25,10 +25,10 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.1 — accepts the v0.1 procedural core\n" +
+const banner = "Zerg REPL v0.2 — accepts the v0.2 procedural core plus composite data\n" +
 	"Type :exit to quit, :help for syntax\n"
 
-const helpText = "Statements: let/mut/const, fn, if/elif/else, for, return/break/continue, print. Run :exit to quit.\n"
+const helpText = "Statements: let/mut/const, fn, struct/enum, if/elif/else, for, match, return/break/continue, print. Run :exit to quit.\n"
 
 const (
 	primaryPrompt      = "zerg> "

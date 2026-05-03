@@ -847,6 +847,8 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 }
 
 // valueEq is == over typed values. typeck guarantees lv.Type == rv.Type.
+// Byte and rune compare on their integer codepoint — same as the codegen
+// side which lowers to a plain `==` on uint8_t / int32_t.
 func valueEq(lv, rv Value) bool {
 	switch lv.Type {
 	case syntax.TInt():
@@ -857,12 +859,15 @@ func valueEq(lv, rv Value) bool {
 		return lv.Bool == rv.Bool
 	case syntax.TStr():
 		return lv.Str == rv.Str
+	case syntax.TByte(), syntax.TRune():
+		return lv.Int == rv.Int
 	}
 	return false
 }
 
 // valueLT is < over typed values. typeck guarantees same-typed numeric/str
-// operands; bool ordering is rejected at check time.
+// operands; bool ordering is rejected at check time. Byte and rune order on
+// codepoint, mirroring the codegen's int compare.
 func valueLT(lv, rv Value) bool {
 	switch lv.Type {
 	case syntax.TInt():
@@ -871,6 +876,8 @@ func valueLT(lv, rv Value) bool {
 		return lv.Float < rv.Float
 	case syntax.TStr():
 		return lv.Str < rv.Str
+	case syntax.TByte(), syntax.TRune():
+		return lv.Int < rv.Int
 	}
 	return false
 }

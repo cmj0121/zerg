@@ -41,6 +41,68 @@ focus is on building a workable prototype with a minimal feature set:
 A phase ships when each example's stdout matches between `zerg run` and `zerg build` — byte-identical
 for sequential code, equivalent under any valid scheduling for concurrent code.
 
+## Building & running v0.0
+
+v0.0 is the toolchain bootstrap. The compiler is a Go program that interprets `.zg` source directly,
+or compiles it by emitting C and shelling out to the system C compiler.
+
+### Prerequisites
+
+- Go 1.22 or newer.
+- A C compiler reachable as `cc` on `PATH` (override with `$CC`).
+- macOS or Linux. Windows is deferred.
+
+### Build the toolchain
+
+```sh
+make build
+```
+
+This produces `src/bootstrap/bin/zerg`.
+
+### Run a source file
+
+```sh
+./src/bootstrap/bin/zerg run examples/01_hello.zg
+# Hello, Zerg!
+```
+
+### Compile to a native binary
+
+`zerg build` writes the binary into the current working directory, named after the source basename:
+
+```sh
+./src/bootstrap/bin/zerg build examples/01_hello.zg && ./01_hello
+# Hello, Zerg!
+```
+
+### REPL
+
+```sh
+./src/bootstrap/bin/zerg repl
+# Zerg REPL v0.0 — accepts: nop, print "..."
+# Type :exit to quit.
+# zerg> print "hi"
+# hi
+# zerg> nop
+# zerg> :exit
+```
+
+### Supported syntax at v0.0
+
+v0.0 accepts only two statements: `nop` and `print "<string literal>"`. Identifiers, numbers,
+interpolation, functions, and control flow are parse errors at this version. v0.1 expands the
+language.
+
+### Parity rule
+
+v0.0's e2e test asserts that `zerg run` and `zerg build`-then-execute produce byte-identical stdout
+for every supported example. Run it with:
+
+```sh
+make test
+```
+
 ## DDD (Dream-Driven Development)
 
 This project is based on the DDD (dream-driven development) methodology which means

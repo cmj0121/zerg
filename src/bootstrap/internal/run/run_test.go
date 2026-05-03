@@ -84,11 +84,13 @@ func TestPrintIntUnderscore(t *testing.T) {
 }
 
 func TestPrintFloat(t *testing.T) {
-	expectOK(t, "print 3.14\n", "3.14\n")
+	// 17 sig digits matches what %.17g emits on the C side; PLAN.md pins the
+	// precision so run/build agree byte-for-byte.
+	expectOK(t, "print 3.14\n", "3.1400000000000001\n")
 }
 
 func TestPrintFloatTrailingZeroStripped(t *testing.T) {
-	// strconv.FormatFloat with 'g' / -1 strips redundant trailing zeros.
+	// %g (and FormatFloat 'g') drop redundant trailing zeros even at high precision.
 	expectOK(t, "print 1.50\n", "1.5\n")
 }
 

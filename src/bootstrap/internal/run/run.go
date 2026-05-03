@@ -220,7 +220,7 @@ func formatValue(v Value) string {
 	case syntax.TInt():
 		return strconv.FormatInt(v.Int, 10)
 	case syntax.TFloat():
-		return strconv.FormatFloat(v.Float, 'g', -1, 64)
+		return strconv.FormatFloat(v.Float, 'g', 17, 64)
 	case syntax.TBool():
 		if v.Bool {
 			return "true"

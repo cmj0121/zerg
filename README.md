@@ -50,7 +50,7 @@ v0.1 corpus) keep working unchanged.
 
 ### Prerequisites
 
-- Go 1.22 or newer.
+- Go 1.23 or newer.
 - A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv`; gcc and
   clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.2.
 - macOS or Linux. Windows is deferred.

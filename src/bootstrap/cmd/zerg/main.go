@@ -1,6 +1,5 @@
-// Command zerg is the v0.0 toolchain entry point. CLI dispatch is handled
-// by kong; diagnostic logging goes to zerolog with a -v / -vv verbosity
-// dial. See PLAN.md for the design.
+// Command zerg is the toolchain entry point. CLI dispatch is handled by
+// kong; diagnostic logging goes to zerolog with a -v / -vv verbosity dial.
 package main
 
 import (

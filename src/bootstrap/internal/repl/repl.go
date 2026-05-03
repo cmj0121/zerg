@@ -1,4 +1,4 @@
-// Package repl is the interactive read-eval-print loop for v0.1.
+// Package repl is the interactive read-eval-print loop.
 //
 // Input handling uses the *try-parse* strategy. Lines are accumulated into a
 // buffer; after each line we attempt to parse the buffer. A successful parse
@@ -10,8 +10,8 @@
 // Persistent state across prompts is achieved by re-parsing and re-running
 // the entire accumulated program from scratch each turn, discarding output
 // produced by previously executed statements. This is wasteful but trivially
-// correct, and v0.1 REPL sessions are short. Switching to an incremental
-// interpreter is a v0.2+ concern.
+// correct, and REPL sessions are short. Switching to an incremental
+// interpreter is a future concern.
 package repl
 
 import (

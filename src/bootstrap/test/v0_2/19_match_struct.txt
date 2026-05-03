@@ -1,0 +1,4 @@
+origin
+on y-axis
+on x-axis
+elsewhere

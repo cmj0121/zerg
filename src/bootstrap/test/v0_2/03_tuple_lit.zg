@@ -1,0 +1,6 @@
+let pair := (1, 2)
+let triple := (10, 20, 30)
+let mixed := (7, "ok")
+print pair
+print triple
+print mixed

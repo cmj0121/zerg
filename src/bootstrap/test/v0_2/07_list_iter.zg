@@ -1,0 +1,10 @@
+let xs := [1, 2, 3]
+for x in xs {
+  print x
+}
+
+let empty: list[int] = []
+for x in empty {
+  print x
+}
+print "done"

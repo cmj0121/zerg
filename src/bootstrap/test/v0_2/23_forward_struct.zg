@@ -1,0 +1,8 @@
+struct Box { content: Inner, count: int }
+struct Inner { v: int }
+
+let b := Box { content: Inner { v: 99 }, count: 3 }
+print b
+print b.content
+print b.content.v
+print b.count

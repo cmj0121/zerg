@@ -1,0 +1,8 @@
+struct Point { x: int, y: int }
+
+let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }, Point { x: 5, y: 6 }]
+print pts
+print pts[0]
+print pts[2]
+print pts[1].x
+print pts[1].y

@@ -1,0 +1,6 @@
+let ascii := 'A'
+let nul   := '\0'
+let kanji := '漢'
+print ascii
+print nul
+print kanji

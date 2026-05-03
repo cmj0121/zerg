@@ -1,0 +1,4 @@
+Box { content: Inner { v: 99 }, count: 3 }
+Inner { v: 99 }
+99
+3

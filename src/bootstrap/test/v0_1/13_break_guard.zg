@@ -1,0 +1,26 @@
+mut i := 0
+for {
+    i += 1
+    break if i >= 4
+    print i
+}
+print i
+
+mut j := 0
+mut emitted := 0
+for j < 8 {
+    j += 1
+    continue if j % 2 == 0
+    print j
+    emitted += 1
+}
+print emitted
+
+fn first_positive(a: int, b: int, c: int) -> int {
+    return a if a > 0
+    return b if b > 0
+    return c
+}
+print first_positive(-1, -2, 3)
+print first_positive(-1, 2, 3)
+print first_positive(1, 2, 3)

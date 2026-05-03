@@ -1,0 +1,25 @@
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+fn fact(n: int) -> int {
+    if n <= 1 {
+        return 1
+    }
+    return n * fact(n - 1)
+}
+
+fn fib(n: int) -> int {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+print add(2, 3)
+print add(-10, 5)
+print fact(0)
+print fact(5)
+print fact(10)
+print fib(0)
+print fib(10)

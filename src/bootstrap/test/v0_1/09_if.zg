@@ -1,0 +1,32 @@
+let x := 10
+if x < 0 {
+    print "negative"
+} elif x == 0 {
+    print "zero"
+} else {
+    print "positive"
+}
+
+let y := 0
+if y < 0 {
+    print "neg"
+} elif y == 0 {
+    print "zero"
+} else {
+    print "pos"
+}
+
+let z := -5
+if z > 0 {
+    print "pos"
+} elif z < -10 {
+    print "very neg"
+} elif z < 0 {
+    print "neg"
+} else {
+    print "zero"
+}
+
+if true {
+    print "always"
+}

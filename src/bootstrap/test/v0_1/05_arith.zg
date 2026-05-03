@@ -1,0 +1,13 @@
+print 1 + 2 * 3
+print (1 + 2) * 3
+print 20 - 4 - 3
+print 20 / 4 / 2
+print 17 / 5
+print 17 // 5
+print 17 % 5
+print -7
+print -(2 + 3)
+print ~0
+print ~5
+print 2 + 3 * 4 - 5
+print 100 - 10 * 5 + 1

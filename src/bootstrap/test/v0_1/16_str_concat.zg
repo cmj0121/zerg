@@ -1,0 +1,15 @@
+let greeting := "hello" + ", " + "world"
+print greeting
+
+let prefix := "Zerg"
+let suffix := "v0.1"
+print prefix + " " + suffix
+
+mut s := "a"
+s += "b"
+s += "c"
+s += "d"
+print s
+
+print "" + "nonempty"
+print "single"

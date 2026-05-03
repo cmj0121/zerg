@@ -1,0 +1,4 @@
+positive
+zero
+neg
+always

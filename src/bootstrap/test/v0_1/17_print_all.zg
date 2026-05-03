@@ -1,0 +1,13 @@
+print 42
+print -17
+print 0
+print 3.14
+print -2.5
+print 0.0
+print true
+print false
+print "hello, world"
+print ""
+print "with \"quotes\" inside"
+print "tab\there"
+print "newline\nhere"

@@ -21,9 +21,9 @@ func DefaultCC() string {
 	return "cc"
 }
 
-// EmitSource lexes and parses the Zerg source at srcPath and writes the
-// generated C to w. It does not invoke the C compiler — use Build for the
-// full compile-to-binary pipeline.
+// EmitSource lexes, parses, and type-checks the Zerg source at srcPath and
+// writes the generated C to w. It does not invoke the C compiler — use Build
+// for the full compile-to-binary pipeline.
 func EmitSource(srcPath string, w io.Writer) error {
 	prog, err := parseSource(srcPath)
 	if err != nil {
@@ -32,8 +32,11 @@ func EmitSource(srcPath string, w io.Writer) error {
 	return Emit(prog, w)
 }
 
-// parseSource reads, lexes, and parses srcPath, wrapping each failure with
-// a `zerg build:` prefix so callers can return errors verbatim.
+// parseSource reads, lexes, parses, and type-checks srcPath, wrapping each
+// failure with a `zerg build:` prefix so callers can return errors verbatim.
+// Type-checking happens here (not just inside Build) so EmitSource — used by
+// `--emit-c` — also rejects ill-typed programs before generating C that the
+// codegen would otherwise accept and produce nonsense for.
 func parseSource(srcPath string) (*syntax.Program, error) {
 	src, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -45,6 +48,9 @@ func parseSource(srcPath string) (*syntax.Program, error) {
 	}
 	prog, err := syntax.Parse(tokens)
 	if err != nil {
+		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
+	}
+	if err := syntax.Check(prog); err != nil {
 		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
 	}
 	return prog, nil
@@ -106,7 +112,11 @@ func Build(srcPath string) error {
 	}
 	outPath := filepath.Join(cwd, base)
 
-	cmd := exec.Command(ccPath, "-O2", "-o", outPath, cPath)
+	// -fwrapv: pin signed integer overflow to two's-complement wrap so build
+	// matches Go's natural int64 wrap (PLAN.md "Numeric semantics (pinned)").
+	// -lm at the end: libm is the home of floor / fmod called from generated
+	// expressions; gcc and clang both accept the link flag last.
+	cmd := exec.Command(ccPath, "-fwrapv", "-O2", "-o", outPath, cPath, "-lm")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

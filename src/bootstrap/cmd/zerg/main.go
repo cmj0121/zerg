@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 
 	"github.com/alecthomas/kong"
@@ -16,7 +17,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const version = "0.0.0"
+const version = "0.1.0"
 
 type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
@@ -32,6 +33,9 @@ type runCmd struct {
 }
 
 func (c *runCmd) Run() error {
+	if err := checkRequiresFile(c.File); err != nil {
+		return err
+	}
 	src, err := os.ReadFile(c.File)
 	if err != nil {
 		return err
@@ -57,6 +61,9 @@ type buildCmd struct {
 }
 
 func (c *buildCmd) Run() error {
+	if err := checkRequiresFile(c.File); err != nil {
+		return err
+	}
 	if c.EmitC {
 		return build.EmitSource(c.File, os.Stdout)
 	}
@@ -74,14 +81,19 @@ func main() {
 	app := &cli{}
 	ctx := kong.Parse(app,
 		kong.Name("zerg"),
-		kong.Description("Zerg toolchain (v0.0)."),
+		kong.Description("Zerg toolchain (v0.1)."),
 		kong.Vars{"version": "zerg " + version},
 		kong.UsageOnError(),
 	)
 	configureLogger(app.Verbose)
 
 	if err := ctx.Run(); err != nil {
-		log.Error().Err(err).Send()
+		// errRequiresFutureVersion has already written its own user-facing
+		// stderr line. Don't double-log via zerolog — it would duplicate the
+		// message and add a timestamp the test harness has to filter out.
+		if !errors.Is(err, errRequiresFutureVersion) {
+			log.Error().Err(err).Send()
+		}
 		os.Exit(1)
 	}
 }

@@ -1,4 +1,5 @@
 #! /usr/bin/env zerg
+# requires: v0.2
 #
 # `:=` declares with type inference; if Zerg cannot easily infer the type, the compiler refuses to guess and
 # raises a compile-time error. In that case, or when you want a type that differs from the default (see the

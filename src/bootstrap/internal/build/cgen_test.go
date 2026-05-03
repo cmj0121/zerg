@@ -42,7 +42,7 @@ func TestEmitUsesFwriteForParity(t *testing.T) {
 	// full byte sequence via fmt.Fprintln, so the codegen must too.
 	prog := &syntax.Program{
 		Statements: []syntax.Stmt{
-			&syntax.PrintStmt{Value: "hi"},
+			&syntax.PrintStmt{Expr: &syntax.StringLit{Value: "hi"}},
 		},
 	}
 	var buf bytes.Buffer

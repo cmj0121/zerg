@@ -1,5 +1,13 @@
 // Package build emits a C source file from a parsed Zerg program and shells
 // out to the system C compiler to produce a native binary.
+//
+// At v0.0 the codegen handles only nop and print of a string literal.
+// The AST grew for v0.1 (variables, full expressions, control flow,
+// functions) but the codegen has not yet caught up. Anything the v0.0
+// corpus didn't exercise returns a clean "not yet implemented" error
+// rather than emitting incorrect code; the v0.0 e2e tests feed only nop
+// and print-of-string, so they continue to pass while the v0.1 emitter
+// is being built out.
 package build
 
 import (
@@ -18,25 +26,41 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 	b.WriteString("\n")
 	b.WriteString("int main(void) {\n")
 	for _, stmt := range prog.Statements {
-		switch s := stmt.(type) {
-		case *syntax.NopStmt:
-			// `(void)0;` is clearer than an empty statement and survives
-			// `-Wpedantic` without complaint.
-			b.WriteString("    (void)0;\n")
-		case *syntax.PrintStmt:
-			// fwrite + putchar instead of puts: parity-safe across NUL bytes,
-			// which puts() would truncate at while fmt.Fprintln in the
-			// interpreter would not.
-			fmt.Fprintf(&b, "    fwrite(%s, %d, 1, stdout);\n", cQuote(s.Value), len(s.Value))
-			b.WriteString("    putchar('\\n');\n")
-		default:
-			return fmt.Errorf("internal error: unknown statement type %T at %s", s, stmt.StmtPos())
+		if err := emitStmt(stmt, &b); err != nil {
+			return err
 		}
 	}
 	b.WriteString("    return 0;\n")
 	b.WriteString("}\n")
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+func emitStmt(stmt syntax.Stmt, b *strings.Builder) error {
+	switch s := stmt.(type) {
+	case *syntax.NopStmt:
+		// `(void)0;` is clearer than an empty statement and survives
+		// `-Wpedantic` without complaint.
+		b.WriteString("    (void)0;\n")
+		return nil
+	case *syntax.PrintStmt:
+		// v0.1 PrintStmt holds an Expression. v0.0 codegen only knows how
+		// to emit a string literal; every other shape returns an error
+		// pointing at the source position until the v0.1 emitter fills
+		// in the missing cases.
+		lit, ok := s.Expr.(*syntax.StringLit)
+		if !ok {
+			return fmt.Errorf("codegen does not yet support print of %T at %s; v0.1 work in progress", s.Expr, s.Pos)
+		}
+		// fwrite + putchar instead of puts: parity-safe across NUL bytes,
+		// which puts() would truncate at while fmt.Fprintln in the
+		// interpreter would not.
+		fmt.Fprintf(b, "    fwrite(%s, %d, 1, stdout);\n", cQuote(lit.Value), len(lit.Value))
+		b.WriteString("    putchar('\\n');\n")
+		return nil
+	default:
+		return fmt.Errorf("codegen does not yet support %T at %s; v0.1 work in progress", s, stmt.StmtPos())
+	}
 }
 
 // cQuote returns a C string literal, complete with surrounding double quotes,

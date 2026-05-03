@@ -128,25 +128,45 @@ print "Hello, Zerg!"
 	if !ok {
 		t.Fatalf("statement 0 is %T, want *PrintStmt", prog.Statements[0])
 	}
-	if ps.Value != "Hello, Zerg!" {
-		t.Errorf("print value = %q, want %q", ps.Value, "Hello, Zerg!")
+	lit, ok := ps.Expr.(*StringLit)
+	if !ok {
+		t.Fatalf("PrintStmt.Expr is %T, want *StringLit", ps.Expr)
+	}
+	if lit.Value != "Hello, Zerg!" {
+		t.Errorf("print value = %q, want %q", lit.Value, "Hello, Zerg!")
 	}
 }
 
-func TestParseRejectsPrintOfNonString(t *testing.T) {
+// v0.1 generalised PrintStmt to take any expression. `print foo` now parses
+// as PrintStmt{Expr: IdentExpr{Name: "foo"}}; the type checker is the layer
+// that later catches references to undefined names.
+func TestParsePrintOfIdentifier(t *testing.T) {
 	tokens, err := Lex([]byte("print foo\n"))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)
 	}
-	_, err = Parse(tokens)
-	if err == nil {
-		t.Fatal("expected parse error for print of identifier, got nil")
+	prog, err := Parse(tokens)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
-	if _, ok := err.(*ParseError); !ok {
-		t.Errorf("error is %T, want *ParseError", err)
+	if len(prog.Statements) != 1 {
+		t.Fatalf("got %d statements, want 1", len(prog.Statements))
+	}
+	ps, ok := prog.Statements[0].(*PrintStmt)
+	if !ok {
+		t.Fatalf("statement 0 is %T, want *PrintStmt", prog.Statements[0])
+	}
+	id, ok := ps.Expr.(*IdentExpr)
+	if !ok {
+		t.Fatalf("PrintStmt.Expr is %T, want *IdentExpr", ps.Expr)
+	}
+	if id.Name != "foo" {
+		t.Errorf("ident name = %q, want %q", id.Name, "foo")
 	}
 }
 
+// At v0.1 a bare identifier is still an error in statement position —
+// expression statements are restricted to function calls.
 func TestParseRejectsBareIdentifier(t *testing.T) {
 	tokens, err := Lex([]byte("xyzzy\n"))
 	if err != nil {

@@ -1,0 +1,14 @@
+const MAX := 100
+const MIN: int = -50
+const VERSION := "v0.1"
+const PI: float = 3.14
+const FLAG := true
+const COMPUTED := 1 + 2 * 3
+const SHIFTED: int = 1 << 10
+print MAX
+print MIN
+print VERSION
+print PI
+print FLAG
+print COMPUTED
+print SHIFTED

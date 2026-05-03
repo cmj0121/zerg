@@ -1,0 +1,14 @@
+print true and true
+print true and false
+print false and true
+print false or false
+print true or false
+print false or true
+print not true
+print not false
+print true xor false
+print true xor true
+print false xor false
+print true and not false
+print not true or true
+print (true and false) or (true and true)

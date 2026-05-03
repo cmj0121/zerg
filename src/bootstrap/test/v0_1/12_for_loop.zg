@@ -1,0 +1,23 @@
+mut i := 0
+for {
+    if i >= 5 {
+        break
+    }
+    print i
+    i += 1
+}
+
+mut j := 0
+mut printed := 0
+for {
+    j += 1
+    if j > 10 {
+        break
+    }
+    if j % 2 == 0 {
+        continue
+    }
+    print j
+    printed += 1
+}
+print printed

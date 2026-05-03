@@ -20,10 +20,30 @@ type Stmt interface {
 }
 
 // Expr is the marker interface for expressions. Same reasoning as Stmt.
+//
+// Type returns the type assigned by the type checker (typeck.Check). It is nil
+// before Check runs and non-nil for every Expr afterwards on a successful
+// pass. We expose a getter rather than a public field so the type checker can
+// own writes via setType while readers (run.go, cgen.go) get a stable accessor.
 type Expr interface {
 	exprNode()
 	ExprPos() Position
+	Type() *Type
+	setType(*Type)
 }
+
+// typed is embedded by every concrete Expr to share the typ field and the
+// Type/setType pair. The field is unexported because only typeck (and the
+// node's own setType) is allowed to write it.
+type typed struct {
+	typ *Type
+}
+
+// Type returns the type recorded by the type checker; nil before Check runs.
+func (t *typed) Type() *Type { return t.typ }
+
+// setType is package-private — only typeck calls it.
+func (t *typed) setType(ty *Type) { t.typ = ty }
 
 // ---------------------------------------------------------------------------
 // Operator enums. Each carries a String() method tuned for diagnostic prose
@@ -204,9 +224,13 @@ func (op UnaryOp) String() string {
 // TypeRef is an explicit type annotation. v0.1 has no compound type syntax
 // (no `[]int`, no generics, no function types as values), so a type ref is
 // nothing but a name plus a position for diagnostics.
+//
+// Resolved is filled in by the type checker to point at the canonical *Type
+// singleton for Name. It is nil before Check runs.
 type TypeRef struct {
-	Name string
-	Pos  Position
+	Name     string
+	Pos      Position
+	Resolved *Type
 }
 
 // ---------------------------------------------------------------------------
@@ -421,18 +445,29 @@ func (s *NopStmt) StmtPos() Position { return s.Pos }
 
 // IntLit is an integer literal. Text is the prefix-preserved form ready for
 // strconv.ParseInt with base 0.
+//
+// Int is the parsed numeric value, populated by the type checker. It is the
+// authoritative value for run.go and cgen.go — they MUST NOT re-parse Text,
+// because typeck has already validated that the literal fits int64.
 type IntLit struct {
+	typed
 	Pos  Position
 	Text string
+	Int  int64
 }
 
 func (*IntLit) exprNode()           {}
 func (e *IntLit) ExprPos() Position { return e.Pos }
 
 // FloatLit is a floating-point literal. Text is the "<int>.<frac>" form.
+//
+// Float is the parsed numeric value, populated by the type checker. typeck
+// rejects literals that overflow to ±Inf at v0.1, so Float is always finite.
 type FloatLit struct {
-	Pos  Position
-	Text string
+	typed
+	Pos   Position
+	Text  string
+	Float float64
 }
 
 func (*FloatLit) exprNode()           {}
@@ -441,6 +476,7 @@ func (e *FloatLit) ExprPos() Position { return e.Pos }
 // StringLit is a double-quoted string literal whose contents have already been
 // unescaped by the lexer.
 type StringLit struct {
+	typed
 	Pos   Position
 	Value string
 }
@@ -450,6 +486,7 @@ func (e *StringLit) ExprPos() Position { return e.Pos }
 
 // BoolLit is `true` or `false`.
 type BoolLit struct {
+	typed
 	Pos   Position
 	Value bool
 }
@@ -459,6 +496,7 @@ func (e *BoolLit) ExprPos() Position { return e.Pos }
 
 // IdentExpr is a bare identifier reference.
 type IdentExpr struct {
+	typed
 	Pos  Position
 	Name string
 }
@@ -468,6 +506,7 @@ func (e *IdentExpr) ExprPos() Position { return e.Pos }
 
 // BinaryExpr is any infix operator application.
 type BinaryExpr struct {
+	typed
 	Pos   Position
 	Op    BinaryOp
 	Left  Expr
@@ -479,6 +518,7 @@ func (e *BinaryExpr) ExprPos() Position { return e.Pos }
 
 // UnaryExpr is a prefix operator application: -, not, ~.
 type UnaryExpr struct {
+	typed
 	Pos     Position
 	Op      UnaryOp
 	Operand Expr
@@ -490,6 +530,7 @@ func (e *UnaryExpr) ExprPos() Position { return e.Pos }
 // CallExpr is `callee(args)`. v0.1 only admits an IdentExpr as Callee but the
 // parser is general so future call-on-expression doesn't require a re-shape.
 type CallExpr struct {
+	typed
 	Pos    Position
 	Callee Expr
 	Args   []Expr
@@ -500,8 +541,11 @@ func (e *CallExpr) ExprPos() Position { return e.Pos }
 
 // RangeExpr is `start..end` or `start..=end`. v0.1 restricts ranges to the
 // head of `for x in ...` — the parser only constructs a RangeExpr there and
-// produces a clear error elsewhere.
+// produces a clear error elsewhere. RangeExpr satisfies Expr but its Type()
+// is left nil at v0.1: range values cannot be stored, so no consumer needs
+// a meaningful type for them.
 type RangeExpr struct {
+	typed
 	Pos       Position
 	Start     Expr
 	End       Expr
@@ -515,6 +559,7 @@ func (e *RangeExpr) ExprPos() Position { return e.Pos }
 // folding them away) because faithful diagnostic positions and any future
 // pretty-printer benefit from knowing the user wrote them.
 type ParenExpr struct {
+	typed
 	Pos   Position
 	Inner Expr
 }

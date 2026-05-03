@@ -251,26 +251,38 @@ func (c *checker) collectTopLevel(prog *Program) error {
 }
 
 // resolveTypeRef maps a TypeRef.Name to a *Type singleton, populates
-// TypeRef.Resolved, and reports unknown names with a clear position.
+// TypeRef.Resolved, and reports unknown names with a clear position. v0.2
+// composite shapes (TypeRefList / TypeRefTuple) are accepted by the parser
+// but not yet checked here; Unit 2 wires them in. Until then we surface a
+// clear "work in progress" error so v0.1 e2e tests stay green and v0.2
+// programs get a known-good message rather than a generic crash.
 func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 	if ref == nil {
 		return nil, nil
 	}
-	var t *Type
-	switch ref.Name {
-	case "int":
-		t = tInt
-	case "float":
-		t = tFloat
-	case "bool":
-		t = tBool
-	case "str":
-		t = tStr
-	default:
-		return nil, typeErr(ref.Pos, "unknown type %q", ref.Name)
+	switch ref.Kind {
+	case TypeRefNamed:
+		var t *Type
+		switch ref.Name {
+		case "int":
+			t = tInt
+		case "float":
+			t = tFloat
+		case "bool":
+			t = tBool
+		case "str":
+			t = tStr
+		default:
+			return nil, typeErr(ref.Pos, "unknown type %q", ref.Name)
+		}
+		ref.Resolved = t
+		return t, nil
+	case TypeRefList:
+		return nil, typeErr(ref.Pos, "v0.2 work in progress: list types not yet resolved")
+	case TypeRefTuple:
+		return nil, typeErr(ref.Pos, "v0.2 work in progress: tuple types not yet resolved")
 	}
-	ref.Resolved = t
-	return t, nil
+	return nil, typeErr(ref.Pos, "internal: unknown TypeRef kind %d", int(ref.Kind))
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +327,13 @@ func (c *checker) checkStmt(stmt Stmt) error {
 			return typeErr(s.Pos, "'continue' outside of a loop")
 		}
 		return c.checkGuard(s.Guard)
+	// v0.2 stubs — Unit 2 (typeck composites) replaces these.
+	case *StructDecl:
+		return typeErr(s.Pos, "v0.2 work in progress: struct declarations not yet type-checked")
+	case *EnumDecl:
+		return typeErr(s.Pos, "v0.2 work in progress: enum declarations not yet type-checked")
+	case *MatchStmt:
+		return typeErr(s.Pos, "v0.2 work in progress: match statements not yet type-checked")
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -642,6 +661,21 @@ func (c *checker) checkExpr(expr Expr) (*Type, error) {
 		// point means a future parser path produced a Range somewhere else;
 		// reject explicitly rather than silently typing.
 		return nil, typeErr(e.Pos, "range expressions cannot be used as values at v0.1")
+	// v0.2 stubs — Unit 2 (typeck composites) replaces these.
+	case *RuneLit:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: rune literals not yet type-checked")
+	case *ListLit:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: list literals not yet type-checked")
+	case *TupleLit:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: tuple literals not yet type-checked")
+	case *StructLit:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: struct literals not yet type-checked")
+	case *IndexExpr:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: indexing not yet type-checked")
+	case *SliceExpr:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: slicing not yet type-checked")
+	case *FieldAccessExpr:
+		return nil, typeErr(e.Pos, "v0.2 work in progress: field access not yet type-checked")
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

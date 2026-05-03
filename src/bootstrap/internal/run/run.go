@@ -191,6 +191,15 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		// level walk is handled in Run() by the FnDecl skip. A FnDecl seen
 		// elsewhere is an internal error.
 		return fmt.Errorf("internal: unexpected FnDecl at %s", s.Pos)
+	// v0.2 stubs — Unit 3 (interpreter for composites) replaces these. typeck
+	// rejects the new shapes today; these guards exist so the run path stays
+	// well-defined as Unit 2 lands and pulls them through.
+	case *syntax.StructDecl:
+		return fmt.Errorf("v0.2 work in progress: StructDecl not yet supported at %s", s.Pos)
+	case *syntax.EnumDecl:
+		return fmt.Errorf("v0.2 work in progress: EnumDecl not yet supported at %s", s.Pos)
+	case *syntax.MatchStmt:
+		return fmt.Errorf("v0.2 work in progress: MatchStmt not yet supported at %s", s.Pos)
 	}
 	return fmt.Errorf("internal: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -479,6 +488,21 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return in.evalBinary(e)
 	case *syntax.CallExpr:
 		return in.evalCall(e)
+	// v0.2 stubs — Unit 3 (composite values) replaces these.
+	case *syntax.RuneLit:
+		return Value{}, fmt.Errorf("v0.2 work in progress: RuneLit not yet supported at %s", e.Pos)
+	case *syntax.ListLit:
+		return Value{}, fmt.Errorf("v0.2 work in progress: ListLit not yet supported at %s", e.Pos)
+	case *syntax.TupleLit:
+		return Value{}, fmt.Errorf("v0.2 work in progress: TupleLit not yet supported at %s", e.Pos)
+	case *syntax.StructLit:
+		return Value{}, fmt.Errorf("v0.2 work in progress: StructLit not yet supported at %s", e.Pos)
+	case *syntax.IndexExpr:
+		return Value{}, fmt.Errorf("v0.2 work in progress: IndexExpr not yet supported at %s", e.Pos)
+	case *syntax.SliceExpr:
+		return Value{}, fmt.Errorf("v0.2 work in progress: SliceExpr not yet supported at %s", e.Pos)
+	case *syntax.FieldAccessExpr:
+		return Value{}, fmt.Errorf("v0.2 work in progress: FieldAccessExpr not yet supported at %s", e.Pos)
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
 }

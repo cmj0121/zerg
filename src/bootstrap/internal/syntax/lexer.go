@@ -356,6 +356,11 @@ func (l *lexer) lexOperator() (Token, error) {
 		if c1 == '=' {
 			return emit2(KindEq)
 		}
+		if c1 == '>' {
+			// `=>` is the v0.2 match-arm separator. The longest-match rule
+			// keeps `==` from gobbling the `=` first because of the c1 check.
+			return emit2(KindFatArrow)
+		}
 		return emit(KindAssign)
 	case '!':
 		if c1 == '=' {

@@ -29,4 +29,8 @@ var keywords = map[string]Kind{
 	"true":     KindTrue,
 	"while":    KindWhile,
 	"xor":      KindXor,
+	// v0.2 composite-data keywords.
+	"struct": KindStruct,
+	"enum":   KindEnum,
+	"match":  KindMatch,
 }

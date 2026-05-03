@@ -147,6 +147,13 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 		// Top-level fn decls are emitted by Emit before main; encountering one
 		// here means typeck let a nested fn through, which it does not.
 		return fmt.Errorf("internal: nested function %q at %s", s.Name, s.Pos)
+	// v0.2 stubs — Unit 4 (codegen for composites) replaces these.
+	case *syntax.StructDecl:
+		return fmt.Errorf("v0.2 work in progress: StructDecl not yet supported at %s", s.Pos)
+	case *syntax.EnumDecl:
+		return fmt.Errorf("v0.2 work in progress: EnumDecl not yet supported at %s", s.Pos)
+	case *syntax.MatchStmt:
+		return fmt.Errorf("v0.2 work in progress: MatchStmt not yet supported at %s", s.Pos)
 	}
 	return fmt.Errorf("codegen: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -476,6 +483,20 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return g.unaryStr(e)
 	case *syntax.BinaryExpr:
 		return g.binaryStr(e)
+	case *syntax.RuneLit:
+		return "", fmt.Errorf("v0.2 work in progress: RuneLit not yet supported at %s", e.Pos)
+	case *syntax.ListLit:
+		return "", fmt.Errorf("v0.2 work in progress: ListLit not yet supported at %s", e.Pos)
+	case *syntax.TupleLit:
+		return "", fmt.Errorf("v0.2 work in progress: TupleLit not yet supported at %s", e.Pos)
+	case *syntax.StructLit:
+		return "", fmt.Errorf("v0.2 work in progress: StructLit not yet supported at %s", e.Pos)
+	case *syntax.IndexExpr:
+		return "", fmt.Errorf("v0.2 work in progress: IndexExpr not yet supported at %s", e.Pos)
+	case *syntax.SliceExpr:
+		return "", fmt.Errorf("v0.2 work in progress: SliceExpr not yet supported at %s", e.Pos)
+	case *syntax.FieldAccessExpr:
+		return "", fmt.Errorf("v0.2 work in progress: FieldAccessExpr not yet supported at %s", e.Pos)
 	case *syntax.CallExpr:
 		ident, ok := e.Callee.(*syntax.IdentExpr)
 		if !ok {

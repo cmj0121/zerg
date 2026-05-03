@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/build"
@@ -147,4 +148,71 @@ func captureCmd(name string, args []string, dir string) ([]byte, int, error) {
 		return stdout.Bytes(), -1, err
 	}
 	return stdout.Bytes(), 0, nil
+}
+
+// captureCmdBoth is like captureCmd but also returns stderr — used by the
+// version-gating tests, which assert on the rejection message.
+func captureCmdBoth(name string, args []string, dir string) (stdout, stderr []byte, code int, err error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	var so, se bytes.Buffer
+	cmd.Stdout = &so
+	cmd.Stderr = &se
+	runErr := cmd.Run()
+	if runErr != nil {
+		if ee, ok := runErr.(*exec.ExitError); ok {
+			return so.Bytes(), se.Bytes(), ee.ExitCode(), nil
+		}
+		return so.Bytes(), se.Bytes(), -1, runErr
+	}
+	return so.Bytes(), se.Bytes(), 0, nil
+}
+
+// TestRequiresGate verifies that examples carrying a future-version
+// `# requires:` marker are rejected with the standard message, and that
+// examples without a marker still run cleanly.
+func TestRequiresGate(t *testing.T) {
+	binPath := buildToolchain(t)
+	examples := examplesDir(t)
+
+	t.Run("rejects future version", func(t *testing.T) {
+		src := filepath.Join(examples, "02_variables.zg")
+		_, stderr, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
+		if err != nil {
+			t.Fatalf("zerg run: %v", err)
+		}
+		if code != 1 {
+			t.Fatalf("exit code = %d, want 1", code)
+		}
+		want := "requires v0.2 (current is v0.1)"
+		if !strings.Contains(string(stderr), want) {
+			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
+		}
+	})
+
+	t.Run("unmarked example still runs", func(t *testing.T) {
+		src := filepath.Join(examples, "01_hello.zg")
+		_, _, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
+		if err != nil {
+			t.Fatalf("zerg run: %v", err)
+		}
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	})
+
+	t.Run("rejects future version on build too", func(t *testing.T) {
+		src := filepath.Join(examples, "13_asm.zg")
+		_, stderr, code, err := captureCmdBoth(binPath, []string{"build", src}, t.TempDir())
+		if err != nil {
+			t.Fatalf("zerg build: %v", err)
+		}
+		if code != 1 {
+			t.Fatalf("exit code = %d, want 1", code)
+		}
+		want := "requires v0.10 (current is v0.1)"
+		if !strings.Contains(string(stderr), want) {
+			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
+		}
+	})
 }

@@ -6,15 +6,28 @@ import (
 
 // ParseError is returned when the parser cannot fit the token stream into the
 // v0.1 grammar.
+//
+// Incomplete is true when the failure was caused by the input running out
+// mid-construct (EOF where more tokens were required) — e.g. a brace-block
+// without its closing `}`, an expression that stops at EOF, a `let` whose
+// `:=`/`: T =` is missing because the user has not typed the rest yet. The
+// REPL uses this flag to keep accumulating input rather than reporting a
+// hard error.
 type ParseError struct {
-	Pos     Position
-	Message string
+	Pos        Position
+	Message    string
+	Incomplete bool
 }
 
 // Error implements the error interface.
 func (e *ParseError) Error() string {
 	return fmt.Sprintf("parse error at %s: %s", e.Pos, e.Message)
 }
+
+// IsIncomplete reports whether this error was caused by the input running
+// out mid-construct. The REPL's try-parse loop uses it to decide whether to
+// keep reading more input or to surface the error to the user.
+func (e *ParseError) IsIncomplete() bool { return e != nil && e.Incomplete }
 
 // Parse consumes a token slice (typically produced by Lex) and returns the
 // program AST. Leading, trailing, and repeated NEWLINE tokens are tolerated;
@@ -115,13 +128,15 @@ func (p *parser) skipNewlines() {
 }
 
 // expect consumes a token of the given kind or returns a parse error tagged
-// with the offending token's position.
+// with the offending token's position. If the offending token is EOF the
+// error is flagged Incomplete so the REPL can keep accumulating input.
 func (p *parser) expect(k Kind, ctx string) (Token, error) {
 	t := p.peek()
 	if t.Kind != k {
 		return Token{}, &ParseError{
-			Pos:     t.Pos,
-			Message: fmt.Sprintf("expected %s%s, got %s", k, ctxSuffix(ctx), t.Kind),
+			Pos:        t.Pos,
+			Message:    fmt.Sprintf("expected %s%s, got %s", k, ctxSuffix(ctx), t.Kind),
+			Incomplete: t.Kind == KindEOF,
 		}
 	}
 	return p.advance(), nil
@@ -137,6 +152,17 @@ func ctxSuffix(ctx string) string {
 // errorAt builds a ParseError at the given position.
 func errorAt(pos Position, format string, args ...any) error {
 	return &ParseError{Pos: pos, Message: fmt.Sprintf(format, args...)}
+}
+
+// errorAtTok builds a ParseError at the given token's position. If the
+// offending token is EOF the error is flagged Incomplete — the REPL relies
+// on that flag to decide whether to keep reading input.
+func errorAtTok(t Token, format string, args ...any) error {
+	return &ParseError{
+		Pos:        t.Pos,
+		Message:    fmt.Sprintf(format, args...),
+		Incomplete: t.Kind == KindEOF,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +205,7 @@ func (p *parser) terminateStatement() error {
 		// trailing NEWLINE.
 		return nil
 	default:
-		return errorAt(t.Pos, "expected newline or end of statement, got %s", t.Kind)
+		return errorAtTok(t, "expected newline or end of statement, got %s", t.Kind)
 	}
 }
 
@@ -263,7 +289,7 @@ func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 		}
 	default:
 		t := p.peek()
-		return nil, errorAt(t.Pos, "expected ':=' or ': T =' after %s name, got %s", kindLabel(kind), t.Kind)
+		return nil, errorAtTok(t, "expected ':=' or ': T =' after %s name, got %s", kindLabel(kind), t.Kind)
 	}
 
 	value, err := p.parseExpr()
@@ -300,7 +326,7 @@ func kindLabel(k declKind) string {
 func (p *parser) parseTypeRef() (*TypeRef, error) {
 	t := p.peek()
 	if t.Kind != KindIdent {
-		return nil, errorAt(t.Pos, "expected type name, got %s", t.Kind)
+		return nil, errorAtTok(t, "expected type name, got %s", t.Kind)
 	}
 	p.advance()
 	return &TypeRef{Name: t.Value, Pos: t.Pos}, nil
@@ -479,7 +505,7 @@ func (p *parser) parseForRange(forPos Position) (Stmt, error) {
 	case KindRangeEq:
 		inclusive = true
 	default:
-		return nil, errorAt(rangeTok.Pos, "expected '..' or '..=' in 'for' range, got %s", rangeTok.Kind)
+		return nil, errorAtTok(rangeTok, "expected '..' or '..=' in 'for' range, got %s", rangeTok.Kind)
 	}
 	p.advance()
 	end, err := p.parseOr()
@@ -646,7 +672,13 @@ func (p *parser) parseBlock(ctx string) (*Block, error) {
 			return blk, nil
 		}
 		if p.peekRaw().Kind == KindEOF {
-			return nil, errorAt(open.Pos, "unterminated block (missing '}')")
+			// Flagged Incomplete: the user has opened a block but not
+			// closed it; the REPL keeps reading until `}` arrives.
+			return nil, &ParseError{
+				Pos:        open.Pos,
+				Message:    "unterminated block (missing '}')",
+				Incomplete: true,
+			}
 		}
 		stmt, err := p.parseStatement()
 		if err != nil {
@@ -1034,5 +1066,5 @@ func (p *parser) parseAtom() (Expr, error) {
 	case KindBang:
 		return nil, errorAt(t.Pos, "use 'not' for boolean negation; '!' is reserved")
 	}
-	return nil, errorAt(t.Pos, "expected expression, got %s", t.Kind)
+	return nil, errorAtTok(t, "expected expression, got %s", t.Kind)
 }

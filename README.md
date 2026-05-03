@@ -25,7 +25,7 @@ focus is on building a workable prototype with a minimal feature set:
 
 ### Pre-1.0
 
-- [ ] **v0.0** — toolchain bootstrap.
+- [x] **v0.0** — toolchain bootstrap.
 - [ ] **v0.1** — procedural core.
 - [ ] **v0.2** — composite data.
 - [ ] **v0.3** — borrow checking.

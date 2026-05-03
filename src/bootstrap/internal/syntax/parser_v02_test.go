@@ -897,3 +897,174 @@ func TestParseUnterminatedMatchIsIncomplete(t *testing.T) {
 		t.Errorf("error %q does not mention match", pe.Error())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// v0.2 Unit 3.5 — `for x in xs` (list iteration) parser surface.
+//
+// The range form `for i in 0..n` continues to parse to ForRange; the new
+// list-iter form parses to ForIter with Iter holding the iterable expression.
+// Disambiguation is purely on the token following the head expression — the
+// parser stays liberal about what shape the iterable takes (typeck enforces
+// list).
+// ---------------------------------------------------------------------------
+
+func TestParseForListIterSimple(t *testing.T) {
+	prog := parseProgramSrc(t, "for x in xs { nop }\n")
+	fs := expectOne[*ForStmt](t, prog)
+	if fs.Kind != ForIter {
+		t.Fatalf("kind = %v, want ForIter", fs.Kind)
+	}
+	if fs.Var != "x" {
+		t.Errorf("var = %q, want %q", fs.Var, "x")
+	}
+	if fs.Iter == nil {
+		t.Fatal("Iter = nil")
+	}
+	if id, ok := fs.Iter.(*IdentExpr); !ok || id.Name != "xs" {
+		t.Errorf("Iter = %#v, want IdentExpr{xs}", fs.Iter)
+	}
+	if fs.Range != nil {
+		t.Errorf("Range should be nil for ForIter, got %#v", fs.Range)
+	}
+}
+
+func TestParseForListIterOverListLiteral(t *testing.T) {
+	// Parser stays liberal: any expression is acceptable as the iterable.
+	prog := parseProgramSrc(t, "for x in [1, 2, 3] { print x }\n")
+	fs := expectOne[*ForStmt](t, prog)
+	if fs.Kind != ForIter {
+		t.Fatalf("kind = %v, want ForIter", fs.Kind)
+	}
+	if _, ok := fs.Iter.(*ListLit); !ok {
+		t.Errorf("Iter = %T, want *ListLit", fs.Iter)
+	}
+}
+
+func TestParseForListIterOverCall(t *testing.T) {
+	// Iterable can be any expression; `make_list()` parses fine here.
+	prog := parseProgramSrc(t, "for x in make_list() { print x }\n")
+	fs := expectOne[*ForStmt](t, prog)
+	if fs.Kind != ForIter {
+		t.Fatalf("kind = %v, want ForIter", fs.Kind)
+	}
+	if _, ok := fs.Iter.(*CallExpr); !ok {
+		t.Errorf("Iter = %T, want *CallExpr", fs.Iter)
+	}
+}
+
+func TestParseForRangeStillParsesAsRange(t *testing.T) {
+	// Existing v0.1 form must still produce ForRange — disambiguation is
+	// driven by what follows the start expression.
+	prog := parseProgramSrc(t, "for i in 0..n { nop }\n")
+	fs := expectOne[*ForStmt](t, prog)
+	if fs.Kind != ForRange {
+		t.Fatalf("kind = %v, want ForRange", fs.Kind)
+	}
+	if fs.Iter != nil {
+		t.Errorf("Iter should be nil for ForRange, got %#v", fs.Iter)
+	}
+}
+
+func TestParseForRangeInclusiveStillRange(t *testing.T) {
+	prog := parseProgramSrc(t, "for i in 1..=5 { nop }\n")
+	fs := expectOne[*ForStmt](t, prog)
+	if fs.Kind != ForRange {
+		t.Fatalf("kind = %v, want ForRange", fs.Kind)
+	}
+	if fs.Range == nil || !fs.Range.Inclusive {
+		t.Errorf("range = %#v, want inclusive", fs.Range)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v0.2 Unit 3.5 — `let (a, b) := pair` (tuple destructure) parser surface.
+//
+// Parser populates LetStmt.Tuple (and MutStmt.Tuple) when the LHS is
+// parenthesised; Name stays empty in that case. Annotated destructure is
+// rejected at parse time — typeck never has to handle it.
+// ---------------------------------------------------------------------------
+
+func TestParseLetTupleDestructureTwo(t *testing.T) {
+	prog := parseProgramSrc(t, "let (a, b) := (1, 2)\n")
+	s := expectOne[*LetStmt](t, prog)
+	if s.Tuple == nil {
+		t.Fatal("Tuple = nil, want non-nil destructure binding")
+	}
+	if s.Name != "" {
+		t.Errorf("Name = %q, want empty for destructure form", s.Name)
+	}
+	if got, want := s.Tuple.Names, []string{"a", "b"}; !equalStrSlice(got, want) {
+		t.Errorf("names = %v, want %v", got, want)
+	}
+}
+
+func TestParseLetTupleDestructureThree(t *testing.T) {
+	prog := parseProgramSrc(t, "let (a, b, c) := (1, 2, 3)\n")
+	s := expectOne[*LetStmt](t, prog)
+	if s.Tuple == nil || len(s.Tuple.Names) != 3 {
+		t.Fatalf("Tuple = %#v, want 3 names", s.Tuple)
+	}
+}
+
+func TestParseLetTupleDestructureTrailingComma(t *testing.T) {
+	prog := parseProgramSrc(t, "let (a, b,) := (1, 2)\n")
+	s := expectOne[*LetStmt](t, prog)
+	if s.Tuple == nil || len(s.Tuple.Names) != 2 {
+		t.Fatalf("Tuple = %#v, want 2 names", s.Tuple)
+	}
+}
+
+func TestParseMutTupleDestructure(t *testing.T) {
+	prog := parseProgramSrc(t, "mut (x, y) := (1, 2)\n")
+	s := expectOne[*MutStmt](t, prog)
+	if s.Tuple == nil || len(s.Tuple.Names) != 2 {
+		t.Fatalf("Tuple = %#v, want 2 names", s.Tuple)
+	}
+}
+
+func TestParseConstTupleDestructureParses(t *testing.T) {
+	// Parser admits the form; typeck rejects it (composites aren't
+	// const-evaluable at v0.2). We assert parse success here so the
+	// diagnostic flow lives in typeck where it belongs.
+	prog := parseProgramSrc(t, "const (a, b) := (1, 2)\n")
+	s := expectOne[*ConstStmt](t, prog)
+	if s.Tuple == nil {
+		t.Fatal("Tuple = nil, expected destructure binding")
+	}
+}
+
+func TestParseLetTupleDestructureRejectsRepeatedName(t *testing.T) {
+	expectParseErr(t, "let (a, a) := (1, 2)\n", "repeated")
+}
+
+func TestParseLetTupleDestructureRejectsSingleName(t *testing.T) {
+	// `let (a) := …` would shadow the ParenExpr-grouping rule for
+	// expressions; we keep destructure ≥ 2 names so the form is unambiguous.
+	expectParseErr(t, "let (a) := 1\n", "at least 2 names")
+}
+
+func TestParseLetTupleDestructureRejectsAnnotation(t *testing.T) {
+	// v0.2 doesn't support annotated destructure; the diagnostic fires in
+	// the parser so typeck doesn't have to learn this case.
+	expectParseErr(t, "let (a, b): tuple[int, int] = (1, 2)\n", "annotations on destructure")
+}
+
+func TestParseLetTupleDestructureRequiresWalrus(t *testing.T) {
+	// `let (a, b) = (1, 2)` (plain `=`) is rejected — destructure uses `:=`.
+	expectParseErr(t, "let (a, b) = (1, 2)\n", "expected ':='")
+}
+
+// equalStrSlice is a tiny local helper used only by the destructure tests
+// above. We keep it here rather than promoting it to parser_test.go because
+// no other test in the package needs it today.
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

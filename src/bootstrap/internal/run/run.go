@@ -170,13 +170,20 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 	case *syntax.PrintStmt:
 		return in.execPrint(s)
 	case *syntax.LetStmt:
+		if s.Tuple != nil {
+			return in.execTupleDestructure(s.Tuple, s.Value)
+		}
 		return in.execDecl(s.Name, s.Value)
 	case *syntax.MutStmt:
+		if s.Tuple != nil {
+			return in.execTupleDestructure(s.Tuple, s.Value)
+		}
 		return in.execDecl(s.Name, s.Value)
 	case *syntax.ConstStmt:
 		// At v0.1 a const is just an immutable binding. The type checker has
 		// already enforced that the rhs is a constant expression; runtime
-		// evaluation is the same as let.
+		// evaluation is the same as let. The destructure form is rejected by
+		// typeck so s.Tuple is always nil here.
 		return in.execDecl(s.Name, s.Value)
 	case *syntax.AssignStmt:
 		return in.execAssign(s)
@@ -342,6 +349,30 @@ func (in *interp) execDecl(name string, value syntax.Expr) error {
 	return in.declare(name, copyValue(v))
 }
 
+// execTupleDestructure evaluates `let (a, b, ...) := expr` (and the mut
+// form). The RHS must yield a tuple value of matching arity — typeck has
+// already enforced this, so a mismatch here is an internal error rather
+// than user-facing. Each name is bound to a deep copy of the matching
+// element so the new bindings are independent of the source tuple.
+func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr) error {
+	v, err := in.evalExpr(value)
+	if err != nil {
+		return err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeTuple {
+		return fmt.Errorf("internal: destructure rhs is not a tuple at %s", tb.Pos)
+	}
+	if len(v.Tuple) != len(tb.Names) {
+		return fmt.Errorf("internal: destructure arity mismatch at %s: %d names vs %d elements", tb.Pos, len(tb.Names), len(v.Tuple))
+	}
+	for i, name := range tb.Names {
+		if err := in.declare(name, copyValue(v.Tuple[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // execAssign mutates an existing binding. typeck has already checked the
 // target is mut and the rhs type matches; here we just do the operation.
 func (in *interp) execAssign(s *syntax.AssignStmt) error {
@@ -488,8 +519,54 @@ func (in *interp) execFor(s *syntax.ForStmt) error {
 			}
 		}
 		return nil
+	case syntax.ForIter:
+		// `for x in xs { ... }` — list iteration. Evaluate the iterable
+		// once; deep-copy each element on bind so the loop body sees a
+		// snapshot independent of any later mutation of xs (no list
+		// mutation at v0.2 keeps this academic, but the contract holds).
+		iterV, err := in.evalExpr(s.Iter)
+		if err != nil {
+			return err
+		}
+		if iterV.Type == nil || iterV.Type.Kind != syntax.TypeList {
+			return fmt.Errorf("internal: for-in iterable is not a list at %s", s.Pos)
+		}
+		for _, elem := range iterV.List {
+			cont, err := in.runListIter(s, elem)
+			if err != nil {
+				return err
+			}
+			if !cont {
+				return nil
+			}
+		}
+		return nil
 	}
 	return fmt.Errorf("internal: unknown for kind at %s", s.Pos)
+}
+
+// runListIter executes one iteration of a `for x in xs` body with the loop
+// variable bound to a deep copy of elem. Mirrors runRangeIter's contract:
+// returns (continueLoop, err) where false means break, true means proceed.
+func (in *interp) runListIter(s *syntax.ForStmt, elem Value) (bool, error) {
+	in.pushFrame()
+	defer in.popFrame()
+	if err := in.declare(s.Var, copyValue(elem)); err != nil {
+		return false, err
+	}
+	for _, st := range s.Body.Statements {
+		err := in.execStmt(st)
+		if errors.Is(err, errBreak) {
+			return false, nil
+		}
+		if errors.Is(err, errContinue) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // runRangeIter executes one iteration of a for-in body with the loop var

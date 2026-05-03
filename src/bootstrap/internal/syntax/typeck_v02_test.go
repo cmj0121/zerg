@@ -614,3 +614,116 @@ func TestCheckStructVoidFieldRejected(t *testing.T) {
 		t.Fatalf("void singleton mismatch")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// v0.2 Unit 3.5 — `for x in xs` (list iteration).
+//
+// Loop variable type is the list element type; empty lists are admissible
+// (loop body never runs, no type error). Non-list iterables are rejected
+// with a precise diagnostic.
+// ---------------------------------------------------------------------------
+
+func TestCheckForListIterIntList(t *testing.T) {
+	checkSrc(t, "let xs := [1, 2, 3]\nfor x in xs { print x }\n")
+}
+
+func TestCheckForListIterEmptyAnnotated(t *testing.T) {
+	// Empty list with explicit annotation is fine — body never runs but the
+	// element type is known.
+	checkSrc(t, "let xs: list[int] = []\nfor x in xs { print x }\n")
+}
+
+func TestCheckForListIterStructList(t *testing.T) {
+	src := `struct Point { x: int, y: int }
+let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+for p in pts { print p.x }
+`
+	checkSrc(t, src)
+}
+
+func TestCheckForListIterFromCall(t *testing.T) {
+	src := `fn make() -> list[int] {
+  return [1, 2, 3]
+}
+for x in make() { print x }
+`
+	checkSrc(t, src)
+}
+
+func TestCheckForListIterRejectsNonList(t *testing.T) {
+	checkErr(t, "let n := 5\nfor x in n { print x }\n", "must be a list")
+}
+
+func TestCheckForListIterRejectsTuple(t *testing.T) {
+	checkErr(t, "let p := (1, 2)\nfor x in p { print x }\n", "must be a list")
+}
+
+// ---------------------------------------------------------------------------
+// v0.2 Unit 3.5 — `let (a, b) := pair` tuple destructure.
+//
+// Each name binds at the corresponding tuple element type; arity must match
+// exactly; non-tuple RHS is rejected; repeated names are caught at parse
+// time (not typeck) so we exercise the typeck-only failure modes here.
+// ---------------------------------------------------------------------------
+
+func TestCheckLetTupleDestructureTwo(t *testing.T) {
+	checkSrc(t, "let (a, b) := (1, 2)\nprint a\nprint b\n")
+}
+
+func TestCheckLetTupleDestructureThree(t *testing.T) {
+	checkSrc(t, "let (a, b, c) := (1, 2, 3)\nprint a\nprint b\nprint c\n")
+}
+
+func TestCheckLetTupleDestructureMixedTypes(t *testing.T) {
+	// The two element types differ; each name picks up its own type.
+	checkSrc(t, `let (a, b) := (1, "two")
+print a
+print b
+`)
+}
+
+func TestCheckLetTupleDestructureFromBound(t *testing.T) {
+	checkSrc(t, "let pair := (10, 20)\nlet (a, b) := pair\nprint a + b\n")
+}
+
+func TestCheckLetTupleDestructureWithStruct(t *testing.T) {
+	src := `struct Point { x: int, y: int }
+let pair := (Point { x: 1, y: 2 }, 99)
+let (p, n) := pair
+print p.x
+print n
+`
+	checkSrc(t, src)
+}
+
+func TestCheckLetTupleDestructureArityTooFew(t *testing.T) {
+	checkErr(t, "let (a, b) := (1, 2, 3)\n", "destructure expects 2")
+}
+
+func TestCheckLetTupleDestructureArityTooMany(t *testing.T) {
+	checkErr(t, "let (a, b, c) := (1, 2)\n", "destructure expects 3")
+}
+
+func TestCheckLetTupleDestructureRejectsNonTuple(t *testing.T) {
+	checkErr(t, "let xs := [1, 2]\nlet (a, b) := xs\n", "requires a tuple")
+}
+
+func TestCheckLetTupleDestructureRejectsListLiteral(t *testing.T) {
+	checkErr(t, "let (a, b) := [1, 2]\n", "requires a tuple")
+}
+
+func TestCheckLetTupleDestructureShadowingRejected(t *testing.T) {
+	// Shadowing follows the same rule as single-name decls — same-scope
+	// redeclaration is an error.
+	checkErr(t, "let a := 1\nlet (a, b) := (2, 3)\n", "already declared")
+}
+
+func TestCheckMutTupleDestructureBindings(t *testing.T) {
+	checkSrc(t, "mut (a, b) := (1, 2)\na = 10\nprint a + b\n")
+}
+
+func TestCheckConstTupleDestructureRejected(t *testing.T) {
+	// Composites aren't const-evaluable at v0.2; a precise diagnostic comes
+	// from typeck rather than the bare "not constant expression" path.
+	checkErr(t, "const (a, b) := (1, 2)\n", "destructure is not allowed on const")
+}

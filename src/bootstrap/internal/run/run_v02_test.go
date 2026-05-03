@@ -345,3 +345,152 @@ match pair {
 `
 	expectOK(t, src, "3\n")
 }
+
+// ---------------------------------------------------------------------------
+// v0.2 Unit 3.5 — `for x in xs` (list iteration) runtime.
+//
+// Each iteration binds x to a deep copy of the list element. break/continue
+// behave the same as in the range form (the unwinding is shared via
+// errBreak/errContinue).
+// ---------------------------------------------------------------------------
+
+func TestRunForListIterPrintsElements(t *testing.T) {
+	src := `let xs := [1, 2, 3]
+for x in xs {
+  print x
+}
+`
+	expectOK(t, src, "1\n2\n3\n")
+}
+
+func TestRunForListIterEmptyList(t *testing.T) {
+	// Empty list ⇒ body never runs ⇒ no output, no error.
+	src := `let xs: list[int] = []
+for x in xs {
+  print x
+}
+print "done"
+`
+	expectOK(t, src, "done\n")
+}
+
+func TestRunForListIterListOfStructs(t *testing.T) {
+	src := `struct Point { x: int, y: int }
+let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+for p in pts {
+  print p.x
+}
+`
+	expectOK(t, src, "1\n3\n")
+}
+
+func TestRunForListIterFromFunctionCall(t *testing.T) {
+	// Iterating over a fn-returned list. Deep-copy on bind makes the loop
+	// var independent of the source list — v0.2 has no list mutation so
+	// the user-observable contract is just "values arrive in order".
+	src := `fn make() -> list[int] {
+  return [10, 20, 30]
+}
+for x in make() {
+  print x
+}
+`
+	expectOK(t, src, "10\n20\n30\n")
+}
+
+func TestRunForListIterBreak(t *testing.T) {
+	src := `let xs := [1, 2, 3, 4, 5]
+for x in xs {
+  break if x > 2
+  print x
+}
+print "done"
+`
+	expectOK(t, src, "1\n2\ndone\n")
+}
+
+func TestRunForListIterContinue(t *testing.T) {
+	src := `let xs := [1, 2, 3, 4]
+for x in xs {
+  continue if x == 2
+  print x
+}
+`
+	expectOK(t, src, "1\n3\n4\n")
+}
+
+func TestRunForListIterListOfStrings(t *testing.T) {
+	src := `let xs := ["a", "b", "c"]
+for s in xs {
+  print s
+}
+`
+	expectOK(t, src, "a\nb\nc\n")
+}
+
+// ---------------------------------------------------------------------------
+// v0.2 Unit 3.5 — `let (a, b) := pair` tuple destructure runtime.
+//
+// Each name is bound to a deep copy of the matching element; the whole
+// declaration is otherwise an ordinary let/mut binding (assignable when
+// declared with mut, immutable when declared with let).
+// ---------------------------------------------------------------------------
+
+func TestRunLetTupleDestructureBasic(t *testing.T) {
+	expectOK(t, "let (a, b) := (1, 2)\nprint a\nprint b\n", "1\n2\n")
+}
+
+func TestRunLetTupleDestructureThree(t *testing.T) {
+	expectOK(t, "let triple := (10, 20, 30)\nlet (a, b, c) := triple\nprint a\nprint b\nprint c\n", "10\n20\n30\n")
+}
+
+func TestRunLetTupleDestructureMixedTypes(t *testing.T) {
+	expectOK(t, `let (a, b) := (42, "hi")
+print a
+print b
+`, "42\nhi\n")
+}
+
+func TestRunLetTupleDestructureWithStruct(t *testing.T) {
+	src := `struct Point { x: int, y: int }
+let pair := (Point { x: 7, y: 11 }, 99)
+let (p, n) := pair
+print p
+print p.x + n
+`
+	expectOK(t, src, "Point { x: 7, y: 11 }\n106\n")
+}
+
+func TestRunLetTupleDestructureNested(t *testing.T) {
+	// Nested tuple inside the RHS — destructure picks up the outer pair,
+	// the inner tuple stays as a tuple value bound to the second name.
+	src := `let pair := (1, (2, 3))
+let (a, b) := pair
+print a
+print b
+`
+	expectOK(t, src, "1\n( 2, 3 )\n")
+}
+
+func TestRunMutTupleDestructureAssignable(t *testing.T) {
+	// mut lets us reassign each binding individually after destructure.
+	src := `mut (a, b) := (1, 2)
+a = a + 10
+print a
+print b
+`
+	expectOK(t, src, "11\n2\n")
+}
+
+func TestRunLetTupleDestructureDeepCopy(t *testing.T) {
+	// Composite element gets deep-copied on bind. We can't observe the
+	// copy directly without list mutation; we settle for showing the bind
+	// produces an independent struct value with the right shape.
+	src := `struct Point { x: int, y: int }
+let pair := (Point { x: 1, y: 2 }, Point { x: 3, y: 4 })
+let (p, q) := pair
+print p
+print q
+`
+	expectOK(t, src, "Point { x: 1, y: 2 }\nPoint { x: 3, y: 4 }\n")
+}

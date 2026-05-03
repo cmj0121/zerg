@@ -608,10 +608,24 @@ func (c *checker) checkStmt(stmt Stmt) error {
 	case *PrintStmt:
 		return c.checkPrint(s)
 	case *LetStmt:
+		if s.Tuple != nil {
+			return c.checkTupleDestructure(s.Pos, s.Tuple, s.Value, bindLet)
+		}
 		return c.checkDecl(s.Pos, s.Name, s.Type, s.Value, bindLet)
 	case *MutStmt:
+		if s.Tuple != nil {
+			return c.checkTupleDestructure(s.Pos, s.Tuple, s.Value, bindMut)
+		}
 		return c.checkDecl(s.Pos, s.Name, s.Type, s.Value, bindMut)
 	case *ConstStmt:
+		if s.Tuple != nil {
+			// PLAN: composites are not const-evaluable at v0.2 (isConstExpr
+			// rejects every tuple/list/struct shape), so a destructured const
+			// is unreachable in practice. Emit the precise diagnostic anyway
+			// so the parser-accepted form fails with a clear reason rather
+			// than an opaque "not a constant expression".
+			return typeErr(s.Pos, "tuple destructure is not allowed on const at v0.2 (no const-evaluable composite expressions)")
+		}
 		if !isConstExpr(s.Value) {
 			return typeErr(s.Pos, "const initialiser must be a constant expression")
 		}
@@ -722,6 +736,40 @@ func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr,
 	return nil
 }
 
+// checkTupleDestructure handles `let (a, b) := expr` (and the mut form). The
+// RHS must be a tuple type with arity matching the LHS name list; each name
+// is then bound in the surrounding scope with its element type. The parser
+// has already rejected repeated names; the only diagnostics generated here
+// are for arity / shape mismatch and shadowing-in-the-same-scope.
+//
+// Annotated destructure (`let (a, b): tuple[int, int] = ...`) is rejected by
+// the parser so we never see a non-nil TypeRef here.
+func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Expr, kind bindKind) error {
+	observed, err := c.checkExpr(value)
+	if err != nil {
+		return err
+	}
+	if observed == nil || observed.Kind != TypeTuple {
+		return typeErr(pos, "tuple destructure requires a tuple value, got %s", observed)
+	}
+	if len(observed.Tuple) != len(tb.Names) {
+		return typeErr(pos, "destructure expects %d element(s), value has %d", len(tb.Names), len(observed.Tuple))
+	}
+	for i, name := range tb.Names {
+		elemT := observed.Tuple[i]
+		if elemT == nil || elemT.Kind == TypeUnknown {
+			return typeErr(tb.NamePos[i], "cannot infer type of %q from tuple element %d", name, i+1)
+		}
+		if elemT == tVoid {
+			return typeErr(tb.NamePos[i], "cannot bind %q to a value of type ()", name)
+		}
+		if !c.scope.declare(name, binding{kind: kind, typ: elemT}) {
+			return typeErr(tb.NamePos[i], "name %q already declared in this scope", name)
+		}
+	}
+	return nil
+}
+
 // checkAssign validates the lhs is mut, then matches operator semantics.
 func (c *checker) checkAssign(s *AssignStmt) error {
 	b, ok := c.scope.lookup(s.Target.Name)
@@ -828,6 +876,29 @@ func (c *checker) checkFor(s *ForStmt) error {
 		c.scope = newScope(c.scope)
 		defer func() { c.scope = c.scope.parent }()
 		if !c.scope.declare(s.Var, binding{kind: bindLet, typ: tInt}) {
+			return typeErr(s.VarPos, "name %q already declared in this scope", s.Var)
+		}
+		for _, st := range s.Body.Statements {
+			if err := c.checkStmt(st); err != nil {
+				return err
+			}
+		}
+		return nil
+	case ForIter:
+		// `for x in xs { ... }` — iterate over a list-typed expression. The
+		// loop variable's type is the element type. Empty lists are allowed
+		// (the body never runs); typeck rejects unannotated empty literals
+		// upstream so the iterable's element type is always concrete here.
+		iterT, err := c.checkExpr(s.Iter)
+		if err != nil {
+			return err
+		}
+		if iterT == nil || iterT.Kind != TypeList {
+			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable must be a list, got %s", iterT)
+		}
+		c.scope = newScope(c.scope)
+		defer func() { c.scope = c.scope.parent }()
+		if !c.scope.declare(s.Var, binding{kind: bindLet, typ: iterT.Element}) {
 			return typeErr(s.VarPos, "name %q already declared in this scope", s.Var)
 		}
 		for _, st := range s.Body.Statements {

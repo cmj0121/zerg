@@ -270,10 +270,23 @@ const (
 	declConst
 )
 
-// parseDecl handles let/mut/const with both `name := expr` and
-// `name: T = expr` forms.
+// parseDecl handles let/mut/const in three shapes:
+//
+//   - `let name := expr` / `mut name := expr` / `const name := expr`
+//   - `let name : T = expr` (annotated)
+//   - `let (a, b, ...) := expr` — v0.2 tuple-destructure declaration. The
+//     parenthesised LHS introduces ≥ 2 fresh names in the current scope; the
+//     RHS must be a tuple of matching arity (typeck enforces). v0.2 does not
+//     admit a type annotation on the destructure form — typeck infers from
+//     the RHS shape.
 func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 	keyword := p.advance() // consume let/mut/const
+
+	// Tuple-destructure LHS: `let (a, b) := expr`.
+	if p.peek().Kind == KindLParen {
+		return p.parseTupleDestructureDecl(kind, keyword.Pos)
+	}
+
 	nameTok, err := p.expect(KindIdent, "after "+kindLabel(kind))
 	if err != nil {
 		return nil, err
@@ -314,6 +327,76 @@ func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 	}
 	// Unreachable: declKind exhausts to three values handled above.
 	return nil, errorAt(keyword.Pos, "internal error: unknown decl kind")
+}
+
+// parseTupleDestructureDecl consumes the parenthesised LHS of a destructure
+// declaration plus its `:=` and RHS. The leading keyword (`let`/`mut`/
+// `const`) and its position have been consumed by the caller; the cursor is
+// at `(`.
+//
+// Grammar: `'(' IDENT (',' IDENT)+ ','? ')' ':=' expr`. PLAN-pinned: ≥ 2
+// names — `let (a) := …` is a parse error (ParenExpr-grouping is reserved
+// for expression position). Repeated names within the same LHS are a
+// parse-time error so typeck doesn't have to catch a contradictory binding
+// pair. v0.2 admits no type annotation on the destructure form — the parser
+// rejects `: T` between `)` and `:=` so we do not have to teach typeck about
+// annotated destructures.
+func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (Stmt, error) {
+	openTok, err := p.expectParen(KindLParen, "in destructure "+kindLabel(kind))
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	var positions []Position
+	seen := map[string]bool{}
+	for {
+		if p.peek().Kind == KindRParen {
+			break
+		}
+		nameTok, err := p.expect(KindIdent, "in destructure name list")
+		if err != nil {
+			return nil, err
+		}
+		if seen[nameTok.Value] {
+			return nil, errorAt(nameTok.Pos, "name %q repeated in destructure pattern", nameTok.Value)
+		}
+		seen[nameTok.Value] = true
+		names = append(names, nameTok.Value)
+		positions = append(positions, nameTok.Pos)
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close destructure pattern"); err != nil {
+		return nil, err
+	}
+	if len(names) < 2 {
+		return nil, errorAt(openTok.Pos, "destructure pattern requires at least 2 names (use the single-name form for one)")
+	}
+	// `:=` only — annotated destructure deferred at v0.2.
+	if k := p.peek().Kind; k == KindColon {
+		bad := p.peek()
+		return nil, errorAt(bad.Pos, "type annotations on destructure declarations are not supported at v0.2")
+	}
+	if _, err := p.expect(KindWalrus, "after destructure pattern"); err != nil {
+		return nil, err
+	}
+	value, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	tb := &TupleBinding{Pos: openTok.Pos, Names: names, NamePos: positions}
+	switch kind {
+	case declLet:
+		return &LetStmt{Pos: keywordPos, Tuple: tb, Value: value}, nil
+	case declMut:
+		return &MutStmt{Pos: keywordPos, Tuple: tb, Value: value}, nil
+	case declConst:
+		return &ConstStmt{Pos: keywordPos, Tuple: tb, Value: value}, nil
+	}
+	return nil, errorAt(keywordPos, "internal error: unknown decl kind")
 }
 
 func kindLabel(k declKind) string {
@@ -689,7 +772,7 @@ func (p *parser) parseIfStmt() (Stmt, error) {
 	return stmt, nil
 }
 
-// parseForStmt handles all three for-loop shapes.
+// parseForStmt handles all four for-loop shapes.
 func (p *parser) parseForStmt() (Stmt, error) {
 	kw := p.advance() // consume `for`
 
@@ -703,14 +786,16 @@ func (p *parser) parseForStmt() (Stmt, error) {
 	}
 
 	// Disambiguate `for x in ...` from `for cond { ... }` by trying the
-	// range head first when the next two tokens look like one. This is a
-	// LL(2) check, which the grammar can absorb without a backtrack.
+	// `IDENT in` head first. This is a LL(2) check, which the grammar can
+	// absorb without a backtrack. Once we see `IDENT in`, the head expr is
+	// either a range (`expr..expr` / `expr..=expr`) or a list-typed expr;
+	// parseForInHeader picks the right shape after parsing the start expr.
 	if p.peek().Kind == KindIdent {
 		// Look two ahead via the raw tokens. We can't use peek alone because
 		// peek is only one-token lookahead; we want to know if the next
 		// non-newline token after the ident is `in`.
 		if k := p.peekKindAfterIdent(); k == KindIn {
-			return p.parseForRange(kw.Pos)
+			return p.parseForInHeader(kw.Pos)
 		}
 	}
 
@@ -740,51 +825,70 @@ func (p *parser) peekKindAfterIdent() Kind {
 	return p.tokens[i].Kind
 }
 
-// parseForRange handles `for IDENT in EXPR..EXPR { ... }` /
-// `for IDENT in EXPR..=EXPR { ... }`. RangeExprs are produced ONLY here at
-// v0.1 — the general expression parser refuses to construct them.
-func (p *parser) parseForRange(forPos Position) (Stmt, error) {
+// parseForInHeader handles both v0.1's range form and v0.2's list-iter form:
+//
+//   - `for IDENT in EXPR..EXPR { ... }` / `for IDENT in EXPR..=EXPR { ... }`
+//     — range iteration. RangeExprs are produced ONLY here — the general
+//     expression parser refuses to construct them.
+//   - `for IDENT in EXPR { ... }` — iterate over a list-typed expression,
+//     binding IDENT to a deep copy of each element on each iteration.
+//
+// We parse the head expression with parseOr (not parseExpr) so the
+// trailing-range guard inside parseExpr doesn't fire on the `..` / `..=` we
+// might be about to consume. After the start expression we peek: if `..` or
+// `..=` follows we're in the range form; otherwise we treat the expression
+// as the iterable. typeck owns the "iterable must be a list" rule — the
+// parser stays liberal so future iterables (str, etc.) need only a typeck
+// extension.
+func (p *parser) parseForInHeader(forPos Position) (Stmt, error) {
 	nameTok, _ := p.expect(KindIdent, "in 'for' header") // already known ident
 	if _, err := p.expect(KindIn, "in 'for' header"); err != nil {
 		return nil, err
 	}
 	// parseOr (not parseExpr) so the trailing-range guard in parseExpr
-	// doesn't fire on the `..` / `..=` we are about to consume.
-	start, err := p.parseOr()
+	// doesn't fire on the `..` / `..=` we may be about to consume.
+	headExpr, err := p.parseOr()
 	if err != nil {
 		return nil, err
 	}
-	rangeTok := p.peek()
-	var inclusive bool
-	switch rangeTok.Kind {
-	case KindRange:
-		inclusive = false
-	case KindRangeEq:
-		inclusive = true
-	default:
-		return nil, errorAtTok(rangeTok, "expected '..' or '..=' in 'for' range, got %s", rangeTok.Kind)
+	switch p.peek().Kind {
+	case KindRange, KindRangeEq:
+		rangeTok := p.advance()
+		inclusive := rangeTok.Kind == KindRangeEq
+		end, err := p.parseOr()
+		if err != nil {
+			return nil, err
+		}
+		body, err := p.parseBlock("'for' body")
+		if err != nil {
+			return nil, err
+		}
+		return &ForStmt{
+			Pos:    forPos,
+			Kind:   ForRange,
+			Var:    nameTok.Value,
+			VarPos: nameTok.Pos,
+			Range: &RangeExpr{
+				Pos:       rangeTok.Pos,
+				Start:     headExpr,
+				End:       end,
+				Inclusive: inclusive,
+			},
+			Body: body,
+		}, nil
 	}
-	p.advance()
-	end, err := p.parseOr()
-	if err != nil {
-		return nil, err
-	}
+	// No range follows: list-iter form.
 	body, err := p.parseBlock("'for' body")
 	if err != nil {
 		return nil, err
 	}
 	return &ForStmt{
 		Pos:    forPos,
-		Kind:   ForRange,
+		Kind:   ForIter,
 		Var:    nameTok.Value,
 		VarPos: nameTok.Pos,
-		Range: &RangeExpr{
-			Pos:       rangeTok.Pos,
-			Start:     start,
-			End:       end,
-			Inclusive: inclusive,
-		},
-		Body: body,
+		Iter:   headExpr,
+		Body:   body,
 	}, nil
 }
 

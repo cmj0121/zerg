@@ -292,12 +292,34 @@ type Block struct {
 	Statements []Stmt
 }
 
+// TupleBinding is the parenthesised LHS of a let/mut/const tuple destructure
+// declaration: `let (a, b) := pair` / `mut (x, y, z) := triple`. v0.2 admits
+// only flat name lists (≥ 2 names); annotated tuple destructure (`let (a, b):
+// tuple[int, int] = ...`) is deferred — the RHS drives inference. Each name
+// becomes a fresh binding in the surrounding scope; typeck rejects repeated
+// names at the point of declare().
+//
+// LetStmt/MutStmt/ConstStmt embed an optional *TupleBinding (Tuple). When
+// Tuple is non-nil, Name is empty and Type is nil — the parser enforces both.
+// When Tuple is nil the declaration is the v0.1 single-name form and Name
+// carries the bound identifier.
+type TupleBinding struct {
+	Pos       Position
+	Names     []string   // ≥ 2 names; parser rejects shorter lists
+	NamePos   []Position // 1:1 with Names; used for precise diagnostics
+}
+
 // LetStmt represents `let name [: T] = expr` / `let name := expr`. Type is
 // nil when the user wrote the walrus form and inference must do the work.
+//
+// v0.2 also admits the tuple-destructure form `let (a, b) := expr`. When the
+// LHS is parenthesised the parser populates Tuple instead of Name; Type is
+// not allowed on the destructure form (typeck infers from the RHS).
 type LetStmt struct {
 	Pos   Position
-	Name  string
-	Type  *TypeRef // nil ⇒ inferred from Value
+	Name  string        // empty when Tuple != nil
+	Tuple *TupleBinding // nil for the single-name form
+	Type  *TypeRef      // nil ⇒ inferred from Value
 	Value Expr
 }
 
@@ -305,10 +327,13 @@ func (*LetStmt) stmtNode()           {}
 func (s *LetStmt) StmtPos() Position { return s.Pos }
 
 // MutStmt is `mut name [: T] = expr` / `mut name := expr`. Same shape as
-// LetStmt; the distinction is whether the binding is later assignable.
+// LetStmt; the distinction is whether the binding is later assignable. The
+// tuple-destructure form `mut (a, b) := expr` is admitted on the same terms
+// as LetStmt.
 type MutStmt struct {
 	Pos   Position
 	Name  string
+	Tuple *TupleBinding
 	Type  *TypeRef
 	Value Expr
 }
@@ -318,10 +343,13 @@ func (s *MutStmt) StmtPos() Position { return s.Pos }
 
 // ConstStmt is `const name [: T] = expr` / `const name := expr`. The parser
 // accepts any expression on the right-hand side; the type checker is
-// responsible for asserting that it's a constant expression.
+// responsible for asserting that it's a constant expression. Tuple
+// destructure on a const is admitted by the parser; typeck rejects it
+// because v0.2 has no const-evaluable composite expressions.
 type ConstStmt struct {
 	Pos   Position
 	Name  string
+	Tuple *TupleBinding
 	Type  *TypeRef
 	Value Expr
 }
@@ -438,7 +466,7 @@ type IfStmt struct {
 func (*IfStmt) stmtNode()           {}
 func (s *IfStmt) StmtPos() Position { return s.Pos }
 
-// ForKind selects which of the three for-loop shapes a ForStmt represents.
+// ForKind selects which of the four for-loop shapes a ForStmt represents.
 type ForKind int
 
 // For-loop shapes.
@@ -446,18 +474,24 @@ const (
 	ForInfinite ForKind = iota // for { ... }
 	ForCond                    // for cond { ... }
 	ForRange                   // for x in start..end { ... }
+	ForIter                    // for x in xs { ... } — iterate over a list value
 )
 
-// ForStmt covers all three for-loop shapes via Kind. Only the fields relevant
+// ForStmt covers all four for-loop shapes via Kind. Only the fields relevant
 // to Kind are populated; the rest are zero values.
+//
+// ForRange uses Var/VarPos plus Range; ForIter uses Var/VarPos plus Iter.
+// The two list-iteration shapes share the loop variable + body machinery and
+// diverge only in how the per-iteration value is produced.
 type ForStmt struct {
-	Pos   Position
-	Kind  ForKind
-	Cond  Expr       // ForCond
-	Var   string     // ForRange — the bound variable name
-	VarPos Position  // ForRange — position of the variable name
-	Range *RangeExpr // ForRange — the iteration range
-	Body  *Block
+	Pos    Position
+	Kind   ForKind
+	Cond   Expr       // ForCond
+	Var    string     // ForRange / ForIter — the bound variable name
+	VarPos Position   // ForRange / ForIter — position of the variable name
+	Range  *RangeExpr // ForRange — the iteration range
+	Iter   Expr       // ForIter — the list-typed expression to iterate
+	Body   *Block
 }
 
 func (*ForStmt) stmtNode()           {}

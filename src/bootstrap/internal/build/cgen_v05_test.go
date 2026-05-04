@@ -502,6 +502,55 @@ print uc.show()
 	}, "main\nutil\n")
 }
 
+// TestV05ParitySameNamedEnumDispatch — same shape as the struct twin but
+// for enums. Two modules each declare `enum Status` and impl an inherent
+// method. Codegen must mangle each impl method against the receiver's
+// defining-module mangle so the two C symbols stay distinct (the bug
+// before this fix collapsed them onto the entry module's mangle, producing
+// a `cc` redefinition error).
+func TestV05ParitySameNamedEnumDispatch(t *testing.T) {
+	expectV05Parity(t, "main.zg", map[string]string{
+		"util.zg": `pub enum Status { Active, Done }
+impl Status {
+pub fn label() -> str { return "util" }
+}
+`,
+		"main.zg": `import "util"
+enum Status { Active, Done }
+impl Status {
+pub fn label() -> str { return "main" }
+}
+let ms := Status.Active
+print ms.label()
+let us := util.Status.Done
+print us.label()
+`,
+	}, "main\nutil\n")
+}
+
+// TestV05ParitySameNamedPayloadEnumDispatch — payload-carrying twin of
+// TestV05ParitySameNamedEnumDispatch. Same root cause: cross-module enum
+// receiver's mangle must be the defining module's, not the entry's.
+func TestV05ParitySameNamedPayloadEnumDispatch(t *testing.T) {
+	expectV05Parity(t, "main.zg", map[string]string{
+		"util.zg": `pub enum Token { Eof, Ident(str) }
+impl Token {
+pub fn label() -> str { return "util" }
+}
+`,
+		"main.zg": `import "util"
+enum Token { Eof, Ident(str) }
+impl Token {
+pub fn label() -> str { return "main" }
+}
+let mt := Token.Ident("x")
+print mt.label()
+let ut := util.Token.Ident("y")
+print ut.label()
+`,
+	}, "main\nutil\n")
+}
+
 // 14. Diamond import — main imports b and c, both import d. d's pub fn
 // must be reachable from main and produce the same value through both
 // paths.

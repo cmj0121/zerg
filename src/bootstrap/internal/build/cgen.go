@@ -142,6 +142,21 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 				if me.view == entry {
 					g.fnTable[s.Name] = s
 				}
+			case *syntax.ImplDecl:
+				// typeck (Unit 6.5) stamps the canonical *Type pointer of
+				// the resolved receiver onto s.Receiver. Use it to claim
+				// ownership when the receiver type is declared in this
+				// module — covers the case where the module declares
+				// `enum X { ... } impl X { ... }` but never references X
+				// from an expression site (so neither findCanonicalTypeRef
+				// nor stampCrossModuleOwners can recover the canonical
+				// pointer for this module). Same root cause that Unit 6.5
+				// fixed for the interp-side dispatch table.
+				if s.TypeModule == "" && s.Receiver != nil {
+					if _, set := g.typeOwner[s.Receiver]; !set {
+						g.typeOwner[s.Receiver] = me.mangle
+					}
+				}
 			}
 		}
 	}
@@ -344,12 +359,22 @@ func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map
 				walkE(f.Value)
 			}
 		case *syntax.EnumLit:
-			// EnumLit doesn't carry a Module field; cross-module enum
-			// lits arrive lowered through MethodCallExpr / FieldAccess
-			// shapes and the local stamp pass handles those when the
-			// host module is the foreign owner. The Lowered form's
-			// Type() already points at the canonical *Type and the
-			// MethodCallExpr below stamps via x.Module.
+			// Cross-module enum lits (`mod.Status.Ok`,
+			// `mod.Token.Ident("x")`) carry the importing-module's local
+			// binding name in x.Module; resolve it to the foreign mangle
+			// and stamp the canonical *Type so the receiver's defining
+			// module wins ownership even when the foreign module never
+			// references its own enum from an expression. Mirrors the
+			// StructLit branch above.
+			if x.Module != "" {
+				if foreignMangle, ok := host.imports[x.Module]; ok {
+					if t := x.Type(); t != nil {
+						if _, set := owner[t]; !set {
+							owner[t] = foreignMangle
+						}
+					}
+				}
+			}
 			for _, p := range x.Payload {
 				walkE(p)
 			}
@@ -3335,7 +3360,18 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 			// has been validated by typeck, so the type resolution lookup
 			// below is best-effort — if it fails we fall back to the methods
 			// alone, which still emit the C fn but with no vtable wrapper.
-			receiverT := g.lookupReceiverType(prog, s.Type)
+			//
+			// Prefer the canonical *Type pointer typeck stamped on
+			// s.Receiver (Unit 6.5). It is the same pointer keying every
+			// dispatch site, so two modules' same-named receivers stay
+			// distinct here even when neither module surfaces the type
+			// from a value-site expression.
+			var receiverT *syntax.Type
+			if s.Receiver != nil {
+				receiverT = s.Receiver
+			} else {
+				receiverT = g.lookupReceiverType(prog, s.Type)
+			}
 			implKeyName := s.Type
 			if receiverT != nil {
 				// Disambiguate same-name types across modules by qualifying

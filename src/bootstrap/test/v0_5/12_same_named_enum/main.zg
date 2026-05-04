@@ -2,7 +2,13 @@ import "util"
 
 enum Status { Active, Done }
 
+impl Status {
+    pub fn label() -> str {
+        return "main"
+    }
+}
+
 let ms := Status.Active
-print ms
+print ms.label()
 let us := util.Status.Done
-print us
+print us.label()

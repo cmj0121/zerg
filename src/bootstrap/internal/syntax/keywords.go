@@ -51,4 +51,11 @@ var keywords = map[string]Kind{
 	// map so the lexer table stays the single source of truth.
 	"import": KindImport,
 	"as":     KindAs,
+	// v0.6 null-safety. `nil` is the absence-of-value literal in expression
+	// position; the lexer promotes the bare word so the parser can distinguish
+	// it from any user-defined identifier. The reserved-name rule extends
+	// transitively: a module imported as `nil`, a let bound to the name, etc.
+	// all reject at parse time via the same keywords-table cross-check used
+	// by every other keyword.
+	"nil": KindNil,
 }

@@ -550,7 +550,7 @@ func isKeywordKind(k Kind) bool {
 		KindElif, KindElse, KindFalse, KindFn, KindFor, KindIf, KindIn,
 		KindLet, KindLoop, KindMut, KindNot, KindOr, KindReturn, KindTrue,
 		KindWhile, KindXor, KindStruct, KindEnum, KindMatch, KindSpec,
-		KindImpl, KindThis, KindPub, KindImport, KindAs:
+		KindImpl, KindThis, KindPub, KindImport, KindAs, KindNil:
 		return true
 	}
 	return false
@@ -741,7 +741,46 @@ func kindLabel(k declKind) string {
 // identifiers so users can still bind names like `let list := ...`); they
 // trigger compound parsing only when they appear in type-ref position
 // followed by `[`.
+//
+// v0.6 extends the grammar with two postfix shapes:
+//
+//   - generic type-args: any TypeRefNamed (and the qualified `mod.Type`
+//     form) admits a `[arg, arg, ...]` tail that captures the use-site
+//     instantiation. `Box[int]`, `Result[int, str]`, `mod.Map[str, int]`.
+//   - nullable: a single trailing `?` on any type position desugars to
+//     `Option[T]` at typeck. `int?`, `Box[int]?`, `list[int]?`. `T??` is
+//     rejected at parse time — the user must spell the second layer
+//     explicitly via `Option[T?]` if they really want nested nullability.
 func (p *parser) parseTypeRef() (*TypeRef, error) {
+	tr, err := p.parseTypeRefHead()
+	if err != nil {
+		return nil, err
+	}
+	// v0.6 nullable suffix. A single trailing `?` is admitted on any type
+	// position and desugars to Option[T] at typeck. Double `?` is rejected
+	// in two shapes: lexed as two `?` tokens (`? ?`) or as one `??` token
+	// (the longest-match rule fuses them). Both produce the same diagnostic.
+	switch p.peek().Kind {
+	case KindQuestion:
+		p.advance()
+		tr.Nullable = true
+		if p.peek().Kind == KindQuestion {
+			bad := p.peek()
+			return nil, errorAt(bad.Pos, "double-nullable types ('??') are not supported; nest with Option[T?] if intentional")
+		}
+	case KindCoalesce:
+		// `T??` lexed as one token. Anchor the diagnostic at the same
+		// position as the two-token form so message text is uniform.
+		bad := p.peek()
+		return nil, errorAt(bad.Pos, "double-nullable types ('??') are not supported; nest with Option[T?] if intentional")
+	}
+	return tr, nil
+}
+
+// parseTypeRefHead parses a type reference without the trailing `?` suffix.
+// Splitting head/tail keeps the nullable check at parseTypeRef tidy and
+// shares one path for every shape.
+func (p *parser) parseTypeRefHead() (*TypeRef, error) {
 	t := p.peek()
 	if t.Kind != KindIdent {
 		return nil, errorAtTok(t, "expected type name, got %s", t.Kind)
@@ -769,15 +808,33 @@ func (p *parser) parseTypeRef() (*TypeRef, error) {
 		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == KindIdent {
 			p.advance() // consume `.`
 			nameTok := p.advance() // consume the qualified type IDENT
-			return &TypeRef{
+			tr := &TypeRef{
 				Kind:   TypeRefNamed,
 				Module: t.Value,
 				Name:   nameTok.Value,
 				Pos:    t.Pos,
-			}, nil
+			}
+			// v0.6 generic type-args on a qualified name: `mod.Map[str, int]`.
+			if p.peek().Kind == KindLBracket {
+				args, err := p.parseTypeArgList()
+				if err != nil {
+					return nil, err
+				}
+				tr.TypeArgs = args
+			}
+			return tr, nil
 		}
 	}
-	return &TypeRef{Kind: TypeRefNamed, Name: t.Value, Pos: t.Pos}, nil
+	tr := &TypeRef{Kind: TypeRefNamed, Name: t.Value, Pos: t.Pos}
+	// v0.6 generic type-args on a bare name: `Box[int]`, `Result[int, str]`.
+	if p.peek().Kind == KindLBracket {
+		args, err := p.parseTypeArgList()
+		if err != nil {
+			return nil, err
+		}
+		tr.TypeArgs = args
+	}
+	return tr, nil
 }
 
 // parseListTypeRef consumes the `[ T ]` tail of a `list[T]` type reference.
@@ -830,12 +887,21 @@ func (p *parser) parseTupleTypeRef(headPos Position) (*TypeRef, error) {
 	return &TypeRef{Kind: TypeRefTuple, Pos: headPos, Elements: elements}, nil
 }
 
-// parseFnDecl handles `fn name(p1: T1, p2: T2) -> R { body }`.
+// parseFnDecl handles `fn name[type_params](p1: T1, p2: T2) -> R { body }`.
+// The optional `[T: Bound]` type-parameter list is a v0.6 addition; pre-v0.6
+// programs see the same code path with TypeParams left at its zero value.
 func (p *parser) parseFnDecl() (Stmt, error) {
 	kw := p.advance() // consume `fn`
 	nameTok, err := p.expect(KindIdent, "after 'fn'")
 	if err != nil {
 		return nil, err
+	}
+	var typeParams []TypeParam
+	if p.peek().Kind == KindLBracket {
+		typeParams, err = p.parseTypeParams()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if _, err := p.expectParen(KindLParen, "in function signature"); err != nil {
 		return nil, err
@@ -886,11 +952,12 @@ func (p *parser) parseFnDecl() (Stmt, error) {
 		return nil, err
 	}
 	return &FnDecl{
-		Pos:    kw.Pos,
-		Name:   nameTok.Value,
-		Params: params,
-		Return: ret,
-		Body:   body,
+		Pos:        kw.Pos,
+		Name:       nameTok.Value,
+		TypeParams: typeParams,
+		Params:     params,
+		Return:     ret,
+		Body:       body,
 	}, nil
 }
 
@@ -902,6 +969,13 @@ func (p *parser) parseStructDecl() (Stmt, error) {
 	nameTok, err := p.expect(KindIdent, "after 'struct'")
 	if err != nil {
 		return nil, err
+	}
+	var typeParams []TypeParam
+	if p.peek().Kind == KindLBracket {
+		typeParams, err = p.parseTypeParams()
+		if err != nil {
+			return nil, err
+		}
 	}
 	open, err := p.expect(KindLBrace, "in struct declaration")
 	if err != nil {
@@ -946,7 +1020,7 @@ func (p *parser) parseStructDecl() (Stmt, error) {
 	if _, err := p.expect(KindRBrace, "to close struct declaration"); err != nil {
 		return nil, err
 	}
-	return &StructDecl{Pos: kw.Pos, Name: nameTok.Value, Fields: fields}, nil
+	return &StructDecl{Pos: kw.Pos, Name: nameTok.Value, TypeParams: typeParams, Fields: fields}, nil
 }
 
 // parseEnumDecl handles `enum Name { Variant, Variant(T1, T2), ... }`. v0.2
@@ -961,6 +1035,13 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 	nameTok, err := p.expect(KindIdent, "after 'enum'")
 	if err != nil {
 		return nil, err
+	}
+	var typeParams []TypeParam
+	if p.peek().Kind == KindLBracket {
+		typeParams, err = p.parseTypeParams()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if _, err := p.expect(KindLBrace, "in enum declaration"); err != nil {
 		return nil, err
@@ -995,7 +1076,7 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 	if _, err := p.expect(KindRBrace, "to close enum declaration"); err != nil {
 		return nil, err
 	}
-	return &EnumDecl{Pos: kw.Pos, Name: nameTok.Value, Variants: variants}, nil
+	return &EnumDecl{Pos: kw.Pos, Name: nameTok.Value, TypeParams: typeParams, Variants: variants}, nil
 }
 
 // parseVariantPayloadTypes consumes the `( type ( ',' type )* )` tail of a
@@ -1050,6 +1131,13 @@ func (p *parser) parseSpecDecl() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	var typeParams []TypeParam
+	if p.peek().Kind == KindLBracket {
+		typeParams, err = p.parseTypeParams()
+		if err != nil {
+			return nil, err
+		}
+	}
 	if _, err := p.expect(KindLBrace, "in spec declaration"); err != nil {
 		return nil, err
 	}
@@ -1069,7 +1157,7 @@ func (p *parser) parseSpecDecl() (Stmt, error) {
 	if _, err := p.expect(KindRBrace, "to close spec declaration"); err != nil {
 		return nil, err
 	}
-	return &SpecDecl{Pos: kw.Pos, Name: nameTok.Value, Methods: methods}, nil
+	return &SpecDecl{Pos: kw.Pos, Name: nameTok.Value, TypeParams: typeParams, Methods: methods}, nil
 }
 
 // parseSpecMethod consumes one `[pub] fn IDENT (params?) (-> type)? block?`
@@ -1094,6 +1182,13 @@ func (p *parser) parseSpecMethod() (*SpecMethod, error) {
 	nameTok, err := p.expect(KindIdent, "after 'fn'")
 	if err != nil {
 		return nil, err
+	}
+	var typeParams []TypeParam
+	if p.peek().Kind == KindLBracket {
+		typeParams, err = p.parseTypeParams()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if _, err := p.expectParen(KindLParen, "in spec method signature"); err != nil {
 		return nil, err
@@ -1148,12 +1243,13 @@ func (p *parser) parseSpecMethod() (*SpecMethod, error) {
 		body = b
 	}
 	return &SpecMethod{
-		Pos:    kw.Pos,
-		Name:   nameTok.Value,
-		Params: params,
-		Return: ret,
-		Body:   body,
-		Pub:    pub,
+		Pos:        kw.Pos,
+		Name:       nameTok.Value,
+		TypeParams: typeParams,
+		Params:     params,
+		Return:     ret,
+		Body:       body,
+		Pub:        pub,
 	}, nil
 }
 
@@ -1167,6 +1263,18 @@ func (p *parser) parseSpecMethod() (*SpecMethod, error) {
 // diagnostic rather than letting the lower-level "expected identifier" leak.
 func (p *parser) parseImplDecl() (Stmt, error) {
 	kw := p.advance() // consume `impl`
+	// v0.6: `impl[T: Bound] LocalType[T] for SomeSpec` — generic-impl
+	// type-parameter list comes immediately after the keyword and before
+	// the receiver-type identifier. Pre-v0.6 programs see no `[` here and
+	// fall straight through with implTypeParams left at its zero value.
+	var implTypeParams []TypeParam
+	var err error
+	if p.peek().Kind == KindLBracket {
+		implTypeParams, err = p.parseTypeParams()
+		if err != nil {
+			return nil, err
+		}
+	}
 	typeNameTok, err := p.expect(KindIdent, "after 'impl'")
 	if err != nil {
 		return nil, err
@@ -1182,6 +1290,15 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 			qual := p.advance()
 			typeModule = typeNameTok.Value
 			typeName = qual.Value
+		}
+	}
+	// v0.6: `impl Box[int] for ...` / `impl[T] Box[T] for ...` —
+	// receiver-type generic type-args are recorded on ImplDecl.TypeArgs.
+	var typeArgs []*TypeRef
+	if p.peek().Kind == KindLBracket {
+		typeArgs, err = p.parseTypeArgList()
+		if err != nil {
+			return nil, err
 		}
 	}
 	specName := ""
@@ -1248,6 +1365,8 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 		Pos:        kw.Pos,
 		Type:       typeName,
 		TypeModule: typeModule,
+		TypeArgs:   typeArgs,
+		TypeParams: implTypeParams,
 		Spec:       specName,
 		SpecModule: specModule,
 		Methods:    methods,
@@ -1730,16 +1849,17 @@ func (p *parser) expectParen(k Kind, ctx string) (Token, error) {
 // ---------------------------------------------------------------------------
 
 // parseExpr is the public entry into the expression grammar. It dispatches
-// to parseOr (the lowest-precedence rung) and then guards against `..` /
-// `..=` appearing at the trailing edge of an otherwise complete expression
-// — at v0.1 ranges are restricted to the head of `for x in ...` and any
-// other appearance gets the dedicated diagnostic instead of a generic
-// "expected newline" message.
+// to parseCoalesce (the lowest-precedence rung at v0.6 — `??` sits below
+// `or`) and then guards against `..` / `..=` appearing at the trailing edge
+// of an otherwise complete expression — at v0.1 ranges are restricted to
+// the head of `for x in ...` and any other appearance gets the dedicated
+// diagnostic instead of a generic "expected newline" message.
 //
 // parseForRange bypasses this guard by calling parseOr directly so it can
-// itself consume the `..` / `..=` token.
+// itself consume the `..` / `..=` token. Pre-v0.6 callers that wanted
+// "everything except `??`" continue to call parseOr directly.
 func (p *parser) parseExpr() (Expr, error) {
-	expr, err := p.parseOr()
+	expr, err := p.parseCoalesce()
 	if err != nil {
 		return nil, err
 	}
@@ -1748,6 +1868,38 @@ func (p *parser) parseExpr() (Expr, error) {
 		return nil, errorAt(bad.Pos, "range expressions are only allowed in for-in heads at v0.1")
 	}
 	return expr, nil
+}
+
+// parseCoalesce is the v0.6 nil-coalesce rung — `??`. Right-associative and
+// the lowest-precedence operator in the grammar (sits below `or`). The body
+// here is the only call site for the CoalesceExpr node; every other rung
+// dispatches downward via parseOr.
+func (p *parser) parseCoalesce() (Expr, error) {
+	left, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == KindCoalesce {
+		opTok := p.advance()
+		// Reject the common malformed shape `lhs ??.field` early — the user
+		// almost certainly meant `lhs?.field` (safe nav) and the generic
+		// "expected expression" error from parseAtom would not point at the
+		// fix. Other bad shapes fall through to the recursive call's own
+		// diagnostic.
+		if p.peek().Kind == KindDot {
+			return nil, errorAt(p.peek().Pos, "'??' must be followed by an expression; did you mean '?.' for safe navigation?")
+		}
+		// Right-assoc: recurse into parseCoalesce so `a ?? b ?? c` parses
+		// as `a ?? (b ?? c)`. Per PLAN.md §Null-safety semantics, the
+		// fold-from-the-right shape mirrors Option/Result chaining and
+		// matches reader expectations from other languages.
+		right, err := p.parseCoalesce()
+		if err != nil {
+			return nil, err
+		}
+		return &CoalesceExpr{Pos: opTok.Pos, Left: left, Right: right}, nil
+	}
+	return left, nil
 }
 
 // Level 1: or, xor (left-assoc).
@@ -2012,6 +2164,12 @@ func (p *parser) parsePostfix() (Expr, error) {
 	for {
 		switch p.peek().Kind {
 		case KindLParen:
+			// v0.6: `nil(...)` is meaningless — `nil` is a literal, not a
+			// callable. Reject at parse time so the diagnostic blames the
+			// shape, not the eventual "type 'Option' is not callable" form.
+			if _, isNil := expr.(*NilLit); isNil {
+				return nil, errorAt(p.peek().Pos, "cannot call 'nil'; nil is the absence-of-value literal, not a function")
+			}
 			callPos := p.peek().Pos
 			if _, err := p.expectParen(KindLParen, "in call"); err != nil {
 				return nil, err
@@ -2041,6 +2199,34 @@ func (p *parser) parsePostfix() (Expr, error) {
 				return nil, err
 			}
 			expr = next
+		case KindQuestion:
+			// v0.6 propagation: `expr?` — postfix on an Option/Result-typed
+			// expression. Typeck (Unit 4) lowers to a match-and-early-return.
+			// `nil?` (calling propagation on a bare nil literal) is admitted
+			// at parse time because the diagnostic belongs at typeck where
+			// the surrounding return-type can be inspected; the parser only
+			// records the shape.
+			qTok := p.advance()
+			expr = &PropagateExpr{Pos: qTok.Pos, Inner: expr}
+		case KindSafeDot:
+			// v0.6 safe-navigation: `expr?.field`. Routed through the same
+			// FieldAccessExpr node as `.` with the Safe bit set; the only
+			// shape difference is the nullable lowering at typeck.
+			safeTok := p.advance()
+			nameTok, err := p.expect(KindIdent, "after '?.'")
+			if err != nil {
+				return nil, err
+			}
+			if p.peek().Kind == KindLParen {
+				return nil, errorAt(p.peek().Pos, "method-form safe navigation ('?.method(...)') is not supported at v0.6 — use a let-binding for the field, then call the method")
+			}
+			expr = &FieldAccessExpr{
+				Pos:       safeTok.Pos,
+				Receiver:  expr,
+				FieldName: nameTok.Value,
+				NamePos:   nameTok.Pos,
+				Safe:      true,
+			}
 		case KindDot:
 			dotTok := p.advance()
 			nameTok, err := p.expect(KindIdent, "after '.'")
@@ -2244,10 +2430,29 @@ func (p *parser) parseAtom() (Expr, error) {
 	case KindThis:
 		p.advance()
 		return &ThisExpr{Pos: t.Pos}, nil
+	case KindNil:
+		// v0.6 nil literal. Typeck (Unit 4) resolves the type from the
+		// surrounding context; outside an inferable position the diagnostic
+		// is `cannot infer type of nil — annotate the binding`.
+		p.advance()
+		return &NilLit{Pos: t.Pos}, nil
 	case KindRange, KindRangeEq:
 		return nil, errorAt(t.Pos, "range expressions are only allowed in for-in heads or slice brackets")
 	case KindBang:
 		return nil, errorAt(t.Pos, "use 'not' for boolean negation; '!' is reserved")
+	case KindQuestion:
+		// v0.6: `?` is a postfix-only operator (propagation). A leading `?`
+		// at expression-start is meaningless; produce a focused diagnostic
+		// instead of the generic "expected expression, got '?'" form.
+		return nil, errorAt(t.Pos, "'?' must follow an expression (propagation is postfix); did you mean '?.' for safe navigation or 'T?' for a nullable type?")
+	case KindSafeDot:
+		// v0.6: `?.` likewise needs a receiver. A leading `?.` is the same
+		// shape error as a leading `?` and gets a parallel diagnostic.
+		return nil, errorAt(t.Pos, "'?.' must follow an expression (safe navigation is postfix)")
+	case KindCoalesce:
+		// v0.6: `??` is an infix-only operator. A leading `??` reports
+		// directly rather than relying on the parseCoalesce loop.
+		return nil, errorAt(t.Pos, "'??' must appear between two expressions (nil-coalesce is infix)")
 	}
 	return nil, errorAtTok(t, "expected expression, got %s", t.Kind)
 }

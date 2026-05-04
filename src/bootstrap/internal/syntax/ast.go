@@ -1273,3 +1273,60 @@ type CoalesceExpr struct {
 
 func (*CoalesceExpr) exprNode()           {}
 func (e *CoalesceExpr) ExprPos() Position { return e.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.7 concurrency expression / statement nodes.
+// ---------------------------------------------------------------------------
+
+// AnonFnExpr is `fn(params) -> R { body }` (or `fn(params) { body }` with no
+// return) used in expression position. Same shape as FnDecl minus the name.
+// The parser produces this node when it sees `fn` immediately followed by `(`
+// — the tenth-man-pinned disambiguation rule. Capture analysis lives in
+// typeck (Unit 3); this node only carries the syntactic surface.
+type AnonFnExpr struct {
+	typed
+	Pos    Position
+	Params []FnParam
+	Return *TypeRef // nil ⇒ no return value
+	Body   *Block
+}
+
+func (*AnonFnExpr) exprNode()           {}
+func (e *AnonFnExpr) ExprPos() Position { return e.Pos }
+
+// SpawnStmt is `spawn <fn-call-expr>`. The parser narrows the inner expression
+// at parse time per the grammar's "spawn admits only fn calls" rule. The
+// admitted shapes are:
+//
+//   - *CallExpr — bare named fn (`spawn do_work()`) or an anon-fn IIFE
+//     (`spawn fn() { ... }()`). The callee is an IdentExpr or AnonFnExpr.
+//   - *MethodCallExpr — qualified cross-module fn (`spawn mod.do_work()`)
+//     and method-form calls. v0.5 typeck's checkCrossModuleFnCall already
+//     consumes MethodCallExpr for the cross-module fn-call path; spawn
+//     reuses that machinery untouched.
+//
+// Call is typed as Expr so both shapes flow through one field; the parser
+// guarantees it is one of the two concrete types above.
+type SpawnStmt struct {
+	Pos  Position
+	Call Expr
+}
+
+func (*SpawnStmt) stmtNode()           {}
+func (s *SpawnStmt) StmtPos() Position { return s.Pos }
+
+// DeferStmt is `defer <stmt>` or `defer <block>`. The block form is recorded
+// as-is; the single-statement form is wrapped in a one-element Block at parse
+// time so downstream consumers walk a single shape.
+//
+// v0.7 admits defer only at fn-body top-level scope (not nested inside if /
+// for / match / inner blocks); the parser enforces that with a precise
+// diagnostic. typeck (Unit 3) takes over for the per-fn defer-stack
+// bookkeeping; the parser only records the syntactic shape.
+type DeferStmt struct {
+	Pos  Position
+	Body *Block
+}
+
+func (*DeferStmt) stmtNode()           {}
+func (s *DeferStmt) StmtPos() Position { return s.Pos }

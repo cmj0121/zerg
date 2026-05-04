@@ -155,6 +155,13 @@ const (
 	KindCoalesce // ??
 	KindSafeDot  // ?.
 	KindNil      // nil
+
+	// --- v0.7 concurrency keywords. `spawn` starts a fire-and-forget task;
+	// `defer` registers code to run at fn-body exit in LIFO order. Lexed at
+	// v0.7 Unit 1a; consumed by typeck at Unit 3 and the interpreter / codegen
+	// at Units 6 / 7.
+	KindSpawn // spawn
+	KindDefer // defer
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -333,6 +340,10 @@ func (k Kind) String() string {
 		return "'?.'"
 	case KindNil:
 		return "'nil'"
+	case KindSpawn:
+		return "'spawn'"
+	case KindDefer:
+		return "'defer'"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

@@ -95,6 +95,14 @@ type parser struct {
 	// lets parseStatement keep its single-Stmt signature unchanged and lets
 	// the grouped form share parseImportEntry with the single-import form.
 	pendingImports []*ImportDecl
+	// fnBodyDepths is a stack of blockDepth values, one per currently-open
+	// fn body (named, impl method, spec method default body, or anon-fn).
+	// Each entry records the blockDepth that the fn body's parseBlock runs
+	// at, so v0.7 `defer` can reject anywhere except the immediate fn-body
+	// scope: the rule is `len(fnBodyDepths) > 0 && p.blockDepth ==
+	// fnBodyDepths[last]`. Push happens just before the fn-body parseBlock
+	// call; pop is paired in defer to keep the stack honest on errors.
+	fnBodyDepths []int
 }
 
 func newParser(tokens []Token) *parser {
@@ -134,6 +142,25 @@ func (p *parser) advance() Token {
 		p.pos++
 	}
 	return t
+}
+
+// peekAfterFnIs reports whether the token immediately after a `fn` head is of
+// the given kind. Used by the v0.7 disambiguation rule: `fn (` ⇒ anon-fn
+// expression, `fn IDENT` ⇒ fn-decl. The cursor is assumed to be sitting on
+// the `fn` token; lookahead skips NEWLINEs only when parenDepth > 0 (matching
+// p.peek's contract). At v0.7 callers always invoke this with parenDepth == 0
+// (statement position), so the simple `+1` slot inspection is correct.
+func (p *parser) peekAfterFnIs(k Kind) bool {
+	i := p.pos + 1
+	if p.parenDepth > 0 {
+		for i < len(p.tokens) && p.tokens[i].Kind == KindNewline {
+			i++
+		}
+	}
+	if i >= len(p.tokens) {
+		return false
+	}
+	return p.tokens[i].Kind == k
 }
 
 // skipNewlines drops any number of NEWLINE tokens at the current cursor.
@@ -258,6 +285,13 @@ func (p *parser) parseStatement() (Stmt, error) {
 	case KindConst:
 		return p.parseDecl(declConst)
 	case KindFn:
+		// v0.7 disambiguation pin: `fn` followed by `(` is ALWAYS an anon-fn
+		// expression at statement position (typically an IIFE — `fn() { ... }()`);
+		// `fn` followed by IDENT is ALWAYS a fn-decl. The lookahead-1 token
+		// after `fn` decides; the two cases never collide.
+		if p.peekAfterFnIs(KindLParen) {
+			return p.parseExprOrAssignStmt()
+		}
 		return p.parseFnDecl()
 	case KindIf:
 		return p.parseIfStmt()
@@ -290,6 +324,10 @@ func (p *parser) parseStatement() (Stmt, error) {
 		// (incremented in parseBlock and impl/spec body parsers) — a non-zero
 		// depth means we are inside some block body, which is illegal.
 		return p.parseImport()
+	case KindSpawn:
+		return p.parseSpawnStmt()
+	case KindDefer:
+		return p.parseDeferStmt()
 	default:
 		return p.parseExprOrAssignStmt()
 	}
@@ -550,7 +588,8 @@ func isKeywordKind(k Kind) bool {
 		KindElif, KindElse, KindFalse, KindFn, KindFor, KindIf, KindIn,
 		KindLet, KindLoop, KindMut, KindNot, KindOr, KindReturn, KindTrue,
 		KindWhile, KindXor, KindStruct, KindEnum, KindMatch, KindSpec,
-		KindImpl, KindThis, KindPub, KindImport, KindAs, KindNil:
+		KindImpl, KindThis, KindPub, KindImport, KindAs, KindNil,
+		KindSpawn, KindDefer:
 		return true
 	}
 	return false
@@ -947,7 +986,7 @@ func (p *parser) parseFnDecl() (Stmt, error) {
 		ret = tr
 	}
 
-	body, err := p.parseBlock("function body")
+	body, err := p.parseFnBody("function body")
 	if err != nil {
 		return nil, err
 	}
@@ -1236,7 +1275,7 @@ func (p *parser) parseSpecMethod() (*SpecMethod, error) {
 	// closing the spec body.
 	var body *Block
 	if p.peek().Kind == KindLBrace {
-		b, err := p.parseBlock("spec method default body")
+		b, err := p.parseFnBody("spec method default body")
 		if err != nil {
 			return nil, err
 		}
@@ -1782,6 +1821,18 @@ func assignOpFor(k Kind) (AssignOp, bool) {
 // ---------------------------------------------------------------------------
 // Blocks.
 // ---------------------------------------------------------------------------
+
+// parseFnBody is parseBlock specialised for fn bodies (top-level fn, impl
+// method, spec method default body, anon-fn). It records the body's block
+// depth on p.fnBodyDepths so v0.7 `defer` can detect "we are at the
+// immediate fn-body level". The push happens before parseBlock bumps
+// blockDepth; the recorded value matches what blockDepth will be inside the
+// body. Pop is paired in defer so an error path leaves the stack honest.
+func (p *parser) parseFnBody(ctx string) (*Block, error) {
+	p.fnBodyDepths = append(p.fnBodyDepths, p.blockDepth+1)
+	defer func() { p.fnBodyDepths = p.fnBodyDepths[:len(p.fnBodyDepths)-1] }()
+	return p.parseBlock(ctx)
+}
 
 // parseBlock consumes `{ statements }`. The optional `ctx` is a phrase
 // inserted into error messages ("'if' body", "function body").
@@ -2430,6 +2481,15 @@ func (p *parser) parseAtom() (Expr, error) {
 	case KindThis:
 		p.advance()
 		return &ThisExpr{Pos: t.Pos}, nil
+	case KindFn:
+		// v0.7 anon-fn expression. The disambiguation pin says `fn` followed
+		// by `(` is always an anon-fn, never a fn-decl. parseAtom reaches
+		// here only in expression context, so anything other than `fn (` is
+		// a misuse — the diagnostic blames the lookahead-1 token.
+		if p.peekAfterFnIs(KindLParen) {
+			return p.parseAnonFnExpr()
+		}
+		return nil, errorAt(t.Pos, "'fn' in expression position must be followed by '(' for an anonymous function")
 	case KindNil:
 		// v0.6 nil literal. Typeck (Unit 4) resolves the type from the
 		// surrounding context; outside an inferable position the diagnostic

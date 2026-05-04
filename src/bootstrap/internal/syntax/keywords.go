@@ -33,4 +33,9 @@ var keywords = map[string]Kind{
 	"struct": KindStruct,
 	"enum":   KindEnum,
 	"match":  KindMatch,
+	// v0.4 polymorphism keywords. `this` is reserved everywhere: any
+	// `let this := ...` or `fn this()` rejects at parse time.
+	"spec": KindSpec,
+	"impl": KindImpl,
+	"this": KindThis,
 }

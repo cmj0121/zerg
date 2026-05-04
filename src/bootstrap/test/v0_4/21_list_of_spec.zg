@@ -1,0 +1,29 @@
+spec Printable {
+    fn to_string() -> str
+}
+
+struct Counter { count: int }
+impl Counter for Printable {
+    fn to_string() -> str {
+        return "counter"
+    }
+}
+
+enum Light { Red, Yellow, Green }
+impl Light for Printable {
+    fn to_string() -> str {
+        match this {
+            Light.Red => return "red"
+            Light.Yellow => return "yellow"
+            Light.Green => return "green"
+        }
+        return "?"
+    }
+}
+
+let c := Counter { count: 7 }
+let l := Light.Green
+let things: list[Printable] = [c, l]
+for t in things {
+    print t.to_string()
+}

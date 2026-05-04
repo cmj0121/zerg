@@ -1,0 +1,19 @@
+enum Light { Red, Yellow, Green }
+
+impl Light {
+    fn name() -> str {
+        match this {
+            Light.Red => return "red"
+            Light.Yellow => return "yellow"
+            Light.Green => return "green"
+        }
+        return "?"
+    }
+}
+
+let r := Light.Red
+let y := Light.Yellow
+let g := Light.Green
+print r.name()
+print y.name()
+print g.name()

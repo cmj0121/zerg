@@ -1,0 +1,24 @@
+enum Inner {
+    Ident(str),
+    Number(int, str)
+}
+
+enum Outer {
+    Pair(Inner, Inner),
+    Solo(Inner)
+}
+
+let p := Outer.Pair(Inner.Ident("k"), Inner.Number(1, "ones"))
+match p {
+    Outer.Pair(left, right) => {
+        match left {
+            Inner.Ident(name) => print name
+            Inner.Number(n, s) => print n
+        }
+        match right {
+            Inner.Ident(name) => print name
+            Inner.Number(n, s) => print n
+        }
+    }
+    Outer.Solo(x) => print "solo"
+}

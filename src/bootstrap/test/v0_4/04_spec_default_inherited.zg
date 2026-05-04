@@ -1,0 +1,12 @@
+spec Hashable {
+    fn hash() -> int {
+        return 0
+    }
+}
+
+struct Defaulty { tag: int }
+
+impl Defaulty for Hashable {}
+
+let d := Defaulty { tag: 99 }
+print d.hash()

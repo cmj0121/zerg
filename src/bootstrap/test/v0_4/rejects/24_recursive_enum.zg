@@ -1,0 +1,7 @@
+enum Tree {
+    Leaf,
+    Node(Tree, Tree)
+}
+
+let t := Tree.Leaf
+print t

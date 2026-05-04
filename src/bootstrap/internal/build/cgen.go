@@ -25,8 +25,25 @@ import (
 // non-nil. Callers that go through Build / EmitSource get this for free
 // because both call syntax.Check before reaching here.
 func Emit(prog *syntax.Program, w io.Writer) error {
-	g := &cgen{indent: 1}
+	g := &cgen{
+		indent:            1,
+		fnTable:           map[string]*syntax.FnDecl{},
+		specs:             map[string]*syntax.SpecDecl{},
+		inherent:          map[string][]*syntax.FnDecl{},
+		specImpls:         map[implKey]*syntax.ImplDecl{},
+		receiverTypes:     map[string]*syntax.Type{},
+		specsUsed:         map[string]bool{},
+	}
+	for _, stmt := range prog.Statements {
+		if fn, ok := stmt.(*syntax.FnDecl); ok {
+			g.fnTable[fn.Name] = fn
+		}
+	}
 	g.shapes = newShapeRegistry()
+
+	// Collect spec / impl declarations first so the shape walk and the method
+	// emitter both have access to the v0.4 tables.
+	g.collectSpecsImpls(prog)
 
 	// Walk the program (typed AST) to collect every concrete composite shape
 	// that needs a per-shape typedef and helpers (list, tuple, struct, enum).
@@ -37,11 +54,16 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 	// 1. Runtime header.
 	g.b.WriteString(runtimeC)
 	g.b.WriteString("\n")
+	g.b.WriteString(runtimeV04C)
+	g.b.WriteString("\n")
 
 	// 2. Composite-shape typedefs and helpers (forward decls then bodies).
 	g.shapes.emitForwardDecls(&g.b)
+	g.emitSpecForwardDecls()
 	g.shapes.emitTypedefs(&g.b)
 	g.shapes.emitHelpers(&g.b)
+	g.emitEqHelpers()
+	g.emitSpecVtablesAndMethods(prog)
 
 	// 3. Top-level fn forward decls then bodies. Forward decls let any fn call
 	// any other regardless of textual order — same as the interpreter's
@@ -75,6 +97,11 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
 		case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
+			continue
+		case *syntax.SpecDecl, *syntax.ImplDecl:
+			// v0.4 Unit 1: parser-only landing. Typeck rejects these shapes
+			// before codegen sees them; skip at the top level for symmetry
+			// with the other declaration shapes.
 			continue
 		}
 		if err := g.emitStmt(stmt); err != nil {
@@ -111,6 +138,36 @@ type cgen struct {
 	// tmpCounter is for fresh local variable names inside generated blocks
 	// (slice receivers, match scrutinees, etc.).
 	tmpCounter int
+
+	// fnTable indexes top-level FnDecl by name so callStr can coerce args
+	// to declared param types (spec coercion at the call site).
+	fnTable map[string]*syntax.FnDecl
+
+	// currentFnRet is the resolved return type of the FnDecl whose body is
+	// being emitted, used to coerce return-value expressions when the
+	// declared return is spec-typed. nil at top level / inside a method body.
+	currentFnRet *syntax.Type
+
+	// v0.4 spec / impl bookkeeping. Populated in collectShapes from top-level
+	// SpecDecl / ImplDecl statements; used by the vtable / method emitters.
+	specs       map[string]*syntax.SpecDecl       // spec name → AST
+	specOrder   []string                          // declaration order
+	inherent    map[string][]*syntax.FnDecl       // type name → inherent methods
+	inherentTypeOrder []string                    // declaration order
+	specImpls   map[implKey]*syntax.ImplDecl      // (type, spec) → AST
+	specImplKeys []implKey                        // declaration order
+	receiverTypes map[string]*syntax.Type         // type name → resolved type (for impl receivers)
+
+	// Spec types referenced anywhere in the program (let : Spec, list[Spec],
+	// fn arg/return of Spec, etc.). Order is declaration order; emitForwardDecls
+	// uses it to emit the fat-pointer typedef + vtable struct definitions.
+	specsUsed map[string]bool
+}
+
+// implKey deduplicates impls by (type, spec). Mirrors run.go's implKey.
+type implKey struct {
+	typeName string
+	specName string
 }
 
 // freshTmp returns a unique C identifier safe to introduce as a local.
@@ -195,7 +252,17 @@ func (r *shapeRegistry) addType(t *syntax.Type) {
 		if _, ok := r.enumShapes[key]; !ok {
 			r.enumShapes[key] = t
 			r.enumOrder = append(r.enumOrder, key)
+			for _, payload := range t.VariantPayloads {
+				for _, pt := range payload {
+					r.addType(pt)
+				}
+			}
 		}
+	case syntax.TypeSpec:
+		// TypeSpec is registered separately on the cgen so the spec
+		// fat-pointer typedef + vtable struct emit at the v0.4 stage.
+		// Recording it here is a no-op — the shape registry handles only
+		// the existing shape kinds.
 	}
 }
 
@@ -225,7 +292,12 @@ func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
 		fmt.Fprintf(b, "typedef struct %s %s;\n", k, k)
 	}
 	for _, k := range r.enumOrder {
-		fmt.Fprintf(b, "typedef int32_t %s;\n", k)
+		// v0.4: enums are tag+union structs even when no variant carries a
+		// payload — keeps the surface uniform between bare-only enums and
+		// payload-carrying enums and means run-time `==` walks the same
+		// shape regardless. Forward-declare the struct here; the typedef
+		// body comes in emitTypedefs.
+		fmt.Fprintf(b, "typedef struct %s %s;\n", k, k)
 	}
 	if len(r.structOrder) > 0 || len(r.enumOrder) > 0 ||
 		len(r.listOrder) > 0 || len(r.tupleOrder) > 0 {
@@ -240,31 +312,23 @@ func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
 // each composite field (a forward declaration is enough only behind a
 // pointer). Strategy:
 //
-//   * Enum macros first — depend on nothing.
-//   * List shape definitions next — every list field is a pointer-to-element,
+//   * List shape definitions first — every list field is a pointer-to-element,
 //     so element types only need their forward decl (already emitted in
 //     emitForwardDecls). Lists therefore have no shape-def dependency on
 //     other shapes and can be emitted en bloc.
-//   * Tuple and struct shape definitions in a unified topological sort.
+//   * Tuple, struct and enum shape definitions in a unified topological sort.
 //     A tuple-of-struct needs the struct's full definition; a struct-of-
-//     tuple needs the tuple's full definition. Handling them as one
-//     dependency graph (tuple/struct → tuple/struct via composite fields)
-//     respects whichever direction the user wrote.
+//     tuple needs the tuple's full definition; an enum variant payload
+//     embeds its payload types by value, so a `Frame { Args(list[int]) }`
+//     enum needs `zerg_list_int64_t`'s full definition (not just its forward
+//     decl) before its own struct body can be emitted. Handling tuples,
+//     structs and enums as one dependency graph respects whichever direction
+//     the user wrote.
 //
 // typeck has rejected composite cycles so the fixed-point loop terminates.
 func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
-	if len(r.enumOrder) > 0 {
-		b.WriteString("/* Enum variant indices. */\n")
-	}
-	for _, k := range r.enumOrder {
-		t := r.enumShapes[k]
-		for i, v := range t.Variants {
-			fmt.Fprintf(b, "#define %s_%s ((%s)%d)\n", k, v, k, i)
-		}
-	}
-
 	if len(r.listOrder) > 0 {
-		b.WriteString("\n/* List shape definitions. */\n")
+		b.WriteString("/* List shape definitions. */\n")
 	}
 	for _, k := range r.listOrder {
 		t := r.listShapes[k]
@@ -275,25 +339,31 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 		fmt.Fprintf(b, "struct %s { %s* data; size_t len; size_t cap; };\n", k, elem)
 	}
 
-	// Unified topo over tuple and struct shapes. depsOf returns the mangled
-	// names of OTHER tuple/struct shapes whose full definition is needed
-	// before this one can be emitted. Composite list dependencies are absent
-	// because lists are already complete by this point.
+	// Unified topo over tuple, struct and enum shapes. depsOf returns the
+	// mangled names of OTHER composite shapes whose full definition is
+	// needed before this one can be emitted. List deps resolve immediately
+	// because lists are already fully defined above.
 	depsOf := func(t *syntax.Type) []string {
 		var out []string
 		var fields []*syntax.Type
-		if t.Kind == syntax.TypeTuple {
+		switch t.Kind {
+		case syntax.TypeTuple:
 			fields = append(fields, t.Tuple...)
-		} else if t.Kind == syntax.TypeStruct {
+		case syntax.TypeStruct:
 			for _, f := range t.Fields {
 				fields = append(fields, f.Type)
+			}
+		case syntax.TypeEnum:
+			for i := range t.Variants {
+				fields = append(fields, variantPayload(t, i)...)
 			}
 		}
 		for _, ft := range fields {
 			if ft == nil {
 				continue
 			}
-			if ft.Kind == syntax.TypeStruct || ft.Kind == syntax.TypeTuple {
+			switch ft.Kind {
+			case syntax.TypeStruct, syntax.TypeTuple, syntax.TypeEnum, syntax.TypeList:
 				out = append(out, mangleType(ft))
 			}
 		}
@@ -302,80 +372,125 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 
 	emittedTuple := map[string]bool{}
 	emittedStruct := map[string]bool{}
+	emittedEnum := map[string]bool{}
+	depReady := func(deps []string) bool {
+		for _, dep := range deps {
+			if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
+				return false
+			}
+			if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
+				return false
+			}
+			if _, ok := r.enumShapes[dep]; ok && !emittedEnum[dep] {
+				return false
+			}
+			// Lists are emitted en bloc above and are always ready.
+		}
+		return true
+	}
+
 	wroteTupleHeader := false
 	wroteStructHeader := false
-	totalRemaining := len(r.tupleOrder) + len(r.structOrder)
+	wroteEnumHeader := false
+	emitTuple := func(k string) {
+		if !wroteTupleHeader {
+			b.WriteString("\n/* Tuple shape definitions. */\n")
+			wroteTupleHeader = true
+		}
+		t := r.tupleShapes[k]
+		fmt.Fprintf(b, "struct %s {", k)
+		for i, e := range t.Tuple {
+			if i > 0 {
+				b.WriteString(";")
+			}
+			fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
+		}
+		b.WriteString("; };\n")
+		emittedTuple[k] = true
+	}
+	emitStruct := func(k string) {
+		if !wroteStructHeader {
+			b.WriteString("\n/* Struct shape definitions. */\n")
+			wroteStructHeader = true
+		}
+		t := r.structShapes[k]
+		fmt.Fprintf(b, "struct %s {", k)
+		for i, f := range t.Fields {
+			if i > 0 {
+				b.WriteString(";")
+			}
+			fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
+		}
+		b.WriteString("; };\n")
+		emittedStruct[k] = true
+	}
+	// v0.4 enum layout: `struct { int32_t tag; union { ... } payload; }`.
+	// Each variant gets a payload sub-struct named pN where N is the variant
+	// index; bare variants use a placeholder slot so the union is never empty.
+	// Variant index macros are emitted alongside as `<Mangle>__<Variant>_TAG`
+	// for use in match scrutinee tag tests.
+	emitEnum := func(k string) {
+		if !wroteEnumHeader {
+			b.WriteString("\n/* Enum tag+union shape definitions. */\n")
+			wroteEnumHeader = true
+		}
+		t := r.enumShapes[k]
+		fmt.Fprintf(b, "struct %s {\n", k)
+		fmt.Fprintf(b, "    int32_t tag;\n")
+		fmt.Fprintf(b, "    union {\n")
+		for i, v := range t.Variants {
+			fmt.Fprintf(b, "        struct {")
+			payload := variantPayload(t, i)
+			if len(payload) == 0 {
+				fmt.Fprintf(b, " char _empty;")
+			} else {
+				for j, pt := range payload {
+					fmt.Fprintf(b, " %s a%d;", cTypeName(pt), j)
+				}
+			}
+			fmt.Fprintf(b, " } p%d; /* %s */\n", i, v)
+		}
+		fmt.Fprintf(b, "    } payload;\n")
+		fmt.Fprintf(b, "};\n")
+		for i, v := range t.Variants {
+			fmt.Fprintf(b, "#define %s__%s_TAG (%d)\n", k, v, i)
+		}
+		emittedEnum[k] = true
+	}
+
+	totalRemaining := len(r.tupleOrder) + len(r.structOrder) + len(r.enumOrder)
 	for totalRemaining > 0 {
 		progress := false
-		// Try every tuple in declared order.
 		for _, k := range r.tupleOrder {
 			if emittedTuple[k] {
 				continue
 			}
-			t := r.tupleShapes[k]
-			ready := true
-			for _, dep := range depsOf(t) {
-				if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
-					ready = false
-					break
-				}
-				if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
-					ready = false
-					break
-				}
-			}
-			if !ready {
+			if !depReady(depsOf(r.tupleShapes[k])) {
 				continue
 			}
-			if !wroteTupleHeader {
-				b.WriteString("\n/* Tuple shape definitions. */\n")
-				wroteTupleHeader = true
-			}
-			fmt.Fprintf(b, "struct %s {", k)
-			for i, e := range t.Tuple {
-				if i > 0 {
-					b.WriteString(";")
-				}
-				fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
-			}
-			b.WriteString("; };\n")
-			emittedTuple[k] = true
+			emitTuple(k)
 			progress = true
 			totalRemaining--
 		}
-		// Try every struct in declared order.
 		for _, k := range r.structOrder {
 			if emittedStruct[k] {
 				continue
 			}
-			t := r.structShapes[k]
-			ready := true
-			for _, dep := range depsOf(t) {
-				if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
-					ready = false
-					break
-				}
-				if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
-					ready = false
-					break
-				}
-			}
-			if !ready {
+			if !depReady(depsOf(r.structShapes[k])) {
 				continue
 			}
-			if !wroteStructHeader {
-				b.WriteString("\n/* Struct shape definitions. */\n")
-				wroteStructHeader = true
+			emitStruct(k)
+			progress = true
+			totalRemaining--
+		}
+		for _, k := range r.enumOrder {
+			if emittedEnum[k] {
+				continue
 			}
-			fmt.Fprintf(b, "struct %s {", k)
-			for i, f := range t.Fields {
-				if i > 0 {
-					b.WriteString(";")
-				}
-				fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
+			if !depReady(depsOf(r.enumShapes[k])) {
+				continue
 			}
-			b.WriteString("; };\n")
-			emittedStruct[k] = true
+			emitEnum(k)
 			progress = true
 			totalRemaining--
 		}
@@ -384,42 +499,19 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 			// regardless rather than spin forever. The C compiler will
 			// surface the underlying issue if any.
 			for _, k := range r.tupleOrder {
-				if emittedTuple[k] {
-					continue
+				if !emittedTuple[k] {
+					emitTuple(k)
 				}
-				if !wroteTupleHeader {
-					b.WriteString("\n/* Tuple shape definitions. */\n")
-					wroteTupleHeader = true
-				}
-				t := r.tupleShapes[k]
-				fmt.Fprintf(b, "struct %s {", k)
-				for i, e := range t.Tuple {
-					if i > 0 {
-						b.WriteString(";")
-					}
-					fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
-				}
-				b.WriteString("; };\n")
-				emittedTuple[k] = true
 			}
 			for _, k := range r.structOrder {
-				if emittedStruct[k] {
-					continue
+				if !emittedStruct[k] {
+					emitStruct(k)
 				}
-				if !wroteStructHeader {
-					b.WriteString("\n/* Struct shape definitions. */\n")
-					wroteStructHeader = true
+			}
+			for _, k := range r.enumOrder {
+				if !emittedEnum[k] {
+					emitEnum(k)
 				}
-				t := r.structShapes[k]
-				fmt.Fprintf(b, "struct %s {", k)
-				for i, f := range t.Fields {
-					if i > 0 {
-						b.WriteString(";")
-					}
-					fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
-				}
-				b.WriteString("; };\n")
-				emittedStruct[k] = true
 			}
 			break
 		}
@@ -455,6 +547,7 @@ func (r *shapeRegistry) emitHelpers(b *strings.Builder) {
 		fmt.Fprintf(b, "static void zerg_print_%s(%s s);\n", k, k)
 	}
 	for _, k := range r.enumOrder {
+		fmt.Fprintf(b, "static %s %s_copy(%s e);\n", k, k, k)
 		fmt.Fprintf(b, "static void zerg_print_%s(%s e);\n", k, k)
 	}
 	if len(r.listOrder)+len(r.tupleOrder)+len(r.structOrder)+len(r.enumOrder) > 0 {
@@ -479,9 +572,10 @@ func (r *shapeRegistry) emitHelpers(b *strings.Builder) {
 		emitStructHelpers(b, k, t)
 		b.WriteString("\n")
 	}
-	// enum helpers (print only)
+	// enum helpers (copy + print).
 	for _, k := range r.enumOrder {
 		t := r.enumShapes[k]
+		emitEnumCopy(b, k, t)
 		emitEnumPrint(b, k, t)
 		b.WriteString("\n")
 	}
@@ -591,17 +685,87 @@ func emitStructHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "}\n")
 }
 
-// emitEnumPrint writes print-helper for an enum: switch on the int and emit
-// "Name.VariantName".
+// emitEnumPrint writes print-helper for an enum: switch on the tag and emit
+// either "Name.VariantName" (bare) or "Name.VariantName(payload, ...)" (with
+// per-position recursive print of each payload value).
 func emitEnumPrint(b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static void zerg_print_%s(%s e) {\n", mname, mname)
-	fmt.Fprintf(b, "    switch ((int)e) {\n")
+	fmt.Fprintf(b, "    switch (e.tag) {\n")
 	for i, v := range t.Variants {
-		fmt.Fprintf(b, "    case %d: fputs(%q, stdout); break;\n", i, t.Name+"."+v)
+		payload := variantPayload(t, i)
+		if len(payload) == 0 {
+			fmt.Fprintf(b, "    case %d: fputs(%q, stdout); break;\n", i, t.Name+"."+v)
+		} else {
+			fmt.Fprintf(b, "    case %d: {\n", i)
+			fmt.Fprintf(b, "        fputs(%q, stdout);\n", t.Name+"."+v+"(")
+			for j, pt := range payload {
+				if j > 0 {
+					fmt.Fprintf(b, "        fputs(\", \", stdout);\n")
+				}
+				fmt.Fprintf(b, "        %s;\n", printExpr(pt, fmt.Sprintf("e.payload.p%d.a%d", i, j)))
+			}
+			fmt.Fprintf(b, "        fputs(\")\", stdout);\n")
+			fmt.Fprintf(b, "        break;\n")
+			fmt.Fprintf(b, "    }\n")
+		}
 	}
 	fmt.Fprintf(b, "    default: fputs(\"<bad enum>\", stdout); break;\n")
 	fmt.Fprintf(b, "    }\n")
 	fmt.Fprintf(b, "}\n")
+}
+
+// emitEnumCopy writes a deep-copy helper for an enum value. Copies primitive
+// payloads by value and recurses through composite payloads via the per-shape
+// _copy helpers. Bare variants copy the (single-byte) placeholder.
+func emitEnumCopy(b *strings.Builder, mname string, t *syntax.Type) {
+	fmt.Fprintf(b, "static %s %s_copy(%s e) {\n", mname, mname, mname)
+	fmt.Fprintf(b, "    %s out;\n", mname)
+	fmt.Fprintf(b, "    out.tag = e.tag;\n")
+	fmt.Fprintf(b, "    switch (e.tag) {\n")
+	for i := range t.Variants {
+		payload := variantPayload(t, i)
+		fmt.Fprintf(b, "    case %d:\n", i)
+		if len(payload) == 0 {
+			fmt.Fprintf(b, "        out.payload.p%d._empty = 0;\n", i)
+		} else {
+			for j, pt := range payload {
+				fmt.Fprintf(b, "        out.payload.p%d.a%d = %s;\n",
+					i, j, copyExpr(pt, fmt.Sprintf("e.payload.p%d.a%d", i, j)))
+			}
+		}
+		fmt.Fprintf(b, "        break;\n")
+	}
+	fmt.Fprintf(b, "    default: break;\n")
+	fmt.Fprintf(b, "    }\n")
+	fmt.Fprintf(b, "    return out;\n")
+	fmt.Fprintf(b, "}\n")
+}
+
+// variantPayload returns the per-position payload type slice for the i-th
+// variant of t. Returns nil when the variant is bare or VariantPayloads is
+// nil for that index (consistent with typeck's representation).
+func variantPayload(t *syntax.Type, i int) []*syntax.Type {
+	if t == nil || t.Kind != syntax.TypeEnum {
+		return nil
+	}
+	if i < 0 || i >= len(t.VariantPayloads) {
+		return nil
+	}
+	return t.VariantPayloads[i]
+}
+
+// variantIndex returns the index of variant `name` in enum t, or -1 when the
+// variant is unknown (which should not happen post-typeck but we guard).
+func variantIndex(t *syntax.Type, name string) int {
+	if t == nil || t.Kind != syntax.TypeEnum {
+		return -1
+	}
+	for i, v := range t.Variants {
+		if v == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // copyExpr returns a C expression that produces a deep-copy of expr (a C
@@ -613,7 +777,7 @@ func copyExpr(t *syntax.Type, expr string) string {
 		return expr
 	}
 	switch t.Kind {
-	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct:
+	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
 		return fmt.Sprintf("%s_copy(%s)", mangleType(t), expr)
 	}
 	return expr
@@ -697,10 +861,21 @@ func (g *cgen) collectShapes(prog *syntax.Program) error {
 			g.shapes.addType(st)
 		case *syntax.EnumDecl:
 			variants := make([]string, len(s.Variants))
+			payloads := make([][]*syntax.Type, len(s.Variants))
 			for i, v := range s.Variants {
 				variants[i] = v.Name
+				if len(v.Payload) > 0 {
+					p := make([]*syntax.Type, len(v.Payload))
+					for j, pr := range v.Payload {
+						if pr != nil {
+							p[j] = pr.Resolved
+						}
+					}
+					payloads[i] = p
+				}
 			}
 			en := syntax.NewEnumType(s.Name, variants)
+			en.VariantPayloads = payloads
 			g.shapes.addType(en)
 		}
 	}
@@ -721,16 +896,19 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 	case *syntax.LetStmt:
 		if s.Type != nil && s.Type.Resolved != nil {
 			g.shapes.addType(s.Type.Resolved)
+			g.collectSpecsInType(s.Type.Resolved)
 		}
 		g.collectExpr(s.Value)
 	case *syntax.MutStmt:
 		if s.Type != nil && s.Type.Resolved != nil {
 			g.shapes.addType(s.Type.Resolved)
+			g.collectSpecsInType(s.Type.Resolved)
 		}
 		g.collectExpr(s.Value)
 	case *syntax.ConstStmt:
 		if s.Type != nil && s.Type.Resolved != nil {
 			g.shapes.addType(s.Type.Resolved)
+			g.collectSpecsInType(s.Type.Resolved)
 		}
 		g.collectExpr(s.Value)
 	case *syntax.AssignStmt:
@@ -778,10 +956,12 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 		for _, p := range s.Params {
 			if p.Type != nil && p.Type.Resolved != nil {
 				g.shapes.addType(p.Type.Resolved)
+				g.collectSpecsInType(p.Type.Resolved)
 			}
 		}
 		if s.Return != nil && s.Return.Resolved != nil {
 			g.shapes.addType(s.Return.Resolved)
+			g.collectSpecsInType(s.Return.Resolved)
 		}
 		g.collectBlock(s.Body)
 	case *syntax.MatchStmt:
@@ -793,6 +973,34 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 				g.collectExpr(arm.Guard)
 			}
 			g.collectBlock(arm.Body)
+		}
+	case *syntax.SpecDecl:
+		// Spec method default bodies may reference shapes the rest of the
+		// program does not — walk them so the registry catches nested types.
+		for _, m := range s.Methods {
+			for _, p := range m.Params {
+				if p.Type != nil && p.Type.Resolved != nil {
+					g.shapes.addType(p.Type.Resolved)
+				}
+			}
+			if m.Return != nil && m.Return.Resolved != nil {
+				g.shapes.addType(m.Return.Resolved)
+			}
+			if m.Body != nil {
+				g.collectBlock(m.Body)
+			}
+		}
+	case *syntax.ImplDecl:
+		for _, fn := range s.Methods {
+			for _, p := range fn.Params {
+				if p.Type != nil && p.Type.Resolved != nil {
+					g.shapes.addType(p.Type.Resolved)
+				}
+			}
+			if fn.Return != nil && fn.Return.Resolved != nil {
+				g.shapes.addType(fn.Return.Resolved)
+			}
+			g.collectBlock(fn.Body)
 		}
 	}
 }
@@ -812,6 +1020,7 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 	}
 	if t := e.Type(); t != nil {
 		g.shapes.addType(t)
+		g.collectSpecsInType(t)
 	}
 	switch x := e.(type) {
 	case *syntax.UnaryExpr:
@@ -851,6 +1060,26 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 		}
 	case *syntax.FieldAccessExpr:
 		g.collectExpr(x.Receiver)
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		}
+	case *syntax.MethodCallExpr:
+		g.collectExpr(x.Receiver)
+		for _, a := range x.Args {
+			g.collectExpr(a)
+		}
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		}
+		if x.LoweredCall != nil {
+			g.collectExpr(x.LoweredCall)
+		}
+	case *syntax.ThisExpr:
+		// nothing to collect; type is registered by the typed() walk above.
+	case *syntax.EnumLit:
+		for _, sub := range x.Payload {
+			g.collectExpr(sub)
+		}
 	}
 }
 
@@ -865,6 +1094,10 @@ func (g *cgen) collectPattern(p syntax.Pattern) {
 	case *syntax.StructPat:
 		for _, f := range x.Fields {
 			g.collectPattern(f.Pattern)
+		}
+	case *syntax.EnumPat:
+		for _, sub := range x.Payload {
+			g.collectPattern(sub)
 		}
 	}
 }
@@ -922,6 +1155,13 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 		return nil
 	case *syntax.MatchStmt:
 		return g.emitMatch(s)
+	case *syntax.SpecDecl, *syntax.ImplDecl:
+		// Spec / impl declarations produce no executable code at the
+		// statement level — their per-method C functions and per-(Type,
+		// Spec) vtable initialisers were emitted at file scope before
+		// main(). Reaching here at non-top level is impossible because
+		// typeck rejects nested decls.
+		return nil
 	}
 	return fmt.Errorf("codegen: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -977,21 +1217,31 @@ func (g *cgen) emitPrint(s *syntax.PrintStmt) error {
 // the v0.2-style deep copy.
 func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isConst bool) error {
 	t := value.Type()
-	if t == nil && ref != nil {
-		t = ref.Resolved
+	declT := t
+	if ref != nil && ref.Resolved != nil {
+		declT = ref.Resolved
 	}
 	if t == nil {
+		t = declT
+	}
+	if declT == nil {
 		return fmt.Errorf("codegen: missing type for %q", name)
 	}
 	exprS, err := g.exprStr(value)
 	if err != nil {
 		return err
 	}
+	// v0.4: a let/mut/const declared with a spec type widens the rhs into a
+	// fat pointer at the bind site; nested specs (list[Spec], tuple[..., Spec])
+	// recurse inside coerceCExpr.
+	if shapeContainsSpec(declT) {
+		exprS = g.coerceCExpr(exprS, t, declT)
+	}
 	g.writeIndent()
 	if isConst {
 		g.b.WriteString("const ")
 	}
-	fmt.Fprintf(&g.b, "%s %s = %s;\n", cTypeName(t), mangle(name), exprS)
+	fmt.Fprintf(&g.b, "%s %s = %s;\n", cTypeName(declT), mangle(name), exprS)
 	return nil
 }
 
@@ -1279,6 +1529,10 @@ func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 		if err != nil {
 			return err
 		}
+		// v0.4: coerce to the declared fn return type if spec-typed.
+		if g.currentFnRet != nil && shapeContainsSpec(g.currentFnRet) {
+			v = g.coerceCExpr(v, s.Value.Type(), g.currentFnRet)
+		}
 		body = fmt.Sprintf("return %s;", v)
 	}
 	if s.Guard == nil {
@@ -1316,6 +1570,13 @@ func (g *cgen) emitFlow(guard syntax.Expr, kw string) error {
 func (g *cgen) emitFn(fn *syntax.FnDecl) error {
 	writeFnSig(&g.b, fn)
 	g.b.WriteString(" {\n")
+	prevRet := g.currentFnRet
+	if fn.Return != nil {
+		g.currentFnRet = fn.Return.Resolved
+	} else {
+		g.currentFnRet = nil
+	}
+	defer func() { g.currentFnRet = prevRet }()
 	if err := g.emitBlockBody(fn.Body); err != nil {
 		return err
 	}
@@ -1510,8 +1771,23 @@ func (g *cgen) patternTest(pat syntax.Pattern, scrut string, scrutT *syntax.Type
 		}
 		return joinAnd(parts)
 	case *syntax.EnumPat:
-		// Variant access: the int value matches the variant's macro.
-		return fmt.Sprintf("(%s == %s_%s)", scrut, mangleType(scrutT), p.VariantName)
+		// Variant tag test plus per-position payload pattern tests.
+		idx := variantIndex(scrutT, p.VariantName)
+		head := fmt.Sprintf("(%s.tag == %d)", scrut, idx)
+		if len(p.Payload) == 0 {
+			return head
+		}
+		payloadTypes := variantPayload(scrutT, idx)
+		parts := []string{head}
+		for i, sub := range p.Payload {
+			var pt *syntax.Type
+			if i < len(payloadTypes) {
+				pt = payloadTypes[i]
+			}
+			access := fmt.Sprintf("%s.payload.p%d.a%d", scrut, idx, i)
+			parts = append(parts, g.patternTest(sub, access, pt))
+		}
+		return joinAnd(parts)
 	}
 	return "0"
 }
@@ -1537,8 +1813,27 @@ func joinAnd(parts []string) string {
 // piece of scrut.
 func (g *cgen) emitPatternBindings(pat syntax.Pattern, scrut string, scrutT *syntax.Type) error {
 	switch p := pat.(type) {
-	case *syntax.WildcardPat, *syntax.LitPat, *syntax.EnumPat:
+	case *syntax.WildcardPat, *syntax.LitPat:
 		_ = p
+		return nil
+	case *syntax.EnumPat:
+		// Recurse into per-position payload sub-patterns so a BindPat at any
+		// payload slot creates a local binding to that payload value.
+		if len(p.Payload) == 0 {
+			return nil
+		}
+		idx := variantIndex(scrutT, p.VariantName)
+		payloadTypes := variantPayload(scrutT, idx)
+		for i, sub := range p.Payload {
+			var pt *syntax.Type
+			if i < len(payloadTypes) {
+				pt = payloadTypes[i]
+			}
+			access := fmt.Sprintf("%s.payload.p%d.a%d", scrut, idx, i)
+			if err := g.emitPatternBindings(sub, access, pt); err != nil {
+				return err
+			}
+		}
 		return nil
 	case *syntax.BindPat:
 		// At v0.3 the bound name shares the matched value (no deep copy).
@@ -1636,6 +1931,14 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return g.fieldAccessStr(e)
 	case *syntax.CallExpr:
 		return g.callStr(e)
+	case *syntax.MethodCallExpr:
+		return g.methodCallStr(e)
+	case *syntax.ThisExpr:
+		// `this` is the implicit receiver parameter inside a method body;
+		// we emit it as a C identifier `z_this` (mangled like any local).
+		return mangle("this"), nil
+	case *syntax.EnumLit:
+		return g.enumLitStr(e)
 	}
 	return "", fmt.Errorf("codegen: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -1671,6 +1974,9 @@ func (g *cgen) listLitStr(e *syntax.ListLit) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			// v0.4: when the list element type is a spec, each concrete
+			// element coerces to a fat pointer at the construction site.
+			s = g.coerceCExpr(s, sub.Type(), t.Element)
 			fmt.Fprintf(&b, "__l.data[%d] = %s; ", i, s)
 		}
 	}
@@ -1696,6 +2002,10 @@ func (g *cgen) tupleLitStr(e *syntax.TupleLit) (string, error) {
 		s, err := g.exprStr(sub)
 		if err != nil {
 			return "", err
+		}
+		// v0.4: per-position spec coercion for tuple element types.
+		if i < len(t.Tuple) {
+			s = g.coerceCExpr(s, sub.Type(), t.Tuple[i])
 		}
 		fmt.Fprintf(&b, ".e%d = %s", i, s)
 	}
@@ -1731,6 +2041,9 @@ func (g *cgen) structLitStr(e *syntax.StructLit) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// v0.4: per-field spec coercion when the declared field type is a
+		// spec (or contains one).
+		s = g.coerceCExpr(s, val.Type(), f.Type)
 		fmt.Fprintf(&b, ".%s = %s", mangleField(f.Name), s)
 	}
 	b.WriteString("})")
@@ -1812,9 +2125,19 @@ func (g *cgen) sliceStr(e *syntax.SliceExpr) (string, error) {
 // has already disambiguated: a FieldAccessExpr whose receiver is a bare
 // IdentExpr that resolves to an enum type is the variant form.
 func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
+	// v0.4: if typeck lowered this to an EnumLit (bare-variant construction),
+	// route through the EnumLit emitter so the tag+union struct shape is
+	// produced uniformly with the payloadful form.
+	if e.Lowered != nil {
+		return g.enumLitStr(e.Lowered)
+	}
 	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
 		if rt := id.Type(); rt != nil && rt.Kind == syntax.TypeEnum {
-			return fmt.Sprintf("%s_%s", mangleType(rt), e.FieldName), nil
+			// Bare variant access without a Lowered EnumLit (e.g. inside a
+			// match scrutinee or a context where typeck didn't lower).
+			// Construct the compound literal directly.
+			idx := variantIndex(rt, e.FieldName)
+			return fmt.Sprintf("((%s){.tag = %d})", mangleType(rt), idx), nil
 		}
 	}
 	rs, err := g.exprStr(e.Receiver)
@@ -1909,21 +2232,32 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		expr := fmt.Sprintf("(%s_push(&%s, %s), 0)", mangleType(listT), nameS, valS)
 		return expr, nil
 	}
+	var paramTypes []*syntax.Type
+	if fn, ok := g.fnTable[ident.Name]; ok {
+		for _, p := range fn.Params {
+			if p.Type != nil {
+				paramTypes = append(paramTypes, p.Type.Resolved)
+			} else {
+				paramTypes = append(paramTypes, nil)
+			}
+		}
+	}
+	args, err := g.coerceArgs(e.Args, paramTypes)
+	if err != nil {
+		return "", err
+	}
 	var sb strings.Builder
 	sb.WriteString(mangle(ident.Name))
 	sb.WriteByte('(')
-	for i, a := range e.Args {
+	for i, a := range args {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		s, err := g.exprStr(a)
-		if err != nil {
-			return "", err
-		}
 		// At v0.3 fn-call composite args are implicit shared borrows —
 		// no deep copy. The borrow checker has confirmed the caller's
-		// binding remains valid for the call duration.
-		sb.WriteString(s)
+		// binding remains valid for the call duration. v0.4 adds spec
+		// coercion via coerceArgs above.
+		sb.WriteString(a)
 	}
 	sb.WriteByte(')')
 	return sb.String(), nil
@@ -1995,10 +2329,22 @@ func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
 		if lt == syntax.TStr() {
 			return fmt.Sprintf("zerg_str_eq(%s, %s)", left, right), nil
 		}
+		if lt != nil {
+			switch lt.Kind {
+			case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
+				return fmt.Sprintf("%s_eq(%s, %s)", mangleType(lt), left, right), nil
+			}
+		}
 		return infix(left, "==", right), nil
 	case syntax.BinNE:
 		if lt == syntax.TStr() {
 			return fmt.Sprintf("(!zerg_str_eq(%s, %s))", left, right), nil
+		}
+		if lt != nil {
+			switch lt.Kind {
+			case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
+				return fmt.Sprintf("(!%s_eq(%s, %s))", mangleType(lt), left, right), nil
+			}
 		}
 		return infix(left, "!=", right), nil
 	case syntax.BinLT:
@@ -2069,7 +2415,7 @@ func cTypeName(t *syntax.Type) string {
 		return "void"
 	}
 	switch t.Kind {
-	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
+	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum, syntax.TypeSpec:
 		return mangleType(t)
 	}
 	return "void"
@@ -2126,6 +2472,8 @@ func mangleType(t *syntax.Type) string {
 		return "zerg_struct_" + t.Name
 	case syntax.TypeEnum:
 		return "zerg_enum_" + t.Name
+	case syntax.TypeSpec:
+		return "zerg_dyn_" + t.Name
 	}
 	return "void"
 }
@@ -2170,4 +2518,1053 @@ func cQuote(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// ---------------------------------------------------------------------------
+// v0.4 — specs, impls, vtables, method calls, fat pointers, NotImplemented.
+//
+// Layout:
+//
+//   * Per spec: a `zerg_dyn_<Spec>` struct typedef carrying (data, vt) plus
+//     a `struct zerg_vtable_<Spec>` listing one function pointer per method
+//     in declaration order (typeck pinned the order for determinism).
+//
+//   * Per (Type, Spec) pair an impl block exists for: a static const
+//     `zerg_vt_<Type>_<Spec>` initialised with each method's resolution —
+//     impl override > spec default specialised to this Type > NotImplemented
+//     stub specialised to this Type / method / spec / pos.
+//
+//   * Per inherent impl method: a static C fn `zerg_struct_<T>__<method>` (or
+//     `zerg_enum_...`) taking `<MangledType> z_this` as the first parameter.
+//
+//   * Per spec impl method: a static C fn
+//     `zerg_struct_<T>__<Spec>__<method>` likewise. The fn pointer in the
+//     vtable wraps this through a `void* this` adapter so the vtable type is
+//     spec-uniform regardless of which Type provides the method.
+//
+//   * Spec coercion (let/arg/return/list-elem/tuple-pos/struct-field/
+//     enum-payload of spec type) wraps the concrete value in a fat pointer.
+//     The wrapped value is heap-boxed so the fat pointer can outlive the
+//     stack frame the source value lives in (mirrors run.go's specVal which
+//     holds *Value).
+// ---------------------------------------------------------------------------
+
+// collectSpecsImpls walks top-level statements once to populate the
+// spec-decl, inherent-impl, and spec-impl tables that every later v0.4 emit
+// pass consults. Mirrors the interpreter's two-pass collection in newInterp.
+func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
+	for _, stmt := range prog.Statements {
+		switch s := stmt.(type) {
+		case *syntax.SpecDecl:
+			if _, dup := g.specs[s.Name]; !dup {
+				g.specOrder = append(g.specOrder, s.Name)
+			}
+			g.specs[s.Name] = s
+		case *syntax.ImplDecl:
+			// Resolve the receiver type by name. Any impl reaching codegen
+			// has been validated by typeck, so the type resolution lookup
+			// below is best-effort — if it fails we fall back to the methods
+			// alone, which still emit the C fn but with no vtable wrapper.
+			receiverT := g.lookupReceiverType(prog, s.Type)
+			if receiverT != nil {
+				g.receiverTypes[s.Type] = receiverT
+			}
+			if s.Spec == "" {
+				if _, ok := g.inherent[s.Type]; !ok {
+					g.inherentTypeOrder = append(g.inherentTypeOrder, s.Type)
+				}
+				g.inherent[s.Type] = append(g.inherent[s.Type], s.Methods...)
+			} else {
+				key := implKey{typeName: s.Type, specName: s.Spec}
+				if _, ok := g.specImpls[key]; !ok {
+					g.specImplKeys = append(g.specImplKeys, key)
+				}
+				g.specImpls[key] = s
+				// Mark the spec as used so the fat-pointer typedef + vtable
+				// struct emit even if the program never binds a spec-typed
+				// value directly.
+				g.specsUsed[s.Spec] = true
+			}
+		}
+	}
+}
+
+// lookupReceiverType resolves a type name to its canonical *Type by walking
+// the program's struct/enum decls. Returns nil if not found.
+func (g *cgen) lookupReceiverType(prog *syntax.Program, name string) *syntax.Type {
+	for _, stmt := range prog.Statements {
+		switch s := stmt.(type) {
+		case *syntax.StructDecl:
+			if s.Name == name {
+				fields := make([]syntax.NamedField, len(s.Fields))
+				for i, f := range s.Fields {
+					if f.Type != nil && f.Type.Resolved != nil {
+						fields[i] = syntax.NamedField{Name: f.Name, Type: f.Type.Resolved}
+					}
+				}
+				return syntax.NewStructType(s.Name, fields)
+			}
+		case *syntax.EnumDecl:
+			if s.Name == name {
+				vs := make([]string, len(s.Variants))
+				for i, v := range s.Variants {
+					vs[i] = v.Name
+				}
+				return syntax.NewEnumType(s.Name, vs)
+			}
+		}
+	}
+	return nil
+}
+
+// collectSpecsInType records every spec-typed leaf reachable from t into
+// g.specsUsed. Walks list/tuple/struct/enum-payload composites recursively
+// so a `list[Printable]` registers the Printable spec for fat-pointer +
+// vtable emission.
+func (g *cgen) collectSpecsInType(t *syntax.Type) {
+	if t == nil {
+		return
+	}
+	switch t.Kind {
+	case syntax.TypeSpec:
+		g.specsUsed[t.Name] = true
+	case syntax.TypeList:
+		g.collectSpecsInType(t.Element)
+	case syntax.TypeTuple:
+		for _, e := range t.Tuple {
+			g.collectSpecsInType(e)
+		}
+	case syntax.TypeStruct:
+		for _, f := range t.Fields {
+			g.collectSpecsInType(f.Type)
+		}
+	case syntax.TypeEnum:
+		for _, payload := range t.VariantPayloads {
+			for _, pt := range payload {
+				g.collectSpecsInType(pt)
+			}
+		}
+	}
+}
+
+// emitSpecForwardDecls writes the fat-pointer typedef and vtable struct
+// for every spec used by the program (declared by `spec ...`, referenced by
+// `let x: Spec = ...`, exposed by an `impl Type for Spec`, etc.). Method
+// signatures inside the vtable struct take `void* this` so the vtable type
+// is spec-uniform regardless of which Type provides the implementation.
+func (g *cgen) emitSpecForwardDecls() {
+	// Union the declared specs and the used specs into a single declaration-
+	// order list; specs declared but never used still emit (the vtable struct
+	// is harmless when no impl blocks reference it).
+	seen := map[string]bool{}
+	var order []string
+	for _, n := range g.specOrder {
+		if !seen[n] {
+			seen[n] = true
+			order = append(order, n)
+		}
+	}
+	for _, n := range g.specOrder {
+		if g.specsUsed[n] && !seen[n] {
+			seen[n] = true
+			order = append(order, n)
+		}
+	}
+	if len(order) == 0 {
+		return
+	}
+	g.b.WriteString("/* Spec fat-pointer typedefs and vtable struct definitions (v0.4). */\n")
+	for _, name := range order {
+		s := g.specs[name]
+		// Vtable struct: one function pointer per spec method in declaration
+		// order; each takes `void* this` plus the declared param types.
+		fmt.Fprintf(&g.b, "struct zerg_vtable_%s {\n", name)
+		if s == nil || len(s.Methods) == 0 {
+			// An empty spec still gets a struct so sizeof(zerg_dyn_<Spec>)
+			// is well-defined; emit a placeholder field.
+			fmt.Fprintf(&g.b, "    char _empty;\n")
+		} else {
+			for _, m := range s.Methods {
+				ret := "void"
+				if m.Return != nil && m.Return.Resolved != nil && m.Return.Resolved != syntax.TVoid() {
+					ret = cTypeName(m.Return.Resolved)
+				}
+				fmt.Fprintf(&g.b, "    %s (*%s)(void* z_this", ret, m.Name)
+				for _, p := range m.Params {
+					if p.Type != nil && p.Type.Resolved != nil {
+						fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+					}
+				}
+				fmt.Fprintf(&g.b, ");\n")
+			}
+		}
+		fmt.Fprintf(&g.b, "};\n")
+		// Fat pointer: data + vtable.
+		fmt.Fprintf(&g.b, "typedef struct { void* data; const struct zerg_vtable_%s* vt; } zerg_dyn_%s;\n",
+			name, name)
+	}
+	g.b.WriteString("\n")
+}
+
+// emitSpecVtablesAndMethods is the v0.4 file-scope emit pass. Order:
+//
+//  1. Forward-declare every emitted method C function so they can reference
+//     each other in any order.
+//  2. Emit each method body — both inherent and per-(Type, Spec) override.
+//     A spec impl method gets one C fn whose receiver is the concrete
+//     mangled type, plus a small `void*` adapter wrapper that downcasts to
+//     the concrete and forwards. The adapter is what the vtable points at.
+//  3. Emit the per-(Type, Spec) static const vtable initialiser populated
+//     with adapter pointers for impl overrides, type-specialised default
+//     adapters for spec defaults, and NotImplemented stubs for the
+//     remainder.
+func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
+	if len(g.inherentTypeOrder) == 0 && len(g.specImplKeys) == 0 && len(g.specOrder) == 0 {
+		return
+	}
+	// Stable ordering: inherent first by declaration order of types, then
+	// (Type, Spec) impls by declaration order.
+	g.b.WriteString("/* v0.4 method functions, vtable adapters, and per-(Type, Spec) vtables. */\n")
+
+	// Forward decls.
+	for _, typeName := range g.inherentTypeOrder {
+		recv := g.receiverTypes[typeName]
+		if recv == nil {
+			continue
+		}
+		for _, fn := range g.inherent[typeName] {
+			g.writeMethodSig(recv, "", fn)
+			g.b.WriteString(";\n")
+		}
+	}
+	for _, key := range g.specImplKeys {
+		recv := g.receiverTypes[key.typeName]
+		if recv == nil {
+			continue
+		}
+		decl := g.specImpls[key]
+		spec := g.specs[key.specName]
+		for _, fn := range decl.Methods {
+			g.writeMethodSig(recv, key.specName, fn)
+			g.b.WriteString(";\n")
+			// Adapter forward decl.
+			fmt.Fprintf(&g.b, "static %s zerg_adapter_%s__%s__%s(void* z_this",
+				returnCType(fn.Return), mangleType(recv), key.specName, fn.Name)
+			for _, p := range fn.Params {
+				if p.Type != nil && p.Type.Resolved != nil {
+					fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+				}
+			}
+			g.b.WriteString(");\n")
+		}
+		// Default-method adapters: for any spec method NOT overridden, we
+		// either need a Type-specialised default adapter (if the spec
+		// supplies a default body) or a NotImplemented stub.
+		if spec != nil {
+			for _, sm := range spec.Methods {
+				overridden := false
+				for _, fn := range decl.Methods {
+					if fn.Name == sm.Name {
+						overridden = true
+						break
+					}
+				}
+				if overridden {
+					continue
+				}
+				if sm.Body != nil {
+					// Type-specialised default-body adapter.
+					fmt.Fprintf(&g.b, "static %s zerg_default_%s__%s__%s(void* z_this",
+						returnCType(sm.Return), mangleType(recv), key.specName, sm.Name)
+					for _, p := range sm.Params {
+						if p.Type != nil && p.Type.Resolved != nil {
+							fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+						}
+					}
+					g.b.WriteString(");\n")
+				} else {
+					// NotImplemented stub.
+					fmt.Fprintf(&g.b, "static %s zerg_not_impl_%s__%s__%s(void* z_this",
+						returnCType(sm.Return), mangleType(recv), key.specName, sm.Name)
+					for _, p := range sm.Params {
+						if p.Type != nil && p.Type.Resolved != nil {
+							fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+						}
+					}
+					g.b.WriteString(");\n")
+				}
+			}
+		}
+	}
+	g.b.WriteString("\n")
+
+	// Method bodies — inherent.
+	for _, typeName := range g.inherentTypeOrder {
+		recv := g.receiverTypes[typeName]
+		if recv == nil {
+			continue
+		}
+		for _, fn := range g.inherent[typeName] {
+			if err := g.emitMethodFn(recv, "", fn); err != nil {
+				// Should not happen post-typeck; emit a comment so the C
+				// compiler error points at the right method.
+				fmt.Fprintf(&g.b, "/* codegen error in %s::%s: %v */\n", typeName, fn.Name, err)
+			}
+			g.b.WriteString("\n")
+		}
+	}
+	// Method bodies — spec impls + adapters.
+	for _, key := range g.specImplKeys {
+		recv := g.receiverTypes[key.typeName]
+		if recv == nil {
+			continue
+		}
+		decl := g.specImpls[key]
+		spec := g.specs[key.specName]
+		for _, fn := range decl.Methods {
+			if err := g.emitMethodFn(recv, key.specName, fn); err != nil {
+				fmt.Fprintf(&g.b, "/* codegen error in %s::%s::%s: %v */\n",
+					key.typeName, key.specName, fn.Name, err)
+			}
+			g.b.WriteString("\n")
+			g.emitSpecAdapter(recv, key.specName, fn)
+			g.b.WriteString("\n")
+		}
+		// Default-body adapters / NotImplemented stubs for unfilled methods.
+		if spec != nil {
+			for _, sm := range spec.Methods {
+				overridden := false
+				for _, fn := range decl.Methods {
+					if fn.Name == sm.Name {
+						overridden = true
+						break
+					}
+				}
+				if overridden {
+					continue
+				}
+				if sm.Body != nil {
+					g.emitSpecDefaultAdapter(recv, key.specName, sm)
+					g.b.WriteString("\n")
+				} else {
+					g.emitNotImplementedStub(recv, key.specName, sm)
+					g.b.WriteString("\n")
+				}
+			}
+		}
+	}
+
+	// Per-(Type, Spec) static vtables.
+	for _, key := range g.specImplKeys {
+		recv := g.receiverTypes[key.typeName]
+		if recv == nil {
+			continue
+		}
+		spec := g.specs[key.specName]
+		decl := g.specImpls[key]
+		fmt.Fprintf(&g.b, "static const struct zerg_vtable_%s zerg_vt_%s_%s = {\n",
+			key.specName, mangleType(recv), key.specName)
+		if spec == nil || len(spec.Methods) == 0 {
+			g.b.WriteString("    ._empty = 0,\n")
+		} else {
+			for _, sm := range spec.Methods {
+				// Pick adapter target.
+				overridden := false
+				for _, fn := range decl.Methods {
+					if fn.Name == sm.Name {
+						overridden = true
+						break
+					}
+				}
+				switch {
+				case overridden:
+					fmt.Fprintf(&g.b, "    .%s = zerg_adapter_%s__%s__%s,\n",
+						sm.Name, mangleType(recv), key.specName, sm.Name)
+				case sm.Body != nil:
+					fmt.Fprintf(&g.b, "    .%s = zerg_default_%s__%s__%s,\n",
+						sm.Name, mangleType(recv), key.specName, sm.Name)
+				default:
+					fmt.Fprintf(&g.b, "    .%s = zerg_not_impl_%s__%s__%s,\n",
+						sm.Name, mangleType(recv), key.specName, sm.Name)
+				}
+			}
+		}
+		g.b.WriteString("};\n")
+	}
+	g.b.WriteString("\n")
+}
+
+// writeMethodSig writes the C signature of a method fn (no trailing punct).
+// receiver is the resolved Type; specName is "" for inherent, otherwise the
+// spec name (used for mangling).
+func (g *cgen) writeMethodSig(receiver *syntax.Type, specName string, fn *syntax.FnDecl) {
+	g.b.WriteString("static ")
+	g.b.WriteString(returnCType(fn.Return))
+	g.b.WriteByte(' ')
+	g.b.WriteString(methodMangle(receiver, specName, fn.Name))
+	g.b.WriteByte('(')
+	fmt.Fprintf(&g.b, "%s %s", cTypeName(receiver), mangle("this"))
+	for _, p := range fn.Params {
+		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+	}
+	g.b.WriteByte(')')
+}
+
+// methodMangle returns the C identifier for a method function on receiver.
+// Inherent: <MangledType>__<method>. Spec impl: <MangledType>__<Spec>__<method>.
+func methodMangle(receiver *syntax.Type, specName, method string) string {
+	if specName == "" {
+		return mangleType(receiver) + "__" + method
+	}
+	return mangleType(receiver) + "__" + specName + "__" + method
+}
+
+// returnCType returns the C return-type string for a method, mapping a nil
+// or void TypeRef to "void".
+func returnCType(ref *syntax.TypeRef) string {
+	if ref == nil || ref.Resolved == nil || ref.Resolved == syntax.TVoid() {
+		return "void"
+	}
+	return cTypeName(ref.Resolved)
+}
+
+// emitMethodFn emits the body of an impl method. The receiver becomes the
+// implicit first parameter `z_this`; the rest of the body lowers like a
+// normal fn body via emitBlockBody.
+func (g *cgen) emitMethodFn(receiver *syntax.Type, specName string, fn *syntax.FnDecl) error {
+	g.writeMethodSig(receiver, specName, fn)
+	g.b.WriteString(" {\n")
+	prevRet := g.currentFnRet
+	if fn.Return != nil {
+		g.currentFnRet = fn.Return.Resolved
+	} else {
+		g.currentFnRet = nil
+	}
+	prevIndent := g.indent
+	g.indent = 1
+	defer func() {
+		g.currentFnRet = prevRet
+		g.indent = prevIndent
+	}()
+	if err := g.emitBlockBody(fn.Body); err != nil {
+		return err
+	}
+	g.b.WriteString("}\n")
+	return nil
+}
+
+// emitSpecAdapter emits the void* → concrete adapter that the vtable points
+// at. The adapter casts the void pointer back to the concrete Type, derefs,
+// and forwards to the real method fn.
+func (g *cgen) emitSpecAdapter(receiver *syntax.Type, specName string, fn *syntax.FnDecl) {
+	fmt.Fprintf(&g.b, "static %s zerg_adapter_%s__%s__%s(void* z_this",
+		returnCType(fn.Return), mangleType(receiver), specName, fn.Name)
+	for _, p := range fn.Params {
+		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+	}
+	g.b.WriteString(") {\n")
+	hasReturn := fn.Return != nil && fn.Return.Resolved != nil && fn.Return.Resolved != syntax.TVoid()
+	if hasReturn {
+		g.b.WriteString("    return ")
+	} else {
+		g.b.WriteString("    ")
+	}
+	fmt.Fprintf(&g.b, "%s(*((%s*)z_this)", methodMangle(receiver, specName, fn.Name), cTypeName(receiver))
+	for _, p := range fn.Params {
+		fmt.Fprintf(&g.b, ", %s", mangle(p.Name))
+	}
+	g.b.WriteString(");\n")
+	g.b.WriteString("}\n")
+}
+
+// emitSpecDefaultAdapter emits a Type-specialised version of a spec default
+// method body. The default body refers to `this` as the implementing type;
+// each (Type, Spec) pair that inherits the default produces its own copy of
+// the lowered C function so `this` resolves to the right concrete type.
+func (g *cgen) emitSpecDefaultAdapter(receiver *syntax.Type, specName string, sm *syntax.SpecMethod) {
+	ret := returnCType(sm.Return)
+	fmt.Fprintf(&g.b, "static %s zerg_default_%s__%s__%s(void* __zg_this_raw",
+		ret, mangleType(receiver), specName, sm.Name)
+	for _, p := range sm.Params {
+		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+	}
+	g.b.WriteString(") {\n")
+	// Bind `this` to the concrete value so the body's `this` reference walks
+	// the same path as inherent / impl method bodies.
+	fmt.Fprintf(&g.b, "    %s %s = *((%s*)__zg_this_raw);\n", cTypeName(receiver), mangle("this"), cTypeName(receiver))
+	prevRet := g.currentFnRet
+	prevIndent := g.indent
+	if sm.Return != nil {
+		g.currentFnRet = sm.Return.Resolved
+	} else {
+		g.currentFnRet = nil
+	}
+	g.indent = 1
+	defer func() {
+		g.currentFnRet = prevRet
+		g.indent = prevIndent
+	}()
+	if err := g.emitBlockBody(sm.Body); err != nil {
+		fmt.Fprintf(&g.b, "    /* codegen error in default %s::%s::%s: %v */\n",
+			receiver.Name, specName, sm.Name, err)
+	}
+	g.b.WriteString("}\n")
+}
+
+// emitNotImplementedStub emits a `__attribute__((noreturn))` C function for
+// a spec method that has no impl override and no spec default. The function
+// signature matches the vtable slot so it can be installed there directly.
+// The diagnostic format is byte-identical to run.go's NotImplemented panic.
+func (g *cgen) emitNotImplementedStub(receiver *syntax.Type, specName string, sm *syntax.SpecMethod) {
+	ret := returnCType(sm.Return)
+	fmt.Fprintf(&g.b, "static %s zerg_not_impl_%s__%s__%s(void* z_this",
+		ret, mangleType(receiver), specName, sm.Name)
+	for _, p := range sm.Params {
+		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+	}
+	g.b.WriteString(") {\n")
+	g.b.WriteString("    (void)z_this;\n")
+	for _, p := range sm.Params {
+		fmt.Fprintf(&g.b, "    (void)%s;\n", mangle(p.Name))
+	}
+	posStr := fmt.Sprintf("%d:%d", sm.Pos.Line, sm.Pos.Column)
+	fmt.Fprintf(&g.b, "    zerg_not_implemented(%q, %q, %q, %q);\n",
+		receiver.Name, sm.Name, specName, posStr)
+	// noreturn helper exits — but the C compiler still wants a path that
+	// produces the declared return value. Add a defensive trap:
+	if ret != "void" {
+		fmt.Fprintf(&g.b, "    return (%s){0};\n", ret)
+	}
+	g.b.WriteString("}\n")
+}
+
+// ---------------------------------------------------------------------------
+// Method-call expression lowering.
+// ---------------------------------------------------------------------------
+
+// methodCallStr lowers a MethodCallExpr. Routing precedence mirrors run.go:
+//
+//   1. typeck-lowered EnumLit (`Token.Ident("foo")`) → enumLitStr.
+//   2. typeck-lowered builtin call (`xs.push(v)`) → existing callStr path.
+//   3. Spec-typed receiver → fat-pointer vtable dispatch.
+//   4. Concrete receiver → resolve to inherent or unique spec impl method,
+//      emit a direct C fn call.
+func (g *cgen) methodCallStr(e *syntax.MethodCallExpr) (string, error) {
+	if e.Lowered != nil {
+		return g.enumLitStr(e.Lowered)
+	}
+	if e.LoweredCall != nil {
+		return g.callStr(e.LoweredCall)
+	}
+	rt := e.Receiver.Type()
+	if rt == nil {
+		return "", fmt.Errorf("codegen: method-call receiver has nil type at %s", e.Pos)
+	}
+	if rt.Kind == syntax.TypeSpec {
+		return g.dispatchSpec(e, rt)
+	}
+	return g.dispatchConcrete(e, rt)
+}
+
+// dispatchSpec emits a fat-pointer vtable dispatch:
+//
+//	({ zerg_dyn_<Spec> __r = <recv>; __r.vt-><method>(__r.data, args...); })
+//
+// The receiver is snapshotted into a temp so a side-effecting receiver
+// expression evaluates exactly once. typeck has validated that <method> is
+// declared by the spec; codegen does not re-check.
+func (g *cgen) dispatchSpec(e *syntax.MethodCallExpr, rt *syntax.Type) (string, error) {
+	rs, err := g.exprStr(e.Receiver)
+	if err != nil {
+		return "", err
+	}
+	specName := rt.Name
+	spec := g.specs[specName]
+	// Coerce each arg to the declared param type so spec-typed params widen.
+	var paramTypes []*syntax.Type
+	if spec != nil {
+		for _, m := range spec.Methods {
+			if m.Name == e.Method {
+				for _, p := range m.Params {
+					if p.Type != nil {
+						paramTypes = append(paramTypes, p.Type.Resolved)
+					} else {
+						paramTypes = append(paramTypes, nil)
+					}
+				}
+				break
+			}
+		}
+	}
+	args, err := g.coerceArgs(e.Args, paramTypes)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "({ %s __r = %s; __r.vt->%s(__r.data", mangleType(rt), rs, e.Method)
+	for _, a := range args {
+		sb.WriteString(", ")
+		sb.WriteString(a)
+	}
+	sb.WriteString("); })")
+	return sb.String(), nil
+}
+
+// dispatchConcrete emits a direct C method-fn call with the receiver as the
+// first argument. Resolution: inherent methods first, then unique spec-impl
+// method by name. typeck has rejected ambiguity so the first match suffices.
+//
+// For spec-impl-via-concrete dispatch we must also handle the spec-default
+// and NotImplemented cases: we route via the same Type-specialised default
+// adapter / NotImplemented stub the vtable uses.
+func (g *cgen) dispatchConcrete(e *syntax.MethodCallExpr, rt *syntax.Type) (string, error) {
+	rs, err := g.exprStr(e.Receiver)
+	if err != nil {
+		return "", err
+	}
+	typeName := rt.Name
+	// 1. Inherent.
+	if methods, ok := g.inherent[typeName]; ok {
+		for _, fn := range methods {
+			if fn.Name == e.Method {
+				return g.emitConcreteMethodCall(rt, "", fn, rs, e.Args)
+			}
+		}
+	}
+	// 2. Spec impl methods. Walk the spec impls for this type and find the
+	// first one exposing the method (override or via default).
+	for _, key := range g.specImplKeys {
+		if key.typeName != typeName {
+			continue
+		}
+		decl := g.specImpls[key]
+		for _, fn := range decl.Methods {
+			if fn.Name == e.Method {
+				return g.emitConcreteMethodCall(rt, key.specName, fn, rs, e.Args)
+			}
+		}
+		// No override — try default.
+		spec := g.specs[key.specName]
+		if spec != nil {
+			for _, sm := range spec.Methods {
+				if sm.Name != e.Method {
+					continue
+				}
+				if sm.Body != nil {
+					// Default body — call the type-specialised default
+					// adapter.
+					return g.emitConcreteSpecDefault(rt, key.specName, sm, rs, e.Args)
+				}
+				// Signature only — NotImplemented stub.
+				return g.emitConcreteNotImpl(rt, key.specName, sm, rs, e.Args)
+			}
+		}
+	}
+	return "", fmt.Errorf("codegen: method %q on %s not resolvable at %s", e.Method, typeName, e.MethodPos)
+}
+
+// emitConcreteMethodCall renders a direct call to either an inherent or
+// spec-impl method fn, passing the receiver value (NOT a pointer; cgen's
+// method functions take the receiver by value, matching the v0.3 fn-call
+// composite-arg convention).
+func (g *cgen) emitConcreteMethodCall(rt *syntax.Type, specName string, fn *syntax.FnDecl, rs string, callArgs []syntax.Expr) (string, error) {
+	var paramTypes []*syntax.Type
+	for _, p := range fn.Params {
+		if p.Type != nil {
+			paramTypes = append(paramTypes, p.Type.Resolved)
+		} else {
+			paramTypes = append(paramTypes, nil)
+		}
+	}
+	args, err := g.coerceArgs(callArgs, paramTypes)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.WriteString(methodMangle(rt, specName, fn.Name))
+	sb.WriteByte('(')
+	sb.WriteString(rs)
+	for _, a := range args {
+		sb.WriteString(", ")
+		sb.WriteString(a)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
+}
+
+// emitConcreteSpecDefault routes a concrete-receiver call to the per-(Type,
+// Spec) default adapter — the same one the vtable points at when the impl
+// inherits the spec's default. The adapter takes void* so we wrap the
+// receiver in a temp and pass its address.
+func (g *cgen) emitConcreteSpecDefault(rt *syntax.Type, specName string, sm *syntax.SpecMethod, rs string, callArgs []syntax.Expr) (string, error) {
+	var paramTypes []*syntax.Type
+	for _, p := range sm.Params {
+		if p.Type != nil {
+			paramTypes = append(paramTypes, p.Type.Resolved)
+		} else {
+			paramTypes = append(paramTypes, nil)
+		}
+	}
+	args, err := g.coerceArgs(callArgs, paramTypes)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "({ %s __t = %s; zerg_default_%s__%s__%s(&__t",
+		cTypeName(rt), rs, mangleType(rt), specName, sm.Name)
+	for _, a := range args {
+		sb.WriteString(", ")
+		sb.WriteString(a)
+	}
+	sb.WriteString("); })")
+	return sb.String(), nil
+}
+
+// emitConcreteNotImpl routes a concrete-receiver call to the per-(Type,
+// Spec, method) NotImplemented stub. Same shape as the default adapter
+// path but the call traps before returning.
+func (g *cgen) emitConcreteNotImpl(rt *syntax.Type, specName string, sm *syntax.SpecMethod, rs string, callArgs []syntax.Expr) (string, error) {
+	var paramTypes []*syntax.Type
+	for _, p := range sm.Params {
+		if p.Type != nil {
+			paramTypes = append(paramTypes, p.Type.Resolved)
+		} else {
+			paramTypes = append(paramTypes, nil)
+		}
+	}
+	args, err := g.coerceArgs(callArgs, paramTypes)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "({ %s __t = %s; zerg_not_impl_%s__%s__%s(&__t",
+		cTypeName(rt), rs, mangleType(rt), specName, sm.Name)
+	for _, a := range args {
+		sb.WriteString(", ")
+		sb.WriteString(a)
+	}
+	sb.WriteString("); })")
+	return sb.String(), nil
+}
+
+// coerceArgs evaluates a slice of argument expressions and applies spec
+// coercion to each one based on the matching declared param type. Used for
+// both method-call and ordinary fn-call arg lowering when the callee carries
+// spec-typed parameters.
+func (g *cgen) coerceArgs(args []syntax.Expr, paramTypes []*syntax.Type) ([]string, error) {
+	out := make([]string, len(args))
+	for i, a := range args {
+		s, err := g.exprStr(a)
+		if err != nil {
+			return nil, err
+		}
+		var pt *syntax.Type
+		if i < len(paramTypes) {
+			pt = paramTypes[i]
+		}
+		out[i] = g.coerceCExpr(s, a.Type(), pt)
+	}
+	return out, nil
+}
+
+// coerceCExpr returns a C expression that produces a value of type `target`
+// from a C expression of type `srcT`. The function is the codegen analogue
+// of run.go's coerceToType: when srcT is a concrete struct/enum and target
+// is a spec, we wrap the value in a fat pointer pointing at a heap-boxed
+// copy of the source. Composite shapes (list/tuple/struct/enum-payload)
+// recurse element-wise.
+//
+// Lifetime — at v0.4 the underlying value is heap-boxed so the fat pointer
+// can outlive any local frame. malloc is leaked (consistent with the rest
+// of the runtime which leaks list buffers and string concats too); a v0.5+
+// arena will reclaim.
+func (g *cgen) coerceCExpr(expr string, srcT, target *syntax.Type) string {
+	if target == nil || srcT == nil {
+		return expr
+	}
+	// If the source already has the same fully-resolved shape as the target
+	// (including spec elements), no coercion is needed — every element
+	// position has already been wrapped at the source-construction site
+	// (list-lit / tuple-lit / struct-lit emit per-element coerces).
+	if srcT.Equals(target) {
+		return expr
+	}
+	if target.Kind == srcT.Kind && target.Kind != syntax.TypeSpec {
+		// Same outer shape — only descend when recursion can hit a spec
+		// inside (list[Spec], tuple[..., Spec], etc.).
+		if !shapeContainsSpec(target) {
+			return expr
+		}
+	}
+	switch target.Kind {
+	case syntax.TypeSpec:
+		if srcT.Kind == syntax.TypeSpec {
+			// Already wrapped — typeck rejects spec-to-different-spec at
+			// v0.4 so just pass through.
+			return expr
+		}
+		// Heap-box the concrete value, then wrap.
+		concreteC := cTypeName(srcT)
+		return fmt.Sprintf(
+			"({ %s* __p = (%s*)malloc(sizeof(%s)); *__p = (%s); (zerg_dyn_%s){.data = __p, .vt = &zerg_vt_%s_%s}; })",
+			concreteC, concreteC, concreteC, expr, target.Name, mangleType(srcT), target.Name)
+	case syntax.TypeList:
+		if srcT.Kind != syntax.TypeList {
+			return expr
+		}
+		if !shapeContainsSpec(target) {
+			return expr
+		}
+		// Build a fresh list, copying each element with element-coerce.
+		mname := mangleType(target)
+		elemC := cTypeName(target.Element)
+		tmp := g.freshTmp("co")
+		coerced := g.coerceCExpr(fmt.Sprintf("__src.data[__i]"), srcT.Element, target.Element)
+		return fmt.Sprintf(
+			"({ %s __src = (%s); %s %s; %s.len = __src.len; %s.cap = __src.len; %s.data = (%s*)malloc(%s.len ? %s.len * sizeof(%s) : 1); for (size_t __i = 0; __i < __src.len; __i++) { %s.data[__i] = %s; } %s; })",
+			cTypeName(srcT), expr, mname, tmp,
+			tmp, tmp, tmp, elemC, tmp, tmp, elemC,
+			tmp, coerced, tmp)
+	case syntax.TypeTuple:
+		if srcT.Kind != syntax.TypeTuple || len(target.Tuple) != len(srcT.Tuple) {
+			return expr
+		}
+		if !shapeContainsSpec(target) {
+			return expr
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "({ %s __src = (%s); ((%s){", cTypeName(srcT), expr, mangleType(target))
+		for i := range target.Tuple {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			coerced := g.coerceCExpr(fmt.Sprintf("__src.e%d", i), srcT.Tuple[i], target.Tuple[i])
+			fmt.Fprintf(&sb, ".e%d = %s", i, coerced)
+		}
+		sb.WriteString("}); })")
+		return sb.String()
+	}
+	return expr
+}
+
+// shapeContainsSpec returns true if t (or any composite leaf reached via
+// list/tuple/struct/enum-payload recursion) has Kind TypeSpec. Drives the
+// per-shape coercion descent decision.
+func shapeContainsSpec(t *syntax.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Kind {
+	case syntax.TypeSpec:
+		return true
+	case syntax.TypeList:
+		return shapeContainsSpec(t.Element)
+	case syntax.TypeTuple:
+		for _, e := range t.Tuple {
+			if shapeContainsSpec(e) {
+				return true
+			}
+		}
+	case syntax.TypeStruct:
+		for _, f := range t.Fields {
+			if shapeContainsSpec(f.Type) {
+				return true
+			}
+		}
+	case syntax.TypeEnum:
+		for _, payload := range t.VariantPayloads {
+			for _, pt := range payload {
+				if shapeContainsSpec(pt) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// enumLitStr lowers an EnumLit to a compound literal of the per-shape enum
+// struct: `((zerg_enum_<Name>){.tag = idx, .payload.pN = {.aJ = ...}})`.
+// Bare variants omit the per-variant payload init (the union slot stays
+// zero-initialised).
+func (g *cgen) enumLitStr(e *syntax.EnumLit) (string, error) {
+	en := e.Type()
+	if en == nil || en.Kind != syntax.TypeEnum {
+		return "", fmt.Errorf("codegen: enum literal has non-enum type at %s", e.Pos)
+	}
+	idx := variantIndex(en, e.Variant)
+	if idx < 0 {
+		return "", fmt.Errorf("codegen: enum %s has no variant %s at %s", en.Name, e.Variant, e.VariantPos)
+	}
+	mname := mangleType(en)
+	if len(e.Payload) == 0 {
+		return fmt.Sprintf("((%s){.tag = %d})", mname, idx), nil
+	}
+	payloadTypes := variantPayload(en, idx)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "((%s){.tag = %d, .payload.p%d = {", mname, idx, idx)
+	for i, sub := range e.Payload {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		s, err := g.exprStr(sub)
+		if err != nil {
+			return "", err
+		}
+		// Coerce each payload element to the declared variant payload type
+		// so a payload position declared as a spec widens the concrete arg.
+		var pt *syntax.Type
+		if i < len(payloadTypes) {
+			pt = payloadTypes[i]
+		}
+		s = g.coerceCExpr(s, sub.Type(), pt)
+		fmt.Fprintf(&sb, ".a%d = %s", i, s)
+	}
+	sb.WriteString("}})")
+	return sb.String(), nil
+}
+
+// emitEqHelpers emits a per-shape `_eq` helper for every composite shape in
+// the program. typeck has validated that == on composites only invokes
+// these helpers when the operand types match exactly. Recursion bottoms out
+// at primitives (== / zerg_str_eq) and at nested composites (which have
+// their own _eq helper emitted alongside).
+//
+// Spec-typed bindings reject == at typeck per PLAN.md, so this function
+// never needs an _eq path for TypeSpec.
+func (g *cgen) emitEqHelpers() {
+	r := g.shapes
+	if len(r.listOrder)+len(r.tupleOrder)+len(r.structOrder)+len(r.enumOrder) == 0 {
+		return
+	}
+	// Skip shapes that transitively reach a spec-typed leaf — typeck rejects
+	// composite == on those at v0.4 so the helper would never be called and
+	// emitting one fails to compile (no eq for spec types).
+	listKeys := filterEqShapes(r.listOrder, r.listShapes)
+	tupleKeys := filterEqShapes(r.tupleOrder, r.tupleShapes)
+	structKeys := filterEqShapes(r.structOrder, r.structShapes)
+	enumKeys := filterEqShapes(r.enumOrder, r.enumShapes)
+	if len(listKeys)+len(tupleKeys)+len(structKeys)+len(enumKeys) == 0 {
+		return
+	}
+	g.b.WriteString("/* Per-shape composite == helpers (v0.4). */\n")
+	// Forward decls so helpers can mutually reference (list-of-struct calls
+	// struct_eq which may itself call list_eq for an inner list field).
+	for _, k := range listKeys {
+		fmt.Fprintf(&g.b, "static _Bool %s_eq(%s a, %s b);\n", k, k, k)
+	}
+	for _, k := range tupleKeys {
+		fmt.Fprintf(&g.b, "static _Bool %s_eq(%s a, %s b);\n", k, k, k)
+	}
+	for _, k := range structKeys {
+		fmt.Fprintf(&g.b, "static _Bool %s_eq(%s a, %s b);\n", k, k, k)
+	}
+	for _, k := range enumKeys {
+		fmt.Fprintf(&g.b, "static _Bool %s_eq(%s a, %s b);\n", k, k, k)
+	}
+	g.b.WriteString("\n")
+
+	for _, k := range listKeys {
+		t := r.listShapes[k]
+		emitListEq(&g.b, k, t)
+		g.b.WriteString("\n")
+	}
+	for _, k := range tupleKeys {
+		t := r.tupleShapes[k]
+		emitTupleEq(&g.b, k, t)
+		g.b.WriteString("\n")
+	}
+	for _, k := range structKeys {
+		t := r.structShapes[k]
+		emitStructEq(&g.b, k, t)
+		g.b.WriteString("\n")
+	}
+	for _, k := range enumKeys {
+		t := r.enumShapes[k]
+		emitEnumEq(&g.b, k, t)
+		g.b.WriteString("\n")
+	}
+}
+
+// filterEqShapes returns the keys whose shape does NOT transitively contain a
+// spec-typed leaf. Spec shapes can't participate in == per typeck rules.
+func filterEqShapes(order []string, shapes map[string]*syntax.Type) []string {
+	out := make([]string, 0, len(order))
+	for _, k := range order {
+		if !shapeContainsSpec(shapes[k]) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// eqExpr returns a C boolean expression that compares two operands of type
+// t. Routes to the per-shape _eq helper for composite types and to the
+// existing primitive == / zerg_str_eq for primitives.
+func eqExpr(t *syntax.Type, a, b string) string {
+	if t == nil {
+		return fmt.Sprintf("(%s == %s)", a, b)
+	}
+	if t == syntax.TStr() {
+		return fmt.Sprintf("zerg_str_eq(%s, %s)", a, b)
+	}
+	switch t.Kind {
+	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
+		return fmt.Sprintf("%s_eq(%s, %s)", mangleType(t), a, b)
+	}
+	return fmt.Sprintf("(%s == %s)", a, b)
+}
+
+func emitListEq(b *strings.Builder, mname string, t *syntax.Type) {
+	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
+	fmt.Fprintf(b, "    if (a.len != b.len) return 0;\n")
+	fmt.Fprintf(b, "    for (size_t i = 0; i < a.len; i++) {\n")
+	fmt.Fprintf(b, "        if (!(%s)) return 0;\n", eqExpr(t.Element, "a.data[i]", "b.data[i]"))
+	fmt.Fprintf(b, "    }\n")
+	fmt.Fprintf(b, "    return 1;\n")
+	fmt.Fprintf(b, "}\n")
+}
+
+func emitTupleEq(b *strings.Builder, mname string, t *syntax.Type) {
+	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
+	for i, e := range t.Tuple {
+		fmt.Fprintf(b, "    if (!(%s)) return 0;\n",
+			eqExpr(e, fmt.Sprintf("a.e%d", i), fmt.Sprintf("b.e%d", i)))
+	}
+	fmt.Fprintf(b, "    return 1;\n")
+	fmt.Fprintf(b, "}\n")
+}
+
+func emitStructEq(b *strings.Builder, mname string, t *syntax.Type) {
+	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
+	for _, f := range t.Fields {
+		fname := mangleField(f.Name)
+		fmt.Fprintf(b, "    if (!(%s)) return 0;\n",
+			eqExpr(f.Type, "a."+fname, "b."+fname))
+	}
+	fmt.Fprintf(b, "    return 1;\n")
+	fmt.Fprintf(b, "}\n")
+}
+
+func emitEnumEq(b *strings.Builder, mname string, t *syntax.Type) {
+	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
+	fmt.Fprintf(b, "    if (a.tag != b.tag) return 0;\n")
+	fmt.Fprintf(b, "    switch (a.tag) {\n")
+	for i := range t.Variants {
+		payload := variantPayload(t, i)
+		fmt.Fprintf(b, "    case %d:\n", i)
+		if len(payload) == 0 {
+			fmt.Fprintf(b, "        return 1;\n")
+			continue
+		}
+		for j, pt := range payload {
+			access := fmt.Sprintf("payload.p%d.a%d", i, j)
+			fmt.Fprintf(b, "        if (!(%s)) return 0;\n",
+				eqExpr(pt, "a."+access, "b."+access))
+		}
+		fmt.Fprintf(b, "        return 1;\n")
+	}
+	fmt.Fprintf(b, "    default: return 0;\n")
+	fmt.Fprintf(b, "    }\n")
+	fmt.Fprintf(b, "}\n")
 }

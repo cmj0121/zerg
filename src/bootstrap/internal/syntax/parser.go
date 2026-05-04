@@ -246,6 +246,10 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseEnumDecl()
 	case KindMatch:
 		return p.parseMatchStmt()
+	case KindSpec:
+		return p.parseSpecDecl()
+	case KindImpl:
+		return p.parseImplDecl()
 	default:
 		return p.parseExprOrAssignStmt()
 	}
@@ -609,8 +613,13 @@ func (p *parser) parseStructDecl() (Stmt, error) {
 	return &StructDecl{Pos: kw.Pos, Name: nameTok.Value, Fields: fields}, nil
 }
 
-// parseEnumDecl handles `enum Name { Variant, ... }`. Variants are bare
-// identifiers at v0.2 — payloads are deferred to v0.4.
+// parseEnumDecl handles `enum Name { Variant, Variant(T1, T2), ... }`. v0.2
+// admitted only bare variant identifiers; v0.4 (Unit 2) extends each variant
+// to carry an optional `( type_list )` payload.
+//
+// Bare form (no parens) and payload form (≥ 1 type, no trailing comma) are
+// both admitted. An empty `()` is rejected with a focused diagnostic — bare
+// variants MUST drop the parentheses entirely.
 func (p *parser) parseEnumDecl() (Stmt, error) {
 	kw := p.advance() // consume `enum`
 	nameTok, err := p.expect(KindIdent, "after 'enum'")
@@ -632,7 +641,15 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		variants = append(variants, VariantDecl{Name: v.Value, Pos: v.Pos})
+		variant := VariantDecl{Name: v.Value, Pos: v.Pos}
+		if p.peek().Kind == KindLParen {
+			payload, err := p.parseVariantPayloadTypes()
+			if err != nil {
+				return nil, err
+			}
+			variant.Payload = payload
+		}
+		variants = append(variants, variant)
 		if p.peek().Kind == KindComma {
 			p.advance()
 			continue
@@ -643,6 +660,211 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 		return nil, err
 	}
 	return &EnumDecl{Pos: kw.Pos, Name: nameTok.Value, Variants: variants}, nil
+}
+
+// parseVariantPayloadTypes consumes the `( type ( ',' type )* )` tail of a
+// variant declaration. The opening `(` has been peeked but not yet consumed.
+//
+// Empty parens (`V()`) are rejected: bare variants drop the parentheses
+// entirely, so an empty payload is never the user's intent. A trailing comma
+// (`V(int,)`) is also rejected — variant payload type lists are pinned to no
+// trailing comma.
+func (p *parser) parseVariantPayloadTypes() ([]*TypeRef, error) {
+	openTok, err := p.expectParen(KindLParen, "in enum variant payload")
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == KindRParen {
+		return nil, errorAt(openTok.Pos,
+			"empty parentheses are not allowed; use the bare variant name")
+	}
+	var types []*TypeRef
+	for {
+		ty, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		types = append(types, ty)
+		if p.peek().Kind == KindComma {
+			commaTok := p.advance()
+			if p.peek().Kind == KindRParen {
+				return nil, errorAt(commaTok.Pos,
+					"trailing comma not allowed in enum variant payload type list")
+			}
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close enum variant payload"); err != nil {
+		return nil, err
+	}
+	return types, nil
+}
+
+// parseSpecDecl handles `spec Name { method_decl* }`. A method decl is the
+// `fn` form with an optional brace-block body: signature-only (no block)
+// declares a method that every impl MUST provide; with-block declares a
+// default that an impl may inherit or override.
+//
+// Empty bodies (`spec Empty {}`) are admitted — useful as marker specs.
+// NEWLINEs between methods are absorbed by the brace-region parenDepth bump.
+func (p *parser) parseSpecDecl() (Stmt, error) {
+	kw := p.advance() // consume `spec`
+	nameTok, err := p.expect(KindIdent, "after 'spec'")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(KindLBrace, "in spec declaration"); err != nil {
+		return nil, err
+	}
+
+	var methods []*SpecMethod
+	for {
+		p.skipNewlines()
+		if p.peekRaw().Kind == KindRBrace {
+			break
+		}
+		m, err := p.parseSpecMethod()
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, m)
+	}
+	if _, err := p.expect(KindRBrace, "to close spec declaration"); err != nil {
+		return nil, err
+	}
+	return &SpecDecl{Pos: kw.Pos, Name: nameTok.Value, Methods: methods}, nil
+}
+
+// parseSpecMethod consumes one `fn IDENT (params?) (-> type)? block?` entry.
+// The block is optional inside a spec — its absence marks the method as
+// signature-only (must be implemented by every type that impls the spec).
+func (p *parser) parseSpecMethod() (*SpecMethod, error) {
+	kw, err := p.expect(KindFn, "in spec method")
+	if err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(KindIdent, "after 'fn'")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expectParen(KindLParen, "in spec method signature"); err != nil {
+		return nil, err
+	}
+	var params []FnParam
+	if p.peek().Kind != KindRParen {
+		for {
+			pname, err := p.expect(KindIdent, "in parameter list")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(KindColon, "after parameter name"); err != nil {
+				return nil, err
+			}
+			ptype, err := p.parseTypeRef()
+			if err != nil {
+				return nil, err
+			}
+			params = append(params, FnParam{
+				Name: pname.Value,
+				Type: ptype,
+				Pos:  pname.Pos,
+			})
+			if p.peek().Kind == KindComma {
+				p.advance()
+				continue
+			}
+			break
+		}
+	}
+	if _, err := p.expectParen(KindRParen, "in spec method signature"); err != nil {
+		return nil, err
+	}
+	var ret *TypeRef
+	if p.peek().Kind == KindArrow {
+		p.advance()
+		tr, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		ret = tr
+	}
+	// A `{` here means a default implementation; otherwise the method is
+	// signature-only and the next token is either a NEWLINE separator or `}`
+	// closing the spec body.
+	var body *Block
+	if p.peek().Kind == KindLBrace {
+		b, err := p.parseBlock("spec method default body")
+		if err != nil {
+			return nil, err
+		}
+		body = b
+	}
+	return &SpecMethod{
+		Pos:    kw.Pos,
+		Name:   nameTok.Value,
+		Params: params,
+		Return: ret,
+		Body:   body,
+	}, nil
+}
+
+// parseImplDecl handles both inherent and for-spec impl blocks:
+//
+//   - `impl Type { fn ... fn ... }`               — inherent
+//   - `impl Type for Spec { fn ... }`             — for-spec
+//   - `impl Type for Spec {}`                     — for-spec, empty body
+//
+// We reject the bare `for` followed by `{` (missing spec name) with a focused
+// diagnostic rather than letting the lower-level "expected identifier" leak.
+func (p *parser) parseImplDecl() (Stmt, error) {
+	kw := p.advance() // consume `impl`
+	typeNameTok, err := p.expect(KindIdent, "after 'impl'")
+	if err != nil {
+		return nil, err
+	}
+	specName := ""
+	if p.peek().Kind == KindFor {
+		forTok := p.advance()
+		st := p.peek()
+		if st.Kind != KindIdent {
+			return nil, errorAt(forTok.Pos, "expected spec name after 'for', got %s", st.Kind)
+		}
+		p.advance()
+		specName = st.Value
+	}
+	if _, err := p.expect(KindLBrace, "in impl declaration"); err != nil {
+		return nil, err
+	}
+
+	var methods []*FnDecl
+	for {
+		p.skipNewlines()
+		if p.peekRaw().Kind == KindRBrace {
+			break
+		}
+		// Methods inside an impl reuse the FnDecl shape unchanged. Typeck
+		// (Unit 3) routes them to the impl rather than to the global fn
+		// table, so the parser doesn't need a separate node type.
+		stmt, err := p.parseFnDecl()
+		if err != nil {
+			return nil, err
+		}
+		fn, ok := stmt.(*FnDecl)
+		if !ok {
+			return nil, errorAt(stmt.StmtPos(), "internal: parseFnDecl produced %T", stmt)
+		}
+		methods = append(methods, fn)
+	}
+	if _, err := p.expect(KindRBrace, "to close impl declaration"); err != nil {
+		return nil, err
+	}
+	return &ImplDecl{
+		Pos:     kw.Pos,
+		Type:    typeNameTok.Value,
+		Spec:    specName,
+		Methods: methods,
+	}, nil
 }
 
 // parseMatchStmt handles `match expr { arm; arm; ... }`. Each arm is
@@ -1006,10 +1228,13 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 	}
 
 	// Plain expression statement: only a CallExpr is meaningful at v0.1.
-	if _, ok := expr.(*CallExpr); !ok {
-		return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
+	// v0.4 broadens this to also accept a MethodCallExpr so `c.method()` is
+	// a valid statement (it has side effects via the impl method body).
+	switch expr.(type) {
+	case *CallExpr, *MethodCallExpr:
+		return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
 	}
-	return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
+	return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
 }
 
 // assignOpFor maps a token Kind to the matching AssignOp value, if any.
@@ -1423,6 +1648,41 @@ func (p *parser) parsePostfix() (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			// v0.4: `expr DOT IDENT (` is a method call; otherwise the form
+			// stays a field access (the v0.3 shape). The disambiguation is
+			// purely additive — every existing field-access test continues to
+			// match the no-paren branch.
+			if p.peek().Kind == KindLParen {
+				if _, err := p.expectParen(KindLParen, "in method call"); err != nil {
+					return nil, err
+				}
+				var args []Expr
+				if p.peek().Kind != KindRParen {
+					for {
+						a, err := p.parseExpr()
+						if err != nil {
+							return nil, err
+						}
+						args = append(args, a)
+						if p.peek().Kind == KindComma {
+							p.advance()
+							continue
+						}
+						break
+					}
+				}
+				if _, err := p.expectParen(KindRParen, "in method call"); err != nil {
+					return nil, err
+				}
+				expr = &MethodCallExpr{
+					Pos:       dotTok.Pos,
+					Receiver:  expr,
+					Method:    nameTok.Value,
+					MethodPos: nameTok.Pos,
+					Args:      args,
+				}
+				continue
+			}
 			expr = &FieldAccessExpr{
 				Pos:       dotTok.Pos,
 				Receiver:  expr,
@@ -1562,6 +1822,9 @@ func (p *parser) parseAtom() (Expr, error) {
 		return p.parseTupleOrParen()
 	case KindLBracket:
 		return p.parseListLit()
+	case KindThis:
+		p.advance()
+		return &ThisExpr{Pos: t.Pos}, nil
 	case KindRange, KindRangeEq:
 		return nil, errorAt(t.Pos, "range expressions are only allowed in for-in heads or slice brackets")
 	case KindBang:
@@ -1759,7 +2022,18 @@ func (p *parser) parsePattern() (Pattern, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &EnumPat{Pos: t.Pos, TypeName: t.Value, VariantName: vT.Value}, nil
+			ep := &EnumPat{Pos: t.Pos, TypeName: t.Value, VariantName: vT.Value}
+			// v0.4 (Unit 2): optional payload destructure
+			// `Token.Ident(name)`, `Token.Number(0, _)`. Empty parens are
+			// rejected — bare variants drop the parentheses entirely.
+			if p.peek().Kind == KindLParen {
+				payload, err := p.parseVariantPayloadPatterns()
+				if err != nil {
+					return nil, err
+				}
+				ep.Payload = payload
+			}
+			return ep, nil
 		}
 		return &BindPat{Pos: t.Pos, Name: t.Value}, nil
 	case KindLParen:
@@ -1822,6 +2096,44 @@ func (p *parser) parseTuplePat() (Pattern, error) {
 		return nil, errorAt(open.Pos, "tuple pattern requires at least 2 elements")
 	}
 	return &TuplePat{Pos: open.Pos, Elements: elements}, nil
+}
+
+// parseVariantPayloadPatterns consumes the `( pat ( ',' pat )* )` tail of an
+// enum variant pattern. The opening `(` has been peeked but not yet consumed.
+//
+// Empty parens (`Token.Ident()`) are rejected: bare variants drop the
+// parentheses, mirroring the variant-decl rule. A trailing comma is also
+// rejected — payload pattern lists carry no trailing comma.
+func (p *parser) parseVariantPayloadPatterns() ([]Pattern, error) {
+	openTok, err := p.expectParen(KindLParen, "in enum variant pattern")
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == KindRParen {
+		return nil, errorAt(openTok.Pos,
+			"empty parentheses are not allowed; use the bare variant name")
+	}
+	var pats []Pattern
+	for {
+		pat, err := p.parsePattern()
+		if err != nil {
+			return nil, err
+		}
+		pats = append(pats, pat)
+		if p.peek().Kind == KindComma {
+			commaTok := p.advance()
+			if p.peek().Kind == KindRParen {
+				return nil, errorAt(commaTok.Pos,
+					"trailing comma not allowed in enum variant pattern")
+			}
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close enum variant pattern"); err != nil {
+		return nil, err
+	}
+	return pats, nil
 }
 
 // parseStructPatBody consumes the `{ field: pat, field, ..., .. }` tail of

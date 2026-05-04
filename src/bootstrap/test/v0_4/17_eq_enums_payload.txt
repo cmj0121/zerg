@@ -1,0 +1,4 @@
+ab eq
+ac neq
+ad neq
+ae neq

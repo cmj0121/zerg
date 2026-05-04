@@ -679,11 +679,18 @@ type StructDecl struct {
 func (*StructDecl) stmtNode()           {}
 func (s *StructDecl) StmtPos() Position { return s.Pos }
 
-// VariantDecl is one declared variant of an enum. v0.2 carries no payload;
-// adding payloads is a v0.4 concern alongside errors.
+// VariantDecl is one declared variant of an enum.
+//
+// v0.2 introduced bare-name variants; v0.4 (Unit 2) adds optional payload
+// types: `Ident(str)`, `Number(int, int)`. Payload is the per-position type
+// list — zero-length for the bare form (`Eof`). The parser rejects an empty
+// `()` after the variant name; payloadful variants must declare at least one
+// type. Resolved types are filled in by typeck (Unit 3); the parser only
+// records the TypeRef shapes.
 type VariantDecl struct {
-	Name string
-	Pos  Position
+	Name    string
+	Pos     Position
+	Payload []*TypeRef // nil/empty for bare variants
 }
 
 // EnumDecl represents `enum Name { V1, V2, ... }`.
@@ -812,12 +819,17 @@ func (e *SliceExpr) ExprPos() Position { return e.Pos }
 // any expression — typeck disambiguates between struct field access (when
 // the receiver is a value) and enum variant access (when the receiver is a
 // bare IdentExpr that resolves to an enum type).
+//
+// Lowered is set by typeck when the access shape is recognised as a bare-
+// variant enum construction (`Token.Eof`). Downstream consumers can use the
+// pointer to dispatch to enum-lit handling.
 type FieldAccessExpr struct {
 	typed
 	Pos       Position
 	Receiver  Expr
 	FieldName string
 	NamePos   Position
+	Lowered   *EnumLit
 }
 
 func (*FieldAccessExpr) exprNode()           {}
@@ -898,12 +910,138 @@ type StructPat struct {
 func (*StructPat) patternNode()         {}
 func (p *StructPat) PatPos() Position { return p.Pos }
 
-// EnumPat is `EnumName.VariantName`. v0.2 has no payload destructure.
+// EnumPat is `EnumName.VariantName` with an optional payload destructure.
+//
+// v0.2 admitted bare-variant patterns only; v0.4 (Unit 2) adds payload
+// patterns: `Token.Ident(name)`, `Token.Number(0, _)`. Payload is the
+// per-position sub-pattern slice — zero-length for the bare form. The parser
+// rejects an empty `()` after the variant name (matching the variant-decl
+// rule that bare variants do not carry parentheses). Typeck (Unit 3) is
+// responsible for arity and per-position type checking.
 type EnumPat struct {
 	Pos         Position
 	TypeName    string
 	VariantName string
+	Payload     []Pattern // nil/empty for bare variants
 }
 
-func (*EnumPat) patternNode()         {}
+func (*EnumPat) patternNode()       {}
 func (p *EnumPat) PatPos() Position { return p.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.4 polymorphism: spec / impl declarations + method-call expressions.
+//
+// At parse time we collect spec and impl bodies as flat AST nodes; typeck
+// (Unit 3) walks them to build the spec/impl tables, validates collisions,
+// and routes method calls. The parser stays liberal — any structural error
+// surfaces at typeck with a focused diagnostic.
+// ---------------------------------------------------------------------------
+
+// SpecMethod is one method declared inside a spec body. Body == nil means
+// signature-only (every implementing type MUST provide an override). Body
+// non-nil is a default implementation that an impl may inherit or override.
+//
+// Reusing FnParam keeps the parameter-shape parser shared with FnDecl.
+type SpecMethod struct {
+	Pos    Position
+	Name   string
+	Params []FnParam
+	Return *TypeRef // nil ⇒ no return value
+	Body   *Block   // nil ⇒ signature only
+}
+
+// SpecDecl represents `spec Name { method_decl* }`. Methods may be
+// signature-only (no body) or default implementations (body present); the
+// parser admits both shapes and the v0.4 typeck pass distinguishes them.
+type SpecDecl struct {
+	Pos     Position
+	Name    string
+	Methods []*SpecMethod
+}
+
+func (*SpecDecl) stmtNode()           {}
+func (s *SpecDecl) StmtPos() Position { return s.Pos }
+
+// ImplDecl represents both inherent and for-spec impl blocks:
+//
+//   - `impl Counter { fn double() -> int { ... } }` (inherent)
+//   - `impl Counter for Printable { fn to_string() -> str { ... } }` (for-spec)
+//
+// Spec is the empty string for the inherent form; for the for-spec form it is
+// the spec name. Methods reuse FnDecl unchanged — the only routing difference
+// (an implicit `this` receiver) is handled at typeck and codegen.
+type ImplDecl struct {
+	Pos     Position
+	Type    string // the type name being implemented
+	Spec    string // empty when inherent; otherwise the spec name
+	Methods []*FnDecl
+}
+
+func (*ImplDecl) stmtNode()           {}
+func (s *ImplDecl) StmtPos() Position { return s.Pos }
+
+// MethodCallExpr is `receiver.method(args)`. The parser produces this when an
+// `expr DOT IDENT` is followed by an open-paren; the no-paren form continues
+// to parse as FieldAccessExpr. Receiver, Method, and Args are walked by
+// typeck (Unit 3) for resolution; until then the node simply records the
+// shape that was parsed.
+//
+// Lowered is set by typeck when the call shape is recognised as an enum-lit
+// construction (`Token.Ident("hello")`). Downstream consumers (run, build)
+// can short-circuit to the EnumLit form via this pointer; the surface
+// MethodCallExpr remains in the tree for diagnostic positioning.
+//
+// LoweredCall is set by typeck when the method-call shape on a list[T]
+// receiver is one of the v0.3 list builtins — `xs.push(v)` desugars to
+// `push(xs, v)`, `xs.clone()` to `clone(xs)`, `xs.len()` to `len(xs)`. The
+// rewrite hands a synthetic CallExpr to the rest of the pipeline so the
+// existing builtin paths in run / cgen handle method-form calls without
+// special-casing. Diagnostics still anchor on the surface MethodCallExpr.
+type MethodCallExpr struct {
+	typed
+	Pos         Position
+	Receiver    Expr
+	Method      string
+	MethodPos   Position
+	Args        []Expr
+	Lowered     *EnumLit
+	LoweredCall *CallExpr
+}
+
+func (*MethodCallExpr) exprNode()           {}
+func (e *MethodCallExpr) ExprPos() Position { return e.Pos }
+
+// ThisExpr is the literal `this` keyword used inside method bodies. Typeck
+// (Unit 3) rejects occurrences outside method bodies; the parser accepts it
+// in any expression position so the diagnostic comes with full type context.
+type ThisExpr struct {
+	typed
+	Pos Position
+}
+
+func (*ThisExpr) exprNode()           {}
+func (e *ThisExpr) ExprPos() Position { return e.Pos }
+
+// EnumLit is a typed enum-variant construction expression: `Token.Eof`,
+// `Token.Ident("foo")`, `Token.Number(10, 16)`.
+//
+// The parser does NOT produce EnumLit directly. v0.2 reads `Type.Variant`
+// (no parens) as a FieldAccessExpr; v0.4 Unit 1 reads `Type.Variant(...)`
+// (with parens) as a MethodCallExpr. Typeck (Unit 3) walks both shapes and
+// lowers them to EnumLit when the receiver is recognised as a known enum
+// type. Until Unit 3 lights up the lowering, this node is unused — declared
+// here so the AST surface is stable across Units 2 and 3.
+//
+// Payload carries the per-position argument slice; zero-length for bare
+// variants (the FieldAccessExpr-derived shape).
+type EnumLit struct {
+	typed
+	Pos         Position
+	EnumName    string
+	Variant     string
+	VariantPos  Position
+	Payload     []Expr
+}
+
+func (*EnumLit) exprNode()           {}
+func (e *EnumLit) ExprPos() Position { return e.Pos }

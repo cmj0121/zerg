@@ -1,0 +1,22 @@
+spec Hashable {
+    fn hash() -> int {
+        return 99
+    }
+}
+
+struct A { x: int }
+impl A for Hashable {}
+
+struct B { x: int }
+impl B for Hashable {
+    fn hash() -> int {
+        return this.x
+    }
+}
+
+let a := A { x: 1 }
+let b := B { x: 5 }
+let things: list[Hashable] = [a, b]
+for t in things {
+    print t.hash()
+}

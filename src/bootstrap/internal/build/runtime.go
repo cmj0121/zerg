@@ -164,3 +164,20 @@ static void zerg_match_panic(const char *pos) {
     exit(1);
 }
 `
+
+// runtimeV04C is the v0.4 runtime extension: helpers for the
+// NotImplemented vtable stub and any other spec-mechanics support that
+// generated code calls. The exact diagnostic format is byte-identical to
+// run.go's `not implemented: <Type>.<method> (declared in spec <Spec> at
+// <pos>)` — Unit 8's parity corpus asserts on the substring.
+const runtimeV04C = `/* zerg_not_implemented is the runtime stub for a vtable slot whose
+   spec method has no impl override and no spec default body. Bytes-for-byte
+   matched to run.go's diagnostic so parity tests pass on substring. */
+__attribute__((noreturn))
+static void zerg_not_implemented(const char *type_name, const char *method_name,
+                                  const char *spec_name, const char *pos) {
+    fprintf(stderr, "not implemented: %s.%s (declared in spec %s at %s)\n",
+            type_name, method_name, spec_name, pos);
+    exit(1);
+}
+`

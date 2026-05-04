@@ -122,6 +122,14 @@ const (
 	KindEnum     // enum
 	KindMatch    // match
 	KindFatArrow // =>
+
+	// --- v0.4 polymorphism keywords. `spec` declares an interface, `impl`
+	// attaches methods (inherent or for-spec), and `this` names the receiver
+	// inside method bodies. All three are reserved — using them as bindings
+	// is a parse-time error.
+	KindSpec // spec
+	KindImpl // impl
+	KindThis // this
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -154,6 +162,12 @@ func (k Kind) String() string {
 		return "'match'"
 	case KindFatArrow:
 		return "'=>'"
+	case KindSpec:
+		return "'spec'"
+	case KindImpl:
+		return "'impl'"
+	case KindThis:
+		return "'this'"
 	case KindAnd:
 		return "'and'"
 	case KindBreak:

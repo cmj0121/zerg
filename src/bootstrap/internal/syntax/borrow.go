@@ -170,13 +170,22 @@ type borrowChecker struct {
 	// fns is the typeck function table; we use it to resolve callees and
 	// recognise builtins (`len`, `push`, `clone`).
 	fns map[string]fnSig
+	// structs / enums / specs are typeck's resolved type tables. The borrow
+	// checker uses them to resolve a receiver type from an ImplDecl.Type name
+	// when registering `this` in a method-body scope.
+	structs map[string]*Type
+	enums   map[string]*Type
+	specs   map[string]*Spec
 }
 
 // borrowCheck is the entry point. It runs after typeck has filled in every
 // Expr.Type and the function table.
-func borrowCheck(prog *Program, fns map[string]fnSig) error {
+func borrowCheck(prog *Program, fns map[string]fnSig, structs, enums map[string]*Type, specs map[string]*Spec) error {
 	c := &borrowChecker{
-		fns: fns,
+		fns:     fns,
+		structs: structs,
+		enums:   enums,
+		specs:   specs,
 	}
 	// Top-level: only fn / struct / enum / const are admitted at file scope
 	// per v0.1+ rules. We walk fn bodies; struct/enum/const decls have no
@@ -190,6 +199,46 @@ func borrowCheck(prog *Program, fns map[string]fnSig) error {
 			return err
 		}
 	}
+	// v0.4: walk impl method bodies as if they were free fns plus an implicit
+	// `this` BorrowedShared receiver. The receiver type is the impl's Type
+	// (struct / enum); the borrow checker registers `this` in the body scope
+	// so use-after-borrow rules fire on `let y := this` / `return this`.
+	for _, stmt := range prog.Statements {
+		id, ok := stmt.(*ImplDecl)
+		if !ok {
+			continue
+		}
+		recv := c.lookupReceiverType(id.Type)
+		for _, fn := range id.Methods {
+			if err := c.checkMethodFn(fn, recv); err != nil {
+				return err
+			}
+		}
+	}
+	// Walk spec default bodies similarly. `this` inside a default body is
+	// BorrowedShared with the spec type — same borrow shape as a concrete
+	// receiver, since the body never moves through it.
+	for _, stmt := range prog.Statements {
+		sd, ok := stmt.(*SpecDecl)
+		if !ok {
+			continue
+		}
+		var recv *Type
+		if c.specs != nil {
+			if sp := c.specs[sd.Name]; sp != nil {
+				recv = sp.typ
+			}
+		}
+		for _, m := range sd.Methods {
+			if m.Body == nil {
+				continue
+			}
+			fakeFn := &FnDecl{Pos: m.Pos, Name: m.Name, Params: m.Params, Return: m.Return, Body: m.Body}
+			if err := c.checkMethodFn(fakeFn, recv); err != nil {
+				return err
+			}
+		}
+	}
 	// Top-level let/mut/const at file scope is OUT at v0.1+ except const, but
 	// the file-scope walker still needs to honour any ExprStmt / PrintStmt
 	// that lands at the top level (REPL-style invocation). Reuse the fn-body
@@ -200,6 +249,12 @@ func borrowCheck(prog *Program, fns map[string]fnSig) error {
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
 		case *FnDecl, *StructDecl, *EnumDecl:
+			continue
+		case *SpecDecl, *ImplDecl:
+			// v0.4 Unit 1: parser-only landing — typeck rejects these before
+			// borrowCheck runs in practice, but stay defensive in case the
+			// caller ever invokes borrowCheck on a tree that somehow slipped
+			// past typeck.
 			continue
 		}
 		if err := c.checkStmt(stmt); err != nil {
@@ -214,6 +269,15 @@ func borrowCheck(prog *Program, fns map[string]fnSig) error {
 // register all parameters — including primitives — so a recursive walker
 // doesn't have to special-case "is this name even tracked?".
 func (c *borrowChecker) checkFn(fn *FnDecl) error {
+	return c.checkMethodFn(fn, nil)
+}
+
+// checkMethodFn is the shared body walker for free fns and impl/spec methods.
+// When `recv` is non-nil, the method body sees an implicit `this` binding in
+// BorrowedShared state — symmetric with how a fn parameter of composite type
+// is handled. `this` cannot be moved or returned; the existing consume()
+// machinery enforces that uniformly via the BorrowedShared state.
+func (c *borrowChecker) checkMethodFn(fn *FnDecl, recv *Type) error {
 	saveScope, saveDepth, saveDiverged := c.scope, c.loopDepth, c.diverged
 	c.scope = newBorrowScope(nil)
 	c.loopDepth = 0
@@ -223,6 +287,24 @@ func (c *borrowChecker) checkFn(fn *FnDecl) error {
 		c.loopDepth = saveDepth
 		c.diverged = saveDiverged
 	}()
+
+	if recv != nil {
+		// `this` is the implicit receiver. Composite receivers (struct, enum,
+		// spec) are BorrowedShared during the method body so any move-out via
+		// `let y := this` or `return this` is rejected by the consume() guard.
+		state := bsOwned
+		reason := ""
+		if isComposite(recv) {
+			state = bsBorrowedShared
+			reason = "method receiver (implicit shared borrow at v0.4)"
+		}
+		c.scope.declare("this", &borrowEntry{
+			state:        state,
+			typ:          recv,
+			borrowReason: reason,
+			declDepth:    0,
+		})
+	}
 
 	for _, p := range fn.Params {
 		var t *Type
@@ -246,6 +328,20 @@ func (c *borrowChecker) checkFn(fn *FnDecl) error {
 		if err := c.checkStmt(st); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// lookupReceiverType resolves a struct or enum name to its canonical *Type
+// for use as an impl receiver. Returns nil when the type is unknown — the
+// surrounding typeck pass would have already rejected an unknown type, so
+// this fallback is only relevant for programs that somehow slip past typeck.
+func (c *borrowChecker) lookupReceiverType(name string) *Type {
+	if t, ok := c.structs[name]; ok {
+		return t
+	}
+	if t, ok := c.enums[name]; ok {
+		return t
 	}
 	return nil
 }
@@ -335,6 +431,11 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		return nil
 	case *MatchStmt:
 		return c.checkMatch(s)
+	case *SpecDecl, *ImplDecl:
+		// v0.4 Unit 1: typeck already rejected these, but if a borrow walk
+		// somehow reaches them treat as a no-op rather than an internal
+		// error so the typeck diagnostic is the one the user sees.
+		return nil
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -351,10 +452,15 @@ func (c *borrowChecker) checkLetLikeDecl(pos Position, name string, tuple *Tuple
 	if tuple != nil {
 		return c.checkTupleDestructure(pos, tuple, value)
 	}
-	// Whole-binding rebind. If the RHS is a bare ident, this is a move site;
-	// otherwise the RHS is a temporary value with no source binding to move.
+	// Whole-binding rebind. If the RHS is a bare ident or `this`, this is a
+	// move site; otherwise the RHS is a temporary value with no source binding
+	// to move.
 	if id, ok := value.(*IdentExpr); ok {
 		if err := c.consume(id, "moved by binding rebind"); err != nil {
+			return err
+		}
+	} else if th, ok := value.(*ThisExpr); ok {
+		if err := c.consumeThis(th, "moved by binding rebind"); err != nil {
 			return err
 		}
 	} else {
@@ -504,6 +610,10 @@ func (c *borrowChecker) checkReturn(s *ReturnStmt) error {
 			if err := c.consume(id, "moved by return"); err != nil {
 				return err
 			}
+		} else if th, ok := s.Value.(*ThisExpr); ok {
+			if err := c.consumeThis(th, "moved by return"); err != nil {
+				return err
+			}
 		} else {
 			if err := c.checkExprConsume(s.Value); err != nil {
 				return err
@@ -630,19 +740,81 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		// (Color.Red) has the receiver as the enum type identifier — typeck
 		// has set Type already; we treat it as a read like any other.
 		return c.walkExpr(e.Receiver, false)
+	case *MethodCallExpr:
+		// If typeck lowered the call to a fn-form CallExpr (list[T] receiver
+		// + push / clone / len), walk that synthetic call so the v0.3 push
+		// borrow rule (Owned receiver required) fires. Otherwise treat the
+		// receiver and args as read positions — same shape as a fn-call.
+		if e.LoweredCall != nil {
+			return c.walkCall(e.LoweredCall)
+		}
+		if err := c.walkExpr(e.Receiver, false); err != nil {
+			return err
+		}
+		for _, a := range e.Args {
+			if err := c.walkExpr(a, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *ThisExpr:
+		// `this` is bound by the receiver as BorrowedShared inside method
+		// bodies. Reading is fine; consume sites (let-rebind, return,
+		// aggregation) route through consumeThis() and reject the move.
+		entry, _ := c.scope.lookup("this")
+		if entry == nil {
+			return nil // typeck would have rejected
+		}
+		if entry.state == bsMoved && isComposite(entry.typ) {
+			return borrowErr(e.Pos, "use of moved value: %q (moved at %s)", "this", entry.movePos)
+		}
+		return nil
 	}
 	return borrowErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }
 
 // consumeOrWalk is the helper for aggregation positions: if the sub-expression
-// is a bare ident, treat it as a move; otherwise walk it in read mode (its
-// own internal aggregations will already trigger moves recursively if any
-// land on bare idents).
+// is a bare ident or `this`, treat it as a move; otherwise walk it in read
+// mode (its own internal aggregations will already trigger moves recursively
+// if any land on bare idents).
 func (c *borrowChecker) consumeOrWalk(e Expr, why string) error {
 	if id, ok := e.(*IdentExpr); ok {
 		return c.consume(id, why)
 	}
+	if th, ok := e.(*ThisExpr); ok {
+		return c.consumeThis(th, why)
+	}
 	return c.walkExpr(e, true)
+}
+
+// consumeThis is the ThisExpr analogue of consume. The borrow checker tracks
+// `this` as a BorrowedShared composite when the receiver is a struct / enum /
+// spec, so any consume site (binding rebind, return, aggregation element)
+// fails with the same diagnostic shape used for borrowed names. When the
+// receiver is a primitive (e.g. a future v0.6 spec impl on int), tracking is
+// disabled and consumeThis is a no-op.
+func (c *borrowChecker) consumeThis(th *ThisExpr, why string) error {
+	_ = why
+	entry, _ := c.scope.lookup("this")
+	if entry == nil {
+		// Outside a method body — typeck has already rejected this case.
+		return nil
+	}
+	if !isComposite(entry.typ) {
+		return nil
+	}
+	if entry.state == bsBorrowedShared {
+		return borrowErr(th.Pos, "cannot move borrowed value: %q (%s)", "this", entry.borrowReason)
+	}
+	if entry.state == bsMoved {
+		return borrowErr(th.Pos, "use of moved value: %q (moved at %s)", "this", entry.movePos)
+	}
+	// Receiver was Owned (impossible at v0.4 because every method-body `this`
+	// starts BorrowedShared, but the branch keeps the helper symmetric with
+	// consume()).
+	entry.state = bsMoved
+	entry.movePos = th.Pos
+	return nil
 }
 
 // consume marks the source binding as Moved, after first validating that it

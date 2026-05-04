@@ -35,6 +35,14 @@ type Value struct {
 	Fields       []Value // TypeStruct, indexed by Type.Fields position
 	VariantIndex int     // TypeEnum
 	VariantName  string  // TypeEnum
+	Payload      []Value // TypeEnum, per-position payload values (v0.4)
+
+	// v0.4 spec-as-type fat pointer. Set when Type.Kind == syntax.TypeSpec.
+	// Data is the wrapped concrete value (struct or enum); ConcreteType is
+	// the wrapped value's static type name so vtable lookup can route to the
+	// right (Type, Spec) impl.
+	Data         *Value // TypeSpec — the wrapped concrete value
+	ConcreteType string // TypeSpec — the wrapped value's nominal type name
 }
 
 // intVal builds an int Value.
@@ -74,9 +82,21 @@ func structVal(structType *syntax.Type, fields []Value) Value {
 	return Value{Type: structType, Fields: fields}
 }
 
-// enumVal builds an enum Value carrying the variant tag and name.
-func enumVal(enumType *syntax.Type, idx int, name string) Value {
-	return Value{Type: enumType, VariantIndex: idx, VariantName: name}
+// enumVal builds an enum Value carrying the variant tag and name. v0.4 also
+// carries the per-position payload slice for non-bare variants; callers pass
+// nil for bare variants.
+func enumVal(enumType *syntax.Type, idx int, name string, payload []Value) Value {
+	return Value{Type: enumType, VariantIndex: idx, VariantName: name, Payload: payload}
+}
+
+// specVal wraps a concrete value into a spec-typed fat pointer. specType is
+// the canonical *Type with Kind == syntax.TypeSpec; data is the underlying
+// concrete value (struct or enum). The wrapper aliases data — typeck has
+// already invalidated the source binding at the wrap site, so no observable
+// aliasing surfaces.
+func specVal(specType *syntax.Type, data Value) Value {
+	d := data
+	return Value{Type: specType, Data: &d, ConcreteType: data.Type.Name}
 }
 
 // copyValue returns a deep copy of v. Primitives copy by value (no-op);
@@ -110,6 +130,19 @@ func copyValue(v Value) Value {
 			out[i] = copyValue(e)
 		}
 		v.Fields = out
+	case syntax.TypeEnum:
+		if len(v.Payload) > 0 {
+			out := make([]Value, len(v.Payload))
+			for i, e := range v.Payload {
+				out[i] = copyValue(e)
+			}
+			v.Payload = out
+		}
+	case syntax.TypeSpec:
+		if v.Data != nil {
+			d := copyValue(*v.Data)
+			v.Data = &d
+		}
 	}
 	return v
 }

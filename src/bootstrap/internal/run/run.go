@@ -35,9 +35,10 @@ func Run(prog *syntax.Program, w io.Writer) error {
 	}
 	in := newInterp(prog, w)
 	for _, stmt := range prog.Statements {
-		if _, ok := stmt.(*syntax.FnDecl); ok {
-			// Fn decls are collected into the function table by newInterp.
-			// At top level they are declarations, not executable statements.
+		switch stmt.(type) {
+		case *syntax.FnDecl, *syntax.SpecDecl, *syntax.ImplDecl:
+			// Decls are collected into per-program tables by newInterp. At
+			// top level they are declarations, not executable statements.
 			continue
 		}
 		if err := in.execStmt(stmt); err != nil {
@@ -62,17 +63,37 @@ func Run(prog *syntax.Program, w io.Writer) error {
 // table. typeck has already validated each enum's variant set; we just
 // mirror the lookup structure here so the runtime path can produce a
 // variant Value without re-walking the AST.
+//
+// v0.4 adds spec/impl tables. specDecls is the per-name SpecDecl AST so
+// default-method bodies are accessible at dispatch time. inherentImpls
+// aggregates every inherent impl method per receiver type. specImpls is keyed
+// by (Type, Spec) so vtable construction and method dispatch resolve in O(1).
 type interp struct {
 	w   io.Writer
 	fns map[string]*syntax.FnDecl
 
 	enums map[string]*syntax.Type
 
+	// v0.4: spec / impl tables. Mirror typeck's structure but reuse the AST
+	// nodes for body walking. Method dispatch precedence at the interpreter
+	// is the same as typeck: inherent first, then unique spec impl, then
+	// vtable when the receiver is a fat-pointer specValue.
+	specDecls     map[string]*syntax.SpecDecl
+	inherentImpls map[string]map[string]*syntax.FnDecl                  // type → method → FnDecl
+	specImpls     map[implKey]map[string]*syntax.FnDecl                 // (type, spec) → method → FnDecl
+	specImplPos   map[implKey]bool                                      // (type, spec) presence (the impl block exists)
+
 	// stack[0] is the top-level frame; the active frame is stack[len(stack)-1].
 	// We keep the slice rather than a parent-pointer linked list because
 	// pushing/popping a Go slice is allocation-light and the depth stays small
 	// in practice.
 	stack []*frame
+}
+
+// implKey deduplicates impls by (type, spec). Spec is "" for inherent impls.
+type implKey struct {
+	typeName string
+	specName string
 }
 
 // frame is one rung of the variable scope stack. Names live here only as
@@ -88,9 +109,13 @@ func newFrame() *frame { return &frame{vars: map[string]*Value{}} }
 // here would be an internal error.
 func newInterp(prog *syntax.Program, w io.Writer) *interp {
 	in := &interp{
-		w:     w,
-		fns:   map[string]*syntax.FnDecl{},
-		enums: map[string]*syntax.Type{},
+		w:             w,
+		fns:           map[string]*syntax.FnDecl{},
+		enums:         map[string]*syntax.Type{},
+		specDecls:     map[string]*syntax.SpecDecl{},
+		inherentImpls: map[string]map[string]*syntax.FnDecl{},
+		specImpls:     map[implKey]map[string]*syntax.FnDecl{},
+		specImplPos:   map[implKey]bool{},
 	}
 	for _, stmt := range prog.Statements {
 		switch s := stmt.(type) {
@@ -102,6 +127,30 @@ func newInterp(prog *syntax.Program, w io.Writer) *interp {
 				variants[i] = v.Name
 			}
 			in.enums[s.Name] = syntax.NewEnumType(s.Name, variants)
+		case *syntax.SpecDecl:
+			in.specDecls[s.Name] = s
+		case *syntax.ImplDecl:
+			if s.Spec == "" {
+				m, ok := in.inherentImpls[s.Type]
+				if !ok {
+					m = map[string]*syntax.FnDecl{}
+					in.inherentImpls[s.Type] = m
+				}
+				for _, fn := range s.Methods {
+					m[fn.Name] = fn
+				}
+			} else {
+				key := implKey{typeName: s.Type, specName: s.Spec}
+				m, ok := in.specImpls[key]
+				if !ok {
+					m = map[string]*syntax.FnDecl{}
+					in.specImpls[key] = m
+				}
+				for _, fn := range s.Methods {
+					m[fn.Name] = fn
+				}
+				in.specImplPos[key] = true
+			}
 		}
 	}
 	in.pushFrame()
@@ -173,18 +222,18 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		if s.Tuple != nil {
 			return in.execTupleDestructure(s.Tuple, s.Value)
 		}
-		return in.execDecl(s.Name, s.Value)
+		return in.execDecl(s.Name, s.Type, s.Value)
 	case *syntax.MutStmt:
 		if s.Tuple != nil {
 			return in.execTupleDestructure(s.Tuple, s.Value)
 		}
-		return in.execDecl(s.Name, s.Value)
+		return in.execDecl(s.Name, s.Type, s.Value)
 	case *syntax.ConstStmt:
 		// At v0.1 a const is just an immutable binding. The type checker has
 		// already enforced that the rhs is a constant expression; runtime
 		// evaluation is the same as let. The destructure form is rejected by
 		// typeck so s.Tuple is always nil here.
-		return in.execDecl(s.Name, s.Value)
+		return in.execDecl(s.Name, s.Type, s.Value)
 	case *syntax.AssignStmt:
 		return in.execAssign(s)
 	case *syntax.ExprStmt:
@@ -228,6 +277,12 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		return nil
 	case *syntax.MatchStmt:
 		return in.execMatch(s)
+	case *syntax.SpecDecl, *syntax.ImplDecl:
+		// v0.4: spec / impl declarations are processed at interp init
+		// (newInterp aggregates inherentImpls / specImpls). At statement-walk
+		// time they are no-ops — like StructDecl / EnumDecl.
+		_ = s
+		return nil
 	}
 	return fmt.Errorf("internal: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -329,7 +384,25 @@ func formatValue(v Value) string {
 		b.WriteString(" }")
 		return b.String()
 	case syntax.TypeEnum:
-		return v.Type.Name + "." + v.VariantName
+		if len(v.Payload) == 0 {
+			return v.Type.Name + "." + v.VariantName
+		}
+		// PLAN: payload variants print as "Name.Variant(arg1, arg2)" with
+		// recursive formatValue per position. No leading/trailing spaces
+		// inside the parens — matches the literal source-form construction.
+		var b strings.Builder
+		b.WriteString(v.Type.Name)
+		b.WriteString(".")
+		b.WriteString(v.VariantName)
+		b.WriteString("(")
+		for i, p := range v.Payload {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(formatValue(p))
+		}
+		b.WriteString(")")
+		return b.String()
 	}
 	// typeck rejects anything else for `print`; reaching here is an internal
 	// error rather than user-visible.
@@ -341,10 +414,16 @@ func formatValue(v Value) string {
 // — this is the v0.2 value-semantics rule for lists / tuples / structs.
 // Primitives copy trivially through the same helper; the cost is negligible
 // for small composite shapes the corpus exercises.
-func (in *interp) execDecl(name string, value syntax.Expr) error {
+func (in *interp) execDecl(name string, ref *syntax.TypeRef, value syntax.Expr) error {
 	v, err := in.evalExpr(value)
 	if err != nil {
 		return err
+	}
+	// v0.4: when the binding is annotated with a spec type (or a composite
+	// containing a spec position), wrap the rhs at the bind site so method
+	// dispatch can reach the right (concrete, spec) impl.
+	if ref != nil && ref.Resolved != nil {
+		v = in.coerceToType(v, ref.Resolved)
 	}
 	// v0.3: no implicit deep-copy on bind. The borrow checker has
 	// invalidated the source binding at the move site, so sharing the
@@ -738,6 +817,16 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return in.evalSlice(e)
 	case *syntax.FieldAccessExpr:
 		return in.evalFieldAccess(e)
+	case *syntax.MethodCallExpr:
+		return in.evalMethodCall(e)
+	case *syntax.ThisExpr:
+		slot, ok := in.lookup("this")
+		if !ok {
+			return Value{}, fmt.Errorf("internal: 'this' is only valid inside an impl method body at %s", e.Pos)
+		}
+		return *slot, nil
+	case *syntax.EnumLit:
+		return in.evalEnumLit(e)
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -887,9 +976,17 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 	case syntax.BinShr:
 		return intVal(lv.Int >> uint64(rv.Int)), nil
 	case syntax.BinEq:
-		return boolVal(valueEq(lv, rv)), nil
+		eq, err := eqValues(lv, rv)
+		if err != nil {
+			return Value{}, err
+		}
+		return boolVal(eq), nil
 	case syntax.BinNE:
-		return boolVal(!valueEq(lv, rv)), nil
+		eq, err := eqValues(lv, rv)
+		if err != nil {
+			return Value{}, err
+		}
+		return boolVal(!eq), nil
 	case syntax.BinLT:
 		return boolVal(valueLT(lv, rv)), nil
 	case syntax.BinGT:
@@ -997,6 +1094,14 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
+		// v0.4: spec widening at the call boundary. typeck's typeEq path
+		// rejects concrete-into-spec at the surface, but the lowered list-
+		// builtin path lets typeck-valid spec arguments through; safe to call
+		// unconditionally because coerceToType is identity when the param
+		// type doesn't reach for a spec.
+		if i < len(fn.Params) && fn.Params[i].Type != nil && fn.Params[i].Type.Resolved != nil {
+			v = in.coerceToType(v, fn.Params[i].Type.Resolved)
+		}
 		args[i] = v
 	}
 
@@ -1027,7 +1132,11 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 		}
 		var ret *errReturn
 		if errors.As(err, &ret) {
-			return ret.value, nil
+			retVal := ret.value
+			if fn.Return != nil && fn.Return.Resolved != nil {
+				retVal = in.coerceToType(retVal, fn.Return.Resolved)
+			}
+			return retVal, nil
 		}
 		// break/continue must NOT escape a function: typeck rejects them
 		// outside loops, and a function body without an enclosing loop in
@@ -1125,20 +1234,23 @@ func (in *interp) evalPush(e *syntax.CallExpr) (Value, error) {
 // independent of the constructed list (a later mutation of an element source
 // — none today, but the contract holds — cannot leak).
 func (in *interp) evalListLit(e *syntax.ListLit) (Value, error) {
+	t := e.Type()
+	if t == nil || t.Kind != syntax.TypeList {
+		return Value{}, fmt.Errorf("internal: list literal has non-list type %s at %s", t, e.Pos)
+	}
 	elems := make([]Value, len(e.Elements))
 	for i, sub := range e.Elements {
 		ev, err := in.evalExpr(sub)
 		if err != nil {
 			return Value{}, err
 		}
-		// v0.3: no implicit deep-copy at list-literal construction.
+		// v0.4: when the literal's element type is a spec, each element is
+		// wrapped at this construction point so list[Printable] holds fat
+		// pointers regardless of which concrete types the user wrote.
+		if t.Element != nil {
+			ev = in.coerceToType(ev, t.Element)
+		}
 		elems[i] = ev
-	}
-	// e.Type() is the canonical list[T]; reuse it so list values constructed
-	// from different sites in the same program share the type pointer.
-	t := e.Type()
-	if t == nil || t.Kind != syntax.TypeList {
-		return Value{}, fmt.Errorf("internal: list literal has non-list type %s at %s", t, e.Pos)
 	}
 	return Value{Type: t, List: elems}, nil
 }
@@ -1192,7 +1304,10 @@ func (in *interp) evalStructLit(e *syntax.StructLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		// v0.3: no implicit deep-copy at struct-literal construction.
+		// v0.4: coerce when the field's declared type is a spec (or
+		// composite containing a spec). For other field types this is a
+		// no-op — coerceToType returns v unchanged.
+		v = in.coerceToType(v, t.Fields[idx].Type)
 		values[idx] = v
 		provided[idx] = true
 	}
@@ -1293,18 +1408,23 @@ func (in *interp) evalSlice(e *syntax.SliceExpr) (Value, error) {
 	return Value{Type: rv.Type, List: out}, nil
 }
 
-// evalFieldAccess evaluates `receiver.field`. Two paths:
+// evalFieldAccess evaluates `receiver.field`. Three paths:
 //
-//  1. Receiver is a bare IdentExpr naming a known enum type — produce the
-//     variant Value. typeck has validated that the variant exists.
-//  2. Otherwise the receiver is a struct value; look up the field by name
-//     in the struct's declared field order and return a deep copy.
+//  1. typeck has stashed a lowered EnumLit (bare-variant enum construction
+//     such as `Token.Eof`) — evaluate that.
+//  2. Receiver is a bare IdentExpr naming a known enum type — produce the
+//     variant Value via the enum table. typeck has validated the variant.
+//  3. Otherwise the receiver is a struct value; look up the field by name
+//     in the struct's declared field order and return the field value.
 func (in *interp) evalFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
+	if e.Lowered != nil {
+		return in.evalEnumLit(e.Lowered)
+	}
 	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
 		if en, isEnum := in.enums[id.Name]; isEnum {
 			for i, v := range en.Variants {
 				if v == e.FieldName {
-					return enumVal(en, i, v), nil
+					return enumVal(en, i, v, nil), nil
 				}
 			}
 			return Value{}, fmt.Errorf("internal: enum %q has no variant %q at %s", id.Name, e.FieldName, e.NamePos)
@@ -1451,7 +1571,28 @@ func (in *interp) bindPattern(pat syntax.Pattern, v Value) (bool, error) {
 			return false, fmt.Errorf("internal: enum pattern against non-enum at %s", p.Pos)
 		}
 		// typeck rejects mismatched type names; here we compare variants.
-		return v.VariantName == p.VariantName, nil
+		if v.VariantName != p.VariantName {
+			return false, nil
+		}
+		// v0.4: bare patterns short-circuit; payload patterns recurse over the
+		// runtime payload slice. typeck has already validated arity, so a
+		// mismatch here would be an internal error.
+		if len(p.Payload) == 0 {
+			return true, nil
+		}
+		if len(v.Payload) != len(p.Payload) {
+			return false, fmt.Errorf("internal: enum pattern arity mismatch (%d vs %d) at %s", len(p.Payload), len(v.Payload), p.Pos)
+		}
+		for i, sub := range p.Payload {
+			ok, err := in.bindPattern(sub, v.Payload[i])
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
 	}
 	return false, fmt.Errorf("internal: unhandled pattern %T at %s", pat, pat.PatPos())
 }
@@ -1476,4 +1617,407 @@ func litEq(lit, v Value) bool {
 		return lit.Int == v.Int
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// v0.4 — enum payloads, method calls, vtable dispatch, composite ==.
+// ---------------------------------------------------------------------------
+
+// evalEnumLit evaluates a typeck-lowered EnumLit. The lowering walks any
+// payload arguments in order and produces a runtime enum value with the
+// variant tag and the per-position payload slice. typeck has validated arity
+// and per-position type so this path only needs to evaluate sub-expressions.
+func (in *interp) evalEnumLit(e *syntax.EnumLit) (Value, error) {
+	en := e.Type()
+	if en == nil || en.Kind != syntax.TypeEnum {
+		return Value{}, fmt.Errorf("internal: enum literal has non-enum type %s at %s", en, e.Pos)
+	}
+	idx := -1
+	for i, v := range en.Variants {
+		if v == e.Variant {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return Value{}, fmt.Errorf("internal: enum %q has no variant %q at %s", en.Name, e.Variant, e.VariantPos)
+	}
+	if len(e.Payload) == 0 {
+		return enumVal(en, idx, e.Variant, nil), nil
+	}
+	payload := make([]Value, len(e.Payload))
+	// The variant's declared payload types drive any spec coercion at element
+	// position so a `Token.Wrap(c)` where `Wrap(Printable)` was declared
+	// widens the concrete arg to a fat pointer.
+	declared := en.VariantPayloads[idx]
+	for i, arg := range e.Payload {
+		v, err := in.evalExpr(arg)
+		if err != nil {
+			return Value{}, err
+		}
+		if i < len(declared) {
+			v = in.coerceToType(v, declared[i])
+		}
+		payload[i] = v
+	}
+	return enumVal(en, idx, e.Variant, payload), nil
+}
+
+// evalMethodCall is the runtime dispatcher for `receiver.method(args)`.
+// Resolution mirrors typeck's precedence:
+//   1. typeck has lowered the call to an EnumLit (`Token.Ident("foo")`) →
+//      delegate to evalEnumLit.
+//   2. typeck has lowered the call to a list builtin (`xs.push(v)`) →
+//      delegate to evalCall on the synthetic CallExpr.
+//   3. Receiver is a spec-typed fat pointer → vtable dispatch via
+//      ConcreteType + spec name.
+//   4. Receiver is a struct/enum value → dispatch by inherent first, then
+//      unique spec impl by method name.
+func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
+	if e.Lowered != nil {
+		return in.evalEnumLit(e.Lowered)
+	}
+	if e.LoweredCall != nil {
+		return in.evalCall(e.LoweredCall)
+	}
+	rv, err := in.evalExpr(e.Receiver)
+	if err != nil {
+		return Value{}, err
+	}
+	if rv.Type == nil {
+		return Value{}, fmt.Errorf("internal: method call receiver has nil type at %s", e.Pos)
+	}
+	// Spec-typed receiver — vtable dispatch.
+	if rv.Type.Kind == syntax.TypeSpec {
+		return in.dispatchSpec(e, rv)
+	}
+	// Concrete receiver — typeck has narrowed to struct or enum.
+	return in.dispatchConcrete(e, rv)
+}
+
+// dispatchSpec routes a method call through a spec-typed fat pointer's
+// (ConcreteType, Spec) pair. Resolution: concrete impl override > spec
+// default > NotImplemented panic.
+func (in *interp) dispatchSpec(e *syntax.MethodCallExpr, rv Value) (Value, error) {
+	specName := rv.Type.Name
+	concreteType := rv.ConcreteType
+	if rv.Data == nil {
+		return Value{}, fmt.Errorf("internal: spec value has nil data at %s", e.Pos)
+	}
+	this := *rv.Data
+	fn, sm := in.resolveSpecMethod(concreteType, specName, e.Method)
+	if fn != nil {
+		return in.callMethodFn(e, fn, this)
+	}
+	if sm != nil {
+		return in.callSpecDefault(e, sm, this)
+	}
+	return Value{}, fmt.Errorf("not implemented: %s.%s (declared in spec %s at %s)",
+		concreteType, e.Method, specName, e.MethodPos)
+}
+
+// resolveSpecMethod looks up the (Type, Spec) override; returns the impl's
+// FnDecl if one is supplied, the spec's default method AST if not. Both nil
+// means the method is signature-only with no override — NotImplemented.
+func (in *interp) resolveSpecMethod(typeName, specName, methodName string) (*syntax.FnDecl, *syntax.SpecMethod) {
+	key := implKey{typeName: typeName, specName: specName}
+	if impl, ok := in.specImpls[key]; ok {
+		if fn, ok := impl[methodName]; ok {
+			return fn, nil
+		}
+	}
+	// Fall through to spec default body if present.
+	if sd, ok := in.specDecls[specName]; ok {
+		for _, m := range sd.Methods {
+			if m.Name == methodName {
+				if m.Body != nil {
+					return nil, m
+				}
+				return nil, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// dispatchConcrete routes a method call against a struct- or enum-typed
+// receiver. Inherent methods take precedence over spec impls; if no inherent
+// exists, the unique spec impl exposing the method wins. typeck has already
+// rejected ambiguity, so the first matching spec impl is sufficient.
+func (in *interp) dispatchConcrete(e *syntax.MethodCallExpr, rv Value) (Value, error) {
+	typeName := rv.Type.Name
+	// 1. Inherent.
+	if methods, ok := in.inherentImpls[typeName]; ok {
+		if fn, ok := methods[e.Method]; ok {
+			return in.callMethodFn(e, fn, rv)
+		}
+	}
+	// 2. Spec impls. Walk every (typeName, specName) in the spec impl table to
+	// find one that exposes the method (override or via default). typeck has
+	// rejected ambiguity so we take the first match.
+	for key := range in.specImpls {
+		if key.typeName != typeName {
+			continue
+		}
+		fn, sm := in.resolveSpecMethod(typeName, key.specName, e.Method)
+		if fn != nil {
+			return in.callMethodFn(e, fn, rv)
+		}
+		if sm != nil {
+			return in.callSpecDefault(e, sm, rv)
+		}
+		// (Type, Spec) impl exists but the method has no override or default.
+		// Only return NotImplemented if the spec actually declares this
+		// method — otherwise keep searching (other specs might have it).
+		if sd, ok := in.specDecls[key.specName]; ok {
+			for _, m := range sd.Methods {
+				if m.Name == e.Method {
+					return Value{}, fmt.Errorf("not implemented: %s.%s (declared in spec %s at %s)",
+						typeName, e.Method, key.specName, e.MethodPos)
+				}
+			}
+		}
+	}
+	return Value{}, fmt.Errorf("internal: method %q not resolvable on %s at %s", e.Method, typeName, e.MethodPos)
+}
+
+// callMethodFn binds `this` plus declared params, walks the impl method's
+// body, and catches the return sentinel.
+func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this Value) (Value, error) {
+	// Evaluate args in caller scope first.
+	args := make([]Value, len(e.Args))
+	for i, a := range e.Args {
+		v, err := in.evalExpr(a)
+		if err != nil {
+			return Value{}, err
+		}
+		// Coerce to declared param type so spec-typed params widen.
+		if i < len(fn.Params) && fn.Params[i].Type != nil && fn.Params[i].Type.Resolved != nil {
+			v = in.coerceToType(v, fn.Params[i].Type.Resolved)
+		}
+		args[i] = v
+	}
+	// Method bodies are like fn calls — a fresh frame stack rooted at one
+	// frame. Save and restore.
+	savedStack := in.stack
+	in.stack = []*frame{newFrame()}
+	defer func() { in.stack = savedStack }()
+	if err := in.declare("this", this); err != nil {
+		return Value{}, err
+	}
+	for i, p := range fn.Params {
+		if err := in.declare(p.Name, args[i]); err != nil {
+			return Value{}, err
+		}
+	}
+	for _, st := range fn.Body.Statements {
+		err := in.execStmt(st)
+		if err == nil {
+			continue
+		}
+		var ret *errReturn
+		if errors.As(err, &ret) {
+			retVal := ret.value
+			if fn.Return != nil && fn.Return.Resolved != nil {
+				retVal = in.coerceToType(retVal, fn.Return.Resolved)
+			}
+			return retVal, nil
+		}
+		if errors.Is(err, errBreak) || errors.Is(err, errContinue) {
+			return Value{}, fmt.Errorf("internal: %v escaped method %s", err, fn.Name)
+		}
+		return Value{}, err
+	}
+	if e.Type() != nil && e.Type() != syntax.TVoid() {
+		return Value{}, fmt.Errorf("method %q ended without return at %s", fn.Name, fn.Pos)
+	}
+	return Value{}, nil
+}
+
+// callSpecDefault is the SpecMethod analogue of callMethodFn — spec defaults
+// store their body on a SpecMethod, not a FnDecl, but the receiver-binding
+// machinery is otherwise identical.
+func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMethod, this Value) (Value, error) {
+	args := make([]Value, len(e.Args))
+	for i, a := range e.Args {
+		v, err := in.evalExpr(a)
+		if err != nil {
+			return Value{}, err
+		}
+		if i < len(sm.Params) && sm.Params[i].Type != nil && sm.Params[i].Type.Resolved != nil {
+			v = in.coerceToType(v, sm.Params[i].Type.Resolved)
+		}
+		args[i] = v
+	}
+	savedStack := in.stack
+	in.stack = []*frame{newFrame()}
+	defer func() { in.stack = savedStack }()
+	if err := in.declare("this", this); err != nil {
+		return Value{}, err
+	}
+	for i, p := range sm.Params {
+		if err := in.declare(p.Name, args[i]); err != nil {
+			return Value{}, err
+		}
+	}
+	for _, st := range sm.Body.Statements {
+		err := in.execStmt(st)
+		if err == nil {
+			continue
+		}
+		var ret *errReturn
+		if errors.As(err, &ret) {
+			retVal := ret.value
+			if sm.Return != nil && sm.Return.Resolved != nil {
+				retVal = in.coerceToType(retVal, sm.Return.Resolved)
+			}
+			return retVal, nil
+		}
+		if errors.Is(err, errBreak) || errors.Is(err, errContinue) {
+			return Value{}, fmt.Errorf("internal: %v escaped spec default %s", err, sm.Name)
+		}
+		return Value{}, err
+	}
+	if e.Type() != nil && e.Type() != syntax.TVoid() {
+		return Value{}, fmt.Errorf("spec default %q ended without return at %s", sm.Name, sm.Pos)
+	}
+	return Value{}, nil
+}
+
+// coerceToType narrows the runtime widening rule that typeck encodes via
+// assignableTo: a concrete struct / enum value flowing into a spec-typed
+// slot is wrapped in a fat pointer; list[Spec] / tuple[..., Spec] / struct
+// fields of spec type recurse element-wise. Same shape on both sides → no-op.
+//
+// The wrap point matters because spec method dispatch reads ConcreteType off
+// the wrapper; without coercion at let / arg / return / list-elem / struct-
+// field sites, vtable lookup would fail.
+func (in *interp) coerceToType(v Value, target *syntax.Type) Value {
+	if target == nil || v.Type == nil {
+		return v
+	}
+	switch target.Kind {
+	case syntax.TypeSpec:
+		if v.Type.Kind == syntax.TypeSpec {
+			// Already wrapped — typically the same spec; assume so since
+			// typeck rejects spec-to-different-spec.
+			return v
+		}
+		// Wrap concrete value.
+		return specVal(target, v)
+	case syntax.TypeList:
+		if v.Type.Kind != syntax.TypeList || target.Element == nil {
+			return v
+		}
+		// Only descend when the target element type differs (e.g. Spec) —
+		// recursion into pure-primitive lists would be an unnecessary copy.
+		if target.Element.Equals(v.Type.Element) && target.Element.Kind != syntax.TypeSpec {
+			return v
+		}
+		out := make([]Value, len(v.List))
+		for i, e := range v.List {
+			out[i] = in.coerceToType(e, target.Element)
+		}
+		return Value{Type: target, List: out}
+	case syntax.TypeTuple:
+		if v.Type.Kind != syntax.TypeTuple || len(target.Tuple) != len(v.Tuple) {
+			return v
+		}
+		needs := false
+		for _, t := range target.Tuple {
+			if t != nil && t.Kind == syntax.TypeSpec {
+				needs = true
+				break
+			}
+		}
+		if !needs {
+			return v
+		}
+		out := make([]Value, len(v.Tuple))
+		for i, e := range v.Tuple {
+			out[i] = in.coerceToType(e, target.Tuple[i])
+		}
+		return Value{Type: target, Tuple: out}
+	}
+	return v
+}
+
+// eqValues recursively compares two runtime values structurally. typeck has
+// validated that comparable shapes match; this walker handles primitives via
+// the existing valueEq plus composite kinds (list, tuple, struct, enum with
+// payload). Spec-typed bindings on either side are typeck-rejected; defensive
+// here so a slip-through fails loudly.
+func eqValues(a, b Value) (bool, error) {
+	if a.Type == nil || b.Type == nil {
+		return false, fmt.Errorf("internal: eqValues on untyped value")
+	}
+	if a.Type.Kind == syntax.TypeSpec || b.Type.Kind == syntax.TypeSpec {
+		return false, fmt.Errorf("internal: spec == reached runtime")
+	}
+	switch a.Type.Kind {
+	case syntax.TypeInt, syntax.TypeFloat, syntax.TypeBool, syntax.TypeStr,
+		syntax.TypeByte, syntax.TypeRune:
+		return valueEq(a, b), nil
+	case syntax.TypeList:
+		if len(a.List) != len(b.List) {
+			return false, nil
+		}
+		for i := range a.List {
+			eq, err := eqValues(a.List[i], b.List[i])
+			if err != nil {
+				return false, err
+			}
+			if !eq {
+				return false, nil
+			}
+		}
+		return true, nil
+	case syntax.TypeTuple:
+		if len(a.Tuple) != len(b.Tuple) {
+			return false, nil
+		}
+		for i := range a.Tuple {
+			eq, err := eqValues(a.Tuple[i], b.Tuple[i])
+			if err != nil {
+				return false, err
+			}
+			if !eq {
+				return false, nil
+			}
+		}
+		return true, nil
+	case syntax.TypeStruct:
+		// typeck guarantees same struct type → same field count.
+		if len(a.Fields) != len(b.Fields) {
+			return false, nil
+		}
+		for i := range a.Fields {
+			eq, err := eqValues(a.Fields[i], b.Fields[i])
+			if err != nil {
+				return false, err
+			}
+			if !eq {
+				return false, nil
+			}
+		}
+		return true, nil
+	case syntax.TypeEnum:
+		if a.VariantIndex != b.VariantIndex {
+			return false, nil
+		}
+		if len(a.Payload) != len(b.Payload) {
+			return false, nil
+		}
+		for i := range a.Payload {
+			eq, err := eqValues(a.Payload[i], b.Payload[i])
+			if err != nil {
+				return false, err
+			}
+			if !eq {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("internal: eqValues unhandled kind %d", int(a.Type.Kind))
 }

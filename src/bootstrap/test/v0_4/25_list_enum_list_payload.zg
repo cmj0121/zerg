@@ -1,0 +1,19 @@
+enum Frame {
+    Args(list[int]),
+    Empty
+}
+
+let f1 := Frame.Args([1, 2, 3])
+let f2 := Frame.Args([1, 2, 3])
+let f3 := Frame.Empty
+
+if f1 == f2 {
+    print "f1 eq f2"
+}
+if f1 != f3 {
+    print "f1 neq f3"
+}
+match f1 {
+    Frame.Args(xs) => print xs.len()
+    Frame.Empty => print "empty"
+}

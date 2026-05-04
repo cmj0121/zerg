@@ -1,0 +1,5 @@
+let xs := [1, 2, 3]
+match xs {
+    ys => print ys[0]
+}
+print xs[0]

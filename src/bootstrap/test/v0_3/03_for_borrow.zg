@@ -1,0 +1,6 @@
+let xs := [10, 20, 30]
+for x in xs {
+    print x
+}
+print xs[0]
+print xs[2]

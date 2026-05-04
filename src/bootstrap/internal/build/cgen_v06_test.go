@@ -405,6 +405,58 @@ print b
 
 // --- codegen size guard ---------------------------------------------------
 
+// TestV06CgenGenericImplBlockEmits pins Bug 2: a generic impl block
+// (`impl[T] Box[T] for Spec`) must surface its methods to cgen so each
+// monomorphised receiver gets its own C function. Previously cgen only
+// looked up methods by canonical *Type, but generic impls register no
+// concrete *Type — dispatch produced "method %q on %s not resolvable".
+func TestV06CgenGenericImplBlockEmits(t *testing.T) {
+	src := `spec Tagged { fn tag() -> str }
+struct Box[T] { value: T }
+impl[T] Box[T] for Tagged { fn tag() -> str { return "Box" } }
+let bi: Box[int] = Box { value: 7 }
+let bs: Box[str] = Box { value: "hi" }
+print bi.tag()
+print bs.tag()
+`
+	out := mustEmit(t, src)
+	mm := mangleModule("main")
+	wantInt := "zerg_struct_" + mm + "__Box__int__" + mm + "__Tagged__tag"
+	wantStr := "zerg_struct_" + mm + "__Box__str__" + mm + "__Tagged__tag"
+	if !strings.Contains(out, wantInt) {
+		t.Errorf("missing Box[int] tag method symbol %q in:\n%s", wantInt, out)
+	}
+	if !strings.Contains(out, wantStr) {
+		t.Errorf("missing Box[str] tag method symbol %q in:\n%s", wantStr, out)
+	}
+}
+
+// TestV06CgenGenericImplBlockBodyClonedPerInstance exercises the type-stomp
+// regression that drove Bug 2's fix: when an impl method's signature
+// references the impl-level type-param (e.g. `fn unwrap() -> T`), the C
+// function for Box[int] must return int64_t and for Box[str] must return
+// zerg_str. A shared TypeRef.Resolved would emit the same return type for
+// both instances and the C compiler would reject.
+func TestV06CgenGenericImplBlockBodyClonedPerInstance(t *testing.T) {
+	src := `struct Box[T] { value: T }
+impl[T] Box[T] { fn unwrap() -> T { return this.value } }
+let bi: Box[int] = Box { value: 5 }
+let bs: Box[str] = Box { value: "hi" }
+print bi.unwrap()
+print bs.unwrap()
+`
+	out := mustEmit(t, src)
+	mm := mangleModule("main")
+	wantInt := "static int64_t zerg_struct_" + mm + "__Box__int__unwrap"
+	wantStr := "static zerg_str zerg_struct_" + mm + "__Box__str__unwrap"
+	if !strings.Contains(out, wantInt) {
+		t.Errorf("missing int64_t-returning unwrap %q in:\n%s", wantInt, out)
+	}
+	if !strings.Contains(out, wantStr) {
+		t.Errorf("missing zerg_str-returning unwrap %q in:\n%s", wantStr, out)
+	}
+}
+
 // TestV06CgenSizeGuard pins the tenth-man rule from PLAN.md §Codegen size
 // guard: emitted C source must not exceed a fixed 50× ratio of the input
 // source bytes for a representative v0.6 program. The ratio bounds catch

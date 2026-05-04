@@ -1,0 +1,27 @@
+# requires: v0.6
+
+spec Talker {
+    fn say() -> str
+}
+
+struct Cat { name: str }
+struct Dog { name: str }
+
+impl Cat for Talker {
+    pub fn say() -> str {
+        return "meow"
+    }
+}
+
+impl Dog for Talker {
+    pub fn say() -> str {
+        return "woof"
+    }
+}
+
+fn announce[T: Talker](x: T) {
+    print x.say()
+}
+
+announce(Cat { name: "mittens" })
+announce(Dog { name: "rex" })

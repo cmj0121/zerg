@@ -354,19 +354,37 @@ func (c *checker) expandOneGenericImpl(gi *genericImpl, mono *Type, args []*Type
 			"duplicate impl: %s already implements %s at %s",
 			mono.Name, implSpecOrInherent(prev), prev.Pos)
 	}
-	// Build the cloned impl methods under the substitution. The bodies
-	// walk under c.activeSubst so bare T-references inside `let` / return
-	// annotations resolve to the chosen concrete arg.
+	// Build a synthetic ImplDecl with deep-cloned method FnDecls so each
+	// instantiation owns its own typed[] storage. Sharing gi.ast.Methods
+	// across instantiations would let the second walk overwrite the first
+	// walk's recorded types — every downstream consumer (run, cgen) reads
+	// expr.Type() and TypeRef.Resolved so the last instantiation would win
+	// for every node. We also clone every TypeRef in the signature because
+	// cgen reads p.Type.Resolved / fn.Return.Resolved directly.
+	clonedMethods := make([]*FnDecl, len(gi.ast.Methods))
+	for i, m := range gi.ast.Methods {
+		cm := *m
+		cm.Body = cloneBlock(m.Body)
+		cm.Params = make([]FnParam, len(m.Params))
+		for j, p := range m.Params {
+			cm.Params[j] = FnParam{Name: p.Name, Pos: p.Pos, Type: cloneTypeRef(p.Type)}
+		}
+		cm.Return = cloneTypeRef(m.Return)
+		clonedMethods[i] = &cm
+	}
+	implAST := *gi.ast
+	implAST.Methods = clonedMethods
+	implAST.Receiver = mono
 	saved := owner.activeSubst
 	owner.activeSubst = subst
-	methods, methodIdx, err := owner.buildImplMethods(gi.ast)
+	methods, methodIdx, err := owner.buildImplMethods(&implAST)
 	owner.activeSubst = saved
 	if err != nil {
 		return err
 	}
 	// Spec validation against the substituted method signatures.
 	if gi.spec != nil {
-		if err := owner.validateImplAgainstSpec(gi.ast, methods, gi.spec); err != nil {
+		if err := owner.validateImplAgainstSpec(&implAST, methods, gi.spec); err != nil {
 			return err
 		}
 	}
@@ -377,7 +395,7 @@ func (c *checker) expandOneGenericImpl(gi *genericImpl, mono *Type, args []*Type
 		Receiver:  mono,
 		Methods:   methods,
 		methodIdx: methodIdx,
-		ast:       gi.ast,
+		ast:       &implAST,
 		recvOwner: gi.recvOwner,
 		specOwner: gi.specOwner,
 	}
@@ -428,6 +446,16 @@ func (c *checker) expandOneGenericImpl(gi *genericImpl, mono *Type, args []*Type
 	// internal type annotations resolve to concrete types.
 	if err := c.walkExpandedImplBodies(gi, impl, methods, subst, mono); err != nil {
 		return err
+	}
+	// Surface the synthetic ImplDecl on the owner module's Program so
+	// codegen can iterate it in the same pipeline as user-written impls.
+	// The owner is the checker that DECLARED the generic impl; if it has
+	// no Program (single-program Check) fall back to the call-site
+	// checker's Program.
+	if owner.ownProg != nil {
+		owner.ownProg.MonoImpls = append(owner.ownProg.MonoImpls, &implAST)
+	} else if c.ownProg != nil {
+		c.ownProg.MonoImpls = append(c.ownProg.MonoImpls, &implAST)
 	}
 	return nil
 }

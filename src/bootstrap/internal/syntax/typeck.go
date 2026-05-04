@@ -2058,7 +2058,19 @@ func (c *checker) checkPattern(pat Pattern, expected *Type, armScope *scope, bin
 		if expected == nil || expected.Kind != TypeEnum {
 			return typeErr(p.Pos, "enum pattern cannot match subject of type %s", expected)
 		}
-		if expected.Name != p.TypeName {
+		// v0.6: monomorphised generic enums carry a Name like `Pair[int,str]`.
+		// Patterns spell only the bare decl name (`Pair`) — strip the
+		// `[args]` suffix from the subject before comparing. Variant payload
+		// types are already substituted on the mono *Type so payload-pattern
+		// checks below work unchanged.
+		expectedBaseName := expected.Name
+		for i, r := range expectedBaseName {
+			if r == '[' {
+				expectedBaseName = expectedBaseName[:i]
+				break
+			}
+		}
+		if expectedBaseName != p.TypeName {
 			return typeErr(p.Pos, "enum pattern type %q does not match subject type %s", p.TypeName, expected)
 		}
 		// Locate the variant index so we can validate payload arity and types.

@@ -688,3 +688,109 @@ func TestV06GenericTPostfixWithLift(t *testing.T) {
 		t.Errorf("a's type = %v, want Option[int]", got)
 	}
 }
+
+// TestV06GenericFnBodyClonedPerInstance exercises Bug 1: two instantiations
+// of the same generic fn with different bound impls must each see their own
+// dispatch types. Previously the body AST was shared, so the second walk
+// stomped the first walk's typed[] storage and the run pass dispatched both
+// calls against the LAST instantiation's chosen impl.
+func TestV06GenericFnBodyClonedPerInstance(t *testing.T) {
+	src := "spec Talker { fn say() -> str }\n" +
+		"struct Cat { name: str }\n" +
+		"struct Dog { name: str }\n" +
+		"impl Cat for Talker { fn say() -> str { return \"meow\" } }\n" +
+		"impl Dog for Talker { fn say() -> str { return \"woof\" } }\n" +
+		"fn announce[T: Talker](x: T) { print x.say() }\n" +
+		"announce(Cat { name: \"c\" })\n" +
+		"announce(Dog { name: \"d\" })\n"
+	prog := checkSrc(t, src)
+	// Both monomorphised clones must exist and their bodies must be
+	// distinct *Block pointers.
+	if len(prog.MonoFns) < 2 {
+		t.Fatalf("expected at least 2 monomorphised announce instances, got %d", len(prog.MonoFns))
+	}
+	a, b := prog.MonoFns[0], prog.MonoFns[1]
+	if a.Body == b.Body {
+		t.Errorf("monomorphised announce instances share the same Body pointer")
+	}
+	// The two bodies' first PrintStmt arg's MethodCall must have a
+	// receiver type that differs across the two instances (Cat vs Dog).
+	recvType := func(fn *FnDecl) *Type {
+		ps, ok := fn.Body.Statements[0].(*PrintStmt)
+		if !ok {
+			return nil
+		}
+		mc, ok := ps.Expr.(*MethodCallExpr)
+		if !ok {
+			return nil
+		}
+		return mc.Receiver.Type()
+	}
+	ra := recvType(a)
+	rb := recvType(b)
+	if ra == nil || rb == nil {
+		t.Fatalf("receiver type missing; ra=%v rb=%v", ra, rb)
+	}
+	if ra == rb {
+		t.Errorf("both instantiations share receiver type %s — body cloning failed", ra.Name)
+	}
+}
+
+// TestV06EnumPatternOnGenericInstance pins Bug 3: the EnumPat walker must
+// strip the `[args]` suffix from the subject's *Type name before comparing
+// to the pattern's bare type-name. Previously the walker rejected with
+// "enum pattern type %q does not match subject type %s".
+func TestV06EnumPatternOnGenericInstance(t *testing.T) {
+	src := "enum Pair[A, B] { Both(A, B), Left(A), Right(B) }\n" +
+		"let p: Pair[int, str] = Pair.Both(7, \"hi\")\n" +
+		"match p {\n" +
+		"    Pair.Both(a, b) => {\n" +
+		"        print a\n" +
+		"        print b\n" +
+		"    }\n" +
+		"    Pair.Left(a) => print a\n" +
+		"    Pair.Right(b) => print b\n" +
+		"}\n"
+	checkSrc(t, src)
+}
+
+// TestV06GenericEnumPartialConstructorHintFill pins Bug 4: when a generic
+// enum constructor only constrains some type-params (`Pair.Left(3)` for
+// `enum Pair[A, B]`), the surrounding return-type hint
+// (`-> Pair[int, str]`) must fill in the unconstrained slot from its
+// matching args.
+func TestV06GenericEnumPartialConstructorHintFill(t *testing.T) {
+	src := "enum Pair[A, B] { Both(A, B), Left(A), Right(B) }\n" +
+		"fn make_left() -> Pair[int, str] { return Pair.Left(3) }\n" +
+		"fn make_right() -> Pair[int, str] { return Pair.Right(\"hello\") }\n"
+	prog := checkSrc(t, src)
+	// Both fn return types must resolve to the same canonical Pair[int,str]
+	// instance — this is what gives downstream dispatch a single shape.
+	var leftFn, rightFn *FnDecl
+	for _, st := range prog.Statements {
+		if fn, ok := st.(*FnDecl); ok {
+			switch fn.Name {
+			case "make_left":
+				leftFn = fn
+			case "make_right":
+				rightFn = fn
+			}
+		}
+	}
+	if leftFn == nil || rightFn == nil {
+		t.Fatal("missing make_left / make_right")
+	}
+	if leftFn.Return == nil || rightFn.Return == nil {
+		t.Fatal("missing return TypeRef")
+	}
+	lt, rt := leftFn.Return.Resolved, rightFn.Return.Resolved
+	if lt == nil || rt == nil {
+		t.Fatalf("return types unresolved: lt=%v rt=%v", lt, rt)
+	}
+	if lt != rt {
+		t.Errorf("make_left / make_right Return.Resolved differ — instantiation cache miss: %v vs %v", lt.Name, rt.Name)
+	}
+	if lt.Name != "Pair[int,str]" {
+		t.Errorf("Return.Resolved.Name = %q, want Pair[int,str]", lt.Name)
+	}
+}

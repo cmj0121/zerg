@@ -13,6 +13,14 @@ import "fmt"
 type Program struct {
 	Statements []Stmt
 	MonoFns    []*FnDecl
+	// MonoImpls (v0.6 Unit 7) holds synthetic ImplDecl instances produced by
+	// generic-impl monomorphisation. Each entry pairs one generic ImplDecl
+	// with one concrete receiver instantiation; methods are deep-cloned so
+	// downstream consumers (codegen) emit one C function per
+	// (impl-method, mono-receiver) tuple. The original generic ImplDecl
+	// stays in Statements but is skipped by emit because its receiver type
+	// is unsubstituted.
+	MonoImpls []*ImplDecl
 }
 
 // ---------------------------------------------------------------------------

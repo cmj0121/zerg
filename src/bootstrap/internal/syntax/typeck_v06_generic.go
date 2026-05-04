@@ -679,8 +679,13 @@ func (c *checker) specialiseGenericFn(fn *FnDecl, args []*Type) (*FnDecl, error)
 		Name:   key,
 		Params: params,
 		Return: nil,
-		Body:   fn.Body,
-		Pub:    fn.Pub,
+		// Deep-clone the body so each specialisation owns its own typed[]
+		// storage. Sharing fn.Body across instantiations would let the
+		// second walk overwrite the first walk's recorded types — every
+		// downstream consumer (run, cgen) reads expr.Type() so the last
+		// instantiation would win for every node.
+		Body: cloneBlock(fn.Body),
+		Pub:  fn.Pub,
 	}
 	if fn.Return != nil {
 		clone.Return = &TypeRef{Pos: fn.Return.Pos, Kind: TypeRefNamed, Name: ret.String(), Resolved: ret}
@@ -836,6 +841,15 @@ func (c *checker) checkGenericEnumLit(e *MethodCallExpr, declName, variant strin
 			for i, tp := range decl.TypeParams {
 				subst[tp.Name] = got[i]
 			}
+		} else if got, ok := genericInstanceArgsForEnum(decl, hint); ok && len(got) == len(decl.TypeParams) {
+			// User-defined generic enum hint — recover args by walking
+			// variant payloads alongside the decl's type-param positions.
+			// Lets a partial-variant constructor (`Pair.Left(3)` with hint
+			// `Pair[int, str]`) fill in the unconstrained type-params from
+			// the surrounding return / let / fn-arg context.
+			for i, tp := range decl.TypeParams {
+				subst[tp.Name] = got[i]
+			}
 		}
 	}
 	if len(e.Args) != len(v.Payload) {
@@ -939,9 +953,15 @@ func (c *checker) checkGenericEnumBareLit(e *FieldAccessExpr, declName, variant 
 	}
 	got, ok := genericInstanceArgs(hint, declName)
 	if !ok || len(got) != len(decl.TypeParams) {
-		return nil, true, typeErr(e.Pos,
-			"cannot infer type parameter(s) for %s.%s — annotate the binding",
-			declName, variant)
+		// User-defined generic enum hint — recover args by walking
+		// the variant payload structure.
+		if got2, ok2 := genericInstanceArgsForEnum(decl, hint); ok2 && len(got2) == len(decl.TypeParams) {
+			got = got2
+		} else {
+			return nil, true, typeErr(e.Pos,
+				"cannot infer type parameter(s) for %s.%s — annotate the binding",
+				declName, variant)
+		}
 	}
 	mono, err := c.instantiateGenericEnum(decl, got, e.Pos)
 	if err != nil {

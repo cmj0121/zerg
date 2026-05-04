@@ -3563,6 +3563,14 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 			}
 			g.specs[s.Name] = s
 		case *syntax.ImplDecl:
+			// v0.6: generic impl blocks (`impl[T] Box[T] for ...`) are
+			// expanded by typeck into per-instantiation synthetic ImplDecls
+			// surfaced via prog.MonoImpls. Skip the generic decl itself —
+			// its TypeRefs reference impl-level type-params and have no
+			// concrete C representation.
+			if len(s.TypeParams) > 0 {
+				continue
+			}
 			// Resolve the receiver type by name. Any impl reaching codegen
 			// has been validated by typeck, so the type resolution lookup
 			// below is best-effort — if it fails we fall back to the methods
@@ -3604,6 +3612,43 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 				// value directly.
 				g.specsUsed[s.Spec] = true
 			}
+		}
+	}
+	// v0.6: walk per-instantiation synthetic ImplDecls produced by typeck's
+	// generic-impl expansion. Each one carries a Receiver pointing at the
+	// concrete monomorphised *Type and methods cloned with substituted
+	// types. Routes through the same inherent / specImpls tables so the
+	// downstream emit pipeline produces one C function per
+	// (impl-method, mono-receiver) tuple.
+	for _, s := range prog.MonoImpls {
+		if s == nil || s.Receiver == nil {
+			continue
+		}
+		receiverT := s.Receiver
+		// Stamp typeOwner for the mono receiver so the implKey + later
+		// mangle calls produce the owning module's prefix.
+		if _, set := g.typeOwner[receiverT]; !set {
+			for i := range g.modules {
+				if g.modules[i].prog == prog {
+					g.typeOwner[receiverT] = g.modules[i].mangle
+					break
+				}
+			}
+		}
+		implKeyName := g.implKeyForType(receiverT)
+		g.receiverTypes[implKeyName] = receiverT
+		if s.Spec == "" {
+			if _, ok := g.inherent[implKeyName]; !ok {
+				g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
+			}
+			g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
+		} else {
+			key := implKey{typeName: implKeyName, specName: s.Spec}
+			if _, ok := g.specImpls[key]; !ok {
+				g.specImplKeys = append(g.specImplKeys, key)
+			}
+			g.specImpls[key] = s
+			g.specsUsed[s.Spec] = true
 		}
 	}
 }

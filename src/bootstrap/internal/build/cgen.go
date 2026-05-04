@@ -269,7 +269,10 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 	for _, k := range r.listOrder {
 		t := r.listShapes[k]
 		elem := cTypeName(t.Element)
-		fmt.Fprintf(b, "struct %s { %s* data; size_t len; };\n", k, elem)
+		// `cap` was dropped in v0.2 because lists were value-copied with
+		// cap == len at every site. With `push` in play at v0.3, cap is
+		// needed so the per-shape grow helper knows when to realloc.
+		fmt.Fprintf(b, "struct %s { %s* data; size_t len; size_t cap; };\n", k, elem)
 	}
 
 	// Unified topo over tuple and struct shapes. depsOf returns the mangled
@@ -436,8 +439,11 @@ func (r *shapeRegistry) emitHelpers(b *strings.Builder) {
 	// each other in any order (a list of struct copy calls the struct copy
 	// which itself may call a list copy for an inner field).
 	for _, k := range r.listOrder {
+		t := r.listShapes[k]
+		elem := cTypeName(t.Element)
 		fmt.Fprintf(b, "static %s %s_copy(%s xs);\n", k, k, k)
 		fmt.Fprintf(b, "static %s %s_slice(%s xs, int64_t lo, int64_t hi, const char* pos);\n", k, k, k)
+		fmt.Fprintf(b, "static void %s_push(%s* xs, %s v);\n", k, k, elem)
 		fmt.Fprintf(b, "static void zerg_print_%s(%s xs);\n", k, k)
 	}
 	for _, k := range r.tupleOrder {
@@ -481,20 +487,23 @@ func (r *shapeRegistry) emitHelpers(b *strings.Builder) {
 	}
 }
 
-// emitListHelpers writes copy, slice, and print for a list[T] shape.
+// emitListHelpers writes copy, slice, push, and print for a list[T] shape.
 func emitListHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 	elem := cTypeName(t.Element)
-	// copy: malloc a fresh buffer, deep-copy each element via copyExpr.
+	// copy: malloc a fresh buffer (cap == len so subsequent pushes start
+	// from a tight buffer), deep-copy each element via copyExpr.
 	fmt.Fprintf(b, "static %s %s_copy(%s xs) {\n", mname, mname, mname)
 	fmt.Fprintf(b, "    %s out;\n", mname)
 	fmt.Fprintf(b, "    out.len = xs.len;\n")
+	fmt.Fprintf(b, "    out.cap = xs.len;\n")
 	fmt.Fprintf(b, "    out.data = (%s*)malloc(out.len ? out.len * sizeof(%s) : 1);\n", elem, elem)
 	fmt.Fprintf(b, "    for (size_t i = 0; i < out.len; i++) { out.data[i] = %s; }\n",
 		copyExpr(t.Element, "xs.data[i]"))
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
 
-	// slice: bounds-check, malloc fresh buffer, deep-copy elements.
+	// slice: bounds-check, malloc fresh buffer, deep-copy elements. The
+	// resulting list owns its buffer with cap == len.
 	fmt.Fprintf(b, "static %s %s_slice(%s xs, int64_t lo, int64_t hi, const char* pos) {\n",
 		mname, mname, mname)
 	fmt.Fprintf(b, "    if (lo < 0 || hi < lo || (size_t)hi > xs.len) {\n")
@@ -503,10 +512,24 @@ func emitListHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "    }\n")
 	fmt.Fprintf(b, "    %s out;\n", mname)
 	fmt.Fprintf(b, "    out.len = (size_t)(hi - lo);\n")
+	fmt.Fprintf(b, "    out.cap = out.len;\n")
 	fmt.Fprintf(b, "    out.data = (%s*)malloc(out.len ? out.len * sizeof(%s) : 1);\n", elem, elem)
 	fmt.Fprintf(b, "    for (size_t i = 0; i < out.len; i++) { out.data[i] = %s; }\n",
 		copyExpr(t.Element, "xs.data[lo + i]"))
 	fmt.Fprintf(b, "    return out;\n")
+	fmt.Fprintf(b, "}\n")
+
+	// push: amortised-O(1) growth. Doubles cap when len catches up; first
+	// growth from cap == 0 jumps to 4 to avoid the 0 → 1 → 2 → 4 ramp on
+	// freshly-constructed empty lists. Takes a pointer so the caller's
+	// (data, len, cap) header is updated in place.
+	fmt.Fprintf(b, "static void %s_push(%s* xs, %s v) {\n", mname, mname, elem)
+	fmt.Fprintf(b, "    if (xs->len == xs->cap) {\n")
+	fmt.Fprintf(b, "        size_t newcap = xs->cap == 0 ? 4 : xs->cap * 2;\n")
+	fmt.Fprintf(b, "        xs->data = (%s*)realloc(xs->data, newcap * sizeof(%s));\n", elem, elem)
+	fmt.Fprintf(b, "        xs->cap = newcap;\n")
+	fmt.Fprintf(b, "    }\n")
+	fmt.Fprintf(b, "    xs->data[xs->len++] = v;\n")
 	fmt.Fprintf(b, "}\n")
 
 	// print: "[ e1, e2 ]" with space-comma-space; "[]" when empty.
@@ -947,11 +970,11 @@ func (g *cgen) emitPrint(s *syntax.PrintStmt) error {
 	return fmt.Errorf("codegen: cannot print value of type %s at %s", t, s.Pos)
 }
 
-// emitDecl lowers let/mut/const into a C local declaration. The annotated
-// type ref (when present) and the inferred type from the rhs are equal by
-// typeck — but we prefer the rhs's type because LetStmt/MutStmt may have a
-// nil Type ref (the := walrus form). The rhs is wrapped in copyExpr for
-// composites — that's the v0.2 value-semantics rule.
+// emitDecl lowers let/mut/const into a C local declaration. At v0.3 we
+// do NOT wrap composite RHS values in `_copy` — the borrow checker has
+// invalidated the source binding at the move site, so sharing the
+// underlying buffer/struct is safe. clone() is the explicit opt-in for
+// the v0.2-style deep copy.
 func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isConst bool) error {
 	t := value.Type()
 	if t == nil && ref != nil {
@@ -964,7 +987,6 @@ func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isC
 	if err != nil {
 		return err
 	}
-	exprS = copyExpr(t, exprS)
 	g.writeIndent()
 	if isConst {
 		g.b.WriteString("const ")
@@ -974,8 +996,9 @@ func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isC
 }
 
 // emitTupleDestructure lowers `let (a, b) := expr` into N variable decls
-// reading from a fresh temp tuple. Each name gets a deep-copy of the matching
-// element.
+// reading from a fresh temp tuple. At v0.3 the elements are NOT deep-copied
+// — the borrow checker invalidated the source pair at the destructure
+// site so each name shares the underlying element value safely.
 func (g *cgen) emitTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr, isConst bool) error {
 	t := value.Type()
 	if t == nil || t.Kind != syntax.TypeTuple {
@@ -994,9 +1017,8 @@ func (g *cgen) emitTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr, 
 		if isConst {
 			g.b.WriteString("const ")
 		}
-		fmt.Fprintf(&g.b, "%s %s = %s;\n",
-			cTypeName(elemT), mangle(name),
-			copyExpr(elemT, fmt.Sprintf("%s.e%d", tmp, i)))
+		fmt.Fprintf(&g.b, "%s %s = %s.e%d;\n",
+			cTypeName(elemT), mangle(name), tmp, i)
 	}
 	return nil
 }
@@ -1021,10 +1043,11 @@ func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
 	g.writeIndent()
 	switch s.Op {
 	case syntax.AssignSet:
-		// For composite targets we deep-copy the rhs so the assignment is a
-		// fresh value (matches the interpreter's copyValue on assign).
-		t := target.Type()
-		fmt.Fprintf(&g.b, "%s = %s;\n", targetName, copyExpr(t, rhs))
+		// At v0.3 plain `x = v` is only meaningful for primitive targets
+		// (the borrow checker rejects composite rebind via `=` because
+		// composite mut bindings reach the new value via `:=` rebinding
+		// or via `xs[i] = v` indexing). No implicit deep-copy.
+		fmt.Fprintf(&g.b, "%s = %s;\n", targetName, rhs)
 	case syntax.AssignAdd:
 		if target.Type() == syntax.TStr() {
 			fmt.Fprintf(&g.b, "%s = zerg_str_concat(%s, %s);\n", targetName, targetName, rhs)
@@ -1086,7 +1109,6 @@ func (g *cgen) emitIndexAssign(s *syntax.AssignStmt, idx *syntax.IndexExpr) erro
 	if err != nil {
 		return err
 	}
-	rhs = copyExpr(listT.Element, rhs)
 	posStr := fmt.Sprintf("%d:%d", s.Pos.Line, s.Pos.Column)
 	nameS := mangle(id.Name)
 	g.writeIndent()
@@ -1207,8 +1229,10 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 			return err
 		}
 		// Snapshot the iterable into a temp so a fn-call iterable is only
-		// evaluated once. The snapshot is itself a deep copy so a body
-		// holding a reference into the original is fine.
+		// evaluated once. At v0.3 the borrow checker has BorrowedShared
+		// the iterable for the body's duration and rejects in-body
+		// mutation of it, so we don't need a deep-copy snapshot — a
+		// shallow snapshot of the (data, len, cap) header suffices.
 		listMangle := mangleType(iterT)
 		tmp := g.freshTmp("iter")
 		idx := g.freshTmp("i")
@@ -1219,13 +1243,12 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 		g.b.WriteString("{\n")
 		g.indent++
 		g.writeIndent()
-		fmt.Fprintf(&g.b, "%s %s = %s_copy(%s);\n", listMangle, tmp, listMangle, iterS)
+		fmt.Fprintf(&g.b, "%s %s = %s;\n", listMangle, tmp, iterS)
 		g.writeIndent()
 		fmt.Fprintf(&g.b, "for (size_t %s = 0; %s < %s.len; %s++) {\n", idx, idx, tmp, idx)
 		g.indent++
 		g.writeIndent()
-		fmt.Fprintf(&g.b, "%s %s = %s;\n", cTypeName(elemT), v,
-			copyExpr(elemT, fmt.Sprintf("%s.data[%s]", tmp, idx)))
+		fmt.Fprintf(&g.b, "%s %s = %s.data[%s];\n", cTypeName(elemT), v, tmp, idx)
 		// Body statements (without the extra brace, but with indent already
 		// raised once). Walk statements one-by-one without using
 		// emitBlockBody to keep the indent layered correctly.
@@ -1246,6 +1269,9 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 }
 
 // emitReturn handles bare return, return-with-value, and the guard form.
+// At v0.3 we do NOT wrap composite return values in `_copy` — the borrow
+// checker has invalidated the local binding at the return site, so the
+// caller can take ownership of the underlying buffer/struct directly.
 func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 	body := "return;"
 	if s.Value != nil {
@@ -1253,9 +1279,6 @@ func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 		if err != nil {
 			return err
 		}
-		// Deep-copy on return for composites so the caller receives an
-		// independent value (consistent with let/mut/arg-pass).
-		v = copyExpr(s.Value.Type(), v)
 		body = fmt.Sprintf("return %s;", v)
 	}
 	if s.Guard == nil {
@@ -1374,12 +1397,14 @@ func (g *cgen) emitMatch(s *syntax.MatchStmt) error {
 	g.writeIndent()
 	g.b.WriteString("{\n")
 	g.indent++
-	// Take a deep-copy snapshot so binding patterns can re-copy from a stable
-	// value without re-evaluating the subject expression (which may have
-	// side effects). The copy is a no-op for primitives.
+	// Snapshot the subject into a local so binding patterns and tests
+	// reference a stable value without re-evaluating the subject (which
+	// may have side effects). At v0.3 we don't deep-copy — the snapshot
+	// shares the underlying buffer/struct with the subject, and the
+	// borrow checker has BorrowedShared the subject for the duration.
 	g.writeIndent()
 	fmt.Fprintf(&g.b, "%s %s = %s;\n",
-		cTypeName(subjT), subjVar, copyExpr(subjT, subjStr))
+		cTypeName(subjT), subjVar, subjStr)
 
 	for i := range s.Arms {
 		arm := &s.Arms[i]
@@ -1516,10 +1541,12 @@ func (g *cgen) emitPatternBindings(pat syntax.Pattern, scrut string, scrutT *syn
 		_ = p
 		return nil
 	case *syntax.BindPat:
+		// At v0.3 the bound name shares the matched value (no deep copy).
+		// The borrow checker has flagged the scrutinee as Moved at exit
+		// for BindPat arms, so the user can't observe aliasing.
 		g.writeIndent()
 		fmt.Fprintf(&g.b, "%s %s = %s;\n",
-			cTypeName(scrutT), mangle(p.Name),
-			copyExpr(scrutT, scrut))
+			cTypeName(scrutT), mangle(p.Name), scrut)
 		return nil
 	case *syntax.TuplePat:
 		if scrutT == nil || scrutT.Kind != syntax.TypeTuple {
@@ -1630,7 +1657,11 @@ func (g *cgen) listLitStr(e *syntax.ListLit) (string, error) {
 	mname := mangleType(t)
 	elem := cTypeName(t.Element)
 	var b strings.Builder
-	fmt.Fprintf(&b, "({ %s __l; __l.len = %d; ", mname, len(e.Elements))
+	// cap == len at construction; the per-shape push helper doubles cap
+	// when len catches up. Element values are NOT deep-copied at v0.3 —
+	// the borrow checker has invalidated source bindings at any move
+	// site, so sharing the underlying value is safe.
+	fmt.Fprintf(&b, "({ %s __l; __l.len = %d; __l.cap = %d; ", mname, len(e.Elements), len(e.Elements))
 	if len(e.Elements) == 0 {
 		fmt.Fprintf(&b, "__l.data = (%s*)malloc(1); ", elem)
 	} else {
@@ -1640,7 +1671,7 @@ func (g *cgen) listLitStr(e *syntax.ListLit) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			fmt.Fprintf(&b, "__l.data[%d] = %s; ", i, copyExpr(t.Element, s))
+			fmt.Fprintf(&b, "__l.data[%d] = %s; ", i, s)
 		}
 	}
 	fmt.Fprintf(&b, "__l; })")
@@ -1648,7 +1679,9 @@ func (g *cgen) listLitStr(e *syntax.ListLit) (string, error) {
 }
 
 // tupleLitStr emits a tuple literal as a `(zerg_tuple_<...>){.e0 = ..., .e1 =
-// ...}` compound literal. C99 designated initialisers handle the rest.
+// ...}` compound literal. C99 designated initialisers handle the rest. At
+// v0.3 we do NOT deep-copy composite elements — the borrow checker has
+// invalidated source bindings at the move site.
 func (g *cgen) tupleLitStr(e *syntax.TupleLit) (string, error) {
 	t := e.Type()
 	if t == nil || t.Kind != syntax.TypeTuple {
@@ -1664,7 +1697,7 @@ func (g *cgen) tupleLitStr(e *syntax.TupleLit) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, ".e%d = %s", i, copyExpr(t.Tuple[i], s))
+		fmt.Fprintf(&b, ".e%d = %s", i, s)
 	}
 	b.WriteString("})")
 	return b.String(), nil
@@ -1698,7 +1731,7 @@ func (g *cgen) structLitStr(e *syntax.StructLit) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, ".%s = %s", mangleField(f.Name), copyExpr(f.Type, s))
+		fmt.Fprintf(&b, ".%s = %s", mangleField(f.Name), s)
 	}
 	b.WriteString("})")
 	return b.String(), nil
@@ -1720,14 +1753,12 @@ func (g *cgen) indexStr(e *syntax.IndexExpr) (string, error) {
 	posStr := fmt.Sprintf("%d:%d", e.Pos.Line, e.Pos.Column)
 	switch {
 	case rt != nil && rt.Kind == syntax.TypeList:
-		elemT := rt.Element
-		// Use a statement-expression to bounds-check, then return a deep copy.
+		// Bounds-check via a statement-expression; the result aliases the
+		// element in the underlying buffer (no implicit copy at v0.3).
 		mname := mangleType(rt)
-		copyForm := copyExpr(elemT,
-			fmt.Sprintf("__r.data[__i]"))
 		return fmt.Sprintf(
-			"({ %s __r = %s; int64_t __i = %s; zerg_index_check(__i, __r.len, %q); %s; })",
-			mname, rs, is, posStr, copyForm), nil
+			"({ %s __r = %s; int64_t __i = %s; zerg_index_check(__i, __r.len, %q); __r.data[__i]; })",
+			mname, rs, is, posStr), nil
 	case rt == syntax.TStr():
 		return fmt.Sprintf("zerg_str_rune_at(%s, %s, %q)", rs, is, posStr), nil
 	}
@@ -1794,23 +1825,27 @@ func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 	if rt == nil || rt.Kind != syntax.TypeStruct {
 		return "", fmt.Errorf("codegen: cannot access field on %s at %s", rt, e.Pos)
 	}
-	// Find the field type for the deep-copy decision.
-	var fieldT *syntax.Type
+	// Validate the field exists; the access itself is a direct member
+	// reference (no implicit deep copy at v0.3).
+	found := false
 	for _, f := range rt.Fields {
 		if f.Name == e.FieldName {
-			fieldT = f.Type
+			found = true
 			break
 		}
 	}
-	if fieldT == nil {
+	if !found {
 		return "", fmt.Errorf("codegen: struct %s has no field %q at %s", rt.Name, e.FieldName, e.Pos)
 	}
 	access := fmt.Sprintf("(%s).%s", rs, mangleField(e.FieldName))
-	return copyExpr(fieldT, access), nil
+	return access, nil
 }
 
-// callStr handles user-fn calls and the `len` built-in. Each composite
-// argument is deep-copied at the call site (matches the interpreter rule).
+// callStr handles user-fn calls and the `len` / `clone` / `push` built-ins.
+// At v0.3 fn-call composite args are implicit shared borrows — NO implicit
+// deep copy at the call site. `clone(xs)` is the explicit opt-in for the
+// v0.2-style deep copy; it remains the only call-site of the per-shape
+// `_copy` helper.
 func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 	ident, ok := e.Callee.(*syntax.IdentExpr)
 	if !ok {
@@ -1847,12 +1882,10 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		return copyExpr(e.Args[0].Type(), argS), nil
 	}
 	if ident.Name == "push" {
-		// push(xs, v) appends v to xs in place. typeck has required xs to
-		// be a top-level mut-bound list ident; the borrow checker has
-		// validated state. We lower to a comma expression that reallocs
-		// xs's data buffer and stores the new (data, len) header back.
-		// Cap doubling lands at Unit 5 — for v0.3 Unit 3 the simple
-		// realloc-by-one keeps the runtime correct without the cap field.
+		// push(xs, v) appends v to xs in place via the per-shape grow
+		// helper, which doubles cap when len catches up. typeck has
+		// required xs to be a top-level mut-bound list ident; the borrow
+		// checker has validated state.
 		if len(e.Args) != 2 {
 			return "", fmt.Errorf("codegen: push expects 2 args at %s", e.Pos)
 		}
@@ -1868,14 +1901,12 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		if listT == nil || listT.Kind != syntax.TypeList {
 			return "", fmt.Errorf("codegen: push first arg must be list at %s", e.Pos)
 		}
-		elem := cTypeName(listT.Element)
-		valS = copyExpr(listT.Element, valS)
 		nameS := mangle(id.Name)
-		// Comma expression: realloc, write, bump len, return 0 (we cast to
-		// void in the surrounding ExprStmt). Using realloc keeps the
-		// implementation tiny; cap-doubling is Unit 5's contract.
-		expr := fmt.Sprintf("(%s.data = (%s*)realloc(%s.data, (%s.len + 1) * sizeof(%s)), %s.data[%s.len] = %s, %s.len = %s.len + 1, 0)",
-			nameS, elem, nameS, nameS, elem, nameS, nameS, valS, nameS, nameS)
+		// `_push` returns void; we emit it as an expression so the caller
+		// (an ExprStmt-wrapped call) compiles. Wrap in `(<call>, 0)` so
+		// the comma expression has a non-void value, matching how the
+		// previous lowering shaped the expression position.
+		expr := fmt.Sprintf("(%s_push(&%s, %s), 0)", mangleType(listT), nameS, valS)
 		return expr, nil
 	}
 	var sb strings.Builder
@@ -1889,8 +1920,9 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// Deep-copy composite args at the call boundary.
-		s = copyExpr(a.Type(), s)
+		// At v0.3 fn-call composite args are implicit shared borrows —
+		// no deep copy. The borrow checker has confirmed the caller's
+		// binding remains valid for the call duration.
 		sb.WriteString(s)
 	}
 	sb.WriteByte(')')

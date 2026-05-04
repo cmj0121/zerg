@@ -346,7 +346,11 @@ func (in *interp) execDecl(name string, value syntax.Expr) error {
 	if err != nil {
 		return err
 	}
-	return in.declare(name, copyValue(v))
+	// v0.3: no implicit deep-copy on bind. The borrow checker has
+	// invalidated the source binding at the move site, so sharing the
+	// underlying Go slice/struct is safe. clone(xs) is the explicit
+	// opt-in for the v0.2-style deep copy.
+	return in.declare(name, v)
 }
 
 // execTupleDestructure evaluates `let (a, b, ...) := expr` (and the mut
@@ -366,7 +370,8 @@ func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Exp
 		return fmt.Errorf("internal: destructure arity mismatch at %s: %d names vs %d elements", tb.Pos, len(tb.Names), len(v.Tuple))
 	}
 	for i, name := range tb.Names {
-		if err := in.declare(name, copyValue(v.Tuple[i])); err != nil {
+		// v0.3: no implicit deep-copy on tuple destructure bind.
+		if err := in.declare(name, v.Tuple[i]); err != nil {
 			return err
 		}
 	}
@@ -399,7 +404,10 @@ func (in *interp) execAssign(s *syntax.AssignStmt) error {
 	}
 	switch s.Op {
 	case syntax.AssignSet:
-		*slot = copyValue(rhs)
+		// v0.3: plain `x = v` is only meaningful for primitive targets
+		// (composite mut bindings rebind via `:=` or write through
+		// `xs[i] = v`); no implicit deep-copy.
+		*slot = rhs
 	case syntax.AssignAdd:
 		*slot, err = applyBin(syntax.BinAdd, *slot, rhs)
 	case syntax.AssignSub:
@@ -460,7 +468,9 @@ func (in *interp) execIndexAssign(s *syntax.AssignStmt, idx *syntax.IndexExpr) e
 	if i < 0 || i >= n {
 		return fmt.Errorf("runtime error at %s: list index %d out of range [0..%d)", s.Pos, i, n)
 	}
-	slot.List[i] = copyValue(rhs)
+	// v0.3: no implicit deep-copy on element write — the borrow checker
+	// has invalidated the rhs's source binding at the move site.
+	slot.List[i] = rhs
 	return nil
 }
 
@@ -602,7 +612,10 @@ func (in *interp) execFor(s *syntax.ForStmt) error {
 func (in *interp) runListIter(s *syntax.ForStmt, elem Value) (bool, error) {
 	in.pushFrame()
 	defer in.popFrame()
-	if err := in.declare(s.Var, copyValue(elem)); err != nil {
+	// v0.3: no implicit deep-copy on for-iter element bind. The borrow
+	// checker has BorrowedShared the iterable for the body's duration
+	// and rejects mutation of it inside, so shared backing is safe.
+	if err := in.declare(s.Var, elem); err != nil {
 		return false, err
 	}
 	for _, st := range s.Body.Statements {
@@ -997,10 +1010,12 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	defer func() { in.stack = savedStack }()
 
 	for i, p := range fn.Params {
-		// Deep-copy each argument as it crosses the call boundary so the
-		// callee's parameter is independent of the caller's binding (PLAN
-		// "value-copied lists" rule).
-		if err := in.declare(p.Name, copyValue(args[i])); err != nil {
+		// v0.3: fn-call composite args are implicit shared borrows. No
+		// deep copy at the call boundary — the borrow checker enforces
+		// that fn parameters of composite type are BorrowedShared and
+		// cannot be moved/mutated inside the body, so sharing the
+		// underlying value with the caller's binding is safe.
+		if err := in.declare(p.Name, args[i]); err != nil {
 			return Value{}, err
 		}
 	}
@@ -1095,7 +1110,9 @@ func (in *interp) evalPush(e *syntax.CallExpr) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	slot.List = append(slot.List, copyValue(v))
+	// v0.3: no implicit deep-copy on push — the borrow checker has
+	// invalidated v's source binding at the move site if v is a name.
+	slot.List = append(slot.List, v)
 	return Value{}, nil
 }
 
@@ -1114,7 +1131,8 @@ func (in *interp) evalListLit(e *syntax.ListLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		elems[i] = copyValue(ev)
+		// v0.3: no implicit deep-copy at list-literal construction.
+		elems[i] = ev
 	}
 	// e.Type() is the canonical list[T]; reuse it so list values constructed
 	// from different sites in the same program share the type pointer.
@@ -1135,7 +1153,8 @@ func (in *interp) evalTupleLit(e *syntax.TupleLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		elems[i] = copyValue(ev)
+		// v0.3: no implicit deep-copy at tuple-literal construction.
+		elems[i] = ev
 	}
 	t := e.Type()
 	if t == nil || t.Kind != syntax.TypeTuple {
@@ -1173,7 +1192,8 @@ func (in *interp) evalStructLit(e *syntax.StructLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		values[idx] = copyValue(v)
+		// v0.3: no implicit deep-copy at struct-literal construction.
+		values[idx] = v
 		provided[idx] = true
 	}
 	for i, ok := range provided {
@@ -1208,7 +1228,8 @@ func (in *interp) evalIndex(e *syntax.IndexExpr) (Value, error) {
 		if idx < 0 || idx >= n {
 			return Value{}, fmt.Errorf("runtime error at %s: list index %d out of range [0..%d)", e.Pos, idx, n)
 		}
-		return copyValue(rv.List[idx]), nil
+		// v0.3: index read aliases the element rather than deep-copying.
+		return rv.List[idx], nil
 	case syntax.TypeStr:
 		runes := []rune(rv.Str)
 		n := int64(len(runes))
@@ -1262,7 +1283,9 @@ func (in *interp) evalSlice(e *syntax.SliceExpr) (Value, error) {
 	}
 	out := make([]Value, hi-lo)
 	for i := lo; i < hi; i++ {
-		out[i-lo] = copyValue(rv.List[i])
+		// v0.3: slice copies the OUTER list header but aliases each
+		// element. Primitives are value-copied by Go assignment anyway.
+		out[i-lo] = rv.List[i]
 	}
 	// Reuse the receiver's list type so the constructed Value's Type pointer
 	// matches the receiver's (consistent with the rest of the interpreter's
@@ -1296,7 +1319,8 @@ func (in *interp) evalFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
 	}
 	for i, f := range rv.Type.Fields {
 		if f.Name == e.FieldName {
-			return copyValue(rv.Fields[i]), nil
+			// v0.3: field read aliases the field rather than deep-copying.
+			return rv.Fields[i], nil
 		}
 	}
 	return Value{}, fmt.Errorf("internal: struct %q has no field %q at %s", rv.Type.Name, e.FieldName, e.NamePos)
@@ -1360,8 +1384,10 @@ func (in *interp) bindPattern(pat syntax.Pattern, v Value) (bool, error) {
 	case *syntax.WildcardPat:
 		return true, nil
 	case *syntax.BindPat:
-		// Bind a deep copy so a later mutation of v's source can't leak.
-		if err := in.declare(p.Name, copyValue(v)); err != nil {
+		// v0.3: bind shares the value. The borrow checker has flagged
+		// the scrutinee as Moved at the BindPat site, so the user
+		// can't observe the alias.
+		if err := in.declare(p.Name, v); err != nil {
 			return false, err
 		}
 		return true, nil

@@ -25,11 +25,12 @@ import (
 const builtinModuleTag = "<builtin>"
 
 // reservedBuiltinTypeNames is the set of type names users may not redeclare
-// at the top level. v0.6 reserves Option and Result; future built-ins
-// append.
+// at the top level. v0.6 reserves Option and Result; v0.7 adds chan; future
+// built-ins append.
 var reservedBuiltinTypeNames = map[string]bool{
 	"Option": true,
 	"Result": true,
+	"chan":   true,
 }
 
 // isReservedBuiltinTypeName reports whether name collides with a v0.6

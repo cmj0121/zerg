@@ -447,6 +447,15 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		// staying lenient keeps the borrow check from raising an internal
 		// error on a tree shape it doesn't understand.
 		return nil
+	case *SendStmt:
+		// v0.7 Unit 2: typeck-only landing for SendStmt. Borrow rules for
+		// send (move-out of value into the channel) land in Unit 5; today
+		// we walk the channel as a read and the value as a read so basic
+		// use-after-move on either operand still fires.
+		if err := c.walkExpr(s.Chan, false); err != nil {
+			return err
+		}
+		return c.walkExpr(s.Value, false)
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -797,6 +806,18 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		// original (also a move). Mirror the let-rebind / return shape — bare
 		// idents move; nested aggregates walk in consume mode.
 		return c.consumeOrWalk(e.Inner, "moved by ? propagation")
+	case *ChanConstructorExpr:
+		// v0.7 Unit 2: typeck-only landing. The capacity expression is read
+		// (no move). Element type is metadata; nothing to walk.
+		if e.Capacity != nil {
+			return c.walkExpr(e.Capacity, false)
+		}
+		return nil
+	case *RecvExpr:
+		// v0.7 Unit 2: typeck-only landing. The channel operand is read (the
+		// channel handle isn't moved); the resulting value is owned by the
+		// caller. Unit 5 will refine the move-in semantics.
+		return c.walkExpr(e.Chan, false)
 	case *CoalesceExpr:
 		// `??` LHS is the match-scrutinee; whichever arm fires moves the
 		// bound value out (Some(v) ⇒ v moves, None ⇒ rhs moves). The borrow
@@ -1173,6 +1194,38 @@ func (c *borrowChecker) checkFor(s *ForStmt) error {
 		if iterEntry != nil {
 			*iterEntry = iterPrior
 		}
+		if bodyErr != nil {
+			return bodyErr
+		}
+		c.diverged = false
+		return nil
+	case ForChan:
+		// v0.7 Unit 2: typeck-only landing for `for v in ch`. The full
+		// borrow rules (move-in per-iteration) land in Unit 5; today we
+		// walk the channel as a read and bind v as Owned in the body
+		// scope so basic move-out / use-after-move from inside the body
+		// fires the standard diagnostics.
+		if err := c.walkExpr(s.Iter, false); err != nil {
+			return err
+		}
+		var elemType *Type
+		if t := s.Iter.Type(); t != nil && t.Kind == TypeChan {
+			elemType = t.Element
+		}
+		c.scope = newBorrowScope(c.scope)
+		c.scope.declare(s.Var, &borrowEntry{
+			state:     bsOwned,
+			typ:       elemType,
+			declDepth: c.loopDepth,
+		})
+		var bodyErr error
+		for _, st := range s.Body.Statements {
+			if err := c.checkStmt(st); err != nil {
+				bodyErr = err
+				break
+			}
+		}
+		c.scope = c.scope.parent
 		if bodyErr != nil {
 			return bodyErr
 		}

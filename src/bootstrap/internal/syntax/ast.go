@@ -560,6 +560,7 @@ const (
 	ForCond                    // for cond { ... }
 	ForRange                   // for x in start..end { ... }
 	ForIter                    // for x in xs { ... } — iterate over a list value
+	ForChan                    // for v in ch { ... } — receive until close (v0.7)
 )
 
 // ForStmt covers all four for-loop shapes via Kind. Only the fields relevant

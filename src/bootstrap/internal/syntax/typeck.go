@@ -45,6 +45,7 @@ const (
 	TypeStruct // Name + Fields populated; canonical instance stored in struct table
 	TypeEnum   // Name + Variants populated; canonical instance stored in enum table
 	TypeSpec   // v0.4 spec-as-type: Name populated; canonical instance stored in spec table
+	TypeChan   // v0.7 channel: Element non-nil; canonical instance cached per element-type
 )
 
 // NamedField is one field of a struct type. Order matches declaration order
@@ -115,6 +116,8 @@ func (t *Type) String() string {
 		return b.String()
 	case TypeStruct, TypeEnum, TypeSpec:
 		return t.Name
+	case TypeChan:
+		return "chan[" + t.Element.String() + "]"
 	}
 	return fmt.Sprintf("Type(%d)", int(t.Kind))
 }
@@ -148,6 +151,8 @@ func (t *Type) Equals(u *Type) bool {
 		// Canonical name suffices because the type table guarantees one
 		// instance per name. Equal names ⇒ equal types.
 		return t.Name == u.Name
+	case TypeChan:
+		return t.Element.Equals(u.Element)
 	}
 	// Primitives only reach here when pointer-equality already held above; for
 	// safety we still treat same-Kind primitives as equal so a stray non-canonical
@@ -462,6 +467,10 @@ type checker struct {
 	// cloned method's body so resolveTypeRef sees `T` bound to the chosen
 	// concrete arg. Nil at the top level and inside non-generic impls.
 	activeSubst map[string]*Type
+	// monoChans caches per-element-type canonical chan *Type values (v0.7).
+	// Same shape as monoEnums / monoStructs; chans don't escape modules at
+	// v0.7 so the cache is per-checker rather than bundle-shared.
+	monoChans map[string]*Type
 }
 
 // Check is the public single-program entry point. It walks prog, annotates
@@ -589,6 +598,12 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			switch s.Name {
 			case "len", "push", "clone":
 				return typeErr(s.Pos, "cannot redefine built-in '%s'", s.Name)
+			}
+			// v0.7: `chan` is reserved as a type-position keyword and `close`
+			// is reserved as a type-driven built-in fn. Both reject with the
+			// uniform reservation diagnostic.
+			if s.Name == "chan" || s.Name == "close" {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
 			}
 			if err := register(s.Name, s.Pos, "function"); err != nil {
 				return err
@@ -1168,6 +1183,13 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			ref.Resolved = t
 			return t, nil
 		}
+		// v0.7: `chan[T]` is a built-in generic type. Intercept here ahead
+		// of the user-decl generic path so `chan` never collides with a
+		// user-defined generic name (the binding-site reservation prevents
+		// it, but the resolver stays defensive).
+		if ref.Name == "chan" {
+			return c.resolveChanTypeRef(ref)
+		}
 		// Generic-name path (v0.6): a name with type-args resolves through
 		// the per-decl monomorphization cache. Unit 2 handled the built-in
 		// Option / Result decls; Unit 3 extends to user-defined generic
@@ -1427,16 +1449,24 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		// one slips through here (e.g. single-file mode without a loader),
 		// it is a no-op so existing v0.0–v0.4 corpora keep behaving the same.
 		return nil
+	case *SendStmt:
+		return c.checkSend(s)
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
 
 // checkPrint validates `print expr`. v0.2 accepts every printable shape:
-// primitives, lists, tuples, structs, enums. Void is rejected.
+// primitives, lists, tuples, structs, enums. Void is rejected. v0.7 rejects
+// channel-typed values with a focused diagnostic — channels carry no
+// printable surface and the deep-copy on send/recv would make every print
+// either a snapshot of the queue (potentially racy) or a no-op.
 func (c *checker) checkPrint(s *PrintStmt) error {
 	t, err := c.checkExpr(s.Expr)
 	if err != nil {
 		return err
+	}
+	if isChanType(t) {
+		return typeErr(s.Pos, "cannot print channel value (channels are not Printable)")
 	}
 	if !isPrintable(t) {
 		return typeErr(s.Pos, "cannot print value of type %s", t)
@@ -1500,6 +1530,9 @@ func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr,
 // lift path. It resolves the annotation and then defers to
 // checkDeclWithSlot with the parent slot.
 func (c *checker) checkDeclSlot(pos Position, name string, ref *TypeRef, slot *Expr, kind bindKind) error {
+	if isReservedV07BuiltinName(name) || name == "close" {
+		return typeErr(pos, "name %q is reserved (built-in)", name)
+	}
 	if c.crossMod != nil {
 		if _, ok := c.crossMod.imports[name]; ok && c.scope.parent == nil {
 			return typeErr(pos, "name %q shadows imported module binding", name)
@@ -1626,6 +1659,9 @@ func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Ex
 		return typeErr(pos, "destructure expects %d element(s), value has %d", len(tb.Names), len(observed.Tuple))
 	}
 	for i, name := range tb.Names {
+		if isReservedV07BuiltinName(name) || name == "close" {
+			return typeErr(tb.NamePos[i], "name %q is reserved (built-in)", name)
+		}
 		elemT := observed.Tuple[i]
 		if elemT == nil || elemT.Kind == TypeUnknown {
 			return typeErr(tb.NamePos[i], "cannot infer type of %q from tuple element %d", name, i+1)
@@ -1817,16 +1853,54 @@ func (c *checker) checkFor(s *ForStmt) error {
 		}
 		return nil
 	case ForIter:
-		// `for x in xs { ... }` — iterate over a list-typed expression. The
-		// loop variable's type is the element type. Empty lists are allowed
-		// (the body never runs); typeck rejects unannotated empty literals
-		// upstream so the iterable's element type is always concrete here.
+		// `for x in xs { ... }` — iterate over a list-typed expression, OR
+		// (v0.7) over a chan-typed expression. The loop variable's type is
+		// the list element / chan element. Empty lists are allowed (the body
+		// never runs); typeck rejects unannotated empty literals upstream so
+		// the iterable's element type is always concrete here. For channels,
+		// receiving until close is desugared (at run.go / cgen.go) to a
+		// match-on-Option loop; we mark the ForStmt with Kind = ForChan so
+		// downstream halves can dispatch.
 		iterT, err := c.checkExpr(s.Iter)
 		if err != nil {
 			return err
 		}
-		if iterT == nil || iterT.Kind != TypeList {
-			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable must be a list, got %s", iterT)
+		if iterT == nil {
+			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable has unknown type")
+		}
+		var elem *Type
+		switch iterT.Kind {
+		case TypeList:
+			elem = iterT.Element
+		case TypeChan:
+			elem = iterT.Element
+			s.Kind = ForChan
+		default:
+			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable must be a list or channel, got %s", iterT)
+		}
+		c.scope = newScope(c.scope)
+		defer func() { c.scope = c.scope.parent }()
+		if !c.scope.declare(s.Var, binding{kind: bindLet, typ: elem}) {
+			return typeErr(s.VarPos, "name %q already declared in this scope", s.Var)
+		}
+		for _, st := range s.Body.Statements {
+			if err := c.checkStmt(st); err != nil {
+				return err
+			}
+		}
+		return nil
+	case ForChan:
+		// Defensive: the parser doesn't produce ForChan directly; checkFor
+		// re-tags ForIter when it sees a chan-typed iterable. This case
+		// keeps the dispatch table exhaustive so a future caller that
+		// constructs ForChan in source-to-AST tools doesn't fall through to
+		// the "internal" panic below.
+		iterT, err := c.checkExpr(s.Iter)
+		if err != nil {
+			return err
+		}
+		if !isChanType(iterT) {
+			return typeErr(s.Iter.ExprPos(), "'for v in ch' iterable must be a channel, got %s", iterT)
 		}
 		c.scope = newScope(c.scope)
 		defer func() { c.scope = c.scope.parent }()
@@ -2218,6 +2292,10 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.checkPropagate(e)
 	case *CoalesceExpr:
 		return c.checkCoalesce(e, hint)
+	case *ChanConstructorExpr:
+		return c.checkChanConstructor(e)
+	case *RecvExpr:
+		return c.checkRecv(e)
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }
@@ -3193,6 +3271,12 @@ func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 	ident, ok := e.Callee.(*IdentExpr)
 	if !ok {
 		return nil, typeErr(e.Pos, "callee must be a function name")
+	}
+	// v0.7: `close(ch)` is a type-driven built-in; it has no fnSig entry. The
+	// reservation diagnostic at name-binding sites blocks user shadowing so
+	// any call whose callee names "close" is the genuine built-in.
+	if recognizeCloseCall(e) {
+		return c.checkCloseCall(e, ident)
 	}
 	// v0.6 Unit 3: generic-fn dispatch.
 	if fn := c.findGenericFnDecl(ident.Name); fn != nil {

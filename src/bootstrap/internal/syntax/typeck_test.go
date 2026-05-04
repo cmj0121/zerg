@@ -250,7 +250,7 @@ func TestCheckCompareSameTypeOK(t *testing.T) {
 }
 
 func TestCheckCompareDifferentTypeRejected(t *testing.T) {
-	checkErr(t, "let x := 1 == 1.0\n", "same-typed primitive operands")
+	checkErr(t, "let x := 1 == 1.0\n", "operator == requires operands of the same type")
 }
 
 func TestCheckRelationalNumericAndStrOK(t *testing.T) {

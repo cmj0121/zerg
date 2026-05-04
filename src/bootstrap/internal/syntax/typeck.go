@@ -2569,8 +2569,14 @@ func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 		}
 		result = tInt
 	case BinEq, BinNE:
-		if lt != rt || !isComparablePrimitive(lt) {
-			return nil, typeErr(e.Pos, "operator %s requires same-typed primitive operands, got %s and %s", e.Op, lt, rt)
+		if reason, ok := isComparableForEq(lt); !ok {
+			return nil, typeErr(e.Pos, "%s", reason)
+		}
+		if reason, ok := isComparableForEq(rt); !ok {
+			return nil, typeErr(e.Pos, "%s", reason)
+		}
+		if !typeEq(lt, rt) {
+			return nil, typeErr(e.Pos, "operator %s requires operands of the same type, got %s and %s", e.Op, lt, rt)
 		}
 		result = tBool
 	case BinLT, BinGT, BinLE, BinGE:
@@ -2768,15 +2774,55 @@ func isNumeric(t *Type) bool {
 	return t == tInt || t == tFloat || t == tByte || t == tRune
 }
 
-// isComparablePrimitive reports whether == / != is admissible on t. Lists,
-// tuples, structs, enums are not compared with == at v0.2 (no structural
-// equality operator); primitives only.
-func isComparablePrimitive(t *Type) bool {
-	switch t {
-	case tInt, tFloat, tBool, tStr, tByte, tRune:
-		return true
+// isComparableForEq reports whether == / != is admissible on t at v0.4. The
+// rule is: primitives are admissible (v0.1), and structural composites — list,
+// tuple, struct, enum — are admissible recursively, with the caveat that any
+// element / payload / field type must itself be admissible. Spec-typed values
+// reject — Comparable is a v0.6 concern (needs generics).
+//
+// Recursive types are already rejected by Unit 3's cycle detection, so this
+// function's recursion always terminates.
+//
+// Returns (reason, ok). reason is the user-visible diagnostic when ok is false.
+func isComparableForEq(t *Type) (string, bool) {
+	if t == nil {
+		return "operands of == must have a known type", false
 	}
-	return false
+	switch t.Kind {
+	case TypeInt, TypeFloat, TypeBool, TypeStr, TypeByte, TypeRune:
+		return "", true
+	case TypeList:
+		if reason, ok := isComparableForEq(t.Element); !ok {
+			return reason, false
+		}
+		return "", true
+	case TypeTuple:
+		for _, sub := range t.Tuple {
+			if reason, ok := isComparableForEq(sub); !ok {
+				return reason, false
+			}
+		}
+		return "", true
+	case TypeStruct:
+		for _, f := range t.Fields {
+			if reason, ok := isComparableForEq(f.Type); !ok {
+				return reason, false
+			}
+		}
+		return "", true
+	case TypeEnum:
+		for _, payload := range t.VariantPayloads {
+			for _, sub := range payload {
+				if reason, ok := isComparableForEq(sub); !ok {
+					return reason, false
+				}
+			}
+		}
+		return "", true
+	case TypeSpec:
+		return fmt.Sprintf("cannot compare values of spec type %q — defer to v0.6", t.Name), false
+	}
+	return fmt.Sprintf("operator == not supported for %s", t), false
 }
 
 // isConstExpr reports whether expr is admissible on the right-hand side of a

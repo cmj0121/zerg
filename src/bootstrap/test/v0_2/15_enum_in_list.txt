@@ -1,0 +1,5 @@
+[ Color.Red, Color.Green, Color.Blue, Color.Red ]
+Color.Red
+Color.Green
+Color.Blue
+Color.Red

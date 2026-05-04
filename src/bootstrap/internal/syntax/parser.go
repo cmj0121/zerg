@@ -2,6 +2,7 @@ package syntax
 
 import (
 	"fmt"
+	"strconv"
 )
 
 // ParseError is returned when the parser cannot fit the token stream into the
@@ -239,6 +240,12 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseBreakLikeStmt(true)
 	case KindContinue:
 		return p.parseBreakLikeStmt(false)
+	case KindStruct:
+		return p.parseStructDecl()
+	case KindEnum:
+		return p.parseEnumDecl()
+	case KindMatch:
+		return p.parseMatchStmt()
 	default:
 		return p.parseExprOrAssignStmt()
 	}
@@ -263,10 +270,23 @@ const (
 	declConst
 )
 
-// parseDecl handles let/mut/const with both `name := expr` and
-// `name: T = expr` forms.
+// parseDecl handles let/mut/const in three shapes:
+//
+//   - `let name := expr` / `mut name := expr` / `const name := expr`
+//   - `let name : T = expr` (annotated)
+//   - `let (a, b, ...) := expr` — v0.2 tuple-destructure declaration. The
+//     parenthesised LHS introduces ≥ 2 fresh names in the current scope; the
+//     RHS must be a tuple of matching arity (typeck enforces). v0.2 does not
+//     admit a type annotation on the destructure form — typeck infers from
+//     the RHS shape.
 func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 	keyword := p.advance() // consume let/mut/const
+
+	// Tuple-destructure LHS: `let (a, b) := expr`.
+	if p.peek().Kind == KindLParen {
+		return p.parseTupleDestructureDecl(kind, keyword.Pos)
+	}
+
 	nameTok, err := p.expect(KindIdent, "after "+kindLabel(kind))
 	if err != nil {
 		return nil, err
@@ -309,6 +329,76 @@ func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 	return nil, errorAt(keyword.Pos, "internal error: unknown decl kind")
 }
 
+// parseTupleDestructureDecl consumes the parenthesised LHS of a destructure
+// declaration plus its `:=` and RHS. The leading keyword (`let`/`mut`/
+// `const`) and its position have been consumed by the caller; the cursor is
+// at `(`.
+//
+// Grammar: `'(' IDENT (',' IDENT)+ ','? ')' ':=' expr`. PLAN-pinned: ≥ 2
+// names — `let (a) := …` is a parse error (ParenExpr-grouping is reserved
+// for expression position). Repeated names within the same LHS are a
+// parse-time error so typeck doesn't have to catch a contradictory binding
+// pair. v0.2 admits no type annotation on the destructure form — the parser
+// rejects `: T` between `)` and `:=` so we do not have to teach typeck about
+// annotated destructures.
+func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (Stmt, error) {
+	openTok, err := p.expectParen(KindLParen, "in destructure "+kindLabel(kind))
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	var positions []Position
+	seen := map[string]bool{}
+	for {
+		if p.peek().Kind == KindRParen {
+			break
+		}
+		nameTok, err := p.expect(KindIdent, "in destructure name list")
+		if err != nil {
+			return nil, err
+		}
+		if seen[nameTok.Value] {
+			return nil, errorAt(nameTok.Pos, "name %q repeated in destructure pattern", nameTok.Value)
+		}
+		seen[nameTok.Value] = true
+		names = append(names, nameTok.Value)
+		positions = append(positions, nameTok.Pos)
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close destructure pattern"); err != nil {
+		return nil, err
+	}
+	if len(names) < 2 {
+		return nil, errorAt(openTok.Pos, "destructure pattern requires at least 2 names (use the single-name form for one)")
+	}
+	// `:=` only — annotated destructure deferred at v0.2.
+	if k := p.peek().Kind; k == KindColon {
+		bad := p.peek()
+		return nil, errorAt(bad.Pos, "type annotations on destructure declarations are not supported at v0.2")
+	}
+	if _, err := p.expect(KindWalrus, "after destructure pattern"); err != nil {
+		return nil, err
+	}
+	value, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	tb := &TupleBinding{Pos: openTok.Pos, Names: names, NamePos: positions}
+	switch kind {
+	case declLet:
+		return &LetStmt{Pos: keywordPos, Tuple: tb, Value: value}, nil
+	case declMut:
+		return &MutStmt{Pos: keywordPos, Tuple: tb, Value: value}, nil
+	case declConst:
+		return &ConstStmt{Pos: keywordPos, Tuple: tb, Value: value}, nil
+	}
+	return nil, errorAt(keywordPos, "internal error: unknown decl kind")
+}
+
 func kindLabel(k declKind) string {
 	switch k {
 	case declLet:
@@ -321,15 +411,83 @@ func kindLabel(k declKind) string {
 	return "<decl>"
 }
 
-// parseTypeRef parses a single identifier as a type name. Compound type
-// syntax is not in v0.1.
+// parseTypeRef parses a type reference. v0.2 admits three shapes:
+//
+//   - bare identifier ("int", "Point") → TypeRefNamed
+//   - "list" '[' type_ref ']'           → TypeRefList
+//   - "tuple" '[' type_ref (',' type_ref)+ ','? ']' → TypeRefTuple (≥ 2)
+//
+// `list` and `tuple` are not reserved keywords (they remain regular
+// identifiers so users can still bind names like `let list := ...`); they
+// trigger compound parsing only when they appear in type-ref position
+// followed by `[`.
 func (p *parser) parseTypeRef() (*TypeRef, error) {
 	t := p.peek()
 	if t.Kind != KindIdent {
 		return nil, errorAtTok(t, "expected type name, got %s", t.Kind)
 	}
 	p.advance()
-	return &TypeRef{Name: t.Value, Pos: t.Pos}, nil
+	// Compound shapes: `list[T]` and `tuple[T1, T2, ...]`. We lookahead one
+	// token; if `[` follows the constructor name we parse the brackets,
+	// otherwise the bare ident stands alone (lets the user keep `list` as a
+	// plain user-defined type if they really want).
+	if (t.Value == "list" || t.Value == "tuple") && p.peek().Kind == KindLBracket {
+		if t.Value == "list" {
+			return p.parseListTypeRef(t.Pos)
+		}
+		return p.parseTupleTypeRef(t.Pos)
+	}
+	return &TypeRef{Kind: TypeRefNamed, Name: t.Value, Pos: t.Pos}, nil
+}
+
+// parseListTypeRef consumes the `[ T ]` tail of a `list[T]` type reference.
+// The opening `[` has been peeked but not yet consumed.
+func (p *parser) parseListTypeRef(headPos Position) (*TypeRef, error) {
+	if _, err := p.expectParen(KindLBracket, "in 'list' type"); err != nil {
+		return nil, err
+	}
+	elt, err := p.parseTypeRef()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expectParen(KindRBracket, "to close 'list' type"); err != nil {
+		return nil, err
+	}
+	return &TypeRef{Kind: TypeRefList, Pos: headPos, Element: elt}, nil
+}
+
+// parseTupleTypeRef consumes the `[ T1, T2, ...]` tail of `tuple[...]`.
+func (p *parser) parseTupleTypeRef(headPos Position) (*TypeRef, error) {
+	if _, err := p.expectParen(KindLBracket, "in 'tuple' type"); err != nil {
+		return nil, err
+	}
+	var elements []*TypeRef
+	for {
+		// Allow trailing comma by peeking for `]` first.
+		if p.peek().Kind == KindRBracket {
+			break
+		}
+		elt, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, elt)
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	closeTok, err := p.expectParen(KindRBracket, "to close 'tuple' type")
+	if err != nil {
+		return nil, err
+	}
+	if len(elements) < 2 {
+		// PLAN: tuple types are ≥ 2 elements. Emit a precise diagnostic at
+		// the closing bracket so users see exactly where the shape fails.
+		return nil, errorAt(closeTok.Pos, "tuple type requires at least 2 element types, got %d", len(elements))
+	}
+	return &TypeRef{Kind: TypeRefTuple, Pos: headPos, Elements: elements}, nil
 }
 
 // parseFnDecl handles `fn name(p1: T1, p2: T2) -> R { body }`.
@@ -396,6 +554,188 @@ func (p *parser) parseFnDecl() (Stmt, error) {
 	}, nil
 }
 
+// parseStructDecl handles `struct Name { field: T, ... }`. NEWLINE between
+// fields is allowed but not required; `parenDepth` is bumped for the brace
+// region so multi-line decls work without the user juggling separators.
+func (p *parser) parseStructDecl() (Stmt, error) {
+	kw := p.advance() // consume `struct`
+	nameTok, err := p.expect(KindIdent, "after 'struct'")
+	if err != nil {
+		return nil, err
+	}
+	open, err := p.expect(KindLBrace, "in struct declaration")
+	if err != nil {
+		return nil, err
+	}
+	// Treat the brace region like a paren region for NEWLINE skipping so
+	// multi-line struct decls Just Work without the user having to align
+	// commas at line ends. The open brace has already been consumed; we
+	// bump parenDepth manually to mirror what expectParen would do for
+	// brackets/parens.
+	p.parenDepth++
+	defer func() { p.parenDepth-- }()
+	_ = open
+
+	var fields []FieldDecl
+	for {
+		if p.peek().Kind == KindRBrace {
+			break
+		}
+		nameT, err := p.expect(KindIdent, "in struct field list")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(KindColon, "after struct field name"); err != nil {
+			return nil, err
+		}
+		fieldType, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, FieldDecl{
+			Name: nameT.Value,
+			Type: fieldType,
+			Pos:  nameT.Pos,
+		})
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(KindRBrace, "to close struct declaration"); err != nil {
+		return nil, err
+	}
+	return &StructDecl{Pos: kw.Pos, Name: nameTok.Value, Fields: fields}, nil
+}
+
+// parseEnumDecl handles `enum Name { Variant, ... }`. Variants are bare
+// identifiers at v0.2 — payloads are deferred to v0.4.
+func (p *parser) parseEnumDecl() (Stmt, error) {
+	kw := p.advance() // consume `enum`
+	nameTok, err := p.expect(KindIdent, "after 'enum'")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(KindLBrace, "in enum declaration"); err != nil {
+		return nil, err
+	}
+	p.parenDepth++
+	defer func() { p.parenDepth-- }()
+
+	var variants []VariantDecl
+	for {
+		if p.peek().Kind == KindRBrace {
+			break
+		}
+		v, err := p.expect(KindIdent, "in enum variant list")
+		if err != nil {
+			return nil, err
+		}
+		variants = append(variants, VariantDecl{Name: v.Value, Pos: v.Pos})
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(KindRBrace, "to close enum declaration"); err != nil {
+		return nil, err
+	}
+	return &EnumDecl{Pos: kw.Pos, Name: nameTok.Value, Variants: variants}, nil
+}
+
+// parseMatchStmt handles `match expr { arm; arm; ... }`. Each arm is
+// `pattern [if guard] => block-or-single-statement`. Arm separator is
+// NEWLINE — we lift parenDepth across the brace region so newlines inside
+// pattern parens (e.g. multi-line tuple patterns) stay transparent, then
+// drop back to NEWLINE-significant mode at the arm-separator level by
+// peeking at the raw stream when we need to.
+func (p *parser) parseMatchStmt() (Stmt, error) {
+	kw := p.advance() // consume `match`
+	subject, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(KindLBrace, "in match"); err != nil {
+		return nil, err
+	}
+
+	stmt := &MatchStmt{Pos: kw.Pos, Subject: subject}
+	for {
+		// Skip blank lines between arms.
+		p.skipNewlines()
+		if p.peekRaw().Kind == KindRBrace {
+			p.pos++ // consume `}`
+			return stmt, nil
+		}
+		if p.peekRaw().Kind == KindEOF {
+			return nil, &ParseError{
+				Pos:        kw.Pos,
+				Message:    "unterminated match (missing '}')",
+				Incomplete: true,
+			}
+		}
+		arm, err := p.parseMatchArm()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Arms = append(stmt.Arms, arm)
+		// Arm separator: NEWLINE or `}`. The `}` case loops back to detect
+		// and consume above.
+		switch p.peekRaw().Kind {
+		case KindNewline:
+			p.pos++
+		case KindRBrace, KindEOF:
+			// Loop iteration handles both cases.
+		default:
+			t := p.peekRaw()
+			return nil, errorAtTok(t, "expected newline or '}' between match arms, got %s", t.Kind)
+		}
+	}
+}
+
+// parseMatchArm reads one arm: `pattern [if guard] => body`. If body is a
+// brace block we consume it directly; if it's a single statement we wrap it
+// in a one-element Block so downstream consumers always see a Block.
+func (p *parser) parseMatchArm() (MatchArm, error) {
+	armPos := p.peek().Pos
+	pat, err := p.parsePattern()
+	if err != nil {
+		return MatchArm{}, err
+	}
+	var guard Expr
+	if p.peek().Kind == KindIf {
+		p.advance()
+		g, err := p.parseExpr()
+		if err != nil {
+			return MatchArm{}, err
+		}
+		guard = g
+	}
+	if _, err := p.expect(KindFatArrow, "in match arm"); err != nil {
+		return MatchArm{}, err
+	}
+	// Body shape: block or single statement.
+	if p.peek().Kind == KindLBrace {
+		body, err := p.parseBlock("match arm body")
+		if err != nil {
+			return MatchArm{}, err
+		}
+		return MatchArm{Pos: armPos, Pattern: pat, Guard: guard, Body: body}, nil
+	}
+	// Single-statement body. Build a synthetic one-element Block so callers
+	// don't have to special-case the shape. The synthetic block carries the
+	// single statement's own position so diagnostics stay precise.
+	stmtPos := p.peek().Pos
+	stmt, err := p.parseStatement()
+	if err != nil {
+		return MatchArm{}, err
+	}
+	body := &Block{Pos: stmtPos, Statements: []Stmt{stmt}}
+	return MatchArm{Pos: armPos, Pattern: pat, Guard: guard, Body: body}, nil
+}
+
 // parseIfStmt handles `if … {} [elif … {}]* [else {}]`.
 func (p *parser) parseIfStmt() (Stmt, error) {
 	kw := p.advance() // consume `if`
@@ -432,7 +772,7 @@ func (p *parser) parseIfStmt() (Stmt, error) {
 	return stmt, nil
 }
 
-// parseForStmt handles all three for-loop shapes.
+// parseForStmt handles all four for-loop shapes.
 func (p *parser) parseForStmt() (Stmt, error) {
 	kw := p.advance() // consume `for`
 
@@ -446,14 +786,16 @@ func (p *parser) parseForStmt() (Stmt, error) {
 	}
 
 	// Disambiguate `for x in ...` from `for cond { ... }` by trying the
-	// range head first when the next two tokens look like one. This is a
-	// LL(2) check, which the grammar can absorb without a backtrack.
+	// `IDENT in` head first. This is a LL(2) check, which the grammar can
+	// absorb without a backtrack. Once we see `IDENT in`, the head expr is
+	// either a range (`expr..expr` / `expr..=expr`) or a list-typed expr;
+	// parseForInHeader picks the right shape after parsing the start expr.
 	if p.peek().Kind == KindIdent {
 		// Look two ahead via the raw tokens. We can't use peek alone because
 		// peek is only one-token lookahead; we want to know if the next
 		// non-newline token after the ident is `in`.
 		if k := p.peekKindAfterIdent(); k == KindIn {
-			return p.parseForRange(kw.Pos)
+			return p.parseForInHeader(kw.Pos)
 		}
 	}
 
@@ -483,51 +825,70 @@ func (p *parser) peekKindAfterIdent() Kind {
 	return p.tokens[i].Kind
 }
 
-// parseForRange handles `for IDENT in EXPR..EXPR { ... }` /
-// `for IDENT in EXPR..=EXPR { ... }`. RangeExprs are produced ONLY here at
-// v0.1 — the general expression parser refuses to construct them.
-func (p *parser) parseForRange(forPos Position) (Stmt, error) {
+// parseForInHeader handles both v0.1's range form and v0.2's list-iter form:
+//
+//   - `for IDENT in EXPR..EXPR { ... }` / `for IDENT in EXPR..=EXPR { ... }`
+//     — range iteration. RangeExprs are produced ONLY here — the general
+//     expression parser refuses to construct them.
+//   - `for IDENT in EXPR { ... }` — iterate over a list-typed expression,
+//     binding IDENT to a deep copy of each element on each iteration.
+//
+// We parse the head expression with parseOr (not parseExpr) so the
+// trailing-range guard inside parseExpr doesn't fire on the `..` / `..=` we
+// might be about to consume. After the start expression we peek: if `..` or
+// `..=` follows we're in the range form; otherwise we treat the expression
+// as the iterable. typeck owns the "iterable must be a list" rule — the
+// parser stays liberal so future iterables (str, etc.) need only a typeck
+// extension.
+func (p *parser) parseForInHeader(forPos Position) (Stmt, error) {
 	nameTok, _ := p.expect(KindIdent, "in 'for' header") // already known ident
 	if _, err := p.expect(KindIn, "in 'for' header"); err != nil {
 		return nil, err
 	}
 	// parseOr (not parseExpr) so the trailing-range guard in parseExpr
-	// doesn't fire on the `..` / `..=` we are about to consume.
-	start, err := p.parseOr()
+	// doesn't fire on the `..` / `..=` we may be about to consume.
+	headExpr, err := p.parseOr()
 	if err != nil {
 		return nil, err
 	}
-	rangeTok := p.peek()
-	var inclusive bool
-	switch rangeTok.Kind {
-	case KindRange:
-		inclusive = false
-	case KindRangeEq:
-		inclusive = true
-	default:
-		return nil, errorAtTok(rangeTok, "expected '..' or '..=' in 'for' range, got %s", rangeTok.Kind)
+	switch p.peek().Kind {
+	case KindRange, KindRangeEq:
+		rangeTok := p.advance()
+		inclusive := rangeTok.Kind == KindRangeEq
+		end, err := p.parseOr()
+		if err != nil {
+			return nil, err
+		}
+		body, err := p.parseBlock("'for' body")
+		if err != nil {
+			return nil, err
+		}
+		return &ForStmt{
+			Pos:    forPos,
+			Kind:   ForRange,
+			Var:    nameTok.Value,
+			VarPos: nameTok.Pos,
+			Range: &RangeExpr{
+				Pos:       rangeTok.Pos,
+				Start:     headExpr,
+				End:       end,
+				Inclusive: inclusive,
+			},
+			Body: body,
+		}, nil
 	}
-	p.advance()
-	end, err := p.parseOr()
-	if err != nil {
-		return nil, err
-	}
+	// No range follows: list-iter form.
 	body, err := p.parseBlock("'for' body")
 	if err != nil {
 		return nil, err
 	}
 	return &ForStmt{
 		Pos:    forPos,
-		Kind:   ForRange,
+		Kind:   ForIter,
 		Var:    nameTok.Value,
 		VarPos: nameTok.Pos,
-		Range: &RangeExpr{
-			Pos:       rangeTok.Pos,
-			Start:     start,
-			End:       end,
-			Inclusive: inclusive,
-		},
-		Body: body,
+		Iter:   headExpr,
+		Body:   body,
 	}, nil
 }
 
@@ -988,38 +1349,142 @@ func (p *parser) parseUnary() (Expr, error) {
 	return p.parsePostfix()
 }
 
-// Level 12: postfix call (left-assoc).
+// Level 12: postfix call / index / slice / field access (left-assoc). The
+// chain is built left-to-right so `xs[0].field(arg)` walks
+// CallExpr ← FieldAccessExpr ← IndexExpr ← Ident.
 func (p *parser) parsePostfix() (Expr, error) {
 	expr, err := p.parseAtom()
 	if err != nil {
 		return nil, err
 	}
-	for p.peek().Kind == KindLParen {
-		callPos := p.peek().Pos
-		if _, err := p.expectParen(KindLParen, "in call"); err != nil {
-			return nil, err
-		}
-		var args []Expr
-		if p.peek().Kind != KindRParen {
-			for {
-				a, err := p.parseExpr()
-				if err != nil {
-					return nil, err
-				}
-				args = append(args, a)
-				if p.peek().Kind == KindComma {
-					p.advance()
-					continue
-				}
-				break
+	for {
+		switch p.peek().Kind {
+		case KindLParen:
+			callPos := p.peek().Pos
+			if _, err := p.expectParen(KindLParen, "in call"); err != nil {
+				return nil, err
 			}
+			var args []Expr
+			if p.peek().Kind != KindRParen {
+				for {
+					a, err := p.parseExpr()
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, a)
+					if p.peek().Kind == KindComma {
+						p.advance()
+						continue
+					}
+					break
+				}
+			}
+			if _, err := p.expectParen(KindRParen, "in call"); err != nil {
+				return nil, err
+			}
+			expr = &CallExpr{Pos: callPos, Callee: expr, Args: args}
+		case KindLBracket:
+			next, err := p.parseIndexOrSlice(expr)
+			if err != nil {
+				return nil, err
+			}
+			expr = next
+		case KindDot:
+			dotTok := p.advance()
+			nameTok, err := p.expect(KindIdent, "after '.'")
+			if err != nil {
+				return nil, err
+			}
+			expr = &FieldAccessExpr{
+				Pos:       dotTok.Pos,
+				Receiver:  expr,
+				FieldName: nameTok.Value,
+				NamePos:   nameTok.Pos,
+			}
+		default:
+			return expr, nil
 		}
-		if _, err := p.expectParen(KindRParen, "in call"); err != nil {
+	}
+}
+
+// parseIndexOrSlice handles `[ ... ]` after a postfix receiver. Inside the
+// brackets `..` and `..=` are admitted (and ONLY here at v0.2 outside the
+// for-in head), giving slicing its own context-sensitive corner of the
+// grammar without loosening the global ban on free-standing ranges.
+func (p *parser) parseIndexOrSlice(receiver Expr) (Expr, error) {
+	open, err := p.expectParen(KindLBracket, "in index/slice")
+	if err != nil {
+		return nil, err
+	}
+
+	// `[..]`, `[..b]`, `[..=b]` — slice with no low bound.
+	if k := p.peek().Kind; k == KindRange || k == KindRangeEq {
+		rangeTok := p.advance()
+		inclusive := rangeTok.Kind == KindRangeEq
+		var high Expr
+		if p.peek().Kind != KindRBracket {
+			h, err := p.parseOr()
+			if err != nil {
+				return nil, err
+			}
+			high = h
+		} else if inclusive {
+			// `[..=]` is meaningless — `..=` requires an upper bound.
+			return nil, errorAt(rangeTok.Pos, "'..=' requires an upper bound in slice expression")
+		}
+		if _, err := p.expectParen(KindRBracket, "to close slice"); err != nil {
 			return nil, err
 		}
-		expr = &CallExpr{Pos: callPos, Callee: expr, Args: args}
+		return &SliceExpr{
+			Pos:       open.Pos,
+			Receiver:  receiver,
+			Low:       nil,
+			High:      high,
+			Inclusive: inclusive,
+		}, nil
 	}
-	return expr, nil
+
+	// `[expr ...]`. We parse the first expression with parseOr (not parseExpr)
+	// so the trailing-range guard inside parseExpr does not fire on the `..`
+	// / `..=` we may be about to consume.
+	first, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	switch p.peek().Kind {
+	case KindRBracket:
+		// Plain index. Use expectParen to keep parenDepth bookkeeping
+		// symmetric with the opening `[`.
+		if _, err := p.expectParen(KindRBracket, "to close index"); err != nil {
+			return nil, err
+		}
+		return &IndexExpr{Pos: open.Pos, Receiver: receiver, Index: first}, nil
+	case KindRange, KindRangeEq:
+		rangeTok := p.advance()
+		inclusive := rangeTok.Kind == KindRangeEq
+		var high Expr
+		if p.peek().Kind != KindRBracket {
+			h, err := p.parseOr()
+			if err != nil {
+				return nil, err
+			}
+			high = h
+		} else if inclusive {
+			return nil, errorAt(rangeTok.Pos, "'..=' requires an upper bound in slice expression")
+		}
+		if _, err := p.expectParen(KindRBracket, "to close slice"); err != nil {
+			return nil, err
+		}
+		return &SliceExpr{
+			Pos:       open.Pos,
+			Receiver:  receiver,
+			Low:       first,
+			High:      high,
+			Inclusive: inclusive,
+		}, nil
+	}
+	t := p.peek()
+	return nil, errorAtTok(t, "expected ']' or '..' in index/slice, got %s", t.Kind)
 }
 
 // Level 13: atoms — literals, identifiers, parenthesised expressions.
@@ -1047,24 +1512,345 @@ func (p *parser) parseAtom() (Expr, error) {
 		return &BoolLit{Pos: t.Pos, Value: false}, nil
 	case KindIdent:
 		p.advance()
+		// Struct-literal disambiguation (v0.2). `Ident '{' ...` is a struct
+		// literal only when the inside is empty (`{}`) or starts with
+		// `IDENT ':'`. Otherwise the `{` belongs to the surrounding
+		// statement (an `if`/`for`/`match` body) and we leave it alone.
+		if p.peek().Kind == KindLBrace && p.looksLikeStructLitBody() {
+			return p.parseStructLitBody(t.Pos, t.Value)
+		}
 		return &IdentExpr{Pos: t.Pos, Name: t.Value}, nil
-	case KindLParen:
-		open := t
-		if _, err := p.expectParen(KindLParen, ""); err != nil {
-			return nil, err
-		}
-		inner, err := p.parseExpr()
+	case KindRune:
+		// Token.Value is the codepoint as a decimal string; the lexer guards
+		// it. We parse here so downstream consumers don't have to. Overflow
+		// of an int64 from a 21-bit Unicode codepoint is impossible.
+		p.advance()
+		v, err := strconv.ParseInt(t.Value, 10, 64)
 		if err != nil {
-			return nil, err
+			return nil, errorAt(t.Pos, "invalid rune codepoint: %v", err)
 		}
-		if _, err := p.expectParen(KindRParen, "to close '('"); err != nil {
-			return nil, err
-		}
-		return &ParenExpr{Pos: open.Pos, Inner: inner}, nil
+		return &RuneLit{Pos: t.Pos, Value: v}, nil
+	case KindLParen:
+		return p.parseTupleOrParen()
+	case KindLBracket:
+		return p.parseListLit()
 	case KindRange, KindRangeEq:
-		return nil, errorAt(t.Pos, "range expressions are only allowed in for-in heads at v0.1")
+		return nil, errorAt(t.Pos, "range expressions are only allowed in for-in heads or slice brackets")
 	case KindBang:
 		return nil, errorAt(t.Pos, "use 'not' for boolean negation; '!' is reserved")
 	}
 	return nil, errorAtTok(t, "expected expression, got %s", t.Kind)
+}
+
+// parseTupleOrParen handles `(` after a postfix-position dispatch. We parse
+// the first expression; if a comma follows we collect the rest as a tuple
+// literal, otherwise we close as a ParenExpr. PLAN.md: 1-tuples are not
+// admitted at v0.2, so a single `(e,)` form produces a parse error.
+func (p *parser) parseTupleOrParen() (Expr, error) {
+	open := p.peek()
+	if _, err := p.expectParen(KindLParen, ""); err != nil {
+		return nil, err
+	}
+	first, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == KindComma {
+		// Tuple literal: collect remaining elements (≥ 1 more makes ≥ 2 total).
+		elements := []Expr{first}
+		for p.peek().Kind == KindComma {
+			p.advance()
+			// Trailing comma allowed: `(a, b,)`.
+			if p.peek().Kind == KindRParen {
+				break
+			}
+			e, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, e)
+		}
+		if _, err := p.expectParen(KindRParen, "to close tuple literal"); err != nil {
+			return nil, err
+		}
+		// PLAN: at least 2 elements. The collection above guarantees ≥ 2 if
+		// at least one extra element was parsed; the trailing-comma case
+		// `(a,)` produces exactly 1 element.
+		if len(elements) < 2 {
+			return nil, errorAt(open.Pos, "tuple literal requires at least 2 elements (use parentheses for grouping)")
+		}
+		return &TupleLit{Pos: open.Pos, Elements: elements}, nil
+	}
+	if _, err := p.expectParen(KindRParen, "to close '('"); err != nil {
+		return nil, err
+	}
+	return &ParenExpr{Pos: open.Pos, Inner: first}, nil
+}
+
+// parseListLit handles `[` in expression position. Empty list is allowed at
+// the parser level; typeck rejects empty lists outside annotated contexts.
+func (p *parser) parseListLit() (Expr, error) {
+	open, err := p.expectParen(KindLBracket, "in list literal")
+	if err != nil {
+		return nil, err
+	}
+	var elements []Expr
+	for {
+		if p.peek().Kind == KindRBracket {
+			break
+		}
+		e, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, e)
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRBracket, "to close list literal"); err != nil {
+		return nil, err
+	}
+	return &ListLit{Pos: open.Pos, Elements: elements}, nil
+}
+
+// looksLikeStructLitBody peeks past the `{` (without consuming) to decide
+// whether `Ident { ... }` is a struct literal or a brace block (i.e. the
+// caller's statement body). Rule: empty `{}` OR opens with `IDENT ':'`
+// where `:` is not `:=` (a walrus would mean the inside is a let-decl,
+// which structurally cannot happen in expression position but happens
+// inside an `if x { let y := ... }` body).
+//
+// The function inspects raw token positions and never advances. We treat
+// NEWLINEs as transparent inside the brace because struct literals can
+// legitimately span lines.
+func (p *parser) looksLikeStructLitBody() bool {
+	// p.pos currently sits on `{`. Walk forward.
+	i := p.pos + 1
+	skipNL := func() {
+		for i < len(p.tokens) && p.tokens[i].Kind == KindNewline {
+			i++
+		}
+	}
+	skipNL()
+	if i >= len(p.tokens) {
+		return false
+	}
+	if p.tokens[i].Kind == KindRBrace {
+		return true // empty struct literal `Name {}`
+	}
+	if p.tokens[i].Kind != KindIdent {
+		return false
+	}
+	i++
+	skipNL()
+	if i >= len(p.tokens) {
+		return false
+	}
+	// `:` (struct field) yes; `:=` (walrus) no.
+	return p.tokens[i].Kind == KindColon
+}
+
+// parseStructLitBody consumes the `{ field: value, ... }` tail of a struct
+// literal. The opening `{` is at p.peek(); typeName is the already-consumed
+// type identifier.
+func (p *parser) parseStructLitBody(headPos Position, typeName string) (Expr, error) {
+	open, err := p.expect(KindLBrace, "in struct literal")
+	if err != nil {
+		return nil, err
+	}
+	// Brace region behaves like a paren region for NEWLINE skipping.
+	p.parenDepth++
+	defer func() { p.parenDepth-- }()
+	_ = open
+
+	var fields []FieldInit
+	for {
+		if p.peek().Kind == KindRBrace {
+			break
+		}
+		nameT, err := p.expect(KindIdent, "in struct literal field list")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(KindColon, "after struct literal field name"); err != nil {
+			return nil, err
+		}
+		val, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, FieldInit{
+			Name:  nameT.Value,
+			Value: val,
+			Pos:   nameT.Pos,
+		})
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(KindRBrace, "to close struct literal"); err != nil {
+		return nil, err
+	}
+	return &StructLit{Pos: headPos, TypeName: typeName, Fields: fields}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Match patterns.
+// ---------------------------------------------------------------------------
+
+// parsePattern is the entry point for the pattern grammar. Top-level
+// dispatch is by the first token: `_` is wildcard, `(` opens a tuple
+// pattern, an IDENT is followed by lookahead to disambiguate Bind vs
+// Struct vs Enum, and any literal kind starts a literal pattern.
+//
+// NEWLINE significance inside patterns is handled the same way as inside
+// expressions: parens/brackets bump parenDepth and silence NEWLINEs, and
+// outside those the pattern is a single line by construction (the arm
+// parser does not intentionally span newlines on a flat pattern).
+func (p *parser) parsePattern() (Pattern, error) {
+	t := p.peek()
+	switch t.Kind {
+	case KindIdent:
+		if t.Value == "_" {
+			p.advance()
+			return &WildcardPat{Pos: t.Pos}, nil
+		}
+		// IDENT alone, IDENT '{' — struct, IDENT '.' IDENT — enum, otherwise bind.
+		p.advance()
+		switch p.peek().Kind {
+		case KindLBrace:
+			return p.parseStructPatBody(t.Pos, t.Value)
+		case KindDot:
+			p.advance()
+			vT, err := p.expect(KindIdent, "in enum pattern after '.'")
+			if err != nil {
+				return nil, err
+			}
+			return &EnumPat{Pos: t.Pos, TypeName: t.Value, VariantName: vT.Value}, nil
+		}
+		return &BindPat{Pos: t.Pos, Name: t.Value}, nil
+	case KindLParen:
+		return p.parseTuplePat()
+	case KindMinus:
+		// Optional unary `-` for numeric literal patterns.
+		minus := p.advance()
+		next := p.peek()
+		if next.Kind != KindInt && next.Kind != KindFloat {
+			return nil, errorAt(minus.Pos, "unary '-' in a pattern must precede a numeric literal, got %s", next.Kind)
+		}
+		litExpr, err := p.parseAtom()
+		if err != nil {
+			return nil, err
+		}
+		return &LitPat{
+			Pos: minus.Pos,
+			Lit: &UnaryExpr{Pos: minus.Pos, Op: UnaryNeg, Operand: litExpr},
+		}, nil
+	case KindInt, KindFloat, KindString, KindTrue, KindFalse, KindRune:
+		// Literal patterns. We re-use parseAtom to read the literal so we
+		// pick up the same Token.Value parsing as expressions do.
+		litExpr, err := p.parseAtom()
+		if err != nil {
+			return nil, err
+		}
+		return &LitPat{Pos: t.Pos, Lit: litExpr}, nil
+	}
+	return nil, errorAtTok(t, "expected pattern, got %s", t.Kind)
+}
+
+// parseTuplePat handles `( pat, pat, ... )`. PLAN.md: ≥ 2 elements are
+// required; a single-paren pattern is a parse error rather than silent
+// grouping (patterns don't have a grouping operator at v0.2).
+func (p *parser) parseTuplePat() (Pattern, error) {
+	open, err := p.expectParen(KindLParen, "in tuple pattern")
+	if err != nil {
+		return nil, err
+	}
+	var elements []Pattern
+	for {
+		if p.peek().Kind == KindRParen {
+			break
+		}
+		pat, err := p.parsePattern()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, pat)
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close tuple pattern"); err != nil {
+		return nil, err
+	}
+	if len(elements) < 2 {
+		return nil, errorAt(open.Pos, "tuple pattern requires at least 2 elements")
+	}
+	return &TuplePat{Pos: open.Pos, Elements: elements}, nil
+}
+
+// parseStructPatBody consumes the `{ field: pat, field, ..., .. }` tail of
+// a struct pattern. The opening `{` has been peeked but not consumed; the
+// type name has already been parsed.
+//
+// Shorthand: `Point { x, y }` desugars at parse time to
+// `Point { x: BindPat{x}, y: BindPat{y} }` so downstream consumers walk a
+// uniform shape. PLAN.md §10 (acted-upon) pins this behaviour.
+func (p *parser) parseStructPatBody(headPos Position, typeName string) (Pattern, error) {
+	if _, err := p.expect(KindLBrace, "in struct pattern"); err != nil {
+		return nil, err
+	}
+	p.parenDepth++
+	defer func() { p.parenDepth-- }()
+
+	var fields []StructPatField
+	rest := false
+	for {
+		if p.peek().Kind == KindRBrace {
+			break
+		}
+		// `..` rest marker. Must be the last token before `}`.
+		if p.peek().Kind == KindRange {
+			rest = true
+			p.advance()
+			break
+		}
+		nameT, err := p.expect(KindIdent, "in struct pattern field list")
+		if err != nil {
+			return nil, err
+		}
+		var sub Pattern
+		if p.peek().Kind == KindColon {
+			p.advance()
+			s, err := p.parsePattern()
+			if err != nil {
+				return nil, err
+			}
+			sub = s
+		} else {
+			// Shorthand: bind to a same-named local.
+			sub = &BindPat{Pos: nameT.Pos, Name: nameT.Value}
+		}
+		fields = append(fields, StructPatField{
+			Name:    nameT.Value,
+			Pattern: sub,
+			Pos:     nameT.Pos,
+		})
+		if p.peek().Kind == KindComma {
+			p.advance()
+			continue
+		}
+		break
+	}
+	if _, err := p.expect(KindRBrace, "to close struct pattern"); err != nil {
+		return nil, err
+	}
+	return &StructPat{Pos: headPos, TypeName: typeName, Fields: fields, Rest: rest}, nil
 }

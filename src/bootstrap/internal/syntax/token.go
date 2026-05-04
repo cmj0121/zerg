@@ -108,6 +108,20 @@ const (
 	KindCaretEq  // ^=
 	KindShlEq    // <<=
 	KindShrEq    // >>=
+
+	// KindRune is a single-quoted character literal. Token.Value carries the
+	// Unicode code-point of the contained rune as a decimal string (e.g.
+	// `'A'` -> "65"). Storing the codepoint as a string keeps Token.Value
+	// uniformly typed; typeck parses it back via strconv.ParseInt and decides
+	// whether the literal is a `byte` (ASCII, code-point < 128) or a `rune`
+	// (anything else).
+	KindRune
+
+	// --- v0.2 composite-data keywords and punctuation.
+	KindStruct   // struct
+	KindEnum     // enum
+	KindMatch    // match
+	KindFatArrow // =>
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -130,6 +144,16 @@ func (k Kind) String() string {
 		return "integer literal"
 	case KindFloat:
 		return "float literal"
+	case KindRune:
+		return "rune literal"
+	case KindStruct:
+		return "'struct'"
+	case KindEnum:
+		return "'enum'"
+	case KindMatch:
+		return "'match'"
+	case KindFatArrow:
+		return "'=>'"
 	case KindAnd:
 		return "'and'"
 	case KindBreak:

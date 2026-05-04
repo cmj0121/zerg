@@ -1,0 +1,9 @@
+let xs := [1, 2, 3, 4]
+let ys := xs
+let zs := xs[1..3]
+print xs
+print ys
+print zs
+print len(xs)
+print len(ys)
+print len(zs)

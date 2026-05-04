@@ -1,0 +1,8 @@
+struct Inner { v: int }
+struct Outer { inner: Inner, label: str }
+
+let o := Outer { inner: Inner { v: 42 }, label: "hello" }
+print o
+print o.inner
+print o.inner.v
+print o.label

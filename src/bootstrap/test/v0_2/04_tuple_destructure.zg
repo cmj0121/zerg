@@ -1,0 +1,10 @@
+let pair := (3, 4)
+let (a, b) := pair
+print a
+print b
+print a + b
+
+let (x, y, z) := (10, 20, 30)
+print x
+print y
+print z

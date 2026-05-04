@@ -597,10 +597,141 @@ func TestLexKindStringHumanReadable(t *testing.T) {
 		{KindFloat, "float literal"},
 		{KindInt, "integer literal"},
 		{KindFloorDiv, "'//'"},
+		{KindRune, "rune literal"},
 	}
 	for _, c := range cases {
 		if got := c.k.String(); got != c.want {
 			t.Errorf("Kind(%d).String() = %q, want %q", c.k, got, c.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v0.2 lexer tests — rune (single-quoted character) literals.
+//
+// The lexer emits KindRune for every well-formed rune literal and stores the
+// Unicode code-point as a decimal string in Token.Value. The byte-vs-rune
+// classification is typeck's job (Unit 2), so the lexer never errors on
+// non-ASCII; it only errors when the literal is empty, multi-rune, or
+// malformed.
+// ---------------------------------------------------------------------------
+
+func TestLexRuneLiterals(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string // decimal codepoint
+	}{
+		{`'A'`, "65"},
+		{`'z'`, "122"},
+		{`'0'`, "48"},
+		{`' '`, "32"},
+		{`'\n'`, "10"},
+		{`'\t'`, "9"},
+		{`'\r'`, "13"},
+		{`'\\'`, "92"},
+		{`'\''`, "39"},
+		{`'\"'`, "34"},
+		{`'\0'`, "0"},
+		{`'漢'`, "28450"},
+		{`'😀'`, "128512"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.src, func(t *testing.T) {
+			tokens, err := Lex([]byte(c.src))
+			if err != nil {
+				t.Fatalf("Lex(%q): %v", c.src, err)
+			}
+			if len(tokens) != 2 {
+				t.Fatalf("token count = %d, want 2: %#v", len(tokens), tokens)
+			}
+			if tokens[0].Kind != KindRune {
+				t.Errorf("kind = %v, want KindRune", tokens[0].Kind)
+			}
+			if tokens[0].Value != c.want {
+				t.Errorf("value = %q, want %q", tokens[0].Value, c.want)
+			}
+		})
+	}
+}
+
+func TestLexRuneRejectsBadInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		wantMsg string
+	}{
+		{"empty", `''`, "empty rune literal"},
+		{"two ascii", `'AB'`, "rune literal must contain exactly one character"},
+		{"ascii then multibyte", `'A漢'`, "rune literal must contain exactly one character"},
+		{"unterminated eof", `'A`, "unterminated rune literal"},
+		{"unterminated newline", "'\n", "unterminated rune literal"},
+		{"unknown escape", `'\q'`, "unknown escape"},
+		{"unterminated escape", `'\`, "unterminated escape"},
+		{"open quote only", `'`, "unterminated rune literal"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Lex([]byte(c.src))
+			if err == nil {
+				t.Fatalf("expected lex error for %q, got nil", c.src)
+			}
+			le, ok := err.(*LexError)
+			if !ok {
+				t.Fatalf("error is %T, want *LexError: %v", err, err)
+			}
+			if !strings.Contains(le.Message, c.wantMsg) {
+				t.Errorf("message = %q, want it to contain %q", le.Message, c.wantMsg)
+			}
+		})
+	}
+}
+
+func TestLexRunePosition(t *testing.T) {
+	// The Pos must point at the opening quote, mirroring how strings work.
+	tokens, err := Lex([]byte("  'A'"))
+	if err != nil {
+		t.Fatalf("Lex: %v", err)
+	}
+	if tokens[0].Kind != KindRune {
+		t.Fatalf("kind = %v, want KindRune", tokens[0].Kind)
+	}
+	if tokens[0].Pos.Line != 1 || tokens[0].Pos.Column != 3 {
+		t.Errorf("pos = %s, want 1:3", tokens[0].Pos)
+	}
+}
+
+func TestLexRuneInsideStatementShape(t *testing.T) {
+	// Ensure rune tokens compose with surrounding tokens correctly:
+	// `let c := 'A'` → LET IDENT WALRUS RUNE.
+	got := kindsOf(t, "let c := 'A'")
+	want := []Kind{KindLet, KindIdent, KindWalrus, KindRune}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("token %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLexCommentWithSingleQuoteIsStillComment(t *testing.T) {
+	// A stray `'` inside a `# …` comment must not start a rune literal —
+	// comments still consume to end of line.
+	tokens, err := Lex([]byte("nop # don't lex me as a rune\nnop\n"))
+	if err != nil {
+		t.Fatalf("Lex: %v", err)
+	}
+	// Expect: nop NEWLINE nop NEWLINE EOF.
+	wantKinds := []Kind{KindNop, KindNewline, KindNop, KindNewline, KindEOF}
+	if len(tokens) != len(wantKinds) {
+		t.Fatalf("got %d tokens (%v), want %d", len(tokens), tokens, len(wantKinds))
+	}
+	for i, want := range wantKinds {
+		if tokens[i].Kind != want {
+			t.Errorf("token %d = %v, want %v", i, tokens[i].Kind, want)
 		}
 	}
 }

@@ -1,0 +1,8 @@
+enum Color { Red, Green, Blue }
+
+let c := Color.Blue
+match c {
+  Color.Red => print "red"
+  Color.Green => print "green"
+}
+print "unreachable"

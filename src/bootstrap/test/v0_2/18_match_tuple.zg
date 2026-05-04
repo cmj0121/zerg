@@ -1,0 +1,11 @@
+let pair := (3, 4)
+match pair {
+  (0, 0) => print "origin"
+  (a, b) => print a + b
+}
+
+let other := (0, 0)
+match other {
+  (0, 0) => print "origin"
+  (a, b) => print a + b
+}

@@ -1,4 +1,4 @@
-// Package repl is the interactive read-eval-print loop for v0.1.
+// Package repl is the interactive read-eval-print loop.
 //
 // Input handling uses the *try-parse* strategy. Lines are accumulated into a
 // buffer; after each line we attempt to parse the buffer. A successful parse
@@ -10,8 +10,8 @@
 // Persistent state across prompts is achieved by re-parsing and re-running
 // the entire accumulated program from scratch each turn, discarding output
 // produced by previously executed statements. This is wasteful but trivially
-// correct, and v0.1 REPL sessions are short. Switching to an incremental
-// interpreter is a v0.2+ concern.
+// correct, and REPL sessions are short. Switching to an incremental
+// interpreter is a future concern.
 package repl
 
 import (
@@ -25,10 +25,10 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.1 — accepts the v0.1 procedural core\n" +
+const banner = "Zerg REPL v0.2 — accepts the v0.2 procedural core plus composite data\n" +
 	"Type :exit to quit, :help for syntax\n"
 
-const helpText = "Statements: let/mut/const, fn, if/elif/else, for, return/break/continue, print. Run :exit to quit.\n"
+const helpText = "Statements: let/mut/const, fn, struct/enum, if/elif/else, for, match, return/break/continue, print. Run :exit to quit.\n"
 
 const (
 	primaryPrompt      = "zerg> "

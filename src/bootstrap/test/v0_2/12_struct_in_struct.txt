@@ -1,0 +1,4 @@
+Outer { inner: Inner { v: 42 }, label: hello }
+Inner { v: 42 }
+42
+hello

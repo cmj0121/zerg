@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
@@ -54,9 +55,18 @@ func Run(prog *syntax.Program, w io.Writer) error {
 // fns; variables live on a stack of frames. Each call site, each block, and
 // each for-range iteration push a fresh frame. A frame holds the names
 // introduced inside its scope only; lookup walks toward the root.
+//
+// enums maps every enum name declared at top level to its canonical *Type,
+// so FieldAccessExpr can disambiguate `Color.Red` (enum variant access) from
+// `p.x` (struct field access) by checking the receiver-name against this
+// table. typeck has already validated each enum's variant set; we just
+// mirror the lookup structure here so the runtime path can produce a
+// variant Value without re-walking the AST.
 type interp struct {
 	w   io.Writer
 	fns map[string]*syntax.FnDecl
+
+	enums map[string]*syntax.Type
 
 	// stack[0] is the top-level frame; the active frame is stack[len(stack)-1].
 	// We keep the slice rather than a parent-pointer linked list because
@@ -77,10 +87,21 @@ func newFrame() *frame { return &frame{vars: map[string]*Value{}} }
 // Type-check has already validated function uniqueness, so a duplicate name
 // here would be an internal error.
 func newInterp(prog *syntax.Program, w io.Writer) *interp {
-	in := &interp{w: w, fns: map[string]*syntax.FnDecl{}}
+	in := &interp{
+		w:     w,
+		fns:   map[string]*syntax.FnDecl{},
+		enums: map[string]*syntax.Type{},
+	}
 	for _, stmt := range prog.Statements {
-		if fn, ok := stmt.(*syntax.FnDecl); ok {
-			in.fns[fn.Name] = fn
+		switch s := stmt.(type) {
+		case *syntax.FnDecl:
+			in.fns[s.Name] = s
+		case *syntax.EnumDecl:
+			variants := make([]string, len(s.Variants))
+			for i, v := range s.Variants {
+				variants[i] = v.Name
+			}
+			in.enums[s.Name] = syntax.NewEnumType(s.Name, variants)
 		}
 	}
 	in.pushFrame()
@@ -149,13 +170,20 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 	case *syntax.PrintStmt:
 		return in.execPrint(s)
 	case *syntax.LetStmt:
+		if s.Tuple != nil {
+			return in.execTupleDestructure(s.Tuple, s.Value)
+		}
 		return in.execDecl(s.Name, s.Value)
 	case *syntax.MutStmt:
+		if s.Tuple != nil {
+			return in.execTupleDestructure(s.Tuple, s.Value)
+		}
 		return in.execDecl(s.Name, s.Value)
 	case *syntax.ConstStmt:
 		// At v0.1 a const is just an immutable binding. The type checker has
 		// already enforced that the rhs is a constant expression; runtime
-		// evaluation is the same as let.
+		// evaluation is the same as let. The destructure form is rejected by
+		// typeck so s.Tuple is always nil here.
 		return in.execDecl(s.Name, s.Value)
 	case *syntax.AssignStmt:
 		return in.execAssign(s)
@@ -191,6 +219,15 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		// level walk is handled in Run() by the FnDecl skip. A FnDecl seen
 		// elsewhere is an internal error.
 		return fmt.Errorf("internal: unexpected FnDecl at %s", s.Pos)
+	case *syntax.StructDecl:
+		// Top-level type declarations are registered in newInterp; nothing
+		// to execute at statement-walk time. typeck rejects nested decls.
+		return nil
+	case *syntax.EnumDecl:
+		// Same as StructDecl — registration happens once at interp init.
+		return nil
+	case *syntax.MatchStmt:
+		return in.execMatch(s)
 	}
 	return fmt.Errorf("internal: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -215,7 +252,23 @@ func (in *interp) execPrint(s *syntax.PrintStmt) error {
 
 // formatValue is the print-format spec. C codegen MUST emit the same bytes;
 // see PLAN.md "print format spec (pinned)".
+//
+// v0.2 extensions (PLAN lines 153-160):
+//   - byte: decimal of the unsigned 0..255 value.
+//   - rune: decimal of the Unicode codepoint.
+//   - list[T]: "[ e1, e2, e3 ]" — comma+space between elements; empty list
+//     prints "[]" with no inner spaces.
+//   - tuple: "( e1, e2 )" — same comma+space rule; tuples have ≥ 2 elements
+//     so the empty-pair guard does not apply.
+//   - struct: "Name { field1: e1, field2: e2 }" — declaration field order.
+//   - enum: "Name.VariantName".
+//
+// Inner element formatting recurses through formatValue, so a list of
+// structs prints with the struct format inline.
 func formatValue(v Value) string {
+	if v.Type == nil {
+		return fmt.Sprintf("<unprintable %s>", v.Type)
+	}
 	switch v.Type {
 	case syntax.TInt():
 		return strconv.FormatInt(v.Int, 10)
@@ -228,19 +281,96 @@ func formatValue(v Value) string {
 		return "false"
 	case syntax.TStr():
 		return v.Str
+	case syntax.TByte():
+		// PLAN: decimal of the unsigned value. Token/typeck guarantee
+		// 0 <= v.Int < 128 for byte (ASCII range), but we mask defensively.
+		return strconv.FormatUint(uint64(uint8(v.Int)), 10)
+	case syntax.TRune():
+		return strconv.FormatInt(v.Int, 10)
+	}
+	switch v.Type.Kind {
+	case syntax.TypeList:
+		if len(v.List) == 0 {
+			return "[]"
+		}
+		var b strings.Builder
+		b.WriteString("[ ")
+		for i, e := range v.List {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(formatValue(e))
+		}
+		b.WriteString(" ]")
+		return b.String()
+	case syntax.TypeTuple:
+		var b strings.Builder
+		b.WriteString("( ")
+		for i, e := range v.Tuple {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(formatValue(e))
+		}
+		b.WriteString(" )")
+		return b.String()
+	case syntax.TypeStruct:
+		var b strings.Builder
+		b.WriteString(v.Type.Name)
+		b.WriteString(" { ")
+		for i, f := range v.Type.Fields {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(f.Name)
+			b.WriteString(": ")
+			b.WriteString(formatValue(v.Fields[i]))
+		}
+		b.WriteString(" }")
+		return b.String()
+	case syntax.TypeEnum:
+		return v.Type.Name + "." + v.VariantName
 	}
 	// typeck rejects anything else for `print`; reaching here is an internal
 	// error rather than user-visible.
 	return fmt.Sprintf("<unprintable %s>", v.Type)
 }
 
-// execDecl evaluates the rhs and binds the name in the current frame.
+// execDecl evaluates the rhs and binds the name in the current frame. The
+// value is deep-copied so any composite payload is independent of the source
+// — this is the v0.2 value-semantics rule for lists / tuples / structs.
+// Primitives copy trivially through the same helper; the cost is negligible
+// for small composite shapes the corpus exercises.
 func (in *interp) execDecl(name string, value syntax.Expr) error {
 	v, err := in.evalExpr(value)
 	if err != nil {
 		return err
 	}
-	return in.declare(name, v)
+	return in.declare(name, copyValue(v))
+}
+
+// execTupleDestructure evaluates `let (a, b, ...) := expr` (and the mut
+// form). The RHS must yield a tuple value of matching arity — typeck has
+// already enforced this, so a mismatch here is an internal error rather
+// than user-facing. Each name is bound to a deep copy of the matching
+// element so the new bindings are independent of the source tuple.
+func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr) error {
+	v, err := in.evalExpr(value)
+	if err != nil {
+		return err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeTuple {
+		return fmt.Errorf("internal: destructure rhs is not a tuple at %s", tb.Pos)
+	}
+	if len(v.Tuple) != len(tb.Names) {
+		return fmt.Errorf("internal: destructure arity mismatch at %s: %d names vs %d elements", tb.Pos, len(tb.Names), len(v.Tuple))
+	}
+	for i, name := range tb.Names {
+		if err := in.declare(name, copyValue(v.Tuple[i])); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // execAssign mutates an existing binding. typeck has already checked the
@@ -256,7 +386,7 @@ func (in *interp) execAssign(s *syntax.AssignStmt) error {
 	}
 	switch s.Op {
 	case syntax.AssignSet:
-		*slot = rhs
+		*slot = copyValue(rhs)
 	case syntax.AssignAdd:
 		*slot, err = applyBin(syntax.BinAdd, *slot, rhs)
 	case syntax.AssignSub:
@@ -389,8 +519,54 @@ func (in *interp) execFor(s *syntax.ForStmt) error {
 			}
 		}
 		return nil
+	case syntax.ForIter:
+		// `for x in xs { ... }` — list iteration. Evaluate the iterable
+		// once; deep-copy each element on bind so the loop body sees a
+		// snapshot independent of any later mutation of xs (no list
+		// mutation at v0.2 keeps this academic, but the contract holds).
+		iterV, err := in.evalExpr(s.Iter)
+		if err != nil {
+			return err
+		}
+		if iterV.Type == nil || iterV.Type.Kind != syntax.TypeList {
+			return fmt.Errorf("internal: for-in iterable is not a list at %s", s.Pos)
+		}
+		for _, elem := range iterV.List {
+			cont, err := in.runListIter(s, elem)
+			if err != nil {
+				return err
+			}
+			if !cont {
+				return nil
+			}
+		}
+		return nil
 	}
 	return fmt.Errorf("internal: unknown for kind at %s", s.Pos)
+}
+
+// runListIter executes one iteration of a `for x in xs` body with the loop
+// variable bound to a deep copy of elem. Mirrors runRangeIter's contract:
+// returns (continueLoop, err) where false means break, true means proceed.
+func (in *interp) runListIter(s *syntax.ForStmt, elem Value) (bool, error) {
+	in.pushFrame()
+	defer in.popFrame()
+	if err := in.declare(s.Var, copyValue(elem)); err != nil {
+		return false, err
+	}
+	for _, st := range s.Body.Statements {
+		err := in.execStmt(st)
+		if errors.Is(err, errBreak) {
+			return false, nil
+		}
+		if errors.Is(err, errContinue) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // runRangeIter executes one iteration of a for-in body with the loop var
@@ -479,6 +655,25 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return in.evalBinary(e)
 	case *syntax.CallExpr:
 		return in.evalCall(e)
+	case *syntax.RuneLit:
+		// typeck has classified the literal as TByte or TRune via Type();
+		// reuse that decision so the print path picks the right format.
+		if e.Type() == syntax.TByte() {
+			return byteVal(e.Value), nil
+		}
+		return runeVal(e.Value), nil
+	case *syntax.ListLit:
+		return in.evalListLit(e)
+	case *syntax.TupleLit:
+		return in.evalTupleLit(e)
+	case *syntax.StructLit:
+		return in.evalStructLit(e)
+	case *syntax.IndexExpr:
+		return in.evalIndex(e)
+	case *syntax.SliceExpr:
+		return in.evalSlice(e)
+	case *syntax.FieldAccessExpr:
+		return in.evalFieldAccess(e)
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -652,6 +847,8 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 }
 
 // valueEq is == over typed values. typeck guarantees lv.Type == rv.Type.
+// Byte and rune compare on their integer codepoint — same as the codegen
+// side which lowers to a plain `==` on uint8_t / int32_t.
 func valueEq(lv, rv Value) bool {
 	switch lv.Type {
 	case syntax.TInt():
@@ -662,12 +859,15 @@ func valueEq(lv, rv Value) bool {
 		return lv.Bool == rv.Bool
 	case syntax.TStr():
 		return lv.Str == rv.Str
+	case syntax.TByte(), syntax.TRune():
+		return lv.Int == rv.Int
 	}
 	return false
 }
 
 // valueLT is < over typed values. typeck guarantees same-typed numeric/str
-// operands; bool ordering is rejected at check time.
+// operands; bool ordering is rejected at check time. Byte and rune order on
+// codepoint, mirroring the codegen's int compare.
 func valueLT(lv, rv Value) bool {
 	switch lv.Type {
 	case syntax.TInt():
@@ -676,6 +876,8 @@ func valueLT(lv, rv Value) bool {
 		return lv.Float < rv.Float
 	case syntax.TStr():
 		return lv.Str < rv.Str
+	case syntax.TByte(), syntax.TRune():
+		return lv.Int < rv.Int
 	}
 	return false
 }
@@ -693,10 +895,18 @@ func floatMod(a, b float64) float64 { return math.Mod(a, b) }
 // evalCall executes a function call. typeck has verified the callee is a
 // declared fn and the argument types match. We push a fresh frame, bind
 // parameters, walk the body, and catch errReturn to extract the value.
+//
+// The built-in `len` is dispatched here before the user-fn lookup. typeck
+// has already enforced that `len` accepts exactly one list argument and
+// returns int — at v0.2 it's the only generic intrinsic, so a single-name
+// switch is the right shape; future built-ins will append.
 func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	ident, ok := e.Callee.(*syntax.IdentExpr)
 	if !ok {
 		return Value{}, fmt.Errorf("internal: non-ident callee at %s", e.Pos)
+	}
+	if ident.Name == "len" {
+		return in.evalLen(e)
 	}
 	fn, ok := in.fns[ident.Name]
 	if !ok {
@@ -725,7 +935,10 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	defer func() { in.stack = savedStack }()
 
 	for i, p := range fn.Params {
-		if err := in.declare(p.Name, args[i]); err != nil {
+		// Deep-copy each argument as it crosses the call boundary so the
+		// callee's parameter is independent of the caller's binding (PLAN
+		// "value-copied lists" rule).
+		if err := in.declare(p.Name, copyValue(args[i])); err != nil {
 			return Value{}, err
 		}
 	}
@@ -755,4 +968,383 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 		return Value{}, fmt.Errorf("function %q ended without return at %s", ident.Name, e.Pos)
 	}
 	return Value{}, nil
+}
+
+// evalLen implements the `len` built-in. typeck has validated argument count
+// and type (one list[T]). For str the codepoint-count rule is also pinned in
+// PLAN line 233; we accept str defensively even though typeck currently
+// rejects str arguments to len at v0.2 — the dispatch is harmless and lines
+// run.go up for a future PLAN tweak without code churn.
+func (in *interp) evalLen(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: len expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil {
+		return Value{}, fmt.Errorf("internal: len argument has nil type at %s", e.Pos)
+	}
+	switch v.Type.Kind {
+	case syntax.TypeList:
+		return intVal(int64(len(v.List))), nil
+	case syntax.TypeStr:
+		// PLAN: count of runes, not bytes. []rune(s) decodes UTF-8.
+		return intVal(int64(len([]rune(v.Str)))), nil
+	}
+	return Value{}, fmt.Errorf("internal: len cannot accept %s at %s", v.Type, e.Pos)
+}
+
+// ---------------------------------------------------------------------------
+// v0.2 composite-data evaluators.
+// ---------------------------------------------------------------------------
+
+// evalListLit evaluates `[e1, e2, ...]` to a list Value. Each element is
+// deep-copied as it goes into the list so the source bindings stay
+// independent of the constructed list (a later mutation of an element source
+// — none today, but the contract holds — cannot leak).
+func (in *interp) evalListLit(e *syntax.ListLit) (Value, error) {
+	elems := make([]Value, len(e.Elements))
+	for i, sub := range e.Elements {
+		ev, err := in.evalExpr(sub)
+		if err != nil {
+			return Value{}, err
+		}
+		elems[i] = copyValue(ev)
+	}
+	// e.Type() is the canonical list[T]; reuse it so list values constructed
+	// from different sites in the same program share the type pointer.
+	t := e.Type()
+	if t == nil || t.Kind != syntax.TypeList {
+		return Value{}, fmt.Errorf("internal: list literal has non-list type %s at %s", t, e.Pos)
+	}
+	return Value{Type: t, List: elems}, nil
+}
+
+// evalTupleLit evaluates `(e1, e2, ...)`. The tuple length is fixed at parse
+// time; element values are deep-copied as they enter the tuple so any
+// composite element is independent of its source binding.
+func (in *interp) evalTupleLit(e *syntax.TupleLit) (Value, error) {
+	elems := make([]Value, len(e.Elements))
+	for i, sub := range e.Elements {
+		ev, err := in.evalExpr(sub)
+		if err != nil {
+			return Value{}, err
+		}
+		elems[i] = copyValue(ev)
+	}
+	t := e.Type()
+	if t == nil || t.Kind != syntax.TypeTuple {
+		return Value{}, fmt.Errorf("internal: tuple literal has non-tuple type %s at %s", t, e.Pos)
+	}
+	return Value{Type: t, Tuple: elems}, nil
+}
+
+// evalStructLit evaluates `Name { f1: v1, f2: v2 }`. Field order in the
+// runtime Value follows declaration order (PLAN-pinned for print
+// determinism), regardless of the order the user wrote field initialisers.
+// typeck has already validated completeness and uniqueness.
+func (in *interp) evalStructLit(e *syntax.StructLit) (Value, error) {
+	t := e.Type()
+	if t == nil || t.Kind != syntax.TypeStruct {
+		return Value{}, fmt.Errorf("internal: struct literal has non-struct type %s at %s", t, e.Pos)
+	}
+	// Walk the user's FieldInits, but write into a slice indexed by the
+	// declared field order so print order stays deterministic. typeck
+	// guarantees every declared field appears exactly once.
+	values := make([]Value, len(t.Fields))
+	provided := make([]bool, len(t.Fields))
+	for _, init := range e.Fields {
+		idx := -1
+		for i, f := range t.Fields {
+			if f.Name == init.Name {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			return Value{}, fmt.Errorf("internal: struct %q has no field %q at %s", t.Name, init.Name, init.Pos)
+		}
+		v, err := in.evalExpr(init.Value)
+		if err != nil {
+			return Value{}, err
+		}
+		values[idx] = copyValue(v)
+		provided[idx] = true
+	}
+	for i, ok := range provided {
+		if !ok {
+			return Value{}, fmt.Errorf("internal: struct %q literal missing field %q at %s", t.Name, t.Fields[i].Name, e.Pos)
+		}
+	}
+	return structVal(t, values), nil
+}
+
+// evalIndex evaluates `xs[i]`. List indexing returns a deep copy of the
+// element so a later mutation of the index target cannot leak into the
+// source list. String indexing returns a rune Value (Unicode codepoint at
+// position i over the rune-decoded string). Out-of-range indices are
+// runtime errors — typeck cannot prove bounds at v0.2.
+func (in *interp) evalIndex(e *syntax.IndexExpr) (Value, error) {
+	rv, err := in.evalExpr(e.Receiver)
+	if err != nil {
+		return Value{}, err
+	}
+	iv, err := in.evalExpr(e.Index)
+	if err != nil {
+		return Value{}, err
+	}
+	idx := iv.Int
+	if rv.Type == nil {
+		return Value{}, fmt.Errorf("internal: index receiver has nil type at %s", e.Pos)
+	}
+	switch rv.Type.Kind {
+	case syntax.TypeList:
+		n := int64(len(rv.List))
+		if idx < 0 || idx >= n {
+			return Value{}, fmt.Errorf("runtime error at %s: list index %d out of range [0..%d)", e.Pos, idx, n)
+		}
+		return copyValue(rv.List[idx]), nil
+	case syntax.TypeStr:
+		runes := []rune(rv.Str)
+		n := int64(len(runes))
+		if idx < 0 || idx >= n {
+			return Value{}, fmt.Errorf("runtime error at %s: string index %d out of range [0..%d)", e.Pos, idx, n)
+		}
+		return runeVal(int64(runes[idx])), nil
+	}
+	return Value{}, fmt.Errorf("internal: cannot index %s at %s", rv.Type, e.Pos)
+}
+
+// evalSlice evaluates list-slicing forms: `xs[lo..hi]`, `xs[..hi]`,
+// `xs[lo..]`, `xs[..]`, `xs[lo..=hi]`. The result is a NEW list that
+// deep-copies the selected range so the source list is unaffected by later
+// mutations of the slice (and vice-versa). String slicing is rejected by
+// typeck so this path only ever sees lists.
+func (in *interp) evalSlice(e *syntax.SliceExpr) (Value, error) {
+	rv, err := in.evalExpr(e.Receiver)
+	if err != nil {
+		return Value{}, err
+	}
+	if rv.Type == nil || rv.Type.Kind != syntax.TypeList {
+		return Value{}, fmt.Errorf("internal: cannot slice %s at %s", rv.Type, e.Pos)
+	}
+	n := int64(len(rv.List))
+	lo := int64(0)
+	hi := n
+	if e.Low != nil {
+		v, err := in.evalExpr(e.Low)
+		if err != nil {
+			return Value{}, err
+		}
+		lo = v.Int
+	}
+	if e.High != nil {
+		v, err := in.evalExpr(e.High)
+		if err != nil {
+			return Value{}, err
+		}
+		hi = v.Int
+		if e.Inclusive {
+			hi++
+		}
+	} else if e.Inclusive {
+		// `xs[lo..=]` is a parse error (the parser requires `=`'s rhs);
+		// reaching here would be an internal bug.
+		return Value{}, fmt.Errorf("internal: inclusive slice without high bound at %s", e.Pos)
+	}
+	if lo < 0 || hi > n || lo > hi {
+		return Value{}, fmt.Errorf("runtime error at %s: slice [%d..%d] out of range [0..%d]", e.Pos, lo, hi, n)
+	}
+	out := make([]Value, hi-lo)
+	for i := lo; i < hi; i++ {
+		out[i-lo] = copyValue(rv.List[i])
+	}
+	// Reuse the receiver's list type so the constructed Value's Type pointer
+	// matches the receiver's (consistent with the rest of the interpreter's
+	// "return the same list[T] *Type" contract).
+	return Value{Type: rv.Type, List: out}, nil
+}
+
+// evalFieldAccess evaluates `receiver.field`. Two paths:
+//
+//  1. Receiver is a bare IdentExpr naming a known enum type — produce the
+//     variant Value. typeck has validated that the variant exists.
+//  2. Otherwise the receiver is a struct value; look up the field by name
+//     in the struct's declared field order and return a deep copy.
+func (in *interp) evalFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
+	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
+		if en, isEnum := in.enums[id.Name]; isEnum {
+			for i, v := range en.Variants {
+				if v == e.FieldName {
+					return enumVal(en, i, v), nil
+				}
+			}
+			return Value{}, fmt.Errorf("internal: enum %q has no variant %q at %s", id.Name, e.FieldName, e.NamePos)
+		}
+	}
+	rv, err := in.evalExpr(e.Receiver)
+	if err != nil {
+		return Value{}, err
+	}
+	if rv.Type == nil || rv.Type.Kind != syntax.TypeStruct {
+		return Value{}, fmt.Errorf("internal: field access on non-struct %s at %s", rv.Type, e.Pos)
+	}
+	for i, f := range rv.Type.Fields {
+		if f.Name == e.FieldName {
+			return copyValue(rv.Fields[i]), nil
+		}
+	}
+	return Value{}, fmt.Errorf("internal: struct %q has no field %q at %s", rv.Type.Name, e.FieldName, e.NamePos)
+}
+
+// ---------------------------------------------------------------------------
+// match.
+// ---------------------------------------------------------------------------
+
+// execMatch evaluates a match statement. PLAN-pinned semantics:
+//   - arms tested top-to-bottom, first match wins
+//   - guards evaluate against pattern bindings; on false, fall through
+//   - if no arm matches, the statement is a runtime error (no silent
+//     fall-through, per the tenth-man revision in PLAN.md)
+//
+// Each arm runs in a fresh frame populated with the pattern's bindings; the
+// body itself is a Block whose execBlock pushes another frame, so an arm
+// body is free to redeclare a name without clobbering the pattern binding.
+func (in *interp) execMatch(s *syntax.MatchStmt) error {
+	subj, err := in.evalExpr(s.Subject)
+	if err != nil {
+		return err
+	}
+	for i := range s.Arms {
+		arm := &s.Arms[i]
+		in.pushFrame()
+		bound, perr := in.bindPattern(arm.Pattern, subj)
+		if perr != nil {
+			in.popFrame()
+			return perr
+		}
+		if !bound {
+			in.popFrame()
+			continue
+		}
+		if arm.Guard != nil {
+			gv, err := in.evalExpr(arm.Guard)
+			if err != nil {
+				in.popFrame()
+				return err
+			}
+			if !gv.Bool {
+				in.popFrame()
+				continue
+			}
+		}
+		err := in.execBlock(arm.Body)
+		in.popFrame()
+		return err
+	}
+	return fmt.Errorf("match: no arm matched at %s", s.Pos)
+}
+
+// bindPattern attempts to match pat against v, recording any bindings in the
+// current frame. Returns (matched, err). A pattern that fails to match
+// without a runtime error returns (false, nil); typeck rules out shape
+// mismatches (e.g. tuple-pat against non-tuple), so this path only fires on
+// value-disagreement (literal mismatch, enum variant mismatch, ...).
+func (in *interp) bindPattern(pat syntax.Pattern, v Value) (bool, error) {
+	switch p := pat.(type) {
+	case *syntax.WildcardPat:
+		return true, nil
+	case *syntax.BindPat:
+		// Bind a deep copy so a later mutation of v's source can't leak.
+		if err := in.declare(p.Name, copyValue(v)); err != nil {
+			return false, err
+		}
+		return true, nil
+	case *syntax.LitPat:
+		// Evaluate the literal expression in the current scope; typeck has
+		// constrained it to a primitive literal (optionally negated).
+		lv, err := in.evalExpr(p.Lit)
+		if err != nil {
+			return false, err
+		}
+		return litEq(lv, v), nil
+	case *syntax.TuplePat:
+		if v.Type == nil || v.Type.Kind != syntax.TypeTuple {
+			return false, fmt.Errorf("internal: tuple pattern against non-tuple at %s", p.Pos)
+		}
+		if len(p.Elements) != len(v.Tuple) {
+			return false, nil
+		}
+		for i, sub := range p.Elements {
+			ok, err := in.bindPattern(sub, v.Tuple[i])
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
+	case *syntax.StructPat:
+		if v.Type == nil || v.Type.Kind != syntax.TypeStruct {
+			return false, fmt.Errorf("internal: struct pattern against non-struct at %s", p.Pos)
+		}
+		// typeck has validated that each named field exists on the struct
+		// and that all declared fields are covered when `..` is absent.
+		// Field order in the pattern doesn't have to match decl order — we
+		// look each field up by name. The struct value's Fields slice is
+		// ordered by declaration so we use the type's Fields[i].Name to
+		// find the right slot.
+		for _, f := range p.Fields {
+			idx := -1
+			for i, df := range v.Type.Fields {
+				if df.Name == f.Name {
+					idx = i
+					break
+				}
+			}
+			if idx == -1 {
+				return false, fmt.Errorf("internal: struct %q has no field %q at %s", v.Type.Name, f.Name, f.Pos)
+			}
+			ok, err := in.bindPattern(f.Pattern, v.Fields[idx])
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
+	case *syntax.EnumPat:
+		if v.Type == nil || v.Type.Kind != syntax.TypeEnum {
+			return false, fmt.Errorf("internal: enum pattern against non-enum at %s", p.Pos)
+		}
+		// typeck rejects mismatched type names; here we compare variants.
+		return v.VariantName == p.VariantName, nil
+	}
+	return false, fmt.Errorf("internal: unhandled pattern %T at %s", pat, pat.PatPos())
+}
+
+// litEq compares a literal-pattern value against the scrutinee using v0.1
+// primitive equality semantics, plus byte/rune compared by codepoint. typeck
+// ensures the types match, so we just dispatch on Type.
+func litEq(lit, v Value) bool {
+	if lit.Type == nil || v.Type == nil {
+		return false
+	}
+	switch lit.Type {
+	case syntax.TInt():
+		return lit.Int == v.Int
+	case syntax.TFloat():
+		return lit.Float == v.Float
+	case syntax.TBool():
+		return lit.Bool == v.Bool
+	case syntax.TStr():
+		return lit.Str == v.Str
+	case syntax.TByte(), syntax.TRune():
+		return lit.Int == v.Int
+	}
+	return false
 }

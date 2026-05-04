@@ -1,0 +1,6 @@
+let xs := [1, 2, 3]
+let empty: list[int] = []
+print xs
+print empty
+print len(xs)
+print len(empty)

@@ -221,16 +221,63 @@ func (op UnaryOp) String() string {
 // errors clearly separated.
 // ---------------------------------------------------------------------------
 
-// TypeRef is an explicit type annotation. v0.1 has no compound type syntax
-// (no `[]int`, no generics, no function types as values), so a type ref is
-// nothing but a name plus a position for diagnostics.
+// TypeRefKind tags which shape a TypeRef carries: a bare named type, a
+// `list[T]` constructor, or a `tuple[T1, T2, ...]` constructor. Adding new
+// kinds appends.
+type TypeRefKind int
+
+// TypeRef shape kinds.
+const (
+	TypeRefNamed TypeRefKind = iota
+	TypeRefList
+	TypeRefTuple
+)
+
+// TypeRef is an explicit type annotation. v0.2 admits compound type syntax
+// for list and tuple; the parser fills in the relevant fields by Kind.
+//
+//   - TypeRefNamed: Name is the identifier ("int", "Point", "Color"). Element
+//     and Elements are nil/empty.
+//   - TypeRefList: Element holds the inner element TypeRef. Name is empty;
+//     printers reconstruct "list[T]" from Element.
+//   - TypeRefTuple: Elements is the per-position TypeRef slice (≥ 2 entries).
+//     Name is empty; printers reconstruct "tuple[T1, T2]".
 //
 // Resolved is filled in by the type checker to point at the canonical *Type
-// singleton for Name. It is nil before Check runs.
+// singleton for the resolved shape. It is nil before Check runs.
 type TypeRef struct {
-	Name     string
 	Pos      Position
+	Kind     TypeRefKind
+	Name     string     // TypeRefNamed
+	Element  *TypeRef   // TypeRefList
+	Elements []*TypeRef // TypeRefTuple
 	Resolved *Type
+}
+
+// String renders the type reference in source-text form. Used by error
+// messages and the typed-AST debug dumps.
+func (r *TypeRef) String() string {
+	if r == nil {
+		return "<nil>"
+	}
+	switch r.Kind {
+	case TypeRefNamed:
+		return r.Name
+	case TypeRefList:
+		return "list[" + r.Element.String() + "]"
+	case TypeRefTuple:
+		var b []byte
+		b = append(b, "tuple["...)
+		for i, e := range r.Elements {
+			if i > 0 {
+				b = append(b, ", "...)
+			}
+			b = append(b, e.String()...)
+		}
+		b = append(b, ']')
+		return string(b)
+	}
+	return fmt.Sprintf("TypeRef(%d)", int(r.Kind))
 }
 
 // ---------------------------------------------------------------------------
@@ -245,12 +292,34 @@ type Block struct {
 	Statements []Stmt
 }
 
+// TupleBinding is the parenthesised LHS of a let/mut/const tuple destructure
+// declaration: `let (a, b) := pair` / `mut (x, y, z) := triple`. v0.2 admits
+// only flat name lists (≥ 2 names); annotated tuple destructure (`let (a, b):
+// tuple[int, int] = ...`) is deferred — the RHS drives inference. Each name
+// becomes a fresh binding in the surrounding scope; typeck rejects repeated
+// names at the point of declare().
+//
+// LetStmt/MutStmt/ConstStmt embed an optional *TupleBinding (Tuple). When
+// Tuple is non-nil, Name is empty and Type is nil — the parser enforces both.
+// When Tuple is nil the declaration is the v0.1 single-name form and Name
+// carries the bound identifier.
+type TupleBinding struct {
+	Pos       Position
+	Names     []string   // ≥ 2 names; parser rejects shorter lists
+	NamePos   []Position // 1:1 with Names; used for precise diagnostics
+}
+
 // LetStmt represents `let name [: T] = expr` / `let name := expr`. Type is
 // nil when the user wrote the walrus form and inference must do the work.
+//
+// v0.2 also admits the tuple-destructure form `let (a, b) := expr`. When the
+// LHS is parenthesised the parser populates Tuple instead of Name; Type is
+// not allowed on the destructure form (typeck infers from the RHS).
 type LetStmt struct {
 	Pos   Position
-	Name  string
-	Type  *TypeRef // nil ⇒ inferred from Value
+	Name  string        // empty when Tuple != nil
+	Tuple *TupleBinding // nil for the single-name form
+	Type  *TypeRef      // nil ⇒ inferred from Value
 	Value Expr
 }
 
@@ -258,10 +327,13 @@ func (*LetStmt) stmtNode()           {}
 func (s *LetStmt) StmtPos() Position { return s.Pos }
 
 // MutStmt is `mut name [: T] = expr` / `mut name := expr`. Same shape as
-// LetStmt; the distinction is whether the binding is later assignable.
+// LetStmt; the distinction is whether the binding is later assignable. The
+// tuple-destructure form `mut (a, b) := expr` is admitted on the same terms
+// as LetStmt.
 type MutStmt struct {
 	Pos   Position
 	Name  string
+	Tuple *TupleBinding
 	Type  *TypeRef
 	Value Expr
 }
@@ -271,10 +343,13 @@ func (s *MutStmt) StmtPos() Position { return s.Pos }
 
 // ConstStmt is `const name [: T] = expr` / `const name := expr`. The parser
 // accepts any expression on the right-hand side; the type checker is
-// responsible for asserting that it's a constant expression.
+// responsible for asserting that it's a constant expression. Tuple
+// destructure on a const is admitted by the parser; typeck rejects it
+// because v0.2 has no const-evaluable composite expressions.
 type ConstStmt struct {
 	Pos   Position
 	Name  string
+	Tuple *TupleBinding
 	Type  *TypeRef
 	Value Expr
 }
@@ -391,7 +466,7 @@ type IfStmt struct {
 func (*IfStmt) stmtNode()           {}
 func (s *IfStmt) StmtPos() Position { return s.Pos }
 
-// ForKind selects which of the three for-loop shapes a ForStmt represents.
+// ForKind selects which of the four for-loop shapes a ForStmt represents.
 type ForKind int
 
 // For-loop shapes.
@@ -399,18 +474,24 @@ const (
 	ForInfinite ForKind = iota // for { ... }
 	ForCond                    // for cond { ... }
 	ForRange                   // for x in start..end { ... }
+	ForIter                    // for x in xs { ... } — iterate over a list value
 )
 
-// ForStmt covers all three for-loop shapes via Kind. Only the fields relevant
+// ForStmt covers all four for-loop shapes via Kind. Only the fields relevant
 // to Kind are populated; the rest are zero values.
+//
+// ForRange uses Var/VarPos plus Range; ForIter uses Var/VarPos plus Iter.
+// The two list-iteration shapes share the loop variable + body machinery and
+// diverge only in how the per-iteration value is produced.
 type ForStmt struct {
-	Pos   Position
-	Kind  ForKind
-	Cond  Expr       // ForCond
-	Var   string     // ForRange — the bound variable name
-	VarPos Position  // ForRange — position of the variable name
-	Range *RangeExpr // ForRange — the iteration range
-	Body  *Block
+	Pos    Position
+	Kind   ForKind
+	Cond   Expr       // ForCond
+	Var    string     // ForRange / ForIter — the bound variable name
+	VarPos Position   // ForRange / ForIter — position of the variable name
+	Range  *RangeExpr // ForRange — the iteration range
+	Iter   Expr       // ForIter — the list-typed expression to iterate
+	Body   *Block
 }
 
 func (*ForStmt) stmtNode()           {}
@@ -566,3 +647,258 @@ type ParenExpr struct {
 
 func (*ParenExpr) exprNode()           {}
 func (e *ParenExpr) ExprPos() Position { return e.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.2 composite-data declarations.
+//
+// Top-level only; collected by typeck's first pass so forward references work.
+// ---------------------------------------------------------------------------
+
+// FieldDecl is one declared field on a struct. Field order is significant —
+// PLAN.md pins struct print order to declaration order, so we keep an ordered
+// slice rather than a map.
+type FieldDecl struct {
+	Name string
+	Type *TypeRef
+	Pos  Position
+}
+
+// StructDecl represents `struct Name { f1: T1, f2: T2, ... }`. Empty field
+// lists are accepted at parse time; typeck rejects them per the PLAN.
+type StructDecl struct {
+	Pos    Position
+	Name   string
+	Fields []FieldDecl
+}
+
+func (*StructDecl) stmtNode()           {}
+func (s *StructDecl) StmtPos() Position { return s.Pos }
+
+// VariantDecl is one declared variant of an enum. v0.2 carries no payload;
+// adding payloads is a v0.4 concern alongside errors.
+type VariantDecl struct {
+	Name string
+	Pos  Position
+}
+
+// EnumDecl represents `enum Name { V1, V2, ... }`.
+type EnumDecl struct {
+	Pos      Position
+	Name     string
+	Variants []VariantDecl
+}
+
+func (*EnumDecl) stmtNode()           {}
+func (s *EnumDecl) StmtPos() Position { return s.Pos }
+
+// ---------------------------------------------------------------------------
+// match statement.
+// ---------------------------------------------------------------------------
+
+// MatchArm is one arm of a `match`: a pattern, an optional guard, and a body
+// block. Single-statement arm bodies are wrapped in a one-element Block at
+// parse time so downstream consumers always walk a Block.
+type MatchArm struct {
+	Pos     Position
+	Pattern Pattern
+	Guard   Expr // nil when the arm has no `if guard`
+	Body    *Block
+}
+
+// MatchStmt is `match expr { arm1; arm2; ... }`. The arms are tested
+// top-to-bottom by both the interpreter and codegen.
+type MatchStmt struct {
+	Pos     Position
+	Subject Expr
+	Arms    []MatchArm
+}
+
+func (*MatchStmt) stmtNode()           {}
+func (s *MatchStmt) StmtPos() Position { return s.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.2 expression atoms.
+// ---------------------------------------------------------------------------
+
+// RuneLit is a `'X'` literal. Value is the Unicode code-point parsed from the
+// lexer's decimal-string Token.Value. typeck classifies the literal as
+// `byte` (codepoint < 128) or `rune` based on Value.
+type RuneLit struct {
+	typed
+	Pos   Position
+	Value int64
+}
+
+func (*RuneLit) exprNode()           {}
+func (e *RuneLit) ExprPos() Position { return e.Pos }
+
+// ListLit is `[e1, e2, ...]`. Empty lists are admitted by the parser but
+// typeck rejects them outside annotated contexts where the element type can
+// be inferred.
+type ListLit struct {
+	typed
+	Pos      Position
+	Elements []Expr
+}
+
+func (*ListLit) exprNode()           {}
+func (e *ListLit) ExprPos() Position { return e.Pos }
+
+// TupleLit is `(e1, e2, ...)` with at least 2 elements. The parser emits a
+// ParenExpr (not a 1-tuple) for `(e)` — PLAN.md pins tuples as ≥ 2 elements.
+type TupleLit struct {
+	typed
+	Pos      Position
+	Elements []Expr
+}
+
+func (*TupleLit) exprNode()           {}
+func (e *TupleLit) ExprPos() Position { return e.Pos }
+
+// FieldInit is one field initialiser inside a struct literal. v0.2 requires
+// every declared field to be initialised; the parser is liberal and typeck
+// enforces the completeness rule.
+type FieldInit struct {
+	Name  string
+	Value Expr
+	Pos   Position
+}
+
+// StructLit is `Name { f1: v1, f2: v2 }`. The parser disambiguates this from
+// a brace-block by peeking after the `{` for an `IDENT :` shape.
+type StructLit struct {
+	typed
+	Pos      Position
+	TypeName string
+	Fields   []FieldInit
+}
+
+func (*StructLit) exprNode()           {}
+func (e *StructLit) ExprPos() Position { return e.Pos }
+
+// IndexExpr is `receiver[index]`. Slice forms (with `..`/`..=` inside the
+// brackets) parse as SliceExpr instead.
+type IndexExpr struct {
+	typed
+	Pos      Position
+	Receiver Expr
+	Index    Expr
+}
+
+func (*IndexExpr) exprNode()           {}
+func (e *IndexExpr) ExprPos() Position { return e.Pos }
+
+// SliceExpr is `receiver[low..high]` / `[low..=high]` and the half-open
+// variants. Low and High are nilable for `[..b]`, `[a..]`, and `[..]`.
+// Inclusive is true for `..=`.
+type SliceExpr struct {
+	typed
+	Pos       Position
+	Receiver  Expr
+	Low       Expr // nil when omitted
+	High      Expr // nil when omitted
+	Inclusive bool
+}
+
+func (*SliceExpr) exprNode()           {}
+func (e *SliceExpr) ExprPos() Position { return e.Pos }
+
+// FieldAccessExpr is `receiver.fieldName`. At parse time the receiver may be
+// any expression — typeck disambiguates between struct field access (when
+// the receiver is a value) and enum variant access (when the receiver is a
+// bare IdentExpr that resolves to an enum type).
+type FieldAccessExpr struct {
+	typed
+	Pos       Position
+	Receiver  Expr
+	FieldName string
+	NamePos   Position
+}
+
+func (*FieldAccessExpr) exprNode()           {}
+func (e *FieldAccessExpr) ExprPos() Position { return e.Pos }
+
+// ---------------------------------------------------------------------------
+// Patterns (match arm heads).
+//
+// A separate marker interface keeps patterns out of Expr/Stmt — they are not
+// values and they are not statements. The arm parser validates that what it
+// reads is a Pattern and only a Pattern.
+// ---------------------------------------------------------------------------
+
+// Pattern is the marker interface for match patterns. Concrete switching is
+// fine — the language is small and the alternative (a Visitor) buys nothing
+// at this scale.
+type Pattern interface {
+	patternNode()
+	PatPos() Position
+}
+
+// LitPat matches a literal value. Lit is one of *IntLit, *FloatLit, *BoolLit,
+// *StringLit, *RuneLit, optionally wrapped by a UnaryExpr{Op: UnaryNeg} for
+// numeric negation.
+type LitPat struct {
+	Pos Position
+	Lit Expr
+}
+
+func (*LitPat) patternNode()         {}
+func (p *LitPat) PatPos() Position { return p.Pos }
+
+// WildcardPat is `_`. Always matches; binds nothing.
+type WildcardPat struct {
+	Pos Position
+}
+
+func (*WildcardPat) patternNode()         {}
+func (p *WildcardPat) PatPos() Position { return p.Pos }
+
+// BindPat is a bare identifier. Always matches and binds the name.
+type BindPat struct {
+	Pos  Position
+	Name string
+}
+
+func (*BindPat) patternNode()         {}
+func (p *BindPat) PatPos() Position { return p.Pos }
+
+// TuplePat is `(p1, p2, ...)` with ≥ 2 elements. PLAN-pinned: `(_)` is
+// grouping, not a 1-tuple pattern; the parser rejects 1-element parens here
+// the same way TupleLit rejects 1-tuples in expression position.
+type TuplePat struct {
+	Pos      Position
+	Elements []Pattern
+}
+
+func (*TuplePat) patternNode()         {}
+func (p *TuplePat) PatPos() Position { return p.Pos }
+
+// StructPatField is one field of a struct pattern. Pattern is the per-field
+// sub-pattern; the parser desugars shorthand `Point { x }` into
+// `Point { x: x }` (i.e. a BindPat with the same name).
+type StructPatField struct {
+	Name    string
+	Pattern Pattern
+	Pos     Position
+}
+
+// StructPat is `Name { f1: pat1, f2 }` with optional `..` rest at the end.
+type StructPat struct {
+	Pos      Position
+	TypeName string
+	Fields   []StructPatField
+	Rest     bool
+}
+
+func (*StructPat) patternNode()         {}
+func (p *StructPat) PatPos() Position { return p.Pos }
+
+// EnumPat is `EnumName.VariantName`. v0.2 has no payload destructure.
+type EnumPat struct {
+	Pos         Position
+	TypeName    string
+	VariantName string
+}
+
+func (*EnumPat) patternNode()         {}
+func (p *EnumPat) PatPos() Position { return p.Pos }

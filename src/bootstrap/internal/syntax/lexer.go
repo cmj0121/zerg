@@ -2,7 +2,9 @@ package syntax
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // LexError is returned when the lexer cannot make sense of the input.
@@ -103,6 +105,8 @@ func (l *lexer) next() (Token, error) {
 			return Token{Kind: KindNewline, Pos: pos}, nil
 		case c == '"':
 			return l.lexString()
+		case c == '\'':
+			return l.lexRune()
 		case isDigit(c):
 			return l.lexNumber()
 		case isIdentStart(c):
@@ -352,6 +356,11 @@ func (l *lexer) lexOperator() (Token, error) {
 		if c1 == '=' {
 			return emit2(KindEq)
 		}
+		if c1 == '>' {
+			// `=>` is the v0.2 match-arm separator. The longest-match rule
+			// keeps `==` from gobbling the `=` first because of the c1 check.
+			return emit2(KindFatArrow)
+		}
 		return emit(KindAssign)
 	case '!':
 		if c1 == '=' {
@@ -465,6 +474,93 @@ func (l *lexer) lexString() (Token, error) {
 			b.WriteByte(l.advance())
 		}
 	}
+}
+
+// lexRune reads a single-quoted character literal. Exactly one rune (possibly
+// expressed as an escape sequence) must appear between the quotes. Token.Value
+// is the decimal string form of the resulting code-point so typeck can replay
+// it through strconv.ParseInt; the byte-vs-rune classification is typeck's
+// call, since the lexer can't tell whether the surrounding context wants the
+// narrower of the two types.
+func (l *lexer) lexRune() (Token, error) {
+	pos := l.position()
+	l.advance() // consume opening '
+
+	if l.atEnd() {
+		return Token{}, &LexError{Pos: pos, Message: "unterminated rune literal"}
+	}
+	c := l.peek()
+	if c == '\'' {
+		// `''` — empty rune.
+		errPos := l.position()
+		l.advance()
+		return Token{}, &LexError{Pos: errPos, Message: "empty rune literal"}
+	}
+	if c == '\n' {
+		return Token{}, &LexError{
+			Pos:     l.position(),
+			Message: "unterminated rune literal (newline before closing quote)",
+		}
+	}
+
+	var r rune
+	if c == '\\' {
+		escPos := l.position()
+		l.advance() // consume backslash
+		if l.atEnd() {
+			return Token{}, &LexError{Pos: escPos, Message: "unterminated escape sequence"}
+		}
+		esc := l.advance()
+		switch esc {
+		case 'n':
+			r = '\n'
+		case 't':
+			r = '\t'
+		case 'r':
+			r = '\r'
+		case '\\':
+			r = '\\'
+		case '\'':
+			r = '\''
+		case '"':
+			r = '"'
+		case '0':
+			r = 0
+		default:
+			return Token{}, &LexError{
+				Pos:     escPos,
+				Message: fmt.Sprintf("unknown escape sequence \\%c", esc),
+			}
+		}
+	} else {
+		// Decode one UTF-8 rune. For ASCII bytes utf8.DecodeRuneInString
+		// returns size 1; for multi-byte sequences it returns the actual
+		// width. We step l.pos by `size` and bump l.col by 1 (one column per
+		// rune, not per byte) so column tracking stays user-meaningful.
+		decoded, size := utf8.DecodeRuneInString(string(l.src[l.pos:]))
+		if decoded == utf8.RuneError && size <= 1 {
+			errPos := l.position()
+			return Token{}, &LexError{Pos: errPos, Message: "invalid UTF-8 in rune literal"}
+		}
+		r = decoded
+		l.pos += size
+		l.col++
+	}
+
+	if l.atEnd() {
+		return Token{}, &LexError{Pos: pos, Message: "unterminated rune literal"}
+	}
+	if l.peek() != '\'' {
+		// Either more characters before the closing quote (multi-rune
+		// literal) or some other parse problem. Either way it's a lex error.
+		errPos := l.position()
+		return Token{}, &LexError{
+			Pos:     errPos,
+			Message: "rune literal must contain exactly one character",
+		}
+	}
+	l.advance() // consume closing '
+	return Token{Kind: KindRune, Value: strconv.FormatInt(int64(r), 10), Pos: pos}, nil
 }
 
 // v0.0 identifiers are ASCII-only. The lexer scans byte-wise, so any

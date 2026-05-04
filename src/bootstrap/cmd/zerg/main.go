@@ -1,6 +1,5 @@
-// Command zerg is the v0.0 toolchain entry point. CLI dispatch is handled
-// by kong; diagnostic logging goes to zerolog with a -v / -vv verbosity
-// dial. See PLAN.md for the design.
+// Command zerg is the toolchain entry point. CLI dispatch is handled by
+// kong; diagnostic logging goes to zerolog with a -v / -vv verbosity dial.
 package main
 
 import (
@@ -17,7 +16,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
@@ -81,7 +80,7 @@ func main() {
 	app := &cli{}
 	ctx := kong.Parse(app,
 		kong.Name("zerg"),
-		kong.Description("Zerg toolchain (v0.1)."),
+		kong.Description("Zerg toolchain (v0.2)."),
 		kong.Vars{"version": "zerg " + version},
 		kong.UsageOnError(),
 	)

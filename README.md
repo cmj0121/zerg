@@ -28,7 +28,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.0** — toolchain bootstrap.
 - [x] **v0.1** — procedural core.
 - [x] **v0.2** — composite data.
-- [ ] **v0.3** — borrow checking.
+- [x] **v0.3** — borrow checking.
 - [ ] **v0.4** — polymorphism and errors.
 - [ ] **v0.5** — modules.
 - [ ] **v0.6** — generics and null-safety.
@@ -44,15 +44,15 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 ## Building & running
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
-shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), and v0.2
-(composite data) share the same `zerg` binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and the
-v0.1 corpus) keep working unchanged.
+shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
+(composite data), and v0.3 (borrow checking) share the same `zerg` binary; earlier examples
+(`00_nop.zg`, `01_hello.zg`, and the v0.1 corpus) keep working unchanged.
 
 ### Prerequisites
 
 - Go 1.23 or newer.
 - A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv`; gcc and
-  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.2.
+  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.3.
 - macOS or Linux. Windows is deferred.
 
 ### Build the toolchain
@@ -82,19 +82,21 @@ float `//` and `%`.
 # Hello, Zerg!
 ```
 
-`zerg build --emit-c <file>` prints the generated C to stdout instead of compiling. The v0.2
+`zerg build --emit-c <file>` prints the generated C to stdout instead of compiling. The v0.3
 runtime header (`zerg_str`, `zerg_print_*`, `zerg_str_concat`, plus per-shape `zerg_list_*` /
-`zerg_tuple_*` / `zerg_struct_*` / `zerg_enum_*` helpers and `zerg_match_panic`) is emitted inline at
-the top of the output — no external runtime to link against.
+`zerg_tuple_*` / `zerg_struct_*` / `zerg_enum_*` helpers — including `<T>_clone` for the
+opt-in deep-copy builtin and the in-place list `<T>_push` lowering — and `zerg_match_panic`) is
+emitted inline at the top of the output — no external runtime to link against.
 
 ### REPL
 
-The v0.2 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
-body, a `for` block, a `struct`/`enum` declaration, or a `match` one line at a time.
+The v0.3 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
+body, a `for` block, a `struct`/`enum` declaration, or a `match` one line at a time. The borrow
+checker runs against each accepted program — diagnostics fire at the prompt, not the next prompt.
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.2 — accepts the v0.2 procedural core plus composite data
+# Zerg REPL v0.3 — accepts the v0.3 surface (procedural core, composite data, borrow checking)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -117,14 +119,17 @@ beyond the current toolchain version with a clean message:
 
 ```sh
 ./src/bootstrap/bin/zerg run examples/10_specs.zg
-# zerg: examples/10_specs.zg requires v0.4 (current is v0.2)
+# zerg: examples/10_specs.zg requires v0.4 (current is v0.3)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
 v0.2-tagged showcase examples in `examples/` (`02_variables.zg`, `09_struct.zg`, …) advertise the
 broader v0.2 surface; they pass the version gate but still exercise features such as `set`/`map`
 literals and `pub` that PLAN defers past v0.2 — those bodies will still error out at lex/parse/type
-time. The authoritative v0.2 corpus lives at `src/bootstrap/test/v0_2/`.
+time. v0.2-tagged programs that today rely on `let ys := xs` re-reading the source list may also
+hit the v0.3 borrow checker (composite bind is now a move); rewrite as `let ys := clone(xs)` to keep
+both bindings live. The authoritative parity corpora live at `src/bootstrap/test/v0_2/` and
+`src/bootstrap/test/v0_3/`.
 
 ### Supported syntax at v0.1
 
@@ -186,7 +191,8 @@ works):
 - **Value semantics, including lists.** `let ys := xs` deep-copies the list (allocates a new
   backing array). Slicing likewise allocates. There is no aliasing at v0.2 because there is no
   list mutation; the contract is consistent today and forever, with v0.3's borrow checker tightening
-  enforcement, not the model.
+  enforcement, not the model. _(At v0.3 the implicit deep-copy on bind is gone — composites move
+  on `let ys := xs` and the user opts back into the v0.2 shape with `let ys := clone(xs)`.)_
 - **Out of scope at v0.2, deferred.** Maps `{k: v}` and sets `{a, b}` (need a `Hashable` spec),
   enum payloads (`Color.Custom(r, g, b)`), struct update syntax `Point { x: 1, ..p }`, struct
   methods / `impl`, list mutation (`xs[0] = 1`, `xs.push(…)`), list patterns with `..tail`,
@@ -215,6 +221,96 @@ print quadrant(Point { x: 3, y: 4 })
 print quadrant(Point { x: 0, y: 0 })
 # Quadrant.I
 # Quadrant.Origin
+```
+
+### Supported syntax at v0.3
+
+v0.3 layers a borrow checker and list mutation on top of v0.2; everything in v0.0 / v0.1 / v0.2
+still parses and runs (with the one caveat below). What's new:
+
+- **Move on bind for composites.** `let ys := xs` (or `mut ys := xs`) now MOVES `xs` into `ys`.
+  After the bind, `xs` is invalid for any subsequent use — reading, indexing, passing to a fn, or
+  rebinding all reject at compile time with a precise diagnostic. Primitives (`int`, `float`,
+  `bool`, `byte`, `rune`, `str`, enums) still copy; only `list[T]`, tuples, and structs move.
+- **The user-visible rule, in one sentence.** _After you give a composite away, you can't use it
+  again — but reading it doesn't give it away._ `print xs`, `len(xs)`, indexing `xs[i]`, slicing
+  `xs[lo..hi]`, iteration `for x in xs { … }`, and _passing `xs` to a function_ are all reads.
+  Function calls implicitly share-borrow composite arguments for the duration of the call; the
+  caller retains ownership when the call returns, so `f(xs); print xs[0]` is fine.
+- **List mutation through `mut` bindings.** `mut`-bound lists support two new write forms:
+  - `xs[i] = v` — replace element at index `i`. Bounds-checked at run time; v's type must match
+    the element type. `xs[i] OP= v` (compound) is rejected at v0.3.
+  - `push(xs, v)` — append. Built-in fn (function-call syntax, not method-call). Mutates `xs` in
+    place; cap doubles on growth so amortised append is O(1).
+    Both require `xs` to be a top-level `mut`-bound list. List mutation through fn parameters needs
+    `&mut` references and is deferred — inside a fn body, composite parameters are implicitly
+    shared-borrowed and cannot be mutated. Build via return-and-rebind: `mut xs := add_some(xs)`.
+- **`clone(xs)` opts back into v0.2 deep-copy semantics.** Built-in fn; receiver is read (not
+  moved); returns a fresh deep copy with no shared state. Reuses the per-shape `_copy` helpers
+  the v0.2 codegen emitted — they don't go away, they become opt-in.
+- **Borrow checker rejects common bugs at compile time.** Use-after-move, aliased mutation
+  through fn-call observation, moves out of an outer binding inside a `for` body, and any branch
+  that disagrees on whether a binding was moved (every branch of an `if` / `elif` / `else` must
+  agree, otherwise you get a hard error pointing at the disagreeing branches).
+- **Move-out sites.** A composite is given away by: `let y := x` / `mut y := x`, `return x`,
+  inclusion in a struct literal `Point { xs: x }`, inclusion in a tuple literal `(x, …)`,
+  inclusion in a list literal `[x, …]`, a bind-arm match `match xs { ys => … }`, and tuple
+  destructure `let (a, b) := pair`.
+- **Read sites.** `print x`, `len(x)`, `x[i]`, `x.field`, slice `x[lo..hi]`, `for v in x`, every
+  fn call, and the match scrutinee (under shared borrow for the duration of the match — moved
+  iff some arm bound the scrutinee whole).
+- **Out of scope at v0.3, deferred.** Explicit `&` / `&mut` reference syntax (PLAN defers until
+  ergonomics demand it), `&mut T` parameters and fn-param mutation, structural composite `==`
+  (deferred to v0.4 with a `Comparable` spec), method-call syntax `xs.push(v)` /
+  `xs.clone()` (deferred to v0.4 with `impl`), `Drop` / destructors (the push grow path leaks the
+  old buffer at v0.3 — bounded by the corpus), non-lexical lifetimes (NLL), generics, and lifetime
+  parameters.
+
+A small v0.3 sample — list mutation:
+
+```zerg
+mut xs := [1, 2]
+push(xs, 3)
+xs[0] = 99
+print xs
+print len(xs)
+# [ 99, 2, 3 ]
+# 3
+```
+
+`clone()` opts back into v0.2-style deep copy, so the original stays usable:
+
+```zerg
+let xs := [1, 2, 3]
+let ys := clone(xs)
+print xs
+print ys
+# [ 1, 2, 3 ]
+# [ 1, 2, 3 ]
+```
+
+Function calls observe a list without consuming it — the caller still owns it after the call:
+
+```zerg
+fn first(xs: list[int]) -> int {
+    return xs[0]
+}
+
+let xs := [10, 20, 30]
+print first(xs)
+print xs[0]
+# 10
+# 10
+```
+
+Programs that _need_ the v0.2 shape (re-read after rebind) get a precise diagnostic and the
+two-character fix is to wrap the source in `clone(…)`:
+
+```zerg
+let xs := [1, 2, 3]
+let ys := xs
+print xs[0]
+# borrow error at 3:7: use of moved value: "xs" (moved at 2:11)
 ```
 
 ### Print format and numeric semantics
@@ -253,7 +349,11 @@ every supported example. v0.0 keeps its golden corpus at `src/bootstrap/test/gol
 destructure, list literal/index/iter/slice/copy, struct decl with nesting and forward references,
 enum decl, and every `match` pattern form (literal, bind+guard, tuple, struct shorthand+rest, enum,
 nested). Program 22 (`22_no_match_panics.zg`) is the panic case: both halves exit 1 with a
-`match: no arm matched` stderr line. Run the full corpus with:
+`match: no arm matched` stderr line. v0.3 adds a 15-program corpus at `src/bootstrap/test/v0_3/`
+covering the move-on-bind rule, `clone()` and `push()` builtins, list-index assignment, fn-call
+implicit shared borrow, branch-join agreement, and the loop-body move rejection — split into
+"success" programs paired with `.txt` golden output and "reject" programs paired with `.err` files
+that pin the borrow-check diagnostic. Run the full corpus with:
 
 ```sh
 make test

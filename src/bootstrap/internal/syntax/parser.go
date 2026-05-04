@@ -961,20 +961,48 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 	// Check for an assignment operator.
 	if op, ok := assignOpFor(p.peek().Kind); ok {
 		opTok := p.advance()
-		ident, ok := expr.(*IdentExpr)
-		if !ok {
-			return nil, errorAt(opTok.Pos, "left-hand side of '%s' must be an identifier", op)
+		// v0.3 admits two LHS shapes: a bare identifier (the v0.1 form) and a
+		// single-level list index `xs[i]` (the v0.3 list-mutation surface).
+		// Compound operators stay identifier-only at v0.3 — `xs[i] += 1` is
+		// sugar that belongs to a later unit and is rejected here so the user
+		// sees a focused diagnostic instead of an opaque downstream type
+		// error.
+		switch lhs := expr.(type) {
+		case *IdentExpr:
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			return &AssignStmt{
+				Pos:    lhs.Pos,
+				Target: lhs,
+				Op:     op,
+				Value:  val,
+			}, nil
+		case *IndexExpr:
+			if op != AssignSet {
+				return nil, errorAt(opTok.Pos, "compound assignment '%s' to a list element is not supported at v0.3 — use `xs[i] = ...` instead", op)
+			}
+			// At v0.3 we admit only single-level indexing (`xs[i] = v`).
+			// Chained indexing (`xs[i][j] = v`) parses fine as a postfix
+			// chain, but the borrow / mutation rules for nested mutation
+			// aren't in scope yet, so reject early with a precise message.
+			if _, nested := lhs.Receiver.(*IndexExpr); nested {
+				return nil, errorAt(opTok.Pos, "left-hand side of assignment must be an identifier or list[i] (chained indexing is not supported at v0.3)")
+			}
+			val, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			return &AssignStmt{
+				Pos:    lhs.Pos,
+				Target: lhs,
+				Op:     op,
+				Value:  val,
+			}, nil
+		default:
+			return nil, errorAt(opTok.Pos, "left-hand side of assignment must be an identifier or list[i]")
 		}
-		val, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		return &AssignStmt{
-			Pos:    ident.Pos,
-			Target: ident,
-			Op:     op,
-			Value:  val,
-		}, nil
 	}
 
 	// Plain expression statement: only a CallExpr is meaningful at v0.1.

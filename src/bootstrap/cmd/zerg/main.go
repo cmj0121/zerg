@@ -16,7 +16,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
@@ -80,7 +80,7 @@ func main() {
 	app := &cli{}
 	ctx := kong.Parse(app,
 		kong.Name("zerg"),
-		kong.Description("Zerg toolchain (v0.2)."),
+		kong.Description("Zerg toolchain (v0.3)."),
 		kong.Vars{"version": "zerg " + version},
 		kong.UsageOnError(),
 	)

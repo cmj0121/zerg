@@ -346,7 +346,11 @@ func (in *interp) execDecl(name string, value syntax.Expr) error {
 	if err != nil {
 		return err
 	}
-	return in.declare(name, copyValue(v))
+	// v0.3: no implicit deep-copy on bind. The borrow checker has
+	// invalidated the source binding at the move site, so sharing the
+	// underlying Go slice/struct is safe. clone(xs) is the explicit
+	// opt-in for the v0.2-style deep copy.
+	return in.declare(name, v)
 }
 
 // execTupleDestructure evaluates `let (a, b, ...) := expr` (and the mut
@@ -366,7 +370,8 @@ func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Exp
 		return fmt.Errorf("internal: destructure arity mismatch at %s: %d names vs %d elements", tb.Pos, len(tb.Names), len(v.Tuple))
 	}
 	for i, name := range tb.Names {
-		if err := in.declare(name, copyValue(v.Tuple[i])); err != nil {
+		// v0.3: no implicit deep-copy on tuple destructure bind.
+		if err := in.declare(name, v.Tuple[i]); err != nil {
 			return err
 		}
 	}
@@ -375,10 +380,23 @@ func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Exp
 
 // execAssign mutates an existing binding. typeck has already checked the
 // target is mut and the rhs type matches; here we just do the operation.
+//
+// Two LHS shapes are admitted: a bare IdentExpr (`x = v`) which writes the
+// named slot in scope, and an IndexExpr (`xs[i] = v`) which writes through a
+// list slot's slice header at the given position. typeck and the borrow
+// checker have already verified mutability and aliasing; the interpreter
+// only does the work.
 func (in *interp) execAssign(s *syntax.AssignStmt) error {
-	slot, ok := in.lookup(s.Target.Name)
+	if idx, ok := s.Target.(*syntax.IndexExpr); ok {
+		return in.execIndexAssign(s, idx)
+	}
+	target, ok := s.Target.(*syntax.IdentExpr)
 	if !ok {
-		return fmt.Errorf("internal: undefined name %q at %s", s.Target.Name, s.Pos)
+		return fmt.Errorf("internal: unsupported assignment target %T at %s", s.Target, s.Pos)
+	}
+	slot, ok := in.lookup(target.Name)
+	if !ok {
+		return fmt.Errorf("internal: undefined name %q at %s", target.Name, s.Pos)
 	}
 	rhs, err := in.evalExpr(s.Value)
 	if err != nil {
@@ -386,7 +404,10 @@ func (in *interp) execAssign(s *syntax.AssignStmt) error {
 	}
 	switch s.Op {
 	case syntax.AssignSet:
-		*slot = copyValue(rhs)
+		// v0.3: plain `x = v` is only meaningful for primitive targets
+		// (composite mut bindings rebind via `:=` or write through
+		// `xs[i] = v`); no implicit deep-copy.
+		*slot = rhs
 	case syntax.AssignAdd:
 		*slot, err = applyBin(syntax.BinAdd, *slot, rhs)
 	case syntax.AssignSub:
@@ -411,6 +432,46 @@ func (in *interp) execAssign(s *syntax.AssignStmt) error {
 		return fmt.Errorf("internal: unknown assign op %s at %s", s.Op, s.Pos)
 	}
 	return err
+}
+
+// execIndexAssign handles `xs[i] = v`. The receiver must be a bare named
+// list (typeck and the borrow checker have already enforced this); we look
+// up the slot, evaluate the index, range-check it, and write a deep copy of
+// the rhs through the slice header at the indexed position.
+//
+// Only AssignSet (`=`) is admitted on a list element — compound assigns
+// (`xs[i] += 1`) are out of scope at v0.3 because typeck doesn't yet plumb
+// them through the IndexExpr LHS path. Any compound op that reaches here
+// is a typeck bug; we report it rather than guess.
+func (in *interp) execIndexAssign(s *syntax.AssignStmt, idx *syntax.IndexExpr) error {
+	id, ok := idx.Receiver.(*syntax.IdentExpr)
+	if !ok {
+		return fmt.Errorf("internal: list-element assignment requires a named list at %s", s.Pos)
+	}
+	slot, ok := in.lookup(id.Name)
+	if !ok {
+		return fmt.Errorf("internal: undefined name %q at %s", id.Name, s.Pos)
+	}
+	iv, err := in.evalExpr(idx.Index)
+	if err != nil {
+		return err
+	}
+	rhs, err := in.evalExpr(s.Value)
+	if err != nil {
+		return err
+	}
+	if s.Op != syntax.AssignSet {
+		return fmt.Errorf("internal: list-element compound assign %s not supported at %s", s.Op, s.Pos)
+	}
+	n := int64(len(slot.List))
+	i := iv.Int
+	if i < 0 || i >= n {
+		return fmt.Errorf("runtime error at %s: list index %d out of range [0..%d)", s.Pos, i, n)
+	}
+	// v0.3: no implicit deep-copy on element write — the borrow checker
+	// has invalidated the rhs's source binding at the move site.
+	slot.List[i] = rhs
+	return nil
 }
 
 // execIf walks the if-elif-else chain. A matched branch executes its block
@@ -551,7 +612,10 @@ func (in *interp) execFor(s *syntax.ForStmt) error {
 func (in *interp) runListIter(s *syntax.ForStmt, elem Value) (bool, error) {
 	in.pushFrame()
 	defer in.popFrame()
-	if err := in.declare(s.Var, copyValue(elem)); err != nil {
+	// v0.3: no implicit deep-copy on for-iter element bind. The borrow
+	// checker has BorrowedShared the iterable for the body's duration
+	// and rejects mutation of it inside, so shared backing is safe.
+	if err := in.declare(s.Var, elem); err != nil {
 		return false, err
 	}
 	for _, st := range s.Body.Statements {
@@ -908,6 +972,17 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	if ident.Name == "len" {
 		return in.evalLen(e)
 	}
+	// v0.3 builtins. `clone(xs)` returns a deep copy of its composite argument
+	// — the borrow checker already enforces that primitives are rejected. The
+	// interpreter implementation reuses copyValue, which is the same logic v0.2
+	// applied implicitly on every bind. `push(xs, v)` mutates the named mut
+	// list in place; the borrow checker has already validated mut and state.
+	if ident.Name == "clone" {
+		return in.evalClone(e)
+	}
+	if ident.Name == "push" {
+		return in.evalPush(e)
+	}
 	fn, ok := in.fns[ident.Name]
 	if !ok {
 		return Value{}, fmt.Errorf("internal: undefined function %q at %s", ident.Name, e.Pos)
@@ -935,10 +1010,12 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	defer func() { in.stack = savedStack }()
 
 	for i, p := range fn.Params {
-		// Deep-copy each argument as it crosses the call boundary so the
-		// callee's parameter is independent of the caller's binding (PLAN
-		// "value-copied lists" rule).
-		if err := in.declare(p.Name, copyValue(args[i])); err != nil {
+		// v0.3: fn-call composite args are implicit shared borrows. No
+		// deep copy at the call boundary — the borrow checker enforces
+		// that fn parameters of composite type are BorrowedShared and
+		// cannot be moved/mutated inside the body, so sharing the
+		// underlying value with the caller's binding is safe.
+		if err := in.declare(p.Name, args[i]); err != nil {
 			return Value{}, err
 		}
 	}
@@ -996,6 +1073,49 @@ func (in *interp) evalLen(e *syntax.CallExpr) (Value, error) {
 	return Value{}, fmt.Errorf("internal: len cannot accept %s at %s", v.Type, e.Pos)
 }
 
+// evalClone implements `clone(xs)`. The argument has already been validated by
+// typeck (composite, exactly one) and by the borrow checker (the receiver is a
+// shared borrow — caller retains ownership). The runtime is purely a fresh
+// deep copy via copyValue.
+func (in *interp) evalClone(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: clone expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	return copyValue(v), nil
+}
+
+// evalPush implements `push(xs, v)`. typeck has already required xs to be a
+// mut-bound list ident and v's type to match the list's element type; the
+// borrow checker has further verified xs is in Owned state. The runtime
+// appends to the named binding's slice in place — we look up the slot, take
+// the current list value, append a deep copy of v, and store the new header
+// back so the slice grows independently of any other view.
+func (in *interp) evalPush(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 2 {
+		return Value{}, fmt.Errorf("internal: push expects 2 args, got %d at %s", len(e.Args), e.Pos)
+	}
+	id, ok := e.Args[0].(*syntax.IdentExpr)
+	if !ok {
+		return Value{}, fmt.Errorf("internal: push first arg must be ident at %s", e.Pos)
+	}
+	slot, ok := in.lookup(id.Name)
+	if !ok {
+		return Value{}, fmt.Errorf("internal: push undefined name %q at %s", id.Name, e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[1])
+	if err != nil {
+		return Value{}, err
+	}
+	// v0.3: no implicit deep-copy on push — the borrow checker has
+	// invalidated v's source binding at the move site if v is a name.
+	slot.List = append(slot.List, v)
+	return Value{}, nil
+}
+
 // ---------------------------------------------------------------------------
 // v0.2 composite-data evaluators.
 // ---------------------------------------------------------------------------
@@ -1011,7 +1131,8 @@ func (in *interp) evalListLit(e *syntax.ListLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		elems[i] = copyValue(ev)
+		// v0.3: no implicit deep-copy at list-literal construction.
+		elems[i] = ev
 	}
 	// e.Type() is the canonical list[T]; reuse it so list values constructed
 	// from different sites in the same program share the type pointer.
@@ -1032,7 +1153,8 @@ func (in *interp) evalTupleLit(e *syntax.TupleLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		elems[i] = copyValue(ev)
+		// v0.3: no implicit deep-copy at tuple-literal construction.
+		elems[i] = ev
 	}
 	t := e.Type()
 	if t == nil || t.Kind != syntax.TypeTuple {
@@ -1070,7 +1192,8 @@ func (in *interp) evalStructLit(e *syntax.StructLit) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		values[idx] = copyValue(v)
+		// v0.3: no implicit deep-copy at struct-literal construction.
+		values[idx] = v
 		provided[idx] = true
 	}
 	for i, ok := range provided {
@@ -1105,7 +1228,8 @@ func (in *interp) evalIndex(e *syntax.IndexExpr) (Value, error) {
 		if idx < 0 || idx >= n {
 			return Value{}, fmt.Errorf("runtime error at %s: list index %d out of range [0..%d)", e.Pos, idx, n)
 		}
-		return copyValue(rv.List[idx]), nil
+		// v0.3: index read aliases the element rather than deep-copying.
+		return rv.List[idx], nil
 	case syntax.TypeStr:
 		runes := []rune(rv.Str)
 		n := int64(len(runes))
@@ -1159,7 +1283,9 @@ func (in *interp) evalSlice(e *syntax.SliceExpr) (Value, error) {
 	}
 	out := make([]Value, hi-lo)
 	for i := lo; i < hi; i++ {
-		out[i-lo] = copyValue(rv.List[i])
+		// v0.3: slice copies the OUTER list header but aliases each
+		// element. Primitives are value-copied by Go assignment anyway.
+		out[i-lo] = rv.List[i]
 	}
 	// Reuse the receiver's list type so the constructed Value's Type pointer
 	// matches the receiver's (consistent with the rest of the interpreter's
@@ -1193,7 +1319,8 @@ func (in *interp) evalFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
 	}
 	for i, f := range rv.Type.Fields {
 		if f.Name == e.FieldName {
-			return copyValue(rv.Fields[i]), nil
+			// v0.3: field read aliases the field rather than deep-copying.
+			return rv.Fields[i], nil
 		}
 	}
 	return Value{}, fmt.Errorf("internal: struct %q has no field %q at %s", rv.Type.Name, e.FieldName, e.NamePos)
@@ -1257,8 +1384,10 @@ func (in *interp) bindPattern(pat syntax.Pattern, v Value) (bool, error) {
 	case *syntax.WildcardPat:
 		return true, nil
 	case *syntax.BindPat:
-		// Bind a deep copy so a later mutation of v's source can't leak.
-		if err := in.declare(p.Name, copyValue(v)); err != nil {
+		// v0.3: bind shares the value. The borrow checker has flagged
+		// the scrutinee as Moved at the BindPat site, so the user
+		// can't observe the alias.
+		if err := in.declare(p.Name, v); err != nil {
 			return false, err
 		}
 		return true, nil

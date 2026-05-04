@@ -132,15 +132,19 @@ func TestParseAssignAllOps(t *testing.T) {
 			if s.Op != c.want {
 				t.Errorf("op = %v, want %v", s.Op, c.want)
 			}
-			if s.Target.Name != "x" {
-				t.Errorf("target = %q, want x", s.Target.Name)
+			ident, ok := s.Target.(*IdentExpr)
+			if !ok {
+				t.Fatalf("Target is %T, want *IdentExpr", s.Target)
+			}
+			if ident.Name != "x" {
+				t.Errorf("target = %q, want x", ident.Name)
 			}
 		})
 	}
 }
 
 func TestParseAssignNonIdentLHSIsError(t *testing.T) {
-	expectParseErr(t, "1 = x\n", "must be an identifier")
+	expectParseErr(t, "1 = x\n", "must be an identifier or list[i]")
 }
 
 func TestParsePrintOfExpression(t *testing.T) {

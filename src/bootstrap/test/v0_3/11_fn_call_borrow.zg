@@ -1,0 +1,8 @@
+fn observe(xs: list[int]) {
+    print xs[0]
+}
+
+let xs := [10, 20, 30]
+observe(xs)
+observe(xs)
+print xs[2]

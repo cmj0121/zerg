@@ -315,6 +315,20 @@ func Check(prog *Program) error {
 		ret:     tInt,
 		builtin: true,
 	}
+	// v0.3 builtins: `push(xs, v)` mutates a mut-bound list in place; `clone(xs)`
+	// returns a fresh deep copy of any composite. Both special-case at the call
+	// site (see checkCall) — the params/ret slots here are documentation-only
+	// sentinels and are never type-checked against directly.
+	c.fns["push"] = fnSig{
+		params:  []*Type{NewListType(tInt), tInt}, // documentation-only sentinel
+		ret:     tVoid,
+		builtin: true,
+	}
+	c.fns["clone"] = fnSig{
+		params:  []*Type{NewListType(tInt)}, // documentation-only sentinel
+		ret:     NewListType(tInt),
+		builtin: true,
+	}
 
 	if err := c.collectTopLevel(prog); err != nil {
 		return err
@@ -332,6 +346,13 @@ func Check(prog *Program) error {
 		if err := c.checkStmt(stmt); err != nil {
 			return err
 		}
+	}
+	// v0.3 Unit 3: borrow check runs after typeck so every Expr already has a
+	// resolved Type. The two passes share a process but produce distinct error
+	// types (TypeError vs BorrowError) — keeping them separate makes it
+	// trivial for tests and tooling to attribute a diagnostic to its source.
+	if err := borrowCheck(prog, c.fns); err != nil {
+		return err
 	}
 	return nil
 }
@@ -393,9 +414,11 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			}
 			c.enums[s.Name] = NewEnumType(s.Name, variants)
 		case *FnDecl:
-			// PLAN-pinned: cannot redefine the built-in `len`.
-			if s.Name == "len" {
-				return typeErr(s.Pos, "cannot redefine built-in 'len'")
+			// PLAN-pinned: cannot redefine built-in fns. v0.2 reserves `len`;
+			// v0.3 adds `push` and `clone` to the same reserved set.
+			switch s.Name {
+			case "len", "push", "clone":
+				return typeErr(s.Pos, "cannot redefine built-in '%s'", s.Name)
 			}
 			if err := register(s.Name, s.Pos, "function"); err != nil {
 				return err
@@ -772,17 +795,79 @@ func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Ex
 
 // checkAssign validates the lhs is mut, then matches operator semantics.
 func (c *checker) checkAssign(s *AssignStmt) error {
-	b, ok := c.scope.lookup(s.Target.Name)
+	switch lhs := s.Target.(type) {
+	case *IdentExpr:
+		return c.checkAssignIdent(s, lhs)
+	case *IndexExpr:
+		return c.checkAssignIndex(s, lhs)
+	default:
+		return typeErr(s.Pos, "internal: unsupported assignment target %T", s.Target)
+	}
+}
+
+// checkAssignIndex is the v0.3 list-element assignment path: `xs[i] = v`.
+// The receiver must be a mut-bound list variable (parse-time guarantees a
+// bare ident receiver — chained indexing was rejected upstream); the index
+// must be int; the value must match the list's element type. Borrow-state
+// checks (Owned vs Moved vs BorrowedShared) happen in the separate borrow
+// pass, not here — typeck only verifies mutability and types.
+func (c *checker) checkAssignIndex(s *AssignStmt, lhs *IndexExpr) error {
+	id, ok := lhs.Receiver.(*IdentExpr)
 	if !ok {
-		return typeErr(s.Target.Pos, "undefined name %q", s.Target.Name)
+		return typeErr(lhs.Pos, "list-element assignment requires a named list on the left")
+	}
+	b, ok := c.scope.lookup(id.Name)
+	if !ok {
+		return typeErr(id.Pos, "undefined name %q", id.Name)
+	}
+	if b.typ == nil || b.typ.Kind != TypeList {
+		return typeErr(lhs.Pos, "cannot index-assign into %q (declared %s)", id.Name, b.typ)
 	}
 	switch b.kind {
 	case bindLet:
-		return typeErr(s.Pos, "cannot assign to %q (declared with let)", s.Target.Name)
+		return typeErr(s.Pos, "cannot assign to %q[i] (declared with let — use mut to allow element mutation)", id.Name)
 	case bindConst:
-		return typeErr(s.Pos, "cannot assign to %q (declared with const)", s.Target.Name)
+		return typeErr(s.Pos, "cannot assign to %q[i] (declared with const)", id.Name)
 	}
-	s.Target.setType(b.typ)
+	id.setType(b.typ)
+	// Index must be int.
+	it, err := c.checkExpr(lhs.Index)
+	if err != nil {
+		return err
+	}
+	if it != tInt {
+		return typeErr(lhs.Index.ExprPos(), "index must be int, got %s", it)
+	}
+	lhs.setType(b.typ.Element)
+	// Value must match the list's element type.
+	rhs, err := c.checkExprHint(s.Value, b.typ.Element)
+	if err != nil {
+		return err
+	}
+	if !typeEq(rhs, b.typ.Element) {
+		return typeErr(s.Pos, "cannot assign %s to %s element of %q", rhs, b.typ.Element, id.Name)
+	}
+	// v0.3 list-element assignment uses the bare `=` operator only. Compound
+	// forms (`xs[i] += 1`) are rejected at parse time; defensive guard here.
+	if s.Op != AssignSet {
+		return typeErr(s.Pos, "compound assignment to a list element is not supported at v0.3")
+	}
+	return nil
+}
+
+// checkAssignIdent is the v0.1 simple-assignment path: `name OP value`.
+func (c *checker) checkAssignIdent(s *AssignStmt, target *IdentExpr) error {
+	b, ok := c.scope.lookup(target.Name)
+	if !ok {
+		return typeErr(target.Pos, "undefined name %q", target.Name)
+	}
+	switch b.kind {
+	case bindLet:
+		return typeErr(s.Pos, "cannot assign to %q (declared with let)", target.Name)
+	case bindConst:
+		return typeErr(s.Pos, "cannot assign to %q (declared with const)", target.Name)
+	}
+	target.setType(b.typ)
 	rhs, err := c.checkExprHint(s.Value, b.typ)
 	if err != nil {
 		return err
@@ -790,7 +875,7 @@ func (c *checker) checkAssign(s *AssignStmt) error {
 	switch s.Op {
 	case AssignSet:
 		if !typeEq(rhs, b.typ) {
-			return typeErr(s.Pos, "cannot assign %s to %q (declared %s)", rhs, s.Target.Name, b.typ)
+			return typeErr(s.Pos, "cannot assign %s to %q (declared %s)", rhs, target.Name, b.typ)
 		}
 	case AssignAdd, AssignSub, AssignMul, AssignDiv, AssignMod:
 		if s.Op == AssignAdd && b.typ == tStr && rhs == tStr {
@@ -1534,6 +1619,12 @@ func (c *checker) checkCall(e *CallExpr) (*Type, error) {
 		e.setType(tInt)
 		return tInt, nil
 	}
+	if sig.builtin && ident.Name == "push" {
+		return c.checkPushCall(e, ident)
+	}
+	if sig.builtin && ident.Name == "clone" {
+		return c.checkCloneCall(e, ident)
+	}
 	if len(e.Args) != len(sig.params) {
 		return nil, typeErr(e.Pos, "function %q expects %d argument(s), got %d", ident.Name, len(sig.params), len(e.Args))
 	}
@@ -1549,6 +1640,82 @@ func (c *checker) checkCall(e *CallExpr) (*Type, error) {
 	ident.setType(sig.ret)
 	e.setType(sig.ret)
 	return sig.ret, nil
+}
+
+// checkPushCall implements typeck for the v0.3 `push(xs, v)` built-in. Arity
+// is fixed at 2; the first arg must be a top-level mut-bound list variable
+// (so the borrow checker at Unit 3 has a single root binding to mark dirty);
+// the second arg's type must equal the list's element type. Return is void.
+//
+// PLAN-pinned: `push` mutates `xs` in place — list mutation through fn
+// parameters or nested struct/list shapes is OUT of scope at v0.3. The
+// "must be a mut-bound list variable" check enforces both: pass-by-fn rejects
+// because fn params are bindLet (and inner-block let push := ... is fine
+// because that name shadows the builtin only at expression resolution).
+func (c *checker) checkPushCall(e *CallExpr, ident *IdentExpr) (*Type, error) {
+	if len(e.Args) != 2 {
+		return nil, typeErr(e.Pos, "function %q expects 2 argument(s), got %d", ident.Name, len(e.Args))
+	}
+	// First arg: must be a bare ident naming a mut-bound list. Reject every
+	// other shape with the same diagnostic so callers don't have to guess
+	// which sub-rule fired.
+	id, ok := e.Args[0].(*IdentExpr)
+	if !ok {
+		return nil, typeErr(e.Args[0].ExprPos(), "push: first argument must be a mut-bound list variable")
+	}
+	b, ok := c.scope.lookup(id.Name)
+	if !ok {
+		return nil, typeErr(id.Pos, "undefined name %q", id.Name)
+	}
+	if b.typ == nil || b.typ.Kind != TypeList {
+		return nil, typeErr(id.Pos, "push: first argument must be a mut-bound list variable")
+	}
+	if b.kind != bindMut {
+		return nil, typeErr(id.Pos, "push: %q must be mut to be modified — declare it with `mut %s := ...`", id.Name, id.Name)
+	}
+	id.setType(b.typ)
+	// Second arg: must equal the list element type.
+	vt, err := c.checkExprHint(e.Args[1], b.typ.Element)
+	if err != nil {
+		return nil, err
+	}
+	if !typeEq(vt, b.typ.Element) {
+		return nil, typeErr(e.Args[1].ExprPos(), "push: value has type %s, list element type is %s", vt, b.typ.Element)
+	}
+	ident.setType(tVoid)
+	e.setType(tVoid)
+	return tVoid, nil
+}
+
+// checkCloneCall implements typeck for the v0.3 `clone(xs)` built-in. Arity
+// is fixed at 1; the argument must be a composite type (list, tuple, struct,
+// enum) — primitives are rejected because they're already value-copied at
+// every bind. Return type is the same as the argument.
+//
+// PLAN-pinned: clone is an OBSERVATION of its argument, not a consumption —
+// the borrow checker at Unit 3 will model this as a shared borrow so the
+// caller retains ownership of `xs` after the call. typeck doesn't enforce
+// that here; it only types the call shape.
+func (c *checker) checkCloneCall(e *CallExpr, ident *IdentExpr) (*Type, error) {
+	if len(e.Args) != 1 {
+		return nil, typeErr(e.Pos, "function %q expects 1 argument(s), got %d", ident.Name, len(e.Args))
+	}
+	at, err := c.checkExpr(e.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	if at == nil {
+		return nil, typeErr(e.Args[0].ExprPos(), "clone: cannot infer argument type")
+	}
+	switch at.Kind {
+	case TypeList, TypeTuple, TypeStruct, TypeEnum:
+		// Composite — admissible. Return the same type; clone produces a
+		// fresh deep copy at runtime, but the type is unchanged.
+		ident.setType(at)
+		e.setType(at)
+		return at, nil
+	}
+	return nil, typeErr(e.Args[0].ExprPos(), "clone: argument must be a composite type — primitives don't need cloning")
 }
 
 // ---------------------------------------------------------------------------

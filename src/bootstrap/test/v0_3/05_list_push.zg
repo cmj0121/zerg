@@ -1,0 +1,7 @@
+mut xs := [1]
+push(xs, 2)
+push(xs, 3)
+push(xs, 4)
+push(xs, 5)
+print xs
+print len(xs)

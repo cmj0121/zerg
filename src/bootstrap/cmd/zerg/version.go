@@ -15,7 +15,7 @@ import (
 // string — so a typo in the version string can't silently relax the gate.
 const (
 	toolchainMajor = 0
-	toolchainMinor = 2
+	toolchainMinor = 3
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

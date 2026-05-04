@@ -1,0 +1,37 @@
+# requires: v0.7
+
+fn main() {
+    let wg := wait_group()
+    let ch := chan[int](4)
+    wg.add(4)
+    for i in 0..4 {
+        spawn fn() {
+            ch <- (i + 1) * 10
+            wg.done()
+        }()
+    }
+    wg.wait()
+    close(ch)
+
+    mut xs := [0, 0, 0, 0]
+    mut k := 0
+    for v in ch {
+        xs[k] = v
+        k = k + 1
+    }
+    let n := len(xs)
+    for i in 0..n {
+        for j in (i+1)..n {
+            if xs[j] < xs[i] {
+                let tmp := xs[i]
+                xs[i] = xs[j]
+                xs[j] = tmp
+            }
+        }
+    }
+    for v in xs {
+        print v
+    }
+}
+
+main()

@@ -1,0 +1,18 @@
+# requires: v0.7
+
+fn main() {
+    let xs := [1, 2, 3]
+    let done := chan[int]()
+    spawn fn() {
+        print xs[0]
+        print xs[1]
+        print xs[2]
+        done <- 0
+    }()
+    let _ := <- done
+    print xs[0]
+    print xs[1]
+    print xs[2]
+}
+
+main()

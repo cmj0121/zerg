@@ -1,0 +1,28 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int](1)
+    let wg := wait_group()
+    wg.add(2)
+    spawn fn() {
+        ch <- 11
+        wg.done()
+    }()
+    spawn fn() {
+        ch <- 22
+        wg.done()
+    }()
+    let a := <- ch
+    let b := <- ch
+    wg.wait()
+    match a {
+        Option.Some(v) => print v
+        Option.None => print -1
+    }
+    match b {
+        Option.Some(v) => print v
+        Option.None => print -1
+    }
+}
+
+main()

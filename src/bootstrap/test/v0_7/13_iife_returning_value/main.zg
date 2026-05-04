@@ -1,0 +1,16 @@
+# requires: v0.7
+
+fn main() {
+    let base := 10
+    let out := chan[int](1)
+    spawn fn() {
+        out <- base * base + 2
+    }()
+    let r := <- out
+    match r {
+        Option.Some(v) => print v
+        Option.None => print -1
+    }
+}
+
+main()

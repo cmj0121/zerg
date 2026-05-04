@@ -1,0 +1,27 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int]()
+    spawn fn() {
+        ch <- 1
+        ch <- 2
+        ch <- 3
+    }()
+    let a := <- ch
+    let b := <- ch
+    let c := <- ch
+    match a {
+        Option.Some(v) => print v
+        Option.None => print -1
+    }
+    match b {
+        Option.Some(v) => print v
+        Option.None => print -1
+    }
+    match c {
+        Option.Some(v) => print v
+        Option.None => print -1
+    }
+}
+
+main()

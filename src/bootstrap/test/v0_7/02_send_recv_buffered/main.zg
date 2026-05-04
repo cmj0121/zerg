@@ -1,0 +1,14 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int](3)
+    ch <- 10
+    ch <- 20
+    ch <- 30
+    close(ch)
+    for v in ch {
+        print v
+    }
+}
+
+main()

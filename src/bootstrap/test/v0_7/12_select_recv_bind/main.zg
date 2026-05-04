@@ -1,0 +1,12 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int](1)
+    ch <- 77
+    select {
+        bound := <- ch -> { print bound }
+        _ -> { print 0 }
+    }
+}
+
+main()

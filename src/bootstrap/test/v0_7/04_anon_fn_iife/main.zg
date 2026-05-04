@@ -1,0 +1,15 @@
+# requires: v0.7
+
+fn main() {
+    let n := 5
+    let done := chan[int]()
+    spawn fn() {
+        print n * 2
+        print n * 3
+        done <- 0
+    }()
+    let _ := <- done
+    print n
+}
+
+main()

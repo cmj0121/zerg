@@ -1,0 +1,4 @@
+# 5 spawned tasks each send their captured loop index to ch. Order is
+# scheduling-dependent; the multiset of values is fixed.
+len: 5
+sorted_set: 0,1,2,3,4

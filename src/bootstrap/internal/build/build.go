@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cmj/zerg/src/bootstrap/internal/loader"
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
@@ -32,24 +33,22 @@ func EmitSource(srcPath string, w io.Writer) error {
 	return Emit(prog, w)
 }
 
-// parseSource reads, lexes, parses, and type-checks srcPath, wrapping each
-// failure with a `zerg build:` prefix so callers can return errors verbatim.
-// Type-checking happens here (not just inside Build) so EmitSource — used by
-// `--emit-c` — also rejects ill-typed programs before generating C that the
-// codegen would otherwise accept and produce nonsense for.
+// parseSource reads, lexes, parses (via the v0.5 module loader), and
+// type-checks srcPath, wrapping each failure with a `zerg build:` prefix
+// so callers can return errors verbatim. Type-checking happens here (not
+// just inside Build) so EmitSource — used by `--emit-c` — also rejects
+// ill-typed programs before generating C that the codegen would otherwise
+// accept and produce nonsense for.
+//
+// At Unit 2 the loader returns a Bundle but typeck and codegen still
+// operate on the entry-only program. Cross-module typeck wires up at
+// Unit 3, codegen at Unit 6.
 func parseSource(srcPath string) (*syntax.Program, error) {
-	src, err := os.ReadFile(srcPath)
+	bundle, err := loader.Load(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("zerg build: %w", err)
 	}
-	tokens, err := syntax.Lex(src)
-	if err != nil {
-		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
-	}
-	prog, err := syntax.Parse(tokens)
-	if err != nil {
-		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
-	}
+	prog := bundle.Entry.Program
 	if err := syntax.Check(prog); err != nil {
 		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
 	}

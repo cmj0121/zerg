@@ -470,6 +470,30 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 			}
 		}
 		return nil
+	case *SelectStmt:
+		// v0.7 Unit 4: typeck-only landing. Real per-arm move/share
+		// semantics land at Unit 5; today we walk each arm's channel
+		// op operands and body as reads so basic use-after-move on
+		// the operands still fires.
+		for i := range s.Arms {
+			arm := &s.Arms[i]
+			if arm.Chan != nil {
+				if err := c.walkExpr(arm.Chan, false); err != nil {
+					return err
+				}
+			}
+			if arm.Value != nil {
+				if err := c.walkExpr(arm.Value, false); err != nil {
+					return err
+				}
+			}
+			for _, st := range arm.Body.Statements {
+				if err := c.checkStmt(st); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }

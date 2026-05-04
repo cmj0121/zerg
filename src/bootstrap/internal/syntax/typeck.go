@@ -1530,6 +1530,8 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		return c.checkSpawnStmt(s)
 	case *DeferStmt:
 		return c.checkDeferStmt(s)
+	case *SelectStmt:
+		return c.checkSelectStmt(s)
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }

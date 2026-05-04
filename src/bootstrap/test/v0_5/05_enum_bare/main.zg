@@ -1,0 +1,5 @@
+import "util"
+
+print util.Color.Red
+print util.Color.Green
+print util.Color.Blue

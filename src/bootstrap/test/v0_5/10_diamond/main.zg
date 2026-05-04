@@ -1,0 +1,7 @@
+import "b"
+import "c"
+import "d"
+
+print d.answer()
+print b.from_b()
+print c.from_c()

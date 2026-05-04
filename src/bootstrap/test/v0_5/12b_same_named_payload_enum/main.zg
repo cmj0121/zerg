@@ -1,0 +1,14 @@
+import "util"
+
+enum Token { Eof, Ident(str) }
+
+impl Token {
+    pub fn label() -> str {
+        return "main"
+    }
+}
+
+let mt := Token.Ident("x")
+print mt.label()
+let ut := util.Token.Ident("y")
+print ut.label()

@@ -25,7 +25,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.4 — accepts the v0.4 surface (procedural core, composite data, borrow checking, polymorphism)\n" +
+const banner = "Zerg REPL v0.5 — accepts the v0.5 surface (procedural core, composite data, borrow checking, polymorphism, modules)\n" +
 	"Type :exit to quit, :help for syntax\n"
 
 const helpText = "Statements: let/mut/const, fn, struct/enum, if/elif/else, for, match, return/break/continue, print. Run :exit to quit.\n"
@@ -108,7 +108,7 @@ func Start(in io.Reader, out io.Writer) error {
 			continue
 		}
 
-		_, err = syntax.Parse(tokens)
+		prog, err := syntax.Parse(tokens)
 		if err != nil {
 			var pe *syntax.ParseError
 			if errors.As(err, &pe) && pe.IsIncomplete() {
@@ -118,6 +118,16 @@ func Start(in io.Reader, out io.Writer) error {
 			// A real parse error: report and discard the in-progress buffer
 			// so the user can retry from a clean slate.
 			fmt.Fprintln(out, err)
+			accumBuf.Reset()
+			continue
+		}
+
+		// PLAN-mandated v0.5 guard: imports are not admitted at the REPL.
+		// We detect any *ImportDecl in the parsed Program's top-level
+		// statements and emit the dedicated diagnostic, dropping the
+		// in-progress buffer so the user can keep typing.
+		if hasImport(prog) {
+			fmt.Fprintln(out, "import not supported at REPL")
 			accumBuf.Reset()
 			continue
 		}
@@ -140,6 +150,21 @@ func Start(in io.Reader, out io.Writer) error {
 		accumBuf.Reset()
 		priorBytes = newPriorBytes
 	}
+}
+
+// hasImport reports whether the parsed Program contains an *ImportDecl at
+// the top level. Used to enforce the v0.5 PLAN's "import not supported at
+// REPL" rule before any later phase (loader/typeck) would silently succeed.
+func hasImport(prog *syntax.Program) bool {
+	if prog == nil {
+		return false
+	}
+	for _, st := range prog.Statements {
+		if _, ok := st.(*syntax.ImportDecl); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // runWithSuppression executes src and returns the total number of output

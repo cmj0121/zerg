@@ -104,7 +104,8 @@ print first(xs)
 	if strings.Contains(out, "zerg_list_int64_t_copy(z_xs)") {
 		t.Errorf("fn-call arg should NOT call <T>_copy; got:\n%s", out)
 	}
-	if !strings.Contains(out, "z_first(z_xs)") {
+	firstSym := "z_" + mangleModule("main") + "__first"
+	if !strings.Contains(out, firstSym+"(z_xs)") {
 		t.Errorf("fn call should pass z_xs directly; got:\n%s", out)
 	}
 }

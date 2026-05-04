@@ -1,0 +1,8 @@
+import (
+    "a"
+    "b"
+)
+
+print a.alpha()
+print b.beta()
+print a.alpha() + b.beta()

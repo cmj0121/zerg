@@ -87,12 +87,15 @@ let c := Counter { count: 5 }
 print c.double()
 `
 	out := mustEmit(t, src)
-	if !strings.Contains(out, "static int64_t zerg_struct_Counter__double(zerg_struct_Counter z_this)") {
-		t.Errorf("inherent method missing mangled signature; got:\n%s", out)
+	mm := mangleModule("main")
+	sig := "static int64_t zerg_struct_" + mm + "__Counter__double(zerg_struct_" + mm + "__Counter z_this)"
+	if !strings.Contains(out, sig) {
+		t.Errorf("inherent method missing mangled signature %q; got:\n%s", sig, out)
 	}
 	// Method-call site emits a direct call — receiver as first arg.
-	if !strings.Contains(out, "zerg_struct_Counter__double(z_c)") {
-		t.Errorf("method-call should pass receiver as first arg; got:\n%s", out)
+	call := "zerg_struct_" + mm + "__Counter__double(z_c)"
+	if !strings.Contains(out, call) {
+		t.Errorf("method-call should pass receiver as first arg %q; got:\n%s", call, out)
 	}
 }
 
@@ -131,12 +134,15 @@ let c := Counter { count: 1 }
 print c.to_string()
 `
 	out := mustEmit(t, src)
+	mm := mangleModule("main")
+	specPrefix := mm + "__Printable"
+	typeMangle := "zerg_struct_" + mm + "__Counter"
 	for _, want := range []string{
-		"struct zerg_vtable_Printable {",
-		"typedef struct { void* data; const struct zerg_vtable_Printable* vt; } zerg_dyn_Printable;",
-		"static zerg_str zerg_struct_Counter__Printable__to_string(zerg_struct_Counter z_this)",
-		"static const struct zerg_vtable_Printable zerg_vt_zerg_struct_Counter_Printable",
-		".to_string = zerg_adapter_zerg_struct_Counter__Printable__to_string",
+		"struct zerg_vtable_" + specPrefix + " {",
+		"typedef struct { void* data; const struct zerg_vtable_" + specPrefix + "* vt; } zerg_dyn_" + specPrefix + ";",
+		"static zerg_str " + typeMangle + "__" + specPrefix + "__to_string(" + typeMangle + " z_this)",
+		"static const struct zerg_vtable_" + specPrefix + " zerg_vt_" + typeMangle + "_" + specPrefix,
+		".to_string = zerg_adapter_" + typeMangle + "__" + specPrefix + "__to_string",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing vtable piece %q; got:\n%s", want, out)
@@ -206,9 +212,11 @@ let c := Counter { count: 1 }
 print c.to_string()
 `
 	out := mustEmit(t, src)
+	mm := mangleModule("main")
+	stub := "zerg_not_impl_zerg_struct_" + mm + "__Counter__" + mm + "__Printable__to_string"
 	// The stub forward-declared and emitted with the parity-format error.
-	if !strings.Contains(out, "zerg_not_impl_zerg_struct_Counter__Printable__to_string") {
-		t.Errorf("NotImplemented stub missing; got:\n%s", out)
+	if !strings.Contains(out, stub) {
+		t.Errorf("NotImplemented stub %q missing; got:\n%s", stub, out)
 	}
 	if !strings.Contains(out, `zerg_not_implemented("Counter", "to_string", "Printable"`) {
 		t.Errorf("NotImplemented call should pass type/method/spec strings; got:\n%s", out)
@@ -242,9 +250,13 @@ let p: Printable = c
 print p.to_string()
 `
 	out := mustEmit(t, src)
+	mm := mangleModule("main")
+	specPrefix := mm + "__Printable"
+	typeMangle := "zerg_struct_" + mm + "__Counter"
+	wrap := "(zerg_dyn_" + specPrefix + "){.data = __p, .vt = &zerg_vt_" + typeMangle + "_" + specPrefix + "}"
 	// Coercion site: heap-box and wrap.
-	if !strings.Contains(out, "(zerg_dyn_Printable){.data = __p, .vt = &zerg_vt_zerg_struct_Counter_Printable}") {
-		t.Errorf("spec coercion did not emit fat-pointer literal; got:\n%s", out)
+	if !strings.Contains(out, wrap) {
+		t.Errorf("spec coercion did not emit fat-pointer literal %q; got:\n%s", wrap, out)
 	}
 	// Vtable dispatch: `__r.vt->method(__r.data, ...)`.
 	if !strings.Contains(out, "__r.vt->to_string(__r.data") {
@@ -305,8 +317,9 @@ let t := Token.Eof
 print t
 `
 	out := mustEmit(t, src)
+	mm := mangleModule("main")
 	for _, want := range []string{
-		"struct zerg_enum_Token {",
+		"struct zerg_enum_" + mm + "__Token {",
 		"int32_t tag;",
 		"union {",
 		"struct { char _empty; } p0; /* Eof */",
@@ -330,8 +343,9 @@ let f := Frame.Args([1, 2, 3])
 print f
 `
 	out := mustEmit(t, src)
+	mm := mangleModule("main")
 	listDef := "struct zerg_list_int64_t { int64_t* data;"
-	enumDef := "struct zerg_enum_Frame {"
+	enumDef := "struct zerg_enum_" + mm + "__Frame {"
 	li := strings.Index(out, listDef)
 	ei := strings.Index(out, enumDef)
 	if li < 0 {

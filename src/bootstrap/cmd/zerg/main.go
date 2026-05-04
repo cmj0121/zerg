@@ -11,12 +11,18 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/build"
+	"github.com/cmj/zerg/src/bootstrap/internal/loader"
 	"github.com/cmj/zerg/src/bootstrap/internal/repl"
 	"github.com/cmj/zerg/src/bootstrap/internal/run"
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const version = "0.4.0"
+// cliVersion is the user-facing string `zerg --version` prints. The
+// toolchain's (major, minor) gate lives in internal/version (see
+// version.Major / version.Minor) — `cliVersion` may lag behind the gate
+// during a v0.X release in progress and is bumped to canonical form by
+// the twain unit at the end of each version's work.
+const cliVersion = "0.5.0"
 
 type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
@@ -35,23 +41,24 @@ func (c *runCmd) Run() error {
 	if err := checkRequiresFile(c.File); err != nil {
 		return err
 	}
-	src, err := os.ReadFile(c.File)
+	bundle, err := loader.Load(c.File)
 	if err != nil {
 		return err
 	}
-	tokens, err := syntax.Lex(src)
-	if err != nil {
+	log.Debug().
+		Int("modules", len(bundle.Modules)).
+		Str("entry", bundle.Entry.Path).
+		Msg("loaded")
+	// v0.5 Unit 3: typeck runs across the whole Bundle so cross-module
+	// references resolve, pub gating fires, and the orphan rule applies.
+	// v0.5 Unit 5: the interpreter walks the entire bundle — cross-module
+	// fn calls, struct/enum construction, method dispatch, and spec
+	// coercion all route through per-module decl tables and a
+	// bundle-wide impl index.
+	if err := syntax.CheckBundle(bundle); err != nil {
 		return err
 	}
-	log.Debug().Int("tokens", len(tokens)).Str("file", c.File).Msg("lexed")
-
-	prog, err := syntax.Parse(tokens)
-	if err != nil {
-		return err
-	}
-	log.Debug().Int("statements", len(prog.Statements)).Msg("parsed")
-
-	return run.Run(prog, os.Stdout)
+	return run.RunBundle(bundle, os.Stdout)
 }
 
 type buildCmd struct {
@@ -80,8 +87,8 @@ func main() {
 	app := &cli{}
 	ctx := kong.Parse(app,
 		kong.Name("zerg"),
-		kong.Description("Zerg toolchain (v0.4)."),
-		kong.Vars{"version": "zerg " + version},
+		kong.Description("Zerg toolchain (v0.5)."),
+		kong.Vars{"version": "zerg " + cliVersion},
 		kong.UsageOnError(),
 	)
 	configureLogger(app.Verbose)

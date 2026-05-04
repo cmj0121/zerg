@@ -130,6 +130,19 @@ const (
 	KindSpec // spec
 	KindImpl // impl
 	KindThis // this
+
+	// --- v0.5 module keywords. `pub` is a top-level visibility modifier; it
+	// applies to `fn`, `struct`, `enum`, `spec`, and impl methods. Default
+	// visibility is private; `pub` opts in. The lexer recognises the keyword
+	// but the visibility bit is inert at v0.5 Unit 1a — typeck consumption
+	// arrives at Unit 3.
+	KindPub // pub
+	// `import` introduces a top-level module import; `as` binds the imported
+	// module to a local alias inside an import statement. Both are reserved
+	// keywords starting v0.5 Unit 1b. The parser consumes them; module loading
+	// (Unit 2) and cross-module name resolution (Unit 3) handle the semantics.
+	KindImport // import
+	KindAs     // as
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -168,6 +181,12 @@ func (k Kind) String() string {
 		return "'impl'"
 	case KindThis:
 		return "'this'"
+	case KindPub:
+		return "'pub'"
+	case KindImport:
+		return "'import'"
+	case KindAs:
+		return "'as'"
 	case KindAnd:
 		return "'and'"
 	case KindBreak:

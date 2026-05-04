@@ -1,0 +1,5 @@
+import "main"
+
+pub fn from_b() -> int {
+    return 1
+}

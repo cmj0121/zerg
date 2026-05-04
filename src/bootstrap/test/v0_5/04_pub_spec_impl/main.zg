@@ -1,0 +1,13 @@
+import "util"
+
+struct Greeting { word: str }
+
+impl Greeting for util.Printable {
+    pub fn to_string() -> str {
+        return this.word
+    }
+}
+
+let g := Greeting { word: "hello" }
+let p: util.Printable = g
+print p.to_string()

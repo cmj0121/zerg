@@ -248,7 +248,14 @@ const (
 type TypeRef struct {
 	Pos      Position
 	Kind     TypeRefKind
-	Name     string     // TypeRefNamed
+	Name     string // TypeRefNamed
+	// Module, when non-empty, is the local binding name of an imported
+	// module that qualifies a TypeRefNamed (`mod.Color`). v0.5 Unit 3
+	// resolves this against the importing module's import-binding table to
+	// route the type lookup into the foreign module's decl tables. Empty
+	// for in-module type references — every v0.0–v0.4 corpus carries this
+	// field at its zero value.
+	Module   string
 	Element  *TypeRef   // TypeRefList
 	Elements []*TypeRef // TypeRefTuple
 	Resolved *Type
@@ -440,12 +447,20 @@ type FnParam struct {
 
 // FnDecl represents `fn name(p: T, ...) -> R { ... }`. The return type is
 // optional — a nil Return means the function returns no value.
+//
+// Pub records the v0.5 visibility modifier: true when the source wrote
+// `pub fn ...`, false (the default) for an unprefixed `fn ...`. The bit is
+// also set on impl-method FnDecls when the inner method was prefixed
+// (`impl T { pub fn m() ... }`). At v0.5 Unit 1a typeck does not yet
+// consume the bit; it carries through unchanged for Unit 3 to gate
+// cross-module access.
 type FnDecl struct {
 	Pos    Position
 	Name   string
 	Params []FnParam
 	Return *TypeRef // nil ⇒ no return value
 	Body   *Block
+	Pub    bool
 }
 
 func (*FnDecl) stmtNode()           {}
@@ -510,6 +525,38 @@ type NopStmt struct {
 
 func (*NopStmt) stmtNode()           {}
 func (s *NopStmt) StmtPos() Position { return s.Pos }
+
+// ImportDecl is one resolved-at-parse-time import. v0.5 Unit 1b admits three
+// surface shapes — `import "name"`, `import "name" as alias`, and the grouped
+// `import (...)` form. The grouped form is desugared in the parser into one
+// ImportDecl per entry so downstream layers (loader, typeck, run, build) only
+// see the flat single-import shape.
+//
+//   - Path is the verbatim contents of the string literal — no path resolution
+//     happens at parse time. The loader (Unit 2) is responsible for mapping
+//     the string to a sibling file.
+//   - PathPos is the position of the string literal inside the source, used by
+//     diagnostics and by the loader when reporting a load failure.
+//   - Alias is empty when the import had no `as` clause; otherwise it is the
+//     local binding name. The bare form `import "name"` uses Path itself as
+//     the binding (the parser rejects at parse time when Path is a reserved
+//     keyword, per the §Resolution rules tenth-man pin).
+//   - AliasPos is the zero Position when Alias is empty; otherwise it is the
+//     position of the alias identifier.
+//
+// At Unit 1b ImportDecl is parser-only: typeck/borrow/run/cgen each treat it
+// as a no-op so existing v0.0–v0.4 corpora keep working unchanged. Unit 2
+// wires the node into the module loader.
+type ImportDecl struct {
+	Pos      Position
+	Path     string
+	PathPos  Position
+	Alias    string
+	AliasPos Position
+}
+
+func (*ImportDecl) stmtNode()           {}
+func (s *ImportDecl) StmtPos() Position { return s.Pos }
 
 // ---------------------------------------------------------------------------
 // Expressions.
@@ -670,10 +717,14 @@ type FieldDecl struct {
 
 // StructDecl represents `struct Name { f1: T1, f2: T2, ... }`. Empty field
 // lists are accepted at parse time; typeck rejects them per the PLAN.
+//
+// Pub records the v0.5 decl-level visibility modifier. Field-level `pub` is
+// out of scope at v0.5; only the decl as a whole is gated.
 type StructDecl struct {
 	Pos    Position
 	Name   string
 	Fields []FieldDecl
+	Pub    bool
 }
 
 func (*StructDecl) stmtNode()           {}
@@ -694,10 +745,14 @@ type VariantDecl struct {
 }
 
 // EnumDecl represents `enum Name { V1, V2, ... }`.
+//
+// Pub records the v0.5 decl-level visibility modifier. Variants inherit the
+// enum's visibility; per-variant `pub` is not a v0.5 surface.
 type EnumDecl struct {
 	Pos      Position
 	Name     string
 	Variants []VariantDecl
+	Pub      bool
 }
 
 func (*EnumDecl) stmtNode()           {}
@@ -782,6 +837,13 @@ type StructLit struct {
 	typed
 	Pos      Position
 	TypeName string
+	// Module, when non-empty, is the local binding name of an imported
+	// module that qualifies a cross-module struct construction
+	// (`mod.MyStruct { ... }`). The parser produces this shape when it sees
+	// `Ident DOT Ident` immediately followed by a struct-literal body.
+	// Empty for in-module struct literals — backward-compatible with every
+	// v0.0–v0.4 corpus program.
+	Module   string
 	Fields   []FieldInit
 }
 
@@ -942,21 +1004,30 @@ func (p *EnumPat) PatPos() Position { return p.Pos }
 // non-nil is a default implementation that an impl may inherit or override.
 //
 // Reusing FnParam keeps the parameter-shape parser shared with FnDecl.
+//
+// Pub records the v0.5 visibility modifier on a spec-method declaration.
+// The bit is inert at Unit 1a; Unit 3 will use it to gate cross-module
+// dispatch on default-method bodies.
 type SpecMethod struct {
 	Pos    Position
 	Name   string
 	Params []FnParam
 	Return *TypeRef // nil ⇒ no return value
 	Body   *Block   // nil ⇒ signature only
+	Pub    bool
 }
 
 // SpecDecl represents `spec Name { method_decl* }`. Methods may be
 // signature-only (no body) or default implementations (body present); the
 // parser admits both shapes and the v0.4 typeck pass distinguishes them.
+//
+// Pub records the v0.5 decl-level visibility modifier on the spec itself;
+// individual method visibility is recorded on each SpecMethod.
 type SpecDecl struct {
 	Pos     Position
 	Name    string
 	Methods []*SpecMethod
+	Pub     bool
 }
 
 func (*SpecDecl) stmtNode()           {}
@@ -973,8 +1044,25 @@ func (s *SpecDecl) StmtPos() Position { return s.Pos }
 type ImplDecl struct {
 	Pos     Position
 	Type    string // the type name being implemented
+	// TypeModule, when non-empty, is the local binding name of an
+	// imported module that defined Type (`impl util.Counter for ...`).
+	// v0.5 typeck routes the receiver-type lookup through the importing
+	// module's import table when this is set.
+	TypeModule string
 	Spec    string // empty when inherent; otherwise the spec name
+	// SpecModule, when non-empty, is the local binding name of an
+	// imported module that defined Spec (`impl T for util.Printable`).
+	SpecModule string
 	Methods []*FnDecl
+	// Receiver is the canonical *Type pointer typeck resolved Type/
+	// TypeModule to. Set during the resolveImpls / resolveImplsCross
+	// pass and read by downstream consumers (interp's RunBundle, build's
+	// EmitBundle) that need pointer-equality dispatch on the receiver.
+	// Two modules each declaring `struct Counter` get distinct *Type
+	// pointers here, so impl tables can disambiguate by canonical pointer
+	// rather than bare name. Nil for impls that fail to resolve (typeck
+	// rejects those before this gets read).
+	Receiver *Type
 }
 
 func (*ImplDecl) stmtNode()           {}
@@ -1036,11 +1124,16 @@ func (e *ThisExpr) ExprPos() Position { return e.Pos }
 // variants (the FieldAccessExpr-derived shape).
 type EnumLit struct {
 	typed
-	Pos         Position
-	EnumName    string
-	Variant     string
-	VariantPos  Position
-	Payload     []Expr
+	Pos        Position
+	EnumName   string
+	// Module, when non-empty, is the local binding name of an imported
+	// module that defined the enum (set by v0.5 Unit 3 typeck when lowering
+	// `mod.Color.Red` / `mod.Token.Ident(x)`). Empty for in-module enum
+	// literals.
+	Module     string
+	Variant    string
+	VariantPos Position
+	Payload    []Expr
 }
 
 func (*EnumLit) exprNode()           {}

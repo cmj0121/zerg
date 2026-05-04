@@ -33,12 +33,45 @@ func Run(prog *syntax.Program, w io.Writer) error {
 	if err := syntax.Check(prog); err != nil {
 		return err
 	}
-	in := newInterp(prog, w)
+	return runChecked(prog, w)
+}
+
+// RunChecked walks an already-type-checked program. Use this when the
+// caller has run syntax.CheckBundle on a multi-module bundle and wants
+// to interpret the entry program without redundantly re-checking it.
+//
+// Backward compatible: builds a one-module bundle and forwards to
+// RunBundle, so v0.0–v0.4 callers keep their single-program surface.
+func RunChecked(prog *syntax.Program, w io.Writer) error {
+	return runChecked(prog, w)
+}
+
+// RunBundle is the v0.5 entry: walk every module's decls, then execute the
+// entry module's top-level statements. Cross-module fn calls, struct/enum
+// construction, method dispatch, enum-payload match, and spec coercion all
+// route through per-module decl tables and a bundle-wide impl index keyed
+// by canonical *Type pointer.
+//
+// CheckBundle must have run before RunBundle — the interpreter reads
+// typeck-stamped fields (StructLit.Module, EnumLit.Module, *Expr.Type(),
+// MethodCallExpr.Lowered/LoweredCall) and trusts pub gating / orphan rule
+// rejection upstream.
+func RunBundle(bundle syntax.BundleView, w io.Writer) error {
+	if bundle == nil {
+		return nil
+	}
+	in := newBundleInterp(bundle, w)
+	entry := bundle.BundleEntry()
+	if entry == nil {
+		return nil
+	}
+	prog := entry.ModuleProgram()
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
-		case *syntax.FnDecl, *syntax.SpecDecl, *syntax.ImplDecl:
-			// Decls are collected into per-program tables by newInterp. At
-			// top level they are declarations, not executable statements.
+		case *syntax.FnDecl, *syntax.SpecDecl, *syntax.ImplDecl,
+			*syntax.StructDecl, *syntax.EnumDecl, *syntax.ImportDecl:
+			// Decls are collected into per-module tables at init. At top
+			// level they are declarations, not executable statements.
 			continue
 		}
 		if err := in.execStmt(stmt); err != nil {
@@ -48,40 +81,83 @@ func Run(prog *syntax.Program, w io.Writer) error {
 	return nil
 }
 
+func runChecked(prog *syntax.Program, w io.Writer) error {
+	return RunBundle(singleProgramBundleAdapter{prog: prog}, w)
+}
+
+// singleProgramBundleAdapter wraps a *Program in the BundleView interface
+// so single-program callers (Run, RunChecked) route through the same
+// RunBundle entry as multi-module callers.
+type singleProgramBundleAdapter struct {
+	prog *syntax.Program
+}
+
+func (b singleProgramBundleAdapter) BundleEntry() syntax.ModuleView {
+	return singleProgramModuleAdapter{prog: b.prog}
+}
+func (b singleProgramBundleAdapter) BundleModules() []syntax.ModuleView {
+	return []syntax.ModuleView{singleProgramModuleAdapter{prog: b.prog}}
+}
+
+type singleProgramModuleAdapter struct {
+	prog *syntax.Program
+}
+
+func (m singleProgramModuleAdapter) ModuleName() string             { return "main" }
+func (m singleProgramModuleAdapter) ModuleProgram() *syntax.Program { return m.prog }
+func (m singleProgramModuleAdapter) ModuleImports() []syntax.ImportView {
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Interpreter state.
 // ---------------------------------------------------------------------------
 
-// interp holds the per-Run mutable state. Functions are looked up by name in
-// fns; variables live on a stack of frames. Each call site, each block, and
-// each for-range iteration push a fresh frame. A frame holds the names
-// introduced inside its scope only; lookup walks toward the root.
+// interp holds the per-Run mutable state. Variables live on a stack of
+// frames. Each call site, each block, and each for-range iteration push a
+// fresh frame. A frame holds the names introduced inside its scope only;
+// lookup walks toward the root.
 //
-// enums maps every enum name declared at top level to its canonical *Type,
-// so FieldAccessExpr can disambiguate `Color.Red` (enum variant access) from
-// `p.x` (struct field access) by checking the receiver-name against this
-// table. typeck has already validated each enum's variant set; we just
-// mirror the lookup structure here so the runtime path can produce a
-// variant Value without re-walking the AST.
-//
-// v0.4 adds spec/impl tables. specDecls is the per-name SpecDecl AST so
-// default-method bodies are accessible at dispatch time. inherentImpls
-// aggregates every inherent impl method per receiver type. specImpls is keyed
-// by (Type, Spec) so vtable construction and method dispatch resolve in O(1).
+// v0.5 multi-module: the interpreter holds per-module decl tables (one
+// moduleData per module in the bundle) plus a bundle-wide impl index keyed
+// by canonical *Type pointer. cur is the lexically-active module — when a
+// fn or method is called, we switch cur to the fn's owning module so its
+// body can resolve unqualified identifiers (its own structs, enums, fns,
+// and import bindings) against the right tables. fnOwner / specMethodOwner
+// stamp every FnDecl / SpecMethod with the module that declared it so the
+// switch is O(1).
 type interp struct {
-	w   io.Writer
-	fns map[string]*syntax.FnDecl
+	w io.Writer
 
-	enums map[string]*syntax.Type
+	// modules holds per-module decl/import tables, keyed by *syntax.Program
+	// pointer (every ModuleView has a unique Program).
+	modules map[*syntax.Program]*moduleData
+	// cur is the active module for unqualified identifier resolution.
+	// Switched on every fn / method call to the callee's owning module.
+	cur *moduleData
 
-	// v0.4: spec / impl tables. Mirror typeck's structure but reuse the AST
-	// nodes for body walking. Method dispatch precedence at the interpreter
-	// is the same as typeck: inherent first, then unique spec impl, then
-	// vtable when the receiver is a fat-pointer specValue.
-	specDecls     map[string]*syntax.SpecDecl
-	inherentImpls map[string]map[string]*syntax.FnDecl                  // type → method → FnDecl
-	specImpls     map[implKey]map[string]*syntax.FnDecl                 // (type, spec) → method → FnDecl
-	specImplPos   map[implKey]bool                                      // (type, spec) presence (the impl block exists)
+	// fnOwner and methodOwner map every FnDecl / spec-default body to the
+	// module that declared it, so a cross-module call can find the callee's
+	// lexical context in O(1).
+	fnOwner         map[*syntax.FnDecl]*moduleData
+	specMethodOwner map[*syntax.SpecMethod]*moduleData
+
+	// Bundle-wide impl index keyed by canonical *Type pointer. typeck has
+	// already validated cross-module rules, so a single union of every
+	// module's impls is correct for runtime dispatch.
+	//
+	//   inherentByType[recv][methodName]  → FnDecl
+	//   specByType[recv][specName][methodName] → FnDecl (override; absent
+	//     entries fall through to the spec's default body)
+	//   specByPair[(recv, specName)] = true when the impl block exists, so
+	//     vtable lookup ("does this concrete-spec pair have an impl?") is O(1).
+	inherentByType map[*syntax.Type]map[string]*syntax.FnDecl
+	specByType     map[*syntax.Type]map[string]map[string]*syntax.FnDecl
+	specByPair     map[specPairKey]bool
+	// specDeclsByName indexes spec declarations across the whole bundle so
+	// spec default bodies can be located by spec-name regardless of which
+	// module declared the spec.
+	specDeclsByName map[string]*syntax.SpecDecl
 
 	// stack[0] is the top-level frame; the active frame is stack[len(stack)-1].
 	// We keep the slice rather than a parent-pointer linked list because
@@ -90,9 +166,28 @@ type interp struct {
 	stack []*frame
 }
 
-// implKey deduplicates impls by (type, spec). Spec is "" for inherent impls.
-type implKey struct {
-	typeName string
+// moduleData is the per-module decl table. Indexed maps mirror typeck's
+// per-module checker tables; we duplicate the structure here so the
+// runtime can resolve unqualified identifiers (fns, enums) and the import
+// binding map without re-walking the AST.
+type moduleData struct {
+	view    syntax.ModuleView
+	prog    *syntax.Program
+	name    string
+	fns     map[string]*syntax.FnDecl
+	enums   map[string]*syntax.Type
+	structs map[string]*syntax.Type
+	// imports binds a local name (alias or bare path) to the target
+	// module's data. Used to recognise `mod.foo()` shapes at run-time.
+	imports map[string]*moduleData
+}
+
+// specPairKey is the (canonical *Type, spec name) pair used to index spec
+// impls bundle-wide. We index by *Type pointer (canonical per defining
+// module) rather than name because two modules can both declare a struct
+// "Counter" — their canonical *Type pointers differ.
+type specPairKey struct {
+	recv     *syntax.Type
 	specName string
 }
 
@@ -104,57 +199,509 @@ type frame struct {
 
 func newFrame() *frame { return &frame{vars: map[string]*Value{}} }
 
-// newInterp builds an interpreter with the program's fn table populated.
-// Type-check has already validated function uniqueness, so a duplicate name
-// here would be an internal error.
-func newInterp(prog *syntax.Program, w io.Writer) *interp {
+// newBundleInterp constructs the interpreter, walks every module's decls
+// into per-module tables, and builds the bundle-wide impl index keyed by
+// canonical *Type pointer.
+//
+// Resolution of impl receiver types is by name lookup in the impl's
+// declaring module's struct/enum tables (or, when ImplDecl.TypeModule is
+// non-empty, in the named imported module's tables). Same for the spec
+// slot. typeck has already validated existence, pubness, and the orphan
+// rule, so a missing-entry fall-through is treated as an internal error.
+func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 	in := &interp{
-		w:             w,
-		fns:           map[string]*syntax.FnDecl{},
-		enums:         map[string]*syntax.Type{},
-		specDecls:     map[string]*syntax.SpecDecl{},
-		inherentImpls: map[string]map[string]*syntax.FnDecl{},
-		specImpls:     map[implKey]map[string]*syntax.FnDecl{},
-		specImplPos:   map[implKey]bool{},
+		w:               w,
+		modules:         map[*syntax.Program]*moduleData{},
+		fnOwner:         map[*syntax.FnDecl]*moduleData{},
+		specMethodOwner: map[*syntax.SpecMethod]*moduleData{},
+		inherentByType:  map[*syntax.Type]map[string]*syntax.FnDecl{},
+		specByType:      map[*syntax.Type]map[string]map[string]*syntax.FnDecl{},
+		specByPair:      map[specPairKey]bool{},
+		specDeclsByName: map[string]*syntax.SpecDecl{},
 	}
-	for _, stmt := range prog.Statements {
-		switch s := stmt.(type) {
-		case *syntax.FnDecl:
-			in.fns[s.Name] = s
-		case *syntax.EnumDecl:
-			variants := make([]string, len(s.Variants))
-			for i, v := range s.Variants {
-				variants[i] = v.Name
-			}
-			in.enums[s.Name] = syntax.NewEnumType(s.Name, variants)
-		case *syntax.SpecDecl:
-			in.specDecls[s.Name] = s
-		case *syntax.ImplDecl:
-			if s.Spec == "" {
-				m, ok := in.inherentImpls[s.Type]
-				if !ok {
-					m = map[string]*syntax.FnDecl{}
-					in.inherentImpls[s.Type] = m
+	mods := bundle.BundleModules()
+	// Phase 1: build per-module decl tables (fns, enums, structs, specs).
+	// Done first so impl resolution can look up types in any module.
+	for _, m := range mods {
+		md := &moduleData{
+			view:    m,
+			prog:    m.ModuleProgram(),
+			name:    m.ModuleName(),
+			fns:     map[string]*syntax.FnDecl{},
+			enums:   map[string]*syntax.Type{},
+			structs: map[string]*syntax.Type{},
+			imports: map[string]*moduleData{},
+		}
+		in.modules[md.prog] = md
+		for _, stmt := range md.prog.Statements {
+			switch s := stmt.(type) {
+			case *syntax.FnDecl:
+				md.fns[s.Name] = s
+				in.fnOwner[s] = md
+			case *syntax.EnumDecl:
+				variants := make([]string, len(s.Variants))
+				for i, v := range s.Variants {
+					variants[i] = v.Name
 				}
-				for _, fn := range s.Methods {
-					m[fn.Name] = fn
+				md.enums[s.Name] = syntax.NewEnumType(s.Name, variants)
+			case *syntax.StructDecl:
+				// We don't need to construct a full *Type here; typeck has
+				// stamped canonical *Type pointers on every StructLit.
+				// Track the name set so impl resolution can route by name
+				// when ImplDecl.TypeModule is empty.
+				md.structs[s.Name] = nil
+			case *syntax.SpecDecl:
+				in.specDeclsByName[s.Name] = s
+				for _, sm := range s.Methods {
+					if sm.Body != nil {
+						in.specMethodOwner[sm] = md
+					}
 				}
-			} else {
-				key := implKey{typeName: s.Type, specName: s.Spec}
-				m, ok := in.specImpls[key]
-				if !ok {
-					m = map[string]*syntax.FnDecl{}
-					in.specImpls[key] = m
-				}
-				for _, fn := range s.Methods {
-					m[fn.Name] = fn
-				}
-				in.specImplPos[key] = true
 			}
 		}
 	}
+	// Phase 2: bind imports (LocalName → *moduleData).
+	for _, m := range mods {
+		md := in.modules[m.ModuleProgram()]
+		for _, imp := range m.ModuleImports() {
+			if imp == nil {
+				continue
+			}
+			target := imp.ImportTarget()
+			if target == nil {
+				continue
+			}
+			md.imports[imp.ImportLocalName()] = in.modules[target.ModuleProgram()]
+		}
+	}
+	// Phase 3: walk impls and union into the bundle-wide index keyed by
+	// canonical *Type pointer. typeck has stamped TypeModule / SpecModule
+	// when the receiver / spec lives in an imported module, so we resolve
+	// the *Type pointer through the importing module's tables for owners.
+	for _, m := range mods {
+		md := in.modules[m.ModuleProgram()]
+		for _, stmt := range md.prog.Statements {
+			id, ok := stmt.(*syntax.ImplDecl)
+			if !ok {
+				continue
+			}
+			recv := in.resolveImplReceiver(md, id)
+			if recv == nil {
+				// typeck would have rejected; defensive — skip the impl
+				// rather than panic so a fixture quirk doesn't break the
+				// whole run.
+				continue
+			}
+			// Stamp every method body's owning module so cross-module
+			// dispatch can switch lexical scope on call.
+			for _, fn := range id.Methods {
+				in.fnOwner[fn] = md
+			}
+			if id.Spec == "" {
+				m, ok := in.inherentByType[recv]
+				if !ok {
+					m = map[string]*syntax.FnDecl{}
+					in.inherentByType[recv] = m
+				}
+				for _, fn := range id.Methods {
+					m[fn.Name] = fn
+				}
+				continue
+			}
+			specMap, ok := in.specByType[recv]
+			if !ok {
+				specMap = map[string]map[string]*syntax.FnDecl{}
+				in.specByType[recv] = specMap
+			}
+			methodMap, ok := specMap[id.Spec]
+			if !ok {
+				methodMap = map[string]*syntax.FnDecl{}
+				specMap[id.Spec] = methodMap
+			}
+			for _, fn := range id.Methods {
+				methodMap[fn.Name] = fn
+			}
+			in.specByPair[specPairKey{recv: recv, specName: id.Spec}] = true
+		}
+	}
+	// Set the active module to the entry, push the top-level frame.
+	if entry := bundle.BundleEntry(); entry != nil {
+		in.cur = in.modules[entry.ModuleProgram()]
+	}
 	in.pushFrame()
 	return in
+}
+
+// resolveImplReceiver returns the canonical receiver *Type pointer that
+// the impl's methods should be keyed by in the bundle-wide impl index.
+//
+// Primary source is id.Receiver, stamped by typeck during
+// resolveImplsCross — the same canonical *Type pointer that
+// StructLit.Type() and EnumLit.Type() carry. Pointer equality is the
+// dispatch key, and typeck's stamp guarantees two modules each declaring
+// `struct Counter` get distinct pointers (each module's own checker
+// owns the *Type it built for its own decl).
+//
+// Fallbacks (rare, defensive) cover bundles checked by an older typeck
+// pass that didn't populate id.Receiver: scan the owning module's prog
+// for a stamp first (so we don't conflate cross-module same-named
+// types), then synthesise a per-Decl stand-in *Type as a last resort.
+func (in *interp) resolveImplReceiver(self *moduleData, id *syntax.ImplDecl) *syntax.Type {
+	owner := self
+	if id.TypeModule != "" {
+		if t, ok := self.imports[id.TypeModule]; ok {
+			owner = t
+		}
+	}
+	// Primary: typeck-stamped canonical pointer.
+	if id.Receiver != nil {
+		if id.Receiver.Kind == syntax.TypeEnum {
+			owner.enums[id.Type] = id.Receiver
+		}
+		return id.Receiver
+	}
+	// Fallback 1: scan the owning module's own prog for a TypeRef stamp.
+	// Restricted to owner.prog so two modules' same-named types stay
+	// pointer-distinct.
+	if t := findCanonicalType(owner.prog, id.Type); t != nil {
+		if t.Kind == syntax.TypeEnum {
+			owner.enums[id.Type] = t
+		}
+		return t
+	}
+	// Fallback 2: per-Decl stand-in. Keyed by *StructDecl pointer so each
+	// module's same-named struct still gets a distinct *Type.
+	if _, ok := owner.structs[id.Type]; ok {
+		for _, stmt := range owner.prog.Statements {
+			if sd, ok := stmt.(*syntax.StructDecl); ok && sd.Name == id.Type {
+				return getOrCreateStructType(sd)
+			}
+		}
+	}
+	return nil
+}
+
+// findCanonicalType walks prog for any TypeRef.Resolved or Expr.Type()
+// whose Name matches and Kind is struct or enum. Returns the canonical
+// *Type pointer the first time it's hit so the runtime impl index uses
+// the same pointer typeck stamped onto values and TypeRefs.
+func findCanonicalType(prog *syntax.Program, name string) *syntax.Type {
+	for _, stmt := range prog.Statements {
+		if t := scanStmtForType(stmt, name); t != nil {
+			return t
+		}
+	}
+	return nil
+}
+
+// structTypeCache holds stand-in *Type pointers for structs whose
+// canonical *Type couldn't be recovered from a TypeRef. Keyed by
+// *StructDecl so each module's struct gets a distinct *Type even when
+// the names collide.
+var structTypeCache = map[*syntax.StructDecl]*syntax.Type{}
+
+func getOrCreateStructType(sd *syntax.StructDecl) *syntax.Type {
+	if t, ok := structTypeCache[sd]; ok {
+		return t
+	}
+	// Minimal stand-in: name + Kind. Field set is unknown without typeck;
+	// dispatch only reads Name / Kind off the type at runtime, so this is
+	// adequate for the impl-index key role.
+	t := &syntax.Type{Kind: syntax.TypeStruct, Name: sd.Name}
+	structTypeCache[sd] = t
+	return t
+}
+
+// scanStmtForType recursively walks stmt looking for a TypeRef.Resolved or
+// Expr.Type() whose Name matches and Kind is TypeStruct or TypeEnum.
+// Returns the canonical pointer the first time it's hit.
+func scanStmtForType(stmt syntax.Stmt, name string) *syntax.Type {
+	switch s := stmt.(type) {
+	case *syntax.StructDecl:
+		for _, f := range s.Fields {
+			if t := scanTypeRefForType(f.Type, name); t != nil {
+				return t
+			}
+		}
+	case *syntax.FnDecl:
+		for _, p := range s.Params {
+			if t := scanTypeRefForType(p.Type, name); t != nil {
+				return t
+			}
+		}
+		if t := scanTypeRefForType(s.Return, name); t != nil {
+			return t
+		}
+		if s.Body != nil {
+			for _, sub := range s.Body.Statements {
+				if t := scanStmtForType(sub, name); t != nil {
+					return t
+				}
+			}
+		}
+	case *syntax.LetStmt:
+		if t := scanTypeRefForType(s.Type, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(s.Value, name); t != nil {
+			return t
+		}
+	case *syntax.MutStmt:
+		if t := scanTypeRefForType(s.Type, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(s.Value, name); t != nil {
+			return t
+		}
+	case *syntax.ConstStmt:
+		if t := scanTypeRefForType(s.Type, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(s.Value, name); t != nil {
+			return t
+		}
+	case *syntax.AssignStmt:
+		if t := scanExprForType(s.Target, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(s.Value, name); t != nil {
+			return t
+		}
+	case *syntax.ExprStmt:
+		if t := scanExprForType(s.Expr, name); t != nil {
+			return t
+		}
+	case *syntax.PrintStmt:
+		if t := scanExprForType(s.Expr, name); t != nil {
+			return t
+		}
+	case *syntax.ReturnStmt:
+		if t := scanExprForType(s.Value, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(s.Guard, name); t != nil {
+			return t
+		}
+	case *syntax.IfStmt:
+		if t := scanExprForType(s.Cond, name); t != nil {
+			return t
+		}
+		if s.Then != nil {
+			for _, sub := range s.Then.Statements {
+				if t := scanStmtForType(sub, name); t != nil {
+					return t
+				}
+			}
+		}
+		for _, ec := range s.Elifs {
+			if t := scanExprForType(ec.Cond, name); t != nil {
+				return t
+			}
+			if ec.Body != nil {
+				for _, sub := range ec.Body.Statements {
+					if t := scanStmtForType(sub, name); t != nil {
+						return t
+					}
+				}
+			}
+		}
+		if s.Else != nil {
+			for _, sub := range s.Else.Statements {
+				if t := scanStmtForType(sub, name); t != nil {
+					return t
+				}
+			}
+		}
+	case *syntax.ForStmt:
+		if t := scanExprForType(s.Cond, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(s.Iter, name); t != nil {
+			return t
+		}
+		if s.Range != nil {
+			if t := scanExprForType(s.Range.Start, name); t != nil {
+				return t
+			}
+			if t := scanExprForType(s.Range.End, name); t != nil {
+				return t
+			}
+		}
+		if s.Body != nil {
+			for _, sub := range s.Body.Statements {
+				if t := scanStmtForType(sub, name); t != nil {
+					return t
+				}
+			}
+		}
+	case *syntax.MatchStmt:
+		if t := scanExprForType(s.Subject, name); t != nil {
+			return t
+		}
+		for _, arm := range s.Arms {
+			if t := scanExprForType(arm.Guard, name); t != nil {
+				return t
+			}
+			if arm.Body != nil {
+				for _, sub := range arm.Body.Statements {
+					if t := scanStmtForType(sub, name); t != nil {
+						return t
+					}
+				}
+			}
+		}
+	case *syntax.ImplDecl:
+		for _, fn := range s.Methods {
+			if t := scanStmtForType(fn, name); t != nil {
+				return t
+			}
+		}
+	case *syntax.SpecDecl:
+		for _, m := range s.Methods {
+			for _, p := range m.Params {
+				if t := scanTypeRefForType(p.Type, name); t != nil {
+					return t
+				}
+			}
+			if t := scanTypeRefForType(m.Return, name); t != nil {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
+func scanTypeRefForType(ref *syntax.TypeRef, name string) *syntax.Type {
+	if ref == nil || ref.Resolved == nil {
+		return nil
+	}
+	if ref.Resolved.Name == name &&
+		(ref.Resolved.Kind == syntax.TypeStruct || ref.Resolved.Kind == syntax.TypeEnum) {
+		return ref.Resolved
+	}
+	if ref.Element != nil {
+		if t := scanTypeRefForType(ref.Element, name); t != nil {
+			return t
+		}
+	}
+	for _, e := range ref.Elements {
+		if t := scanTypeRefForType(e, name); t != nil {
+			return t
+		}
+	}
+	return nil
+}
+
+// scanExprForType recursively walks an expression looking for a node
+// whose Type() Name matches and Kind is TypeStruct or TypeEnum. typeck
+// stamps Type() on every typed expression including ThisExpr inside an
+// impl method body — so even a module that only declares a type and an
+// impl block (no struct-lit or let-binding using it) yields a hit
+// through the impl method's ThisExpr.
+func scanExprForType(e syntax.Expr, name string) *syntax.Type {
+	if e == nil {
+		return nil
+	}
+	if t := exprMatchType(e, name); t != nil {
+		return t
+	}
+	switch ex := e.(type) {
+	case *syntax.ParenExpr:
+		return scanExprForType(ex.Inner, name)
+	case *syntax.UnaryExpr:
+		return scanExprForType(ex.Operand, name)
+	case *syntax.BinaryExpr:
+		if t := scanExprForType(ex.Left, name); t != nil {
+			return t
+		}
+		return scanExprForType(ex.Right, name)
+	case *syntax.CallExpr:
+		if t := scanExprForType(ex.Callee, name); t != nil {
+			return t
+		}
+		for _, a := range ex.Args {
+			if t := scanExprForType(a, name); t != nil {
+				return t
+			}
+		}
+	case *syntax.MethodCallExpr:
+		if t := scanExprForType(ex.Receiver, name); t != nil {
+			return t
+		}
+		for _, a := range ex.Args {
+			if t := scanExprForType(a, name); t != nil {
+				return t
+			}
+		}
+		if ex.Lowered != nil {
+			if t := exprMatchType(ex.Lowered, name); t != nil {
+				return t
+			}
+			for _, a := range ex.Lowered.Payload {
+				if t := scanExprForType(a, name); t != nil {
+					return t
+				}
+			}
+		}
+	case *syntax.IndexExpr:
+		if t := scanExprForType(ex.Receiver, name); t != nil {
+			return t
+		}
+		return scanExprForType(ex.Index, name)
+	case *syntax.SliceExpr:
+		if t := scanExprForType(ex.Receiver, name); t != nil {
+			return t
+		}
+		if t := scanExprForType(ex.Low, name); t != nil {
+			return t
+		}
+		return scanExprForType(ex.High, name)
+	case *syntax.FieldAccessExpr:
+		if ex.Lowered != nil {
+			if t := exprMatchType(ex.Lowered, name); t != nil {
+				return t
+			}
+		}
+		return scanExprForType(ex.Receiver, name)
+	case *syntax.ListLit:
+		for _, el := range ex.Elements {
+			if t := scanExprForType(el, name); t != nil {
+				return t
+			}
+		}
+	case *syntax.TupleLit:
+		for _, el := range ex.Elements {
+			if t := scanExprForType(el, name); t != nil {
+				return t
+			}
+		}
+	case *syntax.StructLit:
+		for _, f := range ex.Fields {
+			if t := scanExprForType(f.Value, name); t != nil {
+				return t
+			}
+		}
+	case *syntax.EnumLit:
+		for _, p := range ex.Payload {
+			if t := scanExprForType(p, name); t != nil {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
+// exprMatchType returns e.Type() iff Name matches and Kind is struct
+// or enum. Helper to keep scanExprForType readable.
+func exprMatchType(e syntax.Expr, name string) *syntax.Type {
+	t := e.Type()
+	if t == nil {
+		return nil
+	}
+	if t.Name == name && (t.Kind == syntax.TypeStruct || t.Kind == syntax.TypeEnum) {
+		return t
+	}
+	return nil
 }
 
 func (in *interp) pushFrame() { in.stack = append(in.stack, newFrame()) }
@@ -281,6 +828,11 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		// v0.4: spec / impl declarations are processed at interp init
 		// (newInterp aggregates inherentImpls / specImpls). At statement-walk
 		// time they are no-ops — like StructDecl / EnumDecl.
+		_ = s
+		return nil
+	case *syntax.ImportDecl:
+		// v0.5 Unit 1b: imports are resolved by the loader before Run sees
+		// the merged program. A stray ImportDecl at this layer is a no-op.
 		_ = s
 		return nil
 	}
@@ -1080,16 +1632,23 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	if ident.Name == "push" {
 		return in.evalPush(e)
 	}
-	fn, ok := in.fns[ident.Name]
+	fn, ok := in.cur.fns[ident.Name]
 	if !ok {
 		return Value{}, fmt.Errorf("internal: undefined function %q at %s", ident.Name, e.Pos)
 	}
+	return in.callFn(fn, e.Args, e.Type(), e.Pos)
+}
 
+// callFn binds args, switches to the callee fn's owning module for the
+// body's lexical context, walks the body, and catches errReturn. Shared
+// by direct fn calls and the cross-module method-call shape recognised
+// in evalMethodCall.
+func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *syntax.Type, callPos syntax.Position) (Value, error) {
 	// Evaluate args in left-to-right order BEFORE pushing the call frame,
 	// so the args are evaluated in the caller's scope (matters for nested
 	// calls or self-recursion).
-	args := make([]Value, len(e.Args))
-	for i, a := range e.Args {
+	args := make([]Value, len(argExprs))
+	for i, a := range argExprs {
 		v, err := in.evalExpr(a)
 		if err != nil {
 			return Value{}, err
@@ -1106,13 +1665,19 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	}
 
 	// Calls do NOT inherit the caller's scope: a fresh frame stack rooted at
-	// just the new frame. Without this a fn could accidentally see the
-	// caller's locals — typeck would catch most cases, but at v0.1 with
-	// only top-level fns the rule is "fn body sees parameters and globals
-	// of nothing else". We achieve it by saving and replacing the stack.
+	// just the new frame. v0.5: also switch the active module to the
+	// callee's owning module so the body resolves unqualified identifiers
+	// (its own fns / enums / structs / imports) against the right tables.
 	savedStack := in.stack
+	savedCur := in.cur
 	in.stack = []*frame{newFrame()}
-	defer func() { in.stack = savedStack }()
+	if owner := in.fnOwner[fn]; owner != nil {
+		in.cur = owner
+	}
+	defer func() {
+		in.stack = savedStack
+		in.cur = savedCur
+	}()
 
 	for i, p := range fn.Params {
 		// v0.3: fn-call composite args are implicit shared borrows. No
@@ -1143,15 +1708,15 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 		// scope means any `break` is in a loop strictly inside the body and
 		// is caught by execFor before reaching us. Defensive check.
 		if errors.Is(err, errBreak) || errors.Is(err, errContinue) {
-			return Value{}, fmt.Errorf("internal: %v escaped fn %s", err, ident.Name)
+			return Value{}, fmt.Errorf("internal: %v escaped fn %s", err, fn.Name)
 		}
 		return Value{}, err
 	}
 	// Fall-through end of body. typeck rejects falling off a non-void fn,
 	// so reaching here for a void fn is fine; for a non-void fn it is an
 	// internal error.
-	if e.Type() != nil && e.Type() != syntax.TVoid() {
-		return Value{}, fmt.Errorf("function %q ended without return at %s", ident.Name, e.Pos)
+	if resultType != nil && resultType != syntax.TVoid() {
+		return Value{}, fmt.Errorf("function %q ended without return at %s", fn.Name, callPos)
 	}
 	return Value{}, nil
 }
@@ -1421,7 +1986,7 @@ func (in *interp) evalFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
 		return in.evalEnumLit(e.Lowered)
 	}
 	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
-		if en, isEnum := in.enums[id.Name]; isEnum {
+		if en, isEnum := in.cur.enums[id.Name]; isEnum {
 			for i, v := range en.Variants {
 				if v == e.FieldName {
 					return enumVal(en, i, v, nil), nil
@@ -1680,6 +2245,21 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 	if e.LoweredCall != nil {
 		return in.evalCall(e.LoweredCall)
 	}
+	// v0.5: cross-module fn call shape — receiver is an IdentExpr that
+	// resolves to a module binding in the active module's import table,
+	// and Method is a pub fn declared in that module. typeck has
+	// validated pubness and arity; the runtime detects the shape and
+	// routes the call into the foreign module's fn body. The body
+	// executes with its own module's lexical scope (callFn switches cur
+	// to the callee's owning module).
+	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
+		if foreign, isMod := in.cur.imports[id.Name]; isMod {
+			if fn, ok := foreign.fns[e.Method]; ok {
+				return in.callFn(fn, e.Args, e.Type(), e.Pos)
+			}
+			return Value{}, fmt.Errorf("internal: module %q has no fn %q at %s", id.Name, e.Method, e.MethodPos)
+		}
+	}
 	rv, err := in.evalExpr(e.Receiver)
 	if err != nil {
 		return Value{}, err
@@ -1700,12 +2280,15 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 // default > NotImplemented panic.
 func (in *interp) dispatchSpec(e *syntax.MethodCallExpr, rv Value) (Value, error) {
 	specName := rv.Type.Name
-	concreteType := rv.ConcreteType
 	if rv.Data == nil {
 		return Value{}, fmt.Errorf("internal: spec value has nil data at %s", e.Pos)
 	}
 	this := *rv.Data
-	fn, sm := in.resolveSpecMethod(concreteType, specName, e.Method)
+	// Bundle-wide spec method dispatch keyed by canonical *Type pointer
+	// (rv.Data.Type) and spec name. The wrapped value's *Type is the
+	// canonical pointer the impl table was indexed under.
+	recvType := rv.Data.Type
+	fn, sm := in.resolveSpecMethod(recvType, specName, e.Method)
 	if fn != nil {
 		return in.callMethodFn(e, fn, this)
 	}
@@ -1713,21 +2296,28 @@ func (in *interp) dispatchSpec(e *syntax.MethodCallExpr, rv Value) (Value, error
 		return in.callSpecDefault(e, sm, this)
 	}
 	return Value{}, fmt.Errorf("not implemented: %s.%s (declared in spec %s at %s)",
-		concreteType, e.Method, specName, e.MethodPos)
+		rv.ConcreteType, e.Method, specName, e.MethodPos)
 }
 
-// resolveSpecMethod looks up the (Type, Spec) override; returns the impl's
-// FnDecl if one is supplied, the spec's default method AST if not. Both nil
-// means the method is signature-only with no override — NotImplemented.
-func (in *interp) resolveSpecMethod(typeName, specName, methodName string) (*syntax.FnDecl, *syntax.SpecMethod) {
-	key := implKey{typeName: typeName, specName: specName}
-	if impl, ok := in.specImpls[key]; ok {
-		if fn, ok := impl[methodName]; ok {
-			return fn, nil
+// resolveSpecMethod looks up the (canonical *Type, Spec) override; returns
+// the impl's FnDecl if one is supplied, the spec's default method AST if
+// not. Both nil means the method is signature-only with no override —
+// NotImplemented.
+//
+// v0.5: keyed by *Type pointer so two modules' same-name structs don't
+// collide. Spec name remains a string because typeck has already
+// validated cross-module spec resolution and the bundle-wide
+// specDeclsByName / specByType union routes correctly.
+func (in *interp) resolveSpecMethod(recv *syntax.Type, specName, methodName string) (*syntax.FnDecl, *syntax.SpecMethod) {
+	if specMap, ok := in.specByType[recv]; ok {
+		if methods, ok := specMap[specName]; ok {
+			if fn, ok := methods[methodName]; ok {
+				return fn, nil
+			}
 		}
 	}
-	// Fall through to spec default body if present.
-	if sd, ok := in.specDecls[specName]; ok {
+	// Fall through to spec default body if present anywhere in the bundle.
+	if sd, ok := in.specDeclsByName[specName]; ok {
 		for _, m := range sd.Methods {
 			if m.Name == methodName {
 				if m.Body != nil {
@@ -1741,25 +2331,30 @@ func (in *interp) resolveSpecMethod(typeName, specName, methodName string) (*syn
 }
 
 // dispatchConcrete routes a method call against a struct- or enum-typed
-// receiver. Inherent methods take precedence over spec impls; if no inherent
-// exists, the unique spec impl exposing the method wins. typeck has already
-// rejected ambiguity, so the first matching spec impl is sufficient.
+// receiver. Inherent methods take precedence over spec impls; if no
+// inherent exists, the unique spec impl exposing the method wins. typeck
+// has already rejected ambiguity, so the first matching spec impl is
+// sufficient.
+//
+// v0.5: dispatch is keyed by canonical *Type pointer (rv.Type), so two
+// modules each declaring a struct named "Counter" with their own impls
+// don't collide. The bundle-wide impl index unions every module's impls
+// against the receiver's owning *Type.
 func (in *interp) dispatchConcrete(e *syntax.MethodCallExpr, rv Value) (Value, error) {
-	typeName := rv.Type.Name
+	recv := rv.Type
 	// 1. Inherent.
-	if methods, ok := in.inherentImpls[typeName]; ok {
+	if methods, ok := in.inherentByType[recv]; ok {
 		if fn, ok := methods[e.Method]; ok {
 			return in.callMethodFn(e, fn, rv)
 		}
 	}
-	// 2. Spec impls. Walk every (typeName, specName) in the spec impl table to
-	// find one that exposes the method (override or via default). typeck has
-	// rejected ambiguity so we take the first match.
-	for key := range in.specImpls {
-		if key.typeName != typeName {
-			continue
-		}
-		fn, sm := in.resolveSpecMethod(typeName, key.specName, e.Method)
+	// 2. Spec impls. Walk every spec name in the spec-impl map for this
+	// receiver type to find one that exposes the method (override or via
+	// default). typeck has rejected ambiguity so the first match is
+	// definitive.
+	specMap := in.specByType[recv]
+	for specName := range specMap {
+		fn, sm := in.resolveSpecMethod(recv, specName, e.Method)
 		if fn != nil {
 			return in.callMethodFn(e, fn, rv)
 		}
@@ -1769,16 +2364,16 @@ func (in *interp) dispatchConcrete(e *syntax.MethodCallExpr, rv Value) (Value, e
 		// (Type, Spec) impl exists but the method has no override or default.
 		// Only return NotImplemented if the spec actually declares this
 		// method — otherwise keep searching (other specs might have it).
-		if sd, ok := in.specDecls[key.specName]; ok {
+		if sd, ok := in.specDeclsByName[specName]; ok {
 			for _, m := range sd.Methods {
 				if m.Name == e.Method {
 					return Value{}, fmt.Errorf("not implemented: %s.%s (declared in spec %s at %s)",
-						typeName, e.Method, key.specName, e.MethodPos)
+						recv.Name, e.Method, specName, e.MethodPos)
 				}
 			}
 		}
 	}
-	return Value{}, fmt.Errorf("internal: method %q not resolvable on %s at %s", e.Method, typeName, e.MethodPos)
+	return Value{}, fmt.Errorf("internal: method %q not resolvable on %s at %s", e.Method, recv.Name, e.MethodPos)
 }
 
 // callMethodFn binds `this` plus declared params, walks the impl method's
@@ -1798,10 +2393,19 @@ func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this
 		args[i] = v
 	}
 	// Method bodies are like fn calls — a fresh frame stack rooted at one
-	// frame. Save and restore.
+	// frame, plus a switch to the method's owning module so identifier
+	// lookups inside the body see the right per-module tables. Save and
+	// restore both.
 	savedStack := in.stack
+	savedCur := in.cur
 	in.stack = []*frame{newFrame()}
-	defer func() { in.stack = savedStack }()
+	if owner := in.fnOwner[fn]; owner != nil {
+		in.cur = owner
+	}
+	defer func() {
+		in.stack = savedStack
+		in.cur = savedCur
+	}()
 	if err := in.declare("this", this); err != nil {
 		return Value{}, err
 	}
@@ -1850,8 +2454,15 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 		args[i] = v
 	}
 	savedStack := in.stack
+	savedCur := in.cur
 	in.stack = []*frame{newFrame()}
-	defer func() { in.stack = savedStack }()
+	if owner := in.specMethodOwner[sm]; owner != nil {
+		in.cur = owner
+	}
+	defer func() {
+		in.stack = savedStack
+		in.cur = savedCur
+	}()
 	if err := in.declare("this", this); err != nil {
 		return Value{}, err
 	}

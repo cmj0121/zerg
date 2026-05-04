@@ -1,0 +1,8 @@
+import "util"
+import "other"
+
+impl util.T for other.S {
+    pub fn ping() -> int {
+        return 0
+    }
+}

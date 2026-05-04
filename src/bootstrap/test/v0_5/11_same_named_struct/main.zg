@@ -1,0 +1,14 @@
+import "util"
+
+struct Counter { tag: int }
+
+impl Counter {
+    pub fn show() -> str {
+        return "main"
+    }
+}
+
+let mc := Counter { tag: 1 }
+print mc.show()
+let uc := util.Counter { tag: 2 }
+print uc.show()

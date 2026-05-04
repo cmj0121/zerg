@@ -917,6 +917,17 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	if ident.Name == "len" {
 		return in.evalLen(e)
 	}
+	// v0.3 builtins. `clone(xs)` returns a deep copy of its composite argument
+	// — the borrow checker already enforces that primitives are rejected. The
+	// interpreter implementation reuses copyValue, which is the same logic v0.2
+	// applied implicitly on every bind. `push(xs, v)` mutates the named mut
+	// list in place; the borrow checker has already validated mut and state.
+	if ident.Name == "clone" {
+		return in.evalClone(e)
+	}
+	if ident.Name == "push" {
+		return in.evalPush(e)
+	}
 	fn, ok := in.fns[ident.Name]
 	if !ok {
 		return Value{}, fmt.Errorf("internal: undefined function %q at %s", ident.Name, e.Pos)
@@ -1003,6 +1014,47 @@ func (in *interp) evalLen(e *syntax.CallExpr) (Value, error) {
 		return intVal(int64(len([]rune(v.Str)))), nil
 	}
 	return Value{}, fmt.Errorf("internal: len cannot accept %s at %s", v.Type, e.Pos)
+}
+
+// evalClone implements `clone(xs)`. The argument has already been validated by
+// typeck (composite, exactly one) and by the borrow checker (the receiver is a
+// shared borrow — caller retains ownership). The runtime is purely a fresh
+// deep copy via copyValue.
+func (in *interp) evalClone(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: clone expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	return copyValue(v), nil
+}
+
+// evalPush implements `push(xs, v)`. typeck has already required xs to be a
+// mut-bound list ident and v's type to match the list's element type; the
+// borrow checker has further verified xs is in Owned state. The runtime
+// appends to the named binding's slice in place — we look up the slot, take
+// the current list value, append a deep copy of v, and store the new header
+// back so the slice grows independently of any other view.
+func (in *interp) evalPush(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 2 {
+		return Value{}, fmt.Errorf("internal: push expects 2 args, got %d at %s", len(e.Args), e.Pos)
+	}
+	id, ok := e.Args[0].(*syntax.IdentExpr)
+	if !ok {
+		return Value{}, fmt.Errorf("internal: push first arg must be ident at %s", e.Pos)
+	}
+	slot, ok := in.lookup(id.Name)
+	if !ok {
+		return Value{}, fmt.Errorf("internal: push undefined name %q at %s", id.Name, e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[1])
+	if err != nil {
+		return Value{}, err
+	}
+	slot.List = append(slot.List, copyValue(v))
+	return Value{}, nil
 }
 
 // ---------------------------------------------------------------------------

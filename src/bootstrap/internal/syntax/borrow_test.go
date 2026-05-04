@@ -460,6 +460,137 @@ func TestBorrowMoveDiagnosticIncludesSourcePos(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Match-arm bound-name composite tracking — Issue 1.
+//
+// Before the fix, bindPatternNames hardcoded typ=nil for every BindPat /
+// TuplePat / StructPat name, so isComposite returned false and any later
+// move of the bound composite was silently allowed. The fix walks the
+// pattern shape against the subject Type and assigns each bound name its
+// real type so move tracking works through match arms.
+// ---------------------------------------------------------------------------
+
+// TestBorrowMatchBindNameTracksCompositeMove — `match xs { ys => ... }` binds
+// ys with the list type; moving ys inside the arm and then reading it must
+// fire use-after-move (was previously a silent miss because ys.typ was nil).
+func TestBorrowMatchBindNameTracksCompositeMove(t *testing.T) {
+	src := `let xs := [1, 2, 3]
+match xs {
+ys => {
+let zs := ys
+print ys[0]
+}
+}
+`
+	borrowErrSrc(t, src, "use of moved value")
+}
+
+// TestBorrowMatchTuplePatBindTracksComposite — TuplePat element bound to a
+// list takes list[T]; a later move of that bound name fires use-after-move.
+func TestBorrowMatchTuplePatBindTracksComposite(t *testing.T) {
+	src := `let pair := ([1], [2])
+match pair {
+(a, b) => {
+let c := a
+print a[0]
+}
+}
+`
+	borrowErrSrc(t, src, "use of moved value")
+}
+
+// TestBorrowMatchStructPatBindPrimitiveOK — StructPat field bound to an int
+// takes the primitive type; the borrow checker ignores moves of primitives.
+func TestBorrowMatchStructPatBindPrimitiveOK(t *testing.T) {
+	src := `struct Point { x: int, y: int }
+let p := Point { x: 1, y: 2 }
+match p {
+Point { x: a, y: b } => {
+let c := a
+print a
+}
+}
+`
+	checkSrc(t, src)
+}
+
+// TestBorrowMatchStructPatBindCompositeTracks — StructPat field bound to a
+// list[int] takes list[int]; a later move fires use-after-move.
+func TestBorrowMatchStructPatBindCompositeTracks(t *testing.T) {
+	src := `struct Bag { xs: list[int] }
+let b := Bag { xs: [1, 2] }
+match b {
+Bag { xs: ys } => {
+let zs := ys
+print ys[0]
+}
+}
+`
+	borrowErrSrc(t, src, "use of moved value")
+}
+
+// ---------------------------------------------------------------------------
+// Match on borrowed-shared fn param doesn't false-flip — Issue 2.
+//
+// Before the fix, the post-match flip-to-Moved fired even when the
+// scrutinee was BorrowedShared at match entry, producing a false-positive
+// use-after-move on subsequent reads of the parameter.
+// ---------------------------------------------------------------------------
+
+// TestBorrowMatchOnFnParamLiteralArmsClean — match with literal arms only on
+// a fn parameter; reads after the match must remain clean.
+func TestBorrowMatchOnFnParamLiteralArmsClean(t *testing.T) {
+	src := `fn f(p: int) -> str {
+match p {
+0 => print "z"
+1 => print "o"
+_ => print "x"
+}
+print p
+return ""
+}
+let n := 1
+print f(n)
+`
+	checkSrc(t, src)
+}
+
+// TestBorrowMatchOnFnParamStructDestructureClean — match with a struct
+// destructure arm on a fn parameter; reads of the parameter after the
+// match (or in the arm body itself) stay clean because the destructure
+// reads fields rather than consuming the parent.
+func TestBorrowMatchOnFnParamStructDestructureClean(t *testing.T) {
+	src := `struct Point { x: int, y: int }
+fn f(p: Point) -> str {
+match p {
+Point { x: 0, y: 0 } => print "z"
+Point { x, y } => print "e"
+}
+print p.x
+return ""
+}
+let q := Point { x: 1, y: 2 }
+print f(q)
+`
+	checkSrc(t, src)
+}
+
+// TestBorrowMatchOnFnParamBindArmRejected — match with a BindPat arm on a
+// fn parameter is rejected because BindPat genuinely consumes the
+// scrutinee, and a borrowed value cannot be moved.
+func TestBorrowMatchOnFnParamBindArmRejected(t *testing.T) {
+	src := `fn f(xs: list[int]) -> int {
+match xs {
+ys => print ys[0]
+}
+return 0
+}
+let xs := [1, 2]
+print f(xs)
+`
+	borrowErrSrc(t, src, "cannot move borrowed value")
+}
+
+// ---------------------------------------------------------------------------
 // Regression — v0.1 / v0.2 surface stays clean.
 // ---------------------------------------------------------------------------
 

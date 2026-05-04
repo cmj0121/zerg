@@ -1022,8 +1022,18 @@ func (c *borrowChecker) checkMatch(s *MatchStmt) error {
 			subjId = id
 		}
 	}
+	// Capture the entry state BEFORE we override to BorrowedShared. The
+	// post-match flip rule depends on this: if the scrutinee was already
+	// BorrowedShared at entry (e.g. a fn parameter), it never owned the
+	// value, so we must NOT flip it to Moved at exit even if some arm's
+	// destructure pattern would otherwise be a "consume". A BindPat arm on
+	// a BorrowedShared scrutinee is rejected separately at the bind site
+	// because BindPat is genuinely a move and `consume` already refuses
+	// to move a borrowed value.
+	var entryState borrowState
 	var subjPrior borrowEntry
 	if subjEntry != nil {
+		entryState = subjEntry.state
 		subjPrior = *subjEntry
 		subjEntry.state = bsBorrowedShared
 		subjEntry.borrowReason = "borrowed by match"
@@ -1041,7 +1051,7 @@ func (c *borrowChecker) checkMatch(s *MatchStmt) error {
 		// the scrutinee is consumed into the bound name — so we ALSO flip
 		// the scrutinee to Moved while the arm body runs (then restore via
 		// the entry-state apply at the next iteration).
-		bound := bindPatternNames(arm.Pattern)
+		bound := bindPatternNames(arm.Pattern, s.Subject.Type())
 		for _, b := range bound {
 			c.scope.declare(b.name, &borrowEntry{
 				state:     bsOwned,
@@ -1050,17 +1060,31 @@ func (c *borrowChecker) checkMatch(s *MatchStmt) error {
 			})
 		}
 		// If this arm is a BindPat (whole-scrutinee bind), mark scrutinee as
-		// Moved during the arm body. For destructuring patterns the
-		// scrutinee is partially consumed — same effect at v0.3 since we
-		// don't track per-field state.
+		// Moved during the arm body — BindPat is a genuine consume. A
+		// BindPat arm on a BorrowedShared scrutinee (e.g. a fn parameter)
+		// is rejected here so the diagnostic fires at the arm itself
+		// rather than via a downstream "use of moved value".
+		// Destructuring patterns (TuplePat / StructPat) READ fields rather
+		// than consume the receiver; they leave the scrutinee usable in
+		// the arm body, so we DON'T flip it to Moved during destructure
+		// arms. (v0.3 doesn't track per-field state, so the bind names
+		// inside the destructure get their declared types and any later
+		// move of those names is checked normally.)
 		var bindArmRestoreSubj *borrowEntry
 		var bindArmPrior borrowEntry
-		if subjEntry != nil && patternConsumes(arm.Pattern) {
-			bindArmRestoreSubj = subjEntry
-			bindArmPrior = *subjEntry
-			subjEntry.state = bsMoved
-			if subjId != nil {
-				subjEntry.movePos = subjId.Pos
+		if subjEntry != nil {
+			if _, isBind := arm.Pattern.(*BindPat); isBind {
+				if entryState == bsBorrowedShared {
+					return borrowErr(arm.Pattern.PatPos(),
+						"cannot move borrowed value: %q (%s)",
+						subjId.Name, subjPrior.borrowReason)
+				}
+				bindArmRestoreSubj = subjEntry
+				bindArmPrior = *subjEntry
+				subjEntry.state = bsMoved
+				if subjId != nil {
+					subjEntry.movePos = subjId.Pos
+				}
 			}
 		}
 		savedDiverged := c.diverged
@@ -1101,7 +1125,14 @@ func (c *borrowChecker) checkMatch(s *MatchStmt) error {
 	// Worst-case static rule: if any arm consumed the scrutinee, mark it
 	// Moved at the join. Otherwise the borrow ends and scrutinee returns to
 	// Owned.
-	if consumes && subjEntry != nil {
+	//
+	// Special case: if the scrutinee was already BorrowedShared at match
+	// entry (a fn parameter, a for-iter binding, etc.), the borrow re-
+	// asserts on exit — the scrutinee never owned the value, so we cannot
+	// flip it to Moved. The BindPat arm path is the only thing that can
+	// produce a genuine consume of a BorrowedShared scrutinee, and that's
+	// already rejected up-front in the per-arm walk above.
+	if consumes && subjEntry != nil && entryState != bsBorrowedShared {
 		subjEntry.state = bsMoved
 		if subjId != nil {
 			subjEntry.movePos = subjId.Pos
@@ -1182,30 +1213,44 @@ func patternBinds(p Pattern) bool {
 }
 
 // bindPatternNames collects every (name, type) pair introduced by a pattern.
-// Types are sourced from the pattern's structural shape against typeck's
-// already-resolved subject type — the AST doesn't carry per-pattern types,
-// so we recurse using the subject Type that typeck recorded. For our
-// purposes (state tracking, not type reconstruction), we pass nil whenever
-// we can't pin a precise type — borrow logic only checks isComposite, and
-// nil isn't composite, so worst case we under-report on inner composites
-// inside nested destructuring. v0.3 corpus doesn't exercise that case.
-func bindPatternNames(p Pattern) []boundName {
+// Types are sourced from typeck's already-resolved subject Type by walking
+// the pattern shape against it: a BindPat at the top takes the whole subject
+// type; a TuplePat element i takes subject.Tuple[i]; a StructPat field f
+// takes the named field's Type. When the shape doesn't line up (defensive
+// — typeck would normally reject mismatches), we fall back to nil so the
+// borrow logic conservatively treats the bound name as primitive.
+func bindPatternNames(p Pattern, subjectType *Type) []boundName {
 	var out []boundName
-	var walk func(p Pattern)
-	walk = func(p Pattern) {
+	var walk func(p Pattern, t *Type)
+	walk = func(p Pattern, t *Type) {
 		switch x := p.(type) {
 		case *BindPat:
-			out = append(out, boundName{name: x.Name, typ: nil})
+			out = append(out, boundName{name: x.Name, typ: t})
 		case *TuplePat:
-			for _, sub := range x.Elements {
-				walk(sub)
+			var subT *Type
+			for i, sub := range x.Elements {
+				if t != nil && t.Kind == TypeTuple && i < len(t.Tuple) {
+					subT = t.Tuple[i]
+				} else {
+					subT = nil
+				}
+				walk(sub, subT)
 			}
 		case *StructPat:
 			for _, f := range x.Fields {
-				walk(f.Pattern)
+				var fieldT *Type
+				if t != nil && t.Kind == TypeStruct {
+					for _, df := range t.Fields {
+						if df.Name == f.Name {
+							fieldT = df.Type
+							break
+						}
+					}
+				}
+				walk(f.Pattern, fieldT)
 			}
 		}
 	}
-	walk(p)
+	walk(p, subjectType)
 	return out
 }

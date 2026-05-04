@@ -792,12 +792,22 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		}
 		return nil
 	case *PropagateExpr:
-		return c.walkExpr(e.Inner, false)
+		// `?` is a move-out site on its receiver: the Ok / Some payload moves
+		// out as the expression's value, and the Err / None path returns the
+		// original (also a move). Mirror the let-rebind / return shape — bare
+		// idents move; nested aggregates walk in consume mode.
+		return c.consumeOrWalk(e.Inner, "moved by ? propagation")
 	case *CoalesceExpr:
-		if err := c.walkExpr(e.Left, false); err != nil {
+		// `??` LHS is the match-scrutinee; whichever arm fires moves the
+		// bound value out (Some(v) ⇒ v moves, None ⇒ rhs moves). The borrow
+		// check is conservative — both arms are assumed to fire, so LHS is
+		// treated as consumed at the operator. RHS is also a consume site
+		// for the same reason: when the None arm fires, an ident-rhs would
+		// be moved out of into the result.
+		if err := c.consumeOrWalk(e.Left, "moved by ?? coalesce (LHS consumed conservatively)"); err != nil {
 			return err
 		}
-		return c.walkExpr(e.Right, false)
+		return c.consumeOrWalk(e.Right, "moved by ?? coalesce (RHS arm)")
 	}
 	return borrowErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

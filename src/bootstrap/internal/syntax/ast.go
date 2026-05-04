@@ -531,6 +531,13 @@ type FnDecl struct {
 	// closure / defer analysis; downstream halves use this bit to skip
 	// per-frame defer-stack setup on fns that don't need it.
 	HasDefers bool
+	// BuiltinName (v0.8 Unit 1) is the bareword identifier following a
+	// `__builtin <name>` fn-decl tail. Empty for ordinary fns. When non-empty
+	// Body is nil — the marker REPLACES the body. Typeck (Unit 2) validates
+	// the name against the closed builtin registry; the interpreter / cgen
+	// route the call to the host implementation keyed by this string.
+	BuiltinName    string
+	BuiltinNamePos Position
 }
 
 func (*FnDecl) stmtNode()           {}

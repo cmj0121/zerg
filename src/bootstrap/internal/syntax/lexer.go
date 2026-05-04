@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/cmj/zerg/src/bootstrap/internal/version"
 )
 
 // LexError is returned when the lexer cannot make sense of the input.
@@ -25,8 +27,26 @@ func (e *LexError) Error() string {
 // always emits NEWLINE for `\n` (line-joining inside brackets is a parser
 // concern at v0.1), recognises every v0.1 keyword and operator, and lexes
 // integer / float / string literals.
+//
+// Version-gated keywords like `__builtin` (v0.8) are recognised only when the
+// source's leading `# requires:` marker declares the relevant minor or higher.
+// Lex pre-scans src for that marker so callers do not need to thread a version
+// argument; the byte-level scan reuses internal/version.ScanRequires.
 func Lex(src []byte) ([]Token, error) {
-	l := &lexer{src: src, line: 1, col: 1}
+	maj, min, ok := version.ScanRequires(src)
+	if !ok {
+		// No requires-marker: lex against the toolchain version. The driver's
+		// CLI gate guarantees we never see a marker that exceeds the toolchain,
+		// so the pre-Unit-1 default of "everything available" is preserved.
+		maj, min = version.Major, version.Minor
+	}
+	return lexWithVersion(src, maj, min)
+}
+
+// lexWithVersion is the shared body of Lex; tests use it to drive the
+// version-gating without a `# requires:` line in the source string.
+func lexWithVersion(src []byte, reqMajor, reqMinor int) ([]Token, error) {
+	l := &lexer{src: src, line: 1, col: 1, reqMajor: reqMajor, reqMinor: reqMinor}
 	var tokens []Token
 	for {
 		tok, err := l.next()
@@ -45,6 +65,11 @@ type lexer struct {
 	pos  int // byte offset into src
 	line int
 	col  int
+	// reqMajor / reqMinor record the file's `# requires:` version (or the
+	// toolchain default when absent). Version-gated keywords like `__builtin`
+	// promote only when (reqMajor, reqMinor) >= the keyword's introduction.
+	reqMajor int
+	reqMinor int
 }
 
 func (l *lexer) atEnd() bool { return l.pos >= len(l.src) }
@@ -127,6 +152,14 @@ func (l *lexer) lexIdent() Token {
 	word := string(l.src[start:l.pos])
 	if k, ok := keywords[word]; ok {
 		return Token{Kind: k, Value: word, Pos: pos}
+	}
+	// Version-gated keywords. `__builtin` lexes as a keyword only when the
+	// file's `# requires:` line declares >= v0.8; older files keep lexing
+	// the bare word as an identifier so v0.0–v0.7 corpora that legally
+	// named things `__builtin` (none ship in-tree but the gate exists for
+	// strict backwards compat) keep parsing.
+	if word == "__builtin" && !version.Less(l.reqMajor, l.reqMinor, 0, 8) {
+		return Token{Kind: KindBuiltin, Value: word, Pos: pos}
 	}
 	return Token{Kind: KindIdent, Value: word, Pos: pos}
 }

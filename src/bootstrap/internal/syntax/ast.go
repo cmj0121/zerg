@@ -1372,3 +1372,49 @@ type RecvExpr struct {
 
 func (*RecvExpr) exprNode()           {}
 func (e *RecvExpr) ExprPos() Position { return e.Pos }
+
+// SelectOpKind tags which of the four channel-op shapes a SelectArm carries.
+// The four shapes mirror the grammar's `select_op` production:
+//
+//   - SelectRecvBind:     IDENT ":=" "<-" expr   — binds the received value
+//   - SelectRecvDiscard:  "<-" expr              — drops the received value
+//   - SelectSend:         expr "<-" expr         — sends a value
+//   - SelectDefault:      "_"                    — non-blocking default arm
+type SelectOpKind int
+
+// Select-arm channel-op kinds.
+const (
+	SelectRecvBind SelectOpKind = iota
+	SelectRecvDiscard
+	SelectSend
+	SelectDefault
+)
+
+// SelectArm is one arm of a `select`: a channel op + a body. Single-statement
+// arm bodies are wrapped in a one-element Block at parse time so downstream
+// consumers always walk a Block (mirrors MatchArm.Body).
+//
+//   - BindName / BindNamePos are populated only for SelectRecvBind.
+//   - Chan is the channel expression for SelectRecvBind / SelectRecvDiscard /
+//     SelectSend; nil for SelectDefault.
+//   - Value is the value being sent for SelectSend; nil for the other shapes.
+type SelectArm struct {
+	Pos         Position
+	Op          SelectOpKind
+	BindName    string
+	BindNamePos Position
+	Chan        Expr
+	Value       Expr
+	Body        *Block
+}
+
+// SelectStmt is `select { arm; arm; ... }`. Multiplexed channel wait — blocks
+// until one arm is ready (the default arm, when present, makes the select
+// non-blocking). The parser rejects an empty arm list at parse time.
+type SelectStmt struct {
+	Pos  Position
+	Arms []SelectArm
+}
+
+func (*SelectStmt) stmtNode()           {}
+func (s *SelectStmt) StmtPos() Position { return s.Pos }

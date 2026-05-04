@@ -64,6 +64,7 @@ var keywords = map[string]Kind{
 	// flows through the same keywords-table cross-check used by every other
 	// keyword, so `let spawn := ...`, `import "x" as defer`, etc. all reject
 	// at parse time.
-	"spawn": KindSpawn,
-	"defer": KindDefer,
+	"spawn":  KindSpawn,
+	"defer":  KindDefer,
+	"select": KindSelect,
 }

@@ -168,6 +168,11 @@ const (
 	// shapes by the parser: `expr <- expr` for a send statement, and prefix
 	// `<- expr` for a receive expression.
 	KindLArrow // <-
+
+	// KindSelect is the v0.7 `select` statement keyword for multiplexed channel
+	// wait. Reserved at v0.7 Unit 1c; consumed by typeck at Unit 4 and the
+	// interpreter / codegen at Units 6 / 7.
+	KindSelect // select
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -352,6 +357,8 @@ func (k Kind) String() string {
 		return "'defer'"
 	case KindLArrow:
 		return "'<-'"
+	case KindSelect:
+		return "'select'"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

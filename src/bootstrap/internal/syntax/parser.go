@@ -328,6 +328,8 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseSpawnStmt()
 	case KindDefer:
 		return p.parseDeferStmt()
+	case KindSelect:
+		return p.parseSelectStmt()
 	default:
 		return p.parseExprOrAssignStmt()
 	}

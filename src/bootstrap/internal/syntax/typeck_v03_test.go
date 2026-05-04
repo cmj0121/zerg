@@ -5,20 +5,34 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// v0.3 typeck tests — Unit 1: list-element assignment placeholder.
+// v0.3 typeck tests — Unit 3: list-element assignment, real check.
 //
-// At Unit 1 the parser admits `xs[i] = v` but typeck stubs it with a
-// "v0.3 work in progress" diagnostic so the v0.0 / v0.1 / v0.2 corpora
-// are unaffected and any program that exercises the new surface fails
-// with a clear message until Unit 3 (borrow checker) lands.
+// Unit 3 replaces the Unit-1 "work in progress" placeholder with real
+// mutability / type checking on the IndexExpr LHS. Borrow-state checking
+// (Owned / Moved / BorrowedShared) is the borrow checker's job and lives in
+// borrow_test.go alongside the rest of the v0.3 borrow rules.
 // ---------------------------------------------------------------------------
 
-// TestCheckIndexAssignWorkInProgress confirms typeck rejects `xs[i] = v` with
-// the placeholder message — Units 2 and 3 will replace this with real mut /
-// borrow / type checking.
-func TestCheckIndexAssignWorkInProgress(t *testing.T) {
-	src := "mut xs := [1, 2, 3]\nxs[0] = 99\n"
-	checkErr(t, src, "v0.3 work in progress")
+// TestCheckIndexAssignOnMutListOK admits the canonical mut-list element write.
+func TestCheckIndexAssignOnMutListOK(t *testing.T) {
+	checkSrc(t, "mut xs := [1, 2, 3]\nxs[0] = 99\n")
+}
+
+// TestCheckIndexAssignOnLetListRejected flags the immutable-binding case with
+// a precise diagnostic that points the user at `mut`.
+func TestCheckIndexAssignOnLetListRejected(t *testing.T) {
+	checkErr(t, "let xs := [1, 2, 3]\nxs[0] = 99\n", "use mut to allow element mutation")
+}
+
+// TestCheckIndexAssignTypeMismatch — RHS type must match the list element type.
+func TestCheckIndexAssignTypeMismatch(t *testing.T) {
+	checkErr(t, "mut xs := [1, 2, 3]\nxs[0] = \"hi\"\n", "cannot assign str")
+}
+
+// TestCheckIndexAssignNonListRejected — assigning into an indexed non-list
+// (e.g. an int variable) is rejected with the "cannot index-assign" diagnostic.
+func TestCheckIndexAssignNonListRejected(t *testing.T) {
+	checkErr(t, "mut x := 5\nx[0] = 1\n", "cannot index-assign")
 }
 
 // TestCheckIdentAssignStillWorks is the regression guard — broadening the

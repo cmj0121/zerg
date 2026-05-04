@@ -347,6 +347,13 @@ func Check(prog *Program) error {
 			return err
 		}
 	}
+	// v0.3 Unit 3: borrow check runs after typeck so every Expr already has a
+	// resolved Type. The two passes share a process but produce distinct error
+	// types (TypeError vs BorrowError) — keeping them separate makes it
+	// trivial for tests and tooling to attribute a diagnostic to its source.
+	if err := borrowCheck(prog, c.fns); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -792,15 +799,60 @@ func (c *checker) checkAssign(s *AssignStmt) error {
 	case *IdentExpr:
 		return c.checkAssignIdent(s, lhs)
 	case *IndexExpr:
-		// v0.3 Unit 1: parse-only support for `xs[i] = v`. Borrow / mut
-		// checking lands at Unit 3; until then we emit a placeholder error
-		// at typeck so the v0.0/v0.1/v0.2 corpora are unaffected and any
-		// stray v0.3 program at this commit fails with a descriptive
-		// message instead of crashing downstream.
-		return typeErr(s.Pos, "v0.3 work in progress: list-element assignment is not yet type-checked")
+		return c.checkAssignIndex(s, lhs)
 	default:
 		return typeErr(s.Pos, "internal: unsupported assignment target %T", s.Target)
 	}
+}
+
+// checkAssignIndex is the v0.3 list-element assignment path: `xs[i] = v`.
+// The receiver must be a mut-bound list variable (parse-time guarantees a
+// bare ident receiver — chained indexing was rejected upstream); the index
+// must be int; the value must match the list's element type. Borrow-state
+// checks (Owned vs Moved vs BorrowedShared) happen in the separate borrow
+// pass, not here — typeck only verifies mutability and types.
+func (c *checker) checkAssignIndex(s *AssignStmt, lhs *IndexExpr) error {
+	id, ok := lhs.Receiver.(*IdentExpr)
+	if !ok {
+		return typeErr(lhs.Pos, "list-element assignment requires a named list on the left")
+	}
+	b, ok := c.scope.lookup(id.Name)
+	if !ok {
+		return typeErr(id.Pos, "undefined name %q", id.Name)
+	}
+	if b.typ == nil || b.typ.Kind != TypeList {
+		return typeErr(lhs.Pos, "cannot index-assign into %q (declared %s)", id.Name, b.typ)
+	}
+	switch b.kind {
+	case bindLet:
+		return typeErr(s.Pos, "cannot assign to %q[i] (declared with let — use mut to allow element mutation)", id.Name)
+	case bindConst:
+		return typeErr(s.Pos, "cannot assign to %q[i] (declared with const)", id.Name)
+	}
+	id.setType(b.typ)
+	// Index must be int.
+	it, err := c.checkExpr(lhs.Index)
+	if err != nil {
+		return err
+	}
+	if it != tInt {
+		return typeErr(lhs.Index.ExprPos(), "index must be int, got %s", it)
+	}
+	lhs.setType(b.typ.Element)
+	// Value must match the list's element type.
+	rhs, err := c.checkExprHint(s.Value, b.typ.Element)
+	if err != nil {
+		return err
+	}
+	if !typeEq(rhs, b.typ.Element) {
+		return typeErr(s.Pos, "cannot assign %s to %s element of %q", rhs, b.typ.Element, id.Name)
+	}
+	// v0.3 list-element assignment uses the bare `=` operator only. Compound
+	// forms (`xs[i] += 1`) are rejected at parse time; defensive guard here.
+	if s.Op != AssignSet {
+		return typeErr(s.Pos, "compound assignment to a list element is not supported at v0.3")
+	}
+	return nil
 }
 
 // checkAssignIdent is the v0.1 simple-assignment path: `name OP value`.

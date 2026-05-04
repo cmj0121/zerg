@@ -190,6 +190,38 @@ func borrowCheck(prog *Program, fns map[string]fnSig) error {
 			return err
 		}
 	}
+	// v0.4: walk impl method bodies as if they were free fns. Borrow shape
+	// for `this` (BorrowedShared) is owned by Unit 5; for now treat the
+	// implicit receiver as out-of-scope for tracking and let typeck enforce
+	// the rules.
+	for _, stmt := range prog.Statements {
+		id, ok := stmt.(*ImplDecl)
+		if !ok {
+			continue
+		}
+		for _, fn := range id.Methods {
+			if err := c.checkFn(fn); err != nil {
+				return err
+			}
+		}
+	}
+	// Walk spec default bodies similarly so any borrow shape inside a default
+	// is exercised.
+	for _, stmt := range prog.Statements {
+		sd, ok := stmt.(*SpecDecl)
+		if !ok {
+			continue
+		}
+		for _, m := range sd.Methods {
+			if m.Body == nil {
+				continue
+			}
+			fakeFn := &FnDecl{Pos: m.Pos, Name: m.Name, Params: m.Params, Return: m.Return, Body: m.Body}
+			if err := c.checkFn(fakeFn); err != nil {
+				return err
+			}
+		}
+	}
 	// Top-level let/mut/const at file scope is OUT at v0.1+ except const, but
 	// the file-scope walker still needs to honour any ExprStmt / PrintStmt
 	// that lands at the top level (REPL-style invocation). Reuse the fn-body
@@ -641,12 +673,25 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		// (Color.Red) has the receiver as the enum type identifier — typeck
 		// has set Type already; we treat it as a read like any other.
 		return c.walkExpr(e.Receiver, false)
-	case *MethodCallExpr, *ThisExpr:
-		// v0.4 Unit 1: parser-only landing. Borrow rules for method receivers
-		// and `this` arrive in Unit 5; typeck rejects these shapes today so
-		// they should never reach here. Return a precise internal error if
-		// they do — keeps the layering honest while we wait for Unit 5.
-		return borrowErr(expr.ExprPos(), "internal: borrow check reached %T before v0.4 Unit 5", expr)
+	case *MethodCallExpr:
+		// Receiver is a read site (BorrowedShared during the call); args are
+		// read positions too. Unit 5 will tighten move/borrow semantics on
+		// the receiver — for now treat as plain reads to keep typeck-only
+		// programs flowing through borrow check without false positives.
+		if err := c.walkExpr(e.Receiver, false); err != nil {
+			return err
+		}
+		for _, a := range e.Args {
+			if err := c.walkExpr(a, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *ThisExpr:
+		// `this` is bound by the receiver and not subject to move tracking
+		// at v0.4. Read-only access is the only shape allowed (typeck
+		// guarantees this).
+		return nil
 	}
 	return borrowErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

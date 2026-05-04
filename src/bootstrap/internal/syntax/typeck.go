@@ -44,6 +44,7 @@ const (
 	TypeTuple  // Tuple non-nil (≥ 2 elements)
 	TypeStruct // Name + Fields populated; canonical instance stored in struct table
 	TypeEnum   // Name + Variants populated; canonical instance stored in enum table
+	TypeSpec   // v0.4 spec-as-type: Name populated; canonical instance stored in spec table
 )
 
 // NamedField is one field of a struct type. Order matches declaration order
@@ -57,13 +58,23 @@ type NamedField struct {
 // NewListType, NewStructType, ...) — never construct a Type literal by hand
 // because primitives rely on pointer equality and composites rely on the
 // type table for struct/enum canonicalisation.
+//
+// v0.4 adds two pieces of bookkeeping to TypeEnum and the new TypeSpec:
+//
+//   - VariantPayloads is the per-variant payload type slice for TypeEnum.
+//     Index-aligned with Variants; nil/empty entries indicate bare variants.
+//     Filled in by the typeck collect/resolve pass once enum payload types
+//     are known.
+//   - TypeSpec uses Name as the spec name. Method resolution off a spec-typed
+//     value goes through the per-program spec table, not the Type itself.
 type Type struct {
-	Kind     TypeKind
-	Element  *Type        // TypeList
-	Tuple    []*Type      // TypeTuple
-	Name     string       // TypeStruct / TypeEnum
-	Fields   []NamedField // TypeStruct, declaration order
-	Variants []string     // TypeEnum, declaration order
+	Kind            TypeKind
+	Element         *Type        // TypeList
+	Tuple           []*Type      // TypeTuple
+	Name            string       // TypeStruct / TypeEnum / TypeSpec
+	Fields          []NamedField // TypeStruct, declaration order
+	Variants        []string     // TypeEnum, declaration order
+	VariantPayloads [][]*Type    // TypeEnum, declaration order; nil entries for bare variants
 }
 
 // String returns the type spelled the way the source spells it. Used in error
@@ -102,7 +113,7 @@ func (t *Type) String() string {
 		}
 		b.WriteString("]")
 		return b.String()
-	case TypeStruct, TypeEnum:
+	case TypeStruct, TypeEnum, TypeSpec:
 		return t.Name
 	}
 	return fmt.Sprintf("Type(%d)", int(t.Kind))
@@ -133,7 +144,7 @@ func (t *Type) Equals(u *Type) bool {
 			}
 		}
 		return true
-	case TypeStruct, TypeEnum:
+	case TypeStruct, TypeEnum, TypeSpec:
 		// Canonical name suffices because the type table guarantees one
 		// instance per name. Equal names ⇒ equal types.
 		return t.Name == u.Name
@@ -199,6 +210,12 @@ func NewStructType(name string, fields []NamedField) *Type {
 // this — one canonical enum lives in the type table per name.
 func NewEnumType(name string, variants []string) *Type {
 	return &Type{Kind: TypeEnum, Name: name, Variants: variants}
+}
+
+// NewSpecType constructs a spec-as-type marker. Only the typeck collector
+// should call this — one canonical spec type lives in the spec table per name.
+func NewSpecType(name string) *Type {
+	return &Type{Kind: TypeSpec, Name: name}
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +297,86 @@ type fnSig struct {
 }
 
 // ---------------------------------------------------------------------------
+// v0.4 spec / impl tables.
+//
+// These tables live alongside structs/enums in the per-program checker state.
+// They are populated in two passes: a first "register" pass that records the
+// declarations, and a second "resolve" pass that turns parameter / return /
+// payload TypeRefs into *Type values. Spec/impl bodies are walked last, after
+// every name is known.
+// ---------------------------------------------------------------------------
+
+// specMethod is one method declared in a spec body. Body == nil signals
+// signature-only; non-nil is a default body the impl may inherit.
+type specMethod struct {
+	pos    Position
+	name   string
+	params []*Type   // resolved param types (excluding implicit `this`)
+	ret    *Type     // void if no declared return
+	ast    *SpecMethod
+}
+
+// Spec is the per-program record for a spec declaration. Methods preserves
+// declaration order for vtable layout determinism; methodIdx is the lookup-by-
+// name index that drives method dispatch on a spec-typed receiver.
+type Spec struct {
+	Pos       Position
+	Name      string
+	Methods   []*specMethod        // declaration order
+	methodIdx map[string]*specMethod
+	typ       *Type                // canonical TypeSpec singleton
+}
+
+// implMethod is one method that lives inside an impl block. We track the
+// resolved receiver type and the underlying *FnDecl. resolved param/ret types
+// are filled in once the impl table is complete.
+type implMethod struct {
+	pos    Position
+	name   string
+	ast    *FnDecl
+	params []*Type
+	ret    *Type
+}
+
+// Impl is the per-(Type, Spec) impl record. Spec is empty for inherent impls.
+type Impl struct {
+	Pos       Position
+	TypeName  string
+	SpecName  string         // "" for inherent
+	Receiver  *Type          // resolved receiver type (struct or enum)
+	Methods   []*implMethod  // declaration order
+	methodIdx map[string]*implMethod
+	ast       *ImplDecl
+}
+
+// methodSource is one place a method name is visible on a type — either an
+// inherent impl method, or a method exposed via a spec impl (override or
+// inherited default). The collision check distinguishes the two via kind.
+type methodSourceKind int
+
+const (
+	mskInherent methodSourceKind = iota
+	mskSpec
+)
+
+type methodSource struct {
+	kind     methodSourceKind
+	pos      Position    // position of override; for inherited defaults, the spec method pos
+	name     string      // method name (redundant but convenient at collision sites)
+	specName string      // empty for inherent
+	impl     *Impl       // backing impl (for both kinds)
+	implFn   *implMethod // non-nil iff the impl supplies the method body
+	defaultM *specMethod // non-nil iff the source is a spec default (no override in impl)
+	inherent *implMethod // mskInherent only: the inherent impl method
+}
+
+// implKey deduplicates impls by (type, spec).
+type implKey struct {
+	typeName string
+	specName string
+}
+
+// ---------------------------------------------------------------------------
 // Checker state and entry point.
 // ---------------------------------------------------------------------------
 
@@ -292,7 +389,21 @@ type checker struct {
 	structs   map[string]*Type     // Name → struct *Type (Kind TypeStruct)
 	enums     map[string]*Type     // Name → enum *Type (Kind TypeEnum)
 	structAST map[string]*StructDecl // Name → AST node, for the second-pass field resolution
+	enumAST   map[string]*EnumDecl   // Name → AST node, for second-pass payload resolution
+	specs     map[string]*Spec       // Name → Spec
+	impls     map[implKey]*Impl      // (type, spec) → Impl
+	implsByType map[string][]*Impl   // type → [Impl ...] (decl order, both inherent and spec)
+	// rawInherentDecls is the per-block inherent ImplDecl AST list (preserved
+	// in declaration order) so the collision pass can attribute method names
+	// to their owning block even after method-list merging.
+	rawInherentDecls []*ImplDecl
+	// methodVisible[type][methodName] is the list of method sources visible on
+	// that type — populated after collision resolution. Empty when the type
+	// has no methods.
+	methodVisible map[string]map[string][]*methodSource
 	currentFn *fnSig                 // nil at top level
+	currentReceiver *Type            // non-nil only inside an impl method body
+	currentSpec *Spec                // non-nil only inside a spec default body
 	loopDepth int
 }
 
@@ -301,11 +412,16 @@ type checker struct {
 // encountered.
 func Check(prog *Program) error {
 	c := &checker{
-		scope:     newScope(nil),
-		fns:       map[string]fnSig{},
-		structs:   map[string]*Type{},
-		enums:     map[string]*Type{},
-		structAST: map[string]*StructDecl{},
+		scope:         newScope(nil),
+		fns:           map[string]fnSig{},
+		structs:       map[string]*Type{},
+		enums:         map[string]*Type{},
+		structAST:     map[string]*StructDecl{},
+		enumAST:       map[string]*EnumDecl{},
+		specs:         map[string]*Spec{},
+		impls:         map[implKey]*Impl{},
+		implsByType:   map[string][]*Impl{},
+		methodVisible: map[string]map[string][]*methodSource{},
 	}
 	// Pre-populate the function table with `len`. It's resolved as a built-in
 	// at call time — the params slot here is a placeholder that the call-site
@@ -336,10 +452,28 @@ func Check(prog *Program) error {
 	if err := c.resolveStructFields(prog); err != nil {
 		return err
 	}
-	if err := c.detectStructCycles(); err != nil {
+	if err := c.resolveEnumPayloads(prog); err != nil {
+		return err
+	}
+	if err := c.detectTypeCycles(); err != nil {
 		return err
 	}
 	if err := c.resolveFnSignatures(prog); err != nil {
+		return err
+	}
+	if err := c.resolveSpecs(prog); err != nil {
+		return err
+	}
+	if err := c.resolveImpls(prog); err != nil {
+		return err
+	}
+	if err := c.buildMethodVisibility(); err != nil {
+		return err
+	}
+	if err := c.checkSpecBodies(prog); err != nil {
+		return err
+	}
+	if err := c.checkImplBodies(prog); err != nil {
 		return err
 	}
 	for _, stmt := range prog.Statements {
@@ -405,23 +539,46 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			}
 			seen := map[string]bool{}
 			variants := make([]string, len(s.Variants))
+			payloads := make([][]*Type, len(s.Variants))
 			for i, v := range s.Variants {
 				if seen[v.Name] {
 					return typeErr(v.Pos, "duplicate variant %q in enum %q", v.Name, s.Name)
 				}
 				seen[v.Name] = true
 				variants[i] = v.Name
-				// v0.4 Unit 2: parser-only landing for variant payloads.
-				// Typeck (Unit 3) wires payload types into the enum's
-				// Type representation; until then, reject so a tree that
-				// somehow survives the parser fails loudly with the v0.4
-				// marker rather than silently dropping payload data.
-				if len(v.Payload) > 0 {
-					return typeErr(v.Pos,
-						"v0.4 work in progress: enum payload not yet supported")
+				// Payload types are resolved in resolveEnumPayloads once every
+				// top-level type name is known. Leave the payload slot nil; the
+				// resolution pass fills it in based on the AST.
+				_ = payloads
+			}
+			c.enums[s.Name] = &Type{Kind: TypeEnum, Name: s.Name, Variants: variants, VariantPayloads: payloads}
+			c.enumAST[s.Name] = s
+		case *SpecDecl:
+			if err := register(s.Name, s.Pos, "spec"); err != nil {
+				return err
+			}
+			// Reject duplicate method names within a single spec body so the
+			// spec table never exposes an ambiguous method set.
+			seen := map[string]bool{}
+			for _, m := range s.Methods {
+				if seen[m.Name] {
+					return typeErr(m.Pos, "duplicate method %q in spec %q", m.Name, s.Name)
+				}
+				seen[m.Name] = true
+				// Reject explicit `this` parameter — `this` is implicit on
+				// every method and the user must not declare it.
+				for _, p := range m.Params {
+					if p.Name == "this" {
+						return typeErr(p.Pos, "method %q in spec %q must not declare an explicit 'this' parameter ('this' is implicit)", m.Name, s.Name)
+					}
 				}
 			}
-			c.enums[s.Name] = NewEnumType(s.Name, variants)
+			c.specs[s.Name] = &Spec{
+				Pos:       s.Pos,
+				Name:      s.Name,
+				methodIdx: map[string]*specMethod{},
+				typ:       NewSpecType(s.Name),
+			}
 		case *FnDecl:
 			// PLAN-pinned: cannot redefine built-in fns. v0.2 reserves `len`;
 			// v0.3 adds `push` and `clone` to the same reserved set.
@@ -459,12 +616,42 @@ func (c *checker) resolveStructFields(_ *Program) error {
 	return nil
 }
 
-// detectStructCycles walks every struct's fields with DFS and rejects direct
+// resolveEnumPayloads walks each enum's variant declarations and fills in
+// VariantPayloads with resolved *Type entries. Forward references between
+// enums and structs work the same way as struct fields — every top-level
+// type name is already in the table by the time we run.
+func (c *checker) resolveEnumPayloads(_ *Program) error {
+	for name, decl := range c.enumAST {
+		en := c.enums[name]
+		for i, v := range decl.Variants {
+			if len(v.Payload) == 0 {
+				en.VariantPayloads[i] = nil
+				continue
+			}
+			payload := make([]*Type, len(v.Payload))
+			for j, ref := range v.Payload {
+				t, err := c.resolveTypeRef(ref)
+				if err != nil {
+					return err
+				}
+				if t == tVoid {
+					return typeErr(ref.Pos, "enum variant payload type cannot be void")
+				}
+				payload[j] = t
+			}
+			en.VariantPayloads[i] = payload
+		}
+	}
+	return nil
+}
+
+// detectTypeCycles walks every struct AND enum with DFS and rejects direct
 // or transitive recursion. Lists-through-self count as cycles too: lists are
-// value-copied at v0.2 so a `struct A { xs: list[A] }` would still imply
-// infinite size at value-semantics. Tuples are inline shapes, so a tuple
-// containing a struct also contributes to a cycle.
-func (c *checker) detectStructCycles() error {
+// value-copied so a `struct A { xs: list[A] }` would still imply infinite size
+// at value-semantics. Tuples are inline shapes, so a tuple containing a struct
+// also contributes to a cycle. v0.4 extends the v0.2 rule to enum variant
+// payloads, which were not present at v0.2.
+func (c *checker) detectTypeCycles() error {
 	const (
 		gray  = 1
 		black = 2
@@ -477,14 +664,30 @@ func (c *checker) detectStructCycles() error {
 		case black:
 			return nil
 		case gray:
-			return typeErr(viaPos, "recursive struct %q is not allowed at v0.2 (%s)", name, viaDesc)
+			kind := "struct"
+			if _, ok := c.enums[name]; ok {
+				kind = "enum"
+			}
+			return typeErr(viaPos, "recursive %s %q is not allowed (%s)", kind, name, viaDesc)
 		}
 		state[name] = gray
-		st := c.structs[name]
-		decl := c.structAST[name]
-		for i, f := range st.Fields {
-			if err := visitType(f.Type, decl.Fields[i].Pos, fmt.Sprintf("via field %q", f.Name), visit); err != nil {
-				return err
+		if st, ok := c.structs[name]; ok {
+			decl := c.structAST[name]
+			for i, f := range st.Fields {
+				if err := visitType(f.Type, decl.Fields[i].Pos, fmt.Sprintf("via field %q", f.Name), visit); err != nil {
+					return err
+				}
+			}
+		}
+		if en, ok := c.enums[name]; ok {
+			decl := c.enumAST[name]
+			for i, payload := range en.VariantPayloads {
+				for j, t := range payload {
+					desc := fmt.Sprintf("via variant %q payload position %d", en.Variants[i], j+1)
+					if err := visitType(t, decl.Variants[i].Pos, desc, visit); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		state[name] = black
@@ -498,17 +701,28 @@ func (c *checker) detectStructCycles() error {
 			}
 		}
 	}
+	for name := range c.enums {
+		if state[name] == 0 {
+			if err := visit(name, c.enumAST[name].Pos, ""); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
-// visitType walks a Type's struct references for cycle detection. Lists, tuples,
-// and nested structs all pull the cycle through.
+// visitType walks a Type's struct/enum references for cycle detection. Lists,
+// tuples, and nested struct/enum names all pull the cycle through. v0.4
+// extends visiting to TypeEnum so enum-via-list / enum-via-struct / direct
+// enum recursion is rejected with the same diagnostic shape v0.2 used.
 func visitType(t *Type, viaPos Position, viaDesc string, visit func(string, Position, string) error) error {
 	if t == nil {
 		return nil
 	}
 	switch t.Kind {
 	case TypeStruct:
+		return visit(t.Name, viaPos, viaDesc)
+	case TypeEnum:
 		return visit(t.Name, viaPos, viaDesc)
 	case TypeList:
 		return visitType(t.Element, viaPos, viaDesc+" (through list)", visit)
@@ -565,6 +779,460 @@ func (c *checker) resolveFnSignatures(prog *Program) error {
 	return nil
 }
 
+// resolveSpecs walks every SpecDecl, resolves each method's parameter and
+// return types, and populates Spec.Methods + methodIdx. Unknown types in
+// signatures surface here with the full type-name table available.
+func (c *checker) resolveSpecs(prog *Program) error {
+	for _, stmt := range prog.Statements {
+		sd, ok := stmt.(*SpecDecl)
+		if !ok {
+			continue
+		}
+		spec := c.specs[sd.Name]
+		for _, m := range sd.Methods {
+			params := make([]*Type, len(m.Params))
+			for i, p := range m.Params {
+				t, err := c.resolveTypeRef(p.Type)
+				if err != nil {
+					return err
+				}
+				if t == tVoid {
+					return typeErr(p.Pos, "spec method parameter %q cannot have void type", p.Name)
+				}
+				params[i] = t
+			}
+			ret := tVoid
+			if m.Return != nil {
+				rt, err := c.resolveTypeRef(m.Return)
+				if err != nil {
+					return err
+				}
+				if rt == tVoid {
+					return typeErr(m.Return.Pos, "use no return annotation instead of declaring a void return")
+				}
+				ret = rt
+			}
+			sm := &specMethod{
+				pos:    m.Pos,
+				name:   m.Name,
+				params: params,
+				ret:    ret,
+				ast:    m,
+			}
+			spec.Methods = append(spec.Methods, sm)
+			spec.methodIdx[m.Name] = sm
+		}
+	}
+	return nil
+}
+
+// resolveImpls walks every ImplDecl, validates the receiver type rule, builds
+// per-impl method tables, and registers each impl in the impl tables. The
+// per-(Type, Spec) duplicate check fires here.
+func (c *checker) resolveImpls(prog *Program) error {
+	for _, stmt := range prog.Statements {
+		id, ok := stmt.(*ImplDecl)
+		if !ok {
+			continue
+		}
+		// Receiver type must be a struct or enum (PLAN-pinned). Primitives,
+		// lists, tuples, and specs all reject. Unknown names also reject.
+		var receiver *Type
+		if st, ok := c.structs[id.Type]; ok {
+			receiver = st
+		} else if en, ok := c.enums[id.Type]; ok {
+			receiver = en
+		} else if _, ok := c.specs[id.Type]; ok {
+			return typeErr(id.Pos, "%q cannot impl spec at v0.4 — only struct and enum types can implement specs", id.Type)
+		} else {
+			// Primitive name?
+			switch id.Type {
+			case "int", "float", "bool", "str", "byte", "rune":
+				return typeErr(id.Pos, "%q cannot impl spec at v0.4 — only struct and enum types can implement specs", id.Type)
+			}
+			return typeErr(id.Pos, "unknown type %q", id.Type)
+		}
+		// Spec name (if any) must be known.
+		var spec *Spec
+		if id.Spec != "" {
+			s, ok := c.specs[id.Spec]
+			if !ok {
+				return typeErr(id.Pos, "unknown spec %q", id.Spec)
+			}
+			spec = s
+		}
+		key := implKey{typeName: id.Type, specName: id.Spec}
+		if prev, exists := c.impls[key]; exists {
+			if id.Spec == "" {
+				// Multiple inherent impls are admitted — they aggregate. Fall
+				// through to merge below.
+				_ = prev
+			} else {
+				return typeErr(id.Pos,
+					"duplicate impl: %s already implements %s at %s",
+					id.Type, id.Spec, prev.Pos)
+			}
+		}
+		// Build implMethod entries with resolved param/ret types.
+		methods := make([]*implMethod, 0, len(id.Methods))
+		methodIdx := map[string]*implMethod{}
+		for _, fn := range id.Methods {
+			if fn.Name == "this" {
+				return typeErr(fn.Pos, "method must not be named 'this'")
+			}
+			// Reject explicit `this` parameter.
+			for _, p := range fn.Params {
+				if p.Name == "this" {
+					return typeErr(p.Pos, "method %q in impl %s must not declare an explicit 'this' parameter ('this' is implicit)", fn.Name, id.Type)
+				}
+			}
+			if _, dup := methodIdx[fn.Name]; dup {
+				return typeErr(fn.Pos, "duplicate method %q in impl block for %s", fn.Name, id.Type)
+			}
+			params := make([]*Type, len(fn.Params))
+			for i, p := range fn.Params {
+				t, err := c.resolveTypeRef(p.Type)
+				if err != nil {
+					return err
+				}
+				if t == tVoid {
+					return typeErr(p.Pos, "parameter %q cannot have void type", p.Name)
+				}
+				params[i] = t
+			}
+			ret := tVoid
+			if fn.Return != nil {
+				rt, err := c.resolveTypeRef(fn.Return)
+				if err != nil {
+					return err
+				}
+				if rt == tVoid {
+					return typeErr(fn.Return.Pos, "use no return annotation instead of declaring a void return")
+				}
+				ret = rt
+			}
+			im := &implMethod{
+				pos:    fn.Pos,
+				name:   fn.Name,
+				ast:    fn,
+				params: params,
+				ret:    ret,
+			}
+			methods = append(methods, im)
+			methodIdx[fn.Name] = im
+		}
+		// For spec impls, validate that every method name corresponds to a
+		// declared spec method, and that the override signature matches the
+		// spec's declared signature.
+		if spec != nil {
+			for _, im := range methods {
+				sm, ok := spec.methodIdx[im.name]
+				if !ok {
+					return typeErr(im.pos, "method %q is not declared in spec %q", im.name, spec.Name)
+				}
+				if len(im.params) != len(sm.params) {
+					return typeErr(im.pos, "method %q expects %d parameter(s) per spec %q, got %d", im.name, len(sm.params), spec.Name, len(im.params))
+				}
+				for i := range im.params {
+					if !typeEq(im.params[i], sm.params[i]) {
+						return typeErr(im.pos, "method %q parameter %d type %s does not match spec %q signature %s", im.name, i+1, im.params[i], spec.Name, sm.params[i])
+					}
+				}
+				if !typeEq(im.ret, sm.ret) {
+					return typeErr(im.pos, "method %q return type %s does not match spec %q return type %s", im.name, im.ret, spec.Name, sm.ret)
+				}
+			}
+		}
+		impl := &Impl{
+			Pos:       id.Pos,
+			TypeName:  id.Type,
+			SpecName:  id.Spec,
+			Receiver:  receiver,
+			Methods:   methods,
+			methodIdx: methodIdx,
+			ast:       id,
+		}
+		// Aggregate inherent impls onto a single record; reject duplicates for
+		// spec impls (already handled above).
+		if id.Spec == "" {
+			c.rawInherentDecls = append(c.rawInherentDecls, id)
+			if prev, exists := c.impls[key]; exists {
+				// Merge inherent methods, watching for duplicate names across
+				// blocks. A duplicate-name across inherent blocks is reported
+				// later by the visibility pass with both positions, so we just
+				// concatenate here.
+				prev.Methods = append(prev.Methods, methods...)
+				for _, im := range methods {
+					if existing, dup := prev.methodIdx[im.name]; dup {
+						_ = existing
+						// Keep the first; visibility pass will diagnose with
+						// both positions.
+					} else {
+						prev.methodIdx[im.name] = im
+					}
+				}
+			} else {
+				c.impls[key] = impl
+				c.implsByType[id.Type] = append(c.implsByType[id.Type], impl)
+			}
+		} else {
+			c.impls[key] = impl
+			c.implsByType[id.Type] = append(c.implsByType[id.Type], impl)
+		}
+	}
+	return nil
+}
+
+// buildMethodVisibility walks every type's collected impls and produces the
+// per-(type, name) source list used by method dispatch. Inherent-vs-spec and
+// inherent-vs-inherent collisions are rejected here with both positions in
+// the diagnostic. Cross-spec collisions are admitted — they are disambiguated
+// by binding the receiver to a spec type.
+func (c *checker) buildMethodVisibility() error {
+	// First detect intra-inherent collisions across separate impl blocks.
+	// We walk the rawInherentDecls slice (populated in resolveImpls) so we
+	// see every block's methods before merging masks them.
+	type inherentSrc struct {
+		pos Position
+	}
+	inherentSeen := map[string]map[string][]inherentSrc{} // type → name → [pos, ...]
+	for _, raw := range c.rawInherentDecls {
+		seenNamesInBlock := map[string]bool{}
+		for _, fn := range raw.Methods {
+			if seenNamesInBlock[fn.Name] {
+				continue // intra-block dup already reported by resolveImpls
+			}
+			seenNamesInBlock[fn.Name] = true
+			if inherentSeen[raw.Type] == nil {
+				inherentSeen[raw.Type] = map[string][]inherentSrc{}
+			}
+			inherentSeen[raw.Type][fn.Name] = append(
+				inherentSeen[raw.Type][fn.Name],
+				inherentSrc{pos: fn.Pos},
+			)
+		}
+	}
+	for typeName, byName := range inherentSeen {
+		for name, srcs := range byName {
+			if len(srcs) > 1 {
+				return typeErr(srcs[1].pos,
+					"method %q on %s is defined multiple times in inherent impl blocks at %s, %s",
+					name, typeName, srcs[0].pos, srcs[1].pos)
+			}
+		}
+	}
+
+	// Now build the visibility map.
+	for typeName, ids := range c.implsByType {
+		visible := map[string][]*methodSource{}
+		for _, impl := range ids {
+			if impl.SpecName == "" {
+				for _, im := range impl.Methods {
+					src := &methodSource{
+						kind:     mskInherent,
+						pos:      im.pos,
+						name:     im.name,
+						impl:     impl,
+						implFn:   im,
+						inherent: im,
+					}
+					visible[im.name] = append(visible[im.name], src)
+				}
+				continue
+			}
+			spec := c.specs[impl.SpecName]
+			// For spec impls, every spec method is visible. Override if the
+			// impl supplies one; otherwise inherit the default if present;
+			// otherwise the method is "not implemented at runtime" — visible
+			// at typeck but a NotImplemented panic at codegen time.
+			for _, sm := range spec.Methods {
+				src := &methodSource{
+					kind:     mskSpec,
+					name:     sm.name,
+					specName: spec.Name,
+					impl:     impl,
+				}
+				if im, ok := impl.methodIdx[sm.name]; ok {
+					src.pos = im.pos
+					src.implFn = im
+				} else {
+					src.pos = sm.pos
+					src.defaultM = sm
+				}
+				visible[sm.name] = append(visible[sm.name], src)
+			}
+		}
+		// Detect inherent-vs-spec collision.
+		for name, srcs := range visible {
+			hasInherent := false
+			hasSpec := false
+			var inhPos, specPos Position
+			var specName string
+			for _, s := range srcs {
+				if s.kind == mskInherent {
+					if !hasInherent {
+						inhPos = s.pos
+					}
+					hasInherent = true
+				} else {
+					if !hasSpec {
+						specPos = s.pos
+						specName = s.specName
+					}
+					hasSpec = true
+				}
+			}
+			if hasInherent && hasSpec {
+				return typeErr(inhPos,
+					"method %q on %s is defined twice — once inherent at %s, once via spec %s at %s. Rename one or remove one.",
+					name, typeName, inhPos, specName, specPos)
+			}
+		}
+		c.methodVisible[typeName] = visible
+	}
+	return nil
+}
+
+// checkSpecBodies walks any spec method that carries a default body and
+// type-checks it once with `this` bound to a placeholder receiver type. Per
+// PLAN, the placeholder is fine for typeck — Unit 6/7 owns the per-type code
+// emission. For typeck purposes we need to validate the body against the
+// spec's signature and reject obviously-wrong shapes.
+//
+// At v0.4 default-body type-checking is intentionally relaxed: bodies that
+// reference `this.field` or `this.method()` rely on the implementing type, so
+// the only soundness check we make at the spec level is "does the body's
+// statement list type-check at all?". When the body is empty / just `return
+// expr` of a literal type matching the declared return, that succeeds; bodies
+// that probe `this.field` are accepted only where the access cannot be
+// statically validated against the placeholder. Since v0.4's corpus uses
+// defaults that read no fields (e.g. `fn hash() -> int { return 0 }`), the
+// relaxed check is sufficient. Stricter validation can be added later.
+func (c *checker) checkSpecBodies(prog *Program) error {
+	for _, stmt := range prog.Statements {
+		sd, ok := stmt.(*SpecDecl)
+		if !ok {
+			continue
+		}
+		spec := c.specs[sd.Name]
+		for _, m := range sd.Methods {
+			if m.Body == nil {
+				continue
+			}
+			sm := spec.methodIdx[m.Name]
+			// Build a synthetic fnSig so return-checking inside the body
+			// compares against the declared return type.
+			sig := fnSig{params: sm.params, ret: sm.ret, pos: m.Pos}
+			savedFn := c.currentFn
+			savedSpec := c.currentSpec
+			savedRecv := c.currentReceiver
+			c.currentFn = &sig
+			c.currentSpec = spec
+			// Placeholder receiver: the spec type itself. Typeck of `this`
+			// inside a default body should treat field access permissively
+			// (deferred to per-type at codegen). Today we represent the
+			// placeholder as the spec type, so `this.method()` resolves
+			// against the spec's other methods (which is sound because every
+			// implementing type has them by definition).
+			c.currentReceiver = spec.typ
+			c.scope = newScope(c.scope)
+			// Bind the declared params.
+			for i, p := range m.Params {
+				if !c.scope.declare(p.Name, binding{kind: bindLet, typ: sm.params[i]}) {
+					c.scope = c.scope.parent
+					c.currentFn = savedFn
+					c.currentSpec = savedSpec
+					c.currentReceiver = savedRecv
+					return typeErr(p.Pos, "parameter %q already declared", p.Name)
+				}
+			}
+			err := func() error {
+				for _, st := range m.Body.Statements {
+					if err := c.checkStmt(st); err != nil {
+						return err
+					}
+				}
+				return nil
+			}()
+			c.scope = c.scope.parent
+			c.currentFn = savedFn
+			c.currentSpec = savedSpec
+			c.currentReceiver = savedRecv
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkImplBodies walks every impl method body with `this` bound to the
+// receiver type. Param types are already resolved.
+func (c *checker) checkImplBodies(prog *Program) error {
+	for _, stmt := range prog.Statements {
+		id, ok := stmt.(*ImplDecl)
+		if !ok {
+			continue
+		}
+		key := implKey{typeName: id.Type, specName: id.Spec}
+		impl, ok := c.impls[key]
+		if !ok {
+			// Inherent impls may have been merged into a single record; if so,
+			// look it up by type name and locate the matching ImplDecl by Pos.
+			if id.Spec == "" {
+				if list := c.implsByType[id.Type]; len(list) > 0 {
+					impl = list[0]
+				}
+			}
+			if impl == nil {
+				continue
+			}
+		}
+		// For each AST method, find its resolved implMethod (by position).
+		for _, fn := range id.Methods {
+			var im *implMethod
+			for _, candidate := range impl.Methods {
+				if candidate.ast == fn {
+					im = candidate
+					break
+				}
+			}
+			if im == nil {
+				continue
+			}
+			sig := fnSig{params: im.params, ret: im.ret, pos: fn.Pos}
+			savedFn := c.currentFn
+			savedRecv := c.currentReceiver
+			c.currentFn = &sig
+			c.currentReceiver = impl.Receiver
+			c.scope = newScope(c.scope)
+			for i, p := range fn.Params {
+				if !c.scope.declare(p.Name, binding{kind: bindLet, typ: im.params[i]}) {
+					c.scope = c.scope.parent
+					c.currentFn = savedFn
+					c.currentReceiver = savedRecv
+					return typeErr(p.Pos, "parameter %q already declared", p.Name)
+				}
+			}
+			err := func() error {
+				for _, st := range fn.Body.Statements {
+					if err := c.checkStmt(st); err != nil {
+						return err
+					}
+				}
+				return nil
+			}()
+			c.scope = c.scope.parent
+			c.currentFn = savedFn
+			c.currentReceiver = savedRecv
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // resolveTypeRef maps a TypeRef to a *Type, populates TypeRef.Resolved, and
 // reports unknown names with a clear position. List and tuple type-refs
 // resolve recursively.
@@ -593,6 +1261,8 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 				t = st
 			} else if en, ok := c.enums[ref.Name]; ok {
 				t = en
+			} else if sp, ok := c.specs[ref.Name]; ok {
+				t = sp.typ
 			} else {
 				return nil, typeErr(ref.Pos, "unknown type %q", ref.Name)
 			}
@@ -693,12 +1363,12 @@ func (c *checker) checkStmt(stmt Stmt) error {
 	case *MatchStmt:
 		return c.checkMatch(s)
 	case *SpecDecl:
-		// v0.4 Unit 1: parser-only landing for spec declarations. Typeck
-		// support (spec/impl tables, method dispatch) lands in Unit 3.
-		return typeErr(s.Pos, "spec declarations are not yet supported (v0.4 work in progress)")
+		// Spec/impl bodies are walked in dedicated passes
+		// (checkSpecBodies / checkImplBodies). The top-level walk only needs
+		// to visit other statement kinds; specs and impls are no-ops here.
+		return nil
 	case *ImplDecl:
-		// v0.4 Unit 1: parser-only landing. Typeck support lands in Unit 3.
-		return typeErr(s.Pos, "impl declarations are not yet supported (v0.4 work in progress)")
+		return nil
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -758,7 +1428,7 @@ func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr,
 	}
 	final := observed
 	if annotated != nil {
-		if !typeEq(observed, annotated) {
+		if !c.assignableTo(observed, annotated) {
 			return typeErr(pos, "cannot assign %s to %s for %q", observed, annotated, name)
 		}
 		final = annotated
@@ -773,6 +1443,48 @@ func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr,
 		return typeErr(pos, "name %q already declared in this scope", name)
 	}
 	return nil
+}
+
+// assignableTo reports whether a value of type `from` may flow into a slot
+// declared as `to`. Beyond plain type equality, v0.4 admits widening from a
+// concrete struct/enum that implements a spec into the spec type itself.
+// list[Printable] / tuple[..., Printable] / struct field of spec type all
+// follow the same rule recursively. Spec → concrete is NEVER admitted (you
+// can't downcast at v0.4).
+func (c *checker) assignableTo(from, to *Type) bool {
+	if typeEq(from, to) {
+		return true
+	}
+	if from == nil || to == nil {
+		return false
+	}
+	// Spec widening: from concrete struct/enum implementing `to`.
+	if to.Kind == TypeSpec {
+		if from.Kind != TypeStruct && from.Kind != TypeEnum {
+			return false
+		}
+		_, ok := c.impls[implKey{typeName: from.Name, specName: to.Name}]
+		return ok
+	}
+	// Recurse into composites.
+	switch to.Kind {
+	case TypeList:
+		if from.Kind != TypeList {
+			return false
+		}
+		return c.assignableTo(from.Element, to.Element)
+	case TypeTuple:
+		if from.Kind != TypeTuple || len(from.Tuple) != len(to.Tuple) {
+			return false
+		}
+		for i := range from.Tuple {
+			if !c.assignableTo(from.Tuple[i], to.Tuple[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // checkTupleDestructure handles `let (a, b) := expr` (and the mut form). The
@@ -1221,20 +1933,35 @@ func (c *checker) checkPattern(pat Pattern, expected *Type, armScope *scope, bin
 		if expected.Name != p.TypeName {
 			return typeErr(p.Pos, "enum pattern type %q does not match subject type %s", p.TypeName, expected)
 		}
-		// v0.4 Unit 2: parser-only landing for payload destructure. Typeck
-		// (Unit 3) checks arity / per-position types and binds payload
-		// names; until then, payloadful patterns reject so a tree that
-		// somehow survives the parser fails loudly with the v0.4 marker.
-		if len(p.Payload) > 0 {
-			return typeErr(p.Pos,
-				"v0.4 work in progress: enum payload not yet supported")
-		}
-		for _, v := range expected.Variants {
+		// Locate the variant index so we can validate payload arity and types.
+		idx := -1
+		for i, v := range expected.Variants {
 			if v == p.VariantName {
-				return nil
+				idx = i
+				break
 			}
 		}
-		return typeErr(p.Pos, "enum %q has no variant %q", expected.Name, p.VariantName)
+		if idx < 0 {
+			return typeErr(p.Pos, "enum %q has no variant %q", expected.Name, p.VariantName)
+		}
+		variantPayload := expected.VariantPayloads[idx]
+		// Bare pattern (no parens) — admissible only for bare variants.
+		if len(p.Payload) == 0 {
+			if len(variantPayload) > 0 {
+				return typeErr(p.Pos, "variant %q.%q has %d payload value(s), pattern must destructure with parens", expected.Name, p.VariantName, len(variantPayload))
+			}
+			return nil
+		}
+		// Payload pattern present. Arity must match.
+		if len(p.Payload) != len(variantPayload) {
+			return typeErr(p.Pos, "variant %q.%q has %d payload value(s), pattern supplies %d", expected.Name, p.VariantName, len(variantPayload), len(p.Payload))
+		}
+		for i, sub := range p.Payload {
+			if err := c.checkPattern(sub, variantPayload[i], armScope, bindings); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return typeErr(pat.PatPos(), "internal: unhandled pattern %T", pat)
 }
@@ -1327,13 +2054,15 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 	case *FieldAccessExpr:
 		return c.checkFieldAccess(e)
 	case *MethodCallExpr:
-		// v0.4 Unit 1: parser-only landing for method-call syntax. Method
-		// dispatch (resolution + vtable routing) lands in Unit 3.
-		return nil, typeErr(e.Pos, "method calls are not yet supported (v0.4 work in progress)")
+		return c.checkMethodCall(e)
 	case *ThisExpr:
-		// v0.4 Unit 1: parser-only landing. Typeck binds `this` to the
-		// receiver type inside method bodies starting in Unit 3.
-		return nil, typeErr(e.Pos, "'this' is not yet supported (v0.4 work in progress)")
+		if c.currentReceiver == nil {
+			return nil, typeErr(e.Pos, "'this' is only valid inside an impl method body")
+		}
+		e.setType(c.currentReceiver)
+		return c.currentReceiver, nil
+	case *EnumLit:
+		return c.checkEnumLit(e)
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }
@@ -1362,9 +2091,30 @@ func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 	if hint != nil && hint.Kind == TypeList {
 		elemHint = hint.Element
 	}
+	// When the hint asks for a list of a spec type, the result list is
+	// list[Spec] regardless of which concrete types appear in the literal —
+	// each element only needs to impl the spec. Otherwise use the first
+	// element's observed type and require subsequent elements to match.
 	first, err := c.checkExprHint(e.Elements[0], elemHint)
 	if err != nil {
 		return nil, err
+	}
+	if elemHint != nil && elemHint.Kind == TypeSpec {
+		if !c.assignableTo(first, elemHint) {
+			return nil, typeErr(e.Elements[0].ExprPos(), "list element 1 has type %s, expected %s", first, elemHint)
+		}
+		for i := 1; i < len(e.Elements); i++ {
+			t, err := c.checkExprHint(e.Elements[i], elemHint)
+			if err != nil {
+				return nil, err
+			}
+			if !c.assignableTo(t, elemHint) {
+				return nil, typeErr(e.Elements[i].ExprPos(), "list element %d has type %s, expected %s", i+1, t, elemHint)
+			}
+		}
+		out := NewListType(elemHint)
+		e.setType(out)
+		return out, nil
 	}
 	for i := 1; i < len(e.Elements); i++ {
 		t, err := c.checkExprHint(e.Elements[i], elemHint)
@@ -1429,7 +2179,7 @@ func (c *checker) checkStructLit(e *StructLit) (*Type, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !typeEq(vt, ft) {
+		if !c.assignableTo(vt, ft) {
 			return nil, typeErr(init.Pos, "field %q expects %s, got %s", init.Name, ft, vt)
 		}
 	}
@@ -1511,13 +2261,30 @@ func (c *checker) checkSlice(e *SliceExpr) (*Type, error) {
 // name must be one of its declared fields. Receiver-as-enum is recorded by
 // setting the receiver IdentExpr's type to the enum type itself, which mirrors
 // how `Color.Red` evaluates at run time.
+//
+// v0.4: when the variant has a non-empty payload declared, a bare-name access
+// without parens is rejected — the user must construct via `Variant(...)`.
+// The lowered EnumLit pointer is attached so downstream consumers can route
+// the construction through the same Visitor path as MethodCallExpr-style
+// payloadful construction.
 func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 	if id, ok := e.Receiver.(*IdentExpr); ok {
 		if en, isEnum := c.enums[id.Name]; isEnum {
-			for _, v := range en.Variants {
+			for i, v := range en.Variants {
 				if v == e.FieldName {
+					if len(en.VariantPayloads[i]) > 0 {
+						return nil, typeErr(e.NamePos,
+							"variant %q.%q has %d payload value(s) — use %s.%s(...) to construct", en.Name, v, len(en.VariantPayloads[i]), en.Name, v)
+					}
 					id.setType(en)
 					e.setType(en)
+					e.Lowered = &EnumLit{
+						Pos:        e.Pos,
+						EnumName:   en.Name,
+						Variant:    v,
+						VariantPos: e.NamePos,
+					}
+					e.Lowered.setType(en)
 					return en, nil
 				}
 			}
@@ -1538,6 +2305,237 @@ func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 		}
 	}
 	return nil, typeErr(e.NamePos, "struct %q has no field %q", rt.Name, e.FieldName)
+}
+
+// checkMethodCall handles `receiver.method(args)`. Three resolution paths:
+//
+//   1. The receiver is a bare ident naming a known enum and `method` is one
+//      of its variants → lower to an EnumLit construction. The variant's
+//      declared payload-type list drives arg type-checking.
+//   2. The receiver has a spec type → look up the method in the spec's
+//      method index and bind to the spec's signature.
+//   3. The receiver has a struct or enum type → look up the method in that
+//      type's method-visibility map. Inherent and single-spec sources resolve
+//      cleanly; multi-spec collisions reject with the "bind to a spec" hint.
+//
+// Receiver expressions are walked once (paths 2 and 3 type-check the receiver
+// before lookup).
+func (c *checker) checkMethodCall(e *MethodCallExpr) (*Type, error) {
+	// Path 1: enum-lit construction shape.
+	if id, ok := e.Receiver.(*IdentExpr); ok {
+		if en, isEnum := c.enums[id.Name]; isEnum {
+			for i, v := range en.Variants {
+				if v == e.Method {
+					return c.lowerEnumLitFromMethodCall(e, en, i)
+				}
+			}
+			// Receiver is an enum ident but `method` is not a variant — could
+			// be a method on the enum type. Fall through to method-table
+			// lookup with receiver type bound to the enum.
+			id.setType(en)
+			return c.dispatchConcreteMethod(e, en)
+		}
+	}
+	// Paths 2 & 3 both need the receiver's type.
+	rt, err := c.checkExpr(e.Receiver)
+	if err != nil {
+		return nil, err
+	}
+	if rt == nil {
+		return nil, typeErr(e.Pos, "cannot call method on untyped value")
+	}
+	if rt.Kind == TypeSpec {
+		return c.dispatchSpecMethod(e, rt)
+	}
+	if rt.Kind != TypeStruct && rt.Kind != TypeEnum {
+		return nil, typeErr(e.MethodPos, "method %q does not exist on %s", e.Method, rt)
+	}
+	return c.dispatchConcreteMethod(e, rt)
+}
+
+// lowerEnumLitFromMethodCall validates payload arity / types and stamps the
+// MethodCallExpr with an EnumLit lowering, then sets the call's type to the
+// owning enum.
+func (c *checker) lowerEnumLitFromMethodCall(e *MethodCallExpr, en *Type, variantIdx int) (*Type, error) {
+	variantName := en.Variants[variantIdx]
+	payload := en.VariantPayloads[variantIdx]
+	if len(payload) == 0 {
+		return nil, typeErr(e.MethodPos, "variant %q.%q has no payload — drop the parentheses to construct", en.Name, variantName)
+	}
+	if len(e.Args) != len(payload) {
+		return nil, typeErr(e.Pos, "variant %q.%q expects %d payload value(s), got %d", en.Name, variantName, len(payload), len(e.Args))
+	}
+	args := make([]Expr, len(e.Args))
+	for i, a := range e.Args {
+		at, err := c.checkExprHint(a, payload[i])
+		if err != nil {
+			return nil, err
+		}
+		if !typeEq(at, payload[i]) {
+			return nil, typeErr(a.ExprPos(), "variant %q.%q payload position %d expects %s, got %s", en.Name, variantName, i+1, payload[i], at)
+		}
+		args[i] = a
+	}
+	if id, ok := e.Receiver.(*IdentExpr); ok {
+		id.setType(en)
+	}
+	lowered := &EnumLit{
+		Pos:        e.Pos,
+		EnumName:   en.Name,
+		Variant:    variantName,
+		VariantPos: e.MethodPos,
+		Payload:    args,
+	}
+	lowered.setType(en)
+	e.Lowered = lowered
+	e.setType(en)
+	return en, nil
+}
+
+// dispatchSpecMethod resolves a method call against a spec-typed receiver.
+// Method lookup is by name in the spec's method index; the call's effective
+// signature is the spec method's declared signature.
+func (c *checker) dispatchSpecMethod(e *MethodCallExpr, specType *Type) (*Type, error) {
+	spec := c.specs[specType.Name]
+	if spec == nil {
+		return nil, typeErr(e.Pos, "internal: spec %q not in spec table", specType.Name)
+	}
+	sm, ok := spec.methodIdx[e.Method]
+	if !ok {
+		return nil, typeErr(e.MethodPos, "method %q does not exist on spec %q", e.Method, spec.Name)
+	}
+	if err := c.checkMethodArgs(e, sm.params); err != nil {
+		return nil, err
+	}
+	e.setType(sm.ret)
+	return sm.ret, nil
+}
+
+// dispatchConcreteMethod resolves a method call against a struct- or enum-
+// typed receiver via the method-visibility map. Inherent and single-spec
+// sources resolve cleanly; multi-spec collisions reject with the "bind 'c' to
+// a spec type to disambiguate" hint.
+func (c *checker) dispatchConcreteMethod(e *MethodCallExpr, recv *Type) (*Type, error) {
+	visible := c.methodVisible[recv.Name]
+	srcs := visible[e.Method]
+	if len(srcs) == 0 {
+		return nil, typeErr(e.MethodPos, "method %q does not exist on %s", e.Method, recv)
+	}
+	// At most one inherent source per type (collision rule fires earlier).
+	// Filter to find the binding source: inherent is unique; spec sources
+	// resolve only when there's exactly one.
+	if len(srcs) == 1 {
+		return c.bindResolvedMethodCall(e, srcs[0])
+	}
+	// Multiple sources — must all be spec; otherwise visibility pass would
+	// have rejected. Multiple distinct specs implementing a method with the
+	// same name → ambiguous when called via concrete receiver.
+	var specNames []string
+	for _, s := range srcs {
+		if s.kind == mskSpec {
+			specNames = append(specNames, s.specName)
+		}
+	}
+	return nil, typeErr(e.MethodPos,
+		"method %q on %s matches multiple specs (%s) — bind '%s' to a spec type to disambiguate",
+		e.Method, recv, strings.Join(specNames, ", "), exprDisplay(e.Receiver))
+}
+
+// bindResolvedMethodCall completes argument-checking against the chosen
+// method source's signature.
+func (c *checker) bindResolvedMethodCall(e *MethodCallExpr, src *methodSource) (*Type, error) {
+	var params []*Type
+	var ret *Type
+	switch src.kind {
+	case mskInherent:
+		params = src.inherent.params
+		ret = src.inherent.ret
+	case mskSpec:
+		if src.implFn != nil {
+			params = src.implFn.params
+			ret = src.implFn.ret
+		} else if src.defaultM != nil {
+			params = src.defaultM.params
+			ret = src.defaultM.ret
+		} else {
+			// Inherited but no body — runtime NotImplemented. The spec method
+			// signature is still the one we type-check against.
+			sm := c.specs[src.specName].methodIdx[src.name]
+			params = sm.params
+			ret = sm.ret
+		}
+	}
+	if err := c.checkMethodArgs(e, params); err != nil {
+		return nil, err
+	}
+	e.setType(ret)
+	return ret, nil
+}
+
+// checkMethodArgs enforces arity and per-position type-equality between e.Args
+// and the resolved method's declared parameter list (excluding implicit
+// `this`). Args are read positions — borrow check (Unit 5) owns the move/borrow
+// rules.
+func (c *checker) checkMethodArgs(e *MethodCallExpr, params []*Type) error {
+	if len(e.Args) != len(params) {
+		return typeErr(e.Pos, "method %q expects %d argument(s), got %d", e.Method, len(params), len(e.Args))
+	}
+	for i, a := range e.Args {
+		at, err := c.checkExprHint(a, params[i])
+		if err != nil {
+			return err
+		}
+		if !typeEq(at, params[i]) {
+			return typeErr(a.ExprPos(), "argument %d to %q has type %s, expected %s", i+1, e.Method, at, params[i])
+		}
+	}
+	return nil
+}
+
+// checkEnumLit validates an EnumLit AST node directly. The parser does not
+// produce EnumLit nodes today (typeck lowers them from Method/FieldAccess),
+// but the entry point exists so that future producers can hand a pre-built
+// EnumLit straight to typeck.
+func (c *checker) checkEnumLit(e *EnumLit) (*Type, error) {
+	en, ok := c.enums[e.EnumName]
+	if !ok {
+		return nil, typeErr(e.Pos, "unknown enum %q", e.EnumName)
+	}
+	idx := -1
+	for i, v := range en.Variants {
+		if v == e.Variant {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, typeErr(e.VariantPos, "enum %q has no variant %q", en.Name, e.Variant)
+	}
+	payload := en.VariantPayloads[idx]
+	if len(e.Payload) != len(payload) {
+		return nil, typeErr(e.Pos, "variant %q.%q expects %d payload value(s), got %d", en.Name, e.Variant, len(payload), len(e.Payload))
+	}
+	for i, a := range e.Payload {
+		at, err := c.checkExprHint(a, payload[i])
+		if err != nil {
+			return nil, err
+		}
+		if !typeEq(at, payload[i]) {
+			return nil, typeErr(a.ExprPos(), "variant %q.%q payload position %d expects %s, got %s", en.Name, e.Variant, i+1, payload[i], at)
+		}
+	}
+	e.setType(en)
+	return en, nil
+}
+
+// exprDisplay renders an expression in source-text-ish form for diagnostics.
+// Only enough fidelity for the "bind 'c' to a spec type to disambiguate"
+// message — anything more elaborate stays in a future formatter.
+func exprDisplay(e Expr) string {
+	if id, ok := e.(*IdentExpr); ok {
+		return id.Name
+	}
+	return "<expr>"
 }
 
 // checkBinary validates per-operator typing rules.

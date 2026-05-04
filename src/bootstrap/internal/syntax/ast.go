@@ -819,12 +819,17 @@ func (e *SliceExpr) ExprPos() Position { return e.Pos }
 // any expression — typeck disambiguates between struct field access (when
 // the receiver is a value) and enum variant access (when the receiver is a
 // bare IdentExpr that resolves to an enum type).
+//
+// Lowered is set by typeck when the access shape is recognised as a bare-
+// variant enum construction (`Token.Eof`). Downstream consumers can use the
+// pointer to dispatch to enum-lit handling.
 type FieldAccessExpr struct {
 	typed
 	Pos       Position
 	Receiver  Expr
 	FieldName string
 	NamePos   Position
+	Lowered   *EnumLit
 }
 
 func (*FieldAccessExpr) exprNode()           {}
@@ -980,13 +985,19 @@ func (s *ImplDecl) StmtPos() Position { return s.Pos }
 // to parse as FieldAccessExpr. Receiver, Method, and Args are walked by
 // typeck (Unit 3) for resolution; until then the node simply records the
 // shape that was parsed.
+//
+// Lowered is set by typeck when the call shape is recognised as an enum-lit
+// construction (`Token.Ident("hello")`). Downstream consumers (run, build)
+// can short-circuit to the EnumLit form via this pointer; the surface
+// MethodCallExpr remains in the tree for diagnostic positioning.
 type MethodCallExpr struct {
 	typed
-	Pos      Position
-	Receiver Expr
-	Method   string
+	Pos       Position
+	Receiver  Expr
+	Method    string
 	MethodPos Position
-	Args     []Expr
+	Args      []Expr
+	Lowered   *EnumLit
 }
 
 func (*MethodCallExpr) exprNode()           {}

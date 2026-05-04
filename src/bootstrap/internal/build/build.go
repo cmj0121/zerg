@@ -25,26 +25,28 @@ func DefaultCC() string {
 // EmitSource lexes, parses, and type-checks the Zerg source at srcPath and
 // writes the generated C to w. It does not invoke the C compiler — use Build
 // for the full compile-to-binary pipeline.
+//
+// v0.5 Unit 6: passes the full Bundle (entry + all reached siblings) to
+// EmitBundle, which emits one merged TU with module-mangled symbol names.
 func EmitSource(srcPath string, w io.Writer) error {
-	prog, err := parseSource(srcPath)
+	bundle, err := parseBundle(srcPath)
 	if err != nil {
 		return err
 	}
-	return Emit(prog, w)
+	return EmitBundle(bundle, w)
 }
 
-// parseSource reads, lexes, parses (via the v0.5 module loader), and
+// parseBundle reads, lexes, parses (via the v0.5 module loader), and
 // type-checks srcPath, wrapping each failure with a `zerg build:` prefix
 // so callers can return errors verbatim. Type-checking happens here (not
 // just inside Build) so EmitSource — used by `--emit-c` — also rejects
 // ill-typed programs before generating C that the codegen would otherwise
 // accept and produce nonsense for.
 //
-// v0.5 Unit 3: typeck runs across the whole Bundle so cross-module name
-// resolution, pub gating, and the orphan rule fire. Codegen still
-// consumes only the entry module's typed AST until Unit 6 wires per-
-// module mangling.
-func parseSource(srcPath string) (*syntax.Program, error) {
+// v0.5 Unit 6: returns the full loader.Bundle so codegen has access to
+// every module's program for module-mangling and cross-module call
+// emission.
+func parseBundle(srcPath string) (*loader.Bundle, error) {
 	bundle, err := loader.Load(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("zerg build: %w", err)
@@ -52,7 +54,7 @@ func parseSource(srcPath string) (*syntax.Program, error) {
 	if err := syntax.CheckBundle(bundle); err != nil {
 		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
 	}
-	return bundle.Entry.Program, nil
+	return bundle, nil
 }
 
 // Build compiles the Zerg source at srcPath into a native binary placed in
@@ -69,7 +71,7 @@ func Build(srcPath string) error {
 		return fmt.Errorf("zerg build: %q not found in PATH; set $CC or install gcc/clang", cc)
 	}
 
-	prog, err := parseSource(srcPath)
+	bundle, err := parseBundle(srcPath)
 	if err != nil {
 		return err
 	}
@@ -97,7 +99,7 @@ func Build(srcPath string) error {
 	if err != nil {
 		return fmt.Errorf("zerg build: %w", err)
 	}
-	if err := Emit(prog, cFile); err != nil {
+	if err := EmitBundle(bundle, cFile); err != nil {
 		cFile.Close()
 		return fmt.Errorf("zerg build: %w", err)
 	}

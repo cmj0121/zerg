@@ -202,16 +202,17 @@ fn add(a: int, b: int) -> int {
 print add(2, 3)
 `
 	out := mustEmit(t, src)
-	if !strings.Contains(out, "static int64_t z_add(int64_t z_a, int64_t z_b);") {
+	addSym := "z_" + mangleModule("main") + "__add"
+	if !strings.Contains(out, "static int64_t "+addSym+"(int64_t z_a, int64_t z_b);") {
 		t.Errorf("fn decl forward should be emitted; got:\n%s", out)
 	}
-	if !strings.Contains(out, "static int64_t z_add(int64_t z_a, int64_t z_b) {") {
+	if !strings.Contains(out, "static int64_t "+addSym+"(int64_t z_a, int64_t z_b) {") {
 		t.Errorf("fn body should follow the same signature; got:\n%s", out)
 	}
 	if !strings.Contains(out, "return (z_a + z_b);") {
 		t.Errorf("return of binary should be parenthesised; got:\n%s", out)
 	}
-	if !strings.Contains(out, "zerg_print_int(z_add(INT64_C(2), INT64_C(3)));") {
+	if !strings.Contains(out, "zerg_print_int("+addSym+"(INT64_C(2), INT64_C(3)));") {
 		t.Errorf("call should mangle and pass through helpers; got:\n%s", out)
 	}
 }
@@ -224,7 +225,8 @@ fn greet() {
 greet()
 `
 	out := mustEmit(t, src)
-	if !strings.Contains(out, "static void z_greet(void);") {
+	greetSym := "z_" + mangleModule("main") + "__greet"
+	if !strings.Contains(out, "static void "+greetSym+"(void);") {
 		t.Errorf("void fn should emit `void` return and `(void)` param list; got:\n%s", out)
 	}
 }

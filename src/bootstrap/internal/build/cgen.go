@@ -19,36 +19,171 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-// Emit writes the C source for prog to w. The output is a complete,
-// self-contained .c file with `int main(void)` as the entry point. Emit
-// assumes prog has already been type-checked: every Expr's Type() must be
-// non-nil. Callers that go through Build / EmitSource get this for free
-// because both call syntax.Check before reaching here.
+// Emit writes the C source for prog to w. Single-program adapter for the
+// v0.5 EmitBundle entry — wraps prog in a one-module bundle whose entry
+// module is named "main" and forwards. Backward compatible with v0.0–v0.4
+// callers; the only output difference is the module-mangle prefix on
+// composite-type symbol names per PLAN.md §Mangling for codegen.
 func Emit(prog *syntax.Program, w io.Writer) error {
-	g := &cgen{
-		indent:            1,
-		fnTable:           map[string]*syntax.FnDecl{},
-		specs:             map[string]*syntax.SpecDecl{},
-		inherent:          map[string][]*syntax.FnDecl{},
-		specImpls:         map[implKey]*syntax.ImplDecl{},
-		receiverTypes:     map[string]*syntax.Type{},
-		specsUsed:         map[string]bool{},
+	return EmitBundle(&singleEmitBundle{prog: prog}, w)
+}
+
+// emitBundleView is the minimal interface EmitBundle needs over a
+// loader.Bundle. We declare it locally to avoid an import cycle on the
+// loader package; loader.Bundle satisfies it via syntax.BundleView's
+// methods (BundleEntry, BundleModules) plus the additional ModulePath
+// method on each ModuleView, which we layer here. For programs that go
+// through syntax.BundleView only (no canonical path), the entry uses
+// "main" and siblings fall back to ModuleName().
+type emitBundleView interface {
+	BundleEntry() syntax.ModuleView
+	BundleModules() []syntax.ModuleView
+}
+
+// EmitBundle is the v0.5 codegen entry: emits one merged C TU containing
+// every module's symbols, with module-mangled names per PLAN.md §Mangling
+// for codegen. Single-file programs reach here through Emit's one-module
+// adapter and produce identical output to v0.4 plus the module prefix.
+func EmitBundle(bundle emitBundleView, w io.Writer) error {
+	if bundle == nil {
+		return nil
 	}
-	for _, stmt := range prog.Statements {
-		if fn, ok := stmt.(*syntax.FnDecl); ok {
-			g.fnTable[fn.Name] = fn
-		}
+	mods := bundle.BundleModules()
+	if len(mods) == 0 {
+		return nil
+	}
+	entry := bundle.BundleEntry()
+
+	g := &cgen{
+		indent:        1,
+		fnTable:       map[string]*syntax.FnDecl{},
+		specs:         map[string]*syntax.SpecDecl{},
+		inherent:      map[string][]*syntax.FnDecl{},
+		specImpls:     map[implKey]*syntax.ImplDecl{},
+		receiverTypes: map[string]*syntax.Type{},
+		specsUsed:     map[string]bool{},
+		modules:       []moduleEmit{},
+		typeOwner:     map[*syntax.Type]string{},
+		specOwner:     map[string]string{},
+		fnOwner:       map[*syntax.FnDecl]string{},
+		moduleByName:  map[string]*moduleEmit{},
+		entryProg:     nil,
 	}
 	g.shapes = newShapeRegistry()
 
-	// Collect spec / impl declarations first so the shape walk and the method
-	// emitter both have access to the v0.4 tables.
-	g.collectSpecsImpls(prog)
+	// Phase 1: register every module with its mangle prefix and prime the
+	// owner tables. The entry module's canonical name is the literal "main"
+	// per PLAN.md §Resolution rules; siblings use ModuleName() (the
+	// loader sets this to the absolute path of the resolved sibling).
+	for _, m := range mods {
+		canonical := m.ModuleName()
+		mangle := mangleModule(canonical)
+		me := moduleEmit{
+			view:   m,
+			prog:   m.ModuleProgram(),
+			mangle: mangle,
+		}
+		g.modules = append(g.modules, me)
+	}
+	for i := range g.modules {
+		me := &g.modules[i]
+		// Bind imports' local name -> target module mangle so cross-module
+		// fn calls can route via IdentExpr receiver.
+		me.imports = map[string]string{}
+		for _, imp := range me.view.ModuleImports() {
+			if imp == nil {
+				continue
+			}
+			target := imp.ImportTarget()
+			if target == nil {
+				continue
+			}
+			for j := range g.modules {
+				if g.modules[j].view == target {
+					me.imports[imp.ImportLocalName()] = g.modules[j].mangle
+				}
+			}
+		}
+	}
+	for i := range g.modules {
+		me := &g.modules[i]
+		g.moduleByName[me.mangle] = me
+	}
+	if entry != nil {
+		g.entryProg = entry.ModuleProgram()
+		for i := range g.modules {
+			if g.modules[i].view == entry {
+				g.entryMangle = g.modules[i].mangle
+				break
+			}
+		}
+	}
 
-	// Walk the program (typed AST) to collect every concrete composite shape
-	// that needs a per-shape typedef and helpers (list, tuple, struct, enum).
-	if err := g.collectShapes(prog); err != nil {
-		return err
+	// Phase 2: stamp every canonical *Type and spec name with its owning
+	// module's mangle. typeck has stamped TypeRef.Resolved with canonical
+	// pointers; we walk every module's struct/enum/spec decls to build the
+	// table. Cross-module references reach the same canonical pointer.
+	for i := range g.modules {
+		me := &g.modules[i]
+		for _, stmt := range me.prog.Statements {
+			switch s := stmt.(type) {
+			case *syntax.StructDecl:
+				if t := findCanonicalTypeRef(me.prog, s.Name, syntax.TypeStruct); t != nil {
+					g.typeOwner[t] = me.mangle
+				}
+			case *syntax.EnumDecl:
+				if t := findCanonicalTypeRef(me.prog, s.Name, syntax.TypeEnum); t != nil {
+					g.typeOwner[t] = me.mangle
+				}
+			case *syntax.SpecDecl:
+				g.specOwner[s.Name] = me.mangle
+			case *syntax.FnDecl:
+				g.fnOwner[s] = me.mangle
+				if me.view == entry {
+					g.fnTable[s.Name] = s
+				}
+			}
+		}
+	}
+	// Phase 2b: cross-module-aware stamping. Walks every module's
+	// expressions for cross-module references (`mod.Type {...}`,
+	// `mod.Variant`, `mod.fn(...)`) and stamps the resolved canonical *Type
+	// with the *owning* module's mangle (not the host's). This catches
+	// types whose owning module never references them locally — e.g. an
+	// `impl Counter { fn show() -> str { return "a" } }` block with a body
+	// that returns a primitive and so never surfaces Counter via
+	// findCanonicalTypeRef on a.zg. The canonical pointer is reachable
+	// only from the importing module's expressions; we use the
+	// `Module` qualifier on the expr to know who owns the type.
+	for i := range g.modules {
+		host := &g.modules[i]
+		for _, stmt := range host.prog.Statements {
+			stampCrossModuleOwners(stmt, host, g.moduleByName, g.typeOwner)
+		}
+	}
+	// Fallback: scan every module's expressions for any Type the decl-walk
+	// missed (e.g. types declared in module A but only referenced via
+	// expressions in module B). The bundle-wide canonical pointer set is
+	// the union; first occurrence wins.
+	for i := range g.modules {
+		me := &g.modules[i]
+		stampTypeOwners(me.prog, me.mangle, g.typeOwner)
+	}
+
+	// Phase 3: collect specs / impls bundle-wide. Each impl is registered
+	// against its receiver's canonical *Type pointer (so two modules'
+	// same-name structs index distinctly).
+	for i := range g.modules {
+		me := &g.modules[i]
+		g.collectSpecsImpls(me.prog)
+	}
+
+	// Phase 4: collect all composite shapes across every module.
+	for i := range g.modules {
+		me := &g.modules[i]
+		if err := g.collectShapes(me.prog); err != nil {
+			return err
+		}
 	}
 
 	// 1. Runtime header.
@@ -58,60 +193,68 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 	g.b.WriteString("\n")
 
 	// 2. Composite-shape typedefs and helpers (forward decls then bodies).
-	g.shapes.emitForwardDecls(&g.b)
+	g.shapes.emitForwardDecls(g, &g.b)
 	g.emitSpecForwardDecls()
-	g.shapes.emitTypedefs(&g.b)
-	g.shapes.emitHelpers(&g.b)
+	g.shapes.emitTypedefs(g, &g.b)
+	g.shapes.emitHelpers(g, &g.b)
 	g.emitEqHelpers()
-	g.emitSpecVtablesAndMethods(prog)
+	g.emitSpecVtablesAndMethods()
 
-	// 3. Top-level fn forward decls then bodies. Forward decls let any fn call
-	// any other regardless of textual order — same as the interpreter's
-	// two-pass collect.
-	for _, stmt := range prog.Statements {
-		fn, ok := stmt.(*syntax.FnDecl)
-		if !ok {
-			continue
+	// 3. Top-level fn forward decls then bodies, ACROSS every module.
+	// Forward decls first so any fn can call any other regardless of
+	// textual or module order.
+	hasAnyFn := false
+	for i := range g.modules {
+		me := &g.modules[i]
+		for _, stmt := range me.prog.Statements {
+			fn, ok := stmt.(*syntax.FnDecl)
+			if !ok {
+				continue
+			}
+			hasAnyFn = true
+			g.writeFnSig(fn)
+			g.b.WriteString(";\n")
 		}
-		writeFnSig(&g.b, fn)
-		g.b.WriteString(";\n")
 	}
-	if hasFn(prog) {
+	if hasAnyFn {
 		g.b.WriteString("\n")
 	}
 
-	for _, stmt := range prog.Statements {
-		fn, ok := stmt.(*syntax.FnDecl)
-		if !ok {
-			continue
+	for i := range g.modules {
+		me := &g.modules[i]
+		for _, stmt := range me.prog.Statements {
+			fn, ok := stmt.(*syntax.FnDecl)
+			if !ok {
+				continue
+			}
+			if err := g.emitFn(fn); err != nil {
+				return err
+			}
+			g.b.WriteString("\n")
 		}
-		if err := g.emitFn(fn); err != nil {
-			return err
-		}
-		g.b.WriteString("\n")
 	}
 
-	// 4. main(). Top-level type decls (struct/enum) are NOT executable; they
-	// produced typedefs above and are skipped here.
+	// 4. main(). Top-level type decls and import decls are NOT executable;
+	// only the entry module's executable statements run. The active module
+	// is the entry's mangle so cross-module fn calls resolve through its
+	// import table.
 	g.b.WriteString("int main(void) {\n")
-	for _, stmt := range prog.Statements {
-		switch stmt.(type) {
-		case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
-			continue
-		case *syntax.SpecDecl, *syntax.ImplDecl:
-			// v0.4 Unit 1: parser-only landing. Typeck rejects these shapes
-			// before codegen sees them; skip at the top level for symmetry
-			// with the other declaration shapes.
-			continue
-		case *syntax.ImportDecl:
-			// v0.5 Unit 1b: imports are resolved by the loader before
-			// codegen sees the merged program. A stray ImportDecl at this
-			// layer is a no-op so existing single-file programs keep
-			// compiling unchanged.
-			continue
-		}
-		if err := g.emitStmt(stmt); err != nil {
-			return err
+	prevMod := g.currentMod
+	g.currentMod = g.entryMangle
+	defer func() { g.currentMod = prevMod }()
+	if g.entryProg != nil {
+		for _, stmt := range g.entryProg.Statements {
+			switch stmt.(type) {
+			case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
+				continue
+			case *syntax.SpecDecl, *syntax.ImplDecl:
+				continue
+			case *syntax.ImportDecl:
+				continue
+			}
+			if err := g.emitStmt(stmt); err != nil {
+				return err
+			}
 		}
 	}
 	g.b.WriteString("    return 0;\n")
@@ -119,6 +262,480 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 
 	_, err := io.WriteString(w, g.b.String())
 	return err
+}
+
+// singleEmitBundle wraps a single Program in the BundleView interface so
+// Emit (single-program callers) routes through EmitBundle exactly like the
+// loader's multi-module Bundle does. The entry module pointer is shared
+// across BundleEntry / BundleModules so EmitBundle's `entry == module.view`
+// pointer-equality check fires correctly.
+type singleEmitBundle struct {
+	prog *syntax.Program
+	mod  *singleEmitModule
+}
+
+func (b *singleEmitBundle) module() *singleEmitModule {
+	if b.mod == nil {
+		b.mod = &singleEmitModule{prog: b.prog}
+	}
+	return b.mod
+}
+
+func (b *singleEmitBundle) BundleEntry() syntax.ModuleView {
+	return b.module()
+}
+
+func (b *singleEmitBundle) BundleModules() []syntax.ModuleView {
+	return []syntax.ModuleView{b.module()}
+}
+
+type singleEmitModule struct {
+	prog *syntax.Program
+}
+
+func (m *singleEmitModule) ModuleName() string             { return "main" }
+func (m *singleEmitModule) ModuleProgram() *syntax.Program { return m.prog }
+func (m *singleEmitModule) ModuleImports() []syntax.ImportView {
+	return nil
+}
+
+// moduleEmit is a per-module record consumed by EmitBundle: the canonical
+// module-mangle prefix, the program AST, and the import-binding table
+// (local name → target module's mangle prefix). Cross-module fn calls
+// route through imports.
+type moduleEmit struct {
+	view    syntax.ModuleView
+	prog    *syntax.Program
+	mangle  string
+	imports map[string]string
+}
+
+// stampCrossModuleOwners walks stmt's expressions inside a host module
+// and, for any cross-module reference (`mod.Type {...}`,
+// `mod.Variant(...)`), stamps the resolved canonical *Type with the
+// owning (foreign) module's mangle. Already-stamped types are not
+// overwritten (first owner wins). This pass exists because the owning
+// module may never reference its own type from an expression — leaving
+// `findCanonicalTypeRef` on that module empty-handed for the type's
+// canonical pointer.
+func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map[string]*moduleEmit, owner map[*syntax.Type]string) {
+	visit := func(e syntax.Expr) {
+		walkExprTypes(e, func(*syntax.Type) {})
+	}
+	_ = visit
+	var walkE func(syntax.Expr)
+	var walkS func(syntax.Stmt)
+	walkE = func(e syntax.Expr) {
+		if e == nil {
+			return
+		}
+		switch x := e.(type) {
+		case *syntax.StructLit:
+			if x.Module != "" {
+				if foreignMangle, ok := host.imports[x.Module]; ok {
+					if t := x.Type(); t != nil {
+						if _, set := owner[t]; !set {
+							owner[t] = foreignMangle
+						}
+					}
+				}
+			}
+			for _, f := range x.Fields {
+				walkE(f.Value)
+			}
+		case *syntax.EnumLit:
+			// EnumLit doesn't carry a Module field; cross-module enum
+			// lits arrive lowered through MethodCallExpr / FieldAccess
+			// shapes and the local stamp pass handles those when the
+			// host module is the foreign owner. The Lowered form's
+			// Type() already points at the canonical *Type and the
+			// MethodCallExpr below stamps via x.Module.
+			for _, p := range x.Payload {
+				walkE(p)
+			}
+		case *syntax.MethodCallExpr:
+			// `mod.fn(args)` cross-module call: receiver is an IdentExpr
+			// whose Name is a module local-binding. The result type is
+			// foreign — but it's a *fn return*, not necessarily a struct
+			// owned by the foreign module (could be a primitive or a
+			// composite-of-foreign). The Lowered enum-lit / Lowered
+			// struct-lit hop handles the foreign-type stamping for those.
+			if id, ok := x.Receiver.(*syntax.IdentExpr); ok {
+				if foreignMangle, fok := host.imports[id.Name]; fok {
+					// Foreign call. If the call's result type is a struct
+					// or enum and the call's foreign module owns it,
+					// stamp it.
+					if t := x.Type(); t != nil && (t.Kind == syntax.TypeStruct || t.Kind == syntax.TypeEnum) {
+						// We need to confirm the type is owned by the
+						// foreign module — defer to the local stamp
+						// pass. For safety, stamp only if no owner is
+						// recorded yet AND the foreign module declares
+						// a type with this name.
+						if _, set := owner[t]; !set {
+							if me, mok := moduleByName[foreignMangle]; mok {
+								for _, ms := range me.prog.Statements {
+									switch ds := ms.(type) {
+									case *syntax.StructDecl:
+										if ds.Name == t.Name {
+											owner[t] = foreignMangle
+										}
+									case *syntax.EnumDecl:
+										if ds.Name == t.Name {
+											owner[t] = foreignMangle
+										}
+									}
+									if _, set2 := owner[t]; set2 {
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			walkE(x.Receiver)
+			for _, a := range x.Args {
+				walkE(a)
+			}
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			}
+			if x.LoweredCall != nil {
+				walkE(x.LoweredCall)
+			}
+		case *syntax.FieldAccessExpr:
+			// `mod.Type.Variant` for bare cross-module enum lits arrives
+			// here with a chain of FieldAccessExpr, but typeck typically
+			// lowers these to EnumLit/MethodCallExpr forms. Recurse for
+			// completeness.
+			walkE(x.Receiver)
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			}
+		case *syntax.UnaryExpr:
+			walkE(x.Operand)
+		case *syntax.BinaryExpr:
+			walkE(x.Left)
+			walkE(x.Right)
+		case *syntax.ParenExpr:
+			walkE(x.Inner)
+		case *syntax.CallExpr:
+			walkE(x.Callee)
+			for _, a := range x.Args {
+				walkE(a)
+			}
+		case *syntax.ListLit:
+			for _, sub := range x.Elements {
+				walkE(sub)
+			}
+		case *syntax.TupleLit:
+			for _, sub := range x.Elements {
+				walkE(sub)
+			}
+		case *syntax.IndexExpr:
+			walkE(x.Receiver)
+			walkE(x.Index)
+		case *syntax.SliceExpr:
+			walkE(x.Receiver)
+			walkE(x.Low)
+			walkE(x.High)
+		}
+	}
+	walkS = func(s syntax.Stmt) {
+		if s == nil {
+			return
+		}
+		switch n := s.(type) {
+		case *syntax.LetStmt:
+			walkE(n.Value)
+		case *syntax.MutStmt:
+			walkE(n.Value)
+		case *syntax.ConstStmt:
+			walkE(n.Value)
+		case *syntax.AssignStmt:
+			walkE(n.Target)
+			walkE(n.Value)
+		case *syntax.ExprStmt:
+			walkE(n.Expr)
+		case *syntax.PrintStmt:
+			walkE(n.Expr)
+		case *syntax.ReturnStmt:
+			walkE(n.Value)
+			walkE(n.Guard)
+		case *syntax.BreakStmt:
+			walkE(n.Guard)
+		case *syntax.ContinueStmt:
+			walkE(n.Guard)
+		case *syntax.IfStmt:
+			walkE(n.Cond)
+			if n.Then != nil {
+				for _, st := range n.Then.Statements {
+					walkS(st)
+				}
+			}
+			for _, ec := range n.Elifs {
+				walkE(ec.Cond)
+				if ec.Body != nil {
+					for _, st := range ec.Body.Statements {
+						walkS(st)
+					}
+				}
+			}
+			if n.Else != nil {
+				for _, st := range n.Else.Statements {
+					walkS(st)
+				}
+			}
+		case *syntax.ForStmt:
+			walkE(n.Cond)
+			walkE(n.Iter)
+			if n.Range != nil {
+				walkE(n.Range.Start)
+				walkE(n.Range.End)
+			}
+			if n.Body != nil {
+				for _, st := range n.Body.Statements {
+					walkS(st)
+				}
+			}
+		case *syntax.MatchStmt:
+			walkE(n.Subject)
+			for _, arm := range n.Arms {
+				walkE(arm.Guard)
+				if arm.Body != nil {
+					for _, st := range arm.Body.Statements {
+						walkS(st)
+					}
+				}
+			}
+		case *syntax.FnDecl:
+			if n.Body != nil {
+				for _, st := range n.Body.Statements {
+					walkS(st)
+				}
+			}
+		case *syntax.ImplDecl:
+			for _, fn := range n.Methods {
+				if fn.Body != nil {
+					for _, st := range fn.Body.Statements {
+						walkS(st)
+					}
+				}
+			}
+		}
+	}
+	walkS(stmt)
+}
+
+// findCanonicalTypeRef walks prog for a TypeRef.Resolved or Expr.Type()
+// whose Name matches and Kind is the requested kind. Returns the first
+// canonical *Type pointer hit. Used to recover the canonical pointer
+// typeck stamped on the program for a struct or enum decl.
+func findCanonicalTypeRef(prog *syntax.Program, name string, kind syntax.TypeKind) *syntax.Type {
+	var found *syntax.Type
+	walk := func(t *syntax.Type) {
+		if found != nil || t == nil {
+			return
+		}
+		if t.Kind == kind && t.Name == name {
+			found = t
+		}
+	}
+	walkProgramTypes(prog, walk)
+	return found
+}
+
+// stampTypeOwners walks prog's typed expressions and TypeRefs for any
+// struct/enum *Type whose owner has not yet been recorded. The first
+// occurrence wins. Used to backfill types whose decl walk did not surface
+// a canonical pointer (rare — defensive).
+func stampTypeOwners(prog *syntax.Program, mangle string, owner map[*syntax.Type]string) {
+	walkProgramTypes(prog, func(t *syntax.Type) {
+		if t == nil {
+			return
+		}
+		if t.Kind != syntax.TypeStruct && t.Kind != syntax.TypeEnum {
+			return
+		}
+		if _, ok := owner[t]; !ok {
+			owner[t] = mangle
+		}
+	})
+}
+
+// walkProgramTypes invokes visit on every *Type pointer reachable from
+// prog's TypeRefs and Expr.Type() stamps. Composite types recurse into
+// their components (list element, tuple positions, struct fields,
+// enum payloads). Used by findCanonicalTypeRef and stampTypeOwners.
+func walkProgramTypes(prog *syntax.Program, visit func(*syntax.Type)) {
+	if prog == nil {
+		return
+	}
+	for _, stmt := range prog.Statements {
+		walkStmtTypes(stmt, visit)
+	}
+}
+
+func walkStmtTypes(stmt syntax.Stmt, visit func(*syntax.Type)) {
+	switch s := stmt.(type) {
+	case *syntax.StructDecl:
+		for _, f := range s.Fields {
+			walkTypeRefTypes(f.Type, visit)
+		}
+	case *syntax.EnumDecl:
+		for _, v := range s.Variants {
+			for _, p := range v.Payload {
+				walkTypeRefTypes(p, visit)
+			}
+		}
+	case *syntax.FnDecl:
+		for _, p := range s.Params {
+			walkTypeRefTypes(p.Type, visit)
+		}
+		walkTypeRefTypes(s.Return, visit)
+		walkBlockTypes(s.Body, visit)
+	case *syntax.LetStmt:
+		walkTypeRefTypes(s.Type, visit)
+		walkExprTypes(s.Value, visit)
+	case *syntax.MutStmt:
+		walkTypeRefTypes(s.Type, visit)
+		walkExprTypes(s.Value, visit)
+	case *syntax.ConstStmt:
+		walkTypeRefTypes(s.Type, visit)
+		walkExprTypes(s.Value, visit)
+	case *syntax.AssignStmt:
+		walkExprTypes(s.Target, visit)
+		walkExprTypes(s.Value, visit)
+	case *syntax.ExprStmt:
+		walkExprTypes(s.Expr, visit)
+	case *syntax.PrintStmt:
+		walkExprTypes(s.Expr, visit)
+	case *syntax.ReturnStmt:
+		walkExprTypes(s.Value, visit)
+		walkExprTypes(s.Guard, visit)
+	case *syntax.BreakStmt:
+		walkExprTypes(s.Guard, visit)
+	case *syntax.ContinueStmt:
+		walkExprTypes(s.Guard, visit)
+	case *syntax.IfStmt:
+		walkExprTypes(s.Cond, visit)
+		walkBlockTypes(s.Then, visit)
+		for _, ec := range s.Elifs {
+			walkExprTypes(ec.Cond, visit)
+			walkBlockTypes(ec.Body, visit)
+		}
+		walkBlockTypes(s.Else, visit)
+	case *syntax.ForStmt:
+		walkExprTypes(s.Cond, visit)
+		walkExprTypes(s.Iter, visit)
+		if s.Range != nil {
+			walkExprTypes(s.Range.Start, visit)
+			walkExprTypes(s.Range.End, visit)
+		}
+		walkBlockTypes(s.Body, visit)
+	case *syntax.MatchStmt:
+		walkExprTypes(s.Subject, visit)
+		for _, arm := range s.Arms {
+			walkExprTypes(arm.Guard, visit)
+			walkBlockTypes(arm.Body, visit)
+		}
+	case *syntax.SpecDecl:
+		for _, m := range s.Methods {
+			for _, p := range m.Params {
+				walkTypeRefTypes(p.Type, visit)
+			}
+			walkTypeRefTypes(m.Return, visit)
+			walkBlockTypes(m.Body, visit)
+		}
+	case *syntax.ImplDecl:
+		for _, fn := range s.Methods {
+			for _, p := range fn.Params {
+				walkTypeRefTypes(p.Type, visit)
+			}
+			walkTypeRefTypes(fn.Return, visit)
+			walkBlockTypes(fn.Body, visit)
+		}
+	}
+}
+
+func walkBlockTypes(b *syntax.Block, visit func(*syntax.Type)) {
+	if b == nil {
+		return
+	}
+	for _, s := range b.Statements {
+		walkStmtTypes(s, visit)
+	}
+}
+
+func walkTypeRefTypes(ref *syntax.TypeRef, visit func(*syntax.Type)) {
+	if ref == nil {
+		return
+	}
+	visit(ref.Resolved)
+	walkTypeRefTypes(ref.Element, visit)
+	for _, e := range ref.Elements {
+		walkTypeRefTypes(e, visit)
+	}
+}
+
+func walkExprTypes(e syntax.Expr, visit func(*syntax.Type)) {
+	if e == nil {
+		return
+	}
+	visit(e.Type())
+	switch x := e.(type) {
+	case *syntax.UnaryExpr:
+		walkExprTypes(x.Operand, visit)
+	case *syntax.BinaryExpr:
+		walkExprTypes(x.Left, visit)
+		walkExprTypes(x.Right, visit)
+	case *syntax.ParenExpr:
+		walkExprTypes(x.Inner, visit)
+	case *syntax.CallExpr:
+		walkExprTypes(x.Callee, visit)
+		for _, a := range x.Args {
+			walkExprTypes(a, visit)
+		}
+	case *syntax.ListLit:
+		for _, sub := range x.Elements {
+			walkExprTypes(sub, visit)
+		}
+	case *syntax.TupleLit:
+		for _, sub := range x.Elements {
+			walkExprTypes(sub, visit)
+		}
+	case *syntax.StructLit:
+		for _, f := range x.Fields {
+			walkExprTypes(f.Value, visit)
+		}
+	case *syntax.IndexExpr:
+		walkExprTypes(x.Receiver, visit)
+		walkExprTypes(x.Index, visit)
+	case *syntax.SliceExpr:
+		walkExprTypes(x.Receiver, visit)
+		walkExprTypes(x.Low, visit)
+		walkExprTypes(x.High, visit)
+	case *syntax.FieldAccessExpr:
+		walkExprTypes(x.Receiver, visit)
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		}
+	case *syntax.MethodCallExpr:
+		walkExprTypes(x.Receiver, visit)
+		for _, a := range x.Args {
+			walkExprTypes(a, visit)
+		}
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		}
+		if x.LoweredCall != nil {
+			walkExprTypes(x.LoweredCall, visit)
+		}
+	case *syntax.EnumLit:
+		for _, p := range x.Payload {
+			walkExprTypes(p, visit)
+		}
+	}
 }
 
 // hasFn reports whether prog declares any top-level function.
@@ -146,7 +763,10 @@ type cgen struct {
 	tmpCounter int
 
 	// fnTable indexes top-level FnDecl by name so callStr can coerce args
-	// to declared param types (spec coercion at the call site).
+	// to declared param types (spec coercion at the call site). v0.5: this
+	// holds the entry module's fns. Cross-module fn calls route through
+	// MethodCallExpr's IdentExpr-receiver shape and use moduleByName /
+	// imports for owner resolution at the call site.
 	fnTable map[string]*syntax.FnDecl
 
 	// currentFnRet is the resolved return type of the FnDecl whose body is
@@ -154,20 +774,50 @@ type cgen struct {
 	// declared return is spec-typed. nil at top level / inside a method body.
 	currentFnRet *syntax.Type
 
+	// currentMod is the mangle prefix of the module whose body is being
+	// emitted. Cross-module fn calls inside a body resolve their import
+	// table via this module's record.
+	currentMod string
+
 	// v0.4 spec / impl bookkeeping. Populated in collectShapes from top-level
 	// SpecDecl / ImplDecl statements; used by the vtable / method emitters.
-	specs       map[string]*syntax.SpecDecl       // spec name → AST
-	specOrder   []string                          // declaration order
-	inherent    map[string][]*syntax.FnDecl       // type name → inherent methods
-	inherentTypeOrder []string                    // declaration order
-	specImpls   map[implKey]*syntax.ImplDecl      // (type, spec) → AST
-	specImplKeys []implKey                        // declaration order
-	receiverTypes map[string]*syntax.Type         // type name → resolved type (for impl receivers)
+	specs             map[string]*syntax.SpecDecl  // spec name → AST
+	specOrder         []string                     // declaration order
+	inherent          map[string][]*syntax.FnDecl  // type name → inherent methods
+	inherentTypeOrder []string                     // declaration order
+	specImpls         map[implKey]*syntax.ImplDecl // (type, spec) → AST
+	specImplKeys      []implKey                    // declaration order
+	receiverTypes     map[string]*syntax.Type      // type name → resolved type (for impl receivers)
 
 	// Spec types referenced anywhere in the program (let : Spec, list[Spec],
 	// fn arg/return of Spec, etc.). Order is declaration order; emitForwardDecls
 	// uses it to emit the fat-pointer typedef + vtable struct definitions.
 	specsUsed map[string]bool
+
+	// v0.5 Unit 6 — bundle / module tracking.
+	// modules holds every module in the bundle, in discovery order. Iteration
+	// is stable because we walk this slice (not a map).
+	modules []moduleEmit
+	// entryProg / entryMangle identify the entry module — its top-level
+	// statements run in `int main()`, others contribute decls only.
+	entryProg   *syntax.Program
+	entryMangle string
+	// typeOwner maps every canonical struct/enum *Type pointer to the mangle
+	// of its owning module. mangleType uses this to prefix composite-type
+	// names. Spec types route through specOwner instead.
+	typeOwner map[*syntax.Type]string
+	// specOwner maps a spec name to the mangle of its owning module. Used by
+	// methodMangle, vtable struct emission, and fat-pointer typedef
+	// emission to route a spec's symbols through its owning module.
+	specOwner map[string]string
+	// fnOwner maps every FnDecl to its owning module's mangle. The entry
+	// module's fns retain their bare-name C identifier (z_<name>) so v0.4-
+	// style top-level `print foo(...)` continues to compile; sibling
+	// modules' fns gain a module-mangle prefix to defeat name collisions.
+	fnOwner map[*syntax.FnDecl]string
+	// moduleByName indexes modules by their mangle prefix for O(1) lookup
+	// during cross-module fn dispatch.
+	moduleByName map[string]*moduleEmit
 }
 
 // implKey deduplicates impls by (type, spec). Mirrors run.go's implKey.
@@ -221,23 +871,27 @@ func newShapeRegistry() *shapeRegistry {
 
 // addType registers t and all its sub-shapes recursively. Primitives are
 // skipped — they map to canonical C primitives and need no per-shape helpers.
-func (r *shapeRegistry) addType(t *syntax.Type) {
+//
+// v0.5: takes the *cgen so the per-type module-mangle resolves correctly.
+// Two modules' identically-named structs must produce distinct shape keys
+// so each gets its own typedef and helper functions.
+func (r *shapeRegistry) addType(g *cgen, t *syntax.Type) {
 	if t == nil {
 		return
 	}
 	switch t.Kind {
 	case syntax.TypeList:
-		r.addType(t.Element)
-		key := mangleType(t)
+		r.addType(g, t.Element)
+		key := g.mangleType(t)
 		if _, ok := r.listShapes[key]; !ok {
 			r.listShapes[key] = t
 			r.listOrder = append(r.listOrder, key)
 		}
 	case syntax.TypeTuple:
 		for _, e := range t.Tuple {
-			r.addType(e)
+			r.addType(g, e)
 		}
-		key := mangleType(t)
+		key := g.mangleType(t)
 		if _, ok := r.tupleShapes[key]; !ok {
 			r.tupleShapes[key] = t
 			r.tupleOrder = append(r.tupleOrder, key)
@@ -245,22 +899,22 @@ func (r *shapeRegistry) addType(t *syntax.Type) {
 	case syntax.TypeStruct:
 		// Add the struct itself; recurse into field types so nested composites
 		// are picked up even when they are only used inside a struct.
-		key := mangleType(t)
+		key := g.mangleType(t)
 		if _, ok := r.structShapes[key]; !ok {
 			r.structShapes[key] = t
 			r.structOrder = append(r.structOrder, key)
 			for _, f := range t.Fields {
-				r.addType(f.Type)
+				r.addType(g, f.Type)
 			}
 		}
 	case syntax.TypeEnum:
-		key := mangleType(t)
+		key := g.mangleType(t)
 		if _, ok := r.enumShapes[key]; !ok {
 			r.enumShapes[key] = t
 			r.enumOrder = append(r.enumOrder, key)
 			for _, payload := range t.VariantPayloads {
 				for _, pt := range payload {
-					r.addType(pt)
+					r.addType(g, pt)
 				}
 			}
 		}
@@ -275,7 +929,8 @@ func (r *shapeRegistry) addType(t *syntax.Type) {
 // emitForwardDecls writes a `typedef struct ...;` for every composite shape
 // so helpers can refer to other shapes without ordering constraints. (List
 // of struct, struct containing list[Foo], etc.)
-func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
+func (r *shapeRegistry) emitForwardDecls(g *cgen, b *strings.Builder) {
+	_ = g
 	// Sort struct/enum order by name for stability — declaration order from
 	// the source already gives a stable order, but a canonical sort makes
 	// the output independent of source-side reorderings.
@@ -318,11 +973,11 @@ func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
 // each composite field (a forward declaration is enough only behind a
 // pointer). Strategy:
 //
-//   * List shape definitions first — every list field is a pointer-to-element,
+//   - List shape definitions first — every list field is a pointer-to-element,
 //     so element types only need their forward decl (already emitted in
 //     emitForwardDecls). Lists therefore have no shape-def dependency on
 //     other shapes and can be emitted en bloc.
-//   * Tuple, struct and enum shape definitions in a unified topological sort.
+//   - Tuple, struct and enum shape definitions in a unified topological sort.
 //     A tuple-of-struct needs the struct's full definition; a struct-of-
 //     tuple needs the tuple's full definition; an enum variant payload
 //     embeds its payload types by value, so a `Frame { Args(list[int]) }`
@@ -332,13 +987,13 @@ func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
 //     the user wrote.
 //
 // typeck has rejected composite cycles so the fixed-point loop terminates.
-func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
+func (r *shapeRegistry) emitTypedefs(g *cgen, b *strings.Builder) {
 	if len(r.listOrder) > 0 {
 		b.WriteString("/* List shape definitions. */\n")
 	}
 	for _, k := range r.listOrder {
 		t := r.listShapes[k]
-		elem := cTypeName(t.Element)
+		elem := g.cTypeName(t.Element)
 		// `cap` was dropped in v0.2 because lists were value-copied with
 		// cap == len at every site. With `push` in play at v0.3, cap is
 		// needed so the per-shape grow helper knows when to realloc.
@@ -370,7 +1025,7 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 			}
 			switch ft.Kind {
 			case syntax.TypeStruct, syntax.TypeTuple, syntax.TypeEnum, syntax.TypeList:
-				out = append(out, mangleType(ft))
+				out = append(out, g.mangleType(ft))
 			}
 		}
 		return out
@@ -409,7 +1064,7 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 			if i > 0 {
 				b.WriteString(";")
 			}
-			fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
+			fmt.Fprintf(b, " %s e%d", g.cTypeName(e), i)
 		}
 		b.WriteString("; };\n")
 		emittedTuple[k] = true
@@ -425,7 +1080,7 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 			if i > 0 {
 				b.WriteString(";")
 			}
-			fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
+			fmt.Fprintf(b, " %s %s", g.cTypeName(f.Type), mangleField(f.Name))
 		}
 		b.WriteString("; };\n")
 		emittedStruct[k] = true
@@ -451,7 +1106,7 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 				fmt.Fprintf(b, " char _empty;")
 			} else {
 				for j, pt := range payload {
-					fmt.Fprintf(b, " %s a%d;", cTypeName(pt), j)
+					fmt.Fprintf(b, " %s a%d;", g.cTypeName(pt), j)
 				}
 			}
 			fmt.Fprintf(b, " } p%d; /* %s */\n", i, v)
@@ -532,13 +1187,13 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 // a copy helper even when the shape contains no lists (the helper is then a
 // trivial pass-through that the C optimiser inlines), so call sites can be
 // uniform.
-func (r *shapeRegistry) emitHelpers(b *strings.Builder) {
+func (r *shapeRegistry) emitHelpers(g *cgen, b *strings.Builder) {
 	// Forward-declare all copy + print helpers first so they can reference
 	// each other in any order (a list of struct copy calls the struct copy
 	// which itself may call a list copy for an inner field).
 	for _, k := range r.listOrder {
 		t := r.listShapes[k]
-		elem := cTypeName(t.Element)
+		elem := g.cTypeName(t.Element)
 		fmt.Fprintf(b, "static %s %s_copy(%s xs);\n", k, k, k)
 		fmt.Fprintf(b, "static %s %s_slice(%s xs, int64_t lo, int64_t hi, const char* pos);\n", k, k, k)
 		fmt.Fprintf(b, "static void %s_push(%s* xs, %s v);\n", k, k, elem)
@@ -563,33 +1218,33 @@ func (r *shapeRegistry) emitHelpers(b *strings.Builder) {
 	// list helpers
 	for _, k := range r.listOrder {
 		t := r.listShapes[k]
-		emitListHelpers(b, k, t)
+		emitListHelpers(g, b, k, t)
 		b.WriteString("\n")
 	}
 	// tuple helpers
 	for _, k := range r.tupleOrder {
 		t := r.tupleShapes[k]
-		emitTupleHelpers(b, k, t)
+		emitTupleHelpers(g, b, k, t)
 		b.WriteString("\n")
 	}
 	// struct helpers
 	for _, k := range r.structOrder {
 		t := r.structShapes[k]
-		emitStructHelpers(b, k, t)
+		emitStructHelpers(g, b, k, t)
 		b.WriteString("\n")
 	}
 	// enum helpers (copy + print).
 	for _, k := range r.enumOrder {
 		t := r.enumShapes[k]
-		emitEnumCopy(b, k, t)
-		emitEnumPrint(b, k, t)
+		emitEnumCopy(g, b, k, t)
+		emitEnumPrint(g, b, k, t)
 		b.WriteString("\n")
 	}
 }
 
 // emitListHelpers writes copy, slice, push, and print for a list[T] shape.
-func emitListHelpers(b *strings.Builder, mname string, t *syntax.Type) {
-	elem := cTypeName(t.Element)
+func emitListHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
+	elem := g.cTypeName(t.Element)
 	// copy: malloc a fresh buffer (cap == len so subsequent pushes start
 	// from a tight buffer), deep-copy each element via copyExpr.
 	fmt.Fprintf(b, "static %s %s_copy(%s xs) {\n", mname, mname, mname)
@@ -598,7 +1253,7 @@ func emitListHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "    out.cap = xs.len;\n")
 	fmt.Fprintf(b, "    out.data = (%s*)malloc(out.len ? out.len * sizeof(%s) : 1);\n", elem, elem)
 	fmt.Fprintf(b, "    for (size_t i = 0; i < out.len; i++) { out.data[i] = %s; }\n",
-		copyExpr(t.Element, "xs.data[i]"))
+		g.copyExpr(t.Element, "xs.data[i]"))
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
 
@@ -615,7 +1270,7 @@ func emitListHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "    out.cap = out.len;\n")
 	fmt.Fprintf(b, "    out.data = (%s*)malloc(out.len ? out.len * sizeof(%s) : 1);\n", elem, elem)
 	fmt.Fprintf(b, "    for (size_t i = 0; i < out.len; i++) { out.data[i] = %s; }\n",
-		copyExpr(t.Element, "xs.data[lo + i]"))
+		g.copyExpr(t.Element, "xs.data[lo + i]"))
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
 
@@ -638,18 +1293,18 @@ func emitListHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "    fputs(\"[ \", stdout);\n")
 	fmt.Fprintf(b, "    for (size_t i = 0; i < xs.len; i++) {\n")
 	fmt.Fprintf(b, "        if (i > 0) fputs(\", \", stdout);\n")
-	fmt.Fprintf(b, "        %s;\n", printExpr(t.Element, "xs.data[i]"))
+	fmt.Fprintf(b, "        %s;\n", g.printExpr(t.Element, "xs.data[i]"))
 	fmt.Fprintf(b, "    }\n")
 	fmt.Fprintf(b, "    fputs(\" ]\", stdout);\n")
 	fmt.Fprintf(b, "}\n")
 }
 
 // emitTupleHelpers writes copy and print for a tuple shape.
-func emitTupleHelpers(b *strings.Builder, mname string, t *syntax.Type) {
+func emitTupleHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static %s %s_copy(%s t) {\n", mname, mname, mname)
 	fmt.Fprintf(b, "    %s out;\n", mname)
 	for i, e := range t.Tuple {
-		fmt.Fprintf(b, "    out.e%d = %s;\n", i, copyExpr(e, fmt.Sprintf("t.e%d", i)))
+		fmt.Fprintf(b, "    out.e%d = %s;\n", i, g.copyExpr(e, fmt.Sprintf("t.e%d", i)))
 	}
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
@@ -660,20 +1315,20 @@ func emitTupleHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 		if i > 0 {
 			fmt.Fprintf(b, "    fputs(\", \", stdout);\n")
 		}
-		fmt.Fprintf(b, "    %s;\n", printExpr(e, fmt.Sprintf("t.e%d", i)))
+		fmt.Fprintf(b, "    %s;\n", g.printExpr(e, fmt.Sprintf("t.e%d", i)))
 	}
 	fmt.Fprintf(b, "    fputs(\" )\", stdout);\n")
 	fmt.Fprintf(b, "}\n")
 }
 
 // emitStructHelpers writes copy and print for a struct shape.
-func emitStructHelpers(b *strings.Builder, mname string, t *syntax.Type) {
+func emitStructHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static %s %s_copy(%s s) {\n", mname, mname, mname)
 	fmt.Fprintf(b, "    %s out;\n", mname)
 	for _, f := range t.Fields {
 		fmt.Fprintf(b, "    out.%s = %s;\n",
 			mangleField(f.Name),
-			copyExpr(f.Type, "s."+mangleField(f.Name)))
+			g.copyExpr(f.Type, "s."+mangleField(f.Name)))
 	}
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
@@ -685,7 +1340,7 @@ func emitStructHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 			fmt.Fprintf(b, "    fputs(\", \", stdout);\n")
 		}
 		fmt.Fprintf(b, "    fputs(%q, stdout);\n", f.Name+": ")
-		fmt.Fprintf(b, "    %s;\n", printExpr(f.Type, "s."+mangleField(f.Name)))
+		fmt.Fprintf(b, "    %s;\n", g.printExpr(f.Type, "s."+mangleField(f.Name)))
 	}
 	fmt.Fprintf(b, "    fputs(\" }\", stdout);\n")
 	fmt.Fprintf(b, "}\n")
@@ -694,7 +1349,7 @@ func emitStructHelpers(b *strings.Builder, mname string, t *syntax.Type) {
 // emitEnumPrint writes print-helper for an enum: switch on the tag and emit
 // either "Name.VariantName" (bare) or "Name.VariantName(payload, ...)" (with
 // per-position recursive print of each payload value).
-func emitEnumPrint(b *strings.Builder, mname string, t *syntax.Type) {
+func emitEnumPrint(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static void zerg_print_%s(%s e) {\n", mname, mname)
 	fmt.Fprintf(b, "    switch (e.tag) {\n")
 	for i, v := range t.Variants {
@@ -708,7 +1363,7 @@ func emitEnumPrint(b *strings.Builder, mname string, t *syntax.Type) {
 				if j > 0 {
 					fmt.Fprintf(b, "        fputs(\", \", stdout);\n")
 				}
-				fmt.Fprintf(b, "        %s;\n", printExpr(pt, fmt.Sprintf("e.payload.p%d.a%d", i, j)))
+				fmt.Fprintf(b, "        %s;\n", g.printExpr(pt, fmt.Sprintf("e.payload.p%d.a%d", i, j)))
 			}
 			fmt.Fprintf(b, "        fputs(\")\", stdout);\n")
 			fmt.Fprintf(b, "        break;\n")
@@ -723,7 +1378,7 @@ func emitEnumPrint(b *strings.Builder, mname string, t *syntax.Type) {
 // emitEnumCopy writes a deep-copy helper for an enum value. Copies primitive
 // payloads by value and recurses through composite payloads via the per-shape
 // _copy helpers. Bare variants copy the (single-byte) placeholder.
-func emitEnumCopy(b *strings.Builder, mname string, t *syntax.Type) {
+func emitEnumCopy(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static %s %s_copy(%s e) {\n", mname, mname, mname)
 	fmt.Fprintf(b, "    %s out;\n", mname)
 	fmt.Fprintf(b, "    out.tag = e.tag;\n")
@@ -736,7 +1391,7 @@ func emitEnumCopy(b *strings.Builder, mname string, t *syntax.Type) {
 		} else {
 			for j, pt := range payload {
 				fmt.Fprintf(b, "        out.payload.p%d.a%d = %s;\n",
-					i, j, copyExpr(pt, fmt.Sprintf("e.payload.p%d.a%d", i, j)))
+					i, j, g.copyExpr(pt, fmt.Sprintf("e.payload.p%d.a%d", i, j)))
 			}
 		}
 		fmt.Fprintf(b, "        break;\n")
@@ -778,13 +1433,13 @@ func variantIndex(t *syntax.Type, name string) int {
 // expression with type t). For primitives the copy is the expression itself
 // (trivial copy via assignment); for composites we delegate to the per-shape
 // _copy helper.
-func copyExpr(t *syntax.Type, expr string) string {
+func (g *cgen) copyExpr(t *syntax.Type, expr string) string {
 	if t == nil {
 		return expr
 	}
 	switch t.Kind {
 	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
-		return fmt.Sprintf("%s_copy(%s)", mangleType(t), expr)
+		return fmt.Sprintf("%s_copy(%s)", g.mangleType(t), expr)
 	}
 	return expr
 }
@@ -797,7 +1452,7 @@ func copyExpr(t *syntax.Type, expr string) string {
 // trailing newline — list/tuple/struct printing handles the surrounding
 // punctuation. For top-level `print stmt` we use a different helper that
 // adds the newline.
-func printExpr(t *syntax.Type, expr string) string {
+func (g *cgen) printExpr(t *syntax.Type, expr string) string {
 	if t == nil {
 		return "(void)0"
 	}
@@ -819,7 +1474,7 @@ func printExpr(t *syntax.Type, expr string) string {
 	}
 	switch t.Kind {
 	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
-		return fmt.Sprintf("zerg_print_%s(%s)", mangleType(t), expr)
+		return fmt.Sprintf("zerg_print_%s(%s)", g.mangleType(t), expr)
 	}
 	return "(void)0"
 }
@@ -864,7 +1519,7 @@ func (g *cgen) collectShapes(prog *syntax.Program) error {
 				fields[i] = syntax.NamedField{Name: f.Name, Type: f.Type.Resolved}
 			}
 			st := syntax.NewStructType(s.Name, fields)
-			g.shapes.addType(st)
+			g.shapes.addType(g, st)
 		case *syntax.EnumDecl:
 			variants := make([]string, len(s.Variants))
 			payloads := make([][]*syntax.Type, len(s.Variants))
@@ -882,7 +1537,7 @@ func (g *cgen) collectShapes(prog *syntax.Program) error {
 			}
 			en := syntax.NewEnumType(s.Name, variants)
 			en.VariantPayloads = payloads
-			g.shapes.addType(en)
+			g.shapes.addType(g, en)
 		}
 	}
 
@@ -901,19 +1556,19 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 		g.collectExpr(s.Expr)
 	case *syntax.LetStmt:
 		if s.Type != nil && s.Type.Resolved != nil {
-			g.shapes.addType(s.Type.Resolved)
+			g.shapes.addType(g, s.Type.Resolved)
 			g.collectSpecsInType(s.Type.Resolved)
 		}
 		g.collectExpr(s.Value)
 	case *syntax.MutStmt:
 		if s.Type != nil && s.Type.Resolved != nil {
-			g.shapes.addType(s.Type.Resolved)
+			g.shapes.addType(g, s.Type.Resolved)
 			g.collectSpecsInType(s.Type.Resolved)
 		}
 		g.collectExpr(s.Value)
 	case *syntax.ConstStmt:
 		if s.Type != nil && s.Type.Resolved != nil {
-			g.shapes.addType(s.Type.Resolved)
+			g.shapes.addType(g, s.Type.Resolved)
 			g.collectSpecsInType(s.Type.Resolved)
 		}
 		g.collectExpr(s.Value)
@@ -961,12 +1616,12 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 	case *syntax.FnDecl:
 		for _, p := range s.Params {
 			if p.Type != nil && p.Type.Resolved != nil {
-				g.shapes.addType(p.Type.Resolved)
+				g.shapes.addType(g, p.Type.Resolved)
 				g.collectSpecsInType(p.Type.Resolved)
 			}
 		}
 		if s.Return != nil && s.Return.Resolved != nil {
-			g.shapes.addType(s.Return.Resolved)
+			g.shapes.addType(g, s.Return.Resolved)
 			g.collectSpecsInType(s.Return.Resolved)
 		}
 		g.collectBlock(s.Body)
@@ -986,11 +1641,11 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 		for _, m := range s.Methods {
 			for _, p := range m.Params {
 				if p.Type != nil && p.Type.Resolved != nil {
-					g.shapes.addType(p.Type.Resolved)
+					g.shapes.addType(g, p.Type.Resolved)
 				}
 			}
 			if m.Return != nil && m.Return.Resolved != nil {
-				g.shapes.addType(m.Return.Resolved)
+				g.shapes.addType(g, m.Return.Resolved)
 			}
 			if m.Body != nil {
 				g.collectBlock(m.Body)
@@ -1000,11 +1655,11 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 		for _, fn := range s.Methods {
 			for _, p := range fn.Params {
 				if p.Type != nil && p.Type.Resolved != nil {
-					g.shapes.addType(p.Type.Resolved)
+					g.shapes.addType(g, p.Type.Resolved)
 				}
 			}
 			if fn.Return != nil && fn.Return.Resolved != nil {
-				g.shapes.addType(fn.Return.Resolved)
+				g.shapes.addType(g, fn.Return.Resolved)
 			}
 			g.collectBlock(fn.Body)
 		}
@@ -1025,7 +1680,7 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 		return
 	}
 	if t := e.Type(); t != nil {
-		g.shapes.addType(t)
+		g.shapes.addType(g, t)
 		g.collectSpecsInType(t)
 	}
 	switch x := e.(type) {
@@ -1208,7 +1863,7 @@ func (g *cgen) emitPrint(s *syntax.PrintStmt) error {
 	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
 		// The composite print helpers do NOT add a newline; we add one here
 		// so the v0.1 contract (every print line ends with '\n') stays.
-		fmt.Fprintf(&g.b, "zerg_print_%s(%s);\n", mangleType(t), expr)
+		fmt.Fprintf(&g.b, "zerg_print_%s(%s);\n", g.mangleType(t), expr)
 		g.writeIndent()
 		g.b.WriteString("putchar('\\n');\n")
 		return nil
@@ -1247,7 +1902,7 @@ func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isC
 	if isConst {
 		g.b.WriteString("const ")
 	}
-	fmt.Fprintf(&g.b, "%s %s = %s;\n", cTypeName(declT), mangle(name), exprS)
+	fmt.Fprintf(&g.b, "%s %s = %s;\n", g.cTypeName(declT), mangle(name), exprS)
 	return nil
 }
 
@@ -1266,7 +1921,7 @@ func (g *cgen) emitTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr, 
 	}
 	tmp := g.freshTmp("tup")
 	g.writeIndent()
-	fmt.Fprintf(&g.b, "%s %s = %s;\n", cTypeName(t), tmp, exprS)
+	fmt.Fprintf(&g.b, "%s %s = %s;\n", g.cTypeName(t), tmp, exprS)
 	for i, name := range tb.Names {
 		elemT := t.Tuple[i]
 		g.writeIndent()
@@ -1274,7 +1929,7 @@ func (g *cgen) emitTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr, 
 			g.b.WriteString("const ")
 		}
 		fmt.Fprintf(&g.b, "%s %s = %s.e%d;\n",
-			cTypeName(elemT), mangle(name), tmp, i)
+			g.cTypeName(elemT), mangle(name), tmp, i)
 	}
 	return nil
 }
@@ -1489,7 +2144,7 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 		// the iterable for the body's duration and rejects in-body
 		// mutation of it, so we don't need a deep-copy snapshot — a
 		// shallow snapshot of the (data, len, cap) header suffices.
-		listMangle := mangleType(iterT)
+		listMangle := g.mangleType(iterT)
 		tmp := g.freshTmp("iter")
 		idx := g.freshTmp("i")
 		v := mangle(s.Var)
@@ -1504,7 +2159,7 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 		fmt.Fprintf(&g.b, "for (size_t %s = 0; %s < %s.len; %s++) {\n", idx, idx, tmp, idx)
 		g.indent++
 		g.writeIndent()
-		fmt.Fprintf(&g.b, "%s %s = %s.data[%s];\n", cTypeName(elemT), v, tmp, idx)
+		fmt.Fprintf(&g.b, "%s %s = %s.data[%s];\n", g.cTypeName(elemT), v, tmp, idx)
 		// Body statements (without the extra brace, but with indent already
 		// raised once). Walk statements one-by-one without using
 		// emitBlockBody to keep the indent layered correctly.
@@ -1572,17 +2227,26 @@ func (g *cgen) emitFlow(guard syntax.Expr, kw string) error {
 	return nil
 }
 
-// emitFn writes a complete static function definition.
+// emitFn writes a complete static function definition. v0.5: switches the
+// current-module context to the fn's owner so cross-module fn calls inside
+// the body resolve through the owner's import table.
 func (g *cgen) emitFn(fn *syntax.FnDecl) error {
-	writeFnSig(&g.b, fn)
+	g.writeFnSig(fn)
 	g.b.WriteString(" {\n")
 	prevRet := g.currentFnRet
+	prevMod := g.currentMod
 	if fn.Return != nil {
 		g.currentFnRet = fn.Return.Resolved
 	} else {
 		g.currentFnRet = nil
 	}
-	defer func() { g.currentFnRet = prevRet }()
+	if owner, ok := g.fnOwner[fn]; ok {
+		g.currentMod = owner
+	}
+	defer func() {
+		g.currentFnRet = prevRet
+		g.currentMod = prevMod
+	}()
 	if err := g.emitBlockBody(fn.Body); err != nil {
 		return err
 	}
@@ -1591,15 +2255,21 @@ func (g *cgen) emitFn(fn *syntax.FnDecl) error {
 }
 
 // writeFnSig renders the C signature (no trailing punctuation).
-func writeFnSig(b *strings.Builder, fn *syntax.FnDecl) {
+//
+// v0.5: every fn — including the entry module's — is name-mangled with its
+// owning module's prefix so two modules' identically-named functions do
+// not collide in the merged TU. Local-call site lowering (callStr) calls
+// fnCName with the same owner so the call resolves to the prefixed name.
+func (g *cgen) writeFnSig(fn *syntax.FnDecl) {
+	b := &g.b
 	ret := "void"
 	if fn.Return != nil && fn.Return.Resolved != nil && fn.Return.Resolved != syntax.TVoid() {
-		ret = cTypeName(fn.Return.Resolved)
+		ret = g.cTypeName(fn.Return.Resolved)
 	}
 	b.WriteString("static ")
 	b.WriteString(ret)
 	b.WriteByte(' ')
-	b.WriteString(mangle(fn.Name))
+	b.WriteString(g.fnCName(fn))
 	b.WriteByte('(')
 	if len(fn.Params) == 0 {
 		b.WriteString("void")
@@ -1608,12 +2278,29 @@ func writeFnSig(b *strings.Builder, fn *syntax.FnDecl) {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(cTypeName(p.Type.Resolved))
+			b.WriteString(g.cTypeName(p.Type.Resolved))
 			b.WriteByte(' ')
 			b.WriteString(mangle(p.Name))
 		}
 	}
 	b.WriteByte(')')
+}
+
+// fnCName returns the C identifier for a top-level fn. Format:
+// `z_<modmangle>__<name>`. Two modules' fns with the same name produce
+// distinct identifiers because the module-mangle prefix differs.
+//
+// Built-ins (`len`, `clone`, `push`) and any fn whose owner cannot be
+// recovered from g.fnOwner fall back to the bare `z_<name>` shape so v0.0–
+// v0.4-style single-program calls keep working in the partial-init paths
+// the test harness exercises.
+func (g *cgen) fnCName(fn *syntax.FnDecl) string {
+	if g != nil {
+		if owner, ok := g.fnOwner[fn]; ok && owner != "" {
+			return "z_" + owner + "__" + fn.Name
+		}
+	}
+	return mangle(fn.Name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1671,7 +2358,7 @@ func (g *cgen) emitMatch(s *syntax.MatchStmt) error {
 	// borrow checker has BorrowedShared the subject for the duration.
 	g.writeIndent()
 	fmt.Fprintf(&g.b, "%s %s = %s;\n",
-		cTypeName(subjT), subjVar, subjStr)
+		g.cTypeName(subjT), subjVar, subjStr)
 
 	for i := range s.Arms {
 		arm := &s.Arms[i]
@@ -1847,7 +2534,7 @@ func (g *cgen) emitPatternBindings(pat syntax.Pattern, scrut string, scrutT *syn
 		// for BindPat arms, so the user can't observe aliasing.
 		g.writeIndent()
 		fmt.Fprintf(&g.b, "%s %s = %s;\n",
-			cTypeName(scrutT), mangle(p.Name), scrut)
+			g.cTypeName(scrutT), mangle(p.Name), scrut)
 		return nil
 	case *syntax.TuplePat:
 		if scrutT == nil || scrutT.Kind != syntax.TypeTuple {
@@ -1963,8 +2650,8 @@ func (g *cgen) listLitStr(e *syntax.ListLit) (string, error) {
 	if t == nil || t.Kind != syntax.TypeList {
 		return "", fmt.Errorf("codegen: list literal has non-list type at %s", e.Pos)
 	}
-	mname := mangleType(t)
-	elem := cTypeName(t.Element)
+	mname := g.mangleType(t)
+	elem := g.cTypeName(t.Element)
 	var b strings.Builder
 	// cap == len at construction; the per-shape push helper doubles cap
 	// when len catches up. Element values are NOT deep-copied at v0.3 —
@@ -2000,7 +2687,7 @@ func (g *cgen) tupleLitStr(e *syntax.TupleLit) (string, error) {
 		return "", fmt.Errorf("codegen: tuple literal has non-tuple type at %s", e.Pos)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "((%s){", mangleType(t))
+	fmt.Fprintf(&b, "((%s){", g.mangleType(t))
 	for i, sub := range e.Elements {
 		if i > 0 {
 			b.WriteString(", ")
@@ -2033,7 +2720,7 @@ func (g *cgen) structLitStr(e *syntax.StructLit) (string, error) {
 		byName[init.Name] = init.Value
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "((%s){", mangleType(t))
+	fmt.Fprintf(&b, "((%s){", g.mangleType(t))
 	for i, f := range t.Fields {
 		if i > 0 {
 			b.WriteString(", ")
@@ -2074,7 +2761,7 @@ func (g *cgen) indexStr(e *syntax.IndexExpr) (string, error) {
 	case rt != nil && rt.Kind == syntax.TypeList:
 		// Bounds-check via a statement-expression; the result aliases the
 		// element in the underlying buffer (no implicit copy at v0.3).
-		mname := mangleType(rt)
+		mname := g.mangleType(rt)
 		return fmt.Sprintf(
 			"({ %s __r = %s; int64_t __i = %s; zerg_index_check(__i, __r.len, %q); __r.data[__i]; })",
 			mname, rs, is, posStr), nil
@@ -2097,7 +2784,7 @@ func (g *cgen) sliceStr(e *syntax.SliceExpr) (string, error) {
 	}
 	// Build lo / hi expressions. We need to evaluate the receiver once to
 	// reach .len for omitted high bounds, so wrap in a statement-expression.
-	mname := mangleType(rt)
+	mname := g.mangleType(rt)
 	posStr := fmt.Sprintf("%d:%d", e.Pos.Line, e.Pos.Column)
 	var lo, hi string
 	if e.Low != nil {
@@ -2143,7 +2830,7 @@ func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 			// match scrutinee or a context where typeck didn't lower).
 			// Construct the compound literal directly.
 			idx := variantIndex(rt, e.FieldName)
-			return fmt.Sprintf("((%s){.tag = %d})", mangleType(rt), idx), nil
+			return fmt.Sprintf("((%s){.tag = %d})", g.mangleType(rt), idx), nil
 		}
 	}
 	rs, err := g.exprStr(e.Receiver)
@@ -2208,7 +2895,7 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return copyExpr(e.Args[0].Type(), argS), nil
+		return g.copyExpr(e.Args[0].Type(), argS), nil
 	}
 	if ident.Name == "push" {
 		// push(xs, v) appends v to xs in place via the per-shape grow
@@ -2235,11 +2922,16 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		// (an ExprStmt-wrapped call) compiles. Wrap in `(<call>, 0)` so
 		// the comma expression has a non-void value, matching how the
 		// previous lowering shaped the expression position.
-		expr := fmt.Sprintf("(%s_push(&%s, %s), 0)", mangleType(listT), nameS, valS)
+		expr := fmt.Sprintf("(%s_push(&%s, %s), 0)", g.mangleType(listT), nameS, valS)
 		return expr, nil
 	}
+	// v0.5: resolve the fn against the active module so the call site
+	// uses the right module-mangled C symbol name and the right param
+	// types for spec coercion. fnTable holds the entry module's fns;
+	// otherwise the current module's fn list is the lookup source.
+	fn := g.lookupCurrentFn(ident.Name)
 	var paramTypes []*syntax.Type
-	if fn, ok := g.fnTable[ident.Name]; ok {
+	if fn != nil {
 		for _, p := range fn.Params {
 			if p.Type != nil {
 				paramTypes = append(paramTypes, p.Type.Resolved)
@@ -2253,7 +2945,11 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		return "", err
 	}
 	var sb strings.Builder
-	sb.WriteString(mangle(ident.Name))
+	if fn != nil {
+		sb.WriteString(g.fnCName(fn))
+	} else {
+		sb.WriteString(mangle(ident.Name))
+	}
 	sb.WriteByte('(')
 	for i, a := range args {
 		if i > 0 {
@@ -2267,6 +2963,31 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 	}
 	sb.WriteByte(')')
 	return sb.String(), nil
+}
+
+// lookupCurrentFn returns the FnDecl with the given name in the currently
+// emitting module (or in the entry module when no current module is set,
+// e.g. mid-collectShapes). Returns nil for built-ins (`len`, `clone`,
+// `push`) and unknown names.
+func (g *cgen) lookupCurrentFn(name string) *syntax.FnDecl {
+	if g == nil {
+		return nil
+	}
+	mangle := g.currentMod
+	if mangle == "" {
+		mangle = g.entryMangle
+	}
+	if me := g.moduleByName[mangle]; me != nil {
+		for _, stmt := range me.prog.Statements {
+			if fn, ok := stmt.(*syntax.FnDecl); ok && fn.Name == name {
+				return fn
+			}
+		}
+	}
+	if fn, ok := g.fnTable[name]; ok {
+		return fn
+	}
+	return nil
 }
 
 // unaryStr lowers -, ~, not.
@@ -2338,7 +3059,7 @@ func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
 		if lt != nil {
 			switch lt.Kind {
 			case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
-				return fmt.Sprintf("%s_eq(%s, %s)", mangleType(lt), left, right), nil
+				return fmt.Sprintf("%s_eq(%s, %s)", g.mangleType(lt), left, right), nil
 			}
 		}
 		return infix(left, "==", right), nil
@@ -2349,7 +3070,7 @@ func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
 		if lt != nil {
 			switch lt.Kind {
 			case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
-				return fmt.Sprintf("(!%s_eq(%s, %s))", mangleType(lt), left, right), nil
+				return fmt.Sprintf("(!%s_eq(%s, %s))", g.mangleType(lt), left, right), nil
 			}
 		}
 		return infix(left, "!=", right), nil
@@ -2400,7 +3121,10 @@ func infix(left, op, right string) string {
 //   - byte  → uint8_t
 //   - rune  → int32_t
 //   - list[T] / tuple[...] / struct Name / enum Name → mangled per-shape name
-func cTypeName(t *syntax.Type) string {
+//
+// v0.5: struct / enum / spec names carry the owning-module mangle prefix
+// — see g.mangleType for the composition.
+func (g *cgen) cTypeName(t *syntax.Type) string {
 	if t == nil {
 		return "void"
 	}
@@ -2422,13 +3146,20 @@ func cTypeName(t *syntax.Type) string {
 	}
 	switch t.Kind {
 	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum, syntax.TypeSpec:
-		return mangleType(t)
+		return g.mangleType(t)
 	}
 	return "void"
 }
 
 // mangleType returns a stable C identifier for any Zerg type, suitable for
 // use as a typedef name and as a suffix on per-shape helpers.
+//
+// v0.5: composite types (struct / enum / spec) gain a module-mangle prefix
+// per PLAN.md §Mangling for codegen — `zerg_struct_<modmangle>__<Name>`
+// etc. The cgen consults g.typeOwner / g.specOwner to find the owning
+// module for a canonical *Type pointer or a spec name. List / tuple
+// mangling stays purely structural — they have no decl-site and no
+// owning module.
 //
 // Mangling rules:
 //
@@ -2441,13 +3172,15 @@ func cTypeName(t *syntax.Type) string {
 //   - rune  → "int32_t"
 //   - list[T] → "zerg_list_<mangle(T)>"
 //   - tuple[T1,T2] → "zerg_tuple_<mangle(T1)>_<mangle(T2)>"
-//   - struct Name → "zerg_struct_<Name>"
-//   - enum Name   → "zerg_enum_<Name>"
+//   - struct Name (mod = M) → "zerg_struct_<M>__<Name>"
+//   - enum Name (mod = M)   → "zerg_enum_<M>__<Name>"
+//   - spec Name (mod = M)   → "zerg_dyn_<M>__<Name>"
 //
 // Mangling is purely structural for list/tuple — two `list[int]` constructed
-// at different sites produce identical names. Struct/enum mangle by name
-// (typeck guarantees one canonical type per name).
-func mangleType(t *syntax.Type) string {
+// at different sites produce identical names. Struct/enum/spec mangle by
+// (owner-mangle, name); typeck guarantees one canonical type per
+// (owner, name).
+func (g *cgen) mangleType(t *syntax.Type) string {
 	if t == nil {
 		return "void"
 	}
@@ -2467,21 +3200,52 @@ func mangleType(t *syntax.Type) string {
 	}
 	switch t.Kind {
 	case syntax.TypeList:
-		return "zerg_list_" + mangleType(t.Element)
+		return "zerg_list_" + g.mangleType(t.Element)
 	case syntax.TypeTuple:
 		var parts []string
 		for _, e := range t.Tuple {
-			parts = append(parts, mangleType(e))
+			parts = append(parts, g.mangleType(e))
 		}
 		return "zerg_tuple_" + strings.Join(parts, "_")
 	case syntax.TypeStruct:
-		return "zerg_struct_" + t.Name
+		return "zerg_struct_" + g.typeMangle(t) + "__" + t.Name
 	case syntax.TypeEnum:
-		return "zerg_enum_" + t.Name
+		return "zerg_enum_" + g.typeMangle(t) + "__" + t.Name
 	case syntax.TypeSpec:
-		return "zerg_dyn_" + t.Name
+		return "zerg_dyn_" + g.specMangle(t.Name) + "__" + t.Name
 	}
 	return "void"
+}
+
+// typeMangle returns the owning-module's mangle prefix for a struct/enum
+// canonical *Type pointer. Falls back to the entry module's mangle (or a
+// generic "main" stub when the cgen has no entry recorded) so the helper
+// stays defined for tests that bypass EmitBundle.
+func (g *cgen) typeMangle(t *syntax.Type) string {
+	if g != nil {
+		if m, ok := g.typeOwner[t]; ok && m != "" {
+			return m
+		}
+		if g.entryMangle != "" {
+			return g.entryMangle
+		}
+	}
+	return mangleModule("main")
+}
+
+// specMangle returns the owning-module's mangle prefix for a spec name.
+// Falls back to the entry mangle when the spec is not registered (e.g.
+// pre-bundle test paths).
+func (g *cgen) specMangle(name string) string {
+	if g != nil {
+		if m, ok := g.specOwner[name]; ok && m != "" {
+			return m
+		}
+		if g.entryMangle != "" {
+			return g.entryMangle
+		}
+	}
+	return mangleModule("main")
 }
 
 // mangle prefixes Zerg variable / function names with `z_` so they cannot
@@ -2572,16 +3336,22 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 			// below is best-effort — if it fails we fall back to the methods
 			// alone, which still emit the C fn but with no vtable wrapper.
 			receiverT := g.lookupReceiverType(prog, s.Type)
+			implKeyName := s.Type
 			if receiverT != nil {
-				g.receiverTypes[s.Type] = receiverT
+				// Disambiguate same-name types across modules by qualifying
+				// the impl-table key with the owning module's mangle.
+				if owner, ok := g.typeOwner[receiverT]; ok && owner != "" {
+					implKeyName = owner + "__" + s.Type
+				}
+				g.receiverTypes[implKeyName] = receiverT
 			}
 			if s.Spec == "" {
-				if _, ok := g.inherent[s.Type]; !ok {
-					g.inherentTypeOrder = append(g.inherentTypeOrder, s.Type)
+				if _, ok := g.inherent[implKeyName]; !ok {
+					g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
 				}
-				g.inherent[s.Type] = append(g.inherent[s.Type], s.Methods...)
+				g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
 			} else {
-				key := implKey{typeName: s.Type, specName: s.Spec}
+				key := implKey{typeName: implKeyName, specName: s.Spec}
 				if _, ok := g.specImpls[key]; !ok {
 					g.specImplKeys = append(g.specImplKeys, key)
 				}
@@ -2595,9 +3365,73 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 	}
 }
 
-// lookupReceiverType resolves a type name to its canonical *Type by walking
-// the program's struct/enum decls. Returns nil if not found.
+// lookupReceiverType resolves a type name to its canonical *Type. Prefers
+// the typeck-stamped canonical pointer recovered via findCanonicalTypeRef
+// so the receiver type pointer matches the one used at every literal /
+// field-access site in the program. Falls back to constructing a fresh
+// stand-in *Type when no stamp is recoverable (e.g. an impl-only module
+// that never uses its own type from a value site); the stand-in is
+// registered into g.typeOwner so subsequent mangle calls produce the
+// owner-prefixed name.
 func (g *cgen) lookupReceiverType(prog *syntax.Program, name string) *syntax.Type {
+	// Try the canonical stamp first — same module's program walk.
+	if t := findCanonicalTypeRef(prog, name, syntax.TypeStruct); t != nil {
+		return t
+	}
+	if t := findCanonicalTypeRef(prog, name, syntax.TypeEnum); t != nil {
+		return t
+	}
+	// Owner-aware bundle-wide search: when the impl's local prog walk
+	// finds nothing (impl body never references the receiver locally),
+	// look across the typeOwner map for a *Type whose stamped owner is
+	// the SAME module as `prog`. This keeps two modules' identically-
+	// named structs from collapsing onto the first one found.
+	progMangle := ""
+	for i := range g.modules {
+		if g.modules[i].prog == prog {
+			progMangle = g.modules[i].mangle
+			break
+		}
+	}
+	if progMangle != "" {
+		for tp, mg := range g.typeOwner {
+			if mg != progMangle || tp == nil {
+				continue
+			}
+			if tp.Name != name {
+				continue
+			}
+			if tp.Kind == syntax.TypeStruct || tp.Kind == syntax.TypeEnum {
+				return tp
+			}
+		}
+	}
+	// Bundle-wide search: typeck wires cross-module type references to the
+	// declaring module's canonical *Type, so the same canonical pointer
+	// might be reachable from another module's program (e.g. main calls
+	// `util.Counter{...}` while util only declares Counter).
+	for i := range g.modules {
+		me := &g.modules[i]
+		if t := findCanonicalTypeRef(me.prog, name, syntax.TypeStruct); t != nil {
+			return t
+		}
+		if t := findCanonicalTypeRef(me.prog, name, syntax.TypeEnum); t != nil {
+			return t
+		}
+	}
+	// Fall back: build a stand-in. Register the stand-in's owner so
+	// downstream mangle calls produce the right module prefix. The owner
+	// for the stand-in is whichever module the prog argument belongs to —
+	// recover the mangle by scanning g.modules.
+	standin := func(t *syntax.Type) *syntax.Type {
+		for i := range g.modules {
+			if g.modules[i].prog == prog {
+				g.typeOwner[t] = g.modules[i].mangle
+				return t
+			}
+		}
+		return t
+	}
 	for _, stmt := range prog.Statements {
 		switch s := stmt.(type) {
 		case *syntax.StructDecl:
@@ -2608,7 +3442,7 @@ func (g *cgen) lookupReceiverType(prog *syntax.Program, name string) *syntax.Typ
 						fields[i] = syntax.NamedField{Name: f.Name, Type: f.Type.Resolved}
 					}
 				}
-				return syntax.NewStructType(s.Name, fields)
+				return standin(syntax.NewStructType(s.Name, fields))
 			}
 		case *syntax.EnumDecl:
 			if s.Name == name {
@@ -2616,7 +3450,7 @@ func (g *cgen) lookupReceiverType(prog *syntax.Program, name string) *syntax.Typ
 				for i, v := range s.Variants {
 					vs[i] = v.Name
 				}
-				return syntax.NewEnumType(s.Name, vs)
+				return standin(syntax.NewEnumType(s.Name, vs))
 			}
 		}
 	}
@@ -2682,9 +3516,10 @@ func (g *cgen) emitSpecForwardDecls() {
 	g.b.WriteString("/* Spec fat-pointer typedefs and vtable struct definitions (v0.4). */\n")
 	for _, name := range order {
 		s := g.specs[name]
+		specPrefix := g.specMangle(name) + "__" + name
 		// Vtable struct: one function pointer per spec method in declaration
 		// order; each takes `void* this` plus the declared param types.
-		fmt.Fprintf(&g.b, "struct zerg_vtable_%s {\n", name)
+		fmt.Fprintf(&g.b, "struct zerg_vtable_%s {\n", specPrefix)
 		if s == nil || len(s.Methods) == 0 {
 			// An empty spec still gets a struct so sizeof(zerg_dyn_<Spec>)
 			// is well-defined; emit a placeholder field.
@@ -2693,12 +3528,12 @@ func (g *cgen) emitSpecForwardDecls() {
 			for _, m := range s.Methods {
 				ret := "void"
 				if m.Return != nil && m.Return.Resolved != nil && m.Return.Resolved != syntax.TVoid() {
-					ret = cTypeName(m.Return.Resolved)
+					ret = g.cTypeName(m.Return.Resolved)
 				}
 				fmt.Fprintf(&g.b, "    %s (*%s)(void* z_this", ret, m.Name)
 				for _, p := range m.Params {
 					if p.Type != nil && p.Type.Resolved != nil {
-						fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+						fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 					}
 				}
 				fmt.Fprintf(&g.b, ");\n")
@@ -2707,7 +3542,7 @@ func (g *cgen) emitSpecForwardDecls() {
 		fmt.Fprintf(&g.b, "};\n")
 		// Fat pointer: data + vtable.
 		fmt.Fprintf(&g.b, "typedef struct { void* data; const struct zerg_vtable_%s* vt; } zerg_dyn_%s;\n",
-			name, name)
+			specPrefix, specPrefix)
 	}
 	g.b.WriteString("\n")
 }
@@ -2724,7 +3559,7 @@ func (g *cgen) emitSpecForwardDecls() {
 //     with adapter pointers for impl overrides, type-specialised default
 //     adapters for spec defaults, and NotImplemented stubs for the
 //     remainder.
-func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
+func (g *cgen) emitSpecVtablesAndMethods() {
 	if len(g.inherentTypeOrder) == 0 && len(g.specImplKeys) == 0 && len(g.specOrder) == 0 {
 		return
 	}
@@ -2750,15 +3585,16 @@ func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
 		}
 		decl := g.specImpls[key]
 		spec := g.specs[key.specName]
+		specPrefix := g.specMangle(key.specName) + "__" + key.specName
 		for _, fn := range decl.Methods {
 			g.writeMethodSig(recv, key.specName, fn)
 			g.b.WriteString(";\n")
 			// Adapter forward decl.
 			fmt.Fprintf(&g.b, "static %s zerg_adapter_%s__%s__%s(void* z_this",
-				returnCType(fn.Return), mangleType(recv), key.specName, fn.Name)
+				g.returnCType(fn.Return), g.mangleType(recv), specPrefix, fn.Name)
 			for _, p := range fn.Params {
 				if p.Type != nil && p.Type.Resolved != nil {
-					fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+					fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 				}
 			}
 			g.b.WriteString(");\n")
@@ -2781,20 +3617,20 @@ func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
 				if sm.Body != nil {
 					// Type-specialised default-body adapter.
 					fmt.Fprintf(&g.b, "static %s zerg_default_%s__%s__%s(void* z_this",
-						returnCType(sm.Return), mangleType(recv), key.specName, sm.Name)
+						g.returnCType(sm.Return), g.mangleType(recv), specPrefix, sm.Name)
 					for _, p := range sm.Params {
 						if p.Type != nil && p.Type.Resolved != nil {
-							fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+							fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 						}
 					}
 					g.b.WriteString(");\n")
 				} else {
 					// NotImplemented stub.
 					fmt.Fprintf(&g.b, "static %s zerg_not_impl_%s__%s__%s(void* z_this",
-						returnCType(sm.Return), mangleType(recv), key.specName, sm.Name)
+						g.returnCType(sm.Return), g.mangleType(recv), specPrefix, sm.Name)
 					for _, p := range sm.Params {
 						if p.Type != nil && p.Type.Resolved != nil {
-							fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+							fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 						}
 					}
 					g.b.WriteString(");\n")
@@ -2868,8 +3704,9 @@ func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
 		}
 		spec := g.specs[key.specName]
 		decl := g.specImpls[key]
+		specPrefix := g.specMangle(key.specName) + "__" + key.specName
 		fmt.Fprintf(&g.b, "static const struct zerg_vtable_%s zerg_vt_%s_%s = {\n",
-			key.specName, mangleType(recv), key.specName)
+			specPrefix, g.mangleType(recv), specPrefix)
 		if spec == nil || len(spec.Methods) == 0 {
 			g.b.WriteString("    ._empty = 0,\n")
 		} else {
@@ -2885,13 +3722,13 @@ func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
 				switch {
 				case overridden:
 					fmt.Fprintf(&g.b, "    .%s = zerg_adapter_%s__%s__%s,\n",
-						sm.Name, mangleType(recv), key.specName, sm.Name)
+						sm.Name, g.mangleType(recv), specPrefix, sm.Name)
 				case sm.Body != nil:
 					fmt.Fprintf(&g.b, "    .%s = zerg_default_%s__%s__%s,\n",
-						sm.Name, mangleType(recv), key.specName, sm.Name)
+						sm.Name, g.mangleType(recv), specPrefix, sm.Name)
 				default:
 					fmt.Fprintf(&g.b, "    .%s = zerg_not_impl_%s__%s__%s,\n",
-						sm.Name, mangleType(recv), key.specName, sm.Name)
+						sm.Name, g.mangleType(recv), specPrefix, sm.Name)
 				}
 			}
 		}
@@ -2905,33 +3742,43 @@ func (g *cgen) emitSpecVtablesAndMethods(prog *syntax.Program) {
 // spec name (used for mangling).
 func (g *cgen) writeMethodSig(receiver *syntax.Type, specName string, fn *syntax.FnDecl) {
 	g.b.WriteString("static ")
-	g.b.WriteString(returnCType(fn.Return))
+	g.b.WriteString(g.returnCType(fn.Return))
 	g.b.WriteByte(' ')
-	g.b.WriteString(methodMangle(receiver, specName, fn.Name))
+	g.b.WriteString(g.methodMangle(receiver, specName, fn.Name))
 	g.b.WriteByte('(')
-	fmt.Fprintf(&g.b, "%s %s", cTypeName(receiver), mangle("this"))
+	fmt.Fprintf(&g.b, "%s %s", g.cTypeName(receiver), mangle("this"))
 	for _, p := range fn.Params {
-		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+		fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 	}
 	g.b.WriteByte(')')
 }
 
 // methodMangle returns the C identifier for a method function on receiver.
-// Inherent: <MangledType>__<method>. Spec impl: <MangledType>__<Spec>__<method>.
-func methodMangle(receiver *syntax.Type, specName, method string) string {
+//
+// v0.5: the spec component carries its owning module's mangle prefix when
+// the spec lives in a different module from the type. The format is
+//
+//	inherent: <typemangle>__<method>
+//	spec impl: <typemangle>__<specModMangle>__<Spec>__<method>
+//
+// where <typemangle> already includes the type's owning module mangle
+// (e.g. `zerg_struct_main_h<m>__Counter`). When the spec lives in the same
+// module as the type the prefix is uniform — slightly redundant but keeps
+// the mangle uniform across "in-module" and "cross-module" impls.
+func (g *cgen) methodMangle(receiver *syntax.Type, specName, method string) string {
 	if specName == "" {
-		return mangleType(receiver) + "__" + method
+		return g.mangleType(receiver) + "__" + method
 	}
-	return mangleType(receiver) + "__" + specName + "__" + method
+	return g.mangleType(receiver) + "__" + g.specMangle(specName) + "__" + specName + "__" + method
 }
 
 // returnCType returns the C return-type string for a method, mapping a nil
 // or void TypeRef to "void".
-func returnCType(ref *syntax.TypeRef) string {
+func (g *cgen) returnCType(ref *syntax.TypeRef) string {
 	if ref == nil || ref.Resolved == nil || ref.Resolved == syntax.TVoid() {
 		return "void"
 	}
-	return cTypeName(ref.Resolved)
+	return g.cTypeName(ref.Resolved)
 }
 
 // emitMethodFn emits the body of an impl method. The receiver becomes the
@@ -2963,10 +3810,11 @@ func (g *cgen) emitMethodFn(receiver *syntax.Type, specName string, fn *syntax.F
 // at. The adapter casts the void pointer back to the concrete Type, derefs,
 // and forwards to the real method fn.
 func (g *cgen) emitSpecAdapter(receiver *syntax.Type, specName string, fn *syntax.FnDecl) {
+	specPrefix := g.specMangle(specName) + "__" + specName
 	fmt.Fprintf(&g.b, "static %s zerg_adapter_%s__%s__%s(void* z_this",
-		returnCType(fn.Return), mangleType(receiver), specName, fn.Name)
+		g.returnCType(fn.Return), g.mangleType(receiver), specPrefix, fn.Name)
 	for _, p := range fn.Params {
-		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+		fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 	}
 	g.b.WriteString(") {\n")
 	hasReturn := fn.Return != nil && fn.Return.Resolved != nil && fn.Return.Resolved != syntax.TVoid()
@@ -2975,7 +3823,7 @@ func (g *cgen) emitSpecAdapter(receiver *syntax.Type, specName string, fn *synta
 	} else {
 		g.b.WriteString("    ")
 	}
-	fmt.Fprintf(&g.b, "%s(*((%s*)z_this)", methodMangle(receiver, specName, fn.Name), cTypeName(receiver))
+	fmt.Fprintf(&g.b, "%s(*((%s*)z_this)", g.methodMangle(receiver, specName, fn.Name), g.cTypeName(receiver))
 	for _, p := range fn.Params {
 		fmt.Fprintf(&g.b, ", %s", mangle(p.Name))
 	}
@@ -2988,16 +3836,17 @@ func (g *cgen) emitSpecAdapter(receiver *syntax.Type, specName string, fn *synta
 // each (Type, Spec) pair that inherits the default produces its own copy of
 // the lowered C function so `this` resolves to the right concrete type.
 func (g *cgen) emitSpecDefaultAdapter(receiver *syntax.Type, specName string, sm *syntax.SpecMethod) {
-	ret := returnCType(sm.Return)
+	specPrefix := g.specMangle(specName) + "__" + specName
+	ret := g.returnCType(sm.Return)
 	fmt.Fprintf(&g.b, "static %s zerg_default_%s__%s__%s(void* __zg_this_raw",
-		ret, mangleType(receiver), specName, sm.Name)
+		ret, g.mangleType(receiver), specPrefix, sm.Name)
 	for _, p := range sm.Params {
-		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+		fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 	}
 	g.b.WriteString(") {\n")
 	// Bind `this` to the concrete value so the body's `this` reference walks
 	// the same path as inherent / impl method bodies.
-	fmt.Fprintf(&g.b, "    %s %s = *((%s*)__zg_this_raw);\n", cTypeName(receiver), mangle("this"), cTypeName(receiver))
+	fmt.Fprintf(&g.b, "    %s %s = *((%s*)__zg_this_raw);\n", g.cTypeName(receiver), mangle("this"), g.cTypeName(receiver))
 	prevRet := g.currentFnRet
 	prevIndent := g.indent
 	if sm.Return != nil {
@@ -3022,11 +3871,12 @@ func (g *cgen) emitSpecDefaultAdapter(receiver *syntax.Type, specName string, sm
 // signature matches the vtable slot so it can be installed there directly.
 // The diagnostic format is byte-identical to run.go's NotImplemented panic.
 func (g *cgen) emitNotImplementedStub(receiver *syntax.Type, specName string, sm *syntax.SpecMethod) {
-	ret := returnCType(sm.Return)
+	specPrefix := g.specMangle(specName) + "__" + specName
+	ret := g.returnCType(sm.Return)
 	fmt.Fprintf(&g.b, "static %s zerg_not_impl_%s__%s__%s(void* z_this",
-		ret, mangleType(receiver), specName, sm.Name)
+		ret, g.mangleType(receiver), specPrefix, sm.Name)
 	for _, p := range sm.Params {
-		fmt.Fprintf(&g.b, ", %s %s", cTypeName(p.Type.Resolved), mangle(p.Name))
+		fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
 	}
 	g.b.WriteString(") {\n")
 	g.b.WriteString("    (void)z_this;\n")
@@ -3050,17 +3900,32 @@ func (g *cgen) emitNotImplementedStub(receiver *syntax.Type, specName string, sm
 
 // methodCallStr lowers a MethodCallExpr. Routing precedence mirrors run.go:
 //
-//   1. typeck-lowered EnumLit (`Token.Ident("foo")`) → enumLitStr.
-//   2. typeck-lowered builtin call (`xs.push(v)`) → existing callStr path.
-//   3. Spec-typed receiver → fat-pointer vtable dispatch.
-//   4. Concrete receiver → resolve to inherent or unique spec impl method,
-//      emit a direct C fn call.
+//  1. typeck-lowered EnumLit (`Token.Ident("foo")`) → enumLitStr.
+//  2. typeck-lowered builtin call (`xs.push(v)`) → existing callStr path.
+//  3. v0.5 cross-module fn-call shape — receiver is an IdentExpr that
+//     resolves to a module binding in the active module's import table,
+//     and Method is a pub fn in that module → emit a direct call to the
+//     foreign module's mangled fn name.
+//  4. Spec-typed receiver → fat-pointer vtable dispatch.
+//  5. Concrete receiver → resolve to inherent or unique spec impl method,
+//     emit a direct C fn call.
 func (g *cgen) methodCallStr(e *syntax.MethodCallExpr) (string, error) {
 	if e.Lowered != nil {
 		return g.enumLitStr(e.Lowered)
 	}
 	if e.LoweredCall != nil {
 		return g.callStr(e.LoweredCall)
+	}
+	// v0.5 cross-module fn call — pattern-match the receiver against the
+	// active module's import bindings. typeck has already validated pubness
+	// and arity (see checkCrossModuleFnCall in typeck_v05.go); the codegen
+	// only needs to route the call to the right mangled fn name.
+	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
+		if foreignMangle := g.lookupImportMangle(id.Name); foreignMangle != "" {
+			if fn := g.lookupModuleFn(foreignMangle, e.Method); fn != nil {
+				return g.crossModFnCallStr(fn, e)
+			}
+		}
 	}
 	rt := e.Receiver.Type()
 	if rt == nil {
@@ -3070,6 +3935,66 @@ func (g *cgen) methodCallStr(e *syntax.MethodCallExpr) (string, error) {
 		return g.dispatchSpec(e, rt)
 	}
 	return g.dispatchConcrete(e, rt)
+}
+
+// lookupImportMangle returns the target module's mangle for a local name
+// in the currently-emitting module's import table. Returns "" when local
+// is not a module binding in the active scope (so the caller falls back
+// to the standard method-dispatch path).
+func (g *cgen) lookupImportMangle(local string) string {
+	if g == nil || g.currentMod == "" {
+		return ""
+	}
+	me := g.moduleByName[g.currentMod]
+	if me == nil {
+		return ""
+	}
+	return me.imports[local]
+}
+
+// lookupModuleFn returns the FnDecl for `fnName` in the module identified
+// by mangle, or nil when the lookup misses. Used by cross-module fn-call
+// emission.
+func (g *cgen) lookupModuleFn(mangle, fnName string) *syntax.FnDecl {
+	me := g.moduleByName[mangle]
+	if me == nil || me.prog == nil {
+		return nil
+	}
+	for _, stmt := range me.prog.Statements {
+		if fn, ok := stmt.(*syntax.FnDecl); ok && fn.Name == fnName {
+			return fn
+		}
+	}
+	return nil
+}
+
+// crossModFnCallStr emits a direct call to a foreign module's pub fn.
+// Argument coercion follows the declared param types so spec-typed args
+// widen at the call boundary, matching run.go's evalMethodCall path.
+func (g *cgen) crossModFnCallStr(fn *syntax.FnDecl, e *syntax.MethodCallExpr) (string, error) {
+	var paramTypes []*syntax.Type
+	for _, p := range fn.Params {
+		if p.Type != nil {
+			paramTypes = append(paramTypes, p.Type.Resolved)
+		} else {
+			paramTypes = append(paramTypes, nil)
+		}
+	}
+	args, err := g.coerceArgs(e.Args, paramTypes)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.WriteString(g.fnCName(fn))
+	sb.WriteByte('(')
+	for i, a := range args {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(a)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
 }
 
 // dispatchSpec emits a fat-pointer vtable dispatch:
@@ -3107,13 +4032,28 @@ func (g *cgen) dispatchSpec(e *syntax.MethodCallExpr, rt *syntax.Type) (string, 
 		return "", err
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "({ %s __r = %s; __r.vt->%s(__r.data", mangleType(rt), rs, e.Method)
+	fmt.Fprintf(&sb, "({ %s __r = %s; __r.vt->%s(__r.data", g.mangleType(rt), rs, e.Method)
 	for _, a := range args {
 		sb.WriteString(", ")
 		sb.WriteString(a)
 	}
 	sb.WriteString("); })")
 	return sb.String(), nil
+}
+
+// implKeyForType returns the impl-table lookup key for a receiver *Type.
+// When the receiver type's owning module is known via g.typeOwner the key
+// is `<modmangle>__<TypeName>`; this disambiguates two modules' identically-
+// named structs/enums in the merged TU. Falls back to the bare type name
+// for receivers we never registered (entry-only single-module fixtures).
+func (g *cgen) implKeyForType(rt *syntax.Type) string {
+	if rt == nil {
+		return ""
+	}
+	if owner, ok := g.typeOwner[rt]; ok && owner != "" {
+		return owner + "__" + rt.Name
+	}
+	return rt.Name
 }
 
 // dispatchConcrete emits a direct C method-fn call with the receiver as the
@@ -3128,7 +4068,7 @@ func (g *cgen) dispatchConcrete(e *syntax.MethodCallExpr, rt *syntax.Type) (stri
 	if err != nil {
 		return "", err
 	}
-	typeName := rt.Name
+	typeName := g.implKeyForType(rt)
 	// 1. Inherent.
 	if methods, ok := g.inherent[typeName]; ok {
 		for _, fn := range methods {
@@ -3187,7 +4127,7 @@ func (g *cgen) emitConcreteMethodCall(rt *syntax.Type, specName string, fn *synt
 		return "", err
 	}
 	var sb strings.Builder
-	sb.WriteString(methodMangle(rt, specName, fn.Name))
+	sb.WriteString(g.methodMangle(rt, specName, fn.Name))
 	sb.WriteByte('(')
 	sb.WriteString(rs)
 	for _, a := range args {
@@ -3215,9 +4155,10 @@ func (g *cgen) emitConcreteSpecDefault(rt *syntax.Type, specName string, sm *syn
 	if err != nil {
 		return "", err
 	}
+	specPrefix := g.specMangle(specName) + "__" + specName
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "({ %s __t = %s; zerg_default_%s__%s__%s(&__t",
-		cTypeName(rt), rs, mangleType(rt), specName, sm.Name)
+		g.cTypeName(rt), rs, g.mangleType(rt), specPrefix, sm.Name)
 	for _, a := range args {
 		sb.WriteString(", ")
 		sb.WriteString(a)
@@ -3242,9 +4183,10 @@ func (g *cgen) emitConcreteNotImpl(rt *syntax.Type, specName string, sm *syntax.
 	if err != nil {
 		return "", err
 	}
+	specPrefix := g.specMangle(specName) + "__" + specName
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "({ %s __t = %s; zerg_not_impl_%s__%s__%s(&__t",
-		cTypeName(rt), rs, mangleType(rt), specName, sm.Name)
+		g.cTypeName(rt), rs, g.mangleType(rt), specPrefix, sm.Name)
 	for _, a := range args {
 		sb.WriteString(", ")
 		sb.WriteString(a)
@@ -3309,11 +4251,14 @@ func (g *cgen) coerceCExpr(expr string, srcT, target *syntax.Type) string {
 			// v0.4 so just pass through.
 			return expr
 		}
-		// Heap-box the concrete value, then wrap.
-		concreteC := cTypeName(srcT)
+		// Heap-box the concrete value, then wrap. specPrefix carries the
+		// spec's owning module mangle so cross-module spec coercion picks
+		// the right vtable type.
+		concreteC := g.cTypeName(srcT)
+		specPrefix := g.specMangle(target.Name) + "__" + target.Name
 		return fmt.Sprintf(
 			"({ %s* __p = (%s*)malloc(sizeof(%s)); *__p = (%s); (zerg_dyn_%s){.data = __p, .vt = &zerg_vt_%s_%s}; })",
-			concreteC, concreteC, concreteC, expr, target.Name, mangleType(srcT), target.Name)
+			concreteC, concreteC, concreteC, expr, specPrefix, g.mangleType(srcT), specPrefix)
 	case syntax.TypeList:
 		if srcT.Kind != syntax.TypeList {
 			return expr
@@ -3322,13 +4267,13 @@ func (g *cgen) coerceCExpr(expr string, srcT, target *syntax.Type) string {
 			return expr
 		}
 		// Build a fresh list, copying each element with element-coerce.
-		mname := mangleType(target)
-		elemC := cTypeName(target.Element)
+		mname := g.mangleType(target)
+		elemC := g.cTypeName(target.Element)
 		tmp := g.freshTmp("co")
 		coerced := g.coerceCExpr(fmt.Sprintf("__src.data[__i]"), srcT.Element, target.Element)
 		return fmt.Sprintf(
 			"({ %s __src = (%s); %s %s; %s.len = __src.len; %s.cap = __src.len; %s.data = (%s*)malloc(%s.len ? %s.len * sizeof(%s) : 1); for (size_t __i = 0; __i < __src.len; __i++) { %s.data[__i] = %s; } %s; })",
-			cTypeName(srcT), expr, mname, tmp,
+			g.cTypeName(srcT), expr, mname, tmp,
 			tmp, tmp, tmp, elemC, tmp, tmp, elemC,
 			tmp, coerced, tmp)
 	case syntax.TypeTuple:
@@ -3339,7 +4284,7 @@ func (g *cgen) coerceCExpr(expr string, srcT, target *syntax.Type) string {
 			return expr
 		}
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "({ %s __src = (%s); ((%s){", cTypeName(srcT), expr, mangleType(target))
+		fmt.Fprintf(&sb, "({ %s __src = (%s); ((%s){", g.cTypeName(srcT), expr, g.mangleType(target))
 		for i := range target.Tuple {
 			if i > 0 {
 				sb.WriteString(", ")
@@ -3402,7 +4347,7 @@ func (g *cgen) enumLitStr(e *syntax.EnumLit) (string, error) {
 	if idx < 0 {
 		return "", fmt.Errorf("codegen: enum %s has no variant %s at %s", en.Name, e.Variant, e.VariantPos)
 	}
-	mname := mangleType(en)
+	mname := g.mangleType(en)
 	if len(e.Payload) == 0 {
 		return fmt.Sprintf("((%s){.tag = %d})", mname, idx), nil
 	}
@@ -3472,22 +4417,22 @@ func (g *cgen) emitEqHelpers() {
 
 	for _, k := range listKeys {
 		t := r.listShapes[k]
-		emitListEq(&g.b, k, t)
+		emitListEq(g, &g.b, k, t)
 		g.b.WriteString("\n")
 	}
 	for _, k := range tupleKeys {
 		t := r.tupleShapes[k]
-		emitTupleEq(&g.b, k, t)
+		emitTupleEq(g, &g.b, k, t)
 		g.b.WriteString("\n")
 	}
 	for _, k := range structKeys {
 		t := r.structShapes[k]
-		emitStructEq(&g.b, k, t)
+		emitStructEq(g, &g.b, k, t)
 		g.b.WriteString("\n")
 	}
 	for _, k := range enumKeys {
 		t := r.enumShapes[k]
-		emitEnumEq(&g.b, k, t)
+		emitEnumEq(g, &g.b, k, t)
 		g.b.WriteString("\n")
 	}
 }
@@ -3507,7 +4452,7 @@ func filterEqShapes(order []string, shapes map[string]*syntax.Type) []string {
 // eqExpr returns a C boolean expression that compares two operands of type
 // t. Routes to the per-shape _eq helper for composite types and to the
 // existing primitive == / zerg_str_eq for primitives.
-func eqExpr(t *syntax.Type, a, b string) string {
+func (g *cgen) eqExpr(t *syntax.Type, a, b string) string {
 	if t == nil {
 		return fmt.Sprintf("(%s == %s)", a, b)
 	}
@@ -3516,43 +4461,43 @@ func eqExpr(t *syntax.Type, a, b string) string {
 	}
 	switch t.Kind {
 	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum:
-		return fmt.Sprintf("%s_eq(%s, %s)", mangleType(t), a, b)
+		return fmt.Sprintf("%s_eq(%s, %s)", g.mangleType(t), a, b)
 	}
 	return fmt.Sprintf("(%s == %s)", a, b)
 }
 
-func emitListEq(b *strings.Builder, mname string, t *syntax.Type) {
+func emitListEq(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
 	fmt.Fprintf(b, "    if (a.len != b.len) return 0;\n")
 	fmt.Fprintf(b, "    for (size_t i = 0; i < a.len; i++) {\n")
-	fmt.Fprintf(b, "        if (!(%s)) return 0;\n", eqExpr(t.Element, "a.data[i]", "b.data[i]"))
+	fmt.Fprintf(b, "        if (!(%s)) return 0;\n", g.eqExpr(t.Element, "a.data[i]", "b.data[i]"))
 	fmt.Fprintf(b, "    }\n")
 	fmt.Fprintf(b, "    return 1;\n")
 	fmt.Fprintf(b, "}\n")
 }
 
-func emitTupleEq(b *strings.Builder, mname string, t *syntax.Type) {
+func emitTupleEq(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
 	for i, e := range t.Tuple {
 		fmt.Fprintf(b, "    if (!(%s)) return 0;\n",
-			eqExpr(e, fmt.Sprintf("a.e%d", i), fmt.Sprintf("b.e%d", i)))
+			g.eqExpr(e, fmt.Sprintf("a.e%d", i), fmt.Sprintf("b.e%d", i)))
 	}
 	fmt.Fprintf(b, "    return 1;\n")
 	fmt.Fprintf(b, "}\n")
 }
 
-func emitStructEq(b *strings.Builder, mname string, t *syntax.Type) {
+func emitStructEq(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
 	for _, f := range t.Fields {
 		fname := mangleField(f.Name)
 		fmt.Fprintf(b, "    if (!(%s)) return 0;\n",
-			eqExpr(f.Type, "a."+fname, "b."+fname))
+			g.eqExpr(f.Type, "a."+fname, "b."+fname))
 	}
 	fmt.Fprintf(b, "    return 1;\n")
 	fmt.Fprintf(b, "}\n")
 }
 
-func emitEnumEq(b *strings.Builder, mname string, t *syntax.Type) {
+func emitEnumEq(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static _Bool %s_eq(%s a, %s b) {\n", mname, mname, mname)
 	fmt.Fprintf(b, "    if (a.tag != b.tag) return 0;\n")
 	fmt.Fprintf(b, "    switch (a.tag) {\n")
@@ -3566,7 +4511,7 @@ func emitEnumEq(b *strings.Builder, mname string, t *syntax.Type) {
 		for j, pt := range payload {
 			access := fmt.Sprintf("payload.p%d.a%d", i, j)
 			fmt.Fprintf(b, "        if (!(%s)) return 0;\n",
-				eqExpr(pt, "a."+access, "b."+access))
+				g.eqExpr(pt, "a."+access, "b."+access))
 		}
 		fmt.Fprintf(b, "        return 1;\n")
 	}

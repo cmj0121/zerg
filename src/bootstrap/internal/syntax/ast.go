@@ -519,6 +519,38 @@ type NopStmt struct {
 func (*NopStmt) stmtNode()           {}
 func (s *NopStmt) StmtPos() Position { return s.Pos }
 
+// ImportDecl is one resolved-at-parse-time import. v0.5 Unit 1b admits three
+// surface shapes — `import "name"`, `import "name" as alias`, and the grouped
+// `import (...)` form. The grouped form is desugared in the parser into one
+// ImportDecl per entry so downstream layers (loader, typeck, run, build) only
+// see the flat single-import shape.
+//
+//   - Path is the verbatim contents of the string literal — no path resolution
+//     happens at parse time. The loader (Unit 2) is responsible for mapping
+//     the string to a sibling file.
+//   - PathPos is the position of the string literal inside the source, used by
+//     diagnostics and by the loader when reporting a load failure.
+//   - Alias is empty when the import had no `as` clause; otherwise it is the
+//     local binding name. The bare form `import "name"` uses Path itself as
+//     the binding (the parser rejects at parse time when Path is a reserved
+//     keyword, per the §Resolution rules tenth-man pin).
+//   - AliasPos is the zero Position when Alias is empty; otherwise it is the
+//     position of the alias identifier.
+//
+// At Unit 1b ImportDecl is parser-only: typeck/borrow/run/cgen each treat it
+// as a no-op so existing v0.0–v0.4 corpora keep working unchanged. Unit 2
+// wires the node into the module loader.
+type ImportDecl struct {
+	Pos      Position
+	Path     string
+	PathPos  Position
+	Alias    string
+	AliasPos Position
+}
+
+func (*ImportDecl) stmtNode()           {}
+func (s *ImportDecl) StmtPos() Position { return s.Pos }
+
 // ---------------------------------------------------------------------------
 // Expressions.
 //

@@ -80,6 +80,21 @@ type parser struct {
 	tokens     []Token
 	pos        int
 	parenDepth int
+	// blockDepth counts how many lexical brace-blocks (fn body, if/for/match
+	// arm body, impl/spec method body) the parser is currently inside. The
+	// depth is bumped by parseBlock on entry and decremented on exit. v0.5
+	// Unit 1b uses it to reject `import` statements anywhere except the
+	// file's top-level scope: parseImport reads blockDepth and produces a
+	// dedicated diagnostic when it is non-zero. Other statement parsers do
+	// not consult this field; it is dedicated to top-level-only constraints.
+	blockDepth int
+	// pendingImports holds desugared ImportDecls produced by `import (...)`
+	// after the first entry. parseImport returns the first entry directly to
+	// parseProgram, which then drains this queue before reading more tokens.
+	// Keeping the queue on the parser (rather than threading a slice return)
+	// lets parseStatement keep its single-Stmt signature unchanged and lets
+	// the grouped form share parseImportEntry with the single-import form.
+	pendingImports []*ImportDecl
 }
 
 func newParser(tokens []Token) *parser {
@@ -181,7 +196,21 @@ func (p *parser) parseProgram() (*Program, error) {
 		if err != nil {
 			return nil, err
 		}
-		prog.Statements = append(prog.Statements, stmt)
+		// parseStatement may return nil to mean "produced zero statements"
+		// — currently this is only used by `import ()` (empty group) which
+		// is admitted as a user-friendly noop. nil is appended-then-stripped
+		// here so callers don't have to special-case the shape.
+		if stmt != nil {
+			prog.Statements = append(prog.Statements, stmt)
+		}
+		// Drain any extra ImportDecls produced by `import (...)`. The grouped
+		// form returns its first entry directly; the rest live on the parser
+		// as a small FIFO. Each desugared entry is treated like its own
+		// top-level statement for downstream layers.
+		for _, extra := range p.pendingImports {
+			prog.Statements = append(prog.Statements, extra)
+		}
+		p.pendingImports = nil
 		if err := p.terminateStatement(); err != nil {
 			return nil, err
 		}
@@ -252,6 +281,15 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseImplDecl()
 	case KindPub:
 		return p.parsePubDecl()
+	case KindImport:
+		// `import` is a top-level-only statement. parseProgram calls
+		// parseStatement, so the dispatch is reachable here at the file top
+		// level; parseBlock also routes through parseStatement, but
+		// parseImport rejects with a precise diagnostic when invoked outside
+		// the file's top-level scope. We track the nesting via blockDepth
+		// (incremented in parseBlock and impl/spec body parsers) — a non-zero
+		// depth means we are inside some block body, which is illegal.
+		return p.parseImport()
 	default:
 		return p.parseExprOrAssignStmt()
 	}
@@ -314,6 +352,223 @@ func (p *parser) parsePubDecl() (Stmt, error) {
 	default:
 		return nil, errorAt(pubTok.Pos, "expected fn / struct / enum / spec after 'pub'")
 	}
+}
+
+// parseImport handles the v0.5 `import` statement in its three surface forms:
+//
+//	'import' STRING_LIT                              — single
+//	'import' STRING_LIT 'as' IDENT                   — alias rename
+//	'import' '(' (STRING_LIT ['as' IDENT] NEWLINE)* ')'  — grouped form
+//
+// The grouped form is desugared into one ImportDecl per entry; downstream
+// layers (loader, typeck, run, build) only see the flat single-import shape.
+//
+// `import` is only legal at the file's top level. parseBlock and parseMatchStmt
+// bump p.blockDepth before they invoke parseStatement on inner content, so
+// reading blockDepth here detects every misplaced import without each block
+// shape having to re-run a scoped check.
+//
+// Parse-time reserved-name rejection (PLAN.md §Resolution rules tenth-man pin):
+// the binding name (Path for the bare form, Alias when `as` is written) must
+// not collide with any keyword. We cross-check against the same `keywords`
+// map the lexer uses, so adding a future keyword automatically tightens this.
+func (p *parser) parseImport() (Stmt, error) {
+	kw := p.advance() // consume `import`
+	if p.blockDepth > 0 {
+		return nil, errorAt(kw.Pos, "import is only allowed at the top of a file")
+	}
+
+	// Grouped form: `import ( ... )`. Desugar into a synthetic Block-like
+	// sequence of single-import statements. The caller (parseProgram) appends
+	// what we return to its statement list, so we can't return multiple
+	// statements directly — instead we emit a synthetic GroupImport via a
+	// helper that loops and adds each ImportDecl to a slice we return as a
+	// `*ImportGroupResult` … simpler: rebuild parseProgram's loop to admit
+	// many statements back from a single call. The cleanest fix that keeps
+	// the existing program loop unchanged is to return the FIRST entry and
+	// stash the remaining entries in the parser, to be drained on the next
+	// parseProgram iteration. But that complicates state for a one-off.
+	//
+	// Simplest: parseImport for the grouped form parses every entry inside
+	// `(...)`, builds a slice of ImportDecl, and returns a *importGroup
+	// shim that parseProgram unpacks. We avoid the shim by keeping a small
+	// pending queue on the parser itself.
+	if p.peek().Kind == KindLParen {
+		return p.parseImportGroup(kw.Pos)
+	}
+
+	// Single-import form: `import STRING_LIT [as IDENT]`.
+	decl, err := p.parseImportEntry(kw.Pos)
+	if err != nil {
+		return nil, err
+	}
+	return decl, nil
+}
+
+// parseImportEntry consumes one `STRING_LIT [as IDENT]` import. The leading
+// `import` keyword has already been consumed by the caller; declPos is the
+// position the resulting ImportDecl should report (the `import` keyword for
+// the single form, the entry's own string-literal position for grouped
+// entries — caller chooses).
+func (p *parser) parseImportEntry(declPos Position) (*ImportDecl, error) {
+	pathTok := p.peek()
+	if pathTok.Kind != KindString {
+		return nil, errorAtTok(pathTok, "expected string literal after 'import', got %s", pathTok.Kind)
+	}
+	p.advance()
+
+	decl := &ImportDecl{
+		Pos:     declPos,
+		Path:    pathTok.Value,
+		PathPos: pathTok.Pos,
+	}
+
+	// Optional `as IDENT` alias. When absent, the binding name is the verbatim
+	// path string itself; the reserved-name check below uses Path in that case.
+	if p.peek().Kind == KindAs {
+		p.advance() // consume `as`
+		aliasTok := p.peek()
+		if aliasTok.Kind != KindIdent {
+			// The user wrote `as <something-not-an-identifier>`. Two prevalent
+			// cases: `as` followed by EOF/newline (forgot the alias name), and
+			// `as <keyword>` (collides with reserved-name rule). Distinguish
+			// them so the diagnostic blames the right thing.
+			if isKeywordKind(aliasTok.Kind) {
+				return nil, errorAt(aliasTok.Pos, "cannot import as %s: name is reserved", keywordSpelling(aliasTok))
+			}
+			return nil, errorAtTok(aliasTok, "expected identifier after 'as', got %s", aliasTok.Kind)
+		}
+		p.advance()
+		// Defensive: bare identifiers can't be lexer keywords (the lexer
+		// promotes them), but cross-check against the keywords map directly
+		// in case Token.Value happens to be a reserved word for any reason.
+		if _, isKw := keywords[aliasTok.Value]; isKw {
+			return nil, errorAt(aliasTok.Pos, "cannot import as %s: name is reserved", aliasTok.Value)
+		}
+		decl.Alias = aliasTok.Value
+		decl.AliasPos = aliasTok.Pos
+	} else {
+		// Bare form: the binding name IS the path string. Reject when that
+		// string is a reserved keyword — the user has no other handle on the
+		// module without an explicit `as`. This matches the §Resolution-rules
+		// tenth-man pin: the lexer's keyword set is the single source of truth.
+		if _, isKw := keywords[pathTok.Value]; isKw {
+			return nil, errorAt(pathTok.Pos, "cannot import as %s: name is reserved", pathTok.Value)
+		}
+	}
+	return decl, nil
+}
+
+// parseImportGroup consumes the grouped form `( entry NEWLINE entry ... )`.
+// The leading `import` keyword has already been consumed by parseImport; the
+// cursor is at `(`. We desugar the group into one ImportDecl per entry and
+// stash the trailing entries on the parser so parseProgram drains them on
+// subsequent iterations. Each ImportDecl reports its own string-literal
+// position as its Pos so diagnostics in later passes anchor on the entry,
+// not on the group's `import` keyword.
+//
+// `import ()` is admitted as a user-friendly noop; it produces zero
+// ImportDecls. parseImport returns nil in that case and parseProgram skips
+// the empty result.
+//
+// Entries are separated by NEWLINE. parenDepth-aware peek would normally
+// swallow NEWLINEs inside `(...)` — we intentionally do NOT bump parenDepth
+// here so the separator stays significant. Comma is rejected with a focused
+// diagnostic to nudge users toward the newline-separated form.
+func (p *parser) parseImportGroup(importKwPos Position) (Stmt, error) {
+	openTok := p.advance() // consume `(`
+	_ = openTok
+
+	var entries []*ImportDecl
+	for {
+		// Drop blank lines and comments-as-newlines between entries. We do
+		// NOT use parenDepth here: NEWLINE is the entry separator and must
+		// stay visible.
+		for p.pos < len(p.tokens) && p.tokens[p.pos].Kind == KindNewline {
+			p.pos++
+		}
+		if p.pos >= len(p.tokens) {
+			return nil, &ParseError{
+				Pos:        importKwPos,
+				Message:    "unterminated import group (missing ')')",
+				Incomplete: true,
+			}
+		}
+		t := p.tokens[p.pos]
+		if t.Kind == KindRParen {
+			p.pos++ // consume `)`
+			break
+		}
+		if t.Kind == KindComma {
+			return nil, errorAt(t.Pos, "use newline (not comma) between imports in a group")
+		}
+		// Parse one entry. The entry's reported Pos is its string-literal
+		// position so diagnostics anchor on the entry rather than on the
+		// outer `import (` keyword.
+		entryPos := t.Pos
+		decl, err := p.parseImportEntry(entryPos)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, decl)
+		// After a successful entry the next significant token must be a
+		// newline (entry separator) or `)` (group end). Comma is the common
+		// trailing-style mistake; reject it with the same diagnostic shape.
+		if p.pos < len(p.tokens) {
+			next := p.tokens[p.pos]
+			if next.Kind == KindComma {
+				return nil, errorAt(next.Pos, "use newline (not comma) between imports in a group")
+			}
+		}
+	}
+
+	if len(entries) == 0 {
+		// `import ()` — admitted as a noop that produces zero ImportDecls.
+		// Returning nil signals parseProgram to skip the append; the rest
+		// of the file's parsing continues as if the `import ()` line wasn't
+		// there. Other parseStatement callers never see nil because no other
+		// statement shape can produce zero output.
+		_ = importKwPos
+		return nil, nil
+	}
+	// Return the first entry directly and stash the remainder on the parser
+	// so parseProgram drains them on subsequent iterations. This avoids
+	// re-shaping parseStatement to return a slice.
+	first := entries[0]
+	if len(entries) > 1 {
+		p.pendingImports = append(p.pendingImports, entries[1:]...)
+	}
+	return first, nil
+}
+
+// isKeywordKind reports whether a Kind corresponds to a reserved keyword
+// admitted by the lexer's keyword table. Used by the reserved-name diagnostic
+// in parseImportEntry to detect `as <keyword>`.
+func isKeywordKind(k Kind) bool {
+	switch k {
+	case KindNop, KindPrint, KindAnd, KindBreak, KindConst, KindContinue,
+		KindElif, KindElse, KindFalse, KindFn, KindFor, KindIf, KindIn,
+		KindLet, KindLoop, KindMut, KindNot, KindOr, KindReturn, KindTrue,
+		KindWhile, KindXor, KindStruct, KindEnum, KindMatch, KindSpec,
+		KindImpl, KindThis, KindPub, KindImport, KindAs:
+		return true
+	}
+	return false
+}
+
+// keywordSpelling returns the textual spelling of a keyword token. For most
+// kinds the lexer leaves Token.Value empty, so we map back to the keyword
+// table by Kind — that table is the single source of truth.
+func keywordSpelling(t Token) string {
+	if t.Value != "" {
+		return t.Value
+	}
+	for word, kind := range keywords {
+		if kind == t.Kind {
+			return word
+		}
+	}
+	return t.Kind.String()
 }
 
 // parsePrint handles `print expr`. The expression is parsed by the full
@@ -969,6 +1224,13 @@ func (p *parser) parseMatchStmt() (Stmt, error) {
 	if _, err := p.expect(KindLBrace, "in match"); err != nil {
 		return nil, err
 	}
+	// match-arm bodies are inside a block: bump blockDepth so any v0.5
+	// `import` that lands in single-statement arm position is rejected by
+	// parseImport with the top-level-only diagnostic. parseBlock bumps the
+	// depth itself for brace-bodies; the single-statement form doesn't go
+	// through parseBlock.
+	p.blockDepth++
+	defer func() { p.blockDepth-- }()
 
 	stmt := &MatchStmt{Pos: kw.Pos, Subject: subject}
 	for {
@@ -1364,6 +1626,11 @@ func (p *parser) parseBlock(ctx string) (*Block, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Track lexical block nesting so parseImport can refuse imports that are
+	// not at the file's top level. The bump/decrement pair stays balanced
+	// across error returns via defer.
+	p.blockDepth++
+	defer func() { p.blockDepth-- }()
 	blk := &Block{Pos: open.Pos}
 	for {
 		// Skip newlines between statements inside the block.

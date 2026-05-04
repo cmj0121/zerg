@@ -1369,6 +1369,12 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		return nil
 	case *ImplDecl:
 		return nil
+	case *ImportDecl:
+		// v0.5 Unit 1b: parser-only landing. The module loader (Unit 2)
+		// consumes ImportDecls before typeck runs on the merged program; if
+		// one slips through here (e.g. single-file mode without a loader),
+		// it is a no-op so existing v0.0–v0.4 corpora keep behaving the same.
+		return nil
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }

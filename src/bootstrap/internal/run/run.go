@@ -40,6 +40,11 @@ func Run(prog *syntax.Program, w io.Writer) error {
 			// Decls are collected into per-program tables by newInterp. At
 			// top level they are declarations, not executable statements.
 			continue
+		case *syntax.ImportDecl:
+			// v0.5 Unit 1b: imports are resolved by the loader before Run
+			// sees the merged program. A stray ImportDecl at this layer is
+			// a no-op so existing single-file programs keep running unchanged.
+			continue
 		}
 		if err := in.execStmt(stmt); err != nil {
 			return err
@@ -281,6 +286,11 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		// v0.4: spec / impl declarations are processed at interp init
 		// (newInterp aggregates inherentImpls / specImpls). At statement-walk
 		// time they are no-ops — like StructDecl / EnumDecl.
+		_ = s
+		return nil
+	case *syntax.ImportDecl:
+		// v0.5 Unit 1b: imports are resolved by the loader before Run sees
+		// the merged program. A stray ImportDecl at this layer is a no-op.
 		_ = s
 		return nil
 	}

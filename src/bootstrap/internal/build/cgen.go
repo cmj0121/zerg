@@ -103,6 +103,12 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 			// before codegen sees them; skip at the top level for symmetry
 			// with the other declaration shapes.
 			continue
+		case *syntax.ImportDecl:
+			// v0.5 Unit 1b: imports are resolved by the loader before
+			// codegen sees the merged program. A stray ImportDecl at this
+			// layer is a no-op so existing single-file programs keep
+			// compiling unchanged.
+			continue
 		}
 		if err := g.emitStmt(stmt); err != nil {
 			return err

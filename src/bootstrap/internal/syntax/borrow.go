@@ -256,6 +256,11 @@ func borrowCheck(prog *Program, fns map[string]fnSig, structs, enums map[string]
 			// caller ever invokes borrowCheck on a tree that somehow slipped
 			// past typeck.
 			continue
+		case *ImportDecl:
+			// v0.5 Unit 1b: imports are resolved by the loader (Unit 2)
+			// before borrow check sees the merged program. A stray
+			// ImportDecl at this layer is a no-op.
+			continue
 		}
 		if err := c.checkStmt(stmt); err != nil {
 			return err
@@ -435,6 +440,12 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		// v0.4 Unit 1: typeck already rejected these, but if a borrow walk
 		// somehow reaches them treat as a no-op rather than an internal
 		// error so the typeck diagnostic is the one the user sees.
+		return nil
+	case *ImportDecl:
+		// v0.5 Unit 1b: defensive no-op. Imports are top-level only (the
+		// parser enforces this) so a borrow walk shouldn't reach them, but
+		// staying lenient keeps the borrow check from raising an internal
+		// error on a tree shape it doesn't understand.
 		return nil
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)

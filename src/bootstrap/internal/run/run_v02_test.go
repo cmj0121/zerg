@@ -103,12 +103,12 @@ func TestLenOfList(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestListBindIsValueCopy(t *testing.T) {
-	// `let ys := xs` is a value copy: even after we rebind ys (well, v0.2
-	// can't mutate ys; we sample by printing both, which exercises the
-	// copy path indirectly — the test is mostly a regression guard against
-	// reading the wrong slice header).
+	// v0.3: `let ys := xs` MOVES xs, so reading xs after the bind requires
+	// an explicit clone. The runtime still produces a fresh independent
+	// list, demonstrated by printing both — they match in value but live in
+	// different storage (the copy path is exercised by clone()).
 	src := `let xs := [1, 2, 3]
-let ys := xs
+let ys := clone(xs)
 print xs
 print ys
 `

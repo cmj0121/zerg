@@ -114,8 +114,12 @@ print xs[1..=3]
 }
 
 func TestCgenListBindIsValueCopy(t *testing.T) {
+	// v0.3: `let ys := xs` MOVES xs. Sampling both bindings requires an
+	// explicit clone of the source so xs remains usable. The codegen path
+	// still emits the per-shape copy helper, so the parity guarantee carries
+	// over from v0.2 — only the user-facing shape changed.
 	src := `let xs := [1, 2, 3]
-let ys := xs
+let ys := clone(xs)
 print xs
 print ys
 `

@@ -195,6 +195,11 @@ func borrowCheck(prog *Program, fns map[string]fnSig, structs, enums map[string]
 		if !ok {
 			continue
 		}
+		// v0.8 Unit 2: __builtin fn-decls carry no body — the host runtime
+		// supplies the implementation. Borrow check has nothing to walk.
+		if fn.BuiltinName != "" {
+			continue
+		}
 		if err := c.checkFn(fn); err != nil {
 			return err
 		}

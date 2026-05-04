@@ -116,7 +116,7 @@ func (b *Bundle) BundleModules() []syntax.ModuleView {
 }
 
 // ModuleName / ModuleProgram / ModuleImports implement syntax.ModuleView.
-func (m *Module) ModuleName() string      { return m.Name }
+func (m *Module) ModuleName() string             { return m.Name }
 func (m *Module) ModuleProgram() *syntax.Program { return m.Program }
 func (m *Module) ModuleImports() []syntax.ImportView {
 	if m == nil {
@@ -130,7 +130,7 @@ func (m *Module) ModuleImports() []syntax.ImportView {
 }
 
 // ImportLocalName / ImportTarget / ImportDecl implement syntax.ImportView.
-func (r *ResolvedImport) ImportLocalName() string      { return r.LocalName }
+func (r *ResolvedImport) ImportLocalName() string { return r.LocalName }
 func (r *ResolvedImport) ImportTarget() syntax.ModuleView {
 	if r == nil {
 		return nil
@@ -344,11 +344,31 @@ func (l *loader) loadSibling(importer *Module, decl *syntax.ImportDecl, absPath 
 // mod.Imports. Resolution: convert the bare path to a sibling absolute
 // path, recurse via loadSibling. On the way back up we record the
 // resolved sibling pointer in mod.Imports.
+//
+// v0.8 Unit 2: import paths beginning with `std/` resolve against the
+// embedded FS (see embed.go) and never fall through to the working
+// directory. Misses surface as "stdlib module not found".
 func (l *loader) resolveImports(mod *Module) error {
 	siblingDir := filepath.Dir(mod.Path)
 	for _, stmt := range mod.Program.Statements {
 		decl, ok := stmt.(*syntax.ImportDecl)
 		if !ok {
+			continue
+		}
+		if isStdlibImport(decl.Path) {
+			target, err := l.loadStdlib(mod, decl)
+			if err != nil {
+				return err
+			}
+			localName := decl.Alias
+			if localName == "" {
+				localName = stdlibLocalName(decl.Path)
+			}
+			mod.Imports = append(mod.Imports, &ResolvedImport{
+				Decl:      decl,
+				Target:    target,
+				LocalName: localName,
+			})
 			continue
 		}
 		if !isValidIdentifier(decl.Path) {
@@ -372,6 +392,98 @@ func (l *loader) resolveImports(mod *Module) error {
 		})
 	}
 	return nil
+}
+
+// isStdlibImport reports whether decl.Path names an embedded stdlib module
+// (`std/io`, `std/strings`, …). Empty or malformed `std/` paths still take
+// this branch so the diagnostic is uniform.
+func isStdlibImport(path string) bool {
+	return strings.HasPrefix(path, "std/")
+}
+
+// stdlibLocalName returns the default local-binding name for a `std/<m>`
+// import that did not write `as <alias>`. Mirrors the v0.5 default-to-bare-
+// path rule: the right-hand component is the local binding.
+func stdlibLocalName(path string) string {
+	return strings.TrimPrefix(path, "std/")
+}
+
+// loadStdlib resolves a `std/<name>` import against the embedded FS and
+// returns the loaded *Module. Misses (or any name that fails the v0.5
+// identifier rule for the post-prefix component) surface as a uniform
+// "stdlib module not found" diagnostic anchored on decl.
+func (l *loader) loadStdlib(importer *Module, decl *syntax.ImportDecl) (*Module, error) {
+	name := strings.TrimPrefix(decl.Path, "std/")
+	// A leading-underscore name is reserved for embed-machinery scaffolding
+	// (the //go:embed pattern requires at least one matching file pre-Unit-3
+	// and we ship a `_placeholder.zg` to satisfy it). Reject any user
+	// import that targets such a name with the same "not found" wording so
+	// the placeholder is invisible to user code.
+	if name == "" || strings.HasPrefix(name, "_") || !isValidIdentifier(name) {
+		return nil, errorAtImport(importer.Path, decl,
+			"stdlib module not found: %s", decl.Path)
+	}
+	embedPath := stdlibModulePath(name)
+	if existing, ok := l.modules[embedPath]; ok {
+		if l.visiting[embedPath] {
+			return nil, l.cycleError(importer, decl, existing)
+		}
+		return existing, nil
+	}
+	src, err := stdlibFS.ReadFile(embedPath)
+	if err != nil {
+		return nil, errorAtImport(importer.Path, decl,
+			"stdlib module not found: %s", decl.Path)
+	}
+	if err := checkRequiresImport(importer.Path, decl, embedPath, src); err != nil {
+		return nil, err
+	}
+	prog, err := parseStdlibSource(importer.Path, decl, embedPath, src)
+	if err != nil {
+		return nil, err
+	}
+
+	mod := &Module{
+		Name:      embedPath,
+		Path:      embedPath,
+		ShortName: name,
+		Source:    src,
+		Program:   prog,
+	}
+	l.modules[embedPath] = mod
+	l.ordered = append(l.ordered, mod)
+
+	l.visiting[embedPath] = true
+	l.visitingPath = append(l.visitingPath, mod)
+	defer func() {
+		delete(l.visiting, embedPath)
+		l.visitingPath = l.visitingPath[:len(l.visitingPath)-1]
+	}()
+
+	if err := l.resolveImports(mod); err != nil {
+		return nil, err
+	}
+	return mod, nil
+}
+
+// parseStdlibSource lexes + parses an embedded stdlib source under the
+// `InStdlibFile: true` parser flag so `__builtin <ident>` markers parse.
+// Errors anchor on the importing module's decl, mirroring the sibling-load
+// diagnostic shape.
+func parseStdlibSource(importerPath string, decl *syntax.ImportDecl, embedPath string, src []byte) (*syntax.Program, error) {
+	tokens, err := syntax.Lex(src)
+	if err != nil {
+		return nil, errorAtImport(importerPath, decl,
+			"failed to lex stdlib module %q (%s): %v",
+			decl.Path, embedPath, err)
+	}
+	prog, err := syntax.ParseWithOptions(tokens, syntax.ParseOptions{InStdlibFile: true})
+	if err != nil {
+		return nil, errorAtImport(importerPath, decl,
+			"failed to parse stdlib module %q (%s): %v",
+			decl.Path, embedPath, err)
+	}
+	return prog, nil
 }
 
 // cycleError builds the v0.5 cycle diagnostic. The path listing walks the

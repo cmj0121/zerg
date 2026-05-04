@@ -485,7 +485,7 @@ func Check(prog *Program) error {
 	// resolved Type. The two passes share a process but produce distinct error
 	// types (TypeError vs BorrowError) — keeping them separate makes it
 	// trivial for tests and tooling to attribute a diagnostic to its source.
-	if err := borrowCheck(prog, c.fns); err != nil {
+	if err := borrowCheck(prog, c.fns, c.structs, c.enums, c.specs); err != nil {
 		return err
 	}
 	return nil
@@ -2347,10 +2347,46 @@ func (c *checker) checkMethodCall(e *MethodCallExpr) (*Type, error) {
 	if rt.Kind == TypeSpec {
 		return c.dispatchSpecMethod(e, rt)
 	}
+	// Path 4: list[T] receiver — `xs.push(v)`, `xs.clone()`, `xs.len()` desugar
+	// to the v0.3 fn-call builtins. The rewrite hands a synthetic CallExpr to
+	// checkCall (which already special-cases push / clone / len) and stashes
+	// the result on e.LoweredCall so run / cgen can short-circuit to the
+	// builtin path. Borrow-check rules for push / clone / len fire on the
+	// synthetic CallExpr the same way they do on a hand-written one.
+	if rt.Kind == TypeList {
+		switch e.Method {
+		case "push", "clone", "len":
+			return c.lowerListBuiltinFromMethodCall(e)
+		}
+	}
 	if rt.Kind != TypeStruct && rt.Kind != TypeEnum {
 		return nil, typeErr(e.MethodPos, "method %q does not exist on %s", e.Method, rt)
 	}
 	return c.dispatchConcreteMethod(e, rt)
+}
+
+// lowerListBuiltinFromMethodCall rewrites `xs.push(v)` / `xs.clone()` /
+// `xs.len()` to a synthetic CallExpr and runs it through checkCall, then
+// stashes the call on e.LoweredCall so downstream consumers see the builtin
+// shape. Diagnostics fall out of checkCall with the synthetic CallExpr's
+// position pinned to the method-call site.
+func (c *checker) lowerListBuiltinFromMethodCall(e *MethodCallExpr) (*Type, error) {
+	callee := &IdentExpr{Pos: e.MethodPos, Name: e.Method}
+	args := make([]Expr, 0, len(e.Args)+1)
+	args = append(args, e.Receiver)
+	args = append(args, e.Args...)
+	call := &CallExpr{
+		Pos:    e.Pos,
+		Callee: callee,
+		Args:   args,
+	}
+	rt, err := c.checkCall(call)
+	if err != nil {
+		return nil, err
+	}
+	e.LoweredCall = call
+	e.setType(rt)
+	return rt, nil
 }
 
 // lowerEnumLitFromMethodCall validates payload arity / types and stamps the

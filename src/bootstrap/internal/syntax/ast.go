@@ -990,14 +990,22 @@ func (s *ImplDecl) StmtPos() Position { return s.Pos }
 // construction (`Token.Ident("hello")`). Downstream consumers (run, build)
 // can short-circuit to the EnumLit form via this pointer; the surface
 // MethodCallExpr remains in the tree for diagnostic positioning.
+//
+// LoweredCall is set by typeck when the method-call shape on a list[T]
+// receiver is one of the v0.3 list builtins — `xs.push(v)` desugars to
+// `push(xs, v)`, `xs.clone()` to `clone(xs)`, `xs.len()` to `len(xs)`. The
+// rewrite hands a synthetic CallExpr to the rest of the pipeline so the
+// existing builtin paths in run / cgen handle method-form calls without
+// special-casing. Diagnostics still anchor on the surface MethodCallExpr.
 type MethodCallExpr struct {
 	typed
-	Pos       Position
-	Receiver  Expr
-	Method    string
-	MethodPos Position
-	Args      []Expr
-	Lowered   *EnumLit
+	Pos         Position
+	Receiver    Expr
+	Method      string
+	MethodPos   Position
+	Args        []Expr
+	Lowered     *EnumLit
+	LoweredCall *CallExpr
 }
 
 func (*MethodCallExpr) exprNode()           {}

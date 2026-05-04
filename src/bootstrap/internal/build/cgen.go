@@ -1704,6 +1704,53 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		// list — len is an int64 view of size_t.
 		return fmt.Sprintf("((int64_t)((%s).len))", argS), nil
 	}
+	if ident.Name == "clone" {
+		// clone(x) returns a fresh deep copy of its composite argument.
+		// typeck rejects primitives; the borrow checker has confirmed the
+		// receiver is observed (not consumed). The emit is the existing
+		// per-shape _copy helper — same path the v0.2 implicit-bind copy
+		// took, just exposed under the user-visible builtin name.
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: clone expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return copyExpr(e.Args[0].Type(), argS), nil
+	}
+	if ident.Name == "push" {
+		// push(xs, v) appends v to xs in place. typeck has required xs to
+		// be a top-level mut-bound list ident; the borrow checker has
+		// validated state. We lower to a comma expression that reallocs
+		// xs's data buffer and stores the new (data, len) header back.
+		// Cap doubling lands at Unit 5 — for v0.3 Unit 3 the simple
+		// realloc-by-one keeps the runtime correct without the cap field.
+		if len(e.Args) != 2 {
+			return "", fmt.Errorf("codegen: push expects 2 args at %s", e.Pos)
+		}
+		id, ok := e.Args[0].(*syntax.IdentExpr)
+		if !ok {
+			return "", fmt.Errorf("codegen: push first arg must be ident at %s", e.Pos)
+		}
+		valS, err := g.exprStr(e.Args[1])
+		if err != nil {
+			return "", err
+		}
+		listT := e.Args[0].Type()
+		if listT == nil || listT.Kind != syntax.TypeList {
+			return "", fmt.Errorf("codegen: push first arg must be list at %s", e.Pos)
+		}
+		elem := cTypeName(listT.Element)
+		valS = copyExpr(listT.Element, valS)
+		nameS := mangle(id.Name)
+		// Comma expression: realloc, write, bump len, return 0 (we cast to
+		// void in the surrounding ExprStmt). Using realloc keeps the
+		// implementation tiny; cap-doubling is Unit 5's contract.
+		expr := fmt.Sprintf("(%s.data = (%s*)realloc(%s.data, (%s.len + 1) * sizeof(%s)), %s.data[%s.len] = %s, %s.len = %s.len + 1, 0)",
+			nameS, elem, nameS, nameS, elem, nameS, nameS, valS, nameS, nameS)
+		return expr, nil
+	}
 	var sb strings.Builder
 	sb.WriteString(mangle(ident.Name))
 	sb.WriteByte('(')

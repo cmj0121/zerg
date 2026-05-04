@@ -40,19 +40,19 @@ func EmitSource(srcPath string, w io.Writer) error {
 // ill-typed programs before generating C that the codegen would otherwise
 // accept and produce nonsense for.
 //
-// At Unit 2 the loader returns a Bundle but typeck and codegen still
-// operate on the entry-only program. Cross-module typeck wires up at
-// Unit 3, codegen at Unit 6.
+// v0.5 Unit 3: typeck runs across the whole Bundle so cross-module name
+// resolution, pub gating, and the orphan rule fire. Codegen still
+// consumes only the entry module's typed AST until Unit 6 wires per-
+// module mangling.
 func parseSource(srcPath string) (*syntax.Program, error) {
 	bundle, err := loader.Load(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("zerg build: %w", err)
 	}
-	prog := bundle.Entry.Program
-	if err := syntax.Check(prog); err != nil {
+	if err := syntax.CheckBundle(bundle); err != nil {
 		return nil, fmt.Errorf("zerg build: %s: %w", srcPath, err)
 	}
-	return prog, nil
+	return bundle.Entry.Program, nil
 }
 
 // Build compiles the Zerg source at srcPath into a native binary placed in

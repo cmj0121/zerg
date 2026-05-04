@@ -93,6 +93,57 @@ type Bundle struct {
 	Modules []*Module
 }
 
+// BundleEntry / BundleModules implement syntax.BundleView so the loader's
+// Bundle can be handed to syntax.CheckBundle without an import cycle.
+func (b *Bundle) BundleEntry() syntax.ModuleView {
+	if b == nil {
+		return nil
+	}
+	return b.Entry
+}
+
+// BundleModules returns every module in the bundle as a slice of
+// syntax.ModuleView for typeck consumption.
+func (b *Bundle) BundleModules() []syntax.ModuleView {
+	if b == nil {
+		return nil
+	}
+	out := make([]syntax.ModuleView, len(b.Modules))
+	for i, m := range b.Modules {
+		out[i] = m
+	}
+	return out
+}
+
+// ModuleName / ModuleProgram / ModuleImports implement syntax.ModuleView.
+func (m *Module) ModuleName() string      { return m.Name }
+func (m *Module) ModuleProgram() *syntax.Program { return m.Program }
+func (m *Module) ModuleImports() []syntax.ImportView {
+	if m == nil {
+		return nil
+	}
+	out := make([]syntax.ImportView, len(m.Imports))
+	for i, im := range m.Imports {
+		out[i] = im
+	}
+	return out
+}
+
+// ImportLocalName / ImportTarget / ImportDecl implement syntax.ImportView.
+func (r *ResolvedImport) ImportLocalName() string      { return r.LocalName }
+func (r *ResolvedImport) ImportTarget() syntax.ModuleView {
+	if r == nil {
+		return nil
+	}
+	return r.Target
+}
+func (r *ResolvedImport) ImportDecl() *syntax.ImportDecl {
+	if r == nil {
+		return nil
+	}
+	return r.Decl
+}
+
 // LoadError is the loader's error type. It carries the position of the
 // offending ImportDecl (or the entry file's position 1:1 when the failure
 // is at the entry-file level) so the CLI can render a uniform "file:line:

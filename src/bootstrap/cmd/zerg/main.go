@@ -14,6 +14,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/loader"
 	"github.com/cmj/zerg/src/bootstrap/internal/repl"
 	"github.com/cmj/zerg/src/bootstrap/internal/run"
+	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
 // cliVersion is the user-facing string `zerg --version` prints. The
@@ -48,11 +49,14 @@ func (c *runCmd) Run() error {
 		Int("modules", len(bundle.Modules)).
 		Str("entry", bundle.Entry.Path).
 		Msg("loaded")
-	// v0.5 Unit 2: typeck/run still operate on the entry-only program.
-	// Cross-module name resolution arrives in Unit 3; until then a multi-
-	// file program with cross-module references will fail at typeck with
-	// "unknown identifier" diagnostics — that's the documented Unit 2 gap.
-	return run.Run(bundle.Entry.Program, os.Stdout)
+	// v0.5 Unit 3: typeck runs across the whole Bundle so cross-module
+	// references resolve, pub gating fires, and the orphan rule applies.
+	// The interpreter still walks the entry module only — Unit 5 wires
+	// multi-module execution.
+	if err := syntax.CheckBundle(bundle); err != nil {
+		return err
+	}
+	return run.RunChecked(bundle.Entry.Program, os.Stdout)
 }
 
 type buildCmd struct {

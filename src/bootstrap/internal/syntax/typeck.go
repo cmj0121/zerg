@@ -339,14 +339,24 @@ type implMethod struct {
 }
 
 // Impl is the per-(Type, Spec) impl record. Spec is empty for inherent impls.
+//
+// recvOwner / specOwner are populated by the v0.5 cross-module resolver:
+// they point at the ModuleView that DEFINED the receiver type / spec. The
+// fields are nil for single-program (non-Bundle) Check, and identical to
+// the importing module when the type/spec was defined locally. The cross-
+// module collision pass uses (recvOwner, TypeName, specOwner, SpecName) as
+// the canonical key so basename collisions across modules don't
+// accidentally fold into one.
 type Impl struct {
-	Pos       Position
-	TypeName  string
-	SpecName  string         // "" for inherent
-	Receiver  *Type          // resolved receiver type (struct or enum)
-	Methods   []*implMethod  // declaration order
-	methodIdx map[string]*implMethod
-	ast       *ImplDecl
+	Pos        Position
+	TypeName   string
+	SpecName   string // "" for inherent
+	Receiver   *Type  // resolved receiver type (struct or enum)
+	Methods    []*implMethod // declaration order
+	methodIdx  map[string]*implMethod
+	ast        *ImplDecl
+	recvOwner  ModuleView // v0.5: defining module of TypeName, nil for single-program
+	specOwner  ModuleView // v0.5: defining module of SpecName, nil for inherent or single-program
 }
 
 // methodSource is one place a method name is visible on a type — either an
@@ -405,90 +415,21 @@ type checker struct {
 	currentReceiver *Type            // non-nil only inside an impl method body
 	currentSpec *Spec                // non-nil only inside a spec default body
 	loopDepth int
+	// crossMod is non-nil when the checker is part of a multi-module
+	// CheckBundle pass. It carries the importing module's import-binding
+	// table and a handle to the per-Module checker map, which together
+	// drive cross-module name resolution and pub gating. Nil for
+	// single-program Check (preserves v0.0–v0.4 behaviour).
+	crossMod *crossModCtx
 }
 
-// Check is the public entry point. It walks prog, annotates every Expr with
-// a type, resolves every TypeRef, and returns the FIRST type or scope error
-// encountered.
+// Check is the public single-program entry point. It walks prog, annotates
+// every Expr with a type, resolves every TypeRef, and returns the FIRST type
+// or scope error encountered. v0.5 routes through CheckBundle with a
+// one-module bundle so single-program callers and Bundle callers share a
+// code path.
 func Check(prog *Program) error {
-	c := &checker{
-		scope:         newScope(nil),
-		fns:           map[string]fnSig{},
-		structs:       map[string]*Type{},
-		enums:         map[string]*Type{},
-		structAST:     map[string]*StructDecl{},
-		enumAST:       map[string]*EnumDecl{},
-		specs:         map[string]*Spec{},
-		impls:         map[implKey]*Impl{},
-		implsByType:   map[string][]*Impl{},
-		methodVisible: map[string]map[string][]*methodSource{},
-	}
-	// Pre-populate the function table with `len`. It's resolved as a built-in
-	// at call time — the params slot here is a placeholder that the call-site
-	// resolver special-cases (any list[T] is admissible).
-	c.fns["len"] = fnSig{
-		params:  []*Type{NewListType(tInt)}, // documentation-only sentinel
-		ret:     tInt,
-		builtin: true,
-	}
-	// v0.3 builtins: `push(xs, v)` mutates a mut-bound list in place; `clone(xs)`
-	// returns a fresh deep copy of any composite. Both special-case at the call
-	// site (see checkCall) — the params/ret slots here are documentation-only
-	// sentinels and are never type-checked against directly.
-	c.fns["push"] = fnSig{
-		params:  []*Type{NewListType(tInt), tInt}, // documentation-only sentinel
-		ret:     tVoid,
-		builtin: true,
-	}
-	c.fns["clone"] = fnSig{
-		params:  []*Type{NewListType(tInt)}, // documentation-only sentinel
-		ret:     NewListType(tInt),
-		builtin: true,
-	}
-
-	if err := c.collectTopLevel(prog); err != nil {
-		return err
-	}
-	if err := c.resolveStructFields(prog); err != nil {
-		return err
-	}
-	if err := c.resolveEnumPayloads(prog); err != nil {
-		return err
-	}
-	if err := c.detectTypeCycles(); err != nil {
-		return err
-	}
-	if err := c.resolveFnSignatures(prog); err != nil {
-		return err
-	}
-	if err := c.resolveSpecs(prog); err != nil {
-		return err
-	}
-	if err := c.resolveImpls(prog); err != nil {
-		return err
-	}
-	if err := c.buildMethodVisibility(); err != nil {
-		return err
-	}
-	if err := c.checkSpecBodies(prog); err != nil {
-		return err
-	}
-	if err := c.checkImplBodies(prog); err != nil {
-		return err
-	}
-	for _, stmt := range prog.Statements {
-		if err := c.checkStmt(stmt); err != nil {
-			return err
-		}
-	}
-	// v0.3 Unit 3: borrow check runs after typeck so every Expr already has a
-	// resolved Type. The two passes share a process but produce distinct error
-	// types (TypeError vs BorrowError) — keeping them separate makes it
-	// trivial for tests and tooling to attribute a diagnostic to its source.
-	if err := borrowCheck(prog, c.fns, c.structs, c.enums, c.specs); err != nil {
-		return err
-	}
-	return nil
+	return CheckSingle(prog)
 }
 
 // collectTopLevel registers every top-level struct, enum, and fn name across
@@ -826,163 +767,6 @@ func (c *checker) resolveSpecs(prog *Program) error {
 	return nil
 }
 
-// resolveImpls walks every ImplDecl, validates the receiver type rule, builds
-// per-impl method tables, and registers each impl in the impl tables. The
-// per-(Type, Spec) duplicate check fires here.
-func (c *checker) resolveImpls(prog *Program) error {
-	for _, stmt := range prog.Statements {
-		id, ok := stmt.(*ImplDecl)
-		if !ok {
-			continue
-		}
-		// Receiver type must be a struct or enum (PLAN-pinned). Primitives,
-		// lists, tuples, and specs all reject. Unknown names also reject.
-		var receiver *Type
-		if st, ok := c.structs[id.Type]; ok {
-			receiver = st
-		} else if en, ok := c.enums[id.Type]; ok {
-			receiver = en
-		} else if _, ok := c.specs[id.Type]; ok {
-			return typeErr(id.Pos, "%q cannot impl spec at v0.4 — only struct and enum types can implement specs", id.Type)
-		} else {
-			// Primitive name?
-			switch id.Type {
-			case "int", "float", "bool", "str", "byte", "rune":
-				return typeErr(id.Pos, "%q cannot impl spec at v0.4 — only struct and enum types can implement specs", id.Type)
-			}
-			return typeErr(id.Pos, "unknown type %q", id.Type)
-		}
-		// Spec name (if any) must be known.
-		var spec *Spec
-		if id.Spec != "" {
-			s, ok := c.specs[id.Spec]
-			if !ok {
-				return typeErr(id.Pos, "unknown spec %q", id.Spec)
-			}
-			spec = s
-		}
-		key := implKey{typeName: id.Type, specName: id.Spec}
-		if prev, exists := c.impls[key]; exists {
-			if id.Spec == "" {
-				// Multiple inherent impls are admitted — they aggregate. Fall
-				// through to merge below.
-				_ = prev
-			} else {
-				return typeErr(id.Pos,
-					"duplicate impl: %s already implements %s at %s",
-					id.Type, id.Spec, prev.Pos)
-			}
-		}
-		// Build implMethod entries with resolved param/ret types.
-		methods := make([]*implMethod, 0, len(id.Methods))
-		methodIdx := map[string]*implMethod{}
-		for _, fn := range id.Methods {
-			if fn.Name == "this" {
-				return typeErr(fn.Pos, "method must not be named 'this'")
-			}
-			// Reject explicit `this` parameter.
-			for _, p := range fn.Params {
-				if p.Name == "this" {
-					return typeErr(p.Pos, "method %q in impl %s must not declare an explicit 'this' parameter ('this' is implicit)", fn.Name, id.Type)
-				}
-			}
-			if _, dup := methodIdx[fn.Name]; dup {
-				return typeErr(fn.Pos, "duplicate method %q in impl block for %s", fn.Name, id.Type)
-			}
-			params := make([]*Type, len(fn.Params))
-			for i, p := range fn.Params {
-				t, err := c.resolveTypeRef(p.Type)
-				if err != nil {
-					return err
-				}
-				if t == tVoid {
-					return typeErr(p.Pos, "parameter %q cannot have void type", p.Name)
-				}
-				params[i] = t
-			}
-			ret := tVoid
-			if fn.Return != nil {
-				rt, err := c.resolveTypeRef(fn.Return)
-				if err != nil {
-					return err
-				}
-				if rt == tVoid {
-					return typeErr(fn.Return.Pos, "use no return annotation instead of declaring a void return")
-				}
-				ret = rt
-			}
-			im := &implMethod{
-				pos:    fn.Pos,
-				name:   fn.Name,
-				ast:    fn,
-				params: params,
-				ret:    ret,
-			}
-			methods = append(methods, im)
-			methodIdx[fn.Name] = im
-		}
-		// For spec impls, validate that every method name corresponds to a
-		// declared spec method, and that the override signature matches the
-		// spec's declared signature.
-		if spec != nil {
-			for _, im := range methods {
-				sm, ok := spec.methodIdx[im.name]
-				if !ok {
-					return typeErr(im.pos, "method %q is not declared in spec %q", im.name, spec.Name)
-				}
-				if len(im.params) != len(sm.params) {
-					return typeErr(im.pos, "method %q expects %d parameter(s) per spec %q, got %d", im.name, len(sm.params), spec.Name, len(im.params))
-				}
-				for i := range im.params {
-					if !typeEq(im.params[i], sm.params[i]) {
-						return typeErr(im.pos, "method %q parameter %d type %s does not match spec %q signature %s", im.name, i+1, im.params[i], spec.Name, sm.params[i])
-					}
-				}
-				if !typeEq(im.ret, sm.ret) {
-					return typeErr(im.pos, "method %q return type %s does not match spec %q return type %s", im.name, im.ret, spec.Name, sm.ret)
-				}
-			}
-		}
-		impl := &Impl{
-			Pos:       id.Pos,
-			TypeName:  id.Type,
-			SpecName:  id.Spec,
-			Receiver:  receiver,
-			Methods:   methods,
-			methodIdx: methodIdx,
-			ast:       id,
-		}
-		// Aggregate inherent impls onto a single record; reject duplicates for
-		// spec impls (already handled above).
-		if id.Spec == "" {
-			c.rawInherentDecls = append(c.rawInherentDecls, id)
-			if prev, exists := c.impls[key]; exists {
-				// Merge inherent methods, watching for duplicate names across
-				// blocks. A duplicate-name across inherent blocks is reported
-				// later by the visibility pass with both positions, so we just
-				// concatenate here.
-				prev.Methods = append(prev.Methods, methods...)
-				for _, im := range methods {
-					if existing, dup := prev.methodIdx[im.name]; dup {
-						_ = existing
-						// Keep the first; visibility pass will diagnose with
-						// both positions.
-					} else {
-						prev.methodIdx[im.name] = im
-					}
-				}
-			} else {
-				c.impls[key] = impl
-				c.implsByType[id.Type] = append(c.implsByType[id.Type], impl)
-			}
-		} else {
-			c.impls[key] = impl
-			c.implsByType[id.Type] = append(c.implsByType[id.Type], impl)
-		}
-	}
-	return nil
-}
-
 // buildMethodVisibility walks every type's collected impls and produces the
 // per-(type, name) source list used by method dispatch. Inherent-vs-spec and
 // inherent-vs-inherent collisions are rejected here with both positions in
@@ -1040,7 +824,14 @@ func (c *checker) buildMethodVisibility() error {
 				}
 				continue
 			}
-			spec := c.specs[impl.SpecName]
+			// v0.5: the spec may live in a foreign module if this is a
+			// cross-module impl (`impl T for foreign.Spec`). Look it up
+			// in the impl's recorded specOwner first; fall back to the
+			// local table for in-module specs.
+			spec := c.lookupSpecForImpl(impl)
+			if spec == nil {
+				return typeErr(impl.Pos, "internal: spec %q not found for impl on %s", impl.SpecName, impl.TypeName)
+			}
 			// For spec impls, every spec method is visible. Override if the
 			// impl supplies one; otherwise inherit the default if present;
 			// otherwise the method is "not implemented at runtime" — visible
@@ -1236,12 +1027,28 @@ func (c *checker) checkImplBodies(prog *Program) error {
 // resolveTypeRef maps a TypeRef to a *Type, populates TypeRef.Resolved, and
 // reports unknown names with a clear position. List and tuple type-refs
 // resolve recursively.
+//
+// v0.5: when ref.Module is non-empty, the type ref is module-qualified
+// (`mod.Color`). The resolver looks up the module binding in the
+// importing module's import table, then resolves the inner name in the
+// foreign module's decl tables, gating on `pub`.
 func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 	if ref == nil {
 		return nil, nil
 	}
 	switch ref.Kind {
 	case TypeRefNamed:
+		// Cross-module qualifier: route through the importing module's
+		// import binding table. The inner name MUST be a pub struct,
+		// enum, or spec in the foreign module.
+		if ref.Module != "" {
+			t, err := c.resolveCrossModuleType(ref)
+			if err != nil {
+				return nil, err
+			}
+			ref.Resolved = t
+			return t, nil
+		}
 		var t *Type
 		switch ref.Name {
 		case "int":
@@ -1422,6 +1229,17 @@ func isPrintable(t *Type) bool {
 // checkDecl handles let/mut/const. The annotated type, when present, drives
 // inference for empty-list literals.
 func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr, kind bindKind) error {
+	// v0.5: a let / mut / const cannot shadow an imported module
+	// binding. The reverse direction (module shadows local) is impossible
+	// because lets are scoped below module bindings.
+	if c.crossMod != nil {
+		if _, ok := c.crossMod.imports[name]; ok && c.scope.parent == nil {
+			// Top-level scope: the let lives at module scope and would
+			// override the import binding for every reference below.
+			// Reject with a focused diagnostic.
+			return typeErr(pos, "name %q shadows imported module binding", name)
+		}
+	}
 	annotated, err := c.resolveTypeRef(ref)
 	if err != nil {
 		return err
@@ -2162,11 +1980,34 @@ func (c *checker) checkTupleLit(e *TupleLit, hint *Type) (*Type, error) {
 // checkStructLit validates `Name { f1: v1, ... }`. The literal must match the
 // declared field set exactly — same names, no missing, no extras. Field order
 // in the literal can differ from declaration order.
+//
+// v0.5: when e.Module is non-empty, the struct type is module-qualified
+// (`mod.MyStruct {...}`). The lookup goes through the importing module's
+// import binding table; the foreign struct must be `pub`.
 func (c *checker) checkStructLit(e *StructLit) (*Type, error) {
+	if e.Module != "" {
+		st, found, err := c.resolveCrossModuleStruct(e.Module, e.TypeName)
+		if !found {
+			return nil, typeErr(e.Pos, "unknown struct type %q.%q", e.Module, e.TypeName)
+		}
+		if err != nil {
+			return nil, typeErr(e.Pos,
+				"cannot access '%s.%s': %q is not pub in module %q",
+				e.Module, e.TypeName, e.TypeName, e.Module)
+		}
+		return c.checkStructLitBody(e, st)
+	}
 	st, ok := c.structs[e.TypeName]
 	if !ok {
 		return nil, typeErr(e.Pos, "unknown struct type %q", e.TypeName)
 	}
+	return c.checkStructLitBody(e, st)
+}
+
+// checkStructLitBody validates the field-init list of a struct literal
+// against a resolved struct *Type. Split out so the cross-module path
+// (`mod.MyStruct{...}`) can share the validation.
+func (c *checker) checkStructLitBody(e *StructLit, st *Type) (*Type, error) {
 	declared := map[string]*Type{}
 	for _, f := range st.Fields {
 		declared[f.Name] = f.Type
@@ -2175,7 +2016,7 @@ func (c *checker) checkStructLit(e *StructLit) (*Type, error) {
 	for _, init := range e.Fields {
 		ft, ok := declared[init.Name]
 		if !ok {
-			return nil, typeErr(init.Pos, "struct %q has no field %q", e.TypeName, init.Name)
+			return nil, typeErr(init.Pos, "struct %q has no field %q", st.Name, init.Name)
 		}
 		if provided[init.Name] {
 			return nil, typeErr(init.Pos, "field %q already initialised in struct literal", init.Name)
@@ -2191,7 +2032,7 @@ func (c *checker) checkStructLit(e *StructLit) (*Type, error) {
 	}
 	for _, f := range st.Fields {
 		if !provided[f.Name] {
-			return nil, typeErr(e.Pos, "struct %q literal is missing field %q", e.TypeName, f.Name)
+			return nil, typeErr(e.Pos, "struct %q literal is missing field %q", st.Name, f.Name)
 		}
 	}
 	e.setType(st)
@@ -2273,8 +2114,97 @@ func (c *checker) checkSlice(e *SliceExpr) (*Type, error) {
 // The lowered EnumLit pointer is attached so downstream consumers can route
 // the construction through the same Visitor path as MethodCallExpr-style
 // payloadful construction.
+//
+// v0.5: when the receiver is a bare ident that matches an imported module
+// binding, the FieldAccessExpr resolves through the foreign module's decl
+// tables. Three sub-cases:
+//
+//   - `mod.Color` standalone (e.g. as a value? rare — typeck rejects an enum
+//     type used as a value just like the v0.4 single-program case).
+//   - `mod.Color.Red` — the OUTER FieldAccessExpr's receiver is itself a
+//     FieldAccessExpr `mod.Color` whose receiver is an IdentExpr `mod`.
+//     We detect this shape and lower to a cross-module enum access.
+//   - `mod.fn_name` — only meaningful inside a CallExpr callee; bare access
+//     rejects with "not a value".
 func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
+	// v0.5: receiver `mod.X` (FieldAccessExpr whose own receiver is the
+	// module-binding IdentExpr) where X is a foreign enum type. The
+	// outer FieldName is the variant.
+	if outerFA, ok := e.Receiver.(*FieldAccessExpr); ok {
+		if modIdent, isModIdent := outerFA.Receiver.(*IdentExpr); isModIdent {
+			if foreignMod := c.lookupImportedModule(modIdent.Name); foreignMod != nil {
+				en, found, err := c.resolveCrossModuleEnum(modIdent.Name, outerFA.FieldName)
+				if found {
+					if err != nil {
+						return nil, typeErr(outerFA.NamePos,
+							"cannot access '%s.%s': %q is not pub in module %q",
+							modIdent.Name, outerFA.FieldName, outerFA.FieldName, modIdent.Name)
+					}
+					// Found a foreign enum — treat the outer access as a
+					// bare-variant enum lit.
+					for i, v := range en.Variants {
+						if v == e.FieldName {
+							if len(en.VariantPayloads[i]) > 0 {
+								return nil, typeErr(e.NamePos,
+									"variant %q.%q has %d payload value(s) — use %s.%s.%s(...) to construct",
+									en.Name, v, len(en.VariantPayloads[i]), modIdent.Name, en.Name, v)
+							}
+							modIdent.setType(en)
+							outerFA.setType(en)
+							e.setType(en)
+							e.Lowered = &EnumLit{
+								Pos:        e.Pos,
+								EnumName:   en.Name,
+								Module:     modIdent.Name,
+								Variant:    v,
+								VariantPos: e.NamePos,
+							}
+							e.Lowered.setType(en)
+							return en, nil
+						}
+					}
+					return nil, typeErr(e.NamePos, "enum %q has no variant %q", en.Name, e.FieldName)
+				}
+				// modIdent is a module but outerFA.FieldName is not a
+				// foreign enum. Could be a foreign fn / struct (rare in
+				// this position) — fall through: the receiver eval below
+				// will produce a precise diagnostic.
+				_ = foreignMod
+			}
+		}
+	}
 	if id, ok := e.Receiver.(*IdentExpr); ok {
+		// v0.5: receiver is an imported module binding. Without a
+		// trailing call, accessing `mod.fn_name` or `mod.Type` bare is
+		// rejected — these aren't values. The grammar does admit such a
+		// shape syntactically (it's a FieldAccessExpr); a precise error
+		// here beats a confusing "field 'fn_name' not found" later.
+		if foreignMod := c.lookupImportedModule(id.Name); foreignMod != nil {
+			fc := c.crossMod.checkers[foreignMod]
+			if fc != nil {
+				if _, ok := fc.fns[e.FieldName]; ok {
+					return nil, typeErr(e.NamePos,
+						"cannot use function '%s.%s' as a value at v0.5 — call it with '()'",
+						id.Name, e.FieldName)
+				}
+				if _, ok := fc.enums[e.FieldName]; ok {
+					return nil, typeErr(e.NamePos,
+						"cannot use enum type '%s.%s' as a value — construct a variant",
+						id.Name, e.FieldName)
+				}
+				if _, ok := fc.structs[e.FieldName]; ok {
+					return nil, typeErr(e.NamePos,
+						"cannot use struct type '%s.%s' as a value — construct an instance",
+						id.Name, e.FieldName)
+				}
+				if _, ok := fc.specs[e.FieldName]; ok {
+					return nil, typeErr(e.NamePos,
+						"cannot use spec type '%s.%s' as a value",
+						id.Name, e.FieldName)
+				}
+			}
+			return nil, typeErr(e.NamePos, "module %q has no member %q", id.Name, e.FieldName)
+		}
 		if en, isEnum := c.enums[id.Name]; isEnum {
 			for i, v := range en.Variants {
 				if v == e.FieldName {
@@ -2327,6 +2257,72 @@ func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 // Receiver expressions are walked once (paths 2 and 3 type-check the receiver
 // before lookup).
 func (c *checker) checkMethodCall(e *MethodCallExpr) (*Type, error) {
+	// v0.5 path 0a: cross-module function call shape — the receiver is
+	// an IdentExpr naming an imported module binding, and Method is a
+	// pub function defined in that module.
+	if id, ok := e.Receiver.(*IdentExpr); ok {
+		if foreignMod := c.lookupImportedModule(id.Name); foreignMod != nil {
+			fc := c.crossMod.checkers[foreignMod]
+			if fc != nil {
+				if sig, found := fc.fns[e.Method]; found && !sig.builtin {
+					if !fnIsPub(fc, e.Method) {
+						return nil, typeErr(e.MethodPos,
+							"cannot access '%s.%s': %q is not pub in module %q",
+							id.Name, e.Method, e.Method, id.Name)
+					}
+					return c.checkCrossModuleFnCall(e, sig)
+				}
+				// Module has the binding but no fn by that name.
+				// If it's an enum/struct/spec, check for variant
+				// construction.
+				if en, ok := fc.enums[e.Method]; ok {
+					_ = en
+					// `mod.EnumName(...)` — enum types aren't called like
+					// functions. Reject with a clear message.
+					return nil, typeErr(e.MethodPos,
+						"cannot call enum type '%s.%s' — use a variant", id.Name, e.Method)
+				}
+				if _, ok := fc.structs[e.Method]; ok {
+					return nil, typeErr(e.MethodPos,
+						"cannot call struct type '%s.%s' — use struct literal syntax", id.Name, e.Method)
+				}
+				if _, ok := fc.specs[e.Method]; ok {
+					return nil, typeErr(e.MethodPos,
+						"cannot call spec type '%s.%s'", id.Name, e.Method)
+				}
+				return nil, typeErr(e.MethodPos,
+					"module %q has no function %q", id.Name, e.Method)
+			}
+		}
+	}
+	// v0.5 path 0b: cross-module enum payload-variant construction —
+	// receiver is `mod.EnumName` (FieldAccessExpr whose receiver is a
+	// module-binding IdentExpr); Method is the variant.
+	if outerFA, ok := e.Receiver.(*FieldAccessExpr); ok {
+		if modIdent, isModIdent := outerFA.Receiver.(*IdentExpr); isModIdent {
+			if foreignMod := c.lookupImportedModule(modIdent.Name); foreignMod != nil {
+				en, found, err := c.resolveCrossModuleEnum(modIdent.Name, outerFA.FieldName)
+				if found {
+					if err != nil {
+						return nil, typeErr(outerFA.NamePos,
+							"cannot access '%s.%s': %q is not pub in module %q",
+							modIdent.Name, outerFA.FieldName, outerFA.FieldName, modIdent.Name)
+					}
+					for i, v := range en.Variants {
+						if v == e.Method {
+							modIdent.setType(en)
+							outerFA.setType(en)
+							t, err := c.lowerCrossModuleEnumLitFromMethodCall(e, en, i, modIdent.Name)
+							return t, err
+						}
+					}
+					return nil, typeErr(e.MethodPos,
+						"enum %q has no variant %q", en.Name, e.Method)
+				}
+				_ = foreignMod
+			}
+		}
+	}
 	// Path 1: enum-lit construction shape.
 	if id, ok := e.Receiver.(*IdentExpr); ok {
 		if en, isEnum := c.enums[id.Name]; isEnum {
@@ -2440,6 +2436,18 @@ func (c *checker) lowerEnumLitFromMethodCall(e *MethodCallExpr, en *Type, varian
 func (c *checker) dispatchSpecMethod(e *MethodCallExpr, specType *Type) (*Type, error) {
 	spec := c.specs[specType.Name]
 	if spec == nil {
+		// v0.5: the spec may live in a foreign module. Walk the bundle's
+		// checkers to locate it.
+		if c.crossMod != nil {
+			for _, fc := range c.crossMod.checkers {
+				if s, ok := fc.specs[specType.Name]; ok {
+					spec = s
+					break
+				}
+			}
+		}
+	}
+	if spec == nil {
 		return nil, typeErr(e.Pos, "internal: spec %q not in spec table", specType.Name)
 	}
 	sm, ok := spec.methodIdx[e.Method]
@@ -2457,9 +2465,16 @@ func (c *checker) dispatchSpecMethod(e *MethodCallExpr, specType *Type) (*Type, 
 // typed receiver via the method-visibility map. Inherent and single-spec
 // sources resolve cleanly; multi-spec collisions reject with the "bind 'c' to
 // a spec type to disambiguate" hint.
+//
+// v0.5: method dispatch must also search OTHER modules' impls because:
+//   - The receiver's type may be defined in module A; module B can have an
+//     `impl A.Type for Spec` that adds methods. Method lookup walks the
+//     visibility maps of every module that has registered an impl on the
+//     receiver type.
+//   - Cross-module methods are pub-gated: a foreign module's inherent or
+//     spec-impl method is reachable only when its FnDecl carries `pub`.
 func (c *checker) dispatchConcreteMethod(e *MethodCallExpr, recv *Type) (*Type, error) {
-	visible := c.methodVisible[recv.Name]
-	srcs := visible[e.Method]
+	srcs := c.collectAllVisibleMethods(recv, e.Method)
 	if len(srcs) == 0 {
 		return nil, typeErr(e.MethodPos, "method %q does not exist on %s", e.Method, recv)
 	}
@@ -2501,8 +2516,14 @@ func (c *checker) bindResolvedMethodCall(e *MethodCallExpr, src *methodSource) (
 			ret = src.defaultM.ret
 		} else {
 			// Inherited but no body — runtime NotImplemented. The spec method
-			// signature is still the one we type-check against.
-			sm := c.specs[src.specName].methodIdx[src.name]
+			// signature is still the one we type-check against. v0.5: if
+			// the spec lives in a foreign module, fall back to the
+			// owning module's spec table.
+			spec := c.lookupSpecForImpl(src.impl)
+			if spec == nil {
+				return nil, typeErr(e.MethodPos, "internal: spec %q for method %q not found", src.specName, src.name)
+			}
+			sm := spec.methodIdx[src.name]
 			params = sm.params
 			ret = sm.ret
 		}

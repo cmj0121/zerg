@@ -248,7 +248,14 @@ const (
 type TypeRef struct {
 	Pos      Position
 	Kind     TypeRefKind
-	Name     string     // TypeRefNamed
+	Name     string // TypeRefNamed
+	// Module, when non-empty, is the local binding name of an imported
+	// module that qualifies a TypeRefNamed (`mod.Color`). v0.5 Unit 3
+	// resolves this against the importing module's import-binding table to
+	// route the type lookup into the foreign module's decl tables. Empty
+	// for in-module type references — every v0.0–v0.4 corpus carries this
+	// field at its zero value.
+	Module   string
 	Element  *TypeRef   // TypeRefList
 	Elements []*TypeRef // TypeRefTuple
 	Resolved *Type
@@ -830,6 +837,13 @@ type StructLit struct {
 	typed
 	Pos      Position
 	TypeName string
+	// Module, when non-empty, is the local binding name of an imported
+	// module that qualifies a cross-module struct construction
+	// (`mod.MyStruct { ... }`). The parser produces this shape when it sees
+	// `Ident DOT Ident` immediately followed by a struct-literal body.
+	// Empty for in-module struct literals — backward-compatible with every
+	// v0.0–v0.4 corpus program.
+	Module   string
 	Fields   []FieldInit
 }
 
@@ -1030,7 +1044,15 @@ func (s *SpecDecl) StmtPos() Position { return s.Pos }
 type ImplDecl struct {
 	Pos     Position
 	Type    string // the type name being implemented
+	// TypeModule, when non-empty, is the local binding name of an
+	// imported module that defined Type (`impl util.Counter for ...`).
+	// v0.5 typeck routes the receiver-type lookup through the importing
+	// module's import table when this is set.
+	TypeModule string
 	Spec    string // empty when inherent; otherwise the spec name
+	// SpecModule, when non-empty, is the local binding name of an
+	// imported module that defined Spec (`impl T for util.Printable`).
+	SpecModule string
 	Methods []*FnDecl
 }
 
@@ -1093,11 +1115,16 @@ func (e *ThisExpr) ExprPos() Position { return e.Pos }
 // variants (the FieldAccessExpr-derived shape).
 type EnumLit struct {
 	typed
-	Pos         Position
-	EnumName    string
-	Variant     string
-	VariantPos  Position
-	Payload     []Expr
+	Pos        Position
+	EnumName   string
+	// Module, when non-empty, is the local binding name of an imported
+	// module that defined the enum (set by v0.5 Unit 3 typeck when lowering
+	// `mod.Color.Red` / `mod.Token.Ident(x)`). Empty for in-module enum
+	// literals.
+	Module     string
+	Variant    string
+	VariantPos Position
+	Payload    []Expr
 }
 
 func (*EnumLit) exprNode()           {}

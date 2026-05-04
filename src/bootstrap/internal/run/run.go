@@ -33,6 +33,17 @@ func Run(prog *syntax.Program, w io.Writer) error {
 	if err := syntax.Check(prog); err != nil {
 		return err
 	}
+	return runChecked(prog, w)
+}
+
+// RunChecked walks an already-type-checked program. Use this when the
+// caller has run syntax.CheckBundle on a multi-module bundle and wants
+// to interpret the entry program without redundantly re-checking it.
+func RunChecked(prog *syntax.Program, w io.Writer) error {
+	return runChecked(prog, w)
+}
+
+func runChecked(prog *syntax.Program, w io.Writer) error {
 	in := newInterp(prog, w)
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {

@@ -757,6 +757,26 @@ func (p *parser) parseTypeRef() (*TypeRef, error) {
 		}
 		return p.parseTupleTypeRef(t.Pos)
 	}
+	// v0.5 cross-module type reference: `mod.Color` in a type position.
+	// Only matches a strict `IDENT . IDENT` shape — any further dotting
+	// (e.g. submodule paths) defers to v0.6+. The leading IDENT is treated
+	// as a module binding by typeck; the trailing IDENT is the foreign
+	// type name.
+	if p.peek().Kind == KindDot {
+		// Lookahead: only consume the dot if a bare IDENT follows. This
+		// preserves the existing behaviour for names that aren't really
+		// followed by a qualified-type tail.
+		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == KindIdent {
+			p.advance() // consume `.`
+			nameTok := p.advance() // consume the qualified type IDENT
+			return &TypeRef{
+				Kind:   TypeRefNamed,
+				Module: t.Value,
+				Name:   nameTok.Value,
+				Pos:    t.Pos,
+			}, nil
+		}
+	}
 	return &TypeRef{Kind: TypeRefNamed, Name: t.Value, Pos: t.Pos}, nil
 }
 
@@ -1151,7 +1171,21 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	// v0.5: `impl mod.Type [...]` — module-qualified receiver type.
+	typeModule := ""
+	typeName := typeNameTok.Value
+	if p.peek().Kind == KindDot {
+		// Lookahead for IDENT — only consume the dot if a name follows,
+		// matching parseTypeRef's policy.
+		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == KindIdent {
+			p.advance() // dot
+			qual := p.advance()
+			typeModule = typeNameTok.Value
+			typeName = qual.Value
+		}
+	}
 	specName := ""
+	specModule := ""
 	if p.peek().Kind == KindFor {
 		forTok := p.advance()
 		st := p.peek()
@@ -1160,6 +1194,15 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 		}
 		p.advance()
 		specName = st.Value
+		// v0.5: `impl T for mod.Spec` — module-qualified spec name.
+		if p.peek().Kind == KindDot {
+			if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == KindIdent {
+				p.advance() // dot
+				qual := p.advance()
+				specModule = specName
+				specName = qual.Value
+			}
+		}
 	}
 	if _, err := p.expect(KindLBrace, "in impl declaration"); err != nil {
 		return nil, err
@@ -1202,10 +1245,12 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 		return nil, err
 	}
 	return &ImplDecl{
-		Pos:     kw.Pos,
-		Type:    typeNameTok.Value,
-		Spec:    specName,
-		Methods: methods,
+		Pos:        kw.Pos,
+		Type:       typeName,
+		TypeModule: typeModule,
+		Spec:       specName,
+		SpecModule: specModule,
+		Methods:    methods,
 	}, nil
 }
 
@@ -2035,6 +2080,26 @@ func (p *parser) parsePostfix() (Expr, error) {
 					MethodPos: nameTok.Pos,
 					Args:      args,
 				}
+				continue
+			}
+			// v0.5 cross-module struct literal: `mod.MyStruct { ... }`
+			// only when the receiver was a bare IdentExpr (i.e. could
+			// be a module binding) and the next tokens look like a
+			// struct-literal body. Otherwise stay with a FieldAccessExpr
+			// — typeck will resolve the receiver, and other shapes
+			// (`receiver.field`, enum-variant access) keep their v0.4
+			// shape unchanged.
+			if id, isIdent := expr.(*IdentExpr); isIdent &&
+				p.peek().Kind == KindLBrace &&
+				p.looksLikeStructLitBody() {
+				lit, err := p.parseStructLitBody(id.Pos, nameTok.Value)
+				if err != nil {
+					return nil, err
+				}
+				if sl, ok := lit.(*StructLit); ok {
+					sl.Module = id.Name
+				}
+				expr = lit
 				continue
 			}
 			expr = &FieldAccessExpr{

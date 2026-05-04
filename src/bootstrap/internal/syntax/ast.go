@@ -357,12 +357,17 @@ type ConstStmt struct {
 func (*ConstStmt) stmtNode()           {}
 func (s *ConstStmt) StmtPos() Position { return s.Pos }
 
-// AssignStmt is `target OP value`. v0.1 restricts targets to bare identifiers
-// (no field access, no index), so Target is *IdentExpr — keeping the type
-// concrete here means callers don't have to type-assert.
+// AssignStmt is `target OP value`. v0.1 admitted only bare identifiers as the
+// target. v0.3 broadens Target to Expr so list-element assignment
+// (`xs[i] = v`) can share the same node. The parser still narrows the LHS at
+// parse time: only *IdentExpr and *IndexExpr are accepted, every other shape
+// (call results, chained indexing, slices, field access at v0.3) is rejected
+// with a precise diagnostic. Compound operators (`+=`, etc.) remain
+// identifier-only at v0.3 — list-element compound assignment is sugar that
+// belongs to a later unit.
 type AssignStmt struct {
 	Pos    Position
-	Target *IdentExpr
+	Target Expr
 	Op     AssignOp
 	Value  Expr
 }

@@ -772,17 +772,34 @@ func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Ex
 
 // checkAssign validates the lhs is mut, then matches operator semantics.
 func (c *checker) checkAssign(s *AssignStmt) error {
-	b, ok := c.scope.lookup(s.Target.Name)
+	switch lhs := s.Target.(type) {
+	case *IdentExpr:
+		return c.checkAssignIdent(s, lhs)
+	case *IndexExpr:
+		// v0.3 Unit 1: parse-only support for `xs[i] = v`. Borrow / mut
+		// checking lands at Unit 3; until then we emit a placeholder error
+		// at typeck so the v0.0/v0.1/v0.2 corpora are unaffected and any
+		// stray v0.3 program at this commit fails with a descriptive
+		// message instead of crashing downstream.
+		return typeErr(s.Pos, "v0.3 work in progress: list-element assignment is not yet type-checked")
+	default:
+		return typeErr(s.Pos, "internal: unsupported assignment target %T", s.Target)
+	}
+}
+
+// checkAssignIdent is the v0.1 simple-assignment path: `name OP value`.
+func (c *checker) checkAssignIdent(s *AssignStmt, target *IdentExpr) error {
+	b, ok := c.scope.lookup(target.Name)
 	if !ok {
-		return typeErr(s.Target.Pos, "undefined name %q", s.Target.Name)
+		return typeErr(target.Pos, "undefined name %q", target.Name)
 	}
 	switch b.kind {
 	case bindLet:
-		return typeErr(s.Pos, "cannot assign to %q (declared with let)", s.Target.Name)
+		return typeErr(s.Pos, "cannot assign to %q (declared with let)", target.Name)
 	case bindConst:
-		return typeErr(s.Pos, "cannot assign to %q (declared with const)", s.Target.Name)
+		return typeErr(s.Pos, "cannot assign to %q (declared with const)", target.Name)
 	}
-	s.Target.setType(b.typ)
+	target.setType(b.typ)
 	rhs, err := c.checkExprHint(s.Value, b.typ)
 	if err != nil {
 		return err
@@ -790,7 +807,7 @@ func (c *checker) checkAssign(s *AssignStmt) error {
 	switch s.Op {
 	case AssignSet:
 		if !typeEq(rhs, b.typ) {
-			return typeErr(s.Pos, "cannot assign %s to %q (declared %s)", rhs, s.Target.Name, b.typ)
+			return typeErr(s.Pos, "cannot assign %s to %q (declared %s)", rhs, target.Name, b.typ)
 		}
 	case AssignAdd, AssignSub, AssignMul, AssignDiv, AssignMod:
 		if s.Op == AssignAdd && b.typ == tStr && rhs == tStr {

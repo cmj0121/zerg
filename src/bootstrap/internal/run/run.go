@@ -375,10 +375,19 @@ func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Exp
 
 // execAssign mutates an existing binding. typeck has already checked the
 // target is mut and the rhs type matches; here we just do the operation.
+//
+// At v0.3 Unit 1 the parser admits list-element LHS (`xs[i] = v`) but the
+// interpreter / borrow checker land in later units. Until then, an IndexExpr
+// LHS that somehow reaches the runtime is reported as "work in progress"
+// instead of crashing on a type-assertion.
 func (in *interp) execAssign(s *syntax.AssignStmt) error {
-	slot, ok := in.lookup(s.Target.Name)
+	target, ok := s.Target.(*syntax.IdentExpr)
 	if !ok {
-		return fmt.Errorf("internal: undefined name %q at %s", s.Target.Name, s.Pos)
+		return fmt.Errorf("v0.3 work in progress: list-element assignment is not yet supported by the interpreter (at %s)", s.Pos)
+	}
+	slot, ok := in.lookup(target.Name)
+	if !ok {
+		return fmt.Errorf("internal: undefined name %q at %s", target.Name, s.Pos)
 	}
 	rhs, err := in.evalExpr(s.Value)
 	if err != nil {

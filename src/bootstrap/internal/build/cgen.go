@@ -918,46 +918,54 @@ func (g *cgen) emitTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr, 
 
 // emitAssign lowers any assign-op to the C equivalent.
 func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
+	// v0.3 Unit 1 admits IndexExpr LHS at parse time, but typeck rejects it
+	// until Unit 3 lands. Codegen therefore only sees IdentExpr targets in
+	// well-formed programs; the IndexExpr arm here is a defensive stub so a
+	// stray AST doesn't surface as a nil deref.
+	target, ok := s.Target.(*syntax.IdentExpr)
+	if !ok {
+		return fmt.Errorf("v0.3 work in progress: list-element assignment is not yet emitted by the C backend (at %s)", s.Pos)
+	}
 	rhs, err := g.exprStr(s.Value)
 	if err != nil {
 		return err
 	}
-	target := mangle(s.Target.Name)
+	targetName := mangle(target.Name)
 	g.writeIndent()
 	switch s.Op {
 	case syntax.AssignSet:
 		// For composite targets we deep-copy the rhs so the assignment is a
 		// fresh value (matches the interpreter's copyValue on assign).
-		t := s.Target.Type()
-		fmt.Fprintf(&g.b, "%s = %s;\n", target, copyExpr(t, rhs))
+		t := target.Type()
+		fmt.Fprintf(&g.b, "%s = %s;\n", targetName, copyExpr(t, rhs))
 	case syntax.AssignAdd:
-		if s.Target.Type() == syntax.TStr() {
-			fmt.Fprintf(&g.b, "%s = zerg_str_concat(%s, %s);\n", target, target, rhs)
+		if target.Type() == syntax.TStr() {
+			fmt.Fprintf(&g.b, "%s = zerg_str_concat(%s, %s);\n", targetName, targetName, rhs)
 			return nil
 		}
-		fmt.Fprintf(&g.b, "%s += %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s += %s;\n", targetName, rhs)
 	case syntax.AssignSub:
-		fmt.Fprintf(&g.b, "%s -= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s -= %s;\n", targetName, rhs)
 	case syntax.AssignMul:
-		fmt.Fprintf(&g.b, "%s *= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s *= %s;\n", targetName, rhs)
 	case syntax.AssignDiv:
-		fmt.Fprintf(&g.b, "%s /= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s /= %s;\n", targetName, rhs)
 	case syntax.AssignMod:
-		if s.Target.Type() == syntax.TFloat() {
-			fmt.Fprintf(&g.b, "%s = fmod(%s, %s);\n", target, target, rhs)
+		if target.Type() == syntax.TFloat() {
+			fmt.Fprintf(&g.b, "%s = fmod(%s, %s);\n", targetName, targetName, rhs)
 			return nil
 		}
-		fmt.Fprintf(&g.b, "%s %%= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s %%= %s;\n", targetName, rhs)
 	case syntax.AssignAnd:
-		fmt.Fprintf(&g.b, "%s &= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s &= %s;\n", targetName, rhs)
 	case syntax.AssignOr:
-		fmt.Fprintf(&g.b, "%s |= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s |= %s;\n", targetName, rhs)
 	case syntax.AssignXor:
-		fmt.Fprintf(&g.b, "%s ^= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s ^= %s;\n", targetName, rhs)
 	case syntax.AssignShl:
-		fmt.Fprintf(&g.b, "%s <<= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s <<= %s;\n", targetName, rhs)
 	case syntax.AssignShr:
-		fmt.Fprintf(&g.b, "%s >>= %s;\n", target, rhs)
+		fmt.Fprintf(&g.b, "%s >>= %s;\n", targetName, rhs)
 	default:
 		return fmt.Errorf("codegen: unknown assign op %s at %s", s.Op, s.Pos)
 	}

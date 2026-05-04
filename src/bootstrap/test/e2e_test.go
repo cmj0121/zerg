@@ -176,7 +176,7 @@ func TestRequiresGate(t *testing.T) {
 	examples := examplesDir(t)
 
 	t.Run("rejects future version", func(t *testing.T) {
-		src := filepath.Join(examples, "10_specs.zg")
+		src := filepath.Join(examples, "08_imports.zg")
 		_, stderr, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
 		if err != nil {
 			t.Fatalf("zerg run: %v", err)
@@ -184,7 +184,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.4 (current is v0.3)"
+		want := "requires v0.5 (current is v0.4)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}
@@ -210,7 +210,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.10 (current is v0.3)"
+		want := "requires v0.10 (current is v0.4)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}

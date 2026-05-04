@@ -29,7 +29,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.1** — procedural core.
 - [x] **v0.2** — composite data.
 - [x] **v0.3** — borrow checking.
-- [ ] **v0.4** — polymorphism and errors.
+- [x] **v0.4** — polymorphism and errors.
 - [ ] **v0.5** — modules.
 - [ ] **v0.6** — generics and null-safety.
 - [ ] **v0.7** — concurrency runtime.
@@ -45,14 +45,15 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
-(composite data), and v0.3 (borrow checking) share the same `zerg` binary; earlier examples
-(`00_nop.zg`, `01_hello.zg`, and the v0.1 corpus) keep working unchanged.
+(composite data), v0.3 (borrow checking), and v0.4 (polymorphism) share the same `zerg` binary;
+earlier examples (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 corpora) keep working
+unchanged.
 
 ### Prerequisites
 
 - Go 1.23 or newer.
 - A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv`; gcc and
-  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.3.
+  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.4.
 - macOS or Linux. Windows is deferred.
 
 ### Build the toolchain
@@ -82,21 +83,24 @@ float `//` and `%`.
 # Hello, Zerg!
 ```
 
-`zerg build --emit-c <file>` prints the generated C to stdout instead of compiling. The v0.3
+`zerg build --emit-c <file>` prints the generated C to stdout instead of compiling. The v0.4
 runtime header (`zerg_str`, `zerg_print_*`, `zerg_str_concat`, plus per-shape `zerg_list_*` /
 `zerg_tuple_*` / `zerg_struct_*` / `zerg_enum_*` helpers — including `<T>_clone` for the
-opt-in deep-copy builtin and the in-place list `<T>_push` lowering — and `zerg_match_panic`) is
-emitted inline at the top of the output — no external runtime to link against.
+opt-in deep-copy builtin, the in-place list `<T>_push` lowering, the auto-derived `<T>_eq`
+structural equality helpers, the per-spec `zerg_dyn_<Spec>` fat-pointer / `zerg_vtable_<Spec>`
+struct, and `zerg_match_panic` / `zerg_not_implemented`) is emitted inline at the top of the
+output — no external runtime to link against.
 
 ### REPL
 
-The v0.3 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
-body, a `for` block, a `struct`/`enum` declaration, or a `match` one line at a time. The borrow
-checker runs against each accepted program — diagnostics fire at the prompt, not the next prompt.
+The v0.4 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
+body, a `for` block, a `struct`/`enum`/`spec`/`impl` declaration, or a `match` one line at a time.
+The borrow checker runs against each accepted program — diagnostics fire at the prompt, not the
+next prompt.
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.3 — accepts the v0.3 surface (procedural core, composite data, borrow checking)
+# Zerg REPL v0.4 — accepts the v0.4 surface (procedural core, composite data, borrow checking, polymorphism)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -118,8 +122,8 @@ version they need. The CLI inspects that comment before lexing the body and refu
 beyond the current toolchain version with a clean message:
 
 ```sh
-./src/bootstrap/bin/zerg run examples/10_specs.zg
-# zerg: examples/10_specs.zg requires v0.4 (current is v0.3)
+./src/bootstrap/bin/zerg run examples/08_imports.zg
+# zerg: examples/08_imports.zg requires v0.5 (current is v0.4)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -128,8 +132,10 @@ broader v0.2 surface; they pass the version gate but still exercise features suc
 literals and `pub` that PLAN defers past v0.2 — those bodies will still error out at lex/parse/type
 time. v0.2-tagged programs that today rely on `let ys := xs` re-reading the source list may also
 hit the v0.3 borrow checker (composite bind is now a move); rewrite as `let ys := clone(xs)` to keep
-both bindings live. The authoritative parity corpora live at `src/bootstrap/test/v0_2/` and
-`src/bootstrap/test/v0_3/`.
+both bindings live. `examples/10_specs.zg` advertises v0.4 but exercises generics
+(`fn display[T: Printable](item: T)`) which are deferred to v0.6 — so it passes the gate but errors
+out at parse time today. The authoritative parity corpora live at `src/bootstrap/test/v0_2/`,
+`src/bootstrap/test/v0_3/`, and `src/bootstrap/test/v0_4/`.
 
 ### Supported syntax at v0.1
 
@@ -313,6 +319,118 @@ print xs[0]
 # borrow error at 3:7: use of moved value: "xs" (moved at 2:11)
 ```
 
+### Supported syntax at v0.4
+
+v0.4 layers polymorphism on top of v0.3; everything in v0.0 / v0.1 / v0.2 / v0.3 still parses and
+runs. What's new:
+
+- **Inherent `impl` blocks.** `impl Counter { fn double() -> int { return this.count * 2 } }`
+  attaches methods to a struct or enum without claiming spec conformance. Multiple inherent blocks
+  for the same type aggregate. Inside the body, `this` is an implicit `BorrowedShared` local of
+  the receiver type; reading `this.field` is fine, reassigning `this` or moving it out is not.
+- **Specs.** `spec Printable { fn to_string() -> str }` declares a contract. Empty bodies are
+  allowed (marker spec). Method signatures (no body) are required to be implemented; `fn` items
+  with a body in the spec are **default impls** any conforming type inherits unless it overrides.
+- **Spec `impl` blocks.** `impl Counter for Printable { fn to_string() -> str { … } }`. The
+  receiver type must be a struct or enum — primitives reject (`<int>` cannot impl spec at v0.4).
+  An empty body inherits the spec's defaults; methods with no override and no default raise
+  `NotImplemented` at runtime when called. Two `impl T for Spec` blocks for the same `(T, Spec)`
+  pair reject at typeck.
+- **Method-call syntax.** `c.method()` and `c.method(args)`. Field access (`c.x`) keeps its
+  existing meaning when no `(` follows. v0.3's `push(xs, v)` and `clone(xs)` builtins gain method
+  forms (`xs.push(v)` / `xs.clone()`); both syntaxes accepted. Inherent-vs-spec and
+  inherent-vs-inherent collisions on the same type reject with a precise diagnostic; cross-spec
+  same-named methods are admitted and disambiguated by the receiver type at the call site.
+- **Specs as types — runtime polymorphism.** `let x: Printable = c` constructs a fat pointer
+  `(data, vt)` and `x.method(args)` dispatches through the vtable. `list[Printable]` holds mixed
+  concrete types as long as each impls Printable. Coercion **heap-boxes** the source value
+  (`malloc(sizeof(T))` + move), so the wrapper's data pointer never aliases stack storage —
+  meaning **a fn may return a spec-typed value** (the original PLAN had this as a deferred
+  feature; the heap-box decision admits it at v0.4). Trade-off: every spec-coercion site is one
+  allocation. `==` on two spec-typed bindings is rejected (`Comparable` spec needs generics —
+  defers to v0.6).
+- **Enum payloads.** `enum Token { Eof, Ident(str), Number(int, int) }`. Construction:
+  `Token.Ident("foo")`, `Token.Number(10, 16)`, `Token.Eof` (no parens for empty payload).
+  Pattern matching binds payload positions: `Token.Ident(name) => print name`. C lowering is
+  `tag + union`. Print format: `Token.Ident(foo)` / `Token.Number(10, 16)` for non-empty
+  payloads; `Token.Eof` for empty. Recursive enums (`enum Tree { Node(Tree, Tree) }`) reject at
+  typeck — heap-boxed recursive payloads defer to v0.6+.
+- **Composite ==.** `==` and `!=` on lists, tuples, structs, and enums (with or without payloads)
+  auto-derive structural equality via per-shape `_eq` helpers. List equality is length-then-elem;
+  struct equality is per-field in declaration order; enum equality is same-tag-then-payload.
+  Recursion bottoms out at the v0.1 primitive comparisons.
+- **Errors deferred to v0.6.** v0.4 ships polymorphism but **not** the `Option[T]` / `Result[T,
+E]` / `?`-propagation half of the "polymorphism and errors" roadmap line — those need generics,
+  which arrive at v0.6. At v0.4 the user hand-rolls error types via enum payloads + `match`. This
+  is intentional; the trade-off is the price of cutting v0.4 free of generics.
+- **Out of scope at v0.4, deferred.** Generic fns / specs / multi-bound (`fn f[T: Printable]`),
+  `Option` / `Result` / `?`, lambdas / closures, method visibility (`pub fn`), `mut` methods that
+  reassign `this` (needs `&mut`), composite ordering (`<`, `>`), spec inheritance (permanent —
+  flat by design), and borrowed (non-boxing) spec coercions (`&dyn Spec`).
+
+A small v0.4 sample — spec, impl, method call, vtable dispatch through `list[Printable]`:
+
+```zerg
+spec Printable {
+    fn to_string() -> str
+}
+
+struct Counter { count: int }
+struct Tag { name: str }
+
+impl Counter for Printable {
+    fn to_string() -> str {
+        return "Counter " + str(this.count)
+    }
+}
+
+impl Tag for Printable {
+    fn to_string() -> str {
+        return "Tag " + this.name
+    }
+}
+
+let items: list[Printable] = [Counter { count: 7 }, Tag { name: "alpha" }]
+for it in items {
+    print it.to_string()
+}
+# Counter 7
+# Tag alpha
+```
+
+Composite `==`:
+
+```zerg
+struct Point { x: int, y: int }
+print Point { x: 1, y: 2 } == Point { x: 1, y: 2 }
+print [1, 2, 3] == [1, 2, 3]
+print (1, "a") == (1, "a")
+# true
+# true
+# true
+```
+
+Enum payloads + match-bind:
+
+```zerg
+enum Token { Eof, Ident(str), Number(int) }
+
+fn show(tok: Token) {
+    match tok {
+        Token.Eof => print "<eof>"
+        Token.Ident(name) => print name
+        Token.Number(n) => print n
+    }
+}
+
+show(Token.Ident("hello"))
+show(Token.Number(42))
+show(Token.Eof)
+# hello
+# 42
+# <eof>
+```
+
 ### Print format and numeric semantics
 
 Both `zerg run` and `zerg build` implement the same table so stdout is byte-identical:
@@ -328,7 +446,7 @@ Both `zerg run` and `zerg build` implement the same table so stdout is byte-iden
 | list[T] | `[ e1, e2, e3 ]` (each element printed by its own format); empty list prints `[]`       |
 | tuple   | `( e1, e2 )` — comma+space between elements                                             |
 | struct  | `Name { field1: v1, field2: v2 }` — declaration order, `:` between field name and value |
-| enum    | `Name.VariantName`                                                                      |
+| enum    | `Name.VariantName` (bare) / `Name.VariantName(p1, p2)` (payload, comma+space between)   |
 
 `print` appends a single trailing `\n`. Numeric semantics are pinned:
 
@@ -353,7 +471,12 @@ nested). Program 22 (`22_no_match_panics.zg`) is the panic case: both halves exi
 covering the move-on-bind rule, `clone()` and `push()` builtins, list-index assignment, fn-call
 implicit shared borrow, branch-join agreement, and the loop-body move rejection — split into
 "success" programs paired with `.txt` golden output and "reject" programs paired with `.err` files
-that pin the borrow-check diagnostic. Run the full corpus with:
+that pin the borrow-check diagnostic. v0.4 adds a 25-program corpus at `src/bootstrap/test/v0_4/`
+covering inherent and spec impls, method-call syntax, `this`, default impls, vtable dispatch
+(spec-as-type, `list[Printable]`, struct field of spec type), enum payloads (construction, match
+bind, nested), structural `==` on lists / tuples / structs / enums, `xs.push(v)` / `xs.clone()`
+method form, the runtime `NotImplemented` panic (`.notimpl` golden), and the recursive-enum typeck
+reject (`rejects/`). Run the full corpus with:
 
 ```sh
 make test

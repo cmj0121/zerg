@@ -160,12 +160,12 @@ func TestHelpCommand(t *testing.T) {
 	}
 }
 
-// TestBannerText pins the v0.4 banner content so a future copy edit can't
+// TestBannerText pins the v0.5 banner content so a future copy edit can't
 // silently regress the user-facing string.
 func TestBannerText(t *testing.T) {
 	got := runSession(t, "", true)
-	if !strings.Contains(got, "v0.4") {
-		t.Fatalf("banner should mention v0.4; got %q", got)
+	if !strings.Contains(got, "v0.5") {
+		t.Fatalf("banner should mention v0.5; got %q", got)
 	}
 	if !strings.Contains(got, ":help") {
 		t.Fatalf("banner should mention :help; got %q", got)
@@ -188,6 +188,23 @@ func TestContinuationPromptPersistsForNestedBraces(t *testing.T) {
 	body := stripPrompts(stripBanner(got))
 	if !strings.Contains(body, "1\n") || !strings.Contains(body, "0\n") {
 		t.Fatalf("expected pick to print 1 and 0; got %q", body)
+	}
+}
+
+// TestImportRejectedAtRepl pins the PLAN-mandated v0.5 diagnostic: typing
+// `import "x"` at the REPL produces the dedicated message rather than a
+// parse error or a downstream "undefined name" failure. The session
+// continues — the user can keep typing.
+func TestImportRejectedAtRepl(t *testing.T) {
+	input := "import \"foo\"\n" +
+		"print 7\n"
+	got := runSession(t, input, true)
+	body := stripPrompts(stripBanner(got))
+	if !strings.Contains(body, "import not supported at REPL") {
+		t.Fatalf("expected 'import not supported at REPL' diagnostic; got %q", body)
+	}
+	if !strings.Contains(body, "7\n") {
+		t.Fatalf("expected session to keep running after rejected import; got %q", body)
 	}
 }
 

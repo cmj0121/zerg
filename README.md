@@ -30,7 +30,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.2** — composite data.
 - [x] **v0.3** — borrow checking.
 - [x] **v0.4** — polymorphism and errors.
-- [ ] **v0.5** — modules.
+- [x] **v0.5** — modules.
 - [ ] **v0.6** — generics and null-safety.
 - [ ] **v0.7** — concurrency runtime.
 - [ ] **v0.8** — standard library.
@@ -45,15 +45,15 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
-(composite data), v0.3 (borrow checking), and v0.4 (polymorphism) share the same `zerg` binary;
-earlier examples (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 corpora) keep working
-unchanged.
+(composite data), v0.3 (borrow checking), v0.4 (polymorphism), and v0.5 (modules) share the same
+`zerg` binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4
+corpora) keep working unchanged.
 
 ### Prerequisites
 
 - Go 1.23 or newer.
 - A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv`; gcc and
-  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.4.
+  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.5.
 - macOS or Linux. Windows is deferred.
 
 ### Build the toolchain
@@ -89,18 +89,21 @@ runtime header (`zerg_str`, `zerg_print_*`, `zerg_str_concat`, plus per-shape `z
 opt-in deep-copy builtin, the in-place list `<T>_push` lowering, the auto-derived `<T>_eq`
 structural equality helpers, the per-spec `zerg_dyn_<Spec>` fat-pointer / `zerg_vtable_<Spec>`
 struct, and `zerg_match_panic` / `zerg_not_implemented`) is emitted inline at the top of the
-output — no external runtime to link against.
+output — no external runtime to link against. v0.5 keeps the single-TU emit and prefixes every
+type/fn/method symbol with a per-module mangle so multi-file programs link cleanly without a
+separate object-file step.
 
 ### REPL
 
-The v0.4 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
+The v0.5 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
 body, a `for` block, a `struct`/`enum`/`spec`/`impl` declaration, or a `match` one line at a time.
 The borrow checker runs against each accepted program — diagnostics fire at the prompt, not the
-next prompt.
+next prompt. `import` is intentionally not admitted at the REPL: typing `import "x"` produces the
+dedicated diagnostic `import not supported at REPL` and the session continues.
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.4 — accepts the v0.4 surface (procedural core, composite data, borrow checking, polymorphism)
+# Zerg REPL v0.5 — accepts the v0.5 surface (procedural core, composite data, borrow checking, polymorphism, modules)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -122,8 +125,8 @@ version they need. The CLI inspects that comment before lexing the body and refu
 beyond the current toolchain version with a clean message:
 
 ```sh
-./src/bootstrap/bin/zerg run examples/08_imports.zg
-# zerg: examples/08_imports.zg requires v0.5 (current is v0.4)
+./src/bootstrap/bin/zerg run examples/11_null_safety.zg
+# zerg: examples/11_null_safety.zg requires v0.6 (current is v0.5)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -134,8 +137,12 @@ time. v0.2-tagged programs that today rely on `let ys := xs` re-reading the sour
 hit the v0.3 borrow checker (composite bind is now a move); rewrite as `let ys := clone(xs)` to keep
 both bindings live. `examples/10_specs.zg` advertises v0.4 but exercises generics
 (`fn display[T: Printable](item: T)`) which are deferred to v0.6 — so it passes the gate but errors
-out at parse time today. The authoritative parity corpora live at `src/bootstrap/test/v0_2/`,
-`src/bootstrap/test/v0_3/`, and `src/bootstrap/test/v0_4/`.
+out at parse time today. `examples/08_imports.zg` advertises v0.5 and now passes the version gate,
+but its body uses surface forms (bare `result := …` without `let`, plus a missing sibling
+`math.zg` and an external git import) that are not supported at v0.5, so it still errors at
+parse / module-load time. The v0.5 surface is exercised end-to-end by the `test/v0_5/` corpus. The authoritative
+parity corpora live at `src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`,
+`src/bootstrap/test/v0_4/`, and `src/bootstrap/test/v0_5/`.
 
 ### Supported syntax at v0.1
 
@@ -431,6 +438,96 @@ show(Token.Eof)
 # <eof>
 ```
 
+### Supported syntax at v0.5
+
+v0.5 layers modules on top of v0.4; everything in v0.0 / v0.1 / v0.2 / v0.3 / v0.4 still parses
+and runs. Single-file programs without `import` and without `pub` are unchanged. What's new:
+
+- **`pub` visibility modifier.** Top-level decls are private to their module unless prefixed with
+  `pub`. Applies to `fn`, `struct`, `enum`, `spec`, and methods inside an `impl` block. Field-level
+  visibility on struct/enum bodies is decl-level only at v0.5 — there is no `pub` on individual
+  fields. Cross-module access to a non-`pub` decl rejects at typeck.
+- **`import "name"` statement.** Appears at the top of a file (after any shebang and the
+  `requires:` line, before any decl). Resolves `"name"` to a sibling `.zg` file in the same
+  directory as the importing file (`./name.zg`). The imported module's `pub` decls become
+  accessible via `name.member`.
+- **`import "name" as alias`.** Bind the imported module to a different local name.
+- **`import (...)` grouped form.** Multiple imports in one block; desugared to one `ImportDecl`
+  per entry with the same resolution rules.
+- **Cross-module member access via dot.** `name.foo()`, `name.MyStruct { ... }`,
+  `name.Color.Red`, `name.Token.Ident("x")`, and `name.MySpec` as a type all work.
+- **Cycle detection.** A→B→A and longer cycles reject at module-load time with a path-listing
+  diagnostic.
+- **Cross-module impls and the orphan rule.** `impl LocalType for OtherModule.SomeSpec` and
+  `impl OtherModule.SomeType for LocalSpec` are admitted; `impl A.SomeType for B.SomeSpec` (both
+  foreign) rejects at typeck with the cross-module orphan diagnostic.
+- **Reserved-name rejection.** `import "<keyword>"` (no alias) and `import ... as <keyword>`
+  reject at parse time against the same keyword set the lexer recognises, so a future keyword
+  automatically tightens the rule.
+- **`requires:` per imported module.** Every imported module's `# requires:` line is checked
+  against the toolchain version exactly as the entry file's is. A v0.5 entry that imports a
+  v0.6 module rejects at module-load time with the standard `requires` diagnostic, naming the
+  offending file.
+- **Module-mangled codegen.** Build emits a single translation unit with every type/fn/method
+  symbol prefixed by a per-module mangle (`<basename>_h<hex8>` derived from the canonical
+  resolution path). Hyphens, leading digits, and non-ASCII basenames are handled deterministically
+  via FNV-1a hashing; the `test/v0_5/15_mangler_lock` corpus entry locks this behaviour in.
+- **REPL: imports rejected.** Typing `import "x"` at the REPL emits the dedicated diagnostic
+  `import not supported at REPL` and the session keeps running. Multi-module REPL is deferred
+  past v0.5.
+- **Out of scope at v0.5, deferred.** External git imports (`"github.com/user/repo"`), submodule
+  paths (`import "a/b/c"`), re-exports (`pub use` / `pub import`), `pub` on individual struct
+  or enum fields, conditional / version-gated imports, `pub(crate)`-style restricted visibility,
+  and stdlib content. Built-ins (`print`, `len`, `clone`, `push`) stay built-in; a real stdlib
+  lands at v0.8.
+
+A small v0.5 sample — sibling `greet.zg` providing a `pub` fn, consumed via `import`:
+
+```zerg
+# greet.zg
+pub fn hello(name: str) -> str {
+    return "hello, " + name
+}
+```
+
+```zerg
+# main.zg
+import "greet"
+
+print greet.hello("world")
+# hello, world
+```
+
+The grouped form plus an alias:
+
+```zerg
+import (
+    "greet"
+    "math" as m
+)
+
+print greet.hello("zerg")
+print m.square(7)
+```
+
+Cross-module impl via the orphan rule (`LocalType for OtherModule.Spec` is admitted):
+
+```zerg
+import "shapes"
+
+struct Counter { count: int }
+
+impl Counter for shapes.Printable {
+    fn to_string() -> str {
+        return "Counter " + str(this.count)
+    }
+}
+
+let c := Counter { count: 7 }
+print c.to_string()
+# Counter 7
+```
+
 ### Print format and numeric semantics
 
 Both `zerg run` and `zerg build` implement the same table so stdout is byte-identical:
@@ -476,7 +573,12 @@ covering inherent and spec impls, method-call syntax, `this`, default impls, vta
 (spec-as-type, `list[Printable]`, struct field of spec type), enum payloads (construction, match
 bind, nested), structural `==` on lists / tuples / structs / enums, `xs.push(v)` / `xs.clone()`
 method form, the runtime `NotImplemented` panic (`.notimpl` golden), and the recursive-enum typeck
-reject (`rejects/`). Run the full corpus with:
+reject (`rejects/`). v0.5 adds a multi-file corpus at `src/bootstrap/test/v0_5/` — each entry is a
+subdirectory with a `main.zg` plus sibling files plus an `expected.txt`, covering basic imports,
+`pub` gating across modules, cross-module spec impls, enum bare/payload construction across
+modules, aliased and grouped imports, diamond import graphs, same-named type collisions, the
+mangler-lock case (a sibling whose basename has both a hyphen and a leading digit), and the
+`rejects/` cases for the orphan rule and cycle detection. Run the full corpus with:
 
 ```sh
 make test

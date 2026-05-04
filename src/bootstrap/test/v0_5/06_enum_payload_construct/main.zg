@@ -1,0 +1,4 @@
+import "util"
+
+let t := util.Token.Ident("hi")
+print t

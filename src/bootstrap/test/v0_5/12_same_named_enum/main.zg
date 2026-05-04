@@ -1,0 +1,8 @@
+import "util"
+
+enum Status { Active, Done }
+
+let ms := Status.Active
+print ms
+let us := util.Status.Done
+print us

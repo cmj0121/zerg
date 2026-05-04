@@ -1,0 +1,3 @@
+pub spec Printable {
+    pub fn to_string() -> str
+}

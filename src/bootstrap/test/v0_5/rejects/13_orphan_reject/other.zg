@@ -1,0 +1,3 @@
+pub spec S {
+    fn ping() -> int
+}

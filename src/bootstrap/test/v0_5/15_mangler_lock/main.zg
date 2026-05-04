@@ -1,0 +1,4 @@
+import "tools_2d" as tools
+
+print tools.area(3, 4)
+print tools.perimeter(3, 4)

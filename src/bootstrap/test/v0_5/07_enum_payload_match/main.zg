@@ -1,0 +1,12 @@
+import "util"
+
+let r := util.parse("good")
+match r {
+    Result.Ok(v) => print v
+    Result.Err(e) => print e
+}
+let s := util.parse("nope")
+match s {
+    Result.Ok(v) => print v
+    Result.Err(e) => print e
+}

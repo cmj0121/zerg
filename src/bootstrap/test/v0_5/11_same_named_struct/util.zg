@@ -1,0 +1,7 @@
+pub struct Counter { tag: int }
+
+impl Counter {
+    pub fn show() -> str {
+        return "util"
+    }
+}

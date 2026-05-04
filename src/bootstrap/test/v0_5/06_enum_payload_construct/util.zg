@@ -1,0 +1,5 @@
+pub enum Token {
+    Eof,
+    Ident(str),
+    Number(int),
+}

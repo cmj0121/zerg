@@ -1,0 +1,7 @@
+pub struct Counter { count: int }
+
+impl Counter {
+    pub fn doubled() -> int {
+        return this.count * 2
+    }
+}

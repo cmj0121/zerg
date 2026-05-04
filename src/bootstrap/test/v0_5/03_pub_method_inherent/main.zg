@@ -1,0 +1,4 @@
+import "util"
+
+let c := util.Counter { count: 7 }
+print c.doubled()

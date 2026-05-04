@@ -1,0 +1,5 @@
+import "d"
+
+pub fn from_b() -> int {
+    return d.answer() + 1
+}

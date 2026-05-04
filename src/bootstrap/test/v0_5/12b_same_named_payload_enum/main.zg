@@ -1,0 +1,8 @@
+import "util"
+
+enum Token { Eof, Ident(str) }
+
+let mt := Token.Ident("x")
+print mt
+let ut := util.Token.Ident("y")
+print ut

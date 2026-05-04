@@ -178,8 +178,8 @@ func (g *cgen) emitChanOneHelpers(cs *chanShape) {
 	g.b.WriteString("    pthread_mutex_lock(&ch->mu);\n")
 	g.b.WriteString("    if (ch->closed) {\n")
 	g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("        fprintf(stderr, \"send on closed channel\\n\");\n")
-	g.b.WriteString("        abort();\n")
+	g.b.WriteString("        fprintf(stderr, \"zerg: runtime: send on closed channel\\n\");\n")
+	g.b.WriteString("        exit(1);\n")
 	g.b.WriteString("    }\n")
 	g.b.WriteString("    int64_t slots = ch->cap > 0 ? ch->cap : 1;\n")
 	g.b.WriteString("    while (ch->count == slots && !ch->closed) {\n")
@@ -187,8 +187,8 @@ func (g *cgen) emitChanOneHelpers(cs *chanShape) {
 	g.b.WriteString("    }\n")
 	g.b.WriteString("    if (ch->closed) {\n")
 	g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("        fprintf(stderr, \"send on closed channel\\n\");\n")
-	g.b.WriteString("        abort();\n")
+	g.b.WriteString("        fprintf(stderr, \"zerg: runtime: send on closed channel\\n\");\n")
+	g.b.WriteString("        exit(1);\n")
 	g.b.WriteString("    }\n")
 	g.b.WriteString("    ch->buf[ch->tail] = v;\n")
 	g.b.WriteString("    ch->tail = (ch->tail + 1) % slots;\n")
@@ -230,8 +230,8 @@ func (g *cgen) emitChanOneHelpers(cs *chanShape) {
 	g.b.WriteString("    pthread_mutex_lock(&ch->mu);\n")
 	g.b.WriteString("    if (ch->closed) {\n")
 	g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("        fprintf(stderr, \"close of closed channel\\n\");\n")
-	g.b.WriteString("        abort();\n")
+	g.b.WriteString("        fprintf(stderr, \"zerg: runtime: close on already-closed channel\\n\");\n")
+	g.b.WriteString("        exit(1);\n")
 	g.b.WriteString("    }\n")
 	g.b.WriteString("    ch->closed = 1;\n")
 	g.b.WriteString("    pthread_cond_broadcast(&ch->cv_send);\n")
@@ -1312,6 +1312,7 @@ func (g *cgen) emitAnonBody(rec *anonFnEmit) error {
 		g.currentHasDefers = prevHasDef
 		g.currentFnEndLabel = prevEndLabel
 		g.b.WriteString("    free(__env);\n")
+		g.b.WriteString("    zerg_main_wg_done();\n")
 		g.b.WriteString("    return 0;\n")
 		g.b.WriteString("}\n\n")
 	case anonFnDefer:
@@ -1398,6 +1399,7 @@ func (g *cgen) emitAnonBody(rec *anonFnEmit) error {
 		}
 		g.b.WriteString(");\n")
 		g.b.WriteString("    free(__env);\n")
+		g.b.WriteString("    zerg_main_wg_done();\n")
 		g.b.WriteString("    return 0;\n")
 		g.b.WriteString("}\n\n")
 	}
@@ -1839,9 +1841,20 @@ func (g *cgen) emitSelect(s *syntax.SelectStmt) error {
 			g.writeIndent()
 			fmt.Fprintf(&g.b, "%s %s = %s_recv(%s);\n", optionMng, optTmp, cm, chTmps[i])
 			// recv-bind drops the Some/None tag for the user — the bound name
-			// receives the inner T directly. A None case (closed chan) maps
-			// to a default-constructed T per the v0.7 corpus design (the test
-			// programs never tickle close-mid-select).
+			// receives the inner T directly. The None case (closed-and-empty
+			// chan) is dereferenced from zero-init union memory; surface a
+			// runtime error matching the interpreter's recv-bind-on-closed
+			// path so both halves agree.
+			g.writeIndent()
+			fmt.Fprintf(&g.b, "if (%s.tag != 0) {\n", optTmp)
+			g.indent++
+			g.writeIndent()
+			g.b.WriteString("fprintf(stderr, \"zerg: runtime: select recv-bind on closed channel\\n\");\n")
+			g.writeIndent()
+			g.b.WriteString("exit(1);\n")
+			g.indent--
+			g.writeIndent()
+			g.b.WriteString("}\n")
 			g.writeIndent()
 			fmt.Fprintf(&g.b, "%s %s = %s.payload.p0.a0;\n",
 				g.cTypeName(t.Element), mangle(arm.BindName), optTmp)

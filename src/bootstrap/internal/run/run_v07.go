@@ -692,6 +692,7 @@ func (in *interp) invokeSpecDefaultDirect(sm *syntax.SpecMethod, this Value, arg
 	if owner := in.specMethodOwner[sm]; owner != nil {
 		in.cur = owner
 	}
+	in.pushDeferFrame(sm.HasDefers)
 	_ = in.declare("this", this)
 	for i, p := range sm.Params {
 		if i >= len(args) {
@@ -705,6 +706,7 @@ func (in *interp) invokeSpecDefaultDirect(sm *syntax.SpecMethod, this Value, arg
 			break
 		}
 	}
+	in.drainDefers(sm.HasDefers)
 }
 
 // evalWaitGroupCtor implements the `wait_group()` built-in — returns a
@@ -760,17 +762,30 @@ func (in *interp) dispatchWaitGroupArgs(method string, rv Value, args []Value) (
 	return Value{}, fmt.Errorf("internal: WaitGroup has no method %q", method)
 }
 
-// execSelect implements `select { arm; ... }` via reflect.Select. Each arm
-// becomes one SelectCase; the chosen index identifies the arm body.
+// execSelect implements `select { arm; ... }`. PLAN.md pins v0.7 select
+// tie-break to declaration order. We first pre-scan every non-default arm
+// in declaration order with a non-blocking probe; the first ready arm
+// wins. If nothing is ready we either dispatch the default arm (if any)
+// or fall through to reflect.Select to BLOCK until exactly one arm fires
+// — at that instant only one is ready, so no tie-break is needed.
 func (in *interp) execSelect(s *syntax.SelectStmt) error {
-	cases := make([]reflect.SelectCase, 0, len(s.Arms))
-	armForCase := make([]int, 0, len(s.Arms))
+	// Pre-evaluate each arm's channel + (for send) value so the pre-scan
+	// and the blocking fallback agree on the operands. Side effects in
+	// arm.Chan / arm.Value run exactly once.
+	type prepared struct {
+		armIdx  int
+		op      syntax.SelectOpKind
+		ch      reflect.Value // zero for default arms
+		send    reflect.Value // populated for send arms
+	}
+	prepd := make([]prepared, 0, len(s.Arms))
+	defaultIdx := -1
 	for i := range s.Arms {
 		arm := &s.Arms[i]
 		switch arm.Op {
 		case syntax.SelectDefault:
-			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
-			armForCase = append(armForCase, i)
+			defaultIdx = i
+			prepd = append(prepd, prepared{armIdx: i, op: arm.Op})
 		case syntax.SelectRecvBind, syntax.SelectRecvDiscard:
 			chV, err := in.evalExpr(arm.Chan)
 			if err != nil {
@@ -779,11 +794,7 @@ func (in *interp) execSelect(s *syntax.SelectStmt) error {
 			if chV.Chan == nil {
 				return fmt.Errorf("internal: select recv on non-channel at %s", arm.Pos)
 			}
-			cases = append(cases, reflect.SelectCase{
-				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(chV.Chan.ch),
-			})
-			armForCase = append(armForCase, i)
+			prepd = append(prepd, prepared{armIdx: i, op: arm.Op, ch: reflect.ValueOf(chV.Chan.ch)})
 		case syntax.SelectSend:
 			chV, err := in.evalExpr(arm.Chan)
 			if err != nil {
@@ -799,20 +810,76 @@ func (in *interp) execSelect(s *syntax.SelectStmt) error {
 			if chV.Chan.elem != nil {
 				v = in.coerceToType(v, chV.Chan.elem)
 			}
-			cases = append(cases, reflect.SelectCase{
-				Dir:  reflect.SelectSend,
-				Chan: reflect.ValueOf(chV.Chan.ch),
-				Send: reflect.ValueOf(v),
+			prepd = append(prepd, prepared{
+				armIdx: i,
+				op:     arm.Op,
+				ch:     reflect.ValueOf(chV.Chan.ch),
+				send:   reflect.ValueOf(v),
 			})
-			armForCase = append(armForCase, i)
 		}
 	}
-	if len(cases) == 0 {
+	if len(prepd) == 0 {
 		return fmt.Errorf("internal: empty select at %s", s.Pos)
 	}
-	chosen, recv, ok := reflect.Select(cases)
-	armIdx := armForCase[chosen]
-	arm := &s.Arms[armIdx]
+
+	// Phase 1: non-blocking pre-scan in declaration order. Per arm we
+	// build a 2-case reflect.Select with the arm op + a default; if the
+	// op fires we have our deterministic tie-break winner.
+	var (
+		chosenArm     = -1
+		chosenRecv    reflect.Value
+		chosenRecvOK  bool
+		chosenIsRecv  bool
+	)
+	for _, p := range prepd {
+		if p.op == syntax.SelectDefault {
+			continue
+		}
+		probe := []reflect.SelectCase{{Dir: reflect.SelectDefault}}
+		switch p.op {
+		case syntax.SelectRecvBind, syntax.SelectRecvDiscard:
+			probe = append(probe, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: p.ch})
+		case syntax.SelectSend:
+			probe = append(probe, reflect.SelectCase{Dir: reflect.SelectSend, Chan: p.ch, Send: p.send})
+		}
+		idx, recv, ok := reflect.Select(probe)
+		if idx == 1 {
+			chosenArm = p.armIdx
+			chosenRecv = recv
+			chosenRecvOK = ok
+			chosenIsRecv = p.op == syntax.SelectRecvBind || p.op == syntax.SelectRecvDiscard
+			break
+		}
+	}
+
+	// Phase 2: nothing was ready. Either dispatch the default arm or
+	// block on reflect.Select until exactly one arm fires.
+	if chosenArm < 0 {
+		if defaultIdx >= 0 {
+			chosenArm = defaultIdx
+		} else {
+			cases := make([]reflect.SelectCase, 0, len(prepd))
+			armForCase := make([]int, 0, len(prepd))
+			for _, p := range prepd {
+				switch p.op {
+				case syntax.SelectRecvBind, syntax.SelectRecvDiscard:
+					cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: p.ch})
+					armForCase = append(armForCase, p.armIdx)
+				case syntax.SelectSend:
+					cases = append(cases, reflect.SelectCase{Dir: reflect.SelectSend, Chan: p.ch, Send: p.send})
+					armForCase = append(armForCase, p.armIdx)
+				}
+			}
+			idx, recv, ok := reflect.Select(cases)
+			chosenArm = armForCase[idx]
+			chosenRecv = recv
+			chosenRecvOK = ok
+			arm := &s.Arms[chosenArm]
+			chosenIsRecv = arm.Op == syntax.SelectRecvBind || arm.Op == syntax.SelectRecvDiscard
+		}
+	}
+
+	arm := &s.Arms[chosenArm]
 	in.pushFrame()
 	defer in.popFrame()
 	if arm.Op == syntax.SelectRecvBind {
@@ -824,10 +891,13 @@ func (in *interp) execSelect(s *syntax.SelectStmt) error {
 		// so the bind-on-closed path is rare; we surface a runtime error
 		// if the user constructs a select where the only ready signal is
 		// a closed channel and they bind a value off it.
-		if !ok {
+		if !chosenIsRecv {
+			return fmt.Errorf("internal: select recv-bind dispatched without recv at %s", arm.Pos)
+		}
+		if !chosenRecvOK {
 			return fmt.Errorf("runtime error at %s: select recv-bind on closed channel", arm.Pos)
 		}
-		v := recv.Interface().(Value)
+		v := chosenRecv.Interface().(Value)
 		if err := in.declare(arm.BindName, v); err != nil {
 			return err
 		}

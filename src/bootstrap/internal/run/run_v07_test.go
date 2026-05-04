@@ -271,6 +271,55 @@ run()
 	expectOK(t, src, "sent\nOption.Some(5)\n")
 }
 
+// invokeSpecDefaultDirect must push/drain a defer frame so a spec-default
+// body's `defer` runs at body exit, matching invokeFnDirect /
+// invokeFnValueDirect / invokeMethodFnDirect. Before Fix 5 this path
+// silently dropped the defer.
+func TestRunV07SpecDefaultMethodDeferRuns(t *testing.T) {
+	src := `spec Greeter {
+fn greet() {
+print "before"
+defer { print "deferred" }
+print "after"
+}
+}
+struct G { id: int }
+impl G for Greeter {}
+let g := G { id: 1 }
+g.greet()
+`
+	expectOK(t, src, "before\nafter\ndeferred\n")
+}
+
+// PLAN.md pins v0.7 select tie-break to declaration order (vs. Go's random
+// pick). With two ready recv arms, the first-declared one must fire every
+// time. We run the select 100 times against fresh channels per trial: a
+// reflect.Select-uniform-random regression would fail with overwhelming
+// probability (probability all 100 trials still land on arm `a` is 2^-100).
+func TestRunV07SelectTieBreakIsDeclarationOrder(t *testing.T) {
+	src := `fn trial() {
+  let a := chan[int](1)
+  let b := chan[int](1)
+  a <- 1
+  b <- 2
+  select {
+    v := <- a -> { print v }
+    v := <- b -> { print v }
+  }
+}
+fn run() {
+  mut i := 0
+  for i < 100 {
+    trial()
+    i = i + 1
+  }
+}
+run()
+`
+	want := strings.Repeat("1\n", 100)
+	expectOK(t, src, want)
+}
+
 // ---------------------------------------------------------------------------
 // Send-on-closed surfaces as a runtime error rather than crashing the host.
 // ---------------------------------------------------------------------------

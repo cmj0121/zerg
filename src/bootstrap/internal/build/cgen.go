@@ -369,6 +369,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 			}
 		}
 	}
+	if needsV07 {
+		// Drain detached spawn threads before main returns so a task doing
+		// post-channel-op work isn't killed mid-flight. The user's explicit
+		// wait_group is a separate object; this synthetic one covers programs
+		// that don't construct one.
+		g.b.WriteString("    zerg_main_wg_wait();\n")
+	}
 	g.b.WriteString("    return 0;\n")
 	g.b.WriteString("}\n")
 

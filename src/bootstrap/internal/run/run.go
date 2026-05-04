@@ -2687,15 +2687,18 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 	if owner := in.specMethodOwner[sm]; owner != nil {
 		in.cur = owner
 	}
+	in.pushDeferFrame(sm.HasDefers)
 	defer func() {
 		in.stack = savedStack
 		in.cur = savedCur
 	}()
 	if err := in.declare("this", this); err != nil {
+		in.popDeferFrame(sm.HasDefers)
 		return Value{}, err
 	}
 	for i, p := range sm.Params {
 		if err := in.declare(p.Name, args[i]); err != nil {
+			in.popDeferFrame(sm.HasDefers)
 			return Value{}, err
 		}
 	}
@@ -2706,6 +2709,7 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 		}
 		var ret *errReturn
 		if errors.As(err, &ret) {
+			in.drainDefers(sm.HasDefers)
 			retVal := ret.value
 			if sm.Return != nil && sm.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, sm.Return.Resolved)
@@ -2717,8 +2721,10 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 			smRet = sm.Return.Resolved
 		}
 		if pret, perr := catchPropagate(err, smRet); perr != nil {
+			in.drainDefers(sm.HasDefers)
 			return Value{}, perr
 		} else if pret != nil {
+			in.drainDefers(sm.HasDefers)
 			retVal := pret.value
 			if smRet != nil {
 				retVal = in.coerceToType(retVal, smRet)
@@ -2726,10 +2732,13 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 			return retVal, nil
 		}
 		if errors.Is(err, errBreak) || errors.Is(err, errContinue) {
+			in.drainDefers(sm.HasDefers)
 			return Value{}, fmt.Errorf("internal: %v escaped spec default %s", err, sm.Name)
 		}
+		in.drainDefers(sm.HasDefers)
 		return Value{}, err
 	}
+	in.drainDefers(sm.HasDefers)
 	if e.Type() != nil && e.Type() != syntax.TVoid() {
 		return Value{}, fmt.Errorf("spec default %q ended without return at %s", sm.Name, sm.Pos)
 	}

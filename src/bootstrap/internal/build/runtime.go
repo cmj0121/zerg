@@ -269,15 +269,47 @@ static void zerg_wait_group_wait(zerg_wait_group_t *w) {
     pthread_mutex_unlock(&w->mu);
 }
 
+/* ---------------- main-thread drain --------------------------------------
+   Synthetic global wait_group used by main() to drain every detached spawn
+   thread before returning. zerg_spawn bumps the counter under the mutex
+   before pthread_create; each spawn trampoline calls zerg_main_wg_done()
+   on the way out (after defer drain) so post-channel-op work runs to
+   completion. Programs that build their own wait_group still get an
+   independent object — this one is hidden from the user. */
+static pthread_mutex_t zerg_main_wg_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t zerg_main_wg_cv = PTHREAD_COND_INITIALIZER;
+static int64_t zerg_main_wg_n = 0;
+
+static void zerg_main_wg_add(int64_t delta) {
+    pthread_mutex_lock(&zerg_main_wg_mu);
+    zerg_main_wg_n += delta;
+    if (zerg_main_wg_n == 0) pthread_cond_broadcast(&zerg_main_wg_cv);
+    pthread_mutex_unlock(&zerg_main_wg_mu);
+}
+
+static void zerg_main_wg_done(void) {
+    zerg_main_wg_add(-1);
+}
+
+static void zerg_main_wg_wait(void) {
+    pthread_mutex_lock(&zerg_main_wg_mu);
+    while (zerg_main_wg_n != 0) pthread_cond_wait(&zerg_main_wg_cv, &zerg_main_wg_mu);
+    pthread_mutex_unlock(&zerg_main_wg_mu);
+}
+
 /* ---------------- spawn ---------------------------------------------------
    pthread_create wrapper with a capped stack and a detached attribute.
    The thread fn signature is void(void*); the env pointer is the captured
-   environment struct allocated by the spawning fn. */
+   environment struct allocated by the spawning fn. The synthetic main
+   wait_group is bumped here so main() can drain all detached threads
+   before returning; each trampoline calls zerg_main_wg_done() at the end
+   of its body. */
 static void zerg_spawn(void *(*fn)(void *), void *env) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 64 * 1024);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    zerg_main_wg_add(1);
     pthread_t t;
     pthread_create(&t, &attr, fn, env);
     pthread_attr_destroy(&attr);

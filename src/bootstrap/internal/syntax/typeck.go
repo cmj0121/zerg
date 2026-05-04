@@ -525,6 +525,11 @@ type checker struct {
 	// checkFnDecl alongside currentFn so checkDeferStmt can record
 	// HasDefers on the right node.
 	currentFnDecl *FnDecl
+	// currentSpecMethod points at the *SpecMethod whose default-impl body
+	// is currently being walked. Set alongside currentSpec when entering
+	// a spec default body; mirrored by checkDeferStmt so HasDefers can be
+	// recorded on the right node (analogous to currentFnDecl).
+	currentSpecMethod *SpecMethod
 	// waitGroupType is the canonical synthetic WaitGroup struct *Type.
 	// Populated by injectWaitGroupBuiltin at newChecker time.
 	waitGroupType *Type
@@ -1089,8 +1094,10 @@ func (c *checker) checkSpecBodies(prog *Program) error {
 			savedFn := c.currentFn
 			savedSpec := c.currentSpec
 			savedRecv := c.currentReceiver
+			savedSpecMethod := c.currentSpecMethod
 			c.currentFn = &sig
 			c.currentSpec = spec
+			c.currentSpecMethod = m
 			// Placeholder receiver: the spec type itself. Typeck of `this`
 			// inside a default body should treat field access permissively
 			// (deferred to per-type at codegen). Today we represent the
@@ -1106,6 +1113,7 @@ func (c *checker) checkSpecBodies(prog *Program) error {
 					c.currentFn = savedFn
 					c.currentSpec = savedSpec
 					c.currentReceiver = savedRecv
+					c.currentSpecMethod = savedSpecMethod
 					return typeErr(p.Pos, "parameter %q already declared", p.Name)
 				}
 			}
@@ -1121,6 +1129,7 @@ func (c *checker) checkSpecBodies(prog *Program) error {
 			c.currentFn = savedFn
 			c.currentSpec = savedSpec
 			c.currentReceiver = savedRecv
+			c.currentSpecMethod = savedSpecMethod
 			if err != nil {
 				return err
 			}

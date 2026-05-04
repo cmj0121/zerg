@@ -1102,6 +1102,10 @@ type SpecMethod struct {
 	Return     *TypeRef // nil ⇒ no return value
 	Body       *Block   // nil ⇒ signature only
 	Pub        bool
+	// HasDefers (v0.7 Unit 3) is set when the default-impl body contains at
+	// least one defer. Mirrors FnDecl.HasDefers so downstream halves can
+	// gate defer-frame setup without a body walk.
+	HasDefers bool
 }
 
 // SpecDecl represents `spec Name { method_decl* }`. Methods may be

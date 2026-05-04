@@ -267,6 +267,9 @@ func (c *checker) checkDeferStmt(s *DeferStmt) error {
 	if c.currentFnDecl != nil {
 		c.currentFnDecl.HasDefers = true
 	}
+	if c.currentSpecMethod != nil {
+		c.currentSpecMethod.HasDefers = true
+	}
 	return nil
 }
 

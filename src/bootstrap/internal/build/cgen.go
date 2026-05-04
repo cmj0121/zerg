@@ -2961,7 +2961,7 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 	case *syntax.RecvExpr:
 		return g.recvStr(e)
 	case *syntax.AnonFnExpr:
-		return "", fmt.Errorf("codegen: anon-fn value not supported at v0.7 outside spawn/IIFE (at %s)", e.Pos)
+		return g.anonFnValueStr(e)
 	}
 	return "", fmt.Errorf("codegen: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -3199,9 +3199,22 @@ func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 // v0.2-style deep copy; it remains the only call-site of the per-shape
 // `_copy` helper.
 func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
+	// v0.7: anon-fn IIFE — `fn(args) -> R { body }(actual)`. The callee is
+	// the AnonFnExpr itself; emit the env-on-stack + direct call to the
+	// pre-registered top-level body fn. preregisterAnonFns has already
+	// allocated the record in anonFnValue mode.
+	if anon, ok := e.Callee.(*syntax.AnonFnExpr); ok {
+		return g.iifeCallStr(anon, e.Args)
+	}
 	ident, ok := e.Callee.(*syntax.IdentExpr)
 	if !ok {
 		return "", fmt.Errorf("codegen: non-ident callee at %s", e.Pos)
+	}
+	// v0.7: a local binding may carry a TypeFn (an anon-fn captured in a
+	// let). Calling such a binding routes through the fn-value pair:
+	// cast .fn to the per-signature C fn pointer and invoke through .env.
+	if t := ident.Type(); t != nil && t.Kind == syntax.TypeFn && g.lookupCurrentFn(ident.Name) == nil {
+		return g.fnValueCallStr(ident, t, e.Args)
 	}
 	if ident.Name == "len" {
 		if len(e.Args) != 1 {
@@ -3523,6 +3536,10 @@ func (g *cgen) cTypeName(t *syntax.Type) string {
 		// Channel handles are pointers to a per-element chan struct so the
 		// runtime helpers can mutate the shared state.
 		return "zerg_chan_" + g.mangleType(t.Element) + " *"
+	case syntax.TypeFn:
+		// v0.7 fn-values bind through a (fn-ptr, env-ptr) pair — the call
+		// site casts .fn to a per-signature C fn-pointer type.
+		return "zerg_fn_value"
 	}
 	return "void"
 }

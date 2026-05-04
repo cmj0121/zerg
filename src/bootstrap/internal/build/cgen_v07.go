@@ -19,6 +19,7 @@ package build
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
@@ -847,6 +848,14 @@ func (g *cgen) preregisterAnonFns(prog *syntax.Program) {
 		}
 		switch x := e.(type) {
 		case *syntax.AnonFnExpr:
+			// preregisterSpawn already registered an anonFnSpawn record for
+			// the spawn-IIFE shape; skip re-registration in that case so the
+			// id allocated for the spawn record stays stable.
+			if _, already := g.anonByNode[x]; !already {
+				rec := g.preallocAnon(anonFnValue)
+				rec.anon = x
+				g.anonByNode[x] = rec
+			}
 			walkBlock(x.Body, walkS)
 		case *syntax.UnaryExpr:
 			walkE(x.Operand)
@@ -971,6 +980,8 @@ func (g *cgen) preallocAnon(mode anonFnMode) *anonFnEmit {
 		rec.fnName = fmt.Sprintf("zerg_defer_%d", id)
 	case anonFnSpawnCall:
 		rec.fnName = fmt.Sprintf("zerg_spawn_call_%d", id)
+	case anonFnValue:
+		rec.fnName = fmt.Sprintf("zerg_anonfn_v_%d", id)
 	}
 	g.anonFns = append(g.anonFns, rec)
 	return rec
@@ -986,6 +997,9 @@ func (g *cgen) preregisterSpawn(s *syntax.SpawnStmt) {
 			rec := g.preallocAnon(anonFnSpawn)
 			rec.anon = anon
 			g.anonByNode[s] = rec
+			// Mark the AnonFnExpr itself so the IIFE-walker doesn't try to
+			// re-register it as an anonFnValue when it walks into n.Call.
+			g.anonByNode[anon] = rec
 			return
 		}
 		rec := g.preallocAnon(anonFnSpawnCall)
@@ -1179,11 +1193,32 @@ func (g *cgen) emitAnonFnHeaders() error {
 		case anonFnDefer:
 			fmt.Fprintf(&g.b, "static void %s(void *env);\n", rec.fnName)
 		case anonFnValue:
-			// v0.7 emits anon-fn values inline at the IIFE call site only.
+			g.writeAnonValueSig(rec)
+			g.b.WriteString(";\n")
 		}
 	}
 	g.b.WriteString("\n")
 	return nil
+}
+
+// writeAnonValueSig renders the C signature of an anonFnValue body fn
+// (no trailing punctuation): `static <RetT> <fnName>(void *__env, <params>)`.
+// Captures travel through the void* env so all signatures share an ABI shape
+// — the bind site casts the void* to the right env-struct pointer inside
+// the body.
+func (g *cgen) writeAnonValueSig(rec *anonFnEmit) {
+	ret := "void"
+	if rec.anon.Return != nil && rec.anon.Return.Resolved != nil && rec.anon.Return.Resolved != syntax.TVoid() {
+		ret = g.cTypeName(rec.anon.Return.Resolved)
+	}
+	fmt.Fprintf(&g.b, "static %s %s(void *__env_raw", ret, rec.fnName)
+	for _, p := range rec.anon.Params {
+		if p.Type == nil || p.Type.Resolved == nil {
+			continue
+		}
+		fmt.Fprintf(&g.b, ", %s %s", g.cTypeName(p.Type.Resolved), mangle(p.Name))
+	}
+	g.b.WriteByte(')')
 }
 
 // emitAnonFnBodies writes the trampoline / body fns. Called AFTER user-fn
@@ -1203,7 +1238,7 @@ func (g *cgen) emitAnonFnBodies() error {
 func (g *cgen) emitAnonEnvStruct(rec *anonFnEmit) error {
 	fmt.Fprintf(&g.b, "typedef struct {\n")
 	switch rec.mode {
-	case anonFnSpawn:
+	case anonFnSpawn, anonFnValue:
 		for _, cap := range rec.anon.Captures {
 			fmt.Fprintf(&g.b, "    %s %s;\n", g.cTypeName(cap.Type), mangle(cap.Name))
 		}
@@ -1298,6 +1333,41 @@ func (g *cgen) emitAnonBody(rec *anonFnEmit) error {
 		g.indent = prevIndent
 		g.b.WriteString("    free(__env);\n")
 		g.b.WriteString("}\n\n")
+	case anonFnValue:
+		g.writeAnonValueSig(rec)
+		g.b.WriteString(" {\n")
+		fmt.Fprintf(&g.b, "    %s *__env = (%s *)__env_raw;\n", rec.envName, rec.envName)
+		_ = rec // silence unused if Captures is empty
+		for _, cap := range rec.anon.Captures {
+			fmt.Fprintf(&g.b, "    %s %s = __env->%s;\n",
+				g.cTypeName(cap.Type), mangle(cap.Name), mangle(cap.Name))
+		}
+		prevDeferBaseStack := g.inDeferDrain
+		prevHasDef := g.currentHasDefers
+		prevEndLabel := g.currentFnEndLabel
+		g.inDeferDrain = false
+		g.currentHasDefers = rec.anon.HasDefers
+		if rec.anon.HasDefers {
+			label := fmt.Sprintf("__zerg_anon_end_%d", rec.id)
+			g.currentFnEndLabel = label
+			g.b.WriteString("    zerg_defer_rec *__zerg_defer_marker = zerg_defer_top;\n")
+		}
+		prevIndent := g.indent
+		g.indent = 1
+		for _, st := range rec.anon.Body.Statements {
+			if err := g.emitStmt(st); err != nil {
+				return err
+			}
+		}
+		if rec.anon.HasDefers {
+			fmt.Fprintf(&g.b, "    %s: ;\n", g.currentFnEndLabel)
+			g.b.WriteString("    zerg_defer_drain(__zerg_defer_marker);\n")
+		}
+		g.indent = prevIndent
+		g.inDeferDrain = prevDeferBaseStack
+		g.currentHasDefers = prevHasDef
+		g.currentFnEndLabel = prevEndLabel
+		g.b.WriteString("}\n\n")
 	case anonFnSpawnCall:
 		fmt.Fprintf(&g.b, "static void *%s(void *__env_raw) {\n", rec.fnName)
 		fmt.Fprintf(&g.b, "    %s *__env = (%s *)__env_raw;\n", rec.envName, rec.envName)
@@ -1332,6 +1402,125 @@ func (g *cgen) emitAnonBody(rec *anonFnEmit) error {
 		g.b.WriteString("}\n\n")
 	}
 	return nil
+}
+
+// fnValueSig renders the C function-pointer type matching a TypeFn:
+// `<RetT> (*)(void *, <param_c_types>...)`. Used at fn-value call sites to
+// cast the void* fn-pointer in a zerg_fn_value back to the right shape.
+func (g *cgen) fnValueSig(t *syntax.Type) string {
+	ret := "void"
+	if t.FnReturn != nil && t.FnReturn != syntax.TVoid() {
+		ret = g.cTypeName(t.FnReturn)
+	}
+	var sb strings.Builder
+	sb.WriteString(ret)
+	sb.WriteString(" (*)(void *")
+	for _, p := range t.FnParams {
+		sb.WriteString(", ")
+		sb.WriteString(g.cTypeName(p))
+	}
+	sb.WriteByte(')')
+	return sb.String()
+}
+
+// anonFnValueStr emits an AnonFnExpr in value position (not as IIFE callee
+// or spawn body). Builds a heap-allocated env populated with cloned captures
+// and produces a `zerg_fn_value` literal that pairs the static body fn
+// pointer with the env. Bind sites store this struct directly.
+func (g *cgen) anonFnValueStr(e *syntax.AnonFnExpr) (string, error) {
+	rec := g.anonByNode[e]
+	if rec == nil || rec.mode != anonFnValue {
+		return "", fmt.Errorf("codegen: anon-fn at %s missing pre-registered value record", e.Pos)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "({ %s *__env = (%s *)malloc(sizeof(%s)); ",
+		rec.envName, rec.envName, rec.envName)
+	if len(e.Captures) == 0 {
+		sb.WriteString("(void)__env; ")
+	}
+	for _, cap := range e.Captures {
+		fmt.Fprintf(&sb, "__env->%s = %s; ",
+			mangle(cap.Name), g.copyExpr(cap.Type, mangle(cap.Name)))
+	}
+	fmt.Fprintf(&sb, "(zerg_fn_value){.fn = (void *)%s, .env = __env}; })", rec.fnName)
+	return sb.String(), nil
+}
+
+// iifeCallStr lowers `fn(params) -> R { body }(args)` to a stmt-expression
+// that allocates the env on the stack, populates captures, and calls the
+// pre-registered top-level body fn directly. No fn-value indirection is
+// needed because the callee is statically known at the call site.
+//
+// Stack-allocating the env keeps the IIFE allocation-free in the common
+// no-capture case. The body fn casts `__env_raw` to the env-struct pointer
+// regardless of allocation site.
+func (g *cgen) iifeCallStr(anon *syntax.AnonFnExpr, args []syntax.Expr) (string, error) {
+	rec := g.anonByNode[anon]
+	if rec == nil || rec.mode != anonFnValue {
+		return "", fmt.Errorf("codegen: IIFE anon-fn at %s missing pre-registered record", anon.Pos)
+	}
+	var paramTypes []*syntax.Type
+	for _, p := range anon.Params {
+		if p.Type != nil {
+			paramTypes = append(paramTypes, p.Type.Resolved)
+		} else {
+			paramTypes = append(paramTypes, nil)
+		}
+	}
+	argStrs, err := g.coerceArgs(args, paramTypes)
+	if err != nil {
+		return "", err
+	}
+	retT := (*syntax.Type)(nil)
+	if anon.Return != nil {
+		retT = anon.Return.Resolved
+	}
+	var sb strings.Builder
+	sb.WriteString("({ ")
+	fmt.Fprintf(&sb, "%s __env; ", rec.envName)
+	if len(anon.Captures) == 0 {
+		sb.WriteString("(void)&__env; ")
+	}
+	for _, cap := range anon.Captures {
+		fmt.Fprintf(&sb, "__env.%s = %s; ",
+			mangle(cap.Name), g.copyExpr(cap.Type, mangle(cap.Name)))
+	}
+	if retT != nil && retT != syntax.TVoid() {
+		fmt.Fprintf(&sb, "%s(&__env", rec.fnName)
+		for _, a := range argStrs {
+			sb.WriteString(", ")
+			sb.WriteString(a)
+		}
+		sb.WriteString("); })")
+	} else {
+		fmt.Fprintf(&sb, "%s(&__env", rec.fnName)
+		for _, a := range argStrs {
+			sb.WriteString(", ")
+			sb.WriteString(a)
+		}
+		sb.WriteString("); 0; })")
+	}
+	return sb.String(), nil
+}
+
+// fnValueCallStr lowers a call through a fn-typed binding (`f(args)` where
+// f's resolved type is TypeFn). Casts the void* fn-pointer in the
+// zerg_fn_value to the per-signature C fn-pointer type and invokes through
+// the paired .env pointer.
+func (g *cgen) fnValueCallStr(ident *syntax.IdentExpr, t *syntax.Type, args []syntax.Expr) (string, error) {
+	argStrs, err := g.coerceArgs(args, t.FnParams)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "((%s)(%s).fn)((%s).env",
+		g.fnValueSig(t), mangle(ident.Name), mangle(ident.Name))
+	for _, a := range argStrs {
+		sb.WriteString(", ")
+		sb.WriteString(a)
+	}
+	sb.WriteByte(')')
+	return sb.String(), nil
 }
 
 // emitSpawn lowers `spawn <call>` to env-alloc + zerg_spawn(rec.fnName, env).

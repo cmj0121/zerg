@@ -196,6 +196,16 @@ static void zerg_not_implemented(const char *type_name, const char *method_name,
 const runtimeV07C = `#include <pthread.h>
 #include <unistd.h>
 
+/* ---------------- fn-value -----------------------------------------------
+   v0.7 anonymous-fn value. Carries a fn-pointer (cast at the call site to a
+   per-signature function-pointer type) and a heap-allocated env pointer
+   holding the captured outer-scope bindings. Bind sites (let f := fn() {..})
+   build this struct; call sites cast .fn to the right signature and invoke. */
+typedef struct {
+    void *fn;
+    void *env;
+} zerg_fn_value;
+
 /* ---------------- defer ---------------------------------------------------
    Per-thread linked list. Each record holds a (fn, env) pair; fn(env) runs
    at fn epilogue in LIFO order. The fn must free env if env was malloc'd. */

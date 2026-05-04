@@ -122,6 +122,64 @@ run()
 	}
 }
 
+// --- anon-fn value / IIFE in non-spawn position ---------------------------
+
+func TestV07CgenIIFEReturningValueEmitsBodyFn(t *testing.T) {
+	src := `let x := fn() -> int { return 42 }()
+print x
+`
+	out := mustEmit(t, src)
+	for _, want := range []string{
+		"static int64_t zerg_anonfn_v_",
+		"zerg_anonfn_v_",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing IIFE piece %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestV07CgenIIFEWithArgsPassesThemThrough(t *testing.T) {
+	src := `let r := fn(x: int) -> int { return x * 2 }(21)
+print r
+`
+	out := mustEmit(t, src)
+	if !strings.Contains(out, "static int64_t zerg_anonfn_v_") {
+		t.Errorf("missing IIFE body fn in:\n%s", out)
+	}
+	if !strings.Contains(out, "int64_t z_x") {
+		t.Errorf("IIFE body fn should take typed param; got:\n%s", out)
+	}
+}
+
+func TestV07CgenLetFnValueEmitsFnValuePair(t *testing.T) {
+	src := `let n := 7
+let f := fn() -> int { return n + 1 }
+print f()
+`
+	out := mustEmit(t, src)
+	for _, want := range []string{
+		"zerg_fn_value z_f",
+		"(zerg_fn_value){.fn = (void *)zerg_anonfn_v_",
+		"((int64_t (*)(void *))(z_f).fn)((z_f).env",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing fn-value piece %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestV07CgenFnValueCaptureClonedAtBind(t *testing.T) {
+	src := `let xs: list[int] = [1, 2, 3]
+let f := fn() -> int { return len(xs) }
+print f()
+`
+	out := mustEmit(t, src)
+	if !strings.Contains(out, "zerg_list_int64_t_copy(z_xs)") {
+		t.Errorf("fn-value capture should clone the list via _copy; got:\n%s", out)
+	}
+}
+
 // --- defer emission -------------------------------------------------------
 
 func TestV07CgenDeferLIFOEmitsTwoPushes(t *testing.T) {

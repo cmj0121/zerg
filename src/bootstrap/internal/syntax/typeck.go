@@ -421,6 +421,18 @@ type checker struct {
 	// drive cross-module name resolution and pub gating. Nil for
 	// single-program Check (preserves v0.0–v0.4 behaviour).
 	crossMod *crossModCtx
+	// builtinEnumDecls is the v0.6 Unit 2 registry of synthetic generic
+	// enum decls (Option, Result). Populated by injectBuiltinEnums at
+	// newChecker time so every module's collect / resolve passes see the
+	// names without an explicit import.
+	builtinEnumDecls map[string]*EnumDecl
+	// monoEnums caches per-instantiation canonical *Type values for
+	// generic enum decls. Key is `Decl[arg1,arg2,...]`. Two type-resolutions
+	// of the same instance (e.g. `Option[int]` and `int?`) return the same
+	// canonical pointer, so downstream pointer-equality dispatch works.
+	// Per-checker (per-module) at Unit 2; full bundle-shared canonicalisation
+	// is Unit 3's job.
+	monoEnums map[string]*Type
 }
 
 // Check is the public single-program entry point. It walks prog, annotates
@@ -452,6 +464,9 @@ func (c *checker) collectTopLevel(prog *Program) error {
 	for _, stmt := range prog.Statements {
 		switch s := stmt.(type) {
 		case *StructDecl:
+			if isReservedBuiltinTypeName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "struct"); err != nil {
 				return err
 			}
@@ -472,6 +487,9 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			c.structs[s.Name] = NewStructType(s.Name, nil) // fields filled by second pass
 			c.structAST[s.Name] = s
 		case *EnumDecl:
+			if isReservedBuiltinTypeName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "enum"); err != nil {
 				return err
 			}
@@ -495,6 +513,9 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			c.enums[s.Name] = &Type{Kind: TypeEnum, Name: s.Name, Variants: variants, VariantPayloads: payloads}
 			c.enumAST[s.Name] = s
 		case *SpecDecl:
+			if isReservedBuiltinTypeName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "spec"); err != nil {
 				return err
 			}
@@ -563,6 +584,13 @@ func (c *checker) resolveStructFields(_ *Program) error {
 // type name is already in the table by the time we run.
 func (c *checker) resolveEnumPayloads(_ *Program) error {
 	for name, decl := range c.enumAST {
+		// Generic enum decls (incl. the v0.6 built-ins Option / Result)
+		// are not resolved here — their payload type-refs name the
+		// declared type-parameters by raw identifier, and the canonical
+		// per-instance *Type is built on demand by instantiateGenericEnum.
+		if len(decl.TypeParams) > 0 {
+			continue
+		}
 		en := c.enums[name]
 		for i, v := range decl.Variants {
 			if len(v.Payload) == 0 {
@@ -1040,11 +1068,62 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 	case TypeRefNamed:
 		// Cross-module qualifier: route through the importing module's
 		// import binding table. The inner name MUST be a pub struct,
-		// enum, or spec in the foreign module.
+		// enum, or spec in the foreign module. v0.6 Unit 2 keeps built-ins
+		// unqualified-only — `mod.Option` does not resolve.
 		if ref.Module != "" {
 			t, err := c.resolveCrossModuleType(ref)
 			if err != nil {
 				return nil, err
+			}
+			if len(ref.TypeArgs) > 0 {
+				return nil, typeErr(ref.Pos,
+					"generic type arguments on cross-module references are not supported at v0.6 Unit 2")
+			}
+			if ref.Nullable {
+				wrapped, werr := c.wrapOption(t, ref.Pos)
+				if werr != nil {
+					return nil, werr
+				}
+				ref.Resolved = wrapped
+				return wrapped, nil
+			}
+			ref.Resolved = t
+			return t, nil
+		}
+		// Generic-name path (v0.6): a name with type-args resolves through
+		// the per-decl monomorphization cache. Unit 2 only handles the
+		// built-in Option / Result decls; user-defined generic enums land
+		// at Unit 3.
+		if len(ref.TypeArgs) > 0 {
+			args := make([]*Type, len(ref.TypeArgs))
+			for i, a := range ref.TypeArgs {
+				ta, err := c.resolveTypeRef(a)
+				if err != nil {
+					return nil, err
+				}
+				args[i] = ta
+			}
+			decl, ok := c.builtinEnumDecls[ref.Name]
+			if !ok {
+				if userDecl, found := c.enumAST[ref.Name]; found && len(userDecl.TypeParams) > 0 {
+					decl = userDecl
+				}
+			}
+			if decl == nil {
+				return nil, typeErr(ref.Pos,
+					"type %q is not generic but was given type arguments", ref.Name)
+			}
+			t, err := c.instantiateGenericEnum(decl, args, ref.Pos)
+			if err != nil {
+				return nil, err
+			}
+			if ref.Nullable {
+				wrapped, werr := c.wrapOption(t, ref.Pos)
+				if werr != nil {
+					return nil, werr
+				}
+				ref.Resolved = wrapped
+				return wrapped, nil
 			}
 			ref.Resolved = t
 			return t, nil
@@ -1064,6 +1143,10 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		case "rune":
 			t = tRune
 		default:
+			if _, isBuiltin := c.builtinEnumDecls[ref.Name]; isBuiltin {
+				return nil, typeErr(ref.Pos,
+					"generic type %q requires type arguments", ref.Name)
+			}
 			if st, ok := c.structs[ref.Name]; ok {
 				t = st
 			} else if en, ok := c.enums[ref.Name]; ok {
@@ -1073,6 +1156,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			} else {
 				return nil, typeErr(ref.Pos, "unknown type %q", ref.Name)
 			}
+		}
+		if ref.Nullable {
+			wrapped, werr := c.wrapOption(t, ref.Pos)
+			if werr != nil {
+				return nil, werr
+			}
+			ref.Resolved = wrapped
+			return wrapped, nil
 		}
 		ref.Resolved = t
 		return t, nil
@@ -1085,6 +1176,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			return nil, typeErr(ref.Pos, "list element type cannot be void")
 		}
 		t := NewListType(elem)
+		if ref.Nullable {
+			wrapped, werr := c.wrapOption(t, ref.Pos)
+			if werr != nil {
+				return nil, werr
+			}
+			ref.Resolved = wrapped
+			return wrapped, nil
+		}
 		ref.Resolved = t
 		return t, nil
 	case TypeRefTuple:
@@ -1100,6 +1199,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			elems[i] = t
 		}
 		t := NewTupleType(elems)
+		if ref.Nullable {
+			wrapped, werr := c.wrapOption(t, ref.Pos)
+			if werr != nil {
+				return nil, werr
+			}
+			ref.Resolved = wrapped
+			return wrapped, nil
+		}
 		ref.Resolved = t
 		return t, nil
 	}
@@ -1909,8 +2016,28 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.currentReceiver, nil
 	case *EnumLit:
 		return c.checkEnumLit(e)
+	case *NilLit:
+		// v0.6 Unit 2: nil resolves only when the surrounding context
+		// supplies an Option[T] expected type via the hint. Inference
+		// across other shapes (fn-arg slot, list-element type,
+		// return-expr context) lands at Unit 4.
+		if hint != nil && hint.Kind == TypeEnum && isOptionInstance(hint) {
+			e.setType(hint)
+			return hint, nil
+		}
+		return nil, typeErr(e.Pos, "cannot infer type of nil — annotate the binding")
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
+}
+
+// isOptionInstance reports whether t is a monomorphized Option[...] enum.
+// Used by NilLit's bidirectional check at Unit 2 (and re-used by Unit 4 for
+// the broader nil / `?` / `??` / `?.` machinery).
+func isOptionInstance(t *Type) bool {
+	if t == nil || t.Kind != TypeEnum {
+		return false
+	}
+	return strings.HasPrefix(t.Name, "Option[")
 }
 
 // checkListLit handles `[e1, e2, ...]` and the empty-list special case. With

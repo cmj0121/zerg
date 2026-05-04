@@ -679,7 +679,7 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		return nil
 	}
 	switch e := expr.(type) {
-	case *IntLit, *FloatLit, *StringLit, *BoolLit, *RuneLit:
+	case *IntLit, *FloatLit, *StringLit, *BoolLit, *RuneLit, *NilLit:
 		return nil
 	case *IdentExpr:
 		// At a leaf, a bare ident is a READ. Use-after-move is reported here.

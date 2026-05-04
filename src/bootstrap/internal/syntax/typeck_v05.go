@@ -219,6 +219,11 @@ func newChecker() *checker {
 		ret:     NewListType(tInt),
 		builtin: true,
 	}
+	// v0.6 Unit 2: register synthetic generic enum decls (Option, Result)
+	// before any user-decl walk so the names are visible to every module
+	// without an explicit import and the reservation diagnostic in
+	// collectTopLevel can fire against a same-named user decl.
+	injectBuiltinEnums(c)
 	return c
 }
 

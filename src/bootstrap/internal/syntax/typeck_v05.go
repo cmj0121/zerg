@@ -162,6 +162,19 @@ func CheckBundle(bundle BundleView) error {
 		}
 	}
 
+	// v0.6 Unit 3.5: late-arriving generic impl registration. A concrete
+	// impl earlier in the same module may have eagerly monomorphised a
+	// receiver-type instance before the generic impl was discovered; the
+	// post-pass here walks every cached mono *Type and expands any
+	// generic impl that should have applied. Idempotent — already-
+	// expanded (gi, mono) pairs are cached in bundleMono.expandedImpls.
+	for _, m := range mods {
+		c := checkers[m]
+		if err := c.expandPendingGenericImpls(); err != nil {
+			return err
+		}
+	}
+
 	// Phase 4: cross-module impl collision detection. Two modules each
 	// declaring the same (originType, originSpec) impl reject with a
 	// dedicated diagnostic.
@@ -288,17 +301,36 @@ type crossModCtx struct {
 // bundleMono holds the bundle-wide monomorphisation caches. Three tables —
 // generic enum / struct types, and generic fn specialisations — keyed by the
 // canonical instance name (`Decl[arg1,arg2,...]`).
+//
+// v0.6 Unit 3.5 extends the bundle-shared state with generic-impl records.
+// Each module's resolveImplsCross discovers its generic impls and appends
+// them here; per-instantiation expansion (driven from
+// instantiateGenericStruct / instantiateGenericEnum) walks the union so a
+// foreign module's `impl[T] LocalType[T] for SomeSpec` lights up regardless
+// of which module first triggered the monomorphisation.
 type bundleMono struct {
-	enums   map[string]*Type
-	structs map[string]*Type
-	fns     map[string]*FnDecl
+	enums         map[string]*Type
+	structs       map[string]*Type
+	fns           map[string]*FnDecl
+	genericImpls  []*genericImpl
+	expandedImpls map[expandedKey]bool
+}
+
+// expandedKey deduplicates per-instance expansion of a (genericImpl, mono
+// receiver) pair across the bundle so the same (impl, instance) tuple is
+// never expanded twice — once expansion has happened, the resulting
+// concrete impl entry is shared by every checker.
+type expandedKey struct {
+	gi       *genericImpl
+	receiver *Type
 }
 
 func newBundleMono() *bundleMono {
 	return &bundleMono{
-		enums:   map[string]*Type{},
-		structs: map[string]*Type{},
-		fns:     map[string]*FnDecl{},
+		enums:         map[string]*Type{},
+		structs:       map[string]*Type{},
+		fns:           map[string]*FnDecl{},
+		expandedImpls: map[expandedKey]bool{},
 	}
 }
 
@@ -372,6 +404,25 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 	for _, stmt := range self.ModuleProgram().Statements {
 		id, ok := stmt.(*ImplDecl)
 		if !ok {
+			continue
+		}
+		// v0.6 Unit 3.5: a generic impl block (`impl[T] LocalType[T] for
+		// SomeSpec { ... }`) is recorded for deferred per-instantiation
+		// expansion. The expansion happens inside instantiateGeneric*
+		// when the receiver-type instance is monomorphised.
+		if len(id.TypeParams) > 0 {
+			if err := c.resolveGenericImplDecl(id); err != nil {
+				return err
+			}
+			continue
+		}
+		// v0.6: a concrete-arg impl (`impl Box[int] for Spec { ... }`)
+		// resolves the receiver to the monomorphised *Type and proceeds
+		// through the regular concrete-impl path.
+		if len(id.TypeArgs) > 0 {
+			if err := c.resolveConcreteGenericImplDecl(id); err != nil {
+				return err
+			}
 			continue
 		}
 		// Resolve the receiver type. id.Type is a bare name today —

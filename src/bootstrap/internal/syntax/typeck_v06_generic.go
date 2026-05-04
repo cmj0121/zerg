@@ -102,6 +102,9 @@ func (c *checker) instantiateGenericStruct(decl *StructDecl, args []*Type, refPo
 		fields[i] = NamedField{Name: f.Name, Type: t}
 	}
 	mono.Fields = fields
+	if err := c.expandGenericImplsForType(decl, nil, mono, args, refPos); err != nil {
+		return nil, err
+	}
 	return mono, nil
 }
 

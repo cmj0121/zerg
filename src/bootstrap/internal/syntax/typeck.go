@@ -446,6 +446,17 @@ type checker struct {
 	// genericFnAST records every generic-fn AST decl by name so
 	// checkGenericFnCall can find the original decl from a call site.
 	genericFnAST map[string]*FnDecl
+	// genericImpls records this module's generic ImplDecls (those with a
+	// non-empty TypeParams list). Each is held until per-receiver-type
+	// monomorphisation expands it into a concrete impl entry. Bundle-shared
+	// via crossMod.bundleMono so a foreign module's impl on a local type
+	// expands when the local type is monomorphised.
+	genericImpls []*genericImpl
+	// activeSubst is the impl-level type-parameter substitution active during
+	// a generic-impl body walk. Set by expandGenericImpls before walking each
+	// cloned method's body so resolveTypeRef sees `T` bound to the chosen
+	// concrete arg. Nil at the top level and inside non-generic impls.
+	activeSubst map[string]*Type
 }
 
 // Check is the public single-program entry point. It walks prog, annotates
@@ -1108,6 +1119,26 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 	}
 	switch ref.Kind {
 	case TypeRefNamed:
+		// v0.6 Unit 3.5: when an impl-level type substitution is in scope
+		// (set by expandGenericImpls during a generic-impl body walk), a
+		// bare reference to a declared type-parameter resolves to its
+		// concrete *Type. Substitution short-circuits before the cross-
+		// module / generic-decl paths so it captures bare T uses inside
+		// method bodies (`let x: T = ...`).
+		if c.activeSubst != nil && ref.Module == "" && len(ref.TypeArgs) == 0 {
+			if t, ok := c.activeSubst[ref.Name]; ok {
+				if ref.Nullable {
+					wrapped, werr := c.wrapOption(t, ref.Pos)
+					if werr != nil {
+						return nil, werr
+					}
+					ref.Resolved = wrapped
+					return wrapped, nil
+				}
+				ref.Resolved = t
+				return t, nil
+			}
+		}
 		// Cross-module qualifier: route through the importing module's
 		// import binding table. The inner name MUST be a pub struct,
 		// enum, or spec in the foreign module. v0.6 Unit 2 keeps built-ins

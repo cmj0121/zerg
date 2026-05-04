@@ -182,6 +182,15 @@ func (c *checker) instantiateGenericEnum(decl *EnumDecl, args []*Type, refPos Po
 		VariantPayloads: payloads,
 	}
 	c.monoEnums[key] = mono
+	// v0.6 Unit 3.5: built-in Option / Result decls have no user-declared
+	// generic impls, but user-defined generic enums may. Skip expansion for
+	// the built-ins (their decls live under <builtin> and never carry an
+	// impl record); for user-defined enums, fan out per-instantiation.
+	if _, isBuiltin := c.builtinEnumDecls[decl.Name]; !isBuiltin {
+		if err := c.expandGenericImplsForType(nil, decl, mono, args, refPos); err != nil {
+			return nil, err
+		}
+	}
 	return mono, nil
 }
 

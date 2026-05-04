@@ -3,8 +3,16 @@ package syntax
 import "fmt"
 
 // Program is the root AST node — a flat sequence of top-level statements.
+//
+// MonoFns (v0.6 Unit 7) holds specialised FnDecl clones produced by
+// monomorphisation. Each entry is the result of one (generic-fn, type-args)
+// instantiation whose generic decl lives in this Program; downstream consumers
+// (codegen) emit one C function per entry. The original generic FnDecl stays
+// in Statements but is skipped by emit because its body type-refs are
+// unsubstituted.
 type Program struct {
 	Statements []Stmt
+	MonoFns    []*FnDecl
 }
 
 // ---------------------------------------------------------------------------
@@ -711,11 +719,17 @@ func (e *UnaryExpr) ExprPos() Position { return e.Pos }
 
 // CallExpr is `callee(args)`. v0.1 only admits an IdentExpr as Callee but the
 // parser is general so future call-on-expression doesn't require a re-shape.
+//
+// Specialised (v0.6 Unit 7) is set by typeck when the callee resolved to a
+// generic-fn instantiation. It points at the monomorphised FnDecl clone so
+// codegen can route the call to the specialised symbol; the surface Callee
+// IdentExpr keeps the original generic name for diagnostics.
 type CallExpr struct {
 	typed
-	Pos    Position
-	Callee Expr
-	Args   []Expr
+	Pos         Position
+	Callee      Expr
+	Args        []Expr
+	Specialised *FnDecl
 }
 
 func (*CallExpr) exprNode()           {}

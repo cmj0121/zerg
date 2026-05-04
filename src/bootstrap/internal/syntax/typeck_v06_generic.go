@@ -170,6 +170,29 @@ func (c *checker) findGenericFnDecl(name string) *FnDecl {
 	return nil
 }
 
+// findGenericFnOwner returns the checker (and thus the Program) that declared
+// the given generic fn. Used by specialiseGenericFn to route the cloned
+// FnDecl into the defining module's Program.MonoFns slice.
+func (c *checker) findGenericFnOwner(fn *FnDecl) *checker {
+	if fn == nil {
+		return nil
+	}
+	if d, ok := c.genericFnAST[fn.Name]; ok && d == fn {
+		return c
+	}
+	if c.crossMod != nil {
+		for _, fc := range c.crossMod.checkers {
+			if fc == c {
+				continue
+			}
+			if d, ok := fc.genericFnAST[fn.Name]; ok && d == fn {
+				return fc
+			}
+		}
+	}
+	return c
+}
+
 // ---------------------------------------------------------------------------
 // Generic-fn call site: bidirectional unifier + specialisation.
 // ---------------------------------------------------------------------------
@@ -432,6 +455,7 @@ func (c *checker) checkGenericFnCall(e *CallExpr, fn *FnDecl, callIdent *IdentEx
 		callIdent.setType(sig.ret)
 	}
 	e.setType(sig.ret)
+	e.Specialised = specialised
 	return sig.ret, nil
 }
 
@@ -673,6 +697,14 @@ func (c *checker) specialiseGenericFn(fn *FnDecl, args []*Type) (*FnDecl, error)
 		pos:    fn.Pos,
 	}
 	c.monoFns[key] = clone
+	// Route the clone to the defining module's Program.MonoFns so codegen
+	// can iterate it. The defining module owns the body; the call site
+	// module may differ (cross-module generic-fn call).
+	if owner := c.findGenericFnOwner(fn); owner != nil && owner.ownProg != nil {
+		owner.ownProg.MonoFns = append(owner.ownProg.MonoFns, clone)
+	} else if c.ownProg != nil {
+		c.ownProg.MonoFns = append(c.ownProg.MonoFns, clone)
+	}
 	// Body type-check the clone.
 	saved := c.currentFn
 	sig := c.fns[key]

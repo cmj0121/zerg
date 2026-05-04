@@ -82,6 +82,7 @@ func CheckBundle(bundle BundleView) error {
 	checkers := make(map[ModuleView]*checker, len(mods))
 	for _, m := range mods {
 		c := newChecker()
+		c.ownProg = m.ModuleProgram()
 		checkers[m] = c
 		if err := c.collectTopLevel(m.ModuleProgram()); err != nil {
 			return err

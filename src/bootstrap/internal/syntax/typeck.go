@@ -446,6 +446,11 @@ type checker struct {
 	// genericFnAST records every generic-fn AST decl by name so
 	// checkGenericFnCall can find the original decl from a call site.
 	genericFnAST map[string]*FnDecl
+	// ownProg is the Program owned by this checker — set by CheckBundle when
+	// it constructs the per-module checker. Used by specialiseGenericFn to
+	// route monomorphised FnDecl clones back to the defining module's
+	// Program.MonoFns slice so codegen can iterate them.
+	ownProg *Program
 	// genericImpls records this module's generic ImplDecls (those with a
 	// non-empty TypeParams list). Each is held until per-receiver-type
 	// monomorphisation expands it into a concrete impl entry. Bundle-shared

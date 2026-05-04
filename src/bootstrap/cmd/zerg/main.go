@@ -51,12 +51,14 @@ func (c *runCmd) Run() error {
 		Msg("loaded")
 	// v0.5 Unit 3: typeck runs across the whole Bundle so cross-module
 	// references resolve, pub gating fires, and the orphan rule applies.
-	// The interpreter still walks the entry module only — Unit 5 wires
-	// multi-module execution.
+	// v0.5 Unit 5: the interpreter walks the entire bundle — cross-module
+	// fn calls, struct/enum construction, method dispatch, and spec
+	// coercion all route through per-module decl tables and a
+	// bundle-wide impl index.
 	if err := syntax.CheckBundle(bundle); err != nil {
 		return err
 	}
-	return run.RunChecked(bundle.Entry.Program, os.Stdout)
+	return run.RunBundle(bundle, os.Stdout)
 }
 
 type buildCmd struct {

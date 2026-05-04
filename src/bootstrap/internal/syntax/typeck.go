@@ -1287,8 +1287,30 @@ func (c *checker) assignableTo(from, to *Type) bool {
 		if from.Kind != TypeStruct && from.Kind != TypeEnum {
 			return false
 		}
-		_, ok := c.impls[implKey{typeName: from.Name, specName: to.Name}]
-		return ok
+		key := implKey{typeName: from.Name, specName: to.Name}
+		if _, ok := c.impls[key]; ok {
+			return true
+		}
+		// v0.5: an impl can live in any module across the bundle. Walk
+		// every module's impl table so list[Spec] / tuple[Spec] /
+		// struct-field-of-Spec coerce cross-module concrete values
+		// uniformly. The impl table key is (typeName, specName); the
+		// canonical *Type pointer comparison would tighten this further
+		// (two modules with same-name structs collide on string-keys),
+		// but the v0.5 orphan rule guarantees at most one module owns
+		// each (Type, Spec) pair, and the impl's recvOwner / specOwner
+		// fields disambiguate when needed at the dispatch layer.
+		if c.crossMod != nil {
+			for _, fc := range c.crossMod.checkers {
+				if fc == c {
+					continue
+				}
+				if _, ok := fc.impls[key]; ok {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	// Recurse into composites.
 	switch to.Kind {

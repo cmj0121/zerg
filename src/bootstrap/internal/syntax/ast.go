@@ -679,11 +679,18 @@ type StructDecl struct {
 func (*StructDecl) stmtNode()           {}
 func (s *StructDecl) StmtPos() Position { return s.Pos }
 
-// VariantDecl is one declared variant of an enum. v0.2 carries no payload;
-// adding payloads is a v0.4 concern alongside errors.
+// VariantDecl is one declared variant of an enum.
+//
+// v0.2 introduced bare-name variants; v0.4 (Unit 2) adds optional payload
+// types: `Ident(str)`, `Number(int, int)`. Payload is the per-position type
+// list — zero-length for the bare form (`Eof`). The parser rejects an empty
+// `()` after the variant name; payloadful variants must declare at least one
+// type. Resolved types are filled in by typeck (Unit 3); the parser only
+// records the TypeRef shapes.
 type VariantDecl struct {
-	Name string
-	Pos  Position
+	Name    string
+	Pos     Position
+	Payload []*TypeRef // nil/empty for bare variants
 }
 
 // EnumDecl represents `enum Name { V1, V2, ... }`.
@@ -898,11 +905,19 @@ type StructPat struct {
 func (*StructPat) patternNode()         {}
 func (p *StructPat) PatPos() Position { return p.Pos }
 
-// EnumPat is `EnumName.VariantName`. v0.2 has no payload destructure.
+// EnumPat is `EnumName.VariantName` with an optional payload destructure.
+//
+// v0.2 admitted bare-variant patterns only; v0.4 (Unit 2) adds payload
+// patterns: `Token.Ident(name)`, `Token.Number(0, _)`. Payload is the
+// per-position sub-pattern slice — zero-length for the bare form. The parser
+// rejects an empty `()` after the variant name (matching the variant-decl
+// rule that bare variants do not carry parentheses). Typeck (Unit 3) is
+// responsible for arity and per-position type checking.
 type EnumPat struct {
 	Pos         Position
 	TypeName    string
 	VariantName string
+	Payload     []Pattern // nil/empty for bare variants
 }
 
 func (*EnumPat) patternNode()       {}
@@ -987,3 +1002,27 @@ type ThisExpr struct {
 
 func (*ThisExpr) exprNode()           {}
 func (e *ThisExpr) ExprPos() Position { return e.Pos }
+
+// EnumLit is a typed enum-variant construction expression: `Token.Eof`,
+// `Token.Ident("foo")`, `Token.Number(10, 16)`.
+//
+// The parser does NOT produce EnumLit directly. v0.2 reads `Type.Variant`
+// (no parens) as a FieldAccessExpr; v0.4 Unit 1 reads `Type.Variant(...)`
+// (with parens) as a MethodCallExpr. Typeck (Unit 3) walks both shapes and
+// lowers them to EnumLit when the receiver is recognised as a known enum
+// type. Until Unit 3 lights up the lowering, this node is unused — declared
+// here so the AST surface is stable across Units 2 and 3.
+//
+// Payload carries the per-position argument slice; zero-length for bare
+// variants (the FieldAccessExpr-derived shape).
+type EnumLit struct {
+	typed
+	Pos         Position
+	EnumName    string
+	Variant     string
+	VariantPos  Position
+	Payload     []Expr
+}
+
+func (*EnumLit) exprNode()           {}
+func (e *EnumLit) ExprPos() Position { return e.Pos }

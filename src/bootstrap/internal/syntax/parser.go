@@ -613,8 +613,13 @@ func (p *parser) parseStructDecl() (Stmt, error) {
 	return &StructDecl{Pos: kw.Pos, Name: nameTok.Value, Fields: fields}, nil
 }
 
-// parseEnumDecl handles `enum Name { Variant, ... }`. Variants are bare
-// identifiers at v0.2 — payloads are deferred to v0.4.
+// parseEnumDecl handles `enum Name { Variant, Variant(T1, T2), ... }`. v0.2
+// admitted only bare variant identifiers; v0.4 (Unit 2) extends each variant
+// to carry an optional `( type_list )` payload.
+//
+// Bare form (no parens) and payload form (≥ 1 type, no trailing comma) are
+// both admitted. An empty `()` is rejected with a focused diagnostic — bare
+// variants MUST drop the parentheses entirely.
 func (p *parser) parseEnumDecl() (Stmt, error) {
 	kw := p.advance() // consume `enum`
 	nameTok, err := p.expect(KindIdent, "after 'enum'")
@@ -636,7 +641,15 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		variants = append(variants, VariantDecl{Name: v.Value, Pos: v.Pos})
+		variant := VariantDecl{Name: v.Value, Pos: v.Pos}
+		if p.peek().Kind == KindLParen {
+			payload, err := p.parseVariantPayloadTypes()
+			if err != nil {
+				return nil, err
+			}
+			variant.Payload = payload
+		}
+		variants = append(variants, variant)
 		if p.peek().Kind == KindComma {
 			p.advance()
 			continue
@@ -647,6 +660,45 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 		return nil, err
 	}
 	return &EnumDecl{Pos: kw.Pos, Name: nameTok.Value, Variants: variants}, nil
+}
+
+// parseVariantPayloadTypes consumes the `( type ( ',' type )* )` tail of a
+// variant declaration. The opening `(` has been peeked but not yet consumed.
+//
+// Empty parens (`V()`) are rejected: bare variants drop the parentheses
+// entirely, so an empty payload is never the user's intent. A trailing comma
+// (`V(int,)`) is also rejected — variant payload type lists are pinned to no
+// trailing comma.
+func (p *parser) parseVariantPayloadTypes() ([]*TypeRef, error) {
+	openTok, err := p.expectParen(KindLParen, "in enum variant payload")
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == KindRParen {
+		return nil, errorAt(openTok.Pos,
+			"empty parentheses are not allowed; use the bare variant name")
+	}
+	var types []*TypeRef
+	for {
+		ty, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		types = append(types, ty)
+		if p.peek().Kind == KindComma {
+			commaTok := p.advance()
+			if p.peek().Kind == KindRParen {
+				return nil, errorAt(commaTok.Pos,
+					"trailing comma not allowed in enum variant payload type list")
+			}
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close enum variant payload"); err != nil {
+		return nil, err
+	}
+	return types, nil
 }
 
 // parseSpecDecl handles `spec Name { method_decl* }`. A method decl is the
@@ -1972,7 +2024,18 @@ func (p *parser) parsePattern() (Pattern, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &EnumPat{Pos: t.Pos, TypeName: t.Value, VariantName: vT.Value}, nil
+			ep := &EnumPat{Pos: t.Pos, TypeName: t.Value, VariantName: vT.Value}
+			// v0.4 (Unit 2): optional payload destructure
+			// `Token.Ident(name)`, `Token.Number(0, _)`. Empty parens are
+			// rejected — bare variants drop the parentheses entirely.
+			if p.peek().Kind == KindLParen {
+				payload, err := p.parseVariantPayloadPatterns()
+				if err != nil {
+					return nil, err
+				}
+				ep.Payload = payload
+			}
+			return ep, nil
 		}
 		return &BindPat{Pos: t.Pos, Name: t.Value}, nil
 	case KindLParen:
@@ -2035,6 +2098,44 @@ func (p *parser) parseTuplePat() (Pattern, error) {
 		return nil, errorAt(open.Pos, "tuple pattern requires at least 2 elements")
 	}
 	return &TuplePat{Pos: open.Pos, Elements: elements}, nil
+}
+
+// parseVariantPayloadPatterns consumes the `( pat ( ',' pat )* )` tail of an
+// enum variant pattern. The opening `(` has been peeked but not yet consumed.
+//
+// Empty parens (`Token.Ident()`) are rejected: bare variants drop the
+// parentheses, mirroring the variant-decl rule. A trailing comma is also
+// rejected — payload pattern lists carry no trailing comma.
+func (p *parser) parseVariantPayloadPatterns() ([]Pattern, error) {
+	openTok, err := p.expectParen(KindLParen, "in enum variant pattern")
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == KindRParen {
+		return nil, errorAt(openTok.Pos,
+			"empty parentheses are not allowed; use the bare variant name")
+	}
+	var pats []Pattern
+	for {
+		pat, err := p.parsePattern()
+		if err != nil {
+			return nil, err
+		}
+		pats = append(pats, pat)
+		if p.peek().Kind == KindComma {
+			commaTok := p.advance()
+			if p.peek().Kind == KindRParen {
+				return nil, errorAt(commaTok.Pos,
+					"trailing comma not allowed in enum variant pattern")
+			}
+			continue
+		}
+		break
+	}
+	if _, err := p.expectParen(KindRParen, "to close enum variant pattern"); err != nil {
+		return nil, err
+	}
+	return pats, nil
 }
 
 // parseStructPatBody consumes the `{ field: pat, field, ..., .. }` tail of

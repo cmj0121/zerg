@@ -411,6 +411,15 @@ func (c *checker) collectTopLevel(prog *Program) error {
 				}
 				seen[v.Name] = true
 				variants[i] = v.Name
+				// v0.4 Unit 2: parser-only landing for variant payloads.
+				// Typeck (Unit 3) wires payload types into the enum's
+				// Type representation; until then, reject so a tree that
+				// somehow survives the parser fails loudly with the v0.4
+				// marker rather than silently dropping payload data.
+				if len(v.Payload) > 0 {
+					return typeErr(v.Pos,
+						"v0.4 work in progress: enum payload not yet supported")
+				}
 			}
 			c.enums[s.Name] = NewEnumType(s.Name, variants)
 		case *FnDecl:
@@ -1211,6 +1220,14 @@ func (c *checker) checkPattern(pat Pattern, expected *Type, armScope *scope, bin
 		}
 		if expected.Name != p.TypeName {
 			return typeErr(p.Pos, "enum pattern type %q does not match subject type %s", p.TypeName, expected)
+		}
+		// v0.4 Unit 2: parser-only landing for payload destructure. Typeck
+		// (Unit 3) checks arity / per-position types and binds payload
+		// names; until then, payloadful patterns reject so a tree that
+		// somehow survives the parser fails loudly with the v0.4 marker.
+		if len(p.Payload) > 0 {
+			return typeErr(p.Pos,
+				"v0.4 work in progress: enum payload not yet supported")
 		}
 		for _, v := range expected.Variants {
 			if v == p.VariantName {

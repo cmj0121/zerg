@@ -201,6 +201,12 @@ func borrowCheck(prog *Program, fns map[string]fnSig) error {
 		switch stmt.(type) {
 		case *FnDecl, *StructDecl, *EnumDecl:
 			continue
+		case *SpecDecl, *ImplDecl:
+			// v0.4 Unit 1: parser-only landing — typeck rejects these before
+			// borrowCheck runs in practice, but stay defensive in case the
+			// caller ever invokes borrowCheck on a tree that somehow slipped
+			// past typeck.
+			continue
 		}
 		if err := c.checkStmt(stmt); err != nil {
 			return err
@@ -335,6 +341,11 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		return nil
 	case *MatchStmt:
 		return c.checkMatch(s)
+	case *SpecDecl, *ImplDecl:
+		// v0.4 Unit 1: typeck already rejected these, but if a borrow walk
+		// somehow reaches them treat as a no-op rather than an internal
+		// error so the typeck diagnostic is the one the user sees.
+		return nil
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -630,6 +641,12 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		// (Color.Red) has the receiver as the enum type identifier — typeck
 		// has set Type already; we treat it as a read like any other.
 		return c.walkExpr(e.Receiver, false)
+	case *MethodCallExpr, *ThisExpr:
+		// v0.4 Unit 1: parser-only landing. Borrow rules for method receivers
+		// and `this` arrive in Unit 5; typeck rejects these shapes today so
+		// they should never reach here. Return a precise internal error if
+		// they do — keeps the layering honest while we wait for Unit 5.
+		return borrowErr(expr.ExprPos(), "internal: borrow check reached %T before v0.4 Unit 5", expr)
 	}
 	return borrowErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

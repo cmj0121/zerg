@@ -246,6 +246,10 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseEnumDecl()
 	case KindMatch:
 		return p.parseMatchStmt()
+	case KindSpec:
+		return p.parseSpecDecl()
+	case KindImpl:
+		return p.parseImplDecl()
 	default:
 		return p.parseExprOrAssignStmt()
 	}
@@ -645,6 +649,174 @@ func (p *parser) parseEnumDecl() (Stmt, error) {
 	return &EnumDecl{Pos: kw.Pos, Name: nameTok.Value, Variants: variants}, nil
 }
 
+// parseSpecDecl handles `spec Name { method_decl* }`. A method decl is the
+// `fn` form with an optional brace-block body: signature-only (no block)
+// declares a method that every impl MUST provide; with-block declares a
+// default that an impl may inherit or override.
+//
+// Empty bodies (`spec Empty {}`) are admitted — useful as marker specs.
+// NEWLINEs between methods are absorbed by the brace-region parenDepth bump.
+func (p *parser) parseSpecDecl() (Stmt, error) {
+	kw := p.advance() // consume `spec`
+	nameTok, err := p.expect(KindIdent, "after 'spec'")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(KindLBrace, "in spec declaration"); err != nil {
+		return nil, err
+	}
+	p.parenDepth++
+	defer func() { p.parenDepth-- }()
+
+	var methods []*SpecMethod
+	for {
+		if p.peek().Kind == KindRBrace {
+			break
+		}
+		m, err := p.parseSpecMethod()
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, m)
+	}
+	if _, err := p.expect(KindRBrace, "to close spec declaration"); err != nil {
+		return nil, err
+	}
+	return &SpecDecl{Pos: kw.Pos, Name: nameTok.Value, Methods: methods}, nil
+}
+
+// parseSpecMethod consumes one `fn IDENT (params?) (-> type)? block?` entry.
+// The block is optional inside a spec — its absence marks the method as
+// signature-only (must be implemented by every type that impls the spec).
+func (p *parser) parseSpecMethod() (*SpecMethod, error) {
+	kw, err := p.expect(KindFn, "in spec method")
+	if err != nil {
+		return nil, err
+	}
+	nameTok, err := p.expect(KindIdent, "after 'fn'")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expectParen(KindLParen, "in spec method signature"); err != nil {
+		return nil, err
+	}
+	var params []FnParam
+	if p.peek().Kind != KindRParen {
+		for {
+			pname, err := p.expect(KindIdent, "in parameter list")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(KindColon, "after parameter name"); err != nil {
+				return nil, err
+			}
+			ptype, err := p.parseTypeRef()
+			if err != nil {
+				return nil, err
+			}
+			params = append(params, FnParam{
+				Name: pname.Value,
+				Type: ptype,
+				Pos:  pname.Pos,
+			})
+			if p.peek().Kind == KindComma {
+				p.advance()
+				continue
+			}
+			break
+		}
+	}
+	if _, err := p.expectParen(KindRParen, "in spec method signature"); err != nil {
+		return nil, err
+	}
+	var ret *TypeRef
+	if p.peek().Kind == KindArrow {
+		p.advance()
+		tr, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		ret = tr
+	}
+	// A `{` here means a default implementation; otherwise the method is
+	// signature-only and the next token is either a NEWLINE separator or `}`
+	// closing the spec body.
+	var body *Block
+	if p.peek().Kind == KindLBrace {
+		b, err := p.parseBlock("spec method default body")
+		if err != nil {
+			return nil, err
+		}
+		body = b
+	}
+	return &SpecMethod{
+		Pos:    kw.Pos,
+		Name:   nameTok.Value,
+		Params: params,
+		Return: ret,
+		Body:   body,
+	}, nil
+}
+
+// parseImplDecl handles both inherent and for-spec impl blocks:
+//
+//   - `impl Type { fn ... fn ... }`               — inherent
+//   - `impl Type for Spec { fn ... }`             — for-spec
+//   - `impl Type for Spec {}`                     — for-spec, empty body
+//
+// We reject the bare `for` followed by `{` (missing spec name) with a focused
+// diagnostic rather than letting the lower-level "expected identifier" leak.
+func (p *parser) parseImplDecl() (Stmt, error) {
+	kw := p.advance() // consume `impl`
+	typeNameTok, err := p.expect(KindIdent, "after 'impl'")
+	if err != nil {
+		return nil, err
+	}
+	specName := ""
+	if p.peek().Kind == KindFor {
+		forTok := p.advance()
+		st := p.peek()
+		if st.Kind != KindIdent {
+			return nil, errorAt(forTok.Pos, "expected spec name after 'for', got %s", st.Kind)
+		}
+		p.advance()
+		specName = st.Value
+	}
+	if _, err := p.expect(KindLBrace, "in impl declaration"); err != nil {
+		return nil, err
+	}
+	p.parenDepth++
+	defer func() { p.parenDepth-- }()
+
+	var methods []*FnDecl
+	for {
+		if p.peek().Kind == KindRBrace {
+			break
+		}
+		// Methods inside an impl reuse the FnDecl shape unchanged. Typeck
+		// (Unit 3) routes them to the impl rather than to the global fn
+		// table, so the parser doesn't need a separate node type.
+		stmt, err := p.parseFnDecl()
+		if err != nil {
+			return nil, err
+		}
+		fn, ok := stmt.(*FnDecl)
+		if !ok {
+			return nil, errorAt(stmt.StmtPos(), "internal: parseFnDecl produced %T", stmt)
+		}
+		methods = append(methods, fn)
+	}
+	if _, err := p.expect(KindRBrace, "to close impl declaration"); err != nil {
+		return nil, err
+	}
+	return &ImplDecl{
+		Pos:     kw.Pos,
+		Type:    typeNameTok.Value,
+		Spec:    specName,
+		Methods: methods,
+	}, nil
+}
+
 // parseMatchStmt handles `match expr { arm; arm; ... }`. Each arm is
 // `pattern [if guard] => block-or-single-statement`. Arm separator is
 // NEWLINE — we lift parenDepth across the brace region so newlines inside
@@ -1006,10 +1178,13 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 	}
 
 	// Plain expression statement: only a CallExpr is meaningful at v0.1.
-	if _, ok := expr.(*CallExpr); !ok {
-		return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
+	// v0.4 broadens this to also accept a MethodCallExpr so `c.method()` is
+	// a valid statement (it has side effects via the impl method body).
+	switch expr.(type) {
+	case *CallExpr, *MethodCallExpr:
+		return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
 	}
-	return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
+	return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
 }
 
 // assignOpFor maps a token Kind to the matching AssignOp value, if any.
@@ -1423,6 +1598,41 @@ func (p *parser) parsePostfix() (Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			// v0.4: `expr DOT IDENT (` is a method call; otherwise the form
+			// stays a field access (the v0.3 shape). The disambiguation is
+			// purely additive — every existing field-access test continues to
+			// match the no-paren branch.
+			if p.peek().Kind == KindLParen {
+				if _, err := p.expectParen(KindLParen, "in method call"); err != nil {
+					return nil, err
+				}
+				var args []Expr
+				if p.peek().Kind != KindRParen {
+					for {
+						a, err := p.parseExpr()
+						if err != nil {
+							return nil, err
+						}
+						args = append(args, a)
+						if p.peek().Kind == KindComma {
+							p.advance()
+							continue
+						}
+						break
+					}
+				}
+				if _, err := p.expectParen(KindRParen, "in method call"); err != nil {
+					return nil, err
+				}
+				expr = &MethodCallExpr{
+					Pos:       dotTok.Pos,
+					Receiver:  expr,
+					Method:    nameTok.Value,
+					MethodPos: nameTok.Pos,
+					Args:      args,
+				}
+				continue
+			}
 			expr = &FieldAccessExpr{
 				Pos:       dotTok.Pos,
 				Receiver:  expr,
@@ -1562,6 +1772,9 @@ func (p *parser) parseAtom() (Expr, error) {
 		return p.parseTupleOrParen()
 	case KindLBracket:
 		return p.parseListLit()
+	case KindThis:
+		p.advance()
+		return &ThisExpr{Pos: t.Pos}, nil
 	case KindRange, KindRangeEq:
 		return nil, errorAt(t.Pos, "range expressions are only allowed in for-in heads or slice brackets")
 	case KindBang:

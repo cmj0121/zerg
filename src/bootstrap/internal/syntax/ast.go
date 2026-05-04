@@ -905,5 +905,85 @@ type EnumPat struct {
 	VariantName string
 }
 
-func (*EnumPat) patternNode()         {}
+func (*EnumPat) patternNode()       {}
 func (p *EnumPat) PatPos() Position { return p.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.4 polymorphism: spec / impl declarations + method-call expressions.
+//
+// At parse time we collect spec and impl bodies as flat AST nodes; typeck
+// (Unit 3) walks them to build the spec/impl tables, validates collisions,
+// and routes method calls. The parser stays liberal — any structural error
+// surfaces at typeck with a focused diagnostic.
+// ---------------------------------------------------------------------------
+
+// SpecMethod is one method declared inside a spec body. Body == nil means
+// signature-only (every implementing type MUST provide an override). Body
+// non-nil is a default implementation that an impl may inherit or override.
+//
+// Reusing FnParam keeps the parameter-shape parser shared with FnDecl.
+type SpecMethod struct {
+	Pos    Position
+	Name   string
+	Params []FnParam
+	Return *TypeRef // nil ⇒ no return value
+	Body   *Block   // nil ⇒ signature only
+}
+
+// SpecDecl represents `spec Name { method_decl* }`. Methods may be
+// signature-only (no body) or default implementations (body present); the
+// parser admits both shapes and the v0.4 typeck pass distinguishes them.
+type SpecDecl struct {
+	Pos     Position
+	Name    string
+	Methods []*SpecMethod
+}
+
+func (*SpecDecl) stmtNode()           {}
+func (s *SpecDecl) StmtPos() Position { return s.Pos }
+
+// ImplDecl represents both inherent and for-spec impl blocks:
+//
+//   - `impl Counter { fn double() -> int { ... } }` (inherent)
+//   - `impl Counter for Printable { fn to_string() -> str { ... } }` (for-spec)
+//
+// Spec is the empty string for the inherent form; for the for-spec form it is
+// the spec name. Methods reuse FnDecl unchanged — the only routing difference
+// (an implicit `this` receiver) is handled at typeck and codegen.
+type ImplDecl struct {
+	Pos     Position
+	Type    string // the type name being implemented
+	Spec    string // empty when inherent; otherwise the spec name
+	Methods []*FnDecl
+}
+
+func (*ImplDecl) stmtNode()           {}
+func (s *ImplDecl) StmtPos() Position { return s.Pos }
+
+// MethodCallExpr is `receiver.method(args)`. The parser produces this when an
+// `expr DOT IDENT` is followed by an open-paren; the no-paren form continues
+// to parse as FieldAccessExpr. Receiver, Method, and Args are walked by
+// typeck (Unit 3) for resolution; until then the node simply records the
+// shape that was parsed.
+type MethodCallExpr struct {
+	typed
+	Pos      Position
+	Receiver Expr
+	Method   string
+	MethodPos Position
+	Args     []Expr
+}
+
+func (*MethodCallExpr) exprNode()           {}
+func (e *MethodCallExpr) ExprPos() Position { return e.Pos }
+
+// ThisExpr is the literal `this` keyword used inside method bodies. Typeck
+// (Unit 3) rejects occurrences outside method bodies; the parser accepts it
+// in any expression position so the diagnostic comes with full type context.
+type ThisExpr struct {
+	typed
+	Pos Position
+}
+
+func (*ThisExpr) exprNode()           {}
+func (e *ThisExpr) ExprPos() Position { return e.Pos }

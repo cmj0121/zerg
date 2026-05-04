@@ -228,6 +228,11 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		return nil
 	case *syntax.MatchStmt:
 		return in.execMatch(s)
+	case *syntax.SpecDecl, *syntax.ImplDecl:
+		// v0.4 Unit 1: parser-only landing. Typeck rejects these shapes
+		// before the interpreter sees them; the case here exists so a tree
+		// that somehow slips past typeck fails loudly with the v0.4 marker.
+		return fmt.Errorf("v0.4 work in progress: %T not yet supported by interpreter at %s", s, stmt.StmtPos())
 	}
 	return fmt.Errorf("internal: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -738,6 +743,11 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return in.evalSlice(e)
 	case *syntax.FieldAccessExpr:
 		return in.evalFieldAccess(e)
+	case *syntax.MethodCallExpr, *syntax.ThisExpr:
+		// v0.4 Unit 1: parser-only landing. Typeck rejects these expressions
+		// before evaluation; the case here exists so a tree that somehow
+		// slips past typeck fails loudly with the v0.4 marker.
+		return Value{}, fmt.Errorf("v0.4 work in progress: %T not yet supported by interpreter at %s", e, expr.ExprPos())
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
 }

@@ -76,6 +76,11 @@ func Emit(prog *syntax.Program, w io.Writer) error {
 		switch stmt.(type) {
 		case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
 			continue
+		case *syntax.SpecDecl, *syntax.ImplDecl:
+			// v0.4 Unit 1: parser-only landing. Typeck rejects these shapes
+			// before codegen sees them; skip at the top level for symmetry
+			// with the other declaration shapes.
+			continue
 		}
 		if err := g.emitStmt(stmt); err != nil {
 			return err
@@ -922,6 +927,12 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 		return nil
 	case *syntax.MatchStmt:
 		return g.emitMatch(s)
+	case *syntax.SpecDecl, *syntax.ImplDecl:
+		// v0.4 Unit 1: parser-only landing. Typeck rejects these before
+		// codegen runs; this case stays so a tree that somehow slips past
+		// typeck fails loudly with the v0.4 marker rather than producing
+		// silently broken C.
+		return fmt.Errorf("v0.4 work in progress: %T not yet supported by codegen at %s", s, stmt.StmtPos())
 	}
 	return fmt.Errorf("codegen: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -1636,6 +1647,11 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return g.fieldAccessStr(e)
 	case *syntax.CallExpr:
 		return g.callStr(e)
+	case *syntax.MethodCallExpr, *syntax.ThisExpr:
+		// v0.4 Unit 1: parser-only landing. Typeck rejects these expressions
+		// before codegen sees them; case here keeps the failure mode loud
+		// rather than silently emitting broken C if a tree slips through.
+		return "", fmt.Errorf("v0.4 work in progress: %T not yet supported by codegen at %s", e, expr.ExprPos())
 	}
 	return "", fmt.Errorf("codegen: unhandled expression %T at %s", expr, expr.ExprPos())
 }

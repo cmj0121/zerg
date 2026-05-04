@@ -683,6 +683,13 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		return nil
 	case *MatchStmt:
 		return c.checkMatch(s)
+	case *SpecDecl:
+		// v0.4 Unit 1: parser-only landing for spec declarations. Typeck
+		// support (spec/impl tables, method dispatch) lands in Unit 3.
+		return typeErr(s.Pos, "spec declarations are not yet supported (v0.4 work in progress)")
+	case *ImplDecl:
+		// v0.4 Unit 1: parser-only landing. Typeck support lands in Unit 3.
+		return typeErr(s.Pos, "impl declarations are not yet supported (v0.4 work in progress)")
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -1302,6 +1309,14 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.checkSlice(e)
 	case *FieldAccessExpr:
 		return c.checkFieldAccess(e)
+	case *MethodCallExpr:
+		// v0.4 Unit 1: parser-only landing for method-call syntax. Method
+		// dispatch (resolution + vtable routing) lands in Unit 3.
+		return nil, typeErr(e.Pos, "method calls are not yet supported (v0.4 work in progress)")
+	case *ThisExpr:
+		// v0.4 Unit 1: parser-only landing. Typeck binds `this` to the
+		// receiver type inside method bodies starting in Unit 3.
+		return nil, typeErr(e.Pos, "'this' is not yet supported (v0.4 work in progress)")
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

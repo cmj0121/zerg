@@ -469,13 +469,21 @@ func TestParseDoubleFieldAccess(t *testing.T) {
 }
 
 func TestParseFieldThenCall(t *testing.T) {
+	// v0.4 routes `expr DOT IDENT '('` to a MethodCallExpr so the impl
+	// dispatch path can pick it up. The receiver is the leading expression
+	// and the method name is the identifier after the dot. Prior to v0.4
+	// this parsed as CallExpr{Callee: FieldAccessExpr{...}}; the postfix
+	// rule changed but the source surface (`p.method()`) is identical.
 	prog := parseProgramSrc(t, "let v := p.method()\n")
-	call, ok := firstExprStmt(t, prog).(*CallExpr)
+	mc, ok := firstExprStmt(t, prog).(*MethodCallExpr)
 	if !ok {
-		t.Fatalf("value is %T, want *CallExpr", firstExprStmt(t, prog))
+		t.Fatalf("value is %T, want *MethodCallExpr (v0.4 method-call shape)", firstExprStmt(t, prog))
 	}
-	if _, ok := call.Callee.(*FieldAccessExpr); !ok {
-		t.Errorf("callee is %T, want *FieldAccessExpr", call.Callee)
+	if id, ok := mc.Receiver.(*IdentExpr); !ok || id.Name != "p" {
+		t.Errorf("receiver = %T %v, want IdentExpr p", mc.Receiver, mc.Receiver)
+	}
+	if mc.Method != "method" {
+		t.Errorf("method = %q, want method", mc.Method)
 	}
 }
 

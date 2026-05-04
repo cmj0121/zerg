@@ -1,0 +1,12 @@
+# requires: v0.8
+
+pub enum IoError {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    InvalidPath,
+    Other,
+}
+
+pub fn read_file(path: str) -> Result[str, IoError] __builtin io_read_file
+pub fn write_file(path: str, content: str) -> Result[bool, IoError] __builtin io_write_file

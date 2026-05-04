@@ -1,0 +1,3 @@
+# requires: v0.8
+
+pub fn env(name: str) -> Option[str] __builtin os_env

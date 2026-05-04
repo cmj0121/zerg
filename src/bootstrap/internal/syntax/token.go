@@ -162,6 +162,12 @@ const (
 	// at Units 6 / 7.
 	KindSpawn // spawn
 	KindDefer // defer
+
+	// KindLArrow is the v0.7 channel send / receive operator `<-`. Disambiguated
+	// in the lexer against `<`, `<=`, `<<`, `<<=` via longest-match. Used in two
+	// shapes by the parser: `expr <- expr` for a send statement, and prefix
+	// `<- expr` for a receive expression.
+	KindLArrow // <-
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -344,6 +350,8 @@ func (k Kind) String() string {
 		return "'spawn'"
 	case KindDefer:
 		return "'defer'"
+	case KindLArrow:
+		return "'<-'"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

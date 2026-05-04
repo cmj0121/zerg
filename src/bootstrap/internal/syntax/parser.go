@@ -1732,6 +1732,14 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 		return nil, err
 	}
 
+	// v0.7 send statement: `chan_expr <- value_expr`. The detector runs before
+	// the assignment check because `<-` is not an assignment operator and
+	// `expr <- value` only makes sense as a statement (a send produces no
+	// value). Chained sends (`a <- b <- c`) reject at parse time per PLAN.md.
+	if p.peek().Kind == KindLArrow {
+		return p.parseSendStmt(expr)
+	}
+
 	// Check for an assignment operator.
 	if op, ok := assignOpFor(p.peek().Kind); ok {
 		opTok := p.advance()
@@ -1781,9 +1789,11 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 
 	// Plain expression statement: only a CallExpr is meaningful at v0.1.
 	// v0.4 broadens this to also accept a MethodCallExpr so `c.method()` is
-	// a valid statement (it has side effects via the impl method body).
+	// a valid statement (it has side effects via the impl method body). v0.7
+	// adds the `<- ch` receive-discard form (a bare RecvExpr) — a receive has
+	// the side effect of advancing the channel even when the value is unused.
 	switch expr.(type) {
-	case *CallExpr, *MethodCallExpr:
+	case *CallExpr, *MethodCallExpr, *RecvExpr:
 		return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
 	}
 	return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
@@ -2183,7 +2193,11 @@ func (p *parser) parseMul() (Expr, error) {
 	}
 }
 
-// Level 11: unary -, ~ (right-assoc).
+// Level 11: unary -, ~, <- (right-assoc). v0.7 adds prefix `<-` for channel
+// receive, which sits at the same precedence rung as the other prefix unaries.
+// Chained receives (`<- <- ch`) parse naturally via the recursive call into
+// parseUnary; typeck rejects them because the inner receive yields `T?`,
+// which is not itself a chan.
 func (p *parser) parseUnary() (Expr, error) {
 	switch p.peek().Kind {
 	case KindMinus:
@@ -2200,6 +2214,13 @@ func (p *parser) parseUnary() (Expr, error) {
 			return nil, err
 		}
 		return &UnaryExpr{Pos: opTok.Pos, Op: UnaryBitNot, Operand: operand}, nil
+	case KindLArrow:
+		opTok := p.advance()
+		operand, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &RecvExpr{Pos: opTok.Pos, Chan: operand}, nil
 	}
 	return p.parsePostfix()
 }
@@ -2455,6 +2476,15 @@ func (p *parser) parseAtom() (Expr, error) {
 		p.advance()
 		return &BoolLit{Pos: t.Pos, Value: false}, nil
 	case KindIdent:
+		// v0.7 chan constructor: the IDENT `chan` followed immediately by `[`
+		// in expression position is the channel constructor (`chan[T]()` /
+		// `chan[T](N)`). The parser commits eagerly because `chan[...]` cannot
+		// be a meaningful index expression — `chan` is reserved for the built-
+		// in constructor and any user-defined binding with that name is
+		// rejected at typeck.
+		if t.Value == "chan" && p.peekAfterIdentIs(KindLBracket) {
+			return p.parseChanConstructorExpr()
+		}
 		p.advance()
 		// Struct-literal disambiguation (v0.2). `Ident '{' ...` is a struct
 		// literal only when the inside is empty (`{}`) or starts with

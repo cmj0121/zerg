@@ -1330,3 +1330,45 @@ type DeferStmt struct {
 
 func (*DeferStmt) stmtNode()           {}
 func (s *DeferStmt) StmtPos() Position { return s.Pos }
+
+// ChanConstructorExpr is `chan[T]()` (unbuffered, rendezvous) or `chan[T](N)`
+// (buffered, capacity N). The parser produces this node when it sees the
+// IDENT `chan` followed by `[T]` then `(...)` — the only place `chan` can
+// appear in expression position. Element carries the parsed element type;
+// Capacity is non-nil only for the buffered form. typeck (Unit 2) resolves
+// Element and validates that Capacity (when present) is an int.
+type ChanConstructorExpr struct {
+	typed
+	Pos      Position
+	Element  *TypeRef
+	Capacity Expr // nil ⇒ unbuffered (rendezvous)
+}
+
+func (*ChanConstructorExpr) exprNode()           {}
+func (e *ChanConstructorExpr) ExprPos() Position { return e.Pos }
+
+// SendStmt is `chan_expr <- value_expr`. Statement-only — a send produces no
+// value and so cannot appear in expression position. The parser detects the
+// shape after parsing the LHS expression at statement position and seeing
+// `<-` next; chained sends (`a <- b <- c`) are rejected at parse time per
+// PLAN.md so users must split with parens.
+type SendStmt struct {
+	Pos   Position
+	Chan  Expr
+	Value Expr
+}
+
+func (*SendStmt) stmtNode()           {}
+func (s *SendStmt) StmtPos() Position { return s.Pos }
+
+// RecvExpr is the prefix `<-` channel-receive operator: `<- ch`. Yields
+// `T?` at typeck (Option[T]) so the closed-channel case lands as `None`.
+// Same precedence rung as the other prefix unaries (`-`, `~`, `not`).
+type RecvExpr struct {
+	typed
+	Pos  Position
+	Chan Expr
+}
+
+func (*RecvExpr) exprNode()           {}
+func (e *RecvExpr) ExprPos() Position { return e.Pos }

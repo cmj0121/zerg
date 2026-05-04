@@ -526,6 +526,11 @@ type FnDecl struct {
 	Return     *TypeRef // nil ⇒ no return value
 	Body       *Block
 	Pub        bool
+	// HasDefers (v0.7 Unit 3) is set when the body contains at least one
+	// DeferStmt. Set by the typeck collect pass that walks fn bodies for
+	// closure / defer analysis; downstream halves use this bit to skip
+	// per-frame defer-stack setup on fns that don't need it.
+	HasDefers bool
 }
 
 func (*FnDecl) stmtNode()           {}
@@ -1279,17 +1284,42 @@ func (e *CoalesceExpr) ExprPos() Position { return e.Pos }
 // v0.7 concurrency expression / statement nodes.
 // ---------------------------------------------------------------------------
 
+// Capture (v0.7 Unit 3) records one outer-scope binding referenced from
+// inside an AnonFnExpr body. Name is the identifier, Pos is the use-site
+// position of one of the references (used for diagnostics), and Type is the
+// resolved *Type of the binding at capture-analysis time. Captures are
+// recorded once per name regardless of how many times the body references
+// it. The slot lives on AnonFnExpr.Captures.
+type Capture struct {
+	Name string
+	Pos  Position
+	Type *Type
+}
+
 // AnonFnExpr is `fn(params) -> R { body }` (or `fn(params) { body }` with no
 // return) used in expression position. Same shape as FnDecl minus the name.
 // The parser produces this node when it sees `fn` immediately followed by `(`
 // — the tenth-man-pinned disambiguation rule. Capture analysis lives in
 // typeck (Unit 3); this node only carries the syntactic surface.
+//
+// Captures (v0.7 Unit 3) records the outer-scope bindings the body references
+// — populated by typeck capture analysis. Captures from inner declarations
+// (params, lets inside the body) are NOT recorded; only free variables that
+// resolve to bindings declared outside the AnonFnExpr appear here. Each entry
+// is added at most once even if the body references the name many times.
+//
+// HasDefers (v0.7 Unit 3) is set when the body (any nesting depth, but the
+// parser only admits top-level fn-body defers) contains at least one
+// DeferStmt. Downstream halves use this bit to skip per-frame defer-stack
+// setup on closures that don't need it.
 type AnonFnExpr struct {
 	typed
-	Pos    Position
-	Params []FnParam
-	Return *TypeRef // nil ⇒ no return value
-	Body   *Block
+	Pos       Position
+	Params    []FnParam
+	Return    *TypeRef // nil ⇒ no return value
+	Body      *Block
+	Captures  []Capture
+	HasDefers bool
 }
 
 func (*AnonFnExpr) exprNode()           {}

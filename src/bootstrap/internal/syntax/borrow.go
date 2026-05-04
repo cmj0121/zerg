@@ -456,6 +456,20 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 			return err
 		}
 		return c.walkExpr(s.Value, false)
+	case *SpawnStmt:
+		// v0.7 Unit 3: typeck-only landing. Spawn's move/clone semantics
+		// land in Unit 5; today we walk the call as a read.
+		return c.walkExpr(s.Call, false)
+	case *DeferStmt:
+		// v0.7 Unit 3: typeck-only landing. Defer's per-frame stack
+		// bookkeeping lands in Unit 5.5; today we walk the body so any
+		// inner moves still register against the surrounding scope.
+		for _, st := range s.Body.Statements {
+			if err := c.checkStmt(st); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -818,6 +832,12 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		// channel handle isn't moved); the resulting value is owned by the
 		// caller. Unit 5 will refine the move-in semantics.
 		return c.walkExpr(e.Chan, false)
+	case *AnonFnExpr:
+		// v0.7 Unit 3: anon-fn body's borrow rules (capture deep-copy at
+		// creation, immutable-only) land in Unit 5. Today we treat the body
+		// as opaque — captures aren't moved out at typeck time, and the
+		// body's internal moves don't escape into the surrounding scope.
+		return nil
 	case *CoalesceExpr:
 		// `??` LHS is the match-scrutinee; whichever arm fires moves the
 		// bound value out (Some(v) ⇒ v moves, None ⇒ rhs moves). The borrow

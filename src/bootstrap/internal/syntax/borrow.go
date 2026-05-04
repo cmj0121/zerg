@@ -780,6 +780,17 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 			return borrowErr(e.Pos, "use of moved value: %q (moved at %s)", "this", entry.movePos)
 		}
 		return nil
+	case *EnumLit:
+		// v0.6: typeck lowers MethodCallExpr / FieldAccessExpr enum-variant
+		// constructions to EnumLit, and Unit 3's T → T? lift wraps a value
+		// in a synthetic EnumLit. Each payload position is a consume site
+		// (the same shape as a struct field or list element).
+		for _, p := range e.Payload {
+			if err := c.consumeOrWalk(p, "moved by enum payload"); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return borrowErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

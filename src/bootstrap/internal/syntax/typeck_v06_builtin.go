@@ -74,11 +74,10 @@ func builtinResultDecl() *EnumDecl {
 
 // injectBuiltinEnums wires the v0.6 built-in Option / Result decls into c's
 // tables. Called from newChecker so every module's collect pass already sees
-// the names. The synthetic decls go into enumAST so the user-decl reservation
-// diagnostic in collectTopLevel can attribute the prior-declaration position
-// when needed; the *Type entries in c.enums are placeholders for the
-// uninstantiated generic decls (resolveTypeRef requires explicit type-args
-// to monomorphize).
+// the names. The synthetic decls live in builtinEnumDecls and enumAST so the
+// generic-decl path can look them up; they are NOT placed in c.enums (which
+// holds non-generic concrete enum types) — every use site monomorphizes
+// through instantiateGenericEnum which writes into c.monoEnums.
 func injectBuiltinEnums(c *checker) {
 	if c.builtinEnumDecls == nil {
 		c.builtinEnumDecls = map[string]*EnumDecl{}
@@ -89,16 +88,6 @@ func injectBuiltinEnums(c *checker) {
 	for _, decl := range []*EnumDecl{builtinOptionDecl(), builtinResultDecl()} {
 		c.builtinEnumDecls[decl.Name] = decl
 		c.enumAST[decl.Name] = decl
-		variants := make([]string, len(decl.Variants))
-		for i, v := range decl.Variants {
-			variants[i] = v.Name
-		}
-		c.enums[decl.Name] = &Type{
-			Kind:            TypeEnum,
-			Name:            decl.Name,
-			Variants:        variants,
-			VariantPayloads: make([][]*Type, len(variants)),
-		}
 	}
 }
 
@@ -213,8 +202,11 @@ func (c *checker) resolveTypeRefWithSubst(ref *TypeRef, subst map[string]*Type) 
 	}
 	switch ref.Kind {
 	case TypeRefNamed:
-		if ref.Module == "" && len(ref.TypeArgs) == 0 && !ref.Nullable {
+		if ref.Module == "" && len(ref.TypeArgs) == 0 {
 			if t, ok := subst[ref.Name]; ok {
+				if ref.Nullable {
+					return c.wrapOption(t, ref.Pos)
+				}
 				return t, nil
 			}
 		}

@@ -107,9 +107,18 @@ func CheckBundle(bundle BundleView) error {
 	// the importing module's binding. We attach the per-bundle checkers
 	// map onto each module's crossModCtx (created in Phase 1.5 by
 	// bindModuleImports) so the import bindings populated above survive.
+	//
+	// v0.6 Unit 3: install the bundle-shared monomorphisation cache so a
+	// generic instance constructed in any module canonicalises to one
+	// *Type. The crossModCtx already carries the importing module's
+	// binding state; tagging bundleMono on it makes the cache reachable
+	// from any per-checker entrypoint.
+	bMono := newBundleMono()
 	for _, m := range mods {
 		c := checkers[m]
 		c.crossMod.checkers = checkers
+		c.crossMod.bundleMono = bMono
+		c.attachBundleMono()
 		if err := c.resolveStructFields(m.ModuleProgram()); err != nil {
 			return err
 		}
@@ -129,6 +138,15 @@ func CheckBundle(bundle BundleView) error {
 			return err
 		}
 		if err := c.resolveSpecs(m.ModuleProgram()); err != nil {
+			return err
+		}
+	}
+	// v0.6 Unit 3: register and validate generic-fn signatures after the
+	// regular fn / spec passes so bound TypeRefs can resolve to spec types
+	// across the bundle.
+	for _, m := range mods {
+		c := checkers[m]
+		if err := c.resolveGenericFnSignatures(m.ModuleProgram()); err != nil {
 			return err
 		}
 	}
@@ -219,12 +237,36 @@ func newChecker() *checker {
 		ret:     NewListType(tInt),
 		builtin: true,
 	}
+	// v0.6 Unit 3: per-checker monomorphisation caches. CheckBundle replaces
+	// these with bundle-shared maps in attachBundleMono so cross-module
+	// instances canonicalise to one *Type / *FnDecl.
+	c.monoStructs = map[string]*Type{}
+	c.monoFns = map[string]*FnDecl{}
+	c.genericFnAST = map[string]*FnDecl{}
 	// v0.6 Unit 2: register synthetic generic enum decls (Option, Result)
 	// before any user-decl walk so the names are visible to every module
 	// without an explicit import and the reservation diagnostic in
 	// collectTopLevel can fire against a same-named user decl.
 	injectBuiltinEnums(c)
 	return c
+}
+
+// attachBundleMono points c's per-checker mono caches at the bundle-shared
+// tables. Called by CheckBundle right after each checker's collect / import-
+// bind passes so subsequent type / fn resolution canonicalises bundle-wide.
+//
+// For correctness on cache contents: the per-checker maps populated by
+// injectBuiltinEnums hold only placeholder entries for the bare-name Option /
+// Result enums; no instance has been constructed yet. We replace the maps
+// rather than copy, because instantiateGenericEnum and friends always
+// dereference c.monoEnums / monoStructs / monoFns to look up entries.
+func (c *checker) attachBundleMono() {
+	if c.crossMod == nil || c.crossMod.bundleMono == nil {
+		return
+	}
+	c.monoEnums = c.crossMod.bundleMono.enums
+	c.monoStructs = c.crossMod.bundleMono.structs
+	c.monoFns = c.crossMod.bundleMono.fns
 }
 
 // crossModCtx is the per-module cross-module resolution state. Lives on
@@ -237,6 +279,27 @@ type crossModCtx struct {
 	// importDecl records which ImportDecl introduced the binding (for
 	// diagnostics).
 	importDecl map[string]*ImportDecl
+	// bundleMono is the v0.6 Unit 3 shared monomorphisation cache. Every
+	// module's checker shares one set of maps so a generic instance
+	// constructed in module A and module B canonicalises to one *Type.
+	bundleMono *bundleMono
+}
+
+// bundleMono holds the bundle-wide monomorphisation caches. Three tables —
+// generic enum / struct types, and generic fn specialisations — keyed by the
+// canonical instance name (`Decl[arg1,arg2,...]`).
+type bundleMono struct {
+	enums   map[string]*Type
+	structs map[string]*Type
+	fns     map[string]*FnDecl
+}
+
+func newBundleMono() *bundleMono {
+	return &bundleMono{
+		enums:   map[string]*Type{},
+		structs: map[string]*Type{},
+		fns:     map[string]*FnDecl{},
+	}
 }
 
 // bindModuleImports populates the import-binding table on c.crossMod and

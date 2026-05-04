@@ -332,24 +332,20 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 	return in
 }
 
-// resolveImplReceiver looks up the impl's receiver type in the declaring
-// module's tables (or in the imported module named by id.TypeModule). The
-// returned *Type is the canonical *Type pointer that StructLit.Type() and
-// EnumLit.Type() carry — pointer equality is the dispatch key.
+// resolveImplReceiver returns the canonical receiver *Type pointer that
+// the impl's methods should be keyed by in the bundle-wide impl index.
 //
-// We recover the canonical *Type from typeck's stamp by scanning every
-// module in the bundle for a matching TypeRef.Resolved or Expr.Type().
-// The canonical *Type pointer is shared across modules (typeck wires
-// cross-module references through the foreign module's type table), so
-// any one stamp suffices. Searching the bundle (not just the owning
-// module) handles the case where the owning module declares but never
-// references its own type — only the importer does — and v0.5 corpora
-// of that shape (sibling fixtures with bare `pub struct` + impl) become
-// dispatchable.
+// Primary source is id.Receiver, stamped by typeck during
+// resolveImplsCross — the same canonical *Type pointer that
+// StructLit.Type() and EnumLit.Type() carry. Pointer equality is the
+// dispatch key, and typeck's stamp guarantees two modules each declaring
+// `struct Counter` get distinct pointers (each module's own checker
+// owns the *Type it built for its own decl).
 //
-// When no stamp is found anywhere, we fall back to a per-Decl stand-in
-// *Type pointer so dispatch still has a stable key (same module's later
-// lookups keep finding the same pointer).
+// Fallbacks (rare, defensive) cover bundles checked by an older typeck
+// pass that didn't populate id.Receiver: scan the owning module's prog
+// for a stamp first (so we don't conflate cross-module same-named
+// types), then synthesise a per-Decl stand-in *Type as a last resort.
 func (in *interp) resolveImplReceiver(self *moduleData, id *syntax.ImplDecl) *syntax.Type {
 	owner := self
 	if id.TypeModule != "" {
@@ -357,28 +353,29 @@ func (in *interp) resolveImplReceiver(self *moduleData, id *syntax.ImplDecl) *sy
 			owner = t
 		}
 	}
-	if t := in.findCanonicalTypeBundle(id.Type); t != nil {
+	// Primary: typeck-stamped canonical pointer.
+	if id.Receiver != nil {
+		if id.Receiver.Kind == syntax.TypeEnum {
+			owner.enums[id.Type] = id.Receiver
+		}
+		return id.Receiver
+	}
+	// Fallback 1: scan the owning module's own prog for a TypeRef stamp.
+	// Restricted to owner.prog so two modules' same-named types stay
+	// pointer-distinct.
+	if t := findCanonicalType(owner.prog, id.Type); t != nil {
 		if t.Kind == syntax.TypeEnum {
 			owner.enums[id.Type] = t
 		}
 		return t
 	}
+	// Fallback 2: per-Decl stand-in. Keyed by *StructDecl pointer so each
+	// module's same-named struct still gets a distinct *Type.
 	if _, ok := owner.structs[id.Type]; ok {
 		for _, stmt := range owner.prog.Statements {
 			if sd, ok := stmt.(*syntax.StructDecl); ok && sd.Name == id.Type {
 				return getOrCreateStructType(sd)
 			}
-		}
-	}
-	return nil
-}
-
-// findCanonicalTypeBundle scans every module in the bundle for a typed
-// stamp matching name. Returns the first canonical *Type pointer found.
-func (in *interp) findCanonicalTypeBundle(name string) *syntax.Type {
-	for _, md := range in.modules {
-		if t := findCanonicalType(md.prog, name); t != nil {
-			return t
 		}
 	}
 	return nil

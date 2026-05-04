@@ -365,6 +365,12 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 				return err
 			}
 		}
+		// Stamp the resolved canonical receiver *Type onto the AST node.
+		// Downstream consumers (interp's RunBundle, build's EmitBundle)
+		// read id.Receiver to key impl tables by canonical pointer, so
+		// two modules' same-named types disambiguate without a bundle-
+		// wide name scan.
+		id.Receiver = recvType
 		impl := &Impl{
 			Pos:       id.Pos,
 			TypeName:  id.Type,
@@ -877,9 +883,16 @@ func (c *checker) collectAllVisibleMethods(recv *Type, methodName string) []*met
 	// Local module's visibility map.
 	local := c.methodVisible[recv.Name]
 	for _, src := range local[methodName] {
-		// Filter inherent/spec impls in foreign modules through pub
-		// gating — but since these are LOCAL impls (registered on c),
-		// no pub gating applies.
+		// v0.5: receiver-pointer gate. Two modules may both declare a
+		// type named e.g. "Counter" — the visibility map is keyed by
+		// the bare name, but each Impl.Receiver carries the canonical
+		// *Type pointer for that module's type. When dispatching on
+		// the OTHER module's Counter, we must skip the local module's
+		// same-named impl. Pointer equality is the dispatch key.
+		if src.impl != nil && src.impl.Receiver != nil && src.impl.Receiver != recv {
+			continue
+		}
+		// LOCAL impls (registered on c) need no pub gating.
 		srcs = append(srcs, src)
 	}
 	// Foreign modules' visibility maps. Walk every checker in the

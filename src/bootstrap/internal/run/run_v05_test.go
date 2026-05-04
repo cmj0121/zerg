@@ -344,3 +344,75 @@ print x.name()
 `,
 	}, "cat\ndog\n")
 }
+
+// V05 same-named struct in two modules: main and util both declare
+// `struct Counter` with their own inherent `show` method. Dispatch must
+// route to the receiver's own module's impl. Mirrors the codegen
+// guarantee enforced by TestV05CodegenSameNamedStructDistinctMangle —
+// two distinct canonical *Type pointers, two distinct impl entries.
+func TestV05SameNamedStructDistinctImpls(t *testing.T) {
+	expectBundleOK(t, "main.zg", map[string]string{
+		"util.zg": `pub struct Counter { tag: int }
+impl Counter {
+pub fn show() -> str { return "util" }
+}
+`,
+		"main.zg": `import "util"
+struct Counter { tag: int }
+impl Counter {
+pub fn show() -> str { return "main" }
+}
+let mc := Counter { tag: 1 }
+print mc.show()
+let uc := util.Counter { tag: 1 }
+print uc.show()
+`,
+	}, "main\nutil\n")
+}
+
+// V05 same-named enum WITH PAYLOAD variants in two modules — exercises
+// the cross-module enum-lit construction (`util.Token.Ident("hi")`)
+// path. Dispatch on a method must route to the impl belonging to the
+// receiver's owning module's canonical enum *Type.
+func TestV05SameNamedPayloadEnumDistinctImpls(t *testing.T) {
+	expectBundleOK(t, "main.zg", map[string]string{
+		"util.zg": `pub enum Token { Eof, Ident(str) }
+impl Token {
+pub fn label() -> str { return "util" }
+}
+`,
+		"main.zg": `import "util"
+enum Token { Eof, Ident(str) }
+impl Token {
+pub fn label() -> str { return "main" }
+}
+let mt := Token.Ident("x")
+print mt.label()
+let ut := util.Token.Ident("y")
+print ut.label()
+`,
+	}, "main\nutil\n")
+}
+
+// V05 same-named enum in two modules. Each declares an inherent method
+// returning the module's own label. Dispatch must key by canonical
+// *Type so the two impls don't collide.
+func TestV05SameNamedEnumDistinctImpls(t *testing.T) {
+	expectBundleOK(t, "main.zg", map[string]string{
+		"util.zg": `pub enum Color { Red, Green }
+impl Color {
+pub fn label() -> str { return "util" }
+}
+`,
+		"main.zg": `import "util"
+enum Color { Red, Green }
+impl Color {
+pub fn label() -> str { return "main" }
+}
+let mc := Color.Red
+print mc.label()
+let uc := util.Color.Red
+print uc.label()
+`,
+	}, "main\nutil\n")
+}

@@ -475,6 +475,33 @@ print cb.v
 	}
 }
 
+// 13b. Two modules each declaring the same-named struct with their own
+// inherent method. Method dispatch must route to the receiver's own
+// module's impl on both halves of the toolchain — this is the
+// end-to-end parity twin of TestV05CodegenSameNamedStructDistinctMangle
+// (which checked symbol presence). RunBundle's bug surfaced here was
+// keying impl tables by bare typename; the fix re-keys by canonical
+// *Type pointer (typeck stamps id.Receiver) so both halves agree.
+func TestV05ParitySameNamedStructDispatch(t *testing.T) {
+	expectV05Parity(t, "main.zg", map[string]string{
+		"util.zg": `pub struct Counter { tag: int }
+impl Counter {
+pub fn show() -> str { return "util" }
+}
+`,
+		"main.zg": `import "util"
+struct Counter { tag: int }
+impl Counter {
+pub fn show() -> str { return "main" }
+}
+let mc := Counter { tag: 1 }
+print mc.show()
+let uc := util.Counter { tag: 1 }
+print uc.show()
+`,
+	}, "main\nutil\n")
+}
+
 // 14. Diamond import — main imports b and c, both import d. d's pub fn
 // must be reachable from main and produce the same value through both
 // paths.

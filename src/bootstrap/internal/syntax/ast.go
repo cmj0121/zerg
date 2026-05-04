@@ -1054,6 +1054,15 @@ type ImplDecl struct {
 	// imported module that defined Spec (`impl T for util.Printable`).
 	SpecModule string
 	Methods []*FnDecl
+	// Receiver is the canonical *Type pointer typeck resolved Type/
+	// TypeModule to. Set during the resolveImpls / resolveImplsCross
+	// pass and read by downstream consumers (interp's RunBundle, build's
+	// EmitBundle) that need pointer-equality dispatch on the receiver.
+	// Two modules each declaring `struct Counter` get distinct *Type
+	// pointers here, so impl tables can disambiguate by canonical pointer
+	// rather than bare name. Nil for impls that fail to resolve (typeck
+	// rejects those before this gets read).
+	Receiver *Type
 }
 
 func (*ImplDecl) stmtNode()           {}

@@ -250,8 +250,69 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return p.parseSpecDecl()
 	case KindImpl:
 		return p.parseImplDecl()
+	case KindPub:
+		return p.parsePubDecl()
 	default:
 		return p.parseExprOrAssignStmt()
+	}
+}
+
+// parsePubDecl handles the `pub` visibility modifier on top-level
+// declarations. Grammar:
+//
+//	'pub' ('fn' fn_decl | 'struct' struct_decl | 'enum' enum_decl | 'spec' spec_decl)
+//
+// Anything else after `pub` is rejected with a focused diagnostic. v0.5
+// Unit 1a parses the bit but typeck does not yet consume it; programs
+// continue to behave exactly as v0.4. v0.5 Unit 3 wires the bit into
+// cross-module visibility gating.
+func (p *parser) parsePubDecl() (Stmt, error) {
+	pubTok := p.advance() // consume `pub`
+	t := p.peek()
+	switch t.Kind {
+	case KindFn:
+		fn, err := p.parseFnDecl()
+		if err != nil {
+			return nil, err
+		}
+		fn.(*FnDecl).Pub = true
+		return fn, nil
+	case KindStruct:
+		st, err := p.parseStructDecl()
+		if err != nil {
+			return nil, err
+		}
+		st.(*StructDecl).Pub = true
+		return st, nil
+	case KindEnum:
+		en, err := p.parseEnumDecl()
+		if err != nil {
+			return nil, err
+		}
+		en.(*EnumDecl).Pub = true
+		return en, nil
+	case KindSpec:
+		sp, err := p.parseSpecDecl()
+		if err != nil {
+			return nil, err
+		}
+		sp.(*SpecDecl).Pub = true
+		return sp, nil
+	case KindLet, KindMut, KindConst, KindImpl:
+		// `pub` is decl-level only and applies to the four shapes above —
+		// emit a focused diagnostic rather than letting `parseDecl` /
+		// `parseImplDecl` handle the keyword (which would lose the `pub`
+		// context). `pub impl` is rejected here because the `pub` lives on
+		// each inner method's `fn`, not on the impl itself.
+		return nil, errorAt(pubTok.Pos, "pub may only modify fn / struct / enum / spec")
+	case KindEOF:
+		return nil, &ParseError{
+			Pos:        pubTok.Pos,
+			Message:    "expected fn / struct / enum / spec after 'pub'",
+			Incomplete: true,
+		}
+	default:
+		return nil, errorAt(pubTok.Pos, "expected fn / struct / enum / spec after 'pub'")
 	}
 }
 
@@ -736,10 +797,21 @@ func (p *parser) parseSpecDecl() (Stmt, error) {
 	return &SpecDecl{Pos: kw.Pos, Name: nameTok.Value, Methods: methods}, nil
 }
 
-// parseSpecMethod consumes one `fn IDENT (params?) (-> type)? block?` entry.
-// The block is optional inside a spec — its absence marks the method as
-// signature-only (must be implemented by every type that impls the spec).
+// parseSpecMethod consumes one `[pub] fn IDENT (params?) (-> type)? block?`
+// entry. The block is optional inside a spec — its absence marks the method
+// as signature-only (must be implemented by every type that impls the spec).
+//
+// A leading `pub` records v0.5 visibility on the SpecMethod itself; only
+// `fn` may follow `pub` inside a spec body, mirroring the top-level rule.
 func (p *parser) parseSpecMethod() (*SpecMethod, error) {
+	pub := false
+	if p.peek().Kind == KindPub {
+		pubTok := p.advance()
+		if p.peek().Kind != KindFn {
+			return nil, errorAt(pubTok.Pos, "expected fn / struct / enum / spec after 'pub'")
+		}
+		pub = true
+	}
 	kw, err := p.expect(KindFn, "in spec method")
 	if err != nil {
 		return nil, err
@@ -806,6 +878,7 @@ func (p *parser) parseSpecMethod() (*SpecMethod, error) {
 		Params: params,
 		Return: ret,
 		Body:   body,
+		Pub:    pub,
 	}, nil
 }
 
@@ -846,6 +919,19 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 		// Methods inside an impl reuse the FnDecl shape unchanged. Typeck
 		// (Unit 3) routes them to the impl rather than to the global fn
 		// table, so the parser doesn't need a separate node type.
+		//
+		// v0.5: a leading `pub` sets the visibility bit on the inner FnDecl.
+		// `pub` on an impl method is the only way to mark an impl member
+		// public — the impl block itself does not carry a `pub` (the PLAN
+		// pins decl-level visibility on `fn` / `struct` / `enum` / `spec`).
+		pub := false
+		if p.peek().Kind == KindPub {
+			pubTok := p.advance()
+			if p.peek().Kind != KindFn {
+				return nil, errorAt(pubTok.Pos, "expected fn / struct / enum / spec after 'pub'")
+			}
+			pub = true
+		}
 		stmt, err := p.parseFnDecl()
 		if err != nil {
 			return nil, err
@@ -854,6 +940,7 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 		if !ok {
 			return nil, errorAt(stmt.StmtPos(), "internal: parseFnDecl produced %T", stmt)
 		}
+		fn.Pub = pub
 		methods = append(methods, fn)
 	}
 	if _, err := p.expect(KindRBrace, "to close impl declaration"); err != nil {

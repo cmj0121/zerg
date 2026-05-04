@@ -440,12 +440,20 @@ type FnParam struct {
 
 // FnDecl represents `fn name(p: T, ...) -> R { ... }`. The return type is
 // optional — a nil Return means the function returns no value.
+//
+// Pub records the v0.5 visibility modifier: true when the source wrote
+// `pub fn ...`, false (the default) for an unprefixed `fn ...`. The bit is
+// also set on impl-method FnDecls when the inner method was prefixed
+// (`impl T { pub fn m() ... }`). At v0.5 Unit 1a typeck does not yet
+// consume the bit; it carries through unchanged for Unit 3 to gate
+// cross-module access.
 type FnDecl struct {
 	Pos    Position
 	Name   string
 	Params []FnParam
 	Return *TypeRef // nil ⇒ no return value
 	Body   *Block
+	Pub    bool
 }
 
 func (*FnDecl) stmtNode()           {}
@@ -670,10 +678,14 @@ type FieldDecl struct {
 
 // StructDecl represents `struct Name { f1: T1, f2: T2, ... }`. Empty field
 // lists are accepted at parse time; typeck rejects them per the PLAN.
+//
+// Pub records the v0.5 decl-level visibility modifier. Field-level `pub` is
+// out of scope at v0.5; only the decl as a whole is gated.
 type StructDecl struct {
 	Pos    Position
 	Name   string
 	Fields []FieldDecl
+	Pub    bool
 }
 
 func (*StructDecl) stmtNode()           {}
@@ -694,10 +706,14 @@ type VariantDecl struct {
 }
 
 // EnumDecl represents `enum Name { V1, V2, ... }`.
+//
+// Pub records the v0.5 decl-level visibility modifier. Variants inherit the
+// enum's visibility; per-variant `pub` is not a v0.5 surface.
 type EnumDecl struct {
 	Pos      Position
 	Name     string
 	Variants []VariantDecl
+	Pub      bool
 }
 
 func (*EnumDecl) stmtNode()           {}
@@ -942,21 +958,30 @@ func (p *EnumPat) PatPos() Position { return p.Pos }
 // non-nil is a default implementation that an impl may inherit or override.
 //
 // Reusing FnParam keeps the parameter-shape parser shared with FnDecl.
+//
+// Pub records the v0.5 visibility modifier on a spec-method declaration.
+// The bit is inert at Unit 1a; Unit 3 will use it to gate cross-module
+// dispatch on default-method bodies.
 type SpecMethod struct {
 	Pos    Position
 	Name   string
 	Params []FnParam
 	Return *TypeRef // nil ⇒ no return value
 	Body   *Block   // nil ⇒ signature only
+	Pub    bool
 }
 
 // SpecDecl represents `spec Name { method_decl* }`. Methods may be
 // signature-only (no body) or default implementations (body present); the
 // parser admits both shapes and the v0.4 typeck pass distinguishes them.
+//
+// Pub records the v0.5 decl-level visibility modifier on the spec itself;
+// individual method visibility is recorded on each SpecMethod.
 type SpecDecl struct {
 	Pos     Position
 	Name    string
 	Methods []*SpecMethod
+	Pub     bool
 }
 
 func (*SpecDecl) stmtNode()           {}

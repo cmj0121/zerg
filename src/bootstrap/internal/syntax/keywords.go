@@ -38,4 +38,8 @@ var keywords = map[string]Kind{
 	"spec": KindSpec,
 	"impl": KindImpl,
 	"this": KindThis,
+	// v0.5 module keywords. `pub` is the top-level visibility modifier; it
+	// applies to `fn`, `struct`, `enum`, `spec`, and impl methods. The bit
+	// is parsed but inert at Unit 1a — Unit 3 wires it into typeck.
+	"pub": KindPub,
 }

@@ -2188,14 +2188,19 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.checkEnumLit(e)
 	case *NilLit:
 		// v0.6 Unit 2: nil resolves only when the surrounding context
-		// supplies an Option[T] expected type via the hint. Inference
-		// across other shapes (fn-arg slot, list-element type,
-		// return-expr context) lands at Unit 4.
+		// supplies an Option[T] expected type via the hint. Unit 4
+		// extends every bidirectional position (return, fn-arg, list
+		// element, struct field) by routing those callers through
+		// checkExprLift, which propagates the hint here.
 		if hint != nil && hint.Kind == TypeEnum && isOptionInstance(hint) {
 			e.setType(hint)
 			return hint, nil
 		}
 		return nil, typeErr(e.Pos, "cannot infer type of nil — annotate the binding")
+	case *PropagateExpr:
+		return c.checkPropagate(e)
+	case *CoalesceExpr:
+		return c.checkCoalesce(e, hint)
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }
@@ -2550,6 +2555,12 @@ func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 // when the access shape is `Option.None` / `Result.Ok` / etc. — a generic
 // enum bare-variant access where the type-args must come from context.
 func (c *checker) checkFieldAccessHint(e *FieldAccessExpr, hint *Type) (*Type, error) {
+	// v0.6 Unit 4: `obj?.field` routes through the safe-navigation path. The
+	// receiver must be Option[T]; the result is Option[fieldType]. Chains
+	// compose because each ?. returns Option[...] which the next ?. consumes.
+	if e.Safe {
+		return c.checkSafeFieldAccess(e)
+	}
 	// v0.5: receiver `mod.X` (FieldAccessExpr whose own receiver is the
 	// module-binding IdentExpr) where X is a foreign enum type. The
 	// outer FieldName is the variant.

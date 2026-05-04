@@ -791,6 +791,13 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 			}
 		}
 		return nil
+	case *PropagateExpr:
+		return c.walkExpr(e.Inner, false)
+	case *CoalesceExpr:
+		if err := c.walkExpr(e.Left, false); err != nil {
+			return err
+		}
+		return c.walkExpr(e.Right, false)
 	}
 	return borrowErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }

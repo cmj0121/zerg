@@ -170,6 +170,56 @@ fn dec() -> int { return 0 }
 	}
 }
 
+// TestParseImplMultiStatementBody — guards against the regression where
+// parseImplDecl bumped parenDepth around the body, causing peek() to consume
+// the NEWLINE between statements inside a method body and then reject the
+// next statement with "expected newline or end of statement, got 'return'".
+func TestParseImplMultiStatementBody(t *testing.T) {
+	src := `impl Counter {
+fn double() -> int {
+let y := this.count
+return y * 2
+}
+}
+`
+	prog := parseProgramSrc(t, src)
+	s := expectOne[*ImplDecl](t, prog)
+	if len(s.Methods) != 1 {
+		t.Fatalf("got %d methods, want 1", len(s.Methods))
+	}
+	body := s.Methods[0].Body
+	if body == nil {
+		t.Fatalf("method body is nil")
+	}
+	if len(body.Statements) != 2 {
+		t.Fatalf("got %d body statements, want 2", len(body.Statements))
+	}
+}
+
+// TestParseSpecDefaultMultiStatementBody — same regression guard for spec
+// default bodies.
+func TestParseSpecDefaultMultiStatementBody(t *testing.T) {
+	src := `spec Greeter {
+fn greet() -> str {
+let s := "hi"
+return s
+}
+}
+`
+	prog := parseProgramSrc(t, src)
+	s := expectOne[*SpecDecl](t, prog)
+	if len(s.Methods) != 1 {
+		t.Fatalf("got %d methods, want 1", len(s.Methods))
+	}
+	body := s.Methods[0].Body
+	if body == nil {
+		t.Fatalf("default body is nil")
+	}
+	if len(body.Statements) != 2 {
+		t.Fatalf("got %d body statements, want 2", len(body.Statements))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Method-call syntax: postfix DOT IDENT '(' ⇒ MethodCallExpr.
 // ---------------------------------------------------------------------------

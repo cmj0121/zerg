@@ -717,12 +717,11 @@ func (p *parser) parseSpecDecl() (Stmt, error) {
 	if _, err := p.expect(KindLBrace, "in spec declaration"); err != nil {
 		return nil, err
 	}
-	p.parenDepth++
-	defer func() { p.parenDepth-- }()
 
 	var methods []*SpecMethod
 	for {
-		if p.peek().Kind == KindRBrace {
+		p.skipNewlines()
+		if p.peekRaw().Kind == KindRBrace {
 			break
 		}
 		m, err := p.parseSpecMethod()
@@ -837,12 +836,11 @@ func (p *parser) parseImplDecl() (Stmt, error) {
 	if _, err := p.expect(KindLBrace, "in impl declaration"); err != nil {
 		return nil, err
 	}
-	p.parenDepth++
-	defer func() { p.parenDepth-- }()
 
 	var methods []*FnDecl
 	for {
-		if p.peek().Kind == KindRBrace {
+		p.skipNewlines()
+		if p.peekRaw().Kind == KindRBrace {
 			break
 		}
 		// Methods inside an impl reuse the FnDecl shape unchanged. Typeck

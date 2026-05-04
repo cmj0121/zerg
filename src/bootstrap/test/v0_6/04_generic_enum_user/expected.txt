@@ -1,0 +1,3 @@
+Pair.Both(1, one)
+Pair.Both(2, two)
+Pair.Both(3, three)

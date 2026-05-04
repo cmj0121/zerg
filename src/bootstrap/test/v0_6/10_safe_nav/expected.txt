@@ -1,0 +1,8 @@
+Option.Some(Inner { tag: deep })
+Option.None
+Option.Some(deep)
+Option.None
+Option.Some(Ada)
+Option.None
+Option.Some(36)
+Option.None

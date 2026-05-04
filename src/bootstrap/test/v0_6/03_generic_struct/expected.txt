@@ -1,0 +1,2 @@
+Box { value: 42 }
+Box { value: hi }

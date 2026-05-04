@@ -1,0 +1,5 @@
+Box { value: Option.Some(42) }
+Box { value: Option.None }
+Box { value: Option.Some(hi) }
+Option.Some(42)
+Option.None

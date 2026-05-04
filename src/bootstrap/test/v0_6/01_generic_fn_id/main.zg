@@ -1,0 +1,8 @@
+# requires: v0.6
+
+fn id[T](x: T) -> T {
+    return x
+}
+
+print id(42)
+print id("hello")

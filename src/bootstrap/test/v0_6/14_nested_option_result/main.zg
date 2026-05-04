@@ -1,0 +1,18 @@
+# requires: v0.6
+
+let none_inner: Option[int] = Option.None
+let x: Option[Option[int]] = Option.Some(Option.Some(7))
+let y: Option[Option[int]] = Option.Some(none_inner)
+let z: Option[Option[int]] = Option.None
+print x
+print y
+print z
+
+let inner_ok: Result[str, int] = Result.Ok("inner-ok")
+let inner_err: Result[str, int] = Result.Err(404)
+let r1: Result[int, Result[str, int]] = Result.Ok(1)
+let r2: Result[int, Result[str, int]] = Result.Err(inner_ok)
+let r3: Result[int, Result[str, int]] = Result.Err(inner_err)
+print r1
+print r2
+print r3

@@ -1,0 +1,10 @@
+# requires: v0.6
+
+import "util"
+
+let a: int? = 7
+let b: int? = nil
+print util.id(42)
+print util.id("ping")
+print a ?? 0
+print b ?? 99

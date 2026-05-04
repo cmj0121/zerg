@@ -1,0 +1,22 @@
+# requires: v0.6
+
+struct Inner { tag: str }
+struct Outer { inner: Inner }
+
+let o1: Outer? = Outer { inner: Inner { tag: "deep" } }
+let o2: Outer? = nil
+
+print o1?.inner
+print o2?.inner
+
+print o1?.inner?.tag
+print o2?.inner?.tag
+
+struct Person { name: str, age: int }
+
+let p: Person? = Person { name: "Ada", age: 36 }
+let q: Person? = nil
+print p?.name
+print q?.name
+print p?.age
+print q?.age

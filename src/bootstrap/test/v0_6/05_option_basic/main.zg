@@ -1,0 +1,11 @@
+# requires: v0.6
+
+let x: int? = 42
+let y: int? = nil
+let z: str? = "ping"
+let w: str? = nil
+
+print x
+print y
+print z
+print w

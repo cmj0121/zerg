@@ -1,0 +1,2 @@
+Result.Ok(43)
+Result.Err(bad input)

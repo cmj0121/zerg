@@ -1,0 +1,16 @@
+# requires: v0.6
+
+let a: int? = 7
+let b: int? = nil
+print a ?? 0
+print b ?? 99
+
+let c: str? = "hi"
+let d: str? = nil
+print c ?? "default"
+print d ?? "default"
+
+let r1: Result[int, str] = Result.Ok(42)
+let r2: Result[int, str] = Result.Err("nope")
+print r1 ?? -1
+print r2 ?? -1

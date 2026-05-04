@@ -1,0 +1,17 @@
+# requires: v0.6
+
+enum Pair[A, B] {
+    Both(A, B),
+    Left(A),
+    Right(B)
+}
+
+let xs: list[Pair[int, str]] = [
+    Pair.Both(1, "one"),
+    Pair.Both(2, "two"),
+    Pair.Both(3, "three")
+]
+
+for p in xs {
+    print p
+}

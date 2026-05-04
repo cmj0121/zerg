@@ -1,0 +1,22 @@
+# requires: v0.6
+
+spec Printable {
+    fn label() -> str
+}
+
+struct Cat { name: str }
+
+impl Cat for Printable {
+    pub fn label() -> str {
+        return "Cat: " + this.name
+    }
+}
+
+fn announce[T: Printable](x: T) -> str {
+    return x.label()
+}
+
+let c1 := Cat{ name: "Mittens" }
+let c2 := Cat{ name: "Whiskers" }
+print announce(c1)
+print announce(c2)

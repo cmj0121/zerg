@@ -32,7 +32,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.4** — polymorphism and errors.
 - [x] **v0.5** — modules.
 - [x] **v0.6** — generics and null-safety.
-- [ ] **v0.7** — concurrency runtime.
+- [x] **v0.7** — concurrency runtime.
 - [ ] **v0.8** — standard library.
 - [ ] **v0.9** — developer tooling.
 - [ ] **v0.10** — hardening and language reference.
@@ -45,15 +45,16 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
-(composite data), v0.3 (borrow checking), v0.4 (polymorphism), v0.5 (modules), and v0.6 (generics
-and null-safety) share the same `zerg` binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and
-the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 corpora) keep working unchanged.
+(composite data), v0.3 (borrow checking), v0.4 (polymorphism), v0.5 (modules), v0.6 (generics
+and null-safety), and v0.7 (concurrency runtime) share the same `zerg` binary; earlier examples
+(`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 / v0.6 corpora) keep working
+unchanged.
 
 ### Prerequisites
 
 - Go 1.23 or newer.
-- A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv`; gcc and
-  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.6.
+- A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv` and
+  `-pthread`; gcc and clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.7.
 - macOS or Linux. Windows is deferred.
 
 ### Build the toolchain
@@ -94,21 +95,28 @@ type/fn/method symbol with a per-module mangle so multi-file programs link clean
 separate object-file step. v0.6 reuses that path for monomorphized generics: each unique
 `(decl, type-args)` pair lowers to one C struct/fn whose mangle suffixes the canonical type-arg
 vector (e.g. `Box[int]` → `Box__int`), so generic instances dedup at link time without a separate
-template machinery.
+template machinery. v0.7 extends the embedded prelude with a pthread-backed concurrency runtime —
+per-element-type `zerg_chan_<T>` (mutex + condvar + ring buffer), `zerg_chan_send` / `_recv` /
+`_close`, `zerg_select` array-of-cases helper, `pthread_create` wrapper for `spawn`, a per-thread
+LIFO defer stack drained at fn exit, and `zerg_wait_group_t` (mutex + condvar + counter). The build
+path adds `-pthread` to the cc flags; macOS and Linux both ship pthreads with the toolchain.
 
 ### REPL
 
-The v0.6 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
+The v0.7 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
 body, a `for` block, a `struct`/`enum`/`spec`/`impl` declaration, or a `match` one line at a time.
 The borrow checker runs against each accepted program — diagnostics fire at the prompt, not the
 next prompt. `import` is intentionally not admitted at the REPL: typing `import "x"` produces the
-dedicated diagnostic `import not supported at REPL` and the session continues.
+dedicated diagnostic `import not supported at REPL` and the session continues. `defer` at the
+prompt is rejected (no enclosing fn). A `spawn fn() { ... }()` at the prompt is admitted; the REPL
+synchronously waits for the spawned task to finish before printing the next prompt so output stays
+deterministic.
 
 <!-- markdownlint-disable MD013 -->
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.6 — accepts the v0.6 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety)
+# Zerg REPL v0.7 — accepts the v0.7 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -121,8 +129,12 @@ dedicated diagnostic `import not supported at REPL` and the session continues.
 # zerg> let opt: int? = 7
 # zerg> print opt ?? -1
 # 7
+# zerg> let ch := chan[int](1)
+# zerg> ch <- 42
+# zerg> print <- ch
+# Option.Some(42)
 # zerg> :help
-# Statements: let/mut/const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Run :exit to quit.
+# Statements: let/mut/const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print, spawn, defer, select. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Concurrency: chan[T], <-, close, for v in ch, anon fn, wait_group. Run :exit to quit.
 # zerg> :exit
 ```
 
@@ -135,8 +147,8 @@ version they need. The CLI inspects that comment before lexing the body and refu
 beyond the current toolchain version with a clean message:
 
 ```sh
-./src/bootstrap/bin/zerg run examples/12_concurrency.zg
-# zerg: examples/12_concurrency.zg requires v0.7 (current is v0.6)
+./src/bootstrap/bin/zerg run examples/13_asm.zg
+# zerg: examples/13_asm.zg requires v0.8 (current is v0.7)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -154,10 +166,13 @@ missing sibling `math.zg` and an external git import) that are not supported at 
 errors at parse / module-load time. `examples/11_null_safety.zg` advertises v0.6 and now passes
 the gate; the surface it exercises (`Result[T, E]`, `?` propagation, `T?` ≡ `Option[T]`, `nil`)
 is supported, though the example's bare-variant constructors (`Ok(...)` without the `Result.`
-qualifier) lie outside the v0.6 corpus and still error at parse time. The v0.6 surface is
-exercised end-to-end by the `test/v0_6/` corpus. The authoritative parity corpora live at
-`src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`, `src/bootstrap/test/v0_4/`,
-`src/bootstrap/test/v0_5/`, and `src/bootstrap/test/v0_6/`.
+qualifier) lie outside the v0.6 corpus and still error at parse time. `examples/12_concurrency.zg`
+advertises v0.7 and now passes the gate; the surface it exercises (`chan[T]`, `spawn`, anon fn,
+`select`, `defer`) is supported, though the example's body may still rely on shapes outside the
+v0.7 corpus. The v0.7 surface is exercised end-to-end by the `test/v0_7/` corpus. The authoritative
+parity corpora live at `src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`,
+`src/bootstrap/test/v0_4/`, `src/bootstrap/test/v0_5/`, `src/bootstrap/test/v0_6/`, and
+`src/bootstrap/test/v0_7/`.
 
 ### Supported syntax at v0.1
 
@@ -669,6 +684,123 @@ print bs.tag()
 # Box
 ```
 
+### Supported syntax at v0.7
+
+v0.7 layers a concurrency runtime on top of v0.6; everything in v0.0 / v0.1 / v0.2 / v0.3 / v0.4 /
+v0.5 / v0.6 still parses and runs. Single-file programs that don't use `chan`, `spawn`, anon fn,
+`select`, `defer`, or `wait_group` are unchanged. What's new:
+
+- **`chan[T]` channels.** Built-in generic type. `chan[T]()` is unbuffered (rendezvous handshake);
+  `chan[T](N)` is buffered (FIFO, capacity N). Send blocks when the buffer is full (or always, for
+  unbuffered, until a matching receive); receive blocks when the buffer is empty (or always, for
+  unbuffered, until a matching send). Channels are not `Printable` — `print ch` rejects at typeck.
+- **Send `ch <- v`.** Statement form. Moves `v` into the channel; the sender no longer owns `v`
+  after the send. Sending into a closed channel panics, matching Go semantics.
+- **Receive `<- ch`.** Prefix-unary expression. Yields `Option[T]` so user code can match on
+  drain-after-close: an open channel produces `Option.Some(v)` (blocking until a value arrives or
+  the channel closes); a drained closed channel produces `Option.None`.
+- **`close(ch)`.** Built-in fn. Once closed, sends panic; receivers drain remaining buffered values
+  in FIFO order, then see `None`. Closing an already-closed channel panics.
+- **`for v in ch`.** Iterator form. Receives until close; binds `v` to the inner `T` (the loop
+  unwraps the `Option` for the user). Desugars at typeck onto the v0.6 `Option[T]` machinery.
+- **`spawn fn-call`.** Statement form. Starts a fire-and-forget concurrent task. The argument must
+  be a fn-call expression (named fn or IIFE anon fn). No return value.
+- **Anon fn `fn(params) -> R { body }`.** Expression form. Captures only **immutable** outer
+  bindings — `mut` capture rejects at typeck. Captured composites are deep-copied at closure
+  creation via the same per-shape `_clone` helpers v0.3 introduced; primitives copy by value. Each
+  capture is independent, so mutations to the original after closure creation don't reach the
+  closure. Often invoked immediately (`fn() { ... }()`) or passed to `spawn`.
+- **`defer expr` / `defer block`.** Registers a statement (or block) to run at fn-body exit, in
+  **LIFO order**. v0.7 admits `defer` only at fn-body scope (not inside `if` / `for` / `match` /
+  other nested blocks). The defer stack is drained on every exit path including the v0.6 `?`
+  early-return propagation. `defer` at the REPL rejects (no enclosing fn).
+- **`select { ... }`.** Multiplexed channel wait. Each arm is one channel op + a body:
+  - `v := <- ch -> { body }` — recv-bind; `v` scopes to the arm body only.
+  - `<- ch -> { body }` — recv-discard.
+  - `ch <- expr -> { body }` — send arm.
+  - `_ -> { body }` — default arm; makes the select non-blocking when no other arm is ready.
+    Empty `select` rejects at parse time. On ties (multiple arms ready), the codegen path picks the
+    first ready arm in declaration order while the interpreter picks at random; both are correct
+    because well-formed programs must not depend on tie-break order. v0.8+ may unify on Go's
+    randomised tie-break once non-deterministic goldens are admitted across the board.
+- **`wait_group` builtin.** Minimal coordination primitive for fan-in. Surface:
+  `wg := wait_group()` constructs the handle; `wg.add(n)` increments the counter (call before
+  spawning); `wg.done()` decrements (call from the spawned task); `wg.wait()` blocks until the
+  counter is zero. Lets multiple senders share a channel and have one closer call `close(ch)` after
+  `wg.wait()`.
+- **Borrow rules for concurrency.** Send moves the value into the channel. Receive moves the value
+  out. Spawn captures only immutable bindings; the deep-copy happens at the spawn site so the
+  spawned task and the parent never alias. The channel handle itself is shared — both sides keep a
+  handle across send/recv.
+- **Out of scope at v0.7, deferred.** General `sync[T]` mutex-protected shared value (defer to v0.8
+  stdlib — `wait_group` is the only coordination primitive shipping at v0.7). Lambda `|x| x * 2`
+  syntax (anon fn covers the surface). Cancellation contexts and timeouts (need a stdlib
+  `sleep` / deadline). `defer` in nested blocks (only fn-body-level admitted at v0.7). Channel
+  direction marks `chan<-[T]` / `<-chan[T]` (defer to v0.8 with stdlib). `raise` / `try` / `except`
+  and a spec `Exception` (grammar reserves them; v0.7 does not parse them).
+
+A small v0.7 sample — fan-in via channel + wait_group:
+
+```zerg
+fn worker(id: int, ch: chan[int], wg: WaitGroup) {
+    defer wg.done()
+    ch <- id * 10
+}
+
+let ch := chan[int](3)
+let wg := wait_group()
+wg.add(3)
+spawn worker(1, ch, wg)
+spawn worker(2, ch, wg)
+spawn worker(3, ch, wg)
+
+spawn fn() {
+    wg.wait()
+    close(ch)
+}()
+
+mut total := 0
+for v in ch {
+    total = total + v
+}
+print total
+# 60
+```
+
+Anon fn capturing an immutable composite (deep-copied at creation) plus a `select` with default:
+
+```zerg
+let nums := [1, 2, 3]
+let ch := chan[int](1)
+
+spawn fn() {
+    let snapshot := nums
+    ch <- len(snapshot)
+}()
+
+select {
+    v := <- ch -> { print v }
+    _ -> { print "would block" }
+}
+# 3
+```
+
+`defer` runs in LIFO order at fn-body exit, including the `?` early-return path inherited from
+v0.6:
+
+```zerg
+fn body() -> Result[int, str] {
+    defer print "first deferred"
+    defer print "second deferred"
+    return Result.Ok(7)
+}
+
+print body()
+# second deferred
+# first deferred
+# Result.Ok(7)
+```
+
 ### Print format and numeric semantics
 
 Both `zerg run` and `zerg build` implement the same table so stdout is byte-identical:
@@ -727,8 +859,16 @@ coalesce on Option/Result, `?.` safe-navigation chains, the symmetric `T → T?`
 boundary (let-init, fn-arg, return, struct field, list element), `impl[T] LocalType[T] for Spec`
 generic-impl dispatch, cross-module generic instantiation, nested `Option[Result[…, …]]` shapes,
 plus a `rejects/` set pinning unmet-bound, `?` outside a Result/Option fn, mismatched `E`,
-unannotated `nil`, user redecl of `Option`, and the `T??` double-nullable parse reject. Run the
-full corpus with:
+unannotated `nil`, user redecl of `Option`, and the `T??` double-nullable parse reject. v0.7 adds
+a 14-program corpus at `src/bootstrap/test/v0_7/` plus a 3-program scheduling subdir at
+`src/bootstrap/test/v0_7/scheduling/`. The deterministic-stdout half covers unbuffered and
+buffered send/recv, `close` + drain, anon-fn IIFE and capture, `defer` LIFO ordering, `defer` ×
+`?` propagation, `wait_group` fan-in, `for v in ch`, and `select` arms (default, send, recv-bind);
+the scheduling subdir asserts invariants for non-deterministic surface (select tie-break,
+send-blocks-on-full-buffer). The `rejects/` set pins defer-at-non-fn-scope, spawn-of-non-fn-call,
+mut-capture, send-into-closed, and defer-at-REPL. The README's parity rule —
+**byte-identical for sequential code, equivalent under any valid scheduling for concurrent code** —
+is unchanged; the `scheduling/` subdir formalises the second half. Run the full corpus with:
 
 ```sh
 make test
@@ -742,6 +882,50 @@ the project is based on what I dream of.
 All the features are based on my needs and my dreams.
 
 ## Release notes
+
+### v0.7 — concurrency runtime
+
+- `chan[T]` built-in generic channel type. `chan[T]()` is unbuffered (rendezvous handshake);
+  `chan[T](N)` is buffered (FIFO, capacity N). Send and receive are first-class on both halves —
+  Go channels under the interpreter, a pthread + mutex + condvar + ring-buffer C runtime under
+  the build path.
+- Send `ch <- v` (statement) and receive `<- ch` (expression yielding `Option[T]`). Receiving from
+  an open empty channel blocks; receiving from a drained closed channel produces `Option.None`.
+- `close(ch)` builtin. Once closed, sends panic; receivers drain remaining buffered values in FIFO
+  order and then see `None`. Closing twice panics.
+- `for v in ch` iterator form. Loops until close; `v` binds to the inner `T`. Desugars onto the
+  v0.6 `Option[T]` machinery at typeck.
+- `spawn fn-call` statement starts a fire-and-forget concurrent task. Argument must be a fn-call
+  (named fn or IIFE anon fn). Interpreter side: a Go goroutine. Build side: `pthread_create` with a
+  capped stack size.
+- Anon fn `fn(params) -> R { body }` as an expression — captures only **immutable** outer
+  bindings; captured composites are deep-copied at closure creation via the v0.3 per-shape
+  `_clone` helpers. `mut` capture rejects at typeck. Often invoked immediately or passed to
+  `spawn`.
+- `defer expr` / `defer block` registers a statement to run at fn-body exit in **LIFO order**. The
+  defer stack drains on every exit path including the v0.6 `?` early-return propagation. v0.7
+  admits `defer` only at fn-body scope; nested-block `defer` is deferred.
+- `select { ... }` multiplexed channel wait. Arms: recv-bind `v := <- ch -> { ... }`, recv-discard
+  `<- ch -> { ... }`, send `ch <- expr -> { ... }`, default `_ -> { ... }`. Empty `select` rejects
+  at parse time. On ties, the codegen path picks first-ready in declaration order while the
+  interpreter randomises; both are correct under the parity rule because well-formed programs must
+  not depend on tie-break order.
+- `wait_group` builtin for fan-in coordination. `wg := wait_group()` constructs the handle;
+  `wg.add(n)` increments the counter, `wg.done()` decrements, `wg.wait()` blocks until zero.
+  Interpreter uses `sync.WaitGroup`; codegen lowers to a mutex + condvar + counter.
+- Borrow rules: send moves the value into the channel, receive moves it out. The channel handle
+  itself is shared across both ends. Spawn captures only immutable bindings and deep-copies
+  composites at the spawn site so the spawned task and the parent never alias.
+- Parity rule extension: the byte-identical-stdout contract holds for every sequential program;
+  for concurrent programs the contract becomes equivalent-under-any-valid-scheduling, formalised
+  by the new `test/v0_7/scheduling/` invariant-asserting harness.
+- Build-side runtime: the embedded C prelude grows a pthread-backed concurrency runtime —
+  per-element-type `zerg_chan_<T>`, `zerg_select` array-of-cases helper, a per-thread defer stack,
+  and `zerg_wait_group_t`. The build path adds `-pthread` to the cc flags. macOS and Linux both
+  ship pthreads with the toolchain.
+- Backward compatibility: every v0.0–v0.6 corpus continues to pass under `make test`. The v0.5
+  module mangle and the v0.6 monomorphisation suffix both flow through unchanged for v0.7's new
+  `chan[T]` and anon-fn-env types.
 
 ### v0.6 — generics and null-safety
 

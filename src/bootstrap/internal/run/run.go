@@ -15,6 +15,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
@@ -75,9 +76,11 @@ func RunBundle(bundle syntax.BundleView, w io.Writer) error {
 			continue
 		}
 		if err := in.execStmt(stmt); err != nil {
+			in.spawnWg.Wait()
 			return err
 		}
 	}
+	in.spawnWg.Wait()
 	return nil
 }
 
@@ -173,6 +176,23 @@ type interp struct {
 	// pushing/popping a Go slice is allocation-light and the depth stays small
 	// in practice.
 	stack []*frame
+
+	// v0.7: per-fn-call defer stacks (LIFO). callFn / callMethodFn /
+	// callFnValue push a fresh slot; the body's DeferStmt appends; the
+	// fn-call epilogue drains in reverse before returning. The slice grows
+	// only during execution so ownership matches the call stack 1:1.
+	deferStacks [][]deferRec
+
+	// v0.7: synchronisation for spawned goroutines and stdout. spawnWg
+	// tracks all live spawned tasks so Run blocks at the top-level until
+	// every task has either returned or paniced — without this the v0.7
+	// REPL behaviour ("synchronously wait for spawned tasks before
+	// returning the next prompt") and corpus determinism would not hold.
+	// writeMu guards in.w against concurrent writes from spawned tasks.
+	// Both are pointers so a sibling interp built via shallow-copy in
+	// newSiblingInterp can share them without violating sync.noCopy.
+	spawnWg *sync.WaitGroup
+	writeMu *sync.Mutex
 }
 
 // moduleData is the per-module decl table. Indexed maps mirror typeck's
@@ -220,6 +240,8 @@ func newFrame() *frame { return &frame{vars: map[string]*Value{}} }
 func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 	in := &interp{
 		w:                  w,
+		spawnWg:            &sync.WaitGroup{},
+		writeMu:            &sync.Mutex{},
 		modules:            map[*syntax.Program]*moduleData{},
 		fnOwner:            map[*syntax.FnDecl]*moduleData{},
 		specMethodOwner:    map[*syntax.SpecMethod]*moduleData{},
@@ -885,6 +907,14 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		// the merged program. A stray ImportDecl at this layer is a no-op.
 		_ = s
 		return nil
+	case *syntax.SendStmt:
+		return in.execSend(s)
+	case *syntax.SpawnStmt:
+		return in.execSpawn(s)
+	case *syntax.DeferStmt:
+		return in.execDefer(s)
+	case *syntax.SelectStmt:
+		return in.execSelect(s)
 	}
 	return fmt.Errorf("internal: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -900,6 +930,8 @@ func (in *interp) execPrint(s *syntax.PrintStmt) error {
 	// Append '\n' once — every output line gets it. fmt.Fprintln would also
 	// work but introduces a Fprintln-specific space-between-args behaviour
 	// that does not matter here yet may surprise a reader; explicit is safer.
+	in.writeMu.Lock()
+	defer in.writeMu.Unlock()
 	if _, err := io.WriteString(in.w, out); err != nil {
 		return err
 	}
@@ -1271,6 +1303,8 @@ func (in *interp) execFor(s *syntax.ForStmt) error {
 			}
 		}
 		return nil
+	case syntax.ForChan:
+		return in.execForChan(s)
 	case syntax.ForIter:
 		// `for x in xs { ... }` — list iteration. Evaluate the iterable
 		// once; deep-copy each element on bind so the loop body sees a
@@ -1445,6 +1479,12 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return in.evalPropagate(e)
 	case *syntax.CoalesceExpr:
 		return in.evalCoalesce(e)
+	case *syntax.ChanConstructorExpr:
+		return in.evalChanConstructor(e)
+	case *syntax.RecvExpr:
+		return in.evalRecv(e)
+	case *syntax.AnonFnExpr:
+		return in.evalAnonFn(e)
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -1680,12 +1720,27 @@ func floatMod(a, b float64) float64 { return math.Mod(a, b) }
 // returns int — at v0.2 it's the only generic intrinsic, so a single-name
 // switch is the right shape; future built-ins will append.
 func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
+	// v0.7: anon-fn IIFE — `fn() { ... }()`. The callee is the AnonFnExpr
+	// itself; evaluate it to an fnValue and dispatch through callFnValue.
+	if anon, ok := e.Callee.(*syntax.AnonFnExpr); ok {
+		fnv, err := in.evalAnonFn(anon)
+		if err != nil {
+			return Value{}, err
+		}
+		return in.callFnValue(fnv.Fn, e.Args, e.Type(), e.Pos)
+	}
 	ident, ok := e.Callee.(*syntax.IdentExpr)
 	if !ok {
 		return Value{}, fmt.Errorf("internal: non-ident callee at %s", e.Pos)
 	}
 	if ident.Name == "len" {
 		return in.evalLen(e)
+	}
+	if ident.Name == "wait_group" {
+		return in.evalWaitGroupCtor(e)
+	}
+	if ident.Name == "close" {
+		return in.evalCloseCall(e)
 	}
 	// v0.3 builtins. `clone(xs)` returns a deep copy of its composite argument
 	// — the borrow checker already enforces that primitives are rejected. The
@@ -1705,6 +1760,13 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	// is shared with the generic decl so behaviour is identical.
 	if e.Specialised != nil {
 		return in.callFn(e.Specialised, e.Args, e.Type(), e.Pos)
+	}
+	// v0.7: a local binding may carry a TypeFn (an anon-fn captured in a
+	// let). Calling such a binding routes through the fn-value path. The
+	// scope lookup runs first so a local fn-typed binding shadows any
+	// same-name top-level fn (matches typeck's resolution order).
+	if slot, ok := in.lookup(ident.Name); ok && slot.Type != nil && slot.Type.Kind == syntax.TypeFn && slot.Fn != nil {
+		return in.callFnValue(slot.Fn, e.Args, e.Type(), e.Pos)
 	}
 	fn, ok := in.cur.fns[ident.Name]
 	if !ok {
@@ -1748,6 +1810,7 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 	if owner := in.fnOwner[fn]; owner != nil {
 		in.cur = owner
 	}
+	in.pushDeferFrame(fn.HasDefers)
 	defer func() {
 		in.stack = savedStack
 		in.cur = savedCur
@@ -1760,6 +1823,7 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		// cannot be moved/mutated inside the body, so sharing the
 		// underlying value with the caller's binding is safe.
 		if err := in.declare(p.Name, args[i]); err != nil {
+			in.popDeferFrame(fn.HasDefers)
 			return Value{}, err
 		}
 	}
@@ -1771,6 +1835,7 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		}
 		var ret *errReturn
 		if errors.As(err, &ret) {
+			in.drainDefers(fn.HasDefers)
 			retVal := ret.value
 			if fn.Return != nil && fn.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, fn.Return.Resolved)
@@ -1781,8 +1846,10 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		// return type. Typeck has guaranteed shape compatibility (Option
 		// in Option fn, or Result in Result fn with matching E).
 		if pret, perr := in.catchPropagateForFn(err, fn); perr != nil {
+			in.drainDefers(fn.HasDefers)
 			return Value{}, perr
 		} else if pret != nil {
+			in.drainDefers(fn.HasDefers)
 			retVal := pret.value
 			if fn.Return != nil && fn.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, fn.Return.Resolved)
@@ -1794,10 +1861,13 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		// scope means any `break` is in a loop strictly inside the body and
 		// is caught by execFor before reaching us. Defensive check.
 		if errors.Is(err, errBreak) || errors.Is(err, errContinue) {
+			in.drainDefers(fn.HasDefers)
 			return Value{}, fmt.Errorf("internal: %v escaped fn %s", err, fn.Name)
 		}
+		in.drainDefers(fn.HasDefers)
 		return Value{}, err
 	}
+	in.drainDefers(fn.HasDefers)
 	// Fall-through end of body. typeck rejects falling off a non-void fn,
 	// so reaching here for a void fn is fine; for a non-void fn it is an
 	// internal error.
@@ -2455,6 +2525,10 @@ func (in *interp) resolveSpecMethod(recv *syntax.Type, specName, methodName stri
 // against the receiver's owning *Type.
 func (in *interp) dispatchConcrete(e *syntax.MethodCallExpr, rv Value) (Value, error) {
 	recv := rv.Type
+	// v0.7: synthetic WaitGroup methods route to host sync.WaitGroup ops.
+	if recv != nil && recv.Kind == syntax.TypeStruct && recv.Name == "WaitGroup" {
+		return in.dispatchWaitGroup(e, rv)
+	}
 	// 1. Inherent.
 	if methods, ok := in.inherentByType[recv]; ok {
 		if fn, ok := methods[e.Method]; ok {
@@ -2538,15 +2612,18 @@ func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this
 	if owner := in.fnOwner[fn]; owner != nil {
 		in.cur = owner
 	}
+	in.pushDeferFrame(fn.HasDefers)
 	defer func() {
 		in.stack = savedStack
 		in.cur = savedCur
 	}()
 	if err := in.declare("this", this); err != nil {
+		in.popDeferFrame(fn.HasDefers)
 		return Value{}, err
 	}
 	for i, p := range fn.Params {
 		if err := in.declare(p.Name, args[i]); err != nil {
+			in.popDeferFrame(fn.HasDefers)
 			return Value{}, err
 		}
 	}
@@ -2557,6 +2634,7 @@ func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this
 		}
 		var ret *errReturn
 		if errors.As(err, &ret) {
+			in.drainDefers(fn.HasDefers)
 			retVal := ret.value
 			if fn.Return != nil && fn.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, fn.Return.Resolved)
@@ -2564,8 +2642,10 @@ func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this
 			return retVal, nil
 		}
 		if pret, perr := in.catchPropagateForFn(err, fn); perr != nil {
+			in.drainDefers(fn.HasDefers)
 			return Value{}, perr
 		} else if pret != nil {
+			in.drainDefers(fn.HasDefers)
 			retVal := pret.value
 			if fn.Return != nil && fn.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, fn.Return.Resolved)
@@ -2573,10 +2653,13 @@ func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this
 			return retVal, nil
 		}
 		if errors.Is(err, errBreak) || errors.Is(err, errContinue) {
+			in.drainDefers(fn.HasDefers)
 			return Value{}, fmt.Errorf("internal: %v escaped method %s", err, fn.Name)
 		}
+		in.drainDefers(fn.HasDefers)
 		return Value{}, err
 	}
+	in.drainDefers(fn.HasDefers)
 	if e.Type() != nil && e.Type() != syntax.TVoid() {
 		return Value{}, fmt.Errorf("method %q ended without return at %s", fn.Name, fn.Pos)
 	}

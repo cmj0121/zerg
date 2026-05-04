@@ -181,3 +181,121 @@ static void zerg_not_implemented(const char *type_name, const char *method_name,
     exit(1);
 }
 `
+
+// runtimeV07C is the v0.7 concurrency runtime extension. It declares the
+// per-thread defer-record stack, the WaitGroup primitive, the spawn
+// wrapper around pthread_create, and the select-arm descriptor. The
+// per-channel-element struct + send/recv/close helpers are emitted by the
+// codegen on demand (one set per element type) and are NOT in this prelude.
+//
+// Simplifications vs. Go semantics (documented):
+//   - select uses a polling loop with usleep when no arm is immediately ready.
+//     Correct under any scheduling but adds ~50us latency on a blocking arm.
+//   - spawn caps stack size at 64 KiB and detaches; no join, no return value.
+//   - defer stack is per-thread via __thread storage; init runs lazily.
+const runtimeV07C = `#include <pthread.h>
+#include <unistd.h>
+
+/* ---------------- defer ---------------------------------------------------
+   Per-thread linked list. Each record holds a (fn, env) pair; fn(env) runs
+   at fn epilogue in LIFO order. The fn must free env if env was malloc'd. */
+typedef struct zerg_defer_rec {
+    void (*fn)(void *);
+    void *env;
+    struct zerg_defer_rec *next;
+} zerg_defer_rec;
+
+static __thread zerg_defer_rec *zerg_defer_top = 0;
+
+static void zerg_defer_push(void (*fn)(void *), void *env) {
+    zerg_defer_rec *r = (zerg_defer_rec *)malloc(sizeof(zerg_defer_rec));
+    r->fn = fn;
+    r->env = env;
+    r->next = zerg_defer_top;
+    zerg_defer_top = r;
+}
+
+/* zerg_defer_drain pops every record above the marker and invokes each fn.
+   Pass the saved top from fn entry as the marker so nested calls' defers
+   stay on their own frame. */
+static void zerg_defer_drain(zerg_defer_rec *marker) {
+    while (zerg_defer_top != marker) {
+        zerg_defer_rec *r = zerg_defer_top;
+        zerg_defer_top = r->next;
+        r->fn(r->env);
+        free(r);
+    }
+}
+
+/* ---------------- wait_group ---------------------------------------------- */
+typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int64_t n;
+} zerg_wait_group_t;
+
+static zerg_wait_group_t *zerg_wait_group_make(void) {
+    zerg_wait_group_t *w = (zerg_wait_group_t *)malloc(sizeof(zerg_wait_group_t));
+    pthread_mutex_init(&w->mu, 0);
+    pthread_cond_init(&w->cv, 0);
+    w->n = 0;
+    return w;
+}
+
+static void zerg_wait_group_add(zerg_wait_group_t *w, int64_t delta) {
+    pthread_mutex_lock(&w->mu);
+    w->n += delta;
+    if (w->n == 0) pthread_cond_broadcast(&w->cv);
+    pthread_mutex_unlock(&w->mu);
+}
+
+static void zerg_wait_group_done(zerg_wait_group_t *w) {
+    zerg_wait_group_add(w, -1);
+}
+
+static void zerg_wait_group_wait(zerg_wait_group_t *w) {
+    pthread_mutex_lock(&w->mu);
+    while (w->n != 0) pthread_cond_wait(&w->cv, &w->mu);
+    pthread_mutex_unlock(&w->mu);
+}
+
+/* ---------------- spawn ---------------------------------------------------
+   pthread_create wrapper with a capped stack and a detached attribute.
+   The thread fn signature is void(void*); the env pointer is the captured
+   environment struct allocated by the spawning fn. */
+static void zerg_spawn(void *(*fn)(void *), void *env) {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64 * 1024);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t t;
+    pthread_create(&t, &attr, fn, env);
+    pthread_attr_destroy(&attr);
+}
+
+/* ---------------- select --------------------------------------------------
+   The select runtime is a polling loop. Each arm is a descriptor:
+     kind  = 0 (recv), 1 (send), 2 (default)
+     chan  = pointer to the chan struct (NULL for default)
+     ready = pointer to a per-element-type "ready?" probe fn that returns
+             1 when the op would not block.
+   The probe fns are emitted per element-type next to the chan helpers.
+   v0.7 keeps the implementation simple — usleep(50us) between polls. */
+typedef struct {
+    int kind;
+    void *chan;
+    int (*ready)(void *chan, int kind);
+} zerg_select_case;
+
+static int zerg_select(zerg_select_case *cases, int n_cases, int has_default,
+                       int default_idx) {
+    for (;;) {
+        for (int i = 0; i < n_cases; i++) {
+            if (cases[i].kind == 2) continue;
+            if (cases[i].ready(cases[i].chan, cases[i].kind)) return i;
+        }
+        if (has_default) return default_idx;
+        usleep(50);
+    }
+}
+`

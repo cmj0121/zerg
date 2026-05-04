@@ -1,6 +1,34 @@
 package run
 
-import "github.com/cmj/zerg/src/bootstrap/internal/syntax"
+import (
+	"sync"
+
+	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
+)
+
+// chanRef wraps a Go channel of Values plus the element *Type the runtime
+// uses for shape-aware payload coercion. The interpreter's send / recv /
+// close / select paths read .ch directly; reflect.Select wraps it in a
+// reflect.Value. closed is read under mu so a `for v in ch` drain can
+// distinguish "closed-after-buffered-drain" from "closed-and-empty".
+type chanRef struct {
+	ch     chan Value
+	elem   *syntax.Type
+	closed bool
+	mu     sync.Mutex
+}
+
+// fnValue carries an anon-fn closure: the AST body, declared params, the
+// captured environment (deep-copied snapshot of outer immutable bindings)
+// plus the module that lexically declared it so unqualified identifier
+// resolution inside the body sees the right per-module decl tables.
+type fnValue struct {
+	anon    *syntax.AnonFnExpr
+	params  []syntax.FnParam
+	ret     *syntax.Type
+	captures map[string]Value
+	owner   *moduleData
+}
 
 // Value is the interpreter's runtime value. We use a struct-with-tag rather
 // than an interface because the type checker has already constrained operand
@@ -43,6 +71,14 @@ type Value struct {
 	// right (Type, Spec) impl.
 	Data         *Value // TypeSpec — the wrapped concrete value
 	ConcreteType string // TypeSpec — the wrapped value's nominal type name
+
+	// v0.7 concurrency carriers. Only the field matching Type.Kind is read.
+	// Chan is set for TypeChan values; Fn is set for TypeFn values; Wg is
+	// set for the synthetic WaitGroup struct (Type.Kind == TypeStruct,
+	// Type.Name == "WaitGroup").
+	Chan *chanRef
+	Fn   *fnValue
+	Wg   *sync.WaitGroup
 }
 
 // intVal builds an int Value.
@@ -87,6 +123,26 @@ func structVal(structType *syntax.Type, fields []Value) Value {
 // nil for bare variants.
 func enumVal(enumType *syntax.Type, idx int, name string, payload []Value) Value {
 	return Value{Type: enumType, VariantIndex: idx, VariantName: name, Payload: payload}
+}
+
+// chanVal builds a channel Value wrapping the given chanRef. The chanRef's
+// elem field carries the element type used by send / recv coercion paths.
+func chanVal(t *syntax.Type, ref *chanRef) Value {
+	return Value{Type: t, Chan: ref}
+}
+
+// fnVal builds an fn-value Value. The TypeFn carries FnParams + FnReturn so
+// callFnValue can validate / coerce at call time.
+func fnVal(t *syntax.Type, fv *fnValue) Value {
+	return Value{Type: t, Fn: fv}
+}
+
+// wgVal builds a WaitGroup Value. The synthetic WaitGroup type has Kind
+// TypeStruct so callers reading composite fields see no Fields slice (the
+// type has none); method dispatch routes through interp's wait-group path
+// keyed by Type.Name == "WaitGroup".
+func wgVal(t *syntax.Type, wg *sync.WaitGroup) Value {
+	return Value{Type: t, Wg: wg}
 }
 
 // specVal wraps a concrete value into a spec-typed fat pointer. specType is
@@ -143,6 +199,10 @@ func copyValue(v Value) Value {
 			d := copyValue(*v.Data)
 			v.Data = &d
 		}
+	case syntax.TypeChan, syntax.TypeFn:
+		// Channels and fn-value closures are shared handles by design —
+		// every captured copy must point at the same underlying channel /
+		// closure. No-op.
 	}
 	return v
 }

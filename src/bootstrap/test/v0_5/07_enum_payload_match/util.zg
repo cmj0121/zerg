@@ -1,11 +1,11 @@
-pub enum Result {
+pub enum Outcome {
     Ok(int),
     Err(str),
 }
 
-pub fn parse(input: str) -> Result {
+pub fn parse(input: str) -> Outcome {
     if input == "good" {
-        return Result.Ok(7)
+        return Outcome.Ok(7)
     }
-    return Result.Err("bad")
+    return Outcome.Err("bad")
 }

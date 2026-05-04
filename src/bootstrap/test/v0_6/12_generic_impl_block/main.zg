@@ -1,0 +1,20 @@
+# requires: v0.6
+
+spec Tagged {
+    fn tag() -> str
+}
+
+struct Box[T] {
+    value: T
+}
+
+impl[T] Box[T] for Tagged {
+    pub fn tag() -> str {
+        return "Box"
+    }
+}
+
+let bi: Box[int] = Box { value: 7 }
+let bs: Box[str] = Box { value: "hi" }
+print bi.tag()
+print bs.tag()

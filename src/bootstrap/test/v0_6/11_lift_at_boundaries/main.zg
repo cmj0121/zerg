@@ -1,0 +1,19 @@
+# requires: v0.6
+
+fn lift_to_opt(x: int) -> int? {
+    return x
+}
+
+struct Holder { val: int? }
+
+let xs: list[int?] = [1, nil, 2, nil]
+for x in xs {
+    print x
+}
+
+print lift_to_opt(42)
+
+let h1 := Holder { val: 9 }
+let h2 := Holder { val: nil }
+print h1.val
+print h2.val

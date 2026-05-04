@@ -1,0 +1,7 @@
+Option.Some(1)
+Option.None
+Option.Some(2)
+Option.None
+Option.Some(42)
+Option.Some(9)
+Option.None

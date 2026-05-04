@@ -142,6 +142,9 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 				if me.view == entry {
 					g.fnTable[s.Name] = s
 				}
+				// v0.6: generic FnDecls stay registered for the call-site
+				// resolver (so checkExpr can find the original by name) but
+				// the codegen iterator skips them — see fn-emit loop above.
 			case *syntax.ImplDecl:
 				// typeck (Unit 6.5) stamps the canonical *Type pointer of
 				// the resolved receiver onto s.Receiver. Use it to claim
@@ -158,6 +161,20 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 					}
 				}
 			}
+		}
+	}
+	// Phase 2.5: stamp ownership for monomorphised FnDecl clones. The
+	// clones live on each module's prog.MonoFns (set by typeck during
+	// generic-fn specialisation in the defining module). The owning
+	// module's mangle drives fnCName so the emitted symbol differs from
+	// the generic decl's name.
+	for i := range g.modules {
+		me := &g.modules[i]
+		for _, fn := range me.prog.MonoFns {
+			if fn == nil {
+				continue
+			}
+			g.fnOwner[fn] = me.mangle
 		}
 	}
 	// Phase 2b: cross-module-aware stamping. Walks every module's
@@ -218,12 +235,28 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	// 3. Top-level fn forward decls then bodies, ACROSS every module.
 	// Forward decls first so any fn can call any other regardless of
 	// textual or module order.
+	//
+	// v0.6: generic FnDecls (those with TypeParams) have unresolved body
+	// type-refs; they are NEVER emitted. Each call site routes to its
+	// monomorphised clone which lives in prog.MonoFns and produces a
+	// concrete C symbol per (decl, type-args).
 	hasAnyFn := false
 	for i := range g.modules {
 		me := &g.modules[i]
 		for _, stmt := range me.prog.Statements {
 			fn, ok := stmt.(*syntax.FnDecl)
 			if !ok {
+				continue
+			}
+			if len(fn.TypeParams) > 0 {
+				continue
+			}
+			hasAnyFn = true
+			g.writeFnSig(fn)
+			g.b.WriteString(";\n")
+		}
+		for _, fn := range me.prog.MonoFns {
+			if fn == nil {
 				continue
 			}
 			hasAnyFn = true
@@ -240,6 +273,18 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		for _, stmt := range me.prog.Statements {
 			fn, ok := stmt.(*syntax.FnDecl)
 			if !ok {
+				continue
+			}
+			if len(fn.TypeParams) > 0 {
+				continue
+			}
+			if err := g.emitFn(fn); err != nil {
+				return err
+			}
+			g.b.WriteString("\n")
+		}
+		for _, fn := range me.prog.MonoFns {
+			if fn == nil {
 				continue
 			}
 			if err := g.emitFn(fn); err != nil {
@@ -760,6 +805,13 @@ func walkExprTypes(e syntax.Expr, visit func(*syntax.Type)) {
 		for _, p := range x.Payload {
 			walkExprTypes(p, visit)
 		}
+	case *syntax.NilLit:
+		// no children
+	case *syntax.PropagateExpr:
+		walkExprTypes(x.Inner, visit)
+	case *syntax.CoalesceExpr:
+		walkExprTypes(x.Left, visit)
+		walkExprTypes(x.Right, visit)
 	}
 }
 
@@ -1358,8 +1410,11 @@ func emitStructHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
 
+	// v0.6 print parity: monomorphised generic struct Names carry the
+	// bracketed type-arg suffix; the print path emits the bare base.
+	displayName := printStructDisplayName(t)
 	fmt.Fprintf(b, "static void zerg_print_%s(%s s) {\n", mname, mname)
-	fmt.Fprintf(b, "    fputs(%q, stdout);\n", t.Name+" { ")
+	fmt.Fprintf(b, "    fputs(%q, stdout);\n", displayName+" { ")
 	for i, f := range t.Fields {
 		if i > 0 {
 			fmt.Fprintf(b, "    fputs(\", \", stdout);\n")
@@ -1374,16 +1429,21 @@ func emitStructHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type
 // emitEnumPrint writes print-helper for an enum: switch on the tag and emit
 // either "Name.VariantName" (bare) or "Name.VariantName(payload, ...)" (with
 // per-position recursive print of each payload value).
+//
+// v0.6: monomorphised generic enums carry a Name like `Box[int]` for
+// diagnostic prose; the print path uses the bare base name (`Box`) per
+// PLAN.md §Print parity. printEnumDisplayName extracts that base.
 func emitEnumPrint(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static void zerg_print_%s(%s e) {\n", mname, mname)
 	fmt.Fprintf(b, "    switch (e.tag) {\n")
+	displayName := printEnumDisplayName(t)
 	for i, v := range t.Variants {
 		payload := variantPayload(t, i)
 		if len(payload) == 0 {
-			fmt.Fprintf(b, "    case %d: fputs(%q, stdout); break;\n", i, t.Name+"."+v)
+			fmt.Fprintf(b, "    case %d: fputs(%q, stdout); break;\n", i, displayName+"."+v)
 		} else {
 			fmt.Fprintf(b, "    case %d: {\n", i)
-			fmt.Fprintf(b, "        fputs(%q, stdout);\n", t.Name+"."+v+"(")
+			fmt.Fprintf(b, "        fputs(%q, stdout);\n", displayName+"."+v+"(")
 			for j, pt := range payload {
 				if j > 0 {
 					fmt.Fprintf(b, "        fputs(\", \", stdout);\n")
@@ -1425,6 +1485,33 @@ func emitEnumCopy(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "    }\n")
 	fmt.Fprintf(b, "    return out;\n")
 	fmt.Fprintf(b, "}\n")
+}
+
+// printEnumDisplayName returns the user-visible base name for an enum, used
+// in the print helper. For non-generic enums the Name is already the bare
+// form; for monomorphised generic enums the Name carries the bracket suffix
+// (e.g. `Option[int]`) which the print path must drop per PLAN.md §Print
+// parity. Diagnostic paths (Type.String) keep the suffix for disambiguation.
+func printEnumDisplayName(t *syntax.Type) string {
+	return stripGenericArgs(t)
+}
+
+// printStructDisplayName mirrors printEnumDisplayName for struct shapes.
+// `Box[int]` prints as `Box { ... }` rather than `Box[int] { ... }`.
+func printStructDisplayName(t *syntax.Type) string {
+	return stripGenericArgs(t)
+}
+
+func stripGenericArgs(t *syntax.Type) string {
+	if t == nil {
+		return ""
+	}
+	for i, r := range t.Name {
+		if r == '[' {
+			return t.Name[:i]
+		}
+	}
+	return t.Name
 }
 
 // variantPayload returns the per-position payload type slice for the i-th
@@ -1514,6 +1601,13 @@ func (g *cgen) collectShapes(prog *syntax.Program) error {
 	for _, stmt := range prog.Statements {
 		switch s := stmt.(type) {
 		case *syntax.StructDecl:
+			// v0.6: skip generic decls. Their field TypeRefs name type-params
+			// (`T`, `E`) which never resolve to a canonical *Type — only the
+			// monomorphised instances (discovered via expression walks below)
+			// produce concrete shapes the registry can emit.
+			if len(s.TypeParams) > 0 {
+				continue
+			}
 			// Resolve the struct type by name via the field type refs.
 			// Each struct's first field has a TypeRef.Resolved that points
 			// at the field's type — but the struct itself we need to look
@@ -1546,6 +1640,12 @@ func (g *cgen) collectShapes(prog *syntax.Program) error {
 			st := syntax.NewStructType(s.Name, fields)
 			g.shapes.addType(g, st)
 		case *syntax.EnumDecl:
+			// v0.6: same as StructDecl — generic enum decls have type-param
+			// references in payloads; only the monomorphised instances reach
+			// the registry through the expression walks.
+			if len(s.TypeParams) > 0 {
+				continue
+			}
 			variants := make([]string, len(s.Variants))
 			payloads := make([][]*syntax.Type, len(s.Variants))
 			for i, v := range s.Variants {
@@ -1564,6 +1664,24 @@ func (g *cgen) collectShapes(prog *syntax.Program) error {
 			en.VariantPayloads = payloads
 			g.shapes.addType(g, en)
 		}
+	}
+	// v0.6: walk every monomorphised FnDecl clone to collect shapes its
+	// param / return types reference. The clones don't appear in
+	// prog.Statements, so without this walk a struct used only inside a
+	// generic-fn body would never reach the registry.
+	for _, fn := range prog.MonoFns {
+		if fn == nil {
+			continue
+		}
+		for _, p := range fn.Params {
+			if p.Type != nil && p.Type.Resolved != nil {
+				g.shapes.addType(g, p.Type.Resolved)
+			}
+		}
+		if fn.Return != nil && fn.Return.Resolved != nil {
+			g.shapes.addType(g, fn.Return.Resolved)
+		}
+		g.collectBlock(fn.Body)
 	}
 
 	// Now walk all statements to pick up types reached via expressions and
@@ -1766,6 +1884,13 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 		for _, sub := range x.Payload {
 			g.collectExpr(sub)
 		}
+	case *syntax.NilLit:
+		// type is collected by the typed() walk above.
+	case *syntax.PropagateExpr:
+		g.collectExpr(x.Inner)
+	case *syntax.CoalesceExpr:
+		g.collectExpr(x.Left)
+		g.collectExpr(x.Right)
 	}
 }
 
@@ -2319,13 +2444,18 @@ func (g *cgen) writeFnSig(fn *syntax.FnDecl) {
 // recovered from g.fnOwner fall back to the bare `z_<name>` shape so v0.0–
 // v0.4-style single-program calls keep working in the partial-init paths
 // the test harness exercises.
+//
+// v0.6: monomorphised FnDecls carry a Name shaped like `id[int]` (the
+// mono cache key). sanitizeGenericName converts the brackets / commas to
+// the C-safe `__` / `_` per PLAN.md.
 func (g *cgen) fnCName(fn *syntax.FnDecl) string {
+	name := sanitizeGenericName(fn.Name)
 	if g != nil {
 		if owner, ok := g.fnOwner[fn]; ok && owner != "" {
-			return "z_" + owner + "__" + fn.Name
+			return "z_" + owner + "__" + name
 		}
 	}
-	return mangle(fn.Name)
+	return mangle(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -2657,6 +2787,12 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return mangle("this"), nil
 	case *syntax.EnumLit:
 		return g.enumLitStr(e)
+	case *syntax.NilLit:
+		return g.nilLitStr(e)
+	case *syntax.PropagateExpr:
+		return g.propagateStr(e)
+	case *syntax.CoalesceExpr:
+		return g.coalesceStr(e)
 	}
 	return "", fmt.Errorf("codegen: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -2842,7 +2978,13 @@ func (g *cgen) sliceStr(e *syntax.SliceExpr) (string, error) {
 // fieldAccessStr emits struct field access OR enum variant access. typeck
 // has already disambiguated: a FieldAccessExpr whose receiver is a bare
 // IdentExpr that resolves to an enum type is the variant form.
+//
+// v0.6: when the source spelled `?.`, the operator is safe-navigation —
+// route to the dedicated lowering that produces the wrapped Option result.
 func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
+	if e.Safe {
+		return g.safeFieldAccessStr(e)
+	}
 	// v0.4: if typeck lowered this to an EnumLit (bare-variant construction),
 	// route through the EnumLit emitter so the tag+union struct shape is
 	// produced uniformly with the payloadful form.
@@ -2950,11 +3092,17 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		expr := fmt.Sprintf("(%s_push(&%s, %s), 0)", g.mangleType(listT), nameS, valS)
 		return expr, nil
 	}
-	// v0.5: resolve the fn against the active module so the call site
-	// uses the right module-mangled C symbol name and the right param
-	// types for spec coercion. fnTable holds the entry module's fns;
-	// otherwise the current module's fn list is the lookup source.
-	fn := g.lookupCurrentFn(ident.Name)
+	// v0.6: a CallExpr whose callee resolved to a generic-fn instantiation
+	// carries the specialised FnDecl on Specialised. Route through it so
+	// the emitted C symbol matches the monomorphised name.
+	fn := e.Specialised
+	if fn == nil {
+		// v0.5: resolve the fn against the active module so the call site
+		// uses the right module-mangled C symbol name and the right param
+		// types for spec coercion. fnTable holds the entry module's fns;
+		// otherwise the current module's fn list is the lookup source.
+		fn = g.lookupCurrentFn(ident.Name)
+	}
 	var paramTypes []*syntax.Type
 	if fn != nil {
 		for _, p := range fn.Params {
@@ -3233,20 +3381,68 @@ func (g *cgen) mangleType(t *syntax.Type) string {
 		}
 		return "zerg_tuple_" + strings.Join(parts, "_")
 	case syntax.TypeStruct:
-		return "zerg_struct_" + g.typeMangle(t) + "__" + t.Name
+		return "zerg_struct_" + g.typeMangle(t) + "__" + sanitizeGenericName(t.Name)
 	case syntax.TypeEnum:
-		return "zerg_enum_" + g.typeMangle(t) + "__" + t.Name
+		return "zerg_enum_" + g.typeMangle(t) + "__" + sanitizeGenericName(t.Name)
 	case syntax.TypeSpec:
-		return "zerg_dyn_" + g.specMangle(t.Name) + "__" + t.Name
+		return "zerg_dyn_" + g.specMangle(t.Name) + "__" + sanitizeGenericName(t.Name)
 	}
 	return "void"
+}
+
+// sanitizeGenericName converts a canonical type Name (which may carry the v0.6
+// monomorphisation bracket suffix `Box[int]` or `Result[int,str]`) into a
+// valid C identifier per PLAN.md §Generic monomorphization. The
+// transformation: `[` → `__`, `]` → dropped, `,` → `_`, whitespace dropped.
+//
+// Examples:
+//
+//	Box[int]                       → Box__int
+//	Result[int,str]                → Result__int_str
+//	Option[Result[int,str]]        → Option__Result__int_str
+//	Box[list[int]]                 → Box__zerg_list_int64_t — but list[]
+//	                                  inside Name is the bare "list[int]"
+//	                                  text, so we get Box__list__int (the
+//	                                  list mangle is applied via mangleType
+//	                                  on the *Type itself, not via the
+//	                                  Name suffix).
+//
+// The Name suffix uses Type.String() per monoEnumArgsSig — that is the
+// printable form, not the C-mangled form. We reuse it here because the
+// cache key invariant guarantees identical instances share identical Names,
+// and the resulting C identifier is structurally unique per instance.
+func sanitizeGenericName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch r {
+		case '[':
+			b.WriteString("__")
+		case ']':
+			// drop
+		case ',':
+			b.WriteByte('_')
+		case ' ', '\t':
+			// drop whitespace
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // typeMangle returns the owning-module's mangle prefix for a struct/enum
 // canonical *Type pointer. Falls back to the entry module's mangle (or a
 // generic "main" stub when the cgen has no entry recorded) so the helper
 // stays defined for tests that bypass EmitBundle.
+//
+// v0.6: built-in Option / Result instances live under the pseudo-module
+// `<builtin>` and mangle to the literal `zerg_builtin` (no FNV hash) per
+// PLAN.md §Built-in mangle. Detection is by Name prefix; the mono cache
+// shape uses `Option[...]` / `Result[...]` for built-in instances.
 func (g *cgen) typeMangle(t *syntax.Type) string {
+	if isBuiltinGenericType(t) {
+		return "zerg_builtin"
+	}
 	if g != nil {
 		if m, ok := g.typeOwner[t]; ok && m != "" {
 			return m
@@ -3256,6 +3452,17 @@ func (g *cgen) typeMangle(t *syntax.Type) string {
 		}
 	}
 	return mangleModule("main")
+}
+
+// isBuiltinGenericType reports whether t is a monomorphized instance of a
+// built-in generic enum (Option or Result). The detection is by Name prefix
+// — the built-in synthesis (typeck_v06_builtin.go) builds the canonical
+// Name as `Option[...]` / `Result[...]` for every instantiation.
+func isBuiltinGenericType(t *syntax.Type) bool {
+	if t == nil || t.Kind != syntax.TypeEnum {
+		return false
+	}
+	return strings.HasPrefix(t.Name, "Option[") || strings.HasPrefix(t.Name, "Result[")
 }
 
 // specMangle returns the owning-module's mangle prefix for a spec name.
@@ -3356,6 +3563,14 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 			}
 			g.specs[s.Name] = s
 		case *syntax.ImplDecl:
+			// v0.6: generic impl blocks (`impl[T] Box[T] for ...`) are
+			// expanded by typeck into per-instantiation synthetic ImplDecls
+			// surfaced via prog.MonoImpls. Skip the generic decl itself —
+			// its TypeRefs reference impl-level type-params and have no
+			// concrete C representation.
+			if len(s.TypeParams) > 0 {
+				continue
+			}
 			// Resolve the receiver type by name. Any impl reaching codegen
 			// has been validated by typeck, so the type resolution lookup
 			// below is best-effort — if it fails we fall back to the methods
@@ -3397,6 +3612,43 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 				// value directly.
 				g.specsUsed[s.Spec] = true
 			}
+		}
+	}
+	// v0.6: walk per-instantiation synthetic ImplDecls produced by typeck's
+	// generic-impl expansion. Each one carries a Receiver pointing at the
+	// concrete monomorphised *Type and methods cloned with substituted
+	// types. Routes through the same inherent / specImpls tables so the
+	// downstream emit pipeline produces one C function per
+	// (impl-method, mono-receiver) tuple.
+	for _, s := range prog.MonoImpls {
+		if s == nil || s.Receiver == nil {
+			continue
+		}
+		receiverT := s.Receiver
+		// Stamp typeOwner for the mono receiver so the implKey + later
+		// mangle calls produce the owning module's prefix.
+		if _, set := g.typeOwner[receiverT]; !set {
+			for i := range g.modules {
+				if g.modules[i].prog == prog {
+					g.typeOwner[receiverT] = g.modules[i].mangle
+					break
+				}
+			}
+		}
+		implKeyName := g.implKeyForType(receiverT)
+		g.receiverTypes[implKeyName] = receiverT
+		if s.Spec == "" {
+			if _, ok := g.inherent[implKeyName]; !ok {
+				g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
+			}
+			g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
+		} else {
+			key := implKey{typeName: implKeyName, specName: s.Spec}
+			if _, ok := g.specImpls[key]; !ok {
+				g.specImplKeys = append(g.specImplKeys, key)
+			}
+			g.specImpls[key] = s
+			g.specsUsed[s.Spec] = true
 		}
 	}
 }

@@ -154,6 +154,15 @@ type interp struct {
 	inherentByType map[*syntax.Type]map[string]*syntax.FnDecl
 	specByType     map[*syntax.Type]map[string]map[string]*syntax.FnDecl
 	specByPair     map[specPairKey]bool
+
+	// v0.6 generic-impl fallback tables. Generic impls (`impl[T] Box[T]`)
+	// have no concrete receiver *Type at typeck time — id.Receiver is nil
+	// because the impl applies to every monomorphisation of Box[T]. We
+	// register their methods by base receiver name (`"Box"`) so dispatch
+	// can fall through when the *Type-keyed lookup misses on a
+	// monomorphized receiver (`recv.Name == "Box[int]"`).
+	inherentByBaseName map[string]map[string]*syntax.FnDecl
+	specByBaseName     map[string]map[string]map[string]*syntax.FnDecl
 	// specDeclsByName indexes spec declarations across the whole bundle so
 	// spec default bodies can be located by spec-name regardless of which
 	// module declared the spec.
@@ -210,14 +219,16 @@ func newFrame() *frame { return &frame{vars: map[string]*Value{}} }
 // rule, so a missing-entry fall-through is treated as an internal error.
 func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 	in := &interp{
-		w:               w,
-		modules:         map[*syntax.Program]*moduleData{},
-		fnOwner:         map[*syntax.FnDecl]*moduleData{},
-		specMethodOwner: map[*syntax.SpecMethod]*moduleData{},
-		inherentByType:  map[*syntax.Type]map[string]*syntax.FnDecl{},
-		specByType:      map[*syntax.Type]map[string]map[string]*syntax.FnDecl{},
-		specByPair:      map[specPairKey]bool{},
-		specDeclsByName: map[string]*syntax.SpecDecl{},
+		w:                  w,
+		modules:            map[*syntax.Program]*moduleData{},
+		fnOwner:            map[*syntax.FnDecl]*moduleData{},
+		specMethodOwner:    map[*syntax.SpecMethod]*moduleData{},
+		inherentByType:     map[*syntax.Type]map[string]*syntax.FnDecl{},
+		specByType:         map[*syntax.Type]map[string]map[string]*syntax.FnDecl{},
+		specByPair:         map[specPairKey]bool{},
+		specDeclsByName:    map[string]*syntax.SpecDecl{},
+		inherentByBaseName: map[string]map[string]*syntax.FnDecl{},
+		specByBaseName:     map[string]map[string]map[string]*syntax.FnDecl{},
 	}
 	mods := bundle.BundleModules()
 	// Phase 1: build per-module decl tables (fns, enums, structs, specs).
@@ -259,6 +270,13 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 				}
 			}
 		}
+		// v0.6: monomorphised generic-fn clones (Program.MonoFns) carry the
+		// callee's body for each (decl, type-args) instance. Stamp each
+		// clone's owning module so cross-module dispatch routes lexical
+		// scope correctly when CallExpr.Specialised points at the clone.
+		for _, fn := range md.prog.MonoFns {
+			in.fnOwner[fn] = md
+		}
 	}
 	// Phase 2: bind imports (LocalName → *moduleData).
 	for _, m := range mods {
@@ -285,17 +303,49 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 			if !ok {
 				continue
 			}
+			// Stamp every method body's owning module so cross-module
+			// dispatch can switch lexical scope on call. Done unconditionally
+			// — generic-impl methods need this just like concrete ones.
+			for _, fn := range id.Methods {
+				in.fnOwner[fn] = md
+			}
+			// v0.6 generic impls (`impl[T] Box[T] ...`) carry no concrete
+			// receiver *Type at typeck time. Register their methods by base
+			// receiver name so dispatch falls back to the name-keyed table
+			// when *Type lookup misses on a monomorphisation.
+			if len(id.TypeParams) > 0 {
+				if id.Spec == "" {
+					mm, ok := in.inherentByBaseName[id.Type]
+					if !ok {
+						mm = map[string]*syntax.FnDecl{}
+						in.inherentByBaseName[id.Type] = mm
+					}
+					for _, fn := range id.Methods {
+						mm[fn.Name] = fn
+					}
+				} else {
+					specMap, ok := in.specByBaseName[id.Type]
+					if !ok {
+						specMap = map[string]map[string]*syntax.FnDecl{}
+						in.specByBaseName[id.Type] = specMap
+					}
+					mm, ok := specMap[id.Spec]
+					if !ok {
+						mm = map[string]*syntax.FnDecl{}
+						specMap[id.Spec] = mm
+					}
+					for _, fn := range id.Methods {
+						mm[fn.Name] = fn
+					}
+				}
+				continue
+			}
 			recv := in.resolveImplReceiver(md, id)
 			if recv == nil {
 				// typeck would have rejected; defensive — skip the impl
 				// rather than panic so a fixture quirk doesn't break the
 				// whole run.
 				continue
-			}
-			// Stamp every method body's owning module so cross-module
-			// dispatch can switch lexical scope on call.
-			for _, fn := range id.Methods {
-				in.fnOwner[fn] = md
 			}
 			if id.Spec == "" {
 				m, ok := in.inherentByType[recv]
@@ -923,7 +973,11 @@ func formatValue(v Value) string {
 		return b.String()
 	case syntax.TypeStruct:
 		var b strings.Builder
-		b.WriteString(v.Type.Name)
+		// v0.6: monomorphized generic structs carry a `Name[args]` instance
+		// name; the print path strips the bracketed suffix so `Box[int] {
+		// value: 7 }` prints as `Box { value: 7 }`. Diagnostics elsewhere
+		// keep the full name for disambiguation.
+		b.WriteString(displayEnumName(v.Type.Name))
 		b.WriteString(" { ")
 		for i, f := range v.Type.Fields {
 			if i > 0 {
@@ -936,14 +990,20 @@ func formatValue(v Value) string {
 		b.WriteString(" }")
 		return b.String()
 	case syntax.TypeEnum:
+		// v0.6 print parity: `Option[int].Some(7)` renders as
+		// `Option.Some(7)`; the `[type-args]` instance suffix is suppressed
+		// for stdout so golden files stay stable across re-monomorphization.
+		// Diagnostics keep the bracketed name (Type.String() has its own
+		// path).
+		name := displayEnumName(v.Type.Name)
 		if len(v.Payload) == 0 {
-			return v.Type.Name + "." + v.VariantName
+			return name + "." + v.VariantName
 		}
 		// PLAN: payload variants print as "Name.Variant(arg1, arg2)" with
 		// recursive formatValue per position. No leading/trailing spaces
 		// inside the parens — matches the literal source-form construction.
 		var b strings.Builder
-		b.WriteString(v.Type.Name)
+		b.WriteString(name)
 		b.WriteString(".")
 		b.WriteString(v.VariantName)
 		b.WriteString("(")
@@ -1379,6 +1439,12 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return *slot, nil
 	case *syntax.EnumLit:
 		return in.evalEnumLit(e)
+	case *syntax.NilLit:
+		return in.evalNilLit(e)
+	case *syntax.PropagateExpr:
+		return in.evalPropagate(e)
+	case *syntax.CoalesceExpr:
+		return in.evalCoalesce(e)
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -1632,6 +1698,14 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	if ident.Name == "push" {
 		return in.evalPush(e)
 	}
+	// v0.6: typeck stamps e.Specialised on calls to generic fns with the
+	// monomorphised FnDecl clone. Body type-refs in the clone resolve to
+	// concrete *Type pointers, which the body-walking interpreter doesn't
+	// strictly need but matches the C codegen route — and the body itself
+	// is shared with the generic decl so behaviour is identical.
+	if e.Specialised != nil {
+		return in.callFn(e.Specialised, e.Args, e.Type(), e.Pos)
+	}
 	fn, ok := in.cur.fns[ident.Name]
 	if !ok {
 		return Value{}, fmt.Errorf("internal: undefined function %q at %s", ident.Name, e.Pos)
@@ -1703,6 +1777,18 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 			}
 			return retVal, nil
 		}
+		// `?` propagation: convert to a return of the outer fn's declared
+		// return type. Typeck has guaranteed shape compatibility (Option
+		// in Option fn, or Result in Result fn with matching E).
+		if pret, perr := in.catchPropagateForFn(err, fn); perr != nil {
+			return Value{}, perr
+		} else if pret != nil {
+			retVal := pret.value
+			if fn.Return != nil && fn.Return.Resolved != nil {
+				retVal = in.coerceToType(retVal, fn.Return.Resolved)
+			}
+			return retVal, nil
+		}
 		// break/continue must NOT escape a function: typeck rejects them
 		// outside loops, and a function body without an enclosing loop in
 		// scope means any `break` is in a loop strictly inside the body and
@@ -1719,6 +1805,17 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		return Value{}, fmt.Errorf("function %q ended without return at %s", fn.Name, callPos)
 	}
 	return Value{}, nil
+}
+
+// catchPropagateForFn converts an errPropagate raised inside fn's body to an
+// errReturn whose value's Type matches fn's declared return type. Returns
+// (nil, nil) when err is not a propagate sentinel so the caller falls through.
+func (in *interp) catchPropagateForFn(err error, fn *syntax.FnDecl) (*errReturn, error) {
+	var ret *syntax.Type
+	if fn.Return != nil {
+		ret = fn.Return.Resolved
+	}
+	return catchPropagate(err, ret)
 }
 
 // evalLen implements the `len` built-in. typeck has validated argument count
@@ -1984,6 +2081,9 @@ func (in *interp) evalSlice(e *syntax.SliceExpr) (Value, error) {
 func (in *interp) evalFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
 	if e.Lowered != nil {
 		return in.evalEnumLit(e.Lowered)
+	}
+	if e.Safe {
+		return in.evalSafeFieldAccess(e)
 	}
 	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
 		if en, isEnum := in.cur.enums[id.Name]; isEnum {
@@ -2316,6 +2416,19 @@ func (in *interp) resolveSpecMethod(recv *syntax.Type, specName, methodName stri
 			}
 		}
 	}
+	// v0.6 generic-impl fallback: when recv is a monomorphized type and the
+	// impl was generic (`impl[T] Box[T] for Spec`), the methods are keyed
+	// by the receiver's base name (`"Box"`).
+	if recv != nil {
+		baseName := displayEnumName(recv.Name)
+		if specMap, ok := in.specByBaseName[baseName]; ok {
+			if methods, ok := specMap[specName]; ok {
+				if fn, ok := methods[methodName]; ok {
+					return fn, nil
+				}
+			}
+		}
+	}
 	// Fall through to spec default body if present anywhere in the bundle.
 	if sd, ok := in.specDeclsByName[specName]; ok {
 		for _, m := range sd.Methods {
@@ -2373,6 +2486,29 @@ func (in *interp) dispatchConcrete(e *syntax.MethodCallExpr, rv Value) (Value, e
 			}
 		}
 	}
+	// 3. v0.6 fallback: generic-impl methods registered by base receiver
+	// name (`impl[T] Box[T] {...}` ⇒ recv name "Box[int]" base "Box").
+	baseName := displayEnumName(recv.Name)
+	if methods, ok := in.inherentByBaseName[baseName]; ok {
+		if fn, ok := methods[e.Method]; ok {
+			return in.callMethodFn(e, fn, rv)
+		}
+	}
+	if specMap, ok := in.specByBaseName[baseName]; ok {
+		for specName, methods := range specMap {
+			if fn, ok := methods[e.Method]; ok {
+				return in.callMethodFn(e, fn, rv)
+			}
+			// Spec default fallback for the (base, spec) pair.
+			if sd, ok := in.specDeclsByName[specName]; ok {
+				for _, m := range sd.Methods {
+					if m.Name == e.Method && m.Body != nil {
+						return in.callSpecDefault(e, m, rv)
+					}
+				}
+			}
+		}
+	}
 	return Value{}, fmt.Errorf("internal: method %q not resolvable on %s at %s", e.Method, recv.Name, e.MethodPos)
 }
 
@@ -2422,6 +2558,15 @@ func (in *interp) callMethodFn(e *syntax.MethodCallExpr, fn *syntax.FnDecl, this
 		var ret *errReturn
 		if errors.As(err, &ret) {
 			retVal := ret.value
+			if fn.Return != nil && fn.Return.Resolved != nil {
+				retVal = in.coerceToType(retVal, fn.Return.Resolved)
+			}
+			return retVal, nil
+		}
+		if pret, perr := in.catchPropagateForFn(err, fn); perr != nil {
+			return Value{}, perr
+		} else if pret != nil {
+			retVal := pret.value
 			if fn.Return != nil && fn.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, fn.Return.Resolved)
 			}
@@ -2481,6 +2626,19 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 			retVal := ret.value
 			if sm.Return != nil && sm.Return.Resolved != nil {
 				retVal = in.coerceToType(retVal, sm.Return.Resolved)
+			}
+			return retVal, nil
+		}
+		var smRet *syntax.Type
+		if sm.Return != nil {
+			smRet = sm.Return.Resolved
+		}
+		if pret, perr := catchPropagate(err, smRet); perr != nil {
+			return Value{}, perr
+		} else if pret != nil {
+			retVal := pret.value
+			if smRet != nil {
+				retVal = in.coerceToType(retVal, smRet)
 			}
 			return retVal, nil
 		}

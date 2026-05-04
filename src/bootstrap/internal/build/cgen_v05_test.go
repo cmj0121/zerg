@@ -308,25 +308,25 @@ print u.answer()
 // 8. Cross-module result-style enum match.
 func TestV05CodegenCrossModuleResultMatch(t *testing.T) {
 	expectV05Parity(t, "main.zg", map[string]string{
-		"util.zg": `pub enum Result {
+		"util.zg": `pub enum Outcome {
 Ok(int),
 Err(str),
 }
-pub fn parse(input: str) -> Result {
-if input == "good" { return Result.Ok(7) }
-return Result.Err("bad")
+pub fn parse(input: str) -> Outcome {
+if input == "good" { return Outcome.Ok(7) }
+return Outcome.Err("bad")
 }
 `,
 		"main.zg": `import "util"
 let r := util.parse("good")
 match r {
-Result.Ok(v) => print v
-Result.Err(e) => print e
+Outcome.Ok(v) => print v
+Outcome.Err(e) => print e
 }
 let s := util.parse("nope")
 match s {
-Result.Ok(v) => print v
-Result.Err(e) => print e
+Outcome.Ok(v) => print v
+Outcome.Err(e) => print e
 }
 `,
 	}, "7\nbad\n")

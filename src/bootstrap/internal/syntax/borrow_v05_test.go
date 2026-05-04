@@ -146,14 +146,14 @@ func TestBorrowV05PositiveCrossModuleImplMethodThisRead(t *testing.T) {
 // primitives (the variant payload is an int).
 func TestBorrowV05PositiveCrossModuleMatchDestructure(t *testing.T) {
 	utilSrc := "" +
-		"pub enum Result { Ok(int), Err(int) }\n" +
-		"pub fn parse() -> Result { return Result.Ok(7) }\n"
+		"pub enum Outcome { Ok(int), Err(int) }\n" +
+		"pub fn parse() -> Outcome { return Outcome.Ok(7) }\n"
 	mainSrc := "" +
 		"import \"util\"\n" +
 		"let r := util.parse()\n" +
 		"match r {\n" +
-		"Result.Ok(v) => print v\n" +
-		"Result.Err(e) => print e\n" +
+		"Outcome.Ok(v) => print v\n" +
+		"Outcome.Err(e) => print e\n" +
 		"}\n"
 	loadOk(t, fixture{
 		"util": utilSrc,

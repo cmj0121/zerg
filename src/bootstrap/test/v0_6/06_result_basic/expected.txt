@@ -1,0 +1,4 @@
+Result.Ok(42)
+Result.Err(oops)
+Result.Ok(won)
+Result.Err(404)

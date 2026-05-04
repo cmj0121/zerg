@@ -1,0 +1,12 @@
+# requires: v0.6
+
+fn parse() -> Result[int, str] {
+    return Result.Ok(42)
+}
+
+fn bad() -> int {
+    let v := parse()?
+    return v
+}
+
+print bad()

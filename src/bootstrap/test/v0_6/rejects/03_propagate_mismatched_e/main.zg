@@ -1,0 +1,12 @@
+# requires: v0.6
+
+fn inner() -> Result[int, str] {
+    return Result.Err("io")
+}
+
+fn outer() -> Result[str, int] {
+    let v := inner()?
+    return Result.Ok("got")
+}
+
+print outer()

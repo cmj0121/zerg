@@ -3,8 +3,24 @@ package syntax
 import "fmt"
 
 // Program is the root AST node — a flat sequence of top-level statements.
+//
+// MonoFns (v0.6 Unit 7) holds specialised FnDecl clones produced by
+// monomorphisation. Each entry is the result of one (generic-fn, type-args)
+// instantiation whose generic decl lives in this Program; downstream consumers
+// (codegen) emit one C function per entry. The original generic FnDecl stays
+// in Statements but is skipped by emit because its body type-refs are
+// unsubstituted.
 type Program struct {
 	Statements []Stmt
+	MonoFns    []*FnDecl
+	// MonoImpls (v0.6 Unit 7) holds synthetic ImplDecl instances produced by
+	// generic-impl monomorphisation. Each entry pairs one generic ImplDecl
+	// with one concrete receiver instantiation; methods are deep-cloned so
+	// downstream consumers (codegen) emit one C function per
+	// (impl-method, mono-receiver) tuple. The original generic ImplDecl
+	// stays in Statements but is skipped by emit because its receiver type
+	// is unsubstituted.
+	MonoImpls []*ImplDecl
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +261,18 @@ const (
 //
 // Resolved is filled in by the type checker to point at the canonical *Type
 // singleton for the resolved shape. It is nil before Check runs.
+//
+// TypeArgs (v0.6) carries generic type arguments at the use site, e.g. the
+// `int` slot in `Box[int]` or the `int, str` slots in `Result[int, str]`. It
+// is meaningful for TypeRefNamed only; TypeRefList / TypeRefTuple have their
+// own dedicated Element / Elements slots and ignore this field. Nil/empty for
+// every non-generic use site — every v0.0–v0.5 program carries this at its
+// zero value.
+//
+// Nullable (v0.6) records a postfix `?` on the type — `int?`, `Option[T]?`,
+// `list[int]?`. v0.6 Unit 2 desugars `T?` to `Option[T]` at the type-resolve
+// step; the parser only records the bit. Double-nullable (`T??`) is rejected
+// at parse time per PLAN.md.
 type TypeRef struct {
 	Pos      Position
 	Kind     TypeRefKind
@@ -258,6 +286,8 @@ type TypeRef struct {
 	Module   string
 	Element  *TypeRef   // TypeRefList
 	Elements []*TypeRef // TypeRefTuple
+	TypeArgs []*TypeRef // v0.6 generic type-args at use site (TypeRefNamed only)
+	Nullable bool       // v0.6 postfix `?` — desugars to Option[T] at typeck
 	Resolved *Type
 }
 
@@ -267,11 +297,25 @@ func (r *TypeRef) String() string {
 	if r == nil {
 		return "<nil>"
 	}
+	var s string
 	switch r.Kind {
 	case TypeRefNamed:
-		return r.Name
+		s = r.Name
+		if len(r.TypeArgs) > 0 {
+			var b []byte
+			b = append(b, s...)
+			b = append(b, '[')
+			for i, a := range r.TypeArgs {
+				if i > 0 {
+					b = append(b, ", "...)
+				}
+				b = append(b, a.String()...)
+			}
+			b = append(b, ']')
+			s = string(b)
+		}
 	case TypeRefList:
-		return "list[" + r.Element.String() + "]"
+		s = "list[" + r.Element.String() + "]"
 	case TypeRefTuple:
 		var b []byte
 		b = append(b, "tuple["...)
@@ -282,9 +326,14 @@ func (r *TypeRef) String() string {
 			b = append(b, e.String()...)
 		}
 		b = append(b, ']')
-		return string(b)
+		s = string(b)
+	default:
+		return fmt.Sprintf("TypeRef(%d)", int(r.Kind))
 	}
-	return fmt.Sprintf("TypeRef(%d)", int(r.Kind))
+	if r.Nullable {
+		s += "?"
+	}
+	return s
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +494,21 @@ type FnParam struct {
 	Pos  Position
 }
 
+// TypeParam is one declared generic type parameter on a generic decl
+// (`fn[T: Bound]`, `struct Box[T]`, `enum Pair[T, U]`, `spec Iterable[T]`,
+// `impl[T: Bound] Type[T] for Spec`). Bounds are the spec constraints that
+// follow `:` — multi-bound is encoded as a slice (`T: A + B` ⇒ Bounds = [A,
+// B]). The Bounds list is empty for unconstrained parameters.
+//
+// At Unit 1 typeck does not consume TypeParam; v0.6 Unit 3 walks the slice
+// during monomorphization to validate that each bound has a matching
+// `impl <conc> for <Spec>` block in scope.
+type TypeParam struct {
+	Name   string
+	Pos    Position
+	Bounds []*TypeRef
+}
+
 // FnDecl represents `fn name(p: T, ...) -> R { ... }`. The return type is
 // optional — a nil Return means the function returns no value.
 //
@@ -455,12 +519,13 @@ type FnParam struct {
 // consume the bit; it carries through unchanged for Unit 3 to gate
 // cross-module access.
 type FnDecl struct {
-	Pos    Position
-	Name   string
-	Params []FnParam
-	Return *TypeRef // nil ⇒ no return value
-	Body   *Block
-	Pub    bool
+	Pos        Position
+	Name       string
+	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic fns
+	Params     []FnParam
+	Return     *TypeRef // nil ⇒ no return value
+	Body       *Block
+	Pub        bool
 }
 
 func (*FnDecl) stmtNode()           {}
@@ -662,11 +727,17 @@ func (e *UnaryExpr) ExprPos() Position { return e.Pos }
 
 // CallExpr is `callee(args)`. v0.1 only admits an IdentExpr as Callee but the
 // parser is general so future call-on-expression doesn't require a re-shape.
+//
+// Specialised (v0.6 Unit 7) is set by typeck when the callee resolved to a
+// generic-fn instantiation. It points at the monomorphised FnDecl clone so
+// codegen can route the call to the specialised symbol; the surface Callee
+// IdentExpr keeps the original generic name for diagnostics.
 type CallExpr struct {
 	typed
-	Pos    Position
-	Callee Expr
-	Args   []Expr
+	Pos         Position
+	Callee      Expr
+	Args        []Expr
+	Specialised *FnDecl
 }
 
 func (*CallExpr) exprNode()           {}
@@ -721,10 +792,11 @@ type FieldDecl struct {
 // Pub records the v0.5 decl-level visibility modifier. Field-level `pub` is
 // out of scope at v0.5; only the decl as a whole is gated.
 type StructDecl struct {
-	Pos    Position
-	Name   string
-	Fields []FieldDecl
-	Pub    bool
+	Pos        Position
+	Name       string
+	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic
+	Fields     []FieldDecl
+	Pub        bool
 }
 
 func (*StructDecl) stmtNode()           {}
@@ -749,10 +821,11 @@ type VariantDecl struct {
 // Pub records the v0.5 decl-level visibility modifier. Variants inherit the
 // enum's visibility; per-variant `pub` is not a v0.5 surface.
 type EnumDecl struct {
-	Pos      Position
-	Name     string
-	Variants []VariantDecl
-	Pub      bool
+	Pos        Position
+	Name       string
+	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic
+	Variants   []VariantDecl
+	Pub        bool
 }
 
 func (*EnumDecl) stmtNode()           {}
@@ -877,10 +950,16 @@ type SliceExpr struct {
 func (*SliceExpr) exprNode()           {}
 func (e *SliceExpr) ExprPos() Position { return e.Pos }
 
-// FieldAccessExpr is `receiver.fieldName`. At parse time the receiver may be
-// any expression — typeck disambiguates between struct field access (when
-// the receiver is a value) and enum variant access (when the receiver is a
-// bare IdentExpr that resolves to an enum type).
+// FieldAccessExpr is `receiver.fieldName` and (v0.6) the safe-navigation
+// `receiver?.fieldName`. At parse time the receiver may be any expression —
+// typeck disambiguates between struct field access (when the receiver is a
+// value) and enum variant access (when the receiver is a bare IdentExpr that
+// resolves to an enum type).
+//
+// Safe (v0.6) records whether the operator was `?.` — chosen over a separate
+// SafeFieldAccessExpr node because the only structural difference is the
+// nullable lowering at typeck, and every consumer (parser printers, typeck,
+// borrow walker, run, cgen) needs one line of branching either way.
 //
 // Lowered is set by typeck when the access shape is recognised as a bare-
 // variant enum construction (`Token.Eof`). Downstream consumers can use the
@@ -891,6 +970,7 @@ type FieldAccessExpr struct {
 	Receiver  Expr
 	FieldName string
 	NamePos   Position
+	Safe      bool // v0.6 set when source spelled `?.`
 	Lowered   *EnumLit
 }
 
@@ -1009,12 +1089,13 @@ func (p *EnumPat) PatPos() Position { return p.Pos }
 // The bit is inert at Unit 1a; Unit 3 will use it to gate cross-module
 // dispatch on default-method bodies.
 type SpecMethod struct {
-	Pos    Position
-	Name   string
-	Params []FnParam
-	Return *TypeRef // nil ⇒ no return value
-	Body   *Block   // nil ⇒ signature only
-	Pub    bool
+	Pos        Position
+	Name       string
+	TypeParams []TypeParam // v0.6 per-method generic type parameters
+	Params     []FnParam
+	Return     *TypeRef // nil ⇒ no return value
+	Body       *Block   // nil ⇒ signature only
+	Pub        bool
 }
 
 // SpecDecl represents `spec Name { method_decl* }`. Methods may be
@@ -1024,10 +1105,11 @@ type SpecMethod struct {
 // Pub records the v0.5 decl-level visibility modifier on the spec itself;
 // individual method visibility is recorded on each SpecMethod.
 type SpecDecl struct {
-	Pos     Position
-	Name    string
-	Methods []*SpecMethod
-	Pub     bool
+	Pos        Position
+	Name       string
+	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic specs
+	Methods    []*SpecMethod
+	Pub        bool
 }
 
 func (*SpecDecl) stmtNode()           {}
@@ -1049,6 +1131,15 @@ type ImplDecl struct {
 	// v0.5 typeck routes the receiver-type lookup through the importing
 	// module's import table when this is set.
 	TypeModule string
+	// TypeArgs (v0.6) carries the receiver-type's generic type arguments,
+	// e.g. the `int` slot in `impl Box[int] for Printable` or the `T` slot
+	// in `impl[T] Box[T] for Printable`. Nil/empty for non-generic receivers
+	// — every v0.0–v0.5 program carries this at its zero value.
+	TypeArgs []*TypeRef
+	// TypeParams (v0.6) carries the impl-level generic parameters declared
+	// immediately after `impl` (`impl[T: Bound] LocalType[T] for SomeSpec`).
+	// Nil for impls that take no impl-level parameters.
+	TypeParams []TypeParam
 	Spec    string // empty when inherent; otherwise the spec name
 	// SpecModule, when non-empty, is the local binding name of an
 	// imported module that defined Spec (`impl T for util.Printable`).
@@ -1138,3 +1229,47 @@ type EnumLit struct {
 
 func (*EnumLit) exprNode()           {}
 func (e *EnumLit) ExprPos() Position { return e.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.6 null-safety expression nodes.
+// ---------------------------------------------------------------------------
+
+// NilLit is the bare `nil` keyword in expression position. Typeck (Unit 4)
+// resolves it to `Option[T].None` for the contextually-inferred T; outside an
+// inferable position the diagnostic is `cannot infer type of nil — annotate
+// the binding`.
+type NilLit struct {
+	typed
+	Pos Position
+}
+
+func (*NilLit) exprNode()           {}
+func (e *NilLit) ExprPos() Position { return e.Pos }
+
+// PropagateExpr is the postfix `?` propagation operator. Inner is the
+// receiver; the operator is only legal inside a fn whose return type is
+// Result[U, E] (compatible E) or Option[U]. Typeck (Unit 4) lowers the
+// operator to a match-and-early-return; the parser only records the shape.
+type PropagateExpr struct {
+	typed
+	Pos   Position
+	Inner Expr
+}
+
+func (*PropagateExpr) exprNode()           {}
+func (e *PropagateExpr) ExprPos() Position { return e.Pos }
+
+// CoalesceExpr is the right-associative infix `??` operator at the lowest
+// precedence. LHS must be Option[T] or Result[T, E]; RHS must be T. The
+// node is kept distinct from BinaryExpr because the operand-type rule is
+// not parameterisable over the existing BinaryOp set, and the lowering
+// (Unit 4) emits a 2-arm match that the binary-op walker would not produce.
+type CoalesceExpr struct {
+	typed
+	Pos   Position
+	Left  Expr
+	Right Expr
+}
+
+func (*CoalesceExpr) exprNode()           {}
+func (e *CoalesceExpr) ExprPos() Position { return e.Pos }

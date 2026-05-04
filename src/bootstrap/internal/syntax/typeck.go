@@ -421,6 +421,47 @@ type checker struct {
 	// drive cross-module name resolution and pub gating. Nil for
 	// single-program Check (preserves v0.0–v0.4 behaviour).
 	crossMod *crossModCtx
+	// builtinEnumDecls is the v0.6 Unit 2 registry of synthetic generic
+	// enum decls (Option, Result). Populated by injectBuiltinEnums at
+	// newChecker time so every module's collect / resolve passes see the
+	// names without an explicit import.
+	builtinEnumDecls map[string]*EnumDecl
+	// monoEnums caches per-instantiation canonical *Type values for
+	// generic enum decls. Key is `Decl[arg1,arg2,...]`. Two type-resolutions
+	// of the same instance (e.g. `Option[int]` and `int?`) return the same
+	// canonical pointer, so downstream pointer-equality dispatch works.
+	//
+	// v0.6 Unit 3: when a CheckBundle is in play, every module's checker
+	// shares the same map via crossMod.bundleMono — the map pointer is
+	// installed there and assigned to each c.monoEnums so cross-module
+	// instantiations canonicalise to one *Type.
+	monoEnums map[string]*Type
+	// monoStructs is the v0.6 Unit 3 cache for generic struct
+	// instantiations. Same shape as monoEnums; bundle-shared via crossMod.
+	monoStructs map[string]*Type
+	// monoFns caches generic-fn specialisations keyed by
+	// `Decl[arg1,arg2,...]`. The cached value is the cloned + fully
+	// type-checked FnDecl. Bundle-shared via crossMod.
+	monoFns map[string]*FnDecl
+	// genericFnAST records every generic-fn AST decl by name so
+	// checkGenericFnCall can find the original decl from a call site.
+	genericFnAST map[string]*FnDecl
+	// ownProg is the Program owned by this checker — set by CheckBundle when
+	// it constructs the per-module checker. Used by specialiseGenericFn to
+	// route monomorphised FnDecl clones back to the defining module's
+	// Program.MonoFns slice so codegen can iterate them.
+	ownProg *Program
+	// genericImpls records this module's generic ImplDecls (those with a
+	// non-empty TypeParams list). Each is held until per-receiver-type
+	// monomorphisation expands it into a concrete impl entry. Bundle-shared
+	// via crossMod.bundleMono so a foreign module's impl on a local type
+	// expands when the local type is monomorphised.
+	genericImpls []*genericImpl
+	// activeSubst is the impl-level type-parameter substitution active during
+	// a generic-impl body walk. Set by expandGenericImpls before walking each
+	// cloned method's body so resolveTypeRef sees `T` bound to the chosen
+	// concrete arg. Nil at the top level and inside non-generic impls.
+	activeSubst map[string]*Type
 }
 
 // Check is the public single-program entry point. It walks prog, annotates
@@ -452,6 +493,9 @@ func (c *checker) collectTopLevel(prog *Program) error {
 	for _, stmt := range prog.Statements {
 		switch s := stmt.(type) {
 		case *StructDecl:
+			if isReservedBuiltinTypeName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "struct"); err != nil {
 				return err
 			}
@@ -469,9 +513,18 @@ func (c *checker) collectTopLevel(prog *Program) error {
 				}
 				seen[f.Name] = true
 			}
-			c.structs[s.Name] = NewStructType(s.Name, nil) // fields filled by second pass
+			// v0.6 Unit 3: generic structs are NOT registered in c.structs
+			// — every use site monomorphizes through instantiateGenericStruct
+			// which writes into c.monoStructs instead. structAST still
+			// records the decl so the generic-decl path can find it.
+			if len(s.TypeParams) == 0 {
+				c.structs[s.Name] = NewStructType(s.Name, nil) // fields filled by second pass
+			}
 			c.structAST[s.Name] = s
 		case *EnumDecl:
+			if isReservedBuiltinTypeName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "enum"); err != nil {
 				return err
 			}
@@ -492,9 +545,19 @@ func (c *checker) collectTopLevel(prog *Program) error {
 				// resolution pass fills it in based on the AST.
 				_ = payloads
 			}
-			c.enums[s.Name] = &Type{Kind: TypeEnum, Name: s.Name, Variants: variants, VariantPayloads: payloads}
+			// v0.6 Unit 3: generic enums are NOT registered in c.enums —
+			// instances live in c.monoEnums keyed by `Decl[arg1,...]`. The
+			// enumAST entry is still recorded so the generic-decl path
+			// can find it (and so the reservation diagnostic in the
+			// builtin path can fire when needed).
+			if len(s.TypeParams) == 0 {
+				c.enums[s.Name] = &Type{Kind: TypeEnum, Name: s.Name, Variants: variants, VariantPayloads: payloads}
+			}
 			c.enumAST[s.Name] = s
 		case *SpecDecl:
+			if isReservedBuiltinTypeName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "spec"); err != nil {
 				return err
 			}
@@ -539,8 +602,16 @@ func (c *checker) collectTopLevel(prog *Program) error {
 // resolveStructFields resolves field types now that every top-level name is
 // known. Forward references between structs and back-references to enums
 // resolve here.
+//
+// v0.6 Unit 3: generic struct decls (TypeParams non-empty) are skipped here
+// — their fields name the declared type-parameters by raw identifier, and
+// the canonical per-instance *Type is built on demand by
+// instantiateGenericStruct.
 func (c *checker) resolveStructFields(_ *Program) error {
 	for name, decl := range c.structAST {
+		if len(decl.TypeParams) > 0 {
+			continue
+		}
 		fields := make([]NamedField, len(decl.Fields))
 		for i, f := range decl.Fields {
 			t, err := c.resolveTypeRef(f.Type)
@@ -563,6 +634,13 @@ func (c *checker) resolveStructFields(_ *Program) error {
 // type name is already in the table by the time we run.
 func (c *checker) resolveEnumPayloads(_ *Program) error {
 	for name, decl := range c.enumAST {
+		// Generic enum decls (incl. the v0.6 built-ins Option / Result)
+		// are not resolved here — their payload type-refs name the
+		// declared type-parameters by raw identifier, and the canonical
+		// per-instance *Type is built on demand by instantiateGenericEnum.
+		if len(decl.TypeParams) > 0 {
+			continue
+		}
 		en := c.enums[name]
 		for i, v := range decl.Variants {
 			if len(v.Payload) == 0 {
@@ -680,10 +758,18 @@ func visitType(t *Type, viaPos Position, viaDesc string, visit func(string, Posi
 // resolveFnSignatures fills in every top-level fn's signature now that struct
 // and enum types are known. The built-in `len` was inserted before the AST
 // walk and is left untouched here.
+//
+// v0.6 Unit 3: generic FnDecls (TypeParams non-empty) are skipped here —
+// their params and return types name declared type-params by raw
+// identifier, and per-instance signatures are resolved on demand by
+// specialiseGenericFn at each call site.
 func (c *checker) resolveFnSignatures(prog *Program) error {
 	for _, stmt := range prog.Statements {
 		fn, ok := stmt.(*FnDecl)
 		if !ok {
+			continue
+		}
+		if len(fn.TypeParams) > 0 {
 			continue
 		}
 		params := make([]*Type, len(fn.Params))
@@ -1038,16 +1124,147 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 	}
 	switch ref.Kind {
 	case TypeRefNamed:
+		// v0.6 Unit 3.5: when an impl-level type substitution is in scope
+		// (set by expandGenericImpls during a generic-impl body walk), a
+		// bare reference to a declared type-parameter resolves to its
+		// concrete *Type. Substitution short-circuits before the cross-
+		// module / generic-decl paths so it captures bare T uses inside
+		// method bodies (`let x: T = ...`).
+		if c.activeSubst != nil && ref.Module == "" && len(ref.TypeArgs) == 0 {
+			if t, ok := c.activeSubst[ref.Name]; ok {
+				if ref.Nullable {
+					wrapped, werr := c.wrapOption(t, ref.Pos)
+					if werr != nil {
+						return nil, werr
+					}
+					ref.Resolved = wrapped
+					return wrapped, nil
+				}
+				ref.Resolved = t
+				return t, nil
+			}
+		}
 		// Cross-module qualifier: route through the importing module's
 		// import binding table. The inner name MUST be a pub struct,
-		// enum, or spec in the foreign module.
+		// enum, or spec in the foreign module. v0.6 Unit 2 keeps built-ins
+		// unqualified-only — `mod.Option` does not resolve.
 		if ref.Module != "" {
 			t, err := c.resolveCrossModuleType(ref)
 			if err != nil {
 				return nil, err
 			}
+			if len(ref.TypeArgs) > 0 {
+				return nil, typeErr(ref.Pos,
+					"generic type arguments on cross-module references are not supported at v0.6 Unit 2")
+			}
+			if ref.Nullable {
+				wrapped, werr := c.wrapOption(t, ref.Pos)
+				if werr != nil {
+					return nil, werr
+				}
+				ref.Resolved = wrapped
+				return wrapped, nil
+			}
 			ref.Resolved = t
 			return t, nil
+		}
+		// Generic-name path (v0.6): a name with type-args resolves through
+		// the per-decl monomorphization cache. Unit 2 handled the built-in
+		// Option / Result decls; Unit 3 extends to user-defined generic
+		// enums and structs (and rejects type-args on non-generic concrete
+		// names).
+		if len(ref.TypeArgs) > 0 {
+			args := make([]*Type, len(ref.TypeArgs))
+			for i, a := range ref.TypeArgs {
+				ta, err := c.resolveTypeRef(a)
+				if err != nil {
+					return nil, err
+				}
+				args[i] = ta
+			}
+			if enumDecl := c.findGenericEnumDecl(ref.Name); enumDecl != nil {
+				t, err := c.instantiateGenericEnum(enumDecl, args, ref.Pos)
+				if err != nil {
+					return nil, err
+				}
+				if ref.Nullable {
+					wrapped, werr := c.wrapOption(t, ref.Pos)
+					if werr != nil {
+						return nil, werr
+					}
+					ref.Resolved = wrapped
+					return wrapped, nil
+				}
+				ref.Resolved = t
+				return t, nil
+			}
+			if structDecl := c.findGenericStructDecl(ref.Name); structDecl != nil {
+				t, err := c.instantiateGenericStruct(structDecl, args, ref.Pos)
+				if err != nil {
+					return nil, err
+				}
+				if ref.Nullable {
+					wrapped, werr := c.wrapOption(t, ref.Pos)
+					if werr != nil {
+						return nil, werr
+					}
+					ref.Resolved = wrapped
+					return wrapped, nil
+				}
+				ref.Resolved = t
+				return t, nil
+			}
+			// Type-args on a primitive or non-generic concrete name.
+			switch ref.Name {
+			case "int", "float", "bool", "str", "byte", "rune":
+				return nil, typeErr(ref.Pos,
+					"type %q has no type parameters", ref.Name)
+			}
+			if _, ok := c.structs[ref.Name]; ok {
+				return nil, typeErr(ref.Pos,
+					"type %q has no type parameters", ref.Name)
+			}
+			if _, ok := c.enums[ref.Name]; ok {
+				if _, isBuiltin := c.builtinEnumDecls[ref.Name]; !isBuiltin {
+					// Non-generic user enum.
+					return nil, typeErr(ref.Pos,
+						"type %q has no type parameters", ref.Name)
+				}
+			}
+			if _, ok := c.specs[ref.Name]; ok {
+				return nil, typeErr(ref.Pos,
+					"type %q has no type parameters", ref.Name)
+			}
+			return nil, typeErr(ref.Pos,
+				"type %q is not generic but was given type arguments", ref.Name)
+		}
+		// Bare-name reference to a generic decl (no args): reject.
+		if _, isBuiltin := c.builtinEnumDecls[ref.Name]; isBuiltin {
+			return nil, typeErr(ref.Pos,
+				"generic type %q requires type arguments", ref.Name)
+		}
+		if d, ok := c.enumAST[ref.Name]; ok && len(d.TypeParams) > 0 {
+			return nil, typeErr(ref.Pos,
+				"cannot use generic type %q without type arguments", ref.Name)
+		}
+		if d, ok := c.structAST[ref.Name]; ok && len(d.TypeParams) > 0 {
+			return nil, typeErr(ref.Pos,
+				"cannot use generic type %q without type arguments", ref.Name)
+		}
+		if c.crossMod != nil {
+			for _, fc := range c.crossMod.checkers {
+				if fc == c {
+					continue
+				}
+				if d, ok := fc.enumAST[ref.Name]; ok && len(d.TypeParams) > 0 {
+					return nil, typeErr(ref.Pos,
+						"cannot use generic type %q without type arguments", ref.Name)
+				}
+				if d, ok := fc.structAST[ref.Name]; ok && len(d.TypeParams) > 0 {
+					return nil, typeErr(ref.Pos,
+						"cannot use generic type %q without type arguments", ref.Name)
+				}
+			}
 		}
 		var t *Type
 		switch ref.Name {
@@ -1064,6 +1281,10 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		case "rune":
 			t = tRune
 		default:
+			if _, isBuiltin := c.builtinEnumDecls[ref.Name]; isBuiltin {
+				return nil, typeErr(ref.Pos,
+					"generic type %q requires type arguments", ref.Name)
+			}
 			if st, ok := c.structs[ref.Name]; ok {
 				t = st
 			} else if en, ok := c.enums[ref.Name]; ok {
@@ -1073,6 +1294,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			} else {
 				return nil, typeErr(ref.Pos, "unknown type %q", ref.Name)
 			}
+		}
+		if ref.Nullable {
+			wrapped, werr := c.wrapOption(t, ref.Pos)
+			if werr != nil {
+				return nil, werr
+			}
+			ref.Resolved = wrapped
+			return wrapped, nil
 		}
 		ref.Resolved = t
 		return t, nil
@@ -1085,6 +1314,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			return nil, typeErr(ref.Pos, "list element type cannot be void")
 		}
 		t := NewListType(elem)
+		if ref.Nullable {
+			wrapped, werr := c.wrapOption(t, ref.Pos)
+			if werr != nil {
+				return nil, werr
+			}
+			ref.Resolved = wrapped
+			return wrapped, nil
+		}
 		ref.Resolved = t
 		return t, nil
 	case TypeRefTuple:
@@ -1100,6 +1337,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			elems[i] = t
 		}
 		t := NewTupleType(elems)
+		if ref.Nullable {
+			wrapped, werr := c.wrapOption(t, ref.Pos)
+			if werr != nil {
+				return nil, werr
+			}
+			ref.Resolved = wrapped
+			return wrapped, nil
+		}
 		ref.Resolved = t
 		return t, nil
 	}
@@ -1120,12 +1365,12 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		if s.Tuple != nil {
 			return c.checkTupleDestructure(s.Pos, s.Tuple, s.Value, bindLet)
 		}
-		return c.checkDecl(s.Pos, s.Name, s.Type, s.Value, bindLet)
+		return c.checkDeclSlot(s.Pos, s.Name, s.Type, &s.Value, bindLet)
 	case *MutStmt:
 		if s.Tuple != nil {
 			return c.checkTupleDestructure(s.Pos, s.Tuple, s.Value, bindMut)
 		}
-		return c.checkDecl(s.Pos, s.Name, s.Type, s.Value, bindMut)
+		return c.checkDeclSlot(s.Pos, s.Name, s.Type, &s.Value, bindMut)
 	case *ConstStmt:
 		if s.Tuple != nil {
 			// PLAN: composites are not const-evaluable at v0.2 (isConstExpr
@@ -1138,7 +1383,7 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		if !isConstExpr(s.Value) {
 			return typeErr(s.Pos, "const initialiser must be a constant expression")
 		}
-		return c.checkDecl(s.Pos, s.Name, s.Type, s.Value, bindConst)
+		return c.checkDeclSlot(s.Pos, s.Name, s.Type, &s.Value, bindConst)
 	case *AssignStmt:
 		return c.checkAssign(s)
 	case *ExprStmt:
@@ -1245,10 +1490,38 @@ func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr,
 		return err
 	}
 	// Pass the annotated type as a hint so empty-list literals can latch onto
-	// it. Other expression forms ignore the hint.
-	observed, err := c.checkExprHint(value, annotated)
+	// it and the v0.6 T → T? lift applies. The caller-side slot is bound
+	// via checkDeclSlot so a wrapping EnumLit can replace value in its
+	// parent slot (caller updates the *LetStmt / *MutStmt / *ConstStmt).
+	return c.checkDeclWithSlot(pos, name, annotated, value, kind, nil)
+}
+
+// checkDeclSlot is the slot-aware front door used by checkStmt for the v0.6
+// lift path. It resolves the annotation and then defers to
+// checkDeclWithSlot with the parent slot.
+func (c *checker) checkDeclSlot(pos Position, name string, ref *TypeRef, slot *Expr, kind bindKind) error {
+	if c.crossMod != nil {
+		if _, ok := c.crossMod.imports[name]; ok && c.scope.parent == nil {
+			return typeErr(pos, "name %q shadows imported module binding", name)
+		}
+	}
+	annotated, err := c.resolveTypeRef(ref)
 	if err != nil {
 		return err
+	}
+	return c.checkDeclWithSlot(pos, name, annotated, *slot, kind, slot)
+}
+
+// checkDeclWithSlot is the slot-aware decl helper: when slot != nil and the
+// hint triggers a T → T? lift, the wrapped EnumLit is installed via slot.
+// Used by the let / mut / const checker paths.
+func (c *checker) checkDeclWithSlot(pos Position, name string, annotated *Type, value Expr, kind bindKind, slot *Expr) error {
+	newExpr, observed, err := c.checkExprLift(value, annotated)
+	if err != nil {
+		return err
+	}
+	if slot != nil && newExpr != value {
+		*slot = newExpr
 	}
 	final := observed
 	if annotated != nil {
@@ -1587,6 +1860,12 @@ func (c *checker) checkFnDecl(fn *FnDecl) error {
 	if c.currentFn != nil {
 		return typeErr(fn.Pos, "nested functions are not supported")
 	}
+	// v0.6 Unit 3: generic fn decls are NOT body-checked at decl time.
+	// Each call site spawns a specialised clone that gets its body
+	// type-checked under the substituted type-vars.
+	if len(fn.TypeParams) > 0 {
+		return nil
+	}
 	sig := c.fns[fn.Name]
 	c.currentFn = &sig
 	defer func() { c.currentFn = nil }()
@@ -1620,14 +1899,17 @@ func (c *checker) checkReturn(s *ReturnStmt) error {
 		}
 		return nil
 	}
-	t, err := c.checkExprHint(s.Value, c.currentFn.ret)
+	newExpr, t, err := c.checkExprLift(s.Value, c.currentFn.ret)
 	if err != nil {
 		return err
+	}
+	if newExpr != s.Value {
+		s.Value = newExpr
 	}
 	if c.currentFn.ret == tVoid {
 		return typeErr(s.Pos, "function returns no value but 'return' has expression of type %s", t)
 	}
-	if !typeEq(t, c.currentFn.ret) {
+	if !c.assignableTo(t, c.currentFn.ret) {
 		return typeErr(s.Pos, "return type mismatch: function returns %s, got %s", c.currentFn.ret, t)
 	}
 	return nil
@@ -1776,7 +2058,19 @@ func (c *checker) checkPattern(pat Pattern, expected *Type, armScope *scope, bin
 		if expected == nil || expected.Kind != TypeEnum {
 			return typeErr(p.Pos, "enum pattern cannot match subject of type %s", expected)
 		}
-		if expected.Name != p.TypeName {
+		// v0.6: monomorphised generic enums carry a Name like `Pair[int,str]`.
+		// Patterns spell only the bare decl name (`Pair`) — strip the
+		// `[args]` suffix from the subject before comparing. Variant payload
+		// types are already substituted on the mono *Type so payload-pattern
+		// checks below work unchanged.
+		expectedBaseName := expected.Name
+		for i, r := range expectedBaseName {
+			if r == '[' {
+				expectedBaseName = expectedBaseName[:i]
+				break
+			}
+		}
+		if expectedBaseName != p.TypeName {
 			return typeErr(p.Pos, "enum pattern type %q does not match subject type %s", p.TypeName, expected)
 		}
 		// Locate the variant index so we can validate payload arity and types.
@@ -1877,7 +2171,7 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 	case *UnaryExpr:
 		return c.checkUnary(e)
 	case *CallExpr:
-		return c.checkCall(e)
+		return c.checkCallHint(e, hint)
 	case *ParenExpr:
 		t, err := c.checkExprHint(e.Inner, hint)
 		if err != nil {
@@ -1892,15 +2186,15 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 	case *TupleLit:
 		return c.checkTupleLit(e, hint)
 	case *StructLit:
-		return c.checkStructLit(e)
+		return c.checkStructLit(e, hint)
 	case *IndexExpr:
 		return c.checkIndex(e)
 	case *SliceExpr:
 		return c.checkSlice(e)
 	case *FieldAccessExpr:
-		return c.checkFieldAccess(e)
+		return c.checkFieldAccessHint(e, hint)
 	case *MethodCallExpr:
-		return c.checkMethodCall(e)
+		return c.checkMethodCallHint(e, hint)
 	case *ThisExpr:
 		if c.currentReceiver == nil {
 			return nil, typeErr(e.Pos, "'this' is only valid inside an impl method body")
@@ -1909,8 +2203,33 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.currentReceiver, nil
 	case *EnumLit:
 		return c.checkEnumLit(e)
+	case *NilLit:
+		// v0.6 Unit 2: nil resolves only when the surrounding context
+		// supplies an Option[T] expected type via the hint. Unit 4
+		// extends every bidirectional position (return, fn-arg, list
+		// element, struct field) by routing those callers through
+		// checkExprLift, which propagates the hint here.
+		if hint != nil && hint.Kind == TypeEnum && isOptionInstance(hint) {
+			e.setType(hint)
+			return hint, nil
+		}
+		return nil, typeErr(e.Pos, "cannot infer type of nil — annotate the binding")
+	case *PropagateExpr:
+		return c.checkPropagate(e)
+	case *CoalesceExpr:
+		return c.checkCoalesce(e, hint)
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
+}
+
+// isOptionInstance reports whether t is a monomorphized Option[...] enum.
+// Used by NilLit's bidirectional check at Unit 2 (and re-used by Unit 4 for
+// the broader nil / `?` / `??` / `?.` machinery).
+func isOptionInstance(t *Type) bool {
+	if t == nil || t.Kind != TypeEnum {
+		return false
+	}
+	return strings.HasPrefix(t.Name, "Option[")
 }
 
 // checkListLit handles `[e1, e2, ...]` and the empty-list special case. With
@@ -1932,7 +2251,9 @@ func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 		return nil, typeErr(e.Pos, "cannot infer element type of empty list literal")
 	}
 	// Use the hint's element type as a hint for each element so an annotated
-	// `let xs: list[list[int]] = [[]]` can fill in the inner empty list.
+	// `let xs: list[list[int]] = [[]]` can fill in the inner empty list. The
+	// v0.6 lift fires here too: `let xs: list[int?] = [1, 2]` wraps each int
+	// in a Some(...) at the per-element slot.
 	var elemHint *Type
 	if hint != nil && hint.Kind == TypeList {
 		elemHint = hint.Element
@@ -1941,18 +2262,24 @@ func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 	// list[Spec] regardless of which concrete types appear in the literal —
 	// each element only needs to impl the spec. Otherwise use the first
 	// element's observed type and require subsequent elements to match.
-	first, err := c.checkExprHint(e.Elements[0], elemHint)
+	newFirst, first, err := c.checkExprLift(e.Elements[0], elemHint)
 	if err != nil {
 		return nil, err
+	}
+	if newFirst != e.Elements[0] {
+		e.Elements[0] = newFirst
 	}
 	if elemHint != nil && elemHint.Kind == TypeSpec {
 		if !c.assignableTo(first, elemHint) {
 			return nil, typeErr(e.Elements[0].ExprPos(), "list element 1 has type %s, expected %s", first, elemHint)
 		}
 		for i := 1; i < len(e.Elements); i++ {
-			t, err := c.checkExprHint(e.Elements[i], elemHint)
+			newE, t, err := c.checkExprLift(e.Elements[i], elemHint)
 			if err != nil {
 				return nil, err
+			}
+			if newE != e.Elements[i] {
+				e.Elements[i] = newE
 			}
 			if !c.assignableTo(t, elemHint) {
 				return nil, typeErr(e.Elements[i].ExprPos(), "list element %d has type %s, expected %s", i+1, t, elemHint)
@@ -1963,9 +2290,12 @@ func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 		return out, nil
 	}
 	for i := 1; i < len(e.Elements); i++ {
-		t, err := c.checkExprHint(e.Elements[i], elemHint)
+		newE, t, err := c.checkExprLift(e.Elements[i], elemHint)
 		if err != nil {
 			return nil, err
+		}
+		if newE != e.Elements[i] {
+			e.Elements[i] = newE
 		}
 		if !typeEq(t, first) {
 			return nil, typeErr(e.Elements[i].ExprPos(), "list element %d has type %s, expected %s", i+1, t, first)
@@ -2006,7 +2336,12 @@ func (c *checker) checkTupleLit(e *TupleLit, hint *Type) (*Type, error) {
 // v0.5: when e.Module is non-empty, the struct type is module-qualified
 // (`mod.MyStruct {...}`). The lookup goes through the importing module's
 // import binding table; the foreign struct must be `pub`.
-func (c *checker) checkStructLit(e *StructLit) (*Type, error) {
+//
+// v0.6 Unit 3: when the named type is generic and a hint supplies the
+// instance (`let b: Box[int] = Box { value: 7 }`), we use the hint's
+// substituted struct *Type directly. Without a hint a bare-name reference
+// to a generic struct is rejected.
+func (c *checker) checkStructLit(e *StructLit, hint *Type) (*Type, error) {
 	if e.Module != "" {
 		st, found, err := c.resolveCrossModuleStruct(e.Module, e.TypeName)
 		if !found {
@@ -2019,11 +2354,28 @@ func (c *checker) checkStructLit(e *StructLit) (*Type, error) {
 		}
 		return c.checkStructLitBody(e, st)
 	}
-	st, ok := c.structs[e.TypeName]
-	if !ok {
-		return nil, typeErr(e.Pos, "unknown struct type %q", e.TypeName)
+	if st, ok := c.structs[e.TypeName]; ok {
+		return c.checkStructLitBody(e, st)
 	}
-	return c.checkStructLitBody(e, st)
+	if d := c.findGenericStructDecl(e.TypeName); d != nil {
+		if hint == nil || hint.Kind != TypeStruct {
+			return nil, typeErr(e.Pos,
+				"cannot infer type parameter(s) for generic struct %q — annotate the binding",
+				e.TypeName)
+		}
+		got, ok := genericStructInstanceArgs(hint, e.TypeName, d)
+		if !ok || len(got) != len(d.TypeParams) {
+			return nil, typeErr(e.Pos,
+				"cannot infer type parameter(s) for generic struct %q — annotate the binding",
+				e.TypeName)
+		}
+		mono, err := c.instantiateGenericStruct(d, got, e.Pos)
+		if err != nil {
+			return nil, err
+		}
+		return c.checkStructLitBody(e, mono)
+	}
+	return nil, typeErr(e.Pos, "unknown struct type %q", e.TypeName)
 }
 
 // checkStructLitBody validates the field-init list of a struct literal
@@ -2035,7 +2387,8 @@ func (c *checker) checkStructLitBody(e *StructLit, st *Type) (*Type, error) {
 		declared[f.Name] = f.Type
 	}
 	provided := map[string]bool{}
-	for _, init := range e.Fields {
+	for i := range e.Fields {
+		init := &e.Fields[i]
 		ft, ok := declared[init.Name]
 		if !ok {
 			return nil, typeErr(init.Pos, "struct %q has no field %q", st.Name, init.Name)
@@ -2044,9 +2397,12 @@ func (c *checker) checkStructLitBody(e *StructLit, st *Type) (*Type, error) {
 			return nil, typeErr(init.Pos, "field %q already initialised in struct literal", init.Name)
 		}
 		provided[init.Name] = true
-		vt, err := c.checkExprHint(init.Value, ft)
+		newExpr, vt, err := c.checkExprLift(init.Value, ft)
 		if err != nil {
 			return nil, err
+		}
+		if newExpr != init.Value {
+			init.Value = newExpr
 		}
 		if !c.assignableTo(vt, ft) {
 			return nil, typeErr(init.Pos, "field %q expects %s, got %s", init.Name, ft, vt)
@@ -2059,6 +2415,66 @@ func (c *checker) checkStructLitBody(e *StructLit, st *Type) (*Type, error) {
 	}
 	e.setType(st)
 	return st, nil
+}
+
+// genericStructInstanceArgs recovers the type-arg vector from a canonical
+// generic struct instance against the decl's type-param ordering. Walks the
+// decl's field TypeRefs to find positions where a type-param appears, then
+// reads the substituted *Type from the matching position in the instance.
+//
+// Returns (args, ok). ok is false when t is not a struct named declName[...]
+// or when the decl's fields don't reference every type-param at least once
+// (unlikely for v0.6 corpus shapes; the caller falls back to a precise
+// "cannot infer" diagnostic).
+func genericStructInstanceArgs(t *Type, declName string, decl *StructDecl) ([]*Type, bool) {
+	if t == nil || t.Kind != TypeStruct {
+		return nil, false
+	}
+	prefix := declName + "["
+	if !strings.HasPrefix(t.Name, prefix) || !strings.HasSuffix(t.Name, "]") {
+		return nil, false
+	}
+	if len(t.Fields) != len(decl.Fields) {
+		return nil, false
+	}
+	out := make([]*Type, len(decl.TypeParams))
+	tpIdx := map[string]int{}
+	for i, tp := range decl.TypeParams {
+		tpIdx[tp.Name] = i
+	}
+	var walk func(*TypeRef, *Type)
+	walk = func(ref *TypeRef, conc *Type) {
+		if ref == nil || conc == nil {
+			return
+		}
+		switch ref.Kind {
+		case TypeRefNamed:
+			if ref.Module == "" && len(ref.TypeArgs) == 0 && !ref.Nullable {
+				if i, ok := tpIdx[ref.Name]; ok && out[i] == nil {
+					out[i] = conc
+				}
+			}
+		case TypeRefList:
+			if conc.Kind == TypeList {
+				walk(ref.Element, conc.Element)
+			}
+		case TypeRefTuple:
+			if conc.Kind == TypeTuple && len(ref.Elements) == len(conc.Tuple) {
+				for i, sub := range ref.Elements {
+					walk(sub, conc.Tuple[i])
+				}
+			}
+		}
+	}
+	for i, f := range decl.Fields {
+		walk(f.Type, t.Fields[i].Type)
+	}
+	for _, v := range out {
+		if v == nil {
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 // checkIndex handles `xs[i]`. Receiver must be list[T] (result T) or str
@@ -2149,6 +2565,19 @@ func (c *checker) checkSlice(e *SliceExpr) (*Type, error) {
 //   - `mod.fn_name` — only meaningful inside a CallExpr callee; bare access
 //     rejects with "not a value".
 func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
+	return c.checkFieldAccessHint(e, nil)
+}
+
+// checkFieldAccessHint is the v0.6 hint-aware variant. The hint is consumed
+// when the access shape is `Option.None` / `Result.Ok` / etc. — a generic
+// enum bare-variant access where the type-args must come from context.
+func (c *checker) checkFieldAccessHint(e *FieldAccessExpr, hint *Type) (*Type, error) {
+	// v0.6 Unit 4: `obj?.field` routes through the safe-navigation path. The
+	// receiver must be Option[T]; the result is Option[fieldType]. Chains
+	// compose because each ?. returns Option[...] which the next ?. consumes.
+	if e.Safe {
+		return c.checkSafeFieldAccess(e)
+	}
 	// v0.5: receiver `mod.X` (FieldAccessExpr whose own receiver is the
 	// module-binding IdentExpr) where X is a foreign enum type. The
 	// outer FieldName is the variant.
@@ -2248,6 +2677,18 @@ func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 			}
 			return nil, typeErr(e.NamePos, "enum %q has no variant %q", id.Name, e.FieldName)
 		}
+		// v0.6 Unit 3: receiver is a generic enum decl name (`Option`,
+		// `Result`, user-defined). The variant is bare (no payload); the
+		// type-args must come from the surrounding hint.
+		if d := c.findGenericEnumDecl(id.Name); d != nil {
+			t, ok, err := c.checkGenericEnumBareLit(e, id.Name, e.FieldName, hint)
+			if ok {
+				return t, err
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	rt, err := c.checkExpr(e.Receiver)
 	if err != nil {
@@ -2279,6 +2720,14 @@ func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 // Receiver expressions are walked once (paths 2 and 3 type-check the receiver
 // before lookup).
 func (c *checker) checkMethodCall(e *MethodCallExpr) (*Type, error) {
+	return c.checkMethodCallHint(e, nil)
+}
+
+// checkMethodCallHint is the v0.6 hint-aware variant: the optional hint
+// supplies missing type-args at a generic-enum lit construction site
+// (`Option.Some(7)`, `Result.Err("oops")`). Non-generic dispatch ignores
+// the hint.
+func (c *checker) checkMethodCallHint(e *MethodCallExpr, hint *Type) (*Type, error) {
 	// v0.5 path 0a: cross-module function call shape — the receiver is
 	// an IdentExpr naming an imported module binding, and Method is a
 	// pub function defined in that module.
@@ -2286,6 +2735,18 @@ func (c *checker) checkMethodCall(e *MethodCallExpr) (*Type, error) {
 		if foreignMod := c.lookupImportedModule(id.Name); foreignMod != nil {
 			fc := c.crossMod.checkers[foreignMod]
 			if fc != nil {
+				// v0.6 Unit 3: foreign module's generic fn. Pub-gated by
+				// the FnDecl's Pub bit. The shape is the same as the
+				// in-module generic call after we lower the
+				// MethodCallExpr to a CallExpr.
+				if gfn, ok := fc.genericFnAST[e.Method]; ok {
+					if !gfn.Pub {
+						return nil, typeErr(e.MethodPos,
+							"cannot access '%s.%s': %q is not pub in module %q",
+							id.Name, e.Method, e.Method, id.Name)
+					}
+					return c.checkCrossModuleGenericFnCall(e, gfn, hint)
+				}
 				if sig, found := fc.fns[e.Method]; found && !sig.builtin {
 					if !fnIsPub(fc, e.Method) {
 						return nil, typeErr(e.MethodPos,
@@ -2358,6 +2819,17 @@ func (c *checker) checkMethodCall(e *MethodCallExpr) (*Type, error) {
 			// lookup with receiver type bound to the enum.
 			id.setType(en)
 			return c.dispatchConcreteMethod(e, en)
+		}
+		// v0.6 Unit 3: receiver names a generic enum decl (`Option.Some(7)`,
+		// `Result.Err("oops")`, user-defined `Pair.Both(1, 2)`).
+		if d := c.findGenericEnumDecl(id.Name); d != nil {
+			t, ok, err := c.checkGenericEnumLit(e, id.Name, e.Method, hint)
+			if ok {
+				return t, err
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	// Paths 2 & 3 both need the receiver's type.
@@ -2710,9 +3182,21 @@ func (c *checker) checkUnary(e *UnaryExpr) (*Type, error) {
 // declared function. The built-in `len` is special-cased: it accepts any
 // list[T] argument and returns int.
 func (c *checker) checkCall(e *CallExpr) (*Type, error) {
+	return c.checkCallHint(e, nil)
+}
+
+// checkCallHint is the v0.6 hint-aware variant: the optional hint feeds
+// the bidirectional unifier at a generic-fn call site so e.g.
+// `let r: Result[int, str] = make_err()` infers the type-args from the
+// surrounding annotation. Non-generic calls ignore the hint.
+func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 	ident, ok := e.Callee.(*IdentExpr)
 	if !ok {
 		return nil, typeErr(e.Pos, "callee must be a function name")
+	}
+	// v0.6 Unit 3: generic-fn dispatch.
+	if fn := c.findGenericFnDecl(ident.Name); fn != nil {
+		return c.checkGenericFnCall(e, fn, ident, hint)
 	}
 	sig, ok := c.fns[ident.Name]
 	if !ok {
@@ -2749,13 +3233,16 @@ func (c *checker) checkCall(e *CallExpr) (*Type, error) {
 	if len(e.Args) != len(sig.params) {
 		return nil, typeErr(e.Pos, "function %q expects %d argument(s), got %d", ident.Name, len(sig.params), len(e.Args))
 	}
-	for i, a := range e.Args {
-		at, err := c.checkExprHint(a, sig.params[i])
+	for i := range e.Args {
+		newExpr, at, err := c.checkExprLift(e.Args[i], sig.params[i])
 		if err != nil {
 			return nil, err
 		}
-		if !typeEq(at, sig.params[i]) {
-			return nil, typeErr(a.ExprPos(), "argument %d to %q has type %s, expected %s", i+1, ident.Name, at, sig.params[i])
+		if newExpr != e.Args[i] {
+			e.Args[i] = newExpr
+		}
+		if !c.assignableTo(at, sig.params[i]) {
+			return nil, typeErr(e.Args[i].ExprPos(), "argument %d to %q has type %s, expected %s", i+1, ident.Name, at, sig.params[i])
 		}
 	}
 	ident.setType(sig.ret)

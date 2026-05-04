@@ -31,7 +31,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.3** — borrow checking.
 - [x] **v0.4** — polymorphism and errors.
 - [x] **v0.5** — modules.
-- [ ] **v0.6** — generics and null-safety.
+- [x] **v0.6** — generics and null-safety.
 - [ ] **v0.7** — concurrency runtime.
 - [ ] **v0.8** — standard library.
 - [ ] **v0.9** — developer tooling.
@@ -45,15 +45,15 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
-(composite data), v0.3 (borrow checking), v0.4 (polymorphism), and v0.5 (modules) share the same
-`zerg` binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4
-corpora) keep working unchanged.
+(composite data), v0.3 (borrow checking), v0.4 (polymorphism), v0.5 (modules), and v0.6 (generics
+and null-safety) share the same `zerg` binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and
+the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 corpora) keep working unchanged.
 
 ### Prerequisites
 
 - Go 1.23 or newer.
 - A C compiler reachable as `cc` on `PATH` (override with `$CC`). It must accept `-fwrapv`; gcc and
-  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.5.
+  clang on macOS / Linux qualify. tcc and MSVC are out of scope at v0.6.
 - macOS or Linux. Windows is deferred.
 
 ### Build the toolchain
@@ -91,19 +91,24 @@ structural equality helpers, the per-spec `zerg_dyn_<Spec>` fat-pointer / `zerg_
 struct, and `zerg_match_panic` / `zerg_not_implemented`) is emitted inline at the top of the
 output — no external runtime to link against. v0.5 keeps the single-TU emit and prefixes every
 type/fn/method symbol with a per-module mangle so multi-file programs link cleanly without a
-separate object-file step.
+separate object-file step. v0.6 reuses that path for monomorphized generics: each unique
+`(decl, type-args)` pair lowers to one C struct/fn whose mangle suffixes the canonical type-arg
+vector (e.g. `Box[int]` → `Box__int`), so generic instances dedup at link time without a separate
+template machinery.
 
 ### REPL
 
-The v0.5 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
+The v0.6 REPL is multi-line: input accumulates until it parses cleanly, so you can paste a function
 body, a `for` block, a `struct`/`enum`/`spec`/`impl` declaration, or a `match` one line at a time.
 The borrow checker runs against each accepted program — diagnostics fire at the prompt, not the
 next prompt. `import` is intentionally not admitted at the REPL: typing `import "x"` produces the
 dedicated diagnostic `import not supported at REPL` and the session continues.
 
+<!-- markdownlint-disable MD013 -->
+
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.5 — accepts the v0.5 surface (procedural core, composite data, borrow checking, polymorphism, modules)
+# Zerg REPL v0.6 — accepts the v0.6 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -113,10 +118,15 @@ dedicated diagnostic `import not supported at REPL` and the session continues.
 # ... }
 # zerg> print double(21)
 # 42
+# zerg> let opt: int? = 7
+# zerg> print opt ?? -1
+# 7
 # zerg> :help
-# Statements: let/mut/const, fn, struct/enum, if/elif/else, for, match, return/break/continue, print. Run :exit to quit.
+# Statements: let/mut/const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Run :exit to quit.
 # zerg> :exit
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 ### Example version gating
 
@@ -125,8 +135,8 @@ version they need. The CLI inspects that comment before lexing the body and refu
 beyond the current toolchain version with a clean message:
 
 ```sh
-./src/bootstrap/bin/zerg run examples/11_null_safety.zg
-# zerg: examples/11_null_safety.zg requires v0.6 (current is v0.5)
+./src/bootstrap/bin/zerg run examples/12_concurrency.zg
+# zerg: examples/12_concurrency.zg requires v0.7 (current is v0.6)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -136,13 +146,18 @@ literals and `pub` that PLAN defers past v0.2 — those bodies will still error 
 time. v0.2-tagged programs that today rely on `let ys := xs` re-reading the source list may also
 hit the v0.3 borrow checker (composite bind is now a move); rewrite as `let ys := clone(xs)` to keep
 both bindings live. `examples/10_specs.zg` advertises v0.4 but exercises generics
-(`fn display[T: Printable](item: T)`) which are deferred to v0.6 — so it passes the gate but errors
-out at parse time today. `examples/08_imports.zg` advertises v0.5 and now passes the version gate,
-but its body uses surface forms (bare `result := …` without `let`, plus a missing sibling
-`math.zg` and an external git import) that are not supported at v0.5, so it still errors at
-parse / module-load time. The v0.5 surface is exercised end-to-end by the `test/v0_5/` corpus. The authoritative
-parity corpora live at `src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`,
-`src/bootstrap/test/v0_4/`, and `src/bootstrap/test/v0_5/`.
+(`fn display[T: Printable](item: T)`) which now ship at v0.6 — it passes the gate and the
+generic-fn surface is supported, though the example's body still relies on shapes outside the
+v0.6 corpus and may error at parse time. `examples/08_imports.zg` advertises v0.5 and now passes
+the version gate, but its body uses surface forms (bare `result := …` without `let`, plus a
+missing sibling `math.zg` and an external git import) that are not supported at v0.5, so it still
+errors at parse / module-load time. `examples/11_null_safety.zg` advertises v0.6 and now passes
+the gate; the surface it exercises (`Result[T, E]`, `?` propagation, `T?` ≡ `Option[T]`, `nil`)
+is supported, though the example's bare-variant constructors (`Ok(...)` without the `Result.`
+qualifier) lie outside the v0.6 corpus and still error at parse time. The v0.6 surface is
+exercised end-to-end by the `test/v0_6/` corpus. The authoritative parity corpora live at
+`src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`, `src/bootstrap/test/v0_4/`,
+`src/bootstrap/test/v0_5/`, and `src/bootstrap/test/v0_6/`.
 
 ### Supported syntax at v0.1
 
@@ -528,6 +543,132 @@ print c.to_string()
 # Counter 7
 ```
 
+### Supported syntax at v0.6
+
+v0.6 layers generics and null-safety on top of v0.5; everything in v0.0 / v0.1 / v0.2 / v0.3 / v0.4
+/ v0.5 still parses and runs. Single-file programs that don't use type-params, `Option`, `Result`,
+`T?`, `nil`, `?`, `??`, or `?.` are unchanged. What's new:
+
+- **Generic type parameters.** `[T]`, `[T: Spec]`, and multi-bound `[T: A + B]` are admitted on
+  `fn`, `struct`, `enum`, `spec`, and `impl` declarations. `fn id[T](x: T) -> T`, `struct Box[T] {
+value: T }`, `enum Pair[A, B] { Both(A, B), Left(A), Right(B) }`, and
+  `spec Iterator[T] { fn next() -> T? }` all type-check; instantiation is by structural
+  canonicalisation, so `Box[int]` and `Pair[int, str]` are interchangeable everywhere a type is
+  expected.
+- **Bidirectional type inference at call sites.** `id(42)` infers `T = int` from the argument;
+  `let x: int? = nil` propagates the binding's annotation into the inferer so `nil` lands as
+  `Option[int].None`. Inference draws from arg shapes and from the surrounding _expected_ type
+  (let annotation, return type, fn-arg slot, list-element type, struct-field type). Explicit
+  type-args at call sites (`id[int](42)`) are not parsed at v0.6 — every generic call is inferred.
+- **Built-in `Option[T]` and `Result[T, E]`.** Compiler-synthesised at typeck time and visible
+  from every module without an `import`. Shapes: `enum Option[T] { Some(T), None }` and
+  `enum Result[T, E] { Ok(T), Err(E) }`. User redecls of either name reject at typeck with the
+  reserved-name diagnostic.
+- **`T?` ≡ `Option[T]` everywhere.** Postfix `?` on any type position desugars to `Option[T]`;
+  the two spellings are interchangeable. `T??` rejects at parse time.
+- **Symmetric `T → T?` lift.** Wherever a `T?` is expected and a bare `T` is supplied — fn-arg,
+  let-init, return expr, struct field, list element under a `list[T?]` annotation — the compiler
+  implicitly wraps as `Some(value)`. The lift is **boundary-only**: a sub-expression with no
+  expected type doesn't lift, so the user keeps full control inside arithmetic / call chains.
+- **`nil` literal.** New keyword. Resolves to `Option[T].None` for the contextually-inferred `T`.
+  Outside an inferable position (`print nil`, `let x := nil`) it is rejected with
+  `cannot infer type of nil — annotate the binding`.
+- **`?` propagation operator.** Postfix on a `Result[T, E]` or `Option[T]` expression. Legal only
+  inside a fn whose return type is `Result[U, E]` (matching `E`) or `Option[U]`. Lowers to: if
+  Err / None, early-return that Err / None; else evaluate to the inner `T`.
+- **`??` nil-coalesce.** `lhs ?? rhs` where `lhs: Option[T]` or `Result[T, E]` and `rhs: T` —
+  yields `T`. RHS is evaluated only on None / Err; LHS is read once.
+- **`?.` safe navigation.** `obj?.field` where `obj: T?` returns `Option[U]` for `U` the field's
+  type on `T`. Chains: `obj?.a?.b` carries `None` forward end-to-end.
+- **Generic `impl` blocks.** `impl[T] Box[T] for Tagged { … }` admits one impl block that covers
+  every monomorphisation of `Box[T]`. The orphan rule still applies (one of `(Type, Spec)` must
+  be local). Concrete-arg impls (`impl Box[int] for Tagged`) are also admitted.
+- **Print parity for Option / Result.** `print Option[int].Some(7)` → `Option.Some(7)`;
+  `print Option[int].None` → `Option.None`; `Result` analogous. The bracketed type-arg suffix is
+  intentionally suppressed in print so golden files stay stable across re-monomorphisation; it
+  still appears in diagnostics, where disambiguation matters.
+- **Out of scope at v0.6, deferred.** Explicit type-arg syntax at call sites
+  (`fn[T] -> ...; f[int](42)`), variance / where-clauses / associated types, spec inheritance
+  (permanent — flat by design), `try` / `except` / `raise`, lazy `??` short-circuit on non-Option
+  / non-Result expressions, generic existentials (`list[Box[Printable]]` mixing `Box[int]` and
+  `Box[str]`), `pub` on individual fields, re-exports, and external git imports (carry-over from
+  v0.5). Built-ins (`print`, `len`, `clone`, `push`) stay built-in; a real stdlib lands at v0.8.
+
+A small v0.6 sample — generic fn with a spec bound, plus the `T?` / `nil` / `??` surface:
+
+```zerg
+spec Printable {
+    fn label() -> str
+}
+
+struct Cat { name: str }
+
+impl Cat for Printable {
+    pub fn label() -> str {
+        return "Cat: " + this.name
+    }
+}
+
+fn announce[T: Printable](x: T) -> str {
+    return x.label()
+}
+
+let c := Cat { name: "Mittens" }
+print announce(c)
+# Cat: Mittens
+
+let a: int? = 7
+let b: int? = nil
+print a ?? 0
+print b ?? 99
+# 7
+# 99
+```
+
+Built-in `Result[T, E]` with `?` propagation:
+
+```zerg
+fn parse(input: str) -> Result[int, str] {
+    if input == "good" {
+        return Result.Ok(42)
+    }
+    return Result.Err("bad input")
+}
+
+fn process(input: str) -> Result[int, str] {
+    let v := parse(input)?
+    return Result.Ok(v + 1)
+}
+
+print process("good")
+print process("nope")
+# Result.Ok(43)
+# Result.Err(bad input)
+```
+
+Generic `impl` block that covers every `Box[T]` instantiation:
+
+```zerg
+spec Tagged {
+    fn tag() -> str
+}
+
+struct Box[T] { value: T }
+
+impl[T] Box[T] for Tagged {
+    pub fn tag() -> str {
+        return "Box"
+    }
+}
+
+let bi: Box[int] = Box { value: 7 }
+let bs: Box[str] = Box { value: "hi" }
+print bi.tag()
+print bs.tag()
+# Box
+# Box
+```
+
 ### Print format and numeric semantics
 
 Both `zerg run` and `zerg build` implement the same table so stdout is byte-identical:
@@ -578,7 +719,16 @@ subdirectory with a `main.zg` plus sibling files plus an `expected.txt`, coverin
 `pub` gating across modules, cross-module spec impls, enum bare/payload construction across
 modules, aliased and grouped imports, diamond import graphs, same-named type collisions, the
 mangler-lock case (a sibling whose basename has both a hyphen and a leading digit), and the
-`rejects/` cases for the orphan rule and cycle detection. Run the full corpus with:
+`rejects/` cases for the orphan rule and cycle detection. v0.6 adds a 15-program corpus at
+`src/bootstrap/test/v0_6/` covering generic fns (id, spec-bound `announce[T: Printable]`, multi
+dispatch), generic structs / enums with type-args, built-in `Option[T]` and `Result[T, E]`
+construction and print, `?` propagation in `Result`-returning and `Option`-returning fns, `??`
+coalesce on Option/Result, `?.` safe-navigation chains, the symmetric `T → T?` lift at every
+boundary (let-init, fn-arg, return, struct field, list element), `impl[T] LocalType[T] for Spec`
+generic-impl dispatch, cross-module generic instantiation, nested `Option[Result[…, …]]` shapes,
+plus a `rejects/` set pinning unmet-bound, `?` outside a Result/Option fn, mismatched `E`,
+unannotated `nil`, user redecl of `Option`, and the `T??` double-nullable parse reject. Run the
+full corpus with:
 
 ```sh
 make test
@@ -590,3 +740,36 @@ This project is based on the DDD (dream-driven development) methodology which me
 the project is based on what I dream of.
 
 All the features are based on my needs and my dreams.
+
+## Release notes
+
+### v0.6 — generics and null-safety
+
+- Generic type parameters `[T]`, `[T: Spec]`, and multi-bound `[T: A + B]` on `fn`, `struct`,
+  `enum`, `spec`, and `impl` declarations — write a generic data structure or algorithm once and
+  let the compiler monomorphise per use site.
+- Built-in `Option[T]` and `Result[T, E]` available from every module without an `import`. User
+  redecls of `Option` / `Result` reject with the reserved-name diagnostic.
+- `T?` postfix sugar for `Option[T]`, accepted in every type position (params, returns, fields,
+  type-args). `T??` rejects at parse time.
+- `nil` literal that resolves to `Option[T].None` for the contextually-inferred `T`. Outside an
+  inferable position, the typechecker says so explicitly.
+- Symmetric `T → T?` lift at every boundary with a known expected type — fn-arg, let-init, return
+  expr, struct field, list element. `let x: int? = 42` succeeds and lifts to `Some(42)`.
+- `?` propagation operator: `parse(input)?` early-returns the `Err` / `None` and unwraps the
+  inner value on the success path. Legal only inside fns whose return type is compatible
+  `Result` / `Option`.
+- `??` coalesce: `opt ?? default` yields the inner `T` on `Some` / `Ok`, the right-hand side on
+  `None` / `Err`. Read once, lazy on the right.
+- `?.` safe navigation: `obj?.field` carries `None` forward across chains, returning `Option[U]`
+  for the field type `U` on `T`.
+- Generic `impl` blocks: `impl[T] LocalType[T] for SomeSpec { ... }` covers every monomorphisation
+  in one declaration; the orphan rule still applies.
+- Bidirectional type inference at call sites — both arg shapes and the surrounding _expected_
+  type (let annotation, return type, fn-arg slot, list-element type) feed the unifier. Explicit
+  type-args at call sites are deferred past v0.6.
+- Print parity: `Option.Some(7)` / `Option.None` / `Result.Ok(...)` / `Result.Err(...)` print
+  without the bracketed type-arg suffix, so golden files stay stable across re-monomorphisation.
+- Backward compatibility: every v0.0–v0.5 corpus continues to pass under `make test`. The v0.5
+  module mangle still wraps every monomorphised symbol, so multi-file programs with generic
+  instances link cleanly without a separate object-file step.

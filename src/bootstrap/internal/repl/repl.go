@@ -25,10 +25,10 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.5 — accepts the v0.5 surface (procedural core, composite data, borrow checking, polymorphism, modules)\n" +
+const banner = "Zerg REPL v0.6 — accepts the v0.6 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety)\n" +
 	"Type :exit to quit, :help for syntax\n"
 
-const helpText = "Statements: let/mut/const, fn, struct/enum, if/elif/else, for, match, return/break/continue, print. Run :exit to quit.\n"
+const helpText = "Statements: let/mut/const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Run :exit to quit.\n"
 
 const (
 	primaryPrompt      = "zerg> "

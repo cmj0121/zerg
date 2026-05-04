@@ -397,6 +397,17 @@ func (l *lexer) lexOperator() (Token, error) {
 		return emit(KindRBracket)
 	case ',':
 		return emit(KindComma)
+	case '?':
+		// v0.6 null-safety. Longest-match wins: `??` and `?.` are emitted as
+		// single tokens; bare `?` lexes for the parser to disambiguate by
+		// position (type-position = nullable, expr-position = propagation).
+		if c1 == '?' {
+			return emit2(KindCoalesce)
+		}
+		if c1 == '.' {
+			return emit2(KindSafeDot)
+		}
+		return emit(KindQuestion)
 	}
 
 	errPos := l.position()

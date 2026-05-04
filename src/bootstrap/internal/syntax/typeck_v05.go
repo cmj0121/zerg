@@ -82,6 +82,7 @@ func CheckBundle(bundle BundleView) error {
 	checkers := make(map[ModuleView]*checker, len(mods))
 	for _, m := range mods {
 		c := newChecker()
+		c.ownProg = m.ModuleProgram()
 		checkers[m] = c
 		if err := c.collectTopLevel(m.ModuleProgram()); err != nil {
 			return err
@@ -107,9 +108,18 @@ func CheckBundle(bundle BundleView) error {
 	// the importing module's binding. We attach the per-bundle checkers
 	// map onto each module's crossModCtx (created in Phase 1.5 by
 	// bindModuleImports) so the import bindings populated above survive.
+	//
+	// v0.6 Unit 3: install the bundle-shared monomorphisation cache so a
+	// generic instance constructed in any module canonicalises to one
+	// *Type. The crossModCtx already carries the importing module's
+	// binding state; tagging bundleMono on it makes the cache reachable
+	// from any per-checker entrypoint.
+	bMono := newBundleMono()
 	for _, m := range mods {
 		c := checkers[m]
 		c.crossMod.checkers = checkers
+		c.crossMod.bundleMono = bMono
+		c.attachBundleMono()
 		if err := c.resolveStructFields(m.ModuleProgram()); err != nil {
 			return err
 		}
@@ -132,6 +142,15 @@ func CheckBundle(bundle BundleView) error {
 			return err
 		}
 	}
+	// v0.6 Unit 3: register and validate generic-fn signatures after the
+	// regular fn / spec passes so bound TypeRefs can resolve to spec types
+	// across the bundle.
+	for _, m := range mods {
+		c := checkers[m]
+		if err := c.resolveGenericFnSignatures(m.ModuleProgram()); err != nil {
+			return err
+		}
+	}
 
 	// Phase 3: per-module impl resolution + orphan rule. Impl resolution
 	// reaches across module boundaries to look up the receiver type and
@@ -140,6 +159,19 @@ func CheckBundle(bundle BundleView) error {
 	for _, m := range mods {
 		c := checkers[m]
 		if err := c.resolveImplsCross(m); err != nil {
+			return err
+		}
+	}
+
+	// v0.6 Unit 3.5: late-arriving generic impl registration. A concrete
+	// impl earlier in the same module may have eagerly monomorphised a
+	// receiver-type instance before the generic impl was discovered; the
+	// post-pass here walks every cached mono *Type and expands any
+	// generic impl that should have applied. Idempotent — already-
+	// expanded (gi, mono) pairs are cached in bundleMono.expandedImpls.
+	for _, m := range mods {
+		c := checkers[m]
+		if err := c.expandPendingGenericImpls(); err != nil {
 			return err
 		}
 	}
@@ -219,7 +251,36 @@ func newChecker() *checker {
 		ret:     NewListType(tInt),
 		builtin: true,
 	}
+	// v0.6 Unit 3: per-checker monomorphisation caches. CheckBundle replaces
+	// these with bundle-shared maps in attachBundleMono so cross-module
+	// instances canonicalise to one *Type / *FnDecl.
+	c.monoStructs = map[string]*Type{}
+	c.monoFns = map[string]*FnDecl{}
+	c.genericFnAST = map[string]*FnDecl{}
+	// v0.6 Unit 2: register synthetic generic enum decls (Option, Result)
+	// before any user-decl walk so the names are visible to every module
+	// without an explicit import and the reservation diagnostic in
+	// collectTopLevel can fire against a same-named user decl.
+	injectBuiltinEnums(c)
 	return c
+}
+
+// attachBundleMono points c's per-checker mono caches at the bundle-shared
+// tables. Called by CheckBundle right after each checker's collect / import-
+// bind passes so subsequent type / fn resolution canonicalises bundle-wide.
+//
+// For correctness on cache contents: the per-checker maps populated by
+// injectBuiltinEnums hold only placeholder entries for the bare-name Option /
+// Result enums; no instance has been constructed yet. We replace the maps
+// rather than copy, because instantiateGenericEnum and friends always
+// dereference c.monoEnums / monoStructs / monoFns to look up entries.
+func (c *checker) attachBundleMono() {
+	if c.crossMod == nil || c.crossMod.bundleMono == nil {
+		return
+	}
+	c.monoEnums = c.crossMod.bundleMono.enums
+	c.monoStructs = c.crossMod.bundleMono.structs
+	c.monoFns = c.crossMod.bundleMono.fns
 }
 
 // crossModCtx is the per-module cross-module resolution state. Lives on
@@ -232,6 +293,46 @@ type crossModCtx struct {
 	// importDecl records which ImportDecl introduced the binding (for
 	// diagnostics).
 	importDecl map[string]*ImportDecl
+	// bundleMono is the v0.6 Unit 3 shared monomorphisation cache. Every
+	// module's checker shares one set of maps so a generic instance
+	// constructed in module A and module B canonicalises to one *Type.
+	bundleMono *bundleMono
+}
+
+// bundleMono holds the bundle-wide monomorphisation caches. Three tables —
+// generic enum / struct types, and generic fn specialisations — keyed by the
+// canonical instance name (`Decl[arg1,arg2,...]`).
+//
+// v0.6 Unit 3.5 extends the bundle-shared state with generic-impl records.
+// Each module's resolveImplsCross discovers its generic impls and appends
+// them here; per-instantiation expansion (driven from
+// instantiateGenericStruct / instantiateGenericEnum) walks the union so a
+// foreign module's `impl[T] LocalType[T] for SomeSpec` lights up regardless
+// of which module first triggered the monomorphisation.
+type bundleMono struct {
+	enums         map[string]*Type
+	structs       map[string]*Type
+	fns           map[string]*FnDecl
+	genericImpls  []*genericImpl
+	expandedImpls map[expandedKey]bool
+}
+
+// expandedKey deduplicates per-instance expansion of a (genericImpl, mono
+// receiver) pair across the bundle so the same (impl, instance) tuple is
+// never expanded twice — once expansion has happened, the resulting
+// concrete impl entry is shared by every checker.
+type expandedKey struct {
+	gi       *genericImpl
+	receiver *Type
+}
+
+func newBundleMono() *bundleMono {
+	return &bundleMono{
+		enums:         map[string]*Type{},
+		structs:       map[string]*Type{},
+		fns:           map[string]*FnDecl{},
+		expandedImpls: map[expandedKey]bool{},
+	}
 }
 
 // bindModuleImports populates the import-binding table on c.crossMod and
@@ -304,6 +405,25 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 	for _, stmt := range self.ModuleProgram().Statements {
 		id, ok := stmt.(*ImplDecl)
 		if !ok {
+			continue
+		}
+		// v0.6 Unit 3.5: a generic impl block (`impl[T] LocalType[T] for
+		// SomeSpec { ... }`) is recorded for deferred per-instantiation
+		// expansion. The expansion happens inside instantiateGeneric*
+		// when the receiver-type instance is monomorphised.
+		if len(id.TypeParams) > 0 {
+			if err := c.resolveGenericImplDecl(id); err != nil {
+				return err
+			}
+			continue
+		}
+		// v0.6: a concrete-arg impl (`impl Box[int] for Spec { ... }`)
+		// resolves the receiver to the monomorphised *Type and proceeds
+		// through the regular concrete-impl path.
+		if len(id.TypeArgs) > 0 {
+			if err := c.resolveConcreteGenericImplDecl(id); err != nil {
+				return err
+			}
 			continue
 		}
 		// Resolve the receiver type. id.Type is a bare name today —

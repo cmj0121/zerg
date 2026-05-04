@@ -143,6 +143,18 @@ const (
 	// (Unit 2) and cross-module name resolution (Unit 3) handle the semantics.
 	KindImport // import
 	KindAs     // as
+
+	// --- v0.6 null-safety tokens. `?` is the postfix nullable / propagation
+	// marker (disambiguated by position: type-position ⇒ nullable, expression-
+	// position ⇒ propagation). `??` is the right-associative nil-coalescing
+	// infix operator at the lowest precedence rung. `?.` is the safe-navigation
+	// member-access operator. `nil` is the absence-of-value literal keyword.
+	// All four are added at v0.6 Unit 1; longest-match in the lexer keeps `??`
+	// from gobbling `?.` and vice versa.
+	KindQuestion // ?
+	KindCoalesce // ??
+	KindSafeDot  // ?.
+	KindNil      // nil
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -313,6 +325,14 @@ func (k Kind) String() string {
 		return "'<<='"
 	case KindShrEq:
 		return "'>>='"
+	case KindQuestion:
+		return "'?'"
+	case KindCoalesce:
+		return "'??'"
+	case KindSafeDot:
+		return "'?.'"
+	case KindNil:
+		return "'nil'"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

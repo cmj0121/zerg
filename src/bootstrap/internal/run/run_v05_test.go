@@ -238,27 +238,27 @@ print u.answer()
 // 10. Cross-module enum match destructure with bare and payload variants.
 func TestV05CrossModuleResultMatch(t *testing.T) {
 	expectBundleOK(t, "main.zg", map[string]string{
-		"util.zg": `pub enum Result {
+		"util.zg": `pub enum Outcome {
 Ok(int),
 Err(str),
 }
-pub fn parse(input: str) -> Result {
+pub fn parse(input: str) -> Outcome {
 if input == "good" {
-return Result.Ok(7)
+return Outcome.Ok(7)
 }
-return Result.Err("bad")
+return Outcome.Err("bad")
 }
 `,
 		"main.zg": `import "util"
 let r := util.parse("good")
 match r {
-Result.Ok(v) => print v
-Result.Err(e) => print e
+Outcome.Ok(v) => print v
+Outcome.Err(e) => print e
 }
 let s := util.parse("nope")
 match s {
-Result.Ok(v) => print v
-Result.Err(e) => print e
+Outcome.Ok(v) => print v
+Outcome.Err(e) => print e
 }
 `,
 	}, "7\nbad\n")

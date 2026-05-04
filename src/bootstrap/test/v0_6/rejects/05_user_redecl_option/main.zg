@@ -1,0 +1,5 @@
+# requires: v0.6
+
+enum Option { Foo, Bar }
+
+print Option.Foo

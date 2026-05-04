@@ -1,0 +1,9 @@
+# requires: v0.7
+
+fn f() {
+    if true {
+        defer print 1
+    }
+}
+
+f()

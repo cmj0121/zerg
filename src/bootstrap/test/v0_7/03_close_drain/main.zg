@@ -1,0 +1,17 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int](4)
+    spawn fn() {
+        ch <- 100
+        ch <- 200
+        ch <- 300
+        ch <- 400
+        close(ch)
+    }()
+    for v in ch {
+        print v
+    }
+}
+
+main()

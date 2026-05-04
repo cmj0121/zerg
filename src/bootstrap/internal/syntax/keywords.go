@@ -58,4 +58,13 @@ var keywords = map[string]Kind{
 	// all reject at parse time via the same keywords-table cross-check used
 	// by every other keyword.
 	"nil": KindNil,
+	// v0.7 concurrency keywords. `spawn` starts a fire-and-forget concurrent
+	// task; `defer` registers code to run at fn-body exit in LIFO order. Both
+	// are reserved everywhere starting v0.7 Unit 1a — the reserved-name rule
+	// flows through the same keywords-table cross-check used by every other
+	// keyword, so `let spawn := ...`, `import "x" as defer`, etc. all reject
+	// at parse time.
+	"spawn":  KindSpawn,
+	"defer":  KindDefer,
+	"select": KindSelect,
 }

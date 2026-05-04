@@ -447,6 +447,14 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		// staying lenient keeps the borrow check from raising an internal
 		// error on a tree shape it doesn't understand.
 		return nil
+	case *SendStmt:
+		return c.checkSend(s)
+	case *SpawnStmt:
+		return c.checkSpawn(s)
+	case *DeferStmt:
+		return c.checkDefer(s)
+	case *SelectStmt:
+		return c.checkSelect(s)
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
@@ -797,6 +805,20 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		// original (also a move). Mirror the let-rebind / return shape — bare
 		// idents move; nested aggregates walk in consume mode.
 		return c.consumeOrWalk(e.Inner, "moved by ? propagation")
+	case *ChanConstructorExpr:
+		// v0.7 Unit 2: typeck-only landing. The capacity expression is read
+		// (no move). Element type is metadata; nothing to walk.
+		if e.Capacity != nil {
+			return c.walkExpr(e.Capacity, false)
+		}
+		return nil
+	case *RecvExpr:
+		// v0.7 Unit 2: typeck-only landing. The channel operand is read (the
+		// channel handle isn't moved); the resulting value is owned by the
+		// caller. Unit 5 will refine the move-in semantics.
+		return c.walkExpr(e.Chan, false)
+	case *AnonFnExpr:
+		return c.walkAnonFn(e)
 	case *CoalesceExpr:
 		// `??` LHS is the match-scrutinee; whichever arm fires moves the
 		// bound value out (Some(v) ⇒ v moves, None ⇒ rhs moves). The borrow
@@ -1178,6 +1200,38 @@ func (c *borrowChecker) checkFor(s *ForStmt) error {
 		}
 		c.diverged = false
 		return nil
+	case ForChan:
+		// v0.7 Unit 2: typeck-only landing for `for v in ch`. The full
+		// borrow rules (move-in per-iteration) land in Unit 5; today we
+		// walk the channel as a read and bind v as Owned in the body
+		// scope so basic move-out / use-after-move from inside the body
+		// fires the standard diagnostics.
+		if err := c.walkExpr(s.Iter, false); err != nil {
+			return err
+		}
+		var elemType *Type
+		if t := s.Iter.Type(); t != nil && t.Kind == TypeChan {
+			elemType = t.Element
+		}
+		c.scope = newBorrowScope(c.scope)
+		c.scope.declare(s.Var, &borrowEntry{
+			state:     bsOwned,
+			typ:       elemType,
+			declDepth: c.loopDepth,
+		})
+		var bodyErr error
+		for _, st := range s.Body.Statements {
+			if err := c.checkStmt(st); err != nil {
+				bodyErr = err
+				break
+			}
+		}
+		c.scope = c.scope.parent
+		if bodyErr != nil {
+			return bodyErr
+		}
+		c.diverged = false
+		return nil
 	}
 	return borrowErr(s.Pos, "internal: unknown for kind")
 }
@@ -1464,4 +1518,225 @@ func bindPatternNames(p Pattern, subjectType *Type) []boundName {
 	}
 	walk(p, subjectType)
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// v0.7 Unit 5 — concurrency surface borrow rules.
+//
+// PLAN.md §Borrow rules for concurrency pins:
+//
+//   * Send (`ch <- v`) moves the value into the channel. The channel handle
+//     itself is read-only; sends and receives never move the chan binding.
+//   * Recv (`<- ch`) returns a fresh Option[T] value owned by the caller; the
+//     channel handle is read-only.
+//   * Spawn closure capture deep-copies composite captures at the spawn site.
+//     Each capture is a clone-read on the source binding; the spawning fn
+//     keeps full ownership of the originals. Anon-fn evaluation outside a
+//     spawn shares the same shape (a closure value carries deep-copied
+//     captures regardless of whether it ever escapes).
+//   * Defer body is checked as if it ran at the defer-statement site. Inner
+//     moves of outer bindings register against the surrounding scope.
+//   * Select arms are branch-merged like match arms: every binding's
+//     end-state must agree across non-diverged arms. Recv-bind names are
+//     fresh locals scoped to the arm body.
+// ---------------------------------------------------------------------------
+
+// checkSend implements `ch <- v`: the channel is read; the value is consumed
+// (composite values are moved into the channel, primitives copy).
+func (c *borrowChecker) checkSend(s *SendStmt) error {
+	if err := c.walkExpr(s.Chan, false); err != nil {
+		return err
+	}
+	if id, ok := s.Value.(*IdentExpr); ok {
+		return c.consume(id, "moved by channel send")
+	}
+	if th, ok := s.Value.(*ThisExpr); ok {
+		return c.consumeThis(th, "moved by channel send")
+	}
+	return c.checkExprConsume(s.Value)
+}
+
+// checkSpawn implements `spawn <call>`: the call's arguments follow the
+// regular fn-call read rules (implicit shared borrow). Capture-by-clone
+// semantics for an anon-fn callee land via walkAnonFn — the captures are
+// reads on the source bindings, so the spawning fn keeps ownership of the
+// originals.
+func (c *borrowChecker) checkSpawn(s *SpawnStmt) error {
+	return c.walkExpr(s.Call, false)
+}
+
+// checkDefer walks a deferred body at the defer-statement site. v0.7 admits
+// defer only at fn-body top-level scope (parser enforced); cross-defer
+// ordering and the `?` early-return interaction are Unit 5.5's responsibility.
+func (c *borrowChecker) checkDefer(s *DeferStmt) error {
+	for _, st := range s.Body.Statements {
+		if err := c.checkStmt(st); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSelect runs each arm's channel op + body in turn from a fresh snapshot
+// of the entry state, then verifies branches agree on every outer binding's
+// end-state. The recv-bind name is a fresh Owned local inside its arm body.
+// Arms whose channel op or body move an outer binding must agree with arms
+// that don't — disagreement reports the standard "branch states disagree"
+// diagnostic.
+func (c *borrowChecker) checkSelect(s *SelectStmt) error {
+	entry := c.scope.snapshotAll()
+	outcomes := make([]branchOutcome, 0, len(s.Arms))
+	for i := range s.Arms {
+		arm := &s.Arms[i]
+		c.scope.applyTo(entry)
+		savedDiverged := c.diverged
+		c.diverged = false
+		if err := c.checkSelectArm(arm); err != nil {
+			c.diverged = savedDiverged
+			return err
+		}
+		armDiverged := c.diverged
+		c.diverged = savedDiverged
+		outcomes = append(outcomes, branchOutcome{end: c.scope.snapshotAll(), diverged: armDiverged})
+	}
+	if err := c.joinBranches(s.Pos, entry, outcomes); err != nil {
+		return err
+	}
+	allDiverged := true
+	for _, o := range outcomes {
+		if !o.diverged {
+			allDiverged = false
+			c.scope.applyTo(o.end)
+			break
+		}
+	}
+	if allDiverged && len(outcomes) > 0 {
+		c.diverged = true
+		c.scope.applyTo(entry)
+	}
+	return nil
+}
+
+// checkSelectArm dispatches one arm's channel op (send / recv / default) and
+// then walks the arm body in a fresh scope rooted at the surrounding scope —
+// any recv-bind name vanishes at the arm boundary, mirroring the per-arm
+// scope shape used by checkMatch.
+func (c *borrowChecker) checkSelectArm(arm *SelectArm) error {
+	switch arm.Op {
+	case SelectSend:
+		if err := c.walkExpr(arm.Chan, false); err != nil {
+			return err
+		}
+		if id, ok := arm.Value.(*IdentExpr); ok {
+			if err := c.consume(id, "moved by select send"); err != nil {
+				return err
+			}
+		} else if th, ok := arm.Value.(*ThisExpr); ok {
+			if err := c.consumeThis(th, "moved by select send"); err != nil {
+				return err
+			}
+		} else {
+			if err := c.checkExprConsume(arm.Value); err != nil {
+				return err
+			}
+		}
+	case SelectRecvDiscard:
+		if err := c.walkExpr(arm.Chan, false); err != nil {
+			return err
+		}
+	case SelectRecvBind:
+		if err := c.walkExpr(arm.Chan, false); err != nil {
+			return err
+		}
+	case SelectDefault:
+		// no channel op
+	}
+	c.scope = newBorrowScope(c.scope)
+	defer func() { c.scope = c.scope.parent }()
+	if arm.Op == SelectRecvBind {
+		var bt *Type
+		if arm.Chan != nil {
+			if t := arm.Chan.Type(); t != nil && t.Kind == TypeChan {
+				bt = t.Element
+			}
+		}
+		c.scope.declare(arm.BindName, &borrowEntry{
+			state:     bsOwned,
+			typ:       bt,
+			declDepth: c.loopDepth,
+		})
+	}
+	for _, st := range arm.Body.Statements {
+		if err := c.checkStmt(st); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// walkAnonFn handles the borrow-walk side of an anon-fn expression. Each
+// recorded capture is a clone-read on the source binding (deep-copy at
+// closure construction means the original is observed, not moved). The body
+// then walks in a fresh borrow scope where each captured name resolves to a
+// fresh-immutable composite — the inner walk cannot move out of a captured
+// value because the clone is the closure's own private copy.
+func (c *borrowChecker) walkAnonFn(anon *AnonFnExpr) error {
+	for _, cap := range anon.Captures {
+		entry, _ := c.scope.lookup(cap.Name)
+		if entry == nil {
+			continue
+		}
+		if entry.state == bsMoved && isComposite(entry.typ) {
+			return borrowErr(cap.Pos,
+				"use of moved value: %q (moved at %s)",
+				cap.Name, entry.movePos)
+		}
+	}
+	saveScope, saveDepth, saveDiverged := c.scope, c.loopDepth, c.diverged
+	c.scope = newBorrowScope(nil)
+	c.loopDepth = 0
+	c.diverged = false
+	defer func() {
+		c.scope = saveScope
+		c.loopDepth = saveDepth
+		c.diverged = saveDiverged
+	}()
+	for _, cap := range anon.Captures {
+		state := bsOwned
+		reason := ""
+		if isComposite(cap.Type) {
+			state = bsBorrowedShared
+			reason = "captured by closure (immutable deep-copy)"
+		}
+		c.scope.declare(cap.Name, &borrowEntry{
+			state:        state,
+			typ:          cap.Type,
+			borrowReason: reason,
+			declDepth:    0,
+		})
+	}
+	for _, p := range anon.Params {
+		var t *Type
+		if p.Type != nil {
+			t = p.Type.Resolved
+		}
+		state := bsOwned
+		reason := ""
+		if isComposite(t) {
+			state = bsBorrowedShared
+			reason = "fn parameter (implicit shared borrow at v0.3)"
+		}
+		c.scope.declare(p.Name, &borrowEntry{
+			state:        state,
+			typ:          t,
+			borrowReason: reason,
+			declDepth:    0,
+		})
+	}
+	for _, st := range anon.Body.Statements {
+		if err := c.checkStmt(st); err != nil {
+			return err
+		}
+	}
+	return nil
 }

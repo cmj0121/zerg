@@ -262,6 +262,11 @@ func newChecker() *checker {
 	// without an explicit import and the reservation diagnostic in
 	// collectTopLevel can fire against a same-named user decl.
 	injectBuiltinEnums(c)
+	// v0.7 Unit 3: register the synthetic WaitGroup struct type and the
+	// `wait_group()` constructor fn. The reservation set in
+	// reservedBuiltinTypeNames / collectTopLevel rejects user redecls of
+	// the same names with the uniform diagnostic.
+	injectWaitGroupBuiltin(c)
 	return c
 }
 
@@ -722,6 +727,13 @@ func detectCrossModuleImplCollisions(mods []ModuleView, checkers map[ModuleView]
 	for _, m := range mods {
 		c := checkers[m]
 		for _, impl := range c.impls {
+			// v0.7 Unit 3: synthetic built-in impls (e.g. WaitGroup) are
+			// injected per checker — every module sees the same name. Skip
+			// them so two modules in a bundle don't collide on the
+			// shared builtin.
+			if isReservedBuiltinTypeName(impl.TypeName) {
+				continue
+			}
 			key := collisionKey{
 				typeOwner: impl.recvOwner,
 				typeName:  impl.TypeName,

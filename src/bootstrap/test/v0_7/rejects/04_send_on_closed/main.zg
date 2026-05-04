@@ -1,0 +1,9 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int](1)
+    close(ch)
+    ch <- 5
+}
+
+main()

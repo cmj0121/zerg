@@ -115,9 +115,11 @@ func Build(srcPath string) error {
 
 	// -fwrapv: pin signed integer overflow to two's-complement wrap so build
 	// matches Go's natural int64 wrap (PLAN.md "Numeric semantics (pinned)").
+	// -pthread: v0.7 concurrency primitives use POSIX threads; the flag is
+	// harmless for v0.0–v0.6 programs that never reference pthread symbols.
 	// -lm at the end: libm is the home of floor / fmod called from generated
 	// expressions; gcc and clang both accept the link flag last.
-	cmd := exec.Command(ccPath, "-fwrapv", "-O2", "-o", outPath, cPath, "-lm")
+	cmd := exec.Command(ccPath, "-fwrapv", "-pthread", "-O2", "-o", outPath, cPath, "-lm")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

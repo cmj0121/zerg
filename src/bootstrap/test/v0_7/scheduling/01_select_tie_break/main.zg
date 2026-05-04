@@ -1,0 +1,18 @@
+# requires: v0.7
+
+fn main() {
+    let a := chan[int](1)
+    let b := chan[int](1)
+    a <- 100
+    b <- 200
+    select {
+        v := <- a -> { print v }
+        v := <- b -> { print v }
+    }
+    select {
+        v := <- a -> { print v }
+        v := <- b -> { print v }
+    }
+}
+
+main()

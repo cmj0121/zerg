@@ -155,6 +155,24 @@ const (
 	KindCoalesce // ??
 	KindSafeDot  // ?.
 	KindNil      // nil
+
+	// --- v0.7 concurrency keywords. `spawn` starts a fire-and-forget task;
+	// `defer` registers code to run at fn-body exit in LIFO order. Lexed at
+	// v0.7 Unit 1a; consumed by typeck at Unit 3 and the interpreter / codegen
+	// at Units 6 / 7.
+	KindSpawn // spawn
+	KindDefer // defer
+
+	// KindLArrow is the v0.7 channel send / receive operator `<-`. Disambiguated
+	// in the lexer against `<`, `<=`, `<<`, `<<=` via longest-match. Used in two
+	// shapes by the parser: `expr <- expr` for a send statement, and prefix
+	// `<- expr` for a receive expression.
+	KindLArrow // <-
+
+	// KindSelect is the v0.7 `select` statement keyword for multiplexed channel
+	// wait. Reserved at v0.7 Unit 1c; consumed by typeck at Unit 4 and the
+	// interpreter / codegen at Units 6 / 7.
+	KindSelect // select
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -333,6 +351,14 @@ func (k Kind) String() string {
 		return "'?.'"
 	case KindNil:
 		return "'nil'"
+	case KindSpawn:
+		return "'spawn'"
+	case KindDefer:
+		return "'defer'"
+	case KindLArrow:
+		return "'<-'"
+	case KindSelect:
+		return "'select'"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

@@ -45,6 +45,8 @@ const (
 	TypeStruct // Name + Fields populated; canonical instance stored in struct table
 	TypeEnum   // Name + Variants populated; canonical instance stored in enum table
 	TypeSpec   // v0.4 spec-as-type: Name populated; canonical instance stored in spec table
+	TypeChan   // v0.7 channel: Element non-nil; canonical instance cached per element-type
+	TypeFn     // v0.7 fn value: FnParams + FnReturn populated (FnReturn may be nil/void)
 )
 
 // NamedField is one field of a struct type. Order matches declaration order
@@ -75,6 +77,12 @@ type Type struct {
 	Fields          []NamedField // TypeStruct, declaration order
 	Variants        []string     // TypeEnum, declaration order
 	VariantPayloads [][]*Type    // TypeEnum, declaration order; nil entries for bare variants
+	// v0.7 Unit 3: TypeFn carries the parameter type vector and the return
+	// type. FnReturn is nil when the fn returns void (no annotation). The
+	// pair is populated by checker.checkAnonFnExpr; structural equality on
+	// TypeFn compares both.
+	FnParams []*Type
+	FnReturn *Type
 }
 
 // String returns the type spelled the way the source spells it. Used in error
@@ -115,6 +123,23 @@ func (t *Type) String() string {
 		return b.String()
 	case TypeStruct, TypeEnum, TypeSpec:
 		return t.Name
+	case TypeChan:
+		return "chan[" + t.Element.String() + "]"
+	case TypeFn:
+		var b strings.Builder
+		b.WriteString("fn(")
+		for i, p := range t.FnParams {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(p.String())
+		}
+		b.WriteString(")")
+		if t.FnReturn != nil && t.FnReturn != tVoid {
+			b.WriteString(" -> ")
+			b.WriteString(t.FnReturn.String())
+		}
+		return b.String()
 	}
 	return fmt.Sprintf("Type(%d)", int(t.Kind))
 }
@@ -148,6 +173,29 @@ func (t *Type) Equals(u *Type) bool {
 		// Canonical name suffices because the type table guarantees one
 		// instance per name. Equal names ⇒ equal types.
 		return t.Name == u.Name
+	case TypeChan:
+		return t.Element.Equals(u.Element)
+	case TypeFn:
+		if len(t.FnParams) != len(u.FnParams) {
+			return false
+		}
+		for i := range t.FnParams {
+			if !t.FnParams[i].Equals(u.FnParams[i]) {
+				return false
+			}
+		}
+		// Treat a nil FnReturn as void for equality purposes so two fn types
+		// produced by different sites (one with explicit -> R; the other
+		// inferred) compare consistently.
+		tr := t.FnReturn
+		ur := u.FnReturn
+		if tr == nil {
+			tr = tVoid
+		}
+		if ur == nil {
+			ur = tVoid
+		}
+		return tr.Equals(ur)
 	}
 	// Primitives only reach here when pointer-equality already held above; for
 	// safety we still treat same-Kind primitives as equal so a stray non-canonical
@@ -462,6 +510,29 @@ type checker struct {
 	// cloned method's body so resolveTypeRef sees `T` bound to the chosen
 	// concrete arg. Nil at the top level and inside non-generic impls.
 	activeSubst map[string]*Type
+	// monoChans caches per-element-type canonical chan *Type values (v0.7).
+	// Same shape as monoEnums / monoStructs; chans don't escape modules at
+	// v0.7 so the cache is per-checker rather than bundle-shared.
+	monoChans map[string]*Type
+	// anonFrames is the v0.7 Unit 3 stack of AnonFnExpr typecheck contexts.
+	// Each frame remembers the parent scope at the moment the anon-fn body
+	// began so capture analysis can decide whether an IDENT lookup
+	// references an outer or inner binding. Pushed by checkAnonFnExpr;
+	// popped on body-walk completion. Empty outside any anon-fn.
+	anonFrames []*anonFnFrame
+	// currentFnDecl points at the *FnDecl whose body is currently being
+	// walked, or nil at top level / inside a spec/impl body. Set by
+	// checkFnDecl alongside currentFn so checkDeferStmt can record
+	// HasDefers on the right node.
+	currentFnDecl *FnDecl
+	// currentSpecMethod points at the *SpecMethod whose default-impl body
+	// is currently being walked. Set alongside currentSpec when entering
+	// a spec default body; mirrored by checkDeferStmt so HasDefers can be
+	// recorded on the right node (analogous to currentFnDecl).
+	currentSpecMethod *SpecMethod
+	// waitGroupType is the canonical synthetic WaitGroup struct *Type.
+	// Populated by injectWaitGroupBuiltin at newChecker time.
+	waitGroupType *Type
 }
 
 // Check is the public single-program entry point. It walks prog, annotates
@@ -590,6 +661,16 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			case "len", "push", "clone":
 				return typeErr(s.Pos, "cannot redefine built-in '%s'", s.Name)
 			}
+			// v0.7: `chan` is reserved as a type-position keyword and `close`
+			// is reserved as a type-driven built-in fn. Both reject with the
+			// uniform reservation diagnostic.
+			if s.Name == "chan" || s.Name == "close" {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
+			// v0.7 Unit 3: additional concurrency reservations.
+			if isReservedV07ConcurName(s.Name) {
+				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
+			}
 			if err := register(s.Name, s.Pos, "function"); err != nil {
 				return err
 			}
@@ -692,9 +773,11 @@ func (c *checker) detectTypeCycles() error {
 		state[name] = gray
 		if st, ok := c.structs[name]; ok {
 			decl := c.structAST[name]
-			for i, f := range st.Fields {
-				if err := visitType(f.Type, decl.Fields[i].Pos, fmt.Sprintf("via field %q", f.Name), visit); err != nil {
-					return err
+			if decl != nil {
+				for i, f := range st.Fields {
+					if err := visitType(f.Type, decl.Fields[i].Pos, fmt.Sprintf("via field %q", f.Name), visit); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -715,7 +798,15 @@ func (c *checker) detectTypeCycles() error {
 
 	for name := range c.structs {
 		if state[name] == 0 {
-			if err := visit(name, c.structAST[name].Pos, ""); err != nil {
+			// v0.7 Unit 3: synthetic built-in structs (e.g. WaitGroup) have
+			// no AST decl to anchor a position on. Skip the cycle walk for
+			// those — they have no fields and so cannot participate in any
+			// recursion.
+			decl := c.structAST[name]
+			if decl == nil {
+				continue
+			}
+			if err := visit(name, decl.Pos, ""); err != nil {
 				return err
 			}
 		}
@@ -1003,8 +1094,10 @@ func (c *checker) checkSpecBodies(prog *Program) error {
 			savedFn := c.currentFn
 			savedSpec := c.currentSpec
 			savedRecv := c.currentReceiver
+			savedSpecMethod := c.currentSpecMethod
 			c.currentFn = &sig
 			c.currentSpec = spec
+			c.currentSpecMethod = m
 			// Placeholder receiver: the spec type itself. Typeck of `this`
 			// inside a default body should treat field access permissively
 			// (deferred to per-type at codegen). Today we represent the
@@ -1020,6 +1113,7 @@ func (c *checker) checkSpecBodies(prog *Program) error {
 					c.currentFn = savedFn
 					c.currentSpec = savedSpec
 					c.currentReceiver = savedRecv
+					c.currentSpecMethod = savedSpecMethod
 					return typeErr(p.Pos, "parameter %q already declared", p.Name)
 				}
 			}
@@ -1035,6 +1129,7 @@ func (c *checker) checkSpecBodies(prog *Program) error {
 			c.currentFn = savedFn
 			c.currentSpec = savedSpec
 			c.currentReceiver = savedRecv
+			c.currentSpecMethod = savedSpecMethod
 			if err != nil {
 				return err
 			}
@@ -1080,7 +1175,9 @@ func (c *checker) checkImplBodies(prog *Program) error {
 			sig := fnSig{params: im.params, ret: im.ret, pos: fn.Pos}
 			savedFn := c.currentFn
 			savedRecv := c.currentReceiver
+			savedDecl := c.currentFnDecl
 			c.currentFn = &sig
+			c.currentFnDecl = fn
 			c.currentReceiver = impl.Receiver
 			c.scope = newScope(c.scope)
 			for i, p := range fn.Params {
@@ -1088,6 +1185,7 @@ func (c *checker) checkImplBodies(prog *Program) error {
 					c.scope = c.scope.parent
 					c.currentFn = savedFn
 					c.currentReceiver = savedRecv
+					c.currentFnDecl = savedDecl
 					return typeErr(p.Pos, "parameter %q already declared", p.Name)
 				}
 			}
@@ -1102,6 +1200,7 @@ func (c *checker) checkImplBodies(prog *Program) error {
 			c.scope = c.scope.parent
 			c.currentFn = savedFn
 			c.currentReceiver = savedRecv
+			c.currentFnDecl = savedDecl
 			if err != nil {
 				return err
 			}
@@ -1167,6 +1266,13 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			}
 			ref.Resolved = t
 			return t, nil
+		}
+		// v0.7: `chan[T]` is a built-in generic type. Intercept here ahead
+		// of the user-decl generic path so `chan` never collides with a
+		// user-defined generic name (the binding-site reservation prevents
+		// it, but the resolver stays defensive).
+		if ref.Name == "chan" {
+			return c.resolveChanTypeRef(ref)
 		}
 		// Generic-name path (v0.6): a name with type-args resolves through
 		// the per-decl monomorphization cache. Unit 2 handled the built-in
@@ -1427,16 +1533,30 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		// one slips through here (e.g. single-file mode without a loader),
 		// it is a no-op so existing v0.0–v0.4 corpora keep behaving the same.
 		return nil
+	case *SendStmt:
+		return c.checkSend(s)
+	case *SpawnStmt:
+		return c.checkSpawnStmt(s)
+	case *DeferStmt:
+		return c.checkDeferStmt(s)
+	case *SelectStmt:
+		return c.checkSelectStmt(s)
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }
 
 // checkPrint validates `print expr`. v0.2 accepts every printable shape:
-// primitives, lists, tuples, structs, enums. Void is rejected.
+// primitives, lists, tuples, structs, enums. Void is rejected. v0.7 rejects
+// channel-typed values with a focused diagnostic — channels carry no
+// printable surface and the deep-copy on send/recv would make every print
+// either a snapshot of the queue (potentially racy) or a no-op.
 func (c *checker) checkPrint(s *PrintStmt) error {
 	t, err := c.checkExpr(s.Expr)
 	if err != nil {
 		return err
+	}
+	if isChanType(t) {
+		return typeErr(s.Pos, "cannot print channel value (channels are not Printable)")
 	}
 	if !isPrintable(t) {
 		return typeErr(s.Pos, "cannot print value of type %s", t)
@@ -1500,6 +1620,9 @@ func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr,
 // lift path. It resolves the annotation and then defers to
 // checkDeclWithSlot with the parent slot.
 func (c *checker) checkDeclSlot(pos Position, name string, ref *TypeRef, slot *Expr, kind bindKind) error {
+	if isReservedV07BuiltinName(name) || name == "close" || isReservedV07ConcurName(name) {
+		return typeErr(pos, "name %q is reserved (built-in)", name)
+	}
 	if c.crossMod != nil {
 		if _, ok := c.crossMod.imports[name]; ok && c.scope.parent == nil {
 			return typeErr(pos, "name %q shadows imported module binding", name)
@@ -1626,6 +1749,9 @@ func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Ex
 		return typeErr(pos, "destructure expects %d element(s), value has %d", len(tb.Names), len(observed.Tuple))
 	}
 	for i, name := range tb.Names {
+		if isReservedV07BuiltinName(name) || name == "close" || isReservedV07ConcurName(name) {
+			return typeErr(tb.NamePos[i], "name %q is reserved (built-in)", name)
+		}
 		elemT := observed.Tuple[i]
 		if elemT == nil || elemT.Kind == TypeUnknown {
 			return typeErr(tb.NamePos[i], "cannot infer type of %q from tuple element %d", name, i+1)
@@ -1817,16 +1943,54 @@ func (c *checker) checkFor(s *ForStmt) error {
 		}
 		return nil
 	case ForIter:
-		// `for x in xs { ... }` — iterate over a list-typed expression. The
-		// loop variable's type is the element type. Empty lists are allowed
-		// (the body never runs); typeck rejects unannotated empty literals
-		// upstream so the iterable's element type is always concrete here.
+		// `for x in xs { ... }` — iterate over a list-typed expression, OR
+		// (v0.7) over a chan-typed expression. The loop variable's type is
+		// the list element / chan element. Empty lists are allowed (the body
+		// never runs); typeck rejects unannotated empty literals upstream so
+		// the iterable's element type is always concrete here. For channels,
+		// receiving until close is desugared (at run.go / cgen.go) to a
+		// match-on-Option loop; we mark the ForStmt with Kind = ForChan so
+		// downstream halves can dispatch.
 		iterT, err := c.checkExpr(s.Iter)
 		if err != nil {
 			return err
 		}
-		if iterT == nil || iterT.Kind != TypeList {
-			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable must be a list, got %s", iterT)
+		if iterT == nil {
+			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable has unknown type")
+		}
+		var elem *Type
+		switch iterT.Kind {
+		case TypeList:
+			elem = iterT.Element
+		case TypeChan:
+			elem = iterT.Element
+			s.Kind = ForChan
+		default:
+			return typeErr(s.Iter.ExprPos(), "'for ... in' iterable must be a list or channel, got %s", iterT)
+		}
+		c.scope = newScope(c.scope)
+		defer func() { c.scope = c.scope.parent }()
+		if !c.scope.declare(s.Var, binding{kind: bindLet, typ: elem}) {
+			return typeErr(s.VarPos, "name %q already declared in this scope", s.Var)
+		}
+		for _, st := range s.Body.Statements {
+			if err := c.checkStmt(st); err != nil {
+				return err
+			}
+		}
+		return nil
+	case ForChan:
+		// Defensive: the parser doesn't produce ForChan directly; checkFor
+		// re-tags ForIter when it sees a chan-typed iterable. This case
+		// keeps the dispatch table exhaustive so a future caller that
+		// constructs ForChan in source-to-AST tools doesn't fall through to
+		// the "internal" panic below.
+		iterT, err := c.checkExpr(s.Iter)
+		if err != nil {
+			return err
+		}
+		if !isChanType(iterT) {
+			return typeErr(s.Iter.ExprPos(), "'for v in ch' iterable must be a channel, got %s", iterT)
 		}
 		c.scope = newScope(c.scope)
 		defer func() { c.scope = c.scope.parent }()
@@ -1868,7 +2032,8 @@ func (c *checker) checkFnDecl(fn *FnDecl) error {
 	}
 	sig := c.fns[fn.Name]
 	c.currentFn = &sig
-	defer func() { c.currentFn = nil }()
+	c.currentFnDecl = fn
+	defer func() { c.currentFn = nil; c.currentFnDecl = nil }()
 
 	c.scope = newScope(c.scope)
 	defer func() { c.scope = c.scope.parent }()
@@ -2160,9 +2325,14 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		e.setType(t)
 		return t, nil
 	case *IdentExpr:
-		b, ok := c.scope.lookup(e.Name)
+		b, defScope, ok := c.scope.lookupWithScope(e.Name)
 		if !ok {
 			return nil, typeErr(e.Pos, "undefined name %q", e.Name)
+		}
+		if len(c.anonFrames) > 0 {
+			if err := c.noteIdentResolved(e.Name, e.Pos, b, defScope); err != nil {
+				return nil, err
+			}
 		}
 		e.setType(b.typ)
 		return b.typ, nil
@@ -2218,6 +2388,12 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.checkPropagate(e)
 	case *CoalesceExpr:
 		return c.checkCoalesce(e, hint)
+	case *ChanConstructorExpr:
+		return c.checkChanConstructor(e)
+	case *RecvExpr:
+		return c.checkRecv(e)
+	case *AnonFnExpr:
+		return c.checkAnonFnExpr(e)
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
 }
@@ -3190,9 +3366,51 @@ func (c *checker) checkCall(e *CallExpr) (*Type, error) {
 // `let r: Result[int, str] = make_err()` infers the type-args from the
 // surrounding annotation. Non-generic calls ignore the hint.
 func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
+	// v0.7 Unit 3: anon-fn IIFE — `fn() { ... }()` calls the anon-fn
+	// directly. Type-check the AnonFnExpr to obtain a TypeFn, then dispatch
+	// the call through the fn-value path.
+	if anon, ok := e.Callee.(*AnonFnExpr); ok {
+		ft, err := c.checkAnonFnExpr(anon)
+		if err != nil {
+			return nil, err
+		}
+		return c.checkFnValueCall(e, ft, "anonymous function")
+	}
 	ident, ok := e.Callee.(*IdentExpr)
 	if !ok {
 		return nil, typeErr(e.Pos, "callee must be a function name")
+	}
+	// v0.7: `close(ch)` is a type-driven built-in; it has no fnSig entry. The
+	// reservation diagnostic at name-binding sites blocks user shadowing so
+	// any call whose callee names "close" is the genuine built-in.
+	if recognizeCloseCall(e) {
+		return c.checkCloseCall(e, ident)
+	}
+	// v0.7 Unit 3: `wait_group()` is a built-in fn. The reservation at the
+	// binding site prevents user shadowing.
+	if recognizeWaitGroupCall(e) {
+		return c.checkWaitGroupCall(e, ident)
+	}
+	// v0.7 Unit 3: a local binding may carry a TypeFn (an anon-fn captured
+	// in a let). Calling such a binding routes through the fn-value path.
+	// Check the scope FIRST so a local fn-typed binding shadows any
+	// same-name top-level fn — same shadowing semantics as let-of-fn vs.
+	// builtin push.
+	if b, _, isVar := c.scope.lookupWithScope(ident.Name); isVar {
+		if b.typ != nil && b.typ.Kind == TypeFn {
+			ident.setType(b.typ)
+			// The IDENT lookup already happened above without going
+			// through checkExpr's IDENT path; record capture analysis
+			// manually so an anon-fn body that calls a captured fn-value
+			// captures the binding.
+			if len(c.anonFrames) > 0 {
+				_, defScope, _ := c.scope.lookupWithScope(ident.Name)
+				if err := c.noteIdentResolved(ident.Name, ident.Pos, b, defScope); err != nil {
+					return nil, err
+				}
+			}
+			return c.checkFnValueCall(e, b.typ, ident.Name)
+		}
 	}
 	// v0.6 Unit 3: generic-fn dispatch.
 	if fn := c.findGenericFnDecl(ident.Name); fn != nil {

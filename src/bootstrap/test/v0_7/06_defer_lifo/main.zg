@@ -1,0 +1,10 @@
+# requires: v0.7
+
+fn three_defers() {
+    defer print 1
+    defer print 2
+    defer print 3
+    print 0
+}
+
+three_defers()

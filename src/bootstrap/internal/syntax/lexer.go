@@ -331,11 +331,17 @@ func (l *lexer) lexOperator() (Token, error) {
 	case '~':
 		return emit(KindTilde)
 	case '<':
+		// Longest-match disambiguation across every `<`-led operator:
+		//   `<<=` > `<<` > `<-` > `<=` > `<`.
+		// `<-` is the v0.7 channel send / receive operator; the rest are v0.1.
 		if c1 == '<' && c2 == '=' {
 			return emit3(KindShlEq)
 		}
 		if c1 == '<' {
 			return emit2(KindShl)
+		}
+		if c1 == '-' {
+			return emit2(KindLArrow)
 		}
 		if c1 == '=' {
 			return emit2(KindLE)

@@ -1,0 +1,11 @@
+# requires: v0.7
+
+fn main() {
+    let ch := chan[int](1)
+    select {
+        v := <- ch -> { print v }
+        _ -> { print 999 }
+    }
+}
+
+main()

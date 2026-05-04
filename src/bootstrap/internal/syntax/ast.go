@@ -526,6 +526,11 @@ type FnDecl struct {
 	Return     *TypeRef // nil ⇒ no return value
 	Body       *Block
 	Pub        bool
+	// HasDefers (v0.7 Unit 3) is set when the body contains at least one
+	// DeferStmt. Set by the typeck collect pass that walks fn bodies for
+	// closure / defer analysis; downstream halves use this bit to skip
+	// per-frame defer-stack setup on fns that don't need it.
+	HasDefers bool
 }
 
 func (*FnDecl) stmtNode()           {}
@@ -560,6 +565,7 @@ const (
 	ForCond                    // for cond { ... }
 	ForRange                   // for x in start..end { ... }
 	ForIter                    // for x in xs { ... } — iterate over a list value
+	ForChan                    // for v in ch { ... } — receive until close (v0.7)
 )
 
 // ForStmt covers all four for-loop shapes via Kind. Only the fields relevant
@@ -1096,6 +1102,10 @@ type SpecMethod struct {
 	Return     *TypeRef // nil ⇒ no return value
 	Body       *Block   // nil ⇒ signature only
 	Pub        bool
+	// HasDefers (v0.7 Unit 3) is set when the default-impl body contains at
+	// least one defer. Mirrors FnDecl.HasDefers so downstream halves can
+	// gate defer-frame setup without a body walk.
+	HasDefers bool
 }
 
 // SpecDecl represents `spec Name { method_decl* }`. Methods may be
@@ -1273,3 +1283,173 @@ type CoalesceExpr struct {
 
 func (*CoalesceExpr) exprNode()           {}
 func (e *CoalesceExpr) ExprPos() Position { return e.Pos }
+
+// ---------------------------------------------------------------------------
+// v0.7 concurrency expression / statement nodes.
+// ---------------------------------------------------------------------------
+
+// Capture (v0.7 Unit 3) records one outer-scope binding referenced from
+// inside an AnonFnExpr body. Name is the identifier, Pos is the use-site
+// position of one of the references (used for diagnostics), and Type is the
+// resolved *Type of the binding at capture-analysis time. Captures are
+// recorded once per name regardless of how many times the body references
+// it. The slot lives on AnonFnExpr.Captures.
+type Capture struct {
+	Name string
+	Pos  Position
+	Type *Type
+}
+
+// AnonFnExpr is `fn(params) -> R { body }` (or `fn(params) { body }` with no
+// return) used in expression position. Same shape as FnDecl minus the name.
+// The parser produces this node when it sees `fn` immediately followed by `(`
+// — the tenth-man-pinned disambiguation rule. Capture analysis lives in
+// typeck (Unit 3); this node only carries the syntactic surface.
+//
+// Captures (v0.7 Unit 3) records the outer-scope bindings the body references
+// — populated by typeck capture analysis. Captures from inner declarations
+// (params, lets inside the body) are NOT recorded; only free variables that
+// resolve to bindings declared outside the AnonFnExpr appear here. Each entry
+// is added at most once even if the body references the name many times.
+//
+// HasDefers (v0.7 Unit 3) is set when the body (any nesting depth, but the
+// parser only admits top-level fn-body defers) contains at least one
+// DeferStmt. Downstream halves use this bit to skip per-frame defer-stack
+// setup on closures that don't need it.
+type AnonFnExpr struct {
+	typed
+	Pos       Position
+	Params    []FnParam
+	Return    *TypeRef // nil ⇒ no return value
+	Body      *Block
+	Captures  []Capture
+	HasDefers bool
+}
+
+func (*AnonFnExpr) exprNode()           {}
+func (e *AnonFnExpr) ExprPos() Position { return e.Pos }
+
+// SpawnStmt is `spawn <fn-call-expr>`. The parser narrows the inner expression
+// at parse time per the grammar's "spawn admits only fn calls" rule. The
+// admitted shapes are:
+//
+//   - *CallExpr — bare named fn (`spawn do_work()`) or an anon-fn IIFE
+//     (`spawn fn() { ... }()`). The callee is an IdentExpr or AnonFnExpr.
+//   - *MethodCallExpr — qualified cross-module fn (`spawn mod.do_work()`)
+//     and method-form calls. v0.5 typeck's checkCrossModuleFnCall already
+//     consumes MethodCallExpr for the cross-module fn-call path; spawn
+//     reuses that machinery untouched.
+//
+// Call is typed as Expr so both shapes flow through one field; the parser
+// guarantees it is one of the two concrete types above.
+type SpawnStmt struct {
+	Pos  Position
+	Call Expr
+}
+
+func (*SpawnStmt) stmtNode()           {}
+func (s *SpawnStmt) StmtPos() Position { return s.Pos }
+
+// DeferStmt is `defer <stmt>` or `defer <block>`. The block form is recorded
+// as-is; the single-statement form is wrapped in a one-element Block at parse
+// time so downstream consumers walk a single shape.
+//
+// v0.7 admits defer only at fn-body top-level scope (not nested inside if /
+// for / match / inner blocks); the parser enforces that with a precise
+// diagnostic. typeck (Unit 3) takes over for the per-fn defer-stack
+// bookkeeping; the parser only records the syntactic shape.
+type DeferStmt struct {
+	Pos  Position
+	Body *Block
+}
+
+func (*DeferStmt) stmtNode()           {}
+func (s *DeferStmt) StmtPos() Position { return s.Pos }
+
+// ChanConstructorExpr is `chan[T]()` (unbuffered, rendezvous) or `chan[T](N)`
+// (buffered, capacity N). The parser produces this node when it sees the
+// IDENT `chan` followed by `[T]` then `(...)` — the only place `chan` can
+// appear in expression position. Element carries the parsed element type;
+// Capacity is non-nil only for the buffered form. typeck (Unit 2) resolves
+// Element and validates that Capacity (when present) is an int.
+type ChanConstructorExpr struct {
+	typed
+	Pos      Position
+	Element  *TypeRef
+	Capacity Expr // nil ⇒ unbuffered (rendezvous)
+}
+
+func (*ChanConstructorExpr) exprNode()           {}
+func (e *ChanConstructorExpr) ExprPos() Position { return e.Pos }
+
+// SendStmt is `chan_expr <- value_expr`. Statement-only — a send produces no
+// value and so cannot appear in expression position. The parser detects the
+// shape after parsing the LHS expression at statement position and seeing
+// `<-` next; chained sends (`a <- b <- c`) are rejected at parse time per
+// PLAN.md so users must split with parens.
+type SendStmt struct {
+	Pos   Position
+	Chan  Expr
+	Value Expr
+}
+
+func (*SendStmt) stmtNode()           {}
+func (s *SendStmt) StmtPos() Position { return s.Pos }
+
+// RecvExpr is the prefix `<-` channel-receive operator: `<- ch`. Yields
+// `T?` at typeck (Option[T]) so the closed-channel case lands as `None`.
+// Same precedence rung as the other prefix unaries (`-`, `~`, `not`).
+type RecvExpr struct {
+	typed
+	Pos  Position
+	Chan Expr
+}
+
+func (*RecvExpr) exprNode()           {}
+func (e *RecvExpr) ExprPos() Position { return e.Pos }
+
+// SelectOpKind tags which of the four channel-op shapes a SelectArm carries.
+// The four shapes mirror the grammar's `select_op` production:
+//
+//   - SelectRecvBind:     IDENT ":=" "<-" expr   — binds the received value
+//   - SelectRecvDiscard:  "<-" expr              — drops the received value
+//   - SelectSend:         expr "<-" expr         — sends a value
+//   - SelectDefault:      "_"                    — non-blocking default arm
+type SelectOpKind int
+
+// Select-arm channel-op kinds.
+const (
+	SelectRecvBind SelectOpKind = iota
+	SelectRecvDiscard
+	SelectSend
+	SelectDefault
+)
+
+// SelectArm is one arm of a `select`: a channel op + a body. Single-statement
+// arm bodies are wrapped in a one-element Block at parse time so downstream
+// consumers always walk a Block (mirrors MatchArm.Body).
+//
+//   - BindName / BindNamePos are populated only for SelectRecvBind.
+//   - Chan is the channel expression for SelectRecvBind / SelectRecvDiscard /
+//     SelectSend; nil for SelectDefault.
+//   - Value is the value being sent for SelectSend; nil for the other shapes.
+type SelectArm struct {
+	Pos         Position
+	Op          SelectOpKind
+	BindName    string
+	BindNamePos Position
+	Chan        Expr
+	Value       Expr
+	Body        *Block
+}
+
+// SelectStmt is `select { arm; arm; ... }`. Multiplexed channel wait — blocks
+// until one arm is ready (the default arm, when present, makes the select
+// non-blocking). The parser rejects an empty arm list at parse time.
+type SelectStmt struct {
+	Pos  Position
+	Arms []SelectArm
+}
+
+func (*SelectStmt) stmtNode()           {}
+func (s *SelectStmt) StmtPos() Position { return s.Pos }

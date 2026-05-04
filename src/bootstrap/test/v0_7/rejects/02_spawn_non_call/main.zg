@@ -1,0 +1,8 @@
+# requires: v0.7
+
+fn main() {
+    let x := 5
+    spawn x
+}
+
+main()

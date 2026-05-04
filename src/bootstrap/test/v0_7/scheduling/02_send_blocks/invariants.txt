@@ -1,0 +1,4 @@
+# Buffered cap=1; two senders race. Both values must be delivered, but
+# the order depends on which sender wins the buffer slot first.
+len: 2
+set: 11,22

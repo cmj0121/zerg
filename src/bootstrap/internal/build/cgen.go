@@ -68,6 +68,7 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		fnOwner:       map[*syntax.FnDecl]string{},
 		moduleByName:  map[string]*moduleEmit{},
 		entryProg:     nil,
+		anonByNode:    map[interface{}]*anonFnEmit{},
 	}
 	g.shapes = newShapeRegistry()
 
@@ -223,14 +224,56 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	g.b.WriteString("\n")
 	g.b.WriteString(runtimeV04C)
 	g.b.WriteString("\n")
+	// v0.7 runtime is emitted only when the program uses any concurrency
+	// primitive — keeps the cgen size guard for v0.0–v0.6 programs intact.
+	needsV07 := g.programUsesV07()
+	if needsV07 {
+		g.b.WriteString(runtimeV07C)
+		g.b.WriteString("\n")
+	}
+
+	// v0.7: wire the Option[T] lookup so chan recv helpers can name the
+	// canonical Option[T] enum. The typed AST stamps every RecvExpr.Type()
+	// with the canonical Option[T]; we walk every RecvExpr and chan-typed
+	// `for v in ch` site to harvest the pointer keyed by element-type
+	// string. addChanShape later consults this index when registering the
+	// chan helper.
+	g.chanOptionByElemKey = map[string]*syntax.Type{}
+	for i := range g.modules {
+		g.harvestChanOptionTypes(g.modules[i].prog)
+	}
+	g.chanOptionLookup = func(elem *syntax.Type) *syntax.Type {
+		if elem == nil {
+			return nil
+		}
+		return g.chanOptionByElemKey[elem.String()]
+	}
+
+	// v0.7: pre-collect chan shapes from typed AST so emitChanTypedefs runs
+	// before the shape registry's typedef pass (chan struct lives next to
+	// list/tuple struct definitions but is its own table). The same walk
+	// pre-registers anon-fn / defer / spawn-named-call records so the env
+	// structs and trampoline fns can be forward-declared before user fn
+	// bodies reference them.
+	for i := range g.modules {
+		me := &g.modules[i]
+		g.collectChanShapes(me.prog)
+		g.preregisterAnonFns(me.prog)
+	}
 
 	// 2. Composite-shape typedefs and helpers (forward decls then bodies).
 	g.shapes.emitForwardDecls(g, &g.b)
 	g.emitSpecForwardDecls()
+	g.emitChanForwardDecls()
 	g.shapes.emitTypedefs(g, &g.b)
+	g.emitChanTypedefs()
 	g.shapes.emitHelpers(g, &g.b)
+	g.emitChanHelpers()
 	g.emitEqHelpers()
 	g.emitSpecVtablesAndMethods()
+	if err := g.emitAnonFnHeaders(); err != nil {
+		return err
+	}
 
 	// 3. Top-level fn forward decls then bodies, ACROSS every module.
 	// Forward decls first so any fn can call any other regardless of
@@ -294,6 +337,15 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		}
 	}
 
+	// 3.5 v0.7: emit anon-fn / defer-body trampolines AFTER user fns so the
+	// trampolines can reference user fns by their mangled symbols. The
+	// env-struct typedefs and forward declarations were emitted earlier
+	// (right after the runtime header) so user fn bodies could call into
+	// them too.
+	if err := g.emitAnonFnBodies(); err != nil {
+		return err
+	}
+
 	// 4. main(). Top-level type decls and import decls are NOT executable;
 	// only the entry module's executable statements run. The active module
 	// is the entry's mangle so cross-module fn calls resolve through its
@@ -316,6 +368,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 				return err
 			}
 		}
+	}
+	if needsV07 {
+		// Drain detached spawn threads before main returns so a task doing
+		// post-channel-op work isn't killed mid-flight. The user's explicit
+		// wait_group is a separate object; this synthetic one covers programs
+		// that don't construct one.
+		g.b.WriteString("    zerg_main_wg_wait();\n")
 	}
 	g.b.WriteString("    return 0;\n")
 	g.b.WriteString("}\n")
@@ -895,6 +954,45 @@ type cgen struct {
 	// moduleByName indexes modules by their mangle prefix for O(1) lookup
 	// during cross-module fn dispatch.
 	moduleByName map[string]*moduleEmit
+
+	// v0.7 Unit 7 — concurrency codegen state.
+	// chanShapes records every chan element type the program references.
+	// Two `chan[int]` uses dedupe to one entry. emitChanTypedefs walks the
+	// map to emit per-element struct + helpers ahead of user fns.
+	chanShapes map[string]*chanShape
+	chanOrder  []string
+	// chanOptionLookup is a closure that returns the canonical Option[T]
+	// *Type for a given element type T. Wired during EmitBundle from the
+	// per-program built-in Option monomorphisation cache so the chan
+	// recv helper emits the right Option[T] enum.
+	chanOptionLookup func(elem *syntax.Type) *syntax.Type
+	// chanOptionByElemKey is the harvested Option[T] map populated at
+	// EmitBundle entry by harvestChanOptionTypes. Key is element-type
+	// String(); value is the canonical Option[T] *Type stamped on a
+	// RecvExpr or for-chan iter site.
+	chanOptionByElemKey map[string]*syntax.Type
+	// anonFns holds every spawn / defer body queued for top-level emission,
+	// in declaration order. Pre-registered by preregisterAnonFns so the
+	// emitted .c file can forward-declare each trampoline ahead of any user
+	// fn body that calls it.
+	anonFns       []*anonFnEmit
+	anonFnCounter int
+	// anonByNode maps an AST node (AnonFnExpr / DeferStmt / SpawnStmt) to
+	// its pre-registered anonFnEmit. emitSpawn / emitDefer look up the
+	// record rather than allocating a new id, so the AST's order matches
+	// the forward declarations.
+	anonByNode map[interface{}]*anonFnEmit
+	// currentHasDefers / currentFnEndLabel drive the defer-drain epilogue
+	// and the `?` early-return goto label inside the emitting fn body.
+	currentHasDefers  bool
+	currentFnEndLabel string
+	// inDeferDrain reserved for nested-defer scoping support; today it
+	// stays false and is restored across nested anon-fn emission.
+	inDeferDrain bool
+	// fnEndCounter generates unique fn-end label suffixes for each fn whose
+	// HasDefers is set. The label is the jump target for `?` propagation
+	// inside that fn so the defer-drain epilogue fires.
+	fnEndCounter int
 }
 
 // implKey deduplicates impls by (type, spec). Mirrors run.go's implKey.
@@ -974,6 +1072,12 @@ func (r *shapeRegistry) addType(g *cgen, t *syntax.Type) {
 			r.tupleOrder = append(r.tupleOrder, key)
 		}
 	case syntax.TypeStruct:
+		// v0.7: the WaitGroup synthetic struct is a runtime-owned handle —
+		// no per-shape typedef / helpers. Skip the registry path; the cTypeName
+		// mapping above renders it as `zerg_wait_group_t *`.
+		if t.Name == "WaitGroup" {
+			return
+		}
 		// Add the struct itself; recurse into field types so nested composites
 		// are picked up even when they are only used inside a struct.
 		key := g.mangleType(t)
@@ -1545,8 +1649,17 @@ func variantIndex(t *syntax.Type, name string) int {
 // expression with type t). For primitives the copy is the expression itself
 // (trivial copy via assignment); for composites we delegate to the per-shape
 // _copy helper.
+//
+// v0.7: TypeChan and the synthetic WaitGroup are runtime-owned handles —
+// pointer-sized shared state, never deep-copied. Treat them as primitives.
 func (g *cgen) copyExpr(t *syntax.Type, expr string) string {
 	if t == nil {
+		return expr
+	}
+	if t.Kind == syntax.TypeChan {
+		return expr
+	}
+	if t.Kind == syntax.TypeStruct && t.Name == "WaitGroup" {
 		return expr
 	}
 	switch t.Kind {
@@ -1973,6 +2086,14 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 		// main(). Reaching here at non-top level is impossible because
 		// typeck rejects nested decls.
 		return nil
+	case *syntax.SpawnStmt:
+		return g.emitSpawn(s)
+	case *syntax.SendStmt:
+		return g.emitSend(s)
+	case *syntax.DeferStmt:
+		return g.emitDefer(s)
+	case *syntax.SelectStmt:
+		return g.emitSelect(s)
 	}
 	return fmt.Errorf("codegen: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }
@@ -2279,6 +2400,8 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 		g.writeIndent()
 		g.b.WriteString("}\n")
 		return nil
+	case syntax.ForChan:
+		return g.emitForChan(s)
 	case syntax.ForIter:
 		// Wrap in a brace-block so the temp + loop variable are scoped.
 		iterT := s.Iter.Type()
@@ -2333,6 +2456,11 @@ func (g *cgen) emitFor(s *syntax.ForStmt) error {
 // At v0.3 we do NOT wrap composite return values in `_copy` — the borrow
 // checker has invalidated the local binding at the return site, so the
 // caller can take ownership of the underlying buffer/struct directly.
+//
+// v0.7: when the enclosing fn carries HasDefers, the return value is
+// snapshotted into a temp, the defer stack is drained, and only then does
+// the C `return` fire — so deferred actions observe an unmodified caller
+// frame and the user's Result-shaped return value still reaches the caller.
 func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 	body := "return;"
 	if s.Value != nil {
@@ -2344,7 +2472,21 @@ func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 		if g.currentFnRet != nil && shapeContainsSpec(g.currentFnRet) {
 			v = g.coerceCExpr(v, s.Value.Type(), g.currentFnRet)
 		}
-		body = fmt.Sprintf("return %s;", v)
+		if g.currentHasDefers {
+			// Snapshot value into a temp; drain defers; then return.
+			retT := g.currentFnRet
+			cType := "int"
+			if retT != nil {
+				cType = g.cTypeName(retT)
+			}
+			tmp := g.freshTmp("ret")
+			body = fmt.Sprintf("{ %s %s = %s; zerg_defer_drain(__zerg_defer_marker); return %s; }",
+				cType, tmp, v, tmp)
+		} else {
+			body = fmt.Sprintf("return %s;", v)
+		}
+	} else if g.currentHasDefers {
+		body = "{ zerg_defer_drain(__zerg_defer_marker); return; }"
 	}
 	if s.Guard == nil {
 		g.writeIndent()
@@ -2357,7 +2499,14 @@ func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 		return err
 	}
 	g.writeIndent()
-	fmt.Fprintf(&g.b, "if (%s) { %s }\n", guard, body)
+	// Wrap the body in braces when it isn't already a brace block (the
+	// HasDefers path emits a brace block already; the simple path is a
+	// `return X;` token). The `{ ... }` form is byte-stable across v0.0–v0.7.
+	if len(body) > 0 && body[0] == '{' {
+		fmt.Fprintf(&g.b, "if (%s) %s\n", guard, body)
+	} else {
+		fmt.Fprintf(&g.b, "if (%s) { %s }\n", guard, body)
+	}
 	return nil
 }
 
@@ -2380,11 +2529,18 @@ func (g *cgen) emitFlow(guard syntax.Expr, kw string) error {
 // emitFn writes a complete static function definition. v0.5: switches the
 // current-module context to the fn's owner so cross-module fn calls inside
 // the body resolve through the owner's import table.
+//
+// v0.7: when fn.HasDefers is set, the body emits a per-frame defer-stack
+// marker on entry and the fn epilogue jumps through `__zerg_fn_end:` /
+// drains the stack on every exit. The `?` early-return path (propagateStr)
+// jumps to that label so deferred actions fire on Err / None propagation.
 func (g *cgen) emitFn(fn *syntax.FnDecl) error {
 	g.writeFnSig(fn)
 	g.b.WriteString(" {\n")
 	prevRet := g.currentFnRet
 	prevMod := g.currentMod
+	prevHasDef := g.currentHasDefers
+	prevEndLabel := g.currentFnEndLabel
 	if fn.Return != nil {
 		g.currentFnRet = fn.Return.Resolved
 	} else {
@@ -2393,12 +2549,26 @@ func (g *cgen) emitFn(fn *syntax.FnDecl) error {
 	if owner, ok := g.fnOwner[fn]; ok {
 		g.currentMod = owner
 	}
+	g.currentHasDefers = fn.HasDefers
+	if fn.HasDefers {
+		g.fnEndCounter++
+		g.currentFnEndLabel = fmt.Sprintf("__zerg_fn_end_%d", g.fnEndCounter)
+		g.b.WriteString("    zerg_defer_rec *__zerg_defer_marker = zerg_defer_top;\n")
+	} else {
+		g.currentFnEndLabel = ""
+	}
 	defer func() {
 		g.currentFnRet = prevRet
 		g.currentMod = prevMod
+		g.currentHasDefers = prevHasDef
+		g.currentFnEndLabel = prevEndLabel
 	}()
 	if err := g.emitBlockBody(fn.Body); err != nil {
 		return err
+	}
+	if fn.HasDefers {
+		fmt.Fprintf(&g.b, "    %s: ;\n", g.currentFnEndLabel)
+		g.b.WriteString("    zerg_defer_drain(__zerg_defer_marker);\n")
 	}
 	g.b.WriteString("}\n")
 	return nil
@@ -2793,6 +2963,12 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return g.propagateStr(e)
 	case *syntax.CoalesceExpr:
 		return g.coalesceStr(e)
+	case *syntax.ChanConstructorExpr:
+		return g.chanConstructorStr(e)
+	case *syntax.RecvExpr:
+		return g.recvStr(e)
+	case *syntax.AnonFnExpr:
+		return g.anonFnValueStr(e)
 	}
 	return "", fmt.Errorf("codegen: unhandled expression %T at %s", expr, expr.ExprPos())
 }
@@ -3030,9 +3206,22 @@ func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 // v0.2-style deep copy; it remains the only call-site of the per-shape
 // `_copy` helper.
 func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
+	// v0.7: anon-fn IIFE — `fn(args) -> R { body }(actual)`. The callee is
+	// the AnonFnExpr itself; emit the env-on-stack + direct call to the
+	// pre-registered top-level body fn. preregisterAnonFns has already
+	// allocated the record in anonFnValue mode.
+	if anon, ok := e.Callee.(*syntax.AnonFnExpr); ok {
+		return g.iifeCallStr(anon, e.Args)
+	}
 	ident, ok := e.Callee.(*syntax.IdentExpr)
 	if !ok {
 		return "", fmt.Errorf("codegen: non-ident callee at %s", e.Pos)
+	}
+	// v0.7: a local binding may carry a TypeFn (an anon-fn captured in a
+	// let). Calling such a binding routes through the fn-value pair:
+	// cast .fn to the per-signature C fn pointer and invoke through .env.
+	if t := ident.Type(); t != nil && t.Kind == syntax.TypeFn && g.lookupCurrentFn(ident.Name) == nil {
+		return g.fnValueCallStr(ident, t, e.Args)
 	}
 	if ident.Name == "len" {
 		if len(e.Args) != 1 {
@@ -3063,6 +3252,29 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 			return "", err
 		}
 		return g.copyExpr(e.Args[0].Type(), argS), nil
+	}
+	if ident.Name == "close" {
+		// v0.7 close(ch): route to the per-element chan_close helper.
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: close expects 1 arg at %s", e.Pos)
+		}
+		argT := e.Args[0].Type()
+		if argT == nil || argT.Kind != syntax.TypeChan {
+			return "", fmt.Errorf("codegen: close arg is not a channel at %s", e.Pos)
+		}
+		g.addChanShape(argT)
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		cm := "zerg_chan_" + g.mangleType(argT.Element)
+		return fmt.Sprintf("(%s_close(%s), 0)", cm, argS), nil
+	}
+	if ident.Name == "wait_group" {
+		if len(e.Args) != 0 {
+			return "", fmt.Errorf("codegen: wait_group expects 0 args at %s", e.Pos)
+		}
+		return "zerg_wait_group_make()", nil
 	}
 	if ident.Name == "push" {
 		// push(xs, v) appends v to xs in place via the per-shape grow
@@ -3318,8 +3530,23 @@ func (g *cgen) cTypeName(t *syntax.Type) string {
 		return "void"
 	}
 	switch t.Kind {
-	case syntax.TypeList, syntax.TypeTuple, syntax.TypeStruct, syntax.TypeEnum, syntax.TypeSpec:
+	case syntax.TypeStruct:
+		// v0.7 synthetic WaitGroup is a runtime-owned handle, not a value
+		// struct emitted by the shape registry.
+		if t.Name == "WaitGroup" {
+			return "zerg_wait_group_t *"
+		}
 		return g.mangleType(t)
+	case syntax.TypeList, syntax.TypeTuple, syntax.TypeEnum, syntax.TypeSpec:
+		return g.mangleType(t)
+	case syntax.TypeChan:
+		// Channel handles are pointers to a per-element chan struct so the
+		// runtime helpers can mutate the shared state.
+		return "zerg_chan_" + g.mangleType(t.Element) + " *"
+	case syntax.TypeFn:
+		// v0.7 fn-values bind through a (fn-ptr, env-ptr) pair — the call
+		// site casts .fn to a per-signature C fn-pointer type.
+		return "zerg_fn_value"
 	}
 	return "void"
 }
@@ -3386,6 +3613,16 @@ func (g *cgen) mangleType(t *syntax.Type) string {
 		return "zerg_enum_" + g.typeMangle(t) + "__" + sanitizeGenericName(t.Name)
 	case syntax.TypeSpec:
 		return "zerg_dyn_" + g.specMangle(t.Name) + "__" + sanitizeGenericName(t.Name)
+	case syntax.TypeChan:
+		// Chan mangle is structural per element type, mirroring list/tuple.
+		// The trailing `_t` distinguishes the chan struct from the element
+		// type's own mangle so the C identifier is unique.
+		return "zerg_chan_" + g.mangleType(t.Element) + "_handle"
+	case syntax.TypeFn:
+		// TypeFn shows up in capture lists for anon-fn analysis; codegen
+		// never emits a fn-value handle at v0.7 (anon-fns are inlined or
+		// captured-as-spawn). Fall through to a stub identifier.
+		return "zerg_fn_value"
 	}
 	return "void"
 }
@@ -4218,6 +4455,30 @@ func (g *cgen) methodCallStr(e *syntax.MethodCallExpr) (string, error) {
 	rt := e.Receiver.Type()
 	if rt == nil {
 		return "", fmt.Errorf("codegen: method-call receiver has nil type at %s", e.Pos)
+	}
+	// v0.7 wait_group: receiver is the synthetic WaitGroup struct (handle is
+	// a pointer to zerg_wait_group_t). Dispatch the three methods directly.
+	if rt.Kind == syntax.TypeStruct && rt.Name == "WaitGroup" {
+		rs, err := g.exprStr(e.Receiver)
+		if err != nil {
+			return "", err
+		}
+		switch e.Method {
+		case "add":
+			if len(e.Args) != 1 {
+				return "", fmt.Errorf("codegen: WaitGroup.add expects 1 arg at %s", e.Pos)
+			}
+			vs, err := g.exprStr(e.Args[0])
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("(zerg_wait_group_add(%s, %s), 0)", rs, vs), nil
+		case "done":
+			return fmt.Sprintf("(zerg_wait_group_done(%s), 0)", rs), nil
+		case "wait":
+			return fmt.Sprintf("(zerg_wait_group_wait(%s), 0)", rs), nil
+		}
+		return "", fmt.Errorf("codegen: unknown WaitGroup method %q at %s", e.Method, e.Pos)
 	}
 	if rt.Kind == syntax.TypeSpec {
 		return g.dispatchSpec(e, rt)

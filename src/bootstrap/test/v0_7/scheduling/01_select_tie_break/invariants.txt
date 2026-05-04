@@ -1,0 +1,4 @@
+# Both arms ready; select picks one each iteration. Order is unspecified
+# (declaration-order at v0.7, random at v0.8+). Both values must appear.
+len: 2
+set: 100,200

@@ -1,0 +1,10 @@
+# requires: v0.7
+
+fn main() {
+    mut x := 0
+    spawn fn() {
+        print x
+    }()
+}
+
+main()

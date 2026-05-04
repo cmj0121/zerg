@@ -59,12 +59,20 @@ func (g *cgen) propagateStr(e *syntax.PropagateExpr) (string, error) {
 	innerMname := g.mangleType(innerT)
 	retMname := g.mangleType(retT)
 	tmp := g.freshTmp("prop")
+	// v0.7 Unit 5.5: when the enclosing fn carries HasDefers, drain the
+	// defer stack before the early-return so deferred actions observe the
+	// `?` propagation path identically to a normal return.
+	drain := ""
+	if g.currentHasDefers {
+		drain = "zerg_defer_drain(__zerg_defer_marker); "
+	}
 	if strings.HasPrefix(innerT.Name, "Option[") {
 		// Option propagation: tag 0 = Some, tag 1 = None.
 		noneIdx := variantIndex(retT, "None")
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "({ %s %s = %s; ", innerMname, tmp, innerS)
-		fmt.Fprintf(&sb, "if (%s.tag != 0) return ((%s){.tag = %d}); ", tmp, retMname, noneIdx)
+		fmt.Fprintf(&sb, "if (%s.tag != 0) { %sreturn ((%s){.tag = %d}); } ",
+			tmp, drain, retMname, noneIdx)
 		fmt.Fprintf(&sb, "%s.payload.p0.a0; })", tmp)
 		return sb.String(), nil
 	}
@@ -73,8 +81,8 @@ func (g *cgen) propagateStr(e *syntax.PropagateExpr) (string, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "({ %s %s = %s; ", innerMname, tmp, innerS)
 	fmt.Fprintf(&sb,
-		"if (%s.tag != 0) return ((%s){.tag = %d, .payload.p%d = {.a0 = %s.payload.p1.a0}}); ",
-		tmp, retMname, errIdx, errIdx, tmp)
+		"if (%s.tag != 0) { %sreturn ((%s){.tag = %d, .payload.p%d = {.a0 = %s.payload.p1.a0}}); } ",
+		tmp, drain, retMname, errIdx, errIdx, tmp)
 	fmt.Fprintf(&sb, "%s.payload.p0.a0; })", tmp)
 	return sb.String(), nil
 }

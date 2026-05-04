@@ -312,28 +312,128 @@ func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
 // each composite field (a forward declaration is enough only behind a
 // pointer). Strategy:
 //
-//   * Enum macros first — depend on nothing.
-//   * List shape definitions next — every list field is a pointer-to-element,
+//   * List shape definitions first — every list field is a pointer-to-element,
 //     so element types only need their forward decl (already emitted in
 //     emitForwardDecls). Lists therefore have no shape-def dependency on
 //     other shapes and can be emitted en bloc.
-//   * Tuple and struct shape definitions in a unified topological sort.
+//   * Tuple, struct and enum shape definitions in a unified topological sort.
 //     A tuple-of-struct needs the struct's full definition; a struct-of-
-//     tuple needs the tuple's full definition. Handling them as one
-//     dependency graph (tuple/struct → tuple/struct via composite fields)
-//     respects whichever direction the user wrote.
+//     tuple needs the tuple's full definition; an enum variant payload
+//     embeds its payload types by value, so a `Frame { Args(list[int]) }`
+//     enum needs `zerg_list_int64_t`'s full definition (not just its forward
+//     decl) before its own struct body can be emitted. Handling tuples,
+//     structs and enums as one dependency graph respects whichever direction
+//     the user wrote.
 //
 // typeck has rejected composite cycles so the fixed-point loop terminates.
 func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
-	if len(r.enumOrder) > 0 {
-		b.WriteString("/* Enum tag+union shape definitions. */\n")
+	if len(r.listOrder) > 0 {
+		b.WriteString("/* List shape definitions. */\n")
+	}
+	for _, k := range r.listOrder {
+		t := r.listShapes[k]
+		elem := cTypeName(t.Element)
+		// `cap` was dropped in v0.2 because lists were value-copied with
+		// cap == len at every site. With `push` in play at v0.3, cap is
+		// needed so the per-shape grow helper knows when to realloc.
+		fmt.Fprintf(b, "struct %s { %s* data; size_t len; size_t cap; };\n", k, elem)
+	}
+
+	// Unified topo over tuple, struct and enum shapes. depsOf returns the
+	// mangled names of OTHER composite shapes whose full definition is
+	// needed before this one can be emitted. List deps resolve immediately
+	// because lists are already fully defined above.
+	depsOf := func(t *syntax.Type) []string {
+		var out []string
+		var fields []*syntax.Type
+		switch t.Kind {
+		case syntax.TypeTuple:
+			fields = append(fields, t.Tuple...)
+		case syntax.TypeStruct:
+			for _, f := range t.Fields {
+				fields = append(fields, f.Type)
+			}
+		case syntax.TypeEnum:
+			for i := range t.Variants {
+				fields = append(fields, variantPayload(t, i)...)
+			}
+		}
+		for _, ft := range fields {
+			if ft == nil {
+				continue
+			}
+			switch ft.Kind {
+			case syntax.TypeStruct, syntax.TypeTuple, syntax.TypeEnum, syntax.TypeList:
+				out = append(out, mangleType(ft))
+			}
+		}
+		return out
+	}
+
+	emittedTuple := map[string]bool{}
+	emittedStruct := map[string]bool{}
+	emittedEnum := map[string]bool{}
+	depReady := func(deps []string) bool {
+		for _, dep := range deps {
+			if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
+				return false
+			}
+			if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
+				return false
+			}
+			if _, ok := r.enumShapes[dep]; ok && !emittedEnum[dep] {
+				return false
+			}
+			// Lists are emitted en bloc above and are always ready.
+		}
+		return true
+	}
+
+	wroteTupleHeader := false
+	wroteStructHeader := false
+	wroteEnumHeader := false
+	emitTuple := func(k string) {
+		if !wroteTupleHeader {
+			b.WriteString("\n/* Tuple shape definitions. */\n")
+			wroteTupleHeader = true
+		}
+		t := r.tupleShapes[k]
+		fmt.Fprintf(b, "struct %s {", k)
+		for i, e := range t.Tuple {
+			if i > 0 {
+				b.WriteString(";")
+			}
+			fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
+		}
+		b.WriteString("; };\n")
+		emittedTuple[k] = true
+	}
+	emitStruct := func(k string) {
+		if !wroteStructHeader {
+			b.WriteString("\n/* Struct shape definitions. */\n")
+			wroteStructHeader = true
+		}
+		t := r.structShapes[k]
+		fmt.Fprintf(b, "struct %s {", k)
+		for i, f := range t.Fields {
+			if i > 0 {
+				b.WriteString(";")
+			}
+			fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
+		}
+		b.WriteString("; };\n")
+		emittedStruct[k] = true
 	}
 	// v0.4 enum layout: `struct { int32_t tag; union { ... } payload; }`.
 	// Each variant gets a payload sub-struct named pN where N is the variant
 	// index; bare variants use a placeholder slot so the union is never empty.
 	// Variant index macros are emitted alongside as `<Mangle>__<Variant>_TAG`
 	// for use in match scrutinee tag tests.
-	for _, k := range r.enumOrder {
+	emitEnum := func(k string) {
+		if !wroteEnumHeader {
+			b.WriteString("\n/* Enum tag+union shape definitions. */\n")
+			wroteEnumHeader = true
+		}
 		t := r.enumShapes[k]
 		fmt.Fprintf(b, "struct %s {\n", k)
 		fmt.Fprintf(b, "    int32_t tag;\n")
@@ -355,121 +455,42 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 		for i, v := range t.Variants {
 			fmt.Fprintf(b, "#define %s__%s_TAG (%d)\n", k, v, i)
 		}
+		emittedEnum[k] = true
 	}
 
-	if len(r.listOrder) > 0 {
-		b.WriteString("\n/* List shape definitions. */\n")
-	}
-	for _, k := range r.listOrder {
-		t := r.listShapes[k]
-		elem := cTypeName(t.Element)
-		// `cap` was dropped in v0.2 because lists were value-copied with
-		// cap == len at every site. With `push` in play at v0.3, cap is
-		// needed so the per-shape grow helper knows when to realloc.
-		fmt.Fprintf(b, "struct %s { %s* data; size_t len; size_t cap; };\n", k, elem)
-	}
-
-	// Unified topo over tuple and struct shapes. depsOf returns the mangled
-	// names of OTHER tuple/struct shapes whose full definition is needed
-	// before this one can be emitted. Composite list dependencies are absent
-	// because lists are already complete by this point.
-	depsOf := func(t *syntax.Type) []string {
-		var out []string
-		var fields []*syntax.Type
-		if t.Kind == syntax.TypeTuple {
-			fields = append(fields, t.Tuple...)
-		} else if t.Kind == syntax.TypeStruct {
-			for _, f := range t.Fields {
-				fields = append(fields, f.Type)
-			}
-		}
-		for _, ft := range fields {
-			if ft == nil {
-				continue
-			}
-			if ft.Kind == syntax.TypeStruct || ft.Kind == syntax.TypeTuple {
-				out = append(out, mangleType(ft))
-			}
-		}
-		return out
-	}
-
-	emittedTuple := map[string]bool{}
-	emittedStruct := map[string]bool{}
-	wroteTupleHeader := false
-	wroteStructHeader := false
-	totalRemaining := len(r.tupleOrder) + len(r.structOrder)
+	totalRemaining := len(r.tupleOrder) + len(r.structOrder) + len(r.enumOrder)
 	for totalRemaining > 0 {
 		progress := false
-		// Try every tuple in declared order.
 		for _, k := range r.tupleOrder {
 			if emittedTuple[k] {
 				continue
 			}
-			t := r.tupleShapes[k]
-			ready := true
-			for _, dep := range depsOf(t) {
-				if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
-					ready = false
-					break
-				}
-				if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
-					ready = false
-					break
-				}
-			}
-			if !ready {
+			if !depReady(depsOf(r.tupleShapes[k])) {
 				continue
 			}
-			if !wroteTupleHeader {
-				b.WriteString("\n/* Tuple shape definitions. */\n")
-				wroteTupleHeader = true
-			}
-			fmt.Fprintf(b, "struct %s {", k)
-			for i, e := range t.Tuple {
-				if i > 0 {
-					b.WriteString(";")
-				}
-				fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
-			}
-			b.WriteString("; };\n")
-			emittedTuple[k] = true
+			emitTuple(k)
 			progress = true
 			totalRemaining--
 		}
-		// Try every struct in declared order.
 		for _, k := range r.structOrder {
 			if emittedStruct[k] {
 				continue
 			}
-			t := r.structShapes[k]
-			ready := true
-			for _, dep := range depsOf(t) {
-				if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
-					ready = false
-					break
-				}
-				if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
-					ready = false
-					break
-				}
-			}
-			if !ready {
+			if !depReady(depsOf(r.structShapes[k])) {
 				continue
 			}
-			if !wroteStructHeader {
-				b.WriteString("\n/* Struct shape definitions. */\n")
-				wroteStructHeader = true
+			emitStruct(k)
+			progress = true
+			totalRemaining--
+		}
+		for _, k := range r.enumOrder {
+			if emittedEnum[k] {
+				continue
 			}
-			fmt.Fprintf(b, "struct %s {", k)
-			for i, f := range t.Fields {
-				if i > 0 {
-					b.WriteString(";")
-				}
-				fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
+			if !depReady(depsOf(r.enumShapes[k])) {
+				continue
 			}
-			b.WriteString("; };\n")
-			emittedStruct[k] = true
+			emitEnum(k)
 			progress = true
 			totalRemaining--
 		}
@@ -478,42 +499,19 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 			// regardless rather than spin forever. The C compiler will
 			// surface the underlying issue if any.
 			for _, k := range r.tupleOrder {
-				if emittedTuple[k] {
-					continue
+				if !emittedTuple[k] {
+					emitTuple(k)
 				}
-				if !wroteTupleHeader {
-					b.WriteString("\n/* Tuple shape definitions. */\n")
-					wroteTupleHeader = true
-				}
-				t := r.tupleShapes[k]
-				fmt.Fprintf(b, "struct %s {", k)
-				for i, e := range t.Tuple {
-					if i > 0 {
-						b.WriteString(";")
-					}
-					fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
-				}
-				b.WriteString("; };\n")
-				emittedTuple[k] = true
 			}
 			for _, k := range r.structOrder {
-				if emittedStruct[k] {
-					continue
+				if !emittedStruct[k] {
+					emitStruct(k)
 				}
-				if !wroteStructHeader {
-					b.WriteString("\n/* Struct shape definitions. */\n")
-					wroteStructHeader = true
+			}
+			for _, k := range r.enumOrder {
+				if !emittedEnum[k] {
+					emitEnum(k)
 				}
-				t := r.structShapes[k]
-				fmt.Fprintf(b, "struct %s {", k)
-				for i, f := range t.Fields {
-					if i > 0 {
-						b.WriteString(";")
-					}
-					fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
-				}
-				b.WriteString("; };\n")
-				emittedStruct[k] = true
 			}
 			break
 		}

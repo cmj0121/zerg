@@ -58,14 +58,12 @@ func v04RejectsDir(t *testing.T) string {
 	return filepath.Join(v04CorpusDir(t), "rejects")
 }
 
-// v04BuildHalfSkip lists programs whose build half is known-broken at v0.4
-// because of a codegen forward-declaration bug for `list[T]` enum payloads.
+// v04BuildHalfSkip lists programs whose build half is known-broken at v0.4.
 // The interpret half still runs and is asserted normally; the build-half
-// assertion is skipped with an explicit log so the skip is visible and the
-// allow-list shrinks to nothing once the codegen fix lands.
-var v04BuildHalfSkip = map[string]string{
-	"25_list_enum_list_payload": "codegen forward-declaration bug: list[T] inside enum payload",
-}
+// assertion is skipped with an explicit log so the skip is visible. Empty
+// today — kept in place so future codegen escapes have a documented
+// allow-list to land in without reshaping the harness.
+var v04BuildHalfSkip = map[string]string{}
 
 // classifyV04Programs walks the v0.4 success corpus directory, partitions
 // every .zg into success / notimpl, and rejects any .zg without a sibling

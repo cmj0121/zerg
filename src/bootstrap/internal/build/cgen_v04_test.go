@@ -319,6 +319,32 @@ print t
 	}
 }
 
+// TestCgenEnumWithListPayloadTypedefOrder — when an enum variant embeds a
+// `list[T]` payload by value, the per-shape `struct zerg_list_<T>` body
+// MUST be emitted before the enum's body or the C compiler reports an
+// `incomplete type` error on the union field. Regression for v0.4 corpus
+// program 25.
+func TestCgenEnumWithListPayloadTypedefOrder(t *testing.T) {
+	src := `enum Frame { Args(list[int]), Empty }
+let f := Frame.Args([1, 2, 3])
+print f
+`
+	out := mustEmit(t, src)
+	listDef := "struct zerg_list_int64_t { int64_t* data;"
+	enumDef := "struct zerg_enum_Frame {"
+	li := strings.Index(out, listDef)
+	ei := strings.Index(out, enumDef)
+	if li < 0 {
+		t.Fatalf("list shape definition not found in output:\n%s", out)
+	}
+	if ei < 0 {
+		t.Fatalf("enum shape definition not found in output:\n%s", out)
+	}
+	if li > ei {
+		t.Errorf("list[int] body must precede enum Frame body (list@%d, enum@%d)", li, ei)
+	}
+}
+
 // TestCgenEnumPayloadLiteralRuns — `Token.Ident("foo")` constructs the
 // tag+payload value and prints it in the documented format.
 func TestCgenEnumPayloadLiteralRuns(t *testing.T) {

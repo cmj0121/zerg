@@ -1,0 +1,10 @@
+struct Counter { count: int }
+
+impl Counter {
+    fn double() -> int {
+        return this.count * 2
+    }
+}
+
+let c := Counter { count: 7 }
+print c.double()

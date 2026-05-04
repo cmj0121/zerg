@@ -1,0 +1,12 @@
+enum Token {
+    Eof,
+    Plus,
+    Minus
+}
+
+let e := Token.Eof
+let p := Token.Plus
+let m := Token.Minus
+print e
+print p
+print m

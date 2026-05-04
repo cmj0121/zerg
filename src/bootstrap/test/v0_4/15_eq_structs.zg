@@ -1,0 +1,16 @@
+struct Counter { count: int, label: str }
+
+let a := Counter { count: 5, label: "a" }
+let b := Counter { count: 5, label: "a" }
+let c := Counter { count: 6, label: "a" }
+let d := Counter { count: 5, label: "z" }
+
+if a == b {
+    print "ab eq"
+}
+if a != c {
+    print "ac neq"
+}
+if a != d {
+    print "ad neq"
+}

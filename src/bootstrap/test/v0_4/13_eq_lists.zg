@@ -1,0 +1,14 @@
+let a := [1, 2, 3]
+let b := [1, 2, 3]
+let c := [1, 2, 4]
+let d := [1, 2]
+
+if a == b {
+    print "ab eq"
+}
+if a != c {
+    print "ac neq"
+}
+if a != d {
+    print "ad neq"
+}

@@ -1,0 +1,16 @@
+spec Hashable {
+    fn hash() -> int {
+        return 0
+    }
+}
+
+struct Counter { count: int }
+
+impl Counter for Hashable {
+    fn hash() -> int {
+        return this.count
+    }
+}
+
+let c := Counter { count: 42 }
+print c.hash()

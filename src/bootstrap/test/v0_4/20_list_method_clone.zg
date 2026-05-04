@@ -1,0 +1,5 @@
+mut xs := [1, 2, 3]
+mut ys := xs.clone()
+ys.push(99)
+print xs.len()
+print ys.len()

@@ -1,0 +1,10 @@
+spec Printable {
+    fn to_string() -> str
+}
+
+struct Empty { tag: int }
+
+impl Empty for Printable {}
+
+let e := Empty { tag: 0 }
+print e.to_string()

@@ -1,0 +1,16 @@
+enum Token {
+    Pair(int, str),
+    Eof
+}
+
+let t := Token.Pair(7, "seven")
+match t {
+    Token.Pair(_, label) => print label
+    Token.Eof => print "eof"
+}
+
+let u := Token.Pair(99, "ignored")
+match u {
+    Token.Pair(num, _) => print num
+    Token.Eof => print "eof"
+}

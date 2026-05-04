@@ -1,0 +1,16 @@
+spec Printable {
+    fn to_string() -> str
+}
+
+struct Counter { count: int }
+impl Counter for Printable {
+    fn to_string() -> str {
+        return "counter"
+    }
+}
+
+struct Holder { g: Printable }
+
+let c := Counter { count: 7 }
+let h := Holder { g: c }
+print h.g.to_string()

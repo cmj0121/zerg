@@ -1,0 +1,2 @@
+Token.Ident(hello)
+Token.Number(42, decimal)

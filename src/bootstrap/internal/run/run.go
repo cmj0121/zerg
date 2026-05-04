@@ -376,14 +376,18 @@ func (in *interp) execTupleDestructure(tb *syntax.TupleBinding, value syntax.Exp
 // execAssign mutates an existing binding. typeck has already checked the
 // target is mut and the rhs type matches; here we just do the operation.
 //
-// At v0.3 Unit 1 the parser admits list-element LHS (`xs[i] = v`) but the
-// interpreter / borrow checker land in later units. Until then, an IndexExpr
-// LHS that somehow reaches the runtime is reported as "work in progress"
-// instead of crashing on a type-assertion.
+// Two LHS shapes are admitted: a bare IdentExpr (`x = v`) which writes the
+// named slot in scope, and an IndexExpr (`xs[i] = v`) which writes through a
+// list slot's slice header at the given position. typeck and the borrow
+// checker have already verified mutability and aliasing; the interpreter
+// only does the work.
 func (in *interp) execAssign(s *syntax.AssignStmt) error {
+	if idx, ok := s.Target.(*syntax.IndexExpr); ok {
+		return in.execIndexAssign(s, idx)
+	}
 	target, ok := s.Target.(*syntax.IdentExpr)
 	if !ok {
-		return fmt.Errorf("v0.3 work in progress: list-element assignment is not yet supported by the interpreter (at %s)", s.Pos)
+		return fmt.Errorf("internal: unsupported assignment target %T at %s", s.Target, s.Pos)
 	}
 	slot, ok := in.lookup(target.Name)
 	if !ok {
@@ -420,6 +424,44 @@ func (in *interp) execAssign(s *syntax.AssignStmt) error {
 		return fmt.Errorf("internal: unknown assign op %s at %s", s.Op, s.Pos)
 	}
 	return err
+}
+
+// execIndexAssign handles `xs[i] = v`. The receiver must be a bare named
+// list (typeck and the borrow checker have already enforced this); we look
+// up the slot, evaluate the index, range-check it, and write a deep copy of
+// the rhs through the slice header at the indexed position.
+//
+// Only AssignSet (`=`) is admitted on a list element — compound assigns
+// (`xs[i] += 1`) are out of scope at v0.3 because typeck doesn't yet plumb
+// them through the IndexExpr LHS path. Any compound op that reaches here
+// is a typeck bug; we report it rather than guess.
+func (in *interp) execIndexAssign(s *syntax.AssignStmt, idx *syntax.IndexExpr) error {
+	id, ok := idx.Receiver.(*syntax.IdentExpr)
+	if !ok {
+		return fmt.Errorf("internal: list-element assignment requires a named list at %s", s.Pos)
+	}
+	slot, ok := in.lookup(id.Name)
+	if !ok {
+		return fmt.Errorf("internal: undefined name %q at %s", id.Name, s.Pos)
+	}
+	iv, err := in.evalExpr(idx.Index)
+	if err != nil {
+		return err
+	}
+	rhs, err := in.evalExpr(s.Value)
+	if err != nil {
+		return err
+	}
+	if s.Op != syntax.AssignSet {
+		return fmt.Errorf("internal: list-element compound assign %s not supported at %s", s.Op, s.Pos)
+	}
+	n := int64(len(slot.List))
+	i := iv.Int
+	if i < 0 || i >= n {
+		return fmt.Errorf("runtime error at %s: list index %d out of range [0..%d)", s.Pos, i, n)
+	}
+	slot.List[i] = copyValue(rhs)
+	return nil
 }
 
 // execIf walks the if-elif-else chain. A matched branch executes its block

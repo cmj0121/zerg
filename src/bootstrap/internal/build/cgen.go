@@ -237,12 +237,21 @@ func (r *shapeRegistry) emitForwardDecls(b *strings.Builder) {
 // types, plus the variant-index macros for each enum.
 //
 // Order matters: a complete C struct definition needs the COMPLETE type of
-// each field, not just a forward declaration. Order from no-deps to
-// most-dependent: enum macros (depend on nothing), then struct definitions
-// in reverse-topological order over struct→struct edges (typeck has rejected
-// struct cycles so a topo sort exists), then tuples (may contain structs),
-// then lists (may contain structs and tuples). Enums are emitted as
-// `int32_t` typedefs in emitForwardDecls so they're already complete.
+// each composite field (a forward declaration is enough only behind a
+// pointer). Strategy:
+//
+//   * Enum macros first — depend on nothing.
+//   * List shape definitions next — every list field is a pointer-to-element,
+//     so element types only need their forward decl (already emitted in
+//     emitForwardDecls). Lists therefore have no shape-def dependency on
+//     other shapes and can be emitted en bloc.
+//   * Tuple and struct shape definitions in a unified topological sort.
+//     A tuple-of-struct needs the struct's full definition; a struct-of-
+//     tuple needs the tuple's full definition. Handling them as one
+//     dependency graph (tuple/struct → tuple/struct via composite fields)
+//     respects whichever direction the user wrote.
+//
+// typeck has rejected composite cycles so the fixed-point loop terminates.
 func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 	if len(r.enumOrder) > 0 {
 		b.WriteString("/* Enum variant indices. */\n")
@@ -254,32 +263,106 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 		}
 	}
 
-	if len(r.structOrder) > 0 {
-		b.WriteString("\n/* Struct shape definitions. */\n")
+	if len(r.listOrder) > 0 {
+		b.WriteString("\n/* List shape definitions. */\n")
 	}
-	// Topo-sort: emit a struct only after every struct it transitively
-	// references via a field has been emitted. typeck has rejected cycles so
-	// a fixed-point loop terminates in O(N) passes.
+	for _, k := range r.listOrder {
+		t := r.listShapes[k]
+		elem := cTypeName(t.Element)
+		fmt.Fprintf(b, "struct %s { %s* data; size_t len; };\n", k, elem)
+	}
+
+	// Unified topo over tuple and struct shapes. depsOf returns the mangled
+	// names of OTHER tuple/struct shapes whose full definition is needed
+	// before this one can be emitted. Composite list dependencies are absent
+	// because lists are already complete by this point.
+	depsOf := func(t *syntax.Type) []string {
+		var out []string
+		var fields []*syntax.Type
+		if t.Kind == syntax.TypeTuple {
+			fields = append(fields, t.Tuple...)
+		} else if t.Kind == syntax.TypeStruct {
+			for _, f := range t.Fields {
+				fields = append(fields, f.Type)
+			}
+		}
+		for _, ft := range fields {
+			if ft == nil {
+				continue
+			}
+			if ft.Kind == syntax.TypeStruct || ft.Kind == syntax.TypeTuple {
+				out = append(out, mangleType(ft))
+			}
+		}
+		return out
+	}
+
+	emittedTuple := map[string]bool{}
 	emittedStruct := map[string]bool{}
-	for len(emittedStruct) < len(r.structOrder) {
+	wroteTupleHeader := false
+	wroteStructHeader := false
+	totalRemaining := len(r.tupleOrder) + len(r.structOrder)
+	for totalRemaining > 0 {
 		progress := false
+		// Try every tuple in declared order.
+		for _, k := range r.tupleOrder {
+			if emittedTuple[k] {
+				continue
+			}
+			t := r.tupleShapes[k]
+			ready := true
+			for _, dep := range depsOf(t) {
+				if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
+					ready = false
+					break
+				}
+				if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				continue
+			}
+			if !wroteTupleHeader {
+				b.WriteString("\n/* Tuple shape definitions. */\n")
+				wroteTupleHeader = true
+			}
+			fmt.Fprintf(b, "struct %s {", k)
+			for i, e := range t.Tuple {
+				if i > 0 {
+					b.WriteString(";")
+				}
+				fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
+			}
+			b.WriteString("; };\n")
+			emittedTuple[k] = true
+			progress = true
+			totalRemaining--
+		}
+		// Try every struct in declared order.
 		for _, k := range r.structOrder {
 			if emittedStruct[k] {
 				continue
 			}
 			t := r.structShapes[k]
 			ready := true
-			for _, f := range t.Fields {
-				if f.Type != nil && f.Type.Kind == syntax.TypeStruct {
-					depKey := mangleType(f.Type)
-					if _, hasDep := r.structShapes[depKey]; hasDep && !emittedStruct[depKey] {
-						ready = false
-						break
-					}
+			for _, dep := range depsOf(t) {
+				if _, ok := r.tupleShapes[dep]; ok && !emittedTuple[dep] {
+					ready = false
+					break
+				}
+				if _, ok := r.structShapes[dep]; ok && !emittedStruct[dep] {
+					ready = false
+					break
 				}
 			}
 			if !ready {
 				continue
+			}
+			if !wroteStructHeader {
+				b.WriteString("\n/* Struct shape definitions. */\n")
+				wroteStructHeader = true
 			}
 			fmt.Fprintf(b, "struct %s {", k)
 			for i, f := range t.Fields {
@@ -291,50 +374,52 @@ func (r *shapeRegistry) emitTypedefs(b *strings.Builder) {
 			b.WriteString("; };\n")
 			emittedStruct[k] = true
 			progress = true
+			totalRemaining--
 		}
 		if !progress {
 			// Should not happen post-typeck cycle check; emit remaining
-			// regardless rather than spin forever.
-			for _, k := range r.structOrder {
-				if !emittedStruct[k] {
-					t := r.structShapes[k]
-					fmt.Fprintf(b, "struct %s {", k)
-					for i, f := range t.Fields {
-						if i > 0 {
-							b.WriteString(";")
-						}
-						fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
-					}
-					b.WriteString("; };\n")
-					emittedStruct[k] = true
+			// regardless rather than spin forever. The C compiler will
+			// surface the underlying issue if any.
+			for _, k := range r.tupleOrder {
+				if emittedTuple[k] {
+					continue
 				}
+				if !wroteTupleHeader {
+					b.WriteString("\n/* Tuple shape definitions. */\n")
+					wroteTupleHeader = true
+				}
+				t := r.tupleShapes[k]
+				fmt.Fprintf(b, "struct %s {", k)
+				for i, e := range t.Tuple {
+					if i > 0 {
+						b.WriteString(";")
+					}
+					fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
+				}
+				b.WriteString("; };\n")
+				emittedTuple[k] = true
+			}
+			for _, k := range r.structOrder {
+				if emittedStruct[k] {
+					continue
+				}
+				if !wroteStructHeader {
+					b.WriteString("\n/* Struct shape definitions. */\n")
+					wroteStructHeader = true
+				}
+				t := r.structShapes[k]
+				fmt.Fprintf(b, "struct %s {", k)
+				for i, f := range t.Fields {
+					if i > 0 {
+						b.WriteString(";")
+					}
+					fmt.Fprintf(b, " %s %s", cTypeName(f.Type), mangleField(f.Name))
+				}
+				b.WriteString("; };\n")
+				emittedStruct[k] = true
 			}
 			break
 		}
-	}
-
-	if len(r.tupleOrder) > 0 {
-		b.WriteString("\n/* Tuple shape definitions. */\n")
-	}
-	for _, k := range r.tupleOrder {
-		t := r.tupleShapes[k]
-		fmt.Fprintf(b, "struct %s {", k)
-		for i, e := range t.Tuple {
-			if i > 0 {
-				b.WriteString(";")
-			}
-			fmt.Fprintf(b, " %s e%d", cTypeName(e), i)
-		}
-		b.WriteString("; };\n")
-	}
-
-	if len(r.listOrder) > 0 {
-		b.WriteString("\n/* List shape definitions. */\n")
-	}
-	for _, k := range r.listOrder {
-		t := r.listShapes[k]
-		elem := cTypeName(t.Element)
-		fmt.Fprintf(b, "struct %s { %s* data; size_t len; };\n", k, elem)
 	}
 
 	if len(r.listOrder)+len(r.tupleOrder)+len(r.structOrder)+len(r.enumOrder) > 0 {
@@ -918,13 +1003,15 @@ func (g *cgen) emitTupleDestructure(tb *syntax.TupleBinding, value syntax.Expr, 
 
 // emitAssign lowers any assign-op to the C equivalent.
 func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
-	// v0.3 Unit 1 admits IndexExpr LHS at parse time, but typeck rejects it
-	// until Unit 3 lands. Codegen therefore only sees IdentExpr targets in
-	// well-formed programs; the IndexExpr arm here is a defensive stub so a
-	// stray AST doesn't surface as a nil deref.
+	// `xs[i] = v` lowers to a bounds-checked write through the list's data
+	// pointer. Other LHS shapes are typeck/borrow-check rejected before they
+	// reach codegen; only bare IdentExpr targets remain.
+	if idx, ok := s.Target.(*syntax.IndexExpr); ok {
+		return g.emitIndexAssign(s, idx)
+	}
 	target, ok := s.Target.(*syntax.IdentExpr)
 	if !ok {
-		return fmt.Errorf("v0.3 work in progress: list-element assignment is not yet emitted by the C backend (at %s)", s.Pos)
+		return fmt.Errorf("codegen: unsupported assignment target %T at %s", s.Target, s.Pos)
 	}
 	rhs, err := g.exprStr(s.Value)
 	if err != nil {
@@ -969,6 +1056,46 @@ func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
 	default:
 		return fmt.Errorf("codegen: unknown assign op %s at %s", s.Op, s.Pos)
 	}
+	return nil
+}
+
+// emitIndexAssign lowers `xs[i] = v`. The receiver must be a bare named list
+// (typeck and borrow check have enforced this); we look up its mangled name,
+// bounds-check the index, and assign through the data pointer with a deep
+// copy of the rhs so the source rhs binding stays independent of the slot.
+//
+// Only AssignSet is admitted on a list element; compound assigns through a
+// list element are out of scope at v0.3.
+func (g *cgen) emitIndexAssign(s *syntax.AssignStmt, idx *syntax.IndexExpr) error {
+	id, ok := idx.Receiver.(*syntax.IdentExpr)
+	if !ok {
+		return fmt.Errorf("codegen: list-element assignment requires a named list at %s", s.Pos)
+	}
+	if s.Op != syntax.AssignSet {
+		return fmt.Errorf("codegen: list-element compound assign %s not supported at %s", s.Op, s.Pos)
+	}
+	listT := idx.Receiver.Type()
+	if listT == nil || listT.Kind != syntax.TypeList {
+		return fmt.Errorf("codegen: list-element assign target is not a list at %s", s.Pos)
+	}
+	is, err := g.exprStr(idx.Index)
+	if err != nil {
+		return err
+	}
+	rhs, err := g.exprStr(s.Value)
+	if err != nil {
+		return err
+	}
+	rhs = copyExpr(listT.Element, rhs)
+	posStr := fmt.Sprintf("%d:%d", s.Pos.Line, s.Pos.Column)
+	nameS := mangle(id.Name)
+	g.writeIndent()
+	// Bounds-check then write through the slice header. We compute the index
+	// once into a local so the bounds check sees the same value the write
+	// uses, and so a side-effecting index expression is evaluated once.
+	fmt.Fprintf(&g.b,
+		"{ int64_t __i = %s; zerg_index_check(__i, %s.len, %q); %s.data[__i] = %s; }\n",
+		is, nameS, posStr, nameS, rhs)
 	return nil
 }
 

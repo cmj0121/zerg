@@ -35,7 +35,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.7** — concurrency runtime.
 - [x] **v0.8** — standard library.
 - [x] **v0.9** — developer tooling.
-- [ ] **v0.10** — hardening and language reference.
+- [x] **v0.10** — hardening and language reference.
 - [ ] **v1.0** — source stability.
 
 A phase ships when each example's stdout matches between `zerg run` and `zerg build` — byte-identical
@@ -46,10 +46,12 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
 (composite data), v0.3 (borrow checking), v0.4 (polymorphism), v0.5 (modules), v0.6 (generics
-and null-safety), v0.7 (concurrency runtime), v0.8 (standard library), and v0.9 (process surface
-and time, plus the `never` bottom type) share the same `zerg` binary; earlier examples
+and null-safety), v0.7 (concurrency runtime), v0.8 (standard library), v0.9 (process surface
+and time, plus the `never` bottom type), and v0.10 (canonical formatter, language reference,
+diagnostic hardening) share the same `zerg` binary; earlier examples
 (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 / v0.6 / v0.7 / v0.8
-corpora) keep working unchanged.
+corpora) keep working unchanged. The toolchain ships four subcommands: `zerg run`, `zerg build`,
+`zerg fmt` (new at v0.10), and `zerg repl`.
 
 ### Prerequisites
 
@@ -117,7 +119,7 @@ deterministic.
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.9 — accepts the v0.9 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time)
+# Zerg REPL v0.10 — accepts the v0.10 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time, fmt)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -149,7 +151,7 @@ beyond the current toolchain version with a clean message:
 
 ```sh
 ./src/bootstrap/bin/zerg run examples/13_asm.zg
-# zerg: examples/13_asm.zg requires v0.10 (current is v0.9)
+# zerg: examples/13_asm.zg requires v0.11 (current is v0.10)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -837,8 +839,6 @@ are unchanged. What's new:
   `__builtin <name>` instead of a `{ body }`; the parser admits the marker only inside files whose
   path begins with `std/` in the embedded FS, and only when their `# requires:` is `>= v0.8`. User
   code that writes `__builtin` is rejected at typeck — the marker is reserved for the toolchain.
-- **Provisional surface through v1.0.** Stdlib fn signatures may change before v1.0 source
-  stability lands.
 - **Out of scope at v0.8, deferred.** `os.argv` and `os.exit` (need the `never` / bottom type and
   a main-signature change), `time.now` / `sleep` / deadlines, floating-point math (Zerg has no
   float type yet), `pow` / `sqrt`, regex, JSON, networking, path manipulation (`path.join` /
@@ -1095,6 +1095,66 @@ All the features are based on my needs and my dreams.
 
 ## Release notes
 
+### v0.10 — hardening + language reference
+
+- **`zerg fmt` canonical formatter.** AST-driven pretty-printer with **comment preservation**.
+  Canonical output: 4-space indent, K&R braces (`fn name(...) -> T {` on one line), trailing
+  commas in multi-line lists / struct lits / enum variant lists / match arms, exactly one blank
+  line between top-level decls, zero blank lines inside blocks. Round-trip property:
+  `fmt(fmt(x)) == fmt(x)`. v0.6+ sugar (`T?`, `?.`, `??`, arrow types) is preserved verbatim, not
+  desugared. CLI surface:
+  - `zerg fmt file.zg` — writes formatted output to stdout.
+  - `zerg fmt -w file.zg [file2.zg ...]` — rewrites in place.
+  - `zerg fmt --check file.zg [...]` — exits **0** if all inputs are already canonical, **1** if
+    any need reformatting (paths printed to stderr), **2** on parse error.
+- **Comment preservation in `zerg fmt`.** Leading-line `#` comments are preserved verbatim and
+  attached to the next non-blank statement. All file-head `#` lines (license headers, attribution,
+  shebangs, `# requires:`) survive a round trip unchanged. **v0.10 limitation:** trailing inline
+  comments on the same line as a statement (`x = 1  # tail`) are **stripped** — the canonical
+  v0.0–v0.9 corpus uses leading-line comments throughout, so the stripping is rare in practice.
+  v1.0+ may add inline-comment preservation.
+- **Reference docs.** [`docs/LANGUAGE.md`](docs/LANGUAGE.md) is the formal language reference —
+  EBNF-style grammar, type system (canonical types, subtyping including `never`, generic
+  instantiation rules), evaluation order and ownership semantics, defer / concurrency / `?`
+  propagation rules, reserved words and reserved type names. [`docs/STDLIB.md`](docs/STDLIB.md) is
+  the per-module fn reference for `std/io`, `std/strings`, `std/math`, `std/os`, and `std/time`,
+  with signatures, error variants, and runnable examples.
+- **Stdlib signatures locked.** Stdlib fn signatures (`std/io`, `std/strings`, `std/math`,
+  `std/os`, `std/time`) are **frozen at v0.10** through v1.0. The "provisional" marker that
+  shipped at v0.8 is dropped.
+- **Diagnostic hardening.** Every reject-corpus diagnostic now carries a `file:line:col` prefix
+  for the offending source span, audited bottom-up against the v0.0–v0.9 reject corpus. Cascade
+  diagnostics are suppressed: a single source error produces a single user-facing message, never
+  a triple from continuation parsing.
+- **Sample `zerg fmt` round trip.** Comments survive verbatim; an unindented body is laid out
+  canonically.
+
+```sh
+$ cat noisy.zg
+# top-of-file note
+fn add(a:int,b:int)->int{
+return a+b
+}
+
+$ ./src/bootstrap/bin/zerg fmt noisy.zg
+# top-of-file note
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+```
+
+- **Out of scope at v0.10, deferred to v1.0+.** `zerg lint` (unused vars / dead code / style
+  rules), `zerg debug` / debug-info / profiling, trailing inline comment preservation in
+  `zerg fmt`, `sync[T]` mutex-protected shared value, `raise` / `try` / `except` exception
+  machinery (`?` propagation is sufficient at v0.10), random tie-break in `select`, `defer` in
+  nested blocks (only fn-body scope admitted), channel direction marks (`<-chan[T]`,
+  `chan<-[T]`), cancellation contexts / deadlines / signals, float type and float math, regex /
+  JSON / network, stdin streaming, and an opinionated line-wrap heuristic in `zerg fmt`.
+- **Backward compatibility.** Every v0.0–v0.9 corpus continues to pass under `make test`; the
+  v0.0–v0.9 programs are byte-equal canonical under `zerg fmt --check`. The REPL banner bumps to
+  v0.10 and adds "fmt" to the surface list; `cliVersion` advances to `0.10.0`; `version.Minor`
+  advances to `10`.
+
 ### v0.9 — process surface + time (centrepiece: `never`)
 
 - **`never` bottom type.** A type that has no values and is a subtype of every concrete type. A fn
@@ -1179,8 +1239,6 @@ All the features are based on my needs and my dreams.
   and `zerg_os_*` runtime fns under a `programUsesV08` gate — they emit only when the program
   actually references a v0.8 builtin, so v0.0–v0.7 codegen output stays byte-identical to the
   pre-v0.8 baseline.
-- The stdlib surface is **provisional** through v1.0. Fn signatures may change before source
-  stability ships.
 - Trust boundary: `read_file` / `write_file` operate on the host filesystem with no path sandbox —
   `read_file("../../etc/passwd")` works. Documented behaviour at v0.8; v0.9+ developer tooling may
   layer in capability scoping.

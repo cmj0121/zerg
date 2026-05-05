@@ -24,7 +24,7 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	Minor = 9
+	Minor = 10
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

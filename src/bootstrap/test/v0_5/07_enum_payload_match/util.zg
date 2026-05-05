@@ -1,6 +1,6 @@
 pub enum Outcome {
     Ok(int),
-    Err(str),
+    Err(str)
 }
 
 pub fn parse(input: str) -> Outcome {

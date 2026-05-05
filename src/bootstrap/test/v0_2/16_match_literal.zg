@@ -1,11 +1,11 @@
 fn name(n: int) -> str {
-  match n {
-    1 => return "one"
-    2 => return "two"
-    3 => return "three"
-    _ => return "other"
-  }
-  return "unreachable"
+    match n {
+        1 => return "one"
+        2 => return "two"
+        3 => return "three"
+        _ => return "other"
+    }
+    return "unreachable"
 }
 
 print name(1)

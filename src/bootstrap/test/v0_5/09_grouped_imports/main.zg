@@ -1,7 +1,5 @@
-import (
-    "a"
-    "b"
-)
+import "a"
+import "b"
 
 print a.alpha()
 print b.beta()

@@ -1,0 +1,4 @@
+# requires: v0.9
+import "std/time"
+
+print time.now_ms()

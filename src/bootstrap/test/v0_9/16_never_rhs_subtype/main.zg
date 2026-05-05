@@ -1,0 +1,18 @@
+# requires: v0.9
+import "std/os"
+
+fn maybe_int(b: bool) -> int {
+    if b {
+        return 42
+    }
+    let x: int = os.exit(7)
+    return x
+}
+
+fn main() -> int {
+    let y := maybe_int(false)
+    print y
+    return 0
+}
+
+main()

@@ -1,0 +1,7 @@
+# requires: v0.9
+
+fn boom() -> never {
+    let x := 1
+}
+
+print "unreachable"

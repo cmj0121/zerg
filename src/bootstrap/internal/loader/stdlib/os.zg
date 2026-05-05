@@ -1,3 +1,7 @@
-# requires: v0.8
+# requires: v0.9
 
 pub fn env(name: str) -> Option[str] __builtin os_env
+
+pub fn argv() -> list[str] __builtin os_argv
+
+pub fn exit(code: int) -> never __builtin os_exit

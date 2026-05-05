@@ -401,7 +401,17 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 	case *AssignStmt:
 		return c.checkAssign(s)
 	case *ExprStmt:
-		return c.checkExprRead(s.Expr)
+		if err := c.checkExprRead(s.Expr); err != nil {
+			return err
+		}
+		// v0.9 Unit 1: a tail call to a -> never fn at statement position
+		// is a divergence point — same shape as `return` for branch-merge
+		// purposes. Match arms / select arms / if arms whose body ends in
+		// such a call participate in the diverged-branch agreement rule.
+		if exprIsDivergingNeverCall(s.Expr) {
+			c.diverged = true
+		}
+		return nil
 	case *IfStmt:
 		return c.checkIf(s)
 	case *ForStmt:

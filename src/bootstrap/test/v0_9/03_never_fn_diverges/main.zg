@@ -1,0 +1,14 @@
+# requires: v0.9
+import "std/os"
+
+fn shutdown(code: int) -> never {
+    os.exit(code)
+}
+
+fn boom() -> never {
+    shutdown(6)
+}
+
+print "calling"
+boom()
+print "unreachable"

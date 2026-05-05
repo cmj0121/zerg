@@ -1,0 +1,9 @@
+# requires: v0.9
+import "std/os"
+
+fn body() {
+    defer print "deferred"
+    os.exit(0)
+}
+
+body()

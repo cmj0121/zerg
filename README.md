@@ -34,7 +34,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.6** — generics and null-safety.
 - [x] **v0.7** — concurrency runtime.
 - [x] **v0.8** — standard library.
-- [ ] **v0.9** — developer tooling.
+- [x] **v0.9** — developer tooling.
 - [ ] **v0.10** — hardening and language reference.
 - [ ] **v1.0** — source stability.
 
@@ -46,9 +46,10 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
 (composite data), v0.3 (borrow checking), v0.4 (polymorphism), v0.5 (modules), v0.6 (generics
-and null-safety), v0.7 (concurrency runtime), and v0.8 (standard library) share the same `zerg`
-binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 /
-v0.6 / v0.7 corpora) keep working unchanged.
+and null-safety), v0.7 (concurrency runtime), v0.8 (standard library), and v0.9 (process surface
+and time, plus the `never` bottom type) share the same `zerg` binary; earlier examples
+(`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 / v0.6 / v0.7 / v0.8
+corpora) keep working unchanged.
 
 ### Prerequisites
 
@@ -116,7 +117,7 @@ deterministic.
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.8 — accepts the v0.8 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib)
+# Zerg REPL v0.9 — accepts the v0.9 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -148,7 +149,7 @@ beyond the current toolchain version with a clean message:
 
 ```sh
 ./src/bootstrap/bin/zerg run examples/13_asm.zg
-# zerg: examples/13_asm.zg requires v0.10 (current is v0.8)
+# zerg: examples/13_asm.zg requires v0.10 (current is v0.9)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -171,9 +172,11 @@ advertises v0.7 and now passes the gate; the surface it exercises (`chan[T]`, `s
 `select`, `defer`) is supported, though the example's body may still rely on shapes outside the
 v0.7 corpus. The v0.8 stdlib surface (`import "std/io"`, `import "std/strings"`, `import "std/math"`,
 `import "std/os"`) does not have a dedicated `examples/` entry — the authoritative coverage lives
-in `test/v0_8/`. The authoritative parity corpora live at `src/bootstrap/test/v0_2/`,
-`src/bootstrap/test/v0_3/`, `src/bootstrap/test/v0_4/`, `src/bootstrap/test/v0_5/`,
-`src/bootstrap/test/v0_6/`, `src/bootstrap/test/v0_7/`, and `src/bootstrap/test/v0_8/`.
+in `test/v0_8/`. The v0.9 process surface (`os.argv`, `os.exit`, `std/time`) and the `never`
+bottom type also have no dedicated `examples/` entry — coverage lives in `test/v0_9/`. The
+authoritative parity corpora live at `src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`,
+`src/bootstrap/test/v0_4/`, `src/bootstrap/test/v0_5/`, `src/bootstrap/test/v0_6/`,
+`src/bootstrap/test/v0_7/`, `src/bootstrap/test/v0_8/`, and `src/bootstrap/test/v0_9/`.
 
 ### Supported syntax at v0.1
 
@@ -915,6 +918,93 @@ print strings.parse_int("12x")
 # Result.Err(ParseError.InvalidDigit)
 ```
 
+### Supported syntax at v0.9
+
+v0.9 layers a process surface (`os.argv`, `os.exit`), a minimum time module (`std/time`), and the
+`never` bottom type on top of v0.8; everything in v0.0 / v0.1 / v0.2 / v0.3 / v0.4 / v0.5 / v0.6
+/ v0.7 / v0.8 still parses and runs. Single-file programs that don't use `never`, `os.argv`,
+`os.exit`, or `std/time` are unchanged. What's new:
+
+- **`never` bottom type.** A type with no values; subtype of every other type. A fn declared
+  `-> never` cannot return — every code path must diverge (call another `-> never` fn, infinite
+  loop). At a call site, a `-> never` call typechecks as any expected type, so
+  `let x: int = exit(1)` and a `match` arm whose body is `exit(1)` are both well-formed. Match
+  exhaustiveness treats a `-> never` arm as diverging (same machinery as v0.7 select). The IDENT
+  `never` is recognized only at type position; user-declared `struct never` / `enum never` /
+  `let never := …` reject at typeck.
+- **`os.argv() -> list[str]`.** Returns the program's command-line arguments. Index 0 is the
+  executable / source path under `zerg run` and `zerg build`-then-execute, and the literal string
+  `"<repl>"` under the REPL. **Parity rule for tests:** corpus programs MUST NOT print `argv[0]`
+  directly — the cgen-built binary is launched from a tempdir with an OS-assigned path, while the
+  interpreter half receives whatever the harness sets. Print `argv[1:]` or specific indices `> 0`
+  only.
+- **`os.exit(code: int) -> never`.** Terminates the process with the given exit code. Cannot fall
+  through (the return type is `never`). The REPL surfaces "process exited with code N" but does
+  not terminate the host Go process.
+- **Defer × exit deviation (intentional).** `os.exit()` does **not** drain defers and does **not**
+  join spawned tasks. This is an explicit deviation from v0.7's "defers drain on every exit path
+  including `?`-propagation" contract — it matches Go's `os.Exit` semantics. User code that needs
+  cleanup before exit must call `wg.wait()` and run any cleanup explicitly before `exit()`.
+- **`std/time` (2 fns).** `now_ms() -> int` returns milliseconds since the **first call to
+  `now_ms()` in the running program** — the first call returns `0` on both halves, captured
+  lazily, and subsequent calls return ms-since-first-call. Both halves agree on the absolute
+  return value of every call by call-index, so corpus tests can `print time.now_ms()` without
+  parity violation. `sleep_ms(ms: int) -> bool` blocks at least `ms` milliseconds and always
+  returns `true`; negative `ms` clamps to `0`. POSIX-only — `clock_gettime(CLOCK_MONOTONIC)` and
+  `nanosleep` are required.
+- **Harness `argv:` manifest grammar.** Per-program manifest gains `argv: a b c` — a
+  whitespace-separated list of args after argv[0]; argv[0] is auto-set by the harness.
+- **Out of scope at v0.9, deferred to v0.10+.** `zerg fmt` (canonical formatter), `zerg lint`,
+  `zerg debug` / debug-info / profiling, cancellation contexts and deadlines, signal handlers,
+  stdin streaming (`os.stdin_read_line`), wall-clock formatting and a `Duration` type, float-typed
+  time (Zerg has no float-typed stdlib surface yet). The roadmap line for v0.9 still reads
+  "developer tooling" — fmt / lint / debug land in v0.10 alongside the language reference; v0.9
+  ships the process surface and time primitives needed to write CLI programs end-to-end.
+
+A small v0.9 sample — `never` and `os.exit` together for a precondition failure:
+
+```zerg
+import "std/os"
+
+fn require_positive(n: int) -> never {
+    if n <= 0 {
+        print "expected positive int"
+        os.exit(2)
+    }
+    os.exit(0)
+}
+
+require_positive(-1)
+# expected positive int
+```
+
+`os.argv` printing the arg count and the args after argv[0]:
+
+```zerg
+import "std/os"
+
+let args := os.argv()
+print len(args)
+for i in 1..len(args) {
+    print args[i]
+}
+```
+
+`std/time` measuring an interval; the first `now_ms()` call always returns 0 so both halves
+agree:
+
+```zerg
+import "std/time"
+
+let t0 := time.now_ms()
+time.sleep_ms(50)
+let t1 := time.now_ms()
+print t0
+print t1 >= 30
+# 0
+# true
+```
+
 ### Print format and numeric semantics
 
 Both `zerg run` and `zerg build` implement the same table so stdout is byte-identical:
@@ -1004,6 +1094,60 @@ the project is based on what I dream of.
 All the features are based on my needs and my dreams.
 
 ## Release notes
+
+### v0.9 — process surface + time (centrepiece: `never`)
+
+- **`never` bottom type.** A type that has no values and is a subtype of every concrete type. A fn
+  declared `-> never` cannot return — every code path must diverge. A `-> never` call typechecks
+  as any expected type, so `let x: int = exit(1)` and a `match` arm whose body tail-calls
+  `exit(1)` are both well-formed. Match exhaustiveness extends the v0.7 select branch-merge to
+  treat `-> never` arms as diverging. The IDENT `never` is contextual at type position; user
+  redecls (`struct never`, `enum never`, `let never := …`) reject at typeck with a focused
+  diagnostic.
+- **`std/os` extended with the v0.8-deferred process surface.** `argv() -> list[str]` returns
+  the program's command-line arguments; index 0 is the executable / source path under
+  `zerg run` and `zerg build`-then-execute, and the literal string `"<repl>"` under the REPL.
+  `exit(code: int) -> never` terminates the process with the given exit code. The REPL surfaces
+  "process exited with code N" but does not terminate the host Go process.
+- **Defer × exit is an intentional deviation from v0.7.** v0.7's contract was "defers drain on
+  every exit path including `?`-propagation". v0.9's `os.exit()` is an **explicit deviation** —
+  defers do **not** drain, spawned tasks do **not** join. This matches Go's `os.Exit` semantics.
+  User code that needs cleanup before exit must call `wg.wait()` and run any cleanup explicitly
+  before `exit()`. A corpus reject test pins this behaviour on both halves.
+- **`std/time` minimum surface.** `now_ms() -> int` returns milliseconds since the **first call
+  to `now_ms()` in the running program**, captured lazily at first call. By construction, the
+  first call returns `0` on both halves and both halves agree on the absolute return value of
+  every call by call-index — so corpus tests can `print time.now_ms()` without parity violation.
+  Implementation: a process-global monotonic epoch initialised on first call (Go `time.Time` on
+  the interpreter side, `struct timespec` on the cgen side). `sleep_ms(ms: int) -> bool` blocks
+  at least `ms` milliseconds and returns `true`; negative `ms` clamps to `0` with no error.
+  POSIX-only — the cgen path uses `clock_gettime(CLOCK_MONOTONIC)` and `nanosleep`, which match
+  the existing `-pthread` constraint.
+- **`os.argv[0]` parity rule.** Corpus programs MUST NOT print `argv[0]` directly — the
+  cgen-built binary is launched from a tempdir with an OS-assigned path, while the interpreter
+  half receives whatever the harness sets. Tests print `argv[1:]` or specific indices `> 0` only.
+  The harness lints test programs and rejects any that contain `print argv[0]`.
+- **Harness `argv:` manifest grammar.** Per-program manifest gains `argv: a b c` — a
+  whitespace-separated list of args after argv[0]. Both halves receive the argv list from the
+  harness; cgen's `main(int argc, char **argv)` accepts the kernel's argv, the interpreter's
+  `RunBundleWithOptions` takes an `Argv []string`. The CLI driver passes argv as
+  `[file_path, arg1, arg2, ...]` for `zerg run file.zg arg1 arg2`.
+- **Build-side codegen gate.** The `int main(int, char**)` signature swap and the v0.9 globals
+  emit only when the program references a v0.9 builtin (`os.argv`, `os.exit`, `time.now_ms`,
+  `time.sleep_ms`); v0.0–v0.8 codegen output stays byte-identical to the pre-v0.9 baseline.
+  Mirrors the v0.7 / v0.8 gate machinery.
+- **Note: `zerg fmt`, `zerg lint`, and `zerg debug` are deferred to v0.10** alongside the
+  language reference. The roadmap line for v0.9 still reads "developer tooling"; this release
+  ships the process surface and time primitives needed to write CLI programs end-to-end, while
+  the formatter / linter / debugger surface — each milestone-sized in its own right — lands in
+  the next round.
+- **Out of scope at v0.9, deferred.** Cancellation contexts / deadlines / signals;
+  `os.stdin_read_line` and interactive stdin; wall-clock formatting (`time.now_iso`) and a
+  `Duration` type; float-typed time (Zerg has no float type yet); `os.signal_handler` and
+  process-control. v0.10+.
+- **Backward compatibility.** Every v0.0–v0.8 corpus continues to pass under `make test`. The
+  REPL banner bumps to v0.9 and adds "process surface, time" to the comma-separated surface list;
+  `cliVersion` advances to `0.9.0`.
 
 ### v0.8 — standard library
 

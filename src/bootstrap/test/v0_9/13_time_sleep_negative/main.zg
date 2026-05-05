@@ -1,0 +1,8 @@
+# requires: v0.9
+import "std/time"
+
+if time.sleep_ms(-5) {
+    print "ok"
+} else {
+    print "fail"
+}

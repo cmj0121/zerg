@@ -36,6 +36,12 @@ import (
 // IoError / ParseError *Type pointer; for Option returns it carries the
 // Option[T] *Type directly.
 func (in *interp) callBuiltin(fn *syntax.FnDecl, args []Value, resultType *syntax.Type, callPos syntax.Position) (Value, error) {
+	if v, ok, err := callBuiltinV09(fn, args); ok {
+		return v, err
+	}
+	if v, ok, err := in.callBuiltinV09ArgvExit(fn, args, resultType); ok {
+		return v, err
+	}
 	switch fn.BuiltinName {
 	case "io_read_file":
 		return execIoReadFile(args[0], resultType, callPos)

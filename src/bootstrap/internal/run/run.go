@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
@@ -58,14 +59,52 @@ func RunChecked(prog *syntax.Program, w io.Writer) error {
 // MethodCallExpr.Lowered/LoweredCall) and trusts pub gating / orphan rule
 // rejection upstream.
 func RunBundle(bundle syntax.BundleView, w io.Writer) error {
+	_, _, err := RunBundleWithOptions(bundle, w, Options{})
+	return err
+}
+
+// Options carries v0.9 host-supplied process surface to the interpreter.
+// Argv is the program's command-line arguments (index 0 is the
+// executable / entry-file path; subsequent entries are caller args). The
+// CLI driver populates from os.Args; the REPL hard-codes a single
+// "<repl>" element; tests pass arbitrary lists.
+type Options struct {
+	Argv []string
+}
+
+// RunBundleWithOptions is the v0.9 entry point. It returns the program's
+// exit code (0 unless `os.exit(code)` was invoked) plus an "exited" flag
+// that distinguishes a clean termination (exited=false, code=0) from an
+// explicit os.exit(0) (exited=true, code=0). Hosts that need either
+// signal (CLI driver propagates exit code; REPL surfaces a message)
+// consult both fields.
+func RunBundleWithOptions(bundle syntax.BundleView, w io.Writer, opts Options) (exitCode int, exited bool, err error) {
 	if bundle == nil {
-		return nil
+		return 0, false, nil
 	}
 	in := newBundleInterp(bundle, w)
+	in.argv = opts.Argv
 	entry := bundle.BundleEntry()
 	if entry == nil {
-		return nil
+		return 0, false, nil
 	}
+	// v0.9 Unit 1: a `-> never` call (Unit 3 lands the exit fn) raises an
+	// exitErr panic that unwinds every fn-call frame to here. Recover and
+	// stash the code on the interpreter so the host can read it. PLAN.md
+	// §"Defer × exit": defers are intentionally NOT drained, spawned tasks
+	// are NOT joined — we return immediately, mirroring Go's os.Exit.
+	defer func() {
+		if r := recover(); r != nil {
+			if ee, ok := catchExit(r); ok {
+				in.exitCode = ee.Code
+				in.exited = true
+				exitCode = ee.Code
+				exited = true
+				return
+			}
+			panic(r)
+		}
+	}()
 	prog := entry.ModuleProgram()
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
@@ -77,11 +116,21 @@ func RunBundle(bundle syntax.BundleView, w io.Writer) error {
 		}
 		if err := in.execStmt(stmt); err != nil {
 			in.spawnWg.Wait()
-			return err
+			if in.spawnExited.Load() {
+				return int(in.spawnExitCode.Load()), true, nil
+			}
+			return 0, false, err
 		}
 	}
 	in.spawnWg.Wait()
-	return nil
+	// v0.9 Phase 4 Fix 2: a spawned goroutine that called os.exit stashed
+	// the code on the bundle-shared coordinator (the panic cannot cross
+	// the goroutine boundary). Surface it now so the host sees the same
+	// (exited, code) pair the cgen half would produce.
+	if in.spawnExited.Load() {
+		return int(in.spawnExitCode.Load()), true, nil
+	}
+	return 0, false, nil
 }
 
 func runChecked(prog *syntax.Program, w io.Writer) error {
@@ -193,6 +242,30 @@ type interp struct {
 	// newSiblingInterp can share them without violating sync.noCopy.
 	spawnWg *sync.WaitGroup
 	writeMu *sync.Mutex
+
+	// v0.9 Unit 1: exit-sentinel state. exited is set when an exitErr
+	// panic was caught at the RunBundle boundary; exitCode carries the
+	// requested code. The fields are read-only by the host; the recover
+	// hook in RunBundle is the sole writer.
+	exited   bool
+	exitCode int
+
+	// v0.9 Phase 4 Fix 2: spawn × exit coordination. A `-> never` call
+	// inside a spawned goroutine cannot panic across the goroutine
+	// boundary (Go runtime rule), so the spawn-recover stashes the code
+	// here and the RunBundle main path consults it after spawnWg.Wait()
+	// completes. First-spawned-to-exit wins via the sync.Once gate —
+	// matches cgen's libc-exit semantics where the first thread to call
+	// exit() takes the whole process down. Pointers so newSiblingInterp's
+	// shallow-copy preserves the shared coordinator.
+	spawnExitOnce *sync.Once
+	spawnExitCode *atomic.Int64
+	spawnExited   *atomic.Bool
+
+	// v0.9 Unit 3: argv from the host. Index 0 is the executable name
+	// (.zg path for `zerg run`, "<repl>" at the REPL, an arbitrary
+	// sentinel in tests). os_argv reads from this slice.
+	argv []string
 }
 
 // moduleData is the per-module decl table. Indexed maps mirror typeck's
@@ -242,6 +315,9 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 		w:                  w,
 		spawnWg:            &sync.WaitGroup{},
 		writeMu:            &sync.Mutex{},
+		spawnExitOnce:      &sync.Once{},
+		spawnExitCode:      &atomic.Int64{},
+		spawnExited:        &atomic.Bool{},
 		modules:            map[*syntax.Program]*moduleData{},
 		fnOwner:            map[*syntax.FnDecl]*moduleData{},
 		specMethodOwner:    map[*syntax.SpecMethod]*moduleData{},
@@ -832,6 +908,14 @@ var errContinue = errors.New("continue")
 // ---------------------------------------------------------------------------
 
 func (in *interp) execStmt(stmt syntax.Stmt) error {
+	// v0.9 Phase 4 Fix 2: a spawned goroutine that hit os.exit stashed
+	// the code on the bundle-shared coordinator. Mimic cgen's libc-exit
+	// semantics — the first thread to exit kills the whole process —
+	// by raising an exitErr at the next statement boundary on the main
+	// path so further user code does not run after a spawn-exit fires.
+	if in.spawnExited != nil && in.spawnExited.Load() {
+		panic(exitErr{Code: int(in.spawnExitCode.Load())})
+	}
 	switch s := stmt.(type) {
 	case *syntax.NopStmt:
 		return nil

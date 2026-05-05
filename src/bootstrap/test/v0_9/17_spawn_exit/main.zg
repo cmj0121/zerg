@@ -1,0 +1,12 @@
+# requires: v0.9
+import "std/os"
+import "std/time"
+
+fn worker() {
+    time.sleep_ms(10)
+    os.exit(5)
+}
+
+spawn worker()
+time.sleep_ms(100)
+print "should not print"

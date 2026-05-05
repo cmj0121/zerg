@@ -344,6 +344,10 @@ func (g *cgen) emitBuiltinFn(fn *syntax.FnDecl) error {
 // braces) for a __builtin fn-decl. Each branch dispatches to the
 // runtime helper and constructs the user-program's return type.
 func (g *cgen) builtinBodyStr(fn *syntax.FnDecl) (string, error) {
+	// v0.9 time builtins forward to the v09 emitter.
+	if body, ok := emitV09TimeBuiltinBody(fn.BuiltinName); ok {
+		return body, nil
+	}
 	retT := fn.Return.Resolved
 	var b strings.Builder
 	switch fn.BuiltinName {

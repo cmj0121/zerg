@@ -1,0 +1,6 @@
+# requires: v0.9
+import "std/os"
+
+print "before"
+os.exit(7)
+print "after"

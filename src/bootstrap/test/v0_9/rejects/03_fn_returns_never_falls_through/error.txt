@@ -1,0 +1,1 @@
+declared to return never but has a non-diverging path

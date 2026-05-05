@@ -1,0 +1,10 @@
+# requires: v0.9
+import "std/os"
+
+let a := os.argv()
+match a[1] {
+    "ok" => print "ok"
+    "two" => os.exit(2)
+    "five" => os.exit(5)
+    _ => os.exit(99)
+}

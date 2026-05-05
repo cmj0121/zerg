@@ -1,0 +1,10 @@
+# requires: v0.9
+import "std/io"
+import "std/os"
+import "std/strings"
+
+let a := os.argv()
+match io.read_file(a[1]) {
+    Result.Ok(content) => print strings.trim(content)
+    Result.Err(_) => print "err"
+}

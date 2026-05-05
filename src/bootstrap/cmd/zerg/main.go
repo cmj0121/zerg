@@ -34,7 +34,8 @@ type cli struct {
 }
 
 type runCmd struct {
-	File string `arg:"" type:"existingfile" help:".zg source file."`
+	File string   `arg:"" type:"existingfile" help:".zg source file."`
+	Args []string `arg:"" optional:"" help:"Args passed to the program as os.argv[1:]."`
 }
 
 func (c *runCmd) Run() error {
@@ -49,16 +50,18 @@ func (c *runCmd) Run() error {
 		Int("modules", len(bundle.Modules)).
 		Str("entry", bundle.Entry.Path).
 		Msg("loaded")
-	// v0.5 Unit 3: typeck runs across the whole Bundle so cross-module
-	// references resolve, pub gating fires, and the orphan rule applies.
-	// v0.5 Unit 5: the interpreter walks the entire bundle — cross-module
-	// fn calls, struct/enum construction, method dispatch, and spec
-	// coercion all route through per-module decl tables and a
-	// bundle-wide impl index.
 	if err := syntax.CheckBundle(bundle); err != nil {
 		return err
 	}
-	return run.RunBundle(bundle, os.Stdout)
+	argv := append([]string{c.File}, c.Args...)
+	code, exited, err := run.RunBundleWithOptions(bundle, os.Stdout, run.Options{Argv: argv})
+	if err != nil {
+		return err
+	}
+	if exited && code != 0 {
+		os.Exit(code)
+	}
+	return nil
 }
 
 type buildCmd struct {

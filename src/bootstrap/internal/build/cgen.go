@@ -238,12 +238,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	// the corresponding typedef must precede it. The walker still runs
 	// here so the gate is computed once.
 	needsV08 := g.programUsesV08()
-	if needsV08 {
+	needsArgv := g.programUsesArgv()
+	if needsV08 || needsArgv {
 		// Force-monomorphise the list[str] shape so its typedef + helpers
 		// land in the shape registry before the runtime references them.
 		// Without this, a program that calls only strings_join (which takes
 		// list[str] but doesn't construct one) would never reach the shape
-		// through the user-AST walks.
+		// through the user-AST walks. v0.9 os.argv has the same need.
 		g.shapes.addType(g, listOfStrType())
 	}
 
@@ -296,6 +297,18 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	// included by the runtime block itself.
 	if g.programUsesV09() {
 		g.b.WriteString(runtimeV09TimeC)
+		g.b.WriteString("\n")
+	}
+	// v0.9 Unit 3 — argv / exit runtime. Lands after the shape helpers so
+	// zerg_list_zerg_str_push (referenced by zerg_os_argv) is already
+	// defined. Emit whenever std/os is imported (i.e. programUsesV08 OR
+	// any v0.9 builtin is reachable) because the std/os trampolines for
+	// argv/exit are emitted unconditionally for every imported module's
+	// __builtin fn-decls — without the runtime, the trampolines would
+	// reference undefined symbols. The gate keeps v0.0-v0.7 programs
+	// (no std/os import) byte-identical.
+	if needsV08 || g.programUsesV09() {
+		g.b.WriteString(runtimeV09ArgvExitC)
 		g.b.WriteString("\n")
 	}
 	g.emitEqHelpers()
@@ -379,7 +392,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	// only the entry module's executable statements run. The active module
 	// is the entry's mangle so cross-module fn calls resolve through its
 	// import table.
-	g.b.WriteString("int main(void) {\n")
+	if needsArgv {
+		g.b.WriteString("int main(int argc, char **argv) {\n")
+		g.b.WriteString("    __zerg_argc = argc;\n")
+		g.b.WriteString("    __zerg_argv = argv;\n")
+	} else {
+		g.b.WriteString("int main(void) {\n")
+	}
 	prevMod := g.currentMod
 	g.currentMod = g.entryMangle
 	defer func() { g.currentMod = prevMod }()

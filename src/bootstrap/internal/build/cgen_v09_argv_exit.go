@@ -1,14 +1,20 @@
-// v0.9 Unit 2 — codegen for std/time builtins.
+// v0.9 Unit 3 — codegen for std/os.argv and std/os.exit.
 //
-// Trampolines for time_now_ms / time_sleep_ms forward into a small embedded
-// C runtime (runtimeV09TimeC) that holds a static struct timespec epoch and
-// captures it lazily on the first time_now_ms call (matching the
-// interpreter half: first call returns 0).
+// Trampolines:
+//   - os_argv: forwards into zerg_os_argv() which builds a zerg_list_zerg_str
+//     from process-globals __zerg_argc / __zerg_argv. The list shape is
+//     force-monomorphised in the prelude (same as strings_split).
+//   - os_exit: forwards into zerg_os_exit(code) which calls libc exit.
+//     The trampoline body is `zerg_os_exit(z_code);` — no return statement
+//     because writeFnSig already stamps `__attribute__((noreturn))` on
+//     `-> never` fn-decls (Unit 1).
 //
-// Gating: programUsesV09 reports whether any reachable __builtin call's
-// name starts with a v0.9 prefix (currently `time_`; U3 will extend to
-// `os_argv` / `os_exit`). The runtime emit is gated on this so v0.0–v0.8
-// programs preserve their byte-identical output.
+// main() signature swap: programUsesArgv reports whether any reachable
+// builtin reference is os_argv. When true, main is rewritten as
+// `int main(int argc, char **argv)` and the first two statements seed
+// the __zerg_argc / __zerg_argv globals. Programs that reference only
+// os_exit keep `int main(void)` — the byte-identical guarantee for
+// non-argv programs holds.
 
 package build
 
@@ -16,29 +22,44 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-// isV09Builtin reports whether name was introduced in v0.9. Same idea as
-// the implicit "v0.8 set" carried by the v08 registry, but extracted as a
-// predicate so the v09 walker can disambiguate.
-func isV09Builtin(name string) bool {
+// isV09ArgvExitBuiltin reports whether name was introduced in v0.9 Unit 3.
+func isV09ArgvExitBuiltin(name string) bool {
 	switch name {
-	case "time_now_ms", "time_sleep_ms":
+	case "os_argv", "os_exit":
 		return true
 	}
-	return isV09ArgvExitBuiltin(name)
+	return false
 }
 
-// programUsesV09 reports whether any module in the bundle references a
-// v0.9-introduced __builtin. Mirrors programUsesV08 / programUsesV07.
-func (g *cgen) programUsesV09() bool {
+// programUsesArgv reports whether any module references os_argv. Only
+// programs hitting this gate get the main(int, char**) signature swap.
+func (g *cgen) programUsesArgv() bool {
 	for i := range g.modules {
-		if g.programUsesV09Walk(g.modules[i].prog) {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_argv") {
 			return true
 		}
 	}
 	return false
 }
 
-func (g *cgen) programUsesV09Walk(prog *syntax.Program) bool {
+// programUsesOsExit reports whether any module references os_exit.
+// Drives the runtime emit (the argv/exit C runtime can be partially
+// emitted: programs that use only exit don't need the argv globals
+// initialised but the runtime block emits both for cohesion).
+func (g *cgen) programUsesOsExit() bool {
+	for i := range g.modules {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_exit") {
+			return true
+		}
+	}
+	return false
+}
+
+// programUsesBuiltinWalk returns true if the named __builtin is referenced
+// anywhere in prog (top-level statements, MonoFns, MonoImpls). Generic
+// walker shared with the v09 argv predicate; structurally identical to
+// programUsesV09Walk but parameterised on a single name.
+func (g *cgen) programUsesBuiltinWalk(prog *syntax.Program, name string) bool {
 	if prog == nil {
 		return false
 	}
@@ -73,7 +94,7 @@ func (g *cgen) programUsesV09Walk(prog *syntax.Program) bool {
 		}
 		switch x := e.(type) {
 		case *syntax.CallExpr:
-			if fn := resolveCall(x.Callee); fn != nil && isV09Builtin(fn.BuiltinName) {
+			if fn := resolveCall(x.Callee); fn != nil && fn.BuiltinName == name {
 				found = true
 				return
 			}
@@ -82,7 +103,7 @@ func (g *cgen) programUsesV09Walk(prog *syntax.Program) bool {
 				walkE(a)
 			}
 		case *syntax.MethodCallExpr:
-			if fn := resolveMethodCall(x); fn != nil && isV09Builtin(fn.BuiltinName) {
+			if fn := resolveMethodCall(x); fn != nil && fn.BuiltinName == name {
 				found = true
 				return
 			}
@@ -251,49 +272,49 @@ func (g *cgen) programUsesV09Walk(prog *syntax.Program) bool {
 	return found
 }
 
-// emitV09TimeBuiltinBody emits the trampoline body for one v0.9 time
-// __builtin. Returns ok=true when fn is a v0.9 builtin (caller skips the
-// v0.8 dispatch); ok=false otherwise. Body strings have no surrounding
-// braces — same calling convention as builtinBodyStr.
-func emitV09TimeBuiltinBody(name string) (string, bool) {
+// emitV09ArgvExitBuiltinBody emits the trampoline body for one v0.9
+// Unit 3 builtin. Returns ok=true when fn is one of ours; ok=false
+// otherwise. Body strings have no surrounding braces (same calling
+// convention as builtinBodyStr).
+func emitV09ArgvExitBuiltinBody(name string) (string, bool) {
 	switch name {
-	case "time_now_ms":
-		return "    return zerg_time_now_ms();\n", true
-	case "time_sleep_ms":
-		return "    return zerg_time_sleep_ms(z_ms);\n", true
+	case "os_argv":
+		return "    return zerg_os_argv();\n", true
+	case "os_exit":
+		return "    zerg_os_exit(z_code);\n", true
 	}
 	return "", false
 }
 
-// runtimeV09TimeC is the embedded C runtime for std/time. Lazy-init epoch
-// matches the interpreter's behaviour: the first time_now_ms call returns 0
-// and captures the epoch; subsequent calls return ms-since-epoch using
-// CLOCK_MONOTONIC. sleep_ms uses nanosleep; negative ms clamps to 0.
-const runtimeV09TimeC = `#include <time.h>
+// runtimeV09ArgvExitC is the embedded C runtime for std/os.argv and
+// std/os.exit. __zerg_argc / __zerg_argv are the process-global
+// argv mirror seeded at the top of main; zerg_os_argv builds a
+// zerg_list_zerg_str from them (one zerg_str per argv entry).
+const runtimeV09ArgvExitC = `#include <stdlib.h>
 
-/* ---------------- v0.9 std/time runtime --------------------------------- */
+/* ---------------- v0.9 std/os argv + exit runtime ----------------------- */
 
-static struct timespec zerg_time_epoch;
-static int zerg_time_initialised = 0;
+static int    __zerg_argc = 0;
+static char **__zerg_argv = 0;
 
-static int64_t zerg_time_now_ms(void) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    if (!zerg_time_initialised) {
-        zerg_time_epoch = now;
-        zerg_time_initialised = 1;
-        return 0;
+static zerg_list_zerg_str zerg_os_argv(void) {
+    zerg_list_zerg_str out;
+    out.len = 0;
+    out.cap = 0;
+    out.data = 0;
+    for (int i = 0; i < __zerg_argc; i++) {
+        const char *a = __zerg_argv[i];
+        size_t n = 0;
+        while (a[n]) n++;
+        char *p = (char *)malloc(n + 1);
+        if (n) memcpy(p, a, n);
+        p[n] = 0;
+        zerg_list_zerg_str_push(&out, (zerg_str){p, n});
     }
-    return (int64_t)(now.tv_sec - zerg_time_epoch.tv_sec) * 1000
-         + (int64_t)(now.tv_nsec - zerg_time_epoch.tv_nsec) / 1000000;
+    return out;
 }
 
-static _Bool zerg_time_sleep_ms(int64_t ms) {
-    if (ms <= 0) return 1;
-    struct timespec req;
-    req.tv_sec = (time_t)(ms / 1000);
-    req.tv_nsec = (long)((ms % 1000) * 1000000L);
-    nanosleep(&req, NULL);
-    return 1;
+__attribute__((noreturn)) static void zerg_os_exit(int64_t code) {
+    exit((int)code);
 }
 `

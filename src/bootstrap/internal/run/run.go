@@ -58,13 +58,34 @@ func RunChecked(prog *syntax.Program, w io.Writer) error {
 // MethodCallExpr.Lowered/LoweredCall) and trusts pub gating / orphan rule
 // rejection upstream.
 func RunBundle(bundle syntax.BundleView, w io.Writer) error {
+	_, _, err := RunBundleWithOptions(bundle, w, Options{})
+	return err
+}
+
+// Options carries v0.9 host-supplied process surface to the interpreter.
+// Argv is the program's command-line arguments (index 0 is the
+// executable / entry-file path; subsequent entries are caller args). The
+// CLI driver populates from os.Args; the REPL hard-codes a single
+// "<repl>" element; tests pass arbitrary lists.
+type Options struct {
+	Argv []string
+}
+
+// RunBundleWithOptions is the v0.9 entry point. It returns the program's
+// exit code (0 unless `os.exit(code)` was invoked) plus an "exited" flag
+// that distinguishes a clean termination (exited=false, code=0) from an
+// explicit os.exit(0) (exited=true, code=0). Hosts that need either
+// signal (CLI driver propagates exit code; REPL surfaces a message)
+// consult both fields.
+func RunBundleWithOptions(bundle syntax.BundleView, w io.Writer, opts Options) (exitCode int, exited bool, err error) {
 	if bundle == nil {
-		return nil
+		return 0, false, nil
 	}
 	in := newBundleInterp(bundle, w)
+	in.argv = opts.Argv
 	entry := bundle.BundleEntry()
 	if entry == nil {
-		return nil
+		return 0, false, nil
 	}
 	// v0.9 Unit 1: a `-> never` call (Unit 3 lands the exit fn) raises an
 	// exitErr panic that unwinds every fn-call frame to here. Recover and
@@ -76,6 +97,8 @@ func RunBundle(bundle syntax.BundleView, w io.Writer) error {
 			if ee, ok := catchExit(r); ok {
 				in.exitCode = ee.Code
 				in.exited = true
+				exitCode = ee.Code
+				exited = true
 				return
 			}
 			panic(r)
@@ -92,11 +115,11 @@ func RunBundle(bundle syntax.BundleView, w io.Writer) error {
 		}
 		if err := in.execStmt(stmt); err != nil {
 			in.spawnWg.Wait()
-			return err
+			return 0, false, err
 		}
 	}
 	in.spawnWg.Wait()
-	return nil
+	return 0, false, nil
 }
 
 func runChecked(prog *syntax.Program, w io.Writer) error {
@@ -215,6 +238,11 @@ type interp struct {
 	// hook in RunBundle is the sole writer.
 	exited   bool
 	exitCode int
+
+	// v0.9 Unit 3: argv from the host. Index 0 is the executable name
+	// (.zg path for `zerg run`, "<repl>" at the REPL, an arbitrary
+	// sentinel in tests). os_argv reads from this slice.
+	argv []string
 }
 
 // moduleData is the per-module decl table. Indexed maps mirror typeck's

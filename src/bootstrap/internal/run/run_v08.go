@@ -39,6 +39,9 @@ func (in *interp) callBuiltin(fn *syntax.FnDecl, args []Value, resultType *synta
 	if v, ok, err := callBuiltinV09(fn, args); ok {
 		return v, err
 	}
+	if v, ok, err := in.callBuiltinV09ArgvExit(fn, args, resultType); ok {
+		return v, err
+	}
 	switch fn.BuiltinName {
 	case "io_read_file":
 		return execIoReadFile(args[0], resultType, callPos)

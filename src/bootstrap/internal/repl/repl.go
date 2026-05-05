@@ -135,12 +135,20 @@ func Start(in io.Reader, out io.Writer) error {
 		// Parse succeeded for the *combined* source. Run it under a writer
 		// that suppresses output already produced by committedSrc, so each
 		// statement's print only fires once across the session.
-		newPriorBytes, runErr := runWithSuppression(combined, out, priorBytes)
+		newPriorBytes, exitCode, exited, runErr := runWithSuppression(combined, out, priorBytes)
 		if runErr != nil {
 			// Type or runtime error: drop the in-progress buffer and the
 			// new statements stay uncommitted. Previously-committed source
 			// is unaffected so prior bindings remain usable.
 			fmt.Fprintln(out, runErr)
+			accumBuf.Reset()
+			continue
+		}
+		if exited {
+			fmt.Fprintf(out, "process exited with code %d\n", exitCode)
+			// Drop the exit-statement so subsequent prompts can keep
+			// running. The committed history retains everything BEFORE
+			// the exit; the exit-statement itself stays uncommitted.
 			accumBuf.Reset()
 			continue
 		}
@@ -172,20 +180,55 @@ func hasImport(prog *syntax.Program) bool {
 // first `skipBytes` bytes of program output are discarded; the rest are
 // forwarded to out. This is how persistent state is implemented: we re-run
 // the whole accumulated program every turn but only let new output through.
-func runWithSuppression(src string, out io.Writer, skipBytes int) (int, error) {
+//
+// v0.9: REPL hard-codes argv to ["<repl>"] per PLAN.md §"argv[0] parity
+// rule". An os.exit(N) call from REPL code surfaces "process exited with
+// code N" via the returned exitCode/exited and does NOT terminate the
+// host Go process — the caller decides what to do.
+func runWithSuppression(src string, out io.Writer, skipBytes int) (int, int, bool, error) {
 	tokens, err := syntax.Lex([]byte(src))
 	if err != nil {
-		return 0, err
+		return 0, 0, false, err
 	}
 	prog, err := syntax.Parse(tokens)
 	if err != nil {
-		return 0, err
+		return 0, 0, false, err
+	}
+	if err := syntax.Check(prog); err != nil {
+		return 0, 0, false, err
 	}
 	w := &skipWriter{dst: out, skip: skipBytes}
-	if err := run.Run(prog, w); err != nil {
-		return 0, err
+	bundle := singleProgramBundle{prog: prog}
+	code, exited, err := run.RunBundleWithOptions(bundle, w, run.Options{Argv: []string{"<repl>"}})
+	if err != nil {
+		return 0, 0, false, err
 	}
-	return skipBytes + w.forwarded, nil
+	return skipBytes + w.forwarded, code, exited, nil
+}
+
+// singleProgramBundle wraps a *Program in the run.BundleView interface
+// so the REPL can route through RunBundleWithOptions exactly like the
+// CLI driver. Mirrors run.singleProgramBundleAdapter (unexported).
+type singleProgramBundle struct {
+	prog *syntax.Program
+}
+
+func (b singleProgramBundle) BundleEntry() syntax.ModuleView {
+	return singleProgramModule{prog: b.prog}
+}
+
+func (b singleProgramBundle) BundleModules() []syntax.ModuleView {
+	return []syntax.ModuleView{singleProgramModule{prog: b.prog}}
+}
+
+type singleProgramModule struct {
+	prog *syntax.Program
+}
+
+func (m singleProgramModule) ModuleName() string             { return "main" }
+func (m singleProgramModule) ModuleProgram() *syntax.Program { return m.prog }
+func (m singleProgramModule) ModuleImports() []syntax.ImportView {
+	return nil
 }
 
 // skipWriter discards the first `skip` bytes written to it and forwards the

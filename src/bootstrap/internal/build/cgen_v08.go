@@ -348,6 +348,10 @@ func (g *cgen) builtinBodyStr(fn *syntax.FnDecl) (string, error) {
 	if body, ok := emitV09TimeBuiltinBody(fn.BuiltinName); ok {
 		return body, nil
 	}
+	// v0.9 Unit 3 argv / exit builtins.
+	if body, ok := emitV09ArgvExitBuiltinBody(fn.BuiltinName); ok {
+		return body, nil
+	}
 	retT := fn.Return.Resolved
 	var b strings.Builder
 	switch fn.BuiltinName {

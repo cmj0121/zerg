@@ -8,4 +8,6 @@ package syntax
 func init() {
 	v08BuiltinRegistry["time_now_ms"] = v08BuiltinSig{params: nil, ret: "int"}
 	v08BuiltinRegistry["time_sleep_ms"] = v08BuiltinSig{params: []string{"int"}, ret: "bool"}
+	v08BuiltinRegistry["os_argv"] = v08BuiltinSig{params: nil, ret: "list[str]"}
+	v08BuiltinRegistry["os_exit"] = v08BuiltinSig{params: []string{"int"}, ret: "never"}
 }

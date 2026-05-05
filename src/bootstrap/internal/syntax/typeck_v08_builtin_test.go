@@ -19,7 +19,7 @@ import (
 // error if any.
 func checkStdlibSrc(t *testing.T, src string) error {
 	t.Helper()
-	tokens, err := lexWithVersion([]byte(src), 0, 8)
+	tokens, _, err := lexWithVersion([]byte(src), 0, 8)
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}

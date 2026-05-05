@@ -35,8 +35,42 @@ func (e *ParseError) IsIncomplete() bool { return e != nil && e.Incomplete }
 // the v0.0 examples both contain a shebang+comment block followed by blank
 // lines, so this is required for the parity test to even reach the
 // statements.
+//
+// Comments are NOT threaded by Parse — the resulting Program has empty
+// HeadComments / LeadingComments slices. Callers that need comments
+// (`zerg fmt`) use ParseWithComments instead. Pre-Unit-1 callers continue
+// to use Parse with no behavioural change.
 func Parse(tokens []Token) (*Program, error) {
 	p := newParser(tokens)
+	return p.parseProgram()
+}
+
+// ParseWithComments is Parse plus a pre-collected slice of CommentTokens
+// (typically produced by LexWithComments). Leading-line comments are
+// attached to the next statement's LeadingComments; comments that appear
+// at the very top of the file (before any statement) are collected on
+// Program.HeadComments instead. Trailing inline comments — those marked
+// Leading == false — are recorded on Program.Comments but NOT attached to
+// any AST node; v0.10 fmt strips them per the documented limitation.
+//
+// Comment attachment rule (PLAN.md): a leading-line `#` comment attaches to
+// the next non-blank statement on a following line. Blank lines between the
+// comment block and the next statement do NOT break attribution — users
+// often separate comment-blocks with blanks.
+func ParseWithComments(tokens []Token, comments []CommentToken) (*Program, error) {
+	p := newParser(tokens)
+	p.comments = comments
+	return p.parseProgram()
+}
+
+// ParseWithOptionsAndComments combines ParseWithOptions (stdlib gating) and
+// ParseWithComments (comment threading). The stdlib loader does not need
+// comments, so it stays on ParseWithOptions; this entry point exists so
+// `zerg fmt` can format stdlib sources without a separate code path.
+func ParseWithOptionsAndComments(tokens []Token, comments []CommentToken, opts ParseOptions) (*Program, error) {
+	p := newParser(tokens)
+	p.inStdlibFile = opts.InStdlibFile
+	p.comments = comments
 	return p.parseProgram()
 }
 
@@ -129,6 +163,17 @@ type parser struct {
 	// modules. Default zero ⇒ user code, which rejects `__builtin` with a
 	// focused diagnostic so the marker stays a private toolchain primitive.
 	inStdlibFile bool
+	// comments is the lexer's side-channel of `#` line comments, in source
+	// order. Nil for callers that used Parse / ParseWithOptions; non-nil
+	// for ParseWithComments / ParseWithOptionsAndComments. The parser
+	// drains entries by line as statements appear and attaches Leading ==
+	// true comments to the next statement's LeadingComments slot. Trailing
+	// inline comments (Leading == false) are recorded on Program.Comments
+	// at the end but NOT attached to any AST node — v0.10 fmt strips them
+	// per the documented limitation.
+	comments    []CommentToken
+	commentIdx  int  // index into comments — entries before this have been processed
+	headDrained bool // true once the file-head comment block has been drained onto Program.HeadComments
 }
 
 func newParser(tokens []Token) *parser {
@@ -234,6 +279,145 @@ func errorAtTok(t Token, format string, args ...any) error {
 	}
 }
 
+// setLeadingComments attaches the given slice as the stmt's LeadingComments.
+// Concrete-type-switching keeps the field private to each node — the AST
+// has no shared "Decl" supertype that owns the slot, so the helper
+// enumerates every Stmt-implementing type that gained the field at v0.10
+// Unit 1. Adding a new statement node means adding a case here.
+//
+// A nil/empty slice short-circuits to a no-op; the AST default is no
+// comments and over-writing nil with nil is wasteful.
+func setLeadingComments(stmt Stmt, comments []string) {
+	if len(comments) == 0 {
+		return
+	}
+	switch s := stmt.(type) {
+	case *LetStmt:
+		s.LeadingComments = comments
+	case *MutStmt:
+		s.LeadingComments = comments
+	case *ConstStmt:
+		s.LeadingComments = comments
+	case *AssignStmt:
+		s.LeadingComments = comments
+	case *ExprStmt:
+		s.LeadingComments = comments
+	case *PrintStmt:
+		s.LeadingComments = comments
+	case *ReturnStmt:
+		s.LeadingComments = comments
+	case *BreakStmt:
+		s.LeadingComments = comments
+	case *ContinueStmt:
+		s.LeadingComments = comments
+	case *FnDecl:
+		s.LeadingComments = comments
+	case *IfStmt:
+		s.LeadingComments = comments
+	case *ForStmt:
+		s.LeadingComments = comments
+	case *NopStmt:
+		s.LeadingComments = comments
+	case *ImportDecl:
+		s.LeadingComments = comments
+	case *StructDecl:
+		s.LeadingComments = comments
+	case *EnumDecl:
+		s.LeadingComments = comments
+	case *MatchStmt:
+		s.LeadingComments = comments
+	case *SpecDecl:
+		s.LeadingComments = comments
+	case *ImplDecl:
+		s.LeadingComments = comments
+	case *SpawnStmt:
+		s.LeadingComments = comments
+	case *DeferStmt:
+		s.LeadingComments = comments
+	case *SendStmt:
+		s.LeadingComments = comments
+	case *SelectStmt:
+		s.LeadingComments = comments
+	}
+}
+
+// drainHeadComments collects the file-head block of leading-line comments —
+// the contiguous run anchored at line 1 with no blank-line gaps between
+// entries. PLAN.md §file-head: the `# requires:` line plus any license /
+// attribution / shebang lines all flow through here. Comments that appear
+// later in the file (separated from the head by a blank line) belong to
+// the next statement's LeadingComments and are NOT collected here.
+//
+// Always advances p.commentIdx past every consumed entry. Returns nil when
+// the file does not start with a leading comment on line 1.
+func (p *parser) drainHeadComments() []string {
+	if len(p.comments) == 0 || p.commentIdx >= len(p.comments) {
+		return nil
+	}
+	first := p.comments[p.commentIdx]
+	if !first.Leading || first.Pos.Line != 1 {
+		return nil
+	}
+	var out []string
+	prevLine := 0
+	for p.commentIdx < len(p.comments) {
+		c := p.comments[p.commentIdx]
+		if !c.Leading {
+			break
+		}
+		if prevLine != 0 && c.Pos.Line != prevLine+1 {
+			// blank-line gap ⇒ end of the head block.
+			break
+		}
+		out = append(out, c.Text)
+		prevLine = c.Pos.Line
+		p.commentIdx++
+	}
+	return out
+}
+
+// drainLeadingComments collects all leading-line `#` comments whose line is
+// strictly before stmtLine. Trailing inline comments (Leading == false) and
+// comments on the same line as the statement are skipped — they belong to
+// the previous statement (if any) and are recorded on Program.Comments
+// instead, where the formatter can ignore them at v0.10 (documented
+// limitation).
+//
+// The drained comments are returned as a `[]string` of comment bodies (the
+// `#` is stripped at lex time). Callers attach the slice to the statement
+// node's LeadingComments field, OR for the very first call, route them to
+// Program.HeadComments via the headDrained latch.
+//
+// Blank lines between a comment block and the next statement do NOT break
+// attribution — users often separate comment groups with blanks. The drain
+// walks comments[commentIdx:] in line order and stops at the first comment
+// whose line is >= stmtLine OR at the first non-leading comment.
+//
+// Returns nil for callers parsing without comments threaded (p.comments
+// is empty). Always advances p.commentIdx past every consumed entry.
+func (p *parser) drainLeadingComments(stmtLine int) []string {
+	if len(p.comments) == 0 {
+		return nil
+	}
+	var out []string
+	for p.commentIdx < len(p.comments) {
+		c := p.comments[p.commentIdx]
+		if c.Pos.Line >= stmtLine {
+			break
+		}
+		// Trailing inline comments (Leading == false) belong to the
+		// previous statement's same line; v0.10 strips them. Skip past
+		// them without attaching anywhere.
+		if !c.Leading {
+			p.commentIdx++
+			continue
+		}
+		out = append(out, c.Text)
+		p.commentIdx++
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // Top-level program and statement terminator handling.
 // ---------------------------------------------------------------------------
@@ -243,8 +427,37 @@ func (p *parser) parseProgram() (*Program, error) {
 	for {
 		p.skipNewlines()
 		if p.peekRaw().Kind == KindEOF {
+			// Comments-only file (no statements at all): everything
+			// becomes the file-head block. Otherwise leading-line comments
+			// past the last statement live on Program.Comments — the
+			// formatter has no node to attach them to and v0.10 strips
+			// the orphan tail per the documented limitation.
+			if !p.headDrained && len(prog.Statements) == 0 {
+				prog.HeadComments = p.drainHeadComments()
+				if tail := p.drainLeadingComments(1 << 30); len(tail) > 0 {
+					prog.HeadComments = append(prog.HeadComments, tail...)
+				}
+				p.headDrained = true
+			}
+			if len(p.comments) > 0 {
+				prog.Comments = p.comments
+			}
 			return prog, nil
 		}
+		stmtLine := p.peekRaw().Pos.Line
+		// Drain leading-line comments preceding this statement. On the
+		// very first call we route the contiguous run anchored at line 1
+		// (stopping at the first blank-line gap) to Program.HeadComments
+		// — the file's preamble (`# requires:` + license / shebang).
+		// Anything after that gap attaches to this first statement's
+		// LeadingComments slot, matching the user's likely intent that a
+		// comment immediately above a decl describes THAT decl. PLAN.md
+		// §file-head pins the requires-line + headers on HeadComments.
+		if !p.headDrained {
+			prog.HeadComments = p.drainHeadComments()
+			p.headDrained = true
+		}
+		leadingForStmt := p.drainLeadingComments(stmtLine)
 		stmt, err := p.parseStatement()
 		if err != nil {
 			return nil, err
@@ -254,7 +467,13 @@ func (p *parser) parseProgram() (*Program, error) {
 		// is admitted as a user-friendly noop. nil is appended-then-stripped
 		// here so callers don't have to special-case the shape.
 		if stmt != nil {
+			setLeadingComments(stmt, leadingForStmt)
 			prog.Statements = append(prog.Statements, stmt)
+		} else if len(leadingForStmt) > 0 {
+			// `import ()` consumed leading comments — keep them attached
+			// somewhere by routing onto HeadComments as a fallback so
+			// nothing is silently dropped from the AST.
+			prog.HeadComments = append(prog.HeadComments, leadingForStmt...)
 		}
 		// Drain any extra ImportDecls produced by `import (...)`. The grouped
 		// form returns its first entry directly; the rest live on the parser
@@ -1932,10 +2151,13 @@ func (p *parser) parseBlock(ctx string) (*Block, error) {
 				Incomplete: true,
 			}
 		}
+		stmtLine := p.peekRaw().Pos.Line
+		leading := p.drainLeadingComments(stmtLine)
 		stmt, err := p.parseStatement()
 		if err != nil {
 			return nil, err
 		}
+		setLeadingComments(stmt, leading)
 		blk.Statements = append(blk.Statements, stmt)
 		if err := p.terminateStatement(); err != nil {
 			return nil, err

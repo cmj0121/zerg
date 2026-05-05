@@ -32,7 +32,22 @@ func (e *LexError) Error() string {
 // source's leading `# requires:` marker declares the relevant minor or higher.
 // Lex pre-scans src for that marker so callers do not need to thread a version
 // argument; the byte-level scan reuses internal/version.ScanRequires.
+//
+// Comments are scanned identically but discarded — the token stream is
+// byte-identical to a comment-aware lex. Callers that need comments (the
+// v0.10 `zerg fmt`) call LexWithComments instead.
 func Lex(src []byte) ([]Token, error) {
+	tokens, _, err := LexWithComments(src)
+	return tokens, err
+}
+
+// LexWithComments is Lex plus a side-channel of CommentToken entries, in
+// source order. The token slice it returns is byte-identical to what Lex
+// returns; comment scanning is unchanged. v0.10 Unit 1: the formatter needs
+// comment text + position to emit user comments verbatim, but every other
+// consumer (typeck, run, build) discards the side-channel — the AST and
+// runtime semantics are unaffected.
+func LexWithComments(src []byte) ([]Token, []CommentToken, error) {
 	maj, min, ok := version.ScanRequires(src)
 	if !ok {
 		// No requires-marker: lex against the toolchain version. The driver's
@@ -43,19 +58,19 @@ func Lex(src []byte) ([]Token, error) {
 	return lexWithVersion(src, maj, min)
 }
 
-// lexWithVersion is the shared body of Lex; tests use it to drive the
-// version-gating without a `# requires:` line in the source string.
-func lexWithVersion(src []byte, reqMajor, reqMinor int) ([]Token, error) {
+// lexWithVersion is the shared body of Lex / LexWithComments; tests use it to
+// drive the version-gating without a `# requires:` line in the source string.
+func lexWithVersion(src []byte, reqMajor, reqMinor int) ([]Token, []CommentToken, error) {
 	l := &lexer{src: src, line: 1, col: 1, reqMajor: reqMajor, reqMinor: reqMinor}
 	var tokens []Token
 	for {
 		tok, err := l.next()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		tokens = append(tokens, tok)
 		if tok.Kind == KindEOF {
-			return tokens, nil
+			return tokens, l.comments, nil
 		}
 	}
 }
@@ -70,6 +85,16 @@ type lexer struct {
 	// promote only when (reqMajor, reqMinor) >= the keyword's introduction.
 	reqMajor int
 	reqMinor int
+	// comments collects CommentToken entries in source order. Used by
+	// LexWithComments (v0.10 Unit 1); plain Lex discards the slice. Comments
+	// do NOT enter the token stream — token-stream consumers see byte-
+	// identical output to the pre-Unit-1 lexer.
+	comments []CommentToken
+	// tokenSeenOnLine is set when at least one non-comment token has been
+	// emitted on the current source line. A `#` scan that fires while this
+	// is true is a trailing inline comment; when false, the comment is
+	// alone on its line (Leading == true). Reset at every NEWLINE.
+	tokenSeenOnLine bool
 }
 
 func (l *lexer) atEnd() bool { return l.pos >= len(l.src) }
@@ -110,6 +135,12 @@ func (l *lexer) position() Position {
 
 // next produces the next significant token. It also handles whitespace and
 // comments inline because they never cross statement boundaries.
+//
+// Comments are captured into l.comments as a side-channel — the returned
+// token stream is identical to a comment-stripping lex. Each CommentToken
+// records the line, the comment text without the leading `#`, and a Leading
+// bit (true when the comment is alone on its line; false when it follows
+// other tokens on the same line — a "trailing" inline comment).
 func (l *lexer) next() (Token, error) {
 	for !l.atEnd() {
 		c := l.peek()
@@ -121,23 +152,50 @@ func (l *lexer) next() (Token, error) {
 			// newline is emitted as a normal NEWLINE token. The shebang
 			// `#! /usr/bin/env zerg` is a comment per the grammar — `!` is
 			// just a CHAR — so no special state is needed here.
+			pos := l.position()
+			leading := !l.tokenSeenOnLine
+			l.advance() // consume `#`
+			start := l.pos
 			for !l.atEnd() && l.peek() != '\n' {
 				l.advance()
 			}
+			l.comments = append(l.comments, CommentToken{
+				Pos:     pos,
+				Text:    string(l.src[start:l.pos]),
+				Leading: leading,
+			})
 		case c == '\n':
 			pos := l.position()
 			l.advance()
+			l.tokenSeenOnLine = false
 			return Token{Kind: KindNewline, Pos: pos}, nil
 		case c == '"':
-			return l.lexString()
+			tok, err := l.lexString()
+			if err == nil {
+				l.tokenSeenOnLine = true
+			}
+			return tok, err
 		case c == '\'':
-			return l.lexRune()
+			tok, err := l.lexRune()
+			if err == nil {
+				l.tokenSeenOnLine = true
+			}
+			return tok, err
 		case isDigit(c):
-			return l.lexNumber()
+			tok, err := l.lexNumber()
+			if err == nil {
+				l.tokenSeenOnLine = true
+			}
+			return tok, err
 		case isIdentStart(c):
+			l.tokenSeenOnLine = true
 			return l.lexIdent(), nil
 		default:
-			return l.lexOperator()
+			tok, err := l.lexOperator()
+			if err == nil {
+				l.tokenSeenOnLine = true
+			}
+			return tok, err
 		}
 	}
 	return Token{Kind: KindEOF, Pos: l.position()}, nil

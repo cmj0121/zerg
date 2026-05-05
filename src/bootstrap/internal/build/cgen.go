@@ -291,6 +291,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString(runtimeV08C)
 		g.b.WriteString("\n")
 	}
+	// v0.9 stdlib runtime — gated on any reachable v0.9 builtin so v0.0–v0.8
+	// programs preserve their byte-identical emit. <time.h> is conditionally
+	// included by the runtime block itself.
+	if g.programUsesV09() {
+		g.b.WriteString(runtimeV09TimeC)
+		g.b.WriteString("\n")
+	}
 	g.emitEqHelpers()
 	g.emitSpecVtablesAndMethods()
 	if err := g.emitAnonFnHeaders(); err != nil {

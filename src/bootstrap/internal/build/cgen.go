@@ -2615,6 +2615,12 @@ func (g *cgen) writeFnSig(fn *syntax.FnDecl) {
 		ret = g.cTypeName(fn.Return.Resolved)
 	}
 	b.WriteString("static ")
+	// v0.9 Unit 1: `-> never` fn-decls cannot return; tell the C compiler
+	// so it does not warn about missing trailing return / unreachable
+	// fall-through paths.
+	if fnReturnsNever(fn) {
+		b.WriteString("__attribute__((noreturn)) ")
+	}
 	b.WriteString(ret)
 	b.WriteByte(' ')
 	b.WriteString(g.fnCName(fn))
@@ -3555,6 +3561,11 @@ func (g *cgen) cTypeName(t *syntax.Type) string {
 	case syntax.TRune():
 		return "int32_t"
 	case syntax.TVoid():
+		return "void"
+	case syntax.TNever():
+		// v0.9 Unit 1: `never` lowers to C `void`. The fn-decl's
+		// `__attribute__((noreturn))` (writeFnSig) makes the C compiler
+		// accept the absence of a return value.
 		return "void"
 	}
 	switch t.Kind {

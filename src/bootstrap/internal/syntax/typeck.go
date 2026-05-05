@@ -47,6 +47,7 @@ const (
 	TypeSpec   // v0.4 spec-as-type: Name populated; canonical instance stored in spec table
 	TypeChan   // v0.7 channel: Element non-nil; canonical instance cached per element-type
 	TypeFn     // v0.7 fn value: FnParams + FnReturn populated (FnReturn may be nil/void)
+	TypeNever  // v0.9 bottom type: subtype of every concrete type; no values inhabit it
 )
 
 // NamedField is one field of a struct type. Order matches declaration order
@@ -108,6 +109,8 @@ func (t *Type) String() string {
 		return "rune"
 	case TypeVoid:
 		return "()"
+	case TypeNever:
+		return "never"
 	case TypeList:
 		return "list[" + t.Element.String() + "]"
 	case TypeTuple:
@@ -212,6 +215,7 @@ var (
 	tByte  = &Type{Kind: TypeByte}
 	tRune  = &Type{Kind: TypeRune}
 	tVoid  = &Type{Kind: TypeVoid}
+	tNever = &Type{Kind: TypeNever}
 )
 
 // TInt returns the canonical int singleton.
@@ -234,6 +238,9 @@ func TRune() *Type { return tRune }
 
 // TVoid returns the canonical void singleton.
 func TVoid() *Type { return tVoid }
+
+// TNever returns the canonical never singleton (v0.9 bottom type).
+func TNever() *Type { return tNever }
 
 // NewListType constructs a list[T] type. The receiver is fresh, but Equals
 // makes structural equality safe — callers do not need to share Type pointers
@@ -564,7 +571,7 @@ func (c *checker) collectTopLevel(prog *Program) error {
 	for _, stmt := range prog.Statements {
 		switch s := stmt.(type) {
 		case *StructDecl:
-			if isReservedBuiltinTypeName(s.Name) {
+			if isReservedBuiltinTypeName(s.Name) || isReservedV09TypeName(s.Name) {
 				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
 			}
 			if err := register(s.Name, s.Pos, "struct"); err != nil {
@@ -593,7 +600,7 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			}
 			c.structAST[s.Name] = s
 		case *EnumDecl:
-			if isReservedBuiltinTypeName(s.Name) {
+			if isReservedBuiltinTypeName(s.Name) || isReservedV09TypeName(s.Name) {
 				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
 			}
 			if err := register(s.Name, s.Pos, "enum"); err != nil {
@@ -626,7 +633,7 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			}
 			c.enumAST[s.Name] = s
 		case *SpecDecl:
-			if isReservedBuiltinTypeName(s.Name) {
+			if isReservedBuiltinTypeName(s.Name) || isReservedV09TypeName(s.Name) {
 				return typeErr(s.Pos, "name %q is reserved (built-in)", s.Name)
 			}
 			if err := register(s.Name, s.Pos, "spec"); err != nil {
@@ -1386,6 +1393,8 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			t = tByte
 		case "rune":
 			t = tRune
+		case "never":
+			t = tNever
 		default:
 			if _, isBuiltin := c.builtinEnumDecls[ref.Name]; isBuiltin {
 				return nil, typeErr(ref.Pos,
@@ -1677,6 +1686,12 @@ func (c *checker) assignableTo(from, to *Type) bool {
 	}
 	if from == nil || to == nil {
 		return false
+	}
+	// v0.9 Unit 1: `never` is the bottom type — a value of type never (only
+	// produced by a -> never call expression) flows into any expected slot.
+	// The reverse (T -> never) is rejected: nothing inhabits never.
+	if from.Kind == TypeNever {
+		return true
 	}
 	// Spec widening: from concrete struct/enum implementing `to`.
 	if to.Kind == TypeSpec {
@@ -2053,6 +2068,9 @@ func (c *checker) checkFnDecl(fn *FnDecl) error {
 		if err := c.checkStmt(st); err != nil {
 			return err
 		}
+	}
+	if err := checkFnDeclNeverDiverges(fn); err != nil {
+		return err
 	}
 	return nil
 }

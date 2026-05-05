@@ -66,6 +66,21 @@ func RunBundle(bundle syntax.BundleView, w io.Writer) error {
 	if entry == nil {
 		return nil
 	}
+	// v0.9 Unit 1: a `-> never` call (Unit 3 lands the exit fn) raises an
+	// exitErr panic that unwinds every fn-call frame to here. Recover and
+	// stash the code on the interpreter so the host can read it. PLAN.md
+	// §"Defer × exit": defers are intentionally NOT drained, spawned tasks
+	// are NOT joined — we return immediately, mirroring Go's os.Exit.
+	defer func() {
+		if r := recover(); r != nil {
+			if ee, ok := catchExit(r); ok {
+				in.exitCode = ee.Code
+				in.exited = true
+				return
+			}
+			panic(r)
+		}
+	}()
 	prog := entry.ModuleProgram()
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
@@ -193,6 +208,13 @@ type interp struct {
 	// newSiblingInterp can share them without violating sync.noCopy.
 	spawnWg *sync.WaitGroup
 	writeMu *sync.Mutex
+
+	// v0.9 Unit 1: exit-sentinel state. exited is set when an exitErr
+	// panic was caught at the RunBundle boundary; exitCode carries the
+	// requested code. The fields are read-only by the host; the recover
+	// hook in RunBundle is the sole writer.
+	exited   bool
+	exitCode int
 }
 
 // moduleData is the per-module decl table. Indexed maps mirror typeck's

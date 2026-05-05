@@ -165,7 +165,9 @@ os.exit(0)
 
 func TestV09CgenMainStaysVoidWithoutOsBuiltins(t *testing.T) {
 	// A v0.0 program (no std/os import) keeps main(void) and emits no
-	// argv/exit runtime symbols.
+	// argv/exit/time runtime symbols. Phase 4 Fix 5: extend the negative
+	// assertions to cover zerg_time_*, __zerg_argc, __zerg_argv so a
+	// regression in the runtime gate is caught at compile-time.
 	out, err := emitFromFileSrc(t, `# requires: v0.0
 print 42
 `)
@@ -175,11 +177,52 @@ print 42
 	if !strings.Contains(out, "int main(void)") {
 		t.Errorf("v0.0 program lost main(void) signature")
 	}
-	if strings.Contains(out, "zerg_os_argv") {
-		t.Errorf("v0.0 program unexpectedly contains zerg_os_argv runtime")
+	for _, sym := range []string{
+		"zerg_os_argv",
+		"zerg_os_exit",
+		"zerg_time_now_ms",
+		"zerg_time_sleep_ms",
+		"zerg_time_epoch",
+		"zerg_time_initialised",
+		"__zerg_argc",
+		"__zerg_argv",
+	} {
+		if strings.Contains(out, sym) {
+			t.Errorf("v0.0 program unexpectedly contains %q in emit", sym)
+		}
 	}
-	if strings.Contains(out, "zerg_os_exit") {
-		t.Errorf("v0.0 program unexpectedly contains zerg_os_exit runtime")
+}
+
+// TestV09CgenRuntimeGateAbsentForOsEnvOnly pins Phase 4 Fix 4: a v0.9
+// program that imports std/os solely for os.env emits byte-identical to
+// the pre-v0.9 baseline — no zerg_os_argv / zerg_os_exit / zerg_time_*
+// symbols, no __zerg_argc / __zerg_argv globals.
+func TestV09CgenRuntimeGateAbsentForOsEnvOnly(t *testing.T) {
+	out, err := emitFromFileSrc(t, `# requires: v0.9
+import "std/os"
+match os.env("PATH") {
+    Option.Some(_) => print "set"
+    Option.None    => print "unset"
+}
+`)
+	if err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	if !strings.Contains(out, "int main(void)") {
+		t.Errorf("os.env-only program lost main(void) signature")
+	}
+	for _, sym := range []string{
+		"zerg_os_argv",
+		"zerg_os_exit",
+		"zerg_time_now_ms",
+		"zerg_time_sleep_ms",
+		"zerg_time_epoch",
+		"__zerg_argc",
+		"__zerg_argv",
+	} {
+		if strings.Contains(out, sym) {
+			t.Errorf("os.env-only program unexpectedly contains %q in emit", sym)
+		}
 	}
 }
 

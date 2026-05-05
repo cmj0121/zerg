@@ -137,3 +137,35 @@ print "after"
 		t.Errorf("stdout reached 'after': %q", out)
 	}
 }
+
+// TestV09InterpSpawnExitSurfacesCode pins Phase 4 Fix 2: an os.exit
+// raised inside a spawned goroutine cannot panic across the goroutine
+// boundary, so the spawn-recover stashes the code on a bundle-shared
+// coordinator. RunBundleWithOptions consults the coordinator after
+// spawnWg.Wait() (or earlier, on the next main-path stmt boundary) and
+// surfaces (exited=true, code=N) — matching cgen's libc-exit semantics
+// where the first thread to call exit() takes the whole process down.
+func TestV09InterpSpawnExitSurfacesCode(t *testing.T) {
+	out, code, exited, err := runV09ArgvExitMain(t, `# requires: v0.9
+import "std/os"
+import "std/time"
+
+fn worker() {
+    time.sleep_ms(10)
+    os.exit(5)
+}
+
+spawn worker()
+time.sleep_ms(100)
+print "should not print"
+`, Options{Argv: []string{"x"}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !exited || code != 5 {
+		t.Errorf("(exited, code) = (%v, %d), want (true, 5)", exited, code)
+	}
+	if strings.Contains(out, "should not print") {
+		t.Errorf("stdout leaked past spawn-exit: %q", out)
+	}
+}

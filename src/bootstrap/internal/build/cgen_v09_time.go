@@ -38,6 +38,23 @@ func (g *cgen) programUsesV09() bool {
 	return false
 }
 
+// programUsesV09Time reports whether any module references a v0.9 time
+// __builtin (time_now_ms / time_sleep_ms). Drives the time runtime emit
+// independently of the argv/exit emit — Phase 4 Fix 4 tightens both
+// runtime gates so programs that use only os.argv don't pull in
+// <time.h> or the static epoch globals.
+func (g *cgen) programUsesV09Time() bool {
+	for i := range g.modules {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "time_now_ms") {
+			return true
+		}
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "time_sleep_ms") {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *cgen) programUsesV09Walk(prog *syntax.Program) bool {
 	if prog == nil {
 		return false
@@ -269,7 +286,13 @@ func emitV09TimeBuiltinBody(name string) (string, bool) {
 // matches the interpreter's behaviour: the first time_now_ms call returns 0
 // and captures the epoch; subsequent calls return ms-since-epoch using
 // CLOCK_MONOTONIC. sleep_ms uses nanosleep; negative ms clamps to 0.
+//
+// Phase 4 Fix 3: nanosleep returns EINTR on signal-interrupt; we loop with
+// the remaining time so the "blocks at least N ms" contract holds. Go's
+// time.Sleep already handles signals correctly so the interpreter half
+// needs no equivalent change.
 const runtimeV09TimeC = `#include <time.h>
+#include <errno.h>
 
 /* ---------------- v0.9 std/time runtime --------------------------------- */
 
@@ -293,7 +316,10 @@ static _Bool zerg_time_sleep_ms(int64_t ms) {
     struct timespec req;
     req.tv_sec = (time_t)(ms / 1000);
     req.tv_nsec = (long)((ms % 1000) * 1000000L);
-    nanosleep(&req, NULL);
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1 && errno == EINTR) {
+        req = rem;
+    }
     return 1;
 }
 `

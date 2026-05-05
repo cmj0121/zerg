@@ -292,22 +292,22 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString(runtimeV08C)
 		g.b.WriteString("\n")
 	}
-	// v0.9 stdlib runtime — gated on any reachable v0.9 builtin so v0.0–v0.8
-	// programs preserve their byte-identical emit. <time.h> is conditionally
-	// included by the runtime block itself.
-	if g.programUsesV09() {
+	// v0.9 stdlib runtime — gated on a reachable time builtin so v0.0–v0.8
+	// programs (and v0.9 programs that use only os.argv / os.exit) preserve
+	// their byte-identical emit. <time.h> is conditionally included by the
+	// runtime block itself.
+	if g.programUsesV09Time() {
 		g.b.WriteString(runtimeV09TimeC)
 		g.b.WriteString("\n")
 	}
 	// v0.9 Unit 3 — argv / exit runtime. Lands after the shape helpers so
 	// zerg_list_zerg_str_push (referenced by zerg_os_argv) is already
-	// defined. Emit whenever std/os is imported (i.e. programUsesV08 OR
-	// any v0.9 builtin is reachable) because the std/os trampolines for
-	// argv/exit are emitted unconditionally for every imported module's
-	// __builtin fn-decls — without the runtime, the trampolines would
-	// reference undefined symbols. The gate keeps v0.0-v0.7 programs
-	// (no std/os import) byte-identical.
-	if needsV08 || g.programUsesV09() {
+	// defined. Emit ONLY when the program reaches an os.argv or os.exit
+	// call site so a v0.8 program that imports std/os solely for os.env
+	// keeps its pre-v0.9 byte-identical emit. The trampoline-emit pass
+	// elides bodies for unused builtins, so referencing-only-os_env never
+	// pulls in zerg_os_argv / zerg_os_exit symbols.
+	if needsArgv || g.programUsesOsExit() {
 		g.b.WriteString(runtimeV09ArgvExitC)
 		g.b.WriteString("\n")
 	}
@@ -336,6 +336,9 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 			if len(fn.TypeParams) > 0 {
 				continue
 			}
+			if g.skipBuiltinFn(fn, needsArgv) {
+				continue
+			}
 			hasAnyFn = true
 			g.writeFnSig(fn)
 			g.b.WriteString(";\n")
@@ -361,6 +364,9 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 				continue
 			}
 			if len(fn.TypeParams) > 0 {
+				continue
+			}
+			if g.skipBuiltinFn(fn, needsArgv) {
 				continue
 			}
 			if err := g.emitFn(fn); err != nil {
@@ -2196,6 +2202,31 @@ func (g *cgen) emitPrint(s *syntax.PrintStmt) error {
 // underlying buffer/struct is safe. clone() is the explicit opt-in for
 // the v0.2-style deep copy.
 func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isConst bool) error {
+	// v0.9 Phase 4 Fix 1: a `-> never` RHS (e.g. `let x: int = os.exit(0)`)
+	// typechecks via the bottom-type subtyping rule but the underlying C
+	// trampoline returns void. Emit the call as a statement and emit a
+	// zero-initialised stub binding so any subsequent references to the
+	// name still compile — the call diverges so the stub is never read.
+	if vt := value.Type(); vt != nil && vt.Kind == syntax.TypeNever {
+		exprS, err := g.exprStr(value)
+		if err != nil {
+			return err
+		}
+		var declT *syntax.Type
+		if ref != nil && ref.Resolved != nil {
+			declT = ref.Resolved
+		}
+		g.writeIndent()
+		fmt.Fprintf(&g.b, "%s;\n", exprS)
+		if declT != nil && declT.Kind != syntax.TypeNever {
+			g.writeIndent()
+			if isConst {
+				g.b.WriteString("const ")
+			}
+			fmt.Fprintf(&g.b, "%s %s = (%s){0};\n", g.cTypeName(declT), mangle(name), g.cTypeName(declT))
+		}
+		return nil
+	}
 	t := value.Type()
 	declT := t
 	if ref != nil && ref.Resolved != nil {
@@ -2268,6 +2299,15 @@ func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
 	rhs, err := g.exprStr(s.Value)
 	if err != nil {
 		return err
+	}
+	// v0.9 Phase 4 Fix 1: a `-> never` RHS (e.g. `x = os.exit(0)`)
+	// typechecks via the bottom-type rule but the trampoline returns
+	// void. Emit the call as a statement and skip the assignment;
+	// control never returns from a diverging callee.
+	if vt := s.Value.Type(); vt != nil && vt.Kind == syntax.TypeNever {
+		g.writeIndent()
+		fmt.Fprintf(&g.b, "%s;\n", rhs)
+		return nil
 	}
 	targetName := mangle(target.Name)
 	g.writeIndent()
@@ -2515,6 +2555,28 @@ func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 		v, err := g.exprStr(s.Value)
 		if err != nil {
 			return err
+		}
+		// v0.9 Phase 4 Fix 1: `return os.exit(0)` from a non-never fn
+		// typechecks via never <: T but the trampoline returns void.
+		// Emit the call as a statement; the diverging callee never
+		// returns so a following return is unreachable. The C compiler
+		// is satisfied because the trampoline carries
+		// __attribute__((noreturn)).
+		if vt := s.Value.Type(); vt != nil && vt.Kind == syntax.TypeNever {
+			body = fmt.Sprintf("%s;", v)
+			if s.Guard == nil {
+				g.writeIndent()
+				g.b.WriteString(body)
+				g.b.WriteString("\n")
+				return nil
+			}
+			guard, err := g.exprStr(s.Guard)
+			if err != nil {
+				return err
+			}
+			g.writeIndent()
+			fmt.Fprintf(&g.b, "if (%s) { %s }\n", guard, body)
+			return nil
 		}
 		// v0.4: coerce to the declared fn return type if spec-typed.
 		if g.currentFnRet != nil && shapeContainsSpec(g.currentFnRet) {

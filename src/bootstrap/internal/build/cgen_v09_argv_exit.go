@@ -55,6 +55,32 @@ func (g *cgen) programUsesOsExit() bool {
 	return false
 }
 
+// skipBuiltinFn reports whether the trampoline for fn should be omitted
+// from the emitted C source. v0.9 Unit 3 builtins (os_argv, os_exit) and
+// Unit 2 builtins (time_now_ms, time_sleep_ms) are elided when their
+// corresponding runtime block is not emitted — i.e. when the user
+// program does not reach a call site for them. Without this gate, a
+// v0.8 program that imports std/os solely for os.env would pull in
+// trampolines referencing undefined zerg_os_argv / zerg_os_exit symbols
+// (since the runtime is now usage-gated per Phase 4 Fix 4).
+//
+// `needsArgv` is the cached programUsesArgv result; the other predicates
+// are recomputed because emitFn is called from multiple sites.
+func (g *cgen) skipBuiltinFn(fn *syntax.FnDecl, needsArgv bool) bool {
+	if fn == nil || fn.BuiltinName == "" {
+		return false
+	}
+	switch fn.BuiltinName {
+	case "os_argv":
+		return !needsArgv
+	case "os_exit":
+		return !g.programUsesOsExit()
+	case "time_now_ms", "time_sleep_ms":
+		return !g.programUsesV09Time()
+	}
+	return false
+}
+
 // programUsesBuiltinWalk returns true if the named __builtin is referenced
 // anywhere in prog (top-level statements, MonoFns, MonoImpls). Generic
 // walker shared with the v09 argv predicate; structurally identical to

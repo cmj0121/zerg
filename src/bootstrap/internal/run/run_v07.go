@@ -515,6 +515,15 @@ func (in *interp) evalSpawnArgs(exprs []syntax.Expr) ([]Value, error) {
 // bundle's read-only state (decl tables, impl indices, writer, spawnWg,
 // writeMu) but owns its own scope/defer stacks. Tracks via spawnWg so
 // RunBundle blocks at top level until every spawned task completes.
+//
+// v0.9 Phase 4 Fix 2: an exitErr panic raised inside the spawned body
+// (i.e. user code calling os.exit from a spawn frame) cannot propagate
+// across the goroutine boundary via panic. The recover stashes the
+// requested code on the bundle-shared spawn-exit coordinator; RunBundle
+// consults it after spawnWg.Wait() and surfaces the code to the host.
+// First-spawned-to-exit wins via sync.Once — matches cgen's libc-exit
+// semantics where the first thread to call exit() takes the whole
+// process down.
 func (in *interp) spawnGo(body func(child *interp)) {
 	child := in.newSiblingInterp()
 	in.spawnWg.Add(1)
@@ -522,6 +531,13 @@ func (in *interp) spawnGo(body func(child *interp)) {
 		defer in.spawnWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
+				if ee, ok := catchExit(r); ok {
+					in.spawnExitOnce.Do(func() {
+						in.spawnExitCode.Store(int64(ee.Code))
+						in.spawnExited.Store(true)
+					})
+					return
+				}
 				in.writeMu.Lock()
 				_, _ = io.WriteString(in.w, fmt.Sprintf("spawned task panicked: %v\n", r))
 				in.writeMu.Unlock()

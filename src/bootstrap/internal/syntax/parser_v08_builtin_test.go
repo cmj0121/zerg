@@ -20,7 +20,7 @@ import (
 // the test inputs stay readable even when they exercise the lexer-only gate.
 func lexAtMinor(t *testing.T, src string, minor int) []Token {
 	t.Helper()
-	tokens, err := lexWithVersion([]byte(src), 0, minor)
+	tokens, _, err := lexWithVersion([]byte(src), 0, minor)
 	if err != nil {
 		t.Fatalf("lexWithVersion(%q, v0.%d): %v", src, minor, err)
 	}
@@ -32,7 +32,7 @@ func lexAtMinor(t *testing.T, src string, minor int) []Token {
 // InStdlibFile = false themselves.
 func parseStdlibSrc(t *testing.T, src string) (*Program, error) {
 	t.Helper()
-	tokens, err := lexWithVersion([]byte(src), 0, 8)
+	tokens, _, err := lexWithVersion([]byte(src), 0, 8)
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestParseBuiltinFnDeclNoReturnType(t *testing.T) {
 
 func TestParseBuiltinFnDeclRejectsBody(t *testing.T) {
 	src := "fn foo() -> int __builtin foo_impl { return 1 }\n"
-	tokens, err := lexWithVersion([]byte(src), 0, 8)
+	tokens, _, err := lexWithVersion([]byte(src), 0, 8)
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestParseBuiltinFnDeclRejectsStringName(t *testing.T) {
 	// The marker takes a bareword IDENT — a string literal is rejected so
 	// typo-driven host-resolution lookups fail at typeck rather than later.
 	src := "fn foo() -> int __builtin \"foo_impl\"\n"
-	tokens, err := lexWithVersion([]byte(src), 0, 8)
+	tokens, _, err := lexWithVersion([]byte(src), 0, 8)
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestParseBuiltinFnDeclRejectsStringName(t *testing.T) {
 
 func TestParseBuiltinFnDeclRejectsMissingName(t *testing.T) {
 	src := "fn foo() -> int __builtin\n"
-	tokens, err := lexWithVersion([]byte(src), 0, 8)
+	tokens, _, err := lexWithVersion([]byte(src), 0, 8)
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestParseBuiltinKeywordRejectedInUserFile(t *testing.T) {
 	// focused diagnostic. The lexer still promotes the word — it's the
 	// parser's job to gate access.
 	src := "fn foo() -> int __builtin foo_impl\n"
-	tokens, err := lexWithVersion([]byte(src), 0, 8)
+	tokens, _, err := lexWithVersion([]byte(src), 0, 8)
 	if err != nil {
 		t.Fatalf("lex: %v", err)
 	}

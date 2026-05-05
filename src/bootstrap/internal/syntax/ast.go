@@ -10,6 +10,22 @@ import "fmt"
 // (codegen) emit one C function per entry. The original generic FnDecl stays
 // in Statements but is skipped by emit because its body type-refs are
 // unsubstituted.
+//
+// HeadComments (v0.10 Unit 1) holds file-head `#` lines — every leading
+// comment on the very top of the source above the first decl. Includes the
+// `# requires:` line, license headers, attribution, and shebangs. Empty for
+// programs that start with a decl on line 1. The slice carries the raw
+// comment body (the `#` is stripped); fmt emits these verbatim above the
+// first decl. Stored on Program rather than on the first decl so a file
+// that opens with `# requires: ...` plus a header still round-trips
+// cleanly even if the user edits the first decl out of the file.
+//
+// Comments (v0.10 Unit 1) is the full per-source side-channel of comments
+// captured by LexWithComments. Empty for programs parsed via the comment-
+// stripping path (Lex / Parse). The formatter uses this to emit any inline
+// trailing comments that the parser couldn't attach to a node — at v0.10
+// inline trailing comments are stripped (documented limitation), so the
+// slice is unused outside the test corpus.
 type Program struct {
 	Statements []Stmt
 	MonoFns    []*FnDecl
@@ -20,7 +36,9 @@ type Program struct {
 	// (impl-method, mono-receiver) tuple. The original generic ImplDecl
 	// stays in Statements but is skipped by emit because its receiver type
 	// is unsubstituted.
-	MonoImpls []*ImplDecl
+	MonoImpls    []*ImplDecl
+	HeadComments []string
+	Comments     []CommentToken
 }
 
 // ---------------------------------------------------------------------------
@@ -371,12 +389,18 @@ type TupleBinding struct {
 // v0.2 also admits the tuple-destructure form `let (a, b) := expr`. When the
 // LHS is parenthesised the parser populates Tuple instead of Name; Type is
 // not allowed on the destructure form (typeck infers from the RHS).
+//
+// LeadingComments (v0.10 Unit 1) is the slice of `#` comment bodies that
+// preceded this statement on its own lines. nil/empty for programs parsed
+// without comment threading (Parse / ParseWithOptions); fmt uses the slice
+// to emit comments verbatim above the stmt.
 type LetStmt struct {
-	Pos   Position
-	Name  string        // empty when Tuple != nil
-	Tuple *TupleBinding // nil for the single-name form
-	Type  *TypeRef      // nil ⇒ inferred from Value
-	Value Expr
+	Pos             Position
+	Name            string        // empty when Tuple != nil
+	Tuple           *TupleBinding // nil for the single-name form
+	Type            *TypeRef      // nil ⇒ inferred from Value
+	Value           Expr
+	LeadingComments []string
 }
 
 func (*LetStmt) stmtNode()           {}
@@ -387,11 +411,12 @@ func (s *LetStmt) StmtPos() Position { return s.Pos }
 // tuple-destructure form `mut (a, b) := expr` is admitted on the same terms
 // as LetStmt.
 type MutStmt struct {
-	Pos   Position
-	Name  string
-	Tuple *TupleBinding
-	Type  *TypeRef
-	Value Expr
+	Pos             Position
+	Name            string
+	Tuple           *TupleBinding
+	Type            *TypeRef
+	Value           Expr
+	LeadingComments []string
 }
 
 func (*MutStmt) stmtNode()           {}
@@ -403,11 +428,12 @@ func (s *MutStmt) StmtPos() Position { return s.Pos }
 // destructure on a const is admitted by the parser; typeck rejects it
 // because v0.2 has no const-evaluable composite expressions.
 type ConstStmt struct {
-	Pos   Position
-	Name  string
-	Tuple *TupleBinding
-	Type  *TypeRef
-	Value Expr
+	Pos             Position
+	Name            string
+	Tuple           *TupleBinding
+	Type            *TypeRef
+	Value           Expr
+	LeadingComments []string
 }
 
 func (*ConstStmt) stmtNode()           {}
@@ -422,10 +448,11 @@ func (s *ConstStmt) StmtPos() Position { return s.Pos }
 // identifier-only at v0.3 — list-element compound assignment is sugar that
 // belongs to a later unit.
 type AssignStmt struct {
-	Pos    Position
-	Target Expr
-	Op     AssignOp
-	Value  Expr
+	Pos             Position
+	Target          Expr
+	Op              AssignOp
+	Value           Expr
+	LeadingComments []string
 }
 
 func (*AssignStmt) stmtNode()           {}
@@ -436,8 +463,9 @@ func (s *AssignStmt) StmtPos() Position { return s.Pos }
 // general Expr and validates the kind, so we get one good error message
 // instead of a generic "expected statement".
 type ExprStmt struct {
-	Pos  Position
-	Expr Expr
+	Pos             Position
+	Expr            Expr
+	LeadingComments []string
 }
 
 func (*ExprStmt) stmtNode()           {}
@@ -447,8 +475,9 @@ func (s *ExprStmt) StmtPos() Position { return s.Pos }
 // generalises to any expression. The interpreter and codegen at v0.0 handle
 // only the StringLit case for back-compat — see run.go and cgen.go.
 type PrintStmt struct {
-	Pos  Position
-	Expr Expr
+	Pos             Position
+	Expr            Expr
+	LeadingComments []string
 }
 
 func (*PrintStmt) stmtNode()           {}
@@ -460,9 +489,10 @@ func (s *PrintStmt) StmtPos() Position { return s.Pos }
 //   - `return if cond` ⇒ Value == nil, Guard != nil
 //   - `return expr if cond` ⇒ both set
 type ReturnStmt struct {
-	Pos   Position
-	Value Expr // nil for a bare `return`
-	Guard Expr // nil for unconditional return
+	Pos             Position
+	Value           Expr // nil for a bare `return`
+	Guard           Expr // nil for unconditional return
+	LeadingComments []string
 }
 
 func (*ReturnStmt) stmtNode()           {}
@@ -470,8 +500,9 @@ func (s *ReturnStmt) StmtPos() Position { return s.Pos }
 
 // BreakStmt represents `break [if cond]`.
 type BreakStmt struct {
-	Pos   Position
-	Guard Expr // nil for unconditional break
+	Pos             Position
+	Guard           Expr // nil for unconditional break
+	LeadingComments []string
 }
 
 func (*BreakStmt) stmtNode()           {}
@@ -479,8 +510,9 @@ func (s *BreakStmt) StmtPos() Position { return s.Pos }
 
 // ContinueStmt represents `continue [if cond]`.
 type ContinueStmt struct {
-	Pos   Position
-	Guard Expr // nil for unconditional continue
+	Pos             Position
+	Guard           Expr // nil for unconditional continue
+	LeadingComments []string
 }
 
 func (*ContinueStmt) stmtNode()           {}
@@ -536,8 +568,9 @@ type FnDecl struct {
 	// Body is nil — the marker REPLACES the body. Typeck (Unit 2) validates
 	// the name against the closed builtin registry; the interpreter / cgen
 	// route the call to the host implementation keyed by this string.
-	BuiltinName    string
-	BuiltinNamePos Position
+	BuiltinName     string
+	BuiltinNamePos  Position
+	LeadingComments []string
 }
 
 func (*FnDecl) stmtNode()           {}
@@ -553,11 +586,12 @@ type ElifClause struct {
 // IfStmt represents `if cond {} [elif cond {}]* [else {}]`. Else is nil when
 // the source omits it.
 type IfStmt struct {
-	Pos   Position
-	Cond  Expr
-	Then  *Block
-	Elifs []ElifClause
-	Else  *Block // nil ⇒ no else
+	Pos             Position
+	Cond            Expr
+	Then            *Block
+	Elifs           []ElifClause
+	Else            *Block // nil ⇒ no else
+	LeadingComments []string
 }
 
 func (*IfStmt) stmtNode()           {}
@@ -582,14 +616,15 @@ const (
 // The two list-iteration shapes share the loop variable + body machinery and
 // diverge only in how the per-iteration value is produced.
 type ForStmt struct {
-	Pos    Position
-	Kind   ForKind
-	Cond   Expr       // ForCond
-	Var    string     // ForRange / ForIter — the bound variable name
-	VarPos Position   // ForRange / ForIter — position of the variable name
-	Range  *RangeExpr // ForRange — the iteration range
-	Iter   Expr       // ForIter — the list-typed expression to iterate
-	Body   *Block
+	Pos             Position
+	Kind            ForKind
+	Cond            Expr       // ForCond
+	Var             string     // ForRange / ForIter — the bound variable name
+	VarPos          Position   // ForRange / ForIter — position of the variable name
+	Range           *RangeExpr // ForRange — the iteration range
+	Iter            Expr       // ForIter — the list-typed expression to iterate
+	Body            *Block
+	LeadingComments []string
 }
 
 func (*ForStmt) stmtNode()           {}
@@ -598,7 +633,8 @@ func (s *ForStmt) StmtPos() Position { return s.Pos }
 // NopStmt represents the literal `nop` keyword. Carries over from v0.0 with
 // no shape change.
 type NopStmt struct {
-	Pos Position
+	Pos             Position
+	LeadingComments []string
 }
 
 func (*NopStmt) stmtNode()           {}
@@ -626,11 +662,12 @@ func (s *NopStmt) StmtPos() Position { return s.Pos }
 // as a no-op so existing v0.0–v0.4 corpora keep working unchanged. Unit 2
 // wires the node into the module loader.
 type ImportDecl struct {
-	Pos      Position
-	Path     string
-	PathPos  Position
-	Alias    string
-	AliasPos Position
+	Pos             Position
+	Path            string
+	PathPos         Position
+	Alias           string
+	AliasPos        Position
+	LeadingComments []string
 }
 
 func (*ImportDecl) stmtNode()           {}
@@ -805,11 +842,12 @@ type FieldDecl struct {
 // Pub records the v0.5 decl-level visibility modifier. Field-level `pub` is
 // out of scope at v0.5; only the decl as a whole is gated.
 type StructDecl struct {
-	Pos        Position
-	Name       string
-	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic
-	Fields     []FieldDecl
-	Pub        bool
+	Pos             Position
+	Name            string
+	TypeParams      []TypeParam // v0.6 generic type parameters; nil for non-generic
+	Fields          []FieldDecl
+	Pub             bool
+	LeadingComments []string
 }
 
 func (*StructDecl) stmtNode()           {}
@@ -834,11 +872,12 @@ type VariantDecl struct {
 // Pub records the v0.5 decl-level visibility modifier. Variants inherit the
 // enum's visibility; per-variant `pub` is not a v0.5 surface.
 type EnumDecl struct {
-	Pos        Position
-	Name       string
-	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic
-	Variants   []VariantDecl
-	Pub        bool
+	Pos             Position
+	Name            string
+	TypeParams      []TypeParam // v0.6 generic type parameters; nil for non-generic
+	Variants        []VariantDecl
+	Pub             bool
+	LeadingComments []string
 }
 
 func (*EnumDecl) stmtNode()           {}
@@ -861,9 +900,10 @@ type MatchArm struct {
 // MatchStmt is `match expr { arm1; arm2; ... }`. The arms are tested
 // top-to-bottom by both the interpreter and codegen.
 type MatchStmt struct {
-	Pos     Position
-	Subject Expr
-	Arms    []MatchArm
+	Pos             Position
+	Subject         Expr
+	Arms            []MatchArm
+	LeadingComments []string
 }
 
 func (*MatchStmt) stmtNode()           {}
@@ -1122,11 +1162,12 @@ type SpecMethod struct {
 // Pub records the v0.5 decl-level visibility modifier on the spec itself;
 // individual method visibility is recorded on each SpecMethod.
 type SpecDecl struct {
-	Pos        Position
-	Name       string
-	TypeParams []TypeParam // v0.6 generic type parameters; nil for non-generic specs
-	Methods    []*SpecMethod
-	Pub        bool
+	Pos             Position
+	Name            string
+	TypeParams      []TypeParam // v0.6 generic type parameters; nil for non-generic specs
+	Methods         []*SpecMethod
+	Pub             bool
+	LeadingComments []string
 }
 
 func (*SpecDecl) stmtNode()           {}
@@ -1170,7 +1211,8 @@ type ImplDecl struct {
 	// pointers here, so impl tables can disambiguate by canonical pointer
 	// rather than bare name. Nil for impls that fail to resolve (typeck
 	// rejects those before this gets read).
-	Receiver *Type
+	Receiver        *Type
+	LeadingComments []string
 }
 
 func (*ImplDecl) stmtNode()           {}
@@ -1350,8 +1392,9 @@ func (e *AnonFnExpr) ExprPos() Position { return e.Pos }
 // Call is typed as Expr so both shapes flow through one field; the parser
 // guarantees it is one of the two concrete types above.
 type SpawnStmt struct {
-	Pos  Position
-	Call Expr
+	Pos             Position
+	Call            Expr
+	LeadingComments []string
 }
 
 func (*SpawnStmt) stmtNode()           {}
@@ -1366,8 +1409,9 @@ func (s *SpawnStmt) StmtPos() Position { return s.Pos }
 // diagnostic. typeck (Unit 3) takes over for the per-fn defer-stack
 // bookkeeping; the parser only records the syntactic shape.
 type DeferStmt struct {
-	Pos  Position
-	Body *Block
+	Pos             Position
+	Body            *Block
+	LeadingComments []string
 }
 
 func (*DeferStmt) stmtNode()           {}
@@ -1395,9 +1439,10 @@ func (e *ChanConstructorExpr) ExprPos() Position { return e.Pos }
 // `<-` next; chained sends (`a <- b <- c`) are rejected at parse time per
 // PLAN.md so users must split with parens.
 type SendStmt struct {
-	Pos   Position
-	Chan  Expr
-	Value Expr
+	Pos             Position
+	Chan            Expr
+	Value           Expr
+	LeadingComments []string
 }
 
 func (*SendStmt) stmtNode()           {}
@@ -1454,8 +1499,9 @@ type SelectArm struct {
 // until one arm is ready (the default arm, when present, makes the select
 // non-blocking). The parser rejects an empty arm list at parse time.
 type SelectStmt struct {
-	Pos  Position
-	Arms []SelectArm
+	Pos             Position
+	Arms            []SelectArm
+	LeadingComments []string
 }
 
 func (*SelectStmt) stmtNode()           {}

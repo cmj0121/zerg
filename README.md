@@ -1037,6 +1037,11 @@ All the features are based on my needs and my dreams.
   pre-v0.8 baseline.
 - The stdlib surface is **provisional** through v1.0. Fn signatures may change before source
   stability ships.
+- Trust boundary: `read_file` / `write_file` operate on the host filesystem with no path sandbox —
+  `read_file("../../etc/passwd")` works. Documented behaviour at v0.8; v0.9+ developer tooling may
+  layer in capability scoping.
+- Memory: `read_file` slurps the whole file into memory; no streaming or size cap at v0.8. Suitable
+  for config / source files, not large blobs. Streaming may land at v0.9+.
 - Backward compatibility: every v0.0–v0.7 corpus continues to pass under `make test`. Programs that
   used `__builtin` as a plain identifier in pre-v0.8 source continue to parse it as IDENT — the
   keyword is gated on `# requires: v0.8` AND on the file living under the embedded `std/` tree.

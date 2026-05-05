@@ -600,7 +600,14 @@ static zerg_io_str_or_err zerg_io_read_file(zerg_str path) {
     if (sz < 0) sz = 0;
     rewind(f);
     char *buf = (char *)malloc((size_t)sz + 1);
+    errno = 0;
     size_t got = fread(buf, 1, (size_t)sz, f);
+    if (ferror(f)) {
+        int eb = zerg_io_errno_bucket(errno);
+        fclose(f);
+        free(buf);
+        return (zerg_io_str_or_err){.tag = eb, .value = (zerg_str){0, 0}};
+    }
     fclose(f);
     buf[got] = 0;
     return (zerg_io_str_or_err){.tag = 0, .value = (zerg_str){buf, got}};

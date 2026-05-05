@@ -4,6 +4,7 @@ import (
 	"bytes"
 	stdfmt "fmt"
 	"os"
+	"path/filepath"
 
 	zfmt "github.com/cmj/zerg/src/bootstrap/internal/fmt"
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
@@ -71,7 +72,12 @@ func (c *fmtCmd) runStdout() error {
 // no files are mutated past the failing one.
 func (c *fmtCmd) runWrite() error {
 	for _, path := range c.Files {
-		out, err := formatFile(path)
+		src, err := os.ReadFile(path)
+		if err != nil {
+			stdfmt.Fprintln(os.Stderr, err)
+			return &fmtExitError{code: 1}
+		}
+		out, err := formatBytes(path, src)
 		if err != nil {
 			stdfmt.Fprintln(os.Stderr, err)
 			if isParseLikeError(err) {
@@ -79,10 +85,57 @@ func (c *fmtCmd) runWrite() error {
 			}
 			return &fmtExitError{code: 1}
 		}
-		if err := os.WriteFile(path, out, 0o644); err != nil {
+		if err := writeCanonical(path, src, out); err != nil {
 			stdfmt.Fprintln(os.Stderr, err)
 			return &fmtExitError{code: 1}
 		}
+	}
+	return nil
+}
+
+// writeCanonical replaces path's contents with out, atomically and only when
+// the bytes actually differ. Skipping the write when src == out preserves
+// mtime so downstream build systems do not see a spurious change. The atomic
+// path is tempfile-in-same-dir + rename: a SIGINT between Close and Rename
+// leaves the source intact (the tempfile is orphaned, never the truth).
+// Permission bits are inherited from the source file's lstat — symlinks are
+// rejected up front so `fmt -w` can never silently rewrite the link target.
+func writeCanonical(path string, src, out []byte) error {
+	if bytes.Equal(out, src) {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return stdfmt.Errorf("zerg fmt: refusing to follow symlink: %s", path)
+	}
+	perm := info.Mode().Perm()
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".fmt.*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
 	}
 	return nil
 }

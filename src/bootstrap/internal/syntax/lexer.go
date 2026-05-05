@@ -159,9 +159,17 @@ func (l *lexer) next() (Token, error) {
 			for !l.atEnd() && l.peek() != '\n' {
 				l.advance()
 			}
+			// CRLF inputs end the line in `\r\n`; the `\r` falls inside the
+			// comment slice and would round-trip as a stray byte if kept.
+			// Strip one trailing `\r` so the comment text is the canonical
+			// LF form regardless of the input line-ending convention.
+			end := l.pos
+			if end > start && l.src[end-1] == '\r' {
+				end--
+			}
 			l.comments = append(l.comments, CommentToken{
 				Pos:     pos,
-				Text:    string(l.src[start:l.pos]),
+				Text:    string(l.src[start:end]),
 				Leading: leading,
 			})
 		case c == '\n':

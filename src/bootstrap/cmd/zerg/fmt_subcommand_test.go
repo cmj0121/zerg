@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
 
 // TestFmtSubcommand exercises the three modes of `zerg fmt` end-to-end via
@@ -141,6 +143,108 @@ func TestFmtSubcommand(t *testing.T) {
 		}
 		if bytes.Contains([]byte(out.stderr), []byte(p2)) {
 			t.Fatalf("canonical %s should not appear in stderr: %s", p2, out.stderr)
+		}
+	})
+}
+
+// TestFmtWriteDataSafety pins the four data-safety properties of `zerg fmt -w`
+// added in v0.10 Iter 2: skip-on-equal preserves mtime, source perm bits are
+// preserved across rewrites, and symlinks are refused with a focused error.
+func TestFmtWriteDataSafety(t *testing.T) {
+	bin := buildBin(t)
+	canonical := "let x := 1\nprint x\n"
+	nonCanonical := "let x := 1\nif true {\n  print x\n}\n"
+	formattedNonCanonical := "let x := 1\nif true {\n    print x\n}\n"
+
+	t.Run("skip-on-equal preserves mtime", func(t *testing.T) {
+		dir := t.TempDir()
+		path := writeFile(t, dir, "a.zg", canonical)
+		// Backdate so the OS clock can't accidentally tick during the
+		// test and produce a coincidentally identical mtime.
+		old := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+		before, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		_, code := runBin(t, bin, "fmt", "-w", path)
+		if code != 0 {
+			t.Fatalf("exit=%d, want 0", code)
+		}
+		after, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if !after.ModTime().Equal(before.ModTime()) {
+			t.Fatalf("mtime changed on canonical file: before=%v after=%v",
+				before.ModTime(), after.ModTime())
+		}
+	})
+
+	t.Run("non-canonical write updates content", func(t *testing.T) {
+		dir := t.TempDir()
+		path := writeFile(t, dir, "a.zg", nonCanonical)
+		_, code := runBin(t, bin, "fmt", "-w", path)
+		if code != 0 {
+			t.Fatalf("exit=%d, want 0", code)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if string(got) != formattedNonCanonical {
+			t.Fatalf("file=%q want %q", got, formattedNonCanonical)
+		}
+	})
+
+	t.Run("preserves permission bits", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("POSIX permission bits not exercised on Windows")
+		}
+		dir := t.TempDir()
+		path := writeFile(t, dir, "a.zg", nonCanonical)
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		_, code := runBin(t, bin, "fmt", "-w", path)
+		if code != 0 {
+			t.Fatalf("exit=%d, want 0", code)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("perm=%#o, want 0o600", got)
+		}
+	})
+
+	t.Run("symlink is refused", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink semantics differ on Windows; not part of this fix")
+		}
+		dir := t.TempDir()
+		target := writeFile(t, dir, "real.zg", nonCanonical)
+		link := filepath.Join(dir, "link.zg")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		out, code := runBin(t, bin, "fmt", "-w", link)
+		if code == 0 {
+			t.Fatalf("exit=0 on symlink; want non-zero (stderr=%s)", out.stderr)
+		}
+		if !bytes.Contains([]byte(out.stderr), []byte("symlink")) {
+			t.Fatalf("stderr=%q does not mention symlink", out.stderr)
+		}
+		// Target must be untouched.
+		got, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatalf("read target: %v", err)
+		}
+		if string(got) != nonCanonical {
+			t.Fatalf("target mutated through symlink: got=%q", got)
 		}
 	})
 }

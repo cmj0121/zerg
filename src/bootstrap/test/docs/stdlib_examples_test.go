@@ -169,7 +169,7 @@ func TestStdlibMdExamplesParseAndTypecheck(t *testing.T) {
 		name := docPath + ":" + lineLabel(ex.Line)
 		t.Run(name, func(t *testing.T) {
 			if ex.Tag != "program" {
-				t.Skipf("unsupported tag %q (only 'program' validated at v0.10)", ex.Tag)
+				t.Fatalf("unsupported tag %q (only 'program' validated at v0.10)", ex.Tag)
 			}
 			if err := validateProgram(t, ex.Source); err != nil {
 				t.Fatalf("example at %s failed:\n--- source ---\n%s---\n%v",

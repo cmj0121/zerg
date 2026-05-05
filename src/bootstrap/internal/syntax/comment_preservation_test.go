@@ -284,6 +284,35 @@ fn f() {
 	}
 }
 
+func TestLexCommentsStripCRLF(t *testing.T) {
+	// CRLF input: the comment scanner ran up to `\n`, capturing the `\r`
+	// as part of the comment body. Iter 2 strips one trailing `\r` so a
+	// comment authored on a CRLF host lex+parse-emits identically to one
+	// authored on an LF host.
+	src := []byte("# header line\r\nlet x := 1\r\n# trailing block\r\n")
+	tokens, comments, err := LexWithComments(src)
+	if err != nil {
+		t.Fatalf("LexWithComments: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("comment count = %d, want 2", len(comments))
+	}
+	for i, c := range comments {
+		if strings.Contains(c.Text, "\r") {
+			t.Errorf("comment %d retained CR: %q", i, c.Text)
+		}
+	}
+	prog, err := ParseWithComments(tokens, comments)
+	if err != nil {
+		t.Fatalf("ParseWithComments: %v", err)
+	}
+	for i, c := range prog.HeadComments {
+		if strings.Contains(c, "\r") {
+			t.Errorf("HeadComments[%d] retained CR: %q", i, c)
+		}
+	}
+}
+
 func TestParseWithoutCommentsLeavesFieldsEmpty(t *testing.T) {
 	// Pre-Unit-1 callers (Parse with no comment threading) get an AST
 	// whose new fields are all nil. This is the structural-additivity

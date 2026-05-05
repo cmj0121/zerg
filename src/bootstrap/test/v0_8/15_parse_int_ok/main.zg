@@ -1,0 +1,10 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.parse_int("42")
+print strings.parse_int("-7")
+print strings.parse_int("+9")
+print strings.parse_int("  100  ")
+print strings.parse_int("0")
+print strings.parse_int("-0")
+print strings.parse_int("+0")

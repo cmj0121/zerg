@@ -1,0 +1,19 @@
+# requires: v0.8
+import "std/io"
+import "std/os"
+
+match os.env("ZERG_TEST_TEMPDIR") {
+    Option.Some(d) => {
+        match io.read_file(d) {
+            Result.Ok(_) => print "ok?"
+            Result.Err(e) => match e {
+                IoError.NotFound => print "NotFound"
+                IoError.PermissionDenied => print "PermissionDenied"
+                IoError.AlreadyExists => print "AlreadyExists"
+                IoError.InvalidPath => print "InvalidPath"
+                IoError.Other => print "Other"
+            }
+        }
+    }
+    Option.None => print "no tempdir"
+}

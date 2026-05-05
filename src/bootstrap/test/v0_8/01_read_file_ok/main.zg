@@ -1,0 +1,15 @@
+# requires: v0.8
+import "std/io"
+import "std/os"
+import "std/strings"
+
+match os.env("ZERG_TEST_TEMPDIR") {
+    Option.Some(d) => {
+        let path := strings.join([d, "input.txt"], "/")
+        match io.read_file(path) {
+            Result.Ok(content) => print strings.trim(content)
+            Result.Err(_) => print "read err"
+        }
+    }
+    Option.None => print "no tempdir"
+}

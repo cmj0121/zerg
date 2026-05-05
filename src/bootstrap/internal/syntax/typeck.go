@@ -2030,6 +2030,13 @@ func (c *checker) checkFnDecl(fn *FnDecl) error {
 	if len(fn.TypeParams) > 0 {
 		return nil
 	}
+	// v0.8 Unit 2: __builtin fn-decls have no body; validate the bareword
+	// against the closed registry and return. The fn's signature was
+	// already resolved by resolveFnSignatures so call sites see normal
+	// param/ret types.
+	if fn.BuiltinName != "" {
+		return validateBuiltinFnDecl(fn)
+	}
 	sig := c.fns[fn.Name]
 	c.currentFn = &sig
 	c.currentFnDecl = fn

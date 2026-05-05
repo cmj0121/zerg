@@ -1,0 +1,4 @@
+# requires: v0.8
+
+fn naughty() -> int __builtin some_host_thing
+print naughty()

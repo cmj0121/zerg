@@ -1,0 +1,9 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.to_lower("HELLO")
+print strings.to_lower("hello")
+print strings.to_lower("AbCdE")
+print strings.to_lower("123 ABC!")
+print strings.to_lower("")
+print strings.to_lower("Aa")

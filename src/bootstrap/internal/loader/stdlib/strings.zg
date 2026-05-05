@@ -1,0 +1,18 @@
+# requires: v0.8
+
+pub enum ParseError {
+    Empty,
+    InvalidDigit,
+    Overflow,
+}
+
+pub fn split(s: str, sep: str) -> list[str] __builtin strings_split
+pub fn join(parts: list[str], sep: str) -> str __builtin strings_join
+pub fn trim(s: str) -> str __builtin strings_trim
+pub fn starts_with(s: str, prefix: str) -> bool __builtin strings_starts_with
+pub fn ends_with(s: str, suffix: str) -> bool __builtin strings_ends_with
+pub fn contains(s: str, needle: str) -> bool __builtin strings_contains
+pub fn replace(s: str, old: str, new: str) -> str __builtin strings_replace
+pub fn to_upper(s: str) -> str __builtin strings_to_upper
+pub fn to_lower(s: str) -> str __builtin strings_to_lower
+pub fn parse_int(s: str) -> Result[int, ParseError] __builtin strings_parse_int

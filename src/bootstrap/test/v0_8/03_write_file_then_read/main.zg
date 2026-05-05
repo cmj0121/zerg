@@ -1,0 +1,19 @@
+# requires: v0.8
+import "std/io"
+import "std/os"
+import "std/strings"
+
+match os.env("ZERG_TEST_TEMPDIR") {
+    Option.Some(d) => {
+        let path := strings.join([d, "round.txt"], "/")
+        match io.write_file(path, "round-trip") {
+            Result.Ok(_) => print "wrote"
+            Result.Err(_) => print "write err"
+        }
+        match io.read_file(path) {
+            Result.Ok(content) => print content
+            Result.Err(_) => print "read err"
+        }
+    }
+    Option.None => print "no tempdir"
+}

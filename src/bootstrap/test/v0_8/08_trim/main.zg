@@ -1,0 +1,9 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.trim("  leading")
+print strings.trim("trailing   ")
+print strings.trim("   both   ")
+print strings.trim("none")
+print strings.trim("")
+print strings.trim("\t\n  mixed \t\n")

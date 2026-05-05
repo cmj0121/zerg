@@ -1,0 +1,9 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.to_upper("hello")
+print strings.to_upper("HELLO")
+print strings.to_upper("AbCdE")
+print strings.to_upper("123 abc!")
+print strings.to_upper("")
+print strings.to_upper("zZ")

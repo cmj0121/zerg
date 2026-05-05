@@ -1800,6 +1800,14 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		args[i] = v
 	}
 
+	// v0.8: __builtin fn-decls have no body. Route to the host primitive
+	// dispatch keyed by fn.BuiltinName. Args have already been coerced; the
+	// result type carries the canonical Result/Option *Type stamped by
+	// typeck on the call expression.
+	if fn.BuiltinName != "" {
+		return in.callBuiltin(fn, args, resultType, callPos)
+	}
+
 	// Calls do NOT inherit the caller's scope: a fresh frame stack rooted at
 	// just the new frame. v0.5: also switch the active module to the
 	// callee's owning module so the body resolves unqualified identifiers

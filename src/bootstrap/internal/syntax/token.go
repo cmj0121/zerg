@@ -173,6 +173,14 @@ const (
 	// wait. Reserved at v0.7 Unit 1c; consumed by typeck at Unit 4 and the
 	// interpreter / codegen at Units 6 / 7.
 	KindSelect // select
+
+	// KindBuiltin is the v0.8 `__builtin` fn-decl marker. Lexed only when the
+	// surrounding file declares `# requires: v0.8` or higher; older files lex
+	// the literal as KindIdent so v0.0–v0.7 backwards compatibility holds.
+	// The parser consumes it in fn-decl tail position (`__builtin <ident>`),
+	// and the typeck / loader (Unit 2) restrict the keyword to embedded
+	// `std/` modules — user code referencing it surfaces a focused diagnostic.
+	KindBuiltin // __builtin
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -359,6 +367,8 @@ func (k Kind) String() string {
 		return "'<-'"
 	case KindSelect:
 		return "'select'"
+	case KindBuiltin:
+		return "'__builtin'"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

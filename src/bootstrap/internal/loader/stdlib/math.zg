@@ -1,0 +1,6 @@
+# requires: v0.8
+
+pub fn abs(x: int) -> int __builtin math_abs
+pub fn min(a: int, b: int) -> int __builtin math_min
+pub fn max(a: int, b: int) -> int __builtin math_max
+pub fn gcd(a: int, b: int) -> int __builtin math_gcd

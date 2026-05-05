@@ -1,0 +1,17 @@
+# requires: v0.8
+import "std/strings"
+
+fn classify(s: str) {
+    match strings.parse_int(s) {
+        Result.Ok(_) => print "ok"
+        Result.Err(e) => match e {
+            ParseError.Empty => print "Empty"
+            ParseError.InvalidDigit => print "InvalidDigit"
+            ParseError.Overflow => print "Overflow"
+        }
+    }
+}
+
+classify("")
+classify("   ")
+classify("\t\n")

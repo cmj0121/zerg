@@ -1,0 +1,9 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.replace("aaa", "aa", "b")
+print strings.replace("foo bar foo", "foo", "baz")
+print strings.replace("hello", "x", "y")
+print strings.replace("", "x", "y")
+print strings.replace("aaaa", "aa", "b")
+print strings.replace("ababab", "ab", "X")

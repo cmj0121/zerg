@@ -231,6 +231,21 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString(runtimeV07C)
 		g.b.WriteString("\n")
 	}
+	// v0.8 stdlib runtime — gated on any reachable __builtin call so v0.0-
+	// v0.7 programs preserve their byte-identical emit. Actual emission is
+	// deferred to after the shape registry's typedef pass because the
+	// runtime references zerg_list_zerg_str (strings_split's return) and
+	// the corresponding typedef must precede it. The walker still runs
+	// here so the gate is computed once.
+	needsV08 := g.programUsesV08()
+	if needsV08 {
+		// Force-monomorphise the list[str] shape so its typedef + helpers
+		// land in the shape registry before the runtime references them.
+		// Without this, a program that calls only strings_join (which takes
+		// list[str] but doesn't construct one) would never reach the shape
+		// through the user-AST walks.
+		g.shapes.addType(g, listOfStrType())
+	}
 
 	// v0.7: wire the Option[T] lookup so chan recv helpers can name the
 	// canonical Option[T] enum. The typed AST stamps every RecvExpr.Type()
@@ -269,6 +284,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	g.emitChanTypedefs()
 	g.shapes.emitHelpers(g, &g.b)
 	g.emitChanHelpers()
+	// v0.8 stdlib runtime lands after the shape helpers because
+	// zerg_strings_split returns zerg_list_zerg_str — the per-shape push /
+	// copy helpers must be defined before the runtime calls them.
+	if needsV08 {
+		g.b.WriteString(runtimeV08C)
+		g.b.WriteString("\n")
+	}
 	g.emitEqHelpers()
 	g.emitSpecVtablesAndMethods()
 	if err := g.emitAnonFnHeaders(); err != nil {
@@ -2535,6 +2557,12 @@ func (g *cgen) emitFlow(guard syntax.Expr, kw string) error {
 // drains the stack on every exit. The `?` early-return path (propagateStr)
 // jumps to that label so deferred actions fire on Err / None propagation.
 func (g *cgen) emitFn(fn *syntax.FnDecl) error {
+	// v0.8: __builtin fn-decls have no body. The trampoline forwards to a
+	// runtime helper and wraps the result into the user-program's view of
+	// the return type (Result / Option construction).
+	if fn.BuiltinName != "" {
+		return g.emitBuiltinFn(fn)
+	}
 	g.writeFnSig(fn)
 	g.b.WriteString(" {\n")
 	prevRet := g.currentFnRet

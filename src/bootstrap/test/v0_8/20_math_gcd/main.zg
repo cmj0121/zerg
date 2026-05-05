@@ -1,0 +1,11 @@
+# requires: v0.8
+import "std/math"
+
+print math.gcd(12, 18)
+print math.gcd(0, 0)
+print math.gcd(0, 5)
+print math.gcd(5, 0)
+print math.gcd(7, 13)
+print math.gcd(-12, 18)
+print math.gcd(12, -18)
+print math.gcd(100, 75)

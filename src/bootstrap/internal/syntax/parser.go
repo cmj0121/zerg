@@ -40,6 +40,27 @@ func Parse(tokens []Token) (*Program, error) {
 	return p.parseProgram()
 }
 
+// ParseOptions controls Parse-time gates that depend on where the source
+// originated. Pre-Unit-1 callers used Parse directly; v0.8 adds the
+// stdlib-only `__builtin` marker, so the loader (Unit 2) signals here when
+// the file lives under the embedded `std/` tree. Tests construct one of
+// these directly to exercise either path.
+type ParseOptions struct {
+	// InStdlibFile is true when the source is one of the toolchain-shipped
+	// `std/...` modules. Only those files may use the `__builtin` fn-decl
+	// marker; user-loaded sources see a focused diagnostic. Set by the
+	// loader; defaults to false for hand-driven Parse callers.
+	InStdlibFile bool
+}
+
+// ParseWithOptions is Parse with an explicit options record. The default
+// Parse keeps its zero-arg shape so existing callers stay untouched.
+func ParseWithOptions(tokens []Token, opts ParseOptions) (*Program, error) {
+	p := newParser(tokens)
+	p.inStdlibFile = opts.InStdlibFile
+	return p.parseProgram()
+}
+
 // ParseStatement parses exactly one statement from a single line of input —
 // the shape the REPL feeds in. Trailing whitespace/EOF is fine, but a second
 // statement on the same line is rejected.
@@ -103,6 +124,11 @@ type parser struct {
 	// fnBodyDepths[last]`. Push happens just before the fn-body parseBlock
 	// call; pop is paired in defer to keep the stack honest on errors.
 	fnBodyDepths []int
+	// inStdlibFile gates the v0.8 `__builtin` fn-decl marker. Set by the
+	// loader (Unit 2) when the source is one of the embedded `std/...`
+	// modules. Default zero ⇒ user code, which rejects `__builtin` with a
+	// focused diagnostic so the marker stays a private toolchain primitive.
+	inStdlibFile bool
 }
 
 func newParser(tokens []Token) *parser {
@@ -986,6 +1012,37 @@ func (p *parser) parseFnDecl() (Stmt, error) {
 			return nil, err
 		}
 		ret = tr
+	}
+
+	// v0.8 Unit 1: a `__builtin <ident>` tail replaces the body. The keyword
+	// only lexes when the file declares `# requires: v0.8` or higher; even
+	// then it is reserved for embedded `std/` modules — user code referencing
+	// it gets a focused diagnostic.
+	if p.peek().Kind == KindBuiltin {
+		bkw := p.advance()
+		if !p.inStdlibFile {
+			return nil, errorAt(bkw.Pos, "__builtin reserved for stdlib")
+		}
+		nameT, err := p.expect(KindIdent, "after '__builtin'")
+		if err != nil {
+			return nil, err
+		}
+		// A body block after the marker is rejected — the marker REPLACES
+		// the body. Allow either an immediate NEWLINE / EOF or any other
+		// statement-terminating token; an LBRACE is the specific ambiguity
+		// to catch.
+		if p.peek().Kind == KindLBrace {
+			return nil, errorAt(p.peek().Pos, "__builtin fn-decl must not have a body block")
+		}
+		return &FnDecl{
+			Pos:            kw.Pos,
+			Name:           nameTok.Value,
+			TypeParams:     typeParams,
+			Params:         params,
+			Return:         ret,
+			BuiltinName:    nameT.Value,
+			BuiltinNamePos: nameT.Pos,
+		}, nil
 	}
 
 	body, err := p.parseFnBody("function body")

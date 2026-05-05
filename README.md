@@ -33,7 +33,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.5** — modules.
 - [x] **v0.6** — generics and null-safety.
 - [x] **v0.7** — concurrency runtime.
-- [ ] **v0.8** — standard library.
+- [x] **v0.8** — standard library.
 - [ ] **v0.9** — developer tooling.
 - [ ] **v0.10** — hardening and language reference.
 - [ ] **v1.0** — source stability.
@@ -46,9 +46,9 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C and
 shelling out to the system C compiler. v0.0 (toolchain bootstrap), v0.1 (procedural core), v0.2
 (composite data), v0.3 (borrow checking), v0.4 (polymorphism), v0.5 (modules), v0.6 (generics
-and null-safety), and v0.7 (concurrency runtime) share the same `zerg` binary; earlier examples
-(`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 / v0.6 corpora) keep working
-unchanged.
+and null-safety), v0.7 (concurrency runtime), and v0.8 (standard library) share the same `zerg`
+binary; earlier examples (`00_nop.zg`, `01_hello.zg`, and the v0.1 / v0.2 / v0.3 / v0.4 / v0.5 /
+v0.6 / v0.7 corpora) keep working unchanged.
 
 ### Prerequisites
 
@@ -116,7 +116,7 @@ deterministic.
 
 ```sh
 ./src/bootstrap/bin/zerg repl
-# Zerg REPL v0.7 — accepts the v0.7 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency)
+# Zerg REPL v0.8 — accepts the v0.8 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib)
 # Type :exit to quit, :help for syntax
 # zerg> let x := 1 + 2
 # zerg> print x
@@ -148,7 +148,7 @@ beyond the current toolchain version with a clean message:
 
 ```sh
 ./src/bootstrap/bin/zerg run examples/13_asm.zg
-# zerg: examples/13_asm.zg requires v0.8 (current is v0.7)
+# zerg: examples/13_asm.zg requires v0.10 (current is v0.8)
 ```
 
 The v0.0 examples (`00_nop.zg`, `01_hello.zg`) carry no `requires` line and continue to run. The
@@ -169,10 +169,11 @@ is supported, though the example's bare-variant constructors (`Ok(...)` without 
 qualifier) lie outside the v0.6 corpus and still error at parse time. `examples/12_concurrency.zg`
 advertises v0.7 and now passes the gate; the surface it exercises (`chan[T]`, `spawn`, anon fn,
 `select`, `defer`) is supported, though the example's body may still rely on shapes outside the
-v0.7 corpus. The v0.7 surface is exercised end-to-end by the `test/v0_7/` corpus. The authoritative
-parity corpora live at `src/bootstrap/test/v0_2/`, `src/bootstrap/test/v0_3/`,
-`src/bootstrap/test/v0_4/`, `src/bootstrap/test/v0_5/`, `src/bootstrap/test/v0_6/`, and
-`src/bootstrap/test/v0_7/`.
+v0.7 corpus. The v0.8 stdlib surface (`import "std/io"`, `import "std/strings"`, `import "std/math"`,
+`import "std/os"`) does not have a dedicated `examples/` entry — the authoritative coverage lives
+in `test/v0_8/`. The authoritative parity corpora live at `src/bootstrap/test/v0_2/`,
+`src/bootstrap/test/v0_3/`, `src/bootstrap/test/v0_4/`, `src/bootstrap/test/v0_5/`,
+`src/bootstrap/test/v0_6/`, `src/bootstrap/test/v0_7/`, and `src/bootstrap/test/v0_8/`.
 
 ### Supported syntax at v0.1
 
@@ -801,6 +802,119 @@ print body()
 # Result.Ok(7)
 ```
 
+### Supported syntax at v0.8
+
+v0.8 layers a focused standard library on top of v0.7; everything in v0.0 / v0.1 / v0.2 / v0.3 /
+v0.4 / v0.5 / v0.6 / v0.7 still parses and runs. Single-file programs that don't `import "std/..."`
+are unchanged. What's new:
+
+- **Four toolchain-shipped stdlib modules.** `std/io`, `std/strings`, `std/math`, `std/os`. Their
+  source ships embedded in the toolchain binary (Go `embed.FS`); `import "std/<m>"` resolves against
+  the embed first and **does not** fall through to the working directory. A user-loaded
+  `import "std/io"` that doesn't resolve to an embedded module rejects with a clear "stdlib module
+  not found" diagnostic — there is no shadowing.
+- **Typed errors, not strings.** Fallible calls return a `Result[T, IoError]` or
+  `Result[T, ParseError]` enum-typed error so the parity surface doesn't depend on host-OS error
+  text. Both halves bucket host errors into the same enum variants.
+  - `IoError { NotFound, PermissionDenied, AlreadyExists, InvalidPath, Other }`
+  - `ParseError { Empty, InvalidDigit, Overflow }`
+- **`std/io` (2 fns).** `read_file(path: str) -> Result[str, IoError]` reads the whole file (UTF-8).
+  `write_file(path: str, content: str) -> Result[bool, IoError]` truncates and writes; returns
+  `Ok(true)` on success.
+- **`std/strings` (10 fns).** `split(s, sep) -> list[str]`; `join(parts, sep) -> str`; `trim(s) -> str`
+  (ASCII whitespace, both ends); `starts_with`, `ends_with`, `contains -> bool`;
+  `replace(s, old, new) -> str` (all occurrences, non-overlapping, left-to-right);
+  `to_upper`, `to_lower -> str` (ASCII only); `parse_int(s) -> Result[int, ParseError]`
+  (base 10, leading `+`/`-` allowed, surrounding whitespace trimmed). Empty-sep `split(s, "")` is
+  rejected at runtime in both halves.
+- **`std/math` (4 fns).** `abs`, `min`, `max`, `gcd` — all over `int`. `gcd(0, 0) == 0`.
+- **`std/os` (1 fn).** `env(name: str) -> Option[str]` — `Some(value)` when set, `None` when unset.
+  Read-only.
+- **`__builtin <ident>` fn-decl marker.** Stdlib `.zg` files terminate fn declarations with
+  `__builtin <name>` instead of a `{ body }`; the parser admits the marker only inside files whose
+  path begins with `std/` in the embedded FS, and only when their `# requires:` is `>= v0.8`. User
+  code that writes `__builtin` is rejected at typeck — the marker is reserved for the toolchain.
+- **Provisional surface through v1.0.** Stdlib fn signatures may change before v1.0 source
+  stability lands.
+- **Out of scope at v0.8, deferred.** `os.argv` and `os.exit` (need the `never` / bottom type and
+  a main-signature change), `time.now` / `sleep` / deadlines, floating-point math (Zerg has no
+  float type yet), `pow` / `sqrt`, regex, JSON, networking, path manipulation (`path.join` /
+  `path.dir`), stdin streaming (`io.read_line`), random.
+
+A small v0.8 sample — read a file, split on lines, count non-empty entries:
+
+```zerg
+import "std/io"
+import "std/strings"
+
+match io.read_file("notes.txt") {
+    Result.Ok(content) => {
+        let lines := strings.split(content, "\n")
+        mut count := 0
+        for line in lines {
+            if strings.trim(line) != "" {
+                count = count + 1
+            }
+        }
+        print count
+    }
+    Result.Err(IoError.NotFound) => print "no file"
+    Result.Err(_) => print "io error"
+}
+```
+
+`std/strings` joining and case mapping:
+
+```zerg
+import "std/strings"
+
+print strings.join(["zerg", "is", "fast"], " ")
+print strings.to_upper("hello")
+print strings.replace("aaa", "a", "b")
+# zerg is fast
+# HELLO
+# bbb
+```
+
+`std/math` integer helpers:
+
+```zerg
+import "std/math"
+
+print math.abs(-7)
+print math.min(3, 8)
+print math.max(3, 8)
+print math.gcd(12, 18)
+# 7
+# 3
+# 8
+# 6
+```
+
+`std/os` environment lookup:
+
+```zerg
+import "std/os"
+
+match os.env("ZERG_GREETING") {
+    Option.Some(g) => print g
+    Option.None => print "default"
+}
+```
+
+`std/strings.parse_int` returning a typed error:
+
+```zerg
+import "std/strings"
+
+print strings.parse_int("42")
+print strings.parse_int("")
+print strings.parse_int("12x")
+# Result.Ok(42)
+# Result.Err(ParseError.Empty)
+# Result.Err(ParseError.InvalidDigit)
+```
+
 ### Print format and numeric semantics
 
 Both `zerg run` and `zerg build` implement the same table so stdout is byte-identical:
@@ -866,7 +980,15 @@ buffered send/recv, `close` + drain, anon-fn IIFE and capture, `defer` LIFO orde
 `?` propagation, `wait_group` fan-in, `for v in ch`, and `select` arms (default, send, recv-bind);
 the scheduling subdir asserts invariants for non-deterministic surface (select tie-break,
 send-blocks-on-full-buffer). The `rejects/` set pins defer-at-non-fn-scope, spawn-of-non-fn-call,
-mut-capture, send-into-closed, and defer-at-REPL. The README's parity rule —
+mut-capture, send-into-closed, and defer-at-REPL. v0.8 adds a 25-program corpus at
+`src/bootstrap/test/v0_8/` covering `std/io` (`read_file`, `write_file`, `IoError` match), `std/strings`
+(`split`, `join`, `trim`, `starts_with`, `ends_with`, `contains`, `replace`, `to_upper`, `to_lower`,
+`parse_int` with `Empty` / `InvalidDigit` / `Overflow` corner cases), `std/math` (`abs`, `min`, `max`,
+`gcd`), `std/os` (`env` set / unset), an end-to-end pipeline, a cross-module import chain, and a
+v0.7 regression that pins `__builtin` lexing as a normal identifier in non-stdlib files. The
+`rejects/` set pins user-code `__builtin` use, runtime panic on empty-sep `split`, and missing-stdlib
+import. The harness sets `ZERG_TEST_TEMPDIR` and provisions per-test fixture files via each entry's
+`manifest.txt`. The README's parity rule —
 **byte-identical for sequential code, equivalent under any valid scheduling for concurrent code** —
 is unchanged; the `scheduling/` subdir formalises the second half. Run the full corpus with:
 
@@ -882,6 +1004,42 @@ the project is based on what I dream of.
 All the features are based on my needs and my dreams.
 
 ## Release notes
+
+### v0.8 — standard library
+
+- Four toolchain-shipped stdlib modules — `std/io`, `std/strings`, `std/math`, `std/os` — accessible
+  via the v0.5 module surface (`import "std/io"`). Source `.zg` files for each module live embedded
+  in the toolchain binary via Go `embed.FS`; the loader resolves `std/...` import paths against the
+  embed and rejects with a "stdlib module not found" diagnostic on miss — there is **no
+  working-directory fallback** for `std/...` paths.
+- `std/io`: `read_file(path) -> Result[str, IoError]` (whole-file UTF-8 read) and
+  `write_file(path, content) -> Result[bool, IoError]` (truncate + write).
+- `std/strings`: `split`, `join`, `trim`, `starts_with`, `ends_with`, `contains`, `replace`,
+  `to_upper`, `to_lower`, and `parse_int(s) -> Result[int, ParseError]`. ASCII-only case mapping.
+  `replace` is non-overlapping left-to-right. Empty-sep `split` rejects at runtime in both halves.
+- `std/math`: `abs`, `min`, `max`, `gcd` over `int`. `gcd(0, 0) == 0`. (Floats and `pow` / `sqrt`
+  defer until Zerg admits a float type.)
+- `std/os`: `env(name) -> Option[str]` for read-only environment lookup. (`os.argv` and `os.exit`
+  defer to v0.9+ — they need the `never` type and a main-signature change.)
+- Typed-error contract: fallible calls return enum-typed errors (`IoError` and `ParseError`), not
+  strings, so the parity rule doesn't depend on host-OS error text. `IoError` variants are
+  `NotFound` / `PermissionDenied` / `AlreadyExists` / `InvalidPath` / `Other`. `ParseError`
+  variants are `Empty` / `InvalidDigit` / `Overflow`. Both halves bucket host errors into the same
+  variant; unclassifiable cases bucket to `Other`.
+- New fn-decl form: `fn name(params) -> R __builtin <ident>`. The trailing `__builtin <ident>`
+  replaces the body. The bareword identifier is validated against a closed registry at typeck — a
+  typo produces a "unknown builtin" compile error rather than a runtime surprise. The `__builtin`
+  keyword lexes only inside files under `std/` in the embedded FS whose `# requires:` is `>= v0.8`;
+  user code that writes `__builtin` is rejected.
+- Build-side runtime: the embedded C prelude grows `zerg_io_*`, `zerg_strings_*`, `zerg_math_*`,
+  and `zerg_os_*` runtime fns under a `programUsesV08` gate — they emit only when the program
+  actually references a v0.8 builtin, so v0.0–v0.7 codegen output stays byte-identical to the
+  pre-v0.8 baseline.
+- The stdlib surface is **provisional** through v1.0. Fn signatures may change before source
+  stability ships.
+- Backward compatibility: every v0.0–v0.7 corpus continues to pass under `make test`. Programs that
+  used `__builtin` as a plain identifier in pre-v0.8 source continue to parse it as IDENT — the
+  keyword is gated on `# requires: v0.8` AND on the file living under the embedded `std/` tree.
 
 ### v0.7 — concurrency runtime
 

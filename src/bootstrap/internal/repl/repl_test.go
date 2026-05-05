@@ -160,12 +160,15 @@ func TestHelpCommand(t *testing.T) {
 	}
 }
 
-// TestBannerText pins the v0.7 banner content so a future copy edit can't
+// TestBannerText pins the v0.8 banner content so a future copy edit can't
 // silently regress the user-facing string.
 func TestBannerText(t *testing.T) {
 	got := runSession(t, "", true)
-	if !strings.Contains(got, "v0.7") {
-		t.Fatalf("banner should mention v0.7; got %q", got)
+	if !strings.Contains(got, "v0.8") {
+		t.Fatalf("banner should mention v0.8; got %q", got)
+	}
+	if !strings.Contains(got, "stdlib") {
+		t.Fatalf("banner should mention stdlib; got %q", got)
 	}
 	if !strings.Contains(got, ":help") {
 		t.Fatalf("banner should mention :help; got %q", got)

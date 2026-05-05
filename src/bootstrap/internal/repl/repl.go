@@ -25,7 +25,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.7 — accepts the v0.7 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency)\n" +
+const banner = "Zerg REPL v0.8 — accepts the v0.8 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib)\n" +
 	"Type :exit to quit, :help for syntax\n"
 
 const helpText = "Statements: let/mut/const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print, spawn, defer, select. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Concurrency: chan[T], <-, close, for v in ch, anon fn, wait_group. Run :exit to quit.\n"

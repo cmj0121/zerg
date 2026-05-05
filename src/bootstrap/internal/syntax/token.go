@@ -386,6 +386,23 @@ func (p Position) String() string {
 	return fmt.Sprintf("%d:%d", p.Line, p.Column)
 }
 
+// CommentToken is one `# … \n` line comment produced by the lexer's
+// comment-side-channel. v0.10 Unit 1: `zerg fmt` consumes these to emit user
+// comments verbatim; every other consumer (typeck, run, build) discards the
+// slice. Pos points at the `#` itself; Text is the comment body with the
+// leading `#` stripped (leading whitespace inside the comment is preserved).
+// Leading is true when the comment was alone on its line, false when it
+// followed other tokens on the same line (a "trailing" inline comment).
+//
+// CommentTokens never enter the regular Token stream — the parser ignores
+// them when threading positions, and the lexer's emission of NEWLINE / EOF
+// is unchanged.
+type CommentToken struct {
+	Pos     Position
+	Text    string
+	Leading bool
+}
+
 // Token is a single lexeme produced by the lexer.
 //
 // For literal kinds Value carries the textual form ready for strconv:

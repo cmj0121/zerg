@@ -176,7 +176,7 @@ func TestRequiresGate(t *testing.T) {
 	examples := examplesDir(t)
 
 	t.Run("rejects future version", func(t *testing.T) {
-		// 13_asm.zg carries `# requires: v0.10` — a real example in the
+		// 13_asm.zg carries `# requires: v0.11` — a real example in the
 		// repo whose marker is well ahead of any v0.X currently underway.
 		// The example was originally chosen for the build path; we use it
 		// here for the run path too because 08_imports.zg's marker tracks
@@ -190,7 +190,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.10 (current is v0.9)"
+		want := "requires v0.11 (current is v0.10)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}
@@ -216,7 +216,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.10 (current is v0.9)"
+		want := "requires v0.11 (current is v0.10)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}

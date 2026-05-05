@@ -16,7 +16,7 @@ fn announce[T: Printable](x: T) -> str {
     return x.label()
 }
 
-let c1 := Cat{ name: "Mittens" }
-let c2 := Cat{ name: "Whiskers" }
+let c1 := Cat { name: "Mittens" }
+let c2 := Cat { name: "Whiskers" }
 print announce(c1)
 print announce(c2)

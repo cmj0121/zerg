@@ -1,13 +1,13 @@
 struct Point { x: int, y: int }
 
 fn classify(p: Point) -> str {
-  match p {
-    Point { x: 0, y: 0 } => return "origin"
-    Point { x: 0, .. } => return "on y-axis"
-    Point { y: 0, .. } => return "on x-axis"
-    Point { x, y } => return "elsewhere"
-  }
-  return "unreachable"
+    match p {
+        Point { x: 0, y: 0 } => return "origin"
+        Point { x: 0, .. } => return "on y-axis"
+        Point { y: 0, .. } => return "on x-axis"
+        Point { x, y } => return "elsewhere"
+    }
+    return "unreachable"
 }
 
 print classify(Point { x: 0, y: 0 })

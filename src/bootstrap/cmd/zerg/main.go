@@ -22,7 +22,7 @@ import (
 // version.Major / version.Minor) — `cliVersion` may lag behind the gate
 // during a v0.X release in progress and is bumped to canonical form by
 // the twain unit at the end of each version's work.
-const cliVersion = "0.9.0"
+const cliVersion = "0.10.0"
 
 type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
@@ -30,6 +30,7 @@ type cli struct {
 
 	Run   runCmd   `cmd:"" help:"Interpret a .zg source file."`
 	Build buildCmd `cmd:"" help:"Compile a .zg source file to a native binary in CWD."`
+	Fmt   fmtCmd   `cmd:"" help:"Format .zg source files (canonical style)."`
 	Repl  replCmd  `cmd:"" help:"Start the interactive REPL."`
 }
 
@@ -90,13 +91,20 @@ func main() {
 	app := &cli{}
 	ctx := kong.Parse(app,
 		kong.Name("zerg"),
-		kong.Description("Zerg toolchain (v0.9)."),
+		kong.Description("Zerg toolchain (v0.10)."),
 		kong.Vars{"version": "zerg " + cliVersion},
 		kong.UsageOnError(),
 	)
 	configureLogger(app.Verbose)
 
 	if err := ctx.Run(); err != nil {
+		// `zerg fmt` carries its own exit code — it already wrote the
+		// user-facing stderr line (or a parse-error envelope), so just
+		// exit with the requested code without re-logging.
+		var fxe *fmtExitError
+		if errors.As(err, &fxe) {
+			os.Exit(fxe.code)
+		}
 		// errRequiresFutureVersion has already written its own user-facing
 		// stderr line. Don't double-log via zerolog — it would duplicate the
 		// message and add a timestamp the test harness has to filter out.

@@ -21,7 +21,7 @@ fn main() {
     }
     let n := len(xs)
     for i in 0..n {
-        for j in (i+1)..n {
+        for j in (i + 1)..n {
             if xs[j] < xs[i] {
                 let tmp := xs[i]
                 xs[i] = xs[j]

@@ -3,5 +3,5 @@ enum Color { Red, Green, Blue }
 let cs := [Color.Red, Color.Green, Color.Blue, Color.Red]
 print cs
 for c in cs {
-  print c
+    print c
 }

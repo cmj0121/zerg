@@ -1,0 +1,788 @@
+<!-- markdownlint-disable MD013 -->
+
+# Zerg Language Reference
+
+Authoritative description of the Zerg surface that ships through v0.9. Each
+production reflects what the v0.10 toolchain (parser + typeck) actually
+accepts and runs. v1.0 source-stability promises will be made against this
+document.
+
+## Overview
+
+Zerg is a small, statically-typed, ahead-of-time compiled language that runs
+through two halves of the same toolchain: an interpreter (`zerg run`) and a
+C-codegen back-end (`zerg build`). The two halves obey the **parity rule**:
+
+- For sequential code, `zerg run` and the compiled binary produce
+  byte-identical stdout.
+- For concurrent code, both halves are correct under any valid scheduling;
+  well-formed programs do not depend on tie-break order.
+
+A program is a sequence of top-level declarations and statements; there is no
+`main` entry. Files may carry an optional `# requires: vMAJOR.MINOR` marker
+that gates parsing against the toolchain version.
+
+## Lexical structure
+
+### Comments
+
+```text
+# this is a comment
+```
+
+`#` introduces a line comment that runs to the next newline. The shebang
+`#!/usr/bin/env zerg` is a regular comment (the `!` is not special).
+
+### Identifiers
+
+```ebnf
+ident      = letter ( letter | digit | '_' )*
+letter     = 'a'..'z' | 'A'..'Z' | '_'
+digit      = '0'..'9'
+```
+
+Identifiers are ASCII-only. `_` is a normal identifier character; in `match`
+and `select` arms a bare `_` token also serves as the wildcard.
+
+### Keywords
+
+The lexer's reserved word set as of v0.9:
+
+```text
+and    as     break    const    continue  defer    elif     else
+enum   false  fn       for      if        impl     import   in
+let    loop   match    mut      nil       nop      not      or
+print  pub    return   select   spawn     spec     struct   this
+true   while  xor
+```
+
+`__builtin` is reserved only inside files whose `# requires:` line is
+`v0.8` or higher and whose path lives under the toolchain-embedded `std/`
+tree.
+
+### Reserved type names
+
+The following names are reserved at type position. User declarations
+(`struct`, `enum`, `spec`) of these names reject at typeck:
+
+| Name        | Introduced | Meaning                                     |
+| ----------- | ---------- | ------------------------------------------- |
+| `int`       | v0.0       | 64-bit signed integer                       |
+| `float`     | v0.1       | 64-bit IEEE 754                             |
+| `bool`      | v0.0       | `true` / `false`                            |
+| `str`       | v0.0       | UTF-8 string, immutable                     |
+| `byte`      | v0.2       | 8-bit unsigned integer                      |
+| `rune`      | v0.2       | 32-bit Unicode codepoint                    |
+| `list`      | v0.2       | `list[T]` constructor                       |
+| `tuple`     | v0.2       | `tuple[T1, T2, ...]` constructor (>= 2)     |
+| `Option`    | v0.6       | built-in enum `Option[T]`                   |
+| `Result`    | v0.6       | built-in enum `Result[T, E]`                |
+| `chan`      | v0.7       | `chan[T]` constructor                       |
+| `WaitGroup` | v0.7       | synthetic struct returned by `wait_group()` |
+| `never`     | v0.9       | bottom type (no values)                     |
+
+### Literals
+
+| Form                          | Type                     |
+| ----------------------------- | ------------------------ |
+| `42`, `0xFF`, `0b1010`, `0o7` | `int`                    |
+| `1_000_000`                   | `int`                    |
+| `3.14`                        | `float`                  |
+| `'A'`                         | `byte`                   |
+| `'漢'`                        | `rune`                   |
+| `"text"`                      | `str`                    |
+| `true`, `false`               | `bool`                   |
+| `nil`                         | `Option[T].None` (v0.6+) |
+
+Integer literals admit `_` as a digit separator, never adjacent to a prefix
+or doubled. Float requires digits on both sides of the dot (`.5` and `1.`
+reject). String escapes: `\n`, `\t`, `\r`, `\\`, `\"`, `\'`, `\0`, `\{`.
+String interpolation (`{expr}` inside a literal) is **not** admitted at
+v0.9 — it rejects at lex time.
+
+## Grammar (EBNF)
+
+Convention: `UPPER` denotes a token kind; `lower` denotes a non-terminal;
+`{ x }` is zero-or-more, `[ x ]` is optional, `|` is alternation. Implicit
+NEWLINE separates top-level declarations and statements; inside `(`, `[`
+parens and inside the brace region of struct / match / impl / spec / enum
+bodies, NEWLINE is transparent.
+
+### Module
+
+```ebnf
+program     = { stmt }
+stmt        = decl | top_stmt
+decl        = import_decl
+            | [ 'pub' ] ( fn_decl | struct_decl | enum_decl | spec_decl )
+            | impl_decl
+top_stmt    = simple_stmt | compound_stmt
+```
+
+### Imports
+
+Imports are top-level only. Resolution is filesystem-relative (sibling `.zg`)
+unless the path begins with `std/`, which routes to the toolchain-embedded
+stdlib.
+
+```ebnf
+import_decl    = 'import' ( import_entry
+                          | '(' { NEWLINE import_entry } NEWLINE ')' )
+import_entry   = STRING [ 'as' IDENT ]
+```
+
+A bare `import "name"` binds the module under its path string; `as alias`
+overrides. Reserved keywords cannot be used as alias names.
+
+### Visibility
+
+`pub` is a top-level modifier on `fn`, `struct`, `enum`, `spec`, and
+`impl`-method `fn`. Field-level visibility is not admitted.
+
+### Function declarations
+
+```ebnf
+fn_decl     = 'fn' IDENT [ type_params ] '(' [ param_list ] ')'
+              [ '->' type ]
+              ( block | builtin_marker )
+type_params = '[' type_param { ',' type_param } ']'
+type_param  = IDENT [ ':' type_bound ]
+type_bound  = type { '+' type }
+param_list  = param { ',' param }
+param       = IDENT ':' type
+builtin_marker = '__builtin' IDENT          ; stdlib-only, v0.8+
+```
+
+### Struct / enum / spec
+
+```ebnf
+struct_decl = 'struct' IDENT [ type_params ] '{' { field NEWLINE } '}'
+field       = IDENT ':' type
+
+enum_decl   = 'enum' IDENT [ type_params ] '{' { variant NEWLINE } '}'
+variant     = IDENT [ '(' type { ',' type } ')' ]
+
+spec_decl   = 'spec' IDENT [ type_params ] '{' { spec_item NEWLINE } '}'
+spec_item   = 'fn' IDENT [ type_params ] '(' [ param_list ] ')' [ '->' type ]
+              [ block ]
+```
+
+A `spec_item` with a body declares a default implementation; without a body
+it is an abstract method that conforming impls must provide.
+
+### impl
+
+```ebnf
+impl_decl   = 'impl' [ type_params ] type [ 'for' type ]
+              '{' { [ 'pub' ] fn_decl NEWLINE } '}'
+```
+
+The shape `impl T for Spec` is a spec-conforming impl; `impl T` is an
+inherent impl. Generic impls (`impl[T] Box[T] for Spec`) cover every
+monomorphisation. The orphan rule rejects `impl A.X for B.Y` when both
+`A` and `B` are foreign modules.
+
+### Statements
+
+```ebnf
+simple_stmt   = let_stmt | mut_stmt | const_stmt | assign_stmt | expr_stmt
+              | return_stmt | break_stmt | continue_stmt
+              | print_stmt | nop_stmt
+              | spawn_stmt | defer_stmt | send_stmt
+compound_stmt = if_stmt | for_stmt | match_stmt | select_stmt
+              | fn_decl | struct_decl | enum_decl | spec_decl | impl_decl
+
+let_stmt      = 'let' bind_target ( ':=' expr | ':' type '=' expr )
+mut_stmt      = 'mut' bind_target ( ':=' expr | ':' type '=' expr )
+const_stmt    = 'const' IDENT     ( ':=' expr | ':' type '=' expr )
+bind_target   = IDENT | tuple_pattern_lhs                ; LHS, not pattern
+tuple_pattern_lhs = '(' IDENT ',' IDENT { ',' IDENT } ')'  ; >= 2 names
+
+assign_stmt   = lvalue assign_op expr
+lvalue        = IDENT | postfix_expr_index_only          ; IDENT or xs[i]
+assign_op     = '=' | '+=' | '-=' | '*=' | '/=' | '%='
+              | '&=' | '|=' | '^=' | '<<=' | '>>='
+
+return_stmt   = 'return' [ expr ] [ 'if' expr ]
+break_stmt    = 'break'    [ 'if' expr ]
+continue_stmt = 'continue' [ 'if' expr ]
+
+print_stmt    = 'print' expr
+nop_stmt      = 'nop'
+
+if_stmt       = 'if' expr block { 'elif' expr block } [ 'else' block ]
+
+for_stmt      = 'for' block                              ; infinite
+              | 'for' expr block                         ; while-style
+              | 'for' IDENT 'in' for_head block
+for_head      = expr '..'  expr                          ; half-open range
+              | expr '..=' expr                          ; closed range
+              | expr                                     ; iter (list / chan)
+
+match_stmt    = 'match' expr '{' { match_arm NEWLINE } '}'
+match_arm     = pattern [ 'if' expr ] '=>' ( block | simple_stmt )
+
+spawn_stmt    = 'spawn' fn_call_expr
+defer_stmt    = 'defer' ( block | simple_stmt )           ; fn-body scope only
+send_stmt     = expr '<-' expr                            ; chained send rejects
+
+select_stmt   = 'select' '{' { select_arm NEWLINE } '}'    ; >= 1 arm
+select_arm    = select_op '->' ( block | simple_stmt )
+select_op     = '_'
+              | '<-' expr                                  ; recv-discard
+              | IDENT ':=' '<-' expr                       ; recv-bind
+              | expr '<-' expr                             ; send
+
+expr_stmt     = call_expr | method_call_expr | recv_expr   ; only these shapes
+block         = '{' { stmt NEWLINE } '}'
+```
+
+A `simple_stmt` after `=>` or `->` is wrapped into a one-element block.
+
+### Patterns
+
+```ebnf
+pattern         = literal_pattern
+                | IDENT                                     ; bind / wildcard `_`
+                | tuple_pattern
+                | struct_pattern
+                | enum_pattern
+literal_pattern = INT | FLOAT | STRING | RUNE | 'true' | 'false' | 'nil'
+tuple_pattern   = '(' pattern { ',' pattern } ')'           ; >= 2
+struct_pattern  = IDENT '{' [ field_pattern { ',' field_pattern }
+                              [ ',' '..' ] ] '}'
+field_pattern   = IDENT [ ':' pattern ]                     ; shorthand binds field
+enum_pattern    = qualified_name [ '(' [ pattern { ',' pattern } ] ')' ]
+qualified_name  = IDENT { '.' IDENT }                       ; e.g. Color.Red
+```
+
+### Types
+
+```ebnf
+type            = type_atom [ '?' ]                         ; '?' means Option[T]
+type_atom       = IDENT [ '.' IDENT ] [ type_args ]         ; named, optionally qualified
+                | 'list'  '[' type ']'
+                | 'tuple' '[' type ',' type { ',' type } ']' ; >= 2
+type_args       = '[' type { ',' type } ']'                 ; >= 1
+```
+
+Channel types are written as the constructor `chan[T]()` / `chan[T](N)`
+(see expressions); `chan[T]` is not a syntactic type — it lives only at the
+constructor call. `T?` desugars to `Option[T]`; `T??` rejects.
+
+### Expressions
+
+Precedence, lowest to highest. Each level is left-associative unless noted.
+
+| #   | Operators                      | Notes            |
+| --- | ------------------------------ | ---------------- |
+| 1   | `??`                           | right-assoc      |
+| 2   | `or`, `xor`                    |                  |
+| 3   | `and`                          |                  |
+| 4   | `not` (prefix)                 | right-assoc      |
+| 5   | `==` `!=` `<` `>` `<=` `>=`    | non-associative  |
+| 6   | `\|`                           | bitwise or       |
+| 7   | `^`                            | bitwise xor      |
+| 8   | `&`                            | bitwise and      |
+| 9   | `<<` `>>`                      | shifts           |
+| 10  | `+` `-`                        | additive         |
+| 11  | `*` `/` `//` `%`               | multiplicative   |
+| 12  | unary `-`, `~`, `<-`           | right-assoc      |
+| 13  | postfix `()` `[]` `?` `?.` `.` | left-assoc chain |
+| 14  | atoms                          |                  |
+
+Range operators (`..`, `..=`) are not part of the expression grammar; they
+only appear in `for x in ...` heads and in slice brackets (`xs[lo..hi]`).
+
+```ebnf
+expr            = coalesce_expr
+coalesce_expr   = or_expr [ '??' coalesce_expr ]
+or_expr         = and_expr   { ( 'or' | 'xor' ) and_expr }
+and_expr        = not_expr   { 'and' not_expr }
+not_expr        = 'not' not_expr | cmp_expr
+cmp_expr        = bitor_expr [ cmp_op bitor_expr ]
+cmp_op          = '==' | '!=' | '<' | '>' | '<=' | '>='
+bitor_expr      = bitxor_expr { '|' bitxor_expr }
+bitxor_expr     = bitand_expr { '^' bitand_expr }
+bitand_expr     = shift_expr  { '&' shift_expr }
+shift_expr      = add_expr    { ( '<<' | '>>' ) add_expr }
+add_expr        = mul_expr    { ( '+' | '-' ) mul_expr }
+mul_expr        = unary_expr  { ( '*' | '/' | '//' | '%' ) unary_expr }
+unary_expr      = ( '-' | '~' | '<-' ) unary_expr | postfix_expr
+postfix_expr    = atom { postfix_op }
+postfix_op      = '(' [ expr { ',' expr } ] ')'              ; call
+                | '[' index_or_slice ']'                     ; index / slice
+                | '.' IDENT [ '(' [ expr { ',' expr } ] ')' ] ; field / method
+                | '?.' IDENT                                 ; safe nav
+                | '?'                                        ; propagation
+index_or_slice  = expr | expr '..' [ expr ] | expr '..=' expr
+                | '..'  [ expr ] | '..=' expr
+atom            = INT | FLOAT | STRING | RUNE
+                | 'true' | 'false' | 'nil' | 'this'
+                | IDENT
+                | list_lit | tuple_lit | paren_expr
+                | struct_lit
+                | anon_fn_expr
+                | chan_constructor
+list_lit        = '[' [ expr { ',' expr } [ ',' ] ] ']'
+tuple_lit       = '(' expr ',' [ expr { ',' expr } ] [ ',' ] ')' ; >= 2 elements
+paren_expr      = '(' expr ')'
+struct_lit      = [ IDENT '.' ] IDENT '{' [ field_init { ',' field_init }
+                                            [ ',' ] ] '}'
+field_init      = IDENT ':' expr
+anon_fn_expr    = 'fn' '(' [ param_list ] ')' [ '->' type ] block
+chan_constructor= 'chan' '[' type ']' '(' [ expr ] ')'
+```
+
+`Ident '{'` parses as a struct literal only when the brace contents look
+like `IDENT ':' ...` or `'}'`. Otherwise the `{` belongs to the surrounding
+statement (e.g. `if cond { ... }`).
+
+## Type system
+
+### Primitives
+
+| Type    | Storage         | Notes                                  |
+| ------- | --------------- | -------------------------------------- |
+| `int`   | 64-bit signed   | overflow is undefined-on-purpose       |
+| `float` | 64-bit IEEE 754 | no implicit int/float coercion         |
+| `bool`  | -               | `true` or `false`                      |
+| `str`   | UTF-8 immutable | `s[i]` returns the i-th rune codepoint |
+| `byte`  | 8-bit unsigned  | default for ASCII rune literals        |
+| `rune`  | 32-bit          | default for non-ASCII rune literals    |
+
+### Composites
+
+| Type            | Notes                                                     |
+| --------------- | --------------------------------------------------------- |
+| `list[T]`       | growable; deep-copy on `clone(xs)`; `push(xs, v)` mutates |
+| `tuple[T1,...]` | fixed-size, >= 2 elements                                 |
+| struct types    | nominal; declaration-order field equality                 |
+| enum types      | tag + optional payload tuple                              |
+| spec types      | fat pointer `(data, vt)`; heap-boxes the value            |
+| `chan[T]`       | unbuffered (rendezvous) or buffered FIFO                  |
+| `WaitGroup`     | synthetic struct returned by `wait_group()`               |
+| `Option[T]`     | built-in enum, variants `Some(T)` and `None`              |
+| `Result[T, E]`  | built-in enum, variants `Ok(T)` and `Err(E)`              |
+| function values | anon-fn expressions; immutable capture                    |
+
+### `never` (v0.9)
+
+`never` is the bottom type. A fn declared `-> never` cannot return — every
+control-flow path must diverge (call another `-> never` fn, run an
+unbounded loop with no break, etc.). `never <: T` for every concrete `T`,
+so a `-> never` call is well-typed in any value position. The IDENT
+`never` is recognised only at type position; user-declared `struct never`,
+`enum never`, `spec never` reject. The only `-> never` calls in the v0.9
+surface are `os.exit` and any user fn declared `-> never`.
+
+### Subtyping and inference
+
+- `never <: T` for every concrete `T`.
+- `T -> T?` lift at boundaries: a bare `T` flowing into a `T?` slot is
+  implicitly wrapped as `Option.Some(value)`. Boundaries are: fn argument,
+  let / mut / const initialiser with annotation, return expression,
+  struct-literal field, list-element type under `list[T?]`.
+- Bidirectional inference at call sites: generic type-args are inferred
+  from argument shapes and from the surrounding expected type.
+- No implicit numeric coercion: `int + float` is a type error.
+
+### Equality and ordering
+
+`==` / `!=` derive structurally on lists, tuples, structs, and enums (with
+or without payloads). Recursion bottoms at primitive equality. `<`, `>`,
+`<=`, `>=` are admitted on `int`, `float`, `byte`, `rune`, and `str`
+(byte-lexicographic for strings).
+
+## Semantics
+
+### Evaluation order
+
+Strict left-to-right, eager. Function arguments evaluate in declaration
+order before the call. Short-circuit applies to `and` and `or`.
+
+### Ownership / borrow rules (v0.3)
+
+Composite values (`list`, tuple, struct, enum payload, spec-typed) are
+**moved** on bind:
+
+- `let ys := xs` and `mut ys := xs` move `xs` into `ys`. Reading `xs`
+  thereafter is rejected at compile time.
+- `return x`, including a value in a struct / tuple / list literal, and
+  binding into a tuple-destructure pattern are move sites.
+- Function calls implicitly **share-borrow** composite arguments: the
+  callee may read but not mutate; the caller retains ownership when the
+  call returns.
+- Primitives (`int`, `float`, `bool`, `byte`, `rune`, `str`, enums without
+  payloads) copy on bind.
+
+Read sites (no move): `print x`, `len(x)`, `x[i]`, `x.field`, slicing,
+`for v in x`, all fn calls, `match` scrutinee.
+
+`clone(xs)` opts back into v0.2-style deep copy semantics.
+
+### List mutation
+
+Through a top-level `mut`-bound list:
+
+- `xs[i] = v` writes element `i`. Bounds-checked at run time.
+- `push(xs, v)` (fn or `xs.push(v)` method) appends.
+
+Compound assignment (`xs[i] += 1`) is not admitted at v0.9.
+
+### Closures (v0.7)
+
+Anonymous functions capture only **immutable** outer bindings. Captured
+composites are deep-copied at closure creation; primitives copy by value.
+Each capture is independent of the source after creation.
+
+### Defer (v0.7)
+
+`defer` registers a statement or block to run at fn-body exit in **LIFO**
+order. v0.9 admits `defer` only at the immediate fn-body scope (never
+inside `if` / `for` / `match` / inner blocks). The defer stack drains on
+**every** exit path including `?` early-return — with one exception:
+
+- **`os.exit(code)` does not drain defers** and does not join spawned
+  tasks. This is an intentional v0.9 deviation, matching Go's
+  `os.Exit` semantics. Cleanup before exit must be explicit.
+
+### Concurrency (v0.7)
+
+- `spawn fn-call` starts a fire-and-forget concurrent task. Argument
+  must be a `CallExpr` or `MethodCallExpr`.
+- `chan[T]()` is unbuffered (rendezvous); `chan[T](N)` is FIFO buffered.
+- `ch <- v` sends; sender no longer owns `v`. Send to a closed channel
+  panics.
+- `<- ch` receives; result is `Option[T]`. `Some(v)` while the channel is
+  open or has buffered values; `None` when drained-and-closed.
+- `for v in ch` iterates until the channel is drained-and-closed; binds
+  the inner `T` (auto-unwraps the `Option`).
+- `close(ch)` is a built-in; closing twice panics.
+- `select { ... }` multiplexes channel ops; arms are tried in declaration
+  order on ties (`zerg build` codegen) or randomly (`zerg run`); empty
+  `select` rejects at parse time.
+- `wait_group()` returns a `WaitGroup`; methods `add(n)`, `done()`,
+  `wait()`.
+
+### Error propagation
+
+The `?` postfix operator on a `Result[T, E]` or `Option[T]` expression
+desugars to: if `Err` / `None`, early-return that variant; else evaluate
+to the inner `T`. Legal only inside a fn whose return type is
+`Result[U, E]` (matching `E`) or `Option[U]`.
+
+`??` is nil-coalesce: `lhs ?? rhs` yields `T` when `lhs` is `Some(v)` /
+`Ok(v)`, otherwise evaluates `rhs`. RHS evaluates only on `None` / `Err`.
+
+`?.` is safe navigation: `obj?.field` yields `Option[U]` for `U` the
+field's type. Chains carry `None` end-to-end.
+
+### Process exit (v0.9)
+
+`os.exit(code: int) -> never` terminates the process with the given exit
+code. Does not drain defers, does not join spawned tasks. Under the REPL,
+"process exited with code N" is reported but the host process keeps
+running.
+
+`os.argv() -> list[str]` returns the command-line arguments. Index 0 is
+the source / executable path under `zerg run` and `zerg build`-then-exec,
+and the literal `"<repl>"` under the REPL. Tests must avoid printing
+`argv[0]` because the path differs across halves.
+
+## Modules
+
+A module is a single `.zg` file. `import "name"` resolves `./name.zg`
+relative to the importing file. `import "std/<name>"` resolves against the
+toolchain-embedded stdlib (no working-directory fallback).
+
+Per-imported-module gating: every imported file's `# requires:` line is
+checked against the toolchain version. A v0.5 entry that imports a v0.6
+module rejects.
+
+Cross-module `impl` follows the orphan rule: at least one of `(Type,
+Spec)` must be local to the impl's module.
+
+## Standard library (provisional through v1.0)
+
+- `std/io` — `read_file`, `write_file` (Result-typed).
+- `std/strings` — `split`, `join`, `trim`, `starts_with`, `ends_with`,
+  `contains`, `replace`, `to_upper`, `to_lower`, `parse_int`.
+- `std/math` — `abs`, `min`, `max`, `gcd` (over `int`).
+- `std/os` — `env`, `argv`, `exit`.
+- `std/time` — `now_ms`, `sleep_ms`.
+
+The first call to `time.now_ms()` returns `0`; subsequent calls return
+milliseconds since that first call. `sleep_ms(ms)` blocks at least `ms`
+milliseconds and clamps negative inputs to `0`.
+
+See `docs/STDLIB.md` for per-fn signatures.
+
+## Examples
+
+Each block below is tagged so the v0.10 extractor knows how to wrap it. Tag
+`program` parses as-is; `fn-body` wraps in
+`fn main() -> int { ... ; return 0 }`; `expression` wraps in
+`let __ := <expr>`.
+
+### Hello
+
+<!-- example: program -->
+
+```zerg
+print "hello, world"
+```
+
+### Variables and arithmetic
+
+<!-- example: fn-body -->
+
+```zerg
+let x := 1
+let y: int = 2
+mut z := x + y
+z = z * 10
+print z
+```
+
+### Branching and loops
+
+<!-- example: fn-body -->
+
+```zerg
+let n := 10
+mut sum := 0
+for i in 0..n {
+    if i % 2 == 0 {
+        sum = sum + i
+    }
+}
+print sum
+```
+
+### Tuples and lists
+
+<!-- example: fn-body -->
+
+```zerg
+let pair := (1, 2)
+let (a, b) := pair
+print a + b
+let xs: list[int] = [1, 2, 3]
+print len(xs)
+```
+
+### Struct and method
+
+<!-- example: program -->
+
+```zerg
+struct Point { x: int, y: int }
+
+impl Point {
+    fn norm() -> int {
+        return this.x * this.x + this.y * this.y
+    }
+}
+
+let p := Point { x: 3, y: 4 }
+print p.norm()
+```
+
+### Enum and match
+
+<!-- example: program -->
+
+```zerg
+enum Token {
+    Eof,
+    Ident(str),
+    Number(int),
+}
+
+fn name(t: Token) -> str {
+    match t {
+        Token.Eof => return "eof"
+        Token.Ident(s) => return s
+        Token.Number(_) => return "number"
+    }
+    return "?"
+}
+
+print name(Token.Ident("hi"))
+```
+
+### Spec, impl, dispatch
+
+<!-- example: program -->
+
+```zerg
+spec Printable {
+    fn label() -> str
+}
+
+struct Cat { name: str }
+
+impl Cat for Printable {
+    pub fn label() -> str {
+        return "Cat: " + this.name
+    }
+}
+
+let c := Cat { name: "Mittens" }
+print c.label()
+```
+
+### Generics, Option, propagation
+
+<!-- example: program -->
+
+```zerg
+fn first(xs: list[int]) -> Option[int] {
+    if len(xs) == 0 {
+        return Option.None
+    }
+    return Option.Some(xs[0])
+}
+
+fn double_first(xs: list[int]) -> Option[int] {
+    let v := first(xs)?
+    return Option.Some(v * 2)
+}
+
+print double_first([10, 20])
+print double_first([])
+```
+
+### Nullable types and coalesce
+
+<!-- example: fn-body -->
+
+```zerg
+let a: int? = 7
+let b: int? = nil
+print a ?? 0
+print b ?? 99
+```
+
+### Stdlib imports
+
+<!-- example: program -->
+
+```zerg
+import "std/strings"
+import "std/math"
+
+print strings.to_upper("hi")
+print math.abs(-3)
+```
+
+### Channels and spawn
+
+<!-- example: program -->
+
+```zerg
+let ch := chan[int](2)
+spawn fn() {
+    ch <- 1
+    ch <- 2
+    close(ch)
+}()
+
+for v in ch {
+    print v
+}
+```
+
+### Select
+
+<!-- example: fn-body -->
+
+```zerg
+let ch := chan[int](1)
+ch <- 7
+select {
+    v := <- ch -> { print v }
+    _ -> { print "would block" }
+}
+```
+
+### Defer
+
+<!-- example: program -->
+
+```zerg
+fn body() -> int {
+    defer print "second"
+    defer print "first"
+    return 0
+}
+
+print body()
+```
+
+### `never` and `os.exit`
+
+<!-- example: program -->
+
+```zerg
+import "std/os"
+
+fn fail(msg: str) -> never {
+    print msg
+    os.exit(2)
+}
+
+let n := 7
+if n < 0 {
+    fail("expected non-negative")
+}
+print n
+```
+
+### Expression atoms (sanity)
+
+<!-- example: expression -->
+
+```zerg
+1 + 2 * 3 - 4 / 2
+```
+
+<!-- example: expression -->
+
+```zerg
+"foo" + "bar"
+```
+
+<!-- example: expression -->
+
+```zerg
+[1, 2, 3]
+```
+
+## Reserved for v1.0+
+
+The following are not part of the v0.0–v0.9 surface and are explicitly
+deferred:
+
+- `sync[T]` shared-mutex container.
+- `raise` / `try` / `except` / `finally` exception machinery.
+- Lambda syntax (`|x| x * 2`, `||  { ... }`).
+- `defer` inside nested blocks (only fn-body scope is admitted at v0.9).
+- Channel direction marks (`<-chan[T]`, `chan<-[T]`).
+- Cancellation contexts, deadlines, signal handlers.
+- Float-typed stdlib surface (`pow`, `sqrt`); `**` exponentiation.
+- Regex, JSON, network, path manipulation, stdin streaming, random.
+- Map (`{k: v}`) and set (`{a, b}`) literals and types.
+- String interpolation (`"hi {name}"`), multi-line `"""..."""`,
+  raw `r"..."`.
+- `pub` on individual struct / enum fields.
+- Re-exports (`pub use` / `pub import`).
+- External / git-backed imports.
+- `&mut T` reference parameters (fn-param list mutation).
+- Inline ARM64 `asm { ... }` blocks.
+- Type aliases (`type Name = Type`).
+- Compound assignment to list elements (`xs[i] += v`).
+- Named call arguments and default parameter values.
+
+<!-- markdownlint-enable MD013 -->

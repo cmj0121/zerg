@@ -1,0 +1,10 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.starts_with("hello world", "hello")
+print strings.starts_with("hello world", "world")
+print strings.starts_with("hello", "hello")
+print strings.starts_with("hi", "hello")
+print strings.starts_with("anything", "")
+print strings.starts_with("", "x")
+print strings.starts_with("", "")

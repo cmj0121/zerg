@@ -1,0 +1,20 @@
+# requires: v0.8
+import "std/io"
+import "std/strings"
+import "std/math"
+import "std/os"
+
+let parts := strings.split("4,2,8,1", ",")
+mut max_val := 0
+for p in parts {
+    match strings.parse_int(p) {
+        Result.Ok(n) => max_val = math.max(max_val, n)
+        Result.Err(_) => print "skip"
+    }
+}
+print max_val
+print strings.to_upper("v0.8 stdlib")
+match os.env("ZERG_TEST_THING") {
+    Option.Some(v) => print v
+    Option.None => print "unset"
+}

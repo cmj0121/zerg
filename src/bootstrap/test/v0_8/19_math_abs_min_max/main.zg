@@ -1,0 +1,12 @@
+# requires: v0.8
+import "std/math"
+
+print math.abs(-5)
+print math.abs(7)
+print math.abs(0)
+print math.min(3, 7)
+print math.min(-1, -2)
+print math.min(0, 0)
+print math.max(3, 7)
+print math.max(-1, -2)
+print math.max(math.abs(-10), math.min(20, 5))

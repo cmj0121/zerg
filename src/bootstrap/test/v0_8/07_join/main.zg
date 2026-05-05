@@ -1,0 +1,8 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.join(["a", "b", "c"], "-")
+print strings.join(["only"], "-")
+print strings.join(["a", "b"], "")
+let parts := strings.split("hello,world", ",")
+print strings.join(parts, " ")

@@ -1,0 +1,7 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.split("a,b,c", ",")
+print strings.split("hello,world,zerg", ",")
+print strings.split("only", ",")
+print strings.split("a::b::c", "::")

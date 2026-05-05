@@ -1,0 +1,6 @@
+leading
+trailing
+both
+none
+
+mixed

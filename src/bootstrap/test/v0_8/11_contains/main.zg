@@ -1,0 +1,9 @@
+# requires: v0.8
+import "std/strings"
+
+print strings.contains("hello world", "lo wo")
+print strings.contains("hello", "ell")
+print strings.contains("hello", "xyz")
+print strings.contains("hello", "")
+print strings.contains("", "x")
+print strings.contains("", "")

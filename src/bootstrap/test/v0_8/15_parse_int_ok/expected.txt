@@ -1,0 +1,7 @@
+Result.Ok(42)
+Result.Ok(-7)
+Result.Ok(9)
+Result.Ok(100)
+Result.Ok(0)
+Result.Ok(0)
+Result.Ok(0)

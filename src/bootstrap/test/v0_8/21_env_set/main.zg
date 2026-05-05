@@ -1,0 +1,7 @@
+# requires: v0.8
+import "std/os"
+
+match os.env("ZERG_TEST_THING") {
+    Option.Some(v) => print v
+    Option.None => print "unset"
+}

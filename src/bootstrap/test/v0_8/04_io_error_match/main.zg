@@ -1,0 +1,25 @@
+# requires: v0.8
+import "std/io"
+import "std/os"
+import "std/strings"
+
+fn classify(path: str) {
+    match io.read_file(path) {
+        Result.Ok(_) => print "ok"
+        Result.Err(e) => match e {
+            IoError.NotFound => print "NotFound"
+            IoError.PermissionDenied => print "PermissionDenied"
+            IoError.AlreadyExists => print "AlreadyExists"
+            IoError.InvalidPath => print "InvalidPath"
+            IoError.Other => print "Other"
+        }
+    }
+}
+
+match os.env("ZERG_TEST_TEMPDIR") {
+    Option.Some(d) => {
+        classify(strings.join([d, "exists.txt"], "/"))
+        classify(strings.join([d, "missing.txt"], "/"))
+    }
+    Option.None => print "no tempdir"
+}

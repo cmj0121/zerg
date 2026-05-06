@@ -26,7 +26,7 @@ func TestParseNullableSimpleType(t *testing.T) {
 }
 
 func TestParseNullableTypeOnLetAnnotation(t *testing.T) {
-	prog := parseProgramSrc(t, "let x: int? = nil\n")
+	prog := parseProgramSrc(t, "x: int? = nil\n")
 	st := expectOne[*LetStmt](t, prog)
 	if st.Type == nil || !st.Type.Nullable || st.Type.Name != "int" {
 		t.Errorf("type = %v, want int?", st.Type)
@@ -83,19 +83,19 @@ func TestParseNullableTypeOnList(t *testing.T) {
 func TestParseRejectDoubleNullable(t *testing.T) {
 	// `int??` lexed as `?` then `?` — the parser sees two KindQuestions and
 	// rejects on the second.
-	expectParseErr(t, "let x: int? ? = nil\n", "double-nullable types")
+	expectParseErr(t, "x: int? ? = nil\n", "double-nullable types")
 }
 
 func TestParseRejectDoubleNullableFusedToken(t *testing.T) {
 	// `int??` (no space) — lexer fuses to one KindCoalesce token; the
 	// type-position rejection still fires with the same diagnostic.
-	expectParseErr(t, "let x: int?? = nil\n", "double-nullable types")
+	expectParseErr(t, "x: int?? = nil\n", "double-nullable types")
 }
 
 // --- nil literal tests ---------------------------------------------------
 
 func TestParseNilLiteralInLet(t *testing.T) {
-	prog := parseProgramSrc(t, "let x: int? = nil\n")
+	prog := parseProgramSrc(t, "x: int? = nil\n")
 	st := expectOne[*LetStmt](t, prog)
 	nl, ok := st.Value.(*NilLit)
 	if !ok {
@@ -138,7 +138,7 @@ func TestParseNilAsArgumentValue(t *testing.T) {
 }
 
 func TestParseRejectNilAsCallee(t *testing.T) {
-	expectParseErr(t, "let x := nil(1, 2)\n", "cannot call 'nil'")
+	expectParseErr(t, "x := nil(1, 2)\n", "cannot call 'nil'")
 }
 
 func TestParseNilAsBinding_StatementErrors(t *testing.T) {
@@ -152,7 +152,7 @@ func TestParseNilAsBinding_StatementErrors(t *testing.T) {
 // --- ? propagation tests -------------------------------------------------
 
 func TestParsePropagateOnIdent(t *testing.T) {
-	prog := parseProgramSrc(t, "fn f() -> int { let x := result?\n return x }\n")
+	prog := parseProgramSrc(t, "fn f() -> int { x := result?\n return x }\n")
 	if len(prog.Statements) != 1 {
 		t.Fatalf("got %d statements, want 1", len(prog.Statements))
 	}
@@ -171,7 +171,7 @@ func TestParsePropagateOnIdent(t *testing.T) {
 }
 
 func TestParsePropagateOnCall(t *testing.T) {
-	prog := parseProgramSrc(t, "fn f() -> int { let x := divide(10, 2)?\n return x }\n")
+	prog := parseProgramSrc(t, "fn f() -> int { x := divide(10, 2)?\n return x }\n")
 	fn := prog.Statements[0].(*FnDecl)
 	let := fn.Body.Statements[0].(*LetStmt)
 	pe, ok := let.Value.(*PropagateExpr)
@@ -184,13 +184,13 @@ func TestParsePropagateOnCall(t *testing.T) {
 }
 
 func TestParseRejectBareQuestion(t *testing.T) {
-	expectParseErr(t, "let x := ?\n", "'?' must follow an expression")
+	expectParseErr(t, "x := ?\n", "'?' must follow an expression")
 }
 
 // --- ?? coalesce tests ---------------------------------------------------
 
 func TestParseCoalesceSimple(t *testing.T) {
-	prog := parseProgramSrc(t, "let x := a ?? b\n")
+	prog := parseProgramSrc(t, "x := a ?? b\n")
 	st := expectOne[*LetStmt](t, prog)
 	ce, ok := st.Value.(*CoalesceExpr)
 	if !ok {
@@ -206,7 +206,7 @@ func TestParseCoalesceSimple(t *testing.T) {
 
 func TestParseCoalesceRightAssociative(t *testing.T) {
 	// `a ?? b ?? c` ⇒ `a ?? (b ?? c)`.
-	prog := parseProgramSrc(t, "let x := a ?? b ?? c\n")
+	prog := parseProgramSrc(t, "x := a ?? b ?? c\n")
 	st := expectOne[*LetStmt](t, prog)
 	outer, ok := st.Value.(*CoalesceExpr)
 	if !ok {
@@ -230,7 +230,7 @@ func TestParseCoalesceRightAssociative(t *testing.T) {
 func TestParseCoalesceLowerThanOr(t *testing.T) {
 	// `a or b ?? c` — `??` must bind looser than `or`, so the structure is
 	// `(a or b) ?? c`.
-	prog := parseProgramSrc(t, "let x := a or b ?? c\n")
+	prog := parseProgramSrc(t, "x := a or b ?? c\n")
 	st := expectOne[*LetStmt](t, prog)
 	ce, ok := st.Value.(*CoalesceExpr)
 	if !ok {
@@ -242,19 +242,19 @@ func TestParseCoalesceLowerThanOr(t *testing.T) {
 }
 
 func TestParseRejectBareCoalesce(t *testing.T) {
-	expectParseErr(t, "let x := ?? a\n", "'??' must appear between two expressions")
+	expectParseErr(t, "x := ?? a\n", "'??' must appear between two expressions")
 }
 
 func TestParseRejectCoalesceFollowedByDot(t *testing.T) {
 	// `lhs ??.field` — common typo for `lhs?.field`. Caught by parseCoalesce
 	// before the recursive parseAtom would emit a generic diagnostic.
-	expectParseErr(t, "let x := a ??.b\n", "did you mean '?.' for safe navigation")
+	expectParseErr(t, "x := a ??.b\n", "did you mean '?.' for safe navigation")
 }
 
 // --- ?. safe navigation tests --------------------------------------------
 
 func TestParseSafeNavigationSimple(t *testing.T) {
-	prog := parseProgramSrc(t, "let x := obj?.field\n")
+	prog := parseProgramSrc(t, "x := obj?.field\n")
 	st := expectOne[*LetStmt](t, prog)
 	fa, ok := st.Value.(*FieldAccessExpr)
 	if !ok {
@@ -271,7 +271,7 @@ func TestParseSafeNavigationSimple(t *testing.T) {
 func TestParseSafeNavigationChained(t *testing.T) {
 	// `a?.b?.c` — chained safe navigation. Each link is a FieldAccessExpr
 	// with Safe=true; the receiver-chain walks left-to-right.
-	prog := parseProgramSrc(t, "let x := a?.b?.c\n")
+	prog := parseProgramSrc(t, "x := a?.b?.c\n")
 	st := expectOne[*LetStmt](t, prog)
 	outer, ok := st.Value.(*FieldAccessExpr)
 	if !ok {
@@ -289,7 +289,7 @@ func TestParseSafeNavigationChained(t *testing.T) {
 func TestParseSafeNavigationMixedWithDot(t *testing.T) {
 	// `obj.a?.b.c` — `.` chains on either side of `?.` keep their Safe=false
 	// status. Only the `?.b` link is Safe.
-	prog := parseProgramSrc(t, "let x := obj.a?.b.c\n")
+	prog := parseProgramSrc(t, "x := obj.a?.b.c\n")
 	st := expectOne[*LetStmt](t, prog)
 	c := st.Value.(*FieldAccessExpr) // .c
 	if c.Safe {
@@ -309,11 +309,11 @@ func TestParseRejectSafeNavMethodCall(t *testing.T) {
 	// PLAN.md defers method-form `?.` to a future unit. The parser rejects
 	// `obj?.method()` so the user is not surprised when typeck doesn't
 	// support the lowering.
-	expectParseErr(t, "let x := obj?.method()\n", "method-form safe navigation")
+	expectParseErr(t, "x := obj?.method()\n", "method-form safe navigation")
 }
 
 func TestParseRejectBareSafeDot(t *testing.T) {
-	expectParseErr(t, "let x := ?.field\n", "'?.' must follow an expression")
+	expectParseErr(t, "x := ?.field\n", "'?.' must follow an expression")
 }
 
 // --- combined / interaction tests ---------------------------------------
@@ -367,11 +367,11 @@ func TestParseV06NullSafetyExampleBody(t *testing.T) {
 }
 
 fn calculate() -> Result[int, str] {
-	let x := divide(10, 0)?
+	x := divide(10, 0)?
 	return Ok(x * 2)
 }
 
-let x: int? = nil
+x: int? = nil
 `
 	prog := parseProgramSrc(t, src)
 	if len(prog.Statements) != 3 {

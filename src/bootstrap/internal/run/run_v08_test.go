@@ -153,7 +153,7 @@ print strings.to_lower("AbCdE")
 func TestRunV08StringsSplit(t *testing.T) {
 	expectV08OK(t, `# requires: v0.8
 import "std/strings"
-let xs := strings.split("a,b,c", ",")
+xs := strings.split("a,b,c", ",")
 print xs
 `, "[ a, b, c ]\n")
 }
@@ -161,7 +161,7 @@ print xs
 func TestRunV08StringsSplitEmptySepPanics(t *testing.T) {
 	expectV08Err(t, `# requires: v0.8
 import "std/strings"
-let xs := strings.split("abc", "")
+xs := strings.split("abc", "")
 print xs
 `, "split: empty separator")
 }
@@ -169,7 +169,7 @@ print xs
 func TestRunV08StringsJoin(t *testing.T) {
 	expectV08OK(t, `# requires: v0.8
 import "std/strings"
-let xs := strings.split("a,b,c", ",")
+xs := strings.split("a,b,c", ",")
 print strings.join(xs, "-")
 print strings.join(xs, "")
 `, "a-b-c\nabc\n")
@@ -208,7 +208,7 @@ func TestRunV08IoReadFileOk(t *testing.T) {
 	}
 	src := `# requires: v0.8
 import "std/io"
-let r := io.read_file("` + fixture + `")
+r := io.read_file("` + fixture + `")
 print r
 `
 	expectV08OK(t, src, "Result.Ok(hello, file\n)\n")
@@ -219,7 +219,7 @@ func TestRunV08IoReadFileNotFound(t *testing.T) {
 	missing := filepath.Join(dir, "no-such-file.txt")
 	src := `# requires: v0.8
 import "std/io"
-let r := io.read_file("` + missing + `")
+r := io.read_file("` + missing + `")
 print r
 `
 	expectV08OK(t, src, "Result.Err(IoError.NotFound)\n")
@@ -230,7 +230,7 @@ func TestRunV08IoWriteFileOk(t *testing.T) {
 	target := filepath.Join(dir, "out.txt")
 	src := `# requires: v0.8
 import "std/io"
-let r := io.write_file("` + target + `", "written")
+r := io.write_file("` + target + `", "written")
 print r
 `
 	expectV08OK(t, src, "Result.Ok(true)\n")
@@ -255,7 +255,7 @@ func TestRunV08IoWriteFilePermissionDenied(t *testing.T) {
 	target := filepath.Join(roDir, "out.txt")
 	src := `# requires: v0.8
 import "std/io"
-let r := io.write_file("` + target + `", "data")
+r := io.write_file("` + target + `", "data")
 print r
 `
 	expectV08OK(t, src, "Result.Err(IoError.PermissionDenied)\n")

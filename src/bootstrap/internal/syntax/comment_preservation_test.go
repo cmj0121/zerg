@@ -63,7 +63,7 @@ func TestLexCommentsTokenStreamUnchanged(t *testing.T) {
 	// are a pure side-channel. This locks the contract that pre-Unit-1
 	// callers see byte-identical output.
 	src := []byte(`# top
-let x := 1
+x := 1
 # inner
 print x  # tail
 `)
@@ -89,11 +89,11 @@ print x  # tail
 
 func TestParseAttachesLeadingCommentsToStmt(t *testing.T) {
 	src := []byte(`# leading for first let
-let x := 1
+x := 1
 
 # leading block for the second let
 # spans two lines
-let y := 2
+y := 2
 `)
 	tokens, comments, err := LexWithComments(src)
 	if err != nil {
@@ -112,25 +112,25 @@ let y := 2
 		t.Errorf("HeadComments = %v, want 1 entry", prog.HeadComments)
 	}
 	if !strings.Contains(strings.Join(prog.HeadComments, "\n"), "leading for first let") {
-		t.Errorf("HeadComments missing first-let header: %v", prog.HeadComments)
+		t.Errorf("HeadComments missing first-header: %v", prog.HeadComments)
 	}
 	first, ok := prog.Statements[0].(*LetStmt)
 	if !ok {
 		t.Fatalf("stmt 0 is %T, want *LetStmt", prog.Statements[0])
 	}
 	if len(first.LeadingComments) != 0 {
-		t.Errorf("first let LeadingComments = %v, want empty (file-head goes to HeadComments)", first.LeadingComments)
+		t.Errorf("first LeadingComments = %v, want empty (file-head goes to HeadComments)", first.LeadingComments)
 	}
 	second, ok := prog.Statements[1].(*LetStmt)
 	if !ok {
 		t.Fatalf("stmt 1 is %T, want *LetStmt", prog.Statements[1])
 	}
 	if len(second.LeadingComments) != 2 {
-		t.Errorf("second let LeadingComments len = %d, want 2: %v", len(second.LeadingComments), second.LeadingComments)
+		t.Errorf("second LeadingComments len = %d, want 2: %v", len(second.LeadingComments), second.LeadingComments)
 	}
 	joined := strings.Join(second.LeadingComments, "|")
 	if !strings.Contains(joined, "leading block") || !strings.Contains(joined, "spans two lines") {
-		t.Errorf("second let LeadingComments missing expected text: %v", second.LeadingComments)
+		t.Errorf("second LeadingComments missing expected text: %v", second.LeadingComments)
 	}
 }
 
@@ -139,11 +139,11 @@ func TestParseBlankLineDoesNotBreakAttachment(t *testing.T) {
 	// break attribution. The two-line comment block here sits between two
 	// statements; the blank line under the comments must not detach them
 	// from the next stmt.
-	src := []byte(`let first := 1
+	src := []byte(`first := 1
 # above
 # also above
 
-let second := 2
+second := 2
 `)
 	tokens, comments, err := LexWithComments(src)
 	if err != nil {
@@ -254,10 +254,10 @@ func TestParseRoundTripCommentsPresentSomewhere(t *testing.T) {
 	// Program.Comments only.
 	src := []byte(`# top one
 # top two
-let x := 1
+x := 1
 
 # mid
-let y := 2
+y := 2
 
 # fn-leading
 fn f() {
@@ -289,7 +289,7 @@ func TestLexCommentsStripCRLF(t *testing.T) {
 	// as part of the comment body. Iter 2 strips one trailing `\r` so a
 	// comment authored on a CRLF host lex+parse-emits identically to one
 	// authored on an LF host.
-	src := []byte("# header line\r\nlet x := 1\r\n# trailing block\r\n")
+	src := []byte("# header line\r\nx := 1\r\n# trailing block\r\n")
 	tokens, comments, err := LexWithComments(src)
 	if err != nil {
 		t.Fatalf("LexWithComments: %v", err)
@@ -318,7 +318,7 @@ func TestParseWithoutCommentsLeavesFieldsEmpty(t *testing.T) {
 	// whose new fields are all nil. This is the structural-additivity
 	// guarantee that keeps v0.0–v0.9 corpora passing.
 	src := []byte(`# top
-let x := 1
+x := 1
 `)
 	tokens, err := Lex(src)
 	if err != nil {

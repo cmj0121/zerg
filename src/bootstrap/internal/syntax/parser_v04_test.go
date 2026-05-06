@@ -177,7 +177,7 @@ fn dec() -> int { return 0 }
 func TestParseImplMultiStatementBody(t *testing.T) {
 	src := `impl Counter {
 fn double() -> int {
-let y := this.count
+y := this.count
 return y * 2
 }
 }
@@ -201,7 +201,7 @@ return y * 2
 func TestParseSpecDefaultMultiStatementBody(t *testing.T) {
 	src := `spec Greeter {
 fn greet() -> str {
-let s := "hi"
+s := "hi"
 return s
 }
 }
@@ -295,7 +295,7 @@ func TestParseMethodCallOnFieldAccess(t *testing.T) {
 // call result then field access. The postfix loop produces FieldAccessExpr
 // wrapping MethodCallExpr.
 func TestParseFieldAccessAfterMethodCall(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := c.method().field\n")
+	prog := parseProgramSrc(t, "v := c.method().field\n")
 	let := expectOne[*LetStmt](t, prog)
 	fa, ok := let.Value.(*FieldAccessExpr)
 	if !ok {
@@ -313,7 +313,7 @@ func TestParseFieldAccessAfterMethodCall(t *testing.T) {
 // when no `(` follows DOT IDENT — this test guards the additive nature of
 // the new method-call rule.
 func TestParseFieldAccessUnchanged(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := c.x\n")
+	prog := parseProgramSrc(t, "v := c.x\n")
 	let := expectOne[*LetStmt](t, prog)
 	fa, ok := let.Value.(*FieldAccessExpr)
 	if !ok {
@@ -329,7 +329,7 @@ func TestParseFieldAccessUnchanged(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseThisInExpression(t *testing.T) {
-	prog := parseProgramSrc(t, "let x := this\n")
+	prog := parseProgramSrc(t, "x := this\n")
 	let := expectOne[*LetStmt](t, prog)
 	if _, ok := let.Value.(*ThisExpr); !ok {
 		t.Errorf("value is %T, want *ThisExpr", let.Value)
@@ -339,7 +339,7 @@ func TestParseThisInExpression(t *testing.T) {
 // TestParseThisFieldAccess verifies `this.x` parses as FieldAccessExpr
 // over a ThisExpr — the receiver shape used inside method bodies.
 func TestParseThisFieldAccess(t *testing.T) {
-	prog := parseProgramSrc(t, "let x := this.count\n")
+	prog := parseProgramSrc(t, "x := this.count\n")
 	let := expectOne[*LetStmt](t, prog)
 	fa, ok := let.Value.(*FieldAccessExpr)
 	if !ok {

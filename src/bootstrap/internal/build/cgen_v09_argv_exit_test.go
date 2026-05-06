@@ -71,7 +71,7 @@ func buildAndRun(t *testing.T, src string, runArgs []string) (stdout string, cod
 func TestV09CgenOsArgvReturnsArgs(t *testing.T) {
 	src := `# requires: v0.9
 import "std/os"
-let a := os.argv()
+a := os.argv()
 print len(a)
 print a[1]
 print a[2]

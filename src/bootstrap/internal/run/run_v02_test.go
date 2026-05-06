@@ -29,63 +29,63 @@ func TestRuneZeroByte(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestListLitPrint(t *testing.T) {
-	expectOK(t, "let xs := [1, 2, 3]\nprint xs\n", "[ 1, 2, 3 ]\n")
+	expectOK(t, "xs := [1, 2, 3]\nprint xs\n", "[ 1, 2, 3 ]\n")
 }
 
 func TestListEmptyPrint(t *testing.T) {
 	// Empty list prints "[]" with no inner spaces (PLAN line 164).
-	expectOK(t, "let xs: list[int] = []\nprint xs\nprint len(xs)\n", "[]\n0\n")
+	expectOK(t, "xs: list[int] = []\nprint xs\nprint len(xs)\n", "[]\n0\n")
 }
 
 func TestListIndex(t *testing.T) {
-	expectOK(t, "let xs := [10, 20, 30]\nprint xs[0]\nprint xs[2]\n", "10\n30\n")
+	expectOK(t, "xs := [10, 20, 30]\nprint xs[0]\nprint xs[2]\n", "10\n30\n")
 }
 
 func TestListIndexLast(t *testing.T) {
 	// len(xs)-1 gives the last index.
-	expectOK(t, "let xs := [9, 8, 7]\nprint xs[len(xs) - 1]\n", "7\n")
+	expectOK(t, "xs := [9, 8, 7]\nprint xs[len(xs) - 1]\n", "7\n")
 }
 
 func TestListSliceHalfOpen(t *testing.T) {
-	expectOK(t, "let xs := [1, 2, 3, 4, 5]\nprint xs[1..3]\n", "[ 2, 3 ]\n")
+	expectOK(t, "xs := [1, 2, 3, 4, 5]\nprint xs[1..3]\n", "[ 2, 3 ]\n")
 }
 
 func TestListSliceInclusive(t *testing.T) {
-	expectOK(t, "let xs := [1, 2, 3, 4, 5]\nprint xs[1..=3]\n", "[ 2, 3, 4 ]\n")
+	expectOK(t, "xs := [1, 2, 3, 4, 5]\nprint xs[1..=3]\n", "[ 2, 3, 4 ]\n")
 }
 
 func TestListSliceLowOmitted(t *testing.T) {
-	expectOK(t, "let xs := [1, 2, 3, 4, 5]\nprint xs[..2]\n", "[ 1, 2 ]\n")
+	expectOK(t, "xs := [1, 2, 3, 4, 5]\nprint xs[..2]\n", "[ 1, 2 ]\n")
 }
 
 func TestListSliceHighOmitted(t *testing.T) {
-	expectOK(t, "let xs := [1, 2, 3, 4, 5]\nprint xs[3..]\n", "[ 4, 5 ]\n")
+	expectOK(t, "xs := [1, 2, 3, 4, 5]\nprint xs[3..]\n", "[ 4, 5 ]\n")
 }
 
 func TestListSliceFullCopy(t *testing.T) {
-	expectOK(t, "let xs := [1, 2]\nprint xs[..]\n", "[ 1, 2 ]\n")
+	expectOK(t, "xs := [1, 2]\nprint xs[..]\n", "[ 1, 2 ]\n")
 }
 
 func TestListSliceEmpty(t *testing.T) {
 	// xs[i..i] is the empty slice — prints "[]".
-	expectOK(t, "let xs := [1, 2, 3]\nprint xs[1..1]\n", "[]\n")
+	expectOK(t, "xs := [1, 2, 3]\nprint xs[1..1]\n", "[]\n")
 }
 
 func TestListIndexOutOfRange(t *testing.T) {
-	expectErr(t, "let xs := [1, 2]\nprint xs[5]\n", "out of range")
+	expectErr(t, "xs := [1, 2]\nprint xs[5]\n", "out of range")
 }
 
 func TestListSliceOutOfRange(t *testing.T) {
-	expectErr(t, "let xs := [1, 2]\nprint xs[0..5]\n", "out of range")
+	expectErr(t, "xs := [1, 2]\nprint xs[0..5]\n", "out of range")
 }
 
 func TestListSliceLowGreaterHigh(t *testing.T) {
-	expectErr(t, "let xs := [1, 2, 3]\nprint xs[2..1]\n", "out of range")
+	expectErr(t, "xs := [1, 2, 3]\nprint xs[2..1]\n", "out of range")
 }
 
 func TestStringIndexReturnsRune(t *testing.T) {
 	// 'h' is codepoint 104, 'i' is 105 — string indexing produces rune.
-	expectOK(t, "let s := \"hi\"\nprint s[0]\nprint s[1]\n", "104\n105\n")
+	expectOK(t, "s := \"hi\"\nprint s[0]\nprint s[1]\n", "104\n105\n")
 }
 
 func TestLenOfList(t *testing.T) {
@@ -107,8 +107,8 @@ func TestListBindIsValueCopy(t *testing.T) {
 	// an explicit clone. The runtime still produces a fresh independent
 	// list, demonstrated by printing both — they match in value but live in
 	// different storage (the copy path is exercised by clone()).
-	src := `let xs := [1, 2, 3]
-let ys := clone(xs)
+	src := `xs := [1, 2, 3]
+ys := clone(xs)
 print xs
 print ys
 `
@@ -122,7 +122,7 @@ func TestListFnArgIsValueCopy(t *testing.T) {
 	src := `fn show(ys: list[int]) {
   print ys
 }
-let xs := [1, 2, 3]
+xs := [1, 2, 3]
 show(xs)
 print xs
 `
@@ -134,15 +134,15 @@ print xs
 // ---------------------------------------------------------------------------
 
 func TestTupleLitPrint(t *testing.T) {
-	expectOK(t, "let p := (1, 2)\nprint p\n", "( 1, 2 )\n")
+	expectOK(t, "p := (1, 2)\nprint p\n", "( 1, 2 )\n")
 }
 
 func TestTupleThreeElement(t *testing.T) {
-	expectOK(t, "let t := (1, 2, 3)\nprint t\n", "( 1, 2, 3 )\n")
+	expectOK(t, "t := (1, 2, 3)\nprint t\n", "( 1, 2, 3 )\n")
 }
 
 func TestTupleHeterogeneous(t *testing.T) {
-	expectOK(t, `let p := (1, "two")
+	expectOK(t, `p := (1, "two")
 print p
 `, "( 1, two )\n")
 }
@@ -151,7 +151,7 @@ func TestTupleMatchDestructure(t *testing.T) {
 	// Tuple destructure via match is the only destructure form parser /
 	// typeck support today — `let (a, b) := pair` requires a parser
 	// extension that's not in scope for Unit 3.
-	src := `let p := (3, 4)
+	src := `p := (3, 4)
 match p {
   (a, b) => print a + b
 }
@@ -165,7 +165,7 @@ match p {
 
 func TestStructLitAndFieldAccess(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 7, y: 11 }
+p := Point { x: 7, y: 11 }
 print p
 print p.x
 print p.y
@@ -176,7 +176,7 @@ print p.y
 func TestStructFieldOrderFollowsDeclaration(t *testing.T) {
 	// Initialiser order differs from declaration order; print follows decl.
 	src := `struct Point { x: int, y: int }
-let p := Point { y: 99, x: 1 }
+p := Point { y: 99, x: 1 }
 print p
 `
 	expectOK(t, src, "Point { x: 1, y: 99 }\n")
@@ -185,7 +185,7 @@ print p
 func TestStructInStructPrint(t *testing.T) {
 	src := `struct Inner { v: int }
 struct Outer { inner: Inner, label: str }
-let o := Outer { inner: Inner { v: 42 }, label: "hi" }
+o := Outer { inner: Inner { v: 42 }, label: "hi" }
 print o
 print o.inner.v
 `
@@ -194,7 +194,7 @@ print o.inner.v
 
 func TestStructInListIndexThenField(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
 print pts[1].x
 `
 	expectOK(t, src, "3\n")
@@ -206,7 +206,7 @@ print pts[1].x
 
 func TestEnumVariantAccess(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let c := Color.Green
+c := Color.Green
 print c
 print Color.Red
 print Color.Blue
@@ -216,7 +216,7 @@ print Color.Blue
 
 func TestEnumInList(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let cs := [Color.Red, Color.Blue]
+cs := [Color.Red, Color.Blue]
 print cs
 print cs[0]
 `
@@ -228,7 +228,7 @@ print cs[0]
 // ---------------------------------------------------------------------------
 
 func TestMatchLiteralArms(t *testing.T) {
-	src := `let n := 2
+	src := `n := 2
 match n {
   1 => print "one"
   2 => print "two"
@@ -239,7 +239,7 @@ match n {
 }
 
 func TestMatchWildcardFallback(t *testing.T) {
-	src := `let n := 99
+	src := `n := 99
 match n {
   1 => print "one"
   _ => print "other"
@@ -249,7 +249,7 @@ match n {
 }
 
 func TestMatchBindCapturesValue(t *testing.T) {
-	src := `let n := 42
+	src := `n := 42
 match n {
   v => print v
 }
@@ -258,7 +258,7 @@ match n {
 }
 
 func TestMatchGuardSelects(t *testing.T) {
-	src := `let n := 7
+	src := `n := 7
 match n {
   x if x > 5 => print "big"
   x => print "small"
@@ -269,7 +269,7 @@ match n {
 
 func TestMatchGuardFallsThrough(t *testing.T) {
 	// Guard false ⇒ next arm.
-	src := `let n := 3
+	src := `n := 3
 match n {
   x if x > 5 => print "big"
   x => print "small"
@@ -279,7 +279,7 @@ match n {
 }
 
 func TestMatchTupleDestructure(t *testing.T) {
-	src := `let p := (10, 20)
+	src := `p := (10, 20)
 match p {
   (a, b) => print a + b
 }
@@ -289,7 +289,7 @@ match p {
 
 func TestMatchStructDestructure(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 5, y: 0 }
+p := Point { x: 5, y: 0 }
 match p {
   Point { x: 0, y: 0 } => print "origin"
   Point { x, y } => print x + y
@@ -300,7 +300,7 @@ match p {
 
 func TestMatchStructWithRest(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 5, y: 99 }
+p := Point { x: 5, y: 99 }
 match p {
   Point { x: 0, .. } => print "x zero"
   Point { x, .. } => print x
@@ -311,7 +311,7 @@ match p {
 
 func TestMatchEnumVariants(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let c := Color.Green
+c := Color.Green
 match c {
   Color.Red => print "red"
   Color.Green => print "green"
@@ -324,7 +324,7 @@ match c {
 func TestMatchNoArmPanics(t *testing.T) {
 	// PLAN tenth-man revision: no silent fall-through. The interpreter
 	// must error out when no arm matches.
-	src := `let n := 5
+	src := `n := 5
 match n {
   1 => print "one"
   2 => print "two"
@@ -337,7 +337,7 @@ func TestMatchNestedTupleStruct(t *testing.T) {
 	// A tuple of (struct, enum) — matches via nested patterns.
 	src := `struct Point { x: int, y: int }
 enum Color { Red, Blue }
-let pair := (Point { x: 1, y: 2 }, Color.Blue)
+pair := (Point { x: 1, y: 2 }, Color.Blue)
 match pair {
   (Point { x, .. }, Color.Red)  => print x
   (Point { x, y }, Color.Blue) => print x + y
@@ -355,7 +355,7 @@ match pair {
 // ---------------------------------------------------------------------------
 
 func TestRunForListIterPrintsElements(t *testing.T) {
-	src := `let xs := [1, 2, 3]
+	src := `xs := [1, 2, 3]
 for x in xs {
   print x
 }
@@ -365,7 +365,7 @@ for x in xs {
 
 func TestRunForListIterEmptyList(t *testing.T) {
 	// Empty list ⇒ body never runs ⇒ no output, no error.
-	src := `let xs: list[int] = []
+	src := `xs: list[int] = []
 for x in xs {
   print x
 }
@@ -376,7 +376,7 @@ print "done"
 
 func TestRunForListIterListOfStructs(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
 for p in pts {
   print p.x
 }
@@ -399,7 +399,7 @@ for x in make() {
 }
 
 func TestRunForListIterBreak(t *testing.T) {
-	src := `let xs := [1, 2, 3, 4, 5]
+	src := `xs := [1, 2, 3, 4, 5]
 for x in xs {
   break if x > 2
   print x
@@ -410,7 +410,7 @@ print "done"
 }
 
 func TestRunForListIterContinue(t *testing.T) {
-	src := `let xs := [1, 2, 3, 4]
+	src := `xs := [1, 2, 3, 4]
 for x in xs {
   continue if x == 2
   print x
@@ -420,7 +420,7 @@ for x in xs {
 }
 
 func TestRunForListIterListOfStrings(t *testing.T) {
-	src := `let xs := ["a", "b", "c"]
+	src := `xs := ["a", "b", "c"]
 for s in xs {
   print s
 }
@@ -437,15 +437,15 @@ for s in xs {
 // ---------------------------------------------------------------------------
 
 func TestRunLetTupleDestructureBasic(t *testing.T) {
-	expectOK(t, "let (a, b) := (1, 2)\nprint a\nprint b\n", "1\n2\n")
+	expectOK(t, "(a, b) := (1, 2)\nprint a\nprint b\n", "1\n2\n")
 }
 
 func TestRunLetTupleDestructureThree(t *testing.T) {
-	expectOK(t, "let triple := (10, 20, 30)\nlet (a, b, c) := triple\nprint a\nprint b\nprint c\n", "10\n20\n30\n")
+	expectOK(t, "triple := (10, 20, 30)\n(a, b, c) := triple\nprint a\nprint b\nprint c\n", "10\n20\n30\n")
 }
 
 func TestRunLetTupleDestructureMixedTypes(t *testing.T) {
-	expectOK(t, `let (a, b) := (42, "hi")
+	expectOK(t, `(a, b) := (42, "hi")
 print a
 print b
 `, "42\nhi\n")
@@ -453,8 +453,8 @@ print b
 
 func TestRunLetTupleDestructureWithStruct(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let pair := (Point { x: 7, y: 11 }, 99)
-let (p, n) := pair
+pair := (Point { x: 7, y: 11 }, 99)
+(p, n) := pair
 print p
 print p.x + n
 `
@@ -464,8 +464,8 @@ print p.x + n
 func TestRunLetTupleDestructureNested(t *testing.T) {
 	// Nested tuple inside the RHS — destructure picks up the outer pair,
 	// the inner tuple stays as a tuple value bound to the second name.
-	src := `let pair := (1, (2, 3))
-let (a, b) := pair
+	src := `pair := (1, (2, 3))
+(a, b) := pair
 print a
 print b
 `
@@ -487,8 +487,8 @@ func TestRunLetTupleDestructureDeepCopy(t *testing.T) {
 	// copy directly without list mutation; we settle for showing the bind
 	// produces an independent struct value with the right shape.
 	src := `struct Point { x: int, y: int }
-let pair := (Point { x: 1, y: 2 }, Point { x: 3, y: 4 })
-let (p, q) := pair
+pair := (Point { x: 1, y: 2 }, Point { x: 3, y: 4 })
+(p, q) := pair
 print p
 print q
 `

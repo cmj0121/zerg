@@ -107,11 +107,11 @@ func TestPrintBoolFalse(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLetInferred(t *testing.T) {
-	expectOK(t, "let x := 10\nprint x\n", "10\n")
+	expectOK(t, "x := 10\nprint x\n", "10\n")
 }
 
 func TestLetAnnotated(t *testing.T) {
-	expectOK(t, "let x: int = 7\nprint x\n", "7\n")
+	expectOK(t, "x: int = 7\nprint x\n", "7\n")
 }
 
 func TestMutAssignment(t *testing.T) {
@@ -265,7 +265,7 @@ print true xor side()
 // ---------------------------------------------------------------------------
 
 func TestStrConcat(t *testing.T) {
-	src := `let s := "hello, " + "world"
+	src := `s := "hello, " + "world"
 print s
 `
 	expectOK(t, src, "hello, world\n")
@@ -288,7 +288,7 @@ func TestIfElse(t *testing.T) {
 }
 
 func TestIfElifElse(t *testing.T) {
-	src := `let x := 2
+	src := `x := 2
 if x == 1 { print "one" } elif x == 2 { print "two" } else { print "other" }
 `
 	expectOK(t, src, "two\n")
@@ -400,9 +400,9 @@ print pick(99)
 // ---------------------------------------------------------------------------
 
 func TestBlockScopeShadow(t *testing.T) {
-	src := `let x := 1
+	src := `x := 1
 if true {
-  let x := 2
+  x := 2
   print x
 }
 print x
@@ -418,11 +418,11 @@ func TestInnerLetDoesNotLeak(t *testing.T) {
 	// frame, so the second one's value prints — proving the first's binding
 	// was popped.
 	src := `if true {
-  let x := 11
+  x := 11
   print x
 }
 if true {
-  let x := 22
+  x := 22
   print x
 }
 `
@@ -444,5 +444,5 @@ func TestIntWrapAroundOnAdd(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTypeErrorPropagates(t *testing.T) {
-	expectErr(t, "let x: int = 3.14\n", "type error")
+	expectErr(t, "x: int = 3.14\n", "type error")
 }

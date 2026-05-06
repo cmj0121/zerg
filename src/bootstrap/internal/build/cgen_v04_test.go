@@ -83,7 +83,7 @@ fn double() -> int {
 return this.count * 2
 }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.double()
 `
 	out := mustEmit(t, src)
@@ -106,11 +106,11 @@ func TestCgenInherentMethodRunsCorrectly(t *testing.T) {
 	src := `struct Counter { count: int }
 impl Counter {
 fn double() -> int {
-let y := this.count
+y := this.count
 return y * 2
 }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.double()
 `
 	expectStdout(t, src, "10\n")
@@ -130,7 +130,7 @@ fn to_string() -> str {
 return "wrapped"
 }
 }
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.to_string()
 `
 	out := mustEmit(t, src)
@@ -160,7 +160,7 @@ fn to_string() -> str {
 return "wrapped"
 }
 }
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.to_string()
 `
 	expectStdout(t, src, "wrapped\n")
@@ -176,7 +176,7 @@ return 99
 }
 struct Counter { count: int }
 impl Counter for Hashable {}
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.hash()
 `
 	expectStdout(t, src, "99\n")
@@ -195,7 +195,7 @@ fn hash() -> int {
 return this.count + 100
 }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.hash()
 `
 	expectStdout(t, src, "105\n")
@@ -208,7 +208,7 @@ func TestCgenNotImplementedStubMessage(t *testing.T) {
 	src := `spec Printable { fn to_string() -> str }
 struct Counter { count: int }
 impl Counter for Printable {}
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.to_string()
 `
 	out := mustEmit(t, src)
@@ -245,8 +245,8 @@ fn to_string() -> str {
 return "wrapped"
 }
 }
-let c := Counter { count: 1 }
-let p: Printable = c
+c := Counter { count: 1 }
+p: Printable = c
 print p.to_string()
 `
 	out := mustEmit(t, src)
@@ -274,8 +274,8 @@ fn to_string() -> str {
 return "wrapped"
 }
 }
-let c := Counter { count: 1 }
-let p: Printable = c
+c := Counter { count: 1 }
+p: Printable = c
 print p.to_string()
 `
 	expectStdout(t, src, "wrapped\n")
@@ -294,9 +294,9 @@ fn tag() -> str { return "counter" }
 impl Color for Tagged {
 fn tag() -> str { return "color" }
 }
-let c := Counter { count: 1 }
-let r := Color.Red
-let xs: list[Tagged] = [c, r]
+c := Counter { count: 1 }
+r := Color.Red
+xs: list[Tagged] = [c, r]
 for x in xs {
 print x.tag()
 }
@@ -313,7 +313,7 @@ print x.tag()
 // an `_empty` placeholder so the union stays well-defined.
 func TestCgenEnumPayloadLayout(t *testing.T) {
 	src := `enum Token { Eof, Ident(str), Number(int, int) }
-let t := Token.Eof
+t := Token.Eof
 print t
 `
 	out := mustEmit(t, src)
@@ -339,7 +339,7 @@ print t
 // program 25.
 func TestCgenEnumWithListPayloadTypedefOrder(t *testing.T) {
 	src := `enum Frame { Args(list[int]), Empty }
-let f := Frame.Args([1, 2, 3])
+f := Frame.Args([1, 2, 3])
 print f
 `
 	out := mustEmit(t, src)
@@ -363,11 +363,11 @@ print f
 // tag+payload value and prints it in the documented format.
 func TestCgenEnumPayloadLiteralRuns(t *testing.T) {
 	src := `enum Token { Eof, Ident(str), Number(int, int) }
-let t := Token.Ident("hello")
+t := Token.Ident("hello")
 print t
-let n := Token.Number(10, 16)
+n := Token.Number(10, 16)
 print n
-let e := Token.Eof
+e := Token.Eof
 print e
 `
 	expectStdout(t, src, "Token.Ident(hello)\nToken.Number(10, 16)\nToken.Eof\n")
@@ -377,7 +377,7 @@ print e
 // position binds the value into arm scope.
 func TestCgenMatchPayloadBindRuns(t *testing.T) {
 	src := `enum Token { Ident(str), Number(int) }
-let t := Token.Ident("zerg")
+t := Token.Ident("zerg")
 match t {
 Token.Ident(name) => { print name }
 Token.Number(n) => { print n }
@@ -390,7 +390,7 @@ Token.Number(n) => { print n }
 // in arm selection. `Op.Add(0)` does NOT match because the payload is 5.
 func TestCgenMatchPayloadLiteralRuns(t *testing.T) {
 	src := `enum Op { Add(int), Sub(int) }
-let o := Op.Add(5)
+o := Op.Add(5)
 match o {
 Op.Add(0) => { print "zero" }
 Op.Add(n) => { print n }
@@ -404,7 +404,7 @@ Op.Sub(n) => { print n }
 // no-op; the bound positions still bind.
 func TestCgenMatchPayloadWildcardRuns(t *testing.T) {
 	src := `enum Pair { Both(int, int) }
-let p := Pair.Both(7, 8)
+p := Pair.Both(7, 8)
 match p {
 Pair.Both(_, second) => { print second }
 }
@@ -419,9 +419,9 @@ Pair.Both(_, second) => { print second }
 // TestCgenListEqRuns — list_eq returns true for identical content, false
 // otherwise.
 func TestCgenListEqRuns(t *testing.T) {
-	src := `let a := [1, 2, 3]
-let b := [1, 2, 3]
-let c := [1, 2]
+	src := `a := [1, 2, 3]
+b := [1, 2, 3]
+c := [1, 2]
 print a == b
 print a == c
 `
@@ -430,9 +430,9 @@ print a == c
 
 // TestCgenTupleEqRuns — per-position tuple equality.
 func TestCgenTupleEqRuns(t *testing.T) {
-	src := `let a := (1, "x")
-let b := (1, "x")
-let c := (1, "y")
+	src := `a := (1, "x")
+b := (1, "x")
+c := (1, "y")
 print a == b
 print a == c
 `
@@ -442,9 +442,9 @@ print a == c
 // TestCgenStructEqRuns — declaration-order field equality.
 func TestCgenStructEqRuns(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let a := Point { x: 1, y: 2 }
-let b := Point { x: 1, y: 2 }
-let c := Point { x: 1, y: 3 }
+a := Point { x: 1, y: 2 }
+b := Point { x: 1, y: 2 }
+c := Point { x: 1, y: 3 }
 print a == b
 print a == c
 `
@@ -454,9 +454,9 @@ print a == c
 // TestCgenEnumBareEqRuns — same tag → true; different tag → false.
 func TestCgenEnumBareEqRuns(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let a := Color.Red
-let b := Color.Red
-let c := Color.Green
+a := Color.Red
+b := Color.Red
+c := Color.Green
 print a == b
 print a == c
 `
@@ -467,9 +467,9 @@ print a == c
 // each payload position.
 func TestCgenEnumPayloadEqRuns(t *testing.T) {
 	src := `enum Token { Ident(str), Number(int) }
-let a := Token.Ident("foo")
-let b := Token.Ident("foo")
-let c := Token.Ident("bar")
+a := Token.Ident("foo")
+b := Token.Ident("foo")
+c := Token.Ident("bar")
 print a == b
 print a == c
 `
@@ -479,9 +479,9 @@ print a == c
 // TestCgenNestedListOfTupleEqRuns — nested composite == recurses correctly
 // (list of tuple → tuple_eq → primitive equality).
 func TestCgenNestedListOfTupleEqRuns(t *testing.T) {
-	src := `let a := [(1, "x"), (2, "y")]
-let b := [(1, "x"), (2, "y")]
-let c := [(1, "x"), (3, "y")]
+	src := `a := [(1, "x"), (2, "y")]
+b := [(1, "x"), (2, "y")]
+c := [(1, "x"), (3, "y")]
 print a == b
 print a == c
 `
@@ -515,7 +515,7 @@ fn sum() -> int {
 return this.x + this.y
 }
 }
-let b := Box { x: 4, y: 5 }
+b := Box { x: 4, y: 5 }
 print b.sum()
 `
 	expectStdout(t, src, "9\n")
@@ -533,7 +533,7 @@ fn quad() -> int {
 return this.double() * 2
 }
 }
-let c := Counter { count: 3 }
+c := Counter { count: 3 }
 print c.quad()
 `
 	expectStdout(t, src, "12\n")

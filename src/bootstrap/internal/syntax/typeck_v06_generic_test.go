@@ -23,8 +23,8 @@ import (
 
 func TestV06GenericFnIdentityInferred(t *testing.T) {
 	src := "fn id[T](x: T) -> T { return x }\n" +
-		"let a := id(7)\n" +
-		"let b := id(\"s\")\n"
+		"a := id(7)\n" +
+		"b := id(\"s\")\n"
 	prog := checkSrc(t, src)
 	var aLet, bLet *LetStmt
 	for _, st := range prog.Statements {
@@ -38,7 +38,7 @@ func TestV06GenericFnIdentityInferred(t *testing.T) {
 		}
 	}
 	if aLet == nil || bLet == nil {
-		t.Fatalf("missing let statements")
+		t.Fatalf("missing statements")
 	}
 	if aLet.Value.Type() != tInt {
 		t.Errorf("a's value type = %s, want int", aLet.Value.Type())
@@ -51,8 +51,8 @@ func TestV06GenericFnIdentityInferred(t *testing.T) {
 func TestV06GenericFnTwoInstancesShareDecl(t *testing.T) {
 	// Two calls with the same T = int must specialise to the same *FnDecl.
 	src := "fn id[T](x: T) -> T { return x }\n" +
-		"let a := id(7)\n" +
-		"let b := id(8)\n"
+		"a := id(7)\n" +
+		"b := id(8)\n"
 	checkSrc(t, src)
 }
 
@@ -60,7 +60,7 @@ func TestV06GenericFnReturnHintDrivesInference(t *testing.T) {
 	// The return-type hint feeds into the unifier so e.g.
 	// `let r: Result[int, str] = make_err("oops")` infers E = str.
 	src := "fn make_err[T, E](e: E) -> Result[T, E] { return Result.Err(e) }\n" +
-		"let r: Result[int, str] = make_err(\"oops\")\n"
+		"r: Result[int, str] = make_err(\"oops\")\n"
 	checkSrc(t, src)
 }
 
@@ -91,8 +91,8 @@ func TestV06GenericBoundSatisfied(t *testing.T) {
 		"struct Counter { n: int }\n" +
 		"impl Counter for Printable { fn to_string() -> str { return \"c\" } }\n" +
 		"fn show[T: Printable](x: T) -> str { return x.to_string() }\n" +
-		"let c := Counter { n: 1 }\n" +
-		"let s := show(c)\n"
+		"c := Counter { n: 1 }\n" +
+		"s := show(c)\n"
 	checkSrc(t, src)
 }
 
@@ -100,8 +100,8 @@ func TestV06GenericBoundUnsatisfied(t *testing.T) {
 	src := "spec Printable { fn to_string() -> str }\n" +
 		"struct Counter { n: int }\n" +
 		"fn show[T: Printable](x: T) -> str { return \"c\" }\n" +
-		"let c := Counter { n: 1 }\n" +
-		"let s := show(c)\n"
+		"c := Counter { n: 1 }\n" +
+		"s := show(c)\n"
 	checkErr(t, src, `does not implement Printable`)
 }
 
@@ -114,7 +114,7 @@ func TestV06GenericMultiBound(t *testing.T) {
 		"struct OnlyA { n: int }\n" +
 		"impl OnlyA for A { fn fa() -> int { return 0 } }\n" +
 		"fn use[T: A + B](x: T) {}\n" +
-		"let b := Both { n: 1 }\n" +
+		"b := Both { n: 1 }\n" +
 		"use(b)\n"
 	checkSrc(t, src)
 }
@@ -125,7 +125,7 @@ func TestV06GenericMultiBoundMissingOne(t *testing.T) {
 		"struct OnlyA { n: int }\n" +
 		"impl OnlyA for A { fn fa() -> int { return 0 } }\n" +
 		"fn use[T: A + B](x: T) {}\n" +
-		"let o := OnlyA { n: 1 }\n" +
+		"o := OnlyA { n: 1 }\n" +
 		"use(o)\n"
 	checkErr(t, src, "does not implement B")
 }
@@ -134,7 +134,7 @@ func TestV06GenericMultiBoundMissingOne(t *testing.T) {
 
 func TestV06GenericStructAnnotated(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let b: Box[int] = Box { value: 7 }\n"
+		"b: Box[int] = Box { value: 7 }\n"
 	prog := checkSrc(t, src)
 	var bLet *LetStmt
 	for _, st := range prog.Statements {
@@ -143,7 +143,7 @@ func TestV06GenericStructAnnotated(t *testing.T) {
 		}
 	}
 	if bLet == nil {
-		t.Fatal("missing let b")
+		t.Fatal("missing b")
 	}
 	got := bLet.Type.Resolved
 	if got == nil || got.Kind != TypeStruct || got.Name != "Box[int]" {
@@ -156,15 +156,15 @@ func TestV06GenericStructAnnotated(t *testing.T) {
 
 func TestV06GenericStructInListAnnotated(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let xs: list[Box[int]] = [Box { value: 1 }, Box { value: 2 }]\n"
+		"xs: list[Box[int]] = [Box { value: 1 }, Box { value: 2 }]\n"
 	checkSrc(t, src)
 }
 
 func TestV06GenericStructCanonicalisesAcrossUses(t *testing.T) {
 	// Two annotations of `Box[int]` must canonicalise to the same *Type.
 	src := "struct Box[T] { value: T }\n" +
-		"let a: Box[int] = Box { value: 1 }\n" +
-		"let b: Box[int] = Box { value: 2 }\n"
+		"a: Box[int] = Box { value: 1 }\n" +
+		"b: Box[int] = Box { value: 2 }\n"
 	prog := checkSrc(t, src)
 	var aT, bT *Type
 	for _, st := range prog.Statements {
@@ -187,7 +187,7 @@ func TestV06GenericStructCanonicalisesAcrossUses(t *testing.T) {
 
 func TestV06GenericStructNestedInstantiation(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let b: Box[Box[int]] = Box { value: Box { value: 7 } }\n"
+		"b: Box[Box[int]] = Box { value: Box { value: 7 } }\n"
 	prog := checkSrc(t, src)
 	var bLet *LetStmt
 	for _, st := range prog.Statements {
@@ -196,7 +196,7 @@ func TestV06GenericStructNestedInstantiation(t *testing.T) {
 		}
 	}
 	if bLet == nil {
-		t.Fatal("missing let b")
+		t.Fatal("missing b")
 	}
 	got := bLet.Type.Resolved
 	if got == nil || !strings.HasPrefix(got.Name, "Box[Box[int]") {
@@ -206,7 +206,7 @@ func TestV06GenericStructNestedInstantiation(t *testing.T) {
 
 func TestV06GenericStructBareNameWithoutHintRejects(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let b := Box { value: 7 }\n"
+		"b := Box { value: 7 }\n"
 	checkErr(t, src, "cannot infer type parameter")
 }
 
@@ -237,7 +237,7 @@ func TestV06TypeArgsOnNonGenericStructRejects(t *testing.T) {
 
 func TestV06GenericEnumDeclaration(t *testing.T) {
 	src := "enum Pair[T, U] { Both(T, U), Neither }\n" +
-		"let p: Pair[int, str] = Pair.Both(1, \"x\")\n"
+		"p: Pair[int, str] = Pair.Both(1, \"x\")\n"
 	prog := checkSrc(t, src)
 	var pLet *LetStmt
 	for _, st := range prog.Statements {
@@ -246,7 +246,7 @@ func TestV06GenericEnumDeclaration(t *testing.T) {
 		}
 	}
 	if pLet == nil {
-		t.Fatal("missing let p")
+		t.Fatal("missing p")
 	}
 	got := pLet.Type.Resolved
 	if got == nil || got.Kind != TypeEnum || got.Name != "Pair[int,str]" {
@@ -259,7 +259,7 @@ func TestV06GenericEnumDeclaration(t *testing.T) {
 func TestV06OptionSomeArgInferred(t *testing.T) {
 	// Option.Some(7) at expression position with no hint: the arg type
 	// drives inference.
-	src := "let x := Option.Some(7)\n"
+	src := "x := Option.Some(7)\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Value.Type()
@@ -270,20 +270,20 @@ func TestV06OptionSomeArgInferred(t *testing.T) {
 
 func TestV06OptionNoneAnnotated(t *testing.T) {
 	// Option.None: no args; type-args supplied by hint.
-	src := "let x: Option[int] = Option.None\n"
+	src := "x: Option[int] = Option.None\n"
 	checkSrc(t, src)
 }
 
 func TestV06OptionNoneWithoutHintRejects(t *testing.T) {
 	// Bare Option.None with no hint: rejects with the inference diagnostic.
-	src := "let x := Option.None\n"
+	src := "x := Option.None\n"
 	checkErr(t, src, "cannot infer type parameter")
 }
 
 func TestV06ResultErrFromHint(t *testing.T) {
 	// `let r: Result[int, str] = Result.Err("oops")` — T comes from the
 	// hint, E from the arg.
-	src := "let r: Result[int, str] = Result.Err(\"oops\")\n"
+	src := "r: Result[int, str] = Result.Err(\"oops\")\n"
 	prog := checkSrc(t, src)
 	var rLet *LetStmt
 	for _, st := range prog.Statements {
@@ -292,7 +292,7 @@ func TestV06ResultErrFromHint(t *testing.T) {
 		}
 	}
 	if rLet == nil {
-		t.Fatal("missing let r")
+		t.Fatal("missing r")
 	}
 	got := rLet.Value.Type()
 	if got == nil || got.Name != "Result[int,str]" {
@@ -301,13 +301,13 @@ func TestV06ResultErrFromHint(t *testing.T) {
 }
 
 func TestV06ResultOkArgInferredErrFromHint(t *testing.T) {
-	src := "let r: Result[int, str] = Result.Ok(42)\n"
+	src := "r: Result[int, str] = Result.Ok(42)\n"
 	checkSrc(t, src)
 }
 
 func TestV06ResultErrWithoutHintRejects(t *testing.T) {
 	// Without a hint, Result.Err("oops") cannot infer T (only E from arg).
-	src := "let x := Result.Err(\"oops\")\n"
+	src := "x := Result.Err(\"oops\")\n"
 	checkErr(t, src, "cannot infer type parameter")
 }
 
@@ -315,7 +315,7 @@ func TestV06ResultErrWithoutHintRejects(t *testing.T) {
 
 func TestV06LiftLetAnnotated(t *testing.T) {
 	// `let x: int? = 42` ⇒ Some(42), pinned to Option[int].
-	src := "let x: int? = 42\n"
+	src := "x: int? = 42\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Value.Type()
@@ -328,7 +328,7 @@ func TestV06LiftLetAnnotated(t *testing.T) {
 }
 
 func TestV06LiftListElement(t *testing.T) {
-	src := "let xs: list[int?] = [1, nil, 2]\n"
+	src := "xs: list[int?] = [1, nil, 2]\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
 	listT := ls.Value.Type()
@@ -376,21 +376,21 @@ func TestV06LiftReturn(t *testing.T) {
 }
 
 func TestV06LiftStructField(t *testing.T) {
-	src := "struct S { v: int? }\n" + "let s := S { v: 7 }\n"
+	src := "struct S { v: int? }\n" + "s := S { v: 7 }\n"
 	checkSrc(t, src)
 }
 
 func TestV06LiftDoesNotDoubleWrap(t *testing.T) {
 	// Already-Option value flowing into an Option[int] slot must NOT
 	// double-wrap.
-	src := "let a: int? = Option.Some(1)\n" +
-		"let b: int? = a\n"
+	src := "a: int? = Option.Some(1)\n" +
+		"b: int? = a\n"
 	checkSrc(t, src)
 }
 
 func TestV06NoLiftWithoutHint(t *testing.T) {
 	// `let x := 42` does NOT lift to Option[int] — no hint.
-	src := "let x := 42\n"
+	src := "x := 42\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
 	if ls.Value.Type() != tInt {
@@ -402,14 +402,14 @@ func TestV06NoLiftWithoutHint(t *testing.T) {
 
 func TestV06InferIntoNestedListElement(t *testing.T) {
 	src := "fn id[T](x: T) -> T { return x }\n" +
-		"let xs: list[int] = [id(1), id(2)]\n"
+		"xs: list[int] = [id(1), id(2)]\n"
 	checkSrc(t, src)
 }
 
 func TestV06InferIntoStructField(t *testing.T) {
 	src := "struct S { x: int }\n" +
 		"fn id[T](v: T) -> T { return v }\n" +
-		"let s := S { x: id(7) }\n"
+		"s := S { x: id(7) }\n"
 	checkSrc(t, src)
 }
 
@@ -462,7 +462,7 @@ func TestV06CrossModuleGenericFnSharedInstance(t *testing.T) {
 	// with int and str. Each instantiation must canonicalise to one
 	// *FnDecl shared bundle-wide.
 	sibSrc := "pub fn id[T](x: T) -> T { return x }\n"
-	mainSrc := "import \"sib\"\nlet a := sib.id(7)\nlet b := sib.id(\"hello\")\nlet c := sib.id(42)\n"
+	mainSrc := "import \"sib\"\na := sib.id(7)\nb := sib.id(\"hello\")\nc := sib.id(42)\n"
 	sibMod := &stubModule{name: "sib", prog: parseSrcOK(t, sibSrc)}
 	mainImp := &ImportDecl{Path: "sib", Alias: "sib"}
 	mainMod := &stubModule{
@@ -494,12 +494,12 @@ func TestV06EmptyTypeArgRejectsAtParse(t *testing.T) {
 // --- regression: non-generic call paths still work ------------------------
 
 func TestV06NonGenericCallRegression(t *testing.T) {
-	src := "fn add(a: int, b: int) -> int { return a + b }\n" + "let r := add(1, 2)\n"
+	src := "fn add(a: int, b: int) -> int { return a + b }\n" + "r := add(1, 2)\n"
 	checkSrc(t, src)
 }
 
 func TestV06NonGenericStructLitRegression(t *testing.T) {
-	src := "struct P { x: int }\n" + "let p := P { x: 7 }\n"
+	src := "struct P { x: int }\n" + "p := P { x: 7 }\n"
 	checkSrc(t, src)
 }
 
@@ -513,7 +513,7 @@ func TestV06OptionSomeFromGenericArg(t *testing.T) {
 }
 
 func TestV06ListOfOptionInt(t *testing.T) {
-	src := "let xs: list[int?] = [Option.Some(1), Option.None, Option.Some(3)]\n"
+	src := "xs: list[int?] = [Option.Some(1), Option.None, Option.Some(3)]\n"
 	checkSrc(t, src)
 }
 
@@ -533,13 +533,13 @@ func TestV06GenericFnRecursiveCall(t *testing.T) {
 	// A generic fn calling itself with the same type-arg vector must
 	// type-check (the sig is pre-registered before body type-checking
 	// in specialiseGenericFn).
-	src := "fn id[T](x: T) -> T { return id(x) }\n" + "let a := id(7)\n"
+	src := "fn id[T](x: T) -> T { return id(x) }\n" + "a := id(7)\n"
 	checkSrc(t, src)
 }
 
 func TestV06GenericFnReturnsListOfT(t *testing.T) {
 	src := "fn singleton[T](x: T) -> list[T] { return [x] }\n" +
-		"let xs := singleton(1)\n"
+		"xs := singleton(1)\n"
 	prog := checkSrc(t, src)
 	var xsLet *LetStmt
 	for _, st := range prog.Statements {
@@ -548,7 +548,7 @@ func TestV06GenericFnReturnsListOfT(t *testing.T) {
 		}
 	}
 	if xsLet == nil {
-		t.Fatal("missing let xs")
+		t.Fatal("missing xs")
 	}
 	got := xsLet.Value.Type()
 	if got == nil || got.Kind != TypeList || got.Element != tInt {
@@ -558,8 +558,8 @@ func TestV06GenericFnReturnsListOfT(t *testing.T) {
 
 func TestV06GenericFnTakesListOfT(t *testing.T) {
 	src := "fn first[T](xs: list[T]) -> T { return xs[0] }\n" +
-		"let xs: list[int] = [1, 2, 3]\n" +
-		"let f := first(xs)\n"
+		"xs: list[int] = [1, 2, 3]\n" +
+		"f := first(xs)\n"
 	checkSrc(t, src)
 }
 
@@ -567,13 +567,13 @@ func TestV06GenericFnHintDrivesElementType(t *testing.T) {
 	// fn make[T]() -> list[T]: the result list is list[T], so the
 	// surrounding `let xs: list[int] = make()` propagates int.
 	src := "fn make[T]() -> list[T] { return [] }\n" +
-		"let xs: list[int] = make()\n"
+		"xs: list[int] = make()\n"
 	checkSrc(t, src)
 }
 
 func TestV06OptionSomeNestedInList(t *testing.T) {
 	// Options inside a list literal — each element a Some(...).
-	src := "let xs := [Option.Some(1), Option.Some(2)]\n"
+	src := "xs := [Option.Some(1), Option.Some(2)]\n"
 	checkSrc(t, src)
 }
 
@@ -581,8 +581,8 @@ func TestV06GenericFnSpecialisationsAreOneInstance(t *testing.T) {
 	// Two calls of `id(7)` and `id(8)` must specialise to the SAME
 	// FnDecl in the bundle's monoFns table.
 	src := "fn id[T](x: T) -> T { return x }\n" +
-		"let a := id(7)\n" +
-		"let b := id(8)\n"
+		"a := id(7)\n" +
+		"b := id(8)\n"
 	tokens, err := Lex([]byte(src))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)
@@ -614,7 +614,7 @@ func TestV06GenericStructSelfRefRejected(t *testing.T) {
 	// Document the v0.6 surface: it's currently ACCEPTED (cycle check
 	// fires only on collected struct decls). The cycle rule for
 	// monomorphized struct instances is a future-unit concern.
-	src := "struct Wrap[T] { v: T }\n" + "let w: Wrap[int] = Wrap { v: 1 }\n"
+	src := "struct Wrap[T] { v: T }\n" + "w: Wrap[int] = Wrap { v: 1 }\n"
 	checkSrc(t, src)
 }
 
@@ -657,14 +657,14 @@ func TestV06SymmetricLiftIntoStructFieldOption(t *testing.T) {
 	// Already an Option[int] flowing into a int? slot must NOT
 	// double-wrap; the lift only fires for non-Option observed types.
 	src := "struct S { v: int? }\n" +
-		"let s := S { v: Option.Some(7) }\n"
+		"s := S { v: Option.Some(7) }\n"
 	checkSrc(t, src)
 }
 
 func TestV06GenericTPostfixSig(t *testing.T) {
 	// `T?` in a generic signature instantiates to Option[<conc>].
 	src := "fn id[T](x: T?) -> T? { return x }\n" +
-		"let a: int? = id(Option.Some(7))\n"
+		"a: int? = id(Option.Some(7))\n"
 	checkSrc(t, src)
 }
 
@@ -672,7 +672,7 @@ func TestV06GenericTPostfixWithLift(t *testing.T) {
 	// Calling `id[T](x: T?)` with a bare T-typed value: the T → T?
 	// lift wraps the arg into Option[T] before passing.
 	src := "fn id[T](x: T?) -> T? { return x }\n" +
-		"let a: int? = id(7)\n"
+		"a: int? = id(7)\n"
 	prog := checkSrc(t, src)
 	var aLet *LetStmt
 	for _, st := range prog.Statements {
@@ -681,7 +681,7 @@ func TestV06GenericTPostfixWithLift(t *testing.T) {
 		}
 	}
 	if aLet == nil {
-		t.Fatal("missing let a")
+		t.Fatal("missing a")
 	}
 	got := aLet.Type.Resolved
 	if got == nil || got.Name != "Option[int]" {
@@ -742,7 +742,7 @@ func TestV06GenericFnBodyClonedPerInstance(t *testing.T) {
 // "enum pattern type %q does not match subject type %s".
 func TestV06EnumPatternOnGenericInstance(t *testing.T) {
 	src := "enum Pair[A, B] { Both(A, B), Left(A), Right(B) }\n" +
-		"let p: Pair[int, str] = Pair.Both(7, \"hi\")\n" +
+		"p: Pair[int, str] = Pair.Both(7, \"hi\")\n" +
 		"match p {\n" +
 		"    Pair.Both(a, b) => {\n" +
 		"        print a\n" +

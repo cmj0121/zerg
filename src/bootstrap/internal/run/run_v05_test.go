@@ -76,7 +76,7 @@ func TestV05CrossModuleStructLit(t *testing.T) {
 		"util.zg": `pub struct Counter { count: int }
 `,
 		"main.zg": `import "util"
-let c := util.Counter { count: 5 }
+c := util.Counter { count: 5 }
 print c.count
 `,
 	}, "5\n")
@@ -98,7 +98,7 @@ return this.count * 2
 }
 `,
 		"main.zg": `import "util"
-let c := util.Counter { count: 7 }
+c := util.Counter { count: 7 }
 print c.doubled()
 `,
 	}, "14\n")
@@ -125,7 +125,7 @@ Number(int),
 }
 `,
 		"main.zg": `import "util"
-let t := util.Token.Ident("hi")
+t := util.Token.Ident("hi")
 match t {
 Token.Ident(s) => print s
 Token.Number(n) => print n
@@ -150,8 +150,8 @@ pub fn to_string() -> str {
 return this.word
 }
 }
-let g := Greeting { word: "hello" }
-let p: util.Printable = g
+g := Greeting { word: "hello" }
+p: util.Printable = g
 print p.to_string()
 `,
 	}, "hello\n")
@@ -186,7 +186,7 @@ return "B"
 		"main.zg": `import "shared"
 import "a"
 import "b"
-let xs: list[shared.Tagged] = [ a.A { v: 1 }, b.B { v: 2 } ]
+xs: list[shared.Tagged] = [ a.A { v: 1 }, b.B { v: 2 } ]
 for x in xs {
 print x.tag()
 }
@@ -250,12 +250,12 @@ return Outcome.Err("bad")
 }
 `,
 		"main.zg": `import "util"
-let r := util.parse("good")
+r := util.parse("good")
 match r {
 Outcome.Ok(v) => print v
 Outcome.Err(e) => print e
 }
-let s := util.parse("nope")
+s := util.parse("nope")
 match s {
 Outcome.Ok(v) => print v
 Outcome.Err(e) => print e
@@ -300,7 +300,7 @@ return "?"
 }
 `,
 		"main.zg": `import "util"
-let l := util.Light { c: util.Color.Red }
+l := util.Light { c: util.Color.Red }
 print l.name()
 `,
 	}, "red\n")
@@ -337,7 +337,7 @@ pub fn name() -> str { return "cat" }
 impl Dog for shared.Named {
 pub fn name() -> str { return "dog" }
 }
-let xs: list[shared.Named] = [ Cat { name: "x" }, Dog { name: "y" } ]
+xs: list[shared.Named] = [ Cat { name: "x" }, Dog { name: "y" } ]
 for x in xs {
 print x.name()
 }
@@ -362,9 +362,9 @@ struct Counter { tag: int }
 impl Counter {
 pub fn show() -> str { return "main" }
 }
-let mc := Counter { tag: 1 }
+mc := Counter { tag: 1 }
 print mc.show()
-let uc := util.Counter { tag: 1 }
+uc := util.Counter { tag: 1 }
 print uc.show()
 `,
 	}, "main\nutil\n")
@@ -386,9 +386,9 @@ enum Token { Eof, Ident(str) }
 impl Token {
 pub fn label() -> str { return "main" }
 }
-let mt := Token.Ident("x")
+mt := Token.Ident("x")
 print mt.label()
-let ut := util.Token.Ident("y")
+ut := util.Token.Ident("y")
 print ut.label()
 `,
 	}, "main\nutil\n")
@@ -409,9 +409,9 @@ enum Color { Red, Green }
 impl Color {
 pub fn label() -> str { return "main" }
 }
-let mc := Color.Red
+mc := Color.Red
 print mc.label()
-let uc := util.Color.Red
+uc := util.Color.Red
 print uc.label()
 `,
 	}, "main\nutil\n")

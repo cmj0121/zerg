@@ -24,8 +24,8 @@ func TestV06GenericImplInherentBasic(t *testing.T) {
 		"impl[T] Box[T] {\n" +
 		"  fn get_value() -> T { return this.value }\n" +
 		"}\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
-		"let v := b.get_value()\n"
+		"b: Box[int] = Box { value: 7 }\n" +
+		"v := b.get_value()\n"
 	prog := checkSrc(t, src)
 	var vLet *LetStmt
 	for _, st := range prog.Statements {
@@ -34,7 +34,7 @@ func TestV06GenericImplInherentBasic(t *testing.T) {
 		}
 	}
 	if vLet == nil {
-		t.Fatalf("missing let v")
+		t.Fatalf("missing v")
 	}
 	if vLet.Value.Type() != tInt {
 		t.Errorf("v's type = %s, want int", vLet.Value.Type())
@@ -49,8 +49,8 @@ func TestV06GenericImplForSpecBasic(t *testing.T) {
 		"impl[T] Box[T] for Printable {\n" +
 		"  fn to_string() -> str { return \"box\" }\n" +
 		"}\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
-		"let s := b.to_string()\n"
+		"b: Box[int] = Box { value: 7 }\n" +
+		"s := b.to_string()\n"
 	checkSrc(t, src)
 }
 
@@ -63,8 +63,8 @@ func TestV06GenericImplForSpecAllowsSpecCoercion(t *testing.T) {
 		"  fn to_string() -> str { return \"box\" }\n" +
 		"}\n" +
 		"fn show(p: Printable) -> str { return p.to_string() }\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
-		"let s := show(b)\n"
+		"b: Box[int] = Box { value: 7 }\n" +
+		"s := show(b)\n"
 	checkSrc(t, src)
 }
 
@@ -78,9 +78,9 @@ func TestV06GenericImplBoundSatisfied(t *testing.T) {
 		"impl[T: Printable] Wrap[T] {\n" +
 		"  fn show() -> str { return this.inner.to_string() }\n" +
 		"}\n" +
-		"let c := Counter { n: 1 }\n" +
-		"let w: Wrap[Counter] = Wrap { inner: c }\n" +
-		"let s := w.show()\n"
+		"c := Counter { n: 1 }\n" +
+		"w: Wrap[Counter] = Wrap { inner: c }\n" +
+		"s := w.show()\n"
 	checkSrc(t, src)
 }
 
@@ -90,7 +90,7 @@ func TestV06GenericImplBoundUnsatisfied(t *testing.T) {
 		"impl[T: Printable] Wrap[T] {\n" +
 		"  fn show() -> int { return 0 }\n" +
 		"}\n" +
-		"let w: Wrap[int] = Wrap { inner: 1 }\n"
+		"w: Wrap[int] = Wrap { inner: 1 }\n"
 	checkErr(t, src, "does not implement Printable")
 }
 
@@ -120,8 +120,8 @@ func TestV06GenericImplVsConcreteImplCollides(t *testing.T) {
 		"struct Box[T] { value: T }\n" +
 		"impl[T] Box[T] for Printable { fn to_string() -> str { return \"g\" } }\n" +
 		"impl Box[int] for Printable { fn to_string() -> str { return \"c\" } }\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
-		"let s := b.to_string()\n"
+		"b: Box[int] = Box { value: 7 }\n" +
+		"s := b.to_string()\n"
 	checkErr(t, src, "duplicate impl")
 }
 
@@ -131,8 +131,8 @@ func TestV06ConcreteArgImplBasic(t *testing.T) {
 	src := "spec Printable { fn to_string() -> str }\n" +
 		"struct Box[T] { value: T }\n" +
 		"impl Box[int] for Printable { fn to_string() -> str { return \"box-int\" } }\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
-		"let s := b.to_string()\n"
+		"b: Box[int] = Box { value: 7 }\n" +
+		"s := b.to_string()\n"
 	checkSrc(t, src)
 }
 
@@ -142,8 +142,8 @@ func TestV06ConcreteArgImplDoesNotApplyToOtherInstance(t *testing.T) {
 	src := "spec Printable { fn to_string() -> str }\n" +
 		"struct Box[T] { value: T }\n" +
 		"impl Box[int] for Printable { fn to_string() -> str { return \"i\" } }\n" +
-		"let b: Box[str] = Box { value: \"x\" }\n" +
-		"let s := b.to_string()\n"
+		"b: Box[str] = Box { value: \"x\" }\n" +
+		"s := b.to_string()\n"
 	checkErr(t, src, "does not exist")
 }
 
@@ -154,8 +154,8 @@ func TestV06GenericImplOnUserEnum(t *testing.T) {
 		"impl[T] Wrap[T] {\n" +
 		"  fn is_empty() -> bool { return false }\n" +
 		"}\n" +
-		"let w: Wrap[int] = Wrap.Inner(7)\n" +
-		"let b := w.is_empty()\n"
+		"w: Wrap[int] = Wrap.Inner(7)\n" +
+		"b := w.is_empty()\n"
 	checkSrc(t, src)
 }
 
@@ -167,10 +167,10 @@ func TestV06GenericImplExpandsForEachInstance(t *testing.T) {
 		"impl[T] Box[T] {\n" +
 		"  fn double_check() -> bool { return true }\n" +
 		"}\n" +
-		"let bi: Box[int] = Box { value: 1 }\n" +
-		"let bs: Box[str] = Box { value: \"x\" }\n" +
-		"let r1 := bi.double_check()\n" +
-		"let r2 := bs.double_check()\n"
+		"bi: Box[int] = Box { value: 1 }\n" +
+		"bs: Box[str] = Box { value: \"x\" }\n" +
+		"r1 := bi.double_check()\n" +
+		"r2 := bs.double_check()\n"
 	checkSrc(t, src)
 }
 
@@ -182,7 +182,7 @@ func TestV06GenericImplSpecMethodSignatureMismatch(t *testing.T) {
 		"impl[T] Box[T] for Printable {\n" +
 		"  fn to_string() -> int { return 0 }\n" +
 		"}\n" +
-		"let b: Box[int] = Box { value: 7 }\n"
+		"b: Box[int] = Box { value: 7 }\n"
 	checkErr(t, src, "return type")
 }
 
@@ -195,8 +195,8 @@ func TestV06GenericImplDoesNotMatchNonGenericType(t *testing.T) {
 		"impl[T] Box[T] {\n" +
 		"  fn ping() -> int { return 1 }\n" +
 		"}\n" +
-		"let c := Counter { n: 1 }\n" +
-		"let r := c.ping()\n"
+		"c := Counter { n: 1 }\n" +
+		"r := c.ping()\n"
 	checkErr(t, src, "does not exist")
 }
 
@@ -212,8 +212,8 @@ func TestV06GenericImplOrderingConcreteBeforeGeneric(t *testing.T) {
 		"impl[T] Box[T] {\n" +
 		"  fn ping() -> int { return 1 }\n" +
 		"}\n" +
-		"let bs: Box[str] = Box { value: \"x\" }\n" +
-		"let r := bs.ping()\n"
+		"bs: Box[str] = Box { value: \"x\" }\n" +
+		"r := bs.ping()\n"
 	checkSrc(t, src)
 }
 
@@ -227,8 +227,8 @@ func TestV06GenericImplOrderingEarlyMonoStillExpands(t *testing.T) {
 		"impl[T] Box[T] {\n" +
 		"  fn ping() -> int { return 1 }\n" +
 		"}\n" +
-		"let bi: Box[int] = Box { value: 1 }\n" +
-		"let r := bi.ping()\n"
+		"bi: Box[int] = Box { value: 1 }\n" +
+		"r := bi.ping()\n"
 	checkSrc(t, src)
 }
 
@@ -240,6 +240,6 @@ func TestV06GenericImplBoundFailureAtUseSite(t *testing.T) {
 		"impl[T: Display] Box[T] for Display {\n" +
 		"  fn fmt() -> str { return \"x\" }\n" +
 		"}\n" +
-		"let b: Box[int] = Box { value: 7 }\n"
+		"b: Box[int] = Box { value: 7 }\n"
 	checkErr(t, src, "does not implement Display")
 }

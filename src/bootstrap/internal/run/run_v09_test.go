@@ -132,7 +132,7 @@ func TestV09RunBundleRePanicsForNonExit(t *testing.T) {
 // are zero before any exit is raised. Used by the host (CLI / REPL) to
 // distinguish a clean run from an exit-driven one.
 func TestV09InterpExitFieldsZeroByDefault(t *testing.T) {
-	src := "let x := 1\n"
+	src := "x := 1\n"
 	tokens, _ := syntax.Lex([]byte(src))
 	prog, _ := syntax.Parse(tokens)
 	if err := syntax.CheckSingle(prog); err != nil {

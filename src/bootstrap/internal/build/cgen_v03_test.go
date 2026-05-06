@@ -27,7 +27,7 @@ import (
 // TestCgenListStructHasCapField — the emitted list struct definition includes
 // a cap field for v0.3 push growth.
 func TestCgenListStructHasCapField(t *testing.T) {
-	out := mustEmit(t, "let xs := [1, 2]\n")
+	out := mustEmit(t, "xs := [1, 2]\n")
 	if !strings.Contains(out, "size_t cap;") {
 		t.Errorf("list struct missing cap field; got:\n%s", out)
 	}
@@ -35,7 +35,7 @@ func TestCgenListStructHasCapField(t *testing.T) {
 
 // TestCgenListLitInitializesCap — list literals construct with cap == len.
 func TestCgenListLitInitializesCap(t *testing.T) {
-	out := mustEmit(t, "let xs := [1, 2, 3]\n")
+	out := mustEmit(t, "xs := [1, 2, 3]\n")
 	if !strings.Contains(out, "__l.len = 3; __l.cap = 3;") {
 		t.Errorf("list literal should set cap = len; got:\n%s", out)
 	}
@@ -78,8 +78,8 @@ push(xs, 3)
 // TestCgenNoImplicitCopyOnBind — let-binding of a composite does NOT wrap
 // the rhs in `<T>_copy`. Was the v0.2 / pre-Unit-5 behaviour.
 func TestCgenNoImplicitCopyOnBind(t *testing.T) {
-	src := `let xs := [1, 2]
-let ys := xs
+	src := `xs := [1, 2]
+ys := xs
 print ys[0]
 `
 	out := mustEmit(t, src)
@@ -87,7 +87,7 @@ print ys[0]
 		t.Errorf("let-binding should NOT call <T>_copy on rhs; got:\n%s", out)
 	}
 	if !strings.Contains(out, "zerg_list_int64_t z_ys = z_xs;") {
-		t.Errorf("let ys := xs should bind directly; got:\n%s", out)
+		t.Errorf("ys := xs should bind directly; got:\n%s", out)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestCgenNoImplicitCopyOnFnArg(t *testing.T) {
 	src := `fn first(ys: list[int]) -> int {
 return ys[0]
 }
-let xs := [1, 2]
+xs := [1, 2]
 print first(xs)
 `
 	out := mustEmit(t, src)
@@ -114,10 +114,10 @@ print first(xs)
 // the value in `<T>_copy`.
 func TestCgenNoImplicitCopyOnReturn(t *testing.T) {
 	src := `fn make() -> list[int] {
-let xs := [1, 2, 3]
+xs := [1, 2, 3]
 return xs
 }
-let ys := make()
+ys := make()
 print ys[0]
 `
 	out := mustEmit(t, src)
@@ -129,8 +129,8 @@ print ys[0]
 // TestCgenCloneStillUsesCopyHelper — the explicit `clone(xs)` call IS the
 // only call-site of the per-shape copy helper at v0.3.
 func TestCgenCloneStillUsesCopyHelper(t *testing.T) {
-	src := `let xs := [1, 2]
-let ys := clone(xs)
+	src := `xs := [1, 2]
+ys := clone(xs)
 print ys[0]
 `
 	out := mustEmit(t, src)

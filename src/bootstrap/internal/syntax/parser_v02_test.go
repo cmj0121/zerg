@@ -155,7 +155,7 @@ func firstExprStmt(t *testing.T, prog *Program) Expr {
 }
 
 func TestParseListLitEmpty(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs := []\n")
+	prog := parseProgramSrc(t, "xs := []\n")
 	lit, ok := firstExprStmt(t, prog).(*ListLit)
 	if !ok {
 		t.Fatalf("value is %T, want *ListLit", firstExprStmt(t, prog))
@@ -166,7 +166,7 @@ func TestParseListLitEmpty(t *testing.T) {
 }
 
 func TestParseListLitSingle(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs := [42]\n")
+	prog := parseProgramSrc(t, "xs := [42]\n")
 	lit := firstExprStmt(t, prog).(*ListLit)
 	if len(lit.Elements) != 1 {
 		t.Errorf("got %d elements, want 1", len(lit.Elements))
@@ -174,7 +174,7 @@ func TestParseListLitSingle(t *testing.T) {
 }
 
 func TestParseListLitMultiple(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs := [1, 2, 3]\n")
+	prog := parseProgramSrc(t, "xs := [1, 2, 3]\n")
 	lit := firstExprStmt(t, prog).(*ListLit)
 	if len(lit.Elements) != 3 {
 		t.Errorf("got %d elements, want 3", len(lit.Elements))
@@ -182,7 +182,7 @@ func TestParseListLitMultiple(t *testing.T) {
 }
 
 func TestParseListLitTrailingComma(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs := [1, 2, 3,]\n")
+	prog := parseProgramSrc(t, "xs := [1, 2, 3,]\n")
 	lit := firstExprStmt(t, prog).(*ListLit)
 	if len(lit.Elements) != 3 {
 		t.Errorf("trailing comma broke element count = %d, want 3", len(lit.Elements))
@@ -190,7 +190,7 @@ func TestParseListLitTrailingComma(t *testing.T) {
 }
 
 func TestParseListLitNested(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs := [[1, 2], [3, 4]]\n")
+	prog := parseProgramSrc(t, "xs := [[1, 2], [3, 4]]\n")
 	outer := firstExprStmt(t, prog).(*ListLit)
 	if len(outer.Elements) != 2 {
 		t.Fatalf("outer got %d, want 2", len(outer.Elements))
@@ -209,7 +209,7 @@ func TestParseListLitNested(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseTupleLit2(t *testing.T) {
-	prog := parseProgramSrc(t, "let p := (1, 2)\n")
+	prog := parseProgramSrc(t, "p := (1, 2)\n")
 	tup, ok := firstExprStmt(t, prog).(*TupleLit)
 	if !ok {
 		t.Fatalf("value is %T, want *TupleLit", firstExprStmt(t, prog))
@@ -220,7 +220,7 @@ func TestParseTupleLit2(t *testing.T) {
 }
 
 func TestParseTupleLit3(t *testing.T) {
-	prog := parseProgramSrc(t, "let p := (1, 2, 3)\n")
+	prog := parseProgramSrc(t, "p := (1, 2, 3)\n")
 	tup := firstExprStmt(t, prog).(*TupleLit)
 	if len(tup.Elements) != 3 {
 		t.Errorf("got %d elements, want 3", len(tup.Elements))
@@ -229,7 +229,7 @@ func TestParseTupleLit3(t *testing.T) {
 
 // `(a)` is grouping, not a 1-tuple. PLAN: 1-tuples deferred.
 func TestParseSingleParenStaysParenExpr(t *testing.T) {
-	prog := parseProgramSrc(t, "let p := (42)\n")
+	prog := parseProgramSrc(t, "p := (42)\n")
 	if _, ok := firstExprStmt(t, prog).(*ParenExpr); !ok {
 		t.Fatalf("value is %T, want *ParenExpr", firstExprStmt(t, prog))
 	}
@@ -237,7 +237,7 @@ func TestParseSingleParenStaysParenExpr(t *testing.T) {
 
 // `(a,)` — 1-tuple form is a parse error at v0.2.
 func TestParseOneTupleRejected(t *testing.T) {
-	expectParseErr(t, "let p := (42,)\n", "tuple literal requires at least 2 elements")
+	expectParseErr(t, "p := (42,)\n", "tuple literal requires at least 2 elements")
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ func TestParseOneTupleRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseStructLitTwoFields(t *testing.T) {
-	prog := parseProgramSrc(t, "let p := Point { x: 1, y: 2 }\n")
+	prog := parseProgramSrc(t, "p := Point { x: 1, y: 2 }\n")
 	lit, ok := firstExprStmt(t, prog).(*StructLit)
 	if !ok {
 		t.Fatalf("value is %T, want *StructLit", firstExprStmt(t, prog))
@@ -259,7 +259,7 @@ func TestParseStructLitTwoFields(t *testing.T) {
 }
 
 func TestParseStructLitTrailingComma(t *testing.T) {
-	prog := parseProgramSrc(t, "let p := Point { x: 1, y: 2, }\n")
+	prog := parseProgramSrc(t, "p := Point { x: 1, y: 2, }\n")
 	lit := firstExprStmt(t, prog).(*StructLit)
 	if len(lit.Fields) != 2 {
 		t.Errorf("trailing comma broke field count = %d, want 2", len(lit.Fields))
@@ -268,7 +268,7 @@ func TestParseStructLitTrailingComma(t *testing.T) {
 
 func TestParseStructLitEmpty(t *testing.T) {
 	// Parser admits `Empty {}`; typeck rejects empty struct decls.
-	prog := parseProgramSrc(t, "let p := Empty {}\n")
+	prog := parseProgramSrc(t, "p := Empty {}\n")
 	lit, ok := firstExprStmt(t, prog).(*StructLit)
 	if !ok {
 		t.Fatalf("value is %T, want *StructLit", firstExprStmt(t, prog))
@@ -333,7 +333,7 @@ nop
 // ---------------------------------------------------------------------------
 
 func TestParseEnumVariantAccess(t *testing.T) {
-	prog := parseProgramSrc(t, "let c := Color.Red\n")
+	prog := parseProgramSrc(t, "c := Color.Red\n")
 	fa, ok := firstExprStmt(t, prog).(*FieldAccessExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *FieldAccessExpr", firstExprStmt(t, prog))
@@ -352,7 +352,7 @@ func TestParseEnumVariantAccess(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseIndexZero(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[0]\n")
+	prog := parseProgramSrc(t, "v := xs[0]\n")
 	idx, ok := firstExprStmt(t, prog).(*IndexExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *IndexExpr", firstExprStmt(t, prog))
@@ -363,7 +363,7 @@ func TestParseIndexZero(t *testing.T) {
 }
 
 func TestParseIndexExpr(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[i + 1]\n")
+	prog := parseProgramSrc(t, "v := xs[i + 1]\n")
 	idx := firstExprStmt(t, prog).(*IndexExpr)
 	if _, ok := idx.Index.(*BinaryExpr); !ok {
 		t.Errorf("index is %T, want *BinaryExpr", idx.Index)
@@ -371,7 +371,7 @@ func TestParseIndexExpr(t *testing.T) {
 }
 
 func TestParseIndexCallResult(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[fn_call(j)]\n")
+	prog := parseProgramSrc(t, "v := xs[fn_call(j)]\n")
 	idx := firstExprStmt(t, prog).(*IndexExpr)
 	if _, ok := idx.Index.(*CallExpr); !ok {
 		t.Errorf("index is %T, want *CallExpr", idx.Index)
@@ -379,7 +379,7 @@ func TestParseIndexCallResult(t *testing.T) {
 }
 
 func TestParseSliceFull(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[1..3]\n")
+	prog := parseProgramSrc(t, "v := xs[1..3]\n")
 	sl, ok := firstExprStmt(t, prog).(*SliceExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *SliceExpr", firstExprStmt(t, prog))
@@ -393,7 +393,7 @@ func TestParseSliceFull(t *testing.T) {
 }
 
 func TestParseSliceInclusive(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[1..=3]\n")
+	prog := parseProgramSrc(t, "v := xs[1..=3]\n")
 	sl := firstExprStmt(t, prog).(*SliceExpr)
 	if !sl.Inclusive {
 		t.Errorf("Inclusive = false, want true for `..=`")
@@ -401,7 +401,7 @@ func TestParseSliceInclusive(t *testing.T) {
 }
 
 func TestParseSliceLowOmitted(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[..3]\n")
+	prog := parseProgramSrc(t, "v := xs[..3]\n")
 	sl := firstExprStmt(t, prog).(*SliceExpr)
 	if sl.Low != nil {
 		t.Errorf("Low = %v, want nil", sl.Low)
@@ -412,7 +412,7 @@ func TestParseSliceLowOmitted(t *testing.T) {
 }
 
 func TestParseSliceHighOmitted(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[1..]\n")
+	prog := parseProgramSrc(t, "v := xs[1..]\n")
 	sl := firstExprStmt(t, prog).(*SliceExpr)
 	if sl.Low == nil {
 		t.Errorf("Low = nil, want non-nil")
@@ -423,7 +423,7 @@ func TestParseSliceHighOmitted(t *testing.T) {
 }
 
 func TestParseSliceFullCopy(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[..]\n")
+	prog := parseProgramSrc(t, "v := xs[..]\n")
 	sl := firstExprStmt(t, prog).(*SliceExpr)
 	if sl.Low != nil || sl.High != nil {
 		t.Errorf("Low/High = %v/%v, want both nil", sl.Low, sl.High)
@@ -435,7 +435,7 @@ func TestParseSliceFullCopy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseChainedIndexFieldAccess(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := xs[0].field\n")
+	prog := parseProgramSrc(t, "v := xs[0].field\n")
 	fa, ok := firstExprStmt(t, prog).(*FieldAccessExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *FieldAccessExpr", firstExprStmt(t, prog))
@@ -446,7 +446,7 @@ func TestParseChainedIndexFieldAccess(t *testing.T) {
 }
 
 func TestParseChainedCallFieldAccess(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := f(x).field\n")
+	prog := parseProgramSrc(t, "v := f(x).field\n")
 	fa := firstExprStmt(t, prog).(*FieldAccessExpr)
 	if _, ok := fa.Receiver.(*CallExpr); !ok {
 		t.Errorf("receiver is %T, want *CallExpr", fa.Receiver)
@@ -454,7 +454,7 @@ func TestParseChainedCallFieldAccess(t *testing.T) {
 }
 
 func TestParseDoubleFieldAccess(t *testing.T) {
-	prog := parseProgramSrc(t, "let v := p.x.y\n")
+	prog := parseProgramSrc(t, "v := p.x.y\n")
 	outer, ok := firstExprStmt(t, prog).(*FieldAccessExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *FieldAccessExpr", firstExprStmt(t, prog))
@@ -474,7 +474,7 @@ func TestParseFieldThenCall(t *testing.T) {
 	// and the method name is the identifier after the dot. Prior to v0.4
 	// this parsed as CallExpr{Callee: FieldAccessExpr{...}}; the postfix
 	// rule changed but the source surface (`p.method()`) is identical.
-	prog := parseProgramSrc(t, "let v := p.method()\n")
+	prog := parseProgramSrc(t, "v := p.method()\n")
 	mc, ok := firstExprStmt(t, prog).(*MethodCallExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *MethodCallExpr (v0.4 method-call shape)", firstExprStmt(t, prog))
@@ -666,7 +666,7 @@ func TestParseMatchSingleArmMinimal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseRuneLitInLet(t *testing.T) {
-	prog := parseProgramSrc(t, "let c := 'A'\n")
+	prog := parseProgramSrc(t, "c := 'A'\n")
 	rl, ok := firstExprStmt(t, prog).(*RuneLit)
 	if !ok {
 		t.Fatalf("value is %T, want *RuneLit", firstExprStmt(t, prog))
@@ -681,7 +681,7 @@ func TestParseRuneLitInLet(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseRangeOutsideSliceStillRejected(t *testing.T) {
-	expectParseErr(t, "let r := 0..10\n", "range expressions")
+	expectParseErr(t, "r := 0..10\n", "range expressions")
 }
 
 // ---------------------------------------------------------------------------
@@ -706,7 +706,7 @@ func TestParseMatchGuardMissingExpr(t *testing.T) {
 
 func TestParseMatchOverEnumProgramShape(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let c := Color.Red
+c := Color.Red
 match c {
 Color.Red => nop
 Color.Green => nop
@@ -721,7 +721,7 @@ Color.Blue => nop
 
 // PLAN: empty struct lit `Point {}` accepted at parse time.
 func TestParseEmptyStructLitAccepted(t *testing.T) {
-	prog := parseProgramSrc(t, "let p := Foo {}\n")
+	prog := parseProgramSrc(t, "p := Foo {}\n")
 	if _, ok := firstExprStmt(t, prog).(*StructLit); !ok {
 		t.Fatalf("value is %T, want *StructLit", firstExprStmt(t, prog))
 	}
@@ -731,8 +731,8 @@ func TestParseEmptyStructLitAccepted(t *testing.T) {
 // access) parse identically — typeck disambiguates by the receiver's type.
 func TestParseDotAccessAlwaysFieldAccessExpr(t *testing.T) {
 	for _, src := range []string{
-		"let v := p.x\n",
-		"let c := Color.Red\n",
+		"v := p.x\n",
+		"c := Color.Red\n",
 	} {
 		prog := parseProgramSrc(t, src)
 		if _, ok := firstExprStmt(t, prog).(*FieldAccessExpr); !ok {
@@ -743,7 +743,7 @@ func TestParseDotAccessAlwaysFieldAccessExpr(t *testing.T) {
 
 // PLAN: `..=` in a slice without an upper bound is an error.
 func TestParseInclusiveSliceNoUpperBoundRejected(t *testing.T) {
-	expectParseErr(t, "let v := xs[..=]\n", "'..=' requires an upper bound")
+	expectParseErr(t, "v := xs[..=]\n", "'..=' requires an upper bound")
 }
 
 // Pattern parser: bare string literal pattern.
@@ -786,7 +786,7 @@ _ => nop
 
 // TypeRef compound shapes lex and parse for `let xs: list[int] = []`.
 func TestParseListTypeRefAnnotation(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs: list[int] = []\n")
+	prog := parseProgramSrc(t, "xs: list[int] = []\n")
 	let := prog.Statements[0].(*LetStmt)
 	if let.Type == nil || let.Type.Kind != TypeRefList {
 		t.Fatalf("type ref = %+v, want TypeRefList", let.Type)
@@ -797,7 +797,7 @@ func TestParseListTypeRefAnnotation(t *testing.T) {
 }
 
 func TestParseTupleTypeRefAnnotation(t *testing.T) {
-	prog := parseProgramSrc(t, "let p: tuple[int, str] = (1, \"x\")\n")
+	prog := parseProgramSrc(t, "p: tuple[int, str] = (1, \"x\")\n")
 	let := prog.Statements[0].(*LetStmt)
 	if let.Type == nil || let.Type.Kind != TypeRefTuple {
 		t.Fatalf("type ref = %+v, want TypeRefTuple", let.Type)
@@ -808,7 +808,7 @@ func TestParseTupleTypeRefAnnotation(t *testing.T) {
 }
 
 func TestParseListTypeRefStringRoundTrip(t *testing.T) {
-	prog := parseProgramSrc(t, "let xs: list[list[int]] = []\n")
+	prog := parseProgramSrc(t, "xs: list[list[int]] = []\n")
 	let := prog.Statements[0].(*LetStmt)
 	got := let.Type.String()
 	want := "list[list[int]]"
@@ -824,7 +824,7 @@ func TestParseListTypeRefStringRoundTrip(t *testing.T) {
 // `Point {}` followed by `==` other should still parse as a comparison —
 // confirms the empty-struct disambiguator does not eat the comparison.
 func TestParseEmptyStructLitComparison(t *testing.T) {
-	prog := parseProgramSrc(t, "let b := Point {} == other\n")
+	prog := parseProgramSrc(t, "b := Point {} == other\n")
 	bin, ok := firstExprStmt(t, prog).(*BinaryExpr)
 	if !ok {
 		t.Fatalf("value is %T, want *BinaryExpr", firstExprStmt(t, prog))
@@ -993,7 +993,7 @@ func TestParseForRangeInclusiveStillRange(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseLetTupleDestructureTwo(t *testing.T) {
-	prog := parseProgramSrc(t, "let (a, b) := (1, 2)\n")
+	prog := parseProgramSrc(t, "(a, b) := (1, 2)\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Tuple == nil {
 		t.Fatal("Tuple = nil, want non-nil destructure binding")
@@ -1007,7 +1007,7 @@ func TestParseLetTupleDestructureTwo(t *testing.T) {
 }
 
 func TestParseLetTupleDestructureThree(t *testing.T) {
-	prog := parseProgramSrc(t, "let (a, b, c) := (1, 2, 3)\n")
+	prog := parseProgramSrc(t, "(a, b, c) := (1, 2, 3)\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Tuple == nil || len(s.Tuple.Names) != 3 {
 		t.Fatalf("Tuple = %#v, want 3 names", s.Tuple)
@@ -1015,7 +1015,7 @@ func TestParseLetTupleDestructureThree(t *testing.T) {
 }
 
 func TestParseLetTupleDestructureTrailingComma(t *testing.T) {
-	prog := parseProgramSrc(t, "let (a, b,) := (1, 2)\n")
+	prog := parseProgramSrc(t, "(a, b,) := (1, 2)\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Tuple == nil || len(s.Tuple.Names) != 2 {
 		t.Fatalf("Tuple = %#v, want 2 names", s.Tuple)
@@ -1042,24 +1042,24 @@ func TestParseConstTupleDestructureParses(t *testing.T) {
 }
 
 func TestParseLetTupleDestructureRejectsRepeatedName(t *testing.T) {
-	expectParseErr(t, "let (a, a) := (1, 2)\n", "repeated")
+	expectParseErr(t, "(a, a) := (1, 2)\n", "repeated")
 }
 
 func TestParseLetTupleDestructureRejectsSingleName(t *testing.T) {
 	// `let (a) := …` would shadow the ParenExpr-grouping rule for
 	// expressions; we keep destructure ≥ 2 names so the form is unambiguous.
-	expectParseErr(t, "let (a) := 1\n", "at least 2 names")
+	expectParseErr(t, "(a) := 1\n", "at least 2 names")
 }
 
 func TestParseLetTupleDestructureRejectsAnnotation(t *testing.T) {
 	// v0.2 doesn't support annotated destructure; the diagnostic fires in
 	// the parser so typeck doesn't have to learn this case.
-	expectParseErr(t, "let (a, b): tuple[int, int] = (1, 2)\n", "annotations on destructure")
+	expectParseErr(t, "(a, b): tuple[int, int] = (1, 2)\n", "annotations on destructure")
 }
 
 func TestParseLetTupleDestructureRequiresWalrus(t *testing.T) {
 	// `let (a, b) = (1, 2)` (plain `=`) is rejected — destructure uses `:=`.
-	expectParseErr(t, "let (a, b) = (1, 2)\n", "expected ':='")
+	expectParseErr(t, "(a, b) = (1, 2)\n", "expected ':='")
 }
 
 // equalStrSlice is a tiny local helper used only by the destructure tests

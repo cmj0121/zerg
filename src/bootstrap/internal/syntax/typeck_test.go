@@ -71,11 +71,11 @@ func TestCheckLiteralsInfer(t *testing.T) {
 		src  string
 		want *Type
 	}{
-		{"int", "let x := 42\n", TInt()},
-		{"float", "let x := 3.14\n", TFloat()},
-		{"bool_true", "let x := true\n", TBool()},
-		{"bool_false", "let x := false\n", TBool()},
-		{"string", "let x := \"hi\"\n", TStr()},
+		{"int", "x := 42\n", TInt()},
+		{"float", "x := 3.14\n", TFloat()},
+		{"bool_true", "x := true\n", TBool()},
+		{"bool_false", "x := false\n", TBool()},
+		{"string", "x := \"hi\"\n", TStr()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -89,7 +89,7 @@ func TestCheckLiteralsInfer(t *testing.T) {
 }
 
 func TestCheckIntLiteralStoresParsedValue(t *testing.T) {
-	prog := checkSrc(t, "let x := 0xff\n")
+	prog := checkSrc(t, "x := 0xff\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	lit := let.Value.(*IntLit)
 	if lit.Int != 255 {
@@ -98,7 +98,7 @@ func TestCheckIntLiteralStoresParsedValue(t *testing.T) {
 }
 
 func TestCheckFloatLiteralStoresParsedValue(t *testing.T) {
-	prog := checkSrc(t, "let x := 3.5\n")
+	prog := checkSrc(t, "x := 3.5\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	lit := let.Value.(*FloatLit)
 	if lit.Float != 3.5 {
@@ -108,14 +108,14 @@ func TestCheckFloatLiteralStoresParsedValue(t *testing.T) {
 
 func TestCheckIntLiteralOverflow(t *testing.T) {
 	// 2^63 == 9223372036854775808 — one past int64 max.
-	checkErr(t, "let x := 9223372036854775808\n", "overflows int")
+	checkErr(t, "x := 9223372036854775808\n", "overflows int")
 }
 
 func TestCheckFloatLiteralOverflow(t *testing.T) {
 	// 1e400 is too large for float64; strconv yields ±Inf.
 	// We don't have exponents at v0.1, so we use a long literal that
 	// still parses through ParseFloat to ±Inf.
-	src := "let x := 1" + strings.Repeat("0", 400) + ".0\n"
+	src := "x := 1" + strings.Repeat("0", 400) + ".0\n"
 	checkErr(t, src, "overflows float")
 }
 
@@ -124,7 +124,7 @@ func TestCheckFloatLiteralOverflow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckUseDeclaredName(t *testing.T) {
-	prog := checkSrc(t, "let x := 1\nprint x\n")
+	prog := checkSrc(t, "x := 1\nprint x\n")
 	pst := prog.Statements[1].(*PrintStmt)
 	if pst.Expr.Type() != TInt() {
 		t.Fatalf("Type = %s, want int", pst.Expr.Type())
@@ -136,16 +136,16 @@ func TestCheckUndefinedName(t *testing.T) {
 }
 
 func TestCheckSameScopeRedeclaration(t *testing.T) {
-	checkErr(t, "let x := 1\nlet x := 2\n", `already declared`)
+	checkErr(t, "x := 1\nx := 2\n", `already declared`)
 }
 
 func TestCheckInnerScopeShadowingAllowed(t *testing.T) {
-	src := "let x := 1\nif true {\nlet x := \"s\"\nprint x\n}\n"
+	src := "x := 1\nif true {\nx := \"s\"\nprint x\n}\n"
 	checkSrc(t, src)
 }
 
 func TestCheckOuterNameVisibleFromInner(t *testing.T) {
-	src := "let x := 1\nif true {\nprint x\n}\n"
+	src := "x := 1\nif true {\nprint x\n}\n"
 	checkSrc(t, src)
 }
 
@@ -154,7 +154,7 @@ func TestCheckOuterNameVisibleFromInner(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckTypeAnnotationMatch(t *testing.T) {
-	prog := checkSrc(t, "let x: int = 1\n")
+	prog := checkSrc(t, "x: int = 1\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	if let.Type.Resolved != TInt() {
 		t.Fatalf("Resolved = %s, want int", let.Type.Resolved)
@@ -162,11 +162,11 @@ func TestCheckTypeAnnotationMatch(t *testing.T) {
 }
 
 func TestCheckTypeAnnotationMismatch(t *testing.T) {
-	checkErr(t, "let x: int = \"hi\"\n", "cannot assign str to int")
+	checkErr(t, "x: int = \"hi\"\n", "cannot assign str to int")
 }
 
 func TestCheckUnknownTypeName(t *testing.T) {
-	checkErr(t, "let x: bogus = 1\n", `unknown type "bogus"`)
+	checkErr(t, "x: bogus = 1\n", `unknown type "bogus"`)
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ func TestCheckMutAssignAllowed(t *testing.T) {
 }
 
 func TestCheckLetAssignRejected(t *testing.T) {
-	checkErr(t, "let x := 1\nx = 2\n", "declared with let")
+	checkErr(t, "x := 1\nx = 2\n", "declared with let")
 }
 
 func TestCheckConstAssignRejected(t *testing.T) {
@@ -210,19 +210,19 @@ func TestCheckPlainAssignTypeMismatch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckArithIntOK(t *testing.T) {
-	checkSrc(t, "let x := 1 + 2 * 3 - 4\nlet y := 7 // 2\nlet z := 5 % 3\n")
+	checkSrc(t, "x := 1 + 2 * 3 - 4\ny := 7 // 2\nz := 5 % 3\n")
 }
 
 func TestCheckArithFloatOK(t *testing.T) {
-	checkSrc(t, "let x := 1.0 + 2.0\nlet y := 3.5 / 1.5\n")
+	checkSrc(t, "x := 1.0 + 2.0\ny := 3.5 / 1.5\n")
 }
 
 func TestCheckArithIntFloatRejected(t *testing.T) {
-	checkErr(t, "let x := 1 + 2.0\n", "operator + requires numeric or str operands of the same type")
+	checkErr(t, "x := 1 + 2.0\n", "operator + requires numeric or str operands of the same type")
 }
 
 func TestCheckStringConcatOK(t *testing.T) {
-	prog := checkSrc(t, "let s := \"a\" + \"b\"\n")
+	prog := checkSrc(t, "s := \"a\" + \"b\"\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	if let.Value.Type() != TStr() {
 		t.Fatalf("Type = %s, want str", let.Value.Type())
@@ -230,47 +230,47 @@ func TestCheckStringConcatOK(t *testing.T) {
 }
 
 func TestCheckStringSubRejected(t *testing.T) {
-	checkErr(t, "let s := \"a\" - \"b\"\n", "requires numeric operands")
+	checkErr(t, "s := \"a\" - \"b\"\n", "requires numeric operands")
 }
 
 func TestCheckStringIntAddRejected(t *testing.T) {
-	checkErr(t, "let s := \"a\" + 1\n", "operator + requires numeric or str operands")
+	checkErr(t, "s := \"a\" + 1\n", "operator + requires numeric or str operands")
 }
 
 func TestCheckBitwiseIntOK(t *testing.T) {
-	checkSrc(t, "let x := 1 & 2\nlet y := 1 | 2\nlet z := 1 ^ 2\nlet a := 1 << 2\nlet b := 8 >> 1\n")
+	checkSrc(t, "x := 1 & 2\ny := 1 | 2\nz := 1 ^ 2\na := 1 << 2\nb := 8 >> 1\n")
 }
 
 func TestCheckBitwiseFloatRejected(t *testing.T) {
-	checkErr(t, "let x := 1.0 & 1.0\n", "requires int operands")
+	checkErr(t, "x := 1.0 & 1.0\n", "requires int operands")
 }
 
 func TestCheckCompareSameTypeOK(t *testing.T) {
-	checkSrc(t, "let a := 1 == 2\nlet b := \"a\" == \"b\"\nlet c := true == false\nlet d := 1.0 == 2.0\n")
+	checkSrc(t, "a := 1 == 2\nb := \"a\" == \"b\"\nc := true == false\nd := 1.0 == 2.0\n")
 }
 
 func TestCheckCompareDifferentTypeRejected(t *testing.T) {
-	checkErr(t, "let x := 1 == 1.0\n", "operator == requires operands of the same type")
+	checkErr(t, "x := 1 == 1.0\n", "operator == requires operands of the same type")
 }
 
 func TestCheckRelationalNumericAndStrOK(t *testing.T) {
-	checkSrc(t, "let a := 1 < 2\nlet b := 1.0 <= 2.0\nlet c := \"a\" < \"b\"\n")
+	checkSrc(t, "a := 1 < 2\nb := 1.0 <= 2.0\nc := \"a\" < \"b\"\n")
 }
 
 func TestCheckRelationalBoolRejected(t *testing.T) {
-	checkErr(t, "let x := true < false\n", "requires same-typed numeric or str operands")
+	checkErr(t, "x := true < false\n", "requires same-typed numeric or str operands")
 }
 
 func TestCheckLogicalBoolOK(t *testing.T) {
-	checkSrc(t, "let x := true and false\nlet y := true or false\nlet z := true xor false\n")
+	checkSrc(t, "x := true and false\ny := true or false\nz := true xor false\n")
 }
 
 func TestCheckLogicalNonBoolRejected(t *testing.T) {
-	checkErr(t, "let x := 1 and 2\n", "requires bool operands")
+	checkErr(t, "x := 1 and 2\n", "requires bool operands")
 }
 
 func TestCheckUnaryNegInt(t *testing.T) {
-	prog := checkSrc(t, "let x := -1\n")
+	prog := checkSrc(t, "x := -1\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	if let.Value.Type() != TInt() {
 		t.Fatalf("Type = %s, want int", let.Value.Type())
@@ -278,23 +278,23 @@ func TestCheckUnaryNegInt(t *testing.T) {
 }
 
 func TestCheckUnaryNegBoolRejected(t *testing.T) {
-	checkErr(t, "let x := -true\n", "unary - requires a numeric operand")
+	checkErr(t, "x := -true\n", "unary - requires a numeric operand")
 }
 
 func TestCheckUnaryBitNotIntOK(t *testing.T) {
-	checkSrc(t, "let x := ~1\n")
+	checkSrc(t, "x := ~1\n")
 }
 
 func TestCheckUnaryBitNotFloatRejected(t *testing.T) {
-	checkErr(t, "let x := ~1.0\n", "unary ~ requires an int operand")
+	checkErr(t, "x := ~1.0\n", "unary ~ requires an int operand")
 }
 
 func TestCheckUnaryNotBoolOK(t *testing.T) {
-	checkSrc(t, "let x := not true\n")
+	checkSrc(t, "x := not true\n")
 }
 
 func TestCheckUnaryNotIntRejected(t *testing.T) {
-	checkErr(t, "let x := not 1\n", "unary not requires a bool operand")
+	checkErr(t, "x := not 1\n", "unary not requires a bool operand")
 }
 
 // ---------------------------------------------------------------------------
@@ -355,12 +355,12 @@ func TestCheckFnSimple(t *testing.T) {
 }
 
 func TestCheckFnArityError(t *testing.T) {
-	src := "fn add(a: int, b: int) -> int {\nreturn a + b\n}\nlet z := add(1)\n"
+	src := "fn add(a: int, b: int) -> int {\nreturn a + b\n}\nz := add(1)\n"
 	checkErr(t, src, "expects 2 argument(s), got 1")
 }
 
 func TestCheckFnArgTypeError(t *testing.T) {
-	src := "fn add(a: int, b: int) -> int {\nreturn a + b\n}\nlet z := add(1, \"x\")\n"
+	src := "fn add(a: int, b: int) -> int {\nreturn a + b\n}\nz := add(1, \"x\")\n"
 	checkErr(t, src, "argument 2")
 }
 
@@ -381,11 +381,11 @@ func TestCheckFnVoidBareReturnOK(t *testing.T) {
 }
 
 func TestCheckCallUndefinedFunction(t *testing.T) {
-	checkErr(t, "let x := bogus(1)\n", `undefined function "bogus"`)
+	checkErr(t, "x := bogus(1)\n", `undefined function "bogus"`)
 }
 
 func TestCheckCallVariableAsFunction(t *testing.T) {
-	checkErr(t, "let x := 1\nlet y := x(1)\n", `is not a function`)
+	checkErr(t, "x := 1\ny := x(1)\n", `is not a function`)
 }
 
 func TestCheckNestedFnRejected(t *testing.T) {
@@ -414,7 +414,7 @@ func TestCheckConstLiteralOK(t *testing.T) {
 
 func TestCheckConstFromIdentRejected(t *testing.T) {
 	// At v0.1 const-init may not reference any name (even another const).
-	checkErr(t, "let a := 1\nconst x := a\n", "must be a constant expression")
+	checkErr(t, "a := 1\nconst x := a\n", "must be a constant expression")
 }
 
 func TestCheckConstFromCallRejected(t *testing.T) {
@@ -441,7 +441,7 @@ func TestCheckPrintRejectsVoidCall(t *testing.T) {
 
 // This one is parser-level — included for completeness.
 func TestCheckRangeOutsideForRejectedAtParse(t *testing.T) {
-	src := "let x := 0..3\n"
+	src := "x := 0..3\n"
 	tokens, err := Lex([]byte(src))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)
@@ -474,8 +474,8 @@ func TestCheckTypeRefResolvedFilledIn(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckEveryExprAnnotated(t *testing.T) {
-	src := `let a := 1 + 2
-let b := -a
+	src := `a := 1 + 2
+b := -a
 mut c := "x"
 c = c + "y"
 if a > 0 {
@@ -484,7 +484,7 @@ print c
 fn f(x: int) -> int {
 return x * 2
 }
-let r := f(5)
+r := f(5)
 print r
 `
 	prog := checkSrc(t, src)

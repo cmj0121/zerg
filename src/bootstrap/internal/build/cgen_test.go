@@ -116,9 +116,9 @@ func TestEmitPrintStr(t *testing.T) {
 }
 
 func TestEmitLetMangled(t *testing.T) {
-	out := mustEmit(t, "let x := 5\n")
+	out := mustEmit(t, "x := 5\n")
 	if !strings.Contains(out, "int64_t z_x = INT64_C(5);") {
-		t.Errorf("let x := 5 should declare int64_t z_x; got:\n%s", out)
+		t.Errorf("x := 5 should declare int64_t z_x; got:\n%s", out)
 	}
 }
 
@@ -147,7 +147,7 @@ func TestEmitStrConcatAssign(t *testing.T) {
 
 func TestEmitIfChain(t *testing.T) {
 	src := `
-let x := 1
+x := 1
 if x == 1 {
     print "one"
 } elif x == 2 {
@@ -281,7 +281,7 @@ func TestEmitAndCompileSmoke(t *testing.T) {
 	if _, err := exec.LookPath(cc); err != nil {
 		t.Skip("cc not available")
 	}
-	src := "let x := 5\nlet y := 3\nprint x + y\n"
+	src := "x := 5\ny := 3\nprint x + y\n"
 	out := mustEmit(t, src)
 
 	dir := t.TempDir()

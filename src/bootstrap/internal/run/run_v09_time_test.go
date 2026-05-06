@@ -34,9 +34,9 @@ func TestRunV09TimeNowMsMonotonic(t *testing.T) {
 	resetTimeEpoch()
 	got, err := runV08Main(t, `# requires: v0.9
 import "std/time"
-let a := time.now_ms()
-let _ := time.sleep_ms(5)
-let b := time.now_ms()
+a := time.now_ms()
+_ := time.sleep_ms(5)
+b := time.now_ms()
 if b >= a {
     print "ok"
 } else {
@@ -117,9 +117,9 @@ func TestRunV09TimeNowMsIncreasesAfterSleep(t *testing.T) {
 	resetTimeEpoch()
 	got, err := runV08Main(t, `# requires: v0.9
 import "std/time"
-let a := time.now_ms()
-let _ := time.sleep_ms(40)
-let b := time.now_ms()
+a := time.now_ms()
+_ := time.sleep_ms(40)
+b := time.now_ms()
 if b > a {
     print "advanced"
 } else {

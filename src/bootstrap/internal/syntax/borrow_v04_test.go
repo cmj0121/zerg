@@ -38,8 +38,8 @@ print xs[0]
 
 // Method-form clone observes its receiver — caller retains ownership.
 func TestBorrowMethodCloneDoesNotMove(t *testing.T) {
-	src := `let xs := [1, 2]
-let ys := xs.clone()
+	src := `xs := [1, 2]
+ys := xs.clone()
 print xs[0]
 print ys[0]
 `
@@ -48,7 +48,7 @@ print ys[0]
 
 // Method-form len returns the length without moving the receiver.
 func TestBorrowMethodLenDoesNotMove(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 print xs.len()
 print xs[0]
 `
@@ -95,7 +95,7 @@ func TestCheckMethodPushSetsLoweredCall(t *testing.T) {
 // Method form on a let-bound list rejects with the same "must be mut" rule
 // the fn form enforces.
 func TestCheckMethodPushOnLetRejected(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 xs.push(3)
 `
 	checkErr(t, src, "must be mut")
@@ -117,7 +117,7 @@ xs.push(3)
 // "method does not exist on int" path because list[T] dispatch is the only
 // path that lowers to clone.
 func TestCheckMethodCloneOnPrimitiveNotLowered(t *testing.T) {
-	checkErr(t, "let x := 5\nprint x.clone()\n", "method \"clone\" does not exist on int")
+	checkErr(t, "x := 5\nprint x.clone()\n", "method \"clone\" does not exist on int")
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ func TestBorrowThisFieldReadOK(t *testing.T) {
 impl Counter {
 fn show() -> int { return this.count }
 }
-let c := Counter { count: 7 }
+c := Counter { count: 7 }
 print c.show()
 `
 	checkSrc(t, src)
@@ -147,7 +147,7 @@ func TestBorrowThisUnusedOK(t *testing.T) {
 impl Counter {
 fn answer() -> int { return 42 }
 }
-let c := Counter { count: 0 }
+c := Counter { count: 0 }
 print c.answer()
 `
 	checkSrc(t, src)
@@ -160,7 +160,7 @@ struct Counter { count: int }
 impl Counter for Doublable {
 fn doubled() -> int { return this.count * 2 }
 }
-let c := Counter { count: 4 }
+c := Counter { count: 4 }
 print c.doubled()
 `
 	checkSrc(t, src)
@@ -175,7 +175,7 @@ fn hash() -> int { return 0 }
 }
 struct K { tag: int }
 impl K for Hashable {}
-let k := K { tag: 1 }
+k := K { tag: 1 }
 print k.hash()
 `
 	checkSrc(t, src)
@@ -194,7 +194,7 @@ func TestBorrowReturnThisRejected(t *testing.T) {
 impl Counter {
 fn give() -> Counter { return this }
 }
-let c := Counter { count: 0 }
+c := Counter { count: 0 }
 print c.give().count
 `
 	borrowErrSrc(t, src, `cannot move borrowed value: "this"`)
@@ -206,7 +206,7 @@ func TestBorrowListLitFromThisRejected(t *testing.T) {
 impl Counter {
 fn pack() -> list[Counter] { return [this] }
 }
-let c := Counter { count: 0 }
+c := Counter { count: 0 }
 print c.pack()
 `
 	borrowErrSrc(t, src, `cannot move borrowed value: "this"`)
@@ -225,7 +225,7 @@ struct Pair { c: Counter }
 impl Counter {
 fn pair() -> Pair { return Pair { c: this } }
 }
-let c := Counter { count: 0 }
+c := Counter { count: 0 }
 print c.pair().c.count
 `
 	borrowErrSrc(t, src, `cannot move borrowed value: "this"`)
@@ -239,8 +239,8 @@ struct Counter { count: int }
 impl Counter for Printable {
 fn to_string() -> str { return "x" }
 }
-let c := Counter { count: 1 }
-let p: Printable = c
+c := Counter { count: 1 }
+p: Printable = c
 print c.count
 `
 	borrowErrSrc(t, src, "use of moved value")

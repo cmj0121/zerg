@@ -26,7 +26,7 @@ import (
 // --- AnonFnExpr type ----------------------------------------------------
 
 func TestV07AnonFnVoidType(t *testing.T) {
-	prog := checkSrc(t, "let f := fn() { print 1 }\n")
+	prog := checkSrc(t, "f := fn() { print 1 }\n")
 	s := expectOne[*LetStmt](t, prog)
 	got := s.Value.Type()
 	if got == nil || got.Kind != TypeFn {
@@ -44,7 +44,7 @@ func TestV07AnonFnVoidType(t *testing.T) {
 }
 
 func TestV07AnonFnTypedSignature(t *testing.T) {
-	prog := checkSrc(t, "let g := fn(x: int) -> int { return x * 2 }\n")
+	prog := checkSrc(t, "g := fn(x: int) -> int { return x * 2 }\n")
 	s := expectOne[*LetStmt](t, prog)
 	got := s.Value.Type()
 	if got == nil || got.Kind != TypeFn {
@@ -62,7 +62,7 @@ func TestV07AnonFnTypedSignature(t *testing.T) {
 }
 
 func TestV07AnonFnMultiParamString(t *testing.T) {
-	prog := checkSrc(t, "let h := fn(a: int, b: str) -> bool { return true }\n")
+	prog := checkSrc(t, "h := fn(a: int, b: str) -> bool { return true }\n")
 	s := expectOne[*LetStmt](t, prog)
 	got := s.Value.Type()
 	if got.String() != "fn(int, str) -> bool" {
@@ -73,11 +73,11 @@ func TestV07AnonFnMultiParamString(t *testing.T) {
 // --- Calling fn-typed bindings -----------------------------------------
 
 func TestV07AnonFnCallVoid(t *testing.T) {
-	checkSrc(t, "let f := fn() { print 1 }\nfn run() { f() }\n")
+	checkSrc(t, "f := fn() { print 1 }\nfn run() { f() }\n")
 }
 
 func TestV07AnonFnCallReturnsInt(t *testing.T) {
-	prog := checkSrc(t, "let g := fn(x: int) -> int { return x * 2 }\nfn run() { let y := g(5) }\n")
+	prog := checkSrc(t, "g := fn(x: int) -> int { return x * 2 }\nfn run() { y := g(5) }\n")
 	if len(prog.Statements) != 2 {
 		t.Fatalf("got %d statements", len(prog.Statements))
 	}
@@ -95,7 +95,7 @@ func TestV07AnonFnIIFEVoid(t *testing.T) {
 
 func TestV07AnonFnIIFEReturning(t *testing.T) {
 	// Expression-position IIFE: `let x := fn() -> int { return 1 }()`.
-	prog := checkSrc(t, "let x := fn() -> int { return 7 }()\n")
+	prog := checkSrc(t, "x := fn() -> int { return 7 }()\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Value.Type() != tInt {
 		t.Errorf("type = %v, want int", s.Value.Type())
@@ -104,20 +104,20 @@ func TestV07AnonFnIIFEReturning(t *testing.T) {
 
 func TestV07AnonFnArityMismatch(t *testing.T) {
 	checkErr(t,
-		"let g := fn(x: int) -> int { return x }\nfn run() { let y := g(1, 2) }\n",
+		"g := fn(x: int) -> int { return x }\nfn run() { y := g(1, 2) }\n",
 		`function "g" expects 1 argument(s), got 2`)
 }
 
 func TestV07AnonFnArgTypeMismatch(t *testing.T) {
 	checkErr(t,
-		"let g := fn(x: int) -> int { return x }\nfn run() { let y := g(\"hi\") }\n",
+		"g := fn(x: int) -> int { return x }\nfn run() { y := g(\"hi\") }\n",
 		`argument 1 to "g" has type str, expected int`)
 }
 
 // --- Closure capture ---------------------------------------------------
 
 func TestV07ClosureCaptureLet(t *testing.T) {
-	prog := checkSrc(t, "fn run() { let x := 5\nlet f := fn() { print x } }\n")
+	prog := checkSrc(t, "fn run() { x := 5\nf := fn() { print x } }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let := fn.Body.Statements[1].(*LetStmt)
 	anon := let.Value.(*AnonFnExpr)
@@ -133,7 +133,7 @@ func TestV07ClosureCaptureLet(t *testing.T) {
 }
 
 func TestV07ClosureCaptureConst(t *testing.T) {
-	prog := checkSrc(t, "const N := 10\nlet f := fn() -> int { return N }\n")
+	prog := checkSrc(t, "const N := 10\nf := fn() -> int { return N }\n")
 	let := prog.Statements[1].(*LetStmt)
 	anon := let.Value.(*AnonFnExpr)
 	if len(anon.Captures) != 1 || anon.Captures[0].Name != "N" {
@@ -143,12 +143,12 @@ func TestV07ClosureCaptureConst(t *testing.T) {
 
 func TestV07ClosureCaptureMutRejects(t *testing.T) {
 	checkErr(t,
-		"fn run() { mut x := 5\nlet f := fn() { print x } }\n",
+		"fn run() { mut x := 5\nf := fn() { print x } }\n",
 		`cannot capture mut binding "x" in closure`)
 }
 
 func TestV07ClosureCaptureMultipleNames(t *testing.T) {
-	prog := checkSrc(t, "fn run() { let a := 1\nlet b := 2\nlet f := fn() -> int { return a + b } }\n")
+	prog := checkSrc(t, "fn run() { a := 1\nb := 2\nf := fn() -> int { return a + b } }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let := fn.Body.Statements[2].(*LetStmt)
 	anon := let.Value.(*AnonFnExpr)
@@ -166,7 +166,7 @@ func TestV07ClosureCaptureMultipleNames(t *testing.T) {
 
 func TestV07ClosureCaptureSameNameOnce(t *testing.T) {
 	// Multiple references to the same outer binding record one capture.
-	prog := checkSrc(t, "fn run() { let x := 1\nlet f := fn() -> int { return x + x + x } }\n")
+	prog := checkSrc(t, "fn run() { x := 1\nf := fn() -> int { return x + x + x } }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let := fn.Body.Statements[1].(*LetStmt)
 	anon := let.Value.(*AnonFnExpr)
@@ -177,7 +177,7 @@ func TestV07ClosureCaptureSameNameOnce(t *testing.T) {
 
 func TestV07ClosureNoCaptureForLocalParam(t *testing.T) {
 	// `x` is the anon-fn's own param; not a capture.
-	prog := checkSrc(t, "let f := fn(x: int) -> int { return x + 1 }\n")
+	prog := checkSrc(t, "f := fn(x: int) -> int { return x + 1 }\n")
 	let := expectOne[*LetStmt](t, prog)
 	anon := let.Value.(*AnonFnExpr)
 	if len(anon.Captures) != 0 {
@@ -187,7 +187,7 @@ func TestV07ClosureNoCaptureForLocalParam(t *testing.T) {
 
 func TestV07ClosureNoCaptureForLocalLet(t *testing.T) {
 	// `y` is declared inside the body; not a capture.
-	prog := checkSrc(t, "let f := fn() -> int { let y := 7\nreturn y }\n")
+	prog := checkSrc(t, "f := fn() -> int { y := 7\nreturn y }\n")
 	let := expectOne[*LetStmt](t, prog)
 	anon := let.Value.(*AnonFnExpr)
 	if len(anon.Captures) != 0 {
@@ -197,7 +197,7 @@ func TestV07ClosureNoCaptureForLocalLet(t *testing.T) {
 
 func TestV07ClosureCaptureGlobalLet(t *testing.T) {
 	// Top-level immutable bindings can be captured under the same rule.
-	prog := checkSrc(t, "let g := 100\nlet f := fn() -> int { return g }\n")
+	prog := checkSrc(t, "g := 100\nf := fn() -> int { return g }\n")
 	let := prog.Statements[1].(*LetStmt)
 	anon := let.Value.(*AnonFnExpr)
 	if len(anon.Captures) != 1 || anon.Captures[0].Name != "g" {
@@ -207,7 +207,7 @@ func TestV07ClosureCaptureGlobalLet(t *testing.T) {
 
 func TestV07ClosureCaptureGlobalMutRejects(t *testing.T) {
 	checkErr(t,
-		"mut g := 100\nlet f := fn() -> int { return g }\n",
+		"mut g := 100\nf := fn() -> int { return g }\n",
 		`cannot capture mut binding "g" in closure`)
 }
 
@@ -215,7 +215,7 @@ func TestV07ClosureCallingOuterFnIsAdmitted(t *testing.T) {
 	// Calling an outer fn name from inside an anon-fn is fine — fn names
 	// don't live in the value scope, so they're not captures.
 	prog := checkSrc(t,
-		"fn helper() -> int { return 42 }\nlet f := fn() -> int { return helper() }\n")
+		"fn helper() -> int { return 42 }\nf := fn() -> int { return helper() }\n")
 	let := prog.Statements[1].(*LetStmt)
 	anon := let.Value.(*AnonFnExpr)
 	if len(anon.Captures) != 0 {
@@ -228,7 +228,7 @@ func TestV07ClosureNestedAnonFnCaptureChain(t *testing.T) {
 	// inner-fn body's reference to `x` flows up the frame stack — every
 	// active frame whose parentScope contains the binding records it.
 	prog := checkSrc(t,
-		"fn run() { let x := 5\nlet outer := fn() { let inner := fn() { print x } } }\n")
+		"fn run() { x := 5\nouter := fn() { inner := fn() { print x } } }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let := fn.Body.Statements[1].(*LetStmt)
 	outerAnon := let.Value.(*AnonFnExpr)
@@ -298,7 +298,7 @@ func TestV07DeferDoesNotMarkUnrelatedFn(t *testing.T) {
 
 func TestV07DeferInsideAnonFnRecordsOnAnon(t *testing.T) {
 	prog := checkSrc(t,
-		"fn cleanup() { print 1 }\nfn outer() { let f := fn() { defer cleanup() } }\n")
+		"fn cleanup() { print 1 }\nfn outer() { f := fn() { defer cleanup() } }\n")
 	outer := prog.Statements[1].(*FnDecl)
 	if outer.HasDefers {
 		t.Error("outer.HasDefers = true, want false (defer is inside the anon-fn)")
@@ -313,7 +313,7 @@ func TestV07DeferInsideAnonFnRecordsOnAnon(t *testing.T) {
 // --- wait_group --------------------------------------------------------
 
 func TestV07WaitGroupConstructorType(t *testing.T) {
-	prog := checkSrc(t, "let wg := wait_group()\n")
+	prog := checkSrc(t, "wg := wait_group()\n")
 	s := expectOne[*LetStmt](t, prog)
 	got := s.Value.Type()
 	if got == nil || got.Kind != TypeStruct || got.Name != "WaitGroup" {
@@ -322,20 +322,20 @@ func TestV07WaitGroupConstructorType(t *testing.T) {
 }
 
 func TestV07WaitGroupAdd(t *testing.T) {
-	checkSrc(t, "fn run() { let wg := wait_group()\nwg.add(5) }\n")
+	checkSrc(t, "fn run() { wg := wait_group()\nwg.add(5) }\n")
 }
 
 func TestV07WaitGroupDone(t *testing.T) {
-	checkSrc(t, "fn run() { let wg := wait_group()\nwg.done() }\n")
+	checkSrc(t, "fn run() { wg := wait_group()\nwg.done() }\n")
 }
 
 func TestV07WaitGroupWait(t *testing.T) {
-	checkSrc(t, "fn run() { let wg := wait_group()\nwg.wait() }\n")
+	checkSrc(t, "fn run() { wg := wait_group()\nwg.wait() }\n")
 }
 
 func TestV07WaitGroupAddWrongArgType(t *testing.T) {
 	checkErr(t,
-		`fn run() { let wg := wait_group()
+		`fn run() { wg := wait_group()
 wg.add("hi") }
 `,
 		`argument 1 to "add" has type str, expected int`)
@@ -343,20 +343,20 @@ wg.add("hi") }
 
 func TestV07WaitGroupUnknownMethodRejects(t *testing.T) {
 	checkErr(t,
-		"fn run() { let wg := wait_group()\nwg.foo() }\n",
+		"fn run() { wg := wait_group()\nwg.foo() }\n",
 		`method "foo" does not exist`)
 }
 
 func TestV07WaitGroupExtraArgsRejects(t *testing.T) {
 	checkErr(t,
-		"fn run() { let wg := wait_group(1) }\n",
+		"fn run() { wg := wait_group(1) }\n",
 		`function "wait_group" expects 0 arguments`)
 }
 
 // --- reservation: wait_group / WaitGroup -------------------------------
 
 func TestV07WaitGroupFnNameReserved(t *testing.T) {
-	checkErr(t, "let wait_group := 1\n",
+	checkErr(t, "wait_group := 1\n",
 		`name "wait_group" is reserved (built-in)`)
 }
 
@@ -386,7 +386,7 @@ func TestV07WaitGroupTypeAsEnumNameReserved(t *testing.T) {
 // diagnostic.
 
 func TestV07SpawnIsKeywordAtLetName(t *testing.T) {
-	tokens, err := Lex([]byte("let spawn := 1\n"))
+	tokens, err := Lex([]byte("spawn := 1\n"))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestV07SpawnIsKeywordAtLetName(t *testing.T) {
 }
 
 func TestV07DeferIsKeywordAtLetName(t *testing.T) {
-	tokens, err := Lex([]byte("let defer := 1\n"))
+	tokens, err := Lex([]byte("defer := 1\n"))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestV07DeferIsKeywordAtLetName(t *testing.T) {
 }
 
 func TestV07SelectIsKeywordAtLetName(t *testing.T) {
-	tokens, err := Lex([]byte("let select := 1\n"))
+	tokens, err := Lex([]byte("select := 1\n"))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestV07AnonFnCallsCapturedFnValue(t *testing.T) {
 	// Captured fn-typed binding: the inner anon-fn calls `g`, which is a
 	// fn-typed outer binding. Capture analysis records `g`.
 	prog := checkSrc(t,
-		"fn run() { let g := fn(x: int) -> int { return x + 1 }\nlet h := fn() -> int { return g(5) } }\n")
+		"fn run() { g := fn(x: int) -> int { return x + 1 }\nh := fn() -> int { return g(5) } }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	hLet := fn.Body.Statements[1].(*LetStmt)
 	hAnon := hLet.Value.(*AnonFnExpr)
@@ -432,7 +432,7 @@ func TestV07AnonFnCallsCapturedFnValue(t *testing.T) {
 
 func TestV07AnonFnReturnTypeMismatch(t *testing.T) {
 	checkErr(t,
-		"let f := fn() -> int { return \"hi\" }\n",
+		"f := fn() -> int { return \"hi\" }\n",
 		"return type mismatch")
 }
 

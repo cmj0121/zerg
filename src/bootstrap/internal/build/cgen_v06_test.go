@@ -36,7 +36,7 @@ import (
 
 func TestV06CgenGenericStructEmitsOneShape(t *testing.T) {
 	src := `struct Box[T] { value: T }
-let b: Box[int] = Box { value: 7 }
+b: Box[int] = Box { value: 7 }
 print b.value
 `
 	out := mustEmit(t, src)
@@ -54,8 +54,8 @@ print b.value
 func TestV06CgenGenericStructDeduplicates(t *testing.T) {
 	// Two `Box[int]` uses must dedupe to a single C struct definition.
 	src := `struct Box[T] { value: T }
-let a: Box[int] = Box { value: 1 }
-let b: Box[int] = Box { value: 2 }
+a: Box[int] = Box { value: 1 }
+b: Box[int] = Box { value: 2 }
 print a.value
 print b.value
 `
@@ -71,8 +71,8 @@ print b.value
 func TestV06CgenGenericStructTwoArgsDistinct(t *testing.T) {
 	// Box[int] and Box[str] produce two distinct mangled shapes.
 	src := `struct Box[T] { value: T }
-let a: Box[int] = Box { value: 7 }
-let b: Box[str] = Box { value: "hi" }
+a: Box[int] = Box { value: 7 }
+b: Box[str] = Box { value: "hi" }
 print a.value
 print b.value
 `
@@ -90,7 +90,7 @@ print b.value
 
 func TestV06CgenGenericStructRuns(t *testing.T) {
 	src := `struct Box[T] { value: T }
-let b: Box[int] = Box { value: 42 }
+b: Box[int] = Box { value: 42 }
 print b.value
 `
 	expectStdout(t, src, "42\n")
@@ -100,8 +100,8 @@ print b.value
 
 func TestV06CgenGenericFnTwoInstancesEmitDistinctSymbols(t *testing.T) {
 	src := `fn id[T](x: T) -> T { return x }
-let a := id(7)
-let b := id("hi")
+a := id(7)
+b := id("hi")
 print a
 print b
 `
@@ -119,8 +119,8 @@ print b
 
 func TestV06CgenGenericFnRuns(t *testing.T) {
 	src := `fn id[T](x: T) -> T { return x }
-let a := id(7)
-let b := id("hi")
+a := id(7)
+b := id("hi")
 print a
 print b
 `
@@ -130,8 +130,8 @@ print b
 func TestV06CgenGenericFnSameTypeDedupes(t *testing.T) {
 	// Two id(int) calls must share the specialised symbol.
 	src := `fn id[T](x: T) -> T { return x }
-let a := id(1)
-let b := id(2)
+a := id(1)
+b := id(2)
 print a
 print b
 `
@@ -148,35 +148,35 @@ print b
 // --- Option / Result construction ----------------------------------------
 
 func TestV06CgenOptionSomePrint(t *testing.T) {
-	src := `let x: int? = Option.Some(7)
+	src := `x: int? = Option.Some(7)
 print x
 `
 	expectStdout(t, src, "Option.Some(7)\n")
 }
 
 func TestV06CgenOptionNonePrint(t *testing.T) {
-	src := `let x: int? = nil
+	src := `x: int? = nil
 print x
 `
 	expectStdout(t, src, "Option.None\n")
 }
 
 func TestV06CgenResultOkPrint(t *testing.T) {
-	src := `let x: Result[int, str] = Result.Ok(42)
+	src := `x: Result[int, str] = Result.Ok(42)
 print x
 `
 	expectStdout(t, src, "Result.Ok(42)\n")
 }
 
 func TestV06CgenResultErrPrint(t *testing.T) {
-	src := `let x: Result[int, str] = Result.Err("oops")
+	src := `x: Result[int, str] = Result.Err("oops")
 print x
 `
 	expectStdout(t, src, "Result.Err(oops)\n")
 }
 
 func TestV06CgenOptionMangleIsBuiltin(t *testing.T) {
-	src := `let x: int? = Option.Some(7)
+	src := `x: int? = Option.Some(7)
 print x
 `
 	out := mustEmit(t, src)
@@ -187,7 +187,7 @@ print x
 }
 
 func TestV06CgenResultMangleIsBuiltin(t *testing.T) {
-	src := `let x: Result[int, str] = Result.Ok(1)
+	src := `x: Result[int, str] = Result.Ok(1)
 print x
 `
 	out := mustEmit(t, src)
@@ -201,11 +201,11 @@ print x
 
 func TestV06CgenPropagateOption(t *testing.T) {
 	src := `fn first(xs: list[int?]) -> int? {
-    let x := xs[0]
+    x := xs[0]
     return Option.Some(x? + 1)
 }
-let xs: list[int?] = [Option.Some(10)]
-let r := first(xs)
+xs: list[int?] = [Option.Some(10)]
+r := first(xs)
 print r
 `
 	expectStdout(t, src, "Option.Some(11)\n")
@@ -213,11 +213,11 @@ print r
 
 func TestV06CgenPropagateOptionNoneEarlyReturns(t *testing.T) {
 	src := `fn first(xs: list[int?]) -> int? {
-    let x := xs[0]
+    x := xs[0]
     return Option.Some(x? + 1)
 }
-let xs: list[int?] = [nil]
-let r := first(xs)
+xs: list[int?] = [nil]
+r := first(xs)
 print r
 `
 	expectStdout(t, src, "Option.None\n")
@@ -225,11 +225,11 @@ print r
 
 func TestV06CgenPropagateResult(t *testing.T) {
 	src := `fn unwrap_inc() -> Result[int, str] {
-    let r: Result[int, str] = Result.Ok(10)
+    r: Result[int, str] = Result.Ok(10)
     return Result.Ok(r? + 1)
 }
 fn unwrap_err() -> Result[int, str] {
-    let r: Result[int, str] = Result.Err("nope")
+    r: Result[int, str] = Result.Err("nope")
     return Result.Ok(r? + 1)
 }
 print unwrap_inc()
@@ -241,24 +241,24 @@ print unwrap_err()
 // --- ?? coalesce ----------------------------------------------------------
 
 func TestV06CgenCoalesceOptionSome(t *testing.T) {
-	src := `let x: int? = Option.Some(7)
-let v := x ?? 0
+	src := `x: int? = Option.Some(7)
+v := x ?? 0
 print v
 `
 	expectStdout(t, src, "7\n")
 }
 
 func TestV06CgenCoalesceOptionNone(t *testing.T) {
-	src := `let x: int? = nil
-let v := x ?? 99
+	src := `x: int? = nil
+v := x ?? 99
 print v
 `
 	expectStdout(t, src, "99\n")
 }
 
 func TestV06CgenCoalesceResultErr(t *testing.T) {
-	src := `let x: Result[int, str] = Result.Err("bad")
-let v := x ?? -1
+	src := `x: Result[int, str] = Result.Err("bad")
+v := x ?? -1
 print v
 `
 	expectStdout(t, src, "-1\n")
@@ -268,8 +268,8 @@ print v
 
 func TestV06CgenSafeFieldSome(t *testing.T) {
 	src := `struct P { x: int }
-let p: P? = Option.Some(P { x: 7 })
-let v := p?.x
+p: P? = Option.Some(P { x: 7 })
+v := p?.x
 print v
 `
 	expectStdout(t, src, "Option.Some(7)\n")
@@ -277,8 +277,8 @@ print v
 
 func TestV06CgenSafeFieldNone(t *testing.T) {
 	src := `struct P { x: int }
-let p: P? = nil
-let v := p?.x
+p: P? = nil
+v := p?.x
 print v
 `
 	expectStdout(t, src, "Option.None\n")
@@ -287,8 +287,8 @@ print v
 func TestV06CgenSafeFieldChain(t *testing.T) {
 	src := `struct A { b: B }
 struct B { c: int }
-let a: A? = Option.Some(A { b: B { c: 42 } })
-let v := a?.b
+a: A? = Option.Some(A { b: B { c: 42 } })
+v := a?.b
 print v
 `
 	// v: B? = Some(B{c:42})
@@ -298,14 +298,14 @@ print v
 // --- nil literal ----------------------------------------------------------
 
 func TestV06CgenNilInLetWithAnnotation(t *testing.T) {
-	src := `let x: int? = nil
+	src := `x: int? = nil
 print x
 `
 	expectStdout(t, src, "Option.None\n")
 }
 
 func TestV06CgenNilInListLiteral(t *testing.T) {
-	src := `let xs: list[int?] = [Option.Some(1), nil, Option.Some(3)]
+	src := `xs: list[int?] = [Option.Some(1), nil, Option.Some(3)]
 for x in xs {
     print x
 }
@@ -316,7 +316,7 @@ for x in xs {
 // --- print parity: bracket suffix suppression -----------------------------
 
 func TestV06CgenPrintSuppressesBracketSuffix(t *testing.T) {
-	src := `let x: Option[int] = Option.Some(7)
+	src := `x: Option[int] = Option.Some(7)
 print x
 `
 	out := mustEmit(t, src)
@@ -334,7 +334,7 @@ print x
 
 func TestV06CgenSymmetricLiftAtLetInit(t *testing.T) {
 	// `let x: int? = 7` lifts 7 to Some(7) via typeck's synthetic EnumLit.
-	src := `let x: int? = 7
+	src := `x: int? = 7
 print x
 `
 	expectStdout(t, src, "Option.Some(7)\n")
@@ -344,8 +344,8 @@ print x
 
 func TestV06CgenNestedGenericInstance(t *testing.T) {
 	// Option[Result[int, str]] mangles to Option__Result__int_str.
-	src := `let r: Result[int, str] = Result.Ok(7)
-let x: Option[Result[int, str]] = Option.Some(r)
+	src := `r: Result[int, str] = Result.Ok(7)
+x: Option[Result[int, str]] = Option.Some(r)
 print x
 `
 	out := mustEmit(t, src)
@@ -361,8 +361,8 @@ print x
 func TestV06CgenGenericStructEqHelper(t *testing.T) {
 	// `==` on two Box[int] values exercises the per-shape _eq helper.
 	src := `struct Box[T] { value: T }
-let a: Box[int] = Box { value: 7 }
-let b: Box[int] = Box { value: 7 }
+a: Box[int] = Box { value: 7 }
+b: Box[int] = Box { value: 7 }
 print a == b
 `
 	expectStdout(t, src, "true\n")
@@ -371,8 +371,8 @@ print a == b
 func TestV06CgenGenericStructCloneHelper(t *testing.T) {
 	// clone() on a Box[int] exercises the per-shape _copy helper.
 	src := `struct Box[T] { value: T }
-let a: Box[int] = Box { value: 9 }
-let b := clone(a)
+a: Box[int] = Box { value: 9 }
+b := clone(a)
 print b.value
 `
 	expectStdout(t, src, "9\n")
@@ -387,8 +387,8 @@ func TestV06CgenCrossModuleGenericFn(t *testing.T) {
 		"util.zg": `pub fn id[T](x: T) -> T { return x }
 `,
 		"main.zg": `import "util"
-let a := util.id(7)
-let b := util.id("hi")
+a := util.id(7)
+b := util.id("hi")
 print a
 print b
 `,
@@ -414,8 +414,8 @@ func TestV06CgenGenericImplBlockEmits(t *testing.T) {
 	src := `spec Tagged { fn tag() -> str }
 struct Box[T] { value: T }
 impl[T] Box[T] for Tagged { fn tag() -> str { return "Box" } }
-let bi: Box[int] = Box { value: 7 }
-let bs: Box[str] = Box { value: "hi" }
+bi: Box[int] = Box { value: 7 }
+bs: Box[str] = Box { value: "hi" }
 print bi.tag()
 print bs.tag()
 `
@@ -440,8 +440,8 @@ print bs.tag()
 func TestV06CgenGenericImplBlockBodyClonedPerInstance(t *testing.T) {
 	src := `struct Box[T] { value: T }
 impl[T] Box[T] { fn unwrap() -> T { return this.value } }
-let bi: Box[int] = Box { value: 5 }
-let bs: Box[str] = Box { value: "hi" }
+bi: Box[int] = Box { value: 5 }
+bs: Box[str] = Box { value: "hi" }
 print bi.unwrap()
 print bs.unwrap()
 `
@@ -465,10 +465,10 @@ print bs.unwrap()
 func TestV06CgenSizeGuard(t *testing.T) {
 	src := `struct Box[T] { value: T }
 fn id[T](x: T) -> T { return x }
-let a: Box[int] = Box { value: id(7) }
-let b: Box[str] = Box { value: id("hi") }
-let r: Result[int, str] = Result.Ok(id(42))
-let o: Option[int] = Option.Some(id(99))
+a: Box[int] = Box { value: id(7) }
+b: Box[str] = Box { value: id("hi") }
+r: Result[int, str] = Result.Ok(id(42))
+o: Option[int] = Option.Some(id(99))
 print a.value
 print b.value
 print r
@@ -477,7 +477,10 @@ print o
 	out := mustEmit(t, src)
 	srcLen := len(src)
 	emitLen := len(out)
-	const ratio = 50
+	// v0.11 retired the `let` keyword from binding statements, shrinking
+	// representative test sources by ~10%. The emitted C is unchanged; the
+	// guard ratio is bumped to keep the sanity-check intent (not bloat).
+	const ratio = 55
 	if emitLen > srcLen*ratio {
 		t.Errorf("emitted size %d exceeds %d× source size %d (%d > %d)",
 			emitLen, ratio, srcLen, emitLen, srcLen*ratio)

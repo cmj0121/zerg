@@ -22,9 +22,9 @@ import (
 func TestFmtSubcommand(t *testing.T) {
 	bin := buildBin(t)
 
-	canonical := "let x := 1\nprint x\n"
-	nonCanonical := "let x := 1\nif true {\n  print x\n}\n"
-	formattedNonCanonical := "let x := 1\nif true {\n    print x\n}\n"
+	canonical := "x := 1\nprint x\n"
+	nonCanonical := "x := 1\nif true {\n  print x\n}\n"
+	formattedNonCanonical := "x := 1\nif true {\n    print x\n}\n"
 	parseError := "let x :=\n"
 
 	t.Run("stdout/canonical", func(t *testing.T) {
@@ -152,9 +152,9 @@ func TestFmtSubcommand(t *testing.T) {
 // preserved across rewrites, and symlinks are refused with a focused error.
 func TestFmtWriteDataSafety(t *testing.T) {
 	bin := buildBin(t)
-	canonical := "let x := 1\nprint x\n"
-	nonCanonical := "let x := 1\nif true {\n  print x\n}\n"
-	formattedNonCanonical := "let x := 1\nif true {\n    print x\n}\n"
+	canonical := "x := 1\nprint x\n"
+	nonCanonical := "x := 1\nif true {\n  print x\n}\n"
+	formattedNonCanonical := "x := 1\nif true {\n    print x\n}\n"
 
 	t.Run("skip-on-equal preserves mtime", func(t *testing.T) {
 		dir := t.TempDir()

@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestCheckRuneLitASCIIIsByte(t *testing.T) {
-	prog := checkSrc(t, "let x := 'A'\n")
+	prog := checkSrc(t, "x := 'A'\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	if let.Value.Type() != TByte() {
 		t.Fatalf("Type = %s, want byte", let.Value.Type())
@@ -22,7 +22,7 @@ func TestCheckRuneLitASCIIIsByte(t *testing.T) {
 }
 
 func TestCheckRuneLitNonASCIIIsRune(t *testing.T) {
-	prog := checkSrc(t, "let x := '漢'\n")
+	prog := checkSrc(t, "x := '漢'\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	if let.Value.Type() != TRune() {
 		t.Fatalf("Type = %s, want rune", let.Value.Type())
@@ -30,7 +30,7 @@ func TestCheckRuneLitNonASCIIIsRune(t *testing.T) {
 }
 
 func TestCheckRuneLitASCIINullByte(t *testing.T) {
-	prog := checkSrc(t, "let x := '\\0'\n")
+	prog := checkSrc(t, "x := '\\0'\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	if let.Value.Type() != TByte() {
 		t.Fatalf("Type = %s, want byte", let.Value.Type())
@@ -38,16 +38,16 @@ func TestCheckRuneLitASCIINullByte(t *testing.T) {
 }
 
 func TestCheckRuneTypeAnnotation(t *testing.T) {
-	checkSrc(t, "let x: rune = '漢'\n")
+	checkSrc(t, "x: rune = '漢'\n")
 }
 
 func TestCheckByteTypeAnnotation(t *testing.T) {
-	checkSrc(t, "let x: byte = 'A'\n")
+	checkSrc(t, "x: byte = 'A'\n")
 }
 
 func TestCheckByteRuneAreDistinct(t *testing.T) {
 	// 'A' is byte; assigning into a `rune` annotation must fail.
-	checkErr(t, "let x: rune = 'A'\n", "cannot assign byte to rune")
+	checkErr(t, "x: rune = 'A'\n", "cannot assign byte to rune")
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ func TestCheckByteRuneAreDistinct(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckStructDeclAndLit(t *testing.T) {
-	prog := checkSrc(t, "struct Point {\nx: int,\ny: int,\n}\nlet p := Point { x: 1, y: 2 }\n")
+	prog := checkSrc(t, "struct Point {\nx: int,\ny: int,\n}\np := Point { x: 1, y: 2 }\n")
 	let := prog.Statements[1].(*LetStmt)
 	if let.Value.Type().Kind != TypeStruct || let.Value.Type().Name != "Point" {
 		t.Fatalf("Type = %s, want Point", let.Value.Type())
@@ -63,36 +63,36 @@ func TestCheckStructDeclAndLit(t *testing.T) {
 }
 
 func TestCheckStructLitFieldCountMissing(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1 }\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1 }\n"
 	checkErr(t, src, `missing field "y"`)
 }
 
 func TestCheckStructLitFieldExtra(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2, z: 3 }\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2, z: 3 }\n"
 	checkErr(t, src, `no field "z"`)
 }
 
 func TestCheckStructLitFieldNameMismatch(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, q: 2 }\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, q: 2 }\n"
 	checkErr(t, src, `no field "q"`)
 }
 
 func TestCheckStructLitFieldTypeMismatch(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: \"oops\" }\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: \"oops\" }\n"
 	checkErr(t, src, `field "y" expects int`)
 }
 
 func TestCheckStructLitFieldOutOfOrderOK(t *testing.T) {
-	checkSrc(t, "struct Point { x: int, y: int }\nlet p := Point { y: 2, x: 1 }\n")
+	checkSrc(t, "struct Point { x: int, y: int }\np := Point { y: 2, x: 1 }\n")
 }
 
 func TestCheckStructLitDuplicateFieldRejected(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, x: 2, y: 3 }\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, x: 2, y: 3 }\n"
 	checkErr(t, src, "already initialised")
 }
 
 func TestCheckStructLitUnknownTypeRejected(t *testing.T) {
-	checkErr(t, "let p := Bogus { x: 1 }\n", `unknown struct type "Bogus"`)
+	checkErr(t, "p := Bogus { x: 1 }\n", `unknown struct type "Bogus"`)
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ func TestCheckStructLitUnknownTypeRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckEnumDeclAndVariant(t *testing.T) {
-	prog := checkSrc(t, "enum Color {\nRed,\nGreen,\nBlue,\n}\nlet c := Color.Red\n")
+	prog := checkSrc(t, "enum Color {\nRed,\nGreen,\nBlue,\n}\nc := Color.Red\n")
 	let := prog.Statements[1].(*LetStmt)
 	if let.Value.Type().Kind != TypeEnum || let.Value.Type().Name != "Color" {
 		t.Fatalf("Type = %s, want Color", let.Value.Type())
@@ -108,7 +108,7 @@ func TestCheckEnumDeclAndVariant(t *testing.T) {
 }
 
 func TestCheckEnumUnknownVariantRejected(t *testing.T) {
-	src := "enum Color { Red, Green, Blue }\nlet c := Color.Purple\n"
+	src := "enum Color { Red, Green, Blue }\nc := Color.Purple\n"
 	checkErr(t, src, `enum "Color" has no variant "Purple"`)
 }
 
@@ -122,7 +122,7 @@ func TestCheckEnumStructNameCollisionRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckListOfInt(t *testing.T) {
-	prog := checkSrc(t, "let xs := [1, 2, 3]\n")
+	prog := checkSrc(t, "xs := [1, 2, 3]\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	tt := let.Value.Type()
 	if tt.Kind != TypeList || tt.Element != TInt() {
@@ -131,7 +131,7 @@ func TestCheckListOfInt(t *testing.T) {
 }
 
 func TestCheckListOfStruct(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet ps := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]\n"
+	src := "struct Point { x: int, y: int }\nps := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]\n"
 	prog := checkSrc(t, src)
 	let := prog.Statements[1].(*LetStmt)
 	tt := let.Value.Type()
@@ -141,7 +141,7 @@ func TestCheckListOfStruct(t *testing.T) {
 }
 
 func TestCheckListOfList(t *testing.T) {
-	prog := checkSrc(t, "let xss := [[1, 2], [3, 4]]\n")
+	prog := checkSrc(t, "xss := [[1, 2], [3, 4]]\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	tt := let.Value.Type()
 	if tt.Kind != TypeList || tt.Element.Kind != TypeList || tt.Element.Element != TInt() {
@@ -154,7 +154,7 @@ func TestCheckListOfList(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckListMixedTypesRejected(t *testing.T) {
-	checkErr(t, "let xs := [1, 2.0]\n", "expected int")
+	checkErr(t, "xs := [1, 2.0]\n", "expected int")
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ func TestCheckListMixedTypesRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckEmptyListWithAnnotationOK(t *testing.T) {
-	prog := checkSrc(t, "let xs: list[int] = []\n")
+	prog := checkSrc(t, "xs: list[int] = []\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	tt := let.Value.Type()
 	if tt.Kind != TypeList || tt.Element != TInt() {
@@ -171,7 +171,7 @@ func TestCheckEmptyListWithAnnotationOK(t *testing.T) {
 }
 
 func TestCheckEmptyListWithoutContextRejected(t *testing.T) {
-	checkErr(t, "let xs := []\n", "cannot infer element type of empty list")
+	checkErr(t, "xs := []\n", "cannot infer element type of empty list")
 }
 
 func TestCheckEmptyListPrintRejected(t *testing.T) {
@@ -193,7 +193,7 @@ func TestCheckEmptyListReturnInfersFromSig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckTupleLitTwoElements(t *testing.T) {
-	prog := checkSrc(t, "let p := (1, \"a\")\n")
+	prog := checkSrc(t, "p := (1, \"a\")\n")
 	let := firstStmt(t, prog).(*LetStmt)
 	tt := let.Value.Type()
 	if tt.Kind != TypeTuple || len(tt.Tuple) != 2 || tt.Tuple[0] != TInt() || tt.Tuple[1] != TStr() {
@@ -202,11 +202,11 @@ func TestCheckTupleLitTwoElements(t *testing.T) {
 }
 
 func TestCheckTupleAnnotation(t *testing.T) {
-	checkSrc(t, "let p: tuple[int, str] = (1, \"a\")\n")
+	checkSrc(t, "p: tuple[int, str] = (1, \"a\")\n")
 }
 
 func TestCheckTupleAnnotationMismatch(t *testing.T) {
-	checkErr(t, "let p: tuple[int, str] = (1, 2)\n", "cannot assign")
+	checkErr(t, "p: tuple[int, str] = (1, 2)\n", "cannot assign")
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +214,7 @@ func TestCheckTupleAnnotationMismatch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckListIndexReturnsElement(t *testing.T) {
-	prog := checkSrc(t, "let xs := [1, 2, 3]\nlet a := xs[0]\n")
+	prog := checkSrc(t, "xs := [1, 2, 3]\na := xs[0]\n")
 	let := prog.Statements[1].(*LetStmt)
 	if let.Value.Type() != TInt() {
 		t.Fatalf("Type = %s, want int", let.Value.Type())
@@ -222,7 +222,7 @@ func TestCheckListIndexReturnsElement(t *testing.T) {
 }
 
 func TestCheckStrIndexReturnsRune(t *testing.T) {
-	prog := checkSrc(t, "let s := \"hi\"\nlet c := s[0]\n")
+	prog := checkSrc(t, "s := \"hi\"\nc := s[0]\n")
 	let := prog.Statements[1].(*LetStmt)
 	if let.Value.Type() != TRune() {
 		t.Fatalf("Type = %s, want rune", let.Value.Type())
@@ -230,11 +230,11 @@ func TestCheckStrIndexReturnsRune(t *testing.T) {
 }
 
 func TestCheckIndexNonIntRejected(t *testing.T) {
-	checkErr(t, "let xs := [1, 2]\nlet a := xs[\"oops\"]\n", "index must be int")
+	checkErr(t, "xs := [1, 2]\na := xs[\"oops\"]\n", "index must be int")
 }
 
 func TestCheckIndexNonListNonStrRejected(t *testing.T) {
-	checkErr(t, "let n := 1\nlet a := n[0]\n", "cannot index value of type int")
+	checkErr(t, "n := 1\na := n[0]\n", "cannot index value of type int")
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ func TestCheckIndexNonListNonStrRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckListSliceFull(t *testing.T) {
-	prog := checkSrc(t, "let xs := [1, 2, 3]\nlet ys := xs[..]\n")
+	prog := checkSrc(t, "xs := [1, 2, 3]\nys := xs[..]\n")
 	let := prog.Statements[1].(*LetStmt)
 	tt := let.Value.Type()
 	if tt.Kind != TypeList || tt.Element != TInt() {
@@ -251,15 +251,15 @@ func TestCheckListSliceFull(t *testing.T) {
 }
 
 func TestCheckListSliceLowHigh(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2, 3, 4]\nlet ys := xs[1..3]\n")
+	checkSrc(t, "xs := [1, 2, 3, 4]\nys := xs[1..3]\n")
 }
 
 func TestCheckListSliceInclusive(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2, 3, 4]\nlet ys := xs[1..=3]\n")
+	checkSrc(t, "xs := [1, 2, 3, 4]\nys := xs[1..=3]\n")
 }
 
 func TestCheckStrSliceRejected(t *testing.T) {
-	checkErr(t, "let s := \"abc\"\nlet t := s[0..2]\n", "string slicing is deferred")
+	checkErr(t, "s := \"abc\"\nt := s[0..2]\n", "string slicing is deferred")
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ func TestCheckStrSliceRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckStructFieldAccess(t *testing.T) {
-	prog := checkSrc(t, "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nlet a := p.x\n")
+	prog := checkSrc(t, "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\na := p.x\n")
 	let := prog.Statements[2].(*LetStmt)
 	if let.Value.Type() != TInt() {
 		t.Fatalf("Type = %s, want int", let.Value.Type())
@@ -275,12 +275,12 @@ func TestCheckStructFieldAccess(t *testing.T) {
 }
 
 func TestCheckStructUnknownFieldRejected(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nlet z := p.z\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nz := p.z\n"
 	checkErr(t, src, `struct "Point" has no field "z"`)
 }
 
 func TestCheckFieldAccessOnNonStructRejected(t *testing.T) {
-	checkErr(t, "let n := 1\nlet z := n.x\n", "cannot access field on value of type int")
+	checkErr(t, "n := 1\nz := n.x\n", "cannot access field on value of type int")
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ func TestCheckFieldAccessOnNonStructRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckStructForwardRefOK(t *testing.T) {
-	src := "struct A {\nb: B,\n}\nstruct B {\nx: int,\n}\nlet b := B { x: 1 }\nlet a := A { b: b }\n"
+	src := "struct A {\nb: B,\n}\nstruct B {\nx: int,\n}\nb := B { x: 1 }\na := A { b: b }\n"
 	checkSrc(t, src)
 }
 
@@ -310,22 +310,22 @@ func TestCheckStructMutualRecursionRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckMatchIntLiteralArms(t *testing.T) {
-	src := "let x := 1\nmatch x {\n1 => print 1\n2 => print 2\n_ => print 0\n}\n"
+	src := "x := 1\nmatch x {\n1 => print 1\n2 => print 2\n_ => print 0\n}\n"
 	checkSrc(t, src)
 }
 
 func TestCheckMatchEnumExhaustive(t *testing.T) {
-	src := "enum Color { Red, Green, Blue }\nlet c := Color.Red\nmatch c {\nColor.Red => print 1\nColor.Green => print 2\nColor.Blue => print 3\n}\n"
+	src := "enum Color { Red, Green, Blue }\nc := Color.Red\nmatch c {\nColor.Red => print 1\nColor.Green => print 2\nColor.Blue => print 3\n}\n"
 	checkSrc(t, src)
 }
 
 func TestCheckMatchStructShorthand(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nmatch p {\nPoint { x, y } => print x\n}\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nmatch p {\nPoint { x, y } => print x\n}\n"
 	checkSrc(t, src)
 }
 
 func TestCheckMatchGuardMustBeBool(t *testing.T) {
-	src := "let x := 1\nmatch x {\nn if 1 => print n\n_ => nop\n}\n"
+	src := "x := 1\nmatch x {\nn if 1 => print n\n_ => nop\n}\n"
 	checkErr(t, src, "match guard must be bool")
 }
 
@@ -334,7 +334,7 @@ func TestCheckMatchGuardMustBeBool(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckMatchLiteralTypeMismatch(t *testing.T) {
-	src := "let s := \"hi\"\nmatch s {\n1 => nop\n_ => nop\n}\n"
+	src := "s := \"hi\"\nmatch s {\n1 => nop\n_ => nop\n}\n"
 	checkErr(t, src, "literal pattern of type int does not match")
 }
 
@@ -343,12 +343,12 @@ func TestCheckMatchLiteralTypeMismatch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckMatchTupleArityMismatch(t *testing.T) {
-	src := "let p := (1, 2)\nmatch p {\n(a, b, c) => nop\n_ => nop\n}\n"
+	src := "p := (1, 2)\nmatch p {\n(a, b, c) => nop\n_ => nop\n}\n"
 	checkErr(t, src, "tuple pattern has 3 element(s)")
 }
 
 func TestCheckMatchTupleSubjectMismatch(t *testing.T) {
-	src := "let n := 1\nmatch n {\n(a, b) => nop\n_ => nop\n}\n"
+	src := "n := 1\nmatch n {\n(a, b) => nop\n_ => nop\n}\n"
 	checkErr(t, src, "tuple pattern cannot match")
 }
 
@@ -357,7 +357,7 @@ func TestCheckMatchTupleSubjectMismatch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckStructPatExtraFieldRejected(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nmatch p {\nPoint { x, y, z } => nop\n_ => nop\n}\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nmatch p {\nPoint { x, y, z } => nop\n_ => nop\n}\n"
 	checkErr(t, src, `has no field "z"`)
 }
 
@@ -366,7 +366,7 @@ func TestCheckStructPatExtraFieldRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckStructPatMissingFieldRejected(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nmatch p {\nPoint { x } => nop\n_ => nop\n}\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nmatch p {\nPoint { x } => nop\n_ => nop\n}\n"
 	checkErr(t, src, `is missing field "y"`)
 }
 
@@ -375,7 +375,7 @@ func TestCheckStructPatMissingFieldRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckStructPatWithRestOK(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nmatch p {\nPoint { x, .. } => print x\n_ => nop\n}\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nmatch p {\nPoint { x, .. } => print x\n_ => nop\n}\n"
 	checkSrc(t, src)
 }
 
@@ -384,7 +384,7 @@ func TestCheckStructPatWithRestOK(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckPatternDoubleBindRejected(t *testing.T) {
-	src := "let p := (1, 2)\nmatch p {\n(x, x) => nop\n_ => nop\n}\n"
+	src := "p := (1, 2)\nmatch p {\n(x, x) => nop\n_ => nop\n}\n"
 	checkErr(t, src, `already bound in this pattern`)
 }
 
@@ -393,7 +393,7 @@ func TestCheckPatternDoubleBindRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckLenOnList(t *testing.T) {
-	prog := checkSrc(t, "let xs := [1, 2, 3]\nlet n := len(xs)\n")
+	prog := checkSrc(t, "xs := [1, 2, 3]\nn := len(xs)\n")
 	let := prog.Statements[1].(*LetStmt)
 	if let.Value.Type() != TInt() {
 		t.Fatalf("Type = %s, want int", let.Value.Type())
@@ -401,16 +401,16 @@ func TestCheckLenOnList(t *testing.T) {
 }
 
 func TestCheckLenOnIntRejected(t *testing.T) {
-	checkErr(t, "let n := len(5)\n", "argument to len must be a list")
+	checkErr(t, "n := len(5)\n", "argument to len must be a list")
 }
 
 func TestCheckLenZeroArgsRejected(t *testing.T) {
-	checkErr(t, "let n := len()\n", "expects 1 argument")
+	checkErr(t, "n := len()\n", "expects 1 argument")
 }
 
 func TestCheckLenOnStrRejected(t *testing.T) {
 	// PLAN's len is monomorphic-list-only; len on a str is rejected.
-	checkErr(t, "let n := len(\"hi\")\n", "argument to len must be a list")
+	checkErr(t, "n := len(\"hi\")\n", "argument to len must be a list")
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +427,7 @@ func TestCheckUserRedefineLenRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckInnerShadowingOfLenOK(t *testing.T) {
-	src := "if true {\nlet len := 5\nprint len\n}\n"
+	src := "if true {\nlen := 5\nprint len\n}\n"
 	checkSrc(t, src)
 }
 
@@ -452,27 +452,27 @@ func TestCheckEmptyEnumRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckPrintByte(t *testing.T) {
-	checkSrc(t, "let b := 'A'\nprint b\n")
+	checkSrc(t, "b := 'A'\nprint b\n")
 }
 
 func TestCheckPrintRune(t *testing.T) {
-	checkSrc(t, "let r := '漢'\nprint r\n")
+	checkSrc(t, "r := '漢'\nprint r\n")
 }
 
 func TestCheckPrintList(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2]\nprint xs\n")
+	checkSrc(t, "xs := [1, 2]\nprint xs\n")
 }
 
 func TestCheckPrintTuple(t *testing.T) {
-	checkSrc(t, "let p := (1, \"a\")\nprint p\n")
+	checkSrc(t, "p := (1, \"a\")\nprint p\n")
 }
 
 func TestCheckPrintStruct(t *testing.T) {
-	checkSrc(t, "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nprint p\n")
+	checkSrc(t, "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nprint p\n")
 }
 
 func TestCheckPrintEnum(t *testing.T) {
-	checkSrc(t, "enum Color { Red, Green }\nlet c := Color.Red\nprint c\n")
+	checkSrc(t, "enum Color { Red, Green }\nc := Color.Red\nprint c\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -530,16 +530,16 @@ func TestCheckTypeStringForms(t *testing.T) {
 }
 
 func TestCheckMatchOnByte(t *testing.T) {
-	checkSrc(t, "let c := 'A'\nmatch c {\n'A' => nop\n_ => nop\n}\n")
+	checkSrc(t, "c := 'A'\nmatch c {\n'A' => nop\n_ => nop\n}\n")
 }
 
 func TestCheckMatchPatternBindReachesGuard(t *testing.T) {
-	src := "let n := 5\nmatch n {\nx if x > 0 => print x\n_ => nop\n}\n"
+	src := "n := 5\nmatch n {\nx if x > 0 => print x\n_ => nop\n}\n"
 	checkSrc(t, src)
 }
 
 func TestCheckMatchPatternBindReachesBody(t *testing.T) {
-	src := "let n := 5\nmatch n {\nx => print x\n}\n"
+	src := "n := 5\nmatch n {\nx => print x\n}\n"
 	checkSrc(t, src)
 }
 
@@ -549,7 +549,7 @@ func TestCheckMatchVoidSubjectRejected(t *testing.T) {
 }
 
 func TestCheckEnumPatternWrongTypeRejected(t *testing.T) {
-	src := "enum A { X }\nenum B { Y }\nlet a := A.X\nmatch a {\nB.Y => nop\n_ => nop\n}\n"
+	src := "enum A { X }\nenum B { Y }\na := A.X\nmatch a {\nB.Y => nop\n_ => nop\n}\n"
 	checkErr(t, src, "does not match")
 }
 
@@ -559,15 +559,15 @@ func TestCheckListAsFnArgWithTypeMismatch(t *testing.T) {
 }
 
 func TestCheckIndexInsideExpr(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2, 3]\nlet n := xs[0] + xs[1]\n")
+	checkSrc(t, "xs := [1, 2, 3]\nn := xs[0] + xs[1]\n")
 }
 
 func TestCheckListLenInExpr(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2, 3]\nlet last := xs[len(xs) - 1]\n")
+	checkSrc(t, "xs := [1, 2, 3]\nlast := xs[len(xs) - 1]\n")
 }
 
 func TestCheckStructInListIndexFieldAccess(t *testing.T) {
-	src := "struct P { x: int, y: int }\nlet ps := [P { x: 1, y: 2 }]\nlet x := ps[0].x\n"
+	src := "struct P { x: int, y: int }\nps := [P { x: 1, y: 2 }]\nx := ps[0].x\n"
 	prog := checkSrc(t, src)
 	let := prog.Statements[2].(*LetStmt)
 	if let.Value.Type() != TInt() {
@@ -576,7 +576,7 @@ func TestCheckStructInListIndexFieldAccess(t *testing.T) {
 }
 
 func TestCheckTupleInTuple(t *testing.T) {
-	checkSrc(t, "let p := ((1, 2), (3, 4))\n")
+	checkSrc(t, "p := ((1, 2), (3, 4))\n")
 }
 
 func TestCheckRuneOutOfRangeRejected(t *testing.T) {
@@ -590,18 +590,18 @@ func TestCheckRuneOutOfRangeRejected(t *testing.T) {
 }
 
 func TestCheckStructPatTypeNameMismatchRejected(t *testing.T) {
-	src := "struct A { x: int }\nstruct B { x: int }\nlet b := B { x: 1 }\nmatch b {\nA { x } => nop\n_ => nop\n}\n"
+	src := "struct A { x: int }\nstruct B { x: int }\nb := B { x: 1 }\nmatch b {\nA { x } => nop\n_ => nop\n}\n"
 	checkErr(t, src, "does not match subject")
 }
 
 func TestCheckEmptyListInTupleAnnotationOK(t *testing.T) {
 	// Hint propagation through tuple literal: the second element is an empty
 	// list literal whose element type comes from the tuple annotation.
-	checkSrc(t, "let p: tuple[int, list[int]] = (1, [])\n")
+	checkSrc(t, "p: tuple[int, list[int]] = (1, [])\n")
 }
 
 func TestCheckStructFieldHoldsList(t *testing.T) {
-	checkSrc(t, "struct Bag { xs: list[int] }\nlet b := Bag { xs: [1, 2] }\n")
+	checkSrc(t, "struct Bag { xs: list[int] }\nb := Bag { xs: [1, 2] }\n")
 }
 
 func TestCheckStructVoidFieldRejected(t *testing.T) {
@@ -624,18 +624,18 @@ func TestCheckStructVoidFieldRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckForListIterIntList(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2, 3]\nfor x in xs { print x }\n")
+	checkSrc(t, "xs := [1, 2, 3]\nfor x in xs { print x }\n")
 }
 
 func TestCheckForListIterEmptyAnnotated(t *testing.T) {
 	// Empty list with explicit annotation is fine — body never runs but the
 	// element type is known.
-	checkSrc(t, "let xs: list[int] = []\nfor x in xs { print x }\n")
+	checkSrc(t, "xs: list[int] = []\nfor x in xs { print x }\n")
 }
 
 func TestCheckForListIterStructList(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
 for p in pts { print p.x }
 `
 	checkSrc(t, src)
@@ -651,11 +651,11 @@ for x in make() { print x }
 }
 
 func TestCheckForListIterRejectsNonList(t *testing.T) {
-	checkErr(t, "let n := 5\nfor x in n { print x }\n", "must be a list")
+	checkErr(t, "n := 5\nfor x in n { print x }\n", "must be a list")
 }
 
 func TestCheckForListIterRejectsTuple(t *testing.T) {
-	checkErr(t, "let p := (1, 2)\nfor x in p { print x }\n", "must be a list")
+	checkErr(t, "p := (1, 2)\nfor x in p { print x }\n", "must be a list")
 }
 
 // ---------------------------------------------------------------------------
@@ -667,29 +667,29 @@ func TestCheckForListIterRejectsTuple(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckLetTupleDestructureTwo(t *testing.T) {
-	checkSrc(t, "let (a, b) := (1, 2)\nprint a\nprint b\n")
+	checkSrc(t, "(a, b) := (1, 2)\nprint a\nprint b\n")
 }
 
 func TestCheckLetTupleDestructureThree(t *testing.T) {
-	checkSrc(t, "let (a, b, c) := (1, 2, 3)\nprint a\nprint b\nprint c\n")
+	checkSrc(t, "(a, b, c) := (1, 2, 3)\nprint a\nprint b\nprint c\n")
 }
 
 func TestCheckLetTupleDestructureMixedTypes(t *testing.T) {
 	// The two element types differ; each name picks up its own type.
-	checkSrc(t, `let (a, b) := (1, "two")
+	checkSrc(t, `(a, b) := (1, "two")
 print a
 print b
 `)
 }
 
 func TestCheckLetTupleDestructureFromBound(t *testing.T) {
-	checkSrc(t, "let pair := (10, 20)\nlet (a, b) := pair\nprint a + b\n")
+	checkSrc(t, "pair := (10, 20)\n(a, b) := pair\nprint a + b\n")
 }
 
 func TestCheckLetTupleDestructureWithStruct(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let pair := (Point { x: 1, y: 2 }, 99)
-let (p, n) := pair
+pair := (Point { x: 1, y: 2 }, 99)
+(p, n) := pair
 print p.x
 print n
 `
@@ -697,25 +697,25 @@ print n
 }
 
 func TestCheckLetTupleDestructureArityTooFew(t *testing.T) {
-	checkErr(t, "let (a, b) := (1, 2, 3)\n", "destructure expects 2")
+	checkErr(t, "(a, b) := (1, 2, 3)\n", "destructure expects 2")
 }
 
 func TestCheckLetTupleDestructureArityTooMany(t *testing.T) {
-	checkErr(t, "let (a, b, c) := (1, 2)\n", "destructure expects 3")
+	checkErr(t, "(a, b, c) := (1, 2)\n", "destructure expects 3")
 }
 
 func TestCheckLetTupleDestructureRejectsNonTuple(t *testing.T) {
-	checkErr(t, "let xs := [1, 2]\nlet (a, b) := xs\n", "requires a tuple")
+	checkErr(t, "xs := [1, 2]\n(a, b) := xs\n", "requires a tuple")
 }
 
 func TestCheckLetTupleDestructureRejectsListLiteral(t *testing.T) {
-	checkErr(t, "let (a, b) := [1, 2]\n", "requires a tuple")
+	checkErr(t, "(a, b) := [1, 2]\n", "requires a tuple")
 }
 
 func TestCheckLetTupleDestructureShadowingRejected(t *testing.T) {
 	// Shadowing follows the same rule as single-name decls — same-scope
 	// redeclaration is an error.
-	checkErr(t, "let a := 1\nlet (a, b) := (2, 3)\n", "already declared")
+	checkErr(t, "a := 1\n(a, b) := (2, 3)\n", "already declared")
 }
 
 func TestCheckMutTupleDestructureBindings(t *testing.T) {

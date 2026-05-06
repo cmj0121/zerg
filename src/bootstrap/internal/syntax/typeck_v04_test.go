@@ -85,7 +85,7 @@ func TestCheckInherentImplAndCall(t *testing.T) {
 impl Counter {
 fn double() -> int { return this.count * 2 }
 }
-let c := Counter { count: 7 }
+c := Counter { count: 7 }
 print c.double()
 `
 	checkSrc(t, src)
@@ -96,7 +96,7 @@ func TestCheckInherentImplOnEnumOK(t *testing.T) {
 impl Color {
 fn describe() -> int { return 1 }
 }
-let c := Color.Red
+c := Color.Red
 print c.describe()
 `
 	checkSrc(t, src)
@@ -130,7 +130,7 @@ struct Counter { count: int }
 impl Counter for Printable {
 fn show() -> int { return this.count }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.show()
 `
 	checkSrc(t, src)
@@ -140,7 +140,7 @@ func TestCheckSpecImplEmptyBodyWithDefault(t *testing.T) {
 	src := `spec Hashable { fn hash() -> int { return 0 } }
 struct Counter { count: int }
 impl Counter for Hashable {}
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.hash()
 `
 	checkSrc(t, src)
@@ -152,7 +152,7 @@ struct Counter { count: int }
 impl Counter for Hashable {
 fn hash() -> int { return this.count }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.hash()
 `
 	checkSrc(t, src)
@@ -253,7 +253,7 @@ spec B { fn name() -> int }
 struct C { x: int }
 impl C for A { fn name() -> int { return 1 } }
 impl C for B { fn name() -> int { return 2 } }
-let c := C { x: 0 }
+c := C { x: 0 }
 print c.name()
 `
 	checkErr(t, src, "matches multiple specs")
@@ -265,8 +265,8 @@ spec B { fn name() -> int }
 struct C { x: int }
 impl C for A { fn name() -> int { return 1 } }
 impl C for B { fn name() -> int { return 2 } }
-let c := C { x: 0 }
-let p: A = c
+c := C { x: 0 }
+p: A = c
 print p.name()
 `
 	checkSrc(t, src)
@@ -280,8 +280,8 @@ func TestCheckSpecAsTypeBind(t *testing.T) {
 	src := `spec Printable { fn show() -> int }
 struct Counter { count: int }
 impl Counter for Printable { fn show() -> int { return this.count } }
-let c := Counter { count: 5 }
-let p: Printable = c
+c := Counter { count: 5 }
+p: Printable = c
 print p.show()
 `
 	checkSrc(t, src)
@@ -289,7 +289,7 @@ print p.show()
 
 func TestCheckSpecAsTypeBindFromNonImplRejected(t *testing.T) {
 	src := `spec Printable { fn show() -> int }
-let p: Printable = 5
+p: Printable = 5
 `
 	checkErr(t, src, "cannot assign int to Printable")
 }
@@ -297,8 +297,8 @@ let p: Printable = 5
 func TestCheckSpecAsTypeBindFromStructWithoutImplRejected(t *testing.T) {
 	src := `spec Printable { fn show() -> int }
 struct C { x: int }
-let c := C { x: 0 }
-let p: Printable = c
+c := C { x: 0 }
+p: Printable = c
 `
 	checkErr(t, src, "cannot assign C to Printable")
 }
@@ -309,9 +309,9 @@ struct C { x: int }
 impl C for Printable { fn show() -> int { return this.x } }
 struct D { y: int }
 impl D for Printable { fn show() -> int { return this.y } }
-let c := C { x: 1 }
-let d := D { y: 2 }
-let xs: list[Printable] = [c, d]
+c := C { x: 1 }
+d := D { y: 2 }
+xs: list[Printable] = [c, d]
 `
 	checkSrc(t, src)
 }
@@ -320,8 +320,8 @@ func TestCheckSpecMethodNotInSpecCalledOnSpecBindRejected(t *testing.T) {
 	src := `spec Printable { fn show() -> int }
 struct C { x: int }
 impl C for Printable { fn show() -> int { return this.x } }
-let c := C { x: 0 }
-let p: Printable = c
+c := C { x: 0 }
+p: Printable = c
 print p.bogus()
 `
 	checkErr(t, src, `method "bogus" does not exist on spec`)
@@ -336,7 +336,7 @@ func TestCheckThisFieldRead(t *testing.T) {
 impl Counter {
 fn show() -> int { return this.count }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.show()
 `
 	checkSrc(t, src)
@@ -348,14 +348,14 @@ impl Counter {
 fn helper() -> int { return this.count }
 fn show() -> int { return this.helper() }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.show()
 `
 	checkSrc(t, src)
 }
 
 func TestCheckThisOutsideMethodRejected(t *testing.T) {
-	checkErr(t, "let x := this\n", "'this' is only valid inside an impl method body")
+	checkErr(t, "x := this\n", "'this' is only valid inside an impl method body")
 }
 
 // `this = other` is rejected at parse, before typeck. We probe the parse
@@ -378,14 +378,14 @@ func TestCheckThisAssignmentRejectedAtParse(t *testing.T) {
 
 func TestCheckMethodMissingOnConcreteRejected(t *testing.T) {
 	src := `struct C { x: int }
-let c := C { x: 0 }
+c := C { x: 0 }
 print c.bogus()
 `
 	checkErr(t, src, `method "bogus" does not exist on C`)
 }
 
 func TestCheckMethodOnPrimitiveRejected(t *testing.T) {
-	checkErr(t, "let x := 5\nprint x.foo()\n", `method "foo" does not exist on int`)
+	checkErr(t, "x := 5\nprint x.foo()\n", `method "foo" does not exist on int`)
 }
 
 // ---------------------------------------------------------------------------
@@ -394,7 +394,7 @@ func TestCheckMethodOnPrimitiveRejected(t *testing.T) {
 
 func TestCheckEnumPayloadConstruct(t *testing.T) {
 	src := `enum Token { Eof, Ident(str), Number(int, int) }
-let t := Token.Ident("hello")
+t := Token.Ident("hello")
 print t
 `
 	checkSrc(t, src)
@@ -402,7 +402,7 @@ print t
 
 func TestCheckEnumPayloadConstructMultiArg(t *testing.T) {
 	src := `enum Token { Number(int, int) }
-let t := Token.Number(10, 16)
+t := Token.Number(10, 16)
 print t
 `
 	checkSrc(t, src)
@@ -410,7 +410,7 @@ print t
 
 func TestCheckEnumBareVariantStillOK(t *testing.T) {
 	src := `enum Token { Eof, Ident(str) }
-let t := Token.Eof
+t := Token.Eof
 print t
 `
 	checkSrc(t, src)
@@ -418,7 +418,7 @@ print t
 
 func TestCheckEnumPayloadArityMismatchTooFew(t *testing.T) {
 	src := `enum Token { Number(int, int) }
-let t := Token.Number(10)
+t := Token.Number(10)
 print t
 `
 	checkErr(t, src, "expects 2 payload value(s)")
@@ -426,7 +426,7 @@ print t
 
 func TestCheckEnumPayloadArityMismatchTooMany(t *testing.T) {
 	src := `enum Token { Ident(str) }
-let t := Token.Ident("a", "b")
+t := Token.Ident("a", "b")
 print t
 `
 	checkErr(t, src, "expects 1 payload value(s)")
@@ -434,7 +434,7 @@ print t
 
 func TestCheckEnumPayloadTypeMismatch(t *testing.T) {
 	src := `enum Token { Ident(str) }
-let t := Token.Ident(42)
+t := Token.Ident(42)
 print t
 `
 	checkErr(t, src, "payload position 1")
@@ -442,7 +442,7 @@ print t
 
 func TestCheckEnumBareVariantWithParensRejected(t *testing.T) {
 	src := `enum Token { Eof }
-let t := Token.Eof()
+t := Token.Eof()
 print t
 `
 	checkErr(t, src, "no payload")
@@ -450,7 +450,7 @@ print t
 
 func TestCheckEnumPayloadVariantBareAccessRejected(t *testing.T) {
 	src := `enum Token { Ident(str) }
-let t := Token.Ident
+t := Token.Ident
 print t
 `
 	checkErr(t, src, "use Token.Ident(...) to construct")
@@ -462,7 +462,7 @@ print t
 
 func TestCheckMatchPayloadBind(t *testing.T) {
 	src := `enum Token { Eof, Ident(str) }
-let t := Token.Ident("hi")
+t := Token.Ident("hi")
 match t {
 Token.Eof => { print "eof" }
 Token.Ident(name) => { print name }
@@ -473,7 +473,7 @@ Token.Ident(name) => { print name }
 
 func TestCheckMatchPayloadArityMismatch(t *testing.T) {
 	src := `enum Token { Number(int, int) }
-let t := Token.Number(10, 16)
+t := Token.Number(10, 16)
 match t {
 Token.Number(a) => { print a }
 }
@@ -483,7 +483,7 @@ Token.Number(a) => { print a }
 
 func TestCheckMatchPayloadBareForPayloadVariant(t *testing.T) {
 	src := `enum Token { Ident(str) }
-let t := Token.Ident("hi")
+t := Token.Ident("hi")
 match t {
 Token.Ident => { print "x" }
 }
@@ -543,8 +543,8 @@ func TestCheckStructFieldOfSpecType(t *testing.T) {
 struct C { x: int }
 impl C for Printable { fn show() -> int { return this.x } }
 struct Holder { p: Printable }
-let c := C { x: 7 }
-let h := Holder { p: c }
+c := C { x: 7 }
+h := Holder { p: c }
 print h.p.show()
 `
 	checkSrc(t, src)
@@ -558,8 +558,8 @@ func TestCheckSpecDefaultInheritedNotOverridden(t *testing.T) {
 	src := `spec Hashable { fn hash() -> int { return 0 } }
 struct C { x: int }
 impl C for Hashable {}
-let c := C { x: 0 }
-let h := c.hash()
+c := C { x: 0 }
+h := c.hash()
 print h
 `
 	checkSrc(t, src)
@@ -574,7 +574,7 @@ func TestCheckMethodArgsTypeCheck(t *testing.T) {
 impl Counter {
 fn add(n: int) -> int { return this.count + n }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.add(10)
 `
 	checkSrc(t, src)
@@ -585,7 +585,7 @@ func TestCheckMethodArgArityMismatch(t *testing.T) {
 impl Counter {
 fn add(n: int) -> int { return this.count + n }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.add(10, 20)
 `
 	checkErr(t, src, "expects 1 argument")
@@ -596,7 +596,7 @@ func TestCheckMethodArgTypeMismatch(t *testing.T) {
 impl Counter {
 fn add(n: int) -> int { return this.count + n }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.add("oops")
 `
 	checkErr(t, src, "argument 1")

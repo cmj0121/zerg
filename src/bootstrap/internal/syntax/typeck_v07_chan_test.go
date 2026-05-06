@@ -59,7 +59,7 @@ func TestV07ChanTwoTypeArgsRejects(t *testing.T) {
 // --- ChanConstructorExpr -------------------------------------------------
 
 func TestV07ChanConstructorUnbuffered(t *testing.T) {
-	prog := checkSrc(t, "let ch := chan[int]()\n")
+	prog := checkSrc(t, "ch := chan[int]()\n")
 	s := expectOne[*LetStmt](t, prog)
 	got := s.Value.Type()
 	if got == nil || got.Kind != TypeChan || got.Element != tInt {
@@ -72,7 +72,7 @@ func TestV07ChanConstructorUnbuffered(t *testing.T) {
 }
 
 func TestV07ChanConstructorBuffered(t *testing.T) {
-	prog := checkSrc(t, "let ch := chan[str](10)\n")
+	prog := checkSrc(t, "ch := chan[str](10)\n")
 	s := expectOne[*LetStmt](t, prog)
 	got := s.Value.Type()
 	if got == nil || got.Kind != TypeChan || got.Element != tStr {
@@ -82,23 +82,23 @@ func TestV07ChanConstructorBuffered(t *testing.T) {
 
 func TestV07ChanConstructorWithExprCapacity(t *testing.T) {
 	// Capacity may be any int expression; runtime panics on negative values.
-	checkSrc(t, "fn run(n: int) { let ch := chan[int](n + 1) }\n")
+	checkSrc(t, "fn run(n: int) { ch := chan[int](n + 1) }\n")
 }
 
 func TestV07ChanConstructorBoolCapacityRejects(t *testing.T) {
-	checkErr(t, "let ch := chan[int](true)\n",
+	checkErr(t, "ch := chan[int](true)\n",
 		"chan capacity must be int")
 }
 
 func TestV07ChanConstructorStringCapacityRejects(t *testing.T) {
-	checkErr(t, `let ch := chan[int]("hi")`+"\n",
+	checkErr(t, `ch := chan[int]("hi")`+"\n",
 		"chan capacity must be int")
 }
 
 // --- annotated let with chan -------------------------------------------
 
 func TestV07ChanLetAnnotated(t *testing.T) {
-	prog := checkSrc(t, "let ch: chan[int] = chan[int]()\n")
+	prog := checkSrc(t, "ch: chan[int] = chan[int]()\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Type == nil || s.Type.Resolved == nil {
 		t.Fatalf("type ref unresolved")
@@ -142,7 +142,7 @@ func TestV07SendNilToOptionChannel(t *testing.T) {
 // --- RecvExpr -------------------------------------------------------------
 
 func TestV07RecvYieldsOption(t *testing.T) {
-	prog := checkSrc(t, "fn run(ch: chan[int]) { let v := <- ch }\n")
+	prog := checkSrc(t, "fn run(ch: chan[int]) { v := <- ch }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let := fn.Body.Statements[0].(*LetStmt)
 	got := let.Value.Type()
@@ -155,7 +155,7 @@ func TestV07RecvYieldsOption(t *testing.T) {
 }
 
 func TestV07RecvFromNonChannel(t *testing.T) {
-	checkErr(t, "fn run() { let v := <- 42 }\n",
+	checkErr(t, "fn run() { v := <- 42 }\n",
 		"receive requires a channel operand")
 }
 
@@ -243,7 +243,7 @@ func TestV07PrintChannelRejects(t *testing.T) {
 // --- reservation: chan ---------------------------------------------------
 
 func TestV07ChanReservedAsLetName(t *testing.T) {
-	checkErr(t, "let chan := 1\n",
+	checkErr(t, "chan := 1\n",
 		`name "chan" is reserved (built-in)`)
 }
 
@@ -280,7 +280,7 @@ func TestV07CloseReservedAsFnName(t *testing.T) {
 }
 
 func TestV07CloseReservedAsLetName(t *testing.T) {
-	checkErr(t, "let close := 1\n",
+	checkErr(t, "close := 1\n",
 		`name "close" is reserved (built-in)`)
 }
 
@@ -307,7 +307,7 @@ func TestV07ChanOfChan(t *testing.T) {
 func TestV07RecvIntoOptionAnnotated(t *testing.T) {
 	// `let v: int? = <- ch` — the annotation hint is Option[int]; the recv
 	// expression already produces Option[int], so the assignment is direct.
-	checkSrc(t, "fn run(ch: chan[int]) { let v: int? = <- ch }\n")
+	checkSrc(t, "fn run(ch: chan[int]) { v: int? = <- ch }\n")
 }
 
 // --- send via chained-target rejection scaffold --------------------------

@@ -21,7 +21,7 @@ func TestCheckIndexAssignOnMutListOK(t *testing.T) {
 // TestCheckIndexAssignOnLetListRejected flags the immutable-binding case with
 // a precise diagnostic that points the user at `mut`.
 func TestCheckIndexAssignOnLetListRejected(t *testing.T) {
-	checkErr(t, "let xs := [1, 2, 3]\nxs[0] = 99\n", "use mut to allow element mutation")
+	checkErr(t, "xs := [1, 2, 3]\nxs[0] = 99\n", "use mut to allow element mutation")
 }
 
 // TestCheckIndexAssignTypeMismatch — RHS type must match the list element type.
@@ -45,7 +45,7 @@ func TestCheckIdentAssignStillWorks(t *testing.T) {
 // TestCheckIdentAssignLetStillRejected confirms the v0.1 "cannot assign to
 // let-bound name" rule still fires after the AssignStmt restructure.
 func TestCheckIdentAssignLetStillRejected(t *testing.T) {
-	checkErr(t, "let x := 1\nx = 2\n", "declared with let")
+	checkErr(t, "x := 1\nx = 2\n", "declared with let")
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ func TestCheckPushOnMutList(t *testing.T) {
 // TestCheckCloneList admits `clone(xs)` on a list and confirms the result type
 // matches the source list type so the binding propagates correctly.
 func TestCheckCloneList(t *testing.T) {
-	prog := checkSrc(t, "let xs := [1, 2]\nlet ys := clone(xs)\n")
+	prog := checkSrc(t, "xs := [1, 2]\nys := clone(xs)\n")
 	let := prog.Statements[1].(*LetStmt)
 	want := NewListType(TInt())
 	if !typeEq(let.Value.Type(), want) {
@@ -86,7 +86,7 @@ func TestCheckCloneList(t *testing.T) {
 // the result is the same struct type — the runtime returns a fresh copy but
 // typeck only cares about the shape.
 func TestCheckCloneStruct(t *testing.T) {
-	src := "struct Point { x: int, y: int }\nlet p := Point { x: 1, y: 2 }\nlet q := clone(p)\n"
+	src := "struct Point { x: int, y: int }\np := Point { x: 1, y: 2 }\nq := clone(p)\n"
 	prog := checkSrc(t, src)
 	let := prog.Statements[2].(*LetStmt)
 	if let.Value.Type() == nil || let.Value.Type().Kind != TypeStruct || let.Value.Type().Name != "Point" {
@@ -96,7 +96,7 @@ func TestCheckCloneStruct(t *testing.T) {
 
 // TestCheckCloneTuple admits `clone(t)` on a tuple value.
 func TestCheckCloneTuple(t *testing.T) {
-	prog := checkSrc(t, "let t := (1, 2)\nlet u := clone(t)\n")
+	prog := checkSrc(t, "t := (1, 2)\nu := clone(t)\n")
 	let := prog.Statements[1].(*LetStmt)
 	want := NewTupleType([]*Type{TInt(), TInt()})
 	if !typeEq(let.Value.Type(), want) {
@@ -108,7 +108,7 @@ func TestCheckCloneTuple(t *testing.T) {
 // PLAN explicitly admits enum as a composite for clone's purposes, even though
 // at runtime the value is a small integer — keeps the surface uniform.
 func TestCheckCloneEnum(t *testing.T) {
-	src := "enum Color { Red, Blue }\nlet c := Color.Red\nlet d := clone(c)\n"
+	src := "enum Color { Red, Blue }\nc := Color.Red\nd := clone(c)\n"
 	prog := checkSrc(t, src)
 	let := prog.Statements[2].(*LetStmt)
 	if let.Value.Type() == nil || let.Value.Type().Kind != TypeEnum || let.Value.Type().Name != "Color" {
@@ -121,7 +121,7 @@ func TestCheckCloneEnum(t *testing.T) {
 // TestCheckPushOnLetListRejected confirms an immutable list binding is
 // rejected with the precise "must be mut" diagnostic.
 func TestCheckPushOnLetListRejected(t *testing.T) {
-	checkErr(t, "let xs := [1, 2]\npush(xs, 3)\n", "must be mut")
+	checkErr(t, "xs := [1, 2]\npush(xs, 3)\n", "must be mut")
 }
 
 // TestCheckPushArityZeroRejected — `push()`.
@@ -156,23 +156,23 @@ func TestCheckPushOnLiteralRejected(t *testing.T) {
 // TestCheckCloneOnPrimitiveRejected — `clone(5)` rejects with the precise
 // "primitives don't need cloning" diagnostic.
 func TestCheckCloneOnPrimitiveRejected(t *testing.T) {
-	checkErr(t, "let x := 5\nlet y := clone(x)\n", "primitives don't need cloning")
+	checkErr(t, "x := 5\ny := clone(x)\n", "primitives don't need cloning")
 }
 
 // TestCheckCloneOnStrRejected — str is a primitive at v0.3 (no list[byte]
 // view yet); clone rejects.
 func TestCheckCloneOnStrRejected(t *testing.T) {
-	checkErr(t, "let s := \"hi\"\nlet t := clone(s)\n", "primitives don't need cloning")
+	checkErr(t, "s := \"hi\"\nt := clone(s)\n", "primitives don't need cloning")
 }
 
 // TestCheckCloneArityZeroRejected — `clone()`.
 func TestCheckCloneArityZeroRejected(t *testing.T) {
-	checkErr(t, "let y := clone()\n", "expects 1 argument")
+	checkErr(t, "y := clone()\n", "expects 1 argument")
 }
 
 // TestCheckCloneArityTwoRejected — `clone(xs, ys)`.
 func TestCheckCloneArityTwoRejected(t *testing.T) {
-	checkErr(t, "let xs := [1]\nlet ys := [2]\nlet zs := clone(xs, ys)\n", "expects 1 argument")
+	checkErr(t, "xs := [1]\nys := [2]\nzs := clone(xs, ys)\n", "expects 1 argument")
 }
 
 // --- negative: top-level shadow rejection -----------------------------------
@@ -194,12 +194,12 @@ func TestCheckUserRedefineCloneRejected(t *testing.T) {
 // because it shadows a name, not the fn-table entry. Mirrors the existing
 // inner-shadowing-of-len test.
 func TestCheckInnerShadowingOfPushOK(t *testing.T) {
-	checkSrc(t, "if true {\nlet push := 5\nprint push\n}\n")
+	checkSrc(t, "if true {\npush := 5\nprint push\n}\n")
 }
 
 // TestCheckInnerShadowingOfCloneOK — same for clone.
 func TestCheckInnerShadowingOfCloneOK(t *testing.T) {
-	checkSrc(t, "if true {\nlet clone := 7\nprint clone\n}\n")
+	checkSrc(t, "if true {\nclone := 7\nprint clone\n}\n")
 }
 
 // --- regression: len still works -------------------------------------------
@@ -207,7 +207,7 @@ func TestCheckInnerShadowingOfCloneOK(t *testing.T) {
 // TestCheckLenRegression — the existing `len(xs)` builtin continues to type-
 // check after push/clone register in the same fn table.
 func TestCheckLenRegression(t *testing.T) {
-	prog := checkSrc(t, "let xs := [1, 2, 3]\nlet n := len(xs)\n")
+	prog := checkSrc(t, "xs := [1, 2, 3]\nn := len(xs)\n")
 	let := prog.Statements[1].(*LetStmt)
 	if let.Value.Type() != TInt() {
 		t.Fatalf("Type = %s, want int", let.Value.Type())

@@ -225,7 +225,7 @@ func TestParseBuiltinDoesNotAffectV07Sources(t *testing.T) {
 	// A v0.7 source that happens to contain the literal `__builtin` as an
 	// identifier (e.g. as a fn name) keeps parsing. We don't ship such a
 	// corpus, but the gate must hold for backwards compat.
-	src := "# requires: v0.7\nlet __builtin := 1\n"
+	src := "# requires: v0.7\n__builtin := 1\n"
 	tokens, err := Lex([]byte(src))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)

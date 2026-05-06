@@ -62,7 +62,7 @@ import (
 func TestBorrowV05PositiveCrossModuleFnCallPrimitives(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub fn add(a: int, b: int) -> int { return a + b }\n",
-		"main": "import \"util\"\nlet n := util.add(1, 2)\nprint n\n",
+		"main": "import \"util\"\nn := util.add(1, 2)\nprint n\n",
 	}, "main.zg")
 }
 
@@ -72,7 +72,7 @@ func TestBorrowV05PositiveCrossModuleFnCallPrimitives(t *testing.T) {
 func TestBorrowV05PositiveCrossModuleFnCallListBorrow(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub fn observe(ys: list[int]) {\nprint ys[0]\n}\n",
-		"main": "import \"util\"\nlet xs := [1, 2, 3]\nutil.observe(xs)\nprint xs[0]\n",
+		"main": "import \"util\"\nxs := [1, 2, 3]\nutil.observe(xs)\nprint xs[0]\n",
 	}, "main.zg")
 }
 
@@ -86,7 +86,7 @@ func TestBorrowV05PositiveCrossModuleMethodCallReceiverBorrow(t *testing.T) {
 		"impl Counter for util.Printable {\n" +
 		"pub fn to_string() -> int { return this.count }\n" +
 		"}\n" +
-		"let c := Counter { count: 7 }\n" +
+		"c := Counter { count: 7 }\n" +
 		"print c.to_string()\n" +
 		"print c.count\n"
 	loadOk(t, fixture{
@@ -101,7 +101,7 @@ func TestBorrowV05PositiveCrossModuleMethodCallReceiverBorrow(t *testing.T) {
 func TestBorrowV05PositiveCrossModuleCallReturnsOwnedList(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub fn dup(xs: list[int]) -> list[int] { return [0] }\n",
-		"main": "import \"util\"\nlet xs := [1, 2, 3]\nlet ys := util.dup(xs)\nprint xs[0]\nprint ys[0]\n",
+		"main": "import \"util\"\nxs := [1, 2, 3]\nys := util.dup(xs)\nprint xs[0]\nprint ys[0]\n",
 	}, "main.zg")
 }
 
@@ -132,7 +132,7 @@ func TestBorrowV05PositiveCrossModuleImplMethodThisRead(t *testing.T) {
 		"impl Counter for util.Printable {\n" +
 		"pub fn show() -> int { return this.count }\n" +
 		"}\n" +
-		"let c := Counter { count: 4 }\n" +
+		"c := Counter { count: 4 }\n" +
 		"print c.show()\n"
 	loadOk(t, fixture{
 		"util": "pub spec Printable { fn show() -> int }\n",
@@ -150,7 +150,7 @@ func TestBorrowV05PositiveCrossModuleMatchDestructure(t *testing.T) {
 		"pub fn parse() -> Outcome { return Outcome.Ok(7) }\n"
 	mainSrc := "" +
 		"import \"util\"\n" +
-		"let r := util.parse()\n" +
+		"r := util.parse()\n" +
 		"match r {\n" +
 		"Outcome.Ok(v) => print v\n" +
 		"Outcome.Err(e) => print e\n" +
@@ -174,8 +174,8 @@ func TestBorrowV05PositiveCrossModuleMatchDestructure(t *testing.T) {
 func TestBorrowV05NegativeMoveThenUseCrossModuleSource(t *testing.T) {
 	src := "" +
 		"import \"util\"\n" +
-		"let xs := util.make()\n" +
-		"let ys := xs\n" +
+		"xs := util.make()\n" +
+		"ys := xs\n" +
 		"print xs[0]\n" +
 		"print ys[0]\n"
 	loadErr(t, fixture{
@@ -197,7 +197,7 @@ func TestBorrowV05PositiveCrossModuleSpecImplFieldReadOK(t *testing.T) {
 		"impl Counter for util.Showable {\n" +
 		"pub fn show() -> int { return this.count }\n" +
 		"}\n" +
-		"let c := Counter { count: 0 }\n" +
+		"c := Counter { count: 0 }\n" +
 		"print c.show()\n"
 	loadOk(t, fixture{
 		"util": utilSrc,
@@ -224,7 +224,7 @@ func TestBorrowV05NegativeMoveBorrowedThisInCrossModuleSpecImpl(t *testing.T) {
 		"impl Counter for util.Wrappable {\n" +
 		"pub fn wrap() -> int { return [this][0].count }\n" +
 		"}\n" +
-		"let c := Counter { count: 0 }\n" +
+		"c := Counter { count: 0 }\n" +
 		"print c.wrap()\n"
 	loadErr(t, fixture{
 		"util": utilSrc,
@@ -264,7 +264,7 @@ func TestBorrowV05PositiveCrossModuleCloneInsideForIter(t *testing.T) {
 	src := "" +
 		"import \"util\"\n" +
 		"for x in util.xs() {\n" +
-		"let copy := util.xs().clone()\n" +
+		"copy := util.xs().clone()\n" +
 		"print copy[0]\n" +
 		"print x\n" +
 		"}\n"

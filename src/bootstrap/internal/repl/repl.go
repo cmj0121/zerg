@@ -25,10 +25,10 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.10 — accepts the v0.10 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time, fmt)\n" +
+const banner = "Zerg REPL v0.11 — accepts the v0.11 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time, fmt; v0.11 retired the `let` keyword — use bare `x := expr` for immutable bindings)\n" +
 	"Type :exit to quit, :help for syntax\n"
 
-const helpText = "Statements: let/mut/const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print, spawn, defer, select. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Concurrency: chan[T], <-, close, for v in ch, anon fn, wait_group. Run :exit to quit.\n"
+const helpText = "Statements: bare-binding (`x := expr` / `x: T = expr`), mut, const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print, spawn, defer, select. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Concurrency: chan[T], <-, close, for v in ch, anon fn, wait_group. Run :exit to quit.\n"
 
 const (
 	primaryPrompt      = "zerg> "

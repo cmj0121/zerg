@@ -90,7 +90,7 @@ func TestMultiLineFnDecl(t *testing.T) {
 // declared in one prompt must survive into the next. If the REPL did not
 // thread state, `print x` would be an unknown name.
 func TestPersistentVariable(t *testing.T) {
-	input := "let x := 5\n" +
+	input := "x := 5\n" +
 		"print x\n"
 	got := runSession(t, input, true)
 	body := stripPrompts(stripBanner(got))
@@ -136,7 +136,7 @@ func TestParseErrorRecovery(t *testing.T) {
 // be promoted to committed history.
 func TestRuntimeErrorRecovery(t *testing.T) {
 	// `let x := 1 + "two"` is a type error caught by Check: int + str.
-	input := "let x := 1 + \"two\"\n" +
+	input := "x := 1 + \"two\"\n" +
 		"print 99\n"
 	got := runSession(t, input, true)
 	body := stripPrompts(stripBanner(got))
@@ -167,12 +167,12 @@ func TestHelpCommand(t *testing.T) {
 	}
 }
 
-// TestBannerText pins the v0.10 banner content so a future copy edit can't
+// TestBannerText pins the v0.11 banner content so a future copy edit can't
 // silently regress the user-facing string.
 func TestBannerText(t *testing.T) {
 	got := runSession(t, "", true)
-	if !strings.Contains(got, "v0.10") {
-		t.Fatalf("banner should mention v0.10; got %q", got)
+	if !strings.Contains(got, "v0.11") {
+		t.Fatalf("banner should mention v0.11; got %q", got)
 	}
 	if !strings.Contains(got, "stdlib") {
 		t.Fatalf("banner should mention stdlib; got %q", got)

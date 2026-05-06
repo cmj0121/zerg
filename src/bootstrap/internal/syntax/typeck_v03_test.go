@@ -21,7 +21,7 @@ func TestCheckIndexAssignOnMutListOK(t *testing.T) {
 // TestCheckIndexAssignOnLetListRejected flags the immutable-binding case with
 // a precise diagnostic that points the user at `mut`.
 func TestCheckIndexAssignOnLetListRejected(t *testing.T) {
-	checkErr(t, "xs := [1, 2, 3]\nxs[0] = 99\n", "use mut to allow element mutation")
+	checkErr(t, "xs := [1, 2, 3]\nxs[0] = 99\n", "declare with mut to allow element mutation")
 }
 
 // TestCheckIndexAssignTypeMismatch — RHS type must match the list element type.
@@ -37,15 +37,15 @@ func TestCheckIndexAssignNonListRejected(t *testing.T) {
 
 // TestCheckIdentAssignStillWorks is the regression guard — broadening the
 // AST shape must not break the v0.1 simple-assignment path. typeck still
-// validates the mut / let / type rules for `x = expr` exactly as before.
+// validates the mut / immutable / type rules for `x = expr` exactly as before.
 func TestCheckIdentAssignStillWorks(t *testing.T) {
 	checkSrc(t, "mut x := 1\nx = 2\n")
 }
 
 // TestCheckIdentAssignLetStillRejected confirms the v0.1 "cannot assign to
-// let-bound name" rule still fires after the AssignStmt restructure.
+// immutable-bound name" rule still fires after the AssignStmt restructure.
 func TestCheckIdentAssignLetStillRejected(t *testing.T) {
-	checkErr(t, "x := 1\nx = 2\n", "declared with let")
+	checkErr(t, "x := 1\nx = 2\n", "immutable binding")
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ func TestCheckUserRedefineCloneRejected(t *testing.T) {
 	checkErr(t, src, "cannot redefine built-in 'clone'")
 }
 
-// TestCheckInnerShadowingOfPushOK — inner-block `let push := ...` is fine
+// TestCheckInnerShadowingOfPushOK — inner-block `push := ...` is fine
 // because it shadows a name, not the fn-table entry. Mirrors the existing
 // inner-shadowing-of-len test.
 func TestCheckInnerShadowingOfPushOK(t *testing.T) {

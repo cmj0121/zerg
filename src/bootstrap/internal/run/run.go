@@ -1160,7 +1160,7 @@ func (in *interp) execDecl(name string, ref *syntax.TypeRef, value syntax.Expr) 
 	return in.declare(name, v)
 }
 
-// execTupleDestructure evaluates `let (a, b, ...) := expr` (and the mut
+// execTupleDestructure evaluates tuple-destructure binding `(a, b, ...) := expr` (and the mut
 // form). The RHS must yield a tuple value of matching arity — typeck has
 // already enforced this, so a mismatch here is an internal error rather
 // than user-facing. Each name is bound to a deep copy of the matching
@@ -2843,7 +2843,7 @@ func (in *interp) callSpecDefault(e *syntax.MethodCallExpr, sm *syntax.SpecMetho
 // fields of spec type recurse element-wise. Same shape on both sides → no-op.
 //
 // The wrap point matters because spec method dispatch reads ConcreteType off
-// the wrapper; without coercion at let / arg / return / list-elem / struct-
+// the wrapper; without coercion at binding / arg / return / list-elem / struct-
 // field sites, vtable lookup would fail.
 func (in *interp) coerceToType(v Value, target *syntax.Type) Value {
 	if target == nil || v.Type == nil {

@@ -49,7 +49,7 @@ func borrowErrSrc(t *testing.T, src, want string) string {
 // Positive — programs that must pass borrow check.
 // ---------------------------------------------------------------------------
 
-// TestBorrowMoveBasic — `let ys := xs` moves xs; reading ys is fine.
+// TestBorrowMoveBasic — `ys := xs` moves xs; reading ys is fine.
 func TestBorrowMoveBasic(t *testing.T) {
 	checkSrc(t, "xs := [1, 2]\nys := xs\nprint ys[0]\n")
 }
@@ -124,7 +124,7 @@ print ys[0]
 	checkSrc(t, src)
 }
 
-// TestBorrowTupleDestructure — `let (a, b) := pair` moves pair, binds
+// TestBorrowTupleDestructure — `(a, b) := pair` moves pair, binds
 // a and b as fresh owned locals (primitives in this case — no further
 // move tracking needed but the parse/typeck path must succeed).
 func TestBorrowTupleDestructure(t *testing.T) {
@@ -229,7 +229,7 @@ print b.xs[0]
 // Negative — programs that must reject.
 // ---------------------------------------------------------------------------
 
-// TestBorrowUseAfterMove — reading xs after `let ys := xs` errors with the
+// TestBorrowUseAfterMove — reading xs after `ys := xs` errors with the
 // precise "use of moved value" diagnostic naming the source binding.
 func TestBorrowUseAfterMove(t *testing.T) {
 	src := "xs := [1, 2]\nys := xs\nprint xs[0]\n"
@@ -239,7 +239,7 @@ func TestBorrowUseAfterMove(t *testing.T) {
 	}
 }
 
-// TestBorrowDoubleMove — `let ys := xs; let zs := xs` flags the second move.
+// TestBorrowDoubleMove — `ys := xs; zs := xs` flags the second move.
 func TestBorrowDoubleMove(t *testing.T) {
 	src := "xs := [1, 2]\nys := xs\nzs := xs\n"
 	borrowErrSrc(t, src, "use of moved value")
@@ -416,7 +416,7 @@ print 0
 	checkSrc(t, src)
 }
 
-// TestBorrowTupleDestructureMovesPair — `let (a, b) := pair; print pair` is
+// TestBorrowTupleDestructureMovesPair — `(a, b) := pair; print pair` is
 // rejected.
 func TestBorrowTupleDestructureMovesPair(t *testing.T) {
 	src := `pair := ([1], [2])
@@ -453,7 +453,7 @@ xs[0] = 99
 func TestBorrowMoveDiagnosticIncludesSourcePos(t *testing.T) {
 	src := "xs := [1, 2]\nys := xs\nprint xs[0]\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
-	// Move is on line 2 ("let ys := xs"); use on line 3.
+	// Move is on line 2 ("ys := xs"); use on line 3.
 	if !strings.Contains(msg, "moved at 2:") {
 		t.Errorf("error %q does not name move position 2:*", msg)
 	}

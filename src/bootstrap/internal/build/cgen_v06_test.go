@@ -19,7 +19,7 @@
 //     evaluates the RHS only on None.
 //   * `?.` chains: `obj?.field` returns Option of the field type; chained
 //     `?.` carries None forward.
-//   * `nil` in a `let x: int? = nil` lowers to None of the contextual
+//   * `nil` in a `x: int? = nil` lowers to None of the contextual
 //     Option type.
 //   * Print suppresses the `[T]` suffix in the variant name.
 //   * Codegen size guard: emitted C source ≤ 50× source bytes on a v0.6
@@ -333,7 +333,7 @@ print x
 // --- T → T? lift symmetry -------------------------------------------------
 
 func TestV06CgenSymmetricLiftAtLetInit(t *testing.T) {
-	// `let x: int? = 7` lifts 7 to Some(7) via typeck's synthetic EnumLit.
+	// `x: int? = 7` lifts 7 to Some(7) via typeck's synthetic EnumLit.
 	src := `x: int? = 7
 print x
 `

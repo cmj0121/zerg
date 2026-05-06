@@ -62,7 +62,7 @@ func TestParseChanConstructorBufferedExprCapacity(t *testing.T) {
 }
 
 func TestParseChanTypeInLetAnnotation(t *testing.T) {
-	// `let ch: chan[int] := ...` — chan as a type position. Routes through
+	// `ch: chan[int] = ...` — chan as a type position. Routes through
 	// parseTypeRef as a TypeRefNamed with TypeArgs (the same path that
 	// admits Box[int], Result[int, str]).
 	prog := parseProgramSrc(t, "ch: chan[int] = chan[int]()\n")

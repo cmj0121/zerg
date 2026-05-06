@@ -141,7 +141,7 @@ fn f() -> int { return 0 }
 // ---------------------------------------------------------------------------
 
 // firstExprStmt extracts the LetStmt's value expression for the common
-// "let x := <expr>" smoke pattern.
+// "x := <expr>" smoke pattern.
 func firstExprStmt(t *testing.T, prog *Program) Expr {
 	t.Helper()
 	if len(prog.Statements) == 0 {
@@ -784,7 +784,7 @@ _ => nop
 	}
 }
 
-// TypeRef compound shapes lex and parse for `let xs: list[int] = []`.
+// TypeRef compound shapes lex and parse for `xs: list[int] = []`.
 func TestParseListTypeRefAnnotation(t *testing.T) {
 	prog := parseProgramSrc(t, "xs: list[int] = []\n")
 	let := prog.Statements[0].(*LetStmt)
@@ -985,7 +985,7 @@ func TestParseForRangeInclusiveStillRange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// v0.2 Unit 3.5 — `let (a, b) := pair` (tuple destructure) parser surface.
+// v0.2 Unit 3.5 — `(a, b) := pair` (tuple destructure) parser surface.
 //
 // Parser populates LetStmt.Tuple (and MutStmt.Tuple) when the LHS is
 // parenthesised; Name stays empty in that case. Annotated destructure is
@@ -1046,7 +1046,7 @@ func TestParseLetTupleDestructureRejectsRepeatedName(t *testing.T) {
 }
 
 func TestParseLetTupleDestructureRejectsSingleName(t *testing.T) {
-	// `let (a) := …` would shadow the ParenExpr-grouping rule for
+	// `(a) := …` would shadow the ParenExpr-grouping rule for
 	// expressions; we keep destructure ≥ 2 names so the form is unambiguous.
 	expectParseErr(t, "(a) := 1\n", "at least 2 names")
 }
@@ -1058,7 +1058,7 @@ func TestParseLetTupleDestructureRejectsAnnotation(t *testing.T) {
 }
 
 func TestParseLetTupleDestructureRequiresWalrus(t *testing.T) {
-	// `let (a, b) = (1, 2)` (plain `=`) is rejected — destructure uses `:=`.
+	// `(a, b) = (1, 2)` (plain `=`) is rejected — destructure uses `:=`.
 	expectParseErr(t, "(a, b) = (1, 2)\n", "expected ':='")
 }
 

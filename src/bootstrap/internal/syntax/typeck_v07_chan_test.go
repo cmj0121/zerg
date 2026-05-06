@@ -95,7 +95,7 @@ func TestV07ChanConstructorStringCapacityRejects(t *testing.T) {
 		"chan capacity must be int")
 }
 
-// --- annotated let with chan -------------------------------------------
+// --- annotated binding with chan ---------------------------------------
 
 func TestV07ChanLetAnnotated(t *testing.T) {
 	prog := checkSrc(t, "ch: chan[int] = chan[int]()\n")
@@ -305,7 +305,7 @@ func TestV07ChanOfChan(t *testing.T) {
 }
 
 func TestV07RecvIntoOptionAnnotated(t *testing.T) {
-	// `let v: int? = <- ch` — the annotation hint is Option[int]; the recv
+	// `v: int? = <- ch` — the annotation hint is Option[int]; the recv
 	// expression already produces Option[int], so the assignment is direct.
 	checkSrc(t, "fn run(ch: chan[int]) { v: int? = <- ch }\n")
 }

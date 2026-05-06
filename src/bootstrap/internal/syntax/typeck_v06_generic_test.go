@@ -58,7 +58,7 @@ func TestV06GenericFnTwoInstancesShareDecl(t *testing.T) {
 
 func TestV06GenericFnReturnHintDrivesInference(t *testing.T) {
 	// The return-type hint feeds into the unifier so e.g.
-	// `let r: Result[int, str] = make_err("oops")` infers E = str.
+	// `r: Result[int, str] = make_err("oops")` infers E = str.
 	src := "fn make_err[T, E](e: E) -> Result[T, E] { return Result.Err(e) }\n" +
 		"r: Result[int, str] = make_err(\"oops\")\n"
 	checkSrc(t, src)
@@ -281,7 +281,7 @@ func TestV06OptionNoneWithoutHintRejects(t *testing.T) {
 }
 
 func TestV06ResultErrFromHint(t *testing.T) {
-	// `let r: Result[int, str] = Result.Err("oops")` — T comes from the
+	// `r: Result[int, str] = Result.Err("oops")` — T comes from the
 	// hint, E from the arg.
 	src := "r: Result[int, str] = Result.Err(\"oops\")\n"
 	prog := checkSrc(t, src)
@@ -314,7 +314,7 @@ func TestV06ResultErrWithoutHintRejects(t *testing.T) {
 // --- T → T? lift at boundaries --------------------------------------------
 
 func TestV06LiftLetAnnotated(t *testing.T) {
-	// `let x: int? = 42` ⇒ Some(42), pinned to Option[int].
+	// `x: int? = 42` ⇒ Some(42), pinned to Option[int].
 	src := "x: int? = 42\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
@@ -389,7 +389,7 @@ func TestV06LiftDoesNotDoubleWrap(t *testing.T) {
 }
 
 func TestV06NoLiftWithoutHint(t *testing.T) {
-	// `let x := 42` does NOT lift to Option[int] — no hint.
+	// `x := 42` does NOT lift to Option[int] — no hint.
 	src := "x := 42\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
@@ -565,7 +565,7 @@ func TestV06GenericFnTakesListOfT(t *testing.T) {
 
 func TestV06GenericFnHintDrivesElementType(t *testing.T) {
 	// fn make[T]() -> list[T]: the result list is list[T], so the
-	// surrounding `let xs: list[int] = make()` propagates int.
+	// surrounding `xs: list[int] = make()` propagates int.
 	src := "fn make[T]() -> list[T] { return [] }\n" +
 		"xs: list[int] = make()\n"
 	checkSrc(t, src)

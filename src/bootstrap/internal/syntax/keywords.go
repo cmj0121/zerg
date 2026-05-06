@@ -39,7 +39,7 @@ var keywords = map[string]Kind{
 	"enum":   KindEnum,
 	"match":  KindMatch,
 	// v0.4 polymorphism keywords. `this` is reserved everywhere: any
-	// `let this := ...` or `fn this()` rejects at parse time.
+	// `this := ...` or `fn this()` rejects at parse time.
 	"spec": KindSpec,
 	"impl": KindImpl,
 	"this": KindThis,
@@ -59,7 +59,7 @@ var keywords = map[string]Kind{
 	// v0.6 null-safety. `nil` is the absence-of-value literal in expression
 	// position; the lexer promotes the bare word so the parser can distinguish
 	// it from any user-defined identifier. The reserved-name rule extends
-	// transitively: a module imported as `nil`, a let bound to the name, etc.
+	// transitively: a module imported as `nil`, a binding to the name, etc.
 	// all reject at parse time via the same keywords-table cross-check used
 	// by every other keyword.
 	"nil": KindNil,
@@ -67,7 +67,7 @@ var keywords = map[string]Kind{
 	// task; `defer` registers code to run at fn-body exit in LIFO order. Both
 	// are reserved everywhere starting v0.7 Unit 1a — the reserved-name rule
 	// flows through the same keywords-table cross-check used by every other
-	// keyword, so `let spawn := ...`, `import "x" as defer`, etc. all reject
+	// keyword, so `spawn := ...`, `import "x" as defer`, etc. all reject
 	// at parse time.
 	"spawn":  KindSpawn,
 	"defer":  KindDefer,

@@ -366,12 +366,12 @@ type Block struct {
 	Statements []Stmt
 }
 
-// TupleBinding is the parenthesised LHS of a let/mut/const tuple destructure
-// declaration: `let (a, b) := pair` / `mut (x, y, z) := triple`. v0.2 admits
-// only flat name lists (≥ 2 names); annotated tuple destructure (`let (a, b):
-// tuple[int, int] = ...`) is deferred — the RHS drives inference. Each name
-// becomes a fresh binding in the surrounding scope; typeck rejects repeated
-// names at the point of declare().
+// TupleBinding is the parenthesised LHS of an immutable/mut/const tuple
+// destructure declaration: `(a, b) := pair` / `mut (x, y, z) := triple`. v0.2
+// admits only flat name lists (≥ 2 names); annotated tuple destructure
+// (`(a, b): tuple[int, int] = ...`) is deferred — the RHS drives inference.
+// Each name becomes a fresh binding in the surrounding scope; typeck rejects
+// repeated names at the point of declare().
 //
 // LetStmt/MutStmt/ConstStmt embed an optional *TupleBinding (Tuple). When
 // Tuple is non-nil, Name is empty and Type is nil — the parser enforces both.
@@ -383,10 +383,13 @@ type TupleBinding struct {
 	NamePos   []Position // 1:1 with Names; used for precise diagnostics
 }
 
-// LetStmt represents `let name [: T] = expr` / `let name := expr`. Type is
-// nil when the user wrote the walrus form and inference must do the work.
+// LetStmt represents the immutable-binding AST node: `name [: T] = expr` /
+// `name := expr`. Type is nil when the user wrote the walrus form and
+// inference must do the work. (The Go type name LetStmt is retained from the
+// pre-v0.11 era when the source carried a `let` keyword; v0.11 retired the
+// keyword from the parser surface but kept the AST node name unchanged.)
 //
-// v0.2 also admits the tuple-destructure form `let (a, b) := expr`. When the
+// v0.2 also admits the tuple-destructure form `(a, b) := expr`. When the
 // LHS is parenthesised the parser populates Tuple instead of Name; Type is
 // not allowed on the destructure form (typeck infers from the RHS).
 //

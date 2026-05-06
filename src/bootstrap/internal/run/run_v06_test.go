@@ -142,7 +142,7 @@ print xs
 }
 
 func TestRunV06NilThenCoalesce(t *testing.T) {
-	// At top level, nil binds to a let then ?? draws the fallback.
+	// At top level, nil binds to a binding then ?? draws the fallback.
 	src := `a: int? = nil
 b: int? = 7
 print a ?? -1

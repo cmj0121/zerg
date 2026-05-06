@@ -17,7 +17,7 @@ import (
 //
 //   (B) `this` inside method bodies. The borrow checker registers `this`
 //       as a BorrowedShared local with the impl receiver type. Reads are
-//       fine; `let y := this` and `return this` reject as move-of-borrowed.
+//       fine; `y := this` and `return this` reject as move-of-borrowed.
 //
 // Helpers (checkSrc, checkErr, borrowErrSrc) are shared with the v0.3
 // borrow_test.go and typeck_test.go files.
@@ -232,7 +232,7 @@ print c.pair().c.count
 }
 
 // Spec-typed binding constructed from a concrete-typed binding moves the
-// source. After `let p: Printable = c`, c is Moved; reading c.count rejects.
+// source. After `p: Printable = c`, c is Moved; reading c.count rejects.
 func TestBorrowSpecBindMovesSource(t *testing.T) {
 	src := `spec Printable { fn to_string() -> str }
 struct Counter { count: int }

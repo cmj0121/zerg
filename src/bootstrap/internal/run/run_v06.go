@@ -48,7 +48,7 @@ func displayEnumName(name string) string {
 
 // evalNilLit constructs an Option[T].None value of the contextually-inferred
 // Option type. Typeck has stamped NilLit.Type() with the Option[T] resolved at
-// the surrounding hint (let / return / fn-arg / list-elem / struct-field).
+// the surrounding hint (binding / return / fn-arg / list-elem / struct-field).
 func (in *interp) evalNilLit(e *syntax.NilLit) (Value, error) {
 	t := e.Type()
 	if !isOptionType(t) {

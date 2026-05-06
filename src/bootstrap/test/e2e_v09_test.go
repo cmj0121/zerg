@@ -224,7 +224,7 @@ func envForV09Manifest(tempDir string, m v09Manifest) []string {
 // path; cgen sees the binary path), so corpus programs MUST limit
 // themselves to argv[1:]. Catch obvious offenders so the parity rule is
 // noticed at corpus-add time, not at flake-debug time. The literal-form
-// check (`argv[0]`, `a[0]` after `let a := os.argv()`, etc.) is a heuristic
+// check (`argv[0]`, `a[0]` after `a := os.argv()`, etc.) is a heuristic
 // — if a future program needs to print the value at index zero for a
 // legitimate reason, this lint can be relaxed.
 func lintV09NoArgvZero(t *testing.T, programDir string) {

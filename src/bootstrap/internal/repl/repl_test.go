@@ -135,7 +135,7 @@ func TestParseErrorRecovery(t *testing.T) {
 // it) and follows up with a valid statement. The bad statement must NOT
 // be promoted to committed history.
 func TestRuntimeErrorRecovery(t *testing.T) {
-	// `let x := 1 + "two"` is a type error caught by Check: int + str.
+	// `x := 1 + "two"` is a type error caught by Check: int + str.
 	input := "x := 1 + \"two\"\n" +
 		"print 99\n"
 	got := runSession(t, input, true)

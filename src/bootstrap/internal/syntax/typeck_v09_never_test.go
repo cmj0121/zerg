@@ -7,7 +7,7 @@ import (
 
 // v0.9 Unit 1 — `never` bottom type typeck tests. Coverage:
 //
-//   - never recognised at type position (`-> never`, `let x: never`).
+//   - never recognised at type position (`-> never`, `x: never`).
 //   - bottom-type subtyping: a -> never call typechecks at any expected slot.
 //   - fn-decl `-> never` requires every code path to diverge.
 //   - reservation: user struct/enum/spec named `never` rejects.

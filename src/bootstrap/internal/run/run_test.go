@@ -103,7 +103,7 @@ func TestPrintBoolFalse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// let / mut / const bindings.
+// immutable / mut / const bindings.
 // ---------------------------------------------------------------------------
 
 func TestLetInferred(t *testing.T) {

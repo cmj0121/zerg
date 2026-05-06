@@ -877,19 +877,21 @@ const (
 	declConst
 )
 
-// parseDecl handles let/mut/const in three shapes:
+// parseDecl handles the keyword-led mut/const declarations in three shapes
+// (the immutable form is keyword-less since v0.11 and is parsed by
+// parseBareInferredBinding / parseBareTypedBinding):
 //
-//   - `let name := expr` / `mut name := expr` / `const name := expr`
-//   - `let name : T = expr` (annotated)
-//   - `let (a, b, ...) := expr` — v0.2 tuple-destructure declaration. The
+//   - `mut name := expr` / `const name := expr`
+//   - `mut name : T = expr` (annotated)
+//   - `mut (a, b, ...) := expr` — tuple-destructure declaration. The
 //     parenthesised LHS introduces ≥ 2 fresh names in the current scope; the
-//     RHS must be a tuple of matching arity (typeck enforces). v0.2 does not
-//     admit a type annotation on the destructure form — typeck infers from
+//     RHS must be a tuple of matching arity (typeck enforces). The
+//     destructure form admits no type annotation — typeck infers from
 //     the RHS shape.
 func (p *parser) parseDecl(kind declKind) (Stmt, error) {
-	keyword := p.advance() // consume let/mut/const
+	keyword := p.advance() // consume mut/const
 
-	// Tuple-destructure LHS: `let (a, b) := expr`.
+	// Tuple-destructure LHS: `mut (a, b) := expr`.
 	if p.peek().Kind == KindLParen {
 		return p.parseTupleDestructureDecl(kind, keyword.Pos)
 	}
@@ -937,15 +939,16 @@ func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 }
 
 // parseTupleDestructureDecl consumes the parenthesised LHS of a destructure
-// declaration plus its `:=` and RHS. The leading keyword (`let`/`mut`/
-// `const`) and its position have been consumed by the caller; the cursor is
-// at `(`.
+// declaration plus its `:=` and RHS. For declMut/declConst the leading
+// keyword (`mut`/`const`) and its position have already been consumed by the
+// caller; for declLet the bare-binding path passes the position of `(`
+// directly (since v0.11 there is no leading keyword). The cursor is at `(`.
 //
 // Grammar: `'(' IDENT (',' IDENT)+ ','? ')' ':=' expr`. PLAN-pinned: ≥ 2
-// names — `let (a) := …` is a parse error (ParenExpr-grouping is reserved
+// names — `(a) := …` is a parse error (ParenExpr-grouping is reserved
 // for expression position). Repeated names within the same LHS are a
 // parse-time error so typeck doesn't have to catch a contradictory binding
-// pair. v0.2 admits no type annotation on the destructure form — the parser
+// pair. The destructure form admits no type annotation — the parser
 // rejects `: T` between `)` and `:=` so we do not have to teach typeck about
 // annotated destructures.
 func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (Stmt, error) {
@@ -1028,7 +1031,7 @@ func kindLabel(k declKind) string {
 //   - "tuple" '[' type_ref (',' type_ref)+ ','? ']' → TypeRefTuple (≥ 2)
 //
 // `list` and `tuple` are not reserved keywords (they remain regular
-// identifiers so users can still bind names like `let list := ...`); they
+// identifiers so users can still bind names like `list := ...`); they
 // trigger compound parsing only when they appear in type-ref position
 // followed by `[`.
 //
@@ -3036,9 +3039,9 @@ func (p *parser) parseListLit() (Expr, error) {
 // looksLikeStructLitBody peeks past the `{` (without consuming) to decide
 // whether `Ident { ... }` is a struct literal or a brace block (i.e. the
 // caller's statement body). Rule: empty `{}` OR opens with `IDENT ':'`
-// where `:` is not `:=` (a walrus would mean the inside is a let-decl,
+// where `:` is not `:=` (a walrus would mean the inside is a binding,
 // which structurally cannot happen in expression position but happens
-// inside an `if x { let y := ... }` body).
+// inside an `if x { y := ... }` body).
 //
 // The function inspects raw token positions and never advances. We treat
 // NEWLINEs as transparent inside the brace because struct literals can

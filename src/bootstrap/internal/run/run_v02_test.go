@@ -103,7 +103,7 @@ func TestLenOfList(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestListBindIsValueCopy(t *testing.T) {
-	// v0.3: `let ys := xs` MOVES xs, so reading xs after the bind requires
+	// v0.3: `ys := xs` MOVES xs, so reading xs after the bind requires
 	// an explicit clone. The runtime still produces a fresh independent
 	// list, demonstrated by printing both — they match in value but live in
 	// different storage (the copy path is exercised by clone()).
@@ -149,7 +149,7 @@ print p
 
 func TestTupleMatchDestructure(t *testing.T) {
 	// Tuple destructure via match is the only destructure form parser /
-	// typeck support today — `let (a, b) := pair` requires a parser
+	// typeck support today — `(a, b) := pair` requires a parser
 	// extension that's not in scope for Unit 3.
 	src := `p := (3, 4)
 match p {
@@ -429,11 +429,11 @@ for s in xs {
 }
 
 // ---------------------------------------------------------------------------
-// v0.2 Unit 3.5 — `let (a, b) := pair` tuple destructure runtime.
+// v0.2 Unit 3.5 — `(a, b) := pair` tuple destructure runtime.
 //
 // Each name is bound to a deep copy of the matching element; the whole
-// declaration is otherwise an ordinary let/mut binding (assignable when
-// declared with mut, immutable when declared with let).
+// declaration is otherwise an ordinary immutable / mut binding (assignable
+// when declared with mut, immutable when declared with the bare form).
 // ---------------------------------------------------------------------------
 
 func TestRunLetTupleDestructureBasic(t *testing.T) {

@@ -199,7 +199,7 @@ const runtimeV07C = `#include <pthread.h>
 /* ---------------- fn-value -----------------------------------------------
    v0.7 anonymous-fn value. Carries a fn-pointer (cast at the call site to a
    per-signature function-pointer type) and a heap-allocated env pointer
-   holding the captured outer-scope bindings. Bind sites (let f := fn() {..})
+   holding the captured outer-scope bindings. Bind sites (f := fn() {..})
    build this struct; call sites cast .fn to the right signature and invoke. */
 typedef struct {
     void *fn;

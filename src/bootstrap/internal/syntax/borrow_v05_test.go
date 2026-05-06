@@ -166,7 +166,7 @@ func TestBorrowV05PositiveCrossModuleMatchDestructure(t *testing.T) {
 // diagnostic shape used in v0.3 / v0.4 single-module tests.
 // ---------------------------------------------------------------------------
 
-// V05-N1: Move-then-use across a module boundary. `let ys := xs` moves xs
+// V05-N1: Move-then-use across a module boundary. `ys := xs` moves xs
 // (the v0.3 whole-binding-rebind rule); using xs afterwards rejects with
 // "use of moved value". The list originated in a cross-module call; the
 // move site is local but the test pins that cross-module call results

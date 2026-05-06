@@ -9,14 +9,14 @@ import (
 //
 // Coverage:
 //   - Option / Result are visible as type names without an import.
-//   - `let x: Option[int] = ...` resolves; arity / name validation fires on
+//   - `x: Option[int] = ...` resolves; arity / name validation fires on
 //     malformed type-arg shapes.
-//   - `let x: int? = ...` resolves to the same canonical *Type as
-//     `let x: Option[int] = ...` (T? ≡ Option[T] at the canonical level).
+//   - `x: int? = ...` resolves to the same canonical *Type as
+//     `x: Option[int] = ...` (T? ≡ Option[T] at the canonical level).
 //   - User `enum Option { ... }`, `struct Option { ... }`, `spec Option`,
 //     and likewise for Result, reject with the reservation diagnostic.
-//   - `let x: int? = nil` succeeds (binding annotation supplies the
-//     expected type); `let x := nil` and `print nil` reject with the
+//   - `x: int? = nil` succeeds (binding annotation supplies the
+//     expected type); `x := nil` and `print nil` reject with the
 //     inference-failure diagnostic.
 
 // --- visibility tests -----------------------------------------------------

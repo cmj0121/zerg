@@ -44,7 +44,7 @@ func parseStdlibSrc(t *testing.T, src string) (*Program, error) {
 func TestLexBuiltinIsIdentBeforeV08(t *testing.T) {
 	// At v0.7 (and earlier) `__builtin` is just an identifier — the keyword
 	// is reserved at v0.8. Pin both the bare-word and a hypothetical
-	// `let __builtin := 1` shape so any future regression surfaces here.
+	// `__builtin := 1` shape so any future regression surfaces here.
 	tokens := lexAtMinor(t, "__builtin\n", 7)
 	if tokens[0].Kind != KindIdent || tokens[0].Value != "__builtin" {
 		t.Errorf("token 0 = %v %q, want IDENT '__builtin'", tokens[0].Kind, tokens[0].Value)

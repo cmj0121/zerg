@@ -158,7 +158,7 @@ func TestParseImplGenericReceiverParameterised(t *testing.T) {
 // --- type-args at use sites ----------------------------------------------
 
 func TestParseGenericTypeRefSingle(t *testing.T) {
-	// `let x: Box[int] = ...` — single type-arg, parsed by parseTypeRef.
+	// `x: Box[int] = ...` — single type-arg, parsed by parseTypeRef.
 	prog := parseProgramSrc(t, "fn make() -> Box[int] { return 0 }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	ret := fn.Return

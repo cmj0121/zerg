@@ -10,9 +10,9 @@ import (
 //
 //   - AnonFnExpr: type is TypeFn with resolved param/return; void return
 //     printed as `fn(...)`; non-void as `fn(...) -> R`.
-//   - Calling: IIFE `fn() { ... }()` typechecks; `let f := fn(...) ...; f()`
+//   - Calling: IIFE `fn() { ... }()` typechecks; `f := fn(...) ...; f()`
 //     typechecks; arity / arg-type mismatches reject.
-//   - Closure capture: outer let / const captured; capture recorded;
+//   - Closure capture: outer immutable / const captured; capture recorded;
 //     mut capture rejected.
 //   - SpawnStmt: named-fn call, IIFE, qualified call type-check; rejects
 //     non-call-expr (parser already handles, but typeck runs the call).
@@ -94,7 +94,7 @@ func TestV07AnonFnIIFEVoid(t *testing.T) {
 }
 
 func TestV07AnonFnIIFEReturning(t *testing.T) {
-	// Expression-position IIFE: `let x := fn() -> int { return 1 }()`.
+	// Expression-position IIFE: `x := fn() -> int { return 1 }()`.
 	prog := checkSrc(t, "x := fn() -> int { return 7 }()\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Value.Type() != tInt {

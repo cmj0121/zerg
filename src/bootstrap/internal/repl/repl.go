@@ -94,7 +94,7 @@ func Start(in io.Reader, out io.Writer) error {
 
 		// Append the line and try to parse the combined committed + accum
 		// program. Trailing newline ensures statement termination on lines
-		// like `let x := 5` that are otherwise complete.
+		// like `x := 5` that are otherwise complete.
 		accumBuf.WriteString(line)
 		accumBuf.WriteByte('\n')
 

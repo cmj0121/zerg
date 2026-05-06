@@ -1235,7 +1235,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		// bare reference to a declared type-parameter resolves to its
 		// concrete *Type. Substitution short-circuits before the cross-
 		// module / generic-decl paths so it captures bare T uses inside
-		// method bodies (`let x: T = ...`).
+		// method bodies (`x: T = ...`).
 		if c.activeSubst != nil && ref.Module == "" && len(ref.TypeArgs) == 0 {
 			if t, ok := c.activeSubst[ref.Name]; ok {
 				if ref.Nullable {
@@ -1603,12 +1603,12 @@ func isPrintable(t *Type) bool {
 // checkDecl handles let/mut/const. The annotated type, when present, drives
 // inference for empty-list literals.
 func (c *checker) checkDecl(pos Position, name string, ref *TypeRef, value Expr, kind bindKind) error {
-	// v0.5: a let / mut / const cannot shadow an imported module
-	// binding. The reverse direction (module shadows local) is impossible
-	// because lets are scoped below module bindings.
+	// v0.5: an immutable / mut / const binding cannot shadow an imported
+	// module binding. The reverse direction (module shadows local) is
+	// impossible because locals are scoped below module bindings.
 	if c.crossMod != nil {
 		if _, ok := c.crossMod.imports[name]; ok && c.scope.parent == nil {
-			// Top-level scope: the let lives at module scope and would
+			// Top-level scope: the binding lives at module scope and would
 			// override the import binding for every reference below.
 			// Reject with a focused diagnostic.
 			return typeErr(pos, "name %q shadows imported module binding", name)
@@ -1646,7 +1646,7 @@ func (c *checker) checkDeclSlot(pos Position, name string, ref *TypeRef, slot *E
 
 // checkDeclWithSlot is the slot-aware decl helper: when slot != nil and the
 // hint triggers a T → T? lift, the wrapped EnumLit is installed via slot.
-// Used by the let / mut / const checker paths.
+// Used by the immutable / mut / const checker paths.
 func (c *checker) checkDeclWithSlot(pos Position, name string, annotated *Type, value Expr, kind bindKind, slot *Expr) error {
 	newExpr, observed, err := c.checkExprLift(value, annotated)
 	if err != nil {
@@ -1744,13 +1744,13 @@ func (c *checker) assignableTo(from, to *Type) bool {
 	return false
 }
 
-// checkTupleDestructure handles `let (a, b) := expr` (and the mut form). The
+// checkTupleDestructure handles tuple-destructure binding `(a, b) := expr` (and the mut form). The
 // RHS must be a tuple type with arity matching the LHS name list; each name
 // is then bound in the surrounding scope with its element type. The parser
 // has already rejected repeated names; the only diagnostics generated here
 // are for arity / shape mismatch and shadowing-in-the-same-scope.
 //
-// Annotated destructure (`let (a, b): tuple[int, int] = ...`) is rejected by
+// Annotated destructure (`(a, b): tuple[int, int] = ...`) is rejected by
 // the parser so we never see a non-nil TypeRef here.
 func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Expr, kind bindKind) error {
 	observed, err := c.checkExpr(value)
@@ -1813,7 +1813,7 @@ func (c *checker) checkAssignIndex(s *AssignStmt, lhs *IndexExpr) error {
 	}
 	switch b.kind {
 	case bindLet:
-		return typeErr(s.Pos, "cannot assign to %q[i] (declared with let — use mut to allow element mutation)", id.Name)
+		return typeErr(s.Pos, "cannot assign to %q[i] (immutable binding — declare with mut to allow element mutation)", id.Name)
 	case bindConst:
 		return typeErr(s.Pos, "cannot assign to %q[i] (declared with const)", id.Name)
 	}
@@ -1851,7 +1851,7 @@ func (c *checker) checkAssignIdent(s *AssignStmt, target *IdentExpr) error {
 	}
 	switch b.kind {
 	case bindLet:
-		return typeErr(s.Pos, "cannot assign to %q (declared with let)", target.Name)
+		return typeErr(s.Pos, "cannot assign to %q (immutable binding — declare with mut to allow rebinding)", target.Name)
 	case bindConst:
 		return typeErr(s.Pos, "cannot assign to %q (declared with const)", target.Name)
 	}
@@ -2436,7 +2436,7 @@ func isOptionInstance(t *Type) bool {
 // checkListLit handles `[e1, e2, ...]` and the empty-list special case. With
 // elements present, every element type must equal the first; the result is
 // list[T]. With zero elements, the literal latches onto a list-shaped hint
-// (annotated let / call argument / function return); otherwise it errors out.
+// (annotated binding / call argument / function return); otherwise it errors out.
 func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 	if len(e.Elements) == 0 {
 		// Empty list: needs context.
@@ -2452,8 +2452,8 @@ func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 		return nil, typeErr(e.Pos, "cannot infer element type of empty list literal")
 	}
 	// Use the hint's element type as a hint for each element so an annotated
-	// `let xs: list[list[int]] = [[]]` can fill in the inner empty list. The
-	// v0.6 lift fires here too: `let xs: list[int?] = [1, 2]` wraps each int
+	// `xs: list[list[int]] = [[]]` can fill in the inner empty list. The
+	// v0.6 lift fires here too: `xs: list[int?] = [1, 2]` wraps each int
 	// in a Some(...) at the per-element slot.
 	var elemHint *Type
 	if hint != nil && hint.Kind == TypeList {
@@ -2539,7 +2539,7 @@ func (c *checker) checkTupleLit(e *TupleLit, hint *Type) (*Type, error) {
 // import binding table; the foreign struct must be `pub`.
 //
 // v0.6 Unit 3: when the named type is generic and a hint supplies the
-// instance (`let b: Box[int] = Box { value: 7 }`), we use the hint's
+// instance (`b: Box[int] = Box { value: 7 }`), we use the hint's
 // substituted struct *Type directly. Without a hint a bare-name reference
 // to a generic struct is rejected.
 func (c *checker) checkStructLit(e *StructLit, hint *Type) (*Type, error) {
@@ -3388,7 +3388,7 @@ func (c *checker) checkCall(e *CallExpr) (*Type, error) {
 
 // checkCallHint is the v0.6 hint-aware variant: the optional hint feeds
 // the bidirectional unifier at a generic-fn call site so e.g.
-// `let r: Result[int, str] = make_err()` infers the type-args from the
+// `r: Result[int, str] = make_err()` infers the type-args from the
 // surrounding annotation. Non-generic calls ignore the hint.
 func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 	// v0.7 Unit 3: anon-fn IIFE — `fn() { ... }()` calls the anon-fn
@@ -3501,7 +3501,7 @@ func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 // PLAN-pinned: `push` mutates `xs` in place — list mutation through fn
 // parameters or nested struct/list shapes is OUT of scope at v0.3. The
 // "must be a mut-bound list variable" check enforces both: pass-by-fn rejects
-// because fn params are bindLet (and inner-block let push := ... is fine
+// because fn params are bindLet (and inner-block push := ... is fine
 // because that name shadows the builtin only at expression resolution).
 func (c *checker) checkPushCall(e *CallExpr, ident *IdentExpr) (*Type, error) {
 	if len(e.Args) != 2 {

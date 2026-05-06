@@ -979,7 +979,7 @@ type cgen struct {
 	specImplKeys      []implKey                    // declaration order
 	receiverTypes     map[string]*syntax.Type      // type name → resolved type (for impl receivers)
 
-	// Spec types referenced anywhere in the program (let : Spec, list[Spec],
+	// Spec types referenced anywhere in the program (binding : Spec, list[Spec],
 	// fn arg/return of Spec, etc.). Order is declaration order; emitForwardDecls
 	// uses it to emit the fat-pointer typedef + vtable struct definitions.
 	specsUsed map[string]bool
@@ -2202,7 +2202,7 @@ func (g *cgen) emitPrint(s *syntax.PrintStmt) error {
 // underlying buffer/struct is safe. clone() is the explicit opt-in for
 // the v0.2-style deep copy.
 func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isConst bool) error {
-	// v0.9 Phase 4 Fix 1: a `-> never` RHS (e.g. `let x: int = os.exit(0)`)
+	// v0.9 Phase 4 Fix 1: a `-> never` RHS (e.g. `x: int = os.exit(0)`)
 	// typechecks via the bottom-type subtyping rule but the underlying C
 	// trampoline returns void. Emit the call as a statement and emit a
 	// zero-initialised stub binding so any subsequent references to the
@@ -2256,7 +2256,7 @@ func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isC
 	return nil
 }
 
-// emitTupleDestructure lowers `let (a, b) := expr` into N variable decls
+// emitTupleDestructure lowers tuple-destructure binding `(a, b) := expr` into N variable decls
 // reading from a fresh temp tuple. At v0.3 the elements are NOT deep-copied
 // — the borrow checker invalidated the source pair at the destructure
 // site so each name shares the underlying element value safely.
@@ -4141,7 +4141,7 @@ func (g *cgen) collectSpecsInType(t *syntax.Type) {
 
 // emitSpecForwardDecls writes the fat-pointer typedef and vtable struct
 // for every spec used by the program (declared by `spec ...`, referenced by
-// `let x: Spec = ...`, exposed by an `impl Type for Spec`, etc.). Method
+// `x: Spec = ...`, exposed by an `impl Type for Spec`, etc.). Method
 // signatures inside the vtable struct take `void* this` so the vtable type
 // is spec-uniform regardless of which Type provides the implementation.
 func (g *cgen) emitSpecForwardDecls() {

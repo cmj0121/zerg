@@ -15,7 +15,7 @@ package syntax
 // is type-driven (the arg must be chan-typed) rather than name-driven.
 
 // isReservedV07BuiltinName reports whether name collides with a v0.7 built-in
-// that may not be redeclared at any binding site (let / mut / const /
+// that may not be redeclared at any binding site (immutable / mut / const /
 // fn / struct / enum / spec / impl-method param). v0.7 reserves `chan` as a
 // type-position keyword; future builtins append.
 func isReservedV07BuiltinName(name string) bool {
@@ -48,7 +48,7 @@ func (c *checker) chanInstance(elem *Type) *Type {
 }
 
 // resolveChanTypeRef handles a `TypeRef{Name: "chan", TypeArgs: [...]}` shape
-// in type position (e.g. `let ch: chan[int] = ...`, `fn run(ch: chan[int])`).
+// in type position (e.g. `ch: chan[int] = ...`, `fn run(ch: chan[int])`).
 // Validates arity (exactly one type-arg) and rejects void elements with the
 // same diagnostic shape as list / tuple. Caller (resolveTypeRef) routes here
 // when ref.Name == "chan" and len(ref.TypeArgs) > 0; a bare `chan` with no
@@ -166,7 +166,7 @@ func (c *checker) checkRecv(e *RecvExpr) (*Type, error) {
 // lookup so unknown-fn errors don't fire.
 //
 // The reservation diagnostic at name-binding sites prevents users from ever
-// shadowing `close` with a local fn / let / mut / const / param, so this
+// shadowing `close` with a local fn / immutable / mut / const / param, so this
 // helper's "shadow" check is defensive — once the reservation fires, the
 // only path that can reach checkCallHint with callee name "close" is the
 // genuine built-in.

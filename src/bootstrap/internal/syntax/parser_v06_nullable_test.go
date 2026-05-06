@@ -356,10 +356,9 @@ func TestParseV06NullSafetyExampleBody(t *testing.T) {
 	// Result/Ok/Err names which are user-visible identifiers; the parser
 	// admits them as bare identifiers / call-shapes and typeck/Unit 2
 	// later resolves them to the synthetic Option/Result decls).
-	// The example file uses bare `x := ...` shorthand inside the fn body
-	// which Zerg's grammar requires to be spelled `let x := ...`. The
-	// example is documentation prose; the parser test exercises the
-	// canonicalised form so the v0.6 surface itself (Result[int, str], `?`
+	// The example file uses bare `x := ...` inside the fn body — that is
+	// the canonical immutable-binding shape v0.11 admits. The parser test
+	// exercises that form so the v0.6 surface itself (Result[int, str], `?`
 	// propagation, `int?` annotation, `nil`) is what we verify.
 	src := `fn divide(a: int, b: int) -> Result[int, str] {
 	return Err("Division by zero") if b == 0

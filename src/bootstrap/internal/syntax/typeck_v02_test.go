@@ -659,7 +659,7 @@ func TestCheckForListIterRejectsTuple(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// v0.2 Unit 3.5 — `let (a, b) := pair` tuple destructure.
+// v0.2 Unit 3.5 — `(a, b) := pair` tuple destructure.
 //
 // Each name binds at the corresponding tuple element type; arity must match
 // exactly; non-tuple RHS is rejected; repeated names are caught at parse

@@ -348,8 +348,8 @@ func newBundleMono() *bundleMono {
 //   - top-level decl shadowing the binding name (`import "a"; struct a {...}`)
 //   - reserved-name collision is handled at parse time (Unit 1b)
 //
-// Local-let-shadowing (`import "u"; let u := 1`) is checked at the let site
-// during the body walk because lets aren't in scope yet at this phase.
+// Local-binding shadowing (`import "u"; u := 1`) is checked at the binding
+// site during the body walk because locals aren't in scope yet at this phase.
 func (c *checker) bindModuleImports(self ModuleView) error {
 	if c.crossMod == nil {
 		c.crossMod = &crossModCtx{self: self}

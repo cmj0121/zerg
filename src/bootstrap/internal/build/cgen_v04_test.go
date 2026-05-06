@@ -18,7 +18,7 @@ import (
 //   * Spec fat-pointer typedef + vtable struct typedef.
 //   * Method call on a concrete receiver: direct C fn call.
 //   * Method call on a spec-typed receiver: vtable indirection.
-//   * Spec coercion at let / list-elem / fn-arg sites.
+//   * Spec coercion at binding / list-elem / fn-arg sites.
 //   * Enum tag+union layout, EnumLit construction, match destructure with
 //     bind / lit / wildcard payload.
 //   * Composite == per-shape helpers: list, tuple, struct, enum bare,
@@ -235,7 +235,7 @@ print c.to_string()
 // Spec-typed receiver dispatch + spec coercion.
 // ---------------------------------------------------------------------------
 
-// TestCgenSpecTypedReceiverDispatchEmits — `let p: Printable = c` lowers
+// TestCgenSpecTypedReceiverDispatchEmits — `p: Printable = c` lowers
 // to a fat-pointer literal; `p.to_string()` lowers to a vtable indirection.
 func TestCgenSpecTypedReceiverDispatchEmits(t *testing.T) {
 	src := `spec Printable { fn to_string() -> str }

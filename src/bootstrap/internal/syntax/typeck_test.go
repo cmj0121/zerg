@@ -170,7 +170,7 @@ func TestCheckUnknownTypeName(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Mut / let / const assignment legality.
+// Mut / immutable / const assignment legality.
 // ---------------------------------------------------------------------------
 
 func TestCheckMutAssignAllowed(t *testing.T) {
@@ -178,7 +178,7 @@ func TestCheckMutAssignAllowed(t *testing.T) {
 }
 
 func TestCheckLetAssignRejected(t *testing.T) {
-	checkErr(t, "x := 1\nx = 2\n", "declared with let")
+	checkErr(t, "x := 1\nx = 2\n", "immutable binding")
 }
 
 func TestCheckConstAssignRejected(t *testing.T) {

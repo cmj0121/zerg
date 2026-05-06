@@ -4,7 +4,7 @@ import "std/strings"
 import "std/math"
 import "std/os"
 
-let parts := strings.split("4,2,8,1", ",")
+parts := strings.split("4,2,8,1", ",")
 mut max_val := 0
 for p in parts {
     match strings.parse_int(p) {

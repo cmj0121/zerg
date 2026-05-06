@@ -1,9 +1,9 @@
 struct Counter { count: int, label: str }
 
-let a := Counter { count: 5, label: "a" }
-let b := Counter { count: 5, label: "a" }
-let c := Counter { count: 6, label: "a" }
-let d := Counter { count: 5, label: "z" }
+a := Counter { count: 5, label: "a" }
+b := Counter { count: 5, label: "a" }
+c := Counter { count: 6, label: "a" }
+d := Counter { count: 5, label: "z" }
 
 if a == b {
     print "ab eq"

@@ -21,9 +21,9 @@ impl Light for Printable {
     }
 }
 
-let c := Counter { count: 7 }
-let l := Light.Green
-let things: list[Printable] = [c, l]
+c := Counter { count: 7 }
+l := Light.Green
+things: list[Printable] = [c, l]
 for t in things {
     print t.to_string()
 }

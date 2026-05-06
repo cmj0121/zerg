@@ -190,7 +190,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.11 (current is v0.10)"
+		want := "requires v0.12 (current is v0.11)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}
@@ -216,7 +216,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.11 (current is v0.10)"
+		want := "requires v0.12 (current is v0.11)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}

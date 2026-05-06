@@ -19,7 +19,7 @@ import (
 // --- anon-fn expression ---------------------------------------------------
 
 func TestParseAnonFnInLet(t *testing.T) {
-	prog := parseProgramSrc(t, "let f := fn() { print 1 }\n")
+	prog := parseProgramSrc(t, "f := fn() { print 1 }\n")
 	s := expectOne[*LetStmt](t, prog)
 	fn, ok := s.Value.(*AnonFnExpr)
 	if !ok {
@@ -40,7 +40,7 @@ func TestParseAnonFnInLet(t *testing.T) {
 }
 
 func TestParseAnonFnWithParamsAndReturn(t *testing.T) {
-	prog := parseProgramSrc(t, "let g := fn(x: int) -> int { return x * 2 }\n")
+	prog := parseProgramSrc(t, "g := fn(x: int) -> int { return x * 2 }\n")
 	s := expectOne[*LetStmt](t, prog)
 	fn, ok := s.Value.(*AnonFnExpr)
 	if !ok {
@@ -55,7 +55,7 @@ func TestParseAnonFnWithParamsAndReturn(t *testing.T) {
 }
 
 func TestParseAnonFnMultiParam(t *testing.T) {
-	prog := parseProgramSrc(t, "let h := fn(a: int, b: int) -> int { return a + b }\n")
+	prog := parseProgramSrc(t, "h := fn(a: int, b: int) -> int { return a + b }\n")
 	s := expectOne[*LetStmt](t, prog)
 	fn := s.Value.(*AnonFnExpr)
 	if len(fn.Params) != 2 {
@@ -105,7 +105,7 @@ func TestParseAnonFnRejectPubInParamType(t *testing.T) {
 	// "expected type name, got 'pub'" via parseTypeRef. The anon-fn path
 	// inherits the same diagnostic — no special-case needed.
 	expectParseErr(t,
-		"let f := fn(x: pub int) { print 1 }\n",
+		"f := fn(x: pub int) { print 1 }\n",
 		"expected type name, got 'pub'",
 	)
 }
@@ -114,7 +114,7 @@ func TestParseAnonFnRejectPubBeforeParamName(t *testing.T) {
 	// Mirrors fn-decl: `pub` before the param name rejects via the same
 	// expect(KindIdent) path that fn-decl uses.
 	expectParseErr(t,
-		"let f := fn(pub x: int) { print 1 }\n",
+		"f := fn(pub x: int) { print 1 }\n",
 		"expected identifier",
 	)
 }
@@ -123,7 +123,7 @@ func TestParseFnInExprNeedsParen(t *testing.T) {
 	// `fn` in expression position not followed by `(` is meaningless: it is
 	// neither a fn-decl (no IDENT) nor a valid anon-fn (no params block).
 	expectParseErr(t,
-		"let f := fn { print 1 }\n",
+		"f := fn { print 1 }\n",
 		"'fn' in expression position must be followed by '('",
 	)
 }
@@ -289,7 +289,7 @@ func TestParseDeferAtREPL(t *testing.T) {
 func TestParseDeferInsideAnonFnBody(t *testing.T) {
 	// Anon-fn introduces a fresh fn-body scope; defer at the immediate body
 	// level of an anon-fn is admitted.
-	prog := parseProgramSrc(t, "fn outer() { let f := fn() { defer cleanup() } }\n")
+	prog := parseProgramSrc(t, "fn outer() { f := fn() { defer cleanup() } }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let, ok := fn.Body.Statements[0].(*LetStmt)
 	if !ok {

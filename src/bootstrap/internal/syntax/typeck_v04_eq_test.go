@@ -15,16 +15,16 @@ import "testing"
 // ---------------------------------------------------------------------------
 
 func TestCheckEqListPrimitive(t *testing.T) {
-	src := `let xs := [1, 2]
-let ys := [1, 2]
+	src := `xs := [1, 2]
+ys := [1, 2]
 print xs == ys
 `
 	checkSrc(t, src)
 }
 
 func TestCheckEqTuplePrimitive(t *testing.T) {
-	src := `let a := (1, "x")
-let b := (1, "x")
+	src := `a := (1, "x")
+b := (1, "x")
 print a == b
 `
 	checkSrc(t, src)
@@ -32,8 +32,8 @@ print a == b
 
 func TestCheckEqStruct(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 1, y: 2 }
-let q := Point { x: 1, y: 2 }
+p := Point { x: 1, y: 2 }
+q := Point { x: 1, y: 2 }
 print p == q
 `
 	checkSrc(t, src)
@@ -41,8 +41,8 @@ print p == q
 
 func TestCheckEqEnumBareVariant(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let c := Color.Red
-let d := Color.Red
+c := Color.Red
+d := Color.Red
 print c == d
 `
 	checkSrc(t, src)
@@ -50,8 +50,8 @@ print c == d
 
 func TestCheckEqEnumPayload(t *testing.T) {
 	src := `enum Token { Eof, Ident(str) }
-let t1 := Token.Ident("a")
-let t2 := Token.Ident("a")
+t1 := Token.Ident("a")
+t2 := Token.Ident("a")
 print t1 == t2
 `
 	checkSrc(t, src)
@@ -64,8 +64,8 @@ func TestCheckNeListPrimitive(t *testing.T) {
 }
 
 func TestCheckEqNestedList(t *testing.T) {
-	src := `let xs := [[1, 2], [3, 4]]
-let ys := [[1, 2], [3, 4]]
+	src := `xs := [[1, 2], [3, 4]]
+ys := [[1, 2], [3, 4]]
 print xs == ys
 `
 	checkSrc(t, src)
@@ -73,8 +73,8 @@ print xs == ys
 
 func TestCheckEqListOfStruct(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let ps := [Point { x: 1, y: 2 }]
-let qs := [Point { x: 1, y: 2 }]
+ps := [Point { x: 1, y: 2 }]
+qs := [Point { x: 1, y: 2 }]
 print ps == qs
 `
 	checkSrc(t, src)
@@ -83,8 +83,8 @@ print ps == qs
 func TestCheckEqEnumPayloadWithList(t *testing.T) {
 	// Enum with list-typed payload still admits == because list[int] does.
 	src := `enum Bag { Empty, Many(list[int]) }
-let a := Bag.Many([1, 2])
-let b := Bag.Many([1, 2])
+a := Bag.Many([1, 2])
+b := Bag.Many([1, 2])
 print a == b
 `
 	checkSrc(t, src)
@@ -92,8 +92,8 @@ print a == b
 
 func TestCheckEqTupleNestedStruct(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let a := (Point { x: 1, y: 2 }, "ok")
-let b := (Point { x: 1, y: 2 }, "ok")
+a := (Point { x: 1, y: 2 }, "ok")
+b := (Point { x: 1, y: 2 }, "ok")
 print a == b
 `
 	checkSrc(t, src)
@@ -106,8 +106,8 @@ print a == b
 func TestCheckEqListElementTypeMismatch(t *testing.T) {
 	// Mismatched element types between the two list literals. The literals
 	// each infer fine; the comparison rejects because list[int] != list[str].
-	src := `let xs := [1, 2]
-let ys := ["a"]
+	src := `xs := [1, 2]
+ys := ["a"]
 print xs == ys
 `
 	checkErr(t, src, "operator == requires operands of the same type")
@@ -116,8 +116,8 @@ print xs == ys
 func TestCheckEqStructDifferentNominalRejected(t *testing.T) {
 	src := `struct Point { x: int, y: int }
 enum Color { Red, Blue }
-let p := Point { x: 1, y: 2 }
-let c := Color.Red
+p := Point { x: 1, y: 2 }
+c := Color.Red
 print p == c
 `
 	checkErr(t, src, "operator == requires operands of the same type")
@@ -125,8 +125,8 @@ print p == c
 
 func TestCheckEqListVsStructRejected(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let xs := [1, 2]
-let p := Point { x: 1, y: 2 }
+xs := [1, 2]
+p := Point { x: 1, y: 2 }
 print xs == p
 `
 	checkErr(t, src, "operator == requires operands of the same type")
@@ -136,8 +136,8 @@ func TestCheckEqSpecTypedRejected(t *testing.T) {
 	src := `spec Printable { fn show() -> int }
 struct Counter { count: int }
 impl Counter for Printable { fn show() -> int { return this.count } }
-let p: Printable = Counter { count: 1 }
-let q: Printable = Counter { count: 2 }
+p: Printable = Counter { count: 1 }
+q: Printable = Counter { count: 2 }
 print p == q
 `
 	checkErr(t, src, `cannot compare values of spec type "Printable" — defer to v0.6`)
@@ -148,8 +148,8 @@ func TestCheckNeSpecTypedRejected(t *testing.T) {
 	src := `spec Printable { fn show() -> int }
 struct Counter { count: int }
 impl Counter for Printable { fn show() -> int { return this.count } }
-let p: Printable = Counter { count: 1 }
-let q: Printable = Counter { count: 2 }
+p: Printable = Counter { count: 1 }
+q: Printable = Counter { count: 2 }
 print p != q
 `
 	checkErr(t, src, `cannot compare values of spec type "Printable" — defer to v0.6`)
@@ -158,8 +158,8 @@ print p != q
 func TestCheckEqTwoStructsDifferentNamesRejected(t *testing.T) {
 	src := `struct A { x: int }
 struct B { x: int }
-let a := A { x: 1 }
-let b := B { x: 1 }
+a := A { x: 1 }
+b := B { x: 1 }
 print a == b
 `
 	checkErr(t, src, "operator == requires operands of the same type")

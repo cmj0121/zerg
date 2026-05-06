@@ -38,7 +38,7 @@ func runV09ArgvExitMain(t *testing.T, mainSrc string, opts Options) (string, int
 func TestV09InterpOsArgvReturnsSlice(t *testing.T) {
 	out, code, exited, err := runV09ArgvExitMain(t, `# requires: v0.9
 import "std/os"
-let a := os.argv()
+a := os.argv()
 print len(a)
 print a[0]
 print a[1]

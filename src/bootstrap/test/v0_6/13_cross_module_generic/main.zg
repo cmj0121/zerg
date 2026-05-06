@@ -2,8 +2,8 @@
 
 import "util"
 
-let a: int? = 7
-let b: int? = nil
+a: int? = 7
+b: int? = nil
 print util.id(42)
 print util.id("ping")
 print a ?? 0

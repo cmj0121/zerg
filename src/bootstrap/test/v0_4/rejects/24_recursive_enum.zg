@@ -3,5 +3,5 @@ enum Tree {
     Node(Tree, Tree)
 }
 
-let t := Tree.Leaf
+t := Tree.Leaf
 print t

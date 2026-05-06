@@ -1,8 +1,8 @@
 # requires: v0.7
 
 fn main() {
-    let ch := chan[int](1)
-    let wg := wait_group()
+    ch := chan[int](1)
+    wg := wait_group()
     wg.add(2)
     spawn fn() {
         ch <- 11
@@ -12,8 +12,8 @@ fn main() {
         ch <- 22
         wg.done()
     }()
-    let a := <- ch
-    let b := <- ch
+    a := <- ch
+    b := <- ch
     wg.wait()
     match a {
         Option.Some(v) => print v

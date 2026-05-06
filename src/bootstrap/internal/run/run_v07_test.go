@@ -16,16 +16,16 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestRunV07ChanUnbufferedSendRecv(t *testing.T) {
-	src := `let ch := chan[int]()
+	src := `ch := chan[int]()
 spawn fn() { ch <- 5 }()
-let v := <- ch
+v := <- ch
 print v
 `
 	expectOK(t, src, "Option.Some(5)\n")
 }
 
 func TestRunV07ChanBufferedSendDrain(t *testing.T) {
-	src := `let ch := chan[int](3)
+	src := `ch := chan[int](3)
 ch <- 1
 ch <- 2
 ch <- 3
@@ -38,11 +38,11 @@ for v in ch {
 }
 
 func TestRunV07ChanRecvAfterCloseYieldsNone(t *testing.T) {
-	src := `let ch := chan[int](1)
+	src := `ch := chan[int](1)
 ch <- 7
 close(ch)
-let a := <- ch
-let b := <- ch
+a := <- ch
+b := <- ch
 print a
 print b
 `
@@ -50,7 +50,7 @@ print b
 }
 
 func TestRunV07ChanForInDrainsBufferedThenStops(t *testing.T) {
-	src := `let ch := chan[str](2)
+	src := `ch := chan[str](2)
 ch <- "a"
 ch <- "b"
 close(ch)
@@ -70,19 +70,19 @@ func TestRunV07SpawnAnonFnIIFEPrints(t *testing.T) {
 	// The host blocks on spawnWg before returning, so the IIFE's print
 	// arrives before main's print. Single-goroutine deterministic by
 	// the synchronisation barrier.
-	src := `let ch := chan[int]()
+	src := `ch := chan[int]()
 spawn fn() {
   ch <- 42
 }()
-let v := <- ch
+v := <- ch
 print v
 `
 	expectOK(t, src, "Option.Some(42)\n")
 }
 
 func TestRunV07AnonFnCaptureLetIIFE(t *testing.T) {
-	src := `let n := 7
-let f := fn() -> int { return n + 1 }
+	src := `n := 7
+f := fn() -> int { return n + 1 }
 print f()
 `
 	expectOK(t, src, "8\n")
@@ -92,8 +92,8 @@ func TestRunV07AnonFnCaptureDeepCopySnapshot(t *testing.T) {
 	// Captures snapshot at fn-evaluation time. The closure sees the
 	// captured `n` from before the rebind — but Zerg lacks `mut` capture
 	// (rejected at typeck) so we test via let-rebind in scope.
-	src := `let n := 1
-let f := fn() -> int { return n }
+	src := `n := 1
+f := fn() -> int { return n }
 print f()
 `
 	expectOK(t, src, "1\n")
@@ -138,7 +138,7 @@ func TestRunV07DeferDrainOnPropagateEarlyReturn(t *testing.T) {
 	src := `fn fails() -> Result[int, str] { return Result.Err("boom") }
 fn caller() -> Result[int, str] {
   defer print "drained"
-  let v := fails()?
+  v := fails()?
   return Result.Ok(v + 1)
 }
 print caller()
@@ -150,7 +150,7 @@ func TestRunV07DeferDrainOnNonePropagate(t *testing.T) {
 	src := `fn maybe() -> int? { return Option.None }
 fn caller() -> int? {
   defer print "cleanup"
-  let v := maybe()?
+  v := maybe()?
   return Option.Some(v)
 }
 print caller()
@@ -167,8 +167,8 @@ func TestRunV07WaitGroupFanInSorted(t *testing.T) {
 	// wg.wait()s, closes the channel, then drains via for-v-in-ch. To
 	// avoid scheduling-induced reordering we collect into a list and
 	// inspect totals.
-	src := `let ch := chan[int](16)
-let wg := wait_group()
+	src := `ch := chan[int](16)
+wg := wait_group()
 wg.add(3)
 spawn fn() {
   ch <- 1
@@ -194,8 +194,8 @@ print total
 }
 
 func TestRunV07WaitGroupSingleSenderClosesCorrectly(t *testing.T) {
-	src := `let ch := chan[int](2)
-let wg := wait_group()
+	src := `ch := chan[int](2)
+wg := wait_group()
 wg.add(1)
 spawn fn() {
   ch <- 10
@@ -217,7 +217,7 @@ for v in ch {
 
 func TestRunV07SelectDefaultTakesWhenChanEmpty(t *testing.T) {
 	src := `fn run() {
-  let ch := chan[int]()
+  ch := chan[int]()
   select {
     v := <- ch -> { print v }
     _ -> { print "default" }
@@ -230,7 +230,7 @@ run()
 
 func TestRunV07SelectRecvBindFires(t *testing.T) {
 	src := `fn run() {
-  let ch := chan[int](1)
+  ch := chan[int](1)
   ch <- 99
   select {
     v := <- ch -> { print v }
@@ -244,7 +244,7 @@ run()
 
 func TestRunV07SelectRecvDiscardFires(t *testing.T) {
 	src := `fn run() {
-  let ch := chan[int](1)
+  ch := chan[int](1)
   ch <- 7
   select {
     <- ch -> { print "got" }
@@ -258,12 +258,12 @@ run()
 
 func TestRunV07SelectSendArm(t *testing.T) {
 	src := `fn run() {
-  let ch := chan[int](1)
+  ch := chan[int](1)
   select {
     ch <- 5 -> { print "sent" }
     _ -> { print "blocked" }
   }
-  let v := <- ch
+  v := <- ch
   print v
 }
 run()
@@ -285,7 +285,7 @@ print "after"
 }
 struct G { id: int }
 impl G for Greeter {}
-let g := G { id: 1 }
+g := G { id: 1 }
 g.greet()
 `
 	expectOK(t, src, "before\nafter\ndeferred\n")
@@ -298,8 +298,8 @@ g.greet()
 // probability (probability all 100 trials still land on arm `a` is 2^-100).
 func TestRunV07SelectTieBreakIsDeclarationOrder(t *testing.T) {
 	src := `fn trial() {
-  let a := chan[int](1)
-  let b := chan[int](1)
+  a := chan[int](1)
+  b := chan[int](1)
   a <- 1
   b <- 2
   select {
@@ -325,7 +325,7 @@ run()
 // ---------------------------------------------------------------------------
 
 func TestRunV07SendOnClosedSurfacesError(t *testing.T) {
-	src := `let ch := chan[int](1)
+	src := `ch := chan[int](1)
 close(ch)
 ch <- 1
 `
@@ -343,14 +343,14 @@ ch <- 1
 // ---------------------------------------------------------------------------
 
 func TestRunV07AnonFnReturnsValueFromBody(t *testing.T) {
-	src := `let g := fn(x: int) -> int { return x * 2 }
+	src := `g := fn(x: int) -> int { return x * 2 }
 print g(5)
 `
 	expectOK(t, src, "10\n")
 }
 
 func TestRunV07AnonFnIIFEReturning(t *testing.T) {
-	src := `let v := fn() -> int { return 7 }()
+	src := `v := fn() -> int { return 7 }()
 print v
 `
 	expectOK(t, src, "7\n")
@@ -361,8 +361,8 @@ print v
 // ---------------------------------------------------------------------------
 
 func TestRunV07ForInChanFromSingleSpawn(t *testing.T) {
-	src := `let ch := chan[int](4)
-let wg := wait_group()
+	src := `ch := chan[int](4)
+wg := wait_group()
 wg.add(1)
 spawn fn() {
   ch <- 1

@@ -1,13 +1,13 @@
 # requires: v0.7
 
 fn main() {
-    let out := chan[int](2)
-    let in_ch := chan[int]()
+    out := chan[int](2)
+    in_ch := chan[int]()
     select {
         out <- 42 -> { print "sent" }
         v := <- in_ch -> { print v }
     }
-    let r := <- out
+    r := <- out
     match r {
         Option.Some(v) => print v
         Option.None => print -1

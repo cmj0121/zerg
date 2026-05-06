@@ -1,15 +1,15 @@
 # requires: v0.7
 
 fn main() {
-    let ch := chan[int]()
+    ch := chan[int]()
     spawn fn() {
         ch <- 1
         ch <- 2
         ch <- 3
     }()
-    let a := <- ch
-    let b := <- ch
-    let c := <- ch
+    a := <- ch
+    b := <- ch
+    c := <- ch
     match a {
         Option.Some(v) => print v
         Option.None => print -1

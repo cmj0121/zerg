@@ -44,7 +44,7 @@ func parseStdlibSrc(t *testing.T, src string) (*Program, error) {
 func TestLexBuiltinIsIdentBeforeV08(t *testing.T) {
 	// At v0.7 (and earlier) `__builtin` is just an identifier — the keyword
 	// is reserved at v0.8. Pin both the bare-word and a hypothetical
-	// `let __builtin := 1` shape so any future regression surfaces here.
+	// `__builtin := 1` shape so any future regression surfaces here.
 	tokens := lexAtMinor(t, "__builtin\n", 7)
 	if tokens[0].Kind != KindIdent || tokens[0].Value != "__builtin" {
 		t.Errorf("token 0 = %v %q, want IDENT '__builtin'", tokens[0].Kind, tokens[0].Value)
@@ -225,7 +225,7 @@ func TestParseBuiltinDoesNotAffectV07Sources(t *testing.T) {
 	// A v0.7 source that happens to contain the literal `__builtin` as an
 	// identifier (e.g. as a fn name) keeps parsing. We don't ship such a
 	// corpus, but the gate must hold for backwards compat.
-	src := "# requires: v0.7\nlet __builtin := 1\n"
+	src := "# requires: v0.7\n__builtin := 1\n"
 	tokens, err := Lex([]byte(src))
 	if err != nil {
 		t.Fatalf("Lex: %v", err)

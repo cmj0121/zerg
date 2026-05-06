@@ -1,5 +1,5 @@
 # requires: v0.8
 import "std/strings"
 
-let xs := strings.split("abc", "")
+xs := strings.split("abc", "")
 print xs

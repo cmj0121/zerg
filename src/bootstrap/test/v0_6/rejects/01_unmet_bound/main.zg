@@ -10,5 +10,5 @@ fn need_tag[T: Tagged](x: T) -> str {
     return x.tag()
 }
 
-let c := Cat { name: "Mittens" }
+c := Cat { name: "Mittens" }
 print need_tag(c)

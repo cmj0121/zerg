@@ -10,7 +10,8 @@
 //
 //   - program     — block is a complete program; parsed verbatim.
 //   - fn-body     — wrap as `fn main() -> int { ...block... ; return 0 }`.
-//   - expression  — wrap as `let __ := <expr>` inside the same fn shell.
+//   - expression  — wrap as `__ := <expr>` inside the same fn shell
+//     (bare immutable bind; v0.11 retired the `let` keyword).
 //
 // Blocks without a tag are rejected by this test as a doc-author bug — the
 // reader can't tell from the page what shape the snippet expects, and the
@@ -166,10 +167,10 @@ func wrap(tag, code string) (string, error) {
 	case "fn-body":
 		return "fn main() -> int {\n" + code + "\nreturn 0\n}\n", nil
 	case "expression":
-		// Strip a trailing newline so the synthesized let stays on one
+		// Strip a trailing newline so the synthesized bind stays on one
 		// logical line if the user wrote a single-line expression.
 		c := strings.TrimRight(code, "\n")
-		return "fn main() -> int {\nlet __ := " + c + "\nreturn 0\n}\n", nil
+		return "fn main() -> int {\n__ := " + c + "\nreturn 0\n}\n", nil
 	}
 	return "", fmt.Errorf("unknown example tag %q", tag)
 }

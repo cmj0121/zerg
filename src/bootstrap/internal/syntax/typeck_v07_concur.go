@@ -27,7 +27,7 @@ package syntax
 //
 // `wait_group()` is a built-in fn returning a synthetic `WaitGroup` struct
 // type with three methods (`add(n: int)`, `done()`, `wait()`). Reservation
-// fires at every binding site — `let wait_group := 1`, `struct WaitGroup
+// fires at every binding site — `wait_group := 1`, `struct WaitGroup
 // {}`, etc. all reject with the uniform reservation diagnostic.
 
 // reservedV07ConcurNames is the set of additional v0.7 names users may not
@@ -83,7 +83,7 @@ func (c *checker) popAnonFnFrame() *anonFnFrame {
 // a capture (unless one is already recorded). Capture-of-mut rejects.
 //
 // The frame stack matters because nested anon-fns inherit captures from
-// their enclosing anon-fn's locals: `fn() { let x := 1; let f := fn() {
+// their enclosing anon-fn's locals: `fn() { x := 1; f := fn() {
 // print x } }` — x is captured by the inner fn but not the outer (it's a
 // local of the outer). The walk records the capture only on frames where
 // the binding lives outside that frame's own scope chain (i.e. in the

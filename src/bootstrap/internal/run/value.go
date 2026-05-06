@@ -159,7 +159,7 @@ func specVal(specType *syntax.Type, data Value) Value {
 // composites recursively duplicate their backing slices and any nested
 // composites so a later mutation of the source can never leak into the copy.
 //
-// PLAN.md "value-copied lists": every let / mut / parameter pass / slice /
+// PLAN.md "value-copied lists": every binding / mut / parameter pass / slice /
 // destructure bind crosses copyValue. Tuples and structs follow the same
 // rule because they may transitively contain a list. Enums are trivially
 // value-copied.

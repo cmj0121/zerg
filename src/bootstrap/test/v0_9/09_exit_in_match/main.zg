@@ -1,7 +1,7 @@
 # requires: v0.9
 import "std/os"
 
-let a := os.argv()
+a := os.argv()
 match a[1] {
     "ok" => print "ok"
     "two" => os.exit(2)

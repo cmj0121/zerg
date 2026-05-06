@@ -1,7 +1,7 @@
-let a := (1, "x")
-let b := (1, "x")
-let c := (1, "y")
-let d := (2, "x")
+a := (1, "x")
+b := (1, "x")
+c := (1, "y")
+d := (2, "x")
 
 if a == b {
     print "ab eq"

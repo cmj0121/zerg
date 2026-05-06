@@ -1,6 +1,6 @@
 enum Color { Red, Green, Blue }
 
-let c := Color.Green
+c := Color.Green
 print Color.Red
 print c
 print Color.Blue

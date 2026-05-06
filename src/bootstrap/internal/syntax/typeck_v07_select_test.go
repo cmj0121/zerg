@@ -32,7 +32,7 @@ func TestV07SelectRecvBindOK(t *testing.T) {
 func TestV07SelectRecvBindBindsElementType(t *testing.T) {
 	src := `fn run(ch: chan[int]) {
 	select {
-		v := <- ch -> { let x: int = v }
+		v := <- ch -> { x: int = v }
 	}
 }
 `
@@ -188,7 +188,7 @@ func TestV07SelectRecvBindArmBodyUsesBinding(t *testing.T) {
 	src := `fn run(ch: chan[int]) {
 	select {
 		v := <- ch -> {
-			let doubled: int = v + 1
+			doubled: int = v + 1
 			print doubled
 		}
 	}
@@ -242,7 +242,7 @@ func TestV07SelectRecvBindReservedNameRejects(t *testing.T) {
 
 func TestV07SelectArmBodyClosesOverOuterLet(t *testing.T) {
 	src := `fn run(ch: chan[int]) {
-	let outer := 100
+	outer := 100
 	select {
 		v := <- ch -> { print v + outer }
 	}

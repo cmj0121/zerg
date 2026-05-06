@@ -44,7 +44,7 @@ func TestCheckBundleGenericImplLocalTypeForeignSpec(t *testing.T) {
 			"impl[T] Box[T] for util.Printable {\n" +
 			"pub fn fmt() -> str { return \"b\" }\n" +
 			"}\n" +
-			"let b: Box[int] = Box { value: 7 }\n" +
-			"let s := b.fmt()\n",
+			"b: Box[int] = Box { value: 7 }\n" +
+			"s := b.fmt()\n",
 	}, "main.zg")
 }

@@ -1,9 +1,9 @@
-let dec := 1000000
-let hex := 0xFF
-let hex_underscore := 0xDEADBEEF
-let bin := 0b10100011
-let oct := 0o755
-let big := 9223372036854775807
+dec := 1000000
+hex := 0xFF
+hex_underscore := 0xDEADBEEF
+bin := 0b10100011
+oct := 0o755
+big := 9223372036854775807
 print dec
 print hex
 print hex_underscore

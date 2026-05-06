@@ -1,8 +1,8 @@
 # requires: v0.7
 
 fn main() {
-    let wg := wait_group()
-    let ch := chan[int](5)
+    wg := wait_group()
+    ch := chan[int](5)
     wg.add(5)
     for i in 0..5 {
         spawn fn() {

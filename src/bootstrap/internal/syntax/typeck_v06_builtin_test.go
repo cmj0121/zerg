@@ -9,20 +9,20 @@ import (
 //
 // Coverage:
 //   - Option / Result are visible as type names without an import.
-//   - `let x: Option[int] = ...` resolves; arity / name validation fires on
+//   - `x: Option[int] = ...` resolves; arity / name validation fires on
 //     malformed type-arg shapes.
-//   - `let x: int? = ...` resolves to the same canonical *Type as
-//     `let x: Option[int] = ...` (T? ≡ Option[T] at the canonical level).
+//   - `x: int? = ...` resolves to the same canonical *Type as
+//     `x: Option[int] = ...` (T? ≡ Option[T] at the canonical level).
 //   - User `enum Option { ... }`, `struct Option { ... }`, `spec Option`,
 //     and likewise for Result, reject with the reservation diagnostic.
-//   - `let x: int? = nil` succeeds (binding annotation supplies the
-//     expected type); `let x := nil` and `print nil` reject with the
+//   - `x: int? = nil` succeeds (binding annotation supplies the
+//     expected type); `x := nil` and `print nil` reject with the
 //     inference-failure diagnostic.
 
 // --- visibility tests -----------------------------------------------------
 
 func TestV06BuiltinOptionVisibleByName(t *testing.T) {
-	prog := checkSrc(t, "let x: Option[int] = nil\n")
+	prog := checkSrc(t, "x: Option[int] = nil\n")
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Type.Resolved
 	if got == nil || got.Kind != TypeEnum {
@@ -92,7 +92,7 @@ func TestV06BuiltinOptionBareNameRejects(t *testing.T) {
 // --- T? ≡ Option[T] canonicalisation -------------------------------------
 
 func TestV06NullableEqualsOption(t *testing.T) {
-	src := "let a: Option[int] = nil\nlet b: int? = nil\n"
+	src := "a: Option[int] = nil\nb: int? = nil\n"
 	prog := checkSrc(t, src)
 	var aT, bT *Type
 	for _, st := range prog.Statements {
@@ -160,7 +160,7 @@ func TestV06ReservedSpecResult(t *testing.T) {
 // --- nil binding ----------------------------------------------------------
 
 func TestV06NilBareLetRejects(t *testing.T) {
-	checkErr(t, "let x := nil\n",
+	checkErr(t, "x := nil\n",
 		"cannot infer type of nil")
 }
 
@@ -170,7 +170,7 @@ func TestV06NilPrintRejects(t *testing.T) {
 }
 
 func TestV06NilAnnotatedLetSucceeds(t *testing.T) {
-	prog := checkSrc(t, "let x: int? = nil\n")
+	prog := checkSrc(t, "x: int? = nil\n")
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Value.Type()
 	if got == nil || got.Kind != TypeEnum || got.Name != "Option[int]" {
@@ -184,6 +184,6 @@ func TestV06NilAnnotatedLetSucceeds(t *testing.T) {
 func TestV06NilAnnotatedRejectsNonOption(t *testing.T) {
 	// nil resolves only to Option[T]; a Result[T, E] annotation does not
 	// pull nil to Result.Err / Result.Ok at Unit 2.
-	checkErr(t, "let x: Result[int, str] = nil\n",
+	checkErr(t, "x: Result[int, str] = nil\n",
 		"cannot infer type of nil")
 }

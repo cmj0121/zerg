@@ -1,4 +1,4 @@
 import "util"
 
-let c := util.Counter { count: 5 }
+c := util.Counter { count: 5 }
 print c.count

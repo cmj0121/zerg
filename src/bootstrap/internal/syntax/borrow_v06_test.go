@@ -39,9 +39,9 @@ func TestBorrowV06PropagateConsumesReceiver(t *testing.T) {
 		"}\n" +
 		"fn observe(r: Result[list[int], str]) -> int { return 0 }\n" +
 		"fn outer() -> Result[int, str] {\n" +
-		"let r := make()\n" +
-		"let v := r?\n" +
-		"let n := observe(r)\n" +
+		"r := make()\n" +
+		"v := r?\n" +
+		"n := observe(r)\n" +
 		"return Result.Ok(v[0])\n" +
 		"}\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
@@ -56,8 +56,8 @@ func TestBorrowV06PropagateConsumesReceiver(t *testing.T) {
 func TestBorrowV06PropagateOnOptionConsumesReceiver(t *testing.T) {
 	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
 		"fn outer() -> int? {\n" +
-		"let r := maybe()\n" +
-		"let v := r?\n" +
+		"r := maybe()\n" +
+		"v := r?\n" +
 		"print r\n" +
 		"return Option.Some(v)\n" +
 		"}\n"
@@ -70,7 +70,7 @@ func TestBorrowV06PropagateOnOptionConsumesReceiver(t *testing.T) {
 func TestBorrowV06PropagateOnFreshCallResultOK(t *testing.T) {
 	src := "fn make() -> Result[int, str] { return Result.Ok(1) }\n" +
 		"fn outer() -> Result[int, str] {\n" +
-		"let v := make()?\n" +
+		"v := make()?\n" +
 		"return Result.Ok(v)\n" +
 		"}\n"
 	checkSrc(t, src)
@@ -83,9 +83,9 @@ func TestBorrowV06PropagateDoubleRejects(t *testing.T) {
 		"return Result.Ok([1, 2])\n" +
 		"}\n" +
 		"fn outer() -> Result[int, str] {\n" +
-		"let r := make()\n" +
-		"let a := r?\n" +
-		"let b := r?\n" +
+		"r := make()\n" +
+		"a := r?\n" +
+		"b := r?\n" +
 		"return Result.Ok(a[0])\n" +
 		"}\n"
 	borrowErrSrc(t, src, "use of moved value")
@@ -98,9 +98,9 @@ func TestBorrowV06PropagateDoubleRejects(t *testing.T) {
 // `??` consumes its LHS conservatively — using the LHS binding afterwards
 // rejects.
 func TestBorrowV06CoalesceConsumesLhs(t *testing.T) {
-	src := "let opt: list[int]? = nil\n" +
-		"let default := [9]\n" +
-		"let v := opt ?? default\n" +
+	src := "opt: list[int]? = nil\n" +
+		"default := [9]\n" +
+		"v := opt ?? default\n" +
 		"print opt\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
 	if !strings.Contains(msg, `"opt"`) {
@@ -111,9 +111,9 @@ func TestBorrowV06CoalesceConsumesLhs(t *testing.T) {
 // `??` consumes its RHS too (conservative): when the None arm fires at
 // runtime an ident-shaped RHS would be moved.
 func TestBorrowV06CoalesceConsumesRhs(t *testing.T) {
-	src := "let opt: list[int]? = nil\n" +
-		"let fallback := [9]\n" +
-		"let v := opt ?? fallback\n" +
+	src := "opt: list[int]? = nil\n" +
+		"fallback := [9]\n" +
+		"v := opt ?? fallback\n" +
 		"print fallback[0]\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
 	if !strings.Contains(msg, `"fallback"`) {
@@ -124,16 +124,16 @@ func TestBorrowV06CoalesceConsumesRhs(t *testing.T) {
 // `??` with a literal RHS still consumes the LHS but does not flag the
 // literal — pins the absence of a false positive on the literal arm.
 func TestBorrowV06CoalesceLiteralRhsOnlyConsumesLhs(t *testing.T) {
-	src := "let opt: int? = nil\n" +
-		"let v: int = opt ?? 0\n" +
+	src := "opt: int? = nil\n" +
+		"v: int = opt ?? 0\n" +
 		"print v\n"
 	checkSrc(t, src)
 }
 
 // `??` on a primitive-payload Option still consumes the LHS binding.
 func TestBorrowV06CoalescePrimitiveLhsConsumed(t *testing.T) {
-	src := "let opt: int? = Option.Some(1)\n" +
-		"let v: int = opt ?? 0\n" +
+	src := "opt: int? = Option.Some(1)\n" +
+		"v: int = opt ?? 0\n" +
 		"print opt\n"
 	// opt is Option[int] — composite (enum) — so the use-after-move rule fires.
 	borrowErrSrc(t, src, "use of moved value")
@@ -146,9 +146,9 @@ func TestBorrowV06CoalescePrimitiveLhsConsumed(t *testing.T) {
 // `?.` is a read on the receiver — the binding remains usable afterwards.
 func TestBorrowV06SafeFieldAccessIsRead(t *testing.T) {
 	src := "struct Box { v: int }\n" +
-		"let b: Box? = Option.Some(Box { v: 7 })\n" +
-		"let x := b?.v\n" +
-		"let y := b?.v\n" +
+		"b: Box? = Option.Some(Box { v: 7 })\n" +
+		"x := b?.v\n" +
+		"y := b?.v\n" +
 		"print x\n" +
 		"print y\n"
 	checkSrc(t, src)
@@ -159,9 +159,9 @@ func TestBorrowV06SafeFieldAccessIsRead(t *testing.T) {
 func TestBorrowV06SafeFieldAccessChainIsRead(t *testing.T) {
 	src := "struct Inner { v: int }\n" +
 		"struct Outer { inner: Inner }\n" +
-		"let o: Outer? = Option.Some(Outer { inner: Inner { v: 1 } })\n" +
-		"let a := o?.inner?.v\n" +
-		"let b := o?.inner?.v\n" +
+		"o: Outer? = Option.Some(Outer { inner: Inner { v: 1 } })\n" +
+		"a := o?.inner?.v\n" +
+		"b := o?.inner?.v\n" +
 		"print a\n" +
 		"print b\n"
 	checkSrc(t, src)
@@ -176,8 +176,8 @@ func TestBorrowV06SafeFieldAccessChainIsRead(t *testing.T) {
 // canonical *Type, so the monomorphized struct inherits move semantics.
 func TestBorrowV06MoveBoxIntThenUse(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
-		"let c := b\n" +
+		"b: Box[int] = Box { value: 7 }\n" +
+		"c := b\n" +
 		"print b.value\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
 	if !strings.Contains(msg, `"b"`) {
@@ -189,8 +189,8 @@ func TestBorrowV06MoveBoxIntThenUse(t *testing.T) {
 // literal aggregation point. Same shape as v0.3's TestBorrowMoveIntoStructAndUseStruct.
 func TestBorrowV06MoveListIntoBoxField(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let xs := [1, 2]\n" +
-		"let b: Box[list[int]] = Box { value: xs }\n" +
+		"xs := [1, 2]\n" +
+		"b: Box[list[int]] = Box { value: xs }\n" +
 		"print xs[0]\n"
 	borrowErrSrc(t, src, "use of moved value")
 }
@@ -198,8 +198,8 @@ func TestBorrowV06MoveListIntoBoxField(t *testing.T) {
 // Move a generic enum value (Option[list[int]]) on rebind — the canonical
 // type is an enum, so the v0.4 enum-as-composite rule fires.
 func TestBorrowV06MoveOptionOfListThenUse(t *testing.T) {
-	src := "let o: list[int]? = Option.Some([1, 2])\n" +
-		"let p := o\n" +
+	src := "o: list[int]? = Option.Some([1, 2])\n" +
+		"p := o\n" +
 		"print o\n"
 	borrowErrSrc(t, src, "use of moved value")
 }
@@ -207,7 +207,7 @@ func TestBorrowV06MoveOptionOfListThenUse(t *testing.T) {
 // Reading `Box[int].value` is a field access — receiver observed, not moved.
 func TestBorrowV06ReadBoxFieldOK(t *testing.T) {
 	src := "struct Box[T] { value: T }\n" +
-		"let b: Box[int] = Box { value: 7 }\n" +
+		"b: Box[int] = Box { value: 7 }\n" +
 		"print b.value\n" +
 		"print b.value\n"
 	checkSrc(t, src)
@@ -220,8 +220,8 @@ func TestBorrowV06ReadBoxFieldOK(t *testing.T) {
 // A bare `nil` is a constant — never a move. Pin the absence of any walker
 // crash on NilLit at a binding site.
 func TestBorrowV06NilLitNeverMoves(t *testing.T) {
-	src := "let x: int? = nil\n" +
-		"let y: int? = nil\n" +
+	src := "x: int? = nil\n" +
+		"y: int? = nil\n" +
 		"print x\n"
 	// x and y are Option[int] (composite enums). Both are bound from a fresh
 	// NilLit — there is no source binding to move.
@@ -233,7 +233,7 @@ func TestBorrowV06NilLitNeverMoves(t *testing.T) {
 func TestBorrowV06NilLitAtMultiplePositions(t *testing.T) {
 	src := "fn take(x: int?) -> int { return 0 }\n" +
 		"fn maybe() -> int? { return nil }\n" +
-		"let r := take(nil)\n" +
+		"r := take(nil)\n" +
 		"print r\n"
 	checkSrc(t, src)
 }
@@ -244,8 +244,8 @@ func TestBorrowV06NilLitAtMultiplePositions(t *testing.T) {
 // triggers the consume-on-aggregation rule).
 func TestBorrowV06SomeLiftMovesListAtFnArg(t *testing.T) {
 	src := "fn take(x: list[int]?) -> int { return 0 }\n" +
-		"let xs := [1, 2]\n" +
-		"let r := take(xs)\n" +
+		"xs := [1, 2]\n" +
+		"r := take(xs)\n" +
 		"print xs[0]\n"
 	// xs is moved into the synthesized Option.Some(xs); using xs after rejects.
 	borrowErrSrc(t, src, "use of moved value")
@@ -253,8 +253,8 @@ func TestBorrowV06SomeLiftMovesListAtFnArg(t *testing.T) {
 
 // Synthetic Some-wrap at a let-binding boundary moves the supplied list.
 func TestBorrowV06SomeLiftMovesListAtLetInit(t *testing.T) {
-	src := "let xs := [1, 2]\n" +
-		"let opt: list[int]? = xs\n" +
+	src := "xs := [1, 2]\n" +
+		"opt: list[int]? = xs\n" +
 		"print xs[0]\n"
 	borrowErrSrc(t, src, "use of moved value")
 }
@@ -264,15 +264,15 @@ func TestBorrowV06SomeLiftMovesListAtLetInit(t *testing.T) {
 // Here every element is a literal/nil so the list literal is admissible
 // without moves.
 func TestBorrowV06ListOfIntOptionLiteralsOK(t *testing.T) {
-	src := "let xs: list[int?] = [1, nil, 2]\n" +
+	src := "xs: list[int?] = [1, nil, 2]\n" +
 		"print xs[0]\n"
 	checkSrc(t, src)
 }
 
 // Move a list[int?] binding on rebind — the outer list is composite.
 func TestBorrowV06MoveListOfIntOptionThenUse(t *testing.T) {
-	src := "let xs: list[int?] = [1, nil, 2]\n" +
-		"let ys := xs\n" +
+	src := "xs: list[int?] = [1, nil, 2]\n" +
+		"ys := xs\n" +
 		"print xs[0]\n"
 	borrowErrSrc(t, src, "use of moved value")
 }

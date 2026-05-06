@@ -3,8 +3,8 @@ enum Token {
     Eof
 }
 
-let zero := Token.Number(0, "zero")
-let other := Token.Number(7, "seven")
+zero := Token.Number(0, "zero")
+other := Token.Number(7, "seven")
 
 match zero {
     Token.Number(0, _) => print "zero literal"

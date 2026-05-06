@@ -44,11 +44,11 @@ func canonical(t *testing.T, src string) {
 }
 
 func TestFmtSimpleLet(t *testing.T) {
-	canonical(t, `let a := 5
-let b: int = 7
-let pi: float = 3.14
-let greeting := "hello"
-let flag: bool = true
+	canonical(t, `a := 5
+b: int = 7
+pi: float = 3.14
+greeting := "hello"
+flag: bool = true
 print a
 print b
 print pi
@@ -58,7 +58,7 @@ print flag
 }
 
 func TestFmtIfElse(t *testing.T) {
-	canonical(t, `let x := 5
+	canonical(t, `x := 5
 if x > 0 {
     print "pos"
 } elif x == 0 {
@@ -73,7 +73,7 @@ func TestFmtForLoops(t *testing.T) {
 	canonical(t, `for i in 0..10 {
     print i
 }
-let xs := [1, 2, 3]
+xs := [1, 2, 3]
 for x in xs {
     print x
 }
@@ -98,7 +98,7 @@ impl Counter {
     }
 }
 
-let c := Counter { count: 7 }
+c := Counter { count: 7 }
 print c.double()
 `)
 }
@@ -116,8 +116,8 @@ impl Counter for Printable {
     }
 }
 
-let c := Counter { count: 7 }
-let p: Printable = c
+c := Counter { count: 7 }
+p: Printable = c
 print p.to_string()
 `)
 }
@@ -139,7 +139,7 @@ print name(Color.Red)
 }
 
 func TestFmtMatchTuple(t *testing.T) {
-	canonical(t, `let pair := (3, 4)
+	canonical(t, `pair := (3, 4)
 match pair {
     (0, 0) => print "origin"
     (a, b) => print a + b
@@ -174,16 +174,16 @@ print id("hello")
 }
 
 func TestFmtNullableAndOption(t *testing.T) {
-	canonical(t, `let x: int? = 42
-let y: int? = nil
+	canonical(t, `x: int? = 42
+y: int? = nil
 print x
 print y
 `)
 }
 
 func TestFmtCoalesceAndPropagate(t *testing.T) {
-	canonical(t, `let a: int? = 7
-let b: int? = nil
+	canonical(t, `a: int? = 7
+b: int? = nil
 print a ?? 0
 print b ?? 99
 `)
@@ -193,7 +193,7 @@ func TestFmtSafeNav(t *testing.T) {
 	canonical(t, `struct Inner { tag: str }
 struct Outer { inner: Inner }
 
-let o: Outer? = Outer { inner: Inner { tag: "deep" } }
+o: Outer? = Outer { inner: Inner { tag: "deep" } }
 print o?.inner
 print o?.inner?.tag
 `)
@@ -201,11 +201,11 @@ print o?.inner?.tag
 
 func TestFmtChannelsAndSpawn(t *testing.T) {
 	canonical(t, `fn main() {
-    let ch := chan[int]()
+    ch := chan[int]()
     spawn fn() {
         ch <- 1
     }()
-    let v := <- ch
+    v := <- ch
     match v {
         Option.Some(x) => print x
         Option.None => print -1
@@ -218,7 +218,7 @@ main()
 
 func TestFmtSelectStmt(t *testing.T) {
 	canonical(t, `fn main() {
-    let ch := chan[int](1)
+    ch := chan[int](1)
     ch <- 77
     select {
         bound := <- ch -> { print bound }
@@ -257,9 +257,9 @@ print u.add(1, 2)
 }
 
 func TestFmtTuplesAndLists(t *testing.T) {
-	canonical(t, `let pair := (1, 2)
-let triple := (10, 20, 30)
-let xs := [1, 2, 3]
+	canonical(t, `pair := (1, 2)
+triple := (10, 20, 30)
+xs := [1, 2, 3]
 print pair
 print triple
 print xs
@@ -273,7 +273,7 @@ func TestFmtHeadCommentsNoBlank(t *testing.T) {
 	src := `# requires: v0.6
 # Copyright (c) 2026 someone
 # Licensed under MIT
-let x := 1
+x := 1
 print x
 `
 	got := roundTrip(t, src)
@@ -288,7 +288,7 @@ func TestFmtHeadCommentsWithBlank(t *testing.T) {
 	// canonical output preserves it.
 	src := `# requires: v0.6
 
-let x := 1
+x := 1
 print x
 `
 	got := roundTrip(t, src)
@@ -299,11 +299,11 @@ print x
 }
 
 func TestFmtLeadingCommentsBeforeStmt(t *testing.T) {
-	src := `let first := 1
+	src := `first := 1
 
 # above one
 # above two
-let second := 2
+second := 2
 `
 	got := roundTrip(t, src)
 	if !strings.Contains(got, "# above one") || !strings.Contains(got, "# above two") {
@@ -313,15 +313,15 @@ let second := 2
 }
 
 func TestFmtNonCanonicalCollapsesBlankLines(t *testing.T) {
-	src := `let a := 1
+	src := `a := 1
 
 
 
-let b := 2
+b := 2
 `
-	want := `let a := 1
+	want := `a := 1
 
-let b := 2
+b := 2
 `
 	got := roundTrip(t, src)
 	if got != want {
@@ -350,14 +350,14 @@ func TestFmtBuiltinFn(t *testing.T) {
 
 func TestFmtAnonFnMultiStmt(t *testing.T) {
 	canonical(t, `fn main() {
-    let xs := [1, 2, 3]
-    let done := chan[int]()
+    xs := [1, 2, 3]
+    done := chan[int]()
     spawn fn() {
         print xs[0]
         print xs[1]
         done <- 0
     }()
-    let _ := <- done
+    _ := <- done
 }
 
 main()
@@ -366,13 +366,13 @@ main()
 
 func TestFmtParenInExpr(t *testing.T) {
 	// Parens kept when user wrote them — favour explicit over clever.
-	canonical(t, `let x := (1 + 2) * 3
+	canonical(t, `x := (1 + 2) * 3
 print x
 `)
 }
 
 func TestFmtEmptyListAnnotated(t *testing.T) {
-	canonical(t, `let empty: list[int] = []
+	canonical(t, `empty: list[int] = []
 print empty
 `)
 }
@@ -383,7 +383,7 @@ func TestFmtPropagateInBody(t *testing.T) {
 }
 
 fn process(input: str) -> Result[int, str] {
-    let v := parse(input)?
+    v := parse(input)?
     return Result.Ok(v + 1)
 }
 
@@ -426,7 +426,7 @@ print describe(E.A)
 // catch shape-specific drift in a single test.
 func TestFmtIdempotenceSampler(t *testing.T) {
 	cases := []string{
-		`let x := 1
+		`x := 1
 print x
 `,
 		`fn main() {
@@ -439,7 +439,7 @@ main()
 print X.A
 `,
 		`struct S { x: int }
-let s := S { x: 1 }
+s := S { x: 1 }
 print s.x
 `,
 	}

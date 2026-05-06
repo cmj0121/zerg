@@ -96,35 +96,35 @@ func loadErr(t *testing.T, f fixture, entry, want string) string {
 func TestCheckBundleCrossModuleFnCall(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub fn double(x: int) -> int { return x * 2 }\n",
-		"main": "import \"util\"\nlet n := util.double(21)\nprint n\n",
+		"main": "import \"util\"\nn := util.double(21)\nprint n\n",
 	}, "main.zg")
 }
 
 func TestCheckBundleCrossModuleStructLit(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub struct Point { x: int, y: int }\n",
-		"main": "import \"util\"\nlet p := util.Point { x: 1, y: 2 }\nprint p.x\n",
+		"main": "import \"util\"\np := util.Point { x: 1, y: 2 }\nprint p.x\n",
 	}, "main.zg")
 }
 
 func TestCheckBundleCrossModuleEnumTypeRef(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub enum Color { Red, Blue }\n",
-		"main": "import \"util\"\nlet c: util.Color = util.Color.Red\nprint c\n",
+		"main": "import \"util\"\nc: util.Color = util.Color.Red\nprint c\n",
 	}, "main.zg")
 }
 
 func TestCheckBundleCrossModuleEnumBareVariant(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub enum Color { Red, Blue }\n",
-		"main": "import \"util\"\nlet c := util.Color.Red\nprint c\n",
+		"main": "import \"util\"\nc := util.Color.Red\nprint c\n",
 	}, "main.zg")
 }
 
 func TestCheckBundleCrossModuleEnumPayloadVariant(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub enum Token { Eof, Ident(str) }\n",
-		"main": "import \"util\"\nlet t := util.Token.Ident(\"hi\")\nprint t\n",
+		"main": "import \"util\"\nt := util.Token.Ident(\"hi\")\nprint t\n",
 	}, "main.zg")
 }
 
@@ -135,8 +135,8 @@ func TestCheckBundleCrossModuleSpecAsType(t *testing.T) {
 		"impl Counter for util.Printable {\n" +
 		"pub fn to_string() -> str { return \"counter\" }\n" +
 		"}\n" +
-		"let c := Counter { count: 1 }\n" +
-		"let p: util.Printable = c\n" +
+		"c := Counter { count: 1 }\n" +
+		"p: util.Printable = c\n" +
 		"print p.to_string()\n"
 	loadOk(t, fixture{
 		"util": "pub spec Printable { fn to_string() -> str }\n",
@@ -151,7 +151,7 @@ func TestCheckBundleCrossModuleMethodDispatch(t *testing.T) {
 		"impl Counter for util.Printable {\n" +
 		"pub fn to_string() -> str { return \"hi\" }\n" +
 		"}\n" +
-		"let c := Counter { count: 7 }\n" +
+		"c := Counter { count: 7 }\n" +
 		"print c.to_string()\n"
 	loadOk(t, fixture{
 		"util": "pub spec Printable { fn to_string() -> str }\n",
@@ -162,13 +162,13 @@ func TestCheckBundleCrossModuleMethodDispatch(t *testing.T) {
 func TestCheckBundleAliasedImport(t *testing.T) {
 	loadOk(t, fixture{
 		"util": "pub fn foo() -> int { return 7 }\n",
-		"main": "import \"util\" as u\nlet n := u.foo()\nprint n\n",
+		"main": "import \"util\" as u\nn := u.foo()\nprint n\n",
 	}, "main.zg")
 }
 
 func TestCheckBundleNoImportsBackwardCompat(t *testing.T) {
 	loadOk(t, fixture{
-		"main": "let x := 42\nprint x\n",
+		"main": "x := 42\nprint x\n",
 	}, "main.zg")
 }
 
@@ -179,7 +179,7 @@ func TestCheckBundleOrphanRuleAdmittedLocalType(t *testing.T) {
 		"impl Counter for util.Printable {\n" +
 		"pub fn to_string() -> str { return \"c\" }\n" +
 		"}\n" +
-		"let c := Counter { count: 1 }\n" +
+		"c := Counter { count: 1 }\n" +
 		"print c.to_string()\n"
 	loadOk(t, fixture{
 		"util": "pub spec Printable { fn to_string() -> str }\n",
@@ -206,7 +206,7 @@ func TestCheckBundleInherentImplOnLocalType(t *testing.T) {
 		"impl Local {\n" +
 		"fn show() -> int { return this.v }\n" +
 		"}\n" +
-		"let x := Local { v: 9 }\n" +
+		"x := Local { v: 9 }\n" +
 		"print x.show()\n"
 	loadOk(t, fixture{
 		"main": src,
@@ -220,21 +220,21 @@ func TestCheckBundleInherentImplOnLocalType(t *testing.T) {
 func TestCheckBundleRejectNonPubFnCall(t *testing.T) {
 	loadErr(t, fixture{
 		"util": "fn private_fn() -> int { return 1 }\n",
-		"main": "import \"util\"\nlet n := util.private_fn()\nprint n\n",
+		"main": "import \"util\"\nn := util.private_fn()\nprint n\n",
 	}, "main.zg", "is not pub")
 }
 
 func TestCheckBundleRejectNonPubStructConstruct(t *testing.T) {
 	loadErr(t, fixture{
 		"util": "struct Hidden { v: int }\n",
-		"main": "import \"util\"\nlet h := util.Hidden { v: 1 }\nprint h.v\n",
+		"main": "import \"util\"\nh := util.Hidden { v: 1 }\nprint h.v\n",
 	}, "main.zg", "is not pub")
 }
 
 func TestCheckBundleRejectUnknownMember(t *testing.T) {
 	loadErr(t, fixture{
 		"util": "pub fn foo() -> int { return 1 }\n",
-		"main": "import \"util\"\nlet n := util.bar()\nprint n\n",
+		"main": "import \"util\"\nn := util.bar()\nprint n\n",
 	}, "main.zg", "no function")
 }
 
@@ -291,7 +291,7 @@ func TestCheckBundleCrossModuleImplCollisionRejectedByOrphan(t *testing.T) {
 func TestCheckBundleLetShadowsImport(t *testing.T) {
 	loadErr(t, fixture{
 		"u":    "pub fn foo() -> int { return 1 }\n",
-		"main": "import \"u\"\nlet u := 1\nprint u\n",
+		"main": "import \"u\"\nu := 1\nprint u\n",
 	}, "main.zg", "shadows imported module")
 }
 
@@ -335,7 +335,7 @@ func TestCheckBundleSingleProgramRejectsUnknownModule(t *testing.T) {
 	// — typeck must still reject cleanly. The failure is at the
 	// MethodCall layer with `mod` resolving as an undefined name.
 	loadErr(t, fixture{
-		"main": "let x := mod.foo()\nprint x\n",
+		"main": "x := mod.foo()\nprint x\n",
 	}, "main.zg", "undefined name")
 }
 
@@ -351,7 +351,7 @@ func TestCheckBundleRejectNonPubMethod(t *testing.T) {
 		"}\n"
 	mainSrc := "" +
 		"import \"util\"\n" +
-		"let c := util.Counter { count: 1 }\n" +
+		"c := util.Counter { count: 1 }\n" +
 		"print c.private_show()\n"
 	loadErr(t, fixture{
 		"util": utilSrc,

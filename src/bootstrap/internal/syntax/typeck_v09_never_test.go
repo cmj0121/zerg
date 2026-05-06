@@ -7,7 +7,7 @@ import (
 
 // v0.9 Unit 1 — `never` bottom type typeck tests. Coverage:
 //
-//   - never recognised at type position (`-> never`, `let x: never`).
+//   - never recognised at type position (`-> never`, `x: never`).
 //   - bottom-type subtyping: a -> never call typechecks at any expected slot.
 //   - fn-decl `-> never` requires every code path to diverge.
 //   - reservation: user struct/enum/spec named `never` rejects.
@@ -56,14 +56,14 @@ func TestV09NeverCallFlowsIntoStrSlot(t *testing.T) {
 
 func TestV09NeverFlowsIntoLetAnnotated(t *testing.T) {
 	src := "fn diverge() -> never { for { } }\n" +
-		"fn use_it() { let x: int = diverge() }\n"
+		"fn use_it() { x: int = diverge() }\n"
 	checkSrc(t, src)
 }
 
 // The reverse direction is rejected: a non-never value cannot flow into a
 // `never` slot. let-binding a `never` slot from an int RHS rejects.
 func TestV09NeverSlotRejectsNonNeverRHS(t *testing.T) {
-	src := "fn use_it() { let x: never = 1 }\n"
+	src := "fn use_it() { x: never = 1 }\n"
 	checkErr(t, src, "cannot assign")
 }
 
@@ -90,7 +90,7 @@ func TestV09NeverFnIfElseAllDivergeAccepted(t *testing.T) {
 func TestV09NeverFnFallthroughRejected(t *testing.T) {
 	// Body finishes without diverging — control would fall off the end,
 	// which a `-> never` fn forbids.
-	src := "fn bad() -> never { let x := 1 }\n"
+	src := "fn bad() -> never { x := 1 }\n"
 	checkErr(t, src, "non-diverging path")
 }
 

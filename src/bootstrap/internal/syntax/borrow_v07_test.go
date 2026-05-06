@@ -33,8 +33,8 @@ import (
 // send rejects with use-after-move.
 func TestBorrowV07SendMovesComposite(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ch := chan[list[int]]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ch := chan[list[int]]()\n" +
 		"ch <- xs\n" +
 		"print xs[0]\n" +
 		"}\n"
@@ -48,7 +48,7 @@ func TestBorrowV07SendMovesComposite(t *testing.T) {
 // freely.
 func TestBorrowV07SendPrimitiveOK(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[int]()\n" +
+		"ch := chan[int]()\n" +
 		"ch <- 5\n" +
 		"print 5\n" +
 		"}\n"
@@ -59,7 +59,7 @@ func TestBorrowV07SendPrimitiveOK(t *testing.T) {
 // same channel is fine.
 func TestBorrowV07SendChannelNotMoved(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[int]()\n" +
+		"ch := chan[int]()\n" +
 		"ch <- 1\n" +
 		"ch <- 2\n" +
 		"}\n"
@@ -69,7 +69,7 @@ func TestBorrowV07SendChannelNotMoved(t *testing.T) {
 // Send of a fresh literal does not register against any source binding.
 func TestBorrowV07SendLiteralOK(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[list[int]]()\n" +
+		"ch := chan[list[int]]()\n" +
 		"ch <- [1, 2, 3]\n" +
 		"}\n"
 	checkSrc(t, src)
@@ -79,9 +79,9 @@ func TestBorrowV07SendLiteralOK(t *testing.T) {
 // binding was already consumed earlier).
 func TestBorrowV07SendOfMovedBindingRejects(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ys := xs\n" +
-		"let ch := chan[list[int]]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ys := xs\n" +
+		"ch := chan[list[int]]()\n" +
 		"ch <- xs\n" +
 		"print ys[0]\n" +
 		"}\n"
@@ -96,9 +96,9 @@ func TestBorrowV07SendOfMovedBindingRejects(t *testing.T) {
 // remains usable after a receive.
 func TestBorrowV07RecvDoesNotMoveChannel(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[int]()\n" +
-		"let v1 := <- ch\n" +
-		"let v2 := <- ch\n" +
+		"ch := chan[int]()\n" +
+		"v1 := <- ch\n" +
+		"v2 := <- ch\n" +
 		"print v1\n" +
 		"print v2\n" +
 		"}\n"
@@ -109,10 +109,10 @@ func TestBorrowV07RecvDoesNotMoveChannel(t *testing.T) {
 // fine, and the source channel survives.
 func TestBorrowV07RecvBindsFreshLocal(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[list[int]]()\n" +
-		"let v := <- ch\n" +
+		"ch := chan[list[int]]()\n" +
+		"v := <- ch\n" +
 		"print v\n" +
-		"let w := <- ch\n" +
+		"w := <- ch\n" +
 		"print w\n" +
 		"}\n"
 	checkSrc(t, src)
@@ -126,7 +126,7 @@ func TestBorrowV07RecvBindsFreshLocal(t *testing.T) {
 // (deep-copy at closure construction). The source remains usable after.
 func TestBorrowV07SpawnCapturesByClone(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
+		"xs := [1, 2, 3]\n" +
 		"spawn fn() { print xs[0] }()\n" +
 		"print xs[0]\n" +
 		"}\n"
@@ -138,7 +138,7 @@ func TestBorrowV07SpawnCapturesByClone(t *testing.T) {
 func TestBorrowV07SpawnFnArgIsSharedBorrow(t *testing.T) {
 	src := "fn worker(ys: list[int]) { print ys[0] }\n" +
 		"fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
+		"xs := [1, 2, 3]\n" +
 		"spawn worker(xs)\n" +
 		"print xs[0]\n" +
 		"}\n"
@@ -149,8 +149,8 @@ func TestBorrowV07SpawnFnArgIsSharedBorrow(t *testing.T) {
 // construction; the source binding remains usable.
 func TestBorrowV07AnonFnCaptureIsRead(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let f := fn() { print xs[0] }\n" +
+		"xs := [1, 2, 3]\n" +
+		"f := fn() { print xs[0] }\n" +
 		"print xs[0]\n" +
 		"f()\n" +
 		"}\n"
@@ -161,8 +161,8 @@ func TestBorrowV07AnonFnCaptureIsRead(t *testing.T) {
 // closure's perspective — the body cannot move it out via a let-rebind.
 func TestBorrowV07AnonFnCaptureCannotBeMovedFromBody(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let f := fn() { let ys := xs\nprint ys[0] }\n" +
+		"xs := [1, 2, 3]\n" +
+		"f := fn() { ys := xs\nprint ys[0] }\n" +
 		"f()\n" +
 		"}\n"
 	msg := borrowErrSrc(t, src, "cannot move borrowed value")
@@ -174,9 +174,9 @@ func TestBorrowV07AnonFnCaptureCannotBeMovedFromBody(t *testing.T) {
 // Capturing an already-moved binding rejects at closure construction.
 func TestBorrowV07AnonFnCaptureOfMovedRejects(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ys := xs\n" +
-		"let f := fn() { print xs[0] }\n" +
+		"xs := [1, 2, 3]\n" +
+		"ys := xs\n" +
+		"f := fn() { print xs[0] }\n" +
 		"f()\n" +
 		"print ys[0]\n" +
 		"}\n"
@@ -187,8 +187,8 @@ func TestBorrowV07AnonFnCaptureOfMovedRejects(t *testing.T) {
 // captures are clone-reads.
 func TestBorrowV07SpawnIifeCaptureSurvives(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ys := [4, 5, 6]\n" +
+		"xs := [1, 2, 3]\n" +
+		"ys := [4, 5, 6]\n" +
 		"spawn fn() { print xs[0]\nprint ys[0] }()\n" +
 		"print xs[0]\n" +
 		"print ys[0]\n" +
@@ -204,7 +204,7 @@ func TestBorrowV07SpawnIifeCaptureSurvives(t *testing.T) {
 // defer is a read at the defer site, like any other expression.
 func TestBorrowV07DeferReadsInScopeBinding(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
+		"xs := [1, 2, 3]\n" +
 		"defer print xs[0]\n" +
 		"print xs[0]\n" +
 		"}\n"
@@ -215,8 +215,8 @@ func TestBorrowV07DeferReadsInScopeBinding(t *testing.T) {
 // surrounding fn scope — using the binding after the defer rejects.
 func TestBorrowV07DeferBodyMoveRegisters(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"defer { let ys := xs\nprint ys[0] }\n" +
+		"xs := [1, 2, 3]\n" +
+		"defer { ys := xs\nprint ys[0] }\n" +
 		"print xs[0]\n" +
 		"}\n"
 	borrowErrSrc(t, src, "use of moved value")
@@ -226,8 +226,8 @@ func TestBorrowV07DeferBodyMoveRegisters(t *testing.T) {
 // own walk.
 func TestBorrowV07DeferOfMovedBindingRejects(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ys := xs\n" +
+		"xs := [1, 2, 3]\n" +
+		"ys := xs\n" +
 		"defer print xs[0]\n" +
 		"print ys[0]\n" +
 		"}\n"
@@ -241,8 +241,8 @@ func TestBorrowV07DeferOfMovedBindingRejects(t *testing.T) {
 // Select with arms that read the same outer binding agree on its end-state.
 func TestBorrowV07SelectArmsReadOK(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ch := chan[int]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ch := chan[int]()\n" +
 		"select {\n" +
 		"v := <- ch -> { print xs[0]\nprint v }\n" +
 		"_ -> { print xs[0] }\n" +
@@ -256,8 +256,8 @@ func TestBorrowV07SelectArmsReadOK(t *testing.T) {
 // other arm reads the binding, branch states disagree and reject.
 func TestBorrowV07SelectSendDisagreesWithRead(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ch := chan[list[int]]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ch := chan[list[int]]()\n" +
 		"select {\n" +
 		"ch <- xs -> { print 1 }\n" +
 		"_ -> { print xs[0] }\n" +
@@ -270,10 +270,10 @@ func TestBorrowV07SelectSendDisagreesWithRead(t *testing.T) {
 // non-diverged arms agree on the moved end-state).
 func TestBorrowV07SelectAllArmsConsumeOK(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ys := [4, 5, 6]\n" +
-		"let ch1 := chan[list[int]]()\n" +
-		"let ch2 := chan[list[int]]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ys := [4, 5, 6]\n" +
+		"ch1 := chan[list[int]]()\n" +
+		"ch2 := chan[list[int]]()\n" +
 		"select {\n" +
 		"ch1 <- xs -> { print 1 }\n" +
 		"ch2 <- xs -> { print 2 }\n" +
@@ -286,8 +286,8 @@ func TestBorrowV07SelectAllArmsConsumeOK(t *testing.T) {
 // Select-send moves the value; using it after the select rejects.
 func TestBorrowV07SelectSendThenUseRejects(t *testing.T) {
 	src := "fn run() {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ch := chan[list[int]]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ch := chan[list[int]]()\n" +
 		"select {\n" +
 		"ch <- xs -> { print 1 }\n" +
 		"ch <- xs -> { print 2 }\n" +
@@ -301,12 +301,12 @@ func TestBorrowV07SelectSendThenUseRejects(t *testing.T) {
 // is not moved.
 func TestBorrowV07SelectRecvBindFreshLocal(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[list[int]]()\n" +
+		"ch := chan[list[int]]()\n" +
 		"select {\n" +
 		"v := <- ch -> { print v[0] }\n" +
 		"_ -> { print 0 }\n" +
 		"}\n" +
-		"let w := <- ch\n" +
+		"w := <- ch\n" +
 		"print w\n" +
 		"}\n"
 	checkSrc(t, src)
@@ -315,12 +315,12 @@ func TestBorrowV07SelectRecvBindFreshLocal(t *testing.T) {
 // Select recv-discard does not bind a name; the channel handle survives.
 func TestBorrowV07SelectRecvDiscardOK(t *testing.T) {
 	src := "fn run() {\n" +
-		"let ch := chan[int]()\n" +
+		"ch := chan[int]()\n" +
 		"select {\n" +
 		"<- ch -> { print 1 }\n" +
 		"_ -> { print 0 }\n" +
 		"}\n" +
-		"let w := <- ch\n" +
+		"w := <- ch\n" +
 		"print w\n" +
 		"}\n"
 	checkSrc(t, src)
@@ -330,8 +330,8 @@ func TestBorrowV07SelectRecvDiscardOK(t *testing.T) {
 // to agree on the move-state — the surviving arm sets the join state.
 func TestBorrowV07SelectDivergingArmExempt(t *testing.T) {
 	src := "fn run() -> int {\n" +
-		"let xs := [1, 2, 3]\n" +
-		"let ch := chan[list[int]]()\n" +
+		"xs := [1, 2, 3]\n" +
+		"ch := chan[list[int]]()\n" +
 		"select {\n" +
 		"ch <- xs -> { return 0 }\n" +
 		"_ -> { print xs[0] }\n" +

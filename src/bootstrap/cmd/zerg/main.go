@@ -22,7 +22,7 @@ import (
 // version.Major / version.Minor) — `cliVersion` may lag behind the gate
 // during a v0.X release in progress and is bumped to canonical form by
 // the twain unit at the end of each version's work.
-const cliVersion = "0.10.0"
+const cliVersion = "0.11.0"
 
 type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
@@ -91,7 +91,7 @@ func main() {
 	app := &cli{}
 	ctx := kong.Parse(app,
 		kong.Name("zerg"),
-		kong.Description("Zerg toolchain (v0.10)."),
+		kong.Description("Zerg toolchain (v0.11)."),
 		kong.Vars{"version": "zerg " + cliVersion},
 		kong.UsageOnError(),
 	)

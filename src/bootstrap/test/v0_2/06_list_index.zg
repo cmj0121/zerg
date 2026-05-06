@@ -1,4 +1,4 @@
-let xs := [10, 20, 30, 40]
+xs := [10, 20, 30, 40]
 print xs[0]
 print xs[2]
 print xs[len(xs) - 1]

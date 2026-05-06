@@ -6,7 +6,7 @@ fn last_of(xs: list[int]) {
     print xs[2]
 }
 
-let xs := [7, 8, 9]
+xs := [7, 8, 9]
 first(xs)
 last_of(xs)
 print xs[1]

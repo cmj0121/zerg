@@ -6,12 +6,12 @@ fn risky() -> Result[int, str] {
 
 fn worker() -> Result[int, str] {
     defer print "cleanup"
-    let v := risky()?
+    v := risky()?
     return Result.Ok(v + 1)
 }
 
 fn main() {
-    let r := worker()
+    r := worker()
     print r
 }
 

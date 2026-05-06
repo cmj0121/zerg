@@ -70,7 +70,7 @@ func expectOne[T Stmt](t *testing.T, prog *Program) T {
 // ---------------------------------------------------------------------------
 
 func TestParseLetWalrus(t *testing.T) {
-	prog := parseProgramSrc(t, "let x := 42\n")
+	prog := parseProgramSrc(t, "x := 42\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Name != "x" {
 		t.Errorf("name = %q, want %q", s.Name, "x")
@@ -84,7 +84,7 @@ func TestParseLetWalrus(t *testing.T) {
 }
 
 func TestParseLetAnnotated(t *testing.T) {
-	prog := parseProgramSrc(t, "let x: int = 0xff\n")
+	prog := parseProgramSrc(t, "x: int = 0xff\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Type == nil || s.Type.Name != "int" {
 		t.Errorf("type ref = %#v, want int", s.Type)
@@ -344,8 +344,8 @@ func TestParseForRangeInclusive(t *testing.T) {
 }
 
 func TestParseRangeOutsideForIsError(t *testing.T) {
-	expectParseErr(t, "let r := 0..n\n", "range expressions are only allowed in for-in heads")
-	expectParseErr(t, "let r := 0..=10\n", "range expressions are only allowed in for-in heads")
+	expectParseErr(t, "r := 0..n\n", "range expressions are only allowed in for-in heads")
+	expectParseErr(t, "r := 0..=10\n", "range expressions are only allowed in for-in heads")
 }
 
 func TestParseNopStillWorks(t *testing.T) {
@@ -529,7 +529,7 @@ func TestParseLineContinuationInsideParens(t *testing.T) {
 
 func TestParseBangIsRejectedAsBoolNegation(t *testing.T) {
 	// `!x` should produce a clean diagnostic recommending `not x`.
-	expectParseErr(t, "let y := !x\n", "use 'not'")
+	expectParseErr(t, "y := !x\n", "use 'not'")
 }
 
 func TestParseUnterminatedBlock(t *testing.T) {
@@ -537,7 +537,7 @@ func TestParseUnterminatedBlock(t *testing.T) {
 }
 
 func TestParseLetWithoutValue(t *testing.T) {
-	expectParseErr(t, "let x\n", "expected ':=' or ': T ='")
+	expectParseErr(t, "x\n", "expected ':=' or ': T ='")
 }
 
 func TestParseFnMissingType(t *testing.T) {
@@ -550,7 +550,7 @@ func TestParseFnMissingType(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPositionsArePropagated(t *testing.T) {
-	prog := parseProgramSrc(t, "\n\nlet x := 1\n")
+	prog := parseProgramSrc(t, "\n\nx := 1\n")
 	s := expectOne[*LetStmt](t, prog)
 	// `let` is on line 3, column 1.
 	if s.Pos.Line != 3 || s.Pos.Column != 1 {

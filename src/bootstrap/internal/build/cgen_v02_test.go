@@ -85,23 +85,23 @@ func TestCgenRuneNonAsciiPrintsCodepoint(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCgenListLitPrint(t *testing.T) {
-	expectV02(t, "let xs := [1, 2, 3]\nprint xs\n", "[ 1, 2, 3 ]\n")
+	expectV02(t, "xs := [1, 2, 3]\nprint xs\n", "[ 1, 2, 3 ]\n")
 }
 
 func TestCgenListEmptyPrint(t *testing.T) {
 	expectV02(t,
-		"let xs: list[int] = []\nprint xs\nprint len(xs)\n",
+		"xs: list[int] = []\nprint xs\nprint len(xs)\n",
 		"[]\n0\n")
 }
 
 func TestCgenListIndex(t *testing.T) {
 	expectV02(t,
-		"let xs := [10, 20, 30]\nprint xs[0]\nprint xs[2]\n",
+		"xs := [10, 20, 30]\nprint xs[0]\nprint xs[2]\n",
 		"10\n30\n")
 }
 
 func TestCgenListSliceForms(t *testing.T) {
-	src := `let xs := [1, 2, 3, 4, 5]
+	src := `xs := [1, 2, 3, 4, 5]
 print xs[1..3]
 print xs[..2]
 print xs[3..]
@@ -114,12 +114,12 @@ print xs[1..=3]
 }
 
 func TestCgenListBindIsValueCopy(t *testing.T) {
-	// v0.3: `let ys := xs` MOVES xs. Sampling both bindings requires an
+	// v0.3: `ys := xs` MOVES xs. Sampling both bindings requires an
 	// explicit clone of the source so xs remains usable. The codegen path
 	// still emits the per-shape copy helper, so the parity guarantee carries
 	// over from v0.2 — only the user-facing shape changed.
-	src := `let xs := [1, 2, 3]
-let ys := clone(xs)
+	src := `xs := [1, 2, 3]
+ys := clone(xs)
 print xs
 print ys
 `
@@ -127,7 +127,7 @@ print ys
 }
 
 func TestCgenListOfListIndexAndPrint(t *testing.T) {
-	src := `let xs := [[1, 2], [3, 4, 5]]
+	src := `xs := [[1, 2], [3, 4, 5]]
 print xs
 print xs[1]
 print len(xs)
@@ -137,7 +137,7 @@ print len(xs[1])
 }
 
 func TestCgenForListIter(t *testing.T) {
-	src := `let xs := [10, 20, 30]
+	src := `xs := [10, 20, 30]
 for x in xs {
   print x
 }
@@ -151,18 +151,18 @@ print "done"
 // ---------------------------------------------------------------------------
 
 func TestCgenTupleLitPrint(t *testing.T) {
-	expectV02(t, "let p := (1, 2)\nprint p\n", "( 1, 2 )\n")
+	expectV02(t, "p := (1, 2)\nprint p\n", "( 1, 2 )\n")
 }
 
 func TestCgenTupleHeterogeneous(t *testing.T) {
 	expectV02(t,
-		"let p := (1, \"two\", 3)\nprint p\n",
+		"p := (1, \"two\", 3)\nprint p\n",
 		"( 1, two, 3 )\n")
 }
 
 func TestCgenLetTupleDestructure(t *testing.T) {
-	src := `let p := (10, 20)
-let (a, b) := p
+	src := `p := (10, 20)
+(a, b) := p
 print a + b
 `
 	expectV02(t, src, "30\n")
@@ -174,7 +174,7 @@ print a + b
 
 func TestCgenStructLitFieldAccess(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 7, y: 11 }
+p := Point { x: 7, y: 11 }
 print p
 print p.x
 print p.y
@@ -184,7 +184,7 @@ print p.y
 
 func TestCgenStructFieldOrderIsDeclOrder(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { y: 99, x: 1 }
+p := Point { y: 99, x: 1 }
 print p
 `
 	expectV02(t, src, "Point { x: 1, y: 99 }\n")
@@ -192,7 +192,7 @@ print p
 
 func TestCgenStructInList(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+pts := [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
 print pts[1].x
 `
 	expectV02(t, src, "3\n")
@@ -202,7 +202,7 @@ func TestCgenForwardStructRef(t *testing.T) {
 	// struct A's field references struct B declared after it.
 	src := `struct A { b: B, name: str }
 struct B { v: int }
-let a := A { b: B { v: 100 }, name: "hi" }
+a := A { b: B { v: 100 }, name: "hi" }
 print a
 print a.b.v
 `
@@ -215,7 +215,7 @@ print a.b.v
 
 func TestCgenEnumVariantAccess(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let c := Color.Green
+c := Color.Green
 print c
 print Color.Red
 print Color.Blue
@@ -225,7 +225,7 @@ print Color.Blue
 
 func TestCgenEnumInList(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let cs := [Color.Red, Color.Blue]
+cs := [Color.Red, Color.Blue]
 print cs
 print cs[0]
 `
@@ -237,7 +237,7 @@ print cs[0]
 // ---------------------------------------------------------------------------
 
 func TestCgenMatchLiteralArms(t *testing.T) {
-	src := `let n := 2
+	src := `n := 2
 match n {
   1 => print "one"
   2 => print "two"
@@ -248,7 +248,7 @@ match n {
 }
 
 func TestCgenMatchBindGuard(t *testing.T) {
-	src := `let n := 7
+	src := `n := 7
 match n {
   x if x > 5 => print "big"
   x => print "small"
@@ -258,7 +258,7 @@ match n {
 }
 
 func TestCgenMatchTupleDestructure(t *testing.T) {
-	src := `let p := (10, 20)
+	src := `p := (10, 20)
 match p {
   (a, b) => print a + b
 }
@@ -268,7 +268,7 @@ match p {
 
 func TestCgenMatchStructWithRest(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 5, y: 99 }
+p := Point { x: 5, y: 99 }
 match p {
   Point { x: 0, .. } => print "x zero"
   Point { x, .. } => print x
@@ -279,7 +279,7 @@ match p {
 
 func TestCgenMatchEnumVariants(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let c := Color.Green
+c := Color.Green
 match c {
   Color.Red => print "red"
   Color.Green => print "green"
@@ -292,7 +292,7 @@ match c {
 func TestCgenMatchNestedTupleStruct(t *testing.T) {
 	src := `struct Point { x: int, y: int }
 enum Color { Red, Blue }
-let pair := (Point { x: 1, y: 2 }, Color.Blue)
+pair := (Point { x: 1, y: 2 }, Color.Blue)
 match pair {
   (Point { x, .. }, Color.Red) => print x
   (Point { x, y }, Color.Blue) => print x + y
@@ -309,7 +309,7 @@ func TestCgenMatchNoArmPanics(t *testing.T) {
 	if _, err := exec.LookPath(cc); err != nil {
 		t.Skip("cc not available")
 	}
-	src := `let n := 5
+	src := `n := 5
 match n {
   1 => print "one"
   2 => print "two"
@@ -354,7 +354,7 @@ func TestCgenIndexOutOfRange(t *testing.T) {
 	if _, err := exec.LookPath(cc); err != nil {
 		t.Skip("cc not available")
 	}
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 print xs[5]
 `
 	out := mustEmit(t, src)

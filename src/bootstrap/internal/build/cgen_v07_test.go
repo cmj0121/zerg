@@ -30,7 +30,7 @@ import (
 // --- chan emission --------------------------------------------------------
 
 func TestV07CgenChanIntEmitsHelpers(t *testing.T) {
-	src := `let ch := chan[int]()
+	src := `ch := chan[int]()
 close(ch)
 `
 	out := mustEmit(t, src)
@@ -47,8 +47,8 @@ close(ch)
 }
 
 func TestV07CgenChanIntDedupes(t *testing.T) {
-	src := `let a := chan[int]()
-let b := chan[int]()
+	src := `a := chan[int]()
+b := chan[int]()
 close(a)
 close(b)
 `
@@ -60,8 +60,8 @@ close(b)
 }
 
 func TestV07CgenChanIntAndStrAreDistinct(t *testing.T) {
-	src := `let ai := chan[int]()
-let bs := chan[str]()
+	src := `ai := chan[int]()
+bs := chan[str]()
 close(ai)
 close(bs)
 `
@@ -78,7 +78,7 @@ close(bs)
 
 func TestV07CgenRecvEmitsOptionEnum(t *testing.T) {
 	src := `fn run(ch: chan[int]) -> int {
-let v := <- ch
+v := <- ch
 return 0
 }
 print 0
@@ -108,7 +108,7 @@ run()
 
 func TestV07CgenSpawnCapturesListClonesIt(t *testing.T) {
 	src := `fn run() {
-let xs: list[int] = [1, 2, 3]
+xs: list[int] = [1, 2, 3]
 spawn fn() { print len(xs) }()
 }
 run()
@@ -125,7 +125,7 @@ run()
 // --- anon-fn value / IIFE in non-spawn position ---------------------------
 
 func TestV07CgenIIFEReturningValueEmitsBodyFn(t *testing.T) {
-	src := `let x := fn() -> int { return 42 }()
+	src := `x := fn() -> int { return 42 }()
 print x
 `
 	out := mustEmit(t, src)
@@ -140,7 +140,7 @@ print x
 }
 
 func TestV07CgenIIFEWithArgsPassesThemThrough(t *testing.T) {
-	src := `let r := fn(x: int) -> int { return x * 2 }(21)
+	src := `r := fn(x: int) -> int { return x * 2 }(21)
 print r
 `
 	out := mustEmit(t, src)
@@ -153,8 +153,8 @@ print r
 }
 
 func TestV07CgenLetFnValueEmitsFnValuePair(t *testing.T) {
-	src := `let n := 7
-let f := fn() -> int { return n + 1 }
+	src := `n := 7
+f := fn() -> int { return n + 1 }
 print f()
 `
 	out := mustEmit(t, src)
@@ -170,8 +170,8 @@ print f()
 }
 
 func TestV07CgenFnValueCaptureClonedAtBind(t *testing.T) {
-	src := `let xs: list[int] = [1, 2, 3]
-let f := fn() -> int { return len(xs) }
+	src := `xs: list[int] = [1, 2, 3]
+f := fn() -> int { return len(xs) }
 print f()
 `
 	out := mustEmit(t, src)
@@ -206,7 +206,7 @@ func TestV07CgenDeferAndPropagateDrainsBeforeReturn(t *testing.T) {
 	src := `fn fetch() -> Result[int, str] { return Result.Ok(7) }
 fn run() -> Result[int, str] {
 defer { print 1 }
-let v := fetch()?
+v := fetch()?
 return Result.Ok(v)
 }
 run()
@@ -261,7 +261,7 @@ print 0
 
 func TestV07CgenWaitGroupEmitsHandle(t *testing.T) {
 	src := `fn run() {
-let wg := wait_group()
+wg := wait_group()
 wg.add(2)
 wg.done()
 wg.wait()
@@ -284,7 +284,7 @@ run()
 // --- runtime presence -----------------------------------------------------
 
 func TestV07CgenRuntimePresentWhenChanUsed(t *testing.T) {
-	src := `let ch := chan[int]()
+	src := `ch := chan[int]()
 close(ch)
 `
 	out := mustEmit(t, src)
@@ -330,16 +330,16 @@ sum += v
 total <- sum
 }
 fn run() {
-let ch := chan[int](4)
-let total := chan[int](1)
-let wg := wait_group()
+ch := chan[int](4)
+total := chan[int](1)
+wg := wait_group()
 wg.add(2)
 spawn producer(ch, wg, 0)
 spawn producer(ch, wg, 100)
 spawn collector(ch, total)
 wg.wait()
 close(ch)
-let r := <- total
+r := <- total
 match r {
 Option.Some(s) => { print s }
 Option.None => { print 0 }

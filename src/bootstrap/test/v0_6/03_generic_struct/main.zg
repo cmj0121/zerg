@@ -2,7 +2,7 @@
 
 struct Box[T] { value: T }
 
-let bi: Box[int] = Box { value: 42 }
-let bs: Box[str] = Box { value: "hi" }
+bi: Box[int] = Box { value: 42 }
+bs: Box[str] = Box { value: "hi" }
 print bi
 print bs

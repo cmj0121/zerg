@@ -31,10 +31,11 @@ import (
 //     type-params substituted to concrete *Type values.
 //
 //   - Bidirectional inference: every callsite that propagates an expected
-//     type (let / mut / const annotation, return target type, fn arg slot,
-//     list element type, struct field type) feeds the hint into checkExprHint
-//     and into the call-site unifier so e.g. `let r: Result[int, str] =
-//     Result.Err("oops")` resolves Result.Err's E from the annotation.
+//     type (immutable / mut / const annotation, return target type, fn arg
+//     slot, list element type, struct field type) feeds the hint into
+//     checkExprHint and into the call-site unifier so e.g.
+//     `r: Result[int, str] = Result.Err("oops")` resolves Result.Err's E
+//     from the annotation.
 //
 //   - T → T? lift: at every position with a known expected `T?` (= Option[T])
 //     a T-typed expression is rewrapped in a synthetic
@@ -846,7 +847,7 @@ func (c *checker) checkGenericEnumLit(e *MethodCallExpr, declName, variant strin
 			// variant payloads alongside the decl's type-param positions.
 			// Lets a partial-variant constructor (`Pair.Left(3)` with hint
 			// `Pair[int, str]`) fill in the unconstrained type-params from
-			// the surrounding return / let / fn-arg context.
+			// the surrounding return / binding / fn-arg context.
 			for i, tp := range decl.TypeParams {
 				subst[tp.Name] = got[i]
 			}

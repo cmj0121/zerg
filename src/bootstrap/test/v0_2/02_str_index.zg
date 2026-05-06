@@ -1,3 +1,3 @@
-let s := "hi"
+s := "hi"
 print s[0]
 print s[1]

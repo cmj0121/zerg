@@ -523,8 +523,6 @@ func (p *parser) parseStatement() (Stmt, error) {
 		return &NopStmt{Pos: t.Pos}, nil
 	case KindPrint:
 		return p.parsePrint()
-	case KindLet:
-		return p.parseDecl(declLet)
 	case KindMut:
 		return p.parseDecl(declMut)
 	case KindConst:
@@ -626,7 +624,10 @@ func (p *parser) parsePubDecl() (Stmt, error) {
 		// emit a focused diagnostic rather than letting `parseDecl` /
 		// `parseImplDecl` handle the keyword (which would lose the `pub`
 		// context). `pub impl` is rejected here because the `pub` lives on
-		// each inner method's `fn`, not on the impl itself.
+		// each inner method's `fn`, not on the impl itself. v0.11 retired
+		// the `let` parser shape but kept `let` as a lexer keyword; `pub
+		// let` still routes here so the error names the actually-reserved
+		// pub targets.
 		return nil, errorAt(pubTok.Pos, "pub may only modify fn / struct / enum / spec")
 	case KindEOF:
 		return nil, &ParseError{
@@ -876,19 +877,21 @@ const (
 	declConst
 )
 
-// parseDecl handles let/mut/const in three shapes:
+// parseDecl handles the keyword-led mut/const declarations in three shapes
+// (the immutable form is keyword-less since v0.11 and is parsed by
+// parseBareInferredBinding / parseBareTypedBinding):
 //
-//   - `let name := expr` / `mut name := expr` / `const name := expr`
-//   - `let name : T = expr` (annotated)
-//   - `let (a, b, ...) := expr` — v0.2 tuple-destructure declaration. The
+//   - `mut name := expr` / `const name := expr`
+//   - `mut name : T = expr` (annotated)
+//   - `mut (a, b, ...) := expr` — tuple-destructure declaration. The
 //     parenthesised LHS introduces ≥ 2 fresh names in the current scope; the
-//     RHS must be a tuple of matching arity (typeck enforces). v0.2 does not
-//     admit a type annotation on the destructure form — typeck infers from
+//     RHS must be a tuple of matching arity (typeck enforces). The
+//     destructure form admits no type annotation — typeck infers from
 //     the RHS shape.
 func (p *parser) parseDecl(kind declKind) (Stmt, error) {
-	keyword := p.advance() // consume let/mut/const
+	keyword := p.advance() // consume mut/const
 
-	// Tuple-destructure LHS: `let (a, b) := expr`.
+	// Tuple-destructure LHS: `mut (a, b) := expr`.
 	if p.peek().Kind == KindLParen {
 		return p.parseTupleDestructureDecl(kind, keyword.Pos)
 	}
@@ -936,15 +939,16 @@ func (p *parser) parseDecl(kind declKind) (Stmt, error) {
 }
 
 // parseTupleDestructureDecl consumes the parenthesised LHS of a destructure
-// declaration plus its `:=` and RHS. The leading keyword (`let`/`mut`/
-// `const`) and its position have been consumed by the caller; the cursor is
-// at `(`.
+// declaration plus its `:=` and RHS. For declMut/declConst the leading
+// keyword (`mut`/`const`) and its position have already been consumed by the
+// caller; for declLet the bare-binding path passes the position of `(`
+// directly (since v0.11 there is no leading keyword). The cursor is at `(`.
 //
 // Grammar: `'(' IDENT (',' IDENT)+ ','? ')' ':=' expr`. PLAN-pinned: ≥ 2
-// names — `let (a) := …` is a parse error (ParenExpr-grouping is reserved
+// names — `(a) := …` is a parse error (ParenExpr-grouping is reserved
 // for expression position). Repeated names within the same LHS are a
 // parse-time error so typeck doesn't have to catch a contradictory binding
-// pair. v0.2 admits no type annotation on the destructure form — the parser
+// pair. The destructure form admits no type annotation — the parser
 // rejects `: T` between `)` and `:=` so we do not have to teach typeck about
 // annotated destructures.
 func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (Stmt, error) {
@@ -1008,7 +1012,10 @@ func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (
 func kindLabel(k declKind) string {
 	switch k {
 	case declLet:
-		return "let"
+		// v0.11: bare-binding form has no keyword; use a generic phrase
+		// for diagnostics that route through this path (currently only
+		// the bare tuple destructure under parseTupleDestructureDecl).
+		return "binding"
 	case declMut:
 		return "mut"
 	case declConst:
@@ -1024,7 +1031,7 @@ func kindLabel(k declKind) string {
 //   - "tuple" '[' type_ref (',' type_ref)+ ','? ']' → TypeRefTuple (≥ 2)
 //
 // `list` and `tuple` are not reserved keywords (they remain regular
-// identifiers so users can still bind names like `let list := ...`); they
+// identifiers so users can still bind names like `list := ...`); they
 // trigger compound parsing only when they appear in type-ref position
 // followed by `[`.
 //
@@ -2003,8 +2010,29 @@ func (p *parser) parseBreakLikeStmt(isBreak bool) (Stmt, error) {
 // parseExprOrAssignStmt handles expression statements (function calls only at
 // v0.1) and assignment statements. We parse the LHS as a full expression and
 // then look for an assignment operator.
+//
+// v0.11: the keyword-led `let` was retired. The bare binding shapes
+//
+//	IDENT ':=' expr                          → inferred immutable
+//	IDENT ':' type '=' expr                  → annotated immutable
+//	'(' IDENT (',' IDENT)+ ','? ')' ':=' expr → tuple destructure
+//
+// are detected at statement start before parseExpr would otherwise consume the
+// LHS as an expression. `mut` and `const` keep their keyword-led forms; `let`
+// is now a regular identifier.
 func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 	startTok := p.peek()
+	if startTok.Kind == KindIdent {
+		switch p.peekRawAt(p.pos + 1) {
+		case KindWalrus:
+			return p.parseBareInferredBinding(startTok)
+		case KindColon:
+			return p.parseBareTypedBinding(startTok)
+		}
+	}
+	if startTok.Kind == KindLParen && p.detectsBareTupleBinding() {
+		return p.parseTupleDestructureDecl(declLet, startTok.Pos)
+	}
 	expr, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -2016,6 +2044,30 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 	// value). Chained sends (`a <- b <- c`) reject at parse time per PLAN.md.
 	if p.peek().Kind == KindLArrow {
 		return p.parseSendStmt(expr)
+	}
+
+	// v0.11 focused diagnostics for almost-binding shapes. These run BEFORE
+	// the assign-op check so `(a, b) = pair` does not get caught by the
+	// generic "left-hand side of assignment must be an identifier or list[i]"
+	// message. The bare-binding sniff at the top of this function already
+	// captured the well-formed shapes; whatever falls through here is one of
+	// the misuses listed in each branch's diagnostic.
+	switch lhs := expr.(type) {
+	case *ParenExpr:
+		if p.peek().Kind == KindWalrus {
+			return nil, errorAt(lhs.Pos, "destructure pattern requires at least 2 names (use the single-name form for one)")
+		}
+	case *TupleLit:
+		switch p.peek().Kind {
+		case KindAssign:
+			return nil, errorAt(p.peek().Pos, "expected ':=' after destructure pattern")
+		case KindColon:
+			return nil, errorAt(p.peek().Pos, "type annotations on destructure declarations are not supported")
+		}
+	case *IdentExpr:
+		if k := p.peek().Kind; k == KindNewline || k == KindEOF {
+			return nil, errorAt(lhs.Pos, "expected ':=' or ': T =' after %q to bind, or '(' to call", lhs.Name)
+		}
 	}
 
 	// Check for an assignment operator.
@@ -2075,6 +2127,88 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 		return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
 	}
 	return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
+}
+
+// peekRawAt returns the kind of the token at absolute index i without
+// consuming or advancing the cursor and without skipping NEWLINEs. Used by
+// the v0.11 bare-binding sniff which fires at statement position where
+// parenDepth is always 0; if a future caller needs paren-aware lookahead it
+// should walk the slice with the parenDepth-skipping rules of peek().
+func (p *parser) peekRawAt(i int) Kind {
+	if i < 0 || i >= len(p.tokens) {
+		return KindEOF
+	}
+	return p.tokens[i].Kind
+}
+
+// detectsBareTupleBinding reports whether the cursor is sitting at the start
+// of a v0.11 bare tuple destructure binding:
+//
+//	'(' IDENT (',' IDENT)+ ','? ')' ':='
+//
+// Walks the token stream without consuming. Returns false for any shape that
+// does not match — `(a)` (single-element parens), `(a + b)` (expression in
+// parens), `(a, b)` followed by anything other than `:=`, etc. — letting
+// parseExpr handle them as ordinary parenthesised / tuple-literal forms.
+func (p *parser) detectsBareTupleBinding() bool {
+	i := p.pos + 1
+	if i >= len(p.tokens) || p.tokens[i].Kind != KindIdent {
+		return false
+	}
+	i++
+	if i >= len(p.tokens) || p.tokens[i].Kind != KindComma {
+		return false
+	}
+	for i < len(p.tokens) {
+		if p.tokens[i].Kind != KindComma {
+			break
+		}
+		i++
+		if i < len(p.tokens) && p.tokens[i].Kind == KindRParen {
+			break
+		}
+		if i >= len(p.tokens) || p.tokens[i].Kind != KindIdent {
+			return false
+		}
+		i++
+	}
+	if i >= len(p.tokens) || p.tokens[i].Kind != KindRParen {
+		return false
+	}
+	i++
+	return i < len(p.tokens) && p.tokens[i].Kind == KindWalrus
+}
+
+// parseBareInferredBinding handles `IDENT ':=' expr`. The cursor is at the
+// IDENT; consumes through the RHS expression. Mirrors the no-annotation
+// branch of parseDecl(declLet) without the keyword consumption.
+func (p *parser) parseBareInferredBinding(idTok Token) (Stmt, error) {
+	p.advance()
+	p.advance()
+	value, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	return &LetStmt{Pos: idTok.Pos, Name: idTok.Value, Value: value}, nil
+}
+
+// parseBareTypedBinding handles `IDENT ':' type '=' expr`. The cursor is at
+// the IDENT; consumes everything through the RHS expression.
+func (p *parser) parseBareTypedBinding(idTok Token) (Stmt, error) {
+	p.advance()
+	p.advance()
+	tr, err := p.parseTypeRef()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(KindAssign, "after type annotation"); err != nil {
+		return nil, err
+	}
+	value, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	return &LetStmt{Pos: idTok.Pos, Name: idTok.Value, Type: tr, Value: value}, nil
 }
 
 // assignOpFor maps a token Kind to the matching AssignOp value, if any.
@@ -2905,9 +3039,9 @@ func (p *parser) parseListLit() (Expr, error) {
 // looksLikeStructLitBody peeks past the `{` (without consuming) to decide
 // whether `Ident { ... }` is a struct literal or a brace block (i.e. the
 // caller's statement body). Rule: empty `{}` OR opens with `IDENT ':'`
-// where `:` is not `:=` (a walrus would mean the inside is a let-decl,
+// where `:` is not `:=` (a walrus would mean the inside is a binding,
 // which structurally cannot happen in expression position but happens
-// inside an `if x { let y := ... }` body).
+// inside an `if x { y := ... }` body).
 //
 // The function inspects raw token positions and never advances. We treat
 // NEWLINEs as transparent inside the brace because struct literals can

@@ -11,6 +11,6 @@ impl Counter for Printable {
 
 struct Holder { g: Printable }
 
-let c := Counter { count: 7 }
-let h := Holder { g: c }
+c := Counter { count: 7 }
+h := Holder { g: c }
 print h.g.to_string()

@@ -1,8 +1,8 @@
 # requires: v0.9
 import "std/time"
 
-let t1 := time.now_ms()
-let t2 := time.now_ms()
+t1 := time.now_ms()
+t2 := time.now_ms()
 print t1
 if t2 >= 0 {
     print "ok"

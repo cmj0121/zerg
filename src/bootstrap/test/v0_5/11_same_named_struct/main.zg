@@ -8,7 +8,7 @@ impl Counter {
     }
 }
 
-let mc := Counter { tag: 1 }
+mc := Counter { tag: 1 }
 print mc.show()
-let uc := util.Counter { tag: 2 }
+uc := util.Counter { tag: 2 }
 print uc.show()

@@ -1,8 +1,8 @@
 # requires: v0.7
 
 fn main() {
-    let a := chan[int](1)
-    let b := chan[int](1)
+    a := chan[int](1)
+    b := chan[int](1)
     a <- 100
     b <- 200
     select {

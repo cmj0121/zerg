@@ -26,7 +26,7 @@ fn double() -> int {
 return this.count * 2
 }
 }
-let c := Counter { count: 7 }
+c := Counter { count: 7 }
 print c.double()
 `
 	expectOK(t, src, "14\n")
@@ -40,7 +40,7 @@ fn label() -> str {
 return "color"
 }
 }
-let c := Color.Red
+c := Color.Red
 print c.label()
 `
 	expectOK(t, src, "color\n")
@@ -55,7 +55,7 @@ fn to_string() -> str {
 return "counter"
 }
 }
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.to_string()
 `
 	expectOK(t, src, "counter\n")
@@ -70,7 +70,7 @@ fn tag() -> str {
 return "light"
 }
 }
-let l := Light.On
+l := Light.On
 print l.tag()
 `
 	expectOK(t, src, "light\n")
@@ -86,7 +86,7 @@ return 99
 }
 struct Counter { count: int }
 impl Counter for Hashable {}
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.hash()
 `
 	expectOK(t, src, "99\n")
@@ -105,7 +105,7 @@ fn hash() -> int {
 return this.count + 100
 }
 }
-let c := Counter { count: 5 }
+c := Counter { count: 5 }
 print c.hash()
 `
 	expectOK(t, src, "105\n")
@@ -117,7 +117,7 @@ func TestRunNotImplementedPanic(t *testing.T) {
 	src := `spec Printable { fn to_string() -> str }
 struct Counter { count: int }
 impl Counter for Printable {}
-let c := Counter { count: 1 }
+c := Counter { count: 1 }
 print c.to_string()
 `
 	got, err := runSrc(t, src)
@@ -147,8 +147,8 @@ fn to_string() -> str {
 return "wrapped"
 }
 }
-let c := Counter { count: 1 }
-let p: Printable = c
+c := Counter { count: 1 }
+p: Printable = c
 print p.to_string()
 `
 	expectOK(t, src, "wrapped\n")
@@ -170,9 +170,9 @@ fn tag() -> str {
 return "color"
 }
 }
-let c := Counter { count: 1 }
-let r := Color.Red
-let xs: list[Tagged] = [c, r]
+c := Counter { count: 1 }
+r := Color.Red
+xs: list[Tagged] = [c, r]
 for x in xs {
 print x.tag()
 }
@@ -188,7 +188,7 @@ print x.tag()
 // in the documented "Name.Variant(arg)" format.
 func TestRunEnumPayloadLitPrint(t *testing.T) {
 	src := `enum Token { Eof, Ident(str), Number(int, int) }
-let t := Token.Ident("hello")
+t := Token.Ident("hello")
 print t
 `
 	expectOK(t, src, "Token.Ident(hello)\n")
@@ -198,7 +198,7 @@ print t
 // separated.
 func TestRunEnumPayloadMultiPrint(t *testing.T) {
 	src := `enum Token { Eof, Ident(str), Number(int, int) }
-let t := Token.Number(10, 16)
+t := Token.Number(10, 16)
 print t
 `
 	expectOK(t, src, "Token.Number(10, 16)\n")
@@ -208,7 +208,7 @@ print t
 // with v0.2 behaviour).
 func TestRunEnumBarePrint(t *testing.T) {
 	src := `enum Token { Eof, Ident(str) }
-let t := Token.Eof
+t := Token.Eof
 print t
 `
 	expectOK(t, src, "Token.Eof\n")
@@ -217,7 +217,7 @@ print t
 // TestRunEnumMatchPayloadBind — binds the payload value into the arm scope.
 func TestRunEnumMatchPayloadBind(t *testing.T) {
 	src := `enum Token { Ident(str), Number(int) }
-let t := Token.Ident("zerg")
+t := Token.Ident("zerg")
 match t {
 Token.Ident(name) => { print name }
 Token.Number(n) => { print n }
@@ -230,7 +230,7 @@ Token.Number(n) => { print n }
 // arm selection.
 func TestRunEnumMatchPayloadLiteral(t *testing.T) {
 	src := `enum Op { Add(int), Sub(int) }
-let o := Op.Add(5)
+o := Op.Add(5)
 match o {
 Op.Add(0) => { print "zero" }
 Op.Add(n) => { print n }
@@ -243,7 +243,7 @@ Op.Sub(n) => { print n }
 // TestRunEnumMatchPayloadWildcard — wildcard in payload position.
 func TestRunEnumMatchPayloadWildcard(t *testing.T) {
 	src := `enum Pair { Both(int, int) }
-let p := Pair.Both(7, 8)
+p := Pair.Both(7, 8)
 match p {
 Pair.Both(_, second) => { print second }
 }
@@ -257,8 +257,8 @@ Pair.Both(_, second) => { print second }
 
 // TestRunListEq — same length, same elements, same order.
 func TestRunListEq(t *testing.T) {
-	src := `let a := [1, 2, 3]
-let b := [1, 2, 3]
+	src := `a := [1, 2, 3]
+b := [1, 2, 3]
 print a == b
 `
 	expectOK(t, src, "true\n")
@@ -266,8 +266,8 @@ print a == b
 
 // TestRunListNeqLength — different lengths compare as false.
 func TestRunListNeqLength(t *testing.T) {
-	src := `let a := [1, 2, 3]
-let b := [1, 2]
+	src := `a := [1, 2, 3]
+b := [1, 2]
 print a == b
 `
 	expectOK(t, src, "false\n")
@@ -275,8 +275,8 @@ print a == b
 
 // TestRunTupleEq — per-position == on tuples.
 func TestRunTupleEq(t *testing.T) {
-	src := `let a := (1, "x")
-let b := (1, "x")
+	src := `a := (1, "x")
+b := (1, "x")
 print a == b
 `
 	expectOK(t, src, "true\n")
@@ -285,9 +285,9 @@ print a == b
 // TestRunStructEq — declaration-order field equality.
 func TestRunStructEq(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let a := Point { x: 1, y: 2 }
-let b := Point { x: 1, y: 2 }
-let c := Point { x: 1, y: 3 }
+a := Point { x: 1, y: 2 }
+b := Point { x: 1, y: 2 }
+c := Point { x: 1, y: 3 }
 print a == b
 print a == c
 `
@@ -297,9 +297,9 @@ print a == c
 // TestRunEnumBareEq — same tag → true; different tag → false.
 func TestRunEnumBareEq(t *testing.T) {
 	src := `enum Color { Red, Green, Blue }
-let a := Color.Red
-let b := Color.Red
-let c := Color.Green
+a := Color.Red
+b := Color.Red
+c := Color.Green
 print a == b
 print a == c
 `
@@ -310,9 +310,9 @@ print a == c
 // → false.
 func TestRunEnumPayloadEq(t *testing.T) {
 	src := `enum Token { Ident(str), Number(int) }
-let a := Token.Ident("foo")
-let b := Token.Ident("foo")
-let c := Token.Ident("bar")
+a := Token.Ident("foo")
+b := Token.Ident("foo")
+c := Token.Ident("bar")
 print a == b
 print a == c
 `
@@ -321,9 +321,9 @@ print a == c
 
 // TestRunNestedListOfTupleEq — recursive composite ==.
 func TestRunNestedListOfTupleEq(t *testing.T) {
-	src := `let a := [(1, "x"), (2, "y")]
-let b := [(1, "x"), (2, "y")]
-let c := [(1, "x"), (3, "y")]
+	src := `a := [(1, "x"), (2, "y")]
+b := [(1, "x"), (2, "y")]
+c := [(1, "x"), (3, "y")]
 print a == b
 print a == c
 `
@@ -345,8 +345,8 @@ print xs
 
 // TestRunListMethodClone — `xs.clone()` returns an independent deep copy.
 func TestRunListMethodClone(t *testing.T) {
-	src := `let xs := [1, 2, 3]
-let ys := xs.clone()
+	src := `xs := [1, 2, 3]
+ys := xs.clone()
 print ys
 `
 	expectOK(t, src, "[ 1, 2, 3 ]\n")
@@ -354,7 +354,7 @@ print ys
 
 // TestRunListMethodLen — `xs.len()` lowers to `len(xs)`.
 func TestRunListMethodLen(t *testing.T) {
-	src := `let xs := [10, 20, 30, 40]
+	src := `xs := [10, 20, 30, 40]
 print xs.len()
 `
 	expectOK(t, src, "4\n")
@@ -372,7 +372,7 @@ fn sum() -> int {
 return this.x + this.y
 }
 }
-let b := Box { x: 4, y: 5 }
+b := Box { x: 4, y: 5 }
 print b.sum()
 `
 	expectOK(t, src, "9\n")
@@ -390,7 +390,7 @@ fn quad() -> int {
 return this.double() * 2
 }
 }
-let c := Counter { count: 3 }
+c := Counter { count: 3 }
 print c.quad()
 `
 	expectOK(t, src, "12\n")

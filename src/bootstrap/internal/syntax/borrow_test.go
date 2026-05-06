@@ -49,15 +49,15 @@ func borrowErrSrc(t *testing.T, src, want string) string {
 // Positive — programs that must pass borrow check.
 // ---------------------------------------------------------------------------
 
-// TestBorrowMoveBasic — `let ys := xs` moves xs; reading ys is fine.
+// TestBorrowMoveBasic — `ys := xs` moves xs; reading ys is fine.
 func TestBorrowMoveBasic(t *testing.T) {
-	checkSrc(t, "let xs := [1, 2]\nlet ys := xs\nprint ys[0]\n")
+	checkSrc(t, "xs := [1, 2]\nys := xs\nprint ys[0]\n")
 }
 
 // TestBorrowReadDoesNotMove — index reads, len, prints all observe without
 // moving the source.
 func TestBorrowReadDoesNotMove(t *testing.T) {
-	src := "let xs := [1, 2]\nprint xs[0]\nprint len(xs)\nprint xs[1]\n"
+	src := "xs := [1, 2]\nprint xs[0]\nprint len(xs)\nprint xs[1]\n"
 	checkSrc(t, src)
 }
 
@@ -67,7 +67,7 @@ func TestBorrowFnCallDoesNotMove(t *testing.T) {
 	src := `fn observe(ys: list[int]) {
 print ys[0]
 }
-let xs := [1, 2]
+xs := [1, 2]
 observe(xs)
 print xs[0]
 `
@@ -83,7 +83,7 @@ print ys[0]
 fn last(ys: list[int]) {
 print ys[1]
 }
-let xs := [1, 2]
+xs := [1, 2]
 first(xs)
 last(xs)
 print len(xs)
@@ -104,7 +104,7 @@ func TestBorrowPushOnMutList(t *testing.T) {
 // TestBorrowForIterReleasesAtBodyExit — for-iter borrows xs only for the
 // body's duration; xs returns to Owned afterwards.
 func TestBorrowForIterReleasesAtBodyExit(t *testing.T) {
-	src := `let xs := [1, 2, 3]
+	src := `xs := [1, 2, 3]
 for x in xs {
 print x
 }
@@ -116,20 +116,20 @@ print xs[0]
 // TestBorrowCloneDoesNotMove — clone observes its argument and returns a
 // fresh copy; original remains usable.
 func TestBorrowCloneDoesNotMove(t *testing.T) {
-	src := `let xs := [1, 2]
-let ys := clone(xs)
+	src := `xs := [1, 2]
+ys := clone(xs)
 print xs[0]
 print ys[0]
 `
 	checkSrc(t, src)
 }
 
-// TestBorrowTupleDestructure — `let (a, b) := pair` moves pair, binds
+// TestBorrowTupleDestructure — `(a, b) := pair` moves pair, binds
 // a and b as fresh owned locals (primitives in this case — no further
 // move tracking needed but the parse/typeck path must succeed).
 func TestBorrowTupleDestructure(t *testing.T) {
-	src := `let pair := (1, 2)
-let (a, b) := pair
+	src := `pair := (1, 2)
+(a, b) := pair
 print a
 print b
 `
@@ -139,12 +139,12 @@ print b
 // TestBorrowBranchBothMove — both branches move xs; agreement holds, no
 // later use is attempted.
 func TestBorrowBranchBothMove(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 if true {
-let y := xs
+y := xs
 print y[0]
 } else {
-let z := xs
+z := xs
 print z[0]
 }
 `
@@ -157,7 +157,7 @@ func TestBorrowIndexReadAfterFnCall(t *testing.T) {
 	src := `fn observe(ys: list[int]) {
 print len(ys)
 }
-let xs := [1, 2, 3]
+xs := [1, 2, 3]
 observe(xs)
 print xs[1]
 `
@@ -166,8 +166,8 @@ print xs[1]
 
 // TestBorrowSliceDoesNotMove — `xs[a..b]` is a read; xs stays usable.
 func TestBorrowSliceDoesNotMove(t *testing.T) {
-	src := `let xs := [1, 2, 3, 4]
-let zs := xs[1..3]
+	src := `xs := [1, 2, 3, 4]
+zs := xs[1..3]
 print xs[0]
 print zs[0]
 `
@@ -177,7 +177,7 @@ print zs[0]
 // TestBorrowFieldReadDoesNotMove — `p.x` reads the receiver without moving.
 func TestBorrowFieldReadDoesNotMove(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 1, y: 2 }
+p := Point { x: 1, y: 2 }
 print p.x
 print p.y
 `
@@ -187,14 +187,14 @@ print p.y
 // TestBorrowPrimitiveMoveIsCopy — primitives move-equals-copy; we don't
 // flag use-after-move on int.
 func TestBorrowPrimitiveMoveIsCopy(t *testing.T) {
-	checkSrc(t, "let x := 5\nlet y := x\nprint x\nprint y\n")
+	checkSrc(t, "x := 5\ny := x\nprint x\nprint y\n")
 }
 
 // TestBorrowMatchEnumDoesNotMove — match arms that only test enum variants
 // don't consume the scrutinee; xs is usable after match.
 func TestBorrowMatchEnumDoesNotMove(t *testing.T) {
 	src := `enum Color { Red, Green }
-let c := Color.Red
+c := Color.Red
 match c {
 Color.Red => print 1
 Color.Green => print 2
@@ -218,8 +218,8 @@ print add(2, 3)
 // fine; the new struct value is usable, the source is moved.
 func TestBorrowMoveIntoStructAndUseStruct(t *testing.T) {
 	src := `struct Box { xs: list[int] }
-let xs := [1, 2]
-let b := Box { xs: xs }
+xs := [1, 2]
+b := Box { xs: xs }
 print b.xs[0]
 `
 	checkSrc(t, src)
@@ -229,19 +229,19 @@ print b.xs[0]
 // Negative — programs that must reject.
 // ---------------------------------------------------------------------------
 
-// TestBorrowUseAfterMove — reading xs after `let ys := xs` errors with the
+// TestBorrowUseAfterMove — reading xs after `ys := xs` errors with the
 // precise "use of moved value" diagnostic naming the source binding.
 func TestBorrowUseAfterMove(t *testing.T) {
-	src := "let xs := [1, 2]\nlet ys := xs\nprint xs[0]\n"
+	src := "xs := [1, 2]\nys := xs\nprint xs[0]\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
 	if !strings.Contains(msg, `"xs"`) {
 		t.Errorf("error %q does not name xs", msg)
 	}
 }
 
-// TestBorrowDoubleMove — `let ys := xs; let zs := xs` flags the second move.
+// TestBorrowDoubleMove — `ys := xs; zs := xs` flags the second move.
 func TestBorrowDoubleMove(t *testing.T) {
-	src := "let xs := [1, 2]\nlet ys := xs\nlet zs := xs\n"
+	src := "xs := [1, 2]\nys := xs\nzs := xs\n"
 	borrowErrSrc(t, src, "use of moved value")
 }
 
@@ -270,9 +270,9 @@ push(xs, 3)
 // TestBorrowBranchDisagreeMoveOnlyOnIf — the if branch moves xs but the
 // implicit else doesn't; branch-agree fires.
 func TestBorrowBranchDisagreeMoveOnlyOnIf(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 if true {
-let y := xs
+y := xs
 print y[0]
 }
 print 0
@@ -282,9 +282,9 @@ print 0
 
 // TestBorrowBranchDisagreeMoveOnIfNotElse — explicit else without move.
 func TestBorrowBranchDisagreeMoveOnIfNotElse(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 if true {
-let y := xs
+y := xs
 print y[0]
 } else {
 print xs[0]
@@ -297,9 +297,9 @@ print xs[0]
 // for-range body is rejected because subsequent iterations would see it
 // already moved.
 func TestBorrowLoopBodyMovesOuter(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 for i in 0..3 {
-let y := xs
+y := xs
 print y[0]
 }
 `
@@ -309,7 +309,7 @@ print y[0]
 // TestBorrowMatchBindMovesScrutinee — a BindPat arm moves the scrutinee;
 // reading it after the match errors.
 func TestBorrowMatchBindMovesScrutinee(t *testing.T) {
-	src := `let xs := [1, 2]
+	src := `xs := [1, 2]
 match xs {
 ys => print ys[0]
 }
@@ -322,10 +322,10 @@ print xs[0]
 // to move it (via let-rebind) errors with "cannot move borrowed value".
 func TestBorrowFnParamCannotBeMoved(t *testing.T) {
 	src := `fn f(xs: list[int]) {
-let ys := xs
+ys := xs
 print ys[0]
 }
-let xs := [1, 2]
+xs := [1, 2]
 f(xs)
 `
 	borrowErrSrc(t, src, "cannot move borrowed value")
@@ -337,8 +337,8 @@ func TestBorrowFnParamCannotBeReturned(t *testing.T) {
 	src := `fn f(xs: list[int]) -> list[int] {
 return xs
 }
-let xs := [1, 2]
-let ys := f(xs)
+xs := [1, 2]
+ys := f(xs)
 print ys[0]
 `
 	borrowErrSrc(t, src, "cannot move borrowed value")
@@ -351,7 +351,7 @@ func TestBorrowFnParamCannotBePushed(t *testing.T) {
 	src := `fn f(xs: list[int]) {
 push(xs, 5)
 }
-let xs := [1, 2]
+xs := [1, 2]
 f(xs)
 `
 	// typeck fires first ("must be mut") because fn params are bindLet —
@@ -363,9 +363,9 @@ f(xs)
 // TestBorrowMoveIntoListLitMovesElement — `[a, b]` moves a and b; using a
 // after the literal errors.
 func TestBorrowMoveIntoListLitMovesElement(t *testing.T) {
-	src := `let a := [1, 2]
-let b := [3, 4]
-let outer := [a, b]
+	src := `a := [1, 2]
+b := [3, 4]
+outer := [a, b]
 print a[0]
 `
 	borrowErrSrc(t, src, "use of moved value")
@@ -373,9 +373,9 @@ print a[0]
 
 // TestBorrowMoveIntoTupleLitMovesElement — same shape for tuples.
 func TestBorrowMoveIntoTupleLitMovesElement(t *testing.T) {
-	src := `let a := [1, 2]
-let b := [3, 4]
-let pair := (a, b)
+	src := `a := [1, 2]
+b := [3, 4]
+pair := (a, b)
 print a[0]
 `
 	borrowErrSrc(t, src, "use of moved value")
@@ -385,8 +385,8 @@ print a[0]
 // my_list; reading it after errors.
 func TestBorrowMoveIntoStructFieldMovesField(t *testing.T) {
 	src := `struct Box { xs: list[int] }
-let xs := [1, 2]
-let b := Box { xs: xs }
+xs := [1, 2]
+b := Box { xs: xs }
 print xs[0]
 `
 	borrowErrSrc(t, src, "use of moved value")
@@ -400,7 +400,7 @@ func TestBorrowReturnMovesValue(t *testing.T) {
 	// later print on the other branch should still fire if the local was
 	// moved on the first branch but not on the (no-else) second.
 	src := `fn f() -> list[int] {
-let xs := [1, 2]
+xs := [1, 2]
 if true {
 return xs
 }
@@ -416,11 +416,11 @@ print 0
 	checkSrc(t, src)
 }
 
-// TestBorrowTupleDestructureMovesPair — `let (a, b) := pair; print pair` is
+// TestBorrowTupleDestructureMovesPair — `(a, b) := pair; print pair` is
 // rejected.
 func TestBorrowTupleDestructureMovesPair(t *testing.T) {
-	src := `let pair := ([1], [2])
-let (a, b) := pair
+	src := `pair := ([1], [2])
+(a, b) := pair
 print pair
 `
 	borrowErrSrc(t, src, "use of moved value")
@@ -429,7 +429,7 @@ print pair
 // TestBorrowMatchTupleBindMovesScrutinee — destructuring a tuple with bind
 // patterns consumes the scrutinee.
 func TestBorrowMatchTupleBindMovesScrutinee(t *testing.T) {
-	src := `let pair := ([1], [2])
+	src := `pair := ([1], [2])
 match pair {
 (a, b) => print 1
 }
@@ -442,7 +442,7 @@ print pair
 // xs[i] = v either.
 func TestBorrowIndexAssignOnMovedListErrors(t *testing.T) {
 	src := `mut xs := [1, 2]
-let ys := xs
+ys := xs
 xs[0] = 99
 `
 	borrowErrSrc(t, src, "use of moved value")
@@ -451,9 +451,9 @@ xs[0] = 99
 // TestBorrowMoveDiagnosticIncludesSourcePos — the use-after-move message
 // includes the position of the move so the user can find both ends.
 func TestBorrowMoveDiagnosticIncludesSourcePos(t *testing.T) {
-	src := "let xs := [1, 2]\nlet ys := xs\nprint xs[0]\n"
+	src := "xs := [1, 2]\nys := xs\nprint xs[0]\n"
 	msg := borrowErrSrc(t, src, "use of moved value")
-	// Move is on line 2 ("let ys := xs"); use on line 3.
+	// Move is on line 2 ("ys := xs"); use on line 3.
 	if !strings.Contains(msg, "moved at 2:") {
 		t.Errorf("error %q does not name move position 2:*", msg)
 	}
@@ -473,10 +473,10 @@ func TestBorrowMoveDiagnosticIncludesSourcePos(t *testing.T) {
 // ys with the list type; moving ys inside the arm and then reading it must
 // fire use-after-move (was previously a silent miss because ys.typ was nil).
 func TestBorrowMatchBindNameTracksCompositeMove(t *testing.T) {
-	src := `let xs := [1, 2, 3]
+	src := `xs := [1, 2, 3]
 match xs {
 ys => {
-let zs := ys
+zs := ys
 print ys[0]
 }
 }
@@ -487,10 +487,10 @@ print ys[0]
 // TestBorrowMatchTuplePatBindTracksComposite — TuplePat element bound to a
 // list takes list[T]; a later move of that bound name fires use-after-move.
 func TestBorrowMatchTuplePatBindTracksComposite(t *testing.T) {
-	src := `let pair := ([1], [2])
+	src := `pair := ([1], [2])
 match pair {
 (a, b) => {
-let c := a
+c := a
 print a[0]
 }
 }
@@ -502,10 +502,10 @@ print a[0]
 // takes the primitive type; the borrow checker ignores moves of primitives.
 func TestBorrowMatchStructPatBindPrimitiveOK(t *testing.T) {
 	src := `struct Point { x: int, y: int }
-let p := Point { x: 1, y: 2 }
+p := Point { x: 1, y: 2 }
 match p {
 Point { x: a, y: b } => {
-let c := a
+c := a
 print a
 }
 }
@@ -517,10 +517,10 @@ print a
 // list[int] takes list[int]; a later move fires use-after-move.
 func TestBorrowMatchStructPatBindCompositeTracks(t *testing.T) {
 	src := `struct Bag { xs: list[int] }
-let b := Bag { xs: [1, 2] }
+b := Bag { xs: [1, 2] }
 match b {
 Bag { xs: ys } => {
-let zs := ys
+zs := ys
 print ys[0]
 }
 }
@@ -548,7 +548,7 @@ _ => print "x"
 print p
 return ""
 }
-let n := 1
+n := 1
 print f(n)
 `
 	checkSrc(t, src)
@@ -568,7 +568,7 @@ Point { x, y } => print "e"
 print p.x
 return ""
 }
-let q := Point { x: 1, y: 2 }
+q := Point { x: 1, y: 2 }
 print f(q)
 `
 	checkSrc(t, src)
@@ -584,7 +584,7 @@ ys => print ys[0]
 }
 return 0
 }
-let xs := [1, 2]
+xs := [1, 2]
 print f(xs)
 `
 	borrowErrSrc(t, src, "cannot move borrowed value")
@@ -614,7 +614,7 @@ return len(xs)
 fn g(xs: list[int]) -> int {
 return f(xs) + len(xs)
 }
-let xs := [1, 2, 3]
+xs := [1, 2, 3]
 print g(xs)
 print xs[0]
 `

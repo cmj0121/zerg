@@ -193,7 +193,7 @@ print strings.to_upper("café")
 func TestV08CgenStringsSplit(t *testing.T) {
 	expectV08Build(t, `# requires: v0.8
 import "std/strings"
-let parts := strings.split("a,b,c", ",")
+parts := strings.split("a,b,c", ",")
 print parts
 `, "[ a, b, c ]\n")
 }
@@ -201,7 +201,7 @@ print parts
 func TestV08CgenStringsJoin(t *testing.T) {
 	expectV08Build(t, `# requires: v0.8
 import "std/strings"
-let parts := strings.split("a,b,c", ",")
+parts := strings.split("a,b,c", ",")
 print strings.join(parts, "-")
 `, "a-b-c\n")
 }
@@ -240,7 +240,7 @@ func TestV08CgenIoReadFileOk(t *testing.T) {
 	}
 	src := `# requires: v0.8
 import "std/io"
-let r := io.read_file("` + fixture + `")
+r := io.read_file("` + fixture + `")
 print r
 `
 	expectV08Build(t, src, "Result.Ok(hello, file\n)\n")
@@ -251,7 +251,7 @@ func TestV08CgenIoReadFileNotFound(t *testing.T) {
 	missing := filepath.Join(dir, "no-such-file.txt")
 	src := `# requires: v0.8
 import "std/io"
-let r := io.read_file("` + missing + `")
+r := io.read_file("` + missing + `")
 print r
 `
 	expectV08Build(t, src, "Result.Err(IoError.NotFound)\n")
@@ -266,7 +266,7 @@ func TestV08CgenIoWriteFileOk(t *testing.T) {
 	target := filepath.Join(dir, "out.txt")
 	src := `# requires: v0.8
 import "std/io"
-let r := io.write_file("` + target + `", "written")
+r := io.write_file("` + target + `", "written")
 print r
 `
 	expectV08Build(t, src, "Result.Ok(true)\n")

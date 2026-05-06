@@ -207,7 +207,7 @@ func borrowCheck(prog *Program, fns map[string]fnSig, structs, enums map[string]
 	// v0.4: walk impl method bodies as if they were free fns plus an implicit
 	// `this` BorrowedShared receiver. The receiver type is the impl's Type
 	// (struct / enum); the borrow checker registers `this` in the body scope
-	// so use-after-borrow rules fire on `let y := this` / `return this`.
+	// so use-after-borrow rules fire on `y := this` / `return this`.
 	for _, stmt := range prog.Statements {
 		id, ok := stmt.(*ImplDecl)
 		if !ok {
@@ -301,7 +301,7 @@ func (c *borrowChecker) checkMethodFn(fn *FnDecl, recv *Type) error {
 	if recv != nil {
 		// `this` is the implicit receiver. Composite receivers (struct, enum,
 		// spec) are BorrowedShared during the method body so any move-out via
-		// `let y := this` or `return this` is rejected by the consume() guard.
+		// `y := this` or `return this` is rejected by the consume() guard.
 		state := bsOwned
 		reason := ""
 		if isComposite(recv) {
@@ -475,13 +475,13 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 }
 
 // ---------------------------------------------------------------------------
-// Declarations: let / mut / const + tuple destructure.
+// Declarations: immutable / mut / const + tuple destructure.
 // ---------------------------------------------------------------------------
 
-// checkLetLikeDecl handles all three of let/mut/const, which share the same
-// borrow-check shape: walk the RHS as a "consume" site (move-out of the RHS
-// happens here when the RHS is a single named binding), then introduce the
-// new binding(s) as Owned in the current scope.
+// checkLetLikeDecl handles all three of immutable/mut/const, which share the
+// same borrow-check shape: walk the RHS as a "consume" site (move-out of the
+// RHS happens here when the RHS is a single named binding), then introduce
+// the new binding(s) as Owned in the current scope.
 func (c *borrowChecker) checkLetLikeDecl(pos Position, name string, tuple *TupleBinding, value Expr) error {
 	if tuple != nil {
 		return c.checkTupleDestructure(pos, tuple, value)
@@ -511,7 +511,7 @@ func (c *borrowChecker) checkLetLikeDecl(pos Position, name string, tuple *Tuple
 	return nil
 }
 
-// checkTupleDestructure handles `let (a, b) := pair` (and the mut form). The
+// checkTupleDestructure handles tuple-destructure binding `(a, b) := pair` (and the mut form). The
 // RHS must be either a bare ident (which we move) or a fresh tuple value.
 // Each name on the LHS becomes Owned with its element type.
 func (c *borrowChecker) checkTupleDestructure(_ Position, tb *TupleBinding, value Expr) error {
@@ -560,7 +560,7 @@ func (c *borrowChecker) checkAssign(s *AssignStmt) error {
 		// Moved — x's state stays as it was (Owned) because we just wrote
 		// to it. But we should reject if x is currently BorrowedShared
 		// (mutating a borrowed binding) — typeck would already reject
-		// "let xs := ..." mutation, so this guard mostly helps fn params.
+		// "xs := ..." mutation, so this guard mostly helps fn params.
 		if e, _ := c.scope.lookup(lhs.Name); e != nil {
 			if e.state == bsBorrowedShared && isComposite(e.typ) {
 				return borrowErr(s.Pos, "cannot mutate %q while it is borrowed (%s)", lhs.Name, e.borrowReason)
@@ -687,7 +687,7 @@ func (c *borrowChecker) checkExprRead(expr Expr) error {
 // checkExprConsume walks expr in consume mode — at AGGREGATION points
 // (ListLit, TupleLit, StructLit FieldInit values), bare ident leaves move
 // the source binding. Used at sites where the surrounding statement consumes
-// the expression result: let RHS, return, etc. The top-level *IdentExpr
+// the expression result: binding RHS, return, etc. The top-level *IdentExpr
 // case is handled by the caller (consume()) so this only matters for the
 // nested aggregate case.
 func (c *borrowChecker) checkExprConsume(expr Expr) error {

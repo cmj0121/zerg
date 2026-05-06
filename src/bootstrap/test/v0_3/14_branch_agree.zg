@@ -1,10 +1,10 @@
-let xs := [1, 2, 3]
-let cond := true
+xs := [1, 2, 3]
+cond := true
 if cond {
-    let y := xs
+    y := xs
     print y[0]
 } else {
-    let z := xs
+    z := xs
     print z[2]
 }
 print 0

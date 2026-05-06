@@ -10,7 +10,7 @@ fn first_even(xs: list[int]) -> int? {
 }
 
 fn double_first_even(xs: list[int]) -> int? {
-    let v := first_even(xs)?
+    v := first_even(xs)?
     return v * 2
 }
 

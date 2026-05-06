@@ -6,5 +6,5 @@ impl Counter {
     }
 }
 
-let c := Counter { count: 7 }
+c := Counter { count: 7 }
 print c.double()

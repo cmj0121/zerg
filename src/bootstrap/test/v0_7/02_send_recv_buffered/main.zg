@@ -1,7 +1,7 @@
 # requires: v0.7
 
 fn main() {
-    let ch := chan[int](3)
+    ch := chan[int](3)
     ch <- 10
     ch <- 20
     ch <- 30

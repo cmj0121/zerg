@@ -16,7 +16,7 @@ import "testing"
 // --- chan[T](...) constructor --------------------------------------------
 
 func TestParseChanConstructorUnbuffered(t *testing.T) {
-	prog := parseProgramSrc(t, "let ch := chan[int]()\n")
+	prog := parseProgramSrc(t, "ch := chan[int]()\n")
 	s := expectOne[*LetStmt](t, prog)
 	cc, ok := s.Value.(*ChanConstructorExpr)
 	if !ok {
@@ -31,7 +31,7 @@ func TestParseChanConstructorUnbuffered(t *testing.T) {
 }
 
 func TestParseChanConstructorBuffered(t *testing.T) {
-	prog := parseProgramSrc(t, "let ch := chan[str](10)\n")
+	prog := parseProgramSrc(t, "ch := chan[str](10)\n")
 	s := expectOne[*LetStmt](t, prog)
 	cc, ok := s.Value.(*ChanConstructorExpr)
 	if !ok {
@@ -49,7 +49,7 @@ func TestParseChanConstructorBuffered(t *testing.T) {
 func TestParseChanConstructorBufferedExprCapacity(t *testing.T) {
 	// Capacity may be any expression; typeck (Unit 2) enforces int. The
 	// parser stays liberal so `chan[int](n + 1)` is admitted here.
-	prog := parseProgramSrc(t, "fn make(n: int) { let ch := chan[int](n + 1) }\n")
+	prog := parseProgramSrc(t, "fn make(n: int) { ch := chan[int](n + 1) }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	if len(fn.Body.Statements) != 1 {
 		t.Fatalf("body has %d stmts, want 1", len(fn.Body.Statements))
@@ -62,10 +62,10 @@ func TestParseChanConstructorBufferedExprCapacity(t *testing.T) {
 }
 
 func TestParseChanTypeInLetAnnotation(t *testing.T) {
-	// `let ch: chan[int] := ...` — chan as a type position. Routes through
+	// `ch: chan[int] = ...` — chan as a type position. Routes through
 	// parseTypeRef as a TypeRefNamed with TypeArgs (the same path that
 	// admits Box[int], Result[int, str]).
-	prog := parseProgramSrc(t, "let ch: chan[int] = chan[int]()\n")
+	prog := parseProgramSrc(t, "ch: chan[int] = chan[int]()\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Type == nil || s.Type.Name != "chan" {
 		t.Fatalf("type = %v, want TypeRef{chan}", s.Type)
@@ -77,14 +77,14 @@ func TestParseChanTypeInLetAnnotation(t *testing.T) {
 
 func TestParseChanRejectMultipleTypeArgs(t *testing.T) {
 	expectParseErr(t,
-		"let ch := chan[int, str]()\n",
+		"ch := chan[int, str]()\n",
 		"chan[T] takes exactly one type argument",
 	)
 }
 
 func TestParseChanRejectMultipleCapArgs(t *testing.T) {
 	expectParseErr(t,
-		"let ch := chan[int](10, 20)\n",
+		"ch := chan[int](10, 20)\n",
 		"chan constructor takes at most one capacity argument",
 	)
 }
@@ -93,7 +93,7 @@ func TestParseChanRejectMissingParens(t *testing.T) {
 	// `chan[int]` standalone in expression position is a type, not a value.
 	// The parser commits to a constructor on `chan [` and then expects `(`.
 	expectParseErr(t,
-		"let ch := chan[int]\n",
+		"ch := chan[int]\n",
 		"expected '('",
 	)
 }
@@ -143,7 +143,7 @@ func TestParseSendRejectChained(t *testing.T) {
 // --- receive expression ---------------------------------------------------
 
 func TestParseRecvExprInLet(t *testing.T) {
-	prog := parseProgramSrc(t, "fn run(ch: chan[int]) { let v := <- ch }\n")
+	prog := parseProgramSrc(t, "fn run(ch: chan[int]) { v := <- ch }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let, ok := fn.Body.Statements[0].(*LetStmt)
 	if !ok {
@@ -177,7 +177,7 @@ func TestParseRecvExprPrecedenceWithPlus(t *testing.T) {
 	// PLAN.md pin: `<- 1 + 2` parses as `(<- 1) + 2` because `<-` is a
 	// prefix unary at the same precedence rung as `-` / `~`. Typeck rejects
 	// receiving on an int; the parser only records the shape.
-	prog := parseProgramSrc(t, "fn run() { let v := <- a + 2 }\n")
+	prog := parseProgramSrc(t, "fn run() { v := <- a + 2 }\n")
 	fn := expectOne[*FnDecl](t, prog)
 	let := fn.Body.Statements[0].(*LetStmt)
 	bin, ok := let.Value.(*BinaryExpr)

@@ -33,9 +33,9 @@ print time.now_ms()
 func TestV09CgenTimeNowMsMonotonic(t *testing.T) {
 	got, err := buildBundleFromFiles(t, "main.zg", map[string]string{"main.zg": `# requires: v0.9
 import "std/time"
-let a := time.now_ms()
-let _ := time.sleep_ms(5)
-let b := time.now_ms()
+a := time.now_ms()
+_ := time.sleep_ms(5)
+b := time.now_ms()
 if b >= a {
     print "ok"
 } else {
@@ -55,10 +55,10 @@ func TestV09CgenTimeSleepMsFloor(t *testing.T) {
 	// doesn't fold into the measurement.
 	got, err := buildBundleFromFiles(t, "main.zg", map[string]string{"main.zg": `# requires: v0.9
 import "std/time"
-let warm := time.now_ms()
-let a := time.now_ms()
-let slept := time.sleep_ms(50)
-let b := time.now_ms()
+warm := time.now_ms()
+a := time.now_ms()
+slept := time.sleep_ms(50)
+b := time.now_ms()
 print slept
 if b - a >= 30 {
     print "blocked"
@@ -81,10 +81,10 @@ func TestV09CgenTimeSleepMsNegativeImmediate(t *testing.T) {
 	// no-op nanosleep skip.
 	got, err := buildBundleFromFiles(t, "main.zg", map[string]string{"main.zg": `# requires: v0.9
 import "std/time"
-let warm := time.now_ms()
-let a := time.now_ms()
-let slept := time.sleep_ms(-5)
-let b := time.now_ms()
+warm := time.now_ms()
+a := time.now_ms()
+slept := time.sleep_ms(-5)
+b := time.now_ms()
 print slept
 if b - a < 25 {
     print "fast"
@@ -111,9 +111,9 @@ print time.sleep_ms(0)
 func TestV09CgenTimeNowMsAdvancesAfterSleep(t *testing.T) {
 	got, err := buildBundleFromFiles(t, "main.zg", map[string]string{"main.zg": `# requires: v0.9
 import "std/time"
-let a := time.now_ms()
-let _ := time.sleep_ms(40)
-let b := time.now_ms()
+a := time.now_ms()
+_ := time.sleep_ms(40)
+b := time.now_ms()
 if b > a {
     print "advanced"
 } else {

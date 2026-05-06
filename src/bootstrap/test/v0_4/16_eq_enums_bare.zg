@@ -1,8 +1,8 @@
 enum Token { Eof, Plus, Minus }
 
-let a := Token.Eof
-let b := Token.Eof
-let c := Token.Plus
+a := Token.Eof
+b := Token.Eof
+c := Token.Plus
 
 if a == b {
     print "ab eq"

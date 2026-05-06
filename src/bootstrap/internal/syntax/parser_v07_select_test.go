@@ -224,11 +224,11 @@ func TestParseSelectRejectMissingBrace(t *testing.T) {
 // --- recv-bind triple does not leak outside a select ---------------------
 
 func TestParseLetWithRecvRhsStillParses(t *testing.T) {
-	// A normal `let x := <- ch` outside a select must continue to parse as
+	// A normal `x := <- ch` outside a select must continue to parse as
 	// a LetStmt whose value is a RecvExpr. The select-arm recv-bind detector
 	// (peekRecvBindHead) must not fire here — it lives only inside
 	// parseSelectArm and is consulted only at arm-start.
-	prog := parseProgramSrc(t, "let x := <- ch\n")
+	prog := parseProgramSrc(t, "x := <- ch\n")
 	s := expectOne[*LetStmt](t, prog)
 	if s.Name != "x" {
 		t.Errorf("name = %q, want x", s.Name)

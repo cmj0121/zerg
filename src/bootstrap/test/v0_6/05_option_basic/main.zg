@@ -1,9 +1,9 @@
 # requires: v0.6
 
-let x: int? = 42
-let y: int? = nil
-let z: str? = "ping"
-let w: str? = nil
+x: int? = 42
+y: int? = nil
+z: str? = "ping"
+w: str? = nil
 
 print x
 print y

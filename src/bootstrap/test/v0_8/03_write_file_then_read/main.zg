@@ -5,7 +5,7 @@ import "std/strings"
 
 match os.env("ZERG_TEST_TEMPDIR") {
     Option.Some(d) => {
-        let path := strings.join([d, "round.txt"], "/")
+        path := strings.join([d, "round.txt"], "/")
         match io.write_file(path, "round-trip") {
             Result.Ok(_) => print "wrote"
             Result.Err(_) => print "write err"

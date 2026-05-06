@@ -1,8 +1,8 @@
-let greeting := "hello" + ", " + "world"
+greeting := "hello" + ", " + "world"
 print greeting
 
-let prefix := "Zerg"
-let suffix := "v0.1"
+prefix := "Zerg"
+suffix := "v0.1"
 print prefix + " " + suffix
 
 mut s := "a"

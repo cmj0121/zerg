@@ -1,9 +1,9 @@
-let a := 5
-let b: int = 7
-let c := a + b
-let pi: float = 3.14
-let greeting := "hello"
-let flag: bool = true
+a := 5
+b: int = 7
+c := a + b
+pi: float = 3.14
+greeting := "hello"
+flag: bool = true
 print a
 print b
 print c

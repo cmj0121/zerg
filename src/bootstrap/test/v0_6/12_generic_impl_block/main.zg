@@ -14,7 +14,7 @@ impl[T] Box[T] for Tagged {
     }
 }
 
-let bi: Box[int] = Box { value: 7 }
-let bs: Box[str] = Box { value: "hi" }
+bi: Box[int] = Box { value: 7 }
+bs: Box[str] = Box { value: "hi" }
 print bi.tag()
 print bs.tag()

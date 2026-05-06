@@ -1,4 +1,4 @@
-let pair := ([1, 2], [3, 4])
-let (a, b) := pair
+pair := ([1, 2], [3, 4])
+(a, b) := pair
 print a
 print pair

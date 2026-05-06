@@ -1,9 +1,9 @@
 # requires: v0.6
 
-let r1: Result[int, str] = Result.Ok(42)
-let r2: Result[int, str] = Result.Err("oops")
-let r3: Result[str, int] = Result.Ok("won")
-let r4: Result[str, int] = Result.Err(404)
+r1: Result[int, str] = Result.Ok(42)
+r2: Result[int, str] = Result.Err("oops")
+r3: Result[str, int] = Result.Ok("won")
+r4: Result[str, int] = Result.Err(404)
 
 print r1
 print r2

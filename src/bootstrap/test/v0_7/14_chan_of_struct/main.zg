@@ -3,7 +3,7 @@
 struct Msg { id: int, label: str }
 
 fn main() {
-    let ch := chan[Msg](1)
+    ch := chan[Msg](1)
     ch <- Msg { id: 7, label: "hello" }
     close(ch)
     for m in ch {

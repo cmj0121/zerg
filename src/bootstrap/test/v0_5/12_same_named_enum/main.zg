@@ -8,7 +8,7 @@ impl Status {
     }
 }
 
-let ms := Status.Active
+ms := Status.Active
 print ms.label()
-let us := util.Status.Done
+us := util.Status.Done
 print us.label()

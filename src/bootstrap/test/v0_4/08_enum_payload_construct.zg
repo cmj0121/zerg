@@ -4,7 +4,7 @@ enum Token {
     Number(int, str)
 }
 
-let i := Token.Ident("hello")
-let n := Token.Number(42, "decimal")
+i := Token.Ident("hello")
+n := Token.Number(42, "decimal")
 print i
 print n

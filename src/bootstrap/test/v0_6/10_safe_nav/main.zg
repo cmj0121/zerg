@@ -3,8 +3,8 @@
 struct Inner { tag: str }
 struct Outer { inner: Inner }
 
-let o1: Outer? = Outer { inner: Inner { tag: "deep" } }
-let o2: Outer? = nil
+o1: Outer? = Outer { inner: Inner { tag: "deep" } }
+o2: Outer? = nil
 
 print o1?.inner
 print o2?.inner
@@ -14,8 +14,8 @@ print o2?.inner?.tag
 
 struct Person { name: str, age: int }
 
-let p: Person? = Person { name: "Ada", age: 36 }
-let q: Person? = nil
+p: Person? = Person { name: "Ada", age: 36 }
+q: Person? = nil
 print p?.name
 print q?.name
 print p?.age

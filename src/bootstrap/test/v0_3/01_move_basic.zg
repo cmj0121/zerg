@@ -1,4 +1,4 @@
-let xs := [1, 2, 3]
-let ys := xs
+xs := [1, 2, 3]
+ys := xs
 print ys[0]
 print xs[0]

@@ -1,7 +1,7 @@
 # requires: v0.9
 import "std/os"
 
-let a := os.argv()
+a := os.argv()
 print len(a)
 for i in 1..len(a) {
     print a[i]

@@ -1,5 +1,5 @@
-let xs := [1, 2, 3]
-let empty: list[int] = []
+xs := [1, 2, 3]
+empty: list[int] = []
 print xs
 print empty
 print len(xs)

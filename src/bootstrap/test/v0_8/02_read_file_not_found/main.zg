@@ -5,7 +5,7 @@ import "std/strings"
 
 match os.env("ZERG_TEST_TEMPDIR") {
     Option.Some(d) => {
-        let path := strings.join([d, "missing.txt"], "/")
+        path := strings.join([d, "missing.txt"], "/")
         match io.read_file(path) {
             Result.Ok(_) => print "ok?"
             Result.Err(e) => match e {

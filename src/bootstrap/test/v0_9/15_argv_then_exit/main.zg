@@ -2,7 +2,7 @@
 import "std/os"
 import "std/strings"
 
-let a := os.argv()
+a := os.argv()
 match strings.parse_int(a[1]) {
     Result.Ok(n) => os.exit(n)
     Result.Err(_) => os.exit(255)

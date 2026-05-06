@@ -3,9 +3,9 @@ enum Frame {
     Empty
 }
 
-let f1 := Frame.Args([1, 2, 3])
-let f2 := Frame.Args([1, 2, 3])
-let f3 := Frame.Empty
+f1 := Frame.Args([1, 2, 3])
+f2 := Frame.Args([1, 2, 3])
+f3 := Frame.Empty
 
 if f1 == f2 {
     print "f1 eq f2"

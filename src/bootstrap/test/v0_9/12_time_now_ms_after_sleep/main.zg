@@ -1,9 +1,9 @@
 # requires: v0.9
 import "std/time"
 
-let t1 := time.now_ms()
-let _ := time.sleep_ms(50)
-let t2 := time.now_ms()
+t1 := time.now_ms()
+_ := time.sleep_ms(50)
+t2 := time.now_ms()
 print t1
 if t2 >= 30 {
     print "ok"

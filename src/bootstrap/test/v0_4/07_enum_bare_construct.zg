@@ -4,9 +4,9 @@ enum Token {
     Minus
 }
 
-let e := Token.Eof
-let p := Token.Plus
-let m := Token.Minus
+e := Token.Eof
+p := Token.Plus
+m := Token.Minus
 print e
 print p
 print m

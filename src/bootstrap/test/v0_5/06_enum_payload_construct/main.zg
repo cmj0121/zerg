@@ -1,4 +1,4 @@
 import "util"
 
-let t := util.Token.Ident("hi")
+t := util.Token.Ident("hi")
 print t

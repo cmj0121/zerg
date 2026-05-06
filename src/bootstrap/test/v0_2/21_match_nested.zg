@@ -2,7 +2,7 @@ struct Point { x: int, y: int }
 enum Color { Red, Green, Blue }
 
 fn describe(p: Point, c: Color) -> str {
-    let pair := (clone(p), clone(c))
+    pair := (clone(p), clone(c))
     match pair {
         (Point { x: 0, y: 0 }, Color.Red) => return "origin red"
         (Point { x: 0, .. }, Color.Green) => return "y-axis green"

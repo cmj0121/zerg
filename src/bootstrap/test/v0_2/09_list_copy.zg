@@ -1,6 +1,6 @@
-let xs := [1, 2, 3, 4]
-let ys := clone(xs)
-let zs := xs[1..3]
+xs := [1, 2, 3, 4]
+ys := clone(xs)
+zs := xs[1..3]
 print xs
 print ys
 print zs

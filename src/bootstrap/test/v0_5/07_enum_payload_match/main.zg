@@ -1,11 +1,11 @@
 import "util"
 
-let r := util.parse("good")
+r := util.parse("good")
 match r {
     Outcome.Ok(v) => print v
     Outcome.Err(e) => print e
 }
-let s := util.parse("nope")
+s := util.parse("nope")
 match s {
     Outcome.Ok(v) => print v
     Outcome.Err(e) => print e

@@ -5,7 +5,7 @@ fn parse() -> Result[int, str] {
 }
 
 fn bad() -> int {
-    let v := parse()?
+    v := parse()?
     return v
 }
 

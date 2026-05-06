@@ -12,5 +12,5 @@ impl Counter for Hashable {
     }
 }
 
-let c := Counter { count: 42 }
+c := Counter { count: 42 }
 print c.hash()

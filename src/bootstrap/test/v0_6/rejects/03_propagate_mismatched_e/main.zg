@@ -5,7 +5,7 @@ fn inner() -> Result[int, str] {
 }
 
 fn outer() -> Result[str, int] {
-    let v := inner()?
+    v := inner()?
     return Result.Ok("got")
 }
 

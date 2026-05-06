@@ -8,7 +8,7 @@ enum Outer {
     Solo(Inner)
 }
 
-let p := Outer.Pair(Inner.Ident("k"), Inner.Number(1, "ones"))
+p := Outer.Pair(Inner.Ident("k"), Inner.Number(1, "ones"))
 match p {
     Outer.Pair(left, right) => {
         match left {

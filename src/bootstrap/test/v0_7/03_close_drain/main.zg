@@ -1,7 +1,7 @@
 # requires: v0.7
 
 fn main() {
-    let ch := chan[int](4)
+    ch := chan[int](4)
     spawn fn() {
         ch <- 100
         ch <- 200

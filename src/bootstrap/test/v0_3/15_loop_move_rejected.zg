@@ -1,5 +1,5 @@
-let xs := [1, 2, 3]
+xs := [1, 2, 3]
 for i in 0..3 {
-    let y := xs
+    y := xs
     print y[0]
 }

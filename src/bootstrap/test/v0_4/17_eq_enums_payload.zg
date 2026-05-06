@@ -1,10 +1,10 @@
 enum Token { Ident(str), Number(int, str), Eof }
 
-let a := Token.Ident("a")
-let b := Token.Ident("a")
-let c := Token.Ident("b")
-let d := Token.Number(1, "one")
-let e := Token.Eof
+a := Token.Ident("a")
+b := Token.Ident("a")
+c := Token.Ident("b")
+d := Token.Number(1, "one")
+e := Token.Eof
 
 if a == b {
     print "ab eq"

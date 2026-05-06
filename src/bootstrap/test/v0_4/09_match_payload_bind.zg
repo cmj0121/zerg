@@ -4,14 +4,14 @@ enum Token {
     Number(int, str)
 }
 
-let t := Token.Ident("hello")
+t := Token.Ident("hello")
 match t {
     Token.Eof => print "eof"
     Token.Ident(name) => print name
     Token.Number(value, base) => print value
 }
 
-let n := Token.Number(42, "dec")
+n := Token.Number(42, "dec")
 match n {
     Token.Eof => print "eof"
     Token.Ident(name) => print name

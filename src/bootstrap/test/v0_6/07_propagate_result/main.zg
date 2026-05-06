@@ -8,7 +8,7 @@ fn parse(input: str) -> Result[int, str] {
 }
 
 fn process(input: str) -> Result[int, str] {
-    let v := parse(input)?
+    v := parse(input)?
     return Result.Ok(v + 1)
 }
 

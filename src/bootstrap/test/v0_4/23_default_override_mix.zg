@@ -14,9 +14,9 @@ impl B for Hashable {
     }
 }
 
-let a := A { x: 1 }
-let b := B { x: 5 }
-let things: list[Hashable] = [a, b]
+a := A { x: 1 }
+b := B { x: 5 }
+things: list[Hashable] = [a, b]
 for t in things {
     print t.hash()
 }

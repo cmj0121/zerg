@@ -11,9 +11,9 @@ impl Light {
     }
 }
 
-let r := Light.Red
-let y := Light.Yellow
-let g := Light.Green
+r := Light.Red
+y := Light.Yellow
+g := Light.Green
 print r.name()
 print y.name()
 print g.name()

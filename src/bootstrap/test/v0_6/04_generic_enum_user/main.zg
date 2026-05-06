@@ -6,7 +6,7 @@ enum Pair[A, B] {
     Right(B)
 }
 
-let p: Pair[int, str] = Pair.Both(7, "hi")
+p: Pair[int, str] = Pair.Both(7, "hi")
 match p {
     Pair.Both(a, b) => {
         print a
@@ -23,7 +23,7 @@ fn make_right() -> Pair[int, str] {
     return Pair.Right("hello")
 }
 
-let q := make_left()
+q := make_left()
 match q {
     Pair.Both(a, b) => {
         print a
@@ -33,7 +33,7 @@ match q {
     Pair.Right(b) => print b
 }
 
-let r := make_right()
+r := make_right()
 match r {
     Pair.Both(a, b) => {
         print a

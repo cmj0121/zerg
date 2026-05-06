@@ -1,7 +1,7 @@
 # requires: v0.9
 import "std/os"
 
-let n := 1
+n := 1
 match n {
     0 => print "zero"
     1 => print "one"

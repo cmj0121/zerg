@@ -8,7 +8,7 @@ impl Token {
     }
 }
 
-let mt := Token.Ident("x")
+mt := Token.Ident("x")
 print mt.label()
-let ut := util.Token.Ident("y")
+ut := util.Token.Ident("y")
 print ut.label()

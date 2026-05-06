@@ -6,5 +6,5 @@ struct Empty { tag: int }
 
 impl Empty for Printable {}
 
-let e := Empty { tag: 0 }
+e := Empty { tag: 0 }
 print e.to_string()

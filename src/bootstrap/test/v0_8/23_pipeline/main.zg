@@ -4,7 +4,7 @@ import "std/os"
 import "std/strings"
 
 fn sum_lines(content: str) -> int {
-    let lines := strings.split(strings.trim(content), ",")
+    lines := strings.split(strings.trim(content), ",")
     mut total := 0
     for line in lines {
         match strings.parse_int(strings.trim(line)) {
@@ -17,7 +17,7 @@ fn sum_lines(content: str) -> int {
 
 match os.env("ZERG_TEST_TEMPDIR") {
     Option.Some(d) => {
-        let path := strings.join([d, "numbers.txt"], "/")
+        path := strings.join([d, "numbers.txt"], "/")
         match io.read_file(path) {
             Result.Ok(content) => print sum_lines(content)
             Result.Err(_) => print "read err"

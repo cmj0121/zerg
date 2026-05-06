@@ -1,6 +1,6 @@
 struct Bag { xs: list[int] }
 
-let my_list := [1, 2, 3]
-let b := Bag { xs: my_list }
+my_list := [1, 2, 3]
+b := Bag { xs: my_list }
 print b
 print b.xs[0]

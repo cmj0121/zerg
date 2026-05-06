@@ -374,7 +374,7 @@ func (w *writer) stmt(s syntax.Stmt) {
 	w.emitLeadingComments(leading)
 	switch x := s.(type) {
 	case *syntax.LetStmt:
-		w.letLike("let", x.Name, x.Tuple, x.Type, x.Value)
+		w.letLike("", x.Name, x.Tuple, x.Type, x.Value)
 	case *syntax.MutStmt:
 		w.letLike("mut", x.Name, x.Tuple, x.Type, x.Value)
 	case *syntax.ConstStmt:
@@ -486,12 +486,15 @@ func leadingCommentsOf(s syntax.Stmt) []string {
 	return nil
 }
 
-// letLike covers let / mut / const decls — they share the same shape modulo
-// the keyword.
+// letLike covers immutable bindings, mut, and const decls. v0.11 retired
+// the `let` keyword; the immutable form (kw == "") emits with no leading
+// keyword. mut / const keep their keyword-led shape.
 func (w *writer) letLike(kw, name string, tup *syntax.TupleBinding, ty *syntax.TypeRef, val syntax.Expr) {
 	w.writeIndent()
-	w.write(kw)
-	w.write(" ")
+	if kw != "" {
+		w.write(kw)
+		w.write(" ")
+	}
 	if tup != nil {
 		w.write("(")
 		for i, n := range tup.Names {
@@ -732,7 +735,9 @@ func (w *writer) armSingleStmt(s syntax.Stmt) {
 		w.expr(x.Value)
 		w.newline()
 	case *syntax.LetStmt:
-		w.write("let ")
+		// v0.11: keyword-led `let` was retired. The bare-binding shape is
+		// the canonical immutable form; tuple destructure renders without a
+		// leading keyword.
 		if x.Tuple != nil {
 			w.write("(")
 			for i, n := range x.Tuple.Names {

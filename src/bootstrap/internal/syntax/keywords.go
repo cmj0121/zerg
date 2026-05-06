@@ -20,8 +20,13 @@ var keywords = map[string]Kind{
 	"for":      KindFor,
 	"if":       KindIf,
 	"in":       KindIn,
-	"let":      KindLet,
-	"loop":     KindLoop,
+	// v0.11: `let` is reserved at the lexer level but no parser shape consumes
+	// it. Source like `let x := 10` lexes to KindLet IDENT WALRUS INT and
+	// fails at parse position with "expected expression, got 'let'". Bare
+	// `x := 10` is the canonical immutable binding. The reserved-word slot
+	// is kept so users cannot name a variable, fn, or imported module `let`.
+	"let":  KindLet,
+	"loop": KindLoop,
 	"mut":      KindMut,
 	"not":      KindNot,
 	"or":       KindOr,

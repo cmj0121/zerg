@@ -186,7 +186,7 @@ Output (last line is `[""]`):
 # requires: v0.8
 import "std/strings"
 
-let xs := strings.split("a,b,c", ",")
+xs := strings.split("a,b,c", ",")
 print strings.join(xs, "-")
 print strings.join(xs, "")
 print strings.join([], "-")
@@ -390,7 +390,7 @@ match os.env("HOME") {
 # requires: v0.9
 import "std/os"
 
-let a := os.argv()
+a := os.argv()
 print len(a)
 for i in 1..len(a) {
     print a[i]
@@ -481,8 +481,8 @@ C codegen and Go's `time.Sleep` in the interpreter).
 import "std/time"
 
 print time.now_ms()
-let _ := time.sleep_ms(50)
-let t := time.now_ms()
+_ := time.sleep_ms(50)
+t := time.now_ms()
 if t >= 30 {
     print "elapsed"
 } else {

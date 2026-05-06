@@ -60,6 +60,11 @@ true   while  xor
 `v0.8` or higher and whose path lives under the toolchain-embedded `std/`
 tree.
 
+`let` remains reserved at the lexer level but has **no admitted
+syntactic form** at v0.11: the immutable-binding `let X := …` shape was
+retired in favour of the bare `X := …` form (see `bind_stmt`). The token
+is held in reserve so future surface work cannot collide with it.
+
 ### Reserved type names
 
 The following names are reserved at type position. User declarations
@@ -185,14 +190,14 @@ monomorphisation. The orphan rule rejects `impl A.X for B.Y` when both
 ### Statements
 
 ```ebnf
-simple_stmt   = let_stmt | mut_stmt | const_stmt | assign_stmt | expr_stmt
+simple_stmt   = bind_stmt | mut_stmt | const_stmt | assign_stmt | expr_stmt
               | return_stmt | break_stmt | continue_stmt
               | print_stmt | nop_stmt
               | spawn_stmt | defer_stmt | send_stmt
 compound_stmt = if_stmt | for_stmt | match_stmt | select_stmt
               | fn_decl | struct_decl | enum_decl | spec_decl | impl_decl
 
-let_stmt      = 'let' bind_target ( ':=' expr | ':' type '=' expr )
+bind_stmt     = bind_target ( ':=' expr | ':' type '=' expr )
 mut_stmt      = 'mut' bind_target ( ':=' expr | ':' type '=' expr )
 const_stmt    = 'const' IDENT     ( ':=' expr | ':' type '=' expr )
 bind_target   = IDENT | tuple_pattern_lhs                ; LHS, not pattern
@@ -381,7 +386,7 @@ surface are `os.exit` and any user fn declared `-> never`.
 - `never <: T` for every concrete `T`.
 - `T -> T?` lift at boundaries: a bare `T` flowing into a `T?` slot is
   implicitly wrapped as `Option.Some(value)`. Boundaries are: fn argument,
-  let / mut / const initialiser with annotation, return expression,
+  bare / mut / const initialiser with annotation, return expression,
   struct-literal field, list-element type under `list[T?]`.
 - Bidirectional inference at call sites: generic type-args are inferred
   from argument shapes and from the surrounding expected type.
@@ -406,7 +411,7 @@ order before the call. Short-circuit applies to `and` and `or`.
 Composite values (`list`, tuple, struct, enum payload, spec-typed) are
 **moved** on bind:
 
-- `let ys := xs` and `mut ys := xs` move `xs` into `ys`. Reading `xs`
+- `ys := xs` and `mut ys := xs` move `xs` into `ys`. Reading `xs`
   thereafter is rejected at compile time.
 - `return x`, including a value in a struct / tuple / list literal, and
   binding into a tuple-destructure pattern are move sites.
@@ -523,7 +528,8 @@ See `docs/STDLIB.md` for per-fn signatures.
 Each block below is tagged so the v0.10 extractor knows how to wrap it. Tag
 `program` parses as-is; `fn-body` wraps in
 `fn main() -> int { ... ; return 0 }`; `expression` wraps in
-`let __ := <expr>`.
+`__ := <expr>` (the bare immutable-binding form; v0.11 retired the
+`let` keyword).
 
 ### Hello
 
@@ -538,8 +544,8 @@ print "hello, world"
 <!-- example: fn-body -->
 
 ```zerg
-let x := 1
-let y: int = 2
+x := 1
+y: int = 2
 mut z := x + y
 z = z * 10
 print z
@@ -550,7 +556,7 @@ print z
 <!-- example: fn-body -->
 
 ```zerg
-let n := 10
+n := 10
 mut sum := 0
 for i in 0..n {
     if i % 2 == 0 {
@@ -565,10 +571,10 @@ print sum
 <!-- example: fn-body -->
 
 ```zerg
-let pair := (1, 2)
-let (a, b) := pair
+pair := (1, 2)
+(a, b) := pair
 print a + b
-let xs: list[int] = [1, 2, 3]
+xs: list[int] = [1, 2, 3]
 print len(xs)
 ```
 
@@ -585,7 +591,7 @@ impl Point {
     }
 }
 
-let p := Point { x: 3, y: 4 }
+p := Point { x: 3, y: 4 }
 print p.norm()
 ```
 
@@ -629,7 +635,7 @@ impl Cat for Printable {
     }
 }
 
-let c := Cat { name: "Mittens" }
+c := Cat { name: "Mittens" }
 print c.label()
 ```
 
@@ -646,7 +652,7 @@ fn first(xs: list[int]) -> Option[int] {
 }
 
 fn double_first(xs: list[int]) -> Option[int] {
-    let v := first(xs)?
+    v := first(xs)?
     return Option.Some(v * 2)
 }
 
@@ -659,8 +665,8 @@ print double_first([])
 <!-- example: fn-body -->
 
 ```zerg
-let a: int? = 7
-let b: int? = nil
+a: int? = 7
+b: int? = nil
 print a ?? 0
 print b ?? 99
 ```
@@ -682,7 +688,7 @@ print math.abs(-3)
 <!-- example: program -->
 
 ```zerg
-let ch := chan[int](2)
+ch := chan[int](2)
 spawn fn() {
     ch <- 1
     ch <- 2
@@ -699,7 +705,7 @@ for v in ch {
 <!-- example: fn-body -->
 
 ```zerg
-let ch := chan[int](1)
+ch := chan[int](1)
 ch <- 7
 select {
     v := <- ch -> { print v }
@@ -733,7 +739,7 @@ fn fail(msg: str) -> never {
     os.exit(2)
 }
 
-let n := 7
+n := 7
 if n < 0 {
     fail("expected non-negative")
 }

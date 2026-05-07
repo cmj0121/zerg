@@ -2,9 +2,6 @@ package build
 
 import (
 	"bytes"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,57 +17,14 @@ import (
 // The drivers print results via printf. We assert on the post-sort set of
 // outputs (work-stealing scrambles order).
 
-const chanHeaderC = `
-#ifndef ZERG_CHAN_H
-#define ZERG_CHAN_H
-typedef struct zerg_chan_int64_t zerg_chan_int64_t;
-typedef struct {
-    int tag;
-    union { struct { long long a0; } p0; } payload;
-} zerg_opt_int64_t;
-zerg_chan_int64_t *zerg_chan_int64_t_make(long long cap);
-void zerg_chan_int64_t_send(zerg_chan_int64_t *ch, long long v);
-zerg_opt_int64_t zerg_chan_int64_t_recv(zerg_chan_int64_t *ch);
-void zerg_chan_int64_t_close(zerg_chan_int64_t *ch);
-#endif
-`
-
+// v12BuildChanDriver concatenates the (coro + sched + chan) runtime with
+// the driver source into one TU and runs it. Chan helpers are emitted
+// `static` (matching the U6 single-TU topology), so single-TU
+// concatenation is what makes them visible to driver code.
 func v12BuildChanDriver(t *testing.T, driver string, env []string) ([]byte, int) {
 	t.Helper()
-	if _, err := exec.LookPath(DefaultCC()); err != nil {
-		t.Skip("cc not available")
-	}
-	dir := t.TempDir()
-	// The chan helpers are emitted `static` so that the U6 single-TU
-	// emit doesn't risk symbol collision with the driver's main fn.
-	// For the U3 unit test we concatenate runtime + driver into one TU
-	// so the static fns are visible to driver code at link time —
-	// matching the v0.7 / U6 emit topology rather than splitting into
-	// separate TUs that would force external linkage.
 	prog := coroRuntimeC + schedRuntimeC + chanRuntimeC + "\n" + driver
-	progPath := filepath.Join(dir, "prog.c")
-	if err := os.WriteFile(progPath, []byte(prog), 0o644); err != nil {
-		t.Fatalf("write prog.c: %v", err)
-	}
-	binPath := filepath.Join(dir, "driver")
-	cmd := exec.Command(DefaultCC(), "-Wall", "-Wno-deprecated-declarations",
-		"-Wno-unused-function", "-O2", "-pthread", "-o", binPath, progPath)
-	cmd.Dir = dir
-	var ccErr bytes.Buffer
-	cmd.Stderr = &ccErr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("cc failed: %v\nstderr:\n%s", err, ccErr.String())
-	}
-	cmd = exec.Command(binPath)
-	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return append(out, ee.Stderr...), ee.ExitCode()
-		}
-		t.Fatalf("driver: %v", err)
-	}
-	return out, 0
+	return v12CompileAndRun(t, prog, env)
 }
 
 // TestV12ChanUnbuffered exercises rendezvous send/recv. cap=0 means every
@@ -115,7 +69,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildChanDriver(t, driver, []string{"ZERG_GOMAXPROCS=4"})
+	out, code := v12BuildChanDriver(t, driver, []string{"ZERG_MAXPROCS=4"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}
@@ -182,7 +136,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildChanDriver(t, driver, []string{"ZERG_GOMAXPROCS=2"})
+	out, code := v12BuildChanDriver(t, driver, []string{"ZERG_MAXPROCS=2"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}
@@ -234,7 +188,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildChanDriver(t, driver, []string{"ZERG_GOMAXPROCS=2"})
+	out, code := v12BuildChanDriver(t, driver, []string{"ZERG_MAXPROCS=2"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}

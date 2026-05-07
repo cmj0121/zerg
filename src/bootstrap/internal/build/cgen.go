@@ -219,16 +219,28 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		}
 	}
 
+	// v0.7 runtime is emitted only when the program uses any concurrency
+	// primitive — keeps the cgen size guard for v0.0–v0.6 programs intact.
+	needsV07 := g.programUsesV07()
+	// 0. Feature-test macros. ucontext on macOS arm64 needs _XOPEN_SOURCE
+	// 600 set BEFORE any system header is parsed; otherwise the first
+	// transitive include (commonly <stdio.h>) parses sys/ucontext.h
+	// without _XOPEN_SOURCE active and ucontext_t never gets defined.
+	// _DARWIN_C_SOURCE re-exposes MAP_ANON which strict _XOPEN_SOURCE
+	// would hide. Emitting these unconditionally is harmless for non-
+	// concurrency programs.
+	if needsV07 {
+		g.b.WriteString("#define _XOPEN_SOURCE 600\n")
+		g.b.WriteString("#define _DARWIN_C_SOURCE\n")
+		g.b.WriteString("#define _DEFAULT_SOURCE\n")
+	}
 	// 1. Runtime header.
 	g.b.WriteString(runtimeC)
 	g.b.WriteString("\n")
 	g.b.WriteString(runtimeV04C)
 	g.b.WriteString("\n")
-	// v0.7 runtime is emitted only when the program uses any concurrency
-	// primitive — keeps the cgen size guard for v0.0–v0.6 programs intact.
-	needsV07 := g.programUsesV07()
 	if needsV07 {
-		g.b.WriteString(runtimeV07C)
+		g.b.WriteString(buildV12RuntimePreamble())
 		g.b.WriteString("\n")
 	}
 	// v0.8 stdlib runtime — gated on any reachable __builtin call so v0.0-
@@ -398,40 +410,74 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	// only the entry module's executable statements run. The active module
 	// is the entry's mangle so cross-module fn calls resolve through its
 	// import table.
-	if needsArgv {
-		g.b.WriteString("int main(int argc, char **argv) {\n")
-		g.b.WriteString("    __zerg_argc = argc;\n")
-		g.b.WriteString("    __zerg_argv = argv;\n")
-	} else {
-		g.b.WriteString("int main(void) {\n")
-	}
 	prevMod := g.currentMod
 	g.currentMod = g.entryMangle
 	defer func() { g.currentMod = prevMod }()
-	if g.entryProg != nil {
-		for _, stmt := range g.entryProg.Statements {
-			switch stmt.(type) {
-			case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
-				continue
-			case *syntax.SpecDecl, *syntax.ImplDecl:
-				continue
-			case *syntax.ImportDecl:
-				continue
-			}
-			if err := g.emitStmt(stmt); err != nil {
-				return err
+
+	if needsV07 {
+		// v0.12 wraps the user's top-level body in a coroutine so its
+		// defers run via the per-coroutine LIFO walk in zerg_coro_entry,
+		// AND so any user fn it calls executes inside a coro context
+		// (zerg_coro_defer would abort otherwise). C main becomes a
+		// thin shell: scheduler init → spawn the wrapper → drain.
+		g.b.WriteString("static void __zerg_top_main(void *__arg) {\n")
+		g.b.WriteString("    (void)__arg;\n")
+		if g.entryProg != nil {
+			for _, stmt := range g.entryProg.Statements {
+				switch stmt.(type) {
+				case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
+					continue
+				case *syntax.SpecDecl, *syntax.ImplDecl:
+					continue
+				case *syntax.ImportDecl:
+					continue
+				}
+				if err := g.emitStmt(stmt); err != nil {
+					return err
+				}
 			}
 		}
+		g.b.WriteString("}\n")
+		if needsArgv {
+			g.b.WriteString("int main(int argc, char **argv) {\n")
+			g.b.WriteString("    __zerg_argc = argc;\n")
+			g.b.WriteString("    __zerg_argv = argv;\n")
+		} else {
+			g.b.WriteString("int main(void) {\n")
+		}
+		g.b.WriteString("    zerg_sched_init(0);\n")
+		g.b.WriteString("    zerg_coro_spawn(__zerg_top_main, 0);\n")
+		g.b.WriteString("    zerg_sched_drain();\n")
+		g.b.WriteString("    return 0;\n")
+		g.b.WriteString("}\n")
+	} else {
+		// No v0.7 features → no concurrency runtime → plain main with
+		// the top-level statements inlined as before.
+		if needsArgv {
+			g.b.WriteString("int main(int argc, char **argv) {\n")
+			g.b.WriteString("    __zerg_argc = argc;\n")
+			g.b.WriteString("    __zerg_argv = argv;\n")
+		} else {
+			g.b.WriteString("int main(void) {\n")
+		}
+		if g.entryProg != nil {
+			for _, stmt := range g.entryProg.Statements {
+				switch stmt.(type) {
+				case *syntax.FnDecl, *syntax.StructDecl, *syntax.EnumDecl:
+					continue
+				case *syntax.SpecDecl, *syntax.ImplDecl:
+					continue
+				case *syntax.ImportDecl:
+					continue
+				}
+				if err := g.emitStmt(stmt); err != nil {
+					return err
+				}
+			}
+		}
+		g.b.WriteString("    return 0;\n")
+		g.b.WriteString("}\n")
 	}
-	if needsV07 {
-		// Drain detached spawn threads before main returns so a task doing
-		// post-channel-op work isn't killed mid-flight. The user's explicit
-		// wait_group is a separate object; this synthetic one covers programs
-		// that don't construct one.
-		g.b.WriteString("    zerg_main_wg_wait();\n")
-	}
-	g.b.WriteString("    return 0;\n")
-	g.b.WriteString("}\n")
 
 	_, err := io.WriteString(w, g.b.String())
 	return err

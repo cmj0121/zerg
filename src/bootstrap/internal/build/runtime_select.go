@@ -42,9 +42,3 @@ static int zerg_select(zerg_select_case *cases, int n_cases, int has_default,
     }
 }
 `
-
-// SelectRuntimeC exposes the U4 select source so the targeted test can
-// compile a driver against it. U6 will fold it into the v0.12 prelude
-// emit path, replacing v0.7's usleep-based polling variant in
-// runtime.go.
-func SelectRuntimeC() string { return selectRuntimeC }

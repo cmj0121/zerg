@@ -260,9 +260,3 @@ void zerg_coro_free(zerg_coro_t *c) {
 #pragma clang diagnostic pop
 #endif
 `
-
-// CoroRuntimeC exposes the U1 C source so the targeted test can compile a
-// driver program that links against it. U2+ folds the source into the
-// emitted runtime via the normal cgen prelude path; this exporter exists
-// solely so the unit-1 test does not have to re-derive the source.
-func CoroRuntimeC() string { return coroRuntimeC }

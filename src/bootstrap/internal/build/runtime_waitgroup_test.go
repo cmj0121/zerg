@@ -2,9 +2,6 @@ package build
 
 import (
 	"bytes"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,36 +16,12 @@ import (
 //   - every producer's done fires before the waiter resumes
 //   - the protocol is robust under work-stealing (multiple workers)
 
+// v12BuildWaitGroupDriver pulls in the chan runtime alongside coro+sched
+// because waitgroup reuses the chan wait-node type.
 func v12BuildWaitGroupDriver(t *testing.T, driver string, env []string) ([]byte, int) {
 	t.Helper()
-	if _, err := exec.LookPath(DefaultCC()); err != nil {
-		t.Skip("cc not available")
-	}
-	dir := t.TempDir()
 	prog := coroRuntimeC + schedRuntimeC + chanRuntimeC + waitgroupRuntimeC + "\n" + driver
-	progPath := filepath.Join(dir, "prog.c")
-	if err := os.WriteFile(progPath, []byte(prog), 0o644); err != nil {
-		t.Fatalf("write prog.c: %v", err)
-	}
-	binPath := filepath.Join(dir, "driver")
-	cmd := exec.Command(DefaultCC(), "-Wall", "-Wno-deprecated-declarations",
-		"-Wno-unused-function", "-O2", "-pthread", "-o", binPath, progPath)
-	cmd.Dir = dir
-	var ccErr bytes.Buffer
-	cmd.Stderr = &ccErr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("cc failed: %v\nstderr:\n%s", err, ccErr.String())
-	}
-	cmd = exec.Command(binPath)
-	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return append(out, ee.Stderr...), ee.ExitCode()
-		}
-		t.Fatalf("driver: %v", err)
-	}
-	return out, 0
+	return v12CompileAndRun(t, prog, env)
 }
 
 // TestV12WaitGroupBasic spawns 64 producers + 1 waiter; the waiter prints
@@ -89,7 +62,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildWaitGroupDriver(t, driver, []string{"ZERG_GOMAXPROCS=4"})
+	out, code := v12BuildWaitGroupDriver(t, driver, []string{"ZERG_MAXPROCS=4"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}
@@ -123,7 +96,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildWaitGroupDriver(t, driver, []string{"ZERG_GOMAXPROCS=2"})
+	out, code := v12BuildWaitGroupDriver(t, driver, []string{"ZERG_MAXPROCS=2"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}

@@ -1,10 +1,6 @@
 package build
 
 import (
-	"bytes"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,37 +31,14 @@ static int zerg_chan_int64_t_ready(void *p, int kind) {
 }
 `
 
+// v12BuildSelectDriver pulls in (coro + sched + chan + select) plus the
+// per-element-type ready probe selectChanReadyC (matching what U6 cgen
+// templates per chan element type).
 func v12BuildSelectDriver(t *testing.T, driver string, env []string) ([]byte, int) {
 	t.Helper()
-	if _, err := exec.LookPath(DefaultCC()); err != nil {
-		t.Skip("cc not available")
-	}
-	dir := t.TempDir()
 	prog := coroRuntimeC + schedRuntimeC + chanRuntimeC + selectRuntimeC +
 		selectChanReadyC + "\n" + driver
-	progPath := filepath.Join(dir, "prog.c")
-	if err := os.WriteFile(progPath, []byte(prog), 0o644); err != nil {
-		t.Fatalf("write prog.c: %v", err)
-	}
-	binPath := filepath.Join(dir, "driver")
-	cmd := exec.Command(DefaultCC(), "-Wall", "-Wno-deprecated-declarations",
-		"-Wno-unused-function", "-O2", "-pthread", "-o", binPath, progPath)
-	cmd.Dir = dir
-	var ccErr bytes.Buffer
-	cmd.Stderr = &ccErr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("cc failed: %v\nstderr:\n%s", err, ccErr.String())
-	}
-	cmd = exec.Command(binPath)
-	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return append(out, ee.Stderr...), ee.ExitCode()
-		}
-		t.Fatalf("driver: %v", err)
-	}
-	return out, 0
+	return v12CompileAndRun(t, prog, env)
 }
 
 // TestV12SelectFanIn drives two producers each into its own chan, with
@@ -158,7 +131,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildSelectDriver(t, driver, []string{"ZERG_GOMAXPROCS=4"})
+	out, code := v12BuildSelectDriver(t, driver, []string{"ZERG_MAXPROCS=4"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}
@@ -228,7 +201,7 @@ int main(void) {
     return 0;
 }
 `
-	out, code := v12BuildSelectDriver(t, driver, []string{"ZERG_GOMAXPROCS=2"})
+	out, code := v12BuildSelectDriver(t, driver, []string{"ZERG_MAXPROCS=2"})
 	if code != 0 {
 		t.Fatalf("driver exited %d\noutput:\n%s", code, out)
 	}

@@ -182,162 +182,158 @@ static void zerg_not_implemented(const char *type_name, const char *method_name,
 }
 `
 
-// runtimeV07C is the v0.7 concurrency runtime extension. It declares the
-// per-thread defer-record stack, the WaitGroup primitive, the spawn
-// wrapper around pthread_create, and the select-arm descriptor. The
-// per-channel-element struct + send/recv/close helpers are emitted by the
-// codegen on demand (one set per element type) and are NOT in this prelude.
+// buildV12RuntimePreamble constructs the v0.12 concurrency-runtime preamble
+// emitted whenever a program uses any v0.7 concurrency primitive (chan /
+// spawn / defer / wait_group / select / anon-fn). It assembles:
 //
-// Simplifications vs. Go semantics (documented):
-//   - select uses a polling loop with usleep when no arm is immediately ready.
-//     Correct under any scheduling but adds ~50us latency on a blocking arm.
-//   - spawn caps stack size at 64 KiB and detaches; no join, no return value.
-//   - defer stack is per-thread via __thread storage; init runs lazily.
-const runtimeV07C = `#include <pthread.h>
-#include <unistd.h>
+//   - coroRuntimeC: ucontext-based coroutine primitive (U1)
+//   - schedRuntimeC: M:N scheduler with park/unpark + shared wait-queue
+//     primitive (U2 + U3 generic node moved here)
+//   - waitgroupRuntimeC: wait_group on park/unpark (U4)
+//   - selectRuntimeC: cooperative-yield select (U4)
+//   - deferRuntimeC: per-coroutine defer push (U5)
+//   - v07ShimsC: surface compatibility shims so cgen's existing emit
+//     (zerg_spawn / zerg_main_wg_* / zerg_wait_group_t / zerg_defer_*)
+//     keeps working bytewise while the runtime body is now M:N
+//
+// Replaces the old condvar-and-pthread-per-spawn runtime: spawn is now an
+// M:N coroutine; select yields instead of usleep; defer is per-coroutine
+// (the __thread defer stack from v0.7 is gone). See PLAN.md for the
+// design pins and runtime_*.go for each unit's source + tests.
+func buildV12RuntimePreamble() string {
+	return coroRuntimeC + "\n" +
+		schedRuntimeC + "\n" +
+		waitgroupRuntimeC + "\n" +
+		selectRuntimeC + "\n" +
+		deferRuntimeC + "\n" +
+		v07ShimsC
+}
 
-/* ---------------- fn-value -----------------------------------------------
-   v0.7 anonymous-fn value. Carries a fn-pointer (cast at the call site to a
-   per-signature function-pointer type) and a heap-allocated env pointer
-   holding the captured outer-scope bindings. Bind sites (f := fn() {..})
-   build this struct; call sites cast .fn to the right signature and invoke. */
+// v07ShimsC keeps the v0.7 emit surface (zerg_spawn, zerg_main_wg_*,
+// zerg_wait_group_t, zerg_defer_push / drain, zerg_fn_value) while
+// routing through the v0.12 internals. The wait_group struct keeps the
+// v0.7 typedef name but the layout is the v0.12 zerg_waitgroup_t shape;
+// the helpers delegate. zerg_main_wg_* is a synthetic global drain
+// counter the cgen emits at the spawn / main boundary — the v0.12
+// scheduler tracks live coroutines independently, so the shim helpers
+// are free to be no-ops with zerg_main_wg_wait deferring to
+// zerg_sched_drain. zerg_defer_push pushes onto the current
+// coroutine's defer stack via zerg_coro_defer; the v0.7 zerg_defer_drain
+// marker pattern is handled inside zerg_coro_defer's per-coroutine LIFO.
+const v07ShimsC = `
+/* ---------------- fn-value (v0.7 surface kept) --------------------------- */
 typedef struct {
     void *fn;
     void *env;
 } zerg_fn_value;
 
-/* ---------------- defer ---------------------------------------------------
-   Per-thread linked list. Each record holds a (fn, env) pair; fn(env) runs
-   at fn epilogue in LIFO order. The fn must free env if env was malloc'd. */
-typedef struct zerg_defer_rec {
-    void (*fn)(void *);
-    void *env;
-    struct zerg_defer_rec *next;
-} zerg_defer_rec;
+/* ---------------- defer shim (v0.7 surface) ----------------------------
+   v0.7 emitted per-fn marker push/pop bracketing the user body:
 
-static __thread zerg_defer_rec *zerg_defer_top = 0;
+       zerg_defer_rec *m = zerg_defer_top;
+       ... user code with zerg_defer_push(fn, env) calls ...
+       zerg_defer_drain(m);
+
+   so each fn frame's defers ran at fn exit, not at thread exit. Under
+   v0.12 the defer stack lives on the coroutine (zerg_coro_t.defer_head,
+   nodes of type zerg_defer_node_t from coroRuntimeC). We keep the
+   per-fn-frame semantics by reading the current coro's defer_head as
+   the marker and draining back to it on fn exit.
+
+   zerg_defer_rec is aliased to zerg_defer_node_t so the v0.7 struct
+   name still names a valid type. zerg_defer_top is a macro reading the
+   current coro's defer_head (NULL outside a coroutine — main is now
+   wrapped in a top-level coro by cgen so this is reachable everywhere
+   user code actually pushes defers). */
+typedef zerg_defer_node_t zerg_defer_rec;
+
+#define zerg_defer_top (zerg_current_coro ? zerg_current_coro->defer_head : 0)
 
 static void zerg_defer_push(void (*fn)(void *), void *env) {
-    zerg_defer_rec *r = (zerg_defer_rec *)malloc(sizeof(zerg_defer_rec));
-    r->fn = fn;
-    r->env = env;
-    r->next = zerg_defer_top;
-    zerg_defer_top = r;
+    zerg_coro_defer(fn, env);
 }
 
-/* zerg_defer_drain pops every record above the marker and invokes each fn.
-   Pass the saved top from fn entry as the marker so nested calls' defers
-   stay on their own frame. */
+/* zerg_defer_drain pops nodes from the current coroutine's defer stack
+   in LIFO order until reaching the saved marker, executing each fn
+   along the way. Outside a coroutine context (no current_coro) it is a
+   no-op — there can be no pushes either, so the marker is also NULL.
+   When the coroutine eventually finishes, zerg_coro_entry walks any
+   leftover defers automatically. */
 static void zerg_defer_drain(zerg_defer_rec *marker) {
-    while (zerg_defer_top != marker) {
-        zerg_defer_rec *r = zerg_defer_top;
-        zerg_defer_top = r->next;
+    zerg_coro_t *c = zerg_current_coro;
+    if (!c) return;
+    while (c->defer_head != marker) {
+        zerg_defer_node_t *r = c->defer_head;
+        c->defer_head = r->next;
         r->fn(r->env);
         free(r);
     }
 }
 
-/* ---------------- wait_group ---------------------------------------------- */
-typedef struct {
-    pthread_mutex_t mu;
-    pthread_cond_t cv;
-    int64_t n;
-} zerg_wait_group_t;
+/* ---------------- wait_group shim (v0.7 surface) -----------------------
+   Aliases the v0.7-named type to the v0.12 zerg_waitgroup_t and
+   forwards every helper. cgen-emitted code constructs / adds / waits /
+   dones on zerg_wait_group_t pointers; under the new runtime they are
+   really zerg_waitgroup_t instances with park/unpark semantics. */
+typedef zerg_waitgroup_t zerg_wait_group_t;
 
 static zerg_wait_group_t *zerg_wait_group_make(void) {
-    zerg_wait_group_t *w = (zerg_wait_group_t *)malloc(sizeof(zerg_wait_group_t));
-    pthread_mutex_init(&w->mu, 0);
-    pthread_cond_init(&w->cv, 0);
-    w->n = 0;
-    return w;
+    return zerg_waitgroup_make();
 }
 
 static void zerg_wait_group_add(zerg_wait_group_t *w, int64_t delta) {
-    pthread_mutex_lock(&w->mu);
-    w->n += delta;
-    if (w->n == 0) pthread_cond_broadcast(&w->cv);
-    pthread_mutex_unlock(&w->mu);
+    zerg_waitgroup_add(w, delta);
 }
 
 static void zerg_wait_group_done(zerg_wait_group_t *w) {
-    zerg_wait_group_add(w, -1);
+    zerg_waitgroup_done(w);
 }
 
 static void zerg_wait_group_wait(zerg_wait_group_t *w) {
-    pthread_mutex_lock(&w->mu);
-    while (w->n != 0) pthread_cond_wait(&w->cv, &w->mu);
-    pthread_mutex_unlock(&w->mu);
+    zerg_waitgroup_wait(w);
 }
 
-/* ---------------- main-thread drain --------------------------------------
-   Synthetic global wait_group used by main() to drain every detached spawn
-   thread before returning. zerg_spawn bumps the counter under the mutex
-   before pthread_create; each spawn trampoline calls zerg_main_wg_done()
-   on the way out (after defer drain) so post-channel-op work runs to
-   completion. Programs that build their own wait_group still get an
-   independent object — this one is hidden from the user. */
-static pthread_mutex_t zerg_main_wg_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t zerg_main_wg_cv = PTHREAD_COND_INITIALIZER;
-static int64_t zerg_main_wg_n = 0;
-
+/* ---------------- main-thread drain shim ------------------------------
+   v0.7 emitted zerg_main_wg_add(1) on every spawn entry and
+   zerg_main_wg_done() on every spawn exit, then zerg_main_wg_wait() at
+   the end of main to join all detached pthreads. v0.12 tracks live
+   coroutines via the scheduler's live_coros counter, so the add/done
+   shims are no-ops and zerg_main_wg_wait delegates to
+   zerg_sched_drain. */
 static void zerg_main_wg_add(int64_t delta) {
-    pthread_mutex_lock(&zerg_main_wg_mu);
-    zerg_main_wg_n += delta;
-    if (zerg_main_wg_n == 0) pthread_cond_broadcast(&zerg_main_wg_cv);
-    pthread_mutex_unlock(&zerg_main_wg_mu);
+    (void)delta;
 }
 
 static void zerg_main_wg_done(void) {
-    zerg_main_wg_add(-1);
 }
 
 static void zerg_main_wg_wait(void) {
-    pthread_mutex_lock(&zerg_main_wg_mu);
-    while (zerg_main_wg_n != 0) pthread_cond_wait(&zerg_main_wg_cv, &zerg_main_wg_mu);
-    pthread_mutex_unlock(&zerg_main_wg_mu);
+    zerg_sched_drain();
 }
 
-/* ---------------- spawn ---------------------------------------------------
-   pthread_create wrapper with a capped stack and a detached attribute.
-   The thread fn signature is void(void*); the env pointer is the captured
-   environment struct allocated by the spawning fn. The synthetic main
-   wait_group is bumped here so main() can drain all detached threads
-   before returning; each trampoline calls zerg_main_wg_done() at the end
-   of its body. */
-static void zerg_spawn(void *(*fn)(void *), void *env) {
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 64 * 1024);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    zerg_main_wg_add(1);
-    pthread_t t;
-    pthread_create(&t, &attr, fn, env);
-    pthread_attr_destroy(&attr);
-}
-
-/* ---------------- select --------------------------------------------------
-   The select runtime is a polling loop. Each arm is a descriptor:
-     kind  = 0 (recv), 1 (send), 2 (default)
-     chan  = pointer to the chan struct (NULL for default)
-     ready = pointer to a per-element-type "ready?" probe fn that returns
-             1 when the op would not block.
-   The probe fns are emitted per element-type next to the chan helpers.
-   v0.7 keeps the implementation simple — usleep(50us) between polls. */
+/* ---------------- spawn shim (v0.7 surface) ----------------------------
+   v0.7 emit calls zerg_spawn(fn, env) where fn is void *(void *). The
+   v0.12 zerg_coro_spawn takes void(*)(void*); we wrap with a one-shot
+   adapter that invokes fn and discards its return. The adapter env is
+   heap-allocated and freed inside the trampoline. */
 typedef struct {
-    int kind;
-    void *chan;
-    int (*ready)(void *chan, int kind);
-} zerg_select_case;
+    void *(*fn)(void *);
+    void *env;
+} zerg_v07_spawn_env_t;
 
-static int zerg_select(zerg_select_case *cases, int n_cases, int has_default,
-                       int default_idx) {
-    for (;;) {
-        for (int i = 0; i < n_cases; i++) {
-            if (cases[i].kind == 2) continue;
-            if (cases[i].ready(cases[i].chan, cases[i].kind)) return i;
-        }
-        if (has_default) return default_idx;
-        usleep(50);
-    }
+static void zerg_v07_spawn_trampoline(void *p) {
+    zerg_v07_spawn_env_t *e = (zerg_v07_spawn_env_t *)p;
+    void *(*fn)(void *) = e->fn;
+    void *env = e->env;
+    free(e);
+    fn(env);
+}
+
+static void zerg_spawn(void *(*fn)(void *), void *env) {
+    zerg_v07_spawn_env_t *e =
+        (zerg_v07_spawn_env_t *)malloc(sizeof(zerg_v07_spawn_env_t));
+    e->fn = fn;
+    e->env = env;
+    zerg_coro_spawn(zerg_v07_spawn_trampoline, e);
 }
 `

@@ -10,7 +10,7 @@ package build
 //
 // Design pins:
 //
-//   - Workers are pthread'd OS threads. Default count = ZERG_GOMAXPROCS env
+//   - Workers are pthread'd OS threads. Default count = ZERG_MAXPROCS env
 //     var, fallback to sysconf(_SC_NPROCESSORS_ONLN). The OS main thread
 //     does NOT become a worker; it acts as the user-program driver and
 //     either runs user code inline (v0.7-compatible mode) or invokes
@@ -123,6 +123,42 @@ static void zerg_sched_signal(void) {
     pthread_mutex_lock(&zerg_sched_mu);
     pthread_cond_broadcast(&zerg_sched_cv);
     pthread_mutex_unlock(&zerg_sched_mu);
+}
+
+/* ---------------- generic wait-queue ------------------------------------
+   Shared by chan, wait_group, and (eventually) select. Per-coroutine wait
+   node allocated on the parker's coroutine stack; lives only for the
+   duration of the park / unpark cycle. The owning struct keeps pointers
+   into this stack-resident node while the coroutine is parked, which is
+   safe because the coroutine's own mmap'd stack is exactly what the
+   unparker resumes onto. */
+typedef struct zerg_chan_wait_node {
+    zerg_coro_t *coro;
+    void *value_ptr;                 /* sender: source; receiver: dest */
+    int closed_flag;                 /* set on close() before unpark */
+    struct zerg_chan_wait_node *next;
+} zerg_chan_wait_node_t;
+
+/* zerg_chan_wait_push appends a node to the tail of a singly-linked
+   queue identified by (head, tail). Caller holds the owning struct's mu. */
+static void zerg_chan_wait_push(zerg_chan_wait_node_t **head,
+                                zerg_chan_wait_node_t **tail,
+                                zerg_chan_wait_node_t *node) {
+    node->next = 0;
+    if (*tail) (*tail)->next = node; else *head = node;
+    *tail = node;
+}
+
+/* zerg_chan_wait_pop returns the head node (or NULL) and re-links.
+   Caller holds the owning struct's mu. */
+static zerg_chan_wait_node_t *zerg_chan_wait_pop(zerg_chan_wait_node_t **head,
+                                                  zerg_chan_wait_node_t **tail) {
+    zerg_chan_wait_node_t *n = *head;
+    if (!n) return 0;
+    *head = n->next;
+    if (!*head) *tail = 0;
+    n->next = 0;
+    return n;
 }
 
 /* zerg_rq_push enqueues a coroutine on the worker's local queue. Returns
@@ -308,7 +344,7 @@ static void *zerg_worker_main(void *arg) {
 void zerg_sched_init(int n_workers) {
     if (zerg_workers) return; /* idempotent */
     if (n_workers <= 0) {
-        const char *env = getenv("ZERG_GOMAXPROCS");
+        const char *env = getenv("ZERG_MAXPROCS");
         if (env && *env) n_workers = atoi(env);
     }
     if (n_workers <= 0) {
@@ -418,8 +454,3 @@ void zerg_sched_drain(void) {
     zerg_n_workers = 0;
 }
 `
-
-// SchedRuntimeC exposes the U2 C source so the targeted test can compile a
-// driver against it (concatenated with coroRuntimeC). U6 will fold both
-// into the v0.12 prelude emit path.
-func SchedRuntimeC() string { return schedRuntimeC }

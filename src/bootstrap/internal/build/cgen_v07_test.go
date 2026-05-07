@@ -310,10 +310,14 @@ func TestV07CgenRuntimePresentWhenChanUsed(t *testing.T) {
 close(ch)
 `
 	out := mustEmit(t, src)
+	// v0.12 keeps the v0.7 emit surface (zerg_defer_push, zerg_select,
+	// pthread include via the scheduler) but the underlying runtime is
+	// the M:N coroutine stack; the v0.7 zerg_defer_rec is a typedef
+	// alias for the U1 zerg_defer_node_t rather than a fresh struct.
 	for _, want := range []string{
 		"#include <pthread.h>",
 		"static void zerg_defer_push(",
-		"typedef struct zerg_defer_rec",
+		"typedef zerg_defer_node_t zerg_defer_rec",
 		"static int zerg_select(",
 	} {
 		if !strings.Contains(out, want) {
@@ -332,11 +336,15 @@ func TestV07CgenRuntimeAbsentWithoutV07Use(t *testing.T) {
 // --- size guard -----------------------------------------------------------
 
 // TestV07CgenSizeGuard mirrors the v0.6 size guard: a representative v0.7
-// program (channels, spawn, defer, wait_group, select) stays within 50× the
-// source size after codegen. The pthread runtime adds ~3 KB to every v0.7
-// program; the source must therefore be at least ~300 bytes for the ratio
-// to hold. The fixture below is the canonical "fan-in over channels" idiom
-// the v0.7 corpus exercises.
+// program (channels, spawn, defer, wait_group, select) stays within 150× the
+// source size after codegen. The v0.12 M:N runtime adds ~15–20 KB to every
+// concurrency-using program (coroutine primitive, scheduler, wait queue,
+// wait_group, select, defer, v0.7 surface shims) — substantially more than
+// v0.7's ~3 KB pthread/condvar runtime. The 150× ceiling accommodates that
+// while still catching pathological per-statement bloat. The source must
+// therefore be at least ~150 bytes for the ratio to hold; the fixture
+// below is the canonical "fan-in over channels" idiom the v0.7 corpus
+// exercises.
 func TestV07CgenSizeGuard(t *testing.T) {
 	src := `fn producer(ch: chan[int], wg: WaitGroup, base: int) {
 defer { wg.done() }
@@ -370,7 +378,7 @@ Option.None => { print 0 }
 run()
 `
 	out := mustEmit(t, src)
-	if len(out) > len(src)*50 {
-		t.Errorf("emitted size %d exceeds 50× source size %d", len(out), len(src))
+	if len(out) > len(src)*150 {
+		t.Errorf("emitted size %d exceeds 150× source size %d", len(out), len(src))
 	}
 }

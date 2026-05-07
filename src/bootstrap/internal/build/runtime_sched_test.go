@@ -24,7 +24,7 @@ import (
 //   - count == N (no extra noise from runtime / scheduler bugs)
 //
 // The driver also prints the worker count so we can confirm
-// ZERG_GOMAXPROCS / sysconf(_SC_NPROCESSORS_ONLN) is being honoured.
+// ZERG_MAXPROCS / sysconf(_SC_NPROCESSORS_ONLN) is being honoured.
 
 const schedDriverC = `
 #include <stdio.h>
@@ -52,7 +52,7 @@ static void worker_fn(void *arg) {
 }
 
 int main(void) {
-    /* default n_workers = nproc; the test sets ZERG_GOMAXPROCS to pin a
+    /* default n_workers = nproc; the test sets ZERG_MAXPROCS to pin a
        deterministic worker count for the assertion below. */
     zerg_sched_init(0);
     for (intptr_t i = 0; i < N_SPAWNS; i++) {
@@ -126,7 +126,7 @@ func TestV12SchedFanOut(t *testing.T) {
 	// Pin to 4 workers so we test work-stealing without going to NPROC
 	// (which can be 1 in some CI environments and would degenerate to
 	// single-threaded execution).
-	out := v12BuildSchedDriver(t, schedDriverC, []string{"ZERG_GOMAXPROCS=4"})
+	out := v12BuildSchedDriver(t, schedDriverC, []string{"ZERG_MAXPROCS=4"})
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	if len(lines) != 256 {
 		t.Fatalf("got %d output lines, want 256\noutput:\n%s", len(lines), out)
@@ -147,11 +147,11 @@ func TestV12SchedFanOut(t *testing.T) {
 	}
 }
 
-// TestV12SchedSingleWorker pins ZERG_GOMAXPROCS=1 so steal paths can
+// TestV12SchedSingleWorker pins ZERG_MAXPROCS=1 so steal paths can
 // never fire. Confirms the scheduler still terminates and runs every
 // coroutine on the lone worker.
 func TestV12SchedSingleWorker(t *testing.T) {
-	out := v12BuildSchedDriver(t, schedDriverC, []string{"ZERG_GOMAXPROCS=1"})
+	out := v12BuildSchedDriver(t, schedDriverC, []string{"ZERG_MAXPROCS=1"})
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	if len(lines) != 256 {
 		t.Fatalf("got %d output lines, want 256\noutput:\n%s", len(lines), out)
@@ -208,7 +208,7 @@ int main(void) {
     return 0;
 }
 `
-	out := v12BuildSchedDriver(t, driver, []string{"ZERG_GOMAXPROCS=2"})
+	out := v12BuildSchedDriver(t, driver, []string{"ZERG_MAXPROCS=2"})
 	got := strings.TrimRight(string(out), "\n")
 	if got != "consumed=42" {
 		t.Fatalf("output = %q, want %q", got, "consumed=42")

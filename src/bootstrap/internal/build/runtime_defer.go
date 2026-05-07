@@ -48,8 +48,3 @@ static void zerg_coro_defer(void (*fn)(void *), void *env) {
     c->defer_head = node;
 }
 `
-
-// DeferRuntimeC exposes the U5 defer source so the targeted test can
-// compile a driver against it. U6 will fold it into the v0.12 prelude
-// emit path.
-func DeferRuntimeC() string { return deferRuntimeC }

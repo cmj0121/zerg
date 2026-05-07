@@ -42,25 +42,15 @@ package build
 // worker's swap-back).
 
 const chanRuntimeC = `
-/* ---------------- channel — wait queue ----------------------------------
-   Per-coroutine wait node. Allocated on the parker's stack; lives only
-   for the duration of the park / unpark cycle. The chan struct owns
-   pointers into this stack-resident node while the coroutine is parked,
-   which is safe because the coroutine's own stack (the mmap'd region in
-   zerg_coro_t.stack_base) is exactly what the unparker resumes onto. */
-typedef struct zerg_chan_wait_node {
-    zerg_coro_t *coro;
-    void *value_ptr;                 /* sender: source; receiver: dest */
-    int closed_flag;                 /* set on close() before unpark */
-    struct zerg_chan_wait_node *next;
-} zerg_chan_wait_node_t;
-
 /* ---------------- channel — int64_t specialisation ----------------------
-   U6 will generate one of these per chan element type via the cgen
-   template (matching the v0.7 emit pattern). U3 hard-codes int64_t for
-   the unit test. The struct layout intentionally matches what v0.7
-   already emits, minus the cv_send / cv_recv condvars (replaced by the
-   wait-queue heads / tails). */
+   U6 generates one of these per chan element type via the cgen template
+   (matching the v0.7 emit pattern). U3's hardcoded int64_t version
+   below stays for the targeted unit test that compiles a stand-alone
+   driver against the runtime; cgen_v07's chan emitter produces
+   semantically-equivalent helpers per element type. The wait-node
+   primitive (zerg_chan_wait_node_t / push / pop) lives in
+   schedRuntimeC so the per-element-type emitter and the wait_group
+   runtime can share it. */
 typedef struct zerg_chan_int64_t {
     pthread_mutex_t mu;
     int64_t *buf;
@@ -81,28 +71,6 @@ static zerg_chan_int64_t *zerg_chan_int64_t_make(int64_t cap) {
     if (slots > 0) ch->buf = (int64_t *)malloc((size_t)slots * sizeof(int64_t));
     ch->cap = cap;
     return ch;
-}
-
-/* zerg_chan_wait_push appends a node to the tail of a singly-linked
-   queue identified by (head, tail). Caller holds ch->mu. */
-static void zerg_chan_wait_push(zerg_chan_wait_node_t **head,
-                                zerg_chan_wait_node_t **tail,
-                                zerg_chan_wait_node_t *node) {
-    node->next = 0;
-    if (*tail) (*tail)->next = node; else *head = node;
-    *tail = node;
-}
-
-/* zerg_chan_wait_pop returns the head node (or NULL) and re-links.
-   Caller holds ch->mu. */
-static zerg_chan_wait_node_t *zerg_chan_wait_pop(zerg_chan_wait_node_t **head,
-                                                  zerg_chan_wait_node_t **tail) {
-    zerg_chan_wait_node_t *n = *head;
-    if (!n) return 0;
-    *head = n->next;
-    if (!*head) *tail = 0;
-    n->next = 0;
-    return n;
 }
 
 static void zerg_chan_int64_t_send(zerg_chan_int64_t *ch, int64_t v) {
@@ -248,8 +216,3 @@ static void zerg_chan_int64_t_close(zerg_chan_int64_t *ch) {
     pthread_mutex_unlock(&ch->mu);
 }
 `
-
-// ChanRuntimeC exposes the U3 chan source so the targeted test can compile
-// driver programs against it. U6 will template this per-element-type into
-// the v0.12 prelude emit.
-func ChanRuntimeC() string { return chanRuntimeC }

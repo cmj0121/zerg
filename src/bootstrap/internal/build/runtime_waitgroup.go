@@ -67,9 +67,3 @@ static void zerg_waitgroup_wait(zerg_waitgroup_t *wg) {
        wait_group has no closed/closed_flag analogue. */
 }
 `
-
-// WaitGroupRuntimeC exposes the U4 wait_group source so the targeted test
-// can compile a driver against it (concatenated with coro + sched + chan
-// runtime, since wait_group reuses the chan wait-node type). U6 will fold
-// it into the v0.12 prelude emit path.
-func WaitGroupRuntimeC() string { return waitgroupRuntimeC }

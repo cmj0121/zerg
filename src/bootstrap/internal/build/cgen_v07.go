@@ -112,28 +112,35 @@ func (g *cgen) emitChanForwardDecls() {
 }
 
 // emitChanTypedefs writes the struct definition for every chan element type.
-// The capacity slot is 0 for unbuffered (the runtime treats 0 as a 1-slot
-// rendezvous so send/recv handshake correctly).
+// The capacity slot is 0 for unbuffered (the runtime treats 0 as a
+// rendezvous: every send must hand off directly to a parked receiver).
+// v0.12 layout: condvar pair replaced by send/recv wait queues; the
+// per-element-type helpers below park the calling coroutine on the queue
+// when the op would block.
 func (g *cgen) emitChanTypedefs() {
 	if len(g.chanOrder) == 0 {
 		return
 	}
 	keys := append([]string(nil), g.chanOrder...)
 	sort.Strings(keys)
-	g.b.WriteString("/* v0.7 channel struct definitions. */\n")
+	const tmpl = `struct %[1]s {
+    pthread_mutex_t mu;
+    %[2]s *buf;
+    int64_t cap;
+    int64_t count;
+    int64_t head;
+    int64_t tail;
+    int     closed;
+    zerg_chan_wait_node_t *send_head;
+    zerg_chan_wait_node_t *send_tail;
+    zerg_chan_wait_node_t *recv_head;
+    zerg_chan_wait_node_t *recv_tail;
+};
+`
+	g.b.WriteString("/* v0.12 channel struct definitions. */\n")
 	for _, k := range keys {
 		cs := g.chanShapes[k]
-		fmt.Fprintf(&g.b, "struct %s {\n", cs.chanMang)
-		g.b.WriteString("    pthread_mutex_t mu;\n")
-		g.b.WriteString("    pthread_cond_t  cv_send;\n")
-		g.b.WriteString("    pthread_cond_t  cv_recv;\n")
-		fmt.Fprintf(&g.b, "    %s *buf;\n", cs.elemC)
-		g.b.WriteString("    int64_t cap;\n")
-		g.b.WriteString("    int64_t count;\n")
-		g.b.WriteString("    int64_t head;\n")
-		g.b.WriteString("    int64_t tail;\n")
-		g.b.WriteString("    int     closed;\n")
-		g.b.WriteString("};\n")
+		fmt.Fprintf(&g.b, tmpl, cs.chanMang, cs.elemC)
 	}
 	g.b.WriteString("\n")
 }
@@ -152,107 +159,151 @@ func (g *cgen) emitChanHelpers() {
 	}
 }
 
+// emitChanOneHelpers writes make / send / recv / close / ready helpers for
+// one chan element type using positional fmt verbs:
+//
+//	%[1]s = chanMang  (e.g. "zerg_chan_int64_t")
+//	%[2]s = elemC     (e.g. "int64_t")
+//	%[3]s = optionMng (e.g. "zerg_opt_int64_t") — recv block only
+//
+// The send / recv park paths rely on zerg_coro_park's deferred-unlock: the
+// chan mu is released only AFTER the parker's ucontext is fully saved, so
+// an unparker that subsequently acquires mu never queues the coro before
+// its ctx is ready. The ready probe mirrors selectChanReadyC's reference:
+// recv ready when buffer non-empty OR a parked sender OR closed; send
+// ready when buffer has room AND not closed, OR a parked receiver.
 func (g *cgen) emitChanOneHelpers(cs *chanShape) {
-	cm := cs.chanMang
-	elemC := cs.elemC
+	const makeSendCloseReadyTmpl = `static %[1]s *%[1]s_make(int64_t cap) {
+    %[1]s *ch = (%[1]s *)calloc(1, sizeof(%[1]s));
+    pthread_mutex_init(&ch->mu, 0);
+    int64_t slots = cap > 0 ? cap : 0;
+    if (slots > 0) ch->buf = (%[2]s *)malloc((size_t)slots * sizeof(%[2]s));
+    ch->cap = cap;
+    return ch;
+}
 
-	fmt.Fprintf(&g.b, "static %s *%s_make(int64_t cap) {\n", cm, cm)
-	fmt.Fprintf(&g.b, "    %s *ch = (%s *)malloc(sizeof(%s));\n", cm, cm, cm)
-	g.b.WriteString("    pthread_mutex_init(&ch->mu, 0);\n")
-	g.b.WriteString("    pthread_cond_init(&ch->cv_send, 0);\n")
-	g.b.WriteString("    pthread_cond_init(&ch->cv_recv, 0);\n")
-	g.b.WriteString("    int64_t slots = cap > 0 ? cap : 1;\n")
-	fmt.Fprintf(&g.b, "    ch->buf = (%s *)malloc((size_t)slots * sizeof(%s));\n", elemC, elemC)
-	g.b.WriteString("    ch->cap = cap;\n")
-	g.b.WriteString("    ch->count = 0;\n")
-	g.b.WriteString("    ch->head = 0;\n")
-	g.b.WriteString("    ch->tail = 0;\n")
-	g.b.WriteString("    ch->closed = 0;\n")
-	g.b.WriteString("    return ch;\n")
-	g.b.WriteString("}\n\n")
+static void %[1]s_send(%[1]s *ch, %[2]s v) {
+    pthread_mutex_lock(&ch->mu);
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        fprintf(stderr, "zerg: runtime: send on closed channel\n");
+        exit(1);
+    }
+    /* Direct hand-off to a parked receiver. */
+    zerg_chan_wait_node_t *r = zerg_chan_wait_pop(&ch->recv_head, &ch->recv_tail);
+    if (r) {
+        *(%[2]s *)r->value_ptr = v;
+        zerg_coro_t *target = r->coro;
+        pthread_mutex_unlock(&ch->mu);
+        zerg_coro_unpark(target);
+        return;
+    }
+    if (ch->count < ch->cap) {
+        ch->buf[ch->tail] = v;
+        ch->tail = (ch->tail + 1) %% ch->cap;
+        ch->count++;
+        pthread_mutex_unlock(&ch->mu);
+        return;
+    }
+    /* Park on the send wait queue. */
+    zerg_chan_wait_node_t node;
+    node.coro = zerg_current_coro;
+    node.value_ptr = &v;
+    node.closed_flag = 0;
+    zerg_chan_wait_push(&ch->send_head, &ch->send_tail, &node);
+    zerg_coro_park(&ch->mu);
+    if (node.closed_flag) {
+        fprintf(stderr, "zerg: runtime: send on closed channel\n");
+        exit(1);
+    }
+}
 
-	// send: panic on closed; for unbuffered (cap==0) wait for an empty slot
-	// AND for a receiver to have signalled cv_recv readiness; for buffered
-	// wait while count==cap.
-	fmt.Fprintf(&g.b, "static void %s_send(%s *ch, %s v) {\n", cm, cm, elemC)
-	g.b.WriteString("    pthread_mutex_lock(&ch->mu);\n")
-	g.b.WriteString("    if (ch->closed) {\n")
-	g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("        fprintf(stderr, \"zerg: runtime: send on closed channel\\n\");\n")
-	g.b.WriteString("        exit(1);\n")
-	g.b.WriteString("    }\n")
-	g.b.WriteString("    int64_t slots = ch->cap > 0 ? ch->cap : 1;\n")
-	g.b.WriteString("    while (ch->count == slots && !ch->closed) {\n")
-	g.b.WriteString("        pthread_cond_wait(&ch->cv_send, &ch->mu);\n")
-	g.b.WriteString("    }\n")
-	g.b.WriteString("    if (ch->closed) {\n")
-	g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("        fprintf(stderr, \"zerg: runtime: send on closed channel\\n\");\n")
-	g.b.WriteString("        exit(1);\n")
-	g.b.WriteString("    }\n")
-	g.b.WriteString("    ch->buf[ch->tail] = v;\n")
-	g.b.WriteString("    ch->tail = (ch->tail + 1) % slots;\n")
-	g.b.WriteString("    ch->count++;\n")
-	g.b.WriteString("    pthread_cond_signal(&ch->cv_recv);\n")
-	g.b.WriteString("    pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("}\n\n")
+static void %[1]s_close(%[1]s *ch) {
+    pthread_mutex_lock(&ch->mu);
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        fprintf(stderr, "zerg: runtime: close on already-closed channel\n");
+        exit(1);
+    }
+    ch->closed = 1;
+    zerg_chan_wait_node_t *s;
+    while ((s = zerg_chan_wait_pop(&ch->send_head, &ch->send_tail)) != 0) {
+        s->closed_flag = 1;
+        zerg_coro_unpark(s->coro);
+    }
+    zerg_chan_wait_node_t *r;
+    while ((r = zerg_chan_wait_pop(&ch->recv_head, &ch->recv_tail)) != 0) {
+        r->closed_flag = 1;
+        zerg_coro_unpark(r->coro);
+    }
+    pthread_mutex_unlock(&ch->mu);
+}
 
-	// recv: blocks until either count > 0 or closed. Returns Option[T] when
-	// the chan element has a registered Option type; otherwise (helpers
-	// emitted as part of program collect) the option-carrying form falls
-	// back to a void result — but every recv site goes through exprStr so
-	// the option type is always registered (RecvExpr.Type() yields
-	// Option[T]). The helper signature is the Option[T] enum struct.
+static int %[1]s_ready(void *p, int kind) {
+    %[1]s *ch = (%[1]s *)p;
+    pthread_mutex_lock(&ch->mu);
+    int r = 0;
+    int64_t slots = ch->cap > 0 ? ch->cap : 1;
+    if (kind == 0) {
+        r = (ch->count > 0) || (ch->send_head != 0) || ch->closed;
+    } else if (kind == 1) {
+        r = ((ch->count < slots) && !ch->closed) || (ch->recv_head != 0);
+    }
+    pthread_mutex_unlock(&ch->mu);
+    return r;
+}
+
+`
+	const recvTmpl = `static %[3]s %[1]s_recv(%[1]s *ch) {
+    pthread_mutex_lock(&ch->mu);
+    if (ch->count > 0) {
+        %[2]s v = ch->buf[ch->head];
+        ch->head = (ch->head + 1) %% ch->cap;
+        ch->count--;
+        zerg_chan_wait_node_t *s = zerg_chan_wait_pop(&ch->send_head, &ch->send_tail);
+        if (s) {
+            ch->buf[ch->tail] = *(%[2]s *)s->value_ptr;
+            ch->tail = (ch->tail + 1) %% ch->cap;
+            ch->count++;
+            zerg_coro_t *target = s->coro;
+            pthread_mutex_unlock(&ch->mu);
+            zerg_coro_unpark(target);
+        } else {
+            pthread_mutex_unlock(&ch->mu);
+        }
+        return ((%[3]s){.tag = 0, .payload.p0 = {.a0 = v}});
+    }
+    zerg_chan_wait_node_t *s = zerg_chan_wait_pop(&ch->send_head, &ch->send_tail);
+    if (s) {
+        %[2]s v = *(%[2]s *)s->value_ptr;
+        zerg_coro_t *target = s->coro;
+        pthread_mutex_unlock(&ch->mu);
+        zerg_coro_unpark(target);
+        return ((%[3]s){.tag = 0, .payload.p0 = {.a0 = v}});
+    }
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        return ((%[3]s){.tag = 1});
+    }
+    %[2]s slot;
+    memset(&slot, 0, sizeof(%[2]s));
+    zerg_chan_wait_node_t node;
+    node.coro = zerg_current_coro;
+    node.value_ptr = &slot;
+    node.closed_flag = 0;
+    zerg_chan_wait_push(&ch->recv_head, &ch->recv_tail, &node);
+    zerg_coro_park(&ch->mu);
+    if (node.closed_flag) {
+        return ((%[3]s){.tag = 1});
+    }
+    return ((%[3]s){.tag = 0, .payload.p0 = {.a0 = slot}});
+}
+
+`
+	fmt.Fprintf(&g.b, makeSendCloseReadyTmpl, cs.chanMang, cs.elemC)
 	if cs.optionT != nil {
-		omn := cs.optionMng
-		fmt.Fprintf(&g.b, "static %s %s_recv(%s *ch) {\n", omn, cm, cm)
-		g.b.WriteString("    pthread_mutex_lock(&ch->mu);\n")
-		g.b.WriteString("    while (ch->count == 0 && !ch->closed) {\n")
-		g.b.WriteString("        pthread_cond_wait(&ch->cv_recv, &ch->mu);\n")
-		g.b.WriteString("    }\n")
-		g.b.WriteString("    if (ch->count == 0 && ch->closed) {\n")
-		g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-		// None tag = 1 in canonical Option layout.
-		fmt.Fprintf(&g.b, "        return ((%s){.tag = 1});\n", omn)
-		g.b.WriteString("    }\n")
-		fmt.Fprintf(&g.b, "    %s v = ch->buf[ch->head];\n", elemC)
-		g.b.WriteString("    int64_t slots = ch->cap > 0 ? ch->cap : 1;\n")
-		g.b.WriteString("    ch->head = (ch->head + 1) % slots;\n")
-		g.b.WriteString("    ch->count--;\n")
-		g.b.WriteString("    pthread_cond_signal(&ch->cv_send);\n")
-		g.b.WriteString("    pthread_mutex_unlock(&ch->mu);\n")
-		fmt.Fprintf(&g.b, "    return ((%s){.tag = 0, .payload.p0 = {.a0 = v}});\n", omn)
-		g.b.WriteString("}\n\n")
+		fmt.Fprintf(&g.b, recvTmpl, cs.chanMang, cs.elemC, cs.optionMng)
 	}
-
-	// close: idempotent panic — closing an already-closed chan aborts.
-	fmt.Fprintf(&g.b, "static void %s_close(%s *ch) {\n", cm, cm)
-	g.b.WriteString("    pthread_mutex_lock(&ch->mu);\n")
-	g.b.WriteString("    if (ch->closed) {\n")
-	g.b.WriteString("        pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("        fprintf(stderr, \"zerg: runtime: close on already-closed channel\\n\");\n")
-	g.b.WriteString("        exit(1);\n")
-	g.b.WriteString("    }\n")
-	g.b.WriteString("    ch->closed = 1;\n")
-	g.b.WriteString("    pthread_cond_broadcast(&ch->cv_send);\n")
-	g.b.WriteString("    pthread_cond_broadcast(&ch->cv_recv);\n")
-	g.b.WriteString("    pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("}\n\n")
-
-	// ready probe used by zerg_select. kind=0 recv, kind=1 send.
-	fmt.Fprintf(&g.b, "static int %s_ready(void *p, int kind) {\n", cm)
-	fmt.Fprintf(&g.b, "    %s *ch = (%s *)p;\n", cm, cm)
-	g.b.WriteString("    pthread_mutex_lock(&ch->mu);\n")
-	g.b.WriteString("    int r = 0;\n")
-	g.b.WriteString("    int64_t slots = ch->cap > 0 ? ch->cap : 1;\n")
-	g.b.WriteString("    if (kind == 0) {\n")
-	g.b.WriteString("        r = (ch->count > 0) || ch->closed;\n")
-	g.b.WriteString("    } else if (kind == 1) {\n")
-	g.b.WriteString("        r = (ch->count < slots) && !ch->closed;\n")
-	g.b.WriteString("    }\n")
-	g.b.WriteString("    pthread_mutex_unlock(&ch->mu);\n")
-	g.b.WriteString("    return r;\n")
-	g.b.WriteString("}\n\n")
 }
 
 // programUsesV07 reports whether any module in the bundle references a

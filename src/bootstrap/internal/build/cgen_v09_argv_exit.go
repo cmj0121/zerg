@@ -316,7 +316,14 @@ func emitV09ArgvExitBuiltinBody(name string) (string, bool) {
 // std/os.exit. __zerg_argc / __zerg_argv are the process-global
 // argv mirror seeded at the top of main; zerg_os_argv builds a
 // zerg_list_zerg_str from them (one zerg_str per argv entry).
+//
+// _exit (in zerg_os_exit) needs <unistd.h>; programs that use os.exit
+// without any v0.7 concurrency primitive don't pull the v0.12 runtime
+// preamble (which would already include it via coroRuntimeC) so we
+// include it locally here. Including twice is harmless — both headers
+// are idempotent on every supported platform.
 const runtimeV09ArgvExitC = `#include <stdlib.h>
+#include <unistd.h>
 
 /* ---------------- v0.9 std/os argv + exit runtime ----------------------- */
 
@@ -340,7 +347,21 @@ static zerg_list_zerg_str zerg_os_argv(void) {
     return out;
 }
 
+/* zerg_os_exit terminates the process with the given code. We flush
+   stdout/stderr first so any prints made before the exit call reach
+   the user, then use _exit rather than exit. _exit avoids running
+   atexit handlers and libc teardown — important under the v0.12 M:N
+   runtime, where the caller is a coroutine running on one worker
+   pthread while other workers are still in zerg_worker_main; libc
+   teardown would race the workers' access to scheduler globals
+   (calloc'd worker pool, runqueues, mutexes). _exit terminates the
+   entire process immediately; the workers' mmap'd stacks and locked
+   mutexes are released by the kernel. v0.9's semantics ("os.exit
+   bypasses defers") are preserved either way — _exit doesn't run
+   cleanup paths. */
 __attribute__((noreturn)) static void zerg_os_exit(int64_t code) {
-    exit((int)code);
+    fflush(stdout);
+    fflush(stderr);
+    _exit((int)code);
 }
 `

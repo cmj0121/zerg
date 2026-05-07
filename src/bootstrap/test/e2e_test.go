@@ -168,6 +168,86 @@ func captureCmdBoth(name string, args []string, dir string) (stdout, stderr []by
 	return so.Bytes(), se.Bytes(), 0, nil
 }
 
+// TestExamplesBuild gates every example in examples/ on a successful
+// `zerg build` so the documentation cannot drift out of sync with the
+// shipped grammar / typeck / codegen surface. 13_asm.zg is excluded by
+// design — it carries a future `# requires:` marker that drives
+// TestRequiresGate; building it would defeat that assertion.
+//
+// The check stops at "the binary was produced" (the existing TestE2E
+// path covers full run/build parity for the small set of examples that
+// have golden files); the goal here is breadth, not stdout fidelity.
+func TestExamplesBuild(t *testing.T) {
+	if _, lookErr := exec.LookPath(build.DefaultCC()); lookErr != nil {
+		t.Skip("cc not available")
+	}
+	binPath := buildToolchain(t)
+	examples := examplesDir(t)
+
+	entries, err := os.ReadDir(examples)
+	if err != nil {
+		t.Fatalf("read examples dir: %v", err)
+	}
+
+	const versionGateFixture = "13_asm.zg"
+	var picked []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".zg") {
+			continue
+		}
+		if name == versionGateFixture {
+			continue
+		}
+		picked = append(picked, name)
+	}
+	if len(picked) == 0 {
+		t.Fatal("no examples picked up — examplesDir resolution likely broken")
+	}
+
+	for _, name := range picked {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			srcPath := filepath.Join(examples, name)
+			buildDir := t.TempDir()
+			out, code, err := captureCmdBothMerged(binPath, []string{"build", srcPath}, buildDir)
+			if err != nil {
+				t.Fatalf("zerg build: %v", err)
+			}
+			if code != 0 {
+				t.Fatalf("zerg build %s exited %d, want 0\noutput:\n%s", name, code, out)
+			}
+			outBin := filepath.Join(buildDir, strings.TrimSuffix(name, ".zg"))
+			if _, err := os.Stat(outBin); err != nil {
+				t.Fatalf("expected binary at %s: %v", outBin, err)
+			}
+		})
+	}
+}
+
+// captureCmdBothMerged runs name in dir and returns stdout+stderr merged
+// (stderr first then stdout, separated by a marker) so a build failure
+// log is fully visible in the t.Fatalf message. Used by TestExamplesBuild
+// where the full diagnostic is what makes a failing example actionable.
+func captureCmdBothMerged(name string, args []string, dir string) ([]byte, int, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+	err := cmd.Run()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return combined.Bytes(), ee.ExitCode(), nil
+		}
+		return combined.Bytes(), -1, err
+	}
+	return combined.Bytes(), 0, nil
+}
+
 // TestRequiresGate verifies that examples carrying a future-version
 // `# requires:` marker are rejected with the standard message, and that
 // examples without a marker still run cleanly.

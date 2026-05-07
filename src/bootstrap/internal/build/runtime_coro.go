@@ -78,12 +78,18 @@ typedef enum {
 
 typedef struct zerg_coro {
     ucontext_t ctx;          /* save area for swapcontext */
-    ucontext_t caller;       /* set by zerg_coro_resume; restored on yield */
+    ucontext_t *caller;      /* set on resume; yield/park swap back through it */
     void *stack_base;        /* mmap'd block, includes guard page */
     size_t stack_size;       /* total mmap'd size (guard + usable) */
     void (*fn)(void *);      /* user entry */
     void *arg;               /* opaque arg passed to fn */
     zerg_coro_state_t state;
+    /* parked is set by zerg_coro_park (true) and cleared by yield (false)
+       so the scheduler worker can distinguish "yielded — requeue locally"
+       from "parked on a wait queue — leave alone, the unparker will
+       requeue". Both paths swapcontext back through caller; only the bit
+       differs. */
+    int parked;
     uint64_t id;             /* monotonic id for diagnostics */
 } zerg_coro_t;
 
@@ -94,21 +100,25 @@ typedef struct zerg_coro {
    that 10000 coroutines fit in 2.5 GiB of address space (not residency). */
 #define ZERG_CORO_STACK_USABLE (256 * 1024)
 
-static _Thread_local zerg_coro_t *zerg_current_coro = 0;
+/* zerg_current_coro is exported so callers in other TUs (the scheduler in
+   schedRuntimeC, U3+ wait queues, and unit-test drivers) can reference it
+   without going through an accessor. _Thread_local because each OS-thread
+   worker has its own current-coroutine. */
+_Thread_local zerg_coro_t *zerg_current_coro = 0;
 static uint64_t zerg_coro_next_id = 1;
 
 /* zerg_coro_entry is the C entry stub makecontext jumps to. It receives the
    coroutine pointer split across two ints (high/low halves) because
    makecontext only admits int args. We rejoin and dispatch the user fn,
-   then mark the coroutine DONE and swap back to its caller. */
+   then mark the coroutine DONE and swap back to whichever context resumed
+   us — c->caller is set by zerg_coro_resume / the scheduler worker before
+   the swap-in, so the same pointer drives the swap-out. */
 static void zerg_coro_entry(unsigned int hi, unsigned int lo) {
     uintptr_t packed = ((uintptr_t)hi << 32) | (uintptr_t)lo;
     zerg_coro_t *c = (zerg_coro_t *)packed;
     c->fn(c->arg);
     c->state = ZERG_CORO_DONE;
-    /* swap back to caller. The caller-side zerg_coro_resume saves its own
-       context into c->caller before jumping in, so this restores it. */
-    swapcontext(&c->ctx, &c->caller);
+    swapcontext(&c->ctx, c->caller);
 }
 
 /* zerg_coro_alloc_stack mmaps stack memory and protects the bottom page so
@@ -160,20 +170,23 @@ zerg_coro_t *zerg_coro_new(void (*fn)(void *), void *arg) {
 
 /* zerg_coro_resume jumps into a coroutine. Returns when the coroutine
    yields (state SUSPENDED) or finishes (state DONE). Marks the coroutine
-   RUNNING for the duration; the caller's context is saved in c->caller so
-   yield can swap straight back. */
+   RUNNING for the duration; the caller's context lives in a stack-local
+   ucontext_t whose address is stashed in c->caller — yield/park reads
+   that pointer to swap straight back. */
 void zerg_coro_resume(zerg_coro_t *c) {
+    ucontext_t local;
     zerg_coro_t *prev = zerg_current_coro;
     zerg_current_coro = c;
+    c->caller = &local;
     c->state = ZERG_CORO_RUNNING;
-    swapcontext(&c->caller, &c->ctx);
+    swapcontext(&local, &c->ctx);
     zerg_current_coro = prev;
 }
 
-/* zerg_coro_yield gives control back to whoever called zerg_coro_resume on
-   this coroutine. May only be called from a coroutine context (not from the
-   driver thread); callers without a current coroutine are a programming
-   error and abort. */
+/* zerg_coro_yield gives control back to whoever called zerg_coro_resume
+   (or to the scheduler worker if running under a worker pool) on this
+   coroutine. May only be called from a coroutine context; callers without
+   a current coroutine are a programming error and abort. */
 void zerg_coro_yield(void) {
     zerg_coro_t *c = zerg_current_coro;
     if (!c) {
@@ -181,7 +194,8 @@ void zerg_coro_yield(void) {
         abort();
     }
     c->state = ZERG_CORO_SUSPENDED;
-    swapcontext(&c->ctx, &c->caller);
+    c->parked = 0;
+    swapcontext(&c->ctx, c->caller);
 }
 
 void zerg_coro_free(zerg_coro_t *c) {

@@ -106,6 +106,28 @@ run()
 	}
 }
 
+func TestV07CgenSpawnNamedCallEnvFieldsParseAsC(t *testing.T) {
+	// Regression: the spawn-of-named-call path used to mangle the synthetic
+	// positional arg names (`__a0`) when emitting the env struct, while the
+	// trampoline and setup site referenced the bare unmangled form. The C
+	// compiler then failed with "no member named '__a0' in 'zerg_env_N'"
+	// for any `spawn fn(args)` shape. Asserts the env struct field, the
+	// trampoline read, and the setup write all use the same name.
+	src := `fn worker(id: int) { print id }
+spawn worker(7)
+`
+	out := mustEmit(t, src)
+	for _, want := range []string{
+		"int64_t __a0;",      // env field declared without z_ prefix
+		"__env->__a0",        // trampoline reads bare name
+		"->__a0 = INT64_C(7", // setup writes bare name
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing spawn-named-call piece %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestV07CgenSpawnCapturesListClonesIt(t *testing.T) {
 	src := `fn run() {
 xs: list[int] = [1, 2, 3]

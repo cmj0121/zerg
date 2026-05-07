@@ -90,6 +90,14 @@ typedef struct zerg_coro {
        requeue". Both paths swapcontext back through caller; only the bit
        differs. */
     int parked;
+    /* park_unlock holds a mutex the caller wants unlocked AFTER the swap-
+       out has saved c->ctx; the worker (zerg_worker_run_one) reads this
+       on the swap-back side and releases the lock. The pattern lets a
+       wait-queue add hold the chan mutex through the queue insertion,
+       hand it to park, and only release once the parking coroutine's
+       context is fully saved — closing the otherwise-fatal race where an
+       unparker observes the queued coro before its ctx is valid. */
+    void *park_unlock;       /* pthread_mutex_t *, 0 for plain yield */
     uint64_t id;             /* monotonic id for diagnostics */
 } zerg_coro_t;
 
@@ -100,11 +108,27 @@ typedef struct zerg_coro {
    that 10000 coroutines fit in 2.5 GiB of address space (not residency). */
 #define ZERG_CORO_STACK_USABLE (256 * 1024)
 
-/* zerg_current_coro is exported so callers in other TUs (the scheduler in
-   schedRuntimeC, U3+ wait queues, and unit-test drivers) can reference it
-   without going through an accessor. _Thread_local because each OS-thread
-   worker has its own current-coroutine. */
-_Thread_local zerg_coro_t *zerg_current_coro = 0;
+/* "Current coroutine" lookup goes through a function pointer rather than
+   a _Thread_local variable. On Apple Silicon (arm64 macOS), libc's
+   swapcontext appears to save/restore the register that backs clang's
+   _Thread_local TLV access. When a coroutine migrates between worker
+   threads (parked on B, unparked, picked up by A), the swap-in
+   restores B's TLS register; afterwards A's coro body reads TLS through
+   B's slot and gets the wrong value. We work around this by routing
+   reads/writes through function pointers. The U1 default uses a
+   _Thread_local backing store and is sufficient for U1's single-OS-
+   thread standalone tests. The U2 scheduler (schedRuntimeC) overrides
+   both pointers at zerg_sched_init time with versions that look up
+   per-worker state on the worker_t struct, keyed by pthread_self()
+   (which uses TPIDRRO_EL0 — kernel-managed, immune to user-level
+   ucontext switches). */
+static _Thread_local zerg_coro_t *zerg_coro_tls_storage = 0;
+static zerg_coro_t *zerg_coro_default_get(void) { return zerg_coro_tls_storage; }
+static void zerg_coro_default_set(zerg_coro_t *c) { zerg_coro_tls_storage = c; }
+zerg_coro_t *(*zerg_coro_get_fp)(void) = zerg_coro_default_get;
+void (*zerg_coro_set_fp)(zerg_coro_t *) = zerg_coro_default_set;
+#define zerg_current_coro (zerg_coro_get_fp())
+#define zerg_set_current_coro(c) (zerg_coro_set_fp(c))
 static uint64_t zerg_coro_next_id = 1;
 
 /* zerg_coro_entry is the C entry stub makecontext jumps to. It receives the
@@ -176,11 +200,11 @@ zerg_coro_t *zerg_coro_new(void (*fn)(void *), void *arg) {
 void zerg_coro_resume(zerg_coro_t *c) {
     ucontext_t local;
     zerg_coro_t *prev = zerg_current_coro;
-    zerg_current_coro = c;
+    zerg_set_current_coro(c);
     c->caller = &local;
     c->state = ZERG_CORO_RUNNING;
     swapcontext(&local, &c->ctx);
-    zerg_current_coro = prev;
+    zerg_set_current_coro(prev);
 }
 
 /* zerg_coro_yield gives control back to whoever called zerg_coro_resume

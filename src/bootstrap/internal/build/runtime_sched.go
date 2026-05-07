@@ -66,6 +66,12 @@ typedef struct zerg_worker {
     pthread_t thread;
     int id;
     zerg_runqueue_t rq;
+    /* Per-worker scheduler context and current-coroutine pointer live
+       on the worker_t (keyed by pthread_self() at lookup) rather than in
+       _Thread_local storage — see runtime_coro.go for the macOS-arm64
+       swapcontext / TPIDR motivation. */
+    ucontext_t worker_ctx;
+    zerg_coro_t *current_coro;
 } zerg_worker_t;
 
 /* Global scheduler state. The worker pool is allocated at zerg_sched_init
@@ -88,11 +94,30 @@ static int zerg_sched_done = 0;
 static pthread_mutex_t zerg_sched_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t zerg_sched_cv = PTHREAD_COND_INITIALIZER;
 
-/* Per-thread "current worker" pointer so park/unpark can read the worker
-   they belong to without an explicit arg threading. Set by the worker fn
-   before its scheduler loop. */
-static _Thread_local zerg_worker_t *zerg_current_worker = 0;
-static _Thread_local ucontext_t zerg_worker_ctx;
+/* zerg_sched_get_current_worker walks the worker pool comparing each
+   worker's pthread_t against pthread_self(). Linear is fine — the pool
+   is at most ~256 workers and the lookup happens once per park / yield /
+   spawn boundary, dominated by the actual swap. Returns 0 if no worker
+   matches (caller is the main thread or some non-worker pthread). */
+static zerg_worker_t *zerg_sched_get_current_worker(void) {
+    pthread_t self = pthread_self();
+    for (int i = 0; i < zerg_n_workers; i++) {
+        if (pthread_equal(zerg_workers[i].thread, self)) {
+            return &zerg_workers[i];
+        }
+    }
+    return 0;
+}
+
+static zerg_coro_t *zerg_sched_get_current_coro(void) {
+    zerg_worker_t *w = zerg_sched_get_current_worker();
+    return w ? w->current_coro : 0;
+}
+
+static void zerg_sched_set_current_coro(zerg_coro_t *c) {
+    zerg_worker_t *w = zerg_sched_get_current_worker();
+    if (w) w->current_coro = c;
+}
 
 static void zerg_sched_signal(void) {
     pthread_mutex_lock(&zerg_sched_mu);
@@ -188,29 +213,42 @@ static zerg_coro_t *zerg_sched_pick(zerg_worker_t *self) {
 }
 
 /* zerg_worker_run executes one coroutine and returns to the scheduler
-   loop. The coroutine's caller context is the worker thread's saved
-   ucontext (zerg_worker_ctx). When the coroutine yields or finishes,
-   control swaps back here. */
+   loop. The coroutine's caller context is the worker's saved ucontext
+   (self->worker_ctx). When the coroutine yields or finishes, control
+   swaps back here. */
 static void zerg_worker_run_one(zerg_worker_t *self, zerg_coro_t *c) {
-    (void)self;
-    zerg_coro_t *prev = zerg_current_coro;
-    zerg_current_coro = c;
-    c->caller = &zerg_worker_ctx;
+    zerg_coro_t *prev = self->current_coro;
+    self->current_coro = c;
+    c->caller = &self->worker_ctx;
     c->state = ZERG_CORO_RUNNING;
     /* The worker context is the resume target on yield / park / done. */
-    swapcontext(&zerg_worker_ctx, &c->ctx);
-    zerg_current_coro = prev;
+    swapcontext(&self->worker_ctx, &c->ctx);
+    /* Swap-back: snapshot the parked-bit BEFORE releasing park_unlock_mu.
+       Otherwise an unparker that acquires the unlocked mu can both clear
+       c->parked AND push c onto a runqueue before we reach the parked
+       check below — leaving us to ALSO push c, putting it on two queues
+       at once. Reading the bit while the unparker is still blocked on
+       the mutex closes that race. */
+    int was_parked = c->parked;
+    /* Releasing the mutex AFTER the swap-out (which saved c->ctx) means
+       any unparker that acquires the same mutex observes a fully-saved
+       context — no race with a worker that pops c and tries to swap in
+       before the parker finished saving. */
+    if (c->park_unlock) {
+        pthread_mutex_t *mu = (pthread_mutex_t *)c->park_unlock;
+        c->park_unlock = 0;
+        pthread_mutex_unlock(mu);
+    }
+    self->current_coro = prev;
     /* On return, c's state is either SUSPENDED (parked or yielded) or
        DONE. SUSPENDED + on no wait queue => yielded => requeue. SUSPENDED
        + on a wait queue => parked => waiter's job to unpark. DONE =>
-       scheduler decrements live_coros and frees. v0.12 U2 doesn't have
-       wait queues yet — every SUSPENDED is a yield, so we always requeue.
-       U3 introduces a "is parked" bit. */
+       scheduler decrements live_coros and frees. */
     if (c->state == ZERG_CORO_DONE) {
         zerg_coro_free(c);
         int64_t left = __atomic_sub_fetch(&zerg_live_coros, 1, __ATOMIC_ACQ_REL);
         if (left == 0) zerg_sched_signal();
-    } else if (c->parked) {
+    } else if (was_parked) {
         /* parked on a wait queue — the unparker is responsible for
            requeueing. Leave the coroutine alone and pick the next one. */
     } else {
@@ -228,12 +266,15 @@ static void zerg_worker_run_one(zerg_worker_t *self, zerg_coro_t *c) {
 /* The pthread entry point for each worker. */
 static void *zerg_worker_main(void *arg) {
     zerg_worker_t *self = (zerg_worker_t *)arg;
-    zerg_current_worker = self;
-    /* Save our scheduler context; coroutines swap into c->ctx and back to
-       this saved context. We don't reuse swapcontext's incoming ctx for
-       this — getcontext seeds the field with valid contents that
-       swapcontext needs to resume. */
-    getcontext(&zerg_worker_ctx);
+    /* Self-register the thread id so zerg_sched_get_current_worker can
+       look us up by pthread_self() — pthread_create populates *thread in
+       the parent before returning, but the child can race with that
+       store on some platforms. Writing here from the child guarantees
+       it's set before this thread does any worker lookups. */
+    self->thread = pthread_self();
+    /* Save our scheduler context; coroutines swap into c->ctx and back
+       to this saved context. */
+    getcontext(&self->worker_ctx);
     for (;;) {
         zerg_coro_t *c = zerg_sched_pick(self);
         if (c) {
@@ -281,6 +322,11 @@ void zerg_sched_init(int n_workers) {
         zerg_workers[i].id = i;
         pthread_mutex_init(&zerg_workers[i].rq.mu, 0);
     }
+    /* Override the U1 default current-coroutine accessors with the
+       worker-table lookup. See runtime_coro.go for why TLS-based
+       accessors don't survive Apple Silicon swapcontext migration. */
+    zerg_coro_get_fp = zerg_sched_get_current_coro;
+    zerg_coro_set_fp = zerg_sched_set_current_coro;
     for (int i = 0; i < n_workers; i++) {
         pthread_create(&zerg_workers[i].thread, 0, zerg_worker_main, &zerg_workers[i]);
     }
@@ -312,7 +358,17 @@ zerg_coro_t *zerg_coro_spawn(void (*fn)(void *), void *arg) {
    parked-bit to decide whether to requeue or trust a wait queue to
    unpark. v0.12 U2 only exposes the API; channels won't call it until
    U3 lands. */
-void zerg_coro_park(void) {
+/* zerg_coro_park parks the current coroutine on a wait queue. The optional
+   unlock_mu, if non-NULL, is released by the worker AFTER the swap-out
+   has saved c->ctx — the standard "park with a held mutex" pattern. The
+   caller is expected to:
+       lock(mu);
+       <add self to wait queue>;
+       zerg_coro_park(mu);     // unlocks mu after save, parks
+       <on resume, mu is released; check delivered/closed_flag>
+   Calling with unlock_mu == NULL is fine and means "I just want to park,
+   no mutex pending" (used by direct park/unpark drivers in tests). */
+void zerg_coro_park(void *unlock_mu) {
     zerg_coro_t *c = zerg_current_coro;
     if (!c) {
         fprintf(stderr, "zerg: zerg_coro_park called outside a coroutine\n");
@@ -320,6 +376,7 @@ void zerg_coro_park(void) {
     }
     c->state = ZERG_CORO_SUSPENDED;
     c->parked = 1;
+    c->park_unlock = unlock_mu;
     swapcontext(&c->ctx, c->caller);
 }
 

@@ -73,7 +73,7 @@ typedef struct zerg_coro zerg_coro_t;
 zerg_coro_t *zerg_coro_spawn(void (*fn)(void *), void *arg);
 void zerg_sched_init(int n_workers);
 void zerg_sched_drain(void);
-void zerg_coro_park(void);
+void zerg_coro_park(void *unlock_mu);
 void zerg_coro_unpark(zerg_coro_t *c);
 #endif
 `
@@ -176,18 +176,18 @@ func TestV12SchedParkUnpark(t *testing.T) {
 static zerg_coro_t * volatile waiting = 0;
 static volatile int produced = 0;
 
-extern zerg_coro_t *zerg_current_coro_(void);
-/* The runtime keeps its current-coro pointer thread-local; we surface it
-   via a tiny accessor declared in the same TU so the driver can fetch
-   the consumer coroutine before parking. */
+/* The runtime exposes the current-coro pointer through a function-pointer
+   indirection (zerg_coro_get_fp) — see runtime_coro.go for the macOS-arm64
+   swapcontext / TLS rationale. The U2 sched_init replaces it with a
+   pthread_self-keyed lookup so the value survives coroutine migration. */
+extern zerg_coro_t *(*zerg_coro_get_fp)(void);
 
 static void consumer_fn(void *arg) {
     (void)arg;
     /* Register self as waiting — the producer will unpark this exact
        coroutine. */
-    extern _Thread_local zerg_coro_t *zerg_current_coro;
-    waiting = zerg_current_coro;
-    zerg_coro_park();
+    waiting = zerg_coro_get_fp();
+    zerg_coro_park(0);
     /* Resumed by producer. Read produced. */
     printf("consumed=%d\n", produced);
 }

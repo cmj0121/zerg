@@ -1,92 +1,87 @@
 #! /usr/bin/env zerg
-# requires: v0.2
+# requires: v0.7
 #
 # Operators
 #
-# The zerg provides the arithmetic, bitwise, comparison and logical operators, more over, it also provides the access,
-# the indexing and the slicing operators, which will be covered in the later sections.
+# Zerg provides arithmetic, bitwise, comparison, and logical operators. Indexing, slicing, and channel
+# operators get their own files (`07_slicing.zg`, `12_concurrency.zg`).
 #
-# The Operator Precedence that lower precedence operators are evaluated after higher precedence operators, and the operators
-# with the same precedence are evaluated from left to right, except for the exponentiation operator, which is evaluated from
-# right to left.
+# Operator precedence (lowest to highest, the table reflects what the parser actually accepts at v0.11):
 #
-# | Precedence | Operator                    | Description              | Associativity
-# |------------|-----------------------------|--------------------------|---------------
-# | 1          | `()`                        | Parentheses              | Left to right
-# |            | `[]`                        | Indexing / Slicing       |
-# |            | `.`                         | Attribute access         |
-# | 2          | `-` `~`                     | Negation / Bitwise NOT   | Right to left
-# | 3          | `**`                        | Exponentiation           |
-# | 4          | `*` `/` `//` `%`            | Multiplication           | Left to right
-# | 5          | `+` `-`                     | Addition and Subtraction |
-# | 6          | `<<` `>>`                   | Bitwise shifts           |
-# | 7          | `&`                         | Bitwise AND              |
-# | 8          | `^`                         | Bitwise XOR              |
-# | 9          | `|`                         | Bitwise OR               |
-# | 10         | `..` `..=`                  | Range                    |
-# | 11         | `==` `!=` `>` `<` `>=` `<=` | Comparison               |
-# |            | `in`                        | Membership               |
-# | 12         | `not`                       | Logical NOT			    | Right to left
-# | 13         | `and`                       | Logical AND              | Left to right
-# | 14         | `xor`                       | Logical XOR              |
-# | 15         | `or`                        | Logical OR               |
-# | 16         | `<-`                        | Channel send and receive |
-# | 17         | `=` `:=`                    | Assignment               | Right to left
+# | Precedence | Operator                       | Description              | Associativity
+# |------------|--------------------------------|--------------------------|---------------
+# | 1          | `??`                           | Nil-coalesce             | Right to left
+# | 2          | `or` `xor`                     | Logical OR / XOR         | Left to right
+# | 3          | `and`                          | Logical AND              |
+# | 4          | `not`                          | Logical NOT              | Right to left
+# | 5          | `==` `!=` `<` `>` `<=` `>=`    | Comparison               | Non-associative
+# | 6          | `\|`                           | Bitwise OR               | Left to right
+# | 7          | `^`                            | Bitwise XOR              |
+# | 8          | `&`                            | Bitwise AND              |
+# | 9          | `<<` `>>`                      | Bitwise shifts           |
+# | 10         | `+` `-`                        | Addition / Subtraction   |
+# | 11         | `*` `/` `//` `%`               | Multiplication           |
+# | 12         | unary `-` `~` `<-`             | Negation / NOT / receive | Right to left
+# | 13         | postfix `()` `[]` `?` `?.` `.` | Call / index / member    | Left to right
 #
-# NOTE. The syntax sugar for the augmented assignment operators, such as `+=`, `-=`, `*=`, etc., is not supported
-# in Zerg, but you can achieve the same effect using the standard assignment operator `=`, like `x = x + 1` instead
-# of `x += 1`.
+# Notes (v0.11):
+#   - `**` exponentiation is NOT shipped (reserved for v1.0+); compute powers with a loop or `math` helpers.
+#   - The `in` membership operator only appears in `for x in <iterable>` heads and `match` arm guards
+#     (e.g. `n if n in 0..10 => ...`). It is NOT an expression operator.
+#   - Range operators (`..`, `..=`) are NOT expressions either; they live only in `for` heads and slice
+#     brackets (`xs[lo..hi]`).
+#   - Compound assignment `+= -= *= /= %=` (and bitwise / shift variants) IS shipped on identifiers.
+#   - Bare expression statements (e.g. `1 + 2` on a line by itself) are REJECTED — only call / method-call
+#     / receive-discard shapes are admitted as statements. Everything below either prints or binds.
 
 # Arithmetic operators
--1       # negation
-1 + 2    # addition
-1 - 2    # subtraction
-1 * 2    # multiplication
-1 / 2    # division to produce a float
-1 % 2    # modulus (remainder)
-1 ** 2   # exponentiation
-1 // 2   # floor division to produce an integer
+print -1       # negation
+print 1 + 2    # addition
+print 1 - 2    # subtraction
+print 1 * 2    # multiplication
+print 1 / 2    # integer division (`int / int` -> `int`); use `//` for explicit floor division
+print 1 % 2    # modulus (remainder)
+print 1 // 2   # floor division — same shape as `/` on integers, distinct on floats
 
-# The bitwise operators
-~1       # bitwise NOT
-1 & 2    # bitwise AND
-1 | 2    # bitwise OR
-1 ^ 2    # bitwise XOR
-1 << 2   # left shift
-1 >> 2   # right shift
+# Bitwise operators
+print ~1       # bitwise NOT
+print 1 & 2    # bitwise AND
+print 1 | 2    # bitwise OR
+print 1 ^ 2    # bitwise XOR
+print 1 << 2   # left shift
+print 1 >> 2   # right shift
 
-# The logical operators
-not 1      # logical NOT
-1 and 2    # logical AND
-1 or 2     # logical OR
-1 xor 2    # logical XOR
+# Logical operators (operands are `bool`; mixing with `int` rejects at typeck)
+print not true     # logical NOT
+print true and false   # logical AND
+print true or false    # logical OR
+print true xor false   # logical XOR
 
-# The comparison operators
-1 == 2    # equal to
-1 != 2    # not equal to
-1 > 2     # greater than
-1 < 2     # less than
-1 >= 2    # greater than or equal to
-1 <= 2    # less than or equal to
+# Comparison operators (return `bool`)
+print 1 == 2
+print 1 != 2
+print 1 > 2
+print 1 < 2
+print 1 >= 2
+print 1 <= 2
 
-# The membership operator `in` tests whether the left operand is contained in the right operand. The right operand may
-# be a tuple, list, set, or range. It is the idiomatic way to express "one of several values" or "within a range" —
-# Zerg has no dedicated or-pattern (`A | B`) or range-pattern syntax in `match`, so both are expressed with a binding
-# plus a guard using `in` (see `09_struct.zg` for an or-pattern example and `05_control_flow.zg` for a range example).
-1 in (1, 2, 3)    # true  — 1 equals the first tuple element
-9 in [1, 2, 3]    # false — 9 is not in the list
-2 in {1, 2, 3}    # true  — 2 is a member of the set
-5 in 0..10        # true  — 5 is within the half-open range [0, 10)
-10 in 0..10       # false — the upper bound of `..` is exclusive
-10 in 0..=10      # true  — `..=` makes the upper bound inclusive
+# Compound assignment on a `mut` binding. Each operator below rebinds the LHS in place.
+mut k := 10
+k += 1
+k -= 2
+k *= 3
+k /= 4
+k %= 5
+print k
 
-# The channel operators
-ch <- 1    # send 1 to channel ch
-<- ch      # receive from channel ch
+# Property access, indexing, and slicing operators (illustrated against a small list).
+xs := [10, 20, 30]
+print xs[0]      # indexing
+print xs[0..2]   # slicing — see `07_slicing.zg` for the full story.
 
-# The property access, the indexing and the slicing operators
-x := y    # declaration and assignment
-x = y     # assignment
-x.y       # property access
-x[0]      # indexing
-x[0..2]   # slicing
+# Channel send and receive — only inside a real channel context. The full demonstration lives in
+# `12_concurrency.zg`; this is just a single rendezvous to exercise the operators.
+ch := chan[int](1)
+ch <- 1          # send statement
+v := <- ch       # receive expression — bound here so the value is observed.
+print v

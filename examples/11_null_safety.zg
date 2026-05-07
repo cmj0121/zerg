@@ -3,44 +3,52 @@
 #
 # Null Safety
 #
-# Zerg provides the null safety feature to prevent null reference errors. In Zerg, the `nil` value represents the absence of
-# a value, and variables that can hold `nil` must be explicitly declared as nullable using the `?` syntax.
-#
-# The original motivation is for the Result[T, E] type, which is a common pattern for error handling. The Result type can
-# be defined as follows:
-#
-# ```zerg
-# enum Result[T, E] {
-#     Ok(T)
-#     Err(E)
-# }
-# ```
-#
-# The `Result[T, E]` type can be used to represent the result of an operation that can either succeed with a value of type
-# `T` or fail with an error of type `E`. The `?` syntax is the syntactic sugar for handling the `Result` type, allowing you
-# to easily propagate errors without having to write explicit error handling code. For example:
+# Zerg models "absence of a value" with the built-in `Option[T]` enum (variants `Option.Some(T)` and
+# `Option.None`). Errors flow through `Result[T, E]` (variants `Result.Ok(T)` and `Result.Err(E)`). The
+# literal `nil` lifts to `Option[T].None` at boundaries with an `Option` shape. The two enums are spelled
+# fully: bare `Ok(...)` / `Err(...)` / `Some(...)` / `None` rejects — qualify with `Result.` / `Option.`.
+
+# `Result[T, E]` example: a function that may fail with a string error.
 fn divide(a: int, b: int) -> Result[int, str] {
-	return Err("Division by zero") if b == 0
-	return Ok(a // b)
+	return Result.Err("Division by zero") if b == 0
+	return Result.Ok(a // b)
 }
 
-# The caller can use the `?` operator to propagate the error if the result is an `Err`, or get the value if it's an `Ok`, like
-# the following example:
+# The caller can use the `?` operator to propagate the error if the result is a `Result.Err`, or to
+# extract the value if it's a `Result.Ok`. The fn must itself return a compatible `Result[U, E]` shape.
 fn calculate() -> Result[int, str] {
-	# The `?` operator will automatically propagate the error if `divide(10, 0)` returns an `Err`, and the function will return
-	# that error. If `divide(10, 0)` returns an `Ok` value, it will be assigned to `x`, and the function will continue to
-	# execute the next line, which returns `Ok(x * 2)`.
-	x := divide(10, 0)?
-	return Ok(x * 2)
+	x := divide(10, 2)?
+	return Result.Ok(x * 2)
 }
 
-# The `Option[T]` type is defined as a special case of `Result[T, nil]`, where the `Err` variant is always `nil`, and
-# the `Ok` variant should always be T. The `T?` syntax is the syntax sugar for `Option[T]`, which is itself the syntax
-# sugar for `Result[T, nil]`, so the following three declarations are equivalent:
-#
-# ```zerg
-# x: int?              = nil
-# x: Option[int]       = nil
-# x: Result[int, nil]  = Err(nil)
-# ```
+# `match` is the explicit form when both branches need to be visible at the call site.
+match calculate() {
+	Result.Ok(v)  => print v
+	Result.Err(e) => print e
+}
+
+# The `T?` syntax is sugar for `Option[T]`. The literal `nil` lifts to `Option.None` at the boundary
+# (annotated binding, fn argument, return expression, struct-literal field, list-element type).
 x: int? = nil
+y: int? = 7
+
+# `??` is nil-coalesce: `lhs ?? rhs` yields the inner value when `lhs` is `Some(v)` / `Ok(v)`, otherwise
+# evaluates `rhs`. The RHS only runs on the `None` / `Err` path.
+print x ?? 0
+print y ?? 0
+
+# `?` post-fix on an `Option[T]` propagates `None`; legal only in fns whose return type is `Option[U]`.
+fn first(xs: list[int]) -> Option[int] {
+	if len(xs) == 0 {
+		return Option.None
+	}
+	return Option.Some(xs[0])
+}
+
+fn double_first(xs: list[int]) -> Option[int] {
+	v := first(xs)?
+	return Option.Some(v * 2)
+}
+
+print double_first([10, 20])
+print double_first([])

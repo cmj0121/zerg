@@ -3,110 +3,95 @@
 #
 # Control Flow
 #
-# Zerg provides several control flow constructs to manage the execution of code based on conditions and loops.
-# It can be used to create more complex and dynamic programs by allowing you to execute different blocks of
-# code based on certain conditions or to repeat a block of code multiple times.
-#
-# The `if` statement is used to execute a block of code if a specified condition is true. You can also use `else`
-# to execute a block of code if the condition is false. The Zerg does not provide `else if` syntax, but you can
-# achieve it by `match` statement, which is more powerful and flexible for handling multiple conditions.
+# Zerg provides several control flow constructs: `if` / `elif` / `else`, three forms of `for`, `match`,
+# and the guarded short forms of `return`, `break`, and `continue`.
 
 fn conditions(x: int) {
-	# The simplest if-else statement allows you to execute a block of code if a condition is true, and optionally
-	# execute another block of code if the condition is false.
+	# The simplest if/else statement runs one block when the condition holds and the other when it does not.
+	# Zerg also has `elif` for chaining additional conditions without nesting.
 	if x > 0 {
 		print "Positive"
+	} elif x < 0 {
+		print "Negative"
 	} else {
-		print "Non-positive"
+		print "Zero"
 	}
 
-	# And you should use `match` to execute complex conditions with multiple branches. The match statement allows
-	# you to compare a value against a series of patterns and execute code based on which pattern matches.
+	# `match` compares a value against a series of patterns and runs the first arm whose pattern (and
+	# optional guard) matches. Arms are separated by NEWLINE — there are no commas between arms.
 	#
-	# It is the syntax-sugar for a series of if-else statements, and it can be more concise and easier to read when
-	# you have multiple conditions to check.
+	# `match` is always a statement in Zerg — it never produces a value. To yield a value from an arm, use
+	# `return`, assignment, or another statement inside the arm.
 	#
-	# `match` is always a statement in Zerg — it never produces a value. To yield a value from an arm, use `return`,
-	# assignment, or another statement inside the arm (see `to_red` in `09_struct.zg`).
-	#
-	# `match` is non-exhaustive: if no arm matches, the compiler behaves as if a trailing `_ => nop` were written, so
-	# control simply falls past the block without error. Adding a new enum variant therefore never breaks an existing
-	# `match` — unhandled variants just do nothing. The explicit `_ => print "Zero"` arm below uses the wildcard
-	# pattern to give the zero case a visible action; if it were dropped, `x == 0` would fall through the implicit
-	# `_ => nop` and simply print nothing.
+	# `match` is non-exhaustive: if no arm matches, the compiler behaves as if a trailing `_ => nop` were
+	# written, so control simply falls past the block without error. Adding a new enum variant therefore
+	# never breaks an existing `match` — unhandled variants just do nothing.
 	match x {
-		n if n > 0 => print "Positive",
-		n if n < 0 => print "Negative",
-		_ => print "Zero",
+		n if n > 0 => print "Positive"
+		n if n < 0 => print "Negative"
+		_          => print "Zero"
 	}
 }
 
-# The guarded statement allows for a more concise way to handle conditions without needing to nest code blocks.
-# It is the syntax sugar for an if statement that immediately returns or continues based on a condition, like
-#
-# ```zerg
-# if x > 100 {
-#     return "big"
-# }
-# return "small"
-# ```
-#
-# can be rewritten as following using the guarded statement, more concise and easier to read.
-#
-# ```zerg
-# return "big" if x > 100
-# return "small"
-# ```
-#
-# The same form composes with `break` and `continue` inside loops (`break if cond`, `continue if cond`), shown
-# in the loop examples below.
-fn check_size(x: int) -> str {
-	# Check the size and early return if hit the condition
-	return "big" if x > 100
+conditions(7)
+conditions(-3)
+conditions(0)
 
+# The guarded statement is syntactic sugar for an `if` that immediately exits. The form is
+# `return <expr> if <cond>`, `break if <cond>`, or `continue if <cond>` — three short forms only, no
+# generic `<stmt> if <expr>` shape. The example below demonstrates `return ... if`:
+fn check_size(x: int) -> str {
+	return "big" if x > 100
 	return "small"
 }
+
+print check_size(150)
+print check_size(7)
 
 # Zerg provides three loop forms:
 #
 #   1. `for { ... }`           — infinite loop, runs forever until a `break` is hit.
-#   2. `for condition { ... }` — conditional loop, runs while the condition is true (like `while` in other languages).
-#   3. `for n in m { ... }`   — iterator loop, iterates over a range, channel, or any type that implements `Iterator`.
+#   2. `for condition { ... }` — conditional loop, runs while the condition is true (like `while` elsewhere).
+#   3. `for n in <iterable>`   — iterator loop, iterates over a range, list, or channel.
 
-# The infinite loop runs forever. Use `break` to exit early.
+# The infinite loop runs forever. Use `break` to exit early; the guarded form `break if cond` keeps the
+# exit clause on a single line.
 mut i := 0
 for {
 	print i
-	i = i + 1
-	break if i >= 5  # Exit the loop when `i` reaches 5.
+	i += 1
+	break if i >= 5
 }
 
 # The conditional loop runs while the condition is true.
 mut n := 0
 for n < 5 {
 	print n
-	n = n + 1
+	n += 1
 }
 
-# The iterator loop iterates over a range. `0..5` is an exclusive range (0 to 4), `0..=5` is inclusive (0 to 5).
-for i in 0..=5 {
-	# `continue` skips the rest of the current iteration and moves to the next one.
-	continue if i == 3
-
-	print i
+# The iterator loop iterates over a range. `0..5` is an exclusive range (0 to 4), `0..=5` is inclusive
+# (0 to 5). The same form iterates over `list[T]` and `chan[T]` (see `07_slicing.zg`, `12_concurrency.zg`).
+for j in 0..=5 {
+	# `continue` skips the rest of the current iteration; the guarded form `continue if cond` is concise.
+	continue if j == 3
+	print j
 }
 
-# "Range-pattern" equivalent via guard + `in`. Zerg has no dedicated range-pattern form in `match`; ranges in arms are
-# expressed with a binding (`n`) plus a guard using `in` against a range literal, exactly like the or-pattern pattern
-# from `09_struct.zg`. The same `..` and `..=` range syntax used for `for` loops and slicing applies unchanged here.
-# Because `match` is non-exhaustive, a trailing `return` is required to guarantee every code path produces a value.
-fn size_class(n: int) -> str {
-	match n {
-		n if n in 0..10     => return "small",
-		n if n in 10..100   => return "medium",
-		n if n in 100..=999 => return "large",
-		_                   => return "huge",
+# Range arms in `match` are expressed as a binding plus an explicit comparison guard. Range literals
+# (`0..10`, `0..=10`) are NOT expressions at v0.11 — they only appear in `for` heads and slice brackets —
+# so a guarded match arm uses `>=` / `<` / `<=` instead of the `in <range>` form.
+fn size_class(m: int) -> str {
+	match m {
+		v if v >= 0   and v < 10    => return "small"
+		v if v >= 10  and v < 100   => return "medium"
+		v if v >= 100 and v <= 999  => return "large"
+		_                           => return "huge"
 	}
-
 	return "unknown"
 }
+
+print size_class(5)
+print size_class(50)
+print size_class(500)
+print size_class(5000)

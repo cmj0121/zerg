@@ -1,33 +1,33 @@
 #! /usr/bin/env zerg
-# requires: v0.5
+# requires: v0.8
 #
 # Module Imports
 #
-# You can import from stdlib, internal package or external git repository with `import` statement. The imported module's
-# public members are accessed via the module name.
+# `import` brings a module into the current file. Two resolution paths are admitted at v0.11:
 #
-# You can have multiple import statements to import multiple modules. For easy to maintain the code, it's recommended to
-# group all import statements together at the top of the file, and separate them into different sections for stdlib,
-# internal package and external git repository with a blank line.
+#   1. `import "std/<name>"` — toolchain-embedded standard library (no on-disk install).
+#   2. `import "name"`       — sibling `.zg` file under the importing file's directory.
+#
+# External / git-backed imports (`import "github.com/owner/repo"`) are NOT shipped — they appear in the
+# v1.0+ reserved list in docs/LANGUAGE.md.
+#
+# A grouped form is admitted when more than one module is needed:
 #
 # ```zerg
 # import (
-#	 "math"      # stdlib
-#	 "greeting"  # internal package
-#
-#	 "github.com/username/repo"  # external git repository
+#     "std/math"
+#     "std/strings"
 # )
 # ```
 
-# Use import to load a module, then access its members with dot syntax.
-import "math"
+# Use `import` to load a module, then access its members with dot syntax. The stdlib lives under `std/`.
+import "std/math"
 
-# or you can rename the module with `as` to avoid name conflicts or for convenience.
-import "greeting" as greet
-
-# You can also import the external git repository as the module, and the module name is the last
-# segment of the repository path.
-import "github.com/username/repo"
+# `as <alias>` renames the binding inside this file (handy for avoiding collisions or for shorter names).
+import "std/strings" as s
 
 # Access the imported module's public members with dot syntax.
-result := math.sqrt(16.0)
+result := math.abs(-16)
+print result
+
+print s.to_upper("hello, zerg")

@@ -66,6 +66,17 @@ const coroRuntimeC = `
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
+/* zerg_defer_node_t is the per-coroutine defer stack entry. The struct
+   is declared here (not in deferRuntimeC) so zerg_coro_t can hold a
+   strongly-typed pointer; the push API and the LIFO walk live in U5
+   (runtime_defer.go). U1 standalone never pushes, so the head stays
+   NULL and the walk in zerg_coro_entry is a no-op. */
+typedef struct zerg_defer_node {
+    void (*fn)(void *);
+    void *env;
+    struct zerg_defer_node *next;
+} zerg_defer_node_t;
+
 /* zerg_coro_state_t tracks the lifecycle stages we want to assert against
    in U2+. U1 only walks NEW -> RUNNING -> SUSPENDED -> RUNNING -> DONE. */
 typedef enum {
@@ -98,6 +109,11 @@ typedef struct zerg_coro {
        context is fully saved — closing the otherwise-fatal race where an
        unparker observes the queued coro before its ctx is valid. */
     void *park_unlock;       /* pthread_mutex_t *, 0 for plain yield */
+    /* defer_head is the head of this coroutine's defer stack. Pushes
+       come from zerg_coro_defer (U5); zerg_coro_entry walks the stack
+       LIFO on DONE and frees each node before swap-back. The struct
+       type is forward-declared above zerg_coro_t. */
+    struct zerg_defer_node *defer_head;
     uint64_t id;             /* monotonic id for diagnostics */
 } zerg_coro_t;
 
@@ -141,6 +157,18 @@ static void zerg_coro_entry(unsigned int hi, unsigned int lo) {
     uintptr_t packed = ((uintptr_t)hi << 32) | (uintptr_t)lo;
     zerg_coro_t *c = (zerg_coro_t *)packed;
     c->fn(c->arg);
+    /* Run defers in LIFO order before transitioning to DONE. The walk
+       consumes c->defer_head; each node was malloc'd by U5's
+       zerg_coro_defer push, so we free as we go. U1 standalone never
+       pushes — defer_head is always NULL here and the loop is a no-op. */
+    zerg_defer_node_t *d = c->defer_head;
+    c->defer_head = 0;
+    while (d) {
+        zerg_defer_node_t *next = d->next;
+        d->fn(d->env);
+        free(d);
+        d = next;
+    }
     c->state = ZERG_CORO_DONE;
     swapcontext(&c->ctx, c->caller);
 }

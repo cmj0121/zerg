@@ -37,6 +37,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.9** — process surface and time.
 - [x] **v0.10** — hardening and language reference.
 - [x] **v0.11** — bare-binding form (retire `let` from grammar).
+- [x] **v0.12** — M:N coroutine runtime.
 - [ ] **v1.0** — source stability.
 
 A phase ships when each example's stdout matches between `zerg run` and `zerg build` — byte-identical

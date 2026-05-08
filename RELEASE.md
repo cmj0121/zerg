@@ -4,6 +4,30 @@ One-screen summary per version of what shipped. Rationale and implementation det
 commit log; the formal language reference lives in [`docs/LANGUAGE.md`](docs/LANGUAGE.md); the
 per-module stdlib reference lives in [`docs/STDLIB.md`](docs/STDLIB.md).
 
+## v0.12 — M:N coroutine runtime
+
+- Build-side concurrency rewritten from pthread-per-`spawn` to an M:N green-thread scheduler.
+  Worker pool sized from `ZERG_MAXPROCS` (defaults to host CPU count); main becomes coroutine 0;
+  the pool tears down once every spawned coroutine has finished and main has returned.
+- Cooperative scheduling: coroutines yield at `chan` send/recv, `select`, `wait_group.wait()`,
+  and `defer` block exit. CPU-bound tight loops without a yield point starve their worker —
+  preemption defers to v0.13+. No new surface is added; user-visible `spawn`/`chan`/`select`/
+  `wait_group`/`defer` semantics are unchanged.
+- Fixed 256 KiB per-coroutine stack with one mmap'd PROT_NONE guard page; overflow surfaces as
+  SIGSEGV instead of silent corruption. Per-arch context switch via POSIX `ucontext_t`
+  (`getcontext` / `makecontext` / `swapcontext`).
+- Channel runtime rewritten end-to-end: `_send` / `_recv` park the calling coroutine on the
+  channel's wait queue instead of condvar-waiting. `wait_group` mirrors the pattern. `select`
+  yields cooperatively between ready-arm sweeps (full wait-queue registration deferred).
+- `defer` stack moves from per-OS-thread to per-coroutine. Top-level user code wraps in a
+  `__zerg_top_main` coroutine so top-level defers + any user fn called from main runs in coro
+  context. `os.exit()` keeps v0.9 semantics: bypasses scheduler via `_exit` (not `exit`) so libc
+  atexit teardown does not race the still-running worker threads' access to scheduler globals.
+- Interpreter half is unchanged (Go goroutines were already M:N); the v0.7 parity rule —
+  byte-identical for sequential code, equivalent under any valid scheduling for concurrent code —
+  carries through, with the full v0.7 / v0.9 / v0.11 corpus passing on the new runtime.
+- `cliVersion` 0.12.0; `version.Minor` 12.
+
 ## v0.11 — bare-binding form (retire `let` from grammar)
 
 - Immutable bindings drop the `let` keyword: `x := 10`, `x: int = 7`, `(a, b) := pair`.

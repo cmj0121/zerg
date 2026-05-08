@@ -2,10 +2,10 @@
 
 # Zerg Language Reference
 
-Authoritative description of the Zerg surface that ships through v0.9. Each
-production reflects what the v0.10 toolchain (parser + typeck) actually
-accepts and runs. v1.0 source-stability promises will be made against this
-document.
+Authoritative description of the Zerg surface that ships through v0.12.
+Each production reflects what the v0.12 toolchain (parser + typeck)
+actually accepts and runs. v1.0 source-stability promises will be made
+against this document.
 
 ## Overview
 
@@ -46,7 +46,7 @@ and `select` arms a bare `_` token also serves as the wildcard.
 
 ### Keywords
 
-The lexer's reserved word set as of v0.9:
+The lexer's reserved word set as of v0.12:
 
 ```text
 and    as     break    const    continue  defer    elif     else
@@ -470,6 +470,16 @@ inside `if` / `for` / `match` / inner blocks). The defer stack drains on
 - `wait_group()` returns a `WaitGroup`; methods `add(n)`, `done()`,
   `wait()`.
 
+Since v0.12, `zerg build` routes spawn / chan / select / wait_group
+through an M:N green-thread runtime: cheap user-space coroutines on a
+worker pool sized from `ZERG_MAXPROCS` (default = host CPU count).
+Scheduling is cooperative — coroutines yield at chan send/recv,
+`select`, `wait_group.wait()`, and defer block exit. Each coroutine has
+a fixed 256 KiB stack with a guard page; CPU-bound tight loops without
+a yield point starve their worker (preemption is deferred to v0.13+).
+The interpreter is unchanged (Go goroutines were already M:N). User-
+visible semantics — including the parity rule — are identical to v0.7.
+
 ### Error propagation
 
 The `?` postfix operator on a `Result[T, E]` or `Option[T]` expression
@@ -768,7 +778,7 @@ print n
 
 ## Reserved for v1.0+
 
-The following are not part of the v0.0–v0.9 surface and are explicitly
+The following are not part of the v0.0–v0.12 surface and are explicitly
 deferred:
 
 - `sync[T]` shared-mutex container.

@@ -1,4 +1,5 @@
 DIR := bin
+SRC := $(find . -type f -name '*.go')
 BIN := $(DIR)/zerg
 
 .PHONY: build test run clean
@@ -16,7 +17,6 @@ run: build                  # build and run against examples/01_hello.zg
 
 build: $(BIN)               # build src/bootstrap/bin/zerg
 
-
 install:                    # install all editor integrations
 
 uninstall:                  # uninstall all editor integrations
@@ -26,6 +26,6 @@ help:            # show this message
 	@perl -nle 'print $$& if m{^[\w-]+:.*?#.*$$}' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?#"} {printf "    %-12s %s\n", $$1, $$2}'
 
-$(BIN):
+$(BIN): $(SRC)
 	@mkdir -p $(DIR)
 	go build -o $(BIN) ./cmd/zerg

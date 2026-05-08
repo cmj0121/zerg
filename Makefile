@@ -8,23 +8,23 @@ all: build                     # default action: build the bootstrap toolchain
 	@git config commit.template .git-commit-template
 
 clean:                         # clean-up environment
-	@$(MAKE) -C $(BOOTSTRAP) clean
+	$(MAKE) -C $(BOOTSTRAP) clean
 	@find . -name '*.sw[po]' -delete
 
 test:                          # run tests (bootstrap toolchain)
-	@$(MAKE) -C $(BOOTSTRAP) test
+	$(MAKE) -C $(BOOTSTRAP) test
 
 run:                           # run a sample program through the bootstrap
-	@$(MAKE) -C $(BOOTSTRAP) run
+	$(MAKE) -C $(BOOTSTRAP) run
 
 build:                         # build the bootstrap toolchain
-	@$(MAKE) -C $(BOOTSTRAP) build
+	$(MAKE) -C $(BOOTSTRAP) build
 
 install:                       # install editor integrations (use DEST=... to override)
-	@$(MAKE) -C $(EDITORS) install
+	$(MAKE) -C $(EDITORS) install
 
 uninstall:                     # uninstall editor integrations
-	@$(MAKE) -C $(EDITORS) uninstall
+	$(MAKE) -C $(EDITORS) uninstall
 
 upgrade:                       # upgrade all the necessary packages
 	pre-commit autoupdate

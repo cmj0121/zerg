@@ -985,10 +985,12 @@ func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (
 	if len(names) < 2 {
 		return nil, errorAt(openTok.Pos, "destructure pattern requires at least 2 names (use the single-name form for one)")
 	}
-	// `:=` only — annotated destructure deferred at v0.2.
+	// `:=` only — annotated destructure remains deferred on the v1.0+
+	// reserved list (see LANGUAGE.md §Reserved for v1.0+). The rule is
+	// permanent under the current surface, so the diagnostic is unstamped.
 	if k := p.peek().Kind; k == KindColon {
 		bad := p.peek()
-		return nil, errorAt(bad.Pos, "type annotations on destructure declarations are not supported at v0.2")
+		return nil, errorAt(bad.Pos, "type annotations on destructure declarations are not supported")
 	}
 	if _, err := p.expect(KindWalrus, "after destructure pattern"); err != nil {
 		return nil, err
@@ -2093,14 +2095,16 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 			}, nil
 		case *IndexExpr:
 			if op != AssignSet {
-				return nil, errorAt(opTok.Pos, "compound assignment '%s' to a list element is not supported at v0.3 — use `xs[i] = ...` instead", op)
+				// Permanent under the current surface — see LANGUAGE.md
+				// §Reserved for v1.0+ "Compound assignment to list elements".
+				return nil, errorAt(opTok.Pos, "compound assignment '%s' to a list element is not supported — use `xs[i] = ...` instead", op)
 			}
-			// At v0.3 we admit only single-level indexing (`xs[i] = v`).
-			// Chained indexing (`xs[i][j] = v`) parses fine as a postfix
-			// chain, but the borrow / mutation rules for nested mutation
-			// aren't in scope yet, so reject early with a precise message.
+			// We admit only single-level indexing (`xs[i] = v`). Chained
+			// indexing (`xs[i][j] = v`) parses fine as a postfix chain, but
+			// the borrow / mutation rules for nested mutation aren't in
+			// scope, so reject early with a precise message.
 			if _, nested := lhs.Receiver.(*IndexExpr); nested {
-				return nil, errorAt(opTok.Pos, "left-hand side of assignment must be an identifier or list[i] (chained indexing is not supported at v0.3)")
+				return nil, errorAt(opTok.Pos, "left-hand side of assignment must be an identifier or list[i] (chained indexing is not supported)")
 			}
 			val, err := p.parseExpr()
 			if err != nil {
@@ -2126,7 +2130,7 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 	case *CallExpr, *MethodCallExpr, *RecvExpr:
 		return &ExprStmt{Pos: startTok.Pos, Expr: expr}, nil
 	}
-	return nil, errorAt(startTok.Pos, "expression statements must be function calls at v0.1")
+	return nil, errorAt(startTok.Pos, "expression statements must be function calls")
 }
 
 // peekRawAt returns the kind of the token at absolute index i without
@@ -2341,7 +2345,7 @@ func (p *parser) parseExpr() (Expr, error) {
 	}
 	if k := p.peek().Kind; k == KindRange || k == KindRangeEq {
 		bad := p.peek()
-		return nil, errorAt(bad.Pos, "range expressions are only allowed in for-in heads at v0.1")
+		return nil, errorAt(bad.Pos, "range expressions are only allowed in for-in heads")
 	}
 	return expr, nil
 }
@@ -2705,7 +2709,7 @@ func (p *parser) parsePostfix() (Expr, error) {
 				return nil, err
 			}
 			if p.peek().Kind == KindLParen {
-				return nil, errorAt(p.peek().Pos, "method-form safe navigation ('?.method(...)') is not supported at v0.6 — use a let-binding for the field, then call the method")
+				return nil, errorAt(p.peek().Pos, "method-form safe navigation ('?.method(...)') is not supported — use a bare binding `x := <recv>?.field`, then call the method on x")
 			}
 			expr = &FieldAccessExpr{
 				Pos:       safeTok.Pos,

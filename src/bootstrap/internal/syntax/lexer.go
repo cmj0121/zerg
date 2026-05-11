@@ -551,7 +551,7 @@ func (l *lexer) lexString() (Token, error) {
 		case '{':
 			return Token{}, &LexError{
 				Pos:     l.position(),
-				Message: "string interpolation is deferred to v0.2",
+				Message: "string interpolation is not supported",
 			}
 		case '\\':
 			escPos := l.position()

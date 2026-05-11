@@ -131,7 +131,7 @@ func TestParseAssignIdentCompoundRegression(t *testing.T) {
 // parse with the "single-level" message — Unit 3 can assume LHS receivers
 // are not themselves IndexExprs.
 func TestParseAssignChainedIndexRejected(t *testing.T) {
-	expectParseErr(t, "xs[0][1] = 5\n", "chained indexing is not supported at v0.3")
+	expectParseErr(t, "xs[0][1] = 5\n", "chained indexing is not supported")
 }
 
 // TestParseAssignCallResultRejected confirms `f().x = 5` is rejected with

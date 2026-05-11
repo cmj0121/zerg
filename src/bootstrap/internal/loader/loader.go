@@ -356,9 +356,10 @@ func (l *loader) loadSibling(importer *Module, decl *syntax.ImportDecl, absPath 
 // path, recurse via loadSibling. On the way back up we record the
 // resolved sibling pointer in mod.Imports.
 //
-// v0.8 Unit 2: import paths beginning with `std/` resolve against the
-// embedded FS (see embed.go) and never fall through to the working
-// directory. Misses surface as "stdlib module not found".
+// Import paths beginning with `std/` or `sys/` resolve against the
+// on-disk stdlib tree (see stdlib_root.go) and never fall through to
+// the working directory. Misses surface as "stdlib module not found" /
+// "sys module not found".
 //
 // v0.13: sibling resolution goes through resolveSiblingPath, which
 // consults the platform-suffix table (`_macos.zg`, `_linux.zg`) before
@@ -371,14 +372,14 @@ func (l *loader) resolveImports(mod *Module) error {
 		if !ok {
 			continue
 		}
-		if isStdlibImport(decl.Path) {
-			target, err := l.loadStdlib(mod, decl)
+		if fam := matchEmbeddedFamily(decl.Path); fam != nil {
+			target, err := l.loadEmbeddedFamily(mod, decl, *fam)
 			if err != nil {
 				return err
 			}
 			localName := decl.Alias
 			if localName == "" {
-				localName = stdlibLocalName(decl.Path)
+				localName = strings.TrimPrefix(decl.Path, fam.prefix)
 			}
 			mod.Imports = append(mod.Imports, &ResolvedImport{
 				Decl:      decl,
@@ -413,75 +414,103 @@ func (l *loader) resolveImports(mod *Module) error {
 	return nil
 }
 
-// isStdlibImport reports whether decl.Path names an embedded stdlib module
-// (`std/io`, `std/strings`, …). Empty or malformed `std/` paths still take
-// this branch so the diagnostic is uniform.
-func isStdlibImport(path string) bool {
-	return strings.HasPrefix(path, "std/")
+// embeddedFamily describes a toolchain-shipped stdlib family — `std/*`
+// or `sys/*` — so loadEmbeddedFamily can resolve either through one
+// code path. New families add an entry to embeddedFamilies; the loader
+// dispatch and miss-diagnostic shape come along for free.
+type embeddedFamily struct {
+	// prefix is the leading import-path segment plus slash, e.g. "std/".
+	prefix string
+	// label is the diagnostic word for misses ("stdlib" / "sys").
+	label string
+	// modulePath builds the on-disk path from the post-prefix module
+	// name, e.g. stdlibModulePath / sysModulePath.
+	modulePath func(name string) string
 }
 
-// stdlibLocalName returns the default local-binding name for a `std/<m>`
-// import that did not write `as <alias>`. Mirrors the v0.5 default-to-bare-
-// path rule: the right-hand component is the local binding.
-func stdlibLocalName(path string) string {
-	return strings.TrimPrefix(path, "std/")
-}
-
-// loadStdlib resolves a `std/<name>` import against the embedded FS and
-// returns the loaded *Module. Misses (or any name that fails the v0.5
-// identifier rule for the post-prefix component) surface as a uniform
-// "stdlib module not found" diagnostic anchored on decl.
+// embeddedFamilies is the registry of toolchain-shipped families.
 //
-// v0.13 carve-out pin: the platform-suffix table (`_macos.zg`, `_linux.zg`)
-// does NOT apply here. Stdlib modules are platform-neutral; if a stdlib
-// module ever needs platform branching, it does so internally (e.g. via a
-// `# requires:` arch line or an architecture-aware shim in stdlib/) rather
-// than through filename-suffix routing. Deferred to v0.14+.
-func (l *loader) loadStdlib(importer *Module, decl *syntax.ImportDecl) (*Module, error) {
-	name := strings.TrimPrefix(decl.Path, "std/")
-	// A leading-underscore name is reserved for embed-machinery scaffolding
-	// (the //go:embed pattern requires at least one matching file pre-Unit-3
-	// and we ship a `_placeholder.zg` to satisfy it). Reject any user
-	// import that targets such a name with the same "not found" wording so
-	// the placeholder is invisible to user code.
+// v0.13 carve-out pin for the std/* family: the platform-suffix table
+// (`_macos.zg`, `_linux.zg`) does NOT apply to embedded families.
+// Stdlib modules are platform-neutral; if one needs platform branching,
+// it does so internally (e.g. via a `# requires:` arch line or an
+// architecture-aware shim) rather than through filename-suffix routing.
+// Deferred to v0.14+.
+//
+// The sys/* family uses a directory-with-mod.zg layout (Rust's mod.rs
+// convention) so future platform-suffix variants can sit alongside
+// mod.zg inside the module's directory; the std/* family keeps its
+// flat <name>.zg layout for v0.5–v0.12 back-compat.
+var embeddedFamilies = []embeddedFamily{
+	{prefix: "std/", label: "stdlib", modulePath: stdlibModulePath},
+	{prefix: "sys/", label: "sys", modulePath: sysModulePath},
+}
+
+// matchEmbeddedFamily returns the family whose prefix matches path, or
+// nil if path is a sibling-import. Empty / malformed paths under a
+// recognised prefix still match — loadEmbeddedFamily produces the
+// uniform "<label> module not found" diagnostic for those so the
+// surface is uniform regardless of why the lookup failed.
+func matchEmbeddedFamily(path string) *embeddedFamily {
+	for i := range embeddedFamilies {
+		if strings.HasPrefix(path, embeddedFamilies[i].prefix) {
+			return &embeddedFamilies[i]
+		}
+	}
+	return nil
+}
+
+// loadEmbeddedFamily resolves a `<prefix><name>` import against the
+// on-disk stdlib tree (see stdlibRoot in stdlib_root.go) using the
+// family-supplied modulePath builder. Misses, or any name that fails
+// the v0.5 identifier rule for the post-prefix component, surface as a
+// uniform "<label> module not found" diagnostic anchored on decl. The
+// stdlib-file parser flag is used so `__builtin <ident>` markers parse
+// — every toolchain-shipped module needs the same treatment.
+//
+// Leading-underscore names are reserved for internal scaffolding files
+// (e.g. `_placeholder.zg`) and rejected with the same "not found"
+// wording so they stay invisible to user code.
+func (l *loader) loadEmbeddedFamily(importer *Module, decl *syntax.ImportDecl, fam embeddedFamily) (*Module, error) {
+	name := strings.TrimPrefix(decl.Path, fam.prefix)
 	if name == "" || strings.HasPrefix(name, "_") || !isValidIdentifier(name) {
 		return nil, errorAtImport(importer.Path, decl,
-			"stdlib module not found: %s", decl.Path)
+			"%s module not found: %s", fam.label, decl.Path)
 	}
-	embedPath := stdlibModulePath(name)
-	if existing, ok := l.modules[embedPath]; ok {
-		if l.visiting[embedPath] {
+	diskPath := fam.modulePath(name)
+	if existing, ok := l.modules[diskPath]; ok {
+		if l.visiting[diskPath] {
 			return nil, l.cycleError(importer, decl, existing)
 		}
 		return existing, nil
 	}
-	src, err := stdlibFS.ReadFile(embedPath)
+	src, err := os.ReadFile(diskPath)
 	if err != nil {
 		return nil, errorAtImport(importer.Path, decl,
-			"stdlib module not found: %s", decl.Path)
+			"%s module not found: %s", fam.label, decl.Path)
 	}
-	if err := checkRequiresImport(importer.Path, decl, embedPath, src); err != nil {
+	if err := checkRequiresImport(importer.Path, decl, diskPath, src); err != nil {
 		return nil, err
 	}
-	prog, err := parseStdlibSource(importer.Path, decl, embedPath, src)
+	prog, err := parseStdlibSource(importer.Path, decl, diskPath, src)
 	if err != nil {
 		return nil, err
 	}
 
 	mod := &Module{
-		Name:      embedPath,
-		Path:      embedPath,
+		Name:      diskPath,
+		Path:      diskPath,
 		ShortName: name,
 		Source:    src,
 		Program:   prog,
 	}
-	l.modules[embedPath] = mod
+	l.modules[diskPath] = mod
 	l.ordered = append(l.ordered, mod)
 
-	l.visiting[embedPath] = true
+	l.visiting[diskPath] = true
 	l.visitingPath = append(l.visitingPath, mod)
 	defer func() {
-		delete(l.visiting, embedPath)
+		delete(l.visiting, diskPath)
 		l.visitingPath = l.visitingPath[:len(l.visitingPath)-1]
 	}()
 
@@ -491,22 +520,22 @@ func (l *loader) loadStdlib(importer *Module, decl *syntax.ImportDecl) (*Module,
 	return mod, nil
 }
 
-// parseStdlibSource lexes + parses an embedded stdlib source under the
+// parseStdlibSource lexes + parses an on-disk stdlib source under the
 // `InStdlibFile: true` parser flag so `__builtin <ident>` markers parse.
 // Errors anchor on the importing module's decl, mirroring the sibling-load
 // diagnostic shape.
-func parseStdlibSource(importerPath string, decl *syntax.ImportDecl, embedPath string, src []byte) (*syntax.Program, error) {
+func parseStdlibSource(importerPath string, decl *syntax.ImportDecl, diskPath string, src []byte) (*syntax.Program, error) {
 	tokens, err := syntax.Lex(src)
 	if err != nil {
 		return nil, errorAtImport(importerPath, decl,
 			"failed to lex stdlib module %q (%s): %v",
-			decl.Path, embedPath, err)
+			decl.Path, diskPath, err)
 	}
 	prog, err := syntax.ParseWithOptions(tokens, syntax.ParseOptions{InStdlibFile: true})
 	if err != nil {
 		return nil, errorAtImport(importerPath, decl,
 			"failed to parse stdlib module %q (%s): %v",
-			decl.Path, embedPath, err)
+			decl.Path, diskPath, err)
 	}
 	return prog, nil
 }

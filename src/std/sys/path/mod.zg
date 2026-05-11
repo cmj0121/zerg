@@ -1,0 +1,48 @@
+# requires: v0.12
+#
+# Version note: stamped at v0.12 because the Step-1 shell shipped here
+# uses only v0.12 surface (struct + inherent impl + std/strings imports).
+# The stamp moves to v0.14 once the operator-overload `path / "..."` form
+# and the `clean` normaliser land, which depend on future language work.
+#
+# sys/path — path-string manipulation as a Path struct.
+#
+# Step 1 of the v0.14 sys/path landing ships:
+#   - the Path struct (a single `raw: str` field)
+#   - a free `new(p: str) -> Path` constructor (the closest current-language
+#     equivalent to Rust's `Path::new` since structs do not admit static
+#     methods at v0.12)
+#   - two anchor methods: `to_str()` (raw form) and `is_abs()` (POSIX
+#     absolute-path predicate)
+#
+# Later steps add basename / dirname / ext / stem / parent / parts / join.
+#
+# Separator policy: `/` everywhere. The macOS + Linux ship targets are POSIX;
+# Windows-separator handling defers along with the Linux corpus.
+
+import "std/strings"
+
+pub struct Path {
+	raw: str,
+}
+
+# Construct a Path from a raw string. The first cut preserves the input
+# verbatim; the `clean` normalisation lands in Step 2 once basename/dirname
+# stabilise the segment-walking helpers.
+pub fn new(p: str) -> Path {
+	return Path { raw: p }
+}
+
+impl Path {
+	# Return the canonical string form. Equivalent to reading `.raw` but
+	# explicit at call sites.
+	pub fn to_str() -> str {
+		return this.raw
+	}
+
+	# Return true iff this path begins with `/` (POSIX absolute). Holds for
+	# the empty case (`Path.new("").is_abs()` returns false).
+	pub fn is_abs() -> bool {
+		return strings.starts_with(this.raw, "/")
+	}
+}

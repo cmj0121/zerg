@@ -171,14 +171,15 @@ func TestStdlibUnaffectedBySuffixTable(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	ri := findResolvedImport(t, bundle.Entry, "io")
-	// Embedded stdlib path layout is `stdlib/<name>.zg` (see embed.go).
-	// The carve-out's contract is that this path is what we get back even
-	// when the host has a recognized platform-suffix string set; if the
-	// suffix table were consulted, the embed lookup would fall through to
-	// "stdlib module not found" or to a synthetic "stdlib/io_macos.zg" miss.
-	if !strings.Contains(ri.Target.Path, "stdlib/io.zg") &&
-		!strings.Contains(ri.Target.Path, "stdlib\\io.zg") {
-		t.Errorf("Target.Path = %q, want a stdlib/io.zg embed path", ri.Target.Path)
+	// On-disk stdlib path layout is `<src/std>/<name>.zg` (see
+	// stdlib_root.go). The carve-out's contract is that this path is
+	// what we get back even when the host has a recognized platform-
+	// suffix string set; if the suffix table were consulted, the
+	// lookup would fall through to "stdlib module not found" or to a
+	// synthetic "io_macos.zg" miss.
+	if !strings.Contains(ri.Target.Path, "/std/io.zg") &&
+		!strings.Contains(ri.Target.Path, `\std\io.zg`) {
+		t.Errorf("Target.Path = %q, want a `/std/io.zg` disk path", ri.Target.Path)
 	}
 }
 

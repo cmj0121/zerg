@@ -46,8 +46,8 @@ func TestLexInterpolationRejected(t *testing.T) {
 	if !ok {
 		t.Fatalf("error is %T, want *LexError: %v", err, err)
 	}
-	if !strings.Contains(le.Message, "interpolation is deferred") {
-		t.Errorf("error message %q does not flag interpolation deferral", le.Message)
+	if !strings.Contains(le.Message, "interpolation is not supported") {
+		t.Errorf("error message %q does not flag interpolation rejection", le.Message)
 	}
 	// `{` in `"hi {name}"` is at column 11 (1-based, counting from the `p`
 	// in `print`). Tolerate a small offset just in case the implementation

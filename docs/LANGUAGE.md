@@ -328,7 +328,6 @@ atom            = INT | FLOAT | STRING | RUNE
                 | list_lit | tuple_lit | paren_expr
                 | struct_lit
                 | anon_fn_expr
-                | chan_constructor
 list_lit        = '[' [ expr { ',' expr } [ ',' ] ] ']'
 tuple_lit       = '(' expr ',' [ expr { ',' expr } ] [ ',' ] ')' ; >= 2 elements
 paren_expr      = '(' expr ')'
@@ -336,12 +335,32 @@ struct_lit      = [ IDENT '.' ] IDENT '{' [ field_init { ',' field_init }
                                             [ ',' ] ] '}'
 field_init      = IDENT ':' expr
 anon_fn_expr    = 'fn' '(' [ param_list ] ')' [ '->' type ] block
-chan_constructor= 'chan' '[' type ']' '(' [ expr ] ')'
 ```
 
 `Ident '{'` parses as a struct literal only when the brace contents look
-like `IDENT ':' ...` or `'}'`. Otherwise the `{` belongs to the surrounding
-statement (e.g. `if cond { ... }`).
+like `IDENT ':' ...` or `'}'`. A brace that opens with `IDENT ':='` (a
+walrus binding) belongs to the surrounding statement (e.g. `if cond { x
+:= 1 }`), as does any other shape that does not match the struct-literal
+prefix.
+
+### Special identifiers
+
+A handful of identifiers carry semantics that the parser does not
+distinguish from any other `IDENT`: `chan`, `wait_group`, `close`, `len`,
+`push`, `clone`. They are lexed as `IDENT`, parse through the regular
+postfix chain (`atom { postfix_op }`), and gain meaning at typeck.
+
+- `chan[T]()` and `chan[T](N)` parse as `IDENT '[' type ']' '(' [expr] ')'`
+  — an index on `chan` followed by a call. Typeck recognises `chan` and
+  reinterprets the shape as a channel constructor.
+- `wait_group()`, `close(ch)`, `len(x)`, `push(xs, v)`, `clone(xs)` parse
+  as ordinary function calls; typeck binds them to the corresponding
+  builtins.
+
+Because the parser does not reserve these names, a local binding may
+shadow them (`mut chan := 5`). The binding succeeds; any subsequent use
+that relied on the builtin meaning fails at typeck. Avoid shadowing
+these names in user code.
 
 ## Type system
 

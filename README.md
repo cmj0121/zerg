@@ -1,5 +1,7 @@
 # Zerg
 
+![Zerg](assets/icon.png)
+
 > Write the code as you think — one way, and only one way, to do it.
 
 Zerg programs are fast to write, easy to read, and overwhelmingly straightforward — swarm your

@@ -244,7 +244,18 @@ type loader struct {
 // cases the entry module so two `zerg run` invocations on different
 // filenames don't accidentally produce different mangled symbols for the
 // "main" namespace.
+//
+// v0.13 platform-suffix gate (entry-file half): if the entry's basename
+// carries a recognized `_<platform>.zg` suffix that does not match the host
+// platform, reject before touching the file with a wrong-platform
+// diagnostic. The sibling-import half lives in resolveImports.
 func (l *loader) loadEntry(absPath string) (*Module, error) {
+	base := filepath.Base(absPath)
+	if suffix := fileSuffixPlatform(base); suffix != "" && suffix != hostPlatform() {
+		return nil, errorAtFile(absPath,
+			"entry file %s is gated to %s but host is %s",
+			base, suffix, hostName())
+	}
 	src, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, errorAtFile(absPath, "%v", err)
@@ -348,6 +359,11 @@ func (l *loader) loadSibling(importer *Module, decl *syntax.ImportDecl, absPath 
 // v0.8 Unit 2: import paths beginning with `std/` resolve against the
 // embedded FS (see embed.go) and never fall through to the working
 // directory. Misses surface as "stdlib module not found".
+//
+// v0.13: sibling resolution goes through resolveSiblingPath, which
+// consults the platform-suffix table (`_macos.zg`, `_linux.zg`) before
+// falling back to the unsuffixed name. Stdlib resolution is intentionally
+// unaffected — see loadStdlib for the carve-out pin.
 func (l *loader) resolveImports(mod *Module) error {
 	siblingDir := filepath.Dir(mod.Path)
 	for _, stmt := range mod.Program.Statements {
@@ -375,7 +391,10 @@ func (l *loader) resolveImports(mod *Module) error {
 			return errorAtImport(mod.Path, decl,
 				"v0.5 supports flat sibling imports only: invalid module path %q", decl.Path)
 		}
-		siblingPath := filepath.Join(siblingDir, decl.Path+".zg")
+		siblingPath, err := resolveSiblingPath(siblingDir, decl.Path)
+		if err != nil {
+			return errorAtImport(mod.Path, decl, "%s", err.Error())
+		}
 		// filepath.Clean would suffice but Join already cleans.
 		target, err := l.loadSibling(mod, decl, siblingPath)
 		if err != nil {
@@ -412,6 +431,12 @@ func stdlibLocalName(path string) string {
 // returns the loaded *Module. Misses (or any name that fails the v0.5
 // identifier rule for the post-prefix component) surface as a uniform
 // "stdlib module not found" diagnostic anchored on decl.
+//
+// v0.13 carve-out pin: the platform-suffix table (`_macos.zg`, `_linux.zg`)
+// does NOT apply here. Stdlib modules are platform-neutral; if a stdlib
+// module ever needs platform branching, it does so internally (e.g. via a
+// `# requires:` arch line or an architecture-aware shim in stdlib/) rather
+// than through filename-suffix routing. Deferred to v0.14+.
 func (l *loader) loadStdlib(importer *Module, decl *syntax.ImportDecl) (*Module, error) {
 	name := strings.TrimPrefix(decl.Path, "std/")
 	// A leading-underscore name is reserved for embed-machinery scaffolding

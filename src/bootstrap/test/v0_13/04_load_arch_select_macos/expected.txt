@@ -1,0 +1,2 @@
+macos arch select
+from helper

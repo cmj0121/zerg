@@ -116,22 +116,6 @@ func fileSuffixPlatform(basename string) string {
 	return ""
 }
 
-// fileVisibleOnHost reports whether the file at absPath is admissible
-// under the current host platform. Files with no recognized platform
-// suffix are always visible; files with a matching suffix are visible
-// on that host; files with a non-matching suffix are invisible.
-//
-// This is the sibling-resolution side of the rule. The entry-file rule
-// uses fileSuffixPlatform directly so it can produce a wrong-platform
-// diagnostic rather than a silent not-found.
-func fileVisibleOnHost(absPath string) bool {
-	suffix := fileSuffixPlatform(filepath.Base(absPath))
-	if suffix == "" {
-		return true
-	}
-	return suffix == hostPlatform()
-}
-
 // resolveSiblingPath picks the on-disk path for `import "<modulePath>"`
 // from a file living in siblingDir.
 //

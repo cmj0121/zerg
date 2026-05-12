@@ -44,6 +44,14 @@ func examplesDir(t *testing.T) string {
 	return filepath.Clean(filepath.Join(testDir(t), "..", "..", "..", "examples"))
 }
 
+// testdataDir resolves src/bootstrap/test/testdata/ — fixtures that live with
+// the tests rather than user-visible examples (e.g. the future-version gate
+// file consumed by TestRequiresGate).
+func testdataDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(testDir(t), "testdata")
+}
+
 // buildToolchain compiles cmd/zerg into a fresh temp dir and returns the
 // absolute path to the resulting binary. We build into a temp dir so the
 // harness leaves no artifacts in the source tree.
@@ -170,9 +178,7 @@ func captureCmdBoth(name string, args []string, dir string) (stdout, stderr []by
 
 // TestExamplesBuild gates every example in examples/ on a successful
 // `zerg build` so the documentation cannot drift out of sync with the
-// shipped grammar / typeck / codegen surface. 14_placeholder.zg is the
-// future-version gate fixture that drives TestRequiresGate, and is
-// excluded for the same reason any gate fixture is: it refuses to load.
+// shipped grammar / typeck / codegen surface.
 //
 // The check stops at "the binary was produced" (the existing TestE2E
 // path covers full run/build parity for the small set of examples that
@@ -189,7 +195,6 @@ func TestExamplesBuild(t *testing.T) {
 		t.Fatalf("read examples dir: %v", err)
 	}
 
-	const versionGateFixture = "14_placeholder.zg"
 	var picked []string
 	for _, e := range entries {
 		if e.IsDir() {
@@ -197,9 +202,6 @@ func TestExamplesBuild(t *testing.T) {
 		}
 		name := e.Name()
 		if !strings.HasSuffix(name, ".zg") {
-			continue
-		}
-		if name == versionGateFixture {
 			continue
 		}
 		picked = append(picked, name)
@@ -248,57 +250,53 @@ func captureCmdBothMerged(name string, args []string, dir string) ([]byte, int, 
 	return combined.Bytes(), 0, nil
 }
 
-// TestRequiresGate verifies that examples carrying a future-version
-// `# requires:` marker are rejected with the standard message, and that
-// examples without a marker still run cleanly.
+// TestRequiresGate verifies that a program carrying a future-version
+// `# requires:` marker is rejected with the standard message, and that
+// programs without a marker still run cleanly.
+//
+// The future-version fixture lives in testdata/ rather than examples/
+// because it is a test artifact, not a user-facing sample. Bump the
+// `# requires:` line inside testdata/requires_future.zg each time a new
+// minor version lands; update `wantRejection` here to match.
 func TestRequiresGate(t *testing.T) {
 	binPath := buildToolchain(t)
-	examples := examplesDir(t)
+	gateSrc := filepath.Join(testdataDir(t), "requires_future.zg")
+	const wantRejection = "requires v0.14 (current is v0.13)"
 
-	t.Run("rejects future version", func(t *testing.T) {
-		// 14_placeholder.zg carries `# requires: v0.14` — the v0.13 dev
-		// window's gate fixture. The marker is one minor past what the
-		// toolchain ships, so the standard rejection message fires
-		// regardless of which v0.13 unit is currently in flight. The
-		// fixture rotates forward each minor release; before U2 the role
-		// was filled by 13_asm.zg with `# requires: v0.13`.
-		src := filepath.Join(examples, "14_placeholder.zg")
-		_, stderr, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
+	t.Run("rejects future version on run", func(t *testing.T) {
+		_, stderr, code, err := captureCmdBoth(binPath, []string{"run", gateSrc}, t.TempDir())
 		if err != nil {
 			t.Fatalf("zerg run: %v", err)
 		}
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.14 (current is v0.13)"
-		if !strings.Contains(string(stderr), want) {
-			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
+		if !strings.Contains(string(stderr), wantRejection) {
+			t.Fatalf("stderr does not contain %q\nstderr: %s", wantRejection, stderr)
 		}
 	})
 
-	t.Run("unmarked example still runs", func(t *testing.T) {
-		src := filepath.Join(examples, "01_hello.zg")
-		_, _, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
-		if err != nil {
-			t.Fatalf("zerg run: %v", err)
-		}
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0", code)
-		}
-	})
-
-	t.Run("rejects future version on build too", func(t *testing.T) {
-		src := filepath.Join(examples, "14_placeholder.zg")
-		_, stderr, code, err := captureCmdBoth(binPath, []string{"build", src}, t.TempDir())
+	t.Run("rejects future version on build", func(t *testing.T) {
+		_, stderr, code, err := captureCmdBoth(binPath, []string{"build", gateSrc}, t.TempDir())
 		if err != nil {
 			t.Fatalf("zerg build: %v", err)
 		}
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.14 (current is v0.13)"
-		if !strings.Contains(string(stderr), want) {
-			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
+		if !strings.Contains(string(stderr), wantRejection) {
+			t.Fatalf("stderr does not contain %q\nstderr: %s", wantRejection, stderr)
+		}
+	})
+
+	t.Run("unmarked example still runs", func(t *testing.T) {
+		src := filepath.Join(examplesDir(t), "01_hello.zg")
+		_, _, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
+		if err != nil {
+			t.Fatalf("zerg run: %v", err)
+		}
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
 		}
 	})
 }

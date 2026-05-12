@@ -1,0 +1,6 @@
+# requires: v0.13
+a := 'A'
+asm {
+	mov x0, $${a}
+	svc #0x80
+}

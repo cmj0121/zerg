@@ -1,0 +1,5 @@
+# requires: v0.13
+asm {
+	mov x0, ${missing}
+	svc #0x80
+}

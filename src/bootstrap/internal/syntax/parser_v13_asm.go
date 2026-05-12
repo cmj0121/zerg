@@ -80,6 +80,16 @@ func splitAsmBody(openPos Position, raw string) ([]AsmChunk, error) {
 		}
 	}
 	for i < len(raw) {
+		if raw[i] == '$' && i+1 < len(raw) && raw[i+1] == '$' {
+			// `$$` is reserved at v0.13. Treating it as two literal `$`
+			// would silently admit a confusing form whose user intent is
+			// ambiguous (literal-dollar vs. typo for `${`). Reject with a
+			// focused diagnostic so the surface stays unambiguous. If a
+			// later version introduces an escape for literal `$`, the
+			// rejection lifts; for now, `${name}` is the only special
+			// shape in an asm body.
+			return nil, errorAt(cur, "'$$' is reserved in asm body; use '${name}' for interpolation")
+		}
 		if raw[i] == '$' && i+1 < len(raw) && raw[i+1] == '{' {
 			dollarPos := cur
 			flushText(i)

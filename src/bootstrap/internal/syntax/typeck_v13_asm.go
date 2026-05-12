@@ -19,7 +19,8 @@ package syntax
 // checkAsmBlock validates the interpolation references inside the block. It
 // is called from the main statement walk in typeck.go's checkStmt switch.
 func (c *checker) checkAsmBlock(s *AsmBlock) error {
-	for _, chunk := range s.Chunks {
+	for i := range s.Chunks {
+		chunk := &s.Chunks[i]
 		if chunk.Kind != AsmChunkInterp {
 			continue
 		}
@@ -38,12 +39,16 @@ func (c *checker) checkAsmBlock(s *AsmBlock) error {
 			return typeErr(chunk.NamePos,
 				"asm interpolation '${%s}' has unresolved type", chunk.Name)
 		}
-		if isAsmInterpAcceptedType(t) {
-			continue
+		if !isAsmInterpAcceptedType(t) {
+			return typeErr(chunk.NamePos,
+				"asm interpolation '${%s}' must be byte or list[byte], got %s",
+				chunk.Name, t)
 		}
-		return typeErr(chunk.NamePos,
-			"asm interpolation '${%s}' must be byte or list[byte], got %s",
-			chunk.Name, t)
+		// Stamp the resolved type onto the chunk so cgen (U4) can dispatch
+		// on it without re-running scope resolution. Note the loop uses an
+		// index + pointer (`&s.Chunks[i]`) so the write actually lands in
+		// the AST node rather than a value copy.
+		chunk.BoundType = t
 	}
 	return nil
 }

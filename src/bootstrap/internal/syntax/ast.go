@@ -1555,6 +1555,12 @@ type AsmChunk struct {
 	// the source.
 	Name    string
 	NamePos Position
+	// BoundType is the binding's resolved type, populated by typeck (U3)
+	// after the name lookup succeeds. Cgen (U4) reads this to decide
+	// whether the interp lowers to a `byte` immediate operand or a
+	// `list[byte].data` pointer operand. Nil for AsmChunkText chunks and
+	// for any chunk reached before typeck has run.
+	BoundType *Type
 }
 
 // AsmBlock is the v0.13 `asm { body }` statement. The block body is the only

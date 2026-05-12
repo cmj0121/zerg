@@ -2195,13 +2195,7 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 	case *syntax.SelectStmt:
 		return g.emitSelect(s)
 	case *syntax.AsmBlock:
-		// v0.13 U4 will lower AsmBlock into a GCC `__asm__ volatile` with
-		// the full arm64 caller-saved clobber set. Until U4 lands, surface
-		// a precise diagnostic anchored on the block — a stray AsmBlock at
-		// this layer means the user reached U2's parser surface ahead of
-		// the cgen support, and we want the failure to point at the asm
-		// block, not at "internal: unhandled statement".
-		return fmt.Errorf("%s: inline asm codegen not yet implemented (lands at v0.13 U4)", s.Pos)
+		return g.emitAsmBlock(s)
 	}
 	return fmt.Errorf("codegen: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }

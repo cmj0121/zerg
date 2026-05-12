@@ -1,0 +1,9 @@
+# requires: v0.13
+msg: list[byte] = ['h', 'i', '\n']
+asm {
+	mov x0, #1
+	mov x1, ${msg}
+	mov x2, #3
+	mov x16, #4
+	svc #0x80
+}

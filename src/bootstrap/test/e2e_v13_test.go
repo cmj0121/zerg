@@ -171,16 +171,46 @@ func TestE2EV13Corpus(t *testing.T) {
 				t.Fatalf("read expected.txt: %v", err)
 			}
 
-			// `zerg run` half.
-			runOut, runCode, err := captureCmd(binPath, []string{"run", entry}, t.TempDir())
+			// `zerg run` half. v0.13 admits `asm { … }` blocks that the
+			// interpreter cannot execute (pin 6); programs that use asm
+			// are build-only. Detect by scanning the source — the
+			// alternative (a per-program manifest flag) adds a moving
+			// part without buying clarity.
+			srcBytes, err := os.ReadFile(entry)
 			if err != nil {
-				t.Fatalf("zerg run: %v", err)
+				t.Fatalf("read entry %s: %v", entry, err)
 			}
-			if runCode != 0 {
-				t.Fatalf("zerg run exit code = %d, want 0\nstdout: %s", runCode, runOut)
-			}
-			if !bytes.Equal(runOut, golden) {
-				t.Errorf("run stdout vs golden mismatch\nrun:    %q\ngolden: %q", runOut, golden)
+			asmBearing := bytes.Contains(srcBytes, []byte("asm {")) ||
+				bytes.Contains(srcBytes, []byte("asm{"))
+			var runOut []byte
+			if asmBearing {
+				// Surface the interpreter's rejection diagnostic so a
+				// future tightening / loosening of pin 6's wording lands
+				// here as a clear failure. The build half still asserts
+				// the program's actual stdout against the golden.
+				_, stderr, runCode, err := captureCmdBoth(binPath, []string{"run", entry}, t.TempDir())
+				if err != nil {
+					t.Fatalf("zerg run: %v", err)
+				}
+				if runCode == 0 {
+					t.Fatalf("zerg run on asm-bearing program returned 0; want non-zero\nstderr: %s", stderr)
+				}
+				want := "inline asm requires 'zerg build'"
+				if !bytes.Contains(stderr, []byte(want)) {
+					t.Fatalf("zerg run stderr missing pin-6 diagnostic %q\nstderr: %s", want, stderr)
+				}
+			} else {
+				runCode := 0
+				runOut, runCode, err = captureCmd(binPath, []string{"run", entry}, t.TempDir())
+				if err != nil {
+					t.Fatalf("zerg run: %v", err)
+				}
+				if runCode != 0 {
+					t.Fatalf("zerg run exit code = %d, want 0\nstdout: %s", runCode, runOut)
+				}
+				if !bytes.Equal(runOut, golden) {
+					t.Errorf("run stdout vs golden mismatch\nrun:    %q\ngolden: %q", runOut, golden)
+				}
 			}
 
 			// `zerg build` half. Skipped if cc is missing on the host —
@@ -212,7 +242,10 @@ func TestE2EV13Corpus(t *testing.T) {
 			if !bytes.Equal(binOut, golden) {
 				t.Errorf("build stdout vs golden mismatch\nbuild:  %q\ngolden: %q", binOut, golden)
 			}
-			if !bytes.Equal(runOut, binOut) {
+			// run-vs-build parity is only meaningful for programs the
+			// interpreter actually runs. For asm-bearing programs the
+			// build output IS the golden surface.
+			if !asmBearing && !bytes.Equal(runOut, binOut) {
 				t.Errorf("run vs build stdout mismatch\nrun:   %q\nbuild: %q", runOut, binOut)
 			}
 		})

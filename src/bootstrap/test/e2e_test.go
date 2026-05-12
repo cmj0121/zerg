@@ -170,10 +170,8 @@ func captureCmdBoth(name string, args []string, dir string) (stdout, stderr []by
 
 // TestExamplesBuild gates every example in examples/ on a successful
 // `zerg build` so the documentation cannot drift out of sync with the
-// shipped grammar / typeck / codegen surface. 13_asm.zg is excluded
-// during the v0.13 dev window because the cgen lowering lands at U4 —
-// until U4 ships, the example parses but does not build. 14_placeholder.zg
-// is the future-version gate fixture that drives TestRequiresGate, and is
+// shipped grammar / typeck / codegen surface. 14_placeholder.zg is the
+// future-version gate fixture that drives TestRequiresGate, and is
 // excluded for the same reason any gate fixture is: it refuses to load.
 //
 // The check stops at "the binary was produced" (the existing TestE2E
@@ -192,11 +190,6 @@ func TestExamplesBuild(t *testing.T) {
 	}
 
 	const versionGateFixture = "14_placeholder.zg"
-	// pendingAsmCodegen names examples that exercise v0.13 inline asm:
-	// the parser surface lands at U2, but the cgen lowering lands at U4.
-	// During the gap (U2 → U4) build-time tests skip these — once U4 ships
-	// they re-enter the corpus. Drop the entry when adding U4.
-	const pendingAsmCodegen = "13_asm.zg"
 	var picked []string
 	for _, e := range entries {
 		if e.IsDir() {
@@ -206,7 +199,7 @@ func TestExamplesBuild(t *testing.T) {
 		if !strings.HasSuffix(name, ".zg") {
 			continue
 		}
-		if name == versionGateFixture || name == pendingAsmCodegen {
+		if name == versionGateFixture {
 			continue
 		}
 		picked = append(picked, name)

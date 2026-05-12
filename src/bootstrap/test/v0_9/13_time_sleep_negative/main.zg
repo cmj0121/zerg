@@ -1,5 +1,5 @@
 # requires: v0.9
-import "std/time"
+import "time"
 
 if time.sleep_ms(-5) {
     print "ok"

@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 xs := strings.split("", ",")
 print len(xs)

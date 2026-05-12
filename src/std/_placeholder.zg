@@ -1,8 +1,0 @@
-# requires: v0.8
-# Placeholder so the //go:embed stdlib/*.zg directive in embed.go has at
-# least one matching file. Unit 3 / Unit 4 populate this directory with the
-# real std/io.zg, std/strings.zg, std/math.zg, std/os.zg sources. The
-# leading underscore in the basename keeps this file out of any user
-# `import "std/<name>"` lookup — the loader strips `std/` to derive the
-# module name and reads `stdlib/<name>.zg`, so a user would have to write
-# `import "std/_placeholder"` to land here, which still parses cleanly.

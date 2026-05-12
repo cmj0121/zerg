@@ -7,8 +7,6 @@
 package loader
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,7 +84,7 @@ func TestLoadSysBarePrefixRejected(t *testing.T) {
 	}
 }
 
-// Underscore-prefixed names mirror the std/_placeholder rule so any
+// Underscore-prefixed names mirror the std/* reserved-scaffolding rule so any
 // future internal-only scaffolding files stay invisible to user code.
 func TestLoadSysUnderscorePrefixedRejected(t *testing.T) {
 	dir := t.TempDir()
@@ -146,28 +144,17 @@ func TestSysPathModParses(t *testing.T) {
 	}
 }
 
-// Guards against an accidental rename / move of src/std/sys/ that would
-// silently turn every sys/* import into a miss with no other signal.
+// Guards against an accidental rename / move of the embedded sys/ tree
+// that would silently turn every sys/* import into a miss with no
+// other signal. The toolchain now ships the stdlib via //go:embed; the
+// check fires the default fallback for a known sys/* module and asserts
+// it returns non-empty source.
 func TestSysTreeReachable(t *testing.T) {
-	root := stdlibRoot()
-	if root == "" {
-		t.Fatal("stdlibRoot() returned empty; src/std/ discovery failed")
+	src, ok := defaultStdlibFallback("sys", "path")
+	if !ok {
+		t.Fatal("embedded sys/path module not reachable via defaultStdlibFallback")
 	}
-	sysDir := filepath.Join(root, "sys")
-	entries, err := os.ReadDir(sysDir)
-	if err != nil {
-		t.Fatalf("read %s: %v", sysDir, err)
-	}
-	if len(entries) == 0 {
-		t.Fatalf("%s is empty", sysDir)
-	}
-	found := false
-	for _, e := range entries {
-		if e.Name() == "path" && e.IsDir() {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("%s does not contain a `path/` directory; entries: %v", sysDir, entries)
+	if len(src) == 0 {
+		t.Fatal("embedded sys/path module has empty source")
 	}
 }

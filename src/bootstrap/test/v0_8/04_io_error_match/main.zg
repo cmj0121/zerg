@@ -1,7 +1,7 @@
 # requires: v0.8
-import "std/io"
-import "std/os"
-import "std/strings"
+import "io"
+import "os"
+import "strings"
 
 fn classify(path: str) {
     match io.read_file(path) {

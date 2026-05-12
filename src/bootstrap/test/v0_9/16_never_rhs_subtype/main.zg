@@ -1,5 +1,5 @@
 # requires: v0.9
-import "std/os"
+import "os"
 
 fn maybe_int(b: bool) -> int {
     if b {

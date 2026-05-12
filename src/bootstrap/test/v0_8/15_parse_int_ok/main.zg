@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.parse_int("42")
 print strings.parse_int("-7")

@@ -1,6 +1,6 @@
 # requires: v0.8
-import "std/io"
-import "std/os"
+import "io"
+import "os"
 
 match os.env("ZERG_TEST_TEMPDIR") {
     Option.Some(d) => {

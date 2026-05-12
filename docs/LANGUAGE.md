@@ -56,12 +56,6 @@ or     print  pub      return   select    spawn    spec     struct
 this   true   while    xor
 ```
 
-`__builtin` is reserved only inside files whose `# requires:` line is
-`v0.8` or higher and whose path lives under the toolchain-embedded `std/`
-tree. `asm` is reserved only inside files whose `# requires:` line is
-`v0.13` or higher; pre-v0.13 sources keep lexing the bareword as `IDENT`
-so existing corpora that named locals `asm` continue to parse.
-
 `let` remains reserved at the lexer level but has **no admitted
 syntactic form** at v0.11: the immutable-binding `let X := …` shape was
 retired in favour of the bare `X := …` form (see `bind_stmt`). The token
@@ -153,14 +147,12 @@ overrides. Reserved keywords cannot be used as alias names.
 
 ```ebnf
 fn_decl     = 'fn' IDENT [ type_params ] '(' [ param_list ] ')'
-              [ '->' type ]
-              ( block | builtin_marker )
+              [ '->' type ] block
 type_params = '[' type_param { ',' type_param } ']'
 type_param  = IDENT [ ':' type_bound ]
 type_bound  = type { '+' type }
 param_list  = param { ',' param }
 param       = IDENT ':' type
-builtin_marker = '__builtin' IDENT          ; stdlib-only, v0.8+
 ```
 
 ### Struct / enum / spec

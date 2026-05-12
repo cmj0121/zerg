@@ -1,6 +1,6 @@
 # requires: v0.9
-import "std/os"
-import "std/strings"
+import "os"
+import "strings"
 
 a := os.argv()
 match strings.parse_int(a[1]) {

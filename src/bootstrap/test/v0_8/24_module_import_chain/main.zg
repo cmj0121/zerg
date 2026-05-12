@@ -1,8 +1,8 @@
 # requires: v0.8
-import "std/io"
-import "std/strings"
-import "std/math"
-import "std/os"
+import "io"
+import "strings"
+import "math"
+import "os"
 
 parts := strings.split("4,2,8,1", ",")
 mut max_val := 0

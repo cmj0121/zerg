@@ -510,10 +510,9 @@ func matchEmbeddedFamily(path string) *embeddedFamily {
 // the source came from disk or fallback.
 //
 // Names that fail the v0.5 identifier rule, and leading-underscore
-// names (reserved for internal scaffolding files like
-// `_placeholder.zg`), short-circuit to the not-found diagnostic
-// without consulting either disk or fallback so they stay invisible
-// to user code.
+// names (reserved for stdlib-internal scaffolding), short-circuit to
+// the not-found diagnostic without consulting either disk or fallback
+// so they stay invisible to user code.
 func (l *loader) loadEmbeddedFamily(importer *Module, decl *syntax.ImportDecl, fam embeddedFamily) (*Module, error) {
 	name := strings.TrimPrefix(decl.Path, fam.prefix)
 	if name == "" || strings.HasPrefix(name, "_") || !isValidIdentifier(name) {

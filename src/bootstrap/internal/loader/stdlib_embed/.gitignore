@@ -1,0 +1,10 @@
+# Build-artifact mirror of src/std/, populated by `make sync-stdlib`
+# (invoked from `make build` / `make test`) so the //go:embed directive
+# in ../stdlib_fallback.go has the stdlib source bundled into the
+# toolchain binary.
+#
+# Ignore every populated file; keep only this .gitignore so the
+# directory exists in git (an empty target of //go:embed compiles fine,
+# but missing-directory is a compile error).
+*
+!.gitignore

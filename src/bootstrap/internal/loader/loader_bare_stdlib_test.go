@@ -207,7 +207,7 @@ func TestExplicitSysPrefixResolvesAgainstSameFixture(t *testing.T) {
 }
 
 // Leading-underscore names are a stdlib-internal scaffolding convention
-// (e.g. `_placeholder.zg`). The fall-through must respect that rule so
+// (underscore-prefixed names are reserved). The fall-through must respect that rule so
 // internal scaffolding stays invisible even when the user spells the
 // bare name: a registered fallback for `_secret` must NOT satisfy a
 // bare `import "_secret"`, and the resulting diagnostic stays sibling-

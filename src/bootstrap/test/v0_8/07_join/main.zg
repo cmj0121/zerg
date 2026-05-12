@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.join(["a", "b", "c"], "-")
 print strings.join(["only"], "-")

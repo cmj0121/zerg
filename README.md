@@ -103,13 +103,12 @@ Prints the catalog of toolchain-supported modules with a one-line description ea
 
 `import "foo"` is resolved by the loader using a fall-through chain:
 
-| Form          | Source                      | Notes                                                              |
-| ------------- | --------------------------- | ------------------------------------------------------------------ |
-| bare `<name>` | `<importer-dir>/<name>.zg`  | Same-repo sibling (wins when present).                             |
-|               | `src/std/<name>.zg`         | Fall-through to stdlib — `std/` is the implicit default namespace. |
-|               | bootstrap / runtime         | Final fall-through to the toolchain's built-in implementation.     |
-| `std/<name>`  | `src/std/<name>.zg`         | Explicit stdlib form — skips the sibling check.                    |
-| `sys/<name>`  | `src/std/sys/<name>/mod.zg` | **Explicit-only**: bare names never fall through to `sys/*`.       |
+| Form          | Source                       | Notes                                                              |
+| ------------- | ---------------------------- | ------------------------------------------------------------------ |
+| bare `<name>` | `<importer-dir>/<name>.zg`   | Same-repo sibling (wins when present).                             |
+|               | embedded `std/<name>.zg`     | Fall-through to stdlib — `std/` is the implicit default namespace. |
+| `std/<name>`  | embedded `std/<name>.zg`     | Explicit stdlib form — skips the sibling check.                    |
+| `sys/<name>`  | embedded `sys/<name>/mod.zg` | **Explicit-only**: bare names never fall through to `sys/*`.       |
 
 `import "io"` works just like `import "std/io"` when no sibling claims the name —
 the `std/` prefix is optional sugar for the implicit default namespace. Use the
@@ -122,10 +121,11 @@ to `sys/path` — pulling in platform-dependent code is a deliberate choice that
 import path must signal. Both families share the on-disk → built-in fall-through
 chain for their explicit forms.
 
-When a stdlib module is not present on disk, the loader falls through to the
-toolchain's built-in implementation — the bootstrap currently provides syscall-shaped
-primitives (file I/O, env/argv, exit, clock) so the language is self-describing before
-the self-hosted runtime ships.
+The stdlib's canonical source tree is `src/std/` (pure Zerg, no Go). `make build`
+mirrors it into `src/bootstrap/internal/loader/stdlib_embed/` (a gitignored build
+artifact) so `//go:embed` can bake it into the toolchain binary — the resulting
+`zerg` is self-contained. Setting `$ZERG_STDLIB` points the loader at an on-disk
+tree instead, useful when iterating on stdlib source without rebuilding.
 
 ## DDD (Dream-Driven Development)
 

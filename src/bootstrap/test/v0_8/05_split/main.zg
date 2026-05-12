@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.split("a,b,c", ",")
 print strings.split("hello,world,zerg", ",")

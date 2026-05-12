@@ -50,8 +50,13 @@ func TestStdlibSubcommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d, want 0; stderr=%s", code, out.stderr)
 	}
-	if !strings.Contains(out.stdout, "std/io") {
-		t.Errorf("stdout missing std/io entry; got:\n%s", out.stdout)
+	// Bare-name std/* entry (no prefix) AND explicit sys/* entry both
+	// appear — pins the dual display convention end-to-end.
+	if !strings.Contains(out.stdout, "io ") {
+		t.Errorf("stdout missing bare 'io' entry; got:\n%s", out.stdout)
+	}
+	if strings.Contains(out.stdout, "std/io") {
+		t.Errorf("stdout leaked the std/ prefix on a std/* entry; got:\n%s", out.stdout)
 	}
 	if !strings.Contains(out.stdout, "sys/path") {
 		t.Errorf("stdout missing sys/path entry; got:\n%s", out.stdout)

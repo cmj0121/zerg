@@ -101,19 +101,31 @@ Prints the catalog of toolchain-supported modules with a one-line description ea
 
 ## Module resolution
 
-`import "foo"` is resolved by the loader using a prefix dispatch:
+`import "foo"` is resolved by the loader using a fall-through chain:
 
-| Prefix        | Source                     | Notes                                                  |
-| ------------- | -------------------------- | ------------------------------------------------------ |
-| bare `<name>` | `<importer-dir>/<name>.zg` | Same-repo sibling.                                     |
-| `std/<name>`  | `src/std/<name>.zg`        | Pure-Zerg stdlib (flat-file).                          |
-|               | bootstrap / runtime        | The toolchain's provided implementation of the stdlib. |
+| Form          | Source                      | Notes                                                              |
+| ------------- | --------------------------- | ------------------------------------------------------------------ |
+| bare `<name>` | `<importer-dir>/<name>.zg`  | Same-repo sibling (wins when present).                             |
+|               | `src/std/<name>.zg`         | Fall-through to stdlib — `std/` is the implicit default namespace. |
+|               | bootstrap / runtime         | Final fall-through to the toolchain's built-in implementation.     |
+| `std/<name>`  | `src/std/<name>.zg`         | Explicit stdlib form — skips the sibling check.                    |
+| `sys/<name>`  | `src/std/sys/<name>/mod.zg` | **Explicit-only**: bare names never fall through to `sys/*`.       |
 
-When a `std/<name>` module is not present on disk, the loader falls through to the
+`import "io"` works just like `import "std/io"` when no sibling claims the name —
+the `std/` prefix is optional sugar for the implicit default namespace. Use the
+explicit form when you want to be unambiguous (e.g. when a sibling with the same
+name exists and you specifically want the stdlib one).
+
+The `sys/*` family is different: it carries platform-specific modules such as
+`sys/path`, and the prefix is **always required**. `import "path"` does not resolve
+to `sys/path` — pulling in platform-dependent code is a deliberate choice that the
+import path must signal. Both families share the on-disk → built-in fall-through
+chain for their explicit forms.
+
+When a stdlib module is not present on disk, the loader falls through to the
 toolchain's built-in implementation — the bootstrap currently provides syscall-shaped
 primitives (file I/O, env/argv, exit, clock) so the language is self-describing before
-the self-hosted runtime ships. The `sys/<name>` prefix follows the same rule, resolving
-against `src/std/sys/<name>/mod.zg` for platform-specific modules such as `sys/path`.
+the self-hosted runtime ships.
 
 ## DDD (Dream-Driven Development)
 
@@ -127,5 +139,5 @@ All the features are based on my needs and my dreams.
 - [`RELEASE.md`](RELEASE.md) — per-version release summaries (one screen per version).
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — formal language reference (grammar EBNF, type system,
   evaluation order, ownership, defer / concurrency / `?` propagation, reserved words).
-- [`docs/STDLIB.md`](docs/STDLIB.md) — per-module fn reference for `std/io`, `std/strings`,
-  `std/math`, `std/os`, and `std/time`, with signatures, error variants, and runnable examples.
+- [`docs/STDLIB.md`](docs/STDLIB.md) — per-module fn reference for `io`, `strings`, `math`,
+  `os`, `time`, and `sys/path`, with signatures, error variants, and runnable examples.

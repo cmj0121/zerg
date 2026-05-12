@@ -20,10 +20,10 @@ func TestCatalogNonEmpty(t *testing.T) {
 	}
 }
 
-// TestCatalogEntriesValid pins the per-entry contract: a non-empty Path
-// under one of the recognised families, and a non-empty Description.
-// Catches accidental empty entries and stray paths outside std/* or
-// sys/* (which the loader would reject anyway).
+// TestCatalogEntriesValid pins the per-entry contract: non-empty Path,
+// non-empty Description, and a path that matches one of the two
+// display conventions — bare name (implicit std/*) or `sys/<name>`
+// (explicit sys/* prefix). Anything else is a malformed entry.
 func TestCatalogEntriesValid(t *testing.T) {
 	for i, e := range Catalog() {
 		if e.Path == "" {
@@ -32,15 +32,21 @@ func TestCatalogEntriesValid(t *testing.T) {
 		if e.Description == "" {
 			t.Errorf("entry %d (%s): empty Description", i, e.Path)
 		}
-		if !strings.HasPrefix(e.Path, "std/") && !strings.HasPrefix(e.Path, "sys/") {
-			t.Errorf("entry %d (%s): path outside std/* and sys/* families", i, e.Path)
+		// std/* entries are displayed bare (no prefix); only sys/* keeps
+		// its prefix. A path starting with "std/" would mean the entry
+		// was authored before the bare-import default landed.
+		if strings.HasPrefix(e.Path, "std/") {
+			t.Errorf("entry %d (%s): std/* entries are displayed bare; drop the std/ prefix", i, e.Path)
+		}
+		if strings.Contains(e.Path, "/") && !strings.HasPrefix(e.Path, "sys/") {
+			t.Errorf("entry %d (%s): only sys/* keeps an explicit prefix", i, e.Path)
 		}
 	}
 }
 
-// TestCatalogStableOrder pins the documented ordering: family-grouped
-// (all std/* before any sys/*), alphabetical within family. The `zerg
-// stdlib` output relies on this for predictable column rendering.
+// TestCatalogStableOrder pins the documented ordering: bare std/*
+// entries first, alphabetical; then sys/* entries, alphabetical. The
+// `zerg stdlib` output relies on this for predictable column rendering.
 func TestCatalogStableOrder(t *testing.T) {
 	entries := Catalog()
 	sawSys := false
@@ -54,7 +60,7 @@ func TestCatalogStableOrder(t *testing.T) {
 		if family == "sys" {
 			sawSys = true
 		} else if sawSys {
-			t.Errorf("std/* entry %s appears after a sys/* entry — families not grouped", e.Path)
+			t.Errorf("bare std/* entry %s appears after a sys/* entry — families not grouped", e.Path)
 		}
 		if family == prevFamily && prev != "" && e.Path <= prev {
 			t.Errorf("non-alphabetical: %s <= %s within family %s", e.Path, prev, family)

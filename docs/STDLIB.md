@@ -4,14 +4,21 @@
 
 ## Overview
 
-The Zerg standard library is shipped embedded in the toolchain binary
-(`zerg`). User programs reach modules with `import "std/<m>" as alias` —
-no on-disk install, no path resolution. Five modules ship at v0.10:
-`std/io`, `std/strings`, `std/math`, `std/os`, `std/time`. Their public
-surface is locked at v0.10 and stable through v1.0; the "provisional"
-marker the README has carried since v0.8 is dropped at this release.
-Signatures, error variants, edge-case semantics, and parity guarantees
-documented in this file are part of the Zerg source-stability promise.
+The Zerg standard library ships with the toolchain. User programs reach
+modules with `import "<m>"` (the `std/` prefix is the implicit default,
+so `import "io"` and `import "io"` reach the same module). Five
+modules ship at v0.10: `io`, `strings`, `math`, `os`, `time`. Their
+public surface is locked at v0.10 and stable through v1.0; the
+"provisional" marker the README carried since v0.8 is dropped at this
+release. Signatures, error variants, edge-case semantics, and parity
+guarantees documented in this file are part of the Zerg source-stability
+promise.
+
+Examples in this file use the bare-name form (`import "io"`) — the
+recommended way to reach the stdlib. Explicit `import "io"` remains
+supported for code that wants to be unambiguous when a sibling with the
+same name could shadow the stdlib. Platform-specific `sys/*` modules
+(e.g. `sys/path`) always require the `sys/` prefix.
 
 Each module's `# requires:` floor is recorded in the per-module section.
 A program importing a module must declare a `# requires:` at least that
@@ -66,7 +73,7 @@ parity is by variant identity, never by host error text.
 
 ```zerg
 # requires: v0.8
-import "std/io"
+import "io"
 
 match io.read_file("config.toml") {
     Result.Ok(content) => print content
@@ -88,7 +95,7 @@ match io.read_file("config.toml") {
 
 ```zerg
 # requires: v0.8
-import "std/io"
+import "io"
 
 match io.write_file("/tmp/zerg-out.txt", "hello\n") {
     Result.Ok(_) => print "wrote"
@@ -161,7 +168,7 @@ sequence, with case helpers explicitly ASCII-only.
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.split("a,b,c", ",")
 print strings.split("only", ",")
@@ -184,7 +191,7 @@ Output (last line is `[""]`):
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 xs := strings.split("a,b,c", ",")
 print strings.join(xs, "-")
@@ -201,7 +208,7 @@ Strips leading and trailing ASCII whitespace
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.trim("  hello  ")
 print strings.trim("\tzerg\n")
@@ -214,7 +221,7 @@ print strings.trim("noop")
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.starts_with("hello", "he")
 print strings.ends_with("hello", "lo")
@@ -235,7 +242,7 @@ error.
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.replace("foo bar foo", "foo", "baz")
 print strings.replace("aaaa", "aa", "b")
@@ -252,7 +259,7 @@ across platforms.
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.to_upper("abc XYZ 123")
 print strings.to_lower("AbCdE")
@@ -268,7 +275,7 @@ remaining bytes must all be `[0-9]`.
 
 ```zerg
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.parse_int("42")
 print strings.parse_int("  -7  ")
@@ -323,7 +330,7 @@ Integer math. No floats (Zerg has no float type at v0.10).
 
 ```zerg
 # requires: v0.8
-import "std/math"
+import "math"
 
 print math.abs(-5)
 print math.abs(7)
@@ -366,7 +373,7 @@ Process surface. Environment access (`env`), command-line argv
 
 ```zerg
 # requires: v0.8
-import "std/os"
+import "os"
 
 match os.env("HOME") {
     Option.Some(h) => print h
@@ -388,7 +395,7 @@ match os.env("HOME") {
 
 ```zerg
 # requires: v0.9
-import "std/os"
+import "os"
 
 a := os.argv()
 print len(a)
@@ -416,7 +423,7 @@ for i in 1..len(a) {
 
 ```zerg
 # requires: v0.9
-import "std/os"
+import "os"
 
 print "before"
 os.exit(0)
@@ -427,7 +434,7 @@ print "unreachable"
 
 ```zerg
 # requires: v0.9
-import "std/os"
+import "os"
 
 fn body() {
     defer print "deferred"
@@ -478,7 +485,7 @@ C codegen and Go's `time.Sleep` in the interpreter).
 
 ```zerg
 # requires: v0.9
-import "std/time"
+import "time"
 
 print time.now_ms()
 _ := time.sleep_ms(50)
@@ -499,7 +506,7 @@ for sleep-resolution slop on busy hosts.
 
 ```zerg
 # requires: v0.9
-import "std/time"
+import "time"
 
 if time.sleep_ms(-5) {
     print "ok"

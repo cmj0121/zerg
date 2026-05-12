@@ -129,8 +129,11 @@ top_stmt    = simple_stmt | compound_stmt
 ### Imports
 
 Imports are top-level only. Resolution is filesystem-relative (sibling `.zg`)
-unless the path begins with `std/`, which routes to the toolchain-embedded
-stdlib.
+with a fall-through to the toolchain-embedded stdlib: a bare `import "name"`
+checks the sibling first and, on miss, resolves as `std/name`. The `std/`
+prefix is the implicit default — an explicit `import "std/name"` is the
+same module and skips the sibling check. The `sys/<name>` prefix is
+always required (platform-specific modules opt in deliberately).
 
 ```ebnf
 import_decl    = 'import' ( import_entry
@@ -598,9 +601,14 @@ and the literal `"<repl>"` under the REPL. Tests must avoid printing
 
 ## Modules
 
-A module is a single `.zg` file. `import "name"` resolves `./name.zg`
-relative to the importing file. `import "std/<name>"` resolves against the
-toolchain-embedded stdlib (no working-directory fallback).
+A module is a single `.zg` file. `import "name"` resolves via a
+fall-through chain: first as `./name.zg` relative to the importing file
+(sibling wins when present), then as the stdlib module `std/name`. The
+`std/` prefix is the implicit default — `import "math"` and `import
+"std/math"` reach the same module when no sibling shadows it; the
+explicit form skips the sibling check. `import "sys/<name>"` resolves
+platform-specific modules (e.g. `sys/path`) and the `sys/` prefix is
+_always required_ — bare names never fall through to `sys/*`.
 
 Per-imported-module gating: every imported file's `# requires:` line is
 checked against the toolchain version. A v0.5 entry that imports a v0.6
@@ -777,8 +785,8 @@ print b ?? 99
 <!-- example: program -->
 
 ```zerg
-import "std/strings"
-import "std/math"
+import "strings"
+import "math"
 
 print strings.to_upper("hi")
 print math.abs(-3)
@@ -833,7 +841,7 @@ print body()
 <!-- example: program -->
 
 ```zerg
-import "std/os"
+import "os"
 
 fn fail(msg: str) -> never {
     print msg

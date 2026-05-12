@@ -20,7 +20,7 @@
 # Separator policy: `/` everywhere. The macOS + Linux ship targets are POSIX;
 # Windows-separator handling defers along with the Linux corpus.
 
-import "std/strings"
+import "strings"
 
 pub struct Path {
 	raw: str,

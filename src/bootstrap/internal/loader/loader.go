@@ -396,8 +396,7 @@ func (l *loader) resolveImports(mod *Module) error {
 		if err != nil {
 			return errorAtImport(mod.Path, decl, "%s", err.Error())
 		}
-		// filepath.Clean would suffice but Join already cleans.
-		target, err := l.loadSibling(mod, decl, siblingPath)
+		target, err := l.resolveBareImport(mod, decl, siblingPath)
 		if err != nil {
 			return err
 		}
@@ -414,6 +413,37 @@ func (l *loader) resolveImports(mod *Module) error {
 	return nil
 }
 
+// resolveBareImport handles `import "<name>"` (no std/ or sys/ prefix).
+// Sibling wins when present — same-repo code keeps the v0.5 contract.
+// On sibling miss, the loader falls through to `std/<name>` *only*: the
+// std/* namespace is the implicit default, so users don't have to spell
+// out the prefix for stdlib modules. Explicit `import "std/<name>"`
+// stays supported for code that wants to be unambiguous about the
+// source.
+//
+// The sys/* family is deliberately NOT consulted by the fall-through.
+// sys/* modules are platform-specific (e.g. sys/path); using one should
+// be a deliberate choice signalled by the explicit `sys/` prefix in the
+// import path, not a silent rescue when a bare name happens to collide.
+//
+// On a total miss (no sibling, no std fallback) the error uses the
+// sibling-shaped wording — "module %q not found at <path>" — anchored
+// on the user-visible sibling path. The internal std/<name> attempt is
+// suppressed so users who never typed `std/` don't see surprise stdlib
+// wording in the diagnostic.
+func (l *loader) resolveBareImport(importer *Module, decl *syntax.ImportDecl, siblingPath string) (*Module, error) {
+	if fileExists(siblingPath) {
+		return l.loadSibling(importer, decl, siblingPath)
+	}
+	stdDecl := *decl
+	stdDecl.Path = "std/" + decl.Path
+	if target, err := l.loadEmbeddedFamily(importer, &stdDecl, stdFamily); err == nil {
+		return target, nil
+	}
+	return nil, errorAtImport(importer.Path, decl,
+		"module %q not found at %s", decl.Path, displayPath(siblingPath))
+}
+
 // embeddedFamily describes a toolchain-shipped stdlib family — `std/*`
 // or `sys/*` — so loadEmbeddedFamily can resolve either through one
 // code path. New families add an entry to embeddedFamilies; the loader
@@ -428,7 +458,20 @@ type embeddedFamily struct {
 	modulePath func(name string) string
 }
 
-// embeddedFamilies is the registry of toolchain-shipped families.
+// stdFamily and sysFamily are the named family records. stdFamily is
+// also the implicit fall-through target for bare-name imports (see
+// resolveBareImport); sysFamily is *explicit-only* — `sys/<name>` must
+// be spelled out by the user, because the sys/* family contains
+// platform-specific modules whose use should be a deliberate choice,
+// not a silent fall-through.
+var (
+	stdFamily = embeddedFamily{prefix: "std/", label: "stdlib", modulePath: stdlibModulePath}
+	sysFamily = embeddedFamily{prefix: "sys/", label: "sys", modulePath: sysModulePath}
+)
+
+// embeddedFamilies is the registry consulted by prefix-dispatch in
+// resolveImports. Both families resolve via the same loadEmbeddedFamily
+// path; only the bare-import fall-through is std-only.
 //
 // v0.13 carve-out pin for the std/* family: the platform-suffix table
 // (`_macos.zg`, `_linux.zg`) does NOT apply to embedded families.
@@ -441,10 +484,7 @@ type embeddedFamily struct {
 // convention) so future platform-suffix variants can sit alongside
 // mod.zg inside the module's directory; the std/* family keeps its
 // flat <name>.zg layout for v0.5–v0.12 back-compat.
-var embeddedFamilies = []embeddedFamily{
-	{prefix: "std/", label: "stdlib", modulePath: stdlibModulePath},
-	{prefix: "sys/", label: "sys", modulePath: sysModulePath},
-}
+var embeddedFamilies = []embeddedFamily{stdFamily, sysFamily}
 
 // matchEmbeddedFamily returns the family whose prefix matches path, or
 // nil if path is a sibling-import. Empty / malformed paths under a

@@ -324,11 +324,13 @@ func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 }
 
 // TestV08CgenRuntimePresentWithBuiltin — using any v0.8 builtin pulls in
-// the runtime helpers.
+// the runtime helpers. The canary import was math until v0.14 retired
+// the __builtin math shim into pure Zerg; strings is the smallest still-
+// shimmed v0.8 family that exercises the same runtime-wiring path.
 func TestV08CgenRuntimePresentWithBuiltin(t *testing.T) {
 	src := `# requires: v0.8
-import "std/math"
-print math.abs(-1)
+import "std/strings"
+print strings.trim("  hi  ")
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.zg"), []byte(src), 0o644); err != nil {
@@ -339,7 +341,7 @@ print math.abs(-1)
 		t.Fatalf("emit: %v", err)
 	}
 	for _, want := range []string{
-		"static int64_t zerg_math_abs(",
+		"static zerg_str zerg_strings_trim(",
 		"zerg_io_str_or_err",
 		"zerg_strings_split",
 	} {
@@ -356,8 +358,8 @@ print math.abs(-1)
 // shape must be present before the runtime block.
 func TestV08CgenListStrShapeForceMonomorphized(t *testing.T) {
 	src := `# requires: v0.8
-import "std/math"
-print math.abs(-1)
+import "std/strings"
+print strings.trim("  hi  ")
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.zg"), []byte(src), 0o644); err != nil {

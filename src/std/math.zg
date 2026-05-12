@@ -1,0 +1,42 @@
+# requires: v0.8
+#
+# Integer math primitives. Pure-Zerg implementation; no __builtin, no host
+# bridge. Behaviour is pinned by docs/STDLIB.md and the v0_8/19 + v0_8/20
+# fixtures — the bootstrap_provided/math.zg shim retired in v0.14.
+#
+# Floats are not a Zerg type at v0.14, so every signature is `int`-only.
+
+# Absolute value of `x`. Returns `x` unchanged when `x >= 0`, else `-x`.
+# `abs(INT64_MIN)` is host-defined: two's-complement minimum has no
+# positive counterpart in `int`, so the result wraps under the host
+# arithmetic. Callers that care must guard the input themselves.
+pub fn abs(x: int) -> int {
+	return -x if x < 0
+	return x
+}
+
+# Smaller of `a` and `b`. Ties return `a` (first argument).
+pub fn min(a: int, b: int) -> int {
+	return a if a < b
+	return b
+}
+
+# Larger of `a` and `b`. Ties return `a` (first argument).
+pub fn max(a: int, b: int) -> int {
+	return a if a > b
+	return b
+}
+
+# Greatest common divisor of `a` and `b`. Sign of inputs is discarded
+# before the Euclidean reduction, so `gcd(-12, 18) == 6`. `gcd(0, 0)`
+# returns 0 (the loop never enters); `gcd(a, 0)` returns `abs(a)`.
+pub fn gcd(a: int, b: int) -> int {
+	mut x: int = abs(a)
+	mut y: int = abs(b)
+	for y != 0 {
+		t := x % y
+		x = y
+		y = t
+	}
+	return x
+}

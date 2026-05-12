@@ -37,5 +37,6 @@ func Catalog() []CatalogEntry {
 		{Path: "strings", Description: "String search, transform, and parse helpers."},
 		{Path: "time", Description: "Wall-clock time (now_ms) and sleep_ms."},
 		{Path: "sys/path", Description: "Path-string manipulation as a Path struct."},
+		{Path: "sys/syscall", Description: "Raw BSD syscall traps for macOS arm64."},
 	}
 }

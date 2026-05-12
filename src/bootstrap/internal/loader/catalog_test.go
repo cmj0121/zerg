@@ -11,12 +11,12 @@ import (
 // time we tweak a description.
 
 // TestCatalogNonEmpty sanity-checks that Catalog returns at least the
-// modules shipped today. The lower bound (6) matches the current set;
+// modules shipped today. The lower bound (7) matches the current set;
 // raising it when we add a module is intentional churn.
 func TestCatalogNonEmpty(t *testing.T) {
 	got := Catalog()
-	if len(got) < 6 {
-		t.Fatalf("Catalog returned %d entries, want at least 6", len(got))
+	if len(got) < 7 {
+		t.Fatalf("Catalog returned %d entries, want at least 7", len(got))
 	}
 }
 

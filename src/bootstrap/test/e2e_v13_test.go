@@ -190,8 +190,16 @@ func TestE2EV13Corpus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read entry %s: %v", entry, err)
 			}
+			// asm-bearing programs are build-only because the interpreter
+			// rejects every asm body (v0.13 pin 6). The check walks the
+			// entry source directly AND treats imports of known
+			// asm-bearing stdlib modules (currently sys/syscall) as
+			// transitive build-only triggers — a fixture that calls into
+			// sys.syscall.write inherits the same "no zerg run" rule
+			// even though its own entry has no `asm {` keyword.
 			asmBearing := bytes.Contains(srcBytes, []byte("asm {")) ||
-				bytes.Contains(srcBytes, []byte("asm{"))
+				bytes.Contains(srcBytes, []byte("asm{")) ||
+				bytes.Contains(srcBytes, []byte(`"sys/syscall"`))
 			var runOut []byte
 			if asmBearing {
 				// `zerg run` cannot execute the asm body (pin 6). For

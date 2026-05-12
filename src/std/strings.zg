@@ -1,0 +1,291 @@
+# requires: v0.14
+#
+# strings — UTF-8 string utilities. v0.14 retires the bootstrap_provided
+# __builtin shim in favour of a pure-Zerg implementation built on the
+# v0.14 str ↔ list[byte] bridge primitives (s.bytes(), s.len(),
+# buf.to_str()) plus the existing list mutation surface (push, indexing).
+#
+# Byte semantics throughout: search and slice operate on bytes, not
+# codepoints. ASCII case conversion (to_upper / to_lower) maps
+# 'a'..'z' ↔ 'A'..'Z' and passes non-ASCII bytes through verbatim,
+# matching the v0.10 contract.
+
+pub enum ParseError {
+	Empty,
+	InvalidDigit,
+	Overflow,
+}
+
+# bytes_eq_at returns true iff haystack's bytes starting at hpos exactly
+# match needle. Used internally by starts_with / ends_with / contains /
+# replace / split. Returns false when hpos + needle.len() exceeds the
+# haystack length.
+fn bytes_eq_at(haystack: list[byte], hpos: int, needle: list[byte]) -> bool {
+	nl := needle.len()
+	return false if hpos + nl > haystack.len()
+	for i in 0..nl {
+		if haystack[hpos + i] != needle[i] {
+			return false
+		}
+	}
+	return true
+}
+
+# is_whitespace_byte returns true for the four ASCII whitespace bytes
+# trim accepts: space, tab, newline, carriage return. Other bytes
+# (including non-ASCII whitespace like U+00A0) pass through.
+fn is_whitespace_byte(b: byte) -> bool {
+	return true if b == ' '
+	return true if b == '\t'
+	return true if b == '\n'
+	return true if b == '\r'
+	return false
+}
+
+# byte_to_int_digit converts an ASCII digit byte ('0'..'9') to its int
+# value 0..9. Returns -1 for any non-digit byte. Hand-rolled because
+# Zerg has no byte → int cast at v0.14; parse_int's per-digit
+# accumulator needs the int form for overflow arithmetic.
+fn byte_to_int_digit(b: byte) -> int {
+	return 0 if b == '0'
+	return 1 if b == '1'
+	return 2 if b == '2'
+	return 3 if b == '3'
+	return 4 if b == '4'
+	return 5 if b == '5'
+	return 6 if b == '6'
+	return 7 if b == '7'
+	return 8 if b == '8'
+	return 9 if b == '9'
+	return -1
+}
+
+# Split s on every non-overlapping occurrence of sep. The result always
+# contains at least one element. An empty sep is a runtime panic
+# (`split: empty separator`) per the v0.10-pinned contract — there is
+# no implicit "split into runes / bytes" fallback.
+pub fn split(s: str, sep: str) -> list[str] {
+	if sep.len() == 0 {
+		panic("split: empty separator")
+	}
+	mut parts: list[str] = []
+	sb := s.bytes()
+	seb := sep.bytes()
+	sl := sb.len()
+	pl := seb.len()
+	mut start: int = 0
+	mut i: int = 0
+	for i + pl <= sl {
+		if bytes_eq_at(sb, i, seb) {
+			mut piece: list[byte] = []
+			for k in start..i {
+				push(piece, sb[k])
+			}
+			push(parts, piece.to_str())
+			i = i + pl
+			start = i
+		} else {
+			i = i + 1
+		}
+	}
+	mut tail: list[byte] = []
+	for k in start..sl {
+		push(tail, sb[k])
+	}
+	push(parts, tail.to_str())
+	return parts
+}
+
+# Concatenate parts with sep between adjacent elements. Returns an
+# empty str if parts is empty; returns parts[0] verbatim if parts has
+# one element (no sep applied in the single-element case).
+pub fn join(parts: list[str], sep: str) -> str {
+	pln := parts.len()
+	mut out: list[byte] = []
+	if pln == 0 {
+		return out.to_str()
+	}
+	sepb := sep.bytes()
+	sl := sepb.len()
+	for i in 0..pln {
+		if i > 0 {
+			for k in 0..sl {
+				push(out, sepb[k])
+			}
+		}
+		pb := parts[i].bytes()
+		plen := pb.len()
+		for k in 0..plen {
+			push(out, pb[k])
+		}
+	}
+	return out.to_str()
+}
+
+# Strip ASCII whitespace (space, tab, newline, carriage return) from
+# both ends of s. Internal whitespace is preserved. Returns an empty
+# str if s contains only whitespace.
+pub fn trim(s: str) -> str {
+	sb := s.bytes()
+	sl := sb.len()
+	mut start: int = 0
+	for start < sl {
+		if not is_whitespace_byte(sb[start]) {
+			break
+		}
+		start = start + 1
+	}
+	mut end: int = sl
+	for end > start {
+		if not is_whitespace_byte(sb[end - 1]) {
+			break
+		}
+		end = end - 1
+	}
+	mut out: list[byte] = []
+	for i in start..end {
+		push(out, sb[i])
+	}
+	return out.to_str()
+}
+
+# Return true iff s begins with prefix. An empty prefix always matches.
+pub fn starts_with(s: str, prefix: str) -> bool {
+	return bytes_eq_at(s.bytes(), 0, prefix.bytes())
+}
+
+# Return true iff s ends with suffix. An empty suffix always matches.
+pub fn ends_with(s: str, suffix: str) -> bool {
+	sl := s.len()
+	sufl := suffix.len()
+	return false if sufl > sl
+	return bytes_eq_at(s.bytes(), sl - sufl, suffix.bytes())
+}
+
+# Return true iff needle appears anywhere in s. An empty needle always
+# matches.
+pub fn contains(s: str, needle: str) -> bool {
+	nl := needle.len()
+	return true if nl == 0
+	sl := s.len()
+	return false if nl > sl
+	sb := s.bytes()
+	nb := needle.bytes()
+	last := sl - nl
+	for i in 0..(last + 1) {
+		return true if bytes_eq_at(sb, i, nb)
+	}
+	return false
+}
+
+# Replace every non-overlapping occurrence of old in s with new. If
+# old is empty, s is returned unchanged (no infinite-empty-insert).
+pub fn replace(s: str, old: str, new: str) -> str {
+	sb := s.bytes()
+	ob := old.bytes()
+	nb := new.bytes()
+	sl := sb.len()
+	ol := ob.len()
+	nl := nb.len()
+	if ol == 0 {
+		return s
+	}
+	mut out: list[byte] = []
+	mut i: int = 0
+	for i < sl {
+		if i + ol <= sl {
+			if bytes_eq_at(sb, i, ob) {
+				for k in 0..nl {
+					push(out, nb[k])
+				}
+				i = i + ol
+				continue
+			}
+		}
+		push(out, sb[i])
+		i = i + 1
+	}
+	return out.to_str()
+}
+
+# Map ASCII lowercase 'a'..'z' to uppercase 'A'..'Z'. Non-ASCII bytes
+# pass through verbatim — multi-byte UTF-8 sequences keep their original
+# bytes so the resulting str's encoding is identical for any non-ASCII
+# content (matches the v0.10 contract).
+pub fn to_upper(s: str) -> str {
+	sb := s.bytes()
+	delta: byte = 'a' - 'A'
+	mut out: list[byte] = []
+	for i in 0..sb.len() {
+		b := sb[i]
+		if b >= 'a' and b <= 'z' {
+			push(out, b - delta)
+		} else {
+			push(out, b)
+		}
+	}
+	return out.to_str()
+}
+
+# Map ASCII uppercase 'A'..'Z' to lowercase 'a'..'z'. Non-ASCII bytes
+# pass through verbatim.
+pub fn to_lower(s: str) -> str {
+	sb := s.bytes()
+	delta: byte = 'a' - 'A'
+	mut out: list[byte] = []
+	for i in 0..sb.len() {
+		b := sb[i]
+		if b >= 'A' and b <= 'Z' {
+			push(out, b + delta)
+		} else {
+			push(out, b)
+		}
+	}
+	return out.to_str()
+}
+
+# Parse s as a base-10 signed integer. Leading and trailing ASCII
+# whitespace is stripped. An optional leading '+' or '-' sets the sign.
+# Errors:
+#   - Empty after whitespace-trim → ParseError.Empty
+#   - Sign with no digits, or any non-digit byte → ParseError.InvalidDigit
+#   - Magnitude exceeds the positive int range → ParseError.Overflow
+#
+# The negative-INT64_MIN edge case parses as Overflow rather than the
+# representable -9223372036854775808; Zerg has no unsigned wider type
+# to carry the magnitude through the overflow check. Matches the
+# pre-v0.14 C builtin's bucket for any input that exceeds 9.22e18.
+pub fn parse_int(s: str) -> Result[int, ParseError] {
+	t := trim(s)
+	tb := t.bytes()
+	tl := tb.len()
+	return Result.Err(ParseError.Empty) if tl == 0
+	mut i: int = 0
+	mut negative: bool = false
+	if tb[0] == '-' {
+		negative = true
+		i = 1
+	} elif tb[0] == '+' {
+		i = 1
+	}
+	return Result.Err(ParseError.InvalidDigit) if i >= tl
+	int_max: int = 9223372036854775807
+	mut acc: int = 0
+	for i < tl {
+		b := tb[i]
+		if b < '0' or b > '9' {
+			return Result.Err(ParseError.InvalidDigit)
+		}
+		digit := byte_to_int_digit(b)
+		# Pre-multiply overflow check: a future acc*10 + digit must
+		# fit in int_max. The classic rearrangement avoids the
+		# multiply that would itself overflow.
+		if acc > (int_max - digit) / 10 {
+			return Result.Err(ParseError.Overflow)
+		}
+		acc = acc * 10 + digit
+		i = i + 1
+	}
+	return Result.Ok(-acc) if negative
+	return Result.Ok(acc)
+}

@@ -477,10 +477,12 @@ print o
 	out := mustEmit(t, src)
 	srcLen := len(src)
 	emitLen := len(out)
-	// v0.11 retired the `let` keyword from binding statements, shrinking
-	// representative test sources by ~10%. The emitted C is unchanged; the
-	// guard ratio is bumped to keep the sanity-check intent (not bloat).
-	const ratio = 55
+	// Ratio bumps when the always-emitted runtime gains a small helper.
+	// v0.11 bumped from 50 → 55 when `let` was retired from binding
+	// statements (representative sources shrank ~10%). v0.14 bumps
+	// 55 → 60 with the addition of zerg_panic to the always-emitted
+	// runtime block. The intent is sanity-check, not bloat.
+	const ratio = 60
 	if emitLen > srcLen*ratio {
 		t.Errorf("emitted size %d exceeds %d× source size %d (%d > %d)",
 			emitLen, ratio, srcLen, emitLen, srcLen*ratio)

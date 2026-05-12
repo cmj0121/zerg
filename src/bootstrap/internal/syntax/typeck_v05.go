@@ -268,6 +268,16 @@ func newChecker() *checker {
 		ret:     tStr,
 		builtin: true,
 	}
+	// v0.14 panic primitive — writes msg to stderr (prefixed with
+	// "zerg: runtime: ") and exits with code 1. Returns never so it
+	// composes with -> never callers. The pure-Zerg strings.zg uses
+	// it for the v0.10-pinned `split: empty separator` panic that
+	// the documented stability promise relies on.
+	c.fns["panic"] = fnSig{
+		params:  []*Type{tStr},
+		ret:     tNever,
+		builtin: true,
+	}
 	// v0.6 Unit 3: per-checker monomorphisation caches. CheckBundle replaces
 	// these with bundle-shared maps in attachBundleMono so cross-module
 	// instances canonicalise to one *Type / *FnDecl.

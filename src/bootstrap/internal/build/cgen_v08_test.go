@@ -323,14 +323,20 @@ func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 	}
 }
 
-// TestV08CgenRuntimePresentWithBuiltin — using any v0.8 builtin pulls in
-// the runtime helpers. The canary import was math until v0.14 retired
-// the __builtin math shim into pure Zerg; strings is the smallest still-
-// shimmed v0.8 family that exercises the same runtime-wiring path.
+// TestV08CgenRuntimePresentWithBuiltin — using any v0.8 builtin pulls
+// in the runtime helpers. Canary churned through versions: math →
+// strings → io. v0.14 retired the math and strings shims into pure
+// Zerg; io stays shimmed, so io.read_file is the smallest still-v0.8-
+// __builtin call that exercises the same runtime-wiring path. When io
+// also moves to pure Zerg, this canary should switch to whichever
+// v0.8 module still ships a __builtin (os / time at minimum).
 func TestV08CgenRuntimePresentWithBuiltin(t *testing.T) {
 	src := `# requires: v0.8
-import "std/strings"
-print strings.trim("  hi  ")
+import "std/io"
+match io.read_file("none") {
+    Result.Ok(_) => print "ok"
+    Result.Err(_) => print "err"
+}
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.zg"), []byte(src), 0o644); err != nil {
@@ -341,7 +347,7 @@ print strings.trim("  hi  ")
 		t.Fatalf("emit: %v", err)
 	}
 	for _, want := range []string{
-		"static zerg_str zerg_strings_trim(",
+		"static zerg_io_str_or_err zerg_io_read_file(",
 		"zerg_io_str_or_err",
 		"zerg_strings_split",
 	} {
@@ -358,8 +364,11 @@ print strings.trim("  hi  ")
 // shape must be present before the runtime block.
 func TestV08CgenListStrShapeForceMonomorphized(t *testing.T) {
 	src := `# requires: v0.8
-import "std/strings"
-print strings.trim("  hi  ")
+import "std/io"
+match io.read_file("none") {
+    Result.Ok(_) => print "ok"
+    Result.Err(_) => print "err"
+}
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.zg"), []byte(src), 0o644); err != nil {

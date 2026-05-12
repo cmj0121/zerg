@@ -667,7 +667,7 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			// (the str ↔ list[byte] bridge primitives) to the same reserved
 			// set.
 			switch s.Name {
-			case "len", "push", "clone", "bytes", "to_str":
+			case "len", "push", "clone", "bytes", "to_str", "panic":
 				return typeErr(s.Pos, "cannot redefine built-in '%s'", s.Name)
 			}
 			// v0.7: `chan` is reserved as a type-position keyword and `close`

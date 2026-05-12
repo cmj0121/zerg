@@ -1658,6 +1658,12 @@ func (in *interp) evalBinary(e *syntax.BinaryExpr) (Value, error) {
 //     so v0.1 parity holds. Document here so Unit 4 follows suit.
 //   - int % follows the dividend's sign (Go and C99+ agree).
 //   - String + concatenates.
+//   - byte arithmetic uses int64 internally then narrows back to byte with
+//     a 0xFF mask, matching the codegen's uint8_t wrap semantics. The pre-
+//     v0.14 interpreter erroneously dropped through to the float branch
+//     for byte operands (storing 0.0) — pure-Zerg strings.zg's case-
+//     conversion paths need byte arithmetic to round-trip, so this gap is
+//     closed here.
 func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 	switch op {
 	case syntax.BinAdd:
@@ -1667,15 +1673,24 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int + rv.Int), nil
 		}
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int + rv.Int) & 0xFF), nil
+		}
 		return floatVal(lv.Float + rv.Float), nil
 	case syntax.BinSub:
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int - rv.Int), nil
 		}
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int - rv.Int) & 0xFF), nil
+		}
 		return floatVal(lv.Float - rv.Float), nil
 	case syntax.BinMul:
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int * rv.Int), nil
+		}
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int * rv.Int) & 0xFF), nil
 		}
 		return floatVal(lv.Float * rv.Float), nil
 	case syntax.BinDiv:
@@ -1685,6 +1700,9 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 			// integer division by zero and that is acceptable parity with C
 			// undefined behaviour for the v0.1 corpus.
 			return intVal(lv.Int / rv.Int), nil
+		}
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int / rv.Int) & 0xFF), nil
 		}
 		return floatVal(lv.Float / rv.Float), nil
 	case syntax.BinFloorDiv:
@@ -1697,6 +1715,9 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int / rv.Int), nil
 		}
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int / rv.Int) & 0xFF), nil
+		}
 		// We avoid pulling in math just for Floor here; the float64 trick
 		// `q := a/b; if (q != int64(q)) && (signMismatch) { q-- }` is more
 		// fragile than just using math.Floor. Use math.Floor.
@@ -1705,6 +1726,9 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int % rv.Int), nil
 		}
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int % rv.Int) & 0xFF), nil
+		}
 		// Go has no float64 % at the language level; we are not required to
 		// support it (typeck rejects float % at parse-or-check time? Actually
 		// it does not — see typeck.go BinSub/...,BinMod accepts numeric.
@@ -1712,17 +1736,32 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		// math.Mod equivalent via the standard "a - b*trunc(a/b)" identity.
 		return floatVal(floatMod(lv.Float, rv.Float)), nil
 	case syntax.BinBitAnd:
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int & rv.Int) & 0xFF), nil
+		}
 		return intVal(lv.Int & rv.Int), nil
 	case syntax.BinBitOr:
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int | rv.Int) & 0xFF), nil
+		}
 		return intVal(lv.Int | rv.Int), nil
 	case syntax.BinBitXor:
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int ^ rv.Int) & 0xFF), nil
+		}
 		return intVal(lv.Int ^ rv.Int), nil
 	case syntax.BinShl:
 		// Shift by negative amounts is undefined in C; typeck does not catch
 		// it. Go panics on negative shift count in some Go versions; we let
 		// the runtime decide rather than synthesising a specific error.
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int << uint64(rv.Int)) & 0xFF), nil
+		}
 		return intVal(lv.Int << uint64(rv.Int)), nil
 	case syntax.BinShr:
+		if lv.Type == syntax.TByte() {
+			return byteVal((lv.Int >> uint64(rv.Int)) & 0xFF), nil
+		}
 		return intVal(lv.Int >> uint64(rv.Int)), nil
 	case syntax.BinEq:
 		eq, err := eqValues(lv, rv)
@@ -1850,6 +1889,12 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	}
 	if ident.Name == "to_str" {
 		return in.evalListByteToStr(e)
+	}
+	// v0.14 panic(msg) — writes "zerg: runtime: <msg>\n" to stderr
+	// and exits with code 1. Surfaces as a non-recoverable runtime
+	// failure — never returns to the caller.
+	if ident.Name == "panic" {
+		return in.evalPanic(e)
 	}
 	// v0.6: typeck stamps e.Specialised on calls to generic fns with the
 	// monomorphised FnDecl clone. Body type-refs in the clone resolve to
@@ -2045,6 +2090,29 @@ func (in *interp) evalStrBytes(e *syntax.CallExpr) (Value, error) {
 		out = append(out, byteVal(int64(v.Str[i])))
 	}
 	return listVal(syntax.TByte(), out), nil
+}
+
+// evalPanic implements `panic(msg)` — surfaces the message as a Go
+// error that the eval chain bubbles up to the CLI / test harness. The
+// build half writes "zerg: runtime: <msg>\n" to stderr via the
+// always-emitted zerg_panic helper and exits with code 1; the interp
+// half lets the host print the returned error before exiting (the CLI
+// driver wraps eval errors with the "runtime error at <pos>:" prefix
+// for source-locatable diagnostics). Both halves' stderr output ends
+// up containing the original `msg` text, which is what the v0.10-
+// pinned stability tests check for.
+func (in *interp) evalPanic(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: panic expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeStr {
+		return Value{}, fmt.Errorf("internal: panic arg must be str, got %s at %s", v.Type, e.Pos)
+	}
+	return Value{}, fmt.Errorf("runtime error at %s: %s", e.Pos, v.Str)
 }
 
 // evalListByteToStr implements `to_str(buf)` — the v0.14 list[byte] → str

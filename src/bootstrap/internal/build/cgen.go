@@ -3456,6 +3456,20 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		}
 		return fmt.Sprintf("zerg_list_uint8_t_to_str(%s)", argS), nil
 	}
+	if ident.Name == "panic" {
+		// v0.14 panic(msg) — writes "zerg: runtime: <msg>\n" to stderr
+		// and exits with code 1. The runtime helper zerg_panic is in
+		// the always-emitted runtime block (runtime.go); typeck pins
+		// the arg as exactly one str.
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: panic expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("zerg_panic(%s)", argS), nil
+	}
 	if ident.Name == "clone" {
 		// clone(x) returns a fresh deep copy of its composite argument.
 		// typeck rejects primitives; the borrow checker has confirmed the

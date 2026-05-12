@@ -91,6 +91,22 @@ you can paste a function body, a `for` block, a `struct`/`enum`/`spec`/`impl` de
 `match` arm at a time. Bindings persist across lines within a session. `import` is not admitted
 at the REPL.
 
+## Module resolution
+
+`import "foo"` is resolved by the loader using a prefix dispatch:
+
+| Prefix        | Source                     | Notes                                                  |
+| ------------- | -------------------------- | ------------------------------------------------------ |
+| bare `<name>` | `<importer-dir>/<name>.zg` | Same-repo sibling.                                     |
+| `std/<name>`  | `src/std/<name>.zg`        | Pure-Zerg stdlib (flat-file).                          |
+|               | bootstrap / runtime        | The toolchain's provided implementation of the stdlib. |
+
+When a `std/<name>` module is not present on disk, the loader falls through to the
+toolchain's built-in implementation — the bootstrap currently provides syscall-shaped
+primitives (file I/O, env/argv, exit, clock) so the language is self-describing before
+the self-hosted runtime ships. The `sys/<name>` prefix follows the same rule, resolving
+against `src/std/sys/<name>/mod.zg` for platform-specific modules such as `sys/path`.
+
 ## DDD (Dream-Driven Development)
 
 This project is based on the DDD (dream-driven development) methodology which means

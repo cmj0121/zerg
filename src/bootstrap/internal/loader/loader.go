@@ -462,15 +462,18 @@ func matchEmbeddedFamily(path string) *embeddedFamily {
 
 // loadEmbeddedFamily resolves a `<prefix><name>` import against the
 // on-disk stdlib tree (see stdlibRoot in stdlib_root.go) using the
-// family-supplied modulePath builder. Misses, or any name that fails
-// the v0.5 identifier rule for the post-prefix component, surface as a
-// uniform "<label> module not found" diagnostic anchored on decl. The
-// stdlib-file parser flag is used so `__builtin <ident>` markers parse
-// — every toolchain-shipped module needs the same treatment.
+// family-supplied modulePath builder. When the on-disk read misses,
+// the loader falls through to stdlibFallback — the bootstrap-provided
+// built-in copy of the stdlib — before surfacing the uniform
+// "<label> module not found" diagnostic. The stdlib-file parser flag
+// is used so `__builtin <ident>` markers parse regardless of whether
+// the source came from disk or fallback.
 //
-// Leading-underscore names are reserved for internal scaffolding files
-// (e.g. `_placeholder.zg`) and rejected with the same "not found"
-// wording so they stay invisible to user code.
+// Names that fail the v0.5 identifier rule, and leading-underscore
+// names (reserved for internal scaffolding files like
+// `_placeholder.zg`), short-circuit to the not-found diagnostic
+// without consulting either disk or fallback so they stay invisible
+// to user code.
 func (l *loader) loadEmbeddedFamily(importer *Module, decl *syntax.ImportDecl, fam embeddedFamily) (*Module, error) {
 	name := strings.TrimPrefix(decl.Path, fam.prefix)
 	if name == "" || strings.HasPrefix(name, "_") || !isValidIdentifier(name) {
@@ -486,8 +489,12 @@ func (l *loader) loadEmbeddedFamily(importer *Module, decl *syntax.ImportDecl, f
 	}
 	src, err := os.ReadFile(diskPath)
 	if err != nil {
-		return nil, errorAtImport(importer.Path, decl,
-			"%s module not found: %s", fam.label, decl.Path)
+		fallback, ok := stdlibFallback(fam.label, name)
+		if !ok {
+			return nil, errorAtImport(importer.Path, decl,
+				"%s module not found: %s", fam.label, decl.Path)
+		}
+		src = fallback
 	}
 	if err := checkRequiresImport(importer.Path, decl, diskPath, src); err != nil {
 		return nil, err

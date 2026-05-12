@@ -64,27 +64,82 @@ func stdlibModulePath(name string) string {
 	return "std/" + name + ".zg"
 }
 
+// sysModulePathProber is the embed-probe function used by sysModulePath
+// when ZERG_STDLIB is unset. Defined as a function variable (rather
+// than calling defaultStdlibFallback directly) so the on-disk and
+// virtual paths share the same layout-resolution rule. Tests that need
+// to override embed-side behaviour swap this through stdlib_fallback's
+// SetStdlibFallbackForTest seam.
+var sysModulePathProber = func(name string) string {
+	if _, ok := readEmbeddedRoots("sys/" + name + ".zg"); ok {
+		return "sys/" + name + ".zg"
+	}
+	if variant := sysPlatformVariantName(); variant != "" {
+		specific := "sys/" + name + "/mod_" + variant + ".zg"
+		if _, ok := readEmbeddedRoots(specific); ok {
+			return specific
+		}
+	}
+	return "sys/" + name + "/mod.zg"
+}
+
 // sysModulePath returns the on-disk path for a `sys/<name>` import.
-// Same disk/virtual duality as stdlibModulePath; sys/* uses the
-// directory-with-mod.zg layout (Rust's mod.rs convention).
+// Same disk/virtual duality as stdlibModulePath. Layout selection is
+// per-module: the loader probes three forms and picks whichever exists.
 //
-// v0.14 per-host selection: when $ZERG_STDLIB is set, the lookup
-// prefers `sys/<name>/mod_<goos>_<goarch>.zg` on hosts whose pair is
-// recognised, falling back to `sys/<name>/mod.zg` when no such file
-// exists on disk. The virtual-path branch (ZERG_STDLIB unset) returns
-// the generic mod.zg sentinel; the embedded fallback chain handles
-// the variant lookup itself (see defaultStdlibFallback).
+// Resolution order:
+//
+//  1. `sys/<name>.zg`                                — flat single-file
+//                                                      layout. Right for
+//                                                      platform-neutral
+//                                                      modules with no
+//                                                      per-host shape
+//                                                      (sys/path is the
+//                                                      first example).
+//  2. `sys/<name>/mod_<goos>_<goarch>.zg`           — per-host variant.
+//                                                      Right for modules
+//                                                      with one file per
+//                                                      target tuple
+//                                                      (sys/syscall).
+//  3. `sys/<name>/mod.zg`                            — directory with a
+//                                                      generic body.
+//                                                      Right for modules
+//                                                      that want a
+//                                                      common base plus
+//                                                      optional per-host
+//                                                      overrides; the
+//                                                      generic body is
+//                                                      the no-variant
+//                                                      fall-through.
+//
+// A module that has BOTH flat (`sys/<name>.zg`) AND a directory
+// (`sys/<name>/`) is an authoring error — this resolver silently
+// prefers the flat form, but a follow-up sanity pass at module-graph
+// load time could reject it explicitly.
+//
+// The virtual-path branch (ZERG_STDLIB unset) returns the generic
+// `sys/<name>/mod.zg` sentinel that os.ReadFile will miss; the
+// embedded fallback chain (defaultStdlibFallback) runs its own three-
+// way probe over the embedded FS.
 func sysModulePath(name string) string {
 	if root := stdlibRoot(); root != "" {
+		flat := filepath.Join(root, "sys", name+".zg")
+		if fileExists(flat) {
+			return flat
+		}
+		dir := filepath.Join(root, "sys", name)
 		if variant := sysPlatformVariantName(); variant != "" {
-			specific := filepath.Join(root, "sys", name, "mod_"+variant+".zg")
+			specific := filepath.Join(dir, "mod_"+variant+".zg")
 			if fileExists(specific) {
 				return specific
 			}
 		}
-		return filepath.Join(root, "sys", name, "mod.zg")
+		return filepath.Join(dir, "mod.zg")
 	}
-	return "sys/" + name + "/mod.zg"
+	// ZERG_STDLIB unset: return the virtual path whose shape matches
+	// the embed's layout for this module, so Target.Path reads as the
+	// actual layout the loader will pull from.
+	return sysModulePathProber(name)
 }
 
 // isDir reports whether path resolves to a directory on disk. Tolerant

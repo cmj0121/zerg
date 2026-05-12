@@ -73,24 +73,31 @@ func SetStdlibFallbackForTest(lookup func(family, name string) ([]byte, bool)) f
 
 // defaultStdlibFallback resolves (family, name) against the two
 // embedded sources, in priority order: src/std/ mirror first, then the
-// bootstrap-provided shims. Each family uses its on-disk layout
-// convention (flat <name>.zg for stdlib, directory-with-mod.zg for
-// sys). An unrecognised family returns (nil, false).
+// bootstrap-provided shims. An unrecognised family returns (nil, false).
 //
-// For the sys/ family, v0.14 adds a per-host variant lookup before the
-// generic mod.zg fall-through: when the host's (GOOS, GOARCH) pair is
-// recognised, the loader first tries `sys/<name>/mod_<goos>_<goarch>.zg`
-// in each embedded root, then falls back to `sys/<name>/mod.zg`. A
-// module like sys/syscall ships only platform-specific variants (no
-// mod.zg) so the lookup either finds the right variant or fails per
-// host; sys/path ships only mod.zg and remains platform-neutral. The
-// fall-back path keeps both styles working from a single loader rule.
+// Layout:
+//   - std/* family is flat: `<name>.zg`.
+//   - sys/* family is per-module — the loader probes three forms in
+//     order and uses whichever exists (matches sysModulePath's on-disk
+//     rule so disk and embed paths agree):
+//
+//        1. sys/<name>.zg                              flat single-file
+//        2. sys/<name>/mod_<goos>_<goarch>.zg          per-host variant
+//        3. sys/<name>/mod.zg                          generic dir body
+//
+//     A module author picks whichever shape fits — sys/path (platform-
+//     neutral, single file) uses form 1; sys/syscall (per-host
+//     implementations) uses form 2; a module with shared base + opt-
+//     in per-host overrides uses 2+3.
 func defaultStdlibFallback(family, name string) ([]byte, bool) {
 	switch family {
 	case "stdlib":
 		path := name + ".zg"
 		return readEmbeddedRoots(path)
 	case "sys":
+		if content, ok := readEmbeddedRoots("sys/" + name + ".zg"); ok {
+			return content, true
+		}
 		if variant := sysPlatformVariantName(); variant != "" {
 			specific := "sys/" + name + "/mod_" + variant + ".zg"
 			if content, ok := readEmbeddedRoots(specific); ok {

@@ -23,13 +23,15 @@ func TestLoadSysPathResolves(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	ri := findResolvedImport(t, bundle.Entry, "path")
-	if !strings.Contains(ri.Target.Path, "sys/path/mod.zg") &&
-		!strings.Contains(ri.Target.Path, `sys\path\mod.zg`) {
-		t.Errorf("Target.Path = %q, want suffix sys/path/mod.zg", ri.Target.Path)
+	// v0.14 layout refactor: sys/path migrated from sys/path/mod.zg to
+	// the flat sys/path.zg form. The loader's per-module resolution
+	// picks whichever layout the module ships, so this test pins the
+	// flat-form path to lock in the migration. sys/syscall (still
+	// dir-with-per-host-variants) is tested separately.
+	if !strings.Contains(ri.Target.Path, "sys/path.zg") &&
+		!strings.Contains(ri.Target.Path, `sys\path.zg`) {
+		t.Errorf("Target.Path = %q, want suffix sys/path.zg", ri.Target.Path)
 	}
-	// v0.14 binds the short-name to `path`, not `path/mod` — cycle
-	// diagnostics name modules by short-name and `path/mod.zg imports …`
-	// would read oddly. The post-prefix component is the canonical name.
 	if ri.Target.ShortName != "path" {
 		t.Errorf("Target.ShortName = %q, want %q", ri.Target.ShortName, "path")
 	}
@@ -212,6 +214,59 @@ func TestSysModulePathFallsBackToModZg(t *testing.T) {
 	got := sysModulePath("neutral")
 	if !strings.HasSuffix(got, filepath.Join("sys", "neutral", "mod.zg")) {
 		t.Errorf("sysModulePath = %q, want suffix sys/neutral/mod.zg", got)
+	}
+}
+
+// v0.14 layout refactor: sysModulePath probes three forms — flat
+// sys/<name>.zg, sys/<name>/mod_<host>.zg, sys/<name>/mod.zg — and
+// uses whichever the module ships. The flat form is the simplest
+// shape, right for platform-neutral single-file modules.
+func TestSysModulePathPrefersFlat(t *testing.T) {
+	dir := t.TempDir()
+	restoreStdlib := SetStdlibRootForTest(dir)
+	defer restoreStdlib()
+	restoreGoos := SetHostPlatformForTest("macos")
+	defer restoreGoos()
+	restoreGoarch := SetHostArchForTest("arm64")
+	defer restoreGoarch()
+
+	if err := os.MkdirAll(filepath.Join(dir, "sys"), 0o755); err != nil {
+		t.Fatalf("mkdir sys: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "sys"), "flatmod.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 7\n}\n")
+
+	got := sysModulePath("flatmod")
+	if !strings.HasSuffix(got, filepath.Join("sys", "flatmod.zg")) {
+		t.Errorf("sysModulePath = %q, want suffix sys/flatmod.zg", got)
+	}
+}
+
+// When a module ships BOTH flat sys/<name>.zg AND a dir sys/<name>/,
+// the resolver prefers the flat form silently. A future authoring
+// rule may reject the ambiguity outright; this test pins the
+// preference until that rule lands.
+func TestSysModulePathFlatBeatsDir(t *testing.T) {
+	dir := t.TempDir()
+	restoreStdlib := SetStdlibRootForTest(dir)
+	defer restoreStdlib()
+	restoreGoos := SetHostPlatformForTest("macos")
+	defer restoreGoos()
+	restoreGoarch := SetHostArchForTest("arm64")
+	defer restoreGoarch()
+
+	// Both forms present.
+	if err := os.MkdirAll(filepath.Join(dir, "sys", "ambig"), 0o755); err != nil {
+		t.Fatalf("mkdir sys/ambig: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "sys"), "ambig.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 1\n}\n")
+	writeFile(t, filepath.Join(dir, "sys", "ambig"), "mod.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 2\n}\n")
+
+	got := sysModulePath("ambig")
+	if !strings.HasSuffix(got, filepath.Join("sys", "ambig.zg")) {
+		t.Errorf("sysModulePath = %q, want flat sys/ambig.zg to win over sys/ambig/mod.zg", got)
 	}
 }
 

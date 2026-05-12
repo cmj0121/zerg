@@ -48,8 +48,8 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 ## Building & running
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C
-and shelling out to the system C compiler. The toolchain ships four subcommands: `zerg run`,
-`zerg build`, `zerg fmt`, and `zerg repl`.
+and shelling out to the system C compiler. The toolchain ships five subcommands: `zerg run`,
+`zerg build`, `zerg fmt`, `zerg repl`, and `zerg stdlib`.
 
 ### Prerequisites
 
@@ -90,6 +90,14 @@ This produces `src/bootstrap/bin/zerg`.
 you can paste a function body, a `for` block, a `struct`/`enum`/`spec`/`impl` declaration, or a
 `match` arm at a time. Bindings persist across lines within a session. `import` is not admitted
 at the REPL.
+
+### Inspect the stdlib
+
+```sh
+./src/bootstrap/bin/zerg stdlib
+```
+
+Prints the catalog of toolchain-supported modules with a one-line description each.
 
 ## Module resolution
 

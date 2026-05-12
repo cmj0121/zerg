@@ -28,10 +28,11 @@ type cli struct {
 	Verbose int              `short:"v" type:"counter" help:"Enable diagnostic logging (-v info, -vv debug, -vvv trace)."`
 	Version kong.VersionFlag `name:"version" help:"Print version and exit."`
 
-	Run   runCmd   `cmd:"" help:"Interpret a .zg source file."`
-	Build buildCmd `cmd:"" help:"Compile a .zg source file to a native binary in CWD."`
-	Fmt   fmtCmd   `cmd:"" help:"Format .zg source files (canonical style)."`
-	Repl  replCmd  `cmd:"" help:"Start the interactive REPL."`
+	Run    runCmd    `cmd:"" help:"Interpret a .zg source file."`
+	Build  buildCmd  `cmd:"" help:"Compile a .zg source file to a native binary in CWD."`
+	Fmt    fmtCmd    `cmd:"" help:"Format .zg source files (canonical style)."`
+	Repl   replCmd   `cmd:"" help:"Start the interactive REPL."`
+	Stdlib stdlibCmd `cmd:"" help:"List supported stdlib modules with short descriptions."`
 }
 
 type runCmd struct {

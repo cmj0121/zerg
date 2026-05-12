@@ -1,0 +1,27 @@
+# requires: v0.13
+#
+# Eight spawns coexist with inline asm. Each spawn picks one byte from
+# `ids` and writes "<id>\n" to stdout via the write(2) syscall. The
+# spawn-interleave makes the line order nondeterministic; the harness
+# sorts stdout lines before comparing to the golden, so the test pins
+# the multiset of ids rather than a specific schedule.
+
+ids: list[byte] = ['0', '1', '2', '3', '4', '5', '6', '7']
+
+wg := wait_group()
+wg.add(8)
+for i in 0..8 {
+	spawn fn() {
+		defer wg.done()
+		my_id: byte = ids[i]
+		msg: list[byte] = [my_id, '\n']
+		asm {
+			mov x0, #1
+			mov x1, ${msg}
+			mov x2, #2
+			mov x16, #4
+			svc #0x80
+		}
+	}()
+}
+wg.wait()

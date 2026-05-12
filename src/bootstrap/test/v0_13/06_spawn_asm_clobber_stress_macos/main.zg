@@ -1,0 +1,70 @@
+# requires: v0.13
+#
+# Clobber stress: each of 16 spawns touches every arm64 caller-saved
+# GPR and FP/SIMD register with a sentinel pattern *before* its
+# write(2) syscall. The conservative clobber set declared by the cgen
+# (PLAN pin 7) tells GCC about the churn — if any register in the set
+# were missing, the C compiler would have used it for a live value and
+# the sentinel write would corrupt that value, surfacing as a missing
+# id, a process abort, or wrong byte on stdout.
+#
+# The schedule is nondeterministic; the harness sorts stdout lines
+# before comparing, so the test pins the multiset of ids (one line per
+# spawn) rather than a specific interleave.
+
+ids: list[byte] = ['0', '1', '2', '3', '4', '5', '6', '7',
+                   '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
+
+wg := wait_group()
+wg.add(16)
+for i in 0..16 {
+	spawn fn() {
+		defer wg.done()
+		my_id: byte = ids[i]
+		msg: list[byte] = [my_id, '\n']
+		asm {
+			# Stomp every caller-saved x-reg with a sentinel. The
+			# clobber list in PLAN pin 7 names every one of these as
+			# clobbered, so GCC will avoid keeping a live value here
+			# across the asm boundary.
+			mov x2, #0xdead
+			mov x3, #0xdead
+			mov x4, #0xdead
+			mov x5, #0xdead
+			mov x6, #0xdead
+			mov x7, #0xdead
+			mov x8, #0xdead
+			mov x9, #0xdead
+			mov x10, #0xdead
+			mov x11, #0xdead
+			mov x12, #0xdead
+			mov x13, #0xdead
+			mov x14, #0xdead
+			mov x15, #0xdead
+			mov x17, #0xdead
+			# Stomp the caller-saved v-regs (16b lane fill with 0xab).
+			movi v0.16b, #0xab
+			movi v1.16b, #0xab
+			movi v2.16b, #0xab
+			movi v3.16b, #0xab
+			movi v4.16b, #0xab
+			movi v5.16b, #0xab
+			movi v6.16b, #0xab
+			movi v7.16b, #0xab
+			movi v16.16b, #0xab
+			movi v17.16b, #0xab
+			movi v31.16b, #0xab
+			# Finally, the syscall — overwriting the sentinels in
+			# x0/x1/x2/x16 with the real args. If any register the
+			# compiler depended on was *not* in the clobber list, the
+			# surrounding frame would be corrupt and ${msg}'s pointer
+			# (passed as %0) would not survive to this point.
+			mov x0, #1
+			mov x1, ${msg}
+			mov x2, #2
+			mov x16, #4
+			svc #0x80
+		}
+	}()
+}
+wg.wait()

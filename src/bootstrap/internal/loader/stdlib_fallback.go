@@ -76,16 +76,37 @@ func SetStdlibFallbackForTest(lookup func(family, name string) ([]byte, bool)) f
 // bootstrap-provided shims. Each family uses its on-disk layout
 // convention (flat <name>.zg for stdlib, directory-with-mod.zg for
 // sys). An unrecognised family returns (nil, false).
+//
+// For the sys/ family, v0.14 adds a per-host variant lookup before the
+// generic mod.zg fall-through: when the host's (GOOS, GOARCH) pair is
+// recognised, the loader first tries `sys/<name>/mod_<goos>_<goarch>.zg`
+// in each embedded root, then falls back to `sys/<name>/mod.zg`. A
+// module like sys/syscall ships only platform-specific variants (no
+// mod.zg) so the lookup either finds the right variant or fails per
+// host; sys/path ships only mod.zg and remains platform-neutral. The
+// fall-back path keeps both styles working from a single loader rule.
 func defaultStdlibFallback(family, name string) ([]byte, bool) {
-	var path string
 	switch family {
 	case "stdlib":
-		path = name + ".zg"
+		path := name + ".zg"
+		return readEmbeddedRoots(path)
 	case "sys":
-		path = "sys/" + name + "/mod.zg"
+		if variant := sysPlatformVariantName(); variant != "" {
+			specific := "sys/" + name + "/mod_" + variant + ".zg"
+			if content, ok := readEmbeddedRoots(specific); ok {
+				return content, true
+			}
+		}
+		return readEmbeddedRoots("sys/" + name + "/mod.zg")
 	default:
 		return nil, false
 	}
+}
+
+// readEmbeddedRoots tries the embedded roots in priority order and
+// returns the first hit. Factored out so the sys/ family can call it
+// twice (variant lookup then generic) without duplicating the loop.
+func readEmbeddedRoots(path string) ([]byte, bool) {
 	for _, root := range []fs.FS{embeddedStdlibRoot, bootstrapProvidedRoot} {
 		if content, err := fs.ReadFile(root, path); err == nil {
 			return content, true

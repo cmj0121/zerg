@@ -2,6 +2,11 @@
 #
 # sys/syscall — raw BSD syscall traps for macOS arm64.
 #
+# The v0.14 loader picks this file via the per-host variant rule on a
+# macOS arm64 host (runtime.GOOS=darwin → "macos", runtime.GOARCH=arm64).
+# The macOS amd64 sibling lives in mod_macos_amd64.zg; sys/syscall has
+# no generic mod.zg because every implementation is target-specific.
+#
 # Each wrapper lowers to a single `svc #0x80` inline-asm block. The
 # v0.14 mut-output-operand surface surfaces the kernel's x0 return into
 # a Zerg `mut int`, and a follow-up `cset` reads the carry flag (NZCV.C)
@@ -15,11 +20,6 @@
 #     on `result < 0`. This matches the convention Linux's signed-int
 #     syscall returns use; macOS's native (errno + carry-flag) shape is
 #     normalised here so std/io / std/os see a uniform surface.
-#
-# Platform: macOS arm64 only. Inline asm itself is gated to this target
-# at the compiler level (v0.13 PLAN pin 1); this module inherits that
-# gate. Linux + x86_64 ports land once the v0.15 corpus gains the
-# matching fixtures and the compiler grows a per-target asm surface.
 #
 # Surface is intentionally minimal — five wrappers cover the I/O
 # critical path used by std/io, std/os.exit, and any pure-Zerg program

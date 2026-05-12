@@ -67,8 +67,21 @@ func stdlibModulePath(name string) string {
 // sysModulePath returns the on-disk path for a `sys/<name>` import.
 // Same disk/virtual duality as stdlibModulePath; sys/* uses the
 // directory-with-mod.zg layout (Rust's mod.rs convention).
+//
+// v0.14 per-host selection: when $ZERG_STDLIB is set, the lookup
+// prefers `sys/<name>/mod_<goos>_<goarch>.zg` on hosts whose pair is
+// recognised, falling back to `sys/<name>/mod.zg` when no such file
+// exists on disk. The virtual-path branch (ZERG_STDLIB unset) returns
+// the generic mod.zg sentinel; the embedded fallback chain handles
+// the variant lookup itself (see defaultStdlibFallback).
 func sysModulePath(name string) string {
 	if root := stdlibRoot(); root != "" {
+		if variant := sysPlatformVariantName(); variant != "" {
+			specific := filepath.Join(root, "sys", name, "mod_"+variant+".zg")
+			if fileExists(specific) {
+				return specific
+			}
+		}
 		return filepath.Join(root, "sys", name, "mod.zg")
 	}
 	return "sys/" + name + "/mod.zg"

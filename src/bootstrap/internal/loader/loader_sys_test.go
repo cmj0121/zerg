@@ -7,6 +7,8 @@
 package loader
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -156,5 +158,85 @@ func TestSysTreeReachable(t *testing.T) {
 	}
 	if len(src) == 0 {
 		t.Fatal("embedded sys/path module has empty source")
+	}
+}
+
+// v0.14 per-host sys/* module selection: on a host whose (goos, goarch)
+// pair matches platformArchs × platformSuffixes, the loader prefers
+// `sys/<name>/mod_<goos>_<goarch>.zg` over the generic `mod.zg`. Tests
+// the on-disk path via $ZERG_STDLIB so the host-override pair drives a
+// real os.ReadFile.
+func TestSysModulePathPrefersHostVariant(t *testing.T) {
+	dir := t.TempDir()
+	restoreStdlib := SetStdlibRootForTest(dir)
+	defer restoreStdlib()
+	restoreGoos := SetHostPlatformForTest("macos")
+	defer restoreGoos()
+	restoreGoarch := SetHostArchForTest("arm64")
+	defer restoreGoarch()
+
+	// Lay down both files; the variant must win.
+	if err := os.MkdirAll(filepath.Join(dir, "sys", "demo"), 0o755); err != nil {
+		t.Fatalf("mkdir sys/demo: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "sys", "demo"), "mod.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 0\n}\n")
+	writeFile(t, filepath.Join(dir, "sys", "demo"), "mod_macos_arm64.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 1\n}\n")
+
+	got := sysModulePath("demo")
+	if !strings.HasSuffix(got, filepath.Join("sys", "demo", "mod_macos_arm64.zg")) {
+		t.Errorf("sysModulePath = %q, want suffix sys/demo/mod_macos_arm64.zg", got)
+	}
+}
+
+// When only the generic mod.zg exists on disk, sysModulePath falls
+// through to it even if the host has a recognised (goos, goarch). The
+// fallback rule keeps sys/path (platform-neutral mod.zg only) working
+// on every supported host without requiring a per-arch shim.
+func TestSysModulePathFallsBackToModZg(t *testing.T) {
+	dir := t.TempDir()
+	restoreStdlib := SetStdlibRootForTest(dir)
+	defer restoreStdlib()
+	restoreGoos := SetHostPlatformForTest("macos")
+	defer restoreGoos()
+	restoreGoarch := SetHostArchForTest("arm64")
+	defer restoreGoarch()
+
+	if err := os.MkdirAll(filepath.Join(dir, "sys", "neutral"), 0o755); err != nil {
+		t.Fatalf("mkdir sys/neutral: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "sys", "neutral"), "mod.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 0\n}\n")
+
+	got := sysModulePath("neutral")
+	if !strings.HasSuffix(got, filepath.Join("sys", "neutral", "mod.zg")) {
+		t.Errorf("sysModulePath = %q, want suffix sys/neutral/mod.zg", got)
+	}
+}
+
+// An unrecognised host arch (sentinel "none") disables variant
+// resolution entirely — sysModulePath returns the generic mod.zg
+// path regardless of which variant files may exist.
+func TestSysModulePathSkipsVariantOnUnknownHost(t *testing.T) {
+	dir := t.TempDir()
+	restoreStdlib := SetStdlibRootForTest(dir)
+	defer restoreStdlib()
+	restoreGoos := SetHostPlatformForTest("macos")
+	defer restoreGoos()
+	restoreGoarch := SetHostArchForTest("none")
+	defer restoreGoarch()
+
+	if err := os.MkdirAll(filepath.Join(dir, "sys", "demo"), 0o755); err != nil {
+		t.Fatalf("mkdir sys/demo: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "sys", "demo"), "mod.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 0\n}\n")
+	writeFile(t, filepath.Join(dir, "sys", "demo"), "mod_macos_arm64.zg",
+		"# requires: v0.14\npub fn marker() -> int {\n\treturn 1\n}\n")
+
+	got := sysModulePath("demo")
+	if !strings.HasSuffix(got, filepath.Join("sys", "demo", "mod.zg")) {
+		t.Errorf("sysModulePath = %q, want suffix sys/demo/mod.zg (variant skipped on unknown host)", got)
 	}
 }

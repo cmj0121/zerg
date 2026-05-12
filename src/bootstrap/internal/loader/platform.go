@@ -34,6 +34,15 @@ import (
 // hostPlatform()'s switch on runtime.GOOS.
 var platformSuffixes = []string{"macos", "linux"}
 
+// platformArchs is the closed set of arch strings recognized by the
+// v0.14 sys/* per-host module-selection rule (mod_<goos>_<goarch>.zg).
+// Aligns with runtime.GOARCH names so the loader matches on the host
+// string directly. Hosts whose runtime.GOARCH is not in this set get
+// no arch-specific resolution — the loader falls through to the
+// generic mod.zg, and a module that lacks both a matching variant and
+// a mod.zg fails the standard not-found path.
+var platformArchs = []string{"arm64", "amd64"}
+
 // hostPlatformOverride is the test seam for hostPlatform(). Empty in
 // production; set via SetHostPlatformForTest to simulate a chosen host
 // without rebuilding the binary against a different GOOS.
@@ -85,6 +94,55 @@ func SetHostPlatformForTest(s string) func() {
 	prev := hostPlatformOverride
 	hostPlatformOverride = s
 	return func() { hostPlatformOverride = prev }
+}
+
+// hostArchOverride is the test seam for hostArch() (mirror of
+// hostPlatformOverride). Empty in production; the sentinel "none"
+// simulates an unsupported arch (no arch-specific routing), any other
+// non-empty value is used verbatim.
+var hostArchOverride string
+
+// hostArch returns the arch string for the current host: "arm64" on
+// runtime.GOARCH == "arm64", "amd64" on runtime.GOARCH == "amd64", "" on
+// hosts not in platformArchs. Paired with hostPlatform() to form the
+// `mod_<goos>_<goarch>.zg` suffix that selects per-host sys/* module
+// implementations (v0.14).
+func hostArch() string {
+	if hostArchOverride != "" {
+		if hostArchOverride == "none" {
+			return ""
+		}
+		return hostArchOverride
+	}
+	switch runtime.GOARCH {
+	case "arm64":
+		return "arm64"
+	case "amd64":
+		return "amd64"
+	}
+	return ""
+}
+
+// SetHostArchForTest overrides hostArch() for the duration of the
+// returned restore func. Mirrors SetHostPlatformForTest; see there for
+// the sentinel + cleanup convention.
+func SetHostArchForTest(s string) func() {
+	prev := hostArchOverride
+	hostArchOverride = s
+	return func() { hostArchOverride = prev }
+}
+
+// sysPlatformVariantName returns the "<goos>_<goarch>" string used to
+// pick a per-host sys/* module variant (`mod_<variant>.zg`). Returns
+// "" when either hostPlatform or hostArch is unrecognised — callers
+// then skip the variant lookup and fall through to the generic mod.zg.
+func sysPlatformVariantName() string {
+	goos := hostPlatform()
+	goarch := hostArch()
+	if goos == "" || goarch == "" {
+		return ""
+	}
+	return goos + "_" + goarch
 }
 
 // fileSuffixPlatform returns the platform-suffix component of basename

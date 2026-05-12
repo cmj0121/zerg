@@ -47,7 +47,11 @@ func emitV13Asm(t *testing.T, src string) string {
 func TestV13CgenAsmClobberSet(t *testing.T) {
 	// Minimal asm-bearing program: a single empty asm block is enough
 	// because the clobber list is constant — every block emits the same
-	// set, regardless of body content or interp count.
+	// set, regardless of body content or interp count. Force arm64
+	// selection so the assertions hold on any build host (the suite
+	// must stay arch-independent at the Go level even though the
+	// emitted body is arm64).
+	defer SetAsmTargetArchForTest("arm64")()
 	out := emitV13Asm(t, `# requires: v0.13
 asm {
 	nop
@@ -209,6 +213,51 @@ asm {
 	// re-escape `%`, so the literal substring in the C source is `%%`).
 	if !strings.Contains(out, `mov w0, %%w0`) {
 		t.Errorf("expected '%%' doubled in asm template; got:\n%s", out)
+	}
+}
+
+// TestV14CgenAsmClobberSetAmd64 — when the cgen targets amd64, the
+// clobber list switches to the SysV AMD64 caller-saved set instead of
+// the arm64 set. The test forces amd64 selection through the test
+// override so it runs on any build host; the emit assertions check
+// that the amd64 register names appear and that the arm64-specific
+// names (x0..x30) do not leak into an amd64 emit.
+func TestV14CgenAsmClobberSetAmd64(t *testing.T) {
+	defer SetAsmTargetArchForTest("amd64")()
+	out := emitV13Asm(t, `# requires: v0.13
+asm {
+	nop
+}
+`)
+	want := []string{`"memory"`, `"cc"`}
+	for _, r := range []string{"rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"} {
+		want = append(want, `"`+r+`"`)
+	}
+	for i := 0; i <= 15; i++ {
+		want = append(want, `"xmm`+itoa(i)+`"`)
+	}
+	for _, name := range want {
+		if !strings.Contains(out, name) {
+			t.Errorf("amd64 clobber list missing %s in emit:\n%s", name, out)
+		}
+	}
+	// Verify the arm64 set is NOT used on amd64. A regression that
+	// always picks the arm64 list would show x0/x30 here, which would
+	// also surface as a real cc failure on amd64 hosts but is cheaper
+	// to catch through the emit shape.
+	for _, banned := range []string{`"x0"`, `"x30"`, `"v0"`, `"v31"`} {
+		if strings.Contains(out, banned) {
+			t.Errorf("amd64 emit erroneously contains arm64 clobber %s; got:\n%s", banned, out)
+		}
+	}
+	// rbx / rbp / r12..r15 are callee-saved under SysV AMD64 and must
+	// NOT appear in the clobber list (mirror of arm64's x29 user-
+	// preserve contract — a regression that adds them would silently
+	// break frame-pointer unwinding inside debuggers).
+	for _, banned := range []string{`"rbx"`, `"rbp"`, `"r12"`, `"r13"`, `"r14"`, `"r15"`} {
+		if strings.Contains(out, banned) {
+			t.Errorf("amd64 clobber list erroneously contains callee-saved %s; got:\n%s", banned, out)
+		}
 	}
 }
 

@@ -1,0 +1,128 @@
+# requires: v0.14
+#
+# sys/syscall — raw BSD syscall traps for macOS x86_64 (amd64).
+#
+# The v0.14 loader picks this file via the per-host variant rule on a
+# macOS amd64 host (runtime.GOOS=darwin → "macos", runtime.GOARCH=amd64).
+# The macOS arm64 sibling is mod_macos_arm64.zg; the cgen's clobber-set
+# selector switches between the SysV AMD64 caller-saved set and the
+# AAPCS64 set based on the build target's runtime.GOARCH.
+#
+# UNTESTED-ON-DEV-HOST CAVEAT: the original landing was authored on a
+# macOS arm64 dev box, so this file's syscall execution path has not
+# been exercised on an actual amd64 host yet. The cgen emit shape is
+# pinned by TestV14CgenAsmClobberSetAmd64 (the right clobber set lands
+# in the C source) and the syscall conventions below are transcribed
+# from Apple's <sys/syscall.h> + the SysV AMD64 ABI. A regression on a
+# real amd64 host should land as a follow-up bug fix here, not a
+# rewrite — every wrapper has the same skeleton.
+#
+# macOS x86_64 syscall conventions:
+#
+#   - Instruction: `syscall` (NOT `int 0x80` — that's the 32-bit ABI).
+#   - Syscall number in `rax` with the BSD class bit set: BSD syscalls
+#     are `0x2000000 | <num>`. write=0x2000004, read=0x2000003,
+#     open=0x2000005, close=0x2000006, exit=0x2000001.
+#   - Args in `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` (System V AMD64
+#     calling convention with the kernel-side substitution of r10 for
+#     rcx, which the syscall instruction itself clobbers).
+#   - Return in `rax`. Carry flag (RFLAGS.CF) is set on error and
+#     `rax` then carries the errno value. The wrapper lifts CF into a
+#     mut-int via `setc` so the Zerg-level surface stays uniform with
+#     the arm64 sibling.
+#
+# Return convention is identical to the arm64 sibling: success returns
+# the raw kernel result (>= 0); error returns -errno (negative).
+
+# write(fd, buf, len) — write at most `len` bytes from `buf` to `fd`.
+# Returns bytes written on success or -errno on error.
+pub fn write(fd: int, buf: list[byte], len: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov rdi, ${fd}
+		mov rsi, ${buf}
+		mov rdx, ${len}
+		mov rax, 0x2000004
+		syscall
+		setc cl
+		movzx rcx, cl
+		mov ${result}, rax
+		mov ${err_flag}, rcx
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# read(fd, buf, cap) — read up to `cap` bytes from `fd` into `buf`.
+# Returns bytes read on success (0 = EOF) or -errno on error.
+pub fn read(fd: int, buf: list[byte], cap: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov rdi, ${fd}
+		mov rsi, ${buf}
+		mov rdx, ${cap}
+		mov rax, 0x2000003
+		syscall
+		setc cl
+		movzx rcx, cl
+		mov ${result}, rax
+		mov ${err_flag}, rcx
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# open(path, flags, mode) — open a file. `path` must be NUL-terminated.
+# Returns the new fd on success or -errno on error.
+pub fn open(path: list[byte], flags: int, mode: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov rdi, ${path}
+		mov rsi, ${flags}
+		mov rdx, ${mode}
+		mov rax, 0x2000005
+		syscall
+		setc cl
+		movzx rcx, cl
+		mov ${result}, rax
+		mov ${err_flag}, rcx
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# close_fd(fd) — close the file descriptor. Carries the `_fd` suffix
+# because the bare name `close` is reserved for the v0.7 channel-close
+# built-in; see the arm64 sibling for the full disambiguation note.
+# Returns 0 on success or -errno on error.
+pub fn close_fd(fd: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov rdi, ${fd}
+		mov rax, 0x2000006
+		syscall
+		setc cl
+		movzx rcx, cl
+		mov ${result}, rax
+		mov ${err_flag}, rcx
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# exit(code) — terminate the current process. Never returns; the kernel
+# reaps the process before syscall returns to user space. The trailing
+# `for { nop }` satisfies typeck's never-return contract; control never
+# reaches it at runtime.
+pub fn exit(code: int) -> never {
+	asm {
+		mov rdi, ${code}
+		mov rax, 0x2000001
+		syscall
+	}
+	for { nop }
+}

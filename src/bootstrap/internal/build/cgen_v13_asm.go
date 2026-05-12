@@ -2,6 +2,7 @@ package build
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
@@ -65,6 +66,67 @@ var asmClobberGroupsV13ARM64 = func() [][]string {
 		fpHigh,
 	}
 }()
+
+// asmClobberGroupsV14AMD64 names the conservative caller-saved register
+// set for inline asm on x86_64 hosts (System V AMD64 ABI, which is the
+// macOS x86_64 calling convention). Grouped for readability:
+//
+//   - "memory", "cc"
+//   - rax (return / scratch), rcx, rdx, rsi, rdi (arg regs), r8, r9
+//     (arg regs), r10, r11 (caller-saved temporaries)
+//   - xmm0..xmm15 (all caller-saved under SysV AMD64)
+//
+// rbx / rbp / r12..r15 are callee-saved and NOT clobbered. The base
+// pointer (rbp) is the x86_64 analogue of arm64's x29 — user-preserve.
+// A v0.14 inline-asm body that needs rbx / r12..r15 MUST save and
+// restore them itself, same hard rule as arm64's x29 / x30 contract.
+var asmClobberGroupsV14AMD64 = [][]string{
+	{"memory", "cc"},
+	{"rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"},
+	{"xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"},
+	{"xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"},
+}
+
+// asmTargetArchOverride is the test seam for asmTargetArch(). Empty
+// in production; tests use SetAsmTargetArchForTest to force a specific
+// arch and assert the corresponding clobber emit even on a build host
+// of a different arch.
+var asmTargetArchOverride string
+
+// asmTargetArch returns the arch tag that drives clobber selection.
+// Today the cgen targets the host (zerg build invokes the host cc),
+// so runtime.GOARCH is the source of truth; the override hook lets
+// tests assert both arches without rebuilding the binary against a
+// different GOARCH. A future cross-compilation path threads a real
+// target tag through cgen and obsoletes the override.
+func asmTargetArch() string {
+	if asmTargetArchOverride != "" {
+		return asmTargetArchOverride
+	}
+	return runtime.GOARCH
+}
+
+// SetAsmTargetArchForTest overrides asmTargetArch() for the duration
+// of the returned restore func. Mirrors the loader's host overrides;
+// always defer the restore so a panic doesn't leak the override.
+func SetAsmTargetArchForTest(arch string) func() {
+	prev := asmTargetArchOverride
+	asmTargetArchOverride = arch
+	return func() { asmTargetArchOverride = prev }
+}
+
+// asmClobberGroups returns the clobber set appropriate for the build
+// target. Unknown arches fall through to the arm64 set — programs that
+// use asm on such hosts already rejected at the v0.13 PLAN pin 1 gate
+// (the inline-asm surface is documented macOS-arm64-or-amd64-only as
+// of v0.14), so this fall-through is purely defensive and never
+// reached in normal operation.
+func asmClobberGroups() [][]string {
+	if asmTargetArch() == "amd64" {
+		return asmClobberGroupsV14AMD64
+	}
+	return asmClobberGroupsV13ARM64
+}
 
 // emitAsmBlock lowers an AsmBlock into a GCC `__asm__ volatile` statement.
 // Called from cgen.emitStmt. The lowering takes the parser-split chunks
@@ -161,7 +223,8 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 	g.b.WriteString("\n")
 	g.writeIndent()
 	g.b.WriteString(": /* clobbers */\n")
-	for gi, group := range asmClobberGroupsV13ARM64 {
+	clobbers := asmClobberGroups()
+	for gi, group := range clobbers {
 		g.writeIndent()
 		g.b.WriteString("    ")
 		for ri, c := range group {
@@ -170,7 +233,7 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 			}
 			g.b.WriteString(cQuote(c))
 		}
-		if gi < len(asmClobberGroupsV13ARM64)-1 {
+		if gi < len(clobbers)-1 {
 			g.b.WriteString(",")
 		}
 		g.b.WriteString("\n")

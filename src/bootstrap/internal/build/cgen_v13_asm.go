@@ -27,30 +27,35 @@ import (
 // constant clobberListV13ARM64 is exported (lower-cased package-internal)
 // so the cgen unit test can assert every register name appears.
 
-// asmClobbersV13ARM64 names the conservative caller-saved register set
-// the cgen pins for every inline-asm block on macOS arm64. Order matches
-// PLAN pin 7's bullet ordering so a diff against the spec is trivial.
-// Memory and cc come first to mirror the GCC convention.
+// asmClobberGroupsV13ARM64 names the conservative caller-saved register
+// set the cgen pins for every inline-asm block on macOS arm64, grouped
+// for readability in the emit. PLAN pin 7's bullet ordering:
 //
-// Pin 7 explicit set:
 //   - "memory", "cc"
 //   - x0…x17, x30
 //   - v0…v7, v16…v31
 //
 // x29 (fp) is NOT in the set — pin 8 makes it user-preserve.
-var asmClobbersV13ARM64 = func() []string {
-	out := []string{"memory", "cc"}
+var asmClobberGroupsV13ARM64 = func() [][]string {
+	gpr := make([]string, 0, 19)
 	for i := 0; i <= 17; i++ {
-		out = append(out, fmt.Sprintf("x%d", i))
+		gpr = append(gpr, fmt.Sprintf("x%d", i))
 	}
-	out = append(out, "x30")
+	gpr = append(gpr, "x30")
+	fpLow := make([]string, 0, 8)
 	for i := 0; i <= 7; i++ {
-		out = append(out, fmt.Sprintf("v%d", i))
+		fpLow = append(fpLow, fmt.Sprintf("v%d", i))
 	}
+	fpHigh := make([]string, 0, 16)
 	for i := 16; i <= 31; i++ {
-		out = append(out, fmt.Sprintf("v%d", i))
+		fpHigh = append(fpHigh, fmt.Sprintf("v%d", i))
 	}
-	return out
+	return [][]string{
+		{"memory", "cc"},
+		gpr,
+		fpLow,
+		fpHigh,
+	}
 }()
 
 // emitAsmBlock lowers an AsmBlock into a GCC `__asm__ volatile` statement.
@@ -97,10 +102,13 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 	g.b.WriteString("do {\n")
 	g.indent++
 	g.writeIndent()
-	g.b.WriteString("__asm__ volatile (")
-	g.b.WriteString(cQuote(template.String()))
-	g.b.WriteString("\n")
+	g.b.WriteString("__asm__ volatile (\n")
 	g.indent++
+	for _, line := range splitAsmTemplateLines(template.String()) {
+		g.writeIndent()
+		g.b.WriteString(cQuote(line))
+		g.b.WriteString("\n")
+	}
 	g.writeIndent()
 	g.b.WriteString(": /* outputs */\n")
 	g.writeIndent()
@@ -113,14 +121,21 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 	}
 	g.b.WriteString("\n")
 	g.writeIndent()
-	g.b.WriteString(": /* clobbers */")
-	for i, c := range asmClobbersV13ARM64 {
-		if i > 0 {
+	g.b.WriteString(": /* clobbers */\n")
+	for gi, group := range asmClobberGroupsV13ARM64 {
+		g.writeIndent()
+		g.b.WriteString("    ")
+		for ri, c := range group {
+			if ri > 0 {
+				g.b.WriteString(", ")
+			}
+			g.b.WriteString(cQuote(c))
+		}
+		if gi < len(asmClobberGroupsV13ARM64)-1 {
 			g.b.WriteString(",")
 		}
-		fmt.Fprintf(&g.b, " %s", cQuote(c))
+		g.b.WriteString("\n")
 	}
-	g.b.WriteString("\n")
 	g.indent--
 	g.writeIndent()
 	g.b.WriteString(");\n")
@@ -129,6 +144,26 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 	g.b.WriteString("} while (0);\n")
 	_ = s.Pos
 	return nil
+}
+
+// splitAsmTemplateLines breaks the assembled template into one C string
+// literal per source asm line. Each non-final line keeps its trailing `\n`
+// so the assembler still sees identical bytes; a final empty fragment
+// (template ending with `\n`) is dropped so we don't emit a stray `""`.
+// One literal per line lets the emitted C source read like hand-written
+// inline asm and lines up debugger source columns with the user's body.
+func splitAsmTemplateLines(tmpl string) []string {
+	if tmpl == "" {
+		return []string{""}
+	}
+	parts := strings.Split(tmpl, "\n")
+	for i := 0; i < len(parts)-1; i++ {
+		parts[i] += "\n"
+	}
+	if parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return parts
 }
 
 // asmInterpOperand builds the C input-operand expression for one

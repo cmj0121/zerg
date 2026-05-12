@@ -24,7 +24,14 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	Minor = 12
+	// Minor advances to 13 with v0.13 U2 so the lexer's version-gated keyword
+	// (`asm`) activates for sources declaring `# requires: v0.13`. The
+	// user-facing `cliVersion` and the RELEASE.md / LANGUAGE.md entry stay
+	// behind until U6 — Minor is the gate's source of truth, cliVersion is
+	// the version the user reads from `zerg --version`. They diverge by
+	// design during the v0.13 dev window so U2's lexer feature lights up
+	// against the unmodified gate machinery.
+	Minor = 13
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

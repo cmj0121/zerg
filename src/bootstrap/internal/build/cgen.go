@@ -2194,6 +2194,8 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 		return g.emitDefer(s)
 	case *syntax.SelectStmt:
 		return g.emitSelect(s)
+	case *syntax.AsmBlock:
+		return g.emitAsmBlock(s)
 	}
 	return fmt.Errorf("codegen: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }

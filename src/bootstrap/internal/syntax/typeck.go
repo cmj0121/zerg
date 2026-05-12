@@ -1550,6 +1550,8 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		return c.checkDeferStmt(s)
 	case *SelectStmt:
 		return c.checkSelectStmt(s)
+	case *AsmBlock:
+		return c.checkAsmBlock(s)
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }

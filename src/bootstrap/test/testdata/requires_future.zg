@@ -1,0 +1,9 @@
+#! /usr/bin/env zerg
+# requires: v0.14
+#
+# Future-version fixture for TestRequiresGate. The `# requires:` marker
+# is one minor past what the toolchain currently ships, so the standard
+# version-gate diagnostic fires regardless of which unit is in flight.
+# Bump the version on the line above each time a new minor lands.
+
+print "placeholder for the next minor version"

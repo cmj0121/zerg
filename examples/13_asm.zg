@@ -1,5 +1,4 @@
 #! /usr/bin/env zerg
-# requires: v0.13
 #
 # Inline Assembly
 #
@@ -11,7 +10,7 @@
 # {  } block. The ${expr} syntax allows you to interpolate byte values from Zerg variables into the assembly code,
 # which can be useful for passing data from Zerg to the assembly code.
 
-msg: list[byte] = [0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x0A]
+msg: list[byte] = ['h', 'e', 'l', 'l', 'o', '\n']
 
 asm {
 	mov x0, #1            // fd = stdout

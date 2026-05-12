@@ -1,0 +1,6 @@
+# requires: v0.13
+n := 5
+asm {
+	mov x0, ${n}
+	svc #0x80
+}

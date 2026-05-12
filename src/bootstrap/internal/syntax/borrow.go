@@ -470,6 +470,15 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		return c.checkDefer(s)
 	case *SelectStmt:
 		return c.checkSelect(s)
+	case *AsmBlock:
+		// v0.13 inline asm bodies are opaque to the borrow checker at U2.
+		// The body is target-machine assembly — there is no Zerg expression
+		// inside it for the move/share rules to apply to. `${name}` interps
+		// are resolved by U3's typeck binder; once those reference real
+		// scope bindings, the borrow check picks them up the same way it
+		// handles any other expression-position read. Until then, the
+		// AsmBlock contributes no move/share edges to the graph.
+		return nil
 	}
 	return borrowErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }

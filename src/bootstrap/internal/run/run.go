@@ -999,6 +999,13 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		return in.execDefer(s)
 	case *syntax.SelectStmt:
 		return in.execSelect(s)
+	case *syntax.AsmBlock:
+		// v0.13 inline asm runs only under `zerg build` — the interpreter
+		// has no path to execute raw machine code. The diagnostic shape
+		// is fixed by PLAN pin 6 and the position anchors on the `asm`
+		// keyword so the user lands on the exact construct that prevents
+		// `zerg run` from making progress.
+		return fmt.Errorf("%s: inline asm requires 'zerg build' (interpreter cannot execute machine code)", s.Pos)
 	}
 	return fmt.Errorf("internal: unhandled statement %T at %s", stmt, stmt.StmtPos())
 }

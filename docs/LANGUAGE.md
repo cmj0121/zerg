@@ -46,19 +46,21 @@ and `select` arms a bare `_` token also serves as the wildcard.
 
 ### Keywords
 
-The lexer's reserved word set as of v0.12:
+The lexer's reserved word set as of v0.13:
 
 ```text
-and    as     break    const    continue  defer    elif     else
-enum   false  fn       for      if        impl     import   in
-let    loop   match    mut      nil       nop      not      or
-print  pub    return   select   spawn     spec     struct   this
-true   while  xor
+and    as     asm      break    const     continue defer    elif
+else   enum   false    fn       for       if       impl     import
+in     let    loop     match    mut       nil      nop      not
+or     print  pub      return   select    spawn    spec     struct
+this   true   while    xor
 ```
 
 `__builtin` is reserved only inside files whose `# requires:` line is
 `v0.8` or higher and whose path lives under the toolchain-embedded `std/`
-tree.
+tree. `asm` is reserved only inside files whose `# requires:` line is
+`v0.13` or higher; pre-v0.13 sources keep lexing the bareword as `IDENT`
+so existing corpora that named locals `asm` continue to parse.
 
 `let` remains reserved at the lexer level but has **no admitted
 syntactic form** at v0.11: the immutable-binding `let X := …` shape was
@@ -511,6 +513,76 @@ to the inner `T`. Legal only inside a fn whose return type is
 
 `?.` is safe navigation: `obj?.field` yields `Option[U]` for `U` the
 field's type. Chains carry `None` end-to-end.
+
+### Inline assembly (v0.13, macOS arm64 only)
+
+`asm { … }` admits a target-machine assembly body. The body is captured
+verbatim between matching braces; brace counting is string-literal aware
+(`}` inside `"…"` does not close the block). The keyword reserves at
+v0.13; pre-v0.13 sources lex the bareword `asm` as `IDENT` and continue
+to parse.
+
+The interpreter cannot execute machine code. A program containing
+`asm { … }` rejects under `zerg run` with the diagnostic
+
+```text
+inline asm requires 'zerg build' (interpreter cannot execute machine code)
+```
+
+`zerg build` lowers each block to a GCC `__asm__ volatile` statement.
+
+#### `${name}` interpolation
+
+Inside the body, `${name}` is a typed reference to a Zerg binding. `name`
+must resolve to an in-scope binding whose type is one of:
+
+- `byte` — lowered as a register-width input operand (`((uint64_t)z_<name>)`).
+- `list[byte]` — lowered as a pointer to the first byte
+  (`((uintptr_t)z_<name>.data)`).
+
+Any other type rejects at typecheck. `$$` is reserved (no escape for
+literal `$` is defined; if needed in a future version, the rule lifts
+explicitly). Unknown names reject with
+`asm interpolation '${name}' references unknown name`.
+
+#### Conservative clobber set (Darwin arm64 ABI)
+
+Every `asm` block emits the same caller-saved clobber list:
+
+- `"memory"`, `"cc"`
+- GPRs: `x0`–`x17`, `x30` (lr)
+- FP/SIMD: `v0`–`v7`, `v16`–`v31`
+
+`x29` (the frame pointer) is **NOT** clobbered. It is a user-preserve
+register: code inside `asm { … }` MUST NOT modify `x29` or `x30` without
+saving and restoring their values. There is no compiler-level
+enforcement of this contract; a violation produces silent debugger
+breakage (unwind / `bt` chains snap) without any Zerg-level diagnostic.
+
+#### Interaction with the M:N runtime
+
+Asm blocks run synchronously on the calling coroutine's worker. An asm
+body does not span a yield point — the M:N scheduler never invokes
+`swapcontext` while a body is executing. Caller-saved register
+preservation across coroutine yields is handled by the v0.12 runtime
+(the same path the v0.7 corpus exercises) and is unaffected by the
+presence of asm bodies.
+
+A blocking syscall _inside_ an asm body parks the underlying OS worker
+thread, not the calling coroutine — same starvation rule as a tight
+CPU loop without a yield point. Use a Zerg-level wait for coroutine-
+friendly blocking; reserve asm for short, non-blocking sequences.
+
+#### Caveat: raw `svc` syscalls are not a stable Darwin ABI
+
+The shipped `examples/13_asm.zg` uses raw `svc #0x80` traps because the
+existing fixture pre-dated a libc-call lowering. Apple has been clear
+that raw syscall numbers and the trap surface are not stable across
+macOS releases. Programs that need long-term ABI stability should reach
+libc via normal Zerg bindings rather than trap directly. v0.14 is
+expected to migrate the in-tree examples to libc-call lowering; the
+language-level surface (`asm { … }` + `${name}`) is unchanged by that
+migration.
 
 ### Process exit (v0.9)
 

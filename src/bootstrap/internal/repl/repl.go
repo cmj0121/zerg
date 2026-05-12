@@ -25,7 +25,7 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-const banner = "Zerg REPL v0.12 — accepts the v0.12 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time, fmt; v0.11 retired the `let` keyword — use bare `x := expr` for immutable bindings; v0.12 routes spawn/chan/select/wait_group through an M:N green-thread runtime — interpreter unchanged from the user's view)\n" +
+const banner = "Zerg REPL v0.13 — accepts the v0.13 surface (procedural core, composite data, borrow checking, polymorphism, modules, generics, null-safety, concurrency, stdlib, process surface, time, fmt, platform-suffix file resolution, inline assembly via `asm { … }` on macOS arm64; v0.11 retired the `let` keyword — use bare `x := expr` for immutable bindings; v0.12 routes spawn/chan/select/wait_group through an M:N green-thread runtime; v0.13 admits inline asm whose bodies the interpreter cannot execute — `zerg run` rejects asm-bearing programs, `zerg build` is the path)\n" +
 	"Type :exit to quit, :help for syntax\n"
 
 const helpText = "Statements: bare-binding (`x := expr` / `x: T = expr`), mut, const, fn, struct/enum/spec/impl, if/elif/else, for, match, return/break/continue, print, spawn, defer, select. Generics: [T: A + B] on fn/struct/enum/spec/impl. Null-safety: T?, nil, ?, ??, ?.. Concurrency: chan[T], <-, close, for v in ch, anon fn, wait_group. Run :exit to quit.\n"

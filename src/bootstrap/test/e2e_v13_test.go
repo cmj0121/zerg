@@ -33,6 +33,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -61,8 +62,11 @@ func v13RejectsDir(t *testing.T) string {
 }
 
 // listV13Programs returns absolute paths to every program directory under
-// v0_13/, excluding rejects/. Each program must contain main.zg and
-// expected.txt.
+// v0_13/, excluding rejects/. Each program must contain main.zg and at
+// least one golden file — either expected.txt (byte-exact stdout match)
+// or expected_sorted.txt (sort stdout lines before comparing, so spawn-
+// interleaved programs can pin their output multiset without imposing a
+// specific schedule). U5's spawn × asm corpus uses expected_sorted.txt.
 func listV13Programs(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
@@ -81,8 +85,14 @@ func listV13Programs(t *testing.T, root string) []string {
 		if _, err := os.Stat(filepath.Join(dir, "main.zg")); err != nil {
 			t.Fatalf("program %s missing main.zg: %v", dir, err)
 		}
-		if _, err := os.Stat(filepath.Join(dir, "expected.txt")); err != nil {
-			t.Fatalf("program %s missing expected.txt: %v", dir, err)
+		_, exactErr := os.Stat(filepath.Join(dir, "expected.txt"))
+		_, sortedErr := os.Stat(filepath.Join(dir, "expected_sorted.txt"))
+		if exactErr != nil && sortedErr != nil {
+			t.Fatalf("program %s missing expected.txt or expected_sorted.txt: %v / %v",
+				dir, exactErr, sortedErr)
+		}
+		if exactErr == nil && sortedErr == nil {
+			t.Fatalf("program %s has both expected.txt and expected_sorted.txt; pick one", dir)
 		}
 		out = append(out, dir)
 	}
@@ -166,21 +176,46 @@ func TestE2EV13Corpus(t *testing.T) {
 		name := filepath.Base(prog)
 		t.Run(name, func(t *testing.T) {
 			entry := filepath.Join(prog, "main.zg")
-			golden, err := os.ReadFile(filepath.Join(prog, "expected.txt"))
+			golden, sortedCompare, err := readV13Golden(prog)
 			if err != nil {
-				t.Fatalf("read expected.txt: %v", err)
+				t.Fatalf("read golden: %v", err)
 			}
 
-			// `zerg run` half.
-			runOut, runCode, err := captureCmd(binPath, []string{"run", entry}, t.TempDir())
+			// `zerg run` half. v0.13 admits `asm { … }` blocks that the
+			// interpreter cannot execute (pin 6); programs that use asm
+			// are build-only. Detect by scanning the source — the
+			// alternative (a per-program manifest flag) adds a moving
+			// part without buying clarity.
+			srcBytes, err := os.ReadFile(entry)
 			if err != nil {
-				t.Fatalf("zerg run: %v", err)
+				t.Fatalf("read entry %s: %v", entry, err)
 			}
-			if runCode != 0 {
-				t.Fatalf("zerg run exit code = %d, want 0\nstdout: %s", runCode, runOut)
-			}
-			if !bytes.Equal(runOut, golden) {
-				t.Errorf("run stdout vs golden mismatch\nrun:    %q\ngolden: %q", runOut, golden)
+			asmBearing := bytes.Contains(srcBytes, []byte("asm {")) ||
+				bytes.Contains(srcBytes, []byte("asm{"))
+			var runOut []byte
+			if asmBearing {
+				// `zerg run` cannot execute the asm body (pin 6). For
+				// programs whose asm sits at top-level the rejection
+				// fires immediately; for programs whose asm sits inside
+				// a spawn body, the interpreter may finish main without
+				// ever stepping into the spawn, so the exit code is 0
+				// with no diagnostic. Both shapes are acceptable here —
+				// the build half is where these programs actually run.
+				// TestRunRejectsAsmBlock (internal/run/run_v13_asm_test.go)
+				// pins pin 6's wording end-to-end against the live
+				// interpreter so the run-half doesn't have to.
+			} else {
+				runCode := 0
+				runOut, runCode, err = captureCmd(binPath, []string{"run", entry}, t.TempDir())
+				if err != nil {
+					t.Fatalf("zerg run: %v", err)
+				}
+				if runCode != 0 {
+					t.Fatalf("zerg run exit code = %d, want 0\nstdout: %s", runCode, runOut)
+				}
+				if !v13StdoutEqual(runOut, golden, sortedCompare) {
+					t.Errorf("run stdout vs golden mismatch\nrun:    %q\ngolden: %q", runOut, golden)
+				}
 			}
 
 			// `zerg build` half. Skipped if cc is missing on the host —
@@ -209,14 +244,58 @@ func TestE2EV13Corpus(t *testing.T) {
 			if binCode != 0 {
 				t.Fatalf("compiled binary exit code = %d, want 0", binCode)
 			}
-			if !bytes.Equal(binOut, golden) {
+			if !v13StdoutEqual(binOut, golden, sortedCompare) {
 				t.Errorf("build stdout vs golden mismatch\nbuild:  %q\ngolden: %q", binOut, golden)
 			}
-			if !bytes.Equal(runOut, binOut) {
+			// run-vs-build parity is only meaningful for programs the
+			// interpreter actually runs. For asm-bearing programs the
+			// build output IS the golden surface.
+			if !asmBearing && !v13StdoutEqual(runOut, binOut, sortedCompare) {
 				t.Errorf("run vs build stdout mismatch\nrun:   %q\nbuild: %q", runOut, binOut)
 			}
 		})
 	}
+}
+
+// readV13Golden picks the golden file shape for a corpus program. A
+// directory carrying expected.txt uses byte-exact compare; expected_sorted.txt
+// switches to "sort stdout lines, then compare to (already-sorted) golden",
+// which is how U5's spawn × asm corpus pins the output multiset without
+// asserting a particular schedule. Exactly one of the two files must
+// exist (enforced in listV13Programs).
+func readV13Golden(prog string) ([]byte, bool, error) {
+	exact := filepath.Join(prog, "expected.txt")
+	sorted := filepath.Join(prog, "expected_sorted.txt")
+	if b, err := os.ReadFile(exact); err == nil {
+		return b, false, nil
+	}
+	b, err := os.ReadFile(sorted)
+	if err != nil {
+		return nil, false, err
+	}
+	return b, true, nil
+}
+
+// v13StdoutEqual compares the program's stdout against the golden. When
+// sortedCompare is true, both sides are split on '\n' and the lines are
+// sorted before comparing — the golden file is expected to be authored
+// in already-sorted form. Trailing empty lines (from a final '\n') are
+// preserved so a program that prints exactly N lines must produce N
+// goldens (no off-by-one slip).
+func v13StdoutEqual(got, want []byte, sortedCompare bool) bool {
+	if !sortedCompare {
+		return bytes.Equal(got, want)
+	}
+	return bytes.Equal(sortLines(got), sortLines(want))
+}
+
+// sortLines splits buf on '\n', sorts the lines (stable), and reassembles
+// with '\n' separators. A trailing '\n' in the input survives — split-join
+// preserves the empty tail element.
+func sortLines(buf []byte) []byte {
+	lines := strings.Split(string(buf), "\n")
+	sort.Strings(lines)
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // TestE2EV13Rejects runs every reject's entry file through `zerg run` and

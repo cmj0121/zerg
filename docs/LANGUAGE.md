@@ -350,9 +350,9 @@ postfix chain (`atom { postfix_op }`), and gain meaning at typeck.
 - `chan[T]()` and `chan[T](N)` parse as `IDENT '[' type ']' '(' [expr] ')'`
   — an index on `chan` followed by a call. Typeck recognises `chan` and
   reinterprets the shape as a channel constructor.
-- `wait_group()`, `close(ch)`, `len(x)`, `push(xs, v)`, `clone(xs)` parse
-  as ordinary function calls; typeck binds them to the corresponding
-  builtins.
+- `wait_group()`, `close(ch)`, `len(x)`, `push(xs, v)`, `clone(xs)`,
+  `bytes(s)` (v0.14), `to_str(buf)` (v0.14) parse as ordinary function
+  calls; typeck binds them to the corresponding builtins.
 
 Because the parser does not reserve these names, a local binding may
 shadow them (`mut chan := 5`). The binding succeeds; any subsequent use
@@ -450,6 +450,31 @@ Through a top-level `mut`-bound list:
 - `push(xs, v)` (fn or `xs.push(v)` method) appends.
 
 Compound assignment (`xs[i] += 1`) is not admitted at v0.9.
+
+### `str` ↔ `list[byte]` bridge (v0.14)
+
+The v0.14 surface adds three primitives that turn `str` (otherwise
+opaque to user code) into a manipulable byte buffer and back:
+
+- `len(s)` / `s.len()` — byte count of `s`. Returns `int`. Replaces the
+  v0.2 rune-count reading, which was dead code (typeck rejected `str`).
+- `bytes(s)` / `s.bytes()` — fresh `list[byte]` containing a copy of
+  `s`'s bytes. The returned list is owned by the caller; mutating it
+  does not affect `s` (which is immutable by design).
+- `to_str(buf)` / `buf.to_str()` — fresh `str` owning a copy of `buf`'s
+  bytes (`buf: list[byte]`). UTF-8 validity is **not** checked — invalid
+  byte sequences pass through verbatim and may break downstream string
+  operations, matching the v0.10 `io.read_file` contract.
+
+Both `bytes` and `to_str` reserve their names against user redefinition
+the same way `len` / `push` / `clone` do. The method-form
+desugaring is the same path the list builtins use, so `xs.push(v)` and
+`s.bytes()` share one dispatch rule.
+
+These primitives unblock the pure-Zerg `strings.zg` rewrite: with
+byte-level access and a byte → str constructor, the v0.8 string
+operations (`split`, `trim`, `replace`, etc.) become expressible
+without `__builtin`.
 
 ### Closures (v0.7)
 

@@ -408,9 +408,15 @@ func TestCheckLenZeroArgsRejected(t *testing.T) {
 	checkErr(t, "n := len()\n", "expects 1 argument")
 }
 
-func TestCheckLenOnStrRejected(t *testing.T) {
-	// PLAN's len is monomorphic-list-only; len on a str is rejected.
-	checkErr(t, "n := len(\"hi\")\n", "argument to len must be a list")
+func TestCheckLenOnStrOK(t *testing.T) {
+	// v0.14 widens len to accept str (returning byte count). The v0.2
+	// rune-count reading was dead code (typeck rejected str) so the
+	// new byte-count reading carries no source-stability cost.
+	prog := checkSrc(t, "n := len(\"hi\")\n")
+	let := prog.Statements[0].(*LetStmt)
+	if let.Value.Type() != TInt() {
+		t.Fatalf("Type = %s, want int", let.Value.Type())
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -1844,6 +1844,13 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	if ident.Name == "push" {
 		return in.evalPush(e)
 	}
+	// v0.14 str ↔ list[byte] bridge builtins.
+	if ident.Name == "bytes" {
+		return in.evalStrBytes(e)
+	}
+	if ident.Name == "to_str" {
+		return in.evalListByteToStr(e)
+	}
 	// v0.6: typeck stamps e.Specialised on calls to generic fns with the
 	// monomorphised FnDecl clone. Body type-refs in the clone resolve to
 	// concrete *Type pointers, which the body-walking interpreter doesn't
@@ -2007,10 +2014,59 @@ func (in *interp) evalLen(e *syntax.CallExpr) (Value, error) {
 	case syntax.TypeList:
 		return intVal(int64(len(v.List))), nil
 	case syntax.TypeStr:
-		// PLAN: count of runes, not bytes. []rune(s) decodes UTF-8.
-		return intVal(int64(len([]rune(v.Str)))), nil
+		// v0.14: byte count (the v0.2 rune-count reading was dead code
+		// — typeck rejected str — and the live reading matches
+		// list[byte].len() semantics so stdlib byte-oriented ops can
+		// be implemented in pure Zerg). The Go string's len() returns
+		// byte count directly.
+		return intVal(int64(len(v.Str))), nil
 	}
 	return Value{}, fmt.Errorf("internal: len cannot accept %s at %s", v.Type, e.Pos)
+}
+
+// evalStrBytes implements `bytes(s)` — the v0.14 str → list[byte] bridge.
+// Allocates a fresh list[byte] from s.Str's bytes. UTF-8 boundaries are
+// not respected: every byte becomes one element regardless of whether
+// it's a lead, continuation, or BOM — matches the byte-buffer semantics
+// the stdlib byte-oriented ops want.
+func (in *interp) evalStrBytes(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: bytes expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeStr {
+		return Value{}, fmt.Errorf("internal: bytes arg must be str, got %s at %s", v.Type, e.Pos)
+	}
+	out := make([]Value, 0, len(v.Str))
+	for i := 0; i < len(v.Str); i++ {
+		out = append(out, byteVal(int64(v.Str[i])))
+	}
+	return listVal(syntax.TByte(), out), nil
+}
+
+// evalListByteToStr implements `to_str(buf)` — the v0.14 list[byte] → str
+// bridge. Concatenates the byte values into a Go string; UTF-8 validity
+// is the caller's responsibility (mirrors the C-side helper's contract).
+func (in *interp) evalListByteToStr(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: to_str expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeList ||
+		v.Type.Element == nil || v.Type.Element.Kind != syntax.TypeByte {
+		return Value{}, fmt.Errorf("internal: to_str arg must be list[byte], got %s at %s", v.Type, e.Pos)
+	}
+	buf := make([]byte, len(v.List))
+	for i, el := range v.List {
+		buf[i] = byte(el.Int & 0xFF)
+	}
+	return strVal(string(buf)), nil
 }
 
 // evalClone implements `clone(xs)`. The argument has already been validated by

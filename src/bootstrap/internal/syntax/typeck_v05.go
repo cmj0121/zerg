@@ -251,6 +251,23 @@ func newChecker() *checker {
 		ret:     NewListType(tInt),
 		builtin: true,
 	}
+	// v0.14 str ↔ list[byte] bridge: these are the primitives that
+	// unblock pure-Zerg stdlib strings work (split, trim, replace, …).
+	// `bytes(s: str) -> list[byte]` allocates a fresh copy of s's bytes;
+	// `to_str(buf: list[byte]) -> str` allocates a fresh str from buf.
+	// Both signatures use a placeholder element type in the registry —
+	// the typeck dispatch (checkCall: ident.Name == "bytes" / "to_str")
+	// validates the real argument type and rejects mismatches.
+	c.fns["bytes"] = fnSig{
+		params:  []*Type{tStr},
+		ret:     NewListType(tByte),
+		builtin: true,
+	}
+	c.fns["to_str"] = fnSig{
+		params:  []*Type{NewListType(tByte)},
+		ret:     tStr,
+		builtin: true,
+	}
 	// v0.6 Unit 3: per-checker monomorphisation caches. CheckBundle replaces
 	// these with bundle-shared maps in attachBundleMono so cross-module
 	// instances canonicalise to one *Type / *FnDecl.

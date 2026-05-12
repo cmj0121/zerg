@@ -663,9 +663,11 @@ func (c *checker) collectTopLevel(prog *Program) error {
 			}
 		case *FnDecl:
 			// PLAN-pinned: cannot redefine built-in fns. v0.2 reserves `len`;
-			// v0.3 adds `push` and `clone` to the same reserved set.
+			// v0.3 adds `push` and `clone`; v0.14 adds `bytes` and `to_str`
+			// (the str ↔ list[byte] bridge primitives) to the same reserved
+			// set.
 			switch s.Name {
-			case "len", "push", "clone":
+			case "len", "push", "clone", "bytes", "to_str":
 				return typeErr(s.Pos, "cannot redefine built-in '%s'", s.Name)
 			}
 			// v0.7: `chan` is reserved as a type-position keyword and `close`
@@ -3052,9 +3054,25 @@ func (c *checker) checkMethodCallHint(e *MethodCallExpr, hint *Type) (*Type, err
 	// the result on e.LoweredCall so run / cgen can short-circuit to the
 	// builtin path. Borrow-check rules for push / clone / len fire on the
 	// synthetic CallExpr the same way they do on a hand-written one.
+	//
+	// v0.14 adds list[byte].to_str(): same desugaring path; the typeck for
+	// the synthetic `to_str(xs)` call accepts only list[byte] receivers
+	// (the registry's tByte placeholder makes assignableTo reject
+	// list[int] / list[rune] / list[str]).
 	if rt.Kind == TypeList {
 		switch e.Method {
-		case "push", "clone", "len":
+		case "push", "clone", "len", "to_str":
+			return c.lowerListBuiltinFromMethodCall(e)
+		}
+	}
+	// Path 5: str receiver (v0.14) — `s.len()` and `s.bytes()` desugar to
+	// the same synthetic-call shape as the list methods. `s.bytes()`
+	// allocates a fresh list[byte] copy of s's bytes; the cgen and run
+	// implementations both copy (str is immutable in the language and
+	// callers may mutate the returned list).
+	if rt.Kind == TypeStr {
+		switch e.Method {
+		case "len", "bytes":
 			return c.lowerListBuiltinFromMethodCall(e)
 		}
 	}
@@ -3064,11 +3082,15 @@ func (c *checker) checkMethodCallHint(e *MethodCallExpr, hint *Type) (*Type, err
 	return c.dispatchConcreteMethod(e, rt)
 }
 
-// lowerListBuiltinFromMethodCall rewrites `xs.push(v)` / `xs.clone()` /
-// `xs.len()` to a synthetic CallExpr and runs it through checkCall, then
-// stashes the call on e.LoweredCall so downstream consumers see the builtin
-// shape. Diagnostics fall out of checkCall with the synthetic CallExpr's
-// position pinned to the method-call site.
+// lowerListBuiltinFromMethodCall rewrites a method-form call (list:
+// `xs.push(v)` / `xs.clone()` / `xs.len()` / `xs.to_str()`; str:
+// `s.len()` / `s.bytes()`) to a synthetic CallExpr and runs it through
+// checkCall, then stashes the call on e.LoweredCall so downstream
+// consumers see the builtin shape. Diagnostics fall out of checkCall
+// with the synthetic CallExpr's position pinned to the method-call
+// site. Despite the historical "List" in the name, the helper is
+// receiver-type-agnostic — it just inverts the method-call shape into
+// a free-call shape for the builtin dispatch to consume.
 func (c *checker) lowerListBuiltinFromMethodCall(e *MethodCallExpr) (*Type, error) {
 	callee := &IdentExpr{Pos: e.MethodPos, Name: e.Method}
 	args := make([]Expr, 0, len(e.Args)+1)
@@ -3451,10 +3473,11 @@ func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 		return nil, typeErr(ident.Pos, "undefined function %q", ident.Name)
 	}
 	if sig.builtin && ident.Name == "len" {
-		// `len(xs)` accepts exactly one list argument and returns int. We do
-		// not promote `len` to a generic in the type system; this is the only
-		// generic-feeling intrinsic at v0.2 and the special-case keeps the
-		// rest of the type system monomorphic.
+		// `len(xs)` accepts exactly one list or str argument and returns
+		// int. For lists, returns the element count. For strs (v0.14),
+		// returns the byte count — matches list[byte].len() semantics
+		// and is what stdlib byte-oriented ops want; the v0.2 rune-count
+		// reading was dead code (typeck rejected str) and is retired here.
 		if len(e.Args) != 1 {
 			return nil, typeErr(e.Pos, "function %q expects 1 argument, got %d", ident.Name, len(e.Args))
 		}
@@ -3462,8 +3485,8 @@ func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 		if err != nil {
 			return nil, err
 		}
-		if at == nil || at.Kind != TypeList {
-			return nil, typeErr(e.Args[0].ExprPos(), "argument to len must be a list, got %s", at)
+		if at == nil || (at.Kind != TypeList && at.Kind != TypeStr) {
+			return nil, typeErr(e.Args[0].ExprPos(), "argument to len must be a list or str, got %s", at)
 		}
 		ident.setType(tInt)
 		e.setType(tInt)

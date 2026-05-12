@@ -259,6 +259,14 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		// through the user-AST walks. v0.9 os.argv has the same need.
 		g.shapes.addType(g, listOfStrType())
 	}
+	// v0.14 str ↔ list[byte] bridge: force-mono list[byte] so the
+	// zerg_str_bytes / zerg_list_uint8_t_to_str helpers compile when a
+	// program calls s.bytes() / buf.to_str() without otherwise touching
+	// list[byte] (matches the v0.8 list[str] force-mono pattern).
+	needsV14StrPrims := g.programUsesV14StrPrims()
+	if needsV14StrPrims {
+		g.shapes.addType(g, listOfByteType())
+	}
 
 	// v0.7: wire the Option[T] lookup so chan recv helpers can name the
 	// canonical Option[T] enum. The typed AST stamps every RecvExpr.Type()
@@ -302,6 +310,16 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	// copy helpers must be defined before the runtime calls them.
 	if needsV08 {
 		g.b.WriteString(runtimeV08C)
+		g.b.WriteString("\n")
+	}
+	// v0.14 str-prim helpers — emitted after the shape helpers and the
+	// v0.8 runtime so the zerg_list_uint8_t typedef is in scope when
+	// the bytes / to_str helpers reference it. Gated independently of
+	// v0.8 because a program may use s.bytes() without pulling in any
+	// __builtin module (the v0.14 bridge is implementable in pure Zerg
+	// over inline asm, so a stdlib-free program can still need it).
+	if needsV14StrPrims {
+		g.b.WriteString(runtimeV14StrPrimsC)
 		g.b.WriteString("\n")
 	}
 	// v0.9 stdlib runtime — gated on a reachable time builtin so v0.0–v0.8
@@ -3402,11 +3420,41 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if argT == syntax.TStr() {
-			return fmt.Sprintf("zerg_str_runelen(%s)", argS), nil
-		}
-		// list — len is an int64 view of size_t.
+		// v0.14: len(str) and len(list) both report the size_t-backed
+		// `.len` field as int64. For str that is the BYTE count (not
+		// the rune count of the retired v0.2 reading) — matches
+		// list[byte].len() semantics and what byte-oriented stdlib ops
+		// (split, trim, replace) want. The zerg_str runtime layout
+		// `{ const char *data; size_t len; }` makes the cast cheap.
+		_ = argT
 		return fmt.Sprintf("((int64_t)((%s).len))", argS), nil
+	}
+	if ident.Name == "bytes" {
+		// v0.14 str.bytes() — allocates a fresh list[byte] copy. Typeck
+		// validated the arg is exactly one str; the helper handles
+		// zero-length strs with a sentinel one-byte allocation.
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: bytes expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("zerg_str_bytes(%s)", argS), nil
+	}
+	if ident.Name == "to_str" {
+		// v0.14 list[byte].to_str() — allocates a fresh str over a
+		// byte copy. Typeck validated the arg is exactly one list[byte]
+		// (the registry's tByte placeholder triggers assignableTo
+		// rejection for list[int] / list[rune] / list[str]).
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: to_str expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("zerg_list_uint8_t_to_str(%s)", argS), nil
 	}
 	if ident.Name == "clone" {
 		// clone(x) returns a fresh deep copy of its composite argument.

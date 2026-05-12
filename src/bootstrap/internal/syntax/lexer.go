@@ -95,6 +95,18 @@ type lexer struct {
 	// is true is a trailing inline comment; when false, the comment is
 	// alone on its line (Leading == true). Reset at every NEWLINE.
 	tokenSeenOnLine bool
+	// pending is a small FIFO of tokens produced as a side-effect of an
+	// earlier scan and queued for the next next() call. v0.13 inline asm
+	// (`asm { … }`) uses this: lexIdent recognises `asm`, returns the
+	// KindAsm token, and pushes the body's KindAsmBody onto pending so the
+	// parser sees the two-token shape (KindAsm, KindAsmBody) without the
+	// lexer needing to return a slice.
+	pending []Token
+	// bodyErr parks an error produced by a side-effect scan (currently only
+	// scanAsmBodyForLexIdent) whose call site cannot surface it directly.
+	// next() drains the queue first, returns the parked error before any
+	// further scanning, and clears the field.
+	bodyErr error
 }
 
 func (l *lexer) atEnd() bool { return l.pos >= len(l.src) }
@@ -142,6 +154,16 @@ func (l *lexer) position() Position {
 // bit (true when the comment is alone on its line; false when it follows
 // other tokens on the same line — a "trailing" inline comment).
 func (l *lexer) next() (Token, error) {
+	if len(l.pending) > 0 {
+		tok := l.pending[0]
+		l.pending = l.pending[1:]
+		return tok, nil
+	}
+	if l.bodyErr != nil {
+		err := l.bodyErr
+		l.bodyErr = nil
+		return Token{}, err
+	}
 	for !l.atEnd() {
 		c := l.peek()
 		switch {
@@ -227,7 +249,119 @@ func (l *lexer) lexIdent() Token {
 	if word == "__builtin" && !version.Less(l.reqMajor, l.reqMinor, 0, 8) {
 		return Token{Kind: KindBuiltin, Value: word, Pos: pos}
 	}
+	// v0.13 inline-asm keyword. Same back-compat gate as __builtin: `asm` lexes
+	// as a keyword only when the source declares >= v0.13. Older corpora that
+	// legally named things `asm` (locals, struct fields) keep parsing as IDENT
+	// — the keywords table stays the source of truth for v0.0–v0.12 surface.
+	//
+	// The keyword emit triggers a body scan via lexAsmBody. On success the body
+	// is queued as KindAsmBody so the parser sees the canonical two-token
+	// sequence (KindAsm, KindAsmBody) and never has to brace-count itself.
+	// Failure inside the body propagates back through next() (which is why
+	// lexIdent does not surface it here — see scanAsmBodyForLexIdent).
+	if word == "asm" && !version.Less(l.reqMajor, l.reqMinor, 0, 13) {
+		if bodyTok, ok := l.scanAsmBodyForLexIdent(); ok {
+			l.pending = append(l.pending, bodyTok)
+		}
+		return Token{Kind: KindAsm, Value: word, Pos: pos}
+	}
 	return Token{Kind: KindIdent, Value: word, Pos: pos}
+}
+
+// scanAsmBodyForLexIdent reads the `{ … }` body that follows the `asm`
+// keyword. It is invoked from lexIdent and returns the assembled KindAsmBody
+// token on success. On failure (no opening `{` after whitespace, or the body
+// never closes before EOF) the failure is parked on l.bodyErr so the next
+// next() call surfaces it as a LexError; we cannot return the error directly
+// because lexIdent's contract is "always produces a token, never fails".
+//
+// The body is read verbatim. Brace counting is string-literal-aware: a `}`
+// inside a `"…"` does not close the block, and `\` inside a string escapes the
+// next byte (so `"\""` does not terminate the string mid-byte). `${name}`
+// interpolation markers pass through unchanged — the parser splits them out
+// of the raw body when it builds the AsmBlock node.
+func (l *lexer) scanAsmBodyForLexIdent() (Token, bool) {
+	saved := l.pos
+	savedLine, savedCol := l.line, l.col
+	// Skip whitespace and `# … \n` comments between `asm` and `{`. Newlines
+	// are allowed (the keyword and the brace may sit on adjacent lines); the
+	// scan is conservative enough that any non-whitespace, non-comment byte
+	// short-circuits and surfaces a "expected '{' after 'asm'" error.
+	for !l.atEnd() {
+		c := l.peek()
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			l.advance()
+			continue
+		}
+		if c == '#' {
+			for !l.atEnd() && l.peek() != '\n' {
+				l.advance()
+			}
+			continue
+		}
+		break
+	}
+	if l.atEnd() || l.peek() != '{' {
+		// Rewind so the caller's view of position is unchanged for the
+		// fall-through path; lexIdent emits KindAsm anyway and the parser
+		// surfaces "expected asm body" against the next token it actually
+		// sees, which gives a precise diagnostic without us inventing one.
+		l.pos = saved
+		l.line, l.col = savedLine, savedCol
+		return Token{}, false
+	}
+	openPos := l.position()
+	l.advance() // consume `{`
+	bodyStart := l.pos
+	depth := 1
+	inString := false
+	for !l.atEnd() {
+		c := l.peek()
+		if inString {
+			if c == '\\' {
+				l.advance()
+				if !l.atEnd() {
+					l.advance() // escaped byte
+				}
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			l.advance()
+			continue
+		}
+		if c == '"' {
+			inString = true
+			l.advance()
+			continue
+		}
+		if c == '{' {
+			depth++
+			l.advance()
+			continue
+		}
+		if c == '}' {
+			depth--
+			if depth == 0 {
+				bodyEnd := l.pos
+				l.advance() // consume `}`
+				return Token{
+					Kind:  KindAsmBody,
+					Value: string(l.src[bodyStart:bodyEnd]),
+					Pos:   openPos,
+				}, true
+			}
+			l.advance()
+			continue
+		}
+		l.advance()
+	}
+	// EOF inside body: register the unterminated-block error and rewind so
+	// the next() loop terminates cleanly. The error is delivered through
+	// l.bodyErr at the next next() entry.
+	l.bodyErr = &LexError{Pos: openPos, Message: "unterminated asm block"}
+	return Token{}, false
 }
 
 // lexNumber recognises integer and float literals.

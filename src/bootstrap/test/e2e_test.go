@@ -170,9 +170,11 @@ func captureCmdBoth(name string, args []string, dir string) (stdout, stderr []by
 
 // TestExamplesBuild gates every example in examples/ on a successful
 // `zerg build` so the documentation cannot drift out of sync with the
-// shipped grammar / typeck / codegen surface. 13_asm.zg is excluded by
-// design — it carries a future `# requires:` marker that drives
-// TestRequiresGate; building it would defeat that assertion.
+// shipped grammar / typeck / codegen surface. 13_asm.zg is excluded
+// during the v0.13 dev window because the cgen lowering lands at U4 —
+// until U4 ships, the example parses but does not build. 14_placeholder.zg
+// is the future-version gate fixture that drives TestRequiresGate, and is
+// excluded for the same reason any gate fixture is: it refuses to load.
 //
 // The check stops at "the binary was produced" (the existing TestE2E
 // path covers full run/build parity for the small set of examples that
@@ -189,7 +191,12 @@ func TestExamplesBuild(t *testing.T) {
 		t.Fatalf("read examples dir: %v", err)
 	}
 
-	const versionGateFixture = "13_asm.zg"
+	const versionGateFixture = "14_placeholder.zg"
+	// pendingAsmCodegen names examples that exercise v0.13 inline asm:
+	// the parser surface lands at U2, but the cgen lowering lands at U4.
+	// During the gap (U2 → U4) build-time tests skip these — once U4 ships
+	// they re-enter the corpus. Drop the entry when adding U4.
+	const pendingAsmCodegen = "13_asm.zg"
 	var picked []string
 	for _, e := range entries {
 		if e.IsDir() {
@@ -199,7 +206,7 @@ func TestExamplesBuild(t *testing.T) {
 		if !strings.HasSuffix(name, ".zg") {
 			continue
 		}
-		if name == versionGateFixture {
+		if name == versionGateFixture || name == pendingAsmCodegen {
 			continue
 		}
 		picked = append(picked, name)
@@ -256,13 +263,13 @@ func TestRequiresGate(t *testing.T) {
 	examples := examplesDir(t)
 
 	t.Run("rejects future version", func(t *testing.T) {
-		// 13_asm.zg carries `# requires: v0.13` — a real example in the
-		// repo whose marker is well ahead of any v0.X currently underway.
-		// The example was originally chosen for the build path; we use it
-		// here for the run path too because 08_imports.zg's marker tracks
-		// the "current under-development" version and would silently
-		// admit once the gate caught up.
-		src := filepath.Join(examples, "13_asm.zg")
+		// 14_placeholder.zg carries `# requires: v0.14` — the v0.13 dev
+		// window's gate fixture. The marker is one minor past what the
+		// toolchain ships, so the standard rejection message fires
+		// regardless of which v0.13 unit is currently in flight. The
+		// fixture rotates forward each minor release; before U2 the role
+		// was filled by 13_asm.zg with `# requires: v0.13`.
+		src := filepath.Join(examples, "14_placeholder.zg")
 		_, stderr, code, err := captureCmdBoth(binPath, []string{"run", src}, t.TempDir())
 		if err != nil {
 			t.Fatalf("zerg run: %v", err)
@@ -270,7 +277,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.13 (current is v0.12)"
+		want := "requires v0.14 (current is v0.13)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}
@@ -288,7 +295,7 @@ func TestRequiresGate(t *testing.T) {
 	})
 
 	t.Run("rejects future version on build too", func(t *testing.T) {
-		src := filepath.Join(examples, "13_asm.zg")
+		src := filepath.Join(examples, "14_placeholder.zg")
 		_, stderr, code, err := captureCmdBoth(binPath, []string{"build", src}, t.TempDir())
 		if err != nil {
 			t.Fatalf("zerg build: %v", err)
@@ -296,7 +303,7 @@ func TestRequiresGate(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		want := "requires v0.13 (current is v0.12)"
+		want := "requires v0.14 (current is v0.13)"
 		if !strings.Contains(string(stderr), want) {
 			t.Fatalf("stderr does not contain %q\nstderr: %s", want, stderr)
 		}

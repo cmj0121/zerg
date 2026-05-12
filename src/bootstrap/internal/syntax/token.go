@@ -181,6 +181,25 @@ const (
 	// and the typeck / loader (Unit 2) restrict the keyword to embedded
 	// `std/` modules — user code referencing it surfaces a focused diagnostic.
 	KindBuiltin // __builtin
+
+	// KindAsm is the v0.13 inline-assembly keyword. Lexed only when the source
+	// declares `# requires: v0.13` or higher; v0.0–v0.12 files keep lexing the
+	// bare word as KindIdent so older corpora that named locals `asm` keep
+	// parsing. The lexer follows the keyword with a body-scan that walks the
+	// `{ … }` payload verbatim — string-literal-aware brace counting — and
+	// emits KindAsmBody carrying the raw bytes. The parser splits the body
+	// into text / `${name}` chunks; cgen (U4) lowers each chunk into a GCC
+	// __asm__ volatile operand list.
+	KindAsm // asm
+
+	// KindAsmBody is the raw payload between the `{` and the matching `}` of
+	// an `asm { … }` block. The lexer emits it as a single composite token
+	// after KindAsm so the parser does not need to count braces or track
+	// string-literal state itself — that work lives next to the rest of
+	// lexical scanning. Token.Value carries the verbatim body (no surrounding
+	// braces, no edits); Token.Pos is the source position of the opening `{`
+	// so diagnostics point at the asm block, not the file head.
+	KindAsmBody // asm-block body payload
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -369,6 +388,10 @@ func (k Kind) String() string {
 		return "'select'"
 	case KindBuiltin:
 		return "'__builtin'"
+	case KindAsm:
+		return "'asm'"
+	case KindAsmBody:
+		return "asm body"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

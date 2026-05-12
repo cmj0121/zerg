@@ -1550,6 +1550,14 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		return c.checkDeferStmt(s)
 	case *SelectStmt:
 		return c.checkSelectStmt(s)
+	case *AsmBlock:
+		// v0.13 U2 lands the syntactic surface. Typeck has nothing to
+		// validate at U2 — the chunks are still raw text / interp names
+		// with no scope resolution. U3 attaches the binder check
+		// (`${name}` must resolve to an in-scope `byte` or `list[byte]`).
+		// Until then, accept every AsmBlock here so the parser-only
+		// surface composes with the rest of typeck.
+		return nil
 	}
 	return typeErr(stmt.StmtPos(), "internal: unhandled statement %T", stmt)
 }

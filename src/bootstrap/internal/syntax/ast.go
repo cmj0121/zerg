@@ -1509,3 +1509,88 @@ type SelectStmt struct {
 
 func (*SelectStmt) stmtNode()           {}
 func (s *SelectStmt) StmtPos() Position { return s.Pos }
+
+// AsmChunkKind tags the two flavours of fragment that compose an AsmBlock
+// body: a literal text run that the cgen emits into the GCC __asm__ template
+// verbatim, and a `${name}` interpolation reference that the cgen lowers into
+// a `%N` operand placeholder bound to an input from the surrounding Zerg
+// scope.
+type AsmChunkKind int
+
+// AsmChunk kinds.
+const (
+	// AsmChunkText is a literal byte run from the asm body. The chunk's Text
+	// field carries the bytes; Name / NamePos are zero.
+	AsmChunkText AsmChunkKind = iota
+	// AsmChunkInterp is a `${name}` interpolation reference. The chunk's
+	// Name field carries the bare identifier text (no `${` or `}`); Text is
+	// zero. U2 only validates the surface shape — that the body between
+	// `${` and `}` is a non-empty valid identifier. U3 attaches the binder
+	// resolution + typecheck; U4 lowers each interp into a GCC inline-asm
+	// operand.
+	AsmChunkInterp
+)
+
+// AsmChunk is one fragment of an `asm { body }` body. The parser splits the
+// raw body produced by the lexer into chunks at `${name}` markers; everything
+// between markers (and any prefix / suffix outside a marker) becomes an
+// AsmChunkText. Empty text chunks are admitted — a body that opens with
+// `${x} mov ...` produces an empty text chunk before the interp so the
+// chunk order matches the byte order of the source, simplifying U4's emit.
+type AsmChunk struct {
+	// Pos is the source position of this chunk's first byte (the `$` of an
+	// interp, or the first byte of a text run). Diagnostics anchor on
+	// chunk-level positions so U3's "unknown binding" / "wrong type" errors
+	// point at the actual `${name}` site.
+	Pos Position
+	// Kind selects between AsmChunkText (literal run) and AsmChunkInterp
+	// (named interp reference).
+	Kind AsmChunkKind
+	// Text carries the literal bytes for AsmChunkText. Empty for interp
+	// chunks. The bytes are passed through to cgen unchanged at U4.
+	Text string
+	// Name is the bare interp identifier for AsmChunkInterp ("xs" for
+	// `${xs}`). Empty for text chunks. NamePos points at the first byte of
+	// the identifier (the byte after `${`) so U3's diagnostics line up with
+	// the source.
+	Name    string
+	NamePos Position
+}
+
+// AsmBlock is the v0.13 `asm { body }` statement. The block body is the only
+// place in the language where raw target-machine assembly appears in source
+// — every other construct routes through cgen's C templating. The parser
+// captures BodyRaw verbatim (between but excluding the braces) so the
+// formatter can round-trip the body byte-for-byte; the same string drives
+// the U4 lowering into a GCC __asm__ volatile template.
+//
+// Surface gating (per v0.13 PLAN pin 5):
+//   - `asm` is reserved at v0.13. v0.12 and earlier lex it as KindIdent so
+//     older source keeps parsing.
+//   - The interpreter (zerg run) rejects every AsmBlock at run time — the
+//     interpreter cannot execute machine code. The exact diagnostic lives
+//     in run.go alongside the rejection.
+//   - Pin 8 contract: x29 (fp) is user-preserve, NOT clobbered by cgen.
+//     There is no parser-level enforcement; the contract ships in
+//     docs/LANGUAGE.md as a hard rule.
+type AsmBlock struct {
+	// Pos is the position of the `asm` keyword.
+	Pos Position
+	// OpenBracePos is the position of the opening `{`. Used by diagnostics
+	// that want to anchor on the block, not the keyword (e.g. an
+	// unterminated-block error from the lexer).
+	OpenBracePos Position
+	// Chunks is the parsed body, split at `${name}` interp markers.
+	// Adjacent text chunks are not merged at parse time — each chunk
+	// carries its own source position for diagnostics.
+	Chunks []AsmChunk
+	// BodyRaw is the verbatim body string captured by the lexer (no
+	// surrounding braces). The formatter uses this to round-trip the body
+	// without re-serialising chunks; cgen uses Chunks because it needs the
+	// interp split to emit operand placeholders.
+	BodyRaw         string
+	LeadingComments []string
+}
+
+func (*AsmBlock) stmtNode()           {}
+func (s *AsmBlock) StmtPos() Position { return s.Pos }

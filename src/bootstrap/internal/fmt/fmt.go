@@ -266,6 +266,15 @@ func lastLineOfStmt(s syntax.Stmt) int {
 			}
 		}
 		return max + 1
+	case *syntax.AsmBlock:
+		// The body's last line is BodyRaw lines past the `{` line.
+		newlines := 0
+		for i := 0; i < len(x.BodyRaw); i++ {
+			if x.BodyRaw[i] == '\n' {
+				newlines++
+			}
+		}
+		return x.OpenBracePos.Line + newlines + 1
 	case *syntax.DeferStmt:
 		if x.Body != nil {
 			// Single-stmt synthetic body: no closing brace.
@@ -423,6 +432,8 @@ func (w *writer) stmt(s syntax.Stmt) {
 		w.sendStmt(x)
 	case *syntax.SelectStmt:
 		w.selectStmt(x)
+	case *syntax.AsmBlock:
+		w.asmBlock(x)
 	default:
 		// Unknown stmt shape — emit a placeholder rather than panicking so
 		// fmt is robust against future AST additions.
@@ -1208,6 +1219,20 @@ func (w *writer) deferStmt(s *syntax.DeferStmt) {
 	w.newline()
 	w.block(s.Body)
 	w.writeIndent()
+	w.write("}")
+	w.newline()
+}
+
+// asmBlock emits `asm { body }` with the body byte-preserved. The parser
+// captures BodyRaw verbatim — including newlines, leading/trailing
+// whitespace, ASCII comments, and `${name}` markers — so the formatter
+// produces a faithful round-trip without re-serialising from chunks. The
+// rule that fmt round-trips asm bodies byte-for-byte ships as one of U2's
+// regression tests.
+func (w *writer) asmBlock(s *syntax.AsmBlock) {
+	w.writeIndent()
+	w.write("asm {")
+	w.write(s.BodyRaw)
 	w.write("}")
 	w.newline()
 }

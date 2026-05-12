@@ -4,6 +4,29 @@ One-screen summary per version of what shipped. Rationale and implementation det
 commit log; the formal language reference lives in [`docs/LANGUAGE.md`](docs/LANGUAGE.md); the
 per-module stdlib reference lives in [`docs/STDLIB.md`](docs/STDLIB.md).
 
+## v0.13 — platform-suffix file resolution + inline assembly (macOS arm64)
+
+- Inline assembly behind `asm { … }`. Restricted to macOS arm64 for v0.13; Linux + x86 defer.
+  The keyword reserves at v0.13; v0.12 and earlier corpora keep parsing `asm` as `IDENT`.
+- Body bytes are captured verbatim by the lexer between matching braces. Brace counting is
+  string-literal aware: `}` inside `"…"` does not close the block. The interpreter cannot
+  execute machine code, so `zerg run` rejects asm-bearing programs with
+  `inline asm requires 'zerg build' (interpreter cannot execute machine code)`. `zerg build`
+  is the path; the emitted C is a GCC `__asm__ volatile` with the conservative caller-saved
+  arm64 clobber set (memory, cc; x0–x17 + x30; v0–v7 + v16–v31; x29 is user-preserve).
+- `${name}` interpolation. `name` must resolve to an in-scope binding whose type is `byte`
+  (lowered to a register-width input operand) or `list[byte]` (lowered to `.data` pointer).
+  Other types reject at typecheck. `$$` is reserved.
+- **Caveat:** v0.13 demos use raw `svc #0x80` syscalls because the existing
+  `examples/13_asm.zg` fixture targets that surface. Apple has been clear that raw syscall
+  numbers are not a stable ABI for user binaries; v0.14 is expected to migrate the demos to
+  libc-call lowering. Programs that need long-term ABI stability against Darwin should reach
+  libc through normal Zerg bindings, not through inline `svc` traps.
+- New `*_macos.zg` / `*_linux.zg` platform-suffix rule (landed at U1) gates sibling-imported
+  files on `runtime.GOOS`. Stdlib resolution does NOT consult the suffix table — stdlib stays
+  platform-neutral; per-module platform branching defers to v0.14.
+- `cliVersion` 0.13.0; `version.Minor` 13.
+
 ## v0.12 — M:N coroutine runtime
 
 - Build-side concurrency rewritten from pthread-per-`spawn` to an M:N green-thread scheduler.

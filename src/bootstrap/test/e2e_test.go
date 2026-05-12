@@ -261,7 +261,7 @@ func captureCmdBothMerged(name string, args []string, dir string) ([]byte, int, 
 func TestRequiresGate(t *testing.T) {
 	binPath := buildToolchain(t)
 	gateSrc := filepath.Join(testdataDir(t), "requires_future.zg")
-	const wantRejection = "requires v0.14 (current is v0.13)"
+	const wantRejection = "requires v0.15 (current is v0.14)"
 
 	t.Run("rejects future version on run", func(t *testing.T) {
 		_, stderr, code, err := captureCmdBoth(binPath, []string{"run", gateSrc}, t.TempDir())

@@ -115,16 +115,80 @@ asm {
 }
 
 func TestV13CgenAsmTextOnlyHasNoOperands(t *testing.T) {
-	// A pure-text body emits no input operands; the input section of the
-	// __asm__ volatile is just the colon delimiter.
+	// A pure-text body emits no input or output operands; both sections
+	// are just the colon delimiter followed by a newline.
 	out := emitV13Asm(t, `# requires: v0.13
 asm {
 	svc #0x80
 }
 `)
-	// Sniff for the input-operand boilerplate without trailing "r"(...).
+	if !strings.Contains(out, ": /* outputs */\n") {
+		t.Errorf("expected empty output section; got:\n%s", out)
+	}
 	if !strings.Contains(out, ": /* inputs */\n") {
 		t.Errorf("expected empty input section; got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v0.14 — int input operand + mut write-back output operand.
+// ---------------------------------------------------------------------------
+
+func TestV14CgenAsmInterpIntInputLowering(t *testing.T) {
+	// An immutable int binding lowers as an input operand cast to
+	// int64_t (the C type Zerg's `int` maps to). The cast widens to
+	// register-size so the "r" constraint can pick any GPR width.
+	out := emitV13Asm(t, `# requires: v0.14
+n := 5
+asm {
+	mov x0, ${n}
+}
+`)
+	if !strings.Contains(out, "mov x0, %0") {
+		t.Errorf("expected 'mov x0, %%0' in asm template; got:\n%s", out)
+	}
+	if !strings.Contains(out, `"r"(((int64_t)z_n))`) {
+		t.Errorf("expected int input operand 'r'(((int64_t)z_n)); got:\n%s", out)
+	}
+}
+
+func TestV14CgenAsmMutIntOutputLowering(t *testing.T) {
+	// A `mut int` binding lowers as a "+r" inout operand. The C operand
+	// expression is the raw lvalue `z_<name>` (no cast wrapper) so GCC
+	// can emit load/store around the asm body.
+	out := emitV13Asm(t, `# requires: v0.14
+mut x: int = 0
+asm {
+	mov ${x}, #42
+}
+`)
+	if !strings.Contains(out, "mov %0, #42") {
+		t.Errorf("expected 'mov %%0, #42' (output placeholder = 0); got:\n%s", out)
+	}
+	if !strings.Contains(out, `"+r"(z_x)`) {
+		t.Errorf("expected mut int output operand '+r'(z_x); got:\n%s", out)
+	}
+}
+
+func TestV14CgenAsmMixedOutputAndInputNumbering(t *testing.T) {
+	// GCC numbers operands outputs-first, inputs-second. With one output
+	// `${x}` and one input `${n}`, the output gets %0 and the input gets
+	// %1 — independent of source order.
+	out := emitV13Asm(t, `# requires: v0.14
+mut x: int = 0
+n := 7
+asm {
+	mov ${x}, ${n}
+}
+`)
+	if !strings.Contains(out, "mov %0, %1") {
+		t.Errorf("expected 'mov %%0, %%1' (output then input); got:\n%s", out)
+	}
+	if !strings.Contains(out, `"+r"(z_x)`) {
+		t.Errorf("expected output operand '+r'(z_x); got:\n%s", out)
+	}
+	if !strings.Contains(out, `"r"(((int64_t)z_n))`) {
+		t.Errorf("expected input operand 'r'(((int64_t)z_n)); got:\n%s", out)
 	}
 }
 

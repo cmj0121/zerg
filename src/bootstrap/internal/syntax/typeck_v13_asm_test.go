@@ -56,15 +56,35 @@ func TestCheckAsmInterpListByteAccepted(t *testing.T) {
 	}
 }
 
-func TestCheckAsmInterpIntRejects(t *testing.T) {
-	// int is the most common wrong-type case (bare numeric literal).
+func TestCheckAsmInterpIntAccepted(t *testing.T) {
+	// v0.14 widens the accept set to include `int`; an immutable int
+	// binding lowers as a register-width input operand. Pre-v0.14 this
+	// path rejected with "must be byte or list[byte], got int".
 	src := "n := 5\nasm { mov x0, ${n} }\n"
-	err := checkAsmAtV13(t, src)
-	if err == nil {
-		t.Fatalf("Check unexpectedly succeeded for int binding")
+	if err := checkAsmAtV13(t, src); err != nil {
+		t.Fatalf("Check failed for int binding: %v", err)
 	}
-	if !strings.Contains(err.Error(), "must be byte or list[byte], got int") {
-		t.Errorf("error = %q, want byte-or-list[byte] diagnostic with 'got int'", err.Error())
+}
+
+func TestCheckAsmInterpMutIntAccepted(t *testing.T) {
+	// v0.14: a `mut int` binding lowers as an output operand. Typeck
+	// stamps IsOutput on the chunk so cgen emits a `"+r"` inout
+	// constraint and the asm body can write a syscall return value back
+	// into the Zerg binding.
+	src := "mut x: int = 0\nasm { mov ${x}, #42 }\n"
+	if err := checkAsmAtV13(t, src); err != nil {
+		t.Fatalf("Check failed for mut int binding: %v", err)
+	}
+}
+
+func TestCheckAsmInterpMutByteAccepted(t *testing.T) {
+	// v0.14: `mut byte` is also an output-capable scalar. Less common
+	// than `mut int` (syscall returns are typically register-width
+	// signed) but the cgen contract treats both as "+r" outputs.
+	// `'A'` defaults to byte (matches TestCheckAsmInterpByteAccepted).
+	src := "mut b := 'A'\nasm { mov ${b}, #1 }\n"
+	if err := checkAsmAtV13(t, src); err != nil {
+		t.Fatalf("Check failed for mut byte binding: %v", err)
 	}
 }
 
@@ -76,7 +96,7 @@ func TestCheckAsmInterpStrRejects(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Check unexpectedly succeeded for str binding")
 	}
-	if !strings.Contains(err.Error(), "must be byte or list[byte], got str") {
+	if !strings.Contains(err.Error(), "must be byte, int, or list[byte], got str") {
 		t.Errorf("error = %q, want diagnostic with 'got str'", err.Error())
 	}
 }
@@ -90,7 +110,7 @@ func TestCheckAsmInterpListIntRejects(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Check unexpectedly succeeded for list[int] binding")
 	}
-	if !strings.Contains(err.Error(), "must be byte or list[byte], got list[int]") {
+	if !strings.Contains(err.Error(), "must be byte, int, or list[byte], got list[int]") {
 		t.Errorf("error = %q, want diagnostic with 'got list[int]'", err.Error())
 	}
 }
@@ -103,7 +123,7 @@ func TestCheckAsmInterpRuneRejects(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Check unexpectedly succeeded for rune binding")
 	}
-	if !strings.Contains(err.Error(), "must be byte or list[byte], got rune") {
+	if !strings.Contains(err.Error(), "must be byte, int, or list[byte], got rune") {
 		t.Errorf("error = %q, want diagnostic with 'got rune'", err.Error())
 	}
 }

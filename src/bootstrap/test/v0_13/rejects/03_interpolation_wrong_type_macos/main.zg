@@ -1,6 +1,6 @@
 # requires: v0.13
-n := 5
+s := "hi"
 asm {
-	mov x0, ${n}
+	mov x1, ${s}
 	svc #0x80
 }

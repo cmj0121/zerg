@@ -1561,6 +1561,15 @@ type AsmChunk struct {
 	// `list[byte].data` pointer operand. Nil for AsmChunkText chunks and
 	// for any chunk reached before typeck has run.
 	BoundType *Type
+	// IsOutput is true iff the binding referenced by this AsmChunkInterp
+	// is mutable and the type admits output-operand lowering (int / byte).
+	// Cgen emits these as GCC `"+r"` inout operands (the asm body may
+	// read the binding's initial value and writes back at block exit).
+	// list[byte] is never an output even when the binding is mut — the
+	// cgen contract there lowers `.data`, and mutating the pointer to a
+	// different buffer is not a supported surface. Set by typeck; false
+	// for AsmChunkText and for any input-only interp.
+	IsOutput bool
 }
 
 // AsmBlock is the v0.13 `asm { body }` statement. The block body is the only

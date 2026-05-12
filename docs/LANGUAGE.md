@@ -532,13 +532,44 @@ Inside the body, `${name}` is a typed reference to a Zerg binding. `name`
 must resolve to an in-scope binding whose type is one of:
 
 - `byte` — lowered as a register-width input operand (`((uint64_t)z_<name>)`).
+- `int` (v0.14) — lowered as a register-width input operand
+  (`((int64_t)z_<name>)`).
 - `list[byte]` — lowered as a pointer to the first byte
-  (`((uintptr_t)z_<name>.data)`).
+  (`((uintptr_t)z_<name>.data)`). Input only.
 
 Any other type rejects at typecheck. `$$` is reserved (no escape for
 literal `$` is defined; if needed in a future version, the rule lifts
 explicitly). Unknown names reject with
 `asm interpolation '${name}' references unknown name`.
+
+#### `mut` bindings as output operands (v0.14)
+
+When `name` resolves to a `mut`-declared binding of an output-capable
+scalar type (`int` or `byte`), the interpolation lowers as a GCC `"+r"`
+inout operand instead of an input. The asm body may read the binding's
+initial value and the value written by the body is reflected back into
+the Zerg binding when the block exits. This is the surface used to
+return syscall results from `svc` traps to the surrounding Zerg code:
+
+```zerg
+# requires: v0.14
+mut fd: int = 0
+asm {
+    mov x0, ${fd}             // initial value (0) loaded by GCC
+    // ...syscall returning into x0...
+    mov ${fd}, x0             // result written back to z_fd
+}
+```
+
+`mut list[byte]` is **not** an output surface — the cgen lowers `.data`
+for `list[byte]`, and pointer-rebinding through inline asm is not
+supported. A `mut list[byte]` binding interpolates as an input operand
+exactly like an immutable `list[byte]`.
+
+GCC numbers operands across both the output and input lists in
+declaration order, outputs first. A body with one output and two
+inputs reaches them as `%0` (output), `%1`, `%2` (inputs) regardless of
+the order the interpolations appear in the source.
 
 #### Conservative clobber set (Darwin arm64 ABI)
 

@@ -10,22 +10,30 @@ import (
 // cgen_v13_asm.go lowers an AsmBlock into a GCC `__asm__ volatile`
 // statement. The lowering uses the GCC operand-substitution form:
 //
-//	__asm__ volatile ( "<template>" : : "r"(op0), "r"(op1), … : <clobbers> )
+//	__asm__ volatile ( "<template>" : <outputs> : <inputs> : <clobbers> )
 //
 // `<template>` is the body bytes with every `%` doubled to `%%` (so the
 // raw arm64 mnemonic register percent-prefix on other targets does not
-// trip the substitution) and every `${name}` interp replaced by `%N` where
-// N is the operand index. Operands are emitted in chunk order, mirroring
-// the AST split. v0.13 supports two operand types per PLAN pin 5:
+// trip the substitution) and every `${name}` interp replaced by `%N`
+// where N is the operand index. GCC numbers operands across both the
+// output and input lists in declaration order, starting at 0 — outputs
+// first, then inputs. v0.13 + v0.14 operand types:
 //
-//   - byte         → register operand bound to the binding's uint8_t value
-//   - list[byte]   → register operand bound to the list's `.data` pointer
+//   - byte         (input)   → `"r"(((uint64_t)z_<name>))`
+//   - int          (input)   → `"r"(((int64_t)z_<name>))`        — v0.14
+//   - list[byte]   (input)   → `"r"(((uintptr_t)z_<name>.data))`
+//   - mut byte     (output)  → `"+r"(z_<name>)`                  — v0.14
+//   - mut int      (output)  → `"+r"(z_<name>)`                  — v0.14
 //
-// Clobber list follows PLAN pin 7: the full arm64 caller-saved set plus
-// "memory" and "cc". x29 (fp) is deliberately omitted — pin 8 makes it a
-// user-preserve register and documenting that contract is U6's job. The
-// constant clobberListV13ARM64 is exported (lower-cased package-internal)
-// so the cgen unit test can assert every register name appears.
+// Output operands use the `"+r"` inout constraint so the asm body may
+// read the binding's initial value (the user typically writes
+// `mut x: int = 0` to make the read deterministic). Pure write-only
+// (`"=r"`) is not used because there is no Zerg-level surface for
+// "uninitialised output" and `"+r"` is strictly more permissive.
+//
+// Clobber list follows v0.13 PLAN pin 7: the full arm64 caller-saved
+// set plus "memory" and "cc". x29 (fp) is deliberately omitted — pin 8
+// makes it a user-preserve register.
 
 // asmClobberGroupsV13ARM64 names the conservative caller-saved register
 // set the cgen pins for every inline-asm block on macOS arm64, grouped
@@ -60,28 +68,57 @@ var asmClobberGroupsV13ARM64 = func() [][]string {
 
 // emitAsmBlock lowers an AsmBlock into a GCC `__asm__ volatile` statement.
 // Called from cgen.emitStmt. The lowering takes the parser-split chunks
-// (text + interp) and rebuilds the body with `%N` operand placeholders;
-// each interp expands into one input operand whose C expression depends
-// on the binding's type.
+// (text + interp), classifies each interp as output or input (per the
+// typeck-stamped IsOutput flag), and rebuilds the body with `%N` operand
+// placeholders. GCC numbers operands as outputs-first, inputs-second, so
+// the index assignment runs in a separate pre-pass before the template
+// emit walks the chunks in source order.
 //
 // The block is wrapped in a `do { … } while (0)` so it composes with
 // surrounding statement contexts (if-arms, for-bodies, defer-bodies) the
-// same way every other compound emit does — without the wrap, `if (c)
-// __asm__ …` would parse fine on first glance but the trailing semicolon
-// rule for inline-asm-as-statement differs between compilers; the do/while
-// pattern moots that.
+// same way every other compound emit does.
 func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
+	// Pre-pass: assign GCC operand indices. Outputs get the low indices
+	// (0..M-1) per the GCC ABI; inputs follow (M..M+N-1). Each chunk gets
+	// its own index even if the same `${name}` appears twice — GCC
+	// permits dup "+r" operands tied to the same C lvalue (the last
+	// write wins, semantics the user is responsible for inside the body).
+	interpIndex := make([]int, len(s.Chunks))
+	var outputs, inputs []string
+	for i, chunk := range s.Chunks {
+		if chunk.Kind != syntax.AsmChunkInterp {
+			continue
+		}
+		opExpr, err := asmInterpOperand(chunk)
+		if err != nil {
+			return err
+		}
+		if chunk.IsOutput {
+			interpIndex[i] = len(outputs)
+			outputs = append(outputs, opExpr)
+		}
+	}
+	outputCount := len(outputs)
+	for i, chunk := range s.Chunks {
+		if chunk.Kind != syntax.AsmChunkInterp || chunk.IsOutput {
+			continue
+		}
+		opExpr, err := asmInterpOperand(chunk)
+		if err != nil {
+			return err
+		}
+		interpIndex[i] = outputCount + len(inputs)
+		inputs = append(inputs, opExpr)
+	}
+
+	// Template build: emit text chunks verbatim (with `%` doubled) and
+	// replace each interp with its assigned `%N` placeholder.
 	var template strings.Builder
-	var operands []string
-	for _, chunk := range s.Chunks {
+	for i, chunk := range s.Chunks {
 		switch chunk.Kind {
 		case syntax.AsmChunkText:
-			// `%` in a GCC inline-asm template is the operand-substitution
-			// prefix. Double every `%` so the user's literal `%`-bearing
-			// asm (e.g. `%w0` register specifiers on other arm64 dialects)
-			// passes through to the assembler unchanged.
-			for i := 0; i < len(chunk.Text); i++ {
-				c := chunk.Text[i]
+			for j := 0; j < len(chunk.Text); j++ {
+				c := chunk.Text[j]
 				if c == '%' {
 					template.WriteString("%%")
 					continue
@@ -89,12 +126,7 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 				template.WriteByte(c)
 			}
 		case syntax.AsmChunkInterp:
-			opExpr, err := g.asmInterpOperand(chunk)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(&template, "%%%d", len(operands))
-			operands = append(operands, opExpr)
+			fmt.Fprintf(&template, "%%%d", interpIndex[i])
 		}
 	}
 
@@ -110,10 +142,17 @@ func (g *cgen) emitAsmBlock(s *syntax.AsmBlock) error {
 		g.b.WriteString("\n")
 	}
 	g.writeIndent()
-	g.b.WriteString(": /* outputs */\n")
+	g.b.WriteString(": /* outputs */")
+	for i, op := range outputs {
+		if i > 0 {
+			g.b.WriteString(",")
+		}
+		fmt.Fprintf(&g.b, " \"+r\"(%s)", op)
+	}
+	g.b.WriteString("\n")
 	g.writeIndent()
 	g.b.WriteString(": /* inputs */")
-	for i, op := range operands {
+	for i, op := range inputs {
 		if i > 0 {
 			g.b.WriteString(",")
 		}
@@ -166,39 +205,50 @@ func splitAsmTemplateLines(tmpl string) []string {
 	return parts
 }
 
-// asmInterpOperand builds the C input-operand expression for one
-// AsmChunkInterp. Typeck (U3) already validated the binding type; here we
-// just dispatch on that type to pick the right C-side surface:
+// asmInterpOperand builds the C operand expression for one AsmChunkInterp.
+// Direction (input vs output) is encoded by the caller via chunk.IsOutput;
+// the operand expression itself depends only on the binding's type and
+// whether the operand must be a writable lvalue.
 //
-//   - byte       → `z_<name>` (the mangled local; cast to uint64_t so the
-//                  GCC "r" constraint can choose any GPR width).
-//   - list[byte] → `z_<name>.data` (cast to uintptr_t for the same reason).
+// Input forms widen scalars to register-sized types so the GCC "r"
+// constraint can pick any GPR width without partial-write surprises:
 //
-// The runtime types are: byte → uint8_t, list[byte] → struct with
-// `uint8_t* data` per the v0.2 list shape (cgen.go:1281). Widening to a
-// register-sized type avoids a partial-write hazard if the user picks an
-// `x` register and only writes the low bits; we'd rather the asm body
-// reflect the actual register the operand lands in.
-func (g *cgen) asmInterpOperand(chunk syntax.AsmChunk) (string, error) {
+//   - byte       (input)  → `((uint64_t)z_<name>)`
+//   - int        (input)  → `((int64_t)z_<name>)`        v0.14
+//   - list[byte] (input)  → `((uintptr_t)z_<name>.data)`
+//
+// Output forms hand GCC the raw lvalue so it can attach a "+r" constraint
+// and emit load/store around the body without a cast wrapper:
+//
+//   - mut byte   (output) → `z_<name>`                   v0.14
+//   - mut int    (output) → `z_<name>`                   v0.14
+func asmInterpOperand(chunk syntax.AsmChunk) (string, error) {
 	t := chunk.BoundType
 	if t == nil {
-		// Defensive: U3 typeck stamps every AsmChunkInterp with its
-		// resolved BoundType. If we land here, either typeck was skipped
-		// (build with no typecheck pass — never happens in production) or
-		// a future cgen reaches AsmBlock through a path that bypasses
-		// typeck. Surface a precise error so the regression has somewhere
-		// obvious to land.
+		// Defensive: typeck stamps every AsmChunkInterp with its resolved
+		// BoundType. If we land here, either typeck was skipped (never
+		// happens in production) or a future cgen reaches AsmBlock through
+		// a path that bypasses typeck. Surface a precise error so the
+		// regression has somewhere obvious to land.
 		return "", fmt.Errorf("%s: asm interpolation '${%s}' has no BoundType (typeck/cgen drift?)",
 			chunk.NamePos, chunk.Name)
 	}
+	name := mangle(chunk.Name)
 	switch {
 	case t.Kind == syntax.TypeByte:
-		return fmt.Sprintf("((uint64_t)%s)", mangle(chunk.Name)), nil
+		if chunk.IsOutput {
+			return name, nil
+		}
+		return fmt.Sprintf("((uint64_t)%s)", name), nil
+	case t.Kind == syntax.TypeInt:
+		if chunk.IsOutput {
+			return name, nil
+		}
+		return fmt.Sprintf("((int64_t)%s)", name), nil
 	case t.Kind == syntax.TypeList && t.Element != nil && t.Element.Kind == syntax.TypeByte:
-		return fmt.Sprintf("((uintptr_t)%s.data)", mangle(chunk.Name)), nil
+		// list[byte] is input-only (typeck never sets IsOutput on it).
+		return fmt.Sprintf("((uintptr_t)%s.data)", name), nil
 	}
-	// Typeck pins the surface; reaching this branch means a future type
-	// snuck through without a cgen mapping. Surface a focused error.
 	return "", fmt.Errorf("%s: asm interpolation '${%s}' has type %s; cgen has no lowering",
 		chunk.NamePos, chunk.Name, t)
 }

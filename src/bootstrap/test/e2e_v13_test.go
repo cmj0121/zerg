@@ -49,10 +49,11 @@ func v13CCAvailable() bool {
 	return err == nil
 }
 
-// v13CorpusDir resolves to src/bootstrap/test/v0_13/.
+// v13CorpusDir resolves to the v0_13/ subtree of the private ./test-data/
+// submodule (cmj0121/zerg-testdata).
 func v13CorpusDir(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(testDir(t), "v0_13")
+	return filepath.Join(privateCorpusDir(t), "v0_13")
 }
 
 // v13RejectsDir resolves to src/bootstrap/test/v0_13/rejects/.

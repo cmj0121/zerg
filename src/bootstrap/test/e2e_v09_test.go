@@ -43,10 +43,11 @@ import (
 	"github.com/cmj/zerg/src/bootstrap/internal/build"
 )
 
-// v09CorpusDir resolves to src/bootstrap/test/v0_9/.
+// v09CorpusDir resolves to the v0_9/ subtree of the private ./test-data/
+// submodule (cmj0121/zerg-testdata).
 func v09CorpusDir(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(testDir(t), "v0_9")
+	return filepath.Join(privateCorpusDir(t), "v0_9")
 }
 
 // v09RejectsDir resolves to src/bootstrap/test/v0_9/rejects/.

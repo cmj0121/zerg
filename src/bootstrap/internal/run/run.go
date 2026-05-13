@@ -1665,6 +1665,12 @@ func (in *interp) evalBinary(e *syntax.BinaryExpr) (Value, error) {
 //     conversion paths need byte arithmetic to round-trip, so this gap is
 //     closed here.
 func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
+	// wrapByte narrows an int64 result to a byteVal with uint8 wrap parity
+	// (matches the cgen's `& 0xFF` lowering). Used by every numeric op so
+	// byte ± byte / shift / bitop round-trip in the interpreter the same
+	// way they do under the C codegen.
+	wrapByte := func(v int64) Value { return byteVal(v & 0xFF) }
+	isByte := lv.Type == syntax.TByte()
 	switch op {
 	case syntax.BinAdd:
 		if lv.Type == syntax.TStr() {
@@ -1673,24 +1679,24 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int + rv.Int), nil
 		}
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int + rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int + rv.Int), nil
 		}
 		return floatVal(lv.Float + rv.Float), nil
 	case syntax.BinSub:
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int - rv.Int), nil
 		}
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int - rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int - rv.Int), nil
 		}
 		return floatVal(lv.Float - rv.Float), nil
 	case syntax.BinMul:
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int * rv.Int), nil
 		}
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int * rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int * rv.Int), nil
 		}
 		return floatVal(lv.Float * rv.Float), nil
 	case syntax.BinDiv:
@@ -1701,8 +1707,8 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 			// undefined behaviour for the v0.1 corpus.
 			return intVal(lv.Int / rv.Int), nil
 		}
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int / rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int / rv.Int), nil
 		}
 		return floatVal(lv.Float / rv.Float), nil
 	case syntax.BinFloorDiv:
@@ -1715,8 +1721,8 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int / rv.Int), nil
 		}
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int / rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int / rv.Int), nil
 		}
 		// We avoid pulling in math just for Floor here; the float64 trick
 		// `q := a/b; if (q != int64(q)) && (signMismatch) { q-- }` is more
@@ -1726,8 +1732,8 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int % rv.Int), nil
 		}
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int % rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int % rv.Int), nil
 		}
 		// Go has no float64 % at the language level; we are not required to
 		// support it (typeck rejects float % at parse-or-check time? Actually
@@ -1736,31 +1742,31 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		// math.Mod equivalent via the standard "a - b*trunc(a/b)" identity.
 		return floatVal(floatMod(lv.Float, rv.Float)), nil
 	case syntax.BinBitAnd:
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int & rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int & rv.Int), nil
 		}
 		return intVal(lv.Int & rv.Int), nil
 	case syntax.BinBitOr:
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int | rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int | rv.Int), nil
 		}
 		return intVal(lv.Int | rv.Int), nil
 	case syntax.BinBitXor:
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int ^ rv.Int) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int ^ rv.Int), nil
 		}
 		return intVal(lv.Int ^ rv.Int), nil
 	case syntax.BinShl:
 		// Shift by negative amounts is undefined in C; typeck does not catch
 		// it. Go panics on negative shift count in some Go versions; we let
 		// the runtime decide rather than synthesising a specific error.
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int << uint64(rv.Int)) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int << uint64(rv.Int)), nil
 		}
 		return intVal(lv.Int << uint64(rv.Int)), nil
 	case syntax.BinShr:
-		if lv.Type == syntax.TByte() {
-			return byteVal((lv.Int >> uint64(rv.Int)) & 0xFF), nil
+		if isByte {
+			return wrapByte(lv.Int >> uint64(rv.Int)), nil
 		}
 		return intVal(lv.Int >> uint64(rv.Int)), nil
 	case syntax.BinEq:

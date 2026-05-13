@@ -152,7 +152,7 @@ func programUsesV14StrPrimsWalk(prog *syntax.Program) bool {
 			walkE(x.Left)
 			walkE(x.Right)
 		case *syntax.AnonFnExpr:
-			walkBlockStmts(x.Body, walkS)
+			walkBlock(x.Body, walkS)
 		}
 	}
 	walkS = func(s syntax.Stmt) {
@@ -175,13 +175,13 @@ func programUsesV14StrPrimsWalk(prog *syntax.Program) bool {
 			walkE(n.Value)
 		case *syntax.IfStmt:
 			walkE(n.Cond)
-			walkBlockStmts(n.Then, walkS)
+			walkBlock(n.Then, walkS)
 			for _, ec := range n.Elifs {
 				walkE(ec.Cond)
-				walkBlockStmts(ec.Body, walkS)
+				walkBlock(ec.Body, walkS)
 			}
 			if n.Else != nil {
-				walkBlockStmts(n.Else, walkS)
+				walkBlock(n.Else, walkS)
 			}
 		case *syntax.ForStmt:
 			if n.Iter != nil {
@@ -194,7 +194,7 @@ func programUsesV14StrPrimsWalk(prog *syntax.Program) bool {
 				walkE(n.Range.Start)
 				walkE(n.Range.End)
 			}
-			walkBlockStmts(n.Body, walkS)
+			walkBlock(n.Body, walkS)
 		case *syntax.ReturnStmt:
 			if n.Value != nil {
 				walkE(n.Value)
@@ -208,17 +208,17 @@ func programUsesV14StrPrimsWalk(prog *syntax.Program) bool {
 				if arm.Guard != nil {
 					walkE(arm.Guard)
 				}
-				walkBlockStmts(arm.Body, walkS)
+				walkBlock(arm.Body, walkS)
 			}
 		case *syntax.FnDecl:
-			walkBlockStmts(n.Body, walkS)
+			walkBlock(n.Body, walkS)
 		case *syntax.SpawnStmt:
 			walkE(n.Call)
 		case *syntax.SendStmt:
 			walkE(n.Chan)
 			walkE(n.Value)
 		case *syntax.DeferStmt:
-			walkBlockStmts(n.Body, walkS)
+			walkBlock(n.Body, walkS)
 		case *syntax.SelectStmt:
 			for _, arm := range n.Arms {
 				if arm.Chan != nil {
@@ -227,7 +227,7 @@ func programUsesV14StrPrimsWalk(prog *syntax.Program) bool {
 				if arm.Value != nil {
 					walkE(arm.Value)
 				}
-				walkBlockStmts(arm.Body, walkS)
+				walkBlock(arm.Body, walkS)
 			}
 		case *syntax.BreakStmt:
 			if n.Guard != nil {
@@ -240,25 +240,32 @@ func programUsesV14StrPrimsWalk(prog *syntax.Program) bool {
 		case *syntax.ImplDecl:
 			for _, m := range n.Methods {
 				if m != nil {
-					walkBlockStmts(m.Body, walkS)
+					walkBlock(m.Body, walkS)
 				}
 			}
 		}
 	}
 	for _, st := range prog.Statements {
 		walkS(st)
+		if found {
+			return true
+		}
+	}
+	for _, fn := range prog.MonoFns {
+		if fn == nil || found {
+			continue
+		}
+		walkBlock(fn.Body, walkS)
+	}
+	for _, im := range prog.MonoImpls {
+		if im == nil || found {
+			continue
+		}
+		for _, m := range im.Methods {
+			if m != nil {
+				walkBlock(m.Body, walkS)
+			}
+		}
 	}
 	return found
-}
-
-// walkBlockStmts feeds every statement of a Block through walkS. Mirrors
-// the v0.8 walker's internal helper of the same shape; defined locally
-// here so the v0.14 walker stays self-contained.
-func walkBlockStmts(b *syntax.Block, walkS func(syntax.Stmt)) {
-	if b == nil {
-		return
-	}
-	for _, st := range b.Statements {
-		walkS(st)
-	}
 }

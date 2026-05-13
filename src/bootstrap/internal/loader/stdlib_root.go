@@ -64,25 +64,6 @@ func stdlibModulePath(name string) string {
 	return "std/" + name + ".zg"
 }
 
-// sysModulePathProber is the embed-probe function used by sysModulePath
-// when ZERG_STDLIB is unset. Defined as a function variable (rather
-// than calling defaultStdlibFallback directly) so the on-disk and
-// virtual paths share the same layout-resolution rule. Tests that need
-// to override embed-side behaviour swap this through stdlib_fallback's
-// SetStdlibFallbackForTest seam.
-var sysModulePathProber = func(name string) string {
-	if _, ok := readEmbeddedRoots("sys/" + name + ".zg"); ok {
-		return "sys/" + name + ".zg"
-	}
-	if variant := sysPlatformVariantName(); variant != "" {
-		specific := "sys/" + name + "/mod_" + variant + ".zg"
-		if _, ok := readEmbeddedRoots(specific); ok {
-			return specific
-		}
-	}
-	return "sys/" + name + "/mod.zg"
-}
-
 // sysModulePath returns the on-disk path for a `sys/<name>` import.
 // Same disk/virtual duality as stdlibModulePath. Layout selection is
 // per-module: the loader probes three forms and picks whichever exists.
@@ -139,7 +120,16 @@ func sysModulePath(name string) string {
 	// ZERG_STDLIB unset: return the virtual path whose shape matches
 	// the embed's layout for this module, so Target.Path reads as the
 	// actual layout the loader will pull from.
-	return sysModulePathProber(name)
+	if _, ok := readEmbeddedRoots("sys/" + name + ".zg"); ok {
+		return "sys/" + name + ".zg"
+	}
+	if variant := sysPlatformVariantName(); variant != "" {
+		specific := "sys/" + name + "/mod_" + variant + ".zg"
+		if _, ok := readEmbeddedRoots(specific); ok {
+			return specific
+		}
+	}
+	return "sys/" + name + "/mod.zg"
 }
 
 // isDir reports whether path resolves to a directory on disk. Tolerant

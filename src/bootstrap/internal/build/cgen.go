@@ -3415,7 +3415,6 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		if len(e.Args) != 1 {
 			return "", fmt.Errorf("codegen: len expects 1 arg at %s", e.Pos)
 		}
-		argT := e.Args[0].Type()
 		argS, err := g.exprStr(e.Args[0])
 		if err != nil {
 			return "", err
@@ -3426,7 +3425,6 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		// list[byte].len() semantics and what byte-oriented stdlib ops
 		// (split, trim, replace) want. The zerg_str runtime layout
 		// `{ const char *data; size_t len; }` makes the cast cheap.
-		_ = argT
 		return fmt.Sprintf("((int64_t)((%s).len))", argS), nil
 	}
 	if ident.Name == "bytes" {

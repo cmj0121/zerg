@@ -1,4 +1,0 @@
-import "helper"
-
-print "macos arch select"
-helper.greet()

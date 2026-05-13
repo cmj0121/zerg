@@ -1,6 +1,0 @@
-# requires: v0.9
-import "os"
-
-print "ok"
-os.exit(0)
-print "unreachable"

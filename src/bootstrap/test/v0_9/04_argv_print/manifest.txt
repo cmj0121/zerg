@@ -1,1 +1,0 @@
-argv: alpha beta gamma

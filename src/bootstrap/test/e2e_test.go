@@ -47,15 +47,27 @@ func examplesDir(t *testing.T) string {
 // privateCorpusDir resolves the repo's ./test-data/ submodule from this
 // test file's location: src/bootstrap/test/ → ../../../test-data/. The
 // submodule (cmj0121/zerg-testdata) ships the v0_9 and v0_13 corpora and
-// the requires_future.zg gate fixture; contributors without access to the
-// private repo will see an empty directory, and this helper t.Fatal's so
-// the failure is loud instead of silent-green.
+// the requires_future.zg gate fixture.
+//
+// Behaviour when the corpus is missing or empty depends on
+// ZERG_SKIP_PRIVATE_CORPUS:
+//
+//   - unset → t.Fatal with an actionable hint. This is the developer-mode
+//     default: a forgotten `git submodule update --init` should be loud,
+//     not silent-green.
+//   - "1"   → t.Skip. CI workflows (and external contributors who cannot
+//     clone the private repo) set this so the public test surface still
+//     runs cleanly and reports SKIP rather than FAIL.
 func privateCorpusDir(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Clean(filepath.Join(testDir(t), "..", "..", "..", "test-data"))
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) == 0 {
-		t.Fatalf("private corpus %q missing — run `git submodule update --init`", dir)
+		if os.Getenv("ZERG_SKIP_PRIVATE_CORPUS") == "1" {
+			t.Skipf("private corpus %q missing; skipping (ZERG_SKIP_PRIVATE_CORPUS=1)", dir)
+		}
+		t.Fatalf("private corpus %q missing — run `git submodule update --init` "+
+			"(or set ZERG_SKIP_PRIVATE_CORPUS=1 to skip)", dir)
 	}
 	return dir
 }

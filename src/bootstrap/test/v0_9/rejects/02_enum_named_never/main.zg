@@ -1,3 +1,0 @@
-# requires: v0.9
-
-enum never { Foo, Bar }

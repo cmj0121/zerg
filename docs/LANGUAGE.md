@@ -80,7 +80,6 @@ The following names are reserved at type position. User declarations
 | `Result`    | v0.6       | built-in enum `Result[T, E]`                |
 | `chan`      | v0.7       | `chan[T]` constructor                       |
 | `WaitGroup` | v0.7       | synthetic struct returned by `wait_group()` |
-| `never`     | v0.9       | bottom type (no values)                     |
 
 ### Literals
 
@@ -387,19 +386,8 @@ these names in user code.
 | `Result[T, E]`  | built-in enum, variants `Ok(T)` and `Err(E)`              |
 | function values | anon-fn expressions; immutable capture                    |
 
-### `never` (v0.9)
-
-`never` is the bottom type. A fn declared `-> never` cannot return — every
-control-flow path must diverge (call another `-> never` fn, run an
-unbounded loop with no break, etc.). `never <: T` for every concrete `T`,
-so a `-> never` call is well-typed in any value position. The IDENT
-`never` is recognised only at type position; user-declared `struct never`,
-`enum never`, `spec never` reject. The only `-> never` calls in the v0.9
-surface are `os.exit` and any user fn declared `-> never`.
-
 ### Subtyping and inference
 
-- `never <: T` for every concrete `T`.
 - `T -> T?` lift at boundaries: a bare `T` flowing into a `T?` slot is
   implicitly wrapped as `Option.Some(value)`. Boundaries are: fn argument,
   bare / mut / const initialiser with annotation, return expression,
@@ -637,8 +625,8 @@ migration.
 
 ### Process exit (v0.9)
 
-`os.exit(code: int) -> never` terminates the process with the given exit
-code. Does not drain defers, does not join spawned tasks. Under the REPL,
+`os.exit(code: int)` terminates the process with the given exit code.
+Does not drain defers, does not join spawned tasks. Under the REPL,
 "process exited with code N" is reported but the host process keeps
 running.
 
@@ -884,14 +872,14 @@ fn body() -> int {
 print body()
 ```
 
-### `never` and `os.exit`
+### `os.exit`
 
 <!-- example: program -->
 
 ```zerg
 import "os"
 
-fn fail(msg: str) -> never {
+fn fail(msg: str) {
     print msg
     os.exit(2)
 }

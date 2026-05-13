@@ -361,7 +361,7 @@ Process surface. Environment access (`env`), command-line argv
 | ------------------------------- | ----- | --------------------------------------------- |
 | `env(name: str) -> Option[str]` | v0.8  | Looks up an environment variable.             |
 | `argv() -> list[str]`           | v0.9  | Returns the program's command-line arguments. |
-| `exit(code: int) -> never`      | v0.9  | Terminates the process with `code`.           |
+| `exit(code: int)`               | v0.9  | Terminates the process with `code`.           |
 
 ### `env`
 
@@ -407,7 +407,8 @@ for i in 1..len(a) {
 ### `exit`
 
 - **Behaviour:** terminates the process with exit code `code`. Does not
-  return — the declared return type is `never`.
+  return at runtime — the kernel reaps the process before control flow
+  resumes. The declared return type is unit (no annotation).
 - **Defer:** `exit` does **not** drain pending `defer`s on the stack.
   Code in `defer` blocks is only run when control flow naturally leaves
   the enclosing block; `exit` skips this. Matches Go's `os.Exit`.

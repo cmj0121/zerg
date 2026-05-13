@@ -1,7 +1,6 @@
 package run
 
 import (
-	"os"
 	"strings"
 	"syscall"
 
@@ -144,12 +143,12 @@ func sysCloseFdShim(args []Value) Value {
 	return errnoResult(0, syscall.Close(fd))
 }
 
-// sysExitShim implements exit(code: int) -> never. The asm wrapper
-// traps SYS_exit which terminates the process; the interpreter parity
-// is os.Exit (skips deferred funcs, exits immediately with the given
-// status). The Value return is unreachable but typed correctly so the
-// caller's coerce-to-never path is structurally consistent.
+// sysExitShim implements exit(code: int). The asm wrapper traps
+// SYS_exit which terminates the process; the interpreter parity panics
+// an exitErr that RunBundle's recover hook catches at the top-level
+// boundary (skipping defers / spawned-task joins, mirroring Go's
+// os.Exit). Returning intVal(0) is unreachable but keeps the call-site
+// boundary structurally consistent.
 func sysExitShim(args []Value) Value {
-	os.Exit(int(args[0].Int))
-	return intVal(0)
+	panic(exitErr{Code: int(args[0].Int)})
 }

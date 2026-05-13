@@ -113,12 +113,12 @@ pub fn close_fd(fd: int) -> int {
 }
 
 # exit(code) — terminate the current process with the given exit code.
-# Never returns; the kernel reaps the process before the svc returns
-# control to user space. The trailing `for { nop }` is unreachable
-# runtime code that satisfies typeck's never-return contract — the
-# compiler has no way to know the asm body diverges, so the loop pins
-# divergence statically without adding meaningful binary size.
-pub fn exit(code: int) -> never {
+# Type-wise returns unit; the kernel reaps the process before the svc
+# returns control to user space, so the unit value is unobservable.
+# The trailing `for { nop }` pins divergence at runtime — without it,
+# control would fall off the asm block on a hypothetical svc that
+# returned, producing undefined behaviour.
+pub fn exit(code: int) {
 	asm {
 		mov x0, ${code}
 		mov x16, #1

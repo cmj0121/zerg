@@ -114,11 +114,11 @@ pub fn close_fd(fd: int) -> int {
 	return result
 }
 
-# exit(code) — terminate the current process. Never returns; the kernel
-# reaps the process before syscall returns to user space. The trailing
-# `for { nop }` satisfies typeck's never-return contract; control never
-# reaches it at runtime.
-pub fn exit(code: int) -> never {
+# exit(code) — terminate the current process. Type-wise returns unit;
+# the kernel reaps the process before syscall returns to user space,
+# so the unit value is unobservable. The trailing `for { nop }` pins
+# divergence at runtime so falling off the asm block is impossible.
+pub fn exit(code: int) {
 	asm {
 		mov rdi, ${code}
 		mov rax, 0x2000001

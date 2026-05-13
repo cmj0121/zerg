@@ -88,9 +88,9 @@ func RunBundleWithOptions(bundle syntax.BundleView, w io.Writer, opts Options) (
 	if entry == nil {
 		return 0, false, nil
 	}
-	// v0.9 Unit 1: a `-> never` call (Unit 3 lands the exit fn) raises an
-	// exitErr panic that unwinds every fn-call frame to here. Recover and
-	// stash the code on the interpreter so the host can read it. PLAN.md
+	// An exit-style call (os.exit / sys.syscall.exit) raises an exitErr
+	// panic that unwinds every fn-call frame to here. Recover and stash
+	// the code on the interpreter so the host can read it. PLAN.md
 	// §"Defer × exit": defers are intentionally NOT drained, spawned tasks
 	// are NOT joined — we return immediately, mirroring Go's os.Exit.
 	defer func() {
@@ -260,7 +260,7 @@ type interp struct {
 	exited   bool
 	exitCode int
 
-	// v0.9 Phase 4 Fix 2: spawn × exit coordination. A `-> never` call
+	// v0.9 Phase 4 Fix 2: spawn × exit coordination. An os.exit call
 	// inside a spawned goroutine cannot panic across the goroutine
 	// boundary (Go runtime rule), so the spawn-recover stashes the code
 	// here and the RunBundle main path consults it after spawnWg.Wait()

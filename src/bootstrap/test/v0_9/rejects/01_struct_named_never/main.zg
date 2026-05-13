@@ -1,3 +1,0 @@
-# requires: v0.9
-
-struct never { x: int }

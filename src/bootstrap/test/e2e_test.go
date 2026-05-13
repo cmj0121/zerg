@@ -44,12 +44,32 @@ func examplesDir(t *testing.T) string {
 	return filepath.Clean(filepath.Join(testDir(t), "..", "..", "..", "examples"))
 }
 
-// testdataDir resolves src/bootstrap/test/testdata/ — fixtures that live with
-// the tests rather than user-visible examples (e.g. the future-version gate
-// file consumed by TestRequiresGate).
-func testdataDir(t *testing.T) string {
+// privateCorpusDir resolves the repo's ./test-data/ submodule from this
+// test file's location: src/bootstrap/test/ → ../../../test-data/. The
+// submodule (cmj0121/zerg-testdata) ships the v0_9 and v0_13 corpora and
+// the requires_future.zg gate fixture.
+//
+// Behaviour when the corpus is missing or empty depends on
+// ZERG_SKIP_PRIVATE_CORPUS:
+//
+//   - unset → t.Fatal with an actionable hint. This is the developer-mode
+//     default: a forgotten `git submodule update --init` should be loud,
+//     not silent-green.
+//   - "1"   → t.Skip. CI workflows (and external contributors who cannot
+//     clone the private repo) set this so the public test surface still
+//     runs cleanly and reports SKIP rather than FAIL.
+func privateCorpusDir(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(testDir(t), "testdata")
+	dir := filepath.Clean(filepath.Join(testDir(t), "..", "..", "..", "test-data"))
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		if os.Getenv("ZERG_SKIP_PRIVATE_CORPUS") == "1" {
+			t.Skipf("private corpus %q missing; skipping (ZERG_SKIP_PRIVATE_CORPUS=1)", dir)
+		}
+		t.Fatalf("private corpus %q missing — run `git submodule update --init` "+
+			"(or set ZERG_SKIP_PRIVATE_CORPUS=1 to skip)", dir)
+	}
+	return dir
 }
 
 // buildToolchain compiles cmd/zerg into a fresh temp dir and returns the
@@ -254,13 +274,13 @@ func captureCmdBothMerged(name string, args []string, dir string) ([]byte, int, 
 // `# requires:` marker is rejected with the standard message, and that
 // programs without a marker still run cleanly.
 //
-// The future-version fixture lives in testdata/ rather than examples/
-// because it is a test artifact, not a user-facing sample. Bump the
-// `# requires:` line inside testdata/requires_future.zg each time a new
-// minor version lands; update `wantRejection` here to match.
+// The future-version fixture lives in the private ./test-data/ submodule
+// rather than examples/ because it is a test artifact, not a user-facing
+// sample. Bump the `# requires:` line inside testdata/requires_future.zg
+// each time a new minor version lands; update `wantRejection` here to match.
 func TestRequiresGate(t *testing.T) {
 	binPath := buildToolchain(t)
-	gateSrc := filepath.Join(testdataDir(t), "requires_future.zg")
+	gateSrc := filepath.Join(privateCorpusDir(t), "testdata", "requires_future.zg")
 	const wantRejection = "requires v0.15 (current is v0.14)"
 
 	t.Run("rejects future version on run", func(t *testing.T) {

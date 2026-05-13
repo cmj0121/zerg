@@ -1,2 +1,0 @@
-fixture: payload.txt = lazy fox jumps
-argv: $TMPDIR/payload.txt

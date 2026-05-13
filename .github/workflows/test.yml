@@ -1,0 +1,58 @@
+# CI test workflow.
+#
+# Runs the bootstrap toolchain test suite. The v0_9 / v0_13 / requires_future
+# corpora live in the private cmj0121/zerg-testdata submodule under
+# ./test-data/; this workflow makes their inclusion conditional on having
+# read access to that repo:
+#
+#   - Maintainer pushes / PRs from the same repo: the TESTDATA_TOKEN secret
+#     (a PAT with `repo` scope on zerg-testdata) authorises submodule init
+#     → full corpus runs.
+#   - Fork PRs: secrets are not exposed to forked workflows, so submodule
+#     init fails. The next step sets ZERG_SKIP_PRIVATE_CORPUS=1 and the
+#     Go tests that need the private corpus emit SKIP instead of FAIL.
+#
+# v0.13 is macOS-only by design (helper_macos.zg / helper_linux.zg split,
+# host-platform diagnostics), so the matrix is macOS-first. Ubuntu can be
+# added later for the platform-portable subset; today the suite would skip
+# v0.13 on linux anyway via the runtime.GOOS gate inside each v13 test.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init private testdata submodule (best-effort)
+        id: testdata
+        continue-on-error: true
+        env:
+          TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
+        run: |
+          if [ -n "${TESTDATA_TOKEN:-}" ]; then
+            # Rewrite the SSH submodule URL to HTTPS-with-token so this
+            # works without managing a deploy key on the workflow runner.
+            git config --global url."https://x-access-token:${TESTDATA_TOKEN}@github.com/".insteadOf "git@github.com:"
+          fi
+          git submodule update --init --recursive
+
+      - name: Flag missing private corpus
+        if: steps.testdata.outcome != 'success'
+        run: |
+          echo "ZERG_SKIP_PRIVATE_CORPUS=1" >> "$GITHUB_ENV"
+          echo "::notice::private corpus unavailable (no TESTDATA_TOKEN or auth failure); v0_9/v0_13/requires_future tests will SKIP"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bootstrap/go.mod
+          cache-dependency-path: src/bootstrap/go.sum
+
+      - name: Run tests
+        run: make test

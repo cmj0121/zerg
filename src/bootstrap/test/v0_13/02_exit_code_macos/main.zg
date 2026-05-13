@@ -1,7 +1,0 @@
-# requires: v0.13
-asm {
-	mov x0, #0
-	mov x16, #1
-	svc #0x80
-}
-print "unreached"

@@ -1,9 +1,0 @@
-# requires: v0.9
-import "os"
-
-fn body() {
-    defer print "deferred"
-    os.exit(0)
-}
-
-body()

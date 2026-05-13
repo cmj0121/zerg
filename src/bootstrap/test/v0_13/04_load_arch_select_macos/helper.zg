@@ -1,3 +1,0 @@
-pub fn greet() {
-    print "from helper"
-}

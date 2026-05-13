@@ -1,1 +1,0 @@
-entry file main_linux.zg is gated to linux but host is macos

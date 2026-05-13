@@ -1,7 +1,7 @@
 # requires: v0.8
-import "std/io"
-import "std/os"
-import "std/strings"
+import "io"
+import "os"
+import "strings"
 
 fn classify(path: str) {
     match io.read_file(path) {
@@ -17,9 +17,9 @@ fn classify(path: str) {
 }
 
 match os.env("ZERG_TEST_TEMPDIR") {
-    Option.Some(d) => {
+    d => {
         classify(strings.join([d, "exists.txt"], "/"))
         classify(strings.join([d, "missing.txt"], "/"))
     }
-    Option.None => print "no tempdir"
+    nil => print "no tempdir"
 }

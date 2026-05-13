@@ -1,0 +1,18 @@
+# requires: v0.14
+#
+# v0.14 mut-binding write-back: the `write` syscall returns its byte count
+# in x0 and the asm body copies that into the Zerg-side `mut written` so
+# the surrounding code can print it. Exercises the full new operand path:
+# list[byte] input + mut int output + numbered placeholders.
+
+msg: list[byte] = ['h', 'i', '\n']
+mut written: int = 0
+asm {
+	mov x0, #1
+	mov x1, ${msg}
+	mov x2, #3
+	mov x16, #4
+	svc #0x80
+	mov ${written}, x0
+}
+print written

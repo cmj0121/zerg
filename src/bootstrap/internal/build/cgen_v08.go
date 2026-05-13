@@ -355,12 +355,6 @@ func (g *cgen) builtinBodyStr(fn *syntax.FnDecl) (string, error) {
 	retT := fn.Return.Resolved
 	var b strings.Builder
 	switch fn.BuiltinName {
-	// std/io — fallible, returns Result[T, IoError].
-	case "io_read_file":
-		emitIoStringResult(&b, g, retT, "zerg_io_read_file(z_path)")
-	case "io_write_file":
-		emitIoBoolResult(&b, g, retT, "zerg_io_write_file(z_path, z_content)")
-
 	// std/strings — non-fallible except parse_int.
 	case "strings_split":
 		// list[str] return; runtime returns the list directly.
@@ -394,49 +388,10 @@ func (g *cgen) builtinBodyStr(fn *syntax.FnDecl) (string, error) {
 	case "math_gcd":
 		fmt.Fprintf(&b, "    return zerg_math_gcd(z_a, z_b);\n")
 
-	// std/os.
-	case "os_env":
-		emitOsEnv(&b, g, retT)
-
 	default:
 		return "", fmt.Errorf("codegen: unknown __builtin %q", fn.BuiltinName)
 	}
 	return b.String(), nil
-}
-
-// emitIoStringResult writes the body for io_read_file: call the runtime,
-// dispatch on tag, build Result.Ok(str) or Result.Err(IoError.<v>).
-func emitIoStringResult(b *strings.Builder, g *cgen, retT *syntax.Type, call string) {
-	resMang := g.mangleType(retT)
-	errT, errMang := resultErrEnumInfo(g, retT)
-	okIdx := variantIndex(retT, "Ok")
-	errIdx := variantIndex(retT, "Err")
-	fmt.Fprintf(b, "    zerg_io_str_or_err __r = %s;\n", call)
-	fmt.Fprintf(b, "    if (__r.tag == 0) {\n")
-	fmt.Fprintf(b, "        return ((%s){.tag = %d, .payload.p%d = {.a0 = __r.value}});\n",
-		resMang, okIdx, okIdx)
-	fmt.Fprintf(b, "    }\n")
-	fmt.Fprintf(b, "    int __v = %s;\n", ioErrTagToVariantSwitch(errT))
-	fmt.Fprintf(b, "    return ((%s){.tag = %d, .payload.p%d = {.a0 = ((%s){.tag = __v})}});\n",
-		resMang, errIdx, errIdx, errMang)
-}
-
-// emitIoBoolResult writes the body for io_write_file: same as
-// emitIoStringResult but the Ok payload is a bool that the caller
-// always sees as Ok(true).
-func emitIoBoolResult(b *strings.Builder, g *cgen, retT *syntax.Type, call string) {
-	resMang := g.mangleType(retT)
-	errT, errMang := resultErrEnumInfo(g, retT)
-	okIdx := variantIndex(retT, "Ok")
-	errIdx := variantIndex(retT, "Err")
-	fmt.Fprintf(b, "    zerg_io_bool_or_err __r = %s;\n", call)
-	fmt.Fprintf(b, "    if (__r.tag == 0) {\n")
-	fmt.Fprintf(b, "        return ((%s){.tag = %d, .payload.p%d = {.a0 = __r.value}});\n",
-		resMang, okIdx, okIdx)
-	fmt.Fprintf(b, "    }\n")
-	fmt.Fprintf(b, "    int __v = %s;\n", ioErrTagToVariantSwitch(errT))
-	fmt.Fprintf(b, "    return ((%s){.tag = %d, .payload.p%d = {.a0 = ((%s){.tag = __v})}});\n",
-		resMang, errIdx, errIdx, errMang)
 }
 
 // emitParseIntResult writes the body for strings_parse_int.
@@ -455,19 +410,6 @@ func emitParseIntResult(b *strings.Builder, g *cgen, retT *syntax.Type) {
 		resMang, errIdx, errIdx, errMang)
 }
 
-// emitOsEnv writes the body for os_env: getenv → Some(str)/None.
-func emitOsEnv(b *strings.Builder, g *cgen, retT *syntax.Type) {
-	optMang := g.mangleType(retT)
-	someIdx := variantIndex(retT, "Some")
-	noneIdx := variantIndex(retT, "None")
-	fmt.Fprintf(b, "    zerg_os_env_result __r = zerg_os_env(z_name);\n")
-	fmt.Fprintf(b, "    if (__r.present == 0) {\n")
-	fmt.Fprintf(b, "        return ((%s){.tag = %d});\n", optMang, noneIdx)
-	fmt.Fprintf(b, "    }\n")
-	fmt.Fprintf(b, "    return ((%s){.tag = %d, .payload.p%d = {.a0 = __r.value}});\n",
-		optMang, someIdx, someIdx)
-}
-
 // resultErrEnumInfo extracts the user-defined error enum carried in the
 // Err payload of resultType (Result[T, E].VariantPayloads[1][0]) and
 // returns its canonical *Type plus mangled C name.
@@ -480,47 +422,6 @@ func resultErrEnumInfo(g *cgen, resultType *syntax.Type) (*syntax.Type, string) 
 	}
 	errT := resultType.VariantPayloads[1][0]
 	return errT, g.mangleType(errT)
-}
-
-// ioErrTagToVariantSwitch returns a C ternary chain mapping the runtime's
-// IoError tag (1..5) to errT's variant index. The runtime's tag alphabet
-// is:  1=NotFound, 2=PermissionDenied, 3=AlreadyExists, 4=InvalidPath,
-// 5=Other. errT is the user program's IoError canonical *Type — its
-// variant order is whatever std/io.zg declared (NotFound, PermissionDenied,
-// AlreadyExists, InvalidPath, Other), so the mapping is a per-tag
-// lookup against errT.Variants.
-func ioErrTagToVariantSwitch(errT *syntax.Type) string {
-	if errT == nil {
-		return "0"
-	}
-	tagToName := map[int]string{
-		1: "NotFound",
-		2: "PermissionDenied",
-		3: "AlreadyExists",
-		4: "InvalidPath",
-		5: "Other",
-	}
-	var b strings.Builder
-	b.WriteString("(")
-	first := true
-	for tag := 1; tag <= 5; tag++ {
-		idx := variantIndex(errT, tagToName[tag])
-		if idx < 0 {
-			idx = variantIndex(errT, "Other")
-		}
-		if first {
-			fmt.Fprintf(&b, "__r.tag == %d ? %d", tag, idx)
-			first = false
-		} else {
-			fmt.Fprintf(&b, " : __r.tag == %d ? %d", tag, idx)
-		}
-	}
-	otherIdx := variantIndex(errT, "Other")
-	if otherIdx < 0 {
-		otherIdx = 0
-	}
-	fmt.Fprintf(&b, " : %d)", otherIdx)
-	return b.String()
 }
 
 // parseErrTagToVariantSwitch returns a C ternary chain mapping the
@@ -570,81 +471,7 @@ const runtimeV08C = `#include <errno.h>
 
 /* ---------------- v0.8 stdlib runtime ----------------------------------- */
 
-typedef struct { int tag; zerg_str value; } zerg_io_str_or_err;
-typedef struct { int tag; _Bool   value; } zerg_io_bool_or_err;
 typedef struct { int tag; int64_t value; } zerg_parse_int_result;
-typedef struct { int present; zerg_str value; } zerg_os_env_result;
-
-/* errno -> tag bucket, matches run_v08.go. 1=NotFound, 2=PermissionDenied,
-   3=AlreadyExists, 4=InvalidPath, 5=Other. */
-static int zerg_io_errno_bucket(int e) {
-    switch (e) {
-        case ENOENT: return 1;
-        case EACCES: return 2;
-        case EEXIST: return 3;
-        case EINVAL: return 4;
-        default:     return 5;
-    }
-}
-
-static zerg_io_str_or_err zerg_io_read_file(zerg_str path) {
-    /* Path is not NUL-terminated; copy into a scratch buffer. */
-    char *cpath = (char *)malloc(path.len + 1);
-    if (path.len) memcpy(cpath, path.data, path.len);
-    cpath[path.len] = 0;
-    FILE *f = fopen(cpath, "rb");
-    if (!f) {
-        int eb = zerg_io_errno_bucket(errno);
-        free(cpath);
-        return (zerg_io_str_or_err){.tag = eb, .value = (zerg_str){0, 0}};
-    }
-    free(cpath);
-    if (fseek(f, 0, SEEK_END) != 0) {
-        int eb = zerg_io_errno_bucket(errno);
-        fclose(f);
-        return (zerg_io_str_or_err){.tag = eb, .value = (zerg_str){0, 0}};
-    }
-    long sz = ftell(f);
-    if (sz < 0) sz = 0;
-    rewind(f);
-    char *buf = (char *)malloc((size_t)sz + 1);
-    errno = 0;
-    size_t got = fread(buf, 1, (size_t)sz, f);
-    if (ferror(f)) {
-        int eb = zerg_io_errno_bucket(errno);
-        fclose(f);
-        free(buf);
-        return (zerg_io_str_or_err){.tag = eb, .value = (zerg_str){0, 0}};
-    }
-    fclose(f);
-    buf[got] = 0;
-    return (zerg_io_str_or_err){.tag = 0, .value = (zerg_str){buf, got}};
-}
-
-static zerg_io_bool_or_err zerg_io_write_file(zerg_str path, zerg_str content) {
-    char *cpath = (char *)malloc(path.len + 1);
-    if (path.len) memcpy(cpath, path.data, path.len);
-    cpath[path.len] = 0;
-    FILE *f = fopen(cpath, "wb");
-    if (!f) {
-        int eb = zerg_io_errno_bucket(errno);
-        free(cpath);
-        return (zerg_io_bool_or_err){.tag = eb, .value = 0};
-    }
-    free(cpath);
-    if (content.len) {
-        size_t wrote = fwrite(content.data, 1, content.len, f);
-        if (wrote != content.len) {
-            int eb = zerg_io_errno_bucket(errno);
-            fclose(f);
-            return (zerg_io_bool_or_err){.tag = eb, .value = 0};
-        }
-    }
-    if (fclose(f) != 0) {
-        return (zerg_io_bool_or_err){.tag = zerg_io_errno_bucket(errno), .value = 0};
-    }
-    return (zerg_io_bool_or_err){.tag = 0, .value = 1};
-}
 
 /* ---------------- strings ----------------------------------------------- */
 
@@ -874,21 +701,5 @@ static int64_t zerg_math_gcd(int64_t a, int64_t b) {
         b = t;
     }
     return a;
-}
-
-/* ---------------- os ---------------------------------------------------- */
-
-static zerg_os_env_result zerg_os_env(zerg_str name) {
-    char *cname = (char *)malloc(name.len + 1);
-    if (name.len) memcpy(cname, name.data, name.len);
-    cname[name.len] = 0;
-    const char *v = getenv(cname);
-    free(cname);
-    if (v == 0) return (zerg_os_env_result){.present = 0};
-    size_t n = strlen(v);
-    char *p = (char *)malloc(n + 1);
-    memcpy(p, v, n);
-    p[n] = 0;
-    return (zerg_os_env_result){.present = 1, .value = (zerg_str){p, n}};
 }
 `

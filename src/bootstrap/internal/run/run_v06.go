@@ -17,13 +17,6 @@ type errPropagate struct {
 
 func (e *errPropagate) Error() string { return "propagate" }
 
-func isOptionType(t *syntax.Type) bool {
-	if t == nil || t.Kind != syntax.TypeEnum {
-		return false
-	}
-	return strings.HasPrefix(t.Name, "Option[")
-}
-
 func isResultType(t *syntax.Type) bool {
 	if t == nil || t.Kind != syntax.TypeEnum {
 		return false
@@ -33,7 +26,7 @@ func isResultType(t *syntax.Type) bool {
 
 // displayEnumName strips the `[type-args]` suffix from a monomorphized enum
 // name for the print path. PLAN.md §Print parity pins that
-// `print Option[int].Some(7)` emits `Option.Some(7)` — the bracketed instance
+// `print int?.Some(7)` emits `Option.Some(7)` — the bracketed instance
 // name is suppressed. The same rule applies uniformly to user-defined generic
 // enums and structs so `Box[int] { value: 7 }` prints as `Box { value: 7 }`.
 //
@@ -46,12 +39,12 @@ func displayEnumName(name string) string {
 	return name
 }
 
-// evalNilLit constructs an Option[T].None value of the contextually-inferred
-// Option type. Typeck has stamped NilLit.Type() with the Option[T] resolved at
+// evalNilLit constructs a T?.None value of the contextually-inferred
+// nullable type. Typeck has stamped NilLit.Type() with the T? resolved at
 // the surrounding hint (binding / return / fn-arg / list-elem / struct-field).
 func (in *interp) evalNilLit(e *syntax.NilLit) (Value, error) {
 	t := e.Type()
-	if !isOptionType(t) {
+	if !syntax.IsNullable(t) {
 		return Value{}, fmt.Errorf("internal: nil at %s lacks Option[T] type stamp (got %s)", e.Pos, t)
 	}
 	idx := -1
@@ -118,23 +111,23 @@ func (in *interp) evalCoalesce(e *syntax.CoalesceExpr) (Value, error) {
 }
 
 // evalSafeFieldAccess implements `obj?.field` per PLAN.md §Null-safety
-// semantics. The receiver must be Option[T]. On Some(inner), produce
-// Option[U].Some(inner.field); on None, produce Option[U].None — both Option
+// semantics. The receiver must be T?. On Some(inner), produce
+// U?.Some(inner.field); on None, produce U?.None — both Option
 // instances carry the canonical *Type stamped by typeck on the FieldAccessExpr
 // so the value is structurally identical to a nil literal at the same site.
 //
-// Chains (`a?.b?.c`) compose because each ?. yields Option[U] which the next
+// Chains (`a?.b?.c`) compose because each ?. yields U? which the next
 // ?. consumes as its receiver.
 func (in *interp) evalSafeFieldAccess(e *syntax.FieldAccessExpr) (Value, error) {
 	rv, err := in.evalExpr(e.Receiver)
 	if err != nil {
 		return Value{}, err
 	}
-	if !isOptionType(rv.Type) {
+	if !syntax.IsNullable(rv.Type) {
 		return Value{}, fmt.Errorf("internal: ?. receiver is not Option at %s (got %s)", e.Pos, rv.Type)
 	}
 	resultT := e.Type()
-	if !isOptionType(resultT) {
+	if !syntax.IsNullable(resultT) {
 		return Value{}, fmt.Errorf("internal: ?. expression lacks Option[T] type stamp at %s", e.Pos)
 	}
 	if rv.VariantName == "None" {
@@ -191,7 +184,7 @@ func lookupField(v Value, name string) (Value, bool) {
 // triggered `?` propagation) to a value of the outer fn's declared return
 // type. The two share the same variant tag and payload values; only the *Type
 // pointer needs swapping so the runtime walks the right (possibly different
-// inner-T) Option / Result instance.
+// inner-T) T? / Result instance.
 //
 // Typeck has guaranteed shape compatibility: Option-in-Option (any U), or
 // Result-in-Result with exact-match E. Mismatch reaching here would be an

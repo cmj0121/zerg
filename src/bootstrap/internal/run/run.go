@@ -88,9 +88,9 @@ func RunBundleWithOptions(bundle syntax.BundleView, w io.Writer, opts Options) (
 	if entry == nil {
 		return 0, false, nil
 	}
-	// v0.9 Unit 1: a `-> never` call (Unit 3 lands the exit fn) raises an
-	// exitErr panic that unwinds every fn-call frame to here. Recover and
-	// stash the code on the interpreter so the host can read it. PLAN.md
+	// An exit-style call (os.exit / sys.syscall.exit) raises an exitErr
+	// panic that unwinds every fn-call frame to here. Recover and stash
+	// the code on the interpreter so the host can read it. PLAN.md
 	// §"Defer × exit": defers are intentionally NOT drained, spawned tasks
 	// are NOT joined — we return immediately, mirroring Go's os.Exit.
 	defer func() {
@@ -105,6 +105,16 @@ func RunBundleWithOptions(bundle syntax.BundleView, w io.Writer, opts Options) (
 			panic(r)
 		}
 	}()
+	// v0.14 P1: initialize imported modules' top-level let / mut / const
+	// bindings into their moduleVars frames before the entry runs. This
+	// is what lets an imported module's fn body reference module-scope
+	// state — the lookup() fall-through reaches in.cur.moduleVars only
+	// if those bindings have been declared somewhere. The entry module
+	// is skipped here; its top-level execution loop below handles its
+	// own bindings (against in.stack[0] == entryMd.moduleVars).
+	if err := in.initImportedModuleVars(bundle); err != nil {
+		return 0, false, err
+	}
 	prog := entry.ModuleProgram()
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
@@ -250,7 +260,7 @@ type interp struct {
 	exited   bool
 	exitCode int
 
-	// v0.9 Phase 4 Fix 2: spawn × exit coordination. A `-> never` call
+	// v0.9 Phase 4 Fix 2: spawn × exit coordination. An os.exit call
 	// inside a spawned goroutine cannot panic across the goroutine
 	// boundary (Go runtime rule), so the spawn-recover stashes the code
 	// here and the RunBundle main path consults it after spawnWg.Wait()
@@ -264,8 +274,15 @@ type interp struct {
 
 	// v0.9 Unit 3: argv from the host. Index 0 is the executable name
 	// (.zg path for `zerg run`, "<repl>" at the REPL, an arbitrary
-	// sentinel in tests). os_argv reads from this slice.
+	// sentinel in tests). os_argv_len / os_argv_at index into this slice.
 	argv []string
+
+	// v0.14 T2: lazy snapshot of os.Environ() shared by envp_len and
+	// envp_at within a single interpreter run. Captured on first read so
+	// the envp index space stays stable for a pure-Zerg env() loop; per-
+	// interpreter (not process-global) so test ordering doesn't leak env
+	// state from one run into the next.
+	envpCache []string
 }
 
 // moduleData is the per-module decl table. Indexed maps mirror typeck's
@@ -282,6 +299,12 @@ type moduleData struct {
 	// imports binds a local name (alias or bare path) to the target
 	// module's data. Used to recognise `mod.foo()` shapes at run-time.
 	imports map[string]*moduleData
+	// moduleVars holds the module's top-level let / mut / const bindings.
+	// Populated at init time (for imported modules) or by the entry
+	// module's top-level execution (for the entry). lookup() falls
+	// through to in.cur.moduleVars after walking the call-frame stack
+	// so fn bodies see their owning module's top-level state.
+	moduleVars *frame
 }
 
 // specPairKey is the (canonical *Type, spec name) pair used to index spec
@@ -333,13 +356,14 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 	// Done first so impl resolution can look up types in any module.
 	for _, m := range mods {
 		md := &moduleData{
-			view:    m,
-			prog:    m.ModuleProgram(),
-			name:    m.ModuleName(),
-			fns:     map[string]*syntax.FnDecl{},
-			enums:   map[string]*syntax.Type{},
-			structs: map[string]*syntax.Type{},
-			imports: map[string]*moduleData{},
+			view:       m,
+			prog:       m.ModuleProgram(),
+			name:       m.ModuleName(),
+			fns:        map[string]*syntax.FnDecl{},
+			enums:      map[string]*syntax.Type{},
+			structs:    map[string]*syntax.Type{},
+			imports:    map[string]*moduleData{},
+			moduleVars: newFrame(),
 		}
 		in.modules[md.prog] = md
 		for _, stmt := range md.prog.Statements {
@@ -472,12 +496,68 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 			in.specByPair[specPairKey{recv: recv, specName: id.Spec}] = true
 		}
 	}
-	// Set the active module to the entry, push the top-level frame.
+	// Set the active module to the entry; the entry's moduleVars frame
+	// serves as the top-level execution scope. RunBundle walks the
+	// entry's prog.Statements and execStmt declares each let/mut/const
+	// into this frame, so subsequent top-level execution AND fn-body
+	// lookups (via the lookup() fall-through to in.cur.moduleVars) see
+	// the same storage. v0.14 P1: imported modules' moduleVars are
+	// populated by initImportedModuleVars before the entry runs.
 	if entry := bundle.BundleEntry(); entry != nil {
 		in.cur = in.modules[entry.ModuleProgram()]
+		in.stack = []*frame{in.cur.moduleVars}
+	} else {
+		in.pushFrame()
 	}
-	in.pushFrame()
 	return in
+}
+
+// initImportedModuleVars walks every non-entry module's top-level
+// let / mut / const stmts and executes them into the module's moduleVars
+// frame. Iteration runs in reverse bundle order so a module's
+// imports init before the importer — bundle.BundleModules() returns
+// the entry first followed by transitive imports in pre-order
+// discovery, so walking back-to-front gives the post-order "deepest
+// first" we want.
+//
+// Only declaration-shape stmts (LetStmt / MutStmt / ConstStmt) are
+// executed. Top-level Print / ExprStmt / Assign in an imported module
+// is not executed at module-init time — those shapes are reserved for
+// the entry module's main execution. Future work can lift this
+// restriction if there's a clear use case.
+//
+// Errors from a module-init binding bubble up to RunBundle; a failing
+// init aborts the whole program before the entry runs.
+func (in *interp) initImportedModuleVars(bundle syntax.BundleView) error {
+	entry := bundle.BundleEntry()
+	var entryMd *moduleData
+	if entry != nil {
+		entryMd = in.modules[entry.ModuleProgram()]
+	}
+	mods := bundle.BundleModules()
+	for i := len(mods) - 1; i >= 0; i-- {
+		md := in.modules[mods[i].ModuleProgram()]
+		if md == nil || md == entryMd {
+			continue
+		}
+		savedCur := in.cur
+		savedStack := in.stack
+		in.cur = md
+		in.stack = []*frame{md.moduleVars}
+		for _, stmt := range md.prog.Statements {
+			switch stmt.(type) {
+			case *syntax.LetStmt, *syntax.MutStmt, *syntax.ConstStmt:
+				if err := in.execStmt(stmt); err != nil {
+					in.cur = savedCur
+					in.stack = savedStack
+					return err
+				}
+			}
+		}
+		in.cur = savedCur
+		in.stack = savedStack
+	}
+	return nil
 }
 
 // resolveImplReceiver returns the canonical receiver *Type pointer that
@@ -869,10 +949,21 @@ func (in *interp) declare(name string, v Value) error {
 }
 
 // lookup walks frames from innermost to outermost. Returns the storage slot
-// (so assignment can mutate it) plus a found bool.
+// (so assignment can mutate it) plus a found bool. v0.14 P1: after the
+// call-frame walk misses, fall through to the active module's top-level
+// frame (in.cur.moduleVars). This is what lets a fn body reference its
+// owning module's top-level let / mut / const bindings even though
+// callFn replaces the call stack with a fresh single-frame slice — the
+// module-scope frame is reached by lexical-owner lookup, not by stack
+// walking.
 func (in *interp) lookup(name string) (*Value, bool) {
 	for i := len(in.stack) - 1; i >= 0; i-- {
 		if slot, ok := in.stack[i].vars[name]; ok {
+			return slot, true
+		}
+	}
+	if in.cur != nil && in.cur.moduleVars != nil {
+		if slot, ok := in.cur.moduleVars.vars[name]; ok {
 			return slot, true
 		}
 	}
@@ -1113,8 +1204,21 @@ func formatValue(v Value) string {
 		b.WriteString(" }")
 		return b.String()
 	case syntax.TypeEnum:
-		// v0.6 print parity: `Option[int].Some(7)` renders as
-		// `Option.Some(7)`; the `[type-args]` instance suffix is suppressed
+		// Nullable values (the synthetic Option-backed enum) print the
+		// inner value for the present case and `nil` for the absent case
+		// — `Option` is not a user-visible name and so does not appear
+		// in stdout. Result and user-defined enums keep the
+		// "Name.Variant(args)" shape.
+		if syntax.IsNullable(v.Type) {
+			if v.VariantName == "None" {
+				return "nil"
+			}
+			if len(v.Payload) == 1 {
+				return formatValue(v.Payload[0])
+			}
+		}
+		// v0.6 print parity: `Result[int,str].Ok(7)` renders as
+		// `Result.Ok(7)`; the `[type-args]` instance suffix is suppressed
 		// for stdout so golden files stay stable across re-monomorphization.
 		// Diagnostics keep the bracketed name (Type.String() has its own
 		// path).
@@ -1658,7 +1762,19 @@ func (in *interp) evalBinary(e *syntax.BinaryExpr) (Value, error) {
 //     so v0.1 parity holds. Document here so Unit 4 follows suit.
 //   - int % follows the dividend's sign (Go and C99+ agree).
 //   - String + concatenates.
+//   - byte arithmetic uses int64 internally then narrows back to byte with
+//     a 0xFF mask, matching the codegen's uint8_t wrap semantics. The pre-
+//     v0.14 interpreter erroneously dropped through to the float branch
+//     for byte operands (storing 0.0) — pure-Zerg strings.zg's case-
+//     conversion paths need byte arithmetic to round-trip, so this gap is
+//     closed here.
 func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
+	// wrapByte narrows an int64 result to a byteVal with uint8 wrap parity
+	// (matches the cgen's `& 0xFF` lowering). Used by every numeric op so
+	// byte ± byte / shift / bitop round-trip in the interpreter the same
+	// way they do under the C codegen.
+	wrapByte := func(v int64) Value { return byteVal(v & 0xFF) }
+	isByte := lv.Type == syntax.TByte()
 	switch op {
 	case syntax.BinAdd:
 		if lv.Type == syntax.TStr() {
@@ -1667,15 +1783,24 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int + rv.Int), nil
 		}
+		if isByte {
+			return wrapByte(lv.Int + rv.Int), nil
+		}
 		return floatVal(lv.Float + rv.Float), nil
 	case syntax.BinSub:
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int - rv.Int), nil
 		}
+		if isByte {
+			return wrapByte(lv.Int - rv.Int), nil
+		}
 		return floatVal(lv.Float - rv.Float), nil
 	case syntax.BinMul:
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int * rv.Int), nil
+		}
+		if isByte {
+			return wrapByte(lv.Int * rv.Int), nil
 		}
 		return floatVal(lv.Float * rv.Float), nil
 	case syntax.BinDiv:
@@ -1685,6 +1810,9 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 			// integer division by zero and that is acceptable parity with C
 			// undefined behaviour for the v0.1 corpus.
 			return intVal(lv.Int / rv.Int), nil
+		}
+		if isByte {
+			return wrapByte(lv.Int / rv.Int), nil
 		}
 		return floatVal(lv.Float / rv.Float), nil
 	case syntax.BinFloorDiv:
@@ -1697,6 +1825,9 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int / rv.Int), nil
 		}
+		if isByte {
+			return wrapByte(lv.Int / rv.Int), nil
+		}
 		// We avoid pulling in math just for Floor here; the float64 trick
 		// `q := a/b; if (q != int64(q)) && (signMismatch) { q-- }` is more
 		// fragile than just using math.Floor. Use math.Floor.
@@ -1705,6 +1836,9 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		if lv.Type == syntax.TInt() {
 			return intVal(lv.Int % rv.Int), nil
 		}
+		if isByte {
+			return wrapByte(lv.Int % rv.Int), nil
+		}
 		// Go has no float64 % at the language level; we are not required to
 		// support it (typeck rejects float % at parse-or-check time? Actually
 		// it does not — see typeck.go BinSub/...,BinMod accepts numeric.
@@ -1712,17 +1846,32 @@ func applyBin(op syntax.BinaryOp, lv, rv Value) (Value, error) {
 		// math.Mod equivalent via the standard "a - b*trunc(a/b)" identity.
 		return floatVal(floatMod(lv.Float, rv.Float)), nil
 	case syntax.BinBitAnd:
+		if isByte {
+			return wrapByte(lv.Int & rv.Int), nil
+		}
 		return intVal(lv.Int & rv.Int), nil
 	case syntax.BinBitOr:
+		if isByte {
+			return wrapByte(lv.Int | rv.Int), nil
+		}
 		return intVal(lv.Int | rv.Int), nil
 	case syntax.BinBitXor:
+		if isByte {
+			return wrapByte(lv.Int ^ rv.Int), nil
+		}
 		return intVal(lv.Int ^ rv.Int), nil
 	case syntax.BinShl:
 		// Shift by negative amounts is undefined in C; typeck does not catch
 		// it. Go panics on negative shift count in some Go versions; we let
 		// the runtime decide rather than synthesising a specific error.
+		if isByte {
+			return wrapByte(lv.Int << uint64(rv.Int)), nil
+		}
 		return intVal(lv.Int << uint64(rv.Int)), nil
 	case syntax.BinShr:
+		if isByte {
+			return wrapByte(lv.Int >> uint64(rv.Int)), nil
+		}
 		return intVal(lv.Int >> uint64(rv.Int)), nil
 	case syntax.BinEq:
 		eq, err := eqValues(lv, rv)
@@ -1811,6 +1960,12 @@ func floatMod(a, b float64) float64 { return math.Mod(a, b) }
 // returns int — at v0.2 it's the only generic intrinsic, so a single-name
 // switch is the right shape; future built-ins will append.
 func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
+	// Bare `Ok(v)` / `Err(e)` sugar — typeck lowered to a Result enum-lit.
+	// Route through the EnumLit evaluator so construction follows the same
+	// path as `Result.Ok(v)`.
+	if e.Lowered != nil {
+		return in.evalEnumLit(e.Lowered)
+	}
 	// v0.7: anon-fn IIFE — `fn() { ... }()`. The callee is the AnonFnExpr
 	// itself; evaluate it to an fnValue and dispatch through callFnValue.
 	if anon, ok := e.Callee.(*syntax.AnonFnExpr); ok {
@@ -1843,6 +1998,19 @@ func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
 	}
 	if ident.Name == "push" {
 		return in.evalPush(e)
+	}
+	// v0.14 str ↔ list[byte] bridge builtins.
+	if ident.Name == "bytes" {
+		return in.evalStrBytes(e)
+	}
+	if ident.Name == "to_str" {
+		return in.evalListByteToStr(e)
+	}
+	// v0.14 panic(msg) — writes "zerg: runtime: <msg>\n" to stderr
+	// and exits with code 1. Surfaces as a non-recoverable runtime
+	// failure — never returns to the caller.
+	if ident.Name == "panic" {
+		return in.evalPanic(e)
 	}
 	// v0.6: typeck stamps e.Specialised on calls to generic fns with the
 	// monomorphised FnDecl clone. Body type-refs in the clone resolve to
@@ -1897,6 +2065,15 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 	// typeck on the call expression.
 	if fn.BuiltinName != "" {
 		return in.callBuiltin(fn, args, resultType, callPos)
+	}
+
+	// v0.14: sys/syscall wrapper fns have a non-empty body, but the body
+	// is a single `asm { svc #0x80 ... }` block the interpreter cannot
+	// execute. The intrinsic dispatch returns handled=true when fn is
+	// one of those wrappers; we bypass the body walk and return its
+	// signed-errno result directly. See run_v14_syscall.go.
+	if v, handled, err := in.invokeSysSyscallIntrinsic(fn, args); handled {
+		return v, err
 	}
 
 	// Calls do NOT inherit the caller's scope: a fresh frame stack rooted at
@@ -2007,10 +2184,82 @@ func (in *interp) evalLen(e *syntax.CallExpr) (Value, error) {
 	case syntax.TypeList:
 		return intVal(int64(len(v.List))), nil
 	case syntax.TypeStr:
-		// PLAN: count of runes, not bytes. []rune(s) decodes UTF-8.
-		return intVal(int64(len([]rune(v.Str)))), nil
+		// v0.14: byte count (the v0.2 rune-count reading was dead code
+		// — typeck rejected str — and the live reading matches
+		// list[byte].len() semantics so stdlib byte-oriented ops can
+		// be implemented in pure Zerg). The Go string's len() returns
+		// byte count directly.
+		return intVal(int64(len(v.Str))), nil
 	}
 	return Value{}, fmt.Errorf("internal: len cannot accept %s at %s", v.Type, e.Pos)
+}
+
+// evalStrBytes implements `bytes(s)` — the v0.14 str → list[byte] bridge.
+// Allocates a fresh list[byte] from s.Str's bytes. UTF-8 boundaries are
+// not respected: every byte becomes one element regardless of whether
+// it's a lead, continuation, or BOM — matches the byte-buffer semantics
+// the stdlib byte-oriented ops want.
+func (in *interp) evalStrBytes(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: bytes expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeStr {
+		return Value{}, fmt.Errorf("internal: bytes arg must be str, got %s at %s", v.Type, e.Pos)
+	}
+	out := make([]Value, 0, len(v.Str))
+	for i := 0; i < len(v.Str); i++ {
+		out = append(out, byteVal(int64(v.Str[i])))
+	}
+	return listVal(syntax.TByte(), out), nil
+}
+
+// evalPanic implements `panic(msg)` — surfaces the message as a Go
+// error that the eval chain bubbles up to the CLI / test harness. The
+// build half writes "zerg: runtime: <msg>\n" to stderr via the
+// always-emitted zerg_panic helper and exits with code 1; the interp
+// half lets the host print the returned error before exiting (the CLI
+// driver wraps eval errors with the "runtime error at <pos>:" prefix
+// for source-locatable diagnostics). Both halves' stderr output ends
+// up containing the original `msg` text, which is what the v0.10-
+// pinned stability tests check for.
+func (in *interp) evalPanic(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: panic expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeStr {
+		return Value{}, fmt.Errorf("internal: panic arg must be str, got %s at %s", v.Type, e.Pos)
+	}
+	return Value{}, fmt.Errorf("runtime error at %s: %s", e.Pos, v.Str)
+}
+
+// evalListByteToStr implements `to_str(buf)` — the v0.14 list[byte] → str
+// bridge. Concatenates the byte values into a Go string; UTF-8 validity
+// is the caller's responsibility (mirrors the C-side helper's contract).
+func (in *interp) evalListByteToStr(e *syntax.CallExpr) (Value, error) {
+	if len(e.Args) != 1 {
+		return Value{}, fmt.Errorf("internal: to_str expects 1 arg, got %d at %s", len(e.Args), e.Pos)
+	}
+	v, err := in.evalExpr(e.Args[0])
+	if err != nil {
+		return Value{}, err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeList ||
+		v.Type.Element == nil || v.Type.Element.Kind != syntax.TypeByte {
+		return Value{}, fmt.Errorf("internal: to_str arg must be list[byte], got %s at %s", v.Type, e.Pos)
+	}
+	buf := make([]byte, len(v.List))
+	for i, el := range v.List {
+		buf[i] = byte(el.Int & 0xFF)
+	}
+	return strVal(string(buf)), nil
 }
 
 // evalClone implements `clone(xs)`. The argument has already been validated by
@@ -2334,6 +2583,24 @@ func (in *interp) execMatch(s *syntax.MatchStmt) error {
 // mismatches (e.g. tuple-pat against non-tuple), so this path only fires on
 // value-disagreement (literal mismatch, enum variant mismatch, ...).
 func (in *interp) bindPattern(pat syntax.Pattern, v Value) (bool, error) {
+	// Auto-unwrap on nullable instance scrutinees. typeck has validated
+	// that a non-nil pattern targets the inner element type; here we
+	// mirror by matching the variant tag first and recursing on the Some
+	// payload. `nil` LitPats keep the full nullable instance view so
+	// litEq's tag comparison fires.
+	if syntax.IsNullable(v.Type) {
+		if syntax.IsNilLitPattern(pat) {
+			return v.VariantName == "None", nil
+		}
+		if _, isEnumPat := pat.(*syntax.EnumPat); !isEnumPat {
+			if v.VariantName == "None" {
+				return false, nil
+			}
+			if len(v.Payload) == 1 {
+				return in.bindPattern(pat, v.Payload[0])
+			}
+		}
+	}
 	switch p := pat.(type) {
 	case *syntax.WildcardPat:
 		return true, nil

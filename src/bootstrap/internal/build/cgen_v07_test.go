@@ -371,8 +371,8 @@ wg.wait()
 close(ch)
 r := <- total
 match r {
-Option.Some(s) => { print s }
-Option.None => { print 0 }
+nil => { print 0 }
+s => { print s }
 }
 }
 run()

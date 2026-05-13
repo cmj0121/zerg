@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.ends_with("hello world", "world")
 print strings.ends_with("hello world", "hello")

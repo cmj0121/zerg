@@ -5,24 +5,29 @@ import (
 	"testing"
 )
 
-// v0.6 Unit 2 — typeck for built-in Option / Result enums.
+// v0.6 Unit 2 — typeck for the built-in Result enum and the synthetic
+// Option-backed `T?` shape. As of v0.15, `Option` is no longer a
+// user-visible type name; the canonical instance is still produced by
+// `T?` resolution but spelled `int?` etc. in diagnostics.
 //
 // Coverage:
-//   - Option / Result are visible as type names without an import.
-//   - `x: Option[int] = ...` resolves; arity / name validation fires on
-//     malformed type-arg shapes.
-//   - `x: int? = ...` resolves to the same canonical *Type as
-//     `x: Option[int] = ...` (T? ≡ Option[T] at the canonical level).
-//   - User `enum Option { ... }`, `struct Option { ... }`, `spec Option`,
-//     and likewise for Result, reject with the reservation diagnostic.
-//   - `x: int? = nil` succeeds (binding annotation supplies the
-//     expected type); `x := nil` and `print nil` reject with the
-//     inference-failure diagnostic.
+//   - Result is visible as a type name without an import.
+//   - `x: int? = ...` resolves to a TypeEnum whose canonical Name is
+//     `Option[int]` (internal); user-spelling stays `int?`.
+//   - `Option` and `Option[T]` reject at type position with a focused
+//     diagnostic that suggests `T?`.
+//   - User `enum Option`, `struct Option`, `spec Option` reject with
+//     the reservation diagnostic (separate path).
+//   - `x: int? = nil` succeeds; `x := nil` and `print nil` reject with
+//     the inference-failure diagnostic.
 
 // --- visibility tests -----------------------------------------------------
 
-func TestV06BuiltinOptionVisibleByName(t *testing.T) {
-	prog := checkSrc(t, "x: Option[int] = nil\n")
+func TestV06NullableShape(t *testing.T) {
+	// `int?` resolves to the synthetic Option-backed enum. The internal
+	// Name is still `Option[int]` (used as the monomorph cache key); the
+	// user-facing diagnostic prints `int?` via Type.String.
+	prog := checkSrc(t, "x: int? = nil\n")
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Type.Resolved
 	if got == nil || got.Kind != TypeEnum {
@@ -40,7 +45,6 @@ func TestV06BuiltinOptionVisibleByName(t *testing.T) {
 			t.Errorf("variant[%d] = %q, want %q", i, got.Variants[i], v)
 		}
 	}
-	// Some payload is the substituted T (= int); None has no payload.
 	if len(got.VariantPayloads) != 2 {
 		t.Fatalf("payloads = %v, want 2 entries", got.VariantPayloads)
 	}
@@ -74,9 +78,21 @@ func TestV06BuiltinResultVisibleByName(t *testing.T) {
 	}
 }
 
-func TestV06BuiltinOptionWrongArity(t *testing.T) {
+func TestV06OptionTypeNameRejects(t *testing.T) {
+	// `Option` is concept-only. Bare or generic, the type name rejects
+	// with a focused diagnostic that points at `T?`.
+	checkErr(t, "fn use(x: Option[int]) {}\n",
+		"`Option` is not a valid type")
+}
+
+func TestV06OptionTypeNameWithMultipleArgsRejects(t *testing.T) {
 	checkErr(t, "fn use(x: Option[int, str]) {}\n",
-		`generic type "Option" expects 1 type argument(s), got 2`)
+		"`Option` is not a valid type")
+}
+
+func TestV06OptionBareNameRejects(t *testing.T) {
+	checkErr(t, "fn use(x: Option) {}\n",
+		"`Option` is not a valid type")
 }
 
 func TestV06BuiltinResultWrongArity(t *testing.T) {
@@ -84,37 +100,7 @@ func TestV06BuiltinResultWrongArity(t *testing.T) {
 		`generic type "Result" expects 2 type argument(s), got 1`)
 }
 
-func TestV06BuiltinOptionBareNameRejects(t *testing.T) {
-	checkErr(t, "fn use(x: Option) {}\n",
-		`generic type "Option" requires type arguments`)
-}
-
-// --- T? ≡ Option[T] canonicalisation -------------------------------------
-
-func TestV06NullableEqualsOption(t *testing.T) {
-	src := "a: Option[int] = nil\nb: int? = nil\n"
-	prog := checkSrc(t, src)
-	var aT, bT *Type
-	for _, st := range prog.Statements {
-		ls, ok := st.(*LetStmt)
-		if !ok {
-			continue
-		}
-		switch ls.Name {
-		case "a":
-			aT = ls.Type.Resolved
-		case "b":
-			bT = ls.Type.Resolved
-		}
-	}
-	if aT == nil || bT == nil {
-		t.Fatalf("missing resolved types: a=%v, b=%v", aT, bT)
-	}
-	if aT != bT {
-		t.Errorf("Option[int] (%p, %s) and int? (%p, %s) must canonicalise to the same *Type",
-			aT, aT, bT, bT)
-	}
-}
+// --- T? canonicalisation -------------------------------------------------
 
 func TestV06NullableNestedList(t *testing.T) {
 	prog := checkSrc(t, "fn use(xs: list[int]?) {}\n")
@@ -181,9 +167,9 @@ func TestV06NilAnnotatedLetSucceeds(t *testing.T) {
 	}
 }
 
-func TestV06NilAnnotatedRejectsNonOption(t *testing.T) {
-	// nil resolves only to Option[T]; a Result[T, E] annotation does not
-	// pull nil to Result.Err / Result.Ok at Unit 2.
+func TestV06NilAnnotatedRejectsNonNullable(t *testing.T) {
+	// nil resolves only against a nullable annotation; a Result[T, E]
+	// annotation does not pull nil to Result.Err / Result.Ok.
 	checkErr(t, "x: Result[int, str] = nil\n",
 		"cannot infer type of nil")
 }

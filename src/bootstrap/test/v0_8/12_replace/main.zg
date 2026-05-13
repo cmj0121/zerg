@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/strings"
+import "strings"
 
 print strings.replace("aaa", "aa", "b")
 print strings.replace("foo bar foo", "foo", "baz")

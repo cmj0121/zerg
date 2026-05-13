@@ -1,5 +1,5 @@
 # requires: v0.8
-import "std/math"
+import "math"
 
 print math.abs(-5)
 print math.abs(7)

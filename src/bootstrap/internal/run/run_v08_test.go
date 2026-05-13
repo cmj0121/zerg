@@ -270,7 +270,7 @@ func TestRunV08OsEnvSome(t *testing.T) {
 	expectV08OK(t, `# requires: v0.8
 import "std/os"
 print os.env("ZERG_TEST_V08_VAR")
-`, "Option.Some(abc)\n")
+`, "abc\n")
 }
 
 func TestRunV08OsEnvNone(t *testing.T) {
@@ -279,5 +279,5 @@ func TestRunV08OsEnvNone(t *testing.T) {
 	expectV08OK(t, `# requires: v0.8
 import "std/os"
 print os.env("ZERG_TEST_V08_VAR")
-`, "Option.None\n")
+`, "nil\n")
 }

@@ -1,6 +1,6 @@
 # requires: v0.9
-import "std/os"
-import "std/time"
+import "os"
+import "time"
 
 fn worker() {
     time.sleep_ms(10)

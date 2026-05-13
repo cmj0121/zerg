@@ -404,13 +404,6 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		if err := c.checkExprRead(s.Expr); err != nil {
 			return err
 		}
-		// v0.9 Unit 1: a tail call to a -> never fn at statement position
-		// is a divergence point — same shape as `return` for branch-merge
-		// purposes. Match arms / select arms / if arms whose body ends in
-		// such a call participate in the diverged-branch agreement rule.
-		if exprIsDivergingNeverCall(s.Expr) {
-			c.diverged = true
-		}
 		return nil
 	case *IfStmt:
 		return c.checkIf(s)
@@ -1512,6 +1505,20 @@ func bindPatternNames(p Pattern, subjectType *Type) []boundName {
 	var out []boundName
 	var walk func(p Pattern, t *Type)
 	walk = func(p Pattern, t *Type) {
+		// Match auto-unwrap on T?. Any pattern other than a nil literal or
+		// an explicit EnumPat targets the Some payload's inner type, so
+		// binding-name types collected here must descend into the element.
+		if IsNullable(t) {
+			if IsNilLitPattern(p) {
+				return
+			}
+			if _, isEnumPat := p.(*EnumPat); !isEnumPat {
+				if inner, ok := NullableInner(t); ok {
+					walk(p, inner)
+					return
+				}
+			}
+		}
 		switch x := p.(type) {
 		case *BindPat:
 			out = append(out, boundName{name: x.Name, typ: t})
@@ -1551,7 +1558,7 @@ func bindPatternNames(p Pattern, subjectType *Type) []boundName {
 //
 //   * Send (`ch <- v`) moves the value into the channel. The channel handle
 //     itself is read-only; sends and receives never move the chan binding.
-//   * Recv (`<- ch`) returns a fresh Option[T] value owned by the caller; the
+//   * Recv (`<- ch`) returns a fresh T? value owned by the caller; the
 //     channel handle is read-only.
 //   * Spawn closure capture deep-copies composite captures at the spawn site.
 //     Each capture is a clone-read on the source binding; the spawning fn

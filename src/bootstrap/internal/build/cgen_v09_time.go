@@ -1,14 +1,17 @@
 // v0.9 Unit 2 — codegen for std/time builtins.
 //
-// Trampolines for time_now_ms / time_sleep_ms forward into a small embedded
-// C runtime (runtimeV09TimeC) that holds a static struct timespec epoch and
-// captures it lazily on the first time_now_ms call (matching the
-// interpreter half: first call returns 0).
+// Trampolines for the two atomic time primitives (time_clock_us /
+// time_sleep_ns) forward into a small embedded C runtime
+// (runtimeV09TimeC). The primitives are intentionally narrow: clock_us
+// reads CLOCK_REALTIME and returns walltime microseconds; sleep_ns
+// calls nanosleep in an EINTR retry loop. All higher-level logic — the
+// epoch-zero-on-first-call contract, ms math, negative-ms clamp —
+// lives in pure-Zerg src/std/time.zg over the v0.14 module-level mut
+// state surfaced by the P1 init walk.
 //
-// Gating: programUsesV09 reports whether any reachable __builtin call's
-// name starts with a v0.9 prefix (currently `time_`; U3 will extend to
-// `os_argv` / `os_exit`). The runtime emit is gated on this so v0.0–v0.8
-// programs preserve their byte-identical output.
+// Gating: programUsesV09Time fires the runtime emit when either
+// primitive is referenced, so v0.0–v0.8 programs preserve their byte-
+// identical output.
 
 package build
 
@@ -21,7 +24,7 @@ import (
 // predicate so the v09 walker can disambiguate.
 func isV09Builtin(name string) bool {
 	switch name {
-	case "time_now_ms", "time_sleep_ms":
+	case "time_clock_us", "time_sleep_ns":
 		return true
 	}
 	return isV09ArgvExitBuiltin(name)
@@ -39,16 +42,15 @@ func (g *cgen) programUsesV09() bool {
 }
 
 // programUsesV09Time reports whether any module references a v0.9 time
-// __builtin (time_now_ms / time_sleep_ms). Drives the time runtime emit
-// independently of the argv/exit emit — Phase 4 Fix 4 tightens both
-// runtime gates so programs that use only os.argv don't pull in
-// <time.h> or the static epoch globals.
+// __builtin (time_clock_us / time_sleep_ns). Drives the time runtime
+// emit independently of the argv/exit emit — programs that use only
+// os.argv don't pull in <time.h> or the lazy-init epoch globals.
 func (g *cgen) programUsesV09Time() bool {
 	for i := range g.modules {
-		if g.programUsesBuiltinWalk(g.modules[i].prog, "time_now_ms") {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "time_clock_us") {
 			return true
 		}
-		if g.programUsesBuiltinWalk(g.modules[i].prog, "time_sleep_ms") {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "time_sleep_ns") {
 			return true
 		}
 	}
@@ -274,52 +276,51 @@ func (g *cgen) programUsesV09Walk(prog *syntax.Program) bool {
 // braces — same calling convention as builtinBodyStr.
 func emitV09TimeBuiltinBody(name string) (string, bool) {
 	switch name {
-	case "time_now_ms":
-		return "    return zerg_time_now_ms();\n", true
-	case "time_sleep_ms":
-		return "    return zerg_time_sleep_ms(z_ms);\n", true
+	case "time_clock_us":
+		return "    return zerg_time_clock_us();\n", true
+	case "time_sleep_ns":
+		return "    return zerg_time_sleep_ns(z_sec, z_nsec);\n", true
 	}
 	return "", false
 }
 
-// runtimeV09TimeC is the embedded C runtime for std/time. Lazy-init epoch
-// matches the interpreter's behaviour: the first time_now_ms call returns 0
-// and captures the epoch; subsequent calls return ms-since-epoch using
-// CLOCK_MONOTONIC. sleep_ms uses nanosleep; negative ms clamps to 0.
+// runtimeV09TimeC is the embedded C runtime for std/time's two atomic
+// primitives. time_clock_us reads CLOCK_REALTIME and returns
+// (sec * 1_000_000 + nsec / 1_000), giving walltime microseconds.
+// time_sleep_ns calls nanosleep with an EINTR retry loop using the
+// kernel's remaining-time fill to honour "blocks at least N ns" across
+// signal delivery.
 //
-// Phase 4 Fix 3: nanosleep returns EINTR on signal-interrupt; we loop with
-// the remaining time so the "blocks at least N ms" contract holds. Go's
-// time.Sleep already handles signals correctly so the interpreter half
-// needs no equivalent change.
+// All higher-level logic — the epoch-zero contract, ms math, negative
+// clamp — lives in src/std/time.zg over P1's module-level mut state.
+// Keeping the C primitives narrow means the build half's deviation
+// from the run half is contained to the libc surface; the Zerg-level
+// behaviour is identical because both halves implement the same
+// pure-Zerg now_ms / sleep_ms on top of the same primitive contract.
 const runtimeV09TimeC = `#include <time.h>
 #include <errno.h>
 
 /* ---------------- v0.9 std/time runtime --------------------------------- */
 
-static struct timespec zerg_time_epoch;
-static int zerg_time_initialised = 0;
-
-static int64_t zerg_time_now_ms(void) {
+static int64_t zerg_time_clock_us(void) {
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    if (!zerg_time_initialised) {
-        zerg_time_epoch = now;
-        zerg_time_initialised = 1;
-        return 0;
-    }
-    return (int64_t)(now.tv_sec - zerg_time_epoch.tv_sec) * 1000
-         + (int64_t)(now.tv_nsec - zerg_time_epoch.tv_nsec) / 1000000;
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (int64_t)now.tv_sec * 1000000 + (int64_t)now.tv_nsec / 1000;
 }
 
-static _Bool zerg_time_sleep_ms(int64_t ms) {
-    if (ms <= 0) return 1;
+static int64_t zerg_time_sleep_ns(int64_t sec, int64_t nsec) {
+    if (sec < 0 || nsec < 0) return -((int64_t)EINVAL);
     struct timespec req;
-    req.tv_sec = (time_t)(ms / 1000);
-    req.tv_nsec = (long)((ms % 1000) * 1000000L);
+    req.tv_sec = (time_t)sec;
+    req.tv_nsec = (long)nsec;
     struct timespec rem;
-    while (nanosleep(&req, &rem) == -1 && errno == EINTR) {
-        req = rem;
+    while (nanosleep(&req, &rem) == -1) {
+        if (errno == EINTR) {
+            req = rem;
+            continue;
+        }
+        return -((int64_t)errno);
     }
-    return 1;
+    return 0;
 }
 `

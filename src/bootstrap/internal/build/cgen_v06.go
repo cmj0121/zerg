@@ -18,29 +18,29 @@ import (
 )
 
 // nilLitStr lowers a NilLit expression. typeck has already resolved the
-// expression type to the contextually-inferred Option[T]; the C value is
-// `((<OptionType>){.tag = <None_idx>})`. The None variant is at index 1
-// in the canonical Option enum (Some at 0, None at 1).
+// expression type to the contextually-inferred nullable; the C value is
+// `((<NullableType>){.tag = <absent_idx>})`. The absent variant lives at
+// index 1 of the synthetic nullable enum (present at 0, absent at 1).
 func (g *cgen) nilLitStr(e *syntax.NilLit) (string, error) {
 	t := e.Type()
-	if t == nil || t.Kind != syntax.TypeEnum || !strings.HasPrefix(t.Name, "Option[") {
-		return "", fmt.Errorf("codegen: nil literal at %s has non-Option type %s", e.Pos, t)
+	if !syntax.IsNullable(t) {
+		return "", fmt.Errorf("codegen: nil literal at %s has non-nullable type %s", e.Pos, t)
 	}
 	idx := variantIndex(t, "None")
 	if idx < 0 {
-		return "", fmt.Errorf("codegen: Option type %s has no None variant", t.Name)
+		return "", fmt.Errorf("codegen: nullable type %s has no absent variant", t.Name)
 	}
 	return fmt.Sprintf("((%s){.tag = %d})", g.mangleType(t), idx), nil
 }
 
-// propagateStr lowers `inner?`. The inner produces an Option[T] or
+// propagateStr lowers `inner?`. The inner produces a T? or
 // Result[T, E]; on Some/Ok the value is unwrapped; on None/Err the
 // enclosing fn early-returns with the propagated tag.
 //
 // The enclosing fn's return type is g.currentFnRet; typeck has validated
-// that it is shape-compatible (Option[U] for an Option inner; Result[U, E]
-// with the same E for a Result inner). For Option propagation the early-
-// return is the None variant of the enclosing Option type; for Result it
+// that it is shape-compatible (U? for a nullable inner; Result[U, E]
+// with the same E for a Result inner). For nullable propagation the early-
+// return is the None variant of the enclosing nullable type; for Result it
 // is the Err variant of the enclosing Result type, carrying the same E
 // payload as the inner.
 func (g *cgen) propagateStr(e *syntax.PropagateExpr) (string, error) {
@@ -54,7 +54,7 @@ func (g *cgen) propagateStr(e *syntax.PropagateExpr) (string, error) {
 	}
 	retT := g.currentFnRet
 	if retT == nil || retT.Kind != syntax.TypeEnum {
-		return "", fmt.Errorf("codegen: ? at %s requires an Option/Result-returning enclosing fn", e.Pos)
+		return "", fmt.Errorf("codegen: ? at %s requires a T?- or Result-returning enclosing fn", e.Pos)
 	}
 	innerMname := g.mangleType(innerT)
 	retMname := g.mangleType(retT)
@@ -66,8 +66,8 @@ func (g *cgen) propagateStr(e *syntax.PropagateExpr) (string, error) {
 	if g.currentHasDefers {
 		drain = "zerg_defer_drain(__zerg_defer_marker); "
 	}
-	if strings.HasPrefix(innerT.Name, "Option[") {
-		// Option propagation: tag 0 = Some, tag 1 = None.
+	if syntax.IsNullable(innerT) {
+		// nullable propagation: tag 0 = Some, tag 1 = None.
 		noneIdx := variantIndex(retT, "None")
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "({ %s %s = %s; ", innerMname, tmp, innerS)
@@ -87,7 +87,7 @@ func (g *cgen) propagateStr(e *syntax.PropagateExpr) (string, error) {
 	return sb.String(), nil
 }
 
-// coalesceStr lowers `lhs ?? rhs`. The LHS is Option[T] or Result[T, E];
+// coalesceStr lowers `lhs ?? rhs`. The LHS is T? or Result[T, E];
 // when the tag is Some/Ok the value is the LHS payload, otherwise the RHS
 // value. RHS is evaluated only when LHS misses.
 func (g *cgen) coalesceStr(e *syntax.CoalesceExpr) (string, error) {
@@ -111,9 +111,9 @@ func (g *cgen) coalesceStr(e *syntax.CoalesceExpr) (string, error) {
 		mname, tmp, lhsS, tmp, tmp, rhsS), nil
 }
 
-// safeFieldAccessStr lowers `obj?.field`. The receiver is an Option[T] for
+// safeFieldAccessStr lowers `obj?.field`. The receiver is a T? for
 // some struct T owning the field; when Some, wrap the field's value in a
-// new Option of the field-type-Option canonical type; when None, propagate
+// new nullable of the field-type-Option canonical type; when None, propagate
 // None of the same canonical type.
 func (g *cgen) safeFieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 	rs, err := g.exprStr(e.Receiver)
@@ -122,14 +122,14 @@ func (g *cgen) safeFieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 	}
 	rt := e.Receiver.Type()
 	if rt == nil || rt.Kind != syntax.TypeEnum {
-		return "", fmt.Errorf("codegen: ?. receiver at %s has non-Option type %s", e.Pos, rt)
+		return "", fmt.Errorf("codegen: ?. receiver at %s has non-nullable type %s", e.Pos, rt)
 	}
-	// The receiver inner type is Option[T] — recover T from the Some payload.
+	// The receiver inner type is T? — recover T from the present-case payload.
 	if len(rt.VariantPayloads) < 1 || len(rt.VariantPayloads[0]) != 1 {
-		return "", fmt.Errorf("codegen: ?. receiver Option payload shape unexpected at %s", e.Pos)
+		return "", fmt.Errorf("codegen: ?. receiver nullable payload shape unexpected at %s", e.Pos)
 	}
 	innerT := rt.VariantPayloads[0][0]
-	// e.Type() is Option[fieldT]; produce its mangled name.
+	// e.Type() is fieldT?; produce its mangled name.
 	resT := e.Type()
 	if resT == nil {
 		return "", fmt.Errorf("codegen: ?. result type missing at %s", e.Pos)

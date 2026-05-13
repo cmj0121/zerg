@@ -80,9 +80,10 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		canonical := m.ModuleName()
 		mangle := mangleModule(canonical)
 		me := moduleEmit{
-			view:   m,
-			prog:   m.ModuleProgram(),
-			mangle: mangle,
+			view:         m,
+			prog:         m.ModuleProgram(),
+			mangle:       mangle,
+			topLevelVars: map[string]bool{},
 		}
 		g.modules = append(g.modules, me)
 	}
@@ -116,6 +117,33 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 			if g.modules[i].view == entry {
 				g.entryMangle = g.modules[i].mangle
 				break
+			}
+		}
+	}
+	// v0.14 P1: collect top-level let / mut / const binding names for
+	// non-entry modules so fn-body identifiers resolving to those names
+	// get module-mangled in identName. The entry module's bindings stay
+	// in main()'s local scope per the historical emit, so they're not
+	// registered here.
+	for i := range g.modules {
+		me := &g.modules[i]
+		if me.mangle == g.entryMangle {
+			continue
+		}
+		for _, stmt := range me.prog.Statements {
+			switch s := stmt.(type) {
+			case *syntax.LetStmt:
+				if s.Name != "" {
+					me.topLevelVars[s.Name] = true
+				}
+			case *syntax.MutStmt:
+				if s.Name != "" {
+					me.topLevelVars[s.Name] = true
+				}
+			case *syntax.ConstStmt:
+				if s.Name != "" {
+					me.topLevelVars[s.Name] = true
+				}
 			}
 		}
 	}
@@ -259,22 +287,30 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		// through the user-AST walks. v0.9 os.argv has the same need.
 		g.shapes.addType(g, listOfStrType())
 	}
+	// v0.14 str ↔ list[byte] bridge: force-mono list[byte] so the
+	// zerg_str_bytes / zerg_list_uint8_t_to_str helpers compile when a
+	// program calls s.bytes() / buf.to_str() without otherwise touching
+	// list[byte] (matches the v0.8 list[str] force-mono pattern).
+	needsV14StrPrims := g.programUsesV14StrPrims()
+	if needsV14StrPrims {
+		g.shapes.addType(g, listOfByteType())
+	}
 
-	// v0.7: wire the Option[T] lookup so chan recv helpers can name the
-	// canonical Option[T] enum. The typed AST stamps every RecvExpr.Type()
-	// with the canonical Option[T]; we walk every RecvExpr and chan-typed
+	// v0.7: wire the T? lookup so chan recv helpers can name the
+	// canonical T? enum. The typed AST stamps every RecvExpr.Type()
+	// with the canonical T?; we walk every RecvExpr and chan-typed
 	// `for v in ch` site to harvest the pointer keyed by element-type
 	// string. addChanShape later consults this index when registering the
 	// chan helper.
-	g.chanOptionByElemKey = map[string]*syntax.Type{}
+	g.chanNullableByElemKey = map[string]*syntax.Type{}
 	for i := range g.modules {
-		g.harvestChanOptionTypes(g.modules[i].prog)
+		g.harvestChanNullableTypes(g.modules[i].prog)
 	}
-	g.chanOptionLookup = func(elem *syntax.Type) *syntax.Type {
+	g.chanNullableLookup = func(elem *syntax.Type) *syntax.Type {
 		if elem == nil {
 			return nil
 		}
-		return g.chanOptionByElemKey[elem.String()]
+		return g.chanNullableByElemKey[elem.String()]
 	}
 
 	// v0.7: pre-collect chan shapes from typed AST so emitChanTypedefs runs
@@ -304,6 +340,16 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString(runtimeV08C)
 		g.b.WriteString("\n")
 	}
+	// v0.14 str-prim helpers — emitted after the shape helpers and the
+	// v0.8 runtime so the zerg_list_uint8_t typedef is in scope when
+	// the bytes / to_str helpers reference it. Gated independently of
+	// v0.8 because a program may use s.bytes() without pulling in any
+	// __builtin module (the v0.14 bridge is implementable in pure Zerg
+	// over inline asm, so a stdlib-free program can still need it).
+	if needsV14StrPrims {
+		g.b.WriteString(runtimeV14StrPrimsC)
+		g.b.WriteString("\n")
+	}
 	// v0.9 stdlib runtime — gated on a reachable time builtin so v0.0–v0.8
 	// programs (and v0.9 programs that use only os.argv / os.exit) preserve
 	// their byte-identical emit. <time.h> is conditionally included by the
@@ -312,20 +358,29 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString(runtimeV09TimeC)
 		g.b.WriteString("\n")
 	}
-	// v0.9 Unit 3 — argv / exit runtime. Lands after the shape helpers so
-	// zerg_list_zerg_str_push (referenced by zerg_os_argv) is already
-	// defined. Emit ONLY when the program reaches an os.argv or os.exit
-	// call site so a v0.8 program that imports std/os solely for os.env
-	// keeps its pre-v0.9 byte-identical emit. The trampoline-emit pass
-	// elides bodies for unused builtins, so referencing-only-os_env never
-	// pulls in zerg_os_argv / zerg_os_exit symbols.
-	if needsArgv || g.programUsesOsExit() {
+	// v0.9 Unit 3 — std/os primitive runtime. Lands after the shape
+	// helpers so any list[zerg_str] shape force-mono lands first
+	// (historically required when zerg_os_argv emitted a list-builder;
+	// kept as-is for consistency with the gate). Emit ONLY when a
+	// program reaches an argv or envp primitive so a v0.8 program that
+	// imports std/os for nothing keeps its pre-v0.9 byte-identical emit.
+	if needsArgv || g.programUsesEnvp() {
 		g.b.WriteString(runtimeV09ArgvExitC)
 		g.b.WriteString("\n")
 	}
 	g.emitEqHelpers()
 	g.emitSpecVtablesAndMethods()
 	if err := g.emitAnonFnHeaders(); err != nil {
+		return err
+	}
+
+	// v0.14 P1: imported-module top-level globals. Each non-entry module's
+	// let / mut / const stmts emit as `static <T> z_<mangle>__<name> = init;`
+	// at file scope before the fn forward decls. identName resolves
+	// fn-body references to these symbols. Initializer must be a C
+	// constant expression today; non-constant inits would need a runtime
+	// init function, deferred until a use case appears.
+	if err := g.emitImportedModuleGlobals(); err != nil {
 		return err
 	}
 
@@ -440,10 +495,12 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString("}\n")
 		if needsArgv {
 			g.b.WriteString("int main(int argc, char **argv) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 			g.b.WriteString("    __zerg_argc = argc;\n")
 			g.b.WriteString("    __zerg_argv = argv;\n")
 		} else {
 			g.b.WriteString("int main(void) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 		}
 		g.b.WriteString("    zerg_sched_init(0);\n")
 		g.b.WriteString("    zerg_coro_spawn(__zerg_top_main, 0);\n")
@@ -455,10 +512,12 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		// the top-level statements inlined as before.
 		if needsArgv {
 			g.b.WriteString("int main(int argc, char **argv) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 			g.b.WriteString("    __zerg_argc = argc;\n")
 			g.b.WriteString("    __zerg_argv = argv;\n")
 		} else {
 			g.b.WriteString("int main(void) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 		}
 		if g.entryProg != nil {
 			for _, stmt := range g.entryProg.Statements {
@@ -527,6 +586,15 @@ type moduleEmit struct {
 	prog    *syntax.Program
 	mangle  string
 	imports map[string]string
+	// topLevelVars is the set of top-level let / mut / const binding
+	// names declared in this module. Populated for non-entry modules
+	// only — those bindings get promoted to file-scope C statics
+	// (`z_<mangle>__<name>`) so fn bodies in the same module can read
+	// and write them via the identName lookup. The entry module keeps
+	// its top-level lets / muts inline inside main() per the historical
+	// emit; only imported modules' bindings need promotion since their
+	// fn bodies execute in a foreign translation unit.
+	topLevelVars map[string]bool
 }
 
 // stampCrossModuleOwners walks stmt's expressions inside a host module
@@ -652,6 +720,9 @@ func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map
 			walkE(x.Callee)
 			for _, a := range x.Args {
 				walkE(a)
+			}
+			if x.Lowered != nil {
+				walkE(x.Lowered)
 			}
 		case *syntax.ListLit:
 			for _, sub := range x.Elements {
@@ -925,6 +996,9 @@ func walkExprTypes(e syntax.Expr, visit func(*syntax.Type)) {
 		for _, a := range x.Args {
 			walkExprTypes(a, visit)
 		}
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		}
 	case *syntax.ListLit:
 		for _, sub := range x.Elements {
 			walkExprTypes(sub, visit)
@@ -1061,16 +1135,16 @@ type cgen struct {
 	// map to emit per-element struct + helpers ahead of user fns.
 	chanShapes map[string]*chanShape
 	chanOrder  []string
-	// chanOptionLookup is a closure that returns the canonical Option[T]
+	// chanNullableLookup is a closure that returns the canonical T?
 	// *Type for a given element type T. Wired during EmitBundle from the
 	// per-program built-in Option monomorphisation cache so the chan
-	// recv helper emits the right Option[T] enum.
-	chanOptionLookup func(elem *syntax.Type) *syntax.Type
-	// chanOptionByElemKey is the harvested Option[T] map populated at
-	// EmitBundle entry by harvestChanOptionTypes. Key is element-type
-	// String(); value is the canonical Option[T] *Type stamped on a
+	// recv helper emits the right T? enum.
+	chanNullableLookup func(elem *syntax.Type) *syntax.Type
+	// chanNullableByElemKey is the harvested T? map populated at
+	// EmitBundle entry by harvestChanNullableTypes. Key is element-type
+	// String(); value is the canonical T? *Type stamped on a
 	// RecvExpr or for-chan iter site.
-	chanOptionByElemKey map[string]*syntax.Type
+	chanNullableByElemKey map[string]*syntax.Type
 	// anonFns holds every spawn / defer body queued for top-level emission,
 	// in declaration order. Pre-registered by preregisterAnonFns so the
 	// emitted .c file can forward-declare each trampoline ahead of any user
@@ -1640,9 +1714,25 @@ func emitStructHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type
 func emitEnumPrint(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static void zerg_print_%s(%s e) {\n", mname, mname)
 	fmt.Fprintf(b, "    switch (e.tag) {\n")
+	// The synthetic nullable (T?) prints the inner value for the present
+	// case and `nil` for the absent case — `Option` is not a user-visible
+	// name, so the qualified `Option.Some(...)` form would leak the internal
+	// identity through stdout.
+	isNullable := syntax.IsNullable(t)
 	displayName := printEnumDisplayName(t)
 	for i, v := range t.Variants {
 		payload := variantPayload(t, i)
+		if isNullable && v == "None" {
+			fmt.Fprintf(b, "    case %d: fputs(\"nil\", stdout); break;\n", i)
+			continue
+		}
+		if isNullable && v == "Some" && len(payload) == 1 {
+			fmt.Fprintf(b, "    case %d: {\n", i)
+			fmt.Fprintf(b, "        %s;\n", g.printExpr(payload[0], fmt.Sprintf("e.payload.p%d.a0", i)))
+			fmt.Fprintf(b, "        break;\n")
+			fmt.Fprintf(b, "    }\n")
+			continue
+		}
 		if len(payload) == 0 {
 			fmt.Fprintf(b, "    case %d: fputs(%q, stdout); break;\n", i, displayName+"."+v)
 		} else {
@@ -1694,7 +1784,7 @@ func emitEnumCopy(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 // printEnumDisplayName returns the user-visible base name for an enum, used
 // in the print helper. For non-generic enums the Name is already the bare
 // form; for monomorphised generic enums the Name carries the bracket suffix
-// (e.g. `Option[int]`) which the print path must drop per PLAN.md §Print
+// (e.g. `int?`) which the print path must drop per PLAN.md §Print
 // parity. Diagnostic paths (Type.String) keep the suffix for disambiguation.
 func printEnumDisplayName(t *syntax.Type) string {
 	return stripGenericArgs(t)
@@ -2052,6 +2142,9 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 		for _, a := range x.Args {
 			g.collectExpr(a)
 		}
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		}
 	case *syntax.ListLit:
 		for _, sub := range x.Elements {
 			g.collectExpr(sub)
@@ -2250,31 +2343,6 @@ func (g *cgen) emitPrint(s *syntax.PrintStmt) error {
 // underlying buffer/struct is safe. clone() is the explicit opt-in for
 // the v0.2-style deep copy.
 func (g *cgen) emitDecl(name string, ref *syntax.TypeRef, value syntax.Expr, isConst bool) error {
-	// v0.9 Phase 4 Fix 1: a `-> never` RHS (e.g. `x: int = os.exit(0)`)
-	// typechecks via the bottom-type subtyping rule but the underlying C
-	// trampoline returns void. Emit the call as a statement and emit a
-	// zero-initialised stub binding so any subsequent references to the
-	// name still compile — the call diverges so the stub is never read.
-	if vt := value.Type(); vt != nil && vt.Kind == syntax.TypeNever {
-		exprS, err := g.exprStr(value)
-		if err != nil {
-			return err
-		}
-		var declT *syntax.Type
-		if ref != nil && ref.Resolved != nil {
-			declT = ref.Resolved
-		}
-		g.writeIndent()
-		fmt.Fprintf(&g.b, "%s;\n", exprS)
-		if declT != nil && declT.Kind != syntax.TypeNever {
-			g.writeIndent()
-			if isConst {
-				g.b.WriteString("const ")
-			}
-			fmt.Fprintf(&g.b, "%s %s = (%s){0};\n", g.cTypeName(declT), mangle(name), g.cTypeName(declT))
-		}
-		return nil
-	}
 	t := value.Type()
 	declT := t
 	if ref != nil && ref.Resolved != nil {
@@ -2348,16 +2416,7 @@ func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
 	if err != nil {
 		return err
 	}
-	// v0.9 Phase 4 Fix 1: a `-> never` RHS (e.g. `x = os.exit(0)`)
-	// typechecks via the bottom-type rule but the trampoline returns
-	// void. Emit the call as a statement and skip the assignment;
-	// control never returns from a diverging callee.
-	if vt := s.Value.Type(); vt != nil && vt.Kind == syntax.TypeNever {
-		g.writeIndent()
-		fmt.Fprintf(&g.b, "%s;\n", rhs)
-		return nil
-	}
-	targetName := mangle(target.Name)
+	targetName := g.identName(target.Name)
 	g.writeIndent()
 	switch s.Op {
 	case syntax.AssignSet:
@@ -2604,28 +2663,6 @@ func (g *cgen) emitReturn(s *syntax.ReturnStmt) error {
 		if err != nil {
 			return err
 		}
-		// v0.9 Phase 4 Fix 1: `return os.exit(0)` from a non-never fn
-		// typechecks via never <: T but the trampoline returns void.
-		// Emit the call as a statement; the diverging callee never
-		// returns so a following return is unreachable. The C compiler
-		// is satisfied because the trampoline carries
-		// __attribute__((noreturn)).
-		if vt := s.Value.Type(); vt != nil && vt.Kind == syntax.TypeNever {
-			body = fmt.Sprintf("%s;", v)
-			if s.Guard == nil {
-				g.writeIndent()
-				g.b.WriteString(body)
-				g.b.WriteString("\n")
-				return nil
-			}
-			guard, err := g.exprStr(s.Guard)
-			if err != nil {
-				return err
-			}
-			g.writeIndent()
-			fmt.Fprintf(&g.b, "if (%s) { %s }\n", guard, body)
-			return nil
-		}
 		// v0.4: coerce to the declared fn return type if spec-typed.
 		if g.currentFnRet != nil && shapeContainsSpec(g.currentFnRet) {
 			v = g.coerceCExpr(v, s.Value.Type(), g.currentFnRet)
@@ -2751,12 +2788,6 @@ func (g *cgen) writeFnSig(fn *syntax.FnDecl) {
 		ret = g.cTypeName(fn.Return.Resolved)
 	}
 	b.WriteString("static ")
-	// v0.9 Unit 1: `-> never` fn-decls cannot return; tell the C compiler
-	// so it does not warn about missing trailing return / unreachable
-	// fall-through paths.
-	if fnReturnsNever(fn) {
-		b.WriteString("__attribute__((noreturn)) ")
-	}
 	b.WriteString(ret)
 	b.WriteByte(' ')
 	b.WriteString(g.fnCName(fn))
@@ -2921,7 +2952,23 @@ func (g *cgen) emitMatch(s *syntax.MatchStmt) error {
 // patternTest returns a C boolean expression that's true iff pat matches the
 // scrutinee at C expression `scrut`. Returns "1" for wildcard/bind patterns
 // (which always match).
+//
+// When scrutT is T?, a `nil` LitPat tests tag==None; any other pattern
+// tests tag==Some AND recurses on the Some payload (`.payload.p0.a0`).
 func (g *cgen) patternTest(pat syntax.Pattern, scrut string, scrutT *syntax.Type) string {
+	if syntax.IsNullable(scrutT) {
+		if syntax.IsNilLitPattern(pat) {
+			noneIdx := variantIndex(scrutT, "None")
+			return fmt.Sprintf("(%s.tag == %d)", scrut, noneIdx)
+		}
+		if _, isEnumPat := pat.(*syntax.EnumPat); !isEnumPat {
+			someIdx := variantIndex(scrutT, "Some")
+			head := fmt.Sprintf("(%s.tag == %d)", scrut, someIdx)
+			inner, _ := syntax.NullableInner(scrutT)
+			innerAccess := fmt.Sprintf("%s.payload.p%d.a0", scrut, someIdx)
+			return joinAnd([]string{head, g.patternTest(pat, innerAccess, inner)})
+		}
+	}
 	switch p := pat.(type) {
 	case *syntax.WildcardPat, *syntax.BindPat:
 		_ = p
@@ -2999,7 +3046,22 @@ func joinAnd(parts []string) string {
 // emitPatternBindings emits local-variable declarations for every BindPat
 // nested in pat. The bound name receives a deep copy of the corresponding
 // piece of scrut.
+//
+// Nullable auto-unwrap: when scrutT is T? and pat is not a `nil` LitPat, the
+// bindings target the inner Some payload at `.payload.p0.a0` — mirroring
+// patternTest's recursion.
 func (g *cgen) emitPatternBindings(pat syntax.Pattern, scrut string, scrutT *syntax.Type) error {
+	if syntax.IsNullable(scrutT) {
+		if syntax.IsNilLitPattern(pat) {
+			return nil
+		}
+		if _, isEnumPat := pat.(*syntax.EnumPat); !isEnumPat {
+			someIdx := variantIndex(scrutT, "Some")
+			inner, _ := syntax.NullableInner(scrutT)
+			innerAccess := fmt.Sprintf("%s.payload.p%d.a0", scrut, someIdx)
+			return g.emitPatternBindings(pat, innerAccess, inner)
+		}
+	}
 	switch p := pat.(type) {
 	case *syntax.WildcardPat, *syntax.LitPat:
 		_ = p
@@ -3087,7 +3149,7 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		}
 		return "(_Bool)0", nil
 	case *syntax.IdentExpr:
-		return mangle(e.Name), nil
+		return g.identName(e.Name), nil
 	case *syntax.ParenExpr:
 		inner, err := g.exprStr(e.Inner)
 		if err != nil {
@@ -3376,6 +3438,12 @@ func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 // v0.2-style deep copy; it remains the only call-site of the per-shape
 // `_copy` helper.
 func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
+	// Bare `Ok(v)` / `Err(e)` sugar — typeck lowered to a Result enum-lit.
+	// Route through the EnumLit emitter so the tag+union compound literal
+	// is produced uniformly with `Result.Ok(v)` shape.
+	if e.Lowered != nil {
+		return g.enumLitStr(e.Lowered)
+	}
 	// v0.7: anon-fn IIFE — `fn(args) -> R { body }(actual)`. The callee is
 	// the AnonFnExpr itself; emit the env-on-stack + direct call to the
 	// pre-registered top-level body fn. preregisterAnonFns has already
@@ -3397,16 +3465,58 @@ func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
 		if len(e.Args) != 1 {
 			return "", fmt.Errorf("codegen: len expects 1 arg at %s", e.Pos)
 		}
-		argT := e.Args[0].Type()
 		argS, err := g.exprStr(e.Args[0])
 		if err != nil {
 			return "", err
 		}
-		if argT == syntax.TStr() {
-			return fmt.Sprintf("zerg_str_runelen(%s)", argS), nil
-		}
-		// list — len is an int64 view of size_t.
+		// v0.14: len(str) and len(list) both report the size_t-backed
+		// `.len` field as int64. For str that is the BYTE count (not
+		// the rune count of the retired v0.2 reading) — matches
+		// list[byte].len() semantics and what byte-oriented stdlib ops
+		// (split, trim, replace) want. The zerg_str runtime layout
+		// `{ const char *data; size_t len; }` makes the cast cheap.
 		return fmt.Sprintf("((int64_t)((%s).len))", argS), nil
+	}
+	if ident.Name == "bytes" {
+		// v0.14 str.bytes() — allocates a fresh list[byte] copy. Typeck
+		// validated the arg is exactly one str; the helper handles
+		// zero-length strs with a sentinel one-byte allocation.
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: bytes expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("zerg_str_bytes(%s)", argS), nil
+	}
+	if ident.Name == "to_str" {
+		// v0.14 list[byte].to_str() — allocates a fresh str over a
+		// byte copy. Typeck validated the arg is exactly one list[byte]
+		// (the registry's tByte placeholder triggers assignableTo
+		// rejection for list[int] / list[rune] / list[str]).
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: to_str expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("zerg_list_uint8_t_to_str(%s)", argS), nil
+	}
+	if ident.Name == "panic" {
+		// v0.14 panic(msg) — writes "zerg: runtime: <msg>\n" to stderr
+		// and exits with code 1. The runtime helper zerg_panic is in
+		// the always-emitted runtime block (runtime.go); typeck pins
+		// the arg as exactly one str.
+		if len(e.Args) != 1 {
+			return "", fmt.Errorf("codegen: panic expects 1 arg at %s", e.Pos)
+		}
+		argS, err := g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("zerg_panic(%s)", argS), nil
 	}
 	if ident.Name == "clone" {
 		// clone(x) returns a fresh deep copy of its composite argument.
@@ -3698,11 +3808,6 @@ func (g *cgen) cTypeName(t *syntax.Type) string {
 		return "int32_t"
 	case syntax.TVoid():
 		return "void"
-	case syntax.TNever():
-		// v0.9 Unit 1: `never` lowers to C `void`. The fn-decl's
-		// `__attribute__((noreturn))` (writeFnSig) makes the C compiler
-		// accept the absence of a return value.
-		return "void"
 	}
 	switch t.Kind {
 	case syntax.TypeStruct:
@@ -3847,10 +3952,10 @@ func sanitizeGenericName(name string) string {
 // generic "main" stub when the cgen has no entry recorded) so the helper
 // stays defined for tests that bypass EmitBundle.
 //
-// v0.6: built-in Option / Result instances live under the pseudo-module
+// v0.6: built-in T? / Result instances live under the pseudo-module
 // `<builtin>` and mangle to the literal `zerg_builtin` (no FNV hash) per
 // PLAN.md §Built-in mangle. Detection is by Name prefix; the mono cache
-// shape uses `Option[...]` / `Result[...]` for built-in instances.
+// shape uses `T?` / `Result[...]` for built-in instances.
 func (g *cgen) typeMangle(t *syntax.Type) string {
 	if isBuiltinGenericType(t) {
 		return "zerg_builtin"
@@ -3869,12 +3974,12 @@ func (g *cgen) typeMangle(t *syntax.Type) string {
 // isBuiltinGenericType reports whether t is a monomorphized instance of a
 // built-in generic enum (Option or Result). The detection is by Name prefix
 // — the built-in synthesis (typeck_v06_builtin.go) builds the canonical
-// Name as `Option[...]` / `Result[...]` for every instantiation.
+// Name as `T?` / `Result[...]` for every instantiation.
 func isBuiltinGenericType(t *syntax.Type) bool {
 	if t == nil || t.Kind != syntax.TypeEnum {
 		return false
 	}
-	return strings.HasPrefix(t.Name, "Option[") || strings.HasPrefix(t.Name, "Result[")
+	return syntax.IsNullable(t) || strings.HasPrefix(t.Name, "Result[")
 }
 
 // specMangle returns the owning-module's mangle prefix for a spec name.
@@ -3896,6 +4001,103 @@ func (g *cgen) specMangle(name string) string {
 // clash with C keywords or runtime helpers.
 func mangle(name string) string {
 	return "z_" + name
+}
+
+// emitImportedModuleGlobals writes file-scope C statics for every
+// non-entry module's top-level let / mut / const bindings. Symbol form
+// is `z_<modmangle>__<name>` so identName's lookup table and the emit
+// here agree. The initializer must be a C constant expression — the
+// helper switches g.currentMod temporarily so g.exprStr resolves any
+// self-referential top-level binding (e.g. `const NEXT := PREV + 1`)
+// to the module-mangled form before the file-scope decl emits.
+//
+// Modules emit in declaration order within each module; ordering
+// across modules follows g.modules. A non-constant initializer surfaces
+// as a C compile error at the file-scope decl — the diagnostic is
+// adequate for v0.14 (a runtime-init hook can land when a real use
+// case demands non-constant module-init).
+func (g *cgen) emitImportedModuleGlobals() error {
+	prevMod := g.currentMod
+	defer func() { g.currentMod = prevMod }()
+	wroteAny := false
+	for i := range g.modules {
+		me := &g.modules[i]
+		if me.mangle == g.entryMangle {
+			continue
+		}
+		if len(me.topLevelVars) == 0 {
+			continue
+		}
+		g.currentMod = me.mangle
+		for _, stmt := range me.prog.Statements {
+			var name string
+			var ref *syntax.TypeRef
+			var value syntax.Expr
+			var isConst bool
+			switch s := stmt.(type) {
+			case *syntax.LetStmt:
+				if s.Name == "" {
+					continue
+				}
+				name, ref, value = s.Name, s.Type, s.Value
+			case *syntax.MutStmt:
+				if s.Name == "" {
+					continue
+				}
+				name, ref, value = s.Name, s.Type, s.Value
+			case *syntax.ConstStmt:
+				if s.Name == "" {
+					continue
+				}
+				name, ref, value, isConst = s.Name, s.Type, s.Value, true
+			default:
+				continue
+			}
+			t := value.Type()
+			declT := t
+			if ref != nil && ref.Resolved != nil {
+				declT = ref.Resolved
+			}
+			if declT == nil {
+				return fmt.Errorf("codegen: missing type for module-level %q in %s", name, me.mangle)
+			}
+			exprS, err := g.exprStr(value)
+			if err != nil {
+				return err
+			}
+			if isConst {
+				g.b.WriteString("static const ")
+			} else {
+				g.b.WriteString("static ")
+			}
+			fmt.Fprintf(&g.b, "%s z_%s__%s = %s;\n", g.cTypeName(declT), me.mangle, name, exprS)
+			wroteAny = true
+		}
+	}
+	if wroteAny {
+		g.b.WriteString("\n")
+	}
+	return nil
+}
+
+// identName returns the C identifier for a Zerg name as referenced inside
+// the currently-emitting module's fn body. If the name resolves to a
+// top-level let / mut / const of that module (registered in moduleEmit.
+// topLevelVars), the module-mangled form `z_<mangle>__<name>` is returned
+// so the C symbol matches the file-scope static emitted by
+// emitImportedModuleGlobals. Otherwise the bare `z_<name>` form is used
+// — that covers fn-locals, parameters, and any name that doesn't shadow
+// a module-level binding. Local shadowing of a module-level binding is
+// currently undefined under cgen (the binding promotion path doesn't
+// track local scope); typeck would not have rejected the shadow but it
+// will compile to the module-mangled global access.
+func (g *cgen) identName(name string) string {
+	if g.currentMod != "" && g.currentMod != g.entryMangle {
+		if me := g.moduleByName[g.currentMod]; me != nil && me.topLevelVars[name] {
+			return "z_" + g.currentMod + "__" + name
+		}
+	}
+	return mangle(name)
 }
 
 // mangleField prefixes struct field names with `f_` so a field named `for`

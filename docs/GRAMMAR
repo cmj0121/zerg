@@ -492,8 +492,8 @@ struct_update  = ".." expr
 #   sync[T]                mutex-protected shared value for concurrency
 #   ptr[T]                 owned heap pointer (enables recursive types)
 #   Result[T, E]           success (Ok) or error (Err) — built-in enum
-#   Option[T]              type alias for Result[T, nil]
-# T? in type position is syntax sugar for Option[T] = Result[T, nil].
+#   T?                     nullable T — auto-lifted from bare T, or nil
+# `Option` is a concept; the only spellable nullable form is `T?`.
 # Arity of generic arguments is checked semantically, not syntactically.
 # Channels are created via constructor call: chan[int]() or chan[int](10).
 #

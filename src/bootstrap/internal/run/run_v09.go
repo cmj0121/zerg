@@ -21,9 +21,9 @@ import "fmt"
 // Unit 1 stages the sentinel and the recover hook. The exit fn that raises
 // the sentinel lands in Unit 3.
 
-// exitErr is the sentinel a `-> never` exit-style call panics. Code holds
-// the requested exit code. Unit 3 raises this from `os_exit`; Unit 1's
-// recover hook catches it at the RunBundle boundary.
+// exitErr is the sentinel an exit-style call panics. Code holds the
+// requested exit code. sysExitShim raises this from syscall.exit;
+// the RunBundle recover hook catches it at the top-level boundary.
 type exitErr struct {
 	Code int
 }

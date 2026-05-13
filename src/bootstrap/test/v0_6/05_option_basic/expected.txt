@@ -1,4 +1,0 @@
-Option.Some(42)
-Option.None
-Option.Some(ping)
-Option.None

@@ -1,51 +1,36 @@
 package run
 
-// v0.9 Unit 2 — interpreter dispatch for std/time builtins.
+// v0.9 Unit 2 — interpreter dispatch for std/time atomic primitives.
 //
-// time_now_ms: lazy-zero-on-first-call epoch. The first call captures
-// time.Now() into a process-global, mutex-guarded so the v0.7-spawn case
-// (multiple goroutines) still produces a single deterministic epoch.
-// First call returns 0; subsequent calls return ms-since-epoch.
+// time_clock_us: returns walltime microseconds since the UNIX epoch
+// (time.Now().UnixMicro on the Go side; clock_gettime CLOCK_REALTIME
+// on the cgen side). No state — the epoch-zero-on-first-call contract
+// lives in src/std/time.zg's now_ms over P1 module-level mut.
 //
-// time_sleep_ms: blocks at least ms ms; returns true. Negative ms clamps
-// to zero (no error).
+// time_sleep_ns: blocks for sec seconds + nsec nanoseconds. Negative
+// inputs return -EINVAL to match the cgen half; src/std/time.zg's
+// sleep_ms clamps non-positive ms before calling here so this path
+// only fires for valid durations.
 
 import (
-	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-// timeFirstCall is the process-global monotonic epoch. The zero-value
-// time.Time tested via IsZero is the "uninitialised" sentinel. timeFirstCallMu
-// guards the lazy-init transition; once set, reads are race-tolerant under
-// the std-library guarantees but the mutex keeps the first-call init
-// well-defined under a v0.7 spawn fan-out.
-var (
-	timeFirstCallMu sync.Mutex
-	timeFirstCall   time.Time
-)
-
-func execTimeNowMs() (Value, error) {
-	timeFirstCallMu.Lock()
-	if timeFirstCall.IsZero() {
-		timeFirstCall = time.Now()
-		timeFirstCallMu.Unlock()
-		return intVal(0), nil
-	}
-	epoch := timeFirstCall
-	timeFirstCallMu.Unlock()
-	return intVal(time.Since(epoch).Milliseconds()), nil
+func execTimeClockUs() (Value, error) {
+	return intVal(time.Now().UnixMicro()), nil
 }
 
-func execTimeSleepMs(msV Value) (Value, error) {
-	ms := msV.Int
-	if ms <= 0 {
-		return boolVal(true), nil
+func execTimeSleepNs(secV, nsecV Value) (Value, error) {
+	sec := secV.Int
+	nsec := nsecV.Int
+	if sec < 0 || nsec < 0 {
+		return intVal(-int64(syscall.EINVAL)), nil
 	}
-	time.Sleep(time.Duration(ms) * time.Millisecond)
-	return boolVal(true), nil
+	time.Sleep(time.Duration(sec)*time.Second + time.Duration(nsec)*time.Nanosecond)
+	return intVal(0), nil
 }
 
 // callBuiltinV09 dispatches the v0.9-introduced __builtin names. Returns
@@ -53,11 +38,11 @@ func execTimeSleepMs(msV Value) (Value, error) {
 // v0.9 builtin so the caller can fall through to v0.8 / older tables.
 func callBuiltinV09(fn *syntax.FnDecl, args []Value) (Value, bool, error) {
 	switch fn.BuiltinName {
-	case "time_now_ms":
-		v, err := execTimeNowMs()
+	case "time_clock_us":
+		v, err := execTimeClockUs()
 		return v, true, err
-	case "time_sleep_ms":
-		v, err := execTimeSleepMs(args[0])
+	case "time_sleep_ns":
+		v, err := execTimeSleepNs(args[0], args[1])
 		return v, true, err
 	}
 	return Value{}, false, nil

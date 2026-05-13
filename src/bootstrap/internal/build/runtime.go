@@ -81,6 +81,19 @@ static void zerg_str_write(zerg_str s) {
     if (s.len) fwrite(s.data, 1, s.len, stdout);
 }
 
+/* zerg_panic writes "zerg: runtime: <msg>\n" to stderr and exits with
+   code 1. Backs the v0.14 panic(msg: str) builtin; pure-Zerg stdlib
+   modules use it for non-recoverable contract violations (e.g.
+   split's documented panic on empty separator). _Noreturn lets
+   surrounding cgen-generated expressions reason about the
+   divergent control flow. */
+static _Noreturn void zerg_panic(zerg_str msg) {
+    fputs("zerg: runtime: ", stderr);
+    if (msg.len) fwrite(msg.data, 1, msg.len, stderr);
+    fputc('\n', stderr);
+    exit(1);
+}
+
 /* zerg_utf8_decode reads one codepoint starting at p, returns its width in
    bytes and writes the codepoint into *cp. Mirrors Go's []rune(s) decoding so
    string indexing is byte-for-byte compatible with the interpreter. The

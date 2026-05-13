@@ -1,0 +1,128 @@
+# requires: v0.14
+#
+# sys/syscall — raw BSD syscall traps for macOS arm64.
+#
+# The v0.14 loader picks this file via the per-host variant rule on a
+# macOS arm64 host (runtime.GOOS=darwin → "macos", runtime.GOARCH=arm64).
+# The macOS amd64 sibling lives in mod_macos_amd64.zg; sys/syscall has
+# no generic mod.zg because every implementation is target-specific.
+#
+# Each wrapper lowers to a single `svc #0x80` inline-asm block. The
+# v0.14 mut-output-operand surface surfaces the kernel's x0 return into
+# a Zerg `mut int`, and a follow-up `cset` reads the carry flag (NZCV.C)
+# into a second `mut int` so the wrapper can distinguish success from
+# error without branching inside the asm body.
+#
+# Return convention:
+#   - On success, the wrapper returns the raw kernel result as-is —
+#     byte count for read / write, fd for open, 0 for close.
+#   - On error, the wrapper returns `-errno` (negative). Callers branch
+#     on `result < 0`. This matches the convention Linux's signed-int
+#     syscall returns use; macOS's native (errno + carry-flag) shape is
+#     normalised here so std/io / std/os see a uniform surface.
+#
+# Surface is intentionally minimal — five wrappers cover the I/O
+# critical path used by std/io, std/os.exit, and any pure-Zerg program
+# that needs direct stdout writes without routing through `print`.
+
+# write(fd, buf, len) — write at most `len` bytes from `buf` to `fd`.
+# Returns the number of bytes written on success (>= 0), or `-errno` on
+# error (e.g. -EBADF if `fd` is closed). `buf` must hold at least `len`
+# bytes; the kernel reads only `len` of them.
+pub fn write(fd: int, buf: list[byte], len: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov x0, ${fd}
+		mov x1, ${buf}
+		mov x2, ${len}
+		mov x16, #4
+		svc #0x80
+		cset x3, cs
+		mov ${result}, x0
+		mov ${err_flag}, x3
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# read(fd, buf, cap) — read up to `cap` bytes from `fd` into `buf`.
+# Returns the byte count actually read (0 at EOF, > 0 otherwise), or
+# `-errno` on error. `buf` must hold at least `cap` bytes; the kernel
+# writes only as many as it returns.
+pub fn read(fd: int, buf: list[byte], cap: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov x0, ${fd}
+		mov x1, ${buf}
+		mov x2, ${cap}
+		mov x16, #3
+		svc #0x80
+		cset x3, cs
+		mov ${result}, x0
+		mov ${err_flag}, x3
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# open(path, flags, mode) — open the file at `path` with `flags` (e.g.
+# O_RDONLY = 0, O_WRONLY|O_CREAT|O_TRUNC = 0x601 on macOS) and `mode`
+# (used only when O_CREAT is set). `path` must be NUL-terminated by the
+# caller — the kernel reads until the first zero byte and the wrapper
+# does no length book-keeping.
+# Returns the new fd on success (>= 0), or `-errno` on error.
+pub fn open(path: list[byte], flags: int, mode: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov x0, ${path}
+		mov x1, ${flags}
+		mov x2, ${mode}
+		mov x16, #5
+		svc #0x80
+		cset x3, cs
+		mov ${result}, x0
+		mov ${err_flag}, x3
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# close_fd(fd) — close the file descriptor.
+# Returns 0 on success, `-errno` on error.
+# The bare name `close` is reserved at the language level for the v0.7
+# channel-close built-in (`close(chan)`), so this wrapper carries the
+# `_fd` suffix to disambiguate. POSIX libc parity callers should alias
+# via `import "sys/syscall" as syscall` and read the call as
+# `syscall.close_fd(fd)`.
+pub fn close_fd(fd: int) -> int {
+	mut result: int = 0
+	mut err_flag: int = 0
+	asm {
+		mov x0, ${fd}
+		mov x16, #6
+		svc #0x80
+		cset x3, cs
+		mov ${result}, x0
+		mov ${err_flag}, x3
+	}
+	return -result if err_flag != 0
+	return result
+}
+
+# exit(code) — terminate the current process with the given exit code.
+# Type-wise returns unit; the kernel reaps the process before the svc
+# returns control to user space, so the unit value is unobservable.
+# The trailing `for { nop }` pins divergence at runtime — without it,
+# control would fall off the asm block on a hypothetical svc that
+# returned, producing undefined behaviour.
+pub fn exit(code: int) {
+	asm {
+		mov x0, ${code}
+		mov x16, #1
+		svc #0x80
+	}
+	for { nop }
+}

@@ -117,7 +117,7 @@ print len(os.argv())
 func TestV09InterpOsExitInsideFnDrainsCalls(t *testing.T) {
 	out, code, exited, err := runV09ArgvExitMain(t, `# requires: v0.9
 import "std/os"
-fn die(n: int) -> never {
+fn die(n: int) {
     os.exit(n)
 }
 print "before"

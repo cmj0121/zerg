@@ -1,47 +1,49 @@
 package run
 
 import (
+	"os"
+
 	"github.com/cmj/zerg/src/bootstrap/internal/syntax"
 )
 
-// v0.9 Unit 3 — interpreter dispatch for std/os.argv and std/os.exit.
+// v0.9 Unit 3 — interpreter dispatch for std/os accessor primitives.
 //
-// os_argv: returns a list[str] built from the host-supplied argv. The
-// list type is recovered from the call expression's typeck-stamped Type
-// (resultType) so the value compares equal to other list[str] values
-// the user constructs.
+// v0.14 T2 retired the coupled os_argv / os_env / os_exit shims. The
+// remaining surface is four atomic accessor primitives consumed by the
+// pure-Zerg src/std/os.zg layer; exit is now a pure-Zerg wrapper over
+// sys.syscall.exit and routes through the existing syscall intrinsic.
 //
-// os_exit: panics exitErr{Code:n}. Unit 1's recover hook at RunBundle
-// catches it and surfaces the code via Options-returning entry. The fn
-// is declared `-> never`; the panic ensures no value is ever returned to
-// the caller, matching the type contract.
+//   os_argv_len  → len(in.argv)
+//   os_argv_at   → strVal(in.argv[i])
+//   os_envp_len  → len(in.envp())
+//   os_envp_at   → strVal(in.envp()[i])
+//
+// envp() lazy-caches os.Environ() on the interp struct so envp_len and
+// envp_at observe the same index space across a single env() loop,
+// even if a test changes the host env between separate interpreter
+// runs. The cache is per-interpreter, not process-global, so each
+// test run sees a fresh snapshot tied to its own RunBundle invocation.
 
-func (in *interp) execOsArgv(resultType *syntax.Type) (Value, error) {
-	out := make([]Value, len(in.argv))
-	for i, s := range in.argv {
-		out[i] = strVal(s)
+func (in *interp) envp() []string {
+	if in.envpCache == nil {
+		in.envpCache = os.Environ()
 	}
-	if resultType != nil && resultType.Kind == syntax.TypeList && resultType.Element != nil {
-		return Value{Type: resultType, List: out}, nil
-	}
-	return listVal(syntax.TStr(), out), nil
+	return in.envpCache
 }
 
-func execOsExit(codeV Value) (Value, error) {
-	panic(exitErr{Code: int(codeV.Int)})
-}
-
-// callBuiltinV09ArgvExit dispatches the v0.9 Unit 3 builtins. Returns
+// callBuiltinV09ArgvExit dispatches the v0.9 std/os primitives. Returns
 // (value, true, nil) when handled; (_, false, nil) when the name is not
 // one of ours so the caller continues to the time / v0.8 tables.
 func (in *interp) callBuiltinV09ArgvExit(fn *syntax.FnDecl, args []Value, resultType *syntax.Type) (Value, bool, error) {
 	switch fn.BuiltinName {
-	case "os_argv":
-		v, err := in.execOsArgv(resultType)
-		return v, true, err
-	case "os_exit":
-		v, err := execOsExit(args[0])
-		return v, true, err
+	case "os_argv_len":
+		return intVal(int64(len(in.argv))), true, nil
+	case "os_argv_at":
+		return strVal(in.argv[args[0].Int]), true, nil
+	case "os_envp_len":
+		return intVal(int64(len(in.envp()))), true, nil
+	case "os_envp_at":
+		return strVal(in.envp()[args[0].Int]), true, nil
 	}
 	return Value{}, false, nil
 }

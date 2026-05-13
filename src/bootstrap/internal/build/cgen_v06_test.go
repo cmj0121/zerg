@@ -148,17 +148,17 @@ print b
 // --- Option / Result construction ----------------------------------------
 
 func TestV06CgenOptionSomePrint(t *testing.T) {
-	src := `x: int? = Option.Some(7)
+	src := `x: int? = 7
 print x
 `
-	expectStdout(t, src, "Option.Some(7)\n")
+	expectStdout(t, src, "7\n")
 }
 
 func TestV06CgenOptionNonePrint(t *testing.T) {
 	src := `x: int? = nil
 print x
 `
-	expectStdout(t, src, "Option.None\n")
+	expectStdout(t, src, "nil\n")
 }
 
 func TestV06CgenResultOkPrint(t *testing.T) {
@@ -176,7 +176,7 @@ print x
 }
 
 func TestV06CgenOptionMangleIsBuiltin(t *testing.T) {
-	src := `x: int? = Option.Some(7)
+	src := `x: int? = 7
 print x
 `
 	out := mustEmit(t, src)
@@ -202,25 +202,25 @@ print x
 func TestV06CgenPropagateOption(t *testing.T) {
 	src := `fn first(xs: list[int?]) -> int? {
     x := xs[0]
-    return Option.Some(x? + 1)
+    return x? + 1
 }
-xs: list[int?] = [Option.Some(10)]
+xs: list[int?] = [10]
 r := first(xs)
 print r
 `
-	expectStdout(t, src, "Option.Some(11)\n")
+	expectStdout(t, src, "11\n")
 }
 
 func TestV06CgenPropagateOptionNoneEarlyReturns(t *testing.T) {
 	src := `fn first(xs: list[int?]) -> int? {
     x := xs[0]
-    return Option.Some(x? + 1)
+    return x? + 1
 }
 xs: list[int?] = [nil]
 r := first(xs)
 print r
 `
-	expectStdout(t, src, "Option.None\n")
+	expectStdout(t, src, "nil\n")
 }
 
 func TestV06CgenPropagateResult(t *testing.T) {
@@ -241,7 +241,7 @@ print unwrap_err()
 // --- ?? coalesce ----------------------------------------------------------
 
 func TestV06CgenCoalesceOptionSome(t *testing.T) {
-	src := `x: int? = Option.Some(7)
+	src := `x: int? = 7
 v := x ?? 0
 print v
 `
@@ -268,11 +268,11 @@ print v
 
 func TestV06CgenSafeFieldSome(t *testing.T) {
 	src := `struct P { x: int }
-p: P? = Option.Some(P { x: 7 })
+p: P? = P { x: 7 }
 v := p?.x
 print v
 `
-	expectStdout(t, src, "Option.Some(7)\n")
+	expectStdout(t, src, "7\n")
 }
 
 func TestV06CgenSafeFieldNone(t *testing.T) {
@@ -281,18 +281,18 @@ p: P? = nil
 v := p?.x
 print v
 `
-	expectStdout(t, src, "Option.None\n")
+	expectStdout(t, src, "nil\n")
 }
 
 func TestV06CgenSafeFieldChain(t *testing.T) {
 	src := `struct A { b: B }
 struct B { c: int }
-a: A? = Option.Some(A { b: B { c: 42 } })
+a: A? = A { b: B { c: 42 } }
 v := a?.b
 print v
 `
 	// v: B? = Some(B{c:42})
-	expectStdout(t, src, "Option.Some(B { c: 42 })\n")
+	expectStdout(t, src, "B { c: 42 }\n")
 }
 
 // --- nil literal ----------------------------------------------------------
@@ -301,32 +301,40 @@ func TestV06CgenNilInLetWithAnnotation(t *testing.T) {
 	src := `x: int? = nil
 print x
 `
-	expectStdout(t, src, "Option.None\n")
+	expectStdout(t, src, "nil\n")
 }
 
 func TestV06CgenNilInListLiteral(t *testing.T) {
-	src := `xs: list[int?] = [Option.Some(1), nil, Option.Some(3)]
+	src := `xs: list[int?] = [1, nil, 3]
 for x in xs {
     print x
 }
 `
-	expectStdout(t, src, "Option.Some(1)\nOption.None\nOption.Some(3)\n")
+	expectStdout(t, src, "1\nnil\n3\n")
 }
 
-// --- print parity: bracket suffix suppression -----------------------------
+// --- print parity: nullable suppresses constructor entirely -------------
 
 func TestV06CgenPrintSuppressesBracketSuffix(t *testing.T) {
-	src := `x: Option[int] = Option.Some(7)
+	// A nullable value prints its inner payload directly (or `nil` for the
+	// absent case). The previous parity assertion (bracket suffix stripped
+	// from `Option[int].Some(7)` → `Option.Some(7)`) is moot because
+	// `Option` no longer appears in stdout at all.
+	src := `x: int? = 7
 print x
 `
 	out := mustEmit(t, src)
-	// The user-facing string in fputs must not contain `Option[int].Some`.
-	if strings.Contains(out, `"Option[int]`) {
-		t.Errorf("emitted print path should not include `Option[int]` literal; got:\n%s", out)
+	// No bracketed instance name in any fputs literal.
+	if strings.Contains(out, `"int?`) {
+		t.Errorf("emitted print path should not include `int?` literal; got:\n%s", out)
 	}
-	// But it must contain the bare-base form `Option.Some(`.
-	if !strings.Contains(out, `"Option.Some(`) {
-		t.Errorf("emitted print path should include bare `Option.Some(`; got:\n%s", out)
+	// No `Option.Some(` in any fputs literal — the print path emits the
+	// bare payload value, not the qualified variant constructor.
+	if strings.Contains(out, `"Option.Some(`) {
+		t.Errorf("emitted print path leaks `Option.Some(`; got:\n%s", out)
+	}
+	if strings.Contains(out, `"Option.None`) {
+		t.Errorf("emitted print path leaks `Option.None`; got:\n%s", out)
 	}
 }
 
@@ -337,15 +345,18 @@ func TestV06CgenSymmetricLiftAtLetInit(t *testing.T) {
 	src := `x: int? = 7
 print x
 `
-	expectStdout(t, src, "Option.Some(7)\n")
+	expectStdout(t, src, "7\n")
 }
 
 // --- nested generic instance ---------------------------------------------
 
 func TestV06CgenNestedGenericInstance(t *testing.T) {
-	// Option[Result[int, str]] mangles to Option__Result__int_str.
+	// Option as a user-visible type name is rejected; a nested nullable
+	// holds a Result[T, E] payload via the `T?` spelling. Mangle still goes
+	// through the `Option[Result[int,str]]` canonical name internally —
+	// that's the cache key, not user syntax.
 	src := `r: Result[int, str] = Result.Ok(7)
-x: Option[Result[int, str]] = Option.Some(r)
+x: Result[int, str]? = r
 print x
 `
 	out := mustEmit(t, src)
@@ -353,7 +364,7 @@ print x
 	if !strings.Contains(out, want) {
 		t.Errorf("expected nested mangle %q; got:\n%s", want, out)
 	}
-	expectStdout(t, src, "Option.Some(Result.Ok(7))\n")
+	expectStdout(t, src, "Result.Ok(7)\n")
 }
 
 // --- generic struct equality / clone -------------------------------------
@@ -468,7 +479,8 @@ fn id[T](x: T) -> T { return x }
 a: Box[int] = Box { value: id(7) }
 b: Box[str] = Box { value: id("hi") }
 r: Result[int, str] = Result.Ok(id(42))
-o: Option[int] = Option.Some(id(99))
+ninety_nine := id(99)
+o: int? = ninety_nine
 print a.value
 print b.value
 print r
@@ -477,10 +489,12 @@ print o
 	out := mustEmit(t, src)
 	srcLen := len(src)
 	emitLen := len(out)
-	// v0.11 retired the `let` keyword from binding statements, shrinking
-	// representative test sources by ~10%. The emitted C is unchanged; the
-	// guard ratio is bumped to keep the sanity-check intent (not bloat).
-	const ratio = 55
+	// Ratio bumps when the always-emitted runtime gains a small helper.
+	// v0.11 bumped from 50 → 55 when `let` was retired from binding
+	// statements (representative sources shrank ~10%). v0.14 bumps
+	// 55 → 60 with the addition of zerg_panic to the always-emitted
+	// runtime block. The intent is sanity-check, not bloat.
+	const ratio = 60
 	if emitLen > srcLen*ratio {
 		t.Errorf("emitted size %d exceeds %d× source size %d (%d > %d)",
 			emitLen, ratio, srcLen, emitLen, srcLen*ratio)

@@ -14,10 +14,11 @@ import (
 //   - `std/...` imports never fall back to the working directory.
 //   - non-`std/...` imports continue to behave exactly as v0.5.
 //
-// The placeholder embedded file (stdlib/_placeholder.zg) is invisible to
-// any user `import "std/<name>"` because the underscore-prefixed component
-// fails the loader's identifier-shape pre-check — same diagnostic as a
-// missing module.
+// Underscore-prefixed names under `std/` and `sys/` are reserved for
+// stdlib-internal scaffolding: the family gate in loadEmbeddedFamily
+// rejects them with the standard "not found" wording before any disk or
+// embed lookup, so internal files (had any been needed) would be
+// invisible to user `import "std/<name>"` lookups.
 
 // TestLoadStdlibUnknownReturnsNotFound covers the headline reject path: a
 // user file imports a stdlib module that does not exist in the embedded FS.
@@ -58,14 +59,14 @@ func TestLoadStdlibDoesNotFallBackToCwd(t *testing.T) {
 	}
 }
 
-// TestLoadStdlibUnderscoreRejected pins the placeholder-shielding rule: a
-// user import targeting the underscore-prefixed placeholder file must not
-// resolve. The loader treats it as a stdlib miss with the same wording so
-// the placeholder cannot leak into user programs even before Unit 3
-// populates real modules.
+// TestLoadStdlibUnderscoreRejected pins the underscore-name rule: any
+// `std/<_name>` import rejects with the standard "stdlib module not
+// found" wording, regardless of whether the file exists in the embed.
+// The check fires at the family gate before disk / fallback consult,
+// so it keeps reserved scaffolding names invisible to user code.
 func TestLoadStdlibUnderscoreRejected(t *testing.T) {
 	dir := t.TempDir()
-	entry := writeFile(t, dir, "main.zg", "import \"std/_placeholder\"\nprint 1\n")
+	entry := writeFile(t, dir, "main.zg", "import \"std/_internal\"\nprint 1\n")
 
 	_, err := Load(entry)
 	if err == nil {

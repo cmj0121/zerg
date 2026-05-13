@@ -1,10 +1,10 @@
 # requires: v0.8
-import "std/io"
-import "std/os"
-import "std/strings"
+import "io"
+import "os"
+import "strings"
 
 match os.env("ZERG_TEST_TEMPDIR") {
-    Option.Some(d) => {
+    d => {
         path := strings.join([d, "round.txt"], "/")
         match io.write_file(path, "round-trip") {
             Result.Ok(_) => print "wrote"
@@ -15,5 +15,5 @@ match os.env("ZERG_TEST_TEMPDIR") {
             Result.Err(_) => print "read err"
         }
     }
-    Option.None => print "no tempdir"
+    nil => print "no tempdir"
 }

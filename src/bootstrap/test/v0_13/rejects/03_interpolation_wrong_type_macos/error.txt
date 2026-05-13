@@ -1,1 +1,1 @@
-must be byte or list[byte], got int
+must be byte, int, or list[byte], got str

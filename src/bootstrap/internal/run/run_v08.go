@@ -3,8 +3,6 @@ package run
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"strconv"
 	"strings"
 
@@ -43,10 +41,6 @@ func (in *interp) callBuiltin(fn *syntax.FnDecl, args []Value, resultType *synta
 		return v, err
 	}
 	switch fn.BuiltinName {
-	case "io_read_file":
-		return execIoReadFile(args[0], resultType, callPos)
-	case "io_write_file":
-		return execIoWriteFile(args[0], args[1], resultType, callPos)
 	case "strings_split":
 		return execStringsSplit(args[0], args[1], resultType, callPos)
 	case "strings_join":
@@ -75,8 +69,6 @@ func (in *interp) callBuiltin(fn *syntax.FnDecl, args []Value, resultType *synta
 		return execMathMax(args[0], args[1])
 	case "math_gcd":
 		return execMathGcd(args[0], args[1])
-	case "os_env":
-		return execOsEnv(args[0], resultType, callPos)
 	}
 	return Value{}, fmt.Errorf("internal: unknown __builtin %q at %s", fn.BuiltinName, callPos)
 }
@@ -118,39 +110,6 @@ func resultErrEnum(resultType *syntax.Type, variantName string, pos syntax.Posit
 		return Value{}, fmt.Errorf("internal: %s has no Err variant at %s", resultType, pos)
 	}
 	return enumVal(resultType, idx, "Err", []Value{errVal}), nil
-}
-
-// bucketIoError maps a host fs error to the IoError variant name per
-// PLAN.md. The cgen half makes the same bucket choices against errno.
-func bucketIoError(err error) string {
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return "NotFound"
-	case errors.Is(err, fs.ErrPermission):
-		return "PermissionDenied"
-	case errors.Is(err, fs.ErrExist):
-		return "AlreadyExists"
-	case errors.Is(err, fs.ErrInvalid):
-		return "InvalidPath"
-	}
-	return "Other"
-}
-
-// --- std/io ---------------------------------------------------------------
-
-func execIoReadFile(pathV Value, resultType *syntax.Type, pos syntax.Position) (Value, error) {
-	data, err := os.ReadFile(pathV.Str)
-	if err != nil {
-		return resultErrEnum(resultType, bucketIoError(err), pos)
-	}
-	return resultOk(resultType, strVal(string(data)), pos)
-}
-
-func execIoWriteFile(pathV, contentV Value, resultType *syntax.Type, pos syntax.Position) (Value, error) {
-	if err := os.WriteFile(pathV.Str, []byte(contentV.Str), 0o644); err != nil {
-		return resultErrEnum(resultType, bucketIoError(err), pos)
-	}
-	return resultOk(resultType, boolVal(true), pos)
 }
 
 // --- std/strings ----------------------------------------------------------
@@ -284,14 +243,4 @@ func execMathGcd(aV, bV Value) (Value, error) {
 		a, b = b, a%b
 	}
 	return intVal(a), nil
-}
-
-// --- std/os ---------------------------------------------------------------
-
-func execOsEnv(nameV Value, resultType *syntax.Type, pos syntax.Position) (Value, error) {
-	v, ok := os.LookupEnv(nameV.Str)
-	if !ok {
-		return optionNone(resultType, pos)
-	}
-	return optionSome(resultType, strVal(v), pos)
 }

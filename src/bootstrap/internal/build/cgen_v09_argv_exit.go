@@ -1,20 +1,20 @@
-// v0.9 Unit 3 — codegen for std/os.argv and std/os.exit.
+// v0.9 Unit 3 — codegen for std/os primitives.
 //
-// Trampolines:
-//   - os_argv: forwards into zerg_os_argv() which builds a zerg_list_zerg_str
-//     from process-globals __zerg_argc / __zerg_argv. The list shape is
-//     force-monomorphised in the prelude (same as strings_split).
-//   - os_exit: forwards into zerg_os_exit(code) which calls libc exit.
-//     The trampoline body is `zerg_os_exit(z_code);` — no return statement
-//     because writeFnSig already stamps `__attribute__((noreturn))` on
-//     `-> never` fn-decls (Unit 1).
+// v0.14 T2 retired the coupled os_env / os_argv / os_exit shims in
+// favour of atomic accessor primitives:
 //
-// main() signature swap: programUsesArgv reports whether any reachable
-// builtin reference is os_argv. When true, main is rewritten as
+//   - os_argv_len / os_argv_at(i)  — read process-globals __zerg_argc /
+//     __zerg_argv[i]. The pure-Zerg argv() in src/std/os.zg builds a
+//     list[str] over these.
+//   - os_envp_len / os_envp_at(i)  — count and index extern char **environ.
+//     The pure-Zerg env(name) walks them and matches on "name=" prefix.
+//   - exit(code) lives in pure-Zerg src/std/os.zg as a wrapper over
+//     sys.syscall.exit(code), so no os_exit __builtin remains.
+//
+// main() signature swap: programUsesArgv reports whether the program
+// reaches os_argv_len or os_argv_at. When true, main is rewritten as
 // `int main(int argc, char **argv)` and the first two statements seed
-// the __zerg_argc / __zerg_argv globals. Programs that reference only
-// os_exit keep `int main(void)` — the byte-identical guarantee for
-// non-argv programs holds.
+// the __zerg_argc / __zerg_argv globals.
 
 package build
 
@@ -25,30 +25,36 @@ import (
 // isV09ArgvExitBuiltin reports whether name was introduced in v0.9 Unit 3.
 func isV09ArgvExitBuiltin(name string) bool {
 	switch name {
-	case "os_argv", "os_exit":
+	case "os_argv_len", "os_argv_at", "os_envp_len", "os_envp_at":
 		return true
 	}
 	return false
 }
 
-// programUsesArgv reports whether any module references os_argv. Only
-// programs hitting this gate get the main(int, char**) signature swap.
+// programUsesArgv reports whether any module references the argv
+// primitives. Only programs hitting this gate get the
+// main(int, char**) signature swap so __zerg_argc / __zerg_argv land.
 func (g *cgen) programUsesArgv() bool {
 	for i := range g.modules {
-		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_argv") {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_argv_len") {
+			return true
+		}
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_argv_at") {
 			return true
 		}
 	}
 	return false
 }
 
-// programUsesOsExit reports whether any module references os_exit.
-// Drives the runtime emit (the argv/exit C runtime can be partially
-// emitted: programs that use only exit don't need the argv globals
-// initialised but the runtime block emits both for cohesion).
-func (g *cgen) programUsesOsExit() bool {
+// programUsesEnvp reports whether any module references the envp
+// primitives. Drives the runtime emit of zerg_os_envp_* — separate
+// gate so an argv-only program doesn't pull in environ-walking code.
+func (g *cgen) programUsesEnvp() bool {
 	for i := range g.modules {
-		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_exit") {
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_envp_len") {
+			return true
+		}
+		if g.programUsesBuiltinWalk(g.modules[i].prog, "os_envp_at") {
 			return true
 		}
 	}
@@ -56,13 +62,13 @@ func (g *cgen) programUsesOsExit() bool {
 }
 
 // skipBuiltinFn reports whether the trampoline for fn should be omitted
-// from the emitted C source. v0.9 Unit 3 builtins (os_argv, os_exit) and
-// Unit 2 builtins (time_now_ms, time_sleep_ms) are elided when their
-// corresponding runtime block is not emitted — i.e. when the user
-// program does not reach a call site for them. Without this gate, a
-// v0.8 program that imports std/os solely for os.env would pull in
-// trampolines referencing undefined zerg_os_argv / zerg_os_exit symbols
-// (since the runtime is now usage-gated per Phase 4 Fix 4).
+// from the emitted C source. v0.9 std/os accessor primitives and Unit 2
+// std/time primitives are elided when their corresponding runtime block
+// is not emitted — i.e. when the user program does not reach a call
+// site for them. Without this gate, a program that imports std/os
+// without calling argv() / env() would pull in trampolines referencing
+// undefined zerg_os_argv_at / zerg_os_envp_at symbols (since the
+// runtime is usage-gated for byte-identical pre-v0.9 emit).
 //
 // `needsArgv` is the cached programUsesArgv result; the other predicates
 // are recomputed because emitFn is called from multiple sites.
@@ -71,11 +77,11 @@ func (g *cgen) skipBuiltinFn(fn *syntax.FnDecl, needsArgv bool) bool {
 		return false
 	}
 	switch fn.BuiltinName {
-	case "os_argv":
+	case "os_argv_len", "os_argv_at":
 		return !needsArgv
-	case "os_exit":
-		return !g.programUsesOsExit()
-	case "time_now_ms", "time_sleep_ms":
+	case "os_envp_len", "os_envp_at":
+		return !g.programUsesEnvp()
+	case "time_clock_us", "time_sleep_ns":
 		return !g.programUsesV09Time()
 	}
 	return false
@@ -299,69 +305,66 @@ func (g *cgen) programUsesBuiltinWalk(prog *syntax.Program, name string) bool {
 }
 
 // emitV09ArgvExitBuiltinBody emits the trampoline body for one v0.9
-// Unit 3 builtin. Returns ok=true when fn is one of ours; ok=false
-// otherwise. Body strings have no surrounding braces (same calling
-// convention as builtinBodyStr).
+// std/os accessor primitive. Returns ok=true when fn is one of ours;
+// ok=false otherwise. Body strings have no surrounding braces (same
+// calling convention as builtinBodyStr).
 func emitV09ArgvExitBuiltinBody(name string) (string, bool) {
 	switch name {
-	case "os_argv":
-		return "    return zerg_os_argv();\n", true
-	case "os_exit":
-		return "    zerg_os_exit(z_code);\n", true
+	case "os_argv_len":
+		return "    return zerg_os_argv_len();\n", true
+	case "os_argv_at":
+		return "    return zerg_os_argv_at(z_i);\n", true
+	case "os_envp_len":
+		return "    return zerg_os_envp_len();\n", true
+	case "os_envp_at":
+		return "    return zerg_os_envp_at(z_i);\n", true
 	}
 	return "", false
 }
 
-// runtimeV09ArgvExitC is the embedded C runtime for std/os.argv and
-// std/os.exit. __zerg_argc / __zerg_argv are the process-global
-// argv mirror seeded at the top of main; zerg_os_argv builds a
-// zerg_list_zerg_str from them (one zerg_str per argv entry).
+// runtimeV09ArgvExitC is the embedded C runtime for std/os accessor
+// primitives. __zerg_argc / __zerg_argv are the process-global argv
+// mirror seeded at the top of main; zerg_os_argv_len / _at index into
+// them. zerg_os_envp_len / _at walk extern char **environ; the length
+// loop runs each call, which is cheap (envp is short and stable).
 //
-// _exit (in zerg_os_exit) needs <unistd.h>; programs that use os.exit
-// without any v0.7 concurrency primitive don't pull the v0.12 runtime
-// preamble (which would already include it via coroRuntimeC) so we
-// include it locally here. Including twice is harmless — both headers
-// are idempotent on every supported platform.
+// Each zerg_str returned by an _at helper points into the kernel-
+// supplied argv / environ memory (read-only, process-lived). No malloc
+// — saves a per-call copy and matches the "list of zerg_str" the user
+// sees from os.argv() / os.env() being a snapshot that aliases
+// process memory.
 const runtimeV09ArgvExitC = `#include <stdlib.h>
-#include <unistd.h>
 
-/* ---------------- v0.9 std/os argv + exit runtime ----------------------- */
+extern char **environ;
+
+/* ---------------- v0.9 std/os primitive runtime -------------------------- */
 
 static int    __zerg_argc = 0;
 static char **__zerg_argv = 0;
 
-static zerg_list_zerg_str zerg_os_argv(void) {
-    zerg_list_zerg_str out;
-    out.len = 0;
-    out.cap = 0;
-    out.data = 0;
-    for (int i = 0; i < __zerg_argc; i++) {
-        const char *a = __zerg_argv[i];
-        size_t n = 0;
-        while (a[n]) n++;
-        char *p = (char *)malloc(n + 1);
-        if (n) memcpy(p, a, n);
-        p[n] = 0;
-        zerg_list_zerg_str_push(&out, (zerg_str){p, n});
-    }
-    return out;
+static int64_t zerg_os_argv_len(void) {
+    return (int64_t)__zerg_argc;
 }
 
-/* zerg_os_exit terminates the process with the given code. We flush
-   stdout/stderr first so any prints made before the exit call reach
-   the user, then use _exit rather than exit. _exit avoids running
-   atexit handlers and libc teardown — important under the v0.12 M:N
-   runtime, where the caller is a coroutine running on one worker
-   pthread while other workers are still in zerg_worker_main; libc
-   teardown would race the workers' access to scheduler globals
-   (calloc'd worker pool, runqueues, mutexes). _exit terminates the
-   entire process immediately; the workers' mmap'd stacks and locked
-   mutexes are released by the kernel. v0.9's semantics ("os.exit
-   bypasses defers") are preserved either way — _exit doesn't run
-   cleanup paths. */
-__attribute__((noreturn)) static void zerg_os_exit(int64_t code) {
-    fflush(stdout);
-    fflush(stderr);
-    _exit((int)code);
+static zerg_str zerg_os_argv_at(int64_t i) {
+    const char *a = __zerg_argv[i];
+    size_t n = 0;
+    while (a[n]) n++;
+    return (zerg_str){a, n};
+}
+
+static int64_t zerg_os_envp_len(void) {
+    int64_t n = 0;
+    if (environ) {
+        while (environ[n]) n++;
+    }
+    return n;
+}
+
+static zerg_str zerg_os_envp_at(int64_t i) {
+    const char *e = environ[i];
+    size_t n = 0;
+    while (e[n]) n++;
+    return (zerg_str){e, n};
 }
 `

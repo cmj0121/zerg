@@ -1,7 +1,0 @@
-# requires: v0.9
-
-fn boom() -> never {
-    x := 1
-}
-
-print "unreachable"

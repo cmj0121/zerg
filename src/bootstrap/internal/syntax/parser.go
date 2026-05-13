@@ -3196,6 +3196,13 @@ func (p *parser) parsePattern() (Pattern, error) {
 			return nil, err
 		}
 		return &LitPat{Pos: t.Pos, Lit: litExpr}, nil
+	case KindNil:
+		// `nil` in pattern position matches the absent case of a nullable
+		// scrutinee. Wrap a NilLit in a LitPat so the rest of the pattern
+		// machinery (typeck auto-unwrap, codegen tag test) uniformly
+		// recognises it as a literal.
+		p.advance()
+		return &LitPat{Pos: t.Pos, Lit: &NilLit{Pos: t.Pos}}, nil
 	}
 	return nil, errorAtTok(t, "expected pattern, got %s", t.Kind)
 }

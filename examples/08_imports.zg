@@ -3,10 +3,14 @@
 #
 # Module Imports
 #
-# `import` brings a module into the current file. Two resolution paths are admitted at v0.11:
+# `import` brings a module into the current file. The loader walks a fall-through chain:
 #
-#   1. `import "std/<name>"` — toolchain-embedded standard library (no on-disk install).
-#   2. `import "name"`       — sibling `.zg` file under the importing file's directory.
+#   1. `import "name"`       — sibling `.zg` file under the importing file's directory (wins when present).
+#   2. then `std/<name>`     — toolchain-embedded standard library. The `std/` prefix is the implicit
+#                              default, so `import "math"` and `import "std/math"` reach the same module
+#                              when there's no sibling.
+#   3. `import "sys/<name>"` — platform-specific stdlib (e.g. `sys/path`). The `sys/` prefix is *always*
+#                              required — bare names never fall through to `sys/*`.
 #
 # External / git-backed imports (`import "github.com/owner/repo"`) are NOT shipped — they appear in the
 # v1.0+ reserved list in docs/LANGUAGE.md.
@@ -15,16 +19,17 @@
 #
 # ```zerg
 # import (
-#     "std/math"
-#     "std/strings"
+#     "math"
+#     "strings"
 # )
 # ```
 
-# Use `import` to load a module, then access its members with dot syntax. The stdlib lives under `std/`.
-import "std/math"
+# Use `import` to load a module, then access its members with dot syntax. Bare `math` resolves to the
+# stdlib because no sibling `math.zg` shadows it.
+import "math"
 
 # `as <alias>` renames the binding inside this file (handy for avoiding collisions or for shorter names).
-import "std/strings" as s
+import "strings" as s
 
 # Access the imported module's public members with dot syntax.
 result := math.abs(-16)

@@ -1,7 +1,7 @@
 # requires: v0.8
-import "std/io"
-import "std/os"
-import "std/strings"
+import "io"
+import "os"
+import "strings"
 
 fn sum_lines(content: str) -> int {
     lines := strings.split(strings.trim(content), ",")
@@ -16,12 +16,12 @@ fn sum_lines(content: str) -> int {
 }
 
 match os.env("ZERG_TEST_TEMPDIR") {
-    Option.Some(d) => {
+    d => {
         path := strings.join([d, "numbers.txt"], "/")
         match io.read_file(path) {
             Result.Ok(content) => print sum_lines(content)
             Result.Err(_) => print "read err"
         }
     }
-    Option.None => print "no tempdir"
+    nil => print "no tempdir"
 }

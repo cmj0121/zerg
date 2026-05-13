@@ -1,0 +1,140 @@
+# requires: v0.14
+#
+# io — file read/write over the raw sys/syscall layer.
+#
+# v0.14 retires the bootstrap_provided/io.zg __builtin shim. Both halves
+# now share a single pure-Zerg implementation: the build half lowers the
+# sys/syscall wrappers to real svc traps; the run half routes through the
+# interpreter syscall intrinsics in run_v14_syscall.go. The errno → IoError
+# bucketing matches the retired C builtin's choices so the v0.8 corpus
+# (tests 01–04, 26) stays byte-identical on both halves.
+#
+# Constants (O_RDONLY, the write-create flag bundle, the errno table)
+# live as locals inside read_file / write_file / errno_to_io because the
+# interpreter does not currently surface module-level `const`-bindings
+# of an imported module to consumers — fn-decls and enum-decls are the
+# only cross-module shapes registered at module-init.
+
+import "sys/syscall"
+
+# IoError surfaces the bucketed host-error variants that read_file /
+# write_file can report. The variant order matches the retired C builtin
+# (NotFound, PermissionDenied, AlreadyExists, InvalidPath, Other) so
+# the v0.8 fixtures' match-arm output stays byte-identical.
+pub enum IoError {
+	NotFound,
+	PermissionDenied,
+	AlreadyExists,
+	InvalidPath,
+	Other,
+}
+
+# cstring copies the bytes of `s` into a fresh mut list[byte] and pushes
+# a trailing NUL. The kernel's open(2) reads until the first zero byte
+# and the sys/syscall.open wrapper performs no length book-keeping, so
+# every path passed across the syscall boundary needs explicit
+# termination.
+fn cstring(s: str) -> list[byte] {
+	sb := s.bytes()
+	mut buf: list[byte] = []
+	for i in 0..sb.len() {
+		push(buf, sb[i])
+	}
+	push(buf, '\0')
+	return buf
+}
+
+# errno_to_io maps a negative syscall result (-errno) to an IoError
+# bucket. The five buckets match the retired C builtin's choices so
+# the v0.8 corpus's match-arm output is byte-identical. Any errno not
+# in the table (EISDIR / EIO / EFBIG / EMFILE / …) collapses to Other.
+# The four named codes are macOS values; Linux uses identical numbers
+# for these so the same table works across the syscall layer's two
+# current targets.
+fn errno_to_io(rc: int) -> IoError {
+	e := -rc
+	return IoError.NotFound if e == 2
+	return IoError.PermissionDenied if e == 13
+	return IoError.AlreadyExists if e == 17
+	return IoError.InvalidPath if e == 22
+	return IoError.Other
+}
+
+# read_file reads the entire contents of the file at `path` and returns
+# them as a single str. The read is byte-oriented: UTF-8 validity of the
+# returned str is the caller's responsibility (non-UTF-8 bytes are
+# returned verbatim and may break downstream string ops, matching the
+# v0.10 contract).
+#
+# Errors are bucketed via errno_to_io. The file is closed before the
+# function returns regardless of the read outcome; a close failure does
+# not override a successful read.
+pub fn read_file(path: str) -> Result[str, IoError] {
+	# O_RDONLY = 0; mode is ignored without O_CREAT so we pass 0.
+	cpath := cstring(path)
+	fd := syscall.open(cpath, 0, 0)
+	return Err(errno_to_io(fd)) if fd < 0
+	# Scratch buf reused across iterations; 4096 = one page on every
+	# host the syscall layer targets.
+	mut content: list[byte] = []
+	mut chunk: list[byte] = []
+	for i in 0..4096 {
+		push(chunk, '\0')
+	}
+	mut err: IoError = IoError.Other
+	mut got_err: bool = false
+	for {
+		n := syscall.read(fd, chunk, 4096)
+		if n < 0 {
+			err = errno_to_io(n)
+			got_err = true
+			break
+		}
+		break if n == 0
+		for i in 0..n {
+			push(content, chunk[i])
+		}
+	}
+	syscall.close_fd(fd)
+	return Err(err) if got_err
+	return Ok(content.to_str())
+}
+
+# write_file writes `content` to the file at `path`, truncating any
+# existing file or creating it with mode 0o644 (subject to umask). The
+# write is byte-oriented; non-UTF-8 bytes pass through unchanged.
+#
+# The Ok payload is `true` so callers using `match ... { Ok(_)
+# => ... }` keep the v0.8 corpus's pattern shape. Returns Result.Err
+# with the bucketed IoError on any open / write / close failure.
+pub fn write_file(path: str, content: str) -> Result[bool, IoError] {
+	# Flag bundle: O_WRONLY (1) | O_CREAT (0x0200) | O_TRUNC (0x0400) =
+	# 1537. Mode 420 == 0o644 (owner rw, group/other r); applied only
+	# when O_CREAT actually creates the file.
+	cpath := cstring(path)
+	fd := syscall.open(cpath, 1537, 420)
+	return Err(errno_to_io(fd)) if fd < 0
+	cb := content.bytes()
+	cn := cb.len()
+	mut written: int = 0
+	mut err: IoError = IoError.Other
+	mut got_err: bool = false
+	for written < cn {
+		remaining := cn - written
+		mut chunk: list[byte] = []
+		for i in 0..remaining {
+			push(chunk, cb[written + i])
+		}
+		n := syscall.write(fd, chunk, remaining)
+		if n < 0 {
+			err = errno_to_io(n)
+			got_err = true
+			break
+		}
+		break if n == 0
+		written = written + n
+	}
+	syscall.close_fd(fd)
+	return Err(err) if got_err
+	return Ok(true)
+}

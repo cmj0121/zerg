@@ -1,0 +1,91 @@
+# requires: v0.14
+#
+# os — process-level interface (argv / env / exit). v0.14 retires the
+# bootstrap_provided coupled os_argv / os_env / os_exit shims in favour
+# of a pure-Zerg implementation over four atomic accessor primitives
+# and sys.syscall.exit.
+#
+# The argv accessors index into the kernel-supplied argv array exposed
+# as the cgen's __zerg_argc / __zerg_argv globals (on the build half)
+# or the interpreter's in.argv slice (on the run half). The envp
+# accessors walk extern char **environ on the build half and a one-
+# shot os.Environ() snapshot on the run half — the snapshot is
+# captured on first call so env() sees a stable index space across
+# its iteration even if the actual env mutates between primitive
+# calls.
+
+import "sys/syscall"
+
+# argv_len / argv_at index the process argv. argv_len returns argc
+# (always >= 1; index 0 is the executable path). argv_at(i) returns
+# the i-th argument as a zerg_str — the underlying bytes alias the
+# kernel-supplied argv memory, which is read-only and process-lived.
+fn argv_len() -> int __builtin os_argv_len
+fn argv_at(i: int) -> str __builtin os_argv_at
+
+# envp_len / envp_at index the process environment. Each envp_at(i)
+# is a "KEY=VALUE" str — env() splits on the first '=' to extract the
+# value. The snapshot semantics are captured once at first envp_len /
+# envp_at call so the search loop sees a consistent index space.
+fn envp_len() -> int __builtin os_envp_len
+fn envp_at(i: int) -> str __builtin os_envp_at
+
+# argv() returns the program's command-line arguments as a list[str].
+# Index 0 is the executable / entry-file path; subsequent entries are
+# the caller-supplied args. The list is fresh on each call (a new
+# list[str] is built by pushing each argv_at(i)).
+pub fn argv() -> list[str] {
+	mut out: list[str] = []
+	n := argv_len()
+	for i in 0..n {
+		push(out, argv_at(i))
+	}
+	return out
+}
+
+# env(name) looks up an environment variable by name. Returns the
+# value `str?` (the raw string on hit, `nil` on miss). Lookup is linear
+# in the number of envp entries — env is usually small enough that the
+# linear cost is below the floor of any pragma we'd ship to optimise
+# it. Matching is byte-exact on the key (no case folding); a name
+# containing '=' would never match because the split anchors on the
+# first '=' of the entry.
+pub fn env(name: str) -> str? {
+	nb := name.bytes()
+	nlen := nb.len()
+	n := envp_len()
+	for i in 0..n {
+		entry := envp_at(i)
+		eb := entry.bytes()
+		elen := eb.len()
+		# Entry must be at least "name=" long to match.
+		continue if elen <= nlen
+		# Prefix must match `name` byte-for-byte.
+		mut prefix_ok: bool = true
+		for k in 0..nlen {
+			if eb[k] != nb[k] {
+				prefix_ok = false
+				break
+			}
+		}
+		continue if not prefix_ok
+		# Next byte after the prefix must be '='.
+		continue if eb[nlen] != '='
+		# Extract value bytes from offset nlen+1 to end.
+		mut val: list[byte] = []
+		for k in (nlen + 1)..elen {
+			push(val, eb[k])
+		}
+		return val.to_str()
+	}
+	return nil
+}
+
+# exit(code) terminates the process. Delegates to sys.syscall.exit,
+# which traps SYS_exit on the build half and routes through the
+# interpreter syscall intrinsic on the run half (Go's os.Exit).
+# Type-wise returns unit; the kernel never returns control so the
+# unit value is unobservable.
+pub fn exit(code: int) {
+	syscall.exit(code)
+}

@@ -4,13 +4,13 @@ import (
 	"strings"
 )
 
-// v0.6 Unit 2 — built-in Option[T] / Result[T, E] enum synthesis.
+// v0.6 Unit 2 — built-in T? / Result[T, E] enum synthesis.
 //
 // Print path must suppress type-args; diagnostic path must show them. Unit 6
 // (run.go) and Unit 7 (cgen.go) honour this split: when emitting a value to
 // stdout the bare-name form (`Option.Some(7)`, `Result.Err("oops")`) is
 // printed; when reporting a diagnostic the bracketed instance name
-// (`Option[int]`) is shown to disambiguate generic instances.
+// (`int?`) is shown to disambiguate generic instances.
 //
 // The synthetic decls live under the pseudo-module `<builtin>` (see
 // builtinModuleTag). Their Pos carries the zero Position{} value so error
@@ -20,7 +20,7 @@ import (
 // position-sensitive lookup.
 
 // builtinModuleTag is the pseudo-module name attributed to the synthetic
-// Option / Result enum decls. Unit 7 codegen emits these under the literal
+// T? / Result enum decls. Unit 7 codegen emits these under the literal
 // `zerg_builtin` mangle (no FNV hash) per PLAN.md §Built-in mangle.
 const builtinModuleTag = "<builtin>"
 
@@ -52,7 +52,7 @@ func isReservedBuiltinTypeName(name string) bool {
 }
 
 // builtinOptionDecl returns a fresh *EnumDecl describing the synthetic
-// `enum Option[T] { Some(T), None }`. A new decl is constructed per call so
+// `enum T? { Some(T), None }`. A new decl is constructed per call so
 // the AST node is not aliased across modules — every module's typeck pass
 // gets its own copy to walk.
 func builtinOptionDecl() *EnumDecl {
@@ -84,7 +84,7 @@ func builtinResultDecl() *EnumDecl {
 	}
 }
 
-// injectBuiltinEnums wires the v0.6 built-in Option / Result decls into c's
+// injectBuiltinEnums wires the v0.6 built-in T? / Result decls into c's
 // tables. Called from newChecker so every module's collect pass already sees
 // the names. The synthetic decls live in builtinEnumDecls and enumAST so the
 // generic-decl path can look them up; they are NOT placed in c.enums (which
@@ -106,7 +106,7 @@ func injectBuiltinEnums(c *checker) {
 // monoKey is the cache key for a generic enum instantiation: the decl's name
 // plus the canonical printable form of the type-arg vector. The decl-name
 // alone disambiguates Option vs Result; the args string disambiguates
-// Option[int] from Option[str], etc. Nested instances (Option[Result[int,
+// int? from str?, etc. Nested instances (Option[Result[int,
 // str]]) round-trip through the same printable form their owning *Type
 // uses, so structurally-equal arg vectors produce one cache hit.
 type monoKey struct {
@@ -136,7 +136,7 @@ func monoEnumArgsSig(args []*Type) string {
 
 // instantiateGenericEnum returns the canonical *Type for a generic enum
 // decl applied to the resolved type-arg vector. Caches by (decl.Name,
-// argsSig) so two type-resolutions of `Option[int]` (one direct, one via
+// argsSig) so two type-resolutions of `int?` (one direct, one via
 // `int?` desugaring) return the same pointer.
 //
 // Argument-shape validation (correct number of type-args) happens here; the
@@ -194,7 +194,7 @@ func (c *checker) instantiateGenericEnum(decl *EnumDecl, args []*Type, refPos Po
 		VariantPayloads: payloads,
 	}
 	c.monoEnums[key] = mono
-	// v0.6 Unit 3.5: built-in Option / Result decls have no user-declared
+	// v0.6 Unit 3.5: built-in T? / Result decls have no user-declared
 	// generic impls, but user-defined generic enums may. Skip expansion for
 	// the built-ins (their decls live under <builtin> and never carry an
 	// impl record); for user-defined enums, fan out per-instantiation.
@@ -210,11 +210,11 @@ func (c *checker) instantiateGenericEnum(decl *EnumDecl, args []*Type, refPos Po
 // used by instantiateGenericEnum to walk a generic decl's payload TypeRefs
 // with type-parameter names mapped to concrete *Type values. A bare named
 // reference whose name matches a key in subst short-circuits to the
-// substituted type; nested generics (`Option[T]` inside another generic
+// substituted type; nested generics (`T?` inside another generic
 // payload) recurse through the regular instantiation path.
 //
 // Unit 2 only uses this path from instantiateGenericEnum on the synthetic
-// Option / Result decls, whose payload references are bare type-param names
+// T? / Result decls, whose payload references are bare type-param names
 // — but the implementation handles the general shape so future user-defined
 // generic enum decls (Unit 3) can share the routine.
 func (c *checker) resolveTypeRefWithSubst(ref *TypeRef, subst map[string]*Type) (*Type, error) {
@@ -226,7 +226,7 @@ func (c *checker) resolveTypeRefWithSubst(ref *TypeRef, subst map[string]*Type) 
 		if ref.Module == "" && len(ref.TypeArgs) == 0 {
 			if t, ok := subst[ref.Name]; ok {
 				if ref.Nullable {
-					return c.wrapOption(t, ref.Pos)
+					return c.wrapNullable(t, ref.Pos)
 				}
 				return t, nil
 			}
@@ -256,7 +256,7 @@ func (c *checker) resolveTypeRefWithSubst(ref *TypeRef, subst map[string]*Type) 
 				return nil, err
 			}
 			if ref.Nullable {
-				return c.wrapOption(t, ref.Pos)
+				return c.wrapNullable(t, ref.Pos)
 			}
 			return t, nil
 		}
@@ -272,7 +272,7 @@ func (c *checker) resolveTypeRefWithSubst(ref *TypeRef, subst map[string]*Type) 
 		}
 		t := NewListType(elem)
 		if ref.Nullable {
-			return c.wrapOption(t, ref.Pos)
+			return c.wrapNullable(t, ref.Pos)
 		}
 		return t, nil
 	case TypeRefTuple:
@@ -286,19 +286,54 @@ func (c *checker) resolveTypeRefWithSubst(ref *TypeRef, subst map[string]*Type) 
 		}
 		t := NewTupleType(elems)
 		if ref.Nullable {
-			return c.wrapOption(t, ref.Pos)
+			return c.wrapNullable(t, ref.Pos)
 		}
 		return t, nil
 	}
 	return nil, typeErr(ref.Pos, "internal: unknown TypeRef kind %d", int(ref.Kind))
 }
 
-// wrapOption returns the canonical *Type for `Option[t]`. Used by
+// wrapNullable returns the canonical *Type for `t?`. Used by
 // resolveTypeRef when a TypeRef carries the postfix `?` bit.
-func (c *checker) wrapOption(t *Type, refPos Position) (*Type, error) {
+func (c *checker) wrapNullable(t *Type, refPos Position) (*Type, error) {
 	decl := c.builtinEnumDecls["Option"]
 	if decl == nil {
 		return nil, typeErr(refPos, "internal: built-in Option not registered")
 	}
 	return c.instantiateGenericEnum(decl, []*Type{t}, refPos)
+}
+
+// IsNullable reports whether t is the synthetic nullable enum that backs
+// `T?` (canonical Name "Option[<inner>]"). Exported so cgen and interp
+// can ask the same question without each repeating the prefix check.
+func IsNullable(t *Type) bool {
+	if t == nil || t.Kind != TypeEnum {
+		return false
+	}
+	return strings.HasPrefix(t.Name, "Option[")
+}
+
+// NullableInner extracts the inner T from a `T?` instance. Returns
+// (inner, true) on success, (nil, false) when t is not a nullable.
+func NullableInner(t *Type) (*Type, bool) {
+	if !IsNullable(t) {
+		return nil, false
+	}
+	if len(t.VariantPayloads) < 1 || len(t.VariantPayloads[0]) != 1 {
+		return nil, false
+	}
+	return t.VariantPayloads[0][0], true
+}
+
+// IsNilLitPattern reports whether pat is a `nil` literal pattern (the
+// only construction surface for the absent case in a nullable match).
+// Used by checkPattern / borrow.bindPatternNames / cgen.patternTest /
+// interp.bindPattern to short-circuit the auto-unwrap rule.
+func IsNilLitPattern(pat Pattern) bool {
+	lp, ok := pat.(*LitPat)
+	if !ok {
+		return false
+	}
+	_, isNil := lp.Lit.(*NilLit)
+	return isNil
 }

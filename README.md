@@ -48,8 +48,8 @@ for sequential code, equivalent under any valid scheduling for concurrent code.
 ## Building & running
 
 The compiler is a Go program that interprets `.zg` source directly, or compiles it by emitting C
-and shelling out to the system C compiler. The toolchain ships four subcommands: `zerg run`,
-`zerg build`, `zerg fmt`, and `zerg repl`.
+and shelling out to the system C compiler. The toolchain ships five subcommands: `zerg run`,
+`zerg build`, `zerg fmt`, `zerg repl`, and `zerg stdlib`.
 
 ### Prerequisites
 
@@ -91,6 +91,42 @@ you can paste a function body, a `for` block, a `struct`/`enum`/`spec`/`impl` de
 `match` arm at a time. Bindings persist across lines within a session. `import` is not admitted
 at the REPL.
 
+### Inspect the stdlib
+
+```sh
+./src/bootstrap/bin/zerg stdlib
+```
+
+Prints the catalog of toolchain-supported modules with a one-line description each.
+
+## Module resolution
+
+`import "foo"` is resolved by the loader using a fall-through chain:
+
+| Form          | Source                       | Notes                                                              |
+| ------------- | ---------------------------- | ------------------------------------------------------------------ |
+| bare `<name>` | `<importer-dir>/<name>.zg`   | Same-repo sibling (wins when present).                             |
+|               | embedded `std/<name>.zg`     | Fall-through to stdlib — `std/` is the implicit default namespace. |
+| `std/<name>`  | embedded `std/<name>.zg`     | Explicit stdlib form — skips the sibling check.                    |
+| `sys/<name>`  | embedded `sys/<name>/mod.zg` | **Explicit-only**: bare names never fall through to `sys/*`.       |
+
+`import "io"` works just like `import "std/io"` when no sibling claims the name —
+the `std/` prefix is optional sugar for the implicit default namespace. Use the
+explicit form when you want to be unambiguous (e.g. when a sibling with the same
+name exists and you specifically want the stdlib one).
+
+The `sys/*` family is different: it carries platform-specific modules such as
+`sys/path`, and the prefix is **always required**. `import "path"` does not resolve
+to `sys/path` — pulling in platform-dependent code is a deliberate choice that the
+import path must signal. Both families share the on-disk → built-in fall-through
+chain for their explicit forms.
+
+The stdlib's canonical source tree is `src/std/` (pure Zerg, no Go). `make build`
+mirrors it into `src/bootstrap/internal/loader/stdlib_embed/` (a gitignored build
+artifact) so `//go:embed` can bake it into the toolchain binary — the resulting
+`zerg` is self-contained. Setting `$ZERG_STDLIB` points the loader at an on-disk
+tree instead, useful when iterating on stdlib source without rebuilding.
+
 ## DDD (Dream-Driven Development)
 
 This project is based on the DDD (dream-driven development) methodology which means
@@ -103,5 +139,5 @@ All the features are based on my needs and my dreams.
 - [`RELEASE.md`](RELEASE.md) — per-version release summaries (one screen per version).
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — formal language reference (grammar EBNF, type system,
   evaluation order, ownership, defer / concurrency / `?` propagation, reserved words).
-- [`docs/STDLIB.md`](docs/STDLIB.md) — per-module fn reference for `std/io`, `std/strings`,
-  `std/math`, `std/os`, and `std/time`, with signatures, error variants, and runnable examples.
+- [`docs/STDLIB.md`](docs/STDLIB.md) — per-module fn reference for `io`, `strings`, `math`,
+  `os`, `time`, and `sys/path`, with signatures, error variants, and runnable examples.

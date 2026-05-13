@@ -190,6 +190,16 @@ func TestE2EV13Corpus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read entry %s: %v", entry, err)
 			}
+			// asm-bearing programs are build-only because the interpreter
+			// rejects every asm body (v0.13 pin 6). The check walks the
+			// entry source directly. v0.14 added a sys/syscall intrinsic
+			// dispatch in run_v14_syscall.go that shims the asm-bearing
+			// wrapper bodies against the host's `syscall` package, so
+			// `import "sys/syscall"` is NO LONGER a transitive build-
+			// only trigger — programs that use the wrappers run under
+			// the interpreter too. A program that writes its own
+			// `asm { … }` block in the entry still falls back to
+			// build-only.
 			asmBearing := bytes.Contains(srcBytes, []byte("asm {")) ||
 				bytes.Contains(srcBytes, []byte("asm{"))
 			var runOut []byte

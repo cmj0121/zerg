@@ -1,5 +1,5 @@
 # requires: v0.9
-import "std/time"
+import "time"
 
 t1 := time.now_ms()
 _ := time.sleep_ms(50)

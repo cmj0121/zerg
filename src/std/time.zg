@@ -1,0 +1,64 @@
+# requires: v0.14
+#
+# time — clock + sleep utilities. v0.14 retires the bootstrap_provided
+# coupled time_now_ms / time_sleep_ms shims in favour of a pure-Zerg
+# implementation over two atomic libc-backed primitives:
+#
+#   - `time_clock_us`  → walltime µs since the UNIX epoch
+#   - `time_sleep_ns`  → blocking sleep (sec, nsec), EINTR-safe in the
+#                        cgen runtime, time.Sleep on the interpreter
+#
+# The first-call-zero contract for now_ms lives in the module-level
+# `epoch_us` binding, surfaced to fn bodies by the v0.14 P1 module-init
+# walk (see internal/run/run.go's initImportedModuleVars and cgen's
+# emitImportedModuleGlobals). Without P1 this state would have no
+# reachable home in pure Zerg.
+
+# epoch_us captures the walltime µs of the first now_ms call. The
+# sentinel -1 means "not yet captured"; the first now_ms call stores
+# the live clock here and returns 0 ms-since-self.
+mut epoch_us: int = -1
+
+# clock_us is the atomic libc-backed primitive: walltime microseconds
+# since the UNIX epoch. No epoch logic, no clamp. Private to time.zg
+# — callers route through now_ms.
+fn clock_us() -> int __builtin time_clock_us
+
+# sleep_ns is the atomic libc-backed primitive: nanosleep with EINTR
+# retry. Negative inputs return -EINVAL; sleep_ms clamps non-positive
+# durations before reaching here. Private to time.zg.
+fn sleep_ns(sec: int, nsec: int) -> int __builtin time_sleep_ns
+
+# now_ms returns milliseconds elapsed since the first call to now_ms.
+# The first call captures the walltime epoch into the module-level
+# `epoch_us` and returns 0. Subsequent calls return (cur - epoch) / 1000.
+#
+# Backed by CLOCK_REALTIME, not CLOCK_MONOTONIC. On the cgen half this
+# is `clock_gettime(CLOCK_REALTIME, &ts)`; on the interpreter half it
+# is Go's `time.Now().UnixMicro()`. Both halves see the same epoch-
+# zero contract and the v0.9 corpus (fixtures 11 / 12 / 14) passes
+# byte-identically against this implementation.
+pub fn now_ms() -> int {
+	cur := clock_us()
+	if epoch_us < 0 {
+		epoch_us = cur
+		return 0
+	}
+	return (cur - epoch_us) / 1000
+}
+
+# sleep_ms blocks for at least `ms` milliseconds. Non-positive `ms` is
+# a no-op (matches the v0.9 contract); returns true on completion,
+# false on a syscall error.
+#
+# The clamp / split happens here so the underlying sleep_ns primitive
+# can stay narrow: it just takes (sec, nsec) and forwards to libc.
+# Negative ms surfaces no error to the caller — the legacy contract
+# documents non-positive as a benign no-op.
+pub fn sleep_ms(ms: int) -> bool {
+	return true if ms <= 0
+	sec := ms / 1000
+	nsec := (ms % 1000) * 1000000
+	rc := sleep_ns(sec, nsec)
+	return rc >= 0
+}

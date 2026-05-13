@@ -1,9 +1,0 @@
-# requires: v0.9
-import "std/os"
-
-n := 1
-match n {
-    0 => print "zero"
-    1 => print "one"
-    _ => os.exit(3)
-}

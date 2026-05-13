@@ -47,7 +47,11 @@ func emitV13Asm(t *testing.T, src string) string {
 func TestV13CgenAsmClobberSet(t *testing.T) {
 	// Minimal asm-bearing program: a single empty asm block is enough
 	// because the clobber list is constant — every block emits the same
-	// set, regardless of body content or interp count.
+	// set, regardless of body content or interp count. Force arm64
+	// selection so the assertions hold on any build host (the suite
+	// must stay arch-independent at the Go level even though the
+	// emitted body is arm64).
+	defer SetAsmTargetArchForTest("arm64")()
 	out := emitV13Asm(t, `# requires: v0.13
 asm {
 	nop
@@ -115,16 +119,80 @@ asm {
 }
 
 func TestV13CgenAsmTextOnlyHasNoOperands(t *testing.T) {
-	// A pure-text body emits no input operands; the input section of the
-	// __asm__ volatile is just the colon delimiter.
+	// A pure-text body emits no input or output operands; both sections
+	// are just the colon delimiter followed by a newline.
 	out := emitV13Asm(t, `# requires: v0.13
 asm {
 	svc #0x80
 }
 `)
-	// Sniff for the input-operand boilerplate without trailing "r"(...).
+	if !strings.Contains(out, ": /* outputs */\n") {
+		t.Errorf("expected empty output section; got:\n%s", out)
+	}
 	if !strings.Contains(out, ": /* inputs */\n") {
 		t.Errorf("expected empty input section; got:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v0.14 — int input operand + mut write-back output operand.
+// ---------------------------------------------------------------------------
+
+func TestV14CgenAsmInterpIntInputLowering(t *testing.T) {
+	// An immutable int binding lowers as an input operand cast to
+	// int64_t (the C type Zerg's `int` maps to). The cast widens to
+	// register-size so the "r" constraint can pick any GPR width.
+	out := emitV13Asm(t, `# requires: v0.14
+n := 5
+asm {
+	mov x0, ${n}
+}
+`)
+	if !strings.Contains(out, "mov x0, %0") {
+		t.Errorf("expected 'mov x0, %%0' in asm template; got:\n%s", out)
+	}
+	if !strings.Contains(out, `"r"(((int64_t)z_n))`) {
+		t.Errorf("expected int input operand 'r'(((int64_t)z_n)); got:\n%s", out)
+	}
+}
+
+func TestV14CgenAsmMutIntOutputLowering(t *testing.T) {
+	// A `mut int` binding lowers as a "+r" inout operand. The C operand
+	// expression is the raw lvalue `z_<name>` (no cast wrapper) so GCC
+	// can emit load/store around the asm body.
+	out := emitV13Asm(t, `# requires: v0.14
+mut x: int = 0
+asm {
+	mov ${x}, #42
+}
+`)
+	if !strings.Contains(out, "mov %0, #42") {
+		t.Errorf("expected 'mov %%0, #42' (output placeholder = 0); got:\n%s", out)
+	}
+	if !strings.Contains(out, `"+r"(z_x)`) {
+		t.Errorf("expected mut int output operand '+r'(z_x); got:\n%s", out)
+	}
+}
+
+func TestV14CgenAsmMixedOutputAndInputNumbering(t *testing.T) {
+	// GCC numbers operands outputs-first, inputs-second. With one output
+	// `${x}` and one input `${n}`, the output gets %0 and the input gets
+	// %1 — independent of source order.
+	out := emitV13Asm(t, `# requires: v0.14
+mut x: int = 0
+n := 7
+asm {
+	mov ${x}, ${n}
+}
+`)
+	if !strings.Contains(out, "mov %0, %1") {
+		t.Errorf("expected 'mov %%0, %%1' (output then input); got:\n%s", out)
+	}
+	if !strings.Contains(out, `"+r"(z_x)`) {
+		t.Errorf("expected output operand '+r'(z_x); got:\n%s", out)
+	}
+	if !strings.Contains(out, `"r"(((int64_t)z_n))`) {
+		t.Errorf("expected input operand 'r'(((int64_t)z_n)); got:\n%s", out)
 	}
 }
 
@@ -145,6 +213,51 @@ asm {
 	// re-escape `%`, so the literal substring in the C source is `%%`).
 	if !strings.Contains(out, `mov w0, %%w0`) {
 		t.Errorf("expected '%%' doubled in asm template; got:\n%s", out)
+	}
+}
+
+// TestV14CgenAsmClobberSetAmd64 — when the cgen targets amd64, the
+// clobber list switches to the SysV AMD64 caller-saved set instead of
+// the arm64 set. The test forces amd64 selection through the test
+// override so it runs on any build host; the emit assertions check
+// that the amd64 register names appear and that the arm64-specific
+// names (x0..x30) do not leak into an amd64 emit.
+func TestV14CgenAsmClobberSetAmd64(t *testing.T) {
+	defer SetAsmTargetArchForTest("amd64")()
+	out := emitV13Asm(t, `# requires: v0.13
+asm {
+	nop
+}
+`)
+	want := []string{`"memory"`, `"cc"`}
+	for _, r := range []string{"rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"} {
+		want = append(want, `"`+r+`"`)
+	}
+	for i := 0; i <= 15; i++ {
+		want = append(want, `"xmm`+itoa(i)+`"`)
+	}
+	for _, name := range want {
+		if !strings.Contains(out, name) {
+			t.Errorf("amd64 clobber list missing %s in emit:\n%s", name, out)
+		}
+	}
+	// Verify the arm64 set is NOT used on amd64. A regression that
+	// always picks the arm64 list would show x0/x30 here, which would
+	// also surface as a real cc failure on amd64 hosts but is cheaper
+	// to catch through the emit shape.
+	for _, banned := range []string{`"x0"`, `"x30"`, `"v0"`, `"v31"`} {
+		if strings.Contains(out, banned) {
+			t.Errorf("amd64 emit erroneously contains arm64 clobber %s; got:\n%s", banned, out)
+		}
+	}
+	// rbx / rbp / r12..r15 are callee-saved under SysV AMD64 and must
+	// NOT appear in the clobber list (mirror of arm64's x29 user-
+	// preserve contract — a regression that adds them would silently
+	// break frame-pointer unwinding inside debuggers).
+	for _, banned := range []string{`"rbx"`, `"rbp"`, `"r12"`, `"r13"`, `"r14"`, `"r15"`} {
+		if strings.Contains(out, banned) {
+			t.Errorf("amd64 clobber list erroneously contains callee-saved %s; got:\n%s", banned, out)
+		}
 	}
 }
 

@@ -122,6 +122,13 @@ func (t *Type) String() string {
 		b.WriteString("]")
 		return b.String()
 	case TypeStruct, TypeEnum, TypeSpec:
+		// A monomorphised T? prints as `T?` because `Option` is not a
+		// user-visible type name. Single-pass strip: the instance name shape
+		// is "Option[<inner>]" and inner already stringifies through its own
+		// Type.String at instantiation time.
+		if IsNullable(t) && strings.HasSuffix(t.Name, "]") {
+			return t.Name[len("Option["):len(t.Name)-1] + "?"
+		}
 		return t.Name
 	case TypeChan:
 		return "chan[" + t.Element.String() + "]"
@@ -476,7 +483,7 @@ type checker struct {
 	builtinEnumDecls map[string]*EnumDecl
 	// monoEnums caches per-instantiation canonical *Type values for
 	// generic enum decls. Key is `Decl[arg1,arg2,...]`. Two type-resolutions
-	// of the same instance (e.g. `Option[int]` and `int?`) return the same
+	// of the same instance (e.g. `int?` and `int?`) return the same
 	// canonical pointer, so downstream pointer-equality dispatch works.
 	//
 	// v0.6 Unit 3: when a CheckBundle is in play, every module's checker
@@ -717,7 +724,7 @@ func (c *checker) resolveStructFields(_ *Program) error {
 // type name is already in the table by the time we run.
 func (c *checker) resolveEnumPayloads(_ *Program) error {
 	for name, decl := range c.enumAST {
-		// Generic enum decls (incl. the v0.6 built-ins Option / Result)
+		// Generic enum decls (incl. the v0.6 built-ins T? / Result)
 		// are not resolved here — their payload type-refs name the
 		// declared type-parameters by raw identifier, and the canonical
 		// per-instance *Type is built on demand by instantiateGenericEnum.
@@ -1234,7 +1241,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		if c.activeSubst != nil && ref.Module == "" && len(ref.TypeArgs) == 0 {
 			if t, ok := c.activeSubst[ref.Name]; ok {
 				if ref.Nullable {
-					wrapped, werr := c.wrapOption(t, ref.Pos)
+					wrapped, werr := c.wrapNullable(t, ref.Pos)
 					if werr != nil {
 						return nil, werr
 					}
@@ -1259,7 +1266,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 					"generic type arguments on cross-module references are not supported at v0.6 Unit 2")
 			}
 			if ref.Nullable {
-				wrapped, werr := c.wrapOption(t, ref.Pos)
+				wrapped, werr := c.wrapNullable(t, ref.Pos)
 				if werr != nil {
 					return nil, werr
 				}
@@ -1276,9 +1283,16 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		if ref.Name == "chan" {
 			return c.resolveChanTypeRef(ref)
 		}
+		// `Option` is not a user-visible type name. The synthetic decl
+		// still backs `T?` internally; user code spells nullables with the
+		// `?` suffix only.
+		if ref.Module == "" && ref.Name == "Option" {
+			return nil, typeErr(ref.Pos,
+				"`Option` is not a valid type; spell a nullable as `T?` instead")
+		}
 		// Generic-name path (v0.6): a name with type-args resolves through
 		// the per-decl monomorphization cache. Unit 2 handled the built-in
-		// Option / Result decls; Unit 3 extends to user-defined generic
+		// T? / Result decls; Unit 3 extends to user-defined generic
 		// enums and structs (and rejects type-args on non-generic concrete
 		// names).
 		if len(ref.TypeArgs) > 0 {
@@ -1296,7 +1310,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 					return nil, err
 				}
 				if ref.Nullable {
-					wrapped, werr := c.wrapOption(t, ref.Pos)
+					wrapped, werr := c.wrapNullable(t, ref.Pos)
 					if werr != nil {
 						return nil, werr
 					}
@@ -1312,7 +1326,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 					return nil, err
 				}
 				if ref.Nullable {
-					wrapped, werr := c.wrapOption(t, ref.Pos)
+					wrapped, werr := c.wrapNullable(t, ref.Pos)
 					if werr != nil {
 						return nil, werr
 					}
@@ -1404,7 +1418,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			}
 		}
 		if ref.Nullable {
-			wrapped, werr := c.wrapOption(t, ref.Pos)
+			wrapped, werr := c.wrapNullable(t, ref.Pos)
 			if werr != nil {
 				return nil, werr
 			}
@@ -1423,7 +1437,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		}
 		t := NewListType(elem)
 		if ref.Nullable {
-			wrapped, werr := c.wrapOption(t, ref.Pos)
+			wrapped, werr := c.wrapNullable(t, ref.Pos)
 			if werr != nil {
 				return nil, werr
 			}
@@ -1446,7 +1460,7 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 		}
 		t := NewTupleType(elems)
 		if ref.Nullable {
-			wrapped, werr := c.wrapOption(t, ref.Pos)
+			wrapped, werr := c.wrapNullable(t, ref.Pos)
 			if werr != nil {
 				return nil, werr
 			}
@@ -2159,7 +2173,30 @@ func (c *checker) checkMatch(s *MatchStmt) error {
 // checkPattern validates pat against expected. Bindings are recorded in
 // armScope; the bindings map tracks names within a single pattern so `Point
 // { x, x }` is rejected.
+//
+// When expected is a nullable instance, patterns auto-unwrap. A LitPat with
+// `nil` matches the absent case; every other pattern (BindPat, non-nil LitPat,
+// Wildcard, etc.) is checked against the inner element type, so
+// `match x { nil => …, v => use(v) }` binds v at type T (not T?). The
+// unwrap fires before the regular dispatch so existing recursion (TuplePat,
+// StructPat, …) works through it uniformly.
 func (c *checker) checkPattern(pat Pattern, expected *Type, armScope *scope, bindings map[string]bool) error {
+	if IsNullable(expected) {
+		if IsNilLitPattern(pat) {
+			// `nil =>` matches the absent case; type the literal as the
+			// nullable instance so codegen / interp reach the same path as a
+			// context-typed nil expression.
+			if _, err := c.checkExprHint(pat.(*LitPat).Lit, expected); err != nil {
+				return err
+			}
+			return nil
+		}
+		if _, isEnumPat := pat.(*EnumPat); !isEnumPat {
+			if inner, ok := NullableInner(expected); ok {
+				return c.checkPattern(pat, inner, armScope, bindings)
+			}
+		}
+	}
 	switch p := pat.(type) {
 	case *WildcardPat:
 		return nil
@@ -2231,6 +2268,10 @@ func (c *checker) checkPattern(pat Pattern, expected *Type, armScope *scope, bin
 		}
 		return nil
 	case *EnumPat:
+		if p.TypeName == "Option" {
+			return typeErr(p.Pos,
+				"`Option.%s` is not a valid pattern; use `nil` for the absent case or bind a name for the present case", p.VariantName)
+		}
 		if expected == nil || expected.Kind != TypeEnum {
 			return typeErr(p.Pos, "enum pattern cannot match subject of type %s", expected)
 		}
@@ -2386,11 +2427,11 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.checkEnumLit(e)
 	case *NilLit:
 		// v0.6 Unit 2: nil resolves only when the surrounding context
-		// supplies an Option[T] expected type via the hint. Unit 4
+		// supplies a T? expected type via the hint. Unit 4
 		// extends every bidirectional position (return, fn-arg, list
 		// element, struct field) by routing those callers through
 		// checkExprLift, which propagates the hint here.
-		if hint != nil && hint.Kind == TypeEnum && isOptionInstance(hint) {
+		if IsNullable(hint) {
 			e.setType(hint)
 			return hint, nil
 		}
@@ -2407,16 +2448,6 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 		return c.checkAnonFnExpr(e)
 	}
 	return nil, typeErr(expr.ExprPos(), "internal: unhandled expression %T", expr)
-}
-
-// isOptionInstance reports whether t is a monomorphized Option[...] enum.
-// Used by NilLit's bidirectional check at Unit 2 (and re-used by Unit 4 for
-// the broader nil / `?` / `??` / `?.` machinery).
-func isOptionInstance(t *Type) bool {
-	if t == nil || t.Kind != TypeEnum {
-		return false
-	}
-	return strings.HasPrefix(t.Name, "Option[")
 }
 
 // checkListLit handles `[e1, e2, ...]` and the empty-list special case. With
@@ -2760,8 +2791,8 @@ func (c *checker) checkFieldAccess(e *FieldAccessExpr) (*Type, error) {
 // enum bare-variant access where the type-args must come from context.
 func (c *checker) checkFieldAccessHint(e *FieldAccessExpr, hint *Type) (*Type, error) {
 	// v0.6 Unit 4: `obj?.field` routes through the safe-navigation path. The
-	// receiver must be Option[T]; the result is Option[fieldType]. Chains
-	// compose because each ?. returns Option[...] which the next ?. consumes.
+	// receiver must be T?; the result is fieldType?. Chains
+	// compose because each ?. returns T? which the next ?. consumes.
 	if e.Safe {
 		return c.checkSafeFieldAccess(e)
 	}
@@ -3446,6 +3477,33 @@ func (c *checker) checkCallHint(e *CallExpr, hint *Type) (*Type, error) {
 	// v0.6 Unit 3: generic-fn dispatch.
 	if fn := c.findGenericFnDecl(ident.Name); fn != nil {
 		return c.checkGenericFnCall(e, fn, ident, hint)
+	}
+	// Bare `Ok(v)` / `Err(e)` sugar for `Result.Ok(v)` / `Result.Err(e)`.
+	// Fires only when no local binding or fn shadows the name (a user with a
+	// local `Ok` keeps the binding behaviour; the sugar gives way).
+	if ident.Name == "Ok" || ident.Name == "Err" {
+		if _, _, isVar := c.scope.lookupWithScope(ident.Name); !isVar {
+			if _, hasFn := c.fns[ident.Name]; !hasFn {
+				if d := c.findGenericEnumDecl("Result"); d != nil {
+					synth := &MethodCallExpr{
+						Pos:       e.Pos,
+						Receiver:  &IdentExpr{Pos: ident.Pos, Name: "Result"},
+						Method:    ident.Name,
+						MethodPos: ident.Pos,
+						Args:      e.Args,
+					}
+					t, handled, err := c.checkGenericEnumLit(synth, "Result", ident.Name, hint)
+					if handled {
+						if err != nil {
+							return nil, err
+						}
+						e.Lowered = synth.Lowered
+						e.setType(t)
+						return t, nil
+					}
+				}
+			}
+		}
 	}
 	sig, ok := c.fns[ident.Name]
 	if !ok {

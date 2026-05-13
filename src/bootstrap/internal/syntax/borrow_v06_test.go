@@ -54,12 +54,12 @@ func TestBorrowV06PropagateConsumesReceiver(t *testing.T) {
 // payload (int) is a primitive, so the BORROW checker only fires on the
 // outer-binding move (the Option enum itself is composite).
 func TestBorrowV06PropagateOnOptionConsumesReceiver(t *testing.T) {
-	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
+	src := "fn maybe() -> int? { return 7 }\n" +
 		"fn outer() -> int? {\n" +
 		"r := maybe()\n" +
 		"v := r?\n" +
 		"print r\n" +
-		"return Option.Some(v)\n" +
+		"return v\n" +
 		"}\n"
 	borrowErrSrc(t, src, "use of moved value")
 }
@@ -132,10 +132,11 @@ func TestBorrowV06CoalesceLiteralRhsOnlyConsumesLhs(t *testing.T) {
 
 // `??` on a primitive-payload Option still consumes the LHS binding.
 func TestBorrowV06CoalescePrimitiveLhsConsumed(t *testing.T) {
-	src := "opt: int? = Option.Some(1)\n" +
+	src := "opt: int? = 1\n" +
 		"v: int = opt ?? 0\n" +
 		"print opt\n"
-	// opt is Option[int] — composite (enum) — so the use-after-move rule fires.
+	// opt is the Option-backed nullable enum — composite — so the
+	// use-after-move rule fires.
 	borrowErrSrc(t, src, "use of moved value")
 }
 
@@ -146,7 +147,7 @@ func TestBorrowV06CoalescePrimitiveLhsConsumed(t *testing.T) {
 // `?.` is a read on the receiver — the binding remains usable afterwards.
 func TestBorrowV06SafeFieldAccessIsRead(t *testing.T) {
 	src := "struct Box { v: int }\n" +
-		"b: Box? = Option.Some(Box { v: 7 })\n" +
+		"b: Box? = Box { v: 7 }\n" +
 		"x := b?.v\n" +
 		"y := b?.v\n" +
 		"print x\n" +
@@ -159,7 +160,7 @@ func TestBorrowV06SafeFieldAccessIsRead(t *testing.T) {
 func TestBorrowV06SafeFieldAccessChainIsRead(t *testing.T) {
 	src := "struct Inner { v: int }\n" +
 		"struct Outer { inner: Inner }\n" +
-		"o: Outer? = Option.Some(Outer { inner: Inner { v: 1 } })\n" +
+		"o: Outer? = Outer { inner: Inner { v: 1 } }\n" +
 		"a := o?.inner?.v\n" +
 		"b := o?.inner?.v\n" +
 		"print a\n" +
@@ -195,10 +196,10 @@ func TestBorrowV06MoveListIntoBoxField(t *testing.T) {
 	borrowErrSrc(t, src, "use of moved value")
 }
 
-// Move a generic enum value (Option[list[int]]) on rebind — the canonical
+// Move an Option-backed nullable list value on rebind — the canonical
 // type is an enum, so the v0.4 enum-as-composite rule fires.
 func TestBorrowV06MoveOptionOfListThenUse(t *testing.T) {
-	src := "o: list[int]? = Option.Some([1, 2])\n" +
+	src := "o: list[int]? = [1, 2]\n" +
 		"p := o\n" +
 		"print o\n"
 	borrowErrSrc(t, src, "use of moved value")

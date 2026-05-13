@@ -1,6 +1,3 @@
-Option.Some(Option.Some(7))
-Option.Some(Option.None)
-Option.None
 Result.Ok(1)
 Result.Err(Result.Ok(inner-ok))
 Result.Err(Result.Err(404))

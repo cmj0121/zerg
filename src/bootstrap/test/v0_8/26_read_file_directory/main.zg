@@ -3,7 +3,7 @@ import "io"
 import "os"
 
 match os.env("ZERG_TEST_TEMPDIR") {
-    Option.Some(d) => {
+    d => {
         match io.read_file(d) {
             Result.Ok(_) => print "ok?"
             Result.Err(e) => match e {
@@ -15,5 +15,5 @@ match os.env("ZERG_TEST_TEMPDIR") {
             }
         }
     }
-    Option.None => print "no tempdir"
+    nil => print "no tempdir"
 }

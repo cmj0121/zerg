@@ -218,6 +218,7 @@ func cloneExpr(e Expr) Expr {
 		out.Callee = cloneExpr(n.Callee)
 		out.Args = cloneExprs(n.Args)
 		out.Specialised = nil
+		out.Lowered = nil
 		return &out
 	case *RangeExpr:
 		out := *n

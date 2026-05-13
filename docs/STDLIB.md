@@ -357,17 +357,17 @@ Process surface. Environment access (`env`), command-line argv
 
 ### Signatures
 
-| Function                        | Since | Description                                   |
-| ------------------------------- | ----- | --------------------------------------------- |
-| `env(name: str) -> Option[str]` | v0.8  | Looks up an environment variable.             |
-| `argv() -> list[str]`           | v0.9  | Returns the program's command-line arguments. |
-| `exit(code: int)`               | v0.9  | Terminates the process with `code`.           |
+| Function                 | Since | Description                                   |
+| ------------------------ | ----- | --------------------------------------------- |
+| `env(name: str) -> str?` | v0.8  | Looks up an environment variable.             |
+| `argv() -> list[str]`    | v0.9  | Returns the program's command-line arguments. |
+| `exit(code: int)`        | v0.9  | Terminates the process with `code`.           |
 
 ### `env`
 
-- **Behaviour:** consults the host process's environment. Returns
-  `Option.Some(value)` if the variable is present (even if empty); else
-  `Option.None`.
+- **Behaviour:** consults the host process's environment. Returns the
+  raw `str` value when the variable is present (even if empty); `nil`
+  otherwise.
 
 <!-- example: program -->
 
@@ -376,8 +376,8 @@ Process surface. Environment access (`env`), command-line argv
 import "os"
 
 match os.env("HOME") {
-    Option.Some(h) => print h
-    Option.None => print "no HOME"
+    nil => print "no HOME"
+    h   => print h
 }
 ```
 

@@ -1,3 +1,0 @@
-Option.Some(8)
-Option.None
-Option.Some(4)

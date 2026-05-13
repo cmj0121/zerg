@@ -287,14 +287,14 @@ func TestV08CgenOsEnvSome(t *testing.T) {
 	expectV08BuildEnv(t, `# requires: v0.8
 import "std/os"
 print os.env("ZERG_V08_CGEN_VAR")
-`, "Option.Some(present)\n", map[string]string{"ZERG_V08_CGEN_VAR": "present"})
+`, "present\n", map[string]string{"ZERG_V08_CGEN_VAR": "present"})
 }
 
 func TestV08CgenOsEnvNone(t *testing.T) {
 	expectV08BuildEnv(t, `# requires: v0.8
 import "std/os"
 print os.env("ZERG_V08_CGEN_NEVER_SET")
-`, "Option.None\n", map[string]string{})
+`, "nil\n", map[string]string{})
 }
 
 // ---------------------------------------------------------------------------

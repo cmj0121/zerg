@@ -259,7 +259,7 @@ pub fn parse_int(s: str) -> Result[int, ParseError] {
 	t := trim(s)
 	tb := t.bytes()
 	tl := tb.len()
-	return Result.Err(ParseError.Empty) if tl == 0
+	return Err(ParseError.Empty) if tl == 0
 	mut i: int = 0
 	mut negative: bool = false
 	if tb[0] == '-' {
@@ -268,24 +268,24 @@ pub fn parse_int(s: str) -> Result[int, ParseError] {
 	} elif tb[0] == '+' {
 		i = 1
 	}
-	return Result.Err(ParseError.InvalidDigit) if i >= tl
+	return Err(ParseError.InvalidDigit) if i >= tl
 	int_max: int = 9223372036854775807
 	mut acc: int = 0
 	for i < tl {
 		b := tb[i]
 		if b < '0' or b > '9' {
-			return Result.Err(ParseError.InvalidDigit)
+			return Err(ParseError.InvalidDigit)
 		}
 		digit := byte_to_int_digit(b)
 		# Pre-multiply overflow check: a future acc*10 + digit must
 		# fit in int_max. The classic rearrangement avoids the
 		# multiply that would itself overflow.
 		if acc > (int_max - digit) / 10 {
-			return Result.Err(ParseError.Overflow)
+			return Err(ParseError.Overflow)
 		}
 		acc = acc * 10 + digit
 		i = i + 1
 	}
-	return Result.Ok(-acc) if negative
-	return Result.Ok(acc)
+	return Ok(-acc) if negative
+	return Ok(acc)
 }

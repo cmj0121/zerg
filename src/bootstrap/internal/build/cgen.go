@@ -296,21 +296,21 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.shapes.addType(g, listOfByteType())
 	}
 
-	// v0.7: wire the Option[T] lookup so chan recv helpers can name the
-	// canonical Option[T] enum. The typed AST stamps every RecvExpr.Type()
-	// with the canonical Option[T]; we walk every RecvExpr and chan-typed
+	// v0.7: wire the T? lookup so chan recv helpers can name the
+	// canonical T? enum. The typed AST stamps every RecvExpr.Type()
+	// with the canonical T?; we walk every RecvExpr and chan-typed
 	// `for v in ch` site to harvest the pointer keyed by element-type
 	// string. addChanShape later consults this index when registering the
 	// chan helper.
-	g.chanOptionByElemKey = map[string]*syntax.Type{}
+	g.chanNullableByElemKey = map[string]*syntax.Type{}
 	for i := range g.modules {
-		g.harvestChanOptionTypes(g.modules[i].prog)
+		g.harvestChanNullableTypes(g.modules[i].prog)
 	}
-	g.chanOptionLookup = func(elem *syntax.Type) *syntax.Type {
+	g.chanNullableLookup = func(elem *syntax.Type) *syntax.Type {
 		if elem == nil {
 			return nil
 		}
-		return g.chanOptionByElemKey[elem.String()]
+		return g.chanNullableByElemKey[elem.String()]
 	}
 
 	// v0.7: pre-collect chan shapes from typed AST so emitChanTypedefs runs
@@ -721,6 +721,9 @@ func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map
 			for _, a := range x.Args {
 				walkE(a)
 			}
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			}
 		case *syntax.ListLit:
 			for _, sub := range x.Elements {
 				walkE(sub)
@@ -993,6 +996,9 @@ func walkExprTypes(e syntax.Expr, visit func(*syntax.Type)) {
 		for _, a := range x.Args {
 			walkExprTypes(a, visit)
 		}
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		}
 	case *syntax.ListLit:
 		for _, sub := range x.Elements {
 			walkExprTypes(sub, visit)
@@ -1129,16 +1135,16 @@ type cgen struct {
 	// map to emit per-element struct + helpers ahead of user fns.
 	chanShapes map[string]*chanShape
 	chanOrder  []string
-	// chanOptionLookup is a closure that returns the canonical Option[T]
+	// chanNullableLookup is a closure that returns the canonical T?
 	// *Type for a given element type T. Wired during EmitBundle from the
 	// per-program built-in Option monomorphisation cache so the chan
-	// recv helper emits the right Option[T] enum.
-	chanOptionLookup func(elem *syntax.Type) *syntax.Type
-	// chanOptionByElemKey is the harvested Option[T] map populated at
-	// EmitBundle entry by harvestChanOptionTypes. Key is element-type
-	// String(); value is the canonical Option[T] *Type stamped on a
+	// recv helper emits the right T? enum.
+	chanNullableLookup func(elem *syntax.Type) *syntax.Type
+	// chanNullableByElemKey is the harvested T? map populated at
+	// EmitBundle entry by harvestChanNullableTypes. Key is element-type
+	// String(); value is the canonical T? *Type stamped on a
 	// RecvExpr or for-chan iter site.
-	chanOptionByElemKey map[string]*syntax.Type
+	chanNullableByElemKey map[string]*syntax.Type
 	// anonFns holds every spawn / defer body queued for top-level emission,
 	// in declaration order. Pre-registered by preregisterAnonFns so the
 	// emitted .c file can forward-declare each trampoline ahead of any user
@@ -1708,9 +1714,25 @@ func emitStructHelpers(g *cgen, b *strings.Builder, mname string, t *syntax.Type
 func emitEnumPrint(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 	fmt.Fprintf(b, "static void zerg_print_%s(%s e) {\n", mname, mname)
 	fmt.Fprintf(b, "    switch (e.tag) {\n")
+	// The synthetic nullable (T?) prints the inner value for the present
+	// case and `nil` for the absent case — `Option` is not a user-visible
+	// name, so the qualified `Option.Some(...)` form would leak the internal
+	// identity through stdout.
+	isNullable := syntax.IsNullable(t)
 	displayName := printEnumDisplayName(t)
 	for i, v := range t.Variants {
 		payload := variantPayload(t, i)
+		if isNullable && v == "None" {
+			fmt.Fprintf(b, "    case %d: fputs(\"nil\", stdout); break;\n", i)
+			continue
+		}
+		if isNullable && v == "Some" && len(payload) == 1 {
+			fmt.Fprintf(b, "    case %d: {\n", i)
+			fmt.Fprintf(b, "        %s;\n", g.printExpr(payload[0], fmt.Sprintf("e.payload.p%d.a0", i)))
+			fmt.Fprintf(b, "        break;\n")
+			fmt.Fprintf(b, "    }\n")
+			continue
+		}
 		if len(payload) == 0 {
 			fmt.Fprintf(b, "    case %d: fputs(%q, stdout); break;\n", i, displayName+"."+v)
 		} else {
@@ -1762,7 +1784,7 @@ func emitEnumCopy(g *cgen, b *strings.Builder, mname string, t *syntax.Type) {
 // printEnumDisplayName returns the user-visible base name for an enum, used
 // in the print helper. For non-generic enums the Name is already the bare
 // form; for monomorphised generic enums the Name carries the bracket suffix
-// (e.g. `Option[int]`) which the print path must drop per PLAN.md §Print
+// (e.g. `int?`) which the print path must drop per PLAN.md §Print
 // parity. Diagnostic paths (Type.String) keep the suffix for disambiguation.
 func printEnumDisplayName(t *syntax.Type) string {
 	return stripGenericArgs(t)
@@ -2119,6 +2141,9 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 		g.collectExpr(x.Callee)
 		for _, a := range x.Args {
 			g.collectExpr(a)
+		}
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
 		}
 	case *syntax.ListLit:
 		for _, sub := range x.Elements {
@@ -2927,7 +2952,23 @@ func (g *cgen) emitMatch(s *syntax.MatchStmt) error {
 // patternTest returns a C boolean expression that's true iff pat matches the
 // scrutinee at C expression `scrut`. Returns "1" for wildcard/bind patterns
 // (which always match).
+//
+// When scrutT is T?, a `nil` LitPat tests tag==None; any other pattern
+// tests tag==Some AND recurses on the Some payload (`.payload.p0.a0`).
 func (g *cgen) patternTest(pat syntax.Pattern, scrut string, scrutT *syntax.Type) string {
+	if syntax.IsNullable(scrutT) {
+		if syntax.IsNilLitPattern(pat) {
+			noneIdx := variantIndex(scrutT, "None")
+			return fmt.Sprintf("(%s.tag == %d)", scrut, noneIdx)
+		}
+		if _, isEnumPat := pat.(*syntax.EnumPat); !isEnumPat {
+			someIdx := variantIndex(scrutT, "Some")
+			head := fmt.Sprintf("(%s.tag == %d)", scrut, someIdx)
+			inner, _ := syntax.NullableInner(scrutT)
+			innerAccess := fmt.Sprintf("%s.payload.p%d.a0", scrut, someIdx)
+			return joinAnd([]string{head, g.patternTest(pat, innerAccess, inner)})
+		}
+	}
 	switch p := pat.(type) {
 	case *syntax.WildcardPat, *syntax.BindPat:
 		_ = p
@@ -3005,7 +3046,22 @@ func joinAnd(parts []string) string {
 // emitPatternBindings emits local-variable declarations for every BindPat
 // nested in pat. The bound name receives a deep copy of the corresponding
 // piece of scrut.
+//
+// Nullable auto-unwrap: when scrutT is T? and pat is not a `nil` LitPat, the
+// bindings target the inner Some payload at `.payload.p0.a0` — mirroring
+// patternTest's recursion.
 func (g *cgen) emitPatternBindings(pat syntax.Pattern, scrut string, scrutT *syntax.Type) error {
+	if syntax.IsNullable(scrutT) {
+		if syntax.IsNilLitPattern(pat) {
+			return nil
+		}
+		if _, isEnumPat := pat.(*syntax.EnumPat); !isEnumPat {
+			someIdx := variantIndex(scrutT, "Some")
+			inner, _ := syntax.NullableInner(scrutT)
+			innerAccess := fmt.Sprintf("%s.payload.p%d.a0", scrut, someIdx)
+			return g.emitPatternBindings(pat, innerAccess, inner)
+		}
+	}
 	switch p := pat.(type) {
 	case *syntax.WildcardPat, *syntax.LitPat:
 		_ = p
@@ -3382,6 +3438,12 @@ func (g *cgen) fieldAccessStr(e *syntax.FieldAccessExpr) (string, error) {
 // v0.2-style deep copy; it remains the only call-site of the per-shape
 // `_copy` helper.
 func (g *cgen) callStr(e *syntax.CallExpr) (string, error) {
+	// Bare `Ok(v)` / `Err(e)` sugar — typeck lowered to a Result enum-lit.
+	// Route through the EnumLit emitter so the tag+union compound literal
+	// is produced uniformly with `Result.Ok(v)` shape.
+	if e.Lowered != nil {
+		return g.enumLitStr(e.Lowered)
+	}
 	// v0.7: anon-fn IIFE — `fn(args) -> R { body }(actual)`. The callee is
 	// the AnonFnExpr itself; emit the env-on-stack + direct call to the
 	// pre-registered top-level body fn. preregisterAnonFns has already
@@ -3890,10 +3952,10 @@ func sanitizeGenericName(name string) string {
 // generic "main" stub when the cgen has no entry recorded) so the helper
 // stays defined for tests that bypass EmitBundle.
 //
-// v0.6: built-in Option / Result instances live under the pseudo-module
+// v0.6: built-in T? / Result instances live under the pseudo-module
 // `<builtin>` and mangle to the literal `zerg_builtin` (no FNV hash) per
 // PLAN.md §Built-in mangle. Detection is by Name prefix; the mono cache
-// shape uses `Option[...]` / `Result[...]` for built-in instances.
+// shape uses `T?` / `Result[...]` for built-in instances.
 func (g *cgen) typeMangle(t *syntax.Type) string {
 	if isBuiltinGenericType(t) {
 		return "zerg_builtin"
@@ -3912,12 +3974,12 @@ func (g *cgen) typeMangle(t *syntax.Type) string {
 // isBuiltinGenericType reports whether t is a monomorphized instance of a
 // built-in generic enum (Option or Result). The detection is by Name prefix
 // — the built-in synthesis (typeck_v06_builtin.go) builds the canonical
-// Name as `Option[...]` / `Result[...]` for every instantiation.
+// Name as `T?` / `Result[...]` for every instantiation.
 func isBuiltinGenericType(t *syntax.Type) bool {
 	if t == nil || t.Kind != syntax.TypeEnum {
 		return false
 	}
-	return strings.HasPrefix(t.Name, "Option[") || strings.HasPrefix(t.Name, "Result[")
+	return syntax.IsNullable(t) || strings.HasPrefix(t.Name, "Result[")
 }
 
 // specMangle returns the owning-module's mangle prefix for a spec name.

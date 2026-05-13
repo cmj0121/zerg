@@ -76,23 +76,22 @@ The following names are reserved at type position. User declarations
 | `rune`      | v0.2       | 32-bit Unicode codepoint                    |
 | `list`      | v0.2       | `list[T]` constructor                       |
 | `tuple`     | v0.2       | `tuple[T1, T2, ...]` constructor (>= 2)     |
-| `Option`    | v0.6       | built-in enum `Option[T]`                   |
 | `Result`    | v0.6       | built-in enum `Result[T, E]`                |
 | `chan`      | v0.7       | `chan[T]` constructor                       |
 | `WaitGroup` | v0.7       | synthetic struct returned by `wait_group()` |
 
 ### Literals
 
-| Form                          | Type                     |
-| ----------------------------- | ------------------------ |
-| `42`, `0xFF`, `0b1010`, `0o7` | `int`                    |
-| `1_000_000`                   | `int`                    |
-| `3.14`                        | `float`                  |
-| `'A'`                         | `byte`                   |
-| `'漢'`                        | `rune`                   |
-| `"text"`                      | `str`                    |
-| `true`, `false`               | `bool`                   |
-| `nil`                         | `Option[T].None` (v0.6+) |
+| Form                          | Type                            |
+| ----------------------------- | ------------------------------- |
+| `42`, `0xFF`, `0b1010`, `0o7` | `int`                           |
+| `1_000_000`                   | `int`                           |
+| `3.14`                        | `float`                         |
+| `'A'`                         | `byte`                          |
+| `'漢'`                        | `rune`                          |
+| `"text"`                      | `str`                           |
+| `true`, `false`               | `bool`                          |
+| `nil`                         | the absent case of `T?` (v0.6+) |
 
 Integer literals admit `_` as a digit separator, never adjacent to a prefix
 or doubled. Float requires digits on both sides of the dot (`.5` and `1.`
@@ -260,7 +259,7 @@ qualified_name  = IDENT { '.' IDENT }                       ; e.g. Color.Red
 ### Types
 
 ```ebnf
-type            = type_atom [ '?' ]                         ; '?' means Option[T]
+type            = type_atom [ '?' ]                         ; '?' means a nullable T
 type_atom       = IDENT [ '.' IDENT ] [ type_args ]         ; named, optionally qualified
                 | 'list'  '[' type ']'
                 | 'tuple' '[' type ',' type { ',' type } ']' ; >= 2
@@ -269,7 +268,8 @@ type_args       = '[' type { ',' type } ']'                 ; >= 1
 
 Channel types are written as the constructor `chan[T]()` / `chan[T](N)`
 (see expressions); `chan[T]` is not a syntactic type — it lives only at the
-constructor call. `T?` desugars to `Option[T]`; `T??` rejects.
+constructor call. `T?` is the nullable type for `T` (`Option` is a concept,
+not a spellable type); `T??` rejects.
 
 ### Expressions
 
@@ -373,23 +373,23 @@ these names in user code.
 
 ### Composites
 
-| Type            | Notes                                                     |
-| --------------- | --------------------------------------------------------- |
-| `list[T]`       | growable; deep-copy on `clone(xs)`; `push(xs, v)` mutates |
-| `tuple[T1,...]` | fixed-size, >= 2 elements                                 |
-| struct types    | nominal; declaration-order field equality                 |
-| enum types      | tag + optional payload tuple                              |
-| spec types      | fat pointer `(data, vt)`; heap-boxes the value            |
-| `chan[T]`       | unbuffered (rendezvous) or buffered FIFO                  |
-| `WaitGroup`     | synthetic struct returned by `wait_group()`               |
-| `Option[T]`     | built-in enum, variants `Some(T)` and `None`              |
-| `Result[T, E]`  | built-in enum, variants `Ok(T)` and `Err(E)`              |
-| function values | anon-fn expressions; immutable capture                    |
+| Type            | Notes                                                           |
+| --------------- | --------------------------------------------------------------- |
+| `list[T]`       | growable; deep-copy on `clone(xs)`; `push(xs, v)` mutates       |
+| `tuple[T1,...]` | fixed-size, >= 2 elements                                       |
+| struct types    | nominal; declaration-order field equality                       |
+| enum types      | tag + optional payload tuple                                    |
+| spec types      | fat pointer `(data, vt)`; heap-boxes the value                  |
+| `chan[T]`       | unbuffered (rendezvous) or buffered FIFO                        |
+| `WaitGroup`     | synthetic struct returned by `wait_group()`                     |
+| `T?`            | nullable; either a `T` value (auto-lifted from bare T) or `nil` |
+| `Result[T, E]`  | built-in enum, variants `Ok(T)` and `Err(E)`                    |
+| function values | anon-fn expressions; immutable capture                          |
 
 ### Subtyping and inference
 
 - `T -> T?` lift at boundaries: a bare `T` flowing into a `T?` slot is
-  implicitly wrapped as `Option.Some(value)`. Boundaries are: fn argument,
+  implicitly wrapped as the present case. Boundaries are: fn argument,
   bare / mut / const initialiser with annotation, return expression,
   struct-literal field, list-element type under `list[T?]`.
 - Bidirectional inference at call sites: generic type-args are inferred
@@ -488,10 +488,10 @@ inside `if` / `for` / `match` / inner blocks). The defer stack drains on
 - `chan[T]()` is unbuffered (rendezvous); `chan[T](N)` is FIFO buffered.
 - `ch <- v` sends; sender no longer owns `v`. Send to a closed channel
   panics.
-- `<- ch` receives; result is `Option[T]`. `Some(v)` while the channel is
-  open or has buffered values; `None` when drained-and-closed.
+- `<- ch` receives; result is `T?`. A `T` value while the channel is
+  open or has buffered values; `nil` when drained-and-closed.
 - `for v in ch` iterates until the channel is drained-and-closed; binds
-  the inner `T` (auto-unwraps the `Option`).
+  the inner `T` (auto-unwraps the nullable).
 - `close(ch)` is a built-in; closing twice panics.
 - `select { ... }` multiplexes channel ops; arms are tried in declaration
   order on ties (`zerg build` codegen) or randomly (`zerg run`); empty
@@ -511,16 +511,17 @@ visible semantics — including the parity rule — are identical to v0.7.
 
 ### Error propagation
 
-The `?` postfix operator on a `Result[T, E]` or `Option[T]` expression
-desugars to: if `Err` / `None`, early-return that variant; else evaluate
-to the inner `T`. Legal only inside a fn whose return type is
-`Result[U, E]` (matching `E`) or `Option[U]`.
+The `?` postfix operator on a `Result[T, E]` or `T?` expression desugars
+to: on `Err` / `nil`, early-return that variant; else evaluate to the
+inner `T`. Legal only inside a fn whose return type is `Result[U, E]`
+(matching `E`) or `U?`.
 
-`??` is nil-coalesce: `lhs ?? rhs` yields `T` when `lhs` is `Some(v)` /
-`Ok(v)`, otherwise evaluates `rhs`. RHS evaluates only on `None` / `Err`.
+`??` is nil-coalesce: `lhs ?? rhs` yields `T` when `lhs` is the present
+case / `Ok(v)`, otherwise evaluates `rhs`. RHS evaluates only on
+`nil` / `Err`.
 
-`?.` is safe navigation: `obj?.field` yields `Option[U]` for `U` the
-field's type. Chains carry `None` end-to-end.
+`?.` is safe navigation: `obj?.field` yields `U?` for `U` the field's
+type. Chains carry `nil` end-to-end.
 
 ### Inline assembly (v0.13, macOS arm64 only)
 
@@ -784,21 +785,21 @@ c := Cat { name: "Mittens" }
 print c.label()
 ```
 
-### Generics, Option, propagation
+### Generics, nullables, propagation
 
 <!-- example: program -->
 
 ```zerg
-fn first(xs: list[int]) -> Option[int] {
+fn first(xs: list[int]) -> int? {
     if len(xs) == 0 {
-        return Option.None
+        return nil
     }
-    return Option.Some(xs[0])
+    return xs[0]
 }
 
-fn double_first(xs: list[int]) -> Option[int] {
+fn double_first(xs: list[int]) -> int? {
     v := first(xs)?
-    return Option.Some(v * 2)
+    return v * 2
 }
 
 print double_first([10, 20])

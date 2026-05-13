@@ -16,12 +16,12 @@ fn main() {
     b := <- ch
     wg.wait()
     match a {
-        Option.Some(v) => print v
-        Option.None => print -1
+        v => print v
+        nil => print -1
     }
     match b {
-        Option.Some(v) => print v
-        Option.None => print -1
+        v => print v
+        nil => print -1
     }
 }
 

@@ -791,6 +791,11 @@ type CallExpr struct {
 	Callee      Expr
 	Args        []Expr
 	Specialised *FnDecl
+	// Bare-variant constructor sugar. When the callee is `Ok` or `Err` and
+	// no local binding shadows the name, typeck lowers the call to the
+	// equivalent Result.<variant> enum-lit and stashes it here; cgen and
+	// interp route through Lowered when present, ignoring the surface Callee.
+	Lowered *EnumLit
 }
 
 func (*CallExpr) exprNode()           {}

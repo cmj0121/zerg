@@ -14,11 +14,11 @@ import (
 
 func TestV06PropagateOptionInOptionFn(t *testing.T) {
 	src := "fn maybe() -> int? {\n" +
-		"  return Option.Some(7)\n" +
+		"  return 7\n" +
 		"}\n" +
 		"fn outer() -> int? {\n" +
 		"  v := maybe()?\n" +
-		"  return Option.Some(v)\n" +
+		"  return v\n" +
 		"}\n"
 	prog := checkSrc(t, src)
 	// The PropagateExpr inside outer's body should typecheck to int.
@@ -56,14 +56,14 @@ func TestV06PropagateResultInResultFn(t *testing.T) {
 }
 
 func TestV06PropagateOptionAtTopLevelRejects(t *testing.T) {
-	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
+	src := "fn maybe() -> int? { return 7 }\n" +
 		"v := maybe()?\n"
 	checkErr(t, src,
-		"? propagation only legal inside fn returning Option[...] or Result[..., E]")
+		"? propagation only legal inside fn returning T? or Result[..., E]")
 }
 
 func TestV06PropagateInIntFnRejects(t *testing.T) {
-	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
+	src := "fn maybe() -> int? { return 7 }\n" +
 		"fn outer() -> int {\n" +
 		"  v := maybe()?\n" +
 		"  return v\n" +
@@ -73,7 +73,7 @@ func TestV06PropagateInIntFnRejects(t *testing.T) {
 }
 
 func TestV06PropagateInVoidFnRejects(t *testing.T) {
-	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
+	src := "fn maybe() -> int? { return 7 }\n" +
 		"fn outer() {\n" +
 		"  v := maybe()?\n" +
 		"}\n"
@@ -91,20 +91,20 @@ func TestV06PropagateMismatchedErrType(t *testing.T) {
 }
 
 func TestV06PropagateOptionInResultFnRejects(t *testing.T) {
-	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
+	src := "fn maybe() -> int? { return 7 }\n" +
 		"fn outer() -> Result[int, str] {\n" +
 		"  v := maybe()?\n" +
-		"  return Result.Ok(v)\n" +
+		"  return Ok(v)\n" +
 		"}\n"
 	checkErr(t, src,
 		"? propagation only legal inside fn returning")
 }
 
 func TestV06PropagateResultInOptionFnRejects(t *testing.T) {
-	src := "fn fetch() -> Result[int, str] { return Result.Ok(7) }\n" +
+	src := "fn fetch() -> Result[int, str] { return Ok(7) }\n" +
 		"fn outer() -> int? {\n" +
 		"  v := fetch()?\n" +
-		"  return Option.Some(v)\n" +
+		"  return v\n" +
 		"}\n"
 	checkErr(t, src,
 		"? propagation only legal inside fn returning")
@@ -113,17 +113,17 @@ func TestV06PropagateResultInOptionFnRejects(t *testing.T) {
 func TestV06PropagateOnNonOptionRejects(t *testing.T) {
 	src := "fn outer() -> int? {\n" +
 		"  v := 7?\n" +
-		"  return Option.Some(v)\n" +
+		"  return v\n" +
 		"}\n"
 	checkErr(t, src,
-		"? requires Option[...] or Result[..., ...] receiver")
+		"? requires T? or Result[T, E] receiver")
 }
 
 func TestV06PropagateInferenceCarriesT(t *testing.T) {
-	src := "fn maybe() -> int? { return Option.Some(7) }\n" +
+	src := "fn maybe() -> int? { return 7 }\n" +
 		"fn outer() -> str? {\n" +
 		"  v := maybe()?\n" +
-		"  return Option.Some(\"ok\")\n" +
+		"  return \"ok\"\n" +
 		"}\n"
 	checkSrc(t, src)
 }
@@ -160,12 +160,12 @@ func TestV06CoalesceResult(t *testing.T) {
 
 func TestV06CoalesceOnIntRejects(t *testing.T) {
 	src := "y: int = 3 ?? 0\n"
-	checkErr(t, src, "?? requires Option[...] or Result[..., ...] on the left")
+	checkErr(t, src, "?? requires T? or Result[T, E] on the left")
 }
 
 func TestV06CoalesceOnStrRejects(t *testing.T) {
 	src := "y: str = \"hi\" ?? \"bye\"\n"
-	checkErr(t, src, "?? requires Option[...] or Result[..., ...] on the left")
+	checkErr(t, src, "?? requires T? or Result[T, E] on the left")
 }
 
 func TestV06CoalesceRhsMismatch(t *testing.T) {
@@ -234,7 +234,7 @@ func TestV06SafeFieldAccess(t *testing.T) {
 		t.Errorf("Safe bit not set")
 	}
 	got := fa.Type()
-	if got == nil || got.Kind != TypeEnum || !isOptionInstance(got) {
+	if got == nil || got.Kind != TypeEnum || !IsNullable(got) {
 		t.Fatalf("type = %v, want Option[int]", got)
 	}
 	if got.Name != "Option[int]" {
@@ -262,7 +262,7 @@ func TestV06SafeFieldAccessChain(t *testing.T) {
 		t.Fatalf("did not find v")
 	}
 	got := ls.Value.Type()
-	if got == nil || !isOptionInstance(got) || got.Name != "Option[int]" {
+	if got == nil || !IsNullable(got) || got.Name != "Option[int]" {
 		t.Errorf("type = %v, want Option[int]", got)
 	}
 }
@@ -290,7 +290,7 @@ func TestV06SafeFieldAccessOnOptionOfList(t *testing.T) {
 	// Option of a non-struct inner — `?.` only makes sense on struct fields.
 	src := "xs: list[int]? = nil\n" +
 		"n := xs?.len\n"
-	checkErr(t, src, "?. requires struct inside Option")
+	checkErr(t, src, "?. requires struct inside a nullable")
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +308,7 @@ func TestV06NilInReturnPosition(t *testing.T) {
 		t.Fatalf("expected ReturnStmt")
 	}
 	got := rs.Value.Type()
-	if got == nil || !isOptionInstance(got) || got.Name != "Option[int]" {
+	if got == nil || !IsNullable(got) || got.Name != "Option[int]" {
 		t.Errorf("nil type = %v, want Option[int]", got)
 	}
 }
@@ -320,14 +320,14 @@ func TestV06NilAsFnArg(t *testing.T) {
 }
 
 func TestV06NilInListElement(t *testing.T) {
-	src := "xs: list[int?] = [nil, Option.Some(1), nil]\n"
+	src := "xs: list[int?] = [nil, 1, nil]\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Type.Resolved
 	if got == nil || got.Kind != TypeList {
 		t.Fatalf("type = %v, want list[int?]", got)
 	}
-	if !isOptionInstance(got.Element) {
+	if !IsNullable(got.Element) {
 		t.Errorf("element type = %v, want Option[int]", got.Element)
 	}
 }
@@ -340,7 +340,7 @@ func TestV06IntInListUnderOptionHintLifts(t *testing.T) {
 	if got == nil || got.Kind != TypeList {
 		t.Fatalf("type = %v, want list[int?]", got)
 	}
-	if !isOptionInstance(got.Element) {
+	if !IsNullable(got.Element) {
 		t.Errorf("element type = %v, want Option[int]", got.Element)
 	}
 }
@@ -378,8 +378,8 @@ func TestV06BareNilLetStillRejects(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestV06EqOptionInt(t *testing.T) {
-	src := "a: Option[int] = Option.Some(7)\n" +
-		"b: Option[int] = Option.Some(7)\n" +
+	src := "a: int? = 7\n" +
+		"b: int? = 7\n" +
 		"c: bool = a == b\n"
 	prog := checkSrc(t, src)
 	var be *BinaryExpr
@@ -406,8 +406,8 @@ func TestV06EqResultErr(t *testing.T) {
 }
 
 func TestV06NeOptionInt(t *testing.T) {
-	src := "a: Option[int] = Option.Some(1)\n" +
-		"b: Option[int] = Option.Some(2)\n" +
+	src := "a: int? = 1\n" +
+		"b: int? = 2\n" +
 		"c: bool = a != b\n"
 	checkSrc(t, src)
 }
@@ -417,9 +417,8 @@ func TestV06NeOptionInt(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestV06CoalesceLiftsRhs(t *testing.T) {
-	// `?? Some(7)` on Option[Option[int]] would not lift; but `?? 7` on
-	// Option[int] takes the RHS hint and expects int (no lift needed).
-	src := "x: int? = Option.Some(3)\ny := x ?? 0\n"
+	// `?? 0` on an int? takes the RHS hint as int.
+	src := "x: int? = 3\ny := x ?? 0\n"
 	prog := checkSrc(t, src)
 	for _, st := range prog.Statements {
 		ls, ok := st.(*LetStmt)
@@ -434,10 +433,10 @@ func TestV06CoalesceLiftsRhs(t *testing.T) {
 
 func TestV06PropagateInOptionFnReturnsInt(t *testing.T) {
 	// Verify that `?` *expression* type is the inner T, usable in arithmetic.
-	src := "fn maybe() -> int? { return Option.Some(2) }\n" +
+	src := "fn maybe() -> int? { return 2 }\n" +
 		"fn outer() -> int? {\n" +
 		"  n := maybe()? + 1\n" +
-		"  return Option.Some(n)\n" +
+		"  return n\n" +
 		"}\n"
 	checkSrc(t, src)
 }
@@ -449,7 +448,7 @@ func TestV06DiagnosticAnchors(t *testing.T) {
 		src  string
 		want string
 	}{
-		{"propagate-out-of-context", "fn m() -> int? { return Option.Some(1) }\nv := m()?\n", "?"},
+		{"propagate-out-of-context", "fn m() -> int? { return 1 }\nv := m()?\n", "?"},
 		{"coalesce-bad-lhs", "y := 3 ?? 0\n", "??"},
 		{"safe-on-non-nullable", "struct B { v: int }\nb := B { v: 1 }\nx := b?.v\n", "?."},
 	}

@@ -27,7 +27,7 @@ import (
 // chanShape is one entry in the per-cgen chan-helper registry. The key is
 // the mangled element type ("int64_t", "zerg_str", "zerg_list_int64_t" ...);
 // elem is the canonical *Type so the helper emit picks the right element
-// C type and the recv result reaches the right Option[T] enum mangle.
+// C type and the recv result reaches the right T? enum mangle.
 type chanShape struct {
 	elem      *syntax.Type
 	elemC     string
@@ -56,11 +56,11 @@ func (g *cgen) addChanShape(t *syntax.Type) {
 		elemMang: elemMang,
 		chanMang: "zerg_chan_" + elemMang,
 	}
-	if g.chanOptionLookup != nil {
-		cs.optionT = g.chanOptionLookup(t.Element)
+	if g.chanNullableLookup != nil {
+		cs.optionT = g.chanNullableLookup(t.Element)
 	}
 	if cs.optionT == nil {
-		cs.optionT = g.synthOptionType(t.Element)
+		cs.optionT = g.synthNullableType(t.Element)
 	}
 	if cs.optionT != nil {
 		cs.optionMng = g.mangleType(cs.optionT)
@@ -68,22 +68,22 @@ func (g *cgen) addChanShape(t *syntax.Type) {
 		// Register in the harvested map so subsequent for-chan / select sites
 		// share the same canonical pointer — the Some payload field shape
 		// must match exactly.
-		if g.chanOptionByElemKey != nil {
-			g.chanOptionByElemKey[t.Element.String()] = cs.optionT
+		if g.chanNullableByElemKey != nil {
+			g.chanNullableByElemKey[t.Element.String()] = cs.optionT
 		}
 	}
 	g.chanShapes[elemMang] = cs
 	g.chanOrder = append(g.chanOrder, elemMang)
 }
 
-// synthOptionType builds a synthetic Option[T] *Type matching the canonical
-// shape typeck constructs for `T?` / wrapOption. Used when no RecvExpr has
+// synthNullableType builds a synthetic T? *Type matching the canonical
+// shape typeck constructs for `T?` / wrapNullable. Used when no RecvExpr has
 // seeded the harvest map for this element type — the v0.7 for-chan path
 // doesn't introduce a syntactic RecvExpr, so a chan-only program that
-// loops via `for v in ch` lacks a typeck-stamped Option[T]. The synthetic
-// instance matches the built-in monomorphisation Name format ("Option[T]")
+// loops via `for v in ch` lacks a typeck-stamped T?. The synthetic
+// instance matches the built-in monomorphisation Name format ("T?")
 // so mangleType routes through the zerg_builtin owner-mangle.
-func (g *cgen) synthOptionType(elem *syntax.Type) *syntax.Type {
+func (g *cgen) synthNullableType(elem *syntax.Type) *syntax.Type {
 	if elem == nil {
 		return nil
 	}
@@ -491,12 +491,12 @@ func (g *cgen) programUsesV07Walk(prog *syntax.Program) bool {
 	return found
 }
 
-// harvestChanOptionTypes walks the typed AST and records, for each chan
+// harvestChanNullableTypes walks the typed AST and records, for each chan
 // element type encountered at a RecvExpr or `for v in ch` site, the
-// canonical Option[T] *Type that typeck stamped on that expression's
-// Type(). chanOptionLookup consults the resulting index so chan recv
-// helpers and select recv arms can name the right Option[T] enum.
-func (g *cgen) harvestChanOptionTypes(prog *syntax.Program) {
+// canonical T? *Type that typeck stamped on that expression's
+// Type(). chanNullableLookup consults the resulting index so chan recv
+// helpers and select recv arms can name the right T? enum.
+func (g *cgen) harvestChanNullableTypes(prog *syntax.Program) {
 	if prog == nil {
 		return
 	}
@@ -510,7 +510,7 @@ func (g *cgen) harvestChanOptionTypes(prog *syntax.Program) {
 		case *syntax.RecvExpr:
 			if chT := x.Chan.Type(); chT != nil && chT.Kind == syntax.TypeChan {
 				if optT := x.Type(); optT != nil {
-					g.chanOptionByElemKey[chT.Element.String()] = optT
+					g.chanNullableByElemKey[chT.Element.String()] = optT
 				}
 			}
 			walkE(x.Chan)
@@ -597,10 +597,10 @@ func (g *cgen) harvestChanOptionTypes(prog *syntax.Program) {
 				walkE(n.Iter)
 				if n.Kind == syntax.ForChan {
 					if chT := n.Iter.Type(); chT != nil && chT.Kind == syntax.TypeChan {
-						// Synthesise the Option[T] from the recv shape — same
+						// Synthesise the T? from the recv shape — same
 						// optionality as a stand-alone RecvExpr would carry.
-						if optT, ok := g.findOptionForElem(chT.Element); ok {
-							g.chanOptionByElemKey[chT.Element.String()] = optT
+						if optT, ok := g.findNullableForElem(chT.Element); ok {
+							g.chanNullableByElemKey[chT.Element.String()] = optT
 						}
 					}
 				}
@@ -623,8 +623,8 @@ func (g *cgen) harvestChanOptionTypes(prog *syntax.Program) {
 					walkE(arm.Chan)
 					if arm.Op == syntax.SelectRecvBind || arm.Op == syntax.SelectRecvDiscard {
 						if chT := arm.Chan.Type(); chT != nil && chT.Kind == syntax.TypeChan {
-							if optT, ok := g.findOptionForElem(chT.Element); ok {
-								g.chanOptionByElemKey[chT.Element.String()] = optT
+							if optT, ok := g.findNullableForElem(chT.Element); ok {
+								g.chanNullableByElemKey[chT.Element.String()] = optT
 							}
 						}
 					}
@@ -664,17 +664,17 @@ func (g *cgen) harvestChanOptionTypes(prog *syntax.Program) {
 	}
 }
 
-// findOptionForElem locates the canonical Option[elem] *Type by scanning
+// findNullableForElem locates the canonical elem? *Type by scanning
 // the harvested map. Used at for-chan / select-recv sites that don't carry
-// the Option type directly on their AST node — we rely on a paired
-// RecvExpr having seeded the map first. Returns the Option *Type and true
+// the nullable type directly on their AST node — we rely on a paired
+// RecvExpr having seeded the map first. Returns the nullable *Type and true
 // when found. v0.7 corpora always have at least one RecvExpr per chan
 // element type (the for-chan body's recv), so the lookup hits.
-func (g *cgen) findOptionForElem(elem *syntax.Type) (*syntax.Type, bool) {
+func (g *cgen) findNullableForElem(elem *syntax.Type) (*syntax.Type, bool) {
 	if elem == nil {
 		return nil, false
 	}
-	t, ok := g.chanOptionByElemKey[elem.String()]
+	t, ok := g.chanNullableByElemKey[elem.String()]
 	return t, ok
 }
 
@@ -1112,7 +1112,7 @@ func (g *cgen) emitSend(s *syntax.SendStmt) error {
 	return nil
 }
 
-// recvStr lowers `<- ch` to the recv-helper call. The result is Option[T].
+// recvStr lowers `<- ch` to the recv-helper call. The result is T?.
 func (g *cgen) recvStr(e *syntax.RecvExpr) (string, error) {
 	chT := e.Chan.Type()
 	if chT == nil || chT.Kind != syntax.TypeChan {
@@ -1127,10 +1127,10 @@ func (g *cgen) recvStr(e *syntax.RecvExpr) (string, error) {
 	return fmt.Sprintf("%s_recv(%s)", cm, chS), nil
 }
 
-// emitForChan lowers `for v in ch` to a while loop with recv + Option match.
+// emitForChan lowers `for v in ch` to a while loop with recv + nullable match.
 //
 //	while (1) {
-//	    Option[T] __opt = ch_recv(ch);
+//	    T? __opt = ch_recv(ch);
 //	    if (__opt.tag != 0) break;
 //	    T v = __opt.payload.p0.a0;
 //	    <body>
@@ -1149,11 +1149,11 @@ func (g *cgen) emitForChan(s *syntax.ForStmt) error {
 	chTmp := g.freshTmp("ch")
 	optTmp := g.freshTmp("opt")
 
-	// Need the Option[T] mangled name; addChanShape ensured the optionT was
+	// Need the T? mangled name; addChanShape ensured the optionT was
 	// registered in the shape registry. Look it up via the per-cgen lookup.
 	var optionT *syntax.Type
-	if g.chanOptionLookup != nil {
-		optionT = g.chanOptionLookup(chT.Element)
+	if g.chanNullableLookup != nil {
+		optionT = g.chanNullableLookup(chT.Element)
 	}
 	if optionT == nil {
 		return fmt.Errorf("codegen: missing Option[T] for chan recv at %s", s.Pos)
@@ -1891,7 +1891,7 @@ func (g *cgen) emitSelect(s *syntax.SelectStmt) error {
 		case syntax.SelectRecvBind:
 			t := armChanTypes[i]
 			cm := "zerg_chan_" + g.mangleType(t.Element)
-			optionT := g.chanOptionLookup(t.Element)
+			optionT := g.chanNullableLookup(t.Element)
 			optionMng := g.mangleType(optionT)
 			optTmp := g.freshTmp("opt")
 			g.writeIndent()

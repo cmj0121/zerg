@@ -4,7 +4,7 @@ package syntax
 // the close() built-in, and `for v in ch` desugaring.
 //
 // The `chan` name is a built-in generic type — same plumbing as v0.6's
-// Option / Result, except chan lives entirely outside the user-facing enum
+// T? / Result, except chan lives entirely outside the user-facing enum
 // machinery. resolveTypeRef intercepts `chan[T]` ahead of the regular
 // generic-decl path; chanInstance produces (and caches) the canonical
 // *Type{Kind: TypeChan, Element: T} so two uses of `chan[int]` share one
@@ -71,7 +71,7 @@ func (c *checker) resolveChanTypeRef(ref *TypeRef) (*Type, error) {
 	}
 	t := c.chanInstance(elem)
 	if ref.Nullable {
-		wrapped, werr := c.wrapOption(t, ref.Pos)
+		wrapped, werr := c.wrapNullable(t, ref.Pos)
 		if werr != nil {
 			return nil, werr
 		}
@@ -140,7 +140,7 @@ func (c *checker) checkSend(s *SendStmt) error {
 }
 
 // checkRecv type-checks a `<- ch` prefix-receive expression. The operand
-// must be chan[T]; the expression's type is Option[T] so the closed-channel
+// must be chan[T]; the expression's type is T? so the closed-channel
 // case lands as None and `for v in ch` desugars on the v0.6 Option machinery.
 func (c *checker) checkRecv(e *RecvExpr) (*Type, error) {
 	chT, err := c.checkExpr(e.Chan)
@@ -151,7 +151,7 @@ func (c *checker) checkRecv(e *RecvExpr) (*Type, error) {
 		return nil, typeErr(e.Pos,
 			"receive requires a channel operand, got %s", chT)
 	}
-	wrapped, err := c.wrapOption(chT.Element, e.Pos)
+	wrapped, err := c.wrapNullable(chT.Element, e.Pos)
 	if err != nil {
 		return nil, err
 	}

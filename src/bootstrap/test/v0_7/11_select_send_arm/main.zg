@@ -9,8 +9,8 @@ fn main() {
     }
     r := <- out
     match r {
-        Option.Some(v) => print v
-        Option.None => print -1
+        v => print v
+        nil => print -1
     }
 }
 

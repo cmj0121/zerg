@@ -73,7 +73,7 @@ pub fn read_file(path: str) -> Result[str, IoError] {
 	# O_RDONLY = 0; mode is ignored without O_CREAT so we pass 0.
 	cpath := cstring(path)
 	fd := syscall.open(cpath, 0, 0)
-	return Result.Err(errno_to_io(fd)) if fd < 0
+	return Err(errno_to_io(fd)) if fd < 0
 	# Scratch buf reused across iterations; 4096 = one page on every
 	# host the syscall layer targets.
 	mut content: list[byte] = []
@@ -96,15 +96,15 @@ pub fn read_file(path: str) -> Result[str, IoError] {
 		}
 	}
 	syscall.close_fd(fd)
-	return Result.Err(err) if got_err
-	return Result.Ok(content.to_str())
+	return Err(err) if got_err
+	return Ok(content.to_str())
 }
 
 # write_file writes `content` to the file at `path`, truncating any
 # existing file or creating it with mode 0o644 (subject to umask). The
 # write is byte-oriented; non-UTF-8 bytes pass through unchanged.
 #
-# The Ok payload is `true` so callers using `match ... { Result.Ok(_)
+# The Ok payload is `true` so callers using `match ... { Ok(_)
 # => ... }` keep the v0.8 corpus's pattern shape. Returns Result.Err
 # with the bucketed IoError on any open / write / close failure.
 pub fn write_file(path: str, content: str) -> Result[bool, IoError] {
@@ -113,7 +113,7 @@ pub fn write_file(path: str, content: str) -> Result[bool, IoError] {
 	# when O_CREAT actually creates the file.
 	cpath := cstring(path)
 	fd := syscall.open(cpath, 1537, 420)
-	return Result.Err(errno_to_io(fd)) if fd < 0
+	return Err(errno_to_io(fd)) if fd < 0
 	cb := content.bytes()
 	cn := cb.len()
 	mut written: int = 0
@@ -135,6 +135,6 @@ pub fn write_file(path: str, content: str) -> Result[bool, IoError] {
 		written = written + n
 	}
 	syscall.close_fd(fd)
-	return Result.Err(err) if got_err
-	return Result.Ok(true)
+	return Err(err) if got_err
+	return Ok(true)
 }

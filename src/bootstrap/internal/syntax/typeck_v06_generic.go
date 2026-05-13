@@ -8,7 +8,7 @@ import (
 // inference.
 //
 // The Unit 2 file (typeck_v06_builtin.go) seeded the canonicalisation
-// machinery for the synthetic Option / Result enum decls; this file extends
+// machinery for the synthetic T? / Result enum decls; this file extends
 // that cache to user-defined generic struct + enum decls and adds the
 // generic-fn call path.
 //
@@ -37,11 +37,11 @@ import (
 //     `r: Result[int, str] = Result.Err("oops")` resolves Result.Err's E
 //     from the annotation.
 //
-//   - T → T? lift: at every position with a known expected `T?` (= Option[T])
+//   - T → T? lift: at every position with a known expected `T?` (= T?)
 //     a T-typed expression is rewrapped in a synthetic
-//     EnumLit{Some, [origExpr]} pinned to the Option[T] type so downstream
+//     EnumLit{Some, [origExpr]} pinned to the T? type so downstream
 //     consumers see one uniform shape. The lift is "boundary-only" — it
-//     fires only at a slot whose hint is Option[T]; sub-expressions without
+//     fires only at a slot whose hint is T?; sub-expressions without
 //     a hint don't lift, matching PLAN.md §Type inference rules.
 //
 // Bound-check note: at v0.6 Unit 3 we accept multi-bound `T: A + B` and
@@ -130,7 +130,7 @@ func (c *checker) findGenericStructDecl(name string) *StructDecl {
 }
 
 // findGenericEnumDecl mirrors findGenericStructDecl for enum decls. Walks
-// builtins first so Option / Result resolve regardless of module.
+// builtins first so T? / Result resolve regardless of module.
 func (c *checker) findGenericEnumDecl(name string) *EnumDecl {
 	if d, ok := c.builtinEnumDecls[name]; ok {
 		return d
@@ -297,7 +297,7 @@ func (c *checker) validateBoundRef(ref *TypeRef) error {
 // validateGenericTypeRef walks a TypeRef in a generic signature position and
 // asserts that every leaf names either a declared type-param (ok) or an in-
 // scope concrete type (resolved via resolveTypeRef). Generic type-args
-// inside compound TypeRefs (`list[T]`, `Box[T]`, `Option[T]`) recurse.
+// inside compound TypeRefs (`list[T]`, `Box[T]`, `T?`) recurse.
 //
 // `T?` is admitted: at instantiation time it desugars to Option[<concrete-T>].
 func (c *checker) validateGenericTypeRef(ref *TypeRef, tparams map[string]bool) error {
@@ -487,11 +487,11 @@ func (c *checker) unify(ref *TypeRef, concrete *Type, subst map[string]*Type, po
 				return nil
 			}
 		}
-		// Nullable-only type-param (T?) — concrete must be Option[U]; unify
+		// Nullable-only type-param (T?) — concrete must be U?; unify
 		// inner U against the type-param.
 		if ref.Module == "" && len(ref.TypeArgs) == 0 && ref.Nullable {
 			if _, isTP := subst[ref.Name]; isTP {
-				if concrete.Kind == TypeEnum && isOptionInstance(concrete) {
+				if IsNullable(concrete) {
 					inner := concrete.VariantPayloads[0]
 					if len(inner) == 1 {
 						return c.unifyName(ref.Name, inner[0], subst, pos)
@@ -502,12 +502,12 @@ func (c *checker) unify(ref *TypeRef, concrete *Type, subst map[string]*Type, po
 				return c.unifyName(ref.Name, concrete, subst, pos)
 			}
 		}
-		// Compound generic in signature: `Option[T]`, `Box[T]`, etc. The
+		// Compound generic in signature: `T?`, `Box[T]`, etc. The
 		// concrete value at this slot must be the matching generic
 		// instance; recurse into its args.
 		if len(ref.TypeArgs) > 0 {
 			// Resolve the head decl to compare arity / kind.
-			if concrete.Kind == TypeEnum && isOptionInstance(concrete) {
+			if IsNullable(concrete) {
 				if ref.Name == "Option" && len(ref.TypeArgs) == 1 {
 					inner := concrete.VariantPayloads[0]
 					if len(inner) == 1 {
@@ -617,7 +617,7 @@ func decomposeGenericInstance(t *Type, declName string) ([]*Type, bool) {
 	}
 	// We don't reconstruct *Type from the name suffix here; instead we
 	// rely on the variant / field shape. For enum: each variant payload
-	// position holds *Type; the unifier callers use Option / Result by
+	// position holds *Type; the unifier callers use T? / Result by
 	// name match (handled inline). For struct: each field's *Type is the
 	// substituted concrete. The caller can recover the type-arg vector
 	// via the decl's payload / field layout if needed; for unify-by-arity
@@ -740,8 +740,8 @@ func (c *checker) specialiseGenericFn(fn *FnDecl, args []*Type) (*FnDecl, error)
 // ---------------------------------------------------------------------------
 
 // checkExprLift type-checks expr with the given hint and applies the v0.6
-// T → T? boundary lift when the hint asks for an Option[T] but the
-// expression's natural type is T (not Option[U] itself). Returns the
+// T → T? boundary lift when the hint asks for a T? but the
+// expression's natural type is T (not U? itself). Returns the
 // possibly-replaced Expr (callers MUST install it in the original slot when
 // it differs) plus the resolved type.
 func (c *checker) checkExprLift(expr Expr, hint *Type) (Expr, *Type, error) {
@@ -749,36 +749,36 @@ func (c *checker) checkExprLift(expr Expr, hint *Type) (Expr, *Type, error) {
 	if err != nil {
 		return expr, nil, err
 	}
-	if newExpr, newType, ok := c.applyOptionLift(expr, observed, hint); ok {
+	if newExpr, newType, ok := c.applyNullableLift(expr, observed, hint); ok {
 		return newExpr, newType, nil
 	}
 	return expr, observed, nil
 }
 
-// applyOptionLift performs the T → T? boundary lift. Returns (wrapped, t?,
+// applyNullableLift performs the T → T? boundary lift. Returns (wrapped, t?,
 // true) when the lift fires; (expr, observed, false) otherwise.
 //
 // The lift fires when:
-//   - hint is Option[U] for some U
-//   - observed is U exactly (not Option[V] — those flow through unchanged)
+//   - hint is U? for some U
+//   - observed is U exactly (not V? — those flow through unchanged)
 //   - observed is not a NilLit (NilLit handles its own resolution to
-//     Option[T].None inside checkExprHint).
+//     T?.None inside checkExprHint).
 //
-// We detect the "already Option[T]" case via observed.Kind / Name to avoid
+// We detect the "already T?" case via observed.Kind / Name to avoid
 // double-wrapping `Some(7)` to `Some(Some(7))`.
-func (c *checker) applyOptionLift(expr Expr, observed, hint *Type) (Expr, *Type, bool) {
+func (c *checker) applyNullableLift(expr Expr, observed, hint *Type) (Expr, *Type, bool) {
 	if hint == nil || observed == nil {
 		return expr, observed, false
 	}
-	if hint.Kind != TypeEnum || !isOptionInstance(hint) {
+	if hint.Kind != TypeEnum || !IsNullable(hint) {
 		return expr, observed, false
 	}
-	if observed.Kind == TypeEnum && isOptionInstance(observed) {
-		// Already an Option — no lift.
+	if IsNullable(observed) {
+		// Already a nullable — no lift.
 		return expr, observed, false
 	}
 	if _, isNil := expr.(*NilLit); isNil {
-		// nil already resolved to Option[T].None inside checkExprHint.
+		// nil already resolved to T?.None inside checkExprHint.
 		return expr, observed, false
 	}
 	if len(hint.VariantPayloads) < 1 || len(hint.VariantPayloads[0]) != 1 {
@@ -802,7 +802,7 @@ func (c *checker) applyOptionLift(expr Expr, observed, hint *Type) (Expr, *Type,
 // ---------------------------------------------------------------------------
 // Generic enum lit construction (Option.Some(x), Result.Err("oops"), ...).
 //
-// At Unit 2 these were rejected because Option / Result aren't valid
+// At Unit 2 these were rejected because T? / Result aren't valid
 // concrete enum names — the bare-name lookup in checkMethodCall fails. Unit
 // 3 wires the construction through instantiateGenericEnum + a call-site
 // inference pass that derives the type-args from arg types and / or the
@@ -818,6 +818,13 @@ func (c *checker) checkGenericEnumLit(e *MethodCallExpr, declName, variant strin
 	decl := c.findGenericEnumDecl(declName)
 	if decl == nil {
 		return nil, false, nil
+	}
+	// `Option.Some(v)` / `Option.None` reject at the source level.
+	// Construction goes through auto-lift (bare value for the present case)
+	// or the `nil` literal (for the absent case).
+	if declName == "Option" {
+		return nil, true, typeErr(e.MethodPos,
+			"`Option.%s` is not constructible; use a bare value for the present case or `nil` for the absent case", variant)
 	}
 	idx := -1
 	for i, v := range decl.Variants {
@@ -931,6 +938,13 @@ func (c *checker) checkGenericEnumBareLit(e *FieldAccessExpr, declName, variant 
 	if decl == nil {
 		return nil, false, nil
 	}
+	// `Option.None` (bare access) rejects with the same focused diagnostic
+	// as `Option.Some(v)`. The construction surface for a nullable is `nil`
+	// for the absent case and a bare value (auto-lift) for the present case.
+	if declName == "Option" {
+		return nil, true, typeErr(e.NamePos,
+			"`Option.%s` is not constructible; use a bare value for the present case or `nil` for the absent case", variant)
+	}
 	idx := -1
 	for i, v := range decl.Variants {
 		if v.Name == variant {
@@ -1030,11 +1044,11 @@ func genericInstanceArgs(t *Type, declName string) ([]*Type, bool) {
 	// values index-aligned with the decl. But we don't have the decl
 	// here, so we extract the args via the layout:
 	//
-	//   - Option[T]: VariantPayloads[0][0] is T (Some payload).
+	//   - T?: VariantPayloads[0][0] is T (Some payload).
 	//   - Result[T, E]: VariantPayloads[0][0] is T (Ok), [1][0] is E (Err).
 	//
 	// For user-defined generic enums / structs, recovery is more involved
-	// — but Unit 3's only callers are the built-in Option / Result paths,
+	// — but Unit 3's only callers are the built-in T? / Result paths,
 	// which get a hard-coded mapping here.
 	switch declName {
 	case "Option":

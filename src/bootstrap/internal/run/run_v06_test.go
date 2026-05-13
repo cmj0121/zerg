@@ -78,24 +78,24 @@ print bs
 // ---------------------------------------------------------------------------
 
 func TestRunV06OptionSomeInt(t *testing.T) {
-	src := `x: Option[int] = Option.Some(7)
+	src := `x: int? = 7
 print x
 `
-	expectOK(t, src, "Option.Some(7)\n")
+	expectOK(t, src, "7\n")
 }
 
 func TestRunV06OptionSomeStr(t *testing.T) {
-	src := `x: Option[str] = Option.Some("ok")
+	src := `x: str? = "ok"
 print x
 `
-	expectOK(t, src, "Option.Some(ok)\n")
+	expectOK(t, src, "ok\n")
 }
 
 func TestRunV06OptionNone(t *testing.T) {
-	src := `x: Option[int] = Option.None
+	src := `x: int? = nil
 print x
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -124,21 +124,21 @@ func TestRunV06NilLetAnnotated(t *testing.T) {
 	src := `x: int? = nil
 print x
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }
 
 func TestRunV06IntLiftToOptional(t *testing.T) {
 	src := `x: int? = 42
 print x
 `
-	expectOK(t, src, "Option.Some(42)\n")
+	expectOK(t, src, "42\n")
 }
 
 func TestRunV06ListOfOptional(t *testing.T) {
 	src := `xs: list[int?] = [1, nil, 2]
 print xs
 `
-	expectOK(t, src, "[ Option.Some(1), Option.None, Option.Some(2) ]\n")
+	expectOK(t, src, "[ 1, nil, 2 ]\n")
 }
 
 func TestRunV06NilThenCoalesce(t *testing.T) {
@@ -156,25 +156,25 @@ print b ?? -1
 // ---------------------------------------------------------------------------
 
 func TestRunV06PropagateOptionSomePassesThrough(t *testing.T) {
-	src := `fn maybe() -> int? { return Option.Some(7) }
+	src := `fn maybe() -> int? { return 7 }
 fn outer() -> int? {
   v := maybe()?
-  return Option.Some(v + 1)
+  return v + 1
 }
 print outer()
 `
-	expectOK(t, src, "Option.Some(8)\n")
+	expectOK(t, src, "8\n")
 }
 
 func TestRunV06PropagateOptionNoneEarlyReturns(t *testing.T) {
-	src := `fn maybe() -> int? { return Option.None }
+	src := `fn maybe() -> int? { return nil }
 fn outer() -> int? {
   v := maybe()?
-  return Option.Some(v + 1)
+  return v + 1
 }
 print outer()
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }
 
 func TestRunV06PropagateResultOkPassesThrough(t *testing.T) {
@@ -201,16 +201,16 @@ print outer()
 
 func TestRunV06PropagateChain(t *testing.T) {
 	// `?` short-circuits at the first None in a chain of fn calls.
-	src := `fn step_a() -> int? { return Option.Some(1) }
-fn step_b() -> int? { return Option.None }
+	src := `fn step_a() -> int? { return 1 }
+fn step_b() -> int? { return nil }
 fn outer() -> int? {
   a := step_a()?
   b := step_b()?
-  return Option.Some(a + b)
+  return a + b
 }
 print outer()
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }
 
 func TestRunV06PropagateResultChangingInnerT(t *testing.T) {
@@ -237,7 +237,7 @@ print x ?? 99
 }
 
 func TestRunV06CoalesceSomeTakesInner(t *testing.T) {
-	src := `x: int? = Option.Some(7)
+	src := `x: int? = 7
 print x ?? 99
 `
 	expectOK(t, src, "7\n")
@@ -263,7 +263,7 @@ func TestRunV06CoalesceRhsNotEvaluatedOnSome(t *testing.T) {
   print "rhs!"
   return 0
 }
-x: int? = Option.Some(5)
+x: int? = 5
 print x ?? rhs()
 `
 	expectOK(t, src, "5\n")
@@ -299,7 +299,7 @@ func TestRunV06SafeFieldAccessSome(t *testing.T) {
 b: Box? = Box { v: 7 }
 print b?.v
 `
-	expectOK(t, src, "Option.Some(7)\n")
+	expectOK(t, src, "7\n")
 }
 
 func TestRunV06SafeFieldAccessNone(t *testing.T) {
@@ -307,7 +307,7 @@ func TestRunV06SafeFieldAccessNone(t *testing.T) {
 b: Box? = nil
 print b?.v
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }
 
 func TestRunV06SafeFieldAccessChain(t *testing.T) {
@@ -317,7 +317,7 @@ struct Outer { inner: Inner }
 o: Outer? = Outer { inner: Inner { v: 9 } }
 print o?.inner?.v
 `
-	expectOK(t, src, "Option.Some(9)\n")
+	expectOK(t, src, "9\n")
 }
 
 func TestRunV06SafeFieldAccessChainNoneAtRoot(t *testing.T) {
@@ -326,7 +326,7 @@ struct Outer { inner: Inner }
 o: Outer? = nil
 print o?.inner?.v
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }
 
 func TestRunV06SafeFieldAccessThenCoalesce(t *testing.T) {
@@ -372,24 +372,24 @@ print bs.echo()
 // ---------------------------------------------------------------------------
 
 func TestRunV06EqOptionSome(t *testing.T) {
-	src := `a: Option[int] = Option.Some(7)
-b: Option[int] = Option.Some(7)
+	src := `a: int? = 7
+b: int? = 7
 print a == b
 `
 	expectOK(t, src, "true\n")
 }
 
 func TestRunV06EqOptionNone(t *testing.T) {
-	src := `a: Option[int] = Option.None
-b: Option[int] = Option.None
+	src := `a: int? = nil
+b: int? = nil
 print a == b
 `
 	expectOK(t, src, "true\n")
 }
 
 func TestRunV06NeqOptionSomeVsNone(t *testing.T) {
-	src := `a: Option[int] = Option.Some(7)
-b: Option[int] = Option.None
+	src := `a: int? = 7
+b: int? = nil
 print a == b
 `
 	expectOK(t, src, "false\n")
@@ -416,33 +416,23 @@ print p
 // Nested Option (Option[Option[T]]).
 // ---------------------------------------------------------------------------
 
-func TestRunV06NestedOption(t *testing.T) {
-	src := `x: Option[Option[int]] = Option.Some(Option.Some(7))
-print x
-`
-	expectOK(t, src, "Option.Some(Option.Some(7))\n")
-}
-
-func TestRunV06NestedOptionInnerNone(t *testing.T) {
-	// `nil` works as the inner None because it inherits its Option[int] type
-	// from the surrounding hint (Option.Some expects an Option[int]).
-	src := `inner: Option[int] = Option.None
-x: Option[Option[int]] = Option.Some(inner)
-print x
-`
-	expectOK(t, src, "Option.Some(Option.None)\n")
-}
+// Nested nullables (`int??` / `Option[int?]`) are no longer expressible —
+// `T?` is the only spellable nullable form and `??` in type position rejects.
+// The two tests previously covering nested Option construction
+// (TestRunV06NestedOption, TestRunV06NestedOptionInnerNone) retired here;
+// the Result-nested counterparts still pin the algebraic case (Result keeps
+// the qualified `Result[T, E]` spelling).
 
 // ---------------------------------------------------------------------------
 // Generic fn returning Option/Result.
 // ---------------------------------------------------------------------------
 
 func TestRunV06GenericFnReturnsOption(t *testing.T) {
-	src := `fn lift[T](x: T) -> T? { return Option.Some(x) }
+	src := `fn lift[T](x: T) -> T? { return x }
 print lift(7)
 print lift("hi")
 `
-	expectOK(t, src, "Option.Some(7)\nOption.Some(hi)\n")
+	expectOK(t, src, "7\nhi\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -451,11 +441,11 @@ print lift("hi")
 
 func TestRunV06PropagateExplicitNoneConstruction(t *testing.T) {
 	src := `fn outer() -> int? {
-  x: int? = Option.None
+  x: int? = nil
   v := x?
-  return Option.Some(v)
+  return v
 }
 print outer()
 `
-	expectOK(t, src, "Option.None\n")
+	expectOK(t, src, "nil\n")
 }

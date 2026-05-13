@@ -4,7 +4,7 @@ import "os"
 import "strings"
 
 match os.env("ZERG_TEST_TEMPDIR") {
-    Option.Some(d) => {
+    d => {
         path := strings.join([d, "missing.txt"], "/")
         match io.read_file(path) {
             Result.Ok(_) => print "ok?"
@@ -17,5 +17,5 @@ match os.env("ZERG_TEST_TEMPDIR") {
             }
         }
     }
-    Option.None => print "no tempdir"
+    nil => print "no tempdir"
 }

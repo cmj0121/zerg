@@ -3,22 +3,22 @@
 #
 # Null Safety
 #
-# Zerg models "absence of a value" with the built-in `Option[T]` enum (variants `Option.Some(T)` and
-# `Option.None`). Errors flow through `Result[T, E]` (variants `Result.Ok(T)` and `Result.Err(E)`). The
-# literal `nil` lifts to `Option[T].None` at boundaries with an `Option` shape. The two enums are spelled
-# fully: bare `Ok(...)` / `Err(...)` / `Some(...)` / `None` rejects — qualify with `Result.` / `Option.`.
+# Zerg models "absence of a value" with the nullable type `T?` (e.g. `int?`, `str?`). A `T?` value is
+# either a bare `T` (auto-lifted at boundaries) or `nil`. The concept name `Option` is internal and
+# does not appear in user code — there is no spellable `Option[T]`. Errors flow through
+# `Result[T, E]` (variants `Ok(T)` and `Err(E)` — the bare names are sugar for `Result.Ok` / `Result.Err`).
 
 # `Result[T, E]` example: a function that may fail with a string error.
 fn divide(a: int, b: int) -> Result[int, str] {
-	return Result.Err("Division by zero") if b == 0
-	return Result.Ok(a // b)
+	return Err("Division by zero") if b == 0
+	return Ok(a // b)
 }
 
-# The caller can use the `?` operator to propagate the error if the result is a `Result.Err`, or to
-# extract the value if it's a `Result.Ok`. The fn must itself return a compatible `Result[U, E]` shape.
+# The caller can use the `?` operator to propagate the error if the result is `Err`, or to extract
+# the value if it's `Ok`. The fn must itself return a compatible `Result[U, E]` shape.
 fn calculate() -> Result[int, str] {
 	x := divide(10, 2)?
-	return Result.Ok(x * 2)
+	return Ok(x * 2)
 }
 
 # `match` is the explicit form when both branches need to be visible at the call site.
@@ -27,27 +27,27 @@ match calculate() {
 	Result.Err(e) => print e
 }
 
-# The `T?` syntax is sugar for `Option[T]`. The literal `nil` lifts to `Option.None` at the boundary
-# (annotated binding, fn argument, return expression, struct-literal field, list-element type).
+# `T?` admits the literal `nil` for the absent case and bare `T` for the present case (auto-lift at
+# annotated binding, fn argument, return expression, struct-literal field, list-element type).
 x: int? = nil
 y: int? = 7
 
-# `??` is nil-coalesce: `lhs ?? rhs` yields the inner value when `lhs` is `Some(v)` / `Ok(v)`, otherwise
-# evaluates `rhs`. The RHS only runs on the `None` / `Err` path.
+# `??` is nil-coalesce: `lhs ?? rhs` yields the inner value when `lhs` is present / `Ok(v)`, otherwise
+# evaluates `rhs`. The RHS only runs on the `nil` / `Err` path.
 print x ?? 0
 print y ?? 0
 
-# `?` post-fix on an `Option[T]` propagates `None`; legal only in fns whose return type is `Option[U]`.
-fn first(xs: list[int]) -> Option[int] {
+# `?` post-fix on a `T?` propagates the absent case; legal only in fns whose return type is `U?`.
+fn first(xs: list[int]) -> int? {
 	if len(xs) == 0 {
-		return Option.None
+		return nil
 	}
-	return Option.Some(xs[0])
+	return xs[0]
 }
 
-fn double_first(xs: list[int]) -> Option[int] {
+fn double_first(xs: list[int]) -> int? {
 	v := first(xs)?
-	return Option.Some(v * 2)
+	return v * 2
 }
 
 print double_first([10, 20])

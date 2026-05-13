@@ -1,0 +1,10 @@
+# requires: v0.6
+
+inner_ok: Result[str, int] = Ok("inner-ok")
+inner_err: Result[str, int] = Err(404)
+r1: Result[int, Result[str, int]] = Ok(1)
+r2: Result[int, Result[str, int]] = Err(inner_ok)
+r3: Result[int, Result[str, int]] = Err(inner_err)
+print r1
+print r2
+print r3

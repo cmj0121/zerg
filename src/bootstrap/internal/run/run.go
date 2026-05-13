@@ -1204,8 +1204,21 @@ func formatValue(v Value) string {
 		b.WriteString(" }")
 		return b.String()
 	case syntax.TypeEnum:
-		// v0.6 print parity: `Option[int].Some(7)` renders as
-		// `Option.Some(7)`; the `[type-args]` instance suffix is suppressed
+		// Nullable values (the synthetic Option-backed enum) print the
+		// inner value for the present case and `nil` for the absent case
+		// — `Option` is not a user-visible name and so does not appear
+		// in stdout. Result and user-defined enums keep the
+		// "Name.Variant(args)" shape.
+		if syntax.IsNullable(v.Type) {
+			if v.VariantName == "None" {
+				return "nil"
+			}
+			if len(v.Payload) == 1 {
+				return formatValue(v.Payload[0])
+			}
+		}
+		// v0.6 print parity: `Result[int,str].Ok(7)` renders as
+		// `Result.Ok(7)`; the `[type-args]` instance suffix is suppressed
 		// for stdout so golden files stay stable across re-monomorphization.
 		// Diagnostics keep the bracketed name (Type.String() has its own
 		// path).
@@ -1947,6 +1960,12 @@ func floatMod(a, b float64) float64 { return math.Mod(a, b) }
 // returns int — at v0.2 it's the only generic intrinsic, so a single-name
 // switch is the right shape; future built-ins will append.
 func (in *interp) evalCall(e *syntax.CallExpr) (Value, error) {
+	// Bare `Ok(v)` / `Err(e)` sugar — typeck lowered to a Result enum-lit.
+	// Route through the EnumLit evaluator so construction follows the same
+	// path as `Result.Ok(v)`.
+	if e.Lowered != nil {
+		return in.evalEnumLit(e.Lowered)
+	}
 	// v0.7: anon-fn IIFE — `fn() { ... }()`. The callee is the AnonFnExpr
 	// itself; evaluate it to an fnValue and dispatch through callFnValue.
 	if anon, ok := e.Callee.(*syntax.AnonFnExpr); ok {
@@ -2564,6 +2583,24 @@ func (in *interp) execMatch(s *syntax.MatchStmt) error {
 // mismatches (e.g. tuple-pat against non-tuple), so this path only fires on
 // value-disagreement (literal mismatch, enum variant mismatch, ...).
 func (in *interp) bindPattern(pat syntax.Pattern, v Value) (bool, error) {
+	// Auto-unwrap on nullable instance scrutinees. typeck has validated
+	// that a non-nil pattern targets the inner element type; here we
+	// mirror by matching the variant tag first and recursing on the Some
+	// payload. `nil` LitPats keep the full nullable instance view so
+	// litEq's tag comparison fires.
+	if syntax.IsNullable(v.Type) {
+		if syntax.IsNilLitPattern(pat) {
+			return v.VariantName == "None", nil
+		}
+		if _, isEnumPat := pat.(*syntax.EnumPat); !isEnumPat {
+			if v.VariantName == "None" {
+				return false, nil
+			}
+			if len(v.Payload) == 1 {
+				return in.bindPattern(pat, v.Payload[0])
+			}
+		}
+	}
 	switch p := pat.(type) {
 	case *syntax.WildcardPat:
 		return true, nil

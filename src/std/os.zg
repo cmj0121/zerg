@@ -43,14 +43,14 @@ pub fn argv() -> list[str] {
 	return out
 }
 
-# env(name) looks up an environment variable by name. Returns
-# Option.Some(value) on hit, Option.None on miss. Lookup is linear in
-# the number of envp entries — env is usually small enough that the
+# env(name) looks up an environment variable by name. Returns the
+# value `str?` (the raw string on hit, `nil` on miss). Lookup is linear
+# in the number of envp entries — env is usually small enough that the
 # linear cost is below the floor of any pragma we'd ship to optimise
 # it. Matching is byte-exact on the key (no case folding); a name
 # containing '=' would never match because the split anchors on the
 # first '=' of the entry.
-pub fn env(name: str) -> Option[str] {
+pub fn env(name: str) -> str? {
 	nb := name.bytes()
 	nlen := nb.len()
 	n := envp_len()
@@ -76,9 +76,9 @@ pub fn env(name: str) -> Option[str] {
 		for k in (nlen + 1)..elen {
 			push(val, eb[k])
 		}
-		return Option.Some(val.to_str())
+		return val.to_str()
 	}
-	return Option.None
+	return nil
 }
 
 # exit(code) terminates the process. Delegates to sys.syscall.exit,

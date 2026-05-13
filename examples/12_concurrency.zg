@@ -4,9 +4,9 @@
 # Concurrency
 #
 # `spawn fn-call()` starts a fire-and-forget concurrent task. Tasks communicate via channels (`chan[T]`)
-# and may close them with the built-in `close(ch)`. Channel receives surface as `Option[T]` — `Some(v)`
-# while open or buffered, `None` once drained-and-closed. The `for v in ch` form auto-unwraps the
-# `Option` and exits when the channel drains.
+# and may close them with the built-in `close(ch)`. Channel receives surface as `T?` — a bare `T`
+# while open or buffered, `nil` once drained-and-closed. The `for v in ch` form auto-unwraps the
+# nullable and exits when the channel drains.
 
 fn spawn_bump(count: int) {
 	for i in 0..count {
@@ -47,12 +47,12 @@ fn fibonacci(n: int) {
 			b = tmp
 		}
 
-		# Explicitly close the channel. Subsequent receives surface `Option.None`; the `for v in ch`
+		# Explicitly close the channel. Subsequent receives surface `nil`; the `for v in ch`
 		# loop below exits cleanly once the channel drains.
 		close(ch)
 	}()
 
-	# Iterate the channel. The loop binds the inner `T` (auto-unwrapping `Option[T]`) and exits when the
+	# Iterate the channel. The loop binds the inner `T` (auto-unwrapping `T?`) and exits when the
 	# channel is drained and closed.
 	for v in ch {
 		print v

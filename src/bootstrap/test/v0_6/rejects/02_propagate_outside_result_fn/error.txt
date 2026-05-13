@@ -1,1 +1,1 @@
-? propagation only legal inside fn returning Option[...] or Result[..., E]
+? propagation only legal inside fn returning T? or Result[..., E]

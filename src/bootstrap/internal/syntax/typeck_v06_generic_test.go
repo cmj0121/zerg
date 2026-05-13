@@ -254,12 +254,13 @@ func TestV06GenericEnumDeclaration(t *testing.T) {
 	}
 }
 
-// --- generic Option / Result construction ---------------------------------
+// --- generic Result construction ------------------------------------------
+// (Option construction goes through auto-lift / `nil`; the qualified
+// `Option.Some` / `Option.None` spellings reject — see typeck_v06_builtin_test.)
 
-func TestV06OptionSomeArgInferred(t *testing.T) {
-	// Option.Some(7) at expression position with no hint: the arg type
-	// drives inference.
-	src := "x := Option.Some(7)\n"
+func TestV06NullableAutoLiftAtAnnotated(t *testing.T) {
+	// `x: int? = 7` auto-lifts the bare int into the Option-backed nullable.
+	src := "x: int? = 7\n"
 	prog := checkSrc(t, src)
 	ls := expectOne[*LetStmt](t, prog)
 	got := ls.Value.Type()
@@ -268,16 +269,22 @@ func TestV06OptionSomeArgInferred(t *testing.T) {
 	}
 }
 
-func TestV06OptionNoneAnnotated(t *testing.T) {
-	// Option.None: no args; type-args supplied by hint.
-	src := "x: Option[int] = Option.None\n"
+func TestV06NullableNilAnnotated(t *testing.T) {
+	// `x: int? = nil` — annotation supplies the nullable hint.
+	src := "x: int? = nil\n"
 	checkSrc(t, src)
 }
 
-func TestV06OptionNoneWithoutHintRejects(t *testing.T) {
-	// Bare Option.None with no hint: rejects with the inference diagnostic.
-	src := "x := Option.None\n"
-	checkErr(t, src, "cannot infer type parameter")
+func TestV06OptionDotSomeRejects(t *testing.T) {
+	// `Option.Some(7)` rejects with the focused diagnostic — the only
+	// construction surface is auto-lift / `nil`.
+	checkErr(t, "x := Option.Some(7)\n",
+		"`Option.Some` is not constructible")
+}
+
+func TestV06OptionDotNoneRejects(t *testing.T) {
+	checkErr(t, "x: int? = Option.None\n",
+		"`Option.None` is not constructible")
 }
 
 func TestV06ResultErrFromHint(t *testing.T) {
@@ -381,9 +388,9 @@ func TestV06LiftStructField(t *testing.T) {
 }
 
 func TestV06LiftDoesNotDoubleWrap(t *testing.T) {
-	// Already-Option value flowing into an Option[int] slot must NOT
-	// double-wrap.
-	src := "a: int? = Option.Some(1)\n" +
+	// Already-nullable value flowing into a same-shape nullable slot must
+	// NOT double-wrap.
+	src := "a: int? = 1\n" +
 		"b: int? = a\n"
 	checkSrc(t, src)
 }
@@ -503,17 +510,17 @@ func TestV06NonGenericStructLitRegression(t *testing.T) {
 	checkSrc(t, src)
 }
 
-// --- Option[T] visibility under indirect generic context ------------------
+// --- T? construction under indirect generic context ----------------------
 
-func TestV06OptionSomeFromGenericArg(t *testing.T) {
-	// Using Option[T] inside a generic fn call with the type-arg coming
-	// from the call-site's hint.
-	src := "fn make() -> Option[int] { return Option.Some(7) }\n"
+func TestV06NullableReturnFromBareValue(t *testing.T) {
+	// `fn make() -> int? { return 7 }` — the bare 7 auto-lifts at the
+	// return boundary.
+	src := "fn make() -> int? { return 7 }\n"
 	checkSrc(t, src)
 }
 
-func TestV06ListOfOptionInt(t *testing.T) {
-	src := "xs: list[int?] = [Option.Some(1), Option.None, Option.Some(3)]\n"
+func TestV06ListOfNullable(t *testing.T) {
+	src := "xs: list[int?] = [1, nil, 3]\n"
 	checkSrc(t, src)
 }
 
@@ -571,9 +578,9 @@ func TestV06GenericFnHintDrivesElementType(t *testing.T) {
 	checkSrc(t, src)
 }
 
-func TestV06OptionSomeNestedInList(t *testing.T) {
-	// Options inside a list literal — each element a Some(...).
-	src := "xs := [Option.Some(1), Option.Some(2)]\n"
+func TestV06NullableInListLiteralWithHint(t *testing.T) {
+	// list[T?] literal with bare ints — auto-lift per element.
+	src := "xs: list[int?] = [1, 2]\n"
 	checkSrc(t, src)
 }
 
@@ -653,18 +660,18 @@ func TestV06InferenceConflictAcrossArgs(t *testing.T) {
 	checkErr(t, src, "conflicting types for type parameter")
 }
 
-func TestV06SymmetricLiftIntoStructFieldOption(t *testing.T) {
-	// Already an Option[int] flowing into a int? slot must NOT
-	// double-wrap; the lift only fires for non-Option observed types.
+func TestV06SymmetricLiftIntoStructFieldNullable(t *testing.T) {
+	// Bare value flowing into a int? struct field auto-lifts.
 	src := "struct S { v: int? }\n" +
-		"s := S { v: Option.Some(7) }\n"
+		"s := S { v: 7 }\n"
 	checkSrc(t, src)
 }
 
 func TestV06GenericTPostfixSig(t *testing.T) {
-	// `T?` in a generic signature instantiates to Option[<conc>].
+	// `T?` in a generic signature instantiates to the synthetic Option-
+	// backed enum (canonical Name still `Option[<conc>]` internally).
 	src := "fn id[T](x: T?) -> T? { return x }\n" +
-		"a: int? = id(Option.Some(7))\n"
+		"a: int? = id(7)\n"
 	checkSrc(t, src)
 }
 

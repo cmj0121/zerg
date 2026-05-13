@@ -4,19 +4,19 @@ import "strings"
 
 // v0.6 Unit 4 — typeck for the null-safety operators (`?`, `??`, `?.`).
 //
-// PropagateExpr (`expr?`) requires its inner to be Option[T] or Result[T, E]
+// PropagateExpr (`expr?`) requires its inner to be T? or Result[T, E]
 // and is only legal inside a fn whose return type is shape-compatible. The
 // resulting type is the inner T.
 //
-// CoalesceExpr (`lhs ?? rhs`) requires LHS to be Option[T] or Result[T, E];
+// CoalesceExpr (`lhs ?? rhs`) requires LHS to be T? or Result[T, E];
 // the RHS must be assignable to T. The resulting type is T.
 //
-// FieldAccessExpr.Safe (`obj?.field`) requires the receiver to be Option[T]
-// for some struct T owning the named field; the result is Option[U] where U
+// FieldAccessExpr.Safe (`obj?.field`) requires the receiver to be T?
+// for some struct T owning the named field; the result is U? where U
 // is the field's declared type.
 
 // isResultInstance reports whether t is a monomorphized Result[...] enum.
-// Mirrors isOptionInstance for the Result branch of the null-safety operators.
+// Mirrors IsNullable for the Result branch of the null-safety operators.
 func isResultInstance(t *Type) bool {
 	if t == nil || t.Kind != TypeEnum {
 		return false
@@ -24,15 +24,15 @@ func isResultInstance(t *Type) bool {
 	return strings.HasPrefix(t.Name, "Result[")
 }
 
-// optionOrResultInner extracts the inner T from an Option[T] or Result[T, E]
-// canonical *Type. Returns (inner, ok). The Option / Result discrimination is
-// recoverable from t via isOptionInstance / isResultInstance; the inner T is
+// nullableOrResultInner extracts the inner T from a T? or Result[T, E]
+// canonical *Type. Returns (inner, ok). The T? / Result discrimination is
+// recoverable from t via IsNullable / isResultInstance; the inner T is
 // always the first variant's first payload slot for both shapes.
-func optionOrResultInner(t *Type) (*Type, bool) {
+func nullableOrResultInner(t *Type) (*Type, bool) {
 	if t == nil || t.Kind != TypeEnum {
 		return nil, false
 	}
-	if !isOptionInstance(t) && !isResultInstance(t) {
+	if !IsNullable(t) && !isResultInstance(t) {
 		return nil, false
 	}
 	if len(t.VariantPayloads) < 1 || len(t.VariantPayloads[0]) != 1 {
@@ -53,13 +53,13 @@ func resultErrType(t *Type) (*Type, bool) {
 	return t.VariantPayloads[1][0], true
 }
 
-// checkPropagate type-checks `inner?`. The inner must be Option[T] or
+// checkPropagate type-checks `inner?`. The inner must be T? or
 // Result[T, E]. The enclosing fn's return type must be shape-compatible:
 //
-//   - Option[T] inner ⇒ enclosing fn must return Option[U] (any U)
+//   - T? inner ⇒ enclosing fn must return U? (any U)
 //   - Result[T, E] inner ⇒ enclosing fn must return Result[U, E] (E exact)
 //
-// Out-of-context (no enclosing fn, or enclosing fn returns a non-Option /
+// Out-of-context (no enclosing fn, or enclosing fn returns a non-nullable /
 // non-Result type) rejects with the canonical diagnostic.
 func (c *checker) checkPropagate(e *PropagateExpr) (*Type, error) {
 	innerT, err := c.checkExpr(e.Inner)
@@ -67,24 +67,24 @@ func (c *checker) checkPropagate(e *PropagateExpr) (*Type, error) {
 		return nil, err
 	}
 	if innerT == nil || innerT.Kind != TypeEnum ||
-		(!isOptionInstance(innerT) && !isResultInstance(innerT)) {
+		(!IsNullable(innerT) && !isResultInstance(innerT)) {
 		return nil, typeErr(e.Pos,
-			"? requires Option[...] or Result[..., ...] receiver, got %s", innerT)
+			"? requires T? or Result[T, E] receiver, got %s", innerT)
 	}
 	if c.currentFn == nil || c.currentFn.ret == nil {
 		return nil, typeErr(e.Pos,
-			"? propagation only legal inside fn returning Option[...] or Result[..., E]")
+			"? propagation only legal inside fn returning T? or Result[..., E]")
 	}
 	ret := c.currentFn.ret
-	if isOptionInstance(innerT) {
-		if !isOptionInstance(ret) {
+	if IsNullable(innerT) {
+		if !IsNullable(ret) {
 			return nil, typeErr(e.Pos,
-				"? propagation only legal inside fn returning Option[...] or Result[..., E]")
+				"? propagation only legal inside fn returning T? or Result[..., E]")
 		}
 	} else {
 		if !isResultInstance(ret) {
 			return nil, typeErr(e.Pos,
-				"? propagation only legal inside fn returning Option[...] or Result[..., E]")
+				"? propagation only legal inside fn returning T? or Result[..., E]")
 		}
 		innerErr, _ := resultErrType(innerT)
 		retErr, _ := resultErrType(ret)
@@ -93,7 +93,7 @@ func (c *checker) checkPropagate(e *PropagateExpr) (*Type, error) {
 				"? error type mismatch: %s vs %s", retErr, innerErr)
 		}
 	}
-	out, ok := optionOrResultInner(innerT)
+	out, ok := nullableOrResultInner(innerT)
 	if !ok {
 		return nil, typeErr(e.Pos, "internal: cannot extract inner T from %s", innerT)
 	}
@@ -101,11 +101,11 @@ func (c *checker) checkPropagate(e *PropagateExpr) (*Type, error) {
 	return out, nil
 }
 
-// checkCoalesce type-checks `lhs ?? rhs`. LHS must be Option[T] or
+// checkCoalesce type-checks `lhs ?? rhs`. LHS must be T? or
 // Result[T, E]; RHS must be assignable to T. Result type is T.
 //
-// Bidirectional hint: when the outer hint is some U (a non-Option type), we
-// pass Option[U] (or Result[U, ?]) as the LHS hint? — at v0.6 the cleanest
+// Bidirectional hint: when the outer hint is some U (a non-nullable type), we
+// pass U? (or Result[U, ?]) as the LHS hint? — at v0.6 the cleanest
 // choice is to type-check LHS first with no hint and then drive the RHS hint
 // from the LHS's inner T. This keeps the caller's hint flowing into RHS only.
 func (c *checker) checkCoalesce(e *CoalesceExpr, hint *Type) (*Type, error) {
@@ -114,11 +114,11 @@ func (c *checker) checkCoalesce(e *CoalesceExpr, hint *Type) (*Type, error) {
 		return nil, err
 	}
 	if leftT == nil || leftT.Kind != TypeEnum ||
-		(!isOptionInstance(leftT) && !isResultInstance(leftT)) {
+		(!IsNullable(leftT) && !isResultInstance(leftT)) {
 		return nil, typeErr(e.Pos,
-			"?? requires Option[...] or Result[..., ...] on the left, got %s", leftT)
+			"?? requires T? or Result[T, E] on the left, got %s", leftT)
 	}
-	inner, ok := optionOrResultInner(leftT)
+	inner, ok := nullableOrResultInner(leftT)
 	if !ok {
 		return nil, typeErr(e.Pos, "internal: cannot extract inner T from %s", leftT)
 	}
@@ -139,29 +139,29 @@ func (c *checker) checkCoalesce(e *CoalesceExpr, hint *Type) (*Type, error) {
 }
 
 // checkSafeFieldAccess type-checks `obj?.field`. The receiver must be
-// Option[T] for some struct T owning the named field; the result is
-// Option[U] where U is the field's declared type. Chains compose because
-// each `?.` returns Option[...] which the next `?.` consumes.
+// T? for some struct T owning the named field; the result is
+// U? where U is the field's declared type. Chains compose because
+// each `?.` returns T? which the next `?.` consumes.
 func (c *checker) checkSafeFieldAccess(e *FieldAccessExpr) (*Type, error) {
 	rt, err := c.checkExpr(e.Receiver)
 	if err != nil {
 		return nil, err
 	}
-	if rt == nil || !isOptionInstance(rt) {
+	if rt == nil || !IsNullable(rt) {
 		return nil, typeErr(e.Pos,
 			"?. requires nullable receiver, got %s", rt)
 	}
-	inner, ok := optionOrResultInner(rt)
+	inner, ok := nullableOrResultInner(rt)
 	if !ok {
 		return nil, typeErr(e.Pos, "internal: cannot extract inner T from %s", rt)
 	}
 	if inner == nil || inner.Kind != TypeStruct {
 		return nil, typeErr(e.Pos,
-			"?. requires struct inside Option, got Option[%s]", inner)
+			"?. requires struct inside a nullable, got %s?", inner)
 	}
 	for _, f := range inner.Fields {
 		if f.Name == e.FieldName {
-			out, err := c.wrapOption(f.Type, e.Pos)
+			out, err := c.wrapNullable(f.Type, e.Pos)
 			if err != nil {
 				return nil, err
 			}

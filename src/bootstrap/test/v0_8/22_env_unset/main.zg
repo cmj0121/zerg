@@ -2,6 +2,6 @@
 import "os"
 
 match os.env("ZERG_TEST_NEVER_SET_XYZ") {
-    Option.Some(v) => print v
-    Option.None => print "unset"
+    v => print v
+    nil => print "unset"
 }

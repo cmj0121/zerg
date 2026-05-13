@@ -211,8 +211,8 @@ func TestV09CgenTimeRuntimeAbsentForOsEnvOnly(t *testing.T) {
 	out, err := emitFromFileSrc(t, `# requires: v0.9
 import "std/os"
 match os.env("PATH") {
-    Option.Some(_) => print "set"
-    Option.None    => print "unset"
+    nil => print "unset"
+    _   => print "set"
 }
 `)
 	if err != nil {

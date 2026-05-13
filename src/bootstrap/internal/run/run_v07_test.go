@@ -21,7 +21,7 @@ spawn fn() { ch <- 5 }()
 v := <- ch
 print v
 `
-	expectOK(t, src, "Option.Some(5)\n")
+	expectOK(t, src, "5\n")
 }
 
 func TestRunV07ChanBufferedSendDrain(t *testing.T) {
@@ -46,7 +46,7 @@ b := <- ch
 print a
 print b
 `
-	expectOK(t, src, "Option.Some(7)\nOption.None\n")
+	expectOK(t, src, "7\nnil\n")
 }
 
 func TestRunV07ChanForInDrainsBufferedThenStops(t *testing.T) {
@@ -77,7 +77,7 @@ spawn fn() {
 v := <- ch
 print v
 `
-	expectOK(t, src, "Option.Some(42)\n")
+	expectOK(t, src, "42\n")
 }
 
 func TestRunV07AnonFnCaptureLetIIFE(t *testing.T) {
@@ -147,15 +147,15 @@ print caller()
 }
 
 func TestRunV07DeferDrainOnNonePropagate(t *testing.T) {
-	src := `fn maybe() -> int? { return Option.None }
+	src := `fn maybe() -> int? { return nil }
 fn caller() -> int? {
   defer print "cleanup"
   v := maybe()?
-  return Option.Some(v)
+  return v
 }
 print caller()
 `
-	expectOK(t, src, "cleanup\nOption.None\n")
+	expectOK(t, src, "cleanup\nnil\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +268,7 @@ func TestRunV07SelectSendArm(t *testing.T) {
 }
 run()
 `
-	expectOK(t, src, "sent\nOption.Some(5)\n")
+	expectOK(t, src, "sent\n5\n")
 }
 
 // invokeSpecDefaultDirect must push/drain a defer frame so a spec-default

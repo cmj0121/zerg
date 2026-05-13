@@ -15,6 +15,6 @@ for p in parts {
 print max_val
 print strings.to_upper("v0.8 stdlib")
 match os.env("ZERG_TEST_THING") {
-    Option.Some(v) => print v
-    Option.None => print "unset"
+    v => print v
+    nil => print "unset"
 }

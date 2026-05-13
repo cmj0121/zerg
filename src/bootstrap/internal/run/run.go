@@ -1957,6 +1957,15 @@ func (in *interp) callFn(fn *syntax.FnDecl, argExprs []syntax.Expr, resultType *
 		return in.callBuiltin(fn, args, resultType, callPos)
 	}
 
+	// v0.14: sys/syscall wrapper fns have a non-empty body, but the body
+	// is a single `asm { svc #0x80 ... }` block the interpreter cannot
+	// execute. The intrinsic dispatch returns handled=true when fn is
+	// one of those wrappers; we bypass the body walk and return its
+	// signed-errno result directly. See run_v14_syscall.go.
+	if v, handled, err := in.invokeSysSyscallIntrinsic(fn, args); handled {
+		return v, err
+	}
+
 	// Calls do NOT inherit the caller's scope: a fresh frame stack rooted at
 	// just the new frame. v0.5: also switch the active module to the
 	// callee's owning module so the body resolves unqualified identifiers

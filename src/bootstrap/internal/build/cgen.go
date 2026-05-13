@@ -80,9 +80,10 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		canonical := m.ModuleName()
 		mangle := mangleModule(canonical)
 		me := moduleEmit{
-			view:   m,
-			prog:   m.ModuleProgram(),
-			mangle: mangle,
+			view:         m,
+			prog:         m.ModuleProgram(),
+			mangle:       mangle,
+			topLevelVars: map[string]bool{},
 		}
 		g.modules = append(g.modules, me)
 	}
@@ -116,6 +117,33 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 			if g.modules[i].view == entry {
 				g.entryMangle = g.modules[i].mangle
 				break
+			}
+		}
+	}
+	// v0.14 P1: collect top-level let / mut / const binding names for
+	// non-entry modules so fn-body identifiers resolving to those names
+	// get module-mangled in identName. The entry module's bindings stay
+	// in main()'s local scope per the historical emit, so they're not
+	// registered here.
+	for i := range g.modules {
+		me := &g.modules[i]
+		if me.mangle == g.entryMangle {
+			continue
+		}
+		for _, stmt := range me.prog.Statements {
+			switch s := stmt.(type) {
+			case *syntax.LetStmt:
+				if s.Name != "" {
+					me.topLevelVars[s.Name] = true
+				}
+			case *syntax.MutStmt:
+				if s.Name != "" {
+					me.topLevelVars[s.Name] = true
+				}
+			case *syntax.ConstStmt:
+				if s.Name != "" {
+					me.topLevelVars[s.Name] = true
+				}
 			}
 		}
 	}
@@ -347,6 +375,16 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		return err
 	}
 
+	// v0.14 P1: imported-module top-level globals. Each non-entry module's
+	// let / mut / const stmts emit as `static <T> z_<mangle>__<name> = init;`
+	// at file scope before the fn forward decls. identName resolves
+	// fn-body references to these symbols. Initializer must be a C
+	// constant expression today; non-constant inits would need a runtime
+	// init function, deferred until a use case appears.
+	if err := g.emitImportedModuleGlobals(); err != nil {
+		return err
+	}
+
 	// 3. Top-level fn forward decls then bodies, ACROSS every module.
 	// Forward decls first so any fn can call any other regardless of
 	// textual or module order.
@@ -545,6 +583,15 @@ type moduleEmit struct {
 	prog    *syntax.Program
 	mangle  string
 	imports map[string]string
+	// topLevelVars is the set of top-level let / mut / const binding
+	// names declared in this module. Populated for non-entry modules
+	// only — those bindings get promoted to file-scope C statics
+	// (`z_<mangle>__<name>`) so fn bodies in the same module can read
+	// and write them via the identName lookup. The entry module keeps
+	// its top-level lets / muts inline inside main() per the historical
+	// emit; only imported modules' bindings need promotion since their
+	// fn bodies execute in a foreign translation unit.
+	topLevelVars map[string]bool
 }
 
 // stampCrossModuleOwners walks stmt's expressions inside a host module
@@ -2375,7 +2422,7 @@ func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
 		fmt.Fprintf(&g.b, "%s;\n", rhs)
 		return nil
 	}
-	targetName := mangle(target.Name)
+	targetName := g.identName(target.Name)
 	g.writeIndent()
 	switch s.Op {
 	case syntax.AssignSet:
@@ -3105,7 +3152,7 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		}
 		return "(_Bool)0", nil
 	case *syntax.IdentExpr:
-		return mangle(e.Name), nil
+		return g.identName(e.Name), nil
 	case *syntax.ParenExpr:
 		inner, err := g.exprStr(e.Inner)
 		if err != nil {
@@ -3956,6 +4003,103 @@ func (g *cgen) specMangle(name string) string {
 // clash with C keywords or runtime helpers.
 func mangle(name string) string {
 	return "z_" + name
+}
+
+// emitImportedModuleGlobals writes file-scope C statics for every
+// non-entry module's top-level let / mut / const bindings. Symbol form
+// is `z_<modmangle>__<name>` so identName's lookup table and the emit
+// here agree. The initializer must be a C constant expression — the
+// helper switches g.currentMod temporarily so g.exprStr resolves any
+// self-referential top-level binding (e.g. `const NEXT := PREV + 1`)
+// to the module-mangled form before the file-scope decl emits.
+//
+// Modules emit in declaration order within each module; ordering
+// across modules follows g.modules. A non-constant initializer surfaces
+// as a C compile error at the file-scope decl — the diagnostic is
+// adequate for v0.14 (a runtime-init hook can land when a real use
+// case demands non-constant module-init).
+func (g *cgen) emitImportedModuleGlobals() error {
+	prevMod := g.currentMod
+	defer func() { g.currentMod = prevMod }()
+	wroteAny := false
+	for i := range g.modules {
+		me := &g.modules[i]
+		if me.mangle == g.entryMangle {
+			continue
+		}
+		if len(me.topLevelVars) == 0 {
+			continue
+		}
+		g.currentMod = me.mangle
+		for _, stmt := range me.prog.Statements {
+			var name string
+			var ref *syntax.TypeRef
+			var value syntax.Expr
+			var isConst bool
+			switch s := stmt.(type) {
+			case *syntax.LetStmt:
+				if s.Name == "" {
+					continue
+				}
+				name, ref, value = s.Name, s.Type, s.Value
+			case *syntax.MutStmt:
+				if s.Name == "" {
+					continue
+				}
+				name, ref, value = s.Name, s.Type, s.Value
+			case *syntax.ConstStmt:
+				if s.Name == "" {
+					continue
+				}
+				name, ref, value, isConst = s.Name, s.Type, s.Value, true
+			default:
+				continue
+			}
+			t := value.Type()
+			declT := t
+			if ref != nil && ref.Resolved != nil {
+				declT = ref.Resolved
+			}
+			if declT == nil {
+				return fmt.Errorf("codegen: missing type for module-level %q in %s", name, me.mangle)
+			}
+			exprS, err := g.exprStr(value)
+			if err != nil {
+				return err
+			}
+			if isConst {
+				g.b.WriteString("static const ")
+			} else {
+				g.b.WriteString("static ")
+			}
+			fmt.Fprintf(&g.b, "%s z_%s__%s = %s;\n", g.cTypeName(declT), me.mangle, name, exprS)
+			wroteAny = true
+		}
+	}
+	if wroteAny {
+		g.b.WriteString("\n")
+	}
+	return nil
+}
+
+// identName returns the C identifier for a Zerg name as referenced inside
+// the currently-emitting module's fn body. If the name resolves to a
+// top-level let / mut / const of that module (registered in moduleEmit.
+// topLevelVars), the module-mangled form `z_<mangle>__<name>` is returned
+// so the C symbol matches the file-scope static emitted by
+// emitImportedModuleGlobals. Otherwise the bare `z_<name>` form is used
+// — that covers fn-locals, parameters, and any name that doesn't shadow
+// a module-level binding. Local shadowing of a module-level binding is
+// currently undefined under cgen (the binding promotion path doesn't
+// track local scope); typeck would not have rejected the shadow but it
+// will compile to the module-mangled global access.
+func (g *cgen) identName(name string) string {
+	if g.currentMod != "" && g.currentMod != g.entryMangle {
+		if me := g.moduleByName[g.currentMod]; me != nil && me.topLevelVars[name] {
+			return "z_" + g.currentMod + "__" + name
+		}
+	}
+	return mangle(name)
 }
 
 // mangleField prefixes struct field names with `f_` so a field named `for`

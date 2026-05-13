@@ -105,6 +105,16 @@ func RunBundleWithOptions(bundle syntax.BundleView, w io.Writer, opts Options) (
 			panic(r)
 		}
 	}()
+	// v0.14 P1: initialize imported modules' top-level let / mut / const
+	// bindings into their moduleVars frames before the entry runs. This
+	// is what lets an imported module's fn body reference module-scope
+	// state — the lookup() fall-through reaches in.cur.moduleVars only
+	// if those bindings have been declared somewhere. The entry module
+	// is skipped here; its top-level execution loop below handles its
+	// own bindings (against in.stack[0] == entryMd.moduleVars).
+	if err := in.initImportedModuleVars(bundle); err != nil {
+		return 0, false, err
+	}
 	prog := entry.ModuleProgram()
 	for _, stmt := range prog.Statements {
 		switch stmt.(type) {
@@ -282,6 +292,12 @@ type moduleData struct {
 	// imports binds a local name (alias or bare path) to the target
 	// module's data. Used to recognise `mod.foo()` shapes at run-time.
 	imports map[string]*moduleData
+	// moduleVars holds the module's top-level let / mut / const bindings.
+	// Populated at init time (for imported modules) or by the entry
+	// module's top-level execution (for the entry). lookup() falls
+	// through to in.cur.moduleVars after walking the call-frame stack
+	// so fn bodies see their owning module's top-level state.
+	moduleVars *frame
 }
 
 // specPairKey is the (canonical *Type, spec name) pair used to index spec
@@ -333,13 +349,14 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 	// Done first so impl resolution can look up types in any module.
 	for _, m := range mods {
 		md := &moduleData{
-			view:    m,
-			prog:    m.ModuleProgram(),
-			name:    m.ModuleName(),
-			fns:     map[string]*syntax.FnDecl{},
-			enums:   map[string]*syntax.Type{},
-			structs: map[string]*syntax.Type{},
-			imports: map[string]*moduleData{},
+			view:       m,
+			prog:       m.ModuleProgram(),
+			name:       m.ModuleName(),
+			fns:        map[string]*syntax.FnDecl{},
+			enums:      map[string]*syntax.Type{},
+			structs:    map[string]*syntax.Type{},
+			imports:    map[string]*moduleData{},
+			moduleVars: newFrame(),
 		}
 		in.modules[md.prog] = md
 		for _, stmt := range md.prog.Statements {
@@ -472,12 +489,68 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 			in.specByPair[specPairKey{recv: recv, specName: id.Spec}] = true
 		}
 	}
-	// Set the active module to the entry, push the top-level frame.
+	// Set the active module to the entry; the entry's moduleVars frame
+	// serves as the top-level execution scope. RunBundle walks the
+	// entry's prog.Statements and execStmt declares each let/mut/const
+	// into this frame, so subsequent top-level execution AND fn-body
+	// lookups (via the lookup() fall-through to in.cur.moduleVars) see
+	// the same storage. v0.14 P1: imported modules' moduleVars are
+	// populated by initImportedModuleVars before the entry runs.
 	if entry := bundle.BundleEntry(); entry != nil {
 		in.cur = in.modules[entry.ModuleProgram()]
+		in.stack = []*frame{in.cur.moduleVars}
+	} else {
+		in.pushFrame()
 	}
-	in.pushFrame()
 	return in
+}
+
+// initImportedModuleVars walks every non-entry module's top-level
+// let / mut / const stmts and executes them into the module's moduleVars
+// frame. Iteration runs in reverse bundle order so a module's
+// imports init before the importer — bundle.BundleModules() returns
+// the entry first followed by transitive imports in pre-order
+// discovery, so walking back-to-front gives the post-order "deepest
+// first" we want.
+//
+// Only declaration-shape stmts (LetStmt / MutStmt / ConstStmt) are
+// executed. Top-level Print / ExprStmt / Assign in an imported module
+// is not executed at module-init time — those shapes are reserved for
+// the entry module's main execution. Future work can lift this
+// restriction if there's a clear use case.
+//
+// Errors from a module-init binding bubble up to RunBundle; a failing
+// init aborts the whole program before the entry runs.
+func (in *interp) initImportedModuleVars(bundle syntax.BundleView) error {
+	entry := bundle.BundleEntry()
+	var entryMd *moduleData
+	if entry != nil {
+		entryMd = in.modules[entry.ModuleProgram()]
+	}
+	mods := bundle.BundleModules()
+	for i := len(mods) - 1; i >= 0; i-- {
+		md := in.modules[mods[i].ModuleProgram()]
+		if md == nil || md == entryMd {
+			continue
+		}
+		savedCur := in.cur
+		savedStack := in.stack
+		in.cur = md
+		in.stack = []*frame{md.moduleVars}
+		for _, stmt := range md.prog.Statements {
+			switch stmt.(type) {
+			case *syntax.LetStmt, *syntax.MutStmt, *syntax.ConstStmt:
+				if err := in.execStmt(stmt); err != nil {
+					in.cur = savedCur
+					in.stack = savedStack
+					return err
+				}
+			}
+		}
+		in.cur = savedCur
+		in.stack = savedStack
+	}
+	return nil
 }
 
 // resolveImplReceiver returns the canonical receiver *Type pointer that
@@ -869,10 +942,21 @@ func (in *interp) declare(name string, v Value) error {
 }
 
 // lookup walks frames from innermost to outermost. Returns the storage slot
-// (so assignment can mutate it) plus a found bool.
+// (so assignment can mutate it) plus a found bool. v0.14 P1: after the
+// call-frame walk misses, fall through to the active module's top-level
+// frame (in.cur.moduleVars). This is what lets a fn body reference its
+// owning module's top-level let / mut / const bindings even though
+// callFn replaces the call stack with a fresh single-frame slice — the
+// module-scope frame is reached by lexical-owner lookup, not by stack
+// walking.
 func (in *interp) lookup(name string) (*Value, bool) {
 	for i := len(in.stack) - 1; i >= 0; i-- {
 		if slot, ok := in.stack[i].vars[name]; ok {
+			return slot, true
+		}
+	}
+	if in.cur != nil && in.cur.moduleVars != nil {
+		if slot, ok := in.cur.moduleVars.vars[name]; ok {
 			return slot, true
 		}
 	}

@@ -107,6 +107,9 @@ func collectRejectCorpus(t *testing.T) []rejectCase {
 	for v := 5; v <= 9; v++ {
 		dir := filepath.Join(root, fmt.Sprintf("v0_%d", v), "rejects")
 		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) {
+			continue
+		}
 		if err != nil {
 			t.Fatalf("read %s: %v", dir, err)
 		}

@@ -91,6 +91,9 @@ func listV09Programs(t *testing.T, root string) []string {
 func listV09Rejects(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		t.Skipf("no rejects root at %s (v0.9 rejects corpus retired with `never`)", root)
+	}
 	if err != nil {
 		t.Fatalf("read rejects root %s: %v", root, err)
 	}

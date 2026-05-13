@@ -304,8 +304,6 @@ print os.env("ZERG_V08_CGEN_NEVER_SET")
 func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 	out := mustEmit(t, "print 1\n")
 	for _, banned := range []string{
-		"zerg_io_read_file",
-		"zerg_io_write_file",
 		"zerg_strings_split",
 		"zerg_strings_join",
 		"zerg_strings_trim",
@@ -313,7 +311,6 @@ func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 		"zerg_strings_parse_int",
 		"zerg_math_abs",
 		"zerg_os_env",
-		"zerg_io_str_or_err",
 		"zerg_parse_int_result",
 		"zerg_os_env_result",
 	} {
@@ -325,17 +322,18 @@ func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 
 // TestV08CgenRuntimePresentWithBuiltin — using any v0.8 builtin pulls
 // in the runtime helpers. Canary churned through versions: math →
-// strings → io. v0.14 retired the math and strings shims into pure
-// Zerg; io stays shimmed, so io.read_file is the smallest still-v0.8-
-// __builtin call that exercises the same runtime-wiring path. When io
-// also moves to pure Zerg, this canary should switch to whichever
-// v0.8 module still ships a __builtin (os / time at minimum).
+// strings → io → os. v0.14 retired math, strings, and io into pure
+// Zerg, so os.env is the smallest still-v0.8-__builtin call that
+// exercises the runtime-wiring path. When os also moves to pure Zerg,
+// this canary should switch to whichever v0.8 module still ships a
+// __builtin (time at minimum) or be retired with the v0.8 runtime
+// block itself.
 func TestV08CgenRuntimePresentWithBuiltin(t *testing.T) {
 	src := `# requires: v0.8
-import "std/io"
-match io.read_file("none") {
-    Result.Ok(_) => print "ok"
-    Result.Err(_) => print "err"
+import "std/os"
+match os.env("ZERG_V08_CANARY_UNSET") {
+    Option.Some(_) => print "set"
+    Option.None => print "unset"
 }
 `
 	dir := t.TempDir()
@@ -347,9 +345,8 @@ match io.read_file("none") {
 		t.Fatalf("emit: %v", err)
 	}
 	for _, want := range []string{
-		"static zerg_io_str_or_err zerg_io_read_file(",
-		"zerg_io_str_or_err",
-		"zerg_strings_split",
+		"zerg_os_env_result",
+		"zerg_os_env",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("v0.8 runtime missing %q in:\n%s", want, out)
@@ -364,10 +361,10 @@ match io.read_file("none") {
 // shape must be present before the runtime block.
 func TestV08CgenListStrShapeForceMonomorphized(t *testing.T) {
 	src := `# requires: v0.8
-import "std/io"
-match io.read_file("none") {
-    Result.Ok(_) => print "ok"
-    Result.Err(_) => print "err"
+import "std/os"
+match os.env("ZERG_V08_FORCE_MONO_UNSET") {
+    Option.Some(_) => print "set"
+    Option.None => print "unset"
 }
 `
 	dir := t.TempDir()

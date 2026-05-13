@@ -20,10 +20,12 @@ import "strings"
 // every other v0.6+ diagnostic — so the comparison is byte-equal between
 // what the user wrote in std/<m>.zg and what the registry expects.
 //
-// Closed set: 17 entries spanning std/io, std/strings, std/math, std/os.
-// PLAN.md §"In scope (v0.8)" enumerates the wire shapes; this file pins them
-// in code so any drift between the table and the std/<m>.zg sources fails
-// at typeck.
+// Closed set: 15 entries spanning std/strings, std/math, std/os. std/io
+// retired into pure Zerg at v0.14 (over the sys/syscall layer); its
+// __builtin entries left this registry alongside the runtime helpers.
+// PLAN.md §"In scope (v0.8)" enumerates the wire shapes; this file pins
+// them in code so any drift between the table and the std/<m>.zg sources
+// fails at typeck.
 
 // v08BuiltinSig is the expected shape of one __builtin entry. Params and Ret
 // are TypeRef.String() forms. Ret is empty when the registry entry returns
@@ -36,10 +38,6 @@ type v08BuiltinSig struct {
 // v08BuiltinRegistry maps a __builtin bareword to its expected fn-decl
 // signature. Closed set per PLAN.md §"In scope (v0.8)".
 var v08BuiltinRegistry = map[string]v08BuiltinSig{
-	// std/io
-	"io_read_file":  {params: []string{"str"}, ret: "Result[str, IoError]"},
-	"io_write_file": {params: []string{"str", "str"}, ret: "Result[bool, IoError]"},
-
 	// std/strings
 	"strings_split":       {params: []string{"str", "str"}, ret: "list[str]"},
 	"strings_join":        {params: []string{"list[str]", "str"}, ret: "str"},

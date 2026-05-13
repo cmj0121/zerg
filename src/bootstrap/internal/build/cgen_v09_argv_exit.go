@@ -57,7 +57,7 @@ func (g *cgen) programUsesOsExit() bool {
 
 // skipBuiltinFn reports whether the trampoline for fn should be omitted
 // from the emitted C source. v0.9 Unit 3 builtins (os_argv, os_exit) and
-// Unit 2 builtins (time_now_ms, time_sleep_ms) are elided when their
+// Unit 2 primitives (time_clock_us, time_sleep_ns) are elided when their
 // corresponding runtime block is not emitted — i.e. when the user
 // program does not reach a call site for them. Without this gate, a
 // v0.8 program that imports std/os solely for os.env would pull in
@@ -75,7 +75,7 @@ func (g *cgen) skipBuiltinFn(fn *syntax.FnDecl, needsArgv bool) bool {
 		return !needsArgv
 	case "os_exit":
 		return !g.programUsesOsExit()
-	case "time_now_ms", "time_sleep_ms":
+	case "time_clock_us", "time_sleep_ns":
 		return !g.programUsesV09Time()
 	}
 	return false

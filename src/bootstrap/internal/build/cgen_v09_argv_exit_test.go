@@ -180,8 +180,8 @@ print 42
 	for _, sym := range []string{
 		"zerg_os_argv",
 		"zerg_os_exit",
-		"zerg_time_now_ms",
-		"zerg_time_sleep_ms",
+		"zerg_time_clock_us",
+		"zerg_time_sleep_ns",
 		"zerg_time_epoch",
 		"zerg_time_initialised",
 		"__zerg_argc",

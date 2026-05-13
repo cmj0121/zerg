@@ -1,4 +1,0 @@
-# requires: v0.9
-
-pub fn now_ms() -> int __builtin time_now_ms
-pub fn sleep_ms(ms: int) -> bool __builtin time_sleep_ms

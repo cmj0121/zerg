@@ -136,8 +136,8 @@ print 42
 	if err != nil {
 		t.Fatalf("emit: %v", err)
 	}
-	if strings.Contains(out, "zerg_time_now_ms") {
-		t.Errorf("v0.0 program emit unexpectedly contains zerg_time_now_ms")
+	if strings.Contains(out, "zerg_time_clock_us") {
+		t.Errorf("v0.0 program emit unexpectedly contains zerg_time_clock_us")
 	}
 	if strings.Contains(out, "<time.h>") {
 		t.Errorf("v0.0 program emit unexpectedly includes <time.h>")
@@ -152,8 +152,8 @@ print time.now_ms()
 	if err != nil {
 		t.Fatalf("emit: %v", err)
 	}
-	if !strings.Contains(out, "zerg_time_now_ms") {
-		t.Errorf("v0.9 time program missing zerg_time_now_ms")
+	if !strings.Contains(out, "zerg_time_clock_us") {
+		t.Errorf("v0.9 time program missing zerg_time_clock_us")
 	}
 	if !strings.Contains(out, "<time.h>") {
 		t.Errorf("v0.9 time program missing <time.h>")

@@ -146,8 +146,18 @@ print len(os.argv())
 	}
 }
 
-func TestV09CgenMainStaysVoidForExitOnly(t *testing.T) {
-	// A program that uses only os.exit (NOT os.argv) keeps main(void).
+// TestV09CgenOsImportSwapsMain pins the v0.14 T2 reality: importing
+// std/os now triggers the argv-signature main swap regardless of what
+// the user calls. Reason: pure-Zerg os.zg's argv() / env() bodies
+// reference the new __builtin accessor primitives (os_argv_at /
+// os_envp_at), and the cgen's programUsesArgv / programUsesEnvp
+// walker is non-reachability — it fires when ANY fn body across the
+// bundle references the primitive, including dead-code paths in the
+// imported module. The trade-off is a few bytes of emit overhead
+// for an os-importing program that uses only os.exit; a future
+// reachability walker can tighten this back down without changing
+// any user-visible semantics.
+func TestV09CgenOsImportSwapsMain(t *testing.T) {
 	out, err := emitFromFileSrc(t, `# requires: v0.9
 import "std/os"
 os.exit(0)
@@ -155,11 +165,8 @@ os.exit(0)
 	if err != nil {
 		t.Fatalf("emit: %v", err)
 	}
-	if !strings.Contains(out, "int main(void)") {
-		t.Errorf("exit-only program lost main(void) signature\n--- emitted ---\n%s", out)
-	}
-	if strings.Contains(out, "int main(int argc") {
-		t.Errorf("exit-only program got argv signature swap")
+	if !strings.Contains(out, "int main(int argc, char **argv)") {
+		t.Errorf("os-importing program missing argv signature\n--- emitted ---\n%s", out)
 	}
 }
 
@@ -180,6 +187,8 @@ print 42
 	for _, sym := range []string{
 		"zerg_os_argv",
 		"zerg_os_exit",
+		"zerg_os_argv_at",
+		"zerg_os_envp_at",
 		"zerg_time_clock_us",
 		"zerg_time_sleep_ns",
 		"zerg_time_epoch",
@@ -193,11 +202,12 @@ print 42
 	}
 }
 
-// TestV09CgenRuntimeGateAbsentForOsEnvOnly pins Phase 4 Fix 4: a v0.9
-// program that imports std/os solely for os.env emits byte-identical to
-// the pre-v0.9 baseline — no zerg_os_argv / zerg_os_exit / zerg_time_*
-// symbols, no __zerg_argc / __zerg_argv globals.
-func TestV09CgenRuntimeGateAbsentForOsEnvOnly(t *testing.T) {
+// TestV09CgenTimeRuntimeAbsentForOsEnvOnly pins that a program using
+// std/os for env / argv does NOT pull in the std/time runtime. The
+// argv + envp primitive runtime IS emitted (importing std/os triggers
+// it under v0.14 T2 — see TestV09CgenOsImportSwapsMain) but the time
+// runtime stays gated on its own predicate.
+func TestV09CgenTimeRuntimeAbsentForOsEnvOnly(t *testing.T) {
 	out, err := emitFromFileSrc(t, `# requires: v0.9
 import "std/os"
 match os.env("PATH") {
@@ -208,17 +218,10 @@ match os.env("PATH") {
 	if err != nil {
 		t.Fatalf("emit: %v", err)
 	}
-	if !strings.Contains(out, "int main(void)") {
-		t.Errorf("os.env-only program lost main(void) signature")
-	}
 	for _, sym := range []string{
-		"zerg_os_argv",
-		"zerg_os_exit",
-		"zerg_time_now_ms",
-		"zerg_time_sleep_ms",
+		"zerg_time_clock_us",
+		"zerg_time_sleep_ns",
 		"zerg_time_epoch",
-		"__zerg_argc",
-		"__zerg_argv",
 	} {
 		if strings.Contains(out, sym) {
 			t.Errorf("os.env-only program unexpectedly contains %q in emit", sym)

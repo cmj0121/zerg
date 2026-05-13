@@ -3,7 +3,6 @@ package run
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -70,8 +69,6 @@ func (in *interp) callBuiltin(fn *syntax.FnDecl, args []Value, resultType *synta
 		return execMathMax(args[0], args[1])
 	case "math_gcd":
 		return execMathGcd(args[0], args[1])
-	case "os_env":
-		return execOsEnv(args[0], resultType, callPos)
 	}
 	return Value{}, fmt.Errorf("internal: unknown __builtin %q at %s", fn.BuiltinName, callPos)
 }
@@ -246,14 +243,4 @@ func execMathGcd(aV, bV Value) (Value, error) {
 		a, b = b, a%b
 	}
 	return intVal(a), nil
-}
-
-// --- std/os ---------------------------------------------------------------
-
-func execOsEnv(nameV Value, resultType *syntax.Type, pos syntax.Position) (Value, error) {
-	v, ok := os.LookupEnv(nameV.Str)
-	if !ok {
-		return optionNone(resultType, pos)
-	}
-	return optionSome(resultType, strVal(v), pos)
 }

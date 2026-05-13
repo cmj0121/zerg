@@ -56,8 +56,6 @@ var v08BuiltinRegistry = map[string]v08BuiltinSig{
 	"math_max": {params: []string{"int", "int"}, ret: "int"},
 	"math_gcd": {params: []string{"int", "int"}, ret: "int"},
 
-	// std/os
-	"os_env": {params: []string{"str"}, ret: "Option[str]"},
 }
 
 // validateBuiltinFnDecl runs the v0.8 builtin-registry checks against fn.

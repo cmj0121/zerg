@@ -358,14 +358,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString(runtimeV09TimeC)
 		g.b.WriteString("\n")
 	}
-	// v0.9 Unit 3 — argv / exit runtime. Lands after the shape helpers so
-	// zerg_list_zerg_str_push (referenced by zerg_os_argv) is already
-	// defined. Emit ONLY when the program reaches an os.argv or os.exit
-	// call site so a v0.8 program that imports std/os solely for os.env
-	// keeps its pre-v0.9 byte-identical emit. The trampoline-emit pass
-	// elides bodies for unused builtins, so referencing-only-os_env never
-	// pulls in zerg_os_argv / zerg_os_exit symbols.
-	if needsArgv || g.programUsesOsExit() {
+	// v0.9 Unit 3 — std/os primitive runtime. Lands after the shape
+	// helpers so any list[zerg_str] shape force-mono lands first
+	// (historically required when zerg_os_argv emitted a list-builder;
+	// kept as-is for consistency with the gate). Emit ONLY when a
+	// program reaches an argv or envp primitive so a v0.8 program that
+	// imports std/os for nothing keeps its pre-v0.9 byte-identical emit.
+	if needsArgv || g.programUsesEnvp() {
 		g.b.WriteString(runtimeV09ArgvExitC)
 		g.b.WriteString("\n")
 	}
@@ -496,10 +495,12 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString("}\n")
 		if needsArgv {
 			g.b.WriteString("int main(int argc, char **argv) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 			g.b.WriteString("    __zerg_argc = argc;\n")
 			g.b.WriteString("    __zerg_argv = argv;\n")
 		} else {
 			g.b.WriteString("int main(void) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 		}
 		g.b.WriteString("    zerg_sched_init(0);\n")
 		g.b.WriteString("    zerg_coro_spawn(__zerg_top_main, 0);\n")
@@ -511,10 +512,12 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		// the top-level statements inlined as before.
 		if needsArgv {
 			g.b.WriteString("int main(int argc, char **argv) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 			g.b.WriteString("    __zerg_argc = argc;\n")
 			g.b.WriteString("    __zerg_argv = argv;\n")
 		} else {
 			g.b.WriteString("int main(void) {\n")
+			g.b.WriteString("    setvbuf(stdout, 0, _IONBF, 0);\n")
 		}
 		if g.entryProg != nil {
 			for _, stmt := range g.entryProg.Statements {

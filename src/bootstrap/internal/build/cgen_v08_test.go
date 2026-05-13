@@ -310,9 +310,7 @@ func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 		"zerg_strings_replace",
 		"zerg_strings_parse_int",
 		"zerg_math_abs",
-		"zerg_os_env",
 		"zerg_parse_int_result",
-		"zerg_os_env_result",
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("v0.8 symbol %q leaked into v0.0 program emit", banned)
@@ -320,76 +318,10 @@ func TestV08CgenRuntimeAbsentWithoutBuiltin(t *testing.T) {
 	}
 }
 
-// TestV08CgenRuntimePresentWithBuiltin — using any v0.8 builtin pulls
-// in the runtime helpers. Canary churned through versions: math →
-// strings → io → os. v0.14 retired math, strings, and io into pure
-// Zerg, so os.env is the smallest still-v0.8-__builtin call that
-// exercises the runtime-wiring path. When os also moves to pure Zerg,
-// this canary should switch to whichever v0.8 module still ships a
-// __builtin (time at minimum) or be retired with the v0.8 runtime
-// block itself.
-func TestV08CgenRuntimePresentWithBuiltin(t *testing.T) {
-	src := `# requires: v0.8
-import "std/os"
-match os.env("ZERG_V08_CANARY_UNSET") {
-    Option.Some(_) => print "set"
-    Option.None => print "unset"
-}
-`
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.zg"), []byte(src), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	out, err := emitFromFile(t, filepath.Join(dir, "main.zg"))
-	if err != nil {
-		t.Fatalf("emit: %v", err)
-	}
-	for _, want := range []string{
-		"zerg_os_env_result",
-		"zerg_os_env",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("v0.8 runtime missing %q in:\n%s", want, out)
-		}
-	}
-}
-
-// TestV08CgenListStrShapeForceMonomorphized — a program that calls
-// strings.split (returns list[str]) must emit the zerg_list_zerg_str
-// shape's helpers even though the user code never literal-constructs a
-// list[str]. The runtime references zerg_list_zerg_str_push, so the
-// shape must be present before the runtime block.
-func TestV08CgenListStrShapeForceMonomorphized(t *testing.T) {
-	src := `# requires: v0.8
-import "std/os"
-match os.env("ZERG_V08_FORCE_MONO_UNSET") {
-    Option.Some(_) => print "set"
-    Option.None => print "unset"
-}
-`
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.zg"), []byte(src), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	out, err := emitFromFile(t, filepath.Join(dir, "main.zg"))
-	if err != nil {
-		t.Fatalf("emit: %v", err)
-	}
-	for _, want := range []string{
-		"zerg_list_zerg_str",
-		"zerg_list_zerg_str_push",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in v0.8 emit; got:\n%s", want, out)
-		}
-	}
-	// The list helper must appear BEFORE the runtime's reference to it.
-	pushDef := strings.Index(out, "static void zerg_list_zerg_str_push(")
-	runtimeRef := strings.Index(out, "static zerg_list_zerg_str zerg_strings_split(")
-	if pushDef < 0 || runtimeRef < 0 {
-		t.Fatalf("missing markers; pushDef=%d runtimeRef=%d", pushDef, runtimeRef)
-	}
-	if pushDef > runtimeRef {
-		t.Errorf("zerg_list_zerg_str_push should precede zerg_strings_split definition")
-	}
-}
+// TestV08CgenRuntimePresentWithBuiltin and
+// TestV08CgenListStrShapeForceMonomorphized were retired at v0.14 T2 —
+// every previously v0.8-__builtin-bearing stdlib (io / strings / math
+// / os / time) is now pure-Zerg, so no surface triggers the v0.8
+// runtime emit gate. The runtime block lingers as dead code pending
+// a follow-up cleanup commit; once removed, the v0.8 runtime tests
+// can be deleted outright instead of just noted here.

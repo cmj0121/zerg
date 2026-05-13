@@ -388,10 +388,6 @@ func (g *cgen) builtinBodyStr(fn *syntax.FnDecl) (string, error) {
 	case "math_gcd":
 		fmt.Fprintf(&b, "    return zerg_math_gcd(z_a, z_b);\n")
 
-	// std/os.
-	case "os_env":
-		emitOsEnv(&b, g, retT)
-
 	default:
 		return "", fmt.Errorf("codegen: unknown __builtin %q", fn.BuiltinName)
 	}
@@ -412,19 +408,6 @@ func emitParseIntResult(b *strings.Builder, g *cgen, retT *syntax.Type) {
 	fmt.Fprintf(b, "    int __v = %s;\n", parseErrTagToVariantSwitch(errT))
 	fmt.Fprintf(b, "    return ((%s){.tag = %d, .payload.p%d = {.a0 = ((%s){.tag = __v})}});\n",
 		resMang, errIdx, errIdx, errMang)
-}
-
-// emitOsEnv writes the body for os_env: getenv → Some(str)/None.
-func emitOsEnv(b *strings.Builder, g *cgen, retT *syntax.Type) {
-	optMang := g.mangleType(retT)
-	someIdx := variantIndex(retT, "Some")
-	noneIdx := variantIndex(retT, "None")
-	fmt.Fprintf(b, "    zerg_os_env_result __r = zerg_os_env(z_name);\n")
-	fmt.Fprintf(b, "    if (__r.present == 0) {\n")
-	fmt.Fprintf(b, "        return ((%s){.tag = %d});\n", optMang, noneIdx)
-	fmt.Fprintf(b, "    }\n")
-	fmt.Fprintf(b, "    return ((%s){.tag = %d, .payload.p%d = {.a0 = __r.value}});\n",
-		optMang, someIdx, someIdx)
 }
 
 // resultErrEnumInfo extracts the user-defined error enum carried in the
@@ -489,7 +472,6 @@ const runtimeV08C = `#include <errno.h>
 /* ---------------- v0.8 stdlib runtime ----------------------------------- */
 
 typedef struct { int tag; int64_t value; } zerg_parse_int_result;
-typedef struct { int present; zerg_str value; } zerg_os_env_result;
 
 /* ---------------- strings ----------------------------------------------- */
 
@@ -719,21 +701,5 @@ static int64_t zerg_math_gcd(int64_t a, int64_t b) {
         b = t;
     }
     return a;
-}
-
-/* ---------------- os ---------------------------------------------------- */
-
-static zerg_os_env_result zerg_os_env(zerg_str name) {
-    char *cname = (char *)malloc(name.len + 1);
-    if (name.len) memcpy(cname, name.data, name.len);
-    cname[name.len] = 0;
-    const char *v = getenv(cname);
-    free(cname);
-    if (v == 0) return (zerg_os_env_result){.present = 0};
-    size_t n = strlen(v);
-    char *p = (char *)malloc(n + 1);
-    memcpy(p, v, n);
-    p[n] = 0;
-    return (zerg_os_env_result){.present = 1, .value = (zerg_str){p, n}};
 }
 `

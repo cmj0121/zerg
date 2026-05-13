@@ -274,8 +274,15 @@ type interp struct {
 
 	// v0.9 Unit 3: argv from the host. Index 0 is the executable name
 	// (.zg path for `zerg run`, "<repl>" at the REPL, an arbitrary
-	// sentinel in tests). os_argv reads from this slice.
+	// sentinel in tests). os_argv_len / os_argv_at index into this slice.
 	argv []string
+
+	// v0.14 T2: lazy snapshot of os.Environ() shared by envp_len and
+	// envp_at within a single interpreter run. Captured on first read so
+	// the envp index space stays stable for a pure-Zerg env() loop; per-
+	// interpreter (not process-global) so test ordering doesn't leak env
+	// state from one run into the next.
+	envpCache []string
 }
 
 // moduleData is the per-module decl table. Indexed maps mirror typeck's

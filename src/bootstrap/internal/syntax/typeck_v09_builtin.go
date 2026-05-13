@@ -13,6 +13,12 @@ func init() {
 	// (introduced by the v0.14 P1 module-init landing).
 	v08BuiltinRegistry["time_clock_us"] = v08BuiltinSig{params: nil, ret: "int"}
 	v08BuiltinRegistry["time_sleep_ns"] = v08BuiltinSig{params: []string{"int", "int"}, ret: "int"}
-	v08BuiltinRegistry["os_argv"] = v08BuiltinSig{params: nil, ret: "list[str]"}
-	v08BuiltinRegistry["os_exit"] = v08BuiltinSig{params: []string{"int"}, ret: "never"}
+	// std/os primitives. v0.14 retired the coupled os_env / os_argv shims
+	// in favour of pair-of-accessor primitives — argv length + per-index,
+	// envp length + per-index. The user-facing env / argv / exit live in
+	// pure-Zerg src/std/os.zg over these primitives plus sys.syscall.exit.
+	v08BuiltinRegistry["os_argv_len"] = v08BuiltinSig{params: nil, ret: "int"}
+	v08BuiltinRegistry["os_argv_at"] = v08BuiltinSig{params: []string{"int"}, ret: "str"}
+	v08BuiltinRegistry["os_envp_len"] = v08BuiltinSig{params: nil, ret: "int"}
+	v08BuiltinRegistry["os_envp_at"] = v08BuiltinSig{params: []string{"int"}, ret: "str"}
 }

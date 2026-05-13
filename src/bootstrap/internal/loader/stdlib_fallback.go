@@ -5,34 +5,21 @@ import (
 	"io/fs"
 )
 
-// The loader serves stdlib modules from TWO embedded sources, consulted
-// in priority order:
+// The loader serves stdlib modules from a single embedded source:
+// stdlib_embed/ — a mirror of src/std/ (pure-Zerg source) populated
+// at build time by `make sync-stdlib` (rsync of ../std/ → stdlib_embed/).
 //
-//   1. embeddedStdlib  — mirror of src/std/ (pure-Zerg source).
-//                        Populated at build time by `make sync-stdlib`
-//                        (rsync of ../std/ → stdlib_embed/).
-//
-//   2. bootstrapProvided — `__builtin`-bearing shims that live inside
-//                          the bootstrap module. Authored directly,
-//                          committed under bootstrap_provided/, never
-//                          synced.
-//
-// Pure-Zerg implementations in src/std/ shadow the bootstrap shims by
-// search order — writing src/std/math.zg in pure Zerg silently retires
-// bootstrap_provided/math.zg with no other change. When the last shim
-// has a pure-Zerg replacement, bootstrap_provided/ goes away and
-// `__builtin` retires with it.
+// v0.14 retired the second embed root (bootstrap_provided/) after the
+// last `__builtin`-bearing shim (os.zg) was rewritten in pure Zerg over
+// atomic accessor primitives. `__builtin` itself stays as a language
+// feature — pure-Zerg stdlib files still declare narrow primitives
+// (time_clock_us, os_argv_at, etc.) that the cgen and interpreter
+// recognise by name — but the directory of forwarder shims is gone.
 
 //go:embed stdlib_embed
 var embeddedStdlib embed.FS
 
-//go:embed bootstrap_provided
-var bootstrapProvided embed.FS
-
-var (
-	embeddedStdlibRoot   = mustSub(embeddedStdlib, "stdlib_embed")
-	bootstrapProvidedRoot = mustSub(bootstrapProvided, "bootstrap_provided")
-)
+var embeddedStdlibRoot = mustSub(embeddedStdlib, "stdlib_embed")
 
 func mustSub(efs embed.FS, dir string) fs.FS {
 	sub, err := fs.Sub(efs, dir)
@@ -52,9 +39,9 @@ func mustSub(efs embed.FS, dir string) fs.FS {
 // return of (nil, false) means no fallback is registered and the loader
 // surfaces the standard "<family> module not found" diagnostic.
 //
-// The default reads from the two embedded sources above. $ZERG_STDLIB
-// lets developers point at an on-disk tree for tight edit loops, but
-// the embeds are what make the toolchain self-contained.
+// The default reads from the embedded source. $ZERG_STDLIB lets
+// developers point at an on-disk tree for tight edit loops, but the
+// embed is what makes the toolchain self-contained.
 //
 // The hook is a function variable so tests can swap in a synthetic
 // registry without touching production code; production never reassigns
@@ -64,16 +51,15 @@ var stdlibFallback = defaultStdlibFallback
 // SetStdlibFallbackForTest swaps the fallback lookup for the duration
 // of the returned restore func. Tests inject a synthetic fallback entry
 // to exercise the disk-miss → fallback-hit path, or pass a no-op lookup
-// to force a total miss for negative tests against the default embeds.
+// to force a total miss for negative tests against the default embed.
 func SetStdlibFallbackForTest(lookup func(family, name string) ([]byte, bool)) func() {
 	prev := stdlibFallback
 	stdlibFallback = lookup
 	return func() { stdlibFallback = prev }
 }
 
-// defaultStdlibFallback resolves (family, name) against the two
-// embedded sources, in priority order: src/std/ mirror first, then the
-// bootstrap-provided shims. An unrecognised family returns (nil, false).
+// defaultStdlibFallback resolves (family, name) against the embedded
+// source. An unrecognised family returns (nil, false).
 //
 // Layout:
 //   - std/* family is flat: `<name>.zg`.
@@ -110,14 +96,13 @@ func defaultStdlibFallback(family, name string) ([]byte, bool) {
 	}
 }
 
-// readEmbeddedRoots tries the embedded roots in priority order and
-// returns the first hit. Factored out so the sys/ family can call it
-// twice (variant lookup then generic) without duplicating the loop.
+// readEmbeddedRoots reads a single embedded path from the stdlib_embed
+// root. Retains the (path, bool) signature because the sys/ family
+// calls it three times to probe the layout variants without
+// re-implementing the open / errno-check.
 func readEmbeddedRoots(path string) ([]byte, bool) {
-	for _, root := range []fs.FS{embeddedStdlibRoot, bootstrapProvidedRoot} {
-		if content, err := fs.ReadFile(root, path); err == nil {
-			return content, true
-		}
+	if content, err := fs.ReadFile(embeddedStdlibRoot, path); err == nil {
+		return content, true
 	}
 	return nil, false
 }

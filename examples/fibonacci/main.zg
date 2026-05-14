@@ -1,0 +1,54 @@
+#! /usr/bin/env zerg
+# requires: v0.19
+#
+# Fibonacci over arbitrary-precision integers. Iterative accumulator;
+# the running state is `math.BigInt` so large indices (e.g. fib 1000)
+# stay exact instead of overflowing the int64 register.
+#
+# Surfaces:
+#   - math.from_int / math.BigInt via v0.18 `pub import` of math/big
+#     from math
+#   - v0.17 Arithmetic operator-spec on BigInt (`a + b` lowers to
+#     `a.add(b)`)
+#   - v0.19 self-rehydrating multi-assign: `a, b = b, a + b` admits
+#     for composite types (BigInt is a struct), so the canonical
+#     parallel-reassign Fibonacci step works the same way it does
+#     for primitive ints.
+
+import (
+	"math"
+	"os"
+	"strings"
+)
+
+# Compute fib(n) over BigInt. n ≥ 0.
+fn fib(n: int) {
+	mut a := math.from_int(0)
+	mut b := math.from_int(1)
+
+	for i in 0..n {
+		a, b = b, a + b
+	}
+	print a.to_str()
+}
+
+# Entrypoint — parses the single positional argument.
+fn main() {
+	args := os.argv()
+
+	if args.len() != 2 {
+		print "Usage: zerg run main.zg <N>"
+		os.exit(1)
+	}
+
+	n := args[1]
+	match strings.parse_int(n) {
+		Result.Ok(v) => fib(v)
+		Result.Err(_) => {
+			print "Invalid N argument: {n}"
+			os.exit(1)
+		}
+	}
+}
+
+main()

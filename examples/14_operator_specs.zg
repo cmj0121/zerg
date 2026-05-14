@@ -1,0 +1,130 @@
+#! /usr/bin/env zerg
+# requires: v0.17
+#
+# Operator specs — v0.17
+#
+# At v0.17 Zerg ships three built-in operator specs that turn surface
+# operators (`+`, `<`, `==`, …) into method-call dispatch on user types.
+# Implementing the spec on a struct or enum lights up the operator for
+# values of that type.
+#
+#   Arithmetic   add sub mul div mod (binary) + neg (unary)
+#                Methods:  fn add(other: Self) -> Self    ↔  a + b
+#                          fn sub(other: Self) -> Self    ↔  a - b
+#                          fn mul(other: Self) -> Self    ↔  a * b
+#                          fn div(other: Self) -> Self    ↔  a / b
+#                          fn mod(other: Self) -> Self    ↔  a % b
+#                          fn neg() -> Self               ↔  -a
+#
+#   Comparable   eq + lt (irreducible)
+#                Methods:  fn eq(other: Self) -> bool     ↔  a == b
+#                          fn lt(other: Self) -> bool     ↔  a < b
+#                          The bundled `!=`, `>`, `<=`, `>=` desugar at
+#                          typeck time via operand swap and/or result
+#                          negation. Author only writes eq + lt.
+#
+#   From[T]      Rust-style conversion contract — declared as a built-in
+#                spec but not yet user-implementable at v0.17. Static-
+#                method dispatch (`MyType::from(x)`) and `impl X for
+#                Spec[T]` parser support both arrive in v0.18.
+#
+# Primitive types (int, float, byte, rune, str) auto-satisfy the
+# relevant bundles, so the operators stay infix on primitives without
+# any user code.
+
+import "math/big"
+
+# ─────────────────────────────────────────────────────────────────────
+# Example 1 — BigInt: operator syntax on a stdlib-provided user type.
+# math/big.zg's `impl BigInt for Arithmetic` and `impl BigInt for
+# Comparable` light up `+ - * / %`, unary `-`, and all six comparison
+# operators on BigInt values.
+# ─────────────────────────────────────────────────────────────────────
+
+a := big.from_int(12345)
+b := big.from_int(678)
+
+print (a + b).to_str()    # 13023
+print (a - b).to_str()    # 11667
+print (a * b).to_str()    # 8369910
+print (a / b).to_str()    # 18  (truncation toward zero)
+print (a % b).to_str()    # 141
+print (-a).to_str()       # -12345
+
+print a == a              # true
+print a == b              # false
+print a != b              # true
+print a < b               # false
+print a > b               # true
+print b < a               # true
+print a >= a              # true
+
+# Mixed-type operands reject at typeck — convert one operand explicitly.
+# `a + 7` fails with: "operator + requires same-typed numeric or str
+# operands, got BigInt and int (convert one operand explicitly to match)"
+# The idiomatic fix:
+seven := big.from_int(7)
+print (a + seven).to_str()    # 12352
+
+# ─────────────────────────────────────────────────────────────────────
+# Example 2 — generic-fn bound. `T: Arithmetic` constrains T to a type
+# that supports the full arithmetic surface. The same `sum_pair` lights
+# up for primitives (synthetic int / float impls) and for user types
+# (BigInt) with no overload required.
+# ─────────────────────────────────────────────────────────────────────
+
+fn sum_pair[T: Arithmetic](x: T, y: T) -> T {
+	return x + y
+}
+
+print sum_pair(1, 2)              # 3      — int specialisation
+print sum_pair(1.5, 2.25)         # 3.75   — float specialisation
+print sum_pair(a, b).to_str()     # 13023  — BigInt specialisation
+
+# ─────────────────────────────────────────────────────────────────────
+# Example 3 — implementing the bundle on a user struct. `impl Counter
+# for Arithmetic` must supply all six methods; partial impls reject
+# at typeck. The compiler verifies each method's signature after
+# Self → receiver substitution.
+# ─────────────────────────────────────────────────────────────────────
+
+struct Counter { n: int }
+
+impl Counter for Arithmetic {
+	pub fn add(other: Counter) -> Counter {
+		return Counter { n: this.n + other.n }
+	}
+	pub fn sub(other: Counter) -> Counter {
+		return Counter { n: this.n - other.n }
+	}
+	pub fn mul(other: Counter) -> Counter {
+		return Counter { n: this.n * other.n }
+	}
+	pub fn div(other: Counter) -> Counter {
+		return Counter { n: this.n / other.n }
+	}
+	pub fn mod(other: Counter) -> Counter {
+		return Counter { n: this.n % other.n }
+	}
+	pub fn neg() -> Counter {
+		return Counter { n: -this.n }
+	}
+}
+
+impl Counter for Comparable {
+	pub fn eq(other: Counter) -> bool {
+		return this.n == other.n
+	}
+	pub fn lt(other: Counter) -> bool {
+		return this.n < other.n
+	}
+}
+
+c := Counter { n: 10 }
+d := Counter { n: 3 }
+print (c + d).n          # 13
+print (c * d).n          # 30
+print (-c).n             # -10
+print c < d              # false
+print c >= d             # true
+print c == Counter { n: 10 }    # true

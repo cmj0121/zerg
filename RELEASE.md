@@ -3,6 +3,78 @@
 One-screen summary per version of what shipped. Rationale and implementation detail live in the
 commit log; the EBNF grammar reference lives in [`docs/GRAMMAR`](docs/GRAMMAR).
 
+## v0.17 — arbitrary-precision arithmetic + operator-spec wiring
+
+- `std/math/big` module: `BigInt` (signed unbounded integers) and `BigDecimal` (signed
+  unbounded fixed-point decimals). Pure-Zerg; opaque internals (sign / digits / unscaled /
+  scale all private). Schoolbook O(n²) arithmetic; constructors `from_int(x)` / `from_str(s)`
+  and `decimal_from_int(x)` / `decimal_from_bigint(bi)` / `decimal_from_str(s)`.
+- Bundled operator specs replace the per-operator design:
+  - `Arithmetic { add sub mul div mod neg }` lights `+`, `-`, `*`, `/`, `%`, unary `-`.
+  - `Comparable { eq lt }` lights `==`, `!=`, `<`, `<=`, `>`, `>=` (the four derived
+    orderings desugar via swap and/or negation at typeck time).
+  - `From[T] { from(value: T) -> Self }` declared as a Rust-style conversion contract;
+    user impls require v0.18 (`impl X for Spec[T]` parser support + static-method dispatch).
+- Primitive types auto-satisfy the relevant bundles (Arithmetic covers int / float;
+  Comparable covers int / float / byte / rune / str). Generic-fn bounds
+  `fn sum[T: Arithmetic](xs: list[T]) -> T` compose uniformly across primitives and user
+  types (BigInt).
+- `std/math` reorganised as a directory module: `math/{mod.zg, utils.zg, spec.zg, big.zg}`.
+  `import "math"` still resolves (via `math/mod.zg`); the new `math/spec` ships a prose
+  contract for the bundled operator specs ahead of the v0.18 source-level declarations.
+- BigInt impls both Arithmetic and Comparable; BigDecimal impls Comparable only (the
+  bundled Arithmetic shape can't admit BigDecimal's three-arg `div(other, scale, mode)` —
+  users call `bd.add(other)` / `bd.mul(other)` / `bd.div_checked(other, scale, mode)` as
+  inherent methods until v0.18 splits Arithmetic into Numeric + DivMod sub-bundles).
+- Mixed-type operands reject with a focused diagnostic: `BigInt + int` fails at typeck —
+  convert one operand explicitly with `big.from_int(n)`.
+- `cliVersion` 0.17.0; `version.Minor` 17.
+
+## v0.16 — bare-identifier string interpolation
+
+- `"hello {name}, you are {age} years old"` — bare-identifier interpolation in string
+  literals. The interpolated identifier must resolve to one of the six primitive types
+  (int, float, bool, str, byte, rune) at typeck; composite types reject.
+- Lexer pivots to a structured-token sequence on encountering an unescaped `{`, emitting
+  `InterpStart / InterpLit / InterpVar* / InterpEnd` tokens that the parser assembles
+  into an `InterpolatedStringLit` AST node.
+- Escape mechanism extends to `\{` and `\}` for literal braces. Composes with the existing
+  `\n` / `\t` / `\"` / `\\` escapes.
+- Arbitrary expressions inside `{...}` are reserved — only a bare IDENT is admitted at
+  v0.16. Multi-line and raw strings remain reserved for v1.0+.
+- Five new runtime helpers (`zerg_int_to_str` / `_float_` / `_bool_` / `_byte_` / `_rune_to_str`)
+  wired through both `zerg run` and `zerg build` paths with byte-identical output.
+- `cliVersion` 0.16.0; `version.Minor` 16.
+
+## v0.15 — tuple parallel reassignment + docs retirement
+
+- `a, b = b, a + b` — bare-comma multi-LHS reassignment. RHS evaluated entirely before
+  any LHS slot is written, so each RHS expression reads the pre-assignment value of every
+  LHS name. Canonical Fibonacci step in one line.
+- LHS: bare identifiers only (≥ 2, distinct). Field access (`p.x, p.y = ...`) and
+  index-assign (`arr[i], arr[j] = ...`) deferred to v1.0+. Compound multi-assign
+  (`a, b += 1, 1`) deferred.
+- Every LHS name must be a pre-declared `mut` binding. `let` / `const` reject with focused
+  diagnostics.
+- RHS admits either a comma-list of expressions matching the LHS arity, or a single
+  expression that types as a tuple of matching arity (e.g. `q, r = divmod(10, 3)`).
+- `docs/LANGUAGE.md` and `docs/STDLIB.md` retired in this cycle — `docs/GRAMMAR` is now the
+  canonical language reference.
+- `cliVersion` 0.15.0; `version.Minor` 15.
+
+## v0.14 — pure-Zerg stdlib + sys/syscall + v0.14 nullable surface
+
+- Stdlib migrates off the `bootstrap_provided/` shims onto pure-Zerg implementations atop
+  `sys/syscall` intrinsics. `math.zg`, `strings.zg`, `io.zg`, `time.zg`, `os.zg` all
+  re-authored in pure-Zerg with no `__builtin` outside `sys/syscall/`.
+- New `sys/syscall` per-host module form: `mod_<goos>_<goarch>.zg` selected by the loader's
+  per-host probe (matches `sys/path.zg`'s flat single-file form).
+- `T?` nullable surface refined: bare `Ok` / `Err` sugar at typed contexts; β-pure
+  auto-unwrap at the call boundary; `Option` hidden as user-visible spelling.
+- `never` bottom type retired — its sole client (`os.exit`) now returns `void` and the
+  `__zerg_unreachable` marker carries the diverge property at codegen time.
+- `cliVersion` 0.14.0; `version.Minor` 14.
+
 ## v0.13 — platform-suffix file resolution + inline assembly (macOS arm64)
 
 - Inline assembly behind `asm { … }`. Restricted to macOS arm64 for v0.13; Linux + x86 defer.

@@ -1,0 +1,23 @@
+# requires: v0.17
+#
+# A type cannot declare both an inherent `fn add` AND `impl T for Add
+# { fn add }`. The collision diagnostic fires at method-visibility-
+# build time.
+
+struct Counter { n: int }
+
+impl Counter {
+    pub fn add(other: Counter) -> Counter {
+        return Counter { n: this.n + other.n }
+    }
+}
+
+impl Counter for Add {
+    pub fn add(other: Counter) -> Counter {
+        return Counter { n: this.n + other.n }
+    }
+}
+
+c := Counter { n: 1 }
+d := Counter { n: 2 }
+print (c + d).n

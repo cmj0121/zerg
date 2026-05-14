@@ -436,7 +436,11 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 			// receiver name so dispatch falls back to the name-keyed table
 			// when *Type lookup misses on a monomorphisation.
 			if len(id.TypeParams) > 0 {
-				if id.Spec == "" {
+				// v0.17: operator-spec impls fold into inherent
+				// alongside the canonical inherent path — typeck
+				// has lowered every surface op to a concrete
+				// method call.
+				if id.Spec == "" || syntax.IsOperatorSpecName(id.Spec) {
 					mm, ok := in.inherentByBaseName[id.Type]
 					if !ok {
 						mm = map[string]*syntax.FnDecl{}
@@ -469,7 +473,11 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 				// whole run.
 				continue
 			}
-			if id.Spec == "" {
+			if id.Spec == "" || syntax.IsOperatorSpecName(id.Spec) {
+				// v0.17: operator-spec impls fold into inherent —
+				// typeck has lowered every surface op to a
+				// concrete method call, so specByType is never
+				// consulted for these methods.
 				m, ok := in.inherentByType[recv]
 				if !ok {
 					m = map[string]*syntax.FnDecl{}
@@ -846,8 +854,14 @@ func scanExprForType(e syntax.Expr, name string) *syntax.Type {
 	case *syntax.ParenExpr:
 		return scanExprForType(ex.Inner, name)
 	case *syntax.UnaryExpr:
+		if ex.Lowered != nil {
+			return scanExprForType(ex.Lowered, name)
+		}
 		return scanExprForType(ex.Operand, name)
 	case *syntax.BinaryExpr:
+		if ex.Lowered != nil {
+			return scanExprForType(ex.Lowered, name)
+		}
 		if t := scanExprForType(ex.Left, name); t != nil {
 			return t
 		}
@@ -1750,6 +1764,10 @@ func (in *interp) evalInterpolatedStringLit(e *syntax.InterpolatedStringLit) (Va
 }
 
 func (in *interp) evalUnary(e *syntax.UnaryExpr) (Value, error) {
+	// v0.17 operator-spec desugar for `-x` on user types.
+	if e.Lowered != nil {
+		return in.evalMethodCall(e.Lowered)
+	}
 	v, err := in.evalExpr(e.Operand)
 	if err != nil {
 		return Value{}, err
@@ -1771,7 +1789,25 @@ func (in *interp) evalUnary(e *syntax.UnaryExpr) (Value, error) {
 
 // evalBinary handles short-circuit `and`/`or`; everything else delegates to
 // applyBin so the assignment path can share the implementation.
+//
+// v0.17 operator-spec desugar: when e.Lowered is set, typeck has
+// rewritten the BinaryExpr into a method-call shape. Evaluate the
+// call and compose the surface op (negate the bool result for `!=`;
+// compare the int cmp result against 0 for `< <= > >=`).
 func (in *interp) evalBinary(e *syntax.BinaryExpr) (Value, error) {
+	if e.Lowered != nil {
+		v, err := in.evalMethodCall(e.Lowered)
+		if err != nil {
+			return Value{}, err
+		}
+		if e.LoweredCmpOp != 0 {
+			return boolVal(applyCmpOpAgainstZero(v.Int, e.LoweredCmpOp)), nil
+		}
+		if e.LoweredNot {
+			return boolVal(!v.Bool), nil
+		}
+		return v, nil
+	}
 	switch e.Op {
 	case syntax.BinAnd:
 		// Short-circuit: skip the rhs when lhs is false.
@@ -2868,12 +2904,131 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 	if rv.Type == nil {
 		return Value{}, fmt.Errorf("internal: method call receiver has nil type at %s", e.Pos)
 	}
+	// v0.17 operator-spec desugar: primitive-typed receivers reach the
+	// method-call path only via a synthesised MethodCallExpr from
+	// tryOperatorSpecDesugar / tryUnaryOperatorSpecDesugar. Route to
+	// the primitive-arithmetic dispatcher rather than the fn-body path
+	// (synthetic impl methods carry no body).
+	if syntax.IsPrimitiveTypeForOperator(rv.Type) {
+		return in.dispatchPrimitiveOperatorBuiltin(e, rv)
+	}
 	// Spec-typed receiver — vtable dispatch.
 	if rv.Type.Kind == syntax.TypeSpec {
 		return in.dispatchSpec(e, rv)
 	}
 	// Concrete receiver — typeck has narrowed to struct or enum.
 	return in.dispatchConcrete(e, rv)
+}
+
+// dispatchPrimitiveOperatorBuiltin evaluates a synthesised primitive-
+// receiver operator-method call. Mirrors cgen's
+// emitPrimitiveOperatorBuiltin — the receiver value carries the
+// primitive *Type, and the method name picks the operator. Most
+// methods route through applyBin so primitive-arm semantics stay
+// canonical; `neg` / `eq` / `cmp` use the same helpers the regular
+// primitive arms call.
+func (in *interp) dispatchPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rv Value) (Value, error) {
+	var av Value
+	if len(e.Args) == 1 {
+		v, err := in.evalExpr(e.Args[0])
+		if err != nil {
+			return Value{}, err
+		}
+		av = v
+	}
+	if op, ok := primitiveOperatorBinOp(e.Method); ok {
+		return applyBin(op, rv, av)
+	}
+	switch e.Method {
+	case "neg":
+		if rv.Type == syntax.TInt() {
+			return intVal(-rv.Int), nil
+		}
+		return floatVal(-rv.Float), nil
+	case "eq":
+		eq, err := eqValues(rv, av)
+		if err != nil {
+			return Value{}, err
+		}
+		return boolVal(eq), nil
+	case "cmp":
+		c, err := comparePrimitiveValues(rv, av)
+		if err != nil {
+			return Value{}, err
+		}
+		return intVal(c), nil
+	}
+	return Value{}, fmt.Errorf("internal: unsupported primitive operator method %q on %s at %s", e.Method, rv.Type, e.Pos)
+}
+
+// primitiveOperatorBinOp maps an operator-spec method name to the
+// underlying BinaryOp for applyBin. Returns (op, true) for the five
+// arithmetic operators; (_, false) for non-arithmetic methods (which
+// the caller handles directly).
+func primitiveOperatorBinOp(method string) (syntax.BinaryOp, bool) {
+	switch method {
+	case "add":
+		return syntax.BinAdd, true
+	case "sub":
+		return syntax.BinSub, true
+	case "mul":
+		return syntax.BinMul, true
+	case "div":
+		return syntax.BinDiv, true
+	case "mod":
+		return syntax.BinMod, true
+	}
+	return 0, false
+}
+
+// comparePrimitiveValues returns -1 / 0 / +1 for two primitive
+// values of equal type. Mirrors the cgen cmp lowering and the
+// existing BinLT / BinGT arms in applyBin so the run / build paths
+// agree byte-for-byte on the wire ordering.
+func comparePrimitiveValues(a, b Value) (int64, error) {
+	switch a.Type {
+	case syntax.TInt(), syntax.TByte(), syntax.TRune():
+		switch {
+		case a.Int < b.Int:
+			return -1, nil
+		case a.Int > b.Int:
+			return 1, nil
+		}
+		return 0, nil
+	case syntax.TFloat():
+		switch {
+		case a.Float < b.Float:
+			return -1, nil
+		case a.Float > b.Float:
+			return 1, nil
+		}
+		return 0, nil
+	case syntax.TStr():
+		switch {
+		case a.Str < b.Str:
+			return -1, nil
+		case a.Str > b.Str:
+			return 1, nil
+		}
+		return 0, nil
+	}
+	return 0, fmt.Errorf("internal: cmp on unsupported primitive type %s", a.Type)
+}
+
+// applyCmpOpAgainstZero composes the cmp() result with the surface
+// comparison operator. Mirrors cgen's `((<cmp>) <op> 0)` lowering.
+func applyCmpOpAgainstZero(cmp int64, op syntax.BinaryOp) bool {
+	switch op {
+	case syntax.BinLT:
+		return cmp < 0
+	case syntax.BinLE:
+		return cmp <= 0
+	case syntax.BinGT:
+		return cmp > 0
+	case syntax.BinGE:
+		return cmp >= 0
+	}
+	return cmp == 0
 }
 
 // dispatchSpec routes a method call through a spec-typed fat pointer's

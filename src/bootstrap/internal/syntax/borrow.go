@@ -758,11 +758,21 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 		}
 		return nil
 	case *BinaryExpr:
+		// v0.17 operator-spec desugar: when Lowered is set, the call
+		// shape carries the borrow semantics. Walk the method call so
+		// the receiver / arg are treated as moves / borrows per the
+		// existing method-call rules.
+		if e.Lowered != nil {
+			return c.walkExpr(e.Lowered, false)
+		}
 		if err := c.walkExpr(e.Left, false); err != nil {
 			return err
 		}
 		return c.walkExpr(e.Right, false)
 	case *UnaryExpr:
+		if e.Lowered != nil {
+			return c.walkExpr(e.Lowered, false)
+		}
 		return c.walkExpr(e.Operand, false)
 	case *CallExpr:
 		return c.walkCall(e)

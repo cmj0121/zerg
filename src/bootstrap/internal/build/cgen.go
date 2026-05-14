@@ -723,10 +723,18 @@ func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map
 				walkE(x.Lowered)
 			}
 		case *syntax.UnaryExpr:
-			walkE(x.Operand)
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			} else {
+				walkE(x.Operand)
+			}
 		case *syntax.BinaryExpr:
-			walkE(x.Left)
-			walkE(x.Right)
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			} else {
+				walkE(x.Left)
+				walkE(x.Right)
+			}
 		case *syntax.ParenExpr:
 			walkE(x.Inner)
 		case *syntax.CallExpr:
@@ -1008,10 +1016,18 @@ func walkExprTypes(e syntax.Expr, visit func(*syntax.Type)) {
 	visit(e.Type())
 	switch x := e.(type) {
 	case *syntax.UnaryExpr:
-		walkExprTypes(x.Operand, visit)
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		} else {
+			walkExprTypes(x.Operand, visit)
+		}
 	case *syntax.BinaryExpr:
-		walkExprTypes(x.Left, visit)
-		walkExprTypes(x.Right, visit)
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		} else {
+			walkExprTypes(x.Left, visit)
+			walkExprTypes(x.Right, visit)
+		}
 	case *syntax.ParenExpr:
 		walkExprTypes(x.Inner, visit)
 	case *syntax.CallExpr:
@@ -2159,10 +2175,18 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 	}
 	switch x := e.(type) {
 	case *syntax.UnaryExpr:
-		g.collectExpr(x.Operand)
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		} else {
+			g.collectExpr(x.Operand)
+		}
 	case *syntax.BinaryExpr:
-		g.collectExpr(x.Left)
-		g.collectExpr(x.Right)
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		} else {
+			g.collectExpr(x.Left)
+			g.collectExpr(x.Right)
+		}
 	case *syntax.ParenExpr:
 		g.collectExpr(x.Inner)
 	case *syntax.CallExpr:
@@ -3775,6 +3799,11 @@ func (g *cgen) lookupCurrentFn(name string) *syntax.FnDecl {
 
 // unaryStr lowers -, ~, not.
 func (g *cgen) unaryStr(e *syntax.UnaryExpr) (string, error) {
+	// v0.17 operator-spec desugar: `-x` on a user type was rewritten to
+	// `x.neg()` at typeck time. Emit through the method-call path.
+	if e.Lowered != nil {
+		return g.methodCallStr(e.Lowered)
+	}
 	inner, err := g.exprStr(e.Operand)
 	if err != nil {
 		return "", err
@@ -3793,7 +3822,26 @@ func (g *cgen) unaryStr(e *syntax.UnaryExpr) (string, error) {
 // binaryStr lowers each binary operator. Identical to v0.1 with the addition
 // that byte/rune comparisons fall through to integer compares (already true
 // for `==` because TByte/TRune are tracked as primitives in typeck).
+//
+// v0.17 operator-spec desugar: when e.Lowered is set, the BinaryExpr was
+// rewritten at typeck time into a method-call shape (e.g. `a.add(b)`).
+// Emit through the method-call path and compose the surface op (e.g.
+// `!=` negates the bool result; `<` `<=` `>` `>=` compare the int cmp
+// result against 0).
 func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
+	if e.Lowered != nil {
+		inner, err := g.methodCallStr(e.Lowered)
+		if err != nil {
+			return "", err
+		}
+		if e.LoweredCmpOp != 0 {
+			return fmt.Sprintf("((%s) %s 0)", inner, e.LoweredCmpOp), nil
+		}
+		if e.LoweredNot {
+			return fmt.Sprintf("(!(%s))", inner), nil
+		}
+		return inner, nil
+	}
 	left, err := g.exprStr(e.Left)
 	if err != nil {
 		return "", err
@@ -3889,6 +3937,59 @@ func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
 
 func infix(left, op, right string) string {
 	return "(" + left + " " + op + " " + right + ")"
+}
+
+// emitPrimitiveOperatorBuiltin renders a synthesised primitive-receiver
+// method call (`(int)x.add(y)` / `(str)s.cmp(t)` / etc.) to the
+// equivalent primitive expression. The call shape is constructed at
+// typeck time by tryOperatorSpecDesugar — see typeck_v17_operators.go.
+//
+// For `cmp` we emit an inline three-way comparison. For `eq` and `cmp`
+// on str the existing zerg_str helpers carry the right semantics.
+func (g *cgen) emitPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rt *syntax.Type) (string, error) {
+	rs, err := g.exprStr(e.Receiver)
+	if err != nil {
+		return "", err
+	}
+	var as string
+	if len(e.Args) == 1 {
+		as, err = g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+	}
+	switch e.Method {
+	case "add":
+		if rt == syntax.TStr() {
+			return fmt.Sprintf("zerg_str_concat(%s, %s)", rs, as), nil
+		}
+		return infix(rs, "+", as), nil
+	case "sub":
+		return infix(rs, "-", as), nil
+	case "mul":
+		return infix(rs, "*", as), nil
+	case "div":
+		return infix(rs, "/", as), nil
+	case "mod":
+		if rt == syntax.TFloat() {
+			return fmt.Sprintf("fmod((%s), (%s))", rs, as), nil
+		}
+		return infix(rs, "%", as), nil
+	case "neg":
+		return fmt.Sprintf("(-(%s))", rs), nil
+	case "eq":
+		if rt == syntax.TStr() {
+			return fmt.Sprintf("zerg_str_eq(%s, %s)", rs, as), nil
+		}
+		return infix(rs, "==", as), nil
+	case "cmp":
+		if rt == syntax.TStr() {
+			return fmt.Sprintf("zerg_str_cmp(%s, %s)", rs, as), nil
+		}
+		// Inline three-way comparison: returns -1 / 0 / 1.
+		return fmt.Sprintf("(((%s) > (%s)) ? 1 : ((%s) < (%s)) ? -1 : 0)", rs, as, rs, as), nil
+	}
+	return "", fmt.Errorf("codegen: unsupported primitive operator method %q on %s at %s", e.Method, rt, e.Pos)
 }
 
 // ---------------------------------------------------------------------------
@@ -4333,6 +4434,16 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 					g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
 				}
 				g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
+			} else if syntax.IsOperatorSpecName(s.Spec) {
+				// v0.17 operator-spec impl. Treat the methods as
+				// inherent — typeck has already lowered every
+				// surface-op call to a method-call on the concrete
+				// receiver, so cgen never needs a vtable for an
+				// operator spec.
+				if _, ok := g.inherent[implKeyName]; !ok {
+					g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
+				}
+				g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
 			} else {
 				key := implKey{typeName: implKeyName, specName: s.Spec}
 				if _, ok := g.specImpls[key]; !ok {
@@ -4369,7 +4480,10 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 		}
 		implKeyName := g.implKeyForType(receiverT)
 		g.receiverTypes[implKeyName] = receiverT
-		if s.Spec == "" {
+		if s.Spec == "" || syntax.IsOperatorSpecName(s.Spec) {
+			// v0.17: operator-spec impls fold into inherent — no
+			// vtable needed (typeck has already lowered every use
+			// site to a concrete method call).
 			if _, ok := g.inherent[implKeyName]; !ok {
 				g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
 			}
@@ -4975,6 +5089,14 @@ func (g *cgen) methodCallStr(e *syntax.MethodCallExpr) (string, error) {
 	rt := e.Receiver.Type()
 	if rt == nil {
 		return "", fmt.Errorf("codegen: method-call receiver has nil type at %s", e.Pos)
+	}
+	// v0.17 operator-spec desugar: primitive-typed receivers reach the
+	// method-call path only via a synthesised MethodCallExpr from
+	// tryOperatorSpecDesugar / tryUnaryOperatorSpecDesugar. Route those
+	// to the primitive-arithmetic emitter rather than attempting a fn-
+	// body lookup (synthetic impl methods carry no body).
+	if syntax.IsPrimitiveTypeForOperator(rt) {
+		return g.emitPrimitiveOperatorBuiltin(e, rt)
 	}
 	// v0.7 wait_group: receiver is the synthetic WaitGroup struct (handle is
 	// a pointer to zerg_wait_group_t). Dispatch the three methods directly.

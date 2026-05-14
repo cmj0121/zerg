@@ -806,23 +806,43 @@ func (*IdentExpr) exprNode()           {}
 func (e *IdentExpr) ExprPos() Position { return e.Pos }
 
 // BinaryExpr is any infix operator application.
+//
+// v0.17 operator-spec wiring: Lowered is set by typeck when the operator
+// lowers to a user-type method call (`a + b` → `a.add(b)` when BigInt
+// implements Add, etc.). cgen / run / borrow walkers read this field and
+// route through the method call instead of the surface op. fmt's pretty-
+// printer keeps walking Left/Right so it can render the surface form.
+//
+// LoweredNot is set to true when the surface op is `!=` — the lowered call
+// is `a.eq(b)` and the emitter negates the bool result.
+//
+// LoweredCmpOp is set for `<` `<=` `>` `>=` — the lowered call is
+// `a.cmp(b)`; cgen / run apply the cmp-against-0 comparison using this op.
 type BinaryExpr struct {
 	typed
-	Pos   Position
-	Op    BinaryOp
-	Left  Expr
-	Right Expr
+	Pos          Position
+	Op           BinaryOp
+	Left         Expr
+	Right        Expr
+	Lowered      *MethodCallExpr // v0.17 operator-spec desugar
+	LoweredNot   bool            // v0.17: true when surface op was `!=`
+	LoweredCmpOp BinaryOp        // v0.17: BinLT/BinLE/BinGT/BinGE for cmp-against-0
 }
 
 func (*BinaryExpr) exprNode()           {}
 func (e *BinaryExpr) ExprPos() Position { return e.Pos }
 
 // UnaryExpr is a prefix operator application: -, not, ~.
+//
+// v0.17 operator-spec wiring: Lowered is set by typeck when `-x` lowers to
+// `x.neg()` (user-type Neg impl). cgen / run / borrow walkers route through
+// the method call when Lowered is non-nil.
 type UnaryExpr struct {
 	typed
 	Pos     Position
 	Op      UnaryOp
 	Operand Expr
+	Lowered *MethodCallExpr // v0.17 operator-spec desugar for `-x`
 }
 
 func (*UnaryExpr) exprNode()           {}

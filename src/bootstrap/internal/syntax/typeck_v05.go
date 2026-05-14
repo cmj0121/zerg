@@ -293,6 +293,13 @@ func newChecker() *checker {
 	// reservedBuiltinTypeNames / collectTopLevel rejects user redecls of
 	// the same names with the uniform diagnostic.
 	injectWaitGroupBuiltin(c)
+	// v0.17 operator-spec wiring: register Add / Sub / Mul / Div / Mod
+	// / Neg / Eq / Ord, then wire synthetic primitive impls so generic
+	// fn bounds (`fn sum[T: Add[T]](xs)`) compose uniformly across
+	// primitives and user types. See typeck_v17_operators.go for the
+	// shape decisions.
+	injectOperatorSpecs(c)
+	injectPrimitiveOperatorImpls(c)
 	return c
 }
 
@@ -507,6 +514,13 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 					id.Type, id.Spec, prev.Pos)
 			}
 		}
+		// Stamp the resolved canonical receiver *Type onto the AST node
+		// before validateImplAgainstSpec so synthetic-operator-spec
+		// validation (which reads id.Receiver to substitute T) sees
+		// the receiver. Downstream consumers (interp's RunBundle,
+		// build's EmitBundle) also read id.Receiver to key impl
+		// tables by canonical pointer.
+		id.Receiver = recvType
 		methods, methodIdx, err := c.buildImplMethods(id)
 		if err != nil {
 			return err
@@ -516,12 +530,6 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 				return err
 			}
 		}
-		// Stamp the resolved canonical receiver *Type onto the AST node.
-		// Downstream consumers (interp's RunBundle, build's EmitBundle)
-		// read id.Receiver to key impl tables by canonical pointer, so
-		// two modules' same-named types disambiguate without a bundle-
-		// wide name scan.
-		id.Receiver = recvType
 		impl := &Impl{
 			Pos:       id.Pos,
 			TypeName:  id.Type,
@@ -706,7 +714,16 @@ func (c *checker) buildImplMethods(id *ImplDecl) ([]*implMethod, map[string]*imp
 
 // validateImplAgainstSpec is the spec/impl signature comparison split out
 // of resolveImpls. Same logic — kept here so the v0.5 path can use it.
+//
+// v0.17: synthetic operator specs (Add / Sub / Mul / Div / Mod / Neg /
+// Eq / Ord) have no source-level types — their methods reference an
+// implicit receiver type T. The shape check delegates to
+// validateOperatorSpecImpl, which knows the per-spec expected shape
+// after T-substitution.
 func (c *checker) validateImplAgainstSpec(id *ImplDecl, methods []*implMethod, spec *Spec) error {
+	if spec.Synthetic {
+		return c.validateOperatorSpecImpl(id, methods, spec)
+	}
 	for _, im := range methods {
 		sm, ok := spec.methodIdx[im.name]
 		if !ok {

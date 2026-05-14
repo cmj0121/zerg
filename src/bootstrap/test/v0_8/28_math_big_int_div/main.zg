@@ -1,0 +1,50 @@
+# requires: v0.14
+import "math/big"
+
+fn show_div(a: int, b: int) {
+    x := big.from_int(a)
+    y := big.from_int(b)
+    match x.div(y) {
+        Result.Ok(q) => print q.to_str()
+        Result.Err(DivError.DivByZero) => print "DivByZero"
+    }
+}
+
+fn show_mod(a: int, b: int) {
+    x := big.from_int(a)
+    y := big.from_int(b)
+    match x.mod(y) {
+        Result.Ok(r) => print r.to_str()
+        Result.Err(DivError.DivByZero) => print "DivByZero"
+    }
+}
+
+# Positive / positive — quotient and remainder positive.
+show_div(7, 3)
+show_mod(7, 3)
+show_div(100, 7)
+show_mod(100, 7)
+
+# Negative dividend — truncation toward zero (sign of quotient
+# follows dividend × divisor product). (-7)/3 truncates to -2;
+# (-7) mod 3 == -1 (sign-of-dividend).
+show_div(-7, 3)
+show_mod(-7, 3)
+
+# Negative divisor — symmetrical.
+show_div(7, -3)
+show_mod(7, -3)
+
+# Both negative — quotient positive, remainder negative.
+show_div(-7, -3)
+show_mod(-7, -3)
+
+# Divide by zero on each operation.
+show_div(7, 0)
+show_mod(7, 0)
+show_div(0, 0)
+show_mod(0, 0)
+
+# Zero / non-zero — quotient zero, remainder zero.
+show_div(0, 5)
+show_mod(0, 5)

@@ -350,24 +350,27 @@ func TestLoadMissingSibling(t *testing.T) {
 	}
 }
 
-// Path with slash: rejected with the v0.5-flat-only diagnostic. The
-// parser admits any string-literal as the import path; the loader is the
-// gatekeeper for path syntax.
-func TestLoadSlashPathRejected(t *testing.T) {
+// Path with slash: v0.17 admits one segment of stdlib nesting
+// (`"math/big"`) as a strict superset of the v0.5 flat-only rule.
+// A single-slash path now routes through the std/* fall-through;
+// unknown nested paths surface as the standard not-found wording.
+// Deeper nesting (two or more slashes) still rejects with the
+// invalid-path diagnostic — loader_v0_17_test.go pins that branch.
+func TestLoadSlashPathRoutesToStdlibFallthrough(t *testing.T) {
 	dir := t.TempDir()
 	entry := writeFile(t, dir, "main.zg",
 		"import \"a/b\"\nprint 1\n")
 
 	_, err := Load(entry)
 	if err == nil {
-		t.Fatalf("expected flat-only rejection, got nil")
+		t.Fatalf("expected not-found error, got nil")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "v0.5 supports flat sibling imports only") {
-		t.Errorf("error does not mention the v0.5 flat-only rule: %s", msg)
+	if !strings.Contains(msg, "stdlib module not found") {
+		t.Errorf("error does not surface stdlib-fall-through wording: %s", msg)
 	}
-	if !strings.Contains(msg, `"a/b"`) {
-		t.Errorf("error does not name the offending path: %s", msg)
+	if !strings.Contains(msg, "std/a/b") {
+		t.Errorf("error does not name the synthesised stdlib path: %s", msg)
 	}
 }
 

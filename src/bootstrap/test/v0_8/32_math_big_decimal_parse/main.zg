@@ -1,0 +1,51 @@
+# requires: v0.14
+import "math/big"
+
+fn show_parse(s: str) {
+    match big.decimal_from_str(s) {
+        Result.Ok(d) => print d.to_str()
+        Result.Err(ParseError.Empty) => print "Empty"
+        Result.Err(ParseError.InvalidDigit) => print "InvalidDigit"
+        Result.Err(ParseError.Overflow) => print "Overflow"
+    }
+}
+
+# Ok cases — integer form.
+show_parse("0")
+show_parse("1")
+show_parse("-1")
+show_parse("+1")
+show_parse("42")
+show_parse("-42")
+show_parse("12345678901234567890")
+
+# Ok cases — fractional form.
+show_parse("1.5")
+show_parse("0.5")
+show_parse("0.001")
+show_parse("-0.001")
+show_parse("1.000")
+show_parse("3.14159")
+
+# Ok cases — leading-dot form (".5" → 0.5).
+show_parse(".5")
+show_parse("-.5")
+show_parse(".001")
+
+# Whitespace stripping.
+show_parse("  1.5  ")
+
+# Err cases.
+show_parse("")
+show_parse("   ")
+show_parse("+")
+show_parse("-")
+show_parse(".")
+show_parse("-.")
+show_parse("1.")
+show_parse("-1.")
+show_parse("1.2.3")
+show_parse("1e10")
+show_parse("1.5e2")
+show_parse("abc")
+show_parse("1 2")

@@ -32,6 +32,7 @@ func Catalog() []CatalogEntry {
 	return []CatalogEntry{
 		{Path: "io", Description: "File reading and writing with typed IoError variants."},
 		{Path: "math", Description: "Integer math primitives: abs, min, max, gcd."},
+		{Path: "math/big", Description: "Arbitrary-precision BigInt and BigDecimal arithmetic."},
 		{Path: "os", Description: "Process surface: environment, argv, exit."},
 		{Path: "strings", Description: "String search, transform, and parse helpers."},
 		{Path: "time", Description: "Wall-clock time (now_ms) and sleep_ms."},

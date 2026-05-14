@@ -1,0 +1,40 @@
+# requires: v0.14
+import "math/big"
+
+fn show_div(x: str, y: str, scale: int) {
+    match big.decimal_from_str(x) {
+        Result.Ok(a) => match big.decimal_from_str(y) {
+            Result.Ok(b) => match a.div(b, scale) {
+                Result.Ok(q) => print q.to_str()
+                Result.Err(DivError.DivByZero) => print "DivByZero"
+            }
+            Result.Err(_) => print "parse err"
+        }
+        Result.Err(_) => print "parse err"
+    }
+}
+
+# Truncation at each scale value.
+show_div("1", "3", 0)
+show_div("1", "3", 1)
+show_div("1", "3", 5)
+show_div("1", "3", 10)
+
+# Exact rationals — no truncation needed.
+show_div("1", "2", 2)
+show_div("3", "4", 4)
+
+# Negative dividend / divisor.
+show_div("-1", "3", 5)
+show_div("1", "-3", 5)
+show_div("-1", "-3", 5)
+
+# Operands carry their own scales (the shift accounts for them).
+show_div("1.5", "0.5", 0)
+show_div("10", "0.3", 4)
+show_div("0.1", "0.3", 5)
+
+# Divide-by-zero at every scale-shape variant.
+show_div("5", "0", 3)
+show_div("0", "0", 0)
+show_div("0.5", "0.0", 2)

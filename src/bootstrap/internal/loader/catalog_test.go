@@ -11,19 +11,30 @@ import (
 // time we tweak a description.
 
 // TestCatalogNonEmpty sanity-checks that Catalog returns at least the
-// modules shipped today. The lower bound (7) matches the current set;
-// raising it when we add a module is intentional churn.
+// modules shipped today. The lower bound (8) matches the v0.17 set
+// (v0.5–v0.14's 7 modules plus math/big). Raising it when we add a
+// module is intentional churn.
 func TestCatalogNonEmpty(t *testing.T) {
 	got := Catalog()
-	if len(got) < 7 {
-		t.Fatalf("Catalog returned %d entries, want at least 7", len(got))
+	if len(got) < 8 {
+		t.Fatalf("Catalog returned %d entries, want at least 8", len(got))
 	}
 }
 
 // TestCatalogEntriesValid pins the per-entry contract: non-empty Path,
-// non-empty Description, and a path that matches one of the two
-// display conventions — bare name (implicit std/*) or `sys/<name>`
-// (explicit sys/* prefix). Anything else is a malformed entry.
+// non-empty Description, and a path that matches one of the supported
+// display conventions:
+//
+//   - bare name              (implicit std/*; e.g. "io", "math")
+//   - bare name with one
+//     nesting segment        (implicit std/* nested; e.g. "math/big")
+//   - sys/<name>             (explicit sys/* prefix; platform-specific)
+//
+// v0.17 widens the rule from "no `/` outside sys/*" to "one `/`
+// segment under any family is OK". Deeper nesting and a stray `std/`
+// prefix on nested entries reject — both deeper paths and the std/-
+// prefixed shape are unreachable from the loader's stdlib resolver,
+// so they cannot be valid catalog entries.
 func TestCatalogEntriesValid(t *testing.T) {
 	for i, e := range Catalog() {
 		if e.Path == "" {
@@ -32,14 +43,18 @@ func TestCatalogEntriesValid(t *testing.T) {
 		if e.Description == "" {
 			t.Errorf("entry %d (%s): empty Description", i, e.Path)
 		}
-		// std/* entries are displayed bare (no prefix); only sys/* keeps
-		// its prefix. A path starting with "std/" would mean the entry
-		// was authored before the bare-import default landed.
+		// std/* entries are displayed bare (no prefix); the path is
+		// either a flat identifier or one nested segment (e.g.
+		// "math/big"). A leading `std/` indicates the entry was
+		// authored before the bare-import default landed.
 		if strings.HasPrefix(e.Path, "std/") {
 			t.Errorf("entry %d (%s): std/* entries are displayed bare; drop the std/ prefix", i, e.Path)
 		}
-		if strings.Contains(e.Path, "/") && !strings.HasPrefix(e.Path, "sys/") {
-			t.Errorf("entry %d (%s): only sys/* keeps an explicit prefix", i, e.Path)
+		// v0.17 admits one nested segment under any family (e.g.
+		// "math/big"); deeper paths are unreachable from the loader's
+		// stdlib resolver and so cannot be valid entries.
+		if strings.Count(e.Path, "/") > 1 {
+			t.Errorf("entry %d (%s): stdlib nesting limited to one segment", i, e.Path)
 		}
 	}
 }

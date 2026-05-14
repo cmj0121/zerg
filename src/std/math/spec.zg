@@ -1,0 +1,78 @@
+# requires: v0.17
+#
+# math/spec — operator-spec contracts.
+#
+# This file is the user-facing documentation for the three built-in
+# operator specs the typeck injects at bootstrap: **Arithmetic**,
+# **Comparable**, and **From**. The canonical shape lives in the
+# typeck (see `src/bootstrap/internal/syntax/typeck_v17_operators.go`);
+# the comments below are the contract a user-defined impl must honour.
+#
+# Why a separate file: writing the specs in source today would need
+# a `Self` keyword that resolves to the implementer's type (Rust-
+# style). That keyword lands in v0.18 alongside `Spec[T]` parser
+# support for impl-decl heads and static-method dispatch (`X::from`).
+# Until then the specs are typeck-injected and this file documents
+# them.
+#
+# Importing `math/spec` is currently a no-op for code generation —
+# its purpose is documentation and forward compatibility (when the
+# specs migrate from injection to source-file declarations at v0.18,
+# the import will pull the canonical `spec` blocks).
+#
+# ─────────────────────────────────────────────────────────────────
+#
+# spec Arithmetic {
+#     fn add(other: Self) -> Self    # surface op `+`
+#     fn sub(other: Self) -> Self    # surface op `-`  (binary)
+#     fn mul(other: Self) -> Self    # surface op `*`
+#     fn div(other: Self) -> Self    # surface op `/`
+#     fn mod(other: Self) -> Self    # surface op `%`
+#     fn neg() -> Self               # surface op `-`  (unary)
+# }
+#
+# Primitive coverage: int, float (auto-satisfied; no impl needed).
+# User impl example (see `math/big`):
+#
+#     impl BigInt for Arithmetic {
+#         pub fn add(other: BigInt) -> BigInt { ... }
+#         pub fn sub(other: BigInt) -> BigInt { ... }
+#         ...
+#     }
+#
+# Generic bound: `fn sum[T: Arithmetic](xs: list[T]) -> T`.
+#
+# ─────────────────────────────────────────────────────────────────
+#
+# spec Comparable {
+#     fn eq(other: Self) -> bool     # surface op `==`  (irreducible)
+#     fn lt(other: Self) -> bool     # surface op `<`   (irreducible)
+# }
+#
+# `!=`, `<=`, `>`, `>=` desugar through eq/lt at typeck time:
+#
+#     a != b   ↔   !a.eq(b)
+#     a >  b   ↔   b.lt(a)
+#     a <= b   ↔   !b.lt(a)
+#     a >= b   ↔   !a.lt(b)
+#
+# Primitive coverage: int, float, byte, rune, str. (Bool is excluded;
+# the primitive `==/!=` arm handles bool directly, but `<` on bool is
+# undefined.) User impls supply both eq and lt; the four derived ops
+# come for free.
+#
+# ─────────────────────────────────────────────────────────────────
+#
+# spec From[T] {
+#     fn from(value: T) -> Self      # Rust-style conversion contract
+# }
+#
+# Declared but NOT user-implementable at v0.17: the parser does not
+# yet accept `impl X for Spec[T]` (spec type-args in impl-decl head),
+# and there is no static-method dispatch syntax (`BigInt::from(5)`).
+# Both arrive in v0.18 together.
+#
+# For now, libraries that want a `from`-style constructor expose a
+# free fn — e.g. `math/big.from_int(n)` instead of
+# `BigInt::from(n)`. When v0.18 lands the inherent fns will gain a
+# matching `impl BigInt for From[int]` so both spellings resolve.

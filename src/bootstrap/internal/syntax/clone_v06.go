@@ -235,7 +235,6 @@ func cloneExpr(e Expr) Expr {
 		// generic-fn specialisation is re-checked. Reset here.
 		out.Lowered = nil
 		out.LoweredNot = false
-		out.LoweredCmpOp = 0
 		return &out
 	case *UnaryExpr:
 		out := *n

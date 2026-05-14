@@ -1,8 +1,8 @@
 # requires: v0.17
 #
 # v0.17 operator-spec coverage on BigInt. Every binary and unary
-# operator on BigInt lowers through the impl Add / Sub / Mul / Div /
-# Mod / Neg / Eq / Ord blocks in math/big.zg.
+# operator on BigInt lowers through `impl BigInt for Arithmetic` and
+# `impl BigInt for Comparable` in math/big.zg.
 
 import "math/big"
 

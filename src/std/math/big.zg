@@ -473,11 +473,9 @@ impl BigInt {
         # Remainder of `this / other`. Sign follows the dividend (Zerg's
         # primitive `int` convention; matches truncation-toward-zero for
         # the quotient). Err(DivByZero) on zero divisor. v0.17: the
-        # operator form `a % b` lives in `impl BigInt for Mod` and
-        # panics on divisor=0; call `mod_checked` for the Result form.
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
+        # operator form `a % b` lives in `impl BigInt for Arithmetic`
+        # and panics on divisor=0; call `mod_checked` for the Result
+        # form.
         if other.sign == 0 {
             return Err(DivError.DivByZero)
         }
@@ -488,20 +486,42 @@ impl BigInt {
         dm := mag_divmod(this.digits, other.digits)
         return Ok(make_bigint(this.sign, dm.r))
     }
+
+    pub fn cmp(other: BigInt) -> int {
+        # Three-way comparison: -1 if this < other, 0 if equal, +1 if
+        # this > other. Sign first; same-sign falls through to magnitude
+        # compare. The `Comparable` impl below derives eq / lt from
+        # this method; ordering operators (`<`, `<=`, `>`, `>=`) light
+        # up via Comparable.lt at typeck time.
+        return -1 if this.sign < other.sign
+        return 1 if this.sign > other.sign
+        # Same sign. Zero matches zero exactly (both have empty
+        # digit lists by canonical invariant C1).
+        if this.sign == 0 {
+            return 0
+        }
+        m := mag_cmp(this.digits, other.digits)
+        # Negative numbers: larger magnitude is the smaller number.
+        if this.sign < 0 {
+            return -m
+        }
+        return m
+    }
 }
 
 # v0.17 operator-spec impls. `a + b` / `a - b` / `a * b` / `a / b` /
-# `a % b` / `-a` / `a == b` / `a != b` / `a < b` / `<=` / `>` / `>=`
-# all desugar through these blocks. BigInt's `Div` / `Mod` panic on
+# `a % b` / `-a` desugar through `Arithmetic`; `==` `!=` `<` `<=` `>`
+# `>=` desugar through `Comparable` (eq + lt, with the four derived
+# orderings synthesised at typeck time). Div and Mod panic on
 # divisor=0 — call `div_checked` / `mod_checked` for the Result form.
 
-impl BigInt for Add {
+impl BigInt for Arithmetic {
     pub fn add(other: BigInt) -> BigInt {
-        # Sum of this and other. Lit up by `a + b` at v0.17.
+        # Sum of this and other. Lit up by `a + b` at v0.17. Zero
+        # short-circuits avoid an unnecessary mag_add allocation.
         #
         # # Note: print bi shows the struct fields; use bi.to_str() for the
         # # human-readable form.
-        # Zero short-circuits avoid an unnecessary mag_add allocation.
         if this.sign == 0 {
             return BigInt { sign: other.sign, digits: clone_digits(other.digits) }
         }
@@ -523,25 +543,15 @@ impl BigInt for Add {
         }
         return make_bigint(other.sign, mag_sub(other.digits, this.digits))
     }
-}
 
-impl BigInt for Sub {
     pub fn sub(other: BigInt) -> BigInt {
         # Difference (`this - other`). Implemented as `this + (-other)`
         # so the sign-handling logic stays in `add`.
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
         return this + (-other)
     }
-}
 
-impl BigInt for Mul {
     pub fn mul(other: BigInt) -> BigInt {
         # Product. Schoolbook O(|a|·|b|).
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
         if this.sign == 0 or other.sign == 0 {
             empty: list[int] = []
             return BigInt { sign: 0, digits: empty }
@@ -549,16 +559,11 @@ impl BigInt for Mul {
         s := this.sign * other.sign
         return make_bigint(s, mag_mul(this.digits, other.digits))
     }
-}
 
-impl BigInt for Div {
     pub fn div(other: BigInt) -> BigInt {
         # Quotient of `this / other`, truncated toward zero. Panics on
         # divisor=0 — matching primitive `int / 0` semantics. Use
         # `div_checked` for the Result-returning variant.
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
         if other.sign == 0 {
             panic("BigInt: integer divide by zero")
         }
@@ -570,15 +575,10 @@ impl BigInt for Div {
         s := this.sign * other.sign
         return make_bigint(s, dm.q)
     }
-}
 
-impl BigInt for Mod {
     pub fn mod(other: BigInt) -> BigInt {
         # Remainder of `this / other`. Sign follows the dividend.
         # Panics on divisor=0 — use `mod_checked` for the Result form.
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
         if other.sign == 0 {
             panic("BigInt: integer modulo by zero")
         }
@@ -589,43 +589,23 @@ impl BigInt for Mod {
         dm := mag_divmod(this.digits, other.digits)
         return make_bigint(this.sign, dm.r)
     }
-}
 
-impl BigInt for Neg {
     pub fn neg() -> BigInt {
         # Sign flip. Zero stays zero (canonical invariant).
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
         return BigInt { sign: -this.sign, digits: clone_digits(this.digits) }
     }
 }
 
-impl BigInt for Eq {
+impl BigInt for Comparable {
     pub fn eq(other: BigInt) -> bool {
         # Numeric equality. Equivalent to `cmp == 0`.
         return this.cmp(other) == 0
     }
-}
 
-impl BigInt for Ord {
-    pub fn cmp(other: BigInt) -> int {
-        # Three-way comparison: -1 if this < other, 0 if equal, +1 if
-        # this > other. Sign first; same-sign falls through to magnitude
-        # compare. Lit up `<`, `<=`, `>`, `>=` at v0.17.
-        return -1 if this.sign < other.sign
-        return 1 if this.sign > other.sign
-        # Same sign. Zero matches zero exactly (both have empty
-        # digit lists by canonical invariant C1).
-        if this.sign == 0 {
-            return 0
-        }
-        m := mag_cmp(this.digits, other.digits)
-        # Negative numbers: larger magnitude is the smaller number.
-        if this.sign < 0 {
-            return -m
-        }
-        return m
+    pub fn lt(other: BigInt) -> bool {
+        # Strict less-than. The bundled `>`, `<=`, `>=` derive at typeck
+        # time via operand swap and/or result negation.
+        return this.cmp(other) < 0
     }
 }
 
@@ -880,76 +860,67 @@ impl BigDecimal {
     }
 }
 
-# v0.17 operator-spec impls for BigDecimal. `+ - * == != < <= > >=`
-# and unary `-` are wired through these blocks. `/` and `%` are NOT
-# implemented — BigDecimal's `div(other, scale)` is three-arg and
-# cannot satisfy `fn div(other: T) -> T`. Users call `bd.div(other,
-# scale)` explicitly.
+# v0.17 operator-spec impl for BigDecimal. Comparable is wired so
+# `==`, `!=`, `<`, `<=`, `>`, `>=` light up.
+#
+# Arithmetic is intentionally NOT implemented: the bundle requires all
+# six methods (add/sub/mul/div/mod/neg) and BigDecimal's `div` /
+# `mod` need an explicit scale + rounding mode, so they can't satisfy
+# the `fn div(T) -> T` shape. Users call inherent methods —
+# `bd.add(other)`, `bd.sub(other)`, `bd.mul(other)`, `bd.neg()`,
+# `bd.div_checked(other, scale, mode)` — directly until the v0.18
+# split into Arithmetic-without-DivMod and DivMod sub-bundles lands.
 
-impl BigDecimal for Add {
+impl BigDecimal {
+    # Sum with scale alignment: result scale = max(this.scale,
+    # other.scale). The smaller-scale operand is multiplied by
+    # 10^delta before delegating to BigInt addition.
     pub fn add(other: BigDecimal) -> BigDecimal {
-        # Sum with scale alignment: result scale = max(this.scale,
-        # other.scale). The smaller-scale operand is multiplied by
-        # 10^delta before delegating to BigInt addition.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
         s := max_scale(this.scale, other.scale)
         a := rescale_unscaled(this.unscaled, this.scale, s)
         b := rescale_unscaled(other.unscaled, other.scale, s)
         return BigDecimal { unscaled: a + b, scale: s }
     }
-}
 
-impl BigDecimal for Sub {
+    # Difference. Implemented via add + neg so the sign / scale
+    # alignment logic lives in one place.
     pub fn sub(other: BigDecimal) -> BigDecimal {
-        # Difference. Implemented via add + neg so the sign / scale
-        # alignment logic lives in one place.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
-        return this + (-other)
+        return this.add(other.neg())
     }
-}
 
-impl BigDecimal for Mul {
+    # Product: unscaled magnitudes multiply, scales add. No truncation
+    # — the result carries the full precision implied by both operands.
     pub fn mul(other: BigDecimal) -> BigDecimal {
-        # Product: unscaled magnitudes multiply, scales add. No
-        # truncation — the result carries the full precision implied by
-        # both operands.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
         return BigDecimal { unscaled: this.unscaled * other.unscaled, scale: this.scale + other.scale }
     }
-}
 
-impl BigDecimal for Neg {
+    # Sign flip; scale preserved.
     pub fn neg() -> BigDecimal {
-        # Sign flip; scale preserved.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
         return BigDecimal { unscaled: -this.unscaled, scale: this.scale }
     }
-}
 
-impl BigDecimal for Eq {
-    pub fn eq(other: BigDecimal) -> bool {
-        # Numeric equality. `1.0 == 1.00` returns true (scale-agnostic).
-        return this.cmp(other) == 0
-    }
-}
-
-impl BigDecimal for Ord {
+    # Three-way comparison with scale alignment. Both operands are
+    # rescaled to max(this.scale, other.scale); the underlying
+    # BigInt.cmp does the rest. The `Comparable` impl below derives
+    # eq / lt from this method.
     pub fn cmp(other: BigDecimal) -> int {
-        # Three-way comparison with scale alignment. Both operands are
-        # rescaled to max(this.scale, other.scale); the underlying
-        # BigInt.cmp does the rest.
         s := max_scale(this.scale, other.scale)
         a := rescale_unscaled(this.unscaled, this.scale, s)
         b := rescale_unscaled(other.unscaled, other.scale, s)
         return a.cmp(b)
+    }
+}
+
+impl BigDecimal for Comparable {
+    pub fn eq(other: BigDecimal) -> bool {
+        # Numeric equality. `1.0 == 1.00` returns true (scale-agnostic).
+        return this.cmp(other) == 0
+    }
+
+    pub fn lt(other: BigDecimal) -> bool {
+        # Strict less-than with scale alignment. `>`, `<=`, `>=` derive
+        # at typeck time.
+        return this.cmp(other) < 0
     }
 }
 

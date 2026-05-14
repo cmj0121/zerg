@@ -1,7 +1,7 @@
 # requires: v0.17
 #
-# v0.17 — Eq-driven `==` / `!=` on primitives and BigInt. != lowers
-# to a negated eq() call on user types.
+# v0.17 — Comparable-driven `==` / `!=` on primitives and BigInt.
+# `!=` lowers to a negated eq() call on user types.
 
 import "math/big"
 

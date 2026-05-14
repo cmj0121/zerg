@@ -364,28 +364,28 @@ type fnSig struct {
 // specMethod is one method declared in a spec body. Body == nil signals
 // signature-only; non-nil is a default body the impl may inherit.
 //
-// v0.17: Synthetic flags the built-in operator specs (Add / Sub / Mul / Div
-// / Mod / Neg / Eq / Ord) injected at newChecker time. Synthetic methods
-// have ast == nil and rely on impl-time substitution to fill the receiver-
-// dependent param/ret slots — see injectOperatorSpecs.
+// v0.17: Synthetic flags the built-in operator specs (Arithmetic /
+// Comparable / From) injected at newChecker time. Synthetic methods
+// have ast == nil and rely on impl-time substitution to fill the
+// receiver-dependent param/ret slots — see injectOperatorSpecs.
 type specMethod struct {
 	pos       Position
 	name      string
-	params    []*Type   // resolved param types (excluding implicit `this`)
-	ret       *Type     // void if no declared return
+	params    []*Type // resolved param types (excluding implicit `this`)
+	ret       *Type   // void if no declared return
 	ast       *SpecMethod
-	Synthetic bool      // v0.17 — built-in operator spec method
+	Synthetic bool // v0.17 — built-in operator spec method
 }
 
 // Spec is the per-program record for a spec declaration. Methods preserves
 // declaration order for vtable layout determinism; methodIdx is the lookup-by-
 // name index that drives method dispatch on a spec-typed receiver.
 //
-// v0.17: Synthetic flags the built-in operator specs (Add / Sub / Mul /
-// Div / Mod / Neg / Eq / Ord) injected at newChecker time. Synthetic
-// specs cannot be spelled at the type level (they have no canonical
-// *Type) — they are only usable as `impl T for <Spec>` declarations
-// and as generic-fn bound names (`fn sum[T: Add[T]](xs: list[T])`).
+// v0.17: Synthetic flags the built-in operator specs (Arithmetic /
+// Comparable / From) injected at newChecker time. Synthetic specs are
+// usable as `impl T for <Spec>` declarations and as generic-fn bound
+// names (`fn sum[T: Arithmetic](xs: list[T])`); they carry a canonical
+// TypeSpec so resolveTypeRef can return their type when referenced.
 type Spec struct {
 	Pos       Position
 	Name      string
@@ -3459,10 +3459,10 @@ func exprDisplay(e Expr) string {
 // v0.17 operator-spec wiring: when the operand types are user-defined
 // (struct or enum) AND they match, the spec-impl lookup fires before
 // the primitive arms. On hit, the BinaryExpr is rewritten in place
-// (Lowered / LoweredNot / LoweredCmpOp set) and the primitive arms
-// are skipped. The primitive fast path is byte-identical to pre-v0.17
-// behaviour because it only runs when the user-type lookup misses or
-// the operands aren't user-defined.
+// (Lowered / LoweredNot set) and the primitive arms are skipped. The
+// primitive fast path is byte-identical to pre-v0.17 behaviour because
+// it only runs when the user-type lookup misses or the operands aren't
+// user-defined.
 func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 	lt, err := c.checkExpr(e.Left)
 	if err != nil {

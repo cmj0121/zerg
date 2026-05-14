@@ -3824,18 +3824,14 @@ func (g *cgen) unaryStr(e *syntax.UnaryExpr) (string, error) {
 // for `==` because TByte/TRune are tracked as primitives in typeck).
 //
 // v0.17 operator-spec desugar: when e.Lowered is set, the BinaryExpr was
-// rewritten at typeck time into a method-call shape (e.g. `a.add(b)`).
-// Emit through the method-call path and compose the surface op (e.g.
-// `!=` negates the bool result; `<` `<=` `>` `>=` compare the int cmp
-// result against 0).
+// rewritten at typeck time into a method-call shape (e.g. `a.add(b)` or
+// `a.lt(b)` with `>` swapping receiver/arg). LoweredNot=true wraps the
+// bool result in `!(...)` for the surface ops `!=`, `>=`, `<=`.
 func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
 	if e.Lowered != nil {
 		inner, err := g.methodCallStr(e.Lowered)
 		if err != nil {
 			return "", err
-		}
-		if e.LoweredCmpOp != 0 {
-			return fmt.Sprintf("((%s) %s 0)", inner, e.LoweredCmpOp), nil
 		}
 		if e.LoweredNot {
 			return fmt.Sprintf("(!(%s))", inner), nil
@@ -3940,12 +3936,12 @@ func infix(left, op, right string) string {
 }
 
 // emitPrimitiveOperatorBuiltin renders a synthesised primitive-receiver
-// method call (`(int)x.add(y)` / `(str)s.cmp(t)` / etc.) to the
+// method call (`(int)x.add(y)` / `(str)s.lt(t)` / etc.) to the
 // equivalent primitive expression. The call shape is constructed at
 // typeck time by tryOperatorSpecDesugar — see typeck_v17_operators.go.
 //
-// For `cmp` we emit an inline three-way comparison. For `eq` and `cmp`
-// on str the existing zerg_str helpers carry the right semantics.
+// For Comparable.lt on str the existing zerg_str_cmp(...)<0 idiom
+// carries the right semantics. eq on str routes through zerg_str_eq.
 func (g *cgen) emitPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rt *syntax.Type) (string, error) {
 	rs, err := g.exprStr(e.Receiver)
 	if err != nil {
@@ -3982,12 +3978,11 @@ func (g *cgen) emitPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rt *syntax
 			return fmt.Sprintf("zerg_str_eq(%s, %s)", rs, as), nil
 		}
 		return infix(rs, "==", as), nil
-	case "cmp":
+	case "lt":
 		if rt == syntax.TStr() {
-			return fmt.Sprintf("zerg_str_cmp(%s, %s)", rs, as), nil
+			return fmt.Sprintf("(zerg_str_cmp(%s, %s) < 0)", rs, as), nil
 		}
-		// Inline three-way comparison: returns -1 / 0 / 1.
-		return fmt.Sprintf("(((%s) > (%s)) ? 1 : ((%s) < (%s)) ? -1 : 0)", rs, as, rs, as), nil
+		return infix(rs, "<", as), nil
 	}
 	return "", fmt.Errorf("codegen: unsupported primitive operator method %q on %s at %s", e.Method, rt, e.Pos)
 }

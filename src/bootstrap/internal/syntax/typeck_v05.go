@@ -293,11 +293,11 @@ func newChecker() *checker {
 	// reservedBuiltinTypeNames / collectTopLevel rejects user redecls of
 	// the same names with the uniform diagnostic.
 	injectWaitGroupBuiltin(c)
-	// v0.17 operator-spec wiring: register Add / Sub / Mul / Div / Mod
-	// / Neg / Eq / Ord, then wire synthetic primitive impls so generic
-	// fn bounds (`fn sum[T: Add[T]](xs)`) compose uniformly across
-	// primitives and user types. See typeck_v17_operators.go for the
-	// shape decisions.
+	// v0.17 operator-spec wiring: register the bundled Arithmetic /
+	// Comparable / From specs, then wire synthetic primitive impls so
+	// generic fn bounds (`fn sum[T: Arithmetic](xs)`) compose uniformly
+	// across primitives and user types. See typeck_v17_operators.go
+	// for the bundle shape and per-spec coverage.
 	injectOperatorSpecs(c)
 	injectPrimitiveOperatorImpls(c)
 	return c
@@ -715,11 +715,11 @@ func (c *checker) buildImplMethods(id *ImplDecl) ([]*implMethod, map[string]*imp
 // validateImplAgainstSpec is the spec/impl signature comparison split out
 // of resolveImpls. Same logic — kept here so the v0.5 path can use it.
 //
-// v0.17: synthetic operator specs (Add / Sub / Mul / Div / Mod / Neg /
-// Eq / Ord) have no source-level types — their methods reference an
-// implicit receiver type T. The shape check delegates to
-// validateOperatorSpecImpl, which knows the per-spec expected shape
-// after T-substitution.
+// v0.17: synthetic operator specs (Arithmetic / Comparable / From) have
+// no source-level types — their methods reference an implicit receiver
+// type Self. The shape check delegates to validateOperatorSpecImpl,
+// which knows the bundle's expected method set after Self → receiver
+// substitution.
 func (c *checker) validateImplAgainstSpec(id *ImplDecl, methods []*implMethod, spec *Spec) error {
 	if spec.Synthetic {
 		return c.validateOperatorSpecImpl(id, methods, spec)

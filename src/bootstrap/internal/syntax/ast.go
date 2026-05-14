@@ -809,24 +809,27 @@ func (e *IdentExpr) ExprPos() Position { return e.Pos }
 //
 // v0.17 operator-spec wiring: Lowered is set by typeck when the operator
 // lowers to a user-type method call (`a + b` → `a.add(b)` when BigInt
-// implements Add, etc.). cgen / run / borrow walkers read this field and
-// route through the method call instead of the surface op. fmt's pretty-
-// printer keeps walking Left/Right so it can render the surface form.
+// implements Arithmetic, etc.). cgen / run / borrow walkers read this
+// field and route through the method call instead of the surface op.
+// fmt's pretty-printer keeps walking Left/Right so it can render the
+// surface form.
 //
-// LoweredNot is set to true when the surface op is `!=` — the lowered call
-// is `a.eq(b)` and the emitter negates the bool result.
+// LoweredNot is set to true when the surface op needs the bool result
+// negated:
+//   - `!=` via `eq` (negate)
+//   - `>=` via `lt` (negate)
+//   - `<=` via swapped `lt` (swap encoded in Lowered, then negate)
 //
-// LoweredCmpOp is set for `<` `<=` `>` `>=` — the lowered call is
-// `a.cmp(b)`; cgen / run apply the cmp-against-0 comparison using this op.
+// Operand swap for `>` and `<=` is encoded directly in Lowered's
+// receiver / args; the emitter sees a normal method call shape.
 type BinaryExpr struct {
 	typed
-	Pos          Position
-	Op           BinaryOp
-	Left         Expr
-	Right        Expr
-	Lowered      *MethodCallExpr // v0.17 operator-spec desugar
-	LoweredNot   bool            // v0.17: true when surface op was `!=`
-	LoweredCmpOp BinaryOp        // v0.17: BinLT/BinLE/BinGT/BinGE for cmp-against-0
+	Pos        Position
+	Op         BinaryOp
+	Left       Expr
+	Right      Expr
+	Lowered    *MethodCallExpr // v0.17 operator-spec desugar
+	LoweredNot bool            // v0.17: true → emit `!(lowered)`
 }
 
 func (*BinaryExpr) exprNode()           {}

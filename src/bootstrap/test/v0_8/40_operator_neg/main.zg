@@ -1,7 +1,7 @@
 # requires: v0.17
 #
 # v0.17 — unary `-` on primitives (int / float) and on user types
-# (BigInt) via the Neg impl.
+# (BigInt) via the Arithmetic.neg method.
 
 import "math/big"
 

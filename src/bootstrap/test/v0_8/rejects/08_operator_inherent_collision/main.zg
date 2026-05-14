@@ -1,8 +1,8 @@
 # requires: v0.17
 #
-# A type cannot declare both an inherent `fn add` AND `impl T for Add
-# { fn add }`. The collision diagnostic fires at method-visibility-
-# build time.
+# A type cannot declare both an inherent `fn add` AND `impl T for
+# Arithmetic { fn add ... }`. The collision diagnostic fires at
+# method-visibility-build time.
 
 struct Counter { n: int }
 
@@ -12,9 +12,24 @@ impl Counter {
     }
 }
 
-impl Counter for Add {
+impl Counter for Arithmetic {
     pub fn add(other: Counter) -> Counter {
         return Counter { n: this.n + other.n }
+    }
+    pub fn sub(other: Counter) -> Counter {
+        return Counter { n: this.n - other.n }
+    }
+    pub fn mul(other: Counter) -> Counter {
+        return Counter { n: this.n * other.n }
+    }
+    pub fn div(other: Counter) -> Counter {
+        return Counter { n: this.n / other.n }
+    }
+    pub fn mod(other: Counter) -> Counter {
+        return Counter { n: this.n % other.n }
+    }
+    pub fn neg() -> Counter {
+        return Counter { n: -this.n }
     }
 }
 

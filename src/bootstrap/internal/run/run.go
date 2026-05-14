@@ -1792,16 +1792,12 @@ func (in *interp) evalUnary(e *syntax.UnaryExpr) (Value, error) {
 //
 // v0.17 operator-spec desugar: when e.Lowered is set, typeck has
 // rewritten the BinaryExpr into a method-call shape. Evaluate the
-// call and compose the surface op (negate the bool result for `!=`;
-// compare the int cmp result against 0 for `< <= > >=`).
+// call and optionally negate the bool result for `!=`, `>=`, `<=`.
 func (in *interp) evalBinary(e *syntax.BinaryExpr) (Value, error) {
 	if e.Lowered != nil {
 		v, err := in.evalMethodCall(e.Lowered)
 		if err != nil {
 			return Value{}, err
-		}
-		if e.LoweredCmpOp != 0 {
-			return boolVal(applyCmpOpAgainstZero(v.Int, e.LoweredCmpOp)), nil
 		}
 		if e.LoweredNot {
 			return boolVal(!v.Bool), nil
@@ -2925,7 +2921,7 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 // emitPrimitiveOperatorBuiltin — the receiver value carries the
 // primitive *Type, and the method name picks the operator. Most
 // methods route through applyBin so primitive-arm semantics stay
-// canonical; `neg` / `eq` / `cmp` use the same helpers the regular
+// canonical; `neg` / `eq` / `lt` use the same helpers the regular
 // primitive arms call.
 func (in *interp) dispatchPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rv Value) (Value, error) {
 	var av Value
@@ -2951,12 +2947,12 @@ func (in *interp) dispatchPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rv 
 			return Value{}, err
 		}
 		return boolVal(eq), nil
-	case "cmp":
+	case "lt":
 		c, err := comparePrimitiveValues(rv, av)
 		if err != nil {
 			return Value{}, err
 		}
-		return intVal(c), nil
+		return boolVal(c < 0), nil
 	}
 	return Value{}, fmt.Errorf("internal: unsupported primitive operator method %q on %s at %s", e.Method, rv.Type, e.Pos)
 }
@@ -3013,22 +3009,6 @@ func comparePrimitiveValues(a, b Value) (int64, error) {
 		return 0, nil
 	}
 	return 0, fmt.Errorf("internal: cmp on unsupported primitive type %s", a.Type)
-}
-
-// applyCmpOpAgainstZero composes the cmp() result with the surface
-// comparison operator. Mirrors cgen's `((<cmp>) <op> 0)` lowering.
-func applyCmpOpAgainstZero(cmp int64, op syntax.BinaryOp) bool {
-	switch op {
-	case syntax.BinLT:
-		return cmp < 0
-	case syntax.BinLE:
-		return cmp <= 0
-	case syntax.BinGT:
-		return cmp > 0
-	case syntax.BinGE:
-		return cmp >= 0
-	}
-	return cmp == 0
 }
 
 // dispatchSpec routes a method call through a spec-typed fat pointer's

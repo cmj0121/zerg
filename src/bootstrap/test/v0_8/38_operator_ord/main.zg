@@ -1,8 +1,9 @@
 # requires: v0.17
 #
-# v0.17 — Ord-driven `<`, `<=`, `>`, `>=` on primitives and BigInt.
-# Each comparison lowers through cmp() on user types; primitives keep
-# the primitive fast path.
+# v0.17 — Comparable-driven `<`, `<=`, `>`, `>=` on primitives and
+# BigInt. `<` calls Comparable.lt directly; `>`, `<=`, `>=` derive via
+# swap and/or negation at typeck time. Primitives keep the primitive
+# fast path.
 
 import "math/big"
 

@@ -59,8 +59,8 @@ describe((0, 5))
 describe((7, 0))
 
 # `&mut T` reference parameters (mutating the caller's binding through the parameter list) are NOT shipped
-# at v0.11 — they appear in the v1.0+ reserved list in docs/LANGUAGE.md. Pure value-in / value-out is the
-# only shape today; the caller rebinds the result if mutation was the goal:
+# at v0.11 — they are reserved for v1.0+. Pure value-in / value-out is the only shape today; the caller
+# rebinds the result if mutation was the goal:
 fn increment(x: int) -> int {
 	return x + 1
 }

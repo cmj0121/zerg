@@ -32,9 +32,9 @@ const (
 	// asm extensions for `int` input and `mut`-binding write-back outputs)
 	// remain available unchanged at the lower gate.
 	//
-	// The user-facing `cliVersion` and the RELEASE.md / LANGUAGE.md entry
-	// stay behind until the v0.15 release unit lands — Minor is the gate's
-	// source of truth.
+	// The user-facing `cliVersion` and the RELEASE.md entry stay behind
+	// until the v0.15 release unit lands — Minor is the gate's source of
+	// truth.
 	Minor = 15
 )
 

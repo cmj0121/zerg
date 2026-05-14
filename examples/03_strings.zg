@@ -10,9 +10,8 @@ greeting := "Hello, " + name + "!"   # string concatenation with `+` is admitted
 print greeting
 
 # String interpolation (`"hi {name}"`), raw strings (`r"..."`), and triple-quoted strings (`"""..."""`) are
-# NOT shipped at v0.11 — they appear in the v1.0+ reserved list in docs/LANGUAGE.md. Until they ship, build
-# multi-piece strings by concatenation and embed control characters with the standard escapes (`\n`, `\t`,
-# `\"`, `\\`).
+# NOT shipped at v0.11 — reserved for v1.0+. Until they ship, build multi-piece strings by concatenation
+# and embed control characters with the standard escapes (`\n`, `\t`, `\"`, `\\`).
 banner := "line one\n" + "line two\n" + "line three"
 print banner
 

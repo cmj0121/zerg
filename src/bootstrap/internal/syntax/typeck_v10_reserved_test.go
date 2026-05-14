@@ -7,9 +7,9 @@ import (
 
 // v0.10 — reservation rule covers the primitive scalar names
 // (int / float / bool / str / byte / rune) and the composite-constructor
-// names (list / tuple) per docs/LANGUAGE.md §"Reserved type names".
-// User struct / enum / spec declarations of any of those names reject at
-// typeck with the standard `name %q is reserved (built-in)` diagnostic.
+// names (list / tuple). User struct / enum / spec declarations of any of
+// those names reject at typeck with the standard
+// `name %q is reserved (built-in)` diagnostic.
 
 func TestV10ReservedTypeNames(t *testing.T) {
 	names := []string{"int", "float", "bool", "str", "byte", "rune", "list", "tuple"}

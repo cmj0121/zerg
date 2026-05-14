@@ -137,7 +137,5 @@ All the features are based on my needs and my dreams.
 ## Further reading
 
 - [`RELEASE.md`](RELEASE.md) — per-version release summaries (one screen per version).
-- [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — formal language reference (grammar EBNF, type system,
-  evaluation order, ownership, defer / concurrency / `?` propagation, reserved words).
-- [`docs/STDLIB.md`](docs/STDLIB.md) — per-module fn reference for `io`, `strings`, `math`,
-  `os`, `time`, and `sys/path`, with signatures, error variants, and runnable examples.
+- [`docs/GRAMMAR`](docs/GRAMMAR) — EBNF grammar reference for the surface syntax.
+- [`examples/`](examples/) — runnable `.zg` tutorial files indexed by language feature.

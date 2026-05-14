@@ -989,9 +989,9 @@ func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (
 	if len(names) < 2 {
 		return nil, errorAt(openTok.Pos, "destructure pattern requires at least 2 names (use the single-name form for one)")
 	}
-	// `:=` only — annotated destructure remains deferred on the v1.0+
-	// reserved list (see LANGUAGE.md §Reserved for v1.0+). The rule is
-	// permanent under the current surface, so the diagnostic is unstamped.
+	// `:=` only — annotated destructure remains deferred to the v1.0+
+	// reserved surface. The rule is permanent under the current surface,
+	// so the diagnostic is unstamped.
 	if k := p.peek().Kind; k == KindColon {
 		bad := p.peek()
 		return nil, errorAt(bad.Pos, "type annotations on destructure declarations are not supported")
@@ -2107,8 +2107,8 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 			}, nil
 		case *IndexExpr:
 			if op != AssignSet {
-				// Permanent under the current surface — see LANGUAGE.md
-				// §Reserved for v1.0+ "Compound assignment to list elements".
+				// Compound assignment to list elements is deferred to v1.0+
+				// — permanent under the current surface.
 				return nil, errorAt(opTok.Pos, "compound assignment '%s' to a list element is not supported — use `xs[i] = ...` instead", op)
 			}
 			// We admit only single-level indexing (`xs[i] = v`). Chained

@@ -27,8 +27,7 @@ type CatalogEntry struct {
 // each call so callers may sort or filter without mutating shared state.
 //
 // New stdlib modules add an entry here. The catalog is the single source
-// of truth for `zerg stdlib`; LANGUAGE.md / STDLIB.md document the same
-// set in more detail.
+// of truth for `zerg stdlib`.
 func Catalog() []CatalogEntry {
 	return []CatalogEntry{
 		{Path: "io", Description: "File reading and writing with typed IoError variants."},

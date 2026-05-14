@@ -12,8 +12,7 @@
 #   3. `import "sys/<name>"` — platform-specific stdlib (e.g. `sys/path`). The `sys/` prefix is *always*
 #                              required — bare names never fall through to `sys/*`.
 #
-# External / git-backed imports (`import "github.com/owner/repo"`) are NOT shipped — they appear in the
-# v1.0+ reserved list in docs/LANGUAGE.md.
+# External / git-backed imports (`import "github.com/owner/repo"`) are NOT shipped — reserved for v1.0+.
 #
 # A grouped form is admitted when more than one module is needed:
 #

@@ -1614,8 +1614,7 @@ type AsmChunk struct {
 //     interpreter cannot execute machine code. The exact diagnostic lives
 //     in run.go alongside the rejection.
 //   - Pin 8 contract: x29 (fp) is user-preserve, NOT clobbered by cgen.
-//     There is no parser-level enforcement; the contract ships in
-//     docs/LANGUAGE.md as a hard rule.
+//     There is no parser-level enforcement; the contract is a hard rule.
 type AsmBlock struct {
 	// Pos is the position of the `asm` keyword.
 	Pos Position

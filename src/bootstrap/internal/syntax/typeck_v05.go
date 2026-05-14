@@ -167,9 +167,13 @@ func CheckBundle(bundle BundleView) error {
 	//
 	// Iterates to fixpoint so transitive re-exports (M pub-imports N
 	// which pub-imports O) compose correctly regardless of module
-	// iteration order. Loop is bounded by the count of pub-import
-	// entries; the fixpoint converges in O(depth) iterations.
-	for {
+	// iteration order. The cap is len(mods)+1 — at each pass at least
+	// one host must gain a new entry to keep the loop going, so the
+	// import DAG's depth bounds the iteration count. The cap is
+	// defensive: a real cycle would have been rejected by the
+	// loader's import-cycle detector before this point.
+	maxIters := len(mods) + 1
+	for iter := 0; iter <= maxIters; iter++ {
 		changed := false
 		for _, m := range mods {
 			c := checkers[m]
@@ -183,6 +187,9 @@ func CheckBundle(bundle BundleView) error {
 		}
 		if !changed {
 			break
+		}
+		if iter == maxIters {
+			return typeErr(Position{}, "internal: pub-import propagation did not converge in %d iterations", maxIters)
 		}
 	}
 

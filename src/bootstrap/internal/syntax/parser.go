@@ -627,17 +627,14 @@ func (p *parser) parsePubDecl() (Stmt, error) {
 		return sp, nil
 	case KindImport:
 		// v0.18: `pub import` re-exports the imported module's pub
-		// surface flat under the host's namespace.
+		// surface flat under the host's namespace. parseImport returns
+		// the first ImportDecl and stashes any grouped-form siblings on
+		// p.pendingImports; mark every entry pub so the whole group
+		// participates in the re-export.
 		stmt, err := p.parseImport()
 		if err != nil {
 			return nil, err
 		}
-		if id, ok := stmt.(*ImportDecl); ok {
-			id.Pub = true
-			return id, nil
-		}
-		// Grouped form (`pub import (...)`) — parseImport queued
-		// extra entries on p.pendingImports; mark each one pub too.
 		if id, ok := stmt.(*ImportDecl); ok {
 			id.Pub = true
 		}

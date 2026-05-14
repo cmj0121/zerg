@@ -5173,15 +5173,7 @@ func (g *cgen) lookupModuleFnWalk(mangle, fnName string, seen map[string]bool) *
 		}
 		localName := imp.Alias
 		if localName == "" {
-			// Path basename — last `/`-separated segment.
-			p := imp.Path
-			localName = p
-			for i := len(p) - 1; i >= 0; i-- {
-				if p[i] == '/' {
-					localName = p[i+1:]
-					break
-				}
-			}
+			localName = syntax.ImportPathBasename(imp.Path)
 		}
 		if targetMangle, ok := me.imports[localName]; ok {
 			if fn := g.lookupModuleFnWalk(targetMangle, fnName, seen); fn != nil {

@@ -3040,7 +3040,7 @@ func (in *interp) lookupModuleFnWalk(md *moduleData, name string, seen map[*modu
 		}
 		local := imp.Alias
 		if local == "" {
-			local = importPathBasename(imp.Path)
+			local = syntax.ImportPathBasename(imp.Path)
 		}
 		if target := md.imports[local]; target != nil {
 			if fn := in.lookupModuleFnWalk(target, name, seen); fn != nil {
@@ -3049,18 +3049,6 @@ func (in *interp) lookupModuleFnWalk(md *moduleData, name string, seen map[*modu
 		}
 	}
 	return nil
-}
-
-// importPathBasename returns the last `/`-separated segment of an
-// import path, matching the loader's ImportLocalName when no `as`
-// alias is given.
-func importPathBasename(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			return path[i+1:]
-		}
-	}
-	return path
 }
 
 func (in *interp) dispatchSpec(e *syntax.MethodCallExpr, rv Value) (Value, error) {

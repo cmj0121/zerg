@@ -24,21 +24,24 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 19 with v0.19 — self-rehydrating multi-assign
-	// for composite types. The borrow checker now treats an RHS
-	// tuple-literal element that is a bare ident naming one of the
-	// multi-assign's own targets as a read, not a move. The LHS write
-	// rebinds the slot immediately after the temp tuple is built, so
-	// the binding's state matches before and after the statement —
-	// even inside a loop body. This unblocks the canonical Fibonacci
-	// step `a, b = b, a + b` over struct types (math.BigInt and
-	// friends), not just primitive ints.
+	// Minor advances to 20 with v0.20 — `print` auto-dispatch through
+	// a struct's `to_str() -> str` method. When the value passed to
+	// `print` is a struct whose method table exposes a zero-arg
+	// `to_str` returning str (inherent or via a spec impl), typeck
+	// rewrites `print value` to `print value.to_str()` so the
+	// user-friendly text comes out instead of the raw struct repr.
+	// Structs without `to_str` keep the existing default formatting,
+	// and the rewrite is shallow — nested structs inside lists /
+	// tuples still walk formatValue per element.
 	//
+	// Inherited from v0.19 cycle: self-rehydrating multi-assign for
+	// composite types — `a, b = b, a + b` admits for struct types
+	// like math.BigInt, not just primitive ints.
 	// Inherited from v0.18 cycle: `pub import` flat re-export.
 	// Inherited from v0.17 cycle: operator-spec wiring (Arithmetic /
 	// Comparable / From), math/big arbitrary-precision arithmetic,
 	// and the math directory-module reorganization.
-	Minor = 19
+	Minor = 20
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

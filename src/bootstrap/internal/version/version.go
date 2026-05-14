@@ -24,18 +24,21 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 16 with v0.16 — the toolchain accepts sources
-	// declaring `# requires: v0.16`, which adds bare-identifier string
-	// interpolation (`"answer = {n}"` lowers to a chain of zerg_str_concat
-	// calls with per-type to-str helpers; primitives only — int, float, bool,
-	// str, byte, rune). Composite-typed bindings reject at typeck. The
-	// v0.15 surface additions (tuple parallel reassignment) remain available
-	// unchanged at the lower gate.
+	// Minor advances to 17 with v0.17 — the toolchain accepts sources
+	// declaring `# requires: v0.17`, which adds the operator-spec
+	// wiring: built-in `Add` / `Sub` / `Mul` / `Div` / `Mod` / `Neg` /
+	// `Eq` / `Ord` specs are injected at checker bootstrap, primitive
+	// types satisfy them via synthetic impls, and user struct/enum
+	// types light up `a + b` / `a == b` / `a < b` / `-x` by writing
+	// `impl T for Add { fn add(...) }` etc. The math/big BigInt /
+	// BigDecimal stdlib types migrate their inherent methods into
+	// these impl blocks; BigDecimal omits `Div`/`Mod` (the three-arg
+	// `bd.div(other, scale)` stays inherent).
 	//
 	// The user-facing `cliVersion` and the RELEASE.md entry stay behind
-	// until the v0.16 release unit lands — Minor is the gate's source of
+	// until the v0.17 release unit lands — Minor is the gate's source of
 	// truth.
-	Minor = 16
+	Minor = 17
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

@@ -422,15 +422,9 @@ type Impl struct {
 	Receiver   *Type  // resolved receiver type (struct or enum)
 	Methods    []*implMethod // declaration order
 	methodIdx  map[string]*implMethod
-	ast        *ImplDecl
-	recvOwner  ModuleView // v0.5: defining module of TypeName, nil for single-program
-	specOwner  ModuleView // v0.5: defining module of SpecName, nil for inherent or single-program
-	// v0.17 — operator-spec wiring. IsPrimitiveBuiltin is set on the
-	// synthetic impl records injected by injectPrimitiveOperatorImpls.
-	// cgen / run check the flag at dispatch time to route the call to
-	// the primitive-arithmetic emit path instead of attempting a fn-body
-	// lookup (there is none — the implMethods carry ast == nil).
-	IsPrimitiveBuiltin bool
+	ast       *ImplDecl
+	recvOwner ModuleView // v0.5: defining module of TypeName, nil for single-program
+	specOwner ModuleView // v0.5: defining module of SpecName, nil for inherent or single-program
 }
 
 // methodSource is one place a method name is visible on a type — either an

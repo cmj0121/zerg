@@ -14,15 +14,14 @@ package syntax
 // `impl X for Spec[T]` parser support and static-method call syntax).
 //
 // After spec injection, per-primitive synthetic *Impl records are wired
-// into c.impls and c.implsByType. They carry IsPrimitiveBuiltin = true
-// and ast == nil method entries; cgen/run check the flag at dispatch
-// time and route to the existing primitive-arithmetic emit/eval paths
-// instead of attempting a fn-body call.
-//
-// The synthetic *Impl records make `fn sum[T: Arithmetic](xs: list[T])
-// -> T` compose uniformly across int and user types: assignableTo's
-// concrete→spec widening path finds either the user-declared impl or a
-// synthetic primitive impl in c.impls.
+// into c.impls so generic-fn bounds (`fn sum[T: Arithmetic](xs)`)
+// compose uniformly across primitives and user types — assignableTo's
+// concrete→spec widening path finds either the user-declared impl or
+// a synthetic primitive impl. cgen / run short-circuit on
+// IsPrimitiveTypeForOperator(receiver) at the MethodCallExpr dispatch
+// site and route to the primitive emit/eval path; the synthetic
+// impls carry no method body (their methodIdx entries are present
+// only so the params/ret arity check passes at typeck).
 
 // operatorMethodSpec is one method on a bundled operator spec. arity is
 // 0 (Neg) or 1 (everything else). returnSelf signals the method returns
@@ -107,16 +106,6 @@ var operatorSpecByName = func() map[string]*bundledOperatorSpec {
 	return m
 }()
 
-// methodSpecByName looks up the per-method shape inside a bundled spec.
-func (b *bundledOperatorSpec) methodSpecByName(method string) *operatorMethodSpec {
-	for i := range b.methods {
-		if b.methods[i].name == method {
-			return &b.methods[i]
-		}
-	}
-	return nil
-}
-
 // injectOperatorSpecs registers the three bundled operator specs in
 // c.specs. The substituted method shapes (parameters typed to the
 // receiver, return type per the spec) are recomputed per-impl at
@@ -144,10 +133,11 @@ func injectOperatorSpecs(c *checker) {
 // injectPrimitiveOperatorImpls wires synthetic primitive impls into
 // c.impls and c.implsByType for every (primitive, bundle) pair where
 // the primitive auto-satisfies all methods of the bundle. Called from
-// newChecker after injectOperatorSpecs. Each impl has
-// IsPrimitiveBuiltin = true; cgen/run see the flag and bypass fn-body
-// lookup, routing to the primitive emit/eval path keyed off method
-// name.
+// newChecker after injectOperatorSpecs. cgen/run short-circuit on
+// IsPrimitiveTypeForOperator(receiver) before reaching fn-body
+// lookup, so these synthetic impls carry no method ast — their role
+// is satisfying assignableTo's spec-widening path for generic-fn
+// bounds like `fn sum[T: Arithmetic](xs: list[T])`.
 func injectPrimitiveOperatorImpls(c *checker) {
 	for i := range operatorSpecCatalog {
 		op := &operatorSpecCatalog[i]
@@ -182,12 +172,11 @@ func (c *checker) installPrimitiveOperatorImpl(recv *Type, op *bundledOperatorSp
 		idx[m.name] = im
 	}
 	impl := &Impl{
-		TypeName:           typeName,
-		SpecName:           op.name,
-		Receiver:           recv,
-		Methods:            methods,
-		methodIdx:          idx,
-		IsPrimitiveBuiltin: true,
+		TypeName:  typeName,
+		SpecName:  op.name,
+		Receiver:  recv,
+		Methods:   methods,
+		methodIdx: idx,
 	}
 	c.impls[key] = impl
 	c.implsByType[typeName] = append(c.implsByType[typeName], impl)
@@ -356,8 +345,7 @@ func (c *checker) lookupImplCrossMod(typeName, specName string) *Impl {
 type binDesugarKind int
 
 const (
-	binDesugarNone binDesugarKind = iota
-	binDesugarPlain
+	binDesugarPlain binDesugarKind = iota
 	binDesugarNot
 )
 
@@ -449,16 +437,13 @@ func (c *checker) tryOperatorSpecDesugar(e *BinaryExpr, t *Type) (bool, *Type, e
 		return false, nil, err
 	}
 	e.Lowered = mc
-	switch disp.kind {
-	case binDesugarPlain:
-		e.setType(mc.Type())
-		return true, mc.Type(), nil
-	case binDesugarNot:
+	if disp.kind == binDesugarNot {
 		e.LoweredNot = true
 		e.setType(tBool)
 		return true, tBool, nil
 	}
-	return false, nil, nil
+	e.setType(mc.Type())
+	return true, mc.Type(), nil
 }
 
 // tryUnaryOperatorSpecDesugar attempts to lower `-x` on user-struct /

@@ -24,20 +24,21 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 18 with v0.18 — `pub import` (re-export). A
-	// module M doing `pub import "X"` exposes every pub fn / struct /
-	// enum / spec from X flat under M's namespace, so callers do
-	// `M.foo(...)` directly rather than `M.X.foo(...)`. The `as`
-	// keyword stays local-only (renames the host's local binding;
-	// does not affect what callers see). Two pub imports contributing
-	// the same name reject at module-bind time with a focused
-	// diagnostic. Transitive re-exports compose: A pub-imports B
-	// pub-imports C → A's callers see C's pub names.
+	// Minor advances to 19 with v0.19 — self-rehydrating multi-assign
+	// for composite types. The borrow checker now treats an RHS
+	// tuple-literal element that is a bare ident naming one of the
+	// multi-assign's own targets as a read, not a move. The LHS write
+	// rebinds the slot immediately after the temp tuple is built, so
+	// the binding's state matches before and after the statement —
+	// even inside a loop body. This unblocks the canonical Fibonacci
+	// step `a, b = b, a + b` over struct types (math.BigInt and
+	// friends), not just primitive ints.
 	//
+	// Inherited from v0.18 cycle: `pub import` flat re-export.
 	// Inherited from v0.17 cycle: operator-spec wiring (Arithmetic /
 	// Comparable / From), math/big arbitrary-precision arithmetic,
 	// and the math directory-module reorganization.
-	Minor = 18
+	Minor = 19
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

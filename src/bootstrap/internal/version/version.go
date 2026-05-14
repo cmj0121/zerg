@@ -24,14 +24,18 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 14 with v0.14 — the toolchain accepts sources
-	// declaring `# requires: v0.14` (gating the v0.14 surface additions:
-	// sys/path module, pure-Zerg src/std/math.zg + the inline-asm
-	// extensions for `int` input and `mut`-binding write-back outputs).
+	// Minor advances to 15 with v0.15 — the toolchain accepts sources
+	// declaring `# requires: v0.15`, which adds tuple parallel reassignment
+	// (`a, b = b, a + b` — bare-comma multi-LHS reassignment built atop the
+	// existing tuple-bind RHS-into-temp evaluation pattern). The v0.14
+	// surface additions (sys/path module, pure-Zerg src/std/math.zg, inline-
+	// asm extensions for `int` input and `mut`-binding write-back outputs)
+	// remain available unchanged at the lower gate.
+	//
 	// The user-facing `cliVersion` and the RELEASE.md / LANGUAGE.md entry
-	// stay behind until the v0.14 release unit lands — Minor is the gate's
+	// stay behind until the v0.15 release unit lands — Minor is the gate's
 	// source of truth.
-	Minor = 14
+	Minor = 15
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

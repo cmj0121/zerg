@@ -695,6 +695,15 @@ func scanStmtForType(stmt syntax.Stmt, name string) *syntax.Type {
 		if t := scanExprForType(s.Value, name); t != nil {
 			return t
 		}
+	case *syntax.MultiAssignStmt:
+		for _, target := range s.Targets {
+			if t := scanExprForType(target, name); t != nil {
+				return t
+			}
+		}
+		if t := scanExprForType(s.Value, name); t != nil {
+			return t
+		}
 	case *syntax.ExprStmt:
 		if t := scanExprForType(s.Expr, name); t != nil {
 			return t
@@ -1030,6 +1039,8 @@ func (in *interp) execStmt(stmt syntax.Stmt) error {
 		return in.execDecl(s.Name, s.Type, s.Value)
 	case *syntax.AssignStmt:
 		return in.execAssign(s)
+	case *syntax.MultiAssignStmt:
+		return in.execMultiAssign(s)
 	case *syntax.ExprStmt:
 		_, err := in.evalExpr(s.Expr)
 		return err
@@ -1350,6 +1361,36 @@ func (in *interp) execAssign(s *syntax.AssignStmt) error {
 		return fmt.Errorf("internal: unknown assign op %s at %s", s.Op, s.Pos)
 	}
 	return err
+}
+
+// execMultiAssign handles the v0.15 `a, b, ... = e1, e2, ...` form. The
+// RHS is evaluated to a single tuple Value before any LHS slot is written —
+// that ordering is what makes `a, b = b, a + b` observe the OLD values of
+// a and b on the right. Once we have the tuple in hand, the LHS writes are
+// straight slot pokes, mirroring execAssign's plain-ident path.
+func (in *interp) execMultiAssign(s *syntax.MultiAssignStmt) error {
+	v, err := in.evalExpr(s.Value)
+	if err != nil {
+		return err
+	}
+	if v.Type == nil || v.Type.Kind != syntax.TypeTuple {
+		return fmt.Errorf("internal: multi-assign rhs is not a tuple at %s", s.Pos)
+	}
+	if len(v.Tuple) != len(s.Targets) {
+		return fmt.Errorf("internal: multi-assign arity mismatch at %s: %d targets vs %d tuple elements", s.Pos, len(s.Targets), len(v.Tuple))
+	}
+	for i, target := range s.Targets {
+		id, ok := target.(*syntax.IdentExpr)
+		if !ok {
+			return fmt.Errorf("internal: unsupported multi-assign target %T at %s", target, s.Pos)
+		}
+		slot, ok := in.lookup(id.Name)
+		if !ok {
+			return fmt.Errorf("internal: undefined name %q at %s", id.Name, s.Pos)
+		}
+		*slot = v.Tuple[i]
+	}
+	return nil
 }
 
 // execIndexAssign handles `xs[i] = v`. The receiver must be a bare named

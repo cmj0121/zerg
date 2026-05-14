@@ -182,6 +182,11 @@ func (g *cgen) programUsesV08Walk(prog *syntax.Program) bool {
 		case *syntax.AssignStmt:
 			walkE(n.Target)
 			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
+			for _, t := range n.Targets {
+				walkE(t)
+			}
+			walkE(n.Value)
 		case *syntax.IfStmt:
 			walkE(n.Cond)
 			walkBlock(n.Then, walkS)

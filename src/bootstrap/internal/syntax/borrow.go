@@ -400,6 +400,8 @@ func (c *borrowChecker) checkStmt(stmt Stmt) error {
 		return c.checkLetLikeDecl(s.Pos, s.Name, s.Tuple, s.Value)
 	case *AssignStmt:
 		return c.checkAssign(s)
+	case *MultiAssignStmt:
+		return c.checkMultiAssign(s)
 	case *ExprStmt:
 		if err := c.checkExprRead(s.Expr); err != nil {
 			return err
@@ -549,6 +551,36 @@ func (c *borrowChecker) checkTupleDestructure(_ Position, tb *TupleBinding, valu
 // ---------------------------------------------------------------------------
 // Assignment.
 // ---------------------------------------------------------------------------
+
+// checkMultiAssign handles the v0.15 `a, b, ... = e1, e2, ...` form. Each
+// LHS target must be Owned (not Moved or BorrowedShared) at the time of the
+// write; the RHS expression is walked first so any move-out happens AT the
+// pre-write borrow state — that ordering is what makes `a, b = b, a + b`
+// observe the OLD values of a and b on the right.
+//
+// Typeck has already verified each target is a mut binding and the RHS is a
+// tuple of matching arity; we only police the borrow-state side here. No
+// state flip on the targets — writes overwrite the value, the binding stays
+// Owned (mirrors checkAssign's plain-ident path).
+func (c *borrowChecker) checkMultiAssign(s *MultiAssignStmt) error {
+	for _, target := range s.Targets {
+		id, ok := target.(*IdentExpr)
+		if !ok {
+			return borrowErr(s.Pos, "internal: unsupported multi-assign target %T", target)
+		}
+		e, _ := c.scope.lookup(id.Name)
+		if e == nil {
+			continue
+		}
+		if e.state == bsBorrowedShared && isComposite(e.typ) {
+			return borrowErr(s.Pos, "cannot mutate %q while it is borrowed (%s)", id.Name, e.borrowReason)
+		}
+		if e.state == bsMoved && isComposite(e.typ) {
+			return borrowErr(s.Pos, "use of moved value: %q (moved at %s)", id.Name, e.movePos)
+		}
+	}
+	return c.checkExprConsume(s.Value)
+}
 
 // checkAssign handles `x = value` and `xs[i] = value`. The bindKind / mut
 // rules are typeck's responsibility; here we enforce that the target is

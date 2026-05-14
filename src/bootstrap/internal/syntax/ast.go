@@ -461,6 +461,29 @@ type AssignStmt struct {
 func (*AssignStmt) stmtNode()           {}
 func (s *AssignStmt) StmtPos() Position { return s.Pos }
 
+// MultiAssignStmt is `a, b, ... = e1, e2, ...` — tuple parallel reassignment
+// (v0.15). The RHS is evaluated entirely into a tuple-shaped temporary BEFORE
+// any LHS slot is written; the temp is then unpacked into the named targets.
+// That sequencing — owned by cgen / run, not by the borrow checker — is what
+// makes `a, b = b, a + b` read OLD `a` and `b` on the right.
+//
+// Targets is parser-restricted to *IdentExpr (bare-ident lvalues only at this
+// iteration; field-access and index-assign LHS are deferred). Value is either
+// a synthetic *TupleLit built by the parser from the bare comma-list RHS, or
+// any single Expr that types as a tuple of matching arity (e.g. a function
+// call returning a tuple, so `a, b = divmod(10, 3)` is admitted on the same
+// terms as the existing bind form `(a, b) := divmod(10, 3)`).
+type MultiAssignStmt struct {
+	Pos             Position
+	Targets         []Expr     // ≥ 2 *IdentExpr; parser narrows
+	TargetPos       []Position // 1:1 with Targets, for slot-level diagnostics
+	Value           Expr       // single Expr (TupleLit or tuple-typed)
+	LeadingComments []string
+}
+
+func (*MultiAssignStmt) stmtNode()           {}
+func (s *MultiAssignStmt) StmtPos() Position { return s.Pos }
+
 // ExprStmt wraps an expression used for its side effects. v0.1 only admits
 // function calls in expression-statement position, but the parser holds the
 // general Expr and validates the kind, so we get one good error message
@@ -1591,8 +1614,7 @@ type AsmChunk struct {
 //     interpreter cannot execute machine code. The exact diagnostic lives
 //     in run.go alongside the rejection.
 //   - Pin 8 contract: x29 (fp) is user-preserve, NOT clobbered by cgen.
-//     There is no parser-level enforcement; the contract ships in
-//     docs/LANGUAGE.md as a hard rule.
+//     There is no parser-level enforcement; the contract is a hard rule.
 type AsmBlock struct {
 	// Pos is the position of the `asm` keyword.
 	Pos Position

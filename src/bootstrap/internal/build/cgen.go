@@ -755,6 +755,11 @@ func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map
 		case *syntax.AssignStmt:
 			walkE(n.Target)
 			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
+			for _, t := range n.Targets {
+				walkE(t)
+			}
+			walkE(n.Value)
 		case *syntax.ExprStmt:
 			walkE(n.Expr)
 		case *syntax.PrintStmt:
@@ -905,6 +910,11 @@ func walkStmtTypes(stmt syntax.Stmt, visit func(*syntax.Type)) {
 		walkExprTypes(s.Value, visit)
 	case *syntax.AssignStmt:
 		walkExprTypes(s.Target, visit)
+		walkExprTypes(s.Value, visit)
+	case *syntax.MultiAssignStmt:
+		for _, t := range s.Targets {
+			walkExprTypes(t, visit)
+		}
 		walkExprTypes(s.Value, visit)
 	case *syntax.ExprStmt:
 		walkExprTypes(s.Expr, visit)
@@ -2021,6 +2031,11 @@ func (g *cgen) collectStmt(stmt syntax.Stmt) {
 	case *syntax.AssignStmt:
 		g.collectExpr(s.Target)
 		g.collectExpr(s.Value)
+	case *syntax.MultiAssignStmt:
+		for _, t := range s.Targets {
+			g.collectExpr(t)
+		}
+		g.collectExpr(s.Value)
 	case *syntax.ExprStmt:
 		g.collectExpr(s.Expr)
 	case *syntax.IfStmt:
@@ -2245,6 +2260,8 @@ func (g *cgen) emitStmt(stmt syntax.Stmt) error {
 		return g.emitDecl(s.Name, s.Type, s.Value, true)
 	case *syntax.AssignStmt:
 		return g.emitAssign(s)
+	case *syntax.MultiAssignStmt:
+		return g.emitMultiAssign(s)
 	case *syntax.ExprStmt:
 		expr, err := g.exprStr(s.Expr)
 		if err != nil {
@@ -2455,6 +2472,45 @@ func (g *cgen) emitAssign(s *syntax.AssignStmt) error {
 		fmt.Fprintf(&g.b, "%s >>= %s;\n", targetName, rhs)
 	default:
 		return fmt.Errorf("codegen: unknown assign op %s at %s", s.Op, s.Pos)
+	}
+	return nil
+}
+
+// emitMultiAssign lowers `a, b, ... = e1, e2, ...` (v0.15 multi-LHS
+// reassignment). Mirrors emitTupleDestructure's "evaluate-rhs-into-temp,
+// then unpack" pattern, except the LHS slots already exist — we write
+// through their mangled names instead of declaring new bindings. The temp
+// boundary is what gives the form its read-OLD / write-NEW semantics:
+//
+//	zerg_tuple_int_int __zerg_multi_assign_0 = (zerg_tuple_int_int){.e0 = b, .e1 = a + b};
+//	a = __zerg_multi_assign_0.e0;
+//	b = __zerg_multi_assign_0.e1;
+//
+// Typeck and the borrow checker have already validated arity, types, and
+// that every target is a mut binding in a writeable borrow state. Here we
+// only do the lowering.
+func (g *cgen) emitMultiAssign(s *syntax.MultiAssignStmt) error {
+	t := s.Value.Type()
+	if t == nil || t.Kind != syntax.TypeTuple {
+		return fmt.Errorf("codegen: multi-assign rhs has non-tuple type at %s", s.Pos)
+	}
+	if len(t.Tuple) != len(s.Targets) {
+		return fmt.Errorf("codegen: multi-assign arity mismatch at %s: %d targets vs %d tuple elements", s.Pos, len(s.Targets), len(t.Tuple))
+	}
+	exprS, err := g.exprStr(s.Value)
+	if err != nil {
+		return err
+	}
+	tmp := g.freshTmp("multi_assign")
+	g.writeIndent()
+	fmt.Fprintf(&g.b, "%s %s = %s;\n", g.cTypeName(t), tmp, exprS)
+	for i, target := range s.Targets {
+		id, ok := target.(*syntax.IdentExpr)
+		if !ok {
+			return fmt.Errorf("codegen: multi-assign target %d is not an identifier (%T) at %s", i, target, s.Pos)
+		}
+		g.writeIndent()
+		fmt.Fprintf(&g.b, "%s = %s.e%d;\n", g.identName(id.Name), tmp, i)
 	}
 	return nil
 }

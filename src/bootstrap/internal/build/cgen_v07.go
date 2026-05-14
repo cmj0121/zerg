@@ -426,6 +426,8 @@ func (g *cgen) programUsesV07Walk(prog *syntax.Program) bool {
 			walkE(n.Value)
 		case *syntax.AssignStmt:
 			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
+			walkE(n.Value)
 		case *syntax.IfStmt:
 			walkE(n.Cond)
 			walkBlock(n.Then, walkS)
@@ -578,6 +580,11 @@ func (g *cgen) harvestChanNullableTypes(prog *syntax.Program) {
 			walkE(n.Value)
 		case *syntax.AssignStmt:
 			walkE(n.Target)
+			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
+			for _, t := range n.Targets {
+				walkE(t)
+			}
 			walkE(n.Value)
 		case *syntax.IfStmt:
 			walkE(n.Cond)
@@ -784,6 +791,11 @@ func (g *cgen) collectChanShapes(prog *syntax.Program) {
 		case *syntax.AssignStmt:
 			walkE(n.Target)
 			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
+			for _, t := range n.Targets {
+				walkE(t)
+			}
+			walkE(n.Value)
 		case *syntax.IfStmt:
 			walkE(n.Cond)
 			walkBlock(n.Then, walkS)
@@ -984,6 +996,8 @@ func (g *cgen) preregisterAnonFns(prog *syntax.Program) {
 		case *syntax.ConstStmt:
 			walkE(n.Value)
 		case *syntax.AssignStmt:
+			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
 			walkE(n.Value)
 		case *syntax.SendStmt:
 			walkE(n.Value)
@@ -1776,6 +1790,8 @@ func (g *cgen) collectDeferEnv(body *syntax.Block) *anonFnEnv {
 		case *syntax.ConstStmt:
 			walkE(n.Value)
 		case *syntax.AssignStmt:
+			walkE(n.Value)
+		case *syntax.MultiAssignStmt:
 			walkE(n.Value)
 		case *syntax.IfStmt:
 			walkE(n.Cond)

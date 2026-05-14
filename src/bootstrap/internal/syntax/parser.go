@@ -300,6 +300,8 @@ func setLeadingComments(stmt Stmt, comments []string) {
 		s.LeadingComments = comments
 	case *AssignStmt:
 		s.LeadingComments = comments
+	case *MultiAssignStmt:
+		s.LeadingComments = comments
 	case *ExprStmt:
 		s.LeadingComments = comments
 	case *PrintStmt:
@@ -987,9 +989,9 @@ func (p *parser) parseTupleDestructureDecl(kind declKind, keywordPos Position) (
 	if len(names) < 2 {
 		return nil, errorAt(openTok.Pos, "destructure pattern requires at least 2 names (use the single-name form for one)")
 	}
-	// `:=` only — annotated destructure remains deferred on the v1.0+
-	// reserved list (see LANGUAGE.md §Reserved for v1.0+). The rule is
-	// permanent under the current surface, so the diagnostic is unstamped.
+	// `:=` only — annotated destructure remains deferred to the v1.0+
+	// reserved surface. The rule is permanent under the current surface,
+	// so the diagnostic is unstamped.
 	if k := p.peek().Kind; k == KindColon {
 		bad := p.peek()
 		return nil, errorAt(bad.Pos, "type annotations on destructure declarations are not supported")
@@ -2032,6 +2034,14 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 			return p.parseBareInferredBinding(startTok)
 		case KindColon:
 			return p.parseBareTypedBinding(startTok)
+		case KindComma:
+			// v0.15 bare-comma multi-assign: `a, b, ... = e1, e2, ...`.
+			// The sniff confirms the trailing `=` before consuming so any
+			// non-matching `IDENT , …` shape falls through to the generic
+			// "expression statements must be function calls" error path.
+			if p.detectsBareMultiAssign() {
+				return p.parseMultiAssignStmt(startTok.Pos)
+			}
 		}
 	}
 	if startTok.Kind == KindLParen && p.detectsBareTupleBinding() {
@@ -2097,8 +2107,8 @@ func (p *parser) parseExprOrAssignStmt() (Stmt, error) {
 			}, nil
 		case *IndexExpr:
 			if op != AssignSet {
-				// Permanent under the current surface — see LANGUAGE.md
-				// §Reserved for v1.0+ "Compound assignment to list elements".
+				// Compound assignment to list elements is deferred to v1.0+
+				// — permanent under the current surface.
 				return nil, errorAt(opTok.Pos, "compound assignment '%s' to a list element is not supported — use `xs[i] = ...` instead", op)
 			}
 			// We admit only single-level indexing (`xs[i] = v`). Chained
@@ -2183,6 +2193,101 @@ func (p *parser) detectsBareTupleBinding() bool {
 	}
 	i++
 	return i < len(p.tokens) && p.tokens[i].Kind == KindWalrus
+}
+
+// detectsBareMultiAssign reports whether the cursor is sitting at the start
+// of a v0.15 bare-comma multi-LHS reassignment:
+//
+//	IDENT (',' IDENT)+ '='
+//
+// Walks the token stream without consuming. Returns false for any shape that
+// does not match (`a, b` with no `=`, `a, b := …` with walrus, etc.), letting
+// the existing fallback path emit its usual diagnostic with the cursor still
+// at the leading IDENT. The closing `=` must be plain `KindAssign` — compound
+// operators (`+=`, etc.) are NOT admitted in this iteration.
+func (p *parser) detectsBareMultiAssign() bool {
+	i := p.pos
+	if i >= len(p.tokens) || p.tokens[i].Kind != KindIdent {
+		return false
+	}
+	i++
+	if i >= len(p.tokens) || p.tokens[i].Kind != KindComma {
+		return false
+	}
+	for i < len(p.tokens) {
+		if p.tokens[i].Kind != KindComma {
+			break
+		}
+		i++
+		if i >= len(p.tokens) || p.tokens[i].Kind != KindIdent {
+			return false
+		}
+		i++
+	}
+	return i < len(p.tokens) && p.tokens[i].Kind == KindAssign
+}
+
+// parseMultiAssignStmt consumes the bare-comma multi-LHS reassignment whose
+// shape has just been confirmed by detectsBareMultiAssign:
+//
+//	IDENT (',' IDENT)+ '=' expr (',' expr)*
+//
+// The LHS becomes a slice of *IdentExpr. The RHS is parsed as one expression
+// followed by zero or more comma-prefixed expressions; when more than one
+// expression is present, the parser wraps them in a synthetic *TupleLit (with
+// Pos taken from the first RHS expr) so the downstream typeck / cgen / run
+// paths see the same tuple shape they already handle for the bind form
+// `(a, b) := some_tuple_call()`. Duplicate LHS names are rejected at parse
+// time — the same diagnostic shape parseTupleDestructureDecl uses, retargeted
+// to multi-assign.
+func (p *parser) parseMultiAssignStmt(startPos Position) (Stmt, error) {
+	var targets []Expr
+	var targetPos []Position
+	seen := map[string]bool{}
+	for {
+		nameTok, err := p.expect(KindIdent, "in multi-assign LHS")
+		if err != nil {
+			return nil, err
+		}
+		if seen[nameTok.Value] {
+			return nil, errorAt(nameTok.Pos, "name %q repeated in multi-assign LHS", nameTok.Value)
+		}
+		seen[nameTok.Value] = true
+		targets = append(targets, &IdentExpr{Pos: nameTok.Pos, Name: nameTok.Value})
+		targetPos = append(targetPos, nameTok.Pos)
+		if p.peek().Kind != KindComma {
+			break
+		}
+		p.advance()
+	}
+	if _, err := p.expect(KindAssign, "after multi-assign LHS"); err != nil {
+		return nil, err
+	}
+	first, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	rhs := []Expr{first}
+	for p.peek().Kind == KindComma {
+		p.advance()
+		next, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		rhs = append(rhs, next)
+	}
+	var value Expr
+	if len(rhs) == 1 {
+		value = rhs[0]
+	} else {
+		value = &TupleLit{Pos: rhs[0].ExprPos(), Elements: rhs}
+	}
+	return &MultiAssignStmt{
+		Pos:       startPos,
+		Targets:   targets,
+		TargetPos: targetPos,
+		Value:     value,
+	}, nil
 }
 
 // parseBareInferredBinding handles `IDENT ':=' expr`. The cursor is at the

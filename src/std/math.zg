@@ -1,8 +1,8 @@
 # requires: v0.8
 #
 # Integer math primitives. Pure-Zerg implementation; no __builtin, no host
-# bridge. Behaviour is pinned by docs/STDLIB.md and the v0_8/19 + v0_8/20
-# fixtures — the bootstrap_provided/math.zg shim retired in v0.14.
+# bridge. Behaviour is pinned by the v0_8/19 + v0_8/20 fixtures — the
+# bootstrap_provided/math.zg shim retired in v0.14.
 #
 # Floats are not a Zerg type at v0.14, so every signature is `int`-only.
 

@@ -1,8 +1,7 @@
 # Zerg release notes
 
 One-screen summary per version of what shipped. Rationale and implementation detail live in the
-commit log; the formal language reference lives in [`docs/LANGUAGE.md`](docs/LANGUAGE.md); the
-per-module stdlib reference lives in [`docs/STDLIB.md`](docs/STDLIB.md).
+commit log; the EBNF grammar reference lives in [`docs/GRAMMAR`](docs/GRAMMAR).
 
 ## v0.13 — platform-suffix file resolution + inline assembly (macOS arm64)
 
@@ -68,8 +67,8 @@ per-module stdlib reference lives in [`docs/STDLIB.md`](docs/STDLIB.md).
 
 - `zerg fmt` canonical formatter with leading-line comment preservation; subflags `-w`
   (write-in-place, atomic) and `--check` (CI gate).
-- New formal references shipped in-tree: [`docs/LANGUAGE.md`](docs/LANGUAGE.md) (grammar + type
-  system) and [`docs/STDLIB.md`](docs/STDLIB.md) (per-module fn reference).
+- New formal references shipped in-tree: `docs/LANGUAGE.md` (grammar + type system) and
+  `docs/STDLIB.md` (per-module fn reference). Both retired post-v0.14; see `docs/GRAMMAR`.
 - Stdlib fn signatures frozen through v1.0; v0.8's "provisional" marker dropped.
 - Diagnostic hardening: every reject-corpus diagnostic carries `file:line:col`; cascade messages
   suppressed.

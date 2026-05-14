@@ -24,21 +24,20 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 17 with v0.17 — the toolchain accepts sources
-	// declaring `# requires: v0.17`, which adds the operator-spec
-	// wiring: built-in `Add` / `Sub` / `Mul` / `Div` / `Mod` / `Neg` /
-	// `Eq` / `Ord` specs are injected at checker bootstrap, primitive
-	// types satisfy them via synthetic impls, and user struct/enum
-	// types light up `a + b` / `a == b` / `a < b` / `-x` by writing
-	// `impl T for Add { fn add(...) }` etc. The math/big BigInt /
-	// BigDecimal stdlib types migrate their inherent methods into
-	// these impl blocks; BigDecimal omits `Div`/`Mod` (the three-arg
-	// `bd.div(other, scale)` stays inherent).
+	// Minor advances to 18 with v0.18 — `pub import` (re-export). A
+	// module M doing `pub import "X"` exposes every pub fn / struct /
+	// enum / spec from X flat under M's namespace, so callers do
+	// `M.foo(...)` directly rather than `M.X.foo(...)`. The `as`
+	// keyword stays local-only (renames the host's local binding;
+	// does not affect what callers see). Two pub imports contributing
+	// the same name reject at module-bind time with a focused
+	// diagnostic. Transitive re-exports compose: A pub-imports B
+	// pub-imports C → A's callers see C's pub names.
 	//
-	// The user-facing `cliVersion` and the RELEASE.md entry stay behind
-	// until the v0.17 release unit lands — Minor is the gate's source of
-	// truth.
-	Minor = 17
+	// Inherited from v0.17 cycle: operator-spec wiring (Arithmetic /
+	// Comparable / From), math/big arbitrary-precision arithmetic,
+	// and the math directory-module reorganization.
+	Minor = 18
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

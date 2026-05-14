@@ -369,7 +369,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString("\n")
 	}
 	g.emitEqHelpers()
-	g.emitSpecVtablesAndMethods()
+	// Emit method forward decls EARLY so the rest of the C output can
+	// reference any method's mangled name without a forward-reference
+	// error. The matching method *bodies* land after the free-fn
+	// forward decls below — that lets impl method bodies call same-
+	// module free fns whose forward decls land in the v0.5 fn-decl
+	// loop further down.
+	g.emitMethodForwardDecls()
 	if err := g.emitAnonFnHeaders(); err != nil {
 		return err
 	}
@@ -422,6 +428,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	if hasAnyFn {
 		g.b.WriteString("\n")
 	}
+
+	// Method bodies / adapters / vtables land AFTER the free-fn forward
+	// decls so impl method bodies can call same-module free fns by their
+	// mangled name without provoking an implicit-declaration error from
+	// the C compiler. The forward decls themselves landed via
+	// emitMethodForwardDecls before this section.
+	g.emitMethodBodiesAndVtables()
 
 	for i := range g.modules {
 		me := &g.modules[i]
@@ -4554,27 +4567,28 @@ func (g *cgen) emitSpecForwardDecls() {
 	g.b.WriteString("\n")
 }
 
-// emitSpecVtablesAndMethods is the v0.4 file-scope emit pass. Order:
+// The v0.4 method-emit pass is split into two halves:
 //
-//  1. Forward-declare every emitted method C function so they can reference
-//     each other in any order.
-//  2. Emit each method body — both inherent and per-(Type, Spec) override.
-//     A spec impl method gets one C fn whose receiver is the concrete
-//     mangled type, plus a small `void*` adapter wrapper that downcasts to
-//     the concrete and forwards. The adapter is what the vtable points at.
-//  3. Emit the per-(Type, Spec) static const vtable initialiser populated
-//     with adapter pointers for impl overrides, type-specialised default
-//     adapters for spec defaults, and NotImplemented stubs for the
-//     remainder.
-func (g *cgen) emitSpecVtablesAndMethods() {
+//   - emitMethodForwardDecls writes signatures plus adapter / default-
+//     body / not-implemented-stub forward decls. Called BEFORE the
+//     free-fn forward decl loop so the rest of the C output can
+//     reference any method's mangled name.
+//   - emitMethodBodiesAndVtables writes the method body fns, the
+//     adapter implementations, the default-body adapters, the
+//     NotImplemented stubs, and the static per-(Type, Spec) vtables.
+//     Called AFTER the free-fn forward decl loop so impl method bodies
+//     can call same-module free fns by their mangled name without
+//     provoking an implicit-declaration error from the C compiler.
+//
+// A spec impl method gets one C fn whose receiver is the concrete
+// mangled type, plus a small `void*` adapter wrapper that downcasts
+// to the concrete and forwards. The adapter is what the vtable
+// points at.
+func (g *cgen) emitMethodForwardDecls() {
 	if len(g.inherentTypeOrder) == 0 && len(g.specImplKeys) == 0 && len(g.specOrder) == 0 {
 		return
 	}
-	// Stable ordering: inherent first by declaration order of types, then
-	// (Type, Spec) impls by declaration order.
-	g.b.WriteString("/* v0.4 method functions, vtable adapters, and per-(Type, Spec) vtables. */\n")
-
-	// Forward decls.
+	g.b.WriteString("/* v0.4 method functions, vtable adapters, and per-(Type, Spec) vtables — forward decls. */\n")
 	for _, typeName := range g.inherentTypeOrder {
 		recv := g.receiverTypes[typeName]
 		if recv == nil {
@@ -4646,7 +4660,18 @@ func (g *cgen) emitSpecVtablesAndMethods() {
 		}
 	}
 	g.b.WriteString("\n")
+}
 
+// emitMethodBodiesAndVtables writes the method body fns, the adapter
+// implementations, the default-body adapters, the NotImplemented stubs,
+// and the static per-(Type, Spec) vtables. Called AFTER free-fn forward
+// decls so impl method bodies can reference same-module free fns
+// without a forward-reference error.
+func (g *cgen) emitMethodBodiesAndVtables() {
+	if len(g.inherentTypeOrder) == 0 && len(g.specImplKeys) == 0 && len(g.specOrder) == 0 {
+		return
+	}
+	g.b.WriteString("/* v0.4 method bodies. */\n")
 	// Method bodies — inherent.
 	for _, typeName := range g.inherentTypeOrder {
 		recv := g.receiverTypes[typeName]
@@ -4801,10 +4826,23 @@ func (g *cgen) emitMethodFn(receiver *syntax.Type, specName string, fn *syntax.F
 		g.currentFnRet = nil
 	}
 	prevIndent := g.indent
+	prevMod := g.currentMod
+	// Active module for body-emit is whichever module declared the
+	// receiver type — same as the impl block's enclosing file. Calls
+	// from inside the method body to that module's free fns then
+	// resolve through lookupCurrentFn against the right module's
+	// fn list, and fnCName mangles them with the owning module's
+	// prefix. Without this, same-module free-fn calls from impl
+	// bodies fall through to bare `z_<name>` symbols that never get
+	// defined under the module mangle.
+	if owner, ok := g.typeOwner[receiver]; ok && owner != "" {
+		g.currentMod = owner
+	}
 	g.indent = 1
 	defer func() {
 		g.currentFnRet = prevRet
 		g.indent = prevIndent
+		g.currentMod = prevMod
 	}()
 	if err := g.emitBlockBody(fn.Body); err != nil {
 		return err

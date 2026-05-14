@@ -85,6 +85,16 @@ func cloneStmt(s Stmt) Stmt {
 		out.Target = cloneExpr(n.Target)
 		out.Value = cloneExpr(n.Value)
 		return &out
+	case *MultiAssignStmt:
+		out := *n
+		if len(n.Targets) > 0 {
+			out.Targets = make([]Expr, len(n.Targets))
+			for i, t := range n.Targets {
+				out.Targets[i] = cloneExpr(t)
+			}
+		}
+		out.Value = cloneExpr(n.Value)
+		return &out
 	case *ExprStmt:
 		out := *n
 		out.Expr = cloneExpr(n.Expr)

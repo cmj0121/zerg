@@ -300,6 +300,8 @@ func lastLineOfStmt(s syntax.Stmt) int {
 		return exprLastLine(x.Value, x.Pos.Line)
 	case *syntax.AssignStmt:
 		return exprLastLine(x.Value, x.Pos.Line)
+	case *syntax.MultiAssignStmt:
+		return exprLastLine(x.Value, x.Pos.Line)
 	case *syntax.PrintStmt:
 		return exprLastLine(x.Expr, x.Pos.Line)
 	case *syntax.ReturnStmt:
@@ -390,6 +392,8 @@ func (w *writer) stmt(s syntax.Stmt) {
 		w.letLike("const", x.Name, x.Tuple, x.Type, x.Value)
 	case *syntax.AssignStmt:
 		w.assignStmt(x)
+	case *syntax.MultiAssignStmt:
+		w.multiAssignStmt(x)
 	case *syntax.PrintStmt:
 		w.printStmt(x)
 	case *syntax.ExprStmt:
@@ -454,6 +458,8 @@ func leadingCommentsOf(s syntax.Stmt) []string {
 	case *syntax.ConstStmt:
 		return x.LeadingComments
 	case *syntax.AssignStmt:
+		return x.LeadingComments
+	case *syntax.MultiAssignStmt:
 		return x.LeadingComments
 	case *syntax.ExprStmt:
 		return x.LeadingComments
@@ -536,6 +542,33 @@ func (w *writer) assignStmt(s *syntax.AssignStmt) {
 	w.write(s.Op.String())
 	w.write(" ")
 	w.expr(s.Value)
+	w.newline()
+}
+
+// multiAssignStmt formats `a, b, ... = e1, e2, ...` (v0.15 multi-LHS
+// reassignment). A TupleLit RHS is always rendered as bare commas — this
+// canonicalizes any user-written `a, b = (e1, e2)` into the bare form, so
+// the formatter has one normal shape for the construct. A non-TupleLit RHS
+// (a function call returning a tuple, etc.) prints unchanged.
+func (w *writer) multiAssignStmt(s *syntax.MultiAssignStmt) {
+	w.writeIndent()
+	for i, t := range s.Targets {
+		if i > 0 {
+			w.write(", ")
+		}
+		w.expr(t)
+	}
+	w.write(" = ")
+	if tup, ok := s.Value.(*syntax.TupleLit); ok {
+		for i, e := range tup.Elements {
+			if i > 0 {
+				w.write(", ")
+			}
+			w.expr(e)
+		}
+	} else {
+		w.expr(s.Value)
+	}
 	w.newline()
 }
 
@@ -744,6 +777,25 @@ func (w *writer) armSingleStmt(s syntax.Stmt) {
 		w.write(x.Op.String())
 		w.write(" ")
 		w.expr(x.Value)
+		w.newline()
+	case *syntax.MultiAssignStmt:
+		for i, t := range x.Targets {
+			if i > 0 {
+				w.write(", ")
+			}
+			w.expr(t)
+		}
+		w.write(" = ")
+		if tup, ok := x.Value.(*syntax.TupleLit); ok {
+			for i, e := range tup.Elements {
+				if i > 0 {
+					w.write(", ")
+				}
+				w.expr(e)
+			}
+		} else {
+			w.expr(x.Value)
+		}
 		w.newline()
 	case *syntax.LetStmt:
 		// v0.11: keyword-led `let` was retired. The bare-binding shape is
@@ -1358,6 +1410,24 @@ func inlineStmt(w *writer, s syntax.Stmt) {
 		w.write(x.Op.String())
 		w.write(" ")
 		w.expr(x.Value)
+	case *syntax.MultiAssignStmt:
+		for i, t := range x.Targets {
+			if i > 0 {
+				w.write(", ")
+			}
+			w.expr(t)
+		}
+		w.write(" = ")
+		if tup, ok := x.Value.(*syntax.TupleLit); ok {
+			for i, e := range tup.Elements {
+				if i > 0 {
+					w.write(", ")
+				}
+				w.expr(e)
+			}
+		} else {
+			w.expr(x.Value)
+		}
 	}
 }
 

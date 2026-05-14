@@ -1508,6 +1508,8 @@ func (c *checker) checkStmt(stmt Stmt) error {
 		return c.checkDeclSlot(s.Pos, s.Name, s.Type, &s.Value, bindConst)
 	case *AssignStmt:
 		return c.checkAssign(s)
+	case *MultiAssignStmt:
+		return c.checkMultiAssign(s)
 	case *ExprStmt:
 		_, err := c.checkExpr(s.Expr)
 		return err
@@ -1779,6 +1781,60 @@ func (c *checker) checkTupleDestructure(pos Position, tb *TupleBinding, value Ex
 		}
 		if !c.scope.declare(name, binding{kind: kind, typ: elemT}) {
 			return typeErr(tb.NamePos[i], "name %q already declared in this scope", name)
+		}
+	}
+	return nil
+}
+
+// checkMultiAssign validates the v0.15 bare-comma multi-LHS reassignment
+// `a, b, ... = e1, e2, ...`. Every target must resolve to a mut binding;
+// the RHS must type as a tuple of matching arity; each slot's type must
+// match the corresponding target. The parser already guarantees ≥ 2
+// distinct *IdentExpr targets, so we only re-check the parser's narrowing
+// defensively.
+//
+// The "RHS reads OLD LHS values" semantics is not enforced here — it falls
+// out of the cgen / run sequencing (eval-rhs-into-temp, then commit-writes).
+// Typeck only needs the static shape match.
+func (c *checker) checkMultiAssign(s *MultiAssignStmt) error {
+	bindings := make([]binding, len(s.Targets))
+	for i, target := range s.Targets {
+		id, ok := target.(*IdentExpr)
+		if !ok {
+			return typeErr(s.TargetPos[i], "internal: multi-assign target %d is not an identifier (%T)", i, target)
+		}
+		if isReservedV07BuiltinName(id.Name) || id.Name == "close" || isReservedV07ConcurName(id.Name) {
+			return typeErr(s.TargetPos[i], "name %q is reserved (built-in)", id.Name)
+		}
+		b, ok := c.scope.lookup(id.Name)
+		if !ok {
+			return typeErr(id.Pos, "undefined name %q", id.Name)
+		}
+		switch b.kind {
+		case bindLet:
+			return typeErr(s.Pos, "cannot assign to %q in multi-assign (immutable binding — declare with mut to allow rebinding)", id.Name)
+		case bindConst:
+			return typeErr(s.Pos, "cannot assign to %q in multi-assign (declared with const)", id.Name)
+		}
+		id.setType(b.typ)
+		bindings[i] = b
+	}
+	observed, err := c.checkExpr(s.Value)
+	if err != nil {
+		return err
+	}
+	if observed == nil || observed.Kind != TypeTuple {
+		return typeErr(s.Pos, "multi-assign rhs must be a tuple, got %s", observed)
+	}
+	if len(observed.Tuple) != len(s.Targets) {
+		return typeErr(s.Pos, "multi-assign expects %d value(s), rhs has %d", len(s.Targets), len(observed.Tuple))
+	}
+	for i := range s.Targets {
+		got := observed.Tuple[i]
+		want := bindings[i].typ
+		if !typeEq(got, want) {
+			id := s.Targets[i].(*IdentExpr)
+			return typeErr(s.TargetPos[i], "cannot assign %s to %q (declared %s)", got, id.Name, want)
 		}
 	}
 	return nil

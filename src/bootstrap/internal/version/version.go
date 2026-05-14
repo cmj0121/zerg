@@ -24,18 +24,20 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 16 with v0.16 — the toolchain accepts sources
-	// declaring `# requires: v0.16`, which adds bare-identifier string
-	// interpolation (`"answer = {n}"` lowers to a chain of zerg_str_concat
-	// calls with per-type to-str helpers; primitives only — int, float, bool,
-	// str, byte, rune). Composite-typed bindings reject at typeck. The
-	// v0.15 surface additions (tuple parallel reassignment) remain available
-	// unchanged at the lower gate.
+	// Minor advances to 18 with v0.18 — `pub import` (re-export). A
+	// module M doing `pub import "X"` exposes every pub fn / struct /
+	// enum / spec from X flat under M's namespace, so callers do
+	// `M.foo(...)` directly rather than `M.X.foo(...)`. The `as`
+	// keyword stays local-only (renames the host's local binding;
+	// does not affect what callers see). Two pub imports contributing
+	// the same name reject at module-bind time with a focused
+	// diagnostic. Transitive re-exports compose: A pub-imports B
+	// pub-imports C → A's callers see C's pub names.
 	//
-	// The user-facing `cliVersion` and the RELEASE.md entry stay behind
-	// until the v0.16 release unit lands — Minor is the gate's source of
-	// truth.
-	Minor = 16
+	// Inherited from v0.17 cycle: operator-spec wiring (Arithmetic /
+	// Comparable / From), math/big arbitrary-precision arithmetic,
+	// and the math directory-module reorganization.
+	Minor = 18
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

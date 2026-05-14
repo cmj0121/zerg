@@ -1,0 +1,23 @@
+# requires: v0.17
+#
+# v0.17 — generic-fn bound `T: Arithmetic` lights up uniformly for
+# primitives (synthetic int / float impls) and user struct / enum
+# types (BigInt). Same call shape, two specialisations.
+
+import "math/big"
+
+fn sum_two[T: Arithmetic](x: T, y: T) -> T {
+    return x + y
+}
+
+# Primitive specialisation.
+print sum_two(1, 2)
+print sum_two(10, 32)
+
+# User-type specialisation: BigInt.
+a := big.from_int(100)
+b := big.from_int(42)
+print sum_two(a, b).to_str()
+
+# Float specialisation.
+print sum_two(1.5, 2.25)

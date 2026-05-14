@@ -1,0 +1,35 @@
+# requires: v0.17
+#
+# v0.17 — operator-spec coverage on BigDecimal. Only Comparable is
+# wired (==, !=, <, <=, >, >=). Arithmetic is intentionally NOT
+# implemented because BigDecimal's div/mod need an explicit scale
+# argument and can't satisfy the bundled `fn div(T) -> T` shape.
+# Users call inherent methods — `bd.add(other)`, `bd.sub(other)`,
+# `bd.mul(other)`, `bd.neg()`, `bd.div_checked(other, scale, mode)`.
+
+import "math/big"
+
+fn parse(s: str) -> big.BigDecimal {
+    match big.decimal_from_str(s) {
+        Result.Ok(v) => return v
+        Result.Err(_) => return big.decimal_from_int(0)
+    }
+}
+
+a := parse("3.14")
+b := parse("2.00")
+
+# Inherent arithmetic methods — no operator syntax at v0.17.
+print a.add(b).to_str()
+print a.sub(b).to_str()
+print a.mul(b).to_str()
+print a.neg().to_str()
+
+# Operator syntax via Comparable.
+print a == a
+print a == b
+print a != b
+print a < b
+print b < a
+print a >= a
+print a <= a

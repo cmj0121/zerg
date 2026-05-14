@@ -1,0 +1,36 @@
+# requires: v0.17
+import "math/big"
+
+fn show_parse(s: str) {
+    match big.from_str(s) {
+        Result.Ok(v) => print v.to_str()
+        Result.Err(ParseError.Empty) => print "Empty"
+        Result.Err(ParseError.InvalidDigit) => print "InvalidDigit"
+        Result.Err(ParseError.Overflow) => print "Overflow"
+    }
+}
+
+# Ok cases.
+show_parse("0")
+show_parse("-0")
+show_parse("+0")
+show_parse("1")
+show_parse("-1")
+show_parse("+1")
+show_parse("42")
+show_parse("-42")
+show_parse("00042")
+show_parse("-00042")
+show_parse("  12345  ")
+show_parse("12345678901234567890")
+show_parse("-99999999999999999999999999999")
+
+# Err cases.
+show_parse("")
+show_parse("   ")
+show_parse("+")
+show_parse("-")
+show_parse("abc")
+show_parse("1 2")
+show_parse("12a3")
+show_parse("--3")

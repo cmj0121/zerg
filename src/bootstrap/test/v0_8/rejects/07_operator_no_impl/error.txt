@@ -1,0 +1,1 @@
+operator + requires numeric or str operands of the same type, got Point and Point

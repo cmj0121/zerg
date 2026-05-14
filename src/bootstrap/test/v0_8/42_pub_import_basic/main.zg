@@ -1,0 +1,19 @@
+# requires: v0.18
+#
+# v0.18 — `pub import` re-export. Callers do `import "math"` and access
+# the math/utils + math/big surfaces flat under `math.*`. The math/mod.zg
+# entry uses pub import to expose both submodules.
+
+import "math"
+
+# math/utils re-exported.
+print math.abs(-7)
+print math.min(3, 5)
+print math.max(3, 5)
+print math.gcd(12, 18)
+
+# math/big re-exported — both the fn and the type.
+a := math.from_int(100)
+b := math.from_int(42)
+print (a + b).to_str()
+print math.from_int(-5).to_str()

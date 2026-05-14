@@ -1,0 +1,85 @@
+# requires: v0.17
+import "math/big"
+
+# Constructors + to_str on a representative range of scales.
+print big.decimal_from_int(0).to_str()
+print big.decimal_from_int(42).to_str()
+print big.decimal_from_int(-42).to_str()
+
+# from_bigint wraps an existing BigInt at scale 0.
+bi := big.from_int(12345)
+print big.decimal_from_bigint(bi).to_str()
+
+# Scale > 0 preserves the authored scale (0.500 ≠ 0.5 in to_str).
+fn show_str(s: str) {
+    match big.decimal_from_str(s) {
+        Result.Ok(d) => print d.to_str()
+        Result.Err(_) => print "err"
+    }
+}
+show_str("1.5")
+show_str("1.500")
+show_str("0.500")
+show_str("0.005")
+show_str("-0.005")
+show_str(".5")
+show_str("-.5")
+
+# add / sub with scale alignment. The result scale is the max of
+# the two operand scales.
+fn show_add(x: str, y: str) {
+    match big.decimal_from_str(x) {
+        Result.Ok(a) => match big.decimal_from_str(y) {
+            Result.Ok(b) => print a.add(b).to_str()
+            Result.Err(_) => print "err"
+        }
+        Result.Err(_) => print "err"
+    }
+}
+show_add("1.5", "2.25")
+show_add("1.5", "2.5")
+show_add("0.1", "0.2")
+show_add("0.99", "0.01")
+show_add("1.000", "2.0")
+show_add("-1.5", "0.5")
+
+# mul: scale adds.
+fn show_mul(x: str, y: str) {
+    match big.decimal_from_str(x) {
+        Result.Ok(a) => match big.decimal_from_str(y) {
+            Result.Ok(b) => print a.mul(b).to_str()
+            Result.Err(_) => print "err"
+        }
+        Result.Err(_) => print "err"
+    }
+}
+show_mul("1.5", "2.0")
+show_mul("0.01", "0.01")
+show_mul("-2.5", "4.0")
+
+# with_scale increase / decrease (truncates).
+match big.decimal_from_str("1.5") {
+    Result.Ok(d) => print d.with_scale(4).to_str()
+    Result.Err(_) => print "err"
+}
+match big.decimal_from_str("1.234567") {
+    Result.Ok(d) => print d.with_scale(3).to_str()
+    Result.Err(_) => print "err"
+}
+match big.decimal_from_str("-1.234567") {
+    Result.Ok(d) => print d.with_scale(3).to_str()
+    Result.Err(_) => print "err"
+}
+
+# is_zero / abs / neg on a decimal value.
+match big.decimal_from_str("0.000") {
+    Result.Ok(d) => print d.is_zero()
+    Result.Err(_) => print "err"
+}
+match big.decimal_from_str("-1.5") {
+    Result.Ok(d) => {
+        print d.abs().to_str()
+        print d.neg().to_str()
+    }
+    Result.Err(_) => print "err"
+}

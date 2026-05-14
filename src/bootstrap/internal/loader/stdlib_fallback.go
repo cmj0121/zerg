@@ -62,7 +62,12 @@ func SetStdlibFallbackForTest(lookup func(family, name string) ([]byte, bool)) f
 // source. An unrecognised family returns (nil, false).
 //
 // Layout:
-//   - std/* family is flat: `<name>.zg`.
+//   - std/* family admits two forms, probed in order:
+//
+//        1. <name>.zg                                  flat single-file
+//        2. <name>/mod.zg                              directory module
+//                                                       (math at v0.17)
+//
 //   - sys/* family is per-module — the loader probes three forms in
 //     order and uses whichever exists (matches sysModulePath's on-disk
 //     rule so disk and embed paths agree):
@@ -78,8 +83,10 @@ func SetStdlibFallbackForTest(lookup func(family, name string) ([]byte, bool)) f
 func defaultStdlibFallback(family, name string) ([]byte, bool) {
 	switch family {
 	case "stdlib":
-		path := name + ".zg"
-		return readEmbeddedRoots(path)
+		if content, ok := readEmbeddedRoots(name + ".zg"); ok {
+			return content, true
+		}
+		return readEmbeddedRoots(name + "/mod.zg")
 	case "sys":
 		if content, ok := readEmbeddedRoots("sys/" + name + ".zg"); ok {
 			return content, true

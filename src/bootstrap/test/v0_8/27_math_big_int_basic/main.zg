@@ -1,0 +1,42 @@
+# requires: v0.17
+import "math/big"
+
+# from_int + to_str round-trip on small operands, including zero and
+# the INT64_MIN edge.
+print big.from_int(0).to_str()
+print big.from_int(1).to_str()
+print big.from_int(-1).to_str()
+print big.from_int(42).to_str()
+print big.from_int(-42).to_str()
+
+int_min := -9223372036854775807 - 1
+print big.from_int(int_min).to_str()
+
+# add / sub / mul cover the sign-cases. mag_cmp drives whether add
+# routes through mag_add (same sign) or mag_sub (opposite).
+a := big.from_int(100)
+b := big.from_int(42)
+print a.add(b).to_str()
+print a.sub(b).to_str()
+print b.sub(a).to_str()
+print a.mul(b).to_str()
+
+c := big.from_int(-100)
+print a.add(c).to_str()
+print a.sub(c).to_str()
+print c.mul(b).to_str()
+
+# Larger multiply exercises mag_mul carry propagation past one digit.
+big1 := big.from_int(99999)
+big2 := big.from_int(99999)
+print big1.mul(big2).to_str()
+
+# neg / abs / is_zero.
+z := big.from_int(0)
+print z.is_zero()
+print a.is_zero()
+
+n := big.from_int(-77)
+print n.abs().to_str()
+print n.neg().to_str()
+print z.neg().to_str()

@@ -1,0 +1,70 @@
+# requires: v0.17
+import "math/big"
+
+# Negative-zero collapse: parsing "-0" produces canonical zero, and
+# 0.neg() / 0.abs() also stay canonical (sign=0).
+match big.from_str("-0") {
+    Result.Ok(v) => {
+        print v.to_str()
+        print v.is_zero()
+        print v.neg().to_str()
+        print v.abs().to_str()
+    }
+    Result.Err(_) => print "err"
+}
+
+# Subtraction collapse: 5 - 5 = canonical zero, no sign drift.
+a := big.from_int(5)
+b := big.from_int(5)
+diff := a.sub(b)
+print diff.to_str()
+print diff.is_zero()
+# Multiplication by zero collapses regardless of operand sign.
+neg_seven := big.from_int(-7)
+print neg_seven.mul(big.from_int(0)).to_str()
+
+# Leading-zero strip: "00042" canonicalises to "42".
+match big.from_str("00042") {
+    Result.Ok(v) => print v.to_str()
+    Result.Err(_) => print "err"
+}
+match big.from_str("-00042") {
+    Result.Ok(v) => print v.to_str()
+    Result.Err(_) => print "err"
+}
+
+# BigDecimal zero with scale > 0 prints as "0.00000" and reports
+# is_zero() == true. The authored scale is preserved (display); the
+# underlying unscaled BigInt stays canonical (numeric).
+match big.decimal_from_str("0.00000") {
+    Result.Ok(d) => {
+        print d.to_str()
+        print d.is_zero()
+    }
+    Result.Err(_) => print "err"
+}
+
+# Numeric equality is scale-agnostic — 1.0 == 1.00 == 1.000.
+match big.decimal_from_str("1.0") {
+    Result.Ok(x) => match big.decimal_from_str("1.00") {
+        Result.Ok(y) => print x.eq(y)
+        Result.Err(_) => print "err"
+    }
+    Result.Err(_) => print "err"
+}
+
+# But to_str preserves the authored scale.
+match big.decimal_from_str("1.0") {
+    Result.Ok(x) => match big.decimal_from_str("1.00") {
+        Result.Ok(y) => {
+            print x.to_str()
+            print y.to_str()
+        }
+        Result.Err(_) => print "err"
+    }
+    Result.Err(_) => print "err"
+}
+
+# decimal_from_int at scale 0 prints without a point.
+print big.decimal_from_int(0).to_str()
+print big.decimal_from_int(7).to_str()

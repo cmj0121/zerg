@@ -40,6 +40,12 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.10** — hardening and language reference.
 - [x] **v0.11** — bare-binding form (retire `let` from grammar).
 - [x] **v0.12** — M:N coroutine runtime.
+- [x] **v0.13** — platform-suffix file resolution + inline assembly (macOS arm64).
+- [x] **v0.14** — pure-Zerg stdlib over `sys/syscall` intrinsics.
+- [x] **v0.15** — tuple parallel reassignment (`a, b = b, a + b`).
+- [x] **v0.16** — bare-identifier string interpolation (`"hi {name}"`).
+- [x] **v0.17** — arbitrary-precision arithmetic + bundled operator specs.
+- [x] **v0.18** — `pub import` flat re-export.
 - [ ] **v1.0** — source stability.
 
 A phase ships when each example's stdout matches between `zerg run` and `zerg build` — byte-identical
@@ -103,12 +109,13 @@ Prints the catalog of toolchain-supported modules with a one-line description ea
 
 `import "foo"` is resolved by the loader using a fall-through chain:
 
-| Form          | Source                       | Notes                                                              |
-| ------------- | ---------------------------- | ------------------------------------------------------------------ |
-| bare `<name>` | `<importer-dir>/<name>.zg`   | Same-repo sibling (wins when present).                             |
-|               | embedded `std/<name>.zg`     | Fall-through to stdlib — `std/` is the implicit default namespace. |
-| `std/<name>`  | embedded `std/<name>.zg`     | Explicit stdlib form — skips the sibling check.                    |
-| `sys/<name>`  | embedded `sys/<name>/mod.zg` | **Explicit-only**: bare names never fall through to `sys/*`.       |
+| Form          | Source                                          | Notes                                                                           |
+| ------------- | ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| bare `<name>` | `<importer-dir>/<name>.zg`                      | Same-repo sibling (wins when present).                                          |
+|               | embedded `std/<name>.zg` or `std/<name>/mod.zg` | Fall-through to stdlib — `std/` is the implicit default namespace.              |
+| `std/<name>`  | embedded `std/<name>.zg` or `std/<name>/mod.zg` | Explicit stdlib form — skips the sibling check.                                 |
+| `std/<a>/<b>` | embedded `std/<a>/<b>.zg`                       | Submodule under a directory-form stdlib module (e.g. `math/big`, `math/utils`). |
+| `sys/<name>`  | embedded `sys/<name>.zg` or `sys/<name>/mod.zg` | **Explicit-only**: bare names never fall through to `sys/*`.                    |
 
 `import "io"` works just like `import "std/io"` when no sibling claims the name —
 the `std/` prefix is optional sugar for the implicit default namespace. Use the

@@ -182,6 +182,22 @@ fn_decl        = visibility "fn" IDENT [ type_params ] "(" [ param_list ] ")" [ 
 param_list     = param { "," param }
 param          = IDENT ":" type [ "=" expr ]
 
+# Imports — bring an external module into scope at the file's top level.
+# An optional `as` clause renames the local binding (caller-side view
+# is unchanged). v0.18 adds the `pub` prefix: a `pub import` re-exports
+# the imported module's pub fns / structs / enums / specs flat under
+# the host module's namespace. `as` stays local-only on `pub import` —
+# it does not introduce a sub-namespace at the caller boundary; two
+# pub imports contributing the same name reject at module-bind time
+# with a focused collision diagnostic.
+#
+#   import "io"                           ; bare binding
+#   import "math/big" as bignum           ; local rename
+#   pub import "math/utils"               ; v0.18 — flat re-export
+#   pub import "math/big" as big          ; v0.18 — flat re-export
+#                                         ;          (`as` local-only)
+import_stmt    = [ "pub" ] "import" STRING [ "as" IDENT ]
+
 # Specs — interfaces that types can implement.
 # A spec declares method signatures without bodies.
 # Specs can extend other specs with ":" (uses constraint syntax: A + B).
@@ -499,12 +515,32 @@ struct_update  = ".." expr
 #
 # Built-in specs (compiler-provided):
 #   Printable, Iterable[T], Iterator[T], Exception
-#   Operator specs: Add[T], Sub[T], Mul[T], Div[T], Mod[T], Neg
-#   Eq, Comparable, Hashable, Index[K, V]
-#   BitAnd[T], BitOr[T], BitXor[T], BitNot, Shl, Shr
+#   Operator specs (v0.17+, bundled):
+#     Arithmetic  — `+ - * / %` and unary `-`
+#                    Methods: add / sub / mul / div / mod / neg
+#                    Primitive coverage: int, float
+#     Comparable  — `== != < <= > >=`
+#                    Methods: eq + lt (the four derived ordering ops
+#                    desugar via swap and/or negation at typeck time)
+#                    Primitive coverage: int, float, byte, rune, str
+#     From[T]     — Rust-style conversion contract
+#                    Method:  from(value: T) -> Self
+#                    NOT yet user-implementable at v0.17 (needs
+#                    `impl X for Spec[T]` parser support + static-
+#                    method dispatch — v0.18).
+#   Hashable, Index[K, V]
+#   BitAnd[T], BitOr[T], BitXor[T], BitNot, Shl, Shr (reserved, v1.0+)
 # Built-in enums (compiler-provided):
 #   enum Result[T, E] { Ok(T), Err(E) }
 # See docs/BUILTIN.md for full documentation.
+#
+# Operator desugar (v0.17): on a user struct or enum, the spec-impl
+# lookup fires before the primitive arms. `a + b` on a BigInt with
+# `impl BigInt for Arithmetic` lowers at typeck time to `a.add(b)`.
+# Comparisons on Comparable use `a.lt(b)` / `a.eq(b)`; `>` swaps
+# operands, `<= >=` add a result negation, `!=` negates `eq`. The
+# bundle's same-type-operands rule still applies (BigInt + int
+# rejects — convert one operand explicitly).
 
 type            = [ "&" "mut" ] ( fn_type | qualified_ident [ "[" type_args "]" ] ) [ "?" ]
 fn_type         = "fn" "(" [ type_args ] ")" [ "->" type ]

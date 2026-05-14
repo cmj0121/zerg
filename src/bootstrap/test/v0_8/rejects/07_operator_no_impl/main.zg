@@ -1,0 +1,10 @@
+# requires: v0.17
+#
+# A user struct that does NOT implement Arithmetic cannot use `a + b`
+# — the operator-spec lookup misses and the primitive arms reject.
+
+struct Point { x: int, y: int }
+
+a := Point { x: 1, y: 2 }
+b := Point { x: 3, y: 4 }
+print (a + b).x

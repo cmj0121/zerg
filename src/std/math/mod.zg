@@ -1,0 +1,34 @@
+# requires: v0.18
+#
+# math — directory-module entry. Re-exposes every submodule's pub
+# surface flat under the math namespace using v0.18 `pub import`.
+#
+# Family layout:
+#
+#   math       (this file)  — directory-module entry; re-exports below
+#   math/spec               — prose-contract documentation for the
+#                              bundled operator specs Arithmetic,
+#                              Comparable, From (their canonical
+#                              shape is typeck-injected at bootstrap)
+#   math/utils              — integer-math primitives (abs / min /
+#                              max / gcd)
+#   math/big                — arbitrary-precision BigInt + BigDecimal
+#                              with bundled-spec operator support
+#
+# Callers do `import "math"` and access flat:
+#
+#     math.abs(-7)           # from math/utils
+#     math.gcd(12, 18)       # from math/utils
+#     math.BigInt            # from math/big — type re-exported
+#     math.from_int(5)       # from math/big — free fn re-exported
+#
+# Direct submodule imports still work and stay independent:
+#     import "math/big"
+#     big.from_int(5)        # equivalent to math.from_int(5)
+#
+# The `as` keyword renames the local binding inside THIS file only —
+# it does NOT change what callers see. v0.18 locks the rule:
+#   pub import ALWAYS flattens; `as` is local-only.
+
+pub import "math/utils"
+pub import "math/big"

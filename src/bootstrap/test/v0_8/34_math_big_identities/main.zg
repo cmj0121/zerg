@@ -1,0 +1,107 @@
+# requires: v0.17
+# Algebraic identities on small (3-10 digit) operands. Each block
+# checks the identity reflexively against a parallel ground-truth
+# computation; the test reports `true` when the identity holds.
+
+import "math/big"
+
+# Helper: build a big.BigInt from a string literal (panics on malformed
+# input — these are hand-authored corpora so the panic doubles as a
+# fixture-author guard).
+fn b(s: str) -> big.BigInt {
+    match big.from_str(s) {
+        Result.Ok(v) => return v
+        Result.Err(_) => panic("test fixture: malformed big.BigInt literal")
+    }
+    # Unreachable — Zerg's match-exhaustiveness check pairs with the
+    # panic so the borrow-checker sees every arm returning.
+    return big.from_int(0)
+}
+
+# Commutativity: a + b == b + a, a * b == b * a.
+fn commutes(a: big.BigInt, x: big.BigInt) -> bool {
+    add_eq := a.add(x).eq(x.add(a))
+    mul_eq := a.mul(x).eq(x.mul(a))
+    return add_eq and mul_eq
+}
+
+# Associativity: (a + b) + c == a + (b + c); same for *.
+fn associates(a: big.BigInt, x: big.BigInt, y: big.BigInt) -> bool {
+    add_eq := a.add(x).add(y).eq(a.add(x.add(y)))
+    mul_eq := a.mul(x).mul(y).eq(a.mul(x.mul(y)))
+    return add_eq and mul_eq
+}
+
+# Distributivity: a * (b + c) == a * b + a * c.
+fn distributes(a: big.BigInt, x: big.BigInt, y: big.BigInt) -> bool {
+    lhs := a.mul(x.add(y))
+    rhs := a.mul(x).add(a.mul(y))
+    return lhs.eq(rhs)
+}
+
+# Identity: a + 0 == a, a * 1 == a, a * 0 == 0.
+fn unit_laws(a: big.BigInt) -> bool {
+    zero := big.from_int(0)
+    one := big.from_int(1)
+    add_id := a.add(zero).eq(a)
+    mul_id := a.mul(one).eq(a)
+    mul_zero := a.mul(zero).eq(zero)
+    return add_id and mul_id and mul_zero
+}
+
+# Negation: a + (-a) == 0, -(-a) == a, abs(-a) == abs(a).
+fn neg_laws(a: big.BigInt) -> bool {
+    zero := big.from_int(0)
+    add_inv := a.add(a.neg()).eq(zero)
+    double_neg := a.neg().neg().eq(a)
+    abs_eq := a.neg().abs().eq(a.abs())
+    return add_inv and double_neg and abs_eq
+}
+
+# div/mod identity: a == (a / b) * b + (a mod b) when b != 0.
+fn divmod_id(a: big.BigInt, b: big.BigInt) -> bool {
+    match a.div_checked(b) {
+        Result.Ok(q) => match a.mod_checked(b) {
+            Result.Ok(r) => return q.mul(b).add(r).eq(a)
+            Result.Err(_) => return false
+        }
+        Result.Err(_) => return false
+    }
+    return false
+}
+
+# Operand set — mix of positive, negative, and a multi-digit case.
+a := b("123")
+x := b("4567")
+y := b("-89")
+z := b("999999999")
+w := b("0")
+
+print commutes(a, x)
+print commutes(x, y)
+print commutes(z, w)
+
+print associates(a, x, y)
+print associates(y, z, x)
+print associates(z, w, a)
+
+print distributes(a, x, y)
+print distributes(y, z, w)
+print distributes(z, a, b("-1"))
+
+print unit_laws(a)
+print unit_laws(y)
+print unit_laws(z)
+
+print neg_laws(a)
+print neg_laws(y)
+print neg_laws(z)
+print neg_laws(w)
+
+# divmod identity on a representative set.
+print divmod_id(a, b("7"))
+print divmod_id(x, b("13"))
+print divmod_id(y, b("4"))
+print divmod_id(z, b("17"))
+print divmod_id(b("-100"), b("3"))
+print divmod_id(b("0"), b("5"))

@@ -436,7 +436,11 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 			// receiver name so dispatch falls back to the name-keyed table
 			// when *Type lookup misses on a monomorphisation.
 			if len(id.TypeParams) > 0 {
-				if id.Spec == "" {
+				// v0.17: operator-spec impls fold into inherent
+				// alongside the canonical inherent path — typeck
+				// has lowered every surface op to a concrete
+				// method call.
+				if id.Spec == "" || syntax.IsOperatorSpecName(id.Spec) {
 					mm, ok := in.inherentByBaseName[id.Type]
 					if !ok {
 						mm = map[string]*syntax.FnDecl{}
@@ -469,7 +473,11 @@ func newBundleInterp(bundle syntax.BundleView, w io.Writer) *interp {
 				// whole run.
 				continue
 			}
-			if id.Spec == "" {
+			if id.Spec == "" || syntax.IsOperatorSpecName(id.Spec) {
+				// v0.17: operator-spec impls fold into inherent —
+				// typeck has lowered every surface op to a
+				// concrete method call, so specByType is never
+				// consulted for these methods.
 				m, ok := in.inherentByType[recv]
 				if !ok {
 					m = map[string]*syntax.FnDecl{}
@@ -846,8 +854,14 @@ func scanExprForType(e syntax.Expr, name string) *syntax.Type {
 	case *syntax.ParenExpr:
 		return scanExprForType(ex.Inner, name)
 	case *syntax.UnaryExpr:
+		if ex.Lowered != nil {
+			return scanExprForType(ex.Lowered, name)
+		}
 		return scanExprForType(ex.Operand, name)
 	case *syntax.BinaryExpr:
+		if ex.Lowered != nil {
+			return scanExprForType(ex.Lowered, name)
+		}
 		if t := scanExprForType(ex.Left, name); t != nil {
 			return t
 		}
@@ -1750,6 +1764,10 @@ func (in *interp) evalInterpolatedStringLit(e *syntax.InterpolatedStringLit) (Va
 }
 
 func (in *interp) evalUnary(e *syntax.UnaryExpr) (Value, error) {
+	// v0.17 operator-spec desugar for `-x` on user types.
+	if e.Lowered != nil {
+		return in.evalMethodCall(e.Lowered)
+	}
 	v, err := in.evalExpr(e.Operand)
 	if err != nil {
 		return Value{}, err
@@ -1771,7 +1789,21 @@ func (in *interp) evalUnary(e *syntax.UnaryExpr) (Value, error) {
 
 // evalBinary handles short-circuit `and`/`or`; everything else delegates to
 // applyBin so the assignment path can share the implementation.
+//
+// v0.17 operator-spec desugar: when e.Lowered is set, typeck has
+// rewritten the BinaryExpr into a method-call shape. Evaluate the
+// call and optionally negate the bool result for `!=`, `>=`, `<=`.
 func (in *interp) evalBinary(e *syntax.BinaryExpr) (Value, error) {
+	if e.Lowered != nil {
+		v, err := in.evalMethodCall(e.Lowered)
+		if err != nil {
+			return Value{}, err
+		}
+		if e.LoweredNot {
+			return boolVal(!v.Bool), nil
+		}
+		return v, nil
+	}
 	switch e.Op {
 	case syntax.BinAnd:
 		// Short-circuit: skip the rhs when lhs is false.
@@ -2855,7 +2887,7 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 	// to the callee's owning module).
 	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
 		if foreign, isMod := in.cur.imports[id.Name]; isMod {
-			if fn, ok := foreign.fns[e.Method]; ok {
+			if fn := in.lookupModuleFn(foreign, e.Method); fn != nil {
 				return in.callFn(fn, e.Args, e.Type(), e.Pos)
 			}
 			return Value{}, fmt.Errorf("internal: module %q has no fn %q at %s", id.Name, e.Method, e.MethodPos)
@@ -2868,6 +2900,14 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 	if rv.Type == nil {
 		return Value{}, fmt.Errorf("internal: method call receiver has nil type at %s", e.Pos)
 	}
+	// v0.17 operator-spec desugar: primitive-typed receivers reach the
+	// method-call path only via a synthesised MethodCallExpr from
+	// tryOperatorSpecDesugar / tryUnaryOperatorSpecDesugar. Route to
+	// the primitive-arithmetic dispatcher rather than the fn-body path
+	// (synthetic impl methods carry no body).
+	if syntax.IsPrimitiveTypeForOperator(rv.Type) {
+		return in.dispatchPrimitiveOperatorBuiltin(e, rv)
+	}
 	// Spec-typed receiver — vtable dispatch.
 	if rv.Type.Kind == syntax.TypeSpec {
 		return in.dispatchSpec(e, rv)
@@ -2876,9 +2916,141 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 	return in.dispatchConcrete(e, rv)
 }
 
+// dispatchPrimitiveOperatorBuiltin evaluates a synthesised primitive-
+// receiver operator-method call. Mirrors cgen's
+// emitPrimitiveOperatorBuiltin — the receiver value carries the
+// primitive *Type, and the method name picks the operator. Most
+// methods route through applyBin so primitive-arm semantics stay
+// canonical; `neg` / `eq` / `lt` use the same helpers the regular
+// primitive arms call.
+func (in *interp) dispatchPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rv Value) (Value, error) {
+	var av Value
+	if len(e.Args) == 1 {
+		v, err := in.evalExpr(e.Args[0])
+		if err != nil {
+			return Value{}, err
+		}
+		av = v
+	}
+	if op, ok := primitiveOperatorBinOp(e.Method); ok {
+		return applyBin(op, rv, av)
+	}
+	switch e.Method {
+	case "neg":
+		if rv.Type == syntax.TInt() {
+			return intVal(-rv.Int), nil
+		}
+		return floatVal(-rv.Float), nil
+	case "eq":
+		eq, err := eqValues(rv, av)
+		if err != nil {
+			return Value{}, err
+		}
+		return boolVal(eq), nil
+	case "lt":
+		c, err := comparePrimitiveValues(rv, av)
+		if err != nil {
+			return Value{}, err
+		}
+		return boolVal(c < 0), nil
+	}
+	return Value{}, fmt.Errorf("internal: unsupported primitive operator method %q on %s at %s", e.Method, rv.Type, e.Pos)
+}
+
+// primitiveOperatorBinOp maps an operator-spec method name to the
+// underlying BinaryOp for applyBin. Returns (op, true) for the five
+// arithmetic operators; (_, false) for non-arithmetic methods (which
+// the caller handles directly).
+func primitiveOperatorBinOp(method string) (syntax.BinaryOp, bool) {
+	switch method {
+	case "add":
+		return syntax.BinAdd, true
+	case "sub":
+		return syntax.BinSub, true
+	case "mul":
+		return syntax.BinMul, true
+	case "div":
+		return syntax.BinDiv, true
+	case "mod":
+		return syntax.BinMod, true
+	}
+	return 0, false
+}
+
+// comparePrimitiveValues returns -1 / 0 / +1 for two primitive
+// values of equal type. Mirrors the cgen cmp lowering and the
+// existing BinLT / BinGT arms in applyBin so the run / build paths
+// agree byte-for-byte on the wire ordering.
+func comparePrimitiveValues(a, b Value) (int64, error) {
+	switch a.Type {
+	case syntax.TInt(), syntax.TByte(), syntax.TRune():
+		switch {
+		case a.Int < b.Int:
+			return -1, nil
+		case a.Int > b.Int:
+			return 1, nil
+		}
+		return 0, nil
+	case syntax.TFloat():
+		switch {
+		case a.Float < b.Float:
+			return -1, nil
+		case a.Float > b.Float:
+			return 1, nil
+		}
+		return 0, nil
+	case syntax.TStr():
+		switch {
+		case a.Str < b.Str:
+			return -1, nil
+		case a.Str > b.Str:
+			return 1, nil
+		}
+		return 0, nil
+	}
+	return 0, fmt.Errorf("internal: cmp on unsupported primitive type %s", a.Type)
+}
+
 // dispatchSpec routes a method call through a spec-typed fat pointer's
 // (ConcreteType, Spec) pair. Resolution: concrete impl override > spec
 // default > NotImplemented panic.
+// lookupModuleFn finds the *FnDecl named `name` in `md`. v0.18: walks
+// `pub import` targets recursively, mirroring cgen.lookupModuleFn so
+// `math.abs(...)` lights up when math/mod.zg `pub import "math/utils"`
+// even though math/mod.zg's own program never declares `abs`.
+func (in *interp) lookupModuleFn(md *moduleData, name string) *syntax.FnDecl {
+	return in.lookupModuleFnWalk(md, name, map[*moduleData]bool{})
+}
+
+func (in *interp) lookupModuleFnWalk(md *moduleData, name string, seen map[*moduleData]bool) *syntax.FnDecl {
+	if md == nil || seen[md] {
+		return nil
+	}
+	seen[md] = true
+	if fn, ok := md.fns[name]; ok {
+		return fn
+	}
+	if md.prog == nil {
+		return nil
+	}
+	for _, stmt := range md.prog.Statements {
+		imp, ok := stmt.(*syntax.ImportDecl)
+		if !ok || !imp.Pub {
+			continue
+		}
+		local := imp.Alias
+		if local == "" {
+			local = syntax.ImportPathBasename(imp.Path)
+		}
+		if target := md.imports[local]; target != nil {
+			if fn := in.lookupModuleFnWalk(target, name, seen); fn != nil {
+				return fn
+			}
+		}
+	}
+	return nil
+}
+
 func (in *interp) dispatchSpec(e *syntax.MethodCallExpr, rv Value) (Value, error) {
 	specName := rv.Type.Name
 	if rv.Data == nil {

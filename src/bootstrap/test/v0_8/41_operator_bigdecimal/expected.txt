@@ -1,0 +1,11 @@
+5.14
+1.14
+6.2800
+-3.14
+true
+false
+true
+false
+true
+true
+true

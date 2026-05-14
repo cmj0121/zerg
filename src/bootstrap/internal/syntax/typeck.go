@@ -363,23 +363,36 @@ type fnSig struct {
 
 // specMethod is one method declared in a spec body. Body == nil signals
 // signature-only; non-nil is a default body the impl may inherit.
+//
+// v0.17: Synthetic flags the built-in operator specs (Arithmetic /
+// Comparable / From) injected at newChecker time. Synthetic methods
+// have ast == nil and rely on impl-time substitution to fill the
+// receiver-dependent param/ret slots — see injectOperatorSpecs.
 type specMethod struct {
-	pos    Position
-	name   string
-	params []*Type   // resolved param types (excluding implicit `this`)
-	ret    *Type     // void if no declared return
-	ast    *SpecMethod
+	pos       Position
+	name      string
+	params    []*Type // resolved param types (excluding implicit `this`)
+	ret       *Type   // void if no declared return
+	ast       *SpecMethod
+	Synthetic bool // v0.17 — built-in operator spec method
 }
 
 // Spec is the per-program record for a spec declaration. Methods preserves
 // declaration order for vtable layout determinism; methodIdx is the lookup-by-
 // name index that drives method dispatch on a spec-typed receiver.
+//
+// v0.17: Synthetic flags the built-in operator specs (Arithmetic /
+// Comparable / From) injected at newChecker time. Synthetic specs are
+// usable as `impl T for <Spec>` declarations and as generic-fn bound
+// names (`fn sum[T: Arithmetic](xs: list[T])`); they carry a canonical
+// TypeSpec so resolveTypeRef can return their type when referenced.
 type Spec struct {
 	Pos       Position
 	Name      string
 	Methods   []*specMethod        // declaration order
 	methodIdx map[string]*specMethod
 	typ       *Type                // canonical TypeSpec singleton
+	Synthetic bool                 // v0.17 — built-in operator spec
 }
 
 // implMethod is one method that lives inside an impl block. We track the
@@ -409,9 +422,9 @@ type Impl struct {
 	Receiver   *Type  // resolved receiver type (struct or enum)
 	Methods    []*implMethod // declaration order
 	methodIdx  map[string]*implMethod
-	ast        *ImplDecl
-	recvOwner  ModuleView // v0.5: defining module of TypeName, nil for single-program
-	specOwner  ModuleView // v0.5: defining module of SpecName, nil for inherent or single-program
+	ast       *ImplDecl
+	recvOwner ModuleView // v0.5: defining module of TypeName, nil for single-program
+	specOwner ModuleView // v0.5: defining module of SpecName, nil for inherent or single-program
 }
 
 // methodSource is one place a method name is visible on a type — either an
@@ -540,6 +553,13 @@ type checker struct {
 	// waitGroupType is the canonical synthetic WaitGroup struct *Type.
 	// Populated by injectWaitGroupBuiltin at newChecker time.
 	waitGroupType *Type
+	// reExportSource is the v0.18 pub-import provenance map. Each entry
+	// records: this name in c.fns / c.structs / c.enums / c.specs is a
+	// re-export from the named source module — not a local decl. Pub-
+	// check helpers (fnIsPub / specIsPub / structAST.Pub / enumAST.Pub)
+	// follow the chain to validate visibility against the canonical
+	// decl. Empty when this checker doesn't re-export anything.
+	reExportSource map[string]ModuleView
 }
 
 // Check is the public single-program entry point. It walks prog, annotates
@@ -1290,6 +1310,14 @@ func (c *checker) resolveTypeRef(ref *TypeRef) (*Type, error) {
 			return nil, typeErr(ref.Pos,
 				"`Option` is not a valid type; spell a nullable as `T?` instead")
 		}
+		// v0.17 synthetic operator specs: `Add[T]` / `Ord[T]` / etc.
+		// resolve as the bare-spec type — the `[T]` arg is a hint that
+		// downstream impl-resolution validates per-receiver, not a
+		// genuine type-parameter on the spec itself.
+		if sp, ok := c.specs[ref.Name]; ok && sp.Synthetic {
+			ref.Resolved = sp.typ
+			return sp.typ, nil
+		}
 		// Generic-name path (v0.6): a name with type-args resolves through
 		// the per-decl monomorphization cache. Unit 2 handled the built-in
 		// T? / Result decls; Unit 3 extends to user-defined generic
@@ -1699,11 +1727,19 @@ func (c *checker) assignableTo(from, to *Type) bool {
 		return false
 	}
 	// Spec widening: from concrete struct/enum implementing `to`.
+	// v0.17 widens this to admit primitives — the synthetic primitive
+	// impls installed by injectPrimitiveOperatorImpls populate
+	// c.impls keyed by primitive type names, so generic-fn bounds
+	// (`T: Add[T]`) compose uniformly across primitives and user
+	// types. Pre-v0.17 the clause `from.Kind != TypeStruct && from.Kind
+	// != TypeEnum` short-circuited primitives — that's load-bearing
+	// only when no primitive impls exist (i.e. pre-injection).
 	if to.Kind == TypeSpec {
-		if from.Kind != TypeStruct && from.Kind != TypeEnum {
-			return false
+		fromName := from.Name
+		if fromName == "" {
+			fromName = primitiveTypeName(from)
 		}
-		key := implKey{typeName: from.Name, specName: to.Name}
+		key := implKey{typeName: fromName, specName: to.Name}
 		if _, ok := c.impls[key]; ok {
 			return true
 		}
@@ -3420,6 +3456,14 @@ func exprDisplay(e Expr) string {
 }
 
 // checkBinary validates per-operator typing rules.
+//
+// v0.17 operator-spec wiring: when the operand types are user-defined
+// (struct or enum) AND they match, the spec-impl lookup fires before
+// the primitive arms. On hit, the BinaryExpr is rewritten in place
+// (Lowered / LoweredNot set) and the primitive arms are skipped. The
+// primitive fast path is byte-identical to pre-v0.17 behaviour because
+// it only runs when the user-type lookup misses or the operands aren't
+// user-defined.
 func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 	lt, err := c.checkExpr(e.Left)
 	if err != nil {
@@ -3429,6 +3473,19 @@ func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 	if err != nil {
 		return nil, err
 	}
+	// v0.17 operator-spec desugar — only fires when the existing
+	// primitive arms would miss. Same-type user struct / enum operands
+	// trigger an impl lookup; on hit, the BinaryExpr is fully checked
+	// and we return early.
+	if isUserStructOrEnum(lt) && typeEq(lt, rt) {
+		lowered, t, err := c.tryOperatorSpecDesugar(e, lt)
+		if err != nil {
+			return nil, err
+		}
+		if lowered {
+			return t, nil
+		}
+	}
 	var result *Type
 	switch e.Op {
 	case BinAdd:
@@ -3437,11 +3494,11 @@ func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 		} else if isNumeric(lt) && lt == rt {
 			result = lt
 		} else {
-			return nil, typeErr(e.Pos, "operator + requires numeric or str operands of the same type, got %s and %s", lt, rt)
+			return nil, typeErr(e.Pos, "%s", appendUserTypeHint("operator + requires numeric or str operands of the same type, got "+typeDisplay(lt)+" and "+typeDisplay(rt), lt, rt))
 		}
 	case BinSub, BinMul, BinDiv, BinFloorDiv, BinMod:
 		if !isNumeric(lt) || lt != rt {
-			return nil, typeErr(e.Pos, "operator %s requires numeric operands of the same type, got %s and %s", e.Op, lt, rt)
+			return nil, typeErr(e.Pos, "%s", appendUserTypeHint("operator "+e.Op.String()+" requires numeric operands of the same type, got "+typeDisplay(lt)+" and "+typeDisplay(rt), lt, rt))
 		}
 		result = lt
 	case BinBitOr, BinBitXor, BinBitAnd, BinShl, BinShr:
@@ -3457,12 +3514,12 @@ func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 			return nil, typeErr(e.Pos, "%s", reason)
 		}
 		if !typeEq(lt, rt) {
-			return nil, typeErr(e.Pos, "operator %s requires operands of the same type, got %s and %s", e.Op, lt, rt)
+			return nil, typeErr(e.Pos, "%s", appendUserTypeHint("operator "+e.Op.String()+" requires operands of the same type, got "+typeDisplay(lt)+" and "+typeDisplay(rt), lt, rt))
 		}
 		result = tBool
 	case BinLT, BinGT, BinLE, BinGE:
 		if lt != rt || !(isNumeric(lt) || lt == tStr || lt == tByte || lt == tRune) {
-			return nil, typeErr(e.Pos, "operator %s requires same-typed numeric or str operands, got %s and %s", e.Op, lt, rt)
+			return nil, typeErr(e.Pos, "%s", appendUserTypeHint("operator "+e.Op.String()+" requires same-typed numeric or str operands, got "+typeDisplay(lt)+" and "+typeDisplay(rt), lt, rt))
 		}
 		result = tBool
 	case BinAnd, BinOr, BinXor:
@@ -3477,10 +3534,43 @@ func (c *checker) checkBinary(e *BinaryExpr) (*Type, error) {
 	return result, nil
 }
 
+// appendUserTypeHint adds the v0.17 conversion hint to a binary-op
+// rejection message when at least one operand is a user struct/enum.
+// `BigInt + int` then rejects with a focused pointer at the
+// conversion surface; primitive-vs-primitive rejections keep the
+// existing v0.0 wording unchanged.
+func appendUserTypeHint(base string, lt, rt *Type) string {
+	if isUserStructOrEnum(lt) || isUserStructOrEnum(rt) {
+		base += " (convert one operand explicitly to match)"
+	}
+	return base
+}
+
+// typeDisplay renders a *Type for an error message, guarding against
+// nil so the operator diagnostic never panics on a malformed operand.
+func typeDisplay(t *Type) string {
+	if t == nil {
+		return "<unknown>"
+	}
+	return t.String()
+}
+
 func (c *checker) checkUnary(e *UnaryExpr) (*Type, error) {
 	t, err := c.checkExpr(e.Operand)
 	if err != nil {
 		return nil, err
+	}
+	// v0.17 operator-spec desugar for `-x` on user types. Fires only
+	// when the primitive arm would reject; on hit, the UnaryExpr is
+	// rewritten with Lowered = x.neg() and the result type is t.
+	if isUserStructOrEnum(t) {
+		lowered, rt, err := c.tryUnaryOperatorSpecDesugar(e, t)
+		if err != nil {
+			return nil, err
+		}
+		if lowered {
+			return rt, nil
+		}
 	}
 	switch e.Op {
 	case UnaryNeg:

@@ -152,6 +152,47 @@ func CheckBundle(bundle BundleView) error {
 		}
 	}
 
+	// Phase 2.5 (v0.18): pub-import re-export propagation. Walk each
+	// module's `pub import "X"` decls and copy X's pub fns, structs,
+	// enums, and specs into the host module's tables. Detects
+	// collisions across pub imports and against the host's own decls.
+	// Re-export provenance is recorded on c.reExportSource so pub-
+	// check helpers (fnIsPub / specIsPub / inline struct & enum AST
+	// checks) can walk back to the canonical decl for visibility
+	// gating.
+	//
+	// Must run AFTER resolveFnSignatures / resolveGenericFnSignatures
+	// so the propagated fnSig entries carry resolved param/ret types,
+	// not placeholder sigs from collectTopLevel.
+	//
+	// Iterates to fixpoint so transitive re-exports (M pub-imports N
+	// which pub-imports O) compose correctly regardless of module
+	// iteration order. The cap is len(mods)+1 — at each pass at least
+	// one host must gain a new entry to keep the loop going, so the
+	// import DAG's depth bounds the iteration count. The cap is
+	// defensive: a real cycle would have been rejected by the
+	// loader's import-cycle detector before this point.
+	maxIters := len(mods) + 1
+	for iter := 0; iter <= maxIters; iter++ {
+		changed := false
+		for _, m := range mods {
+			c := checkers[m]
+			added, err := c.propagateReExports()
+			if err != nil {
+				return err
+			}
+			if added {
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+		if iter == maxIters {
+			return typeErr(Position{}, "internal: pub-import propagation did not converge in %d iterations", maxIters)
+		}
+	}
+
 	// Phase 3: per-module impl resolution + orphan rule. Impl resolution
 	// reaches across module boundaries to look up the receiver type and
 	// (optionally) the spec; the orphan rule requires the importing module
@@ -293,6 +334,13 @@ func newChecker() *checker {
 	// reservedBuiltinTypeNames / collectTopLevel rejects user redecls of
 	// the same names with the uniform diagnostic.
 	injectWaitGroupBuiltin(c)
+	// v0.17 operator-spec wiring: register the bundled Arithmetic /
+	// Comparable / From specs, then wire synthetic primitive impls so
+	// generic fn bounds (`fn sum[T: Arithmetic](xs)`) compose uniformly
+	// across primitives and user types. See typeck_v17_operators.go
+	// for the bundle shape and per-spec coverage.
+	injectOperatorSpecs(c)
+	injectPrimitiveOperatorImpls(c)
 	return c
 }
 
@@ -507,6 +555,13 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 					id.Type, id.Spec, prev.Pos)
 			}
 		}
+		// Stamp the resolved canonical receiver *Type onto the AST node
+		// before validateImplAgainstSpec so synthetic-operator-spec
+		// validation (which reads id.Receiver to substitute T) sees
+		// the receiver. Downstream consumers (interp's RunBundle,
+		// build's EmitBundle) also read id.Receiver to key impl
+		// tables by canonical pointer.
+		id.Receiver = recvType
 		methods, methodIdx, err := c.buildImplMethods(id)
 		if err != nil {
 			return err
@@ -516,12 +571,6 @@ func (c *checker) resolveImplsCross(self ModuleView) error {
 				return err
 			}
 		}
-		// Stamp the resolved canonical receiver *Type onto the AST node.
-		// Downstream consumers (interp's RunBundle, build's EmitBundle)
-		// read id.Receiver to key impl tables by canonical pointer, so
-		// two modules' same-named types disambiguate without a bundle-
-		// wide name scan.
-		id.Receiver = recvType
 		impl := &Impl{
 			Pos:       id.Pos,
 			TypeName:  id.Type,
@@ -706,7 +755,16 @@ func (c *checker) buildImplMethods(id *ImplDecl) ([]*implMethod, map[string]*imp
 
 // validateImplAgainstSpec is the spec/impl signature comparison split out
 // of resolveImpls. Same logic — kept here so the v0.5 path can use it.
+//
+// v0.17: synthetic operator specs (Arithmetic / Comparable / From) have
+// no source-level types — their methods reference an implicit receiver
+// type Self. The shape check delegates to validateOperatorSpecImpl,
+// which knows the bundle's expected method set after Self → receiver
+// substitution.
 func (c *checker) validateImplAgainstSpec(id *ImplDecl, methods []*implMethod, spec *Spec) error {
+	if spec.Synthetic {
+		return c.validateOperatorSpecImpl(id, methods, spec)
+	}
 	for _, im := range methods {
 		sm, ok := spec.methodIdx[im.name]
 		if !ok {
@@ -881,13 +939,32 @@ func (c *checker) resolveCrossModuleType(ref *TypeRef) (*Type, error) {
 // walk the foreign module's AST because the *Spec record itself doesn't
 // carry the bit; the cost is O(n) per probe but n is small (a module's
 // top-level decl count).
+//
+// v0.18: when `name` was re-exported into fc via `pub import`, the
+// canonical decl lives in fc.reExportSource[name] instead. Follow the
+// chain so the pub bit reflects the original spec's visibility.
 func specIsPub(fc *checker, name string) bool {
+	if source := reExportOwner(fc, name); source != nil {
+		if tc := fc.crossMod.checkers[source]; tc != nil {
+			return specIsPub(tc, name)
+		}
+	}
 	for _, stmt := range moduleStatements(fc) {
 		if sd, ok := stmt.(*SpecDecl); ok && sd.Name == name {
 			return sd.Pub
 		}
 	}
 	return false
+}
+
+// reExportOwner returns the source module of a re-exported name on fc,
+// or nil if the name is local (or absent). Used by pub-check helpers
+// to follow the re-export chain back to the canonical decl.
+func reExportOwner(fc *checker, name string) ModuleView {
+	if fc == nil || fc.reExportSource == nil || fc.crossMod == nil {
+		return nil
+	}
+	return fc.reExportSource[name]
 }
 
 // moduleStatements returns the AST statements of fc's owning module, or
@@ -900,7 +977,16 @@ func moduleStatements(fc *checker) []Stmt {
 }
 
 // fnIsPub reports whether the FnDecl named `name` in fc is `pub`.
+//
+// v0.18: re-exported names (entries in fc.reExportSource) follow the
+// chain back to the canonical FnDecl so visibility gating works
+// uniformly across local and re-exported decls.
 func fnIsPub(fc *checker, name string) bool {
+	if source := reExportOwner(fc, name); source != nil {
+		if tc := fc.crossMod.checkers[source]; tc != nil {
+			return fnIsPub(tc, name)
+		}
+	}
 	for _, stmt := range moduleStatements(fc) {
 		if fn, ok := stmt.(*FnDecl); ok && fn.Name == name {
 			return fn.Pub

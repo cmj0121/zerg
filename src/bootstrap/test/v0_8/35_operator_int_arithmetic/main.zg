@@ -1,0 +1,36 @@
+# requires: v0.17
+#
+# v0.17 regression coverage: every operator on int / float must still
+# lower via the primitive fast path (no operator-spec desugar fires
+# for primitive-by-primitive operands). Build / run parity is the
+# real test — this fixture just walks the surface.
+
+print 7 + 3
+print 7 - 3
+print 7 * 3
+print 7 / 3
+print 7 % 3
+print -7
+
+print 1.5 + 0.5
+print 1.5 - 0.5
+print 1.5 * 2.0
+print 1.5 / 0.5
+print -1.5
+
+print 1 == 1
+print 1 != 2
+print 1 < 2
+print 2 <= 2
+print 3 > 2
+print 3 >= 3
+
+print "hi" == "hi"
+print "hi" != "bye"
+print "ant" < "bee"
+print "ant" <= "ant"
+print "bee" > "ant"
+print "bee" >= "bee"
+
+print true == false
+print true != false

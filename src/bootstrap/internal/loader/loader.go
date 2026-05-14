@@ -379,7 +379,9 @@ func (l *loader) resolveImports(mod *Module) error {
 			}
 			localName := decl.Alias
 			if localName == "" {
-				localName = strings.TrimPrefix(decl.Path, fam.prefix)
+				// `import "std/math/big"` binds as `big` — the last
+				// path segment after the family prefix is stripped.
+				localName = lastPathSegment(strings.TrimPrefix(decl.Path, fam.prefix))
 			}
 			mod.Imports = append(mod.Imports, &ResolvedImport{
 				Decl:      decl,
@@ -388,21 +390,37 @@ func (l *loader) resolveImports(mod *Module) error {
 			})
 			continue
 		}
-		if !isValidIdentifier(decl.Path) {
+		if !isValidStdlibPath(decl.Path) {
 			return errorAtImport(mod.Path, decl,
 				"v0.5 supports flat sibling imports only: invalid module path %q", decl.Path)
 		}
-		siblingPath, err := resolveSiblingPath(siblingDir, decl.Path)
-		if err != nil {
-			return errorAtImport(mod.Path, decl, "%s", err.Error())
+		// Stdlib-shape bare imports (`import "math/big"`) skip the
+		// working-directory probe — `/` never appears in a sibling
+		// filename, so the only viable resolution is the stdlib fall-
+		// through. Single-identifier paths keep the v0.5 sibling-first
+		// behaviour.
+		var target *Module
+		var err error
+		if strings.Contains(decl.Path, "/") {
+			stdDecl := *decl
+			stdDecl.Path = "std/" + decl.Path
+			target, err = l.loadEmbeddedFamily(mod, &stdDecl, stdFamily)
+		} else {
+			siblingPath, perr := resolveSiblingPath(siblingDir, decl.Path)
+			if perr != nil {
+				return errorAtImport(mod.Path, decl, "%s", perr.Error())
+			}
+			target, err = l.resolveBareImport(mod, decl, siblingPath)
 		}
-		target, err := l.resolveBareImport(mod, decl, siblingPath)
 		if err != nil {
 			return err
 		}
 		localName := decl.Alias
 		if localName == "" {
-			localName = decl.Path
+			// `import "math/big"` binds as `big` (last segment) rather
+			// than as `"math/big"` (not a valid identifier). Single-
+			// segment paths bind as-is, matching v0.5 behaviour.
+			localName = lastPathSegment(decl.Path)
 		}
 		mod.Imports = append(mod.Imports, &ResolvedImport{
 			Decl:      decl,
@@ -515,7 +533,7 @@ func matchEmbeddedFamily(path string) *embeddedFamily {
 // so they stay invisible to user code.
 func (l *loader) loadEmbeddedFamily(importer *Module, decl *syntax.ImportDecl, fam embeddedFamily) (*Module, error) {
 	name := strings.TrimPrefix(decl.Path, fam.prefix)
-	if name == "" || strings.HasPrefix(name, "_") || !isValidIdentifier(name) {
+	if name == "" || strings.HasPrefix(name, "_") || !isValidStdlibPath(name) {
 		return nil, errorAtImport(importer.Path, decl,
 			"%s module not found: %s", fam.label, decl.Path)
 	}
@@ -641,6 +659,48 @@ func isValidIdentifier(s string) bool {
 		}
 	}
 	return true
+}
+
+// isValidStdlibPath reports whether s is admissible as the post-prefix
+// portion of an import path. Admits either a bare identifier
+// (`"math"`, `"strings"`) or exactly two identifier segments joined by
+// a single `/` (`"math/big"`). Deeper nesting (`"a/b/c"`) and empty
+// segments (`"a//b"`, `"/x"`, `"x/"`) reject — v0.17 caps stdlib
+// nesting at one segment, leaving deeper layouts available for later
+// minors as a strict superset.
+//
+// Used by both call sites that previously routed through
+// isValidIdentifier: the bare-import gate (where the path's first
+// segment may legally name a directory now) and the family gate
+// inside loadEmbeddedFamily (where the post-prefix portion may carry
+// the same single-slash shape).
+func isValidStdlibPath(s string) bool {
+	if s == "" {
+		return false
+	}
+	idx := strings.IndexByte(s, '/')
+	if idx < 0 {
+		return isValidIdentifier(s)
+	}
+	first := s[:idx]
+	rest := s[idx+1:]
+	// Reject deeper nesting and empty segments in one branch.
+	if first == "" || rest == "" || strings.Contains(rest, "/") {
+		return false
+	}
+	return isValidIdentifier(first) && isValidIdentifier(rest)
+}
+
+// lastPathSegment returns the substring after the final `/` in s, or
+// s itself if no slash is present. The loader uses this to derive
+// the default `LocalName` for nested imports: `import "math/big"`
+// binds as `big`, not as `"math/big"` (which is not a valid Zerg
+// identifier).
+func lastPathSegment(s string) string {
+	if idx := strings.LastIndexByte(s, '/'); idx >= 0 {
+		return s[idx+1:]
+	}
+	return s
 }
 
 // checkRequires gates the entry file's `# requires: vX.Y` marker against

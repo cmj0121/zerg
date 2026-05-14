@@ -1,0 +1,6 @@
+# requires: v0.17
+import "math/big"
+
+a := big.from_int(7)
+b := 7
+print (a + b).to_str()

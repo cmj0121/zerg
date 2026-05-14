@@ -1,0 +1,946 @@
+# requires: v0.17
+#
+# math/big — arbitrary-precision arithmetic. BigInt (signed unbounded
+# integers) + BigDecimal (signed unbounded fixed-point decimals).
+# Pure-Zerg; no __builtin, no host bridge.
+#
+# Display surface: `print bi` shows the internal struct fields
+# (BigInt { sign: ..., digits: [...] }). For the human-readable form,
+# call `bi.to_str()` first.
+#
+# Performance: schoolbook O(n²) arithmetic. Adequate for ~1000-digit
+# inputs; pathological beyond. Internal representation is opaque
+# (sign/digits/unscaled/scale are private), so a later refactor to
+# base-2^32 limbs is non-breaking.
+#
+# Storage note: each magnitude digit is conceptually a base-10 digit
+# ∈ 0..9, stored as an `int`. Ward's design specifies `byte` for the
+# minimum-memory shape; the v0.17 cut ships `int` because v0.14 lacks
+# a byte→int cast and the arithmetic body needs the int form. The
+# storage type sits behind the opaque-field boundary, so a later
+# refactor to byte (or to base-2^32 limbs) is a non-breaking change.
+
+import "strings"
+
+# DivError tags the only failure mode the four-op surface admits:
+# division (or modulo) by a zero divisor. Rounding modes (half-even,
+# half-up) are deferred — truncation is the v0.17 contract.
+pub enum DivError {
+    DivByZero
+}
+
+# BigInt — signed unbounded integer. Internal representation:
+# sign    -1 / 0 / +1 (zero is sign=0)
+# digits  base-10, LSB-first, each int ∈ 0..9
+#
+# Canonical invariants enforced by make_bigint:
+# C1  sign=0 ⟺ digits empty (canonical zero)
+# C2  no leading zeros (the top element is never zero unless
+# digits is empty)
+# C3  every digit in 0..9
+#
+# Fields are unmarked (private). Outside callers go through the
+# constructors and methods; the layout is free to change in a later
+# refactor (e.g. to base-2^32 limbs) without breaking the surface.
+pub struct BigInt {
+    sign: int,
+    digits: list[int]
+}
+
+# BigDecimal — signed unbounded fixed-point decimal. Internal
+# representation: `unscaled` is a BigInt holding the digit stream
+# treated as a single integer; `scale` is the number of digits that
+# sit to the right of the decimal point. scale ≥ 0 always.
+#
+# Authored scale is preserved end-to-end (0.500 ≠ 0.5 as `to_str`
+# output) while `eq` is numeric — `1.0 == 1.00` returns true.
+pub struct BigDecimal {
+    unscaled: BigInt,
+    scale: int
+}
+
+# ---------------------------------------------------------------------
+# Private digit-list helpers. Operate on list[int] LSB-first; `mag_*`
+# functions deal with magnitudes only (no signs). Each result is
+# canonical (no leading zeros) before it returns.
+# ---------------------------------------------------------------------
+# Pop top zeros until either the list is empty or the top element is
+# non-zero. Returns a fresh list to avoid aliasing surprises in the
+# struct-literal copy semantics.
+fn trim_leading_zeros(d: list[int]) -> list[int] {
+    mut top: int = d.len()
+    for top > 0 {
+        break if d[top - 1] != 0
+        top = top - 1
+    }
+    mut out: list[int] = []
+    for i in 0..top {
+        push(out, d[i])
+    }
+    return out
+}
+
+# Apply canonical invariants C1+C2 and return a fresh BigInt. The
+# caller hands raw magnitude and an intended sign; this helper trims
+# any top zeros and collapses an empty magnitude to canonical zero
+# regardless of the requested sign.
+fn make_bigint(sign: int, digits: list[int]) -> BigInt {
+    trimmed := trim_leading_zeros(digits)
+    if trimmed.len() == 0 {
+        return BigInt { sign: 0, digits: trimmed }
+    }
+    return BigInt { sign: sign, digits: trimmed }
+}
+
+# Clone a digit list. Used by `neg` / `abs` to avoid any list-aliasing
+# surprise in the struct-literal copy semantics — cost is negligible
+# vs the arithmetic body.
+fn clone_digits(d: list[int]) -> list[int] {
+    mut out: list[int] = []
+    for i in 0..d.len() {
+        push(out, d[i])
+    }
+    return out
+}
+
+# Compare two magnitudes. Returns -1, 0, +1. Both inputs assumed
+# canonical (no leading zeros).
+fn mag_cmp(a: list[int], b: list[int]) -> int {
+    al := a.len()
+    bl := b.len()
+    return -1 if al < bl
+    return 1 if al > bl
+    mut i: int = al
+    for i > 0 {
+        i = i - 1
+        return -1 if a[i] < b[i]
+        return 1 if a[i] > b[i]
+    }
+    return 0
+}
+
+# Magnitude add with carry propagation. Result is canonical.
+fn mag_add(a: list[int], b: list[int]) -> list[int] {
+    al := a.len()
+    bl := b.len()
+    mut nl: int = al
+    if bl > nl {
+        nl = bl
+    }
+    mut out: list[int] = []
+    mut carry: int = 0
+    for i in 0..nl {
+        mut s: int = carry
+        if i < al {
+            s = s + a[i]
+        }
+        if i < bl {
+            s = s + b[i]
+        }
+        push(out, s % 10)
+        carry = s / 10
+    }
+    if carry > 0 {
+        push(out, carry)
+    }
+    return trim_leading_zeros(out)
+}
+
+# Magnitude sub, precondition mag_cmp(a, b) >= 0. The caller arranges
+# operands so the result is non-negative. Result is canonical.
+fn mag_sub(a: list[int], b: list[int]) -> list[int] {
+    al := a.len()
+    bl := b.len()
+    mut out: list[int] = []
+    mut borrow: int = 0
+    for i in 0..al {
+        mut d: int = a[i] - borrow
+        if i < bl {
+            d = d - b[i]
+        }
+        if d < 0 {
+            d = d + 10
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        push(out, d)
+    }
+    return trim_leading_zeros(out)
+}
+
+# Schoolbook magnitude multiply. O(|a|·|b|).
+fn mag_mul(a: list[int], b: list[int]) -> list[int] {
+    al := a.len()
+    bl := b.len()
+    if al == 0 or bl == 0 {
+        out: list[int] = []
+        return out
+    }
+    mut out: list[int] = []
+    for i in 0..(al + bl) {
+        push(out, 0)
+    }
+    for i in 0..al {
+        mut carry: int = 0
+        ai := a[i]
+        for j in 0..bl {
+            s := out[i + j] + ai * b[j] + carry
+            out[i + j] = s % 10
+            carry = s / 10
+        }
+        mut k: int = i + bl
+        for carry > 0 {
+            s := out[k] + carry
+            out[k] = s % 10
+            carry = s / 10
+            k = k + 1
+        }
+    }
+    return trim_leading_zeros(out)
+}
+
+# Bundle for mag_divmod return — Zerg v0.14 has no tuple destructure
+# at the receiver side, so wrap (q, r) in a private struct. Module-
+# private (no `pub`); never escapes the module's arithmetic body.
+struct DivModResult {
+    q: list[int],
+    r: list[int]
+}
+
+# Long division on canonical magnitudes. Divisor must be non-empty
+# (i.e. non-zero). Returns the quotient and remainder, both canonical
+# (no leading zeros). Schoolbook algorithm: walk dividend top-down,
+# maintain a running remainder, and trial-find each quotient digit
+# via a 0..9 binary search.
+fn mag_divmod(a: list[int], b: list[int]) -> DivModResult {
+    al := a.len()
+    # Short-circuit: a < b → quotient zero, remainder a.
+    if mag_cmp(a, b) < 0 {
+        empty: list[int] = []
+        return DivModResult { q: empty, r: clone_digits(a) }
+    }
+    # Quotient buffer indexed by the dividend digit position. Write
+    # each q-digit to q_rev[i]; the trailing trim_leading_zeros call
+    # collapses any leading-zero quotient digit.
+    mut q_rev: list[int] = []
+    for i in 0..al {
+        push(q_rev, 0)
+    }
+    # `rem` accumulates the running remainder top-down. Stored LSB-
+    # first so mag_cmp / mag_sub can be reused.
+    mut rem: list[int] = []
+    mut i: int = al
+    for i > 0 {
+        i = i - 1
+        # Bring down the next dividend digit: shift every byte up
+        # by one position and write the new digit at index 0.
+        mut shifted: list[int] = []
+        push(shifted, a[i])
+        for k in 0..rem.len() {
+            push(shifted, rem[k])
+        }
+        rem = trim_leading_zeros(shifted)
+        # Binary-search the largest digit d ∈ 0..9 with d * b ≤ rem.
+        mut d: int = 0
+        mut lo: int = 0
+        mut hi: int = 9
+        for lo <= hi {
+            mid := (lo + hi) / 2
+            mut mid_buf: list[int] = []
+            push(mid_buf, mid)
+            prod := mag_mul(mid_buf, b)
+            if mag_cmp(prod, rem) <= 0 {
+                d = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        if d > 0 {
+            mut d_buf: list[int] = []
+            push(d_buf, d)
+            sub := mag_mul(d_buf, b)
+            rem = mag_sub(rem, sub)
+        }
+        q_rev[i] = d
+    }
+    return DivModResult { q: trim_leading_zeros(q_rev), r: trim_leading_zeros(rem) }
+}
+
+# Build 10^exp as a BigInt. Precondition: exp >= 0.
+fn pow10_bigint(exp: int) -> BigInt {
+    if exp < 0 {
+        panic("pow10_bigint: negative exponent")
+    }
+    mut d: list[int] = []
+    for i in 0..exp {
+        push(d, 0)
+    }
+    push(d, 1)
+    return make_bigint(1, d)
+}
+
+# Multiply a magnitude by 10^exp by inserting `exp` zero entries at
+# the LSB side. Returns a fresh list; cheaper than mag_mul + pow10
+# for the small-exp case that dominates BigDecimal alignment.
+fn shift_left10(d: list[int], exp: int) -> list[int] {
+    if exp <= 0 or d.len() == 0 {
+        return clone_digits(d)
+    }
+    mut out: list[int] = []
+    for i in 0..exp {
+        push(out, 0)
+    }
+    for i in 0..d.len() {
+        push(out, d[i])
+    }
+    return out
+}
+
+# ---------------------------------------------------------------------
+# BigInt constructors. Free functions so callers write
+# `big.from_int(5)` symmetrically with the BigDecimal constructors.
+# ---------------------------------------------------------------------
+# Build a BigInt from a Zerg int. Handles INT64_MIN by special-case
+# (no positive counterpart in int) — the magnitude digits are a
+# pre-computed constant.
+#
+# # Note: print bi shows the struct fields; use bi.to_str() for the
+# # human-readable form.
+pub fn from_int(x: int) -> BigInt {
+    # INT64_MIN spelled as `-INT64_MAX - 1` since `9223372036854775808`
+    # overflows the lexer's int literal at parse time.
+    int_min: int = -9223372036854775807 - 1
+    if x == int_min {
+        # 9223372036854775808 LSB-first.
+        min_digits := [8, 0, 8, 5, 7, 7, 4, 5, 8, 6, 3, 0, 2, 7, 3, 3, 2, 2, 9]
+
+        return BigInt { sign: -1, digits: min_digits }
+    }
+    if x == 0 {
+        empty: list[int] = []
+        return BigInt { sign: 0, digits: empty }
+    }
+    mut sign: int = 1
+    mut mag: int = x
+    if x < 0 {
+        sign = -1
+        mag = -x
+    }
+    mut digits: list[int] = []
+    for mag > 0 {
+        push(digits, mag % 10)
+        mag = mag / 10
+    }
+    return BigInt { sign: sign, digits: digits }
+}
+
+# Parse a base-10 signed integer string into a BigInt. Grammar:
+# `[+-]?[0-9]+`. Leading and trailing ASCII whitespace is stripped
+# (matches strings.parse_int). Sign-only ("+" / "-") rejects with
+# InvalidDigit. Empty after trim rejects with Empty. Overflow is
+# never reported — magnitude is unbounded.
+#
+# # Note: print bi shows the struct fields; use bi.to_str() for the
+# # human-readable form.
+pub fn from_str(s: str) -> Result[BigInt, strings.ParseError] {
+    t := strings.trim(s)
+    tb := t.bytes()
+    tl := tb.len()
+    return Err(strings.ParseError.Empty) if tl == 0
+    mut i: int = 0
+    mut sign: int = 1
+    if tb[0] == '-' {
+        sign = -1
+        i = 1
+    } elif tb[0] == '+' {
+        i = 1
+    }
+    return Err(strings.ParseError.InvalidDigit) if i >= tl
+    # Collect MSB-first int digits, then reverse into LSB-first.
+    mut msb: list[int] = []
+    for i < tl {
+        b := tb[i]
+        if b < '0' or b > '9' {
+            return Err(strings.ParseError.InvalidDigit)
+        }
+        push(msb, ascii_digit_value(b))
+        i = i + 1
+    }
+    mut lsb: list[int] = []
+    mut k: int = msb.len()
+    for k > 0 {
+        k = k - 1
+        push(lsb, msb[k])
+    }
+    return Ok(make_bigint(sign, lsb))
+}
+
+# ASCII digit byte → int 0..9. Caller guarantees b ∈ '0'..'9'; any
+# other input falls through to -1 (defensive only — parse paths
+# always range-check first).
+fn ascii_digit_value(b: byte) -> int {
+    return 0 if b == '0'
+    return 1 if b == '1'
+    return 2 if b == '2'
+    return 3 if b == '3'
+    return 4 if b == '4'
+    return 5 if b == '5'
+    return 6 if b == '6'
+    return 7 if b == '7'
+    return 8 if b == '8'
+    return 9 if b == '9'
+    return -1
+}
+
+# int 0..9 → ASCII digit byte. Caller guarantees x ∈ 0..9; any other
+# value yields '?' (defensive, never seen on a canonical digit list).
+fn ascii_digit_byte(x: int) -> byte {
+    return '0' if x == 0
+    return '1' if x == 1
+    return '2' if x == 2
+    return '3' if x == 3
+    return '4' if x == 4
+    return '5' if x == 5
+    return '6' if x == 6
+    return '7' if x == 7
+    return '8' if x == 8
+    return '9' if x == 9
+    return '?'
+}
+
+impl BigInt {
+    pub fn to_str() -> str {
+        # Render this BigInt as a canonical decimal string. Zero prints
+        # as "0"; non-zero prints as an optional `-` followed by the
+        # digit stream MSB-first. Leading zeros are absent by construction
+        # (canonical invariant C2).
+        if this.sign == 0 {
+            return "0"
+        }
+        mut out: list[byte] = []
+        if this.sign < 0 {
+            push(out, '-')
+        }
+        mut k: int = this.digits.len()
+        for k > 0 {
+            k = k - 1
+            push(out, ascii_digit_byte(this.digits[k]))
+        }
+        return out.to_str()
+    }
+
+    pub fn abs() -> BigInt {
+        # Absolute value. Negative becomes positive; zero stays zero.
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        if this.sign == 0 {
+            return BigInt { sign: 0, digits: clone_digits(this.digits) }
+        }
+        return BigInt { sign: 1, digits: clone_digits(this.digits) }
+    }
+
+    pub fn is_zero() -> bool {
+        # True iff this is the canonical zero.
+        return this.sign == 0
+    }
+
+    pub fn div_checked(other: BigInt) -> Result[BigInt, DivError] {
+        # Quotient of `this / other`, truncated toward zero. Returns
+        # Err(DivByZero) when other is zero; otherwise Ok with the
+        # canonical BigInt result. Matches Zerg's primitive int `/`
+        # truncation semantics, just unbounded. v0.17: the operator
+        # form `a / b` lives in `impl BigInt for Div` and panics on
+        # divisor=0; call `div_checked` when you need the Result form.
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        if other.sign == 0 {
+            return Err(DivError.DivByZero)
+        }
+        if this.sign == 0 {
+            empty: list[int] = []
+            return Ok(BigInt { sign: 0, digits: empty })
+        }
+        dm := mag_divmod(this.digits, other.digits)
+        s := this.sign * other.sign
+        return Ok(make_bigint(s, dm.q))
+    }
+
+    pub fn mod_checked(other: BigInt) -> Result[BigInt, DivError] {
+        # Remainder of `this / other`. Sign follows the dividend (Zerg's
+        # primitive `int` convention; matches truncation-toward-zero for
+        # the quotient). Err(DivByZero) on zero divisor. v0.17: the
+        # operator form `a % b` lives in `impl BigInt for Arithmetic`
+        # and panics on divisor=0; call `mod_checked` for the Result
+        # form.
+        if other.sign == 0 {
+            return Err(DivError.DivByZero)
+        }
+        if this.sign == 0 {
+            empty: list[int] = []
+            return Ok(BigInt { sign: 0, digits: empty })
+        }
+        dm := mag_divmod(this.digits, other.digits)
+        return Ok(make_bigint(this.sign, dm.r))
+    }
+
+    pub fn cmp(other: BigInt) -> int {
+        # Three-way comparison: -1 if this < other, 0 if equal, +1 if
+        # this > other. Sign first; same-sign falls through to magnitude
+        # compare. The `Comparable` impl below derives eq / lt from
+        # this method; ordering operators (`<`, `<=`, `>`, `>=`) light
+        # up via Comparable.lt at typeck time.
+        return -1 if this.sign < other.sign
+        return 1 if this.sign > other.sign
+        # Same sign. Zero matches zero exactly (both have empty
+        # digit lists by canonical invariant C1).
+        if this.sign == 0 {
+            return 0
+        }
+        m := mag_cmp(this.digits, other.digits)
+        # Negative numbers: larger magnitude is the smaller number.
+        if this.sign < 0 {
+            return -m
+        }
+        return m
+    }
+}
+
+# v0.17 operator-spec impls. `a + b` / `a - b` / `a * b` / `a / b` /
+# `a % b` / `-a` desugar through `Arithmetic`; `==` `!=` `<` `<=` `>`
+# `>=` desugar through `Comparable` (eq + lt, with the four derived
+# orderings synthesised at typeck time). Div and Mod panic on
+# divisor=0 — call `div_checked` / `mod_checked` for the Result form.
+
+impl BigInt for Arithmetic {
+    pub fn add(other: BigInt) -> BigInt {
+        # Sum of this and other. Lit up by `a + b` at v0.17. Zero
+        # short-circuits avoid an unnecessary mag_add allocation.
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        if this.sign == 0 {
+            return BigInt { sign: other.sign, digits: clone_digits(other.digits) }
+        }
+        if other.sign == 0 {
+            return BigInt { sign: this.sign, digits: clone_digits(this.digits) }
+        }
+        if this.sign == other.sign {
+            return make_bigint(this.sign, mag_add(this.digits, other.digits))
+        }
+        # Opposite signs: subtract the smaller magnitude from the
+        # larger; the result carries the larger's sign.
+        c := mag_cmp(this.digits, other.digits)
+        if c == 0 {
+            empty: list[int] = []
+            return BigInt { sign: 0, digits: empty }
+        }
+        if c > 0 {
+            return make_bigint(this.sign, mag_sub(this.digits, other.digits))
+        }
+        return make_bigint(other.sign, mag_sub(other.digits, this.digits))
+    }
+
+    pub fn sub(other: BigInt) -> BigInt {
+        # Difference (`this - other`). Implemented as `this + (-other)`
+        # so the sign-handling logic stays in `add`.
+        return this + (-other)
+    }
+
+    pub fn mul(other: BigInt) -> BigInt {
+        # Product. Schoolbook O(|a|·|b|).
+        if this.sign == 0 or other.sign == 0 {
+            empty: list[int] = []
+            return BigInt { sign: 0, digits: empty }
+        }
+        s := this.sign * other.sign
+        return make_bigint(s, mag_mul(this.digits, other.digits))
+    }
+
+    pub fn div(other: BigInt) -> BigInt {
+        # Quotient of `this / other`, truncated toward zero. Panics on
+        # divisor=0 — matching primitive `int / 0` semantics. Use
+        # `div_checked` for the Result-returning variant.
+        if other.sign == 0 {
+            panic("BigInt: integer divide by zero")
+        }
+        if this.sign == 0 {
+            empty: list[int] = []
+            return BigInt { sign: 0, digits: empty }
+        }
+        dm := mag_divmod(this.digits, other.digits)
+        s := this.sign * other.sign
+        return make_bigint(s, dm.q)
+    }
+
+    pub fn mod(other: BigInt) -> BigInt {
+        # Remainder of `this / other`. Sign follows the dividend.
+        # Panics on divisor=0 — use `mod_checked` for the Result form.
+        if other.sign == 0 {
+            panic("BigInt: integer modulo by zero")
+        }
+        if this.sign == 0 {
+            empty: list[int] = []
+            return BigInt { sign: 0, digits: empty }
+        }
+        dm := mag_divmod(this.digits, other.digits)
+        return make_bigint(this.sign, dm.r)
+    }
+
+    pub fn neg() -> BigInt {
+        # Sign flip. Zero stays zero (canonical invariant).
+        return BigInt { sign: -this.sign, digits: clone_digits(this.digits) }
+    }
+}
+
+impl BigInt for Comparable {
+    pub fn eq(other: BigInt) -> bool {
+        # Numeric equality. Equivalent to `cmp == 0`.
+        return this.cmp(other) == 0
+    }
+
+    pub fn lt(other: BigInt) -> bool {
+        # Strict less-than. The bundled `>`, `<=`, `>=` derive at typeck
+        # time via operand swap and/or result negation.
+        return this.cmp(other) < 0
+    }
+}
+
+# ---------------------------------------------------------------------
+# BigDecimal constructors. Mirror BigInt's surface and always store
+# unscaled-plus-scale; BigInt is the magnitude source of truth so
+# arithmetic delegates through `this.unscaled.{op}`.
+#
+# Naming: `decimal_from_int` / `decimal_from_bigint` / `decimal_from_str`
+# rather than `BigDecimal.from_int` because at v0.14 there is no
+# free-function namespace tied to a type. The `decimal_*` prefix keeps
+# the call site unambiguous (`big.decimal_from_int(5)`) without
+# colliding with the BigInt constructors.
+# ---------------------------------------------------------------------
+# Build a BigDecimal at scale 0 from a Zerg int.
+#
+# # Note: print bd shows the struct fields; use bd.to_str() for the
+# # human-readable form.
+pub fn decimal_from_int(x: int) -> BigDecimal {
+    return BigDecimal { unscaled: from_int(x), scale: 0 }
+}
+
+# Wrap an existing BigInt as a scale-0 BigDecimal. The BigInt is
+# cloned defensively so the caller's binding stays usable after the
+# call (Zerg's v0.14 ownership rules block moving a borrowed fn
+# parameter into a struct literal).
+#
+# # Note: print bd shows the struct fields; use bd.to_str() for the
+# # human-readable form.
+pub fn decimal_from_bigint(bi: BigInt) -> BigDecimal {
+    return BigDecimal { unscaled: BigInt { sign: bi.sign, digits: clone_digits(bi.digits) }, scale: 0 }
+}
+
+# Parse a BigDecimal string. Grammar:
+# [+-]? ( [0-9]+ ( '.' [0-9]+ )? | '.' [0-9]+ )
+# Leading-dot accepted (".5" → 0.5). Trailing-dot rejected
+# ("1." → Err(InvalidDigit)). No scientific notation, no underscores,
+# no base prefixes.
+#
+# # Note: print bd shows the struct fields; use bd.to_str() for the
+# # human-readable form.
+pub fn decimal_from_str(s: str) -> Result[BigDecimal, strings.ParseError] {
+    t := strings.trim(s)
+    tb := t.bytes()
+    tl := tb.len()
+    return Err(strings.ParseError.Empty) if tl == 0
+    mut i: int = 0
+    mut sign: int = 1
+    if tb[0] == '-' {
+        sign = -1
+        i = 1
+    } elif tb[0] == '+' {
+        i = 1
+    }
+    return Err(strings.ParseError.InvalidDigit) if i >= tl
+    # Walk integer-part digits.
+    int_start := i
+    for i < tl {
+        b := tb[i]
+        break if b == '.'
+        if b < '0' or b > '9' {
+            return Err(strings.ParseError.InvalidDigit)
+        }
+        i = i + 1
+    }
+    int_end := i
+    mut frac_start: int = 0
+    mut frac_end: int = 0
+    mut has_dot: bool = false
+    if i < tl {
+        # Saw a '.' (the only break condition above).
+        has_dot = true
+        i = i + 1
+        frac_start = i
+        for i < tl {
+            b := tb[i]
+            if b < '0' or b > '9' {
+                return Err(strings.ParseError.InvalidDigit)
+            }
+            i = i + 1
+        }
+        frac_end = i
+    }
+    int_len := int_end - int_start
+    frac_len := frac_end - frac_start
+    # Reject empty-mantissa shapes: no digits at all (sign-only),
+    # trailing-dot ("1."), or stray-dot (".").
+    if int_len == 0 and frac_len == 0 {
+        return Err(strings.ParseError.InvalidDigit)
+    }
+    if has_dot and frac_len == 0 {
+        return Err(strings.ParseError.InvalidDigit)
+    }
+    # Build the unscaled digit stream MSB-first then reverse to LSB-
+    # first for the BigInt invariant.
+    mut msb: list[int] = []
+    for k in int_start..int_end {
+        push(msb, ascii_digit_value(tb[k]))
+    }
+    for k in frac_start..frac_end {
+        push(msb, ascii_digit_value(tb[k]))
+    }
+    mut lsb: list[int] = []
+    mut k: int = msb.len()
+    for k > 0 {
+        k = k - 1
+        push(lsb, msb[k])
+    }
+    unscaled := make_bigint(sign, lsb)
+    return Ok(BigDecimal { unscaled: unscaled, scale: frac_len })
+}
+
+impl BigDecimal {
+    pub fn to_str() -> str {
+        # Render as a decimal string. scale=0 renders as the underlying
+        # BigInt's canonical form. scale>0 inserts a '.' such that
+        # exactly `scale` digits sit after it; left-pads the fractional
+        # part with '0' when the unscaled magnitude has fewer than
+        # `scale` digits.
+        if this.scale == 0 {
+            return this.unscaled.to_str()
+        }
+        mag := this.unscaled.digits
+        ml := mag.len()
+        mut out: list[byte] = []
+        if this.unscaled.sign < 0 {
+            push(out, '-')
+        }
+        # Zero with scale > 0 renders as "0.000…" (scale zeroes).
+        if ml == 0 {
+            push(out, '0')
+            push(out, '.')
+            for i in 0..this.scale {
+                push(out, '0')
+            }
+            return out.to_str()
+        }
+        if ml > this.scale {
+            # Integer part has (ml - scale) digits, top-down; the
+            # scale-many lowest digits sit after the point.
+            int_len := ml - this.scale
+            for i in 0..int_len {
+                push(out, ascii_digit_byte(mag[ml - 1 - i]))
+            }
+            push(out, '.')
+            for i in 0..this.scale {
+                push(out, ascii_digit_byte(mag[this.scale - 1 - i]))
+            }
+        } else {
+            # Integer part is "0"; left-pad the fractional part with
+            # (scale - ml) zeros before laying down the magnitude
+            # digits MSB-first.
+            push(out, '0')
+            push(out, '.')
+            pad := this.scale - ml
+            for i in 0..pad {
+                push(out, '0')
+            }
+            for i in 0..ml {
+                push(out, ascii_digit_byte(mag[ml - 1 - i]))
+            }
+        }
+        return out.to_str()
+    }
+
+    pub fn abs() -> BigDecimal {
+        # Absolute value; scale preserved.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        return BigDecimal { unscaled: this.unscaled.abs(), scale: this.scale }
+    }
+
+    pub fn is_zero() -> bool {
+        # True iff the unscaled BigInt is zero.
+        return this.unscaled.is_zero()
+    }
+
+    pub fn div(other: BigDecimal, scale: int) -> Result[BigDecimal, DivError] {
+        # Truncated division at the caller-specified scale. Err(DivByZero)
+        # when other is zero. Negative `scale` panics (programmer error).
+        #
+        # v0.17 note: BigDecimal does NOT participate in the `Div` /
+        # `Mod` operator specs. `a / b` on BigDecimal rejects at
+        # typeck — the three-arg shape can't satisfy `fn div(other: T)
+        # -> T`. Call this method explicitly when you need division.
+        #
+        # Algebra: this / other = (this.u / 10^this.s) / (other.u / 10^other.s)
+        # = this.u * 10^(other.s - this.s) / other.u
+        # To produce a result at `scale` fractional digits, multiply the
+        # numerator by an extra 10^scale before the integer divide:
+        # numer = this.u * 10^(scale + other.s - this.s)
+        # denom = other.u
+        # quot  = numer // denom            (truncation toward zero)
+        # Result: BigDecimal { quot, scale }.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        if scale < 0 {
+            panic("BigDecimal.div: negative scale")
+        }
+        if other.is_zero() {
+            return Err(DivError.DivByZero)
+        }
+        shift := scale + other.scale - this.scale
+        if shift >= 0 {
+            numer := make_bigint(this.unscaled.sign, shift_left10(this.unscaled.digits, shift))
+            match numer.div_checked(other.unscaled) {
+                Result.Ok(q) => return Ok(BigDecimal { unscaled: q, scale: scale })
+                Result.Err(e) => return Err(e)
+            }
+        }
+        # shift < 0: fold the negative shift into the denominator
+        # instead so the single .div call still applies (and the
+        # truncation-toward-zero semantics are inherited).
+        denom_shifted := make_bigint(other.unscaled.sign, shift_left10(other.unscaled.digits, -shift))
+        match this.unscaled.div_checked(denom_shifted) {
+            Result.Ok(q) => return Ok(BigDecimal { unscaled: q, scale: scale })
+            Result.Err(e) => return Err(e)
+        }
+    }
+
+    pub fn with_scale(new_scale: int) -> BigDecimal {
+        # Rescale to `new_scale`. Increasing the scale multiplies the
+        # unscaled magnitude by 10^delta (lossless); decreasing truncates
+        # toward zero. Negative `new_scale` is a programmer error — panic
+        # explicitly.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        if new_scale < 0 {
+            panic("with_scale: negative scale")
+        }
+        if new_scale == this.scale {
+            return BigDecimal { unscaled: this.unscaled, scale: this.scale }
+        }
+        if new_scale > this.scale {
+            delta := new_scale - this.scale
+            shifted := make_bigint(this.unscaled.sign, shift_left10(this.unscaled.digits, delta))
+            return BigDecimal { unscaled: shifted, scale: new_scale }
+        }
+        # Reducing scale: integer-divide the unscaled magnitude by
+        # 10^(this.scale - new_scale), truncating toward zero. The
+        # divisor is non-zero by construction so the err arm panics
+        # rather than fabricating a value.
+        delta := this.scale - new_scale
+        divisor := pow10_bigint(delta)
+        match this.unscaled.div_checked(divisor) {
+            Result.Ok(q) => return BigDecimal { unscaled: q, scale: new_scale }
+            Result.Err(_) => panic("with_scale: unreachable div err on pow10")
+        }
+    }
+}
+
+# v0.17 operator-spec impl for BigDecimal. Comparable is wired so
+# `==`, `!=`, `<`, `<=`, `>`, `>=` light up.
+#
+# Arithmetic is intentionally NOT implemented: the bundle requires all
+# six methods (add/sub/mul/div/mod/neg) and BigDecimal's `div` /
+# `mod` need an explicit scale + rounding mode, so they can't satisfy
+# the `fn div(T) -> T` shape. Users call inherent methods —
+# `bd.add(other)`, `bd.sub(other)`, `bd.mul(other)`, `bd.neg()`,
+# `bd.div_checked(other, scale, mode)` — directly until the v0.18
+# split into Arithmetic-without-DivMod and DivMod sub-bundles lands.
+
+impl BigDecimal {
+    # Sum with scale alignment: result scale = max(this.scale,
+    # other.scale). The smaller-scale operand is multiplied by
+    # 10^delta before delegating to BigInt addition.
+    pub fn add(other: BigDecimal) -> BigDecimal {
+        s := max_scale(this.scale, other.scale)
+        a := rescale_unscaled(this.unscaled, this.scale, s)
+        b := rescale_unscaled(other.unscaled, other.scale, s)
+        return BigDecimal { unscaled: a + b, scale: s }
+    }
+
+    # Difference. Implemented via add + neg so the sign / scale
+    # alignment logic lives in one place.
+    pub fn sub(other: BigDecimal) -> BigDecimal {
+        return this.add(other.neg())
+    }
+
+    # Product: unscaled magnitudes multiply, scales add. No truncation
+    # — the result carries the full precision implied by both operands.
+    pub fn mul(other: BigDecimal) -> BigDecimal {
+        return BigDecimal { unscaled: this.unscaled * other.unscaled, scale: this.scale + other.scale }
+    }
+
+    # Sign flip; scale preserved.
+    pub fn neg() -> BigDecimal {
+        return BigDecimal { unscaled: -this.unscaled, scale: this.scale }
+    }
+
+    # Three-way comparison with scale alignment. Both operands are
+    # rescaled to max(this.scale, other.scale); the underlying
+    # BigInt.cmp does the rest. The `Comparable` impl below derives
+    # eq / lt from this method.
+    pub fn cmp(other: BigDecimal) -> int {
+        s := max_scale(this.scale, other.scale)
+        a := rescale_unscaled(this.unscaled, this.scale, s)
+        b := rescale_unscaled(other.unscaled, other.scale, s)
+        return a.cmp(b)
+    }
+}
+
+impl BigDecimal for Comparable {
+    pub fn eq(other: BigDecimal) -> bool {
+        # Numeric equality. `1.0 == 1.00` returns true (scale-agnostic).
+        return this.cmp(other) == 0
+    }
+
+    pub fn lt(other: BigDecimal) -> bool {
+        # Strict less-than with scale alignment. `>`, `<=`, `>=` derive
+        # at typeck time.
+        return this.cmp(other) < 0
+    }
+}
+
+# ---------------------------------------------------------------------
+# Private BigDecimal helpers. Module-private (no `pub`).
+# ---------------------------------------------------------------------
+# max of two non-negative ints. Local rather than imported from math
+# to keep the module's dependency surface to `strings` alone.
+fn max_scale(a: int, b: int) -> int {
+    return a if a > b
+    return b
+}
+
+# Rescale a BigInt `bi` originally at scale `from` to scale `to`,
+# where to >= from. Multiplies the magnitude by 10^(to-from); sign
+# is preserved. Used by BigDecimal arithmetic to align operands.
+fn rescale_unscaled(bi: BigInt, from: int, to: int) -> BigInt {
+    if to == from {
+        return BigInt { sign: bi.sign, digits: clone_digits(bi.digits) }
+    }
+    shifted := shift_left10(bi.digits, to - from)
+    return make_bigint(bi.sign, shifted)
+}

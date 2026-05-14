@@ -1,0 +1,21 @@
+# requires: v0.17
+#
+# v0.17 — unary `-` on primitives (int / float) and on user types
+# (BigInt) via the Arithmetic.neg method.
+
+import "math/big"
+
+# Primitives: int / float take the primitive arm.
+print -5
+print -0
+print -(-7)
+print -1.5
+
+# BigInt: lowers to this.neg().
+a := big.from_int(123)
+print (-a).to_str()
+print (-(-a)).to_str()
+
+# Zero stays zero.
+z := big.from_int(0)
+print (-z).to_str()

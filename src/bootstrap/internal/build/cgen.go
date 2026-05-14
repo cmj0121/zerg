@@ -369,7 +369,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 		g.b.WriteString("\n")
 	}
 	g.emitEqHelpers()
-	g.emitSpecVtablesAndMethods()
+	// Emit method forward decls EARLY so the rest of the C output can
+	// reference any method's mangled name without a forward-reference
+	// error. The matching method *bodies* land after the free-fn
+	// forward decls below — that lets impl method bodies call same-
+	// module free fns whose forward decls land in the v0.5 fn-decl
+	// loop further down.
+	g.emitMethodForwardDecls()
 	if err := g.emitAnonFnHeaders(); err != nil {
 		return err
 	}
@@ -422,6 +428,13 @@ func EmitBundle(bundle emitBundleView, w io.Writer) error {
 	if hasAnyFn {
 		g.b.WriteString("\n")
 	}
+
+	// Method bodies / adapters / vtables land AFTER the free-fn forward
+	// decls so impl method bodies can call same-module free fns by their
+	// mangled name without provoking an implicit-declaration error from
+	// the C compiler. The forward decls themselves landed via
+	// emitMethodForwardDecls before this section.
+	g.emitMethodBodiesAndVtables()
 
 	for i := range g.modules {
 		me := &g.modules[i]
@@ -710,10 +723,18 @@ func stampCrossModuleOwners(stmt syntax.Stmt, host *moduleEmit, moduleByName map
 				walkE(x.Lowered)
 			}
 		case *syntax.UnaryExpr:
-			walkE(x.Operand)
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			} else {
+				walkE(x.Operand)
+			}
 		case *syntax.BinaryExpr:
-			walkE(x.Left)
-			walkE(x.Right)
+			if x.Lowered != nil {
+				walkE(x.Lowered)
+			} else {
+				walkE(x.Left)
+				walkE(x.Right)
+			}
 		case *syntax.ParenExpr:
 			walkE(x.Inner)
 		case *syntax.CallExpr:
@@ -995,10 +1016,18 @@ func walkExprTypes(e syntax.Expr, visit func(*syntax.Type)) {
 	visit(e.Type())
 	switch x := e.(type) {
 	case *syntax.UnaryExpr:
-		walkExprTypes(x.Operand, visit)
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		} else {
+			walkExprTypes(x.Operand, visit)
+		}
 	case *syntax.BinaryExpr:
-		walkExprTypes(x.Left, visit)
-		walkExprTypes(x.Right, visit)
+		if x.Lowered != nil {
+			walkExprTypes(x.Lowered, visit)
+		} else {
+			walkExprTypes(x.Left, visit)
+			walkExprTypes(x.Right, visit)
+		}
 	case *syntax.ParenExpr:
 		walkExprTypes(x.Inner, visit)
 	case *syntax.CallExpr:
@@ -2146,10 +2175,18 @@ func (g *cgen) collectExpr(e syntax.Expr) {
 	}
 	switch x := e.(type) {
 	case *syntax.UnaryExpr:
-		g.collectExpr(x.Operand)
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		} else {
+			g.collectExpr(x.Operand)
+		}
 	case *syntax.BinaryExpr:
-		g.collectExpr(x.Left)
-		g.collectExpr(x.Right)
+		if x.Lowered != nil {
+			g.collectExpr(x.Lowered)
+		} else {
+			g.collectExpr(x.Left)
+			g.collectExpr(x.Right)
+		}
 	case *syntax.ParenExpr:
 		g.collectExpr(x.Inner)
 	case *syntax.CallExpr:
@@ -3762,6 +3799,11 @@ func (g *cgen) lookupCurrentFn(name string) *syntax.FnDecl {
 
 // unaryStr lowers -, ~, not.
 func (g *cgen) unaryStr(e *syntax.UnaryExpr) (string, error) {
+	// v0.17 operator-spec desugar: `-x` on a user type was rewritten to
+	// `x.neg()` at typeck time. Emit through the method-call path.
+	if e.Lowered != nil {
+		return g.methodCallStr(e.Lowered)
+	}
 	inner, err := g.exprStr(e.Operand)
 	if err != nil {
 		return "", err
@@ -3780,7 +3822,22 @@ func (g *cgen) unaryStr(e *syntax.UnaryExpr) (string, error) {
 // binaryStr lowers each binary operator. Identical to v0.1 with the addition
 // that byte/rune comparisons fall through to integer compares (already true
 // for `==` because TByte/TRune are tracked as primitives in typeck).
+//
+// v0.17 operator-spec desugar: when e.Lowered is set, the BinaryExpr was
+// rewritten at typeck time into a method-call shape (e.g. `a.add(b)` or
+// `a.lt(b)` with `>` swapping receiver/arg). LoweredNot=true wraps the
+// bool result in `!(...)` for the surface ops `!=`, `>=`, `<=`.
 func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
+	if e.Lowered != nil {
+		inner, err := g.methodCallStr(e.Lowered)
+		if err != nil {
+			return "", err
+		}
+		if e.LoweredNot {
+			return fmt.Sprintf("(!(%s))", inner), nil
+		}
+		return inner, nil
+	}
 	left, err := g.exprStr(e.Left)
 	if err != nil {
 		return "", err
@@ -3876,6 +3933,58 @@ func (g *cgen) binaryStr(e *syntax.BinaryExpr) (string, error) {
 
 func infix(left, op, right string) string {
 	return "(" + left + " " + op + " " + right + ")"
+}
+
+// emitPrimitiveOperatorBuiltin renders a synthesised primitive-receiver
+// method call (`(int)x.add(y)` / `(str)s.lt(t)` / etc.) to the
+// equivalent primitive expression. The call shape is constructed at
+// typeck time by tryOperatorSpecDesugar — see typeck_v17_operators.go.
+//
+// For Comparable.lt on str the existing zerg_str_cmp(...)<0 idiom
+// carries the right semantics. eq on str routes through zerg_str_eq.
+func (g *cgen) emitPrimitiveOperatorBuiltin(e *syntax.MethodCallExpr, rt *syntax.Type) (string, error) {
+	rs, err := g.exprStr(e.Receiver)
+	if err != nil {
+		return "", err
+	}
+	var as string
+	if len(e.Args) == 1 {
+		as, err = g.exprStr(e.Args[0])
+		if err != nil {
+			return "", err
+		}
+	}
+	switch e.Method {
+	case "add":
+		if rt == syntax.TStr() {
+			return fmt.Sprintf("zerg_str_concat(%s, %s)", rs, as), nil
+		}
+		return infix(rs, "+", as), nil
+	case "sub":
+		return infix(rs, "-", as), nil
+	case "mul":
+		return infix(rs, "*", as), nil
+	case "div":
+		return infix(rs, "/", as), nil
+	case "mod":
+		if rt == syntax.TFloat() {
+			return fmt.Sprintf("fmod((%s), (%s))", rs, as), nil
+		}
+		return infix(rs, "%", as), nil
+	case "neg":
+		return fmt.Sprintf("(-(%s))", rs), nil
+	case "eq":
+		if rt == syntax.TStr() {
+			return fmt.Sprintf("zerg_str_eq(%s, %s)", rs, as), nil
+		}
+		return infix(rs, "==", as), nil
+	case "lt":
+		if rt == syntax.TStr() {
+			return fmt.Sprintf("(zerg_str_cmp(%s, %s) < 0)", rs, as), nil
+		}
+		return infix(rs, "<", as), nil
+	}
+	return "", fmt.Errorf("codegen: unsupported primitive operator method %q on %s at %s", e.Method, rt, e.Pos)
 }
 
 // ---------------------------------------------------------------------------
@@ -4320,6 +4429,16 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 					g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
 				}
 				g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
+			} else if syntax.IsOperatorSpecName(s.Spec) {
+				// v0.17 operator-spec impl. Treat the methods as
+				// inherent — typeck has already lowered every
+				// surface-op call to a method-call on the concrete
+				// receiver, so cgen never needs a vtable for an
+				// operator spec.
+				if _, ok := g.inherent[implKeyName]; !ok {
+					g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
+				}
+				g.inherent[implKeyName] = append(g.inherent[implKeyName], s.Methods...)
 			} else {
 				key := implKey{typeName: implKeyName, specName: s.Spec}
 				if _, ok := g.specImpls[key]; !ok {
@@ -4356,7 +4475,10 @@ func (g *cgen) collectSpecsImpls(prog *syntax.Program) {
 		}
 		implKeyName := g.implKeyForType(receiverT)
 		g.receiverTypes[implKeyName] = receiverT
-		if s.Spec == "" {
+		if s.Spec == "" || syntax.IsOperatorSpecName(s.Spec) {
+			// v0.17: operator-spec impls fold into inherent — no
+			// vtable needed (typeck has already lowered every use
+			// site to a concrete method call).
 			if _, ok := g.inherent[implKeyName]; !ok {
 				g.inherentTypeOrder = append(g.inherentTypeOrder, implKeyName)
 			}
@@ -4554,27 +4676,28 @@ func (g *cgen) emitSpecForwardDecls() {
 	g.b.WriteString("\n")
 }
 
-// emitSpecVtablesAndMethods is the v0.4 file-scope emit pass. Order:
+// The v0.4 method-emit pass is split into two halves:
 //
-//  1. Forward-declare every emitted method C function so they can reference
-//     each other in any order.
-//  2. Emit each method body — both inherent and per-(Type, Spec) override.
-//     A spec impl method gets one C fn whose receiver is the concrete
-//     mangled type, plus a small `void*` adapter wrapper that downcasts to
-//     the concrete and forwards. The adapter is what the vtable points at.
-//  3. Emit the per-(Type, Spec) static const vtable initialiser populated
-//     with adapter pointers for impl overrides, type-specialised default
-//     adapters for spec defaults, and NotImplemented stubs for the
-//     remainder.
-func (g *cgen) emitSpecVtablesAndMethods() {
+//   - emitMethodForwardDecls writes signatures plus adapter / default-
+//     body / not-implemented-stub forward decls. Called BEFORE the
+//     free-fn forward decl loop so the rest of the C output can
+//     reference any method's mangled name.
+//   - emitMethodBodiesAndVtables writes the method body fns, the
+//     adapter implementations, the default-body adapters, the
+//     NotImplemented stubs, and the static per-(Type, Spec) vtables.
+//     Called AFTER the free-fn forward decl loop so impl method bodies
+//     can call same-module free fns by their mangled name without
+//     provoking an implicit-declaration error from the C compiler.
+//
+// A spec impl method gets one C fn whose receiver is the concrete
+// mangled type, plus a small `void*` adapter wrapper that downcasts
+// to the concrete and forwards. The adapter is what the vtable
+// points at.
+func (g *cgen) emitMethodForwardDecls() {
 	if len(g.inherentTypeOrder) == 0 && len(g.specImplKeys) == 0 && len(g.specOrder) == 0 {
 		return
 	}
-	// Stable ordering: inherent first by declaration order of types, then
-	// (Type, Spec) impls by declaration order.
-	g.b.WriteString("/* v0.4 method functions, vtable adapters, and per-(Type, Spec) vtables. */\n")
-
-	// Forward decls.
+	g.b.WriteString("/* v0.4 method functions, vtable adapters, and per-(Type, Spec) vtables — forward decls. */\n")
 	for _, typeName := range g.inherentTypeOrder {
 		recv := g.receiverTypes[typeName]
 		if recv == nil {
@@ -4646,7 +4769,18 @@ func (g *cgen) emitSpecVtablesAndMethods() {
 		}
 	}
 	g.b.WriteString("\n")
+}
 
+// emitMethodBodiesAndVtables writes the method body fns, the adapter
+// implementations, the default-body adapters, the NotImplemented stubs,
+// and the static per-(Type, Spec) vtables. Called AFTER free-fn forward
+// decls so impl method bodies can reference same-module free fns
+// without a forward-reference error.
+func (g *cgen) emitMethodBodiesAndVtables() {
+	if len(g.inherentTypeOrder) == 0 && len(g.specImplKeys) == 0 && len(g.specOrder) == 0 {
+		return
+	}
+	g.b.WriteString("/* v0.4 method bodies. */\n")
 	// Method bodies — inherent.
 	for _, typeName := range g.inherentTypeOrder {
 		recv := g.receiverTypes[typeName]
@@ -4801,10 +4935,23 @@ func (g *cgen) emitMethodFn(receiver *syntax.Type, specName string, fn *syntax.F
 		g.currentFnRet = nil
 	}
 	prevIndent := g.indent
+	prevMod := g.currentMod
+	// Active module for body-emit is whichever module declared the
+	// receiver type — same as the impl block's enclosing file. Calls
+	// from inside the method body to that module's free fns then
+	// resolve through lookupCurrentFn against the right module's
+	// fn list, and fnCName mangles them with the owning module's
+	// prefix. Without this, same-module free-fn calls from impl
+	// bodies fall through to bare `z_<name>` symbols that never get
+	// defined under the module mangle.
+	if owner, ok := g.typeOwner[receiver]; ok && owner != "" {
+		g.currentMod = owner
+	}
 	g.indent = 1
 	defer func() {
 		g.currentFnRet = prevRet
 		g.indent = prevIndent
+		g.currentMod = prevMod
 	}()
 	if err := g.emitBlockBody(fn.Body); err != nil {
 		return err
@@ -4938,6 +5085,14 @@ func (g *cgen) methodCallStr(e *syntax.MethodCallExpr) (string, error) {
 	if rt == nil {
 		return "", fmt.Errorf("codegen: method-call receiver has nil type at %s", e.Pos)
 	}
+	// v0.17 operator-spec desugar: primitive-typed receivers reach the
+	// method-call path only via a synthesised MethodCallExpr from
+	// tryOperatorSpecDesugar / tryUnaryOperatorSpecDesugar. Route those
+	// to the primitive-arithmetic emitter rather than attempting a fn-
+	// body lookup (synthetic impl methods carry no body).
+	if syntax.IsPrimitiveTypeForOperator(rt) {
+		return g.emitPrimitiveOperatorBuiltin(e, rt)
+	}
 	// v0.7 wait_group: receiver is the synthetic WaitGroup struct (handle is
 	// a pointer to zerg_wait_group_t). Dispatch the three methods directly.
 	if rt.Kind == syntax.TypeStruct && rt.Name == "WaitGroup" {
@@ -4986,7 +5141,21 @@ func (g *cgen) lookupImportMangle(local string) string {
 // lookupModuleFn returns the FnDecl for `fnName` in the module identified
 // by mangle, or nil when the lookup misses. Used by cross-module fn-call
 // emission.
+//
+// v0.18: when the module re-exports `fnName` via `pub import "X"`, the
+// fn lives in X's source rather than the host's. Walk pub-import decls
+// recursively so cgen finds the canonical FnDecl (whose g.fnOwner entry
+// resolves to X's mangle, keeping the emit byte-identical to a direct
+// X.<fn> call).
 func (g *cgen) lookupModuleFn(mangle, fnName string) *syntax.FnDecl {
+	return g.lookupModuleFnWalk(mangle, fnName, map[string]bool{})
+}
+
+func (g *cgen) lookupModuleFnWalk(mangle, fnName string, seen map[string]bool) *syntax.FnDecl {
+	if seen[mangle] {
+		return nil
+	}
+	seen[mangle] = true
 	me := g.moduleByName[mangle]
 	if me == nil || me.prog == nil {
 		return nil
@@ -4994,6 +5163,22 @@ func (g *cgen) lookupModuleFn(mangle, fnName string) *syntax.FnDecl {
 	for _, stmt := range me.prog.Statements {
 		if fn, ok := stmt.(*syntax.FnDecl); ok && fn.Name == fnName {
 			return fn
+		}
+	}
+	// v0.18: walk pub-import targets recursively.
+	for _, stmt := range me.prog.Statements {
+		imp, ok := stmt.(*syntax.ImportDecl)
+		if !ok || !imp.Pub {
+			continue
+		}
+		localName := imp.Alias
+		if localName == "" {
+			localName = syntax.ImportPathBasename(imp.Path)
+		}
+		if targetMangle, ok := me.imports[localName]; ok {
+			if fn := g.lookupModuleFnWalk(targetMangle, fnName, seen); fn != nil {
+				return fn
+			}
 		}
 	}
 	return nil

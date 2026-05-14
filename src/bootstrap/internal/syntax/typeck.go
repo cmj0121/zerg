@@ -1598,6 +1598,13 @@ func (c *checker) checkStmt(stmt Stmt) error {
 // channel-typed values with a focused diagnostic — channels carry no
 // printable surface and the deep-copy on send/recv would make every print
 // either a snapshot of the queue (potentially racy) or a no-op.
+//
+// v0.20: when expr is a struct value whose type defines a zero-arg
+// `to_str() -> str` method, the statement is lowered to `print
+// expr.to_str()` so the user-friendly text comes out instead of the raw
+// struct repr. Inherent and spec-supplied methods both qualify; the
+// rewrite is shallow (only the top-level value), so a list of structs
+// still walks formatValue for each element.
 func (c *checker) checkPrint(s *PrintStmt) error {
 	t, err := c.checkExpr(s.Expr)
 	if err != nil {
@@ -1608,6 +1615,49 @@ func (c *checker) checkPrint(s *PrintStmt) error {
 	}
 	if !isPrintable(t) {
 		return typeErr(s.Pos, "cannot print value of type %s", t)
+	}
+	if wrapped := c.tryDisplayLower(s.Pos, s.Expr, t); wrapped != nil {
+		s.Expr = wrapped
+	}
+	return nil
+}
+
+// tryDisplayLower synthesises `expr.to_str()` when t is a struct whose
+// method table contains a zero-arg `to_str() -> str` method. Returns nil
+// when no rewrite applies — checkPrint keeps the original expression and
+// formatValue's struct repr fires.
+//
+// Resolution uses collectAllVisibleMethods so cross-module impls (e.g.
+// math.BigInt.to_str on a user-file print) are found via the bundle's
+// foreign-checker walk. The caller is checkPrint, so the wrapped call
+// inherits the print's source position for diagnostics anchored at the
+// print site rather than the method site.
+func (c *checker) tryDisplayLower(pos Position, expr Expr, t *Type) Expr {
+	if t == nil || t.Kind != TypeStruct {
+		return nil
+	}
+	for _, src := range c.collectAllVisibleMethods(t, "to_str") {
+		var params []*Type
+		var ret *Type
+		switch {
+		case src.implFn != nil:
+			params, ret = src.implFn.params, src.implFn.ret
+		case src.defaultM != nil:
+			params, ret = src.defaultM.params, src.defaultM.ret
+		default:
+			continue
+		}
+		if len(params) != 0 || ret != tStr {
+			continue
+		}
+		call := &MethodCallExpr{
+			Pos:       pos,
+			Receiver:  expr,
+			Method:    "to_str",
+			MethodPos: pos,
+		}
+		call.setType(tStr)
+		return call
 	}
 	return nil
 }

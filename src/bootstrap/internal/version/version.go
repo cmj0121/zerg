@@ -24,20 +24,24 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 18 with v0.18 — `pub import` (re-export). A
-	// module M doing `pub import "X"` exposes every pub fn / struct /
-	// enum / spec from X flat under M's namespace, so callers do
-	// `M.foo(...)` directly rather than `M.X.foo(...)`. The `as`
-	// keyword stays local-only (renames the host's local binding;
-	// does not affect what callers see). Two pub imports contributing
-	// the same name reject at module-bind time with a focused
-	// diagnostic. Transitive re-exports compose: A pub-imports B
-	// pub-imports C → A's callers see C's pub names.
+	// Minor advances to 20 with v0.20 — `print` auto-dispatch through
+	// a struct's `to_str() -> str` method. When the value passed to
+	// `print` is a struct whose method table exposes a zero-arg
+	// `to_str` returning str (inherent or via a spec impl), typeck
+	// rewrites `print value` to `print value.to_str()` so the
+	// user-friendly text comes out instead of the raw struct repr.
+	// Structs without `to_str` keep the existing default formatting,
+	// and the rewrite is shallow — nested structs inside lists /
+	// tuples still walk formatValue per element.
 	//
+	// Inherited from v0.19 cycle: self-rehydrating multi-assign for
+	// composite types — `a, b = b, a + b` admits for struct types
+	// like math.BigInt, not just primitive ints.
+	// Inherited from v0.18 cycle: `pub import` flat re-export.
 	// Inherited from v0.17 cycle: operator-spec wiring (Arithmetic /
 	// Comparable / From), math/big arbitrary-precision arithmetic,
 	// and the math directory-module reorganization.
-	Minor = 18
+	Minor = 20
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

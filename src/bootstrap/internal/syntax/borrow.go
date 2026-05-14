@@ -562,12 +562,24 @@ func (c *borrowChecker) checkTupleDestructure(_ Position, tb *TupleBinding, valu
 // tuple of matching arity; we only police the borrow-state side here. No
 // state flip on the targets — writes overwrite the value, the binding stays
 // Owned (mirrors checkAssign's plain-ident path).
+//
+// v0.19 self-rehydrate: when an RHS tuple-literal element is a bare ident
+// naming one of this statement's targets, treat it as a read rather than a
+// move. The LHS write that immediately follows rebinds the slot, so the
+// binding's post-statement state matches its pre-statement state. Without
+// this, `a, b = b, a + b` on composites inside a loop trips the loop-body
+// move guard ("first iteration would succeed but subsequent iterations
+// would observe a moved value") even though the value is restored before
+// the next iteration's read. Non-target idents and nested aggregates keep
+// their existing consume semantics so unrelated moves still get caught.
 func (c *borrowChecker) checkMultiAssign(s *MultiAssignStmt) error {
+	targetNames := make(map[string]struct{}, len(s.Targets))
 	for _, target := range s.Targets {
 		id, ok := target.(*IdentExpr)
 		if !ok {
 			return borrowErr(s.Pos, "internal: unsupported multi-assign target %T", target)
 		}
+		targetNames[id.Name] = struct{}{}
 		e, _ := c.scope.lookup(id.Name)
 		if e == nil {
 			continue
@@ -578,6 +590,22 @@ func (c *borrowChecker) checkMultiAssign(s *MultiAssignStmt) error {
 		if e.state == bsMoved && isComposite(e.typ) {
 			return borrowErr(s.Pos, "use of moved value: %q (moved at %s)", id.Name, e.movePos)
 		}
+	}
+	if tup, ok := s.Value.(*TupleLit); ok {
+		for _, el := range tup.Elements {
+			if id, isId := el.(*IdentExpr); isId {
+				if _, rehydrate := targetNames[id.Name]; rehydrate {
+					if err := c.checkExprRead(id); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			if err := c.consumeOrWalk(el, "moved by multi-assign tuple element"); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return c.checkExprConsume(s.Value)
 }

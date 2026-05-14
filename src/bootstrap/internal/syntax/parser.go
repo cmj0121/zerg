@@ -2995,6 +2995,8 @@ func (p *parser) parseAtom() (Expr, error) {
 	case KindString:
 		p.advance()
 		return &StringLit{Pos: t.Pos, Value: t.Value}, nil
+	case KindInterpStart:
+		return p.parseInterpolatedStringLit()
 	case KindTrue:
 		p.advance()
 		return &BoolLit{Pos: t.Pos, Value: true}, nil
@@ -3077,6 +3079,40 @@ func (p *parser) parseAtom() (Expr, error) {
 // the first expression; if a comma follows we collect the rest as a tuple
 // literal, otherwise we close as a ParenExpr. PLAN.md: 1-tuples are not
 // admitted at v0.2, so a single `(e,)` form produces a parse error.
+// parseInterpolatedStringLit consumes a v0.16 interpolated string. The lexer
+// guarantees the token sequence is `Start Lit (Var Lit)* End`, so this just
+// walks pieces in order. Empty `Lit` pieces are dropped here so the AST
+// carries only meaningful chunks; the wire-level alternation is a lexer
+// convenience the parser hides.
+func (p *parser) parseInterpolatedStringLit() (Expr, error) {
+	start := p.peek()
+	if start.Kind != KindInterpStart {
+		return nil, errorAtTok(start, "internal: parseInterpolatedStringLit called with non-Start token %s", start.Kind)
+	}
+	p.advance() // consume Start
+	var pieces []StringPiece
+	for {
+		t := p.peek()
+		switch t.Kind {
+		case KindInterpLit:
+			p.advance()
+			if t.Value != "" {
+				pieces = append(pieces, &StringLitPiece{Text: t.Value})
+			}
+		case KindInterpVar:
+			p.advance()
+			pieces = append(pieces, &StringVarPiece{
+				Ident: &IdentExpr{Pos: t.Pos, Name: t.Value},
+			})
+		case KindInterpEnd:
+			p.advance()
+			return &InterpolatedStringLit{Pos: start.Pos, Pieces: pieces}, nil
+		default:
+			return nil, errorAtTok(t, "internal: unexpected token %s inside interpolated string", t.Kind)
+		}
+	}
+}
+
 func (p *parser) parseTupleOrParen() (Expr, error) {
 	open := p.peek()
 	if _, err := p.expectParen(KindLParen, ""); err != nil {

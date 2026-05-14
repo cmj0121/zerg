@@ -36,24 +36,37 @@ func TestLexShebangIsComment(t *testing.T) {
 	}
 }
 
-func TestLexInterpolationRejected(t *testing.T) {
+func TestLexInterpolationProducesStructuredTokens(t *testing.T) {
+	// v0.16 promoted `{ident}` inside a string from a hard rejection to the
+	// load-bearing interp feature. The lexer now emits the structured
+	// Start / Lit / Var / Lit / End sequence around the surrounding `print`.
 	src := []byte(`print "hi {name}"`)
-	_, err := Lex(src)
-	if err == nil {
-		t.Fatal("expected lex error for interpolation, got nil")
+	tokens, err := Lex(src)
+	if err != nil {
+		t.Fatalf("Lex: %v", err)
 	}
-	le, ok := err.(*LexError)
-	if !ok {
-		t.Fatalf("error is %T, want *LexError: %v", err, err)
+	wantKinds := []Kind{
+		KindPrint,
+		KindInterpStart,
+		KindInterpLit,
+		KindInterpVar,
+		KindInterpLit,
+		KindInterpEnd,
+		KindEOF,
 	}
-	if !strings.Contains(le.Message, "interpolation is not supported") {
-		t.Errorf("error message %q does not flag interpolation rejection", le.Message)
+	if len(tokens) != len(wantKinds) {
+		t.Fatalf("got %d tokens, want %d: %#v", len(tokens), len(wantKinds), tokens)
 	}
-	// `{` in `"hi {name}"` is at column 11 (1-based, counting from the `p`
-	// in `print`). Tolerate a small offset just in case the implementation
-	// chooses to point at the `{` itself or the start of the string.
-	if le.Pos.Line != 1 {
-		t.Errorf("error line = %d, want 1", le.Pos.Line)
+	for i, w := range wantKinds {
+		if tokens[i].Kind != w {
+			t.Errorf("token %d kind = %v, want %v", i, tokens[i].Kind, w)
+		}
+	}
+	if tokens[2].Value != "hi " {
+		t.Errorf("leading Lit value = %q, want %q", tokens[2].Value, "hi ")
+	}
+	if tokens[3].Value != "name" {
+		t.Errorf("Var value = %q, want %q", tokens[3].Value, "name")
 	}
 }
 
@@ -561,12 +574,17 @@ func TestLexFnSignatureShape(t *testing.T) {
 	}
 }
 
-func TestLexStringStillRejectsInterpolation(t *testing.T) {
-	// v0.1 inherits the v0.0 rule: `{` inside a string literal is a lex
-	// error. Confirm explicitly.
-	_, err := Lex([]byte(`"hi {x}"`))
-	if err == nil {
-		t.Fatal("expected lex error for `{` inside string, got nil")
+func TestLexStringAdmitsInterpolationAtV016(t *testing.T) {
+	// v0.16 promoted `{ident}` from a hard lex rejection to the load-bearing
+	// interpolation feature. The lexer now emits the Start / Lit / Var / Lit /
+	// End sequence; non-interpolated strings still single-token through
+	// KindString (TestLexNonInterpolatedStringStillSingleToken covers that).
+	tokens, err := Lex([]byte(`"hi {x}"`))
+	if err != nil {
+		t.Fatalf("Lex: %v", err)
+	}
+	if tokens[0].Kind != KindInterpStart {
+		t.Errorf("token 0 kind = %v, want KindInterpStart", tokens[0].Kind)
 	}
 }
 

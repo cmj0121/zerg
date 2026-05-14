@@ -2414,6 +2414,8 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 	case *StringLit:
 		e.setType(tStr)
 		return tStr, nil
+	case *InterpolatedStringLit:
+		return c.checkInterpolatedStringLit(e)
 	case *BoolLit:
 		e.setType(tBool)
 		return tBool, nil
@@ -2510,6 +2512,34 @@ func (c *checker) checkExprHint(expr Expr, hint *Type) (*Type, error) {
 // elements present, every element type must equal the first; the result is
 // list[T]. With zero elements, the literal latches onto a list-shaped hint
 // (annotated binding / call argument / function return); otherwise it errors out.
+// checkInterpolatedStringLit resolves each var piece via the standard ident
+// path and rejects composite types with a focused diagnostic (the
+// "primitives only" cut is a scope decision, not a lookup failure).
+func (c *checker) checkInterpolatedStringLit(e *InterpolatedStringLit) (*Type, error) {
+	for _, piece := range e.Pieces {
+		v, ok := piece.(*StringVarPiece)
+		if !ok {
+			continue
+		}
+		if _, err := c.checkExpr(v.Ident); err != nil {
+			return nil, err
+		}
+		t := v.Ident.Type()
+		if !isInterpPrimitive(t) {
+			return nil, typeErr(v.Ident.Pos,
+				"cannot interpolate %q in string: type %s is not a primitive (only int, float, bool, str, byte, rune are allowed at v0.16)",
+				v.Ident.Name, t)
+		}
+	}
+	e.setType(tStr)
+	return tStr, nil
+}
+
+// isInterpPrimitive reports whether t may appear inside a `{ident}` slot.
+func isInterpPrimitive(t *Type) bool {
+	return t == tInt || t == tFloat || t == tBool || t == tStr || t == tByte || t == tRune
+}
+
 func (c *checker) checkListLit(e *ListLit, hint *Type) (*Type, error) {
 	if len(e.Elements) == 0 {
 		// Empty list: needs context.

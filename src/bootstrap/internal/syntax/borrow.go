@@ -738,6 +738,15 @@ func (c *borrowChecker) walkExpr(expr Expr, consuming bool) error {
 	switch e := expr.(type) {
 	case *IntLit, *FloatLit, *StringLit, *BoolLit, *RuneLit, *NilLit:
 		return nil
+	case *InterpolatedStringLit:
+		for _, piece := range e.Pieces {
+			if v, ok := piece.(*StringVarPiece); ok {
+				if err := c.walkExpr(v.Ident, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	case *IdentExpr:
 		// At a leaf, a bare ident is a READ. Use-after-move is reported here.
 		entry, _ := c.scope.lookup(e.Name)

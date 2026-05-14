@@ -538,18 +538,25 @@ INT            = DIGIT { DIGIT | "_" }
 
 FLOAT          = DIGIT { DIGIT } "." DIGIT { DIGIT }
 
-# Strings support interpolation: "hello {name}" embeds an expression.
-# Use \{ to include a literal brace without interpolation.
-STRING         = '"' { CHAR | ESCAPE | "{" expr "}" } '"'
+# String interpolation: "hello {name}" reads the value of `name` from the
+# surrounding scope and concatenates its text form into the string. The
+# interpolated identifier must resolve to one of the six primitive types
+# (int, float, bool, str, byte, rune) at typeck; composite types reject
+# with a focused diagnostic. Arbitrary expressions inside `{...}` are
+# reserved for a later version — only a bare IDENT is admitted today.
+# Use \{ and \} to include literal braces in the string.
+STRING         = '"' { CHAR | ESCAPE | "{" IDENT "}" } '"'
 
-# Multi-line string — triple double-quote, preserves newlines.
+# Multi-line string — triple double-quote, preserves newlines. Reserved
+# for v1.0+; not accepted by the bootstrap lexer.
 #   msg := """
 #       Hello
 #       World
 #       """
-MULTI_STRING   = '"""' { ? any character ? | "{" expr "}" } '"""'
+MULTI_STRING   = '"""' { ? any character ? | "{" IDENT "}" } '"""'
 
-# Raw string — no escape processing, no interpolation.
+# Raw string — no escape processing, no interpolation. Reserved for
+# v1.0+; not accepted by the bootstrap lexer.
 #   pattern := r"^\d+\.\d+$"
 RAW_STRING     = 'r"' { ? any character except '"' ? } '"'
 
@@ -573,4 +580,4 @@ HEX_DIGIT      = DIGIT | "a"..."f" | "A"..."F"
 BIN_DIGIT      = "0" | "1"
 OCT_DIGIT      = "0"..."7"
 CHAR           = ? any character except '"', '\' and NEWLINE ?
-ESCAPE         = "\" ( '"' | "'" | "\" | "n" | "t" | "r" | "0" | "{" )
+ESCAPE         = "\" ( '"' | "'" | "\" | "n" | "t" | "r" | "0" | "{" | "}" )

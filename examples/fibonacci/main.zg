@@ -19,24 +19,43 @@
 #     instead of the raw struct repr.
 
 import (
-	"math"
-	"os"
-	"strings"
+	"math"     # math.BigInt + math.from_int — arbitrary-precision int
+	"os"       # os.argv() + os.exit(code) — CLI plumbing
+	"strings"  # strings.parse_int(str) -> Result[int, ParseError]
 )
 
-# Compute fib(n) over BigInt. n ≥ 0.
+# fib(n) prints the n-th Fibonacci number. Two-slot accumulator:
+# at the top of each iteration `a` holds fib(i) and `b` holds fib(i+1),
+# starting from fib(0)=0, fib(1)=1. After n steps `a` holds fib(n).
+# Complexity: O(n) time, O(1) extra space — only the two running
+# BigInts plus the current sum live across iterations.
 fn fib(n: int) {
+	# fib(0), fib(1) seeds.
 	mut a := math.from_int(0)
 	mut b := math.from_int(1)
 
+	# `0..n` is an exclusive-upper range, so the body runs exactly n
+	# times. The parallel reassignment evaluates the RHS into a
+	# tuple temp FIRST — both `b` and `a + b` see the pre-write
+	# values of `a` and `b` — then commits both writes. That single-
+	# statement sequencing is what makes the fib recurrence correct.
 	for i in 0..n {
 		a, b = b, a + b
 	}
+
+	# `print a` auto-dispatches through BigInt.to_str() (v0.20),
+	# yielding e.g. "354224848179261915075" instead of the raw
+	# struct repr.
 	print a
 }
 
-# Entrypoint — parses the single positional argument.
+# Entrypoint — parses the single positional argument N and runs
+# fib(N). Diagnostics target stderr conventions (exit code 1) but
+# stay on stdout for simplicity; the exit code is what callers
+# (CI, shell pipelines) check against.
 fn main() {
+	# os.argv() returns [program, arg1, arg2, ...]; we expect exactly
+	# the program name plus one positional N, so len()==2.
 	args := os.argv()
 
 	if args.len() != 2 {
@@ -44,6 +63,10 @@ fn main() {
 		os.exit(1)
 	}
 
+	# Parse the positional. Result.Ok carries the parsed int; Result.Err
+	# carries a ParseError payload we don't inspect — any failure
+	# surfaces the same user-facing message with the bad input echoed
+	# back via v0.16 bare-identifier string interpolation.
 	n := args[1]
 	match strings.parse_int(n) {
 		Result.Ok(v) => fib(v)

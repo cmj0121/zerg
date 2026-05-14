@@ -53,13 +53,34 @@ func resolveStdlibRoot() string {
 }
 
 // stdlibModulePath returns the on-disk path for a `std/<name>` import.
-// Layout when $ZERG_STDLIB is set: `<root>/<name>.zg`. When stdlibRoot
-// is empty (the default), returns a virtual path (`std/<name>.zg`) that
-// will fail os.ReadFile and trigger the embedded-fallback chain — the
-// virtual form then serves as the user-facing diagnostic anchor.
+// Two layouts are admitted, in priority order:
+//
+//  1. `<root>/<name>.zg`         — flat single-file module (the
+//                                    historical case: io, os, strings…)
+//  2. `<root>/<name>/mod.zg`     — directory-module entry (math at
+//                                    v0.17, paired with math/spec,
+//                                    math/utils, math/big submodules)
+//
+// When stdlibRoot is empty (the default), returns a virtual path
+// matching whichever layout the embed serves so Target.Path reflects
+// the actual resolution.
 func stdlibModulePath(name string) string {
 	if root := stdlibRoot(); root != "" {
-		return filepath.Join(root, name+".zg")
+		flat := filepath.Join(root, name+".zg")
+		if fileExists(flat) {
+			return flat
+		}
+		dir := filepath.Join(root, name, "mod.zg")
+		if fileExists(dir) {
+			return dir
+		}
+		return flat
+	}
+	if _, ok := readEmbeddedRoots("std/" + name + ".zg"); ok {
+		return "std/" + name + ".zg"
+	}
+	if _, ok := readEmbeddedRoots("std/" + name + "/mod.zg"); ok {
+		return "std/" + name + "/mod.zg"
 	}
 	return "std/" + name + ".zg"
 }

@@ -1,0 +1,36 @@
+# requires: v0.17
+#
+# v0.17 — Ord-driven `<`, `<=`, `>`, `>=` on primitives and BigInt.
+# Each comparison lowers through cmp() on user types; primitives keep
+# the primitive fast path.
+
+import "math/big"
+
+# int.
+print 1 < 2
+print 2 <= 2
+print 3 > 2
+print 3 >= 3
+print 5 < 2
+
+# str.
+print "ant" < "bee"
+print "bee" <= "bee"
+print "zoo" > "ant"
+print "ant" >= "ant"
+print "bee" < "ant"
+
+# BigInt.
+small := big.from_int(7)
+big_v := big.from_int(99999999999)
+print small < big_v
+print big_v <= big_v
+print big_v > small
+print big_v >= big_v
+print big_v < small
+
+# Sign-bridging negative magnitudes.
+neg := big.from_int(-99999999999)
+print neg < small
+print neg < big_v
+print neg > big_v

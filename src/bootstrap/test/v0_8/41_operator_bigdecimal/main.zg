@@ -1,0 +1,31 @@
+# requires: v0.17
+#
+# v0.17 — operator-spec coverage on BigDecimal. Add / Sub / Mul /
+# Neg / Eq / Ord lit up; Div / Mod intentionally NOT implemented —
+# `bd1 / bd2` rejects at typeck. Users call `bd.div(other, scale)`
+# explicitly.
+
+import "math/big"
+
+fn parse(s: str) -> big.BigDecimal {
+    match big.decimal_from_str(s) {
+        Result.Ok(v) => return v
+        Result.Err(_) => return big.decimal_from_int(0)
+    }
+}
+
+a := parse("3.14")
+b := parse("2.00")
+
+print (a + b).to_str()
+print (a - b).to_str()
+print (a * b).to_str()
+print (-a).to_str()
+
+print a == a
+print a == b
+print a != b
+print a < b
+print b < a
+print a >= a
+print a <= a

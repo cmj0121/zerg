@@ -1,4 +1,4 @@
-# requires: v0.14
+# requires: v0.17
 import "math/big"
 
 fn show_div(x: str, y: str, scale: int) {

@@ -1,10 +1,10 @@
-# requires: v0.14
+# requires: v0.17
 import "math/big"
 
 fn show_div(a: int, b: int) {
     x := big.from_int(a)
     y := big.from_int(b)
-    match x.div(y) {
+    match x.div_checked(y) {
         Result.Ok(q) => print q.to_str()
         Result.Err(DivError.DivByZero) => print "DivByZero"
     }
@@ -13,7 +13,7 @@ fn show_div(a: int, b: int) {
 fn show_mod(a: int, b: int) {
     x := big.from_int(a)
     y := big.from_int(b)
-    match x.mod(y) {
+    match x.mod_checked(y) {
         Result.Ok(r) => print r.to_str()
         Result.Err(DivError.DivByZero) => print "DivByZero"
     }

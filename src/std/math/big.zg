@@ -1,4 +1,4 @@
-# requires: v0.14
+# requires: v0.17
 #
 # math/big — arbitrary-precision arithmetic. BigInt (signed unbounded
 # integers) + BigDecimal (signed unbounded fixed-point decimals).
@@ -431,8 +431,73 @@ impl BigInt {
         return out.to_str()
     }
 
+    pub fn abs() -> BigInt {
+        # Absolute value. Negative becomes positive; zero stays zero.
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        if this.sign == 0 {
+            return BigInt { sign: 0, digits: clone_digits(this.digits) }
+        }
+        return BigInt { sign: 1, digits: clone_digits(this.digits) }
+    }
+
+    pub fn is_zero() -> bool {
+        # True iff this is the canonical zero.
+        return this.sign == 0
+    }
+
+    pub fn div_checked(other: BigInt) -> Result[BigInt, DivError] {
+        # Quotient of `this / other`, truncated toward zero. Returns
+        # Err(DivByZero) when other is zero; otherwise Ok with the
+        # canonical BigInt result. Matches Zerg's primitive int `/`
+        # truncation semantics, just unbounded. v0.17: the operator
+        # form `a / b` lives in `impl BigInt for Div` and panics on
+        # divisor=0; call `div_checked` when you need the Result form.
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        if other.sign == 0 {
+            return Err(DivError.DivByZero)
+        }
+        if this.sign == 0 {
+            empty: list[int] = []
+            return Ok(BigInt { sign: 0, digits: empty })
+        }
+        dm := mag_divmod(this.digits, other.digits)
+        s := this.sign * other.sign
+        return Ok(make_bigint(s, dm.q))
+    }
+
+    pub fn mod_checked(other: BigInt) -> Result[BigInt, DivError] {
+        # Remainder of `this / other`. Sign follows the dividend (Zerg's
+        # primitive `int` convention; matches truncation-toward-zero for
+        # the quotient). Err(DivByZero) on zero divisor. v0.17: the
+        # operator form `a % b` lives in `impl BigInt for Mod` and
+        # panics on divisor=0; call `mod_checked` for the Result form.
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        if other.sign == 0 {
+            return Err(DivError.DivByZero)
+        }
+        if this.sign == 0 {
+            empty: list[int] = []
+            return Ok(BigInt { sign: 0, digits: empty })
+        }
+        dm := mag_divmod(this.digits, other.digits)
+        return Ok(make_bigint(this.sign, dm.r))
+    }
+}
+
+# v0.17 operator-spec impls. `a + b` / `a - b` / `a * b` / `a / b` /
+# `a % b` / `-a` / `a == b` / `a != b` / `a < b` / `<=` / `>` / `>=`
+# all desugar through these blocks. BigInt's `Div` / `Mod` panic on
+# divisor=0 — call `div_checked` / `mod_checked` for the Result form.
+
+impl BigInt for Add {
     pub fn add(other: BigInt) -> BigInt {
-        # Sum of this and other.
+        # Sum of this and other. Lit up by `a + b` at v0.17.
         #
         # # Note: print bi shows the struct fields; use bi.to_str() for the
         # # human-readable form.
@@ -458,18 +523,22 @@ impl BigInt {
         }
         return make_bigint(other.sign, mag_sub(other.digits, this.digits))
     }
+}
 
+impl BigInt for Sub {
     pub fn sub(other: BigInt) -> BigInt {
-        # Difference of this and other (`this - other`). Implemented as
-        # `this + (-other)` so the sign-handling logic lives in one place.
+        # Difference (`this - other`). Implemented as `this + (-other)`
+        # so the sign-handling logic stays in `add`.
         #
         # # Note: print bi shows the struct fields; use bi.to_str() for the
         # # human-readable form.
-        return this.add(other.neg())
+        return this + (-other)
     }
+}
 
+impl BigInt for Mul {
     pub fn mul(other: BigInt) -> BigInt {
-        # Product of this and other. Schoolbook O(|a|·|b|).
+        # Product. Schoolbook O(|a|·|b|).
         #
         # # Note: print bi shows the struct fields; use bi.to_str() for the
         # # human-readable form.
@@ -480,49 +549,70 @@ impl BigInt {
         s := this.sign * other.sign
         return make_bigint(s, mag_mul(this.digits, other.digits))
     }
+}
 
-    pub fn div(other: BigInt) -> Result[BigInt, DivError] {
-        # Quotient of `this / other`, truncated toward zero. Returns
-        # Err(DivByZero) when other is zero; otherwise Ok with the
-        # canonical BigInt result. Matches Zerg's primitive int `/`
-        # truncation semantics, just unbounded.
+impl BigInt for Div {
+    pub fn div(other: BigInt) -> BigInt {
+        # Quotient of `this / other`, truncated toward zero. Panics on
+        # divisor=0 — matching primitive `int / 0` semantics. Use
+        # `div_checked` for the Result-returning variant.
         #
         # # Note: print bi shows the struct fields; use bi.to_str() for the
         # # human-readable form.
         if other.sign == 0 {
-            return Err(DivError.DivByZero)
+            panic("BigInt: integer divide by zero")
         }
         if this.sign == 0 {
             empty: list[int] = []
-            return Ok(BigInt { sign: 0, digits: empty })
+            return BigInt { sign: 0, digits: empty }
         }
         dm := mag_divmod(this.digits, other.digits)
         s := this.sign * other.sign
-        return Ok(make_bigint(s, dm.q))
+        return make_bigint(s, dm.q)
     }
+}
 
-    pub fn mod(other: BigInt) -> Result[BigInt, DivError] {
-        # Remainder of `this / other`. Sign follows the dividend (Zerg's
-        # primitive `int` convention; matches truncation-toward-zero for
-        # the quotient). Err(DivByZero) on zero divisor.
+impl BigInt for Mod {
+    pub fn mod(other: BigInt) -> BigInt {
+        # Remainder of `this / other`. Sign follows the dividend.
+        # Panics on divisor=0 — use `mod_checked` for the Result form.
         #
         # # Note: print bi shows the struct fields; use bi.to_str() for the
         # # human-readable form.
         if other.sign == 0 {
-            return Err(DivError.DivByZero)
+            panic("BigInt: integer modulo by zero")
         }
         if this.sign == 0 {
             empty: list[int] = []
-            return Ok(BigInt { sign: 0, digits: empty })
+            return BigInt { sign: 0, digits: empty }
         }
         dm := mag_divmod(this.digits, other.digits)
-        return Ok(make_bigint(this.sign, dm.r))
+        return make_bigint(this.sign, dm.r)
     }
+}
 
+impl BigInt for Neg {
+    pub fn neg() -> BigInt {
+        # Sign flip. Zero stays zero (canonical invariant).
+        #
+        # # Note: print bi shows the struct fields; use bi.to_str() for the
+        # # human-readable form.
+        return BigInt { sign: -this.sign, digits: clone_digits(this.digits) }
+    }
+}
+
+impl BigInt for Eq {
+    pub fn eq(other: BigInt) -> bool {
+        # Numeric equality. Equivalent to `cmp == 0`.
+        return this.cmp(other) == 0
+    }
+}
+
+impl BigInt for Ord {
     pub fn cmp(other: BigInt) -> int {
         # Three-way comparison: -1 if this < other, 0 if equal, +1 if
         # this > other. Sign first; same-sign falls through to magnitude
-        # compare.
+        # compare. Lit up `<`, `<=`, `>`, `>=` at v0.17.
         return -1 if this.sign < other.sign
         return 1 if this.sign > other.sign
         # Same sign. Zero matches zero exactly (both have empty
@@ -536,35 +626,6 @@ impl BigInt {
             return -m
         }
         return m
-    }
-
-    pub fn eq(other: BigInt) -> bool {
-        # Numeric equality. Equivalent to `cmp == 0`.
-        return this.cmp(other) == 0
-    }
-
-    pub fn neg() -> BigInt {
-        # Sign flip. Zero stays zero (canonical invariant).
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
-        return BigInt { sign: -this.sign, digits: clone_digits(this.digits) }
-    }
-
-    pub fn abs() -> BigInt {
-        # Absolute value. Negative becomes positive; zero stays zero.
-        #
-        # # Note: print bi shows the struct fields; use bi.to_str() for the
-        # # human-readable form.
-        if this.sign == 0 {
-            return BigInt { sign: 0, digits: clone_digits(this.digits) }
-        }
-        return BigInt { sign: 1, digits: clone_digits(this.digits) }
-    }
-
-    pub fn is_zero() -> bool {
-        # True iff this is the canonical zero.
-        return this.sign == 0
     }
 }
 
@@ -730,41 +791,27 @@ impl BigDecimal {
         return out.to_str()
     }
 
-    pub fn add(other: BigDecimal) -> BigDecimal {
-        # Sum with scale alignment: result scale = max(this.scale,
-        # other.scale). The smaller-scale operand is multiplied by
-        # 10^delta before delegating to BigInt.add.
+    pub fn abs() -> BigDecimal {
+        # Absolute value; scale preserved.
         #
         # # Note: print bd shows the struct fields; use bd.to_str() for the
         # # human-readable form.
-        s := max_scale(this.scale, other.scale)
-        a := rescale_unscaled(this.unscaled, this.scale, s)
-        b := rescale_unscaled(other.unscaled, other.scale, s)
-        return BigDecimal { unscaled: a.add(b), scale: s }
+        return BigDecimal { unscaled: this.unscaled.abs(), scale: this.scale }
     }
 
-    pub fn sub(other: BigDecimal) -> BigDecimal {
-        # Difference. Implemented via add + neg so the sign / scale
-        # alignment logic lives in one place.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
-        return this.add(other.neg())
-    }
-
-    pub fn mul(other: BigDecimal) -> BigDecimal {
-        # Product: unscaled magnitudes multiply, scales add. No
-        # truncation — the result carries the full precision implied by
-        # both operands.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
-        return BigDecimal { unscaled: this.unscaled.mul(other.unscaled), scale: this.scale + other.scale }
+    pub fn is_zero() -> bool {
+        # True iff the unscaled BigInt is zero.
+        return this.unscaled.is_zero()
     }
 
     pub fn div(other: BigDecimal, scale: int) -> Result[BigDecimal, DivError] {
         # Truncated division at the caller-specified scale. Err(DivByZero)
         # when other is zero. Negative `scale` panics (programmer error).
+        #
+        # v0.17 note: BigDecimal does NOT participate in the `Div` /
+        # `Mod` operator specs. `a / b` on BigDecimal rejects at
+        # typeck — the three-arg shape can't satisfy `fn div(other: T)
+        # -> T`. Call this method explicitly when you need division.
         #
         # Algebra: this / other = (this.u / 10^this.s) / (other.u / 10^other.s)
         # = this.u * 10^(other.s - this.s) / other.u
@@ -786,7 +833,7 @@ impl BigDecimal {
         shift := scale + other.scale - this.scale
         if shift >= 0 {
             numer := make_bigint(this.unscaled.sign, shift_left10(this.unscaled.digits, shift))
-            match numer.div(other.unscaled) {
+            match numer.div_checked(other.unscaled) {
                 Result.Ok(q) => return Ok(BigDecimal { unscaled: q, scale: scale })
                 Result.Err(e) => return Err(e)
             }
@@ -795,46 +842,10 @@ impl BigDecimal {
         # instead so the single .div call still applies (and the
         # truncation-toward-zero semantics are inherited).
         denom_shifted := make_bigint(other.unscaled.sign, shift_left10(other.unscaled.digits, -shift))
-        match this.unscaled.div(denom_shifted) {
+        match this.unscaled.div_checked(denom_shifted) {
             Result.Ok(q) => return Ok(BigDecimal { unscaled: q, scale: scale })
             Result.Err(e) => return Err(e)
         }
-    }
-
-    pub fn cmp(other: BigDecimal) -> int {
-        # Three-way comparison with scale alignment. Both operands are
-        # rescaled to max(this.scale, other.scale); the underlying
-        # BigInt.cmp does the rest.
-        s := max_scale(this.scale, other.scale)
-        a := rescale_unscaled(this.unscaled, this.scale, s)
-        b := rescale_unscaled(other.unscaled, other.scale, s)
-        return a.cmp(b)
-    }
-
-    pub fn eq(other: BigDecimal) -> bool {
-        # Numeric equality. `1.0 == 1.00` returns true (scale-agnostic).
-        return this.cmp(other) == 0
-    }
-
-    pub fn neg() -> BigDecimal {
-        # Sign flip; scale preserved.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
-        return BigDecimal { unscaled: this.unscaled.neg(), scale: this.scale }
-    }
-
-    pub fn abs() -> BigDecimal {
-        # Absolute value; scale preserved.
-        #
-        # # Note: print bd shows the struct fields; use bd.to_str() for the
-        # # human-readable form.
-        return BigDecimal { unscaled: this.unscaled.abs(), scale: this.scale }
-    }
-
-    pub fn is_zero() -> bool {
-        # True iff the unscaled BigInt is zero.
-        return this.unscaled.is_zero()
     }
 
     pub fn with_scale(new_scale: int) -> BigDecimal {
@@ -862,10 +873,83 @@ impl BigDecimal {
         # rather than fabricating a value.
         delta := this.scale - new_scale
         divisor := pow10_bigint(delta)
-        match this.unscaled.div(divisor) {
+        match this.unscaled.div_checked(divisor) {
             Result.Ok(q) => return BigDecimal { unscaled: q, scale: new_scale }
             Result.Err(_) => panic("with_scale: unreachable div err on pow10")
         }
+    }
+}
+
+# v0.17 operator-spec impls for BigDecimal. `+ - * == != < <= > >=`
+# and unary `-` are wired through these blocks. `/` and `%` are NOT
+# implemented — BigDecimal's `div(other, scale)` is three-arg and
+# cannot satisfy `fn div(other: T) -> T`. Users call `bd.div(other,
+# scale)` explicitly.
+
+impl BigDecimal for Add {
+    pub fn add(other: BigDecimal) -> BigDecimal {
+        # Sum with scale alignment: result scale = max(this.scale,
+        # other.scale). The smaller-scale operand is multiplied by
+        # 10^delta before delegating to BigInt addition.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        s := max_scale(this.scale, other.scale)
+        a := rescale_unscaled(this.unscaled, this.scale, s)
+        b := rescale_unscaled(other.unscaled, other.scale, s)
+        return BigDecimal { unscaled: a + b, scale: s }
+    }
+}
+
+impl BigDecimal for Sub {
+    pub fn sub(other: BigDecimal) -> BigDecimal {
+        # Difference. Implemented via add + neg so the sign / scale
+        # alignment logic lives in one place.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        return this + (-other)
+    }
+}
+
+impl BigDecimal for Mul {
+    pub fn mul(other: BigDecimal) -> BigDecimal {
+        # Product: unscaled magnitudes multiply, scales add. No
+        # truncation — the result carries the full precision implied by
+        # both operands.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        return BigDecimal { unscaled: this.unscaled * other.unscaled, scale: this.scale + other.scale }
+    }
+}
+
+impl BigDecimal for Neg {
+    pub fn neg() -> BigDecimal {
+        # Sign flip; scale preserved.
+        #
+        # # Note: print bd shows the struct fields; use bd.to_str() for the
+        # # human-readable form.
+        return BigDecimal { unscaled: -this.unscaled, scale: this.scale }
+    }
+}
+
+impl BigDecimal for Eq {
+    pub fn eq(other: BigDecimal) -> bool {
+        # Numeric equality. `1.0 == 1.00` returns true (scale-agnostic).
+        return this.cmp(other) == 0
+    }
+}
+
+impl BigDecimal for Ord {
+    pub fn cmp(other: BigDecimal) -> int {
+        # Three-way comparison with scale alignment. Both operands are
+        # rescaled to max(this.scale, other.scale); the underlying
+        # BigInt.cmp does the rest.
+        s := max_scale(this.scale, other.scale)
+        a := rescale_unscaled(this.unscaled, this.scale, s)
+        b := rescale_unscaled(other.unscaled, other.scale, s)
+        return a.cmp(b)
     }
 }
 

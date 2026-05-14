@@ -1,4 +1,4 @@
-# requires: v0.14
+# requires: v0.17
 import "math/big"
 
 # Negative-zero collapse: parsing "-0" produces canonical zero, and

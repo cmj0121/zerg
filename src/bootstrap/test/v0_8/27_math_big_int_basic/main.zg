@@ -1,4 +1,4 @@
-# requires: v0.14
+# requires: v0.17
 import "math/big"
 
 # from_int + to_str round-trip on small operands, including zero and

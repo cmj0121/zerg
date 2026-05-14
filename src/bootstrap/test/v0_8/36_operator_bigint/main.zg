@@ -1,0 +1,37 @@
+# requires: v0.17
+#
+# v0.17 operator-spec coverage on BigInt. Every binary and unary
+# operator on BigInt lowers through the impl Add / Sub / Mul / Div /
+# Mod / Neg / Eq / Ord blocks in math/big.zg.
+
+import "math/big"
+
+a := big.from_int(12345)
+b := big.from_int(678)
+
+print (a + b).to_str()
+print (a - b).to_str()
+print (a * b).to_str()
+print (a / b).to_str()
+print (a % b).to_str()
+print (-a).to_str()
+
+print a == a
+print a == b
+print a != b
+print a != a
+print a < b
+print b < a
+print a <= a
+print a <= b
+print a > b
+print b > a
+print a >= a
+print b >= a
+
+# Operator surface composes naturally for chained expressions.
+print (a + b + b).to_str()
+print (a - b - b).to_str()
+print (a * (-b)).to_str()
+# divmod identity: q*d + r == n
+print (a / b * b + a % b).to_str()

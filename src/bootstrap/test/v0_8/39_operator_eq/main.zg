@@ -1,0 +1,28 @@
+# requires: v0.17
+#
+# v0.17 — Eq-driven `==` / `!=` on primitives and BigInt. != lowers
+# to a negated eq() call on user types.
+
+import "math/big"
+
+# int.
+print 1 == 1
+print 1 != 2
+
+# str.
+print "hi" == "hi"
+print "hi" != "bye"
+
+# bool.
+print true == true
+print true != false
+
+# BigInt.
+a := big.from_int(42)
+b := big.from_int(42)
+c := big.from_int(43)
+print a == a
+print a == b
+print a == c
+print a != c
+print a != b

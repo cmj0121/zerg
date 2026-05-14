@@ -1,4 +1,4 @@
-# requires: v0.14
+# requires: v0.17
 # Algebraic identities on small (3-10 digit) operands. Each block
 # checks the identity reflexively against a parallel ground-truth
 # computation; the test reports `true` when the identity holds.
@@ -60,8 +60,8 @@ fn neg_laws(a: big.BigInt) -> bool {
 
 # div/mod identity: a == (a / b) * b + (a mod b) when b != 0.
 fn divmod_id(a: big.BigInt, b: big.BigInt) -> bool {
-    match a.div(b) {
-        Result.Ok(q) => match a.mod(b) {
+    match a.div_checked(b) {
+        Result.Ok(q) => match a.mod_checked(b) {
             Result.Ok(r) => return q.mul(b).add(r).eq(a)
             Result.Err(_) => return false
         }

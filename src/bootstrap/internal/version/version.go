@@ -24,18 +24,18 @@ import (
 // typo in the version string can't silently relax the gate.
 const (
 	Major = 0
-	// Minor advances to 15 with v0.15 — the toolchain accepts sources
-	// declaring `# requires: v0.15`, which adds tuple parallel reassignment
-	// (`a, b = b, a + b` — bare-comma multi-LHS reassignment built atop the
-	// existing tuple-bind RHS-into-temp evaluation pattern). The v0.14
-	// surface additions (sys/path module, pure-Zerg src/std/math.zg, inline-
-	// asm extensions for `int` input and `mut`-binding write-back outputs)
-	// remain available unchanged at the lower gate.
+	// Minor advances to 16 with v0.16 — the toolchain accepts sources
+	// declaring `# requires: v0.16`, which adds bare-identifier string
+	// interpolation (`"answer = {n}"` lowers to a chain of zerg_str_concat
+	// calls with per-type to-str helpers; primitives only — int, float, bool,
+	// str, byte, rune). Composite-typed bindings reject at typeck. The
+	// v0.15 surface additions (tuple parallel reassignment) remain available
+	// unchanged at the lower gate.
 	//
 	// The user-facing `cliVersion` and the RELEASE.md entry stay behind
-	// until the v0.15 release unit lands — Minor is the gate's source of
+	// until the v0.16 release unit lands — Minor is the gate's source of
 	// truth.
-	Minor = 15
+	Minor = 16
 )
 
 // requiresPattern matches a `# requires: vMAJOR.MINOR` example header.

@@ -657,73 +657,194 @@ func (l *lexer) lexOperator() (Token, error) {
 	}
 }
 
-// lexString reads a double-quoted string. v0.0 understands the standard
-// C-style escapes (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`) and rejects `{`
-// outright — interpolation is reserved for a later version. v0.1 keeps the
-// same rule: `{` inside a string is a lex error.
+// bareCloseBraceMsg is the diagnostic surfaced when `}` appears unescaped
+// inside a string outside an interpolation slot. Hoisted because both the
+// non-interp and the interp-tail scanners reach the same condition.
+const bareCloseBraceMsg = "unexpected '}' in string literal (use \\} for a literal '}')"
+
+// lexString reads a double-quoted string. An unescaped `{` switches into
+// interpolation-mode emission (see lexInterpolatedTail); otherwise the whole
+// literal returns as a single KindString. `\{` and `\}` are literal-brace
+// escapes — the asymmetry between bare `{` (opens a slot) and bare `}`
+// (rejected) keeps the source-site intent unambiguous.
 func (l *lexer) lexString() (Token, error) {
 	pos := l.position()
 	l.advance() // consume opening "
 	var b strings.Builder
 	for {
 		if l.atEnd() {
-			return Token{}, &LexError{
-				Pos:     pos,
-				Message: "unterminated string literal",
-			}
+			return Token{}, &LexError{Pos: pos, Message: "unterminated string literal"}
 		}
 		c := l.peek()
 		switch c {
 		case '\n':
-			return Token{}, &LexError{
-				Pos:     l.position(),
-				Message: "unterminated string literal (newline before closing quote)",
-			}
+			return Token{}, &LexError{Pos: l.position(), Message: "unterminated string literal (newline before closing quote)"}
 		case '"':
 			l.advance()
 			return Token{Kind: KindString, Value: b.String(), Pos: pos}, nil
 		case '{':
-			return Token{}, &LexError{
-				Pos:     l.position(),
-				Message: "string interpolation is not supported",
-			}
+			return l.lexInterpolatedTail(pos, b.String())
+		case '}':
+			return Token{}, &LexError{Pos: l.position(), Message: bareCloseBraceMsg}
 		case '\\':
-			escPos := l.position()
-			l.advance()
-			if l.atEnd() {
-				return Token{}, &LexError{
-					Pos:     escPos,
-					Message: "unterminated escape sequence",
-				}
-			}
-			esc := l.advance()
-			switch esc {
-			case 'n':
-				b.WriteByte('\n')
-			case 't':
-				b.WriteByte('\t')
-			case 'r':
-				b.WriteByte('\r')
-			case '\\':
-				b.WriteByte('\\')
-			case '"':
-				b.WriteByte('"')
-			case '\'':
-				b.WriteByte('\'')
-			case '0':
-				b.WriteByte(0)
-			case '{':
-				b.WriteByte('{')
-			default:
-				return Token{}, &LexError{
-					Pos:     escPos,
-					Message: fmt.Sprintf("unknown escape sequence \\%c", esc),
-				}
+			if err := l.decodeStringEscape(&b); err != nil {
+				return Token{}, err
 			}
 		default:
 			b.WriteByte(l.advance())
 		}
 	}
+}
+
+// decodeStringEscape consumes a `\X` escape sequence — cursor on the `\`
+// at entry, one byte past `X` at exit — and writes the decoded byte to b.
+// The accepted escapes are shared between lexString and lexInterpolatedTail
+// so the two scanners cannot drift on what `\?` means.
+func (l *lexer) decodeStringEscape(b *strings.Builder) error {
+	escPos := l.position()
+	l.advance() // consume `\`
+	if l.atEnd() {
+		return &LexError{Pos: escPos, Message: "unterminated escape sequence"}
+	}
+	switch esc := l.advance(); esc {
+	case 'n':
+		b.WriteByte('\n')
+	case 't':
+		b.WriteByte('\t')
+	case 'r':
+		b.WriteByte('\r')
+	case '\\':
+		b.WriteByte('\\')
+	case '"':
+		b.WriteByte('"')
+	case '\'':
+		b.WriteByte('\'')
+	case '0':
+		b.WriteByte(0)
+	case '{':
+		b.WriteByte('{')
+	case '}':
+		b.WriteByte('}')
+	default:
+		return &LexError{Pos: escPos, Message: fmt.Sprintf("unknown escape sequence \\%c", esc)}
+	}
+	return nil
+}
+
+// lexInterpolatedTail is entered when lexString sees the first unescaped `{`.
+// It scans the remainder of the string and queues the structured tail
+// (Lit, Var, Lit, …, Var, Lit, End) on l.pending, returning the Start.
+// Alternation is uniform: empty Lit pieces sandwich any Var that opens or
+// closes the string so the parser sees a single shape regardless of layout.
+func (l *lexer) lexInterpolatedTail(stringPos Position, firstLit string) (Token, error) {
+	startTok := Token{Kind: KindInterpStart, Pos: stringPos}
+	l.pending = append(l.pending, Token{Kind: KindInterpLit, Value: firstLit, Pos: stringPos})
+
+slotLoop:
+	for {
+		varTok, err := l.lexInterpolationSlot()
+		if err != nil {
+			return Token{}, err
+		}
+		l.pending = append(l.pending, varTok)
+
+		var b strings.Builder
+		litPos := l.position()
+		for {
+			if l.atEnd() {
+				return Token{}, &LexError{Pos: stringPos, Message: "unterminated string literal"}
+			}
+			c := l.peek()
+			switch c {
+			case '\n':
+				return Token{}, &LexError{Pos: l.position(), Message: "unterminated string literal (newline before closing quote)"}
+			case '"':
+				l.advance()
+				l.pending = append(l.pending,
+					Token{Kind: KindInterpLit, Value: b.String(), Pos: litPos},
+					Token{Kind: KindInterpEnd, Pos: l.position()},
+				)
+				return startTok, nil
+			case '{':
+				l.pending = append(l.pending, Token{Kind: KindInterpLit, Value: b.String(), Pos: litPos})
+				continue slotLoop
+			case '}':
+				return Token{}, &LexError{Pos: l.position(), Message: bareCloseBraceMsg}
+			case '\\':
+				if err := l.decodeStringEscape(&b); err != nil {
+					return Token{}, err
+				}
+			default:
+				b.WriteByte(l.advance())
+			}
+		}
+	}
+}
+
+// lexInterpolationSlot scans `{ident}` and returns a KindInterpVar token.
+// The cursor is on the opening `{` at entry and one byte past the closing
+// `}` at exit. Empty `{}`, whitespace `{ x }`, and non-ident contents all
+// reject with focused diagnostics.
+func (l *lexer) lexInterpolationSlot() (Token, error) {
+	if l.atEnd() || l.peek() != '{' {
+		return Token{}, &LexError{
+			Pos:     l.position(),
+			Message: "internal: lexInterpolationSlot called with cursor not on '{'",
+		}
+	}
+	openPos := l.position()
+	l.advance() // consume `{`
+	if l.atEnd() {
+		return Token{}, &LexError{
+			Pos:     openPos,
+			Message: "unterminated interpolation in string literal",
+		}
+	}
+	c := l.peek()
+	if c == '}' {
+		return Token{}, &LexError{
+			Pos:     openPos,
+			Message: "empty interpolation: expected an identifier",
+		}
+	}
+	if c == ' ' || c == '\t' {
+		return Token{}, &LexError{
+			Pos:     l.position(),
+			Message: "interpolation must contain a single identifier (no whitespace)",
+		}
+	}
+	if c == '\n' {
+		return Token{}, &LexError{
+			Pos:     l.position(),
+			Message: "unterminated string literal (newline before closing quote)",
+		}
+	}
+	if !isIdentStart(c) {
+		return Token{}, &LexError{
+			Pos:     l.position(),
+			Message: "interpolation must contain a single identifier",
+		}
+	}
+	identPos := l.position()
+	start := l.pos
+	for !l.atEnd() && isIdentPart(l.peek()) {
+		l.advance()
+	}
+	name := string(l.src[start:l.pos])
+	if l.atEnd() {
+		return Token{}, &LexError{
+			Pos:     openPos,
+			Message: "unterminated interpolation in string literal",
+		}
+	}
+	if l.peek() != '}' {
+		return Token{}, &LexError{
+			Pos:     l.position(),
+			Message: "interpolation must contain a single identifier",
+		}
+	}
+	l.advance() // consume `}`
+	return Token{Kind: KindInterpVar, Value: name, Pos: identPos}, nil
 }
 
 // lexRune reads a single-quoted character literal. Exactly one rune (possibly

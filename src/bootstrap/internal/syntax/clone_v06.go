@@ -191,6 +191,21 @@ func cloneExpr(e Expr) Expr {
 		out := *n
 		out.typed = typed{}
 		return &out
+	case *InterpolatedStringLit:
+		out := *n
+		out.typed = typed{}
+		if len(n.Pieces) > 0 {
+			out.Pieces = make([]StringPiece, len(n.Pieces))
+			for i, p := range n.Pieces {
+				switch pp := p.(type) {
+				case *StringLitPiece:
+					out.Pieces[i] = &StringLitPiece{Text: pp.Text}
+				case *StringVarPiece:
+					out.Pieces[i] = &StringVarPiece{Ident: cloneExpr(pp.Ident).(*IdentExpr)}
+				}
+			}
+		}
+		return &out
 	case *BoolLit:
 		out := *n
 		out.typed = typed{}

@@ -20,6 +20,7 @@ const runtimeC = `#include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <math.h>
 
 typedef struct { const char *data; size_t len; } zerg_str;
@@ -80,6 +81,28 @@ static void zerg_print_rune(int32_t x) { printf("%d\n", (int)x); }
 static void zerg_str_write(zerg_str s) {
     if (s.len) fwrite(s.data, 1, s.len, stdout);
 }
+
+/* Per-type to-str helpers. The format strings MUST stay in sync with the
+   matching zerg_print_* helpers — interp output must agree with the
+   printed form byte-for-byte, and the parity tests assert on this. */
+static zerg_str zerg_str_from_fmt(const char *fmt, ...) {
+    char buf[64];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n < 0) n = 0;
+    char *p = (char *)malloc((size_t)n + 1);
+    memcpy(p, buf, (size_t)n);
+    p[n] = 0;
+    return (zerg_str){p, (size_t)n};
+}
+
+static zerg_str zerg_int_to_str(int64_t x)   { return zerg_str_from_fmt("%lld", (long long)x); }
+static zerg_str zerg_float_to_str(double x)  { return zerg_str_from_fmt("%.17g", x); }
+static zerg_str zerg_byte_to_str(uint8_t x)  { return zerg_str_from_fmt("%hhu", x); }
+static zerg_str zerg_rune_to_str(int32_t x)  { return zerg_str_from_fmt("%d", (int)x); }
+static zerg_str zerg_bool_to_str(_Bool x)    { return x ? (zerg_str){"true", 4} : (zerg_str){"false", 5}; }
 
 /* zerg_panic writes "zerg: runtime: <msg>\n" to stderr and exits with
    code 1. Backs the v0.14 panic(msg: str) builtin; pure-Zerg stdlib

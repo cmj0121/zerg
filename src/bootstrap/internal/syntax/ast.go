@@ -758,6 +758,33 @@ type StringLit struct {
 func (*StringLit) exprNode()           {}
 func (e *StringLit) ExprPos() Position { return e.Pos }
 
+// InterpolatedStringLit is `"foo {x} bar {y}"`. Pieces alternate literal
+// and variable; empty literal pieces are dropped by the parser.
+type InterpolatedStringLit struct {
+	typed
+	Pos    Position
+	Pieces []StringPiece
+}
+
+func (*InterpolatedStringLit) exprNode()           {}
+func (e *InterpolatedStringLit) ExprPos() Position { return e.Pos }
+
+// StringPiece is one segment of an interpolated string — either a literal
+// chunk (*StringLitPiece) or a `{ident}` slot (*StringVarPiece).
+type StringPiece interface {
+	stringPieceNode()
+}
+
+type StringLitPiece struct{ Text string }
+
+func (*StringLitPiece) stringPieceNode() {}
+
+// StringVarPiece wraps the slot's *IdentExpr so typeck's ident-resolution
+// + type-decoration applies unchanged.
+type StringVarPiece struct{ Ident *IdentExpr }
+
+func (*StringVarPiece) stringPieceNode() {}
+
 // BoolLit is `true` or `false`.
 type BoolLit struct {
 	typed

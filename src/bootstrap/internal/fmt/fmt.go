@@ -1532,6 +1532,8 @@ func (w *writer) expr(e syntax.Expr) {
 		w.write(x.Text)
 	case *syntax.StringLit:
 		w.write(quoteString(x.Value))
+	case *syntax.InterpolatedStringLit:
+		w.write(quoteInterpolatedString(x))
 	case *syntax.BoolLit:
 		if x.Value {
 			w.write("true")
@@ -1829,17 +1831,45 @@ func typeRefText(r *syntax.TypeRef) string {
 	return s
 }
 
-// quoteString emits s as a double-quoted Zerg string literal with the
-// escapes the lexer recognises: `\\`, `\"`, `\n`, `\t`, `\r`. Other ASCII
-// control bytes are passed through verbatim — every byte the lexer accepted
-// inside the source must round-trip out, even if the canonical form is
-// arguably odd.
+// quoteString emits s as a double-quoted Zerg string literal, re-escaping
+// the bytes the lexer treats specially: `\\`, `\"`, `\n`, `\t`, `\r`, and —
+// since v0.16 — `{` / `}` (so a literal brace round-trips through the next
+// lex without triggering interpolation). Other bytes pass through verbatim.
 func quoteString(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
+	writeStringChars(&b, s)
+	b.WriteByte('"')
+	return b.String()
+}
+
+// quoteInterpolatedString round-trips an InterpolatedStringLit back to
+// source form. Literal chunks use the shared escape grammar; var pieces
+// render as `{name}`. Formatting twice produces the same bytes.
+func quoteInterpolatedString(e *syntax.InterpolatedStringLit) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, piece := range e.Pieces {
+		switch p := piece.(type) {
+		case *syntax.StringLitPiece:
+			writeStringChars(&b, p.Text)
+		case *syntax.StringVarPiece:
+			b.WriteByte('{')
+			b.WriteString(p.Ident.Name)
+			b.WriteByte('}')
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// writeStringChars writes s into b with the in-string escape grammar
+// applied. Shared between quoteString and the literal-chunk path of
+// quoteInterpolatedString so the two cannot drift on what bytes need
+// escaping.
+func writeStringChars(b *strings.Builder, s string) {
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch c {
+		switch c := s[i]; c {
 		case '\\':
 			b.WriteString(`\\`)
 		case '"':
@@ -1850,12 +1880,14 @@ func quoteString(s string) string {
 			b.WriteString(`\t`)
 		case '\r':
 			b.WriteString(`\r`)
+		case '{':
+			b.WriteString(`\{`)
+		case '}':
+			b.WriteString(`\}`)
 		default:
 			b.WriteByte(c)
 		}
 	}
-	b.WriteByte('"')
-	return b.String()
 }
 
 // quoteRune emits a rune literal in the lexer-accepted form `'X'`. The

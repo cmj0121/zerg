@@ -200,6 +200,20 @@ const (
 	// braces, no edits); Token.Pos is the source position of the opening `{`
 	// so diagnostics point at the asm block, not the file head.
 	KindAsmBody // asm-block body payload
+
+	// --- v0.16 string-interpolation tokens. Interpolated strings ("foo {x}
+	// bar") expand to a structured token sequence so the parser does not need
+	// to re-scan the lexeme. The lexer emits exactly one Start, then alternating
+	// Lit / Var pieces (always starting and ending with a Lit — empty Lits
+	// sandwich any leading or trailing Var so the alternation is uniform),
+	// then exactly one End. Non-interpolated strings still emit a single
+	// KindString for back-compat. The parser drops empty Lit pieces when
+	// building the AST; the wire-level alternation is purely a parser
+	// convenience.
+	KindInterpStart // opening `"` of an interpolated string
+	KindInterpLit   // literal chunk between interpolations; Token.Value carries the unescaped text (may be "")
+	KindInterpVar   // `{ident}` inside an interpolated string; Token.Value carries the ident name
+	KindInterpEnd   // closing `"` of an interpolated string
 )
 
 // String returns a human-readable name for a Kind, suitable for error
@@ -392,6 +406,14 @@ func (k Kind) String() string {
 		return "'asm'"
 	case KindAsmBody:
 		return "asm body"
+	case KindInterpStart:
+		return "interpolated string start"
+	case KindInterpLit:
+		return "interpolated string literal chunk"
+	case KindInterpVar:
+		return "interpolation variable"
+	case KindInterpEnd:
+		return "interpolated string end"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}

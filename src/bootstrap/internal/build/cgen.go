@@ -3199,6 +3199,8 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return strconv.FormatFloat(e.Float, 'g', 17, 64), nil
 	case *syntax.StringLit:
 		return fmt.Sprintf("zerg_str_lit(%s, %d)", cQuote(e.Value), len(e.Value)), nil
+	case *syntax.InterpolatedStringLit:
+		return g.interpolatedStringLitStr(e)
 	case *syntax.BoolLit:
 		if e.Value {
 			return "(_Bool)1", nil
@@ -3259,6 +3261,53 @@ func (g *cgen) exprStr(expr syntax.Expr) (string, error) {
 		return g.anonFnValueStr(e)
 	}
 	return "", fmt.Errorf("codegen: unhandled expression %T at %s", expr, expr.ExprPos())
+}
+
+// interpolatedStringLitStr lowers an interpolated string to a left-fold of
+// zerg_str_concat calls. The per-type helpers in stringPieceStr match the
+// print helpers' format strings so the run-vs-build parity contract holds.
+func (g *cgen) interpolatedStringLitStr(e *syntax.InterpolatedStringLit) (string, error) {
+	acc, err := g.stringPieceStr(e.Pieces[0])
+	if err != nil {
+		return "", err
+	}
+	for _, p := range e.Pieces[1:] {
+		rhs, err := g.stringPieceStr(p)
+		if err != nil {
+			return "", err
+		}
+		acc = fmt.Sprintf("zerg_str_concat(%s, %s)", acc, rhs)
+	}
+	return acc, nil
+}
+
+// stringPieceStr renders one StringPiece as a C zerg_str-typed expression.
+// `str`-typed var pieces are identity; primitives dispatch to the matching
+// zerg_<T>_to_str helper.
+func (g *cgen) stringPieceStr(p syntax.StringPiece) (string, error) {
+	switch pp := p.(type) {
+	case *syntax.StringLitPiece:
+		return fmt.Sprintf("zerg_str_lit(%s, %d)", cQuote(pp.Text), len(pp.Text)), nil
+	case *syntax.StringVarPiece:
+		name := mangle(pp.Ident.Name)
+		t := pp.Ident.Type()
+		switch t {
+		case syntax.TInt():
+			return fmt.Sprintf("zerg_int_to_str(%s)", name), nil
+		case syntax.TFloat():
+			return fmt.Sprintf("zerg_float_to_str(%s)", name), nil
+		case syntax.TBool():
+			return fmt.Sprintf("zerg_bool_to_str(%s)", name), nil
+		case syntax.TByte():
+			return fmt.Sprintf("zerg_byte_to_str(%s)", name), nil
+		case syntax.TRune():
+			return fmt.Sprintf("zerg_rune_to_str(%s)", name), nil
+		case syntax.TStr():
+			return name, nil
+		}
+		return "", fmt.Errorf("codegen: interpolation piece %q has non-primitive type %s at %s", pp.Ident.Name, t, pp.Ident.Pos)
+	}
+	return "", fmt.Errorf("codegen: unknown string piece %T", p)
 }
 
 // listLitStr emits a list literal as a C statement-expression that allocates

@@ -1664,6 +1664,8 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return floatVal(e.Float), nil
 	case *syntax.StringLit:
 		return strVal(e.Value), nil
+	case *syntax.InterpolatedStringLit:
+		return in.evalInterpolatedStringLit(e)
 	case *syntax.BoolLit:
 		return boolVal(e.Value), nil
 	case *syntax.IdentExpr:
@@ -1723,6 +1725,28 @@ func (in *interp) evalExpr(expr syntax.Expr) (Value, error) {
 		return in.evalAnonFn(e)
 	}
 	return Value{}, fmt.Errorf("internal: unhandled expression %T at %s", expr, expr.ExprPos())
+}
+
+// evalInterpolatedStringLit reuses formatValue (the same canonical text form
+// the print path uses), so cgen's per-type helpers and the interpreter agree
+// byte-for-byte on every primitive.
+func (in *interp) evalInterpolatedStringLit(e *syntax.InterpolatedStringLit) (Value, error) {
+	var b strings.Builder
+	for _, piece := range e.Pieces {
+		switch p := piece.(type) {
+		case *syntax.StringLitPiece:
+			b.WriteString(p.Text)
+		case *syntax.StringVarPiece:
+			v, err := in.evalExpr(p.Ident)
+			if err != nil {
+				return Value{}, err
+			}
+			b.WriteString(formatValue(v))
+		default:
+			return Value{}, fmt.Errorf("internal: unknown string piece %T at %s", piece, e.Pos)
+		}
+	}
+	return strVal(b.String()), nil
 }
 
 func (in *interp) evalUnary(e *syntax.UnaryExpr) (Value, error) {

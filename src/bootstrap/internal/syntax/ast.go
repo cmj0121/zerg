@@ -694,6 +694,9 @@ type ImportDecl struct {
 	Alias           string
 	AliasPos        Position
 	LeadingComments []string
+	// Pub marks the import as a re-export. Callers of THIS module see the
+	// imported module's pub surface flat under the host's namespace. v0.18.
+	Pub bool
 }
 
 func (*ImportDecl) stmtNode()           {}

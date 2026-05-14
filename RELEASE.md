@@ -3,6 +3,30 @@
 One-screen summary per version of what shipped. Rationale and implementation detail live in the
 commit log; the EBNF grammar reference lives in [`docs/GRAMMAR`](docs/GRAMMAR).
 
+## v0.18 — `pub import` flat re-export
+
+- `pub import "X"` re-exposes X's pub fns / structs / enums / specs flat under the host
+  module's namespace. Callers of the host see the re-exported names directly: a module M
+  with `pub import "X"` makes `M.foo(x)` callable when `X.foo` is pub. The `as` keyword
+  on `import` and `pub import` renames the host's local binding only; it does NOT
+  introduce a sub-namespace at the caller boundary.
+- Transitive re-exports compose: A `pub import "B"` and B `pub import "C"` together
+  make A's callers see C's pub names. Propagation runs to a fixpoint at module-bind
+  time so iteration order is irrelevant.
+- Collision detection at module-bind time: two pub-imports contributing the same name
+  reject with `pub import collision: %q is exported by two different modules — rename
+or drop the`pub`on one`. A pub-import contributing a name the host already declares
+  locally rejects with `pub import collision: %q is already declared locally`.
+- Pub-check helpers (`fnIsPub` / `specIsPub` / inline struct & enum AST checks) follow
+  the re-export provenance chain back to the canonical decl, so visibility gating fires
+  uniformly across local and re-exported names.
+- `src/std/math/mod.zg` rewrites: the four wrapper fns (`abs`, `min`, `max`, `gcd`)
+  collapse to two `pub import` lines that re-expose `math/utils` and `math/big` flat.
+  `import "math"` callers now access `math.abs(-7)`, `math.from_int(5)`, `math.BigInt`
+  directly. The wrappers ship and run identically at v0.17 — the v0.18 rewrite is purely
+  an authoring simplification.
+- `cliVersion` 0.18.0; `version.Minor` 18.
+
 ## v0.17 — arbitrary-precision arithmetic + operator-spec wiring
 
 - `std/math/big` module: `BigInt` (signed unbounded integers) and `BigDecimal` (signed

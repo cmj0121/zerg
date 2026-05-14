@@ -5141,7 +5141,21 @@ func (g *cgen) lookupImportMangle(local string) string {
 // lookupModuleFn returns the FnDecl for `fnName` in the module identified
 // by mangle, or nil when the lookup misses. Used by cross-module fn-call
 // emission.
+//
+// v0.18: when the module re-exports `fnName` via `pub import "X"`, the
+// fn lives in X's source rather than the host's. Walk pub-import decls
+// recursively so cgen finds the canonical FnDecl (whose g.fnOwner entry
+// resolves to X's mangle, keeping the emit byte-identical to a direct
+// X.<fn> call).
 func (g *cgen) lookupModuleFn(mangle, fnName string) *syntax.FnDecl {
+	return g.lookupModuleFnWalk(mangle, fnName, map[string]bool{})
+}
+
+func (g *cgen) lookupModuleFnWalk(mangle, fnName string, seen map[string]bool) *syntax.FnDecl {
+	if seen[mangle] {
+		return nil
+	}
+	seen[mangle] = true
 	me := g.moduleByName[mangle]
 	if me == nil || me.prog == nil {
 		return nil
@@ -5149,6 +5163,30 @@ func (g *cgen) lookupModuleFn(mangle, fnName string) *syntax.FnDecl {
 	for _, stmt := range me.prog.Statements {
 		if fn, ok := stmt.(*syntax.FnDecl); ok && fn.Name == fnName {
 			return fn
+		}
+	}
+	// v0.18: walk pub-import targets recursively.
+	for _, stmt := range me.prog.Statements {
+		imp, ok := stmt.(*syntax.ImportDecl)
+		if !ok || !imp.Pub {
+			continue
+		}
+		localName := imp.Alias
+		if localName == "" {
+			// Path basename — last `/`-separated segment.
+			p := imp.Path
+			localName = p
+			for i := len(p) - 1; i >= 0; i-- {
+				if p[i] == '/' {
+					localName = p[i+1:]
+					break
+				}
+			}
+		}
+		if targetMangle, ok := me.imports[localName]; ok {
+			if fn := g.lookupModuleFnWalk(targetMangle, fnName, seen); fn != nil {
+				return fn
+			}
 		}
 	}
 	return nil

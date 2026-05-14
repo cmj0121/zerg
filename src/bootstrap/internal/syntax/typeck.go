@@ -553,6 +553,13 @@ type checker struct {
 	// waitGroupType is the canonical synthetic WaitGroup struct *Type.
 	// Populated by injectWaitGroupBuiltin at newChecker time.
 	waitGroupType *Type
+	// reExportSource is the v0.18 pub-import provenance map. Each entry
+	// records: this name in c.fns / c.structs / c.enums / c.specs is a
+	// re-export from the named source module — not a local decl. Pub-
+	// check helpers (fnIsPub / specIsPub / structAST.Pub / enumAST.Pub)
+	// follow the chain to validate visibility against the canonical
+	// decl. Empty when this checker doesn't re-export anything.
+	reExportSource map[string]ModuleView
 }
 
 // Check is the public single-program entry point. It walks prog, annotates

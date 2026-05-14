@@ -2887,7 +2887,7 @@ func (in *interp) evalMethodCall(e *syntax.MethodCallExpr) (Value, error) {
 	// to the callee's owning module).
 	if id, ok := e.Receiver.(*syntax.IdentExpr); ok {
 		if foreign, isMod := in.cur.imports[id.Name]; isMod {
-			if fn, ok := foreign.fns[e.Method]; ok {
+			if fn := in.lookupModuleFn(foreign, e.Method); fn != nil {
 				return in.callFn(fn, e.Args, e.Type(), e.Pos)
 			}
 			return Value{}, fmt.Errorf("internal: module %q has no fn %q at %s", id.Name, e.Method, e.MethodPos)
@@ -3014,6 +3014,55 @@ func comparePrimitiveValues(a, b Value) (int64, error) {
 // dispatchSpec routes a method call through a spec-typed fat pointer's
 // (ConcreteType, Spec) pair. Resolution: concrete impl override > spec
 // default > NotImplemented panic.
+// lookupModuleFn finds the *FnDecl named `name` in `md`. v0.18: walks
+// `pub import` targets recursively, mirroring cgen.lookupModuleFn so
+// `math.abs(...)` lights up when math/mod.zg `pub import "math/utils"`
+// even though math/mod.zg's own program never declares `abs`.
+func (in *interp) lookupModuleFn(md *moduleData, name string) *syntax.FnDecl {
+	return in.lookupModuleFnWalk(md, name, map[*moduleData]bool{})
+}
+
+func (in *interp) lookupModuleFnWalk(md *moduleData, name string, seen map[*moduleData]bool) *syntax.FnDecl {
+	if md == nil || seen[md] {
+		return nil
+	}
+	seen[md] = true
+	if fn, ok := md.fns[name]; ok {
+		return fn
+	}
+	if md.prog == nil {
+		return nil
+	}
+	for _, stmt := range md.prog.Statements {
+		imp, ok := stmt.(*syntax.ImportDecl)
+		if !ok || !imp.Pub {
+			continue
+		}
+		local := imp.Alias
+		if local == "" {
+			local = importPathBasename(imp.Path)
+		}
+		if target := md.imports[local]; target != nil {
+			if fn := in.lookupModuleFnWalk(target, name, seen); fn != nil {
+				return fn
+			}
+		}
+	}
+	return nil
+}
+
+// importPathBasename returns the last `/`-separated segment of an
+// import path, matching the loader's ImportLocalName when no `as`
+// alias is given.
+func importPathBasename(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			return path[i+1:]
+		}
+	}
+	return path
+}
+
 func (in *interp) dispatchSpec(e *syntax.MethodCallExpr, rv Value) (Value, error) {
 	specName := rv.Type.Name
 	if rv.Data == nil {

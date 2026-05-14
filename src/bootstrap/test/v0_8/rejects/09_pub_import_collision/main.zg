@@ -1,0 +1,9 @@
+# requires: v0.18
+#
+# Two sibling modules both expose a pub `foo`; pub-importing both
+# rejects at module-bind time with a focused collision diagnostic.
+
+pub import "first"
+pub import "second"
+
+print first.foo()

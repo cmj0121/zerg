@@ -1,42 +1,34 @@
-# requires: v0.17
+# requires: v0.18
 #
-# math — directory-module entry. Re-exports the integer-math utilities
-# from `math/utils` so `import "math"` keeps resolving to a useful
-# surface, and serves as the family landing page for the per-submodule
-# docs:
+# math — directory-module entry. Re-exposes every submodule's pub
+# surface flat under the math namespace using v0.18 `pub import`.
 #
-#   math       (this file)    — utility fns: abs / min / max / gcd
-#   math/spec  (documented)   — the built-in operator specs Arithmetic,
-#                                Comparable, From (their canonical
-#                                shape is injected by typeck; see
-#                                src/std/math/spec.zg for the prose
-#                                contract)
-#   math/utils                — pure-Zerg integer-math primitives
-#   math/big                  — arbitrary-precision BigInt + BigDecimal
+# Family layout:
 #
-# Zerg has no re-export syntax (yet — slated for v0.18), so the four
-# utility fns are thin wrappers around `math/utils`. The cost is one
-# extra hop per call; the readability win is `math.abs(x)` continues
-# to work after the directory-module split.
+#   math       (this file)  — directory-module entry; re-exports below
+#   math/spec               — prose-contract documentation for the
+#                              bundled operator specs Arithmetic,
+#                              Comparable, From (their canonical
+#                              shape is typeck-injected at bootstrap)
+#   math/utils              — integer-math primitives (abs / min /
+#                              max / gcd)
+#   math/big                — arbitrary-precision BigInt + BigDecimal
+#                              with bundled-spec operator support
+#
+# Callers do `import "math"` and access flat:
+#
+#     math.abs(-7)           # from math/utils
+#     math.gcd(12, 18)       # from math/utils
+#     math.BigInt            # from math/big — type re-exported
+#     math.from_int(5)       # from math/big — free fn re-exported
+#
+# Direct submodule imports still work and stay independent:
+#     import "math/big"
+#     big.from_int(5)        # equivalent to math.from_int(5)
+#
+# The `as` keyword renames the local binding inside THIS file only —
+# it does NOT change what callers see. v0.18 locks the rule:
+#   pub import ALWAYS flattens; `as` is local-only.
 
-import "math/utils"
-
-# Absolute value of `x`. See `math/utils.abs`.
-pub fn abs(x: int) -> int {
-	return utils.abs(x)
-}
-
-# Smaller of `a` and `b`. See `math/utils.min`.
-pub fn min(a: int, b: int) -> int {
-	return utils.min(a, b)
-}
-
-# Larger of `a` and `b`. See `math/utils.max`.
-pub fn max(a: int, b: int) -> int {
-	return utils.max(a, b)
-}
-
-# Greatest common divisor of `a` and `b`. See `math/utils.gcd`.
-pub fn gcd(a: int, b: int) -> int {
-	return utils.gcd(a, b)
-}
+pub import "math/utils"
+pub import "math/big"

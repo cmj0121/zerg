@@ -45,6 +45,7 @@ focus is on building a workable prototype with a minimal feature set:
 - [x] **v0.15** — tuple parallel reassignment (`a, b = b, a + b`).
 - [x] **v0.16** — bare-identifier string interpolation (`"hi {name}"`).
 - [x] **v0.17** — arbitrary-precision arithmetic + bundled operator specs.
+- [x] **v0.18** — `pub import` flat re-export.
 - [ ] **v1.0** — source stability.
 
 A phase ships when each example's stdout matches between `zerg run` and `zerg build` — byte-identical

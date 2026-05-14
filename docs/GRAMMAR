@@ -182,6 +182,22 @@ fn_decl        = visibility "fn" IDENT [ type_params ] "(" [ param_list ] ")" [ 
 param_list     = param { "," param }
 param          = IDENT ":" type [ "=" expr ]
 
+# Imports — bring an external module into scope at the file's top level.
+# An optional `as` clause renames the local binding (caller-side view
+# is unchanged). v0.18 adds the `pub` prefix: a `pub import` re-exports
+# the imported module's pub fns / structs / enums / specs flat under
+# the host module's namespace. `as` stays local-only on `pub import` —
+# it does not introduce a sub-namespace at the caller boundary; two
+# pub imports contributing the same name reject at module-bind time
+# with a focused collision diagnostic.
+#
+#   import "io"                           ; bare binding
+#   import "math/big" as bignum           ; local rename
+#   pub import "math/utils"               ; v0.18 — flat re-export
+#   pub import "math/big" as big          ; v0.18 — flat re-export
+#                                         ;          (`as` local-only)
+import_stmt    = [ "pub" ] "import" STRING [ "as" IDENT ]
+
 # Specs — interfaces that types can implement.
 # A spec declares method signatures without bodies.
 # Specs can extend other specs with ":" (uses constraint syntax: A + B).

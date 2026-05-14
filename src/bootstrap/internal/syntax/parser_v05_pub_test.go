@@ -130,18 +130,19 @@ func TestParsePubConstRejected(t *testing.T) {
 func TestParsePubImplRejected(t *testing.T) {
 	// `impl` carries no `pub`; the visibility lives on each inner method's
 	// `fn`. `pub impl T { ... }` is rejected with the focused diagnostic.
-	expectParseErr(t, "pub impl Counter { fn m() {} }\n", "pub may only modify fn / struct / enum / spec")
+	// v0.18 added `import` to the admitted set.
+	expectParseErr(t, "pub impl Counter { fn m() {} }\n", "pub may only modify fn / struct / enum / spec / import")
 }
 
 func TestParsePubAtEOFRejected(t *testing.T) {
-	expectParseErr(t, "pub", "expected fn / struct / enum / spec after 'pub'")
+	expectParseErr(t, "pub", "expected fn / struct / enum / spec / import after 'pub'")
 }
 
 func TestParsePubBeforeIdentRejected(t *testing.T) {
 	// A non-decl token after `pub` (here, an identifier) is rejected with
 	// the same focused diagnostic. This protects against typos like
 	// `pub foo()` where the user forgot the `fn` keyword.
-	msg := expectParseErr(t, "pub foo\n", "expected fn / struct / enum / spec after 'pub'")
+	msg := expectParseErr(t, "pub foo\n", "expected fn / struct / enum / spec / import after 'pub'")
 	if !strings.Contains(msg, "after 'pub'") {
 		t.Errorf("error %q does not mention `after 'pub'`", msg)
 	}

@@ -152,6 +152,40 @@ func CheckBundle(bundle BundleView) error {
 		}
 	}
 
+	// Phase 2.5 (v0.18): pub-import re-export propagation. Walk each
+	// module's `pub import "X"` decls and copy X's pub fns, structs,
+	// enums, and specs into the host module's tables. Detects
+	// collisions across pub imports and against the host's own decls.
+	// Re-export provenance is recorded on c.reExportSource so pub-
+	// check helpers (fnIsPub / specIsPub / inline struct & enum AST
+	// checks) can walk back to the canonical decl for visibility
+	// gating.
+	//
+	// Must run AFTER resolveFnSignatures / resolveGenericFnSignatures
+	// so the propagated fnSig entries carry resolved param/ret types,
+	// not placeholder sigs from collectTopLevel.
+	//
+	// Iterates to fixpoint so transitive re-exports (M pub-imports N
+	// which pub-imports O) compose correctly regardless of module
+	// iteration order. Loop is bounded by the count of pub-import
+	// entries; the fixpoint converges in O(depth) iterations.
+	for {
+		changed := false
+		for _, m := range mods {
+			c := checkers[m]
+			added, err := c.propagateReExports()
+			if err != nil {
+				return err
+			}
+			if added {
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
 	// Phase 3: per-module impl resolution + orphan rule. Impl resolution
 	// reaches across module boundaries to look up the receiver type and
 	// (optionally) the spec; the orphan rule requires the importing module
@@ -898,13 +932,32 @@ func (c *checker) resolveCrossModuleType(ref *TypeRef) (*Type, error) {
 // walk the foreign module's AST because the *Spec record itself doesn't
 // carry the bit; the cost is O(n) per probe but n is small (a module's
 // top-level decl count).
+//
+// v0.18: when `name` was re-exported into fc via `pub import`, the
+// canonical decl lives in fc.reExportSource[name] instead. Follow the
+// chain so the pub bit reflects the original spec's visibility.
 func specIsPub(fc *checker, name string) bool {
+	if source := reExportOwner(fc, name); source != nil {
+		if tc := fc.crossMod.checkers[source]; tc != nil {
+			return specIsPub(tc, name)
+		}
+	}
 	for _, stmt := range moduleStatements(fc) {
 		if sd, ok := stmt.(*SpecDecl); ok && sd.Name == name {
 			return sd.Pub
 		}
 	}
 	return false
+}
+
+// reExportOwner returns the source module of a re-exported name on fc,
+// or nil if the name is local (or absent). Used by pub-check helpers
+// to follow the re-export chain back to the canonical decl.
+func reExportOwner(fc *checker, name string) ModuleView {
+	if fc == nil || fc.reExportSource == nil || fc.crossMod == nil {
+		return nil
+	}
+	return fc.reExportSource[name]
 }
 
 // moduleStatements returns the AST statements of fc's owning module, or
@@ -917,7 +970,16 @@ func moduleStatements(fc *checker) []Stmt {
 }
 
 // fnIsPub reports whether the FnDecl named `name` in fc is `pub`.
+//
+// v0.18: re-exported names (entries in fc.reExportSource) follow the
+// chain back to the canonical FnDecl so visibility gating works
+// uniformly across local and re-exported decls.
 func fnIsPub(fc *checker, name string) bool {
+	if source := reExportOwner(fc, name); source != nil {
+		if tc := fc.crossMod.checkers[source]; tc != nil {
+			return fnIsPub(tc, name)
+		}
+	}
 	for _, stmt := range moduleStatements(fc) {
 		if fn, ok := stmt.(*FnDecl); ok && fn.Name == name {
 			return fn.Pub

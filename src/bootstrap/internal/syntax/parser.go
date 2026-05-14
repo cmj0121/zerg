@@ -585,12 +585,14 @@ func (p *parser) parseStatement() (Stmt, error) {
 // parsePubDecl handles the `pub` visibility modifier on top-level
 // declarations. Grammar:
 //
-//	'pub' ('fn' fn_decl | 'struct' struct_decl | 'enum' enum_decl | 'spec' spec_decl)
+//	'pub' ('fn' fn_decl | 'struct' struct_decl | 'enum' enum_decl
+//	      | 'spec' spec_decl | 'import' import_stmt)
 //
 // Anything else after `pub` is rejected with a focused diagnostic. v0.5
 // Unit 1a parses the bit but typeck does not yet consume it; programs
 // continue to behave exactly as v0.4. v0.5 Unit 3 wires the bit into
-// cross-module visibility gating.
+// cross-module visibility gating. v0.18 adds `pub import`: re-exports
+// the imported module's pub surface flat under the host's namespace.
 func (p *parser) parsePubDecl() (Stmt, error) {
 	pubTok := p.advance() // consume `pub`
 	t := p.peek()
@@ -623,8 +625,28 @@ func (p *parser) parsePubDecl() (Stmt, error) {
 		}
 		sp.(*SpecDecl).Pub = true
 		return sp, nil
+	case KindImport:
+		// v0.18: `pub import` re-exports the imported module's pub
+		// surface flat under the host's namespace.
+		stmt, err := p.parseImport()
+		if err != nil {
+			return nil, err
+		}
+		if id, ok := stmt.(*ImportDecl); ok {
+			id.Pub = true
+			return id, nil
+		}
+		// Grouped form (`pub import (...)`) — parseImport queued
+		// extra entries on p.pendingImports; mark each one pub too.
+		if id, ok := stmt.(*ImportDecl); ok {
+			id.Pub = true
+		}
+		for _, pi := range p.pendingImports {
+			pi.Pub = true
+		}
+		return stmt, nil
 	case KindLet, KindMut, KindConst, KindImpl:
-		// `pub` is decl-level only and applies to the four shapes above —
+		// `pub` is decl-level only and applies to the shapes above —
 		// emit a focused diagnostic rather than letting `parseDecl` /
 		// `parseImplDecl` handle the keyword (which would lose the `pub`
 		// context). `pub impl` is rejected here because the `pub` lives on
@@ -632,15 +654,15 @@ func (p *parser) parsePubDecl() (Stmt, error) {
 		// the `let` parser shape but kept `let` as a lexer keyword; `pub
 		// let` still routes here so the error names the actually-reserved
 		// pub targets.
-		return nil, errorAt(pubTok.Pos, "pub may only modify fn / struct / enum / spec")
+		return nil, errorAt(pubTok.Pos, "pub may only modify fn / struct / enum / spec / import")
 	case KindEOF:
 		return nil, &ParseError{
 			Pos:        pubTok.Pos,
-			Message:    "expected fn / struct / enum / spec after 'pub'",
+			Message:    "expected fn / struct / enum / spec / import after 'pub'",
 			Incomplete: true,
 		}
 	default:
-		return nil, errorAt(pubTok.Pos, "expected fn / struct / enum / spec after 'pub'")
+		return nil, errorAt(pubTok.Pos, "expected fn / struct / enum / spec / import after 'pub'")
 	}
 }
 

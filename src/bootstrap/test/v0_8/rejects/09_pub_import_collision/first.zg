@@ -1,0 +1,5 @@
+# requires: v0.18
+
+pub fn foo() -> int {
+	return 1
+}

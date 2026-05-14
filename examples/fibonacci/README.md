@@ -50,6 +50,7 @@ Large indices stay exact:
 | Bundled `Arithmetic` operator spec   | v0.17 | `a + b` (lowers to `a.add(b)` on BigInt)         |
 | `pub import` flat re-export          | v0.18 | `import "math"` → `math.from_int`, `math.BigInt` |
 | Self-rehydrating multi-assign        | v0.19 | `a, b = b, a + b` over `BigInt` (struct)         |
+| `print` auto-dispatch via `to_str`   | v0.20 | `print a` calls `a.to_str()` on `BigInt`         |
 
 ## Note on the loop shape
 

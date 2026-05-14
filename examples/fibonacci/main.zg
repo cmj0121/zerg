@@ -1,5 +1,5 @@
 #! /usr/bin/env zerg
-# requires: v0.19
+# requires: v0.20
 #
 # Fibonacci over arbitrary-precision integers. Iterative accumulator;
 # the running state is `math.BigInt` so large indices (e.g. fib 1000)
@@ -14,6 +14,9 @@
 #     for composite types (BigInt is a struct), so the canonical
 #     parallel-reassign Fibonacci step works the same way it does
 #     for primitive ints.
+#   - v0.20 print auto-dispatch: `print a` calls `a.to_str()` when
+#     the type defines it, so the BigInt prints its decimal form
+#     instead of the raw struct repr.
 
 import (
 	"math"
@@ -29,7 +32,7 @@ fn fib(n: int) {
 	for i in 0..n {
 		a, b = b, a + b
 	}
-	print a.to_str()
+	print a
 }
 
 # Entrypoint — parses the single positional argument.

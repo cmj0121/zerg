@@ -9,7 +9,7 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 
 | 層          | 是什麼                            | 劃分的邊界                                 |
 | ----------- | --------------------------------- | ------------------------------------------ |
-| **program** | 以含 `main` 的 entry 檔為根的建置 | 一次執行——一張依賴 DAG 的根                |
+| **program** | 以含 `main` 的 entry 檔為根的建置 | 一次執行——依賴圖的根                       |
 | **package** | 一棵 module 樹                    | **散布 / 相依 / 版本** 與**對外 API** 單位 |
 | **module**  | 一個目錄                          | 預設的**私有**與**命名空間**單位           |
 | **file**    | 一個 module 的實體切片            | 無——同 module 的檔案共享一個命名空間       |
@@ -21,7 +21,8 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 **program 是一次建置**，而非某種特殊 package。compiler 被指向一個 **entry 檔**——`zerg entry.zg`——以它為根展開
 建置，沿它的 import 走遍整張依賴 DAG。
 
-- entry 檔名**不是保留字**；由建置指令指定。語言要求的是**內容**：entry 檔必須定義一個頂層 `fn main()`。
+- entry 檔名**不是保留字**；由建置指令指定。語言要求的是**內容**：entry 檔必須定義一個頂層 **`main`** entry
+  function——它的形貌（輸入與結果）重用已定義的模型，就在下方。
 - `main` 未 `pub`，因此永遠不可被 import——「program 不可被依賴」這個性質免費得到，不需要特殊的 _binary package_
   種類。**每個 package 都是可被 import 的 library。**
 - **多個執行檔**只是多個 entry 檔，各自有自己的 `main`，各自把 compiler 指過去建置。
@@ -49,7 +50,7 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 ### Package
 
 **package** 是一棵 module 樹，也是**散布、相依與版本**的單位——你發佈、依賴、釘版本的那個東西。package 形成一張
-**依賴 DAG**：package 之間的循環會被拒絕。
+**依賴 DAG**（directed acyclic graph，有向無環圖——相依永不繞回）：package 之間的循環會被拒絕。
 
 一次建置在整張圖裡對每個 package **只選一個版本**——同一個 package 絕不會在一個 program 裡出現兩種版本——因此一個
 package 的型別在全程式裡保有單一身分。
@@ -92,13 +93,15 @@ compile error。一個型別指名另一個型別**從來不是**這種循環—
 
 - **module-private**（預設）——只在定義它的 module 內可見（跨其各檔案，file 不劃邊界）。
 - **package-internal**——一個 `pub` 宣告；同 package 的其他 module 可指名它。
-- **package-public**——不是標記、而是一個**位置**：一個 package 的對外 API，就等於它 **root module** 的 `pub` 表面。
-  宣告唯有出現在那裡，才能被依賴者看到。
+- **package-public**——不是標記、而是一個**位置**：一個 package 的對外 API，就等於它 **root module**（package
+  module 樹的頂層目錄）的 `pub` 表面。宣告唯有出現在那裡，才能被依賴者看到。
 
 要把內層型別露給依賴者，就由 root module **re-export** 它——把一個 package-internal 的名字、或整個 module，拉上
-root 自己的公開表面。re-export 是建立 package「臉」的唯一機制：root 不點名，任何東西都出不了 package，因此重整內層
-module 永不擾動對外契約。宣告不能比它所指名的型別更外露——一個 package-public 的函式不能收受或回傳仍是
-module-private 的型別，因為依賴者根本拼不出那個型別。
+root 自己的公開表面。re-export 是建立 package 公開表面的唯一機制：root 不點名，任何東西都出不了 package，因此重整內層
+module 永不擾動對外契約。宣告不能比它所指名的型別更外露——一個 package-public 的函式不能收受或回傳一個
+**本身不在公開表面上**的型別（無論是 module-private、還是 package-internal 但從未被 re-export），因為依賴者
+根本無法指名那個型別。一個型別的 **`pub` method 會隨它一起走**：一旦型別抵達公開表面，它的 `pub` method 也能
+被依賴者呼叫——method 上的可見性讀法與 function 完全相同。
 
 ### 匯入與引用
 
@@ -109,7 +112,7 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 - **同一 module**（同目錄）——無須 import；一個 module 的各檔案共享一個命名空間。
 - **同 package 的其他 module**——import 那個 sibling module，即可指名它的 package-internal（`pub`）宣告。
 - **別的 package**——import 該 package，只看得到它 root 的公開表面；相依套件的內層 module **不可達**，依賴者只拿得到
-  那張臉。
+  那個公開表面。
 
 因為每個相依都被寫下來，import graph 是顯式的——這正是 module 與 package **循環得以被拒絕**的前提。
 

@@ -10,7 +10,7 @@ one concern:
 
 | Layer       | What it is                                  | The boundary it draws                                        |
 | ----------- | ------------------------------------------- | ------------------------------------------------------------ |
-| **program** | a build rooted at an entry file with `main` | the run — the root of one dependency DAG                     |
+| **program** | a build rooted at an entry file with `main` | the run — the root of the dependency graph                   |
 | **package** | a tree of modules                           | the **distribution / dependency / version** and **API** unit |
 | **module**  | a directory                                 | the default **privacy** and **namespace** unit               |
 | **file**    | a physical slice of one module              | none — files in a module share one namespace                 |
@@ -24,7 +24,8 @@ A **program is a build**, not a special kind of package. The compiler is pointed
 `zerg entry.zg` — and roots the build there, following its imports out across the dependency DAG.
 
 - The entry filename is **not reserved**; the build invocation designates it. What the language
-  requires is **content**: the entry file must define a top-level `fn main()`.
+  requires is **content**: the entry file must define a top-level **`main`** entry function — its shape
+  (inputs and result) reuses models already defined, just below.
 - `main` is not `pub`, so it can never be imported — the "you cannot depend on a program" property
   falls out for free, with no special _binary package_ kind. **Every package is an importable
   library.**
@@ -58,8 +59,8 @@ travels by value or through channels, never through a module-level variable.
 ### Packages
 
 A **package** is a tree of modules and the unit of **distribution, dependency, and versioning** — the
-thing you publish, depend on, and pin a version of. Packages form a **dependency DAG**: cycles between
-packages are rejected.
+thing you publish, depend on, and pin a version of. Packages form a **dependency DAG** (a directed
+acyclic graph — dependencies never loop back): cycles between packages are rejected.
 
 A build selects **one version per package** across the whole graph — the same package never appears at
 two versions in one program — so a package's types keep a single identity program-wide.
@@ -118,14 +119,17 @@ three scopes but a single keyword:
   draw no boundary).
 - **package-internal** — a `pub` declaration; the other modules of the same package may name it.
 - **package-public** — not a marker but a **position**: a package's external API is exactly the `pub`
-  surface of its **root module**. A declaration reaches dependents only by appearing there.
+  surface of its **root module** (the top directory of the package's module tree). A declaration reaches
+  dependents only by appearing there.
 
 To expose an inner type to dependents, the root module **re-exports** it — pulling a package-internal
 name, or a whole module, onto the root's own public surface. Re-export is the single mechanism that
-builds a package's face: nothing escapes the package unless the root names it, so reshaping inner
-modules never disturbs the external contract. A declaration can never out-expose the types it names —
-a package-public function cannot take or return a type that stays module-private, because a dependent
-could not spell that type.
+builds a package's public surface: nothing escapes the package unless the root names it, so reshaping inner
+modules never disturbs the external contract. A declaration can never be more visible than the types it
+names — a package-public function cannot take or return a type that is **not itself on the public
+surface** (whether module-private, or package-internal and never re-exported), because a dependent could
+not name that type. A type's **`pub` methods travel with it**: once the type reaches the public surface,
+its `pub` methods are callable by dependents too — visibility reads on a method exactly as on a function.
 
 ### Importing & referencing
 
@@ -138,7 +142,7 @@ and the prelude (see The prelude & std). What you import depends on the distance
 - **Another module of the same package** — import that sibling module, then name its package-internal
   (`pub`) declarations.
 - **Another package** — import the package and see only its root public surface; a dependency's inner
-  modules are **not** reachable, so the face is all a dependent gets.
+  modules are **not** reachable, so the root's public surface is all a dependent gets.
 
 Because every dependency is written down, the import graph is explicit — which is what lets module and
 package **cycles be rejected**.

@@ -51,23 +51,25 @@ enum Either[X, Y] {         # 泛型 sum type
 實作某 `spec`，且每組 **(型別, spec) 只有一個正規 impl**。
 
 `spec` 是抽象行為的**唯一**機制，因此它扮演三個角色——泛型參數的 **bound**、型別所 **conform** 的介面、以及
-（見下）**當成型別本身**。內建協定也都是 spec、不是編譯器魔法：`Err` 就是 `Error` spec，相等、排序、雜湊、迭代、
+（見下）**當成型別本身**。內建行為也都是 spec、不是編譯器魔法：`Err` 就是 `Error` spec，相等、排序、雜湊、迭代、
 以及 opt-in 的 cast 都是普通 stdlib spec。型別的 inherent method 不必隸屬任何 spec；**唯有 spec 所保證的，才可被抽象**。
 
 **spec bound 就是泛型型別的完整介面。** 在泛型於 `T` 的程式碼裡，對一個 `T` 值唯一能用的操作，就是它 spec bound
 所宣告的 method——它的欄位與任何 inherent method 都不可見。因此：
 
 - **空的 `spec`** 是合法的 bound、被所有型別滿足，但它保證**零**行為：這種 `T` 只有 memory model 給的**結構能力**
-  （copy、move、`del`、傳參、存欄位、送 channel），連一個 method 都沒有。
+  ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
 - **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小、**auto-derived** 的 method——`equal`、`copy`、
   `debug`……——由結構逐欄位自動生成（含 channel 則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
   （例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
   可接受的型別集——它只是解鎖那些 method。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
-scope-owned，並在 **receiver 上動態 dispatch**。這種抹除是**單向的**——無法 downcast 回具體型別。
+scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。這是**單向的**——一旦 boxed，
+具體型別就被隱藏、無法還原（不能 downcast）。
 
-concrete bound 的 generic 會在產出的 C 裡 **monomorphize**；把 `spec` 當型別用是唯一改用 dynamic dispatch 之處。
+concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
+當型別用是唯一改用 dynamic dispatch 之處。
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)` 到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
@@ -75,7 +77,7 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**；把 `spec` �
 解析可判定。唯一「所有型別都有」的情況是 `Object`，由編譯器 auto-derive、而非使用者手寫。
 
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
-歧義只存在於「同一個值必須**同時**滿足兩者」之處（`X + Y` 的 bound、`X + Y` 的 existential）。Zerg 在編譯期**拒絕
+歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、或型別為 `X + Y` 的值）。Zerg 在編譯期**拒絕
 這個組合**，而不引入 fully-qualified 呼叫語法來消歧；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Modules, Packages & Programs](package.zh-TW.md)。

@@ -59,7 +59,7 @@ must explicitly declare it implements a `spec`, and there is **one canonical imp
 
 A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
 on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
-The built-in protocols are specs too, not compiler magic: `Err` is the `Error` spec, and equality,
+The built-in behaviors are specs too, not compiler magic: `Err` is the `Error` spec, and equality,
 ordering, hashing, iteration, and opt-in casts are ordinary stdlib specs. A type's inherent methods
 need not belong to any spec; **only what a spec guarantees is ever abstractable**.
 
@@ -68,8 +68,8 @@ operations available on a `T` value are the methods its spec bound declares — 
 inherent methods are invisible. Hence:
 
 - The **empty `spec`** is a valid bound, satisfied by every type, but it guarantees **no** behavior:
-  such a `T` supports only the structural operations every value has from the memory model (copy,
-  move, `del`, pass, store, channel send) — not a single method.
+  such a `T` supports only the structural operations every value has from the memory model — copy it,
+  `del` it, pass it, store it, or send it over a channel — not a single method.
 - **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal,
   **auto-derived** method set — `equal`, `copy`, `debug`, … — generated structurally, field by field
   (a contained channel is refcount-bumped, matching the copy rule). A type may **explicitly override**
@@ -78,11 +78,13 @@ inherent methods are invisible. Hence:
   only unlocks those methods.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
-type — heap-boxed, single-owner, scope-owned, and dispatched **dynamically** on the receiver. The
-erasure is **one-way** — there is no downcast back to the concrete type.
+type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (the method to run is
+picked at runtime from the value's real type). This is **one-way** — once boxed, the concrete type is
+hidden and cannot be recovered (no downcast).
 
-Concrete-bound generics are **monomorphized** in the emitted C; a spec used as a type is the one place
-codegen uses dynamic dispatch.
+Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
+specialized version for each concrete type — while a spec used as a type is the one place codegen uses
+dynamic dispatch.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair to resolve to the same implementation everywhere, so an implementation
@@ -94,7 +96,7 @@ the compiler auto-derives rather than the user writing.
 
 Because specs are nominal, two independently declared specs may share a method name. A type can still
 implement both and be used as either one on its own — the ambiguity exists only where a single value
-must satisfy **both at once** (an `X + Y` bound, an `X + Y` existential). Zerg rejects that combination
+must satisfy **both at once** (a `T: X + Y` bound, or a value typed as `X + Y`). Zerg rejects that combination
 at compile time rather than adding fully-qualified call syntax to disambiguate; to share one method
 across specs, have them obtain it from one shared spec. Where a spec may be implemented across package
 boundaries, and how coherence stays globally unique, is the

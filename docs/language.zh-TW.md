@@ -27,7 +27,8 @@
 
 **可見性（`pub`）**——每個宣告（型別、欄位、函式）**預設 private，只在自己的 module 內可見**；在前面加 `pub`
 才會匯出、供他處使用。mutability 是另一條獨立的軸、**不**在這裡宣告：它屬於**實例（instance）**（也就是
-binding；見 Values & Memory），絕不屬於欄位或型別。
+binding；見 Values & Memory），絕不屬於欄位或型別。module 與 package 是什麼，以及可見性、coherence、entry point
+如何跨越它們，見 [Modules, Packages & Programs](package.zh-TW.md)。
 
 ```text
 struct Node {
@@ -45,16 +46,39 @@ enum Either[X, Y] {         # 泛型 sum type
 
 ## Spec 與 Generics（Specs & Generics）
 
-generic 的型別參數以 **`spec`** 為 bound——`spec` 是「型別必須提供什麼」的命名介面。滿足是 **nominal**：型別必須
-**明確宣告**它實作某 `spec`。
+行為分成**兩層**。型別可定義 **inherent method**——自有行為，只有握著具體型別時才能用。而**抽象**一律透過
+**`spec`**：一個具名的行為介面（只含 method 簽名、**永不含 field**）。滿足是 **nominal**：型別必須**明確宣告**它
+實作某 `spec`，且每組 **(型別, spec) 只有一個正規 impl**。
 
-- **空的 `spec`** 被所有型別滿足——這就是「無約束 generic」的表達方式。
-- **`Object`** 是內建的頂層 `spec`：每個型別（primitive 或 custom）都應支援的最小 spec 集合（細節待定）。
-- `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
-  scope-owned，並以**動態**方式 dispatch。
+`spec` 是抽象行為的**唯一**機制，因此它扮演三個角色——泛型參數的 **bound**、型別所 **conform** 的介面、以及
+（見下）**當成型別本身**。內建協定也都是 spec、不是編譯器魔法：`Err` 就是 `Error` spec，相等、排序、雜湊、迭代、
+以及 opt-in 的 cast 都是普通 stdlib spec。型別的 inherent method 不必隸屬任何 spec；**唯有 spec 所保證的，才可被抽象**。
 
-concrete bound 的 generic 會在產出的 C 裡 monomorphize；把 `spec` 當型別用是唯一改用 dynamic dispatch 之處。
-`Err` 就是 `Error` spec，因此任何實作 `Error` 的型別都能當 `Result` 的錯誤側（見 Null-safety）。
+**spec bound 就是泛型型別的完整介面。** 在泛型於 `T` 的程式碼裡，對一個 `T` 值唯一能用的操作，就是它 spec bound
+所宣告的 method——它的欄位與任何 inherent method 都不可見。因此：
+
+- **空的 `spec`** 是合法的 bound、被所有型別滿足，但它保證**零**行為：這種 `T` 只有 memory model 給的**結構能力**
+  （copy、move、`del`、傳參、存欄位、送 channel），連一個 method 都沒有。
+- **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小、**auto-derived** 的 method——`equal`、`copy`、
+  `debug`……——由結構逐欄位自動生成（含 channel 則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
+  （例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
+  可接受的型別集——它只是解鎖那些 method。
+
+`spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
+scope-owned，並在 **receiver 上動態 dispatch**。這種抹除是**單向的**——無法 downcast 回具體型別。
+
+concrete bound 的 generic 會在產出的 C 裡 **monomorphize**；把 `spec` 當型別用是唯一改用 dynamic dispatch 之處。
+
+一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)` 到處都解析到同一個實作，
+因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
+（`List[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
+解析可判定。唯一「所有型別都有」的情況是 `Object`，由編譯器 auto-derive、而非使用者手寫。
+
+因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
+歧義只存在於「同一個值必須**同時**滿足兩者」之處（`X + Y` 的 bound、`X + Y` 的 existential）。Zerg 在編譯期**拒絕
+這個組合**，而不引入 fully-qualified 呼叫語法來消歧；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
+spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
+[Modules, Packages & Programs](package.zh-TW.md)。
 
 ## 型別轉換（Type Casts）
 
@@ -96,6 +120,109 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 channel 是 scope-owning 的**唯一例外**：因天生跨 coroutine 共享，runtime 對它 **reference-count**，在最後一個
 持有者的 scope 退出時釋放——其餘一切純 scope-owned、無 GC/refcount。複製一個值時，會對它（遞迴）包含的每個
 channel 做 refcount++、深拷貝其餘部分；channel 永遠共享、絕不被複製。
+
+### 重新宣告與遮蔽（Re-declaration & shadowing）
+
+一個名字可以**重新宣告**——在同一個 block 或巢狀 block 皆可——新的 binding 在型別與可變性上都可與舊的不同。
+重新宣告的語意是 **declare-del-declare**：先計算右側（因此它可讀到*舊*的 binding），接著把舊 binding `del` 掉
+（見下），再把名字重新綁定。
+
+```text
+x := read()          # immutable
+x := parse(x)        # 右側讀到舊 x；舊 x 被 del；名字重新綁到新值
+mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為初值
+```
+
+因為舊 binding 在右側算完的當下就死亡，`x := transform(x)` 不需複製——來源已被證明死亡，move 最佳化即生效、
+直接重用舊的儲存。
+
+### `del`——顯式提早釋放
+
+`del name` 在 scope 結束前**撤銷該名字對其儲存的存取權**。釋放儲存只是一個*後果*：唯有被撤銷的正是**擁有權**
+存取、且沒有其他 holder 時才發生；否則 `del` 只是提早結束「這個名字（或這次借用）」的存取，儲存仍歸 owner。
+
+| `del` 的對象                 | 你擁有它嗎？ | 效果                                                                      |
+| ---------------------------- | ------------ | ------------------------------------------------------------------------- |
+| local、傳值參數、捕獲副本    | 是           | 最後存取 → **釋放儲存**                                                   |
+| `mut` 參數（借呼叫端的變數） | 否           | 結束本次呼叫的借用 → **不釋放**；呼叫端保有                               |
+| closure body 內的捕獲值      | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有                     |
+| channel                      | refcounted   | 放掉這個 holder（refcount--）；最後 sender → **關閉**；最後 holder → 釋放 |
+
+`del` 永不懸空：撤銷一個借用不可能釋放別的名字所擁有的儲存，而 Zerg 既有規則已擋掉「owner 在 borrower 仍存活時
+就釋放」（`mut` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
+撤銷——只有 channel 帶 runtime refcount。
+
+`del` 是**流程一致的**：一個名字只要在任一路徑上被 `del`，其後**每一條**路徑都視它為已死（不引入 runtime drop
+flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可再用，與其他分支對稱。
+
+`del ch` 也是**提早關閉 channel** 的直接寫法——當下放掉你對 `ch` 的持有，若你是它最後一個 sender
+即關閉 channel，無需再包一層更窄的 block。
+
+## 建構與封裝（Construction & encapsulation）
+
+建立一個值的**唯一原語是 struct literal**——它會指名每個欄位，所以只在「每個欄位都可見」處才能用。所謂
+**constructor 不是獨立特性**：它就是一個（通常 `pub` 的）associated function，內部回傳一個 literal。因此只要型別
+有**任一私有欄位**，它對其 module 之外就是 **opaque**——struct literal 指不出私有欄位，外部只能透過那個 `pub` 函式
+建構；該函式在型別自己的 module 內執行，能在**建構當下**就把型別的 invariant 立好。
+
+欄位可見性是**讀與寫綁在一起的單一旋鈕**——`pub` 欄位可讀、且在 `mut` binding 下可寫；private 欄位兩者皆否。
+**沒有「對外可讀、對外不可寫」的獨立軸**；更細的控制以 method 表達。
+
+copy-by-value 重新框定了「可寫 `pub` 欄位」的意義：改它只會動到持有者**自己那份 copy**，永遠影響不到別人的值
+（無 aliasing）。所以 `pub` 可變欄位**不是共享突變的隱患**。把欄位設 private 的理由，不是阻止別人改你的值——copy
+已經擋掉了——而是**保護 invariant**：只有型別自己的 method 能改該欄位，於是該型別的每個值都恆為合法。沒有 invariant
+的純資料型別，欄位大方公開即可；必須恆為合法的型別，則把欄位設 private，並提供：
+
+- **讀**——一個 `pub` getter method，回傳該欄位的一份 copy（copy-by-value 下便宜）；
+- **改**——一個 `pub` mutator method，吃 `mut self`，在其中重新確立 invariant。
+
+要造「一個既有值、只改幾個欄位」的新值，用 **functional update**——`Foo{ ..base, age: 2 }` 產生一個**新**值、
+`base` 原封不動——這適用於欄位可見的型別；opaque 型別則用回傳新實例的 `with`-風格 method。Zerg **沒有可變的 builder
+或 cascade**：它只對公開欄位型別有用（而那種 literal 已經講完一切）、碰不到私有欄位、又會把值拖過一串無效中途狀態
+——與「immutable by default」「建構當下即合法」相衝。
+
+## 函式與閉包（Functions & Closures）
+
+函式是**一等值（first-class value）**：它有型別，可當引數傳遞、可回傳、可存進欄位、可綁定到變數。函式型別寫成
+`fn(P...) -> R`；參數的 `mut` 是**型別的一部分**，所以 `fn(mut int) -> bool` 與 `fn(int) -> bool` 是不同型別
+（兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
+**名字**，永不隨值移動，對匿名函式也無意義。
+
+持有函式的 binding 其可變性就是一般的 per-instance 軸——`mut f := …` 可 rebind、`f := …` 不可——與上述一切正交。
+
+**閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** `mut` 變數不能被捕獲；要用先
+快照成 immutable binding（`snap := n`）。捕獲是複製——捕獲的 channel 做 refcount++、其餘深拷貝——所以逃出定義
+scope 的閉包帶著自己的副本，永不懸空。等價地說：
+
+> 一個閉包就是一個 scope-owned struct，它的欄位就是它的捕獲。
+
+因此複製、釋放、channel-refcount 全都從既有記憶體規則掉出來、無須新增；捕獲了具 send 能力的 channel 端就算一個
+holder，所以活著的閉包會撐住該 channel 的 send 側（見 [Coroutines 與 Channels](coroutine.zh-TW.md) 的
+send-coverage 不變式）。
+
+「捕獲 immutable 值」不等於「不能用 `mut`」：閉包 body 內的**區域**變動不受限制——你只是不能變動**被捕獲**的狀態。
+
+```text
+base := load_cfg()                 # immutable
+apply := fn(req: Request) -> Reply {
+    mut acc := base                # 區域可變工作副本，以捕獲值為初值
+    acc = merge(acc, req)          # 動的是 local，不是捕獲值——沒問題
+    return build(acc)
+}
+```
+
+兩個經典的閉包陷阱因此在結構上被排除。loop 變數是 `mut`，所以**不能**被捕獲——每一輪都必須快照，讓每個閉包
+拿到自己的值（沒有共享 loop 變數的 bug）：
+
+```text
+loop i in 0..n {
+    snap := i                      # 必要——i 是 mut、不可捕獲
+    spawn fn() { handle(snap) }    # 每個 coroutine 拿到自己的 0, 1, 2, …
+}
+```
+
+而且因為捕獲永遠是 immutable copy，「捕獲的是變數還是值？」根本沒有可觀察的答案——被捕獲的值永不改變，這個
+問題自然消失。
 
 ## 並行（Concurrency）
 

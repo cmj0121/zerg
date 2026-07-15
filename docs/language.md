@@ -31,7 +31,8 @@ Declare your own **product types** (`struct`) and **sum types** (`enum`), each g
 **Visibility (`pub`)** — every declaration (a type, a field, a function) is **private to its module
 by default**; prefix it with `pub` to export it for use elsewhere. Mutability is a separate axis and
 is **not** declared here: it belongs to the **instance** (the binding; see Values & Memory), never to
-a field or type.
+a field or type. What a module and a package are — and how visibility, coherence, and the program
+entry point work across them — is the [Modules, Packages & Programs](package.md) reference.
 
 ```text
 struct Node {
@@ -50,18 +51,54 @@ enum Either[X, Y] {         # generic sum type
 
 ## Specs & Generics
 
-Generic type parameters are bounded by a **`spec`** — a named interface of what a type must provide.
-Satisfaction is **nominal**: a type must explicitly declare it implements a `spec`.
+Behavior comes in two tiers. A type may define **inherent methods** — its own behavior, usable only
+when you hold the concrete type. **Abstraction**, however, always goes through a **`spec`**: a named
+interface of behavior (method signatures only — **never fields**). Satisfaction is **nominal**: a type
+must explicitly declare it implements a `spec`, and there is **one canonical implementation per
+(type, spec)** pair.
 
-- An **empty `spec`** is satisfied by every type — this expresses an unconstrained generic.
-- **`Object`** is the built-in top `spec`: the minimal set every type, primitive or user, supports
-  (details TBD).
-- A `spec` may be used **as a type**, not only a bound: a spec-typed value holds any implementing
-  type — heap-boxed, single-owner, scope-owned, dispatched **dynamically**.
+A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
+on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
+The built-in protocols are specs too, not compiler magic: `Err` is the `Error` spec, and equality,
+ordering, hashing, iteration, and opt-in casts are ordinary stdlib specs. A type's inherent methods
+need not belong to any spec; **only what a spec guarantees is ever abstractable**.
 
-Concrete-bound generics are monomorphized in the emitted C; a spec used as a type is the one place
-codegen uses dynamic dispatch. `Err` is the `Error` spec, so any type implementing `Error` can be a
-`Result`'s error side (see Null-safety).
+**A spec bound is the complete interface to a generic type.** In code generic over `T`, the only
+operations available on a `T` value are the methods its spec bound declares — its fields and any
+inherent methods are invisible. Hence:
+
+- The **empty `spec`** is a valid bound, satisfied by every type, but it guarantees **no** behavior:
+  such a `T` supports only the structural operations every value has from the memory model (copy,
+  move, `del`, pass, store, channel send) — not a single method.
+- **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal,
+  **auto-derived** method set — `equal`, `copy`, `debug`, … — generated structurally, field by field
+  (a contained channel is refcount-bumped, matching the copy rule). A type may **explicitly override**
+  any of them (e.g. an order-insensitive `equal`); otherwise it inherits the derived version. Because
+  every type implements `Object`, bounding `T: Object` never narrows which types are accepted — it
+  only unlocks those methods.
+
+A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
+type — heap-boxed, single-owner, scope-owned, and dispatched **dynamically** on the receiver. The
+erasure is **one-way** — there is no downcast back to the concrete type.
+
+Concrete-bound generics are **monomorphized** in the emitted C; a spec used as a type is the one place
+codegen uses dynamic dispatch.
+
+An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
+requires a `(type, spec)` pair to resolve to the same implementation everywhere, so an implementation
+can be neither hidden nor duplicated — it is in effect exactly where both its type and its spec are
+visible. Implementations are written for a **concrete or generic type** (`List[T]` may implement
+`Iterator`); a blanket implementation conditioned on a bound — one covering every type that satisfies
+some spec — is not offered, keeping resolution decidable. The lone "every type" case is `Object`, which
+the compiler auto-derives rather than the user writing.
+
+Because specs are nominal, two independently declared specs may share a method name. A type can still
+implement both and be used as either one on its own — the ambiguity exists only where a single value
+must satisfy **both at once** (an `X + Y` bound, an `X + Y` existential). Zerg rejects that combination
+at compile time rather than adding fully-qualified call syntax to disambiguate; to share one method
+across specs, have them obtain it from one shared spec. Where a spec may be implemented across package
+boundaries, and how coherence stays globally unique, is the
+[Modules, Packages & Programs](package.md) reference.
 
 ## Type Casts
 
@@ -110,6 +147,127 @@ A channel is the **sole exception** to scope-owning: inherently shared across co
 **reference-counts** it and frees it when its last holder's scope exits — everything else is pure
 scope-owned, no GC/refcount. Copying a value refcount-bumps any channel it (transitively) contains
 and deep-copies the rest; a channel is shared, never duplicated.
+
+### Re-declaration & shadowing
+
+A name may be **re-declared** — in the same block or a nested one — and the new binding may differ in
+type and mutability from the old. Re-declaration is **declare-del-declare**: the right-hand side is
+evaluated first (so it may read the _old_ binding), then the old binding is `del`-ed (see below), then
+the name is bound afresh.
+
+```text
+x := read()          # immutable
+x := parse(x)        # RHS reads the old x; the old x is del-ed; the name rebinds to the new value
+mut x := x           # shadow again — now mutable, seeded from the previous copy
+```
+
+Because the old binding is dead the instant the RHS finishes, `x := transform(x)` needs no copy — the
+source is provably dead, so the move optimization applies and the old storage is reused.
+
+### `del` — explicit early release
+
+`del name` **revokes that name's access to its storage** before the scope ends. Freeing the storage is
+only a _consequence_: it happens when the revoked access was the **owning** one and no other holder
+remains; otherwise `del` merely ends this name's (or this borrow's) access early and the owner keeps
+the storage.
+
+| `del` target                          | Own? | Effect                                                         |
+| ------------------------------------- | ---- | -------------------------------------------------------------- |
+| local, by-value param, captured copy  | yes  | last access → **storage freed**                                |
+| `mut` param (borrows caller's var)    | no   | ends this call's borrow → **not freed**; caller keeps it       |
+| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it |
+| channel                               | ref  | drops a holder (refcount--); last sender → **closes**          |
+
+`del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
+rules already stop an owner from outliving-then-freeing under a live borrower (a `mut` parameter is
+confined to its call; an escaping closure owns copies of its captures). The compiler knows statically
+whether each `del` frees or merely revokes — only channels carry a runtime refcount.
+
+`del` is **flow-consistent**: once a name is `del`-ed on any path, it is treated as dead on _every_
+subsequent path (no runtime drop flags). A `del` inside one arm of an `if` therefore makes the name
+unusable after the merge, symmetrically with the other arms.
+
+`del ch` is also the direct way to **close a channel early** — it drops your hold on `ch` now, which
+closes the channel if you were its last sender, without wrapping it in a tighter block.
+
+## Construction & encapsulation
+
+The one primitive for building a value is the **struct literal** — it names every field, so it is
+usable only where every field is visible. A "constructor" is not a separate feature: it is an ordinary
+(usually `pub`) associated function that returns a literal. A type with any **private field** is
+therefore **opaque** outside its module — a struct literal cannot name the private field, so outsiders
+build it only through such a `pub` function, which runs inside the type's module and can establish the
+type's invariant at the moment of construction.
+
+Field visibility is a **single knob covering read and write together** — a `pub` field is readable
+and, given a `mut` binding, writable; a private field is neither. There is no separate "public read,
+private write" axis; finer control is expressed with methods.
+
+Copy-by-value reframes what a writable `pub` field means: writing one only ever changes the holder's
+**own copy**, never anyone else's value (there is no aliasing). So a `pub` mutable field is not a
+shared-mutation hazard. The reason to keep a field private is not to stop others changing your value —
+copy already does — but to **protect an invariant**: only the type's own methods may change the field,
+so every value of the type stays valid. A plain data type with no invariant can expose its fields
+freely; a type that must stay valid keeps them private and offers:
+
+- **read** — a `pub` getter method returning a copy of the field (cheap under copy-by-value);
+- **change** — a `pub` mutator method taking `mut self`, which re-establishes the invariant.
+
+To build a value that is an existing one with a few fields changed, use a **functional update** —
+`Foo{ ..base, age: 2 }` produces a **new** value, leaving `base` untouched — for a type whose fields
+are visible, or a `with`-style method returning a new instance for an opaque type. Zerg has **no
+mutating builder or cascade**: it would work only for public-field types (where the literal already
+says everything), could not touch a private field, and would drag a value through invalid intermediate
+states — against immutable-by-default and valid-at-construction.
+
+## Functions & Closures
+
+A function is a **first-class value**: it has a type, and can be passed as an argument, returned,
+stored in a field, and bound to a variable. A function type is written `fn(P...) -> R`; a parameter's
+`mut` is **part of the type**, so `fn(mut int) -> bool` and `fn(int) -> bool` are distinct types (they
+differ in calling convention — by-ref-in-place vs copy). Visibility is **not** part of the type: `pub`
+exports a top-level function's **name**, never travels with the value, and is meaningless on an
+anonymous function.
+
+The mutability of the binding that _holds_ a function is the ordinary per-instance axis — `mut f := …`
+is rebindable, `f := …` is not — and is orthogonal to everything above.
+
+**Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** A
+`mut` variable cannot be captured; snapshot it into an immutable binding first (`snap := n`). Capture
+is by copy — a captured channel is refcount-bumped, everything else deep-copied — so a closure that
+escapes its defining scope carries its own copies and can never dangle. Equivalently:
+
+> A closure is a scope-owned struct whose fields are its captures.
+
+Copy, free, and channel-refcount therefore all fall out of the existing memory rules with nothing
+added; a captured send-capable channel end counts as a holder, so a live closure keeps that channel's
+send side open (the send-coverage invariant in [Coroutines & Channels](coroutine.md)).
+
+Capturing an immutable value is not the same as being unable to use `mut`: **local** mutation inside a
+closure body is unrestricted — you just cannot mutate _captured_ state.
+
+```text
+base := load_cfg()                 # immutable
+apply := fn(req: Request) -> Reply {
+    mut acc := base                # local mutable working copy, seeded from the capture
+    acc = merge(acc, req)          # mutating the local, not the capture — fine
+    return build(acc)
+}
+```
+
+Two classic closure hazards are ruled out by construction. A loop variable is `mut`, so it **cannot**
+be captured — each iteration must snapshot, giving every closure its own value (no shared-loop-var
+bug):
+
+```text
+loop i in 0..n {
+    snap := i                      # required — i is mut and uncapturable
+    spawn fn() { handle(snap) }    # each coroutine gets its own 0, 1, 2, …
+}
+```
+
+And because captures are always immutable copies, "captured the variable or the value?" has no
+observable answer — the captured value can never change, so the question disappears.
 
 ## Concurrency
 

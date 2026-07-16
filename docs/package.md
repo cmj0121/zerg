@@ -192,3 +192,12 @@ only in a test build, never in a normal one. So a test's declarations never reac
 or a package's public surface — even a `pub` declaration in a test file in the root module stays out of
 the external API. As with the entry file, the language itself ascribes no meaning to the name; the tool
 does.
+
+### Target-conditional files
+
+Platform and architecture differences are handled the **same way** — at the **file level, by build-tool
+convention** — not by an inline `#ifdef` / `cfg` construct, which would fragment code against
+`small and crisp`. A module keeps **per-target files** (a name suffix like `_linux` / `_darwin`,
+alongside the `_test` convention), and the build includes only the ones matching the selected target; the
+language itself stays **target-agnostic**, ascribing no meaning to the name. The exact target-naming and
+matching scheme is a build-tool detail, **deferred**.

@@ -149,3 +149,10 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 測試檔由 **build 工具依慣例**辨識（例如 `*_test.zg` 檔名），只在 test build 納入、normal build 一律排除。因此測試的
 宣告永遠到不了 shipped artifact 或 package 的公開表面——即使測試檔放在 root module、即使標了 `pub`，也留在對外 API
 之外。一如 entry 檔，語言本身不賦予檔名任何意義，是工具賦予的。
+
+### Target 條件式檔案
+
+平台與架構差異用**同一套方式**處理——在**檔案層級、由 build 工具依慣例**——而非語言內的 `#ifdef` / `cfg` 構造
+（那會讓程式碎裂、違背 `small and crisp`）。一個 module 保留**各 target 的檔案**（像 `_linux` / `_darwin` 的名稱後
+綴，與 `_test` 慣例並列），build 只納入符合所選 target 的那些；語言本身維持 **target-agnostic**、不賦予檔名任何意義。
+確切的 target 命名與匹配方案屬 build 工具細節，**延後**。

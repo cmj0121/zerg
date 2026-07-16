@@ -25,7 +25,7 @@ aliasing**——複製會深拷貝元素、並對含有的 `Ref` 值（channel �
 的模型，不是把「變數」和「元素」拆開。
 
 - **`mut xs`**——可**改元素**（`xs[i] = v`）、**增長／縮短**（append、insert、remove），以及**重指**
-  （`xs = other`）。改元素與增長都是 `mut self` method，一如 struct 的 mutator。
+  （`xs = other`）。改元素與增長都是 `mut this` method，一如 struct 的 mutator。
 - **plain `xs`**——**完全凍結**，即 Zerg 的固定陣列。（你仍可用 `:=` re-declare 這個名字——**新** binding、舊的被
   `del`——絕非變更。）
 

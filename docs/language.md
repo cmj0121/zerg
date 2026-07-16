@@ -82,9 +82,9 @@ downcast — it destructures variants and compares values, nothing more. **Struc
 
 Behavior comes in two tiers. A type may define **inherent methods** — its own behavior, usable only
 when you hold the concrete type. **Abstraction**, however, always goes through a **`spec`**: a named
-interface of behavior (method signatures only — **never fields**). Satisfaction is **nominal**: a type
-must explicitly declare it implements a `spec`, and there is **one canonical implementation per
-(type, spec)** pair.
+interface of behavior — method signatures, some carrying a **default body** (below), and **never
+fields**. Satisfaction is **nominal**: a type must explicitly declare it implements a `spec`, and there
+is **one canonical implementation per (type, spec)** pair.
 
 A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
 on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
@@ -133,6 +133,34 @@ across specs, have them obtain it from one shared spec. Where a spec may be impl
 boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
 
+### Methods, `this` / `This`, and default bodies
+
+A **method** is a function with a **receiver** — the instance it is called on, named **`this`**; the
+receiver's own type is **`This`**. `This` names "the implementing type" wherever the concrete type is not
+yet known — a same-type operand (`less(this, other: This) -> bool`) or the result of an **associated
+function** (`default() -> This`, a constructor — which, having no receiver, has no `this`) — and resolves
+to the concrete type in each implementation. A generic `spec` parameter (`Iterator[T]`) is a **separate**,
+freely-chosen type (an element, a heterogeneous operand); `This` is the forced self-type, never a choice.
+
+A spec's methods come in two kinds:
+
+- **required** — a signature with no body; every implementer must supply it.
+- **provided** — a signature **with a default body**, written in terms of the required (and other spec)
+  methods on `this`, never fields. An implementer **inherits** it or **overrides** it with a specialized
+  version (a faster `contains`, say); an override must still mean the conventional thing, and the
+  `(type, spec)` implementation stays canonical either way.
+
+So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
+`map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes
+**all** of them, required and provided, callable on a bounded `T`.
+
+**Dispatch is uniform.** Every spec method, required or provided, resolves to the type's **canonical
+implementation** — its override if it has one, else the default. A default body that calls another spec
+method therefore reaches the type's override (a defaulted `count` built on `next` uses an overridden
+`next`); there is **no static-dispatch exception for defaults**. The mechanism is the one already
+defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
+through its **vtable** to the actual impl.
+
 ### Built-in specs
 
 Most are **opt-in** — a type gains one by implementing it — except the set `Object` **auto-derives for
@@ -162,7 +190,7 @@ earn a keyword. Equality is always the **structural** `equal`.
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
 a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead
-of deep-copying, and its `drop(self)` runs **once**, at the last holder's scope exit. The compiler
+of deep-copying, and its `drop(this)` runs **once**, at the last holder's scope exit. The compiler
 supplies the counting and the by-ref copy; only the `drop` body is written. `Ref` is **sealed** — its
 sole implementers are the built-in **`chan`** (whose `drop` is close) and the stdlib **`Ref[T]`** resource
 box (see Values & Memory). Ordinary code **uses `Ref[T]`; it never implements `Ref`** — so "is this value
@@ -329,7 +357,7 @@ so every value of the type stays valid. A plain data type with no invariant can 
 freely; a type that must stay valid keeps them private and offers:
 
 - **read** — a `pub` getter method returning a copy of the field (cheap under copy-by-value);
-- **change** — a `pub` mutator method taking `mut self`, which re-establishes the invariant.
+- **change** — a `pub` mutator method taking `mut this`, which re-establishes the invariant.
 
 To build a value that is an existing one with a few fields changed, use a **functional update** —
 `Foo{ ..base, age: 2 }` produces a **new** value, leaving `base` untouched — for a type whose fields

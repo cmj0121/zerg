@@ -27,7 +27,7 @@ Mutability is the ordinary **per-instance** axis: a **single knob** unlocking _b
 rebinding — the Rust `let mut` / Swift `var` model, not a variable-vs-elements split.
 
 - **`mut xs`** — may **edit elements** (`xs[i] = v`), **grow/shrink** (append, insert, remove), and
-  **rebind** (`xs = other`). Edits and growth are `mut self` methods, like a struct's mutators.
+  **rebind** (`xs = other`). Edits and growth are `mut this` methods, like a struct's mutators.
 - **plain `xs`** — **fully frozen**, Zerg's fixed array. (You may still `:=` re-declare the name — a _new_
   binding, the old one `del`-ed — never a mutation.)
 

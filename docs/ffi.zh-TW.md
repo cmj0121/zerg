@@ -139,8 +139,8 @@ Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與
 1. 一個 C library，以穩定符號曝露 root public surface 的 **FFI-safe 子集**，以及
 2. 一份對應的 **`.h` header**——含 include guard，收納 opaque `typedef`、`struct`／`enum` layout，以及函式原型。
 
-一個 `pub` **method** 也會匯出：它降級成一個 C 函式，其**第一個參數是 receiver**——by-value 的 `self` 變成那個
-struct by value、`mut self` 變成指向它的指標（就地）——所以建議的 handle-wrapper method 以普通函式的形式抵達 C。
+一個 `pub` **method** 也會匯出：它降級成一個 C 函式，其**第一個參數是 receiver**——by-value 的 `this` 變成那個
+struct by value、`mut this` 變成指向它的指標（就地）——所以建議的 handle-wrapper method 以普通函式的形式抵達 C。
 一個**非** FFI-safe 的 `pub` root 宣告會被**回報並排除**於 header 之外，而非靜默丟棄：一個 package 大可對 Zerg
 依賴者提供比對 C 更豐富的 API，而該診斷讓 C ABI 誠實地反映真正跨界的東西。一個不回傳值的 Zerg 函式對映到 C `void`。
 

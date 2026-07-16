@@ -70,8 +70,8 @@ msg := match ev {
 ## Spec 與 Generics（Specs & Generics）
 
 行為分成**兩層**。型別可定義 **inherent method**——自有行為，只有握著具體型別時才能用。而**抽象**一律透過
-**`spec`**：一個具名的行為介面（只含 method 簽名、**永不含 field**）。滿足是 **nominal**：型別必須**明確宣告**它
-實作某 `spec`，且每組 **(型別, spec) 只有一個正規 impl**。
+**`spec`**：一個具名的行為介面——method 簽名，其中有些帶 **default body**（見下），且**永不含 field**。滿足是
+**nominal**：型別必須**明確宣告**它實作某 `spec`，且每組 **(型別, spec) 只有一個正規 impl**。
 
 `spec` 是抽象行為的**唯一**機制，因此它扮演三個角色——泛型參數的 **bound**、型別所 **conform** 的介面、以及
 （見下）**當成型別本身**。內建行為也都是 spec、不是編譯器魔法：`Err` 就是 `Error` spec，相等、排序、雜湊、迭代、
@@ -106,6 +106,30 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Modules, Packages & Programs](package.zh-TW.md)。
 
+### Method、`this` / `This` 與 default body
+
+一個 **method** 是帶 **receiver** 的函式——被呼叫的那個實例，名為 **`this`**；receiver 自身的型別是 **`This`**。
+`This` 在「具體型別尚未知」處指「**實作它的那個型別**」——同型別的運算元（`less(this, other: This) -> bool`）、或
+**associated function** 的結果（`default() -> This`，即 constructor——它無 receiver，故無 `this`）——並在每個實作裡
+解析成具體型別。generic `spec` 參數（`Iterator[T]`）是**另一件事**：一個自由選的型別（element、異型別運算元）；
+`This` 則是被逼定的 self-type，永非選擇。
+
+spec 的 method 分兩種：
+
+- **required**——只有簽名、無 body；每個 implementer 都必須供給。
+- **provided**——簽名**帶 default body**，用 required（及其他 spec）method 作用在 `this` 上定義、碰不到 field。
+  implementer **沿用**它、或以特化版**覆寫**（例如更快的 `contains`）；覆寫仍須維持慣常語意，且 `(型別, spec)` 的
+  實作無論如何都保持 canonical。
+
+於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
+`map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對
+被 bound 的 `T` 呼叫。
+
+**dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
+覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
+`count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
+**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。
+
 ### 內建 spec（Built-in specs）
 
 多數是 **opt-in**——型別實作它才取得——除了 `Object`
@@ -132,7 +156,7 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 - **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
-型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(self)` 在最後一個持有者的 scope 退出時
+型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(this)` 在最後一個持有者的 scope 退出時
 **跑一次**。編譯器提供計數與 by-ref 複製；只有 `drop` 的內容由使用者寫。`Ref` 是 **sealed** 的——唯二實作者是內建的
 **`chan`**（其 `drop` 即 close）與 stdlib 的 **`Ref[T]`** 資源盒（見 Values & Memory）。一般程式碼**使用 `Ref[T]`、
 絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
@@ -273,7 +297,7 @@ copy-by-value 重新框定了「可寫 `pub` 欄位」的意義：改它只會�
 的純資料型別，欄位大方公開即可；必須恆為合法的型別，則把欄位設 private，並提供：
 
 - **讀**——一個 `pub` getter method，回傳該欄位的一份 copy（copy-by-value 下便宜）；
-- **改**——一個 `pub` mutator method，吃 `mut self`，在其中重新確立 invariant。
+- **改**——一個 `pub` mutator method，吃 `mut this`，在其中重新確立 invariant。
 
 要造「一個既有值、只改幾個欄位」的新值，用 **functional update**——`Foo{ ..base, age: 2 }` 產生一個**新**值、
 `base` 原封不動——這適用於欄位可見的型別；opaque 型別則用回傳新實例的 `with`-風格 method。Zerg **沒有可變的 builder

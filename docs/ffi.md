@@ -159,7 +159,7 @@ source change — instead emits, in the same pass:
    layouts, and the function prototypes.
 
 A `pub` **method** exports too: it lowers to a C function whose **first parameter is the receiver** — a
-by-value `self` becomes the struct by value, a `mut self` becomes a pointer to it (in-place) — so the
+by-value `this` becomes the struct by value, a `mut this` becomes a pointer to it (in-place) — so the
 recommended handle-wrapper methods reach C as ordinary functions. A `pub` root declaration that is
 **not** FFI-safe is **reported and left out** of the header rather than silently dropped: a package may
 legitimately offer a richer API to Zerg dependents than it can to C, and the diagnostic keeps the C ABI

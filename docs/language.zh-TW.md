@@ -206,8 +206,13 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 （一元），以及**會短路的** `and` / `or`——只作用於 `bool`、回傳 `bool`（不吃 truthiness；要判斷就 `bool(x)`）：`and`
 在左側為 `false` 時跳過右側、`or` 在左側為 `true` 時跳過右側；logical xor 就是 `a != b`（**沒有** `xor` 關鍵字——它
 無法短路，是普通運算、不是關鍵字）。這些、以及 null-safety 運算子（`?`、`??`、`?.`、`!`），都是**固定構造——永不
-可多載**；bitwise 符號（`& | ^ ~`，見整數運算）永不與它們撞臉。`float` 退出 `Ord` 與 `Hash`，因為 `NaN` 同時破壞
-全序與 `equal ⇒ hash`，故 `float` 永不是排序集合的元素、也永不是 key。
+可多載**；bitwise 符號（`& | ^ ~`，見整數運算）永不與它們撞臉。
+
+`float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——故 `float` 永不是排序集合的元素、也永不是 key，
+而一個**含** `float` 的複合型別會透明地繼承這點：它 auto-derived 的 `equal` 用 `==` 比那個欄位，所以對 `NaN`
+**非自反**，`Ord`/`Hash` 也**不會白得**。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
+陷阱：`Hash` 需要一個**自反**的 `equal` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
+**total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的 total-order／hashable `float` wrapper 延後。
 
 **迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)`
 表示結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable[T]`** 有 `iter()`、產生一個全新的

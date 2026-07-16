@@ -248,9 +248,15 @@ yielding `bool` (no truthiness; cast with `bool(x)`): `and` skips its right oper
 `false`, `or` when the left is `true`, and logical xor is just `a != b` (there is no `xor` keyword — it
 cannot short-circuit, so it is an ordinary operation, not a keyword). These, and the null-safety
 operators (`?`, `??`, `?.`, `!`), are **fixed constructs — never overloadable**; the bitwise symbols
-(`& | ^ ~`, Integer operations) never collide with them. `float` sits out `Ord` and `Hash` because its
-`NaN` breaks both a total order and the `equal ⇒ hash` law, so a `float` is never a sorted-collection
-element or a key.
+(`& | ^ ~`, Integer operations) never collide with them.
+
+`float` sits out `Ord` and `Hash` — its `NaN` breaks a total order and the `equal ⇒ hash` law — so a
+`float` is never a sorted-collection element or a key, and a composite **containing** one inherits this
+transparently: its auto-derived `equal` compares the field with `==`, so it is **non-reflexive** for a
+`NaN`, and gets no `Ord`/`Hash` for free either. To key or sort such a type the author **implements them
+explicitly**, handling `float`'s two traps: a **reflexive** `equal` with **canonical `±0.0`** (equal, so
+must hash alike) for `Hash`, and a **total order** (IEEE `totalOrder`, `NaN` at an end) for `Ord`. A
+stdlib total-order/hashable `float` wrapper is deferred.
 
 **Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
 `Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has

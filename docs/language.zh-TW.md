@@ -152,6 +152,10 @@ spec 的 method 分兩種：
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對
 被 bound 的 `T` 呼叫。
 
+一個 method 或 function 可帶**自己的型別參數**、疊加在 receiver 的之上：`map[U](this, f: fn(T) -> U)` 在 spec 的
+`T` 與 receiver 的 `This` 之外再加一個 `U`，每個具體組合各 **monomorphize** 一份。provided method 也能泛型——這
+正是讓 adapter 能改變 element 型別（`T` → `U`）的關鍵。
+
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
@@ -200,7 +204,9 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 而**對任何其他 `Right(err)` 則 raise**——迭代中途的失敗絕不被靜默吞掉（要檢視就手動 `next()` 再 `guard`）。因為
 `<-ch` 本就回 `Result[T]`，**channel 就是一個 `Iterator`**：`loop v in ch` 會 drain 它，在乾淨關閉時結束、並把
 producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，所以 **lazy adapters**（`map`、`filter`、
-`take`、`zip`…）就是實作 `Iterator` 的普通 stdlib 迭代器、可鏈式。`loop mut x in X` 把每個元素綁成就地的
+`take`、`zip`…）就是實作 `Iterator` 的普通 stdlib 迭代器、可鏈式——每個回傳一個**具體 adapter 型別**（`map`
+回傳 `Map[This, U]`，它自身實作 `Iterator[U]`、存著來源與 closure），所以整條鏈全程 **monomorphize**、不 box。
+`loop mut x in X` 把每個元素綁成就地的
 `mut`——僅當 `X` 為 `mut`。
 
 ## 型別轉換（Type Casts）

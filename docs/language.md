@@ -182,6 +182,11 @@ So a spec with one required method can hand implementers many derived ones for f
 `map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes
 **all** of them, required and provided, callable on a bounded `T`.
 
+A method or function may carry **its own type parameters**, stacked on the receiver's: `map[U](this, f:
+fn(T) -> U)` adds `U` beside the spec's `T` and the receiver's `This`, each **monomorphized** per concrete
+combination. A provided method may be generic too — that is exactly what lets an adapter change the
+element type (`T` → `U`).
+
 **Dispatch is uniform.** Every spec method, required or provided, resolves to the type's **canonical
 implementation** — its override if it has one, else the default. A default body that calls another spec
 method therefore reaches the type's override (a defaulted `count` built on `next` uses an overridden
@@ -238,7 +243,9 @@ overloadable. `float` sits out `Ord` and `Hash` because its `NaN` breaks both a 
 failure is never silently swallowed (drive `next()` by hand and `guard` to inspect it). Since `<-ch`
 already yields `Result[T]`, **a channel is an `Iterator`**: `loop v in ch` drains it, ending on a clean
 close and re-raising a producer crash. An `Iterator` is trivially `Iterable`, so **lazy adapters**
-(`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain. `loop mut x in X` binds each
+(`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain — each returns a **concrete
+adapter type** (`map` a `Map[This, U]` that itself implements `Iterator[U]`, holding the source and the
+closure), so a chain stays fully **monomorphized**, no boxing. `loop mut x in X` binds each
 element as an in-place `mut` — only when `X` is `mut`.
 
 ## Type Casts

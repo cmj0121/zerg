@@ -27,6 +27,21 @@ are in the **[Language Reference](docs/language.md)**, with companion references
 **[Modules, Packages & Programs](docs/package.md)**, **[Coroutines & Channels](docs/coroutine.md)**,
 **[Collections](docs/collections.md)**, and the **[FFI](docs/ffi.md)**.
 
+## Influences
+
+A synthesis, not a clone — each piece has prior art:
+
+- **Rust** — the `spec` system (nominal traits: coherence + orphan rule, default methods,
+  monomorphization, `dyn` existentials), the value/abort two-tier errors, `Ref` ≈ `Rc`/`Arc`.
+- **Go** — `spawn` + channels on an M:N scheduler, untyped literals, module-as-directory, `defer`.
+- **Erlang / Pony** — **no** shared mutable state, taken as an absolute, with fair scheduling.
+- **Swift** — value semantics, a `mut` parameter ≈ `inout`, the `?.` / `??` / `!` null-safety suite.
+- **Zig** — overflow raises; the `+%` / `-%` / `*%` wrapping operators.
+- **Nim / V** — transpiling to C as the codegen target.
+
+The combination is Zerg's own: **transpile-to-C, a Rust-grade `spec` system, CSP channels with _no_
+shared mutable state, and copy-by-value with no `move` syntax.**
+
 ## Compile Flow
 
 ```text

@@ -26,6 +26,21 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把 Zerg 原�
 Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.zh-TW.md)**、
 **[Collection](docs/collections.zh-TW.md)**、與 **[FFI](docs/ffi.zh-TW.md)**。
 
+## 影響來源（Influences）
+
+是 synthesis、不是翻版——每一塊都有出處：
+
+- **Rust**——`spec` 系統（nominal trait：coherence + orphan rule、default method、monomorphize、`dyn`
+  existential）、value/abort 兩層錯誤、`Ref` ≈ `Rc`/`Arc`。
+- **Go**——`spawn` + channel 跑在 M:N scheduler、untyped literal、module 即目錄、`defer`。
+- **Erlang / Pony**——**沒有**共享可變狀態（當成絕對律）、公平排程。
+- **Swift**——value semantics、`mut` 參數 ≈ `inout`、`?.` / `??` / `!` 的 null-safety 組合。
+- **Zig**——overflow raise；`+%` / `-%` / `*%` 的 wrapping 運算子。
+- **Nim / V**——以 transpile 到 C 作為 codegen target。
+
+而這個**組合**是 Zerg 自己的：**transpile 到 C、Rust 等級的 `spec` 系統、CSP channel 且**完全不共享可變狀態**、
+以及 copy-by-value 而無 `move` 語法。**
+
 ## 編譯流程（Compile Flow）
 
 ```text

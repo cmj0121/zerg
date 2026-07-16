@@ -79,8 +79,10 @@ loop mut x in ys { x = x * 2 }            # edit in place — ys must be mut
 indexable**. Bridge through **`list[byte]`** (raw bytes, may hold a NUL) or **`list[rune]`** (code points):
 build a string by collecting into a `list` and converting (`str(...)`); editing text means a **new** `str`.
 
+The `Eq` / `Ord` / `Hash` specs behind these rules are catalogued in the
+[Language Reference](language.md) (Built-in specs); a `float` implements neither `Ord` nor `Hash`, so it
+is never a sorted-collection element or a key.
+
 ## Deferred
 
-- The full **`Eq` / `Ord` / `Hash` spec** semantics (this doc fixes only: `equal` derived, `Hash` explicit).
-- **Ordered variants** — a sorted `map`/`set` on `Ord` rather than `Hash`.
-- **`float` as a key** — `NaN` never equals itself, so the leaning is to give `float` no `Hash` at all.
+- **Ordered variants** — a sorted `map`/`set` keyed on `Ord` rather than `Hash`, if wanted.

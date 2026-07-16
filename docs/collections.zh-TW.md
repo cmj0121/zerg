@@ -74,8 +74,9 @@ loop mut x in ys { x = x * 2 }            # 就地改——ys 必須是 mut
 （原始位元組、可含 NUL）或 **`list[rune]`**（code point）橋接：建字串＝收集進 `list` 再轉（`str(...)`）；編輯文字
 意味著一個**新的** `str`。
 
+這些規則背後的 `Eq` / `Ord` / `Hash` spec 收錄在 [語言參考](language.zh-TW.md)（內建 spec）；`float` 既不實作
+`Ord` 也不實作 `Hash`，故永不是排序集合的元素、也永不是 key。
+
 ## 待決
 
-- 完整的 **`Eq` / `Ord` / `Hash` spec** 語意（本文只定：`equal` derived、`Hash` 顯式）。
-- **有序變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`。
-- **`float` 當 key**——`NaN` 永不等於自己，故傾向乾脆不給 `float` 任何 `Hash`。
+- **有序變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`，若有需要。

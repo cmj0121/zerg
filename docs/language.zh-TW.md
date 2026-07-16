@@ -82,6 +82,45 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Modules, Packages & Programs](package.zh-TW.md)。
 
+### 內建 spec（Built-in specs）
+
+語言倚賴的行為都是普通的 spec、非 compiler magic。多數是 **opt-in**——型別實作它才取得——除了 `Object`
+**為每個型別 auto-derive** 的那組（皆可 override）：
+
+| `Object` method | 驅動            | 說明                                       |
+| --------------- | --------------- | ------------------------------------------ |
+| `copy`          | copy-by-value   | 由記憶體模型**強制**——永不缺席             |
+| `equal`         | `==` / `!=`     | **結構性**；channel 或 `fn` 以 identity 比 |
+| `debug`         | logging、stderr | 開發者取向的表示                           |
+
+Zerg **不設 instance-identity 測試**（沒有 `is`）：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
+identity 只對 channel 有意義——太 narrow、不值得一個保留字。相等永遠是**結構性**的 `equal`。
+
+**Opt-in**——實作該 spec 才取得能力；泛型 bound 以它把關：
+
+- **`Ord`**——`<` `<=` `>` `>=`、sort、min/max：一個 **total** order，其 `Equal` 與 `equal` 一致；
+  `float` **不**實作。
+- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`；`float` **不**實作。
+- **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
+- **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
+  `code() -> byte?`（可選小碼）。
+- **`Add` / `Sub` / `Mul` / `Div` / …**——值運算子（`+ - * / %`、indexing…）：運算子多載，見下。
+- **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
+
+**運算子 desugar 到 spec**，所以 user type 可藉實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
+多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。null-safety 運算子（`?`、`??`、`?.`、
+`!`）與 logical `not` 是固定構造——永不可多載。`float` 退出 `Ord` 與 `Hash`，因為 `NaN` 同時破壞全序與
+`equal ⇒ hash`，故 `float` 永不是排序集合的元素、也永不是 key。
+
+**迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)`
+表示結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable[T]`** 有 `iter()`、產生一個全新的
+`Iterator[T]`。`loop x in X` 需 `X: Iterable`：它把 `x` 綁到每個 `Left`，**在 `Right(StopIteration)` 乾淨結束**，
+而**對任何其他 `Right(err)` 則 raise**——迭代中途的失敗絕不被靜默吞掉（要檢視就手動 `next()` 再 `guard`）。因為
+`<-ch` 本就回 `Result[T]`，**channel 就是一個 `Iterator`**：`loop v in ch` 會 drain 它，在乾淨關閉時結束、並把
+producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，所以 **lazy adapters**（`map`、`filter`、
+`take`、`zip`…）就是實作 `Iterator` 的普通 stdlib 迭代器、可鏈式。`loop mut x in X` 把每個元素綁成就地的
+`mut`——僅當 `X` 為 `mut`。
+
 ## 型別轉換（Type Casts）
 
 **預設**沒有型別會隱式轉換——`int` 不是 `bool`；要轉就用 constructor 風格呼叫（`bool(8)`、`int(c)`）。primitive

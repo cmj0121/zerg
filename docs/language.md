@@ -103,6 +103,51 @@ across specs, have them obtain it from one shared spec. Where a spec may be impl
 boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
 
+### Built-in specs
+
+The behaviours the language leans on are ordinary specs, not compiler magic. Most are **opt-in** — a type
+gains one by implementing it — except the set `Object` **auto-derives for every type** (each
+overridable):
+
+| `Object` method | drives          | notes                                                  |
+| --------------- | --------------- | ------------------------------------------------------ |
+| `copy`          | copy-by-value   | forced by the memory model — never absent              |
+| `equal`         | `==` / `!=`     | **structural**; a channel or `fn` compares by identity |
+| `debug`         | logging, stderr | a developer-facing rendering                           |
+
+Zerg has **no instance-identity test** (no `is`): under copy-by-value distinct values are distinct
+instances and there is no aliasing, so identity would be meaningful only for a channel — too narrow to
+earn a keyword. Equality is always the **structural** `equal`.
+
+**Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
+
+- **`Ord`** — `<` `<=` `>` `>=`, sort, min/max: a **total** order whose `Equal` agrees with `equal`;
+  `float` does **not** implement it.
+- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`; `float` does **not** implement it.
+- **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
+- **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
+  `nil` if none), and `code() -> byte?` (an optional small code).
+- **`Add` / `Sub` / `Mul` / `Div` / …** — the value operators (`+ - * / %`, indexing, …): operator
+  overloading, below.
+- **the cast spec** — an opt-in auto-cast: single-step, at an explicit target (see Type Casts).
+
+**Operators desugar to specs**, so a user type may overload the value operators by implementing the
+matching one — `==` / `<` already route through `equal` / `Ord`. An overload must mean the
+**conventional** thing (a `+` that is not addition is abuse, against `small and crisp`). The null-safety
+operators (`?`, `??`, `?.`, `!`) and logical `not` are fixed constructs — never
+overloadable. `float` sits out `Ord` and `Hash` because its `NaN` breaks both a total order and the
+`equal ⇒ hash` law, so a `float` is never a sorted-collection element or a key.
+
+**Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
+`Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has
+`iter()`, producing a fresh `Iterator[T]`. `loop x in X` requires `X: Iterable`: it binds `x` to each
+`Left`, **exits cleanly on `Right(StopIteration)`**, and **raises any other `Right(err)`** — a mid-stream
+failure is never silently swallowed (drive `next()` by hand and `guard` to inspect it). Since `<-ch`
+already yields `Result[T]`, **a channel is an `Iterator`**: `loop v in ch` drains it, ending on a clean
+close and re-raising a producer crash. An `Iterator` is trivially `Iterable`, so **lazy adapters**
+(`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain. `loop mut x in X` binds each
+element as an in-place `mut` — only when `X` is `mut`.
+
 ## Type Casts
 
 No type converts implicitly **by default** — an `int` is not a `bool`; cast with a constructor-style

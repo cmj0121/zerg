@@ -187,6 +187,9 @@ handle 並非 FFI-safe，不得出現在 `extern` 簽章或匯出面上；結果
 - **一次阻塞的 `extern` 呼叫會阻塞它的 OS thread。** scheduler 把眾多 coroutine 多工到少數 OS thread 上；一個
   阻塞的 C 呼叫（syscall、sleep）會停住整條底層 thread，共用它的 coroutine 因此不前進。優先用非阻塞的 C API，
   或把一次長阻塞呼叫視為佔用 thread。runtime 如何調整或擴張該 thread pool 是實作細節（TBD）。
+- **一個 `Ref[handle]` 跨越 coroutine** 分享的是同一份外部資源，其 thread-safety Zerg 無法擔保——它看不到
+  C 端狀態。用一般方式序列化：把 handle 交給**一個 owner coroutine**、對它送訊息（actor pattern，見
+  [Coroutines 與 Channels](coroutine.zh-TW.md)），除非那個 C library 本身就是 thread-safe。
 - **callback（C → Zerg）**只允許以一個**不捕獲、FFI-safe 的頂層 `fn`**、當作純 C function pointer 交出去。
   這樣的 callback 跑在 **C 呼叫它的那條 thread 上**——不是 Zerg 排程的 coroutine——所以它不得假設有 scheduler
   情境，而它內部的 abort 會**在邊界 trap**，與匯出函式完全相同。因為它不能 capture、Zerg 又沒有 `void*`，它也

@@ -215,6 +215,10 @@ the exported surface; results and completion still travel by channel **inside** 
   OS threads; a C call that blocks (a syscall, a sleep) parks the whole underlying thread, so coroutines
   sharing it do not advance. Prefer non-blocking C APIs, or treat a long blocking call as
   thread-occupying. How the runtime sizes or grows that thread pool is an implementation detail (TBD).
+- **A `Ref[handle]` crossing coroutines** shares one foreign resource whose thread-safety Zerg cannot
+  vouch for — it never sees the C-side state. Serialize it the ordinary way: give the handle to **one
+  owner coroutine** and message it (the actor pattern, see [Coroutines & Channels](coroutine.md)), unless
+  the C library is itself thread-safe.
 - **Callbacks (C → Zerg)** are allowed only as a **non-capturing, FFI-safe top-level `fn`** handed over
   as a plain C function pointer. Such a callback runs on **whatever thread C invokes it from** — not a
   Zerg-scheduled coroutine — so it must not assume a scheduler context, and an abort inside it **traps at

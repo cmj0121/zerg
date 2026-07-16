@@ -9,9 +9,32 @@ Zerg 的並行**只有 coroutine + channel**——沒有共享可變狀態、沒
 join/await；結果與完成**只透過 channel** 觀察。
 
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
-- **捕獲受限**於 **immutable 值與 channel**——`mut` ref 無法跨越 `spawn`，故 coroutine 不共享可變狀態（無 data
-  race）。
-- **一切以複製傳入**（源死時 move 最佳化），跨 coroutine 絕不共享——channel 除外。
+- **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，故 coroutine 不
+  共享可變 Zerg 狀態（無 data race）。什麼能跨越邊界、以及如何跨越，見下一節 **共享與 memory model**。
+
+## 共享與 memory model
+
+因為 coroutine 邊界對「除 `Ref` 值以外」的一切都複製，Zerg **不需要龐大的 memory model**——根本沒有共享可變狀態
+可 race。使用者可觀察的 ordering 只有一條，其餘皆由它導出：
+
+> **一個 channel 的 `send` happens-before 對應的 `receive` 完成。**
+
+接收端因此看到的是**完整建構好**的 payload（在 send 當下快照）；除此之外沒有任何跨 coroutine 的 ordering 存在、也
+不需要。這就是 memory model 的全部。
+
+**什麼能跨越邊界**——作為 `spawn`／closure capture，或 channel payload：
+
+- 一個 **immutable 值**——複製進去（源死時 move 最佳化）；
+- 一個 **`Ref` 值**（channel，或 `Ref[T]`）——以 reference 共享、refcount-bump；
+- 一個 **mutable、非-`Ref` 值**——絕不共享；送出時複製。
+
+所以不變式精確為：**沒有共享可變的 _Zerg_ 狀態。** 跨 coroutine 分享的 `Ref[T]` 只給**唯讀視圖**——讀取與非-`mut`
+方法，永不給 `mut` binding——所以並發讀不需要鎖。任何**必須被變動**的東西就不分享：由一個 coroutine 獨佔（見下方
+actor pattern）。
+
+`Ref[T]` 若包著**外部 handle**（見 [FFI](ffi.zh-TW.md)）是 Zerg 唯一管不到的情況——它看不到資源的 C 端狀態，所以
+該資源的 thread-safety 屬於那個外部 library、在本 model 之外。安全預設一樣：把 `Ref[handle]` 交給**一個** owner
+coroutine。
 
 ## Channels
 
@@ -170,6 +193,40 @@ select {
 }
 ```
 
+## 共享狀態——actor pattern
+
+Zerg 沒有鎖、也沒有共享可變狀態，但真實程式需要協調的可變 state——counter、cache、registry。答案是一個
+**pattern**、不是新原語：一個 **actor** 就是一個**獨佔**某份 `mut` state 的 coroutine，只能經由 channel 上的訊息
+觸及。單一 coroutine 一次處理一則 mailbox 訊息，所以寫入**無鎖地序列化**；又因為沒有別人握著那份 state，不會有
+data race。
+
+```text
+enum Cmd {
+    Add(int),                 # 寫
+    Get(chan[int].send),      # 讀——夾帶回覆用的 channel
+}
+
+fn counter(inbox: chan[Cmd].recv) {
+    mut n := 0                       # state：一個普通 mut int，只有這裡獨佔
+    loop cmd in inbox {              # drain 到最後一個 sender 離場
+        match cmd {
+            Add(d)   -> n = n + d    # 寫入發生在 owner 內
+            Get(rep) -> rep <- n     # 回覆到呼叫端的 channel
+        }
+    }
+}
+```
+
+- **tell**（fire-and-forget）就是一次普通 send——`inbox <- Add(5)`。
+- **ask**（request-reply）送一條全新 reply channel 並 block 等它——
+  `rep := chan[int]();  inbox <- Get(rep.send);  v := <-rep!`。
+- **收尾自動**——最後一個 client 放掉 send 端時，`inbox` 關閉、`loop` 結束、owner 的 `mut` state 釋放；就是既有的
+  channel-close 與 scope-owned 規則，沒有新增。
+
+inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bump）——每個持有它的 copy 與 coroutine 都對著
+同一個 owner 講話。這才是共享可變 state 的方式、而非 `Ref[T]`：`Ref[T]` **唯讀**地分享一個值，actor 則在一個 owner
+背後**序列化寫入**。必須被序列化的資源（非 thread-safe 的 `Ref[handle]`）同樣由一個 actor 獨佔。
+
 ## 未處理的 abort
 
 未被 `guard` 攔下的 abort（見錯誤模型）**只殺死該 coroutine**——它的 stack unwind（釋放 scope、遞減 channel
@@ -181,6 +238,23 @@ coroutine、backtrace——報到 `stderr`。它**純觀察**：開或不開，�
 
 要回報*結構化*的結果——部分結果、特定錯誤、或不會關掉受監看 channel 的失敗——coroutine 仍會 `guard` 並送進
 channel。讓一個死亡變得*致命*是觀察者的職責（對 `Right(err)` 反應並 abort），絕不是 `spawn` 的事。
+
+## 排程與公平性
+
+M:N scheduler 是**公平的**：每個 **ready** 的 coroutine 終究會被排到，且**沒有任何 coroutine 能無限期餓死其他
+人**——即使是一個從不碰 channel 的 CPU-bound 迴圈也不行。你可以放心 `spawn`；一個忙碌的 worker 凍不住無關的
+coroutine。
+
+這是對**可觀察性質、而非機制**的保證。公平**如何**達成——搶佔、compiler 插入的 safepoint、reduction 計數——是語言
+不固定的實作細節；只承諾那個性質。
+
+兩條界限框住它：
+
+- **一次阻塞的 `extern` 呼叫無法被搶佔。** 它把 OS thread 停在一個 Zerg 不擁有的 C frame 裡（見
+  [FFI](ffi.zh-TW.md)）；公平只涵蓋 Zerg 的 coroutine，不涵蓋卡在 C 裡的 thread。runtime 可能長 thread pool，但
+  一次長阻塞呼叫就是佔用 thread——優先用非阻塞的 C API。
+- **公平讓 _ready_ 的前進，不解 _卡住_ 的。** 當每個 coroutine 都阻塞、毫無前進可能時，那是 deadlock，另外處理
+  （見下）；`select` 的公平 tie-break 就是把同一種公平套用在一次等待上。
 
 ## 收尾與 deadlock
 

@@ -11,10 +11,35 @@ handle, no join/await; results and completion are observed **only through channe
 
 - **Fire-and-forget** — the runtime never tracks or joins the coroutine; to learn an outcome it must
   send it over a channel the observer holds.
-- **Captures are restricted** to **immutable values and channels** — a `mut` reference cannot cross
-  `spawn`, so coroutines never share mutable state (no data races).
-- **Everything is copied in** (move-optimized when the source is dead), never shared across
-  coroutines — except channels.
+- **Captures are restricted** to **immutable values and `Ref` values** (channels, `Ref[T]`) — a `mut`
+  reference cannot cross `spawn`, so coroutines never share mutable Zerg state (no data races). What
+  crosses a boundary, and how, is **Sharing & the memory model**, next.
+
+## Sharing & the memory model
+
+Because a coroutine boundary copies everything except `Ref` values, Zerg needs **no elaborate memory
+model** — there is no shared mutable state to race over. One ordering guarantee is observable, and the
+rest follows from it:
+
+> **A `send` on a channel happens-before the matching `receive` completes.**
+
+The receiver sees the payload fully built (it was snapshotted at the send); no other cross-coroutine
+ordering exists or is needed. That is the whole memory model.
+
+**What may cross a boundary** — as a `spawn`/closure capture or a channel payload:
+
+- an **immutable value** — copied in (move-optimized when the source is dead);
+- a **`Ref` value** (a channel, or a `Ref[T]`) — shared by reference, refcount-bumped;
+- a **mutable, non-`Ref` value** — never shared; copied if sent.
+
+So the invariant is exact: **no shared mutable _Zerg_ state.** A `Ref[T]` shared across coroutines
+exposes only a **read-only view** — reads and non-`mut` methods, never a `mut` binding — so concurrent
+readers need no lock. Anything that must be **mutated** under sharing is not shared: one coroutine owns
+it (the actor pattern, below).
+
+A `Ref[T]` over a **foreign handle** (see [FFI](ffi.md)) is the one case Zerg cannot police — it cannot
+see the resource's C-side state, so that resource's thread-safety is the foreign library's concern,
+outside this model. The safe default is the same: give the `Ref[handle]` to **one** owner coroutine.
 
 ## Channels
 
@@ -192,6 +217,42 @@ select {
 }
 ```
 
+## Shared state — the actor pattern
+
+Zerg has no locks and no shared mutable state, yet real programs need coordinated mutable state — a
+counter, a cache, a registry. The answer is a **pattern**, not a new primitive: an **actor** is a
+coroutine that **exclusively owns** some `mut` state, reachable only by messages on a channel. One
+coroutine drains its mailbox one message at a time, so writes **serialize with no lock**, and since no
+one else holds the state there is no data race.
+
+```text
+enum Cmd {
+    Add(int),                 # a write
+    Get(chan[int].send),      # a read — carries a reply channel
+}
+
+fn counter(inbox: chan[Cmd].recv) {
+    mut n := 0                       # the state: a plain mut int, owned here alone
+    loop cmd in inbox {              # drains until the last sender leaves
+        match cmd {
+            Add(d)   -> n = n + d    # the write happens inside the owner
+            Get(rep) -> rep <- n     # reply on the caller's channel
+        }
+    }
+}
+```
+
+- **tell** (fire-and-forget) is a plain send — `inbox <- Add(5)`.
+- **ask** (request-reply) sends a fresh reply channel and blocks on it —
+  `rep := chan[int]();  inbox <- Get(rep.send);  v := <-rep!`.
+- **Teardown is automatic** — when the last client drops its send end, `inbox` closes, the `loop` ends,
+  and the owner's `mut` state is freed; the ordinary channel-close and scope-owned rules, nothing added.
+
+The inbox is a `Ref` value, so **sharing the actor is sharing the inbox** (refcount-bumped) — every copy
+and coroutine that holds it talks to the one owner. This, not a `Ref[T]`, is how mutable state is shared:
+a `Ref[T]` shares a value **read-only**, an actor **serializes writes** behind an owner. A resource that
+must be serialized (a non-thread-safe `Ref[handle]`) is likewise owned by one actor.
+
 ## Unhandled aborts
 
 An abort never caught by `guard` (see the error model) **kills only that coroutine** — its stack
@@ -206,6 +267,25 @@ observational**: behaviour is identical with or without it, and default builds c
 For a _structured_ outcome — partial results, a specific error, or a failure that would not otherwise
 close a watched channel — the coroutine still `guard`s and sends over a channel. Making a death
 _fatal_ is the observer's job (react to `Right(err)` and abort), never the `spawn`'s.
+
+## Scheduling & fairness
+
+The M:N scheduler is **fair**: every **ready** coroutine eventually runs, and **no coroutine can
+indefinitely starve others** — not even a CPU-bound one that never touches a channel. You may `spawn`
+freely; a busy worker cannot freeze unrelated coroutines.
+
+This is a guarantee about the **observable property, not the mechanism**. _How_ fairness is achieved —
+preemption, compiler-inserted safepoints, reduction counting — is an implementation detail the language
+does not fix; only the property is promised.
+
+Two limits bound it:
+
+- **A blocking `extern` call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
+  own (see [FFI](ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. The runtime may grow
+  its thread pool, but a long blocking call is thread-occupying — prefer non-blocking C APIs.
+- **Fairness moves the _ready_; it does not unstick the _blocked_.** When every coroutine is blocked with
+  no possible progress that is a deadlock, caught separately (below); the `select` tie-break is this same
+  fairness applied to a single wait.
 
 ## Termination & deadlock
 

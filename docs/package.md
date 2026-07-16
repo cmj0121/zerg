@@ -15,8 +15,8 @@ one concern:
 | **module**  | a directory                                 | the default **privacy** and **namespace** unit               |
 | **file**    | a physical slice of one module              | none — files in a module share one namespace                 |
 
-A `module` handles encapsulation and naming; a `package` handles distribution and the external
-contract. Keeping the two concerns in two layers is what gives `pub` a precise meaning.
+Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two layers is what gives
+`pub` a precise meaning.
 
 ### Programs & the entry point
 
@@ -172,7 +172,7 @@ imported explicitly like any package: `io`, `math`, further collections, and the
 (`env`, the clock, randomness) that read read-only OS state.
 
 Because the prelude is built-in rather than an implicit import, "no ambient imports" holds without
-exception — there is simply a fixed set of toolchain-bound names always in scope, as keywords are.
+exception.
 
 ### Testing & visibility
 

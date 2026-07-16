@@ -18,7 +18,7 @@ A small, fixed set — there is **no fixed-width integer ladder** (`i8`, `i16`, 
 | `nil`   | the placeholder value of `T?`                        |
 
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
-  **abort**, not a value (see Null-safety & Errors); `int`/`byte`/`rune` never wrap.
+  **abort**, not a value (see Null-safety); `int`/`byte`/`rune` never wrap.
 - **`float` is IEEE-754:** overflow → `±Inf`, invalid → `NaN`, neither raises; `NaN` is unequal to
   everything (including itself).
 - **`str` iterates as `rune` and is not indexable** — convert to `list[byte]` (see
@@ -332,14 +332,14 @@ apply := fn(req: Request) -> Reply {
 }
 ```
 
-Two classic closure hazards are ruled out by construction. A loop variable is `mut`, so it **cannot**
-be captured — each iteration must snapshot, giving every closure its own value (no shared-loop-var
-bug):
+Two classic closure hazards are ruled out by construction. A plain `loop x in xs` variable is a **fresh
+immutable binding each iteration** (a copy of that element), and a capture copies the value — so a closure
+capturing it keeps **its own iteration's value**, no shared-loop-var bug and no snapshot needed (a
+`loop mut x`, the in-place form, is `mut` and so, like any `mut`, uncapturable — snapshot it first):
 
 ```text
-loop i in 0..n {
-    snap := i                      # required — i is mut and uncapturable
-    spawn fn() { handle(snap) }    # each coroutine gets its own 0, 1, 2, …
+loop x in xs {
+    spawn fn() { handle(x) }       # each coroutine gets its own iteration's value
 }
 ```
 
@@ -412,8 +412,8 @@ invariant, a failed assertion, a "can't happen" — so it enters no signature an
 and `guard` reifies it back as `Right(e)` with message, cause, and code intact. Use a `struct` for one
 error, an `enum` for a family — the same value serves both tiers; the bridges convert.
 
-**Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, …) or any `Err`
-you `raise` —
+**Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, `MatchError`,
+`IndexError`, `KeyError`, `SendOnClosedError`, `DeadlockError`) or any `Err` you `raise` —
 marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops is freed in

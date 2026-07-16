@@ -16,8 +16,7 @@
 | `str`   | immutable、null-terminated 的 Unicode（不含 embedded NUL） |
 | `nil`   | `T?` 的 placeholder 值                                     |
 
-- **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值（見 Null-safety
-  與錯誤處理）；`int`/`byte`/`rune` 絕不環繞。
+- **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值（見 Null-safety）；`int`/`byte`/`rune` 絕不環繞。
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
 - **`str` 以 `rune` 迭代、不可索引**——要原始位元組就轉 `list[byte]`（見 [Collection](collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永不含 NUL）。
 
@@ -277,13 +276,13 @@ apply := fn(req: Request) -> Reply {
 }
 ```
 
-兩個經典的閉包陷阱因此在結構上被排除。loop 變數是 `mut`，所以**不能**被捕獲——每一輪都必須快照，讓每個閉包
-拿到自己的值（沒有共享 loop 變數的 bug）：
+兩個經典的閉包陷阱因此在結構上被排除。plain `loop x in xs` 的變數是**每一輪一個全新的不可變 binding**（該元素的
+一份 copy），而 capture 是複製值——所以捕獲它的閉包保有**自己這一輪的值**，沒有共享 loop 變數的 bug、也不需快照
+（`loop mut x` 這種就地形式是 `mut`，故與任何 `mut` 一樣不可捕獲——先快照）：
 
 ```text
-loop i in 0..n {
-    snap := i                      # 必要——i 是 mut、不可捕獲
-    spawn fn() { handle(snap) }    # 每個 coroutine 拿到自己的 0, 1, 2, …
+loop x in xs {
+    spawn fn() { handle(x) }       # 每個 coroutine 拿到自己這一輪的值
 }
 ```
 
@@ -347,7 +346,8 @@ addr := config?.server?.host ?? "localhost"
 spec）的型別都是 `Err`：它可放進 `Result` 的右側，**也**可被 `raise`，而 `guard` 會把它還原成 `Right(e)`、
 message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum`——同一個值服務兩層，由 bridge 轉換。
 
-**Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`……）或任何你 `raise` 的 `Err`——代表
+**Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`、`MatchError`、`IndexError`、
+`KeyError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的 `Err`——代表
 **bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
 出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都按序
 釋放、所持 channel 的 refcount 遞減，與正常的 scope 結束完全相同；絕不是裸的 `abort()`。unwind 抵達某條 stack

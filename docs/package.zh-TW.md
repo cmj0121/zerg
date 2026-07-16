@@ -14,7 +14,7 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 | **module**  | 一個目錄                          | 預設的**私有**與**命名空間**單位           |
 | **file**    | 一個 module 的實體切片            | 無——同 module 的檔案共享一個命名空間       |
 
-`module` 管封裝與命名；`package` 管散布與對外契約。把這兩件事分到兩層，正是讓 `pub` 有精確意義的原因。
+把封裝／命名（`module`）與散布／API（`package`）分到兩層，正是讓 `pub` 有精確意義的原因。
 
 ### Program 與 entry point
 
@@ -134,8 +134,7 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 版本、你從不把它列為相依。它像一般 package 一樣顯式 import：`io`、`math`、更多 collection，以及讀取唯讀 OS 狀態的
 ambient-OS 函式（`env`、時鐘、亂數）。
 
-因為 prelude 是 built-in、而非隱式 import，「無 ambient import」便毫無例外地成立——就只是有一組 toolchain 綁定、
-永遠在 scope 的名字，一如關鍵字。
+因為 prelude 是 built-in、而非隱式 import，「無 ambient import」便毫無例外地成立。
 
 ### 測試與可見性（Testing & visibility）
 

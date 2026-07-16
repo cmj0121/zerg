@@ -97,6 +97,9 @@ its send end in a tighter block:
 cleanup()
 ```
 
+`del ch` does the same directly — dropping your hold now closes the channel if you were its last sender,
+without a tighter block (see the [Language Reference](language.md)).
+
 ### The send-coverage invariant
 
 Auto-close is **level-triggered**: it fires the instant send-count hits 0, with no notion that "a

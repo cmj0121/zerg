@@ -85,6 +85,9 @@ Zerg **沒有 explicit `close`**。channel 在其**最後一個 send 能力持�
 cleanup()
 ```
 
+`del ch` 也直接做到同一件事——當下放掉你對 `ch` 的持有，若你是最後 sender 就關閉 channel，無需更窄的區塊
+（見 [語言參考](language.zh-TW.md)）。
+
 ### send 覆蓋不變量
 
 auto-close 是 **level-triggered**：send-count 一碰 0 就開火，沒有「等一下還有 sender 要來」的概念。因此一條規則：

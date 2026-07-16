@@ -22,7 +22,9 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把 Zerg 原�
 | copy-by-value    | 值預設以複製傳遞；編譯器可自行最佳化                    |
 
 完整語意——primitive 與使用者型別、型別轉換、記憶體模型、並行、null-safety——見
-**[語言參考（Language Reference）](docs/language.zh-TW.md)**。
+**[語言參考（Language Reference）](docs/language.zh-TW.md)**，另有配套參考：**[Module、Package 與
+Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.zh-TW.md)**、
+**[Collection](docs/collections.zh-TW.md)**、與 **[FFI](docs/ffi.zh-TW.md)**。
 
 ## 編譯流程（Compile Flow）
 

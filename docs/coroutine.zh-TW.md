@@ -147,6 +147,25 @@ receive arm 綁定的型別與一般 receive 相同——`Result[T]`：有值時
 粒度是刻意的：單一 receive 逐值呈現關閉；`select` 把乾淨關閉聚合成一個 `done`、同時仍讓崩潰浮現——於是乾淨關閉
 永不混進「有資料」的競賽，也就不空轉。
 
+## Timer 與 cancellation
+
+**timeout** 與 **cancellation** 都從 channel 與 `select` 掉出來——沒有新 primitive。
+
+- **timer 就是一條 channel。** stdlib 的 `after(d)` 回傳一條 receive-only channel，在 duration `d` 之後**一次**變成
+  可接收（`ticker(d)` 則重複觸發）；`select` 對它的一個 receive arm 就是 **timeout**。`d` 是 stdlib duration、clock
+  是 ambient-OS 的 stdlib 設施（如 `env`），都不是 primitive。
+- **cancellation 也是一條 channel。** 給 coroutine 一條 **cancel channel**、讓它在自己的 `select` 裡監看；取消方
+  close 它，coroutine 看到那個 arm 觸發就收手。因為 `spawn` 是 fire-and-forget、**無 handle，所以沒有 preemptive
+  kill**——cancellation 是**合作式**的：一個 coroutine 只會因 return、或因察覺 cancel/timeout arm 而選擇停下才結束。
+
+```text
+select {
+    v := <-work           -> handle(v)   # 真正的工作
+    _ := <-after(timeout) -> stop()      # timeout——timer channel 變成可接收
+    _ := <-cancel         -> stop()      # cancellation——有人 close 了 `cancel`
+}
+```
+
 ## 未處理的 abort
 
 未被 `guard` 攔下的 abort（見錯誤模型）**只殺死該 coroutine**——它的 stack unwind（釋放 scope、遞減 channel

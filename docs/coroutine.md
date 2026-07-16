@@ -168,6 +168,26 @@ The granularity is deliberate: a single receive surfaces closure per value; `sel
 clean close into one `done` while still surfacing a crash — so a clean close never joins the "has
 data" race and nothing spins.
 
+## Timers & cancellation
+
+**Timeouts** and **cancellation** both fall out of channels and `select` — no new primitive.
+
+- **A timer is a channel.** A stdlib `after(d)` yields a receive-only channel that becomes ready **once**
+  after a duration `d` (`ticker(d)` fires repeatedly); a `select` receive arm on it is a **timeout**. `d`
+  is a stdlib duration and the clock is an ambient-OS stdlib facility (like `env`), never a primitive.
+- **Cancellation is a channel.** Hand a coroutine a **cancel channel** to watch in its `select`; the
+  canceller closes it and the coroutine sees that arm fire and bails. Because `spawn` is fire-and-forget
+  with **no handle, there is no preemptive kill** — cancellation is **cooperative**: a coroutine ends
+  only by returning, or by observing a cancel or timeout arm and choosing to stop.
+
+```text
+select {
+    v := <-work           -> handle(v)   # real work
+    _ := <-after(timeout) -> stop()      # timeout — the timer channel became ready
+    _ := <-cancel         -> stop()      # cancellation — someone closed `cancel`
+}
+```
+
 ## Unhandled aborts
 
 An abort never caught by `guard` (see the error model) **kills only that coroutine** — its stack

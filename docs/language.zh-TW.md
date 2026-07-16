@@ -266,8 +266,9 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 
 - **Mutable-ref 參數**（`mut` 參數）——唯一「語意上真的 by-ref」：被呼叫端就地改呼叫端（`mut`）的變數。它受限於
   這次呼叫——值的位置（欄位、`return`、送 channel）都是**複製當下的值**，只能往下傳給另一個 `mut` 參數，且不能跨
-  `spawn`。同一塊儲存不得在一次呼叫裡當兩次 `mut` 參數：靜態別名（`f(x, x)`）是 compile error；執行期索引別名歸
-  呼叫端。
+  `spawn`。**兩個 `mut` 引數永不共享同一塊儲存**——這是被呼叫端倚賴的保證：靜態別名（`f(x, x)`）是
+  **compile error**，而編譯器無法證明之處（`f(mut xs[i], mut xs[j])` 且 runtime `i == j`）該次呼叫會
+  **abort**（`AliasError`）。檢查只插在「mut 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
 **Reference-counted 的值**是 scope-owning 的唯一例外：型別實作 **`Ref`** 的值——內建的 **`chan`**，或 stdlib 的
@@ -464,7 +465,7 @@ spec）的型別都是 `Err`：它可放進 `Result` 的右側，**也**可被 `
 message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum`——同一個值服務兩層，由 bridge 轉換。
 
 **Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`、`MatchError`、`IndexError`、
-`KeyError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的 `Err`——代表
+`KeyError`、`AliasError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的 `Err`——代表
 **bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
 出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是

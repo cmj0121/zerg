@@ -318,8 +318,10 @@ through:
 - **Mutable-ref parameter** (`mut` param) — the one explicit by-ref path: the callee mutates the
   caller's (`mut`) variable in place. It is confined to the call — value positions (field, `return`,
   channel send) copy its current value, it can only pass onward to another `mut` param, and it cannot
-  cross a `spawn`. The same storage may not be a `mut` argument twice: static aliasing (`f(x, x)`) is
-  a compile error; runtime index aliasing is the caller's job.
+  cross a `spawn`. **Two `mut` arguments never share storage** — a guarantee the callee relies on:
+  static aliasing (`f(x, x)`) is a **compile error**, and where the compiler cannot prove it
+  (`f(mut xs[i], mut xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
+  inserted only where mut arguments could dynamically alias.
 - **Channels** — shared by ref across coroutines, for communication only.
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
@@ -549,7 +551,7 @@ and `guard` reifies it back as `Right(e)` with message, cause, and code intact. 
 error, an `enum` for a family — the same value serves both tiers; the bridges convert.
 
 **Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, `MatchError`,
-`IndexError`, `KeyError`, `SendOnClosedError`, `DeadlockError`) or any `Err` you `raise` —
+`IndexError`, `KeyError`, `AliasError`, `SendOnClosedError`, `DeadlockError`) or any `Err` you `raise` —
 marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its

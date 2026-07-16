@@ -48,7 +48,35 @@ enum Either[X, Y] {         # generic sum type
 ```
 
 `Either`, `Result[T]`, and `T?` are not special — they are ordinary stdlib types built on `enum`
-(see Null-safety).
+(see Null-safety). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
+variant, to construct and to `match`; there is no per-variant privacy.
+
+## Pattern matching
+
+`match` is an **expression**: it tries a value against **arms** (`pattern -> result`), runs the first
+that fits, and yields its result. Every arm yields the **same type**, so a `match` is a value usable at a
+`:=`, a `return`, or an argument — arms that yield `nil` read as a plain statement. Coverage is
+**advised, not forced**: a `match` that misses a case is a **warning** (a linter may enforce it), not a
+compile error — so **adding an `enum` variant never breaks a dependent's `match`**. A trailing **`_`**
+covers the rest; a value that reaches a `match` no arm covers **aborts** at runtime (`MatchError`), and a
+**redundant** arm (one an earlier arm already covers) is a warning too.
+
+A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
+`?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`) — matched by `equal`; a
+**nested** pattern (`Left(Some(v))`); an **or-pattern** (`A | B ->`, its alternatives binding the same
+names at the same types); or the **wildcard `_`**, matching anything and binding nothing.
+
+```text
+msg := match ev {
+    Click(p)           -> render(p)
+    Key(k) | Scroll(k) -> handle(k)
+    _                  -> nil
+}
+```
+
+`match` never inspects an existential's real type — a spec used as a type erases it one-way, with no
+downcast — it destructures variants and compares values, nothing more. **Struct-field destructuring** and
+**guard conditions** (`Left(v) if v > 0`) are deferred.
 
 ## Specs & Generics
 

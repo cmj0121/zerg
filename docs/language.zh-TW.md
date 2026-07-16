@@ -42,7 +42,31 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
-`Either`、`Result[T]`、`T?` 並不特殊——它們是建立在 `enum` 之上的普通 stdlib 型別（見 Null-safety）。
+`Either`、`Result[T]`、`T?` 並不特殊——它們是建立在 `enum` 之上的普通 stdlib 型別（見 Null-safety）。一個 `enum`
+的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
+
+## 模式比對（Pattern matching）
+
+`match` 是一個 **expression**：它用 **arm**（`pattern -> result`）逐一試一個值，跑第一個命中的、產出它的 result。
+每個 arm 產出**相同型別**，所以 `match` 是個值，可用於 `:=`、`return`、或引數——產出 `nil` 的 arm 讀來就是普通
+statement。覆蓋是**建議、非強制**：漏掉某情況的 `match` 是一個 **warning**（linter 可加嚴）、**不是編譯錯誤**——
+所以**新增一個 `enum` variant 永不破壞 dependent 的 `match`**。結尾的 **`_`** 收其餘；一個值落到沒有 arm 覆蓋的
+`match` 會在**執行期 abort**（`MatchError`），而**多餘**的 arm（已被前面 arm 覆蓋者）同樣是 warning。
+
+一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
+永不失效；**literal**（`0`、`"y"`、`true`）——以 `equal` 比對；**nested** pattern（`Left(Some(v))`）；**or-pattern**
+（`A | B ->`，各分支綁同名、同型）；或**萬用 `_`**，比對任何值、不綁定。
+
+```text
+msg := match ev {
+    Click(p)           -> render(p)
+    Key(k) | Scroll(k) -> handle(k)
+    _                  -> nil
+}
+```
+
+`match` 永不窺看 existential 的真實型別——spec 當型別用是單向抹除、無 downcast——它只解構 variant、比對值，如此而已。
+**struct 欄位解構**與 **guard 條件**（`Left(v) if v > 0`）延後。
 
 ## Spec 與 Generics（Specs & Generics）
 

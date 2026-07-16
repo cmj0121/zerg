@@ -53,8 +53,15 @@ coroutine to a channel-observed finish if it must complete first; see
 
 Outside `main` lives only **immutable top-level state** — constants, functions, types, and specs —
 readied before `main` runs. Top-level constants are initialized in **dependency order**; a cycle among
-them is a compile error. There is **no `init()` hook** and **no mutable global**: shared mutable state
-travels by value or through channels, never through a module-level variable.
+them is a compile error.
+
+A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
+They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
+first-uses still run them once), in **dependency order** (a module's imports initialize first), before any
+of that module's own code. `init()` carries multi-step or effectful startup (open a resource, register,
+seed) rather than hiding it in a constant's initializer, and readies the module's immutable state. There
+is still **no mutable global**: shared mutable state travels by value or through channels, never a
+module-level variable.
 
 ### Packages
 

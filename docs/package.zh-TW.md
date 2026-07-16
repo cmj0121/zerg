@@ -44,8 +44,12 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 [Coroutines 與 Channels](coroutine.zh-TW.md)）。
 
 `main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。頂層常數以**依賴序**初始化；
-它們之間的循環是 compile error。**沒有 `init()` 鉤子**、**沒有可變全域**：共享的可變狀態以值傳遞或走 channel，
-絕不透過 module 層級的變數。
+它們之間的循環是 compile error。
+
+一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
+**首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），依**相依序**（module 的 imports 先 init），在它任何
+自己的程式碼之前。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而非把它藏進 constant 的 initializer，
+並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走 channel，絕不透過 module 層級的變數。
 
 ### Package
 

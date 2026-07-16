@@ -7,8 +7,8 @@ zoo. They are ordinary **scope-owned values**, built on the [Language Reference]
 | Type        | Role                        | Element / key requirement | Iteration order     |
 | ----------- | --------------------------- | ------------------------- | ------------------- |
 | `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |
-| `map[K, V]` | an **associative** table    | `K: Hash` (entails `Eq`)  | **insertion** order |
-| `set[T]`    | a **unique-membership** set | `T: Hash` (entails `Eq`)  | **insertion** order |
+| `map[K, V]` | an **associative** table    | `K: Hash`                 | **insertion** order |
+| `set[T]`    | a **unique-membership** set | `T: Hash`                 | **insertion** order |
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).
@@ -42,7 +42,7 @@ ys.append(4)               # grow  ·  ys[0] = 9  # edit  ·  ys = [2, 4]  # reb
 ## Keys — `equal` free, `Hash` explicit
 
 `list[T]` takes **any** `T` (only the structural ops every value has). A `map` key / `set` element needs
-**`Hash`** (which entails `Eq`). The halves are deliberately asymmetric: `Object` **auto-derives `equal`**,
+**`Hash`** (keys compare by `equal`). The halves are deliberately asymmetric: `Object` **auto-derives `equal`**,
 but **`Hash` is not derived — a type implements it explicitly** to be a key, keeping "what may be a key" an
 opt-in, `safe by default` choice. The author owns the contract the compiler can't check: **equal ⇒ same
 hash**. Because a key is **copied in** as a frozen snapshot, even a `mut` collection is usable as one.
@@ -79,7 +79,7 @@ loop mut x in ys { x = x * 2 }            # edit in place — ys must be mut
 indexable**. Bridge through **`list[byte]`** (raw bytes, may hold a NUL) or **`list[rune]`** (code points):
 build a string by collecting into a `list` and converting (`str(...)`); editing text means a **new** `str`.
 
-The `Eq` / `Ord` / `Hash` specs behind these rules are catalogued in the
+The `Ord` / `Hash` specs (and `Object`'s `equal`) behind these rules are catalogued in the
 [Language Reference](language.md) (Built-in specs); a `float` implements neither `Ord` nor `Hash`, so it
 is never a sorted-collection element or a key.
 

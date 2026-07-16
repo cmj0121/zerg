@@ -73,7 +73,7 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)` 到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
-（`List[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
+（`list[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
 解析可判定。唯一「所有型別都有」的情況是 `Object`，由編譯器 auto-derive、而非使用者手寫。
 
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
@@ -84,7 +84,7 @@ spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如�
 
 ### 內建 spec（Built-in specs）
 
-語言倚賴的行為都是普通的 spec、非 compiler magic。多數是 **opt-in**——型別實作它才取得——除了 `Object`
+多數是 **opt-in**——型別實作它才取得——除了 `Object`
 **為每個型別 auto-derive** 的那組（皆可 override）：
 
 | `Object` method | 驅動            | 說明                                       |
@@ -98,7 +98,7 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 
 **Opt-in**——實作該 spec 才取得能力；泛型 bound 以它把關：
 
-- **`Ord`**——`<` `<=` `>` `>=`、sort、min/max：一個 **total** order，其 `Equal` 與 `equal` 一致；
+- **`Ord`**——`<` `<=` `>` `>=`、sort、min/max：一個 **total** order，與 `equal` 一致；
   `float` **不**實作。
 - **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`；`float` **不**實作。
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
@@ -269,7 +269,7 @@ loop i in 0..n {
 
 Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）跑在 **M:N scheduler** 上，fire-and-forget、無
 join/handle，只捕獲 **immutable 值與 channel**。channel 是唯一 reference-counted 的 by-ref 管道——payload 複製、在
-最後一個 sender 離場時**自動 close**、以 **`Result[T]`** 接收（`Right` = 已關，攜帶崩潰 `Err` 或 `Closed` 哨兵）、
+最後一個 sender 離場時**自動 close**、以 **`Result[T]`** 接收（`Right` = 已關，攜帶崩潰 `Err` 或 `StopIteration` 哨兵）、
 並用 **`select`** 多路等待。
 
 完整模型——buffering、receive/close 語意、directional 端、`select`、deadlock——見
@@ -305,7 +305,7 @@ fn load() -> Result[Config] {
 不會從函式 return）；用在任何非 `T?` 型別都是 compile error。
 
 **`!`——force-unwrap（值 → abort）。** `x!` 拆出左值，否則 **raise** `UnwrapError`——刻意的「我確定它有值」逃生口，
-是從值那層跨進 abort 的一種入口（`x!` 就是 unwrap-or-`raise UnwrapError`）。（邏輯否定用關鍵字 `not`，所以 postfix
+是從值那層跨進 abort 的一種入口。（邏輯否定用關鍵字 `not`，所以 postfix
 `!` 空出來給它。）
 
 ```text
@@ -322,7 +322,7 @@ addr := config?.server?.host ?? "localhost"
 spec）的型別都是 `Err`：它可放進 `Result` 的右側，**也**可被 `raise`，而 `guard` 會把它還原成 `Right(e)`、
 message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum`——同一個值服務兩層，由 bridge 轉換。
 
-**Aborts。** 一次 abort——`OverflowError`、`DivideByZeroError`、`UnwrapError`、或任何你 `raise` 的 `Err`——代表
+**Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`……）或任何你 `raise` 的 `Err`——代表
 **bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
 出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都按序
 釋放、所持 channel 的 refcount 遞減，與正常的 scope 結束完全相同；絕不是裸的 `abort()`。unwind 抵達某條 stack
@@ -345,6 +345,6 @@ fn read_config(s: str) -> Result[Config] {
 `Result[U]`——內部 abort 與回傳的 `Right(err)` 收斂成同一個 `Right(err)`。`guard` 只攔**當前 stack** 上的 abort；
 在區塊內 `spawn` 出去的 coroutine 有自己的 stack，不受影響。
 
-`guard` 是從 abort 那層回到值的唯一路徑，與 `!` 這個唯一入口對稱——一旦 `guard`，abort 就成了普通 `Result`，用
+`guard` 是從 abort 那層回到值的唯一路徑，與 `raise`／`!` 這些入口對稱——一旦 `guard`，abort 就成了普通 `Result`，用
 既有的 `?` / `??` / `match` 處理，沒有獨立的 handler、也沒有 `recover` 建構。它在 coroutine 裡**沒有特殊意義**：
 用 `guard` 包住的 coroutine body 就只是一個產出 `Result[T]` 的函式，要回報就跟其他值一樣送進 channel。

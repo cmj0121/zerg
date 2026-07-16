@@ -90,7 +90,7 @@ dynamic dispatch.
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair to resolve to the same implementation everywhere, so an implementation
 can be neither hidden nor duplicated — it is in effect exactly where both its type and its spec are
-visible. Implementations are written for a **concrete or generic type** (`List[T]` may implement
+visible. Implementations are written for a **concrete or generic type** (`list[T]` may implement
 `Iterator`); a blanket implementation conditioned on a bound — one covering every type that satisfies
 some spec — is not offered, keeping resolution decidable. The lone "every type" case is `Object`, which
 the compiler auto-derives rather than the user writing.
@@ -105,9 +105,8 @@ boundaries, and how coherence stays globally unique, is the
 
 ### Built-in specs
 
-The behaviours the language leans on are ordinary specs, not compiler magic. Most are **opt-in** — a type
-gains one by implementing it — except the set `Object` **auto-derives for every type** (each
-overridable):
+Most are **opt-in** — a type gains one by implementing it — except the set `Object` **auto-derives for
+every type** (each overridable):
 
 | `Object` method | drives          | notes                                                  |
 | --------------- | --------------- | ------------------------------------------------------ |
@@ -121,7 +120,7 @@ earn a keyword. Equality is always the **structural** `equal`.
 
 **Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
 
-- **`Ord`** — `<` `<=` `>` `>=`, sort, min/max: a **total** order whose `Equal` agrees with `equal`;
+- **`Ord`** — `<` `<=` `>` `>=`, sort, min/max: a **total** order consistent with `equal`;
   `float` does **not** implement it.
 - **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`; `float` does **not** implement it.
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
@@ -323,7 +322,7 @@ Zerg is concurrent through **coroutines and channels only**: `spawn` (Go's `go`)
 scheduler**, fire-and-forget with no join/handle, capturing **only immutable values and channels**.
 Channels are the sole reference-counted, by-ref conduit — payloads copied, **auto-closed** when their
 last sender leaves, received as **`Result[T]`** (`Right` = closed, carrying a crash `Err` or the
-`Closed` sentinel), and multiplexed with **`select`**.
+`StopIteration` sentinel), and multiplexed with **`select`**.
 
 The full model — buffering, receive/close semantics, directional ends, `select`, and deadlock — is
 the **[Coroutines & Channels](coroutine.md)** reference.
@@ -364,8 +363,8 @@ the chain to `nil` in place (unlike `?`, never returns from the function); use o
 is a compile error.
 
 **`!` — force-unwrap (value → abort).** `x!` unwraps the left value or **raises** `UnwrapError` — the
-deliberate "I know it's set" hatch, a crossing from the value tier into an abort (`x!` is
-unwrap-or-`raise UnwrapError`). (Logical negation is the keyword `not`, so postfix `!` is free.)
+deliberate "I know it's set" hatch, a crossing from the value tier into an abort. (Logical negation is
+the keyword `not`, so postfix `!` is free.)
 
 ```text
 port := lookup("PORT") ?? 8080
@@ -383,7 +382,8 @@ invariant, a failed assertion, a "can't happen" — so it enters no signature an
 and `guard` reifies it back as `Right(e)` with message, cause, and code intact. Use a `struct` for one
 error, an `enum` for a family — the same value serves both tiers; the bridges convert.
 
-**Aborts.** An abort — `OverflowError`, `DivideByZeroError`, `UnwrapError`, or any `Err` you `raise` —
+**Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, …) or any `Err`
+you `raise` —
 marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops is freed in
@@ -408,7 +408,7 @@ that already yields `Result[U]` still yields `Result[U]` — an internal abort a
 `Right(err)` collapse to the same `Right(err)`. `guard` catches only aborts on the **current** stack;
 a coroutine `spawn`ed inside the block has its own stack and is untouched.
 
-`guard` is the sole way back from the abort tier, mirroring `!` as the sole way in — once guarded, an
+`guard` is the sole way back from the abort tier, mirroring `raise`/`!` as the ways in — once guarded, an
 abort is an ordinary `Result` handled by the same `?` / `??` / `match`, with no separate handler and
 no `recover` construct. It carries **no special meaning in a coroutine**: a coroutine body wrapped in
 `guard` is just a function producing `Result[T]`, and reports it by sending over a channel like any

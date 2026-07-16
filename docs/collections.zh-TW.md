@@ -3,11 +3,11 @@
 Zerg 的內建容器——**`list`**、**`map`**、**`set`**——每個角色只一個 canonical 型別，不弄變體動物園。它們是普通的
 **scope-owned 值**，建立在 [語言參考](language.zh-TW.md) 之上。亦有 [English](collections.md) 版本。
 
-| 型別        | 角色                 | 元素／key 需求         | iteration 順序 |
-| ----------- | -------------------- | ---------------------- | -------------- |
-| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound）   | 索引序         |
-| `map[K, V]` | 一張**關聯**表       | `K: Hash`（蘊含 `Eq`） | **插入**序     |
-| `set[T]`    | 一個**唯一成員**集合 | `T: Hash`（蘊含 `Eq`） | **插入**序     |
+| 型別        | 角色                 | 元素／key 需求       | iteration 順序 |
+| ----------- | -------------------- | -------------------- | -------------- |
+| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         |
+| `map[K, V]` | 一張**關聯**表       | `K: Hash`            | **插入**序     |
+| `set[T]`    | 一個**唯一成員**集合 | `T: Hash`            | **插入**序     |
 
 更豐富的形狀是組合出來的，不是新內建型別。`list[byte]` 是原始位元組序列（可索引、可含 NUL）；`str` 仍是獨立的
 immutable primitive（見下）。
@@ -38,7 +38,7 @@ ys.append(4)               # 增長 · ys[0] = 9  # 改 · ys = [2, 4]  # 重指
 
 ## key——`equal` 免費、`Hash` 顯式
 
-`list[T]` 接受**任意** `T`（只需每個值都有的結構操作）。`map` 的 key／`set` 的元素需 **`Hash`**（蘊含 `Eq`）。
+`list[T]` 接受**任意** `T`（只需每個值都有的結構操作）。`map` 的 key／`set` 的元素需 **`Hash`**（key 以 `equal` 比較）。
 兩半刻意不對稱：`Object` 會 **auto-derive `equal`**，但 **`Hash` 不 derive——型別須顯式實作**才能當 key，讓「什麼
 能當 key」是 opt-in、`safe by default` 的決定。作者要負起 compiler 無法檢查的契約：**equal ⇒ same hash**。因為 key
 是以凍結快照 **copy-in**，即使 `mut` collection 也能當 key。
@@ -74,7 +74,7 @@ loop mut x in ys { x = x * 2 }            # 就地改——ys 必須是 mut
 （原始位元組、可含 NUL）或 **`list[rune]`**（code point）橋接：建字串＝收集進 `list` 再轉（`str(...)`）；編輯文字
 意味著一個**新的** `str`。
 
-這些規則背後的 `Eq` / `Ord` / `Hash` spec 收錄在 [語言參考](language.zh-TW.md)（內建 spec）；`float` 既不實作
+這些規則背後的 `Ord` / `Hash` spec（與 `Object` 的 `equal`）收錄在 [語言參考](language.zh-TW.md)（內建 spec）；`float` 既不實作
 `Ord` 也不實作 `Hash`，故永不是排序集合的元素、也永不是 key。
 
 ## 待決

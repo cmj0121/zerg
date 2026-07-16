@@ -152,7 +152,8 @@ package **cycles be rejected**.
 The **prelude** is not imported — its names are **built into the toolchain** and bound in every module
 from the start, exactly like the primitive keywords. It holds what the language itself leans on: the
 types the operators desugar to (`Either`, `Result`, `T?`, `nil`), the root specs (`Object`,
-`Error`/`Err`), and a few pervasive types such as `list`. (Primitives — `bool`, `int`, `str`, … — and
+`Error`/`Err`), and a few pervasive types — the `list`, `map`, and `set` containers (see
+[Collections](collections.md)). (Primitives — `bool`, `int`, `str`, … — and
 `chan` are likewise grammar and runtime, not imported names.) These names are **reserved**: a
 declaration may not shadow or redeclare them, so the operators that desugar to them can never be
 knocked out from under the language.

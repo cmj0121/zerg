@@ -120,8 +120,9 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 
 **prelude 不是被 import 的**——它的名字是 **built into the toolchain**，從一開始就綁在每個 module 裡，正如 primitive
 關鍵字。它裝的是語言本身倚賴的東西：運算子 desugar 的目標型別（`Either`、`Result`、`T?`、`nil`）、根 spec（`Object`、
-`Error`／`Err`），外加少數泛用型別如 `list`。（primitives——`bool`、`int`、`str`……——與 `chan` 同樣是 grammar 與
-runtime，不是被 import 的名字。）這些名字是**保留字**：宣告不得 shadow 或重宣告它們，因此那些 desugar 到它們的
+`Error`／`Err`），外加少數泛用型別——`list`、`map`、`set` 容器（見 [Collection](collections.zh-TW.md)）。
+（primitives——`bool`、`int`、`str`……——與 `chan` 同樣是 grammar 與 runtime，不是被 import 的名字。）這些名字是
+**保留字**：宣告不得 shadow 或重宣告它們，因此那些 desugar 到它們的
 運算子永遠不會被從語言底下抽走。
 
 其餘一切都是**標準函式庫**——一個普通 package，只有一點不同：**std 隨 toolchain 出貨**，所以它的版本就是編譯器的

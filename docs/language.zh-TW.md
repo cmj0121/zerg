@@ -19,7 +19,7 @@
 - **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值（見 Null-safety
   與錯誤處理）；`int`/`byte`/`rune` 絕不環繞。
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
-- **`str` 以 `rune` 迭代、不可索引**——要原始位元組就轉 `list[byte]`（可能含 NUL 的二進位也用它，`str` 永不含 NUL）。
+- **`str` 以 `rune` 迭代、不可索引**——要原始位元組就轉 `list[byte]`（見 [Collection](collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永不含 NUL）。
 
 ## 型別（Types）
 

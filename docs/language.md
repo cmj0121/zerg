@@ -21,7 +21,8 @@ A small, fixed set — there is **no fixed-width integer ladder** (`i8`, `i16`, 
   **abort**, not a value (see Null-safety & Errors); `int`/`byte`/`rune` never wrap.
 - **`float` is IEEE-754:** overflow → `±Inf`, invalid → `NaN`, neither raises; `NaN` is unequal to
   everything (including itself).
-- **`str` iterates as `rune` and is not indexable** — convert to `list[byte]` for raw bytes (and for
+- **`str` iterates as `rune` and is not indexable** — convert to `list[byte]` (see
+  [Collections](collections.md)) for raw bytes (and for
   binary that may contain a NUL, which a `str` never holds).
 
 ## Types

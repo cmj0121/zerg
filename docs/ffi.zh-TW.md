@@ -20,8 +20,8 @@ FFI 有兩個方向，而它們刻意重用你已經有的機制，而不是各�
 ## FFI-safe 型別
 
 只有具備**固定、且在邊界上已知的 C 可表示 layout** 的值能跨界。形式上，一個宣告是 **FFI-safe**，當且僅當它提到的
-每個型別都是 FFI-safe；FFI-safe 型別就是那些 primitive、`list[byte]`、opaque 外部 handle，以及任何**非遞迴**、
-由它們層層組成的 `struct`／`enum`。
+每個型別都是 FFI-safe；FFI-safe 型別就是那些 primitive、對 FFI-safe `T` 的 `list[T]`、opaque 外部 handle、
+一個不捕獲的頂層 `fn`，以及任何**非遞迴**、由它們層層組成的 `struct`／`enum`。
 
 | Zerg                        | C 表示法                           | 說明                                          |
 | --------------------------- | ---------------------------------- | --------------------------------------------- |
@@ -30,24 +30,36 @@ FFI 有兩個方向，而它們刻意重用你已經有的機制，而不是各�
 | `rune`                      | `int32_t`                          | 一個 Unicode **code point**（純量，非 UTF-8） |
 | `int`                       | `int64_t`                          | 溢位在 Zerg 內仍 abort（見「錯誤」）          |
 | `float`                     | `double`                           | 純 IEEE-754，不變                             |
-| `str`                       | `const char*`                      | 不可變、NUL 結尾的 UTF-8；借用的視圖          |
-| `list[byte]`                | `uint8_t*` **+** `size_t` 長度     | 原始／二進位位元組；不像 `str`，可含 NUL      |
-| `struct`（欄位皆 FFI-safe） | C `struct`，by value               | 逐欄位對應 layout                             |
-| `enum`（payload FFI-safe）  | tagged union `{ tag; union {…}; }` | `T?` 在 `T` 為 FFI-safe 時包含在內            |
+| `str`                       | `const char*`                      | NUL 結尾的 UTF-8；入境 copy、出境 borrow      |
+| `list[T]`（FFI-safe `T`）   | `T*` **+** `size_t` 長度           | 一個 fat 值（指標 + 長度）；入境 copy         |
+| 不捕獲的頂層 `fn`           | C function pointer                 | `fn` 型別中的 `mut` 參數降為指標參數          |
+| `struct`（欄位皆 FFI-safe） | C `struct`，by value               | 逐欄位對應；`list`／`str` 欄位為 fat          |
+| `enum`（payload FFI-safe）  | tagged union `{ tag; union {…}; }` | discriminant + payload（layout 待決，見下）   |
+| `T?`                        | tagged union——**除**下述例外       | pointer-shaped `T` → 一個 nullable pointer    |
 | opaque handle               | opaque `typedef`（指標形狀）       | 一個外部資源——Zerg 永不解參考                 |
+
+一個 **`T?`、其 `T` 為 pointer-shaped**（opaque handle，或 `fn`）**不會**長出 tag：`nil` 就是**null pointer**、
+值就是那個裸指標。只有非指標 `T` 的 `T?`（例如 `int?`）才需要 tagged 形式。這正是讓 handle 的 out-parameter 能
+對上 C 的 `T**` 慣例的原因（見範例）。
 
 **非 FFI-safe**——在 `extern` 簽章中被拒、也不會進到匯出的 header，且**一律附診斷、絕不靜默**：
 
 - **generic 與 `spec` bound**——generic 在 monomorphize 前不是單一型別，沒有單一 C 簽章。改讓一個**具體**實例跨界
   （在固定型別上包一層 `pub` wrapper）。
-- **`spec` 用作型別**（existential）——heap-boxed 且動態分派，沒有穩定 layout。這正是**`Result[T]` 一般並非
-  FFI-safe** 的原因：它右側是 `Err`，也就是 `Error` spec 用作型別。匯出時改用 `T?`（右側是具體的 `nil`）或
-  `Either[T, C]`（`C` 為具體、FFI-safe 的錯誤型別）——不是新規則，只是把型別映射套上去。
+- **`spec` 用作型別**（existential）——heap-boxed 且動態分派，沒有穩定 layout。這正是**`Result[T]` 永遠不是
+  FFI-safe** 的原因：它右側恆為 `Err`，也就是 `Error` spec 用作型別，沒有任何例外。匯出時改用 `T?`（右側是具體的
+  `nil`）或 `Either[T, C]`（`C` 為具體、FFI-safe 的錯誤型別）——不是新規則，只是把型別映射套上去。
 - **`chan` 與 coroutine handle**——由 runtime 管理、reference-counted、綁定 scheduler；對 C 毫無意義。
 - **會捕獲的 closure**——它是一個以 capture 為欄位的 scope-owned struct（見語言參考）。只有**不捕獲的頂層
   `fn`** 能跨界，成為一個純 C function pointer（見「並行」）。
 - **遞迴或自我參照的型別**——compiler 會把它 **auto-box**（插入一層 heap indirection，見語言參考），因此它沒有
-  扁平的 C layout，跨界時會把 Zerg 擁有的 heap 一起拖過去。先把它壓平成一個 FFI-safe 形狀（例如一個 id 或索引）。
+  **flat**（連續、非 boxed）的 C layout，跨界時會把 Zerg 擁有的 heap 一起拖過去。先把它壓平成一個 FFI-safe 形狀
+  （一個 id 或索引）。
+
+**C 的整數寬度。** Zerg 的 `int`／`byte`／`rune` 是固定的（i64／u8／i32）；C 的 `int`、`unsigned`、`long`、
+`size_t`……是平台寬度、**沒有 Zerg 對應**。`list` 的 `size_t` 長度由 compiler 產生、不是你命名的值——但一個必須
+命名 C `int` 或 `size_t` 的 `extern` 簽章，需要一組僅存在於邊界的 C 寬度別名（`c_int`、`c_uint`、`c_size`……）。
+那組別名**尚待決定**（見「待決問題」）；在它落地前，只有 Zerg 的固定寬度能跨界。
 
 ## Opaque handle——沒有指標的外部資源
 
@@ -73,32 +85,46 @@ extern "C" {
 資源；對一個 handle binding 下 `del` 也只終止名字，不釋放任何外部東西。資源**只**由一次明確、配對的 `extern`
 free 釋放。
 
-這只留下唯一一個語言無法靜態封閉的縫隙——多個仍存活的 token 可能命名一個 C 已經釋放的資源——而這是一個**外部**
-的正確性問題、不是 Zerg 的 aliasing 違規，因為 Zerg 對該 token 不附加任何所有權。這正是為什麼裸 handle 應該
-**包進一個你自己擁有的 newtype**（一個單欄位 `struct`，依 [package.zh-TW.md](package.zh-TW.md) 的 newtype 指引），
-只對外提供安全方法與一個 `del`／close，使裸 handle 永不逸出到一般程式碼：
+把裸 handle **包進一個你自己擁有的 newtype**——一個單欄位 `struct`（[package.zh-TW.md](package.zh-TW.md) 的
+newtype 模式，此處**不**採那個可選的 auto-cast，否則會把 handle 再度外洩）。它的**私有欄位使它在 module 外不透明**
+（見語言參考），所以它只對外提供安全方法與一個 `del`／close，使裸 handle 永不逸出到一般程式碼：
 
 ```text
 struct Db { h: sqlite3 }                               # 私有欄位 ⇒ 在其 module 外不透明
 
 pub fn open(path: str) -> Db? {
-    mut h: sqlite3? = nil
+    mut h: sqlite3? = nil                              # 一個 mut handle out-parameter：C 的 sqlite3**
     if sqlite3_open(path, h) != 0 { return nil }       # 手動映射 C 的狀態碼——沒有魔法
     return Db{ h: h! }
 }
 ```
 
+`mut sqlite3?` out-parameter 之所以成立，是因為 handle 是一個**以值寫回的 scalar token**——就是普通的 `mut`
+參數路徑（見語言參考），沒有新東西。一個**就地填入呼叫端 byte buffer** 的 C 函式是另一種機制（它透過指標*寫入*，
+不是值的寫回）；那個 write-back 協定尚待決定（見「待決問題」）。
+
+**wrapper 藏住 token；它並不讓資源變安全。** 因為 `Db` 和一切一樣是 copy-by-value，複製它就複製了 handle
+的 bit——兩個 `Db` 命名同一個 `sqlite3`，於是 close 其一後，另一個就是 use-after-free，而這是透過普通的「安全」
+程式碼發生的。Zerg 沒有 move-only／linear 型別可以禁止那次複製，所以 newtype **集中**了 free、把裸 token 藏在
+視線外，卻無法靜態排除 double-free／use-after-free。一個能封閉此縫隙的 linear 資源型別是待決問題——在它之前，
+把 handle wrapper 當成一種紀律，而非保證。
+
 ## 邊界上的所有權與生命週期
 
-讓 **scope-owned** 保持完好的規則：compiler 的自動釋放**只作用於 Zerg 配置的儲存**。外部儲存活在記憶體模型之
-外，只由明確的 `extern` free 釋放——Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。
+讓 **scope-owned** 保持完好的規則：compiler 的自動釋放**只作用於 Zerg 配置的儲存**。外部儲存活在記憶體模型之外；
+Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與元素 buffer 遵循 Zerg「跨界一律 copy」的精神——
+**copy 進 Zerg、borrow 出給 C**：
 
-- **`str`／`list[byte]` 傳進 C**——C 拿到一個**借用的唯讀視圖**，只在該次呼叫期間有效。C 不得釋放它、不得寫入、
-  也不得在回傳後保留該指標。Zerg 保有所有權，並照常在 scope 結束時釋放。
-- **C 回傳的一般值**——一個 by-value 的 `struct`、一個 `int`、一個 `bool`：Zerg 現在完全擁有的一份副本，由普通
-  scope 規則釋放。
-- **C 配置的 buffer 或資源**——以 **opaque handle** 回來（只有在 C 保證 buffer 生命週期時，才以 `str`／
-  `list[byte]` 回來），並配一個明確的 `extern` free，由 wrapper 負責呼叫。永遠沒有對外部記憶體的隱式釋放。
+- **`str`／`list[T]` 傳*進* C**（一個引數）——C 拿到一個**借用的唯讀視圖**，只在該次呼叫期間有效。C 不得釋放它、
+  不得寫入、也不得在回傳後保留該指標。Zerg 保有所有權，並照常在 scope 結束時釋放。
+- **`str`／`list[T]` 從 C _出來_**（一個回傳，或一個回傳 `struct` 的欄位）——那些位元組在邊界**被 copy 進一個
+  全新的 Zerg-owned 值**，所以 C 的 buffer 只需在回傳當下有效，而 Zerg**只**釋放自己的副本、永不釋放 C 的。一個
+  入境 `str` 只在 C 保證**有效 UTF-8 且無內嵌 NUL**（`str` 的不變式）時才被接受；否則以 `list[byte]` 取得。
+- **C 回傳的一般 scalar 值**——一個純 scalar 的 `struct`、一個 `int`、一個 `bool`：Zerg 現在完全擁有的一份副本，
+  由普通 scope 規則釋放。
+- **C 配置、且 _Zerg 之後必須釋放_ 的 buffer 或資源**——**不**以 `str`／`list` 回來（那會在 Zerg 複製後洩漏 C 的
+  原件），而是以一個 **opaque handle** 回來，配一個明確、由 wrapper 呼叫的 `extern` free。永遠沒有對外部記憶體的
+  隱式釋放。
 
 ## 匯出一個 package（Zerg → C）
 
@@ -112,13 +138,15 @@ pub fn open(path: str) -> Db? {
 1. 一個 C library，以穩定符號曝露 root public surface 的 **FFI-safe 子集**，以及
 2. 一份對應的 **`.h` header**——含 include guard，收納 opaque `typedef`、`struct`／`enum` layout，以及函式原型。
 
-header 幾乎是免費的，因為 C 本來就是 codegen target。一個**非** FFI-safe 的 `pub` root 宣告會被**回報並排除**於
-header 之外，而非靜默丟棄：一個 package 大可對 Zerg 依賴者提供比對 C 更豐富的 API，而該診斷讓 C ABI 誠實地反映
-真正跨界的東西。
+一個 `pub` **method** 也會匯出：它降級成一個 C 函式，其**第一個參數是 receiver**——by-value 的 `self` 變成那個
+struct by value、`mut self` 變成指向它的指標（就地）——所以建議的 handle-wrapper method 以普通函式的形式抵達 C。
+一個**非** FFI-safe 的 `pub` root 宣告會被**回報並排除**於 header 之外，而非靜默丟棄：一個 package 大可對 Zerg
+依賴者提供比對 C 更豐富的 API，而該診斷讓 C ABI 誠實地反映真正跨界的東西。一個不回傳值的 Zerg 函式對映到 C `void`。
 
 **符號名穩定且不 mangle。** C 的符號空間是扁平的，穩定 ABI 又不容 mangle，所以匯出名是決定性且不衝突的——概念上
-是把 package 名前綴到宣告名上（例如 `zg_<pkg>_<name>`）。扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。
-（確切方案，以及是否提供逐宣告的 link-name 覆寫，是待決問題——見下。）
+是把 package 名前綴到宣告名上（method 再帶上它的型別，例如 `zg_<pkg>_<name>`／`zg_<pkg>_<Type>_<method>`）。
+扁平匯出面上的名稱衝突在 library 模式下是編譯錯誤。（確切方案，以及是否提供逐宣告的 link-name 覆寫，是待決問題
+——見下。）
 
 ## 匯入 C（`extern`）
 
@@ -134,19 +162,21 @@ header 之外，而非靜默丟棄：一個 package 大可對 Zerg 依賴者提�
 
 **abort 永不跨界。** 一個 abort（`OverflowError`、`DivideByZeroError`、`UnwrapError`，任何*被 raise* 的錯誤）
 是一次會執行 scope cleanup 的 Zerg stack unwind（見語言參考）；一個 C frame 沒有這種 cleanup，Zerg 也不擁有 C
-的 unwind 路徑。所以當一個**被匯出**的 `pub` 函式 abort 時，unwind 會**在邊界停下並 trap**——它結束 process
-（或該呼叫 stack），而不是撕穿 C 呼叫者的 frame。要把一個失敗交給 C 呼叫者讀取，就**用 `guard` 在邊界把 abort
-降級成值**，讓匯出函式回傳一個 FFI-safe 結果，而非 unwind：
+的 unwind 路徑。所以當一個**被匯出**的 `pub` 函式（或一個被 C 呼叫的 Zerg callback）abort 時，unwind 會**在邊界
+trap**——它**結束整個 process**，而不是撕穿 C 呼叫者的 frame（當 C 是呼叫者時，沒有 Zerg `main` stack 可停）。
+要把一個失敗交給 C 呼叫者讀取，就**用 `guard` 在邊界把 abort 降級成值**，讓匯出函式回傳一個 FFI-safe 結果，而非
+unwind：
 
 ```text
 pub fn parse_port(s: str) -> int? {
-    return guard { to_int(s) }.ok()                    # 內部溢位變成 nil，而非 trap
+    return guard { parse_int(s) }.ok()                 # 內部溢位變成 nil，而非 trap
 }
 ```
 
-反方向，一個 **`Result`／`Either`／`T?` 值**在其 payload 為 FFI-safe 時，以普通 tagged union 跨界（記得
-`Result[T]` 通常不是——改用 `T?` 或具體錯誤型別）；C 呼叫者讀 `.tag` 來分辨兩側。預期的失敗是兩邊都能檢視的
-資料；一個 bug 則是永不離開 Zerg 的 abort。
+反方向，一個 **`Either`／`T?` 值**在其 payload 為 FFI-safe 時，以普通 tagged union 跨界（或者，對 pointer-shaped
+的 `T?`，以一個 nullable pointer）——記得 `Result[T]` 不是，所以匯出一個具體錯誤型別或 `T?`。C 呼叫者讀
+**discriminant** 來分辨兩側。預期的失敗是兩邊都能檢視的資料；一個 bug 則是永不離開 Zerg 的 abort。（那個
+discriminant 的具體 C layout 是待決細節——見「待決問題」。）
 
 ## 並行跨越邊界
 
@@ -158,8 +188,8 @@ handle 並非 FFI-safe，不得出現在 `extern` 簽章或匯出面上；結果
   或把一次長阻塞呼叫視為佔用 thread。runtime 如何調整或擴張該 thread pool 是實作細節（TBD）。
 - **callback（C → Zerg）**只允許以一個**不捕獲、FFI-safe 的頂層 `fn`**、當作純 C function pointer 交出去。
   這樣的 callback 跑在 **C 呼叫它的那條 thread 上**——不是 Zerg 排程的 coroutine——所以它不得假設有 scheduler
-  情境；在外部呼叫的 callback 裡使用 `spawn`／`chan` 是受限的（TBD）。callback 自身是一條 Zerg stack，因此它
-  內部的 abort 會**在邊界 trap**，與匯出函式完全相同——用 `guard` 把它變成一個值。
+  情境，而它內部的 abort 會**在邊界 trap**，與匯出函式完全相同。因為它不能 capture、Zerg 又沒有 `void*`，它也
+  還無法像 C 的 `void* userdata` callback 那樣接收一個 Zerg context——一個待決問題，見下。
 
 ## 與語言其餘部分的一致性
 
@@ -177,9 +207,16 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 
 留給後續設計回合——皆不阻擋上述模型：
 
+- **C 寬度整數別名**（`c_int`、`c_uint`、`c_size`、`c_long`……），讓 `extern` 簽章能命名 C 的平台寬度整數，而不只是
+  Zerg 的固定寬度。
+- **一個 move-only／linear 資源型別**，讓 handle wrapper 能靜態禁止今日容許 double-free／use-after-free 的那次
+  複製。
+- C 呼叫者讀作 `.tag` 的 **tagged union 具體 C layout**（discriminant 型別、variant 值、成員命名、對齊）。
+- 讓 C 函式就地填入的 `list[byte]` 的 **write-back 協定**（一個可變 out-buffer）——常見的 `read`／`recv` 形狀，
+  目前尚無法表達。
+- **callback context**——一個被外部呼叫的 callback 在沒有 capture、也沒有 `void*` 的情況下如何觸及 Zerg 狀態
+  （例如以一個 opaque handle 當 context），以及它能否 `spawn`。
 - 確切的**穩定符號方案**，以及是否提供逐宣告的 **link-name 覆寫**。
 - library 模式遇到非 FFI-safe 的 public 宣告：**skip-with-diagnostic**（目前傾向）對上硬性錯誤。
 - scheduler 對**阻塞 `extern` 呼叫**的策略（thread pool 擴張）——一個 runtime 細節。
-- 讓 C 函式填入的 `list[byte]` 的**回寫協定**（一個可變 out-buffer）。
-- 當外部程式碼在 scheduler 之外呼叫一個 Zerg `fn` 時的 **callback 語意**（它可以 `spawn` 嗎？）。
 - `extern` 未來是否會命名 **`"C"` 以外的 ABI**；目前只定義 `"C"`。

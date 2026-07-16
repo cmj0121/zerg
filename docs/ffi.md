@@ -23,21 +23,27 @@ direction only; it never appears on the export side.
 
 Only values with a **fixed, C-representable layout known at the boundary** may cross. Formally, a
 declaration is **FFI-safe** when every type it mentions is FFI-safe; the FFI-safe types are the
-primitives, `list[byte]`, opaque foreign handles, and any **non-recursive** `struct`/`enum` built
-transitively from those.
+primitives, `list[T]` over an FFI-safe `T`, opaque foreign handles, a non-capturing top-level `fn`, and
+any **non-recursive** `struct`/`enum` built transitively from those.
 
-| Zerg                           | C representation                   | Notes                                            |
-| ------------------------------ | ---------------------------------- | ------------------------------------------------ |
-| `bool`                         | `bool` (`<stdbool.h>`)             |                                                  |
-| `byte`                         | `uint8_t`                          | Zerg's char / a raw octet                        |
-| `rune`                         | `int32_t`                          | a Unicode **code point** (a scalar, not UTF-8)   |
-| `int`                          | `int64_t`                          | overflow still aborts inside Zerg (see Errors)   |
-| `float`                        | `double`                           | pure IEEE-754, unchanged                         |
-| `str`                          | `const char*`                      | immutable, NUL-terminated UTF-8; a borrowed view |
-| `list[byte]`                   | `uint8_t*` **+** `size_t` length   | raw/binary bytes; unlike `str`, may hold a NUL   |
-| `struct` (all fields FFI-safe) | C `struct`, by value               | field-for-field layout                           |
-| `enum` (FFI-safe payloads)     | tagged union `{ tag; union {…}; }` | `T?` included when `T` is FFI-safe               |
-| opaque handle                  | opaque `typedef` (pointer-shaped)  | a foreign resource — never dereferenced by Zerg  |
+| Zerg                           | C representation                    | Notes                                           |
+| ------------------------------ | ----------------------------------- | ----------------------------------------------- |
+| `bool`                         | `bool` (`<stdbool.h>`)              |                                                 |
+| `byte`                         | `uint8_t`                           | Zerg's char / a raw octet                       |
+| `rune`                         | `int32_t`                           | a Unicode **code point** (a scalar, not UTF-8)  |
+| `int`                          | `int64_t`                           | overflow still aborts inside Zerg (see Errors)  |
+| `float`                        | `double`                            | pure IEEE-754, unchanged                        |
+| `str`                          | `const char*`                       | NUL-terminated UTF-8; copied in / borrowed out  |
+| `list[T]` (FFI-safe `T`)       | `T*` **+** `size_t` length          | a fat value (pointer + length); copied in       |
+| non-capturing top-level `fn`   | C function pointer                  | a `mut` parameter lowers to a pointer parameter |
+| `struct` (all fields FFI-safe) | C `struct`, by value                | field-for-field; a `list`/`str` field is fat    |
+| `enum` (FFI-safe payloads)     | tagged union `{ tag; union {…}; }`  | discriminant + payload (layout deferred, below) |
+| `T?`                           | tagged union — **except** see below | pointer-shaped `T` → a nullable pointer         |
+| opaque handle                  | opaque `typedef` (pointer-shaped)   | a foreign resource — never dereferenced by Zerg |
+
+A **`T?` whose `T` is pointer-shaped** (an opaque handle, or a `fn`) does **not** grow a tag: `nil` is
+the **null pointer** and the value is the bare pointer. Only a `T?` over a non-pointer `T` (e.g. `int?`)
+needs the tagged form. This is what lets a handle out-parameter map to C's `T**` idiom (see the example).
 
 **Not FFI-safe** — rejected in an `extern` signature and left off the exported header, always with a
 diagnostic, never silently:
@@ -45,15 +51,21 @@ diagnostic, never silently:
 - **Generics and `spec` bounds** — a generic is not one type until monomorphized, so it has no single C
   signature. Cross a **concrete** instance instead (a `pub` wrapper at a fixed type).
 - **A `spec` used as a type** (existential) — heap-boxed with dynamic dispatch, so no stable layout.
-  This is why **`Result[T]` is generally not FFI-safe**: its right side is `Err`, the `Error` spec used
-  as a type. Export uses `T?` (whose right side is the concrete `nil`) or `Either[T, C]` for a concrete,
-  FFI-safe error `C` — no new rule, just the type mapping applied.
+  This is why **`Result[T]` is never FFI-safe**: its right side is always `Err`, the `Error` spec used
+  as a type. There is no exception. Export uses `T?` (whose right side is the concrete `nil`) or
+  `Either[T, C]` for a concrete, FFI-safe error `C` — no new rule, just the type mapping applied.
 - **`chan` and coroutine handles** — runtime-managed, reference-counted, scheduler-bound; meaningless to C.
 - **A capturing closure** — it is a scope-owned struct of captures (see Language Reference). Only a
   **non-capturing top-level `fn`** may cross, as a plain C function pointer (see Concurrency).
 - **A recursive or self-referential type** — the compiler **auto-boxes** it (an inserted heap
-  indirection, see Language Reference), so it has no flat C layout and would drag Zerg-owned heap across
-  the boundary. Flatten it to an FFI-safe shape (e.g. an id or an index) first.
+  indirection, see Language Reference), so it has no **flat** (contiguous, non-boxed) C layout and would
+  drag Zerg-owned heap across the boundary. Flatten it to an FFI-safe shape (an id or index) first.
+
+**C's integer widths.** Zerg's `int`/`byte`/`rune` are fixed (i64/u8/i32); C's `int`, `unsigned`,
+`long`, `size_t`, … are platform-width and have **no Zerg counterpart**. A `list`'s `size_t` length is
+compiler-emitted, never a value you name — but an `extern` signature that must name a C `int` or
+`size_t` needs a set of boundary-only C-width aliases (`c_int`, `c_uint`, `c_size`, …). That set is
+**deferred** (see Open questions); until it lands, only Zerg's fixed widths cross.
 
 ## Opaque handles — foreign resources without a pointer
 
@@ -81,37 +93,54 @@ allocation lives entirely outside the memory model, so scope exit frees the toke
 bits) but never the resource, and `del` on a handle binding ends the name without releasing anything
 foreign. The resource is released **only** by an explicit paired `extern` free.
 
-That leaves exactly one gap the language cannot close statically — several live tokens may name a
-resource C has already freed — and it is a **foreign** correctness concern, not a Zerg aliasing
-violation, since Zerg attaches no ownership to the token. It is precisely why a raw handle should be
-**wrapped in a newtype you own** (a single-field `struct`, per the newtype guidance in
-[package.md](package.md)) that exposes only safe methods and a `del`/close, so the bare handle never
-escapes into ordinary code:
+Wrap a raw handle in a **newtype you own** — a single-field `struct` (the newtype pattern from
+[package.md](package.md), here **without** the optional auto-cast, which would re-expose the handle). Its
+**private field makes it opaque** outside its module (Language Reference), so it offers only safe methods
+and a `del`/close and the bare handle never escapes into ordinary code:
 
 ```text
 struct Db { h: sqlite3 }                               # private field ⇒ opaque outside its module
 
 pub fn open(path: str) -> Db? {
-    mut h: sqlite3? = nil
+    mut h: sqlite3? = nil                              # a mut handle out-parameter: C's sqlite3**
     if sqlite3_open(path, h) != 0 { return nil }       # map C's status by hand — no magic
     return Db{ h: h! }
 }
 ```
 
+The `mut sqlite3?` out-parameter works because a handle is a **scalar token written back by value** — the
+ordinary `mut`-parameter path (Language Reference), nothing new. A C function that fills a caller's
+**byte buffer in place** is a different mechanism (it writes _through_ a pointer, not a value copy-back);
+that write-back protocol is deferred (see Open questions).
+
+**The wrapper hides the token; it does _not_ make the resource safe.** Because `Db` is copy-by-value like
+everything, copying it duplicates the handle bits — two `Db`s naming one `sqlite3`, so closing one leaves
+the other a use-after-free, reached through ordinary "safe" code. Zerg has no move-only/linear type to
+forbid that copy, so the newtype **centralizes** the free and keeps the raw token out of sight, but
+cannot statically rule out double-free / use-after-free. A linear resource type that would close the gap
+is an open question — until then, treat a handle wrapper as a discipline, not a guarantee.
+
 ## Ownership & lifetime at the boundary
 
 The rule that keeps **scope-owned** intact: the compiler's automatic free applies **only to
-Zerg-allocated storage**. Foreign storage lives outside the memory model and is released by an explicit
-`extern` free — Zerg never frees it implicitly, and never retains a Zerg buffer on C's behalf.
+Zerg-allocated storage**. Foreign storage lives outside the memory model; Zerg never frees it implicitly,
+and never retains a Zerg buffer on C's behalf. Character and element buffers follow Zerg's "across the
+boundary, copy" ethos — **copied into Zerg, borrowed out to C**:
 
-- **`str` / `list[byte]` passed into C** — C receives a **borrowed, read-only view** valid only for the
-  duration of the call. C must not free it, write through it, or retain the pointer past return. Zerg
-  keeps ownership and frees at scope exit as usual.
-- **Plain values returned from C** — a `struct` by value, an `int`, a `bool`: a copy Zerg now owns
-  outright, freed by the ordinary scope rule.
-- **A buffer or resource allocated by C** — comes back as an **opaque handle** (or as `str`/`list[byte]`
-  only when C guarantees the buffer's lifetime), paired with an explicit `extern` free the wrapper is
-  responsible for calling. There is no implicit free of foreign memory — ever.
+- **`str` / `list[T]` passed _into_ C** (an argument) — C receives a **borrowed, read-only view** valid
+  only for the duration of the call. C must not free it, write through it, or retain the pointer past
+  return. Zerg keeps ownership and frees at scope exit as usual.
+- **`str` / `list[T]` coming _out_ of C** (a return, or a field of a returned `struct`) — the bytes are
+  **copied into a fresh Zerg-owned value** at the boundary, so C's buffer need only be valid at return
+  time and Zerg frees **only its own copy**, never C's. An inbound `str` is accepted only when C
+  guarantees **valid UTF-8 with no embedded NUL** (the `str` invariant); otherwise take it as
+  `list[byte]`.
+- **Plain scalar values returned from C** — a `struct` of scalars, an `int`, a `bool`: a copy Zerg now
+  owns outright, freed by the ordinary scope rule.
+- **A buffer or resource C allocated that _Zerg must later free_** — does **not** come back as
+  `str`/`list` (that would leak C's original after Zerg copies it). It comes back as an **opaque handle**,
+  paired with an explicit `extern` free the wrapper calls. There is no implicit free of foreign memory —
+  ever.
 
 ## Exporting a package (Zerg → C)
 
@@ -126,22 +155,24 @@ source change — instead emits, in the same pass:
 2. a matching **`.h` header** — include-guarded, holding the opaque `typedef`s, the `struct`/`enum`
    layouts, and the function prototypes.
 
-The header is nearly free because C is already the codegen target. A `pub` root declaration that is
+A `pub` **method** exports too: it lowers to a C function whose **first parameter is the receiver** — a
+by-value `self` becomes the struct by value, a `mut self` becomes a pointer to it (in-place) — so the
+recommended handle-wrapper methods reach C as ordinary functions. A `pub` root declaration that is
 **not** FFI-safe is **reported and left out** of the header rather than silently dropped: a package may
 legitimately offer a richer API to Zerg dependents than it can to C, and the diagnostic keeps the C ABI
-honest about what actually crosses.
+honest about what actually crosses. A Zerg function that returns nothing maps to C `void`.
 
 **Symbol names are stable and unmangled.** C's symbol space is flat and a stable ABI forbids mangling,
-so an exported name is deterministic and collision-free — conceptually the package name prefixed onto
-the declaration name (e.g. `zg_<pkg>_<name>`). A clash on the flat exported surface is a compile error
-in library mode. (The exact scheme, and any per-declaration link-name override, are open questions —
-see below.)
+so an exported name is deterministic and collision-free — conceptually the package name prefixed onto the
+declaration name (a method also carrying its type, e.g. `zg_<pkg>_<name>` / `zg_<pkg>_<Type>_<method>`).
+A clash on the flat exported surface is a compile error in library mode. (The exact scheme, and any
+per-declaration link-name override, are open questions — see below.)
 
 ## Importing C (`extern`)
 
-An `extern "C"` block is the sole doorway for a foreign symbol into Zerg. Each item names a C
-function, opaque type, or symbol **verbatim** — no mangling is applied, the linker name is taken as
-written. An `extern` signature is type-checked as FFI-safe like any boundary declaration.
+An `extern "C"` block is the sole doorway for a foreign symbol into Zerg. Each item names a C function,
+opaque type, or symbol **verbatim** — no mangling is applied, the linker name is taken as written. An
+`extern` signature is type-checked as FFI-safe like any boundary declaration.
 
 `extern` is **raw**: it mirrors the C contract exactly and carries none of C's error conventions into
 Zerg. A C function that signals failure by `errno`, a return code, or a `NULL` result returns those raw
@@ -153,21 +184,23 @@ exactly what keeps the mapping explicit and auditable.
 
 **An abort never crosses.** An abort (`OverflowError`, `DivideByZeroError`, `UnwrapError`, any _raised_
 error) is a Zerg stack unwind that runs scope cleanup (see Language Reference); a C frame has no such
-cleanup and Zerg does not own C's unwind path. So when an **exported** `pub` function aborts, the unwind
-**stops and traps at the boundary** — it ends the process (or the calling stack) rather than tearing
-through the C caller's frames. To hand a C caller a failure it can read, **demote the abort to a value
-at the edge with `guard`**, so the exported function returns an FFI-safe result instead of unwinding:
+cleanup and Zerg does not own C's unwind path. So when an **exported** `pub` function (or a Zerg callback
+C invokes) aborts, the unwind **traps at the boundary** — it **terminates the process** rather than
+tearing through the C caller's frames (there is no Zerg `main` stack to stop at when C is the caller). To
+hand a C caller a failure it can read, **demote the abort to a value at the edge with `guard`**, so the
+exported function returns an FFI-safe result instead of unwinding:
 
 ```text
 pub fn parse_port(s: str) -> int? {
-    return guard { to_int(s) }.ok()                    # an overflow inside becomes nil, not a trap
+    return guard { parse_int(s) }.ok()                 # an overflow inside becomes nil, not a trap
 }
 ```
 
-In the other direction, a **`Result`/`Either`/`T?` value** crosses as an ordinary tagged union when its
-payloads are FFI-safe (recall `Result[T]` usually is not — use `T?` or a concrete error type); the C
-caller reads `.tag` to tell the sides apart. Expected failure is data both sides can inspect; a bug is
-an abort that never leaves Zerg.
+In the other direction, a **`Either`/`T?` value** crosses as an ordinary tagged union (or, for a
+pointer-shaped `T?`, a nullable pointer) when its payloads are FFI-safe — recall `Result[T]` is not, so
+export a concrete error type or `T?`. The C caller reads the **discriminant** to tell the sides apart.
+Expected failure is data both sides can inspect; a bug is an abort that never leaves Zerg. (The concrete
+C layout of that discriminant is a deferred detail — see Open questions.)
 
 ## Concurrency across the boundary
 
@@ -181,9 +214,10 @@ the exported surface; results and completion still travel by channel **inside** 
   thread-occupying. How the runtime sizes or grows that thread pool is an implementation detail (TBD).
 - **Callbacks (C → Zerg)** are allowed only as a **non-capturing, FFI-safe top-level `fn`** handed over
   as a plain C function pointer. Such a callback runs on **whatever thread C invokes it from** — not a
-  Zerg-scheduled coroutine — so it must not assume a scheduler context; `spawn`/`chan` from inside a
-  foreign-invoked callback is constrained (TBD). A callback is a Zerg stack of its own, so an abort
-  inside it **traps at the boundary** exactly as in an exported function — `guard` it to return a value.
+  Zerg-scheduled coroutine — so it must not assume a scheduler context, and an abort inside it **traps at
+  the boundary** exactly as in an exported function. Because it cannot capture and Zerg has no `void*`,
+  it also cannot yet receive a Zerg context the way C's `void* userdata` callbacks expect — an open
+  question below.
 
 ## Consistency with the rest of the language
 
@@ -204,10 +238,18 @@ spec)` implementations simply never appear at the C boundary. FFI trades in conc
 
 Deferred for a later design pass — none blocks the model above:
 
+- **C-width integer aliases** (`c_int`, `c_uint`, `c_size`, `c_long`, …) so an `extern` signature can name
+  C's platform-width integers, not just Zerg's fixed widths.
+- **A move-only / linear resource type** that would let a handle wrapper statically forbid the copy that
+  today permits double-free / use-after-free.
+- The concrete **C layout of a tagged union** (discriminant type, variant values, member names,
+  alignment) that a C caller reads as `.tag`.
+- A **write-back protocol** for a `list[byte]` a C function fills in place (a mutable out-buffer) — the
+  common `read`/`recv` shape, not yet expressible.
+- **Callback context** — how a foreign-invoked callback reaches Zerg state without capture or a `void*`
+  (e.g. by receiving an opaque handle as context), and whether it may `spawn`.
 - The exact **stable-symbol scheme**, and whether a per-declaration **link-name override** is offered.
 - Library mode on a non-FFI-safe public declaration: **skip-with-diagnostic** (current lean) vs. a hard
   error.
 - The scheduler's policy for **blocking `extern` calls** (thread-pool growth) — a runtime detail.
-- A **write-back protocol** for a `list[byte]` a C function fills (a mutable out-buffer).
-- **Callback semantics** when foreign code invokes a Zerg `fn` off the scheduler (may it `spawn`?).
 - Whether `extern` will ever name **ABIs other than `"C"`**; only `"C"` is defined today.

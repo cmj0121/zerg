@@ -113,7 +113,9 @@ hidden and cannot be recovered (no downcast).
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
-dynamic dispatch.
+dynamic dispatch. There is **no subtyping** between concrete types, so generics are **invariant**:
+`list[Cat]` is not a `list[Animal]` — abstract over a family with a spec bound (`[T: X]`), not subtype
+substitution.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair to resolve to the same implementation everywhere, so an implementation

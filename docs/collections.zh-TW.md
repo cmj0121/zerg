@@ -69,6 +69,16 @@ loop x in xs { total = total + x }        # 讀取
 loop mut x in ys { x = x * 2 }            # 就地改——ys 必須是 mut
 ```
 
+## 迭代與變動
+
+在 `loop … in xs` 內，`xs` 對**結構性變更凍結**——在迴圈裡 append、insert、remove、grow/shrink、或 rebind 它都是
+**compile error**——所以 iterator **永遠不會失效**（無 dangling cursor、無 runtime fail-fast 檢查）。這是一條
+**local** 規則——迴圈知道自己走訪的是哪個 collection——因此**不需要 borrow checker、runtime 零成本**。就地改一個
+**元素**（`loop mut x`）仍可以：它不移動 cursor。
+
+要就地轉換，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或重建（`xs = xs.filter(pred)`——迴圈後
+rebind）。要邊讀 `xs` 邊累積，就 append 到**另一個** collection。
+
 ## 字串與位元組
 
 `str` 是**獨立的 immutable primitive**、不是 collection——它以 `rune` 走訪、且**不可索引**。透過 **`list[byte]`**

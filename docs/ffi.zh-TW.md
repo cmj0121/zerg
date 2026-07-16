@@ -105,9 +105,10 @@ pub fn open(path: str) -> Db? {
 
 **wrapper 藏住 token；它並不讓資源變安全。** 因為 `Db` 和一切一樣是 copy-by-value，複製它就複製了 handle
 的 bit——兩個 `Db` 命名同一個 `sqlite3`，於是 close 其一後，另一個就是 use-after-free，而這是透過普通的「安全」
-程式碼發生的。Zerg 沒有 move-only／linear 型別可以禁止那次複製，所以 newtype **集中**了 free、把裸 token 藏在
-視線外，卻無法靜態排除 double-free／use-after-free。一個能封閉此縫隙的 linear 資源型別是待決問題——在它之前，
-把 handle wrapper 當成一種紀律，而非保證。
+程式碼發生的。Zerg 沒有 move（它只是隱形最佳化），無法禁止那次複製，所以 newtype **集中**了 free、把裸 token
+藏在視線外，卻無法靜態排除 double-free／use-after-free。解法——一個 `Drop`-refcounted 資源型別（channel 式：copy
+refcount-bump、最後持有者處恰好 free 一次）——**與 FFI 一同延後**（見下）。在它之前，把 handle wrapper 當成一種
+紀律，而非保證。
 
 ## 邊界上的所有權與生命週期
 
@@ -209,8 +210,9 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 
 - **C 寬度整數別名**（`c_int`、`c_uint`、`c_size`、`c_long`……），讓 `extern` 簽章能命名 C 的平台寬度整數，而不只是
   Zerg 的固定寬度。
-- **一個 move-only／linear 資源型別**，讓 handle wrapper 能靜態禁止今日容許 double-free／use-after-free 的那次
-  複製。
+- **一個 `Drop`-refcounted 資源型別**（channel 式：copy refcount-bump、`drop` 於最後持有者跑一次），讓 handle
+  wrapper 恰好 free 一次——**與 FFI 一同延後**，因為核心語言不需要 user-facing 資源型別（記憶體 scope-owned、
+  channel refcounted）。
 - C 呼叫者讀作 `.tag` 的 **tagged union 具體 C layout**（discriminant 型別、variant 值、成員命名、對齊）。
 - 讓 C 函式就地填入的 `list[byte]` 的 **write-back 協定**（一個可變 out-buffer）——常見的 `read`／`recv` 形狀，
   目前尚無法表達。

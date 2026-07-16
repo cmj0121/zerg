@@ -115,10 +115,11 @@ that write-back protocol is deferred (see Open questions).
 
 **The wrapper hides the token; it does _not_ make the resource safe.** Because `Db` is copy-by-value like
 everything, copying it duplicates the handle bits — two `Db`s naming one `sqlite3`, so closing one leaves
-the other a use-after-free, reached through ordinary "safe" code. Zerg has no move-only/linear type to
-forbid that copy, so the newtype **centralizes** the free and keeps the raw token out of sight, but
-cannot statically rule out double-free / use-after-free. A linear resource type that would close the gap
-is an open question — until then, treat a handle wrapper as a discipline, not a guarantee.
+the other a use-after-free, reached through ordinary "safe" code. Zerg has no move (it is only a silent
+optimization), so a copy cannot be forbidden; the newtype **centralizes** the free and hides the raw
+token, but cannot statically rule out double-free / use-after-free. The fix — a `Drop`-refcounted resource
+type (channel-style: copy refcount-bumps, freed once at the last holder) — is **deferred with FFI** (see
+below). Until then, treat a handle wrapper as a discipline, not a guarantee.
 
 ## Ownership & lifetime at the boundary
 
@@ -240,8 +241,9 @@ Deferred for a later design pass — none blocks the model above:
 
 - **C-width integer aliases** (`c_int`, `c_uint`, `c_size`, `c_long`, …) so an `extern` signature can name
   C's platform-width integers, not just Zerg's fixed widths.
-- **A move-only / linear resource type** that would let a handle wrapper statically forbid the copy that
-  today permits double-free / use-after-free.
+- **A `Drop`-refcounted resource type** (channel-style: copy refcount-bumps, `drop` runs once at the last
+  holder) so a handle wrapper frees exactly once — deferred **with FFI**, since the core language needs no
+  user-facing resource type (memory is scope-owned, channels refcounted).
 - The concrete **C layout of a tagged union** (discriminant type, variant values, member names,
   alignment) that a C caller reads as `.tag`.
 - A **write-back protocol** for a `list[byte]` a C function fills in place (a mutable out-buffer) — the

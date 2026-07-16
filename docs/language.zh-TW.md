@@ -118,6 +118,13 @@ msg := match ev {
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。這是**單向的**——一旦 boxed，
 具體型別就被隱藏、無法還原（不能 downcast）。
 
+在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
+box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
+**binary same-type** 操作——`equal` / `==`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
+運算元正是抹除掉的具體型別，無法提供。兩個 boxed 值因此**永遠不能比較**——無 type tag、無 downcast，與單向抹除
+一致。box 一個值是為了動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的
+`[T: S]` bound）。
+
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
 的：`list[Cat]` 不是 `list[Animal]`——要抽象一整族就用 spec bound（`[T: X]`），而非 subtype 代換。

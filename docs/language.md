@@ -139,6 +139,14 @@ type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (
 picked at runtime from the value's real type). This is **one-way** — once boxed, the concrete type is
 hidden and cannot be recovered (no downcast).
 
+On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
+(producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
+ops (`del`, pass, store, send). The **binary same-type** operations — `equal` / `==`, `Ord` comparison,
+and therefore `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
+removes, so it cannot be supplied. Two boxed values are thus **never comparable** — no type tag, no
+downcast, consistent with the one-way erasure. Box a value to dynamically dispatch its spec's methods; to
+compare, sort, or key it, keep the concrete type (a monomorphized `[T: S]` bound).
+
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
 dynamic dispatch. There is **no subtyping** between concrete types, so generics are **invariant**:

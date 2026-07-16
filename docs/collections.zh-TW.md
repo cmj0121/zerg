@@ -72,11 +72,15 @@ loop mut x in ys { x = x * 2 }            # 就地改——ys 必須是 mut
 ## 字串與位元組
 
 `str` 是**獨立的 immutable primitive**、不是 collection——它以 `rune` 走訪、且**不可索引**。透過 **`list[byte]`**
-（原始位元組、可含 NUL）或 **`list[rune]`**（code point）橋接：建字串＝收集進 `list` 再轉（`str(...)`）；編輯文字
-意味著一個**新的** `str`。
+（原始位元組、可含 NUL）或 **`list[rune]`**（code point）橋接：建字串＝收集進 `list` 再用 **`str(...)`** 轉，它會
+**驗證** `str` 的 invariant（從 bytes 需 valid UTF-8、無 embedded NUL）、違反就 **raise**——不信任的輸入用
+`guard { str(bytes) }` 降級成 `Result[str]`（沿用錯誤模型的 checked 路徑，不另設 constructor）。編輯文字永遠產生
+一個**新的** `str`。
 
-這些規則背後的 `Ord` / `Hash` spec（與 `Object` 的 `equal`）收錄在 [語言參考](language.zh-TW.md)（內建 spec）；`float` 既不實作
-`Ord` 也不實作 `Hash`，故永不是排序集合的元素、也永不是 key。
+`str` 實作 **`Ord`**、**`Hash`**、**`Add`**——收錄在 [語言參考](language.zh-TW.md)（內建 spec）：依 code point
+字典序排序、（不可變故）是天然的 `map`/`set` key、且 `a + b` **串接**成新 `str`。在迴圈裡建字串就用前述 list-collect，
+別用重複的 `+`（那會每步複製整個累積字串）。`float` 既不實作 `Ord` 也不實作 `Hash`，故永不是排序
+集合的元素、也永不是 key。（把非文字值格式化成文字——`int` 變 `"42"`、string interpolation——是另一件事，延後。）
 
 ## 待決
 

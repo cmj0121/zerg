@@ -211,14 +211,17 @@ earn a keyword. Equality is always the **structural** `equal`.
 
 **Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
 
-- **`Ord`** — `<` `<=` `>` `>=`, sort, min/max: a **total** order consistent with `equal`;
+- **`Ord`** — `<` `<=` `>` `>=`, sort, min/max: a **total** order consistent with `equal`. `str` orders
+  **lexicographically by code point** (== byte order, its UTF-8 being valid — not locale collation, a
+  separate stdlib concern); `float` does **not** implement it.
+- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key;
   `float` does **not** implement it.
-- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`; `float` does **not** implement it.
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
 - **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
   `nil` if none), and `code() -> byte?` (an optional small code).
 - **`Add` / `Sub` / `Mul` / `Div` / … and the bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
   `Shr`** — the value operators (`+ - * / %`, `& | ^ ~ << >>`, indexing, …): operator overloading, below.
+  `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](collections.md)).
 - **the cast spec** — an opt-in auto-cast: single-step, at an explicit target (see Type Casts).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes

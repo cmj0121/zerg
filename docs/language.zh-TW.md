@@ -177,14 +177,15 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 
 **Opt-in**——實作該 spec 才取得能力；泛型 bound 以它把關：
 
-- **`Ord`**——`<` `<=` `>` `>=`、sort、min/max：一個 **total** order，與 `equal` 一致；
-  `float` **不**實作。
-- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`；`float` **不**實作。
+- **`Ord`**——`<` `<=` `>` `>=`、sort、min/max：一個 **total** order，與 `equal` 一致。`str` 依 **code point
+  字典序**排序（＝ byte 序，因其 UTF-8 有效——非 locale collation，那是另一個 stdlib 功能）；`float` **不**實作。
+- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key；`float` **不**實作。
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
   `code() -> byte?`（可選小碼）。
 - **`Add` / `Sub` / `Mul` / `Div` / … 與 bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
-  `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。
+  `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，故 `+`
+  **串接**成新字串（見 [Collection](collections.zh-TW.md)）。
 - **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`

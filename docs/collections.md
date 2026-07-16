@@ -78,11 +78,18 @@ loop mut x in ys { x = x * 2 }            # edit in place — ys must be mut
 
 `str` is a **distinct immutable primitive**, not a collection — it iterates as `rune` and is **not
 indexable**. Bridge through **`list[byte]`** (raw bytes, may hold a NUL) or **`list[rune]`** (code points):
-build a string by collecting into a `list` and converting (`str(...)`); editing text means a **new** `str`.
+build a string by collecting into a `list` and converting with **`str(...)`**, which **validates** the
+`str` invariant (valid UTF-8 from bytes, no embedded NUL) and **raises** on violation — for untrusted
+input, `guard { str(bytes) }` demotes that to a `Result[str]` (the checked path from the error model; no
+separate constructor). Editing text always yields a **new** `str`.
 
-The `Ord` / `Hash` specs (and `Object`'s `equal`) behind these rules are catalogued in the
-[Language Reference](language.md) (Built-in specs); a `float` implements neither `Ord` nor `Hash`, so it
-is never a sorted-collection element or a key.
+`str` implements **`Ord`**, **`Hash`**, and **`Add`** — catalogued in the
+[Language Reference](language.md) (Built-in specs): it sorts lexicographically by code point, is a natural
+`map`/`set` key (being immutable), and `a + b` **concatenates** into a new `str`. Build a string up in a
+loop with that list-collect, not by repeated `+`, which would copy the whole
+accumulator each step. A `float` implements neither `Ord` nor `Hash`, so it is never a sorted-collection
+element or a key. (Formatting a non-text value into text — an `int` to `"42"`, string interpolation — is a
+separate concern, deferred.)
 
 ## Deferred
 

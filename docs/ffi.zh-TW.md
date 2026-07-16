@@ -29,6 +29,7 @@ FFI 有兩個方向，而它們刻意重用你已經有的機制，而不是各�
 | `byte`                      | `uint8_t`                          | Zerg 的 char／一個原始位元組                  |
 | `rune`                      | `int32_t`                          | 一個 Unicode **code point**（純量，非 UTF-8） |
 | `int`                       | `int64_t`                          | 溢位在 Zerg 內仍 abort（見「錯誤」）          |
+| `uint`                      | `uint64_t`                         | unsigned；溢位在 Zerg 內仍 abort              |
 | `float`                     | `double`                           | 純 IEEE-754，不變                             |
 | `str`                       | `const char*`                      | NUL 結尾的 UTF-8；入境 copy、出境 borrow      |
 | `list[T]`（FFI-safe `T`）   | `T*` **+** `size_t` 長度           | 一個 fat 值（指標 + 長度）；入境 copy         |
@@ -56,8 +57,10 @@ FFI 有兩個方向，而它們刻意重用你已經有的機制，而不是各�
   **flat**（連續、非 boxed）的 C layout，跨界時會把 Zerg 擁有的 heap 一起拖過去。先把它壓平成一個 FFI-safe 形狀
   （一個 id 或索引）。
 
-**C 的整數寬度。** Zerg 的 `int`／`byte`／`rune` 是固定的（i64／u8／i32）；C 的 `int`、`unsigned`、`long`、
-`size_t`……是平台寬度、**沒有 Zerg 對應**。`list` 的 `size_t` 長度由 compiler 產生、不是你命名的值——但一個必須
+**C 的整數寬度。** Zerg 的 `int`／`uint`／`byte`／`rune` 是固定的（i64／u64／u8／i32）——`uint` 恰好對映
+`uint64_t`——但 C 的**平台寬度** `int`、`unsigned`、`long`、
+`size_t`……仍**沒有固定的 Zerg 對應**（`size_t` 不保證是 64-bit）。`list` 的 `size_t` 長度由 compiler 產生、不是你
+命名的值——但一個必須
 命名 C `int` 或 `size_t` 的 `extern` 簽章，需要一組僅存在於邊界的 C 寬度別名（`c_int`、`c_uint`、`c_size`……）。
 那組別名**尚待決定**（見「待決問題」）；在它落地前，只有 Zerg 的固定寬度能跨界。
 

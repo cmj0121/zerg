@@ -32,6 +32,7 @@ any **non-recursive** `struct`/`enum` built transitively from those.
 | `byte`                         | `uint8_t`                           | Zerg's char / a raw octet                       |
 | `rune`                         | `int32_t`                           | a Unicode **code point** (a scalar, not UTF-8)  |
 | `int`                          | `int64_t`                           | overflow still aborts inside Zerg (see Errors)  |
+| `uint`                         | `uint64_t`                          | unsigned; overflow still aborts inside Zerg     |
 | `float`                        | `double`                            | pure IEEE-754, unchanged                        |
 | `str`                          | `const char*`                       | NUL-terminated UTF-8; copied in / borrowed out  |
 | `list[T]` (FFI-safe `T`)       | `T*` **+** `size_t` length          | a fat value (pointer + length); copied in       |
@@ -61,8 +62,9 @@ diagnostic, never silently:
   indirection, see Language Reference), so it has no **flat** (contiguous, non-boxed) C layout and would
   drag Zerg-owned heap across the boundary. Flatten it to an FFI-safe shape (an id or index) first.
 
-**C's integer widths.** Zerg's `int`/`byte`/`rune` are fixed (i64/u8/i32); C's `int`, `unsigned`,
-`long`, `size_t`, … are platform-width and have **no Zerg counterpart**. A `list`'s `size_t` length is
+**C's integer widths.** Zerg's `int`/`uint`/`byte`/`rune` are fixed (i64/u64/u8/i32) — `uint` maps to
+`uint64_t` exactly — but C's **platform-width** `int`, `unsigned`, `long`, `size_t`, … still have **no
+fixed Zerg counterpart** (`size_t` is not portably 64-bit). A `list`'s `size_t` length is
 compiler-emitted, never a value you name — but an `extern` signature that must name a C `int` or
 `size_t` needs a set of boundary-only C-width aliases (`c_int`, `c_uint`, `c_size`, …). That set is
 **deferred** (see Open questions); until it lands, only Zerg's fixed widths cross.

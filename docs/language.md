@@ -5,7 +5,8 @@ Detailed semantics behind the design principles in the [README](../README.md). A
 
 ## Primitive Types
 
-A small, fixed set — there is **no fixed-width integer ladder** (`i8`, `i16`, … do not exist):
+A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and the `byte` octet) with
+**no fixed-width ladder** beyond them (`i8`, `i16`, `u32`, … do not exist):
 
 | Type    | Description                                          |
 | ------- | ---------------------------------------------------- |
@@ -13,17 +14,44 @@ A small, fixed set — there is **no fixed-width integer ladder** (`i8`, `i16`, 
 | `byte`  | unsigned 8-bit — Zerg's char                         |
 | `rune`  | a single valid Unicode code point                    |
 | `int`   | signed 64-bit integer                                |
+| `uint`  | unsigned 64-bit integer                              |
 | `float` | IEEE-754 double (f64)                                |
 | `str`   | immutable, null-terminated Unicode (no embedded NUL) |
 | `nil`   | the placeholder value of `T?`                        |
 
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
-  **abort**, not a value (see Null-safety); `int`/`byte`/`rune` never wrap.
+  **abort**, not a value (see Null-safety); `int`/`uint`/`byte`/`rune` never wrap (opt into roll-over
+  with `+%`/`-%`/`*%`, below).
 - **`float` is IEEE-754:** overflow → `±Inf`, invalid → `NaN`, neither raises; `NaN` is unequal to
   everything (including itself).
 - **`str` iterates as `rune` and is not indexable** — convert to `list[byte]` (see
   [Collections](collections.md)) for raw bytes (and for
   binary that may contain a NUL, which a `str` never holds).
+
+### Integer operations
+
+- **Bitwise** — `&`, `|`, `^`, `~` (and, or, xor, complement) and the shifts `<<`, `>>`, on `int`/`uint`/`byte`.
+  `>>` is **arithmetic** on signed `int` (sign-extends) and **logical** on unsigned `uint`/`byte`
+  (zero-fills) — the type's sign decides, so no separate logical-shift operator exists; a shift by **≥ the
+  type width** raises (`OverflowError`). These desugar to specs (a user type may overload them — see
+  Built-in specs), and the bitwise **symbols** never collide with the logical **keywords** `not`/`and`/`or`.
+- **Wrapping** — `+`, `-`, `*` raise on overflow; the **`%`-suffixed** `+%`, `-%`, `*%` (and unary `-%`)
+  instead **wrap modulo 2^n** — for hashing, checksums, and bit-mixing where roll-over is the intent. The
+  **checked** form is already `guard { a + b }` → `Result` (no `checked_*` API); **saturating** is deferred.
+- **Mixed `int`/`uint` is never implicit** — `int + uint` is a compile error (no implicit conversion,
+  which also sidesteps C's signed/unsigned comparison traps); cast one side (`int(u) + i`).
+
+### Numeric literals
+
+A numeric literal is **untyped** — it adopts the type its context demands (a typed binding `x: uint = 5`,
+a typed parameter, a `return`, or the other operand of a typed expression), checked **at compile time**.
+Unconstrained, an integer literal defaults to `int` and a fractional/exponent literal (`1.0`, `1e3`) to
+`float`; the non-decimal bases `0x…` / `0o…` / `0b…` are ordinary integer literals.
+
+- A literal that **does not fit** its required type is a **compile error** (`byte = 300`, `uint = -1`, an
+  `int` literal past i64) — never a runtime overflow.
+- **Integer and float stay separate**: an integer literal never becomes a `float`; write `1.0` or
+  `float(1)` for a float (there is no implicit int→float, which could silently lose precision).
 
 ## Types
 
@@ -184,8 +212,8 @@ earn a keyword. Equality is always the **structural** `equal`.
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
 - **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
   `nil` if none), and `code() -> byte?` (an optional small code).
-- **`Add` / `Sub` / `Mul` / `Div` / …** — the value operators (`+ - * / %`, indexing, …): operator
-  overloading, below.
+- **`Add` / `Sub` / `Mul` / `Div` / … and the bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
+  `Shr`** — the value operators (`+ - * / %`, `& | ^ ~ << >>`, indexing, …): operator overloading, below.
 - **the cast spec** — an opt-in auto-cast: single-step, at an explicit target (see Type Casts).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
@@ -218,6 +246,15 @@ element as an in-place `mut` — only when `X` is `mut`.
 No type converts implicitly **by default** — an `int` is not a `bool`; cast with a constructor-style
 call (`bool(8)`, `int(c)`). Primitive conversions are **compiler built-in**; a user type cannot add
 an auto-cast to a primitive.
+
+**Narrowing a primitive** can lose the value, so it is checked like arithmetic:
+
+- An integer cast whose value **does not fit** the target raises (`OverflowError`) — `byte(300)`,
+  `uint(-5)`, `int(u)` for a `uint` past i64. The **checked** form is `guard { byte(x) }` → `Result`; to
+  **truncate** to the low bits, mask first — `byte(x & 0xFF)` always fits, so it never raises. Saturating
+  is deferred.
+- **`float` → integer** drops the fractional part (`int(3.7)` is `3` — the intent, not a bug) but raises
+  when the integer part is **out of range** or the float is `NaN` / `±Inf`.
 
 A **user type** may opt in to an **auto-cast** to another type, kept decidable by two rules:
 

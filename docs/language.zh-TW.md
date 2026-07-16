@@ -4,7 +4,8 @@
 
 ## 原始型別（Primitive Types）
 
-一組精簡且固定的集合——**沒有固定寬度的整數階梯**（`i8`、`i16`……都不存在）：
+一組精簡且固定的集合——三種整數寬度（signed `int`、unsigned `uint`、以及 `byte` octet），此外**沒有固定寬度階梯**
+（`i8`、`i16`、`u32`……都不存在）：
 
 | 型別    | 說明                                                       |
 | ------- | ---------------------------------------------------------- |
@@ -12,13 +13,39 @@
 | `byte`  | unsigned 8-bit——Zerg 的 char                               |
 | `rune`  | 單一個有效的 Unicode code point                            |
 | `int`   | signed 64-bit 整數                                         |
+| `uint`  | unsigned 64-bit 整數                                       |
 | `float` | IEEE-754 double（f64）                                     |
 | `str`   | immutable、null-terminated 的 Unicode（不含 embedded NUL） |
 | `nil`   | `T?` 的 placeholder 值                                     |
 
-- **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值（見 Null-safety）；`int`/`byte`/`rune` 絕不環繞。
+- **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值
+  （見 Null-safety）；`int`/`uint`/`byte`/`rune` 絕不環繞（要環繞就用下方的 `+%`/`-%`/`*%`）。
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
-- **`str` 以 `rune` 迭代、不可索引**——要原始位元組就轉 `list[byte]`（見 [Collection](collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永不含 NUL）。
+- **`str` 以 `rune` 迭代、不可索引**——要原始位元組就轉 `list[byte]`
+  （見 [Collection](collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永不含 NUL）。
+
+### 整數運算（Integer operations）
+
+- **Bitwise**——`&`、`|`、`^`、`~`（and、or、xor、complement）與位移 `<<`、`>>`，適用 `int`/`uint`/`byte`。`>>` 對 signed
+  `int` 是 **arithmetic**（補符號位）、對 unsigned `uint`/`byte` 是 **logical**（補 0）——由型別的正負號決定，故不
+  需另設 logical-shift 運算子；位移量 **≥ 型別寬度**會 raise（`OverflowError`）。這些 desugar 到 spec（user type 可
+  多載——見內建 spec），且 bitwise **符號**永不與邏輯**關鍵字** `not`/`and`/`or` 撞臉。
+- **Wrapping**——`+`、`-`、`*` 溢位 raise；**`%` 後綴**的 `+%`、`-%`、`*%`（及一元 `-%`）改為 **mod 2^n 環繞**——供
+  hashing、checksum、bit-mixing 這類「刻意繞回」的場景。**checked** 版已經是 `guard { a + b }` → `Result`（不需
+  `checked_*`）；**saturating** 延後。
+- **`int`/`uint` 混合絕不隱式**——`int + uint` 是 compile error（無隱式轉換，也順帶避開 C 的 signed/unsigned 比較
+  地雷）；顯式 cast 一側（`int(u) + i`）。
+
+### 數值字面量（Numeric literals）
+
+數值字面量是 **untyped** 的——它採用 context 要求的型別（typed binding `x: uint = 5`、typed 參數、`return`、或與它
+運算的另一個 typed 值），在**編譯期**檢查。無 context 時，整數字面量預設為 `int`、帶小數/指數的字面量（`1.0`、`1e3`）
+預設為 `float`；非十進位 `0x…` / `0o…` / `0b…` 也是普通整數字面量。
+
+- 字面量**放不進**要求的型別 → **compile error**（`byte = 300`、`uint = -1`、超過 i64 的 `int` 字面量）——不是
+  runtime overflow。
+- **整數與 float 分開**：整數字面量絕不變成 `float`；要 float 就寫 `1.0` 或 `float(1)`（沒有隱式 int→float，那會
+  悄悄失精度）。
 
 ## 型別（Types）
 
@@ -152,7 +179,8 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
   `code() -> byte?`（可選小碼）。
-- **`Add` / `Sub` / `Mul` / `Div` / …**——值運算子（`+ - * / %`、indexing…）：運算子多載，見下。
+- **`Add` / `Sub` / `Mul` / `Div` / … 與 bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
+  `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。
 - **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
@@ -179,6 +207,14 @@ producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，所�
 
 **預設**沒有型別會隱式轉換——`int` 不是 `bool`；要轉就用 constructor 風格呼叫（`bool(8)`、`int(c)`）。primitive
 之間的轉換由**編譯器內建**；使用者型別不能對 primitive 加 auto-cast。
+
+**窄化一個 primitive** 可能丟失值，因此比照算術檢查：
+
+- 整數 cast 的值**放不進**目標就 raise（`OverflowError`）——`byte(300)`、`uint(-5)`、對超過 i64 的 `uint` 做
+  `int(u)`。**checked** 版是 `guard { byte(x) }` → `Result`；要**截斷**到低位就先遮罩——`byte(x & 0xFF)` 一定 fit、
+  故不 raise。saturating 延後。
+- **`float` → 整數**捨去小數（`int(3.7)` 是 `3`——是本意、非 bug），但當整數部分**超出範圍**、或 float 是
+  `NaN` / `±Inf` 時 raise。
 
 **使用者型別**可 opt-in 一個對另一型別的 **auto-cast**，靠兩條規則保持可判定：
 

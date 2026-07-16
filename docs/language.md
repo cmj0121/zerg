@@ -242,10 +242,15 @@ shared by reference?" always has a definite answer: only `chan` and `Ref[T]` are
 
 **Operators desugar to specs**, so a user type may overload the value operators by implementing the
 matching one — `==` / `<` already route through `equal` / `Ord`. An overload must mean the
-**conventional** thing (a `+` that is not addition is abuse, against `small and crisp`). The null-safety
-operators (`?`, `??`, `?.`, `!`) and logical `not` are fixed constructs — never
-overloadable. `float` sits out `Ord` and `Hash` because its `NaN` breaks both a total order and the
-`equal ⇒ hash` law, so a `float` is never a sorted-collection element or a key.
+**conventional** thing (a `+` that is not addition is abuse, against `small and crisp`). The **logical
+operators are keywords** — `not` (unary), and the **short-circuiting** `and` / `or` — over `bool` only,
+yielding `bool` (no truthiness; cast with `bool(x)`): `and` skips its right operand when the left is
+`false`, `or` when the left is `true`, and logical xor is just `a != b` (there is no `xor` keyword — it
+cannot short-circuit, so it is an ordinary operation, not a keyword). These, and the null-safety
+operators (`?`, `??`, `?.`, `!`), are **fixed constructs — never overloadable**; the bitwise symbols
+(`& | ^ ~`, Integer operations) never collide with them. `float` sits out `Ord` and `Hash` because its
+`NaN` breaks both a total order and the `equal ⇒ hash` law, so a `float` is never a sorted-collection
+element or a key.
 
 **Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
 `Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has

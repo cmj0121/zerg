@@ -202,9 +202,12 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
 
 **運算子 desugar 到 spec**，所以 user type 可藉實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
-多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。null-safety 運算子（`?`、`??`、`?.`、
-`!`）與 logical `not` 是固定構造——永不可多載。`float` 退出 `Ord` 與 `Hash`，因為 `NaN` 同時破壞全序與
-`equal ⇒ hash`，故 `float` 永不是排序集合的元素、也永不是 key。
+多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。**邏輯運算子都是關鍵字**——`not`
+（一元），以及**會短路的** `and` / `or`——只作用於 `bool`、回傳 `bool`（不吃 truthiness；要判斷就 `bool(x)`）：`and`
+在左側為 `false` 時跳過右側、`or` 在左側為 `true` 時跳過右側；logical xor 就是 `a != b`（**沒有** `xor` 關鍵字——它
+無法短路，是普通運算、不是關鍵字）。這些、以及 null-safety 運算子（`?`、`??`、`?.`、`!`），都是**固定構造——永不
+可多載**；bitwise 符號（`& | ^ ~`，見整數運算）永不與它們撞臉。`float` 退出 `Ord` 與 `Hash`，因為 `NaN` 同時破壞
+全序與 `equal ⇒ hash`，故 `float` 永不是排序集合的元素、也永不是 key。
 
 **迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)`
 表示結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable[T]`** 有 `iter()`、產生一個全新的

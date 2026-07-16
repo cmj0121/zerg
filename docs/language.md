@@ -101,7 +101,7 @@ inherent methods are invisible. Hence:
   `del` it, pass it, store it, or send it over a channel — not a single method.
 - **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal,
   **auto-derived** method set — `equal`, `copy`, `debug`, … — generated structurally, field by field
-  (a contained channel is refcount-bumped, matching the copy rule). A type may **explicitly override**
+  (a contained `Ref` value is refcount-bumped, matching the copy rule). A type may **explicitly override**
   any of them (e.g. an order-insensitive `equal`); otherwise it inherits the derived version. Because
   every type implements `Object`, bounding `T: Object` never narrows which types are accepted — it
   only unlocks those methods.
@@ -159,6 +159,14 @@ earn a keyword. Equality is always the **structural** `equal`.
 - **`Add` / `Sub` / `Mul` / `Div` / …** — the value operators (`+ - * / %`, indexing, …): operator
   overloading, below.
 - **the cast spec** — an opt-in auto-cast: single-step, at an explicit target (see Type Casts).
+
+**`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
+a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead
+of deep-copying, and its `drop(self)` runs **once**, at the last holder's scope exit. The compiler
+supplies the counting and the by-ref copy; only the `drop` body is written. `Ref` is **sealed** — its
+sole implementers are the built-in **`chan`** (whose `drop` is close) and the stdlib **`Ref[T]`** resource
+box (see Values & Memory). Ordinary code **uses `Ref[T]`; it never implements `Ref`** — so "is this value
+shared by reference?" always has a definite answer: only `chan` and `Ref[T]` are.
 
 **Operators desugar to specs**, so a user type may overload the value operators by implementing the
 matching one — `==` / `<` already route through `equal` / `Ord`. An overload must mean the
@@ -220,10 +228,22 @@ through:
   a compile error; runtime index aliasing is the caller's job.
 - **Channels** — shared by ref across coroutines, for communication only.
 
-A channel is the **sole exception** to scope-owning: inherently shared across coroutines, the runtime
-**reference-counts** it and frees it when its last holder's scope exits — everything else is pure
-scope-owned, no GC/refcount. Copying a value refcount-bumps any channel it (transitively) contains
-and deep-copies the rest; a channel is shared, never duplicated.
+**Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
+the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The
+runtime counts holders and frees it at the **last** holder's scope exit; everything else stays pure
+scope-owned, no GC/refcount. Copying a value refcount-bumps any `Ref` value it (transitively) contains
+and deep-copies the rest; a `Ref` value is shared, never duplicated.
+
+### `Ref[T]` — a resource that outlives its scope
+
+Most cleanup is just memory, which scope exit frees automatically. A **resource whose release is not that
+automatic free** — a foreign handle (see [FFI](ffi.md)), anything that must be closed **exactly once** — and
+that must **escape the scope that opened it** (returned, stored in a field, sent over a channel) is held
+in a **`Ref[T]`**: a reference-counted box carrying the value and a `drop` action. Because it copies
+**by-ref**, every copy names **one** resource, and `drop` runs **once**, at the last holder's scope exit
+(or an explicit `del`). This is the guarantee a bare copy-by-value handle cannot give — two copies of a
+plain handle would each try to free the one resource. Reach for `Ref[T]` **only when the resource
+escapes**; a resource confined to one scope wants `defer` (below).
 
 ### Re-declaration & shadowing
 
@@ -248,17 +268,18 @@ only a _consequence_: it happens when the revoked access was the **owning** one 
 remains; otherwise `del` merely ends this name's (or this borrow's) access early and the owner keeps
 the storage.
 
-| `del` target                          | Own? | Effect                                                         |
-| ------------------------------------- | ---- | -------------------------------------------------------------- |
-| local, by-value param, captured copy  | yes  | last access → **storage freed**                                |
-| `mut` param (borrows caller's var)    | no   | ends this call's borrow → **not freed**; caller keeps it       |
-| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it |
-| channel                               | ref  | drops a holder (refcount--); last sender → **closes**          |
+| `del` target                          | Own? | Effect                                                                      |
+| ------------------------------------- | ---- | --------------------------------------------------------------------------- |
+| local, by-value param, captured copy  | yes  | last access → **storage freed**                                             |
+| `mut` param (borrows caller's var)    | no   | ends this call's borrow → **not freed**; caller keeps it                    |
+| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it              |
+| channel, `Ref[T]`                     | ref  | drops a holder (refcount--); last holder runs **`drop`** (a channel closes) |
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
 rules already stop an owner from outliving-then-freeing under a live borrower (a `mut` parameter is
 confined to its call; an escaping closure owns copies of its captures). The compiler knows statically
-whether each `del` frees or merely revokes — only channels carry a runtime refcount.
+whether each `del` frees or merely revokes — only `Ref` values (channels and `Ref[T]`) carry a runtime
+refcount.
 
 `del` is **flow-consistent**: once a name is `del`-ed on any path, it is treated as dead on _every_
 subsequent path (no runtime drop flags). A `del` inside one arm of an `if` therefore makes the name
@@ -266,6 +287,26 @@ unusable after the merge, symmetrically with the other arms.
 
 `del ch` is also the direct way to **close a channel early** — it drops your hold on `ch` now, which
 closes the channel if you were its last sender, without wrapping it in a tighter block.
+
+### `defer` — cleanup at block exit
+
+`defer stmt` schedules `stmt` to run when the enclosing **block** exits — on **every** path out,
+**including an abort unwind**. It is the procedural tool for an effect bound to a scope — release a lock,
+flush a buffer, close a scope-local resource — needing no type at all:
+
+```text
+{
+    lock.acquire()
+    defer lock.release()     # runs on every exit — normal, early return, or an abort inside risky()
+    risky()
+}
+```
+
+Several `defer`s in a block run **last-scheduled-first**, interleaved with scope-owned frees and `Ref`
+drops in reverse construction order, so teardown mirrors setup. Three constructs share one axis — _when_
+cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** exit; a `Ref[T]` drop fires
+at the **last holder's** exit. The dividing line is a single question — does the resource escape its
+scope? **No → `defer`; yes → `Ref[T]`.**
 
 ## Construction & encapsulation
 
@@ -350,7 +391,8 @@ observable answer — the captured value can never change, so the question disap
 
 Zerg is concurrent through **coroutines and channels only**: `spawn` (Go's `go`) on an **M:N
 scheduler**, fire-and-forget with no join/handle, capturing **only immutable values and channels**.
-Channels are the sole reference-counted, by-ref conduit — payloads copied, **auto-closed** when their
+Channels are the reference-counted, by-ref **conduit** (a `Ref` type built for communication; `Ref[T]`
+is its resource-holding sibling — see Values & Memory) — payloads copied, **auto-closed** when their
 last sender leaves, received as **`Result[T]`** (`Right` = closed, carrying a crash `Err` or the
 `StopIteration` sentinel), and multiplexed with **`select`**.
 
@@ -416,10 +458,11 @@ error, an `enum` for a family — the same value serves both tiers; the bridges 
 `IndexError`, `KeyError`, `SendOnClosedError`, `DeadlockError`) or any `Err` you `raise` —
 marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
-unwind that runs scope cleanup** — every scope from the raise point to where it stops is freed in
-order and its channels refcount-decremented, exactly like a normal scope exit; never a bare
-`abort()`. An unwind that reaches the top of its stack crashes that stack: the main stack ends the
-program, a coroutine's stack ends only that coroutine (`spawn` is fire-and-forget — see Concurrency).
+unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
+`defer`s** and is freed in order, its `Ref` values (channels and `Ref[T]`) refcount-decremented, exactly
+like a normal scope exit; never a bare `abort()`. An unwind that reaches the top of its stack crashes
+that stack: the main stack ends the program, a coroutine's stack ends only that coroutine (`spawn` is
+fire-and-forget — see Concurrency).
 
 **`guard` — demote an abort to a value (abort → value).** `guard { … }` runs a block and reifies any
 abort inside it as an `Err`, so the expression is always a **`Result[T]`** (`T` = the block's value

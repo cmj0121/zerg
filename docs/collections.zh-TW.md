@@ -15,8 +15,9 @@ immutable primitive（見下）。
 ## 是值，不是 reference
 
 collection 是 **scope-owned 值**：**copy-by-value**（compiler 安全時 elide 或 move）、scope 結束即釋放、**無
-aliasing**——複製會深拷貝元素、並對含有的 channel refcount-bump，就是既有記憶體規則。不存在「兩個名字共用一個容器」：
-讀取共享用不可變傳參、修改共享用 `mut` param；經 channel 傳送的 collection 一如任何 payload 是複製。
+aliasing**——複製會深拷貝元素、並對含有的 `Ref` 值（channel 或 `Ref[T]`）refcount-bump，就是既有記憶體規則。
+不存在「兩個名字共用一個容器」：讀取共享用不可變傳參、修改共享用 `mut` param；經 channel 傳送的 collection 一如
+任何 payload 是複製。
 
 ## 可變性——一個 per-binding 的 knob
 

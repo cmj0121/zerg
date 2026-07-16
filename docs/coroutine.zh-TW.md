@@ -15,9 +15,10 @@ join/await；結果與完成**只透過 channel** 觀察。
 
 ## Channels
 
-channel 是一條型別化的 by-ref 管道，payload **複製**流過它。它是 Zerg **唯一 reference-counted 的值**（其餘皆
-scope-owned）：在最後一個持有者的 scope 結束時 free，複製一個值會 bump 它所含 channel 的 refcount、其餘深拷貝。
-channel 是 **FIFO** 且為**一等值**（可被送進另一條 channel）。
+channel 是一條型別化的 by-ref 管道，payload **複製**流過它。它是一個 **reference-counted 的值**——`Ref` 的內建
+實作者（與 `Ref[T]` 並列；見 [語言參考](language.zh-TW.md)），scope-owning 的例外：在最後一個持有者的 scope 結束時
+free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**（可被送進另一條
+channel）。
 
 ```text
 ch := chan[int]()      # unbuffered——每次 send 與一次 receive rendezvous

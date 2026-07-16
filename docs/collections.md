@@ -16,9 +16,10 @@ hold a NUL); `str` stays a separate immutable primitive (below).
 ## Values, not references
 
 A collection is a **scope-owned value**: **copy-by-value** (the compiler elides or moves when safe), freed
-at scope exit, **no aliasing** — copying deep-copies elements and refcount-bumps any contained channel, the
-existing memory rule. There is no shared container behind two names: share for **reading** by immutable
-pass, for **mutation** by a `mut` parameter; a collection sent over a channel is copied like any payload.
+at scope exit, **no aliasing** — copying deep-copies elements and refcount-bumps any contained `Ref` value (a
+channel or `Ref[T]`), the existing memory rule. There is no shared container behind two names: share for
+**reading** by immutable pass, for **mutation** by a `mut` parameter; a collection sent over a channel is
+copied like any payload.
 
 ## Mutability — one per-binding knob
 

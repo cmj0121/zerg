@@ -79,23 +79,24 @@ extern "C" {
 索引、做算術，或用 struct literal 建構（它沒有欄位）——它只會以 `extern` 的回傳或 out-parameter 形式出現。
 
 一個 handle 是一個**像任何 primitive 一樣 by-value 複製的 opaque token**——複製它就是複製那些 bit、在 Zerg
-的意義上不共享任何東西、也不釋放任何東西。所以它**不是**記憶體模型的新例外：`chan` 仍是唯一 reference-counted
-的值，而一個含 handle 的 struct 也照樣像其他值一樣深拷貝。唯一的微妙之處是這個 token **命名了一個 Zerg 不擁有的
-資源**：那個外部配置完全活在記憶體模型之外，所以 scope 結束只釋放 token（不過是些 bit，微不足道）、卻永不釋放
-資源；對一個 handle binding 下 `del` 也只終止名字，不釋放任何外部東西。資源**只**由一次明確、配對的 `extern`
-free 釋放。
+的意義上不共享任何東西、也不釋放任何東西。所以裸 handle **不是**記憶體模型的新例外：它就是些 bit，而一個含它的
+struct 也照樣像其他值一樣深拷貝（reference-counted 的值仍是 `chan` 與 `Ref[T]`，裸 handle 兩者皆非）。唯一的
+微妙之處是這個 token **命名了一個 Zerg 不擁有的資源**：那個外部配置完全活在記憶體模型之外，所以 scope 結束只
+釋放 token（不過是些 bit，微不足道）、卻永不釋放資源；對一個 handle binding 下 `del` 也只終止名字，不釋放任何
+外部東西。資源**只**由一次明確、配對的 `extern` free 釋放。
 
-把裸 handle **包進一個你自己擁有的 newtype**——一個單欄位 `struct`（[package.zh-TW.md](package.zh-TW.md) 的
-newtype 模式，此處**不**採那個可選的 auto-cast，否則會把 handle 再度外洩）。它的**私有欄位使它在 module 外不透明**
-（見語言參考），所以它只對外提供安全方法與一個 `del`／close，使裸 handle 永不逸出到一般程式碼：
+把 handle **包進一個 `Ref[sqlite3]`**——那個 reference-counted 資源盒（見語言參考），其 `drop` 就是配對的 `extern`
+free——再放進一個你自己擁有的 newtype（一個單欄位 `struct`，[package.zh-TW.md](package.zh-TW.md) 的模式，**不**採那個
+會把盒子再度外洩的 auto-cast）。它的**私有欄位使它在 module 外不透明**，所以只對外提供安全方法，而 `Ref[T]` 讓 close
+**精確**：被複製、回傳、或跨 `spawn` 送出，每個 `Db` 都命名同一條連線、在最後一個持有者的 scope 退出時**關閉一次**：
 
 ```text
-struct Db { h: sqlite3 }                               # 私有欄位 ⇒ 在其 module 外不透明
+struct Db { h: Ref[sqlite3] }                          # 私有 + refcounted ⇒ 不透明、只關一次
 
 pub fn open(path: str) -> Db? {
     mut h: sqlite3? = nil                              # 一個 mut handle out-parameter：C 的 sqlite3**
     if sqlite3_open(path, h) != 0 { return nil }       # 手動映射 C 的狀態碼——沒有魔法
-    return Db{ h: h! }
+    return Db{ h: Ref(h!, sqlite3_close) }             # 盒子的 drop 就是配對的 free
 }
 ```
 
@@ -103,12 +104,11 @@ pub fn open(path: str) -> Db? {
 參數路徑（見語言參考），沒有新東西。一個**就地填入呼叫端 byte buffer** 的 C 函式是另一種機制（它透過指標*寫入*，
 不是值的寫回）；那個 write-back 協定尚待決定（見「待決問題」）。
 
-**wrapper 藏住 token；它並不讓資源變安全。** 因為 `Db` 和一切一樣是 copy-by-value，複製它就複製了 handle
-的 bit——兩個 `Db` 命名同一個 `sqlite3`，於是 close 其一後，另一個就是 use-after-free，而這是透過普通的「安全」
-程式碼發生的。Zerg 沒有 move（它只是隱形最佳化），無法禁止那次複製，所以 newtype **集中**了 free、把裸 token
-藏在視線外，卻無法靜態排除 double-free／use-after-free。解法——一個 `Drop`-refcounted 資源型別（channel 式：copy
-refcount-bump、最後持有者處恰好 free 一次）——**與 FFI 一同延後**（見下）。在它之前，把 handle wrapper 當成一種
-紀律，而非保證。
+**`Ref[sqlite3]` 讓 close 精確。** 複製一個 `Db` 是對盒子 refcount-bump、而非複製裸 token，其 `drop`——配對的
+`sqlite3_close`——在最後一個 `Db` 離開 scope（或被 `del`）時**跑一次**。這正是裸的 `struct Db { h: sqlite3 }` 給不了
+的保證——那裡兩份 copy 會各自試圖關掉同一條連線；而私有欄位讓裸 token 無法逸出，於是這個保證在普通的「安全」
+程式碼中也成立。`Ref[T]` 是**逃出 scope** 的資源之家——在單一 scope 內開啟並關閉的 handle 應改用 `defer`
+（見語言參考）。
 
 ## 邊界上的所有權與生命週期
 
@@ -124,8 +124,8 @@ Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與
 - **C 回傳的一般 scalar 值**——一個純 scalar 的 `struct`、一個 `int`、一個 `bool`：Zerg 現在完全擁有的一份副本，
   由普通 scope 規則釋放。
 - **C 配置、且 _Zerg 之後必須釋放_ 的 buffer 或資源**——**不**以 `str`／`list` 回來（那會在 Zerg 複製後洩漏 C 的
-  原件），而是以一個 **opaque handle** 回來，配一個明確、由 wrapper 呼叫的 `extern` free。永遠沒有對外部記憶體的
-  隱式釋放。
+  原件），而是以一個 **opaque handle** 回來，配一個明確、由 wrapper 以 `Ref[T]` 的 `drop` 呼叫的 `extern` free
+  （見 opaque handle）。永遠沒有對外部記憶體的隱式釋放。
 
 ## 匯出一個 package（Zerg → C）
 
@@ -210,9 +210,6 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 
 - **C 寬度整數別名**（`c_int`、`c_uint`、`c_size`、`c_long`……），讓 `extern` 簽章能命名 C 的平台寬度整數，而不只是
   Zerg 的固定寬度。
-- **一個 `Drop`-refcounted 資源型別**（channel 式：copy refcount-bump、`drop` 於最後持有者跑一次），讓 handle
-  wrapper 恰好 free 一次——**與 FFI 一同延後**，因為核心語言不需要 user-facing 資源型別（記憶體 scope-owned、
-  channel refcounted）。
 - C 呼叫者讀作 `.tag` 的 **tagged union 具體 C layout**（discriminant 型別、variant 值、成員命名、對齊）。
 - 讓 C 函式就地填入的 `list[byte]` 的 **write-back 協定**（一個可變 out-buffer）——常見的 `read`／`recv` 形狀，
   目前尚無法表達。

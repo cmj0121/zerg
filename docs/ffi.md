@@ -86,25 +86,28 @@ It **cannot** be dereferenced, indexed, arithmetic'd, or built from a struct lit
 it arrives only as an `extern` return or out-parameter.
 
 A handle is an **opaque token copied by value like any primitive** — duplicating it copies the bits,
-shares nothing in Zerg's terms, and frees nothing. So it is **not** a new exception to the memory model:
-`chan` stays the sole reference-counted value, and a struct containing a handle still deep-copies like
-any other. The one subtlety is that the token **names a resource Zerg does not own**: the foreign
+shares nothing in Zerg's terms, and frees nothing. So a bare handle is **not** a new exception to the
+memory model: it stays plain bits, and a struct containing one still deep-copies like any other (the
+reference-counted values remain `chan` and `Ref[T]`, which a bare handle is neither). The one subtlety is
+that the token **names a resource Zerg does not own**: the foreign
 allocation lives entirely outside the memory model, so scope exit frees the token (trivially, being mere
 bits) but never the resource, and `del` on a handle binding ends the name without releasing anything
 foreign. The resource is released **only** by an explicit paired `extern` free.
 
-Wrap a raw handle in a **newtype you own** — a single-field `struct` (the newtype pattern from
-[package.md](package.md), here **without** the optional auto-cast, which would re-expose the handle). Its
-**private field makes it opaque** outside its module (Language Reference), so it offers only safe methods
-and a `del`/close and the bare handle never escapes into ordinary code:
+Wrap the handle in a **`Ref[sqlite3]`** — the reference-counted resource box (Language Reference) whose
+`drop` is the paired `extern` free — inside a **newtype you own** (a single-field `struct`, the pattern
+from [package.md](package.md), **without** the auto-cast that would re-expose the box). Its **private
+field makes it opaque** outside its module, so it offers only safe methods, and `Ref[T]` makes the close
+**exact**: copied, returned, or sent across `spawn`, every `Db` names one connection that closes **once**,
+at the last holder's scope exit:
 
 ```text
-struct Db { h: sqlite3 }                               # private field ⇒ opaque outside its module
+struct Db { h: Ref[sqlite3] }                          # private + refcounted ⇒ opaque, closed once
 
 pub fn open(path: str) -> Db? {
     mut h: sqlite3? = nil                              # a mut handle out-parameter: C's sqlite3**
     if sqlite3_open(path, h) != 0 { return nil }       # map C's status by hand — no magic
-    return Db{ h: h! }
+    return Db{ h: Ref(h!, sqlite3_close) }             # the box's drop is the paired free
 }
 ```
 
@@ -113,13 +116,12 @@ ordinary `mut`-parameter path (Language Reference), nothing new. A C function th
 **byte buffer in place** is a different mechanism (it writes _through_ a pointer, not a value copy-back);
 that write-back protocol is deferred (see Open questions).
 
-**The wrapper hides the token; it does _not_ make the resource safe.** Because `Db` is copy-by-value like
-everything, copying it duplicates the handle bits — two `Db`s naming one `sqlite3`, so closing one leaves
-the other a use-after-free, reached through ordinary "safe" code. Zerg has no move (it is only a silent
-optimization), so a copy cannot be forbidden; the newtype **centralizes** the free and hides the raw
-token, but cannot statically rule out double-free / use-after-free. The fix — a `Drop`-refcounted resource
-type (channel-style: copy refcount-bumps, freed once at the last holder) — is **deferred with FFI** (see
-below). Until then, treat a handle wrapper as a discipline, not a guarantee.
+**The `Ref[sqlite3]` makes the close exact.** Copying a `Db` refcount-bumps the box instead of duplicating
+a bare token, and the `drop` — the paired `sqlite3_close` — runs **once**, when the last `Db` leaves scope
+(or is `del`-ed). This is the guarantee a bare `struct Db { h: sqlite3 }` cannot give, where two copies
+would each try to close one connection; the private field keeps the raw token from escaping, so the
+guarantee holds through ordinary "safe" code. `Ref[T]` is the home for a resource that **escapes its
+scope** — a handle opened and closed within a single scope wants `defer` instead (Language Reference).
 
 ## Ownership & lifetime at the boundary
 
@@ -140,8 +142,8 @@ boundary, copy" ethos — **copied into Zerg, borrowed out to C**:
   owns outright, freed by the ordinary scope rule.
 - **A buffer or resource C allocated that _Zerg must later free_** — does **not** come back as
   `str`/`list` (that would leak C's original after Zerg copies it). It comes back as an **opaque handle**,
-  paired with an explicit `extern` free the wrapper calls. There is no implicit free of foreign memory —
-  ever.
+  paired with an explicit `extern` free the wrapper calls as a `Ref[T]`'s `drop` (see Opaque handles).
+  There is no implicit free of foreign memory — ever.
 
 ## Exporting a package (Zerg → C)
 
@@ -241,9 +243,6 @@ Deferred for a later design pass — none blocks the model above:
 
 - **C-width integer aliases** (`c_int`, `c_uint`, `c_size`, `c_long`, …) so an `extern` signature can name
   C's platform-width integers, not just Zerg's fixed widths.
-- **A `Drop`-refcounted resource type** (channel-style: copy refcount-bumps, `drop` runs once at the last
-  holder) so a handle wrapper frees exactly once — deferred **with FFI**, since the core language needs no
-  user-facing resource type (memory is scope-owned, channels refcounted).
 - The concrete **C layout of a tagged union** (discriminant type, variant values, member names,
   alignment) that a C caller reads as `.tag`.
 - A **write-back protocol** for a `list[byte]` a C function fills in place (a mutable out-buffer) — the

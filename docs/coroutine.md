@@ -18,9 +18,10 @@ handle, no join/await; results and completion are observed **only through channe
 
 ## Channels
 
-A channel is a typed, by-ref conduit whose payloads are **copied** through it. It is the **sole
-reference-counted value** in Zerg (all else is scope-owned): freed when its last holder's scope
-exits, and copying a value refcount-bumps any channel it contains while deep-copying the rest. A
+A channel is a typed, by-ref conduit whose payloads are **copied** through it. It is a
+**reference-counted value** — the built-in implementer of `Ref` (alongside `Ref[T]`; see
+[Language Reference](language.md)), the exception to scope-owning: freed when its last holder's scope
+exits, and copying a value refcount-bumps any `Ref` value it contains while deep-copying the rest. A
 channel is **FIFO** and **first-class** (it can be sent over another channel).
 
 ```text

@@ -83,7 +83,7 @@ msg := match ev {
 - **空的 `spec`** 是合法的 bound、被所有型別滿足，但它保證**零**行為：這種 `T` 只有 memory model 給的**結構能力**
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
 - **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小、**auto-derived** 的 method——`equal`、`copy`、
-  `debug`……——由結構逐欄位自動生成（含 channel 則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
+  `debug`……——由結構逐欄位自動生成（含 `Ref` 值則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
   （例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
   可接受的型別集——它只是解鎖那些 method。
 
@@ -130,6 +130,12 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
   `code() -> byte?`（可選小碼）。
 - **`Add` / `Sub` / `Mul` / `Div` / …**——值運算子（`+ - * / %`、indexing…）：運算子多載，見下。
 - **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
+
+**`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
+型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(self)` 在最後一個持有者的 scope 退出時
+**跑一次**。編譯器提供計數與 by-ref 複製；只有 `drop` 的內容由使用者寫。`Ref` 是 **sealed** 的——唯二實作者是內建的
+**`chan`**（其 `drop` 即 close）與 stdlib 的 **`Ref[T]`** 資源盒（見 Values & Memory）。一般程式碼**使用 `Ref[T]`、
+絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
 
 **運算子 desugar 到 spec**，所以 user type 可藉實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
 多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。null-safety 運算子（`?`、`??`、`?.`、
@@ -182,9 +188,19 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   呼叫端。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
-channel 是 scope-owning 的**唯一例外**：因天生跨 coroutine 共享，runtime 對它 **reference-count**，在最後一個
-持有者的 scope 退出時釋放——其餘一切純 scope-owned、無 GC/refcount。複製一個值時，會對它（遞迴）包含的每個
-channel 做 refcount++、深拷貝其餘部分；channel 永遠共享、絕不被複製。
+**Reference-counted 的值**是 scope-owning 的唯一例外：型別實作 **`Ref`** 的值——內建的 **`chan`**，或 stdlib 的
+**`Ref[T]`** 盒——以 **reference** 共享、而非複製。runtime 計數持有者，在**最後**一個持有者的 scope 退出時釋放；
+其餘一切純 scope-owned、無 GC/refcount。複製一個值時，會對它（遞迴）包含的每個 `Ref` 值做 refcount++、深拷貝其餘
+部分；`Ref` 值永遠共享、絕不被複製。
+
+### `Ref[T]`——逃出自身 scope 的資源
+
+多數清理只是記憶體，離開 scope 時就自動釋放。若一個**資源的釋放不屬於這種自動釋放**——foreign handle（見
+[FFI](ffi.zh-TW.md)）、任何必須**恰好關閉一次**者——且它必須**逃出開啟它的 scope**（被 return、存進欄位、送過
+channel），就用 **`Ref[T]`** 持有：一個 reference-counted 的資源盒，攜帶該值與一個 `drop` 動作。因為它以 **by-ref** 複製，
+每份 copy 都指向**同一個**資源，`drop` 在最後一個持有者的 scope 退出時（或明確 `del`）**跑一次**。這正是裸的
+copy-by-value handle 給不了的保證——一個普通 handle 的兩份 copy 會各自試圖釋放那唯一的資源。**唯有資源逃出
+scope 時**才用 `Ref[T]`；侷限在單一 scope 的資源要用 `defer`（見下）。
 
 ### 重新宣告與遮蔽（Re-declaration & shadowing）
 
@@ -206,22 +222,40 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 `del name` 在 scope 結束前**撤銷該名字對其儲存的存取權**。釋放儲存只是一個*後果*：唯有被撤銷的正是**擁有權**
 存取、且沒有其他 holder 時才發生；否則 `del` 只是提早結束「這個名字（或這次借用）」的存取，儲存仍歸 owner。
 
-| `del` 的對象                 | 你擁有它嗎？ | 效果                                                                      |
-| ---------------------------- | ------------ | ------------------------------------------------------------------------- |
-| local、傳值參數、捕獲副本    | 是           | 最後存取 → **釋放儲存**                                                   |
-| `mut` 參數（借呼叫端的變數） | 否           | 結束本次呼叫的借用 → **不釋放**；呼叫端保有                               |
-| closure body 內的捕獲值      | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有                     |
-| channel                      | refcounted   | 放掉這個 holder（refcount--）；最後 sender → **關閉**；最後 holder → 釋放 |
+| `del` 的對象                 | 你擁有它嗎？ | 效果                                                                         |
+| ---------------------------- | ------------ | ---------------------------------------------------------------------------- |
+| local、傳值參數、捕獲副本    | 是           | 最後存取 → **釋放儲存**                                                      |
+| `mut` 參數（借呼叫端的變數） | 否           | 結束本次呼叫的借用 → **不釋放**；呼叫端保有                                  |
+| closure body 內的捕獲值      | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有                        |
+| channel、`Ref[T]`            | refcounted   | 放掉這個 holder（refcount--）；最後 holder 跑 **`drop`**（channel 即 close） |
 
 `del` 永不懸空：撤銷一個借用不可能釋放別的名字所擁有的儲存，而 Zerg 既有規則已擋掉「owner 在 borrower 仍存活時
 就釋放」（`mut` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
-撤銷——只有 channel 帶 runtime refcount。
+撤銷——只有 `Ref` 值（channel 與 `Ref[T]`）帶 runtime refcount。
 
 `del` 是**流程一致的**：一個名字只要在任一路徑上被 `del`，其後**每一條**路徑都視它為已死（不引入 runtime drop
 flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可再用，與其他分支對稱。
 
 `del ch` 也是**提早關閉 channel** 的直接寫法——當下放掉你對 `ch` 的持有，若你是它最後一個 sender
 即關閉 channel，無需再包一層更窄的 block。
+
+### `defer`——在 block 退出時清理
+
+`defer stmt` 安排 `stmt` 在所在 **block** 退出時執行——**每一條**離開路徑都跑，**包含 abort unwind**。它是「綁在
+scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關閉 scope-local 資源——完全不需要型別：
+
+```text
+{
+    lock.acquire()
+    defer lock.release()     # 每一種離開都會跑——正常、提早 return、或 risky() 內部 abort
+    risky()
+}
+```
+
+一個 block 內多個 `defer` 以**後登記先跑**執行，與 scope-owned 的釋放及 `Ref` 的 drop 交錯、依建構的逆序進行，於是
+拆解正好鏡射建構。三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時
+觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →
+`defer`；會 → `Ref[T]`。**
 
 ## 建構與封裝（Construction & encapsulation）
 
@@ -292,8 +326,9 @@ loop x in xs {
 ## 並行（Concurrency）
 
 Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）跑在 **M:N scheduler** 上，fire-and-forget、無
-join/handle，只捕獲 **immutable 值與 channel**。channel 是唯一 reference-counted 的 by-ref 管道——payload 複製、在
-最後一個 sender 離場時**自動 close**、以 **`Result[T]`** 接收（`Right` = 已關，攜帶崩潰 `Err` 或 `StopIteration` 哨兵）、
+join/handle，只捕獲 **immutable 值與 channel**。channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的
+`Ref` 型別；`Ref[T]` 是它持有資源的手足——見 Values & Memory）——payload 複製、在最後一個 sender 離場時
+**自動 close**、以 **`Result[T]`** 接收（`Right` = 已關，攜帶崩潰 `Err` 或 `StopIteration` 哨兵）、
 並用 **`select`** 多路等待。
 
 完整模型——buffering、receive/close 語意、directional 端、`select`、deadlock——見
@@ -349,8 +384,9 @@ message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum
 **Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`、`MatchError`、`IndexError`、
 `KeyError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的 `Err`——代表
 **bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
-出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都按序
-釋放、所持 channel 的 refcount 遞減，與正常的 scope 結束完全相同；絕不是裸的 `abort()`。unwind 抵達某條 stack
+出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
+它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
+裸的 `abort()`。unwind 抵達某條 stack
 頂端就讓那條 stack crash：主 stack 結束整個程式，coroutine 的 stack 只結束該 coroutine（`spawn` 是
 fire-and-forget——見 Concurrency）。
 

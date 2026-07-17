@@ -110,7 +110,7 @@ them. This is the one thing a `list` cannot be: a `list[T]` is heap-backed and i
 value, whereas an array's size is known statically and its storage is inline — which is why an array, not a
 `list`, is what maps to a C `T[N]` field (see [FFI](ffi.md)) and what you reach for when layout matters.
 
-`N` is a **compile-time constant** — an integer literal, a top-level or **associated `const`** (see
+`N` is a **compile-time constant** — an integer literal, a top-level or **type `const`** (see
 [Language Reference](language.md)), or an arithmetic/bitwise combination of those folded by the compiler
 (`[int; ROWS * COLS]`). It is never a runtime value and never a **function call**: Zerg does no general
 compile-time evaluation, so `[int; f(x)]` is an error.

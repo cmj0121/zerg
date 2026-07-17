@@ -177,6 +177,13 @@ values are therefore **never comparable by value**, consistent with the one-way 
 dynamically dispatch its spec's methods; to compare, sort, or key it, keep the concrete type (a
 monomorphized `[T: S]` bound).
 
+The same bar falls on two further member kinds: a spec's **associated functions** (`default() -> This`,
+`zero()` — receiver-less, so a box gives nothing to dispatch _from_) and its **generic methods** (a vtable
+holds one entry per type, not one per type-argument). Each needs a **named concrete type**, so each is a
+compile error **on an existential** — never a ban on using the spec as a type, only on that call, exactly as
+for the binary ops. So there is **no object-safety gate**: a spec is **always usable as a type**, and the box
+offers precisely what dispatches through `this` alone — re-boxing a `This`-returning result as the same spec.
+
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
 dynamic dispatch. There is **no subtyping** between concrete types, so generics are **invariant**:
@@ -284,21 +291,21 @@ method reaches the type's override (a defaulted `count` built on `next` uses an 
 defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
 through its **vtable** to the actual impl.
 
-### Associated constants
+### Type constants
 
-A **`const`** may belong to a type, declared alongside its methods and associated functions and read as
-`Type.NAME` (`This.NAME` from inside an implementation) — the constant analogue of the associated function
-`This.zero()`. Its value is a **constant expression** — a literal, another `const`, or their folded
-arithmetic — so the compiler **substitutes it at compile time**; it runs no code and has **no side effect**
+A **`const`** may belong to a **type**, declared alongside its methods and read as `Type.NAME` (`This.NAME`
+from inside the type). Its value is a **constant expression** — a literal, another `const`, or their folded
+arithmetic — that the compiler **substitutes at compile time**, running no code and having **no side effect**
 (stricter than a top-level `const`, which may be computed once before `main`). It may be typed `This`, giving
-a type its own canonical values (`const ORIGIN: This = Point{ x: 0, y: 0 }`).
-
-A **spec may require** one, exactly as it requires a method: `const MAX: This` is a name and a type with no
-value, each implementer supplies it, and code generic over `T: Bounded` reads `T.MAX`. This is why it is a
-value and not merely a `fn() -> T` — being a compile-time constant it folds into the caller, and an
-`int`-typed one is usable **wherever a compile-time constant is**, including a fixed-array size
+a type its own canonical values (`const ORIGIN: This = Point{ x: 0, y: 0 }`). Being a compile-time constant,
+an `int`-typed one is usable **wherever a compile-time constant is** — including a fixed-array size
 (`[byte; Buffer.SIZE]`, see [Collections](collections.md)). Visibility is the ordinary `pub` / private knob,
 as on a field or method.
+
+A `const` belongs to a **concrete type, never a `spec`**: a spec abstracts over **behavior**, and a const —
+folded, concrete, nothing to dispatch — is not behavior. A per-type _value_ that a spec must guarantee is
+therefore a **method**, the receiver-less associated function `fn max() -> This`, not a const — generic code
+reaches it as `T.max()`.
 
 ### Built-in specs
 

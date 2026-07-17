@@ -144,6 +144,12 @@ box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體
 抹除一致。box 一個值是為了動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的
 `[T: S]` bound）。
 
+同一道關卡也落在另外兩類成員上：spec 的 **associated function**（`default() -> This`、`zero()`——無 receiver，box
+沒有可供分派的 _起點_）與它的**泛型 method**（vtable 每個型別一格、而非每個型別實參一格）。兩者都需要一個**具名的
+具體型別**，所以在 **existential 上**各自是 compile error——這不是禁止該 spec 當型別，只是禁止那一個呼叫，和 binary
+op 完全一樣。因此**沒有 object-safety gate**：一個 spec **永遠可以當型別**，box 就只提供「單憑 `this` 就能分派」的
+東西——並把回傳 `This` 的結果 re-box 成同一個 spec。
+
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
 的：`list[Cat]` 不是 `list[Animal]`——要抽象一整族就用 spec bound（`[T: X]`），而非 subtype 代換。
@@ -229,18 +235,18 @@ spec 的 method 分兩種：
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
 **monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。
 
-### Associated const（關聯常數）
+### 型別常數（Type constants）
 
-一個 **`const`** 可以隸屬於某型別，與它的 method、associated function 並列宣告，並以 `Type.NAME` 讀取（在 impl
-內是 `This.NAME`）——就是 associated function `This.zero()` 的常數對應物。它的值是一個**常數運算式**——literal、
-另一個 `const`、或它們的摺疊算術——所以 compiler **在編譯期直接代入**；它不執行任何程式碼、**無副作用**（比 top-level
-`const` 更嚴，後者可在 `main` 前計算一次）。它可以型別為 `This`，讓型別擁有自己的 canonical 值
-（`const ORIGIN: This = Point{ x: 0, y: 0 }`）。
+一個 **`const`** 可以隸屬於某**型別**，與它的 method 並列宣告，並以 `Type.NAME` 讀取（在型別內是 `This.NAME`）。
+它的值是一個**常數運算式**——literal、另一個 `const`、或它們的摺疊算術——compiler **在編譯期直接代入**、不執行任何
+程式碼、**無副作用**（比 top-level `const` 更嚴，後者可在 `main` 前計算一次）。它可以型別為 `This`，讓型別擁有自己的
+canonical 值（`const ORIGIN: This = Point{ x: 0, y: 0 }`）。身為編譯期常數，`int` 型別的那種**在任何需要編譯期
+常數之處都能用**——包括定長陣列的大小（`[byte; Buffer.SIZE]`，見 [Collections](collections.zh-TW.md)）。可見性就是
+一般的 `pub` / private 旋鈕，如同 field 或 method。
 
-一個 **spec 可以要求**一個，就跟要求 method 一樣：`const MAX: This` 是一個名字加型別、沒有值，每個實作者各自提供，
-而泛型於 `T: Bounded` 的程式碼就讀 `T.MAX`。這正是為什麼它是一個值、而非只是 `fn() -> T`——身為編譯期常數它會摺疊
-進呼叫端，而 `int` 型別的那種**在任何需要編譯期常數之處都能用**，包括定長陣列的大小（`[byte; Buffer.SIZE]`，見
-[Collections](collections.zh-TW.md)）。可見性就是一般的 `pub` / private 旋鈕，如同 field 或 method。
+`const` 隸屬於**具體型別、絕不在 `spec` 裡**：spec 抽象的是**行為**，而一個 const——已摺疊、具體、沒有東西可分派
+——不是行為。一個 spec 必須保證的「每型別的*值*」因此是一個 **method**，即無 receiver 的 associated function
+`fn max() -> This`、而非 const——泛型端以 `T.max()` 取用。
 
 ### 內建 spec（Built-in specs）
 

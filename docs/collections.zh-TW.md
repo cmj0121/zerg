@@ -101,7 +101,7 @@ rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
 inline——這也是為什麼對得上 C 的 `T[N]` 欄位（見 [FFI](ffi.zh-TW.md)）、以及「layout 要緊時該拿」的是陣列而非
 `list`。
 
-N 是一個**編譯期常數**——整數 literal、top-level 或 **associated `const`**（見 [語言參考](language.zh-TW.md)），
+N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `const`**（見 [語言參考](language.zh-TW.md)），
 或由它們經算術／位元運算子組合、被 compiler 摺疊（`[int; ROWS * COLS]`）。它絕不是 runtime 值、也絕不是**函式
 呼叫**：Zerg 不做一般的編譯期求值，所以 `[int; f(x)]`
 是錯誤。

@@ -1,14 +1,15 @@
 # Zerg Collections
 
-Zerg's built-in containers — **`list`**, **`map`**, **`set`** — one canonical type per role, no variant
-zoo. They're just ordinary **scope-owned values**, built on the [Language Reference](language.md). Also in
-[繁體中文](collections.zh-TW.md).
+Zerg's built-in containers — **`list`**, **`map`**, **`set`**, plus the fixed-size **`[T; N]`** array —
+one canonical type per role, no variant zoo. They're just ordinary **scope-owned values**, built on the
+[Language Reference](language.md). Also in [繁體中文](collections.zh-TW.md).
 
 | Type        | Role                        | Element / key requirement | Iteration order     |
 | ----------- | --------------------------- | ------------------------- | ------------------- |
 | `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |
 | `map[K, V]` | an **associative** table    | `K: Hash`                 | **insertion** order |
 | `set[T]`    | a **unique-membership** set | `T: Hash`                 | **insertion** order |
+| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).
@@ -28,11 +29,12 @@ rebinding — the Rust `let mut` / Swift `var` model, not a variable-vs-elements
 
 - **`mut xs`** — may **edit elements** (`xs[i] = v`), **grow/shrink** (append, insert, remove), and
   **rebind** (`xs = other`). Edits and growth are `mut this` methods, like a struct's mutators.
-- **plain `xs`** — **fully frozen**, Zerg's fixed array. (You may still `:=` re-declare the name — a _new_
-  binding, the old one `del`-ed — never a mutation.)
+- **plain `xs`** — **fully frozen**: fixed _contents_, though its length is still a runtime value on the
+  heap. (You may still `:=` re-declare the name — a _new_ binding, the old one `del`-ed — never a mutation.)
+  For a fixed _size_ known at compile time and laid out inline, reach for a `[T; N]` array (below).
 
-So one `list` type is both fixed array (plain) and growable vector (`mut`); **only a `mut` collection can
-modify its elements**.
+So one `list` type is both a frozen sequence (plain) and a growable vector (`mut`); **only a `mut`
+collection can modify its elements**.
 
 ```text
 xs := [1, 2, 3]            # frozen: xs.append(4) and xs[0] = 9 are errors
@@ -98,6 +100,41 @@ the collection it walks — so it needs no borrow checker and costs you nothing 
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a
 **different** collection.
+
+## Fixed-size arrays — `[T; N]`
+
+A **`[T; N]`** is a **fixed-size array** — `N` values of `T` laid out **inline** (on the stack, or within
+its enclosing value), with **no heap and no `Ref`**. Its length **`N` is part of the type** and fixed at
+**compile time**, so `[int; 3]` and `[int; 4]` are **different types** with no implicit conversion between
+them. This is the one thing a `list` cannot be: a `list[T]` is heap-backed and its length is a runtime
+value, whereas an array's size is known statically and its storage is inline — which is why an array, not a
+`list`, is what maps to a C `T[N]` field (see [FFI](ffi.md)) and what you reach for when layout matters.
+
+`N` is a **compile-time constant** — an integer literal or a top-level `const`, or an arithmetic/bitwise
+combination of those folded by the compiler (`[int; ROWS * COLS]`). It is never a runtime value and never a
+**function call**: Zerg does no general compile-time evaluation, so `[int; f(x)]` is an error.
+
+```text
+xs: [int; 4] = [1, 2, 3, 4]     # a list literal, typed as an array by its target — length must be 4
+buf := [0; 256]                 # fill form: 256 copies → [int; 256]
+row := [byte; WIDTH]            # WIDTH is a top-level const
+```
+
+An array is an ordinary **value**: copy-by-value copies all `N` elements (bumping any contained `Ref`), it
+is freed at scope exit, and it never aliases — exactly the container value model. Everything else falls out
+of the rules already stated for `list`:
+
+- **Build** — the list literal `[a, b, …]` is **context-typed**: a `list[T]` by default, an array when the
+  target is `[T; N]` (its length is checked at compile time). The **fill form `[v; N]`** makes `N` copies of
+  `v` — the way to build a large array without spelling every element; there is no implicit zero-fill.
+- **Access** — `a[i]` by value, bounds-checked → `IndexError`, with a constant index outside `[0, N)` caught
+  at **compile time**; `a.get(i) -> T?` is the checked path. `mut a` edits elements in place (`a[i] = v`) but
+  can **never grow or shrink** — the size is in the type; a plain `a` is frozen.
+- **Length** — `a.len()` is `N`, itself a compile-time constant.
+- **Iterate / derive / slice** — it implements `Iterator`/`Iterable` (`for x in a`, `for mut x in a`),
+  derives `Object` always and `Ord`/`Hash`/`Encode` element-wise when `T` has them (two same-type arrays
+  compare and hash element-wise), and `a.slice(p, q)` yields a **read-only `list[T]`** view — the COW bridge
+  from an array back into the list family.
 
 ## Strings & bytes
 

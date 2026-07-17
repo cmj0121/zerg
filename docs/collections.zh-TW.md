@@ -60,17 +60,14 @@ name  := m.get(id) ?? "anon"   # 檢查後給預設
 
 ## 切片——唯讀子區間
 
-一個 `list` 的**子區間**——`xs.slice(a, b)`，即 `[a, b)` 的元素——是一個普通的**唯讀 `list[T]` 值**、不是 borrow。
-**沒有 aliasing**：切片絕不寫回它的母體，所以不需要 borrow checker、也沒有「指進別人 storage」的那些危險——它遵守
-與任何 collection 相同的 copy-by-value 模型。
-
-要讓它免費，編譯器可以用 **copy-on-write** 實現那份 copy：切片**與母體共享底層 storage**，直到任一方被變動、才先
-做真正的複製——所以帳面上是 value semantics，而常見的唯讀情況實務上維持**零拷貝**。COW 是不可觀察的最佳化，與
-copy-elision、move 同列（見[語言參考](language.zh-TW.md)的 Values & Memory）；它不新增任何你看得見的共享，只是讓
-`copy` 更便宜。
+一個**子區間**——`xs.slice(a, b)`，即 `[a, b)` 的元素——是一個普通的**唯讀 `list[T]` 值**、不是 borrow：它絕不寫回
+母體，所以**沒有 aliasing**、也不需要 borrow checker，並遵守與任何 collection 相同的 copy-by-value 模型。編譯器可
+把那份 copy 實現成 **copy-on-write**——與母體共享底層 storage，直到任一方被變動才複製——所以帳面上是 value
+semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 同列的不可觀察最佳化（見 Values & Memory），不新增
+任何看得見的共享，只是讓 `copy` 更便宜。
 
 於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
-**`x[a..b]`** slice-index 語法糖已規劃、但延後到 grammar（見待決）；在那之前用 `slice(a, b)` 這個操作。
+**`x[a..b]`** slice-index 語法糖延後到 grammar（見待決）；在那之前用 `slice(a, b)`。
 
 ## 順序與相等性
 

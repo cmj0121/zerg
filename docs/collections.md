@@ -64,20 +64,16 @@ name  := m.get(id) ?? "anon"   # checked, then default
 
 ## Slicing — read-only subranges
 
-A **subrange** of a `list` — `xs.slice(a, b)`, the elements `[a, b)` — is an ordinary **read-only
-`list[T]` value**, not a borrow. There is **no aliasing**: a slice never writes back into its parent, so
-it needs no borrow checker and carries none of a pointer-into-storage's hazards — it obeys the same
-copy-by-value model as any collection.
+A **subrange** — `xs.slice(a, b)`, the elements `[a, b)` — is an ordinary **read-only `list[T]` value**,
+not a borrow: it never writes back into its parent, so there is **no aliasing** and no borrow checker, and
+it obeys the same copy-by-value model as any collection. The compiler may realize that copy as
+**copy-on-write** — sharing the parent's backing storage until either side is mutated, then copying — so
+value semantics hold while the read-only case stays **zero-copy**; COW is an unobservable optimization
+alongside copy-elision and the move (Values & Memory), adding no visible sharing, only a cheaper `copy`.
 
-To keep that free, the compiler may realize the copy as **copy-on-write**: a slice **shares its parent's
-backing storage** until either side is mutated, at which point the real copy happens first — so value
-semantics hold on paper while the common read-only case stays **zero-copy** in practice. COW is an
-unobservable optimization, alongside copy-elision and the move (Values & Memory in the
-[Language Reference](language.md)); it adds no new sharing you can see, only a cheaper `copy`.
-
-So a lexer scans by index (`xs[i]` is O(1)) and takes read-only windows with `slice` at no copy cost,
-materializing a `str` only when it keeps a token. The **`x[a..b]`** slice-index sugar is planned but
-deferred to the grammar (see Deferred); `slice(a, b)` is the operation until then.
+So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
+materializing a `str` only when it keeps a token. The **`x[a..b]`** slice-index sugar is deferred to the
+grammar (see Deferred); `slice(a, b)` is the operation until then.
 
 ## Order & equality
 

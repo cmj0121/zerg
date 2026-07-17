@@ -244,28 +244,21 @@ producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，所�
 
 ## 控制流（Control flow）
 
-三個構造承載全部控制流，依「產出什麼」區分：**`match`** 產出一個**值**（模式比對），而 **`if`** 與 **`for`** 是為了
-副作用而跑的 **statement**。想從分支拿到值，一律用 `match`（或 null-safety 的 `??` / `?.`）——`if` 永不產出值，
-所以一個選擇只用一種方式產出值，不是兩種。
+全部控制流就三個構造，依「產出什麼」區分：**`match`** 產出一個**值**（模式比對）；**`if`** 與 **`for`** 是為副作用
+而跑的 **statement**。分支要拿到值一律用 `match`（或 `??` / `?.`）——`if` 永不產出值，所以一個選擇只用一種方式產出
+值，不是兩種。
 
-**`if`——條件 statement。** `if cond { … }`，可接 `else` 與 `else if`。條件是 `bool`（沒有 truthiness——要轉就
-`bool(x)`；邏輯關鍵字見內建 spec）。**綁定形式** `if x := expr { … }` 只在 `expr` 命中單一 pattern `x` 時跑區塊、
-並在裡面綁定它——就是「值存在」這個日常測試的單臂 `match` 語法糖：`if v := <-ch { use(v) }` 只在 `Left` 時觸發、
-`if x := opt { … }` 只在 optional 有值時觸發。
+**`if`**——`if cond { … }`，可接 `else` / `else if`；條件是 `bool`（沒有 truthiness）。**綁定形式**
+`if x := expr { … }` 只在 `expr` 命中 pattern `x` 時跑區塊——「值存在」測試的單臂 `match` 語法糖
+（`if v := <-ch { use(v) }` 只在 `Left` 時觸發）。
 
-**`for`——唯一的迴圈。** 一個關鍵字、兩種形式：
+**`for`**——唯一的迴圈關鍵字、兩種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、以及
+**`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為
+`mut`；迭代協定——`StopIteration` 乾淨結束、其他 error re-raise——見「迭代」）。**沒有 `while`、也沒有 C 式三段
+`for`**：條件迴圈就寫 `for { … break if done }`。
 
-- **`for { … }`**——無窮迴圈；用 `break` 或 `return` 離開。
-- **`for x in it { … }`**——走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（一個全新的不可變 binding——函式與閉包
-  那節的閉包捕獲安全正是建立在這點上）。**`for mut x in it`** 把每個元素綁成就地的 `mut`，僅當 `it` 為 `mut`。
-  迭代協定——在 `StopIteration` 乾淨結束、對任何其他 error 則 re-raise——見上面的「迭代」。
-
-**沒有 `while`、也沒有 C 式三段 `for`**：條件終止的迴圈就寫成 `for { … break if done }`，讓迴圈詞彙維持單一個字
-（`small and crisp`）。
-
-**`break` / `continue`** 作用於**最內層的 `for`**，且**沒有 loop label**——要跳出外層迴圈，就把內層抽成函式再
-`return`。慣用的條件形式是語法糖 **`break if cond`** 與 **`continue if cond`**——完全等於 `if cond { break }` /
-`if cond { continue }`，是不必巢狀一層 `if` 就能結束或跳過一輪的可讀寫法：
+**`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
+**`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`：
 
 ```text
 for {
@@ -276,34 +269,26 @@ for {
 }
 ```
 
-`for` 是 **statement**、不是 expression——不產出值。要組結果就鏈一個 **iterator adapter**（`map` / `filter` /
-`fold`，見「迭代」）或 append 進另一個 collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
+`for` 是 statement——不產出值；要組結果就鏈一個 iterator adapter（`map` / `filter` / `fold`）或 append 進另一個
+collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 
 ## 格式化與文字（Formatting & text）
 
-每個值都有兩種渲染，兩者都是 **`Object` method**——所以每個型別都有，不需 opt-in 任何 `spec`：
+每個值都有兩種渲染，兩者都是 **`Object` method**（不需 opt-in 任何 `spec`）：
 
-- **`debug() -> str`**——**開發者**視圖：**auto-derive**、逐欄位（sum 則先 tag 再 payload）結構化生成、可
-  override。logging、`stderr`、abort backtrace 印的就是它——明確、機械，不憑空猜文案。
-- **`display() -> str`**——**給人看**的視圖。它的**預設 body 就是 `debug()`**，所以永遠存在；override 它把值呈現成
-  終端使用者該讀的樣子（金額、日期、百分比）。compiler 永不衍生語意化渲染——只有作者知道——所以 `display`
-  只能 override、不做結構化。
+- **`debug() -> str`**——**開發者**視圖：**auto-derive**、結構化生成（sum 則先 tag 再 payload）、可 override。
+  logging、`stderr`、abort backtrace 印的就是它——機械、不憑空猜文案。
+- **`display() -> str`**——**給人看**的視圖；它的**預設 body 就是 `debug()`**，所以永遠存在。override 它來決定終端
+  使用者該怎麼讀這個值（金額、日期）；compiler 永不衍生語意化渲染，所以 `display` 只能 override。
 
-**字串內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元、免跳脫）。**`f`-string** 內嵌 `{ expr }`——任意
-運算式——透過該值的 `display()` 渲染再串接：`f"sum={x + y}"`、`f"user {name} on port {port}"`。它在**編譯期
-desugar** 成對各片段的 `str` 建構（[Collections](collections.zh-TW.md) 的 `str: Add` 串接）——不需 variadic、
-無 runtime 格式引擎、無需 import。要改嵌開發者視圖就顯式呼叫：`f"{x.debug()}"`。
+**內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元）。**`f`-string** 內嵌 `{ expr }`，透過 `display()` 渲染
+再串接——`f"sum={x + y}"`——在**編譯期 desugar** 成 `str` 串接（Collections），不需 variadic、無 runtime 格式
+引擎；`f"{x.debug()}"` 嵌開發者視圖。**指示子** `f"{x:>.2f}"`（width/precision/進位/對齊）**延後**到一個獨立的
+per-type **format 協定**、而非 `display` 的參數。
 
-**格式指示子——`f"{x:>.2f}"`。** `:` 後綴選 width、precision、進位或對齊。完整指示子文法**延後**；概念上它導向一個
-獨立的 per-type **format 協定**、而非 `display` 的參數，好讓這套 mini-language 能長大而不撐爆 `display`。
-
-**`print`——內建的輸出關鍵字。** `print x` 把 `x.display()`（任何值——每個型別都有）加一個換行寫到 stdout。它是
-**保留字**、永遠在 scope 內、免 import，所以最小的程式只需要 `print f"hello {name}"`。它是**盡力而為**——stdout
-的寫入錯誤會被丟掉、不會 raise——所以 `print` 不需 `?`；有檢查的完整 I/O 面（`stderr`、檔案、socket、buffered
-writer）是要 import 的 `io` package（見 [Process & I/O](io.zh-TW.md)）。
-
-在迴圈裡建長字串，仍是先收集進 `list` 再用 `str(...)` 轉，而非重複 `+`（那樣每步都會複製整個累積字串）——見
-[Collections](collections.zh-TW.md)。
+**`print`** 把 `x.display()` 加換行寫到 stdout——一個**保留字**、永遠在 scope 內、免 import，所以最小的程式就是
+`print f"hello {name}"`。它**盡力而為**（寫入錯誤被丟掉、不 raise），所以不需 `?`；有檢查的完整 I/O 面是要 import
+的 `io` package（見 [Process & I/O](io.zh-TW.md)）。
 
 ## 型別轉換（Type Casts）
 

@@ -295,32 +295,23 @@ element as an in-place `mut` — only when `X` is `mut`.
 
 ## Control flow
 
-Three constructs carry all control flow, split by what they yield: **`match`** produces a **value**
-(Pattern matching), while **`if`** and **`for`** are **statements** that run for effect. Wanting a value
-out of a branch is always `match` (or the null-safety `??` / `?.`) — `if` never yields one, so a choice
-produces a value one way, not two.
+All control flow is three constructs, split by what they yield: **`match`** produces a **value** (Pattern
+matching); **`if`** and **`for`** are **statements** that run for effect. A value out of a branch always
+comes from `match` (or `??` / `?.`) — `if` never yields one, so a choice produces a value one way, not two.
 
-**`if` — conditional statement.** `if cond { … }`, with optional `else` and `else if`. The condition is
-a `bool` (no truthiness — `bool(x)` to cast; the logical keywords are under Built-in specs). A **binding
-form** `if x := expr { … }` runs the block only when `expr` matches the single pattern `x`, binding it
-inside — the one-arm-`match` sugar for the everyday "value present" test: `if v := <-ch { use(v) }`
-fires only on a `Left`, `if x := opt { … }` only when the optional holds a value.
+**`if`** — `if cond { … }` with optional `else` / `else if`; the condition is a `bool` (no truthiness).
+The **binding form** `if x := expr { … }` runs the block only when `expr` matches the pattern `x` — the
+one-arm-`match` sugar for a "value present" test (`if v := <-ch { use(v) }` fires only on a `Left`).
 
-**`for` — the one loop.** One keyword, two forms:
+**`for`** — the one loop keyword, two forms: **`for { … }`** infinite (leave via `break` / `return`), and
+**`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds
+in place, only when `it` is `mut`; the iteration protocol — clean `StopIteration` exit, any other error
+re-raised — is Iteration). There is **no `while` and no C-style three-clause `for`**: a condition loop is
+`for { … break if done }`.
 
-- **`for { … }`** — an infinite loop; leave it with `break` or `return`.
-- **`for x in it { … }`** — iterate `it: Iterable`, binding `x` **by copy** each round (a fresh
-  immutable binding — the closure-capture safety in Functions & Closures rests on exactly this).
-  **`for mut x in it`** binds each element as an in-place `mut`, only when `it` is `mut`. The iteration
-  protocol — a clean exit on `StopIteration`, any other error re-raised — is Iteration, above.
-
-There is **no `while` and no C-style three-clause `for`**: a condition-terminated loop is
-`for { … break if done }`, keeping the loop vocabulary a single word (`small and crisp`).
-
-**`break` / `continue`** act on the **nearest enclosing `for`**, and there are **no loop labels** — to
-leave an outer loop, lift the inner one into a function and `return`. The idiomatic conditional form is
-the sugar **`break if cond`** and **`continue if cond`** — exactly `if cond { break }` /
-`if cond { continue }`, the readable way to end or skip a round without nesting an `if`:
+**`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
+extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly
+`if cond { break }` / `if cond { continue }`:
 
 ```text
 for {
@@ -331,42 +322,30 @@ for {
 }
 ```
 
-`for` is a **statement**, not an expression — it yields no value. Build a result by chaining an
-**iterator adapter** (`map` / `filter` / `fold`, Iteration) or appending into another collection
-([Collections](collections.md)), never a break-with-value.
+`for` is a statement — it yields no value; build a result with an iterator adapter (`map` / `filter` /
+`fold`) or by appending into another collection ([Collections](collections.md)), never a break-with-value.
 
 ## Formatting & text
 
-Every value renders two ways, both **`Object` methods** — so every type has both, with no `spec` to
-opt into:
+Every value renders two ways, both **`Object` methods** (no `spec` to opt into):
 
-- **`debug() -> str`** — the **developer** view: **auto-derived** structurally, field by field (a sum
-  by tag-then-payload), and overridable. This is what logging, `stderr`, and an abort backtrace
-  print — unambiguous and mechanical, never guessed-at prose.
-- **`display() -> str`** — the **human** view. Its **default body is `debug()`**, so it always exists;
-  override it to present the value the way an end user should read it (a price, a date, a percentage).
-  The compiler never derives a semantic rendering — only the author knows it — so `display` is
-  override-only, never structural.
+- **`debug() -> str`** — the **developer** view: **auto-derived** structurally (a sum by
+  tag-then-payload), overridable. Logging, `stderr`, and an abort backtrace print it — mechanical, never
+  guessed prose.
+- **`display() -> str`** — the **human** view; its **default body is `debug()`**, so it always exists.
+  Override it for how an end user should read the value (a price, a date); the compiler never derives a
+  semantic rendering, so `display` is override-only.
 
-**String interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters, no
-escaping). An **`f`-string** embeds `{ expr }` — any expression — rendered through the value's
-`display()` and joined: `f"sum={x + y}"`, `f"user {name} on port {port}"`. It **desugars at compile
-time** to `str` building over the pieces (the `str: Add` concatenation from
-[Collections](collections.md)) — no variadics, no runtime format engine, nothing to import. To embed
-the developer view instead, call it: `f"{x.debug()}"`.
+**Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
+embeds `{ expr }`, rendered through `display()` and joined — `f"sum={x + y}"` — **desugaring at compile
+time** to `str` concatenation (Collections), with no variadics and no runtime format engine;
+`f"{x.debug()}"` embeds the developer view. **Specifiers** `f"{x:>.2f}"` (width/precision/base/alignment)
+are **deferred** to a separate per-type **format protocol**, not a `display` parameter.
 
-**Format specifiers — `f"{x:>.2f}"`.** A `:`-suffix selects width, precision, base, or alignment. The
-full specifier grammar is **deferred**; conceptually it routes to a separate per-type **format
-protocol**, not a `display` parameter, so the mini-language can grow without bloating `display`.
-
-**`print` — the built-in output keyword.** `print x` writes `x.display()` (any value — every type has
-one) followed by a newline to stdout. It is a **reserved keyword**, always in scope with no import, so
-the smallest program needs nothing but `print f"hello {name}"`. It is **best-effort** — a stdout write
-error is dropped, never raised — so `print` needs no `?`; the checked, full I/O surface (`stderr`,
-files, sockets, buffered writers) is the imported `io` package (see [Process & I/O](io.md)).
-
-To build a long string in a loop, still collect into a `list` and convert with `str(...)` rather than
-repeated `+` (which recopies the accumulator each step) — see [Collections](collections.md).
+**`print`** writes `x.display()` and a newline to stdout — a **reserved keyword**, always in scope with no
+import, so the smallest program is `print f"hello {name}"`. It is **best-effort** (a write error is
+dropped, never raised), so it needs no `?`; the checked, full I/O surface is the imported `io` package
+(see [Process & I/O](io.md)).
 
 ## Type Casts
 

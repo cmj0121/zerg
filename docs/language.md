@@ -206,6 +206,15 @@ across specs, have them obtain it from one shared spec. Where a spec may be impl
 boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
 
+**A name resolved on a concrete value must name exactly one method** — the same anti-ambiguity rule, now at
+a concrete call. An **inherent method may not share a name with any spec method the type implements**: a
+compile error at the implementation. To give a type its own version of a spec method, **override** it
+(dispatch stays canonical); inherent methods are for behavior _outside_ any spec, so a collision is a
+mistake, not a priority to resolve. And when a type implements two specs that share a method name, the impls
+are fine — but a bare **`x.foo()` is then ambiguous and rejected**; you resolve it by narrowing the static
+context to one spec (a single-spec bound `[T: X]`, or a spec-typed value), never by qualifying the call —
+exactly as the `T: X + Y` bound is rejected above.
+
 **Specs are flat — there is no super-spec.** A `spec` never requires another; needing several capabilities
 at once is said at the **use site** with a combined bound — `[T: Ord + Hash]`, the `+` reading as "and" —
 never baked into a spec as a supertrait. The one hierarchy other languages lean on, `Ord: Eq`, is moot

@@ -165,6 +165,12 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Module、Package 與 Program](package.zh-TW.md)。
 
+**在具體值上解析出的名字必須恰指一個 method**——同一條反歧義規則,現在落在具體呼叫。**inherent method 不得與型別
+所實作的任何 spec method 撞名**:在 impl 處 compile error。想給型別「自己版本的 spec method」,就**override** 它
+(dispatch 仍 canonical);inherent method 是給「*不屬於*任何 spec 的行為」用的,所以撞名是誤用、不是要去排優先序。
+而當一個型別實作了兩個撞名的 spec,實作本身沒問題——但裸的 **`x.foo()` 就有歧義、被拒**;你把靜態脈絡收窄到單一
+spec 來解(單 spec 的 `[T: X]` bound、或 spec-typed 值),**絕不靠 qualify 呼叫**——正如上面 `T: X + Y` bound 被拒。
+
 **spec 是扁平的——沒有 super-spec。** 一個 `spec` 絕不要求另一個；需要同時具備多種能力，是在**用處**以組合 bound
 說出——`[T: Ord + Hash]`，`+` 讀作「而且」——絕不把它 baked 成一個 spec 的 supertrait。別的語言倚賴的那一條階層
 `Ord: Eq`，在這裡是多餘的：相等性來自普世的 `Object`、恆在，無須被要求。implied bound 與跨 spec 的 default-body

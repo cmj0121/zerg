@@ -76,6 +76,13 @@ enum Either[X, Y] {         # 泛型 sum type
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別（見 Null-safety）。一個 `enum`
 的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
 
+一個 `enum` 的 **discriminant 不是可觀察的值。** 哪個整數標記哪個 variant 是 compiler 的內部細節——你 `match` 的是
+variant、絕不是 tag——所以**沒有 `Variant = 5` 這種 discriminant 語法**。要把一個 variant 綁定某個特定整數（wire
+protocol 的碼、C enum 的值），就寫**顯式轉換**：一個從 variant 到數字的 `match`，再一個回來、且**帶驗證**
+（`from_code(n) -> E?`，未知碼給 `nil`、絕不變成錯的 variant）。這又是*convert by re-construction, never
+reinterpret*——數字是從 variant **建**出來的、不是把 tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連續值、
+別名與版本演進。tag 的具體**表示**——它的整數型別與 C layout——留作 deferred 的 FFI 細節（見 [FFI](ffi.zh-TW.md)）。
+
 一個 **tuple**——`(int, str)`，欄位以位置存取 `.0`、`.1`——不過就是一個**匿名 `struct`**：同一個積型別，只是不具名、
 供一次性的位置束用（多重回傳、`divmod -> (int, int)`）。因為匿名，它是全語言**唯一結構化定型**的形式——`(int, str)`
 不管寫在哪都是同一個型別，而每個具名 `struct` 與 `enum` 仍是 **nominal**。它沿用整套積型別機制——copy-by-value、

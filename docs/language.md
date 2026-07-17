@@ -86,6 +86,16 @@ enum Either[X, Y] {         # generic sum type
 (see Null-safety). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
 variant, to construct and to `match`; there is no per-variant privacy.
 
+An `enum`'s **discriminant is not an observable value.** Which integer tags a variant is a
+compiler-internal detail — you `match` on the variant, never on a tag — so there is **no `Variant = 5`
+discriminant syntax**. To bind a variant to a specific integer — a wire-protocol code, a C enum's value —
+write an **explicit conversion**: a `match` from the variant to the number, and one back that **validates**
+(`from_code(n) -> E?`, an unknown code yielding `nil`, never a wrong variant). This is
+_convert by re-construction, never reinterpret_ again — the number is _built_ from the variant, not the
+tag's bytes reread — and it absorbs the non-contiguous values, aliases, and versioning a baked-in value
+cannot. The tag's concrete **representation** — its integer type and C layout — stays a deferred FFI detail
+(see [FFI](ffi.md)).
+
 A **tuple** — `(int, str)`, its fields reached positionally as `.0`, `.1` — is nothing but an **anonymous
 `struct`**: the same product type, spelled without a name for a transient positional bundle (a multiple
 return, a `divmod -> (int, int)`). Being anonymous it is the language's **one structurally typed** form —

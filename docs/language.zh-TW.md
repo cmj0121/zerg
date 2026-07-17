@@ -113,7 +113,8 @@ msg := match ev {
 
 行為分成**兩層**。型別可定義 **inherent method**——自有行為，只有握著具體型別時才能用。而**抽象**一律透過
 **`spec`**：一個具名的行為介面——method 簽名，其中有些帶 **default body**（見下），且**永不含 field**。滿足是
-**nominal**：型別必須**明確宣告**它實作某 `spec`，且每組 **(型別, spec) 只有一個正規 impl**。
+**nominal**：型別必須**明確宣告**它實作某 `spec`，且每組 **(型別, spec) 只有一個正規 impl**——**帶參數**的 spec 會把
+參數算進這組，所以 `Iterator[int]` 與 `Iterator[str]` 是不同組、各有自己的正規 impl（見下方「解析帶參數的 spec」）。
 
 `spec` 是抽象行為的**唯一**機制，因此它扮演三個角色——泛型參數的 **bound**、型別所 **conform** 的介面、以及
 （見下）**當成型別本身**。內建行為也都是 spec、不是編譯器魔法：`Err` 就是 `Error` spec，相等、排序、雜湊、迭代、
@@ -147,7 +148,7 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 當型別用是唯一改用 dynamic dispatch 之處。concrete type 之間**沒有 subtyping**，所以泛型是**不變（invariant）**
 的：`list[Cat]` 不是 `list[Animal]`——要抽象一整族就用 spec bound（`[T: X]`），而非 subtype 代換。
 
-一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)` 到處都解析到同一個實作，
+一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 （`list[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
 解析可判定。唯一「所有型別都有」的情況是 `Object`，由編譯器 auto-derive、而非使用者手寫。
@@ -157,6 +158,31 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 這個組合**，而不引入 fully-qualified 呼叫語法來消歧；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Module、Package 與 Program](package.zh-TW.md)。
+
+### 解析帶參數的 spec（Resolving a parameterized spec）
+
+因為帶參數 spec 的參數是實作身分的一部分，一個型別可以同時實作 `Iterator[int]` 與 `Iterator[str]`。編譯器接著用
+「為 untyped literal 定型」的同一套機制**解析某次使用指的是哪一個**：它挑出**唯一**能讓該值的所有約束——**包含它在
+後續 body 裡如何被使用**——都通過型別檢查的候選。
+
+```text
+for x in y {          # y 同時實作 Iterator[int] 與 Iterator[str]
+    z := 10           # untyped literal → int
+    print x + z       # x + int 只有在 x 為 int 時才通過 → 選 Iterator[int]
+}
+```
+
+三種結果，比照 literal 定型、但**沒有預設退路**：
+
+- **恰好一個**候選通過 → 解析完成、免標註；
+- **零個** → 普通型別錯誤（就像對只實作 `str` 的 iterator 寫 `x + str`）；
+- **兩個以上** → **硬編譯錯、要你標註**（`for x: int in y`）。它**絕不**降級成警告、也不由預設挑一個：不像未覆蓋的
+  `match`（其退路是響亮的 `MatchError`），一個解析錯的實作**沒有安全退路**——會默默跑錯的碼。
+
+不同的具體參數彼此永不重疊，所以解析是明確定義的；唯一的問題只是「多個都命中時，這次指的是哪一個」。因此慣例仍是
+**一型別一實作**——多個是 power tool，任何 body 定不出來的使用都要標註。concrete-bound 泛型直接指名參數
+（`[I: Iterator[int]]`）、或當場綁定它（`[I: Iterator[T]]` 把 `T` 綁成該 iterator 的 element），所以 **bound 永遠不
+歧義**——只有「對一個有多個實作的值做裸使用」才會。
 
 ### 型別測試（Type tests）——`is`
 

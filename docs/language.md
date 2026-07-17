@@ -133,7 +133,9 @@ Behavior comes in two tiers. A type may define **inherent methods** — its own 
 when you hold the concrete type. **Abstraction**, however, always goes through a **`spec`**: a named
 interface of behavior — method signatures, some carrying a **default body** (below), and **never
 fields**. Satisfaction is **nominal**: a type must explicitly declare it implements a `spec`, and there
-is **one canonical implementation per (type, spec)** pair.
+is **one canonical implementation per (type, spec)** pair — a **parameterized** spec counts its parameters
+into the pair, so `Iterator[int]` and `Iterator[str]` are distinct, each with its own canonical impl
+(Resolving a parameterized spec, below).
 
 A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
 on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
@@ -182,7 +184,7 @@ dynamic dispatch. There is **no subtyping** between concrete types, so generics 
 substitution.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
-requires a `(type, spec)` pair to resolve to the same implementation everywhere, so an implementation
+requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere, so an implementation
 can be neither hidden nor duplicated — it is in effect exactly where both its type and its spec are
 visible. Implementations are written for a **concrete or generic type** (`list[T]` may implement
 `Iterator`); a blanket implementation conditioned on a bound — one covering every type that satisfies
@@ -196,6 +198,34 @@ at compile time rather than adding fully-qualified call syntax to disambiguate; 
 across specs, have them obtain it from one shared spec. Where a spec may be implemented across package
 boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
+
+### Resolving a parameterized spec
+
+Because a parameterized spec's parameter is part of an implementation's identity, a type may implement
+`Iterator[int]` and `Iterator[str]` both. The compiler then **resolves which one** a use means by the same
+machinery that types an untyped literal: it picks the **unique** candidate under which every constraint on
+the value — including how it is **used in the body** that follows — type-checks.
+
+```text
+for x in y {          # y implements Iterator[int] and Iterator[str]
+    z := 10           # untyped literal → int
+    print x + z       # x + int type-checks only if x is int → Iterator[int] is chosen
+}
+```
+
+Three outcomes, mirroring literal typing but with **no default fallback**:
+
+- **exactly one** candidate type-checks → resolved, no annotation;
+- **none** → an ordinary type error (as `x + str` would be against a `str`-only iterator);
+- **two or more** → a **hard compile error demanding an annotation** (`for x: int in y`). It is never
+  demoted to a warning or picked by a default: unlike an uncovered `match` (whose fallback is a loud
+  `MatchError`), a mis-resolved implementation has no safe fallback — it would silently run the wrong code.
+
+Distinct concrete parameters never overlap, so resolution is well-defined; the open question is only which
+of several matches a use means. The idiom therefore stays **one implementation per type** — several are a
+power tool, and any use a body cannot pin down must annotate. A concrete-bound generic names the parameter
+directly (`[I: Iterator[int]]`) or binds it fresh (`[I: Iterator[T]]` binds `T` to the iterator's
+element), so **bounds are never ambiguous** — only a bare use on a value with several implementations is.
 
 ### Type tests — `is`
 

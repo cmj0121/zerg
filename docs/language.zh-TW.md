@@ -283,6 +283,11 @@ desugar** 成對各片段的 `str` 建構（[Collections](collections.zh-TW.md) 
 **格式指示子——`f"{x:>.2f}"`。** `:` 後綴選 width、precision、進位或對齊。完整指示子文法**延後**；概念上它導向一個
 獨立的 per-type **format 協定**、而非 `display` 的參數，好讓這套 mini-language 能長大而不撐爆 `display`。
 
+**`print`——內建的輸出關鍵字。** `print x` 把 `x.display()`（任何值——每個型別都有）加一個換行寫到 stdout。它是
+**保留字**、永遠在 scope 內、免 import，所以最小的程式只需要 `print f"hello {name}"`。它是**盡力而為**——stdout
+的寫入錯誤會被丟掉、不會 raise——所以 `print` 不需 `?`；有檢查的完整 I/O 面（`stderr`、檔案、socket、buffered
+writer）是要 import 的 `io` package（見 Process & I/O）。
+
 在迴圈裡建長字串，仍是先收集進 `list` 再用 `str(...)` 轉，而非重複 `+`（那樣每步都會複製整個累積字串）——見
 [Collections](collections.zh-TW.md)。
 

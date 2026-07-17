@@ -162,7 +162,8 @@ types the operators desugar to (`Either`, `Result`, `T?`, `nil`), the built-in s
 `Ord`, `Hash`, `Iterator`/`Iterable`, `Ref`, the operator specs — see [Language Reference](language.md)),
 and a few pervasive types — the `list`, `map`, and `set` containers (see
 [Collections](collections.md)) and the `Ref[T]` resource box. (Primitives — `bool`, `int`, `str`, … —
-and `chan`, plus the `defer` construct, are likewise grammar and runtime, not imported names.) These
+and `chan`, plus the `defer` and `print` constructs, are likewise grammar and runtime, not imported
+names.) These
 names are **reserved**: a
 declaration may not shadow or redeclare them, so the operators that desugar to them can never be
 knocked out from under the language.

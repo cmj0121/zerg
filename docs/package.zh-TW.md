@@ -126,8 +126,8 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 關鍵字。它裝的是語言本身倚賴的東西：運算子 desugar 的目標型別（`Either`、`Result`、`T?`、`nil`）、built-in spec
 （`Object`、`Error`、`Ord`、`Hash`、`Iterator`／`Iterable`、`Ref`、運算子 spec——見 [語言參考](language.zh-TW.md)），
 外加少數泛用型別——`list`、`map`、`set` 容器（見 [Collection](collections.zh-TW.md)）與 `Ref[T]` 資源盒。
-（primitives——`bool`、`int`、`str`……——與 `chan`、以及 `defer` 構造同樣是 grammar 與 runtime，不是被 import 的
-名字。）這些名字是
+（primitives——`bool`、`int`、`str`……——與 `chan`、以及 `defer`／`print` 構造同樣是 grammar 與 runtime，不是被
+import 的名字。）這些名字是
 **保留字**：宣告不得 shadow 或重宣告它們，所以那些 desugar 到它們的
 運算子永遠不會被從語言底下抽走。
 

@@ -62,6 +62,23 @@ first := xs[0]                 # aborts if empty
 name  := m.get(id) ?? "anon"   # checked, then default
 ```
 
+## Slicing — read-only subranges
+
+A **subrange** of a `list` — `xs.slice(a, b)`, the elements `[a, b)` — is an ordinary **read-only
+`list[T]` value**, not a borrow. There is **no aliasing**: a slice never writes back into its parent, so
+it needs no borrow checker and carries none of a pointer-into-storage's hazards — it obeys the same
+copy-by-value model as any collection.
+
+To keep that free, the compiler may realize the copy as **copy-on-write**: a slice **shares its parent's
+backing storage** until either side is mutated, at which point the real copy happens first — so value
+semantics hold on paper while the common read-only case stays **zero-copy** in practice. COW is an
+unobservable optimization, alongside copy-elision and the move (Values & Memory in the
+[Language Reference](language.md)); it adds no new sharing you can see, only a cheaper `copy`.
+
+So a lexer scans by index (`xs[i]` is O(1)) and takes read-only windows with `slice` at no copy cost,
+materializing a `str` only when it keeps a token. The **`x[a..b]`** slice-index sugar is planned but
+deferred to the grammar (see Deferred); `slice(a, b)` is the operation until then.
+
 ## Order & equality
 
 `list` walks in index order; `map`/`set` in **insertion order** — deterministic, no hash-ordering surprise.
@@ -106,3 +123,4 @@ element or a key. (Rendering a non-text value to text — an `int` to `"42"`, `f
 ## Deferred
 
 - **Ordered variants** — a sorted `map`/`set` keyed on `Ord` rather than `Hash`, if wanted.
+- **`x[a..b]` slice-index sugar** — the range-index form of `slice(a, b)`; a grammar/syntax concern.

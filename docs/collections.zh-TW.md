@@ -58,6 +58,20 @@ first := xs[0]                 # 空的話 abort
 name  := m.get(id) ?? "anon"   # 檢查後給預設
 ```
 
+## 切片——唯讀子區間
+
+一個 `list` 的**子區間**——`xs.slice(a, b)`，即 `[a, b)` 的元素——是一個普通的**唯讀 `list[T]` 值**、不是 borrow。
+**沒有 aliasing**：切片絕不寫回它的母體，所以不需要 borrow checker、也沒有「指進別人 storage」的那些危險——它遵守
+與任何 collection 相同的 copy-by-value 模型。
+
+要讓它免費，編譯器可以用 **copy-on-write** 實現那份 copy：切片**與母體共享底層 storage**，直到任一方被變動、才先
+做真正的複製——所以帳面上是 value semantics，而常見的唯讀情況實務上維持**零拷貝**。COW 是不可觀察的最佳化，與
+copy-elision、move 同列（見[語言參考](language.zh-TW.md)的 Values & Memory）；它不新增任何你看得見的共享，只是讓
+`copy` 更便宜。
+
+於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
+**`x[a..b]`** slice-index 語法糖已規劃、但延後到 grammar（見待決）；在那之前用 `slice(a, b)` 這個操作。
+
 ## 順序與相等性
 
 `list` 依索引序走訪；`map`／`set` 依**插入序**——有決定性、不會有 hash 亂序的驚嚇。走訪時**以值讀取每個元素**（可
@@ -96,3 +110,4 @@ list-collect，別用重複的 `+`（那樣每一步都會複製整個累積字�
 ## 待決
 
 - **有序變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`，如果有需要的話。
+- **`x[a..b]` slice-index 語法糖**——`slice(a, b)` 的 range-index 形式；屬 grammar／語法層，延後。

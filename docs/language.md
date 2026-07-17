@@ -199,6 +199,13 @@ across specs, have them obtain it from one shared spec. Where a spec may be impl
 boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
 
+**Specs are flat — there is no super-spec.** A `spec` never requires another; needing several capabilities
+at once is said at the **use site** with a combined bound — `[T: Ord + Hash]`, the `+` reading as "and" —
+never baked into a spec as a supertrait. The one hierarchy other languages lean on, `Ord: Eq`, is moot
+here: equality comes from the universal `Object`, so it is always present without being required. Implied
+bounds and cross-spec default-body reuse are given up deliberately — a capability shared by several specs is
+its own spec, listed alongside them in the bound.
+
 ### Resolving a parameterized spec
 
 Because a parameterized spec's parameter is part of an implementation's identity, a type may implement

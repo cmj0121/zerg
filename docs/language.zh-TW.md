@@ -159,6 +159,11 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Module、Package 與 Program](package.zh-TW.md)。
 
+**spec 是扁平的——沒有 super-spec。** 一個 `spec` 絕不要求另一個；需要同時具備多種能力，是在**用處**以組合 bound
+說出——`[T: Ord + Hash]`，`+` 讀作「而且」——絕不把它 baked 成一個 spec 的 supertrait。別的語言倚賴的那一條階層
+`Ord: Eq`，在這裡是多餘的：相等性來自普世的 `Object`、恆在，無須被要求。implied bound 與跨 spec 的 default-body
+重用是刻意放棄的——被多個 spec 共用的能力，就自成一個 spec、在 bound 裡與它們並列。
+
 ### 解析帶參數的 spec（Resolving a parameterized spec）
 
 因為帶參數 spec 的參數是實作身分的一部分，一個型別可以同時實作 `Iterator[int]` 與 `Iterator[str]`。編譯器接著用

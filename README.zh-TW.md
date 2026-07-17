@@ -4,8 +4,8 @@
 
 > 想到什麼就寫什麼——做一件事，只有一種、也是唯一一種方法。
 
-Zerg 是一門**編譯式、通用型程式語言**。編譯器會把 Zerg 原始碼轉譯成 **C**（預設 **C17**，可 fallback
-**C99**），再交給 C 編譯器產生原生執行檔。程式寫得快、讀得懂、直白到不能再直白。
+Zerg 是一門**編譯式、通用型程式語言**。編譯器會把你的 Zerg 原始碼轉譯成 **C**（預設 **C17**，不行就 fallback 到
+**C99**），再交給 C 編譯器做出原生執行檔。程式寫得快、讀得懂、直白到不能再直白。
 
 ## 設計原則（Design Principles）
 
@@ -29,7 +29,7 @@ Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.z
 
 ## 影響來源（Influences）
 
-是 synthesis、不是翻版——每一塊都有出處：
+這是 synthesis、不是翻版——每一塊都有它的出處：
 
 - **Rust**——`spec` 系統（nominal trait：coherence + orphan rule、default method、monomorphize、`dyn`
   existential）、value/abort 兩層錯誤、`Ref` ≈ `Rc`/`Arc`。
@@ -39,7 +39,7 @@ Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.z
 - **Zig**——overflow raise；`+%` / `-%` / `*%` 的 wrapping 運算子。
 - **Nim / V**——以 transpile 到 C 作為 codegen target。
 
-而這個**組合**是 Zerg 自己的：**transpile 到 C、Rust 等級的 `spec` 系統、CSP channel 且**完全不共享可變狀態**、
+但這個**組合**是 Zerg 自己的：**transpile 到 C、Rust 等級的 `spec` 系統、CSP channel 且**完全不共享可變狀態**、
 以及 copy-by-value 而無 `move` 語法。**
 
 ## 編譯流程（Compile Flow）

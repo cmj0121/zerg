@@ -21,13 +21,13 @@
 - **整數溢位與除以零會 raise**（`OverflowError`、`DivideByZeroError`）——這是一次 **abort**、不是值
   （見 Null-safety）；`int`/`uint`/`byte`/`rune` 絕不環繞（要環繞就用下方的 `+%`/`-%`/`*%`）。
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
-- **`str` 以 `rune` 迭代、不可索引**——要原始位元組就轉 `list[byte]`
-  （見 [Collection](collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永不含 NUL）。
+- **`str` 以 `rune` 迭代、不可索引**——想要原始位元組，就轉成 `list[byte]`
+  （見 [Collection](collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永遠不含 NUL）。
 
 ### 整數運算（Integer operations）
 
 - **Bitwise**——`&`、`|`、`^`、`~`（and、or、xor、complement）與位移 `<<`、`>>`，適用 `int`/`uint`/`byte`。`>>` 對 signed
-  `int` 是 **arithmetic**（補符號位）、對 unsigned `uint`/`byte` 是 **logical**（補 0）——由型別的正負號決定，故不
+  `int` 是 **arithmetic**（補符號位）、對 unsigned `uint`/`byte` 是 **logical**（補 0）——由型別的正負號決定，所以不
   需另設 logical-shift 運算子；位移量 **≥ 型別寬度**會 raise（`OverflowError`）。這些 desugar 到 spec（user type 可
   多載——見內建 spec），且 bitwise **符號**永不與邏輯**關鍵字** `not`/`and`/`or` 撞臉。
 - **Wrapping**——`+`、`-`、`*` 溢位 raise；**`%` 後綴**的 `+%`、`-%`、`*%`（及一元 `-%`）改為 **mod 2^n 環繞**——供
@@ -54,7 +54,7 @@
 **可見性（`pub`）**——每個宣告（型別、欄位、函式）**預設 private，只在自己的 module 內可見**；在前面加 `pub`
 才會匯出、供他處使用。mutability 是另一條獨立的軸、**不**在這裡宣告：它屬於**實例（instance）**（也就是
 binding；見 Values & Memory），絕不屬於欄位或型別。module 與 package 是什麼，以及可見性、coherence、entry point
-如何跨越它們，見 [Modules, Packages & Programs](package.zh-TW.md)。
+如何跨越它們，見 [Module、Package 與 Program](package.zh-TW.md)。
 
 ```text
 struct Node {
@@ -68,14 +68,14 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
-`Either`、`Result[T]`、`T?` 並不特殊——它們是建立在 `enum` 之上的普通 stdlib 型別（見 Null-safety）。一個 `enum`
+其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別（見 Null-safety）。一個 `enum`
 的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
 
 ## 模式比對（Pattern matching）
 
 `match` 是一個 **expression**：它用 **arm**（`pattern -> result`）逐一試一個值，跑第一個命中的、產出它的 result。
 每個 arm 產出**相同型別**，所以 `match` 是個值，可用於 `:=`、`return`、或引數——產出 `nil` 的 arm 讀來就是普通
-statement。覆蓋是**建議、非強制**：漏掉某情況的 `match` 是一個 **warning**（linter 可加嚴）、**不是編譯錯誤**——
+statement。覆蓋算**建議、不強制**——你漏掉某個 case，頂多是個 **warning**（linter 可加嚴），**不是編譯錯誤**——
 所以**新增一個 `enum` variant 永不破壞 dependent 的 `match`**。結尾的 **`_`** 收其餘；一個值落到沒有 arm 覆蓋的
 `match` 會在**執行期 abort**（`MatchError`），而**多餘**的 arm（已被前面 arm 覆蓋者）同樣是 warning。
 
@@ -139,13 +139,13 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、或型別為 `X + Y` 的值）。Zerg 在編譯期**拒絕
 這個組合**，而不引入 fully-qualified 呼叫語法來消歧；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
-[Modules, Packages & Programs](package.zh-TW.md)。
+[Module、Package 與 Program](package.zh-TW.md)。
 
 ### Method、`this` / `This` 與 default body
 
 一個 **method** 是帶 **receiver** 的函式——被呼叫的那個實例，名為 **`this`**；receiver 自身的型別是 **`This`**。
 `This` 在「具體型別尚未知」處指「**實作它的那個型別**」——同型別的運算元（`less(this, other: This) -> bool`）、或
-**associated function** 的結果（`default() -> This`，即 constructor——它無 receiver，故無 `this`）——並在每個實作裡
+**associated function** 的結果（`default() -> This`，也就是 constructor——它沒有 receiver，所以也沒有 `this`）——並在每個實作裡
 解析成具體型別。generic `spec` 參數（`Iterator[T]`）是**另一件事**：一個自由選的型別（element、異型別運算元）；
 `This` 則是被逼定的 self-type，永非選擇。
 
@@ -161,7 +161,7 @@ spec 的 method 分兩種：
 被 bound 的 `T` 呼叫。這些 provided default 都是**行為性**的——寫在 method 上、不碰 fields；另一個由 compiler
 讀取型別結構來生成 impl 的**結構性**層，見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
-一個 method 或 function 可帶**自己的型別參數**、疊加在 receiver 的之上：`map[U](this, f: fn(T) -> U)` 在 spec 的
+一個 method 或 function 可帶**自己的型別參數**、疊加在 receiver 上面：`map[U](this, f: fn(T) -> U)` 在 spec 的
 `T` 與 receiver 的 `This` 之外再加一個 `U`，每個具體組合各 **monomorphize** 一份。provided method 也能泛型——這
 正是讓 adapter 能改變 element 型別（`T` → `U`）的關鍵。
 
@@ -193,7 +193,7 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
   `code() -> byte?`（可選小碼）。
 - **`Add` / `Sub` / `Mul` / `Div` / … 與 bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
-  `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，故 `+`
+  `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，所以 `+` 會
   **串接**成新字串（見 [Collection](collections.zh-TW.md)）。
 - **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
 
@@ -203,14 +203,14 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 **`chan`**（其 `drop` 即 close）與 stdlib 的 **`Ref[T]`** 資源盒（見 Values & Memory）。一般程式碼**使用 `Ref[T]`、
 絕不實作 `Ref`**——所以「這個值是否以 reference 共享？」始終有明確答案：只有 `chan` 與 `Ref[T]` 是。
 
-**運算子 desugar 到 spec**，所以 user type 可藉實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
+**運算子 desugar 到 spec**，所以 user type 可以靠實作對應 spec 來多載值運算子——`==` / `<` 已經走 `equal` / `Ord`。
 多載必須維持**慣常**語意（`+` 不是加法就是濫用，違背 `small and crisp`）。**邏輯運算子都是關鍵字**——`not`
 （一元），以及**會短路的** `and` / `or`——只作用於 `bool`、回傳 `bool`（不吃 truthiness；要判斷就 `bool(x)`）：`and`
 在左側為 `false` 時跳過右側、`or` 在左側為 `true` 時跳過右側；logical xor 就是 `a != b`（**沒有** `xor` 關鍵字——它
 無法短路，是普通運算、不是關鍵字）。這些、以及 null-safety 運算子（`?`、`??`、`?.`、`!`），都是**固定構造——永不
 可多載**；bitwise 符號（`& | ^ ~`，見整數運算）永不與它們撞臉。
 
-`float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——故 `float` 永不是排序集合的元素、也永不是 key，
+`float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——所以 `float` 永遠不是排序集合的元素、也不是 key，
 而一個**含** `float` 的複合型別會透明地繼承這點：它 auto-derived 的 `equal` 用 `==` 比那個欄位，所以對 `NaN`
 **非自反**，`Ord`/`Hash` 也**不會白得**。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
 陷阱：`Hash` 需要一個**自反**的 `equal` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
@@ -236,7 +236,7 @@ producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，所�
 
 - 整數 cast 的值**放不進**目標就 raise（`OverflowError`）——`byte(300)`、`uint(-5)`、對超過 i64 的 `uint` 做
   `int(u)`。**checked** 版是 `guard { byte(x) }` → `Result`；要**截斷**到低位就先遮罩——`byte(x & 0xFF)` 一定 fit、
-  故不 raise。saturating 延後。
+  所以不會 raise。saturating 延後。
 - **`float` → 整數**捨去小數（`int(3.7)` 是 `3`——是本意、非 bug），但當整數部分**超出範圍**、或 float 是
   `NaN` / `±Inf` 時 raise。
 
@@ -321,8 +321,8 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 `del` 是**流程一致的**：一個名字只要在任一路徑上被 `del`，其後**每一條**路徑都視它為已死（不引入 runtime drop
 flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可再用，與其他分支對稱。
 
-`del ch` 也是**提早關閉 channel** 的直接寫法——當下放掉你對 `ch` 的持有，若你是它最後一個 sender
-即關閉 channel，無需再包一層更窄的 block。
+`del ch` 也是**提早關閉 channel** 的直接寫法——當下放掉你對 `ch` 的持有，若你是它最後一個 sender，
+就會關閉 channel，無需再包一層更窄的 block。
 
 ### `defer`——在 block 退出時清理
 
@@ -380,7 +380,7 @@ scope 的閉包帶著自己的副本，永不懸空。等價地說：
 
 > 一個閉包就是一個 scope-owned struct，它的欄位就是它的捕獲。
 
-因此複製、釋放、channel-refcount 全都從既有記憶體規則掉出來、無須新增；捕獲了具 send 能力的 channel 端就算一個
+所以複製、釋放、channel-refcount 全都是既有記憶體規則自然帶出來的、不用另外加；捕獲了具 send 能力的 channel 端就算一個
 holder，所以活著的閉包會撐住該 channel 的 send 側（見 [Coroutines 與 Channels](coroutine.zh-TW.md) 的
 send-coverage 不變式）。
 
@@ -397,7 +397,7 @@ apply := fn(req: Request) -> Reply {
 
 兩個經典的閉包陷阱因此在結構上被排除。plain `loop x in xs` 的變數是**每一輪一個全新的不可變 binding**（該元素的
 一份 copy），而 capture 是複製值——所以捕獲它的閉包保有**自己這一輪的值**，沒有共享 loop 變數的 bug、也不需快照
-（`loop mut x` 這種就地形式是 `mut`，故與任何 `mut` 一樣不可捕獲——先快照）：
+（`loop mut x` 這種就地形式是 `mut`，所以跟任何 `mut` 一樣不可捕獲——先快照）：
 
 ```text
 loop x in xs {

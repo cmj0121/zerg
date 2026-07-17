@@ -7,7 +7,7 @@ Zerg package 如何與 **C ABI** 交界——這是唯一一處 Zerg 值變成 C
 
 ## 兩條邊、一份契約
 
-FFI 有兩個方向，而它們刻意重用你已經有的機制，而不是各自長出一套新語法：
+FFI 有兩個方向，它們刻意重用你已經有的機制，而不是各自長出一套新語法：
 
 | 邊         | 方向     | 如何表達                                                            |
 | ---------- | -------- | ------------------------------------------------------------------- |
@@ -40,15 +40,15 @@ FFI 有兩個方向，而它們刻意重用你已經有的機制，而不是各�
 | opaque handle               | opaque `typedef`（指標形狀）       | 一個外部資源——Zerg 永不解參考                 |
 
 一個 **`T?`、其 `T` 為 pointer-shaped**（opaque handle，或 `fn`）**不會**長出 tag：`nil` 就是**null pointer**、
-值就是那個裸指標。只有非指標 `T` 的 `T?`（例如 `int?`）才需要 tagged 形式。這正是讓 handle 的 out-parameter 能
-對上 C 的 `T**` 慣例的原因（見範例）。
+值就是那個裸指標。只有非指標 `T` 的 `T?`（例如 `int?`）才需要 tagged 形式。這就是為什麼 handle 的 out-parameter 能
+對上 C 的 `T**` 慣例（見範例）。
 
 **非 FFI-safe**——在 `extern` 簽章中被拒、也不會進到匯出的 header，且**一律附診斷、絕不靜默**：
 
-- **generic 與 `spec` bound**——generic 在 monomorphize 前不是單一型別，沒有單一 C 簽章。改讓一個**具體**實例跨界
+- **generic 與 `spec` bound**——generic 在 monomorphize 前不是單一型別，所以沒有單一 C 簽章。改讓一個**具體**實例跨界
   （在固定型別上包一層 `pub` wrapper）。
-- **`spec` 用作型別**（existential）——heap-boxed 且動態分派，沒有穩定 layout。這正是**`Result[T]` 永遠不是
-  FFI-safe** 的原因：它右側恆為 `Err`，也就是 `Error` spec 用作型別，沒有任何例外。匯出時改用 `T?`（右側是具體的
+- **`spec` 用作型別**（existential）——heap-boxed 且動態分派，沒有穩定 layout。這就是為什麼**`Result[T]` 永遠不是
+  FFI-safe**：它右側恆為 `Err`，也就是 `Error` spec 用作型別，沒有任何例外。匯出時改用 `T?`（右側是具體的
   `nil`）或 `Either[T, C]`（`C` 為具體、FFI-safe 的錯誤型別）——不是新規則，只是把型別映射套上去。
 - **`chan` 與 coroutine handle**——由 runtime 管理、reference-counted、綁定 scheduler；對 C 毫無意義。
 - **會捕獲的 closure**——它是一個以 capture 為欄位的 scope-owned struct（見語言參考）。只有**不捕獲的頂層
@@ -128,7 +128,7 @@ Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與
   由普通 scope 規則釋放。
 - **C 配置、且 _Zerg 之後必須釋放_ 的 buffer 或資源**——**不**以 `str`／`list` 回來（那會在 Zerg 複製後洩漏 C 的
   原件），而是以一個 **opaque handle** 回來，配一個明確、由 wrapper 以 `Ref[T]` 的 `drop` 呼叫的 `extern` free
-  （見 opaque handle）。永遠沒有對外部記憶體的隱式釋放。
+  （見 opaque handle）。外部記憶體永遠不會被隱式釋放——一次都不會。
 
 ## 匯出一個 package（Zerg → C）
 
@@ -159,8 +159,8 @@ struct by value、`mut this` 變成指向它的指標（就地）——所以建
 
 `extern` 是**生的**：它精確映照 C 契約，不把 C 的任何錯誤慣例帶進 Zerg。一個以 `errno`、回傳碼或 `NULL` 結果
 表示失敗的 C 函式，會把那些原封回給 Zerg；把它們映射進 null-safety 模型的，是**手寫的薄 wrapper**——
-`res.ok_or(err)`、一個提早的 `return nil`，或一個建構出的 `Either`。沒有任何自動化，而這正是讓映射保持明確、
-可稽核的原因。
+`res.ok_or(err)`、一個提早的 `return nil`，或一個建構出的 `Either`。沒有任何自動化，而這正好讓映射保持明確、
+可稽核。
 
 ## 錯誤跨越邊界
 

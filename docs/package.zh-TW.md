@@ -18,12 +18,12 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 
 ### Program 與 entry point
 
-**program 是一次建置**，而非某種特殊 package。compiler 被指向一個 **entry 檔**——`zerg entry.zg`——以它為根展開
-建置，沿它的 import 走遍整張依賴 DAG。
+**program 是一次建置**，不是某種特殊的 package。你把 compiler 指向一個 **entry 檔**——`zerg entry.zg`——它就以
+這個檔為根展開建置，沿著它的 import 走遍整張依賴 DAG。
 
 - entry 檔名**不是保留字**；由建置指令指定。語言要求的是**內容**：entry 檔必須定義一個頂層 **`main`** entry
   function——它的形貌（輸入與結果）重用已定義的模型，就在下方。
-- `main` 未 `pub`，因此永遠不可被 import——「program 不可被依賴」這個性質免費得到，不需要特殊的 _binary package_
+- `main` 沒標 `pub`，所以永遠不可被 import——「program 不可被依賴」這個性質免費就有了，不需要特殊的 _binary package_
   種類。**每個 package 都是可被 import 的 library。**
 - **多個執行檔**只是多個 entry 檔，各自有自己的 `main`，各自把 compiler 指過去建置。
 - 讓 `main` 保持薄薄的接線層是**慣例**、不是規則——你想重用或測試的邏輯本來就必須放進可 import 的 package，這自然
@@ -33,22 +33,22 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 
 - **輸入。** 命令列參數——程式自己的介面——以**參數**進入。天生唯讀的 OS 環境事實（環境變數、時鐘、亂數）透過
   stdlib 取得、不進簽名；它們不是可變的全域狀態。
-- **結果。** `main` 回 `Result[nil]`，於是退出複用錯誤模型：`Left` 以 `0` 退出，`Right(err)` 把 `err` 印到 stderr
+- **結果。** `main` 回傳 `Result[nil]`，所以退出複用錯誤模型：`Left` 以 `0` 退出，`Right(err)` 把 `err` 印到 stderr
   並以非零碼退出，未被攔截的 **abort** 則 unwind main stack 而 crash。預期失敗（`Right`）與 bug（abort）維持兩種
-  不同的退出，且 `?` 可直接用在 `main` 裡。
+  不同的退出，而且 `?` 可以直接用在 `main` 裡。
 
 ### Program 生命週期與頂層初始化
 
-`main` 的 body 是**整個 program 的根 scope**：它一回傳，其下所有 scope-owned 的東西即被釋放，任何還在跑的 coroutine
-就地被拋棄（沒有 join——若某 coroutine 必須先跑完，就用 channel 觀察到它完成再讓 main 退；見
+`main` 的 body 是**整個 program 的根 scope**：它一回傳，底下所有 scope-owned 的東西就會被釋放，任何還在跑的 coroutine
+就地被拋棄（沒有 join——要是某個 coroutine 必須先跑完，就用 channel 觀察到它完成、再讓 main 退；見
 [Coroutines 與 Channels](coroutine.zh-TW.md)）。
 
 `main` 之外只住著**不可變的頂層狀態**——常數、函式、型別與 spec——在 `main` 執行前備妥。頂層常數以**依賴序**初始化；
-它們之間的循環是 compile error。
+它們之間要是形成循環，就是 compile error。
 
 一個 module 也可定義 **`init()`** 函式（**可多個**）——它**惰性**的一次性 setup。它們**恰好跑一次**，在該 module
 **首次被使用時**（其後的使用略過；並行的首次使用仍只跑一次），依**相依序**（module 的 imports 先 init），在它任何
-自己的程式碼之前。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而非把它藏進 constant 的 initializer，
+自己的程式碼之前。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它藏進 constant 的 initializer，
 並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走 channel，絕不透過 module 層級的變數。
 
 ### Package
@@ -65,13 +65,13 @@ package 的型別在全程式裡保有單一身分。
 在地強制——一個實作必須住在**定義該型別的 package**、或**定義該 spec 的 package**。
 
 這仍讓你能**替 import 進來的型別加上新行為**：定義你自己的 spec、為那個外來型別實作它——spec 是你擁有的，orphan
-rule 便滿足。給別人的型別加一項能力是**一等、日常的動作**，不是變通。這條規則唯一擋掉的組合是**外來型別 × 外來
+rule 就滿足了。給別人的型別加一項能力是**一等、日常的動作**，不是變通。這條規則唯一擋掉的組合是**外來型別 × 外來
 spec**——替別人的型別實作別人的 spec、兩者你都不擁有；這種較罕見的情況，就用你自己擁有的 **newtype**（單欄位
 struct，搭配 opt-in 的 auto-cast 減少包裝摩擦）把型別包一層，在包裝上實作該 spec。
 
 coherence **不需要全域註冊表**——orphan rule 加上**無環**的 package 圖就保證了它。要 author 一組 `(型別, spec)` 的
 實作，一個 package 必須能同時指名兩者；而因為依賴圖是 DAG，兩個擁有者 package 中至多只有一個能依賴（因而指名）
-另一個，任何第三方 package 也無法在不擁有其一的情況下同時指名兩者。因此該實作若存在，便由構造保證唯一。單一版本
+另一個，任何第三方 package 也無法在不擁有其一的情況下同時指名兩者。所以該實作要是存在，就由構造保證唯一。單一版本
 選擇正是讓「一型別、一實作」有明確定義的前提。
 
 ### Module
@@ -82,7 +82,7 @@ coherence **不需要全域註冊表**——orphan rule 加上**無環**的 pack
 巢狀是**扁平的**：把一個目錄放在另一個底下，只是讓 import path 變長——**沒有階層式私有**，內層 module 對外層並無
 特殊存取權。**module 之間的 import 循環會被拒絕。**
 
-因此相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是共享命名空間的多檔案目錄：一個 `ast`
+所以相互遞迴的型別與函式住在**同一個 module**——而這不痛，因為 module 是共享命名空間的多檔案目錄：一個 `ast`
 module 可以把 `Expr`、`Stmt` 分放在不同檔案、彼此**免 import** 互相引用，編譯器 forward-declare、auto-boxing 讓遞迴有
 有限 layout，與自我參照型別完全相同。當兩個分屬**不同關注點**的型別互相回指，這條禁令是個推力——用 **id 引用**打破
 循環（通常是更好的設計），而不是把它們併一起（package 圖是 DAG 也是同一道理：互相依賴的 package 必須合為一個）。
@@ -128,14 +128,14 @@ primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，�
 外加少數泛用型別——`list`、`map`、`set` 容器（見 [Collection](collections.zh-TW.md)）與 `Ref[T]` 資源盒。
 （primitives——`bool`、`int`、`str`……——與 `chan`、以及 `defer` 構造同樣是 grammar 與 runtime，不是被 import 的
 名字。）這些名字是
-**保留字**：宣告不得 shadow 或重宣告它們，因此那些 desugar 到它們的
+**保留字**：宣告不得 shadow 或重宣告它們，所以那些 desugar 到它們的
 運算子永遠不會被從語言底下抽走。
 
 其餘一切都是**標準函式庫**——一個普通 package，只有一點不同：**std 隨 toolchain 出貨**，所以它的版本就是編譯器的
 版本、你從不把它列為相依。它像一般 package 一樣顯式 import：`io`、`math`、更多 collection，以及讀取唯讀 OS 狀態的
 ambient-OS 函式（`env`、時鐘、亂數）。
 
-因為 prelude 是 built-in、而非隱式 import，「無 ambient import」便毫無例外地成立。
+因為 prelude 是 built-in、而不是隱式 import，「無 ambient import」就毫無例外地成立。
 
 ### 測試與可見性（Testing & visibility）
 
@@ -152,7 +152,7 @@ ambient-OS 函式（`env`、時鐘、亂數）。
 
 ### Target 條件式檔案
 
-平台與架構差異用**同一套方式**處理——在**檔案層級、由 build 工具依慣例**——而非語言內的 `#ifdef` / `cfg` 構造
+平台與架構差異用**同一套方式**處理——在**檔案層級、由 build 工具依慣例**——而不是語言內的 `#ifdef` / `cfg` 構造
 （那會讓程式碎裂、違背 `small and crisp`）。一個 module 保留**各 target 的檔案**（像 `_linux` / `_darwin` 的名稱後
 綴，與 `_test` 慣例並列），build 只納入符合所選 target 的那些；語言本身維持 **target-agnostic**、不賦予檔名任何意義。
 確切的 target 命名與匹配方案屬 build 工具細節，**延後**。

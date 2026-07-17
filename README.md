@@ -4,8 +4,8 @@ English | [繁體中文](README.zh-TW.md)
 
 > Write the code as you think — one way, and only one way, to do it.
 
-Zerg is a **compiled, general-purpose language**. Its compiler translates Zerg source to **C**
-(**C17** by default, **C99** fallback), then hands off to a C compiler for the native binary.
+Zerg is a **compiled, general-purpose language**. The compiler translates your Zerg source to **C**
+(**C17** by default, **C99** as a fallback), then hands it off to a C compiler to build the native binary.
 Programs are fast to write, easy to read, and overwhelmingly straightforward.
 
 ## Design Principles
@@ -30,7 +30,7 @@ are in the **[Language Reference](docs/language.md)**, with companion references
 
 ## Influences
 
-A synthesis, not a clone — each piece has prior art:
+It's a synthesis, not a clone — every piece has prior art:
 
 - **Rust** — the `spec` system (nominal traits: coherence + orphan rule, default methods,
   monomorphization, `dyn` existentials), the value/abort two-tier errors, `Ref` ≈ `Rc`/`Arc`.
@@ -40,7 +40,7 @@ A synthesis, not a clone — each piece has prior art:
 - **Zig** — overflow raises; the `+%` / `-%` / `*%` wrapping operators.
 - **Nim / V** — transpiling to C as the codegen target.
 
-The combination is Zerg's own: **transpile-to-C, a Rust-grade `spec` system, CSP channels with _no_
+But the combination is Zerg's own: **transpile-to-C, a Rust-grade `spec` system, CSP channels with _no_
 shared mutable state, and copy-by-value with no `move` syntax.**
 
 ## Compile Flow

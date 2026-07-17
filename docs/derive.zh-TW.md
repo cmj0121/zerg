@@ -1,11 +1,11 @@
 # Zerg Derive 與預設行為
 
-型別取得實作、卻不必逐一手寫每個 method 的**兩種**途徑，以及它們之間那條不可跨越的界線。本文延續
+型別想拿到實作、又不必逐一手寫每個 method 的**兩種**途徑，以及它們之間那條不可跨越的界線。本文延續
 [語言參考](language.zh-TW.md)的 **Specs & Generics**。另有 [English](derive.md) 版本。
 
 ## 兩種「免費」行為的來源
 
-一個型別能拿到自己沒手寫的實作，共有**兩種**截然不同的方式，Zerg 把它們嚴格分開：
+一個型別要拿到自己沒手寫的實作，其實有**兩種**截然不同的方式，而 Zerg 把它們嚴格分開：
 
 | 來源                        | 由誰撰寫       | 能讀 fields？ | 依據的輸入         | 使用者可自定？ |
 | --------------------------- | -------------- | ------------- | ------------------ | -------------- |
@@ -13,8 +13,8 @@
 | **concrete impl**           | **型別**擁有者 | 能            | 型別自己的 fields  | 可（手寫）     |
 | **structural derive**       | **compiler**   | 能（特權）    | 型別的結構         | **不可**       |
 
-concrete impl 是手寫基準線——一般的 module-local 程式，當然能讀自己的 fields。另外兩層才是「免費」層，
-本文其餘部分談的就是這兩者之間的界線。
+concrete impl 就是手寫的基準線——一般的 module-local 程式，本來就能讀自己的 fields。另外兩層才是「免費」層，
+本文接下來要談的，就是這兩者之間的界線。
 
 ## 不變式：spec 對 fields 是盲的
 
@@ -31,9 +31,9 @@ concrete impl 是手寫基準線——一般的 module-local 程式，當然能�
 
 ## Behavioral default——spec 自帶，且使用者可自定
 
-provided method 是**寫在 `this` 上其他 method 之上的 default body**，從不寫在 fields 之上（即上述不變
-式）。它讓一個 spec 從很小的 required 核心導出許多 method；實作者可**繼承**、也可**覆寫**其一。每個
-使用者 spec 都能帶這種 default——這是**可擴充**的一層。
+provided method 是**寫在 `this` 上其他 method 之上的 default body**，從不寫在 fields 之上（也就是上述那條
+不變式）。它讓一個 spec 只靠很小的 required 核心，就導出許多 method；實作者可以**繼承**、也可以**覆寫**
+其中一個。每個使用者 spec 都能帶這種 default——這就是**可擴充**的那一層。
 
 ```text
 spec Summable {
@@ -48,17 +48,17 @@ spec Summable {
 }
 ```
 
-實作 `zero` 與 `add`，`sum` 就免費得到。這是**從行為導出行為**、完全不碰結構，因此遵守 field-blind，也
+實作 `zero` 與 `add`，`sum` 就免費得到。這是**從行為導出行為**、完全不碰結構，所以自然遵守 field-blind，也
 完全可由使用者自定——這就是「我要怎麼定義自己可重用的 default？」的答案。
 
 ## Structural derive——compiler 的特權，且封閉
 
-`derive X for T` 是請 **compiler** 藉由**讀取 T 的結構**產生 `(T, X)` 的 canonical 實作——product
+`derive X for T` 就是請 **compiler** 靠**讀取 T 的結構**，產生 `(T, X)` 的 canonical 實作——product
 **逐欄位**、sum **逐 variant**，並遞迴進入每個欄位自己的 `X`。它**不是**「空 impl 繼承 default body」的
 語法糖：spec 沒有結構化 default（它 field-blind），所以 `derive` 是一個**以受祝福的 spec 為鍵的
 compiler code generator**，與上面兩層都不同。
 
-**為何使用者無法自定新的 structural derive。** 從結構產生 impl，需要一段**會讀結構**的程式。這段程式
+**為何使用者沒辦法自定新的 structural derive。** 從結構產生 impl，需要一段**會讀結構**的程式。這段程式
 只可能是：
 
 - 一個 **spec / default body**——被 field-blind 禁止，或
@@ -106,7 +106,7 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 ## Serialization——完整範例
 
-serialization 正是 structural derive 存在的目的：一種機械式、逐欄位的對映，沒人該為每個型別手寫，卻又
+serialization 正是 structural derive 存在的目的：一種機械式、逐欄位的對映，沒人該為每個型別手寫，但它
 既不需要 reflection、也不需要 macro。
 
 ```text
@@ -167,6 +167,6 @@ impl Encode for User {                            # 取代 derive 出的那份
 }
 ```
 
-`Decode` 回傳 `Result[This]`，所以格式錯誤是一般 value-tier 失敗——happy path 免 `guard`、出錯以 `?`
+`Decode` 回傳 `Result[This]`，所以格式錯誤只是一般的 value-tier 失敗——happy path 免 `guard`、出錯以 `?`
 傳播——絕非 abort。（`Result[T]` 非 FFI-safe，但這裡無妨：`Encode`/`Decode` 是純 Zerg spec，永遠不跨
 C 邊界——見 [FFI](ffi.zh-TW.md) 參考。）

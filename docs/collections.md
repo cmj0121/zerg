@@ -1,7 +1,7 @@
 # Zerg Collections
 
 Zerg's built-in containers — **`list`**, **`map`**, **`set`** — one canonical type per role, no variant
-zoo. They are ordinary **scope-owned values**, built on the [Language Reference](language.md). Also in
+zoo. They're just ordinary **scope-owned values**, built on the [Language Reference](language.md). Also in
 [繁體中文](collections.zh-TW.md).
 
 | Type        | Role                        | Element / key requirement | Iteration order     |
@@ -17,9 +17,9 @@ hold a NUL); `str` stays a separate immutable primitive (below).
 
 A collection is a **scope-owned value**: **copy-by-value** (the compiler elides or moves when safe), freed
 at scope exit, **no aliasing** — copying deep-copies elements and refcount-bumps any contained `Ref` value (a
-channel or `Ref[T]`), the existing memory rule. There is no shared container behind two names: share for
-**reading** by immutable pass, for **mutation** by a `mut` parameter; a collection sent over a channel is
-copied like any payload.
+channel or `Ref[T]`), the existing memory rule. There's no shared container hiding behind two names: you
+share for **reading** with an immutable pass, for **mutation** with a `mut` parameter; a collection sent
+over a channel is copied like any other payload.
 
 ## Mutability — one per-binding knob
 
@@ -43,8 +43,8 @@ ys.append(4)               # grow  ·  ys[0] = 9  # edit  ·  ys = [2, 4]  # reb
 ## Keys — `equal` free, `Hash` explicit
 
 `list[T]` takes **any** `T` (only the structural ops every value has). A `map` key / `set` element needs
-**`Hash`** (keys compare by `equal`). The halves are deliberately asymmetric: `Object` **auto-derives `equal`**,
-but **`Hash` is not derived — a type implements it explicitly** to be a key, keeping "what may be a key" an
+**`Hash`** (keys compare by `equal`). The two halves are deliberately asymmetric: `Object` **auto-derives `equal`**,
+but **`Hash` is not derived — a type implements it explicitly** to be a key, keeping "what can be a key" an
 opt-in, `safe by default` choice. The author owns the contract the compiler can't check: **equal ⇒ same
 hash**. Because a key is **copied in** as a frozen snapshot, even a `mut` collection is usable as one.
 
@@ -53,8 +53,8 @@ hash**. Because a key is **copied in** as a frozen snapshot, even a `mut` collec
 Indexing mirrors the force-vs-check split of `!` / `?`:
 
 - **`xs[i]` / `m[k]`** — the element **by value**; **aborts** on a bad index or missing key
-  (`IndexError` / `KeyError`). A bad index is a **bug**, like overflow.
-- **`xs.get(i)` / `m.get(k)`** — the checked path → **`T?`** / **`V?`**, for expected absence.
+  (`IndexError` / `KeyError`). A bad index is a **bug**, just like overflow.
+- **`xs.get(i)` / `m.get(k)`** — the checked path → **`T?`** / **`V?`**, for when you expect absence.
 - **`x in s` / `k in m`** → `bool`; on a `mut` collection **`xs[i] = v`** sets in place.
 
 ```text
@@ -79,7 +79,7 @@ loop mut x in ys { x = x * 2 }            # edit in place — ys must be mut
 Within a `loop … in xs`, `xs` is **frozen against structural change** — appending, inserting, removing,
 growing/shrinking, or rebinding it inside the loop is a **compile error** — so an iterator can **never be
 invalidated** (no dangling cursor, no runtime fail-fast check). This is a **local** rule — the loop knows
-the collection it walks — so it needs no borrow checker and costs nothing at runtime. Editing an
+the collection it walks — so it needs no borrow checker and costs you nothing at runtime. Editing an
 **element** in place (`loop mut x`) stays fine: it never moves the cursor.
 
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or

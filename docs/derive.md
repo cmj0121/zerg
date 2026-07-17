@@ -1,12 +1,12 @@
 # Zerg Derive & Default Behavior
 
-Two ways a type acquires an implementation without its author spelling out every method — and the firm
-line between them. This builds on **Specs & Generics** in the [Language Reference](language.md). Also in
+Two ways a type can pick up an implementation without its author spelling out every method — and the
+firm line between them. This builds on **Specs & Generics** in the [Language Reference](language.md). Also in
 [繁體中文](derive.zh-TW.md).
 
 ## Two sources of "free" behavior
 
-A type can be handed an implementation it did not hand-write in **two** distinct ways, and Zerg keeps
+A type can be handed an implementation it didn't hand-write in **two** distinct ways, and Zerg keeps
 them strictly apart:
 
 | Source                      | Who writes it       | May read fields? | Input it works from    | User-definable? |
@@ -15,7 +15,7 @@ them strictly apart:
 | **concrete impl**           | the **type** owner  | yes              | the type's own fields  | yes (by hand)   |
 | **structural derive**       | the **compiler**    | yes (privileged) | the type's structure   | **no**          |
 
-The concrete impl is the manual baseline — ordinary module-local code that may of course read its own
+The concrete impl is the manual baseline — ordinary module-local code that can of course read its own
 fields. The other two are the "free" tiers, and the rest of this note is about the line between them.
 
 ## The invariant: specs are field-blind
@@ -36,7 +36,7 @@ language-level capability. Nothing written as a `spec` can do it. This keeps thr
 
 A provided method is a **default body written over other methods on `this`**, never over fields (the
 invariant above). It lets a spec expose many methods from a small required core; an implementer
-**inherits** them or **overrides** one. Every user spec may carry these — this is the **extensible**
+**inherits** them or **overrides** one. Every user spec can carry these — this is the **extensible**
 tier.
 
 ```text
@@ -60,11 +60,11 @@ own reusable default?"
 
 `derive X for T` asks the **compiler** to generate the canonical `(T, X)` implementation by **reading
 T's structure** — a product **field-by-field**, a sum **variant-by-variant**, recursing into each
-field's own `X`. It is **not** sugar for an empty impl inheriting a default body: a spec has no
-structural default (it is field-blind), so `derive` is a compiler **code generator keyed on a blessed
+field's own `X`. It's **not** sugar for an empty impl inheriting a default body: a spec has no
+structural default (it's field-blind), so `derive` is a compiler **code generator keyed on a blessed
 spec**, distinct from both tiers above.
 
-**Why a user cannot define a new structural derive.** Generating an impl from structure needs code that
+**Why a user can't define a new structural derive.** Generating an impl from structure needs code that
 **reads structure**. Such code can only be:
 
 - a **spec / default body** — forbidden by field-blindness, or
@@ -115,7 +115,7 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 ## Serialization — the worked example
 
 Serialization is the case structural derive exists to serve: a mechanical, field-by-field mapping no
-one should hand-write per type, yet which needs neither reflection nor a macro.
+one should hand-write per type, yet one that needs neither reflection nor a macro.
 
 ```text
 # stdlib specs — behavioral interfaces, field-blind like every spec
@@ -177,6 +177,6 @@ impl Encode for User {                            # replaces the derived one
 ```
 
 `Decode` returns `Result[This]`, so a malformed input is an ordinary value-tier failure — `guard`-free
-on the happy path, `?`-propagated on error — never an abort. (`Result[T]` is not FFI-safe, which is no
-constraint here: `Encode`/`Decode` are pure-Zerg specs and never cross the C boundary — see the
+on the happy path, `?`-propagated on error — never an abort. (`Result[T]` is not FFI-safe, but that's
+no constraint here: `Encode`/`Decode` are pure-Zerg specs and never cross the C boundary — see the
 [FFI](ffi.md) reference.)

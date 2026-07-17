@@ -1,21 +1,21 @@
 # Zerg Coroutines 與 Channels
 
 Zerg 的並行**只有 coroutine + channel**——沒有共享可變狀態、沒有 lock、沒有 future、沒有 join/handle。它建立在
-[Language Reference](language.md) 的記憶體與錯誤模型之上。亦有 [English](coroutine.md) 版本。
+[語言參考](language.zh-TW.md) 的記憶體與錯誤模型之上。亦有 [English](coroutine.md) 版本。
 
 ## `spawn`
 
 `spawn f(args)` 在 **M:N scheduler** 上啟動一個 coroutine（Go 的 `go`）。它**不回傳任何東西**——沒有 handle、沒有
-join/await；結果與完成**只透過 channel** 觀察。
+join/await；結果與完成**只能靠 channel** 觀察。
 
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
-- **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，故 coroutine 不
-  共享可變 Zerg 狀態（無 data race）。什麼能跨越邊界、以及如何跨越，見下一節 **共享與 memory model**。
+- **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會
+  共享可變的 Zerg 狀態（不會有 data race）。什麼能跨越邊界、以及如何跨越，見下一節 **共享與 memory model**。
 
 ## 共享與 memory model
 
 因為 coroutine 邊界對「除 `Ref` 值以外」的一切都複製，Zerg **不需要龐大的 memory model**——根本沒有共享可變狀態
-可 race。使用者可觀察的 ordering 只有一條，其餘皆由它導出：
+可 race。可觀察的 ordering 保證只有一條，其餘全都由它導出：
 
 > **一個 channel 的 `send` happens-before 對應的 `receive` 完成。**
 
@@ -55,16 +55,16 @@ receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
 
 send 與 receive **不對稱**：關閉是 producer 的決定，所以它一定知道。send 不回傳值——它只會完成、block，或 abort：
 
-| channel 狀態                              | `ch <- v`                                                  |
-| ----------------------------------------- | ---------------------------------------------------------- |
-| 開、送得出（有空位、或有等待的 receiver） | 完成；值在 **send 當下快照**                               |
-| 開、暫時送不出（滿了、或沒有 receiver）   | **block**——對還沒被收的 channel 送是合法的，不是 bug       |
-| 已 close                                  | **abort**（`SendOnClosedError`）——見 [Aborts](language.md) |
+| channel 狀態                              | `ch <- v`                                                        |
+| ----------------------------------------- | ---------------------------------------------------------------- |
+| 開、送得出（有空位、或有等待的 receiver） | 完成；值在 **send 當下快照**                                     |
+| 開、暫時送不出（滿了、或沒有 receiver）   | **block**——對還沒被收的 channel 送是合法的，不是 bug             |
+| 已 close                                  | **abort**（`SendOnClosedError`）——見 [Aborts](language.zh-TW.md) |
 
 ### 接收——`<-ch`
 
 receive 回傳 **`Result[T]`**：`Left(v)` 是值；`Right(err)` 代表 channel **已 close 且排空**，`err` 是**原因**——
-因此崩潰原因永不遺失。它**不**代表「空、等一下」（那是 block）。
+所以崩潰的原因永遠不會遺失。它**不**代表「空、等一下」（那是 block）。
 
 | channel 狀態                     | `<-ch : Result[T]`                         |
 | -------------------------------- | ------------------------------------------ |
@@ -114,7 +114,7 @@ cleanup()
 
 ### send 覆蓋不變量
 
-auto-close 是 **level-triggered**：send-count 一碰 0 就開火，沒有「等一下還有 sender 要來」的概念。因此一條規則：
+auto-close 是 **level-triggered**：send-count 一碰 0 就開火，沒有「等一下還有 sender 要來」這種概念。所以就一條規則：
 
 > 從建立起、到你認定*此後再無任何 send* 為止，**任一瞬間都必須至少存在一個 send 能力的持有者。**
 
@@ -259,8 +259,8 @@ coroutine。
 ## 收尾與 deadlock
 
 - **程式生命週期**——main 主 stack return 時，**程式結束**；仍在跑的 coroutine 就地停止、OS 回收一切。沒有 join，
-  所以若某 coroutine 必須在退出前完成，就把它驅動到一個由 channel 觀察到的完成點。
-- **對無 receiver 的 channel send 只是 block**——即使 receive 側可證明永久為空，Zerg 也不 abort 它；要等還是要放棄
+  所以要是某個 coroutine 必須在退出前完成，就把它驅動到一個由 channel 觀察到的完成點。
+- **對無 receiver 的 channel send 只是 block**——就算 receive 側可以證明永遠是空的，Zerg 也不會 abort 它；要等還是要放棄
   是**呼叫端**的決定（例如帶 cancel 或 timeout arm 的 `select`）。
 - **全域 deadlock 偵測**——若每個 coroutine 都 block、無可能前進，runtime 會 raise **`DeadlockError`** 而非默默卡死。
   一個孤零零卡住、而其他 coroutine 仍在前進的 sender，不會被單獨偵測。

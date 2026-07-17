@@ -20,13 +20,13 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 
 ### Programs & the entry point
 
-A **program is a build**, not a special kind of package. The compiler is pointed at an **entry file** —
-`zerg entry.zg` — and roots the build there, following its imports out across the dependency DAG.
+A **program is a build**, not a special kind of package. You point the compiler at an **entry file** —
+`zerg entry.zg` — and it roots the build there, following its imports out across the dependency DAG.
 
 - The entry filename is **not reserved**; the build invocation designates it. What the language
   requires is **content**: the entry file must define a top-level **`main`** entry function — its shape
   (inputs and result) reuses models already defined, just below.
-- `main` is not `pub`, so it can never be imported — the "you cannot depend on a program" property
+- `main` isn't `pub`, so it can never be imported — the "you can't depend on a program" property
   falls out for free, with no special _binary package_ kind. **Every package is an importable
   library.**
 - **Multiple executables** are just multiple entry files, each with its own `main`, each built by
@@ -47,13 +47,13 @@ A **program is a build**, not a special kind of package. The compiler is pointed
 ### Program lifetime & top-level initialization
 
 `main`'s body is the **root scope of the program**: when it returns, everything scope-owned beneath it
-is freed and any still-running coroutine is abandoned where it stands (there is no join — drive a
+is freed and any still-running coroutine is abandoned where it stands (there's no join — drive a
 coroutine to a channel-observed finish if it must complete first; see
 [Coroutines & Channels](coroutine.md)).
 
 Outside `main` lives only **immutable top-level state** — constants, functions, types, and specs —
-readied before `main` runs. Top-level constants are initialized in **dependency order**; a cycle among
-them is a compile error.
+readied before `main` runs. Top-level constants are initialized in **dependency order**; if they form a cycle,
+that's a compile error.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
@@ -89,8 +89,8 @@ wrapper.
 Coherence needs **no global registry** — the orphan rule plus the **acyclic** package graph guarantee
 it. To author an implementation of `(type, spec)` a package must name both; because the dependency
 graph is a DAG, at most one of the two owning packages can depend on — and so name — the other, and no
-third package can name both without owning either. The implementation, if it exists, is therefore
-unique by construction. Single-version selection is what makes "one type, one implementation"
+third package can name both without owning either. So the implementation, if it exists, is unique by
+construction. Single-version selection is what makes "one type, one implementation"
 well-defined.
 
 ### Modules
@@ -103,7 +103,7 @@ Nesting is **flat**: a directory laid out under another only lengthens the impor
 hierarchical privacy, so a nested module gets no special access to an enclosing one. **Import cycles
 between modules are rejected.**
 
-Mutually recursive types and functions therefore live in **one module** — which costs nothing, since a
+So mutually recursive types and functions live in **one module** — which costs nothing, since a
 module is a directory of many files sharing a namespace: an `ast` module can spread `Expr` and `Stmt`
 across separate files that reference each other with no import, and the compiler forward-declares while
 auto-boxing gives the recursion a finite layout, exactly as for a self-referential type. When two types

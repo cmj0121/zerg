@@ -7,7 +7,7 @@ futures, no join/handle. It builds on the memory and error models in the
 ## `spawn`
 
 `spawn f(args)` starts a coroutine (Go's `go`) on an **M:N scheduler**. It **returns nothing** — no
-handle, no join/await; results and completion are observed **only through channels**.
+handle, no join/await; you observe results and completion **only through channels**.
 
 - **Fire-and-forget** — the runtime never tracks or joins the coroutine; to learn an outcome it must
   send it over a channel the observer holds.
@@ -129,7 +129,7 @@ without a tighter block (see the [Language Reference](language.md)).
 ### The send-coverage invariant
 
 Auto-close is **level-triggered**: it fires the instant send-count hits 0, with no notion that "a
-sender is coming later." Hence one rule:
+sender is coming later." So there's just one rule:
 
 > From creation until you mean _no more sends ever_, **at least one send-capable holder must exist at
 > every instant.**
@@ -206,7 +206,7 @@ data" race and nothing spins.
   is a stdlib duration and the clock is an ambient-OS stdlib facility (like `env`), never a primitive.
 - **Cancellation is a channel.** Hand a coroutine a **cancel channel** to watch in its `select`; the
   canceller closes it and the coroutine sees that arm fire and bails. Because `spawn` is fire-and-forget
-  with **no handle, there is no preemptive kill** — cancellation is **cooperative**: a coroutine ends
+  with **no handle, there's no preemptive kill** — cancellation is **cooperative**: a coroutine ends
   only by returning, or by observing a cancel or timeout arm and choosing to stop.
 
 ```text
@@ -264,7 +264,7 @@ At the source the death is otherwise **silent**. An **optional compiler flag** a
 each unhandled abort — the `Err`, the coroutine, a backtrace — to `stderr`. It is **purely
 observational**: behaviour is identical with or without it, and default builds carry no overhead.
 
-For a _structured_ outcome — partial results, a specific error, or a failure that would not otherwise
+For a _structured_ outcome — partial results, a specific error, or a failure that wouldn't otherwise
 close a watched channel — the coroutine still `guard`s and sends over a channel. Making a death
 _fatal_ is the observer's job (react to `Right(err)` and abort), never the `spawn`'s.
 
@@ -276,7 +276,7 @@ freely; a busy worker cannot freeze unrelated coroutines.
 
 This is a guarantee about the **observable property, not the mechanism**. _How_ fairness is achieved —
 preemption, compiler-inserted safepoints, reduction counting — is an implementation detail the language
-does not fix; only the property is promised.
+doesn't fix; only the property is promised.
 
 Two limits bound it:
 
@@ -290,10 +290,10 @@ Two limits bound it:
 ## Termination & deadlock
 
 - **Program lifetime** — when the main stack returns, the **program ends**; still-running coroutines
-  stop where they are and the OS reclaims everything. There is no join, so drive a coroutine to a
+  stop where they are and the OS reclaims everything. There's no join, so drive a coroutine to a
   channel-observed completion if it must finish before exit.
 - **A send with no receivers just blocks** — even when the receive side is provably empty forever,
-  Zerg does not abort it; waiting or bailing is the **caller's** call (e.g. a `select` with a cancel
+  Zerg doesn't abort it; waiting or bailing is the **caller's** call (e.g. a `select` with a cancel
   or timeout arm).
 - **Global deadlock detection** — if every coroutine is blocked with no possible progress, the runtime
   raises **`DeadlockError`** rather than hanging. A lone blocked sender while others progress is not

@@ -24,8 +24,8 @@ A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and 
   with `+%`/`-%`/`*%`, below).
 - **`float` is IEEE-754:** overflow → `±Inf`, invalid → `NaN`, neither raises; `NaN` is unequal to
   everything (including itself).
-- **`str` iterates as `rune` and is not indexable** — convert to `list[byte]` (see
-  [Collections](collections.md)) for raw bytes (and for
+- **`str` iterates as `rune` and is not indexable** — convert it to `list[byte]` (see
+  [Collections](collections.md)) when you want raw bytes (or
   binary that may contain a NUL, which a `str` never holds).
 
 ### Integer operations
@@ -75,7 +75,7 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
-`Either`, `Result[T]`, and `T?` are not special — they are ordinary stdlib types built on `enum`
+`Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
 (see Null-safety). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
 variant, to construct and to `match`; there is no per-variant privacy.
 
@@ -84,7 +84,7 @@ variant, to construct and to `match`; there is no per-variant privacy.
 `match` is an **expression**: it tries a value against **arms** (`pattern -> result`), runs the first
 that fits, and yields its result. Every arm yields the **same type**, so a `match` is a value usable at a
 `:=`, a `return`, or an argument — arms that yield `nil` read as a plain statement. Coverage is
-**advised, not forced**: a `match` that misses a case is a **warning** (a linter may enforce it), not a
+**advised, not forced** — miss a case and you just get a **warning** (a linter may enforce it), not a
 compile error — so **adding an `enum` variant never breaks a dependent's `match`**. A trailing **`_`**
 covers the rest; a value that reaches a `match` no arm covers **aborts** at runtime (`MatchError`), and a
 **redundant** arm (one an earlier arm already covers) is a warning too.
@@ -122,7 +122,7 @@ need not belong to any spec; **only what a spec guarantees is ever abstractable*
 
 **A spec bound is the complete interface to a generic type.** In code generic over `T`, the only
 operations available on a `T` value are the methods its spec bound declares — its fields and any
-inherent methods are invisible. Hence:
+inherent methods are invisible. So:
 
 - The **empty `spec`** is a valid bound, satisfied by every type, but it guarantees **no** behavior:
   such a `T` supports only the structural operations every value has from the memory model — copy it,
@@ -138,13 +138,13 @@ inherent methods are invisible. Hence:
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
 type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (the method to run is
 picked at runtime from the value's real type). This is **one-way** — once boxed, the concrete type is
-hidden and cannot be recovered (no downcast).
+hidden and can't be recovered (no downcast).
 
 On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
 (producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
 ops (`del`, pass, store, send). The **binary same-type** operations — `equal` / `==`, `Ord` comparison,
-and therefore `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
-removes, so it cannot be supplied. Two boxed values are thus **never comparable** — no type tag, no
+and so `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
+removes, so it cannot be supplied. Two boxed values are **never comparable** — no type tag, no
 downcast, consistent with the one-way erasure. Box a value to dynamically dispatch its spec's methods; to
 compare, sort, or key it, keep the concrete type (a monomorphized `[T: S]` bound).
 
@@ -199,9 +199,9 @@ combination. A provided method may be generic too — that is exactly what lets 
 element type (`T` → `U`).
 
 **Dispatch is uniform.** Every spec method, required or provided, resolves to the type's **canonical
-implementation** — its override if it has one, else the default. A default body that calls another spec
-method therefore reaches the type's override (a defaulted `count` built on `next` uses an overridden
-`next`); there is **no static-dispatch exception for defaults**. The mechanism is the one already
+implementation** — its override if it has one, else the default. So a default body that calls another spec
+method reaches the type's override (a defaulted `count` built on `next` uses an overridden
+`next`) — there is **no static-dispatch exception for defaults**. The mechanism is the one already
 defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
 through its **vtable** to the actual impl.
 
@@ -217,7 +217,7 @@ every type** (each overridable):
 | `debug`         | logging, stderr | a developer-facing rendering                           |
 
 Zerg has **no instance-identity test** (no `is`): under copy-by-value distinct values are distinct
-instances and there is no aliasing, so identity would be meaningful only for a channel — too narrow to
+instances and there's no aliasing, so identity would be meaningful only for a channel — too narrow to
 earn a keyword. Equality is always the **structural** `equal`.
 
 **Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
@@ -275,7 +275,7 @@ element as an in-place `mut` — only when `X` is `mut`.
 
 ## Type Casts
 
-No type converts implicitly **by default** — an `int` is not a `bool`; cast with a constructor-style
+No type converts implicitly **by default** — an `int` isn't a `bool`; cast with a constructor-style
 call (`bool(8)`, `int(c)`). Primitive conversions are **compiler built-in**; a user type cannot add
 an auto-cast to a primitive.
 
@@ -456,7 +456,7 @@ escapes its defining scope carries its own copies and can never dangle. Equivale
 
 > A closure is a scope-owned struct whose fields are its captures.
 
-Copy, free, and channel-refcount therefore all fall out of the existing memory rules with nothing
+So copy, free, and channel-refcount all fall out of the existing memory rules with nothing
 added; a captured send-capable channel end counts as a holder, so a live closure keeps that channel's
 send side open (the send-coverage invariant in [Coroutines & Channels](coroutine.md)).
 
@@ -503,7 +503,7 @@ the **[Coroutines & Channels](coroutine.md)** reference.
 Failure comes in **two tiers**, with exactly one bridge each way. **Recoverable failure is a value** —
 absence and expected errors are ordinary values of a sum type, never a magic null; this is the tier
 you work in day to day. **A bug is an abort** — overflow, division by zero, a wrong `!`, or an explicit
-`raise` _raise_ and unwind the stack (see _Aborts_ below); they appear in no signature and cannot be
+`raise` _raise_ and unwind the stack (see _Aborts_ below); they appear in no signature and can't be
 inspected or resumed. Both tiers carry the same `Err` (the `Error` spec), so they meet cleanly at the
 bridges: **`raise` (and `!`) lift a value into an abort, `guard` demotes an abort back into a value.**
 
@@ -516,7 +516,7 @@ propagated:
 - **`T?`** = `Either[T, nil]`; **`nil`** is its placeholder value.
 
 **`?` — propagate.** `x?` unwraps the left value, or early-returns the right from the enclosing
-function (sugar for that early return), so the function must share the same right type. There is no
+function (sugar for that early return), so the function must share the same right type. There's no
 implicit bridge between `T?` and `Result`: convert first with `opt.ok_or(err)` or `res.ok()`.
 
 ```text

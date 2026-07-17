@@ -1,7 +1,7 @@
 # Zerg Foreign Function Interface (FFI)
 
 How a Zerg package meets the **C ABI** — the one boundary where Zerg values become C values and back.
-Because C is Zerg's **codegen target** (not merely an escape hatch), FFI is a native concept: it builds
+Because C is Zerg's **codegen target** (not just an escape hatch), FFI is a native concept: it builds
 directly on the type, memory, error, and visibility models in the [Language Reference](language.md) and
 the public-surface rules in [Modules, Packages & Programs](package.md). Also in [繁體中文](ffi.zh-TW.md).
 
@@ -44,16 +44,16 @@ any **non-recursive** `struct`/`enum` built transitively from those.
 
 A **`T?` whose `T` is pointer-shaped** (an opaque handle, or a `fn`) does **not** grow a tag: `nil` is
 the **null pointer** and the value is the bare pointer. Only a `T?` over a non-pointer `T` (e.g. `int?`)
-needs the tagged form. This is what lets a handle out-parameter map to C's `T**` idiom (see the example).
+needs the tagged form. That's what lets a handle out-parameter map to C's `T**` idiom (see the example).
 
 **Not FFI-safe** — rejected in an `extern` signature and left off the exported header, always with a
 diagnostic, never silently:
 
-- **Generics and `spec` bounds** — a generic is not one type until monomorphized, so it has no single C
+- **Generics and `spec` bounds** — a generic isn't one type until it's monomorphized, so it has no single C
   signature. Cross a **concrete** instance instead (a `pub` wrapper at a fixed type).
 - **A `spec` used as a type** (existential) — heap-boxed with dynamic dispatch, so no stable layout.
-  This is why **`Result[T]` is never FFI-safe**: its right side is always `Err`, the `Error` spec used
-  as a type. There is no exception. Export uses `T?` (whose right side is the concrete `nil`) or
+  That's why **`Result[T]` is never FFI-safe**: its right side is always `Err`, the `Error` spec used
+  as a type. No exceptions. Export uses `T?` (whose right side is the concrete `nil`) or
   `Either[T, C]` for a concrete, FFI-safe error `C` — no new rule, just the type mapping applied.
 - **`chan` and coroutine handles** — runtime-managed, reference-counted, scheduler-bound; meaningless to C.
 - **A capturing closure** — it is a scope-owned struct of captures (see Language Reference). Only a
@@ -120,7 +120,7 @@ that write-back protocol is deferred (see Open questions).
 
 **The `Ref[sqlite3]` makes the close exact.** Copying a `Db` refcount-bumps the box instead of duplicating
 a bare token, and the `drop` — the paired `sqlite3_close` — runs **once**, when the last `Db` leaves scope
-(or is `del`-ed). This is the guarantee a bare `struct Db { h: sqlite3 }` cannot give, where two copies
+(or is `del`-ed). This is the guarantee a bare `struct Db { h: sqlite3 }` can't give, where two copies
 would each try to close one connection; the private field keeps the raw token from escaping, so the
 guarantee holds through ordinary "safe" code. `Ref[T]` is the home for a resource that **escapes its
 scope** — a handle opened and closed within a single scope wants `defer` instead (Language Reference).
@@ -145,11 +145,11 @@ boundary, copy" ethos — **copied into Zerg, borrowed out to C**:
 - **A buffer or resource C allocated that _Zerg must later free_** — does **not** come back as
   `str`/`list` (that would leak C's original after Zerg copies it). It comes back as an **opaque handle**,
   paired with an explicit `extern` free the wrapper calls as a `Ref[T]`'s `drop` (see Opaque handles).
-  There is no implicit free of foreign memory — ever.
+  There's no implicit free of foreign memory — ever.
 
 ## Exporting a package (Zerg → C)
 
-There is **no export keyword**. A package's C ABI is exactly its **package-public surface** — the `pub`
+There's **no export keyword**. A package's C ABI is exactly its **package-public surface** — the `pub`
 declarations re-exported on the **root module** (see [package.md](package.md), "Visibility"). Any such
 `pub` declaration is a candidate C entry point; the boundary adds nothing to say so.
 
@@ -182,7 +182,7 @@ opaque type, or symbol **verbatim** — no mangling is applied, the linker name 
 `extern` is **raw**: it mirrors the C contract exactly and carries none of C's error conventions into
 Zerg. A C function that signals failure by `errno`, a return code, or a `NULL` result returns those raw
 to Zerg; the **thin, hand-written wrapper** is what maps them into the null-safety model —
-`res.ok_or(err)`, an early `return nil`, or a constructed `Either`. Nothing is automatic, which is
+`res.ok_or(err)`, an early `return nil`, or a constructed `Either`. Nothing's automatic, and that's
 exactly what keeps the mapping explicit and auditable.
 
 ## Errors across the boundary

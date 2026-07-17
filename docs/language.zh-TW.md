@@ -658,6 +658,8 @@ addr := config?.server?.host ?? "localhost"
 **`raise`——以任一 `Err` abort（值 → abort）。** `raise e` 把一個 `Err` 升級成攜帶它的 abort——是「值→abort」的
 通用生產側入口，`!` 只是它的特例。**值那層**（簽章裡的 `Result` / `Either`）留給**預期、可回復**的失敗；`raise` 給
 **不可回復**者——壞掉的 invariant、失敗的 assertion、一個「不可能發生」——因此不進任何簽章、只被 `guard` 攔下。
+一個 **`raise e from cause`** 形式會把 `cause` 記成 `e` 的 `unwrap()`——一個 **nested** abort,把底層 `Err` 包進更高
+層的一個、而不遺失它,餵的是每個 `Error` 都有的那條 cause chain;裸的 `raise e` 則原封不動攜帶 `e`。
 
 **自訂 error 型別。** 任何實作 **`Error`** spec（`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`——見內建
 spec）的型別都是 `Err`：它可放進 `Result` 的右側，**也**可被 `raise`，而 `guard` 會把它還原成 `Right(e)`、
@@ -671,6 +673,11 @@ message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum
 裸的 `abort()`。unwind 抵達某條 stack
 頂端就讓那條 stack crash：主 stack 結束整個程式，coroutine 的 stack 只結束該 coroutine（`spawn` 是
 fire-and-forget——見 Concurrency）。
+
+一次在**另一個 abort 已經在 unwind 時**才觸發的 abort——某個 `defer`、或某個 `Ref` 的 `drop` 自己 abort——**絕不
+放棄那次 unwind**:其餘的 `defer` 照跑,所以**清理永不被略過**。兩個錯誤以**與 `raise e from cause` 相同的 nesting**
+合併——較晚的 abort 往外傳、把還在飛的那個記成它的 `unwrap()` cause——所以兩者皆不遺失、consumer 讀得到整條鏈。
+沒有哪個錯誤會無聲勝出,也沒有另一個 _suppressed_ 槽要去查。
 
 一個 **`StackOverflowError`** 是 Zerg 自己的安全網、不是 OS 的：runtime **擁有每一條 stack**——主 stack 與每條
 coroutine 的——並**自己檢查呼叫深度**，在一個呼叫將超出 stack 的當下就 raise 這個 abort（一次會跑 `defer` 的乾淨

@@ -795,6 +795,9 @@ addr := config?.server?.host ?? "localhost"
 it — the general producer-side crossing that `!` specialises. Keep the **value tier** (`Result` / `Either`
 in the signature) for **expected, recoverable** failure; `raise` is for the **unrecoverable** — a broken
 invariant, a failed assertion, a "can't happen" — so it enters no signature and is caught only by `guard`.
+A **`raise e from cause`** form records `cause` as `e`'s `unwrap()` — a **nested** abort that wraps a
+lower-level `Err` in a higher-level one without losing it, feeding the same cause chain every `Error`
+exposes; a bare `raise e` carries `e` unchanged.
 
 **Custom error types.** Any type implementing the **`Error`** spec (`message() -> str`, `unwrap() -> Err?`,
 `code() -> byte?` — see Built-in specs) is an `Err`: it may sit in a `Result`'s right **and** be `raise`d,
@@ -810,6 +813,12 @@ unwind that runs scope cleanup** — every scope from the raise point to where i
 like a normal scope exit; never a bare `abort()`. An unwind that reaches the top of its stack crashes
 that stack: the main stack ends the program, a coroutine's stack ends only that coroutine (`spawn` is
 fire-and-forget — see Concurrency).
+
+An abort that fires **while another is already unwinding** — a `defer`, or a `Ref` `drop`, that itself
+aborts — never abandons that unwind: the remaining `defer`s still run, so **cleanup is never skipped**. The
+two errors combine by the **same nesting as `raise e from cause`** — the later abort propagates with the one
+already in flight recorded as its `unwrap()` cause — so neither is lost and the consumer reads the whole
+chain. No error silently wins, and there is no separate _suppressed_ slot to consult.
 
 A **`StackOverflowError`** is Zerg's own safety net, not the OS's: the runtime **owns every stack** — the
 main one and each coroutine's — and **checks call depth itself**, raising this abort (a clean unwind that

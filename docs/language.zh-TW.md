@@ -372,6 +372,13 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 遞迴與自我參照型別不需要 pointer——直接宣告欄位（例如 `Node?` → `Node`），編譯器**自動**插入 heap 間接；這類值
 一樣是 scope-owned 且 copy-by-value。
 
+**一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
+之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
+配標準 padding。這是 transpile 到 C 掉出來的，也正是為什麼 struct **預設就 FFI-ready**（見 [FFI](ffi.zh-TW.md)）：
+沒有另一套「最佳化」佈局可以 opt-out，所以 Zerg 不需要 `repr(C)` 標記。（sum type 的 payload 同樣 inline；只有它
+discriminant 的確切 C 編碼是一個 deferred 的 FFI 細節。）更緊的控制——去掉 padding（**packed**）或強制更寬的
+**alignment**，給封包格式與 memory-mapped 硬體用——是 niche 旋鈕，**擱置**到有具體需求為止。
+
 mutability 屬於**實例（instance）**——也就是 binding——不是型別或任何欄位：`mut x := …` 讓整個建構出的實例
 可變（每個欄位），`x := …` 則保持不可變；欄位只帶可見性（`pub` 或 private）。Zerg 沒有通用 reference；程式之間
 只能透過以下方式共享儲存：

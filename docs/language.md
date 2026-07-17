@@ -450,6 +450,15 @@ Recursive and self-referential types need no pointer — declare the field direc
 `Node`) and the compiler auto-inserts the heap indirection; such values stay scope-owned and
 copy-by-value like any other.
 
+**A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
+**inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never
+reorders** them — so a Zerg `struct` _is_ a C `struct`, field for field, at natural alignment with standard
+padding. This falls out of transpiling to C, and it is what makes a struct **FFI-ready by default** (see
+[FFI](ffi.md)): there is no separate "optimized" layout to opt out of, so Zerg needs no `repr(C)` marker. (A
+sum type's payload is likewise inline; only the exact C encoding of its discriminant is a deferred FFI
+detail.) Tighter control — dropping padding (**packed**) or forcing a wider **alignment**, for wire formats
+and memory-mapped hardware — is a niche knob, **deferred** until a concrete need.
+
 Mutability belongs to the **instance** — the binding — not the type or any field: `mut x := …` makes
 the whole constructed instance mutable (every field), a plain `x := …` keeps it immutable; a field
 carries only visibility (`pub` or private). Zerg has no general reference; code shares storage only

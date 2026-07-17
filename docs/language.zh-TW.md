@@ -536,13 +536,18 @@ spec）的型別都是 `Err`：它可放進 `Result` 的右側，**也**可被 `
 message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum`——同一個值服務兩層，由 bridge 轉換。
 
 **Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`、`MatchError`、`IndexError`、
-`KeyError`、`AliasError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的 `Err`——代表
-**bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
+`KeyError`、`AliasError`、`StackOverflowError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的
+`Err`——代表 **bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
 出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
 裸的 `abort()`。unwind 抵達某條 stack
 頂端就讓那條 stack crash：主 stack 結束整個程式，coroutine 的 stack 只結束該 coroutine（`spawn` 是
 fire-and-forget——見 Concurrency）。
+
+一個 **`StackOverflowError`** 是 Zerg 自己的安全網、不是 OS 的：runtime **擁有每一條 stack**——主 stack 與每條
+coroutine 的——並**自己檢查呼叫深度**，在一個呼叫將超出 stack 的當下就 raise 這個 abort（一次會跑 `defer` 的乾淨
+unwind），所以失控的遞迴**永不**變成 C 的 stack smash。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack
+就夠——因此無界遞迴是一個確定的 `StackOverflowError`、絕不是無聲的卡死。
 
 **`guard`——把 abort 降級成值（abort → 值）。** `guard { … }` 執行一個區塊，並把其中任何 abort 具現化成 `Err`，
 因此整個運算式恆為 **`Result[T]`**（`T` = 區塊的值型別）：正常結果 `v` 變成 `Left(v)`，攜帶 `err` 的 abort 變成

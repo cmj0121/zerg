@@ -637,14 +637,20 @@ and `guard` reifies it back as `Right(e)` with message, cause, and code intact. 
 error, an `enum` for a family — the same value serves both tiers; the bridges convert.
 
 **Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, `MatchError`,
-`IndexError`, `KeyError`, `AliasError`, `SendOnClosedError`, `DeadlockError`) or any `Err` you `raise` —
-marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
+`IndexError`, `KeyError`, `AliasError`, `StackOverflowError`, `SendOnClosedError`, `DeadlockError`) or
+any `Err` you `raise` — marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
 `defer`s** and is freed in order, its `Ref` values (channels and `Ref[T]`) refcount-decremented, exactly
 like a normal scope exit; never a bare `abort()`. An unwind that reaches the top of its stack crashes
 that stack: the main stack ends the program, a coroutine's stack ends only that coroutine (`spawn` is
 fire-and-forget — see Concurrency).
+
+A **`StackOverflowError`** is Zerg's own safety net, not the OS's: the runtime **owns every stack** — the
+main one and each coroutine's — and **checks call depth itself**, raising this abort (a clean unwind that
+runs `defer`s) the instant a call would exceed the stack, so runaway recursion **never** becomes a C
+stack smash. Zerg does **not** optimize tail calls — `for` is the loop, so a bounded stack is enough —
+which makes an unbounded recursion a definite `StackOverflowError`, never a silent hang.
 
 **`guard` — demote an abort to a value (abort → value).** `guard { … }` runs a block and reifies any
 abort inside it as an `Err`, so the expression is always a **`Result[T]`** (`T` = the block's value

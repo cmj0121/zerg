@@ -79,6 +79,16 @@ enum Either[X, Y] {         # generic sum type
 (see Null-safety). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
 variant, to construct and to `match`; there is no per-variant privacy.
 
+A **tuple** — `(int, str)`, its fields reached positionally as `.0`, `.1` — is nothing but an **anonymous
+`struct`**: the same product type, spelled without a name for a transient positional bundle (a multiple
+return, a `divmod -> (int, int)`). Being anonymous it is the language's **one structurally typed** form —
+`(int, str)` is the same type wherever written, while every named `struct` and `enum` stays **nominal**.
+It rides the whole product machinery — copy-by-value, and the compiler's structural `Object` / `Ord` /
+`Hash` / … derivation (see Specs & Generics) — but, with no name to attach one to, carries **no inherent
+methods and no `spec` impl of its own**: reach for a named `struct` the moment a value wants behavior, a
+nominal identity, or field names worth reading. A tuple result is **first-class** — stored, passed, or
+destructured — so multiple return needs no separate mechanism (Pattern matching).
+
 ## Pattern matching
 
 `match` is an **expression**: it tries a value against **arms** (`pattern -> result`), runs the first
@@ -103,8 +113,10 @@ msg := match ev {
 ```
 
 `match` never inspects an existential's real type — a spec used as a type erases it one-way, with no
-downcast — it destructures variants and compares values, nothing more. **Struct-field destructuring** and
-**guard conditions** (`Left(v) if v > 0`) are deferred.
+downcast — it destructures variants and compares values, nothing more. A **product pattern** destructures
+a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
+it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
+return is consumed. **Guard conditions** (`Left(v) if v > 0`) remain deferred.
 
 ## Specs & Generics
 

@@ -119,8 +119,10 @@ msg := match ev {
 }
 ```
 
-`match` never inspects an existential's real type — a spec used as a type erases it one-way, with no
-downcast — it destructures variants and compares values, nothing more. A **product pattern** destructures
+A `match` **pattern** never inspects an existential's real type — a spec used as a type erases the value
+one-way, with no downcast — it destructures variants and compares values, nothing more; the one query it
+allows on an existential is the boolean **`is`** test (Specs & Generics), used as a **condition**, never
+as a binding that hands the concrete value back. A **product pattern** destructures
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
 return is consumed. **Guard conditions** (`Left(v) if v > 0`) remain deferred.
@@ -136,7 +138,7 @@ is **one canonical implementation per (type, spec)** pair.
 A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
 on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
 The built-in behaviors are specs too, not compiler magic: `Err` is the `Error` spec, and equality,
-ordering, hashing, iteration, and opt-in casts are ordinary stdlib specs. A type's inherent methods
+ordering, hashing, iteration, and opt-in conversions are ordinary stdlib specs. A type's inherent methods
 need not belong to any spec; **only what a spec guarantees is ever abstractable**.
 
 **A spec bound is the complete interface to a generic type.** In code generic over `T`, the only
@@ -157,16 +159,21 @@ inherent methods are invisible. So:
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
 type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (the method to run is
-picked at runtime from the value's real type). This is **one-way** — once boxed, the concrete type is
-hidden and can't be recovered (no downcast).
+picked at runtime from the value's real type). Erasure is **one-way for the value** — once boxed, the
+concrete value is hidden and **can never be recovered** (no downcast, no reinterpret; the only route to a
+concrete type is to have kept it, never to un-erase one). Its **identity** is a separate matter: **`x is
+T`** asks whether the boxed value's concrete type is `T` and yields a plain **`bool`** — a test that
+reads the dispatch identity the box already carries, and **never recovers the value or reads its
+structure** (Type tests, below).
 
 On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
 (producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
 ops (`del`, pass, store, send). The **binary same-type** operations — `equal` / `==`, `Ord` comparison,
 and so `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
-removes, so it cannot be supplied. Two boxed values are **never comparable** — no type tag, no
-downcast, consistent with the one-way erasure. Box a value to dynamically dispatch its spec's methods; to
-compare, sort, or key it, keep the concrete type (a monomorphized `[T: S]` bound).
+removes, and `is` only tests identity — it never hands the value back to supply that operand. Two boxed
+values are therefore **never comparable by value**, consistent with the one-way erasure. Box a value to
+dynamically dispatch its spec's methods; to compare, sort, or key it, keep the concrete type (a
+monomorphized `[T: S]` bound).
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
@@ -189,6 +196,21 @@ at compile time rather than adding fully-qualified call syntax to disambiguate; 
 across specs, have them obtain it from one shared spec. Where a spec may be implemented across package
 boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
+
+### Type tests — `is`
+
+An existential hides the value but not its **identity**: **`x is T`** asks "is the boxed value's concrete
+type `T`?" and yields a **`bool`**. It is a pure query — it reads the dispatch identity every existential
+box already carries, **recovers no value and reads no field** — so it is not a downcast and adds no
+reinterpret to the language (Type Conversion). `T` must implement the spec `x` is typed as, else the test
+is statically impossible and rejected; on a value whose concrete type is **already known** (not an
+existential) the answer is a compile-time constant.
+
+Because `is` never yields the concrete value, it drives **control flow, not data access**: you may branch
+on "is this a `T`?", but to read a `T`'s own fields you must **already hold the concrete type** — one you
+never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `and` / `or`, or as a `match`
+guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
+Null-safety & Errors).
 
 ### Methods, `this` / `This`, and default bodies
 
@@ -237,9 +259,11 @@ every type** (each overridable):
 | `debug`         | logging, stderr   | developer-facing; **auto-derived** structurally, overridable |
 | `display`       | `f"…"`, user text | human-facing; **defaults to `debug`**, override to prettify  |
 
-Zerg has **no instance-identity test** (no `is`): under copy-by-value distinct values are distinct
-instances and there's no aliasing, so identity would be meaningful only for a channel — too narrow to
-earn a keyword. Equality is always the **structural** `equal`.
+Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
+distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
+too narrow to earn an operator. Equality is always the **structural** `equal`. The **`is`** keyword is a
+different question — the **type-identity** test `x is T` on an existential (Type tests) — "what concrete
+type is boxed here?", never "are these two the same value?".
 
 **Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
 
@@ -254,7 +278,8 @@ earn a keyword. Equality is always the **structural** `equal`.
 - **`Add` / `Sub` / `Mul` / `Div` / … and the bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
   `Shr`** — the value operators (`+ - * / %`, `& | ^ ~ << >>`, indexing, …): operator overloading, below.
   `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](collections.md)).
-- **the cast spec** — an opt-in auto-cast: single-step, at an explicit target (see Type Casts).
+- **the cast spec** — an opt-in auto-conversion: single-step, at an explicit target (see Type
+  Conversion).
 
 **`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
 a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead
@@ -348,22 +373,29 @@ import, so the smallest program is `print f"hello {name}"`. It is **best-effort*
 dropped, never raised), so it needs no `?`; the checked, full I/O surface is the imported `io` package
 (see [Process & I/O](io.md)).
 
-## Type Casts
+## Type Conversion
 
-No type converts implicitly **by default** — an `int` isn't a `bool`; cast with a constructor-style
-call (`bool(8)`, `int(c)`). Primitive conversions are **compiler built-in**; a user type cannot add
-an auto-cast to a primitive.
+Zerg **converts by re-construction, never by reinterpretation** — a conversion `T(x)` _builds a new `T`_
+from `x`'s value, the way a constructor does; there is **no C-style cast** that views one type's bytes as
+another (a `reinterpret`), and none is offered. The three type operations stay cleanly apart: **build** a
+new value (`T(x)`, here), **test** an existential's identity (`x is T` → `bool`, Type tests), and
+**never** reinterpret one type's storage as another.
+
+Conversion is **explicit by default** — an `int` isn't a `bool`; build one with a constructor-style call
+(`bool(8)`, `int(c)`). Primitive conversions are **compiler built-in**; a user type cannot add one to a
+primitive.
 
 **Narrowing a primitive** can lose the value, so it is checked like arithmetic:
 
-- An integer cast whose value **does not fit** the target raises (`OverflowError`) — `byte(300)`,
+- An integer conversion whose value **does not fit** the target raises (`OverflowError`) — `byte(300)`,
   `uint(-5)`, `int(u)` for a `uint` past i64. The **checked** form is `guard { byte(x) }` → `Result`; to
   **truncate** to the low bits, mask first — `byte(x & 0xFF)` always fits, so it never raises. Saturating
   is deferred.
 - **`float` → integer** drops the fractional part (`int(3.7)` is `3` — the intent, not a bug) but raises
   when the integer part is **out of range** or the float is `NaN` / `±Inf`.
 
-A **user type** may opt in to an **auto-cast** to another type, kept decidable by two rules:
+A **user type** may opt in to an **automatic** re-construction to another type, kept decidable by two
+rules:
 
 - **Single step only** — never chained (`X → Y`, `Y → Z` ⇏ `X → Z`); one step to one explicit
   target, so no ambiguous multi-path choice arises.
@@ -371,7 +403,7 @@ A **user type** may opt in to an **auto-cast** to another type, kept decidable b
   typed parameter; never an inferred `:=`.
 
 This is how a value, an `Err`, or `nil` flows into an `Either` at a typed binding or return without
-explicit wrapping (see Null-safety).
+explicit wrapping (see Null-safety) — still a build of the target value, never a reinterpret.
 
 ## Values & Memory
 
@@ -678,3 +710,33 @@ abort is an ordinary `Result` handled by the same `?` / `??` / `match`, with no 
 no `recover` construct. It carries **no special meaning in a coroutine**: a coroutine body wrapped in
 `guard` is just a function producing `Result[T]`, and reports it by sending over a channel like any
 other value.
+
+### Handling errors by type — `is`
+
+Both tiers deliver the **same erased `Err`** — a value-tier `Right(err)` and a `guard`-reified abort are
+indistinguishable — so one mechanism dispatches on either. To act on a **specific** error, test its type
+with **`is`** (Type tests):
+
+```text
+match guard { work() } {
+    Left(v)  -> use(v)
+    Right(e) -> {
+        if e is NotFound { rebuild() }          # branch on the concrete type
+        else if e is Overflow { alert(e) }      # a built-in abort, reified by guard
+        else { report(e.message()) }            # everything else — a catch-all is required
+    }
+}
+```
+
+`is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
+but **not the concrete type's own fields** — the value was erased and is never re-constructed. The set of
+errors reachable here is **open** (any `raise`, any built-in abort, any library `Err`), so an `is`-chain
+can never be exhaustive: a **catch-all is mandatory**, and an unmatched error aborts (`MatchError`) like
+any uncovered `match`.
+
+This splits error handling by whether you own a **closed** set. When you need an error's **data**, keep it
+concrete — an **`Either[T, MyErrorEnum]`** (never erased) whose variants a `match` reads by value, with
+payloads and coverage warnings. When the set is **open**, or you only recognize a few types, take the
+erased **`Result[T]`** and `is`-dispatch with a catch-all. So the return type is a contract: an erased
+`Result` says "branch and use the `Error` interface"; a concrete `Either` says "here is my full error
+taxonomy, data and all".

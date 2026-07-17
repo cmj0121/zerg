@@ -103,8 +103,9 @@ msg := match ev {
 }
 ```
 
-`match` 永不窺看 existential 的真實型別——spec 當型別用是單向抹除、無 downcast——它只解構 variant、比對值，如此而已。
-一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
+`match` 的 **pattern** 永不窺看 existential 的真實型別——spec 當型別用是單向抹除、無 downcast——它只解構 variant、比對
+值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 Spec 與 Generics），用作**條件**、絕不作為交回
+具體值的綁定。一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
 部分以 copy 綁定；它在 `match` arm 與普通的 `:=` 綁定（`(q, r) := divmod(x, y)`，也就是多重回傳被消費的方式）都可用。
 **guard 條件**（`Left(v) if v > 0`）仍延後。
 
@@ -116,7 +117,7 @@ msg := match ev {
 
 `spec` 是抽象行為的**唯一**機制，因此它扮演三個角色——泛型參數的 **bound**、型別所 **conform** 的介面、以及
 （見下）**當成型別本身**。內建行為也都是 spec、不是編譯器魔法：`Err` 就是 `Error` spec，相等、排序、雜湊、迭代、
-以及 opt-in 的 cast 都是普通 stdlib spec。型別的 inherent method 不必隸屬任何 spec；**唯有 spec 所保證的，才可被抽象**。
+以及 opt-in 的轉換都是普通 stdlib spec。型別的 inherent method 不必隸屬任何 spec；**唯有 spec 所保證的，才可被抽象**。
 
 **spec bound 就是泛型型別的完整介面。** 在泛型於 `T` 的程式碼裡，對一個 `T` 值唯一能用的操作，就是它 spec bound
 所宣告的 method——它的欄位與任何 inherent method 都不可見。因此：
@@ -130,14 +131,16 @@ msg := match ev {
   `Hash` / `Encode` / …——見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
-scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。這是**單向的**——一旦 boxed，
-具體型別就被隱藏、無法還原（不能 downcast）。
+scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。抹除是**對值單向**的——一旦
+boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不能 reinterpret；要拿到具體型別只能「一開始就留著」、無從
+反抹除）。它的**身分**是另一回事：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個純 **`bool`**——這個
+測試讀的是 box 本就帶著的 dispatch 身分，**既不還原值、也不讀結構**（見下方「型別測試」）。
 
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
 **binary same-type** 操作——`equal` / `==`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
-運算元正是抹除掉的具體型別，無法提供。兩個 boxed 值因此**永遠不能比較**——無 type tag、無 downcast，與單向抹除
-一致。box 一個值是為了動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的
+運算元正是抹除掉的具體型別，而 `is` 只測身分、絕不把值交回來供給它。兩個 boxed 值因此**永遠不能以值比較**，與單向
+抹除一致。box 一個值是為了動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的
 `[T: S]` bound）。
 
 concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器為每個具體型別各生成一份特化版本——而把 `spec`
@@ -154,6 +157,17 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 這個組合**，而不引入 fully-qualified 呼叫語法來消歧；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Module、Package 與 Program](package.zh-TW.md)。
+
+### 型別測試（Type tests）——`is`
+
+existential 藏起值、但沒藏起**身分**：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個 **`bool`**。它是
+純查詢——讀每個 existential box 本就帶著的 dispatch 身分，**不還原任何值、不讀任何欄位**——所以它不是 downcast、也不
+為語言添加任何 reinterpret（見型別轉換）。`T` 必須實作 `x` 所定型的那個 spec，否則測試靜態上不可能、會被拒；對一個
+具體型別**已知**（非 existential）的值，答案是編譯期常數。
+
+因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
+你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
+guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派（見 Null-safety 與錯誤處理）。
 
 ### Method、`this` / `This` 與 default body
 
@@ -196,8 +210,10 @@ spec 的 method 分兩種：
 | `debug`         | logging、stderr      | 開發者取向；**auto-derive**、可 override              |
 | `display`       | `f"…"`、對使用者顯示 | 給人看；**預設 body 就是 `debug`**、要漂亮就 override |
 
-Zerg **不設 instance-identity 測試**（沒有 `is`）：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
-identity 只對 channel 有意義——太 narrow、不值得一個保留字。相等永遠是**結構性**的 `equal`。
+Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
+「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等永遠是**結構性**的 `equal`。**`is`**
+關鍵字問的是另一件事——existential 上的**型別身分**測試 `x is T`（見型別測試）——「這裡 box 的是哪個具體型別？」，
+而非「這兩個是不是同一個值？」。
 
 **Opt-in**——實作該 spec 才取得能力；泛型 bound 以它把關：
 
@@ -210,7 +226,7 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 - **`Add` / `Sub` / `Mul` / `Div` / … 與 bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
   `Shr`**——值運算子（`+ - * / %`、`& | ^ ~ << >>`、indexing…）：運算子多載，見下。`str` 實作 `Add`，所以 `+` 會
   **串接**成新字串（見 [Collection](collections.zh-TW.md)）。
-- **cast spec**——opt-in auto-cast：single-step、於明確目標（見型別轉換）。
+- **cast spec**——opt-in 自動轉換：single-step、於明確目標（見型別轉換）。
 
 **`Ref`——copy-by-ref（sealed）。** 與上面每個 spec 不同，實作它不加行為——它改變值的**表徵（representation）**。`Ref`
 型別是 **reference-counted**：複製是對共享計數 ++、而非深拷貝，它的 `drop(this)` 在最後一個持有者的 scope 退出時
@@ -290,27 +306,32 @@ per-type **format 協定**、而非 `display` 的參數。
 `print f"hello {name}"`。它**盡力而為**（寫入錯誤被丟掉、不 raise），所以不需 `?`；有檢查的完整 I/O 面是要 import
 的 `io` package（見 [Process & I/O](io.zh-TW.md)）。
 
-## 型別轉換（Type Casts）
+## 型別轉換（Type Conversion）
 
-**預設**沒有型別會隱式轉換——`int` 不是 `bool`；要轉就用 constructor 風格呼叫（`bool(8)`、`int(c)`）。primitive
-之間的轉換由**編譯器內建**；使用者型別不能對 primitive 加 auto-cast。
+Zerg **以重新建構（re-construction）轉換、絕不以重新詮釋（reinterpret）**——一次轉換 `T(x)` 是*用 `x` 的值建一個
+新的 `T`*、如同 constructor；**沒有 C 式的 cast** 把一種型別的位元當成另一種來看（reinterpret），也不提供。三種
+型別操作因此清楚分開：**建**一個新值（`T(x)`，這裡）、**測**一個 existential 的身分（`x is T` → `bool`，見型別測試）、
+以及**絕不**把一種型別的儲存重新詮釋成另一種。
+
+轉換**預設顯式**——`int` 不是 `bool`；要轉就用 constructor 風格呼叫建一個（`bool(8)`、`int(c)`）。primitive 之間的
+轉換由**編譯器內建**；使用者型別不能對 primitive 加。
 
 **窄化一個 primitive** 可能丟失值，因此比照算術檢查：
 
-- 整數 cast 的值**放不進**目標就 raise（`OverflowError`）——`byte(300)`、`uint(-5)`、對超過 i64 的 `uint` 做
+- 整數轉換的值**放不進**目標就 raise（`OverflowError`）——`byte(300)`、`uint(-5)`、對超過 i64 的 `uint` 做
   `int(u)`。**checked** 版是 `guard { byte(x) }` → `Result`；要**截斷**到低位就先遮罩——`byte(x & 0xFF)` 一定 fit、
   所以不會 raise。saturating 延後。
 - **`float` → 整數**捨去小數（`int(3.7)` 是 `3`——是本意、非 bug），但當整數部分**超出範圍**、或 float 是
   `NaN` / `±Inf` 時 raise。
 
-**使用者型別**可 opt-in 一個對另一型別的 **auto-cast**，靠兩條規則保持可判定：
+**使用者型別**可 opt-in 一個對另一型別的**自動重新建構**，靠兩條規則保持可判定：
 
 - **只做單步**——絕不串接（`X → Y`、`Y → Z` ⇏ `X → Z`）；單步、單一明確目標，不會出現多路徑歧義。
 - **只在目標型別明確處觸發**——有型別標註的 binding（`x: X = y`）、`return`、或有型別的參數；不會在推斷型別的
   `:=` 上發生。
 
 這正是讓一個值、一個 `Err` 或 `nil` 能在 typed binding 或 return 處直接注入 `Either`、無需明確包裝的機制
-（見 Null-safety）。
+（見 Null-safety）——仍是建構出目標值，絕非 reinterpret。
 
 ## 值與記憶體（Values & Memory）
 
@@ -571,3 +592,28 @@ fn read_config(s: str) -> Result[Config] {
 `guard` 是從 abort 那層回到值的唯一路徑，與 `raise`／`!` 這些入口對稱——一旦 `guard`，abort 就成了普通 `Result`，用
 既有的 `?` / `??` / `match` 處理，沒有獨立的 handler、也沒有 `recover` 建構。它在 coroutine 裡**沒有特殊意義**：
 用 `guard` 包住的 coroutine body 就只是一個產出 `Result[T]` 的函式，要回報就跟其他值一樣送進 channel。
+
+### 依型別處理錯誤——`is`
+
+兩層送出的是**同一個被抹除的 `Err`**——值那層的 `Right(err)` 與 `guard` 具現化的 abort 無從分辨——所以同一套機制就
+能對兩者分派。要對**某一種**錯誤動作，就用 **`is`** 測它的型別（見型別測試）：
+
+```text
+match guard { work() } {
+    Left(v)  -> use(v)
+    Right(e) -> {
+        if e is NotFound { rebuild() }          # 就具體型別分支
+        else if e is Overflow { alert(e) }      # 內建 abort，被 guard 具現化
+        else { report(e.message()) }            # 其餘——catch-all 必備
+    }
+}
+```
+
+`is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
+——值已被抹除、永不重新建構。這裡可達的錯誤集合是**開放**的（任何 `raise`、任何內建 abort、任何 library `Err`），
+所以 `is` 串永遠無法窮盡：**catch-all 必備**，未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort（`MatchError`）。
+
+這把錯誤處理依「你握不握有**封閉**集合」分成兩路。需要錯誤的**資料**時，就讓它保持具體——一個
+**`Either[T, MyErrorEnum]`**（從不抹除），其 variant 由 `match` 以值讀出、帶 payload 與覆蓋警告。集合**開放**、或你只
+認得少數幾種時，收下被抹除的 **`Result[T]`**、用 `is` 分派並留 catch-all。於是回傳型別本身就是契約：抹除的 `Result`
+說「分支、用 `Error` 介面」，具體的 `Either` 說「這是我完整的錯誤分類，含資料」。

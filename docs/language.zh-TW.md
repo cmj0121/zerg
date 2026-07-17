@@ -123,9 +123,9 @@ msg := match ev {
 
 - **空的 `spec`** 是合法的 bound、被所有型別滿足，但它保證**零**行為：這種 `T` 只有 memory model 給的**結構能力**
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
-- **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小、**auto-derived** 的 method——`equal`、`copy`、
-  `debug`、`display`……——由結構逐欄位自動生成（含 `Ref` 值則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
-  （例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
+- **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小的 method——`equal`、`copy`、`debug`……由結構
+  逐欄位 **auto-derive**（含 `Ref` 值則 refcount++，與 copy 規則一致），外加 `display`——其預設 body 就是 `debug`
+  （見 Formatting & text）。型別可**明確覆寫**其中任何一個（例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
   可接受的型別集——它只是解鎖那些 method。這套 compiler 擁有的**結構化衍生**可 opt-in 延伸到 `Ord` /
   `Hash` / `Encode` / …——見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 

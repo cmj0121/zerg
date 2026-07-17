@@ -146,10 +146,11 @@ inherent methods are invisible. So:
 - The **empty `spec`** is a valid bound, satisfied by every type, but it guarantees **no** behavior:
   such a `T` supports only the structural operations every value has from the memory model — copy it,
   `del` it, pass it, store it, or send it over a channel — not a single method.
-- **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal,
-  **auto-derived** method set — `equal`, `copy`, `debug`, `display`, … — generated structurally, field by field
-  (a contained `Ref` value is refcount-bumped, matching the copy rule). A type may **explicitly override**
-  any of them (e.g. an order-insensitive `equal`); otherwise it inherits the derived version. Because
+- **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal method
+  set — `equal`, `copy`, `debug`, … **auto-derived** structurally, field by field (a contained `Ref` value
+  is refcount-bumped, matching the copy rule), plus `display`, whose default body is `debug` (Formatting &
+  text). A type may **explicitly override** any of them (e.g. an order-insensitive `equal`); otherwise it
+  inherits the derived version. Because
   every type implements `Object`, bounding `T: Object` never narrows which types are accepted — it
   only unlocks those methods. This compiler-owned **structural derivation** extends, opt-in, to `Ord` /
   `Hash` / `Encode` / … — the [Derive & Default Behavior](derive.md) reference.

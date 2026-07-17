@@ -106,6 +106,16 @@ methods and no `spec` impl of its own**: reach for a named `struct` the moment a
 nominal identity, or field names worth reading. A tuple result is **first-class** — stored, passed, or
 destructured — so multiple return needs no separate mechanism (Pattern matching).
 
+**`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
+representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
+is a **separate identity**: `X` and `Y` are **different types even when structurally identical**, and there
+is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion. It
+may be generic (`type Result[T] = Either[T, Err]`). This is the **strong-typedef** tool — a `UserId` that
+behaves like an `int` but can never be passed where a plain `int` or a `ProductId` is wanted — and it is
+distinct from the single-field-struct **newtype**, which _wraps_ a value behind a new field and fresh impls
+rather than reusing the whole shape. The prelude's **`Result[T]`** and **`T?`** are exactly this over
+`Either`, which is why they are distinct from each other and need an explicit `ok_or` / `ok` to cross.
+
 ## Pattern matching
 
 `match` is an **expression**: it tries a value against **arms** (`pattern -> result`), runs the first

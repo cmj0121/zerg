@@ -90,6 +90,14 @@ reinterpret*——數字是從 variant **建**出來的、不是把 tag 的 byte
 method、也沒有自己的 `spec` impl**：一旦某個值需要行為、nominal 身分、或值得閱讀的欄位名，就改用具名 `struct`。
 tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制（見模式比對）。
 
+**`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
+以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
+兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。它可以泛型
+(`type Result[T] = Either[T, Err]`)。這是 **strong-typedef** 工具——一個 `UserId`,行為像 `int`、卻永遠不能被當作
+一個裸 `int` 或 `ProductId` 傳進去——並與單欄位 struct 的 **newtype** 有別:newtype 是把值*包*進一個新欄位、配全新
+impl,而非沿用整個形狀。prelude 的 **`Result[T]`** 與 **`T?`** 正是它在 `Either` 上的實例,這也是為什麼它們彼此不同、
+要用 `ok_or` / `ok` 顯式跨越。
+
 ## 模式比對（Pattern matching）
 
 `match` 是一個 **expression**：它用 **arm**（`pattern -> result`）逐一試一個值，跑第一個命中的、產出它的 result。

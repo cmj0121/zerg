@@ -112,7 +112,8 @@ msg := match ev {
 - **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小、**auto-derived** 的 method——`equal`、`copy`、
   `debug`……——由結構逐欄位自動生成（含 `Ref` 值則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
   （例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
-  可接受的型別集——它只是解鎖那些 method。
+  可接受的型別集——它只是解鎖那些 method。這套 compiler 擁有的**結構化衍生**可 opt-in 延伸到 `Ord` /
+  `Hash` / `Encode` / …——見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。這是**單向的**——一旦 boxed，
@@ -157,7 +158,8 @@ spec 的 method 分兩種：
 
 於是一個只有 1 個 required method 的 spec，能免費給 implementer 一堆衍生 method——`Iterator` 由 `next` 衍生
 `map`、`filter`、`count`……——而「spec bound 就是完整介面」這條規則便讓它們**全部**（required 與 provided）都能對
-被 bound 的 `T` 呼叫。
+被 bound 的 `T` 呼叫。這些 provided default 都是**行為性**的——寫在 method 上、不碰 fields；另一個由 compiler
+讀取型別結構來生成 impl 的**結構性**層，見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 一個 method 或 function 可帶**自己的型別參數**、疊加在 receiver 的之上：`map[U](this, f: fn(T) -> U)` 在 spec 的
 `T` 與 receiver 的 `This` 之外再加一個 `U`，每個具體組合各 **monomorphize** 一份。provided method 也能泛型——這

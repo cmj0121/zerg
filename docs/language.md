@@ -132,7 +132,8 @@ inherent methods are invisible. Hence:
   (a contained `Ref` value is refcount-bumped, matching the copy rule). A type may **explicitly override**
   any of them (e.g. an order-insensitive `equal`); otherwise it inherits the derived version. Because
   every type implements `Object`, bounding `T: Object` never narrows which types are accepted — it
-  only unlocks those methods.
+  only unlocks those methods. This compiler-owned **structural derivation** extends, opt-in, to `Ord` /
+  `Hash` / `Encode` / … — the [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
 type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (the method to run is
@@ -188,7 +189,9 @@ A spec's methods come in two kinds:
 
 So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
 `map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes
-**all** of them, required and provided, callable on a bounded `T`.
+**all** of them, required and provided, callable on a bounded `T`. These provided defaults are
+**behavioral** — over methods, never fields; the separate **structural** tier, where the compiler reads
+a type's shape to generate an impl, is the [Derive & Default Behavior](derive.md) reference.
 
 A method or function may carry **its own type parameters**, stacked on the receiver's: `map[U](this, f:
 fn(T) -> U)` adds `U` beside the spec's `T` and the receiver's `This`, each **monomorphized** per concrete

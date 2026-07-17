@@ -15,6 +15,24 @@ handle, no join/await; you observe results and completion **only through channel
   reference cannot cross `spawn`, so coroutines never share mutable Zerg state (no data races). What
   crosses a boundary, and how, is **Sharing & the memory model**, next.
 
+### The one thing not scope-owned
+
+Everything else in Zerg is **scope-owned** — a value, a `defer`, a `Ref[T]` resource — cleaned up
+deterministically when its scope exits. A **coroutine is the single, deliberate exception.** `spawn` cuts the
+child loose: its lifetime is **not** tied to the scope that started it — it may outlive that scope or finish
+long before, and no parent waits on it.
+
+This is the whole point of fire-and-forget, and a **choice, not an omission**. Binding a coroutine's lifetime
+to its spawning scope is exactly **structured concurrency** (a nursery that joins its children); Zerg declines
+it to keep `spawn` handle-less and the model small. The costs are accepted and explicit: **no join, no
+parent-waits, no automatic failure propagation** — coordination is the caller's, always through channels. A
+child's failure reaches others only as a `Right(err)` on a channel close (see Unhandled aborts); at program
+end, still-running coroutines are abandoned where they stand (see Termination & deadlock).
+
+A scope-owned _value_ may still **signal** a coroutine — a resource whose `drop` closes a cancel channel the
+coroutine watches — but that is cooperative signalling, not ownership: the coroutine observes the close and
+_chooses_ to stop, and stays free to ignore it. The coroutine itself is never reclaimed by a scope.
+
 ## Sharing & the memory model
 
 Because a coroutine boundary copies everything except `Ref` values, Zerg needs **no elaborate memory

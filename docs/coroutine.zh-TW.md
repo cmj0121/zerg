@@ -12,6 +12,22 @@ join/await；結果與完成**只能靠 channel** 觀察。
 - **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會
   共享可變的 Zerg 狀態（不會有 data race）。什麼能跨越邊界、以及如何跨越，見下一節 **共享與 memory model**。
 
+### 唯一不 scope-owned 的東西
+
+Zerg 其它每一樣東西都是 **scope-owned**——一個值、一個 `defer`、一個 `Ref[T]` 資源——在 scope 離開時決定性清理。
+**coroutine 是唯一、刻意的例外。** `spawn` 把 child 放生：它的 lifetime **不**綁在啟動它的 scope 上——可以活得比那個
+scope 久、也可以早早結束，而且沒有 parent 等它。
+
+這正是 fire-and-forget 的全部重點，是**選擇、不是遺漏**。把 coroutine 的 lifetime 綁在啟動它的 scope 上，就恰恰是
+**結構化並行**（一個會 join child 的 nursery）；Zerg 拒絕它，以保住 `spawn` 無 handle、保住模型的小。代價是被接受且
+明講的：**沒有 join、沒有 parent 等待、沒有自動的失敗傳播**——協調是 caller 的事、永遠透過 channel。child 的失敗只會以
+channel close 上的 `Right(err)` 傳到別人那裡（見未處理的 abort）；程式結束時，還在跑的 coroutine 就地被 abandon（見
+終止與 deadlock）。
+
+一個 scope-owned 的*值*仍可**通知**一條 coroutine——例如一個資源，它的 `drop` 關掉 coroutine 正在 watch 的一條 cancel
+channel——但那是協作式通知、不是 ownership：coroutine 觀察到 close 並*選擇*停止，也仍然可以無視它。coroutine 本身永遠
+不會被某個 scope 回收。
+
 ## 共享與 memory model
 
 因為 coroutine 邊界對「除 `Ref` 值以外」的一切都複製，Zerg **不需要龐大的 memory model**——根本沒有共享可變狀態

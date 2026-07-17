@@ -344,7 +344,7 @@ protocol**, not a `display` parameter, so the mini-language can grow without blo
 one) followed by a newline to stdout. It is a **reserved keyword**, always in scope with no import, so
 the smallest program needs nothing but `print f"hello {name}"`. It is **best-effort** — a stdout write
 error is dropped, never raised — so `print` needs no `?`; the checked, full I/O surface (`stderr`,
-files, sockets, buffered writers) is the imported `io` package (see Process & I/O).
+files, sockets, buffered writers) is the imported `io` package (see [Process & I/O](io.md)).
 
 To build a long string in a loop, still collect into a `list` and convert with `str(...)` rather than
 repeated `+` (which recopies the accumulator each step) — see [Collections](collections.md).

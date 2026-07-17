@@ -286,7 +286,7 @@ desugar** 成對各片段的 `str` 建構（[Collections](collections.zh-TW.md) 
 **`print`——內建的輸出關鍵字。** `print x` 把 `x.display()`（任何值——每個型別都有）加一個換行寫到 stdout。它是
 **保留字**、永遠在 scope 內、免 import，所以最小的程式只需要 `print f"hello {name}"`。它是**盡力而為**——stdout
 的寫入錯誤會被丟掉、不會 raise——所以 `print` 不需 `?`；有檢查的完整 I/O 面（`stderr`、檔案、socket、buffered
-writer）是要 import 的 `io` package（見 Process & I/O）。
+writer）是要 import 的 `io` package（見 [Process & I/O](io.zh-TW.md)）。
 
 在迴圈裡建長字串，仍是先收集進 `list` 再用 `str(...)` 轉，而非重複 `+`（那樣每步都會複製整個累積字串）——見
 [Collections](collections.zh-TW.md)。

@@ -227,6 +227,32 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 同一個 owner 講話。這才是共享可變 state 的方式、而非 `Ref[T]`：`Ref[T]` **唯讀**地分享一個值，actor 則在一個 owner
 背後**序列化寫入**。必須被序列化的資源（非 thread-safe 的 `Ref[handle]`）同樣由一個 actor 獨佔。
 
+## producer——generator pattern
+
+**generator 不是語言特性**——它就是一個**送值到 channel 的 coroutine**，由消費者用 `for v in ch` drain。那條
+channel _就是_ `Iterator`：它一直 yield 值，直到 producer 的 scope 離開、channel 關閉，收尾的 `StopIteration`
+結束迴圈。沒有 `yield` 關鍵字、沒有 generator 型別；`send` 就是 yield。
+
+```text
+fn range_gen(lo: int, hi: int, out: chan[int].send) {
+    mut n := lo
+    for n < hi {
+        out <- n            # 「yield」n——block 到消費者取走為止
+        n = n + 1
+    }
+}                           # out 的 scope 結束 → channel 關閉（若為最後 sender）
+
+for v in producer(range_gen) { use(v) }   # drain 到 StopIteration
+```
+
+早退（消費者先停）是唯一的皺褶。若消費者先 `break`，一個 blocking 的 `out <- n` 會永遠等下去——Zerg 不會 abort
+一個沒有 receiver 的 send（見終止與 deadlock）。producer 用**與任何 coroutine 相同的協作方式**選擇停止：在
+`select` 裡 watch 一條 **cancel channel**（見計時器與取消），消費者關掉它時就 bail。這是既有機制、不是新的。
+
+一個專用的**人因包裝**——把 value/cancel 接線藏在單一 `for v in generate(...)` 之後，自動接好 channel 並在迴圈
+離開時拆掉 producer——**擱置**。它會是純粹疊在上述零件之上的 stdlib 糖，只在需求確實成立時才加（DDD），永不是語言
+改動。
+
 ## 未處理的 abort
 
 未被 `guard` 攔下的 abort（見錯誤模型）**只殺死該 coroutine**——它的 stack unwind（釋放 scope、遞減 channel

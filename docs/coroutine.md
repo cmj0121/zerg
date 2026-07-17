@@ -253,6 +253,34 @@ and coroutine that holds it talks to the one owner. This, not a `Ref[T]`, is how
 a `Ref[T]` shares a value **read-only**, an actor **serializes writes** behind an owner. A resource that
 must be serialized (a non-thread-safe `Ref[handle]`) is likewise owned by one actor.
 
+## A producer — the generator pattern
+
+A **generator is not a language feature** — it is a **coroutine that sends to a channel**, drained by the
+consumer with `for v in ch`. The channel _is_ the `Iterator`: it yields values until the producer's scope
+exits and the channel closes, and the closing `StopIteration` ends the loop. There is no `yield` keyword and
+no generator type; the `send` is the yield.
+
+```text
+fn range_gen(lo: int, hi: int, out: chan[int].send) {
+    mut n := lo
+    for n < hi {
+        out <- n            # "yield" n — blocks until the consumer takes it
+        n = n + 1
+    }
+}                           # out's scope ends → channel closes (if last sender)
+
+for v in producer(range_gen) { use(v) }   # drains until StopIteration
+```
+
+Early consumer exit is the one wrinkle. If the consumer stops first (a `break`), a blocking `out <- n` waits
+forever — Zerg does not abort a receiver-less send (see Termination & deadlock). The producer opts into
+stopping the **same cooperative way as any coroutine**: watch a **cancel channel** in a `select` (see Timers &
+cancellation) and bail when the consumer closes it. That is the existing mechanism, not a new one.
+
+A dedicated **ergonomic wrapper** — hiding the value/cancel plumbing behind one `for v in generate(...)` that
+auto-wires the channels and tears the producer down at loop exit — is **deferred**. It would be pure stdlib
+sugar over exactly the pieces above, added only if the need proves real (DDD), never a language change.
+
 ## Unhandled aborts
 
 An abort never caught by `guard` (see the error model) **kills only that coroutine** — its stack

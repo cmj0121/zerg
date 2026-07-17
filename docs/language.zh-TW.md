@@ -229,6 +229,19 @@ spec 的 method 分兩種：
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
 **monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。
 
+### Associated const（關聯常數）
+
+一個 **`const`** 可以隸屬於某型別，與它的 method、associated function 並列宣告，並以 `Type.NAME` 讀取（在 impl
+內是 `This.NAME`）——就是 associated function `This.zero()` 的常數對應物。它的值是一個**常數運算式**——literal、
+另一個 `const`、或它們的摺疊算術——所以 compiler **在編譯期直接代入**；它不執行任何程式碼、**無副作用**（比 top-level
+`const` 更嚴，後者可在 `main` 前計算一次）。它可以型別為 `This`，讓型別擁有自己的 canonical 值
+（`const ORIGIN: This = Point{ x: 0, y: 0 }`）。
+
+一個 **spec 可以要求**一個，就跟要求 method 一樣：`const MAX: This` 是一個名字加型別、沒有值，每個實作者各自提供，
+而泛型於 `T: Bounded` 的程式碼就讀 `T.MAX`。這正是為什麼它是一個值、而非只是 `fn() -> T`——身為編譯期常數它會摺疊
+進呼叫端，而 `int` 型別的那種**在任何需要編譯期常數之處都能用**，包括定長陣列的大小（`[byte; Buffer.SIZE]`，見
+[Collections](collections.zh-TW.md)）。可見性就是一般的 `pub` / private 旋鈕，如同 field 或 method。
+
 ### 內建 spec（Built-in specs）
 
 多數是 **opt-in**——型別實作它才取得——除了 `Object`

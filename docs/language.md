@@ -284,6 +284,22 @@ method reaches the type's override (a defaulted `count` built on `next` uses an 
 defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
 through its **vtable** to the actual impl.
 
+### Associated constants
+
+A **`const`** may belong to a type, declared alongside its methods and associated functions and read as
+`Type.NAME` (`This.NAME` from inside an implementation) — the constant analogue of the associated function
+`This.zero()`. Its value is a **constant expression** — a literal, another `const`, or their folded
+arithmetic — so the compiler **substitutes it at compile time**; it runs no code and has **no side effect**
+(stricter than a top-level `const`, which may be computed once before `main`). It may be typed `This`, giving
+a type its own canonical values (`const ORIGIN: This = Point{ x: 0, y: 0 }`).
+
+A **spec may require** one, exactly as it requires a method: `const MAX: This` is a name and a type with no
+value, each implementer supplies it, and code generic over `T: Bounded` reads `T.MAX`. This is why it is a
+value and not merely a `fn() -> T` — being a compile-time constant it folds into the caller, and an
+`int`-typed one is usable **wherever a compile-time constant is**, including a fixed-array size
+(`[byte; Buffer.SIZE]`, see [Collections](collections.md)). Visibility is the ordinary `pub` / private knob,
+as on a field or method.
+
 ### Built-in specs
 
 Most are **opt-in** — a type gains one by implementing it — except the set `Object` **auto-derives for

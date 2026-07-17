@@ -40,6 +40,13 @@ A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and 
   **checked** form is already `guard { a + b }` → `Result` (no `checked_*` API); **saturating** is deferred.
 - **Mixed `int`/`uint` is never implicit** — `int + uint` is a compile error (no implicit conversion,
   which also sidesteps C's signed/unsigned comparison traps); cast one side (`int(u) + i`).
+- **Division & remainder** — `/` and `%` follow the **Euclidean** definition: the remainder is **always
+  non-negative** (`0 ≤ a % b < |b|`) and `a == (a / b) * b + a % b` holds for every sign, so `a % n` is a
+  valid index or bucket for any `b`. This is the canonical mathematical `div`/`mod`, not C's
+  sign-of-dividend truncation; the compiler emits the small correction only when an operand may be
+  negative and **elides it when both are non-negative** (the common case, zero overhead). `a / 0` and
+  `a % 0` raise `DivideByZeroError`, and `INT_MIN / -1` overflows (`OverflowError`); truncating and
+  flooring variants are stdlib (deferred).
 
 ### Numeric literals
 
@@ -414,6 +421,11 @@ through:
   (`f(mut xs[i], mut xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
   inserted only where mut arguments could dynamically alias.
 - **Channels** — shared by ref across coroutines, for communication only.
+
+**Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
+`list`/`map`/`set` literal evaluate **in source order**, deterministically — unlike C, whose
+argument-evaluation order is unspecified. So side effects (a `mut` argument, an abort) sequence
+predictably; the `and` / `or` short-circuit is this rule with the right operand skipped (Built-in specs).
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
 the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The

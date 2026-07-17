@@ -35,6 +35,11 @@
   `checked_*`）；**saturating** 延後。
 - **`int`/`uint` 混合絕不隱式**——`int + uint` 是 compile error（無隱式轉換，也順帶避開 C 的 signed/unsigned 比較
   地雷）；顯式 cast 一側（`int(u) + i`）。
+- **除法與餘數**——`/` 與 `%` 採 **Euclidean** 定義：餘數**恆為非負**（`0 ≤ a % b < |b|`），且
+  `a == (a / b) * b + a % b` 對任何正負號都成立，所以 `a % n`（n>0）對任何 `b` 都是合法的 index/bucket。這是數學上
+  canonical 的 `div`/`mod`、而非 C 那種號隨被除數的 truncation；compiler 只在**運算元可能為負**時補小修正，**兩者
+  皆非負時完全 elide**（最常見、零成本）。`a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
+  （`OverflowError`）；truncating 與 flooring 變體屬 stdlib（延後）。
 
 ### 數值字面量（Numeric literals）
 
@@ -345,6 +350,10 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   **compile error**，而編譯器無法證明之處（`f(mut xs[i], mut xs[j])` 且 runtime `i == j`）該次呼叫會
   **abort**（`AliasError`）。檢查只插在「mut 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
+
+**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map`／`set` literal 的元素都**依原始碼順序**求值、
+deterministic——不像 C 的引數求值順序是 unspecified。所以副作用（一個 `mut` 引數、一次 abort）的次序可預測；
+`and`／`or` 的短路就是這條規則加上「跳過右運算元」（見內建 spec）。
 
 **Reference-counted 的值**是 scope-owning 的唯一例外：型別實作 **`Ref`** 的值——內建的 **`chan`**，或 stdlib 的
 **`Ref[T]`** 盒——以 **reference** 共享、而非複製。runtime 計數持有者，在**最後**一個持有者的 scope 退出時釋放；

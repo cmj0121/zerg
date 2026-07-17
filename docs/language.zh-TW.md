@@ -342,6 +342,11 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 其餘一切純 scope-owned、無 GC/refcount。複製一個值時，會對它（遞迴）包含的每個 `Ref` 值做 refcount++、深拷貝其餘
 部分；`Ref` 值永遠共享、絕不被複製。
 
+**refcount 在構造上就是 cycle-complete**，所以不需要循環收集器、也不需要 weak reference：`Ref[T]` 的 referent
+在**盒子建構時就固定**（要指別處就建一個新的 `Ref`），而值 immutable-by-default、又是 bottom-up 建構，沒有辦法讓
+一個既存的 `Ref` 回頭指向後建的值——參照循環永遠形不成，所以「最後持有者釋放」永遠是完整的。（唯一的退化個案
+——`chan` 把指向自己的 reference buffer 進自己——是 programmer error、不是被檢查的個案。）
+
 ### `Ref[T]`——逃出自身 scope 的資源
 
 多數清理只是記憶體，離開 scope 時就自動釋放。若一個**資源的釋放不屬於這種自動釋放**——foreign handle（見

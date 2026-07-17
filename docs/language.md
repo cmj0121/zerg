@@ -409,6 +409,13 @@ runtime counts holders and frees it at the **last** holder's scope exit; everyth
 scope-owned, no GC/refcount. Copying a value refcount-bumps any `Ref` value it (transitively) contains
 and deep-copies the rest; a `Ref` value is shared, never duplicated.
 
+**Refcounting is cycle-complete by construction**, so it needs no cycle collector and no weak
+reference: a `Ref[T]`'s referent is **fixed when the box is built** (to point elsewhere, build a new
+`Ref`), and with values immutable by default and constructed bottom-up there is no way to make an
+existing `Ref` point back at a later one — a reference cycle can never form, so the last-holder free is
+always complete. (The lone pathological case — a `chan` buffering a reference to itself — is a
+programmer error, not a checked one.)
+
 ### `Ref[T]` — a resource that outlives its scope
 
 Most cleanup is just memory, which scope exit frees automatically. A **resource whose release is not that

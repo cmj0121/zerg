@@ -218,14 +218,51 @@ identity 只對 channel 有意義——太 narrow、不值得一個保留字。�
 
 **迭代。** 一個 **`Iterator[T]`** 有 `next() -> Result[T]`——`Left(v)` 是下一個元素，`Right(StopIteration)`
 表示結束（**`StopIteration`** 是內建的 `Err`）。一個 **`Iterable[T]`** 有 `iter()`、產生一個全新的
-`Iterator[T]`。`loop x in X` 需 `X: Iterable`：它把 `x` 綁到每個 `Left`，**在 `Right(StopIteration)` 乾淨結束**，
+`Iterator[T]`。`for x in X` 需 `X: Iterable`：它把 `x` 綁到每個 `Left`，**在 `Right(StopIteration)` 乾淨結束**，
 而**對任何其他 `Right(err)` 則 raise**——迭代中途的失敗絕不被靜默吞掉（要檢視就手動 `next()` 再 `guard`）。因為
-`<-ch` 本就回 `Result[T]`，**channel 就是一個 `Iterator`**：`loop v in ch` 會 drain 它，在乾淨關閉時結束、並把
+`<-ch` 本就回 `Result[T]`，**channel 就是一個 `Iterator`**：`for v in ch` 會 drain 它，在乾淨關閉時結束、並把
 producer 的崩潰重新 raise。`Iterator` 也 trivially 是 `Iterable`，所以 **lazy adapters**（`map`、`filter`、
 `take`、`zip`…）就是實作 `Iterator` 的普通 stdlib 迭代器、可鏈式——每個回傳一個**具體 adapter 型別**（`map`
 回傳 `Map[This, U]`，它自身實作 `Iterator[U]`、存著來源與 closure），所以整條鏈全程 **monomorphize**、不 box。
-`loop mut x in X` 把每個元素綁成就地的
+`for mut x in X` 把每個元素綁成就地的
 `mut`——僅當 `X` 為 `mut`。
+
+## 控制流（Control flow）
+
+三個構造承載全部控制流，依「產出什麼」區分：**`match`** 產出一個**值**（模式比對），而 **`if`** 與 **`for`** 是為了
+副作用而跑的 **statement**。想從分支拿到值，一律用 `match`（或 null-safety 的 `??` / `?.`）——`if` 永不產出值，
+所以一個選擇只用一種方式產出值，不是兩種。
+
+**`if`——條件 statement。** `if cond { … }`，可接 `else` 與 `else if`。條件是 `bool`（沒有 truthiness——要轉就
+`bool(x)`；邏輯關鍵字見內建 spec）。**綁定形式** `if x := expr { … }` 只在 `expr` 命中單一 pattern `x` 時跑區塊、
+並在裡面綁定它——就是「值存在」這個日常測試的單臂 `match` 語法糖：`if v := <-ch { use(v) }` 只在 `Left` 時觸發、
+`if x := opt { … }` 只在 optional 有值時觸發。
+
+**`for`——唯一的迴圈。** 一個關鍵字、兩種形式：
+
+- **`for { … }`**——無窮迴圈；用 `break` 或 `return` 離開。
+- **`for x in it { … }`**——走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（一個全新的不可變 binding——函式與閉包
+  那節的閉包捕獲安全正是建立在這點上）。**`for mut x in it`** 把每個元素綁成就地的 `mut`，僅當 `it` 為 `mut`。
+  迭代協定——在 `StopIteration` 乾淨結束、對任何其他 error 則 re-raise——見上面的「迭代」。
+
+**沒有 `while`、也沒有 C 式三段 `for`**：條件終止的迴圈就寫成 `for { … break if done }`，讓迴圈詞彙維持單一個字
+（`small and crisp`）。
+
+**`break` / `continue`** 作用於**最內層的 `for`**，且**沒有 loop label**——要跳出外層迴圈，就把內層抽成函式再
+`return`。慣用的條件形式是語法糖 **`break if cond`** 與 **`continue if cond`**——完全等於 `if cond { break }` /
+`if cond { continue }`，是不必巢狀一層 `if` 就能結束或跳過一輪的可讀寫法：
+
+```text
+for {
+    line := <-input ?? break       # 收到 channel 關閉為止
+    continue if line.empty()       # 跳過空行
+    break if line == "quit"        # 遇到 sentinel 就停
+    handle(line)
+}
+```
+
+`for` 是 **statement**、不是 expression——不產出值。要組結果就鏈一個 **iterator adapter**（`map` / `filter` /
+`fold`，見「迭代」）或 append 進另一個 collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
 
 ## 型別轉換（Type Casts）
 
@@ -395,12 +432,12 @@ apply := fn(req: Request) -> Reply {
 }
 ```
 
-兩個經典的閉包陷阱因此在結構上被排除。plain `loop x in xs` 的變數是**每一輪一個全新的不可變 binding**（該元素的
+兩個經典的閉包陷阱因此在結構上被排除。plain `for x in xs` 的變數是**每一輪一個全新的不可變 binding**（該元素的
 一份 copy），而 capture 是複製值——所以捕獲它的閉包保有**自己這一輪的值**，沒有共享 loop 變數的 bug、也不需快照
-（`loop mut x` 這種就地形式是 `mut`，所以跟任何 `mut` 一樣不可捕獲——先快照）：
+（`for mut x` 這種就地形式是 `mut`，所以跟任何 `mut` 一樣不可捕獲——先快照）：
 
 ```text
-loop x in xs {
+for x in xs {
     spawn fn() { handle(x) }       # 每個 coroutine 拿到自己這一輪的值
 }
 ```

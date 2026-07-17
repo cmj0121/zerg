@@ -65,16 +65,16 @@ elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 
 **依序**比，`map`／`set` **與順序無關**（插入序決定 iteration，永遠不會決定相等）。
 
 ```text
-loop x in xs { total = total + x }        # 讀取
-loop mut x in ys { x = x * 2 }            # 就地改——ys 必須是 mut
+for x in xs { total = total + x }         # 讀取
+for mut x in ys { x = x * 2 }             # 就地改——ys 必須是 mut
 ```
 
 ## 迭代與變動
 
-在 `loop … in xs` 內，`xs` 對**結構性變更凍結**——在迴圈裡 append、insert、remove、grow/shrink、或 rebind 它都是
+在 `for … in xs` 內，`xs` 對**結構性變更凍結**——在迴圈裡 append、insert、remove、grow/shrink、或 rebind 它都是
 **compile error**——所以 iterator **永遠不會失效**（無 dangling cursor、無 runtime fail-fast 檢查）。這是一條
 **local** 規則——迴圈知道自己走訪的是哪個 collection——所以**不需要 borrow checker，runtime 也零成本**。就地改
-某個 **元素**（`loop mut x`）還是可以：它不會移動 cursor。
+某個 **元素**（`for mut x`）還是可以：它不會移動 cursor。
 
 想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
 rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。

@@ -46,7 +46,7 @@ spec Summable {
 
     fn sum(items: list[This]) -> This {     # provided — reads only methods, no fields, no match
         mut acc := This.zero()
-        loop x in items { acc = acc.add(x) }
+        for x in items { acc = acc.add(x) }
         return acc
     }
 }

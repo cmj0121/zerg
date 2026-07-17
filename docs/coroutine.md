@@ -91,7 +91,7 @@ v := <-ch?                 # propagate the close reason up (a crash cascades)
 v := <-ch!                 # force: a crash Err re-raises as an abort here
 v := <-ch ?? fallback      # default on any close
 if v := <-ch { … }         # run the block only on a value (Left)
-loop { v := <-ch ?? break }              # drain until any close
+for { v := <-ch ?? break }               # drain until any close
 match <-ch { Left(v) -> use(v)  Right(e) -> report(e) }
 ```
 
@@ -233,7 +233,7 @@ enum Cmd {
 
 fn counter(inbox: chan[Cmd].recv) {
     mut n := 0                       # the state: a plain mut int, owned here alone
-    loop cmd in inbox {              # drains until the last sender leaves
+    for cmd in inbox {               # drains until the last sender leaves
         match cmd {
             Add(d)   -> n = n + d    # the write happens inside the owner
             Get(rep) -> rep <- n     # reply on the caller's channel
@@ -245,7 +245,7 @@ fn counter(inbox: chan[Cmd].recv) {
 - **tell** (fire-and-forget) is a plain send — `inbox <- Add(5)`.
 - **ask** (request-reply) sends a fresh reply channel and blocks on it —
   `rep := chan[int]();  inbox <- Get(rep.send);  v := <-rep!`.
-- **Teardown is automatic** — when the last client drops its send end, `inbox` closes, the `loop` ends,
+- **Teardown is automatic** — when the last client drops its send end, `inbox` closes, the `for` ends,
   and the owner's `mut` state is freed; the ordinary channel-close and scope-owned rules, nothing added.
 
 The inbox is a `Ref` value, so **sharing the actor is sharing the inbox** (refcount-bumped) — every copy

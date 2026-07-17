@@ -82,7 +82,7 @@ v := <-ch?                 # 把關閉原因往上傳（崩潰會級聯）
 v := <-ch!                 # force：崩潰 Err 在此 re-raise 成 abort
 v := <-ch ?? fallback      # 任一關閉都給預設值
 if v := <-ch { … }         # 只有有值（Left）時才跑區塊
-loop { v := <-ch ?? break }              # 逐一收，任一關閉就跳出
+for { v := <-ch ?? break }               # 逐一收，任一關閉就跳出
 match <-ch { Left(v) -> use(v)  Right(e) -> report(e) }
 ```
 
@@ -208,7 +208,7 @@ enum Cmd {
 
 fn counter(inbox: chan[Cmd].recv) {
     mut n := 0                       # state：一個普通 mut int，只有這裡獨佔
-    loop cmd in inbox {              # drain 到最後一個 sender 離場
+    for cmd in inbox {               # drain 到最後一個 sender 離場
         match cmd {
             Add(d)   -> n = n + d    # 寫入發生在 owner 內
             Get(rep) -> rep <- n     # 回覆到呼叫端的 channel
@@ -220,7 +220,7 @@ fn counter(inbox: chan[Cmd].recv) {
 - **tell**（fire-and-forget）就是一次普通 send——`inbox <- Add(5)`。
 - **ask**（request-reply）送一條全新 reply channel 並 block 等它——
   `rep := chan[int]();  inbox <- Get(rep.send);  v := <-rep!`。
-- **收尾自動**——最後一個 client 放掉 send 端時，`inbox` 關閉、`loop` 結束、owner 的 `mut` state 釋放；就是既有的
+- **收尾自動**——最後一個 client 放掉 send 端時，`inbox` 關閉、`for` 結束、owner 的 `mut` state 釋放；就是既有的
   channel-close 與 scope-owned 規則，沒有新增。
 
 inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bump）——每個持有它的 copy 與 coroutine 都對著

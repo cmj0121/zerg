@@ -70,17 +70,17 @@ Iterating reads each element **by value** (elidable to read-only by-ref); to edi
 `map`s/`set`s **order-insensitively** (insertion order governs iteration, never equality).
 
 ```text
-loop x in xs { total = total + x }        # read
-loop mut x in ys { x = x * 2 }            # edit in place — ys must be mut
+for x in xs { total = total + x }         # read
+for mut x in ys { x = x * 2 }             # edit in place — ys must be mut
 ```
 
 ## Iterating & mutation
 
-Within a `loop … in xs`, `xs` is **frozen against structural change** — appending, inserting, removing,
+Within a `for … in xs`, `xs` is **frozen against structural change** — appending, inserting, removing,
 growing/shrinking, or rebinding it inside the loop is a **compile error** — so an iterator can **never be
 invalidated** (no dangling cursor, no runtime fail-fast check). This is a **local** rule — the loop knows
 the collection it walks — so it needs no borrow checker and costs you nothing at runtime. Editing an
-**element** in place (`loop mut x`) stays fine: it never moves the cursor.
+**element** in place (`for mut x`) stays fine: it never moves the cursor.
 
 To transform in place, use a single `mut` method whose internal walk is controlled (`xs.retain(pred)`), or
 rebuild (`xs = xs.filter(pred)` — a rebind after the loop). To accumulate while reading `xs`, append to a

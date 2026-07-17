@@ -263,15 +263,57 @@ stdlib total-order/hashable `float` wrapper is deferred.
 
 **Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
 `Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has
-`iter()`, producing a fresh `Iterator[T]`. `loop x in X` requires `X: Iterable`: it binds `x` to each
+`iter()`, producing a fresh `Iterator[T]`. `for x in X` requires `X: Iterable`: it binds `x` to each
 `Left`, **exits cleanly on `Right(StopIteration)`**, and **raises any other `Right(err)`** — a mid-stream
 failure is never silently swallowed (drive `next()` by hand and `guard` to inspect it). Since `<-ch`
-already yields `Result[T]`, **a channel is an `Iterator`**: `loop v in ch` drains it, ending on a clean
+already yields `Result[T]`, **a channel is an `Iterator`**: `for v in ch` drains it, ending on a clean
 close and re-raising a producer crash. An `Iterator` is trivially `Iterable`, so **lazy adapters**
 (`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain — each returns a **concrete
 adapter type** (`map` a `Map[This, U]` that itself implements `Iterator[U]`, holding the source and the
-closure), so a chain stays fully **monomorphized**, no boxing. `loop mut x in X` binds each
+closure), so a chain stays fully **monomorphized**, no boxing. `for mut x in X` binds each
 element as an in-place `mut` — only when `X` is `mut`.
+
+## Control flow
+
+Three constructs carry all control flow, split by what they yield: **`match`** produces a **value**
+(Pattern matching), while **`if`** and **`for`** are **statements** that run for effect. Wanting a value
+out of a branch is always `match` (or the null-safety `??` / `?.`) — `if` never yields one, so a choice
+produces a value one way, not two.
+
+**`if` — conditional statement.** `if cond { … }`, with optional `else` and `else if`. The condition is
+a `bool` (no truthiness — `bool(x)` to cast; the logical keywords are under Built-in specs). A **binding
+form** `if x := expr { … }` runs the block only when `expr` matches the single pattern `x`, binding it
+inside — the one-arm-`match` sugar for the everyday "value present" test: `if v := <-ch { use(v) }`
+fires only on a `Left`, `if x := opt { … }` only when the optional holds a value.
+
+**`for` — the one loop.** One keyword, two forms:
+
+- **`for { … }`** — an infinite loop; leave it with `break` or `return`.
+- **`for x in it { … }`** — iterate `it: Iterable`, binding `x` **by copy** each round (a fresh
+  immutable binding — the closure-capture safety in Functions & Closures rests on exactly this).
+  **`for mut x in it`** binds each element as an in-place `mut`, only when `it` is `mut`. The iteration
+  protocol — a clean exit on `StopIteration`, any other error re-raised — is Iteration, above.
+
+There is **no `while` and no C-style three-clause `for`**: a condition-terminated loop is
+`for { … break if done }`, keeping the loop vocabulary a single word (`small and crisp`).
+
+**`break` / `continue`** act on the **nearest enclosing `for`**, and there are **no loop labels** — to
+leave an outer loop, lift the inner one into a function and `return`. The idiomatic conditional form is
+the sugar **`break if cond`** and **`continue if cond`** — exactly `if cond { break }` /
+`if cond { continue }`, the readable way to end or skip a round without nesting an `if`:
+
+```text
+for {
+    line := <-input ?? break       # drain until the channel closes
+    continue if line.empty()       # skip blank lines
+    break if line == "quit"        # stop on a sentinel
+    handle(line)
+}
+```
+
+`for` is a **statement**, not an expression — it yields no value. Build a result by chaining an
+**iterator adapter** (`map` / `filter` / `fold`, Iteration) or appending into another collection
+([Collections](collections.md)), never a break-with-value.
 
 ## Type Casts
 
@@ -472,13 +514,13 @@ apply := fn(req: Request) -> Reply {
 }
 ```
 
-Two classic closure hazards are ruled out by construction. A plain `loop x in xs` variable is a **fresh
+Two classic closure hazards are ruled out by construction. A plain `for x in xs` variable is a **fresh
 immutable binding each iteration** (a copy of that element), and a capture copies the value — so a closure
 capturing it keeps **its own iteration's value**, no shared-loop-var bug and no snapshot needed (a
-`loop mut x`, the in-place form, is `mut` and so, like any `mut`, uncapturable — snapshot it first):
+`for mut x`, the in-place form, is `mut` and so, like any `mut`, uncapturable — snapshot it first):
 
 ```text
-loop x in xs {
+for x in xs {
     spawn fn() { handle(x) }       # each coroutine gets its own iteration's value
 }
 ```

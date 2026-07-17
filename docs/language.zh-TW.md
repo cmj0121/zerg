@@ -110,7 +110,7 @@ msg := match ev {
 - **空的 `spec`** 是合法的 bound、被所有型別滿足，但它保證**零**行為：這種 `T` 只有 memory model 給的**結構能力**
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
 - **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小、**auto-derived** 的 method——`equal`、`copy`、
-  `debug`……——由結構逐欄位自動生成（含 `Ref` 值則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
+  `debug`、`display`……——由結構逐欄位自動生成（含 `Ref` 值則 refcount++，與 copy 規則一致）。型別可**明確覆寫**其中任何一個
   （例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
   可接受的型別集——它只是解鎖那些 method。這套 compiler 擁有的**結構化衍生**可 opt-in 延伸到 `Ord` /
   `Hash` / `Encode` / …——見 [Derive 與預設行為](derive.zh-TW.md) 參考。
@@ -175,11 +175,12 @@ spec 的 method 分兩種：
 多數是 **opt-in**——型別實作它才取得——除了 `Object`
 **為每個型別 auto-derive** 的那組（皆可 override）：
 
-| `Object` method | 驅動            | 說明                                       |
-| --------------- | --------------- | ------------------------------------------ |
-| `copy`          | copy-by-value   | 由記憶體模型**強制**——永不缺席             |
-| `equal`         | `==` / `!=`     | **結構性**；channel 或 `fn` 以 identity 比 |
-| `debug`         | logging、stderr | 開發者取向的表示                           |
+| `Object` method | 驅動                 | 說明                                                  |
+| --------------- | -------------------- | ----------------------------------------------------- |
+| `copy`          | copy-by-value        | 由記憶體模型**強制**——永不缺席                        |
+| `equal`         | `==` / `!=`          | **結構性**；channel 或 `fn` 以 identity 比            |
+| `debug`         | logging、stderr      | 開發者取向；**auto-derive**、可 override              |
+| `display`       | `f"…"`、對使用者顯示 | 給人看；**預設 body 就是 `debug`**、要漂亮就 override |
 
 Zerg **不設 instance-identity 測試**（沒有 `is`）：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 identity 只對 channel 有意義——太 narrow、不值得一個保留字。相等永遠是**結構性**的 `equal`。
@@ -263,6 +264,27 @@ for {
 
 `for` 是 **statement**、不是 expression——不產出值。要組結果就鏈一個 **iterator adapter**（`map` / `filter` /
 `fold`，見「迭代」）或 append 進另一個 collection（[Collections](collections.zh-TW.md)），不要 break-with-value。
+
+## 格式化與文字（Formatting & text）
+
+每個值都有兩種渲染，兩者都是 **`Object` method**——所以每個型別都有，不需 opt-in 任何 `spec`：
+
+- **`debug() -> str`**——**開發者**視圖：**auto-derive**、逐欄位（sum 則先 tag 再 payload）結構化生成、可
+  override。logging、`stderr`、abort backtrace 印的就是它——明確、機械，不憑空猜文案。
+- **`display() -> str`**——**給人看**的視圖。它的**預設 body 就是 `debug()`**，所以永遠存在；override 它把值呈現成
+  終端使用者該讀的樣子（金額、日期、百分比）。compiler 永不衍生語意化渲染——只有作者知道——所以 `display`
+  只能 override、不做結構化。
+
+**字串內插——`f"…"`。** 裸 `"…"` 是字面量（大括號是普通字元、免跳脫）。**`f`-string** 內嵌 `{ expr }`——任意
+運算式——透過該值的 `display()` 渲染再串接：`f"sum={x + y}"`、`f"user {name} on port {port}"`。它在**編譯期
+desugar** 成對各片段的 `str` 建構（[Collections](collections.zh-TW.md) 的 `str: Add` 串接）——不需 variadic、
+無 runtime 格式引擎、無需 import。要改嵌開發者視圖就顯式呼叫：`f"{x.debug()}"`。
+
+**格式指示子——`f"{x:>.2f}"`。** `:` 後綴選 width、precision、進位或對齊。完整指示子文法**延後**；概念上它導向一個
+獨立的 per-type **format 協定**、而非 `display` 的參數，好讓這套 mini-language 能長大而不撐爆 `display`。
+
+在迴圈裡建長字串，仍是先收集進 `list` 再用 `str(...)` 轉，而非重複 `+`（那樣每步都會複製整個累積字串）——見
+[Collections](collections.zh-TW.md)。
 
 ## 型別轉換（Type Casts）
 

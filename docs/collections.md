@@ -100,8 +100,8 @@ separate constructor). Editing text always yields a **new** `str`.
 `map`/`set` key (being immutable), and `a + b` **concatenates** into a new `str`. Build a string up in a
 loop with that list-collect, not by repeated `+`, which would copy the whole
 accumulator each step. A `float` implements neither `Ord` nor `Hash`, so it is never a sorted-collection
-element or a key. (Formatting a non-text value into text — an `int` to `"42"`, string interpolation — is a
-separate concern, deferred.)
+element or a key. (Rendering a non-text value to text — an `int` to `"42"`, `f"…"` interpolation — is
+**Formatting & text** in the [Language Reference](language.md), built on `display`.)
 
 ## Deferred
 

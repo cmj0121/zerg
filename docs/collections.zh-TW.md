@@ -90,8 +90,8 @@ rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
 `str` 實作 **`Ord`**、**`Hash`**、**`Add`**——收錄在 [語言參考](language.zh-TW.md)（內建 spec）：依 code point
 字典序排序、（因為不可變）是天然的 `map`/`set` key、且 `a + b` **串接**成新 `str`。在迴圈裡建字串就用前述
 list-collect，別用重複的 `+`（那樣每一步都會複製整個累積字串）。`float` 既不實作 `Ord` 也不實作 `Hash`，所以永遠
-不會是排序集合的元素，也永遠不會是 key。（把非文字值格式化成文字——`int` 變 `"42"`、string interpolation——是另一
-件事，延後。）
+不會是排序集合的元素，也永遠不會是 key。（把非文字值渲染成文字——`int` 變 `"42"`、`f"…"` 內插——是
+[語言參考](language.zh-TW.md)的 **Formatting & text**，建立在 `display` 上。）
 
 ## 待決
 

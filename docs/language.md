@@ -128,7 +128,7 @@ inherent methods are invisible. So:
   such a `T` supports only the structural operations every value has from the memory model — copy it,
   `del` it, pass it, store it, or send it over a channel — not a single method.
 - **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal,
-  **auto-derived** method set — `equal`, `copy`, `debug`, … — generated structurally, field by field
+  **auto-derived** method set — `equal`, `copy`, `debug`, `display`, … — generated structurally, field by field
   (a contained `Ref` value is refcount-bumped, matching the copy rule). A type may **explicitly override**
   any of them (e.g. an order-insensitive `equal`); otherwise it inherits the derived version. Because
   every type implements `Object`, bounding `T: Object` never narrows which types are accepted — it
@@ -210,11 +210,12 @@ through its **vtable** to the actual impl.
 Most are **opt-in** — a type gains one by implementing it — except the set `Object` **auto-derives for
 every type** (each overridable):
 
-| `Object` method | drives          | notes                                                  |
-| --------------- | --------------- | ------------------------------------------------------ |
-| `copy`          | copy-by-value   | forced by the memory model — never absent              |
-| `equal`         | `==` / `!=`     | **structural**; a channel or `fn` compares by identity |
-| `debug`         | logging, stderr | a developer-facing rendering                           |
+| `Object` method | drives            | notes                                                        |
+| --------------- | ----------------- | ------------------------------------------------------------ |
+| `copy`          | copy-by-value     | forced by the memory model — never absent                    |
+| `equal`         | `==` / `!=`       | **structural**; a channel or `fn` compares by identity       |
+| `debug`         | logging, stderr   | developer-facing; **auto-derived** structurally, overridable |
+| `display`       | `f"…"`, user text | human-facing; **defaults to `debug`**, override to prettify  |
 
 Zerg has **no instance-identity test** (no `is`): under copy-by-value distinct values are distinct
 instances and there's no aliasing, so identity would be meaningful only for a channel — too narrow to
@@ -314,6 +315,33 @@ for {
 `for` is a **statement**, not an expression — it yields no value. Build a result by chaining an
 **iterator adapter** (`map` / `filter` / `fold`, Iteration) or appending into another collection
 ([Collections](collections.md)), never a break-with-value.
+
+## Formatting & text
+
+Every value renders two ways, both **`Object` methods** — so every type has both, with no `spec` to
+opt into:
+
+- **`debug() -> str`** — the **developer** view: **auto-derived** structurally, field by field (a sum
+  by tag-then-payload), and overridable. This is what logging, `stderr`, and an abort backtrace
+  print — unambiguous and mechanical, never guessed-at prose.
+- **`display() -> str`** — the **human** view. Its **default body is `debug()`**, so it always exists;
+  override it to present the value the way an end user should read it (a price, a date, a percentage).
+  The compiler never derives a semantic rendering — only the author knows it — so `display` is
+  override-only, never structural.
+
+**String interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters, no
+escaping). An **`f`-string** embeds `{ expr }` — any expression — rendered through the value's
+`display()` and joined: `f"sum={x + y}"`, `f"user {name} on port {port}"`. It **desugars at compile
+time** to `str` building over the pieces (the `str: Add` concatenation from
+[Collections](collections.md)) — no variadics, no runtime format engine, nothing to import. To embed
+the developer view instead, call it: `f"{x.debug()}"`.
+
+**Format specifiers — `f"{x:>.2f}"`.** A `:`-suffix selects width, precision, base, or alignment. The
+full specifier grammar is **deferred**; conceptually it routes to a separate per-type **format
+protocol**, not a `display` parameter, so the mini-language can grow without bloating `display`.
+
+To build a long string in a loop, still collect into a `list` and convert with `str(...)` rather than
+repeated `+` (which recopies the accumulator each step) — see [Collections](collections.md).
 
 ## Type Casts
 

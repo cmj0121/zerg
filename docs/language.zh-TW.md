@@ -506,6 +506,34 @@ I/O、讀 ambient 狀態（clock、randomness、`env`）、或可能 **abort**�
 
 持有函式的 binding 其可變性就是一般的 per-instance 軸——`mut f := …` 可 rebind、`f := …` 不可——與上述一切正交。
 
+### 預設參數與具名引數
+
+Zerg **沒有 overloading**——一個名字就是一個函式——所以 overloading 通常換來的彈性，改由**呼叫端**提供：**預設
+參數**與**具名引數**，兩者合起來就是「這個輸入可選」的正牌講法。
+
+```text
+fn greet(name: str, greeting: str = "Hello", loud: bool = false) -> str { … }
+
+greet("Sam")                 # greeting = "Hello"、loud = false
+greet("Sam", loud: true)     # greeting 用預設；loud 具名給
+greet("Sam", "Hi", true)     # 全 positional
+```
+
+- 一個參數可宣告**預設值**——引數被省略時呼叫端所用的運算式。它在**每次被用到時於呼叫端求值**、絕不是在定義處
+  求值一次，所以沒有 shared-mutable-default 的陷阱；它是普通運算式，且可讀取前面的參數（求值由左往右）。沒有預設
+  的參數仍是**必填**。
+- 一個**具名引數**以參數名字傳入（`loud: true`）——這正是讓你能**跳過中間的預設參數**的關鍵。規則就是慣例那套：
+  positional 引數由左往右填、任何參數都可改用具名、有預設的可省略，而且**一旦具名，其後全部都要具名**（具名之後
+  不能再回到 positional）。
+
+因為參數可以用名字挑選，**名字就成了函式契約的一部分**——改名會弄壞呼叫者，就跟改型別一樣。但預設與名字都不進
+_型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名字住在參數列——與「型別就是輸入／輸出契約、僅此
+而已」一致。兩者都是**呼叫端 sugar**：跨越 C ABI（見 [FFI](ffi.zh-TW.md)）時，export 的函式全 positional、無預設。
+
+**variadic** 參數刻意**不提供**——改為顯式傳 `list[T]`（`sum(xs: list[int])`，呼叫 `sum([1, 2, 3])`）。這讓呼叫
+模型與 C ABI 都保持扁平，也符合 formatting 已採的 no-variadics 立場；`print` 保持是內建構造、不是使用者可定義的
+variadic。
+
 **閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** `mut` 變數不能被捕獲；要用先
 快照成 immutable binding（`snap := n`）。捕獲是複製——捕獲的 channel 做 refcount++、其餘深拷貝——所以逃出定義
 scope 的閉包帶著自己的副本，永不懸空。等價地說：

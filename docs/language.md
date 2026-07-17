@@ -615,6 +615,39 @@ untracked **by design** — Zerg is procedural-first here — not by omission.
 The mutability of the binding that _holds_ a function is the ordinary per-instance axis — `mut f := …`
 is rebindable, `f := …` is not — and is orthogonal to everything above.
 
+### Default parameters & named arguments
+
+Zerg has **no overloading** — one name is one function — so the flexibility overloading usually buys comes
+from the **call site** instead: **default parameters** and **named arguments**, together the sanctioned way
+to say "this input is optional."
+
+```text
+fn greet(name: str, greeting: str = "Hello", loud: bool = false) -> str { … }
+
+greet("Sam")                 # greeting = "Hello", loud = false
+greet("Sam", loud: true)     # greeting defaults; loud given by name
+greet("Sam", "Hi", true)     # all positional
+```
+
+- A parameter may declare a **default** — the expression the call uses when the argument is omitted. It is
+  **evaluated at the call site each time** it is used, never once at definition, so there is no
+  shared-mutable-default trap; it is an ordinary expression and may read earlier parameters (evaluation is
+  left-to-right). A parameter with no default stays **mandatory**.
+- A **named argument** passes a parameter by its name (`loud: true`) — which is what lets you **skip a
+  defaulted parameter** in the middle. The rule is the usual one: positional arguments fill left-to-right,
+  any parameter may instead be given by name, a defaulted one may be omitted, and **once you name an argument
+  the rest must be named too** (no positional after a name).
+
+Because a parameter can be selected by name, **the name is part of the function's contract** — renaming it
+breaks callers, exactly as changing a type would. Yet neither defaults nor names ride in the _type_:
+`fn(str, str, bool) -> str` is the type, defaults live in the declaration and names in the parameter list —
+consistent with a type being the input/output contract and only that. Both are **call-site sugar**: across
+the C ABI (see [FFI](ffi.md)) an exported function is all-positional with no defaults.
+
+A **variadic** parameter is deliberately **not** offered — pass a `list[T]` explicitly (`sum(xs: list[int])`,
+called `sum([1, 2, 3])`). This keeps the call model and the C ABI flat, and matches the no-variadics stance
+already taken for formatting; `print` stays a built-in construct, not a user-definable variadic.
+
 **Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** A
 `mut` variable cannot be captured; snapshot it into an immutable binding first (`snap := n`). Capture
 is by copy — a captured channel is refcount-bumped, everything else deep-copied — so a closure that

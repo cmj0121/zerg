@@ -565,6 +565,14 @@ differ in calling convention — by-ref-in-place vs copy). Visibility is **not**
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
 anonymous function.
 
+**A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut`
+marking the one argument-level effect, in-place mutation of that argument — and its result, where a
+recoverable failure shows as a `Result` / `Either`. It tracks **no other effect**: whether a function does
+I/O, reads ambient state (clock, randomness, `env`), or may **abort** never appears in a signature. I/O is
+visible only through a file's `import`; an abort, being possible in nearly every expression (an overflow, a
+bad index), would be noise on every signature. Effects beyond argument mutation and recoverable error are
+untracked **by design** — Zerg is procedural-first here — not by omission.
+
 The mutability of the binding that _holds_ a function is the ordinary per-instance axis — `mut f := …`
 is rebindable, `f := …` is not — and is orthogonal to everything above.
 

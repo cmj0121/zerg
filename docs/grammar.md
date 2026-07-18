@@ -263,8 +263,8 @@ best-effort (it never raises), so `print f"hello {name}"` is the smallest progra
 A function is a first-class value — a named declaration, an anonymous expression, and a type:
 
 ```text
-fn-decl    ::= 'pub'? 'mut'? 'fn' identifier '(' param-list? ')' ret-type? block
-fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block
+fn-decl    ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # anonymous — never generic
 fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
@@ -286,6 +286,9 @@ param-type ::= 'mut'? type
   place; the call site must hold the receiver in a `mut` binding. It is meaningful only inside an `impl` or
   `spec` — a free function or closure has no receiver. `mut fn` tracks mutation of the value's **own fields**,
   not effects on a resource behind a `Ref[T]`/foreign handle (which need no `mut` — see group 7).
+- **Generics.** A `fn` (and a `spec` method) may take type parameters — `fn max[T: Ord](a: T, b: T) -> T` —
+  with optional spec **bounds**; the full generics grammar and its monomorphization model are in group 7. An
+  **anonymous** `fn(…)` is never generic (wrap it in a named `fn` if you need type parameters).
 
 ## Group 6 — Control flow & Pattern matching
 
@@ -338,8 +341,11 @@ array-type  ::= '[' type ';' expr ']'
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
-spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
-impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' fn-decl* '}'
+generics    ::= '[' type-param ( ',' type-param )* ']'
+type-param  ::= identifier ( ':' bound )?     # an optional spec bound
+bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
 decorated-decl ::= decorator* declaration   # a decorator prefix leads any declaration (group 1)
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
@@ -361,6 +367,16 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   a type and a function cannot share a name (Zerg has no overloading). A struct's constructor is as visible
   as the struct; enforce an invariant with a private struct and a factory `fn`.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
+- **Generics & bounds.** A parameter list `[T, …]` may bound each parameter to specs — `[T: Ord]`, a `+`
+  conjunction `[K: Hash + Eq, V]`. The same `bound` is a spec's **super-spec** (`spec Ord: Eq` — an
+  `impl Ord` then also needs `impl Eq`, and `Ord`'s body may call `Eq` on `This`). An `impl`'s own type
+  params sit **after `impl`** — `impl[T] Summable for list[T]` — so `T` is usable in the target. Generics
+  **monomorphize**: each distinct type argument yields its own specialized C function, so a bound is
+  load-bearing (it names the impl to specialize, and `a < b` in generic code needs the bound that provides
+  `<`) and a generic function is not a first-class value until instantiated. Soundness relies on
+  **coherence** (one `impl Spec for Type` program-wide) and an **orphan rule** (own the spec or the type);
+  generics are **invariant**. `#[dyn]` instead emits one shared witness-table body (size for speed), and the
+  compiler can flag instantiation bloat. Const generics and call-site type arguments are deferred.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
   full method). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
   the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self

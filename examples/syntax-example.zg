@@ -108,6 +108,15 @@ fn composites() -> User {
     return u
 }
 
+# a generic function: the `T: Summable` bound lets the body call Summable's methods on T
+fn sum_all[T: Summable](xs: list[T]) -> T {
+    mut acc := T.zero()
+    for x in xs {
+        acc = acc.add(x)
+    }
+    return acc
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

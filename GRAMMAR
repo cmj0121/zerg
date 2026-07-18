@@ -224,8 +224,8 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # default; a call fills parameters positionally, then by name. ('type' is defined in
 # group 7 (Types); it is referenced here for signatures.)
 
-fn-decl      ::= 'pub'? 'mut'? 'fn' identifier '(' param-list? ')' ret-type? block
-fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure
+fn-decl      ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure — never generic
 fn-type      ::= 'fn' '(' param-type-list? ')' ret-type?         # a function's type
 
 # 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place. It is
@@ -334,8 +334,10 @@ chan-type    ::= 'chan' '[' type ']'           # bidirectional
 struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
-spec-decl    ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
-impl-decl    ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+spec-decl    ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' fn-decl* '}'
+             # 'impl[T] Spec for list[T]' — the type params belong to the impl (after
+             # 'impl'), so a T introduced here is usable in the 'for' target.
 
 # CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
 # the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
@@ -355,7 +357,23 @@ decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg     ::= type-name | literal          # derive(Encode, Decode), align(16), …
 
-generics     ::= '[' identifier ( ',' identifier )* ']'
+# A generic parameter may carry a spec BOUND — 'T: Ord' means every method a body calls
+# on a T comes from the named specs (a '+' conjunction: 'T: Ord + Hash' grants both).
+# The same 'bound' is a spec's SUPER-SPEC — 'spec Ord: Eq' makes an 'impl Ord' also
+# require 'impl Eq', and lets Ord's body use Eq's methods on This.
+#
+# Generics MONOMORPHIZE: each distinct type argument compiles to its own specialized C
+# function. So a bound is load-bearing (it names the impl to specialize against, and in
+# generic code 'a < b' is valid only if T's bounds provide the operator's spec), and a
+# generic function is NOT a first-class value until instantiated. Soundness needs
+# COHERENCE (at most one 'impl Spec for Type' program-wide) and an ORPHAN rule (the impl
+# must own the spec or the type). Generics are invariant — Zerg has no subtyping. The
+# '#[dyn]' decorator instead compiles a generic to one shared witness-table body (a
+# size-for-speed trade; see docs). Const generics and call-site type arguments are
+# deferred.
+generics     ::= '[' type-param ( ',' type-param )* ']'
+type-param   ::= identifier ( ':' bound )?             # an optional spec bound
+bound        ::= type-name ( '+' type-name )*          # a conjunction of specs
 # Fields and variants are separated exactly like statements — by stmt-sep (a line
 # break, realized as ';' by ASI). There is NO ',' between them; the ',' inside a
 # variant payload '(A, B)' is an ordinary argument list.
@@ -364,7 +382,7 @@ field        ::= identifier ':' type ( '=' expr )?     # optional default feeds 
 variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
 variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
 spec-member  ::= fn-sig | fn-decl                      # required (no body) or provided
-fn-sig       ::= 'mut'? 'fn' identifier '(' param-list? ')' ret-type?
+fn-sig       ::= 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================
 # 8. Null-safety & Errors

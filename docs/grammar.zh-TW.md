@@ -245,8 +245,8 @@ print       ::= 'print' expr
 function 是 first-class value——具名宣告、匿名 expression，與一個型別：
 
 ```text
-fn-decl    ::= 'pub'? 'mut'? 'fn' identifier '(' param-list? ')' ret-type? block
-fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block
+fn-decl    ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # 匿名——永不泛型
 fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
@@ -265,6 +265,8 @@ param-type ::= 'mut'? type
 - **`mut fn`（mutating method）。** `mut fn` 標記一個**方法**會就地修改其隱式 receiver `this`；呼叫端的 receiver
   須為 `mut` binding。它只在 `impl` 或 `spec` 內有意義——free function 或 closure 沒有 receiver。`mut fn` 追蹤的是
   值**自身 field** 的變動，不含對 `Ref[T]`／foreign handle 背後資源的 effect（那不需 `mut`——見 group 7）。
+- **泛型。** `fn`（及 `spec` 方法）可帶型別參數——`fn max[T: Ord](a: T, b: T) -> T`——參數可加 spec **bound**;完整
+  泛型文法與 monomorphization 模型見 group 7。**匿名** `fn(…)` 永不泛型(需要型別參數就包成具名 `fn`)。
 
 ## Group 6 — Control flow & Pattern matching
 
@@ -314,8 +316,11 @@ array-type  ::= '[' type ';' expr ']'
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
-spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
-impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' fn-decl* '}'
+generics    ::= '[' type-param ( ',' type-param )* ']'
+type-param  ::= identifier ( ':' bound )?     # 選用的 spec bound
+bound       ::= type-name ( '+' type-name )*  # spec 的合取
 decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
@@ -334,6 +339,13 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   function **共用 value 命名空間**,所以型別和 function 不能同名（Zerg 無 overloading）。struct 的建構子與該 struct
   同可見度;要強制不變量,就用私有 struct + 一個工廠 `fn`。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
+- **泛型與 bound。** 參數列 `[T, …]` 可對各參數加 spec 約束——`[T: Ord]`、`+` 合取 `[K: Hash + Eq, V]`。同一套
+  `bound` 也是 spec 的 **super-spec**(`spec Ord: Eq`——`impl Ord` 便連帶需要 `impl Eq`,且 `Ord` body 可對 `This`
+  呼叫 `Eq`)。`impl` 自身的型別參數放在 **`impl` 之後**——`impl[T] Summable for list[T]`——故 `T` 可用於目標型別。
+  泛型 **monomorphize**:每個相異型別引數各生一份特化的 C 函式,所以 bound 是承重的(它指名要特化的 impl,泛型碼裡
+  `a < b` 也需提供 `<` 的那個 bound),且泛型函式在實例化前不是一等值。健全性靠 **coherence**(全程式一個
+  `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。`#[dyn]` 改為產生
+  一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。const generic 與呼叫端型別引數延後。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法**不宣告 receiver**——
   `this` 在方法內為隱式，透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self
   型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。

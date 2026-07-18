@@ -186,12 +186,21 @@ primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr
 
 postfix      ::= '.' identifier        # field or method access
                | '(' arg-list? ')'     # call (named arguments: group 5)
-               | '[' expr ']'          # index
+               | '[' expr ']'          # index — a single-value subscript
+               | type-args             # explicit type arguments 'f[K, V]' (type-args, group 7)
                | '?'                   # propagate (group 8): unwrap Left, else early-return Right
                | '!'                   # force-unwrap (group 8): unwrap Left, else raise UnwrapError
                | '?.' identifier       # optional chain (group 8): read .id when present, else nil
 arg-list     ::= arg ( ',' arg )*
 arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
+
+# NAME RESOLUTION disambiguates two surfaces that share '[ … ]'. A single '[X]' is an
+# INDEX when the base resolves to a value, and TYPE ARGUMENTS when the base resolves to
+# a generic function or a type constructor ('parse[int]', 'list[int]') — a name is
+# exactly one of these (a type and a function cannot share a name, group 7). A comma —
+# '[X, Y]' — is unambiguously type arguments (an index takes one value). This is the
+# SAME name resolution the pattern grammar uses to tell a variant from a binding
+# (group 6): the grammar is resolved with scope in hand, not purely context-free.
 
 # Composite literals build values in expression position. A tuple is a parenthesized
 # 2+ list — a single '( expr )' is just grouping. A list is bracketed. A map is braced
@@ -300,6 +309,10 @@ match-expr   ::= 'match' expr '{' match-arm+ '}'
 match-arm    ::= pattern '->' expr
 
 # A pattern destructures by copy. Guard conditions ('Left(v) if v > 0') are deferred.
+# A bare name in pattern position is a 'variant-pat' when it RESOLVES to a known type or
+# enum variant in scope, and a 'binding-pat' (a fresh name) otherwise — the same name
+# resolution the postfix grammar uses for index-vs-type-arguments (group 4). Names are
+# case-free, so this is decided by resolution, not by capitalization.
 pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same names
 sub-pattern  ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
 variant-pat  ::= type-name ( '(' pattern-list ')' )?    # Left(v), Some, nested Left(Some(v))
@@ -371,8 +384,9 @@ deco-arg     ::= type-name | literal          # derive(Encode, Decode), align(16
 # COHERENCE (at most one 'impl Spec for Type' program-wide) and an ORPHAN rule (the impl
 # must own the spec or the type). Generics are invariant — Zerg has no subtyping. The
 # '#[dyn]' decorator instead compiles a generic to one shared witness-table body (a
-# size-for-speed trade; see docs). Const generics and call-site type arguments are
-# deferred.
+# size-for-speed trade; see docs). Explicit call-site type arguments are written 'f[T]'
+# — disambiguated from an index by name resolution (see postfix, group 4). Const
+# generics are deferred.
 generics     ::= '[' type-param ( ',' type-param )* ']'
 type-param   ::= identifier ( ':' bound )?             # an optional spec bound
 bound        ::= type-name ( '+' type-name )*          # a conjunction of specs

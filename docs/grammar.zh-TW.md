@@ -193,6 +193,11 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的 `postfix`,
 `??` 則在最鬆的層級。
 
+postfix 的 `[…]` 是**索引**或**顯式型別引數**（`parse[int]("42")`、`collect[K, V](…)`），靠 **name resolution**
+分辨:base 是值就是索引,是泛型 function 或型別建構子就是型別引數——一個名字只會是其一(型別與 function 不能同名,
+group 7),所以**不需要 turbofish**。有逗號（`[X, Y]`）必為型別引數。這與 pattern 分辨 **variant** 或 **binding**
+（group 6）是同一套 name resolution;文法帶著 scope 解析,非純 context-free。
+
 ### 複合字面量（Composite literals）
 
 值在運算式位置**建構**——正是 group 6 那些拆解它們的 pattern 的鏡像:
@@ -303,6 +308,8 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
   （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
   `(q, r) := divmod(x, y)`。guard 條件（`Left(v) if v > 0`）暫緩。
+- **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是
+  新的 binding。名字**大小寫自由**,所以靠解析、非大小寫——與 postfix `[…]` 用的是同一套 name resolution（group 4）。
 
 ## Group 7 — Types & Declarations
 
@@ -350,7 +357,8 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   泛型 **monomorphize**:每個相異型別引數各生一份特化的 C 函式,所以 bound 是承重的(它指名要特化的 impl,泛型碼裡
   `a < b` 也需提供 `<` 的那個 bound),且泛型函式在實例化前不是一等值。健全性靠 **coherence**(全程式一個
   `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。`#[dyn]` 改為產生
-  一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。const generic 與呼叫端型別引數延後。
+  一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。呼叫端顯式型別引數寫作 `f[T]`（靠
+  name resolution 與索引區分——group 4）;const generic 延後。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）、**提供**（完整方法）,或 **associated type**
   （`type Item`——由 `impl` 填入、函數性決定、每個 impl 一個）。方法**不宣告 receiver**——`this` 在方法內為隱式,
   透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self 型別是 **`This`**。

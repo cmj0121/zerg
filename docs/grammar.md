@@ -205,6 +205,12 @@ literal.
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` sits at the loosest level.
 
+A postfix `[…]` is an **index** or **explicit type arguments** (`parse[int]("42")`, `collect[K, V](…)`),
+told apart by **name resolution**: a value base subscripts, a generic function or type constructor base takes
+type arguments — a name is exactly one of these (a type and a function cannot share a name, group 7), so no
+turbofish is needed. A comma (`[X, Y]`) is unambiguously type arguments. This is the same name resolution
+that tells a pattern **variant** from a **binding** (group 6); the grammar is resolved with scope in hand.
+
 ### Composite literals
 
 Values are **built** in expression position — the mirror of the patterns (group 6) that take them apart:
@@ -328,6 +334,9 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
   A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`. Guard conditions
   (`Left(v) if v > 0`) are deferred.
+- **Variant vs binding** is decided by **name resolution**: a bare name is a variant when it resolves to a
+  known type or enum variant in scope, and a fresh binding otherwise. Names are **case-free**, so this is
+  resolution, not capitalization — the same name resolution the postfix `[…]` uses (group 4).
 
 ## Group 7 — Types & Declarations
 
@@ -381,7 +390,8 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   `<`) and a generic function is not a first-class value until instantiated. Soundness relies on
   **coherence** (one `impl Spec for Type` program-wide) and an **orphan rule** (own the spec or the type);
   generics are **invariant**. `#[dyn]` instead emits one shared witness-table body (size for speed), and the
-  compiler can flag instantiation bloat. Const generics and call-site type arguments are deferred.
+  compiler can flag instantiation bloat. Explicit call-site type arguments are `f[T]` (disambiguated from an
+  index by name resolution — group 4); const generics are deferred.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body), **provided** (a
   full method), or an **associated type** (`type Item` — a type the `impl` fills in, functionally determined,
   one per impl). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through

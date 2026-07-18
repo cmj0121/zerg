@@ -103,8 +103,9 @@ fn composites() -> User {
     blank := {:}                       # empty map
     uniq  := set([1, 1, 2, 3])         # set through its constructor
     none  := set()                     # empty set
+    total := sum_all[int]([10, 20, 30])  # explicit type argument at the call — no turbofish
 
-    print f"{pair} {nums} {ages} {uniq} {root.name}"
+    print f"{pair} {nums} {ages} {uniq} {root.name} {total}"
     return u
 }
 

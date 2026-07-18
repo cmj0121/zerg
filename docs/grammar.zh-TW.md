@@ -31,7 +31,7 @@ notation 很小：
 | #   | Group           | 涵蓋                                                            | 狀態   |
 | --- | --------------- | --------------------------------------------------------------- | ------ |
 | 1   | nop & skeleton  | `program`、`statement`、statement 分隔、`nop`                   | 已落地 |
-| 2   | Lexical         | comment、identifier、keyword、newline、block                    | 規劃中 |
+| 2   | Lexical         | comment、identifier、keyword、newline、block                    | 已落地 |
 | 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 規劃中 |
 | 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 規劃中 |
 | 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 規劃中 |
@@ -54,9 +54,11 @@ statement ::= nop
 nop       ::= 'nop'
 ```
 
-statement 之間以**換行**或分號 `;` 分隔——一行一個 statement 是常態，`;` 讓多個 statement 擠在同一行。文法定義
-的第一個 statement 是 **`nop`**：**空 statement** 的 placeholder。它什麼都不做、也不產出值；在「需要一個
-statement、但不想做任何事」的地方頂替：
+statement 與下一個之間以**換行**或分號 `;` 分隔。兩者都**文法合法**，但 **formatter 會正規化**：把一行多
+statement 拆成一行一個——所以 canonical Zerg **一行剛好一個 statement**，`;` 幾乎不會留存於格式化後的原始碼。
+（`;` 也出現在 array 型別與字面量 `[T; N]` 這個無關位置，formatter 會保留。）文法定義的第一個 statement 是
+**`nop`**：**空 statement** 的 placeholder。它什麼都不做、也不產出值；在「需要一個 statement、但不想做任何
+事」的地方頂替：
 
 ```text
 fn noop() { nop }        # 空的函式體
@@ -75,6 +77,36 @@ comment 不是 statement——`#` 一路到行尾，且 Zerg **沒有 block comm
 # 整行註解
 nop    # 行尾註解
 ```
+
+## Group 2 — Lexical
+
+原始碼是 UTF-8。水平空白（space、tab）分隔 token；換行只作為 statement 分隔符（group 1）才有意義。lexical
+group 界定「token 是什麼」：
+
+```text
+letter     ::= [a-zA-Z]
+digit      ::= [0-9]
+identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
+NEWLINE    ::= '\n'
+WS         ::= ( ' ' | '\t' )+
+COMMENT    ::= '#' [^\n]*
+block      ::= '{' stmt-list '}'
+```
+
+**identifier** 以字母或 `_` 開頭，其後接字母、數字或 `_`。**保留字（keyword）**永遠不會是 identifier；完整的
+保留字集合為：
+
+```text
+nop   fn     mut     pub      return   import
+if    else   for     in       break    continue
+match spawn  select  struct   enum     spec
+type  impl   derive  package  init     extern
+defer del    raise   guard    is       not
+and   or     true    false    nil
+```
+
+**block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
+內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
 
 ## 編輯器工具（Editor tooling）
 

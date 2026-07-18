@@ -29,23 +29,53 @@
 # it does nothing and yields nothing, standing in wherever a statement is required
 # but none is wanted (an empty function body `fn f() { nop }`, an empty loop
 # `for { nop }`). Later groups extend `statement` with the other statement forms.
+#
+# A statement is separated from the next by a line break or a ';'. Both are
+# GRAMMATICALLY VALID, but the formatter normalizes a multi-statement line into
+# one statement per line — so canonical Zerg has exactly one statement per line
+# and ';' rarely survives formatting. (';' also appears inside array types and
+# literals `[T; N]`, an unrelated position that formatting keeps.)
 
 program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
-stmt-sep  ::= NEWLINE | ';'
+stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
 statement ::= nop                 # extended by later groups: binding, expr-stmt, ...
 nop       ::= 'nop'
 
-# ----------------------------------------------------------------------------------
-# Lexical tokens referenced above (fully defined in group 2. Lexical)
-# ----------------------------------------------------------------------------------
-NEWLINE   ::= '\n'                 # a line break terminates a statement
-COMMENT   ::= '#' [^\n]*           # to end of line; not a statement
+# ==================================================================================
+# 2. Lexical
+# ==================================================================================
+# Source is UTF-8. Horizontal whitespace (space, tab) separates tokens and is
+# otherwise insignificant; a line break is significant as a statement separator
+# (NEWLINE, group 1). Comments are not tokens.
+
+letter     ::= [a-zA-Z]
+digit      ::= [0-9]
+
+# An identifier names a binding, function, type, field, ...; a reserved keyword is
+# never an identifier.
+identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
+
+NEWLINE    ::= '\n'                # a line break; terminates a statement (group 1)
+WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens
+COMMENT    ::= '#' [^\n]*          # line comment to end of line; no block comments
+
+# A block groups a statement list in braces — the body of a function, loop, or
+# conditional. Inner separators follow the group-1 stmt-list rules.
+block      ::= '{' stmt-list '}'
+
+# The reserved keywords, listed as a lexical fact: none can be an identifier. Each
+# word's grammar is defined by the group that introduces it.
+keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
+             | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
+             | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
+             | 'type'  | 'impl'  | 'derive' | 'package' | 'init'   | 'extern'
+             | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'     | 'not'
+             | 'and'   | 'or'    | 'true'   | 'false'   | 'nil'
 
 # ==================================================================================
 # Roadmap — groups landed one per commit, core to minor
 # ==================================================================================
-#   2. Lexical        comments, identifiers, keywords, newlines, blocks
 #   3. Literals       bool, int (0x/0o/0b), float, rune, byte, str
 #   4. Bindings/Expr  ':=', 'mut', operators + precedence
 #   5. Functions      'fn' decl, params, defaults, named args, closures, 'return'

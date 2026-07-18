@@ -143,10 +143,14 @@ walk, each field delegating to **its own** `Encode`:
 impl Encode for User {                            # generated, not written
     fn encode(this, mut out: Sink) {
         out.begin(4)
-        out.field("id");    this.id.encode(out)
-        out.field("name");  this.name.encode(out)
-        out.field("tags");  this.tags.encode(out)     # list[str]: length, then each str
-        out.field("email"); this.email.encode(out)    # str?: presence, then value
+        out.field("id")
+        this.id.encode(out)
+        out.field("name")
+        this.name.encode(out)
+        out.field("tags")
+        this.tags.encode(out)     # list[str]: length, then each str
+        out.field("email")
+        this.email.encode(out)    # str?: presence, then value
         out.end()
     }
 }
@@ -169,8 +173,10 @@ implementation, still no macro:
 ```text
 impl Encode for User {                            # replaces the derived one
     fn encode(this, mut out: Sink) {
-        out.field("uid"); this.id.encode(out)     # custom key
-        out.field("name"); this.name.encode(out)
+        out.field("uid")
+        this.id.encode(out)       # custom key
+        out.field("name")
+        this.name.encode(out)
         # tags and email deliberately omitted from the wire form
     }
 }

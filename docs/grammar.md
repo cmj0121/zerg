@@ -31,7 +31,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | #   | Group           | Covers                                                         | Status  |
 | --- | --------------- | -------------------------------------------------------------- | ------- |
 | 1   | nop & skeleton  | `program`, `statement`, statement separators, `nop`            | landed  |
-| 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | planned |
+| 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed  |
 | 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | planned |
 | 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | planned |
 | 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | planned |
@@ -54,10 +54,12 @@ statement ::= nop
 nop       ::= 'nop'
 ```
 
-Statements are separated by a **line break** or a semicolon `;` — one statement per line is the norm, and
-`;` puts several on one line. The first statement the grammar defines is **`nop`**: the placeholder for an
-**empty statement**. It does nothing and yields nothing; it stands in wherever a statement is required but
-none is wanted:
+A statement is separated from the next by a **line break** or a semicolon `;`. Both are grammatically
+valid, but the **formatter normalizes** a multi-statement line into one statement per line — so canonical
+Zerg has **exactly one statement per line** and `;` rarely survives formatting. (The `;` also appears
+inside array types and literals `[T; N]`, an unrelated position the formatter keeps.) The first statement
+the grammar defines is **`nop`**: the placeholder for an **empty statement**. It does nothing and yields
+nothing; it stands in wherever a statement is required but none is wanted:
 
 ```text
 fn noop() { nop }        # an empty body
@@ -77,6 +79,37 @@ Comments are not statements — a `#` runs to the end of the line, and Zerg has 
 nop    # a trailing comment
 ```
 
+## Group 2 — Lexical
+
+Source is UTF-8. Horizontal whitespace (space, tab) separates tokens; a line break is significant only as a
+statement separator (group 1). The lexical group fixes what a token is:
+
+```text
+letter     ::= [a-zA-Z]
+digit      ::= [0-9]
+identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
+NEWLINE    ::= '\n'
+WS         ::= ( ' ' | '\t' )+
+COMMENT    ::= '#' [^\n]*
+block      ::= '{' stmt-list '}'
+```
+
+An **identifier** starts with a letter or `_` and continues with letters, digits, or `_`. A **reserved
+keyword** is never an identifier; the full reserved set is:
+
+```text
+nop   fn     mut     pub      return   import
+if    else   for     in       break    continue
+match spawn  select  struct   enum     spec
+type  impl   derive  package  init     extern
+defer del    raise   guard    is       not
+and   or     true    false    nil
+```
+
+A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
+conditional. Its inner statements follow the same separator rules as the top level, so an empty block is
+written with the placeholder: `{ nop }`.
+
 ## Editor tooling
 
 Syntax highlighting for Neovim lives under [`editors/nvim/`](../editors/nvim) as classic Vim syntax files:
@@ -92,3 +125,6 @@ The quickest way is **`make install`**, which symlinks the files into your nvim 
 the highlighting tracks this checkout. Alternatively, add the `editors/nvim/` directory to your
 `runtimepath`. Either way the highlighting tracks `GRAMMAR`: it covers exactly the groups that have landed
 and grows with each new one.
+
+To eyeball the result, open [`examples/syntax-example.zg`](../examples/syntax-example.zg) — a sample that
+exercises every highlighted token category.

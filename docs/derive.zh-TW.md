@@ -135,10 +135,14 @@ compiler 生成的內容——概念示意，你永遠不會寫、也看不到�
 impl Encode for User {                            # 生成，非手寫
     fn encode(this, mut out: Sink) {
         out.begin(4)
-        out.field("id");    this.id.encode(out)
-        out.field("name");  this.name.encode(out)
-        out.field("tags");  this.tags.encode(out)     # list[str]：長度，再逐個 str
-        out.field("email"); this.email.encode(out)    # str?：是否存在，再值
+        out.field("id")
+        this.id.encode(out)
+        out.field("name")
+        this.name.encode(out)
+        out.field("tags")
+        this.tags.encode(out)     # list[str]：長度，再逐個 str
+        out.field("email")
+        this.email.encode(out)    # str?：是否存在，再值
         out.end()
     }
 }
@@ -160,8 +164,10 @@ derive Encode for Shape               # 生成：寫出 variant tag，再逐個 
 ```text
 impl Encode for User {                            # 取代 derive 出的那份
     fn encode(this, mut out: Sink) {
-        out.field("uid"); this.id.encode(out)     # 自訂 key
-        out.field("name"); this.name.encode(out)
+        out.field("uid")
+        this.id.encode(out)       # 自訂 key
+        out.field("name")
+        this.name.encode(out)
         # tags 與 email 刻意不放進線上格式
     }
 }

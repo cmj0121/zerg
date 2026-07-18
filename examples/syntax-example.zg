@@ -1,0 +1,69 @@
+# syntax-example.zg — a highlighting check for editors/nvim/syntax/zerg.vim.
+# Open it in nvim (after `make install`) and confirm each token category lights up:
+# comments, statement/declaration keywords, keyword-operators, built-in types,
+# booleans, and the nil constant.
+
+import io
+
+# a strong-typedef over a built-in type
+type UserId = int
+
+# a product type
+struct User {
+    id:    UserId,
+    name:  str,
+    admin: bool,
+    email: str?,
+}
+
+# a sum type and a behavioral spec
+enum Shape {
+    Circle(float),
+    Rect(float, float),
+}
+
+spec Summable {
+    fn zero() -> This
+    fn add(this, other: This) -> This
+}
+
+# the empty-statement placeholder
+fn noop() { nop }
+
+pub fn describe(u: User) -> str {
+    mut loud  := false
+    mut label := u.name
+
+    if u.admin or loud {
+        label = f"admin:{label}"
+    } else {
+        nop
+    }
+
+    return label
+}
+
+fn total(shapes: list[Shape]) -> float {
+    mut acc := 0.0
+    for s in shapes {
+        continue if s is Circle
+        acc = acc + area(s)
+    }
+    return acc
+}
+
+# concurrency, pattern matching, and error handling
+fn serve(inbox: chan[Shape].recv) {
+    defer io.stdout.write_str("done")
+
+    for {
+        cmd := <-inbox ?? break
+        result := guard { render(cmd) }
+
+        match result {
+            Left(ok) -> spawn publish(ok)
+            Right(e) -> raise e
+            _        -> nil
+        }
+    }
+}

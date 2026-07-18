@@ -98,7 +98,7 @@ fn total(shapes: list[Shape]) -> float {
 }
 
 # concurrency, pattern matching, and error handling
-fn serve(inbox: chan[Shape]) {
+fn serve(inbox: <-chan[Shape]) {          # receive-only channel (a receiver)
     defer io.stdout.write_str("done")
 
     for {

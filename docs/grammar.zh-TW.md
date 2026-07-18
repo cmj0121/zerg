@@ -261,9 +261,9 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
 ```
 
 - **Type 表達式。** 一個**名字**加選用**型別引數**（`int`、`User`、`list[int]`、`Either[A, B]`）；一個 **tuple
-  type** `(A, B)`；一個**陣列** `[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`（雙向——方向性 end 依 Go
-  風格，隨 concurrency group 到來）；或一個**函式型別** `fn(P…) -> R`（group 5）。結尾的 **`?`** 使任何型別成為
-  **optional**——`str?`。
+  type** `(A, B)`；一個**陣列** `[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`，帶 Go 式方向——`<-chan[T]`
+  為 receive-only（receiver）、`chan[T]<-` 為 send-only（sender）；或一個**函式型別** `fn(P…) -> R`
+  （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。
 - **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
   `Rect(float, float)`。field 與 variant 的分隔比照 statement——換行或 `,`，且 **`,` 非必要**；formatter 一行一
   個、不加逗號（Go 式排版）。兩者皆可泛型——`enum Either[X, Y] { … }`。

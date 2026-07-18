@@ -252,7 +252,9 @@ base-type    ::= type-name type-args?                  # int, User, list[int], E
 type-args    ::= '[' type ( ',' type )* ']'
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' expr ']'                 # [T; N] — the ';' array position
-chan-type    ::= 'chan' '[' type ']'   # bidirectional; Go-style direction: concurrency group
+chan-type    ::= 'chan' '[' type ']'           # bidirectional
+               | '<-' 'chan' '[' type ']'       # receive-only (a receiver), Go-style
+               | 'chan' '[' type ']' '<-'       # send-only (a sender), Go-style
 
 # --- declarations (compound: struct/enum/spec/impl; simple: type/derive) ---
 struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'

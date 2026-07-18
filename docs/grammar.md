@@ -276,8 +276,9 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
 
 - **Type expressions.** A **name** with optional **type arguments** (`int`, `User`, `list[int]`,
   `Either[A, B]`); a **tuple type** `(A, B)`; an **array** `[T; N]` (the other use of `;`); a **channel**
-  `chan[T]` (bidirectional — directional ends follow the Go style and land with the concurrency group); or
-  a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an **optional** — `str?`.
+  `chan[T]`, with Go-style direction — `<-chan[T]` is receive-only (a receiver) and `chan[T]<-` is
+  send-only (a sender); or a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an
+  **optional** — `str?`.
 - **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
   an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated like
   statements — a line break or a `,`, with the **`,` not required**; the formatter writes one per line with

@@ -40,8 +40,15 @@
 program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
-statement ::= nop | binding | reassign | print | return | break | continue
-            | if-stmt | for-stmt | declaration | expr-stmt
+
+# A statement is either simple (no block — fits on one line) or compound (it owns a
+# '{ … }' block). 'nop' is the smallest simple statement; the rest are filled in by
+# later groups.
+statement     ::= simple-stmt | compound-stmt
+simple-stmt   ::= nop | binding | reassign | print | return | break | continue
+                | type-decl | derive-decl | expr-stmt
+compound-stmt ::= if-stmt | for-stmt | fn-decl
+                | struct-decl | enum-decl | spec-decl | impl-decl
 nop       ::= 'nop'
 
 # ==================================================================================
@@ -247,9 +254,7 @@ tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' expr ']'                 # [T; N] — the ';' array position
 chan-type    ::= 'chan' '[' type ']'   # bidirectional; Go-style direction: concurrency group
 
-# --- declarations ---
-declaration  ::= fn-decl | struct-decl | enum-decl | type-decl
-               | spec-decl | impl-decl | derive-decl
+# --- declarations (compound: struct/enum/spec/impl; simple: type/derive) ---
 struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef

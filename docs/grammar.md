@@ -47,14 +47,18 @@ Minor groups follow: the error operators (`?` `??` `?.` `!` `raise` `guard`), co
 A Zerg program is a sequence of statements:
 
 ```text
-program   ::= stmt-list
-stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
-stmt-sep  ::= NEWLINE | ';'
-statement ::= nop
-nop       ::= 'nop'
+program       ::= stmt-list
+stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
+stmt-sep      ::= NEWLINE | ';'
+statement     ::= simple-stmt | compound-stmt
+simple-stmt   ::= nop | …          # no block; fits on one line
+compound-stmt ::= …                # owns a '{ … }' block (if / for / fn / struct / …)
+nop           ::= 'nop'
 ```
 
-A statement is separated from the next by a **line break** or a semicolon `;`. Both are grammatically
+A statement is either **simple** (no block — it fits on one line: `nop`, a binding, `return`, …) or
+**compound** (it owns a `{ … }` block: `if`, `for`, `fn`, `struct`, …). `nop` is the smallest simple
+statement. A statement is separated from the next by a **line break** or a semicolon `;`. Both are grammatically
 valid, but the **formatter normalizes** a multi-statement line into one statement per line — so canonical
 Zerg has **exactly one statement per line** and `;` rarely survives formatting. (The `;` also appears
 inside array types and literals `[T; N]`, an unrelated position the formatter keeps.) The first statement

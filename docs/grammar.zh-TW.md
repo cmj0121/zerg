@@ -47,14 +47,18 @@ notation 很小：
 一個 Zerg 程式是一串 statement：
 
 ```text
-program   ::= stmt-list
-stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
-stmt-sep  ::= NEWLINE | ';'
-statement ::= nop
-nop       ::= 'nop'
+program       ::= stmt-list
+stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
+stmt-sep      ::= NEWLINE | ';'
+statement     ::= simple-stmt | compound-stmt
+simple-stmt   ::= nop | …          # 無區塊；一行即可
+compound-stmt ::= …                # 擁有一個 '{ … }' 區塊（if / for / fn / struct / …）
+nop           ::= 'nop'
 ```
 
-statement 與下一個之間以**換行**或分號 `;` 分隔。兩者都**文法合法**，但 **formatter 會正規化**：把一行多
+statement 分為 **simple**（無區塊、一行即可：`nop`、binding、`return` 等）或 **compound**（擁有 `{ … }` 區塊：
+`if`、`for`、`fn`、`struct` 等）。`nop` 是最小的 simple statement。statement 與下一個之間以**換行**或分號 `;`
+分隔。兩者都**文法合法**，但 **formatter 會正規化**：把一行多
 statement 拆成一行一個——所以 canonical Zerg **一行剛好一個 statement**，`;` 幾乎不會留存於格式化後的原始碼。
 （`;` 也出現在 array 型別與字面量 `[T; N]` 這個無關位置，formatter 會保留。）文法定義的第一個 statement 是
 **`nop`**：**空 statement** 的 placeholder。它什麼都不做、也不產出值；在「需要一個 statement、但不想做任何

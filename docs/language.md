@@ -68,6 +68,8 @@ the **[Coroutines & Channels](coroutine.md)** reference.
 
 Built on the core language above:
 
+- **[Grammar](grammar.md)** — the formal surface grammar (W3C-EBNF), the authoritative
+  [`GRAMMAR`](../GRAMMAR) file, and the nvim syntax tooling.
 - **[Collections](collections.md)** — the built-in containers `list`, `map`, `set`, and the
   fixed-size `[T; N]` array; one canonical type per role.
 - **[Derive & Default Behavior](derive.md)** — the two sources of "free" behavior: the compiler's

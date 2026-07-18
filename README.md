@@ -25,8 +25,9 @@ Programs are fast to write, easy to read, and overwhelmingly straightforward.
 Full semantics — primitive & user types, casts, the memory model, concurrency, and null-safety —
 are in the **[Language Reference](docs/language.md)**, with companion references for
 **[Modules, Packages & Programs](docs/package.md)**, **[Coroutines & Channels](docs/coroutine.md)**,
-**[Collections](docs/collections.md)**, **[Derive & Default Behavior](docs/derive.md)**,
-**[Process & I/O](docs/io.md)**, and the **[FFI](docs/ffi.md)**.
+**[Grammar](docs/grammar.md)**, **[Collections](docs/collections.md)**,
+**[Derive & Default Behavior](docs/derive.md)**, **[Process & I/O](docs/io.md)**, and the
+**[FFI](docs/ffi.md)**.
 
 ## Compile Flow
 

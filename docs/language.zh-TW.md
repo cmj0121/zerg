@@ -55,6 +55,7 @@ join/handle,只捕獲 **immutable 值與 channel**。channel 是 reference-count
 
 建立在上述核心語言之上：
 
+- **[文法（Grammar）](grammar.zh-TW.md)**——形式表面文法（W3C-EBNF）、權威的 [`GRAMMAR`](../GRAMMAR) 檔,與 nvim 語法工具。
 - **[Collection](collections.zh-TW.md)**——內建容器 `list`、`map`、`set`,以及定長 `[T; N]` 陣列;一角色一個 canonical 型別。
 - **[Derive 與預設行為](derive.zh-TW.md)**——兩種「免費」行為的來源：compiler 的結構化衍生,與 spec 的 default method,
   以及兩者之間那條明確界線。

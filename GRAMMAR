@@ -1,0 +1,56 @@
+# Zerg Grammar
+#
+# The formal surface grammar of the Zerg language, written in W3C-style EBNF and
+# built up one grammar group at a time, from core to minor. This file is the single
+# source of truth for what is syntactically well-formed; the prose companion lives in
+# docs/grammar.md (and docs/grammar.zh-TW.md).
+#
+# ----------------------------------------------------------------------------------
+# Notation (W3C-style EBNF)
+# ----------------------------------------------------------------------------------
+#   name ::= ...     a production; `name` is a non-terminal (lower-kebab-case)
+#   'text'           a literal terminal, matched verbatim
+#   A B              A followed by B (concatenation)
+#   A | B            A or B (alternation)
+#   ( A )            grouping
+#   A?               zero or one A
+#   A*               zero or more A
+#   A+               one or more A
+#   [a-z]            a character in the given range
+#   [^x]             any character except x
+#   UPPER-CASE       a lexical token defined under the Lexical group
+#   #                a comment, to end of line (same as Zerg's own comment syntax)
+#
+# ==================================================================================
+# 1. nop & program skeleton
+# ==================================================================================
+# The smallest well-formed Zerg program is a sequence of statements. The first
+# statement the grammar defines is `nop` — the placeholder for an empty statement:
+# it does nothing and yields nothing, standing in wherever a statement is required
+# but none is wanted (an empty function body `fn f() { nop }`, an empty loop
+# `for { nop }`). Later groups extend `statement` with the other statement forms.
+
+program   ::= stmt-list
+stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
+stmt-sep  ::= NEWLINE | ';'
+statement ::= nop                 # extended by later groups: binding, expr-stmt, ...
+nop       ::= 'nop'
+
+# ----------------------------------------------------------------------------------
+# Lexical tokens referenced above (fully defined in group 2. Lexical)
+# ----------------------------------------------------------------------------------
+NEWLINE   ::= '\n'                 # a line break terminates a statement
+COMMENT   ::= '#' [^\n]*           # to end of line; not a statement
+
+# ==================================================================================
+# Roadmap — groups landed one per commit, core to minor
+# ==================================================================================
+#   2. Lexical        comments, identifiers, keywords, newlines, blocks
+#   3. Literals       bool, int (0x/0o/0b), float, rune, byte, str
+#   4. Bindings/Expr  ':=', 'mut', operators + precedence
+#   5. Functions      'fn' decl, params, defaults, named args, closures, 'return'
+#   6. Control flow   'if', 'for ... in', 'match' + patterns
+#   7. Types          'struct', 'enum', tuple, 'type X = Y', 'spec'
+#   -- minor --       error operators (? ?? ?. ! raise guard); concurrency
+#                     (spawn/chan/select/<-); modules (import/pub/package/init);
+#                     FFI (extern "C"); defer/del

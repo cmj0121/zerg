@@ -41,7 +41,7 @@ program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
 statement ::= nop | binding | reassign | print | return | break | continue
-            | if-stmt | for-stmt | fn-decl | expr-stmt
+            | if-stmt | for-stmt | declaration | expr-stmt
 nop       ::= 'nop'
 
 # ==================================================================================
@@ -73,7 +73,7 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'type'  | 'impl'  | 'derive' | 'package' | 'init'   | 'extern'
              | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'     | 'not'
-             | 'and'   | 'or'    | 'print'  | 'true'    | 'false'  | 'nil'
+             | 'and'   | 'or'    | 'print'  | 'this'    | 'true'   | 'false' | 'nil'
 
 # ==================================================================================
 # 3. Literals
@@ -177,7 +177,8 @@ ret-type     ::= '->' type
 return       ::= 'return' expr?
 
 param-list   ::= param ( ',' param )*
-param        ::= 'mut'? identifier ':' type ( '=' expr )?        # optional default
+param        ::= 'mut'? 'this'                                   # method receiver (g7)
+               | 'mut'? identifier ':' type ( '=' expr )?        # optional default
 param-type-list ::= param-type ( ',' param-type )*
 param-type   ::= 'mut'? type
 
@@ -230,9 +231,47 @@ field-pat    ::= identifier ( ':' pattern )?            # shorthand, or field: p
 pattern-list ::= pattern ( ',' pattern )*
 
 # ==================================================================================
-# Roadmap — groups landed one per commit, core to minor
+# 7. Types & Declarations
 # ==================================================================================
-#   7. Types          'struct', 'enum', tuple, 'type X = Y', 'spec'
+# The type expressions referenced since group 5, and the declarations that introduce
+# types and behavior: 'struct' (product), 'enum' (sum), 'type X = Y' (strong typedef),
+# 'spec' (behavioral interface), 'impl', and 'derive'. A method's receiver is the
+# bare parameter 'this' (see param, group 5); the self type is 'This'.
+
+# --- type expressions ---
+type         ::= base-type '?'?                        # a trailing '?' makes it optional
+base-type    ::= type-name type-args?                  # int, User, list[int], Either[A, B]
+               | tuple-type | array-type | chan-type | fn-type
+type-args    ::= '[' type ( ',' type )* ']'
+tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
+array-type   ::= '[' type ';' expr ']'                 # [T; N] — the ';' array position
+chan-type    ::= 'chan' '[' type ']'   # bidirectional; Go-style direction: concurrency group
+
+# --- declarations ---
+declaration  ::= fn-decl | struct-decl | enum-decl | type-decl
+               | spec-decl | impl-decl | derive-decl
+struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
+spec-decl    ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
+impl-decl    ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+derive-decl  ::= 'derive' type-name ( ',' type-name )* 'for' type-name
+
+generics     ::= '[' identifier ( ',' identifier )* ']'
+# Fields and variants are separated like statements: a line break or a ','. Both are
+# valid, but ',' is not required and the formatter writes one per line, no comma —
+# the Go-style layout. (The ',' inside a variant payload '(A, B)' is a normal list.)
+field-list   ::= item-sep* ( field ( item-sep+ field )* item-sep* )?
+field        ::= identifier ':' type
+variant-list ::= item-sep* ( variant ( item-sep+ variant )* item-sep* )?
+variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
+item-sep     ::= NEWLINE | ','
+spec-member  ::= fn-sig | fn-decl                      # required (no body) or provided
+fn-sig       ::= 'fn' identifier '(' param-list? ')' ret-type?
+
+# ==================================================================================
+# Roadmap — minor groups, landed one per commit after the core
+# ==================================================================================
 #   -- minor --       error operators (? ?? ?. ! raise guard); concurrency
 #                     (spawn/chan/select/<-); modules (import/pub/package/init);
 #                     FFI (extern "C"); defer/del

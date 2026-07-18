@@ -1,8 +1,8 @@
 " Zerg syntax highlighting
 "
 " Highlighting grows one grammar group at a time, tracking GRAMMAR. This file
-" currently covers group 1 (nop), group 2 (lexical: comments, identifiers,
-" keywords), and group 3 (literals). Later groups add operators and structure.
+" covers the core groups 1-7: nop, lexical (comments/identifiers/keywords),
+" literals, operators, functions, control flow, and types.
 "
 " Maintainer: Zerg project
 " Filenames:  *.zg
@@ -26,6 +26,9 @@ syntax keyword zergStatement spawn select defer del raise guard import derive im
 " highlights as a function; anonymous `fn(...)` has no name and stays plain.
 syntax keyword zergKeyword mut pub struct enum spec type extern package init
 syntax keyword zergKeyword fn skipwhite nextgroup=zergFunction
+
+" The method receiver `this` (the self type `This` is a built-in type, below).
+syntax keyword zergKeyword this
 
 " Keyword operators (the word-form logical/type operators).
 syntax keyword zergOperator not and or is

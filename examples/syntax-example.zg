@@ -10,21 +10,34 @@ type UserId = int
 
 # a product type
 struct User {
-    id:    UserId,
-    name:  str,
-    admin: bool,
-    email: str?,
+    id:    UserId
+    name:  str
+    admin: bool
+    email: str?
 }
 
 # a sum type and a behavioral spec
 enum Shape {
-    Circle(float),
-    Rect(float, float),
+    Circle(float)
+    Rect(float, float)
 }
 
 spec Summable {
     fn zero() -> This
     fn add(this, other: This) -> This
+}
+
+# generics, derive, and impl (group 7)
+enum Option[T] {
+    Some(T)
+    None
+}
+
+derive Encode, Decode for User
+
+impl Summable for int {
+    fn zero() -> This { return 0 }
+    fn add(this, other: This) -> This { return this + other }
 }
 
 # the empty-statement placeholder
@@ -85,7 +98,7 @@ fn total(shapes: list[Shape]) -> float {
 }
 
 # concurrency, pattern matching, and error handling
-fn serve(inbox: chan[Shape].recv) {
+fn serve(inbox: chan[Shape]) {
     defer io.stdout.write_str("done")
 
     for {

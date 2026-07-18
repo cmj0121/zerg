@@ -36,7 +36,7 @@ notation 很小：
 | 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 已落地 |
 | 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 已落地 |
 | 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 已落地 |
-| 7   | Types           | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 規劃中 |
+| 7   | Types           | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 已落地 |
 
 其後是次要 group：error operator（`?` `??` `?.` `!` `raise` `guard`）、concurrency
 （`spawn` / `chan` / `select` / `<-`）、module（`import` / `pub` / `package` / `init`）、FFI
@@ -238,6 +238,34 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
   （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
   `(q, r) := divmod(x, y)`。guard 條件（`Left(v) if v > 0`）暫緩。
+
+## Group 7 — Types & Declarations
+
+自 group 5 起被引用的 type 表達式，以及引入型別與行為的宣告：
+
+```text
+type        ::= base-type '?'?
+base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
+type-args   ::= '[' type ( ',' type )* ']'
+array-type  ::= '[' type ';' expr ']'
+struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+type-decl   ::= 'pub'? 'type' identifier generics? '=' type
+spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
+impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
+```
+
+- **Type 表達式。** 一個**名字**加選用**型別引數**（`int`、`User`、`list[int]`、`Either[A, B]`）；一個 **tuple
+  type** `(A, B)`；一個**陣列** `[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`（雙向——方向性 end 依 Go
+  風格，隨 concurrency group 到來）；或一個**函式型別** `fn(P…) -> R`（group 5）。結尾的 **`?`** 使任何型別成為
+  **optional**——`str?`。
+- **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
+  `Rect(float, float)`。field 與 variant 的分隔比照 statement——換行或 `,`，且 **`,` 非必要**；formatter 一行一
+  個、不加逗號（Go 式排版）。兩者皆可泛型——`enum Either[X, Y] { … }`。
+- **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
+- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法的 receiver 是裸參數
+  **`this`**；self 型別是 **`This`**。`impl … for …` 為某型別提供 spec 的方法，`derive …` 請 compiler 代寫。
 
 ## 編輯器工具（Editor tooling）
 

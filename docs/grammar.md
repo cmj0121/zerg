@@ -28,15 +28,15 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 
 ## Groups
 
-| #   | Group           | Covers                                                         | Status  |
-| --- | --------------- | -------------------------------------------------------------- | ------- |
-| 1   | nop & skeleton  | `program`, `statement`, statement separators, `nop`            | landed  |
-| 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed  |
-| 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed  |
-| 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | landed  |
-| 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | landed  |
-| 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | landed  |
-| 7   | Types           | `struct`, `enum`, tuple, `type X = Y`, `spec`                  | planned |
+| #   | Group           | Covers                                                         | Status |
+| --- | --------------- | -------------------------------------------------------------- | ------ |
+| 1   | nop & skeleton  | `program`, `statement`, statement separators, `nop`            | landed |
+| 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed |
+| 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed |
+| 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | landed |
+| 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | landed |
+| 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | landed |
+| 7   | Types           | `struct`, `enum`, tuple, `type X = Y`, `spec`                  | landed |
 
 Minor groups follow: the error operators (`?` `??` `?.` `!` `raise` `guard`), concurrency
 (`spawn` / `chan` / `select` / `<-`), modules (`import` / `pub` / `package` / `init`), the FFI
@@ -252,6 +252,36 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
   A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`. Guard conditions
   (`Left(v) if v > 0`) are deferred.
+
+## Group 7 — Types & Declarations
+
+The type expressions used since group 5, and the declarations that introduce types and behavior:
+
+```text
+type        ::= base-type '?'?
+base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
+type-args   ::= '[' type ( ',' type )* ']'
+array-type  ::= '[' type ';' expr ']'
+struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+type-decl   ::= 'pub'? 'type' identifier generics? '=' type
+spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
+impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
+```
+
+- **Type expressions.** A **name** with optional **type arguments** (`int`, `User`, `list[int]`,
+  `Either[A, B]`); a **tuple type** `(A, B)`; an **array** `[T; N]` (the other use of `;`); a **channel**
+  `chan[T]` (bidirectional — directional ends follow the Go style and land with the concurrency group); or
+  a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an **optional** — `str?`.
+- **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
+  an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated like
+  statements — a line break or a `,`, with the **`,` not required**; the formatter writes one per line with
+  no comma (the Go-style layout). Both may be generic — `enum Either[X, Y] { … }`.
+- **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
+- **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
+  full method). A method's receiver is the bare parameter **`this`**; the self type is **`This`**. `impl …
+for …` supplies a spec's methods for a type, and `derive …` asks the compiler to write them.
 
 ## Editor tooling
 

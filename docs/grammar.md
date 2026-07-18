@@ -28,19 +28,19 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 
 ## Groups
 
-| #   | Group           | Covers                                                         | Status |
-| --- | --------------- | -------------------------------------------------------------- | ------ |
-| 1   | nop & skeleton  | `program`, `statement`, statement separators, `nop`            | landed |
-| 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed |
-| 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed |
-| 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | landed |
-| 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | landed |
-| 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | landed |
-| 7   | Types           | `struct`, `enum`, tuple, `type X = Y`, `spec`                  | landed |
+| #   | Group                | Covers                                                           | Status |
+| --- | -------------------- | ---------------------------------------------------------------- | ------ |
+| 1   | nop & skeleton       | `program`, `statement`, statement separators, `nop`              | landed |
+| 2   | Lexical              | comments, identifiers, keywords, newlines, blocks                | landed |
+| 3   | Literals             | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str`   | landed |
+| 4   | Bindings & Expr      | `:=`, `mut`, operators and precedence                            | landed |
+| 5   | Functions            | `fn`, params, defaults, named arguments, closures, `return`      | landed |
+| 6   | Control flow         | `if`, `for … in`, `match` and patterns                           | landed |
+| 7   | Types                | `struct`, `enum`, tuple, `type X = Y`, `spec`                    | landed |
+| 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`, and the `T?` / `Result` tiers | landed |
 
-Minor groups follow: the error operators (`?` `??` `?.` `!` `raise` `guard`), concurrency
-(`spawn` / `chan` / `select` / `<-`), modules (`import` / `pub` / `package` / `init`), the FFI
-(`extern "C"`), and `defer` / `del`.
+Minor groups follow: concurrency (`spawn` / `chan` / `select` / `<-`), modules
+(`import` / `pub` / `package` / `init`), the FFI (`extern "C"`), and `defer` / `del`.
 
 ## Group 1 — `nop` & the program skeleton
 
@@ -108,7 +108,8 @@ if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
 type  impl   package init     extern   defer
 del   raise  guard   is       not      and
-or    print  this    true     false    nil
+or    print  this    with     as       from
+true  false  nil
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
@@ -194,7 +195,8 @@ than comparison, so `a & b == c` reads as `(a & b) == c`, sidestepping C's prece
 existential against a spec or variant name (full form in groups 6–7). A sign is an operator, not part of a
 literal.
 
-The null-safety and error operators (`?` `??` `?.` `!`) are **not** here — they belong to the error group.
+The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
+join `postfix` above, and `??` sits at the loosest level.
 
 ### String interpolation & `print`
 
@@ -330,6 +332,34 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   canonical impls of the named specs by reading the type's structure. Decorators are a **fixed,
   compiler-owned set** — users cannot define new ones (Zerg has no macros); other directives (layout, FFI…)
   will slot in here later. `#[` is the one `#` that is not a comment — the lexer peeks one character.
+
+## Group 8 — Null-safety & Errors
+
+Failure comes in **two tiers**. A **recoverable** failure is an ordinary value of a sum type —
+`Either[X, Y]`, `Result[T]` = `Either[T, Err]`, and `T?` = `Either[T, nil]` with the placeholder `nil`. A
+**bug** is an **abort** that unwinds the stack (running `defer`s). Six operators bridge the tiers:
+
+```text
+coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
+coalesce-rhs  ::= coalesce-expr | diverge
+diverge       ::= 'break' | 'continue' | return | raise
+raise         ::= 'raise' expr ( 'from' expr )?
+guard-expr    ::= 'guard' block
+postfix       += '?' | '!' | '?.' identifier
+```
+
+- **`x?`** — **propagate**: unwrap the `Left`, or **early-return** the `Right` from the enclosing function.
+- **`a ?? b`** — **default**: `a`'s `Left` if present, else `b`; loosest binary, **right-associative**,
+  short-circuits. The right side may instead **diverge** — `x ?? break`, `v ?? return nil`, `p ?? raise e` —
+  since `break` / `continue` / `return` / `raise` never yield a value.
+- **`a?.b`** — **optional chain** (`T?` only): read `.b` when `a` is present, else short-circuit to `nil` in
+  place (it never returns from the function, unlike `?`).
+- **`x!`** — **force-unwrap**: unwrap the `Left`, or **raise `UnwrapError`** (a value→abort hatch). Logical
+  negation is the keyword `not`, so postfix `!` is free.
+- **`raise e`** — **abort** carrying an `Err` (value→abort); **`raise e from c`** records `c` as `e`'s cause.
+- **`guard { … }`** — **demote** any abort inside the block back to a value, yielding `Result[T]`
+  (abort→value). It is the sole way back from the abort tier, so a guarded abort is an ordinary `Result`
+  handled by the same `?` / `??` / `match`.
 
 ## Editor tooling
 

@@ -120,6 +120,20 @@ fn process(path: str) {
 }
 
 # concurrency, pattern matching, and error handling
+# null-safety & errors (group 8)
+fn load(path: str) -> Result[Config] {
+    txt  := read_file(path)?                   # propagate: a Right early-returns
+    port := lookup("PORT") ?? 8080             # default when absent
+    host := cfg?.server?.host ?? "localhost"   # optional chain, then default
+    n    := guard { parse_int(txt) } ?? 0      # demote abort -> value, then default
+    key  := lookup("HOME") ?? raise MissingKey # diverge: raise instead of a value
+    user := lookup("USER")!                    # force-unwrap or raise UnwrapError
+    if n < 0 {
+        raise RangeError from BadInput         # value -> abort, recording a cause
+    }
+    return parse(txt)
+}
+
 fn serve(inbox: <-chan[Shape]) {          # receive-only channel (a receiver)
     defer io.stdout.write_str("done")
 

@@ -19,13 +19,14 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `f(x: 1)`(named)/ `p: T = e`(default) | 呼叫端改寫為 positional;default `e` 每次呼叫時求值            |
 | `#[derive(X)]`                        | compiler 依結構代寫的 canonical `impl X for T`                |
 | `print x`                             | best-effort 把 `x.display()` 加換行寫到 stdout                |
+| `e?`                                  | 取出 `Left`,否則從函式提前 return 那個 `Right`                |
+| `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise       |
 
 ## 延後的語法糖（隨其 group 到來）
 
-| 語法糖                          | Desugar 成                                             |
-| ------------------------------- | ------------------------------------------------------ |
-| `e?` / `e ?? d` / `e?.m` / `e!` | 對 `Result` / `T?` 的可回復失敗處理                    |
-| `del ch`                        | 現在就 drop 這個持有者——若是最後 sender 便關閉 channel |
+| 語法糖   | Desugar 成                                             |
+| -------- | ------------------------------------------------------ |
+| `del ch` | 現在就 drop 這個持有者——若是最後 sender 便關閉 channel |
 
 ## 刻意**不是**語法糖的
 

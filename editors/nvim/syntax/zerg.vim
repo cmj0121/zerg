@@ -45,7 +45,7 @@ syntax keyword zergKeyword mut pub extern package init
 syntax keyword zergKeyword fn struct enum spec type skipwhite nextgroup=zergDeclName
 
 " Keyword operators (the word-form logical/type/binding operators).
-syntax keyword zergOperator not and or is as
+syntax keyword zergOperator not and or is as from
 
 " Built-in type names and generic constructors.
 syntax keyword zergType bool byte rune int uint float str
@@ -95,7 +95,7 @@ syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
 
 " Symbol operators (word operators not/and/or/is are keywords, group 2). Multi-
 " character forms are listed before the single-char class so they match whole.
-syntax match zergOperator "->\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=]"
+syntax match zergOperator "->\|??\|?\.\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=?!]"
 
 " --- group 5: declared names (fn/struct/enum/spec/type) and labels -------------
 

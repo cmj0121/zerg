@@ -28,19 +28,19 @@ notation 很小：
 
 ## Group 列表
 
-| #   | Group           | 涵蓋                                                            | 狀態   |
-| --- | --------------- | --------------------------------------------------------------- | ------ |
-| 1   | nop & skeleton  | `program`、`statement`、statement 分隔、`nop`                   | 已落地 |
-| 2   | Lexical         | comment、identifier、keyword、newline、block                    | 已落地 |
-| 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 已落地 |
-| 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 已落地 |
-| 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 已落地 |
-| 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 已落地 |
-| 7   | Types           | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 已落地 |
+| #   | Group                | 涵蓋                                                            | 狀態   |
+| --- | -------------------- | --------------------------------------------------------------- | ------ |
+| 1   | nop & skeleton       | `program`、`statement`、statement 分隔、`nop`                   | 已落地 |
+| 2   | Lexical              | comment、identifier、keyword、newline、block                    | 已落地 |
+| 3   | Literals             | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 已落地 |
+| 4   | Bindings & Expr      | `:=`、`mut`、operator 與優先序                                  | 已落地 |
+| 5   | Functions            | `fn`、參數、預設值、named argument、closure、`return`           | 已落地 |
+| 6   | Control flow         | `if`、`for … in`、`match` 與 pattern                            | 已落地 |
+| 7   | Types                | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 已落地 |
+| 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`,與 `T?` / `Result` 兩層       | 已落地 |
 
-其後是次要 group：error operator（`?` `??` `?.` `!` `raise` `guard`）、concurrency
-（`spawn` / `chan` / `select` / `<-`）、module（`import` / `pub` / `package` / `init`）、FFI
-（`extern "C"`），以及 `defer` / `del`。
+其後是次要 group：concurrency（`spawn` / `chan` / `select` / `<-`）、module
+（`import` / `pub` / `package` / `init`）、FFI（`extern "C"`），以及 `defer` / `del`。
 
 ## Group 1 — `nop` 與程式骨架
 
@@ -107,7 +107,8 @@ if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
 type  impl   package init     extern   defer
 del   raise  guard   is       not      and
-or    print  this    true     false    nil
+or    print  this    with     as       from
+true  false  nil
 ```
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
@@ -183,7 +184,8 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 同層、`\|` `^` 與加法級同層——都比比較緊一級，所以 `a & b == c` 讀作 `(a & b) == c`，避開 C 的優先序陷阱。`is`
 以一個 spec 或 variant 名字測試 existential（完整形式見 group 6–7）。正負號是運算子，不屬 literal。
 
-null-safety 與 error 運算子（`?` `??` `?.` `!`）**不在**此處——歸 error group。
+null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的 `postfix`,
+`??` 則在最鬆的層級。
 
 ### 字串插值與 `print`
 
@@ -305,6 +307,31 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   的 `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl。decorator 是
   **固定、compiler 擁有**的集合——使用者不可自訂（Zerg 無 macro）；其他指令（layout、FFI…）日後於此加入。`#[` 是唯一
   不算註解的 `#`——lexer peek 一字元即分辨。
+
+## Group 8 — Null-safety & Errors
+
+失敗分**兩層**。**可回復**失敗是 sum type 的普通值——`Either[X, Y]`、`Result[T]` = `Either[T, Err]`、以及
+`T?` = `Either[T, nil]`（placeholder 為 `nil`）。**bug** 是**abort**,會 unwind stack（跑 `defer`）。六個運算子在兩層
+間搭橋:
+
+```text
+coalesce-expr ::= or-expr ( '??' coalesce-rhs )?
+coalesce-rhs  ::= coalesce-expr | diverge
+diverge       ::= 'break' | 'continue' | return | raise
+raise         ::= 'raise' expr ( 'from' expr )?
+guard-expr    ::= 'guard' block
+postfix       += '?' | '!' | '?.' identifier
+```
+
+- **`x?`**——**propagate**:取出 `Left`,否則從所在函式**提前 return** 那個 `Right`。
+- **`a ?? b`**——**default**:`a` 有 `Left` 就用它,否則用 `b`;最鬆的二元、**右結合**、短路。右側也可改為**diverge**——
+  `x ?? break`、`v ?? return nil`、`p ?? raise e`——因為 `break` / `continue` / `return` / `raise` 從不產值。
+- **`a?.b`**——**optional chain**（僅 `T?`）:`a` 存在時讀 `.b`,否則就地短路成 `nil`(不像 `?` 會從函式 return)。
+- **`x!`**——**force-unwrap**:取出 `Left`,否則 **raise `UnwrapError`**（value→abort 的逃生口）。邏輯否定是關鍵字
+  `not`,所以 postfix `!` 空著可用。
+- **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
+- **`guard { … }`**——把區塊內任何 abort **降級**回值,產出 `Result[T]`(abort→value)。它是從 abort 層回來的唯一途徑,
+  guard 過的 abort 就是普通 `Result`,用同一套 `?` / `??` / `match` 處理。
 
 ## 編輯器工具（Editor tooling）
 

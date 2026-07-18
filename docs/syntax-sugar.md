@@ -6,27 +6,28 @@ full treatment is in the [Language Reference](language.md). Also in [繁體中�
 
 ## Landed sugar
 
-| Sugar                                    | Desugars to                                                          |
-| ---------------------------------------- | -------------------------------------------------------------------- |
-| `break if c` / `continue if c`           | `if c { break }` / `if c { continue }`                               |
-| `if x := e { … }`                        | a one-arm `match` on `e` — the block runs only when `x` is present   |
-| `with e as y { … }`                      | `{ y := e; defer y's Scoped teardown; … }` (runs on every exit)      |
-| `f"…{x}…"`                               | compile-time `str` concatenation, each hole `x.display()`            |
-| `f"{x!r}"` / `f"{x=}"`                   | `f"{x.debug()}"` / the source text `x=` then the value               |
-| `f"{x:spec}"`                            | `x.format(spec)` through the `Format` protocol                       |
-| `a + b`, `a == b`, `a[i]`, `-a`, …       | the operator's spec method — `a.add(b)`, `a.equal(b)`, …             |
-| `for x in it { … }`                      | the iteration protocol on `it` (a `StopIteration`-terminated loop)   |
-| `(a, b) := e` / `P{x, y} := e`           | destructuring a product/tuple return, each part bound **by copy**    |
-| `f(x: 1)` (named) / `p: T = e` (default) | positional rewrite at the call; a default `e` is evaluated per call  |
-| `#[derive(X)]`                           | the compiler-generated canonical `impl X for T`, read from structure |
-| `print x`                                | a best-effort write of `x.display()` and a newline to stdout         |
+| Sugar                                    | Desugars to                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `break if c` / `continue if c`           | `if c { break }` / `if c { continue }`                                |
+| `if x := e { … }`                        | a one-arm `match` on `e` — the block runs only when `x` is present    |
+| `with e as y { … }`                      | `{ y := e; defer y's Scoped teardown; … }` (runs on every exit)       |
+| `f"…{x}…"`                               | compile-time `str` concatenation, each hole `x.display()`             |
+| `f"{x!r}"` / `f"{x=}"`                   | `f"{x.debug()}"` / the source text `x=` then the value                |
+| `f"{x:spec}"`                            | `x.format(spec)` through the `Format` protocol                        |
+| `a + b`, `a == b`, `a[i]`, `-a`, …       | the operator's spec method — `a.add(b)`, `a.equal(b)`, …              |
+| `for x in it { … }`                      | the iteration protocol on `it` (a `StopIteration`-terminated loop)    |
+| `(a, b) := e` / `P{x, y} := e`           | destructuring a product/tuple return, each part bound **by copy**     |
+| `f(x: 1)` (named) / `p: T = e` (default) | positional rewrite at the call; a default `e` is evaluated per call   |
+| `#[derive(X)]`                           | the compiler-generated canonical `impl X for T`, read from structure  |
+| `print x`                                | a best-effort write of `x.display()` and a newline to stdout          |
+| `e?`                                     | unwrap the `Left`, else early-return the `Right` from the function    |
+| `a ?? b` / `a?.m` / `e!`                 | default; optional chain to `nil`; force-unwrap or raise `UnwrapError` |
 
 ## Deferred sugar (arrives with its group)
 
-| Sugar                           | Desugars to                                                         |
-| ------------------------------- | ------------------------------------------------------------------- |
-| `e?` / `e ?? d` / `e?.m` / `e!` | recoverable-failure handling over `Result` / `T?`                   |
-| `del ch`                        | drop this holder now — closes the channel if it was the last sender |
+| Sugar    | Desugars to                                                         |
+| -------- | ------------------------------------------------------------------- |
+| `del ch` | drop this holder now — closes the channel if it was the last sender |
 
 ## What is deliberately **not** sugar
 

@@ -45,8 +45,8 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 # '{ … }' block). 'nop' is the smallest simple statement; the rest are filled in by
 # later groups.
 statement     ::= simple-stmt | compound-stmt
-simple-stmt   ::= nop | binding | reassign | print | return | break | continue
-                | type-decl | expr-stmt
+simple-stmt   ::= nop | binding | reassign | print | return | raise | break
+                | continue | type-decl | expr-stmt
 compound-stmt ::= block | with-stmt | if-stmt | for-stmt | fn-decl
                 | struct-decl | enum-decl | spec-decl | impl-decl
 nop       ::= 'nop'
@@ -95,8 +95,8 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'type'  | 'impl'  | 'package' | 'init'   | 'extern' | 'defer'
              | 'del'   | 'raise' | 'guard'  | 'is'      | 'not'    | 'and'
-             | 'or'    | 'print' | 'this'   | 'with'    | 'as'     | 'true'
-             | 'false' | 'nil'
+             | 'or'    | 'print' | 'this'   | 'with'    | 'as'     | 'from'
+             | 'true'  | 'false' | 'nil'
 # ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
 
 # ==================================================================================
@@ -161,7 +161,7 @@ lvalue       ::= identifier ( '.' identifier | '[' expr ']' )*
 
 # Expression grammar from lowest precedence (or) to highest (postfix). Binary levels
 # are left-associative; comparison is non-associative (no a < b < c chaining).
-expr         ::= or-expr
+expr         ::= coalesce-expr          # coalesce-expr adds '??' atop or-expr (group 8)
 or-expr      ::= and-expr   ( 'or'  and-expr  )*
 and-expr     ::= cmp-expr   ( 'and' cmp-expr  )*
 cmp-expr     ::= add-expr   ( ( cmp-op add-expr ) | ( 'is' type-name ) )?
@@ -169,11 +169,15 @@ add-expr     ::= mul-expr   ( add-op mul-expr )*
 mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= primary ( postfix )*
-primary      ::= literal | fstr-lit | fn-expr | match-expr | identifier | '(' expr ')'
+primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr
+               | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
                | '(' arg-list? ')'     # call (named arguments: group 5)
                | '[' expr ']'          # index
+               | '?'                   # propagate (group 8): unwrap Left, else early-return Right
+               | '!'                   # force-unwrap (group 8): unwrap Left, else raise UnwrapError
+               | '?.' identifier       # optional chain (group 8): read .id when present, else nil
 arg-list     ::= arg ( ',' arg )*
 arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
 
@@ -327,8 +331,29 @@ spec-member  ::= fn-sig | fn-decl                      # required (no body) or p
 fn-sig       ::= 'mut'? 'fn' identifier '(' param-list? ')' ret-type?
 
 # ==================================================================================
+# 8. Null-safety & Errors
+# ==================================================================================
+# Failure comes in two tiers. RECOVERABLE failure is an ordinary value of a sum type
+# — 'Either[X, Y]', 'Result[T]' = Either[T, Err], and 'T?' = Either[T, nil] with the
+# placeholder 'nil'. A BUG is an ABORT that unwinds the stack (running defers). The
+# operators bridge the tiers:
+#   x?            propagate — unwrap the Left, else early-return the Right from the fn
+#   a ?? b        default   — a's Left if present, else b; right-assoc, short-circuits
+#   a?.b          optional chain (T? only) — read .b when present, else nil in place
+#   x!            force-unwrap — unwrap the Left, else raise UnwrapError (value → abort)
+#   raise e       abort with an Err (value → abort); 'raise e from c' records c as cause
+#   guard { … }   demote an abort in the block back to a value → Result[T] (abort → value)
+# The '??' right side may DIVERGE instead of giving a value — 'x ?? break', 'v ?? return
+# nil', 'p ?? raise Err' — because break/continue/return/raise never produce a value.
+
+coalesce-expr ::= or-expr ( '??' coalesce-rhs )?    # '??': loosest binary, right-assoc
+coalesce-rhs  ::= coalesce-expr | diverge
+diverge       ::= 'break' | 'continue' | return | raise
+raise         ::= 'raise' expr ( 'from' expr )?     # 'from c' records c as e's cause
+guard-expr    ::= 'guard' block                     # yields Result[T]; T = the block's value
+
+# ==================================================================================
 # Roadmap — minor groups, landed one per commit after the core
 # ==================================================================================
-#   -- minor --       error operators (? ?? ?. ! raise guard); concurrency
-#                     (spawn/chan/select/<-); modules (import/pub/package/init);
-#                     FFI (extern "C"); defer/del
+#   -- minor --       concurrency (spawn/chan/select/<-); modules
+#                     (import/pub/package/init); FFI (extern "C"); defer/del

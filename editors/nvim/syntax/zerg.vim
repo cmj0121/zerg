@@ -22,13 +22,13 @@ syntax match zergComment "#.*$" contains=@Spell
 syntax keyword zergStatement nop return if else for in break continue match
 syntax keyword zergStatement spawn select defer del raise guard import derive impl print
 
-" Declaration keywords. `fn` carries a nextgroup so the declaration name (if any)
-" highlights as a function; anonymous `fn(...)` has no name and stays plain.
-syntax keyword zergKeyword mut pub struct enum spec type extern package init
-syntax keyword zergKeyword fn skipwhite nextgroup=zergFunction
+" Declaration keywords.
+syntax keyword zergKeyword mut pub extern package init
 
-" The method receiver `this` (the self type `This` is a built-in type, below).
-syntax keyword zergKeyword this
+" Type- and function-declaring keywords carry a nextgroup, so the declared NAME
+" (fn/struct/enum/spec/type) highlights the same as a function name — see
+" zergDeclName. Anonymous `fn(...)` has no name and stays plain.
+syntax keyword zergKeyword fn struct enum spec type skipwhite nextgroup=zergDeclName
 
 " Keyword operators (the word-form logical/type operators).
 syntax keyword zergOperator not and or is
@@ -37,9 +37,9 @@ syntax keyword zergOperator not and or is
 syntax keyword zergType bool byte rune int uint float str
 syntax keyword zergType list map set chan Ref Result Either This
 
-" Constants.
+" Constants. `this` (the method receiver) is highlighted like nil/true/false.
 syntax keyword zergBoolean true false
-syntax keyword zergConstant nil
+syntax keyword zergConstant nil this
 
 " --- group 3: literals ---------------------------------------------------------
 
@@ -77,18 +77,25 @@ syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
 " character forms are listed before the single-char class so they match whole.
 syntax match zergOperator "->\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=]"
 
-" --- group 5: function declaration name ----------------------------------------
+" --- group 5: declared names (fn/struct/enum/spec/type) and labels -------------
 
-" The name after `fn` (see the fn keyword's nextgroup); contained, so a bare
-" identifier elsewhere is not mistaken for a function name.
-syntax match zergFunction "\h\w*" contained
+" The name right after a declaring keyword (via nextgroup); contained, so a bare
+" identifier elsewhere is not mistaken for one.
+syntax match zergDeclName "\h\w*" contained
 
-" --- group 6: type & variant names ---------------------------------------------
+" A field / parameter / argument label `name:` — the same colour as a declared
+" name. Excludes the `:=` binding operator (colon followed by '=').
+syntax match zergDeclName "\<\h\w*\ze\s*:[^=]"
+
+" --- group 6: type & variant names, wildcard -----------------------------------
 
 " A highlighter can't run the compiler's name resolution, so it keys on case: by
 " Zerg convention capitalized identifiers are types and enum variants (User, Shape,
 " Circle, Left). This is a highlight heuristic, not a grammar rule (names are case-free).
 syntax match zergType "\<\u\w*\>"
+
+" The match wildcard `_`, highlighted as special.
+syntax match zergWildcard "\<_\>"
 
 " --- highlight links ------------------------------------------------------------
 
@@ -107,6 +114,8 @@ highlight default link zergRawString String
 highlight default link zergFString   String
 highlight default link zergDelimiter Delimiter
 highlight default link zergEscape    SpecialChar
-highlight default link zergFunction  Function
+highlight default link zergInterp    Identifier
+highlight default link zergDeclName  Function
+highlight default link zergWildcard  Special
 
 let b:current_syntax = 'zerg'

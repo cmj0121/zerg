@@ -41,16 +41,25 @@ program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
 
-# A statement is either simple (no block — fits on one line) or compound (it owns a
-# '{ … }' block). 'nop' is the smallest simple statement; the rest are filled in by
-# later groups.
-statement     ::= simple-stmt | compound-stmt
-simple-stmt   ::= nop | binding | reassign | print | return | raise | break
-                | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
-                | del-stmt | type-decl | expr-stmt
-compound-stmt ::= block | with-stmt | if-stmt | for-stmt | select-stmt | fn-decl
-                | struct-decl | enum-decl | spec-decl | impl-decl | init-decl
-nop       ::= 'nop'
+# A statement is either simple (no block — fits on one line), compound (it owns a
+# '{ … }' block), or a declaration (introduces a name, and may carry a decorator
+# prefix). 'nop' is the smallest simple statement; the rest are filled in by later
+# groups.
+statement      ::= simple-stmt | compound-stmt | decorated-decl
+simple-stmt    ::= nop | binding | reassign | print | return | raise | break
+                 | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
+                 | del-stmt | expr-stmt
+compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
+
+# A declaration introduces a name — a type, a function, or a module item. A DECORATOR
+# prefix (group 7) may lead ANY declaration and binds to it; which decorators are
+# valid on which declaration is a SEMANTIC rule, not a syntactic one (e.g. 'derive'
+# only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' is the one
+# declaration with no block; the rest own one.
+decorated-decl ::= decorator* declaration
+declaration    ::= type-decl | fn-decl | struct-decl | enum-decl
+                 | spec-decl | impl-decl | init-decl
+nop            ::= 'nop'
 
 # ==================================================================================
 # 2. Lexical
@@ -307,16 +316,17 @@ chan-type    ::= 'chan' '[' type ']'           # bidirectional
                | 'chan' '[' type ']' '<-'       # send-only (a sender), Go-style
 
 # --- declarations (compound: struct/enum/spec/impl; simple: type) ---
-struct-decl  ::= decorator* 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl    ::= decorator* 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
 spec-decl    ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl    ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
 
 # Decorators are a fixed, compiler-owned set of directives (users cannot define new
-# ones — Zerg has no macros). Each binds to the declaration that follows. 'derive'
-# asks the compiler to generate the canonical impls of the named blessed specs by
-# reading the type's structure; other decorators (layout, FFI, …) slot in here later.
+# ones — Zerg has no macros). A decorator prefix leads any declaration (the
+# 'decorator*' on 'decorated-decl', group 1) and binds to it. 'derive' asks the
+# compiler to generate the canonical impls of the named blessed specs by reading the
+# type's structure; other decorators (layout, logging, FFI, …) slot in here later.
 decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 deco-arg     ::= type-name | literal          # derive(Encode, Decode), align(16), …

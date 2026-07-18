@@ -55,14 +55,16 @@ A Zerg program is a sequence of statements:
 program       ::= stmt-list
 stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep      ::= NEWLINE | ';'
-statement     ::= simple-stmt | compound-stmt
+statement     ::= simple-stmt | compound-stmt | decorated-decl
 simple-stmt   ::= nop | …          # no block; fits on one line
-compound-stmt ::= …                # owns a '{ … }' block (if / for / fn / struct / …)
+compound-stmt ::= …                # owns a '{ … }' block (if / for / …)
+decorated-decl ::= …               # a name-introducing declaration, optional #[…] prefix (fn / struct / …, group 7)
 nop           ::= 'nop'
 ```
 
-A statement is either **simple** (no block — it fits on one line: `nop`, a binding, `return`, …) or
-**compound** (it owns a `{ … }` block: `if`, `for`, `fn`, `struct`, …). `nop` is the smallest simple
+A statement is **simple** (no block — it fits on one line: `nop`, a binding, `return`, …),
+**compound** (it owns a `{ … }` block: `if`, `for`, …), or a **declaration** (`fn`, `struct`, `enum`,
+`spec`, … — it introduces a name and may carry a `#[…]` decorator; group 7). `nop` is the smallest simple
 statement. A statement is separated from the next by a **line break** or a semicolon `;`. Both are grammatically
 valid, but the **formatter normalizes** a multi-statement line into one statement per line — so canonical
 Zerg has **exactly one statement per line** and `;` rarely survives formatting. (The `;` also appears
@@ -309,11 +311,12 @@ type        ::= base-type '?'?
 base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
-struct-decl ::= decorator* 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl   ::= decorator* 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+decorated-decl ::= decorator* declaration   # a decorator prefix leads any declaration (group 1)
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 ```
@@ -332,11 +335,14 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   full method). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
   the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self
   type is **`This`**. `impl … for …` supplies a spec's methods for a type by hand.
-- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive attached to the following
-  declaration. `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to **generate** the
-  canonical impls of the named specs by reading the type's structure. Decorators are a **fixed,
-  compiler-owned set** — users cannot define new ones (Zerg has no macros); other directives (layout, FFI…)
-  will slot in here later. `#[` is the one `#` that is not a comment — the lexer peeks one character.
+- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
+  leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
+  declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to
+  **generate** the canonical impls of the named specs by reading the type's structure (see
+  [Derive & Default Behavior](derive.md)); a logging decorator would sit on a `fn`. Decorators are a
+  **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); other directives
+  (layout, FFI…) will slot in here later. `#[` is the one `#` that is not a comment — the lexer peeks one
+  character.
 
 ## Group 8 — Null-safety & Errors
 

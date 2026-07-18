@@ -54,14 +54,16 @@ package 的 `pub` 表面本身**就是**它的 C ABI（見 [FFI](ffi.zh-TW.md)�
 program       ::= stmt-list
 stmt-list     ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep      ::= NEWLINE | ';'
-statement     ::= simple-stmt | compound-stmt
+statement     ::= simple-stmt | compound-stmt | decorated-decl
 simple-stmt   ::= nop | …          # 無區塊；一行即可
-compound-stmt ::= …                # 擁有一個 '{ … }' 區塊（if / for / fn / struct / …）
+compound-stmt ::= …                # 擁有一個 '{ … }' 區塊（if / for / …）
+decorated-decl ::= …               # 引入名字的宣告，可選 #[…] 前綴（fn / struct / …，group 7）
 nop           ::= 'nop'
 ```
 
-statement 分為 **simple**（無區塊、一行即可：`nop`、binding、`return` 等）或 **compound**（擁有 `{ … }` 區塊：
-`if`、`for`、`fn`、`struct` 等）。`nop` 是最小的 simple statement。statement 與下一個之間以**換行**或分號 `;`
+statement 分為 **simple**（無區塊、一行即可：`nop`、binding、`return` 等）、**compound**（擁有 `{ … }` 區塊：
+`if`、`for` 等），或 **declaration**（`fn`、`struct`、`enum`、`spec` 等——引入名字，可帶 `#[…]` decorator；group 7）。
+`nop` 是最小的 simple statement。statement 與下一個之間以**換行**或分號 `;`
 分隔。兩者都**文法合法**，但 **formatter 會正規化**：把一行多
 statement 拆成一行一個——所以 canonical Zerg **一行剛好一個 statement**，`;` 幾乎不會留存於格式化後的原始碼。
 （`;` 也出現在 array 型別與字面量 `[T; N]` 這個無關位置，formatter 會保留。）文法定義的第一個 statement 是
@@ -287,11 +289,12 @@ type        ::= base-type '?'?
 base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
-struct-decl ::= decorator* 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl   ::= decorator* 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
+decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 ```
@@ -307,10 +310,12 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法**不宣告 receiver**——
   `this` 在方法內為隱式，透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self
   型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。
-- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是掛在後續宣告上的 compiler 指令。在 `struct`/`enum` 上
-  的 `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl。decorator 是
-  **固定、compiler 擁有**的集合——使用者不可自訂（Zerg 無 macro）；其他指令（layout、FFI…）日後於此加入。`#[` 是唯一
-  不算註解的 `#`——lexer peek 一字元即分辨。
+- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
+  （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
+  `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見
+  [Derive & Default Behavior](derive.md)）；logging decorator 則會掛在 `fn` 上。decorator 是**固定、compiler
+  擁有**的集合——使用者不可自訂（Zerg 無 macro）；其他指令（layout、FFI…）日後於此加入。`#[` 是唯一不算註解的
+  `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors
 

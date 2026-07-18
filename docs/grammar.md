@@ -335,14 +335,19 @@ The type expressions used since group 5, and the declarations that introduce typ
 
 ```text
 type        ::= base-type '?'?
-base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
+base-type   ::= type-name type-args? ( '.' identifier )?   # 'I.Item' projects an associated type
+              | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
-impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' fn-decl* '}'
+impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'
+impl-item   ::= fn-decl | assoc-bind          # a method, or a binding for an associated type
+assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' fills a spec's assoc type
+spec-member ::= fn-sig | fn-decl | assoc-type
+assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item' (optionally bounded)
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # an optional spec bound
 bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
@@ -377,10 +382,17 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   **coherence** (one `impl Spec for Type` program-wide) and an **orphan rule** (own the spec or the type);
   generics are **invariant**. `#[dyn]` instead emits one shared witness-table body (size for speed), and the
   compiler can flag instantiation bloat. Const generics and call-site type arguments are deferred.
-- **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
-  full method). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
+- **`spec`.** A behavioral interface: members are **required** (a signature with no body), **provided** (a
+  full method), or an **associated type** (`type Item` — a type the `impl` fills in, functionally determined,
+  one per impl). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
   the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self
-  type is **`This`**. `impl … for …` supplies a spec's methods for a type by hand.
+  type is **`This`**. `impl … for …` supplies a spec's methods (and its `type Item = …` bindings) for a type
+  by hand.
+- **Associated types.** An associated type makes a **single-output** protocol well defined: `for x in it`
+  has one element type because `Iterator`'s `Item` is fixed per impl, not chosen per use as a generic
+  `Iterable[T]` would allow. Reference it by **projection** in type position — `I.Item`
+  (`fn collect[I: Iterator](it: I) -> list[I.Item]`). An `impl` supplies it with `type Item = int`. (An
+  associated **const** would need a `const` and is deferred.)
 - **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
   leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
   declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to

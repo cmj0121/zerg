@@ -310,14 +310,19 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
 
 ```text
 type        ::= base-type '?'?
-base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
+base-type   ::= type-name type-args? ( '.' identifier )?   # 'I.Item' 投影一個 associated type
+              | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
-impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' fn-decl* '}'
+impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'
+impl-item   ::= fn-decl | assoc-bind          # 方法，或 associated type 的綁定
+assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' 滿足 spec 的 assoc type
+spec-member ::= fn-sig | fn-decl | assoc-type
+assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item'（可加 bound）
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # 選用的 spec bound
 bound       ::= type-name ( '+' type-name )*  # spec 的合取
@@ -346,9 +351,14 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   `a < b` 也需提供 `<` 的那個 bound),且泛型函式在實例化前不是一等值。健全性靠 **coherence**(全程式一個
   `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。`#[dyn]` 改為產生
   一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。const generic 與呼叫端型別引數延後。
-- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法**不宣告 receiver**——
-  `this` 在方法內為隱式，透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self
-  型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。
+- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）、**提供**（完整方法）,或 **associated type**
+  （`type Item`——由 `impl` 填入、函數性決定、每個 impl 一個）。方法**不宣告 receiver**——`this` 在方法內為隱式,
+  透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self 型別是 **`This`**。
+  `impl … for …` 由手寫為某型別提供 spec 的方法(及其 `type Item = …` 綁定)。
+- **Associated type。** 它讓**單輸出**的 protocol 良定義:`for x in it` 只有一種元素型別,因為 `Iterator` 的 `Item`
+  由 impl 固定,而非像 generic `Iterable[T]` 那樣由使用端選。用型別位置的**投影**引用——`I.Item`
+  （`fn collect[I: Iterator](it: I) -> list[I.Item]`）。impl 以 `type Item = int` 提供它。（associated **const**
+  需要 `const`,延後。）
 - **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
   （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見

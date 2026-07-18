@@ -321,8 +321,8 @@ pattern-list ::= pattern ( ',' pattern )*
 
 # --- type expressions ---
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
-base-type    ::= type-name type-args?                  # int, User, list[int], Either[A, B]
-               | tuple-type | array-type | chan-type | fn-type
+base-type    ::= type-name type-args? ( '.' identifier )?   # int, list[int]; 'I.Item' PROJECTS
+               | tuple-type | array-type | chan-type | fn-type   # an associated type (group 7)
 type-args    ::= '[' type ( ',' type )* ']'
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' expr ']'                 # [T; N] — the ';' array position
@@ -335,9 +335,11 @@ struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
 spec-decl    ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
-impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' fn-decl* '}'
+impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'
              # 'impl[T] Spec for list[T]' — the type params belong to the impl (after
              # 'impl'), so a T introduced here is usable in the 'for' target.
+impl-item    ::= fn-decl | assoc-bind        # a method, or a binding for an associated type
+assoc-bind   ::= 'type' identifier '=' type  # 'type Item = int' satisfies the spec's assoc type
 
 # CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
 # the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
@@ -381,7 +383,15 @@ field-list   ::= stmt-sep* ( field ( stmt-sep+ field )* stmt-sep* )?
 field        ::= identifier ':' type ( '=' expr )?     # optional default feeds the constructor
 variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
 variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
-spec-member  ::= fn-sig | fn-decl                      # required (no body) or provided
+# A spec member is a required method (signature), a provided method (with a body), or an
+# ASSOCIATED TYPE — a type the impl fills in ('type Item'), functionally determined by
+# the implementer (one per impl). It makes a single-output protocol like iteration well
+# defined: 'for x in it' has ONE element type because 'Iterator.Item' is fixed per impl,
+# not chosen per use as a generic 'Iterable[T]' would allow. Reference it by projection
+# in type position — 'I.Item' (group 4's base-type). (An associated CONST would need a
+# 'const', deferred; associated types are types only for now.)
+spec-member  ::= fn-sig | fn-decl | assoc-type         # required / provided method, or assoc type
+assoc-type   ::= 'type' identifier ( ':' bound )?      # 'type Item' or bounded 'type Item: Ord'
 fn-sig       ::= 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================

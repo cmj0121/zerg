@@ -117,6 +117,19 @@ fn sum_all[T: Summable](xs: list[T]) -> T {
     return acc
 }
 
+# an associated type: each Iterator impl fixes its own Item (group 7)
+spec Iterator {
+    type Item
+    mut fn next() -> Item?
+}
+impl Iterator for Counter {
+    type Item = int
+    mut fn next() -> int? { return this.n }
+}
+fn first[I: Iterator](mut it: I) -> I.Item? {
+    return it.next()             # I.Item — the associated type, projected
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

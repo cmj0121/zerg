@@ -232,8 +232,9 @@ map-entry ::= expr ':' expr
 - **Set `set([1, 2, 3])`** (empty `set()`) — built through its constructor, **not** a brace literal, since
   `{1}` would be indistinguishable from a one-statement block. `set`'s parameter defaults to `[]`, so
   `set()` is the empty set.
-- Two rules fall out of `{` being the block opener: at a **statement's start** `{` is a block, and a **map
-  literal at the start of an `if`/`for`/`with`/`match` head** must be parenthesized.
+- Two rules fall out of `{` being the block opener: at a **statement's start** `{` is a block statement (its
+  value discarded), and **any `{`-opening expression — a block or a map literal — at the start of an
+  `if`/`for`/`with`/`match` head** must be parenthesized.
 
 ### String interpolation & `print`
 
@@ -315,11 +316,15 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
 ```
 
 - **Block & `with`.** A bare `{ … }` opens a **nested scope** — its bindings and scope-owned values are
-  freed at the `}`. **`with expr as y { … }`** is sugar over it: it binds a scoped resource `y` for the
-  block and guarantees the resource's **teardown runs on every exit** (normal, `return`, or an abort). The
-  value implements the built-in **`Scoped`** spec (its one method is the teardown); a `Ref[T]`'s drop
-  already satisfies it. So `with open(p) as f { f.read() }` ≈ `{ f := open(p); defer f.<teardown>; … }`.
-  `as y` is optional when the resource is used only for its scope (a held lock).
+  freed at the `}`. A block is also an **expression** (`primary`, group 4): its **value is its last
+  statement's value** — an expr-statement yields its expr; any other statement, or an empty block, yields
+  `nil`. The ASI `;` only **separates** statements, it does not discard a value, so `guard { … }` and a
+  multi-statement `match` arm (`P -> { …; v }`) both yield. **`with expr as y { … }`** is sugar over a bare
+  block: it binds a scoped resource `y` and guarantees the resource's **teardown runs on every exit**
+  (normal, `return`, or an abort). The value implements the built-in **`Scoped`** spec (its one method is the
+  teardown); a `Ref[T]`'s drop already satisfies it. So `with open(p) as f { f.read() }` ≈
+  `{ f := open(p); defer f.<teardown>; … }`. `as y` is optional when the resource is used only for its scope
+  (a held lock).
 - **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
   block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual.
 - **`for`.** The one loop, in two forms: **`for { … }`** infinite (leave via `break` / `return`), and

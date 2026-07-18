@@ -217,8 +217,8 @@ map-entry ::= expr ':' expr
   冒號的大括號無歧義;而**裸元素**的 `{…}` **恆為 block**。
 - **set `set([1, 2, 3])`**(空 `set()`)——走建構子,**不用** brace 字面量,因為 `{1}` 會和單句 block 分不清。`set`
   的參數預設為 `[]`,所以 `set()` 就是空 set。
-- 兩條規則源自「`{` 是 block 開場」:**statement 開頭**的 `{` 是 block;**`if`/`for`/`with`/`match` head 開頭的
-  map 字面量**要加括號。
+- 兩條規則源自「`{` 是 block 開場」:**statement 開頭**的 `{` 是 block statement(值被丟棄);**任何以 `{` 開頭的
+  運算式**——block 或 map 字面量——在 **`if`/`for`/`with`/`match` head 開頭**都要加括號。
 
 ### 字串插值與 `print`
 
@@ -291,11 +291,13 @@ pattern     ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
 ```
 
-- **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。
-  **`with expr as y { … }`** 是其 sugar：把 scoped 資源 `y` 綁進 block，並保證資源的 **teardown 在每條離開路徑**
-  （正常、`return`、abort）都跑。該值實作內建 **`Scoped`** spec（其唯一方法即 teardown）；`Ref[T]` 的 drop 已滿足
-  它。所以 `with open(p) as f { f.read() }` ≈ `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用
-  （如持有的 lock），`as y` 可省。
+- **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。block 同時
+  是一種 **expression**（`primary`，group 4）:它的**值 = 最後一個 statement 的值**——expr-statement 給出其 expr;
+  其他 statement 或空 block 給出 `nil`。ASI `;` 只**分隔**、不丟棄值,所以 `guard { … }` 與多敘述的 `match` arm
+  （`P -> { …; v }`）都能產出。**`with expr as y { … }`** 是裸 block 的 sugar：把 scoped 資源 `y` 綁進 block,並保證
+  資源的 **teardown 在每條離開路徑**（正常、`return`、abort）都跑。該值實作內建 **`Scoped`** spec（其唯一方法即
+  teardown）；`Ref[T]` 的 drop 已滿足它。所以 `with open(p) as f { f.read() }` ≈
+  `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省。
 - **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
   （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。
 - **`for`。** 唯一的迴圈，兩種形式：**`for { … }`** 無限（以 `break` / `return` 離開），與 **`for x in it { … }`**

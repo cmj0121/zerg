@@ -154,12 +154,13 @@ fn total(shapes: list[Shape]) -> float {
     return acc
 }
 
-# bare block scopes a value; `with` binds a scoped resource, torn down on exit
+# a block is an expression — its value is its last statement (group 6)
 fn process(path: str) {
-    {
-        tmp := 1_000           # scoped to this block, freed at its `}`
-        print f"{tmp}"
+    scaled := {                # bare value block: tmp is freed at the `}`
+        tmp := 1_000
+        tmp *% 2               # ← the block's value
     }
+    print f"{scaled}"
     with open(path) as f {     # f's Scoped teardown runs on every exit
         for line in f.read() { print line }
     }
@@ -211,7 +212,10 @@ fn serve(inbox: <-chan[Shape]) {          # receive-only channel (a receiver)
         result := guard { render(cmd) }
 
         match result {
-            Left(ok) -> spawn publish(ok)
+            Left(ok) -> {                  # a multi-statement arm — a block that yields
+                print "publishing"
+                spawn publish(ok)
+            }
             Right(e) -> raise e
             _        -> nil
         }

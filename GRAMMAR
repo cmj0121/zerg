@@ -95,7 +95,11 @@ COMMENT    ::= '#' [^[\n] [^\n]*   # a '#' NOT followed by '[' → comment to EO
              | '#' NEWLINE          # a bare '#' at end of line is also a comment
 
 # A block groups a statement list in braces — the body of a function, loop, or
-# conditional. Inner separators follow the group-1 stmt-list rules.
+# conditional, and ALSO a value: a block is an EXPRESSION (primary, group 4) whose VALUE
+# is its last statement's value — an expr-stmt yields its expr; any other statement, or
+# an empty block, yields 'nil'. The ASI ';' only SEPARATES statements; it does not
+# discard a value the way a trailing ';' does in some languages. So 'guard { … }' and a
+# 'match' arm can hold many statements and still yield. Inner separators follow group 1.
 block      ::= '{' stmt-list '}'
 
 # The reserved keywords, listed as a lexical fact: none can be an identifier. Each
@@ -181,7 +185,7 @@ unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= recv-base ( postfix )*
 recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
 primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr
-               | chan-new | list-lit | map-lit | tuple-lit
+               | chan-new | list-lit | map-lit | tuple-lit | block
                | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
@@ -206,10 +210,11 @@ arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value'
 # 2+ list — a single '( expr )' is just grouping. A list is bracketed. A map is braced
 # with ':'-bearing entries: that ':' is exactly what distinguishes a '{ … }' map from a
 # block, so a bare-element '{ … }' is ALWAYS a block and a set therefore has NO brace
-# literal (build one with its constructor, 'set([ … ])'). Two parse rules follow: at a
-# statement's start '{' is a block, and a map literal at the start of an if/for/with/
-# match head must be parenthesized. (struct and enum values are built by calling a type
-# or variant name — see the constructor note in group 7.)
+# literal (build one with its constructor, 'set([ … ])'). Two parse rules follow from '{'
+# being the block opener: at a statement's start '{' is a block STATEMENT (its value
+# discarded), and ANY '{'-opening expression — a block OR a map literal — at the start of
+# an if/for/with/match head must be parenthesized. (struct and enum values are built by
+# calling a type or variant name — see the constructor note in group 7.)
 tuple-lit    ::= '(' expr ',' expr ( ',' expr )* ')'    # 2+ elements; no 1-tuple, no '()'
 list-lit     ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3]; empty '[]'
 map-lit      ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}

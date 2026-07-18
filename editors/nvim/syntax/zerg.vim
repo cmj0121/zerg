@@ -33,8 +33,12 @@ syntax keyword zergStatement spawn select defer del raise guard import impl prin
 
 " `for` is a match (not a keyword) so the `impl … for` override below can win.
 syntax match zergStatement "\<for\>"
-" In `impl X for Y`, `for` is a plain keyword, not the loop keyword.
-syntax match zergKeyword "\%(\<impl\>.\+\)\@<=\<for\>"
+" In `impl X for Y`, `for` is a plain keyword, not the loop keyword. The match must
+" anchor at `for` (to win over the zergStatement `for` above by later definition), so
+" `impl` is asserted in a lookbehind, width-bounded (\@80<=) to cap the back-scan on a
+" long line. A forward `\<impl\>…\zs\<for\>` can't be used: `impl` is a separate keyword
+" token, so a match anchored there never fires.
+syntax match zergKeyword "\%(\<impl\>.\+\)\@80<=\<for\>"
 
 " Declaration keywords.
 syntax keyword zergKeyword mut pub extern package init
@@ -47,9 +51,11 @@ syntax keyword zergKeyword fn struct enum spec type skipwhite nextgroup=zergDecl
 " Keyword operators (the word-form logical/type/binding operators).
 syntax keyword zergOperator not and or is as from
 
-" Built-in type names and generic constructors.
+" Built-in type names and generic constructors. Capitalized built-ins (Ref, Result,
+" Either, This) are already caught by the `\<\u\w*\>` type match below, so only the
+" lowercase built-ins need naming here.
 syntax keyword zergType bool byte rune int uint float str
-syntax keyword zergType list map set chan Ref Result Either This
+syntax keyword zergType list map set chan
 
 " Constants. `this` (the method receiver) is highlighted like nil/true/false.
 syntax keyword zergBoolean true false

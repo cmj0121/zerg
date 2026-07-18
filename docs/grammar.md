@@ -33,7 +33,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 1   | nop & skeleton  | `program`, `statement`, statement separators, `nop`            | landed  |
 | 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed  |
 | 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed  |
-| 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | planned |
+| 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | landed  |
 | 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | planned |
 | 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | planned |
 | 7   | Types           | `struct`, `enum`, tuple, `type X = Y`, `spec`                  | planned |
@@ -142,6 +142,44 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
+
+## Group 4 — Bindings & Expressions
+
+A **binding** introduces a name; a reassignment updates one:
+
+```text
+binding   ::= 'mut'? identifier ':=' expr
+reassign  ::= lvalue '=' expr
+expr-stmt ::= expr
+lvalue    ::= identifier ( '.' identifier | '[' expr ']' )*
+```
+
+`:=` binds a **new, immutable** name; `mut x := …` makes it rebindable; `=` **reassigns** an existing
+`mut` binding (or field/element). An expression alone — a call, or a `match` run for its effect — is a
+statement. (Destructuring a pattern at `:=`, like `(q, r) := divmod(x, y)`, arrives with patterns in
+group 6.)
+
+Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
+non-associative** — `a < b < c` does not parse, by design.
+
+| Precedence | Operators                            | Assoc     |
+| ---------- | ------------------------------------ | --------- |
+| 1 highest  | `.` `()` `[]` (field / call / index) | left      |
+| 2          | `not` `~` unary `-` `-%`             | right     |
+| 3          | `*` `/` `%` `*%` `<<` `>>` `&`       | left      |
+| 4          | `+` `-` `+%` `-%` `\|` `^`           | left      |
+| 5          | `==` `!=` `<` `>` `<=` `>=` `is`     | non-assoc |
+| 6          | `and`                                | left      |
+| 7 lowest   | `or`                                 | left      |
+
+The `%`-suffixed `+%` `-%` `*%` are the **wrapping** arithmetic operators; `~` is bitwise complement.
+Bitwise `&` `<<` `>>` sit with the multiplicatives and `\|` `^` with the additives — one notch tighter
+than comparison, so `a & b == c` reads as `(a & b) == c`, sidestepping C's precedence trap. `is` tests an
+existential against a spec or variant name (full form in groups 6–7). A sign is an operator, not part of a
+literal.
+
+The null-safety and error operators (`?` `??` `?.` `!`) are **not** here — they belong to the error group.
+`f"…"` interpolation is this expression group, but lands as its **own commit**.
 
 ## Editor tooling
 

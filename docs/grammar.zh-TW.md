@@ -33,7 +33,7 @@ notation 很小：
 | 1   | nop & skeleton  | `program`、`statement`、statement 分隔、`nop`                   | 已落地 |
 | 2   | Lexical         | comment、identifier、keyword、newline、block                    | 已落地 |
 | 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 已落地 |
-| 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 規劃中 |
+| 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 已落地 |
 | 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 規劃中 |
 | 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 規劃中 |
 | 7   | Types           | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 規劃中 |
@@ -137,6 +137,40 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
   `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
+
+## Group 4 — Bindings & Expressions
+
+**binding** 引入一個名字；reassign 更新一個既有名字：
+
+```text
+binding   ::= 'mut'? identifier ':=' expr
+reassign  ::= lvalue '=' expr
+expr-stmt ::= expr
+lvalue    ::= identifier ( '.' identifier | '[' expr ']' )*
+```
+
+`:=` 綁定一個**全新、immutable** 的名字；`mut x := …` 使其可重綁；`=` **重新指派**一個既有的 `mut` 綁定（或
+field／元素）。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。（在 `:=` 處解構
+pattern，如 `(q, r) := divmod(x, y)`，隨 group 6 的 pattern 一起到來。）
+
+expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
+
+| 優先序 | 運算子                              | 結合   |
+| ------ | ----------------------------------- | ------ |
+| 1 最高 | `.` `()` `[]`（field／call／index） | 左     |
+| 2      | `not` `~` 一元 `-` `-%`             | 右     |
+| 3      | `*` `/` `%` `*%` `<<` `>>` `&`      | 左     |
+| 4      | `+` `-` `+%` `-%` `\|` `^`          | 左     |
+| 5      | `==` `!=` `<` `>` `<=` `>=` `is`    | 非結合 |
+| 6      | `and`                               | 左     |
+| 7 最低 | `or`                                | 左     |
+
+`%` 後綴的 `+%` `-%` `*%` 是**回繞（wrapping）**算術運算子；`~` 是 bitwise 補數。bitwise `&` `<<` `>>` 與乘法級
+同層、`\|` `^` 與加法級同層——都比比較緊一級，所以 `a & b == c` 讀作 `(a & b) == c`，避開 C 的優先序陷阱。`is`
+以一個 spec 或 variant 名字測試 existential（完整形式見 group 6–7）。正負號是運算子，不屬 literal。
+
+null-safety 與 error 運算子（`?` `??` `?.` `!`）**不在**此處——歸 error group。`f"…"` 插值屬本 expression
+group，但以**獨立 commit** 落地。
 
 ## 編輯器工具（Editor tooling）
 

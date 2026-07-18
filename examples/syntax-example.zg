@@ -41,6 +41,10 @@ fn literals() {
     ch    := b'a'              # byte
     hi    := "line\n"          # str with an escape
     path  := r"C:\tmp\new"     # raw str — backslashes are literal
+
+    hash  := mask *% 31 +% count       # wrapping arithmetic
+    bits  := flags << 2 | 0b1          # bitwise
+    ok    := ratio >= 6.0 and count != 0
     nop
 }
 

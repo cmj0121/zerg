@@ -59,6 +59,12 @@ syntax match zergCharacter "'\(\\\([ntr0\\'\"]\|u{\x\+}\)\|[^'\\]\)'" contains=z
 syntax region zergRawString start=+r"+ end=+"+
 syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape
 
+" --- group 4: operators --------------------------------------------------------
+
+" Symbol operators (word operators not/and/or/is are keywords, group 2). Multi-
+" character forms are listed before the single-char class so they match whole.
+syntax match zergOperator "==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=]"
+
 " --- highlight links ------------------------------------------------------------
 
 highlight default link zergComment   Comment

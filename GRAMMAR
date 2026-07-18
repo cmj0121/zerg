@@ -40,7 +40,7 @@
 program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
-statement ::= nop                 # extended by later groups: binding, expr-stmt, ...
+statement ::= nop | binding | reassign | expr-stmt   # nop: g1; the rest: g4 (+later)
 nop       ::= 'nop'
 
 # ==================================================================================
@@ -122,9 +122,44 @@ str-char    ::= < any code point except '"', '\', NUL, or a line break >
 raw-char    ::= < any code point except '"' or a line break >   # no escapes
 
 # ==================================================================================
+# 4. Bindings & Expressions
+# ==================================================================================
+# A binding introduces a name: ':=' is immutable, 'mut … :=' rebindable, '=' reassigns
+# an existing lvalue. An expression on its own is a statement (a call, or a match run
+# for effect). Destructuring a pattern at ':=' arrives with patterns (group 6).
+
+binding      ::= 'mut'? identifier ':=' expr
+reassign     ::= lvalue '=' expr
+expr-stmt    ::= expr
+lvalue       ::= identifier ( '.' identifier | '[' expr ']' )*
+
+# Expression grammar from lowest precedence (or) to highest (postfix). Binary levels
+# are left-associative; comparison is non-associative (no a < b < c chaining).
+expr         ::= or-expr
+or-expr      ::= and-expr   ( 'or'  and-expr  )*
+and-expr     ::= cmp-expr   ( 'and' cmp-expr  )*
+cmp-expr     ::= add-expr   ( ( cmp-op add-expr ) | ( 'is' type-name ) )?
+add-expr     ::= mul-expr   ( add-op mul-expr )*
+mul-expr     ::= unary-expr ( mul-op unary-expr )*
+unary-expr   ::= unary-op unary-expr | postfix-expr
+postfix-expr ::= primary ( postfix )*
+primary      ::= literal | identifier | '(' expr ')'
+
+postfix      ::= '.' identifier        # field or method access
+               | '(' arg-list? ')'     # call (named arguments: group 5)
+               | '[' expr ']'          # index
+arg-list     ::= expr ( ',' expr )*
+
+cmp-op       ::= '==' | '!=' | '<' | '>' | '<=' | '>='
+add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
+mul-op       ::= '*' | '/' | '%' | '*%' | '<<' | '>>' | '&'
+unary-op     ::= 'not' | '~' | '-' | '-%'
+
+type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)
+
+# ==================================================================================
 # Roadmap — groups landed one per commit, core to minor
 # ==================================================================================
-#   4. Bindings/Expr  ':=', 'mut', operators + precedence
 #   5. Functions      'fn' decl, params, defaults, named args, closures, 'return'
 #   6. Control flow   'if', 'for ... in', 'match' + patterns
 #   7. Types          'struct', 'enum', tuple, 'type X = Y', 'spec'

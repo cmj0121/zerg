@@ -205,6 +205,30 @@ literal.
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` sits at the loosest level.
 
+### Composite literals
+
+Values are **built** in expression position — the mirror of the patterns (group 6) that take them apart:
+
+```text
+tuple-lit ::= '(' expr ',' expr ( ',' expr )* ')'    # (a, b) — 2+ elements
+list-lit  ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3]; empty []
+map-lit   ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
+          | '{' ':' '}'                               # empty map {:}
+map-entry ::= expr ':' expr
+```
+
+- **Tuple `(a, b)`** — a parenthesized 2+ list; a single `(expr)` is just grouping, so there is no 1-tuple
+  and no empty `()`. This is what lets `divmod` write `return (q, r)`.
+- **List `[1, 2, 3]`** (empty `[]`), ordered. In a context typed `[T; N]`, a list literal of the right
+  length **coerces** to that array.
+- **Map `{k: v}`** (empty `{:}`). The `:` is what tells a `{…}` **map** from a **block** — `k: v` is not a
+  statement, so a braced map is unambiguous, whereas a **bare-element** `{…}` is **always a block**.
+- **Set `set([1, 2, 3])`** (empty `set()`) — built through its constructor, **not** a brace literal, since
+  `{1}` would be indistinguishable from a one-statement block. `set`'s parameter defaults to `[]`, so
+  `set()` is the empty set.
+- Two rules fall out of `{` being the block opener: at a **statement's start** `{` is a block, and a **map
+  literal at the start of an `if`/`for`/`with`/`match` head** must be parenthesized.
+
 ### String interpolation & `print`
 
 An **f-string** is a primary expression — a string with `{ expr }` holes:
@@ -329,7 +353,13 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 - **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
   an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated **exactly
   like statements** (a line break, or `;` inline) — there is **no `,`** between them; the `,` inside a
-  payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
+  payload `(A, B)` is an ordinary list. A field may carry a **default** (`admin: bool = false`). Both may be
+  generic — `enum Either[X, Y] { … }`.
+- **Construction.** A type name is also its **constructor** — `User(id: 1, name: "x")` builds a struct (its
+  fields become parameters in declaration order, positional then named) and `Circle(3.0)` an enum variant; a
+  field's default lets that argument be omitted. The name **shares the value namespace** with functions, so
+  a type and a function cannot share a name (Zerg has no overloading). A struct's constructor is as visible
+  as the struct; enforce an invariant with a private struct and a factory `fn`.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
   full method). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through

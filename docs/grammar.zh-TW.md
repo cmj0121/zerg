@@ -193,6 +193,28 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的 `postfix`,
 `??` 則在最鬆的層級。
 
+### 複合字面量（Composite literals）
+
+值在運算式位置**建構**——正是 group 6 那些拆解它們的 pattern 的鏡像:
+
+```text
+tuple-lit ::= '(' expr ',' expr ( ',' expr )* ')'    # (a, b)——2+ 元素
+list-lit  ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3];空 []
+map-lit   ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
+          | '{' ':' '}'                               # 空 map {:}
+map-entry ::= expr ':' expr
+```
+
+- **tuple `(a, b)`**——括號內 2+ 元素;單一 `(expr)` 只是分組,故無 1-tuple、無空 `()`。這正是讓 `divmod` 能
+  `return (q, r)` 的關鍵。
+- **list `[1, 2, 3]`**(空 `[]`),有序。在型別為 `[T; N]` 的 context 下,長度吻合的 list 字面量會 **coerce** 成陣列。
+- **map `{k: v}`**(空 `{:}`)。`:` 正是分辨 `{…}` 是 **map** 還是 **block** 的依據——`k: v` 不是 statement,所以帶
+  冒號的大括號無歧義;而**裸元素**的 `{…}` **恆為 block**。
+- **set `set([1, 2, 3])`**(空 `set()`)——走建構子,**不用** brace 字面量,因為 `{1}` 會和單句 block 分不清。`set`
+  的參數預設為 `[]`,所以 `set()` 就是空 set。
+- 兩條規則源自「`{` 是 block 開場」:**statement 開頭**的 `{` 是 block;**`if`/`for`/`with`/`match` head 開頭的
+  map 字面量**要加括號。
+
 ### 字串插值與 `print`
 
 **f-string** 是一種 primary expression——帶 `{ expr }` 洞的字串：
@@ -305,7 +327,12 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。
 - **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
   `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
-  `,`**；payload `(A, B)` 內的 `,` 才是一般清單。兩者皆可泛型——`enum Either[X, Y] { … }`。
+  `,`**；payload `(A, B)` 內的 `,` 才是一般清單。field 可帶**預設值**（`admin: bool = false`）。兩者皆可泛型——
+  `enum Either[X, Y] { … }`。
+- **建構（Construction）。** 型別名同時是它的**建構子**——`User(id: 1, name: "x")` 建一個 struct（field 依宣告順序
+  成為參數，positional 先、named 後）、`Circle(3.0)` 建一個 enum variant;有預設的 field 可省略該引數。這個名字與
+  function **共用 value 命名空間**,所以型別和 function 不能同名（Zerg 無 overloading）。struct 的建構子與該 struct
+  同可見度;要強制不變量,就用私有 struct + 一個工廠 `fn`。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法**不宣告 receiver**——
   `this` 在方法內為隱式，透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self

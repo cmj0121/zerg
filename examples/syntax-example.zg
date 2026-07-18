@@ -18,8 +18,8 @@ type UserId = int
 struct User {
     id:    UserId
     name:  str
-    admin: bool
-    email: str?
+    admin: bool = false        # field defaults feed the constructor
+    email: str? = nil
 }
 
 # a sum type and a behavioral spec
@@ -88,6 +88,24 @@ fn literals() {
     bits  := flags << 2 | 0b1          # bitwise
     ok    := ratio >= 6.0 and count != 0
     nop
+}
+
+# composite construction (group 4/7): constructors, tuple, list, map, set
+fn composites() -> User {
+    u    := User(id: 1, name: "Sam", admin: true)   # struct constructor, named args
+    root := User(id: 2, name: "Root")               # admin/email take their defaults
+
+    (q, r) := divmod(21, 4)            # tuple destructure...
+    pair   := (q, r)                   # ...and tuple construction
+
+    nums  := [1, 2, 3]                 # list literal
+    ages  := {"sam": 30, "ada": 28}    # map literal
+    blank := {:}                       # empty map
+    uniq  := set([1, 1, 2, 3])         # set through its constructor
+    none  := set()                     # empty set
+
+    print f"{pair} {nums} {ages} {uniq} {root.name}"
+    return u
 }
 
 pub fn describe(u: User) -> str {

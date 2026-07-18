@@ -181,7 +181,8 @@ unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= recv-base ( postfix )*
 recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
 primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr
-               | chan-new | identifier | '(' expr ')'
+               | chan-new | list-lit | map-lit | tuple-lit
+               | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
                | '(' arg-list? ')'     # call (named arguments: group 5)
@@ -191,6 +192,20 @@ postfix      ::= '.' identifier        # field or method access
                | '?.' identifier       # optional chain (group 8): read .id when present, else nil
 arg-list     ::= arg ( ',' arg )*
 arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
+
+# Composite literals build values in expression position. A tuple is a parenthesized
+# 2+ list — a single '( expr )' is just grouping. A list is bracketed. A map is braced
+# with ':'-bearing entries: that ':' is exactly what distinguishes a '{ … }' map from a
+# block, so a bare-element '{ … }' is ALWAYS a block and a set therefore has NO brace
+# literal (build one with its constructor, 'set([ … ])'). Two parse rules follow: at a
+# statement's start '{' is a block, and a map literal at the start of an if/for/with/
+# match head must be parenthesized. (struct and enum values are built by calling a type
+# or variant name — see the constructor note in group 7.)
+tuple-lit    ::= '(' expr ',' expr ( ',' expr )* ')'    # 2+ elements; no 1-tuple, no '()'
+list-lit     ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3]; empty '[]'
+map-lit      ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
+             | '{' ':' '}'                               # empty map '{:}'
+map-entry    ::= expr ':' expr
 
 cmp-op       ::= '==' | '!=' | '<' | '>' | '<=' | '>='
 add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
@@ -322,6 +337,15 @@ type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typed
 spec-decl    ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl    ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
 
+# CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
+# the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
+# fields become parameters in declaration order — positional then named, group 5) and
+# 'Circle(3.0)' builds an enum variant. A field's optional default (below) lets its
+# argument be omitted. The name is SHARED with functions: a type and a function cannot
+# share a name (a duplicate is an error — Zerg has no overloading). A struct's
+# constructor is as visible as the struct ('pub struct' → 'pub' constructor); enforce an
+# invariant by keeping the struct private and exposing a factory 'fn'.
+
 # Decorators are a fixed, compiler-owned set of directives (users cannot define new
 # ones — Zerg has no macros). A decorator prefix leads any declaration (the
 # 'decorator*' on 'decorated-decl', group 1) and binds to it. 'derive' asks the
@@ -336,7 +360,7 @@ generics     ::= '[' identifier ( ',' identifier )* ']'
 # break, realized as ';' by ASI). There is NO ',' between them; the ',' inside a
 # variant payload '(A, B)' is an ordinary argument list.
 field-list   ::= stmt-sep* ( field ( stmt-sep+ field )* stmt-sep* )?
-field        ::= identifier ':' type
+field        ::= identifier ':' type ( '=' expr )?     # optional default feeds the constructor
 variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
 variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
 spec-member  ::= fn-sig | fn-decl                      # required (no body) or provided

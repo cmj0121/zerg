@@ -338,6 +338,9 @@ pattern-list ::= pattern ( ',' pattern )*
 # implicit inside a method (see param, group 5); the self type is 'This'.
 
 # --- type expressions ---
+# A type-name is just an identifier, so the set of built-in NUMERIC types — 'int',
+# 'uint', 'float', and any fixed-width members ('i32', 'u8', 'f64', …) — is a STDLIB
+# decision, not surface grammar: adding one adds no production.
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
 base-type    ::= type-name type-args? ( '.' identifier )?   # int, list[int]; 'I.Item' PROJECTS
                | tuple-type | array-type | chan-type | fn-type   # an associated type (group 7)
@@ -353,11 +356,16 @@ struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
 spec-decl    ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
-impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'
-             # 'impl[T] Spec for list[T]' — the type params belong to the impl (after
-             # 'impl'), so a T introduced here is usable in the 'for' target.
-impl-item    ::= fn-decl | assoc-bind        # a method, or a binding for an associated type
-assoc-bind   ::= 'type' identifier '=' type  # 'type Item = int' satisfies the spec's assoc type
+impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # a spec impl
+             | 'impl' generics? type '{' impl-item* '}'                              # inherent
+             # 'impl[T] Spec for list[T]' — the impl's type params sit after 'impl', so a
+             # T introduced here is usable in the target. The 'for'-less form adds
+             # INHERENT methods to a type (no spec): 'impl User { … }' — a named
+             # constructor 'User.from_json(…)' (an associated fn, no 'this') or a private
+             # method 'u.recompute()' (uses 'this'). Every method and associated fn on a
+             # type shares one namespace, spec or inherent alike; a duplicate is an error.
+impl-item    ::= fn-decl | assoc-bind        # a method / associated fn, or an assoc-type binding
+assoc-bind   ::= 'type' identifier '=' type  # 'type Item = int' — satisfies a spec's assoc type
 
 # CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
 # the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its

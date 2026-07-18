@@ -23,6 +23,12 @@ struct User {
     email: str? = nil
 }
 
+# inherent impl: methods/associated functions not tied to any spec (group 7)
+impl User {
+    fn guest() -> User { return User(id: 0, name: "guest") }   # associated fn — User.guest()
+    fn is_admin() -> bool { return this.admin }                # method — u.is_admin()
+}
+
 # a sum type and a behavioral spec
 enum Shape {
     Circle(float)

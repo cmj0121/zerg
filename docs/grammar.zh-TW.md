@@ -327,8 +327,9 @@ struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
-impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'
-impl-item   ::= fn-decl | assoc-bind          # 方法，或 associated type 的綁定
+impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
+              | 'impl' generics? type '{' impl-item* '}'                             # inherent
+impl-item   ::= fn-decl | assoc-bind          # 方法／關聯函式，或 associated type 的綁定
 assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' 滿足 spec 的 assoc type
 spec-member ::= fn-sig | fn-decl | assoc-type
 assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item'（可加 bound）
@@ -343,7 +344,8 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 - **Type 表達式。** 一個**名字**加選用**型別引數**（`int`、`User`、`list[int]`、`Either[A, B]`）；一個 **tuple
   type** `(A, B)`；一個**陣列** `[T; N]`（`;` 的另一用途）；一個**通道** `chan[T]`，帶 Go 式方向——`<-chan[T]`
   為 receive-only（receiver）、`chan[T]<-` 為 send-only（sender）；或一個**函式型別** `fn(P…) -> R`
-  （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。
+  （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。型別名只是 identifier,所以內建**數值**型別集合
+  （`int`、`uint`、`float`,以及任何固定寬度 `i32`/`u8`/`f64`/…）是 **stdlib** 的決定,非文法。
 - **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
   `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
   `,`**；payload `(A, B)` 內的 `,` 才是一般清單。field 可帶**預設值**（`admin: bool = false`）。兩者皆可泛型——
@@ -365,6 +367,9 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   （`type Item`——由 `impl` 填入、函數性決定、每個 impl 一個）。方法**不宣告 receiver**——`this` 在方法內為隱式,
   透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self 型別是 **`This`**。
   `impl … for …` 由手寫為某型別提供 spec 的方法(及其 `type Item = …` 綁定)。
+- **Inherent `impl`。** 無 `for` 的 `impl User { … }` 加入**不綁任何 spec** 的方法——named constructor
+  `User.from_json(…)`（關聯函式,不用 `this`,以 `Type.f(…)` 呼叫）或私有方法 `u.recompute()`（用 `this`,以
+  `x.f(…)` 呼叫）。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
 - **Associated type。** 它讓**單輸出**的 protocol 良定義:`for x in it` 只有一種元素型別,因為 `Iterator` 的 `Item`
   由 impl 固定,而非像 generic `Iterable[T]` 那樣由使用端選。用型別位置的**投影**引用——`I.Item`
   （`fn collect[I: Iterator](it: I) -> list[I.Item]`）。impl 以 `type Item = int` 提供它。（associated **const**

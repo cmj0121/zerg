@@ -357,8 +357,9 @@ struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
-impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'
-impl-item   ::= fn-decl | assoc-bind          # a method, or a binding for an associated type
+impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
+              | 'impl' generics? type '{' impl-item* '}'                             # inherent
+impl-item   ::= fn-decl | assoc-bind          # a method / associated fn, or an assoc-type binding
 assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' fills a spec's assoc type
 spec-member ::= fn-sig | fn-decl | assoc-type
 assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item' (optionally bounded)
@@ -374,7 +375,8 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   `Either[A, B]`); a **tuple type** `(A, B)`; an **array** `[T; N]` (the other use of `;`); a **channel**
   `chan[T]`, with Go-style direction — `<-chan[T]` is receive-only (a receiver) and `chan[T]<-` is
   send-only (a sender); or a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an
-  **optional** — `str?`.
+  **optional** — `str?`. A type name is just an identifier, so the set of built-in **numeric** types
+  (`int`, `uint`, `float`, and any fixed-width `i32`/`u8`/`f64`/…) is a **stdlib** decision, not grammar.
 - **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
   an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated **exactly
   like statements** (a line break, or `;` inline) — there is **no `,`** between them; the `,` inside a
@@ -403,6 +405,10 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self
   type is **`This`**. `impl … for …` supplies a spec's methods (and its `type Item = …` bindings) for a type
   by hand.
+- **Inherent `impl`.** A `for`-less `impl User { … }` adds methods **not tied to any spec** — a named
+  constructor `User.from_json(…)` (an associated fn, no `this`, called `Type.f(…)`) or a private method
+  `u.recompute()` (uses `this`, called `x.f(…)`). Every method and associated fn on a type shares one
+  namespace, inherent or from a spec alike; a duplicate is an error.
 - **Associated types.** An associated type makes a **single-output** protocol well defined: `for x in it`
   has one element type because `Iterator`'s `Item` is fixed per impl, not chosen per use as a generic
   `Iterable[T]` would allow. Reference it by **projection** in type position — `I.Item`

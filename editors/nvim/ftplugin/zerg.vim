@@ -14,4 +14,8 @@ setlocal expandtab
 setlocal shiftwidth=4
 setlocal softtabstop=4
 
-let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< shiftwidth< softtabstop<'
+" Brace folding from the syntax file, but start fully unfolded (fold on demand).
+setlocal foldmethod=syntax
+setlocal foldlevel=99
+
+let b:undo_ftplugin = 'setlocal commentstring< comments< expandtab< shiftwidth< softtabstop< foldmethod< foldlevel<'

@@ -58,6 +58,7 @@ fn greet(name: str, greeting: str = "Hello", loud: bool = false) -> str {
 }
 
 fn demo() {
+    # TODO: cover the error operators once that group lands
     print greet("Sam", loud: true)      # named argument skips `greeting`
     double := fn(x: int) -> int { return x *% 2 }
     print f"{double(21)}"

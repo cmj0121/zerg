@@ -2,7 +2,9 @@
 "
 " Highlighting grows one grammar group at a time, tracking GRAMMAR. This file
 " covers the core groups 1-7: nop, lexical (comments/identifiers/keywords),
-" literals, operators, functions, control flow, and types.
+" literals, operators, functions, control flow, and types — plus cross-cutting
+" polish: call highlighting, TODO markers, invalid-escape errors, brace folding,
+" and multi-line sync.
 "
 " Maintainer: Zerg project
 " Filenames:  *.zg
@@ -13,14 +15,21 @@ endif
 
 " --- group 1 & 2: comments -----------------------------------------------------
 
-" Line comment: '#' to end of line (Zerg has no block comments).
-syntax match zergComment "#.*$" contains=@Spell
+" Line comment: '#' to end of line (Zerg has no block comments). TODO-style
+" markers inside a comment are highlighted.
+syntax keyword zergTodo contained TODO FIXME XXX HACK BUG NOTE
+syntax match zergComment "#.*$" contains=zergTodo,@Spell
 
 " --- group 2: reserved keywords ------------------------------------------------
 
 " Statement keywords (control flow, effects, items introduced by a statement).
-syntax keyword zergStatement nop return if else for in break continue match
+syntax keyword zergStatement nop return if else in break continue match
 syntax keyword zergStatement spawn select defer del raise guard import derive impl print
+
+" `for` is a match (not a keyword) so the `impl … for` override below can win.
+syntax match zergStatement "\<for\>"
+" In `impl X for Y`, `for` is a plain keyword, not the loop keyword.
+syntax match zergKeyword "\%(\<impl\>.\+\)\@<=\<for\>"
 
 " Declaration keywords.
 syntax keyword zergKeyword mut pub extern package init
@@ -53,20 +62,22 @@ syntax match zergNumber "\<0b[01]\(_\?[01]\)*\>"
 syntax match zergFloat "\<\d\(_\?\d\)*\.\d\(_\?\d\)*\([eE][-+]\?\d\(_\?\d\)*\)\?\>"
 syntax match zergFloat "\<\d\(_\?\d\)*[eE][-+]\?\d\(_\?\d\)*\>"
 
-" Escape sequences, shared by rune/byte/str.
+" Escape sequences (shared by rune/byte/str). An invalid '\x' is flagged as an
+" error; the valid set is matched afterwards, so it wins where it applies.
+syntax match zergEscapeError "\\." contained
 syntax match zergEscape "\\\([ntr0\\'\"]\|u{\x\+}\|x\x\x\)" contained
 
 " byte b'x' (leftmost, so it wins over rune at the quote) and rune 'x'.
-syntax match zergCharacter "b'\(\\\([ntr0\\']\|x\x\x\)\|[^'\\]\)'" contains=zergEscape
-syntax match zergCharacter "'\(\\\([ntr0\\'\"]\|u{\x\+}\)\|[^'\\]\)'" contains=zergEscape
+syntax match zergCharacter "b'\(\\\([ntr0\\']\|x\x\x\)\|[^'\\]\)'" contains=zergEscape,zergEscapeError
+syntax match zergCharacter "'\(\\\([ntr0\\'\"]\|u{\x\+}\)\|[^'\\]\)'" contains=zergEscape,zergEscapeError
 
 " raw string r"..." (no escapes) and str "..." (with escapes).
 syntax region zergRawString start=+r"+ end=+"+
-syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape
+syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape,zergEscapeError
 
 " f-string f"...{expr}...": text is String, the {expr} holes are highlighted.
 syntax region zergFString matchgroup=zergString start=+f"+ skip=+\\"+ end=+"+
-      \ contains=zergInterp,zergEscape
+      \ contains=zergInterp,zergEscape,zergEscapeError
 syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
       \ contains=zergNumber,zergFloat,zergString,zergRawString,zergCharacter,
       \zergOperator,zergBoolean,zergConstant,zergType,zergKeyword,zergStatement
@@ -87,6 +98,11 @@ syntax match zergDeclName "\h\w*" contained
 " name. Excludes the `:=` binding operator (colon followed by '=').
 syntax match zergDeclName "\<\h\w*\ze\s*:[^=]"
 
+" A function / method call `name(` — lowercase-initial (the highlighter treats a
+" Capitalized name as a type by convention, so a constructor/variant like `Circle(`
+" stays a type, matched below).
+syntax match zergCall "\<\%(\l\|_\)\w*\ze("
+
 " --- group 6: type & variant names, wildcard -----------------------------------
 
 " A highlighter can't run the compiler's name resolution, so it keys on case: by
@@ -96,6 +112,15 @@ syntax match zergType "\<\u\w*\>"
 
 " The match wildcard `_`, highlighted as special.
 syntax match zergWildcard "\<_\>"
+
+" --- folding & sync ------------------------------------------------------------
+
+" Fold on braces (enable with `setlocal foldmethod=syntax`; the ftplugin does).
+syntax region zergFold start="{" end="}" transparent fold
+
+" Zerg has no multi-line tokens, but resync a little above the screen top so
+" brace folds and any long line stay correct when scrolling.
+syntax sync minlines=50
 
 " --- highlight links ------------------------------------------------------------
 
@@ -114,8 +139,11 @@ highlight default link zergRawString String
 highlight default link zergFString   String
 highlight default link zergDelimiter Delimiter
 highlight default link zergEscape    SpecialChar
-highlight default link zergInterp    Identifier
-highlight default link zergDeclName  Function
-highlight default link zergWildcard  Special
+highlight default link zergInterp     Identifier
+highlight default link zergDeclName   Function
+highlight default link zergCall       Function
+highlight default link zergWildcard   Special
+highlight default link zergTodo       Todo
+highlight default link zergEscapeError Error
 
 let b:current_syntax = 'zerg'

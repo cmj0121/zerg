@@ -275,8 +275,9 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
   `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
   `,`**；payload `(A, B)` 內的 `,` 才是一般清單。兩者皆可泛型——`enum Either[X, Y] { … }`。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
-- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法的 receiver 是裸參數
-  **`this`**；self 型別是 **`This`**。`impl … for …` 為某型別提供 spec 的方法，`derive …` 請 compiler 代寫。
+- **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法**不宣告 receiver**——
+  `this` 在方法內為隱式，透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self
+  型別是 **`This`**。`impl … for …` 為某型別提供 spec 的方法，`derive …` 請 compiler 代寫。
 
 ## 編輯器工具（Editor tooling）
 

@@ -42,7 +42,7 @@ tier.
 ```text
 spec Summable {
     fn zero() -> This                       # required
-    fn add(this, other: This) -> This       # required
+    fn add(other: This) -> This             # required
 
     fn sum(items: list[This]) -> This {     # provided — reads only methods, no fields, no match
         mut acc := This.zero()
@@ -120,7 +120,7 @@ one should hand-write per type, yet one that needs neither reflection nor a macr
 ```text
 # stdlib specs — behavioral interfaces, field-blind like every spec
 spec Encode {
-    fn encode(this, mut out: Sink)
+    fn encode(mut out: Sink)
 }
 spec Decode {
     fn decode(mut src: Source) -> Result[This]     # This = the reconstructed value
@@ -141,7 +141,7 @@ walk, each field delegating to **its own** `Encode`:
 
 ```text
 impl Encode for User {                            # generated, not written
-    fn encode(this, mut out: Sink) {
+    fn encode(mut out: Sink) {
         out.begin(4)
         out.field("id")
         this.id.encode(out)
@@ -172,7 +172,7 @@ implementation, still no macro:
 
 ```text
 impl Encode for User {                            # replaces the derived one
-    fn encode(this, mut out: Sink) {
+    fn encode(mut out: Sink) {
         out.field("uid")
         this.id.encode(out)       # custom key
         out.field("name")

@@ -38,7 +38,7 @@ provided method 是**寫在 `this` 上其他 method 之上的 default body**，�
 ```text
 spec Summable {
     fn zero() -> This                       # required
-    fn add(this, other: This) -> This       # required
+    fn add(other: This) -> This             # required
 
     fn sum(items: list[This]) -> This {     # provided——只讀 method，不讀 field，也沒有 match
         mut acc := This.zero()
@@ -112,7 +112,7 @@ serialization 正是 structural derive 存在的目的：一種機械式、逐�
 ```text
 # stdlib spec——behavioral 介面，與每個 spec 一樣 field-blind
 spec Encode {
-    fn encode(this, mut out: Sink)
+    fn encode(mut out: Sink)
 }
 spec Decode {
     fn decode(mut src: Source) -> Result[This]     # This = 重建出的值
@@ -133,7 +133,7 @@ compiler 生成的內容——概念示意，你永遠不會寫、也看不到�
 
 ```text
 impl Encode for User {                            # 生成，非手寫
-    fn encode(this, mut out: Sink) {
+    fn encode(mut out: Sink) {
         out.begin(4)
         out.field("id")
         this.id.encode(out)
@@ -163,7 +163,7 @@ derive Encode for Shape               # 生成：寫出 variant tag，再逐個 
 
 ```text
 impl Encode for User {                            # 取代 derive 出的那份
-    fn encode(this, mut out: Sink) {
+    fn encode(mut out: Sink) {
         out.field("uid")
         this.id.encode(out)       # 自訂 key
         out.field("name")

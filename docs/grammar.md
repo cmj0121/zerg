@@ -294,8 +294,10 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
   payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
-  full method). A method's receiver is the bare parameter **`this`**; the self type is **`This`**. `impl …
-for …` supplies a spec's methods for a type, and `derive …` asks the compiler to write them.
+  full method). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
+  the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self
+  type is **`This`**. `impl … for …` supplies a spec's methods for a type, and `derive …` asks the compiler
+  to write them.
 
 ## Editor tooling
 

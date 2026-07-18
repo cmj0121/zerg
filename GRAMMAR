@@ -193,10 +193,14 @@ ret-type     ::= '->' type
 return       ::= 'return' expr?
 
 param-list   ::= param ( ',' param )*
-param        ::= 'mut'? 'this'                                   # method receiver (g7)
-               | 'mut'? identifier ':' type ( '=' expr )?        # optional default
+param        ::= 'mut'? identifier ':' type ( '=' expr )?        # optional default
 param-type-list ::= param-type ( ',' param-type )*
 param-type   ::= 'mut'? type
+
+# 'this' is NOT a parameter. Inside a method (a 'fn' declared in an 'impl' or a
+# 'spec') 'this' is the implicit receiver, always reachable through the instance
+# the method is called on. A 'fn' whose body uses 'this' with no instance bound to
+# it is a compile error (a free function has no receiver). The self type is 'This'.
 
 # A call's named arguments are the 'arg' form above (group 4): positional arguments
 # come first, then any argument may be given by name; once one is named, the rest
@@ -251,8 +255,9 @@ pattern-list ::= pattern ( ',' pattern )*
 # ==================================================================================
 # The type expressions referenced since group 5, and the declarations that introduce
 # types and behavior: 'struct' (product), 'enum' (sum), 'type X = Y' (strong typedef),
-# 'spec' (behavioral interface), 'impl', and 'derive'. A method's receiver is the
-# bare parameter 'this' (see param, group 5); the self type is 'This'.
+# 'spec' (behavioral interface), 'impl', and 'derive'. A method takes no explicit
+# receiver — 'this' is implicit inside a method (see param, group 5); the self type
+# is 'This'.
 
 # --- type expressions ---
 type         ::= base-type '?'?                        # a trailing '?' makes it optional

@@ -24,7 +24,7 @@ enum Shape {
 
 spec Summable {
     fn zero() -> This
-    fn add(this, other: This) -> This
+    fn add(other: This) -> This        # `this` is implicit — not a parameter
 }
 
 # generics, derive, and impl (group 7)
@@ -37,7 +37,7 @@ derive Encode, Decode for User
 
 impl Summable for int {
     fn zero() -> This { return 0 }
-    fn add(this, other: This) -> This { return this + other }
+    fn add(other: This) -> This { return this + other }   # this used, not declared
 }
 
 # the empty-statement placeholder

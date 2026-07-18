@@ -431,15 +431,18 @@ send-arm    ::= expr '<-' expr '->' expr
 源碼巢狀為 **program › package › module（一個目錄）› file**。
 
 ```text
-import-stmt ::= 'pub'? 'import' import-path
+import-stmt ::= 'pub'? 'import' import-path ( 'as' identifier )?
 import-path ::= identifier ( '/' identifier )*
 init-decl   ::= 'init' '(' ')' block
 ```
 
 - **`pub`**（已是每個宣告的前綴）是唯一的可見性標記：普通宣告是 **module-private**,`pub` 對**同 package 其餘**
   公開,而 package 的公開 API 是其**根 module** 的 `pub` 表面。
-- **`import path`** 指名另一個 module 或 package。**`pub import`** 把它**re-export** 到本 module 的表面——根 module
-  用來組出 package 公開 API 的唯一機制。
+- **`import path`** 綁定一個 **namespace**——路徑的**末段**（`import util/text` 綁 `text`）,以 `.` 存取:
+  `text.split(…)`。**`as`** 改名（`import a/text as at`）,兩個末段同名的 import 便靠它並存;與本地名字衝突即錯,
+  用 `as` 解。**沒有 selective（`from … import`）或 glob import**——要 unqualified 使用某成員,就本地綁定
+  （`split := text.split`）,因為函式是值。**`pub import`** 把該 namespace **re-export** 到本 module 表面——根
+  module 用來組出 package 公開 API 的唯一機制。
 - **`init()`** 是 module 的**惰性、恰好一次**初始化,首次使用時依相依順序執行(無可變全域——狀態靠值或 channel 傳遞)。
 - **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
   **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。

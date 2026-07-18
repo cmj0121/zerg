@@ -473,7 +473,14 @@ send-arm     ::= expr '<-' expr '->' expr
 # — 'main' is an ordinary function, not reserved. 'package' is the distribution /
 # versioning unit: a directory tree selected by the build tool, with NO in-source
 # 'package' declaration.
-import-stmt  ::= 'pub'? 'import' import-path
+#
+# An 'import' binds a NAMESPACE: the path's LAST segment ('import util/text' binds
+# 'text'), reached with '.' — 'text.split(…)'. 'as' renames it ('import a/text as at'),
+# which is how two imports that share a last segment coexist. The bound name lives in
+# the one value namespace (group 7), so colliding with a local name is an error — rename
+# with 'as'. There is NO selective ('from … import …') or glob import: to use a member
+# unqualified, bind it locally — 'split := text.split' — since a function is a value.
+import-stmt  ::= 'pub'? 'import' import-path ( 'as' identifier )?
 import-path  ::= identifier ( '/' identifier )*      # a module (directory) path
 init-decl    ::= 'init' '(' ')' block                # lazy, exactly-once module setup
 

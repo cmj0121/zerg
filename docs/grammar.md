@@ -478,7 +478,7 @@ send-arm    ::= expr '<-' expr '->' expr
 Source nests as **program › package › module (a directory) › file**.
 
 ```text
-import-stmt ::= 'pub'? 'import' import-path
+import-stmt ::= 'pub'? 'import' import-path ( 'as' identifier )?
 import-path ::= identifier ( '/' identifier )*
 init-decl   ::= 'init' '(' ')' block
 ```
@@ -486,8 +486,12 @@ init-decl   ::= 'init' '(' ')' block
 - **`pub`** (already a prefix on every declaration) is the one visibility marker: a plain declaration is
   **module-private**, `pub` exposes it to the **rest of the package**, and a package's public API is the
   `pub` surface of its **root module**.
-- **`import path`** names another module or package. A **`pub import`** **re-exports** it onto this module's
-  surface — the single mechanism by which a root module builds a package's public API.
+- **`import path`** binds a **namespace** — the path's **last segment** (`import util/text` binds `text`),
+  reached with `.`: `text.split(…)`. **`as`** renames it (`import a/text as at`), which is how two imports
+  that share a last segment coexist; a collision with a local name is an error, resolved by `as`. There is
+  **no selective (`from … import`) or glob import** — to use a member unqualified, bind it locally
+  (`split := text.split`), since a function is a value. A **`pub import`** **re-exports** the namespace onto
+  this module's surface — the single mechanism by which a root module builds a package's public API.
 - **`init()`** is a module's **lazy, exactly-once** setup, run on first use, in dependency order (there is
   no mutable global — state travels by value or channel).
 - A **program** is a build rooted at an entry file that defines a top-level `fn main(…) -> Result[nil]`;

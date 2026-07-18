@@ -5,6 +5,7 @@
 
 import io
 pub import util/text        # re-export a module onto this package's public surface
+import sys/env as env        # bind the last segment, renamed with `as`
 
 init() {                    # lazy, exactly-once module setup (group 10)
     nop

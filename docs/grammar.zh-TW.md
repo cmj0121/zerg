@@ -34,7 +34,7 @@ notation 很小：
 | 2   | Lexical         | comment、identifier、keyword、newline、block                    | 已落地 |
 | 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 已落地 |
 | 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 已落地 |
-| 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 規劃中 |
+| 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 已落地 |
 | 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 規劃中 |
 | 7   | Types           | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 規劃中 |
 
@@ -186,6 +186,29 @@ format engine。純 `"…"` 是 literal（大括號是普通字元）；只有 f
 大括號。像 `f"{x:>.2f}"` 這種 format specifier **deferred** 到獨立的 per-type format protocol。**`print`**
 把一個值的 `display()` 加換行寫到 stdout——保留字、恆在 scope、best-effort（永不 raise），所以
 `print f"hello {name}"` 是最小程式。
+
+## Group 5 — Functions
+
+function 是 first-class value——具名宣告、匿名 expression，與一個型別：
+
+```text
+fn-decl    ::= 'pub'? 'fn' identifier '(' param-list? ')' ret-type? block
+fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block
+fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
+ret-type   ::= '->' type
+return     ::= 'return' expr?
+param      ::= 'mut'? identifier ':' type ( '=' expr )?
+param-type ::= 'mut'? type
+```
+
+- **宣告 vs expression。** `fn name(…) -> R { … }` 綁定一個名字；**匿名** `fn(…) -> R { … }` 是 expression
+  （一個 closure）。`pub` 匯出宣告的名字，且不屬型別。
+- **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。
+- **參數。** 參數是 `name: type`，可加 `mut`（by-ref、in-place——屬型別的一部分），亦可帶**預設值** `= expr`。
+  call 端的 **named argument** 是 `name: value`（group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，
+  一旦具名其餘也須具名——這正是能跳過有預設值參數的方式。
+- **型別。** function 的型別是 `fn(P…) -> R`——參數（含 `mut`）與結果，別無其他；預設值與參數名字存在宣告裡，不在
+  型別中。
 
 ## 編輯器工具（Editor tooling）
 

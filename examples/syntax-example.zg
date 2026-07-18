@@ -30,6 +30,17 @@ spec Summable {
 # the empty-statement placeholder
 fn noop() { nop }
 
+# defaults, named arguments, and a closure (group 5)
+fn greet(name: str, greeting: str = "Hello", loud: bool = false) -> str {
+    return f"{greeting}, {name}"
+}
+
+fn demo() {
+    print greet("Sam", loud: true)      # named argument skips `greeting`
+    double := fn(x: int) -> int { return x *% 2 }
+    print f"{double(21)}"
+}
+
 # literals of every kind (group 3)
 fn literals() {
     count := 1_000_000         # int, with digit grouping

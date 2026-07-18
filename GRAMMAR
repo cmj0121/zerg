@@ -40,7 +40,7 @@
 program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
-statement ::= nop | binding | reassign | print | expr-stmt   # nop: g1; rest: g4+
+statement ::= nop | binding | reassign | print | return | fn-decl | expr-stmt
 nop       ::= 'nop'
 
 # ==================================================================================
@@ -143,12 +143,13 @@ add-expr     ::= mul-expr   ( add-op mul-expr )*
 mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= primary ( postfix )*
-primary      ::= literal | fstr-lit | identifier | '(' expr ')'
+primary      ::= literal | fstr-lit | fn-expr | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
                | '(' arg-list? ')'     # call (named arguments: group 5)
                | '[' expr ']'          # index
-arg-list     ::= expr ( ',' expr )*
+arg-list     ::= arg ( ',' arg )*
+arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
 
 cmp-op       ::= '==' | '!=' | '<' | '>' | '<=' | '>='
 add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
@@ -156,6 +157,31 @@ mul-op       ::= '*' | '/' | '%' | '*%' | '<<' | '>>' | '&'
 unary-op     ::= 'not' | '~' | '-' | '-%'
 
 type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)
+
+# ==================================================================================
+# 5. Functions
+# ==================================================================================
+# A function is a first-class value. A declaration binds a name (top level, or a
+# module item); an anonymous function is an expression — a closure over immutable
+# captures. 'return' exits, optionally with a value; an absent '-> type' means the
+# function returns nil. A parameter may be 'mut' (by-ref, in-place) and may carry a
+# default; a call fills parameters positionally, then by name. ('type' is defined in
+# group 7 (Types); it is referenced here for signatures.)
+
+fn-decl      ::= 'pub'? 'fn' identifier '(' param-list? ')' ret-type? block
+fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure
+fn-type      ::= 'fn' '(' param-type-list? ')' ret-type?         # a function's type
+ret-type     ::= '->' type
+return       ::= 'return' expr?
+
+param-list   ::= param ( ',' param )*
+param        ::= 'mut'? identifier ':' type ( '=' expr )?        # optional default
+param-type-list ::= param-type ( ',' param-type )*
+param-type   ::= 'mut'? type
+
+# A call's named arguments are the 'arg' form above (group 4): positional arguments
+# come first, then any argument may be given by name; once one is named, the rest
+# must be named too. A default lets a named argument be omitted.
 
 # ----------------------------------------------------------------------------------
 # String interpolation & print (the formatting / output surface)
@@ -172,7 +198,6 @@ print        ::= 'print' expr
 # ==================================================================================
 # Roadmap — groups landed one per commit, core to minor
 # ==================================================================================
-#   5. Functions      'fn' decl, params, defaults, named args, closures, 'return'
 #   6. Control flow   'if', 'for ... in', 'match' + patterns
 #   7. Types          'struct', 'enum', tuple, 'type X = Y', 'spec'
 #   -- minor --       error operators (? ?? ?. ! raise guard); concurrency

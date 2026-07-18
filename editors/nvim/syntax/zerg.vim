@@ -22,8 +22,10 @@ syntax match zergComment "#.*$" contains=@Spell
 syntax keyword zergStatement nop return if else for in break continue match
 syntax keyword zergStatement spawn select defer del raise guard import derive impl print
 
-" Declaration keywords.
-syntax keyword zergKeyword fn mut pub struct enum spec type extern package init
+" Declaration keywords. `fn` carries a nextgroup so the declaration name (if any)
+" highlights as a function; anonymous `fn(...)` has no name and stays plain.
+syntax keyword zergKeyword mut pub struct enum spec type extern package init
+syntax keyword zergKeyword fn skipwhite nextgroup=zergFunction
 
 " Keyword operators (the word-form logical/type operators).
 syntax keyword zergOperator not and or is
@@ -70,7 +72,13 @@ syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
 
 " Symbol operators (word operators not/and/or/is are keywords, group 2). Multi-
 " character forms are listed before the single-char class so they match whole.
-syntax match zergOperator "==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=]"
+syntax match zergOperator "->\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=]"
+
+" --- group 5: function declaration name ----------------------------------------
+
+" The name after `fn` (see the fn keyword's nextgroup); contained, so a bare
+" identifier elsewhere is not mistaken for a function name.
+syntax match zergFunction "\h\w*" contained
 
 " --- highlight links ------------------------------------------------------------
 
@@ -89,5 +97,6 @@ highlight default link zergRawString String
 highlight default link zergFString   String
 highlight default link zergDelimiter Delimiter
 highlight default link zergEscape    SpecialChar
+highlight default link zergFunction  Function
 
 let b:current_syntax = 'zerg'

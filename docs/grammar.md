@@ -34,7 +34,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed  |
 | 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed  |
 | 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | landed  |
-| 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | planned |
+| 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | landed  |
 | 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | planned |
 | 7   | Types           | `struct`, `enum`, tuple, `type X = Y`, `spec`                  | planned |
 
@@ -196,6 +196,31 @@ ordinary); only an f-string reads `{…}`, and `{{` / `}}` write literal braces.
 `f"{x:>.2f}"` are **deferred** to a separate per-type format protocol. **`print`** writes a value's
 `display()` and a newline to stdout — a reserved keyword, always in scope, best-effort (it never raises),
 so `print f"hello {name}"` is the smallest program.
+
+## Group 5 — Functions
+
+A function is a first-class value — a named declaration, an anonymous expression, and a type:
+
+```text
+fn-decl    ::= 'pub'? 'fn' identifier '(' param-list? ')' ret-type? block
+fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block
+fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
+ret-type   ::= '->' type
+return     ::= 'return' expr?
+param      ::= 'mut'? identifier ':' type ( '=' expr )?
+param-type ::= 'mut'? type
+```
+
+- **Declaration vs expression.** `fn name(…) -> R { … }` binds a name; an **anonymous** `fn(…) -> R { … }`
+  is an expression (a closure). `pub` exports a declaration's name and is not part of the type.
+- **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
+  function returns `nil`.
+- **Parameters.** A parameter is `name: type`, optionally `mut` (by-ref, in-place — part of the type) and
+  optionally with a **default** `= expr`. A **named argument** at the call is `name: value` (the `arg` form
+  from group 4): positional arguments come first, then any may be named, and once one is named the rest
+  must be too — which is what lets a defaulted parameter be skipped.
+- **Type.** A function's type is `fn(P…) -> R` — parameters (with `mut`) and result, nothing else; defaults
+  and parameter names live in the declaration, not the type.
 
 ## Editor tooling
 

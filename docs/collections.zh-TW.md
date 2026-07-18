@@ -1,0 +1,145 @@
+# Zerg Collection
+
+Zerg 的內建容器——**`list`**、**`map`**、**`set`**，外加定長的 **`[T; N]`** 陣列——每個角色只一個 canonical
+型別，不弄變體動物園。它們就是普通的 **scope-owned 值**，建立在 [語言參考](language.zh-TW.md) 之上。也有
+[English](collections.md) 版本。
+
+| 型別        | 角色                 | 元素／key 需求       | iteration 順序 |
+| ----------- | -------------------- | -------------------- | -------------- |
+| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         |
+| `map[K, V]` | 一張**關聯**表       | `K: Hash`            | **插入**序     |
+| `set[T]`    | 一個**唯一成員**集合 | `T: Hash`            | **插入**序     |
+| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         |
+
+更豐富的形狀都是組合出來的，不是新的內建型別。`list[byte]` 是原始位元組序列（可索引、可含 NUL）；`str` 還是獨立的
+immutable primitive（見下）。
+
+## 是值，不是 reference
+
+collection 是 **scope-owned 值**：**copy-by-value**（compiler 安全時 elide 或 move）、scope 一結束就釋放、**無
+aliasing**——複製會深拷貝元素、並對含有的 `Ref` 值（channel 或 `Ref[T]`）refcount-bump，就是既有的記憶體規則。
+不會有「兩個名字共用一個容器」這種事：要共享來讀就用不可變傳參，要共享來改就用 `mut` param；經 channel 傳送的
+collection 跟其他 payload 一樣，都是用複製的。
+
+## 可變性——一個 per-binding 的 knob
+
+可變性是普通的 **per-instance** 軸：**單一 knob** 同時解鎖「改內容」與「重指名字」——Rust `let mut` / Swift `var`
+的模型，不是把「變數」和「元素」拆開。
+
+- **`mut xs`**——可**改元素**（`xs[i] = v`）、**增長／縮短**（append、insert、remove），以及**重指**
+  （`xs = other`）。改元素與增長都是 `mut this` method，就像 struct 的 mutator。
+- **plain `xs`**——**完全凍結**：固定的是*內容*，但它的長度仍是 heap 上的 runtime 值。（你還是可以用 `:=`
+  re-declare 這個名字——**新** binding、舊的被 `del`——絕對不是變更。）要一個在**編譯期**就固定、且 inline 排布的
+  固定*大小*，改用 `[T; N]` 陣列（見下）。
+
+所以同一種 `list` 型別，既是凍結序列（plain）也是可增長 vector（`mut`）；**只有 `mut` collection 能改它的元素**。
+
+```text
+xs := [1, 2, 3]            # 凍結：xs.append(4) 與 xs[0] = 9 都是錯誤
+mut ys := [1, 2, 3]
+ys.append(4)               # 增長 · ys[0] = 9  # 改 · ys = [2, 4]  # 重指
+```
+
+## key——`equal` 免費、`Hash` 顯式
+
+`list[T]` 接受**任意** `T`（只需每個值都有的結構操作）。`map` 的 key／`set` 的元素需要 **`Hash`**（key 以 `equal` 比較）。
+這兩半是刻意不對稱的：`Object` 會 **auto-derive `equal`**，但 **`Hash` 不 derive——型別得自己顯式實作**才能當 key，讓
+「什麼能當 key」是 opt-in、`safe by default` 的決定。作者要負起 compiler 無法檢查的契約：**equal ⇒ same hash**。
+因為 key 是用凍結快照 **copy-in** 進去的，所以就算是 `mut` collection 也能拿來當 key。
+
+## 存取——`[]` 斷言、`.get` 檢查
+
+索引比照 `!` / `?` 的「強取 vs 檢查」：
+
+- **`xs[i]` / `m[k]`**——元素**值**；碰到壞索引或缺 key 就 **abort**（`IndexError` / `KeyError`）。壞索引就是 **bug**，
+  跟 overflow 一樣。
+- **`xs.get(i)` / `m.get(k)`**——檢查路徑 → **`T?`** / **`V?`**，給那種你本來就預期可能不存在的情況用。
+- **`x in s` / `k in m`** → `bool`；在 `mut` collection 上 **`xs[i] = v`** 就地設定。
+
+```text
+first := xs[0]                 # 空的話 abort
+name  := m.get(id) ?? "anon"   # 檢查後給預設
+```
+
+## 切片——唯讀子區間
+
+一個**子區間**——`xs.slice(a, b)`，即 `[a, b)` 的元素——是一個普通的**唯讀 `list[T]` 值**、不是 borrow：它絕不寫回
+母體，所以**沒有 aliasing**、也不需要 borrow checker，並遵守與任何 collection 相同的 copy-by-value 模型。編譯器可
+把那份 copy 實現成 **copy-on-write**——與母體共享底層 storage，直到任一方被變動才複製——所以帳面上是 value
+semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 同列的不可觀察最佳化（見 Values & Memory），不新增
+任何看得見的共享，只是讓 `copy` 更便宜。
+
+於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
+**`x[a..b]`** slice-index 語法糖延後到 grammar（見待決）；在那之前用 `slice(a, b)`。
+
+## 順序與相等性
+
+`list` 依索引序走訪；`map`／`set` 依**插入序**——有決定性、不會有 hash 亂序的驚嚇。走訪時**以值讀取每個元素**（可
+elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 collection 是 `mut`）。相等性是結構性的：`list`
+**依序**比，`map`／`set` **與順序無關**（插入序決定 iteration，永遠不會決定相等）。
+
+```text
+for x in xs { total = total + x }         # 讀取
+for mut x in ys { x = x * 2 }             # 就地改——ys 必須是 mut
+```
+
+## 迭代與變動
+
+在 `for … in xs` 內，`xs` 對**結構性變更凍結**——在迴圈裡 append、insert、remove、grow/shrink、或 rebind 它都是
+**compile error**——所以 iterator **永遠不會失效**（無 dangling cursor、無 runtime fail-fast 檢查）。這是一條
+**local** 規則——迴圈知道自己走訪的是哪個 collection——所以**不需要 borrow checker，runtime 也零成本**。就地改
+某個 **元素**（`for mut x`）還是可以：它不會移動 cursor。
+
+想就地轉換的話，用一個內部走訪受控的 `mut` method（`xs.retain(pred)`），或是重建（`xs = xs.filter(pred)`——迴圈後
+rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
+
+## 定長陣列——`[T; N]`
+
+**`[T; N]`** 是一個**定長陣列**——N 個 `T` 值 **inline** 排布（在 stack 上、或嵌在它所屬的值裡），**無 heap、無
+`Ref`**。它的長度 **N 是型別的一部分**、在**編譯期**固定，所以 `[int; 3]` 與 `[int; 4]` 是**不同型別**、兩者間無
+隱式轉換。這正是 `list` 做不到的一件事：`list[T]` 是 heap-backed、長度是 runtime 值，而陣列的大小靜態已知、儲存
+inline——這也是為什麼對得上 C 的 `T[N]` 欄位（見 [FFI](ffi.zh-TW.md)）、以及「layout 要緊時該拿」的是陣列而非
+`list`。
+
+N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `const`**（見 [型別常數](specs.zh-TW.md)），
+或由它們經算術／位元運算子組合、被 compiler 摺疊（`[int; ROWS * COLS]`）。它絕不是 runtime 值、也絕不是**函式
+呼叫**：Zerg 不做一般的編譯期求值，所以 `[int; f(x)]`
+是錯誤。
+
+```text
+xs: [int; 4] = [1, 2, 3, 4]     # 一個 list literal，由目標型別定型為陣列——長度須為 4
+buf := [0; 256]                 # fill 形式：256 份 → [int; 256]
+row := [byte; WIDTH]            # WIDTH 是 top-level const
+```
+
+陣列是個普通的**值**：copy-by-value 複製全部 N 個元素（bump 所含的任何 `Ref`）、scope 結束釋放、絕不 alias——就是
+容器的值模型。其餘一切都從 `list` 已述的規則掉出來：
+
+- **建構**——list literal `[a, b, …]` 是 **context-typed**：預設 `list[T]`，當目標是 `[T; N]` 時才是陣列（長度在
+  編譯期查）。**fill 形式 `[v; N]`** 做出 N 份 `v`——用來建大陣列而不必逐一列出；沒有隱式 zero-fill。
+- **存取**——`a[i]` by value、bounds-check → `IndexError`，而落在 `[0, N)` 之外的**常數** index 在**編譯期**就被
+  抓出；`a.get(i) -> T?` 是 checked 路徑。`mut a` 可原地改元素（`a[i] = v`），但**永遠不能 grow/shrink**——大小在
+  型別裡；plain `a` 則凍結。
+- **長度**——`a.len()` 就是 N，本身是編譯期常數。
+- **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`、`for mut x in a`），恆 derive `Object`、
+  並在 `T` 具備時逐元素 derive `Ord`／`Hash`／`Encode`（兩個同型別陣列逐元素比較與雜湊），而 `a.slice(p, q)` 產出
+  **唯讀 `list[T]`** view——從陣列橋回 list 家族的 COW 通道。
+
+## 字串與位元組
+
+`str` 是**獨立的 immutable primitive**、不是 collection——它以 `rune` 走訪、且**不可索引**。透過 **`list[byte]`**
+（原始位元組、可含 NUL）或 **`list[rune]`**（code point）橋接：建字串的方式是先收集進 `list`，再用 **`str(...)`** 轉，
+它會**驗證** `str` 的 invariant（從 bytes 來的要是 valid UTF-8、無 embedded NUL）、違反就 **raise**——不信任的輸入就用
+`guard { str(bytes) }` 降級成 `Result[str]`（沿用錯誤模型的 checked 路徑，不另設 constructor）。編輯文字永遠會產生
+一個**新的** `str`。
+
+`str` 實作 **`Ord`**、**`Hash`**、**`Add`**——收錄在 [Spec 與 Generics](specs.zh-TW.md)（內建 spec）：依 code point
+字典序排序、（因為不可變）是天然的 `map`/`set` key、且 `a + b` **串接**成新 `str`。在迴圈裡建字串就用前述
+list-collect，別用重複的 `+`（那樣每一步都會複製整個累積字串）。`float` 既不實作 `Ord` 也不實作 `Hash`，所以永遠
+不會是排序集合的元素，也永遠不會是 key。（把非文字值渲染成文字——`int` 變 `"42"`、`f"…"` 內插——是
+**[Formatting & Text](format.zh-TW.md)**，建立在 `display` 上。）
+
+## 待決
+
+- **有序變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`，如果有需要的話。
+- **`x[a..b]` slice-index 語法糖**——`slice(a, b)` 的 range-index 形式；屬 grammar／語法層，延後。

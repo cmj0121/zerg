@@ -40,8 +40,9 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`, and the `T?` / `Result` tiers | landed |
 | 9   | Concurrency          | `spawn`, `chan[T]()`, `ch <- v`, `<-ch`, `select`                | landed |
 | 10  | Modules & Programs   | `import`, `pub import`, `init()`, `pub`, `main`                  | landed |
+| 11  | Resource cleanup     | `defer expr`, `del name`                                         | landed |
 
-Minor groups follow: the FFI (`extern "C"`) and `defer` / `del`.
+The one remaining minor group is the FFI (`extern "C"`).
 
 ## Group 1 — `nop` & the program skeleton
 
@@ -410,6 +411,25 @@ init-decl   ::= 'init' '(' ')' block
 - A **program** is a build rooted at an entry file that defines a top-level `fn main(…) -> Result[nil]`;
   `main` is an ordinary function (not reserved). **`package`** is the distribution/versioning unit — a
   directory tree selected by the build tool, with **no in-source `package` declaration**.
+
+## Group 11 — Resource cleanup (`defer` & `del`)
+
+Three constructs share one axis — **when** cleanup fires.
+
+```text
+defer-stmt ::= 'defer' expr
+del-stmt   ::= 'del' identifier
+```
+
+- **`defer expr`** runs `expr` at the **enclosing block's exit**, on **every path out** — normal, `return`,
+  or an abort unwind — in last-scheduled-first order. It is the procedural tool for a scope-bound effect
+  (release a lock, flush a buffer, close a scope-local resource).
+- **`del name`** revokes that name's access to its storage **now**; the storage is freed only if the revoked
+  access was the **owning** one and no other holder remains. For a `Ref[T]` / `chan` it drops a refcount
+  instead — **`del ch`** closes a channel if you were its last sender.
+- The third point on the axis — a **`Ref[T]` drop** at the last holder's scope exit — is not a statement;
+  it falls out of scope ownership. The dividing question is `defer` vs `Ref[T]`: does the resource escape
+  its scope? No → `defer`; yes → `Ref[T]`.
 
 ## Editor tooling
 

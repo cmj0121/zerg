@@ -40,8 +40,9 @@ notation 很小：
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`,與 `T?` / `Result` 兩層       | 已落地 |
 | 9   | Concurrency          | `spawn`、`chan[T]()`、`ch <- v`、`<-ch`、`select`               | 已落地 |
 | 10  | Modules & Programs   | `import`、`pub import`、`init()`、`pub`、`main`                 | 已落地 |
+| 11  | Resource cleanup     | `defer expr`、`del name`                                        | 已落地 |
 
-其後是次要 group：FFI（`extern "C"`）以及 `defer` / `del`。
+唯一剩下的次要 group 是 FFI（`extern "C"`）。
 
 ## Group 1 — `nop` 與程式骨架
 
@@ -376,6 +377,22 @@ init-decl   ::= 'init' '(' ')' block
 - **`init()`** 是 module 的**惰性、恰好一次**初始化,首次使用時依相依順序執行(無可變全域——狀態靠值或 channel 傳遞)。
 - **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
   **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。
+
+## Group 11 — Resource cleanup（`defer` 與 `del`）
+
+三個構造共用一條軸——清理**何時**觸發。
+
+```text
+defer-stmt ::= 'defer' expr
+del-stmt   ::= 'del' identifier
+```
+
+- **`defer expr`** 在**所在 block 退出**時執行 `expr`,**每一條離開路徑**都跑——正常、`return`、或 abort unwind——
+  以後登記先跑的順序。它是「綁在 scope 上副作用」的 procedural 工具（放鎖、flush buffer、關 scope-local 資源）。
+- **`del name`** **當下**撤銷該名字對其儲存的存取;唯有被撤銷的是**擁有權**存取且無其他 holder 時才釋放儲存。對
+  `Ref[T]` / `chan` 則是放掉一個 refcount——**`del ch`** 若你是最後 sender 便關閉 channel。
+- 軸上第三點——**`Ref[T]` drop** 於最後 holder 的 scope 退出時——不是 statement,由 scope ownership 掉出來。分界是
+  `defer` vs `Ref[T]`:資源會逃出其 scope 嗎?不會 → `defer`;會 → `Ref[T]`。
 
 ## 編輯器工具（Editor tooling）
 

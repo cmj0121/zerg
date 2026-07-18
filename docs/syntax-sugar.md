@@ -22,12 +22,7 @@ full treatment is in the [Language Reference](language.md). Also in [繁體中�
 | `print x`                                | a best-effort write of `x.display()` and a newline to stdout          |
 | `e?`                                     | unwrap the `Left`, else early-return the `Right` from the function    |
 | `a ?? b` / `a?.m` / `e!`                 | default; optional chain to `nil`; force-unwrap or raise `UnwrapError` |
-
-## Deferred sugar (arrives with its group)
-
-| Sugar    | Desugars to                                                         |
-| -------- | ------------------------------------------------------------------- |
-| `del ch` | drop this holder now — closes the channel if it was the last sender |
+| `del ch`                                 | drop this holder now — closes the channel if it was the last sender   |
 
 ## What is deliberately **not** sugar
 

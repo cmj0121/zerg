@@ -46,8 +46,8 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 # later groups.
 statement     ::= simple-stmt | compound-stmt
 simple-stmt   ::= nop | binding | reassign | print | return | raise | break
-                | continue | spawn-stmt | send-stmt | import-stmt | type-decl
-                | expr-stmt
+                | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
+                | del-stmt | type-decl | expr-stmt
 compound-stmt ::= block | with-stmt | if-stmt | for-stmt | select-stmt | fn-decl
                 | struct-decl | enum-decl | spec-decl | impl-decl | init-decl
 nop       ::= 'nop'
@@ -397,6 +397,19 @@ import-path  ::= identifier ( '/' identifier )*      # a module (directory) path
 init-decl    ::= 'init' '(' ')' block                # lazy, exactly-once module setup
 
 # ==================================================================================
+# 11. Resource cleanup — defer & del
+# ==================================================================================
+# Three constructs share one axis — WHEN cleanup fires. 'defer expr' runs expr at the
+# enclosing block's exit, on EVERY path out (normal, return, or an abort unwind), in
+# last-scheduled-first order. 'del name' revokes that name's access to its storage
+# NOW; the storage is freed only if the revoked access was the owning one and no other
+# holder remains (a Ref[T]/chan drops a refcount instead — 'del ch' closes a channel
+# if you were its last sender). ('Ref[T]' drop, the third point on the axis, fires at
+# the last holder's scope exit — not a statement.)
+defer-stmt   ::= 'defer' expr            # run at block exit, every path incl. abort
+del-stmt     ::= 'del' identifier        # revoke a name's access now
+
+# ==================================================================================
 # Roadmap — minor groups, landed one per commit after the core
 # ==================================================================================
-#   -- minor --       FFI (extern "C"); defer/del
+#   -- minor --       FFI (extern "C")

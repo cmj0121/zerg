@@ -141,6 +141,13 @@ fn fanin(work: <-chan[int]) {
     }
 }
 
+# resource cleanup (group 11)
+fn drain(ch: chan[int]) {
+    defer report("drained")    # runs at block exit, on every path (incl. abort)
+    for v in ch { use(v) }
+    del ch                     # drop our hold now — closes if we were the last sender
+}
+
 # null-safety & errors (group 8)
 fn load(path: str) -> Result[Config] {
     txt  := read_file(path)?                   # propagate: a Right early-returns

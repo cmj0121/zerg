@@ -241,6 +241,8 @@ param-type ::= 'mut'? type
 `if` 與 `for` 是 statement；`match` 是 expression：
 
 ```text
+block       ::= '{' stmt-list '}'                     # 裸 block 開一層 nested scope
+with-stmt   ::= 'with' expr ( 'as' identifier )? block
 if-stmt     ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
 if-head     ::= expr | identifier ':=' expr
 for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block
@@ -252,6 +254,11 @@ pattern     ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
 ```
 
+- **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。
+  **`with expr as y { … }`** 是其 sugar：把 scoped 資源 `y` 綁進 block，並保證資源的 **teardown 在每條離開路徑**
+  （正常、`return`、abort）都跑。該值實作內建 **`Scoped`** spec（其唯一方法即 teardown）；`Ref[T]` 的 drop 已滿足
+  它。所以 `with open(p) as f { f.read() }` ≈ `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用
+  （如持有的 lock），`as y` 可省。
 - **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
   （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。
 - **`for`。** 唯一的迴圈，兩種形式：**`for { … }`** 無限（以 `break` / `return` 離開），與 **`for x in it { … }`**

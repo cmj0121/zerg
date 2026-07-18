@@ -47,7 +47,7 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 statement     ::= simple-stmt | compound-stmt
 simple-stmt   ::= nop | binding | reassign | print | return | break | continue
                 | type-decl | expr-stmt
-compound-stmt ::= if-stmt | for-stmt | fn-decl
+compound-stmt ::= block | with-stmt | if-stmt | for-stmt | fn-decl
                 | struct-decl | enum-decl | spec-decl | impl-decl
 nop       ::= 'nop'
 
@@ -95,7 +95,8 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'type'  | 'impl'  | 'package' | 'init'   | 'extern' | 'defer'
              | 'del'   | 'raise' | 'guard'  | 'is'      | 'not'    | 'and'
-             | 'or'    | 'print' | 'this'   | 'true'    | 'false'  | 'nil'
+             | 'or'    | 'print' | 'this'   | 'with'    | 'as'     | 'true'
+             | 'false' | 'nil'
 # ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
 
 # ==================================================================================
@@ -253,6 +254,15 @@ for-stmt     ::= 'for' block                            # infinite (leave via br
                | 'for' 'mut'? identifier 'in' expr block
 break        ::= 'break' ( 'if' expr )?
 continue     ::= 'continue' ( 'if' expr )?
+
+# A bare block just opens a nested scope — its bindings and scope-owned values are
+# freed at its '}'. 'with' is sugar over it: it binds a scoped resource for the block
+# and guarantees the resource's teardown runs on EVERY exit (normal, return, abort).
+# The value implements the built-in 'Scoped' spec (its one method is the teardown); a
+# Ref[T]'s drop already satisfies it. So `with acquire() as y { body }` desugars to
+# `{ y := acquire(); defer <y's Scoped teardown>; body }`; 'as y' is optional when the
+# resource is used only for its scope (e.g. a held lock).
+with-stmt    ::= 'with' expr ( 'as' identifier )? block
 
 # 'match' tries a value against arms in order and yields the first fit; every arm
 # yields the same type. A trailing '_' covers the rest.

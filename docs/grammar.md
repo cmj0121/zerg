@@ -259,6 +259,8 @@ param-type ::= 'mut'? type
 `if` and `for` are statements; `match` is an expression:
 
 ```text
+block       ::= '{' stmt-list '}'                     # a bare block opens a nested scope
+with-stmt   ::= 'with' expr ( 'as' identifier )? block
 if-stmt     ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
 if-head     ::= expr | identifier ':=' expr
 for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block
@@ -270,6 +272,12 @@ pattern     ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
 ```
 
+- **Block & `with`.** A bare `{ … }` opens a **nested scope** — its bindings and scope-owned values are
+  freed at the `}`. **`with expr as y { … }`** is sugar over it: it binds a scoped resource `y` for the
+  block and guarantees the resource's **teardown runs on every exit** (normal, `return`, or an abort). The
+  value implements the built-in **`Scoped`** spec (its one method is the teardown); a `Ref[T]`'s drop
+  already satisfies it. So `with open(p) as f { f.read() }` ≈ `{ f := open(p); defer f.<teardown>; … }`.
+  `as y` is optional when the resource is used only for its scope (a held lock).
 - **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
   block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual.
 - **`for`.** The one loop, in two forms: **`for { … }`** infinite (leave via `break` / `return`), and

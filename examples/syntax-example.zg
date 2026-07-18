@@ -108,6 +108,17 @@ fn total(shapes: list[Shape]) -> float {
     return acc
 }
 
+# bare block scopes a value; `with` binds a scoped resource, torn down on exit
+fn process(path: str) {
+    {
+        tmp := 1_000           # scoped to this block, freed at its `}`
+        print f"{tmp}"
+    }
+    with open(path) as f {     # f's Scoped teardown runs on every exit
+        for line in f.read() { print line }
+    }
+}
+
 # concurrency, pattern matching, and error handling
 fn serve(inbox: <-chan[Shape]) {          # receive-only channel (a receiver)
     defer io.stdout.write_str("done")

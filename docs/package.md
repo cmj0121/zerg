@@ -63,6 +63,12 @@ seed) rather than hiding it in a constant's initializer, and readies the module'
 is still **no mutable global**: shared mutable state travels by value or through channels, never a
 module-level variable.
 
+If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
+there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
+only itself). The module is then **poisoned**: `init()` is **not re-run** (exactly-once holds even on
+failure, so no side effect repeats), and every later use **re-aborts with the same cached error**. A
+half-initialized module never becomes usable, and concurrent first-uses all observe that one failure.
+
 ### Packages
 
 A **package** is a tree of modules and the unit of **distribution, dependency, and versioning** — the

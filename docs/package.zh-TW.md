@@ -51,6 +51,11 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 自己的程式碼之前。`init()` 承載多步或有副作用的啟動（開資源、註冊、seed），而不是把它藏進 constant 的 initializer，
 並備妥該 module 的 immutable 狀態。仍**沒有可變全域**：共享的可變狀態以值傳遞或走 channel，絕不透過 module 層級的變數。
 
+若某個 `init()` **abort**,該 abort 從觸發它的**首次使用點**往外傳——可在那裡用 `guard` 接住,否則就像任何未接的
+abort 一樣 crash 那條 stack(主 stack 結束程式、coroutine 只結束自己)。該 module 於是**中毒(poisoned)**:`init()`
+**不重跑**(恰好一次即使失敗也成立,所以副作用不重複),而其後每次使用都**以同一個快取的錯誤再度 abort**。一個
+半初始化的 module 永不會變成可用,並行的首次使用也全都看到那同一個失敗。
+
 ### Package
 
 **package** 是一棵 module 樹，也是**散布、相依與版本**的單位——你發佈、依賴、釘版本的那個東西。package 形成一張

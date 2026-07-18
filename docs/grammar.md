@@ -215,7 +215,7 @@ so `print f"hello {name}"` is the smallest program.
 A function is a first-class value — a named declaration, an anonymous expression, and a type:
 
 ```text
-fn-decl    ::= 'pub'? 'fn' identifier '(' param-list? ')' ret-type? block
+fn-decl    ::= 'pub'? 'mut'? 'fn' identifier '(' param-list? ')' ret-type? block
 fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block
 fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
@@ -234,6 +234,10 @@ param-type ::= 'mut'? type
   must be too — which is what lets a defaulted parameter be skipped.
 - **Type.** A function's type is `fn(P…) -> R` — parameters (with `mut`) and result, nothing else; defaults
   and parameter names live in the declaration, not the type.
+- **`mut fn` (mutating method).** A `mut fn` marks a **method** that mutates its implicit receiver `this` in
+  place; the call site must hold the receiver in a `mut` binding. It is meaningful only inside an `impl` or
+  `spec` — a free function or closure has no receiver. `mut fn` tracks mutation of the value's **own fields**,
+  not effects on a resource behind a `Ref[T]`/foreign handle (which need no `mut` — see group 7).
 
 ## Group 6 — Control flow & Pattern matching
 

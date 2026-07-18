@@ -203,7 +203,7 @@ format engine。純 `"…"` 是 literal（大括號是普通字元）；只有 f
 function 是 first-class value——具名宣告、匿名 expression，與一個型別：
 
 ```text
-fn-decl    ::= 'pub'? 'fn' identifier '(' param-list? ')' ret-type? block
+fn-decl    ::= 'pub'? 'mut'? 'fn' identifier '(' param-list? ')' ret-type? block
 fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block
 fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
@@ -220,6 +220,9 @@ param-type ::= 'mut'? type
   一旦具名其餘也須具名——這正是能跳過有預設值參數的方式。
 - **型別。** function 的型別是 `fn(P…) -> R`——參數（含 `mut`）與結果，別無其他；預設值與參數名字存在宣告裡，不在
   型別中。
+- **`mut fn`（mutating method）。** `mut fn` 標記一個**方法**會就地修改其隱式 receiver `this`；呼叫端的 receiver
+  須為 `mut` binding。它只在 `impl` 或 `spec` 內有意義——free function 或 closure 沒有 receiver。`mut fn` 追蹤的是
+  值**自身 field** 的變動，不含對 `Ref[T]`／foreign handle 背後資源的 effect（那不需 `mut`——見 group 7）。
 
 ## Group 6 — Control flow & Pattern matching
 

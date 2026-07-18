@@ -186,9 +186,15 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # default; a call fills parameters positionally, then by name. ('type' is defined in
 # group 7 (Types); it is referenced here for signatures.)
 
-fn-decl      ::= 'pub'? 'fn' identifier '(' param-list? ')' ret-type? block
+fn-decl      ::= 'pub'? 'mut'? 'fn' identifier '(' param-list? ')' ret-type? block
 fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure
 fn-type      ::= 'fn' '(' param-type-list? ')' ret-type?         # a function's type
+
+# 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place. It is
+# meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the call site must
+# hold the receiver in a 'mut' binding. A free function or closure has no receiver,
+# so it is never 'mut fn'. This tracks mutation of the value's own Zerg-owned fields
+# — not effects on a resource behind a Ref[T]/foreign handle, which need no 'mut'.
 ret-type     ::= '->' type
 return       ::= 'return' expr?
 
@@ -287,7 +293,7 @@ field        ::= identifier ':' type
 variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
 variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
 spec-member  ::= fn-sig | fn-decl                      # required (no body) or provided
-fn-sig       ::= 'fn' identifier '(' param-list? ')' ret-type?
+fn-sig       ::= 'mut'? 'fn' identifier '(' param-list? ')' ret-type?
 
 # ==================================================================================
 # Roadmap — minor groups, landed one per commit after the core

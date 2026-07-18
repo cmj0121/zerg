@@ -69,6 +69,23 @@ in a **`Ref[T]`**: a reference-counted box carrying the value and a `drop` actio
 plain handle would each try to free the one resource. Reach for `Ref[T]` **only when the resource
 escapes**; a resource confined to one scope wants `defer` (below).
 
+### `mut` is for owned fields — a handle's state is an effect
+
+`mut` (and a `mut fn` method) track a change to a value's **own Zerg-owned fields**. The state _behind_ a
+`Ref[T]` — a foreign handle's internal state: an OS file's position, a socket, a database cursor — is **not
+part of the Zerg value's bytes**. It belongs to the resource, reached through a handle that copy-by-ref
+never duplicates and construction fixes in place. Touching it is an untracked **effect** (like any I/O),
+**not a mutation** — so a method that advances it needs no `mut`, and its receiver may be **immutable**: an
+immutable `File` can still `read()` and advance its cursor, exactly as a C `const FILE*` can `fread`.
+
+This is a real modelling choice. Put mutable state you **own** in a plain field and change it with a
+`mut fn` on a `mut` binding — tracked, and subject to the no-aliasing guarantee above. Put a resource whose
+internal state the **foreign side owns** behind a `Ref[T]` — an immutable handle with effectful methods,
+needing no `mut`. The dividing question mirrors the `defer`-vs-`Ref[T]` one: **are you changing your own
+bytes, or reaching state a handle owns?** Zerg has **no interior mutability** for owned fields — the same
+"immutable by default, a `Ref`'s referent fixed at construction" that keeps refcounting cycle-free also
+keeps an immutable binding honestly immutable.
+
 ## Re-declaration & shadowing
 
 A name may be **re-declared** — in the same block or a nested one — and the new binding may differ in

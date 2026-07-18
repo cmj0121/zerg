@@ -40,6 +40,15 @@ impl Summable for int {
     fn add(other: This) -> This { return this + other }   # this used, not declared
 }
 
+# a mutating method: `mut fn` marks that it changes the receiver in place
+struct Counter { n: int }
+
+spec Bumpable { mut fn bump() }
+
+impl Bumpable for Counter {
+    mut fn bump() { this.n = this.n + 1 }   # needs a `mut` binding at the call site
+}
+
 # the empty-statement placeholder
 fn noop() { nop }
 

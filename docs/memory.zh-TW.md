@@ -55,6 +55,20 @@ channel），就用 **`Ref[T]`** 持有：一個 reference-counted 的資源盒�
 copy-by-value handle 給不了的保證——一個普通 handle 的兩份 copy 會各自試圖釋放那唯一的資源。**唯有資源逃出
 scope 時**才用 `Ref[T]`；侷限在單一 scope 的資源要用 `defer`（見下）。
 
+### `mut`管的是自有 field——handle 背後的狀態是 effect
+
+`mut`（以及 `mut fn` 方法）追蹤的是值**自身擁有的 Zerg field** 的變動。`Ref[T]` _背後_ 的狀態——foreign
+handle 的內部狀態：OS 檔案的 position、socket、資料庫 cursor——**不屬於 Zerg 值的 bytes**。它屬於那個資源，透過一個
+by-ref 複製從不重製、且建構時即固定的 handle 取得。碰它是**未追蹤的 effect**（如同任何 I/O），**不是 mutation**
+——因此推進它的方法**不需 `mut`**，其 receiver 可為 **immutable**：一個 immutable `File` 仍可 `read()` 並推進其
+cursor，正如 C 的 `const FILE*` 仍可 `fread`。
+
+這是個實際的**建模選擇**。想要你**擁有**的可變狀態 → 放 plain field，用 `mut` binding 上的 `mut fn` 去改
+（受追蹤，並適用上述 no-aliasing 保證）；想要一個內部狀態由**外部端擁有**的資源 → 放 `Ref[T]` 之後——immutable
+handle 搭配 effectful 方法，免 `mut`。分界問題與 `defer`-vs-`Ref[T]` 相同：**你改的是自己的 bytes，還是伸手去碰
+handle 擁有的狀態？** Zerg 對自有 field **沒有 interior mutability**——那個維持 refcount cycle-free 的「預設
+immutable、`Ref` 的 referent 建構時固定」，也讓 immutable binding 誠實地保持不可變。
+
 ## 重新宣告與遮蔽（Re-declaration & shadowing）
 
 一個名字可以**重新宣告**——在同一個 block 或巢狀 block 皆可——新的 binding 在型別與可變性上都可與舊的不同。

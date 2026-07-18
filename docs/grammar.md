@@ -42,7 +42,10 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 10  | Modules & Programs   | `import`, `pub import`, `init()`, `pub`, `main`                  | landed |
 | 11  | Resource cleanup     | `defer expr`, `del name`                                         | landed |
 
-The one remaining minor group is the FFI (`extern "C"`).
+All groups above are landed — the surface grammar is complete. The one boundary left out is **FFI import**
+(an `extern "C"` block for foreign C symbols): it is an **open design question** — possibly a stdlib
+facility rather than a language construct — not a pending feature. **FFI export needs no syntax**: a
+package's `pub` surface already _is_ its C ABI (see [FFI](ffi.md)).
 
 ## Group 1 — `nop` & the program skeleton
 

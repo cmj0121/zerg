@@ -410,6 +410,11 @@ defer-stmt   ::= 'defer' expr            # run at block exit, every path incl. a
 del-stmt     ::= 'del' identifier        # revoke a name's access now
 
 # ==================================================================================
-# Roadmap — minor groups, landed one per commit after the core
+# Roadmap — all core & minor groups above are landed
 # ==================================================================================
-#   -- minor --       FFI (extern "C")
+# The surface grammar is complete. One boundary is deliberately left out:
+#   -- deferred --    FFI IMPORT (an 'extern "C"' block naming foreign C symbols) is
+#                     an OPEN design question, not a pending feature — it may be a
+#                     stdlib facility rather than a language construct. FFI EXPORT
+#                     needs no syntax at all: a package's 'pub' surface already IS its
+#                     C ABI (see docs/ffi.md).

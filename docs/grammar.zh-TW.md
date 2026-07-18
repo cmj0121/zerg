@@ -42,7 +42,9 @@ notation 很小：
 | 10  | Modules & Programs   | `import`、`pub import`、`init()`、`pub`、`main`                 | 已落地 |
 | 11  | Resource cleanup     | `defer expr`、`del name`                                        | 已落地 |
 
-唯一剩下的次要 group 是 FFI（`extern "C"`）。
+以上各 group 皆已落地——表面文法**已完整**。唯一留白的邊界是 **FFI import**（給 foreign C 符號的 `extern "C"`
+區塊）：它是**待議的開放設計**——可能落在 **stdlib** 而非語言構造——而非待做功能。**FFI export 不需任何語法**：
+package 的 `pub` 表面本身**就是**它的 C ABI（見 [FFI](ffi.zh-TW.md)）。
 
 ## Group 1 — `nop` 與程式骨架
 

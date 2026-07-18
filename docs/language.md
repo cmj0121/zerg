@@ -356,7 +356,9 @@ type is boxed here?", never "are these two the same value?".
 
 **Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
 
-- **`Ord`** — `<` `<=` `>` `>=`, sort, min/max: a **total** order consistent with `equal`. `str` orders
+- **`Ord`** — a **total** order consistent with `equal`, defined by the single required **`less`** (`<`);
+  `<=` `>` `>=` and sort derive from it with `equal`, and `min` / `max` / `clamp` are ordinary stdlib helpers
+  over an `Ord` bound — there is **no three-way `Ordering`** value, only `less` and `equal`. `str` orders
   **lexicographically by code point** (== byte order, its UTF-8 being valid — not locale collation, a
   separate stdlib concern); `float` does **not** implement it.
 - **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key;

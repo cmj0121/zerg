@@ -288,8 +288,10 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 
 **Opt-in**——實作該 spec 才取得能力；泛型 bound 以它把關：
 
-- **`Ord`**——`<` `<=` `>` `>=`、sort、min/max：一個 **total** order，與 `equal` 一致。`str` 依 **code point
-  字典序**排序（＝ byte 序，因其 UTF-8 有效——非 locale collation，那是另一個 stdlib 功能）；`float` **不**實作。
+- **`Ord`**——一個與 `equal` 一致的 **total** order,由**單一必需的 `less`**(`<`)定義;`<=` `>` `>=` 與 sort 都由它
+  配 `equal` 導出,而 `min` / `max` / `clamp` 是建在 `Ord` bound 上的普通 stdlib helper——**沒有三路 `Ordering`**
+  值,只有 `less` 與 `equal`。`str` 依 **code point 字典序**排序(＝ byte 序,因其 UTF-8 有效——非 locale
+  collation,那是另一個 stdlib 功能);`float` **不**實作。
 - **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key；`float` **不**實作。
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、

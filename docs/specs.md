@@ -1,0 +1,266 @@
+# Zerg Specs & Generics
+
+How Zerg abstracts over behavior — the `spec` interface, generic bounds, spec-as-type existentials,
+and the built-in specs every type gets. Part of the [Language Reference](language.md). Also in
+[繁體中文](specs.zh-TW.md).
+
+Behavior comes in two tiers. A type may define **inherent methods** — its own behavior, usable only
+when you hold the concrete type. **Abstraction**, however, always goes through a **`spec`**: a named
+interface of behavior — method signatures, some carrying a **default body** (below), and **never
+fields**. Satisfaction is **nominal**: a type must explicitly declare it implements a `spec`, and there
+is **one canonical implementation per (type, spec)** pair — a **parameterized** spec counts its parameters
+into the pair, so `Iterator[int]` and `Iterator[str]` are distinct, each with its own canonical impl
+(Resolving a parameterized spec, below).
+
+A `spec` is the sole mechanism for abstracting over behavior, so it plays three roles — the **bound**
+on a generic parameter, the interface a type **conforms** to, and (below) a **type** in its own right.
+The built-in behaviors are specs too, not compiler magic: `Err` is the `Error` spec, and equality,
+ordering, hashing, iteration, and opt-in conversions are ordinary stdlib specs. A type's inherent methods
+need not belong to any spec; **only what a spec guarantees is ever abstractable**.
+
+**A spec bound is the complete interface to a generic type.** In code generic over `T`, the only
+operations available on a `T` value are the methods its spec bound declares — its fields and any
+inherent methods are invisible. So:
+
+- The **empty `spec`** is a valid bound, satisfied by every type, but it guarantees **no** behavior:
+  such a `T` supports only the structural operations every value has from the memory model — copy it,
+  `del` it, pass it, store it, or send it over a channel — not a single method.
+- **`Object`** is the top `spec`, implemented automatically by every type. It provides a minimal method
+  set — `equal`, `copy`, `debug`, … **auto-derived** structurally, field by field (a contained `Ref` value
+  is refcount-bumped, matching the copy rule), plus `display`, whose default body is `debug` (Formatting &
+  text). A type may **explicitly override** any of them (e.g. an order-insensitive `equal`); otherwise it
+  inherits the derived version. Because
+  every type implements `Object`, bounding `T: Object` never narrows which types are accepted — it
+  only unlocks those methods. This compiler-owned **structural derivation** extends, opt-in, to `Ord` /
+  `Hash` / `Encode` / … — the [Derive & Default Behavior](derive.md) reference.
+
+A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
+type — heap-boxed, single-owner, scope-owned, and **dynamically dispatched** (the method to run is
+picked at runtime from the value's real type). Erasure is **one-way for the value** — once boxed, the
+concrete value is hidden and **can never be recovered** (no downcast, no reinterpret; the only route to a
+concrete type is to have kept it, never to un-erase one). Its **identity** is a separate matter: **`x is
+T`** asks whether the boxed value's concrete type is `T` and yields a plain **`bool`** — a test that
+reads the dispatch identity the box already carries, and **never recovers the value or reads its
+structure** (Type tests, below).
+
+On a boxed value, **unary** operations dispatch to the real type and work: its spec methods, plus `copy`
+(producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
+ops (`del`, pass, store, send). The **binary same-type** operations — `equal` / `==`, `Ord` comparison,
+and so `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
+removes, and `is` only tests identity — it never hands the value back to supply that operand. Two boxed
+values are therefore **never comparable by value**, consistent with the one-way erasure. Box a value to
+dynamically dispatch its spec's methods; to compare, sort, or key it, keep the concrete type (a
+monomorphized `[T: S]` bound).
+
+The same bar falls on two further member kinds: a spec's **associated functions** (`default() -> This`,
+`zero()` — receiver-less, so a box gives nothing to dispatch _from_) and its **generic methods** (a vtable
+holds one entry per type, not one per type-argument). Each needs a **named concrete type**, so each is a
+compile error **on an existential** — never a ban on using the spec as a type, only on that call, exactly as
+for the binary ops. So there is **no object-safety gate**: a spec is **always usable as a type**, and the box
+offers precisely what dispatches through `this` alone — re-boxing a `This`-returning result as the same spec.
+
+Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
+specialized version for each concrete type — while a spec used as a type is the one place codegen uses
+dynamic dispatch. There is **no subtyping** between concrete types, so generics are **invariant**:
+`list[Cat]` is not a `list[Animal]` — abstract over a family with a spec bound (`[T: X]`), not subtype
+substitution.
+
+An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
+requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere, so an implementation
+can be neither hidden nor duplicated — it is in effect exactly where both its type and its spec are
+visible. Implementations are written for a **concrete or generic type** (`list[T]` may implement
+`Iterator`); a blanket implementation conditioned on a bound — one covering every type that satisfies
+some spec — is not offered, keeping resolution decidable. The lone "every type" case is `Object`, which
+the compiler auto-derives rather than the user writing.
+
+Because specs are nominal, two independently declared specs may share a method name. A type can still
+implement both and be used as either one on its own — the ambiguity exists only where a single value
+must satisfy **both at once** (a `T: X + Y` bound, or a value typed as `X + Y`). Zerg rejects that combination
+at compile time rather than adding fully-qualified call syntax to disambiguate; to share one method
+across specs, have them obtain it from one shared spec. Where a spec may be implemented across package
+boundaries, and how coherence stays globally unique, is the
+[Modules, Packages & Programs](package.md) reference.
+
+**A name resolved on a concrete value must name exactly one method** — the same anti-ambiguity rule, now at
+a concrete call. An **inherent method may not share a name with any spec method the type implements**: a
+compile error at the implementation. To give a type its own version of a spec method, **override** it
+(dispatch stays canonical); inherent methods are for behavior _outside_ any spec, so a collision is a
+mistake, not a priority to resolve. And when a type implements two specs that share a method name, the impls
+are fine — but a bare **`x.foo()` is then ambiguous and rejected**; you resolve it by narrowing the static
+context to one spec (a single-spec bound `[T: X]`, or a spec-typed value), never by qualifying the call —
+exactly as the `T: X + Y` bound is rejected above.
+
+**Specs are flat — there is no super-spec.** A `spec` never requires another; needing several capabilities
+at once is said at the **use site** with a combined bound — `[T: Ord + Hash]`, the `+` reading as "and" —
+never baked into a spec as a supertrait. The one hierarchy other languages lean on, `Ord: Eq`, is moot
+here: equality comes from the universal `Object`, so it is always present without being required. Implied
+bounds and cross-spec default-body reuse are given up deliberately — a capability shared by several specs is
+its own spec, listed alongside them in the bound.
+
+## Resolving a parameterized spec
+
+Because a parameterized spec's parameter is part of an implementation's identity, a type may implement
+`Iterator[int]` and `Iterator[str]` both. The compiler then **resolves which one** a use means by the same
+machinery that types an untyped literal: it picks the **unique** candidate under which every constraint on
+the value — including how it is **used in the body** that follows — type-checks.
+
+```text
+for x in y {          # y implements Iterator[int] and Iterator[str]
+    z := 10           # untyped literal → int
+    print x + z       # x + int type-checks only if x is int → Iterator[int] is chosen
+}
+```
+
+Three outcomes, mirroring literal typing but with **no default fallback**:
+
+- **exactly one** candidate type-checks → resolved, no annotation;
+- **none** → an ordinary type error (as `x + str` would be against a `str`-only iterator);
+- **two or more** → a **hard compile error demanding an annotation** (`for x: int in y`). It is never
+  demoted to a warning or picked by a default: unlike an uncovered `match` (whose fallback is a loud
+  `MatchError`), a mis-resolved implementation has no safe fallback — it would silently run the wrong code.
+
+Distinct concrete parameters never overlap, so resolution is well-defined; the open question is only which
+of several matches a use means. The idiom therefore stays **one implementation per type** — several are a
+power tool, and any use a body cannot pin down must annotate. A concrete-bound generic names the parameter
+directly (`[I: Iterator[int]]`) or binds it fresh (`[I: Iterator[T]]` binds `T` to the iterator's
+element), so **bounds are never ambiguous** — only a bare use on a value with several implementations is.
+
+## Type tests — `is`
+
+An existential hides the value but not its **identity**: **`x is T`** asks "is the boxed value's concrete
+type `T`?" and yields a **`bool`**. It is a pure query — it reads the dispatch identity every existential
+box already carries, **recovers no value and reads no field** — so it is not a downcast and adds no
+reinterpret to the language ([Type Conversion](types.md)). `T` must implement the spec `x` is typed as, else the test
+is statically impossible and rejected; on a value whose concrete type is **already known** (not an
+existential) the answer is a compile-time constant.
+
+Because `is` never yields the concrete value, it drives **control flow, not data access**: you may branch
+on "is this a `T`?", but to read a `T`'s own fields you must **already hold the concrete type** — one you
+never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `and` / `or`, or as a `match`
+guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
+[Null-safety & Errors](errors.md)).
+
+## Methods, `this` / `This`, and default bodies
+
+A **method** is a function with a **receiver** — the instance it is called on, named **`this`**; the
+receiver's own type is **`This`**. `This` names "the implementing type" wherever the concrete type is not
+yet known — a same-type operand (`less(this, other: This) -> bool`) or the result of an **associated
+function** (`default() -> This`, a constructor — which, having no receiver, has no `this`) — and resolves
+to the concrete type in each implementation. A generic `spec` parameter (`Iterator[T]`) is a **separate**,
+freely-chosen type (an element, a heterogeneous operand); `This` is the forced self-type, never a choice.
+
+A spec's methods come in two kinds:
+
+- **required** — a signature with no body; every implementer must supply it.
+- **provided** — a signature **with a default body**, written in terms of the required (and other spec)
+  methods on `this`, never fields. An implementer **inherits** it or **overrides** it with a specialized
+  version (a faster `contains`, say); an override must still mean the conventional thing, and the
+  `(type, spec)` implementation stays canonical either way.
+
+So a spec with one required method can hand implementers many derived ones for free — `Iterator` derives
+`map`, `filter`, `count`, … from `next` — and the `spec bound is the complete interface` rule then makes
+**all** of them, required and provided, callable on a bounded `T`. These provided defaults are
+**behavioral** — over methods, never fields; the separate **structural** tier, where the compiler reads
+a type's shape to generate an impl, is the [Derive & Default Behavior](derive.md) reference.
+
+A method or function may carry **its own type parameters**, stacked on the receiver's: `map[U](this, f:
+fn(T) -> U)` adds `U` beside the spec's `T` and the receiver's `This`, each **monomorphized** per concrete
+combination. A provided method may be generic too — that is exactly what lets an adapter change the
+element type (`T` → `U`).
+
+**Dispatch is uniform.** Every spec method, required or provided, resolves to the type's **canonical
+implementation** — its override if it has one, else the default. So a default body that calls another spec
+method reaches the type's override (a defaulted `count` built on `next` uses an overridden
+`next`) — there is **no static-dispatch exception for defaults**. The mechanism is the one already
+defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
+through its **vtable** to the actual impl.
+
+## Type constants
+
+A **`const`** may belong to a **type**, declared alongside its methods and read as `Type.NAME` (`This.NAME`
+from inside the type). Its value is a **constant expression** — a literal, another `const`, or their folded
+arithmetic — that the compiler **substitutes at compile time**, running no code and having **no side effect**
+(stricter than a top-level `const`, which may be computed once before `main`). It may be typed `This`, giving
+a type its own canonical values (`const ORIGIN: This = Point{ x: 0, y: 0 }`). Being a compile-time constant,
+an `int`-typed one is usable **wherever a compile-time constant is** — including a fixed-array size
+(`[byte; Buffer.SIZE]`, see [Collections](collections.md)). Visibility is the ordinary `pub` / private knob,
+as on a field or method.
+
+A `const` belongs to a **concrete type, never a `spec`**: a spec abstracts over **behavior**, and a const —
+folded, concrete, nothing to dispatch — is not behavior. A per-type _value_ that a spec must guarantee is
+therefore a **method**, the receiver-less associated function `fn max() -> This`, not a const — generic code
+reaches it as `T.max()`.
+
+## Built-in specs
+
+Most are **opt-in** — a type gains one by implementing it — except the set `Object` **auto-derives for
+every type** (each overridable):
+
+| `Object` method | drives            | notes                                                        |
+| --------------- | ----------------- | ------------------------------------------------------------ |
+| `copy`          | copy-by-value     | forced by the memory model — never absent                    |
+| `equal`         | `==` / `!=`       | **structural**; a channel or `fn` compares by identity       |
+| `debug`         | logging, stderr   | developer-facing; **auto-derived** structurally, overridable |
+| `display`       | `f"…"`, user text | human-facing; **defaults to `debug`**, override to prettify  |
+
+Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
+distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
+too narrow to earn an operator. Equality is always the **structural** `equal`. The **`is`** keyword is a
+different question — the **type-identity** test `x is T` on an existential (Type tests) — "what concrete
+type is boxed here?", never "are these two the same value?".
+
+**Opt-in** — implement the spec to gain the capability; a generic bound gates on it:
+
+- **`Ord`** — a **total** order consistent with `equal`, defined by the single required **`less`** (`<`);
+  `<=` `>` `>=` and sort derive from it with `equal`, and `min` / `max` / `clamp` are ordinary stdlib helpers
+  over an `Ord` bound — there is **no three-way `Ordering`** value, only `less` and `equal`. `str` orders
+  **lexicographically by code point** (== byte order, its UTF-8 being valid — not locale collation, a
+  separate stdlib concern); `float` does **not** implement it.
+- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key;
+  `float` does **not** implement it.
+- **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
+- **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
+  `nil` if none), and `code() -> byte?` (an optional small code).
+- **`Add` / `Sub` / `Mul` / `Div` / … and the bitwise `BitAnd` / `BitOr` / `BitXor` / `Not` / `Shl` /
+  `Shr`** — the value operators (`+ - * / %`, `& | ^ ~ << >>`, indexing, …): operator overloading, below.
+  `str` implements `Add`, so `+` **concatenates** into a new string (see [Collections](collections.md)).
+- **the cast spec** — an opt-in auto-conversion: single-step, at an explicit target (see Type
+  Conversion).
+
+**`Ref` — copy-by-ref (sealed).** Unlike every spec above, implementing it adds no behavior — it changes
+a value's **representation**. A `Ref` type is **reference-counted**: copying bumps a shared count instead
+of deep-copying, and its `drop(this)` runs **once**, at the last holder's scope exit. The compiler
+supplies the counting and the by-ref copy; only the `drop` body is written. `Ref` is **sealed** — its
+sole implementers are the built-in **`chan`** (whose `drop` is close) and the stdlib **`Ref[T]`** resource
+box (see [Values & Memory](memory.md)). Ordinary code **uses `Ref[T]`; it never implements `Ref`** — so "is this value
+shared by reference?" always has a definite answer: only `chan` and `Ref[T]` are.
+
+**Operators desugar to specs**, so a user type may overload the value operators by implementing the
+matching one — `==` / `<` already route through `equal` / `Ord`. An overload must mean the
+**conventional** thing (a `+` that is not addition is abuse, against `small and crisp`). The **logical
+operators are keywords** — `not` (unary), and the **short-circuiting** `and` / `or` — over `bool` only,
+yielding `bool` (no truthiness; cast with `bool(x)`): `and` skips its right operand when the left is
+`false`, `or` when the left is `true`, and logical xor is just `a != b` (there is no `xor` keyword — it
+cannot short-circuit, so it is an ordinary operation, not a keyword). These, and the null-safety
+operators (`?`, `??`, `?.`, `!`), are **fixed constructs — never overloadable**; the bitwise symbols
+(`& | ^ ~`, [Integer operations](types.md)) never collide with them.
+
+`float` sits out `Ord` and `Hash` — its `NaN` breaks a total order and the `equal ⇒ hash` law — so a
+`float` is never a sorted-collection element or a key, and a composite **containing** one inherits this
+transparently: its auto-derived `equal` compares the field with `==`, so it is **non-reflexive** for a
+`NaN`, and gets no `Ord`/`Hash` for free either. To key or sort such a type the author **implements them
+explicitly**, handling `float`'s two traps: a **reflexive** `equal` with **canonical `±0.0`** (equal, so
+must hash alike) for `Hash`, and a **total order** (IEEE `totalOrder`, `NaN` at an end) for `Ord`. A
+stdlib total-order/hashable `float` wrapper is deferred.
+
+**Iteration.** An **`Iterator[T]`** has `next() -> Result[T]` — `Left(v)` for the next element, or
+`Right(StopIteration)` at the end (**`StopIteration`** is a built-in `Err`). An **`Iterable[T]`** has
+`iter()`, producing a fresh `Iterator[T]`. `for x in X` requires `X: Iterable`: it binds `x` to each
+`Left`, **exits cleanly on `Right(StopIteration)`**, and **raises any other `Right(err)`** — a mid-stream
+failure is never silently swallowed (drive `next()` by hand and `guard` to inspect it). Since `<-ch`
+already yields `Result[T]`, **a channel is an `Iterator`**: `for v in ch` drains it, ending on a clean
+close and re-raising a producer crash. An `Iterator` is trivially `Iterable`, so **lazy adapters**
+(`map`, `filter`, `take`, `zip`, …) are ordinary stdlib iterators that chain — each returns a **concrete
+adapter type** (`map` a `Map[This, U]` that itself implements `Iterator[U]`, holding the source and the
+closure), so a chain stays fully **monomorphized**, no boxing. `for mut x in X` binds each
+element as an in-place `mut` — only when `X` is `mut`.

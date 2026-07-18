@@ -39,9 +39,9 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 7   | Types                | `struct`, `enum`, tuple, `type X = Y`, `spec`                    | landed |
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`, and the `T?` / `Result` tiers | landed |
 | 9   | Concurrency          | `spawn`, `chan[T]()`, `ch <- v`, `<-ch`, `select`                | landed |
+| 10  | Modules & Programs   | `import`, `pub import`, `init()`, `pub`, `main`                  | landed |
 
-Minor groups follow: modules (`import` / `pub` / `package` / `init`), the FFI
-(`extern "C"`), and `defer` / `del`.
+Minor groups follow: the FFI (`extern "C"`) and `defer` / `del`.
 
 ## Group 1 — `nop` & the program skeleton
 
@@ -389,6 +389,27 @@ send-arm    ::= expr '<-' expr '->' expr
   once when every watched receive channel has closed; **`_`** fires when nothing is ready (non-blocking) —
   both are **contextual**, special only as a select-arm head. There is **no explicit close** (a channel
   auto-closes when its last sender leaves) and **no `yield`**.
+
+## Group 10 — Modules & Programs
+
+Source nests as **program › package › module (a directory) › file**.
+
+```text
+import-stmt ::= 'pub'? 'import' import-path
+import-path ::= identifier ( '/' identifier )*
+init-decl   ::= 'init' '(' ')' block
+```
+
+- **`pub`** (already a prefix on every declaration) is the one visibility marker: a plain declaration is
+  **module-private**, `pub` exposes it to the **rest of the package**, and a package's public API is the
+  `pub` surface of its **root module**.
+- **`import path`** names another module or package. A **`pub import`** **re-exports** it onto this module's
+  surface — the single mechanism by which a root module builds a package's public API.
+- **`init()`** is a module's **lazy, exactly-once** setup, run on first use, in dependency order (there is
+  no mutable global — state travels by value or channel).
+- A **program** is a build rooted at an entry file that defines a top-level `fn main(…) -> Result[nil]`;
+  `main` is an ordinary function (not reserved). **`package`** is the distribution/versioning unit — a
+  directory tree selected by the build tool, with **no in-source `package` declaration**.
 
 ## Editor tooling
 

@@ -46,9 +46,10 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 # later groups.
 statement     ::= simple-stmt | compound-stmt
 simple-stmt   ::= nop | binding | reassign | print | return | raise | break
-                | continue | spawn-stmt | send-stmt | type-decl | expr-stmt
+                | continue | spawn-stmt | send-stmt | import-stmt | type-decl
+                | expr-stmt
 compound-stmt ::= block | with-stmt | if-stmt | for-stmt | select-stmt | fn-decl
-                | struct-decl | enum-decl | spec-decl | impl-decl
+                | struct-decl | enum-decl | spec-decl | impl-decl | init-decl
 nop       ::= 'nop'
 
 # ==================================================================================
@@ -379,6 +380,23 @@ recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
 send-arm     ::= expr '<-' expr '->' expr
 
 # ==================================================================================
+# 10. Modules & Programs
+# ==================================================================================
+# Source is organized as program > package > module (a directory) > file. Visibility
+# is 'pub' (already a prefix on every declaration): a plain declaration is module-
+# private, 'pub' exposes it to the rest of the package, and a package's public API is
+# the 'pub' surface of its ROOT module. 'import' names another module/package; a
+# 'pub import' RE-EXPORTS it onto this module's surface (how a root builds its API).
+# 'init()' is a module's lazy, exactly-once setup, run on first use. A program is a
+# build rooted at an entry file that defines a top-level 'fn main(...) -> Result[nil]'
+# — 'main' is an ordinary function, not reserved. 'package' is the distribution /
+# versioning unit: a directory tree selected by the build tool, with NO in-source
+# 'package' declaration.
+import-stmt  ::= 'pub'? 'import' import-path
+import-path  ::= identifier ( '/' identifier )*      # a module (directory) path
+init-decl    ::= 'init' '(' ')' block                # lazy, exactly-once module setup
+
+# ==================================================================================
 # Roadmap — minor groups, landed one per commit after the core
 # ==================================================================================
-#   -- minor --       modules (import/pub/package/init); FFI (extern "C"); defer/del
+#   -- minor --       FFI (extern "C"); defer/del

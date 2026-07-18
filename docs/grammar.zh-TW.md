@@ -39,9 +39,9 @@ notation 很小：
 | 7   | Types                | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 已落地 |
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`,與 `T?` / `Result` 兩層       | 已落地 |
 | 9   | Concurrency          | `spawn`、`chan[T]()`、`ch <- v`、`<-ch`、`select`               | 已落地 |
+| 10  | Modules & Programs   | `import`、`pub import`、`init()`、`pub`、`main`                 | 已落地 |
 
-其後是次要 group：module（`import` / `pub` / `package` / `init`）、FFI（`extern "C"`），以及
-`defer` / `del`。
+其後是次要 group：FFI（`extern "C"`）以及 `defer` / `del`。
 
 ## Group 1 — `nop` 與程式骨架
 
@@ -358,6 +358,24 @@ send-arm    ::= expr '<-' expr '->' expr
 - **`select { … }`** 是唯一的多路等待:跑第一個 ready 的 arm（公平 tie）。**`done`** 在所有被監看的 receive channel
   都關閉時觸發一次;**`_`** 在此刻無 arm ready 時觸發（non-blocking）——兩者皆**contextual**,只在 select-arm 開頭
   特殊。**沒有明確 close**（channel 在最後 sender 離開時自動關）、**沒有 `yield`**。
+
+## Group 10 — Modules & Programs
+
+源碼巢狀為 **program › package › module（一個目錄）› file**。
+
+```text
+import-stmt ::= 'pub'? 'import' import-path
+import-path ::= identifier ( '/' identifier )*
+init-decl   ::= 'init' '(' ')' block
+```
+
+- **`pub`**（已是每個宣告的前綴）是唯一的可見性標記：普通宣告是 **module-private**,`pub` 對**同 package 其餘**
+  公開,而 package 的公開 API 是其**根 module** 的 `pub` 表面。
+- **`import path`** 指名另一個 module 或 package。**`pub import`** 把它**re-export** 到本 module 的表面——根 module
+  用來組出 package 公開 API 的唯一機制。
+- **`init()`** 是 module 的**惰性、恰好一次**初始化,首次使用時依相依順序執行(無可變全域——狀態靠值或 channel 傳遞)。
+- **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
+  **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。
 
 ## 編輯器工具（Editor tooling）
 

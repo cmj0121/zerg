@@ -4,6 +4,11 @@
 # booleans, and the nil constant.
 
 import io
+pub import util/text        # re-export a module onto this package's public surface
+
+init() {                    # lazy, exactly-once module setup (group 10)
+    nop
+}
 
 # a strong-typedef over a built-in type
 type UserId = int
@@ -163,4 +168,10 @@ fn serve(inbox: <-chan[Shape]) {          # receive-only channel (a receiver)
             _        -> nil
         }
     }
+}
+
+# program entry point (group 10) — main is an ordinary function, not reserved
+fn main(args: list[str]) -> Result[nil] {
+    print f"args: {args}"
+    return nil
 }

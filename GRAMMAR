@@ -222,12 +222,19 @@ param-type   ::= 'mut'? type
 # ----------------------------------------------------------------------------------
 # String interpolation & print (the formatting / output surface)
 # ----------------------------------------------------------------------------------
-# An f-string embeds '{ expr }' holes, each rendered through display() and joined;
-# '{{' and '}}' are literal braces. Format specifiers (f"{x:>.2f}") are deferred to
-# a separate format protocol. 'print' writes a value's display() and a newline to
-# stdout — a reserved keyword, always in scope, best-effort (never raises).
+# An f-string embeds '{ … }' holes, joined with the literal text; '{{' and '}}' are
+# literal braces. Python-style, a hole is 'expr' then optional '=' (self-documenting:
+# emits the expression's source text and '='), a '!' conversion, and a ':' format
+# spec. Semantics: 'expr' → display(); '!r'/'!s'/'!a' → debug/display/ascii first;
+# ':spec' → expr.format(spec), a per-type Format protocol (the spec string's meaning
+# is the type's — stdlib numbers/str read the usual fill/align/sign/#/0/width/.prec/
+# type). 'print' writes a value's display() and a newline to stdout — a reserved
+# keyword, always in scope, best-effort (never raises).
 fstr-lit     ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
-interp       ::= '{' expr '}'
+interp       ::= '{' expr '='? conversion? format-spec? '}'
+conversion   ::= '!' ( 'r' | 's' | 'a' )       # r = debug, s = display, a = ascii
+format-spec  ::= ':' fmt-char*                  # opaque here; the Format protocol reads it
+fmt-char     ::= < any character except '{', '}', or a line break >
 fstr-char    ::= < any code point except '"', '\', '{', '}', or a line break >
 print        ::= 'print' expr
 

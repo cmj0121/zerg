@@ -62,6 +62,9 @@ fn demo() {
     print f"{double(21)}"
     (q, r) := divmod(21, 4)             # tuple-destructuring bind
     print f"{q} rem {r}"
+
+    pi := 3.14159
+    print f"pi={pi:.2f} hex={q:#04x} {r=} debug={q!r}"   # Python-style format holes
 }
 
 # literals of every kind (group 3)

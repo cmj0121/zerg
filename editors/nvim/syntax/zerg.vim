@@ -81,11 +81,15 @@ syntax region zergRawString start=+r"+ end=+"+
 syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape,zergEscapeError
 
 " f-string f"...{expr}...": text is String, the {expr} holes are highlighted.
+" Python-style holes carry an optional !conversion and :format-spec.
+syntax match zergFormatConv "![rsa]" contained
+syntax match zergFormatSpec ":[^}]*" contained
 syntax region zergFString matchgroup=zergString start=+f"+ skip=+\\"+ end=+"+
       \ contains=zergInterp,zergEscape,zergEscapeError
 syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
       \ contains=zergNumber,zergFloat,zergString,zergRawString,zergCharacter,
-      \zergOperator,zergBoolean,zergConstant,zergType,zergKeyword,zergStatement
+      \zergOperator,zergBoolean,zergConstant,zergType,zergKeyword,zergStatement,
+      \zergFormatConv,zergFormatSpec
 
 " --- group 4: operators --------------------------------------------------------
 
@@ -151,5 +155,7 @@ highlight default link zergWildcard   Special
 highlight default link zergTodo       Todo
 highlight default link zergEscapeError Error
 highlight default link zergDecorator  PreProc
+highlight default link zergFormatSpec Special
+highlight default link zergFormatConv Special
 
 let b:current_syntax = 'zerg'

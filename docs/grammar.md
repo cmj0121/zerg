@@ -201,17 +201,29 @@ The null-safety and error operators (`?` `??` `?.` `!`) are **not** here — the
 An **f-string** is a primary expression — a string with `{ expr }` holes:
 
 ```text
-fstr-lit ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
-interp   ::= '{' expr '}'
-print    ::= 'print' expr
+fstr-lit    ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+interp      ::= '{' expr '='? conversion? format-spec? '}'
+conversion  ::= '!' ( 'r' | 's' | 'a' )     # r = debug, s = display, a = ascii
+format-spec ::= ':' fmt-char*               # read by the type's Format protocol
+print       ::= 'print' expr
 ```
 
-`f"sum={x + y}"` renders each hole through `display()` and joins the pieces — it **desugars at compile
-time** to `str` concatenation, with no runtime format engine. A plain `"…"` is a literal (its braces are
-ordinary); only an f-string reads `{…}`, and `{{` / `}}` write literal braces. Format specifiers like
-`f"{x:>.2f}"` are **deferred** to a separate per-type format protocol. **`print`** writes a value's
-`display()` and a newline to stdout — a reserved keyword, always in scope, best-effort (it never raises),
-so `print f"hello {name}"` is the smallest program.
+A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x
+
+- y}"`renders each hole through`display()`and joins the pieces — it **desugars at compile time** to`str`
+  concatenation, with no runtime format engine.
+
+- **`{x}`** → `x.display()`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` / `display` /
+  ascii. **`{x=}`** is self-documenting: it emits the expression's source text and `=`, then the value
+  (`f"{n=}"` → `n=42`).
+- **`{x:spec}`** hands `spec` to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
+  `f"{p:>10}"`. The spec **string's meaning is the type's** (stdlib numbers/`str` read the usual
+  fill/align/sign/`#`/`0`/width/`.precision`/type); the grammar treats it as opaque up to `}`.
+- A plain `"…"` is a literal (its braces are ordinary); only an f-string reads `{…}`, and `{{` / `}}` write
+  literal braces.
+
+**`print`** writes a value's `display()` and a newline to stdout — a reserved keyword, always in scope,
+best-effort (it never raises), so `print f"hello {name}"` is the smallest program.
 
 ## Group 5 — Functions
 

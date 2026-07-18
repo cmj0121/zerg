@@ -14,9 +14,17 @@ Every value renders two ways, both **`Object` methods** (no `spec` to opt into):
 
 **Interpolation — `f"…"`.** A plain `"…"` is a literal (braces are ordinary characters). An **`f`-string**
 embeds `{ expr }`, rendered through `display()` and joined — `f"sum={x + y}"` — **desugaring at compile
-time** to `str` concatenation (Collections), with no variadics and no runtime format engine;
-`f"{x.debug()}"` embeds the developer view. **Specifiers** `f"{x:>.2f}"` (width/precision/base/alignment)
-are **deferred** to a separate per-type **format protocol**, not a `display` parameter.
+time** to `str` concatenation (Collections), with no variadics and no runtime format engine. A hole is
+**Python-shaped** — `{ expr =? !conv? :spec? }`:
+
+- **`{x}`** uses `display()`; a **conversion** picks another view first — **`!r`** the developer `debug()`,
+  **`!s`** `display()`, **`!a`** an ASCII-escaped debug. `f"{x!r}"` is `f"{x.debug()}"`.
+- **`{x=}`** is self-documenting: it prints the expression's source text, `=`, then the value —
+  `f"{n=}"` → `n=42` (compose with the rest: `f"{n=:04d}"`).
+- **`{x:spec}`** hands the spec string to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
+  `f"{p:>10}"`. This is a **per-type protocol**, not a `display` parameter: the language fixes only the
+  `:spec` **syntax** (opaque text up to `}`); what a spec **means** is the type's own — the stdlib numbers
+  and `str` read the usual `[[fill]align][sign][#][0][width][.precision][type]`, mirroring Python.
 
 **`print`** writes `x.display()` and a newline to stdout — a **reserved keyword**, always in scope with no
 import, so the smallest program is `print f"hello {name}"`. It is **best-effort** (a write error is

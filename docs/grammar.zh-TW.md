@@ -190,15 +190,24 @@ null-safety 與 error 運算子（`?` `??` `?.` `!`）**不在**此處——歸 
 **f-string** 是一種 primary expression——帶 `{ expr }` 洞的字串：
 
 ```text
-fstr-lit ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
-interp   ::= '{' expr '}'
-print    ::= 'print' expr
+fstr-lit    ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+interp      ::= '{' expr '='? conversion? format-spec? '}'
+conversion  ::= '!' ( 'r' | 's' | 'a' )     # r = debug、s = display、a = ascii
+format-spec ::= ':' fmt-char*               # 由型別的 Format protocol 解讀
+print       ::= 'print' expr
 ```
 
-`f"sum={x + y}"` 把每個洞經 `display()` 算出並串接——它在**編譯期 desugar** 成 `str` 串接，沒有 runtime
-format engine。純 `"…"` 是 literal（大括號是普通字元）；只有 f-string 會讀 `{…}`，而 `{{` / `}}` 寫出字面
-大括號。像 `f"{x:>.2f}"` 這種 format specifier **deferred** 到獨立的 per-type format protocol。**`print`**
-把一個值的 `display()` 加換行寫到 stdout——保留字、恆在 scope、best-effort（永不 raise），所以
+洞是 **Python 式**：`expr`，其後選用 `=`、`!` 轉換、`:` format spec。`f"sum={x + y}"` 把每個洞經 `display()`
+算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。
+
+- **`{x}`** → `x.display()`。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
+  **`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）。
+- **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
+  **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
+  只當它是到 `}` 為止的不透明字串。
+- 純 `"…"` 是 literal（大括號是普通字元）；只有 f-string 會讀 `{…}`，而 `{{` / `}}` 寫出字面大括號。
+
+**`print`** 把一個值的 `display()` 加換行寫到 stdout——保留字、恆在 scope、best-effort（永不 raise），所以
 `print f"hello {name}"` 是最小程式。
 
 ## Group 5 — Functions

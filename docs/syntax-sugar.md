@@ -18,7 +18,6 @@ full treatment is in the [Language Reference](language.md). Also in [繁體中�
 | `for x in it { … }`                      | the iteration protocol on `it` (a `StopIteration`-terminated loop)    |
 | `(a, b) := e` / `P{x, y} := e`           | destructuring a product/tuple return, each part bound **by copy**     |
 | `f(x: 1)` (named) / `p: T = e` (default) | positional rewrite at the call; a default `e` is evaluated per call   |
-| `#[derive(X)]`                           | the compiler-generated canonical `impl X for T`, read from structure  |
 | `print x`                                | a best-effort write of `x.display()` and a newline to stdout          |
 | `e?`                                     | unwrap the `Left`, else early-return the `Right` from the function    |
 | `a ?? b` / `a?.m` / `e!`                 | default; optional chain to `nil`; force-unwrap or raise `UnwrapError` |
@@ -30,5 +29,7 @@ To keep the core honest, some look-alikes are their own thing, not rewrites:
 
 - **`type X = Y`** is a **strong typedef** — a new, distinct type, not a transparent alias.
 - **`+%` / `-%` / `*%`** are **distinct wrapping operators**, not a modifier on `+` / `-` / `*`.
+- **`#[derive(X)]`** is a compiler **code generator** keyed on a blessed spec — it reads the type's structure
+  to emit the impl. It is **not** sugar for an empty `impl` (see [Derive & Default Behavior](derive.md)).
 - **`#[…]` decorators** are a **fixed, compiler-owned** set of directives, not user-definable macros —
   Zerg has **no macros**, so no user sugar can rewrite your code.

@@ -17,7 +17,6 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `for x in it { … }`                   | 對 `it` 的迭代協定(以 `StopIteration` 收尾)                   |
 | `(a, b) := e` / `P{x, y} := e`        | 解構 product/tuple 回傳,各部分**以 copy** 綁定                |
 | `f(x: 1)`(named)/ `p: T = e`(default) | 呼叫端改寫為 positional;default `e` 每次呼叫時求值            |
-| `#[derive(X)]`                        | compiler 依結構代寫的 canonical `impl X for T`                |
 | `print x`                             | best-effort 把 `x.display()` 加換行寫到 stdout                |
 | `e?`                                  | 取出 `Left`,否則從函式提前 return 那個 `Right`                |
 | `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise       |
@@ -29,5 +28,7 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 
 - **`type X = Y`** 是**強 typedef**——全新、獨立的型別,非透明別名。
 - **`+%` / `-%` / `*%`** 是**獨立的回繞運算子**,不是 `+` / `-` / `*` 的修飾。
+- **`#[derive(X)]`** 是 compiler 的**程式碼產生器**,以 blessed spec 為鍵、讀型別結構產出 impl——**不是**空 `impl`
+  的語法糖（見 [Derive & Default Behavior](derive.zh-TW.md)）。
 - **`#[…]` decorator** 是**固定、compiler 擁有**的指令集,不是使用者可自訂的 macro——Zerg **沒有 macro**,所以沒有任何
   使用者語法糖能改寫你的程式。

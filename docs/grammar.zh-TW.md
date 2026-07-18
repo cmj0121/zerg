@@ -100,7 +100,7 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 NEWLINE    ::= '\n'
 WS         ::= ( ' ' | '\t' )+
-COMMENT    ::= '#' [^\n]*
+COMMENT    ::= '#' [^[\n] [^\n]* | '#' NEWLINE   # '#' 後不接 '['（那會起始 decorator）
 block      ::= '{' stmt-list '}'
 ```
 
@@ -111,10 +111,10 @@ block      ::= '{' stmt-list '}'
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-type  impl   package init     extern   defer
-del   raise  guard   is       not      and
-or    print  this    with     as       from
-true  false  nil
+chan  type   impl    package  init     extern
+defer del    raise   guard    is       not
+and   or     print   this     with     as
+from  true   false   nil
 ```
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）

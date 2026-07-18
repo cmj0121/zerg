@@ -102,7 +102,7 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 NEWLINE    ::= '\n'
 WS         ::= ( ' ' | '\t' )+
-COMMENT    ::= '#' [^\n]*
+COMMENT    ::= '#' [^[\n] [^\n]* | '#' NEWLINE   # '#' not before '[' (that starts a decorator)
 block      ::= '{' stmt-list '}'
 ```
 
@@ -113,10 +113,10 @@ keyword** is never an identifier; the full reserved set is:
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-type  impl   package init     extern   defer
-del   raise  guard   is       not      and
-or    print  this    with     as       from
-true  false  nil
+chan  type   impl    package  init     extern
+defer del    raise   guard    is       not
+and   or     print   this     with     as
+from  true   false   nil
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)

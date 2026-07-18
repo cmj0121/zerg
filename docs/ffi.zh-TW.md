@@ -225,5 +225,5 @@ FFI 不對既有模型新增例外——它多半是從中推導出來的：
 - library 模式遇到非 FFI-safe 的 public 宣告：**skip-with-diagnostic**（目前傾向）對上硬性錯誤。
 - scheduler 對**阻塞 `extern` 呼叫**的策略（thread pool 擴張）——一個 runtime 細節。
 - `extern` 未來是否會命名 **`"C"` 以外的 ABI**；目前只定義 `"C"`。
-- 一個編譯期 **`sizeof` / `alignof`**——把型別的大小與對齊當成常數,既然佈局已固定(見 [語言參考](language.zh-TW.md)
-  的 Values & Memory)——是一個 **stdlib** 設施、延後到有具體需求;它不是核心語言構造。
+- 一個編譯期 **`sizeof` / `alignof`**——把型別的大小與對齊當成常數,既然佈局已固定(見
+  [值與記憶體](memory.zh-TW.md))——是一個 **stdlib** 設施、延後到有具體需求;它不是核心語言構造。

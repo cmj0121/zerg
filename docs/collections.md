@@ -111,7 +111,7 @@ value, whereas an array's size is known statically and its storage is inline —
 `list`, is what maps to a C `T[N]` field (see [FFI](ffi.md)) and what you reach for when layout matters.
 
 `N` is a **compile-time constant** — an integer literal, a top-level or **type `const`** (see
-[Language Reference](language.md)), or an arithmetic/bitwise combination of those folded by the compiler
+[Type constants](specs.md)), or an arithmetic/bitwise combination of those folded by the compiler
 (`[int; ROWS * COLS]`). It is never a runtime value and never a **function call**: Zerg does no general
 compile-time evaluation, so `[int; f(x)]` is an error.
 
@@ -147,12 +147,12 @@ input, `guard { str(bytes) }` demotes that to a `Result[str]` (the checked path 
 separate constructor). Editing text always yields a **new** `str`.
 
 `str` implements **`Ord`**, **`Hash`**, and **`Add`** — catalogued in the
-[Language Reference](language.md) (Built-in specs): it sorts lexicographically by code point, is a natural
+[Specs & Generics](specs.md) (Built-in specs): it sorts lexicographically by code point, is a natural
 `map`/`set` key (being immutable), and `a + b` **concatenates** into a new `str`. Build a string up in a
 loop with that list-collect, not by repeated `+`, which would copy the whole
 accumulator each step. A `float` implements neither `Ord` nor `Hash`, so it is never a sorted-collection
 element or a key. (Rendering a non-text value to text — an `int` to `"42"`, `f"…"` interpolation — is
-**Formatting & text** in the [Language Reference](language.md), built on `display`.)
+**[Formatting & Text](format.md)**, built on `display`.)
 
 ## Deferred
 

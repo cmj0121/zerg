@@ -101,7 +101,7 @@ rebind）。想邊讀 `xs` 邊累積，就 append 到**另一個** collection。
 inline——這也是為什麼對得上 C 的 `T[N]` 欄位（見 [FFI](ffi.zh-TW.md)）、以及「layout 要緊時該拿」的是陣列而非
 `list`。
 
-N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `const`**（見 [語言參考](language.zh-TW.md)），
+N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `const`**（見 [型別常數](specs.zh-TW.md)），
 或由它們經算術／位元運算子組合、被 compiler 摺疊（`[int; ROWS * COLS]`）。它絕不是 runtime 值、也絕不是**函式
 呼叫**：Zerg 不做一般的編譯期求值，所以 `[int; f(x)]`
 是錯誤。
@@ -133,11 +133,11 @@ row := [byte; WIDTH]            # WIDTH 是 top-level const
 `guard { str(bytes) }` 降級成 `Result[str]`（沿用錯誤模型的 checked 路徑，不另設 constructor）。編輯文字永遠會產生
 一個**新的** `str`。
 
-`str` 實作 **`Ord`**、**`Hash`**、**`Add`**——收錄在 [語言參考](language.zh-TW.md)（內建 spec）：依 code point
+`str` 實作 **`Ord`**、**`Hash`**、**`Add`**——收錄在 [Spec 與 Generics](specs.zh-TW.md)（內建 spec）：依 code point
 字典序排序、（因為不可變）是天然的 `map`/`set` key、且 `a + b` **串接**成新 `str`。在迴圈裡建字串就用前述
 list-collect，別用重複的 `+`（那樣每一步都會複製整個累積字串）。`float` 既不實作 `Ord` 也不實作 `Hash`，所以永遠
 不會是排序集合的元素，也永遠不會是 key。（把非文字值渲染成文字——`int` 變 `"42"`、`f"…"` 內插——是
-[語言參考](language.zh-TW.md)的 **Formatting & text**，建立在 `display` 上。）
+**[Formatting & Text](format.zh-TW.md)**，建立在 `display` 上。）
 
 ## 待決
 

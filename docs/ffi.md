@@ -261,5 +261,5 @@ Deferred for a later design pass — none blocks the model above:
 - The scheduler's policy for **blocking `extern` calls** (thread-pool growth) — a runtime detail.
 - Whether `extern` will ever name **ABIs other than `"C"`**; only `"C"` is defined today.
 - A compile-time **`sizeof` / `alignof`** — a type's size and alignment as a constant, now that the layout is
-  fixed (see [Language Reference](language.md), Values & Memory) — is a **stdlib** facility, deferred until a
+  fixed (see [Values & Memory](memory.md)) — is a **stdlib** facility, deferred until a
   concrete need; it is not a core-language construct.

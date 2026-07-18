@@ -1,7 +1,7 @@
 # Zerg Derive 與預設行為
 
 型別想拿到實作、又不必逐一手寫每個 method 的**兩種**途徑，以及它們之間那條不可跨越的界線。本文延續
-[語言參考](language.zh-TW.md)的 **Specs & Generics**。另有 [English](derive.md) 版本。
+**[Spec 與 Generics](specs.zh-TW.md)**。另有 [English](derive.md) 版本。
 
 ## 兩種「免費」行為的來源
 
@@ -83,7 +83,7 @@ behavioral default；結構這一層是封閉的。
 | `Decode` | 逐欄位 / 由 tag + payload 重建                          | `Decode`         | `chan` / `Ref` / `fn` / handle |
 
 不符要求的欄位會讓 derive 變成**點名該欄位的編譯錯誤**，絕不靜默略過——`derive Ord for T` 若含 `float`
-欄位會被拒，正如[語言參考](language.zh-TW.md)裡手寫規則所要求（`float` 無 total order；請手寫並以
+欄位會被拒，正如 [Spec 與 Generics](specs.zh-TW.md) 裡手寫規則所要求（`float` 無 total order；請手寫並以
 canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 以下橫切情形都從既有記憶體模型自然導出，無需新規則：

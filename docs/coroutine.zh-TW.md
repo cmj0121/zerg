@@ -55,7 +55,7 @@ coroutine。
 ## Channels
 
 channel 是一條型別化的 by-ref 管道，payload **複製**流過它。它是一個 **reference-counted 的值**——`Ref` 的內建
-實作者（與 `Ref[T]` 並列；見 [語言參考](language.zh-TW.md)），scope-owning 的例外：在最後一個持有者的 scope 結束時
+實作者（與 `Ref[T]` 並列；見 [值與記憶體](memory.zh-TW.md)），scope-owning 的例外：在最後一個持有者的 scope 結束時
 free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**（可被送進另一條
 channel）。
 
@@ -71,11 +71,11 @@ receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
 
 send 與 receive **不對稱**：關閉是 producer 的決定，所以它一定知道。send 不回傳值——它只會完成、block，或 abort：
 
-| channel 狀態                              | `ch <- v`                                                        |
-| ----------------------------------------- | ---------------------------------------------------------------- |
-| 開、送得出（有空位、或有等待的 receiver） | 完成；值在 **send 當下快照**                                     |
-| 開、暫時送不出（滿了、或沒有 receiver）   | **block**——對還沒被收的 channel 送是合法的，不是 bug             |
-| 已 close                                  | **abort**（`SendOnClosedError`）——見 [Aborts](language.zh-TW.md) |
+| channel 狀態                              | `ch <- v`                                                      |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| 開、送得出（有空位、或有等待的 receiver） | 完成；值在 **send 當下快照**                                   |
+| 開、暫時送不出（滿了、或沒有 receiver）   | **block**——對還沒被收的 channel 送是合法的，不是 bug           |
+| 已 close                                  | **abort**（`SendOnClosedError`）——見 [Aborts](errors.zh-TW.md) |
 
 ### 接收——`<-ch`
 
@@ -126,7 +126,7 @@ cleanup()
 ```
 
 `del ch` 也直接做到同一件事——當下放掉你對 `ch` 的持有，若你是最後 sender 就關閉 channel，無需更窄的區塊
-（見 [語言參考](language.zh-TW.md)）。
+（見 [值與記憶體](memory.zh-TW.md)）。
 
 ### send 覆蓋不變量
 

@@ -165,7 +165,7 @@ package **cycles be rejected**.
 The **prelude** is not imported — its names are **built into the toolchain** and bound in every module
 from the start, exactly like the primitive keywords. It holds what the language itself leans on: the
 types the operators desugar to (`Either`, `Result`, `T?`, `nil`), the built-in specs (`Object`, `Error`,
-`Ord`, `Hash`, `Iterator`/`Iterable`, `Ref`, the operator specs — see [Language Reference](language.md)),
+`Ord`, `Hash`, `Iterator`/`Iterable`, `Ref`, the operator specs — see [Specs & Generics](specs.md)),
 and a few pervasive types — the `list`, `map`, and `set` containers (see
 [Collections](collections.md)) and the `Ref[T]` resource box. (Primitives — `bool`, `int`, `str`, … —
 and `chan`, plus the `defer` and `print` constructs, are likewise grammar and runtime, not imported

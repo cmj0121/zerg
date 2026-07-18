@@ -1,7 +1,7 @@
 # Zerg Derive & Default Behavior
 
 Two ways a type can pick up an implementation without its author spelling out every method — and the
-firm line between them. This builds on **Specs & Generics** in the [Language Reference](language.md). Also in
+firm line between them. This builds on **[Specs & Generics](specs.md)**. Also in
 [繁體中文](derive.zh-TW.md).
 
 ## Two sources of "free" behavior
@@ -90,7 +90,7 @@ derived; the rest are **opt-in** via `derive`:
 
 A field that fails the requirement makes the derive a **compile error naming that field**, never a
 silent skip — `derive Ord for T` with a `float` field is rejected exactly as the hand-written rule in
-the [Language Reference](language.md) demands (a `float` has no total order; author it by hand with a
+[Specs & Generics](specs.md) demands (a `float` has no total order; author it by hand with a
 canonical `±0.0` and `NaN` at an end).
 
 Cross-cutting cases fall out of the existing memory model, no new rule:

@@ -63,7 +63,7 @@ outside this model. The safe default is the same: give the `Ref[handle]` to **on
 
 A channel is a typed, by-ref conduit whose payloads are **copied** through it. It is a
 **reference-counted value** — the built-in implementer of `Ref` (alongside `Ref[T]`; see
-[Language Reference](language.md)), the exception to scope-owning: freed when its last holder's scope
+[Values & Memory](memory.md)), the exception to scope-owning: freed when its last holder's scope
 exits, and copying a value refcount-bumps any `Ref` value it contains while deep-copying the rest. A
 channel is **FIFO** and **first-class** (it can be sent over another channel).
 
@@ -81,11 +81,11 @@ one synchronization primitive.
 Send is **asymmetric** with receive: closing is the producer's decision, so it always knows. Send
 never yields a value — it completes, blocks, or aborts:
 
-| Channel state                                   | `ch <- v`                                                    |
-| ----------------------------------------------- | ------------------------------------------------------------ |
-| open, can proceed (room, or a waiting receiver) | completes; the value is **snapshotted at send**              |
-| open, cannot proceed yet (full, or no receiver) | **blocks** — a not-yet-received channel is valid, not a bug  |
-| closed                                          | **aborts** (`SendOnClosedError`) — see [Aborts](language.md) |
+| Channel state                                   | `ch <- v`                                                   |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| open, can proceed (room, or a waiting receiver) | completes; the value is **snapshotted at send**             |
+| open, cannot proceed yet (full, or no receiver) | **blocks** — a not-yet-received channel is valid, not a bug |
+| closed                                          | **aborts** (`SendOnClosedError`) — see [Aborts](errors.md)  |
 
 ### Receive — `<-ch`
 
@@ -142,7 +142,7 @@ cleanup()
 ```
 
 `del ch` does the same directly — dropping your hold now closes the channel if you were its last sender,
-without a tighter block (see the [Language Reference](language.md)).
+without a tighter block (see [Values & Memory](memory.md)).
 
 ### The send-coverage invariant
 

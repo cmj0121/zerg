@@ -38,9 +38,10 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 6   | Control flow         | `if`, `for … in`, `match` and patterns                           | landed |
 | 7   | Types                | `struct`, `enum`, tuple, `type X = Y`, `spec`                    | landed |
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`, and the `T?` / `Result` tiers | landed |
+| 9   | Concurrency          | `spawn`, `chan[T]()`, `ch <- v`, `<-ch`, `select`                | landed |
 
-Minor groups follow: concurrency (`spawn` / `chan` / `select` / `<-`), modules
-(`import` / `pub` / `package` / `init`), the FFI (`extern "C"`), and `defer` / `del`.
+Minor groups follow: modules (`import` / `pub` / `package` / `init`), the FFI
+(`extern "C"`), and `defer` / `del`.
 
 ## Group 1 — `nop` & the program skeleton
 
@@ -360,6 +361,34 @@ postfix       += '?' | '!' | '?.' identifier
 - **`guard { … }`** — **demote** any abort inside the block back to a value, yielding `Result[T]`
   (abort→value). It is the sole way back from the abort tier, so a guarded abort is an ordinary `Result`
   handled by the same `?` / `??` / `match`.
+
+## Group 9 — Concurrency
+
+Concurrency is **coroutines + channels only** (CSP) — no shared mutable state, no locks, no join/handle.
+
+```text
+spawn-stmt  ::= 'spawn' expr
+send-stmt   ::= expr '<-' expr
+chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
+recv-base   ::= '<-' recv-base | primary
+select-stmt ::= 'select' '{' select-arm+ '}'
+select-arm  ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
+send-arm    ::= expr '<-' expr '->' expr
+```
+
+- **`spawn f(args)`** starts a **fire-and-forget** coroutine (Go's `go`) — no handle, no join; you observe
+  it only through channels. Captures are restricted to immutable values and channels.
+- **`chan[T](cap?)`** builds a channel — capacity `0` (the default) is an unbuffered **rendezvous**. A bare
+  `chan[T]` is bidirectional and narrows to `<-chan[T]` / `chan[T]<-` (or via the values `ch.recv` /
+  `ch.send`).
+- **`ch <- v`** sends (no value; blocks or aborts on a closed channel). **`<-ch`** receives, yielding
+  `Result[T]` — `Right` means closed and drained (carrying `StopIteration` or a crash `Err`). The receive
+  binds first, so `(<-ch)?`, `<-ch!`, and `<-ch ?? d` compose with the group-8 operators.
+- **`select { … }`** is the only multi-way wait: it runs the first ready arm (fair ties). **`done`** fires
+  once when every watched receive channel has closed; **`_`** fires when nothing is ready (non-blocking) —
+  both are **contextual**, special only as a select-arm head. There is **no explicit close** (a channel
+  auto-closes when its last sender leaves) and **no `yield`**.
 
 ## Editor tooling
 

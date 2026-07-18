@@ -46,8 +46,8 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 # later groups.
 statement     ::= simple-stmt | compound-stmt
 simple-stmt   ::= nop | binding | reassign | print | return | raise | break
-                | continue | type-decl | expr-stmt
-compound-stmt ::= block | with-stmt | if-stmt | for-stmt | fn-decl
+                | continue | spawn-stmt | send-stmt | type-decl | expr-stmt
+compound-stmt ::= block | with-stmt | if-stmt | for-stmt | select-stmt | fn-decl
                 | struct-decl | enum-decl | spec-decl | impl-decl
 nop       ::= 'nop'
 
@@ -93,10 +93,10 @@ block      ::= '{' stmt-list '}'
 keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
-             | 'type'  | 'impl'  | 'package' | 'init'   | 'extern' | 'defer'
-             | 'del'   | 'raise' | 'guard'  | 'is'      | 'not'    | 'and'
-             | 'or'    | 'print' | 'this'   | 'with'    | 'as'     | 'from'
-             | 'true'  | 'false' | 'nil'
+             | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'  | 'extern'
+             | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'    | 'not'
+             | 'and'   | 'or'    | 'print'  | 'this'    | 'with'  | 'as'
+             | 'from'  | 'true'  | 'false'  | 'nil'
 # ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
 
 # ==================================================================================
@@ -168,9 +168,10 @@ cmp-expr     ::= add-expr   ( ( cmp-op add-expr ) | ( 'is' type-name ) )?
 add-expr     ::= mul-expr   ( add-op mul-expr )*
 mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
-postfix-expr ::= primary ( postfix )*
+postfix-expr ::= recv-base ( postfix )*
+recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
 primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr
-               | identifier | '(' expr ')'
+               | chan-new | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
                | '(' arg-list? ')'     # call (named arguments: group 5)
@@ -353,7 +354,31 @@ raise         ::= 'raise' expr ( 'from' expr )?     # 'from c' records c as e's 
 guard-expr    ::= 'guard' block                     # yields Result[T]; T = the block's value
 
 # ==================================================================================
+# 9. Concurrency — coroutines & channels
+# ==================================================================================
+# Concurrency is coroutines + channels only (CSP). 'spawn f(args)' starts a
+# fire-and-forget coroutine (no handle, no join). A channel is built with
+# 'chan[T](cap?)' (capacity 0 = unbuffered rendezvous); 'ch <- v' sends, '<-ch'
+# receives yielding Result[T] (Right = closed, carrying StopIteration or a crash
+# Err). A bare 'chan[T]' is bidirectional and narrows to '<-chan[T]' / 'chan[T]<-'
+# or via the values 'ch.recv' / 'ch.send'. There is NO explicit close (the channel
+# auto-closes when its last sender leaves) and NO 'yield'. 'select' is the only
+# multi-way wait.
+
+spawn-stmt   ::= 'spawn' expr                  # fire-and-forget; expr is a call
+send-stmt    ::= expr '<-' expr                # 'ch <- v'; send yields no value
+chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional capacity
+
+# 'select' watches several send/receive arms, runs the first ready one (fair ties).
+# 'done' fires once when every watched receive channel has closed; '_' fires when
+# nothing is ready (non-blocking). Both 'done' and '_' are contextual — special only
+# as a select-arm head.
+select-stmt  ::= 'select' '{' select-arm+ '}'
+select-arm   ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
+recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
+send-arm     ::= expr '<-' expr '->' expr
+
+# ==================================================================================
 # Roadmap — minor groups, landed one per commit after the core
 # ==================================================================================
-#   -- minor --       concurrency (spawn/chan/select/<-); modules
-#                     (import/pub/package/init); FFI (extern "C"); defer/del
+#   -- minor --       modules (import/pub/package/init); FFI (extern "C"); defer/del

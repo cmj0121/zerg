@@ -38,9 +38,10 @@ notation 很小：
 | 6   | Control flow         | `if`、`for … in`、`match` 與 pattern                            | 已落地 |
 | 7   | Types                | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 已落地 |
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`,與 `T?` / `Result` 兩層       | 已落地 |
+| 9   | Concurrency          | `spawn`、`chan[T]()`、`ch <- v`、`<-ch`、`select`               | 已落地 |
 
-其後是次要 group：concurrency（`spawn` / `chan` / `select` / `<-`）、module
-（`import` / `pub` / `package` / `init`）、FFI（`extern "C"`），以及 `defer` / `del`。
+其後是次要 group：module（`import` / `pub` / `package` / `init`）、FFI（`extern "C"`），以及
+`defer` / `del`。
 
 ## Group 1 — `nop` 與程式骨架
 
@@ -332,6 +333,31 @@ postfix       += '?' | '!' | '?.' identifier
 - **`raise e`**——攜帶 `Err` 的 **abort**(value→abort);**`raise e from c`** 把 `c` 記為 `e` 的 cause。
 - **`guard { … }`**——把區塊內任何 abort **降級**回值,產出 `Result[T]`(abort→value)。它是從 abort 層回來的唯一途徑,
   guard 過的 abort 就是普通 `Result`,用同一套 `?` / `??` / `match` 處理。
+
+## Group 9 — Concurrency
+
+並行**只有 coroutine + channel**（CSP）——無共享可變狀態、無 lock、無 join/handle。
+
+```text
+spawn-stmt  ::= 'spawn' expr
+send-stmt   ::= expr '<-' expr
+chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
+recv-base   ::= '<-' recv-base | primary
+select-stmt ::= 'select' '{' select-arm+ '}'
+select-arm  ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
+send-arm    ::= expr '<-' expr '->' expr
+```
+
+- **`spawn f(args)`** 啟動一個 **fire-and-forget** coroutine（Go 的 `go`）——無 handle、無 join;只能透過 channel
+  觀察。capture 限 immutable 值與 channel。
+- **`chan[T](cap?)`** 建立 channel——容量 `0`（預設）是無緩衝 **rendezvous**。裸 `chan[T]` 為雙向,可窄化成
+  `<-chan[T]` / `chan[T]<-`（或用值 `ch.recv` / `ch.send`）。
+- **`ch <- v`** 送出（無值;對已關閉 channel 會 abort）。**`<-ch`** 接收,產出 `Result[T]`——`Right` 表示已關閉且排空
+  （攜 `StopIteration` 或 crash `Err`）。receive 先綁定,故 `(<-ch)?`、`<-ch!`、`<-ch ?? d` 與 group-8 運算子組合。
+- **`select { … }`** 是唯一的多路等待:跑第一個 ready 的 arm（公平 tie）。**`done`** 在所有被監看的 receive channel
+  都關閉時觸發一次;**`_`** 在此刻無 arm ready 時觸發（non-blocking）——兩者皆**contextual**,只在 select-arm 開頭
+  特殊。**沒有明確 close**（channel 在最後 sender 離開時自動關）、**沒有 `yield`**。
 
 ## 編輯器工具（Editor tooling）
 

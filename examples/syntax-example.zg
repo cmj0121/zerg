@@ -120,6 +120,22 @@ fn process(path: str) {
 }
 
 # concurrency, pattern matching, and error handling
+# coroutines & channels (group 9)
+fn fanin(work: <-chan[int]) {
+    ch := chan[int](64)                 # buffered channel, capacity 64
+    spawn produce(ch.send)              # fire-and-forget producer
+    ch <- 42                            # send a value
+    first := <-ch!                      # receive, then force-unwrap
+    for {
+        select {
+            v := <-work -> use(v)       # receive arm binds a value
+            ch <- 0     -> nop          # send arm
+            done        -> break        # every watched receive channel closed
+            _           -> nop          # nothing ready now — non-blocking
+        }
+    }
+}
+
 # null-safety & errors (group 8)
 fn load(path: str) -> Result[Config] {
     txt  := read_file(path)?                   # propagate: a Right early-returns

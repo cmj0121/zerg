@@ -95,7 +95,7 @@ syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
 
 " Symbol operators (word operators not/and/or/is are keywords, group 2). Multi-
 " character forms are listed before the single-char class so they match whole.
-syntax match zergOperator "->\|??\|?\.\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=?!]"
+syntax match zergOperator "->\|<-\|??\|?\.\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|^~<>=?!]"
 
 " --- group 5: declared names (fn/struct/enum/spec/type) and labels -------------
 

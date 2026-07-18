@@ -15,6 +15,15 @@ Zerg 如何抽象行為。**`spec`** 是唯一機制——一個 nominal 介面,
 **型別本身**（heap-boxed、動態 dispatch 的 existential）。涵蓋內建 spec（`Object`、`Ord`、`Hash`、`Error`、運算子）、
 迭代協定,以及 `is` 型別測試。見 **[Spec 與 Generics](specs.zh-TW.md)**。
 
+## Decorator 與 compiler 代寫的行為
+
+compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decorator** 請求：`struct`/`enum` 上的
+`#[derive(Encode, Decode)]` 會生成逐欄位(與逐 variant)的 canonical impl。可 derive 的是一組**固定、compiler 擁有的
+受祝福 spec**——`Object`(一律 derive)以及可 opt-in 的 `Ord`、`Hash`、`Encode`、`Decode`。**使用者 spec 永遠不能被
+derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 field 的程式,而那只有 compiler 能做——**沒有 macro**。要
+客製就手寫 `impl X for Y`。decorator 是 Zerg 給這類 compiler 指令的唯一通道,且保持封閉(使用者不可自訂)。見
+**[Derive 與預設行為](derive.zh-TW.md)**。
+
 ## 控制流與模式比對（Control Flow & Pattern Matching）
 
 三個構造,依「產出什麼」區分：**`if`** 與 **`for`** 是為副作用而跑的 statement,**`match`** 是產出值的 expression。再加上

@@ -15,16 +15,21 @@ endif
 
 " --- group 1 & 2: comments -----------------------------------------------------
 
-" Line comment: '#' to end of line (Zerg has no block comments). TODO-style
-" markers inside a comment are highlighted.
+" Line comment: '#' to end of line, EXCEPT '#[' which starts a decorator (below).
+" TODO-style markers inside a comment are highlighted.
 syntax keyword zergTodo contained TODO FIXME XXX HACK BUG NOTE
-syntax match zergComment "#.*$" contains=zergTodo,@Spell
+syntax match zergComment "#\%(\[\)\@!.*$" contains=zergTodo,@Spell
+
+" A decorator '#[derive(...)]' — a compiler directive. Capitalized spec names
+" inside highlight as types; the rest reads as a preprocessor directive.
+syntax region zergDecorator matchgroup=zergDecorator start="#\[" end="\]"
+      \ contains=zergType,zergNumber,zergString
 
 " --- group 2: reserved keywords ------------------------------------------------
 
 " Statement keywords (control flow, effects, items introduced by a statement).
 syntax keyword zergStatement nop return if else in break continue match
-syntax keyword zergStatement spawn select defer del raise guard import derive impl print
+syntax keyword zergStatement spawn select defer del raise guard import impl print
 
 " `for` is a match (not a keyword) so the `impl … for` override below can win.
 syntax match zergStatement "\<for\>"
@@ -145,5 +150,6 @@ highlight default link zergCall       Function
 highlight default link zergWildcard   Special
 highlight default link zergTodo       Todo
 highlight default link zergEscapeError Error
+highlight default link zergDecorator  PreProc
 
 let b:current_syntax = 'zerg'

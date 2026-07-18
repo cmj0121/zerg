@@ -58,7 +58,7 @@ own reusable default?"
 
 ## Structural derive — the compiler's privilege, and closed
 
-`derive X for T` asks the **compiler** to generate the canonical `(T, X)` implementation by **reading
+`#[derive(X)]` asks the **compiler** to generate the canonical `(T, X)` implementation by **reading
 T's structure** — a product **field-by-field**, a sum **variant-by-variant**, recursing into each
 field's own `X`. It's **not** sugar for an empty impl inheriting a default body: a spec has no
 structural default (it's field-blind), so `derive` is a compiler **code generator keyed on a blessed
@@ -72,7 +72,7 @@ spec**, distinct from both tiers above.
 - the **compiler** — which is not user-authored.
 
 So a user-defined structural derive is impossible **by construction**, not by omission. The derivable
-set is **fixed and compiler-owned**; a user spec is never in it (`derive UserSpec for T` is a compile
+set is **fixed and compiler-owned**; a user spec is never in it (`#[derive(UserSpec)]` is a compile
 error). The extensible tier is the behavioral default above; the structural tier is closed.
 
 ## The derivable specs
@@ -89,7 +89,7 @@ derived; the rest are **opt-in** via `derive`:
 | `Decode` | rebuild per field / from tag + payload         | `Decode`              | `chan`/`Ref`/`fn`/handle |
 
 A field that fails the requirement makes the derive a **compile error naming that field**, never a
-silent skip — `derive Ord for T` with a `float` field is rejected exactly as the hand-written rule in
+silent skip — `#[derive(Ord)]` on a `T` with a `float` field is rejected exactly as the hand-written rule in
 [Specs & Generics](specs.md) demands (a `float` has no total order; author it by hand with a
 canonical `±0.0` and `NaN` at an end).
 
@@ -104,13 +104,13 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 
 ## `derive` semantics & coherence
 
-- `derive X for T` yields **the one canonical** `(T, X)` implementation — the same slot a hand impl
+- `#[derive(X)]` yields **the one canonical** `(T, X)` implementation — the same slot a hand impl
   fills, generated instead of written.
 - To specialize, **hand-write `impl X for T { … }` instead** of deriving; you may not have both
   (duplicate impl is an error), consistent with **one canonical implementation per `(type, spec)`**.
 - The **orphan rule is unchanged**: a `derive` is authored where a hand impl legally could be — the
   package that owns `T` or the package that owns `X`.
-- Only a **blessed** spec may follow `derive`; a user spec there is a compile error.
+- Only a **blessed** spec may appear in `#[derive(…)]`; a user spec there is a compile error.
 
 ## Serialization — the worked example
 
@@ -126,14 +126,13 @@ spec Decode {
     fn decode(mut src: Source) -> Result[This]     # This = the reconstructed value
 }
 
+#[derive(Encode, Decode)]             # the compiler reads User's structure, writes both canonical impls
 struct User {
     id:    int
     name:  str
     tags:  list[str]
     email: str?
 }
-
-derive Encode, Decode for User        # the compiler reads User's structure, writes both canonical impls
 ```
 
 What the compiler generates — conceptually; you never write or see this — is the obvious field-by-field
@@ -159,12 +158,11 @@ impl Encode for User {                            # generated, not written
 A sum type derives over its variants — **tag, then payload**:
 
 ```text
+#[derive(Encode)]                     # generated: write the variant tag, then each payload field
 enum Shape {
     Circle(float)
     Rect(float, float)
 }
-
-derive Encode for Shape               # generated: write the variant tag, then each payload field
 ```
 
 When the wire format must differ, **hand-write the impl instead of deriving** — still one canonical

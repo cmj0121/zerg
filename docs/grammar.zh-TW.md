@@ -75,7 +75,8 @@ for {
 之後每個 group 都會為 `statement` 增添一種形式（binding、expression statement、declaration……）；`nop` 始終是
 那個永遠可用、永遠無作用的 statement。
 
-comment 不是 statement——`#` 一路到行尾，且 Zerg **沒有 block comment**：
+comment 不是 statement——`#` 一路到行尾，且 Zerg **沒有 block comment**（唯一例外是 `#[`，它起始一個 decorator，
+見 group 7）：
 
 ```text
 # 整行註解
@@ -104,10 +105,12 @@ block      ::= '{' stmt-list '}'
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-type  impl   derive  package  init     extern
-defer del    raise   guard    is       not
-and   or     print   true     false    nil
+type  impl   package init     extern   defer
+del   raise  guard   is       not      and
+or    print  this    true     false    nil
 ```
+
+（`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
 
 **block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
 內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
@@ -262,12 +265,13 @@ type        ::= base-type '?'?
 base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
-struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+struct-decl ::= decorator* 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl   ::= decorator* 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
-derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
+decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
+deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 ```
 
 - **Type 表達式。** 一個**名字**加選用**型別引數**（`int`、`User`、`list[int]`、`Either[A, B]`）；一個 **tuple
@@ -280,7 +284,11 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法**不宣告 receiver**——
   `this` 在方法內為隱式，透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self
-  型別是 **`This`**。`impl … for …` 為某型別提供 spec 的方法，`derive …` 請 compiler 代寫。
+  型別是 **`This`**。`impl … for …` 由手寫為某型別提供 spec 的方法。
+- **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是掛在後續宣告上的 compiler 指令。在 `struct`/`enum` 上
+  的 `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl。decorator 是
+  **固定、compiler 擁有**的集合——使用者不可自訂（Zerg 無 macro）；其他指令（layout、FFI…）日後於此加入。`#[` 是唯一
+  不算註解的 `#`——lexer peek 一字元即分辨。
 
 ## 編輯器工具（Editor tooling）
 

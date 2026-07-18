@@ -46,7 +46,7 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 # later groups.
 statement     ::= simple-stmt | compound-stmt
 simple-stmt   ::= nop | binding | reassign | print | return | break | continue
-                | type-decl | derive-decl | expr-stmt
+                | type-decl | expr-stmt
 compound-stmt ::= if-stmt | for-stmt | fn-decl
                 | struct-decl | enum-decl | spec-decl | impl-decl
 nop       ::= 'nop'
@@ -66,6 +66,11 @@ nop       ::= 'nop'
 # match arms all newline-separated with the same ';' separator. ',' separates the
 # elements of a value list instead — arguments, tuples, generics, a variant payload,
 # and the fields of a struct pattern/literal (a composite, like Go's Point{X: 1, Y: 2}).
+#
+# Decorators & '#'. '#[' begins a DECORATOR — a compiler directive (group 7); any
+# other '#' begins a line comment. The lexer peeks one character, so the two never
+# collide. A decorator binds to the declaration that follows it; a line break between
+# a decorator and its target does not separate them (no ASI ';' applies there).
 
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
@@ -76,7 +81,8 @@ identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 
 NEWLINE    ::= '\n'                # a line break; terminates a statement (group 1)
 WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens
-COMMENT    ::= '#' [^\n]*          # line comment to end of line; no block comments
+COMMENT    ::= '#' [^[\n] [^\n]*   # a '#' NOT followed by '[' → comment to EOL
+             | '#' NEWLINE          # a bare '#' at end of line is also a comment
 
 # A block groups a statement list in braces — the body of a function, loop, or
 # conditional. Inner separators follow the group-1 stmt-list rules.
@@ -87,9 +93,10 @@ block      ::= '{' stmt-list '}'
 keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
-             | 'type'  | 'impl'  | 'derive' | 'package' | 'init'   | 'extern'
-             | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'     | 'not'
-             | 'and'   | 'or'    | 'print'  | 'this'    | 'true'   | 'false' | 'nil'
+             | 'type'  | 'impl'  | 'package' | 'init'   | 'extern' | 'defer'
+             | 'del'   | 'raise' | 'guard'  | 'is'      | 'not'    | 'and'
+             | 'or'    | 'print' | 'this'   | 'true'    | 'false'  | 'nil'
+# ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
 
 # ==================================================================================
 # 3. Literals
@@ -261,9 +268,9 @@ pattern-list ::= pattern ( ',' pattern )*
 # ==================================================================================
 # The type expressions referenced since group 5, and the declarations that introduce
 # types and behavior: 'struct' (product), 'enum' (sum), 'type X = Y' (strong typedef),
-# 'spec' (behavioral interface), 'impl', and 'derive'. A method takes no explicit
-# receiver — 'this' is implicit inside a method (see param, group 5); the self type
-# is 'This'.
+# 'spec' (behavioral interface), and 'impl'. Structural derivation is a decorator on
+# the type, '#[derive(...)]' (below). A method takes no explicit receiver — 'this' is
+# implicit inside a method (see param, group 5); the self type is 'This'.
 
 # --- type expressions ---
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
@@ -276,13 +283,20 @@ chan-type    ::= 'chan' '[' type ']'           # bidirectional
                | '<-' 'chan' '[' type ']'       # receive-only (a receiver), Go-style
                | 'chan' '[' type ']' '<-'       # send-only (a sender), Go-style
 
-# --- declarations (compound: struct/enum/spec/impl; simple: type/derive) ---
-struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+# --- declarations (compound: struct/enum/spec/impl; simple: type) ---
+struct-decl  ::= decorator* 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl    ::= decorator* 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
 spec-decl    ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl    ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
-derive-decl  ::= 'derive' type-name ( ',' type-name )* 'for' type-name
+
+# Decorators are a fixed, compiler-owned set of directives (users cannot define new
+# ones — Zerg has no macros). Each binds to the declaration that follows. 'derive'
+# asks the compiler to generate the canonical impls of the named blessed specs by
+# reading the type's structure; other decorators (layout, FFI, …) slot in here later.
+decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
+deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
+deco-arg     ::= type-name | literal          # derive(Encode, Decode), align(16), …
 
 generics     ::= '[' identifier ( ',' identifier )* ']'
 # Fields and variants are separated exactly like statements — by stmt-sep (a line

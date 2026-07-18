@@ -53,7 +53,7 @@ spec Summable {
 
 ## Structural derive——compiler 的特權，且封閉
 
-`derive X for T` 就是請 **compiler** 靠**讀取 T 的結構**，產生 `(T, X)` 的 canonical 實作——product
+`#[derive(X)]` 就是請 **compiler** 靠**讀取 T 的結構**，產生 `(T, X)` 的 canonical 實作——product
 **逐欄位**、sum **逐 variant**，並遞迴進入每個欄位自己的 `X`。它**不是**「空 impl 繼承 default body」的
 語法糖：spec 沒有結構化 default（它 field-blind），所以 `derive` 是一個**以受祝福的 spec 為鍵的
 compiler code generator**，與上面兩層都不同。
@@ -66,7 +66,7 @@ compiler code generator**，與上面兩層都不同。
 - **compiler**——那就不是使用者撰寫的。
 
 所以使用者自定 structural derive 是**結構上不可能**，不是漏做。可 derive 的集合是**固定且 compiler
-擁有**的；使用者 spec 永遠不在其中（`derive UserSpec for T` 是編譯錯誤）。可擴充的一層是上面的
+擁有**的；使用者 spec 永遠不在其中（`#[derive(UserSpec)]` 是編譯錯誤）。可擴充的一層是上面的
 behavioral default；結構這一層是封閉的。
 
 ## 可 derive 的 spec 清單
@@ -82,7 +82,7 @@ behavioral default；結構這一層是封閉的。
 | `Encode` | product 逐欄位、sum 先 tag 再 payload                   | `Encode`         | `chan` / `Ref` / `fn` / handle |
 | `Decode` | 逐欄位 / 由 tag + payload 重建                          | `Decode`         | `chan` / `Ref` / `fn` / handle |
 
-不符要求的欄位會讓 derive 變成**點名該欄位的編譯錯誤**，絕不靜默略過——`derive Ord for T` 若含 `float`
+不符要求的欄位會讓 derive 變成**點名該欄位的編譯錯誤**，絕不靜默略過——`#[derive(Ord)]` 若含 `float`
 欄位會被拒，正如 [Spec 與 Generics](specs.zh-TW.md) 裡手寫規則所要求（`float` 無 total order；請手寫並以
 canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
@@ -97,12 +97,12 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 ## `derive` 語意與 coherence
 
-- `derive X for T` 產生**唯一的** `(T, X)` canonical 實作——與手寫 impl 填的是同一個槽，只是用生成取代
+- `#[derive(X)]` 產生**唯一的** `(T, X)` canonical 實作——與手寫 impl 填的是同一個槽，只是用生成取代
   撰寫。
 - 要特化，就**改成手寫 `impl X for T { … }`** 而非 derive；兩者不可並存（重複 impl 是錯誤），符合
   **每個 `(type, spec)` 唯一 canonical 實作**。
 - **orphan rule 不變**：`derive` 撰寫於手寫 impl 合法的所在——擁有 `T` 的 package 或擁有 `X` 的 package。
-- `derive` 後只能接**受祝福**的 spec；接使用者 spec 是編譯錯誤。
+- `#[derive(…)]` 內只能是**受祝福**的 spec；放使用者 spec 是編譯錯誤。
 
 ## Serialization——完整範例
 
@@ -118,14 +118,13 @@ spec Decode {
     fn decode(mut src: Source) -> Result[This]     # This = 重建出的值
 }
 
+#[derive(Encode, Decode)]             # compiler 讀 User 的結構，寫出兩份 canonical impl
 struct User {
     id:    int
     name:  str
     tags:  list[str]
     email: str?
 }
-
-derive Encode, Decode for User        # compiler 讀 User 的結構，寫出兩份 canonical impl
 ```
 
 compiler 生成的內容——概念示意，你永遠不會寫、也看不到——就是顯而易見的逐欄位走訪，每個欄位委派給
@@ -151,12 +150,11 @@ impl Encode for User {                            # 生成，非手寫
 sum 型別依 variant derive——**先 tag、再 payload**：
 
 ```text
+#[derive(Encode)]                     # 生成：寫出 variant tag，再逐個 payload 欄位
 enum Shape {
     Circle(float)
     Rect(float, float)
 }
-
-derive Encode for Shape               # 生成：寫出 variant tag，再逐個 payload 欄位
 ```
 
 當線上格式必須不同，就**手寫 impl 而非 derive**——仍是唯一 canonical 實作，仍然沒有 macro：

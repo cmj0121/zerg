@@ -76,7 +76,8 @@ for {
 Every later group extends `statement` with another form (a binding, an expression statement, a
 declaration, …); `nop` remains the one statement that is always available and always inert.
 
-Comments are not statements — a `#` runs to the end of the line, and Zerg has **no block comments**:
+Comments are not statements — a `#` runs to the end of the line, and Zerg has **no block comments** (the
+one exception is `#[`, which begins a decorator, group 7):
 
 ```text
 # a full-line comment
@@ -105,10 +106,12 @@ keyword** is never an identifier; the full reserved set is:
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-type  impl   derive  package  init     extern
-defer del    raise   guard    is       not
-and   or     print   true     false    nil
+type  impl   package init     extern   defer
+del   raise  guard   is       not      and
+or    print  this    true     false    nil
 ```
+
+(`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
 
 A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
 conditional. Its inner statements follow the same separator rules as the top level, so an empty block is
@@ -279,12 +282,13 @@ type        ::= base-type '?'?
 base-type   ::= type-name type-args? | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
-struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
-enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+struct-decl ::= decorator* 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl   ::= decorator* 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
 spec-decl   ::= 'pub'? 'spec' identifier generics? '{' spec-member* '}'
 impl-decl   ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
-derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
+decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
+deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 ```
 
 - **Type expressions.** A **name** with optional **type arguments** (`int`, `User`, `list[int]`,
@@ -300,8 +304,12 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
   full method). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through
   the instance it is called on; a `fn` that uses `this` with no instance bound is a compile error. The self
-  type is **`This`**. `impl … for …` supplies a spec's methods for a type, and `derive …` asks the compiler
-  to write them.
+  type is **`This`**. `impl … for …` supplies a spec's methods for a type by hand.
+- **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive attached to the following
+  declaration. `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to **generate** the
+  canonical impls of the named specs by reading the type's structure. Decorators are a **fixed,
+  compiler-owned set** — users cannot define new ones (Zerg has no macros); other directives (layout, FFI…)
+  will slot in here later. `#[` is the one `#` that is not a comment — the lexer peeks one character.
 
 ## Editor tooling
 

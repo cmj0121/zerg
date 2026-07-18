@@ -19,6 +19,17 @@ heap-boxed, dynamically dispatched existential). Covers the built-in specs (`Obj
 `Error`, the operators), the iteration protocol, and the `is` type test. See
 **[Specs & Generics](specs.md)**.
 
+## Decorators & compiler-derived behavior
+
+The compiler can **write an implementation for you** from a type's **structure**, requested with a
+**decorator** on the type: `#[derive(Encode, Decode)]` on a `struct`/`enum` generates the canonical,
+field-by-field (and variant-by-variant) impls. What it derives is a **fixed, compiler-owned set of blessed
+specs** — `Object` (always derived) and, opt-in, `Ord`, `Hash`, `Encode`, `Decode`. A **user spec can never
+be derived** (`#[derive(MySpec)]` is a compile error): generating from structure needs code that reads
+fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
+`impl X for Y`. Decorators are Zerg's one channel for such compiler directives, and it stays closed (users
+cannot define new ones). See **[Derive & Default Behavior](derive.md)**.
+
 ## Control Flow & Pattern Matching
 
 The three constructs, split by what they yield: **`if`** and **`for`** are statements that run for

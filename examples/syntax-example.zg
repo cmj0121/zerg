@@ -8,7 +8,8 @@ import io
 # a strong-typedef over a built-in type
 type UserId = int
 
-# a product type
+# a product type; `#[derive(...)]` asks the compiler to generate the impls
+#[derive(Encode, Decode)]
 struct User {
     id:    UserId
     name:  str
@@ -27,14 +28,11 @@ spec Summable {
     fn add(other: This) -> This        # `this` is implicit — not a parameter
 }
 
-# generics, derive, and impl (group 7)
+# generics and impl (group 7)
 enum Option[T] {
     Some(T)
     None
 }
-
-derive Encode, Decode for User
-
 impl Summable for int {
     fn zero() -> This { return 0 }
     fn add(other: This) -> This { return this + other }   # this used, not declared

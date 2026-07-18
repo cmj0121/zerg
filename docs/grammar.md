@@ -87,6 +87,8 @@ Syntax highlighting for Neovim lives under [`editors/nvim/`](../editors/nvim) as
 | `ftplugin/zerg.vim` | buffer conventions: `#` comments, 4-space indent |
 | `syntax/zerg.vim`   | the highlighting rules                           |
 
-To use them, add the `editors/nvim/` directory to your `runtimepath` (or symlink its subdirectories into
-`~/.config/nvim/`). The highlighting tracks `GRAMMAR`: it covers exactly the groups that have landed and
-grows with each new one.
+The quickest way is **`make install`**, which symlinks the files into your nvim config
+(`$XDG_CONFIG_HOME/nvim`, default `~/.config/nvim`); `make uninstall` removes them. Because it symlinks,
+the highlighting tracks this checkout. Alternatively, add the `editors/nvim/` directory to your
+`runtimepath`. Either way the highlighting tracks `GRAMMAR`: it covers exactly the groups that have landed
+and grows with each new one.

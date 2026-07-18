@@ -86,5 +86,7 @@ Neovim 的語法高亮放在 [`editors/nvim/`](../editors/nvim)，是經典的 V
 | `ftplugin/zerg.vim` | buffer 慣例：`#` 註解、4-space 縮排 |
 | `syntax/zerg.vim`   | 高亮規則                            |
 
-使用時，把 `editors/nvim/` 目錄加進 `runtimepath`（或把其子目錄 symlink 進 `~/.config/nvim/`）。高亮跟著
-`GRAMMAR` 走：只涵蓋已落地的 group，並隨每個新 group 成長。
+最快的方式是 **`make install`**，它會把檔案 symlink 進你的 nvim 設定（`$XDG_CONFIG_HOME/nvim`，預設
+`~/.config/nvim`）；`make uninstall` 則移除。因為是 symlink，高亮會跟著這份 checkout 走。或者，把
+`editors/nvim/` 目錄加進 `runtimepath`。無論哪種方式，高亮都跟著 `GRAMMAR`：只涵蓋已落地的 group，並隨每個新
+group 成長。

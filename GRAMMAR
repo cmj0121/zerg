@@ -18,6 +18,7 @@
 #   A+               one or more A
 #   [a-z]            a character in the given range
 #   [^x]             any character except x
+#   < text >         an informal terminal, described in prose
 #   UPPER-CASE       a lexical token defined under the Lexical group
 #   #                a comment, to end of line (same as Zerg's own comment syntax)
 #
@@ -74,9 +75,55 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'and'   | 'or'    | 'true'   | 'false'   | 'nil'
 
 # ==================================================================================
+# 3. Literals
+# ==================================================================================
+# A literal denotes a constant value. A numeric literal is untyped — it adopts the
+# type its context demands (an integer literal defaults to `int`, a fractional or
+# exponent literal to `float`). A '_' may group digits for readability, between
+# digits only (never leading, trailing, or doubled).
+
+literal     ::= bool-lit | nil-lit | float-lit | int-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit
+
+bool-lit    ::= 'true' | 'false'
+nil-lit     ::= 'nil'                      # the placeholder value of a T?
+
+# Integers: decimal or a based form. Sign is not part of the literal (unary '-' is
+# an operator, group 4).
+int-lit     ::= dec-int | hex-int | oct-int | bin-int
+dec-int     ::= digit ( '_'? digit )*
+hex-int     ::= '0x' hex-digit ( '_'? hex-digit )*
+oct-int     ::= '0o' oct-digit ( '_'? oct-digit )*
+bin-int     ::= '0b' bin-digit ( '_'? bin-digit )*
+hex-digit   ::= [0-9a-fA-F]
+oct-digit   ::= [0-7]
+bin-digit   ::= [0-1]
+
+# Floats: a fractional part, an exponent, or both (a bare integer is int-lit).
+float-lit   ::= dec-int '.' dec-int exponent?
+              | dec-int exponent
+exponent    ::= ( 'e' | 'E' ) ( '+' | '-' )? dec-int
+
+# Text. A rune is one Unicode code point in single quotes; a byte is one octet,
+# 'b'-prefixed (or `byte(0x41)` by cast, group 7). A str is double-quoted and
+# processes escapes; a raw str is 'r'-prefixed and processes none. A str may not
+# hold a NUL, so '\0' and '\u{0}' are invalid inside "..." (but valid in a rune or
+# byte). f"..." interpolation is deferred to the expression group.
+rune-lit    ::= "'" ( rune-char | escape ) "'"
+byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
+str-lit     ::= '"' ( str-char | escape )* '"'
+raw-str-lit ::= 'r' '"' raw-char* '"'
+
+escape      ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | '"' | 'u' '{' hex-digit+ '}' )
+byte-escape ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | 'x' hex-digit hex-digit )
+rune-char   ::= < any code point except "'", '\', or a line break >
+byte-char   ::= < any octet 0x00..0x7F except "'", '\', or a line break >
+str-char    ::= < any code point except '"', '\', NUL, or a line break >
+raw-char    ::= < any code point except '"' or a line break >   # no escapes
+
+# ==================================================================================
 # Roadmap — groups landed one per commit, core to minor
 # ==================================================================================
-#   3. Literals       bool, int (0x/0o/0b), float, rune, byte, str
 #   4. Bindings/Expr  ':=', 'mut', operators + precedence
 #   5. Functions      'fn' decl, params, defaults, named args, closures, 'return'
 #   6. Control flow   'if', 'for ... in', 'match' + patterns

@@ -30,6 +30,20 @@ spec Summable {
 # the empty-statement placeholder
 fn noop() { nop }
 
+# literals of every kind (group 3)
+fn literals() {
+    count := 1_000_000         # int, with digit grouping
+    mask  := 0xDE_AD_BE_EF     # hex int
+    perms := 0o755             # octal int
+    flags := 0b1010            # binary int
+    ratio := 6.022e23          # float
+    tab   := '\t'              # rune
+    ch    := b'a'              # byte
+    hi    := "line\n"          # str with an escape
+    path  := r"C:\tmp\new"     # raw str — backslashes are literal
+    nop
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

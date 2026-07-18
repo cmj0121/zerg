@@ -1,8 +1,8 @@
 " Zerg syntax highlighting
 "
 " Highlighting grows one grammar group at a time, tracking GRAMMAR. This file
-" currently covers group 1 (nop) and group 2 (lexical: comments, identifiers,
-" keywords). Later groups add: literals, operators, declarations' structure.
+" currently covers group 1 (nop), group 2 (lexical: comments, identifiers,
+" keywords), and group 3 (literals). Later groups add operators and structure.
 "
 " Maintainer: Zerg project
 " Filenames:  *.zg
@@ -36,6 +36,29 @@ syntax keyword zergType list map set chan Ref Result Either This
 syntax keyword zergBoolean true false
 syntax keyword zergConstant nil
 
+" --- group 3: literals ---------------------------------------------------------
+
+" Integers (decimal, hex, octal, binary) with '_' digit grouping.
+syntax match zergNumber "\<\d\(_\?\d\)*\>"
+syntax match zergNumber "\<0x\x\(_\?\x\)*\>"
+syntax match zergNumber "\<0o\o\(_\?\o\)*\>"
+syntax match zergNumber "\<0b[01]\(_\?[01]\)*\>"
+
+" Floats: fractional and/or exponent.
+syntax match zergFloat "\<\d\(_\?\d\)*\.\d\(_\?\d\)*\([eE][-+]\?\d\(_\?\d\)*\)\?\>"
+syntax match zergFloat "\<\d\(_\?\d\)*[eE][-+]\?\d\(_\?\d\)*\>"
+
+" Escape sequences, shared by rune/byte/str.
+syntax match zergEscape "\\\([ntr0\\'\"]\|u{\x\+}\|x\x\x\)" contained
+
+" byte b'x' (leftmost, so it wins over rune at the quote) and rune 'x'.
+syntax match zergCharacter "b'\(\\\([ntr0\\']\|x\x\x\)\|[^'\\]\)'" contains=zergEscape
+syntax match zergCharacter "'\(\\\([ntr0\\'\"]\|u{\x\+}\)\|[^'\\]\)'" contains=zergEscape
+
+" raw string r"..." (no escapes) and str "..." (with escapes).
+syntax region zergRawString start=+r"+ end=+"+
+syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape
+
 " --- highlight links ------------------------------------------------------------
 
 highlight default link zergComment   Comment
@@ -45,5 +68,11 @@ highlight default link zergOperator  Operator
 highlight default link zergType      Type
 highlight default link zergBoolean   Boolean
 highlight default link zergConstant  Constant
+highlight default link zergNumber    Number
+highlight default link zergFloat     Float
+highlight default link zergCharacter Character
+highlight default link zergString    String
+highlight default link zergRawString String
+highlight default link zergEscape    SpecialChar
 
 let b:current_syntax = 'zerg'

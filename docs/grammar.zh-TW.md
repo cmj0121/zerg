@@ -32,7 +32,7 @@ notation 很小：
 | --- | --------------- | --------------------------------------------------------------- | ------ |
 | 1   | nop & skeleton  | `program`、`statement`、statement 分隔、`nop`                   | 已落地 |
 | 2   | Lexical         | comment、identifier、keyword、newline、block                    | 已落地 |
-| 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 規劃中 |
+| 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 已落地 |
 | 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 規劃中 |
 | 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 規劃中 |
 | 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 規劃中 |
@@ -107,6 +107,36 @@ and   or     true    false    nil
 
 **block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
 內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
+
+## Group 3 — Literals
+
+literal 表示一個常數值：
+
+```text
+literal     ::= bool-lit | nil-lit | float-lit | int-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit
+bool-lit    ::= 'true' | 'false'
+nil-lit     ::= 'nil'
+int-lit     ::= dec-int | hex-int | oct-int | bin-int
+float-lit   ::= dec-int '.' dec-int exponent? | dec-int exponent
+rune-lit    ::= "'" ( rune-char | escape ) "'"
+byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
+str-lit     ::= '"' ( str-char | escape )* '"'
+raw-str-lit ::= 'r' '"' raw-char* '"'
+```
+
+- **數字。** 整數為十進位或帶基底——`0x1F`、`0o17`、`0b1010`。float 有小數部分、指數，或兩者——`1.0`、`1e3`、
+  `6.022e23`。數字 literal 是**未定型的**：採用其語境要求的型別（整數預設 `int`，帶小數/指數者預設 `float`）。`_`
+  可**分組數字**，只允許在數字之間——`1_000_000`、`0xDE_AD_BE_EF`。正負號不屬 literal；`-5` 是對 `5` 施加一元
+  減號（運算子）。
+- **`rune` 與 `byte`。** **`rune`** 是單引號內的一個 Unicode code point——`'a'`、`'\n'`、`'\u{1F600}'`。
+  **`byte`** 是一個 octet，加 `b` 前綴——`b'a'`、`b'\x41'`——或用 cast 寫成 `byte(0x41)`。單引號留給這兩者；字串
+  用雙引號。
+- **`str` 與 raw string。** **`str`** 用雙引號並處理 escape（`\n \t \r \0 \\ \" \'` 與 `\u{…}`）。**raw
+  string** 加 `r` 前綴，**不**處理任何 escape——`r"C:\tmp\new"` 是十個字面字元。`str` 不能含 NUL，所以 `\0` 與
+  `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
+
+`f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 
 ## 編輯器工具（Editor tooling）
 

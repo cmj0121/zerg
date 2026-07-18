@@ -32,7 +32,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | --- | --------------- | -------------------------------------------------------------- | ------- |
 | 1   | nop & skeleton  | `program`, `statement`, statement separators, `nop`            | landed  |
 | 2   | Lexical         | comments, identifiers, keywords, newlines, blocks              | landed  |
-| 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | planned |
+| 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed  |
 | 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | planned |
 | 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | planned |
 | 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | planned |
@@ -109,6 +109,39 @@ and   or     true    false    nil
 A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
 conditional. Its inner statements follow the same separator rules as the top level, so an empty block is
 written with the placeholder: `{ nop }`.
+
+## Group 3 — Literals
+
+A literal denotes a constant value:
+
+```text
+literal     ::= bool-lit | nil-lit | float-lit | int-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit
+bool-lit    ::= 'true' | 'false'
+nil-lit     ::= 'nil'
+int-lit     ::= dec-int | hex-int | oct-int | bin-int
+float-lit   ::= dec-int '.' dec-int exponent? | dec-int exponent
+rune-lit    ::= "'" ( rune-char | escape ) "'"
+byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
+str-lit     ::= '"' ( str-char | escape )* '"'
+raw-str-lit ::= 'r' '"' raw-char* '"'
+```
+
+- **Numbers.** An integer is decimal or based — `0x1F`, `0o17`, `0b1010`. A float has a fractional part,
+  an exponent, or both — `1.0`, `1e3`, `6.022e23`. A numeric literal is **untyped**: it adopts the type
+  its context demands (an integer defaults to `int`, a fractional/exponent literal to `float`). A `_` may
+  **group digits** between digits only — `1_000_000`, `0xDE_AD_BE_EF`. A sign is not part of the literal;
+  `-5` is unary minus (an operator) applied to `5`.
+- **`rune` and `byte`.** A **`rune`** is one Unicode code point in single quotes — `'a'`, `'\n'`,
+  `'\u{1F600}'`. A **`byte`** is one octet, `b`-prefixed — `b'a'`, `b'\x41'` — or written `byte(0x41)` by
+  cast. Single quotes are for these two; strings use double quotes.
+- **`str` and raw strings.** A **`str`** is double-quoted and processes escapes (`\n \t \r \0 \\ \" \'`
+  and `\u{…}`). A **raw string** is `r`-prefixed and processes **none** — `r"C:\tmp\new"` is ten literal
+  characters. A `str` cannot hold a NUL, so `\0` and `\u{0}` are invalid inside `"…"` (they are fine in a
+  `rune` or `byte`).
+
+`f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
+commit.
 
 ## Editor tooling
 

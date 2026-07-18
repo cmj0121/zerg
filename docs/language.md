@@ -83,6 +83,8 @@ Built on the core language above:
   [`GRAMMAR`](../GRAMMAR) file, and the nvim syntax tooling.
 - **[Syntax Sugar](syntax-sugar.md)** — every convenient surface form and the core it desugars to,
   collected in one table.
+- **[Patterns & Idioms](patterns.md)** — the Zerg way to write closures, chained pipelines, and
+  builders (named functions, named args + defaults) without extra syntax.
 - **[Collections](collections.md)** — the built-in containers `list`, `map`, `set`, and the
   fixed-size `[T; N]` array; one canonical type per role.
 - **[Derive & Default Behavior](derive.md)** — the two sources of "free" behavior: the compiler's

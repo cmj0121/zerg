@@ -1,2 +1,9 @@
 MD013:
   line_length: 128
+# Tables are formatted by prettier (display-width aligned); MD060 counts code
+# points, so the two conflict on CJK tables. Let prettier be the authority.
+MD060: false
+# Prettier emits context-appropriate emphasis markers (underscore where valid,
+# asterisk next to CJK where underscore would not parse); MD049 wants a single
+# consistent marker and fights prettier. Let prettier be the authority.
+MD049: false

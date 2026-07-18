@@ -103,7 +103,7 @@ if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
 type  impl   derive  package  init     extern
 defer del    raise   guard    is       not
-and   or     true    false    nil
+and   or     print   true     false    nil
 ```
 
 A **block** groups a statement list in braces — the body a later group hangs on a function, loop, or
@@ -179,7 +179,23 @@ existential against a spec or variant name (full form in groups 6–7). A sign i
 literal.
 
 The null-safety and error operators (`?` `??` `?.` `!`) are **not** here — they belong to the error group.
-`f"…"` interpolation is this expression group, but lands as its **own commit**.
+
+### String interpolation & `print`
+
+An **f-string** is a primary expression — a string with `{ expr }` holes:
+
+```text
+fstr-lit ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+interp   ::= '{' expr '}'
+print    ::= 'print' expr
+```
+
+`f"sum={x + y}"` renders each hole through `display()` and joins the pieces — it **desugars at compile
+time** to `str` concatenation, with no runtime format engine. A plain `"…"` is a literal (its braces are
+ordinary); only an f-string reads `{…}`, and `{{` / `}}` write literal braces. Format specifiers like
+`f"{x:>.2f}"` are **deferred** to a separate per-type format protocol. **`print`** writes a value's
+`display()` and a newline to stdout — a reserved keyword, always in scope, best-effort (it never raises),
+so `print f"hello {name}"` is the smallest program.
 
 ## Editor tooling
 

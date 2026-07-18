@@ -102,7 +102,7 @@ if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
 type  impl   derive  package  init     extern
 defer del    raise   guard    is       not
-and   or     true    false    nil
+and   or     print   true     false    nil
 ```
 
 **block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
@@ -169,8 +169,23 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 同層、`\|` `^` 與加法級同層——都比比較緊一級，所以 `a & b == c` 讀作 `(a & b) == c`，避開 C 的優先序陷阱。`is`
 以一個 spec 或 variant 名字測試 existential（完整形式見 group 6–7）。正負號是運算子，不屬 literal。
 
-null-safety 與 error 運算子（`?` `??` `?.` `!`）**不在**此處——歸 error group。`f"…"` 插值屬本 expression
-group，但以**獨立 commit** 落地。
+null-safety 與 error 運算子（`?` `??` `?.` `!`）**不在**此處——歸 error group。
+
+### 字串插值與 `print`
+
+**f-string** 是一種 primary expression——帶 `{ expr }` 洞的字串：
+
+```text
+fstr-lit ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+interp   ::= '{' expr '}'
+print    ::= 'print' expr
+```
+
+`f"sum={x + y}"` 把每個洞經 `display()` 算出並串接——它在**編譯期 desugar** 成 `str` 串接，沒有 runtime
+format engine。純 `"…"` 是 literal（大括號是普通字元）；只有 f-string 會讀 `{…}`，而 `{{` / `}}` 寫出字面
+大括號。像 `f"{x:>.2f}"` 這種 format specifier **deferred** 到獨立的 per-type format protocol。**`print`**
+把一個值的 `display()` 加換行寫到 stdout——保留字、恆在 scope、best-effort（永不 raise），所以
+`print f"hello {name}"` 是最小程式。
 
 ## 編輯器工具（Editor tooling）
 

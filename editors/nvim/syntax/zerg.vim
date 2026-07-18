@@ -20,7 +20,7 @@ syntax match zergComment "#.*$" contains=@Spell
 
 " Statement keywords (control flow, effects, items introduced by a statement).
 syntax keyword zergStatement nop return if else for in break continue match
-syntax keyword zergStatement spawn select defer del raise guard import derive impl
+syntax keyword zergStatement spawn select defer del raise guard import derive impl print
 
 " Declaration keywords.
 syntax keyword zergKeyword fn mut pub struct enum spec type extern package init
@@ -59,6 +59,13 @@ syntax match zergCharacter "'\(\\\([ntr0\\'\"]\|u{\x\+}\)\|[^'\\]\)'" contains=z
 syntax region zergRawString start=+r"+ end=+"+
 syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape
 
+" f-string f"...{expr}...": text is String, the {expr} holes are highlighted.
+syntax region zergFString matchgroup=zergString start=+f"+ skip=+\\"+ end=+"+
+      \ contains=zergInterp,zergEscape
+syntax region zergInterp matchgroup=zergDelimiter start=+{+ end=+}+ contained
+      \ contains=zergNumber,zergFloat,zergString,zergRawString,zergCharacter,
+      \zergOperator,zergBoolean,zergConstant,zergType,zergKeyword,zergStatement
+
 " --- group 4: operators --------------------------------------------------------
 
 " Symbol operators (word operators not/and/or/is are keywords, group 2). Multi-
@@ -79,6 +86,8 @@ highlight default link zergFloat     Float
 highlight default link zergCharacter Character
 highlight default link zergString    String
 highlight default link zergRawString String
+highlight default link zergFString   String
+highlight default link zergDelimiter Delimiter
 highlight default link zergEscape    SpecialChar
 
 let b:current_syntax = 'zerg'

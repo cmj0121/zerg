@@ -58,6 +58,7 @@ pub fn describe(u: User) -> str {
         nop
     }
 
+    print f"describe -> {label}"       # print + f-string interpolation
     return label
 }
 

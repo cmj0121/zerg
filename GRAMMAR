@@ -40,7 +40,7 @@
 program   ::= stmt-list
 stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
 stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
-statement ::= nop | binding | reassign | expr-stmt   # nop: g1; the rest: g4 (+later)
+statement ::= nop | binding | reassign | print | expr-stmt   # nop: g1; rest: g4+
 nop       ::= 'nop'
 
 # ==================================================================================
@@ -72,7 +72,7 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'type'  | 'impl'  | 'derive' | 'package' | 'init'   | 'extern'
              | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'     | 'not'
-             | 'and'   | 'or'    | 'true'   | 'false'   | 'nil'
+             | 'and'   | 'or'    | 'print'  | 'true'    | 'false'  | 'nil'
 
 # ==================================================================================
 # 3. Literals
@@ -143,7 +143,7 @@ add-expr     ::= mul-expr   ( add-op mul-expr )*
 mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= primary ( postfix )*
-primary      ::= literal | identifier | '(' expr ')'
+primary      ::= literal | fstr-lit | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
                | '(' arg-list? ')'     # call (named arguments: group 5)
@@ -156,6 +156,18 @@ mul-op       ::= '*' | '/' | '%' | '*%' | '<<' | '>>' | '&'
 unary-op     ::= 'not' | '~' | '-' | '-%'
 
 type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)
+
+# ----------------------------------------------------------------------------------
+# String interpolation & print (the formatting / output surface)
+# ----------------------------------------------------------------------------------
+# An f-string embeds '{ expr }' holes, each rendered through display() and joined;
+# '{{' and '}}' are literal braces. Format specifiers (f"{x:>.2f}") are deferred to
+# a separate format protocol. 'print' writes a value's display() and a newline to
+# stdout — a reserved keyword, always in scope, best-effort (never raises).
+fstr-lit     ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+interp       ::= '{' expr '}'
+fstr-char    ::= < any code point except '"', '\', '{', '}', or a line break >
+print        ::= 'print' expr
 
 # ==================================================================================
 # Roadmap — groups landed one per commit, core to minor

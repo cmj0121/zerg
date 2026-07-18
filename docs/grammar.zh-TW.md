@@ -35,7 +35,7 @@ notation 很小：
 | 3   | Literals        | `bool`、`int`（`0x`/`0o`/`0b`）、`float`、`rune`、`byte`、`str` | 已落地 |
 | 4   | Bindings & Expr | `:=`、`mut`、operator 與優先序                                  | 已落地 |
 | 5   | Functions       | `fn`、參數、預設值、named argument、closure、`return`           | 已落地 |
-| 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 規劃中 |
+| 6   | Control flow    | `if`、`for … in`、`match` 與 pattern                            | 已落地 |
 | 7   | Types           | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 規劃中 |
 
 其後是次要 group：error operator（`?` `??` `?.` `!` `raise` `guard`）、concurrency
@@ -209,6 +209,35 @@ param-type ::= 'mut'? type
   一旦具名其餘也須具名——這正是能跳過有預設值參數的方式。
 - **型別。** function 的型別是 `fn(P…) -> R`——參數（含 `mut`）與結果，別無其他；預設值與參數名字存在宣告裡，不在
   型別中。
+
+## Group 6 — Control flow & Pattern matching
+
+`if` 與 `for` 是 statement；`match` 是 expression：
+
+```text
+if-stmt     ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
+if-head     ::= expr | identifier ':=' expr
+for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block
+break       ::= 'break' ( 'if' expr )?
+continue    ::= 'continue' ( 'if' expr )?
+match-expr  ::= 'match' expr '{' match-arm+ '}'
+match-arm   ::= pattern '->' expr
+pattern     ::= sub-pattern ( '|' sub-pattern )*
+sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
+```
+
+- **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
+  （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。
+- **`for`。** 唯一的迴圈，兩種形式：**`for { … }`** 無限（以 `break` / `return` 離開），與 **`for x in it { … }`**
+  走訪 `Iterable`，`x` 以 copy 綁定（**`for mut x`** 就地綁定）。沒有 `while`、沒有 C 式 `for`。**`break` /
+  `continue`** 作用於最近的迴圈；**`break if c`** 與 **`continue if c`** 是 `if c { break }` / `if c { continue }`
+  的 sugar。
+- **`match`。** 一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
+  可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。
+- **Pattern** 以 copy 解構：帶 payload 綁定的 **variant**（`Left(v)`、巢狀 `Left(Some(v))`）、**struct**
+  （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
+  （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
+  `(q, r) := divmod(x, y)`。guard 條件（`Left(v) if v > 0`）暫緩。
 
 ## 編輯器工具（Editor tooling）
 

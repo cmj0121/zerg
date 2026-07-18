@@ -39,6 +39,8 @@ fn demo() {
     print greet("Sam", loud: true)      # named argument skips `greeting`
     double := fn(x: int) -> int { return x *% 2 }
     print f"{double(21)}"
+    (q, r) := divmod(21, 4)             # tuple-destructuring bind
+    print f"{q} rem {r}"
 }
 
 # literals of every kind (group 3)

@@ -80,6 +80,13 @@ syntax match zergOperator "->\|==\|!=\|<=\|>=\|<<\|>>\|:=\|+%\|-%\|\*%\|[-+*/%&|
 " identifier elsewhere is not mistaken for a function name.
 syntax match zergFunction "\h\w*" contained
 
+" --- group 6: type & variant names ---------------------------------------------
+
+" A highlighter can't run the compiler's name resolution, so it keys on case: by
+" Zerg convention capitalized identifiers are types and enum variants (User, Shape,
+" Circle, Left). This is a highlight heuristic, not a grammar rule (names are case-free).
+syntax match zergType "\<\u\w*\>"
+
 " --- highlight links ------------------------------------------------------------
 
 highlight default link zergComment   Comment

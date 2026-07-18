@@ -35,7 +35,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 3   | Literals        | `bool`, `int` (`0x`/`0o`/`0b`), `float`, `rune`, `byte`, `str` | landed  |
 | 4   | Bindings & Expr | `:=`, `mut`, operators and precedence                          | landed  |
 | 5   | Functions       | `fn`, params, defaults, named arguments, closures, `return`    | landed  |
-| 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | planned |
+| 6   | Control flow    | `if`, `for … in`, `match` and patterns                         | landed  |
 | 7   | Types           | `struct`, `enum`, tuple, `type X = Y`, `spec`                  | planned |
 
 Minor groups follow: the error operators (`?` `??` `?.` `!` `raise` `guard`), concurrency
@@ -221,6 +221,37 @@ param-type ::= 'mut'? type
   must be too — which is what lets a defaulted parameter be skipped.
 - **Type.** A function's type is `fn(P…) -> R` — parameters (with `mut`) and result, nothing else; defaults
   and parameter names live in the declaration, not the type.
+
+## Group 6 — Control flow & Pattern matching
+
+`if` and `for` are statements; `match` is an expression:
+
+```text
+if-stmt     ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
+if-head     ::= expr | identifier ':=' expr
+for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block
+break       ::= 'break' ( 'if' expr )?
+continue    ::= 'continue' ( 'if' expr )?
+match-expr  ::= 'match' expr '{' match-arm+ '}'
+match-arm   ::= pattern '->' expr
+pattern     ::= sub-pattern ( '|' sub-pattern )*
+sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
+```
+
+- **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
+  block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual.
+- **`for`.** The one loop, in two forms: **`for { … }`** infinite (leave via `break` / `return`), and
+  **`for x in it { … }`** over an `Iterable`, binding `x` by copy (**`for mut x`** binds in place). There is
+  no `while` and no C-style `for`. **`break` / `continue`** act on the nearest loop; **`break if c`** and
+  **`continue if c`** are sugar for `if c { break }` / `if c { continue }`.
+- **`match`.** An expression: it tries the value against arms in order, yields the first fit, and every arm
+  yields the same type — so a `match` is usable at a `:=`, a `return`, or an argument. A trailing **`_`**
+  covers the rest.
+- **Patterns** destructure by copy: a **variant** with a payload binding (`Left(v)`, nested `Left(Some(v))`),
+  a **struct** (`Div{q, r}`), a **tuple** (`(a, b)`), a **literal** (matched by `equal`), a plain
+  **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
+  A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`. Guard conditions
+  (`Left(v) if v > 0`) are deferred.
 
 ## Editor tooling
 

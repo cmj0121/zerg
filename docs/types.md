@@ -73,13 +73,13 @@ entry point work across them — is the [Modules, Packages & Programs](package.m
 
 ```text
 struct Node {
-    value: int,
-    next:  Node?,           # self-referential — auto-boxed (see Values & Memory)
+    value: int
+    next:  Node?            # self-referential — auto-boxed (see Values & Memory)
 }
 
 enum Either[X, Y] {         # generic sum type
-    Left(X),
-    Right(Y),
+    Left(X)
+    Right(Y)
 }
 ```
 

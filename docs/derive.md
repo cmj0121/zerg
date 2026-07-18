@@ -127,10 +127,10 @@ spec Decode {
 }
 
 struct User {
-    id:    int,
-    name:  str,
-    tags:  list[str],
-    email: str?,
+    id:    int
+    name:  str
+    tags:  list[str]
+    email: str?
 }
 
 derive Encode, Decode for User        # the compiler reads User's structure, writes both canonical impls
@@ -160,8 +160,8 @@ A sum type derives over its variants — **tag, then payload**:
 
 ```text
 enum Shape {
-    Circle(float),
-    Rect(float, float),
+    Circle(float)
+    Rect(float, float)
 }
 
 derive Encode for Shape               # generated: write the variant tag, then each payload field

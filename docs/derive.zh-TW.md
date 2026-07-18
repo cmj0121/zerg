@@ -119,10 +119,10 @@ spec Decode {
 }
 
 struct User {
-    id:    int,
-    name:  str,
-    tags:  list[str],
-    email: str?,
+    id:    int
+    name:  str
+    tags:  list[str]
+    email: str?
 }
 
 derive Encode, Decode for User        # compiler 讀 User 的結構，寫出兩份 canonical impl
@@ -152,8 +152,8 @@ sum 型別依 variant derive——**先 tag、再 payload**：
 
 ```text
 enum Shape {
-    Circle(float),
-    Rect(float, float),
+    Circle(float)
+    Rect(float, float)
 }
 
 derive Encode for Shape               # 生成：寫出 variant tag，再逐個 payload 欄位

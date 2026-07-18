@@ -64,13 +64,13 @@ binding；見 Values & Memory），絕不屬於欄位或型別。module 與 pack
 
 ```text
 struct Node {
-    value: int,
-    next:  Node?,           # 自我參照——自動 boxing（見 Values & Memory）
+    value: int
+    next:  Node?            # 自我參照——自動 boxing（見 Values & Memory）
 }
 
 enum Either[X, Y] {         # 泛型 sum type
-    Left(X),
-    Right(Y),
+    Left(X)
+    Right(Y)
 }
 ```
 

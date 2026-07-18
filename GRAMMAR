@@ -55,8 +55,17 @@ nop       ::= 'nop'
 # 2. Lexical
 # ==================================================================================
 # Source is UTF-8. Horizontal whitespace (space, tab) separates tokens and is
-# otherwise insignificant; a line break is significant as a statement separator
-# (NEWLINE, group 1). Comments are not tokens.
+# otherwise insignificant. A line break is significant: the lexer turns it into a
+# ';' separator (ASI, below). Comments are not tokens.
+#
+# Newlines & ASI (automatic ';' insertion). At a line break the lexer inserts a ';'
+# when the last token on the line can END an item — an identifier, a literal, ')',
+# ']', '}', '?', '_', 'this', or one of 'return' 'break' 'continue' 'nop'. It does
+# NOT insert one inside an unclosed '(' or '[', so an expression or type may span
+# lines there. This single rule makes statements, struct fields, enum variants, and
+# match arms all newline-separated with the same ';' separator. ',' separates the
+# elements of a value list instead — arguments, tuples, generics, a variant payload,
+# and the fields of a struct pattern/literal (a composite, like Go's Point{X: 1, Y: 2}).
 
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
@@ -265,14 +274,13 @@ impl-decl    ::= 'impl' type-name generics? 'for' type '{' fn-decl* '}'
 derive-decl  ::= 'derive' type-name ( ',' type-name )* 'for' type-name
 
 generics     ::= '[' identifier ( ',' identifier )* ']'
-# Fields and variants are separated like statements: a line break or a ','. Both are
-# valid, but ',' is not required and the formatter writes one per line, no comma —
-# the Go-style layout. (The ',' inside a variant payload '(A, B)' is a normal list.)
-field-list   ::= item-sep* ( field ( item-sep+ field )* item-sep* )?
+# Fields and variants are separated exactly like statements — by stmt-sep (a line
+# break, realized as ';' by ASI). There is NO ',' between them; the ',' inside a
+# variant payload '(A, B)' is an ordinary argument list.
+field-list   ::= stmt-sep* ( field ( stmt-sep+ field )* stmt-sep* )?
 field        ::= identifier ':' type
-variant-list ::= item-sep* ( variant ( item-sep+ variant )* item-sep* )?
+variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
 variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
-item-sep     ::= NEWLINE | ','
 spec-member  ::= fn-sig | fn-decl                      # required (no body) or provided
 fn-sig       ::= 'fn' identifier '(' param-list? ')' ret-type?
 

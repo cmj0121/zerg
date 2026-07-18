@@ -218,8 +218,8 @@ data race。
 
 ```text
 enum Cmd {
-    Add(int),                 # 寫
-    Get(chan[int].send),      # 讀——夾帶回覆用的 channel
+    Add(int)                  # 寫
+    Get(chan[int].send)       # 讀——夾帶回覆用的 channel
 }
 
 fn counter(inbox: chan[Cmd].recv) {

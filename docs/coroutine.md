@@ -245,8 +245,8 @@ one else holds the state there is no data race.
 
 ```text
 enum Cmd {
-    Add(int),                 # a write
-    Get(chan[int].send),      # a read — carries a reply channel
+    Add(int)                  # a write
+    Get(chan[int].send)       # a read — carries a reply channel
 }
 
 fn counter(inbox: chan[Cmd].recv) {

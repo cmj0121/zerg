@@ -112,6 +112,13 @@ and   or     print   true     false    nil
 **block** 以大括號包住一串 statement——之後的 group 會把它掛在 function、loop 或 conditional 的主體上。block
 內的 statement 沿用與頂層相同的分隔規則，所以空的 block 用 placeholder 寫成：`{ nop }`。
 
+**換行與 ASI。** 換行由 lexer 實現為 `;` 分隔符（automatic `;` insertion）：遇行尾，若該行最後一個 token 能
+**結束一個項目**——identifier、literal、`)`、`]`、`}`、`?`、`_`、`this`，或 `return` / `break` / `continue` /
+`nop`——就補一個 `;`。在未閉合的 `(` 或 `[` 之內則不補，故運算式或型別可於其中跨行（續行時把運算子放在行尾）。這
+一條規則讓 **statement、struct field、enum variant、match arm** 共用同一個換行分隔符。`,` 則用來分隔**值清單**
+的元素——argument、tuple、generic、variant payload，以及 struct pattern/literal 的 field（composite，如 Go 的
+`Point{X: 1, Y: 2}`）。
+
 ## Group 3 — Literals
 
 literal 表示一個常數值：
@@ -265,8 +272,8 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
   為 receive-only（receiver）、`chan[T]<-` 為 send-only（sender）；或一個**函式型別** `fn(P…) -> R`
   （group 5）。結尾的 **`?`** 使任何型別成為 **optional**——`str?`。
 - **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
-  `Rect(float, float)`。field 與 variant 的分隔比照 statement——換行或 `,`，且 **`,` 非必要**；formatter 一行一
-  個、不加逗號（Go 式排版）。兩者皆可泛型——`enum Either[X, Y] { … }`。
+  `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
+  `,`**；payload `(A, B)` 內的 `,` 才是一般清單。兩者皆可泛型——`enum Either[X, Y] { … }`。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）或**提供**（完整方法）。方法的 receiver 是裸參數
   **`this`**；self 型別是 **`This`**。`impl … for …` 為某型別提供 spec 的方法，`derive …` 請 compiler 代寫。

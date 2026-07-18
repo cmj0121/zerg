@@ -114,6 +114,15 @@ A **block** groups a statement list in braces — the body a later group hangs o
 conditional. Its inner statements follow the same separator rules as the top level, so an empty block is
 written with the placeholder: `{ nop }`.
 
+**Newlines & ASI.** A line break is realized as a `;` separator by the lexer (automatic `;` insertion): at
+a line break the lexer inserts a `;` when the line's last token can **end an item** — an identifier, a
+literal, `)`, `]`, `}`, `?`, `_`, `this`, or `return` / `break` / `continue` / `nop`. It inserts nothing
+inside an unclosed `(` or `[`, so an expression or type may span lines there (put a trailing operator at the
+line's end to continue). This one rule gives **statements, struct fields, enum variants, and match arms** a
+single newline separator. `,` instead separates the elements of a **value list** — arguments, tuples,
+generics, a variant payload, and the fields of a struct pattern/literal (a composite, like Go's
+`Point{X: 1, Y: 2}`).
+
 ## Group 3 — Literals
 
 A literal denotes a constant value:
@@ -280,9 +289,9 @@ derive-decl ::= 'derive' type-name ( ',' type-name )* 'for' type-name
   send-only (a sender); or a **function type** `fn(P…) -> R` (group 5). A trailing **`?`** makes any type an
   **optional** — `str?`.
 - **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
-  an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated like
-  statements — a line break or a `,`, with the **`,` not required**; the formatter writes one per line with
-  no comma (the Go-style layout). Both may be generic — `enum Either[X, Y] { … }`.
+  an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated **exactly
+  like statements** (a line break, or `;` inline) — there is **no `,`** between them; the `,` inside a
+  payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body) or **provided** (a
   full method). A method's receiver is the bare parameter **`this`**; the self type is **`This`**. `impl …

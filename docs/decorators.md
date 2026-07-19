@@ -24,8 +24,16 @@ A decorator only selects a **compiler-provided** behavior — it never runs user
 cannot expand into arbitrary source. That is why the set is closed: the guarantee that no directive can
 silently rewrite your program holds precisely because you cannot add one.
 
+## Kept rare
+
+Decorators are meant to be reached for **seldom**. Two everyday concerns are **not** their job: the
+**serialized / wire form** of a value is customized by hand-writing its `Encode` / `Decode` **spec impl** (a
+`#[repr]` controls in-memory width, never the bytes on a wire); and **memory layout** follows one predictable
+default (declaration order, natural alignment) — you add a layout decorator only to **deviate** for an
+external ABI. On the default path, day to day, you write no decorators at all.
+
 ## Reserved
 
-The set grows only as the compiler gains directives — memory **layout** control, **logging** /
-instrumentation, and **FFI** are the likely next entries. Until a decorator is listed here it is not valid
-syntax.
+The set grows only as the compiler gains directives — memory **layout** control (`#[repr]`, `#[packed]`,
+`#[align]`), **logging** / instrumentation, and **FFI** are the likely next entries. Until a decorator is
+listed here it is not valid syntax.

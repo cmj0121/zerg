@@ -442,7 +442,14 @@ bound        ::= type-name ( '+' type-name )*          # a conjunction of specs
 field-list   ::= stmt-sep* ( field ( stmt-sep+ field )* stmt-sep* )?
 field        ::= 'pub'? identifier ':' type ( '=' expr )?   # 'pub' = external access; default feeds ctor
 variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
-variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
+variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' expr )?   # payload or discriminant
+# A '= expr' gives a variant an explicit DISCRIMINANT — only when EVERY variant is
+# fieldless (a C-style integer enum; a payload enum keeps its tag opaque and match-only).
+# The value is a compile-time-constant integer, distinct across variants; an unspecified
+# one is the previous + 1 (from 0). Such an enum has a native, C-compatible integer repr
+# (backing 'int' by ONE default rule — no annotation needed; 'int(v)' reads the value,
+# 'E.from(n) -> E?' reverses). A specific width is an opt-in layout decorator ('#[repr]',
+# reserved); the serialized/wire form is the 'Encode'/'Decode' impl, never a decorator.
 # A spec member is a required method (signature), a provided method (with a body), or an
 # ASSOCIATED TYPE — a type the impl fills in ('type Item'), functionally determined by
 # the implementer (one per impl). It makes a single-output protocol like iteration well

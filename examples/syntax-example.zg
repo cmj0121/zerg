@@ -48,6 +48,14 @@ enum Shape {
     Rect(float, float)
 }
 
+# a C-style enum: every variant is fieldless, so it may carry explicit discriminants (group 7)
+enum Status {
+    Ok       = 200
+    NotFound = 404
+    Error    = 500
+}
+fn status_code(s: Status) -> int { return int(s) }   # discriminant is observable
+
 spec Summable {
     fn zero() -> This
     fn add(other: This) -> This        # `this` is implicit — not a parameter

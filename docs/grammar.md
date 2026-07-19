@@ -405,6 +405,13 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated **exactly
   like statements** (a line break, or `;` inline) — there is **no `,`** between them; the `,` inside a
   payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
+- **Enum discriminants.** When **every** variant is fieldless, a variant may take an explicit integer
+  **discriminant** — `enum Status { Ok = 200; NotFound = 404 }` — a C-style enum whose value is observable
+  (`int(Status.Ok)` reads it, `Status.from(200) -> Status?` reverses). Values are compile-time constants,
+  distinct; an unspecified one is the previous `+ 1` (from `0`). A **payload** enum keeps its tag **opaque**
+  (match-only) and cannot take discriminants. The backing is `int` by one default rule — a specific width is
+  an opt-in layout decorator (`#[repr]`), and the **wire form is the `Encode`/`Decode` impl**, never a
+  decorator.
 - **Field visibility & defaults.** A field is `pub` for external **instance access** (read/write of
   `u.field`); a non-`pub` field is module-private and **must carry a default**. There are **no zero values**
   — a non-optional field with no default is **required** at construction; the one implicit default is `nil`

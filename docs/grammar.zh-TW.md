@@ -314,7 +314,7 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
 - **`match`。** 一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
   可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。
 - **Pattern** 以 copy 解構：帶 payload 綁定的 **variant**（`Left(v)`、巢狀 `Left(Some(v))`）、**struct**
-  （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
+  （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（可帶負號 `-1`,以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
   （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
   `(q, r) := divmod(x, y)`。guard 條件（`Left(v) if v > 0`）暫緩。
 - **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是

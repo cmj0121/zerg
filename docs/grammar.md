@@ -343,7 +343,8 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   yields the same type — so a `match` is usable at a `:=`, a `return`, or an argument. A trailing **`_`**
   covers the rest.
 - **Patterns** destructure by copy: a **variant** with a payload binding (`Left(v)`, nested `Left(Some(v))`),
-  a **struct** (`Div{q, r}`), a **tuple** (`(a, b)`), a **literal** (matched by `equal`), a plain
+  a **struct** (`Div{q, r}`), a **tuple** (`(a, b)`), a **literal**, optionally signed (`-1`), matched by
+  `equal`; a plain
   **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
   A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`. Guard conditions
   (`Left(v) if v > 0`) are deferred.

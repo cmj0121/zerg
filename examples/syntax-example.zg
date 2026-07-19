@@ -159,6 +159,15 @@ fn query() -> str {
     """
 }
 
+# a signed literal pattern — `-1` matches by equal (group 6)
+fn sign(n: int) -> str {
+    return match n {
+        -1 -> "minus one"
+        0  -> "zero"
+        _  -> "other"
+    }
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

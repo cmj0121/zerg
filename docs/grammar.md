@@ -509,8 +509,10 @@ init-decl   ::= 'init' '(' ')' block
   **no selective (`from … import`) or glob import** — to use a member unqualified, bind it locally
   (`split := text.split`), since a function is a value. A **`pub import`** **re-exports** the namespace onto
   this module's surface — the single mechanism by which a root module builds a package's public API.
-- **`init()`** is a module's **lazy, exactly-once** setup, run on first use, in dependency order (there is
-  no mutable global — state travels by value or channel).
+- **`init()`** is a module's **lazy** setup, run on first use. A module may declare **several** `init()`
+  blocks; they run in **declaration (FIFO) order**, each **exactly once**. There are **no mutable globals**: a
+  top-level binding may not be `mut` — a top-level `:=` is an **immutable module constant** evaluated at init;
+  state travels by value or channel.
 - A **program** is a build rooted at an entry file that defines a top-level `fn main(…) -> Result[nil]`;
   `main` is an ordinary function (not reserved). **`package`** is the distribution/versioning unit — a
   directory tree selected by the build tool, with **no in-source `package` declaration**.

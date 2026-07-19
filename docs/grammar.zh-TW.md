@@ -457,7 +457,9 @@ init-decl   ::= 'init' '(' ')' block
   用 `as` 解。**沒有 selective（`from … import`）或 glob import**——要 unqualified 使用某成員,就本地綁定
   （`split := text.split`）,因為函式是值。**`pub import`** 把該 namespace **re-export** 到本 module 表面——根
   module 用來組出 package 公開 API 的唯一機制。
-- **`init()`** 是 module 的**惰性、恰好一次**初始化,首次使用時依相依順序執行(無可變全域——狀態靠值或 channel 傳遞)。
+- **`init()`** 是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
+  （FIFO）順序**執行,每個**恰好一次**。**無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變的模組常數**,
+  於 init 時求值;狀態靠值或 channel 傳遞。
 - **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
   **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。
 

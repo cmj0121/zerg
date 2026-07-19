@@ -490,11 +490,13 @@ send-arm     ::= expr '<-' expr '->' expr
 # private, 'pub' exposes it to the rest of the package, and a package's public API is
 # the 'pub' surface of its ROOT module. 'import' names another module/package; a
 # 'pub import' RE-EXPORTS it onto this module's surface (how a root builds its API).
-# 'init()' is a module's lazy, exactly-once setup, run on first use. A program is a
-# build rooted at an entry file that defines a top-level 'fn main(...) -> Result[nil]'
-# — 'main' is an ordinary function, not reserved. 'package' is the distribution /
-# versioning unit: a directory tree selected by the build tool, with NO in-source
-# 'package' declaration.
+# 'init()' is lazy module setup, run on first use. A module may declare MULTIPLE 'init()'
+# blocks; they run in declaration (FIFO) order, and each runs EXACTLY ONCE. There are NO
+# mutable globals: a module-level (top-level) binding may not be 'mut' — a top-level ':='
+# is an immutable module constant, evaluated at init. A program is a build rooted at an
+# entry file that defines a top-level 'fn main(...) -> Result[nil]' — 'main' is an
+# ordinary function, not reserved. 'package' is the distribution / versioning unit: a
+# directory tree selected by the build tool, with NO in-source 'package' declaration.
 #
 # An 'import' binds a NAMESPACE: the path's LAST segment ('import util/text' binds
 # 'text'), reached with '.' — 'text.split(…)'. 'as' renames it ('import a/text as at'),
@@ -504,7 +506,7 @@ send-arm     ::= expr '<-' expr '->' expr
 # unqualified, bind it locally — 'split := text.split' — since a function is a value.
 import-stmt  ::= 'pub'? 'import' import-path ( 'as' identifier )?
 import-path  ::= identifier ( '/' identifier )*      # a module (directory) path
-init-decl    ::= 'init' '(' ')' block                # lazy, exactly-once module setup
+init-decl    ::= 'init' '(' ')' block                # lazy setup; many allowed, FIFO, each once
 
 # ==================================================================================
 # 11. Resource cleanup — defer & del

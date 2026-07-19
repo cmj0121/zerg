@@ -291,7 +291,7 @@ for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' ex
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
-match-arm   ::= pattern '->' expr
+match-arm   ::= pattern ( 'if' expr )? '->' expr    # 選用 guard
 pattern     ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
 ```
@@ -318,7 +318,10 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
 - **Pattern** 以 copy 解構：帶 payload 綁定的 **variant**（`Left(v)`、巢狀 `Left(Some(v))`）、**struct**
   （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（可帶負號 `-1`,以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
   （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
-  `(q, r) := divmod(x, y)`。guard 條件（`Left(v) if v > 0`）暫緩。
+  `(q, r) := divmod(x, y)`。
+- **Guard。** arm 可在 pattern 後加 `if expr`（`Some(v) if v > 0 -> …`）——一個能看見 pattern 綁定、且必須成立的
+  條件;`A | B if c` 時涵蓋整個 or-pattern。帶 guard 的 arm **不計入 exhaustiveness**（compiler 無法證明 guard 成
+  立），所以該 case 仍需一個無 guard 的 arm（或 `_`）。
 - **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是
   新的 binding。名字**大小寫自由**,所以靠解析、非大小寫——與 postfix `[…]` 用的是同一套 name resolution（group 4）。
 

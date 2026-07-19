@@ -177,6 +177,15 @@ fn sign(n: int) -> str {
     }
 }
 
+# a guarded match arm — the guard sees the pattern's bindings (group 6)
+fn grade(score: int) -> str {
+    return match score {
+        s if s >= 90 -> "A"
+        s if s >= 60 -> "pass"
+        _            -> "fail"
+    }
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

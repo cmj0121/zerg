@@ -315,7 +315,7 @@ for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' ex
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
-match-arm   ::= pattern '->' expr
+match-arm   ::= pattern ( 'if' expr )? '->' expr    # optional guard
 pattern     ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
 ```
@@ -348,8 +348,11 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   a **struct** (`Div{q, r}`), a **tuple** (`(a, b)`), a **literal**, optionally signed (`-1`), matched by
   `equal`; a plain
   **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
-  A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`. Guard conditions
-  (`Left(v) if v > 0`) are deferred.
+  A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`.
+- **Guards.** An arm may add `if expr` after the pattern (`Some(v) if v > 0 -> …`) — a condition, seeing the
+  pattern's bindings, that must also hold; on `A | B if c` it covers the whole or-pattern. A guarded arm
+  **does not count toward exhaustiveness** (the compiler can't prove the guard holds), so the case still
+  needs an unguarded arm (or `_`).
 - **Variant vs binding** is decided by **name resolution**: a bare name is a variant when it resolves to a
   known type or enum variant in scope, and a fresh binding otherwise. Names are **case-free**, so this is
   resolution, not capitalization — the same name resolution the postfix `[…]` uses (group 4).

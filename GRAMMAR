@@ -396,11 +396,18 @@ assoc-bind   ::= 'type' identifier '=' type  # 'type Item = int' — satisfies a
 # CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
 # the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
 # fields become parameters in declaration order — positional then named, group 5) and
-# 'Circle(3.0)' builds an enum variant. A field's optional default (below) lets its
-# argument be omitted. The name is SHARED with functions: a type and a function cannot
-# share a name (a duplicate is an error — Zerg has no overloading). A struct's
-# constructor is as visible as the struct ('pub struct' → 'pub' constructor); enforce an
-# invariant by keeping the struct private and exposing a factory 'fn'.
+# 'Circle(3.0)' builds an enum variant. The name is SHARED with functions: a type and a
+# function cannot share a name (a duplicate is an error — Zerg has no overloading).
+#
+# FIELD VISIBILITY & DEFAULTS. A field is 'pub' for external INSTANCE ACCESS (read/write
+# of 'u.field'); a non-pub field is module-private, and MUST carry a default. A field's
+# default lets its constructor argument be omitted. There are NO zero values: a non-
+# optional field with no default is REQUIRED at construction; the ONE implicit default is
+# 'nil' for a 'T?' field (its natural absent state). The field-wise 'T(...)' constructor
+# is public and PRIMITIVE (not overridable); a custom constructor is a named associated
+# function (an inherent 'impl', group 5) that builds via 'T(...)'. The '#[sealed]'
+# decorator demotes 'T(...)' to module-private, so external code must use a public custom
+# constructor — the module still builds with 'T(...)' internally.
 
 # Decorators are a fixed, compiler-owned set of directives (users cannot define new
 # ones — Zerg has no macros). A decorator prefix leads any declaration (the
@@ -433,7 +440,7 @@ bound        ::= type-name ( '+' type-name )*          # a conjunction of specs
 # break, realized as ';' by ASI). There is NO ',' between them; the ',' inside a
 # variant payload '(A, B)' is an ordinary argument list.
 field-list   ::= stmt-sep* ( field ( stmt-sep+ field )* stmt-sep* )?
-field        ::= identifier ':' type ( '=' expr )?     # optional default feeds the constructor
+field        ::= 'pub'? identifier ':' type ( '=' expr )?   # 'pub' = external access; default feeds ctor
 variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
 variant      ::= identifier ( '(' type ( ',' type )* ')' )?       # payload optional
 # A spec member is a required method (signature), a provided method (with a body), or an

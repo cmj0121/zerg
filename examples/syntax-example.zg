@@ -17,16 +17,29 @@ type UserId = int
 # a product type; `#[derive(...)]` asks the compiler to generate the impls
 #[derive(Encode, Decode)]
 struct User {
-    id:    UserId
-    name:  str
-    admin: bool = false        # field defaults feed the constructor
-    email: str? = nil
+    pub id:    UserId
+    pub name:  str
+    pub admin: bool = false    # a pub field with a default
+    email:     str?            # private + optional → implicitly nil
 }
 
 # inherent impl: methods/associated functions not tied to any spec (group 7)
 impl User {
     fn guest() -> User { return User(id: 0, name: "guest") }   # associated fn — User.guest()
     fn is_admin() -> bool { return this.admin }                # method — u.is_admin()
+}
+
+# a sealed struct: the default constructor is module-private; build via Email.parse (group 7)
+#[sealed]
+struct Email {
+    pub addr: str
+    valid:    bool = false     # private, has a default
+}
+impl Email {
+    fn parse(s: str) -> Email? {
+        if s == "" { return nil }
+        return Email(addr: s, valid: true)   # the primitive T(...), only reachable in-module
+    }
 }
 
 # a sum type and a behavioral spec

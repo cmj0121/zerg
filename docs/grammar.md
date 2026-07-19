@@ -404,13 +404,19 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 - **`struct` / `enum`.** A **product** with named, typed fields or a **sum** with variants that each carry
   an optional payload — `Circle(float)`, `Rect(float, float)`. Fields and variants are separated **exactly
   like statements** (a line break, or `;` inline) — there is **no `,`** between them; the `,` inside a
-  payload `(A, B)` is an ordinary list. A field may carry a **default** (`admin: bool = false`). Both may be
-  generic — `enum Either[X, Y] { … }`.
+  payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
+- **Field visibility & defaults.** A field is `pub` for external **instance access** (read/write of
+  `u.field`); a non-`pub` field is module-private and **must carry a default**. There are **no zero values**
+  — a non-optional field with no default is **required** at construction; the one implicit default is `nil`
+  for a `T?` field (its natural absent state). So `struct Config { host: str; port: int? = 8080; tags: str? }`
+  → `Config(host: "x")` gives `port = 8080`, `tags = nil`, and omitting `host` is an error.
 - **Construction.** A type name is also its **constructor** — `User(id: 1, name: "x")` builds a struct (its
-  fields become parameters in declaration order, positional then named) and `Circle(3.0)` an enum variant; a
-  field's default lets that argument be omitted. The name **shares the value namespace** with functions, so
-  a type and a function cannot share a name (Zerg has no overloading). A struct's constructor is as visible
-  as the struct; enforce an invariant with a private struct and a factory `fn`.
+  fields become parameters in declaration order, positional then named) and `Circle(3.0)` an enum variant.
+  The name **shares the value namespace** with functions, so a type and a function cannot share a name (Zerg
+  has no overloading). The field-wise `T(...)` is **public and primitive**; a custom constructor is a named
+  associated function (an inherent `impl`) that builds via `T(...)`. **`#[sealed]`** demotes `T(...)` to
+  module-private, so external code must use a public custom constructor — the module still builds with
+  `T(...)` internally.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
 - **Generics & bounds.** A parameter list `[T, …]` may bound each parameter to specs — `[T: Ord]`, a `+`
   conjunction `[K: Hash + Eq, V]`. The same `bound` is a spec's **super-spec** (`spec Ord: Eq` — an

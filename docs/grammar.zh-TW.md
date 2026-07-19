@@ -368,12 +368,16 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   （`int`、`uint`、`float`,以及任何固定寬度 `i32`/`u8`/`f64`/…）是 **stdlib** 的決定,非文法。
 - **`struct` / `enum`。** 具名、定型 field 的**乘積**，或每個 variant 帶選用 payload 的**和**——`Circle(float)`、
   `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
-  `,`**；payload `(A, B)` 內的 `,` 才是一般清單。field 可帶**預設值**（`admin: bool = false`）。兩者皆可泛型——
-  `enum Either[X, Y] { … }`。
+  `,`**；payload `(A, B)` 內的 `,` 才是一般清單。兩者皆可泛型——`enum Either[X, Y] { … }`。
+- **Field 可見性與預設值。** field 加 `pub` 開放外部 **instance 存取**（讀/寫 `u.field`）;非 `pub` field 為模組
+  私有,且**必須有 default**。**沒有 zero value**——非 optional 且無 default 的 field **建構時必填**;唯一的隱含
+  default 是 `T?` field 的 `nil`（其自然的「不存在」狀態）。故 `struct Config { host: str; port: int? = 8080;
+tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略 `host` 為錯。
 - **建構（Construction）。** 型別名同時是它的**建構子**——`User(id: 1, name: "x")` 建一個 struct（field 依宣告順序
-  成為參數，positional 先、named 後）、`Circle(3.0)` 建一個 enum variant;有預設的 field 可省略該引數。這個名字與
-  function **共用 value 命名空間**,所以型別和 function 不能同名（Zerg 無 overloading）。struct 的建構子與該 struct
-  同可見度;要強制不變量,就用私有 struct + 一個工廠 `fn`。
+  成為參數，positional 先、named 後）、`Circle(3.0)` 建一個 enum variant。這個名字與 function **共用 value 命名
+  空間**,所以型別和 function 不能同名（Zerg 無 overloading）。field-wise `T(...)` 是**公開且基元**;自訂 constructor
+  是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** 把 `T(...)` 降為模組私有,外部須改走公開的
+  自訂 constructor——模組內部仍以 `T(...)` 建。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
 - **泛型與 bound。** 參數列 `[T, …]` 可對各參數加 spec 約束——`[T: Ord]`、`+` 合取 `[K: Hash + Eq, V]`。同一套
   `bound` 也是 spec 的 **super-spec**(`spec Ord: Eq`——`impl Ord` 便連帶需要 `impl Eq`,且 `Ord` body 可對 `This`

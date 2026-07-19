@@ -146,6 +146,15 @@ fn countdown(mut n: int) {
     }
 }
 
+# `x..y` is sugar for range(x, y) (group 4)
+fn sum_to(n: int) -> int {
+    mut acc := 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    return acc
+}
+
 # `if` as an expression — needs `else`, both branches yield the same type (group 6)
 fn classify(n: int) -> str {
     return if n < 0 { "neg" } else if n == 0 { "zero" } else { "pos" }

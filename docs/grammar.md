@@ -196,13 +196,15 @@ non-associative** — `a < b < c` does not parse, by design.
 | 4          | `+` `-` `+%` `-%` `\|` `^`           | left      |
 | 5          | `==` `!=` `<` `>` `<=` `>=` `is`     | non-assoc |
 | 6          | `and`                                | left      |
-| 7 lowest   | `or`                                 | left      |
+| 7          | `or`                                 | left      |
+| 8 lowest   | `..` (range)                         | —         |
 
 The `%`-suffixed `+%` `-%` `*%` are the **wrapping** arithmetic operators; `~` is bitwise complement.
 Bitwise `&` `<<` `>>` sit with the multiplicatives and `\|` `^` with the additives — one notch tighter
 than comparison, so `a & b == c` reads as `(a & b) == c`, sidestepping C's precedence trap. `is` tests an
 existential against a spec or variant name (full form in groups 6–7). A sign is an operator, not part of a
-literal.
+literal. The loosest level, `x..y`, is **sugar** for `range(x, y)` (a builtin) — used mostly in
+`for i in 0..n`.
 
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` sits at the loosest level.

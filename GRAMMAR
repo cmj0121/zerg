@@ -179,7 +179,8 @@ lvalue       ::= identifier ( '.' identifier | '[' expr ']' )*
 
 # Expression grammar from lowest precedence (or) to highest (postfix). Binary levels
 # are left-associative; comparison is non-associative (no a < b < c chaining).
-expr         ::= coalesce-expr          # coalesce-expr adds '??' atop or-expr (group 8)
+expr         ::= range-expr             # range-expr adds '..' atop coalesce-expr (group 8)
+range-expr   ::= coalesce-expr ( '..' coalesce-expr )?   # 'x..y' is SUGAR for 'range(x, y)'
 or-expr      ::= and-expr   ( 'or'  and-expr  )*
 and-expr     ::= cmp-expr   ( 'and' cmp-expr  )*
 cmp-expr     ::= add-expr   ( ( cmp-op add-expr ) | ( 'is' type-name ) )?

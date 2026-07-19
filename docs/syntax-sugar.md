@@ -16,6 +16,7 @@ full treatment is in the [Language Reference](language.md). Also in [繁體中�
 | `f"{x:spec}"`                            | `x.format(spec)` through the `Format` protocol                        |
 | `a + b`, `a == b`, `a[i]`, `-a`, …       | the operator's spec method — `a.add(b)`, `a.equal(b)`, …              |
 | `for x in it { … }`                      | the iteration protocol on `it` (a `StopIteration`-terminated loop)    |
+| `x..y`                                   | the builtin `range(x, y)` — a half-open range value                   |
 | `(a, b) := e` / `P{x, y} := e`           | destructuring a product/tuple return, each part bound **by copy**     |
 | `f(x: 1)` (named) / `p: T = e` (default) | positional rewrite at the call; a default `e` is evaluated per call   |
 | `print x`                                | a best-effort write of `x.display()` and a newline to stdout          |

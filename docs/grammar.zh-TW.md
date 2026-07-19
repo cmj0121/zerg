@@ -186,11 +186,13 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 | 4      | `+` `-` `+%` `-%` `\|` `^`          | 左     |
 | 5      | `==` `!=` `<` `>` `<=` `>=` `is`    | 非結合 |
 | 6      | `and`                               | 左     |
-| 7 最低 | `or`                                | 左     |
+| 7      | `or`                                | 左     |
+| 8 最低 | `..`（range）                       | —      |
 
 `%` 後綴的 `+%` `-%` `*%` 是**回繞（wrapping）**算術運算子；`~` 是 bitwise 補數。bitwise `&` `<<` `>>` 與乘法級
 同層、`\|` `^` 與加法級同層——都比比較緊一級，所以 `a & b == c` 讀作 `(a & b) == c`，避開 C 的優先序陷阱。`is`
-以一個 spec 或 variant 名字測試 existential（完整形式見 group 6–7）。正負號是運算子，不屬 literal。
+以一個 spec 或 variant 名字測試 existential（完整形式見 group 6–7）。正負號是運算子，不屬 literal。最鬆的一層
+`x..y` 是 `range(x, y)`（builtin）的**語法糖**——多用於 `for i in 0..n`。
 
 null-safety 與 error 運算子（`?` `??` `?.` `!`）在 group 8;postfix 三個（`?` `!` `?.`）併入上面的 `postfix`,
 `??` 則在最鬆的層級。

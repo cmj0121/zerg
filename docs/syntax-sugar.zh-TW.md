@@ -15,6 +15,7 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `f"{x:spec}"`                         | 經 `Format` protocol 呼叫 `x.format(spec)`                    |
 | `a + b`、`a == b`、`a[i]`、`-a`、…    | 該運算子的 spec 方法——`a.add(b)`、`a.equal(b)`、…             |
 | `for x in it { … }`                   | 對 `it` 的迭代協定(以 `StopIteration` 收尾)                   |
+| `x..y`                                | builtin `range(x, y)`——半開區間值                             |
 | `(a, b) := e` / `P{x, y} := e`        | 解構 product/tuple 回傳,各部分**以 copy** 綁定                |
 | `f(x: 1)`(named)/ `p: T = e`(default) | 呼叫端改寫為 positional;default `e` 每次呼叫時求值            |
 | `print x`                             | best-effort 把 `x.display()` 加換行寫到 stdout                |

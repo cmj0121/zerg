@@ -173,9 +173,16 @@ raw-char    ::= < any code point except '"' or a line break >   # no escapes
 
 binding      ::= 'mut'? bind-target ':=' expr
 bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6
-reassign     ::= lvalue '=' expr
+reassign     ::= assign-target '=' expr
 expr-stmt    ::= expr
 lvalue       ::= identifier ( '.' identifier | '[' expr ']' )*
+# An assignment target is an lvalue, or a tuple / struct SHAPE whose leaves are lvalues —
+# destructuring reassignment, the mirror of a ':=' bind-target but into EXISTING names
+# ('(a, b) = e', 'Div{q, r} = e'); leaves may be any lvalue ('(a, obj.f) = e').
+assign-target ::= lvalue
+               | '(' assign-target ( ',' assign-target )* ')'
+               | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
+field-target  ::= identifier ( ':' assign-target )?
 
 # Expression grammar from lowest precedence (or) to highest (postfix). Binary levels
 # are left-associative; comparison is non-associative (no a < b < c chaining).

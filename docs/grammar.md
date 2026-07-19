@@ -174,16 +174,20 @@ commit.
 A **binding** introduces a name; a reassignment updates one:
 
 ```text
-binding   ::= 'mut'? identifier ':=' expr
-reassign  ::= lvalue '=' expr
-expr-stmt ::= expr
-lvalue    ::= identifier ( '.' identifier | '[' expr ']' )*
+binding       ::= 'mut'? bind-target ':=' expr   # bind-target: identifier or a destructuring pattern
+reassign      ::= assign-target '=' expr
+expr-stmt     ::= expr
+lvalue        ::= identifier ( '.' identifier | '[' expr ']' )*
+assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
+                | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
+field-target  ::= identifier ( ':' assign-target )?
 ```
 
 `:=` binds a **new, immutable** name; `mut x := …` makes it rebindable; `=` **reassigns** an existing
 `mut` binding (or field/element). An expression alone — a call, or a `match` run for its effect — is a
-statement. (Destructuring a pattern at `:=`, like `(q, r) := divmod(x, y)`, arrives with patterns in
-group 6.)
+statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
+**mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
+any lvalue (`(a, obj.f) = …`).
 
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.

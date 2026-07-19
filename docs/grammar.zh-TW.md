@@ -166,15 +166,19 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 **binding** 引入一個名字；reassign 更新一個既有名字：
 
 ```text
-binding   ::= 'mut'? identifier ':=' expr
-reassign  ::= lvalue '=' expr
-expr-stmt ::= expr
-lvalue    ::= identifier ( '.' identifier | '[' expr ']' )*
+binding       ::= 'mut'? bind-target ':=' expr   # bind-target：識別字或解構模式
+reassign      ::= assign-target '=' expr
+expr-stmt     ::= expr
+lvalue        ::= identifier ( '.' identifier | '[' expr ']' )*
+assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
+                | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
+field-target  ::= identifier ( ':' assign-target )?
 ```
 
 `:=` 綁定一個**全新、immutable** 的名字；`mut x := …` 使其可重綁；`=` **重新指派**一個既有的 `mut` 綁定（或
-field／元素）。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。（在 `:=` 處解構
-pattern，如 `(q, r) := divmod(x, y)`，隨 group 6 的 pattern 一起到來。）
+field／元素）。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
+新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
+`Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。
 
 expression 是一條優先序 cascade。每個二元層級都是**左結合**；**比較是非結合**——`a < b < c` 依設計無法 parse。
 

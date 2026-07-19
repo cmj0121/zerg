@@ -28,7 +28,8 @@ specs** — `Object` (always derived) and, opt-in, `Ord`, `Hash`, `Encode`, `Dec
 be derived** (`#[derive(MySpec)]` is a compile error): generating from structure needs code that reads
 fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
 `impl X for Y`. Decorators are Zerg's one channel for such compiler directives, and it stays closed (users
-cannot define new ones). See **[Derive & Default Behavior](derive.md)**.
+cannot define new ones). `derive` is one of a small fixed set — `#[dyn]`, `#[sealed]`, and more — listed in
+**[Decorators](decorators.md)**. See also **[Derive & Default Behavior](derive.md)**.
 
 ## Control Flow & Pattern Matching
 
@@ -89,6 +90,8 @@ Built on the core language above:
   fixed-size `[T; N]` array; one canonical type per role.
 - **[Derive & Default Behavior](derive.md)** — the two sources of "free" behavior: the compiler's
   structural derivation and a spec's default methods, and the firm line between them.
+- **[Decorators](decorators.md)** — the fixed, compiler-owned set of `#[…]` directives (`derive`, `dyn`,
+  `sealed`, …), what each does, and why the set stays closed.
 - **[Modules, Packages & Programs](package.md)** — how source is organized into modules and
   packages, how visibility and coherence hold across them, and where a program starts.
 - **[FFI](ffi.md)** — the C ABI boundary: exporting Zerg through its `pub` surface and importing C

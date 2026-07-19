@@ -21,7 +21,8 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 `#[derive(Encode, Decode)]` 會生成逐欄位(與逐 variant)的 canonical impl。可 derive 的是一組**固定、compiler 擁有的
 受祝福 spec**——`Object`(一律 derive)以及可 opt-in 的 `Ord`、`Hash`、`Encode`、`Decode`。**使用者 spec 永遠不能被
 derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 field 的程式,而那只有 compiler 能做——**沒有 macro**。要
-客製就手寫 `impl X for Y`。decorator 是 Zerg 給這類 compiler 指令的唯一通道,且保持封閉(使用者不可自訂)。見
+客製就手寫 `impl X for Y`。decorator 是 Zerg 給這類 compiler 指令的唯一通道,且保持封閉(使用者不可自訂)。`derive`
+只是一個小固定集合中的一員——`#[dyn]`、`#[sealed]` 等——完整清單見 **[Decorator](decorators.zh-TW.md)**。另見
 **[Derive 與預設行為](derive.zh-TW.md)**。
 
 ## 控制流與模式比對（Control Flow & Pattern Matching）
@@ -71,6 +72,8 @@ join/handle,只捕獲 **immutable 值與 channel**。channel 是 reference-count
 - **[Collection](collections.zh-TW.md)**——內建容器 `list`、`map`、`set`,以及定長 `[T; N]` 陣列;一角色一個 canonical 型別。
 - **[Derive 與預設行為](derive.zh-TW.md)**——兩種「免費」行為的來源：compiler 的結構化衍生,與 spec 的 default method,
   以及兩者之間那條明確界線。
+- **[Decorator](decorators.zh-TW.md)**——固定、compiler 擁有的 `#[…]` 指令集（`derive`、`dyn`、`sealed`……）,各自
+  做什麼,以及這個集合為何保持封閉。
 - **[Module、Package 與 Program](package.zh-TW.md)**——原始碼如何組織成 module 與 package、可見性與 coherence 如何跨越
   它們,以及程式從何啟動。
 - **[FFI](ffi.zh-TW.md)**——C ABI 邊界：以 `pub` 表面 export Zerg、以 `extern` import C。

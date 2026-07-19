@@ -184,7 +184,7 @@ mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= recv-base ( postfix )*
 recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
-primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr
+primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr | if-expr
                | chan-new | list-lit | map-lit | tuple-lit | block
                | identifier | '(' expr ')'
 
@@ -286,8 +286,9 @@ print        ::= 'print' expr
 # ==================================================================================
 # 6. Control flow & Pattern matching
 # ==================================================================================
-# 'if' and 'for' are statements (run for effect); 'match' is an expression (yields a
-# value, so it lives in 'primary', group 4). 'if' takes a bool — no truthiness — or a
+# 'for' is a statement (run for effect); 'match' is an expression, and 'if' is BOTH — a
+# statement, and an expression when it has an 'else' (if-expr, in 'primary', group 4).
+# 'if' takes a bool — no truthiness — or a
 # binding head 'if x := expr' that runs the block only when expr is present. 'for' is
 # the one loop: infinite, WHILE a condition holds, or over an Iterable ('for mut x'
 # binds in place). 'break' / 'continue' act on the nearest 'for'; 'break if c' /
@@ -295,6 +296,11 @@ print        ::= 'print' expr
 # follows 'for'; a bare 'for expr' with no 'in' is the while condition.
 
 if-stmt      ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
+# An 'if' with a MANDATORY trailing 'else' is also an EXPRESSION (if-expr, in primary,
+# group 4): it yields the taken branch's block value, and every branch must yield the
+# same type. As a statement (if-stmt) the 'else' is optional and no value is produced;
+# at statement position the statement form wins.
+if-expr      ::= 'if' if-head block ( 'else' 'if' if-head block )* 'else' block
 if-head      ::= expr | identifier ':=' expr           # binding form runs on 'present'
 for-stmt     ::= 'for' block                            # infinite (leave via break/return)
                | 'for' 'mut'? identifier 'in' expr block   # iterate an Iterable

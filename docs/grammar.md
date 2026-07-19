@@ -299,14 +299,15 @@ param-type ::= 'mut'? type
 
 ## Group 6 — Control flow & Pattern matching
 
-`if` and `for` are statements; `match` is an expression:
+`for` is a statement; `match` is an expression; `if` is both (an expression when it has an `else`):
 
 ```text
 block       ::= '{' stmt-list '}'                     # a bare block opens a nested scope
 with-stmt   ::= 'with' expr ( 'as' identifier )? block
 if-stmt     ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
+if-expr     ::= 'if' if-head block ( 'else' 'if' if-head block )* 'else' block   # else required
 if-head     ::= expr | identifier ':=' expr
-for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block
+for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' expr block
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
@@ -326,7 +327,10 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   `{ f := open(p); defer f.<teardown>; … }`. `as y` is optional when the resource is used only for its scope
   (a held lock).
 - **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
-  block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual.
+  block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual. An `if`
+  with a **mandatory `else`** is also an **expression** (`x := if c { a } else { b }`) — it yields the taken
+  branch's block value, and every branch must yield the same type; at statement position the statement form
+  wins (value discarded).
 - **`for`.** The one loop, in three forms: **`for { … }`** infinite (leave via `break` / `return`),
   **`for cond { … }`** while `cond` (a `bool`) holds, and **`for x in it { … }`** over an `Iterable`, binding
   `x` by copy (**`for mut x`** binds in place). The iterate form is taken when `mut` or an `identifier in`

@@ -146,6 +146,11 @@ fn countdown(mut n: int) {
     }
 }
 
+# `if` as an expression — needs `else`, both branches yield the same type (group 6)
+fn classify(n: int) -> str {
+    return if n < 0 { "neg" } else if n == 0 { "zero" } else { "pos" }
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

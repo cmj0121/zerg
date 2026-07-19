@@ -275,14 +275,15 @@ param-type ::= 'mut'? type
 
 ## Group 6 — Control flow & Pattern matching
 
-`if` 與 `for` 是 statement；`match` 是 expression：
+`for` 是 statement；`match` 是 expression；`if` 兩者皆是（有 `else` 時為 expression）：
 
 ```text
 block       ::= '{' stmt-list '}'                     # 裸 block 開一層 nested scope
 with-stmt   ::= 'with' expr ( 'as' identifier )? block
 if-stmt     ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
+if-expr     ::= 'if' if-head block ( 'else' 'if' if-head block )* 'else' block   # else 必要
 if-head     ::= expr | identifier ':=' expr
-for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block
+for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' expr block
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
@@ -299,7 +300,9 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   teardown）；`Ref[T]` 的 drop 已滿足它。所以 `with open(p) as f { f.read() }` ≈
   `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省。
 - **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
-  （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。
+  （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。帶**必要 `else`** 的 `if` 同時是一個**運算式**
+  （`x := if c { a } else { b }`）——產出被選中分支的 block 值,且每個分支須同型別;statement 位置則以 statement
+  形式為準（值被丟棄）。
 - **`for`。** 唯一的迴圈，三種形式：**`for { … }`** 無限（以 `break` / `return` 離開）、**`for cond { … }`** 當
   `cond`（`bool`）成立時重複、與 **`for x in it { … }`** 走訪 `Iterable`，`x` 以 copy 綁定（**`for mut x`** 就地
   綁定）。有 `mut` 或 `identifier in` 接在 `for` 後就是 iterate 形式;裸 `for expr` 則是 while 條件。沒有 C 式三段

@@ -186,6 +186,20 @@ fn grade(score: int) -> str {
     }
 }
 
+# list patterns with a rest binding (group 6)
+fn describe_list(xs: list[int]) -> str {
+    return match xs {
+        []             -> "empty"
+        [head, ..tail] -> f"head {head}, then {tail}"
+    }
+}
+
+# a partial struct destructure — the rest is ignored with `..` (group 6)
+fn greet_user(u: User) {
+    User{name, ..} := u
+    print f"hi {name}"
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

@@ -316,8 +316,12 @@ break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
 match-arm   ::= pattern ( 'if' expr )? '->' expr    # optional guard
-pattern     ::= sub-pattern ( '|' sub-pattern )*
-sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
+pattern       ::= sub-pattern ( '|' sub-pattern )*
+sub-pattern   ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
+struct-pat    ::= type-name '{' struct-fields? '}'
+struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
+list-pat      ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # at most one '..'
+list-pat-elem ::= pattern | '..' identifier?
 ```
 
 - **Block & `with`.** A bare `{ … }` opens a **nested scope** — its bindings and scope-owned values are
@@ -353,6 +357,12 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   pattern's bindings, that must also hold; on `A | B if c` it covers the whole or-pattern. A guarded arm
   **does not count toward exhaustiveness** (the compiler can't prove the guard holds), so the case still
   needs an unguarded arm (or `_`).
+- **Rest & partial.** A **struct pattern must list every field** or end with `..` — `Div{q, r}` (all),
+  `Div{q, ..}` (rest ignored), `Div{..}` (any). Listing all by default means adding a field **breaks** old
+  patterns, forcing you to look. A **list pattern** matches a list — `[a, b]`, `[head, ..tail]`,
+  `[..init, last]`, `[]` — with **at most one `..`**; `..name` binds the skipped run as a list, a bare `..`
+  drops it (a struct's `..` only ignores, never binds). In pattern position `..` is **rest**, distinct from
+  the value-level range `..`.
 - **Variant vs binding** is decided by **name resolution**: a bare name is a variant when it resolves to a
   known type or enum variant in scope, and a fresh binding otherwise. Names are **case-free**, so this is
   resolution, not capitalization — the same name resolution the postfix `[…]` uses (group 4).

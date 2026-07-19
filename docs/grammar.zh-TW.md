@@ -292,8 +292,12 @@ break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
 match-arm   ::= pattern ( 'if' expr )? '->' expr    # 選用 guard
-pattern     ::= sub-pattern ( '|' sub-pattern )*
-sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
+pattern       ::= sub-pattern ( '|' sub-pattern )*
+sub-pattern   ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
+struct-pat    ::= type-name '{' struct-fields? '}'
+struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
+list-pat      ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # 至多一個 '..'
+list-pat-elem ::= pattern | '..' identifier?
 ```
 
 - **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。block 同時
@@ -322,6 +326,10 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
 - **Guard。** arm 可在 pattern 後加 `if expr`（`Some(v) if v > 0 -> …`）——一個能看見 pattern 綁定、且必須成立的
   條件;`A | B if c` 時涵蓋整個 or-pattern。帶 guard 的 arm **不計入 exhaustiveness**（compiler 無法證明 guard 成
   立），所以該 case 仍需一個無 guard 的 arm（或 `_`）。
+- **Rest 與部分。** **struct pattern 必須列全 field**,否則以 `..` 結尾——`Div{q, r}`（全）、`Div{q, ..}`（略過
+  其餘）、`Div{..}`（任意）。預設列全表示加一個 field 會**弄壞**舊 pattern,逼你檢視。**list pattern** 比對 list——
+  `[a, b]`、`[head, ..tail]`、`[..init, last]`、`[]`——**至多一個 `..`**;`..name` 把略過的一段綁成 list,裸 `..`
+  丟棄（struct 的 `..` 只忽略、不綁）。pattern 位置的 `..` 是 **rest**,與值層的 range `..` 不同。
 - **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是
   新的 binding。名字**大小寫自由**,所以靠解析、非大小寫——與 postfix `[…]` 用的是同一套 name resolution（group 4）。
 

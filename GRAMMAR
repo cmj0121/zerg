@@ -337,10 +337,18 @@ match-arm    ::= pattern ( 'if' expr )? '->' expr   # optional guard after the p
 # resolution the postfix grammar uses for index-vs-type-arguments (group 4). Names are
 # case-free, so this is decided by resolution, not by capitalization.
 pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same names
-sub-pattern  ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat | '_'
+# A struct pattern must list EVERY field, or end with '..' to ignore the rest ('Div{q, r}'
+# lists all; 'Div{q, ..}' ignores the rest; 'Div{..}' matches any). A list pattern may
+# hold at most ONE '..' — '..name' binds the skipped run as a list, a bare '..' drops it.
+# (struct '..' only ignores; it never binds.) 'pattern' position '..' is REST, distinct
+# from the value-level range '..' (group 4).
+sub-pattern  ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
 variant-pat  ::= type-name ( '(' pattern-list ')' )?    # Left(v), Some, nested Left(Some(v))
-struct-pat   ::= type-name '{' field-pat ( ',' field-pat )* '}'   # Div{q, r}
+struct-pat   ::= type-name '{' struct-fields? '}'       # Div{q, r}; Div{q, ..}; Div{..}
+struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
 tuple-pat    ::= '(' pattern-list ')'                   # (a, b) — also a bind-target
+list-pat     ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # [a, b], [h, ..t], []
+list-pat-elem ::= pattern | '..' identifier?            # '..name' binds the rest as a list
 literal-pat  ::= '-'? literal                           # matched by equal; '-' only on a number
 binding-pat  ::= identifier                             # binds anything, by copy
 field-pat    ::= identifier ( ':' pattern )?            # shorthand, or field: pattern

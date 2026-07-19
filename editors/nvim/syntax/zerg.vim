@@ -82,8 +82,10 @@ syntax match zergEscape "\\\([ntr0\\'\"]\|u{\x\+}\|x\x\x\)" contained
 syntax match zergCharacter "b'\(\\\([ntr0\\']\|x\x\x\)\|[^'\\]\)'" contains=zergEscape,zergEscapeError
 syntax match zergCharacter "'\(\\\([ntr0\\'\"]\|u{\x\+}\)\|[^'\\]\)'" contains=zergEscape,zergEscapeError
 
-" raw string r"..." (no escapes) and str "..." (with escapes).
+" raw string r"..." (no escapes) and str "..." (with escapes); triple-quoted str spans
+" lines. The triple region is defined first so its longer start wins over a plain '"'.
 syntax region zergRawString start=+r"+ end=+"+
+syntax region zergString start=+"""+ end=+"""+ contains=zergEscape,zergEscapeError
 syntax region zergString start=+"+ skip=+\\"+ end=+"+ contains=zergEscape,zergEscapeError
 
 " f-string f"...{expr}...": text is String, the {expr} holes are highlighted.

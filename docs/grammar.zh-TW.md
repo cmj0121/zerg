@@ -143,6 +143,7 @@ float-lit   ::= dec-int '.' dec-int exponent? | dec-int exponent
 rune-lit    ::= "'" ( rune-char | escape ) "'"
 byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
+              | '"""' ( ml-str-char | escape )* '"""'   # 多行；換行為字面
 raw-str-lit ::= 'r' '"' raw-char* '"'
 ```
 
@@ -153,9 +154,10 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 - **`rune` 與 `byte`。** **`rune`** 是單引號內的一個 Unicode code point——`'a'`、`'\n'`、`'\u{1F600}'`。
   **`byte`** 是一個 octet，加 `b` 前綴——`b'a'`、`b'\x41'`——或用 cast 寫成 `byte(0x41)`。單引號留給這兩者；字串
   用雙引號。
-- **`str` 與 raw string。** **`str`** 用雙引號並處理 escape（`\n \t \r \0 \\ \" \'` 與 `\u{…}`）。**raw
-  string** 加 `r` 前綴，**不**處理任何 escape——`r"C:\tmp\new"` 是十個字面字元。`str` 不能含 NUL，所以 `\0` 與
-  `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
+- **`str`、多行與 raw string。** **`str`** 用雙引號並處理 escape（`\n \t \r \0 \\ \" \'` 與 `\u{…}`）。**三引號**
+  `"""…"""` 的 `str` 相同但**可跨行**——換行為字面,內部單一 `"` 或 `""` 免 escape（只有 `"""` 結束它）,適合
+  SQL/JSON/文字。**raw string** 加 `r` 前綴,**不**處理任何 escape——`r"C:\tmp\new"` 是十個字面字元。`str` 不能含
+  NUL,所以 `\0` 與 `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 

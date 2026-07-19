@@ -144,13 +144,16 @@ float-lit   ::= dec-int '.' dec-int exponent?
 exponent    ::= ( 'e' | 'E' ) ( '+' | '-' )? dec-int
 
 # Text. A rune is one Unicode code point in single quotes; a byte is one octet,
-# 'b'-prefixed (or `byte(0x41)` by cast, group 7). A str is double-quoted and
-# processes escapes; a raw str is 'r'-prefixed and processes none. A str may not
-# hold a NUL, so '\0' and '\u{0}' are invalid inside "..." (but valid in a rune or
-# byte). f"..." interpolation is deferred to the expression group.
+# 'b'-prefixed (or `byte(0x41)` by cast, group 7). A str is double-quoted and processes
+# escapes; a TRIPLE-quoted '"""..."""' str is the same but spans lines (line breaks are
+# literal, and a lone '"' or '""' inside needs no escape — only '"""' ends it); a raw str
+# is 'r'-prefixed and processes none. A str may not hold a NUL, so '\0' and '\u{0}' are
+# invalid inside "..." (but valid in a rune or byte). f"..." interpolation is deferred to
+# the expression group.
 rune-lit    ::= "'" ( rune-char | escape ) "'"
 byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
+              | '"""' ( ml-str-char | escape )* '"""'    # multiline; line breaks are literal
 raw-str-lit ::= 'r' '"' raw-char* '"'
 
 escape      ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | '"' | 'u' '{' hex-digit+ '}' )
@@ -158,6 +161,7 @@ byte-escape ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | 'x' hex-digit hex-digi
 rune-char   ::= < any code point except "'", '\', or a line break >
 byte-char   ::= < any octet 0x00..0x7F except "'", '\', or a line break >
 str-char    ::= < any code point except '"', '\', NUL, or a line break >
+ml-str-char ::= < any code point except '\', NUL, or a closing '"""' >   # line breaks allowed
 raw-char    ::= < any code point except '"' or a line break >   # no escapes
 
 # ==================================================================================

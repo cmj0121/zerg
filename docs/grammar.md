@@ -148,6 +148,7 @@ float-lit   ::= dec-int '.' dec-int exponent? | dec-int exponent
 rune-lit    ::= "'" ( rune-char | escape ) "'"
 byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
+              | '"""' ( ml-str-char | escape )* '"""'   # multiline; line breaks literal
 raw-str-lit ::= 'r' '"' raw-char* '"'
 ```
 
@@ -159,10 +160,11 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 - **`rune` and `byte`.** A **`rune`** is one Unicode code point in single quotes — `'a'`, `'\n'`,
   `'\u{1F600}'`. A **`byte`** is one octet, `b`-prefixed — `b'a'`, `b'\x41'` — or written `byte(0x41)` by
   cast. Single quotes are for these two; strings use double quotes.
-- **`str` and raw strings.** A **`str`** is double-quoted and processes escapes (`\n \t \r \0 \\ \" \'`
-  and `\u{…}`). A **raw string** is `r`-prefixed and processes **none** — `r"C:\tmp\new"` is ten literal
-  characters. A `str` cannot hold a NUL, so `\0` and `\u{0}` are invalid inside `"…"` (they are fine in a
-  `rune` or `byte`).
+- **`str`, multiline, and raw strings.** A **`str`** is double-quoted and processes escapes (`\n \t \r \0 \\
+\" \'` and `\u{…}`). A **triple-quoted** `"""…"""` `str` is the same but **spans lines** — line breaks are
+  literal, and a lone `"` or `""` inside needs no escape (only `"""` ends it), so it fits SQL/JSON/prose. A
+  **raw string** is `r`-prefixed and processes **none** — `r"C:\tmp\new"` is ten literal characters. A `str`
+  cannot hold a NUL, so `\0` and `\u{0}` are invalid inside `"…"` (they are fine in a `rune` or `byte`).
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.

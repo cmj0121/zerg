@@ -138,6 +138,14 @@ fn first[I: Iterator](mut it: I) -> I.Item? {
     return it.next()             # I.Item — the associated type, projected
 }
 
+# the while form of `for` — loops while the condition holds (group 6)
+fn countdown(mut n: int) {
+    for n > 0 {
+        print f"{n}"
+        n = n - 1
+    }
+}
+
 pub fn describe(u: User) -> str {
     mut loud  := false
     mut label := u.name

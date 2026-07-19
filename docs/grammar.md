@@ -327,10 +327,12 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   (a held lock).
 - **`if`.** The condition is a `bool` — no truthiness. The **binding head** `if x := expr { … }` runs the
   block only when `expr` is present (the one-arm-`match` sugar). `else if` / `else` chain as usual.
-- **`for`.** The one loop, in two forms: **`for { … }`** infinite (leave via `break` / `return`), and
-  **`for x in it { … }`** over an `Iterable`, binding `x` by copy (**`for mut x`** binds in place). There is
-  no `while` and no C-style `for`. **`break` / `continue`** act on the nearest loop; **`break if c`** and
-  **`continue if c`** are sugar for `if c { break }` / `if c { continue }`.
+- **`for`.** The one loop, in three forms: **`for { … }`** infinite (leave via `break` / `return`),
+  **`for cond { … }`** while `cond` (a `bool`) holds, and **`for x in it { … }`** over an `Iterable`, binding
+  `x` by copy (**`for mut x`** binds in place). The iterate form is taken when `mut` or an `identifier in`
+  follows `for`; a bare `for expr` is the while condition. There is no C-style three-clause `for`. **`break` /
+  `continue`** act on the nearest loop; **`break if c`** and **`continue if c`** are sugar for
+  `if c { break }` / `if c { continue }`.
 - **`match`.** An expression: it tries the value against arms in order, yields the first fit, and every arm
   yields the same type — so a `match` is usable at a `:=`, a `return`, or an argument. A trailing **`_`**
   covers the rest.

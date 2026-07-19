@@ -300,9 +300,11 @@ sub-pattern ::= variant-pat | struct-pat | tuple-pat | literal-pat | binding-pat
   `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省。
 - **`if`。** 條件是 `bool`——沒有 truthiness。**binding head** `if x := expr { … }` 只在 `expr` 存在時執行區塊
   （one-arm-`match` 的 sugar）。`else if` / `else` 照常串接。
-- **`for`。** 唯一的迴圈，兩種形式：**`for { … }`** 無限（以 `break` / `return` 離開），與 **`for x in it { … }`**
-  走訪 `Iterable`，`x` 以 copy 綁定（**`for mut x`** 就地綁定）。沒有 `while`、沒有 C 式 `for`。**`break` /
-  `continue`** 作用於最近的迴圈；**`break if c`** 與 **`continue if c`** 是 `if c { break }` / `if c { continue }`
+- **`for`。** 唯一的迴圈，三種形式：**`for { … }`** 無限（以 `break` / `return` 離開）、**`for cond { … }`** 當
+  `cond`（`bool`）成立時重複、與 **`for x in it { … }`** 走訪 `Iterable`，`x` 以 copy 綁定（**`for mut x`** 就地
+  綁定）。有 `mut` 或 `identifier in` 接在 `for` 後就是 iterate 形式;裸 `for expr` 則是 while 條件。沒有 C 式三段
+  `for`。**`break` / `continue`** 作用於最近的迴圈；**`break if c`** 與 **`continue if c`** 是
+  `if c { break }` / `if c { continue }`
   的 sugar。
 - **`match`。** 一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
   可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。

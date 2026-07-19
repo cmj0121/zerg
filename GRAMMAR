@@ -268,6 +268,14 @@ param-type   ::= 'mut'? type
 # A call's named arguments are the 'arg' form above (group 4): positional arguments
 # come first, then any argument may be given by name; once one is named, the rest
 # must be named too. A default lets a named argument be omitted.
+#
+# ARGUMENT CONVENTIONS. Names are resolved at COMPILE time against the signature, so a
+# 'map' does NOT splat into named arguments — its keys are runtime strings and its values
+# one homogeneous type, while parameters are compile-time and heterogeneous. There are
+# also no VARIADICS. Pass a 'list' for many positional values, and an OPTIONS STRUCT with
+# field defaults for a bag of named options ('draw(Style(width: 2))') — the statically
+# typed stand-in for keyword arguments. A 'map' is passed as an ordinary value, never
+# expanded into a call's names.
 
 # ----------------------------------------------------------------------------------
 # String interpolation & print (the formatting / output surface)

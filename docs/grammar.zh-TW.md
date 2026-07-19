@@ -269,6 +269,10 @@ param-type ::= 'mut'? type
 - **參數。** 參數是 `name: type`，可加 `mut`（by-ref、in-place——屬型別的一部分），亦可帶**預設值** `= expr`。
   call 端的 **named argument** 是 `name: value`（group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，
   一旦具名其餘也須具名——這正是能跳過有預設值參數的方式。
+- **引數慣例。** 名字在**編譯期**對照簽名解析,所以 `map` **不能** splat 成 named argument（runtime 字串 key、
+  同質值型別,對上 compile-time 異質參數）。也**沒有 variadic**。多個位置引數傳 **`list`**;一包具名選項用帶 field
+  預設的 **options struct**——`draw(Style(width: 2))`,即靜態版的 keyword arguments。`map` 以普通值傳遞,絕不展開
+  成呼叫的具名參數。
 - **型別。** function 的型別是 `fn(P…) -> R`——參數（含 `mut`）與結果，別無其他；預設值與參數名字存在宣告裡，不在
   型別中。
 - **`mut fn`（mutating method）。** `mut fn` 標記一個**方法**會就地修改其隱式 receiver `this`；呼叫端的 receiver

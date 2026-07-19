@@ -291,6 +291,12 @@ param-type ::= 'mut'? type
   optionally with a **default** `= expr`. A **named argument** at the call is `name: value` (the `arg` form
   from group 4): positional arguments come first, then any may be named, and once one is named the rest
   must be too — which is what lets a defaulted parameter be skipped.
+- **Argument conventions.** Names are resolved at **compile time** against the signature, so a `map` does
+  **not** splat into named arguments (runtime string keys, one homogeneous value type vs compile-time
+  heterogeneous parameters). There are **no variadics** either. Pass a **`list`** for many positional values,
+  and an **options struct** with field defaults for a bag of named options — `draw(Style(width: 2))`, the
+  statically typed stand-in for keyword arguments. A `map` is passed as an ordinary value, never expanded
+  into a call.
 - **Type.** A function's type is `fn(P…) -> R` — parameters (with `mut`) and result, nothing else; defaults
   and parameter names live in the declaration, not the type.
 - **`mut fn` (mutating method).** A `mut fn` marks a **method** that mutates its implicit receiver `this` in

@@ -29,7 +29,7 @@ syntax region zergDecorator matchgroup=zergDecorator start="#\[" end="\]"
 
 " Statement keywords (control flow, effects, items introduced by a statement).
 syntax keyword zergStatement nop return if else break continue match with
-syntax keyword zergStatement spawn select defer del raise guard import impl print
+syntax keyword zergStatement spawn select defer del raise guard import impl print asm
 
 " `for` is a match (not a keyword) so the `impl … for` override below can win.
 syntax match zergStatement "\<for\>"
@@ -41,7 +41,7 @@ syntax match zergStatement "\<for\>"
 syntax match zergKeyword "\%(\<impl\>.\+\)\@80<=\<for\>"
 
 " Declaration keywords.
-syntax keyword zergKeyword mut pub extern package init
+syntax keyword zergKeyword mut pub extern package init unsafe
 
 " Type- and function-declaring keywords carry a nextgroup, so the declared NAME
 " (fn/struct/enum/spec/type) highlights the same as a function name — see
@@ -54,7 +54,7 @@ syntax keyword zergOperator not and or is in as from
 " Built-in type names and generic constructors. Capitalized built-ins (Ref, Result,
 " Either, This) are already caught by the `\<\u\w*\>` type match below, so only the
 " lowercase built-ins need naming here.
-syntax keyword zergType bool byte rune int uint float str
+syntax keyword zergType bool byte rune int uint float str ptr
 syntax keyword zergType list map set chan
 
 " Constants. `this` (the method receiver) is highlighted like nil/true/false.

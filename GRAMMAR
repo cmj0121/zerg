@@ -111,6 +111,7 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'    | 'not'
              | 'and'   | 'or'    | 'print'  | 'this'    | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'     | 'const'
+             | 'unsafe'| 'ptr'   | 'asm'
 # ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
 
 # ==================================================================================
@@ -201,7 +202,7 @@ unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= recv-base ( postfix )*
 recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
 primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr | if-expr
-               | chan-new | list-lit | map-lit | tuple-lit | block
+               | unsafe-expr | asm-expr | chan-new | list-lit | map-lit | tuple-lit | block
                | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
@@ -260,9 +261,9 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # mutable reference (below). A parameter may carry a default; a call fills parameters
 # positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
 
-fn-decl      ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure — never generic
-fn-type      ::= 'fn' '(' param-type-list? ')' ret-type?         # a function's type
+fn-decl      ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure — never generic, never unsafe
+fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a function's type; 'unsafe fn' for ptr[unsafe fn…]
 
 # 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place — exactly the
 # 'mut &this' case. It is meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the
@@ -419,7 +420,7 @@ pattern-list ::= pattern ( ',' pattern )*
 # decision, not surface grammar: adding one adds no production.
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
 base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'I.Item' PROJECTS an
-               | tuple-type | array-type | chan-type | fn-type   # associated type — chainable: 'I.Item.Sub'
+               | tuple-type | array-type | chan-type | fn-type | ptr-type   # associated type — chainable: 'I.Item.Sub'
 type-args    ::= '[' type ( ',' type )* ']'
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' const-expr ']'           # [T; N] — the ';' array position; N is a const-expr
@@ -541,7 +542,7 @@ variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' const-expr )? 
 spec-member  ::= fn-sig | fn-decl | assoc-type | assoc-const   # method(s), assoc type, or assoc const
 assoc-type   ::= 'type' identifier ( ':' bound )?      # 'type Item' or bounded 'type Item: Ord'
 assoc-const  ::= 'const' identifier ':' type ( '=' const-expr )?   # required, or provided with a default
-fn-sig       ::= 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
+fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================
 # 8. Null-safety & Errors
@@ -630,11 +631,48 @@ defer-stmt   ::= 'defer' expr            # run at block exit, every path incl. a
 del-stmt     ::= 'del' identifier        # revoke a name's access now
 
 # ==================================================================================
+# 12. Unsafe — raw pointers & inline assembly
+# ==================================================================================
+# The one door to bare-metal. 'unsafe { … }' is a block-expression inside which the raw
+# operations below are legal; everywhere else they are a compile error, so the safe world
+# ('Ref[T]', 'mut &', no mutable globals, checked 'T?') is unaffected. An 'unsafe fn' is
+# unsafe throughout its body and may only be CALLED from another 'unsafe' context. 'unsafe'
+# is a TRUST BOUNDARY: the compiler makes no memory-safety guarantee about what happens
+# inside it — the author vouches for it.
+unsafe-expr  ::= 'unsafe' block          # yields the block's value; unsafe ops legal only here
+                                         # ('unsafe' also prefixes a decl — 'unsafe fn', groups 5/7)
+
+# RAW POINTERS. 'ptr' is a platform-width raw ADDRESS (like C's 'void*' / 'uintptr'); 'ptr[T]'
+# is that address TYPED to a pointee T (same width — '[T]' only types the load/store/offset). A
+# 'ptr' is inherently nullable (address 0 is null) and is ORTHOGONAL to 'T?' — there is NO
+# 'ptr[T]?'; test a null pointer with 'p == 0'. Because T is any type, function pointers fall out
+# for free — 'ptr[fn(int) -> nil]' (an interrupt vector / callback) — as do 'ptr[ptr[T]]' and the
+# bare 'ptr' (a void*). A 'ptr'/'ptr[T]' TYPE may appear in a signature or field (to DESCRIBE
+# pointer-shaped data), but every OPERATION on one — taking an address, dereferencing, storing,
+# offsetting, casting — is legal only inside 'unsafe'. Those operations are unsafe stdlib
+# INTRINSICS, not grammar: 'addr(x) -> ptr[T]', 'p.load() -> T', 'p.store(v)', 'p.offset(n)', and
+# 'ptr' ⇄ 'ptr[T]' ⇄ 'uint' casts (volatile / atomic variants likewise). There is no '*'/'&'
+# pointer operator — the bracket type keeps pointers consistent with 'list[T]'/'Ref[T]'/'chan[T]'.
+ptr-type     ::= 'ptr' ( '[' type ']' )?     # 'ptr' = raw address; 'ptr[T]' = typed pointer (unsafe)
+
+# INLINE ASSEMBLY (unsafe-only). A template string (triple-quoted for multi-line) with operands
+# that bind Zerg values to registers/constraints. The operand heads 'out'/'inout'/'clobber' are
+# CONTEXTUAL — special only inside an asm operand list ('in' is already a keyword). The constraint
+# string ("rax", "r", "m", …) is opaque here; its meaning is the target backend's.
+asm-expr     ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
+asm-operand  ::= 'in'    '(' str-lit ')' expr      # a value into a register/constraint
+               | 'out'   '(' str-lit ')' lvalue    # a register into an lvalue
+               | 'inout' '(' str-lit ')' lvalue    # both directions
+               | 'clobber' '(' str-lit ( ',' str-lit )* ')'   # registers the asm clobbers
+
+# ==================================================================================
 # Roadmap — all core & minor groups above are landed
 # ==================================================================================
-# The surface grammar is complete. One boundary is deliberately left out:
-#   -- deferred --    FFI IMPORT (an 'extern "C"' block naming foreign C symbols) is
-#                     an OPEN design question, not a pending feature — it may be a
-#                     stdlib facility rather than a language construct. FFI EXPORT
-#                     needs no syntax at all: a package's 'pub' surface already IS its
-#                     C ABI (see docs/ffi.md).
+# The surface grammar is complete. Raw memory and inline assembly land with group 12
+# ('unsafe' / 'ptr' / 'asm'), so bare-metal work — MMIO, page tables, a syscall via 'asm' —
+# is expressible. One boundary is deliberately left out:
+#   -- deferred --    FFI IMPORT by C SYMBOL NAME (naming an external 'malloc'/syscall to
+#                     call it directly) is an OPEN design question — likely a thin linkage/
+#                     stdlib facility rather than surface syntax; a syscall can already be
+#                     issued through 'asm'. FFI EXPORT needs no syntax at all: a package's
+#                     'pub' surface already IS its C ABI (see docs/ffi.md).

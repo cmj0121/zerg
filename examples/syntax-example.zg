@@ -105,6 +105,25 @@ impl Bounded for Counter {
     fn clamp(v: int) -> int { return if v > MAX { MAX } else { v } }
 }
 
+# unsafe: raw pointers & inline asm — bare-metal only (group 12)
+const VGA: uint = 0xB8000
+
+# `unsafe fn` is unsafe throughout its body; ptr operations need unsafe
+unsafe fn poke(cell: int, value: u16) {
+    base := ptr[u16](VGA)              # cast a uint address to a typed pointer
+    base.offset(cell).store(value)     # typed store through a raw pointer
+}
+
+fn halt() {
+    unsafe { asm("hlt") }              # inline asm inside an unsafe block
+}
+
+# pointer-shaped fields: the TYPE is fine in a field; operations need unsafe
+struct PageTable {
+    root:    ptr[u64]                  # a raw pointer field
+    handler: ptr[fn(int) -> nil]       # a function pointer (interrupt vector)
+}
+
 # the empty-statement placeholder
 fn noop() { nop }
 

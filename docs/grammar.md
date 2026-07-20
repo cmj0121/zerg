@@ -41,11 +41,14 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 9   | Concurrency          | `spawn`, `chan[T]()`, `ch <- v`, `<-ch`, `select`                | landed |
 | 10  | Modules & Programs   | `import`, `pub import`, `init()`, `pub`, `main`                  | landed |
 | 11  | Resource cleanup     | `defer expr`, `del name`                                         | landed |
+| 12  | Unsafe               | `unsafe { }`, `unsafe fn`, `ptr` / `ptr[T]`, `asm(…)`            | landed |
 
-All groups above are landed — the surface grammar is complete. The one boundary left out is **FFI import**
-(an `extern "C"` block for foreign C symbols): it is an **open design question** — possibly a stdlib
-facility rather than a language construct — not a pending feature. **FFI export needs no syntax**: a
-package's `pub` surface already _is_ its C ABI (see [FFI](ffi.md)).
+All groups above are landed — the surface grammar is complete. Raw memory and inline assembly land with
+group 12 (`unsafe` / `ptr` / `asm`), so bare-metal work (MMIO, page tables, a syscall via `asm`) is
+expressible. The one boundary left out is **FFI import by C symbol name** (naming an external `malloc` or
+syscall to call it directly): an **open design question** — likely a thin linkage/stdlib facility rather
+than surface syntax — not a pending feature (a syscall can already be issued via `asm`). **FFI export needs
+no syntax**: a package's `pub` surface already _is_ its C ABI (see [FFI](ffi.md)).
 
 ## Group 1 — `nop` & the program skeleton
 
@@ -283,9 +286,9 @@ best-effort (it never raises), so `print f"hello {name}"` is the smallest progra
 A function is a first-class value — a named declaration, an anonymous expression, and a type:
 
 ```text
-fn-decl    ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # anonymous — never generic
-fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
+fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # anonymous — never generic, never unsafe
+fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
@@ -414,7 +417,7 @@ The type expressions used since group 5, and the declarations that introduce typ
 ```text
 type        ::= base-type '?'?
 base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' projects; chainable 'I.Item.Sub'
-              | tuple-type | array-type | chan-type | fn-type
+              | tuple-type | array-type | chan-type | fn-type | ptr-type   # ptr-type: group 12 (unsafe)
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' const-expr ']'   # N is a const-expr
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
@@ -621,6 +624,38 @@ del-stmt   ::= 'del' identifier
 - The third point on the axis — a **`Ref[T]` drop** at the last holder's scope exit — is not a statement;
   it falls out of scope ownership. The dividing question is `defer` vs `Ref[T]`: does the resource escape
   its scope? No → `defer`; yes → `Ref[T]`.
+
+## Group 12 — Unsafe (raw pointers & inline assembly)
+
+The one door to bare-metal. Everything here is legal **only inside `unsafe`**; the safe world (`Ref[T]`,
+`mut &`, no mutable globals, checked `T?`) is untouched.
+
+```text
+unsafe-expr ::= 'unsafe' block             # block-expression; unsafe ops legal only here
+fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn' — unsafe throughout its body
+ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = raw address; 'ptr[T]' = typed pointer
+asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
+asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
+              | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
+```
+
+- **`unsafe { … }`.** A **block-expression** (it yields the block's value) inside which raw operations are
+  legal; anywhere else they are a compile error. `unsafe` is a **trust boundary** — the compiler makes no
+  memory-safety guarantee about its contents; the author vouches for them. **`unsafe fn`** is unsafe
+  throughout its body and may only be **called** from another `unsafe` context.
+- **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
+  `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
+  `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as
+  do `ptr[ptr[T]]` and the bare `ptr`. A `ptr` is **inherently nullable** (address `0`) and is **orthogonal
+  to `T?`** — there is **no `ptr[T]?`**; test with `p == 0`. The **type** may appear in a signature or field
+  (to describe pointer-shaped data), but every **operation** — `addr(x)`, `p.load()`, `p.store(v)`,
+  `p.offset(n)`, casts, volatile/atomic — is an **unsafe stdlib intrinsic** (not grammar), legal only inside
+  `unsafe`. There is **no `*`/`&` operator**; the bracket type keeps pointers consistent with `list[T]` /
+  `Ref[T]` / `chan[T]`.
+- **Inline assembly (`asm`).** A template string (triple-quoted for multi-line) with operands binding Zerg
+  values to registers/constraints. `out` / `inout` / `clobber` are **contextual** (special only in an asm
+  operand list; `in` is already a keyword). The constraint string (`"rax"`, `"r"`, `"m"`, …) is opaque here —
+  its meaning is the target backend's. `asm` is `unsafe`-only; a **syscall** is issued this way.
 
 ## Editor tooling
 

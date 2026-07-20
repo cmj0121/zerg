@@ -41,10 +41,13 @@ notation 很小：
 | 9   | Concurrency          | `spawn`、`chan[T]()`、`ch <- v`、`<-ch`、`select`               | 已落地 |
 | 10  | Modules & Programs   | `import`、`pub import`、`init()`、`pub`、`main`                 | 已落地 |
 | 11  | Resource cleanup     | `defer expr`、`del name`                                        | 已落地 |
+| 12  | Unsafe               | `unsafe { }`、`unsafe fn`、`ptr` / `ptr[T]`、`asm(…)`           | 已落地 |
 
-以上各 group 皆已落地——表面文法**已完整**。唯一留白的邊界是 **FFI import**（給 foreign C 符號的 `extern "C"`
-區塊）：它是**待議的開放設計**——可能落在 **stdlib** 而非語言構造——而非待做功能。**FFI export 不需任何語法**：
-package 的 `pub` 表面本身**就是**它的 C ABI（見 [FFI](ffi.zh-TW.md)）。
+以上各 group 皆已落地——表面文法**已完整**。raw memory 與 inline assembly 隨 group 12（`unsafe` / `ptr` /
+`asm`）到來，故裸機工作（MMIO、page table、以 `asm` 發 syscall）皆可表達。唯一留白的邊界是 **依 C 符號名的 FFI
+import**（命名外部 `malloc`/syscall 直接呼叫）：**待議的開放設計**——可能是薄的 linkage/stdlib 機制而非表面語法——
+而非待做功能（syscall 已可透過 `asm` 發出）。**FFI export 不需任何語法**：package 的 `pub` 表面本身**就是**它的 C
+ABI（見 [FFI](ffi.zh-TW.md)）。
 
 ## Group 1 — `nop` 與程式骨架
 
@@ -262,9 +265,9 @@ print       ::= 'print' expr
 function 是 first-class value——具名宣告、匿名 expression，與一個型別：
 
 ```text
-fn-decl    ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # 匿名——永不泛型
-fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
+fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # 匿名——永不泛型、永不 unsafe
+fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
@@ -370,7 +373,7 @@ list-pat-elem ::= pattern | '..' identifier?
 ```text
 type        ::= base-type '?'?
 base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' 投影;可鏈式 'I.Item.Sub'
-              | tuple-type | array-type | chan-type | fn-type
+              | tuple-type | array-type | chan-type | fn-type | ptr-type   # ptr-type：group 12（unsafe）
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' const-expr ']'   # N 是 const-expr
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
@@ -543,6 +546,33 @@ del-stmt   ::= 'del' identifier
   `Ref[T]` / `chan` 則是放掉一個 refcount——**`del ch`** 若你是最後 sender 便關閉 channel。
 - 軸上第三點——**`Ref[T]` drop** 於最後 holder 的 scope 退出時——不是 statement,由 scope ownership 掉出來。分界是
   `defer` vs `Ref[T]`:資源會逃出其 scope 嗎?不會 → `defer`;會 → `Ref[T]`。
+
+## Group 12 — Unsafe（raw pointer 與 inline assembly）
+
+通往裸機的唯一門。這裡的一切**只在 `unsafe` 內合法**；安全世界（`Ref[T]`、`mut &`、無 mutable globals、受檢
+`T?`）不受影響。
+
+```text
+unsafe-expr ::= 'unsafe' block             # block-expression；unsafe 操作僅此合法
+fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——整個 body 皆 unsafe
+ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = 原始位址；'ptr[T]' = 具型別指標
+asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
+asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
+              | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
+```
+
+- **`unsafe { … }`。** 一個 **block-expression**（yields 區塊值），其內 raw 操作合法；其外皆為編譯錯誤。`unsafe`
+  是**信任邊界**——編譯器對其內容不作記憶體安全保證，由作者背書。**`unsafe fn`** 整個 body 皆 unsafe，且只能從
+  另一個 `unsafe` context **呼叫**。
+- **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
+  位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
+  ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與
+  `T?` **正交**——**無 `ptr[T]?`**；以 `p == 0` 檢查。**型別**可出現在簽名/欄位（描述指標形狀資料），但每個**操作**
+  ——`addr(x)`、`p.load()`、`p.store(v)`、`p.offset(n)`、cast、volatile/atomic——都是 **unsafe stdlib intrinsic**
+  （非文法），只在 `unsafe` 內合法。**無 `*`/`&` 運算子**；中括號型別讓指標與 `list[T]` / `Ref[T]` / `chan[T]` 一致。
+- **Inline assembly（`asm`）。** 一個 template 字串（多行可用三引號）加上把 Zerg 值綁到暫存器/constraint 的 operand。
+  `out` / `inout` / `clobber` 為 **contextual**（只在 asm operand list 內特殊；`in` 本就是 keyword）。constraint 字串
+  （`"rax"`、`"r"`、`"m"` …）在此不透明——其意義屬目標 backend。`asm` 僅限 `unsafe`；**syscall** 由此發出。
 
 ## 編輯器工具（Editor tooling）
 

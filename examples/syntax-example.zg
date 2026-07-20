@@ -120,31 +120,30 @@ fn sum_n[N: int](xs: [int; N]) -> int {
     return acc
 }
 
-# unsafe: raw pointers & inline asm — bare-metal only (group 12)
+# unsafe (group 12): a module-level `unsafe { }` GROUPS everything bare-metal — the mutable global,
+# the fn that guards it, and a raw-pointer poke — in one unsafe context. No per-item `unsafe` prefix:
+# inside the group every `fn` is an unsafe fn and every `mut` binding is a persistent module-private
+# global, so the global write and the ptr operations are all legal here.
 VGA := 0xB8000
 
-# `unsafe fn` is unsafe throughout its body; ptr operations need unsafe
-unsafe fn poke(cell: int, value: u16) {
-    base := ptr[u16](VGA)              # cast a uint address to a typed pointer
-    base.offset(cell).store(value)     # typed store through a raw pointer
+unsafe {
+    mut tick_count: int = 0                     # a persistent module-private mutable global
+    pub fn tick() { tick_count = tick_count + 1 }   # an unsafe fn, grouped with the state it guards
+
+    fn poke(cell: int, value: u16) {            # an unsafe fn — ptr operations are legal in the group
+        base := ptr[u16](VGA)                   # cast a uint address to a typed pointer
+        base.offset(cell).store(value)          # typed store through a raw pointer
+    }
 }
 
 fn halt() {
-    unsafe { asm("hlt") }              # inline asm inside an unsafe block
+    unsafe { asm("hlt") }              # in a function, `unsafe { }` is the block-expression for raw ops
 }
 
 # pointer-shaped fields: the TYPE is fine in a field; operations need unsafe
 struct PageTable {
     root:    ptr[u64]                  # a raw pointer field
     handler: ptr[fn(int) -> nil]       # a function pointer (interrupt vector)
-}
-
-# global mutable state (group 12): a module-level `unsafe { }` GROUPS the mutable global with the
-# functions that touch it — everything inside is unsafe, so `mut tick_count` is a persistent
-# module-private global and `tick` is an unsafe fn (no per-item `unsafe` prefix needed)
-unsafe {
-    mut tick_count: int = 0                     # a persistent module-private mutable global
-    pub fn tick() { tick_count = tick_count + 1 }   # an unsafe fn, grouped with the state it guards
 }
 
 # the SAFE way to share mutable global state: an immutable binding holding a stdlib Atomic

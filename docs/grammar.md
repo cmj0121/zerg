@@ -298,16 +298,20 @@ A function is a first-class value — a named declaration, an anonymous expressi
 
 ```text
 fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # anonymous — never generic, never unsafe
+fn-expr    ::= 'fn' '(' closure-param-list? ')' ret-type? block   # anonymous — never generic/unsafe; types inferrable
 fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
 param-type ::= ( 'mut' '&' )? type
+closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': type' optional in a closure
 ```
 
 - **Declaration vs expression.** `fn name(…) -> R { … }` binds a name; an **anonymous** `fn(…) -> R { … }`
   is an expression (a closure). `pub` exports a declaration's name and is not part of the type.
+- **Inferred closure params.** A **closure** may omit a parameter's `: type` — `xs.map(fn(x) { x *% 2 })` —
+  and the compiler infers it from the function type the closure is checked against (an argument's declared
+  parameter type, or a typed binding's RHS). A named `fn` declaration cannot: its signature is its contract.
 - **Closure capture is immutable.** A closure captures values and channels **by copy, read-only** — it
   cannot mutate a captured variable. This is deliberate: value semantics makes a captured mutation invisible
   to the outside anyway, a by-ref capture would dangle without a GC, and immutable capture is what makes a

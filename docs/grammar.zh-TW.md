@@ -275,16 +275,19 @@ function 是 first-class value——具名宣告、匿名 expression，與一個
 
 ```text
 fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # 匿名——永不泛型、永不 unsafe
+fn-expr    ::= 'fn' '(' closure-param-list? ')' ret-type? block   # 匿名——永不泛型、永不 unsafe;參數型別可推斷
 fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
 param-type ::= ( 'mut' '&' )? type
+closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # closure 內 ': type' 可省
 ```
 
 - **宣告 vs expression。** `fn name(…) -> R { … }` 綁定一個名字；**匿名** `fn(…) -> R { … }` 是 expression
   （一個 closure）。`pub` 匯出宣告的名字，且不屬型別。
+- **推斷的 closure 參數。** **closure** 可省略參數的 `: type`——`xs.map(fn(x) { x *% 2 })`——由編譯器依 closure
+  被檢查時的函式型別推斷（引數宣告的參數型別，或帶型別註記綁定的 RHS）。具名 `fn` 宣告則不行:簽章即契約。
 - **closure 捕獲是 immutable 的。** closure 以**複製、唯讀**捕獲值與 channel——**不能改**捕獲的變數。這是刻意的:
   value 語意下改捕獲對外本就不可見、無 GC 的 by-ref 捕獲會懸空、而 immutable 捕獲正是讓 `spawn` 的 closure
   **無 data race** 的原因。可變 closure 想做的三件事各有對應慣用法:用 `for` 迴圈**累加**

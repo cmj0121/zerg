@@ -279,7 +279,7 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
 
 fn-decl      ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure — never generic, never unsafe
+fn-expr      ::= 'fn' '(' closure-param-list? ')' ret-type? block  # anonymous / closure — never generic, never unsafe; param types may be inferred
 fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a function's type; 'unsafe fn' for ptr[unsafe fn…]
 
 # 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place — exactly the
@@ -303,6 +303,13 @@ param-list   ::= param ( ',' param )*
 param        ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?   # 'mut &x' = mutable reference
 param-type-list ::= param-type ( ',' param-type )*
 param-type   ::= ( 'mut' '&' )? type
+
+# A CLOSURE parameter may OMIT its ': type' — the compiler infers it from the function type the
+# closure is checked against (an argument's declared parameter type, or a typed binding's RHS). A
+# named 'fn' declaration cannot: its signature is its contract, so every 'param' there keeps its
+# type. An omitted-type closure that is never given an expected type is a compile error.
+closure-param-list ::= closure-param ( ',' closure-param )*
+closure-param      ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': type' optional in a closure
 
 # 'this' is NOT a parameter. Inside a method (a 'fn' declared in an 'impl' or a
 # 'spec') 'this' is the implicit receiver, always reachable through the instance

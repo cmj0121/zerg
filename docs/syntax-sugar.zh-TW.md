@@ -5,23 +5,26 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 
 ## 已落地的語法糖
 
-| 語法糖                                | Desugar 成                                                    |
-| ------------------------------------- | ------------------------------------------------------------- |
-| `break if c` / `continue if c`        | `if c { break }` / `if c { continue }`                        |
-| `if x := e { … }`                     | 對 `e` 的 one-arm `match`——`x` 存在時才執行區塊               |
-| `with e as y { … }`                   | `{ y := e; defer y 的 Scoped teardown; … }`(每條離開路徑都跑) |
-| `f"…{x}…"`                            | 編譯期把各段 `str` 串接,每個洞 `x.display()`                  |
-| `f"{x!r}"` / `f"{x=}"`                | `f"{x.debug()}"` / 原文 `x=` 再接值                           |
-| `f"{x:spec}"`                         | 經 `Format` protocol 呼叫 `x.format(spec)`                    |
-| `a + b`、`a == b`、`a[i]`、`-a`、…    | 該運算子的 spec 方法——`a.add(b)`、`a.equal(b)`、…             |
-| `for x in it { … }`                   | 對 `it` 的迭代協定(以 `StopIteration` 收尾)                   |
-| `x..y`                                | builtin `range(x, y)`——半開區間值                             |
-| `(a, b) := e` / `P{x, y} := e`        | 解構 product/tuple 回傳,各部分**以 copy** 綁定                |
-| `f(x: 1)`(named)/ `p: T = e`(default) | 呼叫端改寫為 positional;default `e` 每次呼叫時求值            |
-| `print x`                             | best-effort 把 `x.display()` 加換行寫到 stdout                |
-| `e?`                                  | 取出 `Left`,否則從函式提前 return 那個 `Right`                |
-| `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise       |
-| `del ch`                              | 現在就 drop 這個持有者——若是最後 sender 便關閉 channel        |
+| 語法糖                                | Desugar 成                                                       |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| `break if c` / `continue if c`        | `if c { break }` / `if c { continue }`                           |
+| `if x := e { … }`                     | 對 `e` 的 one-arm `match`——`x` 存在時才執行區塊                  |
+| `with e as y { … }`                   | `{ y := e; defer y 的 Scoped teardown; … }`(每條離開路徑都跑)    |
+| `f"…{x}…"`                            | 編譯期把各段 `str` 串接,每個洞 `x.display()`                     |
+| `f"{x!r}"` / `f"{x=}"`                | `f"{x.debug()}"` / 原文 `x=` 再接值                              |
+| `f"{x:spec}"`                         | 經 `Format` protocol 呼叫 `x.format(spec)`                       |
+| `a + b`、`a == b`、`a[i]`、`-a`、…    | 該運算子的 spec 方法——`a.add(b)`、`a.equal(b)`、…                |
+| `for x in it { … }`                   | 對 `it` 的迭代協定(以 `StopIteration` 收尾)                      |
+| `x..y` / `x..=y` / `x..`              | `range(x, y)` / `range(x, y + 1)` / 開放 range（皆 builtin）     |
+| `v in r`                              | `r.contains(v)`——membership（Range 靠 `Ord`,否則靠迭代）         |
+| `lo..hi ->`（match arm）              | 一個 `_ if _ in lo..hi` arm——以 containment 比對,非 `equal`      |
+| `xs[k]`                               | `Indexable[k 的型別].index(k)`——元素、slice（`Range`）或 map key |
+| `(a, b) := e` / `P{x, y} := e`        | 解構 product/tuple 回傳,各部分**以 copy** 綁定                   |
+| `f(x: 1)`(named)/ `p: T = e`(default) | 呼叫端改寫為 positional;default `e` 每次呼叫時求值               |
+| `print x`                             | best-effort 把 `x.display()` 加換行寫到 stdout                   |
+| `e?`                                  | 取出 `Left`,否則從函式提前 return 那個 `Right`                   |
+| `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise          |
+| `del ch`                              | 現在就 drop 這個持有者——若是最後 sender 便關閉 channel           |
 
 ## 刻意**不是**語法糖的
 

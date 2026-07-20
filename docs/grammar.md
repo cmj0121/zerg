@@ -192,23 +192,25 @@ any lvalue (`(a, obj.f) = …`).
 Expressions are a precedence cascade. Every binary level is **left-associative**; **comparison is
 non-associative** — `a < b < c` does not parse, by design.
 
-| Precedence | Operators                            | Assoc     |
-| ---------- | ------------------------------------ | --------- |
-| 1 highest  | `.` `()` `[]` (field / call / index) | left      |
-| 2          | `not` `~` unary `-` `-%`             | right     |
-| 3          | `*` `/` `%` `*%` `<<` `>>` `&`       | left      |
-| 4          | `+` `-` `+%` `-%` `\|` `^`           | left      |
-| 5          | `==` `!=` `<` `>` `<=` `>=` `is`     | non-assoc |
-| 6          | `and`                                | left      |
-| 7          | `or`                                 | left      |
-| 8 lowest   | `..` (range)                         | —         |
+| Precedence | Operators                             | Assoc     |
+| ---------- | ------------------------------------- | --------- |
+| 1 highest  | `.` `()` `[]` (field / call / index)  | left      |
+| 2          | `not` `~` unary `-` `-%`              | right     |
+| 3          | `*` `/` `%` `*%` `<<` `>>` `&`        | left      |
+| 4          | `+` `-` `+%` `-%` `\|` `^`            | left      |
+| 5          | `..` `..=` (range)                    | —         |
+| 6          | `==` `!=` `<` `>` `<=` `>=` `is` `in` | non-assoc |
+| 7          | `and`                                 | left      |
+| 8 lowest   | `or`                                  | left      |
 
 The `%`-suffixed `+%` `-%` `*%` are the **wrapping** arithmetic operators; `~` is bitwise complement.
 Bitwise `&` `<<` `>>` sit with the multiplicatives and `\|` `^` with the additives — one notch tighter
 than comparison, so `a & b == c` reads as `(a & b) == c`, sidestepping C's precedence trap. `is` tests an
-existential against a spec or variant name (full form in groups 6–7). A sign is an operator, not part of a
-literal. The loosest level, `x..y`, is **sugar** for `range(x, y)` (a builtin) — used mostly in
-`for i in 0..n`.
+existential against a spec or variant name (full form in groups 6–7); `in` tests **membership**. A sign is
+an operator, not part of a literal. A **range** binds one notch tighter than comparison so `v in 0..10`
+reads `v in (0..10)`: `x..y` is **sugar** for `range(x, y)`, `x..=y` for `range(x, y + 1)`, `x..` for an
+open range, and `v in r` for `r.contains(v)` — the `Range` / `contains` machinery is stdlib. (`??` from
+group 8 remains the single loosest binary, looser than `or`.)
 
 The null-safety and error operators (`?` `??` `?.` `!`) live in group 8; the postfix ones (`?` `!` `?.`)
 join `postfix` above, and `??` sits at the loosest level.

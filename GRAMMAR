@@ -184,13 +184,17 @@ assign-target ::= lvalue
                | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
 field-target  ::= identifier ( ':' assign-target )?
 
-# Expression grammar from lowest precedence (or) to highest (postfix). Binary levels
-# are left-associative; comparison is non-associative (no a < b < c chaining).
-expr         ::= range-expr             # range-expr adds '..' atop coalesce-expr (group 8)
-range-expr   ::= coalesce-expr ( '..' coalesce-expr )?   # 'x..y' is SUGAR for 'range(x, y)'
+# Expression grammar from loosest ('??') to tightest (postfix). Binary levels are
+# left-associative; comparison is non-associative (no a < b < c chaining). A RANGE '..'
+# binds tighter than comparison so 'v in 0..10' reads 'v in (0..10)'; membership 'in'
+# and the type test 'is' sit at the comparison level.
+expr         ::= coalesce-expr          # '??' is the loosest binary (group 8)
 or-expr      ::= and-expr   ( 'or'  and-expr  )*
 and-expr     ::= cmp-expr   ( 'and' cmp-expr  )*
-cmp-expr     ::= add-expr   ( ( cmp-op add-expr ) | ( 'is' type-name ) )?
+cmp-expr     ::= range-expr ( ( cmp-op range-expr ) | ( 'is' type-name ) | ( 'in' range-expr ) )?
+range-expr   ::= add-expr ( '..' add-expr? | '..=' add-expr )?
+             # 'x..y' → range(x, y); 'x..=y' → range(x, y+1); 'x..' → an open range. 'v in r'
+             # → r.contains(v). Both are SUGAR (the Range/contains machinery is stdlib).
 add-expr     ::= mul-expr   ( add-op mul-expr )*
 mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
@@ -328,7 +332,9 @@ print        ::= 'print' expr
 # the one loop: infinite, WHILE a condition holds, or over an Iterable ('for mut x'
 # binds in place). 'break' / 'continue' act on the nearest 'for'; 'break if c' /
 # 'continue if c' are sugar. The iterate form is taken when 'mut' or an 'identifier in'
-# follows 'for'; a bare 'for expr' with no 'in' is the while condition.
+# follows 'for'; a bare 'for expr' with no 'in' is the while condition. Since 'in' is also
+# the membership operator (group 4), a while-loop on membership is parenthesized —
+# 'for (v in r) { … }' — so a head-leading 'identifier in' always reads as iterate.
 
 if-stmt      ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
 # An 'if' with a MANDATORY trailing 'else' is also an EXPRESSION (if-expr, in primary,

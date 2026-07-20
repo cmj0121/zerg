@@ -28,7 +28,7 @@ syntax region zergDecorator matchgroup=zergDecorator start="#\[" end="\]"
 " --- group 2: reserved keywords ------------------------------------------------
 
 " Statement keywords (control flow, effects, items introduced by a statement).
-syntax keyword zergStatement nop return if else in break continue match with
+syntax keyword zergStatement nop return if else break continue match with
 syntax keyword zergStatement spawn select defer del raise guard import impl print
 
 " `for` is a match (not a keyword) so the `impl … for` override below can win.
@@ -49,7 +49,7 @@ syntax keyword zergKeyword mut pub extern package init
 syntax keyword zergKeyword fn struct enum spec type skipwhite nextgroup=zergDeclName
 
 " Keyword operators (the word-form logical/type/binding operators).
-syntax keyword zergOperator not and or is as from
+syntax keyword zergOperator not and or is in as from
 
 " Built-in type names and generic constructors. Capitalized built-ins (Ref, Result,
 " Either, This) are already caught by the `\<\u\w*\>` type match below, so only the

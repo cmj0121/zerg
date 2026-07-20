@@ -168,13 +168,20 @@ fn countdown(n: int) {
     }
 }
 
-# `x..y` is sugar for range(x, y) (group 4)
+# ranges: `..` half-open, `..=` inclusive, `in` membership, `[a..b]` slice (group 4)
 fn sum_to(n: int) -> int {
     mut acc := 0
-    for i in 0..n {
+    for i in 0..n {                # half-open [0, n)
         acc = acc + i
     }
     return acc
+}
+
+fn scan(xs: list[int], hi: int) -> list[int] {
+    for i in 1..=hi {              # inclusive: includes hi
+        if i in 0..10 { print f"{i}" }   # membership test
+    }
+    return xs[1..3]                # slice via Indexable[Range]
 }
 
 # destructuring reassignment into existing lvalues; `mut &` writes back to the caller (group 4/5)

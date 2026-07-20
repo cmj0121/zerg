@@ -15,10 +15,11 @@
 形式為準，所以到達 `:=`、`return`、或引數的是那個值形式。**綁定形式** `if x := expr { … }` 只在 `expr` 命中 pattern
 `x` 時跑區塊——「值存在」測試的單臂 `match` 語法糖（`if v := <-ch { use(v) }` 只在 `Left` 時觸發）。
 
-**`for`**——唯一的迴圈關鍵字、兩種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、以及
+**`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為
-`mut`；迭代協定——`StopIteration` 乾淨結束、其他 error re-raise——見 [迭代](specs.zh-TW.md)）。**沒有 `while`、也沒有 C 式三段
-`for`**：條件迴圈就寫 `for { … break if done }`。
+`mut`；迭代協定——`StopIteration` 乾淨結束、其他 error re-raise——見 [迭代](specs.zh-TW.md)）、以及 **`for cond { … }`**
+即 **while** 形式——當 `cond`（一個 `bool`）成立時反覆執行。**沒有 `while` 關鍵字**（裸 `for cond` 就是 while 迴圈）、
+也**沒有 C 式三段 `for`**。
 
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
 **`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`：

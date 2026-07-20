@@ -20,11 +20,12 @@ form wins, so the value form is the one that reaches a `:=`, a `return`, or an a
 form** `if x := expr { … }` runs the block only when `expr` matches the pattern `x` — the one-arm-`match`
 sugar for a "value present" test (`if v := <-ch { use(v) }` fires only on a `Left`).
 
-**`for`** — the one loop keyword, two forms: **`for { … }`** infinite (leave via `break` / `return`), and
+**`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds
 in place, only when `it` is `mut`; the iteration protocol — clean `StopIteration` exit, any other error
-re-raised — is [Iteration](specs.md)). There is **no `while` and no C-style three-clause `for`**: a condition loop is
-`for { … break if done }`.
+re-raised — is [Iteration](specs.md)), and **`for cond { … }`** the **while** form — repeat while `cond`
+(a `bool`) holds. There is **no `while` keyword** (bare `for cond` is the while loop) and **no C-style
+three-clause `for`**.
 
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
 extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly

@@ -54,10 +54,10 @@ compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
 # A declaration introduces a name — a type, a function, or a module item. A DECORATOR
 # prefix (group 7) may lead ANY declaration and binds to it; which decorators are
 # valid on which declaration is a SEMANTIC rule, not a syntactic one (e.g. 'derive'
-# only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' and 'const-decl'
+# only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' and 'global-mut'
 # are the declarations with no block; the rest own one.
 decorated-decl ::= decorator* declaration
-declaration    ::= type-decl | const-decl | global-mut | fn-decl | struct-decl | enum-decl
+declaration    ::= type-decl | global-mut | fn-decl | struct-decl | enum-decl
                  | spec-decl | impl-decl | init-decl
 nop            ::= 'nop'
 
@@ -113,8 +113,8 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'  | 'extern'
              | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'    | 'not'
              | 'and'   | 'or'    | 'print'  | 'this'    | 'with'  | 'as'
-             | 'from'  | 'true'  | 'false'  | 'nil'     | 'const'
-             | 'unsafe'| 'ptr'   | 'asm'
+             | 'from'  | 'true'  | 'false'  | 'nil'
+             | 'unsafe'| 'ptr'   | 'asm'   | 'const'
 # ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
 
 # ==================================================================================
@@ -171,11 +171,18 @@ raw-char    ::= < any code point except '"' or a line break >   # no escapes
 # ==================================================================================
 # 4. Bindings & Expressions
 # ==================================================================================
-# A binding introduces a name: ':=' is immutable, 'mut … :=' rebindable, '=' reassigns
-# an existing lvalue. An expression on its own is a statement (a call, or a match run
-# for effect). Destructuring a pattern at ':=' arrives with patterns (group 6).
+# A binding introduces a name: ':=' is immutable, 'mut … :=' rebindable, 'const … :=' an
+# immutable binding that is SHADOW-PROOF (below), and '=' reassigns an existing lvalue. An
+# expression on its own is a statement (a call, or a match run for effect). Destructuring a
+# pattern at ':=' arrives with patterns (group 6).
+#
+# 'const' marks a SHADOW-PROOF immutable binding: no later binding may shadow it, AND it may
+# not itself shadow a visible binding — a name collision in EITHER direction is an error (a
+# plain ':=' may still be shadowed). This is ORTHOGONAL to compile-time folding (group 7): a
+# 'const' whose RHS is a const-expr is also usable in compile-time positions, but the two
+# properties are independent — 'const' is only about shadowing.
 
-binding      ::= 'mut'? bind-target ':=' expr
+binding      ::= ( 'mut' | 'const' )? bind-target ':=' expr   # 'const' = shadow-proof (bidirectional)
 bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6
 reassign     ::= assign-target '=' expr
 expr-stmt    ::= expr
@@ -426,7 +433,8 @@ pattern-list ::= pattern ( ',' pattern )*
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
 base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'I.Item' PROJECTS an
                | tuple-type | array-type | chan-type | fn-type | ptr-type   # associated type — chainable: 'I.Item.Sub'
-type-args    ::= '[' type ( ',' type )* ']'
+type-args    ::= '[' generic-arg ( ',' generic-arg )* ']'
+generic-arg  ::= type | const-expr   # a type, or a const-expr filling a value generic param (resolved by name resolution)
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' const-expr ']'           # [T; N] — the ';' array position; N is a const-expr
 chan-type    ::= 'chan' '[' type ']'           # bidirectional
@@ -446,32 +454,22 @@ impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item*
              # constructor 'User.from_json(…)' (an associated fn, no 'this') or a private
              # method 'u.recompute()' (uses 'this'). Every method and associated fn on a
              # type shares one namespace, spec or inherent alike; a duplicate is an error.
-impl-item    ::= fn-decl | assoc-bind | const-decl   # a method/assoc fn, an assoc-type binding, or an assoc const
-assoc-bind   ::= 'type' identifier '=' type  # 'type Item = int' — satisfies a spec's assoc type
+impl-item    ::= fn-decl | assoc-bind | val-bind   # a method/assoc fn, an assoc-type binding, or an assoc value
+assoc-bind   ::= 'type' identifier '=' type   # 'type Item = int' — satisfies a spec's assoc type
+val-bind     ::= identifier ':=' const-expr   # 'BITS := 32' — satisfies a spec's associated value
 
-# --- compile-time constants ---
-# A 'const' names a COMPILE-TIME constant: it is folded at compile time and has NO runtime
-# storage — unlike a module-level ':=' (an immutable binding evaluated at init). A const may
-# be used wherever a compile-time value is required — an array length '[T; N]', an enum
-# discriminant, a decorator argument (const generics: deferred) — and ALSO as an ordinary
-# value: pass it, compare it, bind it with ':='; in a pattern it matches by EQUALITY (group
-# 6). The type is optional; a bare numeric const stays untyped and adopts its use site's
-# type, like a literal. A const is NOT an lvalue: it cannot be reassigned ('=') or 'del'-ed.
-# It may be declared at module level, inside a function (local), or in an 'impl' (satisfying
-# an associated const).
+# --- compile-time constants (implicit) ---
+# Compile-time folding is IMPLICIT and independent of the 'const' keyword (which only marks a
+# shadow-proof binding, group 4). A COMPILE-TIME CONSTANT is any binding — ':=' or 'const',
+# module-level or local — whose initializer is a CONST-EXPR: the compiler folds it, and the
+# name may then be used wherever a compile-time value is required — an array length '[T; N]',
+# an enum discriminant, a decorator argument, or a const-generic argument. Using such a name
+# where its initializer is NOT const-foldable is a compile error, reported at the use site.
 #
 # A const-expr is an ordinary 'expr' (group 4) RESTRICTED to what the compiler folds with no
-# evaluation engine: literals, other consts, an enum's discriminant, and the arithmetic /
-# bitwise / comparison / logical operators. There are NO function calls (no 'const fn') and
-# no runtime values — so 'sizeof'/'len' (stdlib calls) are not const-exprs yet.
-#
-# SHADOWING. A 'const' name is FIXED across its whole scope subtree: no later binding —
-# another const, a ':='/'mut' binding, a parameter, a pattern binding, or an import — may
-# shadow it in the same or any nested scope, AND a const may not itself shadow a visible
-# binding (a name collision either direction is an error). Ordinary ':=' binds may still
-# shadow each other ('mut x := x'); only 'const' is shadow-proof, so its name denotes one
-# value everywhere it is in scope — required, since it can appear in a type position '[T; N]'.
-const-decl   ::= 'pub'? 'const' identifier ( ':' type )? '=' const-expr
+# evaluation engine: literals, other const-foldable names, an enum's discriminant, and the
+# arithmetic / bitwise / comparison / logical operators. There are NO function calls and no
+# runtime values — so 'sizeof'/'len' (stdlib calls) are not const-exprs yet.
 const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see above)
 
 # CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
@@ -516,12 +514,20 @@ deco-arg     ::= type-name | const-expr        # derive(Encode, Decode), align(1
 # COHERENCE (at most one 'impl Spec for Type' program-wide) and an ORPHAN rule (the impl
 # must own the spec or the type). Generics are invariant — Zerg has no subtyping. The
 # '#[dyn]' decorator instead compiles a generic to one shared witness-table body (a
-# size-for-speed trade; see docs). Explicit call-site type arguments are written 'f[T]'
-# — disambiguated from an index by name resolution (see postfix, group 4). Const
-# generics are deferred.
+# size-for-speed trade; see docs) — it CANNOT erase a VALUE generic (a compile-time value
+# has no witness-table slot). Explicit call-site type arguments are written 'f[T]',
+# disambiguated from an index by name resolution (see postfix, group 4).
+#
+# VALUE (CONST) GENERICS. A generic parameter may be a compile-time VALUE, not just a type,
+# and there is NO 'const' keyword: the annotation after ':' resolves BY NAME — a SPEC makes it
+# a type parameter bounded by that spec ('[T: Ord]'); a concrete (non-spec) TYPE makes it a
+# compile-time VALUE parameter of that type ('[N: int]' — a PRIMITIVE: int/uint/float/bool/rune/
+# byte/str; composite/user types deferred). A bare '[X]' is a type parameter. A FUNCTION's value
+# param is INFERRED from an argument's type ('fn sum[N: int](xs: [int; N])' fixes N from 'xs')
+# and is not passed at the call site; a TYPE's is supplied in type position ('Matrix[3, 4]').
 generics     ::= '[' type-param ( ',' type-param )* ']'
-type-param   ::= identifier ( ':' bound )?             # an optional spec bound
-bound        ::= type-name ( '+' type-name )*          # a conjunction of specs
+type-param   ::= identifier ( ':' bound )?             # bound = a spec → type param; a concrete type → value param
+bound        ::= type-name ( '+' type-name )*          # a conjunction of specs (single concrete type = value param)
 # Fields and variants are separated exactly like statements — by stmt-sep (a line
 # break, realized as ';' by ASI). There is NO ',' between them; the ',' inside a
 # variant payload '(A, B)' is an ordinary argument list.
@@ -542,11 +548,12 @@ variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' const-expr )? 
 # defined: 'for x in it' has ONE element type because 'Iterator.Item' is fixed per impl,
 # not chosen per use as a generic 'Iterable[T]' would allow. Reference it by projection
 # in type position — 'I.Item' (group 4's base-type). A spec may also require an ASSOCIATED
-# CONST — a compile-time value each impl supplies ('const BITS: int'): an associated type is
-# a type only, an associated const carries a value (see 'const' under declarations).
-spec-member  ::= fn-sig | fn-decl | assoc-type | assoc-const   # method(s), assoc type, or assoc const
+# VALUE — a compile-time value each impl supplies: 'BITS: int' requires it, the impl provides
+# 'BITS := 32' (a val-bind, group 7). An associated type is a type only; an associated value
+# carries a value.
+spec-member  ::= fn-sig | fn-decl | assoc-type | assoc-val   # method(s), assoc type, or assoc value
 assoc-type   ::= 'type' identifier ( ':' bound )?      # 'type Item' or bounded 'type Item: Ord'
-assoc-const  ::= 'const' identifier ':' type ( '=' const-expr )?   # required, or provided with a default
+assoc-val    ::= identifier ':' type                   # 'BITS: int' — a required associated value
 fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
 
 # ==================================================================================

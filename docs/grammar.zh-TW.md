@@ -120,7 +120,8 @@ match spawn  select  struct   enum     spec
 chan  type   impl    package  init     extern
 defer del    raise   guard    is       not
 and   or     print   this     with     as
-from  true   false   nil
+from  true   false   nil      const    unsafe
+ptr   asm
 ```
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
@@ -172,7 +173,7 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 **binding** 引入一個名字；reassign 更新一個既有名字：
 
 ```text
-binding       ::= 'mut'? bind-target ':=' expr   # bind-target：識別字或解構模式
+binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr   # 'const' = shadow-proof；bind-target：識別字/模式
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple 元素
@@ -181,7 +182,8 @@ assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
 field-target  ::= identifier ( ':' assign-target )?
 ```
 
-`:=` 綁定一個**全新、immutable** 的名字；`mut x := …` 使其可重綁；`=` **重新指派**一個既有的 `mut` 綁定（或
+`:=` 綁定一個**全新、immutable** 的名字；`mut x := …` 使其可重綁；`const x := …` 是 immutable **且 shadow-proof**
+（沒有任何綁定可遮蔽它，它也不可遮蔽既有可見名字——兩向皆 error）；`=` **重新指派**一個既有的 `mut` 綁定（或
 field／元素）。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
 `Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。
@@ -377,24 +379,25 @@ list-pat-elem ::= pattern | '..' identifier?
 type        ::= base-type '?'?
 base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' 投影;可鏈式 'I.Item.Sub'
               | tuple-type | array-type | chan-type | fn-type | ptr-type   # ptr-type：group 12（unsafe）
-type-args   ::= '[' type ( ',' type )* ']'
+type-args   ::= '[' generic-arg ( ',' generic-arg )* ']'
+generic-arg ::= type | const-expr             # 型別，或填入值泛型參數的 const-expr
 array-type  ::= '[' type ';' const-expr ']'   # N 是 const-expr
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
-const-decl  ::= 'pub'? 'const' identifier ( ':' type )? '=' const-expr
-const-expr  ::= expr                          # 可於編譯期摺疊（語意限制）
+const-expr  ::= expr                          # 可編譯期摺疊的 expr（無 'const' 關鍵字）
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
-impl-item   ::= fn-decl | assoc-bind | const-decl   # 方法／關聯函式、assoc type 綁定，或 assoc const
+impl-item   ::= fn-decl | assoc-bind | val-bind   # 方法／關聯函式、assoc type 綁定，或 assoc value
 assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' 滿足 spec 的 assoc type
-spec-member ::= fn-sig | fn-decl | assoc-type | assoc-const
+val-bind    ::= identifier ':=' const-expr    # 'BITS := 32' 滿足 spec 的 associated value
+spec-member ::= fn-sig | fn-decl | assoc-type | assoc-val
 assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item'（可加 bound）
-assoc-const ::= 'const' identifier ':' type ( '=' const-expr )?   # 必要，或帶預設值
+assoc-val   ::= identifier ':' type           # 'BITS: int'——required associated value
 generics    ::= '[' type-param ( ',' type-param )* ']'
-type-param  ::= identifier ( ':' bound )?     # 選用的 spec bound
-bound       ::= type-name ( '+' type-name )*  # spec 的合取
+type-param  ::= identifier ( ':' bound )?     # bound：spec → 型別參數；具體型別 → 值參數
+bound         ::= type-name ( '+' type-name )*  # spec 的合取
 decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
@@ -424,13 +427,12 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** 把 `T(...)` 降為模組私有,外部須改走公開的
   自訂 constructor——模組內部仍以 `T(...)` 建。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
-- **編譯期常數（`const`）。** `const NAME: T = expr` 命名一個**編譯期摺疊**、**無 runtime 儲存**的值——與 module-level
-  `:=`（不可變但於 init 求值）不同。`const` 可用於任何需要編譯期值之處——陣列長度 `[T; N]`、enum discriminant、
-  decorator 引數——**也可當作一般值**（傳遞、比較、以 equality 於 pattern 比對）。型別可選；裸數值 const 維持 untyped
-  並採用其使用點型別。它**非 lvalue**（不可 `=`、不可 `del`），且**雙向 shadow-proof**——無綁定可遮蔽 `const`，
-  `const` 亦不可遮蔽既有可見綁定，故其名字在整個 scope 內只代表一個值。`const-expr` 是受限的 `expr`：literal、其他
-  const、discriminant 與運算子；**尚無 function call**（故 `sizeof`/`len` 不是 const-expr）。`const` 可宣告於 module
-  層級、局部，或在 `spec`/`impl` 作為 **associated const**（`const BITS: int`），即 associated type 的值對應物。
+- **編譯期常數（隱含）。** 編譯期摺疊是**隱含**的、與 `const` 關鍵字無關（`const` 只標記 shadow-proof 綁定，見
+  group 4）。任何 RHS 是 `const-expr` 的綁定（`:=` 或 `const`）都會被**編譯期摺疊**，並可用於任何需要編譯期值之處：
+  陣列長度 `[T; N]`、enum discriminant、decorator 引數、值泛型引數。若某名字用在這類位置但其 RHS 不可摺疊 → 使用點
+  編譯錯誤。`const-expr` 是編譯器**無求值引擎**下能摺疊的 `expr`——literal、其他可摺疊名字、discriminant 與運算子；
+  **無 function call**（故 `sizeof`/`len` 不是 const-expr）。spec 可要求一個 **associated value**——`BITS: int`——由各
+  impl 以 `BITS := 32`（一個 `val-bind`）提供。
 - **泛型與 bound。** 參數列 `[T, …]` 可對各參數加 spec 約束——`[T: Ord]`、`+` 合取 `[K: Hash + Eq, V]`。同一套
   `bound` 也是 spec 的 **super-spec**(`spec Ord: Eq`——`impl Ord` 便連帶需要 `impl Eq`,且 `Ord` body 可對 `This`
   呼叫 `Eq`)。`impl` 自身的型別參數放在 **`impl` 之後**——`impl[T] Summable for list[T]`——故 `T` 可用於目標型別。
@@ -438,7 +440,9 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   `a < b` 也需提供 `<` 的那個 bound),且泛型函式在實例化前不是一等值。健全性靠 **coherence**(全程式一個
   `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。`#[dyn]` 改為產生
   一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。呼叫端顯式型別引數寫作 `f[T]`（靠
-  name resolution 與索引區分——group 4）;const generic 延後。**沒有 disjunction bound**（`T: A | B`）——body 無從
+  name resolution 與索引區分——group 4）。**值泛型**讓參數是編譯期值、且**無 `const` 關鍵字**：`[X: Y]` 中 Y 是 spec
+  → X 為型別參數，Y 是具體型別 → X 為值參數（`[N: int]`，primitive；composite 延後）。函式的值參數由引數型別**推斷**
+  （`fn sum[N: int](xs: [int; N])`），型別的則在型別位置給（`Matrix[3, 4]`）。**沒有 disjunction bound**（`T: A | B`）——body 無從
   得知 `T` 有哪些方法,無法 monomorphize。要接受多種型別就**參數化一個 spec**、一型別一 impl:`spec Indexable[K]`
   搭配 `impl Indexable[int]`（元素）與 `impl Indexable[Range]`（slice）——`xs[k]` 便依 `k` 的型別靜態分派,各 impl
   保有自己的 associated `Output`——或用 `enum` 做 runtime 選擇。
@@ -453,7 +457,7 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   由 impl 固定,而非像 generic `Iterable[T]` 那樣由使用端選。用型別位置的**投影**引用——`I.Item`
   （`fn collect[I: Iterator](it: I) -> list[I.Item]`）,當被投影型別本身有 associated type 時**可鏈式**——
   `I.Item.Sub`。impl 以 `type Item = int` 提供它。spec 的 associated
-  **const** 是其值對應物——`const BITS: int` 為必要，由 impl 以 `const BITS = 32` 提供。
+  **value** 是其值對應物——`BITS: int` 為必要，由 impl 以 `BITS := 32` 提供。
 - **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
   （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見

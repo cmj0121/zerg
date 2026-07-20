@@ -122,7 +122,8 @@ match spawn  select  struct   enum     spec
 chan  type   impl    package  init     extern
 defer del    raise   guard    is       not
 and   or     print   this     with     as
-from  true   false   nil
+from  true   false   nil      const    unsafe
+ptr   asm
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
@@ -180,7 +181,7 @@ commit.
 A **binding** introduces a name; a reassignment updates one:
 
 ```text
-binding       ::= 'mut'? bind-target ':=' expr   # bind-target: identifier or a destructuring pattern
+binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr   # 'const' = shadow-proof; bind-target: id/pattern
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element
@@ -189,8 +190,10 @@ assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
 field-target  ::= identifier ( ':' assign-target )?
 ```
 
-`:=` binds a **new, immutable** name; `mut x := …` makes it rebindable; `=` **reassigns** an existing
-`mut` binding (or field/element). An expression alone — a call, or a `match` run for its effect — is a
+`:=` binds a **new, immutable** name; `mut x := …` makes it rebindable; `const x := …` is immutable **and
+shadow-proof** (nothing may shadow it, and it may not shadow a visible name — either direction is an error);
+`=` **reassigns** an existing `mut` binding (or field/element). An expression alone — a call, or a `match`
+run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
 any lvalue (`(a, obj.f) = …`).
@@ -422,23 +425,24 @@ The type expressions used since group 5, and the declarations that introduce typ
 type        ::= base-type '?'?
 base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' projects; chainable 'I.Item.Sub'
               | tuple-type | array-type | chan-type | fn-type | ptr-type   # ptr-type: group 12 (unsafe)
-type-args   ::= '[' type ( ',' type )* ']'
+type-args   ::= '[' generic-arg ( ',' generic-arg )* ']'
+generic-arg ::= type | const-expr             # a type, or a const-expr filling a value generic param
 array-type  ::= '[' type ';' const-expr ']'   # N is a const-expr
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
-const-decl  ::= 'pub'? 'const' identifier ( ':' type )? '=' const-expr
-const-expr  ::= expr                          # compile-time-foldable (semantic restriction)
+const-expr  ::= expr                          # compile-time-foldable expr (no 'const' keyword)
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
-impl-item   ::= fn-decl | assoc-bind | const-decl   # method/assoc fn, assoc-type binding, or assoc const
+impl-item   ::= fn-decl | assoc-bind | val-bind   # method/assoc fn, assoc-type binding, or assoc value
 assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' fills a spec's assoc type
-spec-member ::= fn-sig | fn-decl | assoc-type | assoc-const
+val-bind    ::= identifier ':=' const-expr    # 'BITS := 32' fills a spec's associated value
+spec-member ::= fn-sig | fn-decl | assoc-type | assoc-val
 assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item' (optionally bounded)
-assoc-const ::= 'const' identifier ':' type ( '=' const-expr )?   # required, or provided with a default
+assoc-val   ::= identifier ':' type           # 'BITS: int' — a required associated value
 generics    ::= '[' type-param ( ',' type-param )* ']'
-type-param  ::= identifier ( ':' bound )?     # an optional spec bound
+type-param  ::= identifier ( ':' bound )?     # bound: a spec → type param; a concrete type → value param
 bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
 decorated-decl ::= decorator* declaration   # a decorator prefix leads any declaration (group 1)
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
@@ -476,17 +480,14 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   module-private, so external code must use a public custom constructor — the module still builds with
   `T(...)` internally.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
-- **Compile-time constants (`const`).** `const NAME: T = expr` names a value **folded at compile time** with
-  **no runtime storage** — distinct from a module-level `:=` (immutable, but evaluated at init). A `const`
-  may appear wherever a compile-time value is required — an array length `[T; N]`, an enum discriminant, a
-  decorator argument — and **also as an ordinary value** (pass it, compare it, match it by equality). The
-  type is optional; a bare numeric const stays untyped and adopts its use site's type. It is **not an
-  lvalue** (no `=`, no `del`) and is **shadow-proof** — no binding may shadow a `const`, and a `const` may
-  not shadow a visible binding, in either direction, so its name means one value throughout its scope. A
-  `const-expr` is an `expr` restricted to what folds with **no evaluation engine** — literals, other consts,
-  discriminants, and operators; **no function calls** yet (so `sizeof`/`len` are not const-exprs). A `const`
-  may be declared at module level, locally, or in a `spec`/`impl` as an **associated const** (`const BITS:
-int`), the value counterpart of an associated type.
+- **Compile-time constants (implicit).** Compile-time folding is **implicit** and independent of the `const`
+  keyword (which only marks a shadow-proof binding — Group 4). Any binding — `:=` or `const` — whose
+  initializer is a `const-expr` is **folded at compile time** and may be used where a compile-time value is
+  required: an array length `[T; N]`, an enum discriminant, a decorator argument, a value-generic argument.
+  Using such a name where its initializer is **not** const-foldable is a compile error at the use site. A
+  `const-expr` is an `expr` the compiler folds with **no evaluation engine** — literals, other const-foldable
+  names, discriminants, and operators; **no function calls** (so `sizeof`/`len` are not const-exprs). A spec
+  may require an **associated value** — `BITS: int` — each impl supplies with `BITS := 32` (a `val-bind`).
 - **Generics & bounds.** A parameter list `[T, …]` may bound each parameter to specs — `[T: Ord]`, a `+`
   conjunction `[K: Hash + Eq, V]`. The same `bound` is a spec's **super-spec** (`spec Ord: Eq` — an
   `impl Ord` then also needs `impl Eq`, and `Ord`'s body may call `Eq` on `This`). An `impl`'s own type
@@ -497,7 +498,11 @@ int`), the value counterpart of an associated type.
   **coherence** (one `impl Spec for Type` program-wide) and an **orphan rule** (own the spec or the type);
   generics are **invariant**. `#[dyn]` instead emits one shared witness-table body (size for speed), and the
   compiler can flag instantiation bloat. Explicit call-site type arguments are `f[T]` (disambiguated from an
-  index by name resolution — group 4); const generics are deferred. There is **no disjunction bound**
+  index by name resolution — group 4). **Value generics** let a parameter be a compile-time value with **no
+  `const` keyword**: in `[X: Y]`, a spec `Y` makes `X` a type param, a concrete type `Y` makes `X` a value
+  param (`[N: int]`, a primitive; composite deferred). A function's value param is **inferred** from an
+  argument's type (`fn sum[N: int](xs: [int; N])`) while a type's is written in type position
+  (`Matrix[3, 4]`). There is **no disjunction bound**
   (`T: A | B`) — a body could not know which methods `T` has, so it cannot monomorphize. To accept several
   types, **parameterize a spec** and write one impl per type: `spec Indexable[K]` with `impl Indexable[int]`
   (element) and `impl Indexable[Range]` (slice) is how `xs[k]` dispatches statically on `k`'s type, each impl
@@ -517,7 +522,7 @@ int`), the value counterpart of an associated type.
   `Iterable[T]` would allow. Reference it by **projection** in type position — `I.Item`
   (`fn collect[I: Iterator](it: I) -> list[I.Item]`), **chainable** when the projected type has its own
   associated type — `I.Item.Sub`. An `impl` supplies it with `type Item = int`. A spec's associated
-  **const** is the value counterpart — `const BITS: int` required, supplied by the impl as `const BITS = 32`.
+  **value** is the value counterpart — `BITS: int` required, supplied by the impl as `BITS := 32`.
 - **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
   leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
   declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to

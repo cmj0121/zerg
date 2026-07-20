@@ -81,33 +81,42 @@ impl Bumpable for Counter {
     mut fn bump() { this.n = this.n + 1 }   # needs a `mut` binding at the call site
 }
 
-# compile-time constants (group 7): folded at compile time, no runtime storage
-const MAX_RETRIES: int = 3
-const PAGE = 1 << 12                  # untyped const via a const-expr; adopts context
+# compile-time constants are implicit (group 7): a ':=' with a const-expr RHS is folded and
+# may be used where a compile-time value is required — there is no 'const' keyword.
+MAX_RETRIES := 3
+PAGE := 1 << 12                       # a const-expr; usable as a compile-time value below
+const PI := 3.14159                   # `const` = shadow-proof: no scope may shadow PI (group 4)
 
-# a fixed-size array type [T; N] whose length is a const
+# a fixed-size array type [T; N] whose length is a compile-time constant
 fn zero_page() -> [byte; PAGE] { return make_page() }
 
-# a const is a first-class value: matched by equality in a pattern (group 6)
+# to match a constant, compare it in a guard (a bare name in a pattern binds fresh, group 6)
 fn retry_state(n: int) -> str {
     return match n {
-        MAX_RETRIES -> "at limit"
-        _           -> "retrying"
+        x if x == MAX_RETRIES -> "at limit"
+        _                     -> "retrying"
     }
 }
 
-# an associated const: the spec requires it, each impl supplies it (group 7)
+# an associated value: the spec requires it, each impl supplies it (group 7)
 spec Bounded {
-    const MAX: int
+    MAX: int
     fn clamp(v: int) -> int
 }
 impl Bounded for Counter {
-    const MAX = 100
+    MAX := 100
     fn clamp(v: int) -> int { return if v > MAX { MAX } else { v } }
 }
 
+# a value generic: N is a compile-time value, inferred from the array argument (group 7)
+fn sum_n[N: int](xs: [int; N]) -> int {
+    mut acc := 0
+    for x in xs { acc = acc + x }
+    return acc
+}
+
 # unsafe: raw pointers & inline asm — bare-metal only (group 12)
-const VGA: uint = 0xB8000
+VGA := 0xB8000
 
 # `unsafe fn` is unsafe throughout its body; ptr operations need unsafe
 unsafe fn poke(cell: int, value: u16) {

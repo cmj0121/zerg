@@ -181,7 +181,8 @@ commit.
 A **binding** introduces a name; a reassignment updates one:
 
 ```text
-binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr   # 'const' = shadow-proof; bind-target: id/pattern
+binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr        # inferred; 'const' = shadow-proof; bind-target: id/pattern
+              | ( 'mut' | 'const' )? identifier ':' type '=' expr    # type-annotated; the ':' before '=' picks this over reassign
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element
@@ -190,10 +191,12 @@ assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
 field-target  ::= identifier ( ':' assign-target )?
 ```
 
-`:=` binds a **new, immutable** name; `mut x := …` makes it rebindable; `const x := …` is immutable **and
-shadow-proof** (nothing may shadow it, and it may not shadow a visible name — either direction is an error);
-`=` **reassigns** an existing `mut` binding (or field/element). An expression alone — a call, or a `match`
-run for its effect — is a
+`:=` binds a **new, immutable** name **inferring** its type; `mut x := …` makes it rebindable; `const x := …`
+is immutable **and shadow-proof** (nothing may shadow it, and it may not shadow a visible name — either
+direction is an error). A **type-annotated** binding spells `name: T = expr` — it fixes the type and
+**context-types** the RHS (a bare `[…]` becomes a `list`, or an array against a `[T; N]` target); the leading
+`:` is what tells it apart from a `=` **reassign**, which updates an existing `mut` binding (or field/element).
+An expression alone — a call, or a `match` run for its effect — is a
 statement. A `:=` binding may **destructure** into new names (`(q, r) := divmod(x, y)`, group 6), and `=`
 **mirrors it into existing lvalues** — `(a, b) = swap(a, b)`, `Div{q, r} = divmod(x, y)` — each leaf being
 any lvalue (`(a, obj.f) = …`).

@@ -171,10 +171,13 @@ raw-char    ::= < any code point except '"' or a line break >   # no escapes
 # ==================================================================================
 # 4. Bindings & Expressions
 # ==================================================================================
-# A binding introduces a name: ':=' is immutable, 'mut … :=' rebindable, 'const … :=' an
-# immutable binding that is SHADOW-PROOF (below), and '=' reassigns an existing lvalue. An
-# expression on its own is a statement (a call, or a match run for effect). Destructuring a
-# pattern at ':=' arrives with patterns (group 6).
+# A binding introduces a name. It comes in two forms. INFERRED — ':=' takes the value's type
+# ('mut … :=' rebindable, 'const … :=' immutable and SHADOW-PROOF, below). TYPE-ANNOTATED —
+# 'name: T = expr' fixes the type and CONTEXT-TYPES the RHS (a bare '[ … ]' becomes a 'list' or,
+# against a '[T; N]' target, an array). The annotated form spells '=', not ':=', and the leading
+# ':' is exactly what tells it apart from a REASSIGN 'name = expr' (no ':', writes an EXISTING
+# lvalue). An expression on its own is a statement (a call, or a match run for effect).
+# Destructuring a pattern uses the inferred ':=' only, and arrives with patterns (group 6).
 #
 # 'const' marks a SHADOW-PROOF immutable binding: no later binding may shadow it, AND it may
 # not itself shadow a visible binding — a name collision in EITHER direction is an error (a
@@ -182,8 +185,9 @@ raw-char    ::= < any code point except '"' or a line break >   # no escapes
 # 'const' whose RHS is a const-expr is also usable in compile-time positions, but the two
 # properties are independent — 'const' is only about shadowing.
 
-binding      ::= ( 'mut' | 'const' )? bind-target ':=' expr   # 'const' = shadow-proof (bidirectional)
-bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6
+binding      ::= ( 'mut' | 'const' )? bind-target ':=' expr          # inferred; 'const' = shadow-proof (bidirectional)
+             | ( 'mut' | 'const' )? identifier ':' type '=' expr      # type-ANNOTATED; the ':' before '=' picks this over reassign
+bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6 (inferred ':=' only)
 reassign     ::= assign-target '=' expr
 expr-stmt    ::= expr
 lvalue       ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element

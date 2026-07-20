@@ -173,7 +173,8 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 **binding** 引入一個名字；reassign 更新一個既有名字：
 
 ```text
-binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr   # 'const' = shadow-proof；bind-target：識別字/模式
+binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr        # 推斷；'const' = shadow-proof；bind-target：識別字/模式
+              | ( 'mut' | 'const' )? identifier ':' type '=' expr    # 帶型別註記；'=' 前的 ':' 使其有別於 reassign
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple 元素
@@ -182,9 +183,10 @@ assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
 field-target  ::= identifier ( ':' assign-target )?
 ```
 
-`:=` 綁定一個**全新、immutable** 的名字；`mut x := …` 使其可重綁；`const x := …` 是 immutable **且 shadow-proof**
-（沒有任何綁定可遮蔽它，它也不可遮蔽既有可見名字——兩向皆 error）；`=` **重新指派**一個既有的 `mut` 綁定（或
-field／元素）。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
+`:=` 綁定一個**全新、immutable** 的名字並**推斷**其型別；`mut x := …` 使其可重綁；`const x := …` 是 immutable
+**且 shadow-proof**（沒有任何綁定可遮蔽它，它也不可遮蔽既有可見名字——兩向皆 error）。**帶型別註記**的綁定寫成
+`name: T = expr`——它固定型別並**依語境定型** RHS（裸 `[…]` 成為 `list`，或對 `[T; N]` 目標成為陣列）；開頭的 `:`
+正是它有別於 `=` **reassign**（更新既有 `mut` 綁定或 field／元素）之處。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
 `Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。
 

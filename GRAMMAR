@@ -54,10 +54,11 @@ compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
 # A declaration introduces a name — a type, a function, or a module item. A DECORATOR
 # prefix (group 7) may lead ANY declaration and binds to it; which decorators are
 # valid on which declaration is a SEMANTIC rule, not a syntactic one (e.g. 'derive'
-# only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' and 'global-mut'
-# are the declarations with no block; the rest own one.
+# only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' is the one declaration
+# with no block; the rest own one. 'unsafe-group' is a module-level 'unsafe { … }' that GROUPS
+# declarations in an unsafe context (group 12) — the home of a mutable global.
 decorated-decl ::= decorator* declaration
-declaration    ::= type-decl | global-mut | fn-decl | struct-decl | enum-decl
+declaration    ::= type-decl | unsafe-group | fn-decl | struct-decl | enum-decl
                  | spec-decl | impl-decl | init-decl
 nop            ::= 'nop'
 
@@ -645,9 +646,9 @@ send-arm     ::= expr '<-' expr '->' expr
 # 'init()' is lazy module setup, run on first use. A module may declare MULTIPLE 'init()'
 # blocks; they run in declaration (FIFO) order, and each runs EXACTLY ONCE. There are NO
 # mutable globals in SAFE code: a module-level (top-level) binding may not be 'mut' — a
-# top-level ':=' is an immutable module constant, evaluated at init. (The one exception is an
-# 'unsafe mut' global, group 12; the SAFE way to share mutable global state is an immutable
-# ':=' holding a stdlib 'Atomic[T]'.) A program is a build rooted at an
+# top-level ':=' is an immutable module constant, evaluated at init. (The one exception is a
+# 'mut' binding inside a module-level 'unsafe { … }' group, group 12; the SAFE way to share
+# mutable global state is an immutable ':=' holding a stdlib 'Atomic[T]'.) A program is a build rooted at an
 # entry file that defines a top-level 'fn main(...) -> Result[nil]' — 'main' is an
 # ordinary function, not reserved. 'package' is the distribution / versioning unit: a
 # directory tree selected by the build tool, with NO in-source 'package' declaration.
@@ -688,23 +689,25 @@ del-stmt     ::= 'del' identifier        # revoke a name's access now
 # ==================================================================================
 # 12. Unsafe — raw pointers & inline assembly
 # ==================================================================================
-# The one door to bare-metal. 'unsafe { … }' is a block-expression inside which the raw
-# operations below are legal; everywhere else they are a compile error, so the safe world
-# ('Ref[T]', 'mut &', no mutable globals, checked 'T?') is unaffected. An 'unsafe fn' is
-# unsafe throughout its body and may only be CALLED from another 'unsafe' context. 'unsafe'
-# is a TRUST BOUNDARY: the compiler makes no memory-safety guarantee about what happens
-# inside it — the author vouches for it.
-unsafe-expr  ::= 'unsafe' block          # yields the block's value; unsafe ops legal only here
-                                         # ('unsafe' also prefixes a decl — 'unsafe fn', groups 5/7)
+# The one door to bare-metal. 'unsafe { … }' has TWO shapes, told apart by POSITION. In a FUNCTION
+# body it is a block-EXPRESSION inside which the raw operations below are legal (everywhere else a
+# compile error) and whose bindings are block-scoped like any block; it yields the block's value.
+# At MODULE (declaration) level the SAME 'unsafe { … }' is a DECLARATION GROUP: every item inside is
+# unsafe — a 'fn' is an unsafe fn (unsafe throughout its body, callable only from unsafe), and a 'mut'
+# binding is a module-PRIVATE mutable GLOBAL (persistent — the group scopes names to the MODULE, it is
+# not a fresh value scope). So a page table and the functions that touch it group in one block. An
+# 'unsafe fn' (group 5) is the single-function form outside a group. 'unsafe' is a TRUST BOUNDARY: the
+# compiler makes no memory-safety guarantee inside it — the author vouches for it.
+unsafe-expr  ::= 'unsafe' block          # in a function: block-expression; unsafe ops legal only here
+unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
+unsafe-item  ::= decorated-decl | binding   # a declaration (unsafe here); a 'mut' binding is a mutable GLOBAL
 
-# GLOBAL MUTABLE STATE. The one exception to "no mutable globals" (group 10): 'unsafe mut'
-# declares a module-level mutable variable — the bare-metal escape hatch (a page table, an
-# allocator cursor). There is NO 'static' keyword; the 'unsafe' prefix is the marker. It is
-# module-PRIVATE (never 'pub'), so all access goes through a function/method of its module;
-# its declaration AND every read/write are legal only inside 'unsafe'. Prefer the SAFE
-# alternative — an immutable ':=' holding a stdlib 'Atomic[T]' — which shares mutable global
-# state across cores with no 'unsafe' (the binding is immutable; the Atomic's interior is not).
-global-mut   ::= 'unsafe' 'mut' identifier ( ':' type )? ':=' expr   # module-level; unsafe to define/access
+# GLOBAL MUTABLE STATE is the one exception to "no mutable globals" (group 10), and lives ONLY as a
+# 'mut' binding inside a module-level 'unsafe { … }' group — there is NO 'unsafe mut' prefix and NO
+# 'static' keyword. The group is the bare-metal escape hatch (a page table + the fns that touch it,
+# together). Prefer the SAFE alternative — an immutable ':=' holding a stdlib 'Atomic[T]' — which
+# shares mutable global state across cores with no 'unsafe' (the binding is immutable; the Atomic's
+# interior is not).
 
 # RAW POINTERS. 'ptr' is a platform-width raw ADDRESS (like C's 'void*' / 'uintptr'); 'ptr[T]'
 # is that address TYPED to a pointee T (same width — '[T]' only types the load/store/offset). A

@@ -564,7 +564,7 @@ init-decl   ::= 'init' '(' ')' block
 
 - **`init()`** 是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
   （FIFO）順序**執行,每個**恰好一次**。**safe 程式碼無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變
-  的模組常數**,於 init 時求值。唯一例外是 **`unsafe mut`** 全域(group 12);要安全共享可變全域狀態,用不可變 `:=`
+  的模組常數**,於 init 時求值。唯一例外是 module 層級 **`unsafe { … }`** 分組內的 `mut` 綁定(group 12);要安全共享可變全域狀態,用不可變 `:=`
   持有 stdlib **`Atomic[T]`**。
 - **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
   **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。
@@ -591,22 +591,24 @@ del-stmt   ::= 'del' identifier
 `T?`）不受影響。
 
 ```text
-unsafe-expr ::= 'unsafe' block             # block-expression；unsafe 操作僅此合法
-global-mut  ::= 'unsafe' 'mut' identifier ( ':' type )? ':=' expr   # module-level 可變全域
-fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——整個 body 皆 unsafe
+unsafe-expr  ::= 'unsafe' block            # 函式內：block-expression；unsafe 操作僅此合法
+unsafe-group ::= 'unsafe' '{' unsafe-item* '}'   # module 層級：分組 unsafe 宣告 + 可變全域
+unsafe-item  ::= decorated-decl | binding  # 一個宣告（此處即 unsafe）；'mut' 綁定是可變全域
+fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——單一函式形式
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = 原始位址；'ptr[T]' = 具型別指標
 asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
 asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
               | 'inout' '(' str-lit ')' lvalue | 'clobber' '(' str-lit ( ',' str-lit )* ')'
 ```
 
-- **`unsafe { … }`。** 一個 **block-expression**（yields 區塊值），其內 raw 操作合法；其外皆為編譯錯誤。`unsafe`
-  是**信任邊界**——編譯器對其內容不作記憶體安全保證，由作者背書。**`unsafe fn`** 整個 body 皆 unsafe，且只能從
-  另一個 `unsafe` context **呼叫**。
-- **全域可變狀態（`unsafe mut`）。** _無可變全域_（group 10）的唯一例外——`unsafe mut NAME := …` 宣告一個
-  module-level 可變變數，即裸機逃生口（page table、allocator cursor）。無 `static` 關鍵字；`unsafe` 前綴即標記。它是
-  **module-private**（不可 `pub`），故一切存取都經其 module 的函式，且宣告與每次讀寫都只在 `unsafe` 內合法。優先用
-  **安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
+- **`unsafe { … }`。** 依**位置**分兩種形態。在**函式**體內是 **block-expression**（yields 區塊值），其內 raw 操作
+  合法；其外皆為編譯錯誤。在 **module** 層級，同一個 `unsafe { … }` 是**宣告分組**：其內每個項目都是 unsafe——`fn`
+  是 unsafe fn，而 `mut` 綁定是 module-private 的可變**全域**（持久；此分組把名字歸屬到 module，並非新的 value scope）。
+  `unsafe` 是**信任邊界**——編譯器對其內容不作記憶體安全保證，由作者背書。**`unsafe fn`** 是單一函式形式；unsafe fn
+  只能從另一個 `unsafe` context **呼叫**。
+- **全域可變狀態。** _無可變全域_（group 10）的唯一例外，是**在 module 層級 `unsafe { … }` 分組內**的 `mut` 綁定——
+  裸機逃生口（page table 與觸碰它的函式，放在一起）。**沒有 `unsafe mut` 前綴**、無 `static` 關鍵字。可變全域為
+  **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `fetch_add` / `compare_exchange` 與 memory-ordering 參數。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到

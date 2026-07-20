@@ -76,5 +76,5 @@ join/handle,只捕獲 **immutable 值與 channel**。channel 是 reference-count
   做什麼,以及這個集合為何保持封閉。
 - **[Module、Package 與 Program](package.zh-TW.md)**——原始碼如何組織成 module 與 package、可見性與 coherence 如何跨越
   它們,以及程式從何啟動。
-- **[FFI](ffi.zh-TW.md)**——C ABI 邊界：以 `pub` 表面 export Zerg、以 `extern` import C。
+- **[FFI](ffi.zh-TW.md)**——C ABI 邊界：以 `pub` 表面 export Zerg、import C 則是 stdlib 設施（一次 unsafe 的 foreign call）。
 - **[Process 與 I/O](io.zh-TW.md)**——有檢查的 I/O 面（stream、file、stdio、process）,以 `io` package 匯入。

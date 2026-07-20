@@ -63,7 +63,7 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 
 原生 `io` 同步地讀、卻絕不阻塞 runtime：一個必須等的 `read_bytes`／`write` 會**停泊它的 coroutine**、scheduler
 轉去跑別的——與任何 channel 等待相同的 fairness 保證（[Coroutine 與 Channel](coroutine.zh-TW.md)），沒有
-`async`／`await`、沒有 function coloring。唯一例外是 FFI 邊界：一個阻塞的 **`extern` C 呼叫**會停泊整條 OS
+`async`／`await`、沒有 function coloring。唯一例外是 FFI 邊界：一個阻塞的 **foreign（FFI）C 呼叫**會停泊整條 OS
 thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
 ## Process 與命令執行

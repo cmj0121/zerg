@@ -94,7 +94,7 @@ Built on the core language above:
   `sealed`, …), what each does, and why the set stays closed.
 - **[Modules, Packages & Programs](package.md)** — how source is organized into modules and
   packages, how visibility and coherence hold across them, and where a program starts.
-- **[FFI](ffi.md)** — the C ABI boundary: exporting Zerg through its `pub` surface and importing C
-  with `extern`.
+- **[FFI](ffi.md)** — the C ABI boundary: exporting Zerg through its `pub` surface, and importing C
+  as a stdlib facility (an unsafe foreign call).
 - **[Process & I/O](io.md)** — the checked I/O surface (streams, files, stdio, processes), imported
   as the `io` package.

@@ -70,7 +70,7 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 Native `io` reads synchronously but never blocks the runtime: a `read_bytes`/`write` that must wait
 **parks its coroutine** and the scheduler runs another — the fairness guarantee of any channel wait
 ([Coroutines & Channels](coroutine.md)), with no `async`/`await` and no colored functions. The one
-exception is the FFI edge: a blocking **`extern` C call** parks its whole OS thread, since Zerg does not
+exception is the FFI edge: a blocking **foreign (FFI) C call** parks its whole OS thread, since Zerg does not
 own that frame ([FFI](ffi.md)).
 
 ## Process & command execution

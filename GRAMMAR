@@ -471,7 +471,12 @@ deco-arg     ::= type-name | literal          # derive(Encode, Decode), align(16
 # A generic parameter may carry a spec BOUND — 'T: Ord' means every method a body calls
 # on a T comes from the named specs (a '+' conjunction: 'T: Ord + Hash' grants both).
 # The same 'bound' is a spec's SUPER-SPEC — 'spec Ord: Eq' makes an 'impl Ord' also
-# require 'impl Eq', and lets Ord's body use Eq's methods on This.
+# require 'impl Eq', and lets Ord's body use Eq's methods on This. There is NO disjunction
+# bound ('T: A | B'): a body could not know which methods T has, so it cannot monomorphize.
+# To accept SEVERAL argument types, parameterize a spec and write one impl per type — e.g.
+# 'spec Indexable[K] { type Output; fn index(k: K) -> Output }' with 'impl Indexable[int]'
+# (element) and 'impl Indexable[Range]' (slice) for a list, so 'xs[k]' resolves statically
+# on k's type and each impl keeps its own 'Output' — or use an 'enum' for a runtime choice.
 #
 # Generics MONOMORPHIZE: each distinct type argument compiles to its own specialized C
 # function. So a bound is load-bearing (it names the impl to specialize against, and in

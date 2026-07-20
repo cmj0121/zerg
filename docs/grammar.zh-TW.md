@@ -421,7 +421,10 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   `a < b` 也需提供 `<` 的那個 bound),且泛型函式在實例化前不是一等值。健全性靠 **coherence**(全程式一個
   `impl Spec for Type`)與 **orphan rule**(須擁有 spec 或 type 之一);泛型一律 **invariant**。`#[dyn]` 改為產生
   一份共享的 witness-table body(以 size 換 speed),compiler 也能標出實例化膨脹。呼叫端顯式型別引數寫作 `f[T]`（靠
-  name resolution 與索引區分——group 4）;const generic 延後。
+  name resolution 與索引區分——group 4）;const generic 延後。**沒有 disjunction bound**（`T: A | B`）——body 無從
+  得知 `T` 有哪些方法,無法 monomorphize。要接受多種型別就**參數化一個 spec**、一型別一 impl:`spec Indexable[K]`
+  搭配 `impl Indexable[int]`（元素）與 `impl Indexable[Range]`（slice）——`xs[k]` 便依 `k` 的型別靜態分派,各 impl
+  保有自己的 associated `Output`——或用 `enum` 做 runtime 選擇。
 - **`spec`。** 行為介面：成員為**必要**（只有簽名、無 body）、**提供**（完整方法）,或 **associated type**
   （`type Item`——由 `impl` 填入、函數性決定、每個 impl 一個）。方法**不宣告 receiver**——`this` 在方法內為隱式,
   透過被呼叫的 instance 取得；若 `fn` 用到 `this` 卻無 instance 綁定則為編譯錯誤。self 型別是 **`This`**。

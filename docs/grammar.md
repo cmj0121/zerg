@@ -475,7 +475,11 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   **coherence** (one `impl Spec for Type` program-wide) and an **orphan rule** (own the spec or the type);
   generics are **invariant**. `#[dyn]` instead emits one shared witness-table body (size for speed), and the
   compiler can flag instantiation bloat. Explicit call-site type arguments are `f[T]` (disambiguated from an
-  index by name resolution — group 4); const generics are deferred.
+  index by name resolution — group 4); const generics are deferred. There is **no disjunction bound**
+  (`T: A | B`) — a body could not know which methods `T` has, so it cannot monomorphize. To accept several
+  types, **parameterize a spec** and write one impl per type: `spec Indexable[K]` with `impl Indexable[int]`
+  (element) and `impl Indexable[Range]` (slice) is how `xs[k]` dispatches statically on `k`'s type, each impl
+  keeping its own associated `Output` — or use an `enum` for a runtime choice.
 - **`spec`.** A behavioral interface: members are **required** (a signature with no body), **provided** (a
   full method), or an **associated type** (`type Item` — a type the `impl` fills in, functionally determined,
   one per impl). A method takes **no explicit receiver** — `this` is implicit inside a method, reached through

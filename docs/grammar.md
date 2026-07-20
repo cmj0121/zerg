@@ -240,6 +240,7 @@ Values are **built** in expression position — the mirror of the patterns (grou
 ```text
 tuple-lit ::= '(' expr ',' expr ( ',' expr )* ')'    # (a, b) — 2+ elements
 list-lit  ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3]; empty []
+          | '[' expr ';' const-expr ']'              # fill form: N copies of v — [0; 256]
 map-lit   ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
           | '{' ':' '}'                               # empty map {:}
 map-entry ::= expr ':' expr
@@ -251,7 +252,8 @@ map-entry ::= expr ':' expr
   for the element's type to be known (`a.0.1` is `(a.0).1`, never a float). There is **no tuple struct** —
   `type P = (A, B)` is the named positional type, `struct` the named-field one.
 - **List `[1, 2, 3]`** (empty `[]`), ordered. In a context typed `[T; N]`, a list literal of the right
-  length **coerces** to that array.
+  length **coerces** to that array. The **fill form `[v; N]`** is `N` copies of `v` (`N` a const-expr,
+  mirroring the `[T; N]` array type's `;`) — the way to build a large array without spelling every element.
 - **Map `{k: v}`** (empty `{:}`). The `:` is what tells a `{…}` **map** from a **block** — `k: v` is not a
   statement, so a braced map is unambiguous, whereas a **bare-element** `{…}` is **always a block**.
 - **Set `set([1, 2, 3])`** (empty `set()`) — built through its constructor, **not** a brace literal, since

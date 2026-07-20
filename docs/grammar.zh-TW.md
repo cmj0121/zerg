@@ -265,8 +265,8 @@ fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # 匿名——�
 fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
-param      ::= 'mut'? identifier ':' type ( '=' expr )?
-param-type ::= 'mut'? type
+param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
+param-type ::= ( 'mut' '&' )? type
 ```
 
 - **宣告 vs expression。** `fn name(…) -> R { … }` 綁定一個名字；**匿名** `fn(…) -> R { … }` 是 expression
@@ -276,14 +276,19 @@ param-type ::= 'mut'? type
   **無 data race** 的原因。可變 closure 想做的三件事各有對應慣用法:用 `for` 迴圈**累加**
   （`for x in xs { sum = sum + x }`）、把**狀態**放進帶 `mut fn` 的 `struct`、用 `chan` 傳遞**並行**狀態。
 - **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。
-- **參數。** 參數是 `name: type`，可加 `mut`（by-ref、in-place——屬型別的一部分），亦可帶**預設值** `= expr`。
-  call 端的 **named argument** 是 `name: value`（group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，
-  一旦具名其餘也須具名——這正是能跳過有預設值參數的方式。
+- **參數。** 參數**以值傳遞**（copy），可帶**預設值** `= expr`。call 端的 **named argument** 是 `name: value`
+  （group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，一旦具名其餘也須具名——這正是能跳過有預設值
+  參數的方式。
+- **`mut &`——可變參考。** `mut &x` 傳一個**可變參考**:callee 可改 `x`,且改動**影響 caller 的引數**。兩個控制相遇——
+  **caller** 決定自己的變數是否 `mut`,**callee** 用 `mut &` 決定是否寫回——所以可見的變更需要**兩者兼具**,且引數須為
+  `mut` lvalue。**呼叫端不加標記**:簽名就是契約。`mut &` 參考只在該次呼叫期間有效——不可**逃逸**（被 `spawn` 捕獲或
+  存活得比呼叫久）、不可**別名**（同一次呼叫把同一變數傳給兩個 `mut &`），因而無需 borrow checker 即安全。**沒有純
+  `mut x` 參數**;要本地可變 copy 就遮蔽——`mut x := x`。`mut fn` 正是方法 receiver 的 `mut &this` 情形。
 - **引數慣例。** 名字在**編譯期**對照簽名解析,所以 `map` **不能** splat 成 named argument（runtime 字串 key、
   同質值型別,對上 compile-time 異質參數）。也**沒有 variadic**。多個位置引數傳 **`list`**;一包具名選項用帶 field
   預設的 **options struct**——`draw(Style(width: 2))`,即靜態版的 keyword arguments。`map` 以普通值傳遞,絕不展開
   成呼叫的具名參數。
-- **型別。** function 的型別是 `fn(P…) -> R`——參數（含 `mut`）與結果，別無其他；預設值與參數名字存在宣告裡，不在
+- **型別。** function 的型別是 `fn(P…) -> R`——參數（含 `mut &`）與結果，別無其他；預設值與參數名字存在宣告裡，不在
   型別中。
 - **`mut fn`（mutating method）。** `mut fn` 標記一個**方法**會就地修改其隱式 receiver `this`；呼叫端的 receiver
   須為 `mut` binding。它只在 `impl` 或 `spec` 內有意義——free function 或 closure 沒有 receiver。`mut fn` 追蹤的是

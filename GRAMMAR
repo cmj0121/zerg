@@ -252,26 +252,35 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # A function is a first-class value. A declaration binds a name (top level, or a
 # module item); an anonymous function is an expression — a closure over immutable
 # captures. 'return' exits, optionally with a value; an absent '-> type' means the
-# function returns nil. A parameter may be 'mut' (by-ref, in-place) and may carry a
-# default; a call fills parameters positionally, then by name. ('type' is defined in
-# group 7 (Types); it is referenced here for signatures.)
+# function returns nil. A parameter passes BY VALUE (a copy); 'mut &x' instead passes a
+# mutable reference (below). A parameter may carry a default; a call fills parameters
+# positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
 
 fn-decl      ::= 'pub'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
 fn-expr      ::= 'fn' '(' param-list? ')' ret-type? block        # anonymous / closure — never generic
 fn-type      ::= 'fn' '(' param-type-list? ')' ret-type?         # a function's type
 
-# 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place. It is
-# meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the call site must
-# hold the receiver in a 'mut' binding. A free function or closure has no receiver,
-# so it is never 'mut fn'. This tracks mutation of the value's own Zerg-owned fields
-# — not effects on a resource behind a Ref[T]/foreign handle, which need no 'mut'.
+# 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place — exactly the
+# 'mut &this' case. It is meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the
+# call site must hold the receiver in a 'mut' binding. A free function or closure has no
+# receiver, so it is never 'mut fn'. This tracks mutation of the value's own Zerg-owned
+# fields — not effects on a resource behind a Ref[T]/foreign handle, which need no 'mut'.
 ret-type     ::= '->' type
 return       ::= 'return' expr?
 
+# PARAMETERS pass BY VALUE (a copy). 'mut &x' passes a MUTABLE REFERENCE: the callee may
+# change x and the change AFFECTS the caller's argument. Two independent controls meet —
+# the CALLER decides whether its variable is 'mut', the CALLEE decides via 'mut &' whether
+# it writes back — so a caller-visible mutation needs BOTH, and the argument must be a
+# 'mut' lvalue. There is NO call-site marker: the signature is the contract. A 'mut &'
+# reference is valid only for the call — it cannot ESCAPE (be captured by a spawn or
+# stored past the call) and cannot ALIAS (the same variable to two 'mut &' in one call),
+# which keeps it safe with no borrow checker. There is no plain 'mut x' parameter; for a
+# private mutable copy, shadow — 'mut x := x'.
 param-list   ::= param ( ',' param )*
-param        ::= 'mut'? identifier ':' type ( '=' expr )?        # optional default
+param        ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?   # 'mut &x' = mutable reference
 param-type-list ::= param-type ( ',' param-type )*
-param-type   ::= 'mut'? type
+param-type   ::= ( 'mut' '&' )? type
 
 # 'this' is NOT a parameter. Inside a method (a 'fn' declared in an 'impl' or a
 # 'spec') 'this' is the implicit receiver, always reachable through the instance

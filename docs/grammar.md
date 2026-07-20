@@ -286,8 +286,8 @@ fn-expr    ::= 'fn' '(' param-list? ')' ret-type? block          # anonymous —
 fn-type    ::= 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
 return     ::= 'return' expr?
-param      ::= 'mut'? identifier ':' type ( '=' expr )?
-param-type ::= 'mut'? type
+param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
+param-type ::= ( 'mut' '&' )? type
 ```
 
 - **Declaration vs expression.** `fn name(…) -> R { … }` binds a name; an **anonymous** `fn(…) -> R { … }`
@@ -300,17 +300,25 @@ param-type ::= 'mut'? type
   with a `mut fn`, and share **concurrent** state through a `chan`.
 - **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
   function returns `nil`.
-- **Parameters.** A parameter is `name: type`, optionally `mut` (by-ref, in-place — part of the type) and
-  optionally with a **default** `= expr`. A **named argument** at the call is `name: value` (the `arg` form
-  from group 4): positional arguments come first, then any may be named, and once one is named the rest
-  must be too — which is what lets a defaulted parameter be skipped.
+- **Parameters.** A parameter passes **by value** (a copy) and may carry a **default** `= expr`. A **named
+  argument** at the call is `name: value` (the `arg` form from group 4): positional arguments come first,
+  then any may be named, and once one is named the rest must be too — which is what lets a defaulted
+  parameter be skipped.
+- **`mut &` — mutable reference.** `mut &x` passes a **mutable reference**: the callee may change `x` and the
+  change **affects the caller's argument**. Two controls meet — the **caller** decides whether its variable
+  is `mut`, the **callee** decides via `mut &` whether it writes back — so a visible mutation needs **both**,
+  and the argument must be a `mut` lvalue. There is **no call-site marker**: the signature is the contract. A
+  `mut &` reference lives only for the call — it cannot **escape** (be captured by a `spawn` or stored past
+  the call) nor **alias** (the same variable to two `mut &` in one call), which is safe with no borrow
+  checker. There is **no plain `mut x` parameter**; for a private mutable copy, shadow — `mut x := x`.
+  `mut fn` is exactly the `mut &this` case for a method's receiver.
 - **Argument conventions.** Names are resolved at **compile time** against the signature, so a `map` does
   **not** splat into named arguments (runtime string keys, one homogeneous value type vs compile-time
   heterogeneous parameters). There are **no variadics** either. Pass a **`list`** for many positional values,
   and an **options struct** with field defaults for a bag of named options — `draw(Style(width: 2))`, the
   statically typed stand-in for keyword arguments. A `map` is passed as an ordinary value, never expanded
   into a call.
-- **Type.** A function's type is `fn(P…) -> R` — parameters (with `mut`) and result, nothing else; defaults
+- **Type.** A function's type is `fn(P…) -> R` — parameters (with `mut &`) and result, nothing else; defaults
   and parameter names live in the declaration, not the type.
 - **`mut fn` (mutating method).** A `mut fn` marks a **method** that mutates its implicit receiver `this` in
   place; the call site must hold the receiver in a `mut` binding. It is meaningful only inside an `impl` or

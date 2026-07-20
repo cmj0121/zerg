@@ -603,9 +603,10 @@ init-decl   ::= 'init' '(' ')' block
   (`split := text.split`), since a function is a value. A **`pub import`** **re-exports** the namespace onto
   this module's surface — the single mechanism by which a root module builds a package's public API.
 - **`init()`** is a module's **lazy** setup, run on first use. A module may declare **several** `init()`
-  blocks; they run in **declaration (FIFO) order**, each **exactly once**. There are **no mutable globals**: a
-  top-level binding may not be `mut` — a top-level `:=` is an **immutable module constant** evaluated at init;
-  state travels by value or channel.
+  blocks; they run in **declaration (FIFO) order**, each **exactly once**. There are **no mutable globals in
+  safe code**: a top-level binding may not be `mut` — a top-level `:=` is an **immutable module constant**
+  evaluated at init. The one exception is an **`unsafe mut`** global (group 12); the safe way to share mutable
+  global state is an immutable `:=` holding a stdlib **`Atomic[T]`**.
 - A **program** is a build rooted at an entry file that defines a top-level `fn main(…) -> Result[nil]`;
   `main` is an ordinary function (not reserved). **`package`** is the distribution/versioning unit — a
   directory tree selected by the build tool, with **no in-source `package` declaration**.
@@ -636,6 +637,7 @@ The one door to bare-metal. Everything here is legal **only inside `unsafe`**; t
 
 ```text
 unsafe-expr ::= 'unsafe' block             # block-expression; unsafe ops legal only here
+global-mut  ::= 'unsafe' 'mut' identifier ( ':' type )? ':=' expr   # module-level mutable global
 fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn' — unsafe throughout its body
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = raw address; 'ptr[T]' = typed pointer
 asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
@@ -647,6 +649,14 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   legal; anywhere else they are a compile error. `unsafe` is a **trust boundary** — the compiler makes no
   memory-safety guarantee about its contents; the author vouches for them. **`unsafe fn`** is unsafe
   throughout its body and may only be **called** from another `unsafe` context.
+- **Global mutable state (`unsafe mut`).** The one exception to _no mutable globals_ (group 10) —
+  `unsafe mut NAME := …` declares a module-level mutable variable, the bare-metal escape hatch (a page
+  table, an allocator cursor). No `static` keyword; the `unsafe` prefix is the marker. It is
+  **module-private** (never `pub`), so all access goes through a function of its module, and its declaration
+  and every read/write are legal only inside `unsafe`. Prefer the **safe** alternative — an immutable `:=`
+  holding a stdlib **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the
+  binding is immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]`
+  with `load` / `store` / `fetch_add` / `compare_exchange` and a memory-ordering argument.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
   `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
   `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as

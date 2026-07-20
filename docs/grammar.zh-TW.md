@@ -529,8 +529,9 @@ init-decl   ::= 'init' '(' ')' block
   （`split := text.split`）,因為函式是值。**`pub import`** 把該 namespace **re-export** 到本 module 表面——根
   module 用來組出 package 公開 API 的唯一機制。
 - **`init()`** 是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
-  （FIFO）順序**執行,每個**恰好一次**。**無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變的模組常數**,
-  於 init 時求值;狀態靠值或 channel 傳遞。
+  （FIFO）順序**執行,每個**恰好一次**。**safe 程式碼無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變
+  的模組常數**,於 init 時求值。唯一例外是 **`unsafe mut`** 全域(group 12);要安全共享可變全域狀態,用不可變 `:=`
+  持有 stdlib **`Atomic[T]`**。
 - **program** 是以入口檔為根的 build,其入口檔定義頂層 `fn main(…) -> Result[nil]`;`main` 是普通函式(非保留)。
   **`package`** 是 distribution/versioning 單位——由 build tool 選定的目錄樹,**無 in-source `package` 宣告**。
 
@@ -557,6 +558,7 @@ del-stmt   ::= 'del' identifier
 
 ```text
 unsafe-expr ::= 'unsafe' block             # block-expression；unsafe 操作僅此合法
+global-mut  ::= 'unsafe' 'mut' identifier ( ':' type )? ':=' expr   # module-level 可變全域
 fn-decl     ::= 'pub'? 'unsafe'? 'mut'? 'fn' …    # 'unsafe fn'——整個 body 皆 unsafe
 ptr-type    ::= 'ptr' ( '[' type ']' )?    # 'ptr' = 原始位址；'ptr[T]' = 具型別指標
 asm-expr    ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
@@ -567,6 +569,11 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 - **`unsafe { … }`。** 一個 **block-expression**（yields 區塊值），其內 raw 操作合法；其外皆為編譯錯誤。`unsafe`
   是**信任邊界**——編譯器對其內容不作記憶體安全保證，由作者背書。**`unsafe fn`** 整個 body 皆 unsafe，且只能從
   另一個 `unsafe` context **呼叫**。
+- **全域可變狀態（`unsafe mut`）。** _無可變全域_（group 10）的唯一例外——`unsafe mut NAME := …` 宣告一個
+  module-level 可變變數，即裸機逃生口（page table、allocator cursor）。無 `static` 關鍵字；`unsafe` 前綴即標記。它是
+  **module-private**（不可 `pub`），故一切存取都經其 module 的函式，且宣告與每次讀寫都只在 `unsafe` 內合法。優先用
+  **安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
+  **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `fetch_add` / `compare_exchange` 與 memory-ordering 參數。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與

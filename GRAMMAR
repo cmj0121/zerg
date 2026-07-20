@@ -57,7 +57,7 @@ compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
 # only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' and 'const-decl'
 # are the declarations with no block; the rest own one.
 decorated-decl ::= decorator* declaration
-declaration    ::= type-decl | const-decl | fn-decl | struct-decl | enum-decl
+declaration    ::= type-decl | const-decl | global-mut | fn-decl | struct-decl | enum-decl
                  | spec-decl | impl-decl | init-decl
 nop            ::= 'nop'
 
@@ -606,8 +606,10 @@ send-arm     ::= expr '<-' expr '->' expr
 # 'pub import' RE-EXPORTS it onto this module's surface (how a root builds its API).
 # 'init()' is lazy module setup, run on first use. A module may declare MULTIPLE 'init()'
 # blocks; they run in declaration (FIFO) order, and each runs EXACTLY ONCE. There are NO
-# mutable globals: a module-level (top-level) binding may not be 'mut' — a top-level ':='
-# is an immutable module constant, evaluated at init. A program is a build rooted at an
+# mutable globals in SAFE code: a module-level (top-level) binding may not be 'mut' — a
+# top-level ':=' is an immutable module constant, evaluated at init. (The one exception is an
+# 'unsafe mut' global, group 12; the SAFE way to share mutable global state is an immutable
+# ':=' holding a stdlib 'Atomic[T]'.) A program is a build rooted at an
 # entry file that defines a top-level 'fn main(...) -> Result[nil]' — 'main' is an
 # ordinary function, not reserved. 'package' is the distribution / versioning unit: a
 # directory tree selected by the build tool, with NO in-source 'package' declaration.
@@ -646,6 +648,15 @@ del-stmt     ::= 'del' identifier        # revoke a name's access now
 # inside it — the author vouches for it.
 unsafe-expr  ::= 'unsafe' block          # yields the block's value; unsafe ops legal only here
                                          # ('unsafe' also prefixes a decl — 'unsafe fn', groups 5/7)
+
+# GLOBAL MUTABLE STATE. The one exception to "no mutable globals" (group 10): 'unsafe mut'
+# declares a module-level mutable variable — the bare-metal escape hatch (a page table, an
+# allocator cursor). There is NO 'static' keyword; the 'unsafe' prefix is the marker. It is
+# module-PRIVATE (never 'pub'), so all access goes through a function/method of its module;
+# its declaration AND every read/write are legal only inside 'unsafe'. Prefer the SAFE
+# alternative — an immutable ':=' holding a stdlib 'Atomic[T]' — which shares mutable global
+# state across cores with no 'unsafe' (the binding is immutable; the Atomic's interior is not).
+global-mut   ::= 'unsafe' 'mut' identifier ( ':' type )? ':=' expr   # module-level; unsafe to define/access
 
 # RAW POINTERS. 'ptr' is a platform-width raw ADDRESS (like C's 'void*' / 'uintptr'); 'ptr[T]'
 # is that address TYPED to a pointee T (same width — '[T]' only types the load/store/offset). A

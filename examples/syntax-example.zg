@@ -125,6 +125,14 @@ struct PageTable {
     handler: ptr[fn(int) -> nil]       # a function pointer (interrupt vector)
 }
 
+# global mutable state (group 12): the unsafe escape hatch — module-private, touched via a fn
+unsafe mut tick_count := 0
+unsafe fn tick() { tick_count = tick_count + 1 }    # declaration and access both need unsafe
+
+# the SAFE way to share mutable global state: an immutable binding holding a stdlib Atomic
+ready := Atomic[bool](false)
+fn mark_ready() { ready.store(true) }               # atomic op — no unsafe needed
+
 # the empty-statement placeholder
 fn noop() { nop }
 

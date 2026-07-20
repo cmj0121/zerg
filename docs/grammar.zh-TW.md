@@ -169,7 +169,7 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
 binding       ::= 'mut'? bind-target ':=' expr   # bind-target：識別字或解構模式
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
-lvalue        ::= identifier ( '.' identifier | '[' expr ']' )*
+lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple 元素
 assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
                 | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
 field-target  ::= identifier ( ':' assign-target )?
@@ -219,7 +219,9 @@ map-entry ::= expr ':' expr
 ```
 
 - **tuple `(a, b)`**——括號內 2+ 元素;單一 `(expr)` 只是分組,故無 1-tuple、無空 `()`。這正是讓 `divmod` 能
-  `return (q, r)` 的關鍵。
+  `return (q, r)` 的關鍵。以**靜態索引**讀回元素——`t.0`、`t.1`——而非 `t[i]`:tuple 是異質的,索引須為編譯期常數
+  才能得知元素型別（`a.0.1` 是 `(a.0).1`,絕非 float）。**沒有 tuple struct**——`type P = (A, B)` 是具名位置式型別,
+  `struct` 則是具名欄位式。
 - **list `[1, 2, 3]`**(空 `[]`),有序。在型別為 `[T; N]` 的 context 下,長度吻合的 list 字面量會 **coerce** 成陣列。
 - **map `{k: v}`**(空 `{:}`)。`:` 正是分辨 `{…}` 是 **map** 還是 **block** 的依據——`k: v` 不是 statement,所以帶
   冒號的大括號無歧義;而**裸元素**的 `{…}` **恆為 block**。

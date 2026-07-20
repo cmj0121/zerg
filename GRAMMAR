@@ -175,7 +175,7 @@ binding      ::= 'mut'? bind-target ':=' expr
 bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6
 reassign     ::= assign-target '=' expr
 expr-stmt    ::= expr
-lvalue       ::= identifier ( '.' identifier | '[' expr ']' )*
+lvalue       ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element
 # An assignment target is an lvalue, or a tuple / struct SHAPE whose leaves are lvalues —
 # destructuring reassignment, the mirror of a ':=' bind-target but into EXISTING names
 # ('(a, b) = e', 'Div{q, r} = e'); leaves may be any lvalue ('(a, obj.f) = e').
@@ -201,6 +201,7 @@ primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr | if-exp
                | identifier | '(' expr ')'
 
 postfix      ::= '.' identifier        # field or method access
+               | '.' dec-int           # tuple element by STATIC index — 't.0', 't.1' (0-based)
                | '(' arg-list? ')'     # call (named arguments: group 5)
                | '[' expr ']'          # index — a single-value subscript
                | type-args             # explicit type arguments 'f[K, V]' (type-args, group 7)
@@ -227,6 +228,11 @@ arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value'
 # discarded), and ANY '{'-opening expression — a block OR a map literal — at the start of
 # an if/for/with/match head must be parenthesized. (struct and enum values are built by
 # calling a type or variant name — see the constructor note in group 7.)
+#
+# A tuple is read back by STATIC index — 't.0', 't.1' (postfix, above) — not 't[i]': its
+# elements are heterogeneous, so the index must be a compile-time constant for the result
+# type to be known. In this position a following number is a bare index, so 'a.0.1' is
+# '(a.0).1', not a float. (A list/map, being homogeneous, uses the runtime 't[i]' index.)
 tuple-lit    ::= '(' expr ',' expr ( ',' expr )* ')'    # 2+ elements; no 1-tuple, no '()'
 list-lit     ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3]; empty '[]'
 map-lit      ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}

@@ -177,7 +177,7 @@ A **binding** introduces a name; a reassignment updates one:
 binding       ::= 'mut'? bind-target ':=' expr   # bind-target: identifier or a destructuring pattern
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
-lvalue        ::= identifier ( '.' identifier | '[' expr ']' )*
+lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element
 assign-target ::= lvalue | '(' assign-target ( ',' assign-target )* ')'
                 | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
 field-target  ::= identifier ( ':' assign-target )?
@@ -232,7 +232,10 @@ map-entry ::= expr ':' expr
 ```
 
 - **Tuple `(a, b)`** — a parenthesized 2+ list; a single `(expr)` is just grouping, so there is no 1-tuple
-  and no empty `()`. This is what lets `divmod` write `return (q, r)`.
+  and no empty `()`. This is what lets `divmod` write `return (q, r)`. Read an element back by **static
+  index** — `t.0`, `t.1` — not `t[i]`: a tuple is heterogeneous, so the index must be a compile-time constant
+  for the element's type to be known (`a.0.1` is `(a.0).1`, never a float). There is **no tuple struct** —
+  `type P = (A, B)` is the named positional type, `struct` the named-field one.
 - **List `[1, 2, 3]`** (empty `[]`), ordered. In a context typed `[T; N]`, a list literal of the right
   length **coerces** to that array.
 - **Map `{k: v}`** (empty `{:}`). The `:` is what tells a `{…}` **map** from a **block** — `k: v` is not a

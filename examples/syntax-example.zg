@@ -181,6 +181,11 @@ fn rotate(mut a: int, mut b: int, mut c: int) {
     (a, b, c) = (b, c, a)
 }
 
+# tuple access by static index — `.0`/`.1`, not `[i]` (group 4)
+fn midpoint(p: (float, float)) -> float {
+    return (p.0 + p.1) / 2.0
+}
+
 # `if` as an expression — needs `else`, both branches yield the same type (group 6)
 fn classify(n: int) -> str {
     return if n < 0 { "neg" } else if n == 0 { "zero" } else { "pos" }

@@ -32,7 +32,7 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
-**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map`／`set` literal 的元素都**依原始碼順序**求值、
+**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都**依原始碼順序**求值、
 deterministic——不像 C 的引數求值順序是 unspecified。所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測；
 `and`／`or` 的短路就是這條規則加上「跳過右運算元」（見 [內建 spec](specs.zh-TW.md)）。
 
@@ -108,7 +108,7 @@ flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可�
 
 ## `defer`——在 block 退出時清理
 
-`defer stmt` 安排 `stmt` 在所在 **block** 退出時執行——**每一條**離開路徑都跑，**包含 abort unwind**。它是「綁在
+`defer expr` 安排 `expr` 在所在 **block** 退出時執行——**每一條**離開路徑都跑，**包含 abort unwind**。它是「綁在
 scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關閉 scope-local 資源——完全不需要型別：
 
 ```text

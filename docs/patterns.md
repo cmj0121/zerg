@@ -59,10 +59,10 @@ c := connect("example.com")                          # all defaults
 c := connect("example.com", port: 8080, tls: false)  # override only what you name
 ```
 
-For plain data, a **struct literal** with named fields does the same:
+For plain data, **construction is a call** with named fields, which does the same:
 
 ```text
-cfg := Config{ host: "example.com", port: 8080 }
+cfg := Config(host: "example.com", port: 8080)
 ```
 
 When you genuinely need a **staged / fluent** builder (e.g. a query builder), **copy-by-value makes a

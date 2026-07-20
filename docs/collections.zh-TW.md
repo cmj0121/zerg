@@ -109,7 +109,7 @@ N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `cons
 ```text
 xs: [int; 4] = [1, 2, 3, 4]     # 一個 list literal，由目標型別定型為陣列——長度須為 4
 buf := [0; 256]                 # fill 形式：256 份 → [int; 256]
-row := [byte; WIDTH]            # WIDTH 是 top-level const
+row := [b'\0'; WIDTH]           # WIDTH 是 top-level const
 ```
 
 陣列是個普通的**值**：copy-by-value 複製全部 N 個元素（bump 所含的任何 `Ref`）、scope 結束釋放、絕不 alias——就是

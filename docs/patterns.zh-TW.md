@@ -54,10 +54,10 @@ c := connect("example.com")                          # 全用預設
 c := connect("example.com", port: 8080, tls: false)  # 只具名覆寫想改的
 ```
 
-純資料就用具名 field 的 **struct literal**:
+純資料就用具名 field 的**呼叫式建構**:
 
 ```text
-cfg := Config{ host: "example.com", port: 8080 }
+cfg := Config(host: "example.com", port: 8080)
 ```
 
 若真需要**分階段 / 流式**的 builder（如 query builder）,**copy-by-value 讓 fluent-immutable 天然成立**——每步

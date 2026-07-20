@@ -118,7 +118,7 @@ compile-time evaluation, so `[int; f(x)]` is an error.
 ```text
 xs: [int; 4] = [1, 2, 3, 4]     # a list literal, typed as an array by its target — length must be 4
 buf := [0; 256]                 # fill form: 256 copies → [int; 256]
-row := [byte; WIDTH]            # WIDTH is a top-level const
+row := [b'\0'; WIDTH]           # WIDTH is a top-level const
 ```
 
 An array is an ordinary **value**: copy-by-value copies all `N` elements (bumping any contained `Ref`), it

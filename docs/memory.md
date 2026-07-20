@@ -41,7 +41,7 @@ through:
 - **Channels** — shared by ref across coroutines, for communication only.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
-`list`/`map`/`set` literal evaluate **in source order**, deterministically — unlike C, whose
+`list`/`map` literal, or a `set(...)` constructor, evaluate **in source order**, deterministically — unlike C, whose
 argument-evaluation order is unspecified. So side effects (a `mut &` argument, an abort) sequence
 predictably; the `and` / `or` short-circuit is this rule with the right operand skipped ([Built-in specs](specs.md)).
 
@@ -131,7 +131,7 @@ closes the channel if you were its last sender, without wrapping it in a tighter
 
 ## `defer` — cleanup at block exit
 
-`defer stmt` schedules `stmt` to run when the enclosing **block** exits — on **every** path out,
+`defer expr` schedules `expr` to run when the enclosing **block** exits — on **every** path out,
 **including an abort unwind**. It is the procedural tool for an effect bound to a scope — release a lock,
 flush a buffer, close a scope-local resource — needing no type at all:
 

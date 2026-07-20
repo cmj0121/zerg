@@ -147,7 +147,7 @@ A literal denotes a constant value:
 
 ```text
 literal     ::= bool-lit | nil-lit | float-lit | int-lit
-              | rune-lit | byte-lit | str-lit | raw-str-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit | cmd-lit
 bool-lit    ::= 'true' | 'false'
 nil-lit     ::= 'nil'
 int-lit     ::= dec-int | hex-int | oct-int | bin-int
@@ -157,6 +157,7 @@ byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
               | '"""' ( ml-str-char | escape )* '"""'   # multiline; line breaks literal
 raw-str-lit ::= 'r' '"' raw-char* '"'
+cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — run directly, no shell (f-form: group 5)
 ```
 
 - **Numbers.** An integer is decimal or based — `0x1F`, `0o17`, `0b1010`. A float has a fractional part,
@@ -172,6 +173,11 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
   literal, and a lone `"` or `""` inside needs no escape (only `"""` ends it), so it fits SQL/JSON/prose. A
   **raw string** is `r`-prefixed and processes **none** — `r"C:\tmp\new"` is ten literal characters. A `str`
   cannot hold a NUL, so `\0` and `\u{0}` are invalid inside `"…"` (they are fine in a `rune` or `byte`).
+- **Command literal.** A backtick `` `git status` `` is a **command** — a child process run **directly** (no
+  shell), its argv split on whitespace (quotes respected), so no interpolation and no injection/glob/pipe. The
+  interpolating `` f`…` `` form (group 5) instead runs through a **shell** and **shell-quotes** each hole
+  (`{x:raw}` opts out). Execution — pipes as `Reader`/`Writer`, the process `Ref[proc]` — is **stdlib**
+  ([Process & I/O](io.md)), not grammar.
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
@@ -269,16 +275,18 @@ An **f-string** is a primary expression — a string with `{ expr }` holes:
 
 ```text
 fstr-lit    ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+fcmd-lit    ::= 'f' '`' ( cmd-char | interp )* '`'   # interpolating command literal — runs through a shell
 interp      ::= '{' expr '='? conversion? format-spec? '}'
 conversion  ::= '!' ( 'r' | 's' | 'a' )     # r = debug, s = display, a = ascii
 format-spec ::= ':' fmt-char*               # read by the type's Format protocol
 print       ::= 'print' expr
 ```
 
-A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x
-
-- y}"`renders each hole through`display()`and joins the pieces — it **desugars at compile time** to`str`
-  concatenation, with no runtime format engine.
+A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x + y}"`
+renders each hole through `display()` and joins the pieces — it **desugars at compile time** to `str`
+concatenation, with no runtime format engine. The same `{ … }` holes power the interpolating **command
+literal** `` f`…` `` (the group-3 command literal): it runs through a shell and **shell-quotes** each hole
+(`{x:raw}` opts out), so a value splices in as one safe argument.
 
 - **`{x}`** → `x.display()`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` / `display` /
   ascii. **`{x=}`** is self-documenting: it emits the expression's source text and `=`, then the value

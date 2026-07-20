@@ -126,7 +126,7 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
 # digits only (never leading, trailing, or doubled).
 
 literal     ::= bool-lit | nil-lit | float-lit | int-lit
-              | rune-lit | byte-lit | str-lit | raw-str-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit | cmd-lit
 
 bool-lit    ::= 'true' | 'false'
 nil-lit     ::= 'nil'                      # the placeholder value of a T?
@@ -154,11 +154,19 @@ exponent    ::= ( 'e' | 'E' ) ( '+' | '-' )? dec-int
 # is 'r'-prefixed and processes none. A str may not hold a NUL, so '\0' and '\u{0}' are
 # invalid inside "..." (but valid in a rune or byte). f"..." interpolation is deferred to
 # the expression group.
+#
+# A backtick '`...`' is a COMMAND literal: a child process run DIRECTLY (no shell), its argv split on
+# whitespace (quotes respected) — no interpolation, so no injection/glob/pipe. The interpolating f-form
+# 'f`...`' (group 5) instead runs through a SHELL and shell-quotes each '{ … }' hole ('{x:raw}' opts out).
+# It processes no backslash escapes (a raw text). The execution surface — pipes as Reader/Writer, the
+# process 'Ref[proc]' — is STDLIB (docs/io.md), not grammar.
 rune-lit    ::= "'" ( rune-char | escape ) "'"
 byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
               | '"""' ( ml-str-char | escape )* '"""'    # multiline; line breaks are literal
 raw-str-lit ::= 'r' '"' raw-char* '"'
+cmd-lit     ::= '`' cmd-char* '`'                        # a COMMAND literal (run directly, no shell); f-form in group 5
+cmd-char    ::= < any code point except '`' or a line break >   # no escapes (raw)
 
 escape      ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | '"' | 'u' '{' hex-digit+ '}' )
 byte-escape ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | 'x' hex-digit hex-digit )
@@ -215,7 +223,7 @@ mul-expr     ::= unary-expr ( mul-op unary-expr )*
 unary-expr   ::= unary-op unary-expr | postfix-expr
 postfix-expr ::= recv-base ( postfix )*
 recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
-primary      ::= literal | fstr-lit | fn-expr | match-expr | guard-expr | if-expr
+primary      ::= literal | fstr-lit | fcmd-lit | fn-expr | match-expr | guard-expr | if-expr
                | unsafe-expr | asm-expr | chan-new | list-lit | map-lit | tuple-lit | block
                | identifier | '(' expr ')'
 
@@ -340,6 +348,9 @@ closure-param      ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   #
 # type). 'print' writes a value's display() and a newline to stdout — a reserved
 # keyword, always in scope, best-effort (never raises).
 fstr-lit     ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+# The interpolating COMMAND literal (group 3's 'cmd-lit' with holes): runs through a SHELL, each hole
+# shell-quoted to one argument by default ('{x:raw}' opts out via the Format spec). No backslash escapes.
+fcmd-lit     ::= 'f' '`' ( cmd-char | interp )* '`'
 interp       ::= '{' expr '='? conversion? format-spec? '}'
 conversion   ::= '!' ( 'r' | 's' | 'a' )       # r = debug, s = display, a = ascii
 format-spec  ::= ':' fmt-char*                  # opaque here; the Format protocol reads it

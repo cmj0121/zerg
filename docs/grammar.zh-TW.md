@@ -142,7 +142,7 @@ literal 表示一個常數值：
 
 ```text
 literal     ::= bool-lit | nil-lit | float-lit | int-lit
-              | rune-lit | byte-lit | str-lit | raw-str-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit | cmd-lit
 bool-lit    ::= 'true' | 'false'
 nil-lit     ::= 'nil'
 int-lit     ::= dec-int | hex-int | oct-int | bin-int
@@ -152,6 +152,7 @@ byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
               | '"""' ( ml-str-char | escape )* '"""'   # 多行；換行為字面
 raw-str-lit ::= 'r' '"' raw-char* '"'
+cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——直接執行、不經 shell（f 形式：group 5）
 ```
 
 - **數字。** 整數為十進位或帶基底——`0x1F`、`0o17`、`0b1010`。float 有小數部分、指數，或兩者——`1.0`、`1e3`、
@@ -165,6 +166,10 @@ raw-str-lit ::= 'r' '"' raw-char* '"'
   `"""…"""` 的 `str` 相同但**可跨行**——換行為字面,內部單一 `"` 或 `""` 免 escape（只有 `"""` 結束它）,適合
   SQL/JSON/文字。**raw string** 加 `r` 前綴,**不**處理任何 escape——`r"C:\tmp\new"` 是十個字面字元。`str` 不能含
   NUL,所以 `\0` 與 `\u{0}` 在 `"…"` 內非法（在 `rune` 或 `byte` 內則可）。
+- **command literal。** 反引號 `` `git status` `` 是一個**命令**——一個**直接**執行（不經 shell）的子行程，argv 以
+  空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）改為經過 **shell** 並
+  對每個 hole **shell-quote**（`{x:raw}` 可退出）。執行面——pipe 作為 `Reader`／`Writer`、行程 `Ref[proc]`——屬
+  **stdlib**（[Process & I/O](io.zh-TW.md)），非文法。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 
@@ -250,6 +255,7 @@ map-entry ::= expr ':' expr
 
 ```text
 fstr-lit    ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+fcmd-lit    ::= 'f' '`' ( cmd-char | interp )* '`'   # 插值命令 literal——經過 shell 執行
 interp      ::= '{' expr '='? conversion? format-spec? '}'
 conversion  ::= '!' ( 'r' | 's' | 'a' )     # r = debug、s = display、a = ascii
 format-spec ::= ':' fmt-char*               # 由型別的 Format protocol 解讀
@@ -257,7 +263,9 @@ print       ::= 'print' expr
 ```
 
 洞是 **Python 式**：`expr`，其後選用 `=`、`!` 轉換、`:` format spec。`f"sum={x + y}"` 把每個洞經 `display()`
-算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。
+算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。同一套 `{ … }` 洞也驅動插值的**命令
+literal** `` f`…` ``（group 3 的 command literal）：它經過 shell 執行並對每個洞 **shell-quote**（`{x:raw}` 可退出），
+使值以單一安全引數插入。
 
 - **`{x}`** → `x.display()`。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
   **`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）。

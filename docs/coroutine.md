@@ -326,7 +326,7 @@ doesn't fix; only the property is promised.
 
 Two limits bound it:
 
-- **A blocking `extern` call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
+- **A blocking foreign (FFI) call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
   own (see [FFI](ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. The runtime may grow
   its thread pool, but a long blocking call is thread-occupying — prefer non-blocking C APIs.
 - **Fairness moves the _ready_; it does not unstick the _blocked_.** When every coroutine is blocked with

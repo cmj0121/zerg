@@ -13,11 +13,12 @@ surface for each:
 | Edge       | Direction | How it is expressed                                                              |
 | ---------- | --------- | -------------------------------------------------------------------------------- |
 | **export** | Zerg → C  | **no new syntax** — a package's public surface _is_ its C ABI, emitted on demand |
-| **import** | C → Zerg  | an **`extern`** block names the foreign C symbols Zerg may call                  |
+| **import** | C → Zerg  | **no new syntax** — the **stdlib** binds a foreign C symbol as an `unsafe fn`    |
 
 Both edges share **one** definition of which values may cross (FFI-safe types), **one** rule for who
-owns memory at the boundary, and **one** treatment of errors and concurrency. `extern` names the import
-direction only; it never appears on the export side.
+owns memory at the boundary, and **one** treatment of errors and concurrency. **Neither edge is
+grammar**: export rides the `pub` surface, and import is a **stdlib facility** — there is no `extern`
+keyword — whose foreign calls are **`unsafe`** and sit inside an `unsafe` context (below).
 
 ## FFI-safe types
 
@@ -46,8 +47,8 @@ A **`T?` whose `T` is pointer-shaped** (an opaque handle, or a `fn`) does **not*
 the **null pointer** and the value is the bare pointer. Only a `T?` over a non-pointer `T` (e.g. `int?`)
 needs the tagged form. That's what lets a handle out-parameter map to C's `T**` idiom (see the example).
 
-**Not FFI-safe** — rejected in an `extern` signature and left off the exported header, always with a
-diagnostic, never silently:
+**Not FFI-safe** — rejected in a foreign binding's signature and left off the exported header, always
+with a diagnostic, never silently:
 
 - **Generics and `spec` bounds** — a generic isn't one type until it's monomorphized, so it has no single C
   signature. Cross a **concrete** instance instead (a `pub` wrapper at a fixed type).
@@ -65,27 +66,34 @@ diagnostic, never silently:
 **C's integer widths.** Zerg's `int`/`uint`/`byte`/`rune` are fixed (i64/u64/u8/i32) — `uint` maps to
 `uint64_t` exactly — but C's **platform-width** `int`, `unsigned`, `long`, `size_t`, … still have **no
 fixed Zerg counterpart** (`size_t` is not portably 64-bit). A `list`'s `size_t` length is
-compiler-emitted, never a value you name — but an `extern` signature that must name a C `int` or
-`size_t` needs a set of boundary-only C-width aliases (`c_int`, `c_uint`, `c_size`, …). That set is
-**deferred** (see Open questions); until it lands, only Zerg's fixed widths cross.
+compiler-emitted, never a value you name — but a foreign binding that must name a C `int` or `size_t`
+needs a set of boundary-only C-width aliases (`c_int`, `c_uint`, `c_size`, …). That set is **deferred**
+(see Open questions); until it lands, only Zerg's fixed widths cross.
 
 ## Opaque handles — foreign resources without a pointer
 
 Zerg has **no pointer surface** and is **safe by default**, so FFI must not smuggle a dereferenceable
-raw pointer into the language. It doesn't. A foreign resource crosses as an **opaque handle**: a named
-type, declared in an `extern` block with **no body**, that Zerg can hold but never inspect.
+raw pointer into the language. It doesn't. A foreign resource crosses as an **opaque handle** — the
+stdlib's pointer-shaped **`handle`** token, which Zerg can hold but never inspect. There is **no bodyless
+type declaration** for it (a bare `type sqlite3` does not parse — `type` is a strong typedef and needs a
+right-hand side); the raw token is the stdlib `handle`, and a named resource is a `Ref[handle]` wrapped
+in a newtype you own (the same **foreign-handle pattern** as `File = Ref[handle]` in
+[Process & I/O](io.md)).
+
+The stdlib binds each foreign symbol as an **`unsafe fn`** whose signature you supply — the linker name
+taken **verbatim**, no mangling:
 
 ```text
-extern "C" {
-    type sqlite3                                       # opaque — no fields, pointer-shaped, never dereferenced
-    fn sqlite3_open(path: str, db: mut &sqlite3?) -> int
-    fn sqlite3_close(db: sqlite3) -> int
-}
+import "ffi"
+
+sqlite3_open  := ffi.symbol[unsafe fn(path: str, mut &db: handle?) -> int]("sqlite3_open")
+sqlite3_close := ffi.symbol[unsafe fn(db: handle) -> int]("sqlite3_close")
 ```
 
-A handle **can** be stored in a binding or field, copied, passed to other `extern` calls, and `del`-ed.
-It **cannot** be dereferenced, indexed, arithmetic'd, or built from a struct literal (it has no fields) —
-it arrives only as an `extern` return or out-parameter.
+(The exact stdlib API is a stdlib detail; what the **language** fixes is that the result is an `unsafe
+fn`, callable only inside `unsafe`.) A handle **can** be stored in a binding or field, copied, passed to
+other foreign calls, and `del`-ed. It **cannot** be dereferenced, indexed, arithmetic'd, or built from a
+constructor (it has no fields) — it arrives only as a foreign call's return or out-parameter.
 
 A handle is an **opaque token copied by value like any primitive** — duplicating it copies the bits,
 shares nothing in Zerg's terms, and frees nothing. So a bare handle is **not** a new exception to the
@@ -94,33 +102,36 @@ reference-counted values remain `chan` and `Ref[T]`, which a bare handle is neit
 that the token **names a resource Zerg does not own**: the foreign
 allocation lives entirely outside the memory model, so scope exit frees the token (trivially, being mere
 bits) but never the resource, and `del` on a handle binding ends the name without releasing anything
-foreign. The resource is released **only** by an explicit paired `extern` free.
+foreign. The resource is released **only** by an explicit paired **foreign free**.
 
-Wrap the handle in a **`Ref[sqlite3]`** — the reference-counted resource box (Language Reference) whose
-`drop` is the paired `extern` free — inside a **newtype you own** (a single-field `struct`, the pattern
-from [package.md](package.md), **without** the auto-cast that would re-expose the box). Its **private
-field makes it opaque** outside its module, so it offers only safe methods, and `Ref[T]` makes the close
-**exact**: copied, returned, or sent across `spawn`, every `Db` names one connection that closes **once**,
-at the last holder's scope exit:
+Wrap the raw `handle` in a **`Ref[handle]`** — the reference-counted resource box (Language Reference)
+whose `drop` is the paired foreign free — inside a **newtype you own** (a single-field `struct`, the
+pattern from [package.md](package.md), **without** the auto-cast that would re-expose the box). Its
+**private field makes it opaque** outside its module, so it offers only safe methods, and `Ref[T]` makes
+the close **exact**: copied, returned, or sent across `spawn`, every `Db` names one connection that closes
+**once**, at the last holder's scope exit:
 
 ```text
-struct Db { h: Ref[sqlite3] }                          # private + refcounted ⇒ opaque, closed once
+struct Db { h: Ref[handle] }                           # private + refcounted ⇒ opaque, closed once
 
 pub fn open(path: str) -> Db? {
-    mut h: sqlite3? = nil                              # a mut handle out-parameter: C's sqlite3**
-    if sqlite3_open(path, h) != 0 { return nil }       # map C's status by hand — no magic
-    return Db{ h: Ref(h!, sqlite3_close) }             # the box's drop is the paired free
+    mut raw: handle? = nil                             # a mut handle out-parameter: C's sqlite3**
+    status := unsafe { sqlite3_open(path, raw) }       # a foreign call is UNSAFE — only inside `unsafe`
+    if status != 0 { return nil }                      # map C's status by hand — no magic
+    return Db(h: Ref(raw!, sqlite3_close))             # construction is a CALL; the box's drop is the paired free
 }
 ```
 
-The `mut &sqlite3?` out-parameter works because a handle is a **scalar token written back by value** — the
-ordinary `mut &`-parameter path (Language Reference), nothing new. A C function that fills a caller's
-**byte buffer in place** is a different mechanism (it writes _through_ a pointer, not a value copy-back);
-that write-back protocol is deferred (see Open questions).
+`unsafe { … }` is a **block-expression** here: it yields the call's `int`, which the next line inspects.
+The `mut &handle?` out-parameter works because a handle is a **scalar token written back by value** — the
+ordinary `mut &`-parameter path (Language Reference), nothing new; note the `mut &` marker sits **before**
+the name in the signature. A C function that fills a caller's **byte buffer in place** is a different
+mechanism (it writes _through_ a pointer, not a value copy-back); that write-back protocol is deferred
+(see Open questions).
 
-**The `Ref[sqlite3]` makes the close exact.** Copying a `Db` refcount-bumps the box instead of duplicating
+**The `Ref[handle]` makes the close exact.** Copying a `Db` refcount-bumps the box instead of duplicating
 a bare token, and the `drop` — the paired `sqlite3_close` — runs **once**, when the last `Db` leaves scope
-(or is `del`-ed). This is the guarantee a bare `struct Db { h: sqlite3 }` can't give, where two copies
+(or is `del`-ed). This is the guarantee a bare `struct Db { h: handle }` can't give, where two copies
 would each try to close one connection; the private field keeps the raw token from escaping, so the
 guarantee holds through ordinary "safe" code. `Ref[T]` is the home for a resource that **escapes its
 scope** — a handle opened and closed within a single scope wants `defer` instead (Language Reference).
@@ -144,7 +155,7 @@ boundary, copy" ethos — **copied into Zerg, borrowed out to C**:
   owns outright, freed by the ordinary scope rule.
 - **A buffer or resource C allocated that _Zerg must later free_** — does **not** come back as
   `str`/`list` (that would leak C's original after Zerg copies it). It comes back as an **opaque handle**,
-  paired with an explicit `extern` free the wrapper calls as a `Ref[T]`'s `drop` (see Opaque handles).
+  paired with an explicit **foreign free** the wrapper calls as a `Ref[T]`'s `drop` (see Opaque handles).
   There's no implicit free of foreign memory — ever.
 
 ## Exporting a package (Zerg → C)
@@ -173,17 +184,32 @@ declaration name (a method also carrying its type, e.g. `zg_<pkg>_<name>` / `zg_
 A clash on the flat exported surface is a compile error in library mode. (The exact scheme, and any
 per-declaration link-name override, are open questions — see below.)
 
-## Importing C (`extern`)
+## Importing C — a stdlib facility
 
-An `extern "C"` block is the sole doorway for a foreign symbol into Zerg. Each item names a C function,
-opaque type, or symbol **verbatim** — no mangling is applied, the linker name is taken as written. An
-`extern` signature is type-checked as FFI-safe like any boundary declaration.
+There is **no `extern` keyword and no import block** in the grammar. Binding a foreign C symbol — naming
+`sqlite3_open` so Zerg may call it — is a **stdlib facility**: the stdlib resolves a linker symbol
+**verbatim** (no mangling, the name taken as written) into an **`unsafe fn`**-typed callable whose
+signature you supply, type-checked as FFI-safe like any boundary declaration.
 
-`extern` is **raw**: it mirrors the C contract exactly and carries none of C's error conventions into
+**A foreign call is `unsafe`.** Calling such a binding is legal **only inside an `unsafe` context**. The
+current unsafe model has three shapes: an **`unsafe { … }` block-expression** in a function body (it
+yields the block's value, as in `open` above); a standalone **`unsafe fn`**, unsafe throughout its body
+and callable only from unsafe; and a **module-level `unsafe { … }`** that **groups declarations** in an
+unsafe context (a `fn` inside is an unsafe fn, a `mut` binding is a mutable global). There is **no
+`unsafe mut` prefix**. Inside any of them the compiler makes no safety guarantee across the foreign call —
+the thin wrapper you write is where you vouch. Group the raw bindings and their wrappers together:
+
+```text
+unsafe {
+    fn raw_open(path: str, mut &db: handle?) -> int { sqlite3_open(path, db) }
+}
+```
+
+The binding is **raw**: it mirrors the C contract exactly and carries none of C's error conventions into
 Zerg. A C function that signals failure by `errno`, a return code, or a `NULL` result returns those raw
-to Zerg; the **thin, hand-written wrapper** is what maps them into the null-safety model —
-`res.ok_or(err)`, an early `return nil`, or a constructed `Either`. Nothing's automatic, and that's
-exactly what keeps the mapping explicit and auditable.
+to Zerg; the **thin, hand-written wrapper** — running the call inside `unsafe` — is what maps them into
+the null-safety model: `res.ok_or(err)`, an early `return nil`, or a constructed `Either`. Nothing's
+automatic, and that's exactly what keeps the mapping explicit and auditable.
 
 ## Errors across the boundary
 
@@ -210,10 +236,10 @@ C layout of that discriminant is a deferred detail — see Open questions.)
 ## Concurrency across the boundary
 
 Zerg's concurrency — `spawn` on the M:N scheduler, and `chan` — is **runtime-internal and does not
-cross**. `chan` and coroutine handles are not FFI-safe and may not appear in an `extern` signature or on
-the exported surface; results and completion still travel by channel **inside** Zerg only.
+cross**. `chan` and coroutine handles are not FFI-safe and may not appear in a foreign binding's signature
+or on the exported surface; results and completion still travel by channel **inside** Zerg only.
 
-- **A blocking `extern` call blocks its OS thread.** The scheduler multiplexes many coroutines onto few
+- **A blocking foreign call blocks its OS thread.** The scheduler multiplexes many coroutines onto few
   OS threads; a C call that blocks (a syscall, a sleep) parks the whole underlying thread, so coroutines
   sharing it do not advance. Prefer non-blocking C APIs, or treat a long blocking call as
   thread-occupying. How the runtime sizes or grows that thread pool is an implementation detail (TBD).
@@ -237,17 +263,17 @@ spec)` implementations simply never appear at the C boundary. FFI trades in conc
   functions, not abstraction.
 - **`main`** is unaffected — a library build has no `main`; its `Result[nil]` exit model concerns
   programs, not exported libraries.
-- **The prelude & std** are not involved in the mechanism: opaque handles and `extern` are language-level,
-  built into the toolchain like the primitive keywords. std may still offer convenience helpers (e.g. a
-  `str` ⇄ C-string bridge), but they ride the same rules above.
-- **Testing** treats `extern` and exported code as ordinary code under the usual visibility rules; a
-  black-box test may link the generated header, exactly as a C dependent would.
+- **The prelude & std** _are_ the import mechanism: the `handle` token and the symbol-binding facility
+  are **stdlib**, riding on the language-level `unsafe` boundary and `Ref[T]` — not new keywords. std may
+  also offer convenience helpers (e.g. a `str` ⇄ C-string bridge), all under the same rules above.
+- **Testing** treats foreign bindings and exported code as ordinary code under the usual visibility rules;
+  a black-box test may link the generated header, exactly as a C dependent would.
 
 ## Open questions
 
 Deferred for a later design pass — none blocks the model above:
 
-- **C-width integer aliases** (`c_int`, `c_uint`, `c_size`, `c_long`, …) so an `extern` signature can name
+- **C-width integer aliases** (`c_int`, `c_uint`, `c_size`, `c_long`, …) so a foreign binding can name
   C's platform-width integers, not just Zerg's fixed widths.
 - The concrete **C layout of a tagged union** (discriminant type, variant values, member names,
   alignment) that a C caller reads as `.tag`.
@@ -258,8 +284,8 @@ Deferred for a later design pass — none blocks the model above:
 - The exact **stable-symbol scheme**, and whether a per-declaration **link-name override** is offered.
 - Library mode on a non-FFI-safe public declaration: **skip-with-diagnostic** (current lean) vs. a hard
   error.
-- The scheduler's policy for **blocking `extern` calls** (thread-pool growth) — a runtime detail.
-- Whether `extern` will ever name **ABIs other than `"C"`**; only `"C"` is defined today.
+- The scheduler's policy for **blocking foreign calls** (thread-pool growth) — a runtime detail.
+- Whether the import facility will ever bind **ABIs other than `"C"`**; only `"C"` is defined today.
 - A compile-time **`sizeof` / `alignof`** — a type's size and alignment as a constant, now that the layout is
   fixed (see [Values & Memory](memory.md)) — is a **stdlib** facility, deferred until a
   concrete need; it is not a core-language construct.

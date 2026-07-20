@@ -246,10 +246,10 @@ one else holds the state there is no data race.
 ```text
 enum Cmd {
     Add(int)                  # a write
-    Get(chan[int].send)       # a read — carries a reply channel
+    Get(chan[int]<-)          # a read — carries a reply channel
 }
 
-fn counter(inbox: chan[Cmd].recv) {
+fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # the state: a plain mut int, owned here alone
     for cmd in inbox {               # drains until the last sender leaves
         match cmd {
@@ -279,7 +279,7 @@ exits and the channel closes, and the closing `StopIteration` ends the loop. The
 no generator type; the `send` is the yield.
 
 ```text
-fn range_gen(lo: int, hi: int, out: chan[int].send) {
+fn range_gen(lo: int, hi: int, out: chan[int]<-) {
     mut n := lo
     for n < hi {
         out <- n            # "yield" n — blocks until the consumer takes it

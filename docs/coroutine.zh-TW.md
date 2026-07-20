@@ -219,10 +219,10 @@ data race。
 ```text
 enum Cmd {
     Add(int)                  # 寫
-    Get(chan[int].send)       # 讀——夾帶回覆用的 channel
+    Get(chan[int]<-)          # 讀——夾帶回覆用的 channel
 }
 
-fn counter(inbox: chan[Cmd].recv) {
+fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # state：一個普通 mut int，只有這裡獨佔
     for cmd in inbox {               # drain 到最後一個 sender 離場
         match cmd {
@@ -250,7 +250,7 @@ channel _就是_ `Iterator`：它一直 yield 值，直到 producer 的 scope �
 結束迴圈。沒有 `yield` 關鍵字、沒有 generator 型別；`send` 就是 yield。
 
 ```text
-fn range_gen(lo: int, hi: int, out: chan[int].send) {
+fn range_gen(lo: int, hi: int, out: chan[int]<-) {
     mut n := lo
     for n < hi {
         out <- n            # 「yield」n——block 到消費者取走為止

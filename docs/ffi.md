@@ -72,7 +72,7 @@ needs a set of boundary-only C-width aliases (`c_int`, `c_uint`, `c_size`, …).
 
 ## Opaque handles — foreign resources without a pointer
 
-Zerg has **no pointer surface** and is **safe by default**, so FFI must not smuggle a dereferenceable
+Zerg has **no safe pointer surface** and is **safe by default**, so FFI must not smuggle a dereferenceable
 raw pointer into the language. It doesn't. A foreign resource crosses as an **opaque handle** — the
 stdlib's pointer-shaped **`handle`** token, which Zerg can hold but never inspect. There is **no bodyless
 type declaration** for it (a bare `type sqlite3` does not parse — `type` is a strong typedef and needs a
@@ -129,12 +129,10 @@ the name in the signature. A C function that fills a caller's **byte buffer in p
 mechanism (it writes _through_ a pointer, not a value copy-back); that write-back protocol is deferred
 (see Open questions).
 
-**The `Ref[handle]` makes the close exact.** Copying a `Db` refcount-bumps the box instead of duplicating
-a bare token, and the `drop` — the paired `sqlite3_close` — runs **once**, when the last `Db` leaves scope
-(or is `del`-ed). This is the guarantee a bare `struct Db { h: handle }` can't give, where two copies
-would each try to close one connection; the private field keeps the raw token from escaping, so the
-guarantee holds through ordinary "safe" code. `Ref[T]` is the home for a resource that **escapes its
-scope** — a handle opened and closed within a single scope wants `defer` instead (Language Reference).
+A bare `struct Db { h: handle }` **can't** give that once-only close: two copies would each try to close
+the one connection. The private field keeps the raw token from escaping, so the guarantee holds through
+ordinary "safe" code. `Ref[T]` is the home for a resource that **escapes its scope** — a handle opened
+and closed within a single scope wants `defer` instead (Language Reference).
 
 ## Ownership & lifetime at the boundary
 
@@ -154,13 +152,12 @@ boundary, copy" ethos — **copied into Zerg, borrowed out to C**:
 - **Plain scalar values returned from C** — a `struct` of scalars, an `int`, a `bool`: a copy Zerg now
   owns outright, freed by the ordinary scope rule.
 - **A buffer or resource C allocated that _Zerg must later free_** — does **not** come back as
-  `str`/`list` (that would leak C's original after Zerg copies it). It comes back as an **opaque handle**,
-  paired with an explicit **foreign free** the wrapper calls as a `Ref[T]`'s `drop` (see Opaque handles).
-  There's no implicit free of foreign memory — ever.
+  `str`/`list` (that would leak C's original after Zerg copies it) but as an **opaque handle** with an
+  explicit paired **foreign free** (see Opaque handles). There's no implicit free of foreign memory — ever.
 
 ## Exporting a package (Zerg → C)
 
-There's **no export keyword**. A package's C ABI is exactly its **package-public surface** — the `pub`
+A package's C ABI is exactly its **package-public surface** — the `pub`
 declarations re-exported on the **root module** (see [package.md](package.md), "Visibility"). Any such
 `pub` declaration is a candidate C entry point; the boundary adds nothing to say so.
 
@@ -186,7 +183,7 @@ per-declaration link-name override, are open questions — see below.)
 
 ## Importing C — a stdlib facility
 
-There is **no `extern` keyword and no import block** in the grammar. Binding a foreign C symbol — naming
+There is **no import block** in the grammar either. Binding a foreign C symbol — naming
 `sqlite3_open` so Zerg may call it — is a **stdlib facility**: the stdlib resolves a linker symbol
 **verbatim** (no mangling, the name taken as written) into an **`unsafe fn`**-typed callable whose
 signature you supply, type-checked as FFI-safe like any boundary declaration.
@@ -258,14 +255,12 @@ or on the exported surface; results and completion still travel by channel **ins
 
 FFI adds no exception to the existing models — it mostly falls out of them:
 
-- **Coherence & the orphan rule** are untouched: specs and existentials are not FFI-safe, so `(type,
-spec)` implementations simply never appear at the C boundary. FFI trades in concrete data and
-  functions, not abstraction.
-- **`main`** is unaffected — a library build has no `main`; its `Result[nil]` exit model concerns
-  programs, not exported libraries.
+- **Coherence & the orphan rule** are untouched: specs and existentials are not FFI-safe, so a `(type,
+spec)` implementation never appears at the C boundary.
+- **`main`** is unaffected — a library build has no `main`.
 - **The prelude & std** _are_ the import mechanism: the `handle` token and the symbol-binding facility
-  are **stdlib**, riding on the language-level `unsafe` boundary and `Ref[T]` — not new keywords. std may
-  also offer convenience helpers (e.g. a `str` ⇄ C-string bridge), all under the same rules above.
+  are **stdlib**, riding on the language-level `unsafe` boundary and `Ref[T]`; std may also offer
+  convenience helpers (e.g. a `str` ⇄ C-string bridge), under the same rules above.
 - **Testing** treats foreign bindings and exported code as ordinary code under the usual visibility rules;
   a black-box test may link the generated header, exactly as a C dependent would.
 

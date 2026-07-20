@@ -48,10 +48,9 @@ On a boxed value, **unary** operations dispatch to the real type and work: its s
 (producing an independent box — a contained `Ref` refcount-bumps) and `debug`, and the structural memory
 ops (`del`, pass, store, send). The **binary same-type** operations — `equal` / `==`, `Ord` comparison,
 and so `Hash` keying — **do not**: their `other: This` operand is exactly the concrete type erasure
-removes, and `is` only tests identity — it never hands the value back to supply that operand. Two boxed
-values are therefore **never comparable by value**, consistent with the one-way erasure. Box a value to
-dynamically dispatch its spec's methods; to compare, sort, or key it, keep the concrete type (a
-monomorphized `[T: S]` bound).
+removes, and `is` tests only identity, never supplying it. Two boxed values are therefore **never
+comparable by value**. Box a value to dynamically dispatch its spec's methods; to compare, sort, or key
+it, keep the concrete type (a monomorphized `[T: S]` bound).
 
 The same bar falls on two further member kinds: a spec's **associated functions** (`default() -> This`,
 `zero()` — receiver-less, so a box gives nothing to dispatch _from_) and its **generic methods** (a vtable
@@ -76,20 +75,18 @@ the compiler auto-derives rather than the user writing.
 
 Because specs are nominal, two independently declared specs may share a method name. A type can still
 implement both and be used as either one on its own — the ambiguity exists only where a single value
-must satisfy **both at once** (a `T: X + Y` bound, or a value typed as `X + Y`). Zerg rejects that combination
-at compile time rather than adding fully-qualified call syntax to disambiguate; to share one method
-across specs, have them obtain it from one shared spec. Where a spec may be implemented across package
-boundaries, and how coherence stays globally unique, is the
+must satisfy **both at once** (a `T: X + Y` bound, a value typed as `X + Y`, or a bare `x.foo()` on a value
+implementing both). Zerg rejects that at compile time rather than adding fully-qualified call syntax to
+disambiguate — resolve it by narrowing the static context to one spec (a single-spec bound `[T: X]`, or a
+spec-typed value); to share one method across specs, have them obtain it from one shared spec. Where a spec
+may be implemented across package boundaries, and how coherence stays globally unique, is the
 [Modules, Packages & Programs](package.md) reference.
 
 **A name resolved on a concrete value must name exactly one method** — the same anti-ambiguity rule, now at
 a concrete call. An **inherent method may not share a name with any spec method the type implements**: a
 compile error at the implementation. To give a type its own version of a spec method, **override** it
 (dispatch stays canonical); inherent methods are for behavior _outside_ any spec, so a collision is a
-mistake, not a priority to resolve. And when a type implements two specs that share a method name, the impls
-are fine — but a bare **`x.foo()` is then ambiguous and rejected**; you resolve it by narrowing the static
-context to one spec (a single-spec bound `[T: X]`, or a spec-typed value), never by qualifying the call —
-exactly as the `T: X + Y` bound is rejected above.
+mistake, not a priority to resolve.
 
 **A spec may require a super-spec.** After the spec's name, `: Bound` names one or more specs every
 implementer must **also** implement — `spec Ord: Eq` makes an `impl Ord` also require `impl Eq`, and a
@@ -136,12 +133,10 @@ than by the argument's type, use an `enum` instead.
 
 ## Type tests — `is`
 
-An existential hides the value but not its **identity**: **`x is T`** asks "is the boxed value's concrete
-type `T`?" and yields a **`bool`**. It is a pure query — it reads the dispatch identity every existential
-box already carries, **recovers no value and reads no field** — so it is not a downcast and adds no
-reinterpret to the language ([Type Conversion](types.md)). `T` must implement the spec `x` is typed as, else the test
-is statically impossible and rejected; on a value whose concrete type is **already known** (not an
-existential) the answer is a compile-time constant.
+An existential hides the value but not its **identity** — the `x is T` test introduced above. It is not a
+downcast and adds no reinterpret to the language ([Type Conversion](types.md)). `T` must implement the spec
+`x` is typed as, else the test is statically impossible and rejected; on a value whose concrete type is
+**already known** (not an existential) the answer is a compile-time constant.
 
 Because `is` never yields the concrete value, it drives **control flow, not data access**: you may branch
 on "is this a `T`?", but to read a `T`'s own fields you must **already hold the concrete type** — one you
@@ -221,9 +216,7 @@ fixed-array size (`[byte; Buffer.SIZE]`, see [Collections](collections.md)). Vis
 A type constant is the **impl side** of the associated-value machinery (above): a plain `NAME := …` is a
 `val-bind` no spec demanded, while a spec's `BITS: int` is the same `val-bind` a spec _requires_. So a
 per-type _value_ that a spec must guarantee is an **associated value** — `MAX: This` required, each impl
-supplying `MAX := …`, generic code reading `T.MAX` — **not** a receiver-less function. (An associated
-**function** `fn max() -> This` is for a value that must be _computed_; an associated **value** is for one
-the compiler can _fold_.)
+supplying `MAX := …`, generic code reading `T.MAX` — **not** a receiver-less function.
 
 ## Built-in specs
 
@@ -249,9 +242,8 @@ type is boxed here?", never "are these two the same value?".
   `<=` `>` `>=` and sort derive from it with `equal`, and `min` / `max` / `clamp` are ordinary stdlib helpers
   over an `Ord` bound — there is **no three-way `Ordering`** value, only `less` and `equal`. `str` orders
   **lexicographically by code point** (== byte order, its UTF-8 being valid — not locale collation, a
-  separate stdlib concern); `float` does **not** implement it.
-- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key;
-  `float` does **not** implement it.
+  separate stdlib concern); `float` opts out of both `Ord` and `Hash` (rationale below).
+- **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key.
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).
 - **`Error`** (`Err`) — the error tier: `message() -> str`, `unwrap() -> Err?` (the underlying cause,
   `nil` if none), and `code() -> byte?` (an optional small code).

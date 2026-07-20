@@ -33,9 +33,8 @@ boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不�
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
 **binary same-type** 操作——`equal` / `==`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
-運算元正是抹除掉的具體型別，而 `is` 只測身分、絕不把值交回來供給它。兩個 boxed 值因此**永遠不能以值比較**，與單向
-抹除一致。box 一個值是為了動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的
-`[T: S]` bound）。
+運算元正是抹除掉的具體型別，而 `is` 只測身分、絕不把它交回。兩個 boxed 值因此**永遠不能以值比較**。box 一個值是為了
+動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的 `[T: S]` bound）。
 
 同一道關卡也落在另外兩類成員上：spec 的 **associated function**（`default() -> This`、`zero()`——無 receiver，box
 沒有可供分派的 _起點_）與它的**泛型 method**（vtable 每個型別一格、而非每個型別實參一格）。兩者都需要一個**具名的
@@ -53,16 +52,15 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 解析可判定。唯一「所有型別都有」的情況是 `Object`，由編譯器 auto-derive、而非使用者手寫。
 
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
-歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、或型別為 `X + Y` 的值）。Zerg 在編譯期**拒絕
-這個組合**，而不引入 fully-qualified 呼叫語法來消歧；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
+歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、型別為 `X + Y` 的值、或對同時實作兩者的值
+做裸 `x.foo()`）。Zerg 在編譯期**拒絕它**、而不引入 fully-qualified 呼叫語法來消歧——你把靜態脈絡收窄到單一 spec
+來解（單 spec 的 `[T: X]` bound、或 spec-typed 值）；要讓一個 method 被多個 spec 共用，就讓它們**源自同一個共享
 spec**。spec 可跨 package 邊界實作到什麼程度、以及 coherence 如何維持全域唯一，見
 [Module、Package 與 Program](package.zh-TW.md)。
 
 **在具體值上解析出的名字必須恰指一個 method**——同一條反歧義規則,現在落在具體呼叫。**inherent method 不得與型別
 所實作的任何 spec method 撞名**:在 impl 處 compile error。想給型別「自己版本的 spec method」,就**override** 它
 (dispatch 仍 canonical);inherent method 是給「*不屬於*任何 spec 的行為」用的,所以撞名是誤用、不是要去排優先序。
-而當一個型別實作了兩個撞名的 spec,實作本身沒問題——但裸的 **`x.foo()` 就有歧義、被拒**;你把靜態脈絡收窄到單一
-spec 來解(單 spec 的 `[T: X]` bound、或 spec-typed 值),**絕不靠 qualify 呼叫**——正如上面 `T: X + Y` bound 被拒。
 
 **一個 spec 可以要求 super-spec。** 在 spec 名字之後，`: Bound` 指名每個 implementer **也**必須實作的一或多個
 spec——`spec Ord: Eq` 讓 `impl Ord` 也要求 `impl Eq`，而 `+` 連接則要求多個（`spec Sorted: Ord + Hash`）。
@@ -100,10 +98,9 @@ impl[T] Indexable[Range] for list[T] { type Output = list[T]; fn index(r: Range)
 
 ## 型別測試（Type tests）——`is`
 
-existential 藏起值、但沒藏起**身分**：**`x is T`** 問「這個 boxed 值的具體型別是不是 `T`」、產出一個 **`bool`**。它是
-純查詢——讀每個 existential box 本就帶著的 dispatch 身分，**不還原任何值、不讀任何欄位**——所以它不是 downcast、也不
-為語言添加任何 reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所定型的那個 spec，否則測試靜態上不可能、會被拒；對一個
-具體型別**已知**（非 existential）的值，答案是編譯期常數。
+existential 藏起值、但沒藏起**身分**——就是上面介紹過的 `x is T` 測試。它不是 downcast、也不為語言添加任何
+reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所定型的那個 spec，否則測試靜態上不可能、會被拒；
+對一個具體型別**已知**（非 existential）的值，答案是編譯期常數。
 
 因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
 你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
@@ -167,8 +164,7 @@ impl 固定——而非逐次使用時另選，像帶參數的 `Iterable[T]` 會
 型別常數是 associated-value 機制（見上）的 **impl 端**：一個純粹的 `NAME := …` 是沒有 spec 要求的 `val-bind`，而一個
 spec 的 `BITS: int` 是同一個、被 spec *要求*的 `val-bind`。所以一個 spec 必須保證的「每型別的*值*」是一個
 **associated value**——`MAX: This` 被要求、每個 impl 供給 `MAX := …`、泛型端讀 `T.MAX`——**而非**無 receiver 的
-function。（associated **function** `fn max() -> This` 是給必須*計算*的值；associated **value** 是給 compiler 能
-*摺疊*的值。）
+function。
 
 ## 內建 spec（Built-in specs）
 
@@ -192,8 +188,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 - **`Ord`**——一個與 `equal` 一致的 **total** order,由**單一必需的 `less`**(`<`)定義;`<=` `>` `>=` 與 sort 都由它
   配 `equal` 導出,而 `min` / `max` / `clamp` 是建在 `Ord` bound 上的普通 stdlib helper——**沒有三路 `Ordering`**
   值,只有 `less` 與 `equal`。`str` 依 **code point 字典序**排序(＝ byte 序,因其 UTF-8 有效——非 locale
-  collation,那是另一個 stdlib 功能);`float` **不**實作。
-- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key；`float` **不**實作。
+  collation,那是另一個 stdlib 功能);`float` 同時退出 `Ord` 與 `Hash`(理由見下)。
+- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key。
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
   `code() -> byte?`（可選小碼）。

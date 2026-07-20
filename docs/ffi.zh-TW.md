@@ -66,7 +66,7 @@ FFI 有兩個方向，它們刻意重用你已經有的機制，而不是各自�
 
 ## Opaque handle——沒有指標的外部資源
 
-Zerg **沒有 pointer surface** 且 **safe by default**，所以 FFI 不能把一個可解參考的裸指標偷渡進語言。它也確實
+Zerg **沒有安全的 pointer surface** 且 **safe by default**，所以 FFI 不能把一個可解參考的裸指標偷渡進語言。它也確實
 沒有。外部資源以 **opaque handle** 跨界——即 stdlib 那個指標形狀的 **`handle`** token，Zerg 能持有卻永遠無法
 窺看。它**沒有無主體的型別宣告**（裸的 `type sqlite3` 無法 parse——`type` 是強 typedef、需要右手邊）；raw token
 就是 stdlib 的 `handle`，而一個具名資源是包在你自己擁有的 newtype 裡的 `Ref[handle]`（與 [Process 與 I/O](io.zh-TW.md)
@@ -113,11 +113,9 @@ out-parameter 之所以成立，是因為 handle 是一個**以值寫回的 scal
 （見語言參考），沒有新東西；注意簽章裡的 `mut &` 標記在名字**之前**。一個**就地填入呼叫端 byte buffer** 的
 C 函式是另一種機制（它透過指標*寫入*，不是值的寫回）；那個 write-back 協定尚待決定（見「待決問題」）。
 
-**`Ref[handle]` 讓 close 精確。** 複製一個 `Db` 是對盒子 refcount-bump、而非複製裸 token，其 `drop`——配對的
-`sqlite3_close`——在最後一個 `Db` 離開 scope（或被 `del`）時**跑一次**。這正是裸的 `struct Db { h: handle }` 給不了
-的保證——那裡兩份 copy 會各自試圖關掉同一條連線；而私有欄位讓裸 token 無法逸出，於是這個保證在普通的「安全」
-程式碼中也成立。`Ref[T]` 是**逃出 scope** 的資源之家——在單一 scope 內開啟並關閉的 handle 應改用 `defer`
-（見語言參考）。
+裸的 `struct Db { h: handle }` **給不了**這個只關一次的保證——兩份 copy 會各自試圖關掉同一條連線；而私有欄位讓裸
+token 無法逸出，於是這個保證在普通的「安全」程式碼中也成立。`Ref[T]` 是**逃出 scope** 的資源之家——在單一 scope
+內開啟並關閉的 handle 應改用 `defer`（見語言參考）。
 
 ## 邊界上的所有權與生命週期
 
@@ -133,12 +131,12 @@ Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與
 - **C 回傳的一般 scalar 值**——一個純 scalar 的 `struct`、一個 `int`、一個 `bool`：Zerg 現在完全擁有的一份副本，
   由普通 scope 規則釋放。
 - **C 配置、且 _Zerg 之後必須釋放_ 的 buffer 或資源**——**不**以 `str`／`list` 回來（那會在 Zerg 複製後洩漏 C 的
-  原件），而是以一個 **opaque handle** 回來，配一個明確、由 wrapper 以 `Ref[T]` 的 `drop` 呼叫的**外部 free**
-  （見 opaque handle）。外部記憶體永遠不會被隱式釋放——一次都不會。
+  原件），而是以一個 **opaque handle** 回來、配一個明確、配對的**外部 free**（見 opaque handle）。外部記憶體
+  永遠不會被隱式釋放——一次都不會。
 
 ## 匯出一個 package（Zerg → C）
 
-**沒有 export 關鍵字**。一個 package 的 C ABI 恰好就是它的 **package-public surface**——在 **root module** 上
+一個 package 的 C ABI 恰好就是它的 **package-public surface**——在 **root module** 上
 被 re-export 的那些 `pub` 宣告（見 [package.zh-TW.md](package.zh-TW.md)「可見性」）。任何這樣的 `pub` 宣告都是
 候選的 C 進入點；邊界不需要多加任何標記來宣告這件事。
 
@@ -160,7 +158,7 @@ struct by value、`mut &this` 變成指向它的指標（就地）——所以�
 
 ## 匯入 C——一個 stdlib 設施
 
-grammar 裡**沒有 `extern` 關鍵字、也沒有匯入區塊**。綁定一個外部 C 符號——把 `sqlite3_open` 命名出來讓 Zerg
+grammar 裡也**沒有匯入區塊**。綁定一個外部 C 符號——把 `sqlite3_open` 命名出來讓 Zerg
 可呼叫——是一個 **stdlib 設施**：stdlib 把一個 linker 符號**原封不動**（不 mangle、名字照字面採用）解析成一個
 **`unsafe fn`** 型別的可呼叫值，其簽章由你提供，並與任何邊界宣告一樣被檢查為 FFI-safe。
 
@@ -223,11 +221,10 @@ handle 並非 FFI-safe，不得出現在外部綁定的簽章或匯出面上；�
 FFI 不對既有模型新增例外——它多半是從中推導出來的：
 
 - **coherence 與 orphan rule** 毫髮無傷：spec 與 existential 並非 FFI-safe，所以 `(type, spec)` 實作根本不會
-  出現在 C 邊界。FFI 交易的是具體資料與函式，不是抽象。
-- **`main`** 不受影響——library 建置沒有 `main`；它的 `Result[nil]` 退出模型關乎 program，而非匯出的 library。
+  出現在 C 邊界。
+- **`main`** 不受影響——library 建置沒有 `main`。
 - **prelude 與 std** _就是_ 匯入機制：`handle` token 與符號綁定設施都是 **stdlib**，依附在語言層級的 `unsafe`
-  邊界與 `Ref[T]` 之上——並非新的關鍵字。std 也可提供便利輔助（例如一個 `str` ⇄ C-string 橋接），全都遵循上述
-  同一套規則。
+  邊界與 `Ref[T]` 之上；std 也可提供便利輔助（例如一個 `str` ⇄ C-string 橋接），全都遵循上述同一套規則。
 - **測試**把外部綁定與匯出程式碼當作普通程式碼、依常規可見性規則處理；一個黑箱測試可以連結產生出的 header，
   完全如同一個 C 依賴者。
 

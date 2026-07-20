@@ -309,7 +309,7 @@ fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list?
 fn-expr    ::= 'fn' '(' closure-param-list? ')' ret-type? block   # anonymous — never generic/unsafe; types inferrable
 fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
-return     ::= 'return' expr?
+return     ::= 'return' expr? ( 'if' expr )?     # 'return x if c' — conditional early exit (sugar)
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
 param-type ::= ( 'mut' '&' )? type
 closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': type' optional in a closure
@@ -327,7 +327,10 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': t
   instead: **accumulate** with a `for` loop (`for x in xs { sum = sum + x }`), keep **state** in a `struct`
   with a `mut fn`, and share **concurrent** state through a `chan`.
 - **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
-  function returns `nil`.
+  function returns `nil`. A **trailing `if`** makes it conditional — `return MAX if v > MAX` is sugar for
+  `if v > MAX { return MAX }` (and bare `return if done`), the same postfix `if` as `break if` / `continue
+if`; on a false condition control falls through. A leading `if` _with a block_ is instead an if-expression
+  being returned (`return if c { a } else { b }`); the conditional-return `if` takes a bare condition, no block.
 - **Parameters.** A parameter passes **by value** (a copy) and may carry a **default** `= expr`. A **named
   argument** at the call is `name: value` (the `arg` form from group 4): positional arguments come first,
   then any may be named, and once one is named the rest must be too — which is what lets a defaulted

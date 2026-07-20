@@ -286,7 +286,7 @@ fn-decl    ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list?
 fn-expr    ::= 'fn' '(' closure-param-list? ')' ret-type? block   # 匿名——永不泛型、永不 unsafe;參數型別可推斷
 fn-type    ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?
 ret-type   ::= '->' type
-return     ::= 'return' expr?
+return     ::= 'return' expr? ( 'if' expr )?     # 'return x if c'——條件式提前離開（sugar）
 param      ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?
 param-type ::= ( 'mut' '&' )? type
 closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # closure 內 ': type' 可省
@@ -300,7 +300,10 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # clos
   value 語意下改捕獲對外本就不可見、無 GC 的 by-ref 捕獲會懸空、而 immutable 捕獲正是讓 `spawn` 的 closure
   **無 data race** 的原因。可變 closure 想做的三件事各有對應慣用法:用 `for` 迴圈**累加**
   （`for x in xs { sum = sum + x }`）、把**狀態**放進帶 `mut fn` 的 `struct`、用 `chan` 傳遞**並行**狀態。
-- **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。
+- **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。**尾隨
+  `if`** 使其條件化——`return MAX if v > MAX` 是 `if v > MAX { return MAX }` 的 sugar（亦可 bare `return if done`），
+  與 `break if` / `continue if` 同一個後置 `if`;條件為 false 時直接落下。開頭的 `if` _帶 block_ 則是回傳一個
+  if-expression（`return if c { a } else { b }`）;條件式 return 的 `if` 只取裸條件、不帶 block。
 - **參數。** 參數**以值傳遞**（copy），可帶**預設值** `= expr`。call 端的 **named argument** 是 `name: value`
   （group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，一旦具名其餘也須具名——這正是能跳過有預設值
   參數的方式。

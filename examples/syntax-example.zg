@@ -107,7 +107,10 @@ spec Bounded {
 }
 impl Bounded for Counter {
     MAX := 100
-    fn clamp(v: int) -> int { return if v > MAX { MAX } else { v } }
+    fn clamp(v: int) -> int {
+        return MAX if v > MAX          # conditional early exit (sugar); falls through when false
+        return v
+    }
 }
 
 # a value generic: N is a compile-time value, inferred from the array argument (group 7)

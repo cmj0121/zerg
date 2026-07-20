@@ -282,7 +282,12 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # A function is a first-class value. A declaration binds a name (top level, or a
 # module item); an anonymous function is an expression — a closure over immutable
 # captures. 'return' exits, optionally with a value; an absent '-> type' means the
-# function returns nil. A parameter passes BY VALUE (a copy); 'mut &x' instead passes a
+# function returns nil. A trailing 'if' makes it CONDITIONAL — 'return expr if cond' is sugar
+# for 'if cond { return expr }' (and 'return if cond' for a bare early exit), the same postfix
+# 'if' as 'break if' / 'continue if' (group 6); on a false cond, control falls through.
+# DISAMBIGUATION: a leading 'if' whose condition is followed by a '{' block is instead an
+# if-EXPRESSION being returned ('return if c { a } else { b }' yields a value); the conditional-
+# return 'if' takes a bare condition and NO block. A parameter passes BY VALUE (a copy); 'mut &x' instead passes a
 # mutable reference (below). A parameter may carry a default; a call fills parameters
 # positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
 
@@ -296,7 +301,7 @@ fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a functio
 # receiver, so it is never 'mut fn'. This tracks mutation of the value's own Zerg-owned
 # fields — not effects on a resource behind a Ref[T]/foreign handle, which need no 'mut'.
 ret-type     ::= '->' type
-return       ::= 'return' expr?
+return       ::= 'return' expr? ( 'if' expr )?    # 'return x if c' — conditional early exit (sugar)
 
 # PARAMETERS pass BY VALUE (a copy). 'mut &x' passes a MUTABLE REFERENCE: the callee may
 # change x and the change AFFECTS the caller's argument. Two independent controls meet —

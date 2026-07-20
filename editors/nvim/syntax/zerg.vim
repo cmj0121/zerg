@@ -46,7 +46,7 @@ syntax keyword zergKeyword mut pub extern package init
 " Type- and function-declaring keywords carry a nextgroup, so the declared NAME
 " (fn/struct/enum/spec/type) highlights the same as a function name — see
 " zergDeclName. Anonymous `fn(...)` has no name and stays plain.
-syntax keyword zergKeyword fn struct enum spec type skipwhite nextgroup=zergDeclName
+syntax keyword zergKeyword fn struct enum spec type const skipwhite nextgroup=zergDeclName
 
 " Keyword operators (the word-form logical/type/binding operators).
 syntax keyword zergOperator not and or is in as from

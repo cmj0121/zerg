@@ -372,23 +372,27 @@ type        ::= base-type '?'?
 base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' 投影;可鏈式 'I.Item.Sub'
               | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
-array-type  ::= '[' type ';' expr ']'
+array-type  ::= '[' type ';' const-expr ']'   # N 是 const-expr
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
+const-decl  ::= 'pub'? 'const' identifier ( ':' type )? '=' const-expr
+const-expr  ::= expr                          # 可於編譯期摺疊（語意限制）
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
-impl-item   ::= fn-decl | assoc-bind          # 方法／關聯函式，或 associated type 的綁定
+impl-item   ::= fn-decl | assoc-bind | const-decl   # 方法／關聯函式、assoc type 綁定，或 assoc const
 assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' 滿足 spec 的 assoc type
-spec-member ::= fn-sig | fn-decl | assoc-type
+spec-member ::= fn-sig | fn-decl | assoc-type | assoc-const
 assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item'（可加 bound）
+assoc-const ::= 'const' identifier ':' type ( '=' const-expr )?   # 必要，或帶預設值
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # 選用的 spec bound
 bound       ::= type-name ( '+' type-name )*  # spec 的合取
 decorated-decl ::= decorator* declaration   # decorator 前綴可領任何宣告（group 1）
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
+deco-arg    ::= type-name | const-expr        # derive(Encode, Decode)、align(16)、align(SIZE*2)
 ```
 
 - **Type 表達式。** 一個**名字**加選用**型別引數**（`int`、`User`、`list[int]`、`Either[A, B]`）；一個 **tuple
@@ -414,6 +418,13 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** 把 `T(...)` 降為模組私有,外部須改走公開的
   自訂 constructor——模組內部仍以 `T(...)` 建。
 - **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
+- **編譯期常數（`const`）。** `const NAME: T = expr` 命名一個**編譯期摺疊**、**無 runtime 儲存**的值——與 module-level
+  `:=`（不可變但於 init 求值）不同。`const` 可用於任何需要編譯期值之處——陣列長度 `[T; N]`、enum discriminant、
+  decorator 引數——**也可當作一般值**（傳遞、比較、以 equality 於 pattern 比對）。型別可選；裸數值 const 維持 untyped
+  並採用其使用點型別。它**非 lvalue**（不可 `=`、不可 `del`），且**雙向 shadow-proof**——無綁定可遮蔽 `const`，
+  `const` 亦不可遮蔽既有可見綁定，故其名字在整個 scope 內只代表一個值。`const-expr` 是受限的 `expr`：literal、其他
+  const、discriminant 與運算子；**尚無 function call**（故 `sizeof`/`len` 不是 const-expr）。`const` 可宣告於 module
+  層級、局部，或在 `spec`/`impl` 作為 **associated const**（`const BITS: int`），即 associated type 的值對應物。
 - **泛型與 bound。** 參數列 `[T, …]` 可對各參數加 spec 約束——`[T: Ord]`、`+` 合取 `[K: Hash + Eq, V]`。同一套
   `bound` 也是 spec 的 **super-spec**(`spec Ord: Eq`——`impl Ord` 便連帶需要 `impl Eq`,且 `Ord` body 可對 `This`
   呼叫 `Eq`)。`impl` 自身的型別參數放在 **`impl` 之後**——`impl[T] Summable for list[T]`——故 `T` 可用於目標型別。
@@ -435,7 +446,8 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
 - **Associated type。** 它讓**單輸出**的 protocol 良定義:`for x in it` 只有一種元素型別,因為 `Iterator` 的 `Item`
   由 impl 固定,而非像 generic `Iterable[T]` 那樣由使用端選。用型別位置的**投影**引用——`I.Item`
   （`fn collect[I: Iterator](it: I) -> list[I.Item]`）,當被投影型別本身有 associated type 時**可鏈式**——
-  `I.Item.Sub`。impl 以 `type Item = int` 提供它。（associated **const** 需要 `const`,延後。）
+  `I.Item.Sub`。impl 以 `type Item = int` 提供它。spec 的 associated
+  **const** 是其值對應物——`const BITS: int` 為必要，由 impl 以 `const BITS = 32` 提供。
 - **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
   （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見

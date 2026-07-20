@@ -80,6 +80,31 @@ impl Bumpable for Counter {
     mut fn bump() { this.n = this.n + 1 }   # needs a `mut` binding at the call site
 }
 
+# compile-time constants (group 7): folded at compile time, no runtime storage
+const MAX_RETRIES: int = 3
+const PAGE = 1 << 12                  # untyped const via a const-expr; adopts context
+
+# a fixed-size array type [T; N] whose length is a const
+fn zero_page() -> [byte; PAGE] { return make_page() }
+
+# a const is a first-class value: matched by equality in a pattern (group 6)
+fn retry_state(n: int) -> str {
+    return match n {
+        MAX_RETRIES -> "at limit"
+        _           -> "retrying"
+    }
+}
+
+# an associated const: the spec requires it, each impl supplies it (group 7)
+spec Bounded {
+    const MAX: int
+    fn clamp(v: int) -> int
+}
+impl Bounded for Counter {
+    const MAX = 100
+    fn clamp(v: int) -> int { return if v > MAX { MAX } else { v } }
+}
+
 # the empty-statement placeholder
 fn noop() { nop }
 

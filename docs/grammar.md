@@ -416,23 +416,27 @@ type        ::= base-type '?'?
 base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' projects; chainable 'I.Item.Sub'
               | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
-array-type  ::= '[' type ';' expr ']'
+array-type  ::= '[' type ';' const-expr ']'   # N is a const-expr
 struct-decl ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
 enum-decl   ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
 type-decl   ::= 'pub'? 'type' identifier generics? '=' type
+const-decl  ::= 'pub'? 'const' identifier ( ':' type )? '=' const-expr
+const-expr  ::= expr                          # compile-time-foldable (semantic restriction)
 spec-decl   ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
 impl-decl   ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # spec impl
               | 'impl' generics? type '{' impl-item* '}'                             # inherent
-impl-item   ::= fn-decl | assoc-bind          # a method / associated fn, or an assoc-type binding
+impl-item   ::= fn-decl | assoc-bind | const-decl   # method/assoc fn, assoc-type binding, or assoc const
 assoc-bind  ::= 'type' identifier '=' type    # 'type Item = int' fills a spec's assoc type
-spec-member ::= fn-sig | fn-decl | assoc-type
+spec-member ::= fn-sig | fn-decl | assoc-type | assoc-const
 assoc-type  ::= 'type' identifier ( ':' bound )?   # 'type Item' (optionally bounded)
+assoc-const ::= 'const' identifier ':' type ( '=' const-expr )?   # required, or provided with a default
 generics    ::= '[' type-param ( ',' type-param )* ']'
 type-param  ::= identifier ( ':' bound )?     # an optional spec bound
 bound       ::= type-name ( '+' type-name )*  # a conjunction of specs
 decorated-decl ::= decorator* declaration   # a decorator prefix leads any declaration (group 1)
 decorator   ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
+deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16), align(SIZE*2)
 ```
 
 - **Type expressions.** A **name** with optional **type arguments** (`int`, `User`, `list[int]`,
@@ -465,6 +469,17 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   module-private, so external code must use a public custom constructor — the module still builds with
   `T(...)` internally.
 - **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
+- **Compile-time constants (`const`).** `const NAME: T = expr` names a value **folded at compile time** with
+  **no runtime storage** — distinct from a module-level `:=` (immutable, but evaluated at init). A `const`
+  may appear wherever a compile-time value is required — an array length `[T; N]`, an enum discriminant, a
+  decorator argument — and **also as an ordinary value** (pass it, compare it, match it by equality). The
+  type is optional; a bare numeric const stays untyped and adopts its use site's type. It is **not an
+  lvalue** (no `=`, no `del`) and is **shadow-proof** — no binding may shadow a `const`, and a `const` may
+  not shadow a visible binding, in either direction, so its name means one value throughout its scope. A
+  `const-expr` is an `expr` restricted to what folds with **no evaluation engine** — literals, other consts,
+  discriminants, and operators; **no function calls** yet (so `sizeof`/`len` are not const-exprs). A `const`
+  may be declared at module level, locally, or in a `spec`/`impl` as an **associated const** (`const BITS:
+int`), the value counterpart of an associated type.
 - **Generics & bounds.** A parameter list `[T, …]` may bound each parameter to specs — `[T: Ord]`, a `+`
   conjunction `[K: Hash + Eq, V]`. The same `bound` is a spec's **super-spec** (`spec Ord: Eq` — an
   `impl Ord` then also needs `impl Eq`, and `Ord`'s body may call `Eq` on `This`). An `impl`'s own type
@@ -494,8 +509,8 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
   has one element type because `Iterator`'s `Item` is fixed per impl, not chosen per use as a generic
   `Iterable[T]` would allow. Reference it by **projection** in type position — `I.Item`
   (`fn collect[I: Iterator](it: I) -> list[I.Item]`), **chainable** when the projected type has its own
-  associated type — `I.Item.Sub`. An `impl` supplies it with `type Item = int`. (An associated **const**
-  would need a `const` and is deferred.)
+  associated type — `I.Item.Sub`. An `impl` supplies it with `type Item = int`. A spec's associated
+  **const** is the value counterpart — `const BITS: int` required, supplied by the impl as `const BITS = 32`.
 - **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
   leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
   declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to

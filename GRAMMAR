@@ -332,8 +332,10 @@ print        ::= 'print' expr
 # binding head 'if x := expr' that runs the block only when expr is present. 'for' is
 # the one loop: infinite, WHILE a condition holds, or over an Iterable ('for mut x'
 # binds in place). 'break' / 'continue' act on the nearest 'for'; 'break if c' /
-# 'continue if c' are sugar. The iterate form is taken when 'mut' or an 'identifier in'
-# follows 'for'; a bare 'for expr' with no 'in' is the while condition. Since 'in' is also
+# 'continue if c' are sugar. There are NO loop labels — to exit an OUTER loop from a nested
+# one, extract a function and 'return' (or a flag with 'break if'). The iterate form is taken
+# when 'mut' or an 'identifier in' follows 'for'; a bare 'for expr' with no 'in' is the while
+# condition. Since 'in' is also
 # the membership operator (group 4), a while-loop on membership is parenthesized —
 # 'for (v in r) { … }' — so a head-leading 'identifier in' always reads as iterate.
 

@@ -379,7 +379,8 @@ list-pat-elem ::= pattern | '..' identifier?
   `x` by copy (**`for mut x`** binds in place). The iterate form is taken when `mut` or an `identifier in`
   follows `for`; a bare `for expr` is the while condition. There is no C-style three-clause `for`. **`break` /
   `continue`** act on the nearest loop; **`break if c`** and **`continue if c`** are sugar for
-  `if c { break }` / `if c { continue }`.
+  `if c { break }` / `if c { continue }`. There are **no loop labels** — to exit an outer loop from a
+  nested one, extract a function and `return` (or use a flag with `break if`).
 - **`match`.** An expression: it tries the value against arms in order, yields the first fit, and every arm
   yields the same type — so a `match` is usable at a `:=`, a `return`, or an argument. A trailing **`_`**
   covers the rest.

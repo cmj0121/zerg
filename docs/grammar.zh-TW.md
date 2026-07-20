@@ -343,7 +343,7 @@ list-pat-elem ::= pattern | '..' identifier?
   綁定）。有 `mut` 或 `identifier in` 接在 `for` 後就是 iterate 形式;裸 `for expr` 則是 while 條件。沒有 C 式三段
   `for`。**`break` / `continue`** 作用於最近的迴圈；**`break if c`** 與 **`continue if c`** 是
   `if c { break }` / `if c { continue }`
-  的 sugar。
+  的 sugar。**沒有 loop label**——要退出外層迴圈，抽成函式並 `return`（或用 flag 搭配 `break if`）。
 - **`match`。** 一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
   可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。
 - **Pattern** 以 copy 解構：帶 payload 綁定的 **variant**（`Left(v)`、巢狀 `Left(Some(v))`）、**struct**

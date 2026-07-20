@@ -44,6 +44,9 @@ struct User { id: int }
 
 Each form desugars to the core — the full table is in **[Syntax Sugar](docs/syntax-sugar.md)**.
 
+Control flow stays flat: `break` / `continue` act only on the nearest `for`, and there are **no loop
+labels** — to leave an outer loop, extract a function and `return`.
+
 ## Compile Flow
 
 ```text

@@ -43,6 +43,8 @@ struct User { id: int }
 
 每個寫法都 desugar 回核心——完整列表見 **[語法糖（Syntax Sugar）](docs/syntax-sugar.zh-TW.md)**。
 
+控制流保持扁平：`break` / `continue` 只作用於最近的 `for`，且**沒有 loop label**——要離開外層迴圈，抽成函式並 `return`。
+
 ## 編譯流程（Compile Flow）
 
 ```text

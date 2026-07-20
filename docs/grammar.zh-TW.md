@@ -271,6 +271,10 @@ param-type ::= 'mut'? type
 
 - **宣告 vs expression。** `fn name(…) -> R { … }` 綁定一個名字；**匿名** `fn(…) -> R { … }` 是 expression
   （一個 closure）。`pub` 匯出宣告的名字，且不屬型別。
+- **closure 捕獲是 immutable 的。** closure 以**複製、唯讀**捕獲值與 channel——**不能改**捕獲的變數。這是刻意的:
+  value 語意下改捕獲對外本就不可見、無 GC 的 by-ref 捕獲會懸空、而 immutable 捕獲正是讓 `spawn` 的 closure
+  **無 data race** 的原因。可變 closure 想做的三件事各有對應慣用法:用 `for` 迴圈**累加**
+  （`for x in xs { sum = sum + x }`）、把**狀態**放進帶 `mut fn` 的 `struct`、用 `chan` 傳遞**並行**狀態。
 - **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。
 - **參數。** 參數是 `name: type`，可加 `mut`（by-ref、in-place——屬型別的一部分），亦可帶**預設值** `= expr`。
   call 端的 **named argument** 是 `name: value`（group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，

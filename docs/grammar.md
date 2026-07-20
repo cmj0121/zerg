@@ -292,6 +292,12 @@ param-type ::= 'mut'? type
 
 - **Declaration vs expression.** `fn name(…) -> R { … }` binds a name; an **anonymous** `fn(…) -> R { … }`
   is an expression (a closure). `pub` exports a declaration's name and is not part of the type.
+- **Closure capture is immutable.** A closure captures values and channels **by copy, read-only** — it
+  cannot mutate a captured variable. This is deliberate: value semantics makes a captured mutation invisible
+  to the outside anyway, a by-ref capture would dangle without a GC, and immutable capture is what makes a
+  `spawn`-ed closure **data-race free**. The three things a mutating closure would do have direct idioms
+  instead: **accumulate** with a `for` loop (`for x in xs { sum = sum + x }`), keep **state** in a `struct`
+  with a `mut fn`, and share **concurrent** state through a `chan`.
 - **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
   function returns `nil`.
 - **Parameters.** A parameter is `name: type`, optionally `mut` (by-ref, in-place — part of the type) and

@@ -15,10 +15,11 @@ endif
 
 " --- group 1 & 2: comments -----------------------------------------------------
 
-" Line comment: '#' to end of line, EXCEPT '#[' which starts a decorator (below).
-" TODO-style markers inside a comment are highlighted.
+" '##' is a doc comment (attaches to the following declaration); '#[' starts a decorator
+" (below); any other '#' is an ordinary line comment. TODO-style markers are highlighted.
 syntax keyword zergTodo contained TODO FIXME XXX HACK BUG NOTE
-syntax match zergComment "#\%(\[\)\@!.*$" contains=zergTodo,@Spell
+syntax match zergDocComment "##.*$" contains=zergTodo,@Spell
+syntax match zergComment "#\%(#\|\[\)\@!.*$" contains=zergTodo,@Spell
 
 " A decorator '#[derive(...)]' — a compiler directive. Capitalized spec names
 " inside highlight as types; the rest reads as a preprocessor directive.
@@ -142,6 +143,7 @@ syntax sync minlines=50
 " --- highlight links ------------------------------------------------------------
 
 highlight default link zergComment   Comment
+highlight default link zergDocComment SpecialComment
 highlight default link zergStatement Statement
 highlight default link zergKeyword   Keyword
 highlight default link zergOperator  Operator

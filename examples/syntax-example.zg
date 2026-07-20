@@ -12,6 +12,7 @@ init() {                    # lazy, exactly-once module setup (group 10)
 }
 
 # a strong-typedef over a built-in type
+## A stable identifier for a User — a doc comment attaches to the decl below (group 2)
 type UserId = int
 
 # a product type; `#[derive(...)]` asks the compiler to generate the impls

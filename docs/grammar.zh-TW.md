@@ -84,12 +84,14 @@ for {
 之後每個 group 都會為 `statement` 增添一種形式（binding、expression statement、declaration……）；`nop` 始終是
 那個永遠可用、永遠無作用的 statement。
 
-comment 不是 statement——`#` 一路到行尾，且 Zerg **沒有 block comment**（唯一例外是 `#[`，它起始一個 decorator，
-見 group 7）：
+comment 不是 statement——`#` 一路到行尾。`##` 起始一個 **doc comment**（附著於其後的宣告），`#[` 起始一個
+decorator（group 7）；Zerg **沒有 block comment**：
 
 ```text
 # 整行註解
 nop    # 行尾註解
+## 一段 doc comment——附著於下方的宣告
+fn answer() -> int { return 42 }
 ```
 
 ## Group 2 — Lexical
@@ -103,7 +105,8 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 NEWLINE    ::= '\n'
 WS         ::= ( ' ' | '\t' )+
-COMMENT    ::= '#' [^[\n] [^\n]* | '#' NEWLINE   # '#' 後不接 '['（那會起始 decorator）
+COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' 後不接 '#' 或 '[' → line comment
+DOC-COMMENT ::= '##' [^\n]*                       # doc comment；附著於其後的宣告
 block      ::= '{' stmt-list '}'
 ```
 

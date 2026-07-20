@@ -77,10 +77,12 @@ nop            ::= 'nop'
 # elements of a value list instead — arguments, tuples, generics, a variant payload,
 # and the fields of a struct pattern/literal (a composite, like Go's Point{X: 1, Y: 2}).
 #
-# Decorators & '#'. '#[' begins a DECORATOR — a compiler directive (group 7); any
-# other '#' begins a line comment. The lexer peeks one character, so the two never
-# collide. A decorator binds to the declaration that follows it; a line break between
-# a decorator and its target does not separate them (no ASI ';' applies there).
+# The three faces of '#' (the lexer peeks one character, so they never collide): '#['
+# begins a DECORATOR (a compiler directive, group 7); '##' begins a DOC COMMENT (attached
+# to the declaration that follows — consecutive '##' lines form one doc block; there is NO
+# inner/trailing doc and NO block comment); any other '#' begins an ordinary line comment.
+# A decorator binds to the declaration that follows it; a line break between a decorator and
+# its target does not separate them (no ASI ';' applies there).
 
 letter     ::= [a-zA-Z]
 digit      ::= [0-9]
@@ -91,8 +93,9 @@ identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 
 NEWLINE    ::= '\n'                # a line break; terminates a statement (group 1)
 WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens
-COMMENT    ::= '#' [^[\n] [^\n]*   # a '#' NOT followed by '[' → comment to EOL
-             | '#' NEWLINE          # a bare '#' at end of line is also a comment
+COMMENT     ::= '#' [^#[\n] [^\n]*  # a '#' NOT followed by '#' or '[' → line comment to EOL
+              | '#' NEWLINE          # a bare '#' at end of line is also a comment
+DOC-COMMENT ::= '##' [^\n]*         # a doc comment; attaches to the following declaration
 
 # A block groups a statement list in braces — the body of a function, loop, or
 # conditional, and ALSO a value: a block is an EXPRESSION (primary, group 4) whose VALUE

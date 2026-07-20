@@ -86,12 +86,14 @@ for {
 Every later group extends `statement` with another form (a binding, an expression statement, a
 declaration, …); `nop` remains the one statement that is always available and always inert.
 
-Comments are not statements — a `#` runs to the end of the line, and Zerg has **no block comments** (the
-one exception is `#[`, which begins a decorator, group 7):
+Comments are not statements — a `#` runs to the end of the line. A `##` begins a **doc comment** (attached
+to the declaration that follows), and `#[` begins a decorator (group 7); Zerg has **no block comments**:
 
 ```text
 # a full-line comment
 nop    # a trailing comment
+## a doc comment — attaches to the declaration below
+fn answer() -> int { return 42 }
 ```
 
 ## Group 2 — Lexical
@@ -105,7 +107,8 @@ digit      ::= [0-9]
 identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
 NEWLINE    ::= '\n'
 WS         ::= ( ' ' | '\t' )+
-COMMENT    ::= '#' [^[\n] [^\n]* | '#' NEWLINE   # '#' not before '[' (that starts a decorator)
+COMMENT     ::= '#' [^#[\n] [^\n]* | '#' NEWLINE  # '#' not before '#' or '[' → line comment
+DOC-COMMENT ::= '##' [^\n]*                       # doc comment; attaches to the following declaration
 block      ::= '{' stmt-list '}'
 ```
 

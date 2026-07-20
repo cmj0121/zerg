@@ -2,7 +2,8 @@
 "
 " Highlighting grows one grammar group at a time, tracking GRAMMAR. This file
 " covers the core groups 1-7: nop, lexical (comments/identifiers/keywords),
-" literals, operators, functions, control flow, and types — plus cross-cutting
+" literals, operators, functions, control flow, and types — plus the group-12
+" danger surface (`unsafe` / `asm`, in an alarming colour) and cross-cutting
 " polish: call highlighting, TODO markers, invalid-escape errors, brace folding,
 " and multi-line sync.
 "
@@ -30,7 +31,7 @@ syntax region zergDecorator matchgroup=zergDecorator start="#\[" end="\]"
 
 " Statement keywords (control flow, effects, items introduced by a statement).
 syntax keyword zergStatement nop return if else break continue match with
-syntax keyword zergStatement spawn select defer del raise guard import impl print asm
+syntax keyword zergStatement spawn select defer del raise guard import impl print
 
 " `for` is a match (not a keyword) so the `impl … for` override below can win.
 syntax match zergStatement "\<for\>"
@@ -42,7 +43,16 @@ syntax match zergStatement "\<for\>"
 syntax match zergKeyword "\%(\<impl\>.\+\)\@80<=\<for\>"
 
 " Declaration keywords.
-syntax keyword zergKeyword mut const pub package init unsafe
+syntax keyword zergKeyword mut const pub package init
+
+" --- group 12: the danger surface (unsafe / asm) -------------------------------
+
+" `unsafe` (the trust boundary — raw pointers, `unsafe fn`, `unsafe mut` globals)
+" and `asm` (inline assembly) get their OWN alarming colour, not the ordinary
+" keyword colour, so bare-metal code stands out on sight (linked to a bold-red
+" highlight below). `unsafe` still leads `unsafe fn …`, whose name the `fn`
+" nextgroup below picks up as usual.
+syntax keyword zergDanger unsafe asm
 
 " Type- and function-declaring keywords carry a nextgroup, so the declared NAME
 " (fn/struct/enum/spec/type) highlights the same as a function name — see
@@ -167,5 +177,10 @@ highlight default link zergEscapeError Error
 highlight default link zergDecorator  PreProc
 highlight default link zergFormatSpec Special
 highlight default link zergFormatConv Special
+
+" The danger surface (`unsafe` / `asm`) is NOT linked to an ordinary group — it is
+" given an explicit alarming bold-red so it reads as dangerous under any colorscheme.
+" `default` keeps it overridable by a user's own theme.
+highlight default zergDanger term=bold,underline cterm=bold ctermfg=red gui=bold guifg=#ff3b30
 
 let b:current_syntax = 'zerg'

@@ -133,8 +133,8 @@ ptr   asm
 **結束一個項目**——identifier、literal、`)`、`]`、`}`、`?`、`_`、`this`，或 `return` / `break` / `continue` /
 `nop`——就補一個 `;`。在未閉合的 `(` 或 `[` 之內則不補，故運算式或型別可於其中跨行（續行時把運算子放在行尾）。這
 一條規則讓 **statement、struct field、enum variant、match arm** 共用同一個換行分隔符。`,` 則用來分隔**值清單**
-的元素——argument、tuple、generic、variant payload，以及 struct pattern/literal 的 field（composite，如 Go 的
-`Point{X: 1, Y: 2}`）。
+的元素——argument、tuple、generic、variant payload、struct pattern 的 field（`Div{q, r}`），以及 map literal 的
+entry（兩者皆 `{ … }` composite）。struct **值**沒有 brace literal——由呼叫建構（group 7）。
 
 ## Group 3 — Literals
 

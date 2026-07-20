@@ -76,7 +76,8 @@ nop            ::= 'nop'
 # lines there. This single rule makes statements, struct fields, enum variants, and
 # match arms all newline-separated with the same ';' separator. ',' separates the
 # elements of a value list instead — arguments, tuples, generics, a variant payload,
-# and the fields of a struct pattern/literal (a composite, like Go's Point{X: 1, Y: 2}).
+# the fields of a struct pattern ('Div{q, r}'), and the entries of a map literal (both
+# '{ … }' composites). A struct VALUE has no brace literal — it is built by a call (group 7).
 #
 # The three faces of '#' (the lexer peeks one character, so they never collide): '#['
 # begins a DECORATOR (a compiler directive, group 7); '##' begins a DOC COMMENT (attached

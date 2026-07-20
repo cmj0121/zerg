@@ -138,8 +138,8 @@ literal, `)`, `]`, `}`, `?`, `_`, `this`, or `return` / `break` / `continue` / `
 inside an unclosed `(` or `[`, so an expression or type may span lines there (put a trailing operator at the
 line's end to continue). This one rule gives **statements, struct fields, enum variants, and match arms** a
 single newline separator. `,` instead separates the elements of a **value list** — arguments, tuples,
-generics, a variant payload, and the fields of a struct pattern/literal (a composite, like Go's
-`Point{X: 1, Y: 2}`).
+generics, a variant payload, the fields of a struct pattern (`Div{q, r}`), and the entries of a map literal
+(both `{ … }` composites). A struct **value** has no brace literal — it is built by a call (group 7).
 
 ## Group 3 — Literals
 

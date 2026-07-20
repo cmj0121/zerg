@@ -3,9 +3,11 @@
 # comments, statement/declaration keywords, keyword-operators, built-in types,
 # booleans, and the nil constant.
 
-import io
-pub import util/text        # re-export a module onto this package's public surface
-import sys/env as env        # bind the last segment, renamed with `as`
+import "io"
+import (                     # a parenthesized group — one self-delimiting spec per line
+    pub "util/text"         # `pub` re-exports the module onto this package's public surface
+    "sys/env" as env        # bind the last segment, renamed with `as`
+)
 
 init() {                    # lazy, exactly-once module setup (group 10)
     nop

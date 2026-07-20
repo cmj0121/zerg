@@ -39,7 +39,7 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 | 7   | Types                | `struct`, `enum`, tuple, `type X = Y`, `spec`                    | landed |
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`, and the `T?` / `Result` tiers | landed |
 | 9   | Concurrency          | `spawn`, `chan[T]()`, `ch <- v`, `<-ch`, `select`                | landed |
-| 10  | Modules & Programs   | `import`, `pub import`, `init()`, `pub`, `main`                  | landed |
+| 10  | Modules & Programs   | `import`, `import pub`, `init()`, `pub`, `main`                  | landed |
 | 11  | Resource cleanup     | `defer expr`, `del name`                                         | landed |
 | 12  | Unsafe               | `unsafe { }`, `unsafe fn`, `ptr` / `ptr[T]`, `asm(…)`            | landed |
 
@@ -610,20 +610,33 @@ send-arm    ::= expr '<-' expr '->' expr
 Source nests as **program › package › module (a directory) › file**.
 
 ```text
-import-stmt ::= 'pub'? 'import' import-path ( 'as' identifier )?
-import-path ::= identifier ( '/' identifier )*
+import-stmt ::= 'import' ( import-spec | '(' import-spec* ')' )
+import-spec ::= 'pub'? import-path ( 'as' identifier )?
+import-path ::= str-lit                     # "util/text" — a '/'-separated module path
 init-decl   ::= 'init' '(' ')' block
 ```
 
 - **`pub`** (already a prefix on every declaration) is the one visibility marker: a plain declaration is
   **module-private**, `pub` exposes it to the **rest of the package**, and a package's public API is the
   `pub` surface of its **root module**.
-- **`import path`** binds a **namespace** — the path's **last segment** (`import util/text` binds `text`),
-  reached with `.`: `text.split(…)`. **`as`** renames it (`import a/text as at`), which is how two imports
-  that share a last segment coexist; a collision with a local name is an error, resolved by `as`. There is
-  **no selective (`from … import`) or glob import** — to use a member unqualified, bind it locally
-  (`split := text.split`), since a function is a value. A **`pub import`** **re-exports** the namespace onto
-  this module's surface — the single mechanism by which a root module builds a package's public API.
+- **`import "path"`** binds a **namespace** — the path is a **string** and its **last segment** names the
+  binding (`import "util/text"` binds `text`), reached with `.`: `text.split(…)`. **`as`** renames it
+  (`import "a/text" as at`), which is how two imports that share a last segment coexist; a collision with a
+  local name is an error, resolved by `as`. A leading **`pub`** on the spec **re-exports** the namespace onto
+  this module's surface — `import pub "util/text"` — the single mechanism by which a root module builds a
+  package's public API. **Many imports group** in a parenthesized list, one self-delimiting spec per line:
+
+  ```text
+  import (
+      pub "util/text"
+      "util/text/abc" as cc
+  )
+  ```
+
+  No separator is needed (each spec is `pub`? then a string then an optional `as name`), and the line breaks
+  inside the `( … )` are insignificant. There is **no selective (`from … import`) or glob import** — to use a
+  member unqualified, bind it locally (`split := text.split`), since a function is a value.
+
 - **`init()`** is a module's **lazy** setup, run on first use. A module may declare **several** `init()`
   blocks; they run in **declaration (FIFO) order**, each **exactly once**. There are **no mutable globals in
   safe code**: a top-level binding may not be `mut` — a top-level `:=` is an **immutable module constant**

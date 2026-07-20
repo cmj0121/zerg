@@ -634,8 +634,9 @@ send-arm     ::= expr '<-' expr '->' expr
 # Source is organized as program > package > module (a directory) > file. Visibility
 # is 'pub' (already a prefix on every declaration): a plain declaration is module-
 # private, 'pub' exposes it to the rest of the package, and a package's public API is
-# the 'pub' surface of its ROOT module. 'import' names another module/package; a
-# 'pub import' RE-EXPORTS it onto this module's surface (how a root builds its API).
+# the 'pub' surface of its ROOT module. 'import' names another module/package by its
+# STRING path; a 'pub' on the spec ('import pub "…"') RE-EXPORTS it onto this module's
+# surface (how a root builds its API).
 # 'init()' is lazy module setup, run on first use. A module may declare MULTIPLE 'init()'
 # blocks; they run in declaration (FIFO) order, and each runs EXACTLY ONCE. There are NO
 # mutable globals in SAFE code: a module-level (top-level) binding may not be 'mut' — a
@@ -646,14 +647,24 @@ send-arm     ::= expr '<-' expr '->' expr
 # ordinary function, not reserved. 'package' is the distribution / versioning unit: a
 # directory tree selected by the build tool, with NO in-source 'package' declaration.
 #
-# An 'import' binds a NAMESPACE: the path's LAST segment ('import util/text' binds
-# 'text'), reached with '.' — 'text.split(…)'. 'as' renames it ('import a/text as at'),
-# which is how two imports that share a last segment coexist. The bound name lives in
-# the one value namespace (group 7), so colliding with a local name is an error — rename
-# with 'as'. There is NO selective ('from … import …') or glob import: to use a member
+# An 'import' binds a NAMESPACE. The path is a STRING and its LAST segment names the binding
+# ('import "util/text"' binds 'text'), reached with '.' — 'text.split(…)'. 'as' renames it
+# ('import "a/text" as at'), which is how two imports sharing a last segment coexist. A 'pub'
+# on the spec RE-EXPORTS it ('import pub "util/text"'). MANY imports group in a parenthesized
+# list — 'import ( … )', one spec per line:
+#     import (
+#         pub "util/text"
+#         "util/text/abc" as cc
+#     )
+# each spec is SELF-DELIMITING ('pub'? then a string then an optional 'as name'), so no comma
+# or separator is needed and the '(' … ')' spans lines the usual way (line breaks inside an
+# open '(' are insignificant, group 2); the formatter writes one spec per line. The bound name
+# lives in the one value namespace (group 7), so colliding with a local name is an error —
+# rename with 'as'. There is NO selective ('from … import …') or glob import: to use a member
 # unqualified, bind it locally — 'split := text.split' — since a function is a value.
-import-stmt  ::= 'pub'? 'import' import-path ( 'as' identifier )?
-import-path  ::= identifier ( '/' identifier )*      # a module (directory) path
+import-stmt  ::= 'import' ( import-spec | '(' import-spec* ')' )   # single spec, or a '('-grouped list
+import-spec  ::= 'pub'? import-path ( 'as' identifier )?          # 'pub' RE-EXPORTS; 'as' renames the namespace
+import-path  ::= str-lit                              # "util/text" — a '/'-separated module (directory) path
 init-decl    ::= 'init' '(' ')' block                # lazy setup; many allowed, FIFO, each once
 
 # ==================================================================================

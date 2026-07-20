@@ -39,7 +39,7 @@ notation 很小：
 | 7   | Types                | `struct`、`enum`、tuple、`type X = Y`、`spec`                   | 已落地 |
 | 8   | Null-safety & Errors | `?` `??` `?.` `!` `raise` `guard`,與 `T?` / `Result` 兩層       | 已落地 |
 | 9   | Concurrency          | `spawn`、`chan[T]()`、`ch <- v`、`<-ch`、`select`               | 已落地 |
-| 10  | Modules & Programs   | `import`、`pub import`、`init()`、`pub`、`main`                 | 已落地 |
+| 10  | Modules & Programs   | `import`、`import pub`、`init()`、`pub`、`main`                 | 已落地 |
 | 11  | Resource cleanup     | `defer expr`、`del name`                                        | 已落地 |
 | 12  | Unsafe               | `unsafe { }`、`unsafe fn`、`ptr` / `ptr[T]`、`asm(…)`           | 已落地 |
 
@@ -535,18 +535,30 @@ send-arm    ::= expr '<-' expr '->' expr
 源碼巢狀為 **program › package › module（一個目錄）› file**。
 
 ```text
-import-stmt ::= 'pub'? 'import' import-path ( 'as' identifier )?
-import-path ::= identifier ( '/' identifier )*
+import-stmt ::= 'import' ( import-spec | '(' import-spec* ')' )
+import-spec ::= 'pub'? import-path ( 'as' identifier )?
+import-path ::= str-lit                     # "util/text"——'/' 分隔的 module 路徑
 init-decl   ::= 'init' '(' ')' block
 ```
 
 - **`pub`**（已是每個宣告的前綴）是唯一的可見性標記：普通宣告是 **module-private**,`pub` 對**同 package 其餘**
   公開,而 package 的公開 API 是其**根 module** 的 `pub` 表面。
-- **`import path`** 綁定一個 **namespace**——路徑的**末段**（`import util/text` 綁 `text`）,以 `.` 存取:
-  `text.split(…)`。**`as`** 改名（`import a/text as at`）,兩個末段同名的 import 便靠它並存;與本地名字衝突即錯,
-  用 `as` 解。**沒有 selective（`from … import`）或 glob import**——要 unqualified 使用某成員,就本地綁定
-  （`split := text.split`）,因為函式是值。**`pub import`** 把該 namespace **re-export** 到本 module 表面——根
-  module 用來組出 package 公開 API 的唯一機制。
+- **`import "path"`** 綁定一個 **namespace**——路徑是**字串**,其**末段**命名該綁定（`import "util/text"` 綁
+  `text`）,以 `.` 存取:`text.split(…)`。**`as`** 改名（`import "a/text" as at`）,兩個末段同名的 import 便靠它
+  並存;與本地名字衝突即錯,用 `as` 解。spec 前置 **`pub`** 會把該 namespace **re-export** 到本 module 表面——
+  `import pub "util/text"`——根 module 用來組出 package 公開 API 的唯一機制。**多個 import 成群**寫在括號清單裡,
+  每行一個 self-delimiting 的 spec:
+
+  ```text
+  import (
+      pub "util/text"
+      "util/text/abc" as cc
+  )
+  ```
+
+  不需分隔符（每個 spec 是 `pub`? 加一個字串再加可選的 `as name`）,`( … )` 內的換行不具意義。**沒有 selective
+  （`from … import`）或 glob import**——要 unqualified 使用某成員,就本地綁定（`split := text.split`）,因為函式是值。
+
 - **`init()`** 是 module 的**惰性**初始化,首次使用時執行。一個 module 可宣告**多個** `init()`;它們依**宣告
   （FIFO）順序**執行,每個**恰好一次**。**safe 程式碼無可變全域**:頂層 binding 不可 `mut`——頂層 `:=` 是**不可變
   的模組常數**,於 init 時求值。唯一例外是 **`unsafe mut`** 全域(group 12);要安全共享可變全域狀態,用不可變 `:=`

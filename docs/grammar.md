@@ -413,7 +413,7 @@ The type expressions used since group 5, and the declarations that introduce typ
 
 ```text
 type        ::= base-type '?'?
-base-type   ::= type-name type-args? ( '.' identifier )?   # 'I.Item' projects an associated type
+base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' projects; chainable 'I.Item.Sub'
               | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
@@ -493,8 +493,9 @@ deco-item   ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
 - **Associated types.** An associated type makes a **single-output** protocol well defined: `for x in it`
   has one element type because `Iterator`'s `Item` is fixed per impl, not chosen per use as a generic
   `Iterable[T]` would allow. Reference it by **projection** in type position — `I.Item`
-  (`fn collect[I: Iterator](it: I) -> list[I.Item]`). An `impl` supplies it with `type Item = int`. (An
-  associated **const** would need a `const` and is deferred.)
+  (`fn collect[I: Iterator](it: I) -> list[I.Item]`), **chainable** when the projected type has its own
+  associated type — `I.Item.Sub`. An `impl` supplies it with `type Item = int`. (An associated **const**
+  would need a `const` and is deferred.)
 - **Decorators & `#[derive(…)]`.** A **decorator** `#[…]` is a compiler directive; its `decorator*` prefix
   leads **any declaration** (`decorated-decl`, group 1) and binds to it. Which decorators are valid on which
   declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to

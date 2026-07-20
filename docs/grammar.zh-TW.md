@@ -369,7 +369,7 @@ list-pat-elem ::= pattern | '..' identifier?
 
 ```text
 type        ::= base-type '?'?
-base-type   ::= type-name type-args? ( '.' identifier )?   # 'I.Item' 投影一個 associated type
+base-type   ::= type-name type-args? ( '.' identifier )*   # 'I.Item' 投影;可鏈式 'I.Item.Sub'
               | tuple-type | array-type | chan-type | fn-type
 type-args   ::= '[' type ( ',' type )* ']'
 array-type  ::= '[' type ';' expr ']'
@@ -434,8 +434,8 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   `x.f(…)` 呼叫）。一個型別上所有方法/關聯函式共用一個命名空間,不論 inherent 或來自 spec,**重名即錯**。
 - **Associated type。** 它讓**單輸出**的 protocol 良定義:`for x in it` 只有一種元素型別,因為 `Iterator` 的 `Item`
   由 impl 固定,而非像 generic `Iterable[T]` 那樣由使用端選。用型別位置的**投影**引用——`I.Item`
-  （`fn collect[I: Iterator](it: I) -> list[I.Item]`）。impl 以 `type Item = int` 提供它。（associated **const**
-  需要 `const`,延後。）
+  （`fn collect[I: Iterator](it: I) -> list[I.Item]`）,當被投影型別本身有 associated type 時**可鏈式**——
+  `I.Item.Sub`。impl 以 `type Item = int` 提供它。（associated **const** 需要 `const`,延後。）
 - **Decorator 與 `#[derive(…)]`。** **decorator** `#[…]` 是 compiler 指令；其 `decorator*` 前綴可領**任何宣告**
   （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見

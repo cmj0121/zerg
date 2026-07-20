@@ -418,8 +418,8 @@ pattern-list ::= pattern ( ',' pattern )*
 # 'uint', 'float', and any fixed-width members ('i32', 'u8', 'f64', …) — is a STDLIB
 # decision, not surface grammar: adding one adds no production.
 type         ::= base-type '?'?                        # a trailing '?' makes it optional
-base-type    ::= type-name type-args? ( '.' identifier )?   # int, list[int]; 'I.Item' PROJECTS
-               | tuple-type | array-type | chan-type | fn-type   # an associated type (group 7)
+base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'I.Item' PROJECTS an
+               | tuple-type | array-type | chan-type | fn-type   # associated type — chainable: 'I.Item.Sub'
 type-args    ::= '[' type ( ',' type )* ']'
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' expr ']'                 # [T; N] — the ';' array position

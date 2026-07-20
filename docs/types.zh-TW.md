@@ -5,8 +5,9 @@
 
 ## 原始型別（Primitive Types）
 
-一組精簡且固定的集合——三種整數寬度（signed `int`、unsigned `uint`、以及 `byte` octet），此外**沒有固定寬度階梯**
-（`i8`、`i16`、`u32`……都不存在）：
+一組精簡且固定的集合——三種整數寬度（signed `int`、unsigned `uint`、以及 `byte` octet）。此外的**固定寬度階梯**
+（`i8`、`i16`、`u32`、`f64`……）是一組 **stdlib 型別、不是新語法**——型別名不過就是一個 identifier，所以像 `u32`
+這樣的寬度只是多加一個 stdlib 型別、完全不動語法：
 
 | 型別    | 說明                                                       |
 | ------- | ---------------------------------------------------------- |
@@ -77,12 +78,17 @@ enum Either[X, Y] {         # 泛型 sum type
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別（見 [Null-safety 與錯誤處理](errors.zh-TW.md)）。一個 `enum`
 的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
 
-一個 `enum` 的 **discriminant 不是可觀察的值。** 哪個整數標記哪個 variant 是 compiler 的內部細節——你 `match` 的是
-variant、絕不是 tag——所以**沒有 `Variant = 5` 這種 discriminant 語法**。要把一個 variant 綁定某個特定整數（wire
-protocol 的碼、C enum 的值），就寫**顯式轉換**：一個從 variant 到數字的 `match`，再一個回來、且**帶驗證**
-（`from_code(n) -> E?`，未知碼給 `nil`、絕不變成錯的 variant）。這又是*convert by re-construction, never
-reinterpret*——數字是從 variant **建**出來的、不是把 tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連續值、
-別名與版本演進。tag 的具體**表示**——它的整數型別與 C layout——留作 deferred 的 FFI 細節（見 [FFI](ffi.zh-TW.md)）。
+一個 `enum` 的 **discriminant 對「fieldless enum」與「payload enum」行為不同**——分界在於是否*每一個* variant 都無
+欄位。一個 **fieldless** `enum` 可以給某個 variant 明確的 `= <discriminant>`——一個 **compile-time 常數整數**、
+在各 variant 間互異（未指定者為前一個 `+ 1`、從 `0` 起算）——使它成為 **C 式整數 enum**：`variant = <int>`。這種
+enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）；`int(v)` **讀**出該值，
+`E.from(n) -> E?` **反轉**回來（未知的 `n` 給 `nil`、絕不變成錯的 variant）。要指定寬度就用 opt-in layout 裝飾器
+`#[repr]`；序列化/wire 形式則是 `Encode` / `Decode` impl、絕不是裝飾器。
+
+一個 **payload** `enum`（任一 variant 帶欄位）則保持其 **tag opaque、只可 match**——不允許 `= 5`，你 `match` 的是
+variant、絕不是 tag。要把這種 variant 綁定某個特定整數，就寫**顯式轉換**：一個從 variant 到數字的 `match`，再一個
+回來、且**帶驗證**。這又是*convert by re-construction, never reinterpret*——數字是從 variant **建**出來的、不是把
+tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連續值、別名與版本演進。
 
 一個 **tuple**——`(int, str)`，欄位以位置存取 `.0`、`.1`——不過就是一個**匿名 `struct`**：同一個積型別，只是不具名、
 供一次性的位置束用（多重回傳、`divmod -> (int, int)`）。因為匿名，它是全語言**唯一結構化定型**的形式——`(int, str)`
@@ -115,12 +121,14 @@ copy-by-value 重新框定了「可寫 `pub` 欄位」的意義：改它只會�
 的純資料型別，欄位大方公開即可；必須恆為合法的型別，則把欄位設 private，並提供：
 
 - **讀**——一個 `pub` getter method，回傳該欄位的一份 copy（copy-by-value 下便宜）；
-- **改**——一個 `pub` mutator method，吃 `mut this`，在其中重新確立 invariant。
+- **改**——一個 `pub mut fn` mutator（其 receiver 是 `This`、就地 mutate——`this` 不是參數），在其中重新確立
+  invariant。
 
-要造「一個既有值、只改幾個欄位」的新值，用 **functional update**——`Foo{ ..base, age: 2 }` 產生一個**新**值、
-`base` 原封不動——這適用於欄位可見的型別；opaque 型別則用回傳新實例的 `with`-風格 method。Zerg **沒有可變的 builder
-或 cascade**：它只對公開欄位型別有用（而那種 literal 已經講完一切）、碰不到私有欄位、又會把值拖過一串無效中途狀態
-——與「immutable by default」「建構當下即合法」相衝。
+要造「一個既有值、只改幾個欄位」的新值，就呼叫 constructor、帶上要改的欄位、其餘顯式複製——`Foo(age: 2,
+name: base.name)` 產生一個**新**值、`base` 原封不動——這適用於欄位可見的型別；opaque 型別則用回傳新實例的
+`with`-風格 method。一個能替你複製未變欄位的 spread / `..base` 簡寫**尚未在語法中**——那是另一個未定的設計問題、
+不是你今天能寫的糖。Zerg **沒有可變的 builder 或 cascade**：它只對公開欄位型別有用（而那種 constructor 呼叫已經講
+完一切）、碰不到私有欄位、又會把值拖過一串無效中途狀態——與「immutable by default」「建構當下即合法」相衝。
 
 ## 型別轉換（Type Conversion）
 

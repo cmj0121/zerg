@@ -24,8 +24,26 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把你的 Zerg
 完整語意——primitive 與使用者型別、型別轉換、記憶體模型、並行、null-safety——見
 **[語言參考（Language Reference）](docs/language.zh-TW.md)**，另有配套參考：**[Module、Package 與
 Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.zh-TW.md)**、
+**[文法（Grammar）](docs/grammar.zh-TW.md)**、**[語法糖（Syntax Sugar）](docs/syntax-sugar.zh-TW.md)**、
 **[Collection](docs/collections.zh-TW.md)**、**[Derive 與預設行為](docs/derive.zh-TW.md)**、
 **[Process 與 I/O](docs/io.zh-TW.md)**、與 **[FFI](docs/ffi.zh-TW.md)**。
+
+## 小核心,一點糖
+
+表面大多是**疊在小核心上的糖**——one way to do it、沒有隱藏:
+
+```text
+break if done                   # → if done { break }
+with open(path) as f { … }      # scoped 資源,每條離開路徑都 teardown
+print f"{count=} {ratio:.2f}"   # Python 式插值 → str 串接
+
+#[derive(Encode, Decode)]       # compiler 依結構代寫 impl
+struct User { id: int }
+```
+
+每個寫法都 desugar 回核心——完整列表見 **[語法糖（Syntax Sugar）](docs/syntax-sugar.zh-TW.md)**。
+
+控制流保持扁平：`break` / `continue` 只作用於最近的 `for`，且**沒有 loop label**——要離開外層迴圈，抽成函式並 `return`。
 
 ## 編譯流程（Compile Flow）
 

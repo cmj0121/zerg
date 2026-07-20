@@ -245,11 +245,11 @@ one else holds the state there is no data race.
 
 ```text
 enum Cmd {
-    Add(int),                 # a write
-    Get(chan[int].send),      # a read — carries a reply channel
+    Add(int)                  # a write
+    Get(chan[int]<-)          # a read — carries a reply channel
 }
 
-fn counter(inbox: chan[Cmd].recv) {
+fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # the state: a plain mut int, owned here alone
     for cmd in inbox {               # drains until the last sender leaves
         match cmd {
@@ -279,7 +279,7 @@ exits and the channel closes, and the closing `StopIteration` ends the loop. The
 no generator type; the `send` is the yield.
 
 ```text
-fn range_gen(lo: int, hi: int, out: chan[int].send) {
+fn range_gen(lo: int, hi: int, out: chan[int]<-) {
     mut n := lo
     for n < hi {
         out <- n            # "yield" n — blocks until the consumer takes it
@@ -326,7 +326,7 @@ doesn't fix; only the property is promised.
 
 Two limits bound it:
 
-- **A blocking `extern` call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
+- **A blocking foreign (FFI) call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
   own (see [FFI](ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. The runtime may grow
   its thread pool, but a long blocking call is thread-occupying — prefer non-blocking C APIs.
 - **Fairness moves the _ready_; it does not unstick the _blocked_.** When every coroutine is blocked with

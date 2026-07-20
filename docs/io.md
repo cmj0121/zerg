@@ -5,7 +5,7 @@ Built on the memory, error, spec, and iteration models in the [Language Referenc
 `Ref[T]` box and coroutines in [Coroutines & Channels](coroutine.md), and the C boundary in the
 [FFI](ffi.md). Also in [繁體中文](io.zh-TW.md).
 
-I/O is the stdlib **`io`** package (`import io`, never ambient); the sole exception is the **`print`**
+I/O is the stdlib **`io`** package (`import "io"`, never ambient); the sole exception is the **`print`**
 keyword (Formatting & text), the no-import shortcut for writing a value to stdout. Three ideas carry it,
 each reusing an existing model:
 
@@ -30,7 +30,10 @@ drops (that is `print`'s alone).
 
 ```text
 fn copy_lines(src: Reader, mut dst: Writer) -> Result[nil] {
-    for line in src.read() { dst.write_str(line)?; dst.write_str("\n")? }
+    for line in src.read() {
+        dst.write_str(line)?
+        dst.write_str("\n")?
+    }
     return dst.flush()
 }
 ```
@@ -52,13 +55,13 @@ A missing file is an **expected** value-failure, never an abort. Open modes, see
 
 ## Standard streams
 
-`import io` binds **`io.stdin`** (`Reader`), **`io.stdout`** and **`io.stderr`** (`Writer`s) — read-only
+`import "io"` binds **`io.stdin`** (`Reader`), **`io.stdout`** and **`io.stderr`** (`Writer`s) — read-only
 OS facts through the stdlib, like `env` and the clock ([Modules, Packages & Programs](package.md)), never
 `main` parameters. The **`print`** keyword is the no-import shortcut — `print x` writes `x.display()` and a
 newline to stdout, best-effort; use `io.stdout` when you need the `Result`, `io.stderr`, or raw bytes.
 
 ```text
-import io
+import "io"
 for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
 
@@ -67,7 +70,7 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 Native `io` reads synchronously but never blocks the runtime: a `read_bytes`/`write` that must wait
 **parks its coroutine** and the scheduler runs another — the fairness guarantee of any channel wait
 ([Coroutines & Channels](coroutine.md)), with no `async`/`await` and no colored functions. The one
-exception is the FFI edge: a blocking **`extern` C call** parks its whole OS thread, since Zerg does not
+exception is the FFI edge: a blocking **foreign (FFI) C call** parks its whole OS thread, since Zerg does not
 own that frame ([FFI](ffi.md)).
 
 ## Process & command execution

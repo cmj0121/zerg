@@ -19,7 +19,7 @@ hold a NUL); `str` stays a separate immutable primitive (below).
 A collection is a **scope-owned value**: **copy-by-value** (the compiler elides or moves when safe), freed
 at scope exit, **no aliasing** — copying deep-copies elements and refcount-bumps any contained `Ref` value (a
 channel or `Ref[T]`), the existing memory rule. There's no shared container hiding behind two names: you
-share for **reading** with an immutable pass, for **mutation** with a `mut` parameter; a collection sent
+share for **reading** with an immutable pass, for **mutation** with a `mut &` parameter; a collection sent
 over a channel is copied like any other payload.
 
 ## Mutability — one per-binding knob
@@ -118,7 +118,7 @@ compile-time evaluation, so `[int; f(x)]` is an error.
 ```text
 xs: [int; 4] = [1, 2, 3, 4]     # a list literal, typed as an array by its target — length must be 4
 buf := [0; 256]                 # fill form: 256 copies → [int; 256]
-row := [byte; WIDTH]            # WIDTH is a top-level const
+row := [b'\0'; WIDTH]           # WIDTH is a top-level const
 ```
 
 An array is an ordinary **value**: copy-by-value copies all `N` elements (bumping any contained `Ref`), it

@@ -18,7 +18,7 @@ immutable primitive（見下）。
 
 collection 是 **scope-owned 值**：**copy-by-value**（compiler 安全時 elide 或 move）、scope 一結束就釋放、**無
 aliasing**——複製會深拷貝元素、並對含有的 `Ref` 值（channel 或 `Ref[T]`）refcount-bump，就是既有的記憶體規則。
-不會有「兩個名字共用一個容器」這種事：要共享來讀就用不可變傳參，要共享來改就用 `mut` param；經 channel 傳送的
+不會有「兩個名字共用一個容器」這種事：要共享來讀就用不可變傳參，要共享來改就用 `mut &` param；經 channel 傳送的
 collection 跟其他 payload 一樣，都是用複製的。
 
 ## 可變性——一個 per-binding 的 knob
@@ -109,7 +109,7 @@ N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `cons
 ```text
 xs: [int; 4] = [1, 2, 3, 4]     # 一個 list literal，由目標型別定型為陣列——長度須為 4
 buf := [0; 256]                 # fill 形式：256 份 → [int; 256]
-row := [byte; WIDTH]            # WIDTH 是 top-level const
+row := [b'\0'; WIDTH]           # WIDTH 是 top-level const
 ```
 
 陣列是個普通的**值**：copy-by-value 複製全部 N 個元素（bump 所含的任何 `Ref`）、scope 結束釋放、絕不 alias——就是

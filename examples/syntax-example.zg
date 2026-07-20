@@ -1,0 +1,418 @@
+# syntax-example.zg — a highlighting check for editors/nvim/syntax/zerg.vim.
+# Open it in nvim (after `make install`) and confirm each token category lights up:
+# comments, statement/declaration keywords, keyword-operators, built-in types,
+# booleans, and the nil constant.
+
+import "io"
+import (                     # a parenthesized group — one self-delimiting spec per line
+    pub "util/text"         # `pub` re-exports the module onto this package's public surface
+    "sys/env" as env        # bind the last segment, renamed with `as`
+)
+
+init() {                    # lazy, exactly-once module setup (group 10)
+    nop
+}
+
+# a strong-typedef over a built-in type
+## A stable identifier for a User — a doc comment attaches to the decl below (group 2)
+type UserId = int
+
+# a product type; `#[derive(...)]` asks the compiler to generate the impls
+#[derive(Encode, Decode)]
+struct User {
+    pub id:    UserId
+    pub name:  str
+    pub admin: bool = false    # a pub field with a default
+    email:     str?            # private + optional → implicitly nil
+}
+
+# inherent impl: methods/associated functions not tied to any spec (group 7)
+impl User {
+    fn guest() -> User { return User(id: 0, name: "guest") }   # associated fn — User.guest()
+    fn is_admin() -> bool { return this.admin }                # method — u.is_admin()
+}
+
+# a sealed struct: the default constructor is module-private; build via Email.parse (group 7)
+#[sealed]
+struct Email {
+    pub addr: str
+    valid:    bool = false     # private, has a default
+}
+impl Email {
+    fn parse(s: str) -> Email? {
+        if s == "" { return nil }
+        return Email(addr: s, valid: true)   # the primitive T(...), only reachable in-module
+    }
+}
+
+# a sum type and a behavioral spec
+enum Shape {
+    Circle(float)
+    Rect(float, float)
+}
+
+# a C-style enum: every variant is fieldless, so it may carry explicit discriminants (group 7)
+enum Status {
+    Ok       = 200
+    NotFound = 404
+    Error    = 500
+}
+fn status_code(s: Status) -> int { return int(s) }   # discriminant is observable
+
+spec Summable {
+    fn zero() -> This
+    fn add(other: This) -> This        # `this` is implicit — not a parameter
+}
+
+# generics and impl (group 7)
+enum Option[T] {
+    Some(T)
+    None
+}
+impl Summable for int {
+    fn zero() -> This { return 0 }
+    fn add(other: This) -> This { return this + other }   # this used, not declared
+}
+
+# a mutating method: `mut fn` marks that it changes the receiver in place
+struct Counter { n: int }
+
+spec Bumpable { mut fn bump() }
+
+impl Bumpable for Counter {
+    mut fn bump() { this.n = this.n + 1 }   # needs a `mut` binding at the call site
+}
+
+# compile-time constants are implicit (group 7): a ':=' with a const-expr RHS is folded and
+# may be used where a compile-time value is required — there is no 'const' keyword.
+MAX_RETRIES := 3
+PAGE := 1 << 12                       # a const-expr; usable as a compile-time value below
+const PI := 3.14159                   # `const` = shadow-proof: no scope may shadow PI (group 4)
+
+# a fixed-size array type [T; N] whose length is a compile-time constant
+fn zero_page() -> [byte; PAGE] { return make_page() }
+
+# to match a constant, compare it in a guard (a bare name in a pattern binds fresh, group 6)
+fn retry_state(n: int) -> str {
+    return match n {
+        x if x == MAX_RETRIES -> "at limit"
+        _                     -> "retrying"
+    }
+}
+
+# an associated value: the spec requires it, each impl supplies it (group 7)
+spec Bounded {
+    MAX: int
+    fn clamp(v: int) -> int
+}
+impl Bounded for Counter {
+    MAX := 100
+    fn clamp(v: int) -> int {
+        return MAX if v > MAX          # conditional early exit (sugar); falls through when false
+        return v
+    }
+}
+
+# a value generic: N is a compile-time value, inferred from the array argument (group 7)
+fn sum_n[N: int](xs: [int; N]) -> int {
+    mut acc := 0
+    for x in xs { acc = acc + x }
+    return acc
+}
+
+# unsafe (group 12): a module-level `unsafe { }` GROUPS everything bare-metal — the mutable global,
+# the fn that guards it, and a raw-pointer poke — in one unsafe context. No per-item `unsafe` prefix:
+# inside the group every `fn` is an unsafe fn and every `mut` binding is a persistent module-private
+# global, so the global write and the ptr operations are all legal here.
+VGA := 0xB8000
+
+unsafe {
+    mut tick_count: int = 0                     # a persistent module-private mutable global
+    pub fn tick() { tick_count = tick_count + 1 }   # an unsafe fn, grouped with the state it guards
+
+    fn poke(cell: int, value: u16) {            # an unsafe fn — ptr operations are legal in the group
+        base := ptr[u16](VGA)                   # cast a uint address to a typed pointer
+        base.offset(cell).store(value)          # typed store through a raw pointer
+    }
+}
+
+fn halt() {
+    unsafe { asm("hlt") }              # in a function, `unsafe { }` is the block-expression for raw ops
+}
+
+# pointer-shaped fields: the TYPE is fine in a field; operations need unsafe
+struct PageTable {
+    root:    ptr[u64]                  # a raw pointer field
+    handler: ptr[fn(int) -> nil]       # a function pointer (interrupt vector)
+}
+
+# the SAFE way to share mutable global state: an immutable binding holding a stdlib Atomic
+ready := Atomic[bool](false)
+fn mark_ready() { ready.store(true) }               # atomic op — no unsafe needed
+
+# the empty-statement placeholder
+fn noop() { nop }
+
+# defaults, named arguments, and a closure (group 5)
+fn greet(name: str, greeting: str = "Hello", loud: bool = false) -> str {
+    return f"{greeting}, {name}"
+}
+
+fn demo() {
+    # TODO: cover the error operators once that group lands
+    print greet("Sam", loud: true)      # named argument skips `greeting`
+    double := fn(x: int) -> int { return x *% 2 }
+    print f"{double(21)}"
+    (q, r) := divmod(21, 4)             # tuple-destructuring bind
+    print f"{q} rem {r}"
+
+    pi := 3.14159
+    print f"pi={pi:.2f} hex={q:#04x} {r=} debug={q!r}"   # Python-style format holes
+}
+
+# literals of every kind (group 3)
+fn literals() {
+    count := 1_000_000         # int, with digit grouping
+    mask  := 0xDE_AD_BE_EF     # hex int
+    perms := 0o755             # octal int
+    flags := 0b1010            # binary int
+    ratio := 6.022e23          # float
+    tab   := '\t'              # rune
+    ch    := b'a'              # byte
+    hi    := "line\n"          # str with an escape
+    path  := r"C:\tmp\new"     # raw str — backslashes are literal
+
+    hash  := mask *% 31 +% count       # wrapping arithmetic
+    bits  := flags << 2 | 0b1          # bitwise
+    ok    := ratio >= 6.0 and count != 0
+    nop
+}
+
+# composite construction (group 4/7): constructors, tuple, list, map, set
+fn composites() -> User {
+    u    := User(id: 1, name: "Sam", admin: true)   # struct constructor, named args
+    root := User(id: 2, name: "Root")               # admin/email take their defaults
+
+    (q, r) := divmod(21, 4)            # tuple destructure...
+    pair   := (q, r)                   # ...and tuple construction
+
+    nums  := [1, 2, 3]                 # list literal
+    ages  := {"sam": 30, "ada": 28}    # map literal
+    blank := {:}                       # empty map
+    uniq  := set([1, 1, 2, 3])         # set through its constructor
+    none  := set()                     # empty set
+    total := sum_all[int]([10, 20, 30])  # explicit type argument at the call — no turbofish
+
+    print f"{pair} {nums} {ages} {uniq} {root.name} {total}"
+    return u
+}
+
+# a generic function: the `T: Summable` bound lets the body call Summable's methods on T
+fn sum_all[T: Summable](xs: list[T]) -> T {
+    mut acc := T.zero()
+    for x in xs {
+        acc = acc.add(x)
+    }
+    return acc
+}
+
+# an associated type: each Iterator impl fixes its own Item (group 7)
+spec Iterator {
+    type Item
+    mut fn next() -> Item?
+}
+impl Iterator for Counter {
+    type Item = int
+    mut fn next() -> int? { return this.n }
+}
+fn first[I: Iterator](mut &it: I) -> I.Item? {   # mut & — advances the caller's iterator
+    return it.next()             # I.Item — the associated type, projected
+}
+
+# the while form of `for`; `mut n := n` shadows the by-value param for a local copy (group 5/6)
+fn countdown(n: int) {
+    mut n := n
+    for n > 0 {
+        print f"{n}"
+        n = n - 1
+    }
+}
+
+# ranges: `..` half-open, `..=` inclusive, `in` membership, `[a..b]` slice (group 4)
+fn sum_to(n: int) -> int {
+    mut acc := 0
+    for i in 0..n {                # half-open [0, n)
+        acc = acc + i
+    }
+    return acc
+}
+
+fn scan(xs: list[int], hi: int) -> list[int] {
+    for i in 1..=hi {              # inclusive: includes hi
+        if i in 0..10 { print f"{i}" }   # membership test
+    }
+    return xs[1..3]                # slice via Indexable[Range]
+}
+
+# destructuring reassignment into existing lvalues; `mut &` writes back to the caller (group 4/5)
+fn rotate(mut &a: int, mut &b: int, mut &c: int) {
+    (a, b, c) = (b, c, a)
+}
+
+# tuple access by static index — `.0`/`.1`, not `[i]` (group 4)
+fn midpoint(p: (float, float)) -> float {
+    return (p.0 + p.1) / 2.0
+}
+
+# `if` as an expression — needs `else`, both branches yield the same type (group 6)
+fn classify(n: int) -> str {
+    return if n < 0 { "neg" } else if n == 0 { "zero" } else { "pos" }
+}
+
+# a triple-quoted multiline string — line breaks and lone quotes are literal (group 3)
+fn query() -> str {
+    return """
+    SELECT "id", "name" FROM users
+    WHERE active = 1
+    """
+}
+
+# a signed literal pattern — `-1` matches by equal (group 6)
+fn sign(n: int) -> str {
+    return match n {
+        -1 -> "minus one"
+        0  -> "zero"
+        _  -> "other"
+    }
+}
+
+# a guarded match arm — the guard sees the pattern's bindings (group 6)
+fn grade(score: int) -> str {
+    return match score {
+        s if s >= 90 -> "A"
+        s if s >= 60 -> "pass"
+        _            -> "fail"
+    }
+}
+
+# range arms — sugar for `_ if _ in <range>`, matched by containment (group 6)
+fn status_class(code: int) -> str {
+    return match code {
+        200..300  -> "success"
+        400..=499 -> "client error"
+        500..     -> "server error"
+        _         -> "other"
+    }
+}
+
+# list patterns with a rest binding, and `as` to keep the whole (group 6)
+fn describe_list(xs: list[int]) -> str {
+    return match xs {
+        []                 -> "empty"
+        [only] as whole    -> f"one: {whole}"          # `as` binds the whole list too
+        [head, ..tail]     -> f"head {head}, then {tail}"
+    }
+}
+
+# a partial struct destructure — the rest is ignored with `..` (group 6)
+fn greet_user(u: User) {
+    User{name, ..} := u
+    print f"hi {name}"
+}
+
+pub fn describe(u: User) -> str {
+    mut loud  := false
+    mut label := u.name
+
+    if u.admin or loud {
+        label = f"admin:{label}"
+    } else {
+        nop
+    }
+
+    print f"describe -> {label}"       # print + f-string interpolation
+    return label
+}
+
+fn total(shapes: list[Shape]) -> float {
+    mut acc := 0.0
+    for s in shapes {
+        continue if s is Circle
+        acc = acc + area(s)
+    }
+    return acc
+}
+
+# a block is an expression — its value is its last statement (group 6)
+fn process(path: str) {
+    scaled := {                # bare value block: tmp is freed at the `}`
+        tmp := 1_000
+        tmp *% 2               # ← the block's value
+    }
+    print f"{scaled}"
+    with open(path) as f {     # f's Scoped teardown runs on every exit
+        for line in f.read() { print line }
+    }
+}
+
+# concurrency, pattern matching, and error handling
+# coroutines & channels (group 9)
+fn fanin(work: <-chan[int]) {
+    ch := chan[int](64)                 # buffered channel, capacity 64
+    spawn produce(ch.send)              # fire-and-forget producer
+    ch <- 42                            # send a value
+    first := <-ch!                      # receive, then force-unwrap
+    for {
+        select {
+            v := <-work -> use(v)       # receive arm binds a value
+            ch <- 0     -> nop          # send arm
+            done        -> break        # every watched receive channel closed
+            _           -> nop          # nothing ready now — non-blocking
+        }
+    }
+}
+
+# resource cleanup (group 11)
+fn drain(ch: chan[int]) {
+    defer report("drained")    # runs at block exit, on every path (incl. abort)
+    for v in ch { use(v) }
+    del ch                     # drop our hold now — closes if we were the last sender
+}
+
+# null-safety & errors (group 8)
+fn load(path: str) -> Result[Config] {
+    txt  := read_file(path)?                   # propagate: a Right early-returns
+    port := lookup("PORT") ?? 8080             # default when absent
+    host := cfg?.server?.host ?? "localhost"   # optional chain, then default
+    n    := guard { parse_int(txt) } ?? 0      # demote abort -> value, then default
+    key  := lookup("HOME") ?? raise MissingKey # diverge: raise instead of a value
+    user := lookup("USER")!                    # force-unwrap or raise UnwrapError
+    if n < 0 {
+        raise RangeError from BadInput         # value -> abort, recording a cause
+    }
+    return parse(txt)
+}
+
+fn serve(inbox: <-chan[Shape]) {          # receive-only channel (a receiver)
+    defer io.stdout.write_str("done")
+
+    for {
+        cmd := <-inbox ?? break
+        result := guard { render(cmd) }
+
+        match result {
+            Left(ok) -> {                  # a multi-statement arm — a block that yields
+                print "publishing"
+                spawn publish(ok)
+            }
+            Right(e) -> raise e
+            _        -> nil
+        }
+    }
+}
+
+# program entry point (group 10) — main is an ordinary function, not reserved
+fn main(args: list[str]) -> Result[nil] {
+    print f"args: {args}"
+    return nil
+}

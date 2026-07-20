@@ -6,8 +6,10 @@ how one type converts to another. Part of the [Language Reference](language.md).
 
 ## Primitive Types
 
-A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and the `byte` octet) with
-**no fixed-width ladder** beyond them (`i8`, `i16`, `u32`, … do not exist):
+A small, fixed set — three integer widths (signed `int`, unsigned `uint`, and the `byte` octet). The
+**fixed-width ladder** beyond them (`i8`, `i16`, `u32`, `f64`, …) is a set of **stdlib types, not new
+syntax** — a type name is just an identifier, so a width like `u32` adds a stdlib type without touching
+the grammar:
 
 | Type    | Description                                          |
 | ------- | ---------------------------------------------------- |
@@ -73,13 +75,13 @@ entry point work across them — is the [Modules, Packages & Programs](package.m
 
 ```text
 struct Node {
-    value: int,
-    next:  Node?,           # self-referential — auto-boxed (see Values & Memory)
+    value: int
+    next:  Node?            # self-referential — auto-boxed (see Values & Memory)
 }
 
 enum Either[X, Y] {         # generic sum type
-    Left(X),
-    Right(Y),
+    Left(X)
+    Right(Y)
 }
 ```
 
@@ -87,15 +89,21 @@ enum Either[X, Y] {         # generic sum type
 (see [Null-safety & Errors](errors.md)). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
 variant, to construct and to `match`; there is no per-variant privacy.
 
-An `enum`'s **discriminant is not an observable value.** Which integer tags a variant is a
-compiler-internal detail — you `match` on the variant, never on a tag — so there is **no `Variant = 5`
-discriminant syntax**. To bind a variant to a specific integer — a wire-protocol code, a C enum's value —
-write an **explicit conversion**: a `match` from the variant to the number, and one back that **validates**
-(`from_code(n) -> E?`, an unknown code yielding `nil`, never a wrong variant). This is
-_convert by re-construction, never reinterpret_ again — the number is _built_ from the variant, not the
-tag's bytes reread — and it absorbs the non-contiguous values, aliases, and versioning a baked-in value
-cannot. The tag's concrete **representation** — its integer type and C layout — stays a deferred FFI detail
-(see [FFI](ffi.md)).
+An `enum`'s **discriminant behaves differently for a fieldless enum than for a payload one** — the split
+turns on whether _every_ variant is fieldless. A **fieldless** `enum` may give a variant an explicit
+`= <discriminant>` — a **compile-time-constant integer**, distinct across variants (an unspecified one is
+the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. Such an
+enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
+`int(v)` **reads** the value and `E.of(n) -> E?` **reverses** it (an unknown `n` yielding `nil`, never a
+wrong variant). A specific width is the opt-in layout decorator `#[repr]`; the serialized/wire form is the
+`Encode` / `Decode` impl, never a decorator.
+
+A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
+allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,
+write an **explicit conversion**: a `match` from the variant to the number, and one back that **validates**.
+This is _convert by re-construction, never reinterpret_ again — the number is _built_ from the variant, not
+the tag's bytes reread — and it absorbs the non-contiguous values, aliases, and versioning a baked-in value
+cannot.
 
 A **tuple** — `(int, str)`, its fields reached positionally as `.0`, `.1` — is nothing but an **anonymous
 `struct`**: the same product type, spelled without a name for a transient positional bundle (a multiple
@@ -138,14 +146,17 @@ so every value of the type stays valid. A plain data type with no invariant can 
 freely; a type that must stay valid keeps them private and offers:
 
 - **read** — a `pub` getter method returning a copy of the field (cheap under copy-by-value);
-- **change** — a `pub` mutator method taking `mut this`, which re-establishes the invariant.
+- **change** — a `pub mut fn` mutator (its receiver is `This`, mutated in place — `this` is not a
+  parameter), which re-establishes the invariant.
 
-To build a value that is an existing one with a few fields changed, use a **functional update** —
-`Foo{ ..base, age: 2 }` produces a **new** value, leaving `base` untouched — for a type whose fields
-are visible, or a `with`-style method returning a new instance for an opaque type. Zerg has **no
-mutating builder or cascade**: it would work only for public-field types (where the literal already
-says everything), could not touch a private field, and would drag a value through invalid intermediate
-states — against immutable-by-default and valid-at-construction.
+To build a value that is an existing one with a few fields changed, call the constructor with the new
+field and copy the rest explicitly — `Foo(age: 2, name: base.name)` produces a **new** value, leaving
+`base` untouched — for a type whose fields are visible, or a `with`-style method returning a new instance
+for an opaque type. A spread / `..base` shorthand that would copy the untouched fields for you is **not
+yet in the grammar** — it is a separate open design question, not sugar you can write today. Zerg has
+**no mutating builder or cascade**: it would work only for public-field types (where the constructor call
+already says everything), could not touch a private field, and would drag a value through invalid
+intermediate states — against immutable-by-default and valid-at-construction.
 
 ## Type Conversion
 

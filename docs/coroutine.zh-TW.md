@@ -218,11 +218,11 @@ data race。
 
 ```text
 enum Cmd {
-    Add(int),                 # 寫
-    Get(chan[int].send),      # 讀——夾帶回覆用的 channel
+    Add(int)                  # 寫
+    Get(chan[int]<-)          # 讀——夾帶回覆用的 channel
 }
 
-fn counter(inbox: chan[Cmd].recv) {
+fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # state：一個普通 mut int，只有這裡獨佔
     for cmd in inbox {               # drain 到最後一個 sender 離場
         match cmd {
@@ -250,7 +250,7 @@ channel _就是_ `Iterator`：它一直 yield 值，直到 producer 的 scope �
 結束迴圈。沒有 `yield` 關鍵字、沒有 generator 型別；`send` 就是 yield。
 
 ```text
-fn range_gen(lo: int, hi: int, out: chan[int].send) {
+fn range_gen(lo: int, hi: int, out: chan[int]<-) {
     mut n := lo
     for n < hi {
         out <- n            # 「yield」n——block 到消費者取走為止
@@ -292,7 +292,7 @@ coroutine。
 
 兩條界限框住它：
 
-- **一次阻塞的 `extern` 呼叫無法被搶佔。** 它把 OS thread 停在一個 Zerg 不擁有的 C frame 裡（見
+- **一次阻塞的 foreign（FFI）呼叫無法被搶佔。** 它把 OS thread 停在一個 Zerg 不擁有的 C frame 裡（見
   [FFI](ffi.zh-TW.md)）；公平只涵蓋 Zerg 的 coroutine，不涵蓋卡在 C 裡的 thread。runtime 可能長 thread pool，但
   一次長阻塞呼叫就是佔用 thread——優先用非阻塞的 C API。
 - **公平讓 _ready_ 的前進，不解 _卡住_ 的。** 當每個 coroutine 都阻塞、毫無前進可能時，那是 deadlock，另外處理

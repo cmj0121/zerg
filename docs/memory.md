@@ -31,18 +31,18 @@ the whole constructed instance mutable (every field), a plain `x := …` keeps i
 carries only visibility (`pub` or private). Zerg has no general reference; code shares storage only
 through:
 
-- **Mutable-ref parameter** (`mut` param) — the one explicit by-ref path: the callee mutates the
+- **Mutable-ref parameter** (`mut &` param) — the one explicit by-ref path: the callee mutates the
   caller's (`mut`) variable in place. It is confined to the call — value positions (field, `return`,
-  channel send) copy its current value, it can only pass onward to another `mut` param, and it cannot
-  cross a `spawn`. **Two `mut` arguments never share storage** — a guarantee the callee relies on:
+  channel send) copy its current value, it can only pass onward to another `mut &` param, and it cannot
+  cross a `spawn`. **Two `mut &` arguments never share storage** — a guarantee the callee relies on:
   static aliasing (`f(x, x)`) is a **compile error**, and where the compiler cannot prove it
-  (`f(mut xs[i], mut xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
-  inserted only where mut arguments could dynamically alias.
+  (`f(xs[i], xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
+  inserted only where `mut &` arguments could dynamically alias.
 - **Channels** — shared by ref across coroutines, for communication only.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
-`list`/`map`/`set` literal evaluate **in source order**, deterministically — unlike C, whose
-argument-evaluation order is unspecified. So side effects (a `mut` argument, an abort) sequence
+`list`/`map` literal, or a `set(...)` constructor, evaluate **in source order**, deterministically — unlike C, whose
+argument-evaluation order is unspecified. So side effects (a `mut &` argument, an abort) sequence
 predictably; the `and` / `or` short-circuit is this rule with the right operand skipped ([Built-in specs](specs.md)).
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
@@ -68,6 +68,23 @@ in a **`Ref[T]`**: a reference-counted box carrying the value and a `drop` actio
 (or an explicit `del`). This is the guarantee a bare copy-by-value handle cannot give — two copies of a
 plain handle would each try to free the one resource. Reach for `Ref[T]` **only when the resource
 escapes**; a resource confined to one scope wants `defer` (below).
+
+### `mut` is for owned fields — a handle's state is an effect
+
+`mut` (and a `mut fn` method) track a change to a value's **own Zerg-owned fields**. The state _behind_ a
+`Ref[T]` — a foreign handle's internal state: an OS file's position, a socket, a database cursor — is **not
+part of the Zerg value's bytes**. It belongs to the resource, reached through a handle that copy-by-ref
+never duplicates and construction fixes in place. Touching it is an untracked **effect** (like any I/O),
+**not a mutation** — so a method that advances it needs no `mut`, and its receiver may be **immutable**: an
+immutable `File` can still `read()` and advance its cursor, exactly as a C `const FILE*` can `fread`.
+
+This is a real modelling choice. Put mutable state you **own** in a plain field and change it with a
+`mut fn` on a `mut` binding — tracked, and subject to the no-aliasing guarantee above. Put a resource whose
+internal state the **foreign side owns** behind a `Ref[T]` — an immutable handle with effectful methods,
+needing no `mut`. The dividing question mirrors the `defer`-vs-`Ref[T]` one: **are you changing your own
+bytes, or reaching state a handle owns?** Zerg has **no interior mutability** for owned fields — the same
+"immutable by default, a `Ref`'s referent fixed at construction" that keeps refcounting cycle-free also
+keeps an immutable binding honestly immutable.
 
 ## Re-declaration & shadowing
 
@@ -95,12 +112,12 @@ the storage.
 | `del` target                          | Own? | Effect                                                                      |
 | ------------------------------------- | ---- | --------------------------------------------------------------------------- |
 | local, by-value param, captured copy  | yes  | last access → **storage freed**                                             |
-| `mut` param (borrows caller's var)    | no   | ends this call's borrow → **not freed**; caller keeps it                    |
+| `mut &` param (borrows caller's var)  | no   | ends this call's borrow → **not freed**; caller keeps it                    |
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it              |
 | channel, `Ref[T]`                     | ref  | drops a holder (refcount--); last holder runs **`drop`** (a channel closes) |
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
-rules already stop an owner from outliving-then-freeing under a live borrower (a `mut` parameter is
+rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is
 confined to its call; an escaping closure owns copies of its captures). The compiler knows statically
 whether each `del` frees or merely revokes — only `Ref` values (channels and `Ref[T]`) carry a runtime
 refcount.
@@ -114,7 +131,7 @@ closes the channel if you were its last sender, without wrapping it in a tighter
 
 ## `defer` — cleanup at block exit
 
-`defer stmt` schedules `stmt` to run when the enclosing **block** exits — on **every** path out,
+`defer expr` schedules `expr` to run when the enclosing **block** exits — on **every** path out,
 **including an abort unwind**. It is the procedural tool for an effect bound to a scope — release a lock,
 flush a buffer, close a scope-local resource — needing no type at all:
 

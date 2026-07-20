@@ -1,0 +1,746 @@
+# Zerg Grammar
+#
+# The formal surface grammar of the Zerg language, written in W3C-style EBNF and
+# built up one grammar group at a time, from core to minor. This file is the single
+# source of truth for what is syntactically well-formed; the prose companion lives in
+# docs/grammar.md (and docs/grammar.zh-TW.md).
+#
+# ----------------------------------------------------------------------------------
+# Notation (W3C-style EBNF)
+# ----------------------------------------------------------------------------------
+#   name ::= ...     a production; `name` is a non-terminal (lower-kebab-case)
+#   'text'           a literal terminal, matched verbatim
+#   A B              A followed by B (concatenation)
+#   A | B            A or B (alternation)
+#   ( A )            grouping
+#   A?               zero or one A
+#   A*               zero or more A
+#   A+               one or more A
+#   [a-z]            a character in the given range
+#   [^x]             any character except x
+#   < text >         an informal terminal, described in prose
+#   UPPER-CASE       a lexical token defined under the Lexical group
+#   #                a comment, to end of line (same as Zerg's own comment syntax)
+#
+# ==================================================================================
+# 1. nop & program skeleton
+# ==================================================================================
+# The smallest well-formed Zerg program is a sequence of statements. The first
+# statement the grammar defines is `nop` — the placeholder for an empty statement:
+# it does nothing and yields nothing, standing in wherever a statement is required
+# but none is wanted (an empty function body `fn f() { nop }`, an empty loop
+# `for { nop }`). Later groups extend `statement` with the other statement forms.
+#
+# A statement is separated from the next by a line break or a ';'. Both are
+# GRAMMATICALLY VALID, but the formatter normalizes a multi-statement line into
+# one statement per line — so canonical Zerg has exactly one statement per line
+# and ';' rarely survives formatting. (';' also appears inside array types and
+# literals `[T; N]`, an unrelated position that formatting keeps.)
+
+program   ::= stmt-list
+stmt-list ::= stmt-sep* ( statement ( stmt-sep+ statement )* stmt-sep* )?
+stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto lines
+
+# A statement is either simple (no block — fits on one line), compound (it owns a
+# '{ … }' block), or a declaration (introduces a name, and may carry a decorator
+# prefix). 'nop' is the smallest simple statement; the rest are filled in by later
+# groups.
+statement      ::= simple-stmt | compound-stmt | decorated-decl
+simple-stmt    ::= nop | binding | reassign | print | return | raise | break
+                 | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
+                 | del-stmt | expr-stmt
+compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
+
+# A declaration introduces a name — a type, a function, or a module item. A DECORATOR
+# prefix (group 7) may lead ANY declaration and binds to it; which decorators are
+# valid on which declaration is a SEMANTIC rule, not a syntactic one (e.g. 'derive'
+# only on 'struct'/'enum', a logging decorator only on 'fn'). 'type-decl' is the one declaration
+# with no block; the rest own one. 'unsafe-group' is a module-level 'unsafe { … }' that GROUPS
+# declarations in an unsafe context (group 12) — the home of a mutable global.
+decorated-decl ::= decorator* declaration
+declaration    ::= type-decl | unsafe-group | fn-decl | struct-decl | enum-decl
+                 | spec-decl | impl-decl | init-decl
+nop            ::= 'nop'
+
+# ==================================================================================
+# 2. Lexical
+# ==================================================================================
+# Source is UTF-8. Horizontal whitespace (space, tab) separates tokens and is
+# otherwise insignificant. A line break is significant: the lexer turns it into a
+# ';' separator (ASI, below). Comments are not tokens.
+#
+# Newlines & ASI (automatic ';' insertion). At a line break the lexer inserts a ';'
+# when the last token on the line can END an item — an identifier, a literal, ')',
+# ']', '}', '?', '_', 'this', or one of 'return' 'break' 'continue' 'nop'. It does
+# NOT insert one inside an unclosed '(' or '[', so an expression or type may span
+# lines there. This single rule makes statements, struct fields, enum variants, and
+# match arms all newline-separated with the same ';' separator. ',' separates the
+# elements of a value list instead — arguments, tuples, generics, a variant payload,
+# the fields of a struct pattern ('Div{q, r}'), and the entries of a map literal (both
+# '{ … }' composites). A struct VALUE has no brace literal — it is built by a call (group 7).
+#
+# The three faces of '#' (the lexer peeks one character, so they never collide): '#['
+# begins a DECORATOR (a compiler directive, group 7); '##' begins a DOC COMMENT (attached
+# to the declaration that follows — consecutive '##' lines form one doc block; there is NO
+# inner/trailing doc and NO block comment); any other '#' begins an ordinary line comment.
+# A decorator binds to the declaration that follows it; a line break between a decorator and
+# its target does not separate them (no ASI ';' applies there).
+
+letter     ::= [a-zA-Z]
+digit      ::= [0-9]
+
+# An identifier names a binding, function, type, field, ...; a reserved keyword is
+# never an identifier.
+identifier ::= ( letter | '_' ) ( letter | digit | '_' )*
+
+NEWLINE    ::= '\n'                # a line break; terminates a statement (group 1)
+WS         ::= ( ' ' | '\t' )+     # horizontal whitespace between tokens
+COMMENT     ::= '#' [^#[\n] [^\n]*  # a '#' NOT followed by '#' or '[' → line comment to EOL
+              | '#' NEWLINE          # a bare '#' at end of line is also a comment
+DOC-COMMENT ::= '##' [^\n]*         # a doc comment; attaches to the following declaration
+
+# A block groups a statement list in braces — the body of a function, loop, or
+# conditional, and ALSO a value: a block is an EXPRESSION (primary, group 4) whose VALUE
+# is its last statement's value — an expr-stmt yields its expr; any other statement, or
+# an empty block, yields 'nil'. The ASI ';' only SEPARATES statements; it does not
+# discard a value the way a trailing ';' does in some languages. So 'guard { … }' and a
+# 'match' arm can hold many statements and still yield. Inner separators follow group 1.
+block      ::= '{' stmt-list '}'
+
+# The reserved keywords, listed as a lexical fact: none can be an identifier. Each
+# word's grammar is defined by the group that introduces it.
+keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
+             | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
+             | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
+             | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'
+             | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'    | 'not'
+             | 'and'   | 'or'    | 'print'  | 'this'    | 'with'  | 'as'
+             | 'from'  | 'true'  | 'false'  | 'nil'
+             | 'unsafe'| 'ptr'   | 'asm'   | 'const'
+# ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
+
+# ==================================================================================
+# 3. Literals
+# ==================================================================================
+# A literal denotes a constant value. A numeric literal is untyped — it adopts the
+# type its context demands (an integer literal defaults to `int`, a fractional or
+# exponent literal to `float`). A '_' may group digits for readability, between
+# digits only (never leading, trailing, or doubled).
+
+literal     ::= bool-lit | nil-lit | float-lit | int-lit
+              | rune-lit | byte-lit | str-lit | raw-str-lit | cmd-lit
+
+bool-lit    ::= 'true' | 'false'
+nil-lit     ::= 'nil'                      # the placeholder value of a T?
+
+# Integers: decimal or a based form. Sign is not part of the literal (unary '-' is
+# an operator, group 4).
+int-lit     ::= dec-int | hex-int | oct-int | bin-int
+dec-int     ::= digit ( '_'? digit )*
+hex-int     ::= '0x' hex-digit ( '_'? hex-digit )*
+oct-int     ::= '0o' oct-digit ( '_'? oct-digit )*
+bin-int     ::= '0b' bin-digit ( '_'? bin-digit )*
+hex-digit   ::= [0-9a-fA-F]
+oct-digit   ::= [0-7]
+bin-digit   ::= [0-1]
+
+# Floats: a fractional part, an exponent, or both (a bare integer is int-lit).
+float-lit   ::= dec-int '.' dec-int exponent?
+              | dec-int exponent
+exponent    ::= ( 'e' | 'E' ) ( '+' | '-' )? dec-int
+
+# Text. A rune is one Unicode code point in single quotes; a byte is one octet,
+# 'b'-prefixed (or `byte(0x41)` by cast, group 7). A str is double-quoted and processes
+# escapes; a TRIPLE-quoted '"""..."""' str is the same but spans lines (line breaks are
+# literal, and a lone '"' or '""' inside needs no escape — only '"""' ends it); a raw str
+# is 'r'-prefixed and processes none. A str may not hold a NUL, so '\0' and '\u{0}' are
+# invalid inside "..." (but valid in a rune or byte). f"..." interpolation is deferred to
+# the expression group.
+#
+# A backtick '`...`' is a COMMAND literal: a child process run DIRECTLY (no shell), its argv split on
+# whitespace (quotes respected) — no interpolation, so no injection/glob/pipe. The interpolating f-form
+# 'f`...`' (group 5) instead runs through a SHELL and shell-quotes each '{ … }' hole ('{x:raw}' opts out).
+# It processes no backslash escapes (a raw text). The execution surface — pipes as Reader/Writer, the
+# process 'Ref[proc]' — is STDLIB (docs/io.md), not grammar.
+rune-lit    ::= "'" ( rune-char | escape ) "'"
+byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
+str-lit     ::= '"' ( str-char | escape )* '"'
+              | '"""' ( ml-str-char | escape )* '"""'    # multiline; line breaks are literal
+raw-str-lit ::= 'r' '"' raw-char* '"'
+cmd-lit     ::= '`' cmd-char* '`'                        # a COMMAND literal (run directly, no shell); f-form in group 5
+cmd-char    ::= < any code point except '`' or a line break >   # no escapes (raw)
+
+escape      ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | '"' | 'u' '{' hex-digit+ '}' )
+byte-escape ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | 'x' hex-digit hex-digit )
+rune-char   ::= < any code point except "'", '\', or a line break >
+byte-char   ::= < any octet 0x00..0x7F except "'", '\', or a line break >
+str-char    ::= < any code point except '"', '\', NUL, or a line break >
+ml-str-char ::= < any code point except '\', NUL, or a closing '"""' >   # line breaks allowed
+raw-char    ::= < any code point except '"' or a line break >   # no escapes
+
+# ==================================================================================
+# 4. Bindings & Expressions
+# ==================================================================================
+# A binding introduces a name. It comes in two forms. INFERRED — ':=' takes the value's type
+# ('mut … :=' rebindable, 'const … :=' immutable and SHADOW-PROOF, below). TYPE-ANNOTATED —
+# 'name: T = expr' fixes the type and CONTEXT-TYPES the RHS (a bare '[ … ]' becomes a 'list' or,
+# against a '[T; N]' target, an array). The annotated form spells '=', not ':=', and the leading
+# ':' is exactly what tells it apart from a REASSIGN 'name = expr' (no ':', writes an EXISTING
+# lvalue). An expression on its own is a statement (a call, or a match run for effect).
+# Destructuring a pattern uses the inferred ':=' only, and arrives with patterns (group 6).
+#
+# 'const' marks a SHADOW-PROOF immutable binding: no later binding may shadow it, AND it may
+# not itself shadow a visible binding — a name collision in EITHER direction is an error (a
+# plain ':=' may still be shadowed). This is ORTHOGONAL to compile-time folding (group 7): a
+# 'const' whose RHS is a const-expr is also usable in compile-time positions, but the two
+# properties are independent — 'const' is only about shadowing.
+
+binding      ::= ( 'mut' | 'const' )? bind-target ':=' expr          # inferred; 'const' = shadow-proof (bidirectional)
+             | ( 'mut' | 'const' )? identifier ':' type '=' expr      # type-ANNOTATED; the ':' before '=' picks this over reassign
+bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6 (inferred ':=' only)
+reassign     ::= assign-target '=' expr
+expr-stmt    ::= expr
+lvalue       ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element
+# An assignment target is an lvalue, or a tuple / struct SHAPE whose leaves are lvalues —
+# destructuring reassignment, the mirror of a ':=' bind-target but into EXISTING names
+# ('(a, b) = e', 'Div{q, r} = e'); leaves may be any lvalue ('(a, obj.f) = e').
+assign-target ::= lvalue
+               | '(' assign-target ( ',' assign-target )* ')'
+               | type-name '{' field-target ( ',' field-target )* ( ',' '..' )? '}'
+field-target  ::= identifier ( ':' assign-target )?
+
+# Expression grammar from loosest ('??') to tightest (postfix). Binary levels are
+# left-associative; comparison is non-associative (no a < b < c chaining). A RANGE '..'
+# binds tighter than comparison so 'v in 0..10' reads 'v in (0..10)'; membership 'in'
+# and the type test 'is' sit at the comparison level.
+expr         ::= coalesce-expr          # '??' is the loosest binary (group 8)
+or-expr      ::= and-expr   ( 'or'  and-expr  )*
+and-expr     ::= cmp-expr   ( 'and' cmp-expr  )*
+cmp-expr     ::= range-expr ( ( cmp-op range-expr ) | ( 'is' type-name ) | ( 'in' range-expr ) )?
+range-expr   ::= add-expr ( '..' add-expr? | '..=' add-expr )?
+             # 'x..y' → range(x, y); 'x..=y' → range(x, y+1); 'x..' → an open range. 'v in r'
+             # → r.contains(v). Both are SUGAR (the Range/contains machinery is stdlib).
+add-expr     ::= mul-expr   ( add-op mul-expr )*
+mul-expr     ::= unary-expr ( mul-op unary-expr )*
+unary-expr   ::= unary-op unary-expr | postfix-expr
+postfix-expr ::= recv-base ( postfix )*
+recv-base    ::= '<-' recv-base | primary   # '<-ch' receive (group 9); '(<-ch)?' etc.
+primary      ::= literal | fstr-lit | fcmd-lit | fn-expr | match-expr | guard-expr | if-expr
+               | unsafe-expr | asm-expr | chan-new | list-lit | map-lit | tuple-lit | block
+               | identifier | '(' expr ')'
+
+postfix      ::= '.' identifier        # field or method access
+               | '.' dec-int           # tuple element by STATIC index — 't.0', 't.1' (0-based)
+               | '(' arg-list? ')'     # call (named arguments: group 5)
+               | '[' expr ']'          # index — a single-value subscript
+               | type-args             # explicit type arguments 'f[K, V]' (type-args, group 7)
+               | '?'                   # propagate (group 8): unwrap Left, else early-return Right
+               | '!'                   # force-unwrap (group 8): unwrap Left, else raise UnwrapError
+               | '?.' identifier       # optional chain (group 8): read .id when present, else nil
+arg-list     ::= arg ( ',' arg )*
+arg          ::= ( identifier ':' )? expr   # positional, or named 'name: value' (g5)
+
+# NAME RESOLUTION disambiguates two surfaces that share '[ … ]'. A single '[X]' is an
+# INDEX when the base resolves to a value, and TYPE ARGUMENTS when the base resolves to
+# a generic function or a type constructor ('parse[int]', 'list[int]') — a name is
+# exactly one of these (a type and a function cannot share a name, group 7). A comma —
+# '[X, Y]' — is unambiguously type arguments (an index takes one value). This is the
+# SAME name resolution the pattern grammar uses to tell a variant from a binding
+# (group 6): the grammar is resolved with scope in hand, not purely context-free.
+
+# Composite literals build values in expression position. A tuple is a parenthesized
+# 2+ list — a single '( expr )' is just grouping. A list is bracketed — a comma list '[a, b]',
+# or a FILL form '[v; N]' that is N copies of v (N a const-expr, mirroring the '[T; N]' array
+# type's ';'; context-typed to a 'list' or, against a '[T; N]' target, an array). A map is braced
+# with ':'-bearing entries: that ':' is exactly what distinguishes a '{ … }' map from a
+# block, so a bare-element '{ … }' is ALWAYS a block and a set therefore has NO brace
+# literal (build one with its constructor, 'set([ … ])'). Two parse rules follow from '{'
+# being the block opener: at a statement's start '{' is a block STATEMENT (its value
+# discarded), and ANY '{'-opening expression — a block OR a map literal — at the start of
+# an if/for/with/match head must be parenthesized. (struct and enum values are built by
+# calling a type or variant name — see the constructor note in group 7.)
+#
+# A tuple is read back by STATIC index — 't.0', 't.1' (postfix, above) — not 't[i]': its
+# elements are heterogeneous, so the index must be a compile-time constant for the result
+# type to be known. In this position a following number is a bare index, so 'a.0.1' is
+# '(a.0).1', not a float. (A list/map, being homogeneous, uses the runtime 't[i]' index.)
+tuple-lit    ::= '(' expr ',' expr ( ',' expr )* ')'    # 2+ elements; no 1-tuple, no '()'
+list-lit     ::= '[' ( expr ( ',' expr )* )? ']'        # [1, 2, 3]; empty '[]'
+             | '[' expr ';' const-expr ']'              # FILL form: N copies of v — '[0; 256]'; N is a const-expr
+map-lit      ::= '{' map-entry ( ',' map-entry )* '}'   # {k: v, …}
+             | '{' ':' '}'                               # empty map '{:}'
+map-entry    ::= expr ':' expr
+
+cmp-op       ::= '==' | '!=' | '<' | '>' | '<=' | '>='
+add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
+mul-op       ::= '*' | '/' | '%' | '*%' | '<<' | '>>' | '&'
+unary-op     ::= 'not' | '~' | '-' | '-%'
+
+type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)
+
+# ==================================================================================
+# 5. Functions
+# ==================================================================================
+# A function is a first-class value. A declaration binds a name (top level, or a
+# module item); an anonymous function is an expression — a closure over immutable
+# captures. 'return' exits, optionally with a value; an absent '-> type' means the
+# function returns nil. A trailing 'if' makes it CONDITIONAL — 'return expr if cond' is sugar
+# for 'if cond { return expr }' (and 'return if cond' for a bare early exit), the same postfix
+# 'if' as 'break if' / 'continue if' (group 6); on a false cond, control falls through.
+# DISAMBIGUATION: a leading 'if' whose condition is followed by a '{' block is instead an
+# if-EXPRESSION being returned ('return if c { a } else { b }' yields a value); the conditional-
+# return 'if' takes a bare condition and NO block. A parameter passes BY VALUE (a copy); 'mut &x' instead passes a
+# mutable reference (below). A parameter may carry a default; a call fills parameters
+# positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
+
+fn-decl      ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
+fn-expr      ::= 'fn' '(' closure-param-list? ')' ret-type? block  # anonymous / closure — never generic, never unsafe; param types may be inferred
+fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a function's type; 'unsafe fn' for ptr[unsafe fn…]
+
+# 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place — exactly the
+# 'mut &this' case. It is meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the
+# call site must hold the receiver in a 'mut' binding. A free function or closure has no
+# receiver, so it is never 'mut fn'. This tracks mutation of the value's own Zerg-owned
+# fields — not effects on a resource behind a Ref[T]/foreign handle, which need no 'mut'.
+ret-type     ::= '->' type
+return       ::= 'return' expr? ( 'if' expr )?    # 'return x if c' — conditional early exit (sugar)
+
+# PARAMETERS pass BY VALUE (a copy). 'mut &x' passes a MUTABLE REFERENCE: the callee may
+# change x and the change AFFECTS the caller's argument. Two independent controls meet —
+# the CALLER decides whether its variable is 'mut', the CALLEE decides via 'mut &' whether
+# it writes back — so a caller-visible mutation needs BOTH, and the argument must be a
+# 'mut' lvalue. There is NO call-site marker: the signature is the contract. A 'mut &'
+# reference is valid only for the call — it cannot ESCAPE (be captured by a spawn or
+# stored past the call) and cannot ALIAS (the same variable to two 'mut &' in one call),
+# which keeps it safe with no borrow checker. There is no plain 'mut x' parameter; for a
+# private mutable copy, shadow — 'mut x := x'.
+param-list   ::= param ( ',' param )*
+param        ::= ( 'mut' '&' )? identifier ':' type ( '=' expr )?   # 'mut &x' = mutable reference
+param-type-list ::= param-type ( ',' param-type )*
+param-type   ::= ( 'mut' '&' )? type
+
+# A CLOSURE parameter may OMIT its ': type' — the compiler infers it from the function type the
+# closure is checked against (an argument's declared parameter type, or a typed binding's RHS). A
+# named 'fn' declaration cannot: its signature is its contract, so every 'param' there keeps its
+# type. An omitted-type closure that is never given an expected type is a compile error.
+closure-param-list ::= closure-param ( ',' closure-param )*
+closure-param      ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': type' optional in a closure
+
+# 'this' is NOT a parameter. Inside a method (a 'fn' declared in an 'impl' or a
+# 'spec') 'this' is the implicit receiver, always reachable through the instance
+# the method is called on. A 'fn' whose body uses 'this' with no instance bound to
+# it is a compile error (a free function has no receiver). The self type is 'This'.
+
+# A call's named arguments are the 'arg' form above (group 4): positional arguments
+# come first, then any argument may be given by name; once one is named, the rest
+# must be named too. A default lets a named argument be omitted.
+#
+# ARGUMENT CONVENTIONS. Names are resolved at COMPILE time against the signature, so a
+# 'map' does NOT splat into named arguments — its keys are runtime strings and its values
+# one homogeneous type, while parameters are compile-time and heterogeneous. There are
+# also no VARIADICS. Pass a 'list' for many positional values, and an OPTIONS STRUCT with
+# field defaults for a bag of named options ('draw(Style(width: 2))') — the statically
+# typed stand-in for keyword arguments. A 'map' is passed as an ordinary value, never
+# expanded into a call's names.
+
+# ----------------------------------------------------------------------------------
+# String interpolation & print (the formatting / output surface)
+# ----------------------------------------------------------------------------------
+# An f-string embeds '{ … }' holes, joined with the literal text; '{{' and '}}' are
+# literal braces. Python-style, a hole is 'expr' then optional '=' (self-documenting:
+# emits the expression's source text and '='), a '!' conversion, and a ':' format
+# spec. Semantics: 'expr' → display(); '!r'/'!s'/'!a' → debug/display/ascii first;
+# ':spec' → expr.format(spec), a per-type Format protocol (the spec string's meaning
+# is the type's — stdlib numbers/str read the usual fill/align/sign/#/0/width/.prec/
+# type). 'print' writes a value's display() and a newline to stdout — a reserved
+# keyword, always in scope, best-effort (never raises).
+fstr-lit     ::= 'f' '"' ( fstr-char | escape | '{{' | '}}' | interp )* '"'
+# The interpolating COMMAND literal (group 3's 'cmd-lit' with holes): runs through a SHELL, each hole
+# shell-quoted to one argument by default ('{x:raw}' opts out via the Format spec). No backslash escapes.
+fcmd-lit     ::= 'f' '`' ( cmd-char | interp )* '`'
+interp       ::= '{' expr '='? conversion? format-spec? '}'
+conversion   ::= '!' ( 'r' | 's' | 'a' )       # r = debug, s = display, a = ascii
+format-spec  ::= ':' fmt-char*                  # opaque here; the Format protocol reads it
+fmt-char     ::= < any character except '{', '}', or a line break >
+fstr-char    ::= < any code point except '"', '\', '{', '}', or a line break >
+print        ::= 'print' expr
+
+# ==================================================================================
+# 6. Control flow & Pattern matching
+# ==================================================================================
+# 'for' is a statement (run for effect); 'match' is an expression, and 'if' is BOTH — a
+# statement, and an expression when it has an 'else' (if-expr, in 'primary', group 4).
+# 'if' takes a bool — no truthiness — or a
+# binding head 'if x := expr' that runs the block only when expr is present. 'for' is
+# the one loop: infinite, WHILE a condition holds, or over an Iterable ('for mut x'
+# binds in place). 'break' / 'continue' act on the nearest 'for'; 'break if c' /
+# 'continue if c' are sugar. There are NO loop labels — to exit an OUTER loop from a nested
+# one, extract a function and 'return' (or a flag with 'break if'). The iterate form is taken
+# when 'mut' or an 'identifier in' follows 'for'; a bare 'for expr' with no 'in' is the while
+# condition. Since 'in' is also
+# the membership operator (group 4), a while-loop on membership is parenthesized —
+# 'for (v in r) { … }' — so a head-leading 'identifier in' always reads as iterate.
+
+if-stmt      ::= 'if' if-head block ( 'else' 'if' if-head block )* ( 'else' block )?
+# An 'if' with a MANDATORY trailing 'else' is also an EXPRESSION (if-expr, in primary,
+# group 4): it yields the taken branch's block value, and every branch must yield the
+# same type. As a statement (if-stmt) the 'else' is optional and no value is produced;
+# at statement position the statement form wins.
+if-expr      ::= 'if' if-head block ( 'else' 'if' if-head block )* 'else' block
+if-head      ::= expr | identifier ':=' expr           # binding form runs on 'present'
+for-stmt     ::= 'for' block                            # infinite (leave via break/return)
+               | 'for' 'mut'? identifier 'in' expr block   # iterate an Iterable
+               | 'for' expr block                          # while — repeat while expr (a bool) holds
+break        ::= 'break' ( 'if' expr )?
+continue     ::= 'continue' ( 'if' expr )?
+
+# A bare block just opens a nested scope — its bindings and scope-owned values are
+# freed at its '}'. 'with' is sugar over it: it binds a scoped resource for the block
+# and guarantees the resource's teardown runs on EVERY exit (normal, return, abort).
+# The value implements the built-in 'Scoped' spec (its one method is the teardown); a
+# Ref[T]'s drop already satisfies it. So `with acquire() as y { body }` desugars to
+# `{ y := acquire(); defer <y's Scoped teardown>; body }`; 'as y' is optional when the
+# resource is used only for its scope (e.g. a held lock).
+with-stmt    ::= 'with' expr ( 'as' identifier )? block
+
+# 'match' tries a value against arms in order and yields the first fit; every arm
+# yields the same type. A trailing '_' covers the rest. An arm may carry a GUARD — an
+# 'if expr' after the pattern — that must also hold; the guard sees the pattern's
+# bindings and, on 'A | B if c', covers the whole or-pattern. A guarded arm does NOT
+# count toward exhaustiveness (the compiler can't prove the guard holds), so a case
+# still needs an unguarded arm (or '_') to be covered.
+#
+# A RANGE ARM ('200..300 ->', '400..=499 ->', '500.. ->') is match-only SUGAR for a guard
+# — '_ if _ in <range>' — so it matches by CONTAINMENT (the '..' operators, group 4), not
+# 'equal', and inherits a guard's exhaustiveness (it does not count as covering). It does
+# NOT bind; to use the value, write the explicit form 'x if x in <range>'. Bounds are
+# compile-time constants; a range arm is recognized by its '..'.
+match-expr   ::= 'match' expr '{' match-arm+ '}'
+match-arm    ::= ( pattern | range-arm ) ( 'if' expr )? '->' expr   # optional guard
+range-arm    ::= range-bound ( '..' range-bound? | '..=' range-bound )
+range-bound  ::= '-'? literal | identifier          # a compile-time constant bound
+
+# A pattern destructures by copy.
+# A bare name in pattern position is a 'variant-pat' when it RESOLVES to a known type or
+# enum variant in scope, and a 'binding-pat' (a fresh name) otherwise — the same name
+# resolution the postfix grammar uses for index-vs-type-arguments (group 4). Names are
+# case-free, so this is decided by resolution, not by capitalization.
+pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same names
+# A struct pattern must list EVERY field, or end with '..' to ignore the rest ('Div{q, r}'
+# lists all; 'Div{q, ..}' ignores the rest; 'Div{..}' matches any). A list pattern may
+# hold at most ONE '..' — '..name' binds the skipped run as a list, a bare '..' drops it.
+# (struct '..' only ignores; it never binds.) 'pattern' position '..' is REST, distinct
+# from the value-level range '..' (group 4).
+#
+# 'pattern-core as name' also binds the WHOLE matched value to 'name' while the core keeps
+# destructuring — 'Move{x, y} as m', 'Some(inner as v)'. 'as' reads the same as in
+# 'with'/'import': '<thing> as <name>'. On an or-pattern it binds the nearest alternative
+# ('A | B as m' is 'A | (B as m)'); bind both sides with 'A as m | B as m'.
+sub-pattern  ::= pattern-core ( 'as' identifier )?
+pattern-core ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
+variant-pat  ::= type-name ( '(' pattern-list ')' )?    # Left(v), Some, nested Left(Some(v))
+struct-pat   ::= type-name '{' struct-fields? '}'       # Div{q, r}; Div{q, ..}; Div{..}
+struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
+tuple-pat    ::= '(' pattern-list ')'                   # (a, b) — also a bind-target
+list-pat     ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # [a, b], [h, ..t], []
+list-pat-elem ::= pattern | '..' identifier?            # '..name' binds the rest as a list
+literal-pat  ::= '-'? literal                           # matched by equal; '-' only on a number
+binding-pat  ::= identifier                             # binds anything, by copy
+field-pat    ::= identifier ( ':' pattern )?            # shorthand, or field: pattern
+pattern-list ::= pattern ( ',' pattern )*
+
+# ==================================================================================
+# 7. Types & Declarations
+# ==================================================================================
+# The type expressions referenced since group 5, and the declarations that introduce
+# types and behavior: 'struct' (product), 'enum' (sum), 'type X = Y' (strong typedef),
+# 'spec' (behavioral interface), and 'impl'. Structural derivation is a decorator on
+# the type, '#[derive(...)]' (below). A method takes no explicit receiver — 'this' is
+# implicit inside a method (see param, group 5); the self type is 'This'.
+
+# --- type expressions ---
+# A type-name is just an identifier, so the set of built-in NUMERIC types — 'int',
+# 'uint', 'float', and any fixed-width members ('i32', 'u8', 'f64', …) — is a STDLIB
+# decision, not surface grammar: adding one adds no production.
+type         ::= base-type '?'?                        # a trailing '?' makes it optional
+base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'I.Item' PROJECTS an
+               | tuple-type | array-type | chan-type | fn-type | ptr-type   # associated type — chainable: 'I.Item.Sub'
+type-args    ::= '[' generic-arg ( ',' generic-arg )* ']'
+generic-arg  ::= type | const-expr   # a type, or a const-expr filling a value generic param (resolved by name resolution)
+tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
+array-type   ::= '[' type ';' const-expr ']'           # [T; N] — the ';' array position; N is a const-expr
+chan-type    ::= 'chan' '[' type ']'           # bidirectional
+               | '<-' 'chan' '[' type ']'       # receive-only (a receiver), Go-style
+               | 'chan' '[' type ']' '<-'       # send-only (a sender), Go-style
+
+# --- declarations (compound: struct/enum/spec/impl; simple: type) ---
+struct-decl  ::= 'pub'? 'struct' identifier generics? '{' field-list? '}'
+enum-decl    ::= 'pub'? 'enum' identifier generics? '{' variant-list? '}'
+type-decl    ::= 'pub'? 'type' identifier generics? '=' type      # strong typedef
+spec-decl    ::= 'pub'? 'spec' identifier generics? ( ':' bound )? '{' spec-member* '}'
+impl-decl    ::= 'impl' generics? type-name type-args? 'for' type '{' impl-item* '}'  # a spec impl
+             | 'impl' generics? type '{' impl-item* '}'                              # inherent
+             # 'impl[T] Spec for list[T]' — the impl's type params sit after 'impl', so a
+             # T introduced here is usable in the target. The 'for'-less form adds
+             # INHERENT methods to a type (no spec): 'impl User { … }' — a named
+             # constructor 'User.from_json(…)' (an associated fn, no 'this') or a private
+             # method 'u.recompute()' (uses 'this'). Every method and associated fn on a
+             # type shares one namespace, spec or inherent alike; a duplicate is an error.
+impl-item    ::= fn-decl | assoc-bind | val-bind   # a method/assoc fn, an assoc-type binding, or an assoc value
+assoc-bind   ::= 'type' identifier '=' type   # 'type Item = int' — satisfies a spec's assoc type
+val-bind     ::= identifier ':=' const-expr   # 'BITS := 32' — satisfies a spec's associated value
+
+# --- compile-time constants (implicit) ---
+# Compile-time folding is IMPLICIT and independent of the 'const' keyword (which only marks a
+# shadow-proof binding, group 4). A COMPILE-TIME CONSTANT is any binding — ':=' or 'const',
+# module-level or local — whose initializer is a CONST-EXPR: the compiler folds it, and the
+# name may then be used wherever a compile-time value is required — an array length '[T; N]',
+# an enum discriminant, a decorator argument, or a const-generic argument. Using such a name
+# where its initializer is NOT const-foldable is a compile error, reported at the use site.
+#
+# A const-expr is an ordinary 'expr' (group 4) RESTRICTED to what the compiler folds with no
+# evaluation engine: literals, other const-foldable names, an enum's discriminant, and the
+# arithmetic / bitwise / comparison / logical operators. There are NO function calls and no
+# runtime values — so 'sizeof'/'len' (stdlib calls) are not const-exprs yet.
+const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see above)
+
+# CONSTRUCTION. A type name is ALSO its constructor: 'struct'/'enum' put the name into
+# the value namespace as a callable, so 'User(id: 1, name: "x")' builds a struct (its
+# fields become parameters in declaration order — positional then named, group 5) and
+# 'Circle(3.0)' builds an enum variant. The name is SHARED with functions: a type and a
+# function cannot share a name (a duplicate is an error — Zerg has no overloading).
+#
+# FIELD VISIBILITY & DEFAULTS. A field is 'pub' for external INSTANCE ACCESS (read/write
+# of 'u.field'); a non-pub field is module-private, and MUST carry a default. A field's
+# default lets its constructor argument be omitted. There are NO zero values: a non-
+# optional field with no default is REQUIRED at construction; the ONE implicit default is
+# 'nil' for a 'T?' field (its natural absent state). The field-wise 'T(...)' constructor
+# is public and PRIMITIVE (not overridable); a custom constructor is a named associated
+# function (an inherent 'impl', group 5) that builds via 'T(...)'. The '#[sealed]'
+# decorator demotes 'T(...)' to module-private, so external code must use a public custom
+# constructor — the module still builds with 'T(...)' internally.
+
+# Decorators are a fixed, compiler-owned set of directives (users cannot define new
+# ones — Zerg has no macros). A decorator prefix leads any declaration (the
+# 'decorator*' on 'decorated-decl', group 1) and binds to it. 'derive' asks the
+# compiler to generate the canonical impls of the named blessed specs by reading the
+# type's structure; other decorators (layout, logging, FFI, …) slot in here later.
+decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
+deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
+deco-arg     ::= type-name | const-expr        # derive(Encode, Decode), align(16), align(SIZE*2), …
+
+# A generic parameter may carry a spec BOUND — 'T: Ord' means every method a body calls
+# on a T comes from the named specs (a '+' conjunction: 'T: Ord + Hash' grants both).
+# The same 'bound' is a spec's SUPER-SPEC — 'spec Ord: Eq' makes an 'impl Ord' also
+# require 'impl Eq', and lets Ord's body use Eq's methods on This. There is NO disjunction
+# bound ('T: A | B'): a body could not know which methods T has, so it cannot monomorphize.
+# To accept SEVERAL argument types, parameterize a spec and write one impl per type — e.g.
+# 'spec Indexable[K] { type Output; fn index(k: K) -> Output }' with 'impl Indexable[int]'
+# (element) and 'impl Indexable[Range]' (slice) for a list, so 'xs[k]' resolves statically
+# on k's type and each impl keeps its own 'Output' — or use an 'enum' for a runtime choice.
+#
+# Generics MONOMORPHIZE: each distinct type argument compiles to its own specialized C
+# function. So a bound is load-bearing (it names the impl to specialize against, and in
+# generic code 'a < b' is valid only if T's bounds provide the operator's spec), and a
+# generic function is NOT a first-class value until instantiated. Soundness needs
+# COHERENCE (at most one 'impl Spec for Type' program-wide) and an ORPHAN rule (the impl
+# must own the spec or the type). Generics are invariant — Zerg has no subtyping. The
+# '#[dyn]' decorator instead compiles a generic to one shared witness-table body (a
+# size-for-speed trade; see docs) — it CANNOT erase a VALUE generic (a compile-time value
+# has no witness-table slot). Explicit call-site type arguments are written 'f[T]',
+# disambiguated from an index by name resolution (see postfix, group 4).
+#
+# VALUE (CONST) GENERICS. A generic parameter may be a compile-time VALUE, not just a type,
+# and there is NO 'const' keyword: the annotation after ':' resolves BY NAME — a SPEC makes it
+# a type parameter bounded by that spec ('[T: Ord]'); a concrete (non-spec) TYPE makes it a
+# compile-time VALUE parameter of that type ('[N: int]' — a PRIMITIVE: int/uint/float/bool/rune/
+# byte/str; composite/user types deferred). A bare '[X]' is a type parameter. A FUNCTION's value
+# param is INFERRED from an argument's type ('fn sum[N: int](xs: [int; N])' fixes N from 'xs')
+# and is not passed at the call site; a TYPE's is supplied in type position ('Matrix[3, 4]').
+generics     ::= '[' type-param ( ',' type-param )* ']'
+type-param   ::= identifier ( ':' bound )?             # bound = a spec → type param; a concrete type → value param
+bound        ::= type-name ( '+' type-name )*          # a conjunction of specs (single concrete type = value param)
+# Fields and variants are separated exactly like statements — by stmt-sep (a line
+# break, realized as ';' by ASI). There is NO ',' between them; the ',' inside a
+# variant payload '(A, B)' is an ordinary argument list.
+field-list   ::= stmt-sep* ( field ( stmt-sep+ field )* stmt-sep* )?
+field        ::= 'pub'? identifier ':' type ( '=' expr )?   # 'pub' = external access; default feeds ctor
+variant-list ::= stmt-sep* ( variant ( stmt-sep+ variant )* stmt-sep* )?
+variant      ::= identifier ( '(' type ( ',' type )* ')' )? ( '=' const-expr )?   # payload or discriminant
+# A '= expr' gives a variant an explicit DISCRIMINANT — only when EVERY variant is
+# fieldless (a C-style integer enum; a payload enum keeps its tag opaque and match-only).
+# The value is a compile-time-constant integer, distinct across variants; an unspecified
+# one is the previous + 1 (from 0). Such an enum has a native, C-compatible integer repr
+# (backing 'int' by ONE default rule — no annotation needed; 'int(v)' reads the value,
+# 'E.of(n) -> E?' reverses). A specific width is an opt-in layout decorator ('#[repr]',
+# reserved); the serialized/wire form is the 'Encode'/'Decode' impl, never a decorator.
+# A spec member is a required method (signature), a provided method (with a body), or an
+# ASSOCIATED TYPE — a type the impl fills in ('type Item'), functionally determined by
+# the implementer (one per impl). It makes a single-output protocol like iteration well
+# defined: 'for x in it' has ONE element type because 'Iterator.Item' is fixed per impl,
+# not chosen per use as a generic 'Iterable[T]' would allow. Reference it by projection
+# in type position — 'I.Item' (group 4's base-type). A spec may also require an ASSOCIATED
+# VALUE — a compile-time value each impl supplies: 'BITS: int' requires it, the impl provides
+# 'BITS := 32' (a val-bind, group 7). An associated type is a type only; an associated value
+# carries a value.
+spec-member  ::= fn-sig | fn-decl | assoc-type | assoc-val   # method(s), assoc type, or assoc value
+assoc-type   ::= 'type' identifier ( ':' bound )?      # 'type Item' or bounded 'type Item: Ord'
+assoc-val    ::= identifier ':' type                   # 'BITS: int' — a required associated value
+fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type?
+
+# ==================================================================================
+# 8. Null-safety & Errors
+# ==================================================================================
+# Failure comes in two tiers. RECOVERABLE failure is an ordinary value of a sum type
+# — 'Either[X, Y]', 'Result[T]' = Either[T, Err], and 'T?' = Either[T, nil] with the
+# placeholder 'nil'. A BUG is an ABORT that unwinds the stack (running defers). The
+# operators bridge the tiers:
+#   x?            propagate — unwrap the Left, else early-return the Right from the fn
+#   a ?? b        default   — a's Left if present, else b; right-assoc, short-circuits
+#   a?.b          optional chain (T? only) — read .b when present, else nil in place
+#   x!            force-unwrap — unwrap the Left, else raise UnwrapError (value → abort)
+#   raise e       abort with an Err (value → abort); 'raise e from c' records c as cause
+#   guard { … }   demote an abort in the block back to a value → Result[T] (abort → value)
+# The '??' right side may DIVERGE instead of giving a value — 'x ?? break', 'v ?? return
+# nil', 'p ?? raise Err' — because break/continue/return/raise never produce a value.
+
+coalesce-expr ::= or-expr ( '??' coalesce-rhs )?    # '??': loosest binary, right-assoc
+coalesce-rhs  ::= coalesce-expr | diverge
+diverge       ::= 'break' | 'continue' | return | raise
+raise         ::= 'raise' expr ( 'from' expr )?     # 'from c' records c as e's cause
+guard-expr    ::= 'guard' block                     # yields Result[T]; T = the block's value
+
+# ==================================================================================
+# 9. Concurrency — coroutines & channels
+# ==================================================================================
+# Concurrency is coroutines + channels only (CSP). 'spawn f(args)' starts a
+# fire-and-forget coroutine (no handle, no join). A channel is built with
+# 'chan[T](cap?)' (capacity 0 = unbuffered rendezvous); 'ch <- v' sends, '<-ch'
+# receives yielding Result[T] (Right = closed, carrying StopIteration or a crash
+# Err). A bare 'chan[T]' is bidirectional and narrows to '<-chan[T]' / 'chan[T]<-'
+# or via the values 'ch.recv' / 'ch.send'. There is NO explicit close (the channel
+# auto-closes when its last sender leaves) and NO 'yield'. 'select' is the only
+# multi-way wait.
+
+spawn-stmt   ::= 'spawn' expr                  # fire-and-forget; expr is a call
+send-stmt    ::= expr '<-' expr                # 'ch <- v'; send yields no value
+chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional capacity
+
+# 'select' watches several send/receive arms, runs the first ready one (fair ties).
+# 'done' fires once when every watched receive channel has closed; '_' fires when
+# nothing is ready (non-blocking). Both 'done' and '_' are contextual — special only
+# as a select-arm head.
+select-stmt  ::= 'select' '{' select-arm+ '}'
+select-arm   ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
+recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
+send-arm     ::= expr '<-' expr '->' expr
+
+# ==================================================================================
+# 10. Modules & Programs
+# ==================================================================================
+# Source is organized as program > package > module (a directory) > file. Visibility
+# is 'pub' (already a prefix on every declaration): a plain declaration is module-
+# private, 'pub' exposes it to the rest of the package, and a package's public API is
+# the 'pub' surface of its ROOT module. 'import' names another module/package by its
+# STRING path; a 'pub' on the spec ('import pub "…"') RE-EXPORTS it onto this module's
+# surface (how a root builds its API).
+# 'init()' is lazy module setup, run on first use. A module may declare MULTIPLE 'init()'
+# blocks; they run in declaration (FIFO) order, and each runs EXACTLY ONCE. There are NO
+# mutable globals in SAFE code: a module-level (top-level) binding may not be 'mut' — a
+# top-level ':=' is an immutable module constant, evaluated at init. (The one exception is a
+# 'mut' binding inside a module-level 'unsafe { … }' group, group 12; the SAFE way to share
+# mutable global state is an immutable ':=' holding a stdlib 'Atomic[T]'.) A program is a build rooted at an
+# entry file that defines a top-level 'fn main(...) -> Result[nil]' — 'main' is an
+# ordinary function, not reserved. 'package' is the distribution / versioning unit: a
+# directory tree selected by the build tool, with NO in-source 'package' declaration.
+#
+# An 'import' binds a NAMESPACE. The path is a STRING and its LAST segment names the binding
+# ('import "util/text"' binds 'text'), reached with '.' — 'text.split(…)'. 'as' renames it
+# ('import "a/text" as at'), which is how two imports sharing a last segment coexist. A 'pub'
+# on the spec RE-EXPORTS it ('import pub "util/text"'). MANY imports group in a parenthesized
+# list — 'import ( … )', one spec per line:
+#     import (
+#         pub "util/text"
+#         "util/text/abc" as cc
+#     )
+# each spec is SELF-DELIMITING ('pub'? then a string then an optional 'as name'), so no comma
+# or separator is needed and the '(' … ')' spans lines the usual way (line breaks inside an
+# open '(' are insignificant, group 2); the formatter writes one spec per line. The bound name
+# lives in the one value namespace (group 7), so colliding with a local name is an error —
+# rename with 'as'. There is NO selective ('from … import …') or glob import: to use a member
+# unqualified, bind it locally — 'split := text.split' — since a function is a value.
+import-stmt  ::= 'import' ( import-spec | '(' import-spec* ')' )   # single spec, or a '('-grouped list
+import-spec  ::= 'pub'? import-path ( 'as' identifier )?          # 'pub' RE-EXPORTS; 'as' renames the namespace
+import-path  ::= str-lit                              # "util/text" — a '/'-separated module (directory) path
+init-decl    ::= 'init' '(' ')' block                # lazy setup; many allowed, FIFO, each once
+
+# ==================================================================================
+# 11. Resource cleanup — defer & del
+# ==================================================================================
+# Three constructs share one axis — WHEN cleanup fires. 'defer expr' runs expr at the
+# enclosing block's exit, on EVERY path out (normal, return, or an abort unwind), in
+# last-scheduled-first order. 'del name' revokes that name's access to its storage
+# NOW; the storage is freed only if the revoked access was the owning one and no other
+# holder remains (a Ref[T]/chan drops a refcount instead — 'del ch' closes a channel
+# if you were its last sender). ('Ref[T]' drop, the third point on the axis, fires at
+# the last holder's scope exit — not a statement.)
+defer-stmt   ::= 'defer' expr            # run at block exit, every path incl. abort
+del-stmt     ::= 'del' identifier        # revoke a name's access now
+
+# ==================================================================================
+# 12. Unsafe — raw pointers & inline assembly
+# ==================================================================================
+# The one door to bare-metal. 'unsafe { … }' has TWO shapes, told apart by POSITION. In a FUNCTION
+# body it is a block-EXPRESSION inside which the raw operations below are legal (everywhere else a
+# compile error) and whose bindings are block-scoped like any block; it yields the block's value.
+# At MODULE (declaration) level the SAME 'unsafe { … }' is a DECLARATION GROUP: every item inside is
+# unsafe — a 'fn' is an unsafe fn (unsafe throughout its body, callable only from unsafe), and a 'mut'
+# binding is a module-PRIVATE mutable GLOBAL (persistent — the group scopes names to the MODULE, it is
+# not a fresh value scope). So a page table and the functions that touch it group in one block. An
+# 'unsafe fn' (group 5) is the single-function form outside a group. 'unsafe' is a TRUST BOUNDARY: the
+# compiler makes no memory-safety guarantee inside it — the author vouches for it.
+unsafe-expr  ::= 'unsafe' block          # in a function: block-expression; unsafe ops legal only here
+unsafe-group ::= 'unsafe' '{' stmt-sep* ( unsafe-item ( stmt-sep+ unsafe-item )* stmt-sep* )? '}'
+unsafe-item  ::= decorated-decl | binding   # a declaration (unsafe here); a 'mut' binding is a mutable GLOBAL
+
+# GLOBAL MUTABLE STATE is the one exception to "no mutable globals" (group 10), and lives ONLY as a
+# 'mut' binding inside a module-level 'unsafe { … }' group — there is NO 'unsafe mut' prefix and NO
+# 'static' keyword. The group is the bare-metal escape hatch (a page table + the fns that touch it,
+# together). Prefer the SAFE alternative — an immutable ':=' holding a stdlib 'Atomic[T]' — which
+# shares mutable global state across cores with no 'unsafe' (the binding is immutable; the Atomic's
+# interior is not).
+
+# RAW POINTERS. 'ptr' is a platform-width raw ADDRESS (like C's 'void*' / 'uintptr'); 'ptr[T]'
+# is that address TYPED to a pointee T (same width — '[T]' only types the load/store/offset). A
+# 'ptr' is inherently nullable (address 0 is null) and is ORTHOGONAL to 'T?' — there is NO
+# 'ptr[T]?'; test a null pointer with 'p == 0'. Because T is any type, function pointers fall out
+# for free — 'ptr[fn(int) -> nil]' (an interrupt vector / callback) — as do 'ptr[ptr[T]]' and the
+# bare 'ptr' (a void*). A 'ptr'/'ptr[T]' TYPE may appear in a signature or field (to DESCRIBE
+# pointer-shaped data), but every OPERATION on one — taking an address, dereferencing, storing,
+# offsetting, casting — is legal only inside 'unsafe'. Those operations are unsafe stdlib
+# INTRINSICS, not grammar: 'addr(x) -> ptr[T]', 'p.load() -> T', 'p.store(v)', 'p.offset(n)', and
+# 'ptr' ⇄ 'ptr[T]' ⇄ 'uint' casts (volatile / atomic variants likewise). There is no '*'/'&'
+# pointer operator — the bracket type keeps pointers consistent with 'list[T]'/'Ref[T]'/'chan[T]'.
+ptr-type     ::= 'ptr' ( '[' type ']' )?     # 'ptr' = raw address; 'ptr[T]' = typed pointer (unsafe)
+
+# INLINE ASSEMBLY (unsafe-only). A template string (triple-quoted for multi-line) with operands
+# that bind Zerg values to registers/constraints. The operand heads 'out'/'inout'/'clobber' are
+# CONTEXTUAL — special only inside an asm operand list ('in' is already a keyword). The constraint
+# string ("rax", "r", "m", …) is opaque here; its meaning is the target backend's.
+asm-expr     ::= 'asm' '(' str-lit ( ',' asm-operand )* ')'
+asm-operand  ::= 'in'    '(' str-lit ')' expr      # a value into a register/constraint
+               | 'out'   '(' str-lit ')' lvalue    # a register into an lvalue
+               | 'inout' '(' str-lit ')' lvalue    # both directions
+               | 'clobber' '(' str-lit ( ',' str-lit )* ')'   # registers the asm clobbers
+
+# ==================================================================================
+# Roadmap — all core & minor groups above are landed
+# ==================================================================================
+# The surface grammar is complete. Raw memory and inline assembly land with group 12
+# ('unsafe' / 'ptr' / 'asm'), so bare-metal work — MMIO, page tables, a syscall via 'asm' —
+# is expressible. Two things are deliberately NOT surface grammar:
+#   -- stdlib --      FFI IMPORT (calling a C symbol like 'malloc' from a C library) is a
+#                     STDLIB facility, not syntax — the stdlib binds foreign symbols and a
+#                     foreign call is UNSAFE (allowed only inside 'unsafe'). There is no
+#                     'extern' keyword. FFI EXPORT needs no syntax either: a package's 'pub'
+#                     surface already IS its C ABI (see docs/ffi.md).

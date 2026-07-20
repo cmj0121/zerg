@@ -4,7 +4,7 @@ Zerg 程式如何讀寫外界——檔案、標準串流、子行程。建立在
 模型，[Coroutine 與 Channel](coroutine.zh-TW.md) 的 `Ref[T]` 盒與 coroutine，以及 [FFI](ffi.zh-TW.md) 的 C 邊界
 之上。亦有 [English](io.md) 版本。
 
-I/O 是 stdlib 的 **`io`** package（`import io`，不是 ambient）；唯一例外是 **`print`** 關鍵字（見 Formatting &
+I/O 是 stdlib 的 **`io`** package（`import "io"`，不是 ambient）；唯一例外是 **`print`** 關鍵字（見 Formatting &
 text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載它，每個都複用既有模型：
 
 - **串流**是 `Reader` 或 `Writer`——byte 來源／去處，用 `for` 抽乾；
@@ -26,7 +26,10 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 
 ```text
 fn copy_lines(src: Reader, mut dst: Writer) -> Result[nil] {
-    for line in src.read() { dst.write_str(line)?; dst.write_str("\n")? }
+    for line in src.read() {
+        dst.write_str(line)?
+        dst.write_str("\n")?
+    }
     return dst.flush()
 }
 ```
@@ -46,13 +49,13 @@ create(path: str) -> Result[File]      # 寫/truncate；File 實作 Writer
 
 ## 標準串流
 
-`import io` 綁定 **`io.stdin`**（`Reader`）、**`io.stdout`** 與 **`io.stderr`**（`Writer`）——透過 stdlib 取得的
+`import "io"` 綁定 **`io.stdin`**（`Reader`）、**`io.stdout`** 與 **`io.stderr`**（`Writer`）——透過 stdlib 取得的
 唯讀 OS 事實，跟 `env` 與 clock 同級（[Module、Package 與 Program](package.zh-TW.md)），絕非 `main` 參數。
 **`print`** 關鍵字是免 import 捷徑——`print x` 把 `x.display()` 加換行寫到 stdout、盡力而為；要 `Result`、
 `io.stderr`、或原始 bytes 才用 `io.stdout`。
 
 ```text
-import io
+import "io"
 for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
 
@@ -60,7 +63,7 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 
 原生 `io` 同步地讀、卻絕不阻塞 runtime：一個必須等的 `read_bytes`／`write` 會**停泊它的 coroutine**、scheduler
 轉去跑別的——與任何 channel 等待相同的 fairness 保證（[Coroutine 與 Channel](coroutine.zh-TW.md)），沒有
-`async`／`await`、沒有 function coloring。唯一例外是 FFI 邊界：一個阻塞的 **`extern` C 呼叫**會停泊整條 OS
+`async`／`await`、沒有 function coloring。唯一例外是 FFI 邊界：一個阻塞的 **foreign（FFI）C 呼叫**會停泊整條 OS
 thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
 ## Process 與命令執行

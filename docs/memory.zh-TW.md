@@ -25,15 +25,15 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 可變（每個欄位），`x := …` 則保持不可變；欄位只帶可見性（`pub` 或 private）。Zerg 沒有通用 reference；程式之間
 只能透過以下方式共享儲存：
 
-- **Mutable-ref 參數**（`mut` 參數）——唯一「語意上真的 by-ref」：被呼叫端就地改呼叫端（`mut`）的變數。它受限於
-  這次呼叫——值的位置（欄位、`return`、送 channel）都是**複製當下的值**，只能往下傳給另一個 `mut` 參數，且不能跨
-  `spawn`。**兩個 `mut` 引數永不共享同一塊儲存**——這是被呼叫端倚賴的保證：靜態別名（`f(x, x)`）是
-  **compile error**，而編譯器無法證明之處（`f(mut xs[i], mut xs[j])` 且 runtime `i == j`）該次呼叫會
-  **abort**（`AliasError`）。檢查只插在「mut 引數可能動態別名」的呼叫點。
+- **Mutable-ref 參數**（`mut &` 參數）——唯一「語意上真的 by-ref」：被呼叫端就地改呼叫端（`mut`）的變數。它受限於
+  這次呼叫——值的位置（欄位、`return`、送 channel）都是**複製當下的值**，只能往下傳給另一個 `mut &` 參數，且不能跨
+  `spawn`。**兩個 `mut &` 引數永不共享同一塊儲存**——這是被呼叫端倚賴的保證：靜態別名（`f(x, x)`）是
+  **compile error**，而編譯器無法證明之處（`f(xs[i], xs[j])` 且 runtime `i == j`）該次呼叫會
+  **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
-**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map`／`set` literal 的元素都**依原始碼順序**求值、
-deterministic——不像 C 的引數求值順序是 unspecified。所以副作用（一個 `mut` 引數、一次 abort）的次序可預測；
+**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都**依原始碼順序**求值、
+deterministic——不像 C 的引數求值順序是 unspecified。所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測；
 `and`／`or` 的短路就是這條規則加上「跳過右運算元」（見 [內建 spec](specs.zh-TW.md)）。
 
 **Reference-counted 的值**是 scope-owning 的唯一例外：型別實作 **`Ref`** 的值——內建的 **`chan`**，或 stdlib 的
@@ -55,6 +55,20 @@ channel），就用 **`Ref[T]`** 持有：一個 reference-counted 的資源盒�
 copy-by-value handle 給不了的保證——一個普通 handle 的兩份 copy 會各自試圖釋放那唯一的資源。**唯有資源逃出
 scope 時**才用 `Ref[T]`；侷限在單一 scope 的資源要用 `defer`（見下）。
 
+### `mut`管的是自有 field——handle 背後的狀態是 effect
+
+`mut`（以及 `mut fn` 方法）追蹤的是值**自身擁有的 Zerg field** 的變動。`Ref[T]` _背後_ 的狀態——foreign
+handle 的內部狀態：OS 檔案的 position、socket、資料庫 cursor——**不屬於 Zerg 值的 bytes**。它屬於那個資源，透過一個
+by-ref 複製從不重製、且建構時即固定的 handle 取得。碰它是**未追蹤的 effect**（如同任何 I/O），**不是 mutation**
+——因此推進它的方法**不需 `mut`**，其 receiver 可為 **immutable**：一個 immutable `File` 仍可 `read()` 並推進其
+cursor，正如 C 的 `const FILE*` 仍可 `fread`。
+
+這是個實際的**建模選擇**。想要你**擁有**的可變狀態 → 放 plain field，用 `mut` binding 上的 `mut fn` 去改
+（受追蹤，並適用上述 no-aliasing 保證）；想要一個內部狀態由**外部端擁有**的資源 → 放 `Ref[T]` 之後——immutable
+handle 搭配 effectful 方法，免 `mut`。分界問題與 `defer`-vs-`Ref[T]` 相同：**你改的是自己的 bytes，還是伸手去碰
+handle 擁有的狀態？** Zerg 對自有 field **沒有 interior mutability**——那個維持 refcount cycle-free 的「預設
+immutable、`Ref` 的 referent 建構時固定」，也讓 immutable binding 誠實地保持不可變。
+
 ## 重新宣告與遮蔽（Re-declaration & shadowing）
 
 一個名字可以**重新宣告**——在同一個 block 或巢狀 block 皆可——新的 binding 在型別與可變性上都可與舊的不同。
@@ -75,15 +89,15 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 `del name` 在 scope 結束前**撤銷該名字對其儲存的存取權**。釋放儲存只是一個*後果*：唯有被撤銷的正是**擁有權**
 存取、且沒有其他 holder 時才發生；否則 `del` 只是提早結束「這個名字（或這次借用）」的存取，儲存仍歸 owner。
 
-| `del` 的對象                 | 你擁有它嗎？ | 效果                                                                         |
-| ---------------------------- | ------------ | ---------------------------------------------------------------------------- |
-| local、傳值參數、捕獲副本    | 是           | 最後存取 → **釋放儲存**                                                      |
-| `mut` 參數（借呼叫端的變數） | 否           | 結束本次呼叫的借用 → **不釋放**；呼叫端保有                                  |
-| closure body 內的捕獲值      | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有                        |
-| channel、`Ref[T]`            | refcounted   | 放掉這個 holder（refcount--）；最後 holder 跑 **`drop`**（channel 即 close） |
+| `del` 的對象                   | 你擁有它嗎？ | 效果                                                                         |
+| ------------------------------ | ------------ | ---------------------------------------------------------------------------- |
+| local、傳值參數、捕獲副本      | 是           | 最後存取 → **釋放儲存**                                                      |
+| `mut &` 參數（借呼叫端的變數） | 否           | 結束本次呼叫的借用 → **不釋放**；呼叫端保有                                  |
+| closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有                        |
+| channel、`Ref[T]`              | refcounted   | 放掉這個 holder（refcount--）；最後 holder 跑 **`drop`**（channel 即 close） |
 
 `del` 永不懸空：撤銷一個借用不可能釋放別的名字所擁有的儲存，而 Zerg 既有規則已擋掉「owner 在 borrower 仍存活時
-就釋放」（`mut` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
+就釋放」（`mut &` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
 撤銷——只有 `Ref` 值（channel 與 `Ref[T]`）帶 runtime refcount。
 
 `del` 是**流程一致的**：一個名字只要在任一路徑上被 `del`，其後**每一條**路徑都視它為已死（不引入 runtime drop
@@ -94,7 +108,7 @@ flag）。因此在 `if` 某一分支裡 `del`，匯流之後該名字即不可�
 
 ## `defer`——在 block 退出時清理
 
-`defer stmt` 安排 `stmt` 在所在 **block** 退出時執行——**每一條**離開路徑都跑，**包含 abort unwind**。它是「綁在
+`defer expr` 安排 `expr` 在所在 **block** 退出時執行——**每一條**離開路徑都跑，**包含 abort unwind**。它是「綁在
 scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關閉 scope-local 資源——完全不需要型別：
 
 ```text

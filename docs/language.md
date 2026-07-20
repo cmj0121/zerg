@@ -19,6 +19,18 @@ heap-boxed, dynamically dispatched existential). Covers the built-in specs (`Obj
 `Error`, the operators), the iteration protocol, and the `is` type test. See
 **[Specs & Generics](specs.md)**.
 
+## Decorators & compiler-derived behavior
+
+The compiler can **write an implementation for you** from a type's **structure**, requested with a
+**decorator** on the type: `#[derive(Encode, Decode)]` on a `struct`/`enum` generates the canonical,
+field-by-field (and variant-by-variant) impls. What it derives is a **fixed, compiler-owned set of blessed
+specs** — `Object` (always derived) and, opt-in, `Ord`, `Hash`, `Encode`, `Decode`. A **user spec can never
+be derived** (`#[derive(MySpec)]` is a compile error): generating from structure needs code that reads
+fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
+`impl X for Y`. Decorators are Zerg's one channel for such compiler directives, and it stays closed (users
+cannot define new ones). `derive` is one of a small fixed set — `#[dyn]`, `#[sealed]`, and more — listed in
+**[Decorators](decorators.md)**. See also **[Derive & Default Behavior](derive.md)**.
+
 ## Control Flow & Pattern Matching
 
 The three constructs, split by what they yield: **`if`** and **`for`** are statements that run for
@@ -28,7 +40,7 @@ tuples, structs, or-patterns — that a `match` (or a `:=` binding) destructures
 
 ## Values & Memory
 
-The ownership model with no GC: every value is **scope-owned** and passed **by value**, `mut` is the
+The ownership model with no GC: every value is **scope-owned** and passed **by value**, `mut &` is the
 one explicit by-ref path, `del` and `defer` control cleanup timing, and a **`Ref[T]`** (or a `chan`)
 is the reference-counted exception for a resource that outlives its scope. See
 **[Values & Memory](memory.md)**.
@@ -68,13 +80,21 @@ the **[Coroutines & Channels](coroutine.md)** reference.
 
 Built on the core language above:
 
+- **[Grammar](grammar.md)** — the formal surface grammar (W3C-EBNF), the authoritative
+  [`GRAMMAR`](../GRAMMAR) file, and the nvim syntax tooling.
+- **[Syntax Sugar](syntax-sugar.md)** — every convenient surface form and the core it desugars to,
+  collected in one table.
+- **[Patterns & Idioms](patterns.md)** — the Zerg way to write closures, chained pipelines, and
+  builders (named functions, named args + defaults) without extra syntax.
 - **[Collections](collections.md)** — the built-in containers `list`, `map`, `set`, and the
   fixed-size `[T; N]` array; one canonical type per role.
 - **[Derive & Default Behavior](derive.md)** — the two sources of "free" behavior: the compiler's
   structural derivation and a spec's default methods, and the firm line between them.
+- **[Decorators](decorators.md)** — the fixed, compiler-owned set of `#[…]` directives (`derive`, `dyn`,
+  `sealed`, …), what each does, and why the set stays closed.
 - **[Modules, Packages & Programs](package.md)** — how source is organized into modules and
   packages, how visibility and coherence hold across them, and where a program starts.
-- **[FFI](ffi.md)** — the C ABI boundary: exporting Zerg through its `pub` surface and importing C
-  with `extern`.
+- **[FFI](ffi.md)** — the C ABI boundary: exporting Zerg through its `pub` surface, and importing C
+  as a stdlib facility (an unsafe foreign call).
 - **[Process & I/O](io.md)** — the checked I/O surface (streams, files, stdio, processes), imported
   as the `io` package.

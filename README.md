@@ -25,8 +25,27 @@ Programs are fast to write, easy to read, and overwhelmingly straightforward.
 Full semantics — primitive & user types, casts, the memory model, concurrency, and null-safety —
 are in the **[Language Reference](docs/language.md)**, with companion references for
 **[Modules, Packages & Programs](docs/package.md)**, **[Coroutines & Channels](docs/coroutine.md)**,
+**[Grammar](docs/grammar.md)**, **[Syntax Sugar](docs/syntax-sugar.md)**,
 **[Collections](docs/collections.md)**, **[Derive & Default Behavior](docs/derive.md)**,
 **[Process & I/O](docs/io.md)**, and the **[FFI](docs/ffi.md)**.
+
+## A small core, a little sugar
+
+The surface is mostly **sugar over a tiny core** — one way to do it, nothing hidden:
+
+```text
+break if done                   # → if done { break }
+with open(path) as f { … }      # scoped resource, torn down on every exit
+print f"{count=} {ratio:.2f}"   # Python-style interpolation → str concatenation
+
+#[derive(Encode, Decode)]       # the compiler writes the impls from the structure
+struct User { id: int }
+```
+
+Each form desugars to the core — the full table is in **[Syntax Sugar](docs/syntax-sugar.md)**.
+
+Control flow stays flat: `break` / `continue` act only on the nearest `for`, and there are **no loop
+labels** — to leave an outer loop, extract a function and `return`.
 
 ## Compile Flow
 

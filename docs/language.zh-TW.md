@@ -15,6 +15,16 @@ Zerg 如何抽象行為。**`spec`** 是唯一機制——一個 nominal 介面,
 **型別本身**（heap-boxed、動態 dispatch 的 existential）。涵蓋內建 spec（`Object`、`Ord`、`Hash`、`Error`、運算子）、
 迭代協定,以及 `is` 型別測試。見 **[Spec 與 Generics](specs.zh-TW.md)**。
 
+## Decorator 與 compiler 代寫的行為
+
+compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decorator** 請求：`struct`/`enum` 上的
+`#[derive(Encode, Decode)]` 會生成逐欄位(與逐 variant)的 canonical impl。可 derive 的是一組**固定、compiler 擁有的
+受祝福 spec**——`Object`(一律 derive)以及可 opt-in 的 `Ord`、`Hash`、`Encode`、`Decode`。**使用者 spec 永遠不能被
+derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 field 的程式,而那只有 compiler 能做——**沒有 macro**。要
+客製就手寫 `impl X for Y`。decorator 是 Zerg 給這類 compiler 指令的唯一通道,且保持封閉(使用者不可自訂)。`derive`
+只是一個小固定集合中的一員——`#[dyn]`、`#[sealed]` 等——完整清單見 **[Decorator](decorators.zh-TW.md)**。另見
+**[Derive 與預設行為](derive.zh-TW.md)**。
+
 ## 控制流與模式比對（Control Flow & Pattern Matching）
 
 三個構造,依「產出什麼」區分：**`if`** 與 **`for`** 是為副作用而跑的 statement,**`match`** 是產出值的 expression。再加上
@@ -23,7 +33,7 @@ Zerg 如何抽象行為。**`spec`** 是唯一機制——一個 nominal 介面,
 
 ## 值與記憶體（Values & Memory）
 
-無 GC 的所有權模型：每個值都是 **scope-owned** 且以**值傳遞**,`mut` 是唯一顯式的 by-ref 路徑,`del` 與 `defer` 控制清理
+無 GC 的所有權模型：每個值都是 **scope-owned** 且以**值傳遞**,`mut &` 是唯一顯式的 by-ref 路徑,`del` 與 `defer` 控制清理
 時機,而 **`Ref[T]`**（或 `chan`）是「資源逃出自身 scope」的 reference-counted 例外。見 **[值與記憶體](memory.zh-TW.md)**。
 
 ## 函式與閉包（Functions & Closures）
@@ -55,10 +65,16 @@ join/handle,只捕獲 **immutable 值與 channel**。channel 是 reference-count
 
 建立在上述核心語言之上：
 
+- **[文法（Grammar）](grammar.zh-TW.md)**——形式表面文法（W3C-EBNF）、權威的 [`GRAMMAR`](../GRAMMAR) 檔,與 nvim 語法工具。
+- **[語法糖（Syntax Sugar）](syntax-sugar.zh-TW.md)**——每個方便的表面寫法,以及它 desugar 回的核心,收在一張表。
+- **[慣用法（Patterns & Idioms）](patterns.zh-TW.md)**——closure、鏈式 pipeline、builder 的道地寫法（具名函式、named
+  args + 預設值）,不需額外語法。
 - **[Collection](collections.zh-TW.md)**——內建容器 `list`、`map`、`set`,以及定長 `[T; N]` 陣列;一角色一個 canonical 型別。
 - **[Derive 與預設行為](derive.zh-TW.md)**——兩種「免費」行為的來源：compiler 的結構化衍生,與 spec 的 default method,
   以及兩者之間那條明確界線。
+- **[Decorator](decorators.zh-TW.md)**——固定、compiler 擁有的 `#[…]` 指令集（`derive`、`dyn`、`sealed`……）,各自
+  做什麼,以及這個集合為何保持封閉。
 - **[Module、Package 與 Program](package.zh-TW.md)**——原始碼如何組織成 module 與 package、可見性與 coherence 如何跨越
   它們,以及程式從何啟動。
-- **[FFI](ffi.zh-TW.md)**——C ABI 邊界：以 `pub` 表面 export Zerg、以 `extern` import C。
+- **[FFI](ffi.zh-TW.md)**——C ABI 邊界：以 `pub` 表面 export Zerg、import C 則是 stdlib 設施（一次 unsafe 的 foreign call）。
 - **[Process 與 I/O](io.zh-TW.md)**——有檢查的 I/O 面（stream、file、stdio、process）,以 `io` package 匯入。

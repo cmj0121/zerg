@@ -110,7 +110,7 @@ block      ::= '{' stmt-list '}'
 keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
-             | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'  | 'extern'
+             | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'
              | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'    | 'not'
              | 'and'   | 'or'    | 'print'  | 'this'    | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'
@@ -693,9 +693,9 @@ asm-operand  ::= 'in'    '(' str-lit ')' expr      # a value into a register/con
 # ==================================================================================
 # The surface grammar is complete. Raw memory and inline assembly land with group 12
 # ('unsafe' / 'ptr' / 'asm'), so bare-metal work — MMIO, page tables, a syscall via 'asm' —
-# is expressible. One boundary is deliberately left out:
-#   -- deferred --    FFI IMPORT by C SYMBOL NAME (naming an external 'malloc'/syscall to
-#                     call it directly) is an OPEN design question — likely a thin linkage/
-#                     stdlib facility rather than surface syntax; a syscall can already be
-#                     issued through 'asm'. FFI EXPORT needs no syntax at all: a package's
-#                     'pub' surface already IS its C ABI (see docs/ffi.md).
+# is expressible. Two things are deliberately NOT surface grammar:
+#   -- stdlib --      FFI IMPORT (calling a C symbol like 'malloc' from a C library) is a
+#                     STDLIB facility, not syntax — the stdlib binds foreign symbols and a
+#                     foreign call is UNSAFE (allowed only inside 'unsafe'). There is no
+#                     'extern' keyword. FFI EXPORT needs no syntax either: a package's 'pub'
+#                     surface already IS its C ABI (see docs/ffi.md).

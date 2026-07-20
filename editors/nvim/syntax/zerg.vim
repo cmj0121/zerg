@@ -42,7 +42,7 @@ syntax match zergStatement "\<for\>"
 syntax match zergKeyword "\%(\<impl\>.\+\)\@80<=\<for\>"
 
 " Declaration keywords.
-syntax keyword zergKeyword mut const pub extern package init unsafe
+syntax keyword zergKeyword mut const pub package init unsafe
 
 " Type- and function-declaring keywords carry a nextgroup, so the declared NAME
 " (fn/struct/enum/spec/type) highlights the same as a function name — see

@@ -45,10 +45,10 @@ commit. `GRAMMAR` grows section by section, and the [nvim tooling](#editor-tooli
 
 All groups above are landed — the surface grammar is complete. Raw memory and inline assembly land with
 group 12 (`unsafe` / `ptr` / `asm`), so bare-metal work (MMIO, page tables, a syscall via `asm`) is
-expressible. The one boundary left out is **FFI import by C symbol name** (naming an external `malloc` or
-syscall to call it directly): an **open design question** — likely a thin linkage/stdlib facility rather
-than surface syntax — not a pending feature (a syscall can already be issued via `asm`). **FFI export needs
-no syntax**: a package's `pub` surface already _is_ its C ABI (see [FFI](ffi.md)).
+expressible. Two things are deliberately **not surface grammar**: **FFI import** (calling a C symbol like
+`malloc` from a C library) is a **stdlib facility** — the stdlib binds foreign symbols and a foreign call is
+**unsafe** (allowed only inside `unsafe`); there is no `extern` keyword. **FFI export** needs no syntax
+either: a package's `pub` surface already _is_ its C ABI (see [FFI](ffi.md)).
 
 ## Group 1 — `nop` & the program skeleton
 
@@ -119,7 +119,7 @@ keyword** is never an identifier; the full reserved set is:
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-chan  type   impl    package  init     extern
+chan  type   impl    package  init
 defer del    raise   guard    is       not
 and   or     print   this     with     as
 from  true   false   nil      const    unsafe

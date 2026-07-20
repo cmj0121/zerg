@@ -44,10 +44,10 @@ notation 很小：
 | 12  | Unsafe               | `unsafe { }`、`unsafe fn`、`ptr` / `ptr[T]`、`asm(…)`           | 已落地 |
 
 以上各 group 皆已落地——表面文法**已完整**。raw memory 與 inline assembly 隨 group 12（`unsafe` / `ptr` /
-`asm`）到來，故裸機工作（MMIO、page table、以 `asm` 發 syscall）皆可表達。唯一留白的邊界是 **依 C 符號名的 FFI
-import**（命名外部 `malloc`/syscall 直接呼叫）：**待議的開放設計**——可能是薄的 linkage/stdlib 機制而非表面語法——
-而非待做功能（syscall 已可透過 `asm` 發出）。**FFI export 不需任何語法**：package 的 `pub` 表面本身**就是**它的 C
-ABI（見 [FFI](ffi.zh-TW.md)）。
+`asm`）到來，故裸機工作（MMIO、page table、以 `asm` 發 syscall）皆可表達。有兩件事**刻意不放進表面文法**：**FFI
+import**（呼叫 C library 的符號如 `malloc`）是 **stdlib 機制**——由 stdlib 綁定外部符號，且外部呼叫是 **unsafe**（只在
+`unsafe` 內允許）；**沒有 `extern` 關鍵字**。**FFI export** 也不需語法：package 的 `pub` 表面本身**就是**它的 C ABI
+（見 [FFI](ffi.zh-TW.md)）。
 
 ## Group 1 — `nop` 與程式骨架
 
@@ -117,7 +117,7 @@ block      ::= '{' stmt-list '}'
 nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
-chan  type   impl    package  init     extern
+chan  type   impl    package  init
 defer del    raise   guard    is       not
 and   or     print   this     with     as
 from  true   false   nil      const    unsafe

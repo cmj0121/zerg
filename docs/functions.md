@@ -6,13 +6,13 @@ named arguments, and closure capture. Part of the [Language Reference](language.
 
 A function is a **first-class value**: it has a type, and can be passed as an argument, returned,
 stored in a field, and bound to a variable. A function type is written `fn(P...) -> R`; a parameter's
-`mut` is **part of the type**, so `fn(mut int) -> bool` and `fn(int) -> bool` are distinct types (they
-differ in calling convention — by-ref-in-place vs copy). Visibility is **not** part of the type: `pub`
+`mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they
+differ in calling convention — mutable-reference vs copy). Visibility is **not** part of the type: `pub`
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
 anonymous function.
 
-**A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut`
-marking the one argument-level effect, in-place mutation of that argument — and its result, where a
+**A function's type is its input/output contract, and only that.** It reveals its parameters — with `mut &`
+marking the one argument-level effect, a mutable reference that writes back to the caller — and its result, where a
 recoverable failure shows as a `Result` / `Either`. It tracks **no other effect**: whether a function does
 I/O, reads ambient state (clock, randomness, `env`), or may **abort** never appears in a signature. I/O is
 visible only through a file's `import`; an abort, being possible in nearly every expression (an overflow, a

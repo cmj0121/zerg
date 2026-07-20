@@ -4,12 +4,12 @@
 [語言參考](language.zh-TW.md) 的一部分。亦有 [English](functions.md) 版本。
 
 函式是**一等值（first-class value）**：它有型別，可當引數傳遞、可回傳、可存進欄位、可綁定到變數。函式型別寫成
-`fn(P...) -> R`；參數的 `mut` 是**型別的一部分**，所以 `fn(mut int) -> bool` 與 `fn(int) -> bool` 是不同型別
+`fn(P...) -> R`；參數的 `mut &` 是**型別的一部分**，所以 `fn(mut &int) -> bool` 與 `fn(int) -> bool` 是不同型別
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。
 
-**一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut` 標出唯一的「引數層 effect」：就地改動那個
-引數——以及結果，可回復的失敗會以 `Result` / `Either` 顯示在那裡。它**不追蹤任何其他 effect**：一個函式有沒有做
+**一個函式的型別就是它的輸入／輸出契約，僅此而已。** 它揭露參數——`mut &` 標出唯一的「引數層 effect」:寫回呼叫端的
+可變參考——以及結果，可回復的失敗會以 `Result` / `Either` 顯示在那裡。它**不追蹤任何其他 effect**：一個函式有沒有做
 I/O、讀 ambient 狀態（clock、randomness、`env`）、或可能 **abort**，都不出現在簽章裡。I/O 只能透過檔案的 `import`
 看到；而 abort 幾乎在每個運算式都可能發生（一次溢位、一個壞 index），標它就是每條簽章上的噪音。「引數改動」與
 「可回復錯誤」以外的 effect **刻意不追蹤**——Zerg 在這裡是 procedural-first——而非漏寫。

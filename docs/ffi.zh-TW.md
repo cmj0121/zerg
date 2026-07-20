@@ -33,7 +33,7 @@ FFI 有兩個方向，它們刻意重用你已經有的機制，而不是各自�
 | `float`                     | `double`                           | 純 IEEE-754，不變                             |
 | `str`                       | `const char*`                      | NUL 結尾的 UTF-8；入境 copy、出境 borrow      |
 | `list[T]`（FFI-safe `T`）   | `T*` **+** `size_t` 長度           | 一個 fat 值（指標 + 長度）；入境 copy         |
-| 不捕獲的頂層 `fn`           | C function pointer                 | `fn` 型別中的 `mut` 參數降為指標參數          |
+| 不捕獲的頂層 `fn`           | C function pointer                 | `fn` 型別中的 `mut &` 參數降為指標參數        |
 | `struct`（欄位皆 FFI-safe） | C `struct`，by value               | 逐欄位對應；`list`／`str` 欄位為 fat          |
 | `enum`（payload FFI-safe）  | tagged union `{ tag; union {…}; }` | discriminant + payload（layout 待決，見下）   |
 | `T?`                        | tagged union——**除**下述例外       | pointer-shaped `T` → 一個 nullable pointer    |
@@ -73,7 +73,7 @@ Zerg **沒有 pointer surface** 且 **safe by default**，所以 FFI 不能把�
 ```text
 extern "C" {
     type sqlite3                                       # opaque——無欄位、指標形狀、永不解參考
-    fn sqlite3_open(path: str, db: mut sqlite3?) -> int
+    fn sqlite3_open(path: str, db: mut &sqlite3?) -> int
     fn sqlite3_close(db: sqlite3) -> int
 }
 ```
@@ -103,7 +103,7 @@ pub fn open(path: str) -> Db? {
 }
 ```
 
-`mut sqlite3?` out-parameter 之所以成立，是因為 handle 是一個**以值寫回的 scalar token**——就是普通的 `mut`
+`mut &sqlite3?` out-parameter 之所以成立，是因為 handle 是一個**以值寫回的 scalar token**——就是普通的 `mut &`
 參數路徑（見語言參考），沒有新東西。一個**就地填入呼叫端 byte buffer** 的 C 函式是另一種機制（它透過指標*寫入*，
 不是值的寫回）；那個 write-back 協定尚待決定（見「待決問題」）。
 
@@ -143,7 +143,7 @@ Zerg 永不隱式釋放它，也永不替 C 保留一個 Zerg buffer。字元與
 2. 一份對應的 **`.h` header**——含 include guard，收納 opaque `typedef`、`struct`／`enum` layout，以及函式原型。
 
 一個 `pub` **method** 也會匯出：它降級成一個 C 函式，其**第一個參數是 receiver**——by-value 的 `this` 變成那個
-struct by value、`mut this` 變成指向它的指標（就地）——所以建議的 handle-wrapper method 以普通函式的形式抵達 C。
+struct by value、`mut &this` 變成指向它的指標（就地）——所以建議的 handle-wrapper method 以普通函式的形式抵達 C。
 一個**非** FFI-safe 的 `pub` root 宣告會被**回報並排除**於 header 之外，而非靜默丟棄：一個 package 大可對 Zerg
 依賴者提供比對 C 更豐富的 API，而該診斷讓 C ABI 誠實地反映真正跨界的東西。一個不回傳值的 Zerg 函式對映到 C `void`。
 

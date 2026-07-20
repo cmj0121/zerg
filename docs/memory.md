@@ -31,18 +31,18 @@ the whole constructed instance mutable (every field), a plain `x := …` keeps i
 carries only visibility (`pub` or private). Zerg has no general reference; code shares storage only
 through:
 
-- **Mutable-ref parameter** (`mut` param) — the one explicit by-ref path: the callee mutates the
+- **Mutable-ref parameter** (`mut &` param) — the one explicit by-ref path: the callee mutates the
   caller's (`mut`) variable in place. It is confined to the call — value positions (field, `return`,
-  channel send) copy its current value, it can only pass onward to another `mut` param, and it cannot
-  cross a `spawn`. **Two `mut` arguments never share storage** — a guarantee the callee relies on:
+  channel send) copy its current value, it can only pass onward to another `mut &` param, and it cannot
+  cross a `spawn`. **Two `mut &` arguments never share storage** — a guarantee the callee relies on:
   static aliasing (`f(x, x)`) is a **compile error**, and where the compiler cannot prove it
-  (`f(mut xs[i], mut xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
-  inserted only where mut arguments could dynamically alias.
+  (`f(xs[i], xs[j])` with `i == j` at runtime) the call **aborts** (`AliasError`). A check is
+  inserted only where `mut &` arguments could dynamically alias.
 - **Channels** — shared by ref across coroutines, for communication only.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
 `list`/`map`/`set` literal evaluate **in source order**, deterministically — unlike C, whose
-argument-evaluation order is unspecified. So side effects (a `mut` argument, an abort) sequence
+argument-evaluation order is unspecified. So side effects (a `mut &` argument, an abort) sequence
 predictably; the `and` / `or` short-circuit is this rule with the right operand skipped ([Built-in specs](specs.md)).
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
@@ -112,12 +112,12 @@ the storage.
 | `del` target                          | Own? | Effect                                                                      |
 | ------------------------------------- | ---- | --------------------------------------------------------------------------- |
 | local, by-value param, captured copy  | yes  | last access → **storage freed**                                             |
-| `mut` param (borrows caller's var)    | no   | ends this call's borrow → **not freed**; caller keeps it                    |
+| `mut &` param (borrows caller's var)  | no   | ends this call's borrow → **not freed**; caller keeps it                    |
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it              |
 | channel, `Ref[T]`                     | ref  | drops a holder (refcount--); last holder runs **`drop`** (a channel closes) |
 
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
-rules already stop an owner from outliving-then-freeing under a live borrower (a `mut` parameter is
+rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is
 confined to its call; an escaping closure owns copies of its captures). The compiler knows statically
 whether each `del` frees or merely revokes — only `Ref` values (channels and `Ref[T]`) carry a runtime
 refcount.

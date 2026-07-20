@@ -40,7 +40,7 @@ tuples, structs, or-patterns — that a `match` (or a `:=` binding) destructures
 
 ## Values & Memory
 
-The ownership model with no GC: every value is **scope-owned** and passed **by value**, `mut` is the
+The ownership model with no GC: every value is **scope-owned** and passed **by value**, `mut &` is the
 one explicit by-ref path, `del` and `defer` control cleanup timing, and a **`Ref[T]`** (or a `chan`)
 is the reference-counted exception for a resource that outlives its scope. See
 **[Values & Memory](memory.md)**.

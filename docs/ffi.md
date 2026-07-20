@@ -26,21 +26,21 @@ declaration is **FFI-safe** when every type it mentions is FFI-safe; the FFI-saf
 primitives, `list[T]` over an FFI-safe `T`, opaque foreign handles, a non-capturing top-level `fn`, and
 any **non-recursive** `struct`/`enum` built transitively from those.
 
-| Zerg                           | C representation                    | Notes                                           |
-| ------------------------------ | ----------------------------------- | ----------------------------------------------- |
-| `bool`                         | `bool` (`<stdbool.h>`)              |                                                 |
-| `byte`                         | `uint8_t`                           | Zerg's char / a raw octet                       |
-| `rune`                         | `int32_t`                           | a Unicode **code point** (a scalar, not UTF-8)  |
-| `int`                          | `int64_t`                           | overflow still aborts inside Zerg (see Errors)  |
-| `uint`                         | `uint64_t`                          | unsigned; overflow still aborts inside Zerg     |
-| `float`                        | `double`                            | pure IEEE-754, unchanged                        |
-| `str`                          | `const char*`                       | NUL-terminated UTF-8; copied in / borrowed out  |
-| `list[T]` (FFI-safe `T`)       | `T*` **+** `size_t` length          | a fat value (pointer + length); copied in       |
-| non-capturing top-level `fn`   | C function pointer                  | a `mut` parameter lowers to a pointer parameter |
-| `struct` (all fields FFI-safe) | C `struct`, by value                | field-for-field; a `list`/`str` field is fat    |
-| `enum` (FFI-safe payloads)     | tagged union `{ tag; union {…}; }`  | discriminant + payload (layout deferred, below) |
-| `T?`                           | tagged union — **except** see below | pointer-shaped `T` → a nullable pointer         |
-| opaque handle                  | opaque `typedef` (pointer-shaped)   | a foreign resource — never dereferenced by Zerg |
+| Zerg                           | C representation                    | Notes                                             |
+| ------------------------------ | ----------------------------------- | ------------------------------------------------- |
+| `bool`                         | `bool` (`<stdbool.h>`)              |                                                   |
+| `byte`                         | `uint8_t`                           | Zerg's char / a raw octet                         |
+| `rune`                         | `int32_t`                           | a Unicode **code point** (a scalar, not UTF-8)    |
+| `int`                          | `int64_t`                           | overflow still aborts inside Zerg (see Errors)    |
+| `uint`                         | `uint64_t`                          | unsigned; overflow still aborts inside Zerg       |
+| `float`                        | `double`                            | pure IEEE-754, unchanged                          |
+| `str`                          | `const char*`                       | NUL-terminated UTF-8; copied in / borrowed out    |
+| `list[T]` (FFI-safe `T`)       | `T*` **+** `size_t` length          | a fat value (pointer + length); copied in         |
+| non-capturing top-level `fn`   | C function pointer                  | a `mut &` parameter lowers to a pointer parameter |
+| `struct` (all fields FFI-safe) | C `struct`, by value                | field-for-field; a `list`/`str` field is fat      |
+| `enum` (FFI-safe payloads)     | tagged union `{ tag; union {…}; }`  | discriminant + payload (layout deferred, below)   |
+| `T?`                           | tagged union — **except** see below | pointer-shaped `T` → a nullable pointer           |
+| opaque handle                  | opaque `typedef` (pointer-shaped)   | a foreign resource — never dereferenced by Zerg   |
 
 A **`T?` whose `T` is pointer-shaped** (an opaque handle, or a `fn`) does **not** grow a tag: `nil` is
 the **null pointer** and the value is the bare pointer. Only a `T?` over a non-pointer `T` (e.g. `int?`)
@@ -78,7 +78,7 @@ type, declared in an `extern` block with **no body**, that Zerg can hold but nev
 ```text
 extern "C" {
     type sqlite3                                       # opaque — no fields, pointer-shaped, never dereferenced
-    fn sqlite3_open(path: str, db: mut sqlite3?) -> int
+    fn sqlite3_open(path: str, db: mut &sqlite3?) -> int
     fn sqlite3_close(db: sqlite3) -> int
 }
 ```
@@ -113,8 +113,8 @@ pub fn open(path: str) -> Db? {
 }
 ```
 
-The `mut sqlite3?` out-parameter works because a handle is a **scalar token written back by value** — the
-ordinary `mut`-parameter path (Language Reference), nothing new. A C function that fills a caller's
+The `mut &sqlite3?` out-parameter works because a handle is a **scalar token written back by value** — the
+ordinary `mut &`-parameter path (Language Reference), nothing new. A C function that fills a caller's
 **byte buffer in place** is a different mechanism (it writes _through_ a pointer, not a value copy-back);
 that write-back protocol is deferred (see Open questions).
 
@@ -161,7 +161,7 @@ source change — instead emits, in the same pass:
    layouts, and the function prototypes.
 
 A `pub` **method** exports too: it lowers to a C function whose **first parameter is the receiver** — a
-by-value `this` becomes the struct by value, a `mut this` becomes a pointer to it (in-place) — so the
+by-value `this` becomes the struct by value, a `mut &this` becomes a pointer to it (in-place) — so the
 recommended handle-wrapper methods reach C as ordinary functions. A `pub` root declaration that is
 **not** FFI-safe is **reported and left out** of the header rather than silently dropped: a package may
 legitimately offer a richer API to Zerg dependents than it can to C, and the diagnostic keeps the C ABI

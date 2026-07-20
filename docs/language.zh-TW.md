@@ -33,7 +33,7 @@ derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 fiel
 
 ## 值與記憶體（Values & Memory）
 
-無 GC 的所有權模型：每個值都是 **scope-owned** 且以**值傳遞**,`mut` 是唯一顯式的 by-ref 路徑,`del` 與 `defer` 控制清理
+無 GC 的所有權模型：每個值都是 **scope-owned** 且以**值傳遞**,`mut &` 是唯一顯式的 by-ref 路徑,`del` 與 `defer` 控制清理
 時機,而 **`Ref[T]`**（或 `chan`）是「資源逃出自身 scope」的 reference-counted 例外。見 **[值與記憶體](memory.zh-TW.md)**。
 
 ## 函式與閉包（Functions & Closures）

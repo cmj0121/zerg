@@ -344,7 +344,9 @@ for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' ex
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
-match-arm   ::= pattern ( 'if' expr )? '->' expr    # optional guard
+match-arm   ::= ( pattern | range-arm ) ( 'if' expr )? '->' expr   # optional guard
+range-arm   ::= range-bound ( '..' range-bound? | '..=' range-bound )   # sugar: '_ if _ in <range>'
+range-bound ::= '-'? literal | identifier
 pattern       ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern   ::= pattern-core ( 'as' identifier )?
 pattern-core  ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
@@ -387,6 +389,10 @@ list-pat-elem ::= pattern | '..' identifier?
   pattern's bindings, that must also hold; on `A | B if c` it covers the whole or-pattern. A guarded arm
   **does not count toward exhaustiveness** (the compiler can't prove the guard holds), so the case still
   needs an unguarded arm (or `_`).
+- **Range arm.** A **match-only** `200..300 ->` / `400..=499 ->` / `500.. ->` is **sugar** for a guard —
+  `_ if _ in <range>` — so it matches by **containment** (the `..` operators), not `equal`, and inherits a
+  guard's exhaustiveness (it does not count as covering). It does **not bind**; to use the value, write the
+  explicit `x if x in <range>`. Bounds are compile-time constants; a range arm is recognized by its `..`.
 - **Rest & partial.** A **struct pattern must list every field** or end with `..` — `Div{q, r}` (all),
   `Div{q, ..}` (rest ignored), `Div{..}` (any). Listing all by default means adding a field **breaks** old
   patterns, forcing you to look. A **list pattern** matches a list — `[a, b]`, `[head, ..tail]`,

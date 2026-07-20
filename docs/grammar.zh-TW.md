@@ -312,7 +312,9 @@ for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' ex
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
-match-arm   ::= pattern ( 'if' expr )? '->' expr    # 選用 guard
+match-arm   ::= ( pattern | range-arm ) ( 'if' expr )? '->' expr   # 選用 guard
+range-arm   ::= range-bound ( '..' range-bound? | '..=' range-bound )   # sugar：'_ if _ in <range>'
+range-bound ::= '-'? literal | identifier
 pattern       ::= sub-pattern ( '|' sub-pattern )*
 sub-pattern   ::= pattern-core ( 'as' identifier )?
 pattern-core  ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
@@ -348,6 +350,9 @@ list-pat-elem ::= pattern | '..' identifier?
 - **Guard。** arm 可在 pattern 後加 `if expr`（`Some(v) if v > 0 -> …`）——一個能看見 pattern 綁定、且必須成立的
   條件;`A | B if c` 時涵蓋整個 or-pattern。帶 guard 的 arm **不計入 exhaustiveness**（compiler 無法證明 guard 成
   立），所以該 case 仍需一個無 guard 的 arm（或 `_`）。
+- **Range arm。** **僅 match 專用**的 `200..300 ->` / `400..=499 ->` / `500.. ->` 是 guard 的**語法糖**——
+  `_ if _ in <range>`——所以以 **containment**（`..` 運算子）比對,非 `equal`,並繼承 guard 的 exhaustiveness（不算
+  涵蓋）。它**不綁定**;要用該值就寫顯式 `x if x in <range>`。bound 為編譯期常數;range arm 由其 `..` 辨識。
 - **Rest 與部分。** **struct pattern 必須列全 field**,否則以 `..` 結尾——`Div{q, r}`（全）、`Div{q, ..}`（略過
   其餘）、`Div{..}`（任意）。預設列全表示加一個 field 會**弄壞**舊 pattern,逼你檢視。**list pattern** 比對 list——
   `[a, b]`、`[head, ..tail]`、`[..init, last]`、`[]`——**至多一個 `..`**;`..name` 把略過的一段綁成 list,裸 `..`

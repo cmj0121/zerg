@@ -225,6 +225,16 @@ fn grade(score: int) -> str {
     }
 }
 
+# range arms — sugar for `_ if _ in <range>`, matched by containment (group 6)
+fn status_class(code: int) -> str {
+    return match code {
+        200..300  -> "success"
+        400..=499 -> "client error"
+        500..     -> "server error"
+        _         -> "other"
+    }
+}
+
 # list patterns with a rest binding, and `as` to keep the whole (group 6)
 fn describe_list(xs: list[int]) -> str {
     return match xs {

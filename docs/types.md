@@ -94,7 +94,7 @@ turns on whether _every_ variant is fieldless. A **fieldless** `enum` may give a
 `= <discriminant>` — a **compile-time-constant integer**, distinct across variants (an unspecified one is
 the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. Such an
 enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
-`int(v)` **reads** the value and `E.from(n) -> E?` **reverses** it (an unknown `n` yielding `nil`, never a
+`int(v)` **reads** the value and `E.of(n) -> E?` **reverses** it (an unknown `n` yielding `nil`, never a
 wrong variant). A specific width is the opt-in layout decorator `#[repr]`; the serialized/wire form is the
 `Encode` / `Decode` impl, never a decorator.
 

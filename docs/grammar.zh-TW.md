@@ -431,7 +431,7 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode)、align(1
   `Rect(float, float)`。field 與 variant 的分隔**完全比照 statement**（換行，或單行用 `;`）——兩者之間**沒有
   `,`**；payload `(A, B)` 內的 `,` 才是一般清單。兩者皆可泛型——`enum Either[X, Y] { … }`。
 - **Enum 判別值。** 當**每個** variant 皆無 payload 時,variant 可帶顯式整數**判別值**——`enum Status { Ok = 200;
-NotFound = 404 }`——一個 C-style enum,值可觀察（`int(Status.Ok)` 取值、`Status.from(200) -> Status?` 反轉）。
+NotFound = 404 }`——一個 C-style enum,值可觀察（`int(Status.Ok)` 取值、`Status.of(200) -> Status?` 反轉）。
   值為編譯期常數、彼此相異;未指定者 = 前一個 `+ 1`（從 `0` 起）。**payload** enum 的 tag 維持 **opaque**（只能
   match），不得帶判別值。底層由一條預設規則為 `int`——特定寬度是 opt-in 的 layout decorator（`#[repr]`），而
   **wire 格式是 `Encode`/`Decode` impl**,絕非 decorator。

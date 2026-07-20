@@ -82,7 +82,7 @@ enum Either[X, Y] {         # 泛型 sum type
 欄位。一個 **fieldless** `enum` 可以給某個 variant 明確的 `= <discriminant>`——一個 **compile-time 常數整數**、
 在各 variant 間互異（未指定者為前一個 `+ 1`、從 `0` 起算）——使它成為 **C 式整數 enum**：`variant = <int>`。這種
 enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）；`int(v)` **讀**出該值，
-`E.from(n) -> E?` **反轉**回來（未知的 `n` 給 `nil`、絕不變成錯的 variant）。要指定寬度就用 opt-in layout 裝飾器
+`E.of(n) -> E?` **反轉**回來（未知的 `n` 給 `nil`、絕不變成錯的 variant）。要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`；序列化/wire 形式則是 `Encode` / `Decode` impl、絕不是裝飾器。
 
 一個 **payload** `enum`（任一 variant 帶欄位）則保持其 **tag opaque、只可 match**——不允許 `= 5`，你 `match` 的是

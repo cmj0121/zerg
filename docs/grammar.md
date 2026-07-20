@@ -482,7 +482,7 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   payload `(A, B)` is an ordinary list. Both may be generic — `enum Either[X, Y] { … }`.
 - **Enum discriminants.** When **every** variant is fieldless, a variant may take an explicit integer
   **discriminant** — `enum Status { Ok = 200; NotFound = 404 }` — a C-style enum whose value is observable
-  (`int(Status.Ok)` reads it, `Status.from(200) -> Status?` reverses). Values are compile-time constants,
+  (`int(Status.Ok)` reads it, `Status.of(200) -> Status?` reverses). Values are compile-time constants,
   distinct; an unspecified one is the previous `+ 1` (from `0`). A **payload** enum keeps its tag **opaque**
   (match-only) and cannot take discriminants. The backing is `int` by one default rule — a specific width is
   an opt-in layout decorator (`#[repr]`), and the **wire form is the `Encode`/`Decode` impl**, never a

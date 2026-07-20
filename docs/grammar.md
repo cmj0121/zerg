@@ -327,7 +327,8 @@ continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
 match-arm   ::= pattern ( 'if' expr )? '->' expr    # optional guard
 pattern       ::= sub-pattern ( '|' sub-pattern )*
-sub-pattern   ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
+sub-pattern   ::= pattern-core ( 'as' identifier )?
+pattern-core  ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
 struct-pat    ::= type-name '{' struct-fields? '}'
 struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
 list-pat      ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # at most one '..'
@@ -376,6 +377,10 @@ list-pat-elem ::= pattern | '..' identifier?
 - **Variant vs binding** is decided by **name resolution**: a bare name is a variant when it resolves to a
   known type or enum variant in scope, and a fresh binding otherwise. Names are **case-free**, so this is
   resolution, not capitalization — the same name resolution the postfix `[…]` uses (group 4).
+- **`as` binding.** `pattern as name` also binds the **whole** matched value to `name` while the pattern keeps
+  destructuring — `Move{x, y} as m`, `[first, ..] as all`, nested `Some(inner as v)`. It reads like `with` /
+  `import`: `<thing> as <name>`. On an or-pattern `as` binds the nearest alternative (`A | B as m` is
+  `A | (B as m)`); bind both sides with `A as m | B as m`.
 
 ## Group 7 — Types & Declarations
 

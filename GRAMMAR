@@ -357,7 +357,13 @@ pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same 
 # hold at most ONE '..' — '..name' binds the skipped run as a list, a bare '..' drops it.
 # (struct '..' only ignores; it never binds.) 'pattern' position '..' is REST, distinct
 # from the value-level range '..' (group 4).
-sub-pattern  ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
+#
+# 'pattern-core as name' also binds the WHOLE matched value to 'name' while the core keeps
+# destructuring — 'Move{x, y} as m', 'Some(inner as v)'. 'as' reads the same as in
+# 'with'/'import': '<thing> as <name>'. On an or-pattern it binds the nearest alternative
+# ('A | B as m' is 'A | (B as m)'); bind both sides with 'A as m | B as m'.
+sub-pattern  ::= pattern-core ( 'as' identifier )?
+pattern-core ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
 variant-pat  ::= type-name ( '(' pattern-list ')' )?    # Left(v), Some, nested Left(Some(v))
 struct-pat   ::= type-name '{' struct-fields? '}'       # Div{q, r}; Div{q, ..}; Div{..}
 struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'

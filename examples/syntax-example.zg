@@ -212,11 +212,12 @@ fn grade(score: int) -> str {
     }
 }
 
-# list patterns with a rest binding (group 6)
+# list patterns with a rest binding, and `as` to keep the whole (group 6)
 fn describe_list(xs: list[int]) -> str {
     return match xs {
-        []             -> "empty"
-        [head, ..tail] -> f"head {head}, then {tail}"
+        []                 -> "empty"
+        [only] as whole    -> f"one: {whole}"          # `as` binds the whole list too
+        [head, ..tail]     -> f"head {head}, then {tail}"
     }
 }
 

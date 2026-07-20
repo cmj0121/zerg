@@ -301,7 +301,8 @@ continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
 match-arm   ::= pattern ( 'if' expr )? '->' expr    # 選用 guard
 pattern       ::= sub-pattern ( '|' sub-pattern )*
-sub-pattern   ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
+sub-pattern   ::= pattern-core ( 'as' identifier )?
+pattern-core  ::= variant-pat | struct-pat | tuple-pat | list-pat | literal-pat | binding-pat | '_'
 struct-pat    ::= type-name '{' struct-fields? '}'
 struct-fields ::= field-pat ( ',' field-pat )* ( ',' '..' )? | '..'
 list-pat      ::= '[' ( list-pat-elem ( ',' list-pat-elem )* )? ']'   # 至多一個 '..'
@@ -340,6 +341,9 @@ list-pat-elem ::= pattern | '..' identifier?
   丟棄（struct 的 `..` 只忽略、不綁）。pattern 位置的 `..` 是 **rest**,與值層的 range `..` 不同。
 - **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是
   新的 binding。名字**大小寫自由**,所以靠解析、非大小寫——與 postfix `[…]` 用的是同一套 name resolution（group 4）。
+- **`as` 綁定。** `pattern as name` 在 pattern 繼續解構的同時,把**整個**被比對的值綁到 `name`——`Move{x, y} as m`、
+  `[first, ..] as all`、巢狀 `Some(inner as v)`。讀法同 `with` / `import`:`<東西> as <名字>`。在 or-pattern 上,`as`
+  綁最近的 alternative（`A | B as m` 即 `A | (B as m)`）;兩側都要綁就寫 `A as m | B as m`。
 
 ## Group 7 — Types & Declarations
 

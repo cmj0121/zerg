@@ -26,6 +26,19 @@ const (
 	RawStr // a raw string literal: r"C:\tmp"
 	Rune   // a rune literal: 'a', '\n', '\u{1F600}'
 	Byte   // a byte literal: b'a', b'\x41'
+	Cmd    // a command literal: `ls -l` (raw, no holes)
+
+	// structured f-string / f-cmd tokens (GRAMMAR group 5; DESIGN-1a §4). The
+	// lexer emits these around the normal expression tokens of each '{ … }' hole.
+	FStrBegin // f" and the leading text chunk (Str holds the decoded text)
+	FStrText  // a text chunk after a hole (Str holds the decoded text)
+	FStrEnd   // the closing " of an f-string
+	FCmdBegin // f` and the leading text chunk
+	FCmdText  // a text chunk after a hole in an f-cmd
+	FCmdEnd   // the closing ` of an f-cmd
+	Conv      // a '!r'/'!s'/'!a' conversion inside a hole (Str holds "r"/"s"/"a")
+	FmtSpec   // an opaque ':spec' format spec inside a hole (Str holds the spec text)
+	Hash      // '#[' — a decorator open (consumed by the parser in a later slice)
 
 	// keywords (GRAMMAR group 2); each reserved word is its own kind
 	Fn
@@ -132,6 +145,17 @@ var names = map[Kind]string{
 	RawStr:  "RAWSTR",
 	Rune:    "RUNE",
 	Byte:    "BYTE",
+	Cmd:     "CMD",
+
+	FStrBegin: "FSTR_BEGIN",
+	FStrText:  "FSTR_TEXT",
+	FStrEnd:   "FSTR_END",
+	FCmdBegin: "FCMD_BEGIN",
+	FCmdText:  "FCMD_TEXT",
+	FCmdEnd:   "FCMD_END",
+	Conv:      "CONV",
+	FmtSpec:   "FMTSPEC",
+	Hash:      "#[",
 
 	Fn: "fn", Return: "return", If: "if", Else: "else", For: "for", In: "in",
 	Break: "break", Continue: "continue", Nop: "nop", Mut: "mut", Const: "const",
@@ -217,7 +241,7 @@ func (t Token) String() string {
 		return t.Kind.String()
 	case Int, Float, Ident:
 		return fmt.Sprintf("%s(%s)", t.Kind, t.Lexeme)
-	case Str, RawStr, Rune, Byte:
+	case Str, RawStr, Rune, Byte, Cmd, FStrBegin, FStrText, FCmdBegin, FCmdText, Conv, FmtSpec:
 		return fmt.Sprintf("%s(%q)", t.Kind, t.Str)
 	default:
 		return t.Kind.String()
@@ -230,7 +254,7 @@ func (t Token) String() string {
 // after any other token it is insignificant.
 func (k Kind) EndsItem() bool {
 	switch k {
-	case Ident, Int, Float, Str, RawStr, Rune, Byte,
+	case Ident, Int, Float, Str, RawStr, Rune, Byte, Cmd, FStrEnd, FCmdEnd,
 		RParen, RBrack, RBrace, Question, Bang,
 		True, False, Nil, This, Return, Break, Continue, Nop:
 		return true

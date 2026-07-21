@@ -37,6 +37,11 @@ func (p *parser) parseDecl() ast.Decl {
 // parseBareDecl dispatches on the declaration keyword, peeking past the leading
 // 'pub'/'unsafe'/'mut' modifiers to find it.
 func (p *parser) parseBareDecl() ast.Decl {
+	// A module-level 'unsafe { … }' is a declaration group (GRAMMAR group 12),
+	// told apart from an 'unsafe fn' declaration by the '{' that follows.
+	if p.at(token.Unsafe) && p.peek(1).Kind == token.LBrace {
+		return p.parseUnsafeGroup()
+	}
 	switch p.declHeadKind() {
 	case token.Struct:
 		return p.parseStructDecl()
@@ -91,6 +96,8 @@ func setDecorators(d ast.Decl, decos []*ast.Decorator) {
 	case *ast.ImplDecl:
 		n.Decorators = decos
 	case *ast.InitDecl:
+		n.Decorators = decos
+	case *ast.UnsafeGroup:
 		n.Decorators = decos
 	}
 }

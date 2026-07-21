@@ -173,24 +173,49 @@ func (p *parser) parseFile() *ast.File {
 			break
 		}
 		lead := p.lead()
-		if d := p.tryDecl(); d != nil {
-			attach(d, lead, p.trailBehind())
-			file.Decls = append(file.Decls, d)
+		if s := p.tryTopStmt(); s != nil {
+			attach(s, lead, p.trailBehind())
+			file.Items = append(file.Items, s)
 		}
 	}
 	return spanned(file, token.Span{Start: start, End: p.cur().Span.End})
 }
 
-func (p *parser) tryDecl() (d ast.Decl) {
+// tryTopStmt parses one top-level statement, recovering to the next declaration
+// boundary on a parse error.
+func (p *parser) tryTopStmt() (s ast.Stmt) {
 	defer func() {
 		if r := recover(); r != nil {
 			if _, ok := r.(bailout); !ok {
 				panic(r)
 			}
 			p.syncDecl()
-			d = nil
+			s = nil
 		}
 	}()
+	return p.parseTopStmt()
+}
+
+// parseTopStmt parses one item of the program's top-level stmt-list (GRAMMAR
+// group 1/10): an import, a module-level 'unsafe { … }' group, a module-level
+// binding (a top-level ':=' or 'const'), or a decorated declaration.
+func (p *parser) parseTopStmt() ast.Stmt {
+	switch p.cur().Kind {
+	case token.Import:
+		return p.parseImport()
+	case token.Const:
+		t := p.advance()
+		return p.parseBinding(t.Span.Start, false, true)
+	case token.Unsafe:
+		if p.peek(1).Kind == token.LBrace {
+			return p.parseUnsafeGroup()
+		}
+	case token.Ident:
+		switch p.peek(1).Kind {
+		case token.Walrus, token.Colon:
+			return p.parseBinding(p.cur().Span.Start, false, false)
+		}
+	}
 	return p.parseDecl()
 }
 
@@ -354,6 +379,14 @@ func (p *parser) parseStmt() ast.Stmt {
 		return p.parseWith()
 	case token.Raise:
 		return p.parseRaise()
+	case token.Spawn:
+		return p.parseSpawn()
+	case token.Defer:
+		return p.parseDefer()
+	case token.Del:
+		return p.parseDel()
+	case token.Select:
+		return p.parseSelect()
 	case token.Mut:
 		p.advance()
 		return p.parseBinding(t.Span.Start, true, false)
@@ -371,10 +404,14 @@ func (p *parser) parseStmt() ast.Stmt {
 		}
 	}
 	// Otherwise parse an expression; a following '=' makes it a reassignment
-	// (assign-target = expr), else it is an expression statement.
+	// (assign-target = expr), a following '<-' a send statement (ch <- v), else
+	// it is an expression statement.
 	v := p.parseExpr()
 	if p.at(token.Assign) {
 		return p.finishReassign(v)
+	}
+	if p.at(token.LArrow) {
+		return p.finishSend(v)
 	}
 	return spanned(&ast.ExprStmt{X: v}, token.Span{Start: t.Span.Start, End: v.Span().End})
 }
@@ -708,6 +745,14 @@ func (p *parser) parsePrimary() ast.Expr {
 		return p.parseFStr()
 	case token.FCmdBegin:
 		return p.parseFCmd()
+	case token.Chan:
+		return p.parseChanNew()
+	case token.Asm:
+		return p.parseAsm()
+	case token.Unsafe:
+		if p.peek(1).Kind == token.LBrace {
+			return p.parseUnsafeExpr()
+		}
 	case token.LParen:
 		return p.parseParenOrTuple()
 	case token.LBrack:

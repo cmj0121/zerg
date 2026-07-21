@@ -55,8 +55,8 @@ func conservationDiags(src string, file *ast.File) []diag.Diagnostic {
 	}
 	var list diag.List
 	for _, tr := range lost {
-		list.Add(tr.Span, "cannot format: comment %q would be lost "+
-			"(a comment inside an expression is not yet preserved in iteration 1)", tr.Text)
+		list.Add(tr.Span, "cannot format: comment %q is attached to no node and "+
+			"would be lost on reprint", tr.Text)
 	}
 	return list.Items()
 }

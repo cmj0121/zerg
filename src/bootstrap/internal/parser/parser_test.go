@@ -169,7 +169,7 @@ func TestReturnIf(t *testing.T) {
 
 func TestMatch(t *testing.T) {
 	fn := onlyFunc(t, "fn f(n: int) -> int {\n  return match n {\n"+
-		"    -1 -> 5\n    0 -> 10\n    x if x < 0 -> 20\n    _ -> 30\n  }\n}")
+		"    -1 => 5\n    0 => 10\n    x if x < 0 => 20\n    _ => 30\n  }\n}")
 	ret := fn.Body.Stmts[0].(*ast.ReturnStmt)
 	m, ok := ret.Value.(*ast.MatchExpr)
 	if !ok || len(m.Arms) != 4 {

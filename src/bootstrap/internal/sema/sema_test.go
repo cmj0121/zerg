@@ -94,26 +94,26 @@ func TestReturnIfGuard(t *testing.T) {
 
 func TestMatchOK(t *testing.T) {
 	wantOK(t, "fn sign(n: int) -> int {\n  return match n {\n"+
-		"    0 -> 0\n    x if x < 0 -> -1\n    _ -> 1\n  }\n}")
+		"    0 => 0\n    x if x < 0 => -1\n    _ => 1\n  }\n}")
 }
 
 func TestMatchExhaustive(t *testing.T) {
-	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    0 -> 1\n    1 -> 2\n  }\n}",
+	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    0 => 1\n    1 => 2\n  }\n}",
 		"exhaustiveness")
 }
 
 func TestMatchArmTypesMustAgree(t *testing.T) {
-	wantErr(t, "fn f(n: int) -> str {\n  return match n {\n    0 -> 1\n    _ -> \"x\"\n  }\n}",
+	wantErr(t, "fn f(n: int) -> str {\n  return match n {\n    0 => 1\n    _ => \"x\"\n  }\n}",
 		"same type")
 }
 
 func TestMatchGuardMustBeBool(t *testing.T) {
-	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    x if x -> 1\n    _ -> 0\n  }\n}",
+	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    x if x => 1\n    _ => 0\n  }\n}",
 		"condition must be bool")
 }
 
 func TestMatchSubjectMustBeSimple(t *testing.T) {
-	wantErr(t, "fn g() -> int { return 5 }\nfn f() -> int {\n  return match g() {\n    _ -> 1\n  }\n}",
+	wantErr(t, "fn g() -> int { return 5 }\nfn f() -> int {\n  return match g() {\n    _ => 1\n  }\n}",
 		"name or literal")
 }
 

@@ -99,6 +99,7 @@ func TestOperators(t *testing.T) {
 	eq(t, "a := b", token.Ident, token.Walrus, token.Ident)
 	eq(t, "n: int = 0", token.Ident, token.Colon, token.Ident, token.Assign, token.Int)
 	eq(t, "-> <-", token.Arrow, token.LArrow)
+	eq(t, "a => b", token.Ident, token.FatArrow, token.Ident)
 }
 
 func TestASI(t *testing.T) {

@@ -14,6 +14,19 @@ repos:
     hooks:
       - id: prettier
 
+  # -------- go related linter --------
+  # The bootstrap compiler is a Go module in the go.work workspace; golangci-lint
+  # runs the formatters and linters across the workspace (config: .golangci.yaml).
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2
+    hooks:
+      # target the workspace module explicitly: at the repo root go.work has no
+      # module of its own, so the default './...' pattern would find nothing.
+      - id: golangci-lint-fmt
+        args: [./src/bootstrap/...]
+      - id: golangci-lint
+        args: [./src/bootstrap/...]
+
   # -------- security related linter --------
   - repo: https://github.com/zricethezav/gitleaks
     rev: v8.30.0

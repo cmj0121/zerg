@@ -501,6 +501,9 @@ func (l *Lexer) scanOperator(start token.Pos) token.Token {
 		if two == '=' {
 			return emit(token.EqEq, 1)
 		}
+		if two == '>' {
+			return emit(token.FatArrow, 1)
+		}
 		return emit(token.Assign, 0)
 	case '!':
 		if two == '=' {

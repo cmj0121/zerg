@@ -106,8 +106,8 @@ func TestCompileAndRun(t *testing.T) {
 		},
 		{
 			name: "match-int-and-str",
-			src: "fn sign(n: int) -> int {\n  return match n {\n    0 -> 0\n    x if x < 0 -> -1\n    _ -> 1\n  }\n}\n" +
-				"fn kind(s: str) -> str {\n  return match s {\n    \"hi\" -> \"greeting\"\n    _ -> \"other\"\n  }\n}\n" +
+			src: "fn sign(n: int) -> int {\n  return match n {\n    0 => 0\n    x if x < 0 => -1\n    _ => 1\n  }\n}\n" +
+				"fn kind(s: str) -> str {\n  return match s {\n    \"hi\" => \"greeting\"\n    _ => \"other\"\n  }\n}\n" +
 				"fn main() {\n  print sign(-3)\n  print sign(7)\n  print kind(\"hi\")\n  print kind(\"x\")\n}",
 			want: "-1\n1\ngreeting\nother\n",
 		},

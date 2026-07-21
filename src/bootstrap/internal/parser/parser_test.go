@@ -195,7 +195,7 @@ func TestMatch(t *testing.T) {
 	if !ok || !neg.Neg {
 		t.Fatalf("arm 0 should be a negative literal pattern, got %+v", m.Arms[0].Pat)
 	}
-	bind, ok := m.Arms[2].Pat.(*ast.BindPattern)
+	bind, ok := m.Arms[2].Pat.(*ast.NamePattern)
 	if !ok || bind.Name != "x" || m.Arms[2].Guard == nil {
 		t.Fatalf("arm 2 should be a guarded binding, got %+v", m.Arms[2])
 	}

@@ -42,12 +42,20 @@ func TestEmptyFunc(t *testing.T) {
 	}
 }
 
+// typeName returns the name of a bare named type, for test assertions.
+func typeName(t ast.Type) string {
+	if ref, ok := t.(*ast.TypeRef); ok {
+		return ref.Name
+	}
+	return ""
+}
+
 func TestSignature(t *testing.T) {
 	fn := onlyFunc(t, "fn add(a: int, b: int) -> int { return a + b }")
-	if len(fn.Params) != 2 || fn.Params[0].Name != "a" || fn.Params[1].Type.Name != "int" {
+	if len(fn.Params) != 2 || fn.Params[0].Name != "a" || typeName(fn.Params[1].Type) != "int" {
 		t.Fatalf("unexpected params: %+v", fn.Params)
 	}
-	if fn.Ret == nil || fn.Ret.Name != "int" {
+	if fn.Ret == nil || typeName(fn.Ret) != "int" {
 		t.Fatalf("unexpected return: %+v", fn.Ret)
 	}
 }

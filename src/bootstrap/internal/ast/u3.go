@@ -196,7 +196,7 @@ type FStrPart struct {
 type FnExpr struct {
 	base
 	Params []ClosureParam
-	Ret    *TypeRef
+	Ret    Type
 	Body   *Block
 }
 
@@ -205,22 +205,24 @@ type ClosureParam struct {
 	base
 	Ref     bool // 'mut &x'
 	Name    string
-	Type    *TypeRef // nil when inferred
+	Type    Type // nil when inferred
 	Default Expr
 }
 
 // FnType is a function's type 'unsafe? fn(param-types) -> ret' (GRAMMAR group 5).
+// It appears in type position (a parameter, field, or 'ptr[fn(...) -> ...]'), so
+// it is a Type, not an expression (its markers live in u5.go).
 type FnType struct {
 	base
 	Unsafe bool
 	Params []ParamType
-	Ret    *TypeRef
+	Ret    Type // nil when the function type returns nil
 }
 
 // ParamType is one parameter position of a function type.
 type ParamType struct {
 	Ref  bool // 'mut &'
-	Type *TypeRef
+	Type Type
 }
 
 // --- group 4: reassignment ----------------------------------------------------
@@ -293,7 +295,6 @@ func (*MapLit) node()       {}
 func (*FStr) node()         {}
 func (*FCmd) node()         {}
 func (*FnExpr) node()       {}
-func (*FnType) node()       {}
 func (*Reassign) node()     {}
 func (*LValueTarget) node() {}
 func (*TupleTarget) node()  {}
@@ -321,7 +322,6 @@ func (*MapLit) exprNode()     {}
 func (*FStr) exprNode()       {}
 func (*FCmd) exprNode()       {}
 func (*FnExpr) exprNode()     {}
-func (*FnType) exprNode()     {}
 
 // Block is also an expression (GRAMMAR group 4 primary): its value is its last
 // statement's value.

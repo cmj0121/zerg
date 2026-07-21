@@ -58,6 +58,15 @@ func (c *triviaCollector) target(t AssignTarget) {
 	}
 }
 
+// constExpr collects trivia from a const-expr's inner expression, tolerating nil.
+func (c *triviaCollector) constExpr(ce *ConstExpr) {
+	if ce == nil {
+		return
+	}
+	c.self(ce)
+	c.expr(ce.X)
+}
+
 // fstrParts collects trivia from the hole expressions of an f-string or f-cmd.
 func (c *triviaCollector) fstrParts(parts []FStrPart) {
 	for i := range parts {
@@ -110,6 +119,42 @@ func (c *triviaCollector) node(n Node) {
 		c.expr(v.X)
 	case *NopStmt, *BreakStmt, *ContinueStmt:
 		c.self(v)
+	case *StructDecl:
+		c.self(v)
+		for _, f := range v.Fields {
+			c.self(f)
+			c.expr(f.Default)
+		}
+		c.add(v.End)
+	case *EnumDecl:
+		c.self(v)
+		for _, vr := range v.Variants {
+			c.self(vr)
+			c.constExpr(vr.Discr)
+		}
+		c.add(v.End)
+	case *TypeDecl:
+		c.self(v)
+	case *SpecDecl:
+		c.self(v)
+		for _, m := range v.Members {
+			c.node(m)
+		}
+		c.add(v.End)
+	case *ImplDecl:
+		c.self(v)
+		for _, it := range v.Items {
+			c.node(it)
+		}
+		c.add(v.End)
+	case *InitDecl:
+		c.self(v)
+		c.block(v.Body)
+	case *FnSig, *AssocType, *AssocVal, *AssocBind:
+		c.self(v)
+	case *ValBind:
+		c.self(v)
+		c.constExpr(v.Value)
 	case *LitPattern:
 		c.self(v)
 		c.expr(v.Lit)

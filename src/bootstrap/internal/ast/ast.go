@@ -45,10 +45,15 @@ type File struct {
 	End   []token.Trivia
 }
 
-// TypeRef names a type in source (Phase 0: a bare built-in name like int/float).
+// TypeRef names a type in source: a type-name with optional type arguments
+// ('list[int]') and an optional associated-type projection chain ('I.Item.Sub',
+// GRAMMAR group 7's base-type). It is the named form of a Type; the composite
+// forms (tuple/array/chan/fn/ptr) and the optional wrapper live in u5.go.
 type TypeRef struct {
 	base
 	Name string
+	Args []Type   // type arguments 'list[int]', 'Matrix[3, 4]'; nil when none
+	Proj []string // associated-type projection segments after '.'; nil when none
 }
 
 // Param is one function parameter. Ref marks the 'mut &x' mutable-reference form
@@ -57,22 +62,26 @@ type Param struct {
 	base
 	Ref     bool // 'mut &x' — passed by mutable reference
 	Name    string
-	Type    *TypeRef
+	Type    Type
 	Default Expr
 }
 
-// FuncDecl is a top-level function declaration. A nil Ret means the function
-// returns nil (no '-> type').
+// FuncDecl is a function declaration — top level, or a method / associated
+// function of a spec or impl. A nil Ret means the function returns nil (no
+// '-> type'); a nil Generics means it is not generic; Decorators carries any
+// '#[...]' prefix (GRAMMAR group 7's decorated-decl).
 type FuncDecl struct {
 	base
-	Pub     bool // 'pub fn' — the visibility keyword the surface carried
-	Unsafe  bool // 'unsafe fn' — the function is unsafe throughout (group 5/12)
-	Mut     bool // 'mut fn' — a method that mutates its receiver (group 5)
-	Name    string
-	NameEnd token.Pos // end of the name, for signature diagnostics
-	Params  []Param
-	Ret     *TypeRef
-	Body    *Block
+	Decorators []*Decorator
+	Pub        bool // 'pub fn' — the visibility keyword the surface carried
+	Unsafe     bool // 'unsafe fn' — the function is unsafe throughout (group 5/12)
+	Mut        bool // 'mut fn' — a method that mutates its receiver (group 5)
+	Name       string
+	NameEnd    token.Pos // end of the name, for signature diagnostics
+	Generics   *Generics // '[T: Bound, N: int]'; nil when non-generic
+	Params     []Param
+	Ret        Type
+	Body       *Block
 }
 
 // Block is a brace-delimited statement list. End holds any dangling trivia
@@ -95,7 +104,7 @@ type BindStmt struct {
 	Mut   bool
 	Const bool
 	Name  string
-	Type  *TypeRef
+	Type  Type
 	Value Expr
 }
 

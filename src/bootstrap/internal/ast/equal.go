@@ -76,13 +76,108 @@ func (d *dumper) node(n Node) {
 		d.close()
 	case *FuncDecl:
 		d.open("FuncDecl", v)
+		d.decorators(v.Decorators)
 		d.printf(" pub=%t unsafe=%t mut=%t %q", v.Pub, v.Unsafe, v.Mut, v.Name)
+		d.generics(v.Generics)
 		for i := range v.Params {
 			d.param(&v.Params[i])
 		}
 		d.printf(" ret=")
-		d.typeRef(v.Ret)
+		d.typ(v.Ret)
 		d.node(v.Body)
+		d.close()
+	case *StructDecl:
+		d.open("StructDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		for _, f := range v.Fields {
+			d.field(f)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *EnumDecl:
+		d.open("EnumDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		for _, vr := range v.Variants {
+			d.variant(vr)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *TypeDecl:
+		d.open("TypeDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		d.printf(" alias=")
+		d.typ(v.Alias)
+		d.close()
+	case *SpecDecl:
+		d.open("SpecDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		if v.Super != nil {
+			d.printf(" super=")
+			d.bound(v.Super)
+		}
+		for _, m := range v.Members {
+			d.node(m)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *ImplDecl:
+		d.open("ImplDecl", v)
+		d.decorators(v.Decorators)
+		d.generics(v.Generics)
+		d.printf(" spec=")
+		d.typ(v.Spec)
+		d.printf(" target=")
+		d.typ(v.Target)
+		for _, it := range v.Items {
+			d.node(it)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *InitDecl:
+		d.open("InitDecl", v)
+		d.decorators(v.Decorators)
+		d.node(v.Body)
+		d.close()
+	case *FnSig:
+		d.open("FnSig", v)
+		d.printf(" unsafe=%t mut=%t %q", v.Unsafe, v.Mut, v.Name)
+		d.generics(v.Generics)
+		for i := range v.Params {
+			d.param(&v.Params[i])
+		}
+		d.printf(" ret=")
+		d.typ(v.Ret)
+		d.close()
+	case *AssocType:
+		d.open("AssocType", v)
+		d.printf(" %q", v.Name)
+		if v.Bound != nil {
+			d.printf(" bound=")
+			d.bound(v.Bound)
+		}
+		d.close()
+	case *AssocVal:
+		d.open("AssocVal", v)
+		d.printf(" %q ", v.Name)
+		d.typ(v.Type)
+		d.close()
+	case *AssocBind:
+		d.open("AssocBind", v)
+		d.printf(" %q ", v.Name)
+		d.typ(v.Type)
+		d.close()
+	case *ValBind:
+		d.open("ValBind", v)
+		d.printf(" %q ", v.Name)
+		d.constExpr(v.Value)
 		d.close()
 	case *Block:
 		d.open("Block", v)
@@ -97,7 +192,7 @@ func (d *dumper) node(n Node) {
 	case *BindStmt:
 		d.open("Bind", v)
 		d.printf(" mut=%t const=%t %q ", v.Mut, v.Const, v.Name)
-		d.typeRef(v.Type)
+		d.typ(v.Type)
 		d.expr(v.Value)
 		d.close()
 	case *Reassign:
@@ -323,25 +418,13 @@ func (d *dumper) node(n Node) {
 		for i := range v.Params {
 			cp := &v.Params[i]
 			d.printf(" (CParam ref=%t %q ", cp.Ref, cp.Name)
-			d.typeRef(cp.Type)
+			d.typ(cp.Type)
 			d.expr(cp.Default)
 			d.printf(")")
 		}
 		d.printf(" ret=")
-		d.typeRef(v.Ret)
+		d.typ(v.Ret)
 		d.node(v.Body)
-		d.close()
-	case *FnType:
-		d.open("FnType", v)
-		d.printf(" unsafe=%t", v.Unsafe)
-		for i := range v.Params {
-			pt := &v.Params[i]
-			d.printf(" (PType ref=%t ", pt.Ref)
-			d.typeRef(pt.Type)
-			d.printf(")")
-		}
-		d.printf(" ret=")
-		d.typeRef(v.Ret)
 		d.close()
 	case *LValueTarget:
 		d.open("LValueTarget", v)
@@ -370,9 +453,146 @@ func (d *dumper) node(n Node) {
 // param dumps one function parameter with its 'mut &' flag and default.
 func (d *dumper) param(p *Param) {
 	d.printf(" (Param ref=%t %q ", p.Ref, p.Name)
-	d.typeRef(p.Type)
+	d.typ(p.Type)
 	d.expr(p.Default)
 	d.printf(")")
+}
+
+// decorators dumps a declaration's decorator prefix.
+func (d *dumper) decorators(ds []*Decorator) {
+	for _, dec := range ds {
+		d.printf("(Deco")
+		for _, it := range dec.Items {
+			d.printf("(Item %q", it.Name)
+			for _, a := range it.Args {
+				d.constExpr(a)
+			}
+			d.printf(")")
+		}
+		d.printf(")")
+	}
+}
+
+// generics dumps a generic parameter list, tolerating a nil (non-generic).
+func (d *dumper) generics(g *Generics) {
+	if g == nil {
+		return
+	}
+	d.printf(" (Generics")
+	for _, tp := range g.Params {
+		d.printf("(TP %q", tp.Name)
+		if tp.Bound != nil {
+			d.bound(tp.Bound)
+		}
+		d.printf(")")
+	}
+	d.printf(")")
+}
+
+// bound dumps a spec conjunction.
+func (d *dumper) bound(b *Bound) {
+	d.printf("(Bound")
+	for _, n := range b.Names {
+		d.printf(" %q", n)
+	}
+	d.printf(")")
+}
+
+// field dumps one struct field with its trivia.
+func (d *dumper) field(f *StructField) {
+	d.printf("(Field")
+	d.trivia("lead", f.Lead())
+	d.trivia("trail", f.Trail())
+	d.printf(" pub=%t %q ", f.Pub, f.Name)
+	d.typ(f.Type)
+	d.expr(f.Default)
+	d.printf(")")
+}
+
+// variant dumps one enum variant with its trivia.
+func (d *dumper) variant(v *Variant) {
+	d.printf("(Variant")
+	d.trivia("lead", v.Lead())
+	d.trivia("trail", v.Trail())
+	d.printf(" %q", v.Name)
+	for _, t := range v.Payload {
+		d.typ(t)
+	}
+	if v.Discr != nil {
+		d.printf(" discr=")
+		d.constExpr(v.Discr)
+	}
+	d.printf(")")
+}
+
+// constExpr dumps a const-expr wrapper, tolerating a nil.
+func (d *dumper) constExpr(c *ConstExpr) {
+	if c == nil {
+		d.printf("(nil)")
+		return
+	}
+	d.printf("(Const")
+	d.expr(c.X)
+	d.printf(")")
+}
+
+// typ dumps a type expression, tolerating a nil optional (an absent return type).
+func (d *dumper) typ(t Type) {
+	if t == nil {
+		d.printf("(nil)")
+		return
+	}
+	switch v := t.(type) {
+	case *TypeRef:
+		d.printf("(Type %q", v.Name)
+		for _, a := range v.Args {
+			d.typ(a)
+		}
+		for _, seg := range v.Proj {
+			d.printf(" .%s", seg)
+		}
+		d.printf(")")
+	case *OptType:
+		d.printf("(Opt")
+		d.typ(v.Elem)
+		d.printf(")")
+	case *TupleType:
+		d.printf("(TupleType")
+		for _, e := range v.Elems {
+			d.typ(e)
+		}
+		d.printf(")")
+	case *ArrayType:
+		d.printf("(ArrayType")
+		d.typ(v.Elem)
+		d.constExpr(v.Count)
+		d.printf(")")
+	case *ChanType:
+		d.printf("(ChanType dir=%d", v.Dir)
+		d.typ(v.Elem)
+		d.printf(")")
+	case *FnType:
+		d.printf("(FnType unsafe=%t", v.Unsafe)
+		for i := range v.Params {
+			pt := &v.Params[i]
+			d.printf(" (PType ref=%t ", pt.Ref)
+			d.typ(pt.Type)
+			d.printf(")")
+		}
+		d.printf(" ret=")
+		d.typ(v.Ret)
+		d.printf(")")
+	case *PtrType:
+		d.printf("(PtrType")
+		if v.Elem != nil {
+			d.typ(v.Elem)
+		}
+		d.printf(")")
+	case *ConstExpr:
+		d.constExpr(v)
+	default:
+		d.printf("(unknown-type %T)", t)
+	}
 }
 
 // target dumps an assignment target, tolerating a nil (a struct-field shorthand).
@@ -406,12 +626,4 @@ func (d *dumper) expr(e Expr) {
 		return
 	}
 	d.node(e)
-}
-
-func (d *dumper) typeRef(t *TypeRef) {
-	if t == nil {
-		d.printf("(nil)")
-		return
-	}
-	d.printf("(Type %q)", t.Name)
 }

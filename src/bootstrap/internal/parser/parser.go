@@ -352,25 +352,20 @@ func (p *parser) parseFor() ast.Stmt {
 
 func (p *parser) parseExpr() ast.Expr { return p.parseOr() }
 
-func (p *parser) parseOr() ast.Expr {
-	left := p.parseAnd()
-	for p.at(token.Or) {
+// parseBinaryLeft parses one left-associative precedence level: a `next` operand
+// followed by zero or more `op next` pairs whose operator `isOp` accepts.
+func (p *parser) parseBinaryLeft(isOp func(token.Kind) bool, next func() ast.Expr) ast.Expr {
+	left := next()
+	for isOp(p.cur().Kind) {
 		op := p.advance()
-		right := p.parseAnd()
+		right := next()
 		left = &ast.Binary{Op: op.Kind, L: left, R: right, Span: joinSpan(left, right)}
 	}
 	return left
 }
 
-func (p *parser) parseAnd() ast.Expr {
-	left := p.parseCmp()
-	for p.at(token.And) {
-		op := p.advance()
-		right := p.parseCmp()
-		left = &ast.Binary{Op: op.Kind, L: left, R: right, Span: joinSpan(left, right)}
-	}
-	return left
-}
+func (p *parser) parseOr() ast.Expr  { return p.parseBinaryLeft(isOrOp, p.parseAnd) }
+func (p *parser) parseAnd() ast.Expr { return p.parseBinaryLeft(isAndOp, p.parseCmp) }
 
 // parseCmp is non-associative: at most one comparison operator (GRAMMAR group 4).
 func (p *parser) parseCmp() ast.Expr {
@@ -383,25 +378,8 @@ func (p *parser) parseCmp() ast.Expr {
 	return left
 }
 
-func (p *parser) parseAdd() ast.Expr {
-	left := p.parseMul()
-	for isAddOp(p.cur().Kind) {
-		op := p.advance()
-		right := p.parseMul()
-		left = &ast.Binary{Op: op.Kind, L: left, R: right, Span: joinSpan(left, right)}
-	}
-	return left
-}
-
-func (p *parser) parseMul() ast.Expr {
-	left := p.parseUnary()
-	for isMulOp(p.cur().Kind) {
-		op := p.advance()
-		right := p.parseUnary()
-		left = &ast.Binary{Op: op.Kind, L: left, R: right, Span: joinSpan(left, right)}
-	}
-	return left
-}
+func (p *parser) parseAdd() ast.Expr { return p.parseBinaryLeft(isAddOp, p.parseMul) }
+func (p *parser) parseMul() ast.Expr { return p.parseBinaryLeft(isMulOp, p.parseUnary) }
 
 func (p *parser) parseUnary() ast.Expr {
 	if isUnaryOp(p.cur().Kind) {
@@ -575,6 +553,9 @@ func (p *parser) parseFloatValue(t token.Token) float64 {
 }
 
 // --- operator classification --------------------------------------------------
+
+func isOrOp(k token.Kind) bool  { return k == token.Or }
+func isAndOp(k token.Kind) bool { return k == token.And }
 
 func isCmpOp(k token.Kind) bool {
 	switch k {

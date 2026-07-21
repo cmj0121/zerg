@@ -313,50 +313,38 @@ func (l *Lexer) scanRawString(start token.Pos) token.Token {
 }
 
 func (l *Lexer) scanRune(start token.Pos) token.Token {
-	l.advance() // opening '
-	var sb strings.Builder
-	switch {
-	case l.eof() || l.at(0) == '\n':
-		return l.illegal(start, "empty or unterminated rune literal")
-	case l.at(0) == '\'':
-		l.advance() // consume the stray quote so scanning makes progress
-		return l.illegal(start, "empty rune literal")
-	case l.at(0) == '\\':
-		if !l.scanEscape(&sb, false) {
-			return l.illegal(start, "invalid escape in rune literal")
-		}
-	default:
-		sb.WriteByte(l.advance())
-	}
-	if l.at(0) != '\'' {
-		return l.illegal(start, "unterminated rune literal")
-	}
-	l.advance() // closing '
-	return l.emitStr(token.Rune, start, l.src[start.Offset:l.offs], sb.String())
+	return l.scanCharLit(start, token.Rune, false, "rune")
 }
 
 func (l *Lexer) scanByte(start token.Pos) token.Token {
 	l.advance() // b
+	return l.scanCharLit(start, token.Byte, true, "byte")
+}
+
+// scanCharLit scans a single-quoted rune or byte literal, the cursor sitting on
+// the opening '. byteMode selects the byte form's '\xHH' escape; noun names the
+// literal in diagnostics.
+func (l *Lexer) scanCharLit(start token.Pos, kind token.Kind, byteMode bool, noun string) token.Token {
 	l.advance() // opening '
 	var sb strings.Builder
 	switch {
 	case l.eof() || l.at(0) == '\n':
-		return l.illegal(start, "empty or unterminated byte literal")
+		return l.illegal(start, "empty or unterminated %s literal", noun)
 	case l.at(0) == '\'':
 		l.advance() // consume the stray quote so scanning makes progress
-		return l.illegal(start, "empty byte literal")
+		return l.illegal(start, "empty %s literal", noun)
 	case l.at(0) == '\\':
-		if !l.scanEscape(&sb, true) {
-			return l.illegal(start, "invalid escape in byte literal")
+		if !l.scanEscape(&sb, byteMode) {
+			return l.illegal(start, "invalid escape in %s literal", noun)
 		}
 	default:
 		sb.WriteByte(l.advance())
 	}
 	if l.at(0) != '\'' {
-		return l.illegal(start, "unterminated byte literal")
+		return l.illegal(start, "unterminated %s literal", noun)
 	}
 	l.advance() // closing '
-	return l.emitStr(token.Byte, start, l.src[start.Offset:l.offs], sb.String())
+	return l.emitStr(kind, start, l.src[start.Offset:l.offs], sb.String())
 }
 
 // scanEscape decodes a backslash escape into sb, returning false on a malformed

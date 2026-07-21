@@ -90,21 +90,27 @@ func funcs(file *ast.File) []*ast.FuncDecl {
 	return out
 }
 
+// paramList renders a C parameter list ("void" when empty), formatting each of
+// the n parameters with render.
+func paramList(n int, render func(i int) string) string {
+	if n == 0 {
+		return "void"
+	}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(render(i))
+	}
+	return b.String()
+}
+
 // prototype renders a forward declaration with parameter types only.
 func (e *emitter) prototype(fn *ast.FuncDecl) string {
 	sig := e.info.Funcs[fn.Name]
-	var params strings.Builder
-	if len(sig.Params) == 0 {
-		params.WriteString("void")
-	} else {
-		for i, pt := range sig.Params {
-			if i > 0 {
-				params.WriteString(", ")
-			}
-			params.WriteString(cType(pt))
-		}
-	}
-	return fmt.Sprintf("%s zg_%s(%s)", cType(sig.Ret), fn.Name, params.String())
+	params := paramList(len(sig.Params), func(i int) string { return cType(sig.Params[i]) })
+	return fmt.Sprintf("%s zg_%s(%s)", cType(sig.Ret), fn.Name, params)
 }
 
 func (e *emitter) function(fn *ast.FuncDecl) {
@@ -113,18 +119,10 @@ func (e *emitter) function(fn *ast.FuncDecl) {
 	e.counter = 0
 	e.pushScope() // parameter scope
 
-	var params strings.Builder
-	if len(sig.Params) == 0 {
-		params.WriteString("void")
-	} else {
-		for i, pt := range sig.Params {
-			if i > 0 {
-				params.WriteString(", ")
-			}
-			fmt.Fprintf(&params, "%s %s", cType(pt), e.declareName(sig.ParamNames[i]))
-		}
-	}
-	e.line(fmt.Sprintf("%s zg_%s(%s) {", cType(sig.Ret), fn.Name, params.String()))
+	params := paramList(len(sig.Params), func(i int) string {
+		return cType(sig.Params[i]) + " " + e.declareName(sig.ParamNames[i])
+	})
+	e.line(fmt.Sprintf("%s zg_%s(%s) {", cType(sig.Ret), fn.Name, params))
 
 	e.indent++
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter

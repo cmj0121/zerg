@@ -104,6 +104,13 @@ func TestCompileAndRun(t *testing.T) {
 			src:  "fn main() {\n  print \"hello, world\"\n}",
 			want: "hello, world\n",
 		},
+		{
+			// 'mut n := n' shadows the parameter; C needs distinct names.
+			name: "shadow-parameter",
+			src: "fn bump(n: int) -> int {\n  mut n := n\n  n = n + 1\n  return n\n}\n" +
+				"fn main() {\n  print bump(41)\n}",
+			want: "42\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

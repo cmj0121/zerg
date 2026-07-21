@@ -492,7 +492,7 @@ func (p *parser) parseMatchArm() ast.MatchArm {
 	if p.accept(token.If) {
 		guard = p.parseExpr()
 	}
-	p.expect(token.Arrow)
+	p.expect(token.FatArrow)
 	body := p.parseExpr()
 	return ast.MatchArm{Pat: pat, Guard: guard, Body: body}
 }

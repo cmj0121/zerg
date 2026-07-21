@@ -101,6 +101,7 @@ const (
 	Walrus   // :=
 	Colon    // :
 	Arrow    // ->
+	FatArrow // =>
 	LArrow   // <-
 	Coalesce // ??
 	Question // ?
@@ -145,7 +146,7 @@ var names = map[Kind]string{
 	PlusMod: "+%", MinusMod: "-%", StarMod: "*%",
 	Amp: "&", Pipe: "|", Caret: "^", Tilde: "~", Shl: "<<", Shr: ">>",
 	EqEq: "==", Ne: "!=", Lt: "<", Gt: ">", Le: "<=", Ge: ">=",
-	Assign: "=", Walrus: ":=", Colon: ":", Arrow: "->", LArrow: "<-",
+	Assign: "=", Walrus: ":=", Colon: ":", Arrow: "->", FatArrow: "=>", LArrow: "<-",
 	Coalesce: "??", Question: "?", Bang: "!", OptDot: "?.",
 	Dot: ".", DotDot: "..", DotDotEq: "..=", Comma: ",",
 	LParen: "(", RParen: ")", LBrack: "[", RBrack: "]", LBrace: "{", RBrace: "}",

@@ -211,27 +211,47 @@ func (d *dumper) node(n Node) {
 		d.close()
 	case *BreakStmt:
 		d.open("Break", v)
+		d.expr(v.Cond)
 		d.close()
 	case *ContinueStmt:
 		d.open("Continue", v)
+		d.expr(v.Cond)
 		d.close()
 	case *IfStmt:
 		d.open("If", v)
-		for _, br := range v.Branches {
-			d.printf("(Branch")
-			d.expr(br.Cond)
-			d.node(br.Body)
-			d.printf(")")
-		}
+		d.branches(v.Branches)
 		if v.Else != nil {
 			d.printf(" else=")
 			d.node(v.Else)
 		}
 		d.close()
+	case *IfExpr:
+		d.open("IfExpr", v)
+		d.branches(v.Branches)
+		d.printf(" else=")
+		d.node(v.Else)
+		d.close()
+	case *GuardExpr:
+		d.open("Guard", v)
+		d.node(v.Body)
+		d.close()
 	case *ForStmt:
 		d.open("For", v)
+		d.printf(" mut=%t var=%q", v.Mut, v.Var)
 		d.expr(v.Cond)
+		d.expr(v.Iter)
 		d.node(v.Body)
+		d.close()
+	case *WithStmt:
+		d.open("With", v)
+		d.printf(" var=%q", v.Var)
+		d.expr(v.Resource)
+		d.node(v.Body)
+		d.close()
+	case *RaiseStmt:
+		d.open("Raise", v)
+		d.expr(v.Value)
+		d.expr(v.From)
 		d.close()
 	case *ExprStmt:
 		d.open("ExprStmt", v)
@@ -299,12 +319,63 @@ func (d *dumper) node(n Node) {
 		d.printf(" neg=%t", v.Neg)
 		d.expr(v.Lit)
 		d.close()
-	case *BindPattern:
-		d.open("BindPat", v)
+	case *NamePattern:
+		d.open("NamePat", v)
 		d.printf(" %q", v.Name)
 		d.close()
 	case *WildPattern:
 		d.open("WildPat", v)
+		d.close()
+	case *VariantPattern:
+		d.open("VariantPat", v)
+		d.printf(" %q", v.Name)
+		for _, e := range v.Elems {
+			d.node(e)
+		}
+		d.close()
+	case *StructPattern:
+		d.open("StructPat", v)
+		d.printf(" %q rest=%t", v.Name, v.Rest)
+		for _, f := range v.Fields {
+			d.printf("(FPat %q", f.Name)
+			if f.Pat != nil {
+				d.node(f.Pat)
+			}
+			d.printf(")")
+		}
+		d.close()
+	case *TuplePattern:
+		d.open("TuplePat", v)
+		for _, e := range v.Elems {
+			d.node(e)
+		}
+		d.close()
+	case *ListPattern:
+		d.open("ListPat", v)
+		for _, el := range v.Elems {
+			if el.Rest {
+				d.printf("(Rest %q)", el.Name)
+				continue
+			}
+			d.node(el.Pat)
+		}
+		d.close()
+	case *AsPattern:
+		d.open("AsPat", v)
+		d.printf(" %q", v.Name)
+		d.node(v.Inner)
+		d.close()
+	case *OrPattern:
+		d.open("OrPat", v)
+		for _, alt := range v.Alts {
+			d.node(alt)
+		}
+		d.close()
+	case *RangeArm:
+		d.open("RangeArm", v)
+		d.printf(" inclusive=%t", v.Inclusive)
+		d.expr(v.Lo)
+		d.expr(v.Hi)
 		d.close()
 	case *RuneLit:
 		d.open("Rune", v)
@@ -447,6 +518,17 @@ func (d *dumper) node(n Node) {
 		d.close()
 	default:
 		d.printf("(unknown %T)", n)
+	}
+}
+
+// branches dumps an if/if-expr chain's head branches, each with its binding
+// name (empty for a plain-expr head), condition, and body.
+func (d *dumper) branches(brs []IfBranch) {
+	for _, br := range brs {
+		d.printf("(Branch bind=%q", br.Bind)
+		d.expr(br.Cond)
+		d.node(br.Body)
+		d.printf(")")
 	}
 }
 

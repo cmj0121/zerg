@@ -58,7 +58,15 @@ func (p *parser) parseBareDecl() ast.Decl {
 	case token.Fn:
 		return p.parseFuncDecl()
 	default:
-		p.fail(p.cur().Span, "expected a declaration, found %q", p.cur().Kind.String())
+		// declHeadKind peeked past the leading pub/unsafe/mut modifiers to find a
+		// non-declaration keyword; consume those modifiers so the diagnostic and
+		// the recovery both land on the offending token (otherwise syncDecl would
+		// stop on the still-current modifier and make no progress — an infinite
+		// loop). See syncDecl's stop set.
+		for p.at(token.Pub) || p.at(token.Unsafe) || p.at(token.Mut) {
+			p.advance()
+		}
+		p.fail(p.cur().Span, "expected a declaration, found %s", describe(p.cur().Kind))
 		return nil
 	}
 }
@@ -357,7 +365,7 @@ func (p *parser) parseSpecMember() ast.SpecMember {
 	case token.Ident:
 		return p.parseAssocVal()
 	default:
-		p.fail(p.cur().Span, "expected a spec member, found %q", p.cur().Kind.String())
+		p.fail(p.cur().Span, "expected a spec member, found %s", describe(p.cur().Kind))
 		return nil
 	}
 }
@@ -562,7 +570,7 @@ func (p *parser) parseBaseType() ast.Type {
 	case token.Ident:
 		return p.parseNamedType()
 	default:
-		p.fail(p.cur().Span, "expected a type, found %q", p.cur().Kind.String())
+		p.fail(p.cur().Span, "expected a type, found %s", describe(p.cur().Kind))
 		return nil
 	}
 }

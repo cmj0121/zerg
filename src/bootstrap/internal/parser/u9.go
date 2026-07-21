@@ -61,13 +61,33 @@ func (p *parser) parseSelect() ast.Stmt {
 			break
 		}
 		lead := p.lead()
-		arm := p.parseSelectArm()
+		arm, ok := p.trySelectArm()
+		if !ok {
+			continue // diagnosed and skipped, cursor synced within the braces
+		}
 		arm.SetLead(lead)
 		arm.SetTrail(p.trailBehind())
 		arms = append(arms, arm)
 	}
 	end := p.expect(token.RBrace).Span.End
 	return spanned(&ast.SelectStmt{Arms: arms}, span(start, end))
+}
+
+// trySelectArm parses one select arm, recovering within the select's braces on
+// a parse error (as tryMatchArm does for a match): it reports, syncs to the next
+// separator or the closing '}', and returns ok=false so the arm is skipped
+// without unwinding past the select and cascading.
+func (p *parser) trySelectArm() (arm ast.SelectArm, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isBail := r.(bailout); !isBail {
+				panic(r)
+			}
+			p.syncArm()
+			ok = false
+		}
+	}()
+	return p.parseSelectArm(), true
 }
 
 // parseSelectArm parses one select arm: 'done => e', '_ => e', a recv arm
@@ -161,7 +181,11 @@ func (p *parser) parseImport() ast.Stmt {
 func (p *parser) parseImportSpec() *ast.ImportSpec {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub)
-	path := p.expect(token.Str)
+	if !p.at(token.Str) {
+		p.fail(p.cur().Span, "an import path must be a string literal, e.g. import \"std/io\", found %s",
+			describe(p.cur().Kind))
+	}
+	path := p.advance()
 	spec := &ast.ImportSpec{Pub: pub, Path: path.Str}
 	end := path.Span.End
 	if p.accept(token.As) {
@@ -281,7 +305,7 @@ func (p *parser) parseAsmOperand() *ast.AsmOperand {
 			return p.parseAsmClobber(start)
 		}
 	}
-	p.fail(p.cur().Span, "expected an asm operand (in/out/inout/clobber), found %q", p.cur().Kind.String())
+	p.fail(p.cur().Span, "expected an asm operand (in/out/inout/clobber), found %s", describe(p.cur().Kind))
 	return nil
 }
 

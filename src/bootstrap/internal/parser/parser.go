@@ -129,8 +129,44 @@ func (p *parser) expect(k token.Kind) token.Token {
 	if p.at(k) {
 		return p.advance()
 	}
-	p.errorf(p.cur().Span, "expected %q, found %q", k.String(), p.cur().Kind.String())
+	// An Illegal token was already diagnosed by the lexer (unterminated string,
+	// malformed number, stray character); do not stack a second, redundant
+	// message on top of it — the lexer's is the precise one.
+	if p.cur().Kind != token.Illegal {
+		p.errorf(p.cur().Span, "expected %s, found %s", describe(k), describe(p.cur().Kind))
+	}
 	panic(bailout{})
+}
+
+// describe renders a token kind as a human-readable phrase for diagnostics: a
+// category noun for the open-ended lexical classes ("an identifier", "a string
+// literal", "end of file") and the quoted spelling for the fixed keywords and
+// punctuation ("'}'", "':='"). It keeps every "expected …, found …" message
+// readable instead of leaking the internal token names.
+func describe(k token.Kind) string {
+	switch k {
+	case token.EOF:
+		return "end of file"
+	case token.Illegal:
+		return "invalid input"
+	case token.Ident:
+		return "an identifier"
+	case token.Int:
+		return "an integer literal"
+	case token.Float:
+		return "a float literal"
+	case token.Str:
+		return "a string literal"
+	case token.RawStr:
+		return "a raw string literal"
+	case token.Rune:
+		return "a rune literal"
+	case token.Byte:
+		return "a byte literal"
+	case token.Cmd:
+		return "a command literal"
+	}
+	return "'" + k.String() + "'"
 }
 
 func (p *parser) skipSemis() {
@@ -157,7 +193,12 @@ func (p *parser) errorf(span token.Span, format string, args ...any) {
 }
 
 func (p *parser) fail(span token.Span, format string, args ...any) {
-	p.errorf(span, format, args...)
+	// As in expect: a lexer-flagged Illegal token at the cursor already carries a
+	// precise diagnostic, so suppress the parser's follow-on message and just
+	// recover, keeping exactly one diagnostic per real error.
+	if p.cur().Kind != token.Illegal {
+		p.errorf(span, format, args...)
+	}
 	panic(bailout{})
 }
 
@@ -172,10 +213,16 @@ func (p *parser) parseFile() *ast.File {
 			file.End = p.cur().Leading
 			break
 		}
+		before := p.pos
 		lead := p.lead()
 		if s := p.tryTopStmt(); s != nil {
 			attach(s, lead, p.trailBehind())
 			file.Items = append(file.Items, s)
+		} else if p.pos == before {
+			// A recovered error whose sync made no progress would spin forever;
+			// force one token of progress. The error was already diagnosed by the
+			// bailout, so this only guarantees termination.
+			p.advance()
 		}
 	}
 	return spanned(file, token.Span{Start: start, End: p.cur().Span.End})
@@ -324,13 +371,20 @@ func (p *parser) parseBlock() *ast.Block {
 		if p.at(token.RBrace) || p.at(token.EOF) {
 			break
 		}
+		before := p.pos
 		lead := p.lead()
 		if s := p.tryStmt(); s != nil {
 			attach(s, lead, p.trailBehind())
 			b.Stmts = append(b.Stmts, s)
+		} else if p.pos == before {
+			p.advance() // guarantee progress (see parseFile) so recovery cannot spin
 		}
 	}
-	rb := p.expect(token.RBrace)
+	if !p.at(token.RBrace) { // the loop only exits early at EOF
+		p.fail(p.cur().Span, "unclosed block: expected '}' to close the '{' opened at %s, found %s",
+			lb.Span.Start, describe(p.cur().Kind))
+	}
+	rb := p.advance()
 	b.End = rb.Leading // dangling trivia between the last statement and '}'
 	return spanned(b, token.Span{Start: lb.Span.Start, End: rb.Span.End})
 }
@@ -630,7 +684,7 @@ func (p *parser) parseDot(e ast.Expr) ast.Expr {
 		return spanned(&ast.TupleIndex{X: e, Index: int(p.parseIntValue(t)), Text: t.Lexeme},
 			token.Span{Start: e.Span().Start, End: t.Span.End})
 	}
-	p.fail(t.Span, "expected a field name or tuple index after '.', found %q", t.Kind.String())
+	p.fail(t.Span, "expected a field name or tuple index after '.', found %s", describe(t.Kind))
 	return nil
 }
 
@@ -762,7 +816,7 @@ func (p *parser) parsePrimary() ast.Expr {
 			return p.parseBraceExpr()
 		}
 	}
-	p.fail(t.Span, "expected an expression, found %q", t.Kind.String())
+	p.fail(t.Span, "expected an expression, found %s", describe(t.Kind))
 	return nil // unreachable
 }
 
@@ -780,7 +834,13 @@ func (p *parser) parseMatch() ast.Expr {
 			break
 		}
 		lead := p.lead()
-		arm := p.parseMatchArm()
+		arm, ok := p.tryMatchArm()
+		if !ok {
+			// a malformed arm was diagnosed and skipped; syncArm left the cursor
+			// at the next arm separator or the match's own '}', so the remaining
+			// arms (and the match) still parse instead of cascading.
+			continue
+		}
 		arm.SetLead(lead)
 		arm.SetTrail(p.trailBehind())
 		arms = append(arms, arm)
@@ -789,13 +849,43 @@ func (p *parser) parseMatch() ast.Expr {
 	return spanned(&ast.MatchExpr{Subject: subject, Arms: arms}, token.Span{Start: start, End: end})
 }
 
+// tryMatchArm parses one match arm, recovering within the match's braces on a
+// parse error: it reports the error, syncs to the next arm separator or the
+// closing '}', and returns ok=false so the arm is skipped without unwinding past
+// the match (which would leave the braces unbalanced and cascade).
+func (p *parser) tryMatchArm() (arm ast.MatchArm, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isBail := r.(bailout); !isBail {
+				panic(r)
+			}
+			p.syncArm()
+			ok = false
+		}
+	}()
+	return p.parseMatchArm(), true
+}
+
+// syncArm advances to the next arm/entry separator after a parse error inside a
+// braced construct (match/select/...): a statement separator or the enclosing
+// '}', neither of which it consumes, so the construct's own loop resumes cleanly.
+func (p *parser) syncArm() {
+	for !p.at(token.Semi) && !p.at(token.RBrace) && !p.at(token.EOF) {
+		p.advance()
+	}
+}
+
 func (p *parser) parseMatchArm() ast.MatchArm {
 	pat := p.parseArmPattern()
 	var guard ast.Expr
 	if p.accept(token.If) {
 		guard = p.parseExpr()
 	}
-	p.expect(token.FatArrow)
+	if !p.at(token.FatArrow) {
+		p.fail(p.cur().Span, "a match arm needs '=>' between its pattern and its body, found %s",
+			describe(p.cur().Kind))
+	}
+	p.advance() // '=>'
 	body := p.parseExpr()
 	arm := ast.MatchArm{Pat: pat, Guard: guard, Body: body}
 	arm.SetSpan(token.Span{Start: pat.Span().Start, End: body.Span().End})
@@ -832,7 +922,7 @@ func (p *parser) parseLiteralNode() ast.Expr {
 		p.advance()
 		return spanned(&ast.NilLit{}, t.Span)
 	}
-	p.fail(t.Span, "expected a literal, found %q", t.Kind.String())
+	p.fail(t.Span, "expected a literal, found %s", describe(t.Kind))
 	return nil
 }
 

@@ -275,7 +275,7 @@ func (p *parser) parsePatternCore() ast.Pattern {
 		lit := p.parseLiteralNode()
 		return spanned(&ast.LitPattern{Lit: lit}, lit.Span())
 	}
-	p.fail(t.Span, "expected a pattern, found %q", t.Kind.String())
+	p.fail(t.Span, "expected a pattern, found %s", describe(t.Kind))
 	return nil
 }
 

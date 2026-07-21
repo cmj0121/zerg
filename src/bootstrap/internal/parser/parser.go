@@ -38,9 +38,29 @@ func Parse(src string) (*ast.File, []diag.Diagnostic) {
 }
 
 type parser struct {
-	toks  []token.Token
-	pos   int
-	diags diag.List
+	toks    []token.Token
+	pos     int
+	diags   diag.List
+	noBrace bool // in an if/for/with/match head: a '{'-opening expr must be parenthesized (DESIGN-1a §3c)
+}
+
+// withBraces runs fn with the '{'-opening-expression restriction lifted (inside
+// '(' '[' or an f-string hole a leading '{' is an ordinary map/block again),
+// restoring the flag afterwards.
+func (p *parser) withBraces(fn func() ast.Expr) ast.Expr {
+	saved := p.noBrace
+	p.noBrace = false
+	defer func() { p.noBrace = saved }()
+	return fn()
+}
+
+// headExpr parses the head of an if/for/with/match in no-brace mode, so a leading
+// '{' starts the body block rather than a map/block expression.
+func (p *parser) headExpr() ast.Expr {
+	saved := p.noBrace
+	p.noBrace = true
+	defer func() { p.noBrace = saved }()
+	return p.parseExpr()
 }
 
 // bailout unwinds the stack to the nearest recovery point after a parse error.
@@ -171,16 +191,20 @@ func (p *parser) tryDecl() (d ast.Decl) {
 // syncDecl advances to the start of the next declaration after an error.
 func (p *parser) syncDecl() {
 	for !p.at(token.EOF) {
-		if p.at(token.Fn) || p.at(token.Pub) {
+		if p.at(token.Fn) || p.at(token.Pub) || p.at(token.Unsafe) || p.at(token.Mut) {
 			return
 		}
 		p.advance()
 	}
 }
 
+// parseFuncDecl parses 'pub? unsafe? mut? fn name(params) -> ret? block'
+// (GRAMMAR group 5; generics '[T]' are group 7, out of this slice's scope).
 func (p *parser) parseFuncDecl() ast.Decl {
 	start := p.cur().Span.Start
-	pub := p.accept(token.Pub) // Phase 0 is single-file; visibility is preserved for fmt but unused by sema
+	pub := p.accept(token.Pub) // single-file for now; visibility preserved for fmt
+	unsafe := p.accept(token.Unsafe)
+	mut := p.accept(token.Mut)
 	if !p.at(token.Fn) {
 		p.fail(p.cur().Span, "expected a function declaration")
 	}
@@ -197,6 +221,8 @@ func (p *parser) parseFuncDecl() ast.Decl {
 	body := p.parseBlock()
 	return spanned(&ast.FuncDecl{
 		Pub:     pub,
+		Unsafe:  unsafe,
+		Mut:     mut,
 		Name:    name.Lexeme,
 		NameEnd: name.Span.End,
 		Params:  params,
@@ -205,23 +231,41 @@ func (p *parser) parseFuncDecl() ast.Decl {
 	}, token.Span{Start: start, End: body.Span().End})
 }
 
+// parseParams parses a declared parameter list: 'mut &x'? name ': ' type ('=' default)?.
 func (p *parser) parseParams() []ast.Param {
 	if p.at(token.RParen) {
 		return nil
 	}
 	var params []ast.Param
 	for {
+		start := p.cur().Span.Start
+		ref := p.parseMutRef()
 		name := p.expect(token.Ident)
 		p.expect(token.Colon)
 		typ := p.parseType()
-		param := ast.Param{Name: name.Lexeme, Type: typ}
-		param.SetSpan(token.Span{Start: name.Span.Start, End: typ.Span().End})
+		param := ast.Param{Ref: ref, Name: name.Lexeme, Type: typ}
+		end := typ.Span().End
+		if p.accept(token.Assign) {
+			param.Default = p.parseExpr()
+			end = param.Default.Span().End
+		}
+		param.SetSpan(token.Span{Start: start, End: end})
 		params = append(params, param)
 		if !p.accept(token.Comma) {
 			break
 		}
 	}
 	return params
+}
+
+// parseMutRef consumes a leading 'mut &' mutable-reference marker (GRAMMAR group 5).
+func (p *parser) parseMutRef() bool {
+	if p.at(token.Mut) && p.peek(1).Kind == token.Amp {
+		p.advance() // mut
+		p.advance() // &
+		return true
+	}
+	return false
 }
 
 // parseType reads a Phase 0 type: a bare built-in name (int/float/bool/str).
@@ -303,12 +347,18 @@ func (p *parser) parseStmt() ast.Stmt {
 		switch p.peek(1).Kind {
 		case token.Walrus, token.Colon:
 			return p.parseBinding(t.Span.Start, false, false)
-		case token.Assign:
-			return p.parseReassign()
+		case token.LBrace:
+			if p.looksLikeStructReassign() {
+				return p.parseStructReassign()
+			}
 		}
 	}
-	// fall through: an expression statement (e.g. a call)
+	// Otherwise parse an expression; a following '=' makes it a reassignment
+	// (assign-target = expr), else it is an expression statement.
 	v := p.parseExpr()
+	if p.at(token.Assign) {
+		return p.finishReassign(v)
+	}
 	return spanned(&ast.ExprStmt{X: v}, token.Span{Start: t.Span.Start, End: v.Span().End})
 }
 
@@ -352,18 +402,10 @@ func (p *parser) parseBinding(start token.Pos, mut, konst bool) ast.Stmt {
 	return spanned(b, token.Span{Start: start, End: b.Value.Span().End})
 }
 
-func (p *parser) parseReassign() ast.Stmt {
-	name := p.expect(token.Ident)
-	p.expect(token.Assign)
-	v := p.parseExpr()
-	return spanned(&ast.AssignStmt{Name: name.Lexeme, Value: v},
-		token.Span{Start: name.Span.Start, End: v.Span().End})
-}
-
 func (p *parser) parseIf() ast.Stmt {
 	start := p.expect(token.If).Span.Start
 	var branches []ast.IfBranch
-	cond := p.parseExpr()
+	cond := p.headExpr()
 	body := p.parseBlock()
 	branches = append(branches, ast.IfBranch{Cond: cond, Body: body})
 	end := body.Span().End
@@ -371,7 +413,7 @@ func (p *parser) parseIf() ast.Stmt {
 	var elseBlock *ast.Block
 	for p.accept(token.Else) {
 		if p.accept(token.If) {
-			c := p.parseExpr()
+			c := p.headExpr()
 			b := p.parseBlock()
 			branches = append(branches, ast.IfBranch{Cond: c, Body: b})
 			end = b.Span().End
@@ -388,7 +430,7 @@ func (p *parser) parseFor() ast.Stmt {
 	start := p.expect(token.For).Span.Start
 	var cond ast.Expr
 	if !p.at(token.LBrace) {
-		cond = p.parseExpr()
+		cond = p.headExpr()
 	}
 	body := p.parseBlock()
 	return spanned(&ast.ForStmt{Cond: cond, Body: body}, token.Span{Start: start, End: body.Span().End})
@@ -396,7 +438,62 @@ func (p *parser) parseFor() ast.Stmt {
 
 // --- expressions --------------------------------------------------------------
 
-func (p *parser) parseExpr() ast.Expr { return p.parseOr() }
+func (p *parser) parseExpr() ast.Expr { return p.parseCoalesce() }
+
+// parseCoalesce parses the loosest binary '??' (GRAMMAR group 8), right
+// associative; its right side may be a Diverge (break/continue/return/raise).
+func (p *parser) parseCoalesce() ast.Expr {
+	left := p.parseOr()
+	if p.at(token.Coalesce) {
+		p.advance()
+		right := p.parseCoalesceRHS()
+		return spanned(&ast.Coalesce{X: left, Y: right}, joinSpan(left, right))
+	}
+	return left
+}
+
+// parseCoalesceRHS parses the right side of '??': another coalesce-expr, or a
+// divergent control-flow escape.
+func (p *parser) parseCoalesceRHS() ast.Expr {
+	switch p.cur().Kind {
+	case token.Break, token.Continue, token.Return, token.Raise:
+		return p.parseDiverge()
+	}
+	return p.parseCoalesce()
+}
+
+// parseDiverge parses a '??' right side that never yields a value: 'break',
+// 'continue', 'return e?', or 'raise e (from c)?'.
+func (p *parser) parseDiverge() ast.Expr {
+	t := p.advance()
+	d := &ast.Diverge{Kw: t.Kind}
+	end := t.Span.End
+	switch t.Kind {
+	case token.Return:
+		if !p.atExprEnd() {
+			d.Value = p.parseExpr()
+			end = d.Value.Span().End
+		}
+	case token.Raise:
+		d.Value = p.parseExpr()
+		end = d.Value.Span().End
+		if p.accept(token.From) {
+			d.From = p.parseExpr()
+			end = d.From.Span().End
+		}
+	}
+	return spanned(d, token.Span{Start: t.Span.Start, End: end})
+}
+
+// atExprEnd reports whether the cursor sits where an expression cannot continue —
+// a separator or a closing bracket — so an optional operand is absent.
+func (p *parser) atExprEnd() bool {
+	switch p.cur().Kind {
+	case token.Semi, token.RBrace, token.RParen, token.RBrack, token.Comma, token.EOF:
+		return true
+	}
+	return false
+}
 
 // parseBinaryLeft parses one left-associative precedence level: a `next` operand
 // followed by zero or more `op next` pairs whose operator `isOp` accepts.
@@ -413,15 +510,49 @@ func (p *parser) parseBinaryLeft(isOp func(token.Kind) bool, next func() ast.Exp
 func (p *parser) parseOr() ast.Expr  { return p.parseBinaryLeft(isOrOp, p.parseAnd) }
 func (p *parser) parseAnd() ast.Expr { return p.parseBinaryLeft(isAndOp, p.parseCmp) }
 
-// parseCmp is non-associative: at most one comparison operator (GRAMMAR group 4).
+// parseCmp is non-associative: at most one comparison, a type test 'is', or a
+// membership test 'in' (GRAMMAR group 4).
 func (p *parser) parseCmp() ast.Expr {
-	left := p.parseAdd()
-	if isCmpOp(p.cur().Kind) {
+	left := p.parseRange()
+	switch {
+	case isCmpOp(p.cur().Kind):
 		op := p.advance()
-		right := p.parseAdd()
+		right := p.parseRange()
+		return spanned(&ast.Binary{Op: op.Kind, L: left, R: right}, joinSpan(left, right))
+	case p.at(token.Is):
+		p.advance()
+		name := p.expect(token.Ident)
+		return spanned(&ast.IsExpr{X: left, TypeName: name.Lexeme},
+			token.Span{Start: left.Span().Start, End: name.Span.End})
+	case p.at(token.In):
+		op := p.advance()
+		right := p.parseRange()
 		return spanned(&ast.Binary{Op: op.Kind, L: left, R: right}, joinSpan(left, right))
 	}
 	return left
+}
+
+// parseRange parses 'lo..hi', 'lo..=hi', or the open range 'lo..' (GRAMMAR group 4);
+// a range binds tighter than comparison so 'v in 0..10' reads 'v in (0..10)'.
+func (p *parser) parseRange() ast.Expr {
+	lo := p.parseAdd()
+	switch p.cur().Kind {
+	case token.DotDot:
+		op := p.advance()
+		r := &ast.Range{Lo: lo}
+		end := op.Span.End
+		if !p.atExprEnd() && !p.at(token.LBrace) {
+			r.Hi = p.parseAdd()
+			end = r.Hi.Span().End
+		}
+		return spanned(r, token.Span{Start: lo.Span().Start, End: end})
+	case token.DotDotEq:
+		p.advance()
+		hi := p.parseAdd()
+		return spanned(&ast.Range{Lo: lo, Hi: hi, Inclusive: true},
+			token.Span{Start: lo.Span().Start, End: hi.Span().End})
+	}
+	return lo
 }
 
 func (p *parser) parseAdd() ast.Expr { return p.parseBinaryLeft(isAddOp, p.parseMul) }
@@ -436,28 +567,114 @@ func (p *parser) parseUnary() ast.Expr {
 	return p.parsePostfix()
 }
 
+// parsePostfix parses the recv-base then its postfix chain: '.id', '.N', a call
+// '(args)', an index/type-args '[elems]', '?', '!', and '?.id' (GRAMMAR group 4).
 func (p *parser) parsePostfix() ast.Expr {
-	e := p.parsePrimary()
-	for p.at(token.LParen) {
-		e = p.parseCall(e)
+	e := p.parseRecvBase()
+	for {
+		switch p.cur().Kind {
+		case token.Dot:
+			e = p.parseDot(e)
+		case token.OptDot:
+			p.advance()
+			name := p.expect(token.Ident)
+			e = spanned(&ast.OptChain{X: e, Name: name.Lexeme},
+				token.Span{Start: e.Span().Start, End: name.Span.End})
+		case token.LParen:
+			e = p.parseCall(e)
+		case token.LBrack:
+			e = p.parseBracket(e)
+		case token.Question:
+			q := p.advance()
+			e = spanned(&ast.Try{X: e}, token.Span{Start: e.Span().Start, End: q.Span.End})
+		case token.Bang:
+			b := p.advance()
+			e = spanned(&ast.Force{X: e}, token.Span{Start: e.Span().Start, End: b.Span.End})
+		default:
+			return e
+		}
 	}
-	return e
 }
 
+// parseDot parses a '.id' field access or a '.N' tuple index.
+func (p *parser) parseDot(e ast.Expr) ast.Expr {
+	p.advance() // '.'
+	t := p.cur()
+	switch t.Kind {
+	case token.Ident:
+		p.advance()
+		return spanned(&ast.Field{X: e, Name: t.Lexeme},
+			token.Span{Start: e.Span().Start, End: t.Span.End})
+	case token.Int:
+		p.advance()
+		return spanned(&ast.TupleIndex{X: e, Index: int(p.parseIntValue(t)), Text: t.Lexeme},
+			token.Span{Start: e.Span().Start, End: t.Span.End})
+	}
+	p.fail(t.Span, "expected a field name or tuple index after '.', found %q", t.Kind.String())
+	return nil
+}
+
+// parseRecvBase parses '<-e' channel receives (right-recursive) or a primary
+// (GRAMMAR group 4/9).
+func (p *parser) parseRecvBase() ast.Expr {
+	if p.at(token.LArrow) {
+		arrow := p.advance()
+		x := p.parseRecvBase()
+		return spanned(&ast.Recv{X: x}, token.Span{Start: arrow.Span.Start, End: x.Span().End})
+	}
+	return p.parsePrimary()
+}
+
+// parseCall parses a call's argument list: positional arguments first, then named
+// 'name: value' arguments (GRAMMAR group 5).
 func (p *parser) parseCall(callee ast.Expr) ast.Expr {
 	p.expect(token.LParen)
-	var args []ast.Expr
+	var args []ast.Arg
 	if !p.at(token.RParen) {
-		for {
-			args = append(args, p.parseExpr())
-			if !p.accept(token.Comma) {
-				break
+		p.withBraces(func() ast.Expr {
+			for {
+				args = append(args, p.parseArg())
+				if !p.accept(token.Comma) {
+					break
+				}
 			}
-		}
+			return nil
+		})
 	}
 	rp := p.expect(token.RParen)
 	return spanned(&ast.Call{Callee: callee, Args: args},
 		token.Span{Start: callee.Span().Start, End: rp.Span.End})
+}
+
+// parseArg parses one call argument, named when an 'identifier :' leads it.
+func (p *parser) parseArg() ast.Arg {
+	if p.at(token.Ident) && p.peek(1).Kind == token.Colon {
+		name := p.advance()
+		p.advance() // ':'
+		return ast.Arg{Name: name.Lexeme, Value: p.parseExpr()}
+	}
+	return ast.Arg{Value: p.parseExpr()}
+}
+
+// parseBracket parses the provisional '[elems]' postfix (index or type-args,
+// DESIGN-1a §3a); a comma marks it as unambiguously type arguments.
+func (p *parser) parseBracket(base ast.Expr) ast.Expr {
+	p.expect(token.LBrack)
+	var elems []ast.Expr
+	comma := false
+	p.withBraces(func() ast.Expr {
+		for {
+			elems = append(elems, p.parseExpr())
+			if !p.accept(token.Comma) {
+				break
+			}
+			comma = true
+		}
+		return nil
+	})
+	rb := p.expect(token.RBrack)
+	return spanned(&ast.Bracket{Base: base, Elems: elems, Comma: comma},
+		token.Span{Start: base.Span().Start, End: rb.Span.End})
 }
 
 func (p *parser) parsePrimary() ast.Expr {
@@ -468,26 +685,50 @@ func (p *parser) parsePrimary() ast.Expr {
 		return spanned(&ast.IntLit{Value: p.parseIntValue(t), Text: t.Lexeme}, t.Span)
 	case token.Float:
 		p.advance()
-		return spanned(&ast.FloatLit{Value: p.parseFloatValue(t)}, t.Span)
+		return spanned(&ast.FloatLit{Value: p.parseFloatValue(t), Text: t.Lexeme}, t.Span)
 	case token.True, token.False:
 		p.advance()
 		return spanned(&ast.BoolLit{Value: t.Kind == token.True}, t.Span)
 	case token.Str:
 		p.advance()
 		return spanned(&ast.StrLit{Value: t.Str}, t.Span)
+	case token.RawStr:
+		p.advance()
+		return spanned(&ast.RawStrLit{Text: t.Lexeme, Value: t.Str}, t.Span)
+	case token.Rune:
+		p.advance()
+		return spanned(&ast.RuneLit{Text: t.Lexeme, Value: decodeRune(t.Str)}, t.Span)
+	case token.Byte:
+		p.advance()
+		return spanned(&ast.ByteLit{Text: t.Lexeme, Value: decodeByte(t.Str)}, t.Span)
+	case token.Cmd:
+		p.advance()
+		return spanned(&ast.CmdLit{Text: t.Lexeme, Value: t.Str}, t.Span)
 	case token.Nil:
 		p.advance()
 		return spanned(&ast.NilLit{}, t.Span)
 	case token.Ident:
 		p.advance()
 		return spanned(&ast.Ident{Name: t.Lexeme}, t.Span)
+	case token.This:
+		p.advance()
+		return spanned(&ast.Ident{Name: "this"}, t.Span)
 	case token.Match:
 		return p.parseMatch()
+	case token.Fn:
+		return p.parseFnExpr()
+	case token.FStrBegin:
+		return p.parseFStr()
+	case token.FCmdBegin:
+		return p.parseFCmd()
 	case token.LParen:
-		p.advance()
-		e := p.parseExpr()
-		p.expect(token.RParen)
-		return e
+		return p.parseParenOrTuple()
+	case token.LBrack:
+		return p.parseListLit()
+	case token.LBrace:
+		if !p.noBrace {
+			return p.parseBraceExpr()
+		}
 	}
 	p.fail(t.Span, "expected an expression, found %q", t.Kind.String())
 	return nil // unreachable
@@ -498,7 +739,7 @@ func (p *parser) parsePrimary() ast.Expr {
 // lead/trail trivia.
 func (p *parser) parseMatch() ast.Expr {
 	start := p.expect(token.Match).Span.Start
-	subject := p.parseExpr()
+	subject := p.headExpr()
 	p.expect(token.LBrace)
 	var arms []ast.MatchArm
 	for {
@@ -565,7 +806,7 @@ func (p *parser) parseLiteralNode() ast.Expr {
 		return spanned(&ast.IntLit{Value: p.parseIntValue(t), Text: t.Lexeme}, t.Span)
 	case token.Float:
 		p.advance()
-		return spanned(&ast.FloatLit{Value: p.parseFloatValue(t)}, t.Span)
+		return spanned(&ast.FloatLit{Value: p.parseFloatValue(t), Text: t.Lexeme}, t.Span)
 	case token.Str:
 		p.advance()
 		return spanned(&ast.StrLit{Value: t.Str}, t.Span)

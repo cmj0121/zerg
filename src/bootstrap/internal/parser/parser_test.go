@@ -80,8 +80,16 @@ func TestBindings(t *testing.T) {
 
 func TestReassignVsBind(t *testing.T) {
 	fn := onlyFunc(t, "fn f() {\n  mut x := 0\n  x = 1\n}")
-	if _, ok := fn.Body.Stmts[1].(*ast.AssignStmt); !ok {
-		t.Fatalf("stmt 1 is %T, want *ast.AssignStmt", fn.Body.Stmts[1])
+	re, ok := fn.Body.Stmts[1].(*ast.Reassign)
+	if !ok {
+		t.Fatalf("stmt 1 is %T, want *ast.Reassign", fn.Body.Stmts[1])
+	}
+	lv, ok := re.Target.(*ast.LValueTarget)
+	if !ok {
+		t.Fatalf("target is %T, want *ast.LValueTarget", re.Target)
+	}
+	if id, ok := lv.X.(*ast.Ident); !ok || id.Name != "x" {
+		t.Fatalf("target lvalue is %+v, want ident x", lv.X)
 	}
 }
 
@@ -185,6 +193,24 @@ func TestMatch(t *testing.T) {
 	}
 	if _, ok := m.Arms[3].Pat.(*ast.WildPattern); !ok {
 		t.Fatalf("arm 3 should be a wildcard, got %+v", m.Arms[3].Pat)
+	}
+}
+
+// TestOneTupleRejected pins GRAMMAR:267 — a tuple literal needs 2+ elements, so
+// the trailing-comma '(a,)' is a syntax error, not a silently accepted 1-tuple
+// that fmt would rewrite to grouping '(a)'.
+func TestOneTupleRejected(t *testing.T) {
+	_, diags := Parse("fn f() {\n  (a,) = e\n}")
+	if len(diags) == 0 {
+		t.Fatalf("'(a,)' must be rejected with a diagnostic, got none")
+	}
+	// a legitimate 2-tuple still parses cleanly
+	if _, ok := Parse("fn f() {\n  (a, b) = pair\n}"); len(ok) != 0 {
+		t.Fatalf("a 2-element tuple target must parse cleanly, got %v", ok)
+	}
+	// and a 1-element list '[a]' remains legal (only the paren 1-tuple is illegal)
+	if _, ld := Parse("fn f() {\n  x := [a]\n}"); len(ld) != 0 {
+		t.Fatalf("'[a]' is a legal 1-element list, got %v", ld)
 	}
 }
 

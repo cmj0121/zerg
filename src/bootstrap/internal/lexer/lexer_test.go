@@ -126,9 +126,8 @@ func TestComments(t *testing.T) {
 func TestDiagnostics(t *testing.T) {
 	cases := []string{
 		`"unterminated`,
-		`f"hi"`,
-		"`ls`",
-		`#[derive(x)]`,
+		"f\"unterminated", // f-string with no closing quote
+		"`unterminated",   // command literal with no closing backtick
 		`0xZZ`,
 	}
 	for _, src := range cases {
@@ -137,6 +136,20 @@ func TestDiagnostics(t *testing.T) {
 			t.Fatalf("%q: expected a diagnostic, got none", src)
 		}
 	}
+}
+
+// TestInterpTokenizes proves the group 3/5 interpolation surface now lexes
+// cleanly into the structured token stream (DESIGN-1a §4).
+func TestInterpTokenizes(t *testing.T) {
+	eq(t, `f"a{x}b"`,
+		token.FStrBegin, token.LBrace, token.Ident, token.RBrace, token.FStrText, token.FStrEnd)
+	eq(t, `f"{x!r:>3}"`,
+		token.FStrBegin, token.LBrace, token.Ident, token.Conv, token.FmtSpec, token.RBrace, token.FStrEnd)
+	eq(t, "`ls -l`", token.Cmd)
+	eq(t, "f`echo {x}`",
+		token.FCmdBegin, token.LBrace, token.Ident, token.RBrace, token.FCmdEnd)
+	eq(t, `#[derive(Eq)]`,
+		token.Hash, token.Ident, token.LParen, token.Ident, token.RParen, token.RBrack)
 }
 
 func TestTripleString(t *testing.T) {

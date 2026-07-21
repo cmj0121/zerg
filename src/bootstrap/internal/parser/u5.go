@@ -15,10 +15,22 @@ import (
 
 // parseDecl parses one decorated declaration: an optional '#[…]' decorator run
 // (no statement separator binds it to its target), then the declaration itself.
+//
+// Follow-up F1: a doc-comment (or any trivia) sitting BETWEEN the decorator
+// prefix and the declaration keyword is the leading trivia of that keyword, not
+// of the '#['. The file-level attach hoists only the trivia before the '#[', so
+// this stashes the between-trivia on the declaration node; attach then prepends
+// the pre-decorator trivia, and both survive the reprint.
 func (p *parser) parseDecl() ast.Decl {
 	decos := p.parseDecorators()
+	between := p.lead() // trivia between the last decorator and the declaration keyword
 	d := p.parseBareDecl()
 	setDecorators(d, decos)
+	if len(decos) > 0 && len(between) > 0 {
+		if t, ok := d.(trivial); ok {
+			t.SetLead(between)
+		}
+	}
 	return d
 }
 

@@ -81,9 +81,15 @@ type trivial interface {
 }
 
 // attach hoists trivia onto a node: the leading trivia of its first token and
-// the trailing trivia of its last one.
+// the trailing trivia of its last one. The lead is PREPENDED to whatever the
+// node already carries, so a declaration that stashed the trivia sitting between
+// its decorator prefix and its keyword (parseDecl, follow-up F1) keeps it —
+// ordinary nodes start with no lead, for which prepend is just assignment.
 func attach(n ast.Node, lead, trail []token.Trivia) {
 	if t, ok := n.(trivial); ok { // every node embeds base, so this always holds
+		if existing := n.Lead(); len(existing) > 0 {
+			lead = append(append([]token.Trivia{}, lead...), existing...)
+		}
 		t.SetLead(lead)
 		t.SetTrail(trail)
 	}
@@ -279,6 +285,13 @@ func (p *parser) parseMutRef() bool {
 // --- statements ---------------------------------------------------------------
 
 func (p *parser) parseBlock() *ast.Block {
+	// A block body is never a head, so the '{'-opening-expression restriction is
+	// lifted inside it (a leading '{' statement is a block/map again); it is
+	// restored on the way out for the enclosing head.
+	saved := p.noBrace
+	p.noBrace = false
+	defer func() { p.noBrace = saved }()
+
 	lb := p.expect(token.LBrace)
 	b := &ast.Block{}
 	for {
@@ -330,15 +343,17 @@ func (p *parser) parseStmt() ast.Stmt {
 	case token.Return:
 		return p.parseReturn(t)
 	case token.Break:
-		p.advance()
-		return spanned(&ast.BreakStmt{}, t.Span)
+		return p.parseBreakContinue(true)
 	case token.Continue:
-		p.advance()
-		return spanned(&ast.ContinueStmt{}, t.Span)
+		return p.parseBreakContinue(false)
 	case token.If:
 		return p.parseIf()
 	case token.For:
 		return p.parseFor()
+	case token.With:
+		return p.parseWith()
+	case token.Raise:
+		return p.parseRaise()
 	case token.Mut:
 		p.advance()
 		return p.parseBinding(t.Span.Start, true, false)
@@ -402,40 +417,6 @@ func (p *parser) parseBinding(start token.Pos, mut, konst bool) ast.Stmt {
 		p.fail(p.cur().Span, "expected ':=' or ': type =' in binding")
 	}
 	return spanned(b, token.Span{Start: start, End: b.Value.Span().End})
-}
-
-func (p *parser) parseIf() ast.Stmt {
-	start := p.expect(token.If).Span.Start
-	var branches []ast.IfBranch
-	cond := p.headExpr()
-	body := p.parseBlock()
-	branches = append(branches, ast.IfBranch{Cond: cond, Body: body})
-	end := body.Span().End
-
-	var elseBlock *ast.Block
-	for p.accept(token.Else) {
-		if p.accept(token.If) {
-			c := p.headExpr()
-			b := p.parseBlock()
-			branches = append(branches, ast.IfBranch{Cond: c, Body: b})
-			end = b.Span().End
-			continue
-		}
-		elseBlock = p.parseBlock()
-		end = elseBlock.Span().End
-		break
-	}
-	return spanned(&ast.IfStmt{Branches: branches, Else: elseBlock}, token.Span{Start: start, End: end})
-}
-
-func (p *parser) parseFor() ast.Stmt {
-	start := p.expect(token.For).Span.Start
-	var cond ast.Expr
-	if !p.at(token.LBrace) {
-		cond = p.headExpr()
-	}
-	body := p.parseBlock()
-	return spanned(&ast.ForStmt{Cond: cond, Body: body}, token.Span{Start: start, End: body.Span().End})
 }
 
 // --- expressions --------------------------------------------------------------
@@ -717,6 +698,10 @@ func (p *parser) parsePrimary() ast.Expr {
 		return spanned(&ast.Ident{Name: "this"}, t.Span)
 	case token.Match:
 		return p.parseMatch()
+	case token.If:
+		return p.parseIfExpr()
+	case token.Guard:
+		return p.parseGuard()
 	case token.Fn:
 		return p.parseFnExpr()
 	case token.FStrBegin:
@@ -760,7 +745,7 @@ func (p *parser) parseMatch() ast.Expr {
 }
 
 func (p *parser) parseMatchArm() ast.MatchArm {
-	pat := p.parsePattern()
+	pat := p.parseArmPattern()
 	var guard ast.Expr
 	if p.accept(token.If) {
 		guard = p.parseExpr()
@@ -772,34 +757,8 @@ func (p *parser) parseMatchArm() ast.MatchArm {
 	return arm
 }
 
-// parsePattern parses a Phase 0 pattern: a literal (with optional '-'), a binding
-// name, or the wildcard '_'.
-func (p *parser) parsePattern() ast.Pattern {
-	t := p.cur()
-	switch t.Kind {
-	case token.Ident:
-		p.advance()
-		if t.Lexeme == "_" {
-			return spanned(&ast.WildPattern{}, t.Span)
-		}
-		return spanned(&ast.BindPattern{Name: t.Lexeme}, t.Span)
-	case token.Minus:
-		p.advance()
-		if !p.at(token.Int) && !p.at(token.Float) {
-			p.fail(p.cur().Span, "expected a number after '-' in a pattern")
-		}
-		lit := p.parseLiteralNode()
-		return spanned(&ast.LitPattern{Lit: lit, Neg: true},
-			token.Span{Start: t.Span.Start, End: lit.Span().End})
-	case token.Int, token.Float, token.Str, token.True, token.False, token.Nil:
-		lit := p.parseLiteralNode()
-		return spanned(&ast.LitPattern{Lit: lit}, lit.Span())
-	}
-	p.fail(t.Span, "expected a pattern, found %q", t.Kind.String())
-	return nil
-}
-
-// parseLiteralNode parses a single literal token into its expression node.
+// parseLiteralNode parses a single literal token into its expression node — the
+// literals a match literal-pattern or a range-arm bound may carry.
 func (p *parser) parseLiteralNode() ast.Expr {
 	t := p.cur()
 	switch t.Kind {
@@ -812,6 +771,15 @@ func (p *parser) parseLiteralNode() ast.Expr {
 	case token.Str:
 		p.advance()
 		return spanned(&ast.StrLit{Value: t.Str}, t.Span)
+	case token.RawStr:
+		p.advance()
+		return spanned(&ast.RawStrLit{Text: t.Lexeme, Value: t.Str}, t.Span)
+	case token.Rune:
+		p.advance()
+		return spanned(&ast.RuneLit{Text: t.Lexeme, Value: decodeRune(t.Str)}, t.Span)
+	case token.Byte:
+		p.advance()
+		return spanned(&ast.ByteLit{Text: t.Lexeme, Value: decodeByte(t.Str)}, t.Span)
 	case token.True, token.False:
 		p.advance()
 		return spanned(&ast.BoolLit{Value: t.Kind == token.True}, t.Span)

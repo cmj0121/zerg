@@ -69,8 +69,8 @@ func (d *dumper) node(n Node) {
 	switch v := n.(type) {
 	case *File:
 		d.open("File", v)
-		for _, dec := range v.Decls {
-			d.node(dec)
+		for _, it := range v.Items {
+			d.node(it)
 		}
 		d.trivia("end", v.End)
 		d.close()
@@ -514,6 +514,80 @@ func (d *dumper) node(n Node) {
 			d.printf("(FTarget %q", f.Name)
 			d.target(f.Target)
 			d.printf(")")
+		}
+		d.close()
+	case *SpawnStmt:
+		d.open("Spawn", v)
+		d.expr(v.Call)
+		d.close()
+	case *SendStmt:
+		d.open("Send", v)
+		d.expr(v.Chan)
+		d.expr(v.Value)
+		d.close()
+	case *DeferStmt:
+		d.open("Defer", v)
+		d.expr(v.Call)
+		d.close()
+	case *DelStmt:
+		d.open("Del", v)
+		d.printf(" %q", v.Name)
+		d.close()
+	case *ImportStmt:
+		d.open("Import", v)
+		d.printf(" grouped=%t", v.Grouped)
+		for _, s := range v.Specs {
+			d.printf("(Spec")
+			d.trivia("lead", s.Lead())
+			d.trivia("trail", s.Trail())
+			d.printf(" pub=%t %q as=%q)", s.Pub, s.Path, s.Alias)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *SelectStmt:
+		d.open("Select", v)
+		for i := range v.Arms {
+			arm := &v.Arms[i]
+			d.printf("(SArm")
+			d.trivia("lead", arm.Lead())
+			d.trivia("trail", arm.Trail())
+			d.printf(" kind=%d bind=%q hasbind=%t", arm.Kind, arm.Bind, arm.HasBind)
+			d.expr(arm.Chan)
+			d.expr(arm.Value)
+			d.expr(arm.Body)
+			d.printf(")")
+		}
+		d.close()
+	case *ChanNew:
+		d.open("ChanNew", v)
+		d.typ(v.Elem)
+		d.expr(v.Cap)
+		d.close()
+	case *UnsafeExpr:
+		d.open("UnsafeExpr", v)
+		d.node(v.Body)
+		d.close()
+	case *UnsafeGroup:
+		d.open("UnsafeGroup", v)
+		d.decorators(v.Decorators)
+		for _, it := range v.Items {
+			d.node(it)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *AsmExpr:
+		d.open("Asm", v)
+		d.printf(" %q", v.Template)
+		for _, op := range v.Operands {
+			d.node(op)
+		}
+		d.close()
+	case *AsmOperand:
+		d.open("AsmOp", v)
+		d.printf(" kind=%d constraint=%q", v.Kind, v.Constraint)
+		d.expr(v.Value)
+		for _, c := range v.Clobbers {
+			d.printf(" %q", c)
 		}
 		d.close()
 	default:

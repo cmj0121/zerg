@@ -19,9 +19,11 @@ type Node interface {
 	Trail() []token.Trivia
 }
 
-// Decl is a top-level declaration.
+// Decl is a declaration. A declaration is also a statement (GRAMMAR group 1's
+// decorated-decl: the top level and a block are both stmt-lists), so Decl embeds
+// Stmt and adds the declaration marker.
 type Decl interface {
-	Node
+	Stmt
 	declNode()
 }
 
@@ -37,11 +39,13 @@ type Expr interface {
 	exprNode()
 }
 
-// File is a whole source file: a sequence of declarations. End holds any
-// dangling trivia after the last declaration (comments at end of file).
+// File is a whole source file: the program's top-level stmt-list (GRAMMAR group
+// 1/10). An item is an import, a module-level binding, or a decorated declaration
+// (a declaration is also a statement). End holds any dangling trivia after the
+// last item (comments at end of file).
 type File struct {
 	base
-	Decls []Decl
+	Items []Stmt
 	End   []token.Trivia
 }
 

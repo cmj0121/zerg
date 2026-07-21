@@ -40,10 +40,7 @@ func Print(file *ast.File) string {
 	p := &printer{}
 	for _, d := range file.Decls {
 		p.leadTrivia(d.Lead())
-		p.ind()
-		if fn, ok := d.(*ast.FuncDecl); ok {
-			p.funcDecl(fn)
-		}
+		p.decl(d)
 		p.trailTrivia(d.Trail())
 		p.nl()
 	}
@@ -118,20 +115,26 @@ func (p *printer) funcDecl(fn *ast.FuncDecl) {
 	}
 	p.write("fn ")
 	p.write(fn.Name)
-	p.write("(")
-	for i := range fn.Params {
-		if i > 0 {
-			p.write(", ")
-		}
-		p.param(&fn.Params[i])
-	}
-	p.write(")")
+	p.generics(fn.Generics)
+	p.paramList(fn.Params)
 	if fn.Ret != nil {
 		p.write(" -> ")
-		p.write(fn.Ret.Name)
+		p.typ(fn.Ret)
 	}
 	p.write(" ")
 	p.block(fn.Body)
+}
+
+// paramList prints a parenthesized declared-parameter list.
+func (p *printer) paramList(params []ast.Param) {
+	p.write("(")
+	for i := range params {
+		if i > 0 {
+			p.write(", ")
+		}
+		p.param(&params[i])
+	}
+	p.write(")")
 }
 
 // param prints one declared function parameter: 'mut &x'? name ': type' (= default)?.
@@ -141,7 +144,7 @@ func (p *printer) param(pm *ast.Param) {
 	}
 	p.write(pm.Name)
 	p.write(": ")
-	p.write(pm.Type.Name)
+	p.typ(pm.Type)
 	if pm.Default != nil {
 		p.write(" = ")
 		p.expr(pm.Default, precLowest)
@@ -272,7 +275,7 @@ func (p *printer) bind(n *ast.BindStmt) {
 	p.write(n.Name)
 	if n.Type != nil {
 		p.write(": ")
-		p.write(n.Type.Name)
+		p.typ(n.Type)
 		p.write(" = ")
 	} else {
 		p.write(" := ")
@@ -542,7 +545,7 @@ func (p *printer) fnExpr(n *ast.FnExpr) {
 	p.write(")")
 	if n.Ret != nil {
 		p.write(" -> ")
-		p.write(n.Ret.Name)
+		p.typ(n.Ret)
 	}
 	p.write(" ")
 	p.block(n.Body)
@@ -555,7 +558,7 @@ func (p *printer) closureParam(cp *ast.ClosureParam) {
 	p.write(cp.Name)
 	if cp.Type != nil {
 		p.write(": ")
-		p.write(cp.Type.Name)
+		p.typ(cp.Type)
 	}
 	if cp.Default != nil {
 		p.write(" = ")

@@ -1,0 +1,17 @@
+# 06 — Functions: parameters, return, and calls.
+#
+# A parameter is written `name: type`; `-> type` declares the result.
+# A function with no `-> type` returns nothing.
+fn square(n: int) -> int {
+    return n * n
+}
+
+fn max(a: int, b: int) -> int {
+    if a > b { return a }
+    return b
+}
+
+fn main() {
+    print square(9)          # 81
+    print max(3, 7)          # 7
+}

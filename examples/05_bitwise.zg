@@ -1,0 +1,10 @@
+# 05 — Bitwise operators (integers only).
+#
+# `&` and, `|` or, `^` xor, `<<` shift left, `>>` shift right.
+fn main() {
+    print 0b1100 & 0b1010    # 8
+    print 0b1100 | 0b1010    # 14
+    print 0b1100 ^ 0b1010    # 6
+    print 1 << 8             # 256
+    print 0xFF >> 4          # 15
+}

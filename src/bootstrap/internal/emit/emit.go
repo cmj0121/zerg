@@ -36,6 +36,14 @@ type emitter struct {
 	sb     strings.Builder
 	indent int
 	diags  diag.List
+
+	// Per-function name environment. Zerg allows a binding to shadow an outer
+	// name (e.g. 'mut n := n'), but C parameters and the top-level body share one
+	// scope, so every local gets a unique C name; 'scopes' maps a source name to
+	// the C name currently in effect and 'used' guarantees uniqueness.
+	scopes  []map[string]string
+	used    map[string]bool
+	counter int
 }
 
 func (e *emitter) program(file *ast.File) {
@@ -58,8 +66,7 @@ func (e *emitter) program(file *ast.File) {
 
 	// prototypes first, so declaration order does not constrain calls
 	for _, fn := range funcs(file) {
-		e.raw(e.signature(fn))
-		e.rawln(";")
+		e.line(e.prototype(fn) + ";")
 	}
 	e.blank()
 
@@ -82,8 +89,8 @@ func funcs(file *ast.File) []*ast.FuncDecl {
 	return out
 }
 
-// signature renders 'ret zg_name(params)' without a trailing token.
-func (e *emitter) signature(fn *ast.FuncDecl) string {
+// prototype renders a forward declaration with parameter types only.
+func (e *emitter) prototype(fn *ast.FuncDecl) string {
 	sig := e.info.Funcs[fn.Name]
 	var params strings.Builder
 	if len(sig.Params) == 0 {
@@ -93,7 +100,7 @@ func (e *emitter) signature(fn *ast.FuncDecl) string {
 			if i > 0 {
 				params.WriteString(", ")
 			}
-			fmt.Fprintf(&params, "%s zg_%s", cType(pt), sig.ParamNames[i])
+			params.WriteString(cType(pt))
 		}
 	}
 	return fmt.Sprintf("%s zg_%s(%s)", cType(sig.Ret), fn.Name, params.String())
@@ -101,18 +108,46 @@ func (e *emitter) signature(fn *ast.FuncDecl) string {
 
 func (e *emitter) function(fn *ast.FuncDecl) {
 	sig := e.info.Funcs[fn.Name]
-	e.raw(e.signature(fn))
-	e.rawln(" {")
+	e.used = map[string]bool{}
+	e.counter = 0
+	e.pushScope() // parameter scope
+
+	var params strings.Builder
+	if len(sig.Params) == 0 {
+		params.WriteString("void")
+	} else {
+		for i, pt := range sig.Params {
+			if i > 0 {
+				params.WriteString(", ")
+			}
+			fmt.Fprintf(&params, "%s %s", cType(pt), e.declareName(sig.ParamNames[i]))
+		}
+	}
+	e.line(fmt.Sprintf("%s zg_%s(%s) {", cType(sig.Ret), fn.Name, params.String()))
+
 	e.indent++
+	e.pushScope() // body scope, nested so a body binding can shadow a parameter
 	for _, s := range fn.Body.Stmts {
 		e.stmt(s)
 	}
+	e.popScope()
 	// guarantee a return value on every path for value-returning functions
-	if sig.Ret != sema.Nil {
+	if sig.Ret != sema.Nil && !endsWithReturn(fn.Body) {
 		e.line("return " + zeroValue(sig.Ret) + ";")
 	}
 	e.indent--
 	e.line("}")
+
+	e.popScope()
+}
+
+// endsWithReturn reports whether a block's last statement is a return.
+func endsWithReturn(b *ast.Block) bool {
+	if len(b.Stmts) == 0 {
+		return false
+	}
+	_, ok := b.Stmts[len(b.Stmts)-1].(*ast.ReturnStmt)
+	return ok
 }
 
 // cMain wraps zg_main in a C entry point.
@@ -137,9 +172,12 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.line(";")
 	case *ast.BindStmt:
 		t := e.info.BindTypes[n]
-		e.line(fmt.Sprintf("%s zg_%s = %s;", cType(t), n.Name, e.expr(n.Value)))
+		// resolve the RHS before declaring the name, so 'mut n := n' reads the
+		// outer binding (matching ':=' semantics)
+		rhs := e.expr(n.Value)
+		e.line(fmt.Sprintf("%s %s = %s;", cType(t), e.declareName(n.Name), rhs))
 	case *ast.AssignStmt:
-		e.line(fmt.Sprintf("zg_%s = %s;", n.Name, e.expr(n.Value)))
+		e.line(fmt.Sprintf("%s = %s;", e.resolve(n.Name), e.expr(n.Value)))
 	case *ast.PrintStmt:
 		e.printStmt(n)
 	case *ast.ReturnStmt:
@@ -202,13 +240,45 @@ func (e *emitter) forStmt(n *ast.ForStmt) {
 }
 
 // body emits a block's statements at one deeper indent (the surrounding braces are
-// emitted by the caller so 'else' can share a line with the closing brace).
+// emitted by the caller so 'else' can share a line with the closing brace). It
+// opens a nested name scope so the block's bindings do not leak.
 func (e *emitter) body(b *ast.Block) {
 	e.indent++
+	e.pushScope()
 	for _, s := range b.Stmts {
 		e.stmt(s)
 	}
+	e.popScope()
 	e.indent--
+}
+
+// --- name environment ---------------------------------------------------------
+
+func (e *emitter) pushScope() { e.scopes = append(e.scopes, map[string]string{}) }
+func (e *emitter) popScope()  { e.scopes = e.scopes[:len(e.scopes)-1] }
+
+// declareName maps a source name to a fresh, function-unique C name (plain
+// 'zg_<name>' unless that is already taken, in which case a numeric suffix is
+// appended) and records it in the current scope.
+func (e *emitter) declareName(name string) string {
+	unique := "zg_" + name
+	for e.used[unique] {
+		e.counter++
+		unique = fmt.Sprintf("zg_%s__%d", name, e.counter)
+	}
+	e.used[unique] = true
+	e.scopes[len(e.scopes)-1][name] = unique
+	return unique
+}
+
+// resolve returns the C name a source name currently refers to.
+func (e *emitter) resolve(name string) string {
+	for i := len(e.scopes) - 1; i >= 0; i-- {
+		if u, ok := e.scopes[i][name]; ok {
+			return u
+		}
+	}
+	return "zg_" + name // unreachable for a checked program
 }
 
 // --- expressions --------------------------------------------------------------
@@ -229,7 +299,7 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.NilLit:
 		return "0"
 	case *ast.Ident:
-		return "zg_" + n.Name
+		return e.resolve(n.Name)
 	case *ast.Unary:
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
 	case *ast.Binary:
@@ -381,16 +451,6 @@ func cString(s string) string {
 
 func (e *emitter) line(s string) {
 	e.writeIndent()
-	e.sb.WriteString(s)
-	e.sb.WriteByte('\n')
-}
-
-func (e *emitter) raw(s string) {
-	e.writeIndent()
-	e.sb.WriteString(s)
-}
-
-func (e *emitter) rawln(s string) {
 	e.sb.WriteString(s)
 	e.sb.WriteByte('\n')
 }

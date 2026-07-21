@@ -332,9 +332,9 @@ func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
 	return result
 }
 
-// armValue emits an arm's body, binding a BindPattern's name to the subject.
+// armValue emits an arm's body, binding a NamePattern's name to the subject.
 func (e *emitter) armValue(arm ast.MatchArm, subj string) string {
-	if bp, ok := arm.Pat.(*ast.BindPattern); ok {
+	if bp, ok := arm.Pat.(*ast.NamePattern); ok {
 		e.pushScope()
 		e.scopes[len(e.scopes)-1][bp.Name] = subj
 		v := e.expr(arm.Body)
@@ -344,11 +344,11 @@ func (e *emitter) armValue(arm ast.MatchArm, subj string) string {
 	return e.expr(arm.Body)
 }
 
-// armTestAndValue emits an arm's match test and body. A BindPattern's name is in
+// armTestAndValue emits an arm's match test and body. A NamePattern's name is in
 // scope for both the guard and the body.
 func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type) (test, body string) {
 	pop := func() {}
-	if bp, ok := arm.Pat.(*ast.BindPattern); ok {
+	if bp, ok := arm.Pat.(*ast.NamePattern); ok {
 		e.pushScope()
 		e.scopes[len(e.scopes)-1][bp.Name] = subj
 		pop = e.popScope

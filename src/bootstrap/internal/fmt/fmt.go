@@ -38,14 +38,26 @@ func Format(src string) (string, []diag.Diagnostic) {
 // Print renders a parsed file in canonical form.
 func Print(file *ast.File) string {
 	p := &printer{}
-	for _, d := range file.Decls {
-		p.leadTrivia(d.Lead())
-		p.decl(d)
-		p.trailTrivia(d.Trail())
+	for _, it := range file.Items {
+		p.leadTrivia(it.Lead())
+		p.topItem(it)
+		p.trailTrivia(it.Trail())
 		p.nl()
 	}
 	p.leadTrivia(file.End)
 	return p.sb.String()
+}
+
+// topItem prints one item of the top-level stmt-list: a declaration (which owns
+// its own indent and decorator prefix) or a plain statement (an import or a
+// module-level binding) at the current indent.
+func (p *printer) topItem(it ast.Stmt) {
+	if d, ok := it.(ast.Decl); ok {
+		p.decl(d)
+		return
+	}
+	p.ind()
+	p.stmt(it)
 }
 
 // printer accumulates the canonical text; indent is the current block depth.
@@ -215,6 +227,23 @@ func (p *printer) stmt(s ast.Stmt) {
 		p.withStmt(n)
 	case *ast.RaiseStmt:
 		p.raiseStmt(n)
+	case *ast.SpawnStmt:
+		p.write("spawn ")
+		p.expr(n.Call, precLowest)
+	case *ast.SendStmt:
+		p.expr(n.Chan, precLowest)
+		p.write(" <- ")
+		p.expr(n.Value, precLowest)
+	case *ast.DeferStmt:
+		p.write("defer ")
+		p.expr(n.Call, precLowest)
+	case *ast.DelStmt:
+		p.write("del ")
+		p.write(n.Name)
+	case *ast.ImportStmt:
+		p.importStmt(n)
+	case *ast.SelectStmt:
+		p.selectStmt(n)
 	case *ast.ExprStmt:
 		p.expr(n.X, precLowest)
 	}
@@ -489,6 +518,13 @@ func (p *printer) expr(e ast.Expr, prec int) {
 		p.ifExpr(n)
 	case *ast.GuardExpr:
 		p.guardExpr(n)
+	case *ast.ChanNew:
+		p.chanNew(n)
+	case *ast.UnsafeExpr:
+		p.write("unsafe ")
+		p.block(n.Body)
+	case *ast.AsmExpr:
+		p.asmExpr(n)
 	}
 }
 

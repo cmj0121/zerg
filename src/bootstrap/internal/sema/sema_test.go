@@ -134,6 +134,63 @@ func TestDuplicateFunction(t *testing.T) {
 	wantErr(t, "fn f() { nop }\nfn f() { nop }", "already declared")
 }
 
+func TestOperators(t *testing.T) {
+	wantOK(t, "fn f() {\n"+
+		"  print ~5\n"+
+		"  print 1 & 2 | 3 ^ 4\n"+
+		"  print 8 << 1 >> 2\n"+
+		"  print true and false or not false\n"+
+		"  print 1 < 2\n"+
+		"  print \"a\" == \"b\"\n"+
+		"  print true != false\n"+
+		"  print -3\n"+
+		"  print -2.0\n"+
+		"}")
+}
+
+func TestUnaryErrors(t *testing.T) {
+	wantErr(t, "fn f() { print not 1 }", "requires a bool")
+	wantErr(t, "fn f() { print -true }", "requires a numeric")
+	wantErr(t, "fn f() { print ~true }", "requires an int")
+}
+
+func TestBinaryErrors(t *testing.T) {
+	wantErr(t, "fn f() { print 1 & true }", "requires int operands")
+	wantErr(t, "fn f() { print true and 1 }", "requires bool operands")
+	wantErr(t, "fn f() { print 1 == true }", "cannot compare")
+	wantErr(t, "fn f() { print true < false }", "matching numeric")
+}
+
+func TestUnknownType(t *testing.T) {
+	wantErr(t, "fn f(x: Widget) { nop }", "unknown type")
+	wantErr(t, "fn f() {\n  x: Widget = 1\n}", "unknown type")
+}
+
+func TestUndefinedFunction(t *testing.T) {
+	wantErr(t, "fn f() { g() }", "undefined function")
+}
+
+func TestFunctionNotFirstClass(t *testing.T) {
+	wantErr(t, "fn g() { nop }\nfn f() { print g }", "first-class")
+}
+
+func TestRedeclareInScope(t *testing.T) {
+	wantErr(t, "fn f() {\n  x := 1\n  x := 2\n}", "already declared")
+}
+
+func TestAssignTypeMismatch(t *testing.T) {
+	wantErr(t, "fn f() {\n  mut x := 1\n  x = true\n}", "cannot assign")
+}
+
+func TestMatchPatternTypeAndCoercion(t *testing.T) {
+	// a str literal cannot match an int subject
+	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    \"s\" => 1\n    _ => 2\n  }\n}", "cannot match")
+	// an int literal pattern may match a float subject
+	wantOK(t, "fn f(x: float) -> int {\n  return match x {\n    0 => 1\n    _ => 2\n  }\n}")
+	// an earlier unguarded catch-all makes later arms unreachable
+	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    _ => 1\n    0 => 2\n  }\n}", "unreachable")
+}
+
 func TestExprTypesRecorded(t *testing.T) {
 	file, _ := parser.Parse("fn f() {\n  x := 1 + 2\n  print x\n}")
 	info, diags := Check(file)

@@ -167,6 +167,27 @@ func TestReturnIf(t *testing.T) {
 	}
 }
 
+func TestMatch(t *testing.T) {
+	fn := onlyFunc(t, "fn f(n: int) -> int {\n  return match n {\n"+
+		"    -1 -> 5\n    0 -> 10\n    x if x < 0 -> 20\n    _ -> 30\n  }\n}")
+	ret := fn.Body.Stmts[0].(*ast.ReturnStmt)
+	m, ok := ret.Value.(*ast.MatchExpr)
+	if !ok || len(m.Arms) != 4 {
+		t.Fatalf("want a 4-arm match, got %+v", ret.Value)
+	}
+	neg, ok := m.Arms[0].Pat.(*ast.LitPattern)
+	if !ok || !neg.Neg {
+		t.Fatalf("arm 0 should be a negative literal pattern, got %+v", m.Arms[0].Pat)
+	}
+	bind, ok := m.Arms[2].Pat.(*ast.BindPattern)
+	if !ok || bind.Name != "x" || m.Arms[2].Guard == nil {
+		t.Fatalf("arm 2 should be a guarded binding, got %+v", m.Arms[2])
+	}
+	if _, ok := m.Arms[3].Pat.(*ast.WildPattern); !ok {
+		t.Fatalf("arm 3 should be a wildcard, got %+v", m.Arms[3].Pat)
+	}
+}
+
 func TestErrorRecovery(t *testing.T) {
 	// a bad statement is reported but the following function still parses.
 	file, diags := Parse("fn a() { x := }\nfn b() { nop }")

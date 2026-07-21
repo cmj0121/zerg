@@ -456,6 +456,8 @@ func (p *parser) parsePrimary() ast.Expr {
 	case token.Ident:
 		p.advance()
 		return &ast.Ident{Name: t.Lexeme, Span: t.Span}
+	case token.Match:
+		return p.parseMatch()
 	case token.LParen:
 		p.advance()
 		e := p.parseExpr()
@@ -464,6 +466,85 @@ func (p *parser) parsePrimary() ast.Expr {
 	}
 	p.fail(t.Span, "expected an expression, found %q", t.Kind.String())
 	return nil // unreachable
+}
+
+// parseMatch parses 'match subject { arm+ }' (GRAMMAR group 6). Arms are
+// separated like statements (a newline or ';').
+func (p *parser) parseMatch() ast.Expr {
+	start := p.expect(token.Match).Span.Start
+	subject := p.parseExpr()
+	p.expect(token.LBrace)
+	var arms []ast.MatchArm
+	for {
+		p.skipSemis()
+		if p.at(token.RBrace) || p.at(token.EOF) {
+			break
+		}
+		arms = append(arms, p.parseMatchArm())
+	}
+	end := p.expect(token.RBrace).Span.End
+	return &ast.MatchExpr{Subject: subject, Arms: arms, Span: token.Span{Start: start, End: end}}
+}
+
+func (p *parser) parseMatchArm() ast.MatchArm {
+	pat := p.parsePattern()
+	var guard ast.Expr
+	if p.accept(token.If) {
+		guard = p.parseExpr()
+	}
+	p.expect(token.Arrow)
+	body := p.parseExpr()
+	return ast.MatchArm{Pat: pat, Guard: guard, Body: body}
+}
+
+// parsePattern parses a Phase 0 pattern: a literal (with optional '-'), a binding
+// name, or the wildcard '_'.
+func (p *parser) parsePattern() ast.Pattern {
+	t := p.cur()
+	switch t.Kind {
+	case token.Ident:
+		p.advance()
+		if t.Lexeme == "_" {
+			return &ast.WildPattern{Span: t.Span}
+		}
+		return &ast.BindPattern{Name: t.Lexeme, Span: t.Span}
+	case token.Minus:
+		p.advance()
+		if !p.at(token.Int) && !p.at(token.Float) {
+			p.fail(p.cur().Span, "expected a number after '-' in a pattern")
+		}
+		lit := p.parseLiteralNode()
+		return &ast.LitPattern{Lit: lit, Neg: true, Span: token.Span{Start: t.Span.Start, End: exprEnd(lit)}}
+	case token.Int, token.Float, token.Str, token.True, token.False, token.Nil:
+		lit := p.parseLiteralNode()
+		return &ast.LitPattern{Lit: lit, Span: exprSpan(lit)}
+	}
+	p.fail(t.Span, "expected a pattern, found %q", t.Kind.String())
+	return nil
+}
+
+// parseLiteralNode parses a single literal token into its expression node.
+func (p *parser) parseLiteralNode() ast.Expr {
+	t := p.cur()
+	switch t.Kind {
+	case token.Int:
+		p.advance()
+		return &ast.IntLit{Value: p.parseIntValue(t), Span: t.Span}
+	case token.Float:
+		p.advance()
+		return &ast.FloatLit{Value: p.parseFloatValue(t), Span: t.Span}
+	case token.Str:
+		p.advance()
+		return &ast.StrLit{Value: t.Str, Span: t.Span}
+	case token.True, token.False:
+		p.advance()
+		return &ast.BoolLit{Value: t.Kind == token.True, Span: t.Span}
+	case token.Nil:
+		p.advance()
+		return &ast.NilLit{Span: t.Span}
+	}
+	p.fail(t.Span, "expected a literal, found %q", t.Kind.String())
+	return nil
 }
 
 func (p *parser) parseIntValue(t token.Token) int64 {
@@ -555,6 +636,8 @@ func exprSpan(e ast.Expr) token.Span {
 	case *ast.Binary:
 		return v.Span
 	case *ast.Call:
+		return v.Span
+	case *ast.MatchExpr:
 		return v.Span
 	default:
 		return token.Span{}

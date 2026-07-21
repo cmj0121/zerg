@@ -105,6 +105,13 @@ func TestCompileAndRun(t *testing.T) {
 			want: "hello, world\n",
 		},
 		{
+			name: "match-int-and-str",
+			src: "fn sign(n: int) -> int {\n  return match n {\n    0 -> 0\n    x if x < 0 -> -1\n    _ -> 1\n  }\n}\n" +
+				"fn kind(s: str) -> str {\n  return match s {\n    \"hi\" -> \"greeting\"\n    _ -> \"other\"\n  }\n}\n" +
+				"fn main() {\n  print sign(-3)\n  print sign(7)\n  print kind(\"hi\")\n  print kind(\"x\")\n}",
+			want: "-1\n1\ngreeting\nother\n",
+		},
+		{
 			name: "return-if-guard",
 			src: "fn clamp(v: int) -> int {\n  return 0 if v < 0\n  return 100 if v > 100\n  return v\n}\n" +
 				"fn main() {\n  print clamp(-5)\n  print clamp(150)\n  print clamp(42)\n}",

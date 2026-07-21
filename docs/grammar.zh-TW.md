@@ -519,9 +519,9 @@ send-stmt   ::= expr '<-' expr
 chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
-recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
-send-arm    ::= expr '<-' expr '->' expr
+select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
+send-arm    ::= expr '<-' expr '=>' expr
 ```
 
 - **`spawn f(args)`** 啟動一個 **fire-and-forget** coroutine（Go 的 `go`）——無 handle、無 join;只能透過 channel

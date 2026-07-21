@@ -96,8 +96,8 @@ fn read_config(s: str) -> Result[Config] {
 
 ```text
 match guard { work() } {
-    Left(v)  -> use(v)
-    Right(e) -> {
+    Left(v)  => use(v)
+    Right(e) => {
         if e is NotFound { rebuild() }          # 就具體型別分支
         else if e is Overflow { alert(e) }      # 內建 abort，被 guard 具現化
         else { report(e.message()) }            # 其餘——catch-all 必備

@@ -591,9 +591,9 @@ send-stmt   ::= expr '<-' expr
 chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
-recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
-send-arm    ::= expr '<-' expr '->' expr
+select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
+send-arm    ::= expr '<-' expr '=>' expr
 ```
 
 - **`spawn f(args)`** starts a **fire-and-forget** coroutine (Go's `go`) — no handle, no join; you observe

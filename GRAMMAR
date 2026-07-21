@@ -634,9 +634,9 @@ chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional cap
 # nothing is ready (non-blocking). Both 'done' and '_' are contextual — special only
 # as a select-arm head.
 select-stmt  ::= 'select' '{' select-arm+ '}'
-select-arm   ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
-recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
-send-arm     ::= expr '<-' expr '->' expr
+select-arm   ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
+send-arm     ::= expr '<-' expr '=>' expr    # '=>' separates the arm head from its body
 
 # ==================================================================================
 # 10. Modules & Programs

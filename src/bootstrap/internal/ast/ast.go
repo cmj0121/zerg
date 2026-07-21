@@ -192,6 +192,45 @@ type Call struct {
 	Span   token.Span
 }
 
+// MatchExpr matches a subject against arms in order, yielding the first fit's
+// body. It is an expression: every arm's body has the same type.
+type MatchExpr struct {
+	Subject Expr
+	Arms    []MatchArm
+	Span    token.Span
+}
+
+// MatchArm is one 'pattern (if guard)? -> body' clause of a match.
+type MatchArm struct {
+	Pat   Pattern
+	Guard Expr // nil when the arm has no 'if' guard
+	Body  Expr
+}
+
+// Pattern is a match pattern (Phase 0: literal, binding, or wildcard).
+type Pattern interface {
+	Node
+	patternNode()
+}
+
+// LitPattern matches a value equal to a literal ('-' allowed on a number).
+type LitPattern struct {
+	Lit  Expr // an IntLit/FloatLit/BoolLit/StrLit
+	Neg  bool // a leading '-' on a numeric literal
+	Span token.Span
+}
+
+// BindPattern binds the subject to a fresh name (matches anything).
+type BindPattern struct {
+	Name string
+	Span token.Span
+}
+
+// WildPattern is '_' — matches anything and binds nothing.
+type WildPattern struct {
+	Span token.Span
+}
+
 func (*File) node() {}
 
 func (*NopStmt) node()      {}
@@ -207,15 +246,19 @@ func (*ExprStmt) node()     {}
 func (*Block) node()        {}
 func (*FuncDecl) node()     {}
 
-func (*IntLit) node()   {}
-func (*FloatLit) node() {}
-func (*BoolLit) node()  {}
-func (*StrLit) node()   {}
-func (*NilLit) node()   {}
-func (*Ident) node()    {}
-func (*Unary) node()    {}
-func (*Binary) node()   {}
-func (*Call) node()     {}
+func (*IntLit) node()      {}
+func (*FloatLit) node()    {}
+func (*BoolLit) node()     {}
+func (*StrLit) node()      {}
+func (*NilLit) node()      {}
+func (*Ident) node()       {}
+func (*Unary) node()       {}
+func (*Binary) node()      {}
+func (*Call) node()        {}
+func (*MatchExpr) node()   {}
+func (*LitPattern) node()  {}
+func (*BindPattern) node() {}
+func (*WildPattern) node() {}
 
 func (*FuncDecl) declNode() {}
 
@@ -230,12 +273,17 @@ func (*IfStmt) stmtNode()       {}
 func (*ForStmt) stmtNode()      {}
 func (*ExprStmt) stmtNode()     {}
 
-func (*IntLit) exprNode()   {}
-func (*FloatLit) exprNode() {}
-func (*BoolLit) exprNode()  {}
-func (*StrLit) exprNode()   {}
-func (*NilLit) exprNode()   {}
-func (*Ident) exprNode()    {}
-func (*Unary) exprNode()    {}
-func (*Binary) exprNode()   {}
-func (*Call) exprNode()     {}
+func (*IntLit) exprNode()    {}
+func (*FloatLit) exprNode()  {}
+func (*BoolLit) exprNode()   {}
+func (*StrLit) exprNode()    {}
+func (*NilLit) exprNode()    {}
+func (*Ident) exprNode()     {}
+func (*Unary) exprNode()     {}
+func (*Binary) exprNode()    {}
+func (*Call) exprNode()      {}
+func (*MatchExpr) exprNode() {}
+
+func (*LitPattern) patternNode()  {}
+func (*BindPattern) patternNode() {}
+func (*WildPattern) patternNode() {}

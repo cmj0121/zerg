@@ -311,6 +311,8 @@ func (c *checker) inferExpr(e ast.Expr) Type {
 		return c.inferBinary(n)
 	case *ast.Call:
 		return c.inferCall(n)
+	case *ast.MatchExpr:
+		return c.inferMatch(n)
 	default:
 		return Invalid
 	}
@@ -454,6 +456,108 @@ func (c *checker) inferCall(n *ast.Call) Type {
 	return sig.Ret
 }
 
+// inferMatch checks a match expression and returns its result type (the common
+// type of every arm's body).
+func (c *checker) inferMatch(n *ast.MatchExpr) Type {
+	if !isSimpleSubject(n.Subject) {
+		c.errorf(exprSpan(n.Subject), "match subject must be a name or literal in Phase 0")
+	}
+	subjT := c.checkExpr(n.Subject)
+	if subjT != Invalid && !subjT.printable() {
+		// printable == comparable-by-value here (int/float/bool/str)
+		c.errorf(exprSpan(n.Subject), "cannot match on a value of type %s", subjT)
+	}
+	if len(n.Arms) == 0 {
+		c.errorf(n.Span, "match must have at least one arm")
+		return Invalid
+	}
+
+	// Exhaustiveness (Phase 0): the last arm is an unguarded catch-all, and no
+	// earlier arm is (which would make the rest unreachable).
+	last := n.Arms[len(n.Arms)-1]
+	if last.Guard != nil || !isCatchAll(last.Pat) {
+		c.errorf(n.Span, "match must end with an unguarded '_' or binding arm (Phase 0 exhaustiveness)")
+	}
+	for i := 0; i < len(n.Arms)-1; i++ {
+		if n.Arms[i].Guard == nil && isCatchAll(n.Arms[i].Pat) {
+			c.errorf(patternSpan(n.Arms[i].Pat), "this catch-all arm makes the following arms unreachable")
+		}
+	}
+
+	result := Invalid
+	for i, arm := range n.Arms {
+		c.pushScope()
+		c.checkPattern(arm.Pat, subjT)
+		if arm.Guard != nil {
+			c.checkCond(arm.Guard)
+		}
+		bt := c.checkExpr(arm.Body)
+		c.popScope()
+		switch {
+		case i == 0:
+			result = bt
+		case bt != Invalid && result != Invalid && !c.assignable(result, arm.Body, bt):
+			c.errorf(exprSpan(arm.Body), "all match arms must yield the same type; found %s and %s", result, bt)
+		}
+	}
+	return result
+}
+
+func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
+	switch p := pat.(type) {
+	case *ast.WildPattern:
+		// matches anything, binds nothing
+	case *ast.BindPattern:
+		c.declare(p.Span, p.Name, subjT, false)
+	case *ast.LitPattern:
+		lt := c.checkExpr(p.Lit)
+		if p.Neg && !lt.numeric() {
+			c.errorf(p.Span, "'-' pattern requires a number, found %s", lt)
+		}
+		if lt != Invalid && subjT != Invalid && !patternMatches(subjT, p.Lit, lt) {
+			c.errorf(p.Span, "a %s literal cannot match a subject of type %s", lt, subjT)
+		}
+	}
+}
+
+// patternMatches reports whether a literal pattern of type lt can match a subject
+// of type subjT (allowing an untyped int literal against a float subject).
+func patternMatches(subjT Type, lit ast.Expr, lt Type) bool {
+	if subjT == lt {
+		return true
+	}
+	_, isInt := lit.(*ast.IntLit)
+	return subjT == Float && lt == Int && isInt
+}
+
+func isSimpleSubject(e ast.Expr) bool {
+	switch e.(type) {
+	case *ast.Ident, *ast.IntLit, *ast.FloatLit, *ast.BoolLit, *ast.StrLit:
+		return true
+	}
+	return false
+}
+
+func isCatchAll(pat ast.Pattern) bool {
+	switch pat.(type) {
+	case *ast.WildPattern, *ast.BindPattern:
+		return true
+	}
+	return false
+}
+
+func patternSpan(pat ast.Pattern) token.Span {
+	switch p := pat.(type) {
+	case *ast.WildPattern:
+		return p.Span
+	case *ast.BindPattern:
+		return p.Span
+	case *ast.LitPattern:
+		return p.Span
+	}
+	return token.Span{}
+}
+
 // assignable reports whether a value of type vt (produced by expr e) fits a
 // target of type want, allowing an untyped int literal to become a float.
 func (c *checker) assignable(want Type, e ast.Expr, vt Type) bool {
@@ -543,6 +647,8 @@ func exprSpan(e ast.Expr) token.Span {
 	case *ast.Binary:
 		return v.Span
 	case *ast.Call:
+		return v.Span
+	case *ast.MatchExpr:
 		return v.Span
 	default:
 		return token.Span{}

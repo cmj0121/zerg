@@ -62,6 +62,7 @@ func (e *emitter) program(file *ast.File) {
 	e.line("#include <stdio.h>")
 	e.line("#include <stdint.h>")
 	e.line("#include <stdbool.h>")
+	e.line("#include <string.h>")
 	e.blank()
 
 	// prototypes first, so declaration order does not constrain calls
@@ -311,9 +312,81 @@ func (e *emitter) expr(x ast.Expr) string {
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
 	case *ast.Call:
 		return e.call(n)
+	case *ast.MatchExpr:
+		return e.lowerMatch(n)
 	default:
 		return "0"
 	}
+}
+
+// lowerMatch lowers a match to a nested C ternary. The subject is a name or
+// literal (a Phase 0 restriction), so it is safe to reference in each arm without
+// hoisting. The last arm is an unguarded catch-all, forming the final else.
+func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
+	subj := e.expr(m.Subject)
+	subjT := e.info.ExprTypes[m.Subject]
+	n := len(m.Arms)
+	result := e.armValue(m.Arms[n-1], subj)
+	for i := n - 2; i >= 0; i-- {
+		test, body := e.armTestAndValue(m.Arms[i], subj, subjT)
+		result = fmt.Sprintf("(%s ? %s : %s)", test, body, result)
+	}
+	return result
+}
+
+// armValue emits an arm's body, binding a BindPattern's name to the subject.
+func (e *emitter) armValue(arm ast.MatchArm, subj string) string {
+	if bp, ok := arm.Pat.(*ast.BindPattern); ok {
+		e.pushScope()
+		e.scopes[len(e.scopes)-1][bp.Name] = subj
+		v := e.expr(arm.Body)
+		e.popScope()
+		return v
+	}
+	return e.expr(arm.Body)
+}
+
+// armTestAndValue emits an arm's match test and body. A BindPattern's name is in
+// scope for both the guard and the body.
+func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type) (test, body string) {
+	pop := func() {}
+	if bp, ok := arm.Pat.(*ast.BindPattern); ok {
+		e.pushScope()
+		e.scopes[len(e.scopes)-1][bp.Name] = subj
+		pop = e.popScope
+	}
+	test = e.patternTest(arm.Pat, subj, subjT)
+	if arm.Guard != nil {
+		g := e.expr(arm.Guard)
+		if test == "" {
+			test = g
+		} else {
+			test = fmt.Sprintf("(%s && %s)", test, g)
+		}
+	}
+	body = e.expr(arm.Body)
+	pop()
+	if test == "" {
+		test = "1" // a non-last unguarded catch-all is rejected by sema
+	}
+	return test, body
+}
+
+// patternTest renders the boolean C test for a pattern, or "" when the pattern
+// matches unconditionally (wildcard or binding).
+func (e *emitter) patternTest(pat ast.Pattern, subj string, subjT sema.Type) string {
+	lp, ok := pat.(*ast.LitPattern)
+	if !ok {
+		return ""
+	}
+	lit := e.expr(lp.Lit)
+	if lp.Neg {
+		lit = "(-" + lit + ")"
+	}
+	if subjT == sema.Str {
+		return fmt.Sprintf("(strcmp(%s, %s) == 0)", subj, lit)
+	}
+	return fmt.Sprintf("(%s == %s)", subj, lit)
 }
 
 func (e *emitter) call(n *ast.Call) string {

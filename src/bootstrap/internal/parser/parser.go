@@ -4,6 +4,12 @@
 // (types with '?', pattern matching, generics, closures, ...) are reported as
 // diagnostics rather than parsed.
 //
+// Every node is stamped with its source span, and token trivia is re-homed onto
+// the tree (DESIGN-1a §2): the leading trivia of a statement's (or declaration's,
+// or match arm's) first token becomes the node's Lead, and the trailing trivia of
+// its last token becomes the node's Trail, so 'zerg fmt' can reprint comments and
+// blank lines where they stood.
+//
 // Error recovery is panic/recover based: a parse error records a diagnostic and
 // unwinds to the nearest statement or declaration boundary, where the parser
 // resynchronizes and continues, so one mistake does not abandon the whole file.
@@ -39,6 +45,29 @@ type parser struct {
 
 // bailout unwinds the stack to the nearest recovery point after a parse error.
 type bailout struct{}
+
+// spanned stamps a span on a freshly built node and returns it, so construction
+// sites stay one expression (every node embeds ast's base).
+func spanned[T interface{ SetSpan(token.Span) }](n T, s token.Span) T {
+	n.SetSpan(s)
+	return n
+}
+
+// trivial is the setter surface every AST node exposes through its embedded
+// base; the parser uses it to attach hoisted trivia.
+type trivial interface {
+	SetLead([]token.Trivia)
+	SetTrail([]token.Trivia)
+}
+
+// attach hoists trivia onto a node: the leading trivia of its first token and
+// the trailing trivia of its last one.
+func attach(n ast.Node, lead, trail []token.Trivia) {
+	if t, ok := n.(trivial); ok { // every node embeds base, so this always holds
+		t.SetLead(lead)
+		t.SetTrail(trail)
+	}
+}
 
 // --- token cursor -------------------------------------------------------------
 
@@ -84,6 +113,19 @@ func (p *parser) skipSemis() {
 	}
 }
 
+// lead returns the pending leading trivia of the current token — the comments
+// and blank lines that stand before the construct about to be parsed.
+func (p *parser) lead() []token.Trivia { return p.cur().Leading }
+
+// trailBehind returns the trailing trivia of the most recently consumed token —
+// the same-line comment after the construct just parsed.
+func (p *parser) trailBehind() []token.Trivia {
+	if p.pos == 0 {
+		return nil
+	}
+	return p.toks[p.pos-1].Trailing
+}
+
 func (p *parser) errorf(span token.Span, format string, args ...any) {
 	p.diags.Add(span, format, args...)
 }
@@ -97,16 +139,20 @@ func (p *parser) fail(span token.Span, format string, args ...any) {
 
 func (p *parser) parseFile() *ast.File {
 	file := &ast.File{}
+	start := p.cur().Span.Start
 	for {
 		p.skipSemis()
 		if p.at(token.EOF) {
+			file.End = p.cur().Leading
 			break
 		}
+		lead := p.lead()
 		if d := p.tryDecl(); d != nil {
+			attach(d, lead, p.trailBehind())
 			file.Decls = append(file.Decls, d)
 		}
 	}
-	return file
+	return spanned(file, token.Span{Start: start, End: p.cur().Span.End})
 }
 
 func (p *parser) tryDecl() (d ast.Decl) {
@@ -134,7 +180,7 @@ func (p *parser) syncDecl() {
 
 func (p *parser) parseFuncDecl() ast.Decl {
 	start := p.cur().Span.Start
-	p.accept(token.Pub) // Phase 0 is single-file; visibility is accepted but unused
+	pub := p.accept(token.Pub) // Phase 0 is single-file; visibility is preserved for fmt but unused by sema
 	if !p.at(token.Fn) {
 		p.fail(p.cur().Span, "expected a function declaration")
 	}
@@ -149,14 +195,14 @@ func (p *parser) parseFuncDecl() ast.Decl {
 		ret = p.parseType()
 	}
 	body := p.parseBlock()
-	return &ast.FuncDecl{
+	return spanned(&ast.FuncDecl{
+		Pub:     pub,
 		Name:    name.Lexeme,
 		NameEnd: name.Span.End,
 		Params:  params,
 		Ret:     ret,
 		Body:    body,
-		Span:    token.Span{Start: start, End: body.Span.End},
-	}
+	}, token.Span{Start: start, End: body.Span().End})
 }
 
 func (p *parser) parseParams() []ast.Param {
@@ -168,11 +214,9 @@ func (p *parser) parseParams() []ast.Param {
 		name := p.expect(token.Ident)
 		p.expect(token.Colon)
 		typ := p.parseType()
-		params = append(params, ast.Param{
-			Name: name.Lexeme,
-			Type: typ,
-			Span: token.Span{Start: name.Span.Start, End: typ.Span.End},
-		})
+		param := ast.Param{Name: name.Lexeme, Type: typ}
+		param.SetSpan(token.Span{Start: name.Span.Start, End: typ.Span().End})
+		params = append(params, param)
 		if !p.accept(token.Comma) {
 			break
 		}
@@ -183,25 +227,28 @@ func (p *parser) parseParams() []ast.Param {
 // parseType reads a Phase 0 type: a bare built-in name (int/float/bool/str).
 func (p *parser) parseType() *ast.TypeRef {
 	name := p.expect(token.Ident)
-	return &ast.TypeRef{Name: name.Lexeme, Span: name.Span}
+	return spanned(&ast.TypeRef{Name: name.Lexeme}, name.Span)
 }
 
 // --- statements ---------------------------------------------------------------
 
 func (p *parser) parseBlock() *ast.Block {
 	lb := p.expect(token.LBrace)
-	var stmts []ast.Stmt
+	b := &ast.Block{}
 	for {
 		p.skipSemis()
 		if p.at(token.RBrace) || p.at(token.EOF) {
 			break
 		}
+		lead := p.lead()
 		if s := p.tryStmt(); s != nil {
-			stmts = append(stmts, s)
+			attach(s, lead, p.trailBehind())
+			b.Stmts = append(b.Stmts, s)
 		}
 	}
 	rb := p.expect(token.RBrace)
-	return &ast.Block{Stmts: stmts, Span: token.Span{Start: lb.Span.Start, End: rb.Span.End}}
+	b.End = rb.Leading // dangling trivia between the last statement and '}'
+	return spanned(b, token.Span{Start: lb.Span.Start, End: rb.Span.End})
 }
 
 func (p *parser) tryStmt() (s ast.Stmt) {
@@ -229,19 +276,19 @@ func (p *parser) parseStmt() ast.Stmt {
 	switch t.Kind {
 	case token.Nop:
 		p.advance()
-		return &ast.NopStmt{Span: t.Span}
+		return spanned(&ast.NopStmt{}, t.Span)
 	case token.Print:
 		p.advance()
 		v := p.parseExpr()
-		return &ast.PrintStmt{Value: v, Span: token.Span{Start: t.Span.Start, End: exprEnd(v)}}
+		return spanned(&ast.PrintStmt{Value: v}, token.Span{Start: t.Span.Start, End: v.Span().End})
 	case token.Return:
 		return p.parseReturn(t)
 	case token.Break:
 		p.advance()
-		return &ast.BreakStmt{Span: t.Span}
+		return spanned(&ast.BreakStmt{}, t.Span)
 	case token.Continue:
 		p.advance()
-		return &ast.ContinueStmt{Span: t.Span}
+		return spanned(&ast.ContinueStmt{}, t.Span)
 	case token.If:
 		return p.parseIf()
 	case token.For:
@@ -262,28 +309,27 @@ func (p *parser) parseStmt() ast.Stmt {
 	}
 	// fall through: an expression statement (e.g. a call)
 	v := p.parseExpr()
-	return &ast.ExprStmt{X: v, Span: token.Span{Start: t.Span.Start, End: exprEnd(v)}}
+	return spanned(&ast.ExprStmt{X: v}, token.Span{Start: t.Span.Start, End: v.Span().End})
 }
 
 func (p *parser) parseReturn(kw token.Token) ast.Stmt {
 	p.advance() // 'return'
-	r := &ast.ReturnStmt{Span: kw.Span}
+	r := spanned(&ast.ReturnStmt{}, kw.Span)
 	// 'return if c' — a bare conditional early exit (no value)
 	if p.at(token.If) {
 		p.advance()
 		r.Cond = p.parseExpr()
-		r.Span = token.Span{Start: kw.Span.Start, End: exprEnd(r.Cond)}
-		return r
+		return spanned(r, token.Span{Start: kw.Span.Start, End: r.Cond.Span().End})
 	}
 	if p.at(token.Semi) || p.at(token.RBrace) || p.at(token.EOF) {
 		return r
 	}
 	r.Value = p.parseExpr()
-	r.Span = token.Span{Start: kw.Span.Start, End: exprEnd(r.Value)}
+	r.SetSpan(token.Span{Start: kw.Span.Start, End: r.Value.Span().End})
 	// 'return e if c' — conditional early exit with a value
 	if p.accept(token.If) {
 		r.Cond = p.parseExpr()
-		r.Span = token.Span{Start: kw.Span.Start, End: exprEnd(r.Cond)}
+		r.SetSpan(token.Span{Start: kw.Span.Start, End: r.Cond.Span().End})
 	}
 	return r
 }
@@ -303,15 +349,15 @@ func (p *parser) parseBinding(start token.Pos, mut, konst bool) ast.Stmt {
 	default:
 		p.fail(p.cur().Span, "expected ':=' or ': type =' in binding")
 	}
-	b.Span = token.Span{Start: start, End: exprEnd(b.Value)}
-	return b
+	return spanned(b, token.Span{Start: start, End: b.Value.Span().End})
 }
 
 func (p *parser) parseReassign() ast.Stmt {
 	name := p.expect(token.Ident)
 	p.expect(token.Assign)
 	v := p.parseExpr()
-	return &ast.AssignStmt{Name: name.Lexeme, Value: v, Span: token.Span{Start: name.Span.Start, End: exprEnd(v)}}
+	return spanned(&ast.AssignStmt{Name: name.Lexeme, Value: v},
+		token.Span{Start: name.Span.Start, End: v.Span().End})
 }
 
 func (p *parser) parseIf() ast.Stmt {
@@ -320,7 +366,7 @@ func (p *parser) parseIf() ast.Stmt {
 	cond := p.parseExpr()
 	body := p.parseBlock()
 	branches = append(branches, ast.IfBranch{Cond: cond, Body: body})
-	end := body.Span.End
+	end := body.Span().End
 
 	var elseBlock *ast.Block
 	for p.accept(token.Else) {
@@ -328,14 +374,14 @@ func (p *parser) parseIf() ast.Stmt {
 			c := p.parseExpr()
 			b := p.parseBlock()
 			branches = append(branches, ast.IfBranch{Cond: c, Body: b})
-			end = b.Span.End
+			end = b.Span().End
 			continue
 		}
 		elseBlock = p.parseBlock()
-		end = elseBlock.Span.End
+		end = elseBlock.Span().End
 		break
 	}
-	return &ast.IfStmt{Branches: branches, Else: elseBlock, Span: token.Span{Start: start, End: end}}
+	return spanned(&ast.IfStmt{Branches: branches, Else: elseBlock}, token.Span{Start: start, End: end})
 }
 
 func (p *parser) parseFor() ast.Stmt {
@@ -345,7 +391,7 @@ func (p *parser) parseFor() ast.Stmt {
 		cond = p.parseExpr()
 	}
 	body := p.parseBlock()
-	return &ast.ForStmt{Cond: cond, Body: body, Span: token.Span{Start: start, End: body.Span.End}}
+	return spanned(&ast.ForStmt{Cond: cond, Body: body}, token.Span{Start: start, End: body.Span().End})
 }
 
 // --- expressions --------------------------------------------------------------
@@ -359,7 +405,7 @@ func (p *parser) parseBinaryLeft(isOp func(token.Kind) bool, next func() ast.Exp
 	for isOp(p.cur().Kind) {
 		op := p.advance()
 		right := next()
-		left = &ast.Binary{Op: op.Kind, L: left, R: right, Span: joinSpan(left, right)}
+		left = spanned(&ast.Binary{Op: op.Kind, L: left, R: right}, joinSpan(left, right))
 	}
 	return left
 }
@@ -373,7 +419,7 @@ func (p *parser) parseCmp() ast.Expr {
 	if isCmpOp(p.cur().Kind) {
 		op := p.advance()
 		right := p.parseAdd()
-		return &ast.Binary{Op: op.Kind, L: left, R: right, Span: joinSpan(left, right)}
+		return spanned(&ast.Binary{Op: op.Kind, L: left, R: right}, joinSpan(left, right))
 	}
 	return left
 }
@@ -385,7 +431,7 @@ func (p *parser) parseUnary() ast.Expr {
 	if isUnaryOp(p.cur().Kind) {
 		op := p.advance()
 		x := p.parseUnary()
-		return &ast.Unary{Op: op.Kind, X: x, Span: token.Span{Start: op.Span.Start, End: exprEnd(x)}}
+		return spanned(&ast.Unary{Op: op.Kind, X: x}, token.Span{Start: op.Span.Start, End: x.Span().End})
 	}
 	return p.parsePostfix()
 }
@@ -410,7 +456,8 @@ func (p *parser) parseCall(callee ast.Expr) ast.Expr {
 		}
 	}
 	rp := p.expect(token.RParen)
-	return &ast.Call{Callee: callee, Args: args, Span: token.Span{Start: exprStart(callee), End: rp.Span.End}}
+	return spanned(&ast.Call{Callee: callee, Args: args},
+		token.Span{Start: callee.Span().Start, End: rp.Span.End})
 }
 
 func (p *parser) parsePrimary() ast.Expr {
@@ -418,22 +465,22 @@ func (p *parser) parsePrimary() ast.Expr {
 	switch t.Kind {
 	case token.Int:
 		p.advance()
-		return &ast.IntLit{Value: p.parseIntValue(t), Span: t.Span}
+		return spanned(&ast.IntLit{Value: p.parseIntValue(t), Text: t.Lexeme}, t.Span)
 	case token.Float:
 		p.advance()
-		return &ast.FloatLit{Value: p.parseFloatValue(t), Span: t.Span}
+		return spanned(&ast.FloatLit{Value: p.parseFloatValue(t)}, t.Span)
 	case token.True, token.False:
 		p.advance()
-		return &ast.BoolLit{Value: t.Kind == token.True, Span: t.Span}
+		return spanned(&ast.BoolLit{Value: t.Kind == token.True}, t.Span)
 	case token.Str:
 		p.advance()
-		return &ast.StrLit{Value: t.Str, Span: t.Span}
+		return spanned(&ast.StrLit{Value: t.Str}, t.Span)
 	case token.Nil:
 		p.advance()
-		return &ast.NilLit{Span: t.Span}
+		return spanned(&ast.NilLit{}, t.Span)
 	case token.Ident:
 		p.advance()
-		return &ast.Ident{Name: t.Lexeme, Span: t.Span}
+		return spanned(&ast.Ident{Name: t.Lexeme}, t.Span)
 	case token.Match:
 		return p.parseMatch()
 	case token.LParen:
@@ -447,7 +494,8 @@ func (p *parser) parsePrimary() ast.Expr {
 }
 
 // parseMatch parses 'match subject { arm+ }' (GRAMMAR group 6). Arms are
-// separated like statements (a newline or ';').
+// separated like statements (a newline or ';') and each keeps its own line's
+// lead/trail trivia.
 func (p *parser) parseMatch() ast.Expr {
 	start := p.expect(token.Match).Span.Start
 	subject := p.parseExpr()
@@ -458,10 +506,14 @@ func (p *parser) parseMatch() ast.Expr {
 		if p.at(token.RBrace) || p.at(token.EOF) {
 			break
 		}
-		arms = append(arms, p.parseMatchArm())
+		lead := p.lead()
+		arm := p.parseMatchArm()
+		arm.SetLead(lead)
+		arm.SetTrail(p.trailBehind())
+		arms = append(arms, arm)
 	}
 	end := p.expect(token.RBrace).Span.End
-	return &ast.MatchExpr{Subject: subject, Arms: arms, Span: token.Span{Start: start, End: end}}
+	return spanned(&ast.MatchExpr{Subject: subject, Arms: arms}, token.Span{Start: start, End: end})
 }
 
 func (p *parser) parseMatchArm() ast.MatchArm {
@@ -472,7 +524,9 @@ func (p *parser) parseMatchArm() ast.MatchArm {
 	}
 	p.expect(token.FatArrow)
 	body := p.parseExpr()
-	return ast.MatchArm{Pat: pat, Guard: guard, Body: body}
+	arm := ast.MatchArm{Pat: pat, Guard: guard, Body: body}
+	arm.SetSpan(token.Span{Start: pat.Span().Start, End: body.Span().End})
+	return arm
 }
 
 // parsePattern parses a Phase 0 pattern: a literal (with optional '-'), a binding
@@ -483,19 +537,20 @@ func (p *parser) parsePattern() ast.Pattern {
 	case token.Ident:
 		p.advance()
 		if t.Lexeme == "_" {
-			return &ast.WildPattern{Span: t.Span}
+			return spanned(&ast.WildPattern{}, t.Span)
 		}
-		return &ast.BindPattern{Name: t.Lexeme, Span: t.Span}
+		return spanned(&ast.BindPattern{Name: t.Lexeme}, t.Span)
 	case token.Minus:
 		p.advance()
 		if !p.at(token.Int) && !p.at(token.Float) {
 			p.fail(p.cur().Span, "expected a number after '-' in a pattern")
 		}
 		lit := p.parseLiteralNode()
-		return &ast.LitPattern{Lit: lit, Neg: true, Span: token.Span{Start: t.Span.Start, End: exprEnd(lit)}}
+		return spanned(&ast.LitPattern{Lit: lit, Neg: true},
+			token.Span{Start: t.Span.Start, End: lit.Span().End})
 	case token.Int, token.Float, token.Str, token.True, token.False, token.Nil:
 		lit := p.parseLiteralNode()
-		return &ast.LitPattern{Lit: lit, Span: exprSpan(lit)}
+		return spanned(&ast.LitPattern{Lit: lit}, lit.Span())
 	}
 	p.fail(t.Span, "expected a pattern, found %q", t.Kind.String())
 	return nil
@@ -507,19 +562,19 @@ func (p *parser) parseLiteralNode() ast.Expr {
 	switch t.Kind {
 	case token.Int:
 		p.advance()
-		return &ast.IntLit{Value: p.parseIntValue(t), Span: t.Span}
+		return spanned(&ast.IntLit{Value: p.parseIntValue(t), Text: t.Lexeme}, t.Span)
 	case token.Float:
 		p.advance()
-		return &ast.FloatLit{Value: p.parseFloatValue(t), Span: t.Span}
+		return spanned(&ast.FloatLit{Value: p.parseFloatValue(t)}, t.Span)
 	case token.Str:
 		p.advance()
-		return &ast.StrLit{Value: t.Str, Span: t.Span}
+		return spanned(&ast.StrLit{Value: t.Str}, t.Span)
 	case token.True, token.False:
 		p.advance()
-		return &ast.BoolLit{Value: t.Kind == token.True, Span: t.Span}
+		return spanned(&ast.BoolLit{Value: t.Kind == token.True}, t.Span)
 	case token.Nil:
 		p.advance()
-		return &ast.NilLit{Span: t.Span}
+		return spanned(&ast.NilLit{}, t.Span)
 	}
 	p.fail(t.Span, "expected a literal, found %q", t.Kind.String())
 	return nil
@@ -592,35 +647,5 @@ func isUnaryOp(k token.Kind) bool {
 // --- span helpers -------------------------------------------------------------
 
 func joinSpan(l, r ast.Expr) token.Span {
-	return token.Span{Start: exprStart(l), End: exprEnd(r)}
-}
-
-func exprStart(e ast.Expr) token.Pos { return exprSpan(e).Start }
-func exprEnd(e ast.Expr) token.Pos   { return exprSpan(e).End }
-
-func exprSpan(e ast.Expr) token.Span {
-	switch v := e.(type) {
-	case *ast.IntLit:
-		return v.Span
-	case *ast.FloatLit:
-		return v.Span
-	case *ast.BoolLit:
-		return v.Span
-	case *ast.StrLit:
-		return v.Span
-	case *ast.NilLit:
-		return v.Span
-	case *ast.Ident:
-		return v.Span
-	case *ast.Unary:
-		return v.Span
-	case *ast.Binary:
-		return v.Span
-	case *ast.Call:
-		return v.Span
-	case *ast.MatchExpr:
-		return v.Span
-	default:
-		return token.Span{}
-	}
+	return token.Span{Start: l.Span().Start, End: r.Span().End}
 }

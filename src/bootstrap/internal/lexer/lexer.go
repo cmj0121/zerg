@@ -4,6 +4,12 @@
 // a line break when the last token can end an item, suppressed inside an unclosed
 // '(' or '[' (but not '{').
 //
+// Comments and blank lines are not dropped: they are collected as trivia
+// (DESIGN-1a §2). Full-line comments, folded '##' doc-comment blocks, and
+// collapsed blank-line runs become the Leading trivia of the next real token; a
+// same-line comment after a token becomes that token's Trailing trivia (attached
+// by Tokenize, which sees the already-emitted token).
+//
 // The lexer recognizes the full lexical surface it can (so the token vocabulary is
 // forward-compatible), and records a diagnostic for constructs the Phase 0 pipeline
 // does not yet accept (f-strings, command literals, decorators) rather than
@@ -27,26 +33,57 @@ type Lexer struct {
 	depth int        // nesting of '(' and '[' — suppresses ASI while > 0
 	prev  token.Kind // kind of the previous emitted token, for ASI
 	diags diag.List
+
+	pending   []token.Trivia // leading trivia awaiting the next real token
+	trail     []token.Trivia // trailing trivia detected for the previously emitted token
+	nlRun     int            // consecutive newlines since the last token or comment
+	onTokLine bool           // a real (non-Semi) token has been emitted on the current line
 }
 
 // New builds a lexer over the given source text.
 func New(src string) *Lexer {
-	return &Lexer{src: src, offs: 0, line: 1, col: 1, prev: token.Semi}
+	// nlRun starts at 1 as if a newline preceded the file, so a blank first line
+	// registers as a BlankLine trivia.
+	return &Lexer{src: src, offs: 0, line: 1, col: 1, prev: token.Semi, nlRun: 1}
 }
 
 // Tokenize scans src to completion, returning the token stream (terminated by an
-// EOF token) and any diagnostics gathered along the way.
+// EOF token) and any diagnostics gathered along the way. Leading trivia is
+// attached by Next itself; trailing trivia — a same-line comment after a token —
+// is attached here, onto the most recent real token.
 func Tokenize(src string) ([]token.Token, []diag.Diagnostic) {
 	l := New(src)
 	var toks []token.Token
 	for {
 		t := l.Next()
+		if tr := l.takeTrailing(); len(tr) > 0 {
+			attachTrailing(toks, tr)
+		}
 		toks = append(toks, t)
 		if t.Kind == token.EOF {
 			break
 		}
 	}
 	return toks, l.diags.Items()
+}
+
+// attachTrailing hangs a same-line trailing comment on the most recent real
+// token, skipping any Semi the ASI rule inserted after it.
+func attachTrailing(toks []token.Token, tr []token.Trivia) {
+	for i := len(toks) - 1; i >= 0; i-- {
+		if toks[i].Kind != token.Semi {
+			toks[i].Trailing = append(toks[i].Trailing, tr...)
+			return
+		}
+	}
+}
+
+// takeTrailing returns and clears the trailing trivia staged for the previously
+// emitted token.
+func (l *Lexer) takeTrailing() []token.Trivia {
+	tr := l.trail
+	l.trail = nil
+	return tr
 }
 
 // Diagnostics returns the diagnostics gathered so far.
@@ -91,9 +128,11 @@ func isIdent(c byte) bool { return isLetter(c) || isDigit(c) || c == '_' }
 // --- token production ----------------------------------------------------------
 
 // Next returns the next token, inserting a ';' at line breaks per the ASI rule.
+// Comments and blank lines encountered along the way are collected as trivia
+// rather than dropped.
 func (l *Lexer) Next() token.Token {
-	// Skip horizontal whitespace and comments; a significant newline yields a
-	// Semi token, otherwise the newline is consumed and scanning continues.
+	// Skip horizontal whitespace; a significant newline yields a Semi token, a
+	// comment becomes trivia, otherwise scanning continues.
 	for !l.eof() {
 		switch l.at(0) {
 		case ' ', '\t', '\r':
@@ -101,6 +140,15 @@ func (l *Lexer) Next() token.Token {
 		case '\n':
 			start := l.pos()
 			l.advance()
+			l.onTokLine = false
+			l.nlRun++
+			if l.nlRun == 2 {
+				// the line just ended was blank; a longer run stays one trivia
+				l.pending = append(l.pending, token.Trivia{
+					Kind: token.BlankLine,
+					Span: token.Span{Start: start, End: start},
+				})
+			}
 			if l.depth == 0 && l.prev.EndsItem() {
 				return l.emit(token.Semi, start, ";")
 			}
@@ -110,7 +158,7 @@ func (l *Lexer) Next() token.Token {
 				// '#[' opens a decorator, not a comment; scanToken reports it.
 				return l.scanToken()
 			}
-			l.skipComment()
+			l.scanComment()
 		default:
 			return l.scanToken()
 		}
@@ -118,10 +166,19 @@ func (l *Lexer) Next() token.Token {
 	return l.emit(token.EOF, l.pos(), "")
 }
 
-// emit records prev and returns a token with the given span.
+// emit records prev and returns a token with the given span. Pending leading
+// trivia is attached to every real token (and to EOF, so end-of-file trivia is
+// not lost) but flows past inserted Semi tokens onto the next item.
 func (l *Lexer) emit(k token.Kind, start token.Pos, lexeme string) token.Token {
 	l.prev = k
-	return token.Token{Kind: k, Lexeme: lexeme, Span: token.Span{Start: start, End: l.pos()}}
+	t := token.Token{Kind: k, Lexeme: lexeme, Span: token.Span{Start: start, End: l.pos()}}
+	if k != token.Semi {
+		t.Leading = l.pending
+		l.pending = nil
+		l.onTokLine = true
+		l.nlRun = 0
+	}
+	return t
 }
 
 func (l *Lexer) emitStr(k token.Kind, start token.Pos, lexeme, value string) token.Token {
@@ -130,12 +187,35 @@ func (l *Lexer) emitStr(k token.Kind, start token.Pos, lexeme, value string) tok
 	return t
 }
 
-// skipComment consumes a line comment or doc comment to end of line. The '#['
-// decorator form is separated out by Next before this is called.
-func (l *Lexer) skipComment() {
+// scanComment consumes a '#' or '##' comment to end of line and records it as
+// trivia: trailing when a token already sits on this line, otherwise leading.
+// Consecutive full-line '##' lines fold into a single DocComment block.
+func (l *Lexer) scanComment() {
+	start := l.pos()
 	for !l.eof() && l.at(0) != '\n' {
 		l.advance()
 	}
+	text := strings.TrimRight(l.src[start.Offset:l.offs], " \t\r")
+	kind := token.LineComment
+	if strings.HasPrefix(text, "##") {
+		kind = token.DocComment
+	}
+	tr := token.Trivia{Kind: kind, Text: text, Span: token.Span{Start: start, End: l.pos()}}
+	l.nlRun = 0
+	if l.onTokLine {
+		l.trail = append(l.trail, tr)
+		return
+	}
+	// fold a '##' line into a directly preceding DocComment block (a blank line
+	// or ordinary comment in between breaks the run)
+	if kind == token.DocComment && len(l.pending) > 0 {
+		if last := &l.pending[len(l.pending)-1]; last.Kind == token.DocComment {
+			last.Text += "\n" + text
+			last.Span.End = tr.Span.End
+			return
+		}
+	}
+	l.pending = append(l.pending, tr)
 }
 
 func (l *Lexer) scanToken() token.Token {

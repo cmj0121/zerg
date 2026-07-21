@@ -109,7 +109,7 @@ func (c *checker) collectFuncs(file *ast.File) {
 			continue
 		}
 		if _, dup := c.info.Funcs[fn.Name]; dup {
-			c.errorf(fn.Span, "function %q is already declared", fn.Name)
+			c.errorf(fn.Span(), "function %q is already declared", fn.Name)
 			continue
 		}
 		sig := &FuncSig{Name: fn.Name, Ret: Nil, Decl: fn}
@@ -137,7 +137,7 @@ func (c *checker) resolveType(ref *ast.TypeRef) Type {
 	case "nil":
 		return Nil
 	default:
-		c.errorf(ref.Span, "unknown type %q", ref.Name)
+		c.errorf(ref.Span(), "unknown type %q", ref.Name)
 		return Invalid
 	}
 }
@@ -159,7 +159,7 @@ func (c *checker) checkFunc(fn *ast.FuncDecl) {
 	c.curFn = sig
 	c.pushScope() // parameter scope; the body opens a nested scope so 'mut n := n' can shadow
 	for i, p := range fn.Params {
-		c.declare(p.Span, p.Name, sig.Params[i], false)
+		c.declare(p.Span(), p.Name, sig.Params[i], false)
 	}
 	c.checkBlock(fn.Body)
 	c.popScope()
@@ -185,17 +185,17 @@ func (c *checker) checkStmt(s ast.Stmt) {
 	case *ast.PrintStmt:
 		t := c.checkExpr(n.Value)
 		if t != Invalid && !t.printable() {
-			c.errorf(n.Span, "cannot print a value of type %s", t)
+			c.errorf(n.Span(), "cannot print a value of type %s", t)
 		}
 	case *ast.ReturnStmt:
 		c.checkReturn(n)
 	case *ast.BreakStmt:
 		if c.loopDepth == 0 {
-			c.errorf(n.Span, "break outside of a loop")
+			c.errorf(n.Span(), "break outside of a loop")
 		}
 	case *ast.ContinueStmt:
 		if c.loopDepth == 0 {
-			c.errorf(n.Span, "continue outside of a loop")
+			c.errorf(n.Span(), "continue outside of a loop")
 		}
 	case *ast.IfStmt:
 		for _, br := range n.Branches {
@@ -219,7 +219,7 @@ func (c *checker) checkStmt(s ast.Stmt) {
 
 func (c *checker) checkCond(e ast.Expr) {
 	if t := c.checkExpr(e); t != Invalid && t != Bool {
-		c.errorf(exprSpan(e), "condition must be bool, found %s", t)
+		c.errorf(e.Span(), "condition must be bool, found %s", t)
 	}
 }
 
@@ -230,32 +230,32 @@ func (c *checker) checkBind(b *ast.BindStmt) {
 		declared := c.resolveType(b.Type)
 		typ = declared
 		if declared != Invalid && vt != Invalid && !c.assignable(declared, b.Value, vt) {
-			c.errorf(b.Span, "cannot bind %s to a %s binding", vt, declared)
+			c.errorf(b.Span(), "cannot bind %s to a %s binding", vt, declared)
 		}
 	} else {
 		if vt == Nil {
-			c.errorf(b.Span, "cannot infer a type from nil; use a type annotation")
+			c.errorf(b.Span(), "cannot infer a type from nil; use a type annotation")
 			typ = Invalid
 		} else {
 			typ = vt
 		}
 	}
 	c.info.BindTypes[b] = typ
-	c.declare(b.Span, b.Name, typ, b.Mut)
+	c.declare(b.Span(), b.Name, typ, b.Mut)
 }
 
 func (c *checker) checkAssign(n *ast.AssignStmt) {
 	vt := c.checkExpr(n.Value)
 	sym := c.lookup(n.Name)
 	if sym == nil {
-		c.errorf(n.Span, "undefined name %q", n.Name)
+		c.errorf(n.Span(), "undefined name %q", n.Name)
 		return
 	}
 	if !sym.mutable {
-		c.errorf(n.Span, "cannot assign to immutable binding %q", n.Name)
+		c.errorf(n.Span(), "cannot assign to immutable binding %q", n.Name)
 	}
 	if sym.typ != Invalid && vt != Invalid && !c.assignable(sym.typ, n.Value, vt) {
-		c.errorf(n.Span, "cannot assign %s to %q of type %s", vt, n.Name, sym.typ)
+		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, n.Name, sym.typ)
 	}
 }
 
@@ -269,17 +269,17 @@ func (c *checker) checkReturn(n *ast.ReturnStmt) {
 	}
 	if n.Value == nil {
 		if want != Nil {
-			c.errorf(n.Span, "return with no value in a function returning %s", want)
+			c.errorf(n.Span(), "return with no value in a function returning %s", want)
 		}
 		return
 	}
 	vt := c.checkExpr(n.Value)
 	if want == Nil {
-		c.errorf(n.Span, "unexpected return value in a function returning nil")
+		c.errorf(n.Span(), "unexpected return value in a function returning nil")
 		return
 	}
 	if vt != Invalid && !c.assignable(want, n.Value, vt) {
-		c.errorf(n.Span, "cannot return %s from a function returning %s", vt, want)
+		c.errorf(n.Span(), "cannot return %s from a function returning %s", vt, want)
 	}
 }
 
@@ -323,10 +323,10 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 		return sym.typ
 	}
 	if _, ok := c.info.Funcs[n.Name]; ok {
-		c.errorf(n.Span, "functions are not first-class values in Phase 0: %q", n.Name)
+		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
 		return Invalid
 	}
-	c.errorf(n.Span, "undefined name %q", n.Name)
+	c.errorf(n.Span(), "undefined name %q", n.Name)
 	return Invalid
 }
 
@@ -338,19 +338,19 @@ func (c *checker) inferUnary(n *ast.Unary) Type {
 	switch n.Op {
 	case token.Minus, token.MinusMod:
 		if !t.numeric() {
-			c.errorf(n.Span, "operator %q requires a numeric operand, found %s", n.Op, t)
+			c.errorf(n.Span(), "operator %q requires a numeric operand, found %s", n.Op, t)
 			return Invalid
 		}
 		return t
 	case token.Not:
 		if t != Bool {
-			c.errorf(n.Span, "operator 'not' requires a bool operand, found %s", t)
+			c.errorf(n.Span(), "operator 'not' requires a bool operand, found %s", t)
 			return Invalid
 		}
 		return Bool
 	case token.Tilde:
 		if t != Int {
-			c.errorf(n.Span, "operator '~' requires an int operand, found %s", t)
+			c.errorf(n.Span(), "operator '~' requires an int operand, found %s", t)
 			return Invalid
 		}
 		return Int
@@ -369,7 +369,7 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		return c.numericResult(n, lt, rt)
 	case isBitOp(n.Op):
 		if lt != Int || rt != Int {
-			c.errorf(n.Span, "operator %q requires int operands, found %s and %s", n.Op, lt, rt)
+			c.errorf(n.Span(), "operator %q requires int operands, found %s and %s", n.Op, lt, rt)
 			return Invalid
 		}
 		return Int
@@ -380,13 +380,13 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		return Bool
 	case isEqOp(n.Op):
 		if !c.comparable(n, lt, rt) {
-			c.errorf(n.Span, "cannot compare %s and %s", lt, rt)
+			c.errorf(n.Span(), "cannot compare %s and %s", lt, rt)
 			return Invalid
 		}
 		return Bool
 	case isLogicOp(n.Op):
 		if lt != Bool || rt != Bool {
-			c.errorf(n.Span, "operator %q requires bool operands, found %s and %s", n.Op, lt, rt)
+			c.errorf(n.Span(), "operator %q requires bool operands, found %s and %s", n.Op, lt, rt)
 			return Invalid
 		}
 		return Bool
@@ -408,7 +408,7 @@ func (c *checker) numericResult(n *ast.Binary, lt, rt Type) Type {
 		c.info.ExprTypes[n.L] = Float
 		return Float
 	}
-	c.errorf(n.Span, "operator %q requires matching numeric operands, found %s and %s", n.Op, lt, rt)
+	c.errorf(n.Span(), "operator %q requires matching numeric operands, found %s and %s", n.Op, lt, rt)
 	return Invalid
 }
 
@@ -431,12 +431,12 @@ func (c *checker) comparable(n *ast.Binary, lt, rt Type) bool {
 func (c *checker) inferCall(n *ast.Call) Type {
 	name, ok := n.Callee.(*ast.Ident)
 	if !ok {
-		c.errorf(exprSpan(n.Callee), "only named functions can be called in Phase 0")
+		c.errorf(n.Callee.Span(), "only named functions can be called in Phase 0")
 		return Invalid
 	}
 	sig, ok := c.info.Funcs[name.Name]
 	if !ok {
-		c.errorf(name.Span, "undefined function %q", name.Name)
+		c.errorf(name.Span(), "undefined function %q", name.Name)
 		// still check arguments to surface nested errors
 		for _, a := range n.Args {
 			c.checkExpr(a)
@@ -444,13 +444,13 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		return Invalid
 	}
 	if len(n.Args) != len(sig.Params) {
-		c.errorf(n.Span, "function %q expects %d argument(s), got %d", name.Name, len(sig.Params), len(n.Args))
+		c.errorf(n.Span(), "function %q expects %d argument(s), got %d", name.Name, len(sig.Params), len(n.Args))
 	}
 	for i, a := range n.Args {
 		at := c.checkExpr(a)
 		if i < len(sig.Params) && at != Invalid && sig.Params[i] != Invalid &&
 			!c.assignable(sig.Params[i], a, at) {
-			c.errorf(exprSpan(a), "argument %d of %q: cannot use %s as %s", i+1, name.Name, at, sig.Params[i])
+			c.errorf(a.Span(), "argument %d of %q: cannot use %s as %s", i+1, name.Name, at, sig.Params[i])
 		}
 	}
 	return sig.Ret
@@ -460,15 +460,15 @@ func (c *checker) inferCall(n *ast.Call) Type {
 // type of every arm's body).
 func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 	if !isSimpleSubject(n.Subject) {
-		c.errorf(exprSpan(n.Subject), "match subject must be a name or literal in Phase 0")
+		c.errorf(n.Subject.Span(), "match subject must be a name or literal in Phase 0")
 	}
 	subjT := c.checkExpr(n.Subject)
 	if subjT != Invalid && !subjT.printable() {
 		// printable == comparable-by-value here (int/float/bool/str)
-		c.errorf(exprSpan(n.Subject), "cannot match on a value of type %s", subjT)
+		c.errorf(n.Subject.Span(), "cannot match on a value of type %s", subjT)
 	}
 	if len(n.Arms) == 0 {
-		c.errorf(n.Span, "match must have at least one arm")
+		c.errorf(n.Span(), "match must have at least one arm")
 		return Invalid
 	}
 
@@ -476,11 +476,11 @@ func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 	// earlier arm is (which would make the rest unreachable).
 	last := n.Arms[len(n.Arms)-1]
 	if last.Guard != nil || !isCatchAll(last.Pat) {
-		c.errorf(n.Span, "match must end with an unguarded '_' or binding arm (Phase 0 exhaustiveness)")
+		c.errorf(n.Span(), "match must end with an unguarded '_' or binding arm (Phase 0 exhaustiveness)")
 	}
 	for i := 0; i < len(n.Arms)-1; i++ {
 		if n.Arms[i].Guard == nil && isCatchAll(n.Arms[i].Pat) {
-			c.errorf(patternSpan(n.Arms[i].Pat), "this catch-all arm makes the following arms unreachable")
+			c.errorf(n.Arms[i].Pat.Span(), "this catch-all arm makes the following arms unreachable")
 		}
 	}
 
@@ -497,7 +497,7 @@ func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 		case i == 0:
 			result = bt
 		case bt != Invalid && result != Invalid && !c.assignable(result, arm.Body, bt):
-			c.errorf(exprSpan(arm.Body), "all match arms must yield the same type; found %s and %s", result, bt)
+			c.errorf(arm.Body.Span(), "all match arms must yield the same type; found %s and %s", result, bt)
 		}
 	}
 	return result
@@ -508,14 +508,14 @@ func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
 	case *ast.WildPattern:
 		// matches anything, binds nothing
 	case *ast.BindPattern:
-		c.declare(p.Span, p.Name, subjT, false)
+		c.declare(p.Span(), p.Name, subjT, false)
 	case *ast.LitPattern:
 		lt := c.checkExpr(p.Lit)
 		if p.Neg && !lt.numeric() {
-			c.errorf(p.Span, "'-' pattern requires a number, found %s", lt)
+			c.errorf(p.Span(), "'-' pattern requires a number, found %s", lt)
 		}
 		if lt != Invalid && subjT != Invalid && !patternMatches(subjT, p.Lit, lt) {
-			c.errorf(p.Span, "a %s literal cannot match a subject of type %s", lt, subjT)
+			c.errorf(p.Span(), "a %s literal cannot match a subject of type %s", lt, subjT)
 		}
 	}
 }
@@ -544,18 +544,6 @@ func isCatchAll(pat ast.Pattern) bool {
 		return true
 	}
 	return false
-}
-
-func patternSpan(pat ast.Pattern) token.Span {
-	switch p := pat.(type) {
-	case *ast.WildPattern:
-		return p.Span
-	case *ast.BindPattern:
-		return p.Span
-	case *ast.LitPattern:
-		return p.Span
-	}
-	return token.Span{}
 }
 
 // assignable reports whether a value of type vt (produced by expr e) fits a
@@ -626,31 +614,3 @@ func isEqOp(k token.Kind) bool { return k == token.EqEq || k == token.Ne }
 func isLogicOp(k token.Kind) bool { return k == token.And || k == token.Or }
 
 func isIntLit(e ast.Expr) bool { _, ok := e.(*ast.IntLit); return ok }
-
-// exprSpan returns the source span of an expression node.
-func exprSpan(e ast.Expr) token.Span {
-	switch v := e.(type) {
-	case *ast.IntLit:
-		return v.Span
-	case *ast.FloatLit:
-		return v.Span
-	case *ast.BoolLit:
-		return v.Span
-	case *ast.StrLit:
-		return v.Span
-	case *ast.NilLit:
-		return v.Span
-	case *ast.Ident:
-		return v.Span
-	case *ast.Unary:
-		return v.Span
-	case *ast.Binary:
-		return v.Span
-	case *ast.Call:
-		return v.Span
-	case *ast.MatchExpr:
-		return v.Span
-	default:
-		return token.Span{}
-	}
-}

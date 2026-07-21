@@ -105,6 +105,12 @@ func TestCompileAndRun(t *testing.T) {
 			want: "hello, world\n",
 		},
 		{
+			name: "return-if-guard",
+			src: "fn clamp(v: int) -> int {\n  return 0 if v < 0\n  return 100 if v > 100\n  return v\n}\n" +
+				"fn main() {\n  print clamp(-5)\n  print clamp(150)\n  print clamp(42)\n}",
+			want: "0\n100\n42\n",
+		},
+		{
 			// 'mut n := n' shadows the parameter; C needs distinct names.
 			name: "shadow-parameter",
 			src: "fn bump(n: int) -> int {\n  mut n := n\n  n = n + 1\n  return n\n}\n" +

@@ -86,6 +86,12 @@ func TestCallArgType(t *testing.T) {
 	wantErr(t, `fn g(a: int) -> int { return a }`+"\nfn f() { print g(true) }", "cannot use bool as int")
 }
 
+func TestReturnIfGuard(t *testing.T) {
+	wantOK(t, "fn max(a: int, b: int) -> int {\n  return a if a > b\n  return b\n}")
+	// the guard condition must be bool
+	wantErr(t, "fn f(n: int) -> int {\n  return 0 if n\n  return 1\n}", "condition must be bool")
+}
+
 func TestReturnMismatch(t *testing.T) {
 	wantErr(t, "fn f() -> int { return true }", "cannot return bool")
 	wantErr(t, "fn f() { return 1 }", "unexpected return value")

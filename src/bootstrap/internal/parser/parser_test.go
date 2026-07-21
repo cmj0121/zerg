@@ -148,6 +148,25 @@ func TestSemicolonSeparator(t *testing.T) {
 	}
 }
 
+func TestReturnIf(t *testing.T) {
+	// 'return e if c' carries both a value and a condition.
+	fn := onlyFunc(t, "fn f(a: int, b: int) -> int {\n  return a if a > b\n  return b\n}")
+	ret, ok := fn.Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok || ret.Value == nil || ret.Cond == nil {
+		t.Fatalf("stmt 0 = %+v, want a conditional return with a value", fn.Body.Stmts[0])
+	}
+	// the fall-through return is unconditional.
+	if tail := fn.Body.Stmts[1].(*ast.ReturnStmt); tail.Cond != nil {
+		t.Fatalf("stmt 1 should be unconditional")
+	}
+	// 'return if c' is a bare conditional early exit.
+	fn2 := onlyFunc(t, "fn g(n: int) {\n  return if n < 0\n  nop\n}")
+	ret2 := fn2.Body.Stmts[0].(*ast.ReturnStmt)
+	if ret2.Value != nil || ret2.Cond == nil {
+		t.Fatalf("stmt 0 = %+v, want a bare conditional return", ret2)
+	}
+}
+
 func TestErrorRecovery(t *testing.T) {
 	// a bad statement is reported but the following function still parses.
 	file, diags := Parse("fn a() { x := }\nfn b() { nop }")

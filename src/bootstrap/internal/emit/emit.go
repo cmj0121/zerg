@@ -176,8 +176,8 @@ func (e *emitter) stmt(s ast.Stmt) {
 		// outer binding (matching ':=' semantics)
 		rhs := e.expr(n.Value)
 		e.line(fmt.Sprintf("%s %s = %s;", cType(t), e.declareName(n.Name), rhs))
-	case *ast.AssignStmt:
-		e.line(fmt.Sprintf("%s = %s;", e.resolve(n.Name), e.expr(n.Value)))
+	case *ast.Reassign:
+		e.line(fmt.Sprintf("%s = %s;", e.assignTarget(n.Target), e.expr(n.Value)))
 	case *ast.PrintStmt:
 		e.printStmt(n)
 	case *ast.ReturnStmt:
@@ -394,9 +394,19 @@ func (e *emitter) call(n *ast.Call) string {
 		if i > 0 {
 			args.WriteString(", ")
 		}
-		args.WriteString(e.expr(a))
+		args.WriteString(e.expr(a.Value))
 	}
 	return fmt.Sprintf("zg_%s(%s)", name, args.String())
+}
+
+// assignTarget lowers a reassignment target. The Phase 0 backend only lowers the
+// bare-identifier lvalue that the checked examples use; richer shapes (tuple,
+// struct, field, index) are outside the Phase 0 subset.
+func (e *emitter) assignTarget(t ast.AssignTarget) string {
+	if lv, ok := t.(*ast.LValueTarget); ok {
+		return e.expr(lv.X)
+	}
+	return "0"
 }
 
 // --- lowering helpers ---------------------------------------------------------

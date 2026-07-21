@@ -373,7 +373,7 @@ for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' ex
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
-match-arm   ::= ( pattern | range-arm ) ( 'if' expr )? '->' expr   # optional guard
+match-arm   ::= ( pattern | range-arm ) ( 'if' expr )? '=>' expr   # '=>' separates arm from body
 range-arm   ::= range-bound ( '..' range-bound? | '..=' range-bound )   # sugar: '_ if _ in <range>'
 range-bound ::= '-'? literal | identifier
 pattern       ::= sub-pattern ( '|' sub-pattern )*
@@ -389,7 +389,7 @@ list-pat-elem ::= pattern | '..' identifier?
   freed at the `}`. A block is also an **expression** (`primary`, group 4): its **value is its last
   statement's value** — an expr-statement yields its expr; any other statement, or an empty block, yields
   `nil`. The ASI `;` only **separates** statements, it does not discard a value, so `guard { … }` and a
-  multi-statement `match` arm (`P -> { …; v }`) both yield. **`with expr as y { … }`** is sugar over a bare
+  multi-statement `match` arm (`P => { …; v }`) both yield. **`with expr as y { … }`** is sugar over a bare
   block: it binds a scoped resource `y` and guarantees the resource's **teardown runs on every exit**
   (normal, `return`, or an abort). The value implements the built-in **`Scoped`** spec (its one method is the
   teardown); a `Ref[T]`'s drop already satisfies it. So `with open(p) as f { f.read() }` ≈
@@ -409,17 +409,18 @@ list-pat-elem ::= pattern | '..' identifier?
   nested one, extract a function and `return` (or use a flag with `break if`).
 - **`match`.** An expression: it tries the value against arms in order, yields the first fit, and every arm
   yields the same type — so a `match` is usable at a `:=`, a `return`, or an argument. A trailing **`_`**
-  covers the rest.
+  covers the rest. An arm separates pattern from body with **`=>`** — distinct from the **`->`** of a
+  function's return type, so the two never blur.
 - **Patterns** destructure by copy: a **variant** with a payload binding (`Left(v)`, nested `Left(Some(v))`),
   a **struct** (`Div{q, r}`), a **tuple** (`(a, b)`), a **literal**, optionally signed (`-1`), matched by
   `equal`; a plain
   **binding** name, an **or-pattern** (`A | B`, its sides binding the same names), or the wildcard **`_`**.
   A tuple or struct pattern also destructures at a `:=` binding — `(q, r) := divmod(x, y)`.
-- **Guards.** An arm may add `if expr` after the pattern (`Some(v) if v > 0 -> …`) — a condition, seeing the
+- **Guards.** An arm may add `if expr` after the pattern (`Some(v) if v > 0 => …`) — a condition, seeing the
   pattern's bindings, that must also hold; on `A | B if c` it covers the whole or-pattern. A guarded arm
   **does not count toward exhaustiveness** (the compiler can't prove the guard holds), so the case still
   needs an unguarded arm (or `_`).
-- **Range arm.** A **match-only** `200..300 ->` / `400..=499 ->` / `500.. ->` is **sugar** for a guard —
+- **Range arm.** A **match-only** `200..300 =>` / `400..=499 =>` / `500.. =>` is **sugar** for a guard —
   `_ if _ in <range>` — so it matches by **containment** (the `..` operators), not `equal`, and inherits a
   guard's exhaustiveness (it does not count as covering). It does **not bind**; to use the value, write the
   explicit `x if x in <range>`. Bounds are compile-time constants; a range arm is recognized by its `..`.
@@ -590,9 +591,9 @@ send-stmt   ::= expr '<-' expr
 chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
-recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
-send-arm    ::= expr '<-' expr '->' expr
+select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
+send-arm    ::= expr '<-' expr '=>' expr
 ```
 
 - **`spawn f(args)`** starts a **fire-and-forget** coroutine (Go's `go`) — no handle, no join; you observe
@@ -730,5 +731,5 @@ the highlighting tracks this checkout. Alternatively, add the `editors/nvim/` di
 `runtimepath`. Either way the highlighting tracks `GRAMMAR`: it covers exactly the groups that have landed
 and grows with each new one.
 
-To eyeball the result, open [`examples/syntax-example.zg`](../examples/syntax-example.zg) — a sample that
-exercises every highlighted token category.
+To eyeball the result, open any of the runnable samples under [`examples/`](../examples/) — a numbered tour
+of the language that the highlighting colours.

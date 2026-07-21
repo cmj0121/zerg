@@ -113,8 +113,8 @@ with **`is`** ([Type tests](specs.md)):
 
 ```text
 match guard { work() } {
-    Left(v)  -> use(v)
-    Right(e) -> {
+    Left(v)  => use(v)
+    Right(e) => {
         if e is NotFound { rebuild() }          # branch on the concrete type
         else if e is Overflow { alert(e) }      # a built-in abort, reified by guard
         else { report(e.message()) }            # everything else — a catch-all is required

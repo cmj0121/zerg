@@ -338,7 +338,7 @@ for-stmt    ::= 'for' block | 'for' 'mut'? identifier 'in' expr block | 'for' ex
 break       ::= 'break' ( 'if' expr )?
 continue    ::= 'continue' ( 'if' expr )?
 match-expr  ::= 'match' expr '{' match-arm+ '}'
-match-arm   ::= ( pattern | range-arm ) ( 'if' expr )? '->' expr   # 選用 guard
+match-arm   ::= ( pattern | range-arm ) ( 'if' expr )? '=>' expr   # '=>' 分隔 arm 與 body
 range-arm   ::= range-bound ( '..' range-bound? | '..=' range-bound )   # sugar：'_ if _ in <range>'
 range-bound ::= '-'? literal | identifier
 pattern       ::= sub-pattern ( '|' sub-pattern )*
@@ -353,7 +353,7 @@ list-pat-elem ::= pattern | '..' identifier?
 - **Block 與 `with`。** 裸 `{ … }` 開一層 **nested scope**——其 binding 與 scope-owned 值在 `}` 釋放。block 同時
   是一種 **expression**（`primary`，group 4）:它的**值 = 最後一個 statement 的值**——expr-statement 給出其 expr;
   其他 statement 或空 block 給出 `nil`。ASI `;` 只**分隔**、不丟棄值,所以 `guard { … }` 與多敘述的 `match` arm
-  （`P -> { …; v }`）都能產出。**`with expr as y { … }`** 是裸 block 的 sugar：把 scoped 資源 `y` 綁進 block,並保證
+  （`P => { …; v }`）都能產出。**`with expr as y { … }`** 是裸 block 的 sugar：把 scoped 資源 `y` 綁進 block,並保證
   資源的 **teardown 在每條離開路徑**（正常、`return`、abort）都跑。該值實作內建 **`Scoped`** spec（其唯一方法即
   teardown）；`Ref[T]` 的 drop 已滿足它。所以 `with open(p) as f { f.read() }` ≈
   `{ f := open(p); defer f.<teardown>; … }`。當資源只為其 scope 而用（如持有的 lock），`as y` 可省。
@@ -368,15 +368,16 @@ list-pat-elem ::= pattern | '..' identifier?
   `if c { break }` / `if c { continue }`
   的 sugar。**沒有 loop label**——要退出外層迴圈，抽成函式並 `return`（或用 flag 搭配 `break if`）。
 - **`match`。** 一個 expression：依序比對各 arm，取第一個吻合並產出，且每個 arm 產出**同一型別**——所以 `match`
-  可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。
+  可用於 `:=`、`return` 或引數。結尾的 **`_`** 涵蓋其餘。arm 以 **`=>`** 分隔 pattern 與 body——刻意與函式回傳型別的
+  **`->`** 區別，兩者不會混淆。
 - **Pattern** 以 copy 解構：帶 payload 綁定的 **variant**（`Left(v)`、巢狀 `Left(Some(v))`）、**struct**
   （`Div{q, r}`）、**tuple**（`(a, b)`）、**literal**（可帶負號 `-1`,以 `equal` 比對）、單純的**綁定**名字、**or-pattern**
   （`A | B`，兩側綁同名）、或萬用字元 **`_`**。tuple 或 struct pattern 也能在 `:=` 綁定處解構——
   `(q, r) := divmod(x, y)`。
-- **Guard。** arm 可在 pattern 後加 `if expr`（`Some(v) if v > 0 -> …`）——一個能看見 pattern 綁定、且必須成立的
+- **Guard。** arm 可在 pattern 後加 `if expr`（`Some(v) if v > 0 => …`）——一個能看見 pattern 綁定、且必須成立的
   條件;`A | B if c` 時涵蓋整個 or-pattern。帶 guard 的 arm **不計入 exhaustiveness**（compiler 無法證明 guard 成
   立），所以該 case 仍需一個無 guard 的 arm（或 `_`）。
-- **Range arm。** **僅 match 專用**的 `200..300 ->` / `400..=499 ->` / `500.. ->` 是 guard 的**語法糖**——
+- **Range arm。** **僅 match 專用**的 `200..300 =>` / `400..=499 =>` / `500.. =>` 是 guard 的**語法糖**——
   `_ if _ in <range>`——所以以 **containment**（`..` 運算子）比對,非 `equal`,並繼承 guard 的 exhaustiveness（不算
   涵蓋）。它**不綁定**;要用該值就寫顯式 `x if x in <range>`。bound 為編譯期常數;range arm 由其 `..` 辨識。
 - **Rest 與部分。** **struct pattern 必須列全 field**,否則以 `..` 結尾——`Div{q, r}`（全）、`Div{q, ..}`（略過
@@ -518,9 +519,9 @@ send-stmt   ::= expr '<-' expr
 chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | 'done' '->' expr | '_' '->' expr
-recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '->' expr
-send-arm    ::= expr '<-' expr '->' expr
+select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
+send-arm    ::= expr '<-' expr '=>' expr
 ```
 
 - **`spawn f(args)`** 啟動一個 **fire-and-forget** coroutine（Go 的 `go`）——無 handle、無 join;只能透過 channel

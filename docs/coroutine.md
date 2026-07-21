@@ -110,7 +110,7 @@ v := <-ch!                 # force: a crash Err re-raises as an abort here
 v := <-ch ?? fallback      # default on any close
 if v := <-ch { … }         # run the block only on a value (Left)
 for { v := <-ch ?? break }               # drain until any close
-match <-ch { Left(v) -> use(v)  Right(e) -> report(e) }
+match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 ```
 
 Because closed is the `Right` side, `chan[U?]` is unambiguous: a **sent `nil`** is `Left(nil)`, a
@@ -192,10 +192,10 @@ is **ready**, and runs that arm; ties are broken **fairly** (not by position, so
 
 ```text
 select {
-    v := <-a -> use(v)      # receive arm: ready when open with a value
-    b <- x   -> sent()      # send arm: ready when the send can proceed
-    done     -> break       # all watched receive channels closed → fires once
-    _        -> tick()      # nothing ready now → non-blocking
+    v := <-a => use(v)      # receive arm: ready when open with a value
+    b <- x   => sent()      # send arm: ready when the send can proceed
+    done     => break       # all watched receive channels closed → fires once
+    _        => tick()      # nothing ready now → non-blocking
 }
 ```
 
@@ -229,9 +229,9 @@ data" race and nothing spins.
 
 ```text
 select {
-    v := <-work           -> handle(v)   # real work
-    _ := <-after(timeout) -> stop()      # timeout — the timer channel became ready
-    _ := <-cancel         -> stop()      # cancellation — someone closed `cancel`
+    v := <-work           => handle(v)   # real work
+    _ := <-after(timeout) => stop()      # timeout — the timer channel became ready
+    _ := <-cancel         => stop()      # cancellation — someone closed `cancel`
 }
 ```
 
@@ -253,8 +253,8 @@ fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # the state: a plain mut int, owned here alone
     for cmd in inbox {               # drains until the last sender leaves
         match cmd {
-            Add(d)   -> n = n + d    # the write happens inside the owner
-            Get(rep) -> rep <- n     # reply on the caller's channel
+            Add(d)   => n = n + d    # the write happens inside the owner
+            Get(rep) => rep <- n     # reply on the caller's channel
         }
     }
 }

@@ -1,0 +1,19 @@
+# 10 — FizzBuzz: a capstone combining loops, conditions, and print.
+#
+# Print 1..15, but "Fizz" for multiples of 3, "Buzz" for multiples of 5,
+# and "FizzBuzz" for multiples of both.
+fn main() {
+    mut i := 1
+    for i <= 15 {
+        if i % 15 == 0 {
+            print "FizzBuzz"
+        } else if i % 3 == 0 {
+            print "Fizz"
+        } else if i % 5 == 0 {
+            print "Buzz"
+        } else {
+            print i
+        }
+        i = i + 1
+    }
+}

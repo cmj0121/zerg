@@ -99,7 +99,7 @@ v := <-ch!                 # force：崩潰 Err 在此 re-raise 成 abort
 v := <-ch ?? fallback      # 任一關閉都給預設值
 if v := <-ch { … }         # 只有有值（Left）時才跑區塊
 for { v := <-ch ?? break }               # 逐一收，任一關閉就跳出
-match <-ch { Left(v) -> use(v)  Right(e) -> report(e) }
+match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 ```
 
 因為關閉落在 `Right`，`chan[U?]` 不再含糊：**送了一個 `nil`** 是 `Left(nil)`，**關閉**是 `Right`。
@@ -170,10 +170,10 @@ consumer 會被算成 sender，害 channel 永遠開著。雙向端適合**對�
 
 ```text
 select {
-    v := <-a -> use(v)      # receive arm：開著且有值才 ready
-    b <- x   -> sent()      # send arm：送得出去才 ready
-    done     -> break       # 所盯的 receive channel 全部關閉 → 觸發一次
-    _        -> tick()      # 此刻沒人 ready → 非阻塞
+    v := <-a => use(v)      # receive arm：開著且有值才 ready
+    b <- x   => sent()      # send arm：送得出去才 ready
+    done     => break       # 所盯的 receive channel 全部關閉 → 觸發一次
+    _        => tick()      # 此刻沒人 ready → 非阻塞
 }
 ```
 
@@ -203,9 +203,9 @@ receive arm 綁定的型別與一般 receive 相同——`Result[T]`：有值時
 
 ```text
 select {
-    v := <-work           -> handle(v)   # 真正的工作
-    _ := <-after(timeout) -> stop()      # timeout——timer channel 變成可接收
-    _ := <-cancel         -> stop()      # cancellation——有人 close 了 `cancel`
+    v := <-work           => handle(v)   # 真正的工作
+    _ := <-after(timeout) => stop()      # timeout——timer channel 變成可接收
+    _ := <-cancel         => stop()      # cancellation——有人 close 了 `cancel`
 }
 ```
 
@@ -226,8 +226,8 @@ fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # state：一個普通 mut int，只有這裡獨佔
     for cmd in inbox {               # drain 到最後一個 sender 離場
         match cmd {
-            Add(d)   -> n = n + d    # 寫入發生在 owner 內
-            Get(rep) -> rep <- n     # 回覆到呼叫端的 channel
+            Add(d)   => n = n + d    # 寫入發生在 owner 內
+            Get(rep) => rep <- n     # 回覆到呼叫端的 channel
         }
     }
 }

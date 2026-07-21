@@ -1,0 +1,32 @@
+# 07 — Pattern matching with `match`.
+#
+# `match` tries a value against its arms in order and yields the first that
+# fits — it is an expression, so every arm yields the same type. A literal
+# arm matches by equality, a bare name binds the value, `_` is the
+# catch-all, and an arm may add an `if` guard. The last arm must be a
+# catch-all so the match is exhaustive. An arm uses `=>` (distinct from the
+# `->` that marks a function's return type).
+fn sign(n: int) -> int {
+    return match n {
+        0          => 0
+        x if x < 0 => -1        # `x` binds n; the guard must also hold
+        _          => 1
+    }
+}
+
+fn name(n: int) -> str {
+    return match n {
+        1 => "one"
+        2 => "two"
+        3 => "three"
+        _ => "many"
+    }
+}
+
+fn main() {
+    print sign(-8)           # -1
+    print sign(0)            # 0
+    print sign(42)           # 1
+    print name(2)            # two
+    print name(9)            # many
+}

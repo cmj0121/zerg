@@ -1,0 +1,12 @@
+version: "2"
+
+# The bootstrap compiler lives in the go.work workspace (module: src/bootstrap).
+# golangci-lint discovers it through the workspace, so `golangci-lint run` at the
+# repo root lints every Go module without a per-directory invocation.
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

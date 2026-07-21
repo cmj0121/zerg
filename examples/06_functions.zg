@@ -1,0 +1,18 @@
+# 06 — Functions: parameters, return, and calls.
+#
+# A parameter is written `name: type`; `-> type` declares the result.
+# `return e if cond` is the conditional early-exit guard: it returns when
+# the condition holds, and otherwise falls through to the next statement.
+fn square(n: int) -> int {
+    return n * n
+}
+
+fn max(a: int, b: int) -> int {
+    return a if a > b      # guard: return early when a is the larger
+    return b
+}
+
+fn main() {
+    print square(9)          # 81
+    print max(3, 7)          # 7
+}

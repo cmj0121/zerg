@@ -37,6 +37,34 @@ func (c *triviaCollector) self(n Node) {
 	c.add(n.Trail())
 }
 
+// target collects trivia from an assignment target subtree.
+func (c *triviaCollector) target(t AssignTarget) {
+	switch v := t.(type) {
+	case nil:
+		return
+	case *LValueTarget:
+		c.self(v)
+		c.expr(v.X)
+	case *TupleTarget:
+		c.self(v)
+		for _, e := range v.Elems {
+			c.target(e)
+		}
+	case *StructTarget:
+		c.self(v)
+		for _, f := range v.Fields {
+			c.target(f.Target)
+		}
+	}
+}
+
+// fstrParts collects trivia from the hole expressions of an f-string or f-cmd.
+func (c *triviaCollector) fstrParts(parts []FStrPart) {
+	for i := range parts {
+		c.expr(parts[i].Expr)
+	}
+}
+
 func (c *triviaCollector) node(n Node) {
 	if n == nil {
 		return
@@ -55,8 +83,9 @@ func (c *triviaCollector) node(n Node) {
 	case *BindStmt:
 		c.self(v)
 		c.expr(v.Value)
-	case *AssignStmt:
+	case *Reassign:
 		c.self(v)
+		c.target(v.Target)
 		c.expr(v.Value)
 	case *PrintStmt:
 		c.self(v)
@@ -115,8 +144,81 @@ func (c *triviaCollector) expr(e Expr) {
 		c.self(v)
 		c.expr(v.Callee)
 		for _, a := range v.Args {
-			c.expr(a)
+			c.expr(a.Value)
 		}
+	case *Range:
+		c.self(v)
+		c.expr(v.Lo)
+		c.expr(v.Hi)
+	case *IsExpr:
+		c.self(v)
+		c.expr(v.X)
+	case *Coalesce:
+		c.self(v)
+		c.expr(v.X)
+		c.expr(v.Y)
+	case *Diverge:
+		c.self(v)
+		c.expr(v.Value)
+		c.expr(v.From)
+	case *Try:
+		c.self(v)
+		c.expr(v.X)
+	case *Force:
+		c.self(v)
+		c.expr(v.X)
+	case *OptChain:
+		c.self(v)
+		c.expr(v.X)
+	case *Recv:
+		c.self(v)
+		c.expr(v.X)
+	case *Field:
+		c.self(v)
+		c.expr(v.X)
+	case *TupleIndex:
+		c.self(v)
+		c.expr(v.X)
+	case *Bracket:
+		c.self(v)
+		c.expr(v.Base)
+		for _, e := range v.Elems {
+			c.expr(e)
+		}
+	case *TupleLit:
+		c.self(v)
+		for _, e := range v.Elems {
+			c.expr(e)
+		}
+	case *ListLit:
+		c.self(v)
+		for _, e := range v.Elems {
+			c.expr(e)
+		}
+	case *ListFill:
+		c.self(v)
+		c.expr(v.Value)
+		c.expr(v.Count)
+	case *MapLit:
+		c.self(v)
+		for _, e := range v.Entries {
+			c.expr(e.Key)
+			c.expr(e.Value)
+		}
+	case *FStr:
+		c.self(v)
+		c.fstrParts(v.Parts)
+	case *FCmd:
+		c.self(v)
+		c.fstrParts(v.Parts)
+	case *FnExpr:
+		c.self(v)
+		for i := range v.Params {
+			c.expr(v.Params[i].Default)
+		}
+		c.block(v.Body)
+	case *Block:
+		c.block(v)
 	case *MatchExpr:
 		c.self(v)
 		c.expr(v.Subject)

@@ -7,7 +7,6 @@ package ast
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
@@ -77,12 +76,9 @@ func (d *dumper) node(n Node) {
 		d.close()
 	case *FuncDecl:
 		d.open("FuncDecl", v)
-		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.printf(" pub=%t unsafe=%t mut=%t %q", v.Pub, v.Unsafe, v.Mut, v.Name)
 		for i := range v.Params {
-			p := &v.Params[i]
-			d.printf(" (Param %q ", p.Name)
-			d.typeRef(p.Type)
-			d.printf(")")
+			d.param(&v.Params[i])
 		}
 		d.printf(" ret=")
 		d.typeRef(v.Ret)
@@ -104,9 +100,9 @@ func (d *dumper) node(n Node) {
 		d.typeRef(v.Type)
 		d.expr(v.Value)
 		d.close()
-	case *AssignStmt:
-		d.open("Assign", v)
-		d.printf(" %q", v.Name)
+	case *Reassign:
+		d.open("Reassign", v)
+		d.target(v.Target)
 		d.expr(v.Value)
 		d.close()
 	case *PrintStmt:
@@ -152,7 +148,7 @@ func (d *dumper) node(n Node) {
 		d.close()
 	case *FloatLit:
 		d.open("Float", v)
-		d.printf(" %s", strconv.FormatFloat(v.Value, 'g', -1, 64))
+		d.printf(" %q", v.Text) // compare the surface lexeme so a base/grouping change is caught
 		d.close()
 	case *BoolLit:
 		d.open("Bool", v)
@@ -184,7 +180,9 @@ func (d *dumper) node(n Node) {
 		d.open("Call", v)
 		d.expr(v.Callee)
 		for _, a := range v.Args {
-			d.expr(a)
+			d.printf("(Arg %q", a.Name)
+			d.expr(a.Value)
+			d.printf(")")
 		}
 		d.close()
 	case *MatchExpr:
@@ -213,8 +211,190 @@ func (d *dumper) node(n Node) {
 	case *WildPattern:
 		d.open("WildPat", v)
 		d.close()
+	case *RuneLit:
+		d.open("Rune", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *ByteLit:
+		d.open("Byte", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *RawStrLit:
+		d.open("RawStr", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *CmdLit:
+		d.open("Cmd", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *Range:
+		d.open("Range", v)
+		d.printf(" inclusive=%t", v.Inclusive)
+		d.expr(v.Lo)
+		d.expr(v.Hi)
+		d.close()
+	case *IsExpr:
+		d.open("Is", v)
+		d.printf(" %q", v.TypeName)
+		d.expr(v.X)
+		d.close()
+	case *Coalesce:
+		d.open("Coalesce", v)
+		d.expr(v.X)
+		d.expr(v.Y)
+		d.close()
+	case *Diverge:
+		d.open("Diverge", v)
+		d.printf(" %q", v.Kw.String())
+		d.expr(v.Value)
+		d.expr(v.From)
+		d.close()
+	case *Try:
+		d.open("Try", v)
+		d.expr(v.X)
+		d.close()
+	case *Force:
+		d.open("Force", v)
+		d.expr(v.X)
+		d.close()
+	case *OptChain:
+		d.open("OptChain", v)
+		d.printf(" %q", v.Name)
+		d.expr(v.X)
+		d.close()
+	case *Recv:
+		d.open("Recv", v)
+		d.expr(v.X)
+		d.close()
+	case *Field:
+		d.open("Field", v)
+		d.printf(" %q", v.Name)
+		d.expr(v.X)
+		d.close()
+	case *TupleIndex:
+		d.open("TupleIndex", v)
+		d.printf(" %d %q", v.Index, v.Text)
+		d.expr(v.X)
+		d.close()
+	case *Bracket:
+		d.open("Bracket", v)
+		d.printf(" comma=%t", v.Comma)
+		d.expr(v.Base)
+		for _, e := range v.Elems {
+			d.expr(e)
+		}
+		d.close()
+	case *TupleLit:
+		d.open("TupleLit", v)
+		for _, e := range v.Elems {
+			d.expr(e)
+		}
+		d.close()
+	case *ListLit:
+		d.open("ListLit", v)
+		for _, e := range v.Elems {
+			d.expr(e)
+		}
+		d.close()
+	case *ListFill:
+		d.open("ListFill", v)
+		d.expr(v.Value)
+		d.expr(v.Count)
+		d.close()
+	case *MapLit:
+		d.open("MapLit", v)
+		for _, e := range v.Entries {
+			d.printf("(Entry")
+			d.expr(e.Key)
+			d.expr(e.Value)
+			d.printf(")")
+		}
+		d.close()
+	case *FStr:
+		d.open("FStr", v)
+		d.fstrParts(v.Parts)
+		d.close()
+	case *FCmd:
+		d.open("FCmd", v)
+		d.fstrParts(v.Parts)
+		d.close()
+	case *FnExpr:
+		d.open("FnExpr", v)
+		for i := range v.Params {
+			cp := &v.Params[i]
+			d.printf(" (CParam ref=%t %q ", cp.Ref, cp.Name)
+			d.typeRef(cp.Type)
+			d.expr(cp.Default)
+			d.printf(")")
+		}
+		d.printf(" ret=")
+		d.typeRef(v.Ret)
+		d.node(v.Body)
+		d.close()
+	case *FnType:
+		d.open("FnType", v)
+		d.printf(" unsafe=%t", v.Unsafe)
+		for i := range v.Params {
+			pt := &v.Params[i]
+			d.printf(" (PType ref=%t ", pt.Ref)
+			d.typeRef(pt.Type)
+			d.printf(")")
+		}
+		d.printf(" ret=")
+		d.typeRef(v.Ret)
+		d.close()
+	case *LValueTarget:
+		d.open("LValueTarget", v)
+		d.expr(v.X)
+		d.close()
+	case *TupleTarget:
+		d.open("TupleTarget", v)
+		for _, e := range v.Elems {
+			d.target(e)
+		}
+		d.close()
+	case *StructTarget:
+		d.open("StructTarget", v)
+		d.printf(" %q rest=%t", v.TypeName, v.Rest)
+		for _, f := range v.Fields {
+			d.printf("(FTarget %q", f.Name)
+			d.target(f.Target)
+			d.printf(")")
+		}
+		d.close()
 	default:
 		d.printf("(unknown %T)", n)
+	}
+}
+
+// param dumps one function parameter with its 'mut &' flag and default.
+func (d *dumper) param(p *Param) {
+	d.printf(" (Param ref=%t %q ", p.Ref, p.Name)
+	d.typeRef(p.Type)
+	d.expr(p.Default)
+	d.printf(")")
+}
+
+// target dumps an assignment target, tolerating a nil (a struct-field shorthand).
+func (d *dumper) target(t AssignTarget) {
+	if t == nil {
+		d.printf("(nil)")
+		return
+	}
+	d.node(t)
+}
+
+// fstrParts dumps the parts of an f-string or f-cmd.
+func (d *dumper) fstrParts(parts []FStrPart) {
+	for i := range parts {
+		p := &parts[i]
+		if p.Expr == nil {
+			d.printf("(Text %q)", p.Text)
+			continue
+		}
+		d.printf("(Hole debug=%t conv=%d spec=%q,%t", p.Debug, p.Conv, p.Spec, p.HasSpec)
+		d.expr(p.Expr)
+		d.printf(")")
 	}
 }
 

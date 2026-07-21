@@ -51,11 +51,14 @@ type TypeRef struct {
 	Name string
 }
 
-// Param is one function parameter.
+// Param is one function parameter. Ref marks the 'mut &x' mutable-reference form
+// (GRAMMAR group 5); a nil Default means the parameter has no default value.
 type Param struct {
 	base
-	Name string
-	Type *TypeRef
+	Ref     bool // 'mut &x' — passed by mutable reference
+	Name    string
+	Type    *TypeRef
+	Default Expr
 }
 
 // FuncDecl is a top-level function declaration. A nil Ret means the function
@@ -63,6 +66,8 @@ type Param struct {
 type FuncDecl struct {
 	base
 	Pub     bool // 'pub fn' — the visibility keyword the surface carried
+	Unsafe  bool // 'unsafe fn' — the function is unsafe throughout (group 5/12)
+	Mut     bool // 'mut fn' — a method that mutates its receiver (group 5)
 	Name    string
 	NameEnd token.Pos // end of the name, for signature diagnostics
 	Params  []Param
@@ -91,13 +96,6 @@ type BindStmt struct {
 	Const bool
 	Name  string
 	Type  *TypeRef
-	Value Expr
-}
-
-// AssignStmt reassigns an existing name: 'x = e' (Phase 0 targets a bare name).
-type AssignStmt struct {
-	base
-	Name  string
 	Value Expr
 }
 
@@ -160,10 +158,14 @@ type IntLit struct {
 	Text  string
 }
 
-// FloatLit is a floating-point literal.
+// FloatLit is a floating-point literal. Value is the decoded number sema and emit
+// use; Text is the author's original lexeme (exponent form and '_' grouping
+// intact) so 'zerg fmt' reprints '1.5e3'/'1_000.5' verbatim instead of rewriting
+// them to a canonical float (the same surface-preservation lesson as IntLit).
 type FloatLit struct {
 	base
 	Value float64
+	Text  string
 }
 
 // BoolLit is 'true' or 'false'.
@@ -201,11 +203,19 @@ type Binary struct {
 	L, R Expr
 }
 
-// Call applies a callee to positional arguments (Phase 0: callee is a name).
+// Call applies a callee to arguments. Each Arg is positional or named
+// ('name: value'); GRAMMAR group 5 requires the positional arguments to precede
+// the named ones.
 type Call struct {
 	base
 	Callee Expr
-	Args   []Expr
+	Args   []Arg
+}
+
+// Arg is one call argument: positional (Name empty) or named 'Name: Value'.
+type Arg struct {
+	Name  string // "" for a positional argument
+	Value Expr
 }
 
 // MatchExpr matches a subject against arms in order, yielding the first fit's
@@ -251,7 +261,6 @@ func (*File) node() {}
 
 func (*NopStmt) node()      {}
 func (*BindStmt) node()     {}
-func (*AssignStmt) node()   {}
 func (*PrintStmt) node()    {}
 func (*ReturnStmt) node()   {}
 func (*BreakStmt) node()    {}
@@ -280,7 +289,6 @@ func (*FuncDecl) declNode() {}
 
 func (*NopStmt) stmtNode()      {}
 func (*BindStmt) stmtNode()     {}
-func (*AssignStmt) stmtNode()   {}
 func (*PrintStmt) stmtNode()    {}
 func (*ReturnStmt) stmtNode()   {}
 func (*BreakStmt) stmtNode()    {}

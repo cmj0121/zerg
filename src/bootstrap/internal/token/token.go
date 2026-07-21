@@ -198,12 +198,16 @@ type Span struct {
 	End   Pos
 }
 
-// Token is a single lexical unit with its source text and location.
+// Token is a single lexical unit with its source text, location, and any trivia
+// (comments, blank lines) the lexer attached to it.
 type Token struct {
 	Kind   Kind
 	Lexeme string // the exact source text of the token
 	Str    string // decoded content for Str/RawStr/Rune/Byte literals
 	Span   Span
+
+	Leading  []Trivia // trivia on the lines before this token
+	Trailing []Trivia // same-line comment(s) after this token
 }
 
 // String renders a token compactly for tests and debugging.

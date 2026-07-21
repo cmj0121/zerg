@@ -730,5 +730,5 @@ the highlighting tracks this checkout. Alternatively, add the `editors/nvim/` di
 `runtimepath`. Either way the highlighting tracks `GRAMMAR`: it covers exactly the groups that have landed
 and grows with each new one.
 
-To eyeball the result, open [`examples/syntax-example.zg`](../examples/syntax-example.zg) — a sample that
-exercises every highlighted token category.
+To eyeball the result, open any of the runnable samples under [`examples/`](../examples/) — a numbered tour
+of the language that the highlighting colours.

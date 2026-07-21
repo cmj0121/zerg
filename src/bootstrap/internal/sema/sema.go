@@ -124,7 +124,14 @@ func (c *checker) collectFuncs(file *ast.File) {
 	}
 }
 
-func (c *checker) resolveType(ref *ast.TypeRef) Type {
+func (c *checker) resolveType(t ast.Type) Type {
+	ref, ok := t.(*ast.TypeRef)
+	if !ok || len(ref.Args) != 0 || len(ref.Proj) != 0 {
+		// composite and generic types belong to later phases; this pass only
+		// resolves the Phase 0 built-in scalar names.
+		c.errorf(t.Span(), "unsupported type in this phase")
+		return Invalid
+	}
 	switch ref.Name {
 	case "int":
 		return Int

@@ -63,14 +63,14 @@ earlier arm already covers) is a warning.
 
 A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`) — matched by `equal`; a
-**nested** pattern (`Left(Some(v))`); an **or-pattern** (`A | B ->`, its alternatives binding the same
+**nested** pattern (`Left(Some(v))`); an **or-pattern** (`A | B =>`, its alternatives binding the same
 names at the same types); or the **wildcard `_`**, matching anything and binding nothing.
 
 ```text
 msg := match ev {
-    Click(p)           -> render(p)
-    Key(k) | Scroll(k) -> handle(k)
-    _                  -> nil
+    Click(p)           => render(p)
+    Key(k) | Scroll(k) => handle(k)
+    _                  => nil
 }
 ```
 
@@ -83,6 +83,6 @@ it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x,
 return is consumed. **Guard conditions** are shipped: an arm may carry an **`if expr`** after its pattern
 (`Left(v) if v > 0`) that must also hold for the arm to fire; the guard sees the pattern's **bindings**, and
 on `A | B if c` covers the **whole or-pattern**. A guarded arm does **not** count toward exhaustiveness, so
-a guarded case still needs an unguarded arm or `_`. A **range arm** (`200..300 ->`, `400..=499 ->`,
-`500.. ->`) is a match-only sugar for `_ if _ in <range>` — it matches by **containment** (not `equal`),
+a guarded case still needs an unguarded arm or `_`. A **range arm** (`200..300 =>`, `400..=499 =>`,
+`500.. =>`) is a match-only sugar for `_ if _ in <range>` — it matches by **containment** (not `equal`),
 binds **nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value).

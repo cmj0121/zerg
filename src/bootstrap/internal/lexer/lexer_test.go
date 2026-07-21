@@ -139,6 +139,48 @@ func TestDiagnostics(t *testing.T) {
 	}
 }
 
+func TestTripleString(t *testing.T) {
+	toks, diags := Tokenize("\"\"\"line1\nline2\"\"\"")
+	if len(diags) != 0 {
+		t.Fatalf("diags: %v", diags)
+	}
+	if toks[0].Kind != token.Str || toks[0].Str != "line1\nline2" {
+		t.Fatalf("triple string: kind=%v str=%q", toks[0].Kind, toks[0].Str)
+	}
+}
+
+func TestMoreEscapes(t *testing.T) {
+	toks, diags := Tokenize(`'\u{263A}' b'\x7F' "\r\0end"`)
+	if len(diags) != 0 {
+		t.Fatalf("diags: %v", diags)
+	}
+	if toks[0].Kind != token.Rune || toks[0].Str != "☺" {
+		t.Fatalf("rune escape: %q", toks[0].Str)
+	}
+	if toks[1].Kind != token.Byte || toks[1].Str != "\x7f" {
+		t.Fatalf("byte escape: %q", toks[1].Str)
+	}
+	if toks[2].Kind != token.Str || toks[2].Str != "\r\x00end" {
+		t.Fatalf("str escapes: %q", toks[2].Str)
+	}
+}
+
+func TestBadCharLiterals(t *testing.T) {
+	for _, src := range []string{`'\q'`, `"\z"`, `''`, `b''`, `'ab'`, `@`, `'\u{}'`, `b'\xZZ'`} {
+		if _, diags := Tokenize(src); len(diags) == 0 {
+			t.Errorf("%q: expected a diagnostic", src)
+		}
+	}
+}
+
+func TestDiagnosticsMethod(t *testing.T) {
+	l := New("@")
+	l.Next()
+	if len(l.Diagnostics()) == 0 {
+		t.Fatalf("Diagnostics() should report the illegal character")
+	}
+}
+
 func TestSpans(t *testing.T) {
 	toks, _ := Tokenize("fn\n  x")
 	// 'fn' cannot end an item, so no ';' is inserted; 'x' is on line 2, column 3.

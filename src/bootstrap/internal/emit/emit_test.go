@@ -105,6 +105,29 @@ func TestCompileAndRun(t *testing.T) {
 			want: "hello, world\n",
 		},
 		{
+			// value-returning functions that fall off the end get a default
+			// return (exercises zeroValue for each type).
+			name: "fallthrough-default-return",
+			src: "fn a() -> int { print 1 }\n" +
+				"fn b() -> float { print 1 }\n" +
+				"fn c() -> bool { print 1 }\n" +
+				"fn d() -> str { print 1 }\n" +
+				"fn main() {\n  print a()\n  print b()\n  print c()\n  print d()\n}",
+			want: "1\n0\n1\n0\n1\nfalse\n1\n\n",
+		},
+		{
+			name: "unary-ops-and-escapes",
+			src:  "fn main() {\n  print ~0\n  print not false\n  print -5\n  print \"a\\tb\"\n  print \"\\u{7F}\"\n}",
+			want: "-1\ntrue\n-5\na\tb\n\x7f\n",
+		},
+		{
+			// a binding pattern as the catch-all arm binds the subject.
+			name: "match-binding-catchall",
+			src: "fn f(n: int) -> int {\n  return match n {\n    0 => 100\n    rest => rest + 1\n  }\n}\n" +
+				"fn main() {\n  print f(0)\n  print f(41)\n}",
+			want: "100\n42\n",
+		},
+		{
 			name: "match-int-and-str",
 			src: "fn sign(n: int) -> int {\n  return match n {\n    0 => 0\n    x if x < 0 => -1\n    _ => 1\n  }\n}\n" +
 				"fn kind(s: str) -> str {\n  return match s {\n    \"hi\" => \"greeting\"\n    _ => \"other\"\n  }\n}\n" +

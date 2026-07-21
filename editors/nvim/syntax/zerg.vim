@@ -126,6 +126,10 @@ syntax match zergDeclName "\h\w*" contained
 " name. Excludes the `:=` binding operator (colon followed by '=').
 syntax match zergDeclName "\<\h\w*\ze\s*:[^=]"
 
+" An inferred binding target `name :=` — coloured like a typed binding's name so
+" both binding forms (`x := e` and `x: T = e`) highlight their target the same.
+syntax match zergDeclName "\<\h\w*\ze\s*:="
+
 " A function / method call `name(` — lowercase-initial (the highlighter treats a
 " Capitalized name as a type by convention, so a constructor/variant like `Circle(`
 " stays a type, matched below).

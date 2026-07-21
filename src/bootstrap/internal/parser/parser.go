@@ -185,21 +185,24 @@ func (p *parser) tryDecl() (d ast.Decl) {
 			d = nil
 		}
 	}()
-	return p.parseFuncDecl()
+	return p.parseDecl()
 }
 
 // syncDecl advances to the start of the next declaration after an error.
 func (p *parser) syncDecl() {
 	for !p.at(token.EOF) {
-		if p.at(token.Fn) || p.at(token.Pub) || p.at(token.Unsafe) || p.at(token.Mut) {
+		switch p.cur().Kind {
+		case token.Fn, token.Pub, token.Unsafe, token.Mut, token.Struct, token.Enum,
+			token.Spec, token.Impl, token.Type, token.Init, token.Hash:
 			return
 		}
 		p.advance()
 	}
 }
 
-// parseFuncDecl parses 'pub? unsafe? mut? fn name(params) -> ret? block'
-// (GRAMMAR group 5; generics '[T]' are group 7, out of this slice's scope).
+// parseFuncDecl parses 'pub? unsafe? mut? fn name generics? (params) -> ret? block'
+// (GRAMMAR group 5, with the group 7 generics). It also serves as an impl method
+// or a spec's provided method.
 func (p *parser) parseFuncDecl() ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub) // single-file for now; visibility preserved for fmt
@@ -210,24 +213,29 @@ func (p *parser) parseFuncDecl() ast.Decl {
 	}
 	p.expect(token.Fn)
 	name := p.expect(token.Ident)
+	var generics *ast.Generics
+	if p.at(token.LBrack) {
+		generics = p.parseGenerics()
+	}
 	p.expect(token.LParen)
 	params := p.parseParams()
 	p.expect(token.RParen)
 
-	var ret *ast.TypeRef
+	var ret ast.Type
 	if p.accept(token.Arrow) {
 		ret = p.parseType()
 	}
 	body := p.parseBlock()
 	return spanned(&ast.FuncDecl{
-		Pub:     pub,
-		Unsafe:  unsafe,
-		Mut:     mut,
-		Name:    name.Lexeme,
-		NameEnd: name.Span.End,
-		Params:  params,
-		Ret:     ret,
-		Body:    body,
+		Pub:      pub,
+		Unsafe:   unsafe,
+		Mut:      mut,
+		Name:     name.Lexeme,
+		NameEnd:  name.Span.End,
+		Generics: generics,
+		Params:   params,
+		Ret:      ret,
+		Body:     body,
 	}, token.Span{Start: start, End: body.Span().End})
 }
 
@@ -266,12 +274,6 @@ func (p *parser) parseMutRef() bool {
 		return true
 	}
 	return false
-}
-
-// parseType reads a Phase 0 type: a bare built-in name (int/float/bool/str).
-func (p *parser) parseType() *ast.TypeRef {
-	name := p.expect(token.Ident)
-	return spanned(&ast.TypeRef{Name: name.Lexeme}, name.Span)
 }
 
 // --- statements ---------------------------------------------------------------

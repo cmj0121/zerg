@@ -41,7 +41,7 @@ func (p *parser) parseFnExpr() ast.Expr {
 	p.expect(token.LParen)
 	params := p.parseClosureParams()
 	p.expect(token.RParen)
-	var ret *ast.TypeRef
+	var ret ast.Type
 	if p.accept(token.Arrow) {
 		ret = p.parseType()
 	}

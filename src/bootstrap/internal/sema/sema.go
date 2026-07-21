@@ -103,7 +103,7 @@ func (c *checker) errorf(span token.Span, format string, args ...any) {
 // --- pass 1: collect signatures ------------------------------------------------
 
 func (c *checker) collectFuncs(file *ast.File) {
-	for _, d := range file.Decls {
+	for _, d := range file.Items {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok {
 			continue
@@ -152,7 +152,7 @@ func (c *checker) resolveType(t ast.Type) Type {
 // --- pass 2: check bodies ------------------------------------------------------
 
 func (c *checker) checkFuncs(file *ast.File) {
-	for _, d := range file.Decls {
+	for _, d := range file.Items {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok {
 			continue

@@ -82,7 +82,7 @@ func (e *emitter) program(file *ast.File) {
 // funcs returns the function declarations in source order.
 func funcs(file *ast.File) []*ast.FuncDecl {
 	var out []*ast.FuncDecl
-	for _, d := range file.Decls {
+	for _, d := range file.Items {
 		if fn, ok := d.(*ast.FuncDecl); ok {
 			out = append(out, fn)
 		}

@@ -154,14 +154,14 @@ func dumpTokens(src string) int {
 	return 0
 }
 
-// dumpAST parses and reports the number of top-level declarations.
+// dumpAST parses and reports the number of top-level items.
 func dumpAST(file, src string) int {
 	f, diags := parser.Parse(src)
 	if len(diags) > 0 {
 		reportDiags(file, diags)
 		return 1
 	}
-	fmt.Printf("%d declaration(s) parsed\n", len(f.Decls))
+	fmt.Printf("%d top-level item(s) parsed\n", len(f.Items))
 	return 0
 }
 

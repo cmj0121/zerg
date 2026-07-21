@@ -267,11 +267,25 @@ func (p *parser) parseStmt() ast.Stmt {
 
 func (p *parser) parseReturn(kw token.Token) ast.Stmt {
 	p.advance() // 'return'
-	if p.at(token.Semi) || p.at(token.RBrace) || p.at(token.EOF) {
-		return &ast.ReturnStmt{Span: kw.Span}
+	r := &ast.ReturnStmt{Span: kw.Span}
+	// 'return if c' — a bare conditional early exit (no value)
+	if p.at(token.If) {
+		p.advance()
+		r.Cond = p.parseExpr()
+		r.Span = token.Span{Start: kw.Span.Start, End: exprEnd(r.Cond)}
+		return r
 	}
-	v := p.parseExpr()
-	return &ast.ReturnStmt{Value: v, Span: token.Span{Start: kw.Span.Start, End: exprEnd(v)}}
+	if p.at(token.Semi) || p.at(token.RBrace) || p.at(token.EOF) {
+		return r
+	}
+	r.Value = p.parseExpr()
+	r.Span = token.Span{Start: kw.Span.Start, End: exprEnd(r.Value)}
+	// 'return e if c' — conditional early exit with a value
+	if p.accept(token.If) {
+		r.Cond = p.parseExpr()
+		r.Span = token.Span{Start: kw.Span.Start, End: exprEnd(r.Cond)}
+	}
+	return r
 }
 
 // parseBinding parses 'name := e' / 'name: T = e' (the leading mut/const keyword,

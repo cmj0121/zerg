@@ -141,13 +141,14 @@ func (e *emitter) function(fn *ast.FuncDecl) {
 	e.popScope()
 }
 
-// endsWithReturn reports whether a block's last statement is a return.
+// endsWithReturn reports whether a block's last statement is an unconditional
+// return (a 'return ... if c' may fall through, so it does not count).
 func endsWithReturn(b *ast.Block) bool {
 	if len(b.Stmts) == 0 {
 		return false
 	}
-	_, ok := b.Stmts[len(b.Stmts)-1].(*ast.ReturnStmt)
-	return ok
+	r, ok := b.Stmts[len(b.Stmts)-1].(*ast.ReturnStmt)
+	return ok && r.Cond == nil
 }
 
 // cMain wraps zg_main in a C entry point.
@@ -181,10 +182,14 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.PrintStmt:
 		e.printStmt(n)
 	case *ast.ReturnStmt:
-		if n.Value == nil {
-			e.line("return;")
+		ret := "return;"
+		if n.Value != nil {
+			ret = "return " + e.expr(n.Value) + ";"
+		}
+		if n.Cond != nil {
+			e.line(fmt.Sprintf("if (%s) { %s }", e.expr(n.Cond), ret))
 		} else {
-			e.line("return " + e.expr(n.Value) + ";")
+			e.line(ret)
 		}
 	case *ast.BreakStmt:
 		e.line("break;")

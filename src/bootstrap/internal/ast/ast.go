@@ -95,9 +95,12 @@ type PrintStmt struct {
 	Span  token.Span
 }
 
-// ReturnStmt is 'return' with an optional value.
+// ReturnStmt is 'return' with an optional value and an optional trailing
+// condition: 'return', 'return e', 'return if c', or 'return e if c' (the last
+// two are the conditional early-exit sugar).
 type ReturnStmt struct {
 	Value Expr // nil for a bare 'return'
+	Cond  Expr // nil when unconditional; the 'if c' condition otherwise
 	Span  token.Span
 }
 

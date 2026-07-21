@@ -260,6 +260,9 @@ func (c *checker) checkAssign(n *ast.AssignStmt) {
 }
 
 func (c *checker) checkReturn(n *ast.ReturnStmt) {
+	if n.Cond != nil {
+		c.checkCond(n.Cond)
+	}
 	want := Nil
 	if c.curFn != nil {
 		want = c.curFn.Ret

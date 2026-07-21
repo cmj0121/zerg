@@ -19,12 +19,12 @@ func parseOK(t *testing.T, src string) *ast.File {
 func onlyFunc(t *testing.T, src string) *ast.FuncDecl {
 	t.Helper()
 	file := parseOK(t, src)
-	if len(file.Decls) != 1 {
-		t.Fatalf("got %d decls, want 1", len(file.Decls))
+	if len(file.Items) != 1 {
+		t.Fatalf("got %d decls, want 1", len(file.Items))
 	}
-	fn, ok := file.Decls[0].(*ast.FuncDecl)
+	fn, ok := file.Items[0].(*ast.FuncDecl)
 	if !ok {
-		t.Fatalf("decl is %T, want *ast.FuncDecl", file.Decls[0])
+		t.Fatalf("decl is %T, want *ast.FuncDecl", file.Items[0])
 	}
 	return fn
 }
@@ -228,7 +228,7 @@ func TestErrorRecovery(t *testing.T) {
 	if len(diags) == 0 {
 		t.Fatalf("expected a diagnostic for the empty binding RHS")
 	}
-	if len(file.Decls) != 2 {
-		t.Fatalf("got %d decls, want 2 (recovery should keep fn b)", len(file.Decls))
+	if len(file.Items) != 2 {
+		t.Fatalf("got %d decls, want 2 (recovery should keep fn b)", len(file.Items))
 	}
 }

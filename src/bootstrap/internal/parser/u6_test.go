@@ -145,10 +145,10 @@ func TestWithBinding(t *testing.T) {
 // and its declaration is attached (parses with no diagnostics) rather than lost.
 func TestDocBetweenDecorator(t *testing.T) {
 	file := parseOK(t, "#[derive(Encode)]\n## a documented type\nstruct S {\nx: int\n}")
-	if len(file.Decls) != 1 {
-		t.Fatalf("want 1 decl, got %d", len(file.Decls))
+	if len(file.Items) != 1 {
+		t.Fatalf("want 1 decl, got %d", len(file.Items))
 	}
-	lead := file.Decls[0].Lead()
+	lead := file.Items[0].Lead()
 	found := false
 	for _, tr := range lead {
 		if tr.Text == "## a documented type" {

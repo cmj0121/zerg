@@ -38,6 +38,25 @@ type Lexer struct {
 	trail     []token.Trivia // trailing trivia detected for the previously emitted token
 	nlRun     int            // consecutive newlines since the last token or comment
 	onTokLine bool           // a real (non-Semi) token has been emitted on the current line
+
+	modes []fmode // f-string / f-cmd interpolation mode stack (DESIGN-1a §4)
+}
+
+// fmode is one frame of the interpolation mode stack: either the text of an
+// f-string / f-cmd (fmStr) or the expression inside a '{ … }' hole (fmHole).
+type fmode struct {
+	hole  bool // false: string/cmd text mode; true: inside a hole's expression
+	cmd   bool // for text mode: a backtick f-cmd rather than a double-quoted f-string
+	depth int  // for hole mode: nesting of '(' '[' '{' within the hole
+}
+
+func (l *Lexer) pushMode(m fmode) { l.modes = append(l.modes, m) }
+func (l *Lexer) popMode()         { l.modes = l.modes[:len(l.modes)-1] }
+func (l *Lexer) topMode() *fmode {
+	if len(l.modes) == 0 {
+		return nil
+	}
+	return &l.modes[len(l.modes)-1]
 }
 
 // New builds a lexer over the given source text.
@@ -131,6 +150,11 @@ func isIdent(c byte) bool { return isLetter(c) || isDigit(c) || c == '_' }
 // Comments and blank lines encountered along the way are collected as trivia
 // rather than dropped.
 func (l *Lexer) Next() token.Token {
+	// Inside an f-string / f-cmd text chunk the next token is a text piece, a hole
+	// opener, or the closing quote — driven by the interpolation mode stack.
+	if top := l.topMode(); top != nil && !top.hole {
+		return l.nextInText(top)
+	}
 	// Skip horizontal whitespace; a significant newline yields a Semi token, a
 	// comment becomes trivia, otherwise scanning continues.
 	for !l.eof() {
@@ -222,14 +246,29 @@ func (l *Lexer) scanToken() token.Token {
 	start := l.pos()
 	c := l.at(0)
 
-	// literal prefixes: r"…" raw string, b'…' byte, f"…"/f`…` (unsupported here).
+	// Inside a hole, the '}' that closes it, a ':' format spec, and a '!r'/'!s'/'!a'
+	// conversion are lexed specially (they are not ordinary expression tokens).
+	if top := l.topMode(); top != nil && top.hole && top.depth == 0 {
+		switch {
+		case c == '}':
+			return l.closeHole(start)
+		case c == ':':
+			return l.scanFmtSpec(start)
+		case c == '!' && isConv(l.at(1)) && (l.at(2) == '}' || l.at(2) == ':'):
+			return l.scanConv(start)
+		}
+	}
+
+	// literal prefixes: r"…" raw string, b'…' byte, f"…"/f`…` interpolation.
 	switch {
 	case c == 'r' && l.at(1) == '"':
 		return l.scanRawString(start)
 	case c == 'b' && l.at(1) == '\'':
 		return l.scanByte(start)
-	case c == 'f' && (l.at(1) == '"' || l.at(1) == '`'):
-		return l.unsupported(start, 2, "f-strings are a Phase 1 feature")
+	case c == 'f' && l.at(1) == '"':
+		return l.beginFString(start)
+	case c == 'f' && l.at(1) == '`':
+		return l.beginFCmd(start)
 	}
 
 	switch {
@@ -242,9 +281,9 @@ func (l *Lexer) scanToken() token.Token {
 	case c == '\'':
 		return l.scanRune(start)
 	case c == '`':
-		return l.unsupported(start, 1, "command literals are a Phase 1 feature")
+		return l.scanCmd(start)
 	case c == '#': // '#[' decorator — the only '#' that reaches scanToken
-		return l.unsupported(start, 2, "decorators are a Phase 1 feature")
+		return l.scanDecoratorOpen(start)
 	}
 	return l.scanOperator(start)
 }
@@ -261,6 +300,12 @@ func (l *Lexer) scanIdent(start token.Pos) token.Token {
 // accepted only between two digits.
 func (l *Lexer) scanNumber(start token.Pos) token.Token {
 	kind := token.Int
+	// A number in tuple-index position — after a '.' — is a bare decimal integer,
+	// never a float: 'a.0.1' is '(a.0).1', not 'a.(0.1)' (GRAMMAR group 4).
+	if l.prev == token.Dot {
+		l.consumeDigits(isDigit)
+		return l.emit(token.Int, start, l.src[start.Offset:l.offs])
+	}
 	if l.at(0) == '0' && (l.at(1) == 'x' || l.at(1) == 'o' || l.at(1) == 'b') {
 		base := l.at(1)
 		l.advance() // 0
@@ -603,36 +648,36 @@ func (l *Lexer) scanOperator(start token.Pos) token.Token {
 		return emit(token.Comma, 0)
 	case '(':
 		l.depth++
+		l.holeDepth(+1)
 		return emit(token.LParen, 0)
 	case ')':
 		if l.depth > 0 {
 			l.depth--
 		}
+		l.holeDepth(-1)
 		return emit(token.RParen, 0)
 	case '[':
 		l.depth++
+		l.holeDepth(+1)
 		return emit(token.LBrack, 0)
 	case ']':
 		if l.depth > 0 {
 			l.depth--
 		}
+		l.holeDepth(-1)
 		return emit(token.RBrack, 0)
 	case '{':
+		l.holeDepth(+1)
 		return emit(token.LBrace, 0)
 	case '}':
+		// a hole-closing '}' at depth 0 is intercepted in scanToken; this reaches
+		// scanOperator only for a nested map/block brace, so it decrements depth.
+		l.holeDepth(-1)
 		return emit(token.RBrace, 0)
 	case ';':
 		return emit(token.Semi, 0)
 	}
 	return l.illegal(start, "unexpected character %q", string(c))
-}
-
-// unsupported consumes width characters and reports a not-yet-supported construct.
-func (l *Lexer) unsupported(start token.Pos, width int, msg string) token.Token {
-	for i := 0; i < width && !l.eof(); i++ {
-		l.advance()
-	}
-	return l.illegal(start, "%s", msg)
 }
 
 // illegal records a diagnostic spanning [start, cursor) and returns an Illegal

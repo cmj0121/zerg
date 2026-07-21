@@ -124,7 +124,14 @@ func (c *checker) collectFuncs(file *ast.File) {
 	}
 }
 
-func (c *checker) resolveType(ref *ast.TypeRef) Type {
+func (c *checker) resolveType(t ast.Type) Type {
+	ref, ok := t.(*ast.TypeRef)
+	if !ok || len(ref.Args) != 0 || len(ref.Proj) != 0 {
+		// composite and generic types belong to later phases; this pass only
+		// resolves the Phase 0 built-in scalar names.
+		c.errorf(t.Span(), "unsupported type in this phase")
+		return Invalid
+	}
 	switch ref.Name {
 	case "int":
 		return Int
@@ -180,7 +187,7 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		// nothing
 	case *ast.BindStmt:
 		c.checkBind(n)
-	case *ast.AssignStmt:
+	case *ast.Reassign:
 		c.checkAssign(n)
 	case *ast.PrintStmt:
 		t := c.checkExpr(n.Value)
@@ -244,19 +251,39 @@ func (c *checker) checkBind(b *ast.BindStmt) {
 	c.declare(b.Span(), b.Name, typ, b.Mut)
 }
 
-func (c *checker) checkAssign(n *ast.AssignStmt) {
+func (c *checker) checkAssign(n *ast.Reassign) {
 	vt := c.checkExpr(n.Value)
-	sym := c.lookup(n.Name)
+	name, ok := simpleTargetName(n.Target)
+	if !ok {
+		// tuple / struct / field / index targets are beyond the Phase 0 checker;
+		// the parser still records them so 'zerg fmt' round-trips.
+		return
+	}
+	sym := c.lookup(name)
 	if sym == nil {
-		c.errorf(n.Span(), "undefined name %q", n.Name)
+		c.errorf(n.Span(), "undefined name %q", name)
 		return
 	}
 	if !sym.mutable {
-		c.errorf(n.Span(), "cannot assign to immutable binding %q", n.Name)
+		c.errorf(n.Span(), "cannot assign to immutable binding %q", name)
 	}
 	if sym.typ != Invalid && vt != Invalid && !c.assignable(sym.typ, n.Value, vt) {
-		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, n.Name, sym.typ)
+		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, name, sym.typ)
 	}
+}
+
+// simpleTargetName returns the bound name when a reassignment target is a bare
+// identifier lvalue — the only shape the Phase 0 checker and emitter handle.
+func simpleTargetName(t ast.AssignTarget) (string, bool) {
+	lv, ok := t.(*ast.LValueTarget)
+	if !ok {
+		return "", false
+	}
+	id, ok := lv.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
 }
 
 func (c *checker) checkReturn(n *ast.ReturnStmt) {
@@ -439,7 +466,7 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		c.errorf(name.Span(), "undefined function %q", name.Name)
 		// still check arguments to surface nested errors
 		for _, a := range n.Args {
-			c.checkExpr(a)
+			c.checkExpr(a.Value)
 		}
 		return Invalid
 	}
@@ -447,10 +474,10 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		c.errorf(n.Span(), "function %q expects %d argument(s), got %d", name.Name, len(sig.Params), len(n.Args))
 	}
 	for i, a := range n.Args {
-		at := c.checkExpr(a)
+		at := c.checkExpr(a.Value)
 		if i < len(sig.Params) && at != Invalid && sig.Params[i] != Invalid &&
-			!c.assignable(sig.Params[i], a, at) {
-			c.errorf(a.Span(), "argument %d of %q: cannot use %s as %s", i+1, name.Name, at, sig.Params[i])
+			!c.assignable(sig.Params[i], a.Value, at) {
+			c.errorf(a.Value.Span(), "argument %d of %q: cannot use %s as %s", i+1, name.Name, at, sig.Params[i])
 		}
 	}
 	return sig.Ret

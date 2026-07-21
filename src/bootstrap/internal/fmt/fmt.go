@@ -40,10 +40,7 @@ func Print(file *ast.File) string {
 	p := &printer{}
 	for _, d := range file.Decls {
 		p.leadTrivia(d.Lead())
-		p.ind()
-		if fn, ok := d.(*ast.FuncDecl); ok {
-			p.funcDecl(fn)
-		}
+		p.decl(d)
 		p.trailTrivia(d.Trail())
 		p.nl()
 	}
@@ -110,24 +107,48 @@ func (p *printer) funcDecl(fn *ast.FuncDecl) {
 	if fn.Pub {
 		p.write("pub ")
 	}
+	if fn.Unsafe {
+		p.write("unsafe ")
+	}
+	if fn.Mut {
+		p.write("mut ")
+	}
 	p.write("fn ")
 	p.write(fn.Name)
-	p.write("(")
-	for i := range fn.Params {
-		if i > 0 {
-			p.write(", ")
-		}
-		p.write(fn.Params[i].Name)
-		p.write(": ")
-		p.write(fn.Params[i].Type.Name)
-	}
-	p.write(")")
+	p.generics(fn.Generics)
+	p.paramList(fn.Params)
 	if fn.Ret != nil {
 		p.write(" -> ")
-		p.write(fn.Ret.Name)
+		p.typ(fn.Ret)
 	}
 	p.write(" ")
 	p.block(fn.Body)
+}
+
+// paramList prints a parenthesized declared-parameter list.
+func (p *printer) paramList(params []ast.Param) {
+	p.write("(")
+	for i := range params {
+		if i > 0 {
+			p.write(", ")
+		}
+		p.param(&params[i])
+	}
+	p.write(")")
+}
+
+// param prints one declared function parameter: 'mut &x'? name ': type' (= default)?.
+func (p *printer) param(pm *ast.Param) {
+	if pm.Ref {
+		p.write("mut &")
+	}
+	p.write(pm.Name)
+	p.write(": ")
+	p.typ(pm.Type)
+	if pm.Default != nil {
+		p.write(" = ")
+		p.expr(pm.Default, precLowest)
+	}
 }
 
 // block prints '{ ... }' with the body one tab deeper; the cursor is left just
@@ -157,8 +178,8 @@ func (p *printer) stmt(s ast.Stmt) {
 		p.write("nop")
 	case *ast.BindStmt:
 		p.bind(n)
-	case *ast.AssignStmt:
-		p.write(n.Name)
+	case *ast.Reassign:
+		p.assignTarget(n.Target)
 		p.write(" = ")
 		p.expr(n.Value, precLowest)
 	case *ast.PrintStmt:
@@ -183,12 +204,64 @@ func (p *printer) stmt(s ast.Stmt) {
 	case *ast.ForStmt:
 		p.write("for ")
 		if n.Cond != nil {
-			p.expr(n.Cond, precLowest)
+			p.head(n.Cond)
 			p.write(" ")
 		}
 		p.block(n.Body)
 	case *ast.ExprStmt:
 		p.expr(n.X, precLowest)
+	}
+}
+
+// head prints an if/for/with/match head expression, wrapping a '{'-opening
+// expression (a map literal or a block) in parentheses as GRAMMAR requires
+// (DESIGN-1a §3c), so the reprinted head does not swallow the body's '{'.
+func (p *printer) head(e ast.Expr) {
+	switch e.(type) {
+	case *ast.MapLit, *ast.Block:
+		p.write("(")
+		p.expr(e, precLowest)
+		p.write(")")
+	default:
+		p.expr(e, precLowest)
+	}
+}
+
+// assignTarget prints a reassignment target: an lvalue, a tuple shape, or a
+// struct shape.
+func (p *printer) assignTarget(t ast.AssignTarget) {
+	switch n := t.(type) {
+	case *ast.LValueTarget:
+		p.expr(n.X, precLowest)
+	case *ast.TupleTarget:
+		p.write("(")
+		for i, e := range n.Elems {
+			if i > 0 {
+				p.write(", ")
+			}
+			p.assignTarget(e)
+		}
+		p.write(")")
+	case *ast.StructTarget:
+		p.write(n.TypeName)
+		p.write("{")
+		for i, f := range n.Fields {
+			if i > 0 {
+				p.write(", ")
+			}
+			p.write(f.Name)
+			if f.Target != nil {
+				p.write(": ")
+				p.assignTarget(f.Target)
+			}
+		}
+		if n.Rest {
+			if len(n.Fields) > 0 {
+				p.write(", ")
+			}
+			p.write("..")
+		}
+		p.write("}")
 	}
 }
 
@@ -202,7 +275,7 @@ func (p *printer) bind(n *ast.BindStmt) {
 	p.write(n.Name)
 	if n.Type != nil {
 		p.write(": ")
-		p.write(n.Type.Name)
+		p.typ(n.Type)
 		p.write(" = ")
 	} else {
 		p.write(" := ")
@@ -217,7 +290,7 @@ func (p *printer) ifStmt(n *ast.IfStmt) {
 		} else {
 			p.write(" else if ")
 		}
-		p.expr(br.Cond, precLowest)
+		p.head(br.Cond)
 		p.write(" ")
 		p.block(br.Body)
 	}
@@ -234,12 +307,15 @@ func (p *printer) ifStmt(n *ast.IfStmt) {
 // parses back to the same tree.
 const (
 	precLowest = iota
+	precCoalesce
 	precOr
 	precAnd
 	precCmp
+	precRange
 	precAdd
 	precMul
 	precUnary
+	precRecv
 	precPostfix
 )
 
@@ -250,7 +326,7 @@ func binPrec(k token.Kind) int {
 		return precOr
 	case token.And:
 		return precAnd
-	case token.EqEq, token.Ne, token.Lt, token.Gt, token.Le, token.Ge:
+	case token.EqEq, token.Ne, token.Lt, token.Gt, token.Le, token.Ge, token.In:
 		return precCmp
 	case token.Plus, token.Minus, token.PlusMod, token.MinusMod, token.Pipe, token.Caret:
 		return precAdd
@@ -266,19 +342,66 @@ func (p *printer) expr(e ast.Expr, prec int) {
 	case *ast.IntLit:
 		p.write(n.Text) // the author's lexeme, base and '_' grouping intact
 	case *ast.FloatLit:
-		p.write(floatText(n.Value))
+		p.write(n.Text) // the author's lexeme, exponent form and '_' grouping intact
 	case *ast.BoolLit:
 		p.write(strconv.FormatBool(n.Value))
 	case *ast.StrLit:
 		p.write(quote(n.Value))
 	case *ast.NilLit:
 		p.write("nil")
+	case *ast.RawStrLit:
+		p.write(n.Text) // raw string: reprinted verbatim (processes no escapes)
+	case *ast.RuneLit:
+		p.write(n.Text) // rune literal: surface form kept verbatim
+	case *ast.ByteLit:
+		p.write(n.Text) // byte literal: surface form kept verbatim
+	case *ast.CmdLit:
+		p.write(n.Text) // command literal: surface backtick form kept verbatim
 	case *ast.Ident:
 		p.write(n.Name)
 	case *ast.Unary:
 		p.unary(n, prec)
 	case *ast.Binary:
 		p.binary(n, prec)
+	case *ast.Range:
+		p.rangeExpr(n, prec)
+	case *ast.IsExpr:
+		p.paren(prec, precCmp, func() {
+			p.expr(n.X, precRange)
+			p.write(" is ")
+			p.write(n.TypeName)
+		})
+	case *ast.Coalesce:
+		p.paren(prec, precCoalesce, func() {
+			p.expr(n.X, precCoalesce+1)
+			p.write(" ?? ")
+			p.expr(n.Y, precCoalesce)
+		})
+	case *ast.Diverge:
+		p.diverge(n)
+	case *ast.Recv:
+		p.paren(prec, precRecv, func() {
+			p.write("<-")
+			p.expr(n.X, precRecv)
+		})
+	case *ast.Try:
+		p.expr(n.X, precPostfix)
+		p.write("?")
+	case *ast.Force:
+		p.expr(n.X, precPostfix)
+		p.write("!")
+	case *ast.OptChain:
+		p.expr(n.X, precPostfix)
+		p.write("?.")
+		p.write(n.Name)
+	case *ast.Field:
+		p.expr(n.X, precPostfix)
+		p.write(".")
+		p.write(n.Name)
+	case *ast.TupleIndex:
+		p.expr(n.X, precPostfix)
+		p.write(".")
+		p.write(n.Text)
 	case *ast.Call:
 		p.expr(n.Callee, precPostfix)
 		p.write("(")
@@ -286,11 +409,160 @@ func (p *printer) expr(e ast.Expr, prec int) {
 			if i > 0 {
 				p.write(", ")
 			}
-			p.expr(a, precLowest)
+			if a.Name != "" {
+				p.write(a.Name)
+				p.write(": ")
+			}
+			p.expr(a.Value, precLowest)
 		}
 		p.write(")")
+	case *ast.Bracket:
+		p.expr(n.Base, precPostfix)
+		p.write("[")
+		for i, e := range n.Elems {
+			if i > 0 {
+				p.write(", ")
+			}
+			p.expr(e, precLowest)
+		}
+		p.write("]")
+	case *ast.TupleLit:
+		p.write("(")
+		for i, e := range n.Elems {
+			if i > 0 {
+				p.write(", ")
+			}
+			p.expr(e, precLowest)
+		}
+		p.write(")")
+	case *ast.ListLit:
+		p.write("[")
+		for i, e := range n.Elems {
+			if i > 0 {
+				p.write(", ")
+			}
+			p.expr(e, precLowest)
+		}
+		p.write("]")
+	case *ast.ListFill:
+		p.write("[")
+		p.expr(n.Value, precLowest)
+		p.write("; ")
+		p.expr(n.Count, precLowest)
+		p.write("]")
+	case *ast.MapLit:
+		p.mapLit(n)
+	case *ast.FStr:
+		p.fstr(n)
+	case *ast.FCmd:
+		p.fcmd(n)
+	case *ast.FnExpr:
+		p.fnExpr(n)
+	case *ast.Block:
+		p.block(n)
 	case *ast.MatchExpr:
 		p.match(n)
+	}
+}
+
+// paren runs body, wrapping it in parentheses when the node's precedence (my) is
+// looser than the surrounding context requires.
+func (p *printer) paren(ctx, my int, body func()) {
+	if my < ctx {
+		p.write("(")
+		body()
+		p.write(")")
+		return
+	}
+	body()
+}
+
+// rangeExpr prints 'lo..hi', 'lo..=hi', or the open range 'lo..'.
+func (p *printer) rangeExpr(n *ast.Range, prec int) {
+	p.paren(prec, precRange, func() {
+		p.expr(n.Lo, precRange+1)
+		if n.Inclusive {
+			p.write("..=")
+		} else {
+			p.write("..")
+		}
+		if n.Hi != nil {
+			p.expr(n.Hi, precRange+1)
+		}
+	})
+}
+
+// diverge prints a '??' right-side control-flow escape.
+func (p *printer) diverge(n *ast.Diverge) {
+	switch n.Kw {
+	case token.Break:
+		p.write("break")
+	case token.Continue:
+		p.write("continue")
+	case token.Return:
+		p.write("return")
+		if n.Value != nil {
+			p.write(" ")
+			p.expr(n.Value, precLowest)
+		}
+	case token.Raise:
+		p.write("raise ")
+		p.expr(n.Value, precLowest)
+		if n.From != nil {
+			p.write(" from ")
+			p.expr(n.From, precLowest)
+		}
+	}
+}
+
+// mapLit prints a map literal, or the empty map '{:}'.
+func (p *printer) mapLit(n *ast.MapLit) {
+	if len(n.Entries) == 0 {
+		p.write("{:}")
+		return
+	}
+	p.write("{")
+	for i, e := range n.Entries {
+		if i > 0 {
+			p.write(", ")
+		}
+		p.expr(e.Key, precLowest)
+		p.write(": ")
+		p.expr(e.Value, precLowest)
+	}
+	p.write("}")
+}
+
+// fnExpr prints a closure 'fn(params) -> ret? { body }'.
+func (p *printer) fnExpr(n *ast.FnExpr) {
+	p.write("fn(")
+	for i := range n.Params {
+		if i > 0 {
+			p.write(", ")
+		}
+		p.closureParam(&n.Params[i])
+	}
+	p.write(")")
+	if n.Ret != nil {
+		p.write(" -> ")
+		p.typ(n.Ret)
+	}
+	p.write(" ")
+	p.block(n.Body)
+}
+
+func (p *printer) closureParam(cp *ast.ClosureParam) {
+	if cp.Ref {
+		p.write("mut &")
+	}
+	p.write(cp.Name)
+	if cp.Type != nil {
+		p.write(": ")
+		p.typ(cp.Type)
+	}
+	if cp.Default != nil {
+		p.write(" = ")
+		p.expr(cp.Default, precLowest)
 	}
 }
 
@@ -335,7 +607,7 @@ func (p *printer) binary(n *ast.Binary, prec int) {
 
 func (p *printer) match(n *ast.MatchExpr) {
 	p.write("match ")
-	p.expr(n.Subject, precLowest)
+	p.head(n.Subject)
 	p.write(" {")
 	p.nl()
 	p.indent++

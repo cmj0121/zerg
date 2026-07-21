@@ -45,29 +45,43 @@ type File struct {
 	End   []token.Trivia
 }
 
-// TypeRef names a type in source (Phase 0: a bare built-in name like int/float).
+// TypeRef names a type in source: a type-name with optional type arguments
+// ('list[int]') and an optional associated-type projection chain ('I.Item.Sub',
+// GRAMMAR group 7's base-type). It is the named form of a Type; the composite
+// forms (tuple/array/chan/fn/ptr) and the optional wrapper live in u5.go.
 type TypeRef struct {
 	base
 	Name string
+	Args []Type   // type arguments 'list[int]', 'Matrix[3, 4]'; nil when none
+	Proj []string // associated-type projection segments after '.'; nil when none
 }
 
-// Param is one function parameter.
+// Param is one function parameter. Ref marks the 'mut &x' mutable-reference form
+// (GRAMMAR group 5); a nil Default means the parameter has no default value.
 type Param struct {
 	base
-	Name string
-	Type *TypeRef
+	Ref     bool // 'mut &x' — passed by mutable reference
+	Name    string
+	Type    Type
+	Default Expr
 }
 
-// FuncDecl is a top-level function declaration. A nil Ret means the function
-// returns nil (no '-> type').
+// FuncDecl is a function declaration — top level, or a method / associated
+// function of a spec or impl. A nil Ret means the function returns nil (no
+// '-> type'); a nil Generics means it is not generic; Decorators carries any
+// '#[...]' prefix (GRAMMAR group 7's decorated-decl).
 type FuncDecl struct {
 	base
-	Pub     bool // 'pub fn' — the visibility keyword the surface carried
-	Name    string
-	NameEnd token.Pos // end of the name, for signature diagnostics
-	Params  []Param
-	Ret     *TypeRef
-	Body    *Block
+	Decorators []*Decorator
+	Pub        bool // 'pub fn' — the visibility keyword the surface carried
+	Unsafe     bool // 'unsafe fn' — the function is unsafe throughout (group 5/12)
+	Mut        bool // 'mut fn' — a method that mutates its receiver (group 5)
+	Name       string
+	NameEnd    token.Pos // end of the name, for signature diagnostics
+	Generics   *Generics // '[T: Bound, N: int]'; nil when non-generic
+	Params     []Param
+	Ret        Type
+	Body       *Block
 }
 
 // Block is a brace-delimited statement list. End holds any dangling trivia
@@ -90,14 +104,7 @@ type BindStmt struct {
 	Mut   bool
 	Const bool
 	Name  string
-	Type  *TypeRef
-	Value Expr
-}
-
-// AssignStmt reassigns an existing name: 'x = e' (Phase 0 targets a bare name).
-type AssignStmt struct {
-	base
-	Name  string
+	Type  Type
 	Value Expr
 }
 
@@ -160,10 +167,14 @@ type IntLit struct {
 	Text  string
 }
 
-// FloatLit is a floating-point literal.
+// FloatLit is a floating-point literal. Value is the decoded number sema and emit
+// use; Text is the author's original lexeme (exponent form and '_' grouping
+// intact) so 'zerg fmt' reprints '1.5e3'/'1_000.5' verbatim instead of rewriting
+// them to a canonical float (the same surface-preservation lesson as IntLit).
 type FloatLit struct {
 	base
 	Value float64
+	Text  string
 }
 
 // BoolLit is 'true' or 'false'.
@@ -201,11 +212,19 @@ type Binary struct {
 	L, R Expr
 }
 
-// Call applies a callee to positional arguments (Phase 0: callee is a name).
+// Call applies a callee to arguments. Each Arg is positional or named
+// ('name: value'); GRAMMAR group 5 requires the positional arguments to precede
+// the named ones.
 type Call struct {
 	base
 	Callee Expr
-	Args   []Expr
+	Args   []Arg
+}
+
+// Arg is one call argument: positional (Name empty) or named 'Name: Value'.
+type Arg struct {
+	Name  string // "" for a positional argument
+	Value Expr
 }
 
 // MatchExpr matches a subject against arms in order, yielding the first fit's
@@ -251,7 +270,6 @@ func (*File) node() {}
 
 func (*NopStmt) node()      {}
 func (*BindStmt) node()     {}
-func (*AssignStmt) node()   {}
 func (*PrintStmt) node()    {}
 func (*ReturnStmt) node()   {}
 func (*BreakStmt) node()    {}
@@ -280,7 +298,6 @@ func (*FuncDecl) declNode() {}
 
 func (*NopStmt) stmtNode()      {}
 func (*BindStmt) stmtNode()     {}
-func (*AssignStmt) stmtNode()   {}
 func (*PrintStmt) stmtNode()    {}
 func (*ReturnStmt) stmtNode()   {}
 func (*BreakStmt) stmtNode()    {}

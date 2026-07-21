@@ -7,7 +7,6 @@ package ast
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
@@ -77,16 +76,108 @@ func (d *dumper) node(n Node) {
 		d.close()
 	case *FuncDecl:
 		d.open("FuncDecl", v)
-		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t unsafe=%t mut=%t %q", v.Pub, v.Unsafe, v.Mut, v.Name)
+		d.generics(v.Generics)
 		for i := range v.Params {
-			p := &v.Params[i]
-			d.printf(" (Param %q ", p.Name)
-			d.typeRef(p.Type)
-			d.printf(")")
+			d.param(&v.Params[i])
 		}
 		d.printf(" ret=")
-		d.typeRef(v.Ret)
+		d.typ(v.Ret)
 		d.node(v.Body)
+		d.close()
+	case *StructDecl:
+		d.open("StructDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		for _, f := range v.Fields {
+			d.field(f)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *EnumDecl:
+		d.open("EnumDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		for _, vr := range v.Variants {
+			d.variant(vr)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *TypeDecl:
+		d.open("TypeDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		d.printf(" alias=")
+		d.typ(v.Alias)
+		d.close()
+	case *SpecDecl:
+		d.open("SpecDecl", v)
+		d.decorators(v.Decorators)
+		d.printf(" pub=%t %q", v.Pub, v.Name)
+		d.generics(v.Generics)
+		if v.Super != nil {
+			d.printf(" super=")
+			d.bound(v.Super)
+		}
+		for _, m := range v.Members {
+			d.node(m)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *ImplDecl:
+		d.open("ImplDecl", v)
+		d.decorators(v.Decorators)
+		d.generics(v.Generics)
+		d.printf(" spec=")
+		d.typ(v.Spec)
+		d.printf(" target=")
+		d.typ(v.Target)
+		for _, it := range v.Items {
+			d.node(it)
+		}
+		d.trivia("end", v.End)
+		d.close()
+	case *InitDecl:
+		d.open("InitDecl", v)
+		d.decorators(v.Decorators)
+		d.node(v.Body)
+		d.close()
+	case *FnSig:
+		d.open("FnSig", v)
+		d.printf(" unsafe=%t mut=%t %q", v.Unsafe, v.Mut, v.Name)
+		d.generics(v.Generics)
+		for i := range v.Params {
+			d.param(&v.Params[i])
+		}
+		d.printf(" ret=")
+		d.typ(v.Ret)
+		d.close()
+	case *AssocType:
+		d.open("AssocType", v)
+		d.printf(" %q", v.Name)
+		if v.Bound != nil {
+			d.printf(" bound=")
+			d.bound(v.Bound)
+		}
+		d.close()
+	case *AssocVal:
+		d.open("AssocVal", v)
+		d.printf(" %q ", v.Name)
+		d.typ(v.Type)
+		d.close()
+	case *AssocBind:
+		d.open("AssocBind", v)
+		d.printf(" %q ", v.Name)
+		d.typ(v.Type)
+		d.close()
+	case *ValBind:
+		d.open("ValBind", v)
+		d.printf(" %q ", v.Name)
+		d.constExpr(v.Value)
 		d.close()
 	case *Block:
 		d.open("Block", v)
@@ -101,12 +192,12 @@ func (d *dumper) node(n Node) {
 	case *BindStmt:
 		d.open("Bind", v)
 		d.printf(" mut=%t const=%t %q ", v.Mut, v.Const, v.Name)
-		d.typeRef(v.Type)
+		d.typ(v.Type)
 		d.expr(v.Value)
 		d.close()
-	case *AssignStmt:
-		d.open("Assign", v)
-		d.printf(" %q", v.Name)
+	case *Reassign:
+		d.open("Reassign", v)
+		d.target(v.Target)
 		d.expr(v.Value)
 		d.close()
 	case *PrintStmt:
@@ -152,7 +243,7 @@ func (d *dumper) node(n Node) {
 		d.close()
 	case *FloatLit:
 		d.open("Float", v)
-		d.printf(" %s", strconv.FormatFloat(v.Value, 'g', -1, 64))
+		d.printf(" %q", v.Text) // compare the surface lexeme so a base/grouping change is caught
 		d.close()
 	case *BoolLit:
 		d.open("Bool", v)
@@ -184,7 +275,9 @@ func (d *dumper) node(n Node) {
 		d.open("Call", v)
 		d.expr(v.Callee)
 		for _, a := range v.Args {
-			d.expr(a)
+			d.printf("(Arg %q", a.Name)
+			d.expr(a.Value)
+			d.printf(")")
 		}
 		d.close()
 	case *MatchExpr:
@@ -213,8 +306,315 @@ func (d *dumper) node(n Node) {
 	case *WildPattern:
 		d.open("WildPat", v)
 		d.close()
+	case *RuneLit:
+		d.open("Rune", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *ByteLit:
+		d.open("Byte", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *RawStrLit:
+		d.open("RawStr", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *CmdLit:
+		d.open("Cmd", v)
+		d.printf(" %q", v.Text)
+		d.close()
+	case *Range:
+		d.open("Range", v)
+		d.printf(" inclusive=%t", v.Inclusive)
+		d.expr(v.Lo)
+		d.expr(v.Hi)
+		d.close()
+	case *IsExpr:
+		d.open("Is", v)
+		d.printf(" %q", v.TypeName)
+		d.expr(v.X)
+		d.close()
+	case *Coalesce:
+		d.open("Coalesce", v)
+		d.expr(v.X)
+		d.expr(v.Y)
+		d.close()
+	case *Diverge:
+		d.open("Diverge", v)
+		d.printf(" %q", v.Kw.String())
+		d.expr(v.Value)
+		d.expr(v.From)
+		d.close()
+	case *Try:
+		d.open("Try", v)
+		d.expr(v.X)
+		d.close()
+	case *Force:
+		d.open("Force", v)
+		d.expr(v.X)
+		d.close()
+	case *OptChain:
+		d.open("OptChain", v)
+		d.printf(" %q", v.Name)
+		d.expr(v.X)
+		d.close()
+	case *Recv:
+		d.open("Recv", v)
+		d.expr(v.X)
+		d.close()
+	case *Field:
+		d.open("Field", v)
+		d.printf(" %q", v.Name)
+		d.expr(v.X)
+		d.close()
+	case *TupleIndex:
+		d.open("TupleIndex", v)
+		d.printf(" %d %q", v.Index, v.Text)
+		d.expr(v.X)
+		d.close()
+	case *Bracket:
+		d.open("Bracket", v)
+		d.printf(" comma=%t", v.Comma)
+		d.expr(v.Base)
+		for _, e := range v.Elems {
+			d.expr(e)
+		}
+		d.close()
+	case *TupleLit:
+		d.open("TupleLit", v)
+		for _, e := range v.Elems {
+			d.expr(e)
+		}
+		d.close()
+	case *ListLit:
+		d.open("ListLit", v)
+		for _, e := range v.Elems {
+			d.expr(e)
+		}
+		d.close()
+	case *ListFill:
+		d.open("ListFill", v)
+		d.expr(v.Value)
+		d.expr(v.Count)
+		d.close()
+	case *MapLit:
+		d.open("MapLit", v)
+		for _, e := range v.Entries {
+			d.printf("(Entry")
+			d.expr(e.Key)
+			d.expr(e.Value)
+			d.printf(")")
+		}
+		d.close()
+	case *FStr:
+		d.open("FStr", v)
+		d.fstrParts(v.Parts)
+		d.close()
+	case *FCmd:
+		d.open("FCmd", v)
+		d.fstrParts(v.Parts)
+		d.close()
+	case *FnExpr:
+		d.open("FnExpr", v)
+		for i := range v.Params {
+			cp := &v.Params[i]
+			d.printf(" (CParam ref=%t %q ", cp.Ref, cp.Name)
+			d.typ(cp.Type)
+			d.expr(cp.Default)
+			d.printf(")")
+		}
+		d.printf(" ret=")
+		d.typ(v.Ret)
+		d.node(v.Body)
+		d.close()
+	case *LValueTarget:
+		d.open("LValueTarget", v)
+		d.expr(v.X)
+		d.close()
+	case *TupleTarget:
+		d.open("TupleTarget", v)
+		for _, e := range v.Elems {
+			d.target(e)
+		}
+		d.close()
+	case *StructTarget:
+		d.open("StructTarget", v)
+		d.printf(" %q rest=%t", v.TypeName, v.Rest)
+		for _, f := range v.Fields {
+			d.printf("(FTarget %q", f.Name)
+			d.target(f.Target)
+			d.printf(")")
+		}
+		d.close()
 	default:
 		d.printf("(unknown %T)", n)
+	}
+}
+
+// param dumps one function parameter with its 'mut &' flag and default.
+func (d *dumper) param(p *Param) {
+	d.printf(" (Param ref=%t %q ", p.Ref, p.Name)
+	d.typ(p.Type)
+	d.expr(p.Default)
+	d.printf(")")
+}
+
+// decorators dumps a declaration's decorator prefix.
+func (d *dumper) decorators(ds []*Decorator) {
+	for _, dec := range ds {
+		d.printf("(Deco")
+		for _, it := range dec.Items {
+			d.printf("(Item %q", it.Name)
+			for _, a := range it.Args {
+				d.constExpr(a)
+			}
+			d.printf(")")
+		}
+		d.printf(")")
+	}
+}
+
+// generics dumps a generic parameter list, tolerating a nil (non-generic).
+func (d *dumper) generics(g *Generics) {
+	if g == nil {
+		return
+	}
+	d.printf(" (Generics")
+	for _, tp := range g.Params {
+		d.printf("(TP %q", tp.Name)
+		if tp.Bound != nil {
+			d.bound(tp.Bound)
+		}
+		d.printf(")")
+	}
+	d.printf(")")
+}
+
+// bound dumps a spec conjunction.
+func (d *dumper) bound(b *Bound) {
+	d.printf("(Bound")
+	for _, n := range b.Names {
+		d.printf(" %q", n)
+	}
+	d.printf(")")
+}
+
+// field dumps one struct field with its trivia.
+func (d *dumper) field(f *StructField) {
+	d.printf("(Field")
+	d.trivia("lead", f.Lead())
+	d.trivia("trail", f.Trail())
+	d.printf(" pub=%t %q ", f.Pub, f.Name)
+	d.typ(f.Type)
+	d.expr(f.Default)
+	d.printf(")")
+}
+
+// variant dumps one enum variant with its trivia.
+func (d *dumper) variant(v *Variant) {
+	d.printf("(Variant")
+	d.trivia("lead", v.Lead())
+	d.trivia("trail", v.Trail())
+	d.printf(" %q", v.Name)
+	for _, t := range v.Payload {
+		d.typ(t)
+	}
+	if v.Discr != nil {
+		d.printf(" discr=")
+		d.constExpr(v.Discr)
+	}
+	d.printf(")")
+}
+
+// constExpr dumps a const-expr wrapper, tolerating a nil.
+func (d *dumper) constExpr(c *ConstExpr) {
+	if c == nil {
+		d.printf("(nil)")
+		return
+	}
+	d.printf("(Const")
+	d.expr(c.X)
+	d.printf(")")
+}
+
+// typ dumps a type expression, tolerating a nil optional (an absent return type).
+func (d *dumper) typ(t Type) {
+	if t == nil {
+		d.printf("(nil)")
+		return
+	}
+	switch v := t.(type) {
+	case *TypeRef:
+		d.printf("(Type %q", v.Name)
+		for _, a := range v.Args {
+			d.typ(a)
+		}
+		for _, seg := range v.Proj {
+			d.printf(" .%s", seg)
+		}
+		d.printf(")")
+	case *OptType:
+		d.printf("(Opt")
+		d.typ(v.Elem)
+		d.printf(")")
+	case *TupleType:
+		d.printf("(TupleType")
+		for _, e := range v.Elems {
+			d.typ(e)
+		}
+		d.printf(")")
+	case *ArrayType:
+		d.printf("(ArrayType")
+		d.typ(v.Elem)
+		d.constExpr(v.Count)
+		d.printf(")")
+	case *ChanType:
+		d.printf("(ChanType dir=%d", v.Dir)
+		d.typ(v.Elem)
+		d.printf(")")
+	case *FnType:
+		d.printf("(FnType unsafe=%t", v.Unsafe)
+		for i := range v.Params {
+			pt := &v.Params[i]
+			d.printf(" (PType ref=%t ", pt.Ref)
+			d.typ(pt.Type)
+			d.printf(")")
+		}
+		d.printf(" ret=")
+		d.typ(v.Ret)
+		d.printf(")")
+	case *PtrType:
+		d.printf("(PtrType")
+		if v.Elem != nil {
+			d.typ(v.Elem)
+		}
+		d.printf(")")
+	case *ConstExpr:
+		d.constExpr(v)
+	default:
+		d.printf("(unknown-type %T)", t)
+	}
+}
+
+// target dumps an assignment target, tolerating a nil (a struct-field shorthand).
+func (d *dumper) target(t AssignTarget) {
+	if t == nil {
+		d.printf("(nil)")
+		return
+	}
+	d.node(t)
+}
+
+// fstrParts dumps the parts of an f-string or f-cmd.
+func (d *dumper) fstrParts(parts []FStrPart) {
+	for i := range parts {
+		p := &parts[i]
+		if p.Expr == nil {
+			d.printf("(Text %q)", p.Text)
+			continue
+		}
+		d.printf("(Hole debug=%t conv=%d spec=%q,%t", p.Debug, p.Conv, p.Spec, p.HasSpec)
+		d.expr(p.Expr)
+		d.printf(")")
 	}
 }
 
@@ -226,12 +626,4 @@ func (d *dumper) expr(e Expr) {
 		return
 	}
 	d.node(e)
-}
-
-func (d *dumper) typeRef(t *TypeRef) {
-	if t == nil {
-		d.printf("(nil)")
-		return
-	}
-	d.printf("(Type %q)", t.Name)
 }

@@ -69,9 +69,9 @@ func TestCanonicalForm(t *testing.T) {
 			want: "fn f(n: int) -> int {\n\treturn if n < 0\n\treturn n if n > 10\n\treturn 0\n}\n",
 		},
 		{
-			name: "float stays float",
+			name: "float surface preserved verbatim",
 			src:  "fn main() {\n\tprint 2.0\n\tprint 6.022e23\n}",
-			want: "fn main() {\n\tprint 2.0\n\tprint 6.022e+23\n}\n",
+			want: "fn main() {\n\tprint 2.0\n\tprint 6.022e23\n}\n",
 		},
 		{
 			name: "integer base and grouping preserved",
@@ -165,6 +165,19 @@ func TestIntegerBasesVerbatim(t *testing.T) {
 		out := mustRoundTrip(t, src)
 		if !strings.Contains(out, lexeme) {
 			t.Errorf("integer literal %q was not reprinted verbatim:\n%s", lexeme, out)
+		}
+	}
+}
+
+// TestFloatSurfaceVerbatim pins the float-literal surface: a formatter must never
+// rewrite the author's exponent form or '_' grouping to a canonical float (the
+// same source-preservation rule as integer bases).
+func TestFloatSurfaceVerbatim(t *testing.T) {
+	for _, lexeme := range []string{"1.5e3", "1_000.5", "1e10", "100000000.0", "6.022e23", "3.14"} {
+		src := "fn main() {\n\tprint " + lexeme + "\n}"
+		out := mustRoundTrip(t, src)
+		if !strings.Contains(out, lexeme) {
+			t.Errorf("float literal %q was not reprinted verbatim:\n%s", lexeme, out)
 		}
 	}
 }

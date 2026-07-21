@@ -59,8 +59,8 @@ func TestRunReadError(t *testing.T) {
 }
 
 func TestRunTokensDiagnostic(t *testing.T) {
-	// an unsupported construct makes the lexer report a diagnostic.
-	if code := run(&CLI{File: writeSrc(t, "fn f() { x := `ls` }"), Emit: "tokens"}); code != 1 {
+	// a malformed literal makes the lexer report a diagnostic.
+	if code := run(&CLI{File: writeSrc(t, "fn f() { x := 0xZZ }"), Emit: "tokens"}); code != 1 {
 		t.Errorf("tokens dump with diagnostic = %d, want 1", code)
 	}
 }

@@ -7,9 +7,15 @@ NVIM_SRC    := $(CURDIR)/nvim
 NVIM_CONFIG := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/nvim
 NVIM_DIRS   := ftdetect ftplugin syntax
 
-.PHONY: all clean install uninstall
+.PHONY: all clean build test run install uninstall
 
 all:				# default action (nothing to build)
+
+build:				# (no-op) editor integrations need no build
+
+test:				# (no-op) editor integrations have no tests
+
+run:				# (no-op)
 
 clean:				# clean-up environment (nothing to clean)
 

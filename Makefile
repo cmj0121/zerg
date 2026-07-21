@@ -1,4 +1,4 @@
-SUBDIR := editors
+SUBDIR := editors src/bootstrap
 
 .PHONY: all clean test run build install uninstall upgrade help $(SUBDIR)
 
@@ -9,11 +9,11 @@ all: $(SUBDIR) 		# default action
 clean: $(SUBDIR)	# clean-up environment
 	@find . -name '*.sw[po]' -delete
 
-test:				# run test
+test: $(SUBDIR)		# run test
 
-run:				# run in the local environment
+run: $(SUBDIR)		# run in the local environment
 
-build:				# build the binary/library
+build: $(SUBDIR)	# build the binary/library
 
 install: $(SUBDIR)	# install editor integrations (nvim syntax) locally
 

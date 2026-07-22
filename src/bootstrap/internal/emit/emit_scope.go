@@ -202,17 +202,28 @@ func (e *emitter) withStmt(n *ast.WithStmt) {
 
 // --- raise --------------------------------------------------------------------
 
-// raiseStmt lowers `raise e` (GRAMMAR group 8) to the runtime abort exit: it unwinds
-// the cleanup stack to the nearest handler (running every pending defer/drop) and
-// longjmps there. A string operand becomes the abort message. The full Result/`from`
-// cause bridging is a later phase; 1d only needs the abort exit so `defer` and drops
-// are observed to run on the abort path.
+// raiseStmt lowers `raise e (from c)` (GRAMMAR group 8) to the Err-carrying abort
+// exit (Decision D): it unwinds the cleanup stack to the nearest handler (running
+// every pending defer/drop) and longjmps there, carrying a zrt_err VALUE so a
+// surrounding `guard`/`?` recovers the actual error, not just a message. A string
+// operand becomes the Err message; `from c` records c's message as the cause. A
+// non-string operand carries a placeholder message for the MVP (a per-type
+// display() is a later iteration).
 func (e *emitter) raiseStmt(n *ast.RaiseStmt) {
-	msg := "\"raise\""
-	if s, ok := n.Value.(*ast.StrLit); ok {
-		msg = cString(s.Value)
+	err := fmt.Sprintf("zrt_err_new(%s)", e.errMessage(n.Value))
+	if n.From != nil {
+		err = fmt.Sprintf("zrt_err_with_cause(%s, zrt_err_new(%s))", e.errMessage(n.Value), e.errMessage(n.From))
 	}
-	e.line(fmt.Sprintf("zrt_abort(%s);", msg))
+	e.line(fmt.Sprintf("zrt_raise_err(%s);", err))
+}
+
+// errMessage renders the C string message for a raised value: a string literal
+// verbatim, any other expression a placeholder (its display() is a later iteration).
+func (e *emitter) errMessage(x ast.Expr) string {
+	if s, ok := x.(*ast.StrLit); ok {
+		return cString(s.Value)
+	}
+	return "\"raise\""
 }
 
 // --- defer --------------------------------------------------------------------

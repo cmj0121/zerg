@@ -159,18 +159,6 @@ func (e *emitter) recvExpr(n *ast.Recv) string {
 	return fmt.Sprintf("zg_chanrecv_%d(%s)", idx, e.expr(n.X))
 }
 
-// forceExpr lowers `e!` when e is a channel receive's Result[T]: it unwraps the Left
-// value, aborting on a Right (a closed/crashed channel). A `!` on any other value is
-// outside slice C2 and lowers to the operand unchanged (no example uses it).
-func (e *emitter) forceExpr(n *ast.Force) string {
-	if ei, ok := e.cur.ExprType(e.info, n.X).(*types.Either); ok {
-		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
-			return fmt.Sprintf("zg_force_%d(%s)", idx, e.expr(n.X))
-		}
-	}
-	return e.expr(n.X)
-}
-
 // selectStmt lowers `select { arm+ }` (GRAMMAR group 9). It evaluates every recv/send
 // arm's channel (and a send arm's value) into a case-descriptor array, calls zrt_select
 // once to pick and perform a ready arm fairly (or park on all of them until one is), and

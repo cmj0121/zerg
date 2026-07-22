@@ -82,16 +82,33 @@ void zrt_unwind_to(size_t mark) {
 void zrt_handler_push(zrt_frame *frame) {
 	frame->mark = g_tls.len;
 	frame->prev = g_tls.handler;
+	frame->catches = false;
 	g_tls.handler = frame;
+}
+
+void zrt_handler_push_catch(zrt_frame *frame) {
+	zrt_handler_push(frame);
+	frame->catches = true;
 }
 
 void zrt_handler_pop(zrt_frame *frame) {
 	g_tls.handler = frame->prev;
 }
 
-_Noreturn void zrt_abort(const char *msg) {
-	zrt_report(msg);
+/* zrt_unwind_abort is the shared abort core: report the message, then unwind to the
+ * innermost handler and longjmp (or exit when none). Both the string zrt_abort and
+ * the Err-carrying zrt_raise_err funnel through it; the only difference is whether
+ * an Err value was stashed in g_tls.taken first (Decision D). */
+static _Noreturn void zrt_unwind_abort(const char *msg) {
 	zrt_frame *h = g_tls.handler;
+	/* A `guard` handler demotes this abort to a Result value, so it is not an error
+	 * the program failed to handle: land on it WITHOUT reporting the message (the Err
+	 * value carries it). Only a reporting handler (or none) prints the diagnostic. */
+	if (h != NULL && h->catches) {
+		zrt_unwind_to(h->mark);
+		longjmp(h->buf, 1);
+	}
+	zrt_report(msg);
 	if (h != NULL) {
 		/* An unhandled coroutine crash unwinds to the coroutine's outermost handler
 		 * (the trampoline's, whose prev is NULL); mark it so the sender releases run
@@ -106,4 +123,35 @@ _Noreturn void zrt_abort(const char *msg) {
 	 * scheduler every coroutine installs a bottom handler in its trampoline, so a
 	 * handler-less coroutine abort is contained there rather than reaching this. */
 	exit(1);
+}
+
+_Noreturn void zrt_abort(const char *msg) {
+	/* A string abort still stashes an Err so a surrounding `guard` recovers a value
+	 * (with the message) rather than nothing; behaviour is otherwise unchanged. */
+	g_tls.taken = zrt_err_new(msg);
+	zrt_unwind_abort(msg);
+}
+
+zrt_err zrt_err_new(const char *msg) {
+	zrt_err e;
+	e.msg = msg;
+	e.cause = NULL;
+	return e;
+}
+
+zrt_err zrt_err_with_cause(const char *msg, zrt_err cause) {
+	zrt_err e;
+	e.msg = msg;
+	e.cause = (zrt_err *)zrt_alloc(sizeof(zrt_err));
+	*e.cause = cause;
+	return e;
+}
+
+_Noreturn void zrt_raise_err(zrt_err e) {
+	g_tls.taken = e;
+	zrt_unwind_abort(e.msg);
+}
+
+zrt_err zrt_taken_err(void) {
+	return g_tls.taken;
 }

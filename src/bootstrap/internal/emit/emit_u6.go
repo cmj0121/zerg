@@ -119,7 +119,7 @@ func (e *emitter) dynFunction(inst *mono.Instance) {
 	}
 	e.popScope()
 	if inst.Ret != types.Nil && !endsWithReturn(inst.Origin.Body) {
-		e.line("return " + zeroValue(inst.Ret) + ";")
+		e.line("return " + e.zeroValueC(inst.Ret) + ";")
 	}
 	e.indent--
 	e.line("}")
@@ -148,7 +148,7 @@ func (e *emitter) methodFunction(inst *mono.Instance) {
 	}
 	e.popScope()
 	if inst.Ret != types.Nil && !endsWithReturn(inst.Origin.Body) {
-		e.line("return " + zeroValue(inst.Ret) + ";")
+		e.line("return " + e.zeroValueC(inst.Ret) + ";")
 	}
 	e.indent--
 	e.line("}")

@@ -36,3 +36,10 @@ func leftType(t Type) (Type, bool) {
 	}
 	return nil, false
 }
+
+// isOptional reports whether t is a 'T?' optional (as opposed to an Either/Result),
+// the shape whose empty case is written 'nil'.
+func isOptional(t Type) bool {
+	_, ok := t.(*types.Opt)
+	return ok
+}

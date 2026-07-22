@@ -482,6 +482,19 @@ func (c *checker) assignable(want Type, e ast.Expr, vt Type) bool {
 		c.info.ExprTypes[e] = want
 		return true
 	}
+	// Context-typed Ok/Left construction: a value of type T widens implicitly to a
+	// Result[T] / Either[T, _] (its Left/Ok) or a T? optional (its present case),
+	// and `nil` widens to the empty case of a T? or a Result[nil]. This is what lets
+	// `fn f() -> Result[int] { return 5 }` and `return nil` in a Result[nil] read as
+	// the wrapped value; the emitter builds the carrier from the recorded value type.
+	if lt, wrap := leftType(want); wrap {
+		if vt == Nil && (isOptional(want) || bad(lt) || lt == Nil) {
+			return true
+		}
+		if !bad(vt) && c.assignable(lt, e, vt) {
+			return true
+		}
+	}
 	// A bidirectional channel narrows implicitly to a receive-only or send-only handle
 	// of the same element type (GRAMMAR group 9: 'chan[T]' narrows to '<-chan[T]' /
 	// 'chan[T]<-'). Directional narrowing is what lets a program hand a send-capable copy

@@ -138,6 +138,10 @@ func (e *emitter) prepareRuntime() {
 	// Number the channel receive element types and detect channel-handle drops, so the
 	// Result[T] carriers and drop thunks are ready before any body is emitted.
 	e.prepareChannels()
+	// Number the general Result/Either/optional carriers (Phase 1f U0), after the
+	// channel prepass so a channel recv's Result[T] keeps its own carrier and is not
+	// double-registered. Sets needsResult/needsRuntime only when a carrier is found.
+	e.prepareResults()
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}
@@ -362,6 +366,9 @@ func (e *emitter) emitRefHelpers() {
 	e.emitDeferHelpers()
 	e.emitSpawnHelpers()
 	e.emitChanHelpers()
+	// Result/Either/optional force helpers (Phase 1f U0); emits nothing when the
+	// program registered no carrier.
+	e.emitResultHelpers()
 }
 
 // programHasRefLocal reports whether the program binds a bare Ref[T] to a name (a

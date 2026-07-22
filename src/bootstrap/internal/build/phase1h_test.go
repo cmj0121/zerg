@@ -204,3 +204,110 @@ func TestPtrTypeInSignatureIsSafe(t *testing.T) {
 		t.Fatalf("a ptr type in a signature should be safe, got diagnostics: %v", diags)
 	}
 }
+
+// TestMutGlobalAccessGating is the M1 trust-boundary fix: touching a module-level
+// mutable global (a `mut` inside an unsafe group) is shared-state mutation, so both
+// READING and WRITING it from safe code is rejected — while the group's own unsafe fn
+// and an `unsafe { }` block may freely touch it.
+func TestMutGlobalAccessGating(t *testing.T) {
+	rejected := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "write-from-safe",
+			src:  "unsafe {\n\tmut counter: int = 0\n}\nfn tick() {\n\tcounter = counter + 1\n}\nfn main() { print 0 }\n",
+		},
+		{
+			name: "read-from-safe",
+			src:  "unsafe {\n\tmut counter: int = 0\n}\nfn main() {\n\tprint counter\n}\n",
+		},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, diags := Compile(tc.src)
+			if len(diags) == 0 {
+				t.Fatalf("%s: accessing a mutable global from safe code should be rejected", tc.name)
+			}
+		})
+	}
+
+	// From an unsafe-group fn and an `unsafe { }` block, the same global is readable and
+	// writable, and the write persists across calls.
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	src := "unsafe {\n" +
+		"\tmut counter: int = 0\n" +
+		"\tfn tick() {\n\t\tcounter = counter + 1\n\t}\n" +
+		"}\n" +
+		"fn main() {\n" +
+		"\tunsafe {\n\t\ttick()\n\t\ttick()\n\t\tprint counter\n\t}\n" +
+		"}\n"
+	code, _, diags := Compile(src)
+	if len(diags) != 0 {
+		t.Fatalf("mutable global access from unsafe should be allowed, got: %v", diags)
+	}
+	if got := compileAndRun(t, cc, code); got != "2\n" {
+		t.Fatalf("mutable global from unsafe: got %q, want %q", got, "2\n")
+	}
+}
+
+// TestPtrStoreTypeMismatch is the M2 fix: `p.store(v)` must enforce the value type
+// against the pointee, so storing a float through a `ptr[int]` is rejected rather
+// than silently truncated; a matching store still compiles.
+func TestPtrStoreTypeMismatch(t *testing.T) {
+	bad := "fn main() {\n\tunsafe {\n\t\tx: int = 0\n\t\tp: ptr[int] = addr(x)\n\t\tp.store(3.5)\n\t}\n}\n"
+	_, _, diags := Compile(bad)
+	if len(diags) == 0 {
+		t.Fatalf("storing a float through a ptr[int] should be rejected")
+	}
+
+	ok := "fn main() {\n\tunsafe {\n\t\tx: int = 0\n\t\tp: ptr[int] = addr(x)\n\t\tp.store(9)\n\t\tprint p.load()\n\t}\n}\n"
+	_, _, diags = Compile(ok)
+	if len(diags) != 0 {
+		t.Fatalf("a matching store should compile, got: %v", diags)
+	}
+}
+
+// TestGenericCallInsideUnsafeBlock is the M3 fix: a generic call nested inside an
+// `unsafe { }` block-expression must be monomorphized (its instance enqueued and
+// emitted), so the call resolves to the mangled instance rather than an undeclared
+// name. It must compile and run.
+func TestGenericCallInsideUnsafeBlock(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	src := "fn id[T](v: T) -> T { return v }\n" +
+		"fn main() { unsafe { print id(42) } }\n"
+	code, _, diags := Compile(src)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if strings.Contains(code, "0(42)") || strings.Contains(code, "0((42") {
+		t.Fatalf("the generic call miscompiled to a literal 0 callee:\n%s", code)
+	}
+	if got := compileAndRun(t, cc, code); got != "42\n" {
+		t.Fatalf("generic call inside unsafe: got %q, want %q", got, "42\n")
+	}
+}
+
+// TestGenericCallInsideClosureEnqueued guards the M3 fix for a closure body: mono
+// must descend into an `*ast.FnExpr` so a generic call inside a closure enqueues its
+// instance. This asserts the instance is emitted (declared and defined); a closure's
+// full value lowering is a separate, pre-existing backend concern, so this checks the
+// monomorphization gap the fix closes rather than end-to-end linking.
+func TestGenericCallInsideClosureEnqueued(t *testing.T) {
+	src := "fn id[T](v: T) -> T { return v }\n" +
+		"fn apply(f: fn() -> int) -> int { return f() }\n" +
+		"fn main() {\n\tprint apply(fn() { return id(42) })\n}\n"
+	code, _, diags := Compile(src)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if !strings.Contains(code, "int64_t zgg_2_idi(int64_t zg_v)") {
+		t.Fatalf("the generic instance called inside the closure must be enqueued+emitted:\n%s", code)
+	}
+}

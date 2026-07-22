@@ -92,11 +92,68 @@ func TestEmbedHasNoStrayFiles(t *testing.T) {
 		return nil
 	})
 	for _, n := range names {
-		if !strings.HasSuffix(n, ".c") && !strings.HasSuffix(n, ".h") {
+		if !strings.HasSuffix(n, ".c") && !strings.HasSuffix(n, ".h") && !strings.HasSuffix(n, ".S") {
 			t.Errorf("unexpected embedded file %q", n)
 		}
 	}
 }
+
+// TestSchedulerCompilesAndRuns is the concurrency smoke: it links the core runtime
+// with the scheduler and the host's context switch, then drives zrt_spawn and the
+// nil-main entry shim. It asserts the spawned coroutine actually runs (on its own
+// stack) and that the run queue drains so fire-and-forget coroutines complete before
+// the program exits.
+func TestSchedulerCompilesAndRuns(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+
+	driver := filepath.Join(dir, "sched_smoke.c")
+	if err := os.WriteFile(driver, []byte(schedSmokeC), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, "sched_smoke.bin")
+	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+
+	out, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("scheduler smoke run failed: %v\n%s", err, out)
+	}
+	want := "main\nco-a\nco-b\n"
+	if string(out) != want {
+		t.Fatalf("scheduler smoke output = %q, want %q", out, want)
+	}
+}
+
+// schedSmokeC spawns two coroutines from a nil main, then returns; the scheduler
+// must still run both queued coroutines (fire-and-forget) before the program exits.
+const schedSmokeC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static void co_a(void *env) { (void)env; printf("co-a\n"); }
+static void co_b(void *env) { (void)env; printf("co-b\n"); }
+
+static void prog_main(void) {
+    printf("main\n");
+    zrt_spawn(co_a, NULL);
+    zrt_spawn(co_b, NULL);
+}
+
+int main(void) {
+    return zrt_sched_main_nil(prog_main);
+}
+`
 
 // smokeC drives the runtime through its three moving parts and prints one line
 // each so the Go test can assert observable behavior.

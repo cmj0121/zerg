@@ -23,7 +23,7 @@ func emitC(t *testing.T, src string) string {
 	if len(sdiags) != 0 {
 		t.Fatalf("sema errors: %v", sdiags)
 	}
-	code, ediags := Emit(mono.Build(file, info))
+	code, _, ediags := Emit(mono.Build(file, info))
 	if len(ediags) != 0 {
 		t.Fatalf("emit errors: %v", ediags)
 	}
@@ -59,7 +59,7 @@ func TestEmitMainReturnsInt(t *testing.T) {
 func TestNoMain(t *testing.T) {
 	file, _ := parser.Parse("fn helper() { nop }")
 	info, _ := sema.Check(file)
-	_, diags := Emit(mono.Build(file, info))
+	_, _, diags := Emit(mono.Build(file, info))
 	if len(diags) == 0 {
 		t.Fatalf("expected a diagnostic for a program with no main")
 	}

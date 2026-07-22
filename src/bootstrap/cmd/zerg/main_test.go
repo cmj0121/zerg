@@ -137,6 +137,28 @@ func TestRunBuildAndKeepC(t *testing.T) {
 	}
 }
 
+// TestRunBuildResultNilMainLinksRuntime is the end-to-end runtime path: a
+// 'fn main() -> Result[nil]' program has a non-empty Manifest, so the driver
+// materializes the embedded src/runtime tree and links it. The built binary runs
+// through the zrt_run entry shim and exits 0 on the Ok path.
+func TestRunBuildResultNilMainLinksRuntime(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skip("no C compiler")
+	}
+	out := filepath.Join(t.TempDir(), "prog")
+	src := writeSrc(t, "fn main() -> Result[nil] {\n  nop\n}")
+	if code := runBuild(&BuildCmd{File: src, Emit: "bin", CC: cc, Output: out}); code != 0 {
+		t.Fatalf("runtime-linked build run = %d, want 0", code)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("binary not produced: %v", err)
+	}
+	if err := exec.Command(out).Run(); err != nil {
+		t.Fatalf("runtime program should exit 0, got %v", err)
+	}
+}
+
 func TestRunBuildCCFailure(t *testing.T) {
 	// a non-existent C compiler makes linking fail.
 	src := writeSrc(t, "fn main() { print 1 }")

@@ -28,7 +28,7 @@ func TestExamplesNoSyntheticNames(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", zg, err)
 			}
-			code, diags := Compile(string(src))
+			code, _, diags := Compile(string(src))
 			if len(diags) != 0 {
 				t.Fatalf("%s should compile: %v", name, diags)
 			}
@@ -49,7 +49,7 @@ func runProgram(t *testing.T, src string) string {
 	if cc == "" {
 		t.Skip("no C compiler found")
 	}
-	code, diags := Compile(src)
+	code, _, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}

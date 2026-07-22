@@ -6,7 +6,7 @@ import (
 )
 
 func TestCompileSuccess(t *testing.T) {
-	code, diags := Compile("fn main() {\n  print 1 + 2\n}")
+	code, _, diags := Compile("fn main() {\n  print 1 + 2\n}")
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
@@ -16,7 +16,7 @@ func TestCompileSuccess(t *testing.T) {
 }
 
 func TestCompileStopsAtParseError(t *testing.T) {
-	code, diags := Compile("fn f( {")
+	code, _, diags := Compile("fn f( {")
 	if len(diags) == 0 {
 		t.Fatalf("expected a parse diagnostic")
 	}
@@ -26,7 +26,7 @@ func TestCompileStopsAtParseError(t *testing.T) {
 }
 
 func TestCompileStopsAtSemaError(t *testing.T) {
-	code, diags := Compile("fn main() { print undefined_name }")
+	code, _, diags := Compile("fn main() { print undefined_name }")
 	if len(diags) == 0 {
 		t.Fatalf("expected a sema diagnostic")
 	}

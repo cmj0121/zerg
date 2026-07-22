@@ -31,6 +31,13 @@ type Manifest struct {
 	// NeedsRuntime reports whether the emitted C includes "zergrt.h" and must be
 	// linked against the src/runtime tree.
 	NeedsRuntime bool
+
+	// Concurrency reports whether the program uses concurrency (a `spawn`, or a
+	// channel value/op). When set, the driver additionally links the scheduler and
+	// the per-arch context switch, and the entry runs main under the scheduler
+	// (zrt_sched_main). It implies NeedsRuntime. A non-concurrent program leaves it
+	// false, links nothing new, and stays byte-identical to the Phase 1d path.
+	Concurrency bool
 }
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -43,7 +50,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency}, nil
 }
 
 type emitter struct {
@@ -59,6 +66,15 @@ type emitter struct {
 	// zergrt.h" line and the returned Manifest. Value-only programs leave it
 	// false, so their emitted C is byte-identical to Phase 0.
 	needsRuntime bool
+
+	// concurrency is set when this program uses `spawn` or a channel (Phase 1e). It
+	// drives the returned Manifest's Concurrency flag (the driver then links the
+	// scheduler + context switch) and the scheduler entry in cMain, and implies
+	// needsRuntime. spawnIdx numbers each `spawn f(args)` site so it shares one
+	// generated env struct + trampoline (like deferIdx). Both empty/false for a
+	// non-concurrent program, which therefore stays byte-identical to Phase 1d.
+	concurrency bool
+	spawnIdx    map[*ast.SpawnStmt]int
 
 	// Ref[T] runtime state (Phase 1d iteration 2). refnewIdx numbers the distinct
 	// Ref construction element types so each gets a stable zg_refnew_<n> helper;
@@ -339,6 +355,18 @@ func (e *emitter) cMain(main *sema.FuncSig) {
 	e.line("int main(void) {")
 	e.indent++
 	switch {
+	case e.concurrency:
+		// A concurrent program runs main as the first coroutine under the scheduler
+		// (Fork-F), one entry per main return shape; the scheduler drains the run queue
+		// and maps main's outcome to the exit code.
+		switch {
+		case isResultNil(main.Ret):
+			e.line("return zrt_sched_main(zg_main);")
+		case main.Ret == sema.Int:
+			e.line("return zrt_sched_main_int(zg_main);")
+		default:
+			e.line("return zrt_sched_main_nil(zg_main);")
+		}
 	case isResultNil(main.Ret):
 		e.line("return zrt_run(zg_main);")
 	case main.Ret == sema.Int:
@@ -405,6 +433,8 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.delStmt(n)
 	case *ast.DeferStmt:
 		e.deferStmt(n)
+	case *ast.SpawnStmt:
+		e.spawnStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:

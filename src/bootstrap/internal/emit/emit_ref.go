@@ -128,6 +128,13 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
+	// Concurrency is the 1e gate: a program that uses `spawn` (or a channel) links the
+	// scheduler and runs main under it. It implies the runtime. A program with none of
+	// these leaves it false and links nothing new, so its C stays byte-identical.
+	if e.programUsesConcurrency() {
+		e.concurrency = true
+		e.needsRuntime = true
+	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}
@@ -343,6 +350,7 @@ func (e *emitter) emitRefHelpers() {
 		e.refnewHelper(elem)
 	}
 	e.emitDeferHelpers()
+	e.emitSpawnHelpers()
 }
 
 // programHasRefLocal reports whether the program binds a bare Ref[T] to a name (a

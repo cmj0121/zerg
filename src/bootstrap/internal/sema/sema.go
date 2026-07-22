@@ -535,6 +535,12 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		// every path. The operand is synthesized so its type overlay reaches the
 		// emitter, which schedules it on the runtime cleanup stack.
 		c.synth(n.Call)
+	case *ast.SpawnStmt:
+		// 'spawn f(args)' (GRAMMAR group 9) starts a fire-and-forget coroutine. The
+		// call is synthesized so its callee and argument types reach the emitter, which
+		// marshals the call into a coroutine entry; the spawn statement itself yields no
+		// value.
+		c.synth(n.Call)
 	case *ast.WithStmt:
 		c.checkWith(n)
 	}

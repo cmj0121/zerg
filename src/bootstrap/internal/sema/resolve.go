@@ -158,6 +158,17 @@ func (r *resolver) collectImport(n *ast.ImportStmt) {
 	}
 }
 
+// ModuleMember is the top-level name a bundled stdlib module's public member takes
+// after the bundle importer prefixes it with its namespace (Decision C, the single-
+// unit bundle MVP): `io.println` resolves to the merged function `io__println`. The
+// prefix keeps a bundled internal from leaking into the user's unqualified scope and
+// from colliding with a user or another module's name. A later phase's module graph
+// (1g) replaces the resolver, not this spelling.
+func ModuleMember(namespace, member string) string { return namespace + "__" + member }
+
+// moduleMember is the package-internal spelling of ModuleMember.
+func moduleMember(namespace, member string) string { return ModuleMember(namespace, member) }
+
 // importName is the binding an import spec introduces: its 'as' alias, else the
 // last '/'-separated segment of its path.
 func importName(spec *ast.ImportSpec) string {

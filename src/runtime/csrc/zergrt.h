@@ -184,8 +184,33 @@ zrt_err zrt_taken_err(void);
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just
- * abort-message output; real io is a later phase. */
+ * abort-message output; the stream primitives below are the io module's leaves. */
 void zrt_report(const char *msg);
+
+/* --- io streams (sys.c, Phase 1f) ---------------------------------------------
+ *
+ * The minimal byte-level standard-stream surface the stdlib `io` module lowers
+ * onto (through the compiler write intrinsics for now, the FFI binder later). The
+ * standard fds are 0=stdin, 1=stdout, 2=stderr. These ride in the always-linked
+ * sys.c, so a program that `import "io"` links them via NeedsRuntime; a program
+ * that never imports io never calls them. This is the one spot a freestanding
+ * backend swaps libc read/write for a platform console. */
+
+/* zrt_write writes up to n bytes of buf to fd, retrying short writes, and returns
+ * the total written or -1 on error (errno semantics). */
+long zrt_write(int fd, const uint8_t *buf, size_t n);
+
+/* zrt_read reads up to n bytes from fd into buf and returns the count (0 at end of
+ * input, never a blocking wait beyond one read) or -1 on error. */
+long zrt_read(int fd, uint8_t *buf, size_t n);
+
+/* zrt_write_str writes the NUL-terminated string s to fd (its strlen bytes); a NULL
+ * s writes nothing. Best-effort convenience over zrt_write. */
+long zrt_write_str(int fd, const char *s);
+
+/* zrt_write_int writes the decimal text of v to fd. Best-effort convenience over
+ * zrt_write. */
+long zrt_write_int(int fd, int64_t v);
 
 /* --- Result[nil] + program entry (entry.c) ------------------------------- */
 

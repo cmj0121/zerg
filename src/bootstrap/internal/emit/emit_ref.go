@@ -142,6 +142,18 @@ func (e *emitter) prepareRuntime() {
 	// channel prepass so a channel recv's Result[T] keeps its own carrier and is not
 	// double-registered. Sets needsResult/needsRuntime only when a carrier is found.
 	e.prepareResults()
+	// A program that imports io (lowers a write intrinsic) or that carries a
+	// Result[nil] in any signature (e.g. a bundled io function) needs the runtime:
+	// the io primitives ride in the always-linked sys.c, and Result[nil] spells
+	// zrt_result_nil from zergrt.h. A program with neither leaves needsRuntime as it
+	// was, so it stays byte-identical.
+	if e.programUsesIO() {
+		e.needsIO = true
+		e.needsRuntime = true
+	}
+	if e.programUsesResultNil() {
+		e.needsRuntime = true
+	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}
@@ -179,6 +191,48 @@ func (e *emitter) programUsesRuntimeStmt() bool {
 		})
 		if found {
 			return true
+		}
+	}
+	return false
+}
+
+// programUsesIO reports whether the program lowers a stdlib `io` write intrinsic
+// (`__zrt_write` / `__zrt_write_int`) — the leaf of a bundled io function. A shadowed
+// spelling is left to the ordinary call path (info.Refs records the user binding), so
+// it does not count as an io use.
+func (e *emitter) programUsesIO() bool {
+	for node := range e.info.ExprTypes {
+		call, ok := node.(*ast.Call)
+		if !ok {
+			continue
+		}
+		id, ok := call.Callee.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if _, shadowed := e.info.Refs[id]; shadowed {
+			continue
+		}
+		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" {
+			return true
+		}
+	}
+	return false
+}
+
+// programUsesResultNil reports whether any function signature carries a Result[nil]
+// (as a return or a parameter) — a value spelled zrt_result_nil, which needs the
+// runtime header even when the program registers no general carrier. A value-only
+// program has none and stays byte-identical.
+func (e *emitter) programUsesResultNil() bool {
+	for _, sig := range e.info.Funcs {
+		if isResultNil(sig.Ret) {
+			return true
+		}
+		for _, p := range sig.Params {
+			if isResultNil(p) {
+				return true
+			}
 		}
 	}
 	return false
@@ -262,6 +316,29 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 		elem := e.cur.ExprType(e.info, n)
 		arg := e.expr(n.Args[0].Value)
 		return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(elem), arg), true
+	}
+	return e.writeIntrinsicEmit(n)
+}
+
+// writeIntrinsicEmit lowers the Phase 1f io write intrinsics — `__zrt_write(fd, s)`
+// and `__zrt_write_int(fd, n)` — that the stdlib `io` module's leaves call. Each
+// maps to its always-linked sys.c primitive, cast to the intrinsic's int result. A
+// name shadowed by a user binding (recorded in info.Refs) is left to the ordinary
+// call path, so the intrinsic never masks a user symbol.
+func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok || len(n.Args) != 2 {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	fd, val := e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)
+	switch id.Name {
+	case "__zrt_write":
+		return fmt.Sprintf("((int64_t)zrt_write_str(%s, %s))", fd, val), true
+	case "__zrt_write_int":
+		return fmt.Sprintf("((int64_t)zrt_write_int(%s, %s))", fd, val), true
 	}
 	return "", false
 }

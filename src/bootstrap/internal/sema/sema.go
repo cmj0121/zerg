@@ -136,7 +136,26 @@ type checker struct {
 	curImpl    *types.ImplDef  // the impl whose signatures are being resolved (U3 assoc-type)
 	loopDepth  int
 	derived    []*ast.ImplDecl // '#[derive]'-synthesized impls, type-checked after the file (U5)
+
+	// dead tracks each binding's liveness after `del` within the current function
+	// body (GRAMMAR group 11, DESIGN-1d §5.1). A name absent from the map is live; a
+	// `del` marks it deadRevoked on that path; a control-flow merge where a name is
+	// dead on some paths but not all marks it deadInconsistent. A use or reassignment
+	// of a non-live name is rejected, turning a would-be use-after-free into a clean
+	// compile error.
+	dead map[*symbol]liveness
 }
+
+// liveness is a binding's post-del state on the current path: liveOK (the default,
+// absent from the dead map), deadRevoked (a `del` ran on every path reaching here),
+// or deadInconsistent (dead on some merged paths, live on others).
+type liveness uint8
+
+const (
+	liveOK liveness = iota
+	deadRevoked
+	deadInconsistent
+)
 
 func (c *checker) errorf(span token.Span, format string, args ...any) {
 	c.diags.Add(span, format, args...)
@@ -407,6 +426,9 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 	c.curFn = sig
 	c.typeParams = sig.Generic.merged(savedTP)
 
+	savedDead := c.dead
+	c.dead = map[*symbol]liveness{} // per-body del flow-analysis, fresh per function
+
 	c.pushScope() // parameter scope; the body opens a nested scope so 'mut n := n' can shadow
 	if recv != nil {
 		c.declare(fn.Span(), "this", recv, fn.Mut)
@@ -423,6 +445,7 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 	}
 	c.popScope()
 
+	c.dead = savedDead
 	c.curFn, c.typeParams = savedFn, savedTP
 }
 
@@ -458,27 +481,45 @@ func (c *checker) checkStmt(s ast.Stmt) {
 			c.errorf(n.Span(), "continue outside of a loop")
 		}
 	case *ast.IfStmt:
+		// Analyse each branch (and the implicit fall-through when there is no else)
+		// from the same entry liveness, then merge: a name dead on every path stays
+		// dead, dead on some but not all is inconsistent (DESIGN-1d §5.1).
+		incoming := c.snapshotDead()
+		var ends []map[*symbol]liveness
 		for _, br := range n.Branches {
+			c.dead = c.snapshotFrom(incoming)
 			c.checkCond(br.Cond)
 			c.checkBlock(br.Body)
+			ends = append(ends, c.dead)
 		}
 		if n.Else != nil {
+			c.dead = c.snapshotFrom(incoming)
 			c.checkBlock(n.Else)
+			ends = append(ends, c.dead)
+		} else {
+			ends = append(ends, incoming) // fall-through path: no branch ran
 		}
+		c.mergeDead(ends)
 	case *ast.ForStmt:
 		if n.Cond != nil {
 			c.checkCond(n.Cond)
 		}
+		// The body may run zero times, so join its end liveness with the entry state:
+		// a name revoked inside the loop is inconsistent after it (dead if it ran).
+		incoming := c.snapshotDead()
 		c.loopDepth++
 		c.checkBlock(n.Body)
 		c.loopDepth--
+		c.mergeDead([]map[*symbol]liveness{incoming, c.dead})
 	case *ast.ExprStmt:
 		c.synth(n.X)
 	case *ast.DelStmt:
 		// 'del name' revokes a binding's access now (GRAMMAR group 11); for a Ref the
-		// emitter drops a refcount. The full four-way ownership dispatch is U5 — here
-		// we only resolve the name so 'del undefined' is reported.
-		if c.lookup(n.Name) == nil {
+		// emitter drops a refcount. It marks the name dead on this path so a later use
+		// is rejected (DESIGN-1d §5.1); revoking is idempotent.
+		if sym := c.lookup(n.Name); sym != nil {
+			c.revoke(sym)
+		} else {
 			c.errorf(n.Span(), "undefined name %q", n.Name)
 		}
 	case *ast.RaiseStmt:
@@ -568,6 +609,71 @@ func (c *checker) lookup(name string) *symbol {
 		}
 	}
 	return nil
+}
+
+// --- del liveness (flow-consistent) -------------------------------------------
+
+// checkLive rejects a use or reassignment of a binding that a `del` revoked on the
+// path reaching here (DESIGN-1d §5.1). A name dead on every path is a hard
+// use-after-del; a name dead on only some merged paths is an inconsistent use.
+func (c *checker) checkLive(sym *symbol, span token.Span, name string) {
+	switch c.dead[sym] {
+	case deadRevoked:
+		c.errorf(span, "%q is used after del", name)
+	case deadInconsistent:
+		c.errorf(span, "%q is used after del on some paths", name)
+	}
+}
+
+// revoke marks a binding dead on the current path (a `del`). It is idempotent, so a
+// symmetric `del` on both branches of an `if` merges cleanly to dead.
+func (c *checker) revoke(sym *symbol) { c.dead[sym] = deadRevoked }
+
+// snapshotDead copies the current liveness map, so a branch can be analysed from a
+// shared entry state and its result merged.
+func (c *checker) snapshotDead() map[*symbol]liveness { return c.snapshotFrom(c.dead) }
+
+// snapshotFrom copies a liveness map, so each branch is analysed from a fresh copy
+// of the shared entry state.
+func (c *checker) snapshotFrom(m map[*symbol]liveness) map[*symbol]liveness {
+	out := make(map[*symbol]liveness, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// mergeDead replaces the current liveness with the join of the given per-path end
+// states: a binding dead on every path stays dead; live on every path stays live;
+// dead on some but not all is inconsistent (a later use of it is rejected).
+func (c *checker) mergeDead(ends []map[*symbol]liveness) {
+	seen := map[*symbol]bool{}
+	for _, m := range ends {
+		for sym := range m {
+			seen[sym] = true
+		}
+	}
+	merged := map[*symbol]liveness{}
+	for sym := range seen {
+		allDead, anyDead := true, false
+		for _, m := range ends {
+			switch m[sym] {
+			case deadRevoked:
+				anyDead = true
+			case deadInconsistent:
+				anyDead, allDead = true, false
+			default: // liveOK
+				allDead = false
+			}
+		}
+		switch {
+		case allDead:
+			merged[sym] = deadRevoked
+		case anyDead:
+			merged[sym] = deadInconsistent
+		}
+	}
+	c.dead = merged
 }
 
 // --- operator classification --------------------------------------------------

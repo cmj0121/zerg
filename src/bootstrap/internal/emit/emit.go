@@ -466,10 +466,32 @@ func (e *emitter) reassign(n *ast.Reassign) {
 		e.line(fmt.Sprintf("%s = %s;", target, e.expr(n.Value)))
 		return
 	}
+	// Release the old value before overwriting, so a Ref (or Ref-holding) target does
+	// not leak or, if the new value aliases the old, double-free. A whole-binding
+	// target (a name) is found in the scope's drop items and released through the
+	// binding; a sub-place target (a field or index) is not tracked as a binding, so
+	// the old value occupying that place is released directly in place.
 	if it, ok := e.findDrop(target); ok {
 		e.emitInlineDrop(it)
+	} else if targetIsPlace(n.Target) {
+		e.line(e.fieldDrop(t, target))
 	}
 	e.line(fmt.Sprintf("%s = %s;", target, e.copyValue(t, n.Value)))
+}
+
+// targetIsPlace reports whether an assignment target is a sub-place — a field,
+// index, or tuple element — rather than a whole binding, so a reassignment can
+// release the old value that currently occupies that place.
+func targetIsPlace(t ast.AssignTarget) bool {
+	lv, ok := t.(*ast.LValueTarget)
+	if !ok {
+		return false
+	}
+	switch lv.X.(type) {
+	case *ast.Field, *ast.Bracket, *ast.TupleIndex:
+		return true
+	}
+	return false
 }
 
 // targetExpr returns the expression underlying a simple assignment target (the

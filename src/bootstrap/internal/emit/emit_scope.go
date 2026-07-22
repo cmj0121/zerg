@@ -31,12 +31,13 @@ type scope struct {
 	items   []dropItem
 }
 
-// dropItem is one droppable binding: its C name, its type, and whether a `del`
-// already revoked it.
+// dropItem is one droppable binding: its C name and its type. Whether a `del`
+// revoked it is not tracked here: the runtime slot guard makes a Ref's release
+// idempotent (a NULL slot is skipped), and sema rejects any use-after-del, so the
+// backend never needs a compile-time liveness flag.
 type dropItem struct {
 	cname string
 	typ   sema.Type
-	dead  bool
 }
 
 // openScope pushes a teardown frame. When markNeeded the scope records a
@@ -103,28 +104,16 @@ func (e *emitter) registerDrop(cname string, typ sema.Type) {
 	}
 }
 
-// findDrop returns the live drop item for a C name, searching innermost-out.
+// findDrop returns the drop item for a C name, searching innermost-out.
 func (e *emitter) findDrop(cname string) (dropItem, bool) {
 	for i := len(e.drops) - 1; i >= 0; i-- {
 		for _, it := range e.drops[i].items {
-			if it.cname == cname && !it.dead {
+			if it.cname == cname {
 				return it, true
 			}
 		}
 	}
 	return dropItem{}, false
-}
-
-// markDead records that a binding was revoked by `del`, so a later lookup skips it.
-func (e *emitter) markDead(cname string) {
-	for i := len(e.drops) - 1; i >= 0; i-- {
-		for j := range e.drops[i].items {
-			if e.drops[i].items[j].cname == cname {
-				e.drops[i].items[j].dead = true
-				return
-			}
-		}
-	}
 }
 
 // emitInlineDrop releases a droppable binding in place (used by a reassignment to
@@ -155,9 +144,12 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 	}
 	switch it.typ.(type) {
 	case *types.Ref:
+		// Release now and null the slot. The scope-exit guard reads the slot, so it
+		// skips a nulled binding — the box is freed exactly once whether or not the
+		// `del` is reached on a given path (flow-consistent, and safe under a
+		// conditional del because zrt_release(NULL) is a no-op).
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
-		e.markDead(cname)
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)
 	}

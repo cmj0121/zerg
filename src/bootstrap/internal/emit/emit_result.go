@@ -240,6 +240,9 @@ func (e *emitter) zeroValueC(t sema.Type) string {
 	if c, ok := e.carrierFor(t); ok {
 		return fmt.Sprintf("(%s){0}", c.name)
 	}
+	if c, ok := e.tupleFor(t); ok {
+		return fmt.Sprintf("(%s){0}", c.name)
+	}
 	return zeroValue(t)
 }
 
@@ -248,11 +251,29 @@ func (e *emitter) zeroValueC(t sema.Type) string {
 // the value already has the carrier type (or the target is not a carrier) it is
 // returned unchanged, so every existing bind/return stays byte-identical.
 func (e *emitter) wrapValue(target, vt sema.Type, code string) string {
-	if target == nil || isBadType(vt) || types.Identical(target, vt) {
+	if target == nil {
 		return code
 	}
+	// A `Result[nil]` target uses the tag-only zrt_result_nil representation, so it is
+	// reconciled here before the structural short-circuit below — `Result[nil]`'s Left
+	// is `<unknown>`, which Identical treats as compatible with any Left, so a concrete
+	// `Result[T]` value (e.g. a `guard { … }` whose block yields a value) would
+	// otherwise slip through unwrapped and be returned with a mismatched carrier type.
+	// A value already tag-only passes through; a concrete Result/optional/Either carrier
+	// projects its ok/err tag (dropping the payload the nil result does not carry); a
+	// bare value or `nil` is Ok.
 	if isResultNil(target) {
+		if isResultNil(vt) {
+			return code
+		}
+		if c, ok := e.carrierFor(vt); ok {
+			tmp := e.freshName("rn")
+			return fmt.Sprintf("({ %s %s = %s; (zrt_result_nil){ .tag = %s.tag }; })", c.name, tmp, code, tmp)
+		}
 		return "zrt_result_ok()"
+	}
+	if isBadType(vt) || types.Identical(target, vt) {
+		return code
 	}
 	c, ok := e.carrierFor(target)
 	if !ok {

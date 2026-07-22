@@ -112,6 +112,13 @@ type emitter struct {
 	carriers    map[string]*carrier
 	needsResult bool
 
+	// Tuple value carriers (completeness iteration 2, U2). tuples maps a tuple type's
+	// spelling to its generated per-shape C struct (`zg_tuple_<n>` with fields
+	// `.f0, .f1, …`), mirroring the Result carrier: an INTERNAL monomorphized layout,
+	// never FFI-frozen. Empty for a program that names no tuple value, which therefore
+	// stays byte-identical.
+	tuples map[string]*tupleCarrier
+
 	// needsIO is set when the program lowers a stdlib `io` write intrinsic (Phase
 	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
 	// program that never imports io, which therefore stays byte-identical.
@@ -225,6 +232,11 @@ func (e *emitter) program() {
 	for _, ti := range e.prog.Types {
 		e.typedef(ti)
 	}
+
+	// Tuple value carriers (completeness iteration 2, U2), before the Result carriers
+	// and prototypes that may name a tuple as an element/parameter/return type. Emits
+	// nothing for a program with no tuple value.
+	e.emitTupleTypedefs()
 
 	// Result/Either/optional carriers, before any prototype that names one as a
 	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
@@ -865,6 +877,10 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.ifExprValue(n)
 	case *ast.Block:
 		return e.blockExprValue(n)
+	case *ast.TupleLit:
+		return e.tupleLit(n)
+	case *ast.TupleIndex:
+		return e.tupleIndex(n)
 	case *ast.ChanNew:
 		return e.chanNew(n)
 	case *ast.Recv:
@@ -885,6 +901,15 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.unsafeExpr(n)
 	case *ast.AsmExpr:
 		return e.asmExpr(n)
+	case *ast.FnExpr:
+		// A closure reaching expr() is used AS A VALUE — bound, passed, returned, or
+		// stored — which needs a full closure conversion (a fn-pointer + captured
+		// environment struct) not yet implemented. Rather than silently lower it to a
+		// `void` value / `0` that miscompiles, fail cleanly here (completeness iteration
+		// 2, U5(a)). A closure invoked inline where it is defined does not pass through
+		// this path.
+		e.diags.Add(n.Span(), "a closure used as a value is not yet supported")
+		return "0"
 	default:
 		return "0"
 	}
@@ -1304,6 +1329,10 @@ func (e *emitter) ctype(t sema.Type) string {
 	}
 	// a general Result/Either/optional value: its monomorphized carrier (Phase 1f U0).
 	if c, ok := e.carrierFor(t); ok {
+		return c.name
+	}
+	// a tuple value: its monomorphized per-shape carrier (completeness iteration 2 U2).
+	if c, ok := e.tupleFor(t); ok {
 		return c.name
 	}
 	if _, ok := t.(*types.Chan); ok {

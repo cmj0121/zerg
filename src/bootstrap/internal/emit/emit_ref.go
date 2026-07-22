@@ -143,6 +143,10 @@ func (e *emitter) prepareRuntime() {
 	// channel prepass so a channel recv's Result[T] keeps its own carrier and is not
 	// double-registered. Sets needsResult/needsRuntime only when a carrier is found.
 	e.prepareResults()
+	// Number the tuple value shapes (completeness iteration 2, U2), after the Result
+	// prepass so a tuple's element ctype (which a Result carrier may influence) is
+	// settled. Leaves the tuple map empty for a program with no tuple value.
+	e.prepareTuples()
 	// A program that imports io (lowers a write intrinsic) or that carries a
 	// Result[nil] in any signature (e.g. a bundled io function) needs the runtime:
 	// the io primitives ride in the always-linked sys.c, and Result[nil] spells

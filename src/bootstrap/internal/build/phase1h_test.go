@@ -294,20 +294,24 @@ func TestGenericCallInsideUnsafeBlock(t *testing.T) {
 	}
 }
 
-// TestGenericCallInsideClosureEnqueued guards the M3 fix for a closure body: mono
-// must descend into an `*ast.FnExpr` so a generic call inside a closure enqueues its
-// instance. This asserts the instance is emitted (declared and defined); a closure's
-// full value lowering is a separate, pre-existing backend concern, so this checks the
-// monomorphization gap the fix closes rather than end-to-end linking.
-func TestGenericCallInsideClosureEnqueued(t *testing.T) {
+// TestClosureAsValueDiagnostic covers U5(a) of completeness iteration 2: a closure
+// used AS A VALUE (here passed to `apply`) needs a full closure conversion that is not
+// yet implemented, so it must fail with a clean diagnostic rather than silently lower
+// to a `void`/`0` value that miscompiles. Reaching this emit diagnostic (rather than a
+// mono crash or an undeclared-function reference) also exercises the M3 fix: mono still
+// descends into the `*ast.FnExpr` body to enqueue the generic `id` instance.
+func TestClosureAsValueDiagnostic(t *testing.T) {
 	src := "fn id[T](v: T) -> T { return v }\n" +
 		"fn apply(f: fn() -> int) -> int { return f() }\n" +
 		"fn main() {\n\tprint apply(fn() { return id(42) })\n}\n"
 	code, _, diags := Compile(src)
-	if len(diags) != 0 {
-		t.Fatalf("unexpected diagnostics: %v", diags)
+	if len(diags) == 0 {
+		t.Fatal("a closure used as a value should be rejected with a clean diagnostic")
 	}
-	if !strings.Contains(code, "int64_t zgg_2_idi(int64_t zg_v)") {
-		t.Fatalf("the generic instance called inside the closure must be enqueued+emitted:\n%s", code)
+	if code != "" {
+		t.Fatalf("no C should be emitted for a rejected program, got:\n%s", code)
+	}
+	if !strings.Contains(diags[0].Msg, "closure used as a value is not yet supported") {
+		t.Fatalf("expected the closure-as-value diagnostic, got: %v", diags)
 	}
 }

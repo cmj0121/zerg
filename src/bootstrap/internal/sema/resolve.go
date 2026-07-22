@@ -452,6 +452,15 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 	case *ast.Coalesce:
 		r.resolveExpr(n.X)
 		r.resolveExpr(n.Y)
+	case *ast.Diverge:
+		if n.Value != nil {
+			r.resolveExpr(n.Value)
+		}
+		if n.From != nil {
+			r.resolveExpr(n.From)
+		}
+	case *ast.GuardExpr:
+		r.resolveBlock(n.Body, ScopeBlock)
 	case *ast.Try:
 		r.resolveExpr(n.X)
 	case *ast.Force:

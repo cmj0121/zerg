@@ -133,6 +133,11 @@ func (w *worker) walkStmt(in *Instance, s ast.Stmt) {
 		w.walkBlock(in, n.Body)
 	case *ast.ExprStmt:
 		w.walkExpr(in, n.X)
+	case *ast.DeferStmt:
+		w.walkExpr(in, n.Call)
+	case *ast.WithStmt:
+		w.walkExpr(in, n.Resource)
+		w.walkBlock(in, n.Body)
 	}
 }
 

@@ -158,6 +158,7 @@ func (c *checker) synthBlock(b *ast.Block) Type {
 
 func (c *checker) inferIdent(n *ast.Ident) Type {
 	if sym := c.lookup(n.Name); sym != nil {
+		c.checkLive(sym, n.Span(), n.Name)
 		return sym.typ
 	}
 	// an enum variant is a value: a nullary variant names a value of its enum type,
@@ -213,6 +214,12 @@ func (c *checker) checkAssign(n *ast.Reassign) {
 		c.synth(n.Value)
 		return
 	}
+	// Record the resolved target type (mirroring how the RHS is recorded), so the
+	// emitter's reassignment lowering sees a Ref/Ref-holding target and emits its
+	// release-old + retain-new — not the POD bare '='. Without this a Ref target
+	// double-frees / leaks. A POD target records its POD type, so the emitted C is
+	// unchanged.
+	c.info.ExprTypes[lv.X] = lty
 	vt := c.check(n.Value, lty)
 	if !mutable {
 		c.errorf(n.Span(), "cannot assign to immutable binding %q", name)
@@ -229,6 +236,9 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 	switch x := e.(type) {
 	case *ast.Ident:
 		if sym := c.lookup(x.Name); sym != nil {
+			// a reassignment (or a field/index write rooted here) counts as a use, so
+			// writing through a name revoked by `del` is rejected (DESIGN-1d §5.1).
+			c.checkLive(sym, x.Span(), x.Name)
 			return sym.typ, sym.mutable, x.Name, true
 		}
 		c.errorf(x.Span(), "undefined name %q", x.Name)

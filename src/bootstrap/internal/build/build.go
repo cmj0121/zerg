@@ -13,17 +13,18 @@ import (
 )
 
 // Compile lowers Zerg source to C. It stops at the first stage that reports
-// diagnostics, returning them with an empty string; on success it runs the
-// pipeline parse -> sema -> mono -> emit and returns the C translation unit and
-// no diagnostics.
-func Compile(src string) (string, []diag.Diagnostic) {
+// diagnostics, returning them with an empty string and an empty Manifest; on
+// success it runs the pipeline parse -> sema -> mono -> emit and returns the C
+// translation unit, an emit.Manifest describing which runtime features the
+// program uses (empty for a value-only program), and no diagnostics.
+func Compile(src string) (string, emit.Manifest, []diag.Diagnostic) {
 	file, diags := parser.Parse(src)
 	if len(diags) > 0 {
-		return "", diags
+		return "", emit.Manifest{}, diags
 	}
 	info, diags := sema.Check(file)
 	if len(diags) > 0 {
-		return "", diags
+		return "", emit.Manifest{}, diags
 	}
 	return emit.Emit(mono.Build(file, info))
 }

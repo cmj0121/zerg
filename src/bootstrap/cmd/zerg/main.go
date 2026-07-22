@@ -26,10 +26,12 @@ import (
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/build"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/emit"
 	zfmt "github.com/cmj0121/zerg/src/bootstrap/internal/fmt"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/lexer"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/parser"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
+	runtime "github.com/cmj0121/zerg/src/runtime"
 )
 
 // CLI is the zerg command line, parsed by kong.
@@ -89,7 +91,7 @@ func runBuild(cmd *BuildCmd) int {
 	}
 
 	log.Debug().Str("file", cmd.File).Msg("compiling")
-	code, diags := build.Compile(string(src))
+	code, manifest, diags := build.Compile(string(src))
 	if len(diags) > 0 {
 		reportDiags(cmd.File, diags)
 		return 1
@@ -100,11 +102,16 @@ func runBuild(cmd *BuildCmd) int {
 		fmt.Print(code)
 		return 0
 	}
-	return link(cmd, code)
+	return link(cmd, code, manifest)
 }
 
-// link writes the C source and compiles it into cmd.Output with cmd.CC.
-func link(cmd *BuildCmd, code string) int {
+// link writes the C source and compiles it into cmd.Output with cmd.CC. When the
+// manifest reports no runtime is needed (every value-only program, including all
+// the examples), it links exactly as Phase 0 did — a single 'cc -std=c11 -o out
+// file.c' — so the built binary is byte-identical. When the runtime is needed it
+// materializes the embedded src/runtime tree next to the C and compiles it in
+// with the include path.
+func link(cmd *BuildCmd, code string, manifest emit.Manifest) int {
 	cpath, cleanup, err := writeCSource(cmd, code)
 	if err != nil {
 		log.Error().Err(err).Msg("cannot write C source")
@@ -112,8 +119,24 @@ func link(cmd *BuildCmd, code string) int {
 	}
 	defer cleanup()
 
-	log.Debug().Str("cc", cmd.CC).Str("c", cpath).Str("out", cmd.Output).Msg("linking")
-	out, err := exec.Command(cmd.CC, "-std=c11", "-o", cmd.Output, cpath).CombinedOutput() //nolint:gosec // cc + generated file are trusted inputs
+	args := []string{"-std=c11", "-o", cmd.Output, cpath}
+	if manifest.NeedsRuntime {
+		rtdir, err := os.MkdirTemp("", "zerg-rt-")
+		if err != nil {
+			log.Error().Err(err).Msg("cannot stage runtime")
+			return 1
+		}
+		defer func() { _ = os.RemoveAll(rtdir) }()
+		cfiles, err := runtime.Materialize(rtdir)
+		if err != nil {
+			log.Error().Err(err).Msg("cannot write runtime sources")
+			return 1
+		}
+		args = append([]string{"-std=c11", "-I", rtdir, "-o", cmd.Output, cpath}, cfiles...)
+	}
+
+	log.Debug().Str("cc", cmd.CC).Str("c", cpath).Str("out", cmd.Output).Bool("runtime", manifest.NeedsRuntime).Msg("linking")
+	out, err := exec.Command(cmd.CC, args...).CombinedOutput() //nolint:gosec // cc + generated files are trusted inputs
 	if err != nil {
 		log.Error().Err(err).Msg("cc failed")
 		_, _ = os.Stderr.Write(out)

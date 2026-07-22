@@ -14,42 +14,33 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// Type is a Phase 0 type.
-type Type int
+// Type is a Zerg type. Phase 1b carries the shared type IR (internal/types);
+// sema re-exports it under the historic name so the emitter — which switches on
+// sema.Int / sema.Str / … and spells parameters sema.Type — compiles unchanged.
+type Type = types.Type
 
-const (
-	Invalid Type = iota
-	Nil
-	Int
-	Float
-	Bool
-	Str
+// The primitive singletons the checker and emitter compare against by identity.
+// They alias the interned values in internal/types, so 'case sema.Int:' still
+// matches by the same pointer the type IR hands out.
+//
+//nolint:gochecknoglobals // re-exported interned singletons.
+var (
+	Invalid Type = types.Invalid
+	Nil     Type = types.Nil
+	Int     Type = types.Int
+	Float   Type = types.Float
+	Bool    Type = types.Bool
+	Str     Type = types.Str
 )
 
-// String renders a type as it is spelled in source.
-func (t Type) String() string {
-	switch t {
-	case Nil:
-		return "nil"
-	case Int:
-		return "int"
-	case Float:
-		return "float"
-	case Bool:
-		return "bool"
-	case Str:
-		return "str"
-	default:
-		return "<invalid>"
-	}
-}
+// numeric reports whether t is a numeric primitive (Phase 0: int or float).
+func numeric(t Type) bool { return t == Int || t == Float }
 
-func (t Type) numeric() bool { return t == Int || t == Float }
-
-// printable reports whether 'print' accepts a value of this type (Phase 0).
-func (t Type) printable() bool { return t.numeric() || t == Bool || t == Str }
+// printable reports whether 'print' accepts a value of type t (Phase 0).
+func printable(t Type) bool { return numeric(t) || t == Bool || t == Str }
 
 // FuncSig is a resolved function signature.
 type FuncSig struct {
@@ -60,27 +51,48 @@ type FuncSig struct {
 	Decl       *ast.FuncDecl
 }
 
-// Info is the result of a successful check, consumed by the emitter.
+// Info is the result of a successful check, consumed by the emitter. The Phase 0
+// fields (Funcs / ExprTypes / BindTypes) keep their historic names so the emitter
+// reads them unchanged; the resolution side tables (Refs / Brackets / Patterns)
+// are the Phase 1b additions that settle the provisional nodes without rewriting
+// the AST (so 'zerg fmt' still round-trips).
 type Info struct {
 	Funcs     map[string]*FuncSig
 	ExprTypes map[ast.Expr]Type
 	BindTypes map[*ast.BindStmt]Type
+
+	// resolution layer (Phase 1b)
+	Refs     map[*ast.Ident]*Symbol       // each identifier's resolved symbol
+	Brackets map[*ast.Bracket]BracketRes  // each '[ … ]' postfix: index vs type args
+	Patterns map[*ast.NamePattern]NameRes // each bare-name pattern: variant vs binding
 }
 
 // Check resolves and type-checks the file, returning the analysis info and any
 // diagnostics. When diagnostics are non-empty the Info is still returned but must
 // not be used for emission.
+//
+// It runs the name-resolution pass first (building the scope tree, enforcing the
+// module-surface and 'const' shadow rules, and settling the provisional nodes),
+// then the Phase 0 type checker; both write into the one Info and their
+// diagnostics are concatenated.
 func Check(file *ast.File) (*Info, []diag.Diagnostic) {
-	c := &checker{
-		info: &Info{
-			Funcs:     map[string]*FuncSig{},
-			ExprTypes: map[ast.Expr]Type{},
-			BindTypes: map[*ast.BindStmt]Type{},
-		},
+	info := &Info{
+		Funcs:     map[string]*FuncSig{},
+		ExprTypes: map[ast.Expr]Type{},
+		BindTypes: map[*ast.BindStmt]Type{},
+		Refs:      map[*ast.Ident]*Symbol{},
+		Brackets:  map[*ast.Bracket]BracketRes{},
+		Patterns:  map[*ast.NamePattern]NameRes{},
 	}
+
+	r := &resolver{info: info}
+	r.resolveFile(file)
+
+	c := &checker{info: info}
 	c.collectFuncs(file)
 	c.checkFuncs(file)
-	return c.info, c.diags.Items()
+
+	return info, append(r.diags.Items(), c.diags.Items()...)
 }
 
 type symbol struct {
@@ -191,7 +203,7 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		c.checkAssign(n)
 	case *ast.PrintStmt:
 		t := c.checkExpr(n.Value)
-		if t != Invalid && !t.printable() {
+		if t != Invalid && !printable(t) {
 			c.errorf(n.Span(), "cannot print a value of type %s", t)
 		}
 	case *ast.ReturnStmt:
@@ -364,7 +376,7 @@ func (c *checker) inferUnary(n *ast.Unary) Type {
 	}
 	switch n.Op {
 	case token.Minus, token.MinusMod:
-		if !t.numeric() {
+		if !numeric(t) {
 			c.errorf(n.Span(), "operator %q requires a numeric operand, found %s", n.Op, t)
 			return Invalid
 		}
@@ -424,7 +436,7 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 // numericResult checks a numeric binary operation, coercing an untyped integer
 // literal to float against a float operand, and returns the result type.
 func (c *checker) numericResult(n *ast.Binary, lt, rt Type) Type {
-	if lt == rt && lt.numeric() {
+	if lt == rt && numeric(lt) {
 		return lt
 	}
 	if lt == Float && rt == Int && isIntLit(n.R) {
@@ -490,7 +502,7 @@ func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 		c.errorf(n.Subject.Span(), "match subject must be a name or literal in Phase 0")
 	}
 	subjT := c.checkExpr(n.Subject)
-	if subjT != Invalid && !subjT.printable() {
+	if subjT != Invalid && !printable(subjT) {
 		// printable == comparable-by-value here (int/float/bool/str)
 		c.errorf(n.Subject.Span(), "cannot match on a value of type %s", subjT)
 	}
@@ -538,7 +550,7 @@ func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
 		c.declare(p.Span(), p.Name, subjT, false)
 	case *ast.LitPattern:
 		lt := c.checkExpr(p.Lit)
-		if p.Neg && !lt.numeric() {
+		if p.Neg && !numeric(lt) {
 			c.errorf(p.Span(), "'-' pattern requires a number, found %s", lt)
 		}
 		if lt != Invalid && subjT != Invalid && !patternMatches(subjT, p.Lit, lt) {

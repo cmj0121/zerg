@@ -1,0 +1,73 @@
+package sema
+
+import "testing"
+
+// TestTryOperator types the propagate postfix 'x?' (DESIGN-1b §6): it unwraps an
+// optional's value and requires the enclosing function to return an optional.
+func TestTryOperator(t *testing.T) {
+	t.Run("unwraps in an optional-returning function", func(t *testing.T) {
+		wantOK(t, "fn f(x: int?) -> int? {\n  n := x?\n  return x\n}")
+	})
+	t.Run("requires an optional operand", func(t *testing.T) {
+		wantErr(t, "fn f(x: int) -> int? {\n  n := x?\n  return x\n}", "'?' requires an Either")
+	})
+	t.Run("requires an optional-returning function", func(t *testing.T) {
+		wantErr(t, "fn f(x: int?) -> int {\n  return x?\n}", "can only be used in a function returning")
+	})
+}
+
+// TestCoalesceOperator types the default operator 'a ?? b' (DESIGN-1b §6): it
+// yields the left operand's value type and checks the default against it — unless
+// the default diverges.
+func TestCoalesceOperator(t *testing.T) {
+	t.Run("yields the element type", func(t *testing.T) {
+		wantOK(t, "fn f(x: int?) -> int {\n  return x ?? 0\n}")
+	})
+	t.Run("a diverging default is allowed", func(t *testing.T) {
+		wantOK(t, "fn f(x: int?) -> int {\n  y := x ?? return 0\n  return y\n}")
+	})
+	t.Run("a mismatched default is an error", func(t *testing.T) {
+		wantErr(t, "fn f(x: int?) -> int {\n  return x ?? true\n}", "cannot use bool as int")
+	})
+	t.Run("requires an optional left operand", func(t *testing.T) {
+		wantErr(t, "fn f(x: int) -> int {\n  return x ?? 0\n}", "'??' requires an optional")
+	})
+}
+
+// TestOptChainOperator types the optional-chain postfix 'a?.b' (DESIGN-1b §6): a
+// must be optional and the result is the field type made optional.
+func TestOptChainOperator(t *testing.T) {
+	const point = "struct Point {\n  x: int\n}\n"
+	t.Run("reads a field through an optional", func(t *testing.T) {
+		wantOK(t, point+"fn f(p: Point?) -> int? {\n  return p?.x\n}")
+	})
+	t.Run("requires an optional receiver", func(t *testing.T) {
+		wantErr(t, point+"fn f(p: Point) -> int {\n  return p?.x\n}", "requires an optional value")
+	})
+}
+
+// TestForceOperator types the force-unwrap postfix 'x!' (DESIGN-1b §6): it unwraps
+// an optional's value with no constraint on the enclosing function.
+func TestForceOperator(t *testing.T) {
+	t.Run("unwraps an optional", func(t *testing.T) {
+		wantOK(t, "fn f(x: int?) -> int {\n  return x!\n}")
+	})
+	t.Run("requires an optional operand", func(t *testing.T) {
+		wantErr(t, "fn f(x: int) -> int {\n  return x!\n}", "'!' requires an Either")
+	})
+}
+
+// TestGuardExpr types the guard expression 'guard { block }' as Result[T] over the
+// block's value type (DESIGN-1b §6).
+func TestGuardExpr(t *testing.T) {
+	ty := bindType(t, "fn f() {\n  g := guard {\n    1\n  }\n}")
+	if got := ty.String(); got != "Either[int, Err]" {
+		t.Fatalf("guard { 1 } has type %s, want Either[int, Err]", got)
+	}
+}
+
+// TestRaiseDiverges accepts a 'raise' statement: it aborts, so it needs no value
+// context (DESIGN-1b §6).
+func TestRaiseDiverges(t *testing.T) {
+	wantOK(t, "fn f(x: int) {\n  raise x\n}")
+}

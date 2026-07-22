@@ -371,6 +371,14 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		c.loopDepth--
 	case *ast.ExprStmt:
 		c.synth(n.X)
+	case *ast.RaiseStmt:
+		// 'raise e (from c)' diverges (never). With no stdlib Error spec yet, any
+		// value is accepted as the error and its cause (FORK-4); the operands are
+		// still synthesized so nested errors surface.
+		c.synth(n.Value)
+		if n.From != nil {
+			c.synth(n.From)
+		}
 	}
 }
 
@@ -404,98 +412,7 @@ func (c *checker) checkReturn(n *ast.ReturnStmt) {
 	}
 }
 
-// --- match --------------------------------------------------------------------
-
-// inferMatch checks a match expression and returns its result type (the common
-// type of every arm's body). Full exhaustiveness lands in a later iteration; this
-// keeps the Phase-0 rule: the last arm is an unguarded catch-all and no earlier
-// arm is.
-func (c *checker) inferMatch(n *ast.MatchExpr) Type {
-	if !isSimpleSubject(n.Subject) {
-		c.errorf(n.Subject.Span(), "match subject must be a name or literal in Phase 0")
-	}
-	subjT := c.synth(n.Subject)
-	if !bad(subjT) && !printable(subjT) {
-		c.errorf(n.Subject.Span(), "cannot match on a value of type %s", subjT)
-	}
-	if len(n.Arms) == 0 {
-		c.errorf(n.Span(), "match must have at least one arm")
-		return Invalid
-	}
-
-	last := n.Arms[len(n.Arms)-1]
-	if last.Guard != nil || !isCatchAll(last.Pat) {
-		c.errorf(n.Span(), "match must end with an unguarded '_' or binding arm (Phase 0 exhaustiveness)")
-	}
-	for i := 0; i < len(n.Arms)-1; i++ {
-		if n.Arms[i].Guard == nil && isCatchAll(n.Arms[i].Pat) {
-			c.errorf(n.Arms[i].Pat.Span(), "this catch-all arm makes the following arms unreachable")
-		}
-	}
-
-	result := Invalid
-	for i, arm := range n.Arms {
-		c.pushScope()
-		c.checkPattern(arm.Pat, subjT)
-		if arm.Guard != nil {
-			c.checkCond(arm.Guard)
-		}
-		var bt Type
-		if i == 0 {
-			bt = c.synth(arm.Body)
-			result = bt
-		} else {
-			bt = c.check(arm.Body, result)
-			if !bad(bt) && !bad(result) && !c.assignable(result, arm.Body, bt) {
-				c.errorf(arm.Body.Span(), "all match arms must yield the same type; found %s and %s", result, bt)
-			}
-		}
-		c.popScope()
-	}
-	return result
-}
-
-func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
-	switch p := pat.(type) {
-	case *ast.WildPattern:
-		// matches anything, binds nothing
-	case *ast.NamePattern:
-		c.declare(p.Span(), p.Name, subjT, false)
-	case *ast.LitPattern:
-		lt := c.synth(p.Lit)
-		if p.Neg && !isNumeric(lt) {
-			c.errorf(p.Span(), "'-' pattern requires a number, found %s", lt)
-		}
-		if !bad(lt) && !bad(subjT) && !patternMatches(subjT, p.Lit, lt) {
-			c.errorf(p.Span(), "a %s literal cannot match a subject of type %s", lt, subjT)
-		}
-	}
-}
-
-// patternMatches reports whether a literal pattern of type lt can match a subject
-// of type subjT (allowing an untyped int literal against a numeric subject).
-func patternMatches(subjT Type, lit ast.Expr, lt Type) bool {
-	if types.Identical(subjT, lt) {
-		return true
-	}
-	return isNumeric(subjT) && lt == Int && isIntLit(lit)
-}
-
-func isSimpleSubject(e ast.Expr) bool {
-	switch e.(type) {
-	case *ast.Ident, *ast.IntLit, *ast.FloatLit, *ast.BoolLit, *ast.StrLit:
-		return true
-	}
-	return false
-}
-
-func isCatchAll(pat ast.Pattern) bool {
-	switch pat.(type) {
-	case *ast.WildPattern, *ast.NamePattern:
-		return true
-	}
-	return false
-}
+// The match expression, its exhaustiveness, and pattern binding live in match.go.
 
 // --- scopes -------------------------------------------------------------------
 

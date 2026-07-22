@@ -133,7 +133,11 @@ func (r *resolver) collectEnum(n *ast.EnumDecl) {
 			vd.Payload = append(vd.Payload, types.Unknown)
 		}
 		enum.Variants = append(enum.Variants, vd)
-		r.declareSurface(&Symbol{Name: v.Name, Kind: SymVariant, Pub: n.Pub, Span: v.Span(), Decl: v, Variant: vd})
+		// TypeDef back-references the owning enum so a variant used as a value
+		// ('Red', 'Some(3)') can name its enum type (§3.6 C1).
+		r.declareSurface(&Symbol{
+			Name: v.Name, Kind: SymVariant, Pub: n.Pub, Span: v.Span(), Decl: v, Variant: vd, TypeDef: def,
+		})
 	}
 }
 
@@ -452,6 +456,15 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 	case *ast.Coalesce:
 		r.resolveExpr(n.X)
 		r.resolveExpr(n.Y)
+	case *ast.Diverge:
+		if n.Value != nil {
+			r.resolveExpr(n.Value)
+		}
+		if n.From != nil {
+			r.resolveExpr(n.From)
+		}
+	case *ast.GuardExpr:
+		r.resolveBlock(n.Body, ScopeBlock)
 	case *ast.Try:
 		r.resolveExpr(n.X)
 	case *ast.Force:

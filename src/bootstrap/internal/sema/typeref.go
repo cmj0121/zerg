@@ -95,6 +95,9 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	if ctor, ok := c.builtinGeneric(ref); ok {
 		return ctor
 	}
+	if sum, ok := c.builtinSum(ref); ok {
+		return sum
+	}
 	if sym := c.module.lookup(ref.Name); sym != nil && sym.Kind == SymType {
 		return c.namedTypeUse(sym, c.typeArgs(refArgExprs(ref)))
 	}
@@ -125,6 +128,27 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 			return &types.Ptr{}, true
 		}
 		return &types.Ptr{Elem: arg(0)}, true
+	}
+	return nil, false
+}
+
+// builtinSum resolves the built-in sum types 'Either[L, R]' and 'Result[T]'
+// (= 'Either[T, Err]') so a function may name them in its signature and the
+// null-safety operators can type against them (DESIGN-1b §6 C2).
+func (c *checker) builtinSum(ref *ast.TypeRef) (types.Type, bool) {
+	switch ref.Name {
+	case "Either":
+		if len(ref.Args) != 2 {
+			c.errorf(ref.Span(), "Either takes 2 type arguments, got %d", len(ref.Args))
+			return Invalid, true
+		}
+		return &types.Either{Left: c.resolveType(ref.Args[0]), Right: c.resolveType(ref.Args[1])}, true
+	case "Result":
+		if len(ref.Args) != 1 {
+			c.errorf(ref.Span(), "Result takes 1 type argument, got %d", len(ref.Args))
+			return Invalid, true
+		}
+		return &types.Either{Left: c.resolveType(ref.Args[0]), Right: errType}, true
 	}
 	return nil, false
 }

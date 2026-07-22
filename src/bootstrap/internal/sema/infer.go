@@ -16,6 +16,9 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymType {
 			return c.construct(n, sym)
 		}
+		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymVariant {
+			return c.constructVariant(n, sym)
+		}
 		if sig, ok := c.info.Funcs[id.Name]; ok {
 			return c.callFunc(n, sig)
 		}
@@ -90,6 +93,33 @@ func (c *checker) construct(n *ast.Call, sym *Symbol) Type {
 	}
 	c.bindCallArgs(def.Name, n, pnames, ptypes, defaults)
 	return c.namedTypeUse(sym, nil)
+}
+
+// constructVariant checks an enum variant used as a value constructor, e.g.
+// 'Some(3)' (DESIGN-1b §3.6 C1): the variant's payload types are its parameters
+// and the result is the owning enum's type. A nullary variant is not callable.
+func (c *checker) constructVariant(n *ast.Call, sym *Symbol) Type {
+	vd := sym.Variant
+	if vd == nil {
+		c.synthArgs(n)
+		return c.enumType(sym)
+	}
+	if len(vd.Payload) == 0 {
+		c.errorf(n.Span(), "variant %q is nullary and takes no payload", vd.Name)
+		c.synthArgs(n)
+		return c.enumType(sym)
+	}
+	pnames := make([]string, len(vd.Payload))
+	c.bindCallArgs(vd.Name, n, pnames, vd.Payload, nil)
+	return c.enumType(sym)
+}
+
+// enumType is the use-site enum type a variant symbol belongs to.
+func (c *checker) enumType(sym *Symbol) Type {
+	if sym.TypeDef != nil && sym.TypeDef.Enum != nil {
+		return &types.Enum{Def: sym.TypeDef}
+	}
+	return types.Unknown
 }
 
 // bindCallArgs binds call arguments to declared parameters and checks each. The
@@ -216,10 +246,15 @@ func (c *checker) pairArgs(sig *FuncSig, n *ast.Call) []ast.Expr {
 	pos := 0
 	for _, a := range n.Args {
 		if a.Name != "" {
-			if i, ok := idx[a.Name]; ok {
-				exprs[i] = a.Value
-			} else {
+			i, ok := idx[a.Name]
+			switch {
+			case !ok:
+				c.errorf(a.Value.Span(), "%q: unknown argument %q", sig.Name, a.Name)
 				c.synth(a.Value)
+			case exprs[i] != nil:
+				c.errorf(a.Value.Span(), "%q: argument %q set more than once", sig.Name, a.Name)
+			default:
+				exprs[i] = a.Value
 			}
 			continue
 		}
@@ -227,6 +262,7 @@ func (c *checker) pairArgs(sig *FuncSig, n *ast.Call) []ast.Expr {
 			exprs[pos] = a.Value
 			pos++
 		} else {
+			c.errorf(a.Value.Span(), "%q: too many arguments", sig.Name)
 			c.synth(a.Value)
 		}
 	}

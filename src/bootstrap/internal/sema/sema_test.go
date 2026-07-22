@@ -207,3 +207,48 @@ func TestExprTypesRecorded(t *testing.T) {
 		}
 	}
 }
+
+// TestModuleConstForwardRefTypes guards Phase 1g S3: a module constant that
+// forward-references a later constant infers the real type (int), not void, and its
+// ConstOrder places the dependency first.
+func TestModuleConstForwardRefTypes(t *testing.T) {
+	file, pdiags := parser.Parse("a := b + 1\nb := 10\nfn main() {\n\tprint a\n\tprint b\n}\n")
+	if len(pdiags) != 0 {
+		t.Fatalf("parse errors: %v", pdiags)
+	}
+	info, diags := Check(file)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	// Both constants must infer int (not Unknown/void) despite the forward reference.
+	if len(info.BindTypes) != 2 {
+		t.Fatalf("expected 2 module-constant binding types, got %d", len(info.BindTypes))
+	}
+	for b, ty := range info.BindTypes {
+		if ty != Int {
+			t.Fatalf("module constant %q typed as %s, want int", b.Name, ty)
+		}
+	}
+	// The dependency (b) must come before its dependent (a) in ConstOrder.
+	if len(info.ConstOrder) != 2 {
+		t.Fatalf("ConstOrder = %d entries, want 2", len(info.ConstOrder))
+	}
+	if info.ConstOrder[0].Name != "b" || info.ConstOrder[1].Name != "a" {
+		t.Fatalf("ConstOrder = [%s, %s], want [b, a]", info.ConstOrder[0].Name, info.ConstOrder[1].Name)
+	}
+}
+
+// TestModuleConstCycleDiagnostic guards that a constant dependency cycle is a clean
+// span-anchored sema error rather than a leaked void.
+func TestModuleConstCycleDiagnostic(t *testing.T) {
+	msgs := check(t, "p := q + 1\nq := p + 1\nfn main() {\n\tprint p\n}\n")
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m, "module-constant cycle") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a 'module-constant cycle' diagnostic, got: %v", msgs)
+	}
+}

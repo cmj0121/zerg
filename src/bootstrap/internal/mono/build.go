@@ -304,7 +304,7 @@ func (w *worker) walkNamespaceCall(in *Instance, n *ast.Call) bool {
 	if !ok || sym.Kind != sema.SymNamespace {
 		return false
 	}
-	sig, ok := w.info.Funcs[sema.ModuleMember(id.Name, fld.Name)]
+	sig, ok := w.info.Funcs[sema.NamespaceMemberName(sym, id.Name, fld.Name)]
 	if !ok || sig.Generic == nil {
 		return true // a non-generic namespace member: emit resolves it directly
 	}

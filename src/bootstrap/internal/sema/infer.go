@@ -167,12 +167,42 @@ func (c *checker) namespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 	if sym == nil || sym.Kind != SymNamespace {
 		return nil, false
 	}
-	if sig, ok := c.info.Funcs[moduleMember(id.Name, fld.Name)]; ok {
+	key := moduleMember(nsTag(sym, id.Name), fld.Name)
+	if sig, ok := c.info.Funcs[key]; ok {
 		return c.callFunc(n, sig), true
+	}
+	// A cross-module TYPE reached through the namespace as a constructor callee
+	// `ns.T(...)` builds that type (generalizing beyond the function-only bundle).
+	if ts := c.module.lookup(key); ts != nil && ts.Kind == SymType {
+		return c.construct(n, ts), true
 	}
 	c.errorf(fld.Span(), "module %q has no public member %q", id.Name, fld.Name)
 	c.synthArgs(n)
 	return Invalid, true
+}
+
+// namespaceMember types a non-call member access `ns.member` on an imported
+// namespace: a cross-module constant or value binding yields its type, and a
+// cross-module function named without a call is rejected (functions are not first-
+// class values in this phase, matching the bare-name rule). It generalizes the
+// function-only bundle to constants (member types are handled in resolveTypeRef).
+func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type {
+	key := moduleMember(nsTag(sym, local), n.Name)
+	if m := c.module.lookup(key); m != nil {
+		switch m.Kind {
+		case SymConst, SymVar:
+			return m.Type
+		case SymType:
+			c.errorf(n.Span(), "type %q used as a value", n.Name)
+			return Invalid
+		}
+	}
+	if _, ok := c.info.Funcs[key]; ok {
+		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
+		return Invalid
+	}
+	c.errorf(n.Span(), "module %q has no public member %q", local, n.Name)
+	return Invalid
 }
 
 // writeIntrinsic checks a compiler write intrinsic `__zrt_write(fd, value)`: a file
@@ -787,6 +817,11 @@ func substituteAll(ts []Type, subT map[string]Type, subV map[string]types.ConstV
 // a field on a non-struct is not modelled beyond the grammar-needed built-ins
 // (FORK-4), so it yields Unknown rather than cascading.
 func (c *checker) inferField(n *ast.Field) Type {
+	if id, ok := n.X.(*ast.Ident); ok {
+		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymNamespace {
+			return c.namespaceMember(n, sym, id.Name)
+		}
+	}
 	xt := c.synth(n.X)
 	if st, ok := xt.(*types.Struct); ok && st.Def.Struct != nil {
 		if f := findField(st.Def, n.Name); f != nil {

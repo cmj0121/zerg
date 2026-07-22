@@ -91,7 +91,10 @@ func runBuild(cmd *BuildCmd) int {
 	}
 
 	log.Debug().Str("file", cmd.File).Msg("compiling")
-	code, manifest, diags := build.Compile(string(src))
+	// Compile as a whole program: `import "a/b"` roots in the entry file's
+	// directory tree, falling back to the embedded stdlib. A single-file entry with
+	// no import flattens to exactly itself, so its C stays byte-identical.
+	code, manifest, diags := build.CompileProgram(cmd.File)
 	if len(diags) > 0 {
 		reportDiags(cmd.File, diags)
 		return 1

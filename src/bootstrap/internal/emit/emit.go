@@ -1041,7 +1041,7 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	// A non-generic member calls the bundled top-level function directly; a generic
 	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name
 	// mono recorded for this call site.
-	target := e.prog.CallTarget(sema.ModuleMember(id.Name, fld.Name))
+	target := e.prog.CallTarget(sema.NamespaceMemberName(sym, id.Name, fld.Name))
 	if m, ok := e.cur.Calls[n]; ok {
 		target = m
 	}

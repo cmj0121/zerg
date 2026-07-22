@@ -76,6 +76,21 @@ func (c *checker) arrayLen(ce *ast.ConstExpr) types.ConstVal {
 
 // resolveTypeRef resolves a named type, applying any type arguments.
 func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
+	// A cross-module type reached through a namespace, `text.Slice` — parsed as a
+	// single-segment projection on a name that resolves to an imported namespace.
+	// It resolves to the merged module type under its canonical mangling, with any
+	// type arguments applied, so an imported type is nameable in a signature and a
+	// generic imported type monomorphizes across the module boundary.
+	if len(ref.Proj) == 1 {
+		if sym := c.module.lookup(ref.Name); sym != nil && sym.Kind == SymNamespace {
+			key := moduleMember(nsTag(sym, ref.Name), ref.Proj[0])
+			if ts := c.module.lookup(key); ts != nil && ts.Kind == SymType {
+				return c.namedTypeUse(ts, c.typeArgs(ref.Args))
+			}
+			c.errorf(ref.Span(), "module %q has no public type %q", ref.Name, ref.Proj[0])
+			return Invalid
+		}
+	}
 	if len(ref.Proj) != 0 {
 		// an associated-type projection 'X.Item': resolve to the impl's binding when
 		// the concrete impl is known, else keep it abstract (U3, DESIGN-1c §3).

@@ -448,6 +448,8 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.spawnStmt(n)
 	case *ast.SendStmt:
 		e.sendStmt(n)
+	case *ast.SelectStmt:
+		e.selectStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:

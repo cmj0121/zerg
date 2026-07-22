@@ -162,6 +162,14 @@ void zrt_sched_park(void) {
 }
 
 void zrt_sched_wake(zrt_coro *co) {
+	/* Idempotent: only a still-parked coroutine is re-enqueued. A select parks on
+	 * several channels at once, so more than one counterparty (or a close) may try to
+	 * wake it in one scheduler quantum; waking only a BLOCKED coroutine keeps it on the
+	 * run queue exactly once. A plain send/recv coroutine is woken by its single
+	 * counterparty, so the guard is a no-op there. */
+	if (co->state != ZRT_CORO_BLOCKED) {
+		return;
+	}
 	co->state = ZRT_CORO_RUNNABLE;
 	runq_push(co);
 }

@@ -137,6 +137,19 @@ func (w *worker) walkStmt(in *Instance, s ast.Stmt) {
 		w.walkExpr(in, n.Call)
 	case *ast.SpawnStmt:
 		w.walkExpr(in, n.Call)
+	case *ast.SelectStmt:
+		for i := range n.Arms {
+			arm := &n.Arms[i]
+			w.walkExpr(in, arm.Chan)
+			w.walkExpr(in, arm.Value)
+			// A '{ … }' arm body's statements are walked directly (walkExpr does not
+			// descend into a block); any other body is an expression.
+			if blk, ok := arm.Body.(*ast.Block); ok {
+				w.walkBlock(in, blk)
+			} else {
+				w.walkExpr(in, arm.Body)
+			}
+		}
 	case *ast.WithStmt:
 		w.walkExpr(in, n.Resource)
 		w.walkBlock(in, n.Body)

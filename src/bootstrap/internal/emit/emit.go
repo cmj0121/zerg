@@ -62,12 +62,21 @@ type emitter struct {
 
 	// Ref[T] runtime state (Phase 1d iteration 2). refnewIdx numbers the distinct
 	// Ref construction element types so each gets a stable zg_refnew_<n> helper;
-	// refnewElems is those element types in that order. dropScopes is the stack of
-	// lexical scopes' droppable bindings (Ref / non-POD struct locals), released in
-	// reverse order at scope exit. All empty for a value-only program.
+	// refnewElems is those element types in that order. All empty for a value-only
+	// program.
 	refnewIdx   map[string]int
 	refnewElems []sema.Type
-	dropScopes  []*dropScope
+
+	// Teardown state (Phase 1d iteration 3). drops is the stack of lexical scopes'
+	// teardown frames (marks + droppable bindings), driving reverse-order release on
+	// every exit path via the runtime cleanup stack. fnMark is the current function
+	// root's cleanup mark ("" when the function owns no teardown), the height a
+	// `return` unwinds to after copying the value out. deferIdx numbers each
+	// `defer f(args)` site so it shares one generated env struct and thunk. All empty
+	// for a value-only program, which therefore stays byte-identical to Phase 0.
+	drops    []*scope
+	fnMark   string
+	deferIdx map[*ast.DeferStmt]int
 
 	// Per-function name environment. Zerg allows a binding to shadow an outer
 	// name (e.g. 'mut n := n'), but C parameters and the top-level body share one
@@ -279,22 +288,33 @@ func (e *emitter) function(inst *mono.Instance) {
 
 	e.indent++
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
-	// One drop scope spans the parameters and the top-level body: a by-value Ref
+	// One teardown frame spans the parameters and the top-level body: a by-value Ref
 	// parameter is the callee's own holder and is released when the function returns
-	// (the caller retained its argument copy). A value-only function registers none.
-	e.openDrops()
+	// (the caller retained its argument copy). The mark is recorded only when the
+	// function owns teardown, so a value-only function is byte-identical to Phase 0.
+	need := e.anyRefParam(inst) || e.subtreeTeardown(fn.Body.Stmts)
+	e.openScope(need, false)
+	e.fnMark = e.curScope().markVar
 	for i, p := range inst.Params {
-		e.addDrop(e.resolve(inst.ParamNames[i]), p)
+		e.registerDrop(e.resolve(inst.ParamNames[i]), p)
 	}
 	for _, s := range fn.Body.Stmts {
 		e.stmt(s)
 	}
-	e.closeDrops()
-	e.popScope()
-	// guarantee a return value on every path for value-returning functions
-	if inst.Ret != sema.Nil && !endsWithReturn(fn.Body) {
-		e.line("return " + zeroValue(inst.Ret) + ";")
+	// On fallthrough, unwind the function's cleanup stack (running param drops and any
+	// top-level defers/drops) before the trailing return; an explicit final return
+	// already unwound.
+	if !endsWithReturn(fn.Body) {
+		if e.fnMark != "" {
+			e.line(fmt.Sprintf("zrt_unwind_to(%s);", e.fnMark))
+		}
+		if inst.Ret != sema.Nil {
+			e.line("return " + zeroValue(inst.Ret) + ";")
+		}
 	}
+	e.popScopeRaw()
+	e.fnMark = ""
+	e.popScope()
 	e.indent--
 	e.line("}")
 
@@ -360,26 +380,22 @@ func (e *emitter) stmt(s ast.Stmt) {
 		rhs := e.copyValue(t, n.Value)
 		cname := e.declareName(n.Name)
 		e.line(e.localDecl(t, cname) + " = " + rhs + ";")
-		e.addDrop(cname, t)
+		e.registerDrop(cname, t)
 	case *ast.Reassign:
 		e.reassign(n)
 	case *ast.PrintStmt:
 		e.printStmt(n)
 	case *ast.ReturnStmt:
-		ret := "return;"
-		if n.Value != nil {
-			// copy-out: returning a Ref that names existing storage retains, so the
-			// source stays valid and its scope-exit release is balanced (POD unchanged).
-			ret = "return " + e.copyValue(e.cur.ExprType(e.info, n.Value), n.Value) + ";"
-		}
-		if n.Cond != nil {
-			e.line(fmt.Sprintf("if (%s) { %s }", e.expr(n.Cond), ret))
-		} else {
-			e.line(ret)
-		}
+		e.returnStmt(n)
 	case *ast.BreakStmt:
+		if lm := e.loopMark(); lm != "" {
+			e.line(fmt.Sprintf("zrt_unwind_to(%s);", lm))
+		}
 		e.line("break;")
 	case *ast.ContinueStmt:
+		if lm := e.loopMark(); lm != "" {
+			e.line(fmt.Sprintf("zrt_unwind_to(%s);", lm))
+		}
 		e.line("continue;")
 	case *ast.IfStmt:
 		e.ifStmt(n)
@@ -387,9 +403,56 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.forStmt(n)
 	case *ast.DelStmt:
 		e.delStmt(n)
+	case *ast.DeferStmt:
+		e.deferStmt(n)
+	case *ast.WithStmt:
+		e.withStmt(n)
+	case *ast.RaiseStmt:
+		e.raiseStmt(n)
 	case *ast.ExprStmt:
 		e.line(e.expr(n.X) + ";")
 	}
+}
+
+// returnStmt lowers `return e (if c)?`. When the function owns no teardown (fnMark
+// empty) it keeps the byte-identical Phase 0 spelling. Otherwise it copies the
+// return value out to a temporary FIRST, unwinds the function's cleanup stack
+// (running every pending defer/drop), then returns the temporary — so a Ref returned
+// on an early path is retained before its scope releases, and no drop is skipped.
+func (e *emitter) returnStmt(n *ast.ReturnStmt) {
+	if e.fnMark == "" {
+		ret := "return;"
+		if n.Value != nil {
+			ret = "return " + e.copyValue(e.cur.ExprType(e.info, n.Value), n.Value) + ";"
+		}
+		if n.Cond != nil {
+			e.line(fmt.Sprintf("if (%s) { %s }", e.expr(n.Cond), ret))
+		} else {
+			e.line(ret)
+		}
+		return
+	}
+	emit := func() {
+		if n.Value == nil {
+			e.line(fmt.Sprintf("zrt_unwind_to(%s);", e.fnMark))
+			e.line("return;")
+			return
+		}
+		tmp := e.freshName("ret")
+		val := e.copyValue(e.cur.ExprType(e.info, n.Value), n.Value)
+		e.line(fmt.Sprintf("%s = %s;", e.localDecl(e.cur.Ret, tmp), val))
+		e.line(fmt.Sprintf("zrt_unwind_to(%s);", e.fnMark))
+		e.line("return " + tmp + ";")
+	}
+	if n.Cond != nil {
+		e.line(fmt.Sprintf("if (%s) {", e.expr(n.Cond)))
+		e.indent++
+		emit()
+		e.indent--
+		e.line("}")
+		return
+	}
+	emit()
 }
 
 // reassign lowers 'x = e'. For a POD target it is the historic bare assignment. For
@@ -404,7 +467,7 @@ func (e *emitter) reassign(n *ast.Reassign) {
 		return
 	}
 	if it, ok := e.findDrop(target); ok {
-		e.emitDrop(it)
+		e.emitInlineDrop(it)
 	}
 	e.line(fmt.Sprintf("%s = %s;", target, e.copyValue(t, n.Value)))
 }
@@ -439,11 +502,11 @@ func (e *emitter) ifStmt(n *ast.IfStmt) {
 			kw = "} else if"
 		}
 		e.line(fmt.Sprintf("%s (%s) {", kw, e.expr(br.Cond)))
-		e.body(br.Body)
+		e.body(br.Body, false)
 	}
 	if n.Else != nil {
 		e.line("} else {")
-		e.body(n.Else)
+		e.body(n.Else, false)
 	}
 	e.line("}")
 }
@@ -454,21 +517,28 @@ func (e *emitter) forStmt(n *ast.ForStmt) {
 	} else {
 		e.line(fmt.Sprintf("while (%s) {", e.expr(n.Cond)))
 	}
-	e.body(n.Body)
+	e.body(n.Body, true)
 	e.line("}")
 }
 
 // body emits a block's statements at one deeper indent (the surrounding braces are
-// emitted by the caller so 'else' can share a line with the closing brace). It
-// opens a nested name scope so the block's bindings do not leak.
-func (e *emitter) body(b *ast.Block) {
+// emitted by the caller so 'else' can share a line with the closing brace). It opens
+// a nested name scope so the block's bindings do not leak, and a teardown frame that
+// records a cleanup mark when the block owns teardown. A loop body records its mark
+// whenever its subtree owns teardown (a `break`/`continue` unwinds to it); a plain
+// block only when its own statements do.
+func (e *emitter) body(b *ast.Block, isLoop bool) {
 	e.indent++
 	e.pushScope()
-	e.openDrops()
+	need := e.directTeardown(b.Stmts)
+	if isLoop {
+		need = e.subtreeTeardown(b.Stmts)
+	}
+	e.openScope(need, isLoop)
 	for _, s := range b.Stmts {
 		e.stmt(s)
 	}
-	e.closeDrops()
+	e.closeScope()
 	e.popScope()
 	e.indent--
 }
@@ -490,6 +560,19 @@ func (e *emitter) declareName(name string) string {
 	e.used[unique] = true
 	e.scopes[len(e.scopes)-1][name] = unique
 	return unique
+}
+
+// freshName returns a fresh, function-unique C name with the given prefix (not tied
+// to any source name), for a compiler temporary such as a cleanup mark, a
+// copied-out return value, or a deferred call's captured environment.
+func (e *emitter) freshName(prefix string) string {
+	name := "zg_" + prefix
+	for e.used[name] {
+		e.counter++
+		name = fmt.Sprintf("zg_%s__%d", prefix, e.counter)
+	}
+	e.used[name] = true
+	return name
 }
 
 // resolve returns the C name a source name currently refers to.

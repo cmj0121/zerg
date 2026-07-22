@@ -125,7 +125,7 @@ func paramSub(params []*types.Param, args []sema.Type) map[string]sema.Type {
 // program, keeping that program byte-identical.
 func (e *emitter) prepareRuntime() {
 	e.refnewIdx = map[string]int{}
-	if e.programUsesRef() {
+	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
 	// Deterministically number the Ref construction element types (sorted by their
@@ -149,6 +149,25 @@ func (e *emitter) prepareRuntime() {
 		e.refnewIdx[k] = i
 		e.refnewElems = append(e.refnewElems, seen[k])
 	}
+}
+
+// programUsesRuntimeStmt reports whether the program contains a `defer`, `with`, or
+// `raise` — statements that drive the runtime cleanup/abort machinery even when no
+// Ref is present, so the emitted C must include and link the runtime.
+func (e *emitter) programUsesRuntimeStmt() bool {
+	for _, inst := range e.prog.Funcs {
+		found := false
+		walkStmts(inst.Origin.Body, func(s ast.Stmt) {
+			switch s.(type) {
+			case *ast.DeferStmt, *ast.WithStmt, *ast.RaiseStmt:
+				found = true
+			}
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // programUsesRef reports whether any binding, expression, or function signature in
@@ -288,99 +307,6 @@ func (e *emitter) unsupportedRef(at ast.Node, t sema.Type) {
 	e.diags.Add(span, "copying a %s is not supported in Phase 1d iteration 2 (only Ref[T] and structs holding Refs)", t)
 }
 
-// --- scope teardown (drop) ----------------------------------------------------
-
-// dropScope is one lexical scope's ordered list of droppable bindings (Ref or
-// non-POD struct locals). On scope exit the live ones are released in reverse
-// declaration order — the memory model's reverse-construction teardown. Full path
-// coverage (early return/break/abort unwind) is U4; this iteration releases at the
-// natural end of the block.
-type dropScope struct{ items []dropItem }
-
-// dropItem is one droppable binding: its C name, its type, and whether a 'del' has
-// already dropped it (so scope exit does not release it a second time).
-type dropItem struct {
-	cname string
-	typ   sema.Type
-	dead  bool
-}
-
-func (e *emitter) openDrops() { e.dropScopes = append(e.dropScopes, &dropScope{}) }
-func (e *emitter) closeDrops() {
-	top := e.dropScopes[len(e.dropScopes)-1]
-	for i := len(top.items) - 1; i >= 0; i-- {
-		if !top.items[i].dead {
-			e.emitDrop(top.items[i])
-		}
-	}
-	e.dropScopes = e.dropScopes[:len(e.dropScopes)-1]
-}
-
-// addDrop registers a droppable binding (a Ref or non-POD struct) in the current
-// scope, to be released on scope exit. A POD binding is not registered.
-func (e *emitter) addDrop(cname string, typ sema.Type) {
-	if !containsRef(typ) || len(e.dropScopes) == 0 {
-		return
-	}
-	top := e.dropScopes[len(e.dropScopes)-1]
-	top.items = append(top.items, dropItem{cname: cname, typ: typ})
-}
-
-// killDrop marks the binding with C name cname as already dropped (a 'del' ran),
-// so scope exit will not release it again. It searches innermost-out.
-func (e *emitter) killDrop(cname string) {
-	for i := len(e.dropScopes) - 1; i >= 0; i-- {
-		for j := range e.dropScopes[i].items {
-			if e.dropScopes[i].items[j].cname == cname {
-				e.dropScopes[i].items[j].dead = true
-				return
-			}
-		}
-	}
-}
-
-// emitDrop releases a droppable binding: a bare Ref decrements its refcount, a
-// non-POD struct runs its generated deep-drop.
-func (e *emitter) emitDrop(it dropItem) {
-	switch it.typ.(type) {
-	case *types.Ref:
-		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
-	case *types.Struct:
-		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
-	default:
-		e.emitDropUnsupported(it)
-	}
-}
-
-// emitDropUnsupported records an unsupported droppable shape (see unsupportedRef).
-func (e *emitter) emitDropUnsupported(it dropItem) {
-	e.diags.Add(token.Span{}, "dropping a %s is not supported in Phase 1d iteration 2", it.typ)
-}
-
-// delStmt lowers 'del name' for a Ref binding: it drops one refcount now and marks
-// the binding dead so scope exit does not release it again (flow-consistent, no
-// runtime drop flag). For a POD binding del is a no-op in C (the value has no
-// teardown); the general ownership dispatch is U5.
-func (e *emitter) delStmt(n *ast.DelStmt) {
-	cname := e.resolve(n.Name)
-	if it, ok := e.findDrop(cname); ok {
-		e.emitDrop(it)
-		e.killDrop(cname)
-	}
-}
-
-// findDrop returns the live drop item for a C name, searching innermost-out.
-func (e *emitter) findDrop(cname string) (dropItem, bool) {
-	for i := len(e.dropScopes) - 1; i >= 0; i-- {
-		for _, it := range e.dropScopes[i].items {
-			if it.cname == cname && !it.dead {
-				return it, true
-			}
-		}
-	}
-	return dropItem{}, false
-}
-
 // --- generated helpers --------------------------------------------------------
 
 // emitRefHelpers writes the per-type copy/drop helpers for every non-POD struct the
@@ -389,6 +315,20 @@ func (e *emitter) findDrop(cname string) (dropItem, bool) {
 // the function bodies, so a body can call them. A value-only program specializes no
 // non-POD type and constructs no Ref, so this emits nothing.
 func (e *emitter) emitRefHelpers() {
+	// zg_ref_drop is the cleanup-stack thunk for a bare Ref local: it reads the
+	// current pointer through the binding's slot and releases it unless a 'del'
+	// nulled the slot. Registering the slot (not the value) lets a later 'del' or
+	// reassignment change what the scope-exit release targets, so a Ref is freed
+	// exactly once on every path (U4/U5).
+	if e.programHasRefLocal() {
+		e.line("static void zg_ref_drop(void *slot) {")
+		e.indent++
+		e.line("void **s = (void **)slot;")
+		e.line("if (*s != NULL) { zrt_release(*s); }")
+		e.indent--
+		e.line("}")
+		e.blank()
+	}
 	for _, ti := range e.prog.Types {
 		if !e.tiContainsRef(ti) {
 			continue
@@ -402,6 +342,39 @@ func (e *emitter) emitRefHelpers() {
 	for _, elem := range e.refnewElems {
 		e.refnewHelper(elem)
 	}
+	e.emitDeferHelpers()
+}
+
+// programHasRefLocal reports whether the program binds a bare Ref[T] to a name (a
+// let binding, a by-value parameter, or a 'with' resource) — the only shape that
+// registers the zg_ref_drop cleanup thunk. A struct-of-Ref uses its own drop-env
+// thunk instead, so this stays false for a program that only nests Refs in structs.
+func (e *emitter) programHasRefLocal() bool {
+	isRef := func(t sema.Type) bool { _, ok := t.(*types.Ref); return ok }
+	for _, t := range e.info.BindTypes {
+		if isRef(t) {
+			return true
+		}
+	}
+	for _, sig := range e.info.Funcs {
+		for _, p := range sig.Params {
+			if isRef(p) {
+				return true
+			}
+		}
+	}
+	for _, inst := range e.prog.Funcs {
+		found := false
+		walkStmts(inst.Origin.Body, func(s ast.Stmt) {
+			if w, ok := s.(*ast.WithStmt); ok && isRef(inst.ExprType(e.info, w.Resource)) {
+				found = true
+			}
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // tiContainsRef reports whether a specialized nominal type instance transitively
@@ -452,6 +425,11 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 	}
 	e.indent--
 	e.line("}")
+
+	// zg_dropenv_<T> adapts the typed deep-drop to the runtime cleanup stack's
+	// void* thunk signature, so a struct local's teardown can be scheduled on scope
+	// entry and run on every exit path (fallthrough, early return/break, abort).
+	e.line(fmt.Sprintf("static void zg_dropenv_%s(void *p) { zg_drop_%s((%s *)p); }", name, name, name))
 	e.blank()
 }
 

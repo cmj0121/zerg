@@ -1,31 +1,31 @@
-# The bootstrap Zerg compiler (Go host).
+# The Zerg toolchain driver (Go host).
 #
-# Builds the `zergc` driver into the repo-root bin/. Invoked directly
+# Builds the `zerg` driver into the repo-root bin/. Invoked directly
 # (`make -C src/bootstrap build`) or through the root Makefile's SUBDIR fan-out.
 BIN     := $(CURDIR)/../../bin
-BINARY  := $(BIN)/zergc
+BINARY  := $(BIN)/zerg
 GO      := go
-PKG     := ./cmd/zergc
+PKG     := ./cmd/zerg
 
 .PHONY: all build test run clean install uninstall help
 
-all: build			# default action: build the compiler
+all: build			# default action: build the toolchain driver
 
-build:				# build the zergc bootstrap compiler into bin/
+build:				# build the zerg toolchain driver into bin/
 	@mkdir -p "$(BIN)"
 	$(GO) build -o "$(BINARY)" $(PKG)
 
 test:				# run the Go test suite
 	$(GO) test ./...
 
-run: build			# build then run zergc (pass args with ARGS="…")
+run: build			# build then run zerg (pass args with ARGS="…", e.g. ARGS="build hello.zg")
 	@"$(BINARY)" $(ARGS)
 
 clean:				# remove build artifacts
 	@rm -f "$(BINARY)"
 	@$(GO) clean
 
-install:			# (no-op) zergc is run from bin/, not installed
+install:			# (no-op) zerg is run from bin/, not installed
 
 uninstall:			# (no-op)
 

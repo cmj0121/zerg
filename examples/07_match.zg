@@ -7,26 +7,26 @@
 # catch-all so the match is exhaustive. An arm uses `=>` (distinct from the
 # `->` that marks a function's return type).
 fn sign(n: int) -> int {
-    return match n {
-        0          => 0
-        x if x < 0 => -1        # `x` binds n; the guard must also hold
-        _          => 1
-    }
+	return match n {
+		0 => 0
+		x if x < 0 => -1 # `x` binds n; the guard must also hold
+		_ => 1
+	}
 }
 
 fn name(n: int) -> str {
-    return match n {
-        1 => "one"
-        2 => "two"
-        3 => "three"
-        _ => "many"
-    }
+	return match n {
+		1 => "one"
+		2 => "two"
+		3 => "three"
+		_ => "many"
+	}
 }
 
 fn main() {
-    print sign(-8)           # -1
-    print sign(0)            # 0
-    print sign(42)           # 1
-    print name(2)            # two
-    print name(9)            # many
+	print sign(-8) # -1
+	print sign(0) # 0
+	print sign(42) # 1
+	print name(2) # two
+	print name(9) # many
 }

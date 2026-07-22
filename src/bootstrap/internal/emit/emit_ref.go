@@ -151,6 +151,10 @@ func (e *emitter) prepareRuntime() {
 		e.needsIO = true
 		e.needsRuntime = true
 	}
+	if e.programUsesFormat() {
+		e.needsFormat = true
+		e.needsRuntime = true
+	}
 	if e.programUsesResultNil() {
 		e.needsRuntime = true
 	}

@@ -130,10 +130,27 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 		return c.inferChanNew(n)
 	case *ast.Recv:
 		return c.inferRecv(n)
+	case *ast.FStr:
+		return c.inferFStr(n)
 	}
-	// blocks, if-expressions, f-strings, and the remaining group-8 operators are
+	// blocks, if-expressions, f-cmds, and the remaining group-8 operators are
 	// modelled in later iterations; treat them as Unknown so they do not cascade.
 	return types.Unknown
+}
+
+// inferFStr types an f-string f"…{expr}…" (GRAMMAR group 5), the Format cluster's
+// entry point: it synthesizes every hole expression (so the backend can pick the
+// hole's display()/format(:spec) rendering by the hole's static type) and yields
+// str. The `:spec` text is opaque to the language — its meaning is the hole type's
+// own Format impl — so it is not type-checked here. A hole with no display/format
+// rendering for its type is caught at lowering, not here.
+func (c *checker) inferFStr(n *ast.FStr) Type {
+	for i := range n.Parts {
+		if n.Parts[i].Expr != nil {
+			c.synth(n.Parts[i].Expr)
+		}
+	}
+	return Str
 }
 
 // synthBlock types a block as an expression and returns its value type: the type

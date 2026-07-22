@@ -340,6 +340,19 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 		for i := range n.Parts {
 			w.walkExpr(in, n.Parts[i].Expr)
 		}
+	// group-12 expression forms (Phase 1h): a generic call may nest inside an
+	// `unsafe { }` block-expression, a closure body, or an asm operand, so each is
+	// walked to enqueue that call's instance. Missing these left a generic call under
+	// `unsafe { id(42) }` / `fn() { id(x) }` / an asm operand un-enqueued, so its
+	// mangled name was unrecorded and emit referenced an undeclared function.
+	case *ast.UnsafeExpr:
+		w.walkBlock(in, n.Body)
+	case *ast.FnExpr:
+		w.walkBlock(in, n.Body)
+	case *ast.AsmExpr:
+		for _, op := range n.Operands {
+			w.walkExpr(in, op.Value)
+		}
 	}
 }
 

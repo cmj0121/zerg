@@ -237,6 +237,12 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 	// a module constant (a top-level ':=', Phase 1g S3) is a value in the module
 	// surface: its type is filled by checkModuleConsts before any body is checked.
 	if sym := c.module.lookup(n.Name); sym != nil && (sym.Kind == SymConst || sym.Kind == SymVar) {
+		// a module-level mutable global (a `mut` inside an unsafe group) is shared
+		// mutable state, so even READING it requires an unsafe context (Phase 1h U2);
+		// a plain top-level `:=` constant stays freely readable.
+		if sym.Kind == SymVar && sym.Mutable {
+			c.unsafeOp(n.Span(), "reading a mutable global")
+		}
 		return sym.Type
 	}
 	if _, ok := c.info.Funcs[n.Name]; ok {
@@ -312,8 +318,12 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 		}
 		// A module-level binding assigned from a body: a mutable global (a `mut` inside
 		// a module unsafe group, Phase 1h U2) is a writable place; a top-level `:=`
-		// constant reports as immutable so the reassignment is rejected.
+		// constant reports as immutable so the reassignment is rejected. Writing a
+		// mutable global is shared-state mutation, so it too requires an unsafe context.
 		if sym := c.module.lookup(x.Name); sym != nil && (sym.Kind == SymVar || sym.Kind == SymConst) {
+			if sym.Kind == SymVar && sym.Mutable {
+				c.unsafeOp(x.Span(), "writing a mutable global")
+			}
 			return sym.Type, sym.Mutable, x.Name, true
 		}
 		c.errorf(x.Span(), "undefined name %q", x.Name)

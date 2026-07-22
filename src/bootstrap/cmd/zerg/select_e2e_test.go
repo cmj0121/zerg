@@ -1,8 +1,29 @@
 package main
 
 import (
+	"context"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 )
+
+// runBounded runs bin with a hard timeout, so a lowering regression that busy-loops (the
+// slice-C3 break-in-select hang) fails the test instead of wedging the whole suite.
+func runBounded(t *testing.T, bin string, d time.Duration) (stdout, stderr string, err error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	var out, errb strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err = cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("program did not terminate within %s (select break regression?)\nstdout so far: %q", d, out.String())
+	}
+	return out.String(), errb.String(), err
+}
 
 // TestSelectDoneOverProducers compiles and runs the slice-C3 acceptance program: two
 // producer coroutines each send two values on their own UNBUFFERED channel, and main
@@ -43,6 +64,45 @@ func TestSelectDoneOverProducers(t *testing.T) {
 	}
 	if stdout != "10\n" {
 		t.Fatalf("stdout = %q, want %q (1+2+3+4 received before done fired)", stdout, "10\n")
+	}
+}
+
+// TestSelectBreakInArm is the slice-C3 regression for a `break` inside a select arm: the
+// arm dispatch must be an if-chain, NOT a C switch, so a Zerg `break` binds to the
+// enclosing `for` and terminates the loop once `done` fires. Lowered as a switch this
+// program busy-loops forever (the `break` breaks the switch, not the loop). It must
+// print the sum and exit.
+func TestSelectBreakInArm(t *testing.T) {
+	const src = "fn prod(ch: chan[int], a: int, b: int) {\n" +
+		"  ch <- a\n" +
+		"  ch <- b\n" +
+		"}\n" +
+		"fn main() {\n" +
+		"  c1 := chan[int]()\n" +
+		"  c2 := chan[int]()\n" +
+		"  spawn prod(c1, 1, 2)\n" +
+		"  spawn prod(c2, 3, 4)\n" +
+		"  r1: <-chan[int] = c1\n" +
+		"  r2: <-chan[int] = c2\n" +
+		"  del c1\n" +
+		"  del c2\n" +
+		"  mut sum := 0\n" +
+		"  for {\n" +
+		"    select {\n" +
+		"      x := <-r1 => { sum = sum + x! }\n" +
+		"      y := <-r2 => { sum = sum + y! }\n" +
+		"      done => { break }\n" +
+		"    }\n" +
+		"  }\n" +
+		"  print sum\n" +
+		"}"
+	bin := buildConcurrent(t, src)
+	stdout, stderr, err := runBounded(t, bin, 10*time.Second)
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr)
+	}
+	if stdout != "10\n" {
+		t.Fatalf("stdout = %q, want %q (break in the done arm exits the select loop)", stdout, "10\n")
 	}
 }
 

@@ -62,19 +62,24 @@ func TestSelectLowering(t *testing.T) {
 		t.Fatalf("a select program must report Concurrency\n%s", code)
 	}
 	for _, want := range []string{
-		"zrt_sel_case",         // the descriptor array
-		"ZRT_SEL_RECV",         // the recv case descriptor
-		"ZRT_SEL_SEND",         // the send case descriptor
-		"= zrt_select(",        // the one runtime call
-		", false, true);",      // has_default=false, has_done=true
-		"switch (",             // dispatch on the picked index
-		"zg_recv_0 zg_x = {",   // the recv arm binds its Result[T] carrier
-		"zg_force_0(",          // x! in the recv arm body
-		"case ZRT_SEL_DONE: {", // the done arm label
+		"zrt_sel_case",       // the descriptor array
+		"ZRT_SEL_RECV",       // the recv case descriptor
+		"ZRT_SEL_SEND",       // the send case descriptor
+		"= zrt_select(",      // the one runtime call
+		", false, true);",    // has_default=false, has_done=true
+		"== 0) {",            // dispatch keyed on the picked index (if-chain, not a switch)
+		"ZRT_SEL_DONE) {",    // the done arm branch
+		"zg_recv_0 zg_x = {", // the recv arm binds its Result[T] carrier
+		"zg_force_0(",        // x! in the recv arm body
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q\n%s", want, code)
 		}
+	}
+	// The dispatch must NOT be a C switch: a Zerg `break` in an arm would be captured by
+	// the switch instead of the enclosing loop (the slice-C3 break-in-select hang).
+	if strings.Contains(code, "switch (") {
+		t.Fatalf("select dispatch must be an if-chain, not a C switch\n%s", code)
 	}
 }
 
@@ -89,7 +94,7 @@ func TestSelectDefaultFlag(t *testing.T) {
 		"  }\n" +
 		"}"
 	code, _ := emitWithManifest(t, src)
-	for _, want := range []string{", true, false);", "case ZRT_SEL_DEFAULT: {"} {
+	for _, want := range []string{", true, false);", "ZRT_SEL_DEFAULT) {"} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q\n%s", want, code)
 		}

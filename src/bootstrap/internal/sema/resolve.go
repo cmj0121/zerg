@@ -64,6 +64,28 @@ type resolver struct {
 	module  *Scope
 	scope   *Scope
 	inUnsfe bool // inside a module-level 'unsafe { }' group (a mutable global is legal)
+
+	// curConst is the module constant whose initializer is currently being resolved,
+	// and constEdges is the dependency graph collected while resolving it: an edge
+	// a -> b whenever a's initializer references module constant b (Phase 1g S3). The
+	// checker topologically sorts this so a forward reference between module constants
+	// is typed and evaluated in dependency order.
+	curConst   *ast.BindStmt
+	constEdges map[*ast.BindStmt][]*ast.BindStmt
+}
+
+// addConstEdge records that module constant `from`'s initializer references module
+// constant `to`, de-duplicating repeated references.
+func (r *resolver) addConstEdge(from, to *ast.BindStmt) {
+	if r.constEdges == nil {
+		r.constEdges = map[*ast.BindStmt][]*ast.BindStmt{}
+	}
+	for _, e := range r.constEdges[from] {
+		if e == to {
+			return
+		}
+	}
+	r.constEdges[from] = append(r.constEdges[from], to)
 }
 
 func (r *resolver) errorf(span token.Span, format string, args ...any) {
@@ -252,9 +274,14 @@ func (r *resolver) resolveItem(it ast.Stmt) {
 		r.resolveFunc(n)
 	case *ast.BindStmt:
 		// a module-level binding's value resolves in the module scope, where every
-		// top-level name is already visible
+		// top-level name is already visible. Resolving it under curConst records the
+		// constant's dependency edges (an ident that resolves to another module
+		// constant) so the checker can order them (Phase 1g S3).
 		if n.Value != nil {
+			prev := r.curConst
+			r.curConst = n
 			r.resolveExpr(n.Value)
+			r.curConst = prev
 		}
 	case *ast.UnsafeGroup:
 		saved := r.inUnsfe
@@ -483,6 +510,15 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 	case *ast.Ident:
 		if sym := r.scope.lookup(n.Name); sym != nil {
 			r.info.Refs[n] = sym
+			// While resolving a module constant's initializer, an ident that resolves to a
+			// module constant (its declaring node is a top-level BindStmt) is a dependency
+			// edge for the constant-initialization order. A self-reference is recorded too,
+			// so `x := x + 1` is caught as a cycle rather than reading its own zero value.
+			if r.curConst != nil {
+				if dep, ok := sym.Decl.(*ast.BindStmt); ok {
+					r.addConstEdge(r.curConst, dep)
+				}
+			}
 		}
 	case *ast.Unary:
 		r.resolveExpr(n.X)

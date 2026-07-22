@@ -1,6 +1,7 @@
 package mono
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -66,8 +67,13 @@ func (w *worker) buildInits(plan *module.InitPlan) {
 		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}
 	w.prog.InitCtx = ctx
+	rank := constRank(w.info.ConstOrder)
 	for _, m := range plan.Modules {
-		for _, b := range m.Consts {
+		// Emit the module's constants in the checker's dependency (topological) order —
+		// a forward reference reads its dependency's already-assigned value — rather than
+		// the loader's declaration order (Phase 1g S3).
+		consts := orderConsts(m.Consts, rank)
+		for _, b := range consts {
 			w.collectType(ctx.BindType(w.info, b))
 			w.walkExpr(ctx, b.Value)
 		}
@@ -78,7 +84,7 @@ func (w *worker) buildInits(plan *module.InitPlan) {
 				}
 			}
 		}
-		w.prog.Inits = append(w.prog.Inits, InitGroup{Tag: m.Tag, Inits: m.Inits, Consts: m.Consts})
+		w.prog.Inits = append(w.prog.Inits, InitGroup{Tag: m.Tag, Inits: m.Inits, Consts: consts})
 	}
 	// Any function the fixpoint above discovered while walking the init code is queued;
 	// drain it so their bodies are specialized too.
@@ -87,6 +93,30 @@ func (w *worker) buildInits(plan *module.InitPlan) {
 		w.queue = w.queue[1:]
 		w.specialize(in)
 	}
+}
+
+// constRank maps each module constant to its position in the checker's dependency
+// order (Info.ConstOrder), so a module's constants can be sorted into that order.
+func constRank(order []*ast.BindStmt) map[*ast.BindStmt]int {
+	rank := make(map[*ast.BindStmt]int, len(order))
+	for i, b := range order {
+		rank[b] = i
+	}
+	return rank
+}
+
+// orderConsts returns a module's constants sorted by their dependency rank (a stable
+// sort, so a constant absent from the rank — which should not happen — keeps its
+// declaration position). A nil/empty rank leaves the order unchanged, so a program
+// with no module constant is untouched and stays byte-identical.
+func orderConsts(consts []*ast.BindStmt, rank map[*ast.BindStmt]int) []*ast.BindStmt {
+	if len(consts) < 2 || len(rank) == 0 {
+		return consts
+	}
+	out := make([]*ast.BindStmt, len(consts))
+	copy(out, consts)
+	sort.SliceStable(out, func(i, j int) bool { return rank[out[i]] < rank[out[j]] })
+	return out
 }
 
 // worker carries the fixpoint state: the analysis Info, the Program under

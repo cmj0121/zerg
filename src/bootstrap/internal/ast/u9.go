@@ -103,6 +103,14 @@ type ImportSpec struct {
 	// mangling on it (falling back to the local binding name when unset, which
 	// keeps a directly-checked file without a loader pass working as before).
 	Module string
+
+	// Reexports lists the canonical C-mangle tags of the modules the module THIS
+	// spec resolves to re-exports through its own `import pub "…"` specs (one level,
+	// Phase 1g S2). The loader fills it after the graph is resolved; sema uses it so
+	// a member reached through this namespace that the module does not expose
+	// directly resolves onto a re-exported module's public surface. Empty for a plain
+	// import (or before the loader runs).
+	Reexports []string
 }
 
 // --- group 11: resource cleanup -----------------------------------------------

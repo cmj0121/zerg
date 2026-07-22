@@ -167,16 +167,22 @@ func (c *checker) namespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 	if sym == nil || sym.Kind != SymNamespace {
 		return nil, false
 	}
-	key := moduleMember(nsTag(sym, id.Name), fld.Name)
-	if sig, ok := c.info.Funcs[key]; ok {
+	res := c.resolveMember(sym, id.Name, fld.Name)
+	if !res.Found {
+		c.memberError(fld, id.Name, fld.Name, res.Private)
+		c.synthArgs(n)
+		return Invalid, true
+	}
+	c.recordMember(fld, res.Key)
+	if sig, ok := c.info.Funcs[res.Key]; ok {
 		return c.callFunc(n, sig), true
 	}
 	// A cross-module TYPE reached through the namespace as a constructor callee
 	// `ns.T(...)` builds that type (generalizing beyond the function-only bundle).
-	if ts := c.module.lookup(key); ts != nil && ts.Kind == SymType {
-		return c.construct(n, ts), true
+	if res.Sym != nil && res.Sym.Kind == SymType {
+		return c.construct(n, res.Sym), true
 	}
-	c.errorf(fld.Span(), "module %q has no public member %q", id.Name, fld.Name)
+	c.memberError(fld, id.Name, fld.Name, false)
 	c.synthArgs(n)
 	return Invalid, true
 }
@@ -187,21 +193,26 @@ func (c *checker) namespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 // class values in this phase, matching the bare-name rule). It generalizes the
 // function-only bundle to constants (member types are handled in resolveTypeRef).
 func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type {
-	key := moduleMember(nsTag(sym, local), n.Name)
-	if m := c.module.lookup(key); m != nil {
-		switch m.Kind {
+	res := c.resolveMember(sym, local, n.Name)
+	if !res.Found {
+		c.memberError(n, local, n.Name, res.Private)
+		return Invalid
+	}
+	c.recordMember(n, res.Key)
+	if res.Sym != nil {
+		switch res.Sym.Kind {
 		case SymConst, SymVar:
-			return m.Type
+			return res.Sym.Type
 		case SymType:
 			c.errorf(n.Span(), "type %q used as a value", n.Name)
 			return Invalid
 		}
 	}
-	if _, ok := c.info.Funcs[key]; ok {
+	if _, ok := c.info.Funcs[res.Key]; ok {
 		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
 		return Invalid
 	}
-	c.errorf(n.Span(), "module %q has no public member %q", local, n.Name)
+	c.memberError(n, local, n.Name, false)
 	return Invalid
 }
 

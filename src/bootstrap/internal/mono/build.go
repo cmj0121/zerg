@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/module"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
@@ -15,6 +16,16 @@ import (
 // then specializes each queued instance to a fixpoint, enqueuing any new
 // specialization it discovers.
 func Build(file *ast.File, info *sema.Info) *Program {
+	return BuildWithInit(file, info, nil)
+}
+
+// BuildWithInit is Build with a whole-program initialization plan (Phase 1g S3): in
+// addition to the function fixpoint, it monomorphizes every module `init()` body and
+// module-constant initializer under one shared, non-generic context and records the
+// per-module init groups on the Program, so the emitter lowers each module's init
+// function. A nil plan is exactly Build — no init code is walked and the Program's
+// init fields stay empty, keeping a no-init program byte-identical.
+func BuildWithInit(file *ast.File, info *sema.Info, plan *module.InitPlan) *Program {
 	w := &worker{
 		info: info,
 		prog: &Program{
@@ -34,7 +45,48 @@ func Build(file *ast.File, info *sema.Info) *Program {
 		w.queue = w.queue[1:]
 		w.specialize(in)
 	}
+	w.buildInits(plan)
 	return w.prog
+}
+
+// buildInits walks every module init body and module-constant initializer in the
+// plan under one shared non-generic instance (its overlay is the identity, so types
+// read through it are unchanged), enqueuing any generic function they call and
+// registering any nominal type they use. It records the resolved call targets on the
+// shared context and the per-module groups on the Program; a nil/empty plan leaves
+// the Program's init fields untouched.
+func (w *worker) buildInits(plan *module.InitPlan) {
+	if plan.Empty() {
+		return
+	}
+	ctx := &Instance{
+		Calls:       map[*ast.Call]string{},
+		DynSites:    map[*ast.Call]*DynSite{},
+		MethodCalls: map[*ast.Call]*MethodDispatch{},
+		OpCalls:     map[*ast.Binary]*MethodDispatch{},
+	}
+	w.prog.InitCtx = ctx
+	for _, m := range plan.Modules {
+		for _, b := range m.Consts {
+			w.collectType(ctx.BindType(w.info, b))
+			w.walkExpr(ctx, b.Value)
+		}
+		for _, in := range m.Inits {
+			if in.Body != nil {
+				for _, s := range in.Body.Stmts {
+					w.walkStmt(ctx, s)
+				}
+			}
+		}
+		w.prog.Inits = append(w.prog.Inits, InitGroup{Tag: m.Tag, Inits: m.Inits, Consts: m.Consts})
+	}
+	// Any function the fixpoint above discovered while walking the init code is queued;
+	// drain it so their bodies are specialized too.
+	for len(w.queue) > 0 {
+		in := w.queue[0]
+		w.queue = w.queue[1:]
+		w.specialize(in)
+	}
 }
 
 // worker carries the fixpoint state: the analysis Info, the Program under

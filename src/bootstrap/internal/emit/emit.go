@@ -213,10 +213,16 @@ func (e *emitter) program() {
 	// '#[dyn]' witness-table struct types, before any prototype that names one
 	e.witnessStructs()
 
+	// module-constant globals, evaluated at init (Phase 1g S3); none for a program
+	// with no module constant, which therefore stays byte-identical.
+	e.emitModuleConstGlobals()
+
 	// prototypes first, so declaration order does not constrain calls
 	for _, inst := range e.prog.Funcs {
 		e.line(e.prototype(inst) + ";")
 	}
+	// per-module init function prototypes (Phase 1g S3); none for a no-init program.
+	e.emitInitPrototypes()
 	e.blank()
 
 	// concrete witness tables, after the impl-method prototypes their slots name
@@ -231,6 +237,10 @@ func (e *emitter) program() {
 		e.function(inst)
 		e.blank()
 	}
+
+	// per-module init functions (Phase 1g S3), before the entry that calls them; none
+	// for a program with no init and no module constant.
+	e.emitInitFunctions()
 
 	e.cMain(main)
 }
@@ -458,6 +468,10 @@ func endsWithReturn(b *ast.Block) bool {
 func (e *emitter) cMain(main *sema.FuncSig) {
 	e.line("int main(void) {")
 	e.indent++
+	// Run every module's init in dependency order before main's body (Phase 1g S3);
+	// nothing is emitted for a program with no init and no module constant, so its
+	// entry stays byte-identical.
+	e.emitInitCalls()
 	switch {
 	case e.concurrency:
 		// A concurrent program runs main as the first coroutine under the scheduler
@@ -726,6 +740,13 @@ func (e *emitter) resetUsed() {
 	for _, ti := range e.prog.Types {
 		e.used[ti.Mangled] = true
 	}
+	// module-constant globals share the file scope with every body, so a body-local
+	// binding must not pick one of their names (Phase 1g S3).
+	for _, g := range e.prog.Inits {
+		for _, b := range g.Consts {
+			e.used["zg_"+b.Name] = true
+		}
+	}
 }
 
 // declareName maps a source name to a fresh, function-unique C name (plain
@@ -797,6 +818,9 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:
+		if s, ok := e.namespaceMemberValue(n); ok {
+			return s
+		}
 		return e.expr(n.X) + ".zg_" + n.Name
 	case *ast.Bracket:
 		if e.info.Brackets[n].Kind == sema.BracketIndex && len(n.Elems) == 1 {
@@ -1040,12 +1064,39 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	}
 	// A non-generic member calls the bundled top-level function directly; a generic
 	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name
-	// mono recorded for this call site.
-	target := e.prog.CallTarget(sema.NamespaceMemberName(sym, id.Name, fld.Name))
+	// mono recorded for this call site. The resolved merged name (which follows a
+	// one-level `import pub` re-export, Phase 1g S2) is read from sema's NsMembers
+	// table when present, falling back to the direct spelling.
+	key := sema.NamespaceMemberName(sym, id.Name, fld.Name)
+	if k, ok := e.info.NsMembers[fld]; ok {
+		key = k
+	}
+	target := e.prog.CallTarget(key)
 	if m, ok := e.cur.Calls[n]; ok {
 		target = m
 	}
 	return fmt.Sprintf("%s(%s)", target, args.String()), true
+}
+
+// namespaceMemberValue lowers a non-call namespace member access `ns.member` used as
+// a value — a cross-module module constant or binding — to the merged file-scope C
+// global sema resolved it to (honoring a one-level `import pub` re-export). It
+// returns false for an ordinary struct-field access, which the caller spells as
+// `x.zg_field`.
+func (e *emitter) namespaceMemberValue(n *ast.Field) (string, bool) {
+	id, ok := n.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok || sym.Kind != sema.SymNamespace {
+		return "", false
+	}
+	key, ok := e.info.NsMembers[n]
+	if !ok {
+		key = sema.NamespaceMemberName(sym, id.Name, n.Name)
+	}
+	return "zg_" + key, true
 }
 
 // callTarget is the mangled C name a call resolves to: a generic call site is

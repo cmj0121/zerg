@@ -70,6 +70,12 @@ type Symbol struct {
 	// without a loader pass (member resolution then falls back to the local name).
 	Module string
 
+	// Reexports holds, for a SymNamespace, the canonical tags of the modules the
+	// namespace's module re-exports through its own `import pub "…"` (one level, S2).
+	// A member the module does not expose directly resolves onto a re-exported
+	// module's public surface. Empty for a plain import.
+	Reexports []string
+
 	TypeDef *types.TypeDef    // set when Kind == SymType
 	Variant *types.VariantDef // set when Kind == SymVariant
 }

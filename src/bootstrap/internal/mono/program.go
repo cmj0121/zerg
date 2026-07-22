@@ -34,9 +34,28 @@ type Program struct {
 	Witnesses []*Witness
 	Main      *Instance
 
+	// Inits is the module-initialization plan the emitter lowers (Phase 1g S3): the
+	// modules that own an `init()` block or a module constant, in dependency order.
+	// InitCtx is the shared, non-generic instance context under which every init body
+	// and constant initializer was monomorphized, so the emitter reads their generic
+	// call targets and type overlays through it. Both empty/nil for a program with no
+	// init and no module constant, which therefore stays byte-identical.
+	Inits   []InitGroup
+	InitCtx *Instance
+
 	byMangled   map[string]*Instance
 	typeByKey   map[string]*TypeInstance
 	witByGlobal map[string]*Witness
+}
+
+// InitGroup is one module's initialization content the emitter renders into a
+// per-module init function: the module's C-mangle tag (empty for the entry module),
+// its `init()` blocks in declaration order, and its module constants in declaration
+// order (evaluated before the init blocks run).
+type InitGroup struct {
+	Tag    string
+	Inits  []*ast.InitDecl
+	Consts []*ast.BindStmt
 }
 
 // Instance is one function to emit: its source declaration (the body the emitter

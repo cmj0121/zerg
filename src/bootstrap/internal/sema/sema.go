@@ -81,6 +81,14 @@ type Info struct {
 	Brackets map[*ast.Bracket]BracketRes  // each '[ … ]' postfix: index vs type args
 	Patterns map[*ast.NamePattern]NameRes // each bare-name pattern: variant vs binding
 
+	// NsMembers records, for each namespace member access `ns.member` (the callee of a
+	// namespace call, or a namespace value/const access), the merged top-level name it
+	// resolved to — honoring a one-level `import pub` re-export (Phase 1g S2). mono and
+	// emit read it to spell the C target, so a re-exported member reaches the right
+	// module's definition. For a plain (non-re-exported) member it equals
+	// NamespaceMemberName, so the emitted C is unchanged.
+	NsMembers map[*ast.Field]string
+
 	// spec/impl layer (Phase 1c, U1)
 	Specs *SpecRegistry // collected specs, impls, and the per-type method namespaces
 }
@@ -101,6 +109,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 		Refs:      map[*ast.Ident]*Symbol{},
 		Brackets:  map[*ast.Bracket]BracketRes{},
 		Patterns:  map[*ast.NamePattern]NameRes{},
+		NsMembers: map[*ast.Field]string{},
 	}
 
 	r := &resolver{info: info}
@@ -113,6 +122,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	// registry must exist when collectFuncs runs genericEnv.
 	c.collectSpecsAndImpls(file)
 	c.collectFuncs(file)
+	c.checkModuleConsts(file)
 	c.checkFuncs(file)
 
 	return info, append(r.diags.Items(), c.diags.Items()...)
@@ -395,6 +405,14 @@ func (c *checker) checkFuncs(file *ast.File) {
 			c.checkFunc(n, nil)
 		case *ast.ImplDecl:
 			c.checkImpl(n)
+		case *ast.InitDecl:
+			c.checkInit(n)
+		case *ast.UnsafeGroup:
+			for _, sub := range n.Items {
+				if in, ok := sub.(*ast.InitDecl); ok {
+					c.checkInit(in)
+				}
+			}
 		}
 	}
 	// '#[derive]'-synthesized impls are not in the file, so their canonical method

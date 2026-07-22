@@ -49,6 +49,9 @@ const (
 	KChan
 	KFn
 	KPtr
+	// KRef is the refcounted heap box 'Ref[T]' (memory.md): a value shared by
+	// reference, not copied. It is the one non-POD box Phase 1d models.
+	KRef
 	// KOpt is the optional wrapper T?.
 	KOpt
 	// KEither is Either[X, Y] (Result[T] = Either[T, Err]); T? uses KOpt instead.
@@ -277,6 +280,17 @@ func (p *Ptr) String() string {
 	}
 	return "ptr[" + p.Elem.String() + "]"
 }
+
+// Ref is the refcounted heap box 'Ref[T]' (memory.md): a reference-counted value
+// carrying a T and a drop action, shared by reference so every copy names one
+// referent and the last holder frees it. The referent is fixed at construction,
+// which keeps refcounting cycle-free. Unlike every primitive/struct/tuple, a Ref
+// is NOT plain-old-data: copying it retains and dropping it releases (Phase 1d U3).
+type Ref struct{ Elem Type }
+
+func (*Ref) typ()             {}
+func (*Ref) Kind() Kind       { return KRef }
+func (r *Ref) String() string { return "Ref[" + r.Elem.String() + "]" }
 
 // Opt is the optional wrapper 'T?'.
 type Opt struct{ Elem Type }

@@ -59,17 +59,20 @@ func TestTempNameVsUserFunction(t *testing.T) {
 	}
 }
 
-// TestTupleValueDiagnostic covers the tracked minor: a tuple VALUE has no backend
-// lowering yet, so it must produce a clean sema diagnostic rather than the bad C
-// `void zg_t = 0;`.
-func TestTupleValueDiagnostic(t *testing.T) {
-	src := "fn main() -> Result[nil] {\n\tt := (11, 22)\n\treturn nil\n}\n"
+// TestTupleValueLowers covers U2 (completeness iteration 2): a tuple VALUE now
+// lowers to a monomorphized per-shape carrier `zg_tuple_<n>` with positional fields
+// `.f0, .f1, …`, rather than the old clean "not yet supported" diagnostic.
+func TestTupleValueLowers(t *testing.T) {
+	src := "fn main() -> Result[nil] {\n\tt := (11, 22)\n\tprint t.0 + t.1\n\treturn nil\n}\n"
 	code, _, diags := Compile(src)
-	if len(diags) == 0 {
-		t.Fatalf("a tuple value should be rejected with a clean diagnostic")
+	if len(diags) != 0 {
+		t.Fatalf("a tuple value should now lower cleanly, got diagnostics: %v", diags)
 	}
-	if code != "" {
-		t.Fatalf("no C should be emitted for a rejected program, got:\n%s", code)
+	if !strings.Contains(code, "typedef struct { int64_t f0; int64_t f1; } zg_tuple_0;") {
+		t.Fatalf("expected a zg_tuple_0 carrier typedef, got:\n%s", code)
+	}
+	if !strings.Contains(code, ".f0 = 11") || !strings.Contains(code, ".f1 = 22") {
+		t.Fatalf("expected the tuple struct literal, got:\n%s", code)
 	}
 }
 

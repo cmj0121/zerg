@@ -767,6 +767,10 @@ func unify(decl, actual Type, subT map[string]Type, subV map[string]types.ConstV
 		if a, ok := actual.(*types.Opt); ok {
 			unify(d.Elem, a.Elem, subT, subV)
 		}
+	case *types.Ref:
+		if a, ok := actual.(*types.Ref); ok {
+			unify(d.Elem, a.Elem, subT, subV)
+		}
 	case *types.Struct:
 		if a, ok := actual.(*types.Struct); ok && a.Def == d.Def {
 			for i := range d.Args {
@@ -891,6 +895,16 @@ func (c *checker) inferField(n *ast.Field) Type {
 			return substituteArgs(st.Def.Params, st.Args, f.Type)
 		}
 		c.errorf(n.Span(), "type %s has no field %q", st.Def.Name, n.Name)
+		return Invalid
+	}
+	// A channel's `.recv` / `.send` value narrowing (GRAMMAR group 9) has no backend
+	// lowering yet — the narrowed handle needs the right retain/drop discipline for a
+	// receive-only vs send-only view. Reject it cleanly rather than silently type it as
+	// void and emit a bad field access; direction narrowing via a `<-chan[T]` /
+	// `chan[T]<-` annotation on the binding or parameter is the supported path today.
+	if _, ok := xt.(*types.Chan); ok && (n.Name == "recv" || n.Name == "send") {
+		c.errorf(n.Span(), "channel `.%s` value narrowing is not yet supported; "+
+			"annotate the binding or parameter type instead (`<-chan[T]` for receive-only, `chan[T]<-` for send-only)", n.Name)
 		return Invalid
 	}
 	return types.Unknown

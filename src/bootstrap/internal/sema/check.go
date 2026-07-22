@@ -673,21 +673,20 @@ func (c *checker) checkTupleLit(n *ast.TupleLit, want Type) Type {
 		for i, el := range n.Elems {
 			c.checkElem(el, w.Elems[i], "tuple element")
 		}
-		c.errorf(n.Span(), "tuple values are not yet supported")
 		return w
 	}
 	return c.synthTupleLit(n)
 }
 
+// synthTupleLit types a tuple literal '(a, b, …)' bottom-up as the product of its
+// element types. The value lowers to a monomorphized per-shape C carrier (U2), so no
+// element restriction is imposed here; a non-POD element (one holding a Ref) is
+// caught at its copy site by the emitter's clean unsupported-copy diagnostic.
 func (c *checker) synthTupleLit(n *ast.TupleLit) Type {
 	elems := make([]Type, len(n.Elems))
 	for i, el := range n.Elems {
 		elems[i] = c.synth(el)
 	}
-	// A tuple VALUE has no backend lowering yet (its per-shape C struct is not
-	// generated), so the emitter would produce `void zg_t = 0;`. Reject it cleanly
-	// here rather than emit bad C; the value carrier is tracked for a later slice.
-	c.errorf(n.Span(), "tuple values are not yet supported")
 	return &types.Tuple{Elems: elems}
 }
 

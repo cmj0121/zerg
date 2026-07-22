@@ -78,14 +78,14 @@ func assertFuncs(t *testing.T, prog *Program, want ...string) {
 // the generic function itself is not emitted un-instantiated.
 func TestInstantiateTwoTypes(t *testing.T) {
 	prog := build(t, "fn id[T](x: T) -> T { return x }\nfn main() { print id(5)\n print id(true) }")
-	assertFuncs(t, prog, "zg_main", "zg_id__i", "zg_id__b")
+	assertFuncs(t, prog, "zg_main", "zgg_2_idi", "zgg_2_idb")
 }
 
 // TestDedup checks that the same instantiation reached twice collapses to a single
 // instance (DESIGN-1c §4.3).
 func TestDedup(t *testing.T) {
 	prog := build(t, "fn id[T](x: T) -> T { return x }\nfn main() { print id(5)\n print id(6) }")
-	assertFuncs(t, prog, "zg_main", "zg_id__i")
+	assertFuncs(t, prog, "zg_main", "zgg_2_idi")
 }
 
 // TestTransitive checks that a generic function calling another generic function
@@ -95,7 +95,7 @@ func TestTransitive(t *testing.T) {
 		"fn wrap[T](x: T) -> T { return id(x) }\n" +
 		"fn main() { print wrap(7)\n print wrap(false) }"
 	prog := build(t, src)
-	assertFuncs(t, prog, "zg_main", "zg_wrap__i", "zg_wrap__b", "zg_id__i", "zg_id__b")
+	assertFuncs(t, prog, "zg_main", "zgg_4_wrapi", "zgg_4_wrapb", "zgg_2_idi", "zgg_2_idb")
 }
 
 // TestValueGeneric checks that a value-generic parameter instantiates once per
@@ -105,7 +105,7 @@ func TestValueGeneric(t *testing.T) {
 		"fn main() {\n a: [int; 3] = [10, 20, 30]\n b: [int; 2] = [40, 50]\n" +
 		" print head(a)\n print head(b) }"
 	prog := build(t, src)
-	assertFuncs(t, prog, "zg_main", "zg_head__n3", "zg_head__n2")
+	assertFuncs(t, prog, "zg_main", "zgg_4_headVi3_", "zgg_4_headVi2_")
 }
 
 // TestGenericStruct checks that a generic struct used at two types yields one
@@ -121,12 +121,12 @@ func TestGenericStruct(t *testing.T) {
 	for _, ti := range prog.Types {
 		names[ti.Mangled] = ti
 	}
-	for _, want := range []string{"zg_Box__i", "zg_Box__b"} {
+	for _, want := range []string{"zgt_N3_Box1_i", "zgt_N3_Box1_b"} {
 		if names[want] == nil {
 			t.Fatalf("missing type instance %q; got %v", want, names)
 		}
 	}
-	if f := names["zg_Box__i"].Fields; len(f) != 1 || f[0].Name != "value" || f[0].Type != sema.Int {
+	if f := names["zgt_N3_Box1_i"].Fields; len(f) != 1 || f[0].Name != "value" || f[0].Type != sema.Int {
 		t.Fatalf("Box[int] fields = %+v, want value:int", f)
 	}
 }

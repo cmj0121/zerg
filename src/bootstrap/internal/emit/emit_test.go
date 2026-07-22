@@ -219,10 +219,10 @@ func TestGenericsCompileAndRun(t *testing.T) {
 func TestGenericSpecializationShape(t *testing.T) {
 	code := emitC(t, "fn id[T](x: T) -> T { return x }\nfn main() {\n print id(5)\n print id(true)\n}")
 	for _, want := range []string{
-		"int64_t zg_id__i(int64_t zg_x)",
-		"bool zg_id__b(bool zg_x)",
-		"zg_id__i(5)",
-		"zg_id__b(true)",
+		"int64_t zgg_2_idi(int64_t zg_x)",
+		"bool zgg_2_idb(bool zg_x)",
+		"zgg_2_idi(5)",
+		"zgg_2_idb(true)",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("specialized C missing %q\n---\n%s", want, code)

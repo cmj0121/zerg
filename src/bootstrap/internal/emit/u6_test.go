@@ -16,12 +16,12 @@ func TestDynDispatchEmit(t *testing.T) {
 		"fn main() {\n  print total(Wrap(5))\n}")
 
 	for _, want := range []string{
-		"} zg_witness_Show;",
+		"} zgs_Show;",
 		"int64_t (*value)(const void*);",
-		"static const zg_witness_Show zg_witness_Show__Wrap = { zg_Wrap__value };",
-		"int64_t zg_total__dyn(const void* zg_x, const zg_witness_Show* w) {",
+		"static const zgs_Show zgw_4_ShowN4_Wrap0_ = { zge_N4_Wrap0__value };",
+		"int64_t zgd_total(const void* zg_x, const zgs_Show* w) {",
 		"return w->value((const void*)zg_x);",
-		"&zg_witness_Show__Wrap",
+		"&zgw_4_ShowN4_Wrap0_",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q\n---\n%s", want, code)
@@ -38,7 +38,7 @@ func TestGenericEnumEmit(t *testing.T) {
 
 	for _, want := range []string{
 		"int32_t tag;",
-		"} zg_Box__i;",
+		"} zgt_N3_Box1_i;",
 		".tag = 0, .u.Full = {.f0 = 7}",
 		".tag == 0",
 	} {

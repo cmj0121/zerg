@@ -20,9 +20,9 @@ func TestGenericEnumSpecialized(t *testing.T) {
 		"fn unwrap[T](b: Box[T], d: T) -> T {\n  return match b {\n    Full(v) => v\n    Empty => d\n  }\n}\n"+
 		"fn main() {\n  print unwrap(Full(7), 0)\n}")
 
-	ti := hasType(prog, "zg_Box__i")
+	ti := hasType(prog, "zgt_N3_Box1_i")
 	if ti == nil {
-		t.Fatalf("no specialized enum zg_Box__i; got %v", typeNames(prog))
+		t.Fatalf("no specialized enum zgt_N3_Box1_i; got %v", typeNames(prog))
 	}
 	if !ti.IsEnum || len(ti.Variants) != 2 {
 		t.Fatalf("Box__i should be an enum with 2 variants, got IsEnum=%v variants=%d", ti.IsEnum, len(ti.Variants))
@@ -57,8 +57,8 @@ func TestDynWitnessBuilt(t *testing.T) {
 			dyn = in
 		}
 	}
-	if dyn == nil || dyn.Mangled != "zg_total__dyn" {
-		t.Fatalf("expected one erased dyn body zg_total__dyn; funcs=%v", mangledNames(prog))
+	if dyn == nil || dyn.Mangled != "zgd_total" {
+		t.Fatalf("expected one erased dyn body zgd_total; funcs=%v", mangledNames(prog))
 	}
 	if len(dyn.Erased) != 1 || !dyn.Erased[0] {
 		t.Fatalf("dyn body's single type parameter should be erased, got %v", dyn.Erased)
@@ -67,7 +67,7 @@ func TestDynWitnessBuilt(t *testing.T) {
 		t.Fatalf("expected one witness table, got %d", len(prog.Witnesses))
 	}
 	w := prog.Witnesses[0]
-	if w.Global != "zg_witness_Show__Wrap" || len(w.Slots) != 1 || w.Slots[0].Fn != "zg_Wrap__value" {
+	if w.Global != "zgw_4_ShowN4_Wrap0_" || len(w.Slots) != 1 || w.Slots[0].Fn != "zge_N4_Wrap0__value" {
 		t.Fatalf("witness table wrong: %+v", w)
 	}
 }

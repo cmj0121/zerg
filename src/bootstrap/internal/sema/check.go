@@ -604,6 +604,7 @@ func (c *checker) checkTupleLit(n *ast.TupleLit, want Type) Type {
 		for i, el := range n.Elems {
 			c.checkElem(el, w.Elems[i], "tuple element")
 		}
+		c.errorf(n.Span(), "tuple values are not yet supported")
 		return w
 	}
 	return c.synthTupleLit(n)
@@ -614,6 +615,10 @@ func (c *checker) synthTupleLit(n *ast.TupleLit) Type {
 	for i, el := range n.Elems {
 		elems[i] = c.synth(el)
 	}
+	// A tuple VALUE has no backend lowering yet (its per-shape C struct is not
+	// generated), so the emitter would produce `void zg_t = 0;`. Reject it cleanly
+	// here rather than emit bad C; the value carrier is tracked for a later slice.
+	c.errorf(n.Span(), "tuple values are not yet supported")
 	return &types.Tuple{Elems: elems}
 }
 

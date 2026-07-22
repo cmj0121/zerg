@@ -376,6 +376,13 @@ int zrt_sched_main(zrt_main_fn fn);
 int zrt_sched_main_nil(void (*fn)(void));
 int zrt_sched_main_int(int64_t (*fn)(void));
 
+/* zrt_sched_run starts the scheduler, runs fn as the first coroutine (coroutine 0),
+ * and drains the run queue. Unlike the _main shims it maps no return value to an exit
+ * code — the `zerg test` driver (Phase 1i) uses it so a `#[test]` that `spawn`s or
+ * uses a channel runs under the scheduler like a normal program, then reads its own
+ * pass/fail tally for the exit code. Linked only into a concurrent test binary. */
+void zrt_sched_run(void (*fn)(void));
+
 /* zrt_sched_current returns the running coroutine, or NULL when the scheduler loop
  * itself is running (no coroutine is current). chan.c uses it to park the caller. */
 zrt_coro *zrt_sched_current(void);

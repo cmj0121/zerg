@@ -126,11 +126,10 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 		return c.synthDiverge(n)
 	case *ast.GuardExpr:
 		return c.inferGuard(n)
+	case *ast.ChanNew:
+		return c.inferChanNew(n)
 	case *ast.Recv:
-		// a channel receive yields Result[T]; with no stdlib channel model yet its
-		// payload stays Unknown (FORK-4).
-		c.synth(n.X)
-		return types.Unknown
+		return c.inferRecv(n)
 	}
 	// blocks, if-expressions, f-strings, and the remaining group-8 operators are
 	// modelled in later iterations; treat them as Unknown so they do not cascade.
@@ -154,6 +153,38 @@ func (c *checker) synthBlock(b *ast.Block) Type {
 		value = Nil
 	}
 	return value
+}
+
+// inferChanNew types the channel constructor 'chan[T](cap?)' (GRAMMAR group 9): it
+// yields a bidirectional 'chan[T]' — narrowing to a send-/receive-only handle is a
+// property of the binding it flows into. An explicit capacity must be an integer
+// (0 = unbuffered rendezvous); an omitted capacity is unbuffered.
+func (c *checker) inferChanNew(n *ast.ChanNew) Type {
+	elem := c.resolveType(n.Elem)
+	if n.Cap != nil {
+		if ct := c.synth(n.Cap); !bad(ct) && !isIntegral(ct) {
+			c.errorf(n.Cap.Span(), "channel capacity must be an integer, found %s", ct)
+		}
+	}
+	return &types.Chan{Elem: elem, Dir: types.ChanBidi}
+}
+
+// inferRecv types a channel receive '<-ch' (GRAMMAR group 9): it yields Result[T]
+// (Left = a received value, Right = the channel closed, carrying StopIteration or a
+// crash Err). Receiving from a send-only channel is rejected (directional narrowing).
+func (c *checker) inferRecv(n *ast.Recv) Type {
+	xt := c.synth(n.X)
+	ch, ok := xt.(*types.Chan)
+	if !ok {
+		if !bad(xt) {
+			c.errorf(n.Span(), "receive '<-' requires a channel, found %s", xt)
+		}
+		return types.Unknown
+	}
+	if ch.Dir == types.ChanSend {
+		c.errorf(n.Span(), "cannot receive from a send-only channel %s", ch)
+	}
+	return resultType(ch.Elem)
 }
 
 func (c *checker) inferIdent(n *ast.Ident) Type {

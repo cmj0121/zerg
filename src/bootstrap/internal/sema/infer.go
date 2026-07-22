@@ -647,6 +647,10 @@ func substitute(t Type, subT map[string]Type, subV map[string]types.ConstVal) Ty
 		return &types.Map{Key: substitute(x.Key, subT, subV), Val: substitute(x.Val, subT, subV)}
 	case *types.Ref:
 		return &types.Ref{Elem: substitute(x.Elem, subT, subV)}
+	case *types.Chan:
+		return &types.Chan{Elem: substitute(x.Elem, subT, subV), Dir: x.Dir}
+	case *types.Either:
+		return &types.Either{Left: substitute(x.Left, subT, subV), Right: substitute(x.Right, subT, subV)}
 	case *types.Opt:
 		return &types.Opt{Elem: substitute(x.Elem, subT, subV)}
 	case *types.Struct:

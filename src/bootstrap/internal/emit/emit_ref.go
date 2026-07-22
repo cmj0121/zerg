@@ -135,6 +135,9 @@ func (e *emitter) prepareRuntime() {
 		e.concurrency = true
 		e.needsRuntime = true
 	}
+	// Number the channel receive element types and detect channel-handle drops, so the
+	// Result[T] carriers and drop thunks are ready before any body is emitted.
+	e.prepareChannels()
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}
@@ -276,9 +279,16 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 	if !containsRef(typ) || !isLValueExpr(x) {
 		return base
 	}
-	switch typ.(type) {
+	switch t := typ.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", base)
+	case *types.Chan:
+		// copying a channel handle retains it; a send-capable handle (bidi/send-only)
+		// also bumps the sender count, a receive-only handle does not.
+		if t.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_copy(%s)", base)
+		}
+		return fmt.Sprintf("zrt_chan_sender_copy(%s)", base)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(typ), base)
 	}
@@ -351,6 +361,7 @@ func (e *emitter) emitRefHelpers() {
 	}
 	e.emitDeferHelpers()
 	e.emitSpawnHelpers()
+	e.emitChanHelpers()
 }
 
 // programHasRefLocal reports whether the program binds a bare Ref[T] to a name (a

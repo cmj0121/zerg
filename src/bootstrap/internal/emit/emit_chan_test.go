@@ -41,6 +41,61 @@ func TestChannelLowering(t *testing.T) {
 	}
 }
 
+// TestSelectLowering is the slice-C3 lowering oracle: a `select` with a recv arm (with a
+// bind), a send arm, and a `done` arm lowers to a zrt_sel_case descriptor array, one
+// zrt_select call carrying the has_default / has_done flags, and a switch that binds the
+// recv arm's Result[T] carrier before its body and dispatches `done` from ZRT_SEL_DONE.
+func TestSelectLowering(t *testing.T) {
+	const src = "fn main() {\n" +
+		"  c1 := chan[int](1)\n" +
+		"  c2 := chan[int](1)\n" +
+		"  mut total := 0\n" +
+		"  select {\n" +
+		"    x := <-c1 => { total = x! }\n" +
+		"    c2 <- 7 => { total = 7 }\n" +
+		"    done => { total = 0 }\n" +
+		"  }\n" +
+		"  print total\n" +
+		"}"
+	code, manifest := emitWithManifest(t, src)
+	if !manifest.Concurrency {
+		t.Fatalf("a select program must report Concurrency\n%s", code)
+	}
+	for _, want := range []string{
+		"zrt_sel_case",         // the descriptor array
+		"ZRT_SEL_RECV",         // the recv case descriptor
+		"ZRT_SEL_SEND",         // the send case descriptor
+		"= zrt_select(",        // the one runtime call
+		", false, true);",      // has_default=false, has_done=true
+		"switch (",             // dispatch on the picked index
+		"zg_recv_0 zg_x = {",   // the recv arm binds its Result[T] carrier
+		"zg_force_0(",          // x! in the recv arm body
+		"case ZRT_SEL_DONE: {", // the done arm label
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("emitted C missing %q\n%s", want, code)
+		}
+	}
+}
+
+// TestSelectDefaultFlag checks a `select` with a `_` arm passes has_default=true and
+// dispatches it from the ZRT_SEL_DEFAULT label.
+func TestSelectDefaultFlag(t *testing.T) {
+	const src = "fn main() {\n" +
+		"  c := chan[int]()\n" +
+		"  select {\n" +
+		"    x := <-c => { print x! }\n" +
+		"    _ => { print 0 }\n" +
+		"  }\n" +
+		"}"
+	code, _ := emitWithManifest(t, src)
+	for _, want := range []string{", true, false);", "case ZRT_SEL_DEFAULT: {"} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("emitted C missing %q\n%s", want, code)
+		}
+	}
+}
+
 // TestChannelUnbufferedCap checks the omitted-capacity constructor lowers to capacity 0
 // (the unbuffered rendezvous form).
 func TestChannelUnbufferedCap(t *testing.T) {

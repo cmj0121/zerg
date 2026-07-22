@@ -19,9 +19,11 @@ type Node interface {
 	Trail() []token.Trivia
 }
 
-// Decl is a top-level declaration.
+// Decl is a declaration. A declaration is also a statement (GRAMMAR group 1's
+// decorated-decl: the top level and a block are both stmt-lists), so Decl embeds
+// Stmt and adds the declaration marker.
 type Decl interface {
-	Node
+	Stmt
 	declNode()
 }
 
@@ -37,11 +39,13 @@ type Expr interface {
 	exprNode()
 }
 
-// File is a whole source file: a sequence of declarations. End holds any
-// dangling trivia after the last declaration (comments at end of file).
+// File is a whole source file: the program's top-level stmt-list (GRAMMAR group
+// 1/10). An item is an import, a module-level binding, or a decorated declaration
+// (a declaration is also a statement). End holds any dangling trivia after the
+// last item (comments at end of file).
 type File struct {
 	base
-	Decls []Decl
+	Items []Stmt
 	End   []token.Trivia
 }
 
@@ -123,29 +127,46 @@ type ReturnStmt struct {
 	Cond  Expr // nil when unconditional; the 'if c' condition otherwise
 }
 
-// BreakStmt is 'break'.
-type BreakStmt struct{ base }
+// BreakStmt is 'break' with an optional trailing condition 'break if c'
+// (GRAMMAR group 6); a nil Cond is the unconditional form.
+type BreakStmt struct {
+	base
+	Cond Expr
+}
 
-// ContinueStmt is 'continue'.
-type ContinueStmt struct{ base }
+// ContinueStmt is 'continue' with an optional trailing condition 'continue if c'
+// (GRAMMAR group 6); a nil Cond is the unconditional form.
+type ContinueStmt struct {
+	base
+	Cond Expr
+}
 
-// IfBranch is one 'if'/'else if' condition and its body.
+// IfBranch is one 'if'/'else if' head and its body. A binding head 'if x := e'
+// carries the bound name in Bind (empty for a plain expression head) and the
+// present-tested expression in Cond (GRAMMAR group 6's if-head).
 type IfBranch struct {
+	Bind string // the bound name of an 'x := e' head; "" for a plain-expr head
 	Cond Expr
 	Body *Block
 }
 
-// IfStmt is an if/else-if/else chain (statement form; no value).
+// IfStmt is an if/else-if/else chain (statement form; no value). At statement
+// position the statement form always wins, so the trailing 'else' is optional.
 type IfStmt struct {
 	base
 	Branches []IfBranch
 	Else     *Block // nil when there is no 'else'
 }
 
-// ForStmt is 'for { }' (infinite when Cond is nil) or 'for cond { }' (while).
+// ForStmt is the one loop in its three forms (GRAMMAR group 6): infinite
+// 'for { }' (Cond nil, Var ""), while 'for cond { }' (Cond set), or iterate
+// 'for mut? v in e { }' (Var set, Iter the iterable).
 type ForStmt struct {
 	base
-	Cond Expr
+	Cond Expr   // the while condition; nil for the infinite and iterate forms
+	Mut  bool   // 'for mut v in e' — the iteration variable binds mutably in place
+	Var  string // the iterate form's variable; "" for the infinite and while forms
+	Iter Expr   // the iterate form's iterable expression; nil otherwise
 	Body *Block
 }
 
@@ -257,12 +278,6 @@ type LitPattern struct {
 	Neg bool // a leading '-' on a numeric literal
 }
 
-// BindPattern binds the subject to a fresh name (matches anything).
-type BindPattern struct {
-	base
-	Name string
-}
-
 // WildPattern is '_' — matches anything and binds nothing.
 type WildPattern struct{ base }
 
@@ -291,7 +306,6 @@ func (*Binary) node()      {}
 func (*Call) node()        {}
 func (*MatchExpr) node()   {}
 func (*LitPattern) node()  {}
-func (*BindPattern) node() {}
 func (*WildPattern) node() {}
 
 func (*FuncDecl) declNode() {}
@@ -318,5 +332,4 @@ func (*Call) exprNode()      {}
 func (*MatchExpr) exprNode() {}
 
 func (*LitPattern) patternNode()  {}
-func (*BindPattern) patternNode() {}
 func (*WildPattern) patternNode() {}

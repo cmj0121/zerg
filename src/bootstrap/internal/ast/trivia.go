@@ -80,8 +80,8 @@ func (c *triviaCollector) node(n Node) {
 	}
 	switch v := n.(type) {
 	case *File:
-		for _, d := range v.Decls {
-			c.node(d)
+		for _, it := range v.Items {
+			c.node(it)
 		}
 		c.add(v.End)
 	case *FuncDecl:
@@ -113,11 +113,26 @@ func (c *triviaCollector) node(n Node) {
 	case *ForStmt:
 		c.self(v)
 		c.expr(v.Cond)
+		c.expr(v.Iter)
 		c.block(v.Body)
+	case *WithStmt:
+		c.self(v)
+		c.expr(v.Resource)
+		c.block(v.Body)
+	case *RaiseStmt:
+		c.self(v)
+		c.expr(v.Value)
+		c.expr(v.From)
 	case *ExprStmt:
 		c.self(v)
 		c.expr(v.X)
-	case *NopStmt, *BreakStmt, *ContinueStmt:
+	case *BreakStmt:
+		c.self(v)
+		c.expr(v.Cond)
+	case *ContinueStmt:
+		c.self(v)
+		c.expr(v.Cond)
+	case *NopStmt:
 		c.self(v)
 	case *StructDecl:
 		c.self(v)
@@ -158,8 +173,78 @@ func (c *triviaCollector) node(n Node) {
 	case *LitPattern:
 		c.self(v)
 		c.expr(v.Lit)
-	case *BindPattern, *WildPattern:
+	case *RangeArm:
 		c.self(v)
+		c.expr(v.Lo)
+		c.expr(v.Hi)
+	case *VariantPattern:
+		c.self(v)
+		for _, e := range v.Elems {
+			c.node(e)
+		}
+	case *StructPattern:
+		c.self(v)
+		for _, f := range v.Fields {
+			if f.Pat != nil {
+				c.node(f.Pat)
+			}
+		}
+	case *TuplePattern:
+		c.self(v)
+		for _, e := range v.Elems {
+			c.node(e)
+		}
+	case *ListPattern:
+		c.self(v)
+		for _, el := range v.Elems {
+			if el.Pat != nil {
+				c.node(el.Pat)
+			}
+		}
+	case *AsPattern:
+		c.self(v)
+		c.node(v.Inner)
+	case *OrPattern:
+		c.self(v)
+		for _, alt := range v.Alts {
+			c.node(alt)
+		}
+	case *NamePattern, *WildPattern:
+		c.self(v)
+	case *SpawnStmt:
+		c.self(v)
+		c.expr(v.Call)
+	case *SendStmt:
+		c.self(v)
+		c.expr(v.Chan)
+		c.expr(v.Value)
+	case *DeferStmt:
+		c.self(v)
+		c.expr(v.Call)
+	case *DelStmt:
+		c.self(v)
+	case *ImportStmt:
+		c.self(v)
+		for _, s := range v.Specs {
+			c.self(s)
+		}
+		c.add(v.End)
+	case *SelectStmt:
+		c.self(v)
+		for i := range v.Arms {
+			arm := &v.Arms[i]
+			c.add(arm.Lead())
+			c.add(arm.Trail())
+			c.expr(arm.Chan)
+			c.expr(arm.Value)
+			c.expr(arm.Body)
+		}
+	case *UnsafeGroup:
+		c.self(v)
+		for _, it := range v.Items {
+			c.node(it)
+		}
+		c.add(v.End)
 	default:
 		// expressions and patterns share the expr path
 		if e, ok := n.(Expr); ok {
@@ -264,6 +349,28 @@ func (c *triviaCollector) expr(e Expr) {
 		c.block(v.Body)
 	case *Block:
 		c.block(v)
+	case *IfExpr:
+		c.self(v)
+		for _, br := range v.Branches {
+			c.expr(br.Cond)
+			c.block(br.Body)
+		}
+		c.block(v.Else)
+	case *GuardExpr:
+		c.self(v)
+		c.block(v.Body)
+	case *ChanNew:
+		c.self(v)
+		c.expr(v.Cap)
+	case *UnsafeExpr:
+		c.self(v)
+		c.block(v.Body)
+	case *AsmExpr:
+		c.self(v)
+		for _, op := range v.Operands {
+			c.self(op)
+			c.expr(op.Value)
+		}
 	case *MatchExpr:
 		c.self(v)
 		c.expr(v.Subject)

@@ -103,7 +103,7 @@ func (c *checker) errorf(span token.Span, format string, args ...any) {
 // --- pass 1: collect signatures ------------------------------------------------
 
 func (c *checker) collectFuncs(file *ast.File) {
-	for _, d := range file.Decls {
+	for _, d := range file.Items {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok {
 			continue
@@ -152,7 +152,7 @@ func (c *checker) resolveType(t ast.Type) Type {
 // --- pass 2: check bodies ------------------------------------------------------
 
 func (c *checker) checkFuncs(file *ast.File) {
-	for _, d := range file.Decls {
+	for _, d := range file.Items {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok {
 			continue
@@ -534,7 +534,7 @@ func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
 	switch p := pat.(type) {
 	case *ast.WildPattern:
 		// matches anything, binds nothing
-	case *ast.BindPattern:
+	case *ast.NamePattern:
 		c.declare(p.Span(), p.Name, subjT, false)
 	case *ast.LitPattern:
 		lt := c.checkExpr(p.Lit)
@@ -567,7 +567,7 @@ func isSimpleSubject(e ast.Expr) bool {
 
 func isCatchAll(pat ast.Pattern) bool {
 	switch pat.(type) {
-	case *ast.WildPattern, *ast.BindPattern:
+	case *ast.WildPattern, *ast.NamePattern:
 		return true
 	}
 	return false

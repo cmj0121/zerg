@@ -96,7 +96,7 @@ func (p *parser) parseFStr() ast.Expr {
 		case token.LBrace:
 			parts = append(parts, p.parseHole())
 		default:
-			p.fail(p.cur().Span, "malformed f-string near %q", p.cur().Kind.String())
+			p.fail(p.cur().Span, "malformed f-string near %s", describe(p.cur().Kind))
 		}
 	}
 }
@@ -116,7 +116,7 @@ func (p *parser) parseFCmd() ast.Expr {
 		case token.LBrace:
 			parts = append(parts, p.parseHole())
 		default:
-			p.fail(p.cur().Span, "malformed f-cmd near %q", p.cur().Kind.String())
+			p.fail(p.cur().Span, "malformed f-cmd near %s", describe(p.cur().Kind))
 		}
 	}
 }

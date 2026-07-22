@@ -38,14 +38,26 @@ func Format(src string) (string, []diag.Diagnostic) {
 // Print renders a parsed file in canonical form.
 func Print(file *ast.File) string {
 	p := &printer{}
-	for _, d := range file.Decls {
-		p.leadTrivia(d.Lead())
-		p.decl(d)
-		p.trailTrivia(d.Trail())
+	for _, it := range file.Items {
+		p.leadTrivia(it.Lead())
+		p.topItem(it)
+		p.trailTrivia(it.Trail())
 		p.nl()
 	}
 	p.leadTrivia(file.End)
 	return p.sb.String()
+}
+
+// topItem prints one item of the top-level stmt-list: a declaration (which owns
+// its own indent and decorator prefix) or a plain statement (an import or a
+// module-level binding) at the current indent.
+func (p *printer) topItem(it ast.Stmt) {
+	if d, ok := it.(ast.Decl); ok {
+		p.decl(d)
+		return
+	}
+	p.ind()
+	p.stmt(it)
 }
 
 // printer accumulates the canonical text; indent is the current block depth.
@@ -197,17 +209,41 @@ func (p *printer) stmt(s ast.Stmt) {
 		}
 	case *ast.BreakStmt:
 		p.write("break")
+		if n.Cond != nil {
+			p.write(" if ")
+			p.expr(n.Cond, precLowest)
+		}
 	case *ast.ContinueStmt:
 		p.write("continue")
+		if n.Cond != nil {
+			p.write(" if ")
+			p.expr(n.Cond, precLowest)
+		}
 	case *ast.IfStmt:
 		p.ifStmt(n)
 	case *ast.ForStmt:
-		p.write("for ")
-		if n.Cond != nil {
-			p.head(n.Cond)
-			p.write(" ")
-		}
-		p.block(n.Body)
+		p.forStmt(n)
+	case *ast.WithStmt:
+		p.withStmt(n)
+	case *ast.RaiseStmt:
+		p.raiseStmt(n)
+	case *ast.SpawnStmt:
+		p.write("spawn ")
+		p.expr(n.Call, precLowest)
+	case *ast.SendStmt:
+		p.expr(n.Chan, precLowest)
+		p.write(" <- ")
+		p.expr(n.Value, precLowest)
+	case *ast.DeferStmt:
+		p.write("defer ")
+		p.expr(n.Call, precLowest)
+	case *ast.DelStmt:
+		p.write("del ")
+		p.write(n.Name)
+	case *ast.ImportStmt:
+		p.importStmt(n)
+	case *ast.SelectStmt:
+		p.selectStmt(n)
 	case *ast.ExprStmt:
 		p.expr(n.X, precLowest)
 	}
@@ -284,20 +320,36 @@ func (p *printer) bind(n *ast.BindStmt) {
 }
 
 func (p *printer) ifStmt(n *ast.IfStmt) {
-	for i, br := range n.Branches {
+	p.ifBranches(n.Branches)
+	if n.Else != nil {
+		p.write(" else ")
+		p.block(n.Else)
+	}
+}
+
+// ifBranches prints an if/else-if chain's head branches (shared by the statement
+// and expression forms).
+func (p *printer) ifBranches(branches []ast.IfBranch) {
+	for i, br := range branches {
 		if i == 0 {
 			p.write("if ")
 		} else {
 			p.write(" else if ")
 		}
-		p.head(br.Cond)
+		p.ifHead(br)
 		p.write(" ")
 		p.block(br.Body)
 	}
-	if n.Else != nil {
-		p.write(" else ")
-		p.block(n.Else)
+}
+
+// ifHead prints an if head: a binding form 'x := e' or a plain head expression,
+// each wrapping a '{'-opening head in parens as GRAMMAR requires.
+func (p *printer) ifHead(br ast.IfBranch) {
+	if br.Bind != "" {
+		p.write(br.Bind)
+		p.write(" := ")
 	}
+	p.head(br.Cond)
 }
 
 // --- expressions --------------------------------------------------------------
@@ -462,6 +514,17 @@ func (p *printer) expr(e ast.Expr, prec int) {
 		p.block(n)
 	case *ast.MatchExpr:
 		p.match(n)
+	case *ast.IfExpr:
+		p.ifExpr(n)
+	case *ast.GuardExpr:
+		p.guardExpr(n)
+	case *ast.ChanNew:
+		p.chanNew(n)
+	case *ast.UnsafeExpr:
+		p.write("unsafe ")
+		p.block(n.Body)
+	case *ast.AsmExpr:
+		p.asmExpr(n)
 	}
 }
 
@@ -634,13 +697,34 @@ func (p *printer) pattern(pat ast.Pattern) {
 	switch n := pat.(type) {
 	case *ast.WildPattern:
 		p.write("_")
-	case *ast.BindPattern:
+	case *ast.NamePattern:
 		p.write(n.Name)
 	case *ast.LitPattern:
 		if n.Neg {
 			p.write("-")
 		}
 		p.expr(n.Lit, precLowest)
+	case *ast.VariantPattern:
+		p.variantPattern(n)
+	case *ast.StructPattern:
+		p.structPattern(n)
+	case *ast.TuplePattern:
+		p.patternList("(", ")", n.Elems)
+	case *ast.ListPattern:
+		p.listPattern(n)
+	case *ast.AsPattern:
+		p.pattern(n.Inner)
+		p.write(" as ")
+		p.write(n.Name)
+	case *ast.OrPattern:
+		for i, alt := range n.Alts {
+			if i > 0 {
+				p.write(" | ")
+			}
+			p.pattern(alt)
+		}
+	case *ast.RangeArm:
+		p.rangeArm(n)
 	}
 }
 

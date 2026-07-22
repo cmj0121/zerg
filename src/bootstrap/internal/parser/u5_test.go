@@ -10,10 +10,10 @@ import (
 func onlyDecl(t *testing.T, src string) ast.Decl {
 	t.Helper()
 	file := parseOK(t, src)
-	if len(file.Decls) != 1 {
-		t.Fatalf("got %d decls, want 1", len(file.Decls))
+	if len(file.Items) != 1 {
+		t.Fatalf("got %d items, want 1", len(file.Items))
 	}
-	return file.Decls[0]
+	return file.Items[0].(ast.Decl)
 }
 
 func TestStructDecl(t *testing.T) {

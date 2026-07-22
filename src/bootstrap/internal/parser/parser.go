@@ -81,9 +81,15 @@ type trivial interface {
 }
 
 // attach hoists trivia onto a node: the leading trivia of its first token and
-// the trailing trivia of its last one.
+// the trailing trivia of its last one. The lead is PREPENDED to whatever the
+// node already carries, so a declaration that stashed the trivia sitting between
+// its decorator prefix and its keyword (parseDecl, follow-up F1) keeps it —
+// ordinary nodes start with no lead, for which prepend is just assignment.
 func attach(n ast.Node, lead, trail []token.Trivia) {
 	if t, ok := n.(trivial); ok { // every node embeds base, so this always holds
+		if existing := n.Lead(); len(existing) > 0 {
+			lead = append(append([]token.Trivia{}, lead...), existing...)
+		}
 		t.SetLead(lead)
 		t.SetTrail(trail)
 	}
@@ -123,8 +129,44 @@ func (p *parser) expect(k token.Kind) token.Token {
 	if p.at(k) {
 		return p.advance()
 	}
-	p.errorf(p.cur().Span, "expected %q, found %q", k.String(), p.cur().Kind.String())
+	// An Illegal token was already diagnosed by the lexer (unterminated string,
+	// malformed number, stray character); do not stack a second, redundant
+	// message on top of it — the lexer's is the precise one.
+	if p.cur().Kind != token.Illegal {
+		p.errorf(p.cur().Span, "expected %s, found %s", describe(k), describe(p.cur().Kind))
+	}
 	panic(bailout{})
+}
+
+// describe renders a token kind as a human-readable phrase for diagnostics: a
+// category noun for the open-ended lexical classes ("an identifier", "a string
+// literal", "end of file") and the quoted spelling for the fixed keywords and
+// punctuation ("'}'", "':='"). It keeps every "expected …, found …" message
+// readable instead of leaking the internal token names.
+func describe(k token.Kind) string {
+	switch k {
+	case token.EOF:
+		return "end of file"
+	case token.Illegal:
+		return "invalid input"
+	case token.Ident:
+		return "an identifier"
+	case token.Int:
+		return "an integer literal"
+	case token.Float:
+		return "a float literal"
+	case token.Str:
+		return "a string literal"
+	case token.RawStr:
+		return "a raw string literal"
+	case token.Rune:
+		return "a rune literal"
+	case token.Byte:
+		return "a byte literal"
+	case token.Cmd:
+		return "a command literal"
+	}
+	return "'" + k.String() + "'"
 }
 
 func (p *parser) skipSemis() {
@@ -151,7 +193,12 @@ func (p *parser) errorf(span token.Span, format string, args ...any) {
 }
 
 func (p *parser) fail(span token.Span, format string, args ...any) {
-	p.errorf(span, format, args...)
+	// As in expect: a lexer-flagged Illegal token at the cursor already carries a
+	// precise diagnostic, so suppress the parser's follow-on message and just
+	// recover, keeping exactly one diagnostic per real error.
+	if p.cur().Kind != token.Illegal {
+		p.errorf(span, format, args...)
+	}
 	panic(bailout{})
 }
 
@@ -166,26 +213,71 @@ func (p *parser) parseFile() *ast.File {
 			file.End = p.cur().Leading
 			break
 		}
+		before := p.pos
 		lead := p.lead()
-		if d := p.tryDecl(); d != nil {
-			attach(d, lead, p.trailBehind())
-			file.Decls = append(file.Decls, d)
+		if s := p.tryTopStmt(); s != nil {
+			attach(s, lead, p.trailBehind())
+			file.Items = append(file.Items, s)
+			p.requireStmtSep()
+		} else if p.pos == before {
+			// A recovered error whose sync made no progress would spin forever;
+			// force one token of progress. The error was already diagnosed by the
+			// bailout, so this only guarantees termination.
+			p.advance()
 		}
 	}
 	return spanned(file, token.Span{Start: start, End: p.cur().Span.End})
 }
 
-func (p *parser) tryDecl() (d ast.Decl) {
+// tryTopStmt parses one top-level statement, recovering to the next declaration
+// boundary on a parse error.
+func (p *parser) tryTopStmt() (s ast.Stmt) {
 	defer func() {
 		if r := recover(); r != nil {
 			if _, ok := r.(bailout); !ok {
 				panic(r)
 			}
 			p.syncDecl()
-			d = nil
+			s = nil
 		}
 	}()
-	return p.parseDecl()
+	return p.parseTopStmt()
+}
+
+// parseTopStmt parses one item of the program's top-level stmt-list. Zerg's top
+// level is a full statement list (GRAMMAR:36 'program ::= stmt-list') because the
+// language supports SCRIPT MODE, so any statement is legal here — not only the
+// module surface. This routes the items that need top-level-specific treatment
+// (imports, the 'unsafe { … }' declaration GROUP vs. the block-expression, and
+// decorated / visibility-prefixed declarations) and otherwise falls through to
+// parseStmt so a bare 'print'/'if'/'for'/expression/etc. parses at the top level.
+// (Script-vs-compile-mode semantics — top-level statements run in script mode,
+// are inert in compile mode — are a 1b concern; 1a only parses and round-trips.)
+func (p *parser) parseTopStmt() ast.Stmt {
+	switch {
+	case p.at(token.Import):
+		return p.parseImport()
+	case p.at(token.Hash), p.at(token.Pub):
+		// '#[…]' or a 'pub' prefix can only introduce a declaration.
+		return p.parseDecl()
+	case p.at(token.Unsafe) && p.peek(1).Kind == token.LBrace:
+		// module-level 'unsafe { … }' is the declaration group, not a block-expr.
+		return p.parseUnsafeGroup()
+	case p.startsDecl():
+		// struct/enum/spec/impl/type/init/fn, possibly behind unsafe/mut modifiers.
+		return p.parseDecl()
+	}
+	return p.parseStmt()
+}
+
+// startsDecl reports whether the cursor begins a declaration (a decl keyword,
+// possibly behind pub/unsafe/mut modifiers), as opposed to an ordinary statement.
+func (p *parser) startsDecl() bool {
+	switch p.declHeadKind() {
+	case token.Struct, token.Enum, token.Spec, token.Impl, token.Type, token.Init, token.Fn:
+		return true
+	}
+	return false
 }
 
 // syncDecl advances to the start of the next declaration after an error.
@@ -279,6 +371,13 @@ func (p *parser) parseMutRef() bool {
 // --- statements ---------------------------------------------------------------
 
 func (p *parser) parseBlock() *ast.Block {
+	// A block body is never a head, so the '{'-opening-expression restriction is
+	// lifted inside it (a leading '{' statement is a block/map again); it is
+	// restored on the way out for the enclosing head.
+	saved := p.noBrace
+	p.noBrace = false
+	defer func() { p.noBrace = saved }()
+
 	lb := p.expect(token.LBrace)
 	b := &ast.Block{}
 	for {
@@ -286,13 +385,21 @@ func (p *parser) parseBlock() *ast.Block {
 		if p.at(token.RBrace) || p.at(token.EOF) {
 			break
 		}
+		before := p.pos
 		lead := p.lead()
 		if s := p.tryStmt(); s != nil {
 			attach(s, lead, p.trailBehind())
 			b.Stmts = append(b.Stmts, s)
+			p.requireStmtSep()
+		} else if p.pos == before {
+			p.advance() // guarantee progress (see parseFile) so recovery cannot spin
 		}
 	}
-	rb := p.expect(token.RBrace)
+	if !p.at(token.RBrace) { // the loop only exits early at EOF
+		p.fail(p.cur().Span, "unclosed block: expected '}' to close the '{' opened at %s, found %s",
+			lb.Span.Start, describe(p.cur().Kind))
+	}
+	rb := p.advance()
 	b.End = rb.Leading // dangling trivia between the last statement and '}'
 	return spanned(b, token.Span{Start: lb.Span.Start, End: rb.Span.End})
 }
@@ -317,6 +424,28 @@ func (p *parser) syncStmt() {
 	}
 }
 
+// requireStmtSep enforces GRAMMAR:41 — statements in a stmt-list are separated by
+// stmt-sep+ (a newline, which the lexer turns into an ASI ';', or an explicit
+// ';'). After a statement the cursor must be at a ';', a closing '}', or EOF; any
+// other token means two statements share a line with no separator, so it reports
+// a span-anchored diagnostic. Inside an unclosed '('/'[' the lexer suppresses ASI
+// and the whole thing is one expression, so this is only ever reached between two
+// genuine statements. A leading '{' gets a targeted hint: Zerg has no struct
+// brace-literal, so 'x := T{a: 1}' is really 'x := T' followed by a stray map —
+// the value is built with a call, 'T(a: 1)'.
+func (p *parser) requireStmtSep() {
+	if p.at(token.Semi) || p.at(token.RBrace) || p.at(token.EOF) {
+		return
+	}
+	if p.at(token.LBrace) {
+		p.errorf(p.cur().Span, "expected a newline or ';' to separate statements; "+
+			"a struct value is written as a call like T(a: 1), not with braces")
+		return
+	}
+	p.errorf(p.cur().Span, "expected a newline or ';' to separate statements, found %s",
+		describe(p.cur().Kind))
+}
+
 func (p *parser) parseStmt() ast.Stmt {
 	t := p.cur()
 	switch t.Kind {
@@ -330,15 +459,25 @@ func (p *parser) parseStmt() ast.Stmt {
 	case token.Return:
 		return p.parseReturn(t)
 	case token.Break:
-		p.advance()
-		return spanned(&ast.BreakStmt{}, t.Span)
+		return p.parseBreakContinue(true)
 	case token.Continue:
-		p.advance()
-		return spanned(&ast.ContinueStmt{}, t.Span)
+		return p.parseBreakContinue(false)
 	case token.If:
 		return p.parseIf()
 	case token.For:
 		return p.parseFor()
+	case token.With:
+		return p.parseWith()
+	case token.Raise:
+		return p.parseRaise()
+	case token.Spawn:
+		return p.parseSpawn()
+	case token.Defer:
+		return p.parseDefer()
+	case token.Del:
+		return p.parseDel()
+	case token.Select:
+		return p.parseSelect()
 	case token.Mut:
 		p.advance()
 		return p.parseBinding(t.Span.Start, true, false)
@@ -356,10 +495,14 @@ func (p *parser) parseStmt() ast.Stmt {
 		}
 	}
 	// Otherwise parse an expression; a following '=' makes it a reassignment
-	// (assign-target = expr), else it is an expression statement.
+	// (assign-target = expr), a following '<-' a send statement (ch <- v), else
+	// it is an expression statement.
 	v := p.parseExpr()
 	if p.at(token.Assign) {
 		return p.finishReassign(v)
+	}
+	if p.at(token.LArrow) {
+		return p.finishSend(v)
 	}
 	return spanned(&ast.ExprStmt{X: v}, token.Span{Start: t.Span.Start, End: v.Span().End})
 }
@@ -402,40 +545,6 @@ func (p *parser) parseBinding(start token.Pos, mut, konst bool) ast.Stmt {
 		p.fail(p.cur().Span, "expected ':=' or ': type =' in binding")
 	}
 	return spanned(b, token.Span{Start: start, End: b.Value.Span().End})
-}
-
-func (p *parser) parseIf() ast.Stmt {
-	start := p.expect(token.If).Span.Start
-	var branches []ast.IfBranch
-	cond := p.headExpr()
-	body := p.parseBlock()
-	branches = append(branches, ast.IfBranch{Cond: cond, Body: body})
-	end := body.Span().End
-
-	var elseBlock *ast.Block
-	for p.accept(token.Else) {
-		if p.accept(token.If) {
-			c := p.headExpr()
-			b := p.parseBlock()
-			branches = append(branches, ast.IfBranch{Cond: c, Body: b})
-			end = b.Span().End
-			continue
-		}
-		elseBlock = p.parseBlock()
-		end = elseBlock.Span().End
-		break
-	}
-	return spanned(&ast.IfStmt{Branches: branches, Else: elseBlock}, token.Span{Start: start, End: end})
-}
-
-func (p *parser) parseFor() ast.Stmt {
-	start := p.expect(token.For).Span.Start
-	var cond ast.Expr
-	if !p.at(token.LBrace) {
-		cond = p.headExpr()
-	}
-	body := p.parseBlock()
-	return spanned(&ast.ForStmt{Cond: cond, Body: body}, token.Span{Start: start, End: body.Span().End})
 }
 
 // --- expressions --------------------------------------------------------------
@@ -612,7 +721,7 @@ func (p *parser) parseDot(e ast.Expr) ast.Expr {
 		return spanned(&ast.TupleIndex{X: e, Index: int(p.parseIntValue(t)), Text: t.Lexeme},
 			token.Span{Start: e.Span().Start, End: t.Span.End})
 	}
-	p.fail(t.Span, "expected a field name or tuple index after '.', found %q", t.Kind.String())
+	p.fail(t.Span, "expected a field name or tuple index after '.', found %s", describe(t.Kind))
 	return nil
 }
 
@@ -717,12 +826,24 @@ func (p *parser) parsePrimary() ast.Expr {
 		return spanned(&ast.Ident{Name: "this"}, t.Span)
 	case token.Match:
 		return p.parseMatch()
+	case token.If:
+		return p.parseIfExpr()
+	case token.Guard:
+		return p.parseGuard()
 	case token.Fn:
 		return p.parseFnExpr()
 	case token.FStrBegin:
 		return p.parseFStr()
 	case token.FCmdBegin:
 		return p.parseFCmd()
+	case token.Chan:
+		return p.parseChanNew()
+	case token.Asm:
+		return p.parseAsm()
+	case token.Unsafe:
+		if p.peek(1).Kind == token.LBrace {
+			return p.parseUnsafeExpr()
+		}
 	case token.LParen:
 		return p.parseParenOrTuple()
 	case token.LBrack:
@@ -732,7 +853,7 @@ func (p *parser) parsePrimary() ast.Expr {
 			return p.parseBraceExpr()
 		}
 	}
-	p.fail(t.Span, "expected an expression, found %q", t.Kind.String())
+	p.fail(t.Span, "expected an expression, found %s", describe(t.Kind))
 	return nil // unreachable
 }
 
@@ -744,62 +865,82 @@ func (p *parser) parseMatch() ast.Expr {
 	subject := p.headExpr()
 	p.expect(token.LBrace)
 	var arms []ast.MatchArm
+	sawArm := false // did the source have any arm at all (even a malformed one)?
 	for {
 		p.skipSemis()
 		if p.at(token.RBrace) || p.at(token.EOF) {
 			break
 		}
+		sawArm = true
 		lead := p.lead()
-		arm := p.parseMatchArm()
+		arm, ok := p.tryMatchArm()
+		if !ok {
+			// a malformed arm was diagnosed and skipped; syncArm left the cursor
+			// at the next arm separator or the match's own '}', so the remaining
+			// arms (and the match) still parse instead of cascading.
+			continue
+		}
 		arm.SetLead(lead)
 		arm.SetTrail(p.trailBehind())
 		arms = append(arms, arm)
 	}
-	end := p.expect(token.RBrace).Span.End
-	return spanned(&ast.MatchExpr{Subject: subject, Arms: arms}, token.Span{Start: start, End: end})
+	rb := p.expect(token.RBrace)
+	if !sawArm {
+		// GRAMMAR:421 'match-body ::= match-arm+' — at least one arm is required.
+		// This is syntactic arity (not 1b exhaustiveness); anchor it at the match.
+		// Only reported when the braces were genuinely empty: a malformed arm that
+		// was diagnosed and skipped already carries its own error, so this must not
+		// pile a second diagnostic on top of it.
+		p.errorf(token.Span{Start: start, End: rb.Span.End}, "a match needs at least one arm")
+	}
+	return spanned(&ast.MatchExpr{Subject: subject, Arms: arms}, token.Span{Start: start, End: rb.Span.End})
+}
+
+// tryMatchArm parses one match arm, recovering within the match's braces on a
+// parse error: it reports the error, syncs to the next arm separator or the
+// closing '}', and returns ok=false so the arm is skipped without unwinding past
+// the match (which would leave the braces unbalanced and cascade).
+func (p *parser) tryMatchArm() (arm ast.MatchArm, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isBail := r.(bailout); !isBail {
+				panic(r)
+			}
+			p.syncArm()
+			ok = false
+		}
+	}()
+	return p.parseMatchArm(), true
+}
+
+// syncArm advances to the next arm/entry separator after a parse error inside a
+// braced construct (match/select/...): a statement separator or the enclosing
+// '}', neither of which it consumes, so the construct's own loop resumes cleanly.
+func (p *parser) syncArm() {
+	for !p.at(token.Semi) && !p.at(token.RBrace) && !p.at(token.EOF) {
+		p.advance()
+	}
 }
 
 func (p *parser) parseMatchArm() ast.MatchArm {
-	pat := p.parsePattern()
+	pat := p.parseArmPattern()
 	var guard ast.Expr
 	if p.accept(token.If) {
 		guard = p.parseExpr()
 	}
-	p.expect(token.FatArrow)
+	if !p.at(token.FatArrow) {
+		p.fail(p.cur().Span, "a match arm needs '=>' between its pattern and its body, found %s",
+			describe(p.cur().Kind))
+	}
+	p.advance() // '=>'
 	body := p.parseExpr()
 	arm := ast.MatchArm{Pat: pat, Guard: guard, Body: body}
 	arm.SetSpan(token.Span{Start: pat.Span().Start, End: body.Span().End})
 	return arm
 }
 
-// parsePattern parses a Phase 0 pattern: a literal (with optional '-'), a binding
-// name, or the wildcard '_'.
-func (p *parser) parsePattern() ast.Pattern {
-	t := p.cur()
-	switch t.Kind {
-	case token.Ident:
-		p.advance()
-		if t.Lexeme == "_" {
-			return spanned(&ast.WildPattern{}, t.Span)
-		}
-		return spanned(&ast.BindPattern{Name: t.Lexeme}, t.Span)
-	case token.Minus:
-		p.advance()
-		if !p.at(token.Int) && !p.at(token.Float) {
-			p.fail(p.cur().Span, "expected a number after '-' in a pattern")
-		}
-		lit := p.parseLiteralNode()
-		return spanned(&ast.LitPattern{Lit: lit, Neg: true},
-			token.Span{Start: t.Span.Start, End: lit.Span().End})
-	case token.Int, token.Float, token.Str, token.True, token.False, token.Nil:
-		lit := p.parseLiteralNode()
-		return spanned(&ast.LitPattern{Lit: lit}, lit.Span())
-	}
-	p.fail(t.Span, "expected a pattern, found %q", t.Kind.String())
-	return nil
-}
-
-// parseLiteralNode parses a single literal token into its expression node.
+// parseLiteralNode parses a single literal token into its expression node — the
+// literals a match literal-pattern or a range-arm bound may carry.
 func (p *parser) parseLiteralNode() ast.Expr {
 	t := p.cur()
 	switch t.Kind {
@@ -812,6 +953,15 @@ func (p *parser) parseLiteralNode() ast.Expr {
 	case token.Str:
 		p.advance()
 		return spanned(&ast.StrLit{Value: t.Str}, t.Span)
+	case token.RawStr:
+		p.advance()
+		return spanned(&ast.RawStrLit{Text: t.Lexeme, Value: t.Str}, t.Span)
+	case token.Rune:
+		p.advance()
+		return spanned(&ast.RuneLit{Text: t.Lexeme, Value: decodeRune(t.Str)}, t.Span)
+	case token.Byte:
+		p.advance()
+		return spanned(&ast.ByteLit{Text: t.Lexeme, Value: decodeByte(t.Str)}, t.Span)
 	case token.True, token.False:
 		p.advance()
 		return spanned(&ast.BoolLit{Value: t.Kind == token.True}, t.Span)
@@ -819,7 +969,7 @@ func (p *parser) parseLiteralNode() ast.Expr {
 		p.advance()
 		return spanned(&ast.NilLit{}, t.Span)
 	}
-	p.fail(t.Span, "expected a literal, found %q", t.Kind.String())
+	p.fail(t.Span, "expected a literal, found %s", describe(t.Kind))
 	return nil
 }
 

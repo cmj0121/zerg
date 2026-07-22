@@ -23,7 +23,7 @@ func TestTriviaWalksWholeTree(t *testing.T) {
 	fn := &FuncDecl{Name: "f", Body: body}
 	fn.SetTrail([]token.Trivia{comment("# on the fn")})
 
-	file := &File{Decls: []Decl{fn}}
+	file := &File{Items: []Stmt{fn}}
 	file.End = []token.Trivia{comment("# file end")}
 
 	got := texts(Trivia(file))
@@ -45,7 +45,7 @@ func TestTriviaToleratesAbsentElse(t *testing.T) {
 		Else:     nil,
 	}
 	fn := &FuncDecl{Name: "f", Body: &Block{Stmts: []Stmt{iff}}}
-	_ = Trivia(&File{Decls: []Decl{fn}}) // must not panic
+	_ = Trivia(&File{Items: []Stmt{fn}}) // must not panic
 }
 
 // TestTriviaReachesMatchArms collects per-arm trivia.

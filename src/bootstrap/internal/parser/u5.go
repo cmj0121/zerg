@@ -15,16 +15,33 @@ import (
 
 // parseDecl parses one decorated declaration: an optional '#[…]' decorator run
 // (no statement separator binds it to its target), then the declaration itself.
+//
+// Follow-up F1: a doc-comment (or any trivia) sitting BETWEEN the decorator
+// prefix and the declaration keyword is the leading trivia of that keyword, not
+// of the '#['. The file-level attach hoists only the trivia before the '#[', so
+// this stashes the between-trivia on the declaration node; attach then prepends
+// the pre-decorator trivia, and both survive the reprint.
 func (p *parser) parseDecl() ast.Decl {
 	decos := p.parseDecorators()
+	between := p.lead() // trivia between the last decorator and the declaration keyword
 	d := p.parseBareDecl()
 	setDecorators(d, decos)
+	if len(decos) > 0 && len(between) > 0 {
+		if t, ok := d.(trivial); ok {
+			t.SetLead(between)
+		}
+	}
 	return d
 }
 
 // parseBareDecl dispatches on the declaration keyword, peeking past the leading
 // 'pub'/'unsafe'/'mut' modifiers to find it.
 func (p *parser) parseBareDecl() ast.Decl {
+	// A module-level 'unsafe { … }' is a declaration group (GRAMMAR group 12),
+	// told apart from an 'unsafe fn' declaration by the '{' that follows.
+	if p.at(token.Unsafe) && p.peek(1).Kind == token.LBrace {
+		return p.parseUnsafeGroup()
+	}
 	switch p.declHeadKind() {
 	case token.Struct:
 		return p.parseStructDecl()
@@ -41,7 +58,15 @@ func (p *parser) parseBareDecl() ast.Decl {
 	case token.Fn:
 		return p.parseFuncDecl()
 	default:
-		p.fail(p.cur().Span, "expected a declaration, found %q", p.cur().Kind.String())
+		// declHeadKind peeked past the leading pub/unsafe/mut modifiers to find a
+		// non-declaration keyword; consume those modifiers so the diagnostic and
+		// the recovery both land on the offending token (otherwise syncDecl would
+		// stop on the still-current modifier and make no progress — an infinite
+		// loop). See syncDecl's stop set.
+		for p.at(token.Pub) || p.at(token.Unsafe) || p.at(token.Mut) {
+			p.advance()
+		}
+		p.fail(p.cur().Span, "expected a declaration, found %s", describe(p.cur().Kind))
 		return nil
 	}
 }
@@ -79,6 +104,8 @@ func setDecorators(d ast.Decl, decos []*ast.Decorator) {
 	case *ast.ImplDecl:
 		n.Decorators = decos
 	case *ast.InitDecl:
+		n.Decorators = decos
+	case *ast.UnsafeGroup:
 		n.Decorators = decos
 	}
 }
@@ -338,7 +365,7 @@ func (p *parser) parseSpecMember() ast.SpecMember {
 	case token.Ident:
 		return p.parseAssocVal()
 	default:
-		p.fail(p.cur().Span, "expected a spec member, found %q", p.cur().Kind.String())
+		p.fail(p.cur().Span, "expected a spec member, found %s", describe(p.cur().Kind))
 		return nil
 	}
 }
@@ -543,7 +570,7 @@ func (p *parser) parseBaseType() ast.Type {
 	case token.Ident:
 		return p.parseNamedType()
 	default:
-		p.fail(p.cur().Span, "expected a type, found %q", p.cur().Kind.String())
+		p.fail(p.cur().Span, "expected a type, found %s", describe(p.cur().Kind))
 		return nil
 	}
 }

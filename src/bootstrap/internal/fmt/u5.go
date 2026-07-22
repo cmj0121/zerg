@@ -18,6 +18,12 @@ import (
 func (p *printer) decl(d ast.Decl) {
 	p.decorators(declDecorators(d))
 	p.ind()
+	p.declDispatch(d)
+}
+
+// declDispatch prints a declaration's body at the current cursor (decorators and
+// indent already emitted), so an unsafe group can reuse it for its own items.
+func (p *printer) declDispatch(d ast.Decl) {
 	switch n := d.(type) {
 	case *ast.FuncDecl:
 		p.funcDecl(n)
@@ -33,6 +39,8 @@ func (p *printer) decl(d ast.Decl) {
 		p.implDecl(n)
 	case *ast.InitDecl:
 		p.initDecl(n)
+	case *ast.UnsafeGroup:
+		p.unsafeGroup(n)
 	}
 }
 
@@ -52,6 +60,8 @@ func declDecorators(d ast.Decl) []*ast.Decorator {
 	case *ast.ImplDecl:
 		return n.Decorators
 	case *ast.InitDecl:
+		return n.Decorators
+	case *ast.UnsafeGroup:
 		return n.Decorators
 	}
 	return nil

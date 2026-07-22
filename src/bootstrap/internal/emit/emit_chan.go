@@ -248,13 +248,22 @@ type selOp struct {
 	recv bool
 }
 
+// selectDispatch writes the dispatch on zrt_select's returned pick as an if / else-if
+// chain (NOT a C switch): a Zerg `break`/`continue` in an arm body lowers to a bare
+// `break;`/`continue;`, which a C switch would capture — inside `for { select { … } }`
+// that would break the switch, not the loop, hanging the program. An if-chain keeps a
+// Zerg `break` bound to the enclosing loop.
 func (e *emitter) selectDispatch(
 	pick string, ops []selOp, vals []string, cs string,
 	hasDone, hasDefault bool, doneBody, defaultBody ast.Expr,
 ) {
-	e.line(fmt.Sprintf("switch (%s) {", pick))
+	// Each branch opens with `if`/`} else if` and is left OPEN (no closing brace); the
+	// next branch's `} else if` closes it and the final `e.line("}")` closes the last,
+	// exactly as ifStmt spells an if/else-if chain.
+	kw := "if"
+	any := false
 	for k, op := range ops {
-		e.line(fmt.Sprintf("case %d: {", k))
+		e.line(fmt.Sprintf("%s (%s == %d) {", kw, pick, k))
 		e.indent++
 		e.pushScope()
 		if op.recv && op.arm.HasBind && op.arm.Bind != "" && op.arm.Bind != "_" {
@@ -264,27 +273,28 @@ func (e *emitter) selectDispatch(
 		}
 		e.selectArmBody(op.arm.Body)
 		e.popScope()
-		e.line("break;")
 		e.indent--
-		e.line("}")
+		kw = "} else if"
+		any = true
 	}
 	if hasDone {
-		e.line("case ZRT_SEL_DONE: {")
+		e.line(fmt.Sprintf("%s (%s == ZRT_SEL_DONE) {", kw, pick))
 		e.indent++
 		e.selectArmBody(doneBody)
-		e.line("break;")
 		e.indent--
-		e.line("}")
+		kw = "} else if"
+		any = true
 	}
 	if hasDefault {
-		e.line("case ZRT_SEL_DEFAULT: {")
+		e.line(fmt.Sprintf("%s (%s == ZRT_SEL_DEFAULT) {", kw, pick))
 		e.indent++
 		e.selectArmBody(defaultBody)
-		e.line("break;")
 		e.indent--
+		any = true
+	}
+	if any {
 		e.line("}")
 	}
-	e.line("}")
 }
 
 // selectArmBody emits a select arm's body, run for effect. A block body's statements are

@@ -24,6 +24,11 @@ void zrt_retain(void *ref) {
 	((zrt_ref_hdr *)ref)->rc++;
 }
 
+void *zrt_ref_copy(void *ref) {
+	zrt_retain(ref);
+	return ref;
+}
+
 void zrt_release(void *ref) {
 	zrt_ref_hdr *h;
 	if (ref == NULL) {

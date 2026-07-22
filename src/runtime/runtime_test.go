@@ -122,12 +122,12 @@ static zrt_result_nil aborting_main(void) {
 }
 
 int main(void) {
-    /* Ref refcount: retain then two releases; drop runs once at rc==0. */
+    /* Ref refcount: copy (retain) then two releases; drop runs once at rc==0. */
     void *r = zrt_ref_alloc(sizeof(long), count_drop);
     *(long *)zrt_ref_payload(r) = 42;
-    zrt_retain(r);
+    void *r2 = zrt_ref_copy(r);  /* retains and returns the same box */
     zrt_release(r);
-    zrt_release(r);
+    zrt_release(r2);
     printf("drops=%d\n", g_drops);
 
     /* cleanup(defer) stack runs LIFO: push A then B, unwind runs B then A. */

@@ -135,6 +135,117 @@ func TestSchedulerCompilesAndRuns(t *testing.T) {
 	}
 }
 
+// TestChannelsCompileAndRun is the slice-C2 channel smoke: it links the runtime with
+// the scheduler and channels and drives all four behaviours the design calls out — a
+// buffered producer, an unbuffered rendezvous, auto-close on the last sender leaving
+// (recv -> Right/StopIteration), and a crashing last sender closing its channel with a
+// crash Err (recv -> Right/Err). Each producer runs as a coroutine that parks/rendezvous
+// with main, proving park/wake across a real context switch.
+func TestChannelsCompileAndRun(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+
+	driver := filepath.Join(dir, "chan_smoke.c")
+	if err := os.WriteFile(driver, []byte(chanSmokeC), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, "chan_smoke.bin")
+	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+
+	// Capture stdout only: a crashing coroutine reports "boom" on stderr (expected).
+	out, err := exec.Command(bin).Output()
+	if err != nil {
+		t.Fatalf("channel smoke run failed: %v\n%s", err, out)
+	}
+	want := "A=1\nA=2\nA-closed err=0\n" +
+		"B=10\nB=20\nB-closed err=0\n" +
+		"C=1 r=0\nC-crash r=1 err=coroutine crashed\n"
+	if string(out) != want {
+		t.Fatalf("channel smoke output = %q, want %q", out, want)
+	}
+}
+
+// chanSmokeC drives channels through their four moving parts. Each producer coroutine
+// receives the channel as its env; a sender registers its release on the cleanup stack
+// (as the compiler does for a channel parameter) so a crash auto-closes it. main holds a
+// receive-only copy (rc only) so the object survives the sender's close until main reads
+// the Right and releases it.
+const chanSmokeC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static void chan_sender_drop(void *slot) {
+    zrt_chan **s = (zrt_chan **)slot;
+    if (*s != NULL) { zrt_chan_sender_release(*s); }
+}
+
+static void producer_buffered(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    long v = 1; zrt_chan_send(ch, &v);
+    v = 2;     zrt_chan_send(ch, &v);
+    zrt_chan_sender_release(ch);
+}
+
+static void producer_rendezvous(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    long v = 10; zrt_chan_send(ch, &v);
+    v = 20;      zrt_chan_send(ch, &v);
+    zrt_chan_sender_release(ch);
+}
+
+static void producer_crash(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    zrt_defer(chan_sender_drop, &ch); /* released on every exit, incl. the crash unwind */
+    long v = 1; zrt_chan_send(ch, &v);
+    zrt_abort("boom");                /* unhandled: closes ch with a crash Err */
+}
+
+static void prog_main(void) {
+    long out;
+
+    /* A: buffered (cap 2). main is a receive-only holder; producer is the sole sender. */
+    zrt_chan *a = zrt_chan_new(sizeof(long), 2);
+    zrt_chan_copy(a);
+    zrt_spawn(producer_buffered, a);
+    while (zrt_chan_recv(a, &out) == 0) { printf("A=%ld\n", out); }
+    printf("A-closed err=%d\n", zrt_chan_err(a) != NULL);
+    zrt_chan_release(a);
+
+    /* B: unbuffered rendezvous (cap 0). */
+    zrt_chan *b = zrt_chan_new(sizeof(long), 0);
+    zrt_chan_copy(b);
+    zrt_spawn(producer_rendezvous, b);
+    while (zrt_chan_recv(b, &out) == 0) { printf("B=%ld\n", out); }
+    printf("B-closed err=%d\n", zrt_chan_err(b) != NULL);
+    zrt_chan_release(b);
+
+    /* C: crashing last sender closes with a crash Err. */
+    zrt_chan *c = zrt_chan_new(sizeof(long), 0);
+    zrt_chan_copy(c);
+    zrt_spawn(producer_crash, c);
+    int r1 = zrt_chan_recv(c, &out);
+    printf("C=%ld r=%d\n", out, r1);
+    int r2 = zrt_chan_recv(c, &out);
+    printf("C-crash r=%d err=%s\n", r2, zrt_chan_err(c));
+    zrt_chan_release(c);
+}
+
+int main(void) {
+    return zrt_sched_main_nil(prog_main);
+}
+`
+
 // schedSmokeC spawns two coroutines from a nil main, then returns; the scheduler
 // must still run both queued coroutines (fire-and-forget) before the program exits.
 const schedSmokeC = `

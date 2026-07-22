@@ -36,11 +36,7 @@ func BuildWithInit(file *ast.File, info *sema.Info, plan *module.InitPlan) *Prog
 			witByGlobal: map[string]*Witness{},
 		},
 	}
-	for _, d := range file.Items {
-		if fn, ok := d.(*ast.FuncDecl); ok && !isGeneric(info, fn) {
-			w.enqueueFn(fn, nil, nil)
-		}
-	}
+	w.seedFuncs(file.Items)
 	for len(w.queue) > 0 {
 		in := w.queue[0]
 		w.queue = w.queue[1:]
@@ -48,6 +44,24 @@ func BuildWithInit(file *ast.File, info *sema.Info, plan *module.InitPlan) *Prog
 	}
 	w.buildInits(plan)
 	return w.prog
+}
+
+// seedFuncs seeds the work-list with every non-generic function, descending into a
+// module-level `unsafe { }` group (Phase 1h U2) so a `fn` declared inside a group is
+// collected and emitted like a top-level one — closing the gap where a group fn was
+// never enqueued. A group's `mut` global is emitted through the init/const path
+// (buildInits), so only its functions are seeded here.
+func (w *worker) seedFuncs(items []ast.Stmt) {
+	for _, d := range items {
+		switch n := d.(type) {
+		case *ast.FuncDecl:
+			if !isGeneric(w.info, n) {
+				w.enqueueFn(n, nil, nil)
+			}
+		case *ast.UnsafeGroup:
+			w.seedFuncs(n.Items)
+		}
+	}
 }
 
 // buildInits walks every module init body and module-constant initializer in the

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/emit"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/module"
@@ -78,11 +79,79 @@ func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []di
 	if len(diags) > 0 {
 		return "", emit.Manifest{}, diags
 	}
+	// A `#[test]` function is not part of a normal build: strip it before sema so it is
+	// neither type-checked nor emitted (Phase 1i U5). Nothing calls a test function, so a
+	// program with no `#[test]` is unchanged and its emitted C stays byte-identical; a
+	// program that happens to carry one builds exactly as it would without it.
+	file.Items = dropTestItems(file.Items)
 	info, diags := sema.Check(file)
 	if len(diags) > 0 {
 		return "", emit.Manifest{}, diags
 	}
 	return emit.Emit(mono.BuildWithInit(file, info, plan))
+}
+
+// CompileTests lowers a program to a TEST binary's C: the `zerg test` counterpart of
+// CompileProgram (Phase 1i U2). It runs the same load -> sema pipeline but KEEPS the
+// `#[test]` functions (so sema fills Info.Tests), then emits a test-driver entry
+// (emit.EmitTests) instead of the ordinary `main`. The driver runs each test under
+// the runtime's guard/abort handler and reports pass/fail, so the emitted C always
+// needs the runtime. A program with no `#[test]` compiles to a driver that runs zero
+// tests and exits 0.
+func CompileTests(entryPath string) (string, emit.Manifest, []diag.Diagnostic) {
+	src, err := os.ReadFile(entryPath) //nolint:gosec // the entry source the user asked to test
+	if err != nil {
+		var diags diag.List
+		diags.Add(token.Span{}, "cannot read entry file %q: %v", entryPath, err)
+		return "", emit.Manifest{}, diags.Items()
+	}
+	root := module.OSProvider{Root: filepath.Dir(entryPath)}
+	loader := module.NewLoader(root, stdlibProvider{})
+	file, plan, diags := loader.LoadProgram(string(src))
+	if len(diags) > 0 {
+		return "", emit.Manifest{}, diags
+	}
+	info, diags := sema.Check(file)
+	if len(diags) > 0 {
+		return "", emit.Manifest{}, diags
+	}
+	return emit.EmitTests(mono.BuildWithInit(file, info, plan), info.Tests)
+}
+
+// dropTestItems returns items with every `#[test]` function removed, descending into
+// a module-level `unsafe { }` group so a test declared inside one is stripped too. It
+// allocates a new slice only when a test is present, so a program with none keeps its
+// exact item list (byte-identical guarantee).
+func dropTestItems(items []ast.Stmt) []ast.Stmt {
+	hasTest := false
+	for _, it := range items {
+		if fn, ok := it.(*ast.FuncDecl); ok && sema.HasTestDecorator(fn) {
+			hasTest = true
+			break
+		}
+		if g, ok := it.(*ast.UnsafeGroup); ok {
+			for _, sub := range g.Items {
+				if fn, ok := sub.(*ast.FuncDecl); ok && sema.HasTestDecorator(fn) {
+					hasTest = true
+					break
+				}
+			}
+		}
+	}
+	if !hasTest {
+		return items
+	}
+	out := make([]ast.Stmt, 0, len(items))
+	for _, it := range items {
+		if fn, ok := it.(*ast.FuncDecl); ok && sema.HasTestDecorator(fn) {
+			continue
+		}
+		if g, ok := it.(*ast.UnsafeGroup); ok {
+			g.Items = dropTestItems(g.Items)
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 // stdlibProvider is the embedded-stdlib source root (Phase 1g S4). It resolves an

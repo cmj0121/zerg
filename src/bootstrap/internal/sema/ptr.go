@@ -89,7 +89,10 @@ func (c *checker) ptrMethodCall(n *ast.Call, fld *ast.Field, pt *types.Ptr) (Typ
 			c.synthArgs(n)
 			return Nil, true
 		}
-		c.check(n.Args[0].Value, pt.Elem)
+		at := c.check(n.Args[0].Value, pt.Elem)
+		if !bad(at) && !bad(pt.Elem) && !c.assignable(pt.Elem, n.Args[0].Value, at) {
+			c.errorf(n.Args[0].Value.Span(), "cannot store %s through a ptr[%s]", at, pt.Elem)
+		}
 		return Nil, true
 	case "offset":
 		c.unsafeOp(n.Span(), "offsetting a raw pointer")

@@ -105,7 +105,7 @@ func (e *emitter) selfPtrName() string { return "zg_self" }
 // calls through the witness (see dynDispatch).
 func (e *emitter) dynFunction(inst *mono.Instance) {
 	e.cur = inst
-	e.used = map[string]bool{}
+	e.resetUsed()
 	e.counter = 0
 	e.pushScope()
 	// pre-reserve the witness pointer name so it cannot clash with a parameter
@@ -131,7 +131,7 @@ func (e *emitter) dynFunction(inst *mono.Instance) {
 // 'this.f' renders against a by-value receiver exactly as a normal method would.
 func (e *emitter) methodFunction(inst *mono.Instance) {
 	e.cur = inst
-	e.used = map[string]bool{}
+	e.resetUsed()
 	e.counter = 0
 	e.pushScope()
 	this := e.declareName("this")

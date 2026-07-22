@@ -504,6 +504,10 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 		r.resolveBlock(n.Body, ScopeBlock)
 	case *ast.UnsafeExpr:
 		r.resolveBlock(n.Body, ScopeBlock)
+	case *ast.FStr:
+		r.resolveFStrParts(n.Parts)
+	case *ast.FCmd:
+		r.resolveFStrParts(n.Parts)
 	case *ast.Try:
 		r.resolveExpr(n.X)
 	case *ast.Force:
@@ -524,6 +528,19 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 		r.resolveIfExpr(n)
 	case *ast.Block:
 		r.resolveBlock(n, ScopeBlock)
+	}
+}
+
+// resolveFStrParts resolves the hole expressions of an f-string or f-cmd (GRAMMAR
+// group 5): each hole is an ordinary expression, so its identifiers must be entered
+// into info.Refs like any other — without this a namespace member call in a hole
+// (`f"{math.abs(x)}"`) never records `math` as a namespace and the backend
+// miscompiles its callee. Text parts (Expr nil) carry no names.
+func (r *resolver) resolveFStrParts(parts []ast.FStrPart) {
+	for i := range parts {
+		if parts[i].Expr != nil {
+			r.resolveExpr(parts[i].Expr)
+		}
 	}
 }
 

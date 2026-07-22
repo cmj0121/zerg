@@ -34,13 +34,13 @@ func TestEmbedShipsTree(t *testing.T) {
 	for _, c := range cfiles {
 		got[filepath.Base(c)] = true
 	}
-	for _, want := range []string{"alloc.c", "ref.c", "unwind.c", "entry.c", "sys.c"} {
+	for _, want := range []string{"alloc.c", "ref.c", "unwind.c", "entry.c", "sys.c", "fmt.c"} {
 		if !got[want] {
 			t.Errorf("materialized C files missing %s (got %v)", want, cfiles)
 		}
 	}
-	if len(cfiles) != len(got) || len(got) != 5 {
-		t.Errorf("expected 5 C units, got %v", cfiles)
+	if len(cfiles) != len(got) || len(got) != 6 {
+		t.Errorf("expected 6 C units, got %v", cfiles)
 	}
 }
 

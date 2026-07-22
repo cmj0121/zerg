@@ -117,8 +117,9 @@ func sameStrings(a, b []string) bool {
 }
 
 // constEqual reports whether two compile-time array lengths are the same. An
-// unknown length is compatible with any length so an unfolded '[T; N]' does not
-// cascade errors.
+// unknown length — an unfolded position or a symbolic value-generic parameter — is
+// compatible with any length, so an unresolved '[T; N]' does not cascade errors
+// (the checker binds a symbolic length by local inference before comparing).
 func constEqual(a, b ConstVal) bool {
 	if !a.Known || !b.Known {
 		return true

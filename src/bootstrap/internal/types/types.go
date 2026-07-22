@@ -410,16 +410,27 @@ func (e *Enum) String() string { return e.Def.Name }
 // ConstVal is a folded compile-time value, used for an array length '[T; N]' and
 // (later) enum discriminants and value-generic arguments. Phase 1b only needs the
 // integer and boolean cases; Known is false for an unfolded position.
+//
+// Name is set when the length is a symbolic value-generic parameter — an array
+// element of a generic function's parameter type, '[int; N]'. A symbolic length is
+// structurally compatible with any concrete length (constEqual); the checker binds
+// it to a concrete value by local structural inference at each call site.
 type ConstVal struct {
 	Kind  Kind
 	I     int64
 	B     bool
 	Known bool
+	Name  string
 }
+
+// Symbolic reports whether this length is an unbound value-generic parameter.
+func (v ConstVal) Symbolic() bool { return v.Name != "" && !v.Known }
 
 // String renders the constant value for diagnostics.
 func (v ConstVal) String() string {
 	switch {
+	case v.Symbolic():
+		return v.Name
 	case !v.Known:
 		return "?"
 	case v.Kind == KBool:

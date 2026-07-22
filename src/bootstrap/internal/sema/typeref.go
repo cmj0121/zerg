@@ -83,9 +83,13 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	// generic imported type monomorphizes across the module boundary.
 	if len(ref.Proj) == 1 {
 		if sym := c.module.lookup(ref.Name); sym != nil && sym.Kind == SymNamespace {
-			key := moduleMember(nsTag(sym, ref.Name), ref.Proj[0])
-			if ts := c.module.lookup(key); ts != nil && ts.Kind == SymType {
-				return c.namedTypeUse(ts, c.typeArgs(ref.Args))
+			res := c.resolveMember(sym, ref.Name, ref.Proj[0])
+			if res.Found && res.Sym != nil && res.Sym.Kind == SymType {
+				return c.namedTypeUse(res.Sym, c.typeArgs(ref.Args))
+			}
+			if res.Private {
+				c.errorf(ref.Span(), "%q is not a public type of module %q", ref.Proj[0], ref.Name)
+				return Invalid
 			}
 			c.errorf(ref.Span(), "module %q has no public type %q", ref.Name, ref.Proj[0])
 			return Invalid

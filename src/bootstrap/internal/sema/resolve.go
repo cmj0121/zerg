@@ -151,11 +151,20 @@ func (r *resolver) collectImport(n *ast.ImportStmt) {
 			continue
 		}
 		if prev := r.module.local(name); prev != nil {
+			// The whole-program flatten (Phase 1g) merges every module's imports into one
+			// unit, so a module imported from two places (a diamond, or the entry and a
+			// dependency both importing it) yields two identical specs bound to the same
+			// namespace: keep the first and ignore the duplicate. A genuinely different
+			// module claiming a taken name is still a collision.
+			if prev.Kind == SymNamespace && spec.Module != "" && prev.Module == spec.Module {
+				continue
+			}
 			r.errorf(spec.Span(), "import %q collides with the existing name %q", spec.Path, name)
 			continue
 		}
 		r.module.declareLocal(&Symbol{
-			Name: name, Kind: SymNamespace, Pub: spec.Pub, Span: spec.Span(), Decl: spec, Module: spec.Module,
+			Name: name, Kind: SymNamespace, Pub: spec.Pub, Span: spec.Span(), Decl: spec,
+			Module: spec.Module, Reexports: spec.Reexports,
 		})
 	}
 }

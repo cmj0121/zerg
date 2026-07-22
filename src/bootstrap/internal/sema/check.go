@@ -232,6 +232,11 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 		}
 		return c.enumType(sym)
 	}
+	// a module constant (a top-level ':=', Phase 1g S3) is a value in the module
+	// surface: its type is filled by checkModuleConsts before any body is checked.
+	if sym := c.module.lookup(n.Name); sym != nil && (sym.Kind == SymConst || sym.Kind == SymVar) {
+		return sym.Type
+	}
 	if _, ok := c.info.Funcs[n.Name]; ok {
 		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
 		return Invalid

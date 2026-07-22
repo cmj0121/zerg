@@ -64,6 +64,10 @@ type FuncSig struct {
 	// backend to compile it to one shared witness-table body rather than
 	// monomorphizing per type argument (Phase 1c §6).
 	Dyn bool
+	// TestLabel is the human-readable `module::surface` name of a `#[test]` function
+	// (Phase 1i U1), set when the signature is collected into Info.Tests. It is empty
+	// for a non-test function, so a normal build never reads it.
+	TestLabel string
 }
 
 // Info is the result of a successful check, consumed by the emitter. The Phase 0
@@ -100,6 +104,13 @@ type Info struct {
 	// type. It is empty for a program with no module constant, which stays
 	// byte-identical.
 	ConstOrder []*ast.BindStmt
+
+	// Tests lists every `#[test]` function's signature, in the flattened whole-program
+	// order — entry-module tests (file order) first, then imported modules by canonical
+	// name — so `zerg test` runs them deterministically (Phase 1i U1/U3). It is empty
+	// for a program with no `#[test]`; a normal `zerg build` filters test functions out
+	// before this pass, so it is empty there too.
+	Tests []*FuncSig
 }
 
 // Check resolves and type-checks the file, returning the analysis info and any
@@ -280,7 +291,15 @@ func (c *checker) collectFuncItems(items []ast.Stmt, inUnsafe bool) {
 				c.errorf(n.Span(), "function %q is already declared", n.Name)
 				continue
 			}
-			c.info.Funcs[n.Name] = c.buildSig(n)
+			sig := c.buildSig(n)
+			c.info.Funcs[n.Name] = sig
+			// A `#[test]` function is a compiler-owned decorator (like #[derive]/#[extern]):
+			// collect it into Info.Tests after validating its shape (Phase 1i U1). A normal
+			// build never reaches here for a test function — the driver filters them out —
+			// so this fires only under `zerg test`.
+			if hasDecorator(n.Decorators, "test") {
+				c.collectTest(n, sig)
+			}
 		case *ast.UnsafeGroup:
 			c.collectFuncItems(n.Items, true)
 		}

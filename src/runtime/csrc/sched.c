@@ -269,3 +269,18 @@ int zrt_sched_main_int(int64_t (*fn)(void)) {
 	sched_run();
 	return g_exit_code;
 }
+
+/* the test-driver body pointer, run as coroutine 0 by zrt_sched_run. */
+static void (*g_run_body)(void);
+
+static void run_body_thunk(void *env) {
+	(void)env;
+	g_run_body();
+}
+
+void zrt_sched_run(void (*fn)(void)) {
+	sched_init();
+	g_run_body = fn;
+	zrt_spawn(run_body_thunk, NULL);
+	sched_run();
+}

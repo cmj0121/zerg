@@ -60,15 +60,35 @@ func reportUnusedImports(file *ast.File, used map[string]bool, diags *diag.List)
 
 // reportUnusedPrivate flags every module-private (non-pub) top-level declaration
 // whose name is never referenced. `main` is the program entry point, so it is
-// exempt even though it is not `pub`.
+// exempt even though it is not `pub`; a `#[test]` function is exempt for the same
+// reason — it is an entry point the `zerg test` runner calls, never the program
+// itself (Phase 1i U5), so it is expected to be unreferenced.
 func reportUnusedPrivate(file *ast.File, used map[string]bool, diags *diag.List) {
 	for _, it := range file.Items {
 		name, kind, pub, span, ok := privateDecl(it)
-		if !ok || pub || name == "main" || used[name] {
+		if !ok || pub || name == "main" || used[name] || isTestFunc(it) {
 			continue
 		}
 		diags.Add(span, "unused %s %q (module-private and never used)", kind, name)
 	}
+}
+
+// isTestFunc reports whether an item is a `#[test]` function (Phase 1i U5). Such a
+// function is an entry point for `zerg test`, not dead code, so lint exempts it from
+// the unused-private finding.
+func isTestFunc(it ast.Stmt) bool {
+	fn, ok := it.(*ast.FuncDecl)
+	if !ok {
+		return false
+	}
+	for _, deco := range fn.Decorators {
+		for _, item := range deco.Items {
+			if item.Name == "test" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // privateDecl reports a top-level declaration's name, a human label for its kind,

@@ -489,7 +489,30 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		if n.From != nil {
 			c.synth(n.From)
 		}
+	case *ast.DeferStmt:
+		// 'defer expr' (GRAMMAR group 11) runs expr at the enclosing block's exit on
+		// every path. The operand is synthesized so its type overlay reaches the
+		// emitter, which schedules it on the runtime cleanup stack.
+		c.synth(n.Call)
+	case *ast.WithStmt:
+		c.checkWith(n)
 	}
+}
+
+// checkWith type-checks a 'with e (as y)? { body }' (GRAMMAR group 6). The resource
+// expression is synthesized, an 'as y' binding takes the resource's type in a fresh
+// scope, and the body is checked there — so the emitter can desugar it to a scoped
+// binding whose Scoped teardown (a Ref's drop) runs on every exit.
+func (c *checker) checkWith(n *ast.WithStmt) {
+	rt := c.synth(n.Resource)
+	c.pushScope()
+	if n.Var != "" {
+		c.declare(n.Body.Span(), n.Var, rt, false)
+	}
+	for _, s := range n.Body.Stmts {
+		c.checkStmt(s)
+	}
+	c.popScope()
 }
 
 func (c *checker) checkCond(e ast.Expr) {

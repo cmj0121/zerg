@@ -300,12 +300,14 @@ func (e *Either) String() string {
 
 // Param is an abstract, bound-constrained type parameter. Under Phase 1b's
 // abstract checking a Param is identical only to itself (pointer identity), and
-// its body may use only the methods its Bounds' specs provide. Bounds are opaque
-// here (the sema Symbol pointers they reference live in internal/sema); this
-// package treats a Param purely by identity.
+// its body may use only the methods its Bounds' specs provide. Phase 1c resolves
+// Bounds to the concrete specs the parameter carries: '[T: Ord]' yields the Ord
+// spec closed over its super-specs (so Eq is present too), which the bound-
+// satisfaction and operator-resolution passes consult. The slice is empty for an
+// unbounded parameter. A Param is still compared purely by identity.
 type Param struct {
 	Name   string
-	Bounds []any
+	Bounds []*SpecDef
 }
 
 func (*Param) typ()             {}

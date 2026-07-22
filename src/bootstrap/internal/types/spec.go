@@ -17,7 +17,11 @@ type SpecDef struct {
 	Methods    []*SpecMethod
 	AssocTypes []*AssocTypeDef
 	AssocVals  []*AssocValDef
-	Decl       any
+	// Local is true when the spec is declared in this compilation unit. Phase 1c's
+	// single-module orphan rule treats a local spec (or a local target type) as
+	// "owned"; a built-in blessed spec (Eq/Ord) is foreign (Local false).
+	Local bool
+	Decl  any
 }
 
 // SpecMethod is one method of a spec: a required signature (Provided false, a

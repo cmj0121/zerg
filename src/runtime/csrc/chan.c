@@ -28,12 +28,20 @@
  * coroutine's own stack (valid while it is suspended): `val` points at the value to
  * send (a sender) or the receive target (a receiver), and `done` is set by the
  * counterparty when a direct hand-off completes, so the woken coroutine can tell a
- * rendezvous from a close. */
+ * rendezvous from a close.
+ *
+ * `claimed` supports select's park-on-many. A select parks one waiter on EACH watched
+ * channel, all sharing one bool: `claimed` points at it (NULL for a plain send/recv
+ * waiter). A counterparty hands off through wq_take, which claims the shared bool so the
+ * first hand-off wins and any later hand-off to another of that select's waiters is
+ * skipped — a select fires exactly one arm even while its other waiters still sit in
+ * other queues. */
 typedef struct zrt_waiter {
 	zrt_coro          *co;
 	void              *val;
 	bool               done;
 	struct zrt_waiter *next;
+	bool              *claimed; /* select: shared "already fired" flag; NULL if plain */
 } zrt_waiter;
 
 /* zrt_chan is the channel object (Fork-D layout). The ring buffer is present only for
@@ -76,6 +84,48 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 		w->next = NULL;
 	}
 	return w;
+}
+
+/* wq_remove unlinks a specific waiter from a queue if present, a no-op otherwise. A
+ * select removes its remaining waiters from every queue once it fires, before its stack
+ * (which the waiters live on) is reused. */
+static void wq_remove(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
+	zrt_waiter *prev = NULL;
+	for (zrt_waiter *cur = *head; cur != NULL; prev = cur, cur = cur->next) {
+		if (cur != w) {
+			continue;
+		}
+		if (prev == NULL) {
+			*head = cur->next;
+		} else {
+			prev->next = cur->next;
+		}
+		if (*tail == cur) {
+			*tail = prev;
+		}
+		cur->next = NULL;
+		return;
+	}
+}
+
+/* wq_take pops the next LIVE waiter for a hand-off, discarding stale select waiters
+ * whose select has already fired elsewhere, and claiming a fresh select waiter so it
+ * cannot also fire on another channel. A plain waiter (claimed == NULL) is always live.
+ * Used wherever a counterparty consumes a waiter (send-to-receiver, recv-from-sender). */
+static zrt_waiter *wq_take(zrt_waiter **head, zrt_waiter **tail) {
+	for (;;) {
+		zrt_waiter *w = wq_pop(head, tail);
+		if (w == NULL) {
+			return NULL;
+		}
+		if (w->claimed != NULL) {
+			if (*w->claimed) {
+				continue; /* stale: this select already fired on another channel */
+			}
+			*w->claimed = true; /* claim this select for this hand-off */
+		}
+		return w;
+	}
 }
 
 /* --- ring buffer ------------------------------------------------------------- */
@@ -167,7 +217,7 @@ void zrt_chan_send(zrt_chan *ch, const void *val) {
 		zrt_abort("send on a closed channel");
 	}
 	/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
-	zrt_waiter *r = wq_pop(&ch->recvq_head, &ch->recvq_tail);
+	zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
 	if (r != NULL) {
 		memcpy(r->val, val, ch->elemsz);
 		r->done = true;
@@ -180,7 +230,7 @@ void zrt_chan_send(zrt_chan *ch, const void *val) {
 		return;
 	}
 	/* full (or unbuffered with no receiver): park until a receiver takes the value. */
-	zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL};
+	zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL, NULL};
 	wq_push(&ch->sendq_head, &ch->sendq_tail, &w);
 	zrt_sched_park();
 	if (!w.done) {
@@ -195,7 +245,7 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		 * freed slot so a full buffer keeps flowing. */
 		if (ch->len > 0) {
 			ring_get(ch, out);
-			zrt_waiter *s = wq_pop(&ch->sendq_head, &ch->sendq_tail);
+			zrt_waiter *s = wq_take(&ch->sendq_head, &ch->sendq_tail);
 			if (s != NULL) {
 				ring_put(ch, s->val);
 				s->done = true;
@@ -205,7 +255,7 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		}
 		/* no buffered value but a parked sender: take its value directly (unbuffered
 		 * rendezvous, or a buffered channel whose sender parked on a full buffer). */
-		zrt_waiter *s = wq_pop(&ch->sendq_head, &ch->sendq_tail);
+		zrt_waiter *s = wq_take(&ch->sendq_head, &ch->sendq_tail);
 		if (s != NULL) {
 			memcpy(out, s->val, ch->elemsz);
 			s->done = true;
@@ -217,7 +267,7 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 			return 1;
 		}
 		/* empty and open: park until a sender hands off or the channel closes. */
-		zrt_waiter w = {zrt_sched_current(), out, false, NULL};
+		zrt_waiter w = {zrt_sched_current(), out, false, NULL, NULL};
 		wq_push(&ch->recvq_head, &ch->recvq_tail, &w);
 		zrt_sched_park();
 		if (w.done) {
@@ -229,4 +279,147 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 
 const char *zrt_chan_err(zrt_chan *ch) {
 	return ch->err;
+}
+
+/* --- select ------------------------------------------------------------------ */
+
+/* g_sel_rot rotates the fair ready-scan's start index so that, when several arms are
+ * ready at once, the winner rotates rather than always being the first (front) arm —
+ * enough fairness to keep a back arm from starving under the N:1 scheduler. */
+static size_t g_sel_rot;
+
+/* sel_try_recv performs a recv on ch if it can proceed WITHOUT blocking on a real value
+ * (a buffered element, or a parked live sender), returning 1 and delivering into *out;
+ * it returns 0 when the channel has no value to give right now (including a closed,
+ * drained channel — closure is resolved by the caller via `done` / Right). It mirrors
+ * zrt_chan_recv's ready path and uses wq_take, so a stale select sender is skipped. */
+static int sel_try_recv(zrt_chan *ch, void *out) {
+	if (ch->len > 0) {
+		ring_get(ch, out);
+		zrt_waiter *s = wq_take(&ch->sendq_head, &ch->sendq_tail);
+		if (s != NULL) {
+			ring_put(ch, s->val);
+			s->done = true;
+			zrt_sched_wake(s->co);
+		}
+		return 1;
+	}
+	zrt_waiter *s = wq_take(&ch->sendq_head, &ch->sendq_tail);
+	if (s != NULL) {
+		memcpy(out, s->val, ch->elemsz);
+		s->done = true;
+		zrt_sched_wake(s->co);
+		return 1;
+	}
+	return 0;
+}
+
+/* sel_try_send performs a send on ch if it can proceed without blocking (a parked live
+ * receiver, or buffer room), returning 1; it returns 0 when the channel would block.
+ * Sending on a closed channel is a program error and aborts (DESIGN-1e §4.2: a closed
+ * send case selected aborts). It mirrors zrt_chan_send's ready path. */
+static int sel_try_send(zrt_chan *ch, const void *val) {
+	if (ch->closed) {
+		zrt_abort("send on a closed channel");
+	}
+	zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
+	if (r != NULL) {
+		memcpy(r->val, val, ch->elemsz);
+		r->done = true;
+		zrt_sched_wake(r->co);
+		return 1;
+	}
+	if (ch->len < ch->cap) {
+		ring_put(ch, val);
+		return 1;
+	}
+	return 0;
+}
+
+/* sel_all_recv_closed reports whether every watched recv case's channel has closed (its
+ * buffer is drained by the time this runs, since a buffered value would have been
+ * value-ready). With no recv case it is vacuously true. Drives the `done` arm. */
+static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		if (cases[i].op == ZRT_SEL_RECV && !cases[i].ch->closed) {
+			return false;
+		}
+	}
+	return true;
+}
+
+int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
+	for (;;) {
+		size_t start = g_sel_rot++;
+		/* fair scan for a value-ready case: perform the first that can proceed. */
+		for (size_t k = 0; k < n; k++) {
+			size_t i = (start + k) % n;
+			zrt_sel_case *c = &cases[i];
+			if (c->op == ZRT_SEL_RECV) {
+				if (sel_try_recv(c->ch, c->val)) {
+					c->closed = 0;
+					return (int)i;
+				}
+			} else if (sel_try_send(c->ch, c->val)) {
+				return (int)i;
+			}
+		}
+		/* nothing value-ready. `done` fires once every watched recv channel has closed. */
+		if (has_done && sel_all_recv_closed(cases, n)) {
+			return ZRT_SEL_DONE;
+		}
+		/* with no `done` arm to absorb closure, a closed recv channel fires as Right. */
+		if (!has_done) {
+			for (size_t k = 0; k < n; k++) {
+				size_t i = (start + k) % n;
+				zrt_sel_case *c = &cases[i];
+				if (c->op == ZRT_SEL_RECV && c->ch->closed) {
+					c->closed = 1;
+					return (int)i;
+				}
+			}
+		}
+		/* the non-blocking `_`: nothing ready, so run its arm without parking. */
+		if (has_default) {
+			return ZRT_SEL_DEFAULT;
+		}
+		/* park on EVERY case's channel at once; wake when any becomes ready. The waiters
+		 * share one `claimed` flag so at most one hand-off fires this select. */
+		bool claimed = false;
+		zrt_waiter ws[n];
+		zrt_coro *self = zrt_sched_current();
+		for (size_t i = 0; i < n; i++) {
+			ws[i].co = self;
+			ws[i].val = cases[i].val;
+			ws[i].done = false;
+			ws[i].next = NULL;
+			ws[i].claimed = &claimed;
+			if (cases[i].op == ZRT_SEL_RECV) {
+				wq_push(&cases[i].ch->recvq_head, &cases[i].ch->recvq_tail, &ws[i]);
+			} else {
+				wq_push(&cases[i].ch->sendq_head, &cases[i].ch->sendq_tail, &ws[i]);
+			}
+		}
+		zrt_sched_park();
+		/* woken. Claim ourselves so no late hand-off consumes another waiter, then unlink
+		 * every waiter before this stack frame (which they live on) is reused. */
+		claimed = true;
+		int fired = -1;
+		for (size_t i = 0; i < n; i++) {
+			if (ws[i].done) {
+				fired = (int)i;
+			}
+			if (cases[i].op == ZRT_SEL_RECV) {
+				wq_remove(&cases[i].ch->recvq_head, &cases[i].ch->recvq_tail, &ws[i]);
+			} else {
+				wq_remove(&cases[i].ch->sendq_head, &cases[i].ch->sendq_tail, &ws[i]);
+			}
+		}
+		if (fired >= 0) {
+			cases[fired].closed = 0; /* a hand-off delivered a real value (Left) */
+			return fired;
+		}
+		/* woken by a close (no hand-off): loop and re-scan — a closed recv now routes to
+		 * `done` or fires as Right per the resolution order above. */
+	}
 }

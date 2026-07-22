@@ -1,0 +1,31 @@
+# geom — a directory module reached as `import "geom"`. It exports a type, a
+# function returning that type, and a generic; it also keeps a module-private helper
+# to prove visibility is enforced (only the `pub` surface is reachable across the
+# module boundary, but a private item is freely used inside the module).
+
+# Point is a cross-module TYPE: nameable in another module's signature as geom.Point.
+pub struct Point {
+	pub x: int
+	pub y: int
+}
+
+# make is a cross-module FUNCTION returning a real module type (not Unknown).
+pub fn make(a: int, b: int) -> Point {
+	return Point(x: a, y: b)
+}
+
+# id is a cross-module GENERIC, monomorphized across the module boundary at each
+# concrete argument type of a `geom.id(...)` call in another module.
+pub fn id[T](v: T) -> T {
+	return v
+}
+
+# secret is module-private: reachable only inside geom, never as geom.secret.
+fn secret() -> int {
+	return 100
+}
+
+# hundred exposes secret's result across the boundary (a pub accessor).
+pub fn hundred() -> int {
+	return secret()
+}

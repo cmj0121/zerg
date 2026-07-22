@@ -1,0 +1,24 @@
+# g10 modules conformance (compile + run): a three-module program that exercises
+# every cross-module shape Phase 1g resolves in one build.
+#
+#   main            (this entry module)
+#     imports geom  — a directory module: a cross-module TYPE, FUNCTION, and GENERIC
+#     imports app   — a module with init() + a module constant, RE-EXPORTING geom
+#
+# Build and run it with:  zerg build main.zg && ./a.out
+import "geom"
+import "app"
+
+# total names a cross-module TYPE (geom.Point) in its own signature.
+fn total(p: geom.Point) -> int {
+	return p.x + p.y
+}
+
+fn main() {
+	p := geom.make(3, 4) # a cross-module FUNCTION returning geom.Point
+	print total(p)       # 7
+	print geom.id(42)    # a cross-module GENERIC at T = int
+	print geom.hundred() # 100 — reaches geom's module-private helper internally
+	print app.base()     # 5   — app's module constant, evaluated at init
+	print app.hundred()  # 100 — geom.hundred re-exported through app (import pub)
+}

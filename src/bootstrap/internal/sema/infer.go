@@ -91,8 +91,80 @@ func (c *checker) construct(n *ast.Call, sym *Symbol) Type {
 		ptypes = append(ptypes, f.Type)
 		defaults = append(defaults, f.HasDefault)
 	}
+	if len(def.Params) > 0 {
+		return c.constructGeneric(n, sym, def, pnames, ptypes)
+	}
 	c.bindCallArgs(def.Name, n, pnames, ptypes, defaults)
 	return c.namedTypeUse(sym, nil)
+}
+
+// constructGeneric checks a generic struct construction 'T(...)', inferring the
+// type arguments from the field arguments — the constructor analogue of a generic
+// call (DESIGN-1c §4). It unifies each field's declared type against its argument
+// type to fix the struct's parameters, checks each argument against the resulting
+// concrete field type, and yields the applied struct type 'T[args]' so
+// monomorphization can specialize it.
+func (c *checker) constructGeneric(n *ast.Call, sym *Symbol, def *types.TypeDef, pnames []string, ptypes []Type) Type {
+	exprs := c.pairFields(def.Name, n, pnames)
+	subT := map[string]Type{}
+	subV := map[string]types.ConstVal{}
+	argTypes := make([]Type, len(ptypes))
+	for i := range ptypes {
+		if exprs[i] == nil {
+			continue
+		}
+		argTypes[i] = c.synth(exprs[i])
+		unify(ptypes[i], argTypes[i], subT, subV)
+	}
+	for i := range ptypes {
+		if exprs[i] == nil {
+			c.errorf(n.Span(), "%q: missing field %q", def.Name, argName(pnames, i))
+			continue
+		}
+		want := substitute(ptypes[i], subT, subV)
+		if at := argTypes[i]; !bad(at) && !bad(want) && !c.assignable(want, exprs[i], at) {
+			c.errorf(exprs[i].Span(), "field %d of %q: cannot use %s as %s", i+1, def.Name, at, want)
+		}
+	}
+	args := make([]Type, len(def.Params))
+	for i, p := range def.Params {
+		if t, ok := subT[p.Name]; ok {
+			args[i] = t
+		} else {
+			args[i] = types.Unknown
+		}
+	}
+	return c.namedTypeUse(sym, args)
+}
+
+// pairFields aligns a construction's arguments to a struct's fields, positional
+// first then named, reporting an unknown or excess argument.
+func (c *checker) pairFields(name string, n *ast.Call, pnames []string) []ast.Expr {
+	exprs := make([]ast.Expr, len(pnames))
+	idx := map[string]int{}
+	for i, nm := range pnames {
+		idx[nm] = i
+	}
+	pos := 0
+	for _, a := range n.Args {
+		if a.Name != "" {
+			if i, ok := idx[a.Name]; ok {
+				exprs[i] = a.Value
+			} else {
+				c.errorf(a.Value.Span(), "%q: unknown field %q", name, a.Name)
+				c.synth(a.Value)
+			}
+			continue
+		}
+		if pos < len(exprs) {
+			exprs[pos] = a.Value
+			pos++
+		} else {
+			c.errorf(a.Value.Span(), "%q: too many arguments", name)
+			c.synth(a.Value)
+		}
+	}
+	return exprs
 }
 
 // constructVariant checks an enum variant used as a value constructor, e.g.
@@ -308,8 +380,25 @@ func unify(decl, actual Type, subT map[string]Type, subV map[string]types.ConstV
 	}
 }
 
+// Substitute is the exported form of substitute: it replaces the bound type and
+// value parameters in t, for the monomorphization stage (internal/mono), which
+// reuses this one substitution engine to build each instance's type overlay
+// (DESIGN-1c §4, FORK-A) rather than re-deriving types.
+func Substitute(t Type, subT map[string]Type, subV map[string]types.ConstVal) Type {
+	return substitute(t, subT, subV)
+}
+
+// Unify is the exported form of unify, matching a declared parameter type against
+// a concrete argument type to bind a callee's type and value parameters. The
+// monomorphization stage reuses it to resolve a generic call's type arguments from
+// the concrete argument types it already holds (DESIGN-1c §4.2).
+func Unify(decl, actual Type, subT map[string]Type, subV map[string]types.ConstVal) {
+	unify(decl, actual, subT, subV)
+}
+
 // substitute replaces bound type parameters and symbolic array lengths in t with
-// their inferred values.
+// their inferred values, recursing through composite and nominal (struct/enum)
+// type arguments so a container like 'Box[T]' specializes to 'Box[int]'.
 func substitute(t Type, subT map[string]Type, subV map[string]types.ConstVal) Type {
 	switch x := t.(type) {
 	case *types.Param:
@@ -333,8 +422,44 @@ func substitute(t Type, subT map[string]Type, subV map[string]types.ConstVal) Ty
 		return &types.Map{Key: substitute(x.Key, subT, subV), Val: substitute(x.Val, subT, subV)}
 	case *types.Opt:
 		return &types.Opt{Elem: substitute(x.Elem, subT, subV)}
+	case *types.Struct:
+		if len(x.Args) == 0 {
+			return x
+		}
+		return &types.Struct{Def: x.Def, Args: substituteAll(x.Args, subT, subV)}
+	case *types.Enum:
+		if len(x.Args) == 0 {
+			return x
+		}
+		return &types.Enum{Def: x.Def, Args: substituteAll(x.Args, subT, subV)}
 	}
 	return t
+}
+
+// substituteArgs specializes a nominal type's member type (a field or payload) by
+// binding the type's declared parameters to the use-site arguments: 'Box[int]'
+// reads field 'value: T' as 'int'. With no parameters or arguments it is a no-op,
+// so a non-generic type's field type is returned unchanged.
+func substituteArgs(params []*types.Param, args []Type, member Type) Type {
+	if len(params) == 0 || len(args) == 0 {
+		return member
+	}
+	subT := map[string]Type{}
+	for i, p := range params {
+		if i < len(args) {
+			subT[p.Name] = args[i]
+		}
+	}
+	return substitute(member, subT, nil)
+}
+
+// substituteAll substitutes every type in a slice, returning a fresh slice.
+func substituteAll(ts []Type, subT map[string]Type, subV map[string]types.ConstVal) []Type {
+	out := make([]Type, len(ts))
+	for i, t := range ts {
+		out[i] = substitute(t, subT, subV)
+	}
+	return out
 }
 
 // --- access -------------------------------------------------------------------
@@ -346,7 +471,7 @@ func (c *checker) inferField(n *ast.Field) Type {
 	xt := c.synth(n.X)
 	if st, ok := xt.(*types.Struct); ok && st.Def.Struct != nil {
 		if f := findField(st.Def, n.Name); f != nil {
-			return f.Type
+			return substituteArgs(st.Def.Params, st.Args, f.Type)
 		}
 		c.errorf(n.Span(), "type %s has no field %q", st.Def.Name, n.Name)
 		return Invalid

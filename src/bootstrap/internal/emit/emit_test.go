@@ -160,6 +160,76 @@ func TestCompileAndRun(t *testing.T) {
 	}
 }
 
+// TestGenericsCompileAndRun exercises the Phase 1c backend end-to-end: a generic
+// program emits one specialized C function/type per instantiation, compiles with
+// cc, and runs to the expected stdout (DESIGN-1c §7). Skipped without a C compiler.
+func TestGenericsCompileAndRun(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			// a generic identity function at two types -> two specialized C functions.
+			name: "identity-two-types",
+			src:  "fn id[T](x: T) -> T { return x }\nfn main() {\n print id(5)\n print id(true)\n}",
+			want: "5\ntrue\n",
+		},
+		{
+			// a generic function calling a generic function -> transitive instances.
+			name: "transitive",
+			src: "fn id[T](x: T) -> T { return x }\n" +
+				"fn wrap[T](x: T) -> T { return id(x) }\n" +
+				"fn main() {\n print wrap(7)\n print wrap(false)\n}",
+			want: "7\nfalse\n",
+		},
+		{
+			// a value-generic parameter -> one specialization per distinct length.
+			name: "value-generic",
+			src: "fn head[N: int](xs: [int; N]) -> int { return xs[0] }\n" +
+				"fn main() {\n a: [int; 3] = [10, 20, 30]\n b: [int; 2] = [40, 50]\n" +
+				" print head(a)\n print head(b)\n}",
+			want: "10\n40\n",
+		},
+		{
+			// a generic struct -> one specialized C struct per type argument.
+			name: "generic-struct",
+			src: "struct Box[T] { value: T }\n" +
+				"fn main() {\n bi := Box(5)\n bb := Box(true)\n print bi.value\n print bb.value\n}",
+			want: "5\ntrue\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code := emitC(t, tc.src)
+			got := compileAndRun(t, cc, code)
+			if got != tc.want {
+				t.Fatalf("output = %q, want %q\n--- C ---\n%s", got, tc.want, code)
+			}
+		})
+	}
+}
+
+// TestGenericSpecializationShape checks the specialized C for a generic identity
+// function: two distinctly named C functions, one per type argument.
+func TestGenericSpecializationShape(t *testing.T) {
+	code := emitC(t, "fn id[T](x: T) -> T { return x }\nfn main() {\n print id(5)\n print id(true)\n}")
+	for _, want := range []string{
+		"int64_t zg_id__i(int64_t zg_x)",
+		"bool zg_id__b(bool zg_x)",
+		"zg_id__i(5)",
+		"zg_id__b(true)",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("specialized C missing %q\n---\n%s", want, code)
+		}
+	}
+}
+
 func findCC() string {
 	for _, name := range []string{"cc", "clang", "gcc"} {
 		if p, err := exec.LookPath(name); err == nil {

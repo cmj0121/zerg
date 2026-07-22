@@ -158,8 +158,10 @@ func (c *checker) fillStruct(n *ast.StructDecl) {
 	if sym == nil || sym.TypeDef == nil || sym.TypeDef.Struct == nil {
 		return
 	}
+	env := c.genericEnv(n.Generics)
+	sym.TypeDef.Params = typeParamsOf(env)
 	saved := c.typeParams
-	c.typeParams = c.genericEnv(n.Generics).merged(saved)
+	c.typeParams = env.merged(saved)
 	for _, f := range n.Fields {
 		sym.TypeDef.Struct.Fields = append(sym.TypeDef.Struct.Fields, types.FieldDef{
 			Name: f.Name, Type: c.resolveType(f.Type), Pub: f.Pub, HasDefault: f.Default != nil,
@@ -168,13 +170,31 @@ func (c *checker) fillStruct(n *ast.StructDecl) {
 	c.typeParams = saved
 }
 
+// typeParamsOf returns a generic environment's type parameters in declaration
+// order, backing a nominal type's TypeDef.Params (so a use site can bind them to
+// its type arguments). Value parameters are not type parameters and are skipped.
+func typeParamsOf(env *GenericEnv) []*types.Param {
+	if env == nil {
+		return nil
+	}
+	var out []*types.Param
+	for _, name := range env.Names {
+		if p, ok := env.Params[name].(*types.Param); ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (c *checker) fillEnum(n *ast.EnumDecl) {
 	sym := c.module.local(n.Name)
 	if sym == nil || sym.TypeDef == nil || sym.TypeDef.Enum == nil {
 		return
 	}
+	env := c.genericEnv(n.Generics)
+	sym.TypeDef.Params = typeParamsOf(env)
 	saved := c.typeParams
-	c.typeParams = c.genericEnv(n.Generics).merged(saved)
+	c.typeParams = env.merged(saved)
 	for i, v := range n.Variants {
 		if i >= len(sym.TypeDef.Enum.Variants) {
 			break

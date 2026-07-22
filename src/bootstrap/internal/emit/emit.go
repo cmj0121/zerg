@@ -19,6 +19,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/mono"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -36,6 +37,7 @@ func Emit(prog *mono.Program) (string, []diag.Diagnostic) {
 type emitter struct {
 	prog   *mono.Program
 	info   *sema.Info
+	cur    *mono.Instance // the instance whose body is being rendered (its type overlay)
 	sb     strings.Builder
 	indent int
 	diags  diag.List
@@ -68,6 +70,11 @@ func (e *emitter) program() {
 	e.line("#include <string.h>")
 	e.blank()
 
+	// specialized nominal types, each before the functions that use it
+	for _, ti := range e.prog.Types {
+		e.typedef(ti)
+	}
+
 	// prototypes first, so declaration order does not constrain calls
 	for _, inst := range e.prog.Funcs {
 		e.line(e.prototype(inst) + ";")
@@ -80,6 +87,19 @@ func (e *emitter) program() {
 	}
 
 	e.cMain(main)
+}
+
+// typedef emits a specialized struct as a C typedef with each field named
+// 'zg_<field>' and typed through its concrete type.
+func (e *emitter) typedef(ti *mono.TypeInstance) {
+	e.line("typedef struct {")
+	e.indent++
+	for _, f := range ti.Fields {
+		e.line(e.ctype(f.Type) + " zg_" + f.Name + ";")
+	}
+	e.indent--
+	e.line("} " + ti.Mangled + ";")
+	e.blank()
 }
 
 // paramList renders a C parameter list ("void" when empty), formatting each of
@@ -99,24 +119,23 @@ func paramList(n int, render func(i int) string) string {
 }
 
 // prototype renders a forward declaration with parameter types only, using the
-// instance's mangled C name.
+// instance's mangled C name and its concrete (specialized) signature.
 func (e *emitter) prototype(inst *mono.Instance) string {
-	sig := e.info.Funcs[inst.Origin.Name]
-	params := paramList(len(sig.Params), func(i int) string { return cType(sig.Params[i]) })
-	return fmt.Sprintf("%s %s(%s)", cType(sig.Ret), inst.Mangled, params)
+	params := paramList(len(inst.Params), func(i int) string { return e.paramType(inst.Params[i]) })
+	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
 }
 
 func (e *emitter) function(inst *mono.Instance) {
 	fn := inst.Origin
-	sig := e.info.Funcs[fn.Name]
+	e.cur = inst
 	e.used = map[string]bool{}
 	e.counter = 0
 	e.pushScope() // parameter scope
 
-	params := paramList(len(sig.Params), func(i int) string {
-		return cType(sig.Params[i]) + " " + e.declareName(sig.ParamNames[i])
+	params := paramList(len(inst.Params), func(i int) string {
+		return e.paramType(inst.Params[i]) + " " + e.declareName(inst.ParamNames[i])
 	})
-	e.line(fmt.Sprintf("%s %s(%s) {", cType(sig.Ret), inst.Mangled, params))
+	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, params))
 
 	e.indent++
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
@@ -125,8 +144,8 @@ func (e *emitter) function(inst *mono.Instance) {
 	}
 	e.popScope()
 	// guarantee a return value on every path for value-returning functions
-	if sig.Ret != sema.Nil && !endsWithReturn(fn.Body) {
-		e.line("return " + zeroValue(sig.Ret) + ";")
+	if inst.Ret != sema.Nil && !endsWithReturn(fn.Body) {
+		e.line("return " + zeroValue(inst.Ret) + ";")
 	}
 	e.indent--
 	e.line("}")
@@ -165,11 +184,11 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.NopStmt:
 		e.line(";")
 	case *ast.BindStmt:
-		t := e.info.BindTypes[n]
+		t := e.cur.BindType(e.info, n)
 		// resolve the RHS before declaring the name, so 'mut n := n' reads the
 		// outer binding (matching ':=' semantics)
 		rhs := e.expr(n.Value)
-		e.line(fmt.Sprintf("%s %s = %s;", cType(t), e.declareName(n.Name), rhs))
+		e.line(e.localDecl(t, e.declareName(n.Name)) + " = " + rhs + ";")
 	case *ast.Reassign:
 		e.line(fmt.Sprintf("%s = %s;", e.assignTarget(n.Target), e.expr(n.Value)))
 	case *ast.PrintStmt:
@@ -199,7 +218,7 @@ func (e *emitter) stmt(s ast.Stmt) {
 
 func (e *emitter) printStmt(n *ast.PrintStmt) {
 	v := e.expr(n.Value)
-	switch e.info.ExprTypes[n.Value] {
+	switch e.cur.ExprType(e.info, n.Value) {
 	case sema.Int:
 		e.line(fmt.Sprintf("printf(\"%%lld\\n\", (long long)(%s));", v))
 	case sema.Float:
@@ -304,6 +323,15 @@ func (e *emitter) expr(x ast.Expr) string {
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
 	case *ast.Call:
 		return e.call(n)
+	case *ast.Field:
+		return e.expr(n.X) + ".zg_" + n.Name
+	case *ast.Bracket:
+		if e.info.Brackets[n].Kind == sema.BracketIndex && len(n.Elems) == 1 {
+			return e.expr(n.Base) + "[" + e.expr(n.Elems[0]) + "]"
+		}
+		return "0"
+	case *ast.ListLit:
+		return "{" + e.exprList(n.Elems) + "}"
 	case *ast.MatchExpr:
 		return e.lowerMatch(n)
 	default:
@@ -311,12 +339,24 @@ func (e *emitter) expr(x ast.Expr) string {
 	}
 }
 
+// exprList renders a comma-separated list of expressions.
+func (e *emitter) exprList(xs []ast.Expr) string {
+	var b strings.Builder
+	for i, x := range xs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(e.expr(x))
+	}
+	return b.String()
+}
+
 // lowerMatch lowers a match to a nested C ternary. The subject is a name or
 // literal (a Phase 0 restriction), so it is safe to reference in each arm without
 // hoisting. The last arm is an unguarded catch-all, forming the final else.
 func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
 	subj := e.expr(m.Subject)
-	subjT := e.info.ExprTypes[m.Subject]
+	subjT := e.cur.ExprType(e.info, m.Subject)
 	n := len(m.Arms)
 	result := e.armValue(m.Arms[n-1], subj)
 	for i := n - 2; i >= 0; i-- {
@@ -382,7 +422,12 @@ func (e *emitter) patternTest(pat ast.Pattern, subj string, subjT sema.Type) str
 }
 
 func (e *emitter) call(n *ast.Call) string {
-	name := n.Callee.(*ast.Ident).Name
+	id, _ := n.Callee.(*ast.Ident)
+	if id != nil {
+		if sym, ok := e.info.Refs[id]; ok && sym.Kind == sema.SymType {
+			return e.construct(n)
+		}
+	}
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
@@ -390,7 +435,36 @@ func (e *emitter) call(n *ast.Call) string {
 		}
 		args.WriteString(e.expr(a.Value))
 	}
-	return fmt.Sprintf("%s(%s)", e.prog.CallTarget(name), args.String())
+	return fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String())
+}
+
+// callTarget is the mangled C name a call resolves to: a generic call site is
+// recorded per instance (so the same call in two specializations dispatches to two
+// callees); a non-generic call falls back to the program-level 'zg_<name>'.
+func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
+	if m, ok := e.cur.Calls[n]; ok {
+		return m
+	}
+	return e.prog.CallTarget(id.Name)
+}
+
+// construct lowers a struct construction 'T(...)' to a C compound literal of the
+// specialized struct type, with arguments in field-declaration order.
+func (e *emitter) construct(n *ast.Call) string {
+	name := e.ctype(e.cur.ExprType(e.info, n))
+	return "((" + name + "){" + e.constructArgs(n.Args) + "})"
+}
+
+// constructArgs renders a construction's positional argument values in order.
+func (e *emitter) constructArgs(args []ast.Arg) string {
+	var b strings.Builder
+	for i, a := range args {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(e.expr(a.Value))
+	}
+	return b.String()
 }
 
 // assignTarget lowers a reassignment target. The Phase 0 backend only lowers the
@@ -404,6 +478,37 @@ func (e *emitter) assignTarget(t ast.AssignTarget) string {
 }
 
 // --- lowering helpers ---------------------------------------------------------
+
+// ctype renders a type in type-only position (a return type, a cast, a field, a
+// struct-typed value): a specialized nominal type spells its mangled C name, and
+// every other type falls to the primitive mapping — so a non-generic program's C is
+// unchanged.
+func (e *emitter) ctype(t sema.Type) string {
+	if name, ok := e.prog.TypeName(t); ok {
+		return name
+	}
+	return cType(t)
+}
+
+// paramType renders a parameter's C type. A fixed-size array parameter decays to a
+// pointer to its element (C cannot pass an array by value); every other type is its
+// ctype.
+func (e *emitter) paramType(t sema.Type) string {
+	if a, ok := t.(*types.Array); ok {
+		return e.ctype(a.Elem) + "*"
+	}
+	return e.ctype(t)
+}
+
+// localDecl renders a local declaration 'type name'. A fixed-size array places its
+// bound after the name ('int64_t name[N]'), the C array declarator; every other
+// type is 'ctype name', identical to the pre-generics backend.
+func (e *emitter) localDecl(t sema.Type, name string) string {
+	if a, ok := t.(*types.Array); ok && a.N.Known {
+		return e.ctype(a.Elem) + " " + name + "[" + strconv.FormatInt(a.N.I, 10) + "]"
+	}
+	return e.ctype(t) + " " + name
+}
 
 func cType(t sema.Type) string {
 	switch t {

@@ -260,16 +260,30 @@ func (c *checker) fillEnum(n *ast.EnumDecl) {
 // --- pass 1b: collect signatures ----------------------------------------------
 
 func (c *checker) collectFuncs(file *ast.File) {
-	for _, d := range file.Items {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok {
-			continue
+	c.collectFuncItems(file.Items, false)
+}
+
+// collectFuncItems registers each item's function signature, descending into a
+// module-level `unsafe { }` group (GRAMMAR group 12, Phase 1h U2). A `fn` inside
+// such a group is an UNSAFE fn — its whole body is an unsafe context and it is
+// callable only from unsafe code — so it is marked `Unsafe` in place before its
+// signature is built, which is what closes the gap where a group fn was neither
+// registered, checked-as-unsafe, nor rejected when called from safe code.
+func (c *checker) collectFuncItems(items []ast.Stmt, inUnsafe bool) {
+	for _, d := range items {
+		switch n := d.(type) {
+		case *ast.FuncDecl:
+			if inUnsafe {
+				n.Unsafe = true
+			}
+			if _, dup := c.info.Funcs[n.Name]; dup {
+				c.errorf(n.Span(), "function %q is already declared", n.Name)
+				continue
+			}
+			c.info.Funcs[n.Name] = c.buildSig(n)
+		case *ast.UnsafeGroup:
+			c.collectFuncItems(n.Items, true)
 		}
-		if _, dup := c.info.Funcs[fn.Name]; dup {
-			c.errorf(fn.Span(), "function %q is already declared", fn.Name)
-			continue
-		}
-		c.info.Funcs[fn.Name] = c.buildSig(fn)
 	}
 }
 
@@ -422,9 +436,16 @@ func (c *checker) checkFuncs(file *ast.File) {
 		case *ast.InitDecl:
 			c.checkInit(n)
 		case *ast.UnsafeGroup:
+			// Descend into a module-level unsafe group: its `fn`s (marked Unsafe in
+			// collectFuncItems) are type-checked as unsafe contexts, and its `init()`
+			// blocks are checked like any other. A `mut` binding is a mutable global,
+			// already typed by checkModuleConsts.
 			for _, sub := range n.Items {
-				if in, ok := sub.(*ast.InitDecl); ok {
-					c.checkInit(in)
+				switch it := sub.(type) {
+				case *ast.FuncDecl:
+					c.checkFunc(it, nil)
+				case *ast.InitDecl:
+					c.checkInit(it)
 				}
 			}
 		}

@@ -840,6 +840,12 @@ func (p *parser) parsePrimary() ast.Expr {
 		return p.parseChanNew()
 	case token.Asm:
 		return p.parseAsm()
+	case token.Ptr:
+		// `ptr` in expression position is the head of a raw-pointer cast — `ptr(p)` or
+		// `ptr[T](p)` (GRAMMAR group 12) — parsed as an ordinary callee so the postfix
+		// chain forms the Bracket/Call; sema recognizes it as an unsafe ptr intrinsic.
+		p.advance()
+		return spanned(&ast.Ident{Name: "ptr"}, t.Span)
 	case token.Unsafe:
 		if p.peek(1).Kind == token.LBrace {
 			return p.parseUnsafeExpr()

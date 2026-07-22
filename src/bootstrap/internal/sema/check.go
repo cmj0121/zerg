@@ -308,6 +308,12 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 			c.checkLive(sym, x.Span(), x.Name)
 			return sym.typ, sym.mutable, x.Name, true
 		}
+		// A module-level binding assigned from a body: a mutable global (a `mut` inside
+		// a module unsafe group, Phase 1h U2) is a writable place; a top-level `:=`
+		// constant reports as immutable so the reassignment is rejected.
+		if sym := c.module.lookup(x.Name); sym != nil && (sym.Kind == SymVar || sym.Kind == SymConst) {
+			return sym.Type, sym.Mutable, x.Name, true
+		}
 		c.errorf(x.Span(), "undefined name %q", x.Name)
 		return Invalid, false, x.Name, false
 	case *ast.Field:
@@ -501,6 +507,16 @@ func (c *checker) comparable(n *ast.Binary, lt, rt Type) bool {
 	}
 	if isNumeric(rt) && lt == Int && isIntLit(n.L) {
 		c.info.ExprTypes[n.L] = rt
+		return true
+	}
+	// A raw pointer compares to the integer literal 0 for a null test (`p == 0`), a
+	// SAFE operation (it is not in group 12's list of unsafe ptr ops), so a program
+	// can hold a ptr field and test it without dereferencing. Only comparison to an
+	// integer literal is allowed — never `ptr == ptr` (no address ordering, MVP).
+	if _, ok := lt.(*types.Ptr); ok && rt == Int && isIntLit(n.R) {
+		return true
+	}
+	if _, ok := rt.(*types.Ptr); ok && lt == Int && isIntLit(n.L) {
 		return true
 	}
 	return false

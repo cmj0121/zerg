@@ -482,6 +482,16 @@ func (c *checker) assignable(want Type, e ast.Expr, vt Type) bool {
 		c.info.ExprTypes[e] = want
 		return true
 	}
+	// A bidirectional channel narrows implicitly to a receive-only or send-only handle
+	// of the same element type (GRAMMAR group 9: 'chan[T]' narrows to '<-chan[T]' /
+	// 'chan[T]<-'). Directional narrowing is what lets a program hand a send-capable copy
+	// to a producer while keeping a receive-only handle — so the channel can auto-close
+	// when the last sender leaves and a 'select' can observe 'done'.
+	if want, ok := want.(*types.Chan); ok {
+		if vt, ok := vt.(*types.Chan); ok {
+			return vt.Dir == types.ChanBidi && types.Identical(want.Elem, vt.Elem)
+		}
+	}
 	return false
 }
 

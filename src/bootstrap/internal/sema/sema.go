@@ -560,8 +560,60 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		if !bad(vt) && !c.assignable(ch.Elem, n.Value, vt) {
 			c.errorf(n.Value.Span(), "cannot send a value of type %s on a channel of %s", vt, ch.Elem)
 		}
+	case *ast.SelectStmt:
+		c.checkSelect(n)
 	case *ast.WithStmt:
 		c.checkWith(n)
+	}
+}
+
+// checkSelect type-checks a 'select { arm+ }' (GRAMMAR group 9), the one multi-way wait.
+// It runs for effect (it yields no value). Each arm is checked in its own scope: a recv
+// arm's channel must be a receivable channel and its '(id :=)' bind takes Result[T]
+// (Left = a received value, Right = the channel closed) like a bare '<-ch'; a send arm
+// type-checks 'ch <- v' as a send statement does; the 'done' and '_' arms carry only a
+// body. Both 'done' and '_' are contextual — special only as an arm head here.
+func (c *checker) checkSelect(n *ast.SelectStmt) {
+	for i := range n.Arms {
+		arm := &n.Arms[i]
+		c.pushScope()
+		switch arm.Kind {
+		case ast.SelectRecv:
+			ct := c.synth(arm.Chan)
+			if ch, ok := ct.(*types.Chan); ok {
+				if ch.Dir == types.ChanSend {
+					c.errorf(arm.Chan.Span(), "cannot receive from a send-only channel %s", ch)
+				}
+				if arm.HasBind && arm.Bind != "" && arm.Bind != "_" {
+					c.declare(arm.Span(), arm.Bind, resultType(ch.Elem), false)
+				}
+			} else if !bad(ct) {
+				c.errorf(arm.Chan.Span(), "receive '<-' requires a channel, found %s", ct)
+			}
+		case ast.SelectSend:
+			ct := c.synth(arm.Chan)
+			vt := c.synth(arm.Value)
+			if ch, ok := ct.(*types.Chan); ok {
+				if ch.Dir == types.ChanRecv {
+					c.errorf(arm.Chan.Span(), "cannot send on a receive-only channel %s", ch)
+				}
+				if !bad(vt) && !c.assignable(ch.Elem, arm.Value, vt) {
+					c.errorf(arm.Value.Span(), "cannot send a value of type %s on a channel of %s", vt, ch.Elem)
+				}
+			} else if !bad(ct) {
+				c.errorf(arm.Chan.Span(), "send '<-' requires a channel, found %s", ct)
+			}
+		case ast.SelectDone, ast.SelectDefault:
+		}
+		// The arm body runs for effect. A '{ … }' block body is checked statement by
+		// statement (synthExpr alone would treat a block as Unknown without descending),
+		// so a recv arm's binding is usable inside it; any other expression is synthesized.
+		if blk, ok := arm.Body.(*ast.Block); ok {
+			c.synthBlock(blk)
+		} else {
+			c.synth(arm.Body)
+		}
+		c.popScope()
 	}
 }
 

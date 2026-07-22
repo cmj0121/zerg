@@ -91,6 +91,15 @@ type Info struct {
 
 	// spec/impl layer (Phase 1c, U1)
 	Specs *SpecRegistry // collected specs, impls, and the per-type method namespaces
+
+	// ConstOrder lists every module constant (a top-level `:=`) in dependency
+	// (topological) order — a constant after every module constant its initializer
+	// references (Phase 1g S3). The backend evaluates and emits constants in this
+	// order so a forward reference reads its dependency's already-assigned value; the
+	// checker also types them in this order so a forward reference infers the real
+	// type. It is empty for a program with no module constant, which stays
+	// byte-identical.
+	ConstOrder []*ast.BindStmt
 }
 
 // Check resolves and type-checks the file, returning the analysis info and any
@@ -115,7 +124,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	r := &resolver{info: info}
 	r.resolveFile(file)
 
-	c := &checker{info: info, module: r.module}
+	c := &checker{info: info, module: r.module, constEdges: r.constEdges}
 	c.collectTypes(file)
 	// The spec/impl registry is built before signatures so a generic parameter's
 	// spec bound ('[T: Ord]') can be resolved to the SpecDef it carries (U3): the
@@ -147,6 +156,11 @@ type checker struct {
 	loopDepth  int
 	inUnsafe   bool            // inside an `unsafe fn` body or an `unsafe { }` block-expression (group 12)
 	derived    []*ast.ImplDecl // '#[derive]'-synthesized impls, type-checked after the file (U5)
+
+	// constEdges is the module-constant dependency graph the resolver recorded: an
+	// edge a -> b when constant a's initializer references module constant b. The
+	// checker topologically sorts it to type and order the constants (Phase 1g S3).
+	constEdges map[*ast.BindStmt][]*ast.BindStmt
 
 	// dead tracks each binding's liveness after `del` within the current function
 	// body (GRAMMAR group 11, DESIGN-1d §5.1). A name absent from the map is live; a

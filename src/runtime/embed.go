@@ -32,6 +32,7 @@ const csrcDir = "csrc"
 //
 //go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/unwind.c csrc/entry.c csrc/sys.c csrc/fmt.c
 //go:embed csrc/sched.c csrc/chan.c csrc/ctx_arm64.S csrc/ctx_x86_64.S csrc/ctx_ucontext.c
+//go:embed csrc/zrt_test.h csrc/zrt_test.c
 var Files embed.FS
 
 // coreCUnits are the Phase 1d core C translation units, always linked when the
@@ -66,6 +67,14 @@ func Materialize(dir string) (cfiles []string, err error) {
 	}
 	sort.Strings(cfiles)
 	return cfiles, nil
+}
+
+// TestCUnits returns the extra translation units for a `zerg test` binary: the
+// test-runner harness (zrt_test.c), on top of the core units Materialize returns. The
+// file was already written by Materialize; dir must be the same directory. A normal
+// `zerg build` never adds it, so its link line and binary are unchanged.
+func TestCUnits(dir string) []string {
+	return []string{filepath.Join(dir, "zrt_test.c")}
 }
 
 // HostArch is the GOARCH of the machine the driver runs on, used to pick the

@@ -52,7 +52,7 @@ func CompileProgram(entryPath string) (string, emit.Manifest, []diag.Diagnostic)
 
 // compileWith runs the shared inner pipeline over a configured loader.
 func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []diag.Diagnostic) {
-	file, diags := loader.LoadSource(src)
+	file, plan, diags := loader.LoadProgram(src)
 	if len(diags) > 0 {
 		return "", emit.Manifest{}, diags
 	}
@@ -60,7 +60,7 @@ func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []di
 	if len(diags) > 0 {
 		return "", emit.Manifest{}, diags
 	}
-	return emit.Emit(mono.Build(file, info))
+	return emit.Emit(mono.BuildWithInit(file, info, plan))
 }
 
 // stdlibProvider is the embedded-stdlib source root: it resolves an import by the

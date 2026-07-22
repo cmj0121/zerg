@@ -52,6 +52,7 @@ func (c *checker) collectSpecsAndImpls(file *ast.File) {
 	}
 	c.collectDerived(reg, file)
 	c.checkCoherence(reg)
+	registerPrimitiveBlessed(reg)
 }
 
 // linkSpec fills a spec shell: it resolves the super-spec bound (each name must

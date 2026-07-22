@@ -52,6 +52,13 @@ type Manifest struct {
 	// flag records the dependency for the driver and later slices. A program that
 	// never imports io leaves it false and stays byte-identical.
 	NeedsIO bool
+
+	// NeedsFormat reports whether the program lowers an f-string (Phase 1f U3): its
+	// parts join through zrt_str_concat and its holes render through the display() /
+	// Format helpers in fmt.c. It implies NeedsRuntime (those helpers ride in the
+	// always-linked core units). A program with no f-string leaves it false and stays
+	// byte-identical.
+	NeedsFormat bool
 }
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -64,7 +71,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
 }
 
 type emitter struct {
@@ -102,6 +109,12 @@ type emitter struct {
 	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
 	// program that never imports io, which therefore stays byte-identical.
 	needsIO bool
+
+	// needsFormat is set when the program lowers an f-string (Phase 1f U3): its parts
+	// join through zrt_str_concat and its holes render through fmt.c's display()/Format
+	// helpers. It drives the NeedsFormat manifest flag and implies needsRuntime. False
+	// for a program with no f-string, which therefore stays byte-identical.
+	needsFormat bool
 
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
@@ -742,6 +755,8 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.optChainExpr(n)
 	case *ast.GuardExpr:
 		return e.guardExpr(n)
+	case *ast.FStr:
+		return e.fstrExpr(n)
 	default:
 		return "0"
 	}
@@ -928,7 +943,14 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 		}
 		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
 	}
-	return fmt.Sprintf("%s(%s)", e.prog.CallTarget(sema.ModuleMember(id.Name, fld.Name)), args.String()), true
+	// A non-generic member calls the bundled top-level function directly; a generic
+	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name
+	// mono recorded for this call site.
+	target := e.prog.CallTarget(sema.ModuleMember(id.Name, fld.Name))
+	if m, ok := e.cur.Calls[n]; ok {
+		target = m
+	}
+	return fmt.Sprintf("%s(%s)", target, args.String()), true
 }
 
 // callTarget is the mangled C name a call resolves to: a generic call site is

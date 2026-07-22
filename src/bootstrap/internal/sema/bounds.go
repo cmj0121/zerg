@@ -53,6 +53,41 @@ func registerBlessed(reg *SpecRegistry) {
 	}
 }
 
+// registerPrimitiveBlessed makes the built-in scalar types satisfy the blessed Eq
+// and Ord bounds, so a generic `[T: Eq]`/`[T: Ord]` (e.g. `testing.assert_eq`)
+// accepts a primitive operand. No method is registered: the backend keeps a
+// primitive comparison's native C `==` / `<` (mono.lowerCompare leaves a
+// non-nominal operand untouched), so the impl is a bound-resolution witness only.
+// Eq covers every scalar whose native C equality is content-correct (the integers,
+// floats, bool, rune, byte); Ord covers the ordered numerics. `str` is deliberately
+// omitted: native C `==` / `<` on a `const char*` compares POINTERS, not content, so
+// a content-correct str Eq/Ord is deferred rather than lowered to a silently wrong
+// comparison. Registration runs after coherence, so a user's (orphan) `impl Eq for
+// int` is still reported, and an already-present key is never overwritten.
+func registerPrimitiveBlessed(reg *SpecRegistry) {
+	if reg.byKey == nil {
+		reg.byKey = map[implKey]*types.ImplDef{}
+	}
+	fixed := &types.Fixed{}
+	eqTargets := []types.Type{types.Int, types.Uint, types.Float, types.Bool, types.Rune, types.Byte, fixed}
+	ordTargets := []types.Type{types.Int, types.Uint, types.Float, types.Rune, types.Byte, fixed}
+	add := func(sp *types.SpecDef, t types.Type) {
+		if sp == nil {
+			return
+		}
+		k := implKey{spec: sp, head: targetHead(t)}
+		if _, exists := reg.byKey[k]; !exists {
+			reg.byKey[k] = &types.ImplDef{Spec: sp, Target: t, Derived: true}
+		}
+	}
+	for _, t := range eqTargets {
+		add(reg.Specs["Eq"], t)
+	}
+	for _, t := range ordTargets {
+		add(reg.Specs["Ord"], t)
+	}
+}
+
 // blessedMethods builds the required-method set of a blessed spec: each is a method
 // 'fn name(o: This) -> bool'. Only the names matter to bound resolution; the bodies
 // are synthesized by derive (U5).

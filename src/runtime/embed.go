@@ -30,14 +30,15 @@ const csrcDir = "csrc"
 // core but linked ONLY when the Manifest reports Concurrency, so a non-concurrent
 // program's link line — and its binary — is unchanged.
 //
-//go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/unwind.c csrc/entry.c csrc/sys.c
+//go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/unwind.c csrc/entry.c csrc/sys.c csrc/fmt.c
 //go:embed csrc/sched.c csrc/chan.c csrc/ctx_arm64.S csrc/ctx_x86_64.S csrc/ctx_ucontext.c
 var Files embed.FS
 
 // coreCUnits are the Phase 1d core C translation units, always linked when the
-// runtime is needed. The concurrency units (sched.c + a context switch) are added
-// separately by ConcurrencyCUnits.
-var coreCUnits = []string{"alloc.c", "ref.c", "unwind.c", "entry.c", "sys.c"}
+// runtime is needed (fmt.c carries the Phase 1f display/Format helpers). The
+// concurrency units (sched.c + a context switch) are added separately by
+// ConcurrencyCUnits.
+var coreCUnits = []string{"alloc.c", "ref.c", "unwind.c", "entry.c", "sys.c", "fmt.c"}
 
 // Materialize writes the whole embedded runtime tree (header, core units, and the
 // concurrency sources) into dir and returns the paths of the CORE C translation

@@ -66,6 +66,28 @@ func TestScopeEmit(t *testing.T) {
 			},
 		},
 		{
+			// reassigning a Ref binding releases the old value then retains the new, so
+			// the target does not leak or double-free (review R3).
+			name:        "reassign-ref-binding-releases-old",
+			src:         "fn main() {\n a := Ref(1)\n mut b := Ref(2)\n b = a\n print deref(b)\n}",
+			wantRuntime: true,
+			wantContains: []string{
+				"zrt_release(zg_b);",         // release old Ref(2) before overwrite
+				"zg_b = zrt_ref_copy(zg_a);", // retain the aliased new value
+			},
+		},
+		{
+			// reassigning a Ref-typed field releases the old field value in place before
+			// storing the new one (review R8: a sub-place not tracked as a binding).
+			name:        "reassign-ref-field-releases-old",
+			src:         "struct Box { v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n a.v = Ref(2)\n print deref(a.v)\n}",
+			wantRuntime: true,
+			wantContains: []string{
+				"zrt_release(zg_a.zg_v);",     // release old field Ref(1)
+				"zg_a.zg_v = zg_refnew_0(2);", // store the new box
+			},
+		},
+		{
 			// `with e as y { }` desugars to a scoped binding whose Ref drop is scheduled
 			// and unwound at the block's exit — no explicit defer node needed.
 			name:        "with-desugars-to-scoped-drop",

@@ -71,3 +71,16 @@ func TestGuardExpr(t *testing.T) {
 func TestRaiseDiverges(t *testing.T) {
 	wantOK(t, "fn f(x: int) {\n  raise x\n}")
 }
+
+// TestResultOkWidening checks the context-typed Ok/Left widening (Phase 1f U0): a T
+// value is accepted where a Result[T] / T? is expected, and `nil` fills a Result[nil]
+// or a T? — the fix for the earlier "cannot return nil from Result[nil]" rejection.
+func TestResultOkWidening(t *testing.T) {
+	wantOK(t, "fn f() -> Result[int] {\n  return 5\n}")
+	wantOK(t, "fn f() -> Result[nil] {\n  return nil\n}")
+	wantOK(t, "fn f() -> int? {\n  return 5\n}")
+	wantOK(t, "fn f() -> int? {\n  return nil\n}")
+	wantOK(t, "fn f() -> Result[int] {\n  x: Result[int] = 7\n  return x\n}")
+	// a genuinely wrong Left type is still rejected.
+	wantErr(t, "fn f() -> Result[int] {\n  return \"s\"\n}", "cannot return")
+}

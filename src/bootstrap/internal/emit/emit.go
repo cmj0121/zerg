@@ -849,6 +849,8 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.fstrExpr(n)
 	case *ast.UnsafeExpr:
 		return e.unsafeExpr(n)
+	case *ast.AsmExpr:
+		return e.asmExpr(n)
 	default:
 		return "0"
 	}

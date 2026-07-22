@@ -1,0 +1,41 @@
+# Phase 1h unsafe/ptr/asm conformance corpus (Slice D).
+#
+# One build that exercises every raw operation of GRAMMAR group 12: taking a raw
+# address, storing/loading/offsetting through a typed pointer, a pointer-cast round
+# trip, a safe null test, a module-private mutable global mutated by an unsafe group
+# fn, and an inline-asm integer add. Each raw op sits inside an `unsafe` context.
+
+unsafe {
+	mut counter: int = 0
+
+	fn bump() -> int {
+		counter = counter + 1
+		return counter
+	}
+}
+
+fn add_asm(a: int, b: int) -> int {
+	r: int = 0
+	unsafe {
+		asm("add %0, %1, %2", out("=r") r, in("r") a, in("r") b)
+	}
+	return r
+}
+
+fn main() {
+	unsafe {
+		x: int = 10
+		p: ptr[int] = addr(x)          # addr
+		p.store(20)                     # store
+		print p.load()                  # load  -> 20
+		q: ptr[int] = p.offset(0)       # offset
+		print q.load()                  # -> 20
+		raw: ptr = ptr(p)               # cast to bare ptr
+		typed: ptr[int] = ptr[int](raw) # cast back to ptr[int]
+		print typed.load()              # -> 20
+		print p == 0                    # null test (safe) -> false
+		print bump()                    # unsafe group fn  -> 1
+		print bump()                    # persists         -> 2
+		print add_asm(3, 4)             # inline asm       -> 7
+	}
+}

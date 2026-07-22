@@ -134,6 +134,8 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 		return c.inferFStr(n)
 	case *ast.UnsafeExpr:
 		return c.inferUnsafe(n)
+	case *ast.AsmExpr:
+		return c.inferAsm(n)
 	}
 	// blocks, if-expressions, f-cmds, and the remaining group-8 operators are
 	// modelled in later iterations; treat them as Unknown so they do not cascade.

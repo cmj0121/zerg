@@ -13,6 +13,13 @@ import (
 // value of function type is an indirect call. A complex callee expression is
 // synthesized and, when it is a function value, called indirectly.
 func (c *checker) inferCall(n *ast.Call) Type {
+	if br, ok := n.Callee.(*ast.Bracket); ok {
+		if id, ok := br.Base.(*ast.Ident); ok {
+			if sig, ok := c.info.Funcs[id.Name]; ok && sig.Generic != nil {
+				return c.callGenericExplicit(n, br, sig)
+			}
+		}
+	}
 	if id, ok := n.Callee.(*ast.Ident); ok {
 		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymType {
 			return c.construct(n, sym)
@@ -341,6 +348,57 @@ func (c *checker) callGeneric(n *ast.Call, sig *FuncSig) Type {
 		want := substitute(sig.Params[i], subT, subV)
 		at := argTypes[i]
 		if !bad(at) && !bad(want) && !c.assignable(want, exprs[i], at) {
+			c.errorf(exprs[i].Span(), "argument %d of %q: cannot use %s as %s", i+1, sig.Name, at, want)
+		}
+	}
+	c.checkBounds(n.Span(), sig.Generic, subT)
+	if sig.Ret == nil {
+		return Nil
+	}
+	return substitute(sig.Ret, subT, subV)
+}
+
+// callGenericExplicit types an explicit type/value-argument call 'f[int](x)' /
+// 'fill[3](9)' (B1): it binds the callee's generic parameters from the bracket's
+// arguments — a value parameter from a folded const, a type parameter from the
+// resolved type argument — infers any remaining from the value arguments, checks
+// each argument against the resulting concrete parameter type, and yields the
+// substituted return type.
+func (c *checker) callGenericExplicit(n *ast.Call, br *ast.Bracket, sig *FuncSig) Type {
+	subT := map[string]Type{}
+	subV := map[string]types.ConstVal{}
+	res := c.info.Brackets[br]
+	for i, name := range sig.Generic.Names {
+		if _, isVal := sig.Generic.Params[name].(*types.ValParam); isVal {
+			if i < len(br.Elems) {
+				if v, ok := c.foldConst(br.Elems[i]); ok {
+					subV[name] = v
+					continue
+				}
+			}
+		}
+		if i < len(res.Args) && res.Args[i] != nil && !bad(res.Args[i]) {
+			subT[name] = res.Args[i]
+		}
+	}
+	exprs := c.pairArgs(sig, n)
+	argTypes := make([]Type, len(sig.Params))
+	for i := range sig.Params {
+		if exprs[i] == nil {
+			continue
+		}
+		argTypes[i] = c.synth(exprs[i])
+		unify(sig.Params[i], argTypes[i], subT, subV)
+	}
+	for i := range sig.Params {
+		if exprs[i] == nil {
+			if !hasDefault(sig.Defaults, i) {
+				c.errorf(n.Span(), "%q: missing argument %q", sig.Name, argName(sig.ParamNames, i))
+			}
+			continue
+		}
+		want := substitute(sig.Params[i], subT, subV)
+		if at := argTypes[i]; !bad(at) && !bad(want) && !c.assignable(want, exprs[i], at) {
 			c.errorf(exprs[i].Span(), "argument %d of %q: cannot use %s as %s", i+1, sig.Name, at, want)
 		}
 	}

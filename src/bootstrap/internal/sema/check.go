@@ -305,6 +305,12 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	if isTypeParam(lt) || isTypeParam(rt) {
 		return c.inferGenericOp(n, lt, rt)
 	}
+	// A comparison on a nominal (struct/enum) operand is not a native C operator: it
+	// requires the corresponding Eq/Ord impl (derived or hand-written), and the
+	// backend lowers it to that method (B2, DESIGN-1c §3.3).
+	if isCompareOp(n.Op) && (isNominal(lt) || isNominal(rt)) {
+		return c.inferNominalCompare(n, lt, rt)
+	}
 	switch {
 	case isArithOp(n.Op):
 		return c.numericResult(n, lt, rt)
@@ -332,6 +338,43 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		return Bool
 	}
 	return Invalid
+}
+
+// isNominal reports whether a type is a user struct or enum — the operands whose
+// comparison must go through an Eq/Ord impl rather than a native C operator.
+func isNominal(t Type) bool {
+	switch t.(type) {
+	case *types.Struct, *types.Enum:
+		return true
+	}
+	return false
+}
+
+// isCompareOp reports whether an operator is an equality or ordering comparison.
+func isCompareOp(k token.Kind) bool { return isEqOp(k) || isOrderOp(k) }
+
+// inferNominalCompare types a comparison whose operand is a nominal type: the
+// operands must be the same type, and it must have the Eq (for '=='/'!=') or Ord
+// (for '<'/'<='/'>'/'>=') impl the comparison lowers to (B2). It yields bool, or
+// Invalid with a diagnostic when the impl is missing.
+func (c *checker) inferNominalCompare(n *ast.Binary, lt, rt Type) Type {
+	if !types.Identical(lt, rt) {
+		c.errorf(n.Span(), "cannot compare %s and %s", lt, rt)
+		return Invalid
+	}
+	spec := "Eq"
+	if isOrderOp(n.Op) {
+		spec = "Ord"
+	}
+	reg := c.info.Specs
+	if reg != nil {
+		if sp := reg.Specs[spec]; sp == nil || reg.resolveImpl(sp, lt) == nil {
+			c.errorf(n.Span(), "operator %q on %s requires an impl of %s; add #[derive(%s)] or write one",
+				n.Op, lt, spec, spec)
+			return Invalid
+		}
+	}
+	return Bool
 }
 
 // numericResult checks a numeric binary operation, coercing an untyped integer

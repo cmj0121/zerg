@@ -92,7 +92,7 @@ func (e *emitter) erasedSignature(inst *mono.Instance, defn bool) string {
 		params = append(params, decl)
 	}
 	if inst.Dyn && inst.DynSpec != nil {
-		params = append(params, "const zg_witness_"+inst.DynSpec.Name+"*"+name(inst.DynParam))
+		params = append(params, "const zgs_"+inst.DynSpec.Name+"*"+name(inst.DynParam))
 	}
 	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, strings.Join(params, ", "))
 }

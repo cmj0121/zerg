@@ -170,11 +170,40 @@ func paramList(n int, render func(i int) string) string {
 	return b.String()
 }
 
+// paramNames renders each of n parameters with render, returning them as a slice.
+func paramNames(n int, render func(i int) string) []string {
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = render(i)
+	}
+	return out
+}
+
+// joinParams joins a receiver (0 or 1 entry) and the rest of the parameters into a
+// C parameter list, spelling an empty list "void" — so a free function with no
+// parameters is byte-identical to the pre-method backend.
+func joinParams(recv, rest []string) string {
+	all := append(recv, rest...)
+	if len(all) == 0 {
+		return "void"
+	}
+	return strings.Join(all, ", ")
+}
+
 // prototype renders a forward declaration with parameter types only, using the
 // instance's mangled C name and its concrete (specialized) signature.
 func (e *emitter) prototype(inst *mono.Instance) string {
 	if inst.Dyn || inst.RecvErased {
 		return e.erasedSignature(inst, false)
+	}
+	if inst.Recv != nil {
+		var b strings.Builder
+		b.WriteString(e.ctype(inst.Recv))
+		for i := range inst.Params {
+			b.WriteString(", ")
+			b.WriteString(e.paramType(inst.Params[i]))
+		}
+		return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, b.String())
 	}
 	params := paramList(len(inst.Params), func(i int) string { return e.paramType(inst.Params[i]) })
 	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
@@ -195,10 +224,16 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.counter = 0
 	e.pushScope() // parameter scope
 
-	params := paramList(len(inst.Params), func(i int) string {
+	// an impl-method instance takes its receiver by value as the first parameter,
+	// bound to the source name 'this'; a free function has no receiver.
+	var recv []string
+	if inst.Recv != nil {
+		recv = append(recv, e.ctype(inst.Recv)+" "+e.declareName("this"))
+	}
+	rest := paramNames(len(inst.Params), func(i int) string {
 		return e.paramType(inst.Params[i]) + " " + e.declareName(inst.ParamNames[i])
 	})
-	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, params))
+	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, joinParams(recv, rest)))
 
 	e.indent++
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
@@ -386,6 +421,9 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.Unary:
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
 	case *ast.Binary:
+		if md, ok := e.cur.OpCalls[n]; ok {
+			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.expr(n.R))
+		}
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
 	case *ast.Call:
 		return e.call(n)
@@ -529,6 +567,9 @@ func (e *emitter) call(n *ast.Call) string {
 			return s
 		}
 	}
+	if md, ok := e.cur.MethodCalls[n]; ok {
+		return e.methodCall(n, md)
+	}
 	id, _ := n.Callee.(*ast.Ident)
 	if id != nil {
 		if sym, ok := e.info.Refs[id]; ok {
@@ -552,12 +593,28 @@ func (e *emitter) call(n *ast.Call) string {
 
 // callTarget is the mangled C name a call resolves to: a generic call site is
 // recorded per instance (so the same call in two specializations dispatches to two
-// callees); a non-generic call falls back to the program-level 'zg_<name>'.
+// callees); a non-generic Ident call falls back to the program-level 'zg_<name>'.
+// A callee that is neither a recorded generic call nor a plain identifier (e.g. an
+// unresolved indirect call) yields a safe placeholder rather than a nil deref.
 func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 	if m, ok := e.cur.Calls[n]; ok {
 		return m
 	}
+	if id == nil {
+		return "0"
+	}
 	return e.prog.CallTarget(id.Name)
+}
+
+// methodCall lowers a bound-method call 'recv.method(args)' to a by-value call of
+// the resolved impl-method instance, passing the receiver first (B1).
+func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
+	field, _ := n.Callee.(*ast.Field)
+	args := e.expr(field.X)
+	for _, a := range n.Args {
+		args += ", " + e.expr(a.Value)
+	}
+	return fmt.Sprintf("%s(%s)", md.Mangled, args)
 }
 
 // construct lowers a struct construction 'T(...)' to a C compound literal of the

@@ -135,6 +135,7 @@ type checker struct {
 	curSpec    *types.SpecDef  // the spec whose signatures are being resolved (U3 assoc-type)
 	curImpl    *types.ImplDef  // the impl whose signatures are being resolved (U3 assoc-type)
 	loopDepth  int
+	derived    []*ast.ImplDecl // '#[derive]'-synthesized impls, type-checked after the file (U5)
 }
 
 func (c *checker) errorf(span token.Span, format string, args ...any) {
@@ -353,6 +354,12 @@ func (c *checker) checkFuncs(file *ast.File) {
 		case *ast.ImplDecl:
 			c.checkImpl(n)
 		}
+	}
+	// '#[derive]'-synthesized impls are not in the file, so their canonical method
+	// bodies are type-checked here — recording the field/payload comparison types
+	// the backend reads when it emits them (U5, DESIGN-1c §5).
+	for _, n := range c.derived {
+		c.checkImpl(n)
 	}
 }
 

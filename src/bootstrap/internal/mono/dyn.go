@@ -45,22 +45,24 @@ func (w *worker) dynCall(in *Instance, sig *sema.FuncSig, n *ast.Call) {
 // type-parameter parameters are marked erased (rendered 'const void*') and it
 // carries the bound spec so the emitter appends a witness pointer (DESIGN-1c §6.1).
 func (w *worker) enqueueDyn(sig *sema.FuncSig) *Instance {
-	mangled := mangle(sig.Name) + "__dyn"
+	mangled := "zgd_" + sig.Name
 	if in, ok := w.prog.byMangled[mangled]; ok {
 		return in
 	}
 	in := &Instance{
-		Origin:     sig.Decl,
-		Mangled:    mangled,
-		ParamNames: sig.ParamNames,
-		Params:     make([]types.Type, len(sig.Params)),
-		Ret:        orNil(sig.Ret),
-		Dyn:        true,
-		DynSpec:    dynBoundSpec(sig),
-		Erased:     make([]bool, len(sig.Params)),
-		DynParam:   "w",
-		Calls:      map[*ast.Call]string{},
-		DynSites:   map[*ast.Call]*DynSite{},
+		Origin:      sig.Decl,
+		Mangled:     mangled,
+		ParamNames:  sig.ParamNames,
+		Params:      make([]types.Type, len(sig.Params)),
+		Ret:         orNil(sig.Ret),
+		Dyn:         true,
+		DynSpec:     dynBoundSpec(sig),
+		Erased:      make([]bool, len(sig.Params)),
+		DynParam:    "w",
+		Calls:       map[*ast.Call]string{},
+		DynSites:    map[*ast.Call]*DynSite{},
+		MethodCalls: map[*ast.Call]*MethodDispatch{},
+		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}
 	for i, p := range sig.Params {
 		in.Params[i] = p
@@ -79,11 +81,11 @@ func (w *worker) enqueueDyn(sig *sema.FuncSig) *Instance {
 // instance, and fills one slot per method with that body's mangled name (DESIGN-1c
 // §6.2). Every witness of the same spec shares a witness struct type.
 func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness {
-	global := "zg_witness_" + spec.Name + "__" + mangleType(concrete)
+	global := witnessGlobalName(spec.Name, concrete)
 	if wit, ok := w.prog.witByGlobal[global]; ok {
 		return wit
 	}
-	wit := &Witness{Global: global, Struct: "zg_witness_" + spec.Name, Spec: spec}
+	wit := &Witness{Global: global, Struct: witnessStructName(spec.Name), Spec: spec}
 	w.prog.witByGlobal[global] = wit
 
 	reg := w.info.Specs
@@ -115,18 +117,20 @@ func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness
 // concrete types.
 func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod) *Instance {
 	fn, _ := m.Decl.(*ast.FuncDecl)
-	mangled := mangle(mangleType(concrete) + "__" + m.Name)
+	mangled := "zge_" + typeCode(concrete) + "_" + m.Name
 	if in, ok := w.prog.byMangled[mangled]; ok {
 		return in
 	}
 	in := &Instance{
-		Origin:     fn,
-		Mangled:    mangled,
-		Recv:       concrete,
-		RecvErased: true,
-		Ret:        orNil(m.Sig.Ret),
-		Calls:      map[*ast.Call]string{},
-		DynSites:   map[*ast.Call]*DynSite{},
+		Origin:      fn,
+		Mangled:     mangled,
+		Recv:        concrete,
+		RecvErased:  true,
+		Ret:         orNil(m.Sig.Ret),
+		Calls:       map[*ast.Call]string{},
+		DynSites:    map[*ast.Call]*DynSite{},
+		MethodCalls: map[*ast.Call]*MethodDispatch{},
+		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}
 	if fn != nil {
 		for _, p := range fn.Params {

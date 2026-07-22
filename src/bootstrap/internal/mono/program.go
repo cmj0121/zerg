@@ -67,10 +67,20 @@ type Instance struct {
 	Erased   []bool
 	DynParam string // the witness pointer parameter name inside a dyn body ("w")
 
-	subT     map[string]types.Type
-	subV     map[string]types.ConstVal
-	Calls    map[*ast.Call]string
-	DynSites map[*ast.Call]*DynSite
+	subT        map[string]types.Type
+	subV        map[string]types.ConstVal
+	Calls       map[*ast.Call]string
+	DynSites    map[*ast.Call]*DynSite
+	MethodCalls map[*ast.Call]*MethodDispatch
+	OpCalls     map[*ast.Binary]*MethodDispatch
+}
+
+// MethodDispatch is a resolved method or operator call within a body: the mangled
+// name of the impl-method instance it dispatches to. The receiver (a method call's
+// receiver, or a comparison's left operand) is passed by value as the first
+// argument (DESIGN-1c §3.3/§6, B1/B2).
+type MethodDispatch struct {
+	Mangled string
 }
 
 // DynSite is a call to a '#[dyn]' function from within some body: the witness the
@@ -153,11 +163,11 @@ func (p *Program) CallTarget(name string) string { return mangle(name) }
 func (p *Program) TypeName(t types.Type) (string, bool) {
 	switch x := t.(type) {
 	case *types.Struct:
-		if ti, ok := p.typeByKey[typeFrag(x.Def, x.Args)]; ok {
+		if ti, ok := p.typeByKey[typeKey(x.Def, x.Args)]; ok {
 			return ti.Mangled, true
 		}
 	case *types.Enum:
-		if ti, ok := p.typeByKey[typeFrag(x.Def, x.Args)]; ok {
+		if ti, ok := p.typeByKey[typeKey(x.Def, x.Args)]; ok {
 			return ti.Mangled, true
 		}
 	}
@@ -172,7 +182,7 @@ func (p *Program) EnumInstance(t types.Type) *TypeInstance {
 	if !ok {
 		return nil
 	}
-	if ti, ok := p.typeByKey[typeFrag(x.Def, x.Args)]; ok && ti.IsEnum {
+	if ti, ok := p.typeByKey[typeKey(x.Def, x.Args)]; ok && ti.IsEnum {
 		return ti
 	}
 	return nil

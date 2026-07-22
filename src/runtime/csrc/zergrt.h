@@ -53,6 +53,10 @@ void *zrt_ref_alloc(size_t payload_sz, zrt_drop_fn drop);
 /* zrt_retain increments a Ref's refcount (copying a Ref value). */
 void zrt_retain(void *ref);
 
+/* zrt_ref_copy retains a Ref and returns it, so copying a Ref value is a single
+ * expression 'x = zrt_ref_copy(y)' the backend can drop into any copy site. */
+void *zrt_ref_copy(void *ref);
+
 /* zrt_release decrements a Ref's refcount; at zero it runs the drop function on
  * the payload and frees the block. Dropping a Ref value calls this. */
 void zrt_release(void *ref);

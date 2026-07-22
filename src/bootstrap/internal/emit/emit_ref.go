@@ -22,6 +22,7 @@ package emit
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/mono"
@@ -158,6 +159,12 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesResultNil() {
 		e.needsRuntime = true
 	}
+	// A program binding a foreign C symbol (an `#[extern]` function) pulls in the
+	// standard headers that declare libc symbols; the foreign thunk itself needs no
+	// Zerg runtime. A program with no such binding stays byte-identical.
+	if e.programUsesFFI() {
+		e.needsFFI = true
+	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}
@@ -218,6 +225,22 @@ func (e *emitter) programUsesIO() bool {
 			continue
 		}
 		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" {
+			return true
+		}
+	}
+	return false
+}
+
+// programUsesFFI reports whether any function this program emits binds a foreign C
+// symbol through an `#[extern]` decorator (Phase 1f U5). Such a function lowers to a
+// thunk forwarding to a libc symbol, so its emitted C needs the standard headers. A
+// program with no `#[extern]` function leaves it false and stays byte-identical.
+func (e *emitter) programUsesFFI() bool {
+	for _, inst := range e.prog.Funcs {
+		if inst.Origin == nil {
+			continue
+		}
+		if _, ok := sema.ExternSymbol(inst.Origin); ok {
 			return true
 		}
 	}
@@ -321,7 +344,42 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 		arg := e.expr(n.Args[0].Value)
 		return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(elem), arg), true
 	}
+	if s, ok := e.atomicIntrinsicEmit(n); ok {
+		return s, true
+	}
 	return e.writeIntrinsicEmit(n)
+}
+
+// atomicIntrinsicEmit lowers the Phase 1f Atomic[int] intrinsics — `__zrt_atomic_load`
+// / `_store` / `_swap` / `_add` / `_cas` — that the stdlib `atomic` module's leaves
+// call. The first argument is the shared cell, a `Ref[int]` (a `void*` box); its int64
+// payload pointer, `(int64_t*)zrt_ref_payload(box)`, is passed to the matching sys.c
+// SC primitive, with any remaining int operands forwarded. A shadowed spelling defers
+// to the ordinary call path, so the intrinsic never masks a user symbol.
+func (e *emitter) atomicIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	fn, ok := map[string]string{
+		"__zrt_atomic_load":  "zrt_atomic_load",
+		"__zrt_atomic_store": "zrt_atomic_store",
+		"__zrt_atomic_swap":  "zrt_atomic_swap",
+		"__zrt_atomic_add":   "zrt_atomic_add",
+		"__zrt_atomic_cas":   "zrt_atomic_cas",
+	}[id.Name]
+	if !ok || len(n.Args) < 1 {
+		return "", false
+	}
+	cell := fmt.Sprintf("(int64_t*)zrt_ref_payload(%s)", e.expr(n.Args[0].Value))
+	args := []string{cell}
+	for _, a := range n.Args[1:] {
+		args = append(args, e.expr(a.Value))
+	}
+	return fmt.Sprintf("%s(%s)", fn, strings.Join(args, ", ")), true
 }
 
 // writeIntrinsicEmit lowers the Phase 1f io write intrinsics — `__zrt_write(fd, s)`

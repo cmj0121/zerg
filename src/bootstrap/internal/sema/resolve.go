@@ -502,6 +502,8 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 		}
 	case *ast.GuardExpr:
 		r.resolveBlock(n.Body, ScopeBlock)
+	case *ast.UnsafeExpr:
+		r.resolveBlock(n.Body, ScopeBlock)
 	case *ast.Try:
 		r.resolveExpr(n.X)
 	case *ast.Force:

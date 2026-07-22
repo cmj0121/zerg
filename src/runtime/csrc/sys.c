@@ -52,3 +52,33 @@ long zrt_write_int(int fd, int64_t v) {
 	}
 	return zrt_write(fd, (const uint8_t *)buf, (size_t)len);
 }
+
+/*
+ * Atomic[int] cell operations (Phase 1f U2). The stdlib `atomic` module lowers a
+ * shared Atomic[int] onto a Ref[int] box and calls these on its payload pointer,
+ * so every copy of the box (including one sent across `spawn`) names one cell.
+ * Sequential-consistency ordering keeps the API correct beyond the current N:1
+ * cooperative scheduler. The __atomic_* builtins operate on a plain int64_t*, so
+ * the payload needs no _Atomic storage qualifier.
+ */
+int64_t zrt_atomic_load(int64_t *p) {
+	return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+}
+
+int64_t zrt_atomic_store(int64_t *p, int64_t v) {
+	__atomic_store_n(p, v, __ATOMIC_SEQ_CST);
+	return v;
+}
+
+int64_t zrt_atomic_swap(int64_t *p, int64_t v) {
+	return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST);
+}
+
+int64_t zrt_atomic_add(int64_t *p, int64_t n) {
+	return __atomic_fetch_add(p, n, __ATOMIC_SEQ_CST);
+}
+
+bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired) {
+	return __atomic_compare_exchange_n(p, &expect, desired, false, __ATOMIC_SEQ_CST,
+	                                   __ATOMIC_SEQ_CST);
+}

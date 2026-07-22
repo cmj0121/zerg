@@ -94,9 +94,13 @@ func (e *emitter) registerDrop(cname string, typ sema.Type) {
 	}
 	top := e.curScope()
 	top.items = append(top.items, dropItem{cname: cname, typ: typ})
-	switch typ.(type) {
+	switch t := typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
+	case *types.Chan:
+		// a channel handle releases at scope exit through a slot guard (so a later `del`
+		// nulls the slot); a send-capable handle releases as a sender (may auto-close).
+		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.chanDropThunk(t), cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("zrt_defer(zg_dropenv_%s, &%s);", e.ctype(typ), cname))
 	default:
@@ -120,9 +124,11 @@ func (e *emitter) findDrop(cname string) (dropItem, bool) {
 // drop the old value before the new one is bound). Unlike a scope-exit release it
 // runs immediately, on the normal path only.
 func (e *emitter) emitInlineDrop(it dropItem) {
-	switch it.typ.(type) {
+	switch t := it.typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
+	case *types.Chan:
+		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	default:
@@ -142,13 +148,19 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 	if !ok {
 		return // POD, a borrow (mut &), or a captured value: nothing to free
 	}
-	switch it.typ.(type) {
+	switch t := it.typ.(type) {
 	case *types.Ref:
 		// Release now and null the slot. The scope-exit guard reads the slot, so it
 		// skips a nulled binding — the box is freed exactly once whether or not the
 		// `del` is reached on a given path (flow-consistent, and safe under a
 		// conditional del because zrt_release(NULL) is a no-op).
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
+		e.line(fmt.Sprintf("%s = NULL;", cname))
+	case *types.Chan:
+		// `del ch` (GRAMMAR group 11) drops a channel refcount now — and for a
+		// send-capable handle, closes the channel if it was the last sender. Nulling the
+		// slot makes the scope-exit guard skip it, so the drop happens exactly once.
+		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)

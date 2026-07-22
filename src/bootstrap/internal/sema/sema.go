@@ -541,6 +541,25 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		// marshals the call into a coroutine entry; the spawn statement itself yields no
 		// value.
 		c.synth(n.Call)
+	case *ast.SendStmt:
+		// 'ch <- v' (GRAMMAR group 9) sends v on the channel ch and yields no value.
+		// Sending on a receive-only channel is rejected (directional narrowing), and the
+		// value must be assignable to the channel's element type.
+		ct := c.synth(n.Chan)
+		vt := c.synth(n.Value)
+		ch, ok := ct.(*types.Chan)
+		if !ok {
+			if !bad(ct) {
+				c.errorf(n.Chan.Span(), "send '<-' requires a channel, found %s", ct)
+			}
+			return
+		}
+		if ch.Dir == types.ChanRecv {
+			c.errorf(n.Span(), "cannot send on a receive-only channel %s", ch)
+		}
+		if !bad(vt) && !c.assignable(ch.Elem, n.Value, vt) {
+			c.errorf(n.Value.Span(), "cannot send a value of type %s on a channel of %s", vt, ch.Elem)
+		}
 	case *ast.WithStmt:
 		c.checkWith(n)
 	}

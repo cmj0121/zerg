@@ -473,6 +473,10 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 		r.resolveExpr(n.X)
 	case *ast.Recv:
 		r.resolveExpr(n.X)
+	case *ast.ChanNew:
+		if n.Cap != nil {
+			r.resolveExpr(n.Cap)
+		}
 	case *ast.IsExpr:
 		r.resolveExpr(n.X)
 	case *ast.MatchExpr:

@@ -76,6 +76,17 @@ type emitter struct {
 	concurrency bool
 	spawnIdx    map[*ast.SpawnStmt]int
 
+	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
+	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
+	// plus its recv/force helpers; recvElems is those element types in that order.
+	// needChanDrop/needChanSenderDrop record whether the program drops any receive-only
+	// / send-capable channel handle, gating the two drop thunks so a program that drops
+	// neither emits neither. All empty/false for a program with no channels.
+	recvIdx            map[string]int
+	recvElems          []sema.Type
+	needChanDrop       bool
+	needChanSenderDrop bool
+
 	// Ref[T] runtime state (Phase 1d iteration 2). refnewIdx numbers the distinct
 	// Ref construction element types so each gets a stable zg_refnew_<n> helper;
 	// refnewElems is those element types in that order. All empty for a value-only
@@ -435,6 +446,8 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.deferStmt(n)
 	case *ast.SpawnStmt:
 		e.spawnStmt(n)
+	case *ast.SendStmt:
+		e.sendStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:
@@ -679,6 +692,12 @@ func (e *emitter) expr(x ast.Expr) string {
 		return "{" + e.exprList(n.Elems) + "}"
 	case *ast.MatchExpr:
 		return e.lowerMatch(n)
+	case *ast.ChanNew:
+		return e.chanNew(n)
+	case *ast.Recv:
+		return e.recvExpr(n)
+	case *ast.Force:
+		return e.forceExpr(n)
 	default:
 		return "0"
 	}
@@ -931,6 +950,17 @@ func (e *emitter) assignTarget(t ast.AssignTarget) string {
 func (e *emitter) ctype(t sema.Type) string {
 	if isResultNil(t) {
 		return "zrt_result_nil"
+	}
+	if ei, ok := t.(*types.Either); ok {
+		// the Result[T] a `<-ch` yields: a generated tagged carrier struct keyed by the
+		// received element type (tag 0 = Left(value), 1 = Right(closed/crash)).
+		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
+			return fmt.Sprintf("zg_recv_%d", idx)
+		}
+	}
+	if _, ok := t.(*types.Chan); ok {
+		// a channel handle is an opaque runtime pointer (chan.c owns the layout).
+		return "zrt_chan*"
 	}
 	if _, ok := t.(*types.Ref); ok {
 		// a Ref[T] value is a pointer to its zrt_ref_alloc'd header+payload.

@@ -474,6 +474,13 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		c.loopDepth--
 	case *ast.ExprStmt:
 		c.synth(n.X)
+	case *ast.DelStmt:
+		// 'del name' revokes a binding's access now (GRAMMAR group 11); for a Ref the
+		// emitter drops a refcount. The full four-way ownership dispatch is U5 — here
+		// we only resolve the name so 'del undefined' is reported.
+		if c.lookup(n.Name) == nil {
+			c.errorf(n.Span(), "undefined name %q", n.Name)
+		}
 	case *ast.RaiseStmt:
 		// 'raise e (from c)' diverges (never). With no stdlib Error spec yet, any
 		// value is accepted as the error and its cause (FORK-4); the operands are

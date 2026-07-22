@@ -145,6 +145,8 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 		return &types.Map{Key: arg(0), Val: arg(1)}, true
 	case "chan":
 		return &types.Chan{Elem: arg(0)}, true
+	case "Ref":
+		return &types.Ref{Elem: arg(0)}, true
 	case "ptr":
 		if len(ref.Args) == 0 {
 			return &types.Ptr{}, true

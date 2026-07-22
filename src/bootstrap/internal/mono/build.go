@@ -287,6 +287,8 @@ func (w *worker) collectType(t types.Type) {
 	case *types.Map:
 		w.collectType(x.Key)
 		w.collectType(x.Val)
+	case *types.Ref:
+		w.collectType(x.Elem)
 	case *types.Opt:
 		w.collectType(x.Elem)
 	}
@@ -448,6 +450,8 @@ func typeCode(t types.Type) string {
 		return "M" + typeCode(x.Key) + typeCode(x.Val)
 	case *types.Array:
 		return "Y" + typeCode(x.Elem) + valCode(x.N)
+	case *types.Ref:
+		return "R" + typeCode(x.Elem)
 	case *types.Opt:
 		return "O" + typeCode(x.Elem)
 	case *types.Struct:

@@ -13,6 +13,9 @@ import (
 // value of function type is an indirect call. A complex callee expression is
 // synthesized and, when it is a function value, called indirectly.
 func (c *checker) inferCall(n *ast.Call) Type {
+	if t, ok := c.builtinCall(n); ok {
+		return t
+	}
 	if br, ok := n.Callee.(*ast.Bracket); ok {
 		if id, ok := br.Base.(*ast.Ident); ok {
 			if sig, ok := c.info.Funcs[id.Name]; ok && sig.Generic != nil {
@@ -50,6 +53,88 @@ func (c *checker) inferCall(n *ast.Call) Type {
 	}
 	c.synthArgs(n)
 	return types.Unknown
+}
+
+// builtinCall handles the Phase 1d runtime builtins that no stdlib supplies yet:
+// the 'Ref[T]' box constructor and its reader 'deref'. It recognises 'Ref(v)'
+// (element inferred from v), 'Ref[T](v)' (element given explicitly), and
+// 'deref(r) -> T'. A name shadowed by a local or module binding is left to the
+// ordinary call paths, so the builtins never mask a user symbol.
+func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
+	switch callee := n.Callee.(type) {
+	case *ast.Ident:
+		if c.shadowed(callee.Name) {
+			return nil, false
+		}
+		switch callee.Name {
+		case "Ref":
+			return c.constructRef(n, nil), true
+		case "deref":
+			return c.derefRef(n), true
+		}
+	case *ast.Bracket:
+		id, ok := callee.Base.(*ast.Ident)
+		if !ok || id.Name != "Ref" || c.shadowed("Ref") {
+			return nil, false
+		}
+		var elem Type
+		if len(callee.Elems) == 1 {
+			elem = c.exprAsType(callee.Elems[0])
+		}
+		return c.constructRef(n, elem), true
+	}
+	return nil, false
+}
+
+// shadowed reports whether a name is bound by a local or module symbol, so a
+// builtin spelling defers to the user's binding of the same name.
+func (c *checker) shadowed(name string) bool {
+	return c.lookup(name) != nil || c.module.lookup(name) != nil
+}
+
+// constructRef checks a 'Ref[T](v)' box construction: it takes exactly one value
+// argument, uses the explicit element type when given (else infers it from the
+// argument), and yields 'Ref[elem]'. The argument is checked against the element
+// type so a mismatch is reported.
+func (c *checker) constructRef(n *ast.Call, elem Type) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "Ref(v) takes exactly one value argument, got %d", len(n.Args))
+		c.synthArgs(n)
+		return Invalid
+	}
+	arg := n.Args[0].Value
+	if elem == nil || bad(elem) {
+		elem = c.synth(arg)
+	} else {
+		vt := c.check(arg, elem)
+		if !bad(elem) && !bad(vt) && !c.assignable(elem, arg, vt) {
+			c.errorf(n.Span(), "cannot store %s in a Ref[%s]", vt, elem)
+		}
+	}
+	if elem == Nil {
+		c.errorf(n.Span(), "cannot infer a Ref element type from nil")
+		return Invalid
+	}
+	return &types.Ref{Elem: elem}
+}
+
+// derefRef checks 'deref(r)': it takes one 'Ref[T]' argument and yields a copy of
+// the boxed T. Reading a Ref whose element itself holds a Ref is deferred (the
+// reader would have to retain the inner boxes); this iteration reads POD elements.
+func (c *checker) derefRef(n *ast.Call) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "deref(r) takes exactly one argument, got %d", len(n.Args))
+		c.synthArgs(n)
+		return Invalid
+	}
+	rt := c.synth(n.Args[0].Value)
+	if ref, ok := rt.(*types.Ref); ok {
+		return ref.Elem
+	}
+	if !bad(rt) {
+		c.errorf(n.Span(), "deref expects a Ref[T], got %s", rt)
+	}
+	return Invalid
 }
 
 func (c *checker) synthArgs(n *ast.Call) {
@@ -560,6 +645,8 @@ func substitute(t Type, subT map[string]Type, subV map[string]types.ConstVal) Ty
 		return &types.Set{Elem: substitute(x.Elem, subT, subV)}
 	case *types.Map:
 		return &types.Map{Key: substitute(x.Key, subT, subV), Val: substitute(x.Val, subT, subV)}
+	case *types.Ref:
+		return &types.Ref{Elem: substitute(x.Elem, subT, subV)}
 	case *types.Opt:
 		return &types.Opt{Elem: substitute(x.Elem, subT, subV)}
 	case *types.Struct:

@@ -136,9 +136,13 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 		return c.inferUnsafe(n)
 	case *ast.AsmExpr:
 		return c.inferAsm(n)
+	case *ast.IfExpr:
+		return c.inferIfExpr(n)
+	case *ast.Block:
+		return c.synthBlock(n)
 	}
-	// blocks, if-expressions, f-cmds, and the remaining group-8 operators are
-	// modelled in later iterations; treat them as Unknown so they do not cascade.
+	// f-cmds and the remaining group-8 operators are modelled in later iterations;
+	// treat them as Unknown so they do not cascade.
 	return types.Unknown
 }
 
@@ -186,6 +190,38 @@ func (c *checker) synthBlock(b *ast.Block) Type {
 		value = Nil
 	}
 	return value
+}
+
+// inferIfExpr types an if-EXPRESSION used as a value (GRAMMAR group 4/6): each
+// branch condition must be boolean, and every branch body and the mandatory else —
+// each a value-producing block — must yield the same type, which becomes the
+// expression's type. A branch type that disagrees with the others is an error
+// (GRAMMAR: "every branch must yield the same type"). It mirrors how a value 'match'
+// requires arms of one type.
+func (c *checker) inferIfExpr(n *ast.IfExpr) Type {
+	var result Type
+	merge := func(bt Type) {
+		if bad(bt) {
+			return
+		}
+		if result == nil {
+			result = bt
+			return
+		}
+		if !types.Identical(result, bt) {
+			c.errorf(n.Span(),
+				"all branches of an if-expression must have the same type, found %s and %s", result, bt)
+		}
+	}
+	for _, br := range n.Branches {
+		c.checkCond(br.Cond)
+		merge(c.synthBlock(br.Body))
+	}
+	merge(c.synthBlock(n.Else))
+	if result == nil {
+		return types.Unknown
+	}
+	return result
 }
 
 // inferChanNew types the channel constructor 'chan[T](cap?)' (GRAMMAR group 9): it

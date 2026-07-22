@@ -45,6 +45,13 @@ type Manifest struct {
 	// zrt_err). A program that uses no such value leaves it false, so its emitted C
 	// stays byte-identical.
 	NeedsResult bool
+
+	// NeedsIO reports whether the program lowers a stdlib `io` write intrinsic
+	// (`import "io"`, Phase 1f). It implies NeedsRuntime. The io primitives ride in
+	// the always-linked sys.c, so NeedsRuntime is the effective link gate and this
+	// flag records the dependency for the driver and later slices. A program that
+	// never imports io leaves it false and stays byte-identical.
+	NeedsIO bool
 }
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -57,7 +64,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO}, nil
 }
 
 type emitter struct {
@@ -90,6 +97,11 @@ type emitter struct {
 	// value, which therefore stays byte-identical.
 	carriers    map[string]*carrier
 	needsResult bool
+
+	// needsIO is set when the program lowers a stdlib `io` write intrinsic (Phase
+	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
+	// program that never imports io, which therefore stays byte-identical.
+	needsIO bool
 
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
@@ -854,6 +866,9 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.builtinCallEmit(n); ok {
 		return s
 	}
+	if s, ok := e.namespaceCallEmit(n); ok {
+		return s
+	}
 	if site, ok := e.cur.DynSites[n]; ok {
 		return e.dynCallSite(n, site)
 	}
@@ -886,6 +901,34 @@ func (e *emitter) call(n *ast.Call) string {
 		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
 	}
 	return fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String())
+}
+
+// namespaceCallEmit lowers a single-level imported-module member call
+// `ns.member(args)` (the bundle-import MVP, Decision C): when the callee's base names
+// an imported namespace, the member is the bundled module's public function under its
+// mangled name `ns__member`, called by value with the ordinary argument copies. It is
+// tried before the method/dyn/plain paths, which never match a namespace callee.
+func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
+	fld, ok := n.Callee.(*ast.Field)
+	if !ok {
+		return "", false
+	}
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok || sym.Kind != sema.SymNamespace {
+		return "", false
+	}
+	var args strings.Builder
+	for i, a := range n.Args {
+		if i > 0 {
+			args.WriteString(", ")
+		}
+		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+	}
+	return fmt.Sprintf("%s(%s)", e.prog.CallTarget(sema.ModuleMember(id.Name, fld.Name)), args.String()), true
 }
 
 // callTarget is the mangled C name a call resolves to: a generic call site is

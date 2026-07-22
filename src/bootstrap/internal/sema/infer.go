@@ -16,6 +16,11 @@ func (c *checker) inferCall(n *ast.Call) Type {
 	if t, ok := c.builtinCall(n); ok {
 		return t
 	}
+	if fld, ok := n.Callee.(*ast.Field); ok {
+		if t, handled := c.namespaceCall(n, fld); handled {
+			return t
+		}
+	}
 	if br, ok := n.Callee.(*ast.Bracket); ok {
 		if id, ok := br.Base.(*ast.Ident); ok {
 			if sig, ok := c.info.Funcs[id.Name]; ok && sig.Generic != nil {
@@ -71,6 +76,10 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.constructRef(n, nil), true
 		case "deref":
 			return c.derefRef(n), true
+		case "__zrt_write":
+			return c.writeIntrinsic(n, Str), true
+		case "__zrt_write_int":
+			return c.writeIntrinsic(n, Int), true
 		}
 	case *ast.Bracket:
 		id, ok := callee.Base.(*ast.Ident)
@@ -135,6 +144,43 @@ func (c *checker) derefRef(n *ast.Call) Type {
 		c.errorf(n.Span(), "deref expects a Ref[T], got %s", rt)
 	}
 	return Invalid
+}
+
+// namespaceCall checks a single-level imported-module member call `ns.member(...)`
+// (the bundle-import MVP, Decision C). When the callee's base names an imported
+// namespace, the member resolves to the bundled module's public function under its
+// mangled name `ns__member` (build.bundle), and the call is checked like any direct
+// call. It reports true once it has taken responsibility for a namespace callee, so
+// inferCall does not fall through to its generic-callee handling.
+func (c *checker) namespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	sym := c.module.lookup(id.Name)
+	if sym == nil || sym.Kind != SymNamespace {
+		return nil, false
+	}
+	if sig, ok := c.info.Funcs[moduleMember(id.Name, fld.Name)]; ok {
+		return c.callFunc(n, sig), true
+	}
+	c.errorf(fld.Span(), "module %q has no public member %q", id.Name, fld.Name)
+	c.synthArgs(n)
+	return Invalid, true
+}
+
+// writeIntrinsic checks a compiler write intrinsic `__zrt_write(fd, value)`: a file
+// descriptor and a value of vt (str or int). It is the MVP leaf the stdlib `io`
+// module lowers onto until the FFI binder lands; it yields the byte count (int).
+func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
+	if len(n.Args) != 2 {
+		c.errorf(n.Span(), "write intrinsic takes (fd, value), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return Invalid
+	}
+	c.check(n.Args[0].Value, Int)
+	c.check(n.Args[1].Value, vt)
+	return Int
 }
 
 func (c *checker) synthArgs(n *ast.Call) {

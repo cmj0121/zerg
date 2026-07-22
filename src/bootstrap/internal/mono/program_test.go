@@ -46,3 +46,87 @@ func TestIdentityRail(t *testing.T) {
 		t.Fatalf("CallTarget(unknown) = %q, want zg_unknown fallback", got)
 	}
 }
+
+// mangledNames returns the mangled name of every function instance, for asserting
+// which specializations were collected.
+func mangledNames(prog *Program) map[string]bool {
+	got := map[string]bool{}
+	for _, in := range prog.Funcs {
+		got[in.Mangled] = true
+	}
+	return got
+}
+
+func assertFuncs(t *testing.T, prog *Program, want ...string) {
+	t.Helper()
+	got := mangledNames(prog)
+	if len(got) != len(prog.Funcs) {
+		t.Fatalf("duplicate mangled names among %d instances: %v", len(prog.Funcs), got)
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Fatalf("missing instance %q; got %v", w, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("instance set = %v, want exactly %v", got, want)
+	}
+}
+
+// TestInstantiateTwoTypes checks that a generic identity function used at two types
+// yields one specialized instance per type, with distinct mangled names, and that
+// the generic function itself is not emitted un-instantiated.
+func TestInstantiateTwoTypes(t *testing.T) {
+	prog := build(t, "fn id[T](x: T) -> T { return x }\nfn main() { print id(5)\n print id(true) }")
+	assertFuncs(t, prog, "zg_main", "zg_id__i", "zg_id__b")
+}
+
+// TestDedup checks that the same instantiation reached twice collapses to a single
+// instance (DESIGN-1c §4.3).
+func TestDedup(t *testing.T) {
+	prog := build(t, "fn id[T](x: T) -> T { return x }\nfn main() { print id(5)\n print id(6) }")
+	assertFuncs(t, prog, "zg_main", "zg_id__i")
+}
+
+// TestTransitive checks that a generic function calling another generic function
+// instantiates the callee transitively at the caller's concrete type.
+func TestTransitive(t *testing.T) {
+	src := "fn id[T](x: T) -> T { return x }\n" +
+		"fn wrap[T](x: T) -> T { return id(x) }\n" +
+		"fn main() { print wrap(7)\n print wrap(false) }"
+	prog := build(t, src)
+	assertFuncs(t, prog, "zg_main", "zg_wrap__i", "zg_wrap__b", "zg_id__i", "zg_id__b")
+}
+
+// TestValueGeneric checks that a value-generic parameter instantiates once per
+// distinct concrete value: '[int; 3]' and '[int; 2]' are two instances.
+func TestValueGeneric(t *testing.T) {
+	src := "fn head[N: int](xs: [int; N]) -> int { return xs[0] }\n" +
+		"fn main() {\n a: [int; 3] = [10, 20, 30]\n b: [int; 2] = [40, 50]\n" +
+		" print head(a)\n print head(b) }"
+	prog := build(t, src)
+	assertFuncs(t, prog, "zg_main", "zg_head__n3", "zg_head__n2")
+}
+
+// TestGenericStruct checks that a generic struct used at two types yields one
+// specialized C type per type argument, each with its field type concretized.
+func TestGenericStruct(t *testing.T) {
+	src := "struct Box[T] { value: T }\n" +
+		"fn main() { bi := Box(5)\n bb := Box(true)\n print bi.value\n print bb.value }"
+	prog := build(t, src)
+	if len(prog.Types) != 2 {
+		t.Fatalf("got %d type instances, want 2: %+v", len(prog.Types), prog.Types)
+	}
+	names := map[string]*TypeInstance{}
+	for _, ti := range prog.Types {
+		names[ti.Mangled] = ti
+	}
+	for _, want := range []string{"zg_Box__i", "zg_Box__b"} {
+		if names[want] == nil {
+			t.Fatalf("missing type instance %q; got %v", want, names)
+		}
+	}
+	if f := names["zg_Box__i"].Fields; len(f) != 1 || f[0].Name != "value" || f[0].Type != sema.Int {
+		t.Fatalf("Box[int] fields = %+v, want value:int", f)
+	}
+}

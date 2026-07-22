@@ -13,14 +13,20 @@ type SpecRegistry struct {
 	Specs   map[string]*types.SpecDef
 	Impls   []*types.ImplDef
 	Methods map[*types.TypeDef]*types.MethodSet
+	// byKey indexes each spec impl by (spec, target head) so a bound can be resolved
+	// to its impl in O(1) (DESIGN-1c §3.1). Coherence guarantees the key is unique;
+	// checkCoherence populates it, keeping the first impl of a conflicting pair.
+	byKey map[implKey]*types.ImplDef
 }
 
-// collectSpecsAndImpls builds the SpecRegistry in three phases so a spec member
-// or an impl target may refer to a type or spec declared later in the file
-// (DESIGN-1c §1.2): (1) create an empty shell for each spec, (2) link each spec's
-// super-specs, method signatures, and associated types/values, (3) collect each
-// impl, register its methods in the per-type namespace, and validate its
-// associated bindings against the spec it implements.
+// collectSpecsAndImpls builds the SpecRegistry in phases so a spec member or an
+// impl target may refer to a type or spec declared later in the file (DESIGN-1c
+// §1.2): (1) create an empty shell for each spec and register the built-in blessed
+// specs (Eq/Ord), (2) link each spec's super-specs, method signatures, and
+// associated types/values, (3) collect each impl, register its methods in the
+// per-type namespace, and validate its associated bindings, then (4) run the
+// coherence/orphan/super-spec check (U2/U3), which also indexes impls for bound
+// resolution.
 func (c *checker) collectSpecsAndImpls(file *ast.File) {
 	reg := &SpecRegistry{
 		Specs:   map[string]*types.SpecDef{},
@@ -30,9 +36,10 @@ func (c *checker) collectSpecsAndImpls(file *ast.File) {
 
 	for _, d := range file.Items {
 		if n, ok := d.(*ast.SpecDecl); ok {
-			reg.Specs[n.Name] = &types.SpecDef{Name: n.Name, Decl: n}
+			reg.Specs[n.Name] = &types.SpecDef{Name: n.Name, Local: true, Decl: n}
 		}
 	}
+	registerBlessed(reg)
 	for _, d := range file.Items {
 		if n, ok := d.(*ast.SpecDecl); ok {
 			c.linkSpec(reg, n)
@@ -43,6 +50,7 @@ func (c *checker) collectSpecsAndImpls(file *ast.File) {
 			c.collectImpl(reg, n)
 		}
 	}
+	c.checkCoherence(reg)
 }
 
 // linkSpec fills a spec shell: it resolves the super-spec bound (each name must
@@ -61,8 +69,25 @@ func (c *checker) linkSpec(reg *SpecRegistry, n *ast.SpecDecl) {
 		}
 	}
 
-	saved := c.curSelf
+	// Associated types and values are recorded first so a member signature may name
+	// an associated type in type position — 'fn get() -> Item' resolves Item to the
+	// abstract projection This.Item (U3, DESIGN-1c §3 associated-type resolution).
+	for _, m := range n.Members {
+		switch mem := m.(type) {
+		case *ast.AssocType:
+			def.AssocTypes = append(def.AssocTypes, &types.AssocTypeDef{
+				Name: mem.Name, Bound: c.resolveSpecBound(reg, mem.Bound),
+			})
+		case *ast.AssocVal:
+			def.AssocVals = append(def.AssocVals, &types.AssocValDef{
+				Name: mem.Name, Of: c.resolveType(mem.Type),
+			})
+		}
+	}
+
+	savedSelf, savedSpec := c.curSelf, c.curSpec
 	c.curSelf = &types.Param{Name: "This"} // abstract self while resolving signatures
+	c.curSpec = def                        // so a signature may name this spec's associated types
 	for _, m := range n.Members {
 		switch mem := m.(type) {
 		case *ast.FnSig:
@@ -75,17 +100,9 @@ func (c *checker) linkSpec(reg *SpecRegistry, n *ast.SpecDecl) {
 				Name: mem.Name, Mut: mem.Mut, Provided: true,
 				Sig: c.fnSig(mem.Params, mem.Ret, mem.Unsafe), Decl: mem,
 			})
-		case *ast.AssocType:
-			def.AssocTypes = append(def.AssocTypes, &types.AssocTypeDef{
-				Name: mem.Name, Bound: c.resolveSpecBound(reg, mem.Bound),
-			})
-		case *ast.AssocVal:
-			def.AssocVals = append(def.AssocVals, &types.AssocValDef{
-				Name: mem.Name, Of: c.resolveType(mem.Type),
-			})
 		}
 	}
-	c.curSelf = saved
+	c.curSelf, c.curSpec = savedSelf, savedSpec
 }
 
 // collectImpl collects one impl block: it resolves the target type, the spec (for
@@ -105,17 +122,13 @@ func (c *checker) collectImpl(reg *SpecRegistry, n *ast.ImplDecl) {
 		impl.Spec = c.resolveSpecRef(reg, n.Spec)
 	}
 
-	saved := c.curSelf
+	savedSelf, savedImpl := c.curSelf, c.curImpl
 	c.curSelf = target
+	// Associated bindings are resolved first so a method signature may name a bound
+	// associated type — 'fn get() -> Item' with 'type Item = int' resolves Item to
+	// int, the concrete impl binding (U3, DESIGN-1c §3 associated-type resolution).
 	for _, item := range n.Items {
 		switch it := item.(type) {
-		case *ast.FuncDecl:
-			m := &types.ImplMethod{
-				Name: it.Name, Mut: it.Mut,
-				Sig: c.fnSig(it.Params, it.Ret, it.Unsafe), Decl: it,
-			}
-			impl.Methods[it.Name] = m
-			c.addMethod(reg, target, impl, m)
 		case *ast.AssocBind:
 			impl.AssocBind[it.Name] = c.resolveType(it.Type)
 		case *ast.ValBind:
@@ -126,7 +139,18 @@ func (c *checker) collectImpl(reg *SpecRegistry, n *ast.ImplDecl) {
 			}
 		}
 	}
-	c.curSelf = saved
+	c.curImpl = impl
+	for _, item := range n.Items {
+		if it, ok := item.(*ast.FuncDecl); ok {
+			m := &types.ImplMethod{
+				Name: it.Name, Mut: it.Mut,
+				Sig: c.fnSig(it.Params, it.Ret, it.Unsafe), Decl: it,
+			}
+			impl.Methods[it.Name] = m
+			c.addMethod(reg, target, impl, m)
+		}
+	}
+	c.curSelf, c.curImpl = savedSelf, savedImpl
 
 	reg.Impls = append(reg.Impls, impl)
 	if impl.Spec != nil {

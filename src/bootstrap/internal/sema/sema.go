@@ -104,8 +104,11 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 
 	c := &checker{info: info, module: r.module}
 	c.collectTypes(file)
-	c.collectFuncs(file)
+	// The spec/impl registry is built before signatures so a generic parameter's
+	// spec bound ('[T: Ord]') can be resolved to the SpecDef it carries (U3): the
+	// registry must exist when collectFuncs runs genericEnv.
 	c.collectSpecsAndImpls(file)
+	c.collectFuncs(file)
 	c.checkFuncs(file)
 
 	return info, append(r.diags.Items(), c.diags.Items()...)
@@ -124,7 +127,9 @@ type checker struct {
 	scopes     []map[string]*symbol
 	curFn      *FuncSig
 	typeParams map[string]Type // generic parameters visible in the current body
-	curSelf    Type            // the 'This' type inside an impl body
+	curSelf    Type            // the 'This' type inside a spec or impl body
+	curSpec    *types.SpecDef  // the spec whose signatures are being resolved (U3 assoc-type)
+	curImpl    *types.ImplDef  // the impl whose signatures are being resolved (U3 assoc-type)
 	loopDepth  int
 }
 
@@ -230,11 +235,29 @@ func (c *checker) genericEnv(g *ast.Generics) *GenericEnv {
 		if of, ok := c.valueParamType(tp.Bound); ok {
 			env.Params[tp.Name] = &types.ValParam{Name: tp.Name, Of: of}
 		} else {
-			env.Params[tp.Name] = &types.Param{Name: tp.Name}
+			env.Params[tp.Name] = &types.Param{Name: tp.Name, Bounds: c.paramBounds(tp.Bound)}
 		}
 		env.Names = append(env.Names, tp.Name)
 	}
 	return env
+}
+
+// paramBounds resolves a type parameter's spec bound '[T: Ord + Hash]' to the
+// SpecDefs it names, each closed over its super-specs so 'T: Ord' carries Eq too
+// (U3, DESIGN-1c §3). An unknown name — or a name the registry does not yet hold —
+// contributes nothing; bound-name validity is not this pass's concern.
+func (c *checker) paramBounds(b *ast.Bound) []*types.SpecDef {
+	if b == nil || c.info.Specs == nil {
+		return nil
+	}
+	var out []*types.SpecDef
+	seen := map[*types.SpecDef]bool{}
+	for _, name := range b.Names {
+		if sp := c.info.Specs.Specs[name]; sp != nil {
+			out = closeSpecInto(out, sp, seen)
+		}
+	}
+	return out
 }
 
 // valueParamType reports whether a generic bound names a single concrete type
@@ -285,14 +308,29 @@ func (c *checker) checkFuncs(file *ast.File) {
 // mechanism 1b already uses for inherent-impl and free-fn bodies).
 func (c *checker) checkImpl(n *ast.ImplDecl) {
 	target := c.resolveType(n.Target)
-	saved := c.curSelf
+	savedSelf, savedImpl := c.curSelf, c.curImpl
 	c.curSelf = target
+	c.curImpl = c.implFor(n) // so a method signature re-resolves its associated types
 	for _, item := range n.Items {
 		if fn, ok := item.(*ast.FuncDecl); ok {
 			c.checkFunc(fn, target)
 		}
 	}
-	c.curSelf = saved
+	c.curSelf, c.curImpl = savedSelf, savedImpl
+}
+
+// implFor returns the collected ImplDef for an impl declaration, or nil, matching
+// on the originating AST node.
+func (c *checker) implFor(n *ast.ImplDecl) *types.ImplDef {
+	if c.info.Specs == nil {
+		return nil
+	}
+	for _, im := range c.info.Specs.Impls {
+		if im.Decl == n {
+			return im
+		}
+	}
+	return nil
 }
 
 // checkFunc type-checks a function (or, when recv is non-nil, a method) body. A

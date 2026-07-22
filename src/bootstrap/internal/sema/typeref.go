@@ -77,11 +77,33 @@ func (c *checker) arrayLen(ce *ast.ConstExpr) types.ConstVal {
 // resolveTypeRef resolves a named type, applying any type arguments.
 func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	if len(ref.Proj) != 0 {
-		// an associated-type projection 'I.Item' is opaque this iteration (1c).
-		return types.Unknown
+		// an associated-type projection 'X.Item': resolve to the impl's binding when
+		// the concrete impl is known, else keep it abstract (U3, DESIGN-1c §3).
+		base := c.projBase(ref)
+		if c.info.Specs != nil {
+			if concrete, ok := c.info.Specs.resolveProjection(base, ref.Proj); ok {
+				return concrete
+			}
+		}
+		return &types.Proj{On: base, Path: ref.Proj}
 	}
 	if ref.Name == "This" && c.curSelf != nil {
 		return c.curSelf
+	}
+	// An associated type named in a spec or impl signature ('fn get() -> Item')
+	// resolves to the impl's concrete binding when known, else to the abstract
+	// projection This.Item (U3, DESIGN-1c §3 associated-type resolution).
+	if c.curImpl != nil {
+		if t, ok := c.curImpl.AssocBind[ref.Name]; ok {
+			return t
+		}
+	}
+	if c.curSpec != nil {
+		for _, at := range c.curSpec.AssocTypes {
+			if at.Name == ref.Name {
+				return &types.Proj{On: c.curSelf, Path: []string{ref.Name}}
+			}
+		}
 	}
 	if tp, ok := c.typeParams[ref.Name]; ok {
 		return tp
@@ -168,6 +190,18 @@ func (c *checker) namedTypeUse(sym *Symbol, args []types.Type) types.Type {
 	default:
 		return types.Unknown
 	}
+}
+
+// projBase resolves the head of a projection 'X.Item' to a type (best-effort, no
+// diagnostic): 'This' inside an impl/spec, a generic parameter, or a named type.
+func (c *checker) projBase(ref *ast.TypeRef) types.Type {
+	if ref.Name == "This" && c.curSelf != nil {
+		return c.curSelf
+	}
+	if tp, ok := c.typeParams[ref.Name]; ok {
+		return tp
+	}
+	return c.resolveTypeName(ref.Name)
 }
 
 // resolveTypeName resolves a bare type name without reporting a diagnostic,

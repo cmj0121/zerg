@@ -1,0 +1,51 @@
+# atomic — the safe shared-mutable primitive (Phase 1f, bundle MVP).
+#
+# Bundled into a program that writes `import "atomic"`; its members are reached
+# through the namespace, as `atomic.atomic(0)`, `atomic.load(a)`, … . Per GRAMMAR
+# group 10, the safe way to share mutable global state is an immutable `:=` holding
+# a stdlib `Atomic[T]`: the cell is immutable at the Zerg level (you never reassign
+# the binding), yet its contents mutate through these atomic operations.
+#
+# An Atomic[int] is a `Ref[int]` — a refcounted heap cell — so a copy of the binding
+# (including one captured by a `spawn`ed coroutine) names the SAME cell; the leaf
+# operations run under sequential-consistency ordering (the `__zrt_atomic_*`
+# intrinsics over sys.c). Under the 1e N:1 cooperative scheduler atomicity already
+# holds without preemption; the SC ops keep the surface correct for a future M:N
+# scheduler with no source change.
+#
+# MVP scope: int-typed only (a generic `Atomic[T]` awaits the bundle importer's
+# support for stdlib struct/method surfaces); sequential-consistency ordering only
+# (no relaxed/acquire/release). The leaf primitives call the compiler atomic
+# intrinsics, the MVP stand-ins matching io's `__zrt_write` convention.
+
+# atomic builds a fresh shared cell holding the initial value v. Bind it once with
+# `:=` and share the binding; every holder observes the one cell.
+pub fn atomic(v: int) -> Ref[int] {
+	return Ref(v)
+}
+
+# load reads the cell's current value.
+pub fn load(a: Ref[int]) -> int {
+	return __zrt_atomic_load(a)
+}
+
+# store writes v into the cell and returns the value stored.
+pub fn store(a: Ref[int], v: int) -> int {
+	return __zrt_atomic_store(a, v)
+}
+
+# swap stores v into the cell and returns its previous value.
+pub fn swap(a: Ref[int], v: int) -> int {
+	return __zrt_atomic_swap(a, v)
+}
+
+# fetch_add adds n to the cell and returns its previous value.
+pub fn fetch_add(a: Ref[int], n: int) -> int {
+	return __zrt_atomic_add(a, n)
+}
+
+# compare_swap stores desired only if the cell currently equals expect, returning
+# whether the swap happened.
+pub fn compare_swap(a: Ref[int], expect: int, desired: int) -> bool {
+	return __zrt_atomic_cas(a, expect, desired)
+}

@@ -1,0 +1,57 @@
+# math — basic mathematics (Phase 1f, bundle MVP).
+#
+# Bundled into a program that writes `import "math"`; its members are reached
+# through the namespace, as `math.abs(-3)` or `math.sqrt(2.0)`. The pure-arithmetic
+# functions (abs / fabs / min / max) are ordinary safe Zerg; the transcendental
+# functions (sqrt / pow) are FOREIGN bindings onto libc `<math.h>` through the FFI
+# import binder (`#[extern("c_symbol")]`, docs/ffi.md U5). A foreign call is unsafe,
+# so `math.sqrt`/`math.pow` are `unsafe fn`s callable only inside `unsafe { … }` —
+# exactly the boundary docs/ffi.md fixes for importing a C symbol.
+#
+# MVP scope: the sample above plus the arithmetic helpers. A richer surface
+# (floor/ceil/round, the trigonometric family, the PI/E constants) is a
+# straightforward extension of the same two mechanisms and is deferred.
+
+# abs returns the absolute value of the integer x.
+pub fn abs(x: int) -> int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+# fabs returns the absolute value of the float x.
+pub fn fabs(x: float) -> float {
+	if x < 0.0 {
+		return -x
+	}
+	return x
+}
+
+# min returns the smaller of two integers.
+pub fn min(a: int, b: int) -> int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+# max returns the larger of two integers.
+pub fn max(a: int, b: int) -> int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+# sqrt is the non-negative square root of x, bound to libc `sqrt` (a foreign call —
+# invoke inside `unsafe { … }`).
+#[extern("sqrt")]
+pub unsafe fn sqrt(x: float) -> float {
+}
+
+# pow raises base to exp, bound to libc `pow` (a foreign call — invoke inside
+# `unsafe { … }`).
+#[extern("pow")]
+pub unsafe fn pow(base: float, exp: float) -> float {
+}

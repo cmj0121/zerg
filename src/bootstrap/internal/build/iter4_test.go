@@ -5,6 +5,74 @@ import (
 	"testing"
 )
 
+// TestFStrHoleNamespaceCall is the B1 regression: a module-member call inside an
+// f-string hole must resolve like any other expression. Before the fix, resolveExpr
+// had no FStr case, so `math` was never recorded as a namespace and the callee
+// miscompiled to `0(...)`. It must now lower to the real mangled function.
+func TestFStrHoleNamespaceCall(t *testing.T) {
+	src := "import \"math\"\n" +
+		"fn main() -> Result[nil] {\n" +
+		"\tprint f\"{math.abs(-5)}\"\n" +
+		"\tr := unsafe { math.sqrt(16.0) }\n" +
+		"\tprint f\"{r:.1f}\"\n" +
+		"\treturn nil\n" +
+		"}\n"
+	code, _, diags := Compile(src)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if !strings.Contains(code, "zg_math__abs(") {
+		t.Fatalf("f-string hole namespace call must lower to zg_math__abs, got:\n%s", code)
+	}
+	if strings.Contains(code, "0((") || strings.Contains(code, "0((-5))") {
+		t.Fatalf("f-string hole callee miscompiled to a literal 0:\n%s", code)
+	}
+}
+
+// TestTempNameVsUserFunction is the B2 regression: a statement-expression temp (a
+// guard result) and a teardown mark must never take the mangled name of a top-level
+// function, which they would shadow in C. `fn gr` + `guard { gr() }` and `fn mk` +
+// a teardown (a Ref local) are the two shapes; both must compile with the temp/mark
+// renamed away from the function.
+func TestTempNameVsUserFunction(t *testing.T) {
+	guardSrc := "fn gr() -> int {\n\treturn 5\n}\n" +
+		"fn main() -> Result[nil] {\n\tx := guard { gr() }\n\tprint x!\n\treturn nil\n}\n"
+	code, _, diags := Compile(guardSrc)
+	if len(diags) != 0 {
+		t.Fatalf("guard/gr: unexpected diagnostics: %v", diags)
+	}
+	if !strings.Contains(code, "int64_t zg_gr(void)") || !strings.Contains(code, "zg_gr()") {
+		t.Fatalf("guard/gr: the user function zg_gr must survive:\n%s", code)
+	}
+	if strings.Contains(code, "zg_result_0 zg_gr;") {
+		t.Fatalf("guard/gr: the guard temp shadowed the function zg_gr:\n%s", code)
+	}
+
+	mkSrc := "fn mk() -> int {\n\treturn 5\n}\n" +
+		"fn main() -> Result[nil] {\n\tr := Ref(mk())\n\tprint deref(r)\n\treturn nil\n}\n"
+	code, _, diags = Compile(mkSrc)
+	if len(diags) != 0 {
+		t.Fatalf("mk/teardown: unexpected diagnostics: %v", diags)
+	}
+	if strings.Contains(code, "size_t zg_mk =") {
+		t.Fatalf("mk/teardown: the teardown mark shadowed the function zg_mk:\n%s", code)
+	}
+}
+
+// TestTupleValueDiagnostic covers the tracked minor: a tuple VALUE has no backend
+// lowering yet, so it must produce a clean sema diagnostic rather than the bad C
+// `void zg_t = 0;`.
+func TestTupleValueDiagnostic(t *testing.T) {
+	src := "fn main() -> Result[nil] {\n\tt := (11, 22)\n\treturn nil\n}\n"
+	code, _, diags := Compile(src)
+	if len(diags) == 0 {
+		t.Fatalf("a tuple value should be rejected with a clean diagnostic")
+	}
+	if code != "" {
+		t.Fatalf("no C should be emitted for a rejected program, got:\n%s", code)
+	}
+}
+
 // TestBundleImportMath covers the stdlib math module (Phase 1f U4): the pure
 // arithmetic helpers bundle and resolve as ordinary namespace members, while the
 // transcendental functions are `#[extern]`-bound foreign calls (U5) that lower to a

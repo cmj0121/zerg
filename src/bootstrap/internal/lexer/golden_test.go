@@ -13,7 +13,7 @@ import (
 
 // TestLexerGolden checks the scanner against the shared corpus: each lexer/*.zg in
 // the test-data submodule is tokenized and its dump compared to the sibling
-// *.tokens golden (the 'zergc --emit tokens' format: line:col<TAB>token).
+// *.tokens golden (the 'zerg build --emit tokens' format: line:col<TAB>token).
 func TestLexerGolden(t *testing.T) {
 	dir, ok := corpus.Path("lexer")
 	if !ok {
@@ -42,7 +42,7 @@ func TestLexerGolden(t *testing.T) {
 	}
 }
 
-// dumpTokens renders the token stream exactly as 'zergc --emit tokens' does.
+// dumpTokens renders the token stream exactly as 'zerg build --emit tokens' does.
 func dumpTokens(src string) string {
 	toks, _ := Tokenize(src)
 	var b strings.Builder

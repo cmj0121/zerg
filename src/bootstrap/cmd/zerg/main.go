@@ -1,30 +1,51 @@
-// Command zerg is the Zerg toolchain driver. Phase 1a ships its first
-// subcommand, 'zerg fmt': parse a source file and reprint it in canonical form
-// (see internal/fmt), to stdout by default or rewriting the file with --write.
-// Later phases hang further subcommands (build, lint, test) off this driver;
-// the Phase 0 'zergc' build path is untouched.
+// Command zerg is the single Zerg toolchain driver (Go model, like `go`). It
+// hangs each capability off a subcommand:
+//
+//   - 'zerg build' drives the Phase 0 compile pipeline (lex -> parse -> sema ->
+//     emit C -> cc -> binary): it reads a .zg file, reports any diagnostics
+//     against the source, emits C, and links it with a C compiler.
+//   - 'zerg fmt' parses a source file and reprints it in canonical form (see
+//     internal/fmt), to stdout by default or rewriting the file with --write.
 //
 // Usage:
 //
+//	zerg build [flags] <file.zg>
 //	zerg fmt [--write] <file.zg>
+//
+// See --help for the flags (output path, --emit stage, --cc, verbosity).
 package main
 
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/alecthomas/kong"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cmj0121/zerg/src/bootstrap/internal/build"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
 	zfmt "github.com/cmj0121/zerg/src/bootstrap/internal/fmt"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/lexer"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/parser"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 )
 
 // CLI is the zerg command line, parsed by kong.
 type CLI struct {
-	Fmt     FmtCmd `cmd:"" name:"fmt" help:"Format a Zerg source file to canonical form."`
-	Verbose int    `short:"v" type:"counter" help:"increase log verbosity (-v info, -vv debug)"`
+	Build   BuildCmd `cmd:"" name:"build" help:"Compile a Zerg source file to a binary."`
+	Fmt     FmtCmd   `cmd:"" name:"fmt" help:"Format a Zerg source file to canonical form."`
+	Verbose int      `short:"v" type:"counter" help:"increase log verbosity (-v info, -vv debug)"`
+}
+
+// BuildCmd compiles one source file through the Phase 0 pipeline.
+type BuildCmd struct {
+	File   string `arg:"" name:"file" help:"the Zerg source file to compile" type:"existingfile"`
+	Output string `short:"o" name:"output" default:"a.out" help:"output binary path"`
+	Emit   string `name:"emit" enum:"tokens,ast,c,bin" default:"bin" help:"stop after a stage: tokens, ast, c; or bin to link a binary"`
+	CC     string `name:"cc" default:"cc" help:"C compiler used to link the emitted C"`
+	KeepC  bool   `name:"keep-c" help:"keep the generated .c file next to the output"`
 }
 
 // FmtCmd formats one source file.
@@ -37,16 +58,129 @@ func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
 		kong.Name("zerg"),
-		kong.Description("The Zerg toolchain driver (Phase 1a): format source to canonical form."),
+		kong.Description("The Zerg toolchain driver: compile with 'build', canonicalize with 'fmt'."),
 		kong.UsageOnError(),
 	)
 	setupLog(cli.Verbose)
 	switch ctx.Command() {
+	case "build <file>":
+		os.Exit(runBuild(&cli.Build))
 	case "fmt <file>":
 		os.Exit(runFmt(&cli.Fmt))
 	default:
 		ctx.Fatalf("unknown command %q", ctx.Command())
 	}
+}
+
+// runBuild executes the compile pipeline for an already-parsed command line and
+// returns the process exit code.
+func runBuild(cmd *BuildCmd) int {
+	src, err := os.ReadFile(cmd.File)
+	if err != nil {
+		log.Error().Err(err).Msg("cannot read source")
+		return 1
+	}
+
+	if cmd.Emit == "tokens" {
+		return dumpTokens(string(src))
+	}
+	if cmd.Emit == "ast" {
+		return dumpAST(cmd.File, string(src))
+	}
+
+	log.Debug().Str("file", cmd.File).Msg("compiling")
+	code, diags := build.Compile(string(src))
+	if len(diags) > 0 {
+		reportDiags(cmd.File, diags)
+		return 1
+	}
+	log.Debug().Msg("front-end and C emission ok")
+
+	if cmd.Emit == "c" {
+		fmt.Print(code)
+		return 0
+	}
+	return link(cmd, code)
+}
+
+// link writes the C source and compiles it into cmd.Output with cmd.CC.
+func link(cmd *BuildCmd, code string) int {
+	cpath, cleanup, err := writeCSource(cmd, code)
+	if err != nil {
+		log.Error().Err(err).Msg("cannot write C source")
+		return 1
+	}
+	defer cleanup()
+
+	log.Debug().Str("cc", cmd.CC).Str("c", cpath).Str("out", cmd.Output).Msg("linking")
+	out, err := exec.Command(cmd.CC, "-std=c11", "-o", cmd.Output, cpath).CombinedOutput() //nolint:gosec // cc + generated file are trusted inputs
+	if err != nil {
+		log.Error().Err(err).Msg("cc failed")
+		_, _ = os.Stderr.Write(out)
+		return 1
+	}
+	log.Info().Str("output", cmd.Output).Msg("built")
+	return 0
+}
+
+// writeCSource writes the emitted C to a sidecar file (with --keep-c) or a temp
+// file, returning its path and a cleanup function.
+func writeCSource(cmd *BuildCmd, code string) (string, func(), error) {
+	if cmd.KeepC {
+		path := cmd.Output + ".c"
+		if err := os.WriteFile(path, []byte(code), 0o644); err != nil { //nolint:gosec // generated source, not a secret
+			return "", func() {}, err
+		}
+		return path, func() {}, nil
+	}
+	f, err := os.CreateTemp("", "zerg-*.c")
+	if err != nil {
+		return "", func() {}, err
+	}
+	path := f.Name()
+	_, werr := f.WriteString(code)
+	cerr := f.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(path)
+		return "", func() {}, fmt.Errorf("write temp C: %w", cmpErr(werr, cerr))
+	}
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func cmpErr(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
+}
+
+// dumpTokens prints the token stream for debugging the lexer.
+func dumpTokens(src string) int {
+	toks, diags := lexer.Tokenize(src)
+	for _, t := range toks {
+		if t.Kind == token.EOF {
+			break
+		}
+		fmt.Printf("%s\t%s\n", t.Span.Start, t)
+	}
+	for _, d := range diags {
+		fmt.Fprintln(os.Stderr, d.Error())
+	}
+	if len(diags) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// dumpAST parses and reports the number of top-level items.
+func dumpAST(file, src string) int {
+	f, diags := parser.Parse(src)
+	if len(diags) > 0 {
+		reportDiags(file, diags)
+		return 1
+	}
+	fmt.Printf("%d top-level item(s) parsed\n", len(f.Items))
+	return 0
 }
 
 // runFmt formats one file and returns the process exit code.

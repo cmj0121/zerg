@@ -513,6 +513,12 @@ func (w *worker) collectType(t types.Type) {
 		w.collectType(x.Elem)
 	case *types.Opt:
 		w.collectType(x.Elem)
+	case *types.Tuple:
+		// a tuple element may itself be (or contain) a generic struct/enum instance, so
+		// descend so it is registered too (completeness iteration 3, F4).
+		for _, el := range x.Elems {
+			w.collectType(el)
+		}
 	}
 }
 

@@ -45,6 +45,15 @@ func (e *emitter) prepareTuples() {
 		if !ok {
 			return
 		}
+		// A generic function's own signature carries the un-substituted template shape
+		// (e.g. `fn dup[T]() -> (T, T)` contributes `(T, T)`), whose element ctype is
+		// void — a carrier `struct { void f0; … }` is uncompilable. Only a ground tuple
+		// (all concrete elements, reached through a call site's ExprType) needs a carrier;
+		// skip any shape that still mentions a type/value parameter (completeness
+		// iteration 3, F4).
+		if mentionsParam(tup) {
+			return
+		}
 		if _, dup := seen[tup.String()]; dup {
 			return
 		}
@@ -71,9 +80,101 @@ func (e *emitter) prepareTuples() {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for i, k := range keys {
-		e.tuples[k] = &tupleCarrier{name: fmt.Sprintf("zg_tuple_%d", i), elems: seen[k].Elems}
+	// A generated carrier name shares C's ordinary-identifier namespace with every
+	// user type/function, and a non-generic user type `tuple_0` mangles to exactly
+	// `zg_tuple_0` — so allocate through the reserved top-level set, skipping any index
+	// a user name already took (completeness iteration 3, F2). A program with no such
+	// collision keeps the historic `zg_tuple_<i>` spelling and stays byte-identical.
+	reserved := e.reservedTopLevel()
+	i := 0
+	for _, k := range keys {
+		name := e.freshCarrierName("zg_tuple_%d", &i, reserved)
+		e.tuples[k] = &tupleCarrier{name: name, elems: seen[k].Elems}
 	}
+}
+
+// reservedTopLevel is the set of every top-level mangled C name (function and type
+// instances, plus module-constant globals) — mirroring resetUsed's per-function
+// seeding but at program scope. A generated carrier name is kept disjoint from this
+// set so it can never collide with a user identifier that mangles into the
+// `zg_<name>` namespace (e.g. a user type `tuple_0` → `zg_tuple_0`).
+func (e *emitter) reservedTopLevel() map[string]bool {
+	r := map[string]bool{}
+	for _, inst := range e.prog.Funcs {
+		r[inst.Mangled] = true
+	}
+	for _, ti := range e.prog.Types {
+		r[ti.Mangled] = true
+	}
+	for _, g := range e.prog.Inits {
+		for _, b := range g.Consts {
+			r["zg_"+b.Name] = true
+		}
+	}
+	return r
+}
+
+// freshCarrierName formats a carrier name `format` (a `%d` printf template) at the
+// counter *n, advancing *n past any index already taken by a reserved name or a
+// previously allocated carrier, then reserves and returns it. For a program with no
+// user-name collision this yields the dense `..._0, ..._1, …` sequence unchanged.
+func (e *emitter) freshCarrierName(format string, n *int, reserved map[string]bool) string {
+	name := fmt.Sprintf(format, *n)
+	for reserved[name] {
+		*n++
+		name = fmt.Sprintf(format, *n)
+	}
+	reserved[name] = true
+	*n++
+	return name
+}
+
+// mentionsParam reports whether a type still mentions a type or value parameter, so
+// it is a non-ground template shape (never a concrete value's type). It walks every
+// composite type that can carry an element, so a parameter nested arbitrarily deep is
+// found.
+func mentionsParam(t sema.Type) bool {
+	switch x := t.(type) {
+	case *types.Param, *types.ValParam:
+		return true
+	case *types.List:
+		return mentionsParam(x.Elem)
+	case *types.Set:
+		return mentionsParam(x.Elem)
+	case *types.Map:
+		return mentionsParam(x.Key) || mentionsParam(x.Val)
+	case *types.Array:
+		return x.N.Name != "" || mentionsParam(x.Elem)
+	case *types.Ref:
+		return mentionsParam(x.Elem)
+	case *types.Ptr:
+		return x.Elem != nil && mentionsParam(x.Elem)
+	case *types.Chan:
+		return mentionsParam(x.Elem)
+	case *types.Opt:
+		return mentionsParam(x.Elem)
+	case *types.Either:
+		return mentionsParam(x.Left) || mentionsParam(x.Right)
+	case *types.Tuple:
+		for _, el := range x.Elems {
+			if mentionsParam(el) {
+				return true
+			}
+		}
+	case *types.Struct:
+		for _, a := range x.Args {
+			if mentionsParam(a) {
+				return true
+			}
+		}
+	case *types.Enum:
+		for _, a := range x.Args {
+			if mentionsParam(a) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // tupleFor returns the carrier registered for a tuple type, if any.

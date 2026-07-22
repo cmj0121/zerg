@@ -92,21 +92,25 @@ func (e *emitter) prepareResults() {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	// A user type named `result_0`/`opt_0`/`either_0` mangles to exactly the carrier
+	// spelling, sharing C's ordinary-identifier namespace — the same collision class as
+	// the tuple carrier. Allocate each family through the reserved top-level set so a
+	// colliding index is skipped; a program without such a user type keeps the historic
+	// `zg_result_<n>`/`zg_opt_<n>`/`zg_either_<n>` sequence and stays byte-identical
+	// (completeness iteration 3, F2).
+	reserved := e.reservedTopLevel()
 	var nres, neither, nopt int
 	for _, k := range keys {
 		t := seen[k]
 		c := &carrier{left: leftOf(t)}
 		switch x := t.(type) {
 		case *types.Opt:
-			c.kind, c.name = carrierOpt, fmt.Sprintf("zg_opt_%d", nopt)
-			nopt++
+			c.kind, c.name = carrierOpt, e.freshCarrierName("zg_opt_%d", &nopt, reserved)
 		case *types.Either:
 			if isErrType(x.Right) {
-				c.kind, c.name = carrierResult, fmt.Sprintf("zg_result_%d", nres)
-				nres++
+				c.kind, c.name = carrierResult, e.freshCarrierName("zg_result_%d", &nres, reserved)
 			} else {
-				c.kind, c.right, c.name = carrierEither, x.Right, fmt.Sprintf("zg_either_%d", neither)
-				neither++
+				c.kind, c.right, c.name = carrierEither, x.Right, e.freshCarrierName("zg_either_%d", &neither, reserved)
 			}
 		}
 		e.carriers[k] = c
@@ -294,6 +298,21 @@ func (e *emitter) wrapValue(target, vt sema.Type, code string) string {
 // value even though it carries control flow.
 func (e *emitter) tryExpr(n *ast.Try) string {
 	opT := e.cur.ExprType(e.info, n.X)
+	// A `Result[nil]` operand is the tag-only zrt_result_nil, NOT a registered carrier,
+	// so it must be handled before carrierFor — otherwise the `?` silently drops its
+	// try/propagate and swallows an Err (completeness iteration 3, F3). Its Ok payload
+	// is nil (void), so the whole `?` yields no value; on Err it unwinds and returns the
+	// enclosing function's own Err representation.
+	if isResultNil(opT) {
+		tmp := e.freshName("try")
+		unwind := ""
+		if e.fnMark != "" {
+			unwind = fmt.Sprintf("zrt_unwind_to(%s); ", e.fnMark)
+		}
+		right := e.rightLiteral(e.cur.Ret, "", nil)
+		return fmt.Sprintf("({ zrt_result_nil %s = %s; if (%s.tag != 0) { %sreturn %s; } })",
+			tmp, e.expr(n.X), tmp, unwind, right)
+	}
 	c, ok := e.carrierFor(opT)
 	if !ok {
 		return e.expr(n.X) // an un-modelled operand: leave it rather than emit broken C
@@ -313,8 +332,10 @@ func (e *emitter) tryExpr(n *ast.Try) string {
 // Result[nil] or optional return carries only the tag; a general Either propagation
 // is outside iteration 1 (it carries a default-tagged Right).
 func (e *emitter) rightLiteral(ret sema.Type, errExpr string, op *carrier) string {
+	// op is nil when the propagated operand is a tag-only `Result[nil]` (F3): it carries
+	// no err payload, so the enclosing Err takes the default `zrt_err_new(0)`.
 	errVal := "zrt_err_new(0)"
-	if op.kind == carrierResult {
+	if op != nil && op.kind == carrierResult {
 		errVal = errExpr
 	}
 	if isResultNil(ret) {

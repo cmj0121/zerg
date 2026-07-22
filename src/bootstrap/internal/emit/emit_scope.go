@@ -88,7 +88,7 @@ func (e *emitter) loopMark() string {
 // slot with the zg_ref_drop guard (so a later `del`/reassignment retargets the
 // release); a non-POD struct registers its address with the type's drop-env thunk.
 // A POD binding owns no teardown and is not registered.
-func (e *emitter) registerDrop(cname string, typ sema.Type) {
+func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 	if !containsRef(typ) || len(e.drops) == 0 {
 		return
 	}
@@ -104,7 +104,9 @@ func (e *emitter) registerDrop(cname string, typ sema.Type) {
 	case *types.Struct:
 		e.line(fmt.Sprintf("zrt_defer(zg_dropenv_%s, &%s);", e.ctype(typ), cname))
 	default:
-		e.unsupportedRef(nil, typ)
+		// an unsupported non-POD shape (e.g. a tuple holding a Ref): report it against the
+		// binding's own span rather than 0:0 (completeness iteration 3, F5).
+		e.unsupportedRef(at, typ)
 	}
 }
 
@@ -188,7 +190,7 @@ func (e *emitter) withStmt(n *ast.WithStmt) {
 	}
 	cy := e.declareName(name)
 	e.line(fmt.Sprintf("%s = %s;", e.localDecl(rt, cy), e.copyValue(rt, n.Resource)))
-	e.registerDrop(cy, rt)
+	e.registerDrop(cy, rt, n.Resource)
 
 	for _, s := range n.Body.Stmts {
 		e.stmt(s)

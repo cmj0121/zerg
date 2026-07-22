@@ -3,5 +3,5 @@
 # Every runnable program defines `main`. `print` writes one value
 # followed by a newline; a double-quoted "..." is a string literal.
 fn main() {
-    print "hello, zerg"
+	print "hello, zerg"
 }

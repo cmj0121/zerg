@@ -3,10 +3,10 @@
 # `*`, `/`, `%` bind tighter than `+`, `-`; parentheses override that.
 # The `%`-suffixed operators (`+%`, `-%`, `*%`) wrap on overflow.
 fn main() {
-    print 2 + 3 * 4            # 14
-    print (2 + 3) * 4          # 20
-    print 17 / 5              # 3  (integer division)
-    print 17 % 5              # 2  (remainder)
-    print 2 *% 3              # 6  (wrapping multiply)
-    print -8 + 3              # -5 (unary minus)
+	print 2 + 3 * 4 # 14
+	print (2 + 3) * 4 # 20
+	print 17 / 5 # 3  (integer division)
+	print 17 % 5 # 2  (remainder)
+	print 2 *% 3 # 6  (wrapping multiply)
+	print -8 + 3 # -5 (unary minus)
 }

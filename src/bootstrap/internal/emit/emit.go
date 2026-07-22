@@ -435,7 +435,7 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.openScope(need, false)
 	e.fnMark = e.curScope().markVar
 	for i, p := range inst.Params {
-		e.registerDrop(e.resolve(inst.ParamNames[i]), p)
+		e.registerDrop(e.resolve(inst.ParamNames[i]), p, fn)
 	}
 	for _, s := range fn.Body.Stmts {
 		e.stmt(s)
@@ -563,7 +563,7 @@ func (e *emitter) stmt(s ast.Stmt) {
 		rhs := e.wrapValue(t, e.cur.ExprType(e.info, n.Value), e.copyValue(t, n.Value))
 		cname := e.declareName(n.Name)
 		e.line(e.localDecl(t, cname) + " = " + rhs + ";")
-		e.registerDrop(cname, t)
+		e.registerDrop(cname, t, n)
 	case *ast.Reassign:
 		e.reassign(n)
 	case *ast.PrintStmt:
@@ -977,11 +977,19 @@ func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
 // non-expression statement leaves tmp untouched (its zero value). It is the shared
 // core of the if-expression and block-expression lowerings.
 func (e *emitter) blockValueInto(tmp string, ty sema.Type, b *ast.Block) {
+	// A void-typed block/branch (ctype→void) carries no value: emit EVERY statement,
+	// including a trailing expression, for effect only — never assign into tmp (the
+	// tmp is not even declared on the void path, see blockExprValue/ifExprValue). This
+	// is the shared degrade for a statement-position bare block (completeness iteration
+	// 3, F1).
+	void := e.ctype(ty) == "void"
 	stmts := b.Stmts
 	var last ast.Expr
-	if k := len(stmts); k > 0 {
-		if es, ok := stmts[k-1].(*ast.ExprStmt); ok {
-			last, stmts = es.X, stmts[:k-1]
+	if !void {
+		if k := len(stmts); k > 0 {
+			if es, ok := stmts[k-1].(*ast.ExprStmt); ok {
+				last, stmts = es.X, stmts[:k-1]
+			}
 		}
 	}
 	e.pushScope()
@@ -1002,6 +1010,25 @@ func (e *emitter) blockValueInto(tmp string, ty sema.Type, b *ast.Block) {
 // of an if-expression — becomes a value without a new AST shape.
 func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 	gt := e.cur.ExprType(e.info, n)
+	// A void-typed if in statement position produces no value: declaring `void res;`
+	// is uncompilable, so degrade to a plain if that runs each branch for effect with
+	// no temp and no trailing value (completeness iteration 3, F1).
+	if e.ctype(gt) == "void" {
+		body := e.capture(func() {
+			for i, br := range n.Branches {
+				kw := "if"
+				if i > 0 {
+					kw = "} else if"
+				}
+				e.line(fmt.Sprintf("%s (%s) {", kw, e.expr(br.Cond)))
+				e.blockValueInto("", gt, br.Body)
+			}
+			e.line("} else {")
+			e.blockValueInto("", gt, n.Else)
+			e.line("}")
+		})
+		return fmt.Sprintf("({ %s})", body)
+	}
 	res := e.freshName("if")
 	body := e.capture(func() {
 		for i, br := range n.Branches {
@@ -1024,6 +1051,16 @@ func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 // block's value is its last statement).
 func (e *emitter) blockExprValue(b *ast.Block) string {
 	gt := e.cur.ExprType(e.info, b)
+	// A void-typed block in statement position produces no value: declaring `void res;`
+	// is uncompilable, so degrade to a bare statement-expression that runs the block's
+	// statements for effect with no temp and no trailing value. This covers a bare
+	// `{ … }` (and a nested one) used as a statement (completeness iteration 3, F1).
+	if e.ctype(gt) == "void" {
+		body := e.capture(func() {
+			e.blockValueInto("", gt, b)
+		})
+		return fmt.Sprintf("({ %s})", body)
+	}
 	res := e.freshName("blk")
 	body := e.capture(func() {
 		e.blockValueInto(res, gt, b)

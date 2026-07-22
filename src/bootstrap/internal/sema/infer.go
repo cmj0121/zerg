@@ -771,6 +771,12 @@ func unify(decl, actual Type, subT map[string]Type, subV map[string]types.ConstV
 		if a, ok := actual.(*types.Ref); ok {
 			unify(d.Elem, a.Elem, subT, subV)
 		}
+	case *types.Tuple:
+		if a, ok := actual.(*types.Tuple); ok && len(d.Elems) == len(a.Elems) {
+			for i := range d.Elems {
+				unify(d.Elems[i], a.Elems[i], subT, subV)
+			}
+		}
 	case *types.Struct:
 		if a, ok := actual.(*types.Struct); ok && a.Def == d.Def {
 			for i := range d.Args {
@@ -838,6 +844,8 @@ func substitute(t Type, subT map[string]Type, subV map[string]types.ConstVal) Ty
 		return &types.Either{Left: substitute(x.Left, subT, subV), Right: substitute(x.Right, subT, subV)}
 	case *types.Opt:
 		return &types.Opt{Elem: substitute(x.Elem, subT, subV)}
+	case *types.Tuple:
+		return &types.Tuple{Elems: substituteAll(x.Elems, subT, subV)}
 	case *types.Struct:
 		if len(x.Args) == 0 {
 			return x

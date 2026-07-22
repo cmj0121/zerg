@@ -103,25 +103,45 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 	case *ast.MatchExpr:
 		return c.inferMatch(n)
 	case *ast.Coalesce:
-		c.synth(n.X)
-		c.synth(n.Y)
-		return types.Unknown
+		return c.inferCoalesce(n)
 	case *ast.Try:
-		c.synth(n.X)
-		return types.Unknown
+		return c.inferTry(n)
 	case *ast.Force:
-		c.synth(n.X)
-		return types.Unknown
+		return c.inferForce(n)
 	case *ast.OptChain:
-		c.synth(n.X)
-		return types.Unknown
+		return c.inferOptChain(n)
+	case *ast.Diverge:
+		return c.synthDiverge(n)
+	case *ast.GuardExpr:
+		return c.inferGuard(n)
 	case *ast.Recv:
+		// a channel receive yields Result[T]; with no stdlib channel model yet its
+		// payload stays Unknown (FORK-4).
 		c.synth(n.X)
 		return types.Unknown
 	}
 	// blocks, if-expressions, f-strings, and the remaining group-8 operators are
 	// modelled in later iterations; treat them as Unknown so they do not cascade.
 	return types.Unknown
+}
+
+// synthBlock types a block as an expression and returns its value type: the type
+// of its last statement when that is an expression, otherwise nil. It opens a
+// nested scope so the block's bindings do not leak. It backs the guard expression
+// (DESIGN-1b §6); ordinary statement blocks go through checkBlock.
+func (c *checker) synthBlock(b *ast.Block) Type {
+	c.pushScope()
+	defer c.popScope()
+	value := Nil
+	for i, s := range b.Stmts {
+		if es, ok := s.(*ast.ExprStmt); ok && i == len(b.Stmts)-1 {
+			value = c.synth(es.X)
+			continue
+		}
+		c.checkStmt(s)
+		value = Nil
+	}
+	return value
 }
 
 func (c *checker) inferIdent(n *ast.Ident) Type {

@@ -84,6 +84,11 @@ typedef struct zrt_frame {
 	jmp_buf           buf;
 	size_t            mark;
 	struct zrt_frame *prev;
+	/* catches marks a `guard` handler that DEMOTES an abort to a Result value: it
+	 * takes the in-flight Err without reporting it to stderr (the program handles the
+	 * error). A root/reporting handler (zrt_run, a coroutine trampoline) leaves it
+	 * false, so an uncaught abort still prints its diagnostic. */
+	bool              catches;
 } zrt_frame;
 
 /* zrt_tls is the whole of the abort/unwind machinery's mutable state gathered into
@@ -95,11 +100,22 @@ typedef struct zrt_frame {
  * stack. Moving this state does NOT change any emitted C: the cleanup-stack API
  * (zrt_scope_mark / zrt_defer / zrt_unwind_to / zrt_handler_push / …) is unchanged;
  * only where it reads its state from moved. */
+/* zrt_err is the Zerg runtime's minimal error value (Decision D): a message and an
+ * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
+ * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
+ * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
+typedef struct zrt_err {
+	const char     *msg;
+	struct zrt_err *cause;
+} zrt_err;
+
 typedef struct {
 	zrt_cleanup *stack; /* the cleanup(defer) stack (was the file-static g_stack) */
 	size_t       len;   /* its live height (was g_len) */
 	size_t       cap;   /* its allocated capacity (was g_cap) */
 	zrt_frame   *handler; /* the innermost abort handler (was g_handler) */
+	zrt_err      taken;   /* the in-flight Err an abort/raise carries; a `guard` reads
+	                       * it with zrt_taken_err on the abort landing (Decision D). */
 } zrt_tls;
 
 /* zrt_tls_save snapshots the current unwind state into out; zrt_tls_load makes in
@@ -128,8 +144,14 @@ void zrt_unwind_to(size_t mark);
 
 /* zrt_handler_push links a frame as the innermost abort handler, recording the
  * current cleanup-stack height in frame->mark. The caller must then arm
- * frame->buf with setjmp in its own activation. */
+ * frame->buf with setjmp in its own activation. A plain handler REPORTS an abort's
+ * message before landing (the reporting root: zrt_run, a coroutine trampoline). */
 void zrt_handler_push(zrt_frame *frame);
+
+/* zrt_handler_push_catch is zrt_handler_push for a `guard` handler: it marks the
+ * frame `catches`, so an abort demoted to a Result value prints no diagnostic (the
+ * program is handling the error; the message rides in the Err value instead). */
+void zrt_handler_push_catch(zrt_frame *frame);
 
 /* zrt_handler_pop unlinks the innermost abort handler. */
 void zrt_handler_pop(zrt_frame *frame);
@@ -139,6 +161,25 @@ void zrt_handler_pop(zrt_frame *frame);
  * message and exits non-zero. This is the single exit that `raise`, `x!`, an
  * alias violation and OOM all funnel through. */
 _Noreturn void zrt_abort(const char *msg);
+
+/* --- Err value + carrying abort (unwind.c, Decision D) -------------------- */
+
+/* zrt_err_new builds an Err with the given message and no cause. */
+zrt_err zrt_err_new(const char *msg);
+
+/* zrt_err_with_cause builds an Err chained to a cause: `raise e from c` records c
+ * so a handler can walk the chain. The cause is copied to the heap (the caller's
+ * cause value is a stack temporary), leaked for the MVP like every other box. */
+zrt_err zrt_err_with_cause(const char *msg, zrt_err cause);
+
+/* zrt_raise_err aborts carrying an Err VALUE: it stashes e (so a `guard`/`?` reads
+ * it back with zrt_taken_err), reports e.msg, then unwinds and longjmps exactly as
+ * zrt_abort. `raise e`, `x!`, and the propagate paths funnel through here. */
+_Noreturn void zrt_raise_err(zrt_err e);
+
+/* zrt_taken_err returns the Err the current abort/raise carried, read on a `guard`
+ * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
+zrt_err zrt_taken_err(void);
 
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 

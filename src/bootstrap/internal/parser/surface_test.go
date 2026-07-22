@@ -1,10 +1,45 @@
 package parser
 
 import (
+	gofmt "fmt"
 	"testing"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 )
+
+// TestTopLevelStatements checks the widened top level (Slice-E W1): Zerg
+// supports script mode, so GRAMMAR:36 'program ::= stmt-list' means any
+// statement is legal at the top level, not only the module surface. The bare
+// expression, print, if, and for below must parse cleanly and become File.Items,
+// while declarations continue to parse as before.
+func TestTopLevelStatements(t *testing.T) {
+	src := "1 + 2\n" +
+		"print 42\n" +
+		"x := 3\n" +
+		"if x > 0 {\n\tnop\n}\n" +
+		"for i in items {\n\tnop\n}\n" +
+		"fn main() {\n\tnop\n}\n" +
+		"struct S {\n\tv: int\n}\n"
+	file, diags := Parse(src)
+	if len(diags) != 0 {
+		t.Fatalf("top-level statements should parse cleanly, got: %v", diags)
+	}
+	if len(file.Items) != 7 {
+		t.Fatalf("got %d top-level items, want 7", len(file.Items))
+	}
+	// spot-check that the mix of statement and declaration kinds is preserved.
+	wantKinds := []any{
+		&ast.ExprStmt{}, &ast.PrintStmt{}, &ast.BindStmt{}, &ast.IfStmt{},
+		&ast.ForStmt{}, &ast.FuncDecl{}, &ast.StructDecl{},
+	}
+	for i, want := range wantKinds {
+		gotT := gofmt.Sprintf("%T", file.Items[i])
+		wantT := gofmt.Sprintf("%T", want)
+		if gotT != wantT {
+			t.Errorf("item %d is %s, want %s", i, gotT, wantT)
+		}
+	}
+}
 
 // TestPubPreserved checks the 'pub' visibility keyword survives on the node
 // (QA FIX 2): the parser must record it so fmt can reprint it.

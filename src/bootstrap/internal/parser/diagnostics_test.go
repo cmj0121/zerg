@@ -122,6 +122,31 @@ func TestDiagnostics(t *testing.T) {
 			wantDiags: 1, wantItems: 1,
 		},
 		{
+			name: "empty_match_needs_arm", group: "g8 patterns",
+			src:     "fn f() {\n\tmatch x {}\n}",
+			wantSub: "a match needs at least one arm", wantLine: 2, wantCol: 2,
+			wantDiags: 1, wantItems: 1,
+		},
+		{
+			name: "struct_brace_literal", group: "g5 statements",
+			src:      "fn f() {\n\tx := T{a: 1}\n}",
+			wantSub:  "a struct value is written as a call like T(a: 1), not with braces",
+			wantLine: 2, wantCol: 8,
+			wantDiags: 1, wantItems: 1,
+		},
+		{
+			name: "missing_statement_separator", group: "g1 skeleton",
+			src:     "fn f() {\n\ta b\n}",
+			wantSub: "expected a newline or ';' to separate statements", wantLine: 2, wantCol: 4,
+			wantDiags: 1, wantItems: 1,
+		},
+		{
+			name: "else_on_next_line", group: "g6 control-flow",
+			src:     "fn f() {\n\tif c {\n\t\tnop\n\t}\n\telse {\n\t\tnop\n\t}\n}",
+			wantSub: "'else' must be on the same line as the closing '}'", wantLine: 5, wantCol: 2,
+			wantDiags: 1, wantItems: 1,
+		},
+		{
 			name: "recovery_keeps_following_decl", group: "recovery",
 			src:     "fn a() { x := }\nfn b() { nop }",
 			wantSub: "expected an expression", wantLine: 1, wantCol: 15,

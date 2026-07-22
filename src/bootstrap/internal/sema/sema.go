@@ -135,6 +135,7 @@ type checker struct {
 	curSpec    *types.SpecDef  // the spec whose signatures are being resolved (U3 assoc-type)
 	curImpl    *types.ImplDef  // the impl whose signatures are being resolved (U3 assoc-type)
 	loopDepth  int
+	inUnsafe   bool            // inside an `unsafe fn` body or an `unsafe { }` block-expression (group 12)
 	derived    []*ast.ImplDecl // '#[derive]'-synthesized impls, type-checked after the file (U5)
 
 	// dead tracks each binding's liveness after `del` within the current function
@@ -287,6 +288,28 @@ func (c *checker) checkDyn(fn *ast.FuncDecl, env *GenericEnv) bool {
 }
 
 // hasDecorator reports whether a decorator run contains an item of the given name.
+// externSymbol returns the C symbol a function's `#[extern("c_symbol")]` decorator
+// binds it to, and whether the function carries one. It is the FFI import binder
+// (Phase 1f U5, docs/ffi.md): the decorated `unsafe fn` names a foreign C symbol
+// verbatim (no mangling), and the backend lowers the function body to a thunk that
+// forwards its parameters to that symbol. A missing or non-string argument yields no
+// binding (reported where the decorator is validated).
+// ExternSymbol is exported for the backend (internal/emit), which lowers an
+// #[extern]-bound function to a thunk forwarding to the named C symbol.
+func ExternSymbol(fn *ast.FuncDecl) (string, bool) {
+	for _, deco := range fn.Decorators {
+		for _, item := range deco.Items {
+			if item.Name != "extern" || len(item.Args) != 1 {
+				continue
+			}
+			if lit, ok := item.Args[0].X.(*ast.StrLit); ok {
+				return lit.Value, true
+			}
+		}
+	}
+	return "", false
+}
+
 func hasDecorator(decos []*ast.Decorator, name string) bool {
 	for _, deco := range decos {
 		for _, item := range deco.Items {
@@ -426,6 +449,18 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 	c.curFn = sig
 	c.typeParams = sig.Generic.merged(savedTP)
 
+	// An #[extern("c_symbol")]-bound foreign binding must be declared `unsafe fn`
+	// (its call is a foreign call, always unsafe — docs/ffi.md); the compiler
+	// supplies its body (a thunk to the C symbol), so an empty source body is fine.
+	if sym, ok := ExternSymbol(fn); ok && !fn.Unsafe {
+		c.errorf(fn.Span(), "an #[extern(%q)] foreign binding must be declared `unsafe fn`", sym)
+	}
+
+	// The body of an `unsafe fn` is an unsafe context throughout (group 12), so a
+	// foreign call inside it is legal without a nested `unsafe { }`.
+	savedUnsafe := c.inUnsafe
+	c.inUnsafe = c.inUnsafe || fn.Unsafe
+
 	savedDead := c.dead
 	c.dead = map[*symbol]liveness{} // per-body del flow-analysis, fresh per function
 
@@ -446,6 +481,7 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 	c.popScope()
 
 	c.dead = savedDead
+	c.inUnsafe = savedUnsafe
 	c.curFn, c.typeParams = savedFn, savedTP
 }
 

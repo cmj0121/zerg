@@ -80,6 +80,12 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.writeIntrinsic(n, Str), true
 		case "__zrt_write_int":
 			return c.writeIntrinsic(n, Int), true
+		case "__zrt_atomic_load":
+			return c.atomicIntrinsic(n, 1, Int), true
+		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
+			return c.atomicIntrinsic(n, 2, Int), true
+		case "__zrt_atomic_cas":
+			return c.atomicIntrinsic(n, 3, Bool), true
 		}
 	case *ast.Bracket:
 		id, ok := callee.Base.(*ast.Ident)
@@ -183,20 +189,56 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	return Int
 }
 
+// atomicIntrinsic checks a compiler atomic-cell intrinsic `__zrt_atomic_<op>(a,
+// …)` — the MVP leaf the stdlib `atomic` module lowers onto (Phase 1f U2). The
+// first argument is the shared cell, a `Ref[int]`; any remaining arguments are the
+// int operands (the value to store/swap/add, or the expect+desired of a CAS). It
+// yields ret (Int for the value ops, Bool for a CAS).
+func (c *checker) atomicIntrinsic(n *ast.Call, arity int, ret Type) Type {
+	if len(n.Args) != arity {
+		c.errorf(n.Span(), "atomic intrinsic takes %d argument(s), got %d", arity, len(n.Args))
+		c.synthArgs(n)
+		return Invalid
+	}
+	at := c.synth(n.Args[0].Value)
+	if ref, ok := at.(*types.Ref); !ok || ref.Elem != Int {
+		if !bad(at) {
+			c.errorf(n.Args[0].Value.Span(), "atomic intrinsic expects a Ref[int] cell, got %s", at)
+		}
+	}
+	for _, a := range n.Args[1:] {
+		c.check(a.Value, Int)
+	}
+	return ret
+}
+
 func (c *checker) synthArgs(n *ast.Call) {
 	for _, a := range n.Args {
 		c.synth(a.Value)
 	}
 }
 
-// callFunc checks a direct call to a named function, dispatching to the generic
-// path when the function has type or value parameters.
+// callFunc checks a direct or namespaced call to a named function, dispatching to
+// the generic path when the function has type or value parameters.
 func (c *checker) callFunc(n *ast.Call, sig *FuncSig) Type {
+	c.checkForeignCall(sig, n.Span())
 	if sig.Generic != nil {
 		return c.callGeneric(n, sig)
 	}
 	c.bindCallArgs(sig.Name, n, sig.ParamNames, sig.Params, sig.Defaults)
 	return sig.Ret
+}
+
+// checkForeignCall enforces docs/ffi.md's rule that a foreign call — a call to an
+// `#[extern]`-bound C symbol — is legal only inside an unsafe context. A call to
+// such a binding outside an `unsafe fn` body or `unsafe { }` block is rejected.
+func (c *checker) checkForeignCall(sig *FuncSig, span token.Span) {
+	if sig == nil || sig.Decl == nil || c.inUnsafe {
+		return
+	}
+	if sym, ok := ExternSymbol(sig.Decl); ok {
+		c.errorf(span, "foreign call to %q is unsafe; call it inside an `unsafe { }` block", sym)
+	}
 }
 
 // callIndirect checks a call through a function-typed value.

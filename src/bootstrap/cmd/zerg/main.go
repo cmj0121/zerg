@@ -140,6 +140,11 @@ func link(cmd *BuildCmd, code string, manifest emit.Manifest) int {
 		}
 		args = append([]string{"-std=c11", "-I", rtdir, "-o", cmd.Output, cpath}, cfiles...)
 	}
+	// A program that binds a foreign math symbol (`#[extern]` onto libm) links the
+	// math library; harmless where libm is folded into libc (e.g. macOS).
+	if manifest.NeedsFFI {
+		args = append(args, "-lm")
+	}
 
 	log.Debug().Str("cc", cmd.CC).Str("c", cpath).Str("out", cmd.Output).Bool("runtime", manifest.NeedsRuntime).Msg("linking")
 	out, err := exec.Command(cmd.CC, args...).CombinedOutput() //nolint:gosec // cc + generated files are trusted inputs

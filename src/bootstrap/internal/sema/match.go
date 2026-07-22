@@ -2,6 +2,7 @@ package sema
 
 import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -179,6 +180,7 @@ func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
 		// matches anything, binds nothing
 	case *ast.NamePattern:
 		if res, ok := c.info.Patterns[p]; ok && res.Kind == NameVariant {
+			c.checkVariantMember(p.Span(), p.Name, subjT, 0, false)
 			return // a nullary variant binds nothing
 		}
 		c.declare(p.Span(), p.Name, subjT, false)
@@ -217,17 +219,13 @@ func (c *checker) checkLitPattern(p *ast.LitPattern, subjT Type) {
 	}
 }
 
-// checkVariantPattern binds a variant pattern's payload sub-patterns against the
-// matched variant's payload types.
+// checkVariantPattern validates a variant pattern against the subject enum and
+// binds its payload sub-patterns against the variant's payload types (M1).
 func (c *checker) checkVariantPattern(p *ast.VariantPattern, subjT Type) {
+	vd := c.checkVariantMember(p.Span(), p.Name, subjT, len(p.Elems), true)
 	var payload []Type
-	if e, ok := subjT.(*types.Enum); ok && e.Def != nil && e.Def.Enum != nil {
-		for _, v := range e.Def.Enum.Variants {
-			if v.Name == p.Name {
-				payload = v.Payload
-				break
-			}
-		}
+	if vd != nil {
+		payload = vd.Payload
 	}
 	for i, sub := range p.Elems {
 		et := types.Type(types.Unknown)
@@ -236,6 +234,43 @@ func (c *checker) checkVariantPattern(p *ast.VariantPattern, subjT Type) {
 		}
 		c.checkPattern(sub, et)
 	}
+}
+
+// checkVariantMember validates a variant pattern against the subject type (M1):
+// the subject must be an enum that declares the named variant, and the payload
+// arity must match — a nullary variant takes no '(...)', a payload variant takes
+// '(...)' with the right count. It returns the matched variant, or nil.
+func (c *checker) checkVariantMember(span token.Span, name string, subjT Type, arity int, parens bool) *types.VariantDef {
+	e, ok := subjT.(*types.Enum)
+	if !ok {
+		if !bad(subjT) {
+			c.errorf(span, "variant pattern %q cannot match a subject of type %s", name, subjT)
+		}
+		return nil
+	}
+	if e.Def == nil || e.Def.Enum == nil {
+		return nil
+	}
+	var vd *types.VariantDef
+	for _, v := range e.Def.Enum.Variants {
+		if v.Name == name {
+			vd = v
+			break
+		}
+	}
+	if vd == nil {
+		c.errorf(span, "enum %s has no variant %q", e.Def.Name, name)
+		return nil
+	}
+	switch np := len(vd.Payload); {
+	case np == 0 && parens:
+		c.errorf(span, "variant %s.%s is nullary and takes no payload", e.Def.Name, name)
+	case np > 0 && !parens:
+		c.errorf(span, "variant %s.%s requires a payload of %d value(s)", e.Def.Name, name, np)
+	case parens && arity != np:
+		c.errorf(span, "variant %s.%s expects %d payload value(s), got %d", e.Def.Name, name, np, arity)
+	}
+	return vd
 }
 
 // checkStructPattern binds a struct pattern's fields against the subject struct's

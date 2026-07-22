@@ -33,7 +33,19 @@ func (c *checker) checkExpr(e ast.Expr, want Type) Type {
 		// literal defaulting: an integer literal adopts a numeric context type
 		// (int by default, but 'x: u8 = 5' / 'x: float = 1' retype it) — §4.3.
 		if isNumeric(want) {
+			c.checkIntRange(n, want, false)
 			return want
+		}
+	case *ast.FloatLit:
+		// a fractional literal adopts a float context type (float / f32 / f64).
+		if isFloatWant(want) {
+			return want
+		}
+	case *ast.Unary:
+		// a negated numeric literal '-lit' pushes the numeric context through the
+		// sign to the inner literal so defaulting applies (§4.3).
+		if t, ok := c.checkSignedLit(n, want); ok {
+			return t
 		}
 	case *ast.ListLit:
 		return c.checkListLit(n, want)
@@ -148,6 +160,15 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 	if sym := c.lookup(n.Name); sym != nil {
 		return sym.typ
 	}
+	// an enum variant is a value: a nullary variant names a value of its enum type,
+	// while a payload variant is only usable as a constructor 'V(...)' (§3.6 C1).
+	if sym := c.module.lookup(n.Name); sym != nil && sym.Kind == SymVariant {
+		if sym.Variant != nil && len(sym.Variant.Payload) != 0 {
+			c.errorf(n.Span(), "variant %q requires a payload; use %s(...)", n.Name, n.Name)
+			return Invalid
+		}
+		return c.enumType(sym)
+	}
 	if _, ok := c.info.Funcs[n.Name]; ok {
 		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
 		return Invalid
@@ -225,9 +246,19 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 			return Invalid, m, x.Name, true
 		}
 		return types.Unknown, m, x.Name, true
-	case *ast.Bracket, *ast.TupleIndex:
-		// an element/field of a mutable container is itself a mutable place.
-		return c.synth(e), true, "", true
+	case *ast.Bracket:
+		_, m, nm, base := c.lvalue(x.Base)
+		if !base {
+			return Invalid, false, nm, false
+		}
+		// an element of a container is a mutable place only when its base is.
+		return c.synth(e), m, nm, true
+	case *ast.TupleIndex:
+		_, m, nm, base := c.lvalue(x.X)
+		if !base {
+			return Invalid, false, nm, false
+		}
+		return c.synth(e), m, nm, true
 	}
 	return c.synth(e), true, "", true
 }
@@ -474,6 +505,76 @@ func (c *checker) checkElem(e ast.Expr, want Type, what string) {
 	if !bad(t) && !bad(want) && !c.assignable(want, e, t) {
 		c.errorf(e.Span(), "%s: cannot use %s as %s", what, t, want)
 	}
+}
+
+// --- numeric literal context typing -------------------------------------------
+
+// checkSignedLit context-types a negated numeric literal '-lit' by pushing a
+// numeric want through the sign to the inner literal, so literal defaulting and
+// the fixed-width overflow check apply (DESIGN-1b §4.3). It reports whether it
+// handled the expression.
+func (c *checker) checkSignedLit(n *ast.Unary, want Type) (Type, bool) {
+	if (n.Op != token.Minus && n.Op != token.MinusMod) || !isNumeric(want) {
+		return nil, false
+	}
+	switch lit := n.X.(type) {
+	case *ast.IntLit:
+		c.info.ExprTypes[lit] = want
+		c.checkIntRange(lit, want, true)
+		return want, true
+	case *ast.FloatLit:
+		if isFloatWant(want) {
+			c.info.ExprTypes[lit] = want
+			return want, true
+		}
+	}
+	return nil, false
+}
+
+// checkIntRange reports an integer literal that overflows a fixed-width integer
+// context type (DESIGN-1b §4.3 MINOR); other numeric contexts impose no
+// compile-time literal bound here. When neg is set the literal carries a leading
+// '-'.
+func (c *checker) checkIntRange(lit *ast.IntLit, want Type, neg bool) {
+	f, ok := want.(*types.Fixed)
+	if !ok || f.Float {
+		return
+	}
+	v := lit.Value
+	if neg {
+		v = -v
+	}
+	if !fitsFixed(v, f) {
+		c.errorf(lit.Span(), "literal %d overflows %s", v, want)
+	}
+}
+
+// fitsFixed reports whether the value v is representable in the fixed-width
+// integer f.
+func fitsFixed(v int64, f *types.Fixed) bool {
+	if f.Signed {
+		if f.Bits >= 64 {
+			return true
+		}
+		return v >= -(int64(1)<<(f.Bits-1)) && v <= int64(1)<<(f.Bits-1)-1
+	}
+	if v < 0 {
+		return false
+	}
+	if f.Bits >= 64 {
+		return true
+	}
+	return v <= int64(1)<<f.Bits-1
+}
+
+// isFloatWant reports whether a context type is a floating-point type (float, f32,
+// or f64) — the contexts a fractional literal may adopt.
+func isFloatWant(want Type) bool {
+	if want.Kind() == types.KFloat {
+		return true
+	}
+	f, ok := want.(*types.Fixed)
+	return ok && f.Float
 }
 
 // --- type predicates ----------------------------------------------------------

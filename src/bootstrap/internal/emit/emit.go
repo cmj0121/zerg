@@ -364,7 +364,7 @@ func (e *emitter) function(inst *mono.Instance) {
 	}
 	fn := inst.Origin
 	e.cur = inst
-	e.used = map[string]bool{}
+	e.resetUsed()
 	e.counter = 0
 	e.pushScope() // parameter scope
 
@@ -710,6 +710,23 @@ func (e *emitter) body(b *ast.Block, isLoop bool) {
 
 func (e *emitter) pushScope() { e.scopes = append(e.scopes, map[string]string{}) }
 func (e *emitter) popScope()  { e.scopes = e.scopes[:len(e.scopes)-1] }
+
+// resetUsed starts a fresh per-function C-name environment and pre-seeds it with
+// every top-level mangled name (functions and specialized types), so a body-local
+// binding or a compiler temporary can never pick a name that collides with — and so
+// shadows — a top-level function or type in C. Without this, a local like `x :=
+// guard { gr() }` whose temp is `zg_gr`, or a teardown mark `zg_mk` beside a `fn
+// mk`, would shadow the function of the same mangled name and miscompile the call.
+// The examples hold no such collision, so their emitted names are unchanged.
+func (e *emitter) resetUsed() {
+	e.used = map[string]bool{}
+	for _, inst := range e.prog.Funcs {
+		e.used[inst.Mangled] = true
+	}
+	for _, ti := range e.prog.Types {
+		e.used[ti.Mangled] = true
+	}
+}
 
 // declareName maps a source name to a fresh, function-unique C name (plain
 // 'zg_<name>' unless that is already taken, in which case a numeric suffix is

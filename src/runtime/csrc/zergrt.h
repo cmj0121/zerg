@@ -212,6 +212,33 @@ long zrt_write_str(int fd, const char *s);
  * zrt_write. */
 long zrt_write_int(int fd, int64_t v);
 
+/* --- Atomic[int] cell operations (sys.c, Phase 1f U2) ----------------------
+ *
+ * The stdlib `atomic` module lowers onto these: an Atomic[int] is a `Ref[int]`
+ * box (a shared, refcounted heap cell) whose int64 payload these functions read
+ * and write with sequential-consistency ordering. Under the 1e N:1 cooperative
+ * scheduler there is no preemption, so atomicity holds even without hardware
+ * fences; the SC ops keep the API correct for a future M:N scheduler with no
+ * change to the Zerg surface. Each takes the payload pointer (from
+ * zrt_ref_payload) so a copy of the box — shared across `spawn` — names the same
+ * cell. */
+
+/* zrt_atomic_load returns *p read with sequential-consistency ordering. */
+int64_t zrt_atomic_load(int64_t *p);
+
+/* zrt_atomic_store writes v to *p (SC) and returns the value stored. */
+int64_t zrt_atomic_store(int64_t *p, int64_t v);
+
+/* zrt_atomic_swap stores v into *p (SC) and returns the previous value. */
+int64_t zrt_atomic_swap(int64_t *p, int64_t v);
+
+/* zrt_atomic_add adds n to *p (SC) and returns the previous value. */
+int64_t zrt_atomic_add(int64_t *p, int64_t n);
+
+/* zrt_atomic_cas compares *p with expect and, if equal, stores desired (SC),
+ * returning true on success and false otherwise. */
+bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired);
+
 /* --- text rendering: display() / Format / f-string join (fmt.c, Phase 1f) ---
  *
  * The built-in `display()` and per-type `Format` (`:spec`) impls the compiler lowers

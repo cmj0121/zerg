@@ -201,6 +201,49 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 			w.walkExpr(in, arm.Guard)
 			w.walkExpr(in, arm.Body)
 		}
+	case *ast.TupleLit:
+		for _, el := range n.Elems {
+			w.walkExpr(in, el)
+		}
+	case *ast.MapLit:
+		for _, ent := range n.Entries {
+			w.walkExpr(in, ent.Key)
+			w.walkExpr(in, ent.Value)
+		}
+	case *ast.Range:
+		w.walkExpr(in, n.Lo)
+		w.walkExpr(in, n.Hi)
+	case *ast.IsExpr:
+		w.walkExpr(in, n.X)
+	// group-8 operators (Phase 1f): a generic call may nest inside any of these, so
+	// each is walked so its instance is enqueued. Missing these left a generic call
+	// under `x!` / `x?` / `a ?? b` / `guard { }` / an f-string hole un-enqueued.
+	case *ast.Force:
+		w.walkExpr(in, n.X)
+	case *ast.Try:
+		w.walkExpr(in, n.X)
+	case *ast.Coalesce:
+		w.walkExpr(in, n.X)
+		w.walkExpr(in, n.Y)
+	case *ast.OptChain:
+		w.walkExpr(in, n.X)
+	case *ast.Diverge:
+		w.walkExpr(in, n.Value)
+		w.walkExpr(in, n.From)
+	case *ast.GuardExpr:
+		w.walkBlock(in, n.Body)
+	case *ast.Recv:
+		w.walkExpr(in, n.X)
+	case *ast.ChanNew:
+		w.walkExpr(in, n.Cap)
+	case *ast.FStr:
+		for i := range n.Parts {
+			w.walkExpr(in, n.Parts[i].Expr)
+		}
+	case *ast.FCmd:
+		for i := range n.Parts {
+			w.walkExpr(in, n.Parts[i].Expr)
+		}
 	}
 }
 
@@ -221,6 +264,9 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 		w.explicitCall(in, br, n)
 		return
 	}
+	if w.walkNamespaceCall(in, n) {
+		return
+	}
 	id, ok := n.Callee.(*ast.Ident)
 	if !ok {
 		return
@@ -236,6 +282,40 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	subT, subV := w.resolveArgs(in, sig, n)
 	callee := w.enqueueFn(sig.Decl, subT, subV)
 	in.Calls[n] = callee.Mangled
+}
+
+// walkNamespaceCall handles an imported-module member call `ns.member(args)` (the
+// bundle-import MVP): when the callee's base names an imported namespace, its target
+// is the bundled module's public function under its mangled name. A generic member
+// (e.g. `testing.assert_eq[T: Eq]`) is monomorphized here from the concrete argument
+// types and its instance recorded, exactly like a generic Ident call; a non-generic
+// member needs no instance (the emitter calls the top-level function directly). It
+// returns true once it has taken responsibility for a namespace callee.
+func (w *worker) walkNamespaceCall(in *Instance, n *ast.Call) bool {
+	fld, ok := n.Callee.(*ast.Field)
+	if !ok {
+		return false
+	}
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	sym, ok := w.info.Refs[id]
+	if !ok || sym.Kind != sema.SymNamespace {
+		return false
+	}
+	sig, ok := w.info.Funcs[sema.ModuleMember(id.Name, fld.Name)]
+	if !ok || sig.Generic == nil {
+		return true // a non-generic namespace member: emit resolves it directly
+	}
+	if sig.Dyn {
+		w.dynCall(in, sig, n)
+		return true
+	}
+	subT, subV := w.resolveArgs(in, sig, n)
+	callee := w.enqueueFn(sig.Decl, subT, subV)
+	in.Calls[n] = callee.Mangled
+	return true
 }
 
 // resolveArgs fixes a generic callee's type and value arguments from a call's

@@ -1,0 +1,24 @@
+# app — a module that owns an init() block and a module constant, and re-exports
+# geom onto its own surface with `import pub`, so a module importing app reaches
+# geom's public members through the app namespace.
+import pub "geom"
+
+# base is a module-private constant (a top-level `:=`): immutable, evaluated once at
+# init time. Its initializer is a runtime call, so it is computed inside app's init
+# function, not at C static-init.
+base_value := seed()
+
+# seed is module-private, used only to initialize the constant.
+fn seed() -> int {
+	return 5
+}
+
+# init() runs exactly once, before the first use of app from main.
+init() {
+	nop
+}
+
+# base exposes the module constant across the boundary (a pub accessor).
+pub fn base() -> int {
+	return base_value
+}

@@ -166,3 +166,27 @@ func TestRunBuildCCFailure(t *testing.T) {
 		t.Errorf("bad-cc run = %d, want 1", code)
 	}
 }
+
+func TestRunLintClean(t *testing.T) {
+	// A used import and a used private helper produce no findings: clean exit.
+	src := writeSrc(t, "fn helper() -> int {\n\treturn 2\n}\nfn main() {\n\tprint helper()\n}\n")
+	if code := runLint(&LintCmd{File: src}); code != 0 {
+		t.Errorf("lint of a clean program = %d, want 0", code)
+	}
+}
+
+func TestRunLintUnusedImport(t *testing.T) {
+	// An unused import is a lint finding: non-zero exit.
+	src := writeSrc(t, "import \"io\"\nfn main() {\n\tprint 1\n}\n")
+	if code := runLint(&LintCmd{File: src}); code != 1 {
+		t.Errorf("lint of an unused import = %d, want 1", code)
+	}
+}
+
+func TestRunLintCompileError(t *testing.T) {
+	// A program that does not type-check is reported (exit 1), not linted further.
+	src := writeSrc(t, "fn main() {\n\tprint undefined_name\n}\n")
+	if code := runLint(&LintCmd{File: src}); code != 1 {
+		t.Errorf("lint of a broken program = %d, want 1", code)
+	}
+}

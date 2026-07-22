@@ -50,6 +50,28 @@ func CompileProgram(entryPath string) (string, emit.Manifest, []diag.Diagnostic)
 	return compileWith(loader, string(src))
 }
 
+// CheckProgram runs only the front-end of the whole-program pipeline over the entry
+// file — module resolution, name resolution, and type checking — and returns its
+// diagnostics (empty on success). It is the shared basis for `zerg lint`, which
+// layers its lint-only findings on a program the compiler already accepts; stopping
+// before mono/emit means it reports exactly the compile-time errors without lowering.
+func CheckProgram(entryPath string) []diag.Diagnostic {
+	src, err := os.ReadFile(entryPath) //nolint:gosec // the entry source the user asked to lint
+	if err != nil {
+		var diags diag.List
+		diags.Add(token.Span{}, "cannot read entry file %q: %v", entryPath, err)
+		return diags.Items()
+	}
+	root := module.OSProvider{Root: filepath.Dir(entryPath)}
+	loader := module.NewLoader(root, stdlibProvider{})
+	file, _, diags := loader.LoadProgram(string(src))
+	if len(diags) > 0 {
+		return diags
+	}
+	_, diags = sema.Check(file)
+	return diags
+}
+
 // compileWith runs the shared inner pipeline over a configured loader.
 func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []diag.Diagnostic) {
 	file, plan, diags := loader.LoadProgram(src)
@@ -63,22 +85,30 @@ func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []di
 	return emit.Emit(mono.BuildWithInit(file, info, plan))
 }
 
-// stdlibProvider is the embedded-stdlib source root: it resolves an import by the
-// LAST path segment onto a flat stdlib module (`import "io"` and `import "std/io"`
-// both load io.zg), matching the pre-1g bundle so the stdlib keeps working while
-// its migration onto true directory modules is a later slice. Its canonical
-// identity is that last segment, so the mangle tag stays `io` and `io__println`
-// is byte-identical.
+// stdlibProvider is the embedded-stdlib source root (Phase 1g S4). It resolves an
+// import through the SAME module machinery as a user module — a module.FSProvider
+// over the embedded stdlib tree (stdlib.FS()) — rather than the pre-1g out-of-band
+// bundle. `import "io"` resolves the file module io.zg with canonical identity "io",
+// so its mangle tag stays `io` and `io__println` is byte-identical.
+//
+// The one behaviour that stays special-cased is the historic last-segment ALIAS:
+// the flat embedded layout also answers `import "std/io"` by loading io.zg, so an
+// import that does not resolve at its full path retries at its last segment. This
+// keeps the documented pre-1g convention working; it disappears once the stdlib is
+// laid out as real nested directory modules.
 type stdlibProvider struct{}
 
-// Resolve loads a flat stdlib module by the import path's last segment.
+// Resolve locates a stdlib module through the shared FSProvider, then falls back to
+// the last-segment alias for the flat layout.
 func (stdlibProvider) Resolve(importPath string) (string, []module.ModuleFile, bool) {
-	seg := lastSegment(importPath)
-	src, ok := stdlib.Source(seg)
-	if !ok {
-		return "", nil, false
+	fsp := module.FSProvider{FS: stdlib.FS()}
+	if canonical, files, ok := fsp.Resolve(importPath); ok {
+		return canonical, files, true
 	}
-	return seg, []module.ModuleFile{{Name: seg + ".zg", Src: src}}, true
+	if seg := lastSegment(importPath); seg != importPath {
+		return fsp.Resolve(seg)
+	}
+	return "", nil, false
 }
 
 // lastSegment returns the final '/'-separated segment of a module path.

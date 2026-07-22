@@ -1,0 +1,4 @@
+# deep — the innermost module, re-exported through `mid` (Phase 1g `import pub`).
+pub fn hello() -> int {
+	return 7
+}

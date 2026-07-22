@@ -75,6 +75,19 @@ func (reg *SpecRegistry) resolveImpl(spec *types.SpecDef, target types.Type) *ty
 	return reg.byKey[implKey{spec: spec, head: targetHead(target)}]
 }
 
+// ResolveImpl is the exported form of resolveImpl, so the monomorphization stage
+// can find the impl backing a '#[dyn]' witness table for a concrete type.
+func (reg *SpecRegistry) ResolveImpl(spec *types.SpecDef, target types.Type) *types.ImplDef {
+	return reg.resolveImpl(spec, target)
+}
+
+// SpecClosure returns a spec together with its transitive super-specs (the spec
+// first), so the monomorphization stage can lay out a witness table over every
+// method the bound provides — Ord's own methods and Eq's alike.
+func (reg *SpecRegistry) SpecClosure(spec *types.SpecDef) []*types.SpecDef {
+	return closeSpecInto(nil, spec, map[*types.SpecDef]bool{})
+}
+
 // satisfies reports whether a concrete type meets every spec in bounds — an impl
 // exists for each, and recursively for each spec's super-specs — reporting the
 // first gap (DESIGN-1c §3.2). It is the bound-satisfaction check a future

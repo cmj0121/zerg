@@ -50,6 +50,7 @@ func (c *checker) collectSpecsAndImpls(file *ast.File) {
 			c.collectImpl(reg, n)
 		}
 	}
+	c.collectDerived(reg, file)
 	c.checkCoherence(reg)
 }
 
@@ -109,7 +110,7 @@ func (c *checker) linkSpec(reg *SpecRegistry, n *ast.SpecDecl) {
 // a spec impl), each method (registered in the per-type method namespace), and
 // the associated-type and value bindings; then validates the bindings against the
 // spec's requirements. Member signatures resolve with 'This' bound to the target.
-func (c *checker) collectImpl(reg *SpecRegistry, n *ast.ImplDecl) {
+func (c *checker) collectImpl(reg *SpecRegistry, n *ast.ImplDecl) *types.ImplDef {
 	target := c.resolveType(n.Target)
 	impl := &types.ImplDef{
 		Target:    target,
@@ -156,6 +157,7 @@ func (c *checker) collectImpl(reg *SpecRegistry, n *ast.ImplDecl) {
 	if impl.Spec != nil {
 		c.checkAssocBindings(n, impl)
 	}
+	return impl
 }
 
 // addMethod inserts a method into the target type's one method namespace,

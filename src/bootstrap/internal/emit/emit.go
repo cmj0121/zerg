@@ -16,15 +16,17 @@ import (
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/mono"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 )
 
-// Emit lowers the file to C source. When the returned diagnostics are non-empty
-// the source is empty and must not be compiled.
-func Emit(file *ast.File, info *sema.Info) (string, []diag.Diagnostic) {
-	e := &emitter{info: info}
-	e.program(file)
+// Emit lowers the monomorphized program to C source. It renders each instance in
+// prog.Funcs, reading the type overlay from prog.Info. When the returned
+// diagnostics are non-empty the source is empty and must not be compiled.
+func Emit(prog *mono.Program) (string, []diag.Diagnostic) {
+	e := &emitter{prog: prog, info: prog.Info}
+	e.program()
 	if !e.diags.Empty() {
 		return "", e.diags.Items()
 	}
@@ -32,6 +34,7 @@ func Emit(file *ast.File, info *sema.Info) (string, []diag.Diagnostic) {
 }
 
 type emitter struct {
+	prog   *mono.Program
 	info   *sema.Info
 	sb     strings.Builder
 	indent int
@@ -46,7 +49,7 @@ type emitter struct {
 	counter int
 }
 
-func (e *emitter) program(file *ast.File) {
+func (e *emitter) program() {
 	main, ok := e.info.Funcs["main"]
 	switch {
 	case !ok:
@@ -66,28 +69,17 @@ func (e *emitter) program(file *ast.File) {
 	e.blank()
 
 	// prototypes first, so declaration order does not constrain calls
-	for _, fn := range funcs(file) {
-		e.line(e.prototype(fn) + ";")
+	for _, inst := range e.prog.Funcs {
+		e.line(e.prototype(inst) + ";")
 	}
 	e.blank()
 
-	for _, fn := range funcs(file) {
-		e.function(fn)
+	for _, inst := range e.prog.Funcs {
+		e.function(inst)
 		e.blank()
 	}
 
 	e.cMain(main)
-}
-
-// funcs returns the function declarations in source order.
-func funcs(file *ast.File) []*ast.FuncDecl {
-	var out []*ast.FuncDecl
-	for _, d := range file.Items {
-		if fn, ok := d.(*ast.FuncDecl); ok {
-			out = append(out, fn)
-		}
-	}
-	return out
 }
 
 // paramList renders a C parameter list ("void" when empty), formatting each of
@@ -106,14 +98,16 @@ func paramList(n int, render func(i int) string) string {
 	return b.String()
 }
 
-// prototype renders a forward declaration with parameter types only.
-func (e *emitter) prototype(fn *ast.FuncDecl) string {
-	sig := e.info.Funcs[fn.Name]
+// prototype renders a forward declaration with parameter types only, using the
+// instance's mangled C name.
+func (e *emitter) prototype(inst *mono.Instance) string {
+	sig := e.info.Funcs[inst.Origin.Name]
 	params := paramList(len(sig.Params), func(i int) string { return cType(sig.Params[i]) })
-	return fmt.Sprintf("%s zg_%s(%s)", cType(sig.Ret), fn.Name, params)
+	return fmt.Sprintf("%s %s(%s)", cType(sig.Ret), inst.Mangled, params)
 }
 
-func (e *emitter) function(fn *ast.FuncDecl) {
+func (e *emitter) function(inst *mono.Instance) {
+	fn := inst.Origin
 	sig := e.info.Funcs[fn.Name]
 	e.used = map[string]bool{}
 	e.counter = 0
@@ -122,7 +116,7 @@ func (e *emitter) function(fn *ast.FuncDecl) {
 	params := paramList(len(sig.Params), func(i int) string {
 		return cType(sig.Params[i]) + " " + e.declareName(sig.ParamNames[i])
 	})
-	e.line(fmt.Sprintf("%s zg_%s(%s) {", cType(sig.Ret), fn.Name, params))
+	e.line(fmt.Sprintf("%s %s(%s) {", cType(sig.Ret), inst.Mangled, params))
 
 	e.indent++
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
@@ -396,7 +390,7 @@ func (e *emitter) call(n *ast.Call) string {
 		}
 		args.WriteString(e.expr(a.Value))
 	}
-	return fmt.Sprintf("zg_%s(%s)", name, args.String())
+	return fmt.Sprintf("%s(%s)", e.prog.CallTarget(name), args.String())
 }
 
 // assignTarget lowers a reassignment target. The Phase 0 backend only lowers the

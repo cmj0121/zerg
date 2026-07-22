@@ -7,13 +7,15 @@ package build
 import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/emit"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/mono"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/parser"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
 )
 
 // Compile lowers Zerg source to C. It stops at the first stage that reports
-// diagnostics, returning them with an empty string; on success it returns the C
-// translation unit and no diagnostics.
+// diagnostics, returning them with an empty string; on success it runs the
+// pipeline parse -> sema -> mono -> emit and returns the C translation unit and
+// no diagnostics.
 func Compile(src string) (string, []diag.Diagnostic) {
 	file, diags := parser.Parse(src)
 	if len(diags) > 0 {
@@ -23,5 +25,5 @@ func Compile(src string) (string, []diag.Diagnostic) {
 	if len(diags) > 0 {
 		return "", diags
 	}
-	return emit.Emit(file, info)
+	return emit.Emit(mono.Build(file, info))
 }

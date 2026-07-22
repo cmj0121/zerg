@@ -76,6 +76,9 @@ type Info struct {
 	Refs     map[*ast.Ident]*Symbol       // each identifier's resolved symbol
 	Brackets map[*ast.Bracket]BracketRes  // each '[ … ]' postfix: index vs type args
 	Patterns map[*ast.NamePattern]NameRes // each bare-name pattern: variant vs binding
+
+	// spec/impl layer (Phase 1c, U1)
+	Specs *SpecRegistry // collected specs, impls, and the per-type method namespaces
 }
 
 // Check resolves and type-checks the file, returning the analysis info and any
@@ -102,6 +105,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	c := &checker{info: info, module: r.module}
 	c.collectTypes(file)
 	c.collectFuncs(file)
+	c.collectSpecsAndImpls(file)
 	c.checkFuncs(file)
 
 	return info, append(r.diags.Items(), c.diags.Items()...)
@@ -274,13 +278,12 @@ func (c *checker) checkFuncs(file *ast.File) {
 	}
 }
 
-// checkImpl type-checks the method bodies of an inherent impl, binding 'this' to
-// the target type and 'This' to the same. Spec impls need program-wide coherence
-// (1c), so their bodies are not typed here.
+// checkImpl type-checks the method bodies of an impl, binding 'this' to the
+// target type and 'This' to the same. Phase 1c checks spec-impl bodies too (the
+// one body check 1c adds beyond 1b): each spec-impl method body is typed against
+// its own signature with This = the target type (DESIGN-1c §1, the abstract
+// mechanism 1b already uses for inherent-impl and free-fn bodies).
 func (c *checker) checkImpl(n *ast.ImplDecl) {
-	if n.Spec != nil {
-		return
-	}
 	target := c.resolveType(n.Target)
 	saved := c.curSelf
 	c.curSelf = target

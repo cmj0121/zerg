@@ -997,6 +997,9 @@ func (e *emitter) variantTag(subjT sema.Type, name string) int {
 }
 
 func (e *emitter) call(n *ast.Call) string {
+	if s, ok := e.ptrCallEmit(n); ok {
+		return s
+	}
 	if s, ok := e.builtinCallEmit(n); ok {
 		return s
 	}
@@ -1212,6 +1215,14 @@ func (e *emitter) ctype(t sema.Type) string {
 	if _, ok := t.(*types.Ref); ok {
 		// a Ref[T] value is a pointer to its zrt_ref_alloc'd header+payload.
 		return "void*"
+	}
+	if p, ok := t.(*types.Ptr); ok {
+		// a raw pointer (group 12): bare `ptr` is `void*`; `ptr[T]` is `T*`, so the
+		// pointee type drives load/store deref width and offset stride (FORK-PTR-C).
+		if p.Elem == nil {
+			return "void*"
+		}
+		return e.ctype(p.Elem) + "*"
 	}
 	if name, ok := e.prog.TypeName(t); ok {
 		return name

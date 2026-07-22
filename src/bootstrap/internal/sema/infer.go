@@ -20,6 +20,13 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		if t, handled := c.namespaceCall(n, fld); handled {
 			return t
 		}
+		// A method on a raw-pointer receiver (`p.load()` / `.store()` / `.offset()`) is
+		// a compiler-recognized unsafe intrinsic, dispatched on the receiver's static
+		// type; a receiver of any other type falls through to the ordinary paths.
+		if pt, ok := c.synth(fld.X).(*types.Ptr); ok {
+			t, _ := c.ptrMethodCall(n, fld, pt)
+			return t
+		}
 	}
 	if br, ok := n.Callee.(*ast.Bracket); ok {
 		if id, ok := br.Base.(*ast.Ident); ok {
@@ -86,17 +93,49 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.atomicIntrinsic(n, 2, Int), true
 		case "__zrt_atomic_cas":
 			return c.atomicIntrinsic(n, 3, Bool), true
+		case "addr":
+			// addr(x) -> ptr[T]: the address of an addressable value (U1).
+			return c.ptrAddr(n), true
+		case "ptr":
+			// ptr(p) / ptr(u) -> bare `ptr`: a raw-address cast (any ptr or uint).
+			return c.ptrCast(n, &types.Ptr{}), true
+		case "uint":
+			// uint(p) -> uint: a ptr-to-integer cast, recognized only when the argument
+			// is a raw pointer, so a future numeric `uint(x)` conversion is not masked.
+			if len(n.Args) == 1 {
+				if _, ok := c.synth(n.Args[0].Value).(*types.Ptr); ok {
+					c.unsafeOp(n.Span(), "a pointer cast")
+					return types.Uint, true
+				}
+			}
+			return nil, false
 		}
 	case *ast.Bracket:
 		id, ok := callee.Base.(*ast.Ident)
-		if !ok || id.Name != "Ref" || c.shadowed("Ref") {
+		if !ok {
 			return nil, false
 		}
-		var elem Type
-		if len(callee.Elems) == 1 {
-			elem = c.exprAsType(callee.Elems[0])
+		switch id.Name {
+		case "Ref":
+			if c.shadowed("Ref") {
+				return nil, false
+			}
+			var elem Type
+			if len(callee.Elems) == 1 {
+				elem = c.exprAsType(callee.Elems[0])
+			}
+			return c.constructRef(n, elem), true
+		case "ptr":
+			// ptr[T](p) -> ptr[T]: a typed-pointer cast (U1).
+			if c.shadowed("ptr") {
+				return nil, false
+			}
+			var elem Type
+			if len(callee.Elems) == 1 {
+				elem = c.exprAsType(callee.Elems[0])
+			}
+			return c.ptrCast(n, &types.Ptr{Elem: elem}), true
 		}
-		return c.constructRef(n, elem), true
 	}
 	return nil, false
 }
@@ -262,7 +301,7 @@ func (c *checker) synthArgs(n *ast.Call) {
 // callFunc checks a direct or namespaced call to a named function, dispatching to
 // the generic path when the function has type or value parameters.
 func (c *checker) callFunc(n *ast.Call, sig *FuncSig) Type {
-	c.checkForeignCall(sig, n.Span())
+	c.checkUnsafeCall(sig, n.Span())
 	if sig.Generic != nil {
 		return c.callGeneric(n, sig)
 	}
@@ -270,15 +309,22 @@ func (c *checker) callFunc(n *ast.Call, sig *FuncSig) Type {
 	return sig.Ret
 }
 
-// checkForeignCall enforces docs/ffi.md's rule that a foreign call — a call to an
-// `#[extern]`-bound C symbol — is legal only inside an unsafe context. A call to
-// such a binding outside an `unsafe fn` body or `unsafe { }` block is rejected.
-func (c *checker) checkForeignCall(sig *FuncSig, span token.Span) {
+// checkUnsafeCall enforces group 12's rule that an unsafe call is legal only inside
+// an unsafe context: a foreign call (a call to an `#[extern]`-bound C symbol, per
+// docs/ffi.md) and a call to an `unsafe fn` — including a `fn` declared inside a
+// module-level `unsafe { }` group (Phase 1h U2) — are both rejected outside an
+// `unsafe fn` body or `unsafe { }` block. It generalizes 1f's checkForeignCall: the
+// foreign case is the extern subset.
+func (c *checker) checkUnsafeCall(sig *FuncSig, span token.Span) {
 	if sig == nil || sig.Decl == nil || c.inUnsafe {
 		return
 	}
 	if sym, ok := ExternSymbol(sig.Decl); ok {
 		c.errorf(span, "foreign call to %q is unsafe; call it inside an `unsafe { }` block", sym)
+		return
+	}
+	if sig.Decl.Unsafe {
+		c.errorf(span, "call to unsafe fn %q is unsafe; call it inside an `unsafe { }` block", sig.Name)
 	}
 }
 

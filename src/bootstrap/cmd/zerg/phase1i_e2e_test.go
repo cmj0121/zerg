@@ -32,6 +32,9 @@ func buildTests(t *testing.T, entryPath string) string {
 		t.Fatalf("materialize runtime: %v", err)
 	}
 	cfiles = append(cfiles, runtime.TestCUnits(dir)...)
+	if manifest.Concurrency {
+		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
+	}
 	cpath := filepath.Join(dir, "prog.c")
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {
 		t.Fatalf("write C: %v", err)
@@ -143,6 +146,45 @@ func TestZergTestCrossModule(t *testing.T) {
 		"\ntest result: 2 tests; 2 passed, 0 failed\n"
 	if stdout != want {
 		t.Fatalf("report =\n%q\nwant\n%q", stdout, want)
+	}
+}
+
+// TestZergTestReportInterleavesWithIO is the M1 fix: the report is unbuffered and
+// incremental (the label prints BEFORE the test runs), so a test's own io.println
+// output lands between the `test <label> ... ` line and its `ok` verdict, in order —
+// not reordered or swallowed by stdio block-buffering when stdout is piped.
+func TestZergTestReportInterleavesWithIO(t *testing.T) {
+	src := "import \"testing\"\nimport \"io\"\n\n" +
+		"#[test]\nfn test_talky() {\n  io.println(\"mid\")\n  testing.assert(true)\n}\n"
+	_, entry := entryAt(t, "in.zg", src)
+	bin := buildTests(t, entry)
+	stdout, stderr, err := run(t, bin)
+	if err != nil {
+		t.Fatalf("suite must pass: %v\n%s", err, stderr)
+	}
+	want := "test test_talky ... mid\nok\n\ntest result: 1 tests; 1 passed, 0 failed\n"
+	if stdout != want {
+		t.Fatalf("interleaved report =\n%q\nwant\n%q", stdout, want)
+	}
+}
+
+// TestZergTestSpawnChannel is the M2 fix: a `#[test]` that `spawn`s a coroutine and
+// receives on a channel runs UNDER the scheduler (as a normal program does) instead
+// of enqueuing a coroutine onto a run queue nobody drains — so it completes rather
+// than silently deadlocking.
+func TestZergTestSpawnChannel(t *testing.T) {
+	src := "import \"testing\"\n\n" +
+		"#[test]\nfn test_spawn_chan() {\n  ch := chan[int]()\n  spawn send42(ch)\n  v := <-ch\n  testing.assert_eq(v!, 42)\n}\n\n" +
+		"fn send42(ch: chan[int]) {\n  ch <- 42\n}\n"
+	_, entry := entryAt(t, "in.zg", src)
+	bin := buildTests(t, entry)
+	stdout, stderr, err := run(t, bin)
+	if err != nil {
+		t.Fatalf("a spawn/channel test must run, not hang: %v\nstdout=%q stderr=%q", err, stdout, stderr)
+	}
+	want := "test test_spawn_chan ... ok\n\ntest result: 1 tests; 1 passed, 0 failed\n"
+	if stdout != want {
+		t.Fatalf("spawn-in-test report =\n%q\nwant\n%q", stdout, want)
 	}
 }
 

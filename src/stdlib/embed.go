@@ -16,7 +16,7 @@ import "embed"
 
 // files holds the embedded stdlib module sources.
 //
-//go:embed io.zg
+//go:embed io.zg testing.zg
 var files embed.FS
 
 // Source returns the embedded Zerg source of the stdlib module named name (a bare

@@ -1,0 +1,36 @@
+# testing — minimal assertion helpers (Phase 1f, bundle MVP).
+#
+# Bundled into a program that writes `import "testing"`; its members are reached
+# through the namespace, as `testing.assert_eq(a, b)`. Each assertion returns
+# `Result[nil]` — a satisfied assertion is `nil` (Ok), a violated one `raise`s so an
+# enclosing `guard` recovers it as a value (or, uncaught, aborts with the message).
+# This is the library the `#[test]` discovery + `zerg test` runner (Phase 1i) builds
+# on; `#[test]` discovery itself is 1i, not this module.
+
+# assert succeeds when cond holds; otherwise it raises so the failure is observable
+# (an enclosing `guard` catches it, or it aborts the program).
+pub fn assert(cond: bool) -> Result[nil] {
+	if not cond {
+		raise "assertion failed"
+	}
+	return nil
+}
+
+# assert_eq succeeds when a and b compare equal under their Eq impl (the blessed Eq
+# spec / a `#[derive(Eq)]` from Phase 1c); otherwise it raises. Generic over any
+# `T: Eq`, so it serves the primitive scalars and any user type that derives Eq.
+pub fn assert_eq[T: Eq](a: T, b: T) -> Result[nil] {
+	if a != b {
+		raise "assert_eq failed: values are not equal"
+	}
+	return nil
+}
+
+# assert_ne is the negation: it succeeds when a and b differ, and raises when they
+# compare equal.
+pub fn assert_ne[T: Eq](a: T, b: T) -> Result[nil] {
+	if a == b {
+		raise "assert_ne failed: values are equal"
+	}
+	return nil
+}

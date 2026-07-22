@@ -60,6 +60,10 @@ type FuncSig struct {
 	Ret        Type // Nil when the function has no '-> type'
 	Decl       *ast.FuncDecl
 	Generic    *GenericEnv
+	// Dyn is true when the function carries the '#[dyn]' decorator, asking the
+	// backend to compile it to one shared witness-table body rather than
+	// monomorphizing per type argument (Phase 1c §6).
+	Dyn bool
 }
 
 // Info is the result of a successful check, consumed by the emitter. The Phase 0
@@ -229,6 +233,7 @@ func (c *checker) collectFuncs(file *ast.File) {
 func (c *checker) buildSig(fn *ast.FuncDecl) *FuncSig {
 	sig := &FuncSig{Name: fn.Name, Ret: Nil, Decl: fn}
 	sig.Generic = c.genericEnv(fn.Generics)
+	sig.Dyn = c.checkDyn(fn, sig.Generic)
 	saved := c.typeParams
 	c.typeParams = sig.Generic.merged(saved)
 	for _, p := range fn.Params {
@@ -241,6 +246,36 @@ func (c *checker) buildSig(fn *ast.FuncDecl) *FuncSig {
 	}
 	c.typeParams = saved
 	return sig
+}
+
+// checkDyn reports whether a function carries the '#[dyn]' decorator and enforces
+// its one rule (DESIGN-1c §6.3): '#[dyn]' cannot erase a value (const) generic,
+// since a compile-time value has no witness-table slot. A '#[dyn]' over a
+// parameter list holding any '[N: int]' value parameter is a compile-time error.
+func (c *checker) checkDyn(fn *ast.FuncDecl, env *GenericEnv) bool {
+	if !hasDecorator(fn.Decorators, "dyn") {
+		return false
+	}
+	if env != nil {
+		for _, name := range env.Names {
+			if _, isVal := env.Params[name].(*types.ValParam); isVal {
+				c.errorf(fn.Span(), "#[dyn] cannot erase value generic %q: a compile-time value has no witness-table slot", name)
+			}
+		}
+	}
+	return true
+}
+
+// hasDecorator reports whether a decorator run contains an item of the given name.
+func hasDecorator(decos []*ast.Decorator, name string) bool {
+	for _, deco := range decos {
+		for _, item := range deco.Items {
+			if item.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // genericEnv builds the abstract parameter environment for a generic list. A

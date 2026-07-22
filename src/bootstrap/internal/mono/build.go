@@ -17,9 +17,10 @@ func Build(file *ast.File, info *sema.Info) *Program {
 	w := &worker{
 		info: info,
 		prog: &Program{
-			Info:      info,
-			byMangled: map[string]*Instance{},
-			typeByKey: map[string]*TypeInstance{},
+			Info:        info,
+			byMangled:   map[string]*Instance{},
+			typeByKey:   map[string]*TypeInstance{},
+			witByGlobal: map[string]*Witness{},
 		},
 	}
 	for _, d := range file.Items {
@@ -70,6 +71,7 @@ func (w *worker) enqueueFn(fn *ast.FuncDecl, subT map[string]types.Type, subV ma
 		subT:       subT,
 		subV:       subV,
 		Calls:      map[*ast.Call]string{},
+		DynSites:   map[*ast.Call]*DynSite{},
 	}
 	for i, p := range sig.Params {
 		in.Params[i] = sema.Substitute(p, subT, subV)
@@ -196,6 +198,10 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	if !ok || sig.Generic == nil {
 		return
 	}
+	if sig.Dyn {
+		w.dynCall(in, sig, n)
+		return
+	}
 	subT, subV := w.resolveArgs(in, sig, n)
 	callee := w.enqueueFn(sig.Decl, subT, subV)
 	in.Calls[n] = callee.Mangled
@@ -206,6 +212,21 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 // callee's parameters and unifying each (DESIGN-1c §4.2). The argument types are
 // read through the caller instance's overlay, so they are already concrete.
 func (w *worker) resolveArgs(in *Instance, sig *sema.FuncSig, n *ast.Call) (map[string]types.Type, map[string]types.ConstVal) {
+	exprs := pairArgs(sig, n)
+	subT := map[string]types.Type{}
+	subV := map[string]types.ConstVal{}
+	for i := range sig.Params {
+		if exprs[i] == nil {
+			continue
+		}
+		sema.Unify(sig.Params[i], in.ExprType(w.info, exprs[i]), subT, subV)
+	}
+	return subT, subV
+}
+
+// pairArgs aligns a call's arguments to a callee's parameters, positional first
+// then named, returning one expression per parameter (nil for an unsupplied one).
+func pairArgs(sig *sema.FuncSig, n *ast.Call) []ast.Expr {
 	exprs := make([]ast.Expr, len(sig.Params))
 	idx := map[string]int{}
 	for i, name := range sig.ParamNames {
@@ -224,15 +245,7 @@ func (w *worker) resolveArgs(in *Instance, sig *sema.FuncSig, n *ast.Call) (map[
 			pos++
 		}
 	}
-	subT := map[string]types.Type{}
-	subV := map[string]types.ConstVal{}
-	for i := range sig.Params {
-		if exprs[i] == nil {
-			continue
-		}
-		sema.Unify(sig.Params[i], in.ExprType(w.info, exprs[i]), subT, subV)
-	}
-	return subT, subV
+	return exprs
 }
 
 // --- type instantiation -------------------------------------------------------
@@ -249,6 +262,11 @@ func (w *worker) collectType(t types.Type) {
 			w.collectType(a)
 		}
 		w.registerStruct(x)
+	case *types.Enum:
+		for _, a := range x.Args {
+			w.collectType(a)
+		}
+		w.registerEnum(x)
 	case *types.List:
 		w.collectType(x.Elem)
 	case *types.Set:
@@ -288,6 +306,40 @@ func (w *worker) registerStruct(x *types.Struct) {
 		ft := sema.Substitute(f.Type, subT, nil)
 		w.collectType(ft)
 		ti.Fields = append(ti.Fields, FieldInst{Name: f.Name, Type: ft})
+	}
+	w.prog.Types = append(w.prog.Types, ti)
+}
+
+// registerEnum records the specialized C tagged union for a use-site enum type,
+// finishing the generic-enum specialization deferred from iteration 3 (DESIGN-1c
+// §4/§7). Like registerStruct it marks the key before computing payloads so a
+// recursive enum terminates, specializes each variant's payload to the instance's
+// type arguments, and appends the instance after the types it depends on.
+func (w *worker) registerEnum(x *types.Enum) {
+	if x.Def == nil || x.Def.Enum == nil {
+		return
+	}
+	key := typeFrag(x.Def, x.Args)
+	if _, ok := w.prog.typeByKey[key]; ok {
+		return
+	}
+	ti := &TypeInstance{Mangled: mangle(key), Def: x.Def, Args: x.Args, IsEnum: true}
+	w.prog.typeByKey[key] = ti
+
+	subT := map[string]types.Type{}
+	for i, p := range x.Def.Params {
+		if i < len(x.Args) {
+			subT[p.Name] = x.Args[i]
+		}
+	}
+	for tag, v := range x.Def.Enum.Variants {
+		vi := VariantInst{Name: v.Name, Tag: tag}
+		for _, pt := range v.Payload {
+			st := sema.Substitute(pt, subT, nil)
+			w.collectType(st)
+			vi.Payload = append(vi.Payload, st)
+		}
+		ti.Variants = append(ti.Variants, vi)
 	}
 	w.prog.Types = append(w.prog.Types, ti)
 }

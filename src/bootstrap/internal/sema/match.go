@@ -225,7 +225,7 @@ func (c *checker) checkVariantPattern(p *ast.VariantPattern, subjT Type) {
 	vd := c.checkVariantMember(p.Span(), p.Name, subjT, len(p.Elems), true)
 	var payload []Type
 	if vd != nil {
-		payload = vd.Payload
+		payload = variantPayload(subjT, vd)
 	}
 	for i, sub := range p.Elems {
 		et := types.Type(types.Unknown)
@@ -271,6 +271,22 @@ func (c *checker) checkVariantMember(span token.Span, name string, subjT Type, a
 		c.errorf(span, "variant %s.%s expects %d payload value(s), got %d", e.Def.Name, name, np, arity)
 	}
 	return vd
+}
+
+// variantPayload returns a variant's payload types specialized to the subject
+// enum's type arguments, so a generic enum's payload 'T' reads as the concrete
+// argument the subject supplies — 'Full(v)' on a 'Box[T]' subject binds v to that
+// T, not the enum's own abstract parameter (generic-enum pattern binding).
+func variantPayload(subjT Type, vd *types.VariantDef) []Type {
+	e, ok := subjT.(*types.Enum)
+	if !ok || len(e.Args) == 0 || len(e.Def.Params) == 0 {
+		return vd.Payload
+	}
+	out := make([]Type, len(vd.Payload))
+	for i, pt := range vd.Payload {
+		out[i] = substituteArgs(e.Def.Params, e.Args, pt)
+	}
+	return out
 }
 
 // checkStructPattern binds a struct pattern's fields against the subject struct's

@@ -75,11 +75,17 @@ func (e *emitter) program() {
 		e.typedef(ti)
 	}
 
+	// '#[dyn]' witness-table struct types, before any prototype that names one
+	e.witnessStructs()
+
 	// prototypes first, so declaration order does not constrain calls
 	for _, inst := range e.prog.Funcs {
 		e.line(e.prototype(inst) + ";")
 	}
 	e.blank()
+
+	// concrete witness tables, after the impl-method prototypes their slots name
+	e.witnessGlobals()
 
 	for _, inst := range e.prog.Funcs {
 		e.function(inst)
@@ -89,9 +95,13 @@ func (e *emitter) program() {
 	e.cMain(main)
 }
 
-// typedef emits a specialized struct as a C typedef with each field named
-// 'zg_<field>' and typed through its concrete type.
+// typedef emits a specialized nominal type: a struct as a plain C struct, or an
+// enum as a tagged union (an integer tag plus a union of the payload variants).
 func (e *emitter) typedef(ti *mono.TypeInstance) {
+	if ti.IsEnum {
+		e.enumTypedef(ti)
+		return
+	}
 	e.line("typedef struct {")
 	e.indent++
 	for _, f := range ti.Fields {
@@ -100,6 +110,48 @@ func (e *emitter) typedef(ti *mono.TypeInstance) {
 	e.indent--
 	e.line("} " + ti.Mangled + ";")
 	e.blank()
+}
+
+// enumTypedef emits a specialized enum as a tagged union: an 'int32_t tag' holding
+// the variant's zero-based discriminant, and, when any variant carries a payload, a
+// union 'u' of one anonymous struct per payload variant whose fields are 'f0, f1,
+// …'. A wholly fieldless enum emits the tag alone.
+func (e *emitter) enumTypedef(ti *mono.TypeInstance) {
+	e.line("typedef struct {")
+	e.indent++
+	e.line("int32_t tag;")
+	if enumHasPayload(ti) {
+		e.line("union {")
+		e.indent++
+		for _, v := range ti.Variants {
+			if len(v.Payload) == 0 {
+				continue
+			}
+			var b strings.Builder
+			b.WriteString("struct { ")
+			for i, pt := range v.Payload {
+				fmt.Fprintf(&b, "%s f%d; ", e.ctype(pt), i)
+			}
+			b.WriteString("} " + v.Name + ";")
+			e.line(b.String())
+		}
+		e.indent--
+		e.line("} u;")
+	}
+	e.indent--
+	e.line("} " + ti.Mangled + ";")
+	e.blank()
+}
+
+// enumHasPayload reports whether any variant of an enum instance carries a payload,
+// so a wholly fieldless enum omits the (empty, and in C ill-formed) union.
+func enumHasPayload(ti *mono.TypeInstance) bool {
+	for _, v := range ti.Variants {
+		if len(v.Payload) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // paramList renders a C parameter list ("void" when empty), formatting each of
@@ -121,11 +173,22 @@ func paramList(n int, render func(i int) string) string {
 // prototype renders a forward declaration with parameter types only, using the
 // instance's mangled C name and its concrete (specialized) signature.
 func (e *emitter) prototype(inst *mono.Instance) string {
+	if inst.Dyn || inst.RecvErased {
+		return e.erasedSignature(inst, false)
+	}
 	params := paramList(len(inst.Params), func(i int) string { return e.paramType(inst.Params[i]) })
 	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
 }
 
 func (e *emitter) function(inst *mono.Instance) {
+	if inst.Dyn {
+		e.dynFunction(inst)
+		return
+	}
+	if inst.RecvErased {
+		e.methodFunction(inst)
+		return
+	}
 	fn := inst.Origin
 	e.cur = inst
 	e.used = map[string]bool{}
@@ -316,6 +379,9 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.NilLit:
 		return "0"
 	case *ast.Ident:
+		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
+			return e.constructVariant(n, nil, sym.Variant.Name)
+		}
 		return e.resolve(n.Name)
 	case *ast.Unary:
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
@@ -358,7 +424,7 @@ func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
 	subj := e.expr(m.Subject)
 	subjT := e.cur.ExprType(e.info, m.Subject)
 	n := len(m.Arms)
-	result := e.armValue(m.Arms[n-1], subj)
+	result := e.armValue(m.Arms[n-1], subj, subjT)
 	for i := n - 2; i >= 0; i-- {
 		test, body := e.armTestAndValue(m.Arms[i], subj, subjT)
 		result = fmt.Sprintf("(%s ? %s : %s)", test, body, result)
@@ -366,27 +432,18 @@ func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
 	return result
 }
 
-// armValue emits an arm's body, binding a NamePattern's name to the subject.
-func (e *emitter) armValue(arm ast.MatchArm, subj string) string {
-	if bp, ok := arm.Pat.(*ast.NamePattern); ok {
-		e.pushScope()
-		e.scopes[len(e.scopes)-1][bp.Name] = subj
-		v := e.expr(arm.Body)
-		e.popScope()
-		return v
-	}
-	return e.expr(arm.Body)
+// armValue emits an arm's body with the pattern's names bound to the subject.
+func (e *emitter) armValue(arm ast.MatchArm, subj string, subjT sema.Type) string {
+	pop := e.bindArm(arm.Pat, subj)
+	v := e.expr(arm.Body)
+	pop()
+	return v
 }
 
-// armTestAndValue emits an arm's match test and body. A NamePattern's name is in
+// armTestAndValue emits an arm's match test and body, with the pattern's names in
 // scope for both the guard and the body.
 func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type) (test, body string) {
-	pop := func() {}
-	if bp, ok := arm.Pat.(*ast.NamePattern); ok {
-		e.pushScope()
-		e.scopes[len(e.scopes)-1][bp.Name] = subj
-		pop = e.popScope
-	}
+	pop := e.bindArm(arm.Pat, subj)
 	test = e.patternTest(arm.Pat, subj, subjT)
 	if arm.Guard != nil {
 		g := e.expr(arm.Guard)
@@ -404,28 +461,83 @@ func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type
 	return test, body
 }
 
+// bindArm opens a scope and binds an arm pattern's names to the subject: a
+// binding NamePattern binds the whole subject, and a variant pattern binds each
+// payload name to its union field 'subj.u.<Variant>.f<i>'. It returns the scope's
+// pop, to be deferred after the body is emitted.
+func (e *emitter) bindArm(pat ast.Pattern, subj string) func() {
+	e.pushScope()
+	scope := e.scopes[len(e.scopes)-1]
+	switch p := pat.(type) {
+	case *ast.NamePattern:
+		if res, ok := e.info.Patterns[p]; !ok || res.Kind != sema.NameVariant {
+			scope[p.Name] = subj
+		}
+	case *ast.VariantPattern:
+		for i, el := range p.Elems {
+			if np, ok := el.(*ast.NamePattern); ok {
+				scope[np.Name] = fmt.Sprintf("%s.u.%s.f%d", subj, p.Name, i)
+			}
+		}
+	}
+	return e.popScope
+}
+
 // patternTest renders the boolean C test for a pattern, or "" when the pattern
-// matches unconditionally (wildcard or binding).
+// matches unconditionally (wildcard or a bare binding). A literal compares by value
+// (or strcmp for a string); a variant pattern — spelled 'V(...)' or a nullary 'V'
+// name — compares the subject's tag.
 func (e *emitter) patternTest(pat ast.Pattern, subj string, subjT sema.Type) string {
-	lp, ok := pat.(*ast.LitPattern)
-	if !ok {
-		return ""
+	switch p := pat.(type) {
+	case *ast.LitPattern:
+		lit := e.expr(p.Lit)
+		if p.Neg {
+			lit = "(-" + lit + ")"
+		}
+		if subjT == sema.Str {
+			return fmt.Sprintf("(strcmp(%s, %s) == 0)", subj, lit)
+		}
+		return fmt.Sprintf("(%s == %s)", subj, lit)
+	case *ast.VariantPattern:
+		return fmt.Sprintf("(%s.tag == %d)", subj, e.variantTag(subjT, p.Name))
+	case *ast.NamePattern:
+		if res, ok := e.info.Patterns[p]; ok && res.Kind == sema.NameVariant {
+			return fmt.Sprintf("(%s.tag == %d)", subj, e.variantTag(subjT, p.Name))
+		}
 	}
-	lit := e.expr(lp.Lit)
-	if lp.Neg {
-		lit = "(-" + lit + ")"
+	return ""
+}
+
+// variantTag returns the discriminant of a named variant of an enum subject, read
+// from the specialized enum instance (0 when the type or variant is not found, a
+// case a checked program does not reach).
+func (e *emitter) variantTag(subjT sema.Type, name string) int {
+	if ti := e.prog.EnumInstance(subjT); ti != nil {
+		if v, ok := ti.Variant(name); ok {
+			return v.Tag
+		}
 	}
-	if subjT == sema.Str {
-		return fmt.Sprintf("(strcmp(%s, %s) == 0)", subj, lit)
-	}
-	return fmt.Sprintf("(%s == %s)", subj, lit)
+	return 0
 }
 
 func (e *emitter) call(n *ast.Call) string {
+	if site, ok := e.cur.DynSites[n]; ok {
+		return e.dynCallSite(n, site)
+	}
+	if e.cur.Dyn {
+		if s := e.dynDispatch(n); s != "" {
+			return s
+		}
+	}
 	id, _ := n.Callee.(*ast.Ident)
 	if id != nil {
-		if sym, ok := e.info.Refs[id]; ok && sym.Kind == sema.SymType {
-			return e.construct(n)
+		if sym, ok := e.info.Refs[id]; ok {
+			switch sym.Kind {
+			case sema.SymType:
+				return e.construct(n)
+			case sema.SymVariant:
+				return e.constructVariant(n, n.Args, sym.Variant.Name)
+			}
 		}
 	}
 	var args strings.Builder
@@ -453,6 +565,36 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 func (e *emitter) construct(n *ast.Call) string {
 	name := e.ctype(e.cur.ExprType(e.info, n))
 	return "((" + name + "){" + e.constructArgs(n.Args) + "})"
+}
+
+// constructVariant lowers an enum variant used as a value — a payload
+// construction 'V(a, b)' or a bare nullary value 'V' — to a C compound literal of
+// the specialized tagged union: the variant's tag, and, for a payload variant, its
+// arguments in the union member 'u.<V>' as fields 'f0, f1, …'. node is the
+// construction expression (used to read its concrete enum type).
+func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) string {
+	t := e.cur.ExprType(e.info, node)
+	cname := e.ctype(t)
+	tag := 0
+	if ti := e.prog.EnumInstance(t); ti != nil {
+		if v, ok := ti.Variant(name); ok {
+			tag = v.Tag
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "((%s){.tag = %d", cname, tag)
+	if len(args) > 0 {
+		fmt.Fprintf(&b, ", .u.%s = {", name)
+		for i, a := range args {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, ".f%d = %s", i, e.expr(a.Value))
+		}
+		b.WriteString("}")
+	}
+	b.WriteString("})")
+	return b.String()
 }
 
 // constructArgs renders a construction's positional argument values in order.

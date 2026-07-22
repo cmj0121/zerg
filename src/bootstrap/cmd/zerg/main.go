@@ -6,11 +6,15 @@
 //     against the source, emits C, and links it with a C compiler.
 //   - 'zerg fmt' parses a source file and reprints it in canonical form (see
 //     internal/fmt), to stdout by default or rewriting the file with --write.
+//   - 'zerg lint' runs the front-end over a program and reports lint-only findings
+//     (unused imports, unused module-private declarations) the compiler itself does
+//     not; it exits non-zero when the program has compile errors or lint findings.
 //
 // Usage:
 //
 //	zerg build [flags] <file.zg>
 //	zerg fmt [--write] <file.zg>
+//	zerg lint <file.zg>
 //
 // See --help for the flags (output path, --emit stage, --cc, verbosity).
 package main
@@ -29,6 +33,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/emit"
 	zfmt "github.com/cmj0121/zerg/src/bootstrap/internal/fmt"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/lexer"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/lint"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/parser"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	runtime "github.com/cmj0121/zerg/src/runtime"
@@ -38,6 +43,7 @@ import (
 type CLI struct {
 	Build   BuildCmd `cmd:"" name:"build" help:"Compile a Zerg source file to a binary."`
 	Fmt     FmtCmd   `cmd:"" name:"fmt" help:"Format a Zerg source file to canonical form."`
+	Lint    LintCmd  `cmd:"" name:"lint" help:"Report unused imports and unused module-private declarations."`
 	Verbose int      `short:"v" type:"counter" help:"increase log verbosity (-v info, -vv debug)"`
 }
 
@@ -56,6 +62,11 @@ type FmtCmd struct {
 	Write bool   `short:"w" name:"write" help:"rewrite the file in place instead of printing to stdout"`
 }
 
+// LintCmd lints one program rooted at an entry file.
+type LintCmd struct {
+	File string `arg:"" name:"file" help:"the Zerg entry file to lint" type:"existingfile"`
+}
+
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
@@ -69,6 +80,8 @@ func main() {
 		os.Exit(runBuild(&cli.Build))
 	case "fmt <file>":
 		os.Exit(runFmt(&cli.Fmt))
+	case "lint <file>":
+		os.Exit(runLint(&cli.Lint))
 	default:
 		ctx.Fatalf("unknown command %q", ctx.Command())
 	}
@@ -249,6 +262,39 @@ func runFmt(cmd *FmtCmd) int {
 	}
 	log.Info().Str("file", cmd.File).Msg("formatted")
 	return 0
+}
+
+// runLint runs the front-end over the entry program, then the lint-only checks on
+// the entry file, and returns the process exit code. It exits non-zero when the
+// program fails to compile (front-end diagnostics) or when any lint finding is
+// reported, so `zerg lint` fits a CI gate; a clean program exits zero.
+func runLint(cmd *LintCmd) int {
+	// 1. Run the shared front-end (module resolution + resolve + type check). A
+	// program that does not compile is reported as errors, not linted further.
+	if diags := build.CheckProgram(cmd.File); len(diags) > 0 {
+		reportDiags(cmd.File, diags)
+		return 1
+	}
+
+	// 2. Lint the entry file itself (a fresh parse, so the whole-program flatten does
+	// not fold imported modules' items into the scan).
+	src, err := os.ReadFile(cmd.File)
+	if err != nil {
+		log.Error().Err(err).Msg("cannot read source")
+		return 1
+	}
+	file, diags := parser.Parse(string(src))
+	if len(diags) > 0 {
+		reportDiags(cmd.File, diags)
+		return 1
+	}
+	findings := lint.Check(file)
+	if len(findings) == 0 {
+		log.Debug().Msg("no lint findings")
+		return 0
+	}
+	reportDiags(cmd.File, findings)
+	return 1
 }
 
 // reportDiags prints each diagnostic as 'file:line:col: message' to stderr.

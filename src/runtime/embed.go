@@ -31,7 +31,7 @@ const csrcDir = "csrc"
 // program's link line — and its binary — is unchanged.
 //
 //go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/unwind.c csrc/entry.c csrc/sys.c
-//go:embed csrc/sched.c csrc/ctx_arm64.S csrc/ctx_x86_64.S csrc/ctx_ucontext.c
+//go:embed csrc/sched.c csrc/chan.c csrc/ctx_arm64.S csrc/ctx_x86_64.S csrc/ctx_ucontext.c
 var Files embed.FS
 
 // coreCUnits are the Phase 1d core C translation units, always linked when the
@@ -72,9 +72,10 @@ func Materialize(dir string) (cfiles []string, err error) {
 func HostArch() string { return goruntime.GOARCH }
 
 // ConcurrencyCUnits returns the extra translation units to compile for a program
-// that uses concurrency: the scheduler plus the context switch selected by arch
-// (a hand-written .S for arm64/amd64, else the portable ucontext floor). The files
-// were already written by Materialize; dir must be the same directory.
+// that uses concurrency: the scheduler and the channels, plus the context switch
+// selected by arch (a hand-written .S for arm64/amd64, else the portable ucontext
+// floor). The files were already written by Materialize; dir must be the same
+// directory.
 func ConcurrencyCUnits(dir, arch string) []string {
 	ctx := "ctx_ucontext.c"
 	switch arch {
@@ -83,5 +84,5 @@ func ConcurrencyCUnits(dir, arch string) []string {
 	case "amd64":
 		ctx = "ctx_x86_64.S"
 	}
-	return []string{filepath.Join(dir, "sched.c"), filepath.Join(dir, ctx)}
+	return []string{filepath.Join(dir, "sched.c"), filepath.Join(dir, "chan.c"), filepath.Join(dir, ctx)}
 }

@@ -41,6 +41,11 @@ static zrt_coro *g_runq_tail;
  * aborting main (whose thunk never records success) exits non-zero, as zrt_run. */
 static int g_exit_code;
 
+/* the number of live (not-yet-reclaimed) coroutines. When the run queue drains while
+ * this is non-zero, every remaining coroutine is parked on a channel with nothing left
+ * to wake it — a deadlock (§1.4). Zero means the program finished normally. */
+static size_t g_live;
+
 static void runq_push(zrt_coro *co) {
 	co->qnext = NULL;
 	if (g_runq_tail != NULL) {
@@ -127,6 +132,7 @@ void zrt_spawn(void (*thunk)(void *env), void *env) {
 	co->tls.handler = NULL;
 	co->qnext = NULL;
 	zrt_ctx_init(&co->ctx, co->stack, co->stack_size, coro_trampoline, co);
+	g_live++;
 	runq_push(co);
 }
 
@@ -139,12 +145,34 @@ void zrt_yield(void) {
 	zrt_ctx_swap(&co->ctx, &g_sched_ctx);
 }
 
+/* --- park / wake (channel blocking primitives, used by chan.c) --------------- */
+
+zrt_coro *zrt_sched_current(void) {
+	return g_current;
+}
+
+void zrt_sched_park(void) {
+	zrt_coro *co = g_current;
+	if (co == NULL) {
+		return; /* not inside a coroutine: cannot block */
+	}
+	co->state = ZRT_CORO_BLOCKED;
+	zrt_ctx_swap(&co->ctx, &g_sched_ctx);
+	/* resumed: a wake re-enqueued us and the scheduler swapped back in. */
+}
+
+void zrt_sched_wake(zrt_coro *co) {
+	co->state = ZRT_CORO_RUNNABLE;
+	runq_push(co);
+}
+
 /* --- the scheduler loop ------------------------------------------------------ */
 
 static void sched_init(void) {
 	g_runq_head = NULL;
 	g_runq_tail = NULL;
 	g_current = NULL;
+	g_live = 0;
 	g_exit_code = 1; /* pessimistic: main's thunk overwrites this on success */
 }
 
@@ -156,19 +184,31 @@ static void sched_run(void) {
 	for (;;) {
 		zrt_coro *co = runq_pop();
 		if (co == NULL) {
-			return; /* run queue drained: the program is finished */
+			if (g_live > 0) {
+				/* nothing runnable but coroutines remain: they are all parked on
+				 * channels with no sender/receiver left to wake them — a deadlock. */
+				zrt_report("all coroutines blocked (deadlock)");
+				exit(1);
+			}
+			return; /* run queue drained and no coroutine left: finished */
 		}
 		g_current = co;
 		zrt_tls_load(&co->tls);               /* make this coroutine's unwind state current */
-		zrt_ctx_swap(&g_sched_ctx, &co->ctx); /* run it until it yields or finishes */
+		zrt_ctx_swap(&g_sched_ctx, &co->ctx); /* run it until it yields, parks, or finishes */
 		zrt_tls_save(&co->tls);               /* snapshot its unwind state back */
 		g_current = NULL;
-		if (co->state == ZRT_CORO_DONE) {
+		switch (co->state) {
+		case ZRT_CORO_DONE:
 			zrt_tls_free(&co->tls);
 			munmap(co->stack, co->stack_size);
 			zrt_free(co);
-		} else {
-			runq_push(co); /* yielded: back on the queue */
+			g_live--;
+			break;
+		case ZRT_CORO_RUNNABLE:
+			runq_push(co); /* voluntarily yielded: back on the queue */
+			break;
+		case ZRT_CORO_BLOCKED:
+			break; /* parked on a channel wait queue; a wake re-enqueues it */
 		}
 	}
 }

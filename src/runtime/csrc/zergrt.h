@@ -255,4 +255,73 @@ int zrt_sched_main(zrt_main_fn fn);
 int zrt_sched_main_nil(void (*fn)(void));
 int zrt_sched_main_int(int64_t (*fn)(void));
 
+/* zrt_sched_current returns the running coroutine, or NULL when the scheduler loop
+ * itself is running (no coroutine is current). chan.c uses it to park the caller. */
+zrt_coro *zrt_sched_current(void);
+
+/* zrt_sched_park marks the current coroutine BLOCKED and returns control to the
+ * scheduler; it returns once a zrt_sched_wake puts the coroutine back on the run
+ * queue and the scheduler resumes it. A no-op outside a coroutine. It is the single
+ * blocking primitive the channel send/recv paths (C2) park on. */
+void zrt_sched_park(void);
+
+/* zrt_sched_wake marks a BLOCKED coroutine RUNNABLE and pushes it onto the run queue,
+ * so the scheduler resumes it. The channel send/recv/close paths call it to hand a
+ * parked counterparty back to the scheduler. */
+void zrt_sched_wake(zrt_coro *co);
+
+/* --- concurrency: channels (chan.c) -----------------------------------------
+ *
+ * A channel is a refcounted, coroutine-shared object with TWO independent counts
+ * (Fork-D, distinct from the 1d zrt_ref_hdr): `rc` is the holder count (the last
+ * holder frees the object), and `senders` is the count of send-capable handles
+ * (when it reaches zero the channel AUTO-CLOSES). A bidirectional or send-only
+ * handle bumps both counts; a receive-only handle bumps only rc. Closing merely
+ * flips a flag and wakes parked receivers — freeing is still governed by rc, so
+ * the object's lifetime (rc) and its channel semantics (senders/closed) are kept
+ * separate. The whole struct lives in chan.c; emitted C sees only `zrt_chan *`. */
+typedef struct zrt_chan zrt_chan;
+
+/* zrt_chan_new allocates a channel carrying elemsz-byte elements with capacity cap
+ * (0 = an unbuffered rendezvous). The new handle is bidirectional: rc = senders = 1. */
+zrt_chan *zrt_chan_new(size_t elemsz, size_t cap);
+
+/* zrt_chan_copy / zrt_chan_sender_copy copy a channel handle. A receive-only handle
+ * bumps rc only (copy); a bidirectional or send-only handle also bumps senders
+ * (sender_copy). Both return the same channel so a copy site is one expression. */
+zrt_chan *zrt_chan_copy(zrt_chan *ch);
+zrt_chan *zrt_chan_sender_copy(zrt_chan *ch);
+
+/* zrt_chan_release / zrt_chan_sender_release drop a channel handle. sender_release
+ * decrements senders first (auto-closing at zero, waking parked receivers); both then
+ * decrement rc and free the channel when the last holder leaves. `del ch` lowers to
+ * whichever matches the handle's direction. */
+void zrt_chan_release(zrt_chan *ch);
+void zrt_chan_sender_release(zrt_chan *ch);
+
+/* zrt_chan_send copies *val (elemsz bytes) into ch: it hands off directly to a waiting
+ * receiver, else buffers it when there is room, else PARKS the caller on the send queue
+ * until a receiver takes it. Sending on a closed channel aborts (a dead-letter is a
+ * program error). Send yields no value. */
+void zrt_chan_send(zrt_chan *ch, const void *val);
+
+/* zrt_chan_recv receives one element into *out. It returns 0 for a value (the Left of
+ * Result[T]) and 1 when the channel is closed and drained (the Right). When empty and
+ * open it PARKS the caller on the receive queue until a value arrives or the channel
+ * closes. On a Right result zrt_chan_err reports the reason (see below). */
+int zrt_chan_recv(zrt_chan *ch, void *out);
+
+/* zrt_chan_err reports why a recv returned 1 (Right): NULL is the ordinary close
+ * (StopIteration), a non-NULL string is the message of a sender coroutine that crashed
+ * (Fork-C: an unhandled coroutine abort closes the channels it sends on with a crash
+ * Err). Valid immediately after a zrt_chan_recv that returned 1. */
+const char *zrt_chan_err(zrt_chan *ch);
+
+/* zrt_crash_active reports whether the abort currently unwinding is an unhandled
+ * coroutine crash (unwind.c sets it while running the crashing coroutine's cleanup
+ * stack). zrt_chan_sender_release reads it so a channel auto-closed by a crashing last
+ * sender carries a crash Err rather than the ordinary StopIteration. Always false on a
+ * normal path. */
+bool zrt_crash_active(void);
+
 #endif /* ZERGRT_H */

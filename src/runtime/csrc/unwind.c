@@ -26,6 +26,17 @@
  * state; under the scheduler it is whichever coroutine is currently running. */
 static zrt_tls g_tls;
 
+/* g_crashing is true only while zrt_abort unwinds an UNHANDLED coroutine crash (its
+ * target handler is the coroutine's outermost one). chan.c reads it through
+ * zrt_crash_active as the crash unwind runs the coroutine's sender releases, so a
+ * channel auto-closed by a crashing last sender carries a crash Err (Fork-C). It is
+ * self-scoped: each zrt_abort sets it for the duration of that unwind and clears it. */
+static bool g_crashing;
+
+bool zrt_crash_active(void) {
+	return g_crashing;
+}
+
 void zrt_tls_save(zrt_tls *out) {
 	*out = g_tls;
 }
@@ -80,9 +91,16 @@ void zrt_handler_pop(zrt_frame *frame) {
 
 _Noreturn void zrt_abort(const char *msg) {
 	zrt_report(msg);
-	if (g_tls.handler != NULL) {
-		zrt_unwind_to(g_tls.handler->mark);
-		longjmp(g_tls.handler->buf, 1);
+	zrt_frame *h = g_tls.handler;
+	if (h != NULL) {
+		/* An unhandled coroutine crash unwinds to the coroutine's outermost handler
+		 * (the trampoline's, whose prev is NULL); mark it so the sender releases run
+		 * during this unwind close their channels with a crash Err. A handled abort
+		 * (an inner user handler, prev != NULL) is not a crash and leaves the flag off. */
+		g_crashing = (h->prev == NULL);
+		zrt_unwind_to(h->mark);
+		g_crashing = false;
+		longjmp(h->buf, 1);
 	}
 	/* no handler installed (e.g. abort before program entry): last resort. Under the
 	 * scheduler every coroutine installs a bottom handler in its trampoline, so a

@@ -86,6 +86,34 @@ typedef struct zrt_frame {
 	struct zrt_frame *prev;
 } zrt_frame;
 
+/* zrt_tls is the whole of the abort/unwind machinery's mutable state gathered into
+ * one switchable bundle: the cleanup(defer) stack and the innermost abort handler.
+ * A single-threaded program (Phase 1d) keeps one process-global zrt_tls and the
+ * behaviour is exactly as before. The 1e scheduler gives every coroutine its own
+ * zrt_tls and swaps the "current" bundle around each context switch (zrt_tls_save /
+ * zrt_tls_load), so a coroutine's defers/drops and its abort handler act on its own
+ * stack. Moving this state does NOT change any emitted C: the cleanup-stack API
+ * (zrt_scope_mark / zrt_defer / zrt_unwind_to / zrt_handler_push / …) is unchanged;
+ * only where it reads its state from moved. */
+typedef struct {
+	zrt_cleanup *stack; /* the cleanup(defer) stack (was the file-static g_stack) */
+	size_t       len;   /* its live height (was g_len) */
+	size_t       cap;   /* its allocated capacity (was g_cap) */
+	zrt_frame   *handler; /* the innermost abort handler (was g_handler) */
+} zrt_tls;
+
+/* zrt_tls_save snapshots the current unwind state into out; zrt_tls_load makes in
+ * the current unwind state. The scheduler brackets each zrt_ctx_swap with these so
+ * the cleanup stack and handler chain follow the running coroutine. Non-concurrent
+ * programs never call them. */
+void zrt_tls_save(zrt_tls *out);
+void zrt_tls_load(const zrt_tls *in);
+
+/* zrt_tls_free releases a coroutine-owned cleanup stack's backing buffer (grown by
+ * zrt_defer) when the coroutine is reclaimed, so a finished coroutine leaks nothing.
+ * The process-global (main) zrt_tls is never freed. */
+void zrt_tls_free(zrt_tls *t);
+
 /* zrt_scope_mark records the current cleanup-stack height, to unwind back to on
  * scope exit. */
 size_t zrt_scope_mark(void);
@@ -149,5 +177,82 @@ typedef zrt_result_nil (*zrt_main_fn)(void);
  * unwinds top-level defers, and maps the outcome to a process exit code (0 Ok,
  * 1 Err or abort). Value-only programs do not use this shim. */
 int zrt_run(zrt_main_fn fn);
+
+/* --- concurrency: coroutine scheduler + spawn (sched.c, ctx_<arch>) ----------
+ *
+ * Everything below is linked ONLY when a program's Manifest reports Concurrency
+ * (it uses `spawn` / a channel). A program without concurrency neither links
+ * sched.c nor the per-arch context switch, so these declarations are unused and
+ * its emitted C is byte-identical to the non-concurrent path. The scheduler is
+ * N:1 cooperative: one OS thread, a FIFO run queue of stackful coroutines, and a
+ * context switch hidden behind the zrt_ctx shim (ctx_arm64.S / ctx_x86_64.S, or
+ * ctx_ucontext.c as a portable floor). */
+
+/* zrt_ctx is an opaque saved machine context: the callee-saved registers, the
+ * stack pointer, and the resume point. Its storage must be large enough for every
+ * backend; the arm64 layout uses the first 21 slots (x19-x30, sp, d8-d15). The
+ * per-arch .S files know these offsets — do not reorder without updating them. */
+typedef struct zrt_ctx {
+	void *slots[24];
+} zrt_ctx;
+
+/* zrt_ctx_init prepares c so that the first zrt_ctx_swap into it begins executing
+ * entry(arg) on the stack [stack_base, stack_base+size). The stack grows down from
+ * the high end; the caller places a guard page at the low end. */
+void zrt_ctx_init(zrt_ctx *c, void *stack_base, size_t size, void (*entry)(void *), void *arg);
+
+/* zrt_ctx_swap saves the current execution point into *from and resumes the one
+ * saved in *to; when control later returns to *from it continues as if this call
+ * returned. It saves only callee-saved state (no signal mask), so it is cheap. */
+void zrt_ctx_swap(zrt_ctx *from, zrt_ctx *to);
+
+/* zrt_coro_state is a coroutine's scheduling state. RUNNABLE sits on the run queue;
+ * BLOCKED is parked on a channel wait queue (1e channels, C2); DONE has finished its
+ * thunk and awaits reclamation by the scheduler. */
+typedef enum {
+	ZRT_CORO_RUNNABLE,
+	ZRT_CORO_BLOCKED,
+	ZRT_CORO_DONE,
+} zrt_coro_state;
+
+/* zrt_coro is one stackful coroutine: its saved context, its own fixed stack (with a
+ * guard page), its scheduling state, the thunk+env `spawn` marshalled, and its
+ * private unwind state (its cleanup stack + abort handler chain). qnext threads it on
+ * the run queue. */
+typedef struct zrt_coro {
+	zrt_ctx          ctx;
+	void            *stack;      /* mmap base (guard page + usable stack) */
+	size_t           stack_size; /* total mapped size, incl. the guard page */
+	zrt_coro_state   state;
+	void           (*thunk)(void *env); /* the marshalled call (spawn trampoline body) */
+	void            *env;               /* heap-owned argument environment; thunk frees it */
+	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
+	struct zrt_coro *qnext;             /* intrusive run-queue link */
+} zrt_coro;
+
+/* ZRT_CORO_STACK is the fixed per-coroutine stack size (Fork-B: fixed size + guard
+ * page, not growable). Kept in one place so a later phase can retune it or move to a
+ * growable stack without the backend re-emitting anything. */
+#define ZRT_CORO_STACK ((size_t)(256 * 1024))
+
+/* zrt_spawn allocates a coroutine (stack + guard page), arms it to run thunk(env) on
+ * its own stack, and enqueues it on the run queue. Fire-and-forget: no handle, no
+ * join. env is heap-owned and the thunk frees it. */
+void zrt_spawn(void (*thunk)(void *env), void *env);
+
+/* zrt_yield voluntarily returns to the scheduler, leaving the current coroutine
+ * RUNNABLE so it resumes later. The only cooperative yield point this iteration
+ * (channel send/recv add more in C2). A no-op when not inside a coroutine. */
+void zrt_yield(void);
+
+/* zrt_sched_main / _nil / _int are the concurrency program-entry shims, one per
+ * `main` return shape. Each starts the scheduler, runs main as the first coroutine,
+ * drains the run queue (so fire-and-forget coroutines get to run — they are never
+ * joined but are not killed), and returns main's outcome as the process exit code
+ * (an aborting main yields 1, as zrt_run does). The backend selects one by main's
+ * type when the Manifest reports Concurrency. */
+int zrt_sched_main(zrt_main_fn fn);
+int zrt_sched_main_nil(void (*fn)(void));
+int zrt_sched_main_int(int64_t (*fn)(void));
 
 #endif /* ZERGRT_H */

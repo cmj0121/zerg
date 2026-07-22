@@ -87,10 +87,10 @@ func TestBracketResolution(t *testing.T) {
 // binding.
 func TestNamePatternResolution(t *testing.T) {
 	t.Run("known variant is a variant pattern", func(t *testing.T) {
-		// 'Red' is the last (catch-all) arm so the Phase 0 checker stays happy; the
-		// resolver settles it as a variant because it names an enum variant in scope.
+		// a trailing '_' keeps the match exhaustive; the resolver settles 'Red' as a
+		// variant because it names an enum variant in scope.
 		info, msgs := checkInfo(t, "enum Color {\n  Red\n  Green\n  Blue\n}\n"+
-			"fn f(n: int) -> int {\n  return match n {\n    0 => 1\n    Red => 0\n  }\n}")
+			"fn f(n: int) -> int {\n  return match n {\n    0 => 1\n    Red => 0\n    _ => 2\n  }\n}")
 		if len(msgs) != 0 {
 			t.Fatalf("unexpected diags: %v", msgs)
 		}

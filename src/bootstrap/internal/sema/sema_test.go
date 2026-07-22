@@ -99,7 +99,7 @@ func TestMatchOK(t *testing.T) {
 
 func TestMatchExhaustive(t *testing.T) {
 	wantErr(t, "fn f(n: int) -> int {\n  return match n {\n    0 => 1\n    1 => 2\n  }\n}",
-		"exhaustiveness")
+		"non-exhaustive")
 }
 
 func TestMatchArmTypesMustAgree(t *testing.T) {
@@ -112,9 +112,10 @@ func TestMatchGuardMustBeBool(t *testing.T) {
 		"condition must be bool")
 }
 
-func TestMatchSubjectMustBeSimple(t *testing.T) {
-	wantErr(t, "fn g() -> int { return 5 }\nfn f() -> int {\n  return match g() {\n    _ => 1\n  }\n}",
-		"name or literal")
+// TestMatchSubjectAnyExpr: the semantic core lifts the Phase-0 "name or literal"
+// subject restriction — any expression may be a match subject (DESIGN-1b §5).
+func TestMatchSubjectAnyExpr(t *testing.T) {
+	wantOK(t, "fn g() -> int { return 5 }\nfn f() -> int {\n  return match g() {\n    _ => 1\n  }\n}")
 }
 
 func TestReturnMismatch(t *testing.T) {

@@ -1,13 +1,16 @@
-// Package sema is the Phase 0 semantic checker. It resolves names, infers and
-// checks types over the small type universe (int, float, bool, str, nil), and
-// enforces the rules the roadmap's Phase 0 subset needs: conditions are bool,
-// reassignment targets an existing mutable binding, calls match their signature,
-// and returns match the function's result type.
+// Package sema is the Zerg semantic core. It runs a name-resolution pass (the
+// scope tree, the module surface, and the 'const' shadow rule; see resolve.go and
+// symbols.go) and then a bidirectional type checker (check.go / infer.go): two
+// entry points, synth (the ':=' direction) and check (context-typing against an
+// expected type), type every expression over the shared type IR (internal/types).
 //
 // It produces an Info the emitter consumes: the type of every expression, the
-// resolved type of every binding, and the collected function signatures. Numeric
-// literals are untyped and adopt a float context (e.g. 'x: float = 1'); no other
-// implicit numeric conversion happens.
+// resolved type of every binding, the collected function signatures, and the
+// Phase 1b resolution side tables (Refs / Brackets / Patterns). An integer literal
+// defaults to int and a fractional one to float, but a context type retypes it
+// (e.g. 'x: u8 = 5', 'x: float = 1'); there is no other implicit numeric
+// conversion. Unknown and Invalid types are compatible with anything so an
+// unresolved value or a prior error does not cascade.
 package sema
 
 import (
@@ -36,19 +39,27 @@ var (
 	Str     Type = types.Str
 )
 
-// numeric reports whether t is a numeric primitive (Phase 0: int or float).
-func numeric(t Type) bool { return t == Int || t == Float }
+// printable reports whether 'print' accepts a value of type t (Phase 0: a scalar).
+func printable(t Type) bool { return isNumeric(t) || t == Bool || t == Str }
 
-// printable reports whether 'print' accepts a value of type t (Phase 0).
-func printable(t Type) bool { return numeric(t) || t == Bool || t == Str }
+// GenericEnv is a generic function's (or type's) parameter environment: each name
+// maps to the abstract type it denotes — a *types.Param for a type parameter or a
+// *types.ValParam for a value parameter '[N: int]' — in declaration order.
+type GenericEnv struct {
+	Params map[string]Type
+	Names  []string
+}
 
-// FuncSig is a resolved function signature.
+// FuncSig is a resolved function signature. Generic is non-nil when the function
+// has type or value parameters; Defaults[i] marks a parameter with a default.
 type FuncSig struct {
 	Name       string
 	ParamNames []string
 	Params     []Type
+	Defaults   []bool
 	Ret        Type // Nil when the function has no '-> type'
 	Decl       *ast.FuncDecl
+	Generic    *GenericEnv
 }
 
 // Info is the result of a successful check, consumed by the emitter. The Phase 0
@@ -73,7 +84,7 @@ type Info struct {
 //
 // It runs the name-resolution pass first (building the scope tree, enforcing the
 // module-surface and 'const' shadow rules, and settling the provisional nodes),
-// then the Phase 0 type checker; both write into the one Info and their
+// then the bidirectional type checker; both write into the one Info and their
 // diagnostics are concatenated.
 func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	info := &Info{
@@ -88,31 +99,87 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	r := &resolver{info: info}
 	r.resolveFile(file)
 
-	c := &checker{info: info}
+	c := &checker{info: info, module: r.module}
+	c.collectTypes(file)
 	c.collectFuncs(file)
 	c.checkFuncs(file)
 
 	return info, append(r.diags.Items(), c.diags.Items()...)
 }
 
+// symbol is one value binding in the checker's local type environment.
 type symbol struct {
 	typ     Type
 	mutable bool
 }
 
 type checker struct {
-	info      *Info
-	diags     diag.List
-	scopes    []map[string]*symbol
-	curFn     *FuncSig
-	loopDepth int
+	info       *Info
+	diags      diag.List
+	module     *Scope
+	scopes     []map[string]*symbol
+	curFn      *FuncSig
+	typeParams map[string]Type // generic parameters visible in the current body
+	curSelf    Type            // the 'This' type inside an impl body
+	loopDepth  int
 }
 
 func (c *checker) errorf(span token.Span, format string, args ...any) {
 	c.diags.Add(span, format, args...)
 }
 
-// --- pass 1: collect signatures ------------------------------------------------
+// --- pass 1a: collect user types ----------------------------------------------
+
+// collectTypes fills the field and payload types of every declared struct and
+// enum (the resolver created the empty TypeDefs during surface collection). It
+// runs before signatures so a function may mention a struct declared later.
+func (c *checker) collectTypes(file *ast.File) {
+	for _, d := range file.Items {
+		switch n := d.(type) {
+		case *ast.StructDecl:
+			c.fillStruct(n)
+		case *ast.EnumDecl:
+			c.fillEnum(n)
+		}
+	}
+}
+
+func (c *checker) fillStruct(n *ast.StructDecl) {
+	sym := c.module.local(n.Name)
+	if sym == nil || sym.TypeDef == nil || sym.TypeDef.Struct == nil {
+		return
+	}
+	saved := c.typeParams
+	c.typeParams = c.genericEnv(n.Generics).merged(saved)
+	for _, f := range n.Fields {
+		sym.TypeDef.Struct.Fields = append(sym.TypeDef.Struct.Fields, types.FieldDef{
+			Name: f.Name, Type: c.resolveType(f.Type), Pub: f.Pub, HasDefault: f.Default != nil,
+		})
+	}
+	c.typeParams = saved
+}
+
+func (c *checker) fillEnum(n *ast.EnumDecl) {
+	sym := c.module.local(n.Name)
+	if sym == nil || sym.TypeDef == nil || sym.TypeDef.Enum == nil {
+		return
+	}
+	saved := c.typeParams
+	c.typeParams = c.genericEnv(n.Generics).merged(saved)
+	for i, v := range n.Variants {
+		if i >= len(sym.TypeDef.Enum.Variants) {
+			break
+		}
+		vd := sym.TypeDef.Enum.Variants[i]
+		vd.Payload = vd.Payload[:0]
+		for _, p := range v.Payload {
+			vd.Payload = append(vd.Payload, c.resolveType(p))
+		}
+	}
+	c.typeParams = saved
+}
+
+// --- pass 1b: collect signatures ----------------------------------------------
 
 func (c *checker) collectFuncs(file *ast.File) {
 	for _, d := range file.Items {
@@ -124,65 +191,136 @@ func (c *checker) collectFuncs(file *ast.File) {
 			c.errorf(fn.Span(), "function %q is already declared", fn.Name)
 			continue
 		}
-		sig := &FuncSig{Name: fn.Name, Ret: Nil, Decl: fn}
-		for _, p := range fn.Params {
-			sig.ParamNames = append(sig.ParamNames, p.Name)
-			sig.Params = append(sig.Params, c.resolveType(p.Type))
-		}
-		if fn.Ret != nil {
-			sig.Ret = c.resolveType(fn.Ret)
-		}
-		c.info.Funcs[fn.Name] = sig
+		c.info.Funcs[fn.Name] = c.buildSig(fn)
 	}
 }
 
-func (c *checker) resolveType(t ast.Type) Type {
-	ref, ok := t.(*ast.TypeRef)
-	if !ok || len(ref.Args) != 0 || len(ref.Proj) != 0 {
-		// composite and generic types belong to later phases; this pass only
-		// resolves the Phase 0 built-in scalar names.
-		c.errorf(t.Span(), "unsupported type in this phase")
-		return Invalid
+// buildSig resolves a function's signature, with its generic parameters (if any)
+// in scope so their names resolve inside parameter and return types.
+func (c *checker) buildSig(fn *ast.FuncDecl) *FuncSig {
+	sig := &FuncSig{Name: fn.Name, Ret: Nil, Decl: fn}
+	sig.Generic = c.genericEnv(fn.Generics)
+	saved := c.typeParams
+	c.typeParams = sig.Generic.merged(saved)
+	for _, p := range fn.Params {
+		sig.ParamNames = append(sig.ParamNames, p.Name)
+		sig.Params = append(sig.Params, c.resolveType(p.Type))
+		sig.Defaults = append(sig.Defaults, p.Default != nil)
 	}
-	switch ref.Name {
-	case "int":
-		return Int
-	case "float":
-		return Float
-	case "bool":
-		return Bool
-	case "str":
-		return Str
-	case "nil":
-		return Nil
-	default:
-		c.errorf(ref.Span(), "unknown type %q", ref.Name)
-		return Invalid
+	if fn.Ret != nil {
+		sig.Ret = c.resolveType(fn.Ret)
 	}
+	c.typeParams = saved
+	return sig
 }
 
-// --- pass 2: check bodies ------------------------------------------------------
+// genericEnv builds the abstract parameter environment for a generic list. A
+// single concrete-type bound ('[N: int]') marks a value parameter; a bare or
+// spec-bounded parameter ('[T]', '[T: Ord]') is a type parameter (DESIGN-1b §3.4).
+func (c *checker) genericEnv(g *ast.Generics) *GenericEnv {
+	if g == nil || len(g.Params) == 0 {
+		return nil
+	}
+	env := &GenericEnv{Params: map[string]Type{}}
+	for _, tp := range g.Params {
+		if of, ok := c.valueParamType(tp.Bound); ok {
+			env.Params[tp.Name] = &types.ValParam{Name: tp.Name, Of: of}
+		} else {
+			env.Params[tp.Name] = &types.Param{Name: tp.Name}
+		}
+		env.Names = append(env.Names, tp.Name)
+	}
+	return env
+}
+
+// valueParamType reports whether a generic bound names a single concrete type
+// (making the parameter a value parameter) and returns that type.
+func (c *checker) valueParamType(b *ast.Bound) (Type, bool) {
+	if b == nil || len(b.Names) != 1 {
+		return nil, false
+	}
+	if p := primitiveNamed(b.Names[0]); p != nil {
+		return p, true
+	}
+	return nil, false
+}
+
+// merged returns this environment's parameters overlaid on an outer scope's, so a
+// nested generic sees both. A nil environment returns the outer map unchanged.
+func (e *GenericEnv) merged(outer map[string]Type) map[string]Type {
+	if e == nil {
+		return outer
+	}
+	out := make(map[string]Type, len(outer)+len(e.Params))
+	for k, v := range outer {
+		out[k] = v
+	}
+	for k, v := range e.Params {
+		out[k] = v
+	}
+	return out
+}
+
+// --- pass 2: check bodies -----------------------------------------------------
 
 func (c *checker) checkFuncs(file *ast.File) {
 	for _, d := range file.Items {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok {
-			continue
+		switch n := d.(type) {
+		case *ast.FuncDecl:
+			c.checkFunc(n, nil)
+		case *ast.ImplDecl:
+			c.checkImpl(n)
 		}
-		c.checkFunc(fn)
 	}
 }
 
-func (c *checker) checkFunc(fn *ast.FuncDecl) {
-	sig := c.info.Funcs[fn.Name]
-	c.curFn = sig
-	c.pushScope() // parameter scope; the body opens a nested scope so 'mut n := n' can shadow
-	for i, p := range fn.Params {
-		c.declare(p.Span(), p.Name, sig.Params[i], false)
+// checkImpl type-checks the method bodies of an inherent impl, binding 'this' to
+// the target type and 'This' to the same. Spec impls need program-wide coherence
+// (1c), so their bodies are not typed here.
+func (c *checker) checkImpl(n *ast.ImplDecl) {
+	if n.Spec != nil {
+		return
 	}
-	c.checkBlock(fn.Body)
+	target := c.resolveType(n.Target)
+	saved := c.curSelf
+	c.curSelf = target
+	for _, item := range n.Items {
+		if fn, ok := item.(*ast.FuncDecl); ok {
+			c.checkFunc(fn, target)
+		}
+	}
+	c.curSelf = saved
+}
+
+// checkFunc type-checks a function (or, when recv is non-nil, a method) body. A
+// method uses a locally built signature that is not registered globally, and
+// binds 'this' to its receiver type.
+func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
+	sig := c.info.Funcs[fn.Name]
+	if sig == nil || recv != nil {
+		sig = c.buildSig(fn)
+	}
+	savedFn, savedTP := c.curFn, c.typeParams
+	c.curFn = sig
+	c.typeParams = sig.Generic.merged(savedTP)
+
+	c.pushScope() // parameter scope; the body opens a nested scope so 'mut n := n' can shadow
+	if recv != nil {
+		c.declare(fn.Span(), "this", recv, fn.Mut)
+	}
+	for i, p := range fn.Params {
+		var pt Type = types.Unknown
+		if i < len(sig.Params) {
+			pt = sig.Params[i]
+		}
+		c.declare(p.Span(), p.Name, pt, false)
+	}
+	if fn.Body != nil {
+		c.checkBlock(fn.Body)
+	}
 	c.popScope()
-	c.curFn = nil
+
+	c.curFn, c.typeParams = savedFn, savedTP
 }
 
 func (c *checker) checkBlock(b *ast.Block) {
@@ -202,8 +340,8 @@ func (c *checker) checkStmt(s ast.Stmt) {
 	case *ast.Reassign:
 		c.checkAssign(n)
 	case *ast.PrintStmt:
-		t := c.checkExpr(n.Value)
-		if t != Invalid && !printable(t) {
+		t := c.synth(n.Value)
+		if !bad(t) && !printable(t) {
 			c.errorf(n.Span(), "cannot print a value of type %s", t)
 		}
 	case *ast.ReturnStmt:
@@ -232,70 +370,14 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		c.checkBlock(n.Body)
 		c.loopDepth--
 	case *ast.ExprStmt:
-		c.checkExpr(n.X)
+		c.synth(n.X)
 	}
 }
 
 func (c *checker) checkCond(e ast.Expr) {
-	if t := c.checkExpr(e); t != Invalid && t != Bool {
+	if t := c.synth(e); !bad(t) && t != Bool {
 		c.errorf(e.Span(), "condition must be bool, found %s", t)
 	}
-}
-
-func (c *checker) checkBind(b *ast.BindStmt) {
-	vt := c.checkExpr(b.Value)
-	var typ Type
-	if b.Type != nil {
-		declared := c.resolveType(b.Type)
-		typ = declared
-		if declared != Invalid && vt != Invalid && !c.assignable(declared, b.Value, vt) {
-			c.errorf(b.Span(), "cannot bind %s to a %s binding", vt, declared)
-		}
-	} else {
-		if vt == Nil {
-			c.errorf(b.Span(), "cannot infer a type from nil; use a type annotation")
-			typ = Invalid
-		} else {
-			typ = vt
-		}
-	}
-	c.info.BindTypes[b] = typ
-	c.declare(b.Span(), b.Name, typ, b.Mut)
-}
-
-func (c *checker) checkAssign(n *ast.Reassign) {
-	vt := c.checkExpr(n.Value)
-	name, ok := simpleTargetName(n.Target)
-	if !ok {
-		// tuple / struct / field / index targets are beyond the Phase 0 checker;
-		// the parser still records them so 'zerg fmt' round-trips.
-		return
-	}
-	sym := c.lookup(name)
-	if sym == nil {
-		c.errorf(n.Span(), "undefined name %q", name)
-		return
-	}
-	if !sym.mutable {
-		c.errorf(n.Span(), "cannot assign to immutable binding %q", name)
-	}
-	if sym.typ != Invalid && vt != Invalid && !c.assignable(sym.typ, n.Value, vt) {
-		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, name, sym.typ)
-	}
-}
-
-// simpleTargetName returns the bound name when a reassignment target is a bare
-// identifier lvalue — the only shape the Phase 0 checker and emitter handle.
-func simpleTargetName(t ast.AssignTarget) (string, bool) {
-	lv, ok := t.(*ast.LValueTarget)
-	if !ok {
-		return "", false
-	}
-	id, ok := lv.X.(*ast.Ident)
-	if !ok {
-		return "", false
-	}
-	return id.Name, true
 }
 
 func (c *checker) checkReturn(n *ast.ReturnStmt) {
@@ -312,198 +394,28 @@ func (c *checker) checkReturn(n *ast.ReturnStmt) {
 		}
 		return
 	}
-	vt := c.checkExpr(n.Value)
+	vt := c.check(n.Value, want)
 	if want == Nil {
 		c.errorf(n.Span(), "unexpected return value in a function returning nil")
 		return
 	}
-	if vt != Invalid && !c.assignable(want, n.Value, vt) {
+	if !bad(vt) && !bad(want) && !c.assignable(want, n.Value, vt) {
 		c.errorf(n.Span(), "cannot return %s from a function returning %s", vt, want)
 	}
 }
 
-// --- expressions --------------------------------------------------------------
-
-func (c *checker) checkExpr(e ast.Expr) Type {
-	t := c.inferExpr(e)
-	c.info.ExprTypes[e] = t
-	return t
-}
-
-func (c *checker) inferExpr(e ast.Expr) Type {
-	switch n := e.(type) {
-	case *ast.IntLit:
-		return Int
-	case *ast.FloatLit:
-		return Float
-	case *ast.BoolLit:
-		return Bool
-	case *ast.StrLit:
-		return Str
-	case *ast.NilLit:
-		return Nil
-	case *ast.Ident:
-		return c.inferIdent(n)
-	case *ast.Unary:
-		return c.inferUnary(n)
-	case *ast.Binary:
-		return c.inferBinary(n)
-	case *ast.Call:
-		return c.inferCall(n)
-	case *ast.MatchExpr:
-		return c.inferMatch(n)
-	default:
-		return Invalid
-	}
-}
-
-func (c *checker) inferIdent(n *ast.Ident) Type {
-	if sym := c.lookup(n.Name); sym != nil {
-		return sym.typ
-	}
-	if _, ok := c.info.Funcs[n.Name]; ok {
-		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
-		return Invalid
-	}
-	c.errorf(n.Span(), "undefined name %q", n.Name)
-	return Invalid
-}
-
-func (c *checker) inferUnary(n *ast.Unary) Type {
-	t := c.checkExpr(n.X)
-	if t == Invalid {
-		return Invalid
-	}
-	switch n.Op {
-	case token.Minus, token.MinusMod:
-		if !numeric(t) {
-			c.errorf(n.Span(), "operator %q requires a numeric operand, found %s", n.Op, t)
-			return Invalid
-		}
-		return t
-	case token.Not:
-		if t != Bool {
-			c.errorf(n.Span(), "operator 'not' requires a bool operand, found %s", t)
-			return Invalid
-		}
-		return Bool
-	case token.Tilde:
-		if t != Int {
-			c.errorf(n.Span(), "operator '~' requires an int operand, found %s", t)
-			return Invalid
-		}
-		return Int
-	}
-	return Invalid
-}
-
-func (c *checker) inferBinary(n *ast.Binary) Type {
-	lt := c.checkExpr(n.L)
-	rt := c.checkExpr(n.R)
-	if lt == Invalid || rt == Invalid {
-		return Invalid
-	}
-	switch {
-	case isArithOp(n.Op):
-		return c.numericResult(n, lt, rt)
-	case isBitOp(n.Op):
-		if lt != Int || rt != Int {
-			c.errorf(n.Span(), "operator %q requires int operands, found %s and %s", n.Op, lt, rt)
-			return Invalid
-		}
-		return Int
-	case isOrderOp(n.Op):
-		if c.numericResult(n, lt, rt) == Invalid {
-			return Invalid
-		}
-		return Bool
-	case isEqOp(n.Op):
-		if !c.comparable(n, lt, rt) {
-			c.errorf(n.Span(), "cannot compare %s and %s", lt, rt)
-			return Invalid
-		}
-		return Bool
-	case isLogicOp(n.Op):
-		if lt != Bool || rt != Bool {
-			c.errorf(n.Span(), "operator %q requires bool operands, found %s and %s", n.Op, lt, rt)
-			return Invalid
-		}
-		return Bool
-	}
-	return Invalid
-}
-
-// numericResult checks a numeric binary operation, coercing an untyped integer
-// literal to float against a float operand, and returns the result type.
-func (c *checker) numericResult(n *ast.Binary, lt, rt Type) Type {
-	if lt == rt && numeric(lt) {
-		return lt
-	}
-	if lt == Float && rt == Int && isIntLit(n.R) {
-		c.info.ExprTypes[n.R] = Float
-		return Float
-	}
-	if lt == Int && rt == Float && isIntLit(n.L) {
-		c.info.ExprTypes[n.L] = Float
-		return Float
-	}
-	c.errorf(n.Span(), "operator %q requires matching numeric operands, found %s and %s", n.Op, lt, rt)
-	return Invalid
-}
-
-func (c *checker) comparable(n *ast.Binary, lt, rt Type) bool {
-	if lt == rt {
-		return true
-	}
-	// allow comparing an untyped int literal against a float
-	if lt == Float && rt == Int && isIntLit(n.R) {
-		c.info.ExprTypes[n.R] = Float
-		return true
-	}
-	if lt == Int && rt == Float && isIntLit(n.L) {
-		c.info.ExprTypes[n.L] = Float
-		return true
-	}
-	return false
-}
-
-func (c *checker) inferCall(n *ast.Call) Type {
-	name, ok := n.Callee.(*ast.Ident)
-	if !ok {
-		c.errorf(n.Callee.Span(), "only named functions can be called in Phase 0")
-		return Invalid
-	}
-	sig, ok := c.info.Funcs[name.Name]
-	if !ok {
-		c.errorf(name.Span(), "undefined function %q", name.Name)
-		// still check arguments to surface nested errors
-		for _, a := range n.Args {
-			c.checkExpr(a.Value)
-		}
-		return Invalid
-	}
-	if len(n.Args) != len(sig.Params) {
-		c.errorf(n.Span(), "function %q expects %d argument(s), got %d", name.Name, len(sig.Params), len(n.Args))
-	}
-	for i, a := range n.Args {
-		at := c.checkExpr(a.Value)
-		if i < len(sig.Params) && at != Invalid && sig.Params[i] != Invalid &&
-			!c.assignable(sig.Params[i], a.Value, at) {
-			c.errorf(a.Value.Span(), "argument %d of %q: cannot use %s as %s", i+1, name.Name, at, sig.Params[i])
-		}
-	}
-	return sig.Ret
-}
+// --- match --------------------------------------------------------------------
 
 // inferMatch checks a match expression and returns its result type (the common
-// type of every arm's body).
+// type of every arm's body). Full exhaustiveness lands in a later iteration; this
+// keeps the Phase-0 rule: the last arm is an unguarded catch-all and no earlier
+// arm is.
 func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 	if !isSimpleSubject(n.Subject) {
 		c.errorf(n.Subject.Span(), "match subject must be a name or literal in Phase 0")
 	}
-	subjT := c.checkExpr(n.Subject)
-	if subjT != Invalid && !printable(subjT) {
-		// printable == comparable-by-value here (int/float/bool/str)
+	subjT := c.synth(n.Subject)
+	if !bad(subjT) && !printable(subjT) {
 		c.errorf(n.Subject.Span(), "cannot match on a value of type %s", subjT)
 	}
 	if len(n.Arms) == 0 {
@@ -511,8 +423,6 @@ func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 		return Invalid
 	}
 
-	// Exhaustiveness (Phase 0): the last arm is an unguarded catch-all, and no
-	// earlier arm is (which would make the rest unreachable).
 	last := n.Arms[len(n.Arms)-1]
 	if last.Guard != nil || !isCatchAll(last.Pat) {
 		c.errorf(n.Span(), "match must end with an unguarded '_' or binding arm (Phase 0 exhaustiveness)")
@@ -530,14 +440,17 @@ func (c *checker) inferMatch(n *ast.MatchExpr) Type {
 		if arm.Guard != nil {
 			c.checkCond(arm.Guard)
 		}
-		bt := c.checkExpr(arm.Body)
-		c.popScope()
-		switch {
-		case i == 0:
+		var bt Type
+		if i == 0 {
+			bt = c.synth(arm.Body)
 			result = bt
-		case bt != Invalid && result != Invalid && !c.assignable(result, arm.Body, bt):
-			c.errorf(arm.Body.Span(), "all match arms must yield the same type; found %s and %s", result, bt)
+		} else {
+			bt = c.check(arm.Body, result)
+			if !bad(bt) && !bad(result) && !c.assignable(result, arm.Body, bt) {
+				c.errorf(arm.Body.Span(), "all match arms must yield the same type; found %s and %s", result, bt)
+			}
 		}
+		c.popScope()
 	}
 	return result
 }
@@ -549,24 +462,23 @@ func (c *checker) checkPattern(pat ast.Pattern, subjT Type) {
 	case *ast.NamePattern:
 		c.declare(p.Span(), p.Name, subjT, false)
 	case *ast.LitPattern:
-		lt := c.checkExpr(p.Lit)
-		if p.Neg && !numeric(lt) {
+		lt := c.synth(p.Lit)
+		if p.Neg && !isNumeric(lt) {
 			c.errorf(p.Span(), "'-' pattern requires a number, found %s", lt)
 		}
-		if lt != Invalid && subjT != Invalid && !patternMatches(subjT, p.Lit, lt) {
+		if !bad(lt) && !bad(subjT) && !patternMatches(subjT, p.Lit, lt) {
 			c.errorf(p.Span(), "a %s literal cannot match a subject of type %s", lt, subjT)
 		}
 	}
 }
 
 // patternMatches reports whether a literal pattern of type lt can match a subject
-// of type subjT (allowing an untyped int literal against a float subject).
+// of type subjT (allowing an untyped int literal against a numeric subject).
 func patternMatches(subjT Type, lit ast.Expr, lt Type) bool {
-	if subjT == lt {
+	if types.Identical(subjT, lt) {
 		return true
 	}
-	_, isInt := lit.(*ast.IntLit)
-	return subjT == Float && lt == Int && isInt
+	return isNumeric(subjT) && lt == Int && isIntLit(lit)
 }
 
 func isSimpleSubject(e ast.Expr) bool {
@@ -580,19 +492,6 @@ func isSimpleSubject(e ast.Expr) bool {
 func isCatchAll(pat ast.Pattern) bool {
 	switch pat.(type) {
 	case *ast.WildPattern, *ast.NamePattern:
-		return true
-	}
-	return false
-}
-
-// assignable reports whether a value of type vt (produced by expr e) fits a
-// target of type want, allowing an untyped int literal to become a float.
-func (c *checker) assignable(want Type, e ast.Expr, vt Type) bool {
-	if want == vt {
-		return true
-	}
-	if want == Float && vt == Int && isIntLit(e) {
-		c.info.ExprTypes[e] = Float
 		return true
 	}
 	return false
@@ -651,5 +550,3 @@ func isOrderOp(k token.Kind) bool {
 func isEqOp(k token.Kind) bool { return k == token.EqEq || k == token.Ne }
 
 func isLogicOp(k token.Kind) bool { return k == token.And || k == token.Or }
-
-func isIntLit(e ast.Expr) bool { _, ok := e.(*ast.IntLit); return ok }

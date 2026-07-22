@@ -299,6 +299,12 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	if bad(lt) || bad(rt) {
 		return firstBad(lt, rt)
 	}
+	// A generic operand routes through its bound spec: 'a < b' on a type parameter
+	// resolves to Ord, '==' to Eq (U3, DESIGN-1c §3.3). Concrete operands keep their
+	// primitive semantics below.
+	if isTypeParam(lt) || isTypeParam(rt) {
+		return c.inferGenericOp(n, lt, rt)
+	}
 	switch {
 	case isArithOp(n.Op):
 		return c.numericResult(n, lt, rt)
@@ -622,6 +628,10 @@ func underlyingFn(t Type) (*types.Fn, bool) {
 
 // isIntLit reports whether e is an integer literal (used for literal defaulting).
 func isIntLit(e ast.Expr) bool { _, ok := e.(*ast.IntLit); return ok }
+
+// isTypeParam reports whether t is an abstract type parameter, the operand that
+// routes a binary operator through its bound spec (U3).
+func isTypeParam(t Type) bool { return t.Kind() == types.KParam }
 
 // findField returns a struct's field by name, or nil.
 func findField(def *types.TypeDef, name string) *types.FieldDef {

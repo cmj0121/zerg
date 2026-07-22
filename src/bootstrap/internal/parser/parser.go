@@ -218,6 +218,7 @@ func (p *parser) parseFile() *ast.File {
 		if s := p.tryTopStmt(); s != nil {
 			attach(s, lead, p.trailBehind())
 			file.Items = append(file.Items, s)
+			p.requireStmtSep()
 		} else if p.pos == before {
 			// A recovered error whose sync made no progress would spin forever;
 			// force one token of progress. The error was already diagnosed by the
@@ -243,27 +244,40 @@ func (p *parser) tryTopStmt() (s ast.Stmt) {
 	return p.parseTopStmt()
 }
 
-// parseTopStmt parses one item of the program's top-level stmt-list (GRAMMAR
-// group 1/10): an import, a module-level 'unsafe { … }' group, a module-level
-// binding (a top-level ':=' or 'const'), or a decorated declaration.
+// parseTopStmt parses one item of the program's top-level stmt-list. Zerg's top
+// level is a full statement list (GRAMMAR:36 'program ::= stmt-list') because the
+// language supports SCRIPT MODE, so any statement is legal here — not only the
+// module surface. This routes the items that need top-level-specific treatment
+// (imports, the 'unsafe { … }' declaration GROUP vs. the block-expression, and
+// decorated / visibility-prefixed declarations) and otherwise falls through to
+// parseStmt so a bare 'print'/'if'/'for'/expression/etc. parses at the top level.
+// (Script-vs-compile-mode semantics — top-level statements run in script mode,
+// are inert in compile mode — are a 1b concern; 1a only parses and round-trips.)
 func (p *parser) parseTopStmt() ast.Stmt {
-	switch p.cur().Kind {
-	case token.Import:
+	switch {
+	case p.at(token.Import):
 		return p.parseImport()
-	case token.Const:
-		t := p.advance()
-		return p.parseBinding(t.Span.Start, false, true)
-	case token.Unsafe:
-		if p.peek(1).Kind == token.LBrace {
-			return p.parseUnsafeGroup()
-		}
-	case token.Ident:
-		switch p.peek(1).Kind {
-		case token.Walrus, token.Colon:
-			return p.parseBinding(p.cur().Span.Start, false, false)
-		}
+	case p.at(token.Hash), p.at(token.Pub):
+		// '#[…]' or a 'pub' prefix can only introduce a declaration.
+		return p.parseDecl()
+	case p.at(token.Unsafe) && p.peek(1).Kind == token.LBrace:
+		// module-level 'unsafe { … }' is the declaration group, not a block-expr.
+		return p.parseUnsafeGroup()
+	case p.startsDecl():
+		// struct/enum/spec/impl/type/init/fn, possibly behind unsafe/mut modifiers.
+		return p.parseDecl()
 	}
-	return p.parseDecl()
+	return p.parseStmt()
+}
+
+// startsDecl reports whether the cursor begins a declaration (a decl keyword,
+// possibly behind pub/unsafe/mut modifiers), as opposed to an ordinary statement.
+func (p *parser) startsDecl() bool {
+	switch p.declHeadKind() {
+	case token.Struct, token.Enum, token.Spec, token.Impl, token.Type, token.Init, token.Fn:
+		return true
+	}
+	return false
 }
 
 // syncDecl advances to the start of the next declaration after an error.
@@ -376,6 +390,7 @@ func (p *parser) parseBlock() *ast.Block {
 		if s := p.tryStmt(); s != nil {
 			attach(s, lead, p.trailBehind())
 			b.Stmts = append(b.Stmts, s)
+			p.requireStmtSep()
 		} else if p.pos == before {
 			p.advance() // guarantee progress (see parseFile) so recovery cannot spin
 		}
@@ -407,6 +422,28 @@ func (p *parser) syncStmt() {
 	for !p.at(token.Semi) && !p.at(token.RBrace) && !p.at(token.EOF) {
 		p.advance()
 	}
+}
+
+// requireStmtSep enforces GRAMMAR:41 — statements in a stmt-list are separated by
+// stmt-sep+ (a newline, which the lexer turns into an ASI ';', or an explicit
+// ';'). After a statement the cursor must be at a ';', a closing '}', or EOF; any
+// other token means two statements share a line with no separator, so it reports
+// a span-anchored diagnostic. Inside an unclosed '('/'[' the lexer suppresses ASI
+// and the whole thing is one expression, so this is only ever reached between two
+// genuine statements. A leading '{' gets a targeted hint: Zerg has no struct
+// brace-literal, so 'x := T{a: 1}' is really 'x := T' followed by a stray map —
+// the value is built with a call, 'T(a: 1)'.
+func (p *parser) requireStmtSep() {
+	if p.at(token.Semi) || p.at(token.RBrace) || p.at(token.EOF) {
+		return
+	}
+	if p.at(token.LBrace) {
+		p.errorf(p.cur().Span, "expected a newline or ';' to separate statements; "+
+			"a struct value is written as a call like T(a: 1), not with braces")
+		return
+	}
+	p.errorf(p.cur().Span, "expected a newline or ';' to separate statements, found %s",
+		describe(p.cur().Kind))
 }
 
 func (p *parser) parseStmt() ast.Stmt {
@@ -828,11 +865,13 @@ func (p *parser) parseMatch() ast.Expr {
 	subject := p.headExpr()
 	p.expect(token.LBrace)
 	var arms []ast.MatchArm
+	sawArm := false // did the source have any arm at all (even a malformed one)?
 	for {
 		p.skipSemis()
 		if p.at(token.RBrace) || p.at(token.EOF) {
 			break
 		}
+		sawArm = true
 		lead := p.lead()
 		arm, ok := p.tryMatchArm()
 		if !ok {
@@ -845,8 +884,16 @@ func (p *parser) parseMatch() ast.Expr {
 		arm.SetTrail(p.trailBehind())
 		arms = append(arms, arm)
 	}
-	end := p.expect(token.RBrace).Span.End
-	return spanned(&ast.MatchExpr{Subject: subject, Arms: arms}, token.Span{Start: start, End: end})
+	rb := p.expect(token.RBrace)
+	if !sawArm {
+		// GRAMMAR:421 'match-body ::= match-arm+' — at least one arm is required.
+		// This is syntactic arity (not 1b exhaustiveness); anchor it at the match.
+		// Only reported when the braces were genuinely empty: a malformed arm that
+		// was diagnosed and skipped already carries its own error, so this must not
+		// pile a second diagnostic on top of it.
+		p.errorf(token.Span{Start: start, End: rb.Span.End}, "a match needs at least one arm")
+	}
+	return spanned(&ast.MatchExpr{Subject: subject, Arms: arms}, token.Span{Start: start, End: rb.Span.End})
 }
 
 // tryMatchArm parses one match arm, recovering within the match's braces on a

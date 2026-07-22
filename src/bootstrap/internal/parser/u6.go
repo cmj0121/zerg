@@ -34,7 +34,22 @@ func (p *parser) parseIfChain() ([]ast.IfBranch, *ast.Block, token.Pos) {
 	branches := []ast.IfBranch{p.parseIfBranch()}
 	end := branches[0].Body.Span().End
 	var elseBlock *ast.Block
-	for p.accept(token.Else) {
+	for {
+		if !p.at(token.Else) {
+			// W4: 'else' must sit on the same line as the preceding branch's '}'
+			// (Go-style). A newline before it inserts an ASI ';'; tolerate that
+			// with one dedicated diagnostic and still attach the 'else', so the
+			// isolated keyword does not cascade into 'expected an expression' at
+			// the 'else' plus 'expected a declaration' at the stray '}'.
+			if p.at(token.Semi) && p.elseAfterSemis() {
+				p.skipSemis()
+				p.errorf(p.cur().Span,
+					"'else' must be on the same line as the closing '}' of the preceding branch")
+			} else {
+				break
+			}
+		}
+		p.advance() // 'else'
 		if p.accept(token.If) {
 			br := p.parseIfBranch()
 			branches = append(branches, br)
@@ -46,6 +61,18 @@ func (p *parser) parseIfChain() ([]ast.IfBranch, *ast.Block, token.Pos) {
 		break
 	}
 	return branches, elseBlock, end
+}
+
+// elseAfterSemis reports whether, skipping a run of statement separators, the
+// next token is 'else' — the "newline before else" case (W4).
+func (p *parser) elseAfterSemis() bool {
+	for i := p.pos; i < len(p.toks); i++ {
+		if p.toks[i].Kind == token.Semi {
+			continue
+		}
+		return p.toks[i].Kind == token.Else
+	}
+	return false
 }
 
 // parseIf parses the 'if' statement (GRAMMAR group 6): the trailing 'else' is

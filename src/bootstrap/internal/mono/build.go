@@ -2,6 +2,7 @@ package mono
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
@@ -17,9 +18,10 @@ func Build(file *ast.File, info *sema.Info) *Program {
 	w := &worker{
 		info: info,
 		prog: &Program{
-			Info:      info,
-			byMangled: map[string]*Instance{},
-			typeByKey: map[string]*TypeInstance{},
+			Info:        info,
+			byMangled:   map[string]*Instance{},
+			typeByKey:   map[string]*TypeInstance{},
+			witByGlobal: map[string]*Witness{},
 		},
 	}
 	for _, d := range file.Items {
@@ -62,14 +64,17 @@ func (w *worker) enqueueFn(fn *ast.FuncDecl, subT map[string]types.Type, subV ma
 		return in
 	}
 	in := &Instance{
-		Origin:     fn,
-		Mangled:    mangled,
-		ParamNames: sig.ParamNames,
-		Params:     make([]types.Type, len(sig.Params)),
-		Ret:        sema.Substitute(sig.Ret, subT, subV),
-		subT:       subT,
-		subV:       subV,
-		Calls:      map[*ast.Call]string{},
+		Origin:      fn,
+		Mangled:     mangled,
+		ParamNames:  sig.ParamNames,
+		Params:      make([]types.Type, len(sig.Params)),
+		Ret:         sema.Substitute(sig.Ret, subT, subV),
+		subT:        subT,
+		subV:        subV,
+		Calls:       map[*ast.Call]string{},
+		DynSites:    map[*ast.Call]*DynSite{},
+		MethodCalls: map[*ast.Call]*MethodDispatch{},
+		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}
 	for i, p := range sig.Params {
 		in.Params[i] = sema.Substitute(p, subT, subV)
@@ -151,6 +156,7 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 	case *ast.Binary:
 		w.walkExpr(in, n.L)
 		w.walkExpr(in, n.R)
+		w.lowerCompare(in, n)
 	case *ast.Call:
 		w.walkCall(in, n)
 	case *ast.Field:
@@ -188,12 +194,23 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	for _, a := range n.Args {
 		w.walkExpr(in, a.Value)
 	}
+	if w.walkMethodCall(in, n) {
+		return
+	}
+	if br, ok := n.Callee.(*ast.Bracket); ok {
+		w.explicitCall(in, br, n)
+		return
+	}
 	id, ok := n.Callee.(*ast.Ident)
 	if !ok {
 		return
 	}
 	sig, ok := w.info.Funcs[id.Name]
 	if !ok || sig.Generic == nil {
+		return
+	}
+	if sig.Dyn {
+		w.dynCall(in, sig, n)
 		return
 	}
 	subT, subV := w.resolveArgs(in, sig, n)
@@ -206,6 +223,21 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 // callee's parameters and unifying each (DESIGN-1c §4.2). The argument types are
 // read through the caller instance's overlay, so they are already concrete.
 func (w *worker) resolveArgs(in *Instance, sig *sema.FuncSig, n *ast.Call) (map[string]types.Type, map[string]types.ConstVal) {
+	exprs := pairArgs(sig, n)
+	subT := map[string]types.Type{}
+	subV := map[string]types.ConstVal{}
+	for i := range sig.Params {
+		if exprs[i] == nil {
+			continue
+		}
+		sema.Unify(sig.Params[i], in.ExprType(w.info, exprs[i]), subT, subV)
+	}
+	return subT, subV
+}
+
+// pairArgs aligns a call's arguments to a callee's parameters, positional first
+// then named, returning one expression per parameter (nil for an unsupplied one).
+func pairArgs(sig *sema.FuncSig, n *ast.Call) []ast.Expr {
 	exprs := make([]ast.Expr, len(sig.Params))
 	idx := map[string]int{}
 	for i, name := range sig.ParamNames {
@@ -224,15 +256,7 @@ func (w *worker) resolveArgs(in *Instance, sig *sema.FuncSig, n *ast.Call) (map[
 			pos++
 		}
 	}
-	subT := map[string]types.Type{}
-	subV := map[string]types.ConstVal{}
-	for i := range sig.Params {
-		if exprs[i] == nil {
-			continue
-		}
-		sema.Unify(sig.Params[i], in.ExprType(w.info, exprs[i]), subT, subV)
-	}
-	return subT, subV
+	return exprs
 }
 
 // --- type instantiation -------------------------------------------------------
@@ -249,6 +273,11 @@ func (w *worker) collectType(t types.Type) {
 			w.collectType(a)
 		}
 		w.registerStruct(x)
+	case *types.Enum:
+		for _, a := range x.Args {
+			w.collectType(a)
+		}
+		w.registerEnum(x)
 	case *types.List:
 		w.collectType(x.Elem)
 	case *types.Set:
@@ -271,11 +300,11 @@ func (w *worker) registerStruct(x *types.Struct) {
 	if x.Def == nil || x.Def.Struct == nil {
 		return
 	}
-	key := typeFrag(x.Def, x.Args)
+	key := typeKey(x.Def, x.Args)
 	if _, ok := w.prog.typeByKey[key]; ok {
 		return
 	}
-	ti := &TypeInstance{Mangled: mangle(key), Def: x.Def, Args: x.Args}
+	ti := &TypeInstance{Mangled: typeInstanceName(x.Def, x.Args), Def: x.Def, Args: x.Args}
 	w.prog.typeByKey[key] = ti
 
 	subT := map[string]types.Type{}
@@ -292,56 +321,143 @@ func (w *worker) registerStruct(x *types.Struct) {
 	w.prog.Types = append(w.prog.Types, ti)
 }
 
+// registerEnum records the specialized C tagged union for a use-site enum type,
+// finishing the generic-enum specialization deferred from iteration 3 (DESIGN-1c
+// §4/§7). Like registerStruct it marks the key before computing payloads so a
+// recursive enum terminates, specializes each variant's payload to the instance's
+// type arguments, and appends the instance after the types it depends on.
+func (w *worker) registerEnum(x *types.Enum) {
+	if x.Def == nil || x.Def.Enum == nil {
+		return
+	}
+	key := typeKey(x.Def, x.Args)
+	if _, ok := w.prog.typeByKey[key]; ok {
+		return
+	}
+	ti := &TypeInstance{Mangled: typeInstanceName(x.Def, x.Args), Def: x.Def, Args: x.Args, IsEnum: true}
+	w.prog.typeByKey[key] = ti
+
+	subT := map[string]types.Type{}
+	for i, p := range x.Def.Params {
+		if i < len(x.Args) {
+			subT[p.Name] = x.Args[i]
+		}
+	}
+	for tag, v := range x.Def.Enum.Variants {
+		vi := VariantInst{Name: v.Name, Tag: tag}
+		for _, pt := range v.Payload {
+			st := sema.Substitute(pt, subT, nil)
+			w.collectType(st)
+			vi.Payload = append(vi.Payload, st)
+		}
+		ti.Variants = append(ti.Variants, vi)
+	}
+	w.prog.Types = append(w.prog.Types, ti)
+}
+
 // --- name mangling (FORK-B) ---------------------------------------------------
 
+// Reserved name prefixes (DESIGN-1c §4.5, B3/B4). A non-generic function or type
+// keeps its historic 'zg_<name>' spelling (so the examples are byte-identical),
+// while every compiler-synthesized name takes a prefix whose third character is a
+// letter, not '_' — a shape 'zg_<userident>' can never produce, so a user
+// identifier (even one containing '__') can never collide with a synthesized name:
+//
+//	zgg_  generic function instance    zgm_  impl-method instance
+//	zgt_  specialized nominal type      zgw_  concrete witness table
+//	zgs_  witness struct type
+//
+// Within each namespace the type/value fragment encoding (typeCode) is
+// self-delimiting, hence injective, so two distinct instantiations never collide.
+
 // mangle prefixes a fragment with the reserved 'zg_' so no emitted C name collides
-// with a keyword or the runtime. A non-generic function keeps its historic
-// 'zg_<name>' spelling, so the examples' C is unchanged.
+// with a keyword or the runtime. Used for non-generic functions and types, whose
+// spelling is unchanged from the pre-generics backend.
 func mangle(frag string) string { return "zg_" + frag }
 
-// mangleFn is the structured, deterministic name of a function instance
-// (DESIGN-1c §4.5): a non-generic function is 'zg_<fn>'; a generic instance appends
-// one fragment per parameter in declaration order — '__<type>' for a type argument,
-// '__n<value>' for a value argument — so distinct instantiations get distinct
-// names.
+// mangleFn is the name of a function instance: a non-generic function keeps its
+// historic 'zg_<fn>' spelling; a generic instance takes the 'zgg_' prefix, a
+// length-delimited function name, and one self-delimiting code per parameter (a
+// type code for a type argument, a value code for a value argument), so distinct
+// instantiations — and distinct functions — get distinct, collision-free names.
 func mangleFn(name string, env *sema.GenericEnv, subT map[string]types.Type, subV map[string]types.ConstVal) string {
 	if env == nil {
 		return mangle(name)
 	}
-	s := mangle(name)
+	var b strings.Builder
+	b.WriteString("zgg_")
+	b.WriteString(lenTag(name))
 	for _, pn := range env.Names {
 		switch {
 		case subV[pn].Known || subV[pn].Name != "":
-			s += "__n" + valueFrag(subV[pn])
+			b.WriteString(valCode(subV[pn]))
 		case subT[pn] != nil:
-			s += "__" + mangleType(subT[pn])
+			b.WriteString(typeCode(subT[pn]))
+		default:
+			b.WriteString("z")
 		}
 	}
-	return s
+	return b.String()
 }
 
-// mangleType encodes a concrete type as a C-identifier-safe fragment (DESIGN-1c
-// §4.5): a primitive is one letter, a fixed-width numeric its spelling, a container
-// its constructor and element fragments, and a nominal type its name with argument
-// fragments.
-func mangleType(t types.Type) string {
+// typeInstanceName is the C name of a specialized nominal type: a non-generic type
+// keeps 'zg_<name>' (byte-identical), a generic instance takes 'zgt_' and the
+// injective type code, so 'Box[int]' can never alias a user 'struct Box__i'.
+func typeInstanceName(def *types.TypeDef, args []types.Type) string {
+	if len(args) == 0 {
+		return mangle(def.Name)
+	}
+	return "zgt_" + nominalCode(def, args)
+}
+
+// methodMangle is the C name of an impl-method instance: 'zgm_' followed by the
+// self-delimiting code of the receiver type and the method name.
+func methodMangle(recv types.Type, name string) string {
+	return "zgm_" + typeCode(recv) + "_" + name
+}
+
+// witnessStructName is the shared witness struct type of a spec ('zgs_<Spec>').
+func witnessStructName(spec string) string { return "zgs_" + spec }
+
+// witnessGlobalName is the concrete witness table of a (spec, type) pair.
+func witnessGlobalName(spec string, recv types.Type) string {
+	return "zgw_" + lenTag(spec) + typeCode(recv)
+}
+
+// lenTag length-delimits an identifier as '<len>_<ident>', so a name boundary is
+// unambiguous even when the identifier or what follows contains '_'.
+func lenTag(s string) string { return strconv.Itoa(len(s)) + "_" + s }
+
+// typeKey is the injective map key for a specialized nominal type — the same code
+// its instance name is built from, so two distinct types never share a key.
+func typeKey(def *types.TypeDef, args []types.Type) string { return nominalCode(def, args) }
+
+// typeCode encodes a type as a self-delimiting, C-identifier-safe code (B3/B4): a
+// primitive is one letter, a fixed-width numeric 'W<bits><kind>', a container a tag
+// letter and its element codes, a nominal type a length-delimited name and its
+// argument codes. Concatenating codes is unambiguous, so the encoding is injective.
+func typeCode(t types.Type) string {
 	switch x := t.(type) {
 	case *types.Fixed:
-		return x.String()
+		return "W" + strconv.Itoa(x.Bits) + fixedKind(x)
 	case *types.List:
-		return "list_" + mangleType(x.Elem)
+		return "L" + typeCode(x.Elem)
 	case *types.Set:
-		return "set_" + mangleType(x.Elem)
+		return "X" + typeCode(x.Elem)
 	case *types.Map:
-		return "map_" + mangleType(x.Key) + "_" + mangleType(x.Val)
+		return "M" + typeCode(x.Key) + typeCode(x.Val)
 	case *types.Array:
-		return "arr_" + mangleType(x.Elem) + "_n" + valueFrag(x.N)
+		return "Y" + typeCode(x.Elem) + valCode(x.N)
 	case *types.Opt:
-		return "opt_" + mangleType(x.Elem)
+		return "O" + typeCode(x.Elem)
 	case *types.Struct:
-		return typeFrag(x.Def, x.Args)
+		return nominalCode(x.Def, x.Args)
 	case *types.Enum:
-		return typeFrag(x.Def, x.Args)
+		return nominalCode(x.Def, x.Args)
+	case *types.Param:
+		return "P" + lenTag(x.Name)
+	case *types.ValParam:
+		return "Q" + lenTag(x.Name)
 	}
 	switch t.Kind() {
 	case types.KInt:
@@ -355,34 +471,51 @@ func mangleType(t types.Type) string {
 	case types.KStr:
 		return "s"
 	case types.KRune:
-		return "r"
+		return "c"
 	case types.KByte:
 		return "y"
 	case types.KNil:
-		return "nil"
+		return "z"
 	}
-	return "t"
+	return "e"
 }
 
-// typeFrag is a nominal type's fragment: its name, then one '__<arg>' per type
-// argument. A non-generic type is just its name, so a plain 'struct Foo' mangles to
-// 'zg_Foo'.
-func typeFrag(def *types.TypeDef, args []types.Type) string {
-	s := def.Name
+// nominalCode encodes a nominal type: 'N', a length-delimited name, a
+// length-delimited argument count, then each argument's code — self-delimiting, so
+// a bare 'struct Box__i' and 'Box[int]' encode differently.
+func nominalCode(def *types.TypeDef, args []types.Type) string {
+	var b strings.Builder
+	b.WriteString("N")
+	b.WriteString(lenTag(def.Name))
+	b.WriteString(strconv.Itoa(len(args)))
+	b.WriteByte('_')
 	for _, a := range args {
-		s += "__" + mangleType(a)
+		b.WriteString(typeCode(a))
 	}
-	return s
+	return b.String()
 }
 
-// valueFrag renders a value-generic argument as a fragment: a boolean by name, any
-// other compile-time value by its integer form.
-func valueFrag(v types.ConstVal) string {
+// fixedKind is the trailing letter of a fixed-width numeric code: 'g' float, 's'
+// signed int, 'u' unsigned int.
+func fixedKind(x *types.Fixed) string {
+	switch {
+	case x.Float:
+		return "g"
+	case x.Signed:
+		return "s"
+	default:
+		return "u"
+	}
+}
+
+// valCode encodes a value-generic argument as a self-delimiting code: 'Vt'/'Vf' for
+// a boolean, 'Vi<digits>_' for an integer.
+func valCode(v types.ConstVal) string {
 	if v.Kind == types.KBool {
 		if v.B {
-			return "true"
+			return "Vt"
 		}
-		return "false"
+		return "Vf"
 	}
-	return strconv.FormatInt(v.I, 10)
+	return "Vi" + strconv.FormatInt(v.I, 10) + "_"
 }

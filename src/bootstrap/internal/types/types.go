@@ -394,7 +394,7 @@ type Struct struct {
 
 func (*Struct) typ()             {}
 func (*Struct) Kind() Kind       { return KStruct }
-func (s *Struct) String() string { return s.Def.Name }
+func (s *Struct) String() string { return nominalString(s.Def.Name, s.Args) }
 
 // Enum is a use-site enum type: a reference to its TypeDef with any type
 // arguments applied.
@@ -405,7 +405,24 @@ type Enum struct {
 
 func (*Enum) typ()             {}
 func (*Enum) Kind() Kind       { return KEnum }
-func (e *Enum) String() string { return e.Def.Name }
+func (e *Enum) String() string { return nominalString(e.Def.Name, e.Args) }
+
+// nominalString renders a nominal type's source spelling, appending its type
+// arguments '[A, B]' when applied, so a diagnostic distinguishes 'Box[int]' from
+// 'Box[bool]' rather than printing a bare 'Box' for both.
+func nominalString(name string, args []Type) string {
+	if len(args) == 0 {
+		return name
+	}
+	s := name + "["
+	for i, a := range args {
+		if i > 0 {
+			s += ", "
+		}
+		s += a.String()
+	}
+	return s + "]"
+}
 
 // --- compile-time values ------------------------------------------------------
 

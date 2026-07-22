@@ -61,7 +61,11 @@ type ImplDef struct {
 	Methods   map[string]*ImplMethod
 	AssocBind map[string]Type
 	ValBind   map[string]ConstVal
-	Decl      any
+	// Derived is true when the compiler synthesized this impl from a '#[derive(...)]'
+	// on the target type (Phase 1c §5); a derived impl is otherwise an ordinary impl
+	// — it participates in coherence, the orphan rule, and bound resolution alike.
+	Derived bool
+	Decl    any
 }
 
 // ImplMethod is one method or associated fn of an impl, with its resolved

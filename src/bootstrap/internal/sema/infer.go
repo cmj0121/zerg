@@ -2,6 +2,7 @@ package sema
 
 import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -12,6 +13,13 @@ import (
 // value of function type is an indirect call. A complex callee expression is
 // synthesized and, when it is a function value, called indirectly.
 func (c *checker) inferCall(n *ast.Call) Type {
+	if br, ok := n.Callee.(*ast.Bracket); ok {
+		if id, ok := br.Base.(*ast.Ident); ok {
+			if sig, ok := c.info.Funcs[id.Name]; ok && sig.Generic != nil {
+				return c.callGenericExplicit(n, br, sig)
+			}
+		}
+	}
 	if id, ok := n.Callee.(*ast.Ident); ok {
 		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymType {
 			return c.construct(n, sym)
@@ -181,9 +189,51 @@ func (c *checker) constructVariant(n *ast.Call, sym *Symbol) Type {
 		c.synthArgs(n)
 		return c.enumType(sym)
 	}
+	if def := sym.TypeDef; def != nil && len(def.Params) > 0 {
+		return c.constructVariantGeneric(n, def, vd)
+	}
 	pnames := make([]string, len(vd.Payload))
 	c.bindCallArgs(vd.Name, n, pnames, vd.Payload, nil)
 	return c.enumType(sym)
+}
+
+// constructVariantGeneric checks a generic enum's payload variant construction —
+// 'Full(7)' on 'enum Box[T]' — inferring the enum's type arguments from the
+// payload arguments, the enum analogue of constructGeneric (DESIGN-1c §4, generic
+// enum specialization). It unifies each declared payload type against its
+// argument, checks the argument against the resulting concrete type, and yields
+// the applied enum type 'Box[int]' so monomorphization specializes it.
+func (c *checker) constructVariantGeneric(n *ast.Call, def *types.TypeDef, vd *types.VariantDef) Type {
+	subT := map[string]Type{}
+	subV := map[string]types.ConstVal{}
+	argTypes := make([]Type, len(vd.Payload))
+	for i := range vd.Payload {
+		if i < len(n.Args) {
+			argTypes[i] = c.synth(n.Args[i].Value)
+			unify(vd.Payload[i], argTypes[i], subT, subV)
+		}
+	}
+	if len(n.Args) != len(vd.Payload) {
+		c.errorf(n.Span(), "variant %q expects %d payload value(s), got %d", vd.Name, len(vd.Payload), len(n.Args))
+	}
+	for i := range vd.Payload {
+		if i >= len(n.Args) {
+			continue
+		}
+		want := substitute(vd.Payload[i], subT, subV)
+		if at := argTypes[i]; !bad(at) && !bad(want) && !c.assignable(want, n.Args[i].Value, at) {
+			c.errorf(n.Args[i].Value.Span(), "payload %d of variant %q: cannot use %s as %s", i+1, vd.Name, at, want)
+		}
+	}
+	args := make([]Type, len(def.Params))
+	for i, p := range def.Params {
+		if t, ok := subT[p.Name]; ok {
+			args[i] = t
+		} else {
+			args[i] = types.Unknown
+		}
+	}
+	return &types.Enum{Def: def, Args: args}
 }
 
 // enumType is the use-site enum type a variant symbol belongs to.
@@ -301,10 +351,84 @@ func (c *checker) callGeneric(n *ast.Call, sig *FuncSig) Type {
 			c.errorf(exprs[i].Span(), "argument %d of %q: cannot use %s as %s", i+1, sig.Name, at, want)
 		}
 	}
+	c.checkBounds(n.Span(), sig.Generic, subT)
 	if sig.Ret == nil {
 		return Nil
 	}
 	return substitute(sig.Ret, subT, subV)
+}
+
+// callGenericExplicit types an explicit type/value-argument call 'f[int](x)' /
+// 'fill[3](9)' (B1): it binds the callee's generic parameters from the bracket's
+// arguments — a value parameter from a folded const, a type parameter from the
+// resolved type argument — infers any remaining from the value arguments, checks
+// each argument against the resulting concrete parameter type, and yields the
+// substituted return type.
+func (c *checker) callGenericExplicit(n *ast.Call, br *ast.Bracket, sig *FuncSig) Type {
+	subT := map[string]Type{}
+	subV := map[string]types.ConstVal{}
+	res := c.info.Brackets[br]
+	for i, name := range sig.Generic.Names {
+		if _, isVal := sig.Generic.Params[name].(*types.ValParam); isVal {
+			if i < len(br.Elems) {
+				if v, ok := c.foldConst(br.Elems[i]); ok {
+					subV[name] = v
+					continue
+				}
+			}
+		}
+		if i < len(res.Args) && res.Args[i] != nil && !bad(res.Args[i]) {
+			subT[name] = res.Args[i]
+		}
+	}
+	exprs := c.pairArgs(sig, n)
+	argTypes := make([]Type, len(sig.Params))
+	for i := range sig.Params {
+		if exprs[i] == nil {
+			continue
+		}
+		argTypes[i] = c.synth(exprs[i])
+		unify(sig.Params[i], argTypes[i], subT, subV)
+	}
+	for i := range sig.Params {
+		if exprs[i] == nil {
+			if !hasDefault(sig.Defaults, i) {
+				c.errorf(n.Span(), "%q: missing argument %q", sig.Name, argName(sig.ParamNames, i))
+			}
+			continue
+		}
+		want := substitute(sig.Params[i], subT, subV)
+		if at := argTypes[i]; !bad(at) && !bad(want) && !c.assignable(want, exprs[i], at) {
+			c.errorf(exprs[i].Span(), "argument %d of %q: cannot use %s as %s", i+1, sig.Name, at, want)
+		}
+	}
+	c.checkBounds(n.Span(), sig.Generic, subT)
+	if sig.Ret == nil {
+		return Nil
+	}
+	return substitute(sig.Ret, subT, subV)
+}
+
+// checkBounds verifies that each of a generic call's inferred type arguments
+// satisfies its parameter's spec bounds (DESIGN-1c §3.2): '[T: Ord]' called at a
+// concrete type needs an 'impl Ord' for it — one written by hand or synthesized by
+// '#[derive(Ord)]'. It is the use-site half of bound resolution that 1c adds over
+// 1b's abstract body check.
+func (c *checker) checkBounds(at token.Span, env *GenericEnv, subT map[string]Type) {
+	if env == nil || c.info.Specs == nil {
+		return
+	}
+	for name, pt := range env.Params {
+		p, ok := pt.(*types.Param)
+		if !ok || len(p.Bounds) == 0 {
+			continue
+		}
+		concrete, ok := subT[name]
+		if !ok || bad(concrete) {
+			continue
+		}
+		c.info.Specs.satisfies(c, concrete, p.Bounds, at)
+	}
 }
 
 // pairArgs aligns a call's arguments to parameter positions (positional first,
@@ -376,6 +500,22 @@ func unify(decl, actual Type, subT map[string]Type, subV map[string]types.ConstV
 	case *types.Opt:
 		if a, ok := actual.(*types.Opt); ok {
 			unify(d.Elem, a.Elem, subT, subV)
+		}
+	case *types.Struct:
+		if a, ok := actual.(*types.Struct); ok && a.Def == d.Def {
+			for i := range d.Args {
+				if i < len(a.Args) {
+					unify(d.Args[i], a.Args[i], subT, subV)
+				}
+			}
+		}
+	case *types.Enum:
+		if a, ok := actual.(*types.Enum); ok && a.Def == d.Def {
+			for i := range d.Args {
+				if i < len(a.Args) {
+					unify(d.Args[i], a.Args[i], subT, subV)
+				}
+			}
 		}
 	}
 }

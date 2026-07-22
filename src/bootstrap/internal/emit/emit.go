@@ -38,6 +38,13 @@ type Manifest struct {
 	// (zrt_sched_main). It implies NeedsRuntime. A non-concurrent program leaves it
 	// false, links nothing new, and stays byte-identical to the Phase 1d path.
 	Concurrency bool
+
+	// NeedsResult reports whether the program lowers a general Result/Either/optional
+	// carrier (Phase 1f U0) — a construction, a `?`/`??`/`!`/`?.`/`guard`, or an
+	// Either/optional signature. It implies NeedsRuntime (the carriers carry a
+	// zrt_err). A program that uses no such value leaves it false, so its emitted C
+	// stays byte-identical.
+	NeedsResult bool
 }
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -50,7 +57,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult}, nil
 }
 
 type emitter struct {
@@ -75,6 +82,14 @@ type emitter struct {
 	// non-concurrent program, which therefore stays byte-identical to Phase 1d.
 	concurrency bool
 	spawnIdx    map[*ast.SpawnStmt]int
+
+	// Result/Either/optional carriers (Phase 1f U0). carriers maps a type's spelling
+	// to its generated C carrier (a monomorphized tagged struct generalizing the
+	// channel recv carrier); needsResult gates their typedefs/helpers and the
+	// NeedsResult manifest flag. Both empty/false for a program that uses no such
+	// value, which therefore stays byte-identical.
+	carriers    map[string]*carrier
+	needsResult bool
 
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
@@ -147,6 +162,10 @@ func (e *emitter) program() {
 	for _, ti := range e.prog.Types {
 		e.typedef(ti)
 	}
+
+	// Result/Either/optional carriers, before any prototype that names one as a
+	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
+	e.emitResultTypedefs()
 
 	// '#[dyn]' witness-table struct types, before any prototype that names one
 	e.witnessStructs()
@@ -336,7 +355,7 @@ func (e *emitter) function(inst *mono.Instance) {
 			e.line(fmt.Sprintf("zrt_unwind_to(%s);", e.fnMark))
 		}
 		if inst.Ret != sema.Nil {
-			e.line("return " + zeroValue(inst.Ret) + ";")
+			e.line("return " + e.zeroValueC(inst.Ret) + ";")
 		}
 	}
 	e.popScopeRaw()
@@ -415,8 +434,9 @@ func (e *emitter) stmt(s ast.Stmt) {
 		// resolve the RHS before declaring the name, so 'mut n := n' reads the
 		// outer binding (matching ':=' semantics). A non-POD RHS is copied (retain /
 		// deep copy) when it names existing storage, else moved (byte-identical for
-		// every POD binding).
-		rhs := e.copyValue(t, n.Value)
+		// every POD binding). A T value bound to a Result/Either/optional binding is
+		// wrapped as its Ok/Left (context-typed construction, Phase 1f U0).
+		rhs := e.wrapValue(t, e.cur.ExprType(e.info, n.Value), e.copyValue(t, n.Value))
 		cname := e.declareName(n.Name)
 		e.line(e.localDecl(t, cname) + " = " + rhs + ";")
 		e.registerDrop(cname, t)
@@ -468,7 +488,8 @@ func (e *emitter) returnStmt(n *ast.ReturnStmt) {
 	if e.fnMark == "" {
 		ret := "return;"
 		if n.Value != nil {
-			ret = "return " + e.copyValue(e.cur.ExprType(e.info, n.Value), n.Value) + ";"
+			vt := e.cur.ExprType(e.info, n.Value)
+			ret = "return " + e.wrapValue(e.cur.Ret, vt, e.copyValue(vt, n.Value)) + ";"
 		}
 		if n.Cond != nil {
 			e.line(fmt.Sprintf("if (%s) { %s }", e.expr(n.Cond), ret))
@@ -484,7 +505,8 @@ func (e *emitter) returnStmt(n *ast.ReturnStmt) {
 			return
 		}
 		tmp := e.freshName("ret")
-		val := e.copyValue(e.cur.ExprType(e.info, n.Value), n.Value)
+		vt := e.cur.ExprType(e.info, n.Value)
+		val := e.wrapValue(e.cur.Ret, vt, e.copyValue(vt, n.Value))
 		e.line(fmt.Sprintf("%s = %s;", e.localDecl(e.cur.Ret, tmp), val))
 		e.line(fmt.Sprintf("zrt_unwind_to(%s);", e.fnMark))
 		e.line("return " + tmp + ";")
@@ -700,6 +722,14 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.recvExpr(n)
 	case *ast.Force:
 		return e.forceExpr(n)
+	case *ast.Try:
+		return e.tryExpr(n)
+	case *ast.Coalesce:
+		return e.coalesceExpr(n)
+	case *ast.OptChain:
+		return e.optChainExpr(n)
+	case *ast.GuardExpr:
+		return e.guardExpr(n)
 	default:
 		return "0"
 	}
@@ -959,6 +989,10 @@ func (e *emitter) ctype(t sema.Type) string {
 		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
 			return fmt.Sprintf("zg_recv_%d", idx)
 		}
+	}
+	// a general Result/Either/optional value: its monomorphized carrier (Phase 1f U0).
+	if c, ok := e.carrierFor(t); ok {
+		return c.name
 	}
 	if _, ok := t.(*types.Chan); ok {
 		// a channel handle is an opaque runtime pointer (chan.c owns the layout).

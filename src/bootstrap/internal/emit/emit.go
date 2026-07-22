@@ -684,14 +684,20 @@ func targetExpr(t ast.AssignTarget) ast.Expr {
 
 func (e *emitter) printStmt(n *ast.PrintStmt) {
 	v := e.expr(n.Value)
-	switch e.cur.ExprType(e.info, n.Value) {
-	case sema.Int:
+	// The display family drives the printf conversion: a signed integer (int, byte,
+	// rune, i8..i64) prints with %lld, an unsigned integer (uint, u8..u64) with %llu,
+	// and a float with %g. The int/float/bool/str forms are unchanged, so a program
+	// that prints only those stays byte-identical.
+	switch numericDisplay(e.cur.ExprType(e.info, n.Value)) {
+	case dispInt:
 		e.line(fmt.Sprintf("printf(\"%%lld\\n\", (long long)(%s));", v))
-	case sema.Float:
+	case dispUint:
+		e.line(fmt.Sprintf("printf(\"%%llu\\n\", (unsigned long long)(%s));", v))
+	case dispFloat:
 		e.line(fmt.Sprintf("printf(\"%%g\\n\", %s);", v))
-	case sema.Bool:
+	case dispBool:
 		e.line(fmt.Sprintf("printf(\"%%s\\n\", (%s) ? \"true\" : \"false\");", v))
-	case sema.Str:
+	case dispStr:
 		e.line(fmt.Sprintf("printf(\"%%s\\n\", %s);", v))
 	}
 }
@@ -855,6 +861,10 @@ func (e *emitter) expr(x ast.Expr) string {
 		return "{" + e.exprList(n.Elems) + "}"
 	case *ast.MatchExpr:
 		return e.lowerMatch(n)
+	case *ast.IfExpr:
+		return e.ifExprValue(n)
+	case *ast.Block:
+		return e.blockExprValue(n)
 	case *ast.ChanNew:
 		return e.chanNew(n)
 	case *ast.Recv:
@@ -932,6 +942,68 @@ func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
 		result = fmt.Sprintf("(%s ? %s : %s)", test, body, result)
 	}
 	return result
+}
+
+// --- expression-as-value (if-expr / block-expr) -------------------------------
+
+// blockValueInto emits a value-producing block's statements, assigning its value —
+// the last statement when it is an expression, coerced into the target type ty — to
+// tmp. Every leading statement is emitted for effect. A block that ends in a
+// non-expression statement leaves tmp untouched (its zero value). It is the shared
+// core of the if-expression and block-expression lowerings.
+func (e *emitter) blockValueInto(tmp string, ty sema.Type, b *ast.Block) {
+	stmts := b.Stmts
+	var last ast.Expr
+	if k := len(stmts); k > 0 {
+		if es, ok := stmts[k-1].(*ast.ExprStmt); ok {
+			last, stmts = es.X, stmts[:k-1]
+		}
+	}
+	e.pushScope()
+	for _, s := range stmts {
+		e.stmt(s)
+	}
+	if last != nil {
+		val := e.wrapValue(ty, e.cur.ExprType(e.info, last), e.copyValue(ty, last))
+		e.line(fmt.Sprintf("%s = %s;", tmp, val))
+	}
+	e.popScope()
+}
+
+// ifExprValue lowers an if-EXPRESSION to a GNU statement-expression: a fresh temp
+// receives the taken branch's value, since each branch body and the mandatory else
+// is a value-producing block (sema requires them all one type). This is the same
+// value mechanism guard/`??` use, so `x := if c { a } else { b }` — and a `return`
+// of an if-expression — becomes a value without a new AST shape.
+func (e *emitter) ifExprValue(n *ast.IfExpr) string {
+	gt := e.cur.ExprType(e.info, n)
+	res := e.freshName("if")
+	body := e.capture(func() {
+		for i, br := range n.Branches {
+			kw := "if"
+			if i > 0 {
+				kw = "} else if"
+			}
+			e.line(fmt.Sprintf("%s (%s) {", kw, e.expr(br.Cond)))
+			e.blockValueInto(res, gt, br.Body)
+		}
+		e.line("} else {")
+		e.blockValueInto(res, gt, n.Else)
+		e.line("}")
+	})
+	return fmt.Sprintf("({ %s %s; %s%s; })", e.ctype(gt), res, body, res)
+}
+
+// blockExprValue lowers a block-EXPRESSION to a GNU statement-expression whose value
+// is the block's last statement, so `x := { s1; s2; v }` is a value (GRAMMAR: a
+// block's value is its last statement).
+func (e *emitter) blockExprValue(b *ast.Block) string {
+	gt := e.cur.ExprType(e.info, b)
+	res := e.freshName("blk")
+	body := e.capture(func() {
+		e.blockValueInto(res, gt, b)
+	})
+	return fmt.Sprintf("({ %s %s; %s%s; })", e.ctype(gt), res, body, res)
 }
 
 // armValue emits an arm's body with the pattern's names bound to the subject.
@@ -1276,24 +1348,56 @@ func (e *emitter) localDecl(t sema.Type, name string) string {
 	return e.ctype(t) + " " + name
 }
 
+// cType maps a primitive type to its C spelling. The built-in numeric types beyond
+// int/float lower to their <stdint.h> fixed-width integers — uint to uint64_t, byte
+// to uint8_t, rune to a 32-bit code point — and an explicit fixed-width type (i8..i64,
+// u8..u64, f32/f64) to the matching stdint/float type; every other type is void.
 func cType(t sema.Type) string {
+	if f, ok := t.(*types.Fixed); ok {
+		return fixedCType(f)
+	}
 	switch t {
 	case sema.Int:
 		return "int64_t"
+	case types.Uint:
+		return "uint64_t"
 	case sema.Float:
 		return "double"
 	case sema.Bool:
 		return "bool"
 	case sema.Str:
 		return "const char*"
+	case types.Byte:
+		return "uint8_t"
+	case types.Rune:
+		return "int32_t"
 	default:
 		return "void"
 	}
 }
 
+// fixedCType maps a fixed-width numeric type to its C spelling: a float picks
+// float/double by width, and an integer picks (u)intN_t by sign and width.
+func fixedCType(f *types.Fixed) string {
+	if f.Float {
+		if f.Bits == 32 {
+			return "float"
+		}
+		return "double"
+	}
+	prefix := "int"
+	if !f.Signed {
+		prefix = "uint"
+	}
+	return fmt.Sprintf("%s%d_t", prefix, f.Bits)
+}
+
 func zeroValue(t sema.Type) string {
 	if isResultNil(t) {
 		return "zrt_result_ok()"
+	}
+	if f, ok := t.(*types.Fixed); ok && f.Float {
+		return "0.0"
 	}
 	switch t {
 	case sema.Int:

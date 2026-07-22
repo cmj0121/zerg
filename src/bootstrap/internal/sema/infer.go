@@ -27,6 +27,12 @@ func (c *checker) inferCall(n *ast.Call) Type {
 			t, _ := c.ptrMethodCall(n, fld, pt)
 			return t
 		}
+		// A '.method()' on a concrete nominal receiver dispatches to the type's method
+		// namespace (inherent or spec method alike); only when no such method exists does
+		// it fall through to the field-access path and its "no field" diagnostic.
+		if t, ok := c.methodCall(n, fld); ok {
+			return t
+		}
 	}
 	if br, ok := n.Callee.(*ast.Bracket); ok {
 		if id, ok := br.Base.(*ast.Ident); ok {
@@ -888,6 +894,72 @@ func (c *checker) inferField(n *ast.Field) Type {
 		return Invalid
 	}
 	return types.Unknown
+}
+
+// methodCall types a call to an inherent (or spec) method on a concrete nominal
+// receiver 'recv.method(args)'. It consults the receiver type's one method
+// namespace (GRAMMAR group 7), substitutes the receiver's type arguments through the
+// method's signature, checks the arguments, and yields the substituted return type.
+// It reports false when the receiver is not a nominal type or has no such method, so
+// the ordinary field-access path (and its "has no field" diagnostic) still applies.
+// mono's walkMethodCall and the emitter's methodCall already lower a resolved
+// inherent method, so this sema type is the only piece a concrete '.method()' needed.
+func (c *checker) methodCall(n *ast.Call, fld *ast.Field) (Type, bool) {
+	if c.info.Specs == nil {
+		return nil, false
+	}
+	head := nominalHead(c.synth(fld.X))
+	if head == nil {
+		return nil, false
+	}
+	ms := c.info.Specs.Methods[head]
+	if ms == nil {
+		return nil, false
+	}
+	ref, ok := ms.Methods[fld.Name]
+	if !ok {
+		return nil, false
+	}
+	m := ref.Method
+	subT := nominalArgs(c.synth(fld.X))
+	var pnames []string
+	if fn, ok := m.Decl.(*ast.FuncDecl); ok {
+		for _, p := range fn.Params {
+			pnames = append(pnames, p.Name)
+		}
+	}
+	ptypes := make([]Type, len(m.Sig.Params))
+	for i, p := range m.Sig.Params {
+		ptypes[i] = substitute(p.Type, subT, nil)
+	}
+	c.bindCallArgs(head.Name+"."+fld.Name, n, pnames, ptypes, make([]bool, len(ptypes)))
+	if m.Sig.Ret == nil {
+		return Nil, true
+	}
+	return substitute(m.Sig.Ret, subT, nil), true
+}
+
+// nominalArgs maps a nominal receiver type's declared parameters to its use-site
+// type arguments, so a method's abstract 'T' substitutes to the concrete argument
+// (the sema counterpart of mono's nominalSubT).
+func nominalArgs(recv Type) map[string]Type {
+	subT := map[string]Type{}
+	var def *types.TypeDef
+	var args []Type
+	switch x := recv.(type) {
+	case *types.Struct:
+		def, args = x.Def, x.Args
+	case *types.Enum:
+		def, args = x.Def, x.Args
+	}
+	if def != nil {
+		for i, p := range def.Params {
+			if i < len(args) {
+				subT[p.Name] = args[i]
+			}
+		}
+	}
+	return subT
 }
 
 // inferTupleIndex types a static tuple element access 't.0'.

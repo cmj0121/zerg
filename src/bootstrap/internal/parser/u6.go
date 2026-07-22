@@ -31,7 +31,15 @@ func (p *parser) parseIfBranch() ast.IfBranch {
 // parseIfChain parses the shared 'if head block (else if head block)*' prefix,
 // returning the branches, the optional trailing else block, and the end position.
 func (p *parser) parseIfChain() ([]ast.IfBranch, *ast.Block, token.Pos) {
-	branches := []ast.IfBranch{p.parseIfBranch()}
+	return p.continueIfChain(p.parseIfBranch())
+}
+
+// continueIfChain continues an 'if' chain from an already-parsed first branch,
+// parsing any 'else if head block' branches and the optional trailing else. It backs
+// both parseIfChain and the return-if disambiguation, which parses the first branch
+// itself to decide between an if-expression and a bare conditional return.
+func (p *parser) continueIfChain(first ast.IfBranch) ([]ast.IfBranch, *ast.Block, token.Pos) {
+	branches := []ast.IfBranch{first}
 	end := branches[0].Body.Span().End
 	var elseBlock *ast.Block
 	for {

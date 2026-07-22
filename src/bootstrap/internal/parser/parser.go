@@ -510,11 +510,10 @@ func (p *parser) parseStmt() ast.Stmt {
 func (p *parser) parseReturn(kw token.Token) ast.Stmt {
 	p.advance() // 'return'
 	r := spanned(&ast.ReturnStmt{}, kw.Span)
-	// 'return if c' — a bare conditional early exit (no value)
+	// A leading 'if' is disambiguated: an if-expression being returned, or a bare
+	// conditional early exit (GRAMMAR group 5).
 	if p.at(token.If) {
-		p.advance()
-		r.Cond = p.parseExpr()
-		return spanned(r, token.Span{Start: kw.Span.Start, End: r.Cond.Span().End})
+		return p.parseReturnIf(kw, r)
 	}
 	if p.at(token.Semi) || p.at(token.RBrace) || p.at(token.EOF) {
 		return r
@@ -527,6 +526,35 @@ func (p *parser) parseReturn(kw token.Token) ast.Stmt {
 		r.SetSpan(token.Span{Start: kw.Span.Start, End: r.Cond.Span().End})
 	}
 	return r
+}
+
+// parseReturnIf disambiguates a leading 'if' after 'return' (GRAMMAR group 5): an
+// 'if' whose condition is followed by a '{' block is an if-EXPRESSION being returned
+// ('return if c { a } else { b }'), so the whole if-expression becomes the return
+// value; otherwise it is a bare conditional early exit with no value ('return if c').
+func (p *parser) parseReturnIf(kw token.Token, r *ast.ReturnStmt) ast.Stmt {
+	ifKw := p.expect(token.If)
+	var br ast.IfBranch
+	if p.at(token.Ident) && p.peek(1).Kind == token.Walrus {
+		name := p.advance()
+		p.advance() // ':='
+		br.Bind = name.Lexeme
+	}
+	br.Cond = p.headExpr()
+	if !p.at(token.LBrace) {
+		// bare conditional early exit: 'return if c' (no value).
+		r.Cond = br.Cond
+		return spanned(r, span(kw.Span.Start, br.Cond.Span().End))
+	}
+	// the leading 'if' is an if-expression being returned; parse its block and continue
+	// the else chain, then hang the whole if-expression off the return's value.
+	br.Body = p.parseBlock()
+	branches, elseBlock, end := p.continueIfChain(br)
+	if elseBlock == nil {
+		p.fail(span(ifKw.Span.Start, end), "an if-expression requires a trailing 'else'")
+	}
+	r.Value = spanned(&ast.IfExpr{Branches: branches, Else: elseBlock}, span(ifKw.Span.Start, end))
+	return spanned(r, span(kw.Span.Start, end))
 }
 
 // parseBinding parses 'name := e' / 'name: T = e' (the leading mut/const keyword,

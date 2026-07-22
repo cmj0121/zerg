@@ -297,6 +297,19 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 			w.walkExpr(in, arm.Guard)
 			w.walkExpr(in, arm.Body)
 		}
+	// if-expression and block-expression as values (Iteration 1): a generic call may
+	// nest inside a branch/block, so each branch condition and body — and the block's
+	// statements — is walked to enqueue that call's instance. Missing these left a
+	// generic call under `x := if c { id(42) } else { 0 }` or `x := { id(42) }`
+	// un-enqueued, so emit referenced an undeclared function.
+	case *ast.IfExpr:
+		for _, br := range n.Branches {
+			w.walkExpr(in, br.Cond)
+			w.walkBlock(in, br.Body)
+		}
+		w.walkBlock(in, n.Else)
+	case *ast.Block:
+		w.walkBlock(in, n)
 	case *ast.TupleLit:
 		for _, el := range n.Elems {
 			w.walkExpr(in, el)

@@ -12,12 +12,22 @@
 // these sources).
 package stdlib
 
-import "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
 // files holds the embedded stdlib module sources.
 //
 //go:embed io.zg testing.zg atomic.zg math.zg
 var files embed.FS
+
+// FS returns the embedded standard-library source tree as an fs.FS, so the module
+// loader resolves a stdlib import through the same FileProvider machinery as a user
+// module (Phase 1g S4). The layout is currently flat (each `*.zg` is a single-file
+// module at the root), which a directory-shaped stdlib module can later join with no
+// change to this contract.
+func FS() fs.FS { return files }
 
 // Source returns the embedded Zerg source of the stdlib module named name (a bare
 // last-path-segment, e.g. "io"), and whether such a module exists.

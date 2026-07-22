@@ -14,9 +14,9 @@
 package module
 
 import (
+	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -30,7 +30,7 @@ type ModuleFile struct {
 
 // FileProvider is one source root the loader searches for an imported module. A
 // program has two roots, tried in order (§2.1): the entry file's directory tree
-// (OSProvider) and the embedded standard library (supplied by the caller).
+// (OSProvider) and the embedded standard library (FSProvider over an embed.FS).
 type FileProvider interface {
 	// Resolve locates the module named by importPath (a '/'-separated path relative
 	// to this root). It returns the module's CANONICAL identity (the dedup key and
@@ -47,37 +47,87 @@ type OSProvider struct {
 	Root string
 }
 
-// Resolve reads the module directory's Zerg sources in a stable order.
+// Resolve reads the module directory's Zerg sources in a stable order. The user
+// tree resolves directory modules only (a module is a directory), so a bare
+// `<path>.zg` file is not itself a module here.
 func (p OSProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
+	return resolveModule(os.DirFS(p.Root), importPath, false)
+}
+
+// FSProvider resolves a module under an arbitrary fs.FS — the embedded standard
+// library (Phase 1g S4). It routes stdlib resolution through the SAME module
+// machinery as a user directory module, replacing the pre-1g flat bundle that read
+// the source out of band. It accepts both a directory module (`<path>/`) and a
+// single-file module (`<path>.zg`), so the flat embedded stdlib layout (`io.zg` at
+// the root) resolves as a file module while a future directory-shaped stdlib module
+// works with no change.
+type FSProvider struct {
+	FS fs.FS
+}
+
+// Resolve reads the module (directory or single file) under the embedded root.
+func (p FSProvider) Resolve(importPath string) (string, []ModuleFile, bool) {
+	return resolveModule(p.FS, importPath, true)
+}
+
+// resolveModule locates importPath under fsys as a module: a directory whose `.zg`
+// files share one namespace, or — when allowFile — a single `<path>.zg` file. It
+// returns the cleaned canonical path (the dedup + mangling key), the module's
+// sources in a stable order, and whether it was found. OSProvider and FSProvider
+// share this one code path, so the user tree and the embedded stdlib resolve
+// identically.
+func resolveModule(fsys fs.FS, importPath string, allowFile bool) (string, []ModuleFile, bool) {
 	canonical := path.Clean(importPath)
-	if canonical == "." || strings.HasPrefix(canonical, "..") {
+	if canonical == "." || canonical == ".." || strings.HasPrefix(canonical, "../") || strings.HasPrefix(canonical, "/") {
 		return "", nil, false
 	}
-	dir := filepath.Join(p.Root, filepath.FromSlash(canonical))
-	info, err := os.Stat(dir)
+	if files, ok := resolveDirModule(fsys, canonical); ok {
+		return canonical, files, true
+	}
+	if allowFile {
+		if files, ok := resolveFileModule(fsys, canonical); ok {
+			return canonical, files, true
+		}
+	}
+	return "", nil, false
+}
+
+// resolveDirModule reads canonical as a directory module: every `.zg` file directly
+// in it, in a stable (name-sorted) order.
+func resolveDirModule(fsys fs.FS, canonical string) ([]ModuleFile, bool) {
+	info, err := fs.Stat(fsys, canonical)
 	if err != nil || !info.IsDir() {
-		return "", nil, false
+		return nil, false
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(fsys, canonical)
 	if err != nil {
-		return "", nil, false
+		return nil, false
 	}
 	var files []ModuleFile
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".zg") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // a module source under the chosen root
+		data, err := fs.ReadFile(fsys, path.Join(canonical, e.Name()))
 		if err != nil {
-			return "", nil, false
+			return nil, false
 		}
 		files = append(files, ModuleFile{Name: e.Name(), Src: string(data)})
 	}
 	if len(files) == 0 {
-		return "", nil, false
+		return nil, false
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
-	return canonical, files, true
+	return files, true
+}
+
+// resolveFileModule reads `<canonical>.zg` as a single-file module.
+func resolveFileModule(fsys fs.FS, canonical string) ([]ModuleFile, bool) {
+	data, err := fs.ReadFile(fsys, canonical+".zg")
+	if err != nil {
+		return nil, false
+	}
+	return []ModuleFile{{Name: path.Base(canonical) + ".zg", Src: string(data)}}, true
 }
 
 // mangleTag turns a canonical module path into its C-mangle tag: '/' becomes '_'

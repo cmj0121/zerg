@@ -1,0 +1,20 @@
+# util/text — a sibling module reached as `import "util/text"` (the namespace is
+# the last path segment, `text`). It exports a type, a function that returns that
+# type, and a generic — the three cross-module shapes Phase 1g resolves.
+
+# Pair is a cross-module TYPE: nameable in another module's signature as text.Pair.
+pub struct Pair {
+	pub lo: int
+	pub hi: int
+}
+
+# make is a cross-module FUNCTION returning a real module type (not Unknown).
+pub fn make(a: int, b: int) -> Pair {
+	return Pair(lo: a, hi: b)
+}
+
+# id is a cross-module GENERIC, monomorphized across the module boundary at each
+# concrete argument type of a `text.id(...)` call in another module.
+pub fn id[T](x: T) -> T {
+	return x
+}

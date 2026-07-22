@@ -95,6 +95,14 @@ type ImportSpec struct {
 	Pub   bool
 	Path  string // the decoded string path, e.g. "util/text"
 	Alias string // the 'as id' rename; "" when absent
+
+	// Module is the canonical C-mangle tag the module loader (internal/module)
+	// assigns to the module this spec resolves to: the canonical module path with
+	// '/' replaced by '_' (so "util/text" -> "util_text", a flat stdlib "io" ->
+	// "io"). It is empty until the loader resolves the graph; sema keys a member
+	// mangling on it (falling back to the local binding name when unset, which
+	// keeps a directly-checked file without a loader pass working as before).
+	Module string
 }
 
 // --- group 11: resource cleanup -----------------------------------------------

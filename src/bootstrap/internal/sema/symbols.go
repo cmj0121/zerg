@@ -64,6 +64,12 @@ type Symbol struct {
 	Span    token.Span // the declaration point (diagnostics & redeclaration)
 	Decl    ast.Node   // back-reference to the declaring node
 
+	// Module is the canonical C-mangle tag of the module a SymNamespace refers to
+	// (the module loader's tag, e.g. "util_text"). It keys cross-module member
+	// mangling; empty for every non-namespace symbol and for a namespace bound
+	// without a loader pass (member resolution then falls back to the local name).
+	Module string
+
 	TypeDef *types.TypeDef    // set when Kind == SymType
 	Variant *types.VariantDef // set when Kind == SymVariant
 }

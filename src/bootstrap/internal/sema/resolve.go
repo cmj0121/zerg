@@ -154,8 +154,21 @@ func (r *resolver) collectImport(n *ast.ImportStmt) {
 			r.errorf(spec.Span(), "import %q collides with the existing name %q", spec.Path, name)
 			continue
 		}
-		r.module.declareLocal(&Symbol{Name: name, Kind: SymNamespace, Pub: spec.Pub, Span: spec.Span(), Decl: spec})
+		r.module.declareLocal(&Symbol{
+			Name: name, Kind: SymNamespace, Pub: spec.Pub, Span: spec.Span(), Decl: spec, Module: spec.Module,
+		})
 	}
+}
+
+// nsTag is the C-mangle tag a namespace member is keyed on: the module loader's
+// canonical tag (Symbol.Module) when a loader pass set it, else the local binding
+// name. The fallback keeps a file checked directly (no loader) resolving members
+// under the local name, exactly as the pre-graph bundle did.
+func nsTag(sym *Symbol, local string) string {
+	if sym.Module != "" {
+		return sym.Module
+	}
+	return local
 }
 
 // ModuleMember is the top-level name a bundled stdlib module's public member takes
@@ -168,6 +181,15 @@ func ModuleMember(namespace, member string) string { return namespace + "__" + m
 
 // moduleMember is the package-internal spelling of ModuleMember.
 func moduleMember(namespace, member string) string { return ModuleMember(namespace, member) }
+
+// NamespaceMemberName is the merged top-level name of member reached through the
+// namespace symbol sym (bound to the local name local): the canonical-module
+// mangling `<tag>__member`. It lets a downstream pass (mono) key a cross-module
+// member on the same name sema and the loader used, honoring the loader's
+// canonical tag and the no-loader local-name fallback (nsTag).
+func NamespaceMemberName(sym *Symbol, local, member string) string {
+	return moduleMember(nsTag(sym, local), member)
+}
 
 // importName is the binding an import spec introduces: its 'as' alias, else the
 // last '/'-separated segment of its path.

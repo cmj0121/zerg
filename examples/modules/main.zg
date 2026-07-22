@@ -1,0 +1,17 @@
+# A two-module program: this entry file imports the sibling directory module
+# util/text and uses its cross-module type, function, and generic. Build it with
+#   zerg build examples/modules/main.zg
+# `import "util/text"` roots in this file's directory, so it locates ./util/text/.
+import "util/text"
+
+# total names a cross-module type (text.Pair) in its own signature.
+fn total(p: text.Pair) -> int {
+	return p.lo + p.hi
+}
+
+fn main() {
+	p := text.make(3, 4) # a cross-module function returning text.Pair
+	print total(p)       # 7
+	print text.id(100)   # 100 — a cross-module generic at T = int
+	print text.id(7)     # 7   — same generic at a second call site
+}

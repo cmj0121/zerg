@@ -212,6 +212,34 @@ long zrt_write_str(int fd, const char *s);
  * zrt_write. */
 long zrt_write_int(int fd, int64_t v);
 
+/* --- text rendering: display() / Format / f-string join (fmt.c, Phase 1f) ---
+ *
+ * The built-in `display()` and per-type `Format` (`:spec`) impls the compiler lowers
+ * an f-string onto, plus the concatenation that joins the lowered parts. Every result
+ * is a fresh heap string (leaked for the MVP); the compiler only reads them. The spec
+ * mirrors Python's `[[fill]align][sign][#][0][width][.prec][type]`; a field the MVP
+ * does not model is ignored (there is no runtime error channel — the desugar is at
+ * compile time). */
+
+/* zrt_str_concat returns a fresh heap string holding a followed by b (a NULL operand
+ * is the empty string). It joins the parts of a lowered f-string. */
+const char *zrt_str_concat(const char *a, const char *b);
+
+/* zrt_display_* render a value's human `display()` text (the f-string `{x}` default
+ * and the `!s` conversion). A `str` displays as itself, so it has no entry here. */
+const char *zrt_display_int(int64_t v);
+const char *zrt_display_uint(uint64_t v);
+const char *zrt_display_float(double v);
+const char *zrt_display_bool(bool v);
+
+/* zrt_fmt_* render a value under a `:spec` (the f-string `{x:spec}` hole). Numbers
+ * read sign / base (d/b/o/x/X/c) / '#' prefix / zero-pad / width / (float) precision;
+ * a string reads width / align / precision (truncation). */
+const char *zrt_fmt_int(int64_t v, const char *spec);
+const char *zrt_fmt_uint(uint64_t v, const char *spec);
+const char *zrt_fmt_float(double v, const char *spec);
+const char *zrt_fmt_str(const char *s, const char *spec);
+
 /* --- Result[nil] + program entry (entry.c) ------------------------------- */
 
 /* zrt_result_nil is the C encoding of Zerg's `Result[nil]` at the program-entry

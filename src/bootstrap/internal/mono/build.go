@@ -622,7 +622,13 @@ func (w *worker) registerEnum(x *types.Enum) {
 		}
 	}
 	for tag, v := range x.Def.Enum.Variants {
-		vi := VariantInst{Name: v.Name, Tag: tag}
+		// A C-style variant carries an explicit discriminant (sema resolved the `= n`
+		// continuation into Discr); a payload variant keeps its positional tag.
+		t := tag
+		if v.Discr != nil {
+			t = int(*v.Discr)
+		}
+		vi := VariantInst{Name: v.Name, Tag: t}
 		for _, pt := range v.Payload {
 			st := sema.Substitute(pt, subT, nil)
 			w.collectType(st)

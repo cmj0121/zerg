@@ -1011,6 +1011,13 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.unsafeExpr(n)
 	case *ast.AsmExpr:
 		return e.asmExpr(n)
+	case *ast.IsExpr:
+		// The `x is T` type test parses and type-checks (yielding bool) but has no backend
+		// lowering yet — a runtime type test needs type tags the MVP does not carry. Gate it
+		// as a normal user-facing Phase diagnostic rather than letting it fall to the
+		// internal-error backstop below.
+		e.diags.Add(x.Span(), "the `is` type test is not yet supported")
+		return "0"
 	case *ast.FnExpr:
 		// A closure reaching expr() is used AS A VALUE — bound, passed, returned, or
 		// stored — which needs a full closure conversion (a fn-pointer + captured

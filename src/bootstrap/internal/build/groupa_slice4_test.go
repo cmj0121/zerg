@@ -67,7 +67,9 @@ func TestSingleTupleArmExhaustive(t *testing.T) {
 }
 
 // TestListPatternGate covers the A8 cut for list patterns: a general list[T] pattern
-// has no runtime, so it must fail cleanly rather than mis-index.
+// has no runtime, so it must fail cleanly rather than mis-index. Its `list[int]` param
+// type is now itself gated in sema (A4), so the program is rejected at the type before
+// the emit pattern-gate is reached — either way it fails loud with a clean diagnostic.
 func TestListPatternGate(t *testing.T) {
 	src := "fn f(xs: list[int]) -> int {\n\treturn match xs {\n\t\t[a, b] => a + b\n\t\t_ => 0\n\t}\n}\n" +
 		"fn main() { print 0 }\n"
@@ -75,7 +77,14 @@ func TestListPatternGate(t *testing.T) {
 	if len(diags) == 0 || code != "" {
 		t.Fatalf("a list pattern should be gated, got code=%q diags=%v", code, diags)
 	}
-	if !strings.Contains(diags[0].Msg, "list pattern is not yet supported") {
-		t.Fatalf("expected the list-pattern gate diagnostic, got: %v", diags)
+	gated := false
+	for _, d := range diags {
+		if strings.Contains(d.Msg, "list pattern is not yet supported") ||
+			strings.Contains(d.Msg, "list type is not yet supported") {
+			gated = true
+		}
+	}
+	if !gated {
+		t.Fatalf("expected a clean list gate diagnostic, got: %v", diags)
 	}
 }

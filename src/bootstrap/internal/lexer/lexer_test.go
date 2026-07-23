@@ -163,7 +163,7 @@ func TestTripleString(t *testing.T) {
 }
 
 func TestMoreEscapes(t *testing.T) {
-	toks, diags := Tokenize(`'\u{263A}' b'\x7F' "\r\0end"`)
+	toks, diags := Tokenize(`'\u{263A}' b'\x7F' "\r\tend"`)
 	if len(diags) != 0 {
 		t.Fatalf("diags: %v", diags)
 	}
@@ -173,8 +173,37 @@ func TestMoreEscapes(t *testing.T) {
 	if toks[1].Kind != token.Byte || toks[1].Str != "\x7f" {
 		t.Fatalf("byte escape: %q", toks[1].Str)
 	}
-	if toks[2].Kind != token.Str || toks[2].Str != "\r\x00end" {
+	if toks[2].Kind != token.Str || toks[2].Str != "\r\tend" {
 		t.Fatalf("str escapes: %q", toks[2].Str)
+	}
+}
+
+// TestNulInStringRejected covers GRAMMAR 156: a NUL is forbidden inside a string, so
+// `\0` and `\u{0}` in a plain, triple, or f-string are rejected — never silently
+// accepted and truncated at runtime.
+func TestNulInStringRejected(t *testing.T) {
+	for _, src := range []string{`"\0"`, `"a\u{0}b"`, "\"\"\"x\\0y\"\"\"", `f"a\0b"`} {
+		if _, diags := Tokenize(src); len(diags) == 0 {
+			t.Errorf("%q: a NUL in a string must be rejected", src)
+		}
+	}
+}
+
+// TestNulInRuneAndByteLegal covers the other half of GRAMMAR 156: a NUL scalar is
+// legal in a rune or byte literal, decoding to a 0 code point / octet.
+func TestNulInRuneAndByteLegal(t *testing.T) {
+	toks, diags := Tokenize(`'\0' b'\x00' '\u{0}'`)
+	if len(diags) != 0 {
+		t.Fatalf("a NUL in a rune/byte should be legal, got: %v", diags)
+	}
+	if toks[0].Kind != token.Rune || toks[0].Str != "\x00" {
+		t.Fatalf("rune NUL: kind=%v str=%q", toks[0].Kind, toks[0].Str)
+	}
+	if toks[1].Kind != token.Byte || toks[1].Str != "\x00" {
+		t.Fatalf("byte NUL: kind=%v str=%q", toks[1].Kind, toks[1].Str)
+	}
+	if toks[2].Kind != token.Rune || toks[2].Str != "\x00" {
+		t.Fatalf("rune \\u{0}: kind=%v str=%q", toks[2].Kind, toks[2].Str)
 	}
 }
 

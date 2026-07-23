@@ -233,7 +233,6 @@ func TestQuote(t *testing.T) {
 		{"plain", `"plain"`},
 		{"a\tb\nc", `"a\tb\nc"`},
 		{`quote " and \`, `"quote \" and \\"`},
-		{"\r\x00", `"\r\0"`},
 		{"\x01", `"\u{1}"`},
 		{"héllo ☺", `"héllo ☺"`},
 	}

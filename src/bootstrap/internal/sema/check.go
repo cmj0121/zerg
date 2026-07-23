@@ -355,6 +355,15 @@ func (c *checker) checkAssign(n *ast.Reassign) {
 	if !mutable {
 		c.errorf(n.Span(), "cannot assign to immutable binding %q", name)
 	}
+	// Rebinding the whole list a `for x in xs` loop is iterating invalidates its
+	// cursor, so it is rejected inside the loop (docs/collections.md). An element
+	// write `xs[i] = v` is not a rebind and stays allowed (its target is a Bracket).
+	if lv, ok := n.Target.(*ast.LValueTarget); ok {
+		if _, isList := lty.(*types.List); isList && c.listIsFrozen(lv.X) {
+			c.errorf(n.Span(), "cannot rebind list %q while iterating it; "+
+				"the list is frozen against structural change inside its own `for` loop", name)
+		}
+	}
 	if !bad(lty) && !bad(vt) && !c.assignable(lty, n.Value, vt) {
 		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, name, lty)
 	}

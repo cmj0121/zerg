@@ -119,6 +119,13 @@ type emitter struct {
 	// stays byte-identical.
 	tuples map[string]*tupleCarrier
 
+	// List instances (docs/collections.md). lists maps a list element type's spelling
+	// to its generated per-instance helpers (the element vtable, the by-value copy, and
+	// the drop-env thunk); every list is the same C header (zrt_list), only its element
+	// copy/drop differ. Empty for a program that names no list value, which therefore
+	// stays byte-identical.
+	lists map[string]*listCarrier
+
 	// needsIO is set when the program lowers a stdlib `io` write intrinsic (Phase
 	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
 	// program that never imports io, which therefore stays byte-identical.
@@ -669,6 +676,12 @@ func (e *emitter) returnStmt(n *ast.ReturnStmt) {
 // bound with copy/move semantics — the memory model's declare-del-declare, done
 // eagerly (full flow tracking is U4/U5).
 func (e *emitter) reassign(n *ast.Reassign) {
+	// `xs[i] = v` on a list target sets in place through the runtime (drop-old +
+	// store-new), before the ordinary place-assignment paths.
+	if s, ok := e.listIndexAssign(n); ok {
+		e.line(s + ";")
+		return
+	}
 	target := e.assignTarget(n.Target)
 	t := e.cur.ExprType(e.info, targetExpr(n.Target))
 	if !containsRef(t) {
@@ -784,6 +797,14 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 		e.popScope()
 		return
 	}
+	// A list[T]: index it through the runtime and copy each element into a `T v` local
+	// the body reads (a `for mut x` writes the edited element back to its slot at the
+	// end of each iteration). The loop var and body share one name scope and teardown
+	// frame, so a non-POD element copy is released per iteration.
+	if lt, ok := e.cur.ExprType(e.info, n.Iter).(*types.List); ok {
+		e.forInList(n, lt)
+		return
+	}
 	// A fixed array [T; N]: index it and copy each element into a `T v` local the body
 	// reads. The loop var and the body share one name scope and teardown frame.
 	arr, _ := e.cur.ExprType(e.info, n.Iter).(*types.Array)
@@ -796,6 +817,78 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	e.line(fmt.Sprintf("%s = %s[%s];", e.localDecl(arr.Elem, cv), e.expr(n.Iter), iv))
 	for _, s := range n.Body.Stmts {
 		e.stmt(s)
+	}
+	e.closeScope()
+	e.popScope()
+	e.indent--
+	e.line("}")
+}
+
+// forInList lowers `for (mut)? v in xs` over a list. Each iteration copies element i
+// into a `T v` local: a plain `for` copies (retain/deep-copy) a value the body only
+// reads, dropped per iteration when non-POD; a `for mut` copies the element, lets the
+// body edit it, then writes it back to slot i (drop-old + store-new via zrt_list_set).
+// The iterated list is frozen against structural change (sema), so the length read
+// each turn is stable.
+func (e *emitter) forInList(n *ast.ForStmt, lt *types.List) {
+	nonPOD := containsRef(lt.Elem)
+	if n.Mut && nonPOD {
+		// A `for mut x` over a non-POD element needs move/ownership tracking on the
+		// per-iteration write-back that the MVP loop-var machinery does not model; gate it
+		// rather than leak or double-free. A `for x` read and a POD `for mut` are supported.
+		e.diags.Add(n.Span(), "`for mut x` over a list of non-POD elements is not yet supported")
+		return
+	}
+	// The iterable must be an addressable place to index in place. A fresh list (a
+	// literal, a call result) is materialized into an owned temp, dropped on every exit
+	// path through the cleanup stack, then iterated.
+	if !isLValueExpr(n.Iter) {
+		e.line("{")
+		e.indent++
+		e.pushScope()
+		e.openScope(true, false)
+		tmp := e.freshName("foriter")
+		e.line(fmt.Sprintf("zrt_list %s = %s;", tmp, e.copyValue(lt, n.Iter)))
+		e.registerDrop(tmp, lt, n.Iter)
+		e.forInListBody(n, lt, tmp)
+		e.closeScope()
+		e.popScope()
+		e.indent--
+		e.line("}")
+		return
+	}
+	e.forInListBody(n, lt, e.expr(n.Iter))
+}
+
+// forInListBody emits the counted list iteration loop over the list named by `base`
+// (an addressable place or a materialized temp), copying each element into the loop
+// var. Split from forInList so a fresh iterable can be materialized and dropped around
+// it.
+func (e *emitter) forInListBody(n *ast.ForStmt, lt *types.List, base string) {
+	nonPOD := containsRef(lt.Elem)
+	iv := e.freshName("i")
+	ct := e.ctype(lt.Elem)
+	e.line(fmt.Sprintf("for (size_t %s = 0; %s < zrt_list_len(&(%s)); %s++) {", iv, iv, base, iv))
+	e.indent++
+	e.pushScope()
+	cv := e.declareName(n.Var)
+	e.openScope(e.subtreeTeardown(n.Body.Stmts), true)
+	slot := fmt.Sprintf("(*(%s*)zrt_list_at(&(%s), %s))", ct, base, iv)
+	rhs := slot
+	if nonPOD {
+		rhs = e.fieldCopy(lt.Elem, slot)
+	}
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(lt.Elem, cv), rhs))
+	if nonPOD {
+		e.registerDrop(cv, lt.Elem, n)
+	}
+	for _, s := range n.Body.Stmts {
+		e.stmt(s)
+	}
+	if n.Mut {
+		// a POD element edited in place is written straight back to its slot (a bit copy;
+		// no element teardown, so no drop/leak concern).
+		e.line(fmt.Sprintf("%s = %s;", slot, cv))
 	}
 	e.closeScope()
 	e.popScope()
@@ -948,25 +1041,36 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.expr(n.X) + ".zg_" + n.Name
 	case *ast.Bracket:
 		if e.info.Brackets[n].Kind == sema.BracketIndex && len(n.Elems) == 1 {
+			// a list[T] index reads the element through the runtime (aborting on OOB =
+			// IndexError) and copies it out to an owned value; an array/ptr base keeps the
+			// native `base[idx]`.
+			if lt, ok := e.cur.ExprType(e.info, n.Base).(*types.List); ok {
+				return e.listIndex(n, lt)
+			}
 			return e.expr(n.Base) + "[" + e.expr(n.Elems[0]) + "]"
 		}
 		return "0"
 	case *ast.ListLit:
 		// A list literal in fixed-array position ([int; N] = [a, b, …]) lowers to a C
 		// array initializer, which is what the surrounding binding's array type consumes.
-		// A general list[T] / set[T] value has no runtime yet, so lowering `{…}` there
-		// would produce a value of an incomplete type; gate it cleanly instead.
+		// A list[T] value lowers to a statement-expression that builds a zrt_list; a
+		// set[T] value has no runtime yet and is gated.
+		if t, ok := e.cur.ExprType(e.info, n).(*types.List); ok {
+			return e.listLit(n, t)
+		}
 		if t, ok := e.info.ExprTypes[n]; ok {
-			switch t.(type) {
-			case *types.List, *types.Set:
-				e.diags.Add(n.Span(), "a list value is not yet supported")
+			if _, ok := t.(*types.Set); ok {
+				e.diags.Add(n.Span(), "a set value is not yet supported")
 				return "0"
 			}
 		}
 		return "{" + e.exprList(n.Elems) + "}"
 	case *ast.ListFill:
-		// The fill form [v; N] in fixed-array position could lower to an initializer, but
-		// only the general list[T] runtime path is exercised today; gate both cleanly.
+		// The fill form [v; N] in list position builds a zrt_list of N copies; an array
+		// (or set) target has no runtime lowering yet and stays gated.
+		if t, ok := e.cur.ExprType(e.info, n).(*types.List); ok {
+			return e.listFill(n, t)
+		}
 		e.diags.Add(n.Span(), "a fill-form list literal is not yet supported")
 		return "0"
 	case *ast.MapLit:
@@ -1424,6 +1528,9 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.ptrCallEmit(n); ok {
 		return s
 	}
+	if s, ok := e.listMethodEmit(n); ok {
+		return s
+	}
 	if s, ok := e.builtinCallEmit(n); ok {
 		return s
 	}
@@ -1718,6 +1825,11 @@ func (e *emitter) ctype(t sema.Type) string {
 	// a tuple value: its monomorphized per-shape carrier (completeness iteration 2 U2).
 	if c, ok := e.tupleFor(t); ok {
 		return c.name
+	}
+	if _, ok := t.(*types.List); ok {
+		// a list[T] value is a by-value header (list.c owns the buffer); its element type
+		// rides in the per-instance vtable, so every list is the same C header type.
+		return "zrt_list"
 	}
 	if _, ok := t.(*types.Chan); ok {
 		// a channel handle is an opaque runtime pointer (chan.c owns the layout).

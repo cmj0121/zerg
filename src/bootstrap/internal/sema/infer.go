@@ -27,6 +27,12 @@ func (c *checker) inferCall(n *ast.Call) Type {
 			t, _ := c.ptrMethodCall(n, fld, pt)
 			return t
 		}
+		// A method on a built-in list receiver (`.len()` / `.get(i)` / `.append(v)`) is a
+		// compiler intrinsic (list is not a user struct), dispatched on the receiver's
+		// static type before the nominal-method path.
+		if lt, ok := c.synth(fld.X).(*types.List); ok {
+			return c.listMethodCall(n, fld, lt)
+		}
 		// A '.method()' on a concrete nominal receiver dispatches to the type's method
 		// namespace (inherent or spec method alike); only when no such method exists does
 		// it fall through to the field-access path and its "no field" diagnostic.

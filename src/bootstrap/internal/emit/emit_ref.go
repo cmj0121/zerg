@@ -41,6 +41,11 @@ func containsRef(t sema.Type) bool {
 	switch x := t.(type) {
 	case *types.Ref:
 		return true
+	case *types.List:
+		// a list is NEVER plain-old-data: even a list[int] owns a heap buffer, so a bare
+		// C `=` would alias it and double-free at the two holders' scope exits. It must
+		// always flow through zrt_list_copy / zrt_list_drop (docs/collections.md).
+		return true
 	case *types.Chan:
 		// a channel is a ref type per memory.md; its runtime is 1e, so it never
 		// actually reaches a copy site this phase, but POD-ness must still exclude it.
@@ -147,6 +152,9 @@ func (e *emitter) prepareRuntime() {
 	// prepass so a tuple's element ctype (which a Result carrier may influence) is
 	// settled. Leaves the tuple map empty for a program with no tuple value.
 	e.prepareTuples()
+	// Number the list instances (docs/collections.md), keyed by element type. Leaves
+	// the list map empty for a program with no list value, which stays byte-identical.
+	e.prepareLists()
 	// A program that imports io (lowers a write intrinsic) or that carries a
 	// Result[nil] in any signature (e.g. a bundled io function) needs the runtime:
 	// the io primitives ride in the always-linked sys.c, and Result[nil] spells
@@ -435,12 +443,16 @@ func (e *emitter) refnewName(elem sema.Type) string {
 // is moved unchanged, so a newly built Ref is not over-counted.
 func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 	base := e.expr(x)
-	if !containsRef(typ) || !isLValueExpr(x) {
+	if !containsRef(typ) || !e.namesStorage(x) {
 		return base
 	}
 	switch t := typ.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", base)
+	case *types.List:
+		// copying a list value that names existing storage deep-copies its buffer (each
+		// element via the instance vtable), so the two holders never alias.
+		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), base)
 	case *types.Chan:
 		// copying a channel handle retains it; a send-capable handle (bidi/send-only)
 		// also bumps the sender count, a receive-only handle does not.
@@ -462,6 +474,22 @@ func isLValueExpr(x ast.Expr) bool {
 	switch x.(type) {
 	case *ast.Ident, *ast.Field:
 		return true
+	}
+	return false
+}
+
+// namesStorage extends isLValueExpr with a list index `xs[i]`, which borrows the
+// element's slot storage: copying it must retain/deep-copy the element (so a `v :=
+// xs[i]` owns an independent copy), while a transient read leaves the borrow alone.
+// A non-list bracket (an array index, a type-arg bracket) is not treated as owned
+// storage here, keeping every existing copy site byte-identical.
+func (e *emitter) namesStorage(x ast.Expr) bool {
+	if isLValueExpr(x) {
+		return true
+	}
+	if br, ok := x.(*ast.Bracket); ok {
+		_, ok := e.cur.ExprType(e.info, br.Base).(*types.List)
+		return ok
 	}
 	return false
 }
@@ -505,6 +533,11 @@ func (e *emitter) emitRefHelpers() {
 		e.line("}")
 		e.blank()
 	}
+	// Forward-declare the list helpers before the struct helpers, so a struct with a
+	// list field (whose zg_copy_ references zg_listcopy_<n>) resolves; the definitions
+	// follow after the struct helpers, where a list-of-struct's element thunk can see
+	// the struct's own zg_copy_.
+	e.emitListForwardDecls()
 	for _, ti := range e.prog.Types {
 		if !e.tiContainsRef(ti) {
 			continue
@@ -518,6 +551,9 @@ func (e *emitter) emitRefHelpers() {
 	for _, elem := range e.refnewElems {
 		e.refnewHelper(elem)
 	}
+	// List element vtables + copy/drop definitions (after the struct helpers so a
+	// list-of-struct's element thunk can call the struct's zg_copy_/zg_drop_).
+	e.emitListHelpers()
 	e.emitDeferHelpers()
 	e.emitSpawnHelpers()
 	e.emitChanHelpers()
@@ -619,6 +655,9 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
+	case *types.List:
+		// a list field / element deep-copies through its instance's value copy helper.
+		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
 	}
@@ -631,6 +670,8 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_release(%s);", access)
+	case *types.List:
+		return fmt.Sprintf("zrt_list_drop(&(%s));", access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
 	}

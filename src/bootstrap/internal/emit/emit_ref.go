@@ -586,6 +586,15 @@ func (e *emitter) programHasRefLocal() bool {
 			if w, ok := s.(*ast.WithStmt); ok && isRef(inst.ExprType(e.info, w.Resource)) {
 				found = true
 			}
+			// A `for x in xs` over a list whose element bears a Ref copies each element
+			// into a Ref-bearing loop var that registers the zg_ref_drop guard per
+			// iteration (forInListBody), so the thunk must be emitted even when the program
+			// binds no other bare Ref local.
+			if f, ok := s.(*ast.ForStmt); ok && f.Iter != nil {
+				if lt, ok := inst.ExprType(e.info, f.Iter).(*types.List); ok && containsRef(lt.Elem) {
+					found = true
+				}
+			}
 		})
 		if found {
 			return true

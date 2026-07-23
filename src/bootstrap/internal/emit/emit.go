@@ -872,7 +872,11 @@ func (e *emitter) forInListBody(n *ast.ForStmt, lt *types.List, base string) {
 	e.indent++
 	e.pushScope()
 	cv := e.declareName(n.Var)
-	e.openScope(e.subtreeTeardown(n.Body.Stmts), true)
+	// A non-POD loop var registers a per-iteration drop (registerDrop below), so the
+	// scope must record a mark even when the body owns no teardown — otherwise the
+	// element copy's release is deferred to function end (the same stack slot re-pushed
+	// each iteration → multi-release of the last element and a leak of the earlier ones).
+	e.openScope(nonPOD || e.subtreeTeardown(n.Body.Stmts), true)
 	slot := fmt.Sprintf("(*(%s*)zrt_list_at(&(%s), %s))", ct, base, iv)
 	rhs := slot
 	if nonPOD {

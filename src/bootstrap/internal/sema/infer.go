@@ -913,14 +913,14 @@ func (c *checker) inferField(n *ast.Field) Type {
 		c.errorf(n.Span(), "type %s has no field %q", st.Def.Name, n.Name)
 		return Invalid
 	}
-	// A channel's `.recv` / `.send` value narrowing (GRAMMAR group 9) has no backend
-	// lowering yet — the narrowed handle needs the right retain/drop discipline for a
-	// receive-only vs send-only view. Reject it cleanly rather than silently type it as
-	// void and emit a bad field access; direction narrowing via a `<-chan[T]` /
-	// `chan[T]<-` annotation on the binding or parameter is the supported path today.
+	// `ch.recv` / `ch.send` value narrowing is not part of the language: a channel is
+	// narrowed to a receive-only or send-only view by a type annotation, not by a
+	// `.recv`/`.send` field. Reject it cleanly rather than silently type it as void and
+	// emit a bad field access. The send/receive operations stay Go-style (`ch <- v`,
+	// `<-ch`) and are unaffected.
 	if _, ok := xt.(*types.Chan); ok && (n.Name == "recv" || n.Name == "send") {
-		c.errorf(n.Span(), "channel `.%s` value narrowing is not yet supported; "+
-			"annotate the binding or parameter type instead (`<-chan[T]` for receive-only, `chan[T]<-` for send-only)", n.Name)
+		c.errorf(n.Span(), "a channel is narrowed by a type annotation "+
+			"(`<-chan[T]` for receive-only, `chan[T]<-` for send-only), not by `.%s`", n.Name)
 		return Invalid
 	}
 	return types.Unknown

@@ -264,6 +264,13 @@ func (c *checker) fillEnum(n *ast.EnumDecl) {
 	sym.TypeDef.Params = typeParamsOf(env)
 	saved := c.typeParams
 	c.typeParams = env.merged(saved)
+	// C-style discriminants run continuously: an explicit `= n` sets the value and the
+	// next unnannotated variant continues from n+1 (so `Red = 1; Green; Blue = 10` is
+	// 1, 2, 10). Only a wholly fieldless enum (CStyle) carries discriminants; a variant
+	// with a payload keeps its positional tag (Discr stays nil), so an enum with no
+	// explicit values resolves to 0, 1, 2 — identical to the positional tags.
+	var next int64
+	cstyle := sym.TypeDef.Enum.CStyle
 	for i, v := range n.Variants {
 		if i >= len(sym.TypeDef.Enum.Variants) {
 			break
@@ -272,6 +279,18 @@ func (c *checker) fillEnum(n *ast.EnumDecl) {
 		vd.Payload = vd.Payload[:0]
 		for _, p := range v.Payload {
 			vd.Payload = append(vd.Payload, c.resolveType(p))
+		}
+		if cstyle {
+			if v.Discr != nil {
+				if kv, ok := c.foldConst(v.Discr.X); ok && kv.Kind == types.KInt {
+					next = kv.I
+				} else {
+					c.errorf(v.Discr.Span(), "an enum discriminant must be a constant integer")
+				}
+			}
+			d := next
+			vd.Discr = &d
+			next++
 		}
 	}
 	c.typeParams = saved
@@ -719,7 +738,14 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		c.checkAssign(n)
 	case *ast.PrintStmt:
 		t := c.synth(n.Value)
-		if !bad(t) && !printable(t) {
+		switch {
+		case t != nil && t.Kind() == types.KUnknown:
+			// An Unknown-typed operand (a str/container method or field result the stdlib
+			// has not typed yet, GRAMMAR/FORK-4) has no concrete C value to print, so the
+			// backend would silently emit nothing. Fail loud here rather than vanish.
+			c.errorf(n.Span(), "cannot use a value of unknown type here "+
+				"(a string/container method result is not yet typed)")
+		case !bad(t) && !printable(t):
 			c.errorf(n.Span(), "cannot print a value of type %s", t)
 		}
 	case *ast.ReturnStmt:

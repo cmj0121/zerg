@@ -64,6 +64,64 @@ void zrt_release(void *ref);
 /* zrt_ref_payload returns the payload pointer for a Ref header (header + 1). */
 void *zrt_ref_payload(void *ref);
 
+/* --- list[T]: by-value growable sequence (list.c) ------------------------ */
+
+/* zrt_elem_vt is a list instance's per-element teardown vtable: how to deep-copy
+ * one element (dst <- src) and how to drop one. A POD element type carries a NULL
+ * vtable (or NULL copy/drop), which selects the raw memcpy fast path. The compiler
+ * emits one static vtable per distinct list element type. */
+typedef struct {
+	void (*copy)(void *dst, const void *src);
+	void (*drop)(void *elem);
+} zrt_elem_vt;
+
+/* zrt_list is a list's BY-VALUE header: the elements live in one heap buffer `data`
+ * of `cap` slots each `elemsz` bytes, `len` of them live, and `vt` teaches the
+ * runtime how to copy/drop an element. The header itself is embedded inline in its
+ * holder (a local/field/element), so copying/dropping the header is the compiler's
+ * job; this runtime owns only the buffer. The layout is INTERNAL (never FFI-frozen). */
+typedef struct {
+	uint8_t          *data;
+	size_t            len;
+	size_t            cap;
+	size_t            elemsz;
+	const zrt_elem_vt *vt;
+} zrt_list;
+
+/* zrt_list_init sets l to an empty list of elemsz-byte elements with the given
+ * element vtable (NULL for a POD element). No buffer is allocated until the first
+ * push. */
+void zrt_list_init(zrt_list *l, size_t elemsz, const zrt_elem_vt *vt);
+
+/* zrt_list_push appends a copy of *elem (elemsz bytes, a raw memcpy — the caller has
+ * already produced an owned element) to l, growing the buffer 0->8 then doubling. A
+ * grow relocates the live prefix with a bit-move, not vt->copy. */
+void zrt_list_push(zrt_list *l, const void *elem);
+
+/* zrt_list_at returns a pointer to element i's slot, aborting ("index out of range")
+ * when i is past the end — the `xs[i]` force path (IndexError). */
+void *zrt_list_at(zrt_list *l, size_t i);
+
+/* zrt_list_set overwrites element i: it drops the old element (vt->drop) then
+ * memcpys *elem in. Aborts on a bad index, like zrt_list_at. */
+void zrt_list_set(zrt_list *l, size_t i, const void *elem);
+
+/* zrt_list_len returns the live element count. */
+size_t zrt_list_len(const zrt_list *l);
+
+/* zrt_list_get returns element i's slot pointer, or NULL when i is out of range (no
+ * abort) — the checked `.get(i)` path. */
+void *zrt_list_get(zrt_list *l, size_t i);
+
+/* zrt_list_copy deep-copies src into dst: a fresh buffer, then per-element vt->copy
+ * (POD elements — NULL vt or copy — take a single memcpy). It is the value-semantics
+ * copy the compiler inserts wherever a list is bound/passed/returned by value. */
+void zrt_list_copy(zrt_list *dst, const zrt_list *src);
+
+/* zrt_list_drop drops every live element (vt->drop) and frees the buffer, leaving an
+ * empty header. It is the scope-exit teardown the compiler schedules for a list. */
+void zrt_list_drop(zrt_list *l);
+
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
 /* zrt_cleanup is one pending deferred action on the cleanup stack: a thunk and

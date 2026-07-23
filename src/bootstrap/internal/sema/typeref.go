@@ -176,11 +176,9 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 	}
 	switch ref.Name {
 	case "list":
-		// A8: a list/map/set has no runtime yet. Naming one in a real codegen TYPE
-		// position (a param, field, binding annotation, or tuple element) would lower to
-		// C's `void` (an incomplete type cc rejects) — so reject the explicit type here,
-		// where the span is precise. An inferred list VALUE is gated separately in emit.
-		c.errorf(ref.Span(), "a list type is not yet supported")
+		// list[T] is a real container (list.c): its ctype is zrt_list, so naming one in
+		// a codegen TYPE position (param, field, binding annotation, tuple element) is
+		// supported. map/set have no runtime yet and stay gated below.
 		return &types.List{Elem: arg(0)}, true
 	case "set":
 		c.errorf(ref.Span(), "a set type is not yet supported")

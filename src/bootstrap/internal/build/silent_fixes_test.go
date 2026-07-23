@@ -130,3 +130,23 @@ func TestPayloadEnumDiscriminantRejected(t *testing.T) {
 		t.Fatalf("expected the payload-enum discriminant diagnostic, got: %v", diags)
 	}
 }
+
+// TestBreakIfConditionTypeChecked covers a break-if / continue-if guard: the trailing
+// condition must be bool, mirroring return-if — a non-bool was silently accepted.
+func TestBreakIfConditionTypeChecked(t *testing.T) {
+	for _, src := range []string{
+		"fn main() {\n\tmut i := 0\n\tfor {\n\t\ti = i + 1\n\t\tbreak if 5\n\t}\n}\n",
+		"fn main() {\n\tmut i := 0\n\tfor {\n\t\ti = i + 1\n\t\tcontinue if 5\n\t\tbreak if i > 3\n\t}\n}\n",
+	} {
+		_, _, diags := Compile(src)
+		found := false
+		for _, d := range diags {
+			if strings.Contains(d.Msg, "condition must be bool") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("a non-bool break/continue-if condition must be rejected, got: %v", diags)
+		}
+	}
+}

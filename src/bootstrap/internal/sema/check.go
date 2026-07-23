@@ -355,6 +355,15 @@ func (c *checker) checkAssign(n *ast.Reassign) {
 	if !mutable {
 		c.errorf(n.Span(), "cannot assign to immutable binding %q", name)
 	}
+	// Rebinding the whole list a `for x in xs` loop is iterating invalidates its
+	// cursor, so it is rejected inside the loop (docs/collections.md). An element
+	// write `xs[i] = v` is not a rebind and stays allowed (its target is a Bracket).
+	if lv, ok := n.Target.(*ast.LValueTarget); ok {
+		if _, isList := lty.(*types.List); isList && c.listIsFrozen(lv.X) {
+			c.errorf(n.Span(), "cannot rebind list %q while iterating it; "+
+				"the list is frozen against structural change inside its own `for` loop", name)
+		}
+	}
 	if !bad(lty) && !bad(vt) && !c.assignable(lty, n.Value, vt) {
 		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, name, lty)
 	}
@@ -473,6 +482,13 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		}
 		return Bool
 	case isEqOp(n.Op):
+		// List equality is not implemented; without this gate two lists satisfy
+		// `comparable` (identical types) and the backend emits `zg_a == zg_b` on the
+		// runtime list struct, which cc rejects. Report a clean deferral here.
+		if isListType(lt) || isListType(rt) {
+			c.errorf(n.Span(), "list equality (%q) is not yet supported", n.Op)
+			return Invalid
+		}
 		if !c.comparable(n, lt, rt) {
 			c.errorf(n.Span(), "cannot compare %s and %s", lt, rt)
 			return Invalid
@@ -485,10 +501,24 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		}
 		return Bool
 	case n.Op == token.In:
+		// List membership is not implemented; without this gate `2 in xs` types as bool
+		// and the backend emits `(2 ? zg_xs)`, which cc rejects. Report a clean deferral
+		// (map membership stays supported through its own path).
+		if isListType(rt) {
+			c.errorf(n.Span(), "list membership (`in`) is not yet supported")
+			return Invalid
+		}
 		// membership test 'v in coll' yields bool (GRAMMAR group 4).
 		return Bool
 	}
 	return Invalid
+}
+
+// isListType reports whether a type is a list[T] — the operand shape whose equality
+// and membership are not yet implemented in the backend.
+func isListType(t Type) bool {
+	_, ok := t.(*types.List)
+	return ok
 }
 
 // isNominal reports whether a type is a user struct or enum — the operands whose

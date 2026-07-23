@@ -135,7 +135,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	r := &resolver{info: info}
 	r.resolveFile(file)
 
-	c := &checker{info: info, module: r.module, constEdges: r.constEdges}
+	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}}
 	c.collectTypes(file)
 	// The spec/impl registry is built before signatures so a generic parameter's
 	// spec bound ('[T: Ord]') can be resolved to the SpecDef it carries (U3): the
@@ -180,6 +180,12 @@ type checker struct {
 	// of a non-live name is rejected, turning a would-be use-after-free into a clean
 	// compile error.
 	dead map[*symbol]liveness
+
+	// frozenLists counts, per list-binding symbol, the number of enclosing `for x in
+	// xs` loops iterating it: a list is frozen against structural change (append or
+	// rebind) while it is being iterated, so an iterator can never be invalidated
+	// (docs/collections.md). Editing an ELEMENT in place (`for mut x`) stays allowed.
+	frozenLists map[*symbol]int
 }
 
 // liveness is a binding's post-del state on the current path: liveOK (the default,
@@ -691,6 +697,13 @@ func (c *checker) checkForIn(n *ast.ForStmt) {
 	elem := c.forInElem(n)
 	incoming := c.snapshotDead()
 	c.loopDepth++
+	// Freeze the iterated list against structural change (append/rebind) for the loop
+	// body, so an iterator is never invalidated (docs/collections.md). A `for mut x`
+	// in-place element edit stays allowed; only append/rebind of the list are rejected.
+	if frozen := c.iteratedListSym(n); frozen != nil {
+		c.frozenLists[frozen]++
+		defer func() { c.frozenLists[frozen]-- }()
+	}
 	c.pushScope()
 	if n.Var != "" {
 		c.declare(n.Body.Span(), n.Var, elem, n.Mut)
@@ -726,10 +739,31 @@ func (c *checker) forInElem(n *ast.ForStmt) Type {
 	if arr, ok := it.(*types.Array); ok {
 		return arr.Elem
 	}
+	if lst, ok := it.(*types.List); ok {
+		return lst.Elem
+	}
 	if !bad(it) {
 		c.errorf(n.Iter.Span(), "for-in over %s is not yet supported", it)
 	}
 	return Invalid
+}
+
+// iteratedListSym returns the list-binding symbol a for-in iterates when the iterable
+// is a bare name bound to a list, so the loop can freeze it against structural change
+// for its duration. It is nil for a range, an array, or a non-name list expression.
+func (c *checker) iteratedListSym(n *ast.ForStmt) *symbol {
+	id, ok := n.Iter.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	sym := c.lookup(id.Name)
+	if sym == nil {
+		return nil
+	}
+	if _, ok := sym.typ.(*types.List); !ok {
+		return nil
+	}
+	return sym
 }
 
 func (c *checker) checkStmt(s ast.Stmt) {
@@ -758,9 +792,15 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		if c.loopDepth == 0 {
 			c.errorf(n.Span(), "break outside of a loop")
 		}
+		if n.Cond != nil {
+			c.checkCond(n.Cond)
+		}
 	case *ast.ContinueStmt:
 		if c.loopDepth == 0 {
 			c.errorf(n.Span(), "continue outside of a loop")
+		}
+		if n.Cond != nil {
+			c.checkCond(n.Cond)
 		}
 	case *ast.IfStmt:
 		// Analyse each branch (and the implicit fall-through when there is no else)

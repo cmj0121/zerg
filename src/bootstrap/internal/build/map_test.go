@@ -194,6 +194,63 @@ func TestMapNestedMapValue(t *testing.T) {
 	}
 }
 
+// TestMapGenericBoolKeyGate: a generic `fn build[K, V](…) -> map[K, V]` instantiated with
+// a bool key must be rejected with the SAME clean Hash gate a direct `map[bool, int]` gets.
+// sema lets the bare type parameter K through, so the gate has to re-run on the CONCRETE
+// key after monomorphization (emit's prepareMaps) — otherwise the backend falls back to the
+// int vtable and reads 8 bytes for a 1-byte key (an ASan stack-buffer-overflow, no
+// diagnostic).
+func TestMapGenericBoolKeyGate(t *testing.T) {
+	src := "fn build[K, V](k: K, v: V) -> map[K, V] {\n\tmut m: map[K, V] = {:}\n\tm[k] = v\n\treturn m\n}\n" +
+		"fn main() {\n\tm := build(true, 7)\n\tprint m[true]\n}\n"
+	c, _, diags := Compile(src)
+	if len(diags) == 0 || !strings.Contains(diags[0].Msg, "needs Hash") {
+		t.Fatalf("expected a map-key Hash gate on the concrete bool key, got %v", diags)
+	}
+	if c != "" {
+		t.Fatalf("expected no C emitted for a rejected generic bool-keyed map, got %d bytes", len(c))
+	}
+}
+
+// TestMapGenericStructKeyGate: a generic map instantiated with a >8-byte struct key must be
+// rejected. Without the post-monomorphization gate the int vtable hashes only the first 8
+// bytes, so two distinct struct keys collide — a SILENT miscompile (wrong answer, no
+// diagnostic). This asserts it is a clean gate instead.
+func TestMapGenericStructKeyGate(t *testing.T) {
+	src := "struct P {\n\tx: int\n\ty: int\n\tz: int\n}\n" +
+		"fn build[K, V](k: K, v: V) -> map[K, V] {\n\tmut m: map[K, V] = {:}\n\tm[k] = v\n\treturn m\n}\n" +
+		"fn main() {\n\tm := build(P(x: 1, y: 2, z: 3), 100)\n\tprint m.len()\n}\n"
+	c, _, diags := Compile(src)
+	if len(diags) == 0 || !strings.Contains(diags[0].Msg, "needs Hash") {
+		t.Fatalf("expected a map-key Hash gate on the concrete struct key, got %v", diags)
+	}
+	if c != "" {
+		t.Fatalf("expected no C emitted for a rejected generic struct-keyed map, got %d bytes", len(c))
+	}
+}
+
+// TestMapGenericIntKey: a legitimate generic map instantiated with an int key still compiles
+// and runs — the gate rejects only non-int/str concrete keys, not the whole generic path.
+func TestMapGenericIntKey(t *testing.T) {
+	src := "fn build[K, V](k: K, v: V) -> map[K, V] {\n\tmut m: map[K, V] = {:}\n\tm[k] = v\n\treturn m\n}\n" +
+		"fn main() {\n\tm := build(1, 7)\n\tprint m[1]\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "7\n" {
+		t.Fatalf("generic int-keyed map = %q, want %q", got, "7\n")
+	}
+}
+
+// TestMapGenericStrKey: a legitimate generic map instantiated with a str key compiles and
+// runs (the built-in str Hash), proving the gate is on the key type, not the generic form.
+func TestMapGenericStrKey(t *testing.T) {
+	src := "fn build[K, V](k: K, v: V) -> map[K, V] {\n\tmut m: map[K, V] = {:}\n\tm[k] = v\n\treturn m\n}\n" +
+		"fn main() {\n\tm := build(\"k\", 7)\n\tprint m[\"k\"]\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "7\n" {
+		t.Fatalf("generic str-keyed map = %q, want %q", got, "7\n")
+	}
+}
+
 // TestMapEqualityGate: `a == b` on two maps is not implemented (map equality). Without a
 // sema gate two same-type maps satisfy `comparable` and the backend emits `zg_a == zg_b`
 // on the runtime map struct, which cc rejects. It must be a clean diagnostic.

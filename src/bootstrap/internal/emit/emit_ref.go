@@ -373,6 +373,19 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 		}
 		elem := e.cur.ExprType(e.info, n)
 		arg := e.expr(n.Args[0].Value)
+		// A fresh-container index (`deref({…}[k])`, `deref([…][i])`) hands deref an OWNED
+		// Ref copy with no other holder — the materialized-base fieldCopy — so reading its
+		// payload and dropping it on the floor leaks the box (balance 1). Read the payload
+		// into a value, THEN release the transient box, so it is freed exactly once. A
+		// non-POD payload (Ref-of-Ref) is left on the plain read (the value would need its
+		// own retain before the release); it is exotic and keeps the prior behaviour.
+		if !containsRef(elem) && e.producesOwnedTransientRef(n.Args[0].Value) {
+			box := e.freshName("drefbox")
+			val := e.freshName("drefval")
+			ct := e.ctype(elem)
+			return fmt.Sprintf("({ void *%s = %s; %s %s = (*(%s*)zrt_ref_payload(%s)); zrt_release(%s); %s; })",
+				box, arg, ct, val, ct, box, box, val), true
+		}
 		return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(elem), arg), true
 	}
 	if s, ok := e.atomicIntrinsicEmit(n); ok {
@@ -501,9 +514,34 @@ func (e *emitter) namesStorage(x ast.Expr) bool {
 	if br, ok := x.(*ast.Bracket); ok {
 		switch e.cur.ExprType(e.info, br.Base).(type) {
 		case *types.List, *types.Map:
-			return true
+			// Only an ADDRESSABLE container's index borrows its slot storage (listIndex/
+			// mapIndex take the borrow branch), so copying it must retain/deep-copy. A FRESH
+			// (rvalue) container's index took the materialized branch and ALREADY returned an
+			// OWNED copy; retaining again would double-count (leak on the bound/argument path).
+			// Recurse so a nested `xss[i][j]` on a named root still counts as storage.
+			return e.namesStorage(br.Base)
 		}
 		return false
+	}
+	return false
+}
+
+// producesOwnedTransientRef reports whether an expression is a FRESH-base container
+// index whose element is Ref-bearing — the exact shape for which listIndex/mapIndex
+// return an OWNED copy (the materialized-base fieldCopy) rather than a borrow. A
+// transient reader of such a value (deref) must release that owned copy after reading
+// it, or the box leaks (balance 1). A named-base index is a borrow and must NOT be
+// released here (the container still owns it).
+func (e *emitter) producesOwnedTransientRef(x ast.Expr) bool {
+	br, ok := x.(*ast.Bracket)
+	if !ok || len(br.Elems) != 1 || isLValueExpr(br.Base) {
+		return false
+	}
+	switch b := e.cur.ExprType(e.info, br.Base).(type) {
+	case *types.List:
+		return containsRef(b.Elem)
+	case *types.Map:
+		return containsRef(b.Val)
 	}
 	return false
 }

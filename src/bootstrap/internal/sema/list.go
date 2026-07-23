@@ -30,7 +30,12 @@ func (c *checker) listMethodCall(n *ast.Call, fld *ast.Field, lt *types.List) Ty
 			c.synthArgs(n)
 			return &types.Opt{Elem: lt.Elem}
 		}
-		c.check(n.Args[0].Value, Int)
+		// The index argument must be ASSIGNABLE to int, exactly like the `xs[i]` index
+		// path (inferBracket). A bare `check()` only context-types a literal and never
+		// reports a mismatch, so `xs.get(true)` would silently coerce bool -> int and
+		// `xs.get("x")` would emit `zrt_list_get(_, "x")` (bad C to cc); checkElem
+		// enforces assignability and reports a clean "list index" diagnostic.
+		c.checkElem(n.Args[0].Value, Int, "list index")
 		return &types.Opt{Elem: lt.Elem}
 	case "append":
 		if _, mutable, name, ok := c.lvalue(fld.X); ok && !mutable {

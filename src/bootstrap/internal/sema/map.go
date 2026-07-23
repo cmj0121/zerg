@@ -29,7 +29,12 @@ func (c *checker) mapMethodCall(n *ast.Call, fld *ast.Field, mt *types.Map) Type
 			c.synthArgs(n)
 			return &types.Opt{Elem: mt.Val}
 		}
-		c.check(n.Args[0].Value, mt.Key)
+		// The key argument must be ASSIGNABLE to the key type, exactly like `m[k]` and
+		// `m[k] = v` (both use checkElem). A bare `check()` only context-types a literal
+		// and never reports a mismatch, so `m.get(true)` on an int map would silently
+		// coerce bool -> int and `m.get("x")` would emit `int64_t = "x"` (bad C to cc);
+		// checkElem enforces assignability and reports a clean "map key" diagnostic.
+		c.checkElem(n.Args[0].Value, mt.Key, "map key")
 		return &types.Opt{Elem: mt.Val}
 	}
 	c.errorf(n.Span(), "a map has no method %q", fld.Name)

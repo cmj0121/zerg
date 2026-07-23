@@ -1022,7 +1022,15 @@ func (c *checker) inferBracket(n *ast.Bracket) Type {
 	switch b := xt.(type) {
 	case *types.List:
 		elem = b.Elem
-		c.synthIndices(n.Elems)
+		// a single index `xs[i]` must be assignable to int (mirroring the map key path
+		// below and `.get`); without this a bad index type (`xs[true]`, `xs["x"]`)
+		// reaches the backend as a silent coercion / bad C. A slice-shaped bracket is
+		// left to synth.
+		if len(n.Elems) == 1 {
+			c.checkElem(n.Elems[0], Int, "list index")
+		} else {
+			c.synthIndices(n.Elems)
+		}
 	case *types.Array:
 		elem = b.Elem
 		c.synthIndices(n.Elems)

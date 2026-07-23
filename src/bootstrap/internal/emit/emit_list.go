@@ -53,6 +53,10 @@ func (e *emitter) prepareLists() {
 			if _, dup := elems[x.String()]; !dup {
 				elems[x.String()] = x.Elem
 			}
+		case *types.Map:
+			// a list nested in a map's key/value (map[int, list[int]]) must register too.
+			consider(x.Key)
+			consider(x.Val)
 		case *types.Tuple:
 			for _, el := range x.Elems {
 				consider(el)

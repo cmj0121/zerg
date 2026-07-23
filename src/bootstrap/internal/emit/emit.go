@@ -126,6 +126,13 @@ type emitter struct {
 	// stays byte-identical.
 	lists map[string]*listCarrier
 
+	// Map instances (docs/collections.md). maps a map[K,V] type's spelling to its
+	// generated per-instance helpers (the key/val vtable, the by-value copy, and the
+	// drop-env thunk); every map is the same C header (zrt_map), only its value copy/drop
+	// (and the int/str hash+eq) differ. Empty for a program that names no map value,
+	// which therefore stays byte-identical.
+	maps map[string]*mapCarrier
+
 	// needsIO is set when the program lowers a stdlib `io` write intrinsic (Phase
 	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
 	// program that never imports io, which therefore stays byte-identical.
@@ -682,6 +689,11 @@ func (e *emitter) reassign(n *ast.Reassign) {
 		e.line(s + ";")
 		return
 	}
+	// `m[k] = v` on a map target inserts/updates in place through the runtime.
+	if s, ok := e.mapIndexAssign(n); ok {
+		e.line(s + ";")
+		return
+	}
 	target := e.assignTarget(n.Target)
 	t := e.cur.ExprType(e.info, targetExpr(n.Target))
 	if !containsRef(t) {
@@ -803,6 +815,12 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	// frame, so a non-POD element copy is released per iteration.
 	if lt, ok := e.cur.ExprType(e.info, n.Iter).(*types.List); ok {
 		e.forInList(n, lt)
+		return
+	}
+	// A map[K, V]: walk its entry vector in INSERTION order, binding each KEY into a `K k`
+	// local the body reads; the value is reached via `m[k]` (FORK-MAP-ITER).
+	if mt, ok := e.cur.ExprType(e.info, n.Iter).(*types.Map); ok {
+		e.forInMap(n, mt)
 		return
 	}
 	// A fixed array [T; N]: index it and copy each element into a `T v` local the body
@@ -1035,6 +1053,12 @@ func (e *emitter) expr(x ast.Expr) string {
 		if md, ok := e.cur.OpCalls[n]; ok {
 			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.expr(n.R))
 		}
+		// `k in m` over a map lowers to a membership probe on the runtime table.
+		if n.Op == token.In {
+			if s, ok := e.mapMembership(n); ok {
+				return s
+			}
+		}
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
 	case *ast.Call:
 		return e.call(n)
@@ -1050,6 +1074,11 @@ func (e *emitter) expr(x ast.Expr) string {
 			// native `base[idx]`.
 			if lt, ok := e.cur.ExprType(e.info, n.Base).(*types.List); ok {
 				return e.listIndex(n, lt)
+			}
+			// a map[K, V] index reads the value through the runtime (aborting on a missing
+			// key = KeyError) and copies it out to an owned value.
+			if mt, ok := e.cur.ExprType(e.info, n.Base).(*types.Map); ok {
+				return e.mapIndex(n, mt)
 			}
 			return e.expr(n.Base) + "[" + e.expr(n.Elems[0]) + "]"
 		}
@@ -1078,6 +1107,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(n.Span(), "a fill-form list literal is not yet supported")
 		return "0"
 	case *ast.MapLit:
+		// A map[K, V] value lowers to a statement-expression that builds a zrt_map,
+		// inserting each entry by value; a program that names no map registers no instance.
+		if t, ok := e.cur.ExprType(e.info, n).(*types.Map); ok {
+			return e.mapLit(n, t)
+		}
 		e.diags.Add(n.Span(), "a map literal is not yet supported")
 		return "0"
 	case *ast.Range:
@@ -1535,6 +1569,9 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.listMethodEmit(n); ok {
 		return s
 	}
+	if s, ok := e.mapMethodEmit(n); ok {
+		return s
+	}
 	if s, ok := e.builtinCallEmit(n); ok {
 		return s
 	}
@@ -1834,6 +1871,11 @@ func (e *emitter) ctype(t sema.Type) string {
 		// a list[T] value is a by-value header (list.c owns the buffer); its element type
 		// rides in the per-instance vtable, so every list is the same C header type.
 		return "zrt_list"
+	}
+	if _, ok := t.(*types.Map); ok {
+		// a map[K, V] value is a by-value header (map.c owns the storage); its key/value
+		// types ride in the per-instance vtable, so every map is the same C header type.
+		return "zrt_map"
 	}
 	if _, ok := t.(*types.Chan); ok {
 		// a channel handle is an opaque runtime pointer (chan.c owns the layout).

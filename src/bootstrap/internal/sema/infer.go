@@ -33,6 +33,11 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		if lt, ok := c.synth(fld.X).(*types.List); ok {
 			return c.listMethodCall(n, fld, lt)
 		}
+		// A method on a built-in map receiver (`.len()` / `.get(k)`) is a compiler
+		// intrinsic, dispatched on the receiver's static type before the nominal path.
+		if mt, ok := c.synth(fld.X).(*types.Map); ok {
+			return c.mapMethodCall(n, fld, mt)
+		}
 		// A '.method()' on a concrete nominal receiver dispatches to the type's method
 		// namespace (inherent or spec method alike); only when no such method exists does
 		// it fall through to the field-access path and its "no field" diagnostic.

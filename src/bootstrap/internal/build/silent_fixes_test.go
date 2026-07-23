@@ -109,3 +109,24 @@ func TestEnumExplicitDiscriminantRoundTrip(t *testing.T) {
 		t.Fatalf("enum discriminant round-trip: got %q, want %q", got, "100\n200\n300\n")
 	}
 }
+
+// TestPayloadEnumDiscriminantRejected covers the review follow-up: an explicit
+// discriminant on a payload-bearing enum keeps a positional tag, so it must be rejected
+// (a clean diagnostic) rather than silently ignored.
+func TestPayloadEnumDiscriminantRejected(t *testing.T) {
+	src := "enum Shape {\n\tCircle(int)\n\tSquare = 5\n}\nfn main() {\n\tprint 0\n}\n"
+	code, _, diags := Compile(src)
+	if len(diags) == 0 {
+		t.Fatal("an explicit discriminant on a payload-bearing enum should be rejected")
+	}
+	if code != "" {
+		t.Fatalf("no C should be emitted for a rejected program, got:\n%s", code)
+	}
+	joined := ""
+	for _, d := range diags {
+		joined += d.Msg
+	}
+	if !strings.Contains(joined, "only allowed on a payload-free enum") {
+		t.Fatalf("expected the payload-enum discriminant diagnostic, got: %v", diags)
+	}
+}

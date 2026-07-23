@@ -17,7 +17,15 @@ func (c *checker) resolveType(t ast.Type) types.Type {
 	case *ast.TypeRef:
 		return c.resolveTypeRef(n)
 	case *ast.OptType:
-		return &types.Opt{Elem: c.resolveType(n.Elem)}
+		elem := c.resolveType(n.Elem)
+		if _, ok := elem.(*types.Ptr); ok {
+			// GRAMMAR group 12: there is no `ptr[T]?`. A raw pointer is already
+			// nullable (test with `p == 0`), so wrapping it in an optional is rejected
+			// rather than silently building a tagged optional-of-pointer.
+			c.errorf(t.Span(), "a raw pointer type may not be optional; a raw pointer is nullable — test with p == 0")
+			return elem
+		}
+		return &types.Opt{Elem: elem}
 	case *ast.TupleType:
 		elems := make([]types.Type, len(n.Elems))
 		for i, e := range n.Elems {
@@ -168,10 +176,17 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 	}
 	switch ref.Name {
 	case "list":
+		// A8: a list/map/set has no runtime yet. Naming one in a real codegen TYPE
+		// position (a param, field, binding annotation, or tuple element) would lower to
+		// C's `void` (an incomplete type cc rejects) — so reject the explicit type here,
+		// where the span is precise. An inferred list VALUE is gated separately in emit.
+		c.errorf(ref.Span(), "a list type is not yet supported")
 		return &types.List{Elem: arg(0)}, true
 	case "set":
+		c.errorf(ref.Span(), "a set type is not yet supported")
 		return &types.Set{Elem: arg(0)}, true
 	case "map":
+		c.errorf(ref.Span(), "a map type is not yet supported")
 		return &types.Map{Key: arg(0), Val: arg(1)}, true
 	case "chan":
 		return &types.Chan{Elem: arg(0)}, true

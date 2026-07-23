@@ -178,6 +178,15 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 // omitted `as y` binds a fresh hidden name held only for the scope's duration.
 func (e *emitter) withStmt(n *ast.WithStmt) {
 	rt := e.cur.ExprType(e.info, n.Resource)
+	if !containsRef(rt) {
+		// GATE (A6): `with` teardown rides the runtime cleanup stack, which only knows
+		// how to release a Ref-bearing resource. A resource with no automatic cleanup (a
+		// POD struct/value) would bind and run the body with NO teardown scheduled — a
+		// silent no-op that never runs the resource's teardown. The user `Scoped`
+		// teardown protocol is unbuilt, so reject it loudly rather than drop the cleanup.
+		e.diags.Add(n.Resource.Span(), "with requires a resource with automatic cleanup (a Ref); a user teardown protocol is not yet supported")
+		return
+	}
 	e.line("{")
 	e.indent++
 	e.pushScope()

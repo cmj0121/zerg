@@ -40,6 +40,10 @@ func (l *Lexer) beginFString(start token.Pos) token.Token {
 		l.popMode()
 		return l.illegal(start, "unterminated f-string literal")
 	}
+	if strings.IndexByte(text, 0) >= 0 {
+		l.popMode()
+		return l.illegal(start, "a string literal may not contain a NUL")
+	}
 	return l.emitStr(token.FStrBegin, start, l.src[start.Offset:l.offs], text)
 }
 
@@ -86,6 +90,10 @@ func (l *Lexer) nextInText(top *fmode) token.Token {
 		if !ok {
 			l.popMode()
 			return l.illegal(start, "unterminated f-string or f-cmd literal")
+		}
+		if !top.cmd && strings.IndexByte(text, 0) >= 0 {
+			l.popMode()
+			return l.illegal(start, "a string literal may not contain a NUL")
 		}
 		return l.emitStr(textKind, start, l.src[start.Offset:l.offs], text)
 	}

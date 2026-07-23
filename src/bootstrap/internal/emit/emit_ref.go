@@ -518,8 +518,10 @@ func (e *emitter) namesStorage(x ast.Expr) bool {
 			// mapIndex take the borrow branch), so copying it must retain/deep-copy. A FRESH
 			// (rvalue) container's index took the materialized branch and ALREADY returned an
 			// OWNED copy; retaining again would double-count (leak on the bound/argument path).
-			// Recurse so a nested `xss[i][j]` on a named root still counts as storage.
-			return e.namesStorage(br.Base)
+			// The base is storage only when it is itself an lvalue — a nested `xss[i][j]`'s
+			// base `xss[i]` is a Bracket (already materialized to an owned copy), so it must
+			// move, not retain.
+			return isLValueExpr(br.Base)
 		}
 		return false
 	}

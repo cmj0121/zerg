@@ -182,7 +182,8 @@ func TestMoreEscapes(t *testing.T) {
 // `\0` and `\u{0}` in a plain, triple, or f-string are rejected — never silently
 // accepted and truncated at runtime.
 func TestNulInStringRejected(t *testing.T) {
-	for _, src := range []string{`"\0"`, `"a\u{0}b"`, "\"\"\"x\\0y\"\"\"", `f"a\0b"`} {
+	// a raw string carries a literal NUL byte (it does not process a `\0` escape).
+	for _, src := range []string{`"\0"`, `"a\u{0}b"`, "\"\"\"x\\0y\"\"\"", `f"a\0b"`, "r\"a\x00b\""} {
 		if _, diags := Tokenize(src); len(diags) == 0 {
 			t.Errorf("%q: a NUL in a string must be rejected", src)
 		}

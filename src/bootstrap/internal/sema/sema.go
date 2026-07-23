@@ -657,6 +657,58 @@ func (c *checker) checkBlock(b *ast.Block) {
 	c.popScope()
 }
 
+// checkForIn types the iterate form `for mut? v in iter { body }` (GRAMMAR group 6).
+// Two iterables are supported today: an integer RANGE (`a..b` / `a..=b`), whose element
+// type is int, and a FIXED ARRAY `[T; N]`, whose element type is T. Any other iterable
+// (a list/map/set, a string, or a bare value) has no lowering yet and is rejected with a
+// clean diagnostic rather than silently accepted — its emit would loop forever. The loop
+// variable is declared in a fresh scope for the body, and the body's end liveness joins
+// the entry state because the loop may run zero times.
+func (c *checker) checkForIn(n *ast.ForStmt) {
+	elem := c.forInElem(n)
+	incoming := c.snapshotDead()
+	c.loopDepth++
+	c.pushScope()
+	if n.Var != "" {
+		c.declare(n.Body.Span(), n.Var, elem, n.Mut)
+	}
+	for _, s := range n.Body.Stmts {
+		c.checkStmt(s)
+	}
+	c.popScope()
+	c.loopDepth--
+	c.mergeDead([]map[*symbol]liveness{incoming, c.dead})
+}
+
+// forInElem types a for-in iterable and returns its element type. A range yields int
+// (its bounds must be int, and it must be bounded); a fixed array yields its element
+// type. Any other iterable is not yet supported.
+func (c *checker) forInElem(n *ast.ForStmt) Type {
+	if rng, ok := n.Iter.(*ast.Range); ok {
+		lo := c.synth(rng.Lo)
+		if !bad(lo) && lo != Int {
+			c.errorf(rng.Lo.Span(), "a for-in range bound must be int, got %s", lo)
+		}
+		if rng.Hi == nil {
+			c.errorf(n.Iter.Span(), "an unbounded range cannot drive a for-in loop")
+			return Invalid
+		}
+		hi := c.synth(rng.Hi)
+		if !bad(hi) && hi != Int {
+			c.errorf(rng.Hi.Span(), "a for-in range bound must be int, got %s", hi)
+		}
+		return Int
+	}
+	it := c.synth(n.Iter)
+	if arr, ok := it.(*types.Array); ok {
+		return arr.Elem
+	}
+	if !bad(it) {
+		c.errorf(n.Iter.Span(), "for-in over %s is not yet supported", it)
+	}
+	return Invalid
+}
+
 func (c *checker) checkStmt(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.NopStmt:
@@ -701,6 +753,10 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		}
 		c.mergeDead(ends)
 	case *ast.ForStmt:
+		if n.Iter != nil {
+			c.checkForIn(n)
+			return
+		}
 		if n.Cond != nil {
 			c.checkCond(n.Cond)
 		}

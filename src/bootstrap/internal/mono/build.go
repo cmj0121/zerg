@@ -231,6 +231,7 @@ func (w *worker) walkStmt(in *Instance, s ast.Stmt) {
 		w.walkBlock(in, n.Else)
 	case *ast.ForStmt:
 		w.walkExpr(in, n.Cond)
+		w.walkExpr(in, n.Iter)
 		w.walkBlock(in, n.Body)
 	case *ast.ExprStmt:
 		w.walkExpr(in, n.X)

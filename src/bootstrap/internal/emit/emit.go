@@ -749,12 +749,57 @@ func (e *emitter) ifStmt(n *ast.IfStmt) {
 }
 
 func (e *emitter) forStmt(n *ast.ForStmt) {
+	if n.Iter != nil {
+		e.forInStmt(n)
+		return
+	}
 	if n.Cond == nil {
 		e.line("for (;;) {")
 	} else {
 		e.line(fmt.Sprintf("while (%s) {", e.expr(n.Cond)))
 	}
 	e.body(n.Body, true)
+	e.line("}")
+}
+
+// forInStmt lowers the iterate form `for v in iter { body }`. An integer range
+// `a..b` (`a..=b`) becomes a counted C `for` over a real `int64_t` loop var the body
+// reads: `for (int64_t v = LO; v < HI; v++)` (`<= HI` for an inclusive range). A fixed
+// array `[T; N]` becomes an index loop that copies each element into a `T v` local
+// before the body: `for (size_t i = 0; i < N; i++) { T v = arr[i]; body }`. The loop
+// var is a fresh C name registered in a scope enclosing the body, so a `v` in the body
+// resolves to it. Sema rejects every other iterable, so no other shape reaches here.
+func (e *emitter) forInStmt(n *ast.ForStmt) {
+	if rng, ok := n.Iter.(*ast.Range); ok {
+		e.pushScope()
+		cv := e.declareName(n.Var)
+		op := "<"
+		if rng.Inclusive {
+			op = "<="
+		}
+		e.line(fmt.Sprintf("for (int64_t %s = %s; %s %s %s; %s++) {",
+			cv, e.expr(rng.Lo), cv, op, e.expr(rng.Hi), cv))
+		e.body(n.Body, true)
+		e.line("}")
+		e.popScope()
+		return
+	}
+	// A fixed array [T; N]: index it and copy each element into a `T v` local the body
+	// reads. The loop var and the body share one name scope and teardown frame.
+	arr, _ := e.cur.ExprType(e.info, n.Iter).(*types.Array)
+	iv := e.freshName("i")
+	e.line(fmt.Sprintf("for (size_t %s = 0; %s < %d; %s++) {", iv, iv, arr.N.I, iv))
+	e.indent++
+	e.pushScope()
+	cv := e.declareName(n.Var)
+	e.openScope(e.subtreeTeardown(n.Body.Stmts), true)
+	e.line(fmt.Sprintf("%s = %s[%s];", e.localDecl(arr.Elem, cv), e.expr(n.Iter), iv))
+	for _, s := range n.Body.Stmts {
+		e.stmt(s)
+	}
+	e.closeScope()
+	e.popScope()
+	e.indent--
 	e.line("}")
 }
 
@@ -1185,12 +1230,29 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 		}
 		return fmt.Sprintf("(%s == %s)", place, lit)
 	case *ast.VariantPattern:
-		for i, el := range p.Elems {
-			if np, ok := el.(*ast.NamePattern); ok {
-				scope[np.Name] = fmt.Sprintf("%s.u.%s.f%d", place, p.Name, i)
+		// The arm matches when the discriminant equals this variant's tag AND every
+		// payload sub-pattern matches. Each payload element i is located at the union
+		// place `place.u.<V>.f<i>` and typed from the specialized enum instance, then
+		// walked recursively — so a literal (`Leaf(0)`) or nested (`Wrap(A(v))`) payload
+		// sub-pattern contributes its own test and bindings instead of being dropped.
+		tests := []string{fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))}
+		var payload []sema.Type
+		if ti := e.prog.EnumInstance(placeT); ti != nil {
+			if v, ok := ti.Variant(p.Name); ok {
+				payload = v.Payload
 			}
 		}
-		return fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))
+		for i, el := range p.Elems {
+			et := sema.Type(types.Unknown)
+			if i < len(payload) {
+				et = payload[i]
+			}
+			sub := fmt.Sprintf("%s.u.%s.f%d", place, p.Name, i)
+			if t := e.patternWalk(el, sub, et, scope); t != "" {
+				tests = append(tests, t)
+			}
+		}
+		return strings.Join(tests, " && ")
 	case *ast.NamePattern:
 		if res, ok := e.info.Patterns[p]; ok && res.Kind == sema.NameVariant {
 			return fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))

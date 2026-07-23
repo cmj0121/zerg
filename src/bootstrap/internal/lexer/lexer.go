@@ -390,6 +390,9 @@ func (l *Lexer) scanString(start token.Pos) token.Token {
 		}
 		sb.WriteByte(l.advance())
 	}
+	if strings.IndexByte(sb.String(), 0) >= 0 {
+		return l.illegal(start, "a string literal may not contain a NUL")
+	}
 	return l.emitStr(token.Str, start, l.src[start.Offset:l.offs], sb.String())
 }
 
@@ -415,6 +418,9 @@ func (l *Lexer) scanTripleString(start token.Pos) token.Token {
 			continue
 		}
 		sb.WriteByte(l.advance())
+	}
+	if strings.IndexByte(sb.String(), 0) >= 0 {
+		return l.illegal(start, "a string literal may not contain a NUL")
 	}
 	return l.emitStr(token.Str, start, l.src[start.Offset:l.offs], sb.String())
 }

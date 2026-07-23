@@ -291,6 +291,10 @@ func (c *checker) fillEnum(n *ast.EnumDecl) {
 			d := next
 			vd.Discr = &d
 			next++
+		} else if v.Discr != nil {
+			// A payload-bearing enum keeps positional tags; an explicit discriminant on it
+			// would be silently ignored, so reject it rather than dropping it.
+			c.errorf(v.Discr.Span(), "an explicit discriminant is only allowed on a payload-free enum")
 		}
 	}
 	c.typeParams = saved

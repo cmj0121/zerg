@@ -189,9 +189,10 @@ func TestAtomicNameableType(t *testing.T) {
 }
 
 // TestChanRecvSendNarrowingDiagnostic covers U5(b): `.recv` / `.send` value narrowing
-// of a channel has no backend lowering, so it must fail with a clean diagnostic rather
-// than silently typing to void and emitting a bad field access. Direction narrowing via
-// a `<-chan[T]` / `chan[T]<-` type annotation remains the supported path.
+// of a channel is not part of the language — a channel is narrowed by a type annotation,
+// not by a `.recv`/`.send` field — so it must fail with a clean diagnostic rather than
+// silently typing to void and emitting a bad field access. Direction narrowing via a
+// `<-chan[T]` / `chan[T]<-` type annotation remains the supported path.
 func TestChanRecvSendNarrowingDiagnostic(t *testing.T) {
 	for _, name := range []string{"recv", "send"} {
 		src := "fn main() {\n  ch := chan[int](1)\n  x := ch." + name + "\n}\n"
@@ -205,8 +206,11 @@ func TestChanRecvSendNarrowingDiagnostic(t *testing.T) {
 		joined := ""
 		for _, d := range diags {
 			joined += d.Msg
+			if strings.Contains(d.Msg, "internal:") {
+				t.Fatalf("channel narrowing must be a clean gate, got internal error: %v", diags)
+			}
 		}
-		if !strings.Contains(joined, "value narrowing is not yet supported") {
+		if !strings.Contains(joined, "a channel is narrowed by a type annotation") {
 			t.Fatalf("expected the channel narrowing diagnostic for .%s, got: %v", name, diags)
 		}
 	}

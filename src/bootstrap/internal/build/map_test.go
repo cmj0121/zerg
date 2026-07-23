@@ -260,3 +260,83 @@ func TestMapEqualityGate(t *testing.T) {
 		t.Fatalf("expected a map-equality deferral gate, got %v", diags)
 	}
 }
+
+// TestMapGetKeyTypeChecked (FIX 1): `.get(k)` must TYPE-CHECK its key argument exactly
+// like `m[k]`. A wrong key type is a clean "map key" diagnostic — never a silent bool ->
+// int coercion, and never a `int64_t = "x"` that escapes to cc. Regression guard for the
+// bare `check()` that context-typed a literal but reported no mismatch.
+func TestMapGetKeyTypeChecked(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"fn main() {\n\tm := {1: 2}\n\tprint m.get(true) ?? -1\n}\n", "map key"},
+		{"fn main() {\n\tm := {1: 2}\n\tprint m.get(\"x\") ?? 0\n}\n", "map key"},
+	} {
+		_, _, diags := Compile(tc.src)
+		if len(diags) == 0 || !strings.Contains(diags[0].Msg, tc.want) {
+			t.Fatalf("expected a %q diagnostic for %q, got %v", tc.want, tc.src, diags)
+		}
+	}
+}
+
+// TestMapGetKeyOK (FIX 1): a correct key type still type-checks and runs — the added
+// assignability check rejects only a mismatch, not a valid `m.get(k)`.
+func TestMapGetKeyOK(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tm := {1: 2}\n\tprint m.get(1) ?? -1\n\tprint m.get(9) ?? -1\n}\n")
+	if got != "2\n-1\n" {
+		t.Fatalf("map get(valid key) = %q, want %q", got, "2\n-1\n")
+	}
+}
+
+// TestMapFreshIndexRefTransient (FIX 2): indexing a FRESH (rvalue) map whose value is a
+// Ref and reading it transiently (`deref({…}[k])`). The materialized-base index returns an
+// OWNED copy of the box; deref must release that transient copy after reading, so the box
+// is freed exactly once. Regression guard for the leak (balance 1) where the owned copy
+// was dropped on the floor.
+func TestMapFreshIndexRefTransient(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tprint deref({\"a\": Ref(42)}[\"a\"])\n}\n")
+	if got != "42\n" {
+		t.Fatalf("fresh map[Ref] index (transient) = %q, want %q", got, "42\n")
+	}
+}
+
+// TestMapFreshIndexRefBinding (FIX 2): binding a fresh-map Ref index (`r := {…}[k]`). The
+// owned copy the materialized-base index returns must be retained exactly once (namesStorage
+// no longer double-counts a fresh-base index), so `r`'s single scope-exit drop balances it.
+func TestMapFreshIndexRefBinding(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tr := {\"a\": Ref(42)}[\"a\"]\n\tprint deref(r)\n}\n")
+	if got != "42\n" {
+		t.Fatalf("fresh map[Ref] index (binding) = %q, want %q", got, "42\n")
+	}
+}
+
+// TestMapFreshIndexRefCall (FIX 2): the base is a CALL result (another fresh rvalue map).
+func TestMapFreshIndexRefCall(t *testing.T) {
+	src := "fn mk() -> map[str, Ref[int]] {\n\treturn {\"a\": Ref(77)}\n}\n" +
+		"fn main() {\n\tprint deref(mk()[\"a\"])\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "77\n" {
+		t.Fatalf("fresh map[Ref] index (call base) = %q, want %q", got, "77\n")
+	}
+}
+
+// TestMapFreshIndexRefArg (FIX 2): a fresh-map Ref index passed to a by-value Ref parameter
+// — the owned copy is moved to the callee, which drops it (balance 0). Guards that
+// namesStorage no longer over-retains on the argument path either.
+func TestMapFreshIndexRefArg(t *testing.T) {
+	src := "fn take(r: Ref[int]) -> int {\n\treturn deref(r)\n}\n" +
+		"fn main() {\n\tprint take({\"a\": Ref(42)}[\"a\"])\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "42\n" {
+		t.Fatalf("fresh map[Ref] index (fn arg) = %q, want %q", got, "42\n")
+	}
+}
+
+// TestMapFreshGet (FIX 2): `.get` on a fresh map with a POD value — the materialized-base
+// `.get` reads the slot and drops the temp map with no leak (balance 0). (A Ref-valued
+// `.get` read transiently leaks the optional's owned box for a NAMED base too — a
+// pre-existing transient-optional limitation, not a fresh-base defect.)
+func TestMapFreshGet(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tprint {\"a\": 42, \"b\": 7}.get(\"a\") ?? -1\n}\n")
+	if got != "42\n" {
+		t.Fatalf("fresh map.get (POD) = %q, want %q", got, "42\n")
+	}
+}

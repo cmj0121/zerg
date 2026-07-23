@@ -100,6 +100,10 @@ type Instance struct {
 // argument (DESIGN-1c §3.3/§6, B1/B2).
 type MethodDispatch struct {
 	Mangled string
+	// Erased marks a dispatch whose target instance takes an opaque 'const void*'
+	// receiver (a spec provided-method body called from another provided body, W3):
+	// the receiver is address-taken and cast, not passed by value.
+	Erased bool
 }
 
 // DynSite is a call to a '#[dyn]' function from within some body: the witness the
@@ -202,6 +206,21 @@ func (p *Program) EnumInstance(t types.Type) *TypeInstance {
 		return nil
 	}
 	if ti, ok := p.typeByKey[typeKey(x.Def, x.Args)]; ok && ti.IsEnum {
+		return ti
+	}
+	return nil
+}
+
+// StructInstance returns the collected specialized struct for a struct-typed value,
+// so the emitter can read each field's CONCRETE type when destructuring a struct
+// pattern (a generic struct's field 'T' reads as the instance's type argument). It
+// returns nil for a non-struct type or one that was never collected.
+func (p *Program) StructInstance(t types.Type) *TypeInstance {
+	x, ok := t.(*types.Struct)
+	if !ok {
+		return nil
+	}
+	if ti, ok := p.typeByKey[typeKey(x.Def, x.Args)]; ok && !ti.IsEnum {
 		return ti
 	}
 	return nil

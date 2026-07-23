@@ -222,10 +222,19 @@ func (c *checker) fillStruct(n *ast.StructDecl) {
 	sym.TypeDef.Params = typeParamsOf(env)
 	saved := c.typeParams
 	c.typeParams = env.merged(saved)
+	own := map[string]bool{}
+	for _, f := range n.Fields {
+		own[f.Name] = true
+	}
 	for _, f := range n.Fields {
 		sym.TypeDef.Struct.Fields = append(sym.TypeDef.Struct.Fields, types.FieldDef{
 			Name: f.Name, Type: c.resolveType(f.Type), Pub: f.Pub, HasDefault: f.Default != nil,
 		})
+		// FORK-A5: a field default is backfilled verbatim at the construct site, so it
+		// must be a self-contained constant that references no field of this struct.
+		if f.Default != nil {
+			c.checkConstDefault(f.Default, own)
+		}
 	}
 	c.typeParams = saved
 }
@@ -319,11 +328,66 @@ func (c *checker) buildSig(fn *ast.FuncDecl) *FuncSig {
 		sig.Params = append(sig.Params, c.resolveType(p.Type))
 		sig.Defaults = append(sig.Defaults, p.Default != nil)
 	}
+	// FORK-A5: a default is backfilled verbatim at the call site by emit, so it must
+	// be a self-contained constant that names none of this function's parameters
+	// (referencing one would silently resolve to a same-named global) and calls no
+	// function. Gate anything else cleanly before it can reach the backend.
+	own := map[string]bool{}
+	for _, p := range fn.Params {
+		own[p.Name] = true
+	}
+	for _, p := range fn.Params {
+		if p.Default != nil {
+			c.checkConstDefault(p.Default, own)
+		}
+	}
 	if fn.Ret != nil {
 		sig.Ret = c.resolveType(fn.Ret)
 	}
 	c.typeParams = saved
 	return sig
+}
+
+// checkConstDefault validates that a defaulted parameter's or field's default
+// expression is a self-contained constant (FORK-A5): a literal, a reference to a
+// module-level constant, or arithmetic/unary over those. `own` is the set of the
+// declaration's own parameter/field names, which a default must not reference —
+// emit backfills the expression verbatim at the call/construct site, where such a
+// name would wrongly bind to a same-named global (a silent wrong value). Any
+// function/method call is likewise disallowed (it need not be enqueued for
+// monomorphization and would reach cc as bad C). A gated default records a clean
+// diagnostic, stopping compilation before the backend runs. Returns whether the
+// expression is an acceptable constant.
+func (c *checker) checkConstDefault(e ast.Expr, own map[string]bool) bool {
+	const msg = "a default value must be a constant expression that does not reference a parameter/field"
+	switch x := e.(type) {
+	case *ast.IntLit, *ast.FloatLit, *ast.BoolLit, *ast.StrLit,
+		*ast.RawStrLit, *ast.NilLit, *ast.RuneLit, *ast.ByteLit:
+		return true
+	case *ast.Ident:
+		if own[x.Name] {
+			c.errorf(x.Span(), msg)
+			return false
+		}
+		// Only a module-level binding (an immutable module constant or a plain
+		// module `:=`) names storage that survives to the call site unchanged; a
+		// parameter/field or any other unresolved name does not.
+		if sym := c.module.lookup(x.Name); sym == nil || (sym.Kind != SymConst && sym.Kind != SymVar) {
+			c.errorf(x.Span(), msg)
+			return false
+		}
+		return true
+	case *ast.Unary:
+		return c.checkConstDefault(x.X, own)
+	case *ast.Binary:
+		if !c.checkConstDefault(x.L, own) {
+			return false
+		}
+		return c.checkConstDefault(x.R, own)
+	default:
+		c.errorf(e.Span(), msg)
+		return false
+	}
 }
 
 // checkDyn reports whether a function carries the '#[dyn]' decorator and enforces
@@ -452,6 +516,8 @@ func (c *checker) checkFuncs(file *ast.File) {
 			c.checkFunc(n, nil)
 		case *ast.ImplDecl:
 			c.checkImpl(n)
+		case *ast.SpecDecl:
+			c.checkSpecDefaults(n)
 		case *ast.InitDecl:
 			c.checkInit(n)
 		case *ast.UnsafeGroup:
@@ -475,6 +541,32 @@ func (c *checker) checkFuncs(file *ast.File) {
 	for _, n := range c.derived {
 		c.checkImpl(n)
 	}
+}
+
+// checkSpecDefaults type-checks a spec's PROVIDED default method bodies (A10). A
+// default body is written against the abstract self 'This' bound by its own spec, so
+// its sibling method calls (`this.other()`) resolve through that bound — the same way
+// a bounded type parameter's method calls do. Recording these body types is what lets
+// the '#[dyn]' witness path lower a default the impl does not override (mono
+// substitutes This -> the concrete receiver). A required member (an *ast.FnSig with no
+// body) is skipped.
+func (c *checker) checkSpecDefaults(n *ast.SpecDecl) {
+	if c.info.Specs == nil {
+		return
+	}
+	def := c.info.Specs.Specs[n.Name]
+	if def == nil {
+		return
+	}
+	this := &types.Param{Name: "This", Bounds: []*types.SpecDef{def}}
+	savedSelf, savedSpec := c.curSelf, c.curSpec
+	c.curSelf, c.curSpec = this, def
+	for _, m := range n.Members {
+		if fn, ok := m.(*ast.FuncDecl); ok {
+			c.checkFunc(fn, this)
+		}
+	}
+	c.curSelf, c.curSpec = savedSelf, savedSpec
 }
 
 // checkImpl type-checks the method bodies of an impl, binding 'this' to the

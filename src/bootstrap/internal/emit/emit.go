@@ -571,15 +571,9 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.ReturnStmt:
 		e.returnStmt(n)
 	case *ast.BreakStmt:
-		if lm := e.loopMark(); lm != "" {
-			e.line(fmt.Sprintf("zrt_unwind_to(%s);", lm))
-		}
-		e.line("break;")
+		e.loopExit("break", n.Cond)
 	case *ast.ContinueStmt:
-		if lm := e.loopMark(); lm != "" {
-			e.line(fmt.Sprintf("zrt_unwind_to(%s);", lm))
-		}
-		e.line("continue;")
+		e.loopExit("continue", n.Cond)
 	case *ast.IfStmt:
 		e.ifStmt(n)
 	case *ast.ForStmt:
@@ -601,6 +595,30 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.ExprStmt:
 		e.line(e.expr(n.X) + ";")
 	}
+}
+
+// loopExit lowers a `break`/`continue` statement, optionally guarded by a trailing
+// `if cond`. The loop teardown (zrt_unwind_to to the loop mark, run before leaving
+// the loop body) MUST sit inside the same guard so it only fires when the jump is
+// actually taken. An unconditional exit keeps the byte-identical teardown+keyword
+// spelling. (The `??`-RHS break/continue is a separate, always-unconditional path in
+// divergeStmt and is unaffected.)
+func (e *emitter) loopExit(kw string, cond ast.Expr) {
+	if cond == nil {
+		if lm := e.loopMark(); lm != "" {
+			e.line(fmt.Sprintf("zrt_unwind_to(%s);", lm))
+		}
+		e.line(kw + ";")
+		return
+	}
+	e.line(fmt.Sprintf("if (%s) {", e.expr(cond)))
+	e.indent++
+	if lm := e.loopMark(); lm != "" {
+		e.line(fmt.Sprintf("zrt_unwind_to(%s);", lm))
+	}
+	e.line(kw + ";")
+	e.indent--
+	e.line("}")
 }
 
 // returnStmt lowers `return e (if c)?`. When the function owns no teardown (fnMark
@@ -851,6 +869,17 @@ func (e *emitter) expr(x ast.Expr) string {
 		return "false"
 	case *ast.StrLit:
 		return cString(n.Value)
+	case *ast.RawStrLit:
+		// A raw string r"…" carries no escapes; lower its DECODED content (never the
+		// surface .Text, which keeps the r"…" delimiters for fmt only) as a C string.
+		return cString(n.Value)
+	case *ast.RuneLit:
+		// A rune is an int32_t code point (cType maps types.Rune). Lower the DECODED
+		// scalar, never the surface lexeme, so 'a' becomes 97 not "'a'".
+		return strconv.Itoa(int(n.Value))
+	case *ast.ByteLit:
+		// A byte is a uint8_t octet (cType maps types.Byte); lower the decoded value.
+		return strconv.Itoa(int(n.Value))
 	case *ast.NilLit:
 		return "0"
 	case *ast.Ident:
@@ -878,7 +907,35 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return "0"
 	case *ast.ListLit:
+		// A list literal in fixed-array position ([int; N] = [a, b, …]) lowers to a C
+		// array initializer, which is what the surrounding binding's array type consumes.
+		// A general list[T] / set[T] value has no runtime yet, so lowering `{…}` there
+		// would produce a value of an incomplete type; gate it cleanly instead.
+		if t, ok := e.info.ExprTypes[n]; ok {
+			switch t.(type) {
+			case *types.List, *types.Set:
+				e.diags.Add(n.Span(), "a list value is not yet supported")
+				return "0"
+			}
+		}
 		return "{" + e.exprList(n.Elems) + "}"
+	case *ast.ListFill:
+		// The fill form [v; N] in fixed-array position could lower to an initializer, but
+		// only the general list[T] runtime path is exercised today; gate both cleanly.
+		e.diags.Add(n.Span(), "a fill-form list literal is not yet supported")
+		return "0"
+	case *ast.MapLit:
+		e.diags.Add(n.Span(), "a map literal is not yet supported")
+		return "0"
+	case *ast.Range:
+		e.diags.Add(n.Span(), "a range value is not yet supported")
+		return "0"
+	case *ast.CmdLit:
+		e.diags.Add(n.Span(), "a command literal is not yet supported")
+		return "0"
+	case *ast.FCmd:
+		e.diags.Add(n.Span(), "an interpolating command literal is not yet supported")
+		return "0"
 	case *ast.MatchExpr:
 		return e.lowerMatch(n)
 	case *ast.IfExpr:
@@ -919,6 +976,12 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(n.Span(), "a closure used as a value is not yet supported")
 		return "0"
 	default:
+		// The load-bearing anti-silence net (SLICE 8): every expression node the backend
+		// can lower has an explicit case above. Anything reaching here is a node the emit
+		// pass does not handle, which previously lowered to a silent "0" that miscompiles.
+		// Fail loudly instead — Emit discards the output while diags are non-empty. A
+		// working example/golden that trips this means a real case was lost; add it back.
+		e.diags.Add(x.Span(), "internal: unsupported expression node %T", x)
 		return "0"
 	}
 }
@@ -1074,17 +1137,18 @@ func (e *emitter) blockExprValue(b *ast.Block) string {
 
 // armValue emits an arm's body with the pattern's names bound to the subject.
 func (e *emitter) armValue(arm ast.MatchArm, subj string, subjT sema.Type) string {
-	pop := e.bindArm(arm.Pat, subj)
+	e.pushScope()
+	e.patternWalk(arm.Pat, subj, subjT, e.scopes[len(e.scopes)-1])
 	v := e.expr(arm.Body)
-	pop()
+	e.popScope()
 	return v
 }
 
 // armTestAndValue emits an arm's match test and body, with the pattern's names in
 // scope for both the guard and the body.
 func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type) (test, body string) {
-	pop := e.bindArm(arm.Pat, subj)
-	test = e.patternTest(arm.Pat, subj, subjT)
+	e.pushScope()
+	test = e.patternWalk(arm.Pat, subj, subjT, e.scopes[len(e.scopes)-1])
 	if arm.Guard != nil {
 		g := e.expr(arm.Guard)
 		if test == "" {
@@ -1094,58 +1158,185 @@ func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type
 		}
 	}
 	body = e.expr(arm.Body)
-	pop()
+	e.popScope()
 	if test == "" {
 		test = "1" // a non-last unguarded catch-all is rejected by sema
 	}
 	return test, body
 }
 
-// bindArm opens a scope and binds an arm pattern's names to the subject: a
-// binding NamePattern binds the whole subject, and a variant pattern binds each
-// payload name to its union field 'subj.u.<Variant>.f<i>'. It returns the scope's
-// pop, to be deferred after the body is emitted.
-func (e *emitter) bindArm(pat ast.Pattern, subj string) func() {
-	e.pushScope()
-	scope := e.scopes[len(e.scopes)-1]
-	switch p := pat.(type) {
-	case *ast.NamePattern:
-		if res, ok := e.info.Patterns[p]; !ok || res.Kind != sema.NameVariant {
-			scope[p.Name] = subj
-		}
-	case *ast.VariantPattern:
-		for i, el := range p.Elems {
-			if np, ok := el.(*ast.NamePattern); ok {
-				scope[np.Name] = fmt.Sprintf("%s.u.%s.f%d", subj, p.Name, i)
-			}
-		}
-	}
-	return e.popScope
-}
-
-// patternTest renders the boolean C test for a pattern, or "" when the pattern
-// matches unconditionally (wildcard or a bare binding). A literal compares by value
-// (or strcmp for a string); a variant pattern — spelled 'V(...)' or a nullary 'V'
-// name — compares the subject's tag.
-func (e *emitter) patternTest(pat ast.Pattern, subj string, subjT sema.Type) string {
+// patternWalk recursively lowers a pattern against the C place-expression `place`
+// (which locates the sub-value of type placeT within the subject), recording each
+// name binding into `scope` and returning the boolean C test — "" when the pattern is
+// irrefutable. It descends structurally: a tuple element is `place.f<i>`, a struct
+// field is `place.zg_<field>`, an array element is `place[i]`, and a variant payload
+// is `place.u.<V>.f<i>`. It allocates NO compiler temporary, so a program's `used`
+// name counts are unchanged and the historic single-level lowerings (07_match)
+// stay byte-identical.
+func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, scope map[string]string) string {
 	switch p := pat.(type) {
 	case *ast.LitPattern:
 		lit := e.expr(p.Lit)
 		if p.Neg {
 			lit = "(-" + lit + ")"
 		}
-		if subjT == sema.Str {
-			return fmt.Sprintf("(strcmp(%s, %s) == 0)", subj, lit)
+		if placeT == sema.Str {
+			return fmt.Sprintf("(strcmp(%s, %s) == 0)", place, lit)
 		}
-		return fmt.Sprintf("(%s == %s)", subj, lit)
+		return fmt.Sprintf("(%s == %s)", place, lit)
 	case *ast.VariantPattern:
-		return fmt.Sprintf("(%s.tag == %d)", subj, e.variantTag(subjT, p.Name))
+		for i, el := range p.Elems {
+			if np, ok := el.(*ast.NamePattern); ok {
+				scope[np.Name] = fmt.Sprintf("%s.u.%s.f%d", place, p.Name, i)
+			}
+		}
+		return fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))
 	case *ast.NamePattern:
 		if res, ok := e.info.Patterns[p]; ok && res.Kind == sema.NameVariant {
-			return fmt.Sprintf("(%s.tag == %d)", subj, e.variantTag(subjT, p.Name))
+			return fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))
+		}
+		scope[p.Name] = place
+		return ""
+	case *ast.TuplePattern:
+		return e.tuplePatternWalk(p, place, placeT, scope)
+	case *ast.StructPattern:
+		return e.structPatternWalk(p, place, placeT, scope)
+	case *ast.AsPattern:
+		test := e.patternWalk(p.Inner, place, placeT, scope)
+		scope[p.Name] = place
+		return test
+	case *ast.RangeArm:
+		lo := e.expr(p.Lo)
+		if p.Hi == nil {
+			return fmt.Sprintf("(%s >= %s)", place, lo)
+		}
+		op := "<"
+		if p.Inclusive {
+			op = "<="
+		}
+		return fmt.Sprintf("(%s >= %s && %s %s %s)", place, lo, place, op, e.expr(p.Hi))
+	case *ast.ListPattern:
+		return e.listPatternWalk(p, place, placeT, scope)
+	case *ast.OrPattern:
+		return e.orPatternWalk(p, place, placeT, scope)
+	case *ast.WildPattern:
+		// '_' matches anything and binds nothing: an irrefutable test.
+		return ""
+	}
+	// The load-bearing anti-silence net (mirrors expr's): every pattern node the
+	// backend lowers has an explicit case above. A node reaching here would formerly
+	// fall to an empty test — an always-true match that silently miscompiles the arm.
+	// Fail loudly instead so Emit discards the output while diags are non-empty.
+	e.diags.Add(pat.Span(), "internal: unsupported pattern node %T", pat)
+	return ""
+}
+
+// orPatternWalk lowers an or-pattern 'a | b | c' (GRAMMAR group 6): the arm matches
+// when any alternative does, so the test is the alternatives' tests joined by '||'.
+// Every alternative is walked against the same place, so a variant/literal or-pattern
+// without bindings (Red|Green, 1|2|3) lowers to a plain disjunction and stays
+// byte-identical to a hand-written guard. An alternative that would bind a name is
+// gated cleanly: with different alternatives binding different carriers, a single
+// scope entry cannot describe the value, so it is not yet supported. An irrefutable
+// alternative makes the whole or-pattern always match (empty test).
+func (e *emitter) orPatternWalk(p *ast.OrPattern, place string, placeT sema.Type, scope map[string]string) string {
+	var tests []string
+	for _, alt := range p.Alts {
+		probe := map[string]string{}
+		t := e.patternWalk(alt, place, placeT, probe)
+		if len(probe) > 0 {
+			e.diags.Add(p.Span(), "an or-pattern with bindings is not yet supported")
+			return ""
+		}
+		if t == "" {
+			return "" // an irrefutable alternative subsumes the rest
+		}
+		tests = append(tests, t)
+	}
+	if len(tests) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(tests, " || ") + ")"
+}
+
+// tuplePatternWalk destructures a tuple pattern: each element i is located at the
+// carrier field `place.f<i>` and typed from the subject tuple's element types. The
+// arm matches when every element sub-test does (all-irrefutable yields "").
+func (e *emitter) tuplePatternWalk(p *ast.TuplePattern, place string, placeT sema.Type, scope map[string]string) string {
+	tup, _ := placeT.(*types.Tuple)
+	var tests []string
+	for i, sub := range p.Elems {
+		et := sema.Type(types.Unknown)
+		if tup != nil && i < len(tup.Elems) {
+			et = tup.Elems[i]
+		}
+		if t := e.patternWalk(sub, fmt.Sprintf("%s.f%d", place, i), et, scope); t != "" {
+			tests = append(tests, t)
 		}
 	}
-	return ""
+	return strings.Join(tests, " && ")
+}
+
+// structPatternWalk destructures a struct pattern: each field is located at
+// `place.zg_<field>` (the typedef field naming) and typed from the specialized struct
+// instance (so a generic field reads its concrete type). A shorthand `{x}` binds the
+// field's value under its own name; a `{x: sub}` recurses. A trailing `..` ignores the
+// rest and imposes no test.
+func (e *emitter) structPatternWalk(p *ast.StructPattern, place string, placeT sema.Type, scope map[string]string) string {
+	si := e.prog.StructInstance(placeT)
+	st, _ := placeT.(*types.Struct)
+	fieldType := func(name string) sema.Type {
+		if si != nil {
+			for _, f := range si.Fields {
+				if f.Name == name {
+					return f.Type
+				}
+			}
+		}
+		if st != nil && st.Def != nil && st.Def.Struct != nil {
+			for i := range st.Def.Struct.Fields {
+				if st.Def.Struct.Fields[i].Name == name {
+					return st.Def.Struct.Fields[i].Type
+				}
+			}
+		}
+		return types.Unknown
+	}
+	var tests []string
+	for _, f := range p.Fields {
+		fplace := place + ".zg_" + f.Name
+		if f.Pat == nil {
+			scope[f.Name] = fplace
+			continue
+		}
+		if t := e.patternWalk(f.Pat, fplace, fieldType(f.Name), scope); t != "" {
+			tests = append(tests, t)
+		}
+	}
+	return strings.Join(tests, " && ")
+}
+
+// listPatternWalk destructures a list pattern. A fixed array `[T; N]` subject lowers
+// each positional element to `place[i]`; a rest element, or a general `list[T]`
+// subject (whose runtime is not yet implemented — the A8 cut), is failed cleanly so
+// it can never silently mis-index.
+func (e *emitter) listPatternWalk(p *ast.ListPattern, place string, placeT sema.Type, scope map[string]string) string {
+	arr, ok := placeT.(*types.Array)
+	if !ok {
+		e.diags.Add(p.Span(), "a list pattern is not yet supported")
+		return ""
+	}
+	var tests []string
+	for i, el := range p.Elems {
+		if el.Rest || el.Pat == nil {
+			e.diags.Add(p.Span(), "a rest '..' element in a list pattern is not yet supported")
+			return ""
+		}
+		if t := e.patternWalk(el.Pat, fmt.Sprintf("%s[%d]", place, i), arr.Elem, scope); t != "" {
+			tests = append(tests, t)
+		}
+	}
+	return strings.Join(tests, " && ")
 }
 
 // variantTag returns the discriminant of a named variant of an enum subject, read
@@ -1201,7 +1392,44 @@ func (e *emitter) call(n *ast.Call) string {
 		// storage, so the callee's own holder is independent; POD args are unchanged.
 		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
 	}
+	// A5: backfill trailing omitted parameters with their (constant) default
+	// expressions, in declaration order, so a `fn f(a, b = 10)` called as `f(1)`
+	// still passes the default. A fully-applied call has no trailing defaults and
+	// stays byte-identical.
+	for i, def := range e.trailingDefaults(id, len(n.Args)) {
+		if args.Len() > 0 || i > 0 {
+			args.WriteString(", ")
+		}
+		args.WriteString(e.expr(def))
+	}
 	return fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String())
+}
+
+// trailingDefaults returns the default expressions for the parameters a call omits —
+// the callee's declared parameters at index >= provided that carry a default (A5,
+// FORK-A5: trailing positional constants). It returns nil for anything but a
+// resolved function identifier call, or when no parameter is omitted, so a
+// fully-applied or indirect call is unaffected and byte-identical.
+func (e *emitter) trailingDefaults(id *ast.Ident, provided int) []ast.Expr {
+	if id == nil {
+		return nil
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok {
+		return nil
+	}
+	fd, ok := sym.Decl.(*ast.FuncDecl)
+	if !ok || provided >= len(fd.Params) {
+		return nil
+	}
+	var out []ast.Expr
+	for i := provided; i < len(fd.Params); i++ {
+		if fd.Params[i].Default == nil {
+			return nil // a gap without a default is a sema error, not our backfill
+		}
+		out = append(out, fd.Params[i].Default)
+	}
+	return out
 }
 
 // namespaceCallEmit lowers a single-level imported-module member call
@@ -1285,7 +1513,15 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 // the resolved impl-method instance, passing the receiver first (B1).
 func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	field, _ := n.Callee.(*ast.Field)
-	args := e.expr(field.X)
+	recv := e.expr(field.X)
+	// W3: a dispatch to a provided-method body takes an opaque 'const void*' receiver
+	// (its prologue casts it back to the concrete type), so the by-value receiver — the
+	// erased body's own `this` local — is address-taken and cast, exactly as a dyn
+	// dispatch does. An ordinary impl-method target takes `this` by value, unchanged.
+	if md.Erased {
+		recv = "(const void*)&(" + recv + ")"
+	}
+	args := recv
 	for _, a := range n.Args {
 		args += ", " + e.expr(a.Value)
 	}
@@ -1296,7 +1532,45 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 // specialized struct type, with arguments in field-declaration order.
 func (e *emitter) construct(n *ast.Call) string {
 	name := e.ctype(e.cur.ExprType(e.info, n))
-	return "((" + name + "){" + e.constructArgs(n.Args) + "})"
+	body := e.constructArgs(n.Args)
+	// A5: backfill trailing omitted fields with their (constant) default expressions,
+	// in field-declaration order. A fully-specified construction has none and stays
+	// byte-identical.
+	for _, def := range e.trailingFieldDefaults(n, len(n.Args)) {
+		if body != "" {
+			body += ", "
+		}
+		body += e.expr(def)
+	}
+	return "((" + name + "){" + body + "})"
+}
+
+// trailingFieldDefaults returns the default expressions for the struct fields a
+// construction omits — declared fields at index >= provided that carry a default
+// (A5, FORK-A5: trailing positional constants). It returns nil unless the callee is a
+// resolved struct type with every omitted trailing field defaulted, so a
+// fully-specified construction is unaffected and byte-identical.
+func (e *emitter) trailingFieldDefaults(n *ast.Call, provided int) []ast.Expr {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok {
+		return nil
+	}
+	sd, ok := sym.Decl.(*ast.StructDecl)
+	if !ok || provided >= len(sd.Fields) {
+		return nil
+	}
+	var out []ast.Expr
+	for i := provided; i < len(sd.Fields); i++ {
+		if sd.Fields[i].Default == nil {
+			return nil // a gap without a default is a sema error, not our backfill
+		}
+		out = append(out, sd.Fields[i].Default)
+	}
+	return out
 }
 
 // constructVariant lowers an enum variant used as a value — a payload

@@ -140,6 +140,17 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 		return sum
 	}
 	if sym := c.module.lookup(ref.Name); sym != nil && sym.Kind == SymType {
+		// A9: a transparent type alias `type X = Y` resolves to its UNDERLYING type, so
+		// the alias name is never retained in ExprTypes/BindTypes (and never splits a
+		// carrier/tuple String() key). A generic alias `type X[T] = …` is not yet
+		// supported and is gated cleanly (FORK-A9: non-generic aliases only).
+		if td, ok := sym.Decl.(*ast.TypeDecl); ok && td.Alias != nil {
+			if td.Generics != nil {
+				c.errorf(ref.Span(), "a generic type alias is not yet supported")
+				return Invalid
+			}
+			return c.resolveType(td.Alias)
+		}
 		return c.namedTypeUse(sym, c.typeArgs(refArgExprs(ref)))
 	}
 	c.errorf(ref.Span(), "unknown type %q", ref.Name)

@@ -100,10 +100,21 @@ func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness
 		}
 		for _, m := range sp.Methods {
 			im := impl.Methods[m.Name]
+			selfSub := types.Type(nil)
 			if im == nil {
-				continue
+				// A10: the impl does not override this method. When the spec supplies a
+				// default body (Provided), build an erased-receiver instance from THAT
+				// body and fill the slot; otherwise the required method is missing (a
+				// coherence error caught earlier) and there is nothing to point at. Filling
+				// the provided slot keeps wit.Slots aligned 1:1 with specMethods() — the
+				// order witnessStructs()/witnessGlobals() emit — so no slot is left null.
+				if !m.Provided {
+					continue
+				}
+				im = &types.ImplMethod{Name: m.Name, Sig: m.Sig, Mut: m.Mut, Decl: m.Decl}
+				selfSub = concrete // the default body's abstract This resolves to concrete
 			}
-			inst := w.enqueueMethod(concrete, im)
+			inst := w.enqueueMethod(concrete, im, selfSub)
 			wit.Slots = append(wit.Slots, WitnessSlot{Method: m.Name, Fn: inst.Mangled})
 		}
 	}
@@ -111,22 +122,92 @@ func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness
 	return wit
 }
 
+// walkProvidedSelfCall handles a `this.<method>()` self-call inside a synthesized
+// spec provided-method body (RecvErased) where <method> is ANOTHER provided method
+// the impl does not override (W3). Such a method is absent from the type's impl
+// method namespace, so walkMethodCall/resolveMethod cannot find it and the call would
+// lower to a null callee ('0()') that fails cc. Here we locate the provided spec
+// method for the receiver's concrete type and enqueue its erased-receiver instance —
+// the same instance (identical mangled name) buildWitness fills the witness slot with
+// — so the self-call dispatches through it. It returns false when the call is not such
+// a provided-method self-call, leaving the ordinary paths untouched (byte-identical).
+func (w *worker) walkProvidedSelfCall(in *Instance, n *ast.Call) bool {
+	if !in.RecvErased {
+		return false
+	}
+	field, ok := n.Callee.(*ast.Field)
+	if !ok {
+		return false
+	}
+	recv := in.ExprType(w.info, field.X)
+	m := w.providedMethod(recv, field.Name)
+	if m == nil {
+		return false
+	}
+	inst := w.enqueueMethod(recv, m, recv)
+	in.MethodCalls[n] = &MethodDispatch{Mangled: inst.Mangled, Erased: true}
+	return true
+}
+
+// providedMethod finds a provided (default-body) spec method named `name` available
+// on the concrete receiver type but NOT overridden by its impl — the exact method
+// buildWitness synthesizes for an unoverridden slot. It returns a fresh ImplMethod
+// carrying the spec method's signature and default-body decl, or nil when no such
+// unoverridden provided method matches (an overridden or required method is handled
+// by the ordinary resolveMethod path).
+func (w *worker) providedMethod(recv types.Type, name string) *types.ImplMethod {
+	reg := w.info.Specs
+	if reg == nil {
+		return nil
+	}
+	head := nominalHeadT(recv)
+	if head == nil {
+		return nil
+	}
+	for _, impl := range reg.Impls {
+		if impl.Spec == nil || nominalHeadT(impl.Target) != head {
+			continue
+		}
+		if impl.Methods[name] != nil {
+			continue // overridden by the impl — resolveMethod already resolves it
+		}
+		for _, sp := range reg.SpecClosure(impl.Spec) {
+			for _, m := range sp.Methods {
+				if m.Name == name && m.Provided {
+					return &types.ImplMethod{Name: m.Name, Sig: m.Sig, Mut: m.Mut, Decl: m.Decl}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // enqueueMethod creates (once) the C body of an impl method used by a witness: an
 // erased-receiver instance whose receiver is passed as 'const void*' and cast to
 // the concrete type in a prologue (DESIGN-1c §6.1). Its own parameters keep their
 // concrete types.
-func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod) *Instance {
+func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod, selfSub types.Type) *Instance {
 	fn, _ := m.Decl.(*ast.FuncDecl)
 	mangled := "zge_" + typeCode(concrete) + "_" + m.Name
 	if in, ok := w.prog.byMangled[mangled]; ok {
 		return in
+	}
+	// A10: a spec DEFAULT body was type-checked with the abstract self 'This'; supply an
+	// overlay mapping This -> the concrete receiver so its `this.other()` calls (and its
+	// This-typed sub-expressions) resolve concretely during the walk and the emit. An
+	// ordinary impl method was already checked against the concrete type, so it passes a
+	// nil selfSub and keeps an empty overlay (byte-identical).
+	var subT map[string]types.Type
+	if selfSub != nil {
+		subT = map[string]types.Type{"This": selfSub}
 	}
 	in := &Instance{
 		Origin:      fn,
 		Mangled:     mangled,
 		Recv:        concrete,
 		RecvErased:  true,
-		Ret:         orNil(m.Sig.Ret),
+		Ret:         sema.Substitute(orNil(m.Sig.Ret), subT, nil),
+		subT:        subT,
 		Calls:       map[*ast.Call]string{},
 		DynSites:    map[*ast.Call]*DynSite{},
 		MethodCalls: map[*ast.Call]*MethodDispatch{},
@@ -138,7 +219,7 @@ func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod) *Instan
 		}
 	}
 	for _, p := range m.Sig.Params {
-		in.Params = append(in.Params, p.Type)
+		in.Params = append(in.Params, sema.Substitute(p.Type, subT, nil))
 	}
 	w.prog.byMangled[mangled] = in
 	w.prog.Funcs = append(w.prog.Funcs, in)

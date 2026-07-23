@@ -251,10 +251,12 @@ func (e *emitter) programUsesFFI() bool {
 	return false
 }
 
-// programUsesResultNil reports whether any function signature carries a Result[nil]
-// (as a return or a parameter) — a value spelled zrt_result_nil, which needs the
-// runtime header even when the program registers no general carrier. A value-only
-// program has none and stays byte-identical.
+// programUsesResultNil reports whether any Result[nil] value appears in the program
+// — as a function signature (return/parameter), or as the type of any expression or
+// binding (A12: a `guard { void }` / if-expr / block-expr yielding Result[nil]). Such
+// a value is spelled zrt_result_nil, which needs the runtime header even when the
+// program registers no general carrier. isResultNil matches only Either[nil, Err], so
+// a value-only program has none and stays byte-identical.
 func (e *emitter) programUsesResultNil() bool {
 	for _, sig := range e.info.Funcs {
 		if isResultNil(sig.Ret) {
@@ -264,6 +266,16 @@ func (e *emitter) programUsesResultNil() bool {
 			if isResultNil(p) {
 				return true
 			}
+		}
+	}
+	for _, t := range e.info.ExprTypes {
+		if isResultNil(t) {
+			return true
+		}
+	}
+	for _, t := range e.info.BindTypes {
+		if isResultNil(t) {
+			return true
 		}
 	}
 	return false

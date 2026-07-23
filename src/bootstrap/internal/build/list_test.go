@@ -1,6 +1,7 @@
 package build
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,80 @@ import (
 
 	runtime "github.com/cmj0121/zerg/src/runtime"
 )
+
+// countingAllocC replaces the materialized alloc.c with a counting wrapper: every
+// zrt_alloc/zrt_free (all runtime heap traffic flows through this one seam) adjusts
+// a live-allocation tally, and an atexit hook prints it to stderr. macOS ships no
+// LeakSanitizer, so a leak-free run is proven by asserting the tally returns to zero
+// rather than by ASan; ASan+UBSan still catch double-free / use-after-scope.
+const countingAllocC = `#include "zergrt.h"
+#include <stdlib.h>
+#include <stdio.h>
+static long zrt_live_allocs = 0;
+static void zrt_report_balance(void) { fprintf(stderr, "ZRT_ALLOC_BALANCE=%ld\n", zrt_live_allocs); }
+void *zrt_alloc(size_t n) {
+	static int hooked = 0;
+	if (!hooked) { hooked = 1; atexit(zrt_report_balance); }
+	void *p = malloc(n);
+	if (p == NULL && n != 0) { zrt_abort("out of memory"); }
+	if (p != NULL) { zrt_live_allocs++; }
+	return p;
+}
+void zrt_free(void *p) { if (p != NULL) { zrt_live_allocs--; } free(p); }
+`
+
+// runProgramRTBalanced compiles+links src under ASan+UBSan against the runtime with
+// the counting allocator (countingAllocC) swapped in, runs it, and asserts both a
+// clean exit and a zero alloc/free balance (no leak). It returns stdout so the caller
+// can assert the program's output. Use it for the non-POD teardown paths where a leak
+// would otherwise pass silently on macOS.
+func runProgramRTBalanced(t *testing.T, src string) string {
+	t.Helper()
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	code, manifest, diags := Compile(src)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	dir := t.TempDir()
+	cfiles, err := runtime.Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize runtime: %v", err)
+	}
+	// Overwrite the materialized alloc.c (a returned core unit) with the counting
+	// version; the paths in cfiles are unchanged, so the link line is the same.
+	if err := os.WriteFile(filepath.Join(dir, "alloc.c"), []byte(countingAllocC), 0o644); err != nil {
+		t.Fatalf("write counting alloc.c: %v", err)
+	}
+	if manifest.Concurrency {
+		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
+	}
+	cpath := filepath.Join(dir, "prog.c")
+	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	bin := filepath.Join(dir, "prog.bin")
+	args := append([]string{
+		"-std=c11", "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+		"-I", dir, "-o", bin, cpath,
+	}, cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s\n--- generated C ---\n%s", err, out, code)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(bin)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run failed: %v\nstderr:\n%s\n--- generated C ---\n%s", err, stderr.String(), code)
+	}
+	if !strings.Contains(stderr.String(), "ZRT_ALLOC_BALANCE=0\n") {
+		t.Fatalf("alloc/free NOT balanced (leak): stderr=%q\n--- generated C ---\n%s", stderr.String(), code)
+	}
+	return stdout.String()
+}
 
 // RUN-based tests for the built-in list[T] container (docs/collections.md), one per
 // implemented slice L1-L8. Every program is compiled to C, linked against the
@@ -180,5 +255,66 @@ func TestListFillList(t *testing.T) {
 	got := runProgramRT(t, "fn main() {\n\txs := [7; 4]\n\tprint xs.len()\n\tprint xs[3]\n}\n")
 	if got != "4\n7\n" {
 		t.Fatalf("list fill = %q, want %q", got, "4\n7\n")
+	}
+}
+
+// TestListForInRefDrop (L6): a plain `for x in xs` over a list[Ref[int]] — a
+// spec-required read path — copies (retains) each element into the loop var and
+// releases it at the END of EACH iteration, not at function end. Regression guard for
+// the missing per-iteration unwind mark (the loop var's drop was deferred, re-pushing
+// the same stack slot every turn → multi-release of the last element, leak of the
+// earlier ones). Asserts the sum and a zero alloc/free balance under ASan.
+func TestListForInRefDrop(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\txs := [Ref(1), Ref(2), Ref(3)]\n"+
+		"\tmut sum := 0\n\tfor x in xs { sum = sum + deref(x) }\n\tprint sum\n}\n")
+	if got != "6\n" {
+		t.Fatalf("for-in over list[Ref] sum = %q, want %q", got, "6\n")
+	}
+}
+
+// TestListForInRefNoOtherRefLocal (L6): the same read path in a program that binds NO
+// other bare Ref local (xs is a list, and every Ref(n) is unnamed). The loop var over
+// a list[Ref] is itself a Ref-bearing local that schedules the zg_ref_drop thunk, so
+// the thunk must be emitted for this program — otherwise cc fails on an undeclared
+// zg_ref_drop. Regression guard for programHasRefLocal ignoring the for-in loop var.
+func TestListForInRefNoOtherRefLocal(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\txs := [Ref(4), Ref(5)]\n"+
+		"\tfor x in xs { print deref(x) }\n}\n")
+	if got != "4\n5\n" {
+		t.Fatalf("for-in over list[Ref], no other Ref local = %q, want %q", got, "4\n5\n")
+	}
+}
+
+// TestListForInStructRef (L6): the read path over a list of a struct that holds a Ref.
+// Each element copies (deep-copies the Ref field) into the loop var and drops it per
+// iteration through the struct's drop-env thunk; ASan + a zero balance prove no leak
+// or double-free.
+func TestListForInStructRef(t *testing.T) {
+	got := runProgramRTBalanced(t, "struct Box {\n\tr: Ref[int]\n}\n"+
+		"fn main() {\n\txs := [Box(Ref(10)), Box(Ref(20))]\n"+
+		"\tmut sum := 0\n\tfor x in xs { sum = sum + deref(x.r) }\n\tprint sum\n}\n")
+	if got != "30\n" {
+		t.Fatalf("for-in over list[struct{Ref}] sum = %q, want %q", got, "30\n")
+	}
+}
+
+// TestListInMembershipGate: `v in xs` over a list is not implemented (list membership).
+// Without a sema gate it types as bool and the backend emits `(v ? zg_xs)`, which cc
+// rejects — a deferred construct escaping to cc. It must be a clean diagnostic.
+func TestListInMembershipGate(t *testing.T) {
+	_, _, diags := Compile("fn main() {\n\txs := [1, 2, 3]\n\tif 2 in xs { print 1 }\n}\n")
+	if len(diags) == 0 || !strings.Contains(diags[0].Msg, "list membership") {
+		t.Fatalf("expected a list-membership deferral gate, got %v", diags)
+	}
+}
+
+// TestListEqualityGate: `xs == ys` on two lists is not implemented (list equality).
+// Without a sema gate the operands are identical types and pass `comparable`, so the
+// backend emits `(zg_xs == zg_ys)` on the runtime list struct, which cc rejects. It
+// must be a clean diagnostic.
+func TestListEqualityGate(t *testing.T) {
+	_, _, diags := Compile("fn main() {\n\txs := [1, 2, 3]\n\tys := [1, 2, 3]\n\tif xs == ys { print 1 }\n}\n")
+	if len(diags) == 0 || !strings.Contains(diags[0].Msg, "list equality") {
+		t.Fatalf("expected a list-equality deferral gate, got %v", diags)
 	}
 }

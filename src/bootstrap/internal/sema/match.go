@@ -154,8 +154,13 @@ func (c *checker) boolExhaustive(arms []ast.MatchArm) (string, bool) {
 	return "", true
 }
 
-// isCatchAll reports whether a pattern matches every value: a wildcard, a
-// bare-binding name (not a variant), or an as-pattern wrapping one.
+// isCatchAll reports whether a pattern matches every value of its subject type: a
+// wildcard, a bare-binding name (not a variant), an as-pattern wrapping one, or a
+// structural pattern all of whose components are themselves irrefutable — a tuple
+// whose every element is a catch-all, or a struct all of whose field patterns are
+// (a shorthand `{x}` binds and so is a catch-all field). A range arm NEVER counts
+// (its containment is a partial cover), and a list pattern only when it is a single
+// bare rest `[..]`/`[..rest]` (any fixed head imposes a length/element test).
 func (c *checker) isCatchAll(pat ast.Pattern) bool {
 	switch p := pat.(type) {
 	case *ast.WildPattern:
@@ -165,6 +170,22 @@ func (c *checker) isCatchAll(pat ast.Pattern) bool {
 		return ok && res.Kind == NameBinding
 	case *ast.AsPattern:
 		return c.isCatchAll(p.Inner)
+	case *ast.TuplePattern:
+		for _, el := range p.Elems {
+			if !c.isCatchAll(el) {
+				return false
+			}
+		}
+		return true
+	case *ast.StructPattern:
+		for _, f := range p.Fields {
+			if f.Pat != nil && !c.isCatchAll(f.Pat) {
+				return false
+			}
+		}
+		return true
+	case *ast.ListPattern:
+		return len(p.Elems) == 1 && p.Elems[0].Rest
 	}
 	return false
 }

@@ -207,6 +207,21 @@ func (p *Program) EnumInstance(t types.Type) *TypeInstance {
 	return nil
 }
 
+// StructInstance returns the collected specialized struct for a struct-typed value,
+// so the emitter can read each field's CONCRETE type when destructuring a struct
+// pattern (a generic struct's field 'T' reads as the instance's type argument). It
+// returns nil for a non-struct type or one that was never collected.
+func (p *Program) StructInstance(t types.Type) *TypeInstance {
+	x, ok := t.(*types.Struct)
+	if !ok {
+		return nil
+	}
+	if ti, ok := p.typeByKey[typeKey(x.Def, x.Args)]; ok && !ti.IsEnum {
+		return ti
+	}
+	return nil
+}
+
 // Variant returns the specialized variant of the named case and whether it exists,
 // so the emitter can read its tag and payload types.
 func (ti *TypeInstance) Variant(name string) (VariantInst, bool) {

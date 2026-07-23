@@ -303,11 +303,31 @@ func (c *checker) checkBind(b *ast.BindStmt) {
 	} else if vt := c.synth(b.Value); vt == Nil {
 		c.errorf(b.Span(), "cannot infer a type from nil; use a type annotation")
 		typ = Invalid
+	} else if c.isVoidTryBind(b.Value) {
+		// A11: `y := boom()?` where boom yields Result[nil] unwraps to a nil/void
+		// value the backend cannot give storage to. Reject it cleanly (mirroring the
+		// `y := { … }`/nil rejection) instead of emitting a `void zg_y`. A bare
+		// `boom()?` statement (no binding) still propagates fine.
+		c.errorf(b.Span(), "cannot bind a value of type nil; use a type annotation")
+		typ = Invalid
 	} else {
 		typ = vt
 	}
 	c.info.BindTypes[b] = typ
 	c.declare(b.Span(), b.Name, typ, b.Mut)
+}
+
+// isVoidTryBind reports whether an initializer is a `?` propagate whose operand is a
+// Result[nil] (Either with a nil-ish Left) — the try then yields a nil/void value
+// that has no C storage, so an inferred binding to it must be rejected (A11). The
+// operand type is read from the overlay recorded when the value was synthesized.
+func (c *checker) isVoidTryBind(e ast.Expr) bool {
+	try, ok := e.(*ast.Try)
+	if !ok {
+		return false
+	}
+	ei, ok := c.info.ExprTypes[try.X].(*types.Either)
+	return ok && (ei.Left == types.Nil || ei.Left.Kind() == types.KUnknown)
 }
 
 // --- reassignment -------------------------------------------------------------

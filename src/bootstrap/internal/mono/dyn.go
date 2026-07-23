@@ -100,10 +100,21 @@ func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness
 		}
 		for _, m := range sp.Methods {
 			im := impl.Methods[m.Name]
+			selfSub := types.Type(nil)
 			if im == nil {
-				continue
+				// A10: the impl does not override this method. When the spec supplies a
+				// default body (Provided), build an erased-receiver instance from THAT
+				// body and fill the slot; otherwise the required method is missing (a
+				// coherence error caught earlier) and there is nothing to point at. Filling
+				// the provided slot keeps wit.Slots aligned 1:1 with specMethods() — the
+				// order witnessStructs()/witnessGlobals() emit — so no slot is left null.
+				if !m.Provided {
+					continue
+				}
+				im = &types.ImplMethod{Name: m.Name, Sig: m.Sig, Mut: m.Mut, Decl: m.Decl}
+				selfSub = concrete // the default body's abstract This resolves to concrete
 			}
-			inst := w.enqueueMethod(concrete, im)
+			inst := w.enqueueMethod(concrete, im, selfSub)
 			wit.Slots = append(wit.Slots, WitnessSlot{Method: m.Name, Fn: inst.Mangled})
 		}
 	}
@@ -115,18 +126,28 @@ func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness
 // erased-receiver instance whose receiver is passed as 'const void*' and cast to
 // the concrete type in a prologue (DESIGN-1c §6.1). Its own parameters keep their
 // concrete types.
-func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod) *Instance {
+func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod, selfSub types.Type) *Instance {
 	fn, _ := m.Decl.(*ast.FuncDecl)
 	mangled := "zge_" + typeCode(concrete) + "_" + m.Name
 	if in, ok := w.prog.byMangled[mangled]; ok {
 		return in
+	}
+	// A10: a spec DEFAULT body was type-checked with the abstract self 'This'; supply an
+	// overlay mapping This -> the concrete receiver so its `this.other()` calls (and its
+	// This-typed sub-expressions) resolve concretely during the walk and the emit. An
+	// ordinary impl method was already checked against the concrete type, so it passes a
+	// nil selfSub and keeps an empty overlay (byte-identical).
+	var subT map[string]types.Type
+	if selfSub != nil {
+		subT = map[string]types.Type{"This": selfSub}
 	}
 	in := &Instance{
 		Origin:      fn,
 		Mangled:     mangled,
 		Recv:        concrete,
 		RecvErased:  true,
-		Ret:         orNil(m.Sig.Ret),
+		Ret:         sema.Substitute(orNil(m.Sig.Ret), subT, nil),
+		subT:        subT,
 		Calls:       map[*ast.Call]string{},
 		DynSites:    map[*ast.Call]*DynSite{},
 		MethodCalls: map[*ast.Call]*MethodDispatch{},
@@ -138,7 +159,7 @@ func (w *worker) enqueueMethod(concrete types.Type, m *types.ImplMethod) *Instan
 		}
 	}
 	for _, p := range m.Sig.Params {
-		in.Params = append(in.Params, p.Type)
+		in.Params = append(in.Params, sema.Substitute(p.Type, subT, nil))
 	}
 	w.prog.byMangled[mangled] = in
 	w.prog.Funcs = append(w.prog.Funcs, in)

@@ -452,6 +452,8 @@ func (c *checker) checkFuncs(file *ast.File) {
 			c.checkFunc(n, nil)
 		case *ast.ImplDecl:
 			c.checkImpl(n)
+		case *ast.SpecDecl:
+			c.checkSpecDefaults(n)
 		case *ast.InitDecl:
 			c.checkInit(n)
 		case *ast.UnsafeGroup:
@@ -475,6 +477,32 @@ func (c *checker) checkFuncs(file *ast.File) {
 	for _, n := range c.derived {
 		c.checkImpl(n)
 	}
+}
+
+// checkSpecDefaults type-checks a spec's PROVIDED default method bodies (A10). A
+// default body is written against the abstract self 'This' bound by its own spec, so
+// its sibling method calls (`this.other()`) resolve through that bound — the same way
+// a bounded type parameter's method calls do. Recording these body types is what lets
+// the '#[dyn]' witness path lower a default the impl does not override (mono
+// substitutes This -> the concrete receiver). A required member (an *ast.FnSig with no
+// body) is skipped.
+func (c *checker) checkSpecDefaults(n *ast.SpecDecl) {
+	if c.info.Specs == nil {
+		return
+	}
+	def := c.info.Specs.Specs[n.Name]
+	if def == nil {
+		return
+	}
+	this := &types.Param{Name: "This", Bounds: []*types.SpecDef{def}}
+	savedSelf, savedSpec := c.curSelf, c.curSpec
+	c.curSelf, c.curSpec = this, def
+	for _, m := range n.Members {
+		if fn, ok := m.(*ast.FuncDecl); ok {
+			c.checkFunc(fn, this)
+		}
+	}
+	c.curSelf, c.curSpec = savedSelf, savedSpec
 }
 
 // checkImpl type-checks the method bodies of an impl, binding 'this' to the

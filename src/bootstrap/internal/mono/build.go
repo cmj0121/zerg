@@ -193,6 +193,11 @@ func (w *worker) specialize(in *Instance) {
 	for _, p := range in.Params {
 		w.collectType(p)
 	}
+	// A5: a parameter default (a constant expression, FORK-A5) is emitted at every
+	// under-applied call site, so walk each so any type it references is registered.
+	for i := range in.Origin.Params {
+		w.walkExpr(in, in.Origin.Params[i].Default)
+	}
 	if in.Origin.Body != nil {
 		for _, s := range in.Origin.Body.Stmts {
 			w.walkStmt(in, s)
@@ -261,6 +266,44 @@ func (w *worker) walkBlock(in *Instance, b *ast.Block) {
 	}
 }
 
+// walkPattern descends into the expressions a match arm pattern carries so their
+// instances are enqueued. Only a range arm holds expressions (its bounds); the other
+// pattern kinds carry constant literals or bindings with nothing generic to collect,
+// but structural patterns are recursed in case a nested range arm ever appears.
+func (w *worker) walkPattern(in *Instance, pat ast.Pattern) {
+	switch p := pat.(type) {
+	case *ast.RangeArm:
+		w.walkExpr(in, p.Lo)
+		w.walkExpr(in, p.Hi)
+	case *ast.TuplePattern:
+		for _, el := range p.Elems {
+			w.walkPattern(in, el)
+		}
+	case *ast.StructPattern:
+		for _, f := range p.Fields {
+			if f.Pat != nil {
+				w.walkPattern(in, f.Pat)
+			}
+		}
+	case *ast.VariantPattern:
+		for _, el := range p.Elems {
+			w.walkPattern(in, el)
+		}
+	case *ast.ListPattern:
+		for _, el := range p.Elems {
+			if el.Pat != nil {
+				w.walkPattern(in, el.Pat)
+			}
+		}
+	case *ast.AsPattern:
+		w.walkPattern(in, p.Inner)
+	case *ast.OrPattern:
+		for _, alt := range p.Alts {
+			w.walkPattern(in, alt)
+		}
+	}
+}
+
 func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 	if e == nil {
 		return
@@ -294,6 +337,7 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 	case *ast.MatchExpr:
 		w.walkExpr(in, n.Subject)
 		for _, arm := range n.Arms {
+			w.walkPattern(in, arm.Pat)
 			w.walkExpr(in, arm.Guard)
 			w.walkExpr(in, arm.Body)
 		}

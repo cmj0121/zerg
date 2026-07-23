@@ -390,3 +390,24 @@ func TestListFreshIndexRefArg(t *testing.T) {
 		t.Fatalf("fresh list[Ref] index (fn arg) = %q, want %q", got, "8\n")
 	}
 }
+
+// TestListNestedIndexRefBinding (review follow-up): a NESTED index `xss[0][1]` — the outer
+// base `xss[0]` is already a materialized owned copy, so binding the inner Ref must move
+// it, not retain a second time. Previously the recursive namesStorage walked to the named
+// root and double-retained → a leak; the balance must now be 0.
+func TestListNestedIndexRefBinding(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\txss := [[Ref(1), Ref(2)]]\n\tr := xss[0][1]\n\tprint deref(r)\n}\n")
+	if got != "2\n" {
+		t.Fatalf("nested list index (binding) = %q, want %q", got, "2\n")
+	}
+}
+
+// TestListNestedIndexRefArg (review follow-up): the same nested index passed as an argument.
+func TestListNestedIndexRefArg(t *testing.T) {
+	src := "fn take(r: Ref[int]) -> int {\n\treturn deref(r)\n}\n" +
+		"fn main() {\n\txss := [[Ref(1), Ref(2)]]\n\tprint take(xss[0][1])\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "2\n" {
+		t.Fatalf("nested list index (fn arg) = %q, want %q", got, "2\n")
+	}
+}

@@ -330,6 +330,17 @@ func TestMapFreshIndexRefArg(t *testing.T) {
 	}
 }
 
+// TestMapNestedIndexRefBinding (review follow-up): a NESTED index `m["a"][1]` — the outer
+// base `m["a"]` is a materialized owned list copy, so binding the inner Ref must move it,
+// not retain a second time (the recursive namesStorage previously walked to the named root
+// and double-retained → a leak). The balance must be 0.
+func TestMapNestedIndexRefBinding(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tm := {\"a\": [Ref(7), Ref(8)]}\n\tr := m[\"a\"][1]\n\tprint deref(r)\n}\n")
+	if got != "8\n" {
+		t.Fatalf("nested map index (binding) = %q, want %q", got, "8\n")
+	}
+}
+
 // TestMapFreshGet (FIX 2): `.get` on a fresh map with a POD value — the materialized-base
 // `.get` reads the slot and drops the temp map with no leak (balance 0). (A Ref-valued
 // `.get` read transiently leaks the optional's owned box for a NAMED base too — a

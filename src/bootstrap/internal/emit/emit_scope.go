@@ -101,6 +101,10 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		// a list frees its buffer (and drops each element) at scope exit through its
 		// instance's drop-env thunk, scheduled on the runtime cleanup stack.
 		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.listDropEnv(typ), cname))
+	case *types.Map:
+		// a map frees its storage (and drops each key/value) at scope exit through its
+		// instance's drop-env thunk, scheduled on the runtime cleanup stack.
+		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.mapDropEnv(typ), cname))
 	case *types.Chan:
 		// a channel handle releases at scope exit through a slot guard (so a later `del`
 		// nulls the slot); a send-capable handle releases as a sender (may auto-close).
@@ -135,6 +139,8 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
 	case *types.List:
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
+	case *types.Map:
+		e.line(fmt.Sprintf("zrt_map_drop(&%s);", it.cname))
 	case *types.Chan:
 		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:

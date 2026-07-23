@@ -363,6 +363,20 @@ func (c *checker) checkAssign(n *ast.Reassign) {
 			c.errorf(n.Span(), "cannot rebind list %q while iterating it; "+
 				"the list is frozen against structural change inside its own `for` loop", name)
 		}
+		if _, isMap := lty.(*types.Map); isMap && c.listIsFrozen(lv.X) {
+			c.errorf(n.Span(), "cannot rebind map %q while iterating it; "+
+				"the map is frozen against structural change inside its own `for` loop", name)
+		}
+		// `m[k] = v` inside a `for k in m` may INSERT a new key, which can grow (reallocate)
+		// the entry vector and invalidate the walk — so a map index-write is frozen too
+		// (unlike a list's in-place `xs[i] = v`, which never grows). The target is a
+		// Bracket rooted at the frozen map.
+		if br, ok := lv.X.(*ast.Bracket); ok {
+			if _, isMap := c.synth(br.Base).(*types.Map); isMap && c.listIsFrozen(br.Base) {
+				c.errorf(n.Span(), "cannot insert into map %q while iterating it; "+
+					"the map is frozen against structural change inside its own `for` loop", name)
+			}
+		}
 	}
 	if !bad(lty) && !bad(vt) && !c.assignable(lty, n.Value, vt) {
 		c.errorf(n.Span(), "cannot assign %s to %q of type %s", vt, name, lty)
@@ -489,6 +503,13 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 			c.errorf(n.Span(), "list equality (%q) is not yet supported", n.Op)
 			return Invalid
 		}
+		// Map equality (order-insensitive, docs/collections.md) is not implemented; gate it
+		// cleanly so two same-type maps don't satisfy `comparable` and emit `zg_a == zg_b`
+		// on the runtime map struct, which cc rejects.
+		if isMapType(lt) || isMapType(rt) {
+			c.errorf(n.Span(), "map equality (%q) is not yet supported", n.Op)
+			return Invalid
+		}
 		if !c.comparable(n, lt, rt) {
 			c.errorf(n.Span(), "cannot compare %s and %s", lt, rt)
 			return Invalid
@@ -508,6 +529,12 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 			c.errorf(n.Span(), "list membership (`in`) is not yet supported")
 			return Invalid
 		}
+		// `k in m` over a map: the left operand must be assignable to the key type
+		// (zrt_map_has hashes it as a key). Any other membership yields bool unchecked.
+		if mt, ok := rt.(*types.Map); ok && !bad(lt) && !bad(mt.Key) && !c.assignable(mt.Key, n.L, lt) {
+			c.errorf(n.L.Span(), "cannot test membership of %s in a map with key %s", lt, mt.Key)
+			return Invalid
+		}
 		// membership test 'v in coll' yields bool (GRAMMAR group 4).
 		return Bool
 	}
@@ -518,6 +545,13 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 // and membership are not yet implemented in the backend.
 func isListType(t Type) bool {
 	_, ok := t.(*types.List)
+	return ok
+}
+
+// isMapType reports whether a type is a map[K, V] — the operand shape whose equality is
+// not yet implemented in the backend (membership `k in m` IS implemented, on its own path).
+func isMapType(t Type) bool {
+	_, ok := t.(*types.Map)
 	return ok
 }
 
@@ -762,6 +796,7 @@ func (c *checker) synthMapLit(n *ast.MapLit) Type {
 		c.checkElem(en.Key, k, "map key")
 		c.checkElem(en.Value, v, "map value")
 	}
+	c.checkMapKey(n.Span(), k)
 	return &types.Map{Key: k, Val: v}
 }
 

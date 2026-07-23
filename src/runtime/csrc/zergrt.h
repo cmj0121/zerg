@@ -122,6 +122,89 @@ void zrt_list_copy(zrt_list *dst, const zrt_list *src);
  * empty header. It is the scope-exit teardown the compiler schedules for a list. */
 void zrt_list_drop(zrt_list *l);
 
+/* --- map[K, V]: by-value insertion-ordered hash table (map.c) ------------ */
+
+/* zrt_map_vt is a map instance's per-key/value teardown+hash vtable: how to hash and
+ * compare a key, and how to deep-copy / drop one key and one value. A POD key/value
+ * carries NULL copy/drop (the memcpy fast path). Built-in `hash`/`eq` are provided for
+ * int (zrt_hash_int/zrt_eq_int) and str (zrt_hash_str/zrt_eq_str) keys; the compiler
+ * emits one static vtable per distinct map instance. */
+typedef struct {
+	size_t (*hash)(const void *key);
+	bool   (*eq)(const void *a, const void *b);
+	void   (*key_copy)(void *dst, const void *src);
+	void   (*key_drop)(void *key);
+	void   (*val_copy)(void *dst, const void *src);
+	void   (*val_drop)(void *val);
+} zrt_map_vt;
+
+/* zrt_map is a map's BY-VALUE header. `entries` is an insertion-order array of `cap`
+ * records each `entrysz = sizeof(size_t)+keysz+valsz` bytes, laid out
+ * `[ hash | key | val ]`, `len` of them live — walked in order for iteration. `buckets`
+ * is a linear-probe hash index of `nbuckets` slots, each a 1-based entry index (0 =
+ * empty). The header is embedded inline in its holder, so copying/dropping it is the
+ * compiler's job; this runtime owns only the two heap buffers. Layout is INTERNAL
+ * (never FFI-frozen). */
+typedef struct {
+	uint8_t          *entries;
+	size_t            len;
+	size_t            cap;
+	int64_t          *buckets;
+	size_t            nbuckets;
+	size_t            keysz;
+	size_t            valsz;
+	size_t            entrysz;
+	const zrt_map_vt *vt;
+} zrt_map;
+
+/* zrt_map_init sets m to an empty map of keysz/valsz-byte keys/values with the given
+ * vtable. No storage is allocated until the first insert. */
+void zrt_map_init(zrt_map *m, size_t keysz, size_t valsz, const zrt_map_vt *vt);
+
+/* zrt_map_get returns a pointer to the value stored under key, or NULL on a miss — the
+ * checked `.get(k)` path. */
+void *zrt_map_get(zrt_map *m, const void *key);
+
+/* zrt_map_index returns the value pointer for key, aborting ("key not found", a
+ * KeyError) on a miss — the force path `m[k]`. */
+void *zrt_map_index(zrt_map *m, const void *key);
+
+/* zrt_map_has reports whether key is present — the `k in m` membership test. */
+bool zrt_map_has(zrt_map *m, const void *key);
+
+/* zrt_map_set inserts or updates key -> val (both already copied in by the emitter).
+ * On a hit it drops the old value, stores the new one, and drops the surplus incoming
+ * key; on a miss it appends a new insertion-order entry, rehashing the bucket index
+ * when the 0.75 load factor is crossed. */
+void zrt_map_set(zrt_map *m, const void *key, const void *val);
+
+/* zrt_map_len returns the live entry count. */
+size_t zrt_map_len(const zrt_map *m);
+
+/* zrt_map_key_at / zrt_map_val_at return the key/value slot of the i-th entry in
+ * INSERTION order (0..len-1) — the walk a `for k in m` iterates. */
+void *zrt_map_key_at(zrt_map *m, size_t i);
+void *zrt_map_val_at(zrt_map *m, size_t i);
+
+/* zrt_map_copy deep-copies src into dst: fresh storage, the entry bits bit-copied, then
+ * per-entry vt->key_copy / vt->val_copy for any non-POD side. It is the value-semantics
+ * copy the compiler inserts wherever a map is bound/passed/returned by value. */
+void zrt_map_copy(zrt_map *dst, const zrt_map *src);
+
+/* zrt_map_drop drops every live key/value (vt->key_drop / vt->val_drop) and frees both
+ * buffers, leaving an empty header. It is the scope-exit teardown for a map. */
+void zrt_map_drop(zrt_map *m);
+
+/* zrt_hash_int / zrt_eq_int are the built-in Hash for an int key (a splitmix64 mix of
+ * the int64 value; equality by value). The key slot holds an int64_t. */
+size_t zrt_hash_int(const void *key);
+bool   zrt_eq_int(const void *a, const void *b);
+
+/* zrt_hash_str / zrt_eq_str are the built-in Hash for a str key (FNV-1a over the bytes
+ * to the NUL; equality by strcmp). The key slot holds a `const char *`. */
+size_t zrt_hash_str(const void *key);
+bool   zrt_eq_str(const void *a, const void *b);
+
 /* --- abort / unwind + cleanup(defer) stack (unwind.c) -------------------- */
 
 /* zrt_cleanup is one pending deferred action on the cleanup stack: a thunk and

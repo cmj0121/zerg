@@ -33,6 +33,11 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		if lt, ok := c.synth(fld.X).(*types.List); ok {
 			return c.listMethodCall(n, fld, lt)
 		}
+		// A method on a built-in map receiver (`.len()` / `.get(k)`) is a compiler
+		// intrinsic, dispatched on the receiver's static type before the nominal path.
+		if mt, ok := c.synth(fld.X).(*types.Map); ok {
+			return c.mapMethodCall(n, fld, mt)
+		}
 		// A '.method()' on a concrete nominal receiver dispatches to the type's method
 		// namespace (inherent or spec method alike); only when no such method exists does
 		// it fall through to the field-access path and its "no field" diagnostic.
@@ -1017,7 +1022,15 @@ func (c *checker) inferBracket(n *ast.Bracket) Type {
 	switch b := xt.(type) {
 	case *types.List:
 		elem = b.Elem
-		c.synthIndices(n.Elems)
+		// a single index `xs[i]` must be assignable to int (mirroring the map key path
+		// below and `.get`); without this a bad index type (`xs[true]`, `xs["x"]`)
+		// reaches the backend as a silent coercion / bad C. A slice-shaped bracket is
+		// left to synth.
+		if len(n.Elems) == 1 {
+			c.checkElem(n.Elems[0], Int, "list index")
+		} else {
+			c.synthIndices(n.Elems)
+		}
 	case *types.Array:
 		elem = b.Elem
 		c.synthIndices(n.Elems)

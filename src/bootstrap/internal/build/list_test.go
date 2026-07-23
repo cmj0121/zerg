@@ -318,3 +318,96 @@ func TestListEqualityGate(t *testing.T) {
 		t.Fatalf("expected a list-equality deferral gate, got %v", diags)
 	}
 }
+
+// TestListGetIndexTypeChecked (FIX 1): `.get(i)` must TYPE-CHECK its index argument as an
+// int. A wrong index type is a clean "list index" diagnostic — never a silent bool -> int
+// coercion, and never a `zrt_list_get(_, "x")` that escapes to cc. Regression guard for the
+// bare `check()` that context-typed a literal but reported no mismatch.
+func TestListGetIndexTypeChecked(t *testing.T) {
+	for _, src := range []string{
+		"fn main() {\n\txs := [10, 20]\n\tprint xs.get(true) ?? -1\n}\n",
+		"fn main() {\n\txs := [10, 20]\n\tprint xs.get(\"x\") ?? -1\n}\n",
+	} {
+		_, _, diags := Compile(src)
+		if len(diags) == 0 || !strings.Contains(diags[0].Msg, "list index") {
+			t.Fatalf("expected a \"list index\" diagnostic for %q, got %v", src, diags)
+		}
+	}
+}
+
+// TestListIndexTypeChecked (FIX 1): `xs[i]` must TYPE-CHECK its index the same way `.get`
+// and `m[k]` do — an unchecked list index reached the backend as `zrt_list_at(_, true)` /
+// `zrt_list_at(_, "x")` (silent coercion / bad C). It must be a clean "list index" gate.
+func TestListIndexTypeChecked(t *testing.T) {
+	for _, src := range []string{
+		"fn main() {\n\txs := [10, 20]\n\tprint xs[true]\n}\n",
+		"fn main() {\n\txs := [10, 20]\n\tprint xs[\"x\"]\n}\n",
+	} {
+		_, _, diags := Compile(src)
+		if len(diags) == 0 || !strings.Contains(diags[0].Msg, "list index") {
+			t.Fatalf("expected a \"list index\" diagnostic for %q, got %v", src, diags)
+		}
+	}
+}
+
+// TestListIndexOK (FIX 1): a valid int index still type-checks and runs unchanged — the
+// added assignability check rejects only a mismatch.
+func TestListIndexOK(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\txs := [5, 6, 7]\n\ti := 2\n\tprint xs[i]\n\tprint xs[0]\n}\n")
+	if got != "7\n5\n" {
+		t.Fatalf("list index (valid) = %q, want %q", got, "7\n5\n")
+	}
+}
+
+// TestListFreshIndexRefTransient (FIX 2): indexing a FRESH (rvalue) list whose element is a
+// Ref and reading it transiently (`deref([…][i])`). The materialized-base index returns an
+// OWNED copy of the box; deref releases that transient copy after reading, so the box is
+// freed exactly once (balance 0). Regression guard for the leak (balance 1).
+func TestListFreshIndexRefTransient(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tprint deref([Ref(42), Ref(43)][0])\n}\n")
+	if got != "42\n" {
+		t.Fatalf("fresh list[Ref] index (transient) = %q, want %q", got, "42\n")
+	}
+}
+
+// TestListFreshIndexRefBinding (FIX 2): binding a fresh-list Ref index (`r := […][i]`). The
+// owned copy is retained exactly once (namesStorage no longer double-counts a fresh-base
+// index), so `r`'s single scope-exit drop balances it.
+func TestListFreshIndexRefBinding(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\tr := [Ref(1), Ref(2)][1]\n\tprint deref(r)\n}\n")
+	if got != "2\n" {
+		t.Fatalf("fresh list[Ref] index (binding) = %q, want %q", got, "2\n")
+	}
+}
+
+// TestListFreshIndexRefArg (FIX 2): a fresh-list Ref index passed to a by-value Ref
+// parameter — the owned copy is moved to the callee, which drops it (balance 0).
+func TestListFreshIndexRefArg(t *testing.T) {
+	src := "fn take(r: Ref[int]) -> int {\n\treturn deref(r)\n}\n" +
+		"fn main() {\n\tprint take([Ref(7), Ref(8)][1])\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "8\n" {
+		t.Fatalf("fresh list[Ref] index (fn arg) = %q, want %q", got, "8\n")
+	}
+}
+
+// TestListNestedIndexRefBinding (review follow-up): a NESTED index `xss[0][1]` — the outer
+// base `xss[0]` is already a materialized owned copy, so binding the inner Ref must move
+// it, not retain a second time. Previously the recursive namesStorage walked to the named
+// root and double-retained → a leak; the balance must now be 0.
+func TestListNestedIndexRefBinding(t *testing.T) {
+	got := runProgramRTBalanced(t, "fn main() {\n\txss := [[Ref(1), Ref(2)]]\n\tr := xss[0][1]\n\tprint deref(r)\n}\n")
+	if got != "2\n" {
+		t.Fatalf("nested list index (binding) = %q, want %q", got, "2\n")
+	}
+}
+
+// TestListNestedIndexRefArg (review follow-up): the same nested index passed as an argument.
+func TestListNestedIndexRefArg(t *testing.T) {
+	src := "fn take(r: Ref[int]) -> int {\n\treturn deref(r)\n}\n" +
+		"fn main() {\n\txss := [[Ref(1), Ref(2)]]\n\tprint take(xss[0][1])\n}\n"
+	got := runProgramRTBalanced(t, src)
+	if got != "2\n" {
+		t.Fatalf("nested list index (fn arg) = %q, want %q", got, "2\n")
+	}
+}

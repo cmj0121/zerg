@@ -742,15 +742,21 @@ func (c *checker) forInElem(n *ast.ForStmt) Type {
 	if lst, ok := it.(*types.List); ok {
 		return lst.Elem
 	}
+	// `for k in m` binds the KEY, walking the map in insertion order (docs/collections.md;
+	// FORK-MAP-ITER: the value is reached via `m[k]`).
+	if mp, ok := it.(*types.Map); ok {
+		return mp.Key
+	}
 	if !bad(it) {
 		c.errorf(n.Iter.Span(), "for-in over %s is not yet supported", it)
 	}
 	return Invalid
 }
 
-// iteratedListSym returns the list-binding symbol a for-in iterates when the iterable
-// is a bare name bound to a list, so the loop can freeze it against structural change
-// for its duration. It is nil for a range, an array, or a non-name list expression.
+// iteratedListSym returns the container-binding symbol a for-in iterates when the
+// iterable is a bare name bound to a list or a map, so the loop can freeze it against
+// structural change for its duration. It is nil for a range, an array, or a non-name
+// container expression.
 func (c *checker) iteratedListSym(n *ast.ForStmt) *symbol {
 	id, ok := n.Iter.(*ast.Ident)
 	if !ok {
@@ -760,10 +766,11 @@ func (c *checker) iteratedListSym(n *ast.ForStmt) *symbol {
 	if sym == nil {
 		return nil
 	}
-	if _, ok := sym.typ.(*types.List); !ok {
-		return nil
+	switch sym.typ.(type) {
+	case *types.List, *types.Map:
+		return sym
 	}
-	return sym
+	return nil
 }
 
 func (c *checker) checkStmt(s ast.Stmt) {

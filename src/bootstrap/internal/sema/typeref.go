@@ -2,6 +2,7 @@ package sema
 
 import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -184,8 +185,12 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 		c.errorf(ref.Span(), "a set type is not yet supported")
 		return &types.Set{Elem: arg(0)}, true
 	case "map":
-		c.errorf(ref.Span(), "a map type is not yet supported")
-		return &types.Map{Key: arg(0), Val: arg(1)}, true
+		// map[K, V] is a real container (map.c): its ctype is zrt_map, so naming one in a
+		// codegen TYPE position (param, field, binding annotation) is supported. The key
+		// must be a Hash-able type; only int and str keys are supported this phase.
+		k, v := arg(0), arg(1)
+		c.checkMapKey(ref.Span(), k)
+		return &types.Map{Key: k, Val: v}, true
 	case "chan":
 		return &types.Chan{Elem: arg(0)}, true
 	case "Ref":
@@ -197,6 +202,21 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 		return &types.Ptr{Elem: arg(0)}, true
 	}
 	return nil, false
+}
+
+// checkMapKey enforces the map key bound (docs/collections.md: `K: Hash`). This phase
+// lands only the built-in Hash for int and str keys; any other concrete key type is
+// rejected with a clean diagnostic rather than reaching a backend with no vtable for it.
+// A bad/unknown key (a cascading error, or an unresolved generic parameter) is left
+// alone so no spurious second diagnostic piles on.
+func (c *checker) checkMapKey(at token.Span, k types.Type) {
+	if bad(k) || k == types.Unknown || k == Int || k == Str {
+		return
+	}
+	if _, param := k.(*types.Param); param {
+		return
+	}
+	c.errorf(at, "a map key of type %s needs Hash; only int and str keys are supported in this phase", k)
 }
 
 // builtinSum resolves the built-in sum types 'Either[L, R]' and 'Result[T]'

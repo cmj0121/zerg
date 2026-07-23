@@ -46,6 +46,10 @@ func containsRef(t sema.Type) bool {
 		// C `=` would alias it and double-free at the two holders' scope exits. It must
 		// always flow through zrt_list_copy / zrt_list_drop (docs/collections.md).
 		return true
+	case *types.Map:
+		// a map is NEVER plain-old-data (like a list): even a map[int,int] owns heap
+		// storage, so it must always flow through zrt_map_copy / zrt_map_drop.
+		return true
 	case *types.Chan:
 		// a channel is a ref type per memory.md; its runtime is 1e, so it never
 		// actually reaches a copy site this phase, but POD-ness must still exclude it.
@@ -155,6 +159,9 @@ func (e *emitter) prepareRuntime() {
 	// Number the list instances (docs/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()
+	// Number the map instances (docs/collections.md), keyed by the K,V pair. Leaves the
+	// map map empty for a program with no map value, which stays byte-identical.
+	e.prepareMaps()
 	// A program that imports io (lowers a write intrinsic) or that carries a
 	// Result[nil] in any signature (e.g. a bundled io function) needs the runtime:
 	// the io primitives ride in the always-linked sys.c, and Result[nil] spells
@@ -366,6 +373,19 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 		}
 		elem := e.cur.ExprType(e.info, n)
 		arg := e.expr(n.Args[0].Value)
+		// A fresh-container index (`deref({…}[k])`, `deref([…][i])`) hands deref an OWNED
+		// Ref copy with no other holder — the materialized-base fieldCopy — so reading its
+		// payload and dropping it on the floor leaks the box (balance 1). Read the payload
+		// into a value, THEN release the transient box, so it is freed exactly once. A
+		// non-POD payload (Ref-of-Ref) is left on the plain read (the value would need its
+		// own retain before the release); it is exotic and keeps the prior behaviour.
+		if !containsRef(elem) && e.producesOwnedTransientRef(n.Args[0].Value) {
+			box := e.freshName("drefbox")
+			val := e.freshName("drefval")
+			ct := e.ctype(elem)
+			return fmt.Sprintf("({ void *%s = %s; %s %s = (*(%s*)zrt_ref_payload(%s)); zrt_release(%s); %s; })",
+				box, arg, ct, val, ct, box, box, val), true
+		}
 		return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(elem), arg), true
 	}
 	if s, ok := e.atomicIntrinsicEmit(n); ok {
@@ -453,6 +473,10 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		// copying a list value that names existing storage deep-copies its buffer (each
 		// element via the instance vtable), so the two holders never alias.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), base)
+	case *types.Map:
+		// copying a map value that names existing storage deep-copies its storage (each
+		// value via the instance vtable), so the two holders never alias.
+		return fmt.Sprintf("%s(%s)", e.mapCopyFn(t), base)
 	case *types.Chan:
 		// copying a channel handle retains it; a send-capable handle (bidi/send-only)
 		// also bumps the sender count, a receive-only handle does not.
@@ -488,8 +512,38 @@ func (e *emitter) namesStorage(x ast.Expr) bool {
 		return true
 	}
 	if br, ok := x.(*ast.Bracket); ok {
-		_, ok := e.cur.ExprType(e.info, br.Base).(*types.List)
-		return ok
+		switch e.cur.ExprType(e.info, br.Base).(type) {
+		case *types.List, *types.Map:
+			// Only an ADDRESSABLE container's index borrows its slot storage (listIndex/
+			// mapIndex take the borrow branch), so copying it must retain/deep-copy. A FRESH
+			// (rvalue) container's index took the materialized branch and ALREADY returned an
+			// OWNED copy; retaining again would double-count (leak on the bound/argument path).
+			// The base is storage only when it is itself an lvalue — a nested `xss[i][j]`'s
+			// base `xss[i]` is a Bracket (already materialized to an owned copy), so it must
+			// move, not retain.
+			return isLValueExpr(br.Base)
+		}
+		return false
+	}
+	return false
+}
+
+// producesOwnedTransientRef reports whether an expression is a FRESH-base container
+// index whose element is Ref-bearing — the exact shape for which listIndex/mapIndex
+// return an OWNED copy (the materialized-base fieldCopy) rather than a borrow. A
+// transient reader of such a value (deref) must release that owned copy after reading
+// it, or the box leaks (balance 1). A named-base index is a borrow and must NOT be
+// released here (the container still owns it).
+func (e *emitter) producesOwnedTransientRef(x ast.Expr) bool {
+	br, ok := x.(*ast.Bracket)
+	if !ok || len(br.Elems) != 1 || isLValueExpr(br.Base) {
+		return false
+	}
+	switch b := e.cur.ExprType(e.info, br.Base).(type) {
+	case *types.List:
+		return containsRef(b.Elem)
+	case *types.Map:
+		return containsRef(b.Val)
 	}
 	return false
 }
@@ -538,6 +592,7 @@ func (e *emitter) emitRefHelpers() {
 	// follow after the struct helpers, where a list-of-struct's element thunk can see
 	// the struct's own zg_copy_.
 	e.emitListForwardDecls()
+	e.emitMapForwardDecls()
 	for _, ti := range e.prog.Types {
 		if !e.tiContainsRef(ti) {
 			continue
@@ -554,6 +609,9 @@ func (e *emitter) emitRefHelpers() {
 	// List element vtables + copy/drop definitions (after the struct helpers so a
 	// list-of-struct's element thunk can call the struct's zg_copy_/zg_drop_).
 	e.emitListHelpers()
+	// Map key/val vtables + copy/drop definitions (after the list helpers so a map value
+	// that is a list can call the list's zg_listcopy_/zg_listdropenv_).
+	e.emitMapHelpers()
 	e.emitDeferHelpers()
 	e.emitSpawnHelpers()
 	e.emitChanHelpers()
@@ -667,6 +725,9 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	case *types.List:
 		// a list field / element deep-copies through its instance's value copy helper.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), access)
+	case *types.Map:
+		// a map field / element / value deep-copies through its instance's value copy helper.
+		return fmt.Sprintf("%s(%s)", e.mapCopyFn(t), access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
 	}
@@ -681,6 +742,8 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 		return fmt.Sprintf("zrt_release(%s);", access)
 	case *types.List:
 		return fmt.Sprintf("zrt_list_drop(&(%s));", access)
+	case *types.Map:
+		return fmt.Sprintf("zrt_map_drop(&(%s));", access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
 	}

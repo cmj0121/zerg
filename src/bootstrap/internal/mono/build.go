@@ -426,6 +426,9 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	if w.walkMethodCall(in, n) {
 		return
 	}
+	if w.walkProvidedSelfCall(in, n) {
+		return
+	}
 	if br, ok := n.Callee.(*ast.Bracket); ok {
 		w.explicitCall(in, br, n)
 		return

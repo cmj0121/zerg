@@ -1217,8 +1217,46 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 		return fmt.Sprintf("(%s >= %s && %s %s %s)", place, lo, place, op, e.expr(p.Hi))
 	case *ast.ListPattern:
 		return e.listPatternWalk(p, place, placeT, scope)
+	case *ast.OrPattern:
+		return e.orPatternWalk(p, place, placeT, scope)
+	case *ast.WildPattern:
+		// '_' matches anything and binds nothing: an irrefutable test.
+		return ""
 	}
+	// The load-bearing anti-silence net (mirrors expr's): every pattern node the
+	// backend lowers has an explicit case above. A node reaching here would formerly
+	// fall to an empty test — an always-true match that silently miscompiles the arm.
+	// Fail loudly instead so Emit discards the output while diags are non-empty.
+	e.diags.Add(pat.Span(), "internal: unsupported pattern node %T", pat)
 	return ""
+}
+
+// orPatternWalk lowers an or-pattern 'a | b | c' (GRAMMAR group 6): the arm matches
+// when any alternative does, so the test is the alternatives' tests joined by '||'.
+// Every alternative is walked against the same place, so a variant/literal or-pattern
+// without bindings (Red|Green, 1|2|3) lowers to a plain disjunction and stays
+// byte-identical to a hand-written guard. An alternative that would bind a name is
+// gated cleanly: with different alternatives binding different carriers, a single
+// scope entry cannot describe the value, so it is not yet supported. An irrefutable
+// alternative makes the whole or-pattern always match (empty test).
+func (e *emitter) orPatternWalk(p *ast.OrPattern, place string, placeT sema.Type, scope map[string]string) string {
+	var tests []string
+	for _, alt := range p.Alts {
+		probe := map[string]string{}
+		t := e.patternWalk(alt, place, placeT, probe)
+		if len(probe) > 0 {
+			e.diags.Add(p.Span(), "an or-pattern with bindings is not yet supported")
+			return ""
+		}
+		if t == "" {
+			return "" // an irrefutable alternative subsumes the rest
+		}
+		tests = append(tests, t)
+	}
+	if len(tests) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(tests, " || ") + ")"
 }
 
 // tuplePatternWalk destructures a tuple pattern: each element i is located at the
@@ -1475,7 +1513,15 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 // the resolved impl-method instance, passing the receiver first (B1).
 func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	field, _ := n.Callee.(*ast.Field)
-	args := e.expr(field.X)
+	recv := e.expr(field.X)
+	// W3: a dispatch to a provided-method body takes an opaque 'const void*' receiver
+	// (its prologue casts it back to the concrete type), so the by-value receiver — the
+	// erased body's own `this` local — is address-taken and cast, exactly as a dyn
+	// dispatch does. An ordinary impl-method target takes `this` by value, unchanged.
+	if md.Erased {
+		recv = "(const void*)&(" + recv + ")"
+	}
+	args := recv
 	for _, a := range n.Args {
 		args += ", " + e.expr(a.Value)
 	}

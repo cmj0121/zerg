@@ -122,6 +122,66 @@ func (w *worker) buildWitness(spec *types.SpecDef, concrete types.Type) *Witness
 	return wit
 }
 
+// walkProvidedSelfCall handles a `this.<method>()` self-call inside a synthesized
+// spec provided-method body (RecvErased) where <method> is ANOTHER provided method
+// the impl does not override (W3). Such a method is absent from the type's impl
+// method namespace, so walkMethodCall/resolveMethod cannot find it and the call would
+// lower to a null callee ('0()') that fails cc. Here we locate the provided spec
+// method for the receiver's concrete type and enqueue its erased-receiver instance —
+// the same instance (identical mangled name) buildWitness fills the witness slot with
+// — so the self-call dispatches through it. It returns false when the call is not such
+// a provided-method self-call, leaving the ordinary paths untouched (byte-identical).
+func (w *worker) walkProvidedSelfCall(in *Instance, n *ast.Call) bool {
+	if !in.RecvErased {
+		return false
+	}
+	field, ok := n.Callee.(*ast.Field)
+	if !ok {
+		return false
+	}
+	recv := in.ExprType(w.info, field.X)
+	m := w.providedMethod(recv, field.Name)
+	if m == nil {
+		return false
+	}
+	inst := w.enqueueMethod(recv, m, recv)
+	in.MethodCalls[n] = &MethodDispatch{Mangled: inst.Mangled, Erased: true}
+	return true
+}
+
+// providedMethod finds a provided (default-body) spec method named `name` available
+// on the concrete receiver type but NOT overridden by its impl — the exact method
+// buildWitness synthesizes for an unoverridden slot. It returns a fresh ImplMethod
+// carrying the spec method's signature and default-body decl, or nil when no such
+// unoverridden provided method matches (an overridden or required method is handled
+// by the ordinary resolveMethod path).
+func (w *worker) providedMethod(recv types.Type, name string) *types.ImplMethod {
+	reg := w.info.Specs
+	if reg == nil {
+		return nil
+	}
+	head := nominalHeadT(recv)
+	if head == nil {
+		return nil
+	}
+	for _, impl := range reg.Impls {
+		if impl.Spec == nil || nominalHeadT(impl.Target) != head {
+			continue
+		}
+		if impl.Methods[name] != nil {
+			continue // overridden by the impl — resolveMethod already resolves it
+		}
+		for _, sp := range reg.SpecClosure(impl.Spec) {
+			for _, m := range sp.Methods {
+				if m.Name == name && m.Provided {
+					return &types.ImplMethod{Name: m.Name, Sig: m.Sig, Mut: m.Mut, Decl: m.Decl}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // enqueueMethod creates (once) the C body of an impl method used by a witness: an
 // erased-receiver instance whose receiver is passed as 'const void*' and cast to
 // the concrete type in a prologue (DESIGN-1c §6.1). Its own parameters keep their

@@ -100,6 +100,10 @@ type Instance struct {
 // argument (DESIGN-1c §3.3/§6, B1/B2).
 type MethodDispatch struct {
 	Mangled string
+	// Erased marks a dispatch whose target instance takes an opaque 'const void*'
+	// receiver (a spec provided-method body called from another provided body, W3):
+	// the receiver is address-taken and cast, not passed by value.
+	Erased bool
 }
 
 // DynSite is a call to a '#[dyn]' function from within some body: the witness the

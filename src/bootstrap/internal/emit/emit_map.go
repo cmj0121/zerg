@@ -21,6 +21,7 @@ import (
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -54,6 +55,19 @@ func (e *emitter) prepareMaps() {
 			consider(x.Val)
 			if _, dup := insts[x.String()]; !dup {
 				insts[x.String()] = x
+				// Enforce the map-key Hash bound on the CONCRETE (post-monomorphization) key
+				// type. sema's checkMapKey lets a bare type parameter through — the key is not
+				// known until instantiation — so a generic `map[K, V]` reaches here with K
+				// substituted. This is the point at which the key is ground, so a non-int/str
+				// concrete key (however it arrived: a direct `map[bool, int]` annotation or a
+				// `build(true, 7)` instantiation) is rejected with the SAME clean diagnostic the
+				// sema gate uses, aborting emit before mapHashEq would fall back to the int
+				// vtable and read past a differently-sized key (a stack overflow or a silent
+				// collision miscompile). A still-parametric shape was already filtered above.
+				if x.Key != sema.Int && x.Key != sema.Str {
+					e.diags.Add(token.Span{},
+						"a map key of type %s needs Hash; only int and str keys are supported in this phase", x.Key)
+				}
 			}
 		case *types.List:
 			consider(x.Elem)
@@ -164,12 +178,21 @@ func (e *emitter) orderedMaps() []*mapCarrier {
 }
 
 // mapHashEq returns the built-in hash/eq function names for a map key type (int or
-// str, the only keys this phase — enforced by sema's checkMapKey).
+// str, the only keys this phase — enforced by sema's checkMapKey and, for a key that
+// arrives through a generic type parameter, by prepareMaps' post-monomorphization
+// gate). It never falls back to the int vtable for another key type: the int vtable
+// reads 8 bytes regardless of the real key size, so a wider/narrower key would
+// stack-overflow or silently collide. Reaching the default arm means the gate was
+// bypassed — an internal error, not a program the user can trigger.
 func mapHashEq(key sema.Type) (hash, eq string) {
-	if key == sema.Str {
+	switch key {
+	case sema.Str:
 		return "zrt_hash_str", "zrt_eq_str"
+	case sema.Int:
+		return "zrt_hash_int", "zrt_eq_int"
+	default:
+		panic(fmt.Sprintf("emit: internal error: map key of type %s reached mapHashEq; the int/str key gate should have rejected it", key))
 	}
-	return "zrt_hash_int", "zrt_eq_int"
 }
 
 // emitMapForwardDecls forward-declares every map helper that a struct/list/map copy or

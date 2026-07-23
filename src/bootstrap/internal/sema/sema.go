@@ -792,9 +792,15 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		if c.loopDepth == 0 {
 			c.errorf(n.Span(), "break outside of a loop")
 		}
+		if n.Cond != nil {
+			c.checkCond(n.Cond)
+		}
 	case *ast.ContinueStmt:
 		if c.loopDepth == 0 {
 			c.errorf(n.Span(), "continue outside of a loop")
+		}
+		if n.Cond != nil {
+			c.checkCond(n.Cond)
 		}
 	case *ast.IfStmt:
 		// Analyse each branch (and the implicit fall-through when there is no else)

@@ -39,28 +39,22 @@ func TestRawStringLiteralRuns(t *testing.T) {
 	}
 }
 
-// TestListLiteralValueGate covers A8: a general list[T] value has no runtime yet,
-// so a list-literal used as a value must fail cleanly rather than lower to a broken
-// C initializer. (A fixed-array [int;N] initializer is unaffected — see the
-// value-generic emit test.)
-func TestListLiteralValueGate(t *testing.T) {
-	code, _, diags := Compile("fn main() {\n x := [1, 2, 3]\n print x[0]\n}")
-	if len(diags) == 0 || code != "" {
-		t.Fatalf("a list value should be gated, got code=%q diags=%v", code, diags)
-	}
-	if !strings.Contains(diags[0].Msg, "list value is not yet supported") {
-		t.Fatalf("expected the list-value gate diagnostic, got: %v", diags)
+// TestListLiteralValueRuns covers the list[T] container (docs/collections.md): a list
+// literal builds a real zrt_list a subsequent index reads by value. (A fixed-array
+// [int;N] initializer keeps its own path — see the value-generic emit test.)
+func TestListLiteralValueRuns(t *testing.T) {
+	got := runProgramRT(t, "fn main() {\n x := [1, 2, 3]\n print x[0]\n print x[2]\n}")
+	if got != "1\n3\n" {
+		t.Fatalf("list literal index = %q, want %q", got, "1\n3\n")
 	}
 }
 
-// TestFillFormGate covers A8: the fill form [v; N] is gated cleanly.
-func TestFillFormGate(t *testing.T) {
-	code, _, diags := Compile("fn main() {\n x := [0; 3]\n print x[0]\n}")
-	if len(diags) == 0 || code != "" {
-		t.Fatalf("a fill-form list should be gated, got code=%q diags=%v", code, diags)
-	}
-	if !strings.Contains(diags[0].Msg, "fill-form list literal is not yet supported") {
-		t.Fatalf("expected the fill-form gate diagnostic, got: %v", diags)
+// TestFillFormRuns covers the fill form [v; N] in list position: it builds a list of N
+// copies of v.
+func TestFillFormRuns(t *testing.T) {
+	got := runProgramRT(t, "fn main() {\n x := [7; 3]\n print x.len()\n print x[2]\n}")
+	if got != "3\n7\n" {
+		t.Fatalf("fill-form list = %q, want %q", got, "3\n7\n")
 	}
 }
 

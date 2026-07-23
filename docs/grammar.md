@@ -599,8 +599,7 @@ send-arm    ::= expr '<-' expr '=>' expr
 - **`spawn f(args)`** starts a **fire-and-forget** coroutine (Go's `go`) — no handle, no join; you observe
   it only through channels. Captures are restricted to immutable values and channels.
 - **`chan[T](cap?)`** builds a channel — capacity `0` (the default) is an unbuffered **rendezvous**. A bare
-  `chan[T]` is bidirectional and narrows to `<-chan[T]` / `chan[T]<-` (or via the values `ch.recv` /
-  `ch.send`).
+  `chan[T]` is bidirectional and narrows to `<-chan[T]` / `chan[T]<-` via a type annotation.
 - **`ch <- v`** sends (no value; blocks or aborts on a closed channel). **`<-ch`** receives, yielding
   `Result[T]` — `Right` means closed and drained (carrying `StopIteration` or a crash `Err`). The receive
   binds first, so `(<-ch)?`, `<-ch!`, and `<-ch ?? d` compose with the group-8 operators.

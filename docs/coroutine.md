@@ -135,7 +135,7 @@ its send end in a tighter block:
 
 ```text
 {
-    out := ch.send
+    out: chan[int]<- = ch
     produce(out)
 }              # out's scope ends → auto-close (if last sender)
 cleanup()
@@ -157,9 +157,9 @@ not; the only failure is a _gap_ with no send end at all.
 
 ```text
 ch := chan[int]()
-spawn consumer(ch.recv)     # the creator still holds bidirectional `ch`
+spawn consumer(ch)          # ch narrows to consumer's `<-chan[int]` param; creator still holds bidirectional `ch`
 ... delay ...               # SAFE: the creator's end keeps send-count ≥ 1 across the delay
-spawn producer(ch.send)
+spawn producer(ch)          # ch narrows to producer's `chan[int]<-` param
 ```
 
 Safe: the consumer just **blocks** while the creator holds a send-capable end. It breaks only if you
@@ -174,8 +174,9 @@ for a producer) or **receive-only** (`<-ch`, for a consumer).
 
 **Narrowing is one-way**, never back to bidirectional — the safety guarantee: a send-only end
 **cannot** receive (steal) values, a receive-only end cannot inject. It is a safe built-in upcast at
-a directional-typed target (parameter, `return`, typed binding); an explicit narrow (`ch.send` /
-`ch.recv`) drops your own bidirectional contribution.
+a directional-typed target (parameter, `return`, typed binding) and does **not** drop your own hold —
+the target gets a narrowed view while you keep your bidirectional end. To actually drop your own end
+(your bidirectional contribution) use `del ch` or end its scope (a tighter block), as above.
 
 Direction is also what makes auto-close **precise**, since the refcount is per direction: send-only
 counts toward send-count, receive-only toward receive-count, bidirectional toward **both**. So a
@@ -262,7 +263,8 @@ fn counter(inbox: <-chan[Cmd]) {
 
 - **tell** (fire-and-forget) is a plain send — `inbox <- Add(5)`.
 - **ask** (request-reply) sends a fresh reply channel and blocks on it —
-  `rep := chan[int]();  inbox <- Get(rep.send);  v := <-rep!`.
+  `rep := chan[int]();  inbox <- Get(rep);  v := <-rep!`. `Get`'s field is typed `chan[int]<-`, so `rep`
+  narrows to send-only as it enters the message, while the caller keeps its receive end.
 - **Teardown is automatic** — when the last client drops its send end, `inbox` closes, the `for` ends,
   and the owner's `mut` state is freed; the ordinary channel-close and scope-owned rules, nothing added.
 

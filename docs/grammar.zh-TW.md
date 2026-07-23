@@ -526,8 +526,8 @@ send-arm    ::= expr '<-' expr '=>' expr
 
 - **`spawn f(args)`** 啟動一個 **fire-and-forget** coroutine（Go 的 `go`）——無 handle、無 join;只能透過 channel
   觀察。capture 限 immutable 值與 channel。
-- **`chan[T](cap?)`** 建立 channel——容量 `0`（預設）是無緩衝 **rendezvous**。裸 `chan[T]` 為雙向,可窄化成
-  `<-chan[T]` / `chan[T]<-`（或用值 `ch.recv` / `ch.send`）。
+- **`chan[T](cap?)`** 建立 channel——容量 `0`（預設）是無緩衝 **rendezvous**。裸 `chan[T]` 為雙向,可透過型別標註
+  窄化成 `<-chan[T]` / `chan[T]<-`。
 - **`ch <- v`** 送出（無值;對已關閉 channel 會 abort）。**`<-ch`** 接收,產出 `Result[T]`——`Right` 表示已關閉且排空
   （攜 `StopIteration` 或 crash `Err`）。receive 先綁定,故 `(<-ch)?`、`<-ch!`、`<-ch ?? d` 與 group-8 運算子組合。
 - **`select { … }`** 是唯一的多路等待:跑第一個 ready 的 arm（公平 tie）。**`done`** 在所有被監看的 receive channel

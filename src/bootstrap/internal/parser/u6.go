@@ -13,10 +13,12 @@ import (
 
 // --- if (statement & expression) ----------------------------------------------
 
-// parseIfBranch parses one 'if'/'else if' head and its block. The head is a
-// binding form 'id := e' (Bind set) or a plain expression, both parsed in
-// no-brace mode so a leading '{' opens the body block.
-func (p *parser) parseIfBranch() ast.IfBranch {
+// parseIfHead parses the shared 'if' head — an optional binding form 'id := e'
+// (Bind set) followed by the condition expression, both in no-brace mode so a
+// leading '{' opens the body block — and returns the partially filled branch
+// (Bind + Cond). The caller parses the body (parseIfBranch) or does its own
+// '{'-lookahead (parseReturnIf).
+func (p *parser) parseIfHead() ast.IfBranch {
 	var br ast.IfBranch
 	if p.at(token.Ident) && p.peek(1).Kind == token.Walrus {
 		name := p.advance()
@@ -24,6 +26,14 @@ func (p *parser) parseIfBranch() ast.IfBranch {
 		br.Bind = name.Lexeme
 	}
 	br.Cond = p.headExpr()
+	return br
+}
+
+// parseIfBranch parses one 'if'/'else if' head and its block. The head is a
+// binding form 'id := e' (Bind set) or a plain expression, both parsed in
+// no-brace mode so a leading '{' opens the body block.
+func (p *parser) parseIfBranch() ast.IfBranch {
+	br := p.parseIfHead()
 	br.Body = p.parseBlock()
 	return br
 }

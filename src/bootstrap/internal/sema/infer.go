@@ -868,13 +868,21 @@ func substituteArgs(params []*types.Param, args []Type, member Type) Type {
 	if len(params) == 0 || len(args) == 0 {
 		return member
 	}
-	subT := map[string]Type{}
+	return substitute(member, paramMap(params, args), nil)
+}
+
+// paramMap zips a nominal type's declared parameters against its use-site type
+// arguments, mapping each parameter name to the argument at the same index (any
+// parameter past the arguments is left unmapped). Shared by substituteArgs and
+// nominalArgs.
+func paramMap(params []*types.Param, args []Type) map[string]Type {
+	m := map[string]Type{}
 	for i, p := range params {
 		if i < len(args) {
-			subT[p.Name] = args[i]
+			m[p.Name] = args[i]
 		}
 	}
-	return substitute(member, subT, nil)
+	return m
 }
 
 // substituteAll substitutes every type in a slice, returning a fresh slice.
@@ -930,7 +938,8 @@ func (c *checker) methodCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 	if c.info.Specs == nil {
 		return nil, false
 	}
-	head := nominalHead(c.synth(fld.X))
+	rt := c.synth(fld.X)
+	head := nominalHead(rt)
 	if head == nil {
 		return nil, false
 	}
@@ -943,7 +952,7 @@ func (c *checker) methodCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 		return nil, false
 	}
 	m := ref.Method
-	subT := nominalArgs(c.synth(fld.X))
+	subT := nominalArgs(rt)
 	var pnames []string
 	if fn, ok := m.Decl.(*ast.FuncDecl); ok {
 		for _, p := range fn.Params {
@@ -965,23 +974,13 @@ func (c *checker) methodCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 // type arguments, so a method's abstract 'T' substitutes to the concrete argument
 // (the sema counterpart of mono's nominalSubT).
 func nominalArgs(recv Type) map[string]Type {
-	subT := map[string]Type{}
-	var def *types.TypeDef
-	var args []Type
 	switch x := recv.(type) {
 	case *types.Struct:
-		def, args = x.Def, x.Args
+		return paramMap(x.Def.Params, x.Args)
 	case *types.Enum:
-		def, args = x.Def, x.Args
+		return paramMap(x.Def.Params, x.Args)
 	}
-	if def != nil {
-		for i, p := range def.Params {
-			if i < len(args) {
-				subT[p.Name] = args[i]
-			}
-		}
-	}
-	return subT
+	return map[string]Type{}
 }
 
 // inferTupleIndex types a static tuple element access 't.0'.

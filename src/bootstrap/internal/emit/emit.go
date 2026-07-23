@@ -775,20 +775,28 @@ func (e *emitter) popScope()  { e.scopes = e.scopes[:len(e.scopes)-1] }
 // mk`, would shadow the function of the same mangled name and miscompile the call.
 // The examples hold no such collision, so their emitted names are unchanged.
 func (e *emitter) resetUsed() {
-	e.used = map[string]bool{}
+	e.used = e.topLevelNames()
+}
+
+// topLevelNames is the set of every top-level mangled C name: function and type
+// instances (their Mangled name), plus module-constant globals ("zg_"+Name). It is
+// the one source shared by resetUsed's per-function seeding and reservedTopLevel's
+// carrier-allocation reservation. Module-constant globals share the file scope with
+// every body, so a body-local binding must not pick one of their names (Phase 1g S3).
+func (e *emitter) topLevelNames() map[string]bool {
+	r := map[string]bool{}
 	for _, inst := range e.prog.Funcs {
-		e.used[inst.Mangled] = true
+		r[inst.Mangled] = true
 	}
 	for _, ti := range e.prog.Types {
-		e.used[ti.Mangled] = true
+		r[ti.Mangled] = true
 	}
-	// module-constant globals share the file scope with every body, so a body-local
-	// binding must not pick one of their names (Phase 1g S3).
 	for _, g := range e.prog.Inits {
 		for _, b := range g.Consts {
-			e.used["zg_"+b.Name] = true
+			r["zg_"+b.Name] = true
 		}
 	}
+	return r
 }
 
 // declareName maps a source name to a fresh, function-unique C name (plain
@@ -1003,33 +1011,30 @@ func (e *emitter) blockValueInto(tmp string, ty sema.Type, b *ast.Block) {
 	e.popScope()
 }
 
+// wrapStmtExpr wraps a captured body as a GNU statement-expression; an empty res
+// means a void body that yields no value.
+func (e *emitter) wrapStmtExpr(gt sema.Type, res, body string) string {
+	if res == "" {
+		return fmt.Sprintf("({ %s})", body)
+	}
+	return fmt.Sprintf("({ %s %s; %s%s; })", e.ctype(gt), res, body, res)
+}
+
 // ifExprValue lowers an if-EXPRESSION to a GNU statement-expression: a fresh temp
 // receives the taken branch's value, since each branch body and the mandatory else
 // is a value-producing block (sema requires them all one type). This is the same
 // value mechanism guard/`??` use, so `x := if c { a } else { b }` — and a `return`
 // of an if-expression — becomes a value without a new AST shape.
+//
+// A void-typed if in statement position produces no value: declaring `void res;`
+// is uncompilable, so with res empty we degrade to a plain if that runs each branch
+// for effect with no temp and no trailing value (completeness iteration 3, F1).
 func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 	gt := e.cur.ExprType(e.info, n)
-	// A void-typed if in statement position produces no value: declaring `void res;`
-	// is uncompilable, so degrade to a plain if that runs each branch for effect with
-	// no temp and no trailing value (completeness iteration 3, F1).
-	if e.ctype(gt) == "void" {
-		body := e.capture(func() {
-			for i, br := range n.Branches {
-				kw := "if"
-				if i > 0 {
-					kw = "} else if"
-				}
-				e.line(fmt.Sprintf("%s (%s) {", kw, e.expr(br.Cond)))
-				e.blockValueInto("", gt, br.Body)
-			}
-			e.line("} else {")
-			e.blockValueInto("", gt, n.Else)
-			e.line("}")
-		})
-		return fmt.Sprintf("({ %s})", body)
+	res := ""
+	if e.ctype(gt) != "void" {
+		res = e.freshName("if")
 	}
-	res := e.freshName("if")
 	body := e.capture(func() {
 		for i, br := range n.Branches {
 			kw := "if"
@@ -1043,29 +1048,28 @@ func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 		e.blockValueInto(res, gt, n.Else)
 		e.line("}")
 	})
-	return fmt.Sprintf("({ %s %s; %s%s; })", e.ctype(gt), res, body, res)
+	return e.wrapStmtExpr(gt, res, body)
 }
 
 // blockExprValue lowers a block-EXPRESSION to a GNU statement-expression whose value
 // is the block's last statement, so `x := { s1; s2; v }` is a value (GRAMMAR: a
 // block's value is its last statement).
+//
+// A void-typed block in statement position produces no value: declaring `void res;`
+// is uncompilable, so with res empty we degrade to a bare statement-expression that
+// runs the block's statements for effect with no temp and no trailing value. This
+// covers a bare `{ … }` (and a nested one) used as a statement (completeness
+// iteration 3, F1).
 func (e *emitter) blockExprValue(b *ast.Block) string {
 	gt := e.cur.ExprType(e.info, b)
-	// A void-typed block in statement position produces no value: declaring `void res;`
-	// is uncompilable, so degrade to a bare statement-expression that runs the block's
-	// statements for effect with no temp and no trailing value. This covers a bare
-	// `{ … }` (and a nested one) used as a statement (completeness iteration 3, F1).
-	if e.ctype(gt) == "void" {
-		body := e.capture(func() {
-			e.blockValueInto("", gt, b)
-		})
-		return fmt.Sprintf("({ %s})", body)
+	res := ""
+	if e.ctype(gt) != "void" {
+		res = e.freshName("blk")
 	}
-	res := e.freshName("blk")
 	body := e.capture(func() {
 		e.blockValueInto(res, gt, b)
 	})
-	return fmt.Sprintf("({ %s %s; %s%s; })", e.ctype(gt), res, body, res)
+	return e.wrapStmtExpr(gt, res, body)
 }
 
 // armValue emits an arm's body with the pattern's names bound to the subject.

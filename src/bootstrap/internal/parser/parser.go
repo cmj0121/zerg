@@ -534,13 +534,7 @@ func (p *parser) parseReturn(kw token.Token) ast.Stmt {
 // value; otherwise it is a bare conditional early exit with no value ('return if c').
 func (p *parser) parseReturnIf(kw token.Token, r *ast.ReturnStmt) ast.Stmt {
 	ifKw := p.expect(token.If)
-	var br ast.IfBranch
-	if p.at(token.Ident) && p.peek(1).Kind == token.Walrus {
-		name := p.advance()
-		p.advance() // ':='
-		br.Bind = name.Lexeme
-	}
-	br.Cond = p.headExpr()
+	br := p.parseIfHead()
 	if !p.at(token.LBrace) {
 		// bare conditional early exit: 'return if c' (no value).
 		r.Cond = br.Cond

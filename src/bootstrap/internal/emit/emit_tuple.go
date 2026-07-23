@@ -99,19 +99,7 @@ func (e *emitter) prepareTuples() {
 // set so it can never collide with a user identifier that mangles into the
 // `zg_<name>` namespace (e.g. a user type `tuple_0` → `zg_tuple_0`).
 func (e *emitter) reservedTopLevel() map[string]bool {
-	r := map[string]bool{}
-	for _, inst := range e.prog.Funcs {
-		r[inst.Mangled] = true
-	}
-	for _, ti := range e.prog.Types {
-		r[ti.Mangled] = true
-	}
-	for _, g := range e.prog.Inits {
-		for _, b := range g.Consts {
-			r["zg_"+b.Name] = true
-		}
-	}
-	return r
+	return e.topLevelNames()
 }
 
 // freshCarrierName formats a carrier name `format` (a `%d` printf template) at the
@@ -179,7 +167,7 @@ func mentionsParam(t sema.Type) bool {
 
 // tupleFor returns the carrier registered for a tuple type, if any.
 func (e *emitter) tupleFor(t sema.Type) (*tupleCarrier, bool) {
-	if t == nil || e.tuples == nil {
+	if t == nil || len(e.tuples) == 0 {
 		return nil, false
 	}
 	c, ok := e.tuples[t.String()]

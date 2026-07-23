@@ -440,6 +440,9 @@ func (l *Lexer) scanRawString(start token.Pos) token.Token {
 	}
 	value := l.src[contentStart:l.offs]
 	l.advance() // closing "
+	if strings.IndexByte(value, 0) >= 0 {
+		return l.illegal(start, "a string literal may not contain a NUL")
+	}
 	return l.emitStr(token.RawStr, start, l.src[start.Offset:l.offs], value)
 }
 

@@ -81,7 +81,8 @@ func TestClosureInnerLocalNotCaptured(t *testing.T) {
 }
 
 // TestClosureLifting pins the emitted C: the closure becomes a top-level `zg_lambda_0`
-// function, and its use site passes that name.
+// function taking the uniform closure env parameter (ignored, since it captures
+// nothing), and its use site is a closure literal over it with a NULL env.
 func TestClosureLifting(t *testing.T) {
 	code, _, diags := Compile("fn apply(f: fn(int) -> int, x: int) -> int {\n\treturn f(x)\n}\n" +
 		"fn main() {\n\tprint apply(fn(n: int) -> int { return n + 1 }, 5)\n}\n")
@@ -89,8 +90,9 @@ func TestClosureLifting(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 	for _, want := range []string{
-		"int64_t zg_lambda_0(int64_t",
-		"zg_apply(zg_lambda_0,",
+		"int64_t zg_lambda_0(void *zg_env, int64_t",
+		"(void)zg_env;",
+		"zg_lambda_0, (void *)0 })",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q:\n%s", want, code)

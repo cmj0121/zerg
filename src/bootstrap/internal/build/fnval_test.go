@@ -66,9 +66,9 @@ func TestFnValueDispatchTableRuns(t *testing.T) {
 	}
 }
 
-// TestFnValueLowering pins the emitted C: a function type is a `zg_fn_<n>` pointer
-// typedef, the value is the function's designator, and the typedef precedes a struct
-// that holds one as a field.
+// TestFnValueLowering pins the emitted C: a function type is the uniform closure struct
+// `{ code, env }`, a named function used as a value is a literal over its env-ignoring
+// thunk with a NULL env, and a call goes through the code pointer passing env first.
 func TestFnValueLowering(t *testing.T) {
 	code, _, diags := Compile("fn inc(n: int) -> int {\n\treturn n + 1\n}\n" +
 		"fn apply(f: fn(int) -> int, x: int) -> int {\n\treturn f(x)\n}\n" +
@@ -77,9 +77,11 @@ func TestFnValueLowering(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 	for _, want := range []string{
-		"typedef int64_t (*zg_fn_0)(int64_t);",
-		"zg_fn_0 zg_f",     // the parameter takes the pointer typedef
-		"zg_apply(zg_inc,", // the named function passed as its designator
+		"(*code)(void *, int64_t); void *env;", // the fat closure struct typedef
+		"zg_fn_0 zg_f",                         // the parameter takes the struct type
+		"_cl.code(_cl.env,",                    // the call goes through the code pointer
+		"zg_fnthunk",                           // the named function's env-ignoring thunk
+		", (void *)0 })",                       // a NULL environment
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q:\n%s", want, code)

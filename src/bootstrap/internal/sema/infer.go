@@ -327,17 +327,11 @@ func (c *checker) callFunc(n *ast.Call, sig *FuncSig) Type {
 }
 
 // checkUnsafeCall enforces group 12's rule that an unsafe call is legal only inside
-// an unsafe context: a foreign call (a call to an `#[extern]`-bound C symbol, per
-// docs/ffi.md) and a call to an `unsafe fn` — including a `fn` declared inside a
-// module-level `unsafe { }` group (Phase 1h U2) — are both rejected outside an
-// `unsafe fn` body or `unsafe { }` block. It generalizes 1f's checkForeignCall: the
-// foreign case is the extern subset.
+// an unsafe context: a call to an `unsafe fn` — including a `fn` declared inside a
+// module-level `unsafe { }` group (Phase 1h U2) — is rejected outside an `unsafe fn`
+// body or `unsafe { }` block.
 func (c *checker) checkUnsafeCall(sig *FuncSig, span token.Span) {
 	if sig == nil || sig.Decl == nil || c.inUnsafe {
-		return
-	}
-	if sym, ok := ExternSymbol(sig.Decl); ok {
-		c.errorf(span, "foreign call to %q is unsafe; call it inside an `unsafe { }` block", sym)
 		return
 	}
 	if sig.Decl.Unsafe {

@@ -59,13 +59,6 @@ type Manifest struct {
 	// always-linked core units). A program with no f-string leaves it false and stays
 	// byte-identical.
 	NeedsFormat bool
-
-	// NeedsFFI reports whether the program binds a foreign C symbol through an
-	// `#[extern("c_symbol")]` function (Phase 1f U5): its emitted C includes the
-	// standard headers that declare libc symbols and its link line adds the math
-	// library. A program that binds no foreign symbol leaves it false and stays
-	// byte-identical.
-	NeedsFFI bool
 }
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -78,7 +71,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat, NeedsFFI: e.needsFFI}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
 }
 
 type emitter struct {
@@ -143,12 +136,6 @@ type emitter struct {
 	// helpers. It drives the NeedsFormat manifest flag and implies needsRuntime. False
 	// for a program with no f-string, which therefore stays byte-identical.
 	needsFormat bool
-
-	// needsFFI is set when the program binds a foreign C symbol through an
-	// `#[extern]` function (Phase 1f U5): it drives the NeedsFFI manifest flag and the
-	// standard-header includes. False for a program that binds no foreign symbol,
-	// which therefore stays byte-identical.
-	needsFFI bool
 
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
@@ -236,11 +223,6 @@ func (e *emitter) program() {
 	e.line("#include <stdint.h>")
 	e.line("#include <stdbool.h>")
 	e.line("#include <string.h>")
-	if e.needsFFI {
-		// declarations for the libc symbols an `#[extern]` binding may forward to.
-		e.line("#include <math.h>")
-		e.line("#include <stdlib.h>")
-	}
 	if e.needsRuntime {
 		e.line("#include \"zergrt.h\"")
 	}
@@ -426,10 +408,6 @@ func (e *emitter) function(inst *mono.Instance) {
 		e.methodFunction(inst)
 		return
 	}
-	if sym, ok := sema.ExternSymbol(inst.Origin); ok {
-		e.externFunction(inst, sym)
-		return
-	}
 	fn := inst.Origin
 	e.cur = inst
 	e.resetUsed()
@@ -480,33 +458,6 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.line("}")
 
 	e.popScope()
-}
-
-// externFunction emits the thunk for an `#[extern("c_symbol")]`-bound function
-// (Phase 1f U5, the FFI import binder): a body-less `unsafe fn` whose compiler-
-// supplied body forwards its parameters, in order, to the named C symbol taken
-// verbatim (no mangling). The parameters already carry their FFI-safe C types
-// (int→int64_t, float→double, str→const char*), so the forward is a direct call
-// with the result cast to the Zerg-mapped return type; the standard headers that
-// declare libc symbols (math.h/stdlib.h/string.h) ride in under the needsFFI gate.
-func (e *emitter) externFunction(inst *mono.Instance, sym string) {
-	e.cur = inst
-	names := make([]string, len(inst.ParamNames))
-	params := make([]string, len(inst.ParamNames))
-	for i := range inst.ParamNames {
-		names[i] = "a" + strconv.Itoa(i)
-		params[i] = e.paramType(inst.Params[i]) + " " + names[i]
-	}
-	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, strings.Join(params, ", ")))
-	e.indent++
-	call := fmt.Sprintf("%s(%s)", sym, strings.Join(names, ", "))
-	if inst.Ret == sema.Nil {
-		e.line(call + ";")
-	} else {
-		e.line(fmt.Sprintf("return (%s)%s;", e.ctype(inst.Ret), call))
-	}
-	e.indent--
-	e.line("}")
 }
 
 // endsWithReturn reports whether a block's last statement is an unconditional

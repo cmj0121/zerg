@@ -32,7 +32,7 @@ func EmitTests(prog *mono.Program, tests []*sema.FuncSig) (string, Manifest, []d
 	}
 	return e.sb.String(), Manifest{
 		NeedsRuntime: true, Concurrency: e.concurrency, NeedsResult: e.needsResult,
-		NeedsIO: e.needsIO, NeedsFormat: e.needsFormat, NeedsFFI: e.needsFFI,
+		NeedsIO: e.needsIO, NeedsFormat: e.needsFormat,
 	}, nil
 }
 

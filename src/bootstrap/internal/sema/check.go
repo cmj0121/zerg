@@ -162,10 +162,10 @@ func (c *checker) inferFStr(n *ast.FStr) Type {
 }
 
 // inferUnsafe types the function-body `unsafe { block }` block-expression (GRAMMAR
-// group 12): raw operations — foreign calls, `asm`, raw-pointer ops — are legal
-// inside, and it yields the block's value. It marks the body an unsafe context so a
-// foreign (`#[extern]`-bound) call within it is accepted; outside such a context
-// that same call is rejected (docs/ffi.md: a foreign call is unsafe).
+// group 12): raw operations — `unsafe fn` calls, `asm`, raw-pointer ops — are legal
+// inside, and it yields the block's value. It marks the body an unsafe context so an
+// `unsafe fn` call within it is accepted; outside such a context that same call is
+// rejected.
 func (c *checker) inferUnsafe(n *ast.UnsafeExpr) Type {
 	saved := c.inUnsafe
 	c.inUnsafe = true

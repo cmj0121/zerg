@@ -192,6 +192,10 @@ func (e *emitter) prepareRuntime() {
 			break
 		}
 	}
+	// `for c in s` decodes the str's runes over the runtime (zrt_str_runes + a list).
+	if e.info.StrForIn {
+		e.needsRuntime = true
+	}
 	// A conversion that can fail calls a zrt_conv_* helper, which raises OverflowError
 	// through zrt_abort. A program whose conversions are all lossless emits plain casts
 	// and stays byte-identical.

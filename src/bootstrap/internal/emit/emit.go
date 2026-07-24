@@ -894,6 +894,12 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 		e.forInMap(n, mt)
 		return
 	}
+	// A str: iterate its code points. Materialize the runes into a temporary list and
+	// walk it, so the body's loop variable binds each rune (docs/collections.md).
+	if e.cur.ExprType(e.info, n.Iter) == sema.Str {
+		e.forInStr(n)
+		return
+	}
 	// A fixed array [T; N]: index it and copy each element into a `T v` local the body
 	// reads. The loop var and the body share one name scope and teardown frame.
 	arr, _ := e.cur.ExprType(e.info, n.Iter).(*types.Array)
@@ -909,6 +915,34 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	}
 	e.closeScope()
 	e.popScope()
+	e.indent--
+	e.line("}")
+}
+
+// forInStr lowers `for c in s` over a str: it decodes the str's code points into a
+// temporary list[rune], walks it binding each rune into an `int32_t c` local, and frees
+// the temporary after the loop. A str is immutable, so `for mut c` is meaningless here
+// and the loop var is always a fresh read.
+func (e *emitter) forInStr(n *ast.ForStmt) {
+	runes := e.freshName("runes")
+	iv := e.freshName("i")
+	e.line("{")
+	e.indent++
+	e.line(fmt.Sprintf("zrt_list %s = zrt_str_runes(%s);", runes, e.expr(n.Iter)))
+	e.line(fmt.Sprintf("for (size_t %s = 0; %s < zrt_list_len(&%s); %s++) {", iv, iv, runes, iv))
+	e.indent++
+	e.pushScope()
+	cv := e.declareName(n.Var)
+	e.openScope(e.subtreeTeardown(n.Body.Stmts), true)
+	e.line(fmt.Sprintf("int32_t %s = *(int32_t*)zrt_list_at(&%s, %s);", cv, runes, iv))
+	for _, s := range n.Body.Stmts {
+		e.stmt(s)
+	}
+	e.closeScope()
+	e.popScope()
+	e.indent--
+	e.line("}")
+	e.line(fmt.Sprintf("zrt_list_drop(&%s);", runes))
 	e.indent--
 	e.line("}")
 }
@@ -1655,6 +1689,10 @@ func (e *emitter) call(n *ast.Call) string {
 	}
 	// a primitive conversion `T(x)`; after ptrCallEmit, which owns `uint(p)`.
 	if s, ok := e.convCallEmit(n); ok {
+		return s
+	}
+	// a str<->list bridge: `str(bytes)`, `list[byte](s)`, etc.
+	if s, ok := e.strBridgeEmit(n); ok {
 		return s
 	}
 	if s, ok := e.listMethodEmit(n); ok {

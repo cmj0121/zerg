@@ -156,6 +156,7 @@ func (e *emitter) prepareRuntime() {
 	// prepass so a tuple's element ctype (which a Result carrier may influence) is
 	// settled. Leaves the tuple map empty for a program with no tuple value.
 	e.prepareTuples()
+	e.prepareFnTypes()
 	// Number the list instances (docs/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()
@@ -183,6 +184,13 @@ func (e *emitter) prepareRuntime() {
 	// needs nothing beyond <string.h>.
 	if e.programUsesStrConcat() {
 		e.needsRuntime = true
+	}
+	// A capturing closure allocates its environment box through the runtime allocator.
+	for _, lam := range e.info.Lambdas {
+		if len(lam.Captures) > 0 {
+			e.needsRuntime = true
+			break
+		}
 	}
 	// A conversion that can fail calls a zrt_conv_* helper, which raises OverflowError
 	// through zrt_abort. A program whose conversions are all lossless emits plain casts

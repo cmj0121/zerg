@@ -30,9 +30,10 @@ type Lexer struct {
 	line int // 1-based current line
 	col  int // 1-based current column
 
-	depth int        // nesting of '(' and '[' — suppresses ASI while > 0
-	prev  token.Kind // kind of the previous emitted token, for ASI
-	diags diag.List
+	depth      int        // nesting of '(' and '[' — suppresses ASI while > 0
+	depthStack []int      // saved depth per open '{' — a block re-enables ASI inside parens
+	prev       token.Kind // kind of the previous emitted token, for ASI
+	diags      diag.List
 
 	pending   []token.Trivia // leading trivia awaiting the next real token
 	trail     []token.Trivia // trailing trivia detected for the previously emitted token
@@ -676,11 +677,21 @@ func (l *Lexer) scanOperator(start token.Pos) token.Token {
 		l.holeDepth(-1)
 		return emit(token.RBrack, 0)
 	case '{':
+		// A '{' opens a block or map composite. Inside it, ASI resumes even when the
+		// brace itself sits inside an unclosed '(' or '[' — so a multi-line closure or
+		// block passed as a call argument gets its statements separated. Save the
+		// enclosing paren/bracket depth and reset, restoring it at the matching '}'.
+		l.depthStack = append(l.depthStack, l.depth)
+		l.depth = 0
 		l.holeDepth(+1)
 		return emit(token.LBrace, 0)
 	case '}':
 		// a hole-closing '}' at depth 0 is intercepted in scanToken; this reaches
 		// scanOperator only for a nested map/block brace, so it decrements depth.
+		if n := len(l.depthStack); n > 0 {
+			l.depth = l.depthStack[n-1]
+			l.depthStack = l.depthStack[:n-1]
+		}
 		l.holeDepth(-1)
 		return emit(token.RBrace, 0)
 	case ';':

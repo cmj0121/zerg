@@ -87,11 +87,19 @@ func fnIdentical(x, y *Fn) bool {
 			return false
 		}
 	}
-	// A nil Ret means the function returns nil; compare those consistently.
-	if (x.Ret == nil) != (y.Ret == nil) {
+	// A function with no `-> type` returns nil, spelled either as a Go-nil Ret (a
+	// resolved `fn(...)` type) or the `nil` primitive (a declaration's signature). The
+	// two mean the same, so normalize before comparing.
+	if retNil(x.Ret) != retNil(y.Ret) {
 		return false
 	}
-	return x.Ret == nil || Identical(x.Ret, y.Ret)
+	return retNil(x.Ret) || Identical(x.Ret, y.Ret)
+}
+
+// retNil reports whether a function-result type means "returns nil": an absent result
+// (Go nil) or the `nil` primitive.
+func retNil(t Type) bool {
+	return t == nil || t.Kind() == KNil
 }
 
 func identicalList(a, b []Type) bool {

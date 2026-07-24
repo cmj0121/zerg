@@ -294,24 +294,15 @@ func TestGenericCallInsideUnsafeBlock(t *testing.T) {
 	}
 }
 
-// TestClosureAsValueDiagnostic covers U5(a) of completeness iteration 2: a closure
-// used AS A VALUE (here passed to `apply`) needs a full closure conversion that is not
-// yet implemented, so it must fail with a clean diagnostic rather than silently lower
-// to a `void`/`0` value that miscompiles. Reaching this emit diagnostic (rather than a
-// mono crash or an undeclared-function reference) also exercises the M3 fix: mono still
-// descends into the `*ast.FnExpr` body to enqueue the generic `id` instance.
-func TestClosureAsValueDiagnostic(t *testing.T) {
-	src := "fn id[T](v: T) -> T { return v }\n" +
-		"fn apply(f: fn() -> int) -> int { return f() }\n" +
-		"fn main() {\n\tprint apply(fn() { return id(42) })\n}\n"
-	code, _, diags := Compile(src)
-	if len(diags) == 0 {
-		t.Fatal("a closure used as a value should be rejected with a clean diagnostic")
-	}
-	if code != "" {
-		t.Fatalf("no C should be emitted for a rejected program, got:\n%s", code)
-	}
-	if !strings.Contains(diags[0].Msg, "closure used as a value is not yet supported") {
-		t.Fatalf("expected the closure-as-value diagnostic, got: %v", diags)
+// TestClosureCallingGenericLifts covers a non-capturing closure used AS A VALUE whose
+// body CALLS a generic function: the closure lifts to a top-level function, and mono
+// still descends into the lifted body to enqueue the generic `id` instance (the M3
+// fix). Before closures lifted, this was rejected with a diagnostic; now it runs.
+func TestClosureCallingGenericLifts(t *testing.T) {
+	got := runProgramRT(t, "fn id[T](v: T) -> T { return v }\n"+
+		"fn apply(f: fn() -> int) -> int { return f() }\n"+
+		"fn main() {\n\tprint apply(fn() -> int { return id(42) })\n}\n")
+	if want := "42\n"; got != want {
+		t.Fatalf("closure calling a generic: got %q, want %q", got, want)
 	}
 }

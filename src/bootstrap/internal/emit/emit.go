@@ -112,6 +112,17 @@ type emitter struct {
 	// stays byte-identical.
 	tuples map[string]*tupleCarrier
 
+	// First-class function values (docs/functions.md). fntypes maps a function type's
+	// spelling to its generated `zg_fn_<n>` struct typedef; fnthunks maps a named
+	// function used as a value to its env-ignoring adapter; lambdaDecls is the set of
+	// lifted-closure FuncDecls, which get the uniform closure calling convention's
+	// leading env parameter. All empty for a program that names no function value.
+	fntypes      map[string]*fnCarrier
+	fnthunks     map[string]*fnThunk
+	lambdaDecls  map[*ast.FuncDecl]bool
+	lambdaByDecl map[*ast.FuncDecl]*sema.Lambda // a lifted closure's captures, by its decl
+	envTypes     map[string]string              // capturing lambda name -> its env struct C name
+
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
 	// the drop-env thunk); every list is the same C header (zrt_list), only its element
@@ -241,6 +252,11 @@ func (e *emitter) program() {
 	}
 	e.blank()
 
+	// First-class function-value pointer typedefs, BEFORE the nominal types, since a
+	// struct may hold a function-value field (`run: fn(int) -> int`) and C needs the
+	// typedef name to declare that field. Emits nothing for a program with none.
+	e.emitFnTypedefs()
+
 	// specialized nominal types, each before the functions that use it
 	for _, ti := range e.prog.Types {
 		e.typedef(ti)
@@ -255,6 +271,11 @@ func (e *emitter) program() {
 	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
 	e.emitResultTypedefs()
 
+	// Closure environment structs, after every type a capture may be (a struct, tuple,
+	// or function value) and before the lambdas that read them. Emits nothing when no
+	// closure captures.
+	e.emitEnvTypedefs()
+
 	// '#[dyn]' witness-table struct types, before any prototype that names one
 	e.witnessStructs()
 
@@ -268,6 +289,9 @@ func (e *emitter) program() {
 	}
 	// per-module init function prototypes (Phase 1g S3); none for a no-init program.
 	e.emitInitPrototypes()
+	// env-ignoring value thunks for named functions used as values, after the prototypes
+	// they forward to. Emits nothing for a program that takes no function value.
+	e.emitFnThunks()
 	e.blank()
 
 	// concrete witness tables, after the impl-method prototypes their slots name
@@ -405,7 +429,20 @@ func (e *emitter) prototype(inst *mono.Instance) string {
 		return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, b.String())
 	}
 	params := paramList(len(inst.Params), func(i int) string { return e.declParamType(inst, i) })
-	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
+	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, e.withEnvParam(inst, params))
+}
+
+// withEnvParam prepends the uniform closure calling convention's leading `void *env`
+// parameter to a lifted-closure instance's parameter list. Every other function is
+// unchanged, so its emitted C stays byte-identical.
+func (e *emitter) withEnvParam(inst *mono.Instance, params string) string {
+	if !e.isLambdaInst(inst) {
+		return params
+	}
+	if params == "void" || params == "" {
+		return "void *zg_env"
+	}
+	return "void *zg_env, " + params
 }
 
 func (e *emitter) function(inst *mono.Instance) {
@@ -432,9 +469,39 @@ func (e *emitter) function(inst *mono.Instance) {
 	rest := paramNames(len(inst.Params), func(i int) string {
 		return e.declParamType(inst, i) + " " + e.declareName(inst.ParamNames[i])
 	})
-	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, joinParams(recv, rest)))
+	sig := joinParams(recv, rest)
+	if e.isLambdaInst(inst) {
+		// the uniform closure calling convention: a lifted closure takes its environment
+		// first. A non-capturing closure ignores it (see the `(void)zg_env` below).
+		if sig == "void" || sig == "" {
+			sig = "void *zg_env"
+		} else {
+			sig = "void *zg_env, " + sig
+		}
+	}
+	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, sig))
 
 	e.indent++
+	if lam, ok := e.lambdaOf(inst); ok {
+		if len(lam.Captures) == 0 {
+			// a non-capturing closure carries the leading env by convention but never reads
+			// it; mark it used so the C compiler stays quiet.
+			e.line("(void)zg_env;")
+		} else {
+			// a capturing closure reads its captures from the environment: bind each source
+			// name to a field access, so a body reference resolves to it (a parameter or an
+			// inner local declared later shadows it, exactly as in source).
+			envType := e.envTypes[lam.Name]
+			top := e.scopes[len(e.scopes)-1]
+			for _, cap := range lam.Captures {
+				// a parameter of the same name shadows the capture; never overwrite it. (A
+				// capture is a free variable, so this cannot actually collide, but be safe.)
+				if _, param := top[cap.Name]; !param {
+					top[cap.Name] = fmt.Sprintf("((%s *)zg_env)->zg_%s", envType, cap.Name)
+				}
+			}
+		}
+	}
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
 	// One teardown frame spans the parameters and the top-level body: a by-value Ref
 	// parameter is the callee's own holder and is released when the function returns
@@ -1050,6 +1117,13 @@ func (e *emitter) expr(x ast.Expr) string {
 		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
 			return e.constructVariant(n, nil, sym.Variant.Name)
 		}
+		// a bare top-level function name used as a value is a closure literal over its
+		// env-ignoring thunk (docs/functions.md).
+		if name, ok := e.info.FuncValues[n]; ok {
+			if s, ok := e.namedFnValue(name); ok {
+				return s
+			}
+		}
 		// a `mut &x` parameter is pointer storage: every mention reads through it.
 		if e.identIsByRef(n) {
 			return "(*" + e.resolve(n.Name) + ")"
@@ -1174,12 +1248,12 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(x.Span(), "the `is` type test is not yet supported")
 		return "0"
 	case *ast.FnExpr:
-		// A closure reaching expr() is used AS A VALUE — bound, passed, returned, or
-		// stored — which needs a full closure conversion (a fn-pointer + captured
-		// environment struct) not yet implemented. Rather than silently lower it to a
-		// `void` value / `0` that miscompiles, fail cleanly here (completeness iteration
-		// 2, U5(a)). A closure invoked inline where it is defined does not pass through
-		// this path.
+		// A closure reaching expr() is used AS A VALUE. A non-capturing one was lifted to
+		// a top-level function (sema/mono), so its value is a closure literal over that
+		// function with a NULL environment. A capturing closure is gated in sema.
+		if lam, ok := e.info.Lambdas[n]; ok {
+			return e.lambdaValue(lam)
+		}
 		e.diags.Add(n.Span(), "a closure used as a value is not yet supported")
 		return "0"
 	default:
@@ -1617,6 +1691,11 @@ func (e *emitter) call(n *ast.Call) string {
 			}
 		}
 	}
+	// a call through a function VALUE (a fn-typed field/local/expr) — after the
+	// construct/method/dyn paths, so only a genuine value call reaches here.
+	if s, ok := e.indirectCallEmit(n); ok {
+		return s
+	}
 	byref := e.calleeByRefArgs(id)
 	var args strings.Builder
 	for i, a := range n.Args {
@@ -1916,6 +1995,10 @@ func (e *emitter) ctype(t sema.Type) string {
 			return "void*"
 		}
 		return e.ctype(p.Elem) + "*"
+	}
+	if c, ok := e.fnTypeFor(t); ok {
+		// a first-class function value is a C function pointer, spelled by its typedef.
+		return c.name
 	}
 	if name, ok := e.prog.TypeName(t); ok {
 		return name

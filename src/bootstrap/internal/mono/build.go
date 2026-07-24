@@ -406,7 +406,15 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 	case *ast.UnsafeExpr:
 		w.walkBlock(in, n.Body)
 	case *ast.FnExpr:
-		w.walkBlock(in, n.Body)
+		// A non-capturing closure was lifted to a top-level function (sema): enqueue it so
+		// it is emitted, and let its own instance specialize the body. A closure that is
+		// not lifted (a gated capturing one) never reaches emit, but its body is still
+		// walked under this instance so any generic call inside it is enqueued.
+		if lam, ok := w.info.Lambdas[n]; ok {
+			w.enqueueFn(lam.Decl, nil, nil)
+		} else {
+			w.walkBlock(in, n.Body)
+		}
 	case *ast.AsmExpr:
 		for _, op := range n.Operands {
 			w.walkExpr(in, op.Value)

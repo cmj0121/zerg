@@ -64,6 +64,9 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		}
 		if s := c.lookup(id.Name); s != nil {
 			if fn, ok := underlyingFn(s.typ); ok {
+				// record the callee's function type so the backend spells the call as an
+				// indirect call through the value, not a direct named call.
+				c.info.ExprTypes[id] = s.typ
 				return c.callIndirect(n, fn)
 			}
 			if !bad(s.typ) {
@@ -278,7 +281,10 @@ func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type 
 		}
 	}
 	if _, ok := c.info.Funcs[res.Key]; ok {
-		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
+		// A same-module function name is a first-class value (check.go); a cross-module
+		// one reached through a namespace member needs its resolved cross-module linkage
+		// as a value, which is not wired yet.
+		c.errorf(n.Span(), "a function from another module is not yet a first-class value: %q; wrap it in a local function", n.Name)
 		return Invalid
 	}
 	c.memberError(n, local, n.Name, false)
@@ -1082,6 +1088,7 @@ func (c *checker) typeArgExprs(elems []ast.Expr) []Type {
 // omitted parameter type from the expected type's corresponding parameter
 // (DESIGN-1b §4.4).
 func (c *checker) checkClosure(fe *ast.FnExpr, want *types.Fn) Type {
+	c.enterClosure()
 	c.pushScope()
 	for i := range fe.Params {
 		p := &fe.Params[i]
@@ -1104,6 +1111,7 @@ func (c *checker) checkClosure(fe *ast.FnExpr, want *types.Fn) Type {
 	}
 	c.curFn = saved
 	c.popScope()
+	c.resolveClosure(fe, want, c.leaveClosure())
 	return want
 }
 
@@ -1111,6 +1119,7 @@ func (c *checker) checkClosure(fe *ast.FnExpr, want *types.Fn) Type {
 // parameter must then carry an explicit type annotation.
 func (c *checker) synthFn(fe *ast.FnExpr) Type {
 	fn := &types.Fn{}
+	c.enterClosure()
 	c.pushScope()
 	for i := range fe.Params {
 		p := &fe.Params[i]
@@ -1134,6 +1143,7 @@ func (c *checker) synthFn(fe *ast.FnExpr) Type {
 	}
 	c.curFn = saved
 	c.popScope()
+	c.resolveClosure(fe, fn, c.leaveClosure())
 	return fn
 }
 

@@ -236,6 +236,10 @@ func (e *emitter) prepareRuntime() {
 	// settled. Leaves the tuple map empty for a program with no tuple value.
 	e.prepareTuples()
 	e.prepareFnTypes()
+	// Detect whether the program materializes a range value, so the shared zg_range
+	// carrier typedef is emitted. Leaves needsRange false for a program that uses no
+	// range value (including a pure `v in lo..hi` membership), which stays byte-identical.
+	e.prepareRange()
 	// Number the list instances (docs/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()

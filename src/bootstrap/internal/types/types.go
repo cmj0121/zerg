@@ -56,6 +56,9 @@ const (
 	KOpt
 	// KEither is Either[X, Y] (Result[T] = Either[T, Err]); T? uses KOpt instead.
 	KEither
+	// KRange is a half-open/inclusive numeric range 'lo..hi' / 'lo..=hi' used as a
+	// value (membership 'v in r', or a bound name). Its element type is integral.
+	KRange
 
 	// user-declared nominal types
 	KStruct
@@ -304,6 +307,19 @@ type Opt struct{ Elem Type }
 func (*Opt) typ()             {}
 func (*Opt) Kind() Kind       { return KOpt }
 func (o *Opt) String() string { return o.Elem.String() + "?" }
+
+// Range is a numeric range value 'lo..hi' (half-open) or 'lo..=hi' (inclusive),
+// over an integral element type. Inclusive marks the '..=' form; a range used only
+// to drive a for-in loop never becomes a Range value (that stays sugar), so this
+// type appears only for a range membership 'v in r' or a range bound to a name.
+type Range struct {
+	Elem      Type
+	Inclusive bool
+}
+
+func (*Range) typ()             {}
+func (*Range) Kind() Kind       { return KRange }
+func (r *Range) String() string { return "range[" + r.Elem.String() + "]" }
 
 // Either is the sum 'Either[X, Y]' (Result[T] = Either[T, Err]).
 type Either struct{ Left, Right Type }

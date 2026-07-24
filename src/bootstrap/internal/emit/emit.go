@@ -105,6 +105,12 @@ type emitter struct {
 	carriers    map[string]*carrier
 	needsResult bool
 
+	// needsRange is set when the program materializes a range VALUE (a range bound to
+	// a name, or passed/returned as a value) — so the shared `zg_range` carrier typedef
+	// is emitted. An inline membership `v in lo..hi` lowers to a bounds test and does not
+	// set it, so a program that only tests membership stays free of the typedef.
+	needsRange bool
+
 	// Tuple value carriers (completeness iteration 2, U2). tuples maps a tuple type's
 	// spelling to its generated per-shape C struct (`zg_tuple_<n>` with fields
 	// `.f0, .f1, …`), mirroring the Result carrier: an INTERNAL monomorphized layout,
@@ -280,6 +286,10 @@ func (e *emitter) program() {
 	// Result/Either/optional carriers, before any prototype that names one as a
 	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
 	e.emitResultTypedefs()
+
+	// The shared range value carrier, before any prototype/body that names a range
+	// value. Emits nothing for a program that materializes no range value.
+	e.emitRangeTypedef()
 
 	// Closure environment structs, after every type a capture may be (a struct, tuple,
 	// or function value) and before the lambdas that read them. Emits nothing when no
@@ -659,6 +669,10 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.NopStmt:
 		e.line(";")
 	case *ast.BindStmt:
+		if n.Target != nil {
+			e.destructureBind(n)
+			return
+		}
 		t := e.cur.BindType(e.info, n)
 		// resolve the RHS before declaring the name, so 'mut n := n' reads the
 		// outer binding (matching ':=' semantics). A non-POD RHS is copied (retain /
@@ -809,6 +823,19 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	e.line(fmt.Sprintf("%s = %s;", target, e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
 }
 
+// destructureBind lowers a destructuring bind '(a, b) := e' / 'P{x, y} := e'. It
+// materializes the RHS once into a temp of the tuple/struct type, then binds each leaf
+// name to its sub-place inside the temp (`tmp.f<i>` for a tuple element, `tmp.zg_<f>`
+// for a struct field) — reusing the match pattern walk, so a nested '(a, (b, c))'
+// destructures too. Every subsequent read of a leaf resolves to its sub-place, so no
+// per-component copy is made; the temp stays live for the enclosing block.
+func (e *emitter) destructureBind(n *ast.BindStmt) {
+	t := e.cur.ExprType(e.info, n.Value)
+	tmp := e.freshName("db")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(t, tmp), e.copyValue(t, n.Value)))
+	e.patternWalk(n.Target, tmp, t, e.scopes[len(e.scopes)-1])
+}
+
 // targetIsPlace reports whether an assignment target is a sub-place — a field,
 // index, or tuple element — rather than a whole binding, so a reassignment can
 // release the old value that currently occupies that place.
@@ -862,6 +889,17 @@ func (e *emitter) printStmt(n *ast.PrintStmt) {
 }
 
 func (e *emitter) ifStmt(n *ast.IfStmt) {
+	// A plain if/else-if/else chain keeps the flat `} else if` spelling (byte-identical).
+	// A chain with a binding head `if x := opt` nests, since each binding head must
+	// evaluate its optional into a temp before the presence test.
+	if !anyIfBind(n.Branches) {
+		e.ifStmtFlat(n)
+		return
+	}
+	e.ifChain(n.Branches, n.Else)
+}
+
+func (e *emitter) ifStmtFlat(n *ast.IfStmt) {
 	for i, br := range n.Branches {
 		kw := "if"
 		if i > 0 {
@@ -875,6 +913,95 @@ func (e *emitter) ifStmt(n *ast.IfStmt) {
 		e.body(n.Else, false)
 	}
 	e.line("}")
+}
+
+// anyIfBind reports whether any branch of a chain is a binding head `if x := opt`.
+func anyIfBind(branches []ast.IfBranch) bool {
+	for _, br := range branches {
+		if br.Bind != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ifChain emits an if/else-if/else statement chain that contains at least one binding
+// head. A plain branch keeps `if (cond) { body }`; a binding head `if x := opt`
+// evaluates the optional into a temp and, when it is present, binds x to the unwrapped
+// value for the then-body only. Later branches form the `else` tail recursively, so a
+// later branch's optional is evaluated only when the earlier tests fail.
+func (e *emitter) ifChain(branches []ast.IfBranch, elseB *ast.Block) {
+	br := branches[0]
+	tail := func() {
+		switch {
+		case len(branches) > 1:
+			e.line("} else {")
+			e.indent++
+			e.ifChain(branches[1:], elseB)
+			e.indent--
+			e.line("}")
+		case elseB != nil:
+			e.line("} else {")
+			e.body(elseB, false)
+			e.line("}")
+		default:
+			e.line("}")
+		}
+	}
+	if br.Bind == "" {
+		e.line(fmt.Sprintf("if (%s) {", e.expr(br.Cond)))
+		e.body(br.Body, false)
+		tail()
+		return
+	}
+	optT := e.cur.ExprType(e.info, br.Cond)
+	e.line("{")
+	e.indent++
+	e.pushScope()
+	tmp := e.freshName("ifopt")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.expr(br.Cond)))
+	e.line(fmt.Sprintf("if (%s) {", e.optPresentTest(optT, tmp)))
+	e.pushScope()
+	e.indent++
+	cname := e.declareName(br.Bind)
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optElem(optT), cname), e.optUnwrapValue(optT, tmp)))
+	e.indent--
+	e.body(br.Body, false)
+	e.popScope()
+	tail()
+	e.popScope()
+	e.indent--
+	e.line("}")
+}
+
+// optPresentTest renders the presence test of an evaluated optional temp: a carrier
+// optional is present when its tag is 0; a boxed nullable optional when its cell is
+// non-NULL.
+func (e *emitter) optPresentTest(optT sema.Type, tmp string) string {
+	if e.isBoxedOpt(optT) {
+		return tmp + " != NULL"
+	}
+	return tmp + ".tag == 0"
+}
+
+// optUnwrapValue renders the unwrapped element value of an evaluated optional temp: a
+// carrier optional reads its `.ok` field; a boxed nullable optional reads through the
+// cell's payload.
+func (e *emitter) optUnwrapValue(optT sema.Type, tmp string) string {
+	if e.isBoxedOpt(optT) {
+		elem := optT.(*types.Opt).Elem
+		return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(elem), tmp)
+	}
+	return tmp + ".ok"
+}
+
+// optElem returns the element type of an optional, or Unknown when the type is not an
+// optional (a checked binding head always yields an optional).
+func optElem(optT sema.Type) sema.Type {
+	if o, ok := optT.(*types.Opt); ok {
+		return o.Elem
+	}
+	return types.Unknown
 }
 
 func (e *emitter) forStmt(n *ast.ForStmt) {
@@ -1213,6 +1340,10 @@ func (e *emitter) expr(x ast.Expr) string {
 			if s, ok := e.mapMembership(n); ok {
 				return s
 			}
+			// `v in lo..hi` range membership lowers to an inline bounds test.
+			if s, ok := e.rangeMembership(n); ok {
+				return s
+			}
 		}
 		// `str` is not a native C operand: '+' concatenates through the runtime and a
 		// comparison goes through strcmp (see emit_str.go).
@@ -1275,8 +1406,7 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(n.Span(), "a map literal is not yet supported")
 		return "0"
 	case *ast.Range:
-		e.diags.Add(n.Span(), "a range value is not yet supported")
-		return "0"
+		return e.rangeValue(n)
 	case *ast.CmdLit:
 		e.diags.Add(n.Span(), "a command literal is not yet supported")
 		return "0"
@@ -1453,6 +1583,10 @@ func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 		res = e.freshName("if")
 	}
 	body := e.capture(func() {
+		if anyIfBind(n.Branches) {
+			e.ifExprChain(n.Branches, n.Else, res, gt)
+			return
+		}
 		for i, br := range n.Branches {
 			kw := "if"
 			if i > 0 {
@@ -1466,6 +1600,47 @@ func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 		e.line("}")
 	})
 	return e.wrapStmtExpr(gt, res, body)
+}
+
+// ifExprChain lowers an if-EXPRESSION chain that contains a binding head into the
+// captured body of ifExprValue. It mirrors ifChain but assigns each taken branch's
+// value into res (via blockValueInto) rather than running the body for effect; an
+// if-expression always has a trailing else, so the tail always terminates in one.
+func (e *emitter) ifExprChain(branches []ast.IfBranch, elseB *ast.Block, res string, gt sema.Type) {
+	br := branches[0]
+	tail := func() {
+		e.line("} else {")
+		if len(branches) > 1 {
+			e.indent++
+			e.ifExprChain(branches[1:], elseB, res, gt)
+			e.indent--
+		} else {
+			e.blockValueInto(res, gt, elseB)
+		}
+		e.line("}")
+	}
+	if br.Bind == "" {
+		e.line(fmt.Sprintf("if (%s) {", e.expr(br.Cond)))
+		e.blockValueInto(res, gt, br.Body)
+		tail()
+		return
+	}
+	optT := e.cur.ExprType(e.info, br.Cond)
+	e.line("{")
+	e.indent++
+	e.pushScope()
+	tmp := e.freshName("ifopt")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.expr(br.Cond)))
+	e.line(fmt.Sprintf("if (%s) {", e.optPresentTest(optT, tmp)))
+	e.pushScope()
+	cname := e.declareName(br.Bind)
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optElem(optT), cname), e.optUnwrapValue(optT, tmp)))
+	e.blockValueInto(res, gt, br.Body)
+	e.popScope()
+	tail()
+	e.popScope()
+	e.indent--
+	e.line("}")
 }
 
 // blockExprValue lowers a block-EXPRESSION to a GNU statement-expression whose value
@@ -2102,6 +2277,11 @@ func (e *emitter) ctype(t sema.Type) string {
 		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
 			return fmt.Sprintf("zg_recv_%d", idx)
 		}
+	}
+	// a range value: one shared carrier struct (int64 bounds + inclusive flag), so a
+	// `r := lo..hi` bound name and a membership `v in r` read the same shape.
+	if _, ok := t.(*types.Range); ok {
+		return "zg_range"
 	}
 	// a general Result/Either/optional value: its monomorphized carrier (Phase 1f U0).
 	if c, ok := e.carrierFor(t); ok {

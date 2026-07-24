@@ -193,6 +193,9 @@ func (d *dumper) node(n Node) {
 		d.open("Bind", v)
 		d.printf(" mut=%t const=%t %q ", v.Mut, v.Const, v.Name)
 		d.typ(v.Type)
+		if v.Target != nil {
+			d.node(v.Target)
+		}
 		d.expr(v.Value)
 		d.close()
 	case *Reassign:

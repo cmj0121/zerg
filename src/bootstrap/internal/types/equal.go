@@ -56,6 +56,9 @@ func Identical(a, b Type) bool {
 		return Identical(x.Elem, b.(*Ref).Elem)
 	case *Opt:
 		return Identical(x.Elem, b.(*Opt).Elem)
+	case *Range:
+		y := b.(*Range)
+		return x.Inclusive == y.Inclusive && Identical(x.Elem, y.Elem)
 	case *Either:
 		y := b.(*Either)
 		return Identical(x.Left, y.Left) && Identical(x.Right, y.Right)

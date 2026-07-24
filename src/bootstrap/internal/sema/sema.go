@@ -881,8 +881,7 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		var ends []map[*symbol]liveness
 		for _, br := range n.Branches {
 			c.dead = c.snapshotFrom(incoming)
-			c.checkCond(br.Cond)
-			c.checkBlock(br.Body)
+			c.checkBranch(br)
 			ends = append(ends, c.dead)
 		}
 		if n.Else != nil {
@@ -1028,6 +1027,39 @@ func (c *checker) checkWith(n *ast.WithStmt) {
 		c.checkStmt(s)
 	}
 	c.popScope()
+}
+
+// checkBranch type-checks one if/else-if branch (statement form). A plain head is a
+// boolean condition; a binding head `if x := opt` binds x to the unwrapped optional
+// element in a scope wrapping the body, which runs only when the optional is present
+// (like Swift `if let`).
+func (c *checker) checkBranch(br ast.IfBranch) {
+	if br.Bind != "" {
+		elem := c.ifBindElem(br)
+		c.pushScope()
+		c.declare(br.Body.Span(), br.Bind, elem, false)
+		c.checkBlock(br.Body)
+		c.popScope()
+		return
+	}
+	c.checkCond(br.Cond)
+	c.checkBlock(br.Body)
+}
+
+// ifBindElem types an `if x := opt` binding head: its operand (carried in br.Cond)
+// must be an optional 'T?', and the head binds T — the block runs only on the present
+// (Some) case. A non-optional operand is a clean error.
+func (c *checker) ifBindElem(br ast.IfBranch) Type {
+	t := c.synth(br.Cond)
+	if bad(t) {
+		return t
+	}
+	opt, ok := t.(*types.Opt)
+	if !ok {
+		c.errorf(br.Cond.Span(), "an `if %s :=` binding head requires an optional value, found %s", br.Bind, t)
+		return Invalid
+	}
+	return opt.Elem
 }
 
 func (c *checker) checkCond(e ast.Expr) {

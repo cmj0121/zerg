@@ -292,34 +292,32 @@ func (e *emitter) errMessage(x ast.Expr) string {
 
 // --- defer --------------------------------------------------------------------
 
-// deferStmt lowers `defer f(args)` (GRAMMAR group 11): it captures the call's
-// argument values into the site's env struct and schedules the pre-generated thunk
-// on the cleanup stack, so the call runs LIFO at the enclosing scope's exit on every
-// path. A no-argument call schedules the thunk with a NULL env.
+// deferStmt lowers `defer f(args)` (GRAMMAR group 11): it captures the call's receiver
+// (a method callee) and argument values into the site's env struct and schedules the
+// pre-generated thunk on the cleanup stack, so the call runs LIFO at the enclosing
+// scope's exit on every path. A no-capture call schedules the thunk with a NULL env.
 func (e *emitter) deferStmt(n *ast.DeferStmt) {
 	idx, ok := e.deferIdx[n]
 	if !ok {
-		e.diags.Add(n.Span(), "defer supports only a direct function call in Phase 1d")
+		e.diags.Add(n.Span(), "defer supports only a direct, namespace, or method function call in Phase 1d")
 		return
 	}
 	call, _ := n.Call.(*ast.Call)
-	if len(call.Args) == 0 {
+	_, recv, _, _, _ := e.capturedCall(call)
+	if recv == nil && len(call.Args) == 0 {
 		e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, NULL);", idx))
 		return
 	}
 	env := e.freshName("denv")
-	var b []string
-	for _, a := range call.Args {
-		b = append(b, e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
-	}
+	b := e.captureValues(recv, call.Args) // defer OWNS its receiver (survives a `del`/temporary of the original)
 	e.line(fmt.Sprintf("zg_deferenv_%d %s = { %s };", idx, env, joinComma(b)))
 	e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, &%s);", idx, env))
 }
 
 // emitDeferHelpers generates, before any function body, the env struct and thunk for
 // every `defer f(args)` in the program (numbered per distinct site). The thunk
-// unpacks the captured args and makes the call; a no-argument call needs only the
-// thunk. It emits nothing for a program with no defers.
+// unpacks the captured receiver/args and makes the call; a no-capture call needs only
+// the thunk. It emits nothing for a program with no defers.
 func (e *emitter) emitDeferHelpers() {
 	e.deferIdx = map[*ast.DeferStmt]int{}
 	for _, inst := range e.prog.Funcs {
@@ -336,48 +334,151 @@ func (e *emitter) emitDeferHelpers() {
 			if !ok {
 				return
 			}
-			id, ok := call.Callee.(*ast.Ident)
+			target, recv, recvT, erased, ok := e.capturedCall(call)
 			if !ok {
 				return
 			}
 			idx := len(e.deferIdx)
 			e.deferIdx[d] = idx
-			e.emitDeferThunk(idx, e.callTarget(call, id), call.Args)
+			e.emitDeferThunk(idx, target, recv, recvT, erased, call.Args)
 		})
 	}
 	e.cur = nil
 }
 
-// emitDeferThunk writes one deferred call's env struct (when it has captured args)
-// and its cleanup-stack thunk.
-func (e *emitter) emitDeferThunk(idx int, target string, args []ast.Arg) {
-	if len(args) == 0 {
+// emitDeferThunk writes one deferred call's env struct (when it captures a receiver or
+// args) and its cleanup-stack thunk.
+func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT sema.Type, erased bool, args []ast.Arg) {
+	if recv == nil && len(args) == 0 {
 		e.line(fmt.Sprintf("static void zg_deferfn_%d(void *p) { (void)p; %s(); }", idx, target))
 		e.blank()
 		return
 	}
-	e.line(fmt.Sprintf("typedef struct { %s } zg_deferenv_%d;", e.deferFields(args), idx))
+	e.line(fmt.Sprintf("typedef struct { %s } zg_deferenv_%d;", e.captureFields(recvT, args), idx))
 	e.line(fmt.Sprintf("static void zg_deferfn_%d(void *p) {", idx))
 	e.indent++
 	e.line(fmt.Sprintf("zg_deferenv_%d *zg_c = (zg_deferenv_%d *)p;", idx, idx))
-	var call []string
-	for i := range args {
-		call = append(call, fmt.Sprintf("zg_c->f%d", i))
+	e.line(fmt.Sprintf("%s(%s);", target, captureCallArgs("zg_c", recv != nil, erased, len(args))))
+	// The defer OWNS its captured receiver (deferStmt retained/deep-copied it), so a non-POD
+	// receiver's owned copy is released here, after the call — balancing the capture retain
+	// and freeing it exactly once whether the original was dropped, `del`'d, or a temporary.
+	if recv != nil {
+		e.releaseOwnedReceiver("zg_c", recvT)
 	}
-	e.line(fmt.Sprintf("%s(%s);", target, joinComma(call)))
 	e.indent--
 	e.line("}")
 	e.blank()
 }
 
-// deferFields renders the env struct's field declarations, one per captured
-// argument, typed by the argument's concrete type.
-func (e *emitter) deferFields(args []ast.Arg) string {
+// --- captured (defer/spawn) call plumbing -------------------------------------
+
+// capturedCall resolves a defer/spawn call's callee to its mangled C target and, for a
+// method callee, the borrowed receiver to capture alongside the arguments. It accepts a
+// direct function (Ident), a namespace member `mod.func(args)` (no receiver — it lowers
+// to the merged top-level function, like namespaceCallEmit), and a method
+// `recv.method(args)` (the receiver is captured as the leading value, dispatched like
+// methodCall). It returns ok=false for any other callee (e.g. a call through a function
+// value), which leaves deferIdx/spawnIdx unset so the site reports the loud stub.
+func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, recvT sema.Type, erased, ok bool) {
+	switch callee := call.Callee.(type) {
+	case *ast.Ident:
+		return e.callTarget(call, callee), nil, nil, false, true
+	case *ast.Field:
+		if id, isID := callee.X.(*ast.Ident); isID {
+			if sym, found := e.info.Refs[id]; found && sym.Kind == sema.SymNamespace {
+				key := sema.NamespaceMemberName(sym, id.Name, callee.Name)
+				if k, has := e.info.NsMembers[callee]; has {
+					key = k
+				}
+				t := e.prog.CallTarget(key)
+				if m, has := e.cur.Calls[call]; has {
+					t = m
+				}
+				return t, nil, nil, false, true
+			}
+		}
+		if md, found := e.cur.MethodCalls[call]; found {
+			return md.Mangled, callee.X, e.cur.ExprType(e.info, callee.X), md.Erased, true
+		}
+	}
+	return "", nil, nil, false, false
+}
+
+// captureValues renders the initializer values for a captured defer/spawn env. Every
+// value — the method receiver and each argument alike — is captured by value
+// (retained/deep-copied so the deferred/spawned call OWNS an independent copy), so the
+// captured call is self-contained and safe regardless of what happens to the originals
+// after the capture site:
+//
+//   - a spawned coroutine is fire-and-forget (sched.c: never joined) and its env is
+//     heap-copied, so it may run AFTER the spawner's scope dropped the originals;
+//   - a defer runs at scope exit, but the receiver's original may have been `del`'d (or
+//     is a temporary with no owner at all), so a bare borrow could dangle there too.
+//
+// The captured copy is released when the call is done — the argument copies by the
+// callee's own param drop (as any by-value call), and the OWNED receiver by the thunk
+// itself (emitDeferThunk / emitSpawnThunk), since a method borrows its receiver and never
+// releases it. A POD receiver/argument owns no cells, so copyValue is a bare copy and the
+// release is elided — byte-identical to a plain capture.
+func (e *emitter) captureValues(recv ast.Expr, args []ast.Arg) []string {
 	var b []string
-	for i, a := range args {
+	if recv != nil {
+		b = append(b, e.copyValue(e.cur.ExprType(e.info, recv), recv))
+	}
+	for _, a := range args {
+		b = append(b, e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+	}
+	return b
+}
+
+// releaseOwnedReceiver releases a captured OWNED receiver (env field f0) after the
+// deferred/spawned method call, before the env is freed — balancing the copyValue retain
+// captureValues did (a method borrows its receiver and never releases it). ptr is the env
+// pointer name ("zg_c" for defer, "zg_e" for spawn). A POD receiver owns no cells, so
+// nothing is emitted and the thunk stays byte-identical to a plain capture.
+func (e *emitter) releaseOwnedReceiver(ptr string, recvT sema.Type) {
+	if recvT == nil || !e.containsRef(recvT) {
+		return
+	}
+	e.emitInlineDrop(dropItem{cname: ptr + "->f0", typ: recvT})
+}
+
+// captureFields renders a captured defer/spawn env struct's field declarations: an
+// optional leading receiver field (a method callee), then one field per argument, each
+// typed by its concrete type. The fields are named f0.. in capture order.
+func (e *emitter) captureFields(recvT sema.Type, args []ast.Arg) string {
+	var b []string
+	i := 0
+	if recvT != nil {
+		b = append(b, fmt.Sprintf("%s f%d;", e.ctype(recvT), i))
+		i++
+	}
+	for _, a := range args {
 		b = append(b, fmt.Sprintf("%s f%d;", e.ctype(e.cur.ExprType(e.info, a.Value)), i))
+		i++
 	}
 	return join(b, " ")
+}
+
+// captureCallArgs renders a defer/spawn thunk's call arguments, unpacked from the env
+// pointer named ptr (e.g. "zg_c"): the receiver first when present (address-taken and
+// const-cast for an erased provided-method dispatch, W3), then each argument field.
+func captureCallArgs(ptr string, hasRecv, erased bool, nargs int) string {
+	var out []string
+	fi := 0
+	if hasRecv {
+		r := fmt.Sprintf("%s->f%d", ptr, fi)
+		if erased {
+			r = "(const void*)&" + r
+		}
+		out = append(out, r)
+		fi++
+	}
+	for j := 0; j < nargs; j++ {
+		out = append(out, fmt.Sprintf("%s->f%d", ptr, fi))
+		fi++
+	}
+	return joinComma(out)
 }
 
 // --- teardown detection -------------------------------------------------------

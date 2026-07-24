@@ -74,14 +74,18 @@ func ScalarOf(t Type) (Scalar, bool) {
 	return Scalar{}, false
 }
 
-// PrimitiveName returns the primitive type a name spells, or nil when the name is not
-// one. The backend uses it to recognize a conversion callee — `byte(x)` names a type,
-// not a function — against the same table the front end resolved it with.
-func PrimitiveName(name string) Type {
-	if t := primitiveNamed(name); t != nil {
-		return t
+// ConversionTarget reports the scalar a call is converting TO: the callee name must
+// spell a primitive type, and the call's result type must be that type. The backend
+// uses it to tell `byte(x)` — a conversion, since `byte` names a type — from a call
+// of some user function. The comparison goes through types.Identical rather than
+// pointer equality, because the fixed-width family (i32, u16, ...) is built fresh per
+// mention and is not interned the way the named primitives are.
+func ConversionTarget(name string, result Type) (Scalar, bool) {
+	t := primitiveNamed(name)
+	if t == nil || result == nil || !types.Identical(t, result) {
+		return Scalar{}, false
 	}
-	return nil
+	return ScalarOf(result)
 }
 
 // Lossless reports whether every value of the source scalar is representable in the

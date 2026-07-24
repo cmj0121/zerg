@@ -29,8 +29,8 @@ func (e *emitter) convCallEmit(n *ast.Call) (string, bool) {
 		return "", false
 	}
 	dst := e.cur.ExprType(e.info, n)
-	dstS, ok := sema.ScalarOf(dst)
-	if !ok || sema.PrimitiveName(id.Name) != dst {
+	dstS, ok := sema.ConversionTarget(id.Name, dst)
+	if !ok {
 		return "", false
 	}
 	srcS, ok := sema.ScalarOf(e.cur.ExprType(e.info, n.Args[0].Value))
@@ -139,8 +139,8 @@ func (e *emitter) programUsesCheckedConv() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		dstS, ok := sema.ScalarOf(dst)
-		if !ok || sema.PrimitiveName(id.Name) != dst || dstS.Class == sema.ScalarBool {
+		dstS, ok := sema.ConversionTarget(id.Name, dst)
+		if !ok || dstS.Class == sema.ScalarBool {
 			continue
 		}
 		srcS, ok := sema.ScalarOf(e.info.ExprTypes[call.Args[0].Value])

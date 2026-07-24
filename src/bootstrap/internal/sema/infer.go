@@ -336,6 +336,7 @@ func (c *checker) callFunc(n *ast.Call, sig *FuncSig) Type {
 		return c.callGeneric(n, sig)
 	}
 	c.bindCallArgs(sig.Name, n, sig.ParamNames, sig.Params, sig.Defaults)
+	c.checkByRefArgs(sig, n)
 	return sig.Ret
 }
 

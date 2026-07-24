@@ -391,11 +391,11 @@ func (e *emitter) prototype(inst *mono.Instance) string {
 		b.WriteString(e.ctype(inst.Recv))
 		for i := range inst.Params {
 			b.WriteString(", ")
-			b.WriteString(e.paramType(inst.Params[i]))
+			b.WriteString(e.declParamType(inst, i))
 		}
 		return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, b.String())
 	}
-	params := paramList(len(inst.Params), func(i int) string { return e.paramType(inst.Params[i]) })
+	params := paramList(len(inst.Params), func(i int) string { return e.declParamType(inst, i) })
 	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
 }
 
@@ -421,7 +421,7 @@ func (e *emitter) function(inst *mono.Instance) {
 		recv = append(recv, e.ctype(inst.Recv)+" "+e.declareName("this"))
 	}
 	rest := paramNames(len(inst.Params), func(i int) string {
-		return e.paramType(inst.Params[i]) + " " + e.declareName(inst.ParamNames[i])
+		return e.declParamType(inst, i) + " " + e.declareName(inst.ParamNames[i])
 	})
 	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, joinParams(recv, rest)))
 
@@ -435,6 +435,11 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.openScope(need, false)
 	e.fnMark = e.curScope().markVar
 	for i, p := range inst.Params {
+		// A by-ref parameter is a BORROW: the caller keeps the variable, so ending this
+		// call must not free it (docs/memory.md's lifetime table).
+		if isByRefParam(inst, i) {
+			continue
+		}
 		e.registerDrop(e.resolve(inst.ParamNames[i]), p, fn)
 	}
 	for _, s := range fn.Body.Stmts {
@@ -1005,6 +1010,10 @@ func (e *emitter) expr(x ast.Expr) string {
 		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
 			return e.constructVariant(n, nil, sym.Variant.Name)
 		}
+		// a `mut &x` parameter is pointer storage: every mention reads through it.
+		if e.identIsByRef(n) {
+			return "(*" + e.resolve(n.Name) + ")"
+		}
 		return e.resolve(n.Name)
 	case *ast.Unary:
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
@@ -1568,10 +1577,17 @@ func (e *emitter) call(n *ast.Call) string {
 			}
 		}
 	}
+	byref := e.calleeByRefArgs(id)
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
 			args.WriteString(", ")
+		}
+		// a `mut &` parameter binds the caller's variable itself — pass its address, and
+		// never a copy, which is the whole point of the writeback.
+		if byref != nil && i < len(byref) && byref[i] {
+			args.WriteString(e.addressOf(a.Value))
+			continue
 		}
 		// a by-value argument is copied (retain / deep copy) when it names existing
 		// storage, so the callee's own holder is independent; POD args are unchanged.

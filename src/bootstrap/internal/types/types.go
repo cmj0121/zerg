@@ -261,7 +261,10 @@ func (f *Fn) String() string {
 		s += p.Type.String()
 	}
 	s += ")"
-	if f.Ret != nil {
+	// A function with no `-> type` returns nil, whether its Ret is a Go-nil (a resolved
+	// `fn(...)` type) or the `nil` primitive (a declaration's signature). Render both the
+	// same, so the same function type has one spelling — and one generated typedef.
+	if !retNil(f.Ret) {
 		s += " -> " + f.Ret.String()
 	}
 	return s

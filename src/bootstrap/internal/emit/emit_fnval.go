@@ -158,11 +158,18 @@ func (e *emitter) indirectCallEmit(n *ast.Call) (string, bool) {
 			return "", false
 		}
 	}
-	if _, ok := e.cur.ExprType(e.info, n.Callee).(*types.Fn); !ok {
+	fn, ok := e.cur.ExprType(e.info, n.Callee).(*types.Fn)
+	if !ok {
 		return "", false
 	}
 	args := make([]string, len(n.Args))
 	for i, a := range n.Args {
+		// a `mut &` parameter of the function type binds the caller's variable, so the
+		// argument is passed by address — exactly as a direct call to such a function.
+		if i < len(fn.Params) && fn.Params[i].ByRef {
+			args[i] = e.addressOf(a.Value)
+			continue
+		}
 		args[i] = e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value)
 	}
 	return fmt.Sprintf("%s(%s)", e.expr(n.Callee), joinArgs(args)), true

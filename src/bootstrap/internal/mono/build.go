@@ -43,6 +43,7 @@ func BuildWithInit(file *ast.File, info *sema.Info, plan *module.InitPlan) *Prog
 		w.specialize(in)
 	}
 	w.buildInits(plan)
+	MarkBoxing(w.prog)
 	return w.prog
 }
 
@@ -642,6 +643,9 @@ func (w *worker) registerEnum(x *types.Enum) {
 			w.collectType(st)
 			vi.Payload = append(vi.Payload, st)
 		}
+		// Boxed is parallel to Payload so a later structural query is index-safe; the
+		// MarkBoxing pass flips the slots it must heap-indirect to break a cycle.
+		vi.Boxed = make([]bool, len(vi.Payload))
 		ti.Variants = append(ti.Variants, vi)
 	}
 	w.prog.Types = append(w.prog.Types, ti)

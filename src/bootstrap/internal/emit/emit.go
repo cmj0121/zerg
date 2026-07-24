@@ -338,11 +338,21 @@ func (e *emitter) typedef(ti *mono.TypeInstance) {
 	e.line("typedef struct {")
 	e.indent++
 	for _, f := range ti.Fields {
-		e.line(e.ctype(f.Type) + " zg_" + f.Name + ";")
+		e.line(e.slotCtype(f.Type, f.Boxed) + " zg_" + f.Name + ";")
 	}
 	e.indent--
 	e.line("} " + ti.Mangled + ";")
 	e.blank()
+}
+
+// slotCtype renders a struct field or enum payload slot's C type. A Boxed slot (S1) is
+// heap-indirected through a refcounted cell, so it is a `void*` regardless of its
+// nominal payload type; every other slot keeps its ordinary ctype.
+func (e *emitter) slotCtype(t sema.Type, boxed bool) string {
+	if boxed {
+		return "void*"
+	}
+	return e.ctype(t)
 }
 
 // enumTypedef emits a specialized enum as a tagged union: an 'int32_t tag' holding
@@ -363,7 +373,7 @@ func (e *emitter) enumTypedef(ti *mono.TypeInstance) {
 			var b strings.Builder
 			b.WriteString("struct { ")
 			for i, pt := range v.Payload {
-				fmt.Fprintf(&b, "%s f%d; ", e.ctype(pt), i)
+				fmt.Fprintf(&b, "%s f%d; ", e.slotCtype(pt, v.Boxed[i]), i)
 			}
 			b.WriteString("} " + v.Name + ";")
 			e.line(b.String())
@@ -791,7 +801,12 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	} else if targetIsPlace(n.Target) {
 		e.line(e.fieldDrop(t, target))
 	}
-	e.line(fmt.Sprintf("%s = %s;", target, e.copyValue(t, n.Value)))
+	// Move/retain the new value into the (now released) slot, coercing to the target type —
+	// for a boxed `Opt` field (S1) this allocates the nullable box (Some) or NULL (None).
+	// The release-old → move/retain-new → store order is load-bearing for a boxed field: a
+	// field has no slot guard, so overwriting before releasing would leak the old cell.
+	vt := e.cur.ExprType(e.info, n.Value)
+	e.line(fmt.Sprintf("%s = %s;", target, e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
 }
 
 // targetIsPlace reports whether an assignment target is a sub-place — a field,
@@ -1185,7 +1200,13 @@ func (e *emitter) expr(x ast.Expr) string {
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
 	case *ast.Binary:
 		if md, ok := e.cur.OpCalls[n]; ok {
-			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.expr(n.R))
+			// The right operand is a by-value ARGUMENT the impl method consumes (drops), so an
+			// lvalue operand is copied (retain/deep-copy) exactly as the plain call path copies
+			// its args — otherwise a non-POD/boxed operand is double-freed when the callee
+			// releases its param (DESIGN-refcount §7 risk 8). The left operand is the borrowed
+			// receiver (never dropped by the callee), so it is passed raw. POD operands copy with
+			// a bare `=`, so an existing derived comparison stays byte-identical.
+			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.copyValue(e.cur.ExprType(e.info, n.R), n.R))
 		}
 		// `k in m` over a map lowers to a membership probe on the runtime table.
 		if n.Op == token.In {
@@ -1525,9 +1546,10 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 		// sub-pattern contributes its own test and bindings instead of being dropped.
 		tests := []string{fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))}
 		var payload []sema.Type
+		var boxed []bool
 		if ti := e.prog.EnumInstance(placeT); ti != nil {
 			if v, ok := ti.Variant(p.Name); ok {
-				payload = v.Payload
+				payload, boxed = v.Payload, v.Boxed
 			}
 		}
 		for i, el := range p.Elems {
@@ -1536,6 +1558,13 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 				et = payload[i]
 			}
 			sub := fmt.Sprintf("%s.u.%s.f%d", place, p.Name, i)
+			// A BOXED payload slot (S1) holds a `void*` cell: bind/match reads THROUGH the box
+			// (zrt_ref_payload), so a nested pattern (`Add(Add(_,_), _)`) recurses through
+			// another deref and a name binding borrows the payload (no retain — copyValue at a
+			// use site retains if needed).
+			if i < len(boxed) && boxed[i] {
+				sub = e.boxDeref(sub, et)
+			}
 			if t := e.patternWalk(el, sub, et, scope); t != "" {
 				tests = append(tests, t)
 			}
@@ -1899,7 +1928,12 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	}
 	args := recv
 	for _, a := range n.Args {
-		args += ", " + e.expr(a.Value)
+		// A by-value argument is CONSUMED by the callee (its body registers the param's drop),
+		// so an lvalue argument must be copied (retain/deep-copy) here or the callee's release
+		// double-frees the caller's value — the enum analogue of the struct discipline, newly
+		// load-bearing for a boxed/recursive arg (DESIGN-refcount §7 risk 8). A POD arg copies
+		// with a bare `=`, so an existing method call stays byte-identical.
+		args += ", " + e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value)
 	}
 	return fmt.Sprintf("%s(%s)", md.Mangled, args)
 }
@@ -1907,18 +1941,49 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 // construct lowers a struct construction 'T(...)' to a C compound literal of the
 // specialized struct type, with arguments in field-declaration order.
 func (e *emitter) construct(n *ast.Call) string {
-	name := e.ctype(e.cur.ExprType(e.info, n))
-	body := e.constructArgs(n.Args)
+	t := e.cur.ExprType(e.info, n)
+	name := e.ctype(t)
+	si := e.prog.StructInstance(t)
+	var parts []string
+	for i, a := range n.Args {
+		parts = append(parts, e.fieldSlot(si, i, a.Value))
+	}
 	// A5: backfill trailing omitted fields with their (constant) default expressions,
 	// in field-declaration order. A fully-specified construction has none and stays
 	// byte-identical.
-	for _, def := range e.trailingFieldDefaults(n, len(n.Args)) {
-		if body != "" {
-			body += ", "
-		}
-		body += e.expr(def)
+	provided := len(n.Args)
+	for j, def := range e.trailingFieldDefaults(n, provided) {
+		parts = append(parts, e.fieldSlot(si, provided+j, def))
 	}
-	return "((" + name + "){" + body + "})"
+	return "((" + name + "){" + strings.Join(parts, ", ") + "})"
+}
+
+// fieldSlot renders one struct-construction field value. A non-POD or boxed field
+// (S1/S2) is copied (retain/deep-copy an lvalue, move a fresh producer) and coerced to
+// the field type — for a boxed `Opt` field this allocates the nullable box (Some) or
+// NULL (None) via wrapValue. This closes the pre-existing gap where a struct built from
+// a BORROWED str/Ref variable did not retain (leak/double-free). A POD field stays the
+// byte-identical raw expression, so an existing value struct construction is unchanged.
+func (e *emitter) fieldSlot(si *mono.TypeInstance, i int, arg ast.Expr) string {
+	ft, boxed := e.fieldTypeBoxed(si, i)
+	if ft == nil {
+		return e.expr(arg)
+	}
+	if boxed || e.containsRef(ft) {
+		et := e.cur.ExprType(e.info, arg)
+		return e.wrapValue(ft, et, e.copyValue(et, arg))
+	}
+	return e.expr(arg)
+}
+
+// fieldTypeBoxed returns the i-th field's concrete type and boxed mark from a struct
+// instance, or (nil, false) when the instance or index is unavailable (a defensive
+// fallback that keeps the raw expression).
+func (e *emitter) fieldTypeBoxed(si *mono.TypeInstance, i int) (sema.Type, bool) {
+	if si == nil || i >= len(si.Fields) {
+		return nil, false
+	}
+	return si.Fields[i].Type, si.Fields[i].Boxed
 }
 
 // trailingFieldDefaults returns the default expressions for the struct fields a
@@ -1958,9 +2023,11 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 	t := e.cur.ExprType(e.info, node)
 	cname := e.ctype(t)
 	tag := 0
+	var payload []sema.Type
+	var boxed []bool
 	if ti := e.prog.EnumInstance(t); ti != nil {
 		if v, ok := ti.Variant(name); ok {
-			tag = v.Tag
+			tag, payload, boxed = v.Tag, v.Payload, v.Boxed
 		}
 	}
 	var b strings.Builder
@@ -1971,7 +2038,7 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			fmt.Fprintf(&b, ".f%d = %s", i, e.expr(a.Value))
+			fmt.Fprintf(&b, ".f%d = %s", i, e.payloadSlot(payload, boxed, i, a.Value))
 		}
 		b.WriteString("}")
 	}
@@ -1979,16 +2046,24 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 	return b.String()
 }
 
-// constructArgs renders a construction's positional argument values in order.
-func (e *emitter) constructArgs(args []ast.Arg) string {
-	var b strings.Builder
-	for i, a := range args {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(e.expr(a.Value))
+// payloadSlot renders one enum-variant payload argument at construction. A BOXED slot
+// (S1) allocates a fresh cell and MOVES/RETAINS the copied payload into it via
+// zg_refnew_<n>(copyValue(...)); a non-POD inline slot copies (retain/deep-copy) so the
+// new value owns it; a POD slot stays the byte-identical raw expression, so an existing
+// payload-enum program is unchanged (DESIGN-refcount §7 risk 2/6). The copyValue is what
+// keeps the refcount balanced: a fresh rvalue is moved, an lvalue is retained.
+func (e *emitter) payloadSlot(payload []sema.Type, boxed []bool, i int, arg ast.Expr) string {
+	if i >= len(payload) {
+		return e.expr(arg)
 	}
-	return b.String()
+	pt := payload[i]
+	if i < len(boxed) && boxed[i] {
+		return fmt.Sprintf("%s(%s)", e.refnewName(boxPayloadType(pt)), e.copyValue(pt, arg))
+	}
+	if e.containsRef(pt) {
+		return e.copyValue(pt, arg)
+	}
+	return e.expr(arg)
 }
 
 // assignTarget lowers a reassignment target. The Phase 0 backend only lowers the
@@ -2014,6 +2089,12 @@ func (e *emitter) ctype(t sema.Type) string {
 	}
 	if isResultNil(t) {
 		return "zrt_result_nil"
+	}
+	// An `Opt[T]` whose T is a cyclic nominal is a nullable heap box, not the optional
+	// carrier (S1 §5): None≡NULL, Some≡a Ref[T] cell, so its C type is `void*`. This keeps
+	// a standalone `x: Node? = n.next` the same representation as the boxed field read.
+	if o, ok := t.(*types.Opt); ok && e.isCyclicNominal(o.Elem) {
+		return "void*"
 	}
 	if ei, ok := t.(*types.Either); ok {
 		// the Result[T] a `<-ch` yields: a generated tagged carrier struct keyed by the

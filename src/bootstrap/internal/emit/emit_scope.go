@@ -100,9 +100,20 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		e.line(fmt.Sprintf("zrt_defer(zg_str_drop, &%s);", cname))
 		return
 	}
+	// A boxed nullable-Opt local (`Node?`, S1) is a bare `void*` cell: it registers the
+	// same zg_ref_drop slot guard as a Ref local, so a later `del`/reassignment retargets
+	// the release (NULL-tolerant).
+	if e.isBoxedOpt(typ) {
+		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
+		return
+	}
 	switch t := typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
+	case *types.Enum:
+		// a recursive/non-POD enum local (S1) frees its boxed payload cells at scope exit
+		// through its generated drop-env thunk, like a struct.
+		e.line(fmt.Sprintf("zrt_defer(zg_dropenv_%s, &%s);", e.ctype(typ), cname))
 	case *types.List:
 		// a list frees its buffer (and drops each element) at scope exit through its
 		// instance's drop-env thunk, scheduled on the runtime cleanup stack.
@@ -144,9 +155,15 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("zrt_str_release(%s);", it.cname))
 		return
 	}
+	if e.isBoxedOpt(it.typ) {
+		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
+		return
+	}
 	switch t := it.typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
+	case *types.Enum:
+		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.List:
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
 	case *types.Map:
@@ -176,6 +193,13 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 	// guard skips it — freed exactly once whether or not the `del` is reached (S2).
 	if it.typ.Kind() == types.KStr {
 		e.line(fmt.Sprintf("zrt_str_release(%s);", cname))
+		e.line(fmt.Sprintf("%s = NULL;", cname))
+		return
+	}
+	// `del x` of a boxed nullable-Opt local (S1) releases the cell now and nulls the slot,
+	// so the scope-exit guard skips it — freed exactly once, like a Ref del.
+	if e.isBoxedOpt(it.typ) {
+		e.line(fmt.Sprintf("zrt_release(%s);", cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 		return
 	}

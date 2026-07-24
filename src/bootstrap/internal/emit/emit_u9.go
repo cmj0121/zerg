@@ -64,30 +64,44 @@ func (e *emitter) programUsesConcurrency() bool {
 }
 
 // containsChan reports whether a type transitively holds a channel (chan[T]), the
-// value form that pulls in the scheduler. It mirrors containsRef's structural walk.
+// value form that pulls in the scheduler. It mirrors containsRef's structural walk, with
+// a visited set so a recursive (S1) type terminates instead of looping forever — a
+// nominal already on the walk contributes no new channel, so revisiting it yields false.
 func containsChan(t sema.Type) bool {
+	return containsChanSeen(t, map[string]bool{})
+}
+
+func containsChanSeen(t sema.Type, seen map[string]bool) bool {
 	switch x := t.(type) {
 	case *types.Chan:
 		return true
 	case *types.Tuple:
 		for _, el := range x.Elems {
-			if containsChan(el) {
+			if containsChanSeen(el, seen) {
 				return true
 			}
 		}
 	case *types.Array:
-		return containsChan(x.Elem)
+		return containsChanSeen(x.Elem, seen)
 	case *types.Opt:
-		return containsChan(x.Elem)
+		return containsChanSeen(x.Elem, seen)
 	case *types.Struct:
+		if seen[x.String()] {
+			return false
+		}
+		seen[x.String()] = true
 		for _, ft := range structFieldTypes(x) {
-			if containsChan(ft) {
+			if containsChanSeen(ft, seen) {
 				return true
 			}
 		}
 	case *types.Enum:
+		if seen[x.String()] {
+			return false
+		}
+		seen[x.String()] = true
 		for _, pt := range enumPayloadTypes(x) {
-			if containsChan(pt) {
+			if containsChanSeen(pt, seen) {
 				return true
 			}
 		}

@@ -70,14 +70,42 @@ func (e *emitter) containsRef(t sema.Type) bool {
 	case *types.Array:
 		return e.containsRef(x.Elem)
 	case *types.Opt:
+		// An `Opt[T]` whose T is a cyclic nominal is a nullable heap BOX (`void*`, None≡NULL,
+		// §5 carrier bypass), so it is a non-POD leaf: copy retains and drop releases the
+		// cell, and — crucially — it does NOT recurse into T, which is what makes containsRef
+		// terminate on a recursive type (the pre-S1 recursion looped forever, the crash).
+		if e.isCyclicNominal(x.Elem) {
+			return true
+		}
 		return e.containsRef(x.Elem)
 	case *types.Struct:
+		// Consult the boxing marks (S1): a Boxed field is a cell (non-POD leaf) and is NOT
+		// recursed into, so a recursive type terminates. Every back edge is a boxed slot, so
+		// the remaining non-boxed recursion is a DAG and always terminates.
+		if ti := e.prog.StructInstance(x); ti != nil {
+			for _, f := range ti.Fields {
+				if f.Boxed || e.containsRef(f.Type) {
+					return true
+				}
+			}
+			return false
+		}
 		for _, ft := range structFieldTypes(x) {
 			if e.containsRef(ft) {
 				return true
 			}
 		}
 	case *types.Enum:
+		if ti := e.prog.EnumInstance(x); ti != nil {
+			for _, v := range ti.Variants {
+				for i, pt := range v.Payload {
+					if v.Boxed[i] || e.containsRef(pt) {
+						return true
+					}
+				}
+			}
+			return false
+		}
 		for _, pt := range enumPayloadTypes(x) {
 			if e.containsRef(pt) {
 				return true
@@ -85,6 +113,41 @@ func (e *emitter) containsRef(t sema.Type) bool {
 		}
 	}
 	return false
+}
+
+// isCyclicNominal reports whether a type is a specialized nominal struct/enum that
+// takes part in a type-graph cycle (S1, prog.CyclicTypes). An `Opt` over such a type
+// lowers to a nullable box rather than the optional carrier, and it is a non-POD leaf.
+func (e *emitter) isCyclicNominal(t sema.Type) bool {
+	if name, ok := e.prog.TypeName(t); ok {
+		return e.prog.CyclicTypes[name]
+	}
+	return false
+}
+
+// isBoxedOpt reports whether a type is an `Opt[T]` with T a cyclic nominal — the
+// nullable-box shape (`void*`, None≡NULL) the carrier bypass lowers (S1 §5). Its value
+// IS a Ref[T] cell, so it flows through the Ref copy/drop arms.
+func (e *emitter) isBoxedOpt(t sema.Type) bool {
+	o, ok := t.(*types.Opt)
+	return ok && e.isCyclicNominal(o.Elem)
+}
+
+// boxPayloadType is the payload type stored inside a boxed slot's cell: an `Opt[T]`
+// slot boxes the underlying T (None≡NULL), a direct-nominal slot boxes the nominal
+// itself. This is the type keyed into the refnew helper table and read back on deref.
+func boxPayloadType(t sema.Type) sema.Type {
+	if o, ok := t.(*types.Opt); ok {
+		return o.Elem
+	}
+	return t
+}
+
+// boxDeref reads the payload of a boxed slot cell (`place`, a `void*`) as an lvalue of
+// the payload type — the same deref a Ref reader uses. A boxed match binding and a
+// force-through-box both read through this.
+func (e *emitter) boxDeref(place string, payloadT sema.Type) string {
+	return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(payloadT), place)
 }
 
 // structFieldTypes returns a use-site struct's field types with the struct's
@@ -228,6 +291,37 @@ func (e *emitter) prepareRuntime() {
 		}
 		if ref, ok := t.(*types.Ref); ok && ref.Elem != nil {
 			seen[ref.Elem.String()] = ref.Elem
+		}
+	}
+	// S1: every boxed slot's cell needs its own zg_refnew_<n> (alloc) and zg_refdrop_<n>
+	// (the payload's drop thunk). A boxed enum payload boxes its nominal directly; a boxed
+	// `Opt` field (and any `Opt[cyclic]` value, whose Some-coercion boxes the payload) boxes
+	// the underlying element. Register each so the construction/coercion sites resolve.
+	for _, ti := range e.prog.Types {
+		for _, f := range ti.Fields {
+			if f.Boxed {
+				pt := boxPayloadType(f.Type)
+				seen[pt.String()] = pt
+			}
+		}
+		for _, v := range ti.Variants {
+			for i, pt := range v.Payload {
+				if v.Boxed[i] {
+					seen[pt.String()] = pt
+				}
+			}
+		}
+	}
+	for _, t := range e.info.BindTypes {
+		if e.isBoxedOpt(t) {
+			el := t.(*types.Opt).Elem
+			seen[el.String()] = el
+		}
+	}
+	for _, t := range e.info.ExprTypes {
+		if e.isBoxedOpt(t) {
+			el := t.(*types.Opt).Elem
+			seen[el.String()] = el
 		}
 	}
 	keys := make([]string, 0, len(seen))
@@ -498,6 +592,16 @@ func (e *emitter) refnewName(elem sema.Type) string {
 // is moved unchanged, so a newly built Ref is not over-counted.
 func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 	base := e.expr(x)
+	// A boxed nullable Opt (`Node?`) is a `void*` cell (S1): retain it when the value is
+	// already of that boxed-Opt type and names storage (a shared box, both holders own it);
+	// a bare-payload value (a Some-coercion `Node -> Node?`) or `nil` is boxed/nulled later
+	// by wrapValue, so it is moved here. zrt_ref_copy tolerates a NULL (None) box.
+	if e.isBoxedOpt(typ) {
+		if xt := e.cur.ExprType(e.info, x); types.Identical(typ, xt) && e.namesStorage(x) {
+			return fmt.Sprintf("zrt_ref_copy(%s)", base)
+		}
+		return base
+	}
 	if !e.containsRef(typ) || !e.namesStorage(x) {
 		return base
 	}
@@ -510,6 +614,10 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 	switch t := typ.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", base)
+	case *types.Enum:
+		// a recursive/non-POD enum deep-copies through its generated value copy helper,
+		// which retains each boxed payload cell (S1); mirrors the struct case below.
+		return fmt.Sprintf("%s(%s)", e.copyHelperName(typ), base)
 	case *types.List:
 		// copying a list value that names existing storage deep-copies its buffer (each
 		// element via the instance vtable), so the two holders never alias.
@@ -652,7 +760,9 @@ func (e *emitter) emitRefHelpers() {
 			continue
 		}
 		if ti.IsEnum {
-			e.diags.Add(token.Span{}, "Ref inside an enum is not supported in Phase 1d iteration 2")
+			// A non-POD enum (a boxed recursive payload, S1, or a Ref/str payload) gets its
+			// own generated copy/drop, exactly like a struct — the pre-S1 refusal is gone.
+			e.enumCopyDrop(ti)
 			continue
 		}
 		e.structCopyDrop(ti)
@@ -679,7 +789,14 @@ func (e *emitter) emitRefHelpers() {
 // registers the zg_ref_drop cleanup thunk. A struct-of-Ref uses its own drop-env
 // thunk instead, so this stays false for a program that only nests Refs in structs.
 func (e *emitter) programHasRefLocal() bool {
-	isRef := func(t sema.Type) bool { _, ok := t.(*types.Ref); return ok }
+	// A boxed nullable-Opt local (`x: Node? = …`) is a bare `void*` cell (S1), so it uses
+	// the same zg_ref_drop slot guard as a bare Ref local.
+	isRef := func(t sema.Type) bool {
+		if _, ok := t.(*types.Ref); ok {
+			return true
+		}
+		return e.isBoxedOpt(t)
+	}
 	for _, t := range e.info.BindTypes {
 		if isRef(t) {
 			return true
@@ -716,18 +833,111 @@ func (e *emitter) programHasRefLocal() bool {
 }
 
 // tiContainsRef reports whether a specialized nominal type instance transitively
-// holds a Ref (its fields/payloads are already concrete).
+// holds a Ref (its fields/payloads are already concrete). A Boxed slot (S1) is a cell,
+// so it makes its owner non-POD even when the payload nominal would itself be POD.
 func (e *emitter) tiContainsRef(ti *mono.TypeInstance) bool {
 	for _, f := range ti.Fields {
-		if e.containsRef(f.Type) {
+		if f.Boxed || e.containsRef(f.Type) {
 			return true
 		}
 	}
 	for _, v := range ti.Variants {
-		for _, pt := range v.Payload {
-			if e.containsRef(pt) {
+		for i, pt := range v.Payload {
+			if v.Boxed[i] || e.containsRef(pt) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// slotCopy renders the retained/deep copy of one non-POD or boxed slot. A Boxed slot
+// (S1) is a Ref cell regardless of its nominal payload type, so it retains directly;
+// otherwise it defers to fieldCopy for the type's own copy arm.
+func (e *emitter) slotCopy(t sema.Type, boxed bool, access string) string {
+	if boxed {
+		return fmt.Sprintf("zrt_ref_copy(%s)", access)
+	}
+	return e.fieldCopy(t, access)
+}
+
+// slotDrop renders the release/deep drop of one non-POD or boxed slot. A Boxed slot
+// (S1) releases its cell directly; otherwise it defers to fieldDrop.
+func (e *emitter) slotDrop(t sema.Type, boxed bool, access string) string {
+	if boxed {
+		return fmt.Sprintf("zrt_release(%s);", access)
+	}
+	return e.fieldDrop(t, access)
+}
+
+// enumCopyDrop emits a non-POD enum's copy and drop helpers (S1), removing the old
+// Ref-in-enum refusal. copy shallow-copies the tagged union then, per variant, retains/
+// deep-copies each boxed or non-POD payload slot; drop releases/deep-drops them in
+// reverse slot order. A POD (or wholly boxed-free) variant is left to the shallow `r =
+// x` copy and needs no teardown, so a fieldless/C-style enum never reaches here.
+func (e *emitter) enumCopyDrop(ti *mono.TypeInstance) {
+	name := ti.Mangled
+
+	e.line(fmt.Sprintf("static %s zg_copy_%s(%s x) {", name, name, name))
+	e.indent++
+	e.line(fmt.Sprintf("%s r = x;", name))
+	e.line("switch (x.tag) {")
+	for _, v := range ti.Variants {
+		if !e.variantNonPOD(v) {
+			continue
+		}
+		e.line(fmt.Sprintf("case %d:", v.Tag))
+		e.indent++
+		for i, pt := range v.Payload {
+			if !v.Boxed[i] && !e.containsRef(pt) {
+				continue
+			}
+			acc := fmt.Sprintf("x.u.%s.f%d", v.Name, i)
+			e.line(fmt.Sprintf("r.u.%s.f%d = %s;", v.Name, i, e.slotCopy(pt, v.Boxed[i], acc)))
+		}
+		e.line("break;")
+		e.indent--
+	}
+	e.line("default: break;")
+	e.line("}")
+	e.line("return r;")
+	e.indent--
+	e.line("}")
+
+	e.line(fmt.Sprintf("static void zg_drop_%s(%s *x) {", name, name))
+	e.indent++
+	e.line("switch (x->tag) {")
+	for _, v := range ti.Variants {
+		if !e.variantNonPOD(v) {
+			continue
+		}
+		e.line(fmt.Sprintf("case %d:", v.Tag))
+		e.indent++
+		for i := len(v.Payload) - 1; i >= 0; i-- {
+			if !v.Boxed[i] && !e.containsRef(v.Payload[i]) {
+				continue
+			}
+			acc := fmt.Sprintf("x->u.%s.f%d", v.Name, i)
+			e.line(e.slotDrop(v.Payload[i], v.Boxed[i], acc))
+		}
+		e.line("break;")
+		e.indent--
+	}
+	e.line("default: break;")
+	e.line("}")
+	e.indent--
+	e.line("}")
+
+	e.line(fmt.Sprintf("static void zg_dropenv_%s(void *p) { zg_drop_%s((%s *)p); }", name, name, name))
+	e.blank()
+}
+
+// variantNonPOD reports whether an enum variant carries any boxed or non-POD payload
+// slot, so a wholly-POD variant emits no copy/drop arm.
+func (e *emitter) variantNonPOD(v mono.VariantInst) bool {
+	for i, pt := range v.Payload {
+		if v.Boxed[i] || e.containsRef(pt) {
+			return true
 		}
 	}
 	return false
@@ -743,10 +953,10 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 	e.indent++
 	e.line(fmt.Sprintf("%s r = x;", name))
 	for _, f := range ti.Fields {
-		if !e.containsRef(f.Type) {
+		if !f.Boxed && !e.containsRef(f.Type) {
 			continue
 		}
-		e.line(fmt.Sprintf("r.zg_%s = %s;", f.Name, e.fieldCopy(f.Type, "x.zg_"+f.Name)))
+		e.line(fmt.Sprintf("r.zg_%s = %s;", f.Name, e.slotCopy(f.Type, f.Boxed, "x.zg_"+f.Name)))
 	}
 	e.line("return r;")
 	e.indent--
@@ -756,10 +966,10 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 	e.indent++
 	for i := len(ti.Fields) - 1; i >= 0; i-- {
 		f := ti.Fields[i]
-		if !e.containsRef(f.Type) {
+		if !f.Boxed && !e.containsRef(f.Type) {
 			continue
 		}
-		e.line(e.fieldDrop(f.Type, "x->zg_"+f.Name))
+		e.line(e.slotDrop(f.Type, f.Boxed, "x->zg_"+f.Name))
 	}
 	e.indent--
 	e.line("}")
@@ -777,6 +987,10 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	if t != nil && t.Kind() == types.KStr {
 		return fmt.Sprintf("zrt_str_retain(%s)", access)
 	}
+	// a boxed nullable Opt field (`Node?`) IS a Ref cell (S1): retain it (NULL-tolerant).
+	if e.isBoxedOpt(t) {
+		return fmt.Sprintf("zrt_ref_copy(%s)", access)
+	}
 	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
@@ -787,6 +1001,9 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 		// a map field / element / value deep-copies through its instance's value copy helper.
 		return fmt.Sprintf("%s(%s)", e.mapCopyFn(t), access)
 	case *types.Struct:
+		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
+	case *types.Enum:
+		// a recursive/non-POD enum field deep-copies through its generated helper (S1).
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
 	}
 	e.unsupportedRef(nil, t)
@@ -799,6 +1016,10 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	if t != nil && t.Kind() == types.KStr {
 		return fmt.Sprintf("zrt_str_release(%s);", access)
 	}
+	// a boxed nullable Opt field (`Node?`) IS a Ref cell (S1): release it (NULL-tolerant).
+	if e.isBoxedOpt(t) {
+		return fmt.Sprintf("zrt_release(%s);", access)
+	}
 	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_release(%s);", access)
@@ -807,6 +1028,9 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	case *types.Map:
 		return fmt.Sprintf("zrt_map_drop(&(%s));", access)
 	case *types.Struct:
+		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
+	case *types.Enum:
+		// a recursive/non-POD enum field deep-drops through its generated helper (S1).
 		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
 	}
 	e.unsupportedRef(nil, t)
@@ -821,8 +1045,9 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 func (e *emitter) refnewHelper(elem sema.Type) {
 	ct := e.ctype(elem)
 	idx := e.refnewIdx[elem.String()]
-	// A non-POD struct payload needs a thunk adapting its typed drop to void*.
-	if _, ok := elem.(*types.Struct); ok && e.containsRef(elem) {
+	// A non-POD nominal payload (a struct or a recursive/non-POD enum, S1) needs a thunk
+	// adapting its typed deep-drop to the runtime's void* cell-drop signature.
+	if e.nominalHasDrop(elem) {
 		e.line(fmt.Sprintf("static void zg_refdrop_%d(void *p) { %s((%s*)p); }", idx, e.dropHelperName(elem), ct))
 	}
 	e.line(fmt.Sprintf("static void *zg_refnew_%d(%s v) {", idx, ct))
@@ -843,11 +1068,22 @@ func (e *emitter) refDropFn(elem sema.Type) string {
 	if !e.containsRef(elem) {
 		return "NULL"
 	}
-	if _, ok := elem.(*types.Struct); ok {
+	if e.nominalHasDrop(elem) {
 		return "&" + e.refThunkName(elem)
 	}
 	e.unsupportedRef(nil, elem)
 	return "NULL"
+}
+
+// nominalHasDrop reports whether a boxed payload is a nominal struct/enum with a
+// generated deep-drop helper (zg_drop_<T>) — the payloads S1 boxes. A bare Ref/list/map
+// payload is handled by its own arm, not a nominal drop thunk.
+func (e *emitter) nominalHasDrop(elem sema.Type) bool {
+	switch elem.(type) {
+	case *types.Struct, *types.Enum:
+		return e.containsRef(elem)
+	}
+	return false
 }
 
 func (e *emitter) refThunkName(elem sema.Type) string {

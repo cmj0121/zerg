@@ -142,7 +142,9 @@ Because `is` never yields the concrete value, it drives **control flow, not data
 on "is this a `T`?", but to read a `T`'s own fields you must **already hold the concrete type** — one you
 never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `and` / `or`, or as a `match`
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
-[Null-safety & Errors](errors.md)).
+[Null-safety & Errors](errors.md)) — and **this phase that is the only use implemented**: `is` works on the
+built-in error taxonomy, while the general existential test `x is T` for a **non-error** type is **not yet
+available**.
 
 ## Methods, `this` / `This`, and default bodies
 
@@ -179,7 +181,9 @@ implementation** — its override if it has one, else the default. So a default 
 method reaches the type's override (a defaulted `count` built on `next` uses an overridden
 `next`) — there is **no static-dispatch exception for defaults**. The mechanism is the one already
 defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
-through its **vtable** to the actual impl.
+through its **vtable** to the actual impl. This holds for a **direct call on a concrete value** as well:
+`c.provided()` runs the type's **override** if it has one, else the spec's **default body** — with no `#[dyn]`
+and no boxing needed, so a provided method is not confined to the dynamic-dispatch path.
 
 ## Associated types and values
 

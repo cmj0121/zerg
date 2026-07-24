@@ -153,7 +153,8 @@ and the prelude (see The prelude & std). What you import depends on the distance
 
 - **Same module** (same directory) — nothing to import; a module's files share one namespace.
 - **Another module of the same package** — import that sibling module, then name its package-internal
-  (`pub`) declarations.
+  (`pub`) declarations. A named function among them is a **first-class value**, not only a call target:
+  `f := other.helper` binds it, `f(x)` calls it (see [Functions & Closures](functions.md)).
 - **Another package** — import the package and see only its root public surface; a dependency's inner
   modules are **not** reachable, so the root's public surface is all a dependent gets.
 

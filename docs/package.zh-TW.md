@@ -119,7 +119,8 @@ import 的那些 package），也沒有 ambient import。每個名字要嘛是�
 primitive 關鍵字與 prelude（見 Prelude 與 std）。要 import 什麼，取決於距離：
 
 - **同一 module**（同目錄）——無須 import；一個 module 的各檔案共享一個命名空間。
-- **同 package 的其他 module**——import 那個 sibling module，即可指名它的 package-internal（`pub`）宣告。
+- **同 package 的其他 module**——import 那個 sibling module，即可指名它的 package-internal（`pub`）宣告。其中一個
+  具名函式是**一等值**、不只是呼叫目標:`f := other.helper` 綁定它、`f(x)` 呼叫它(見 [函式與閉包](functions.zh-TW.md))。
 - **別的 package**——import 該 package，只看得到它 root 的公開表面；相依套件的內層 module **不可達**，依賴者只拿得到
   那個公開表面。
 

@@ -17,8 +17,12 @@ no value; the condition is a `bool` (no truthiness). With a **mandatory trailing
 **expression** (`if-expr`, a `primary`): it yields the **taken branch's block value**, and **every branch
 must yield the same type** (`x := if hot { warm() } else { cool() }`). At statement position the statement
 form wins, so the value form is the one that reaches a `:=`, a `return`, or an argument. The **binding
-form** `if x := expr { … }` runs the block only when `expr` matches the pattern `x` — the one-arm-`match`
-sugar for a "value present" test (`if v := <-ch { use(v) }` fires only on a `Left`).
+form** `if x := expr { … }` (if-let) runs the block only when `expr` is **present** — an optional holding a
+value, a `<-ch` that received (a `Left`) — and **binds the unwrapped value** as `x` in the **then-block
+only**: `x` is not in scope in the `else`, nor after the `if`. It is the one-arm-`match` sugar for a "value
+present" test (`if v := <-ch { use(v) }` fires only on a `Left`), and works **wherever an `if` does** — as a
+statement, as an expression (with a trailing `else`), and as a returned if-expression (`return if x := opt {
+use(x) } else { fallback }`).
 
 **`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds

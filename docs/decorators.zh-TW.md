@@ -1,18 +1,32 @@
 # Zerg Decorator
 
 **decorator** 是掛在宣告前的 `#[…]` 前綴——一道給 compiler 的指令。這個集合是**固定、compiler 擁有**的:使用者
-不能自訂（Zerg **沒有 macro**），所以本頁以外的任何東西都無法改寫你的程式。每個 decorator 綁定其後的宣告。屬於
+不能自訂（Zerg **沒有 macro**），所以本頁以外的任何東西都無法改寫你的程式。因為集合封閉,**未知或拼錯的 decorator
+是編譯錯誤**——絕不會被默默忽略。每個 decorator 綁定其後的宣告。屬於
 [語言參考](language.zh-TW.md) 的一部分。亦有 [English](decorators.md) 版本。
 
 ## 集合
+
+目前**已實作**的有三個——`#[derive]`、`#[dyn]`、`#[test]`:
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl:
   `Object`（一律生成）加上可選的 `Ord`、`Hash`、`Encode`、`Decode`。使用者 spec 不可被 derive（`#[derive(MySpec)]`
   為編譯錯誤）。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
 - **`#[dyn]`** — 掛在泛型 `fn`。把泛型編成**一份共享的 witness-table body**,而非依型別引數各自 monomorphize——以
   zero-cost 換較小的碼,並讓 compiler 封頂實例化膨脹。見 **[Grammar](grammar.zh-TW.md)**（group 7）。
-- **`#[sealed]`** — 掛在 `struct`。把預設的 field-wise `T(…)` constructor 降為**模組私有**,外部必須改走公開的
-  自訂 constructor（具名關聯 `fn`）;模組自身仍以 `T(…)` 建。搭配私有、帶 default 的 field 以強制不變量。
+- **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。函式不帶參數;
+  其中的斷言失敗或 abort 即令測試失敗（測試放在何處見 [模組、套件與程式](package.zh-TW.md)）。
+
+## 已識別但尚未支援
+
+另有四個 decorator 名稱被 compiler **識別**,但這個階段會**大聲拒絕**——用了就是「尚未支援」的**編譯錯誤**,絕不
+默默當作 no-op:
+
+- **`#[sealed]`** — 掛在 `struct`。*原意*是把預設的 field-wise `T(…)` constructor 降為**模組私有**,外部必須改走
+  公開的自訂 constructor（具名關聯 `fn`）,而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
+  **尚未實作。**
+- **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
+  padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**尚未實作。**
 
 ## 不是 macro
 
@@ -28,5 +42,6 @@ decorator 的定位是**極少動用**。有兩個日常需求**不是**它的�
 
 ## 保留
 
-這個集合只在 compiler 新增指令時成長——記憶體 **layout** 控制（`#[repr]`、`#[packed]`、`#[align]`）、
-**logging** / 觀測、**FFI** 是可能的下一批。在某個 decorator 列入本頁之前,它都不是合法語法。
+這個集合只在 compiler 新增指令時成長。layout decorator（`#[repr]`、`#[packed]`、`#[align]`）與 `#[sealed]`
+已是**保留名稱**——會被識別並大聲拒絕（見上）直到實作為止——而 **logging** / 觀測與 **FFI** 是可能的下一批。任何
+**未**列在本頁的名稱根本不是保留的 decorator:它是**編譯錯誤**,所以拼錯絕不會被當成某個 compiler 默默丟棄的指令。

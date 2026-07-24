@@ -55,10 +55,18 @@ A **`raise e from cause`** form records `cause` as `e`'s `unwrap()` — a **nest
 lower-level `Err` in a higher-level one without losing it, feeding the same cause chain every `Error`
 exposes; a bare `raise e` carries `e` unchanged.
 
-**Custom error types.** Any type implementing the **`Error`** spec (`message() -> str`, `unwrap() -> Err?`,
-`code() -> byte?` — see [Built-in specs](specs.md)) is an `Err`: it may sit in a `Result`'s right **and** be `raise`d,
-and `guard` reifies it back as `Right(e)` with message, cause, and code intact. Use a `struct` for one
-error, an `enum` for a family — the same value serves both tiers; the bridges convert.
+**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds — **`ValueError`**,
+**`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`** — and you **choose
+from these**; **defining your own** error type (a `struct` / `enum` implementing the **`Error`** spec —
+`message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](specs.md)) is **not yet
+supported**. Each kind is a full `Err`: construct one with a message (`raise ValueError("bad input")`), let it
+sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`, and have
+`guard` reify it back as `Right(err)` with message, cause, and code intact. The runtime's **own intrinsic
+failures raise the matching kind**, so library and runtime errors share one vocabulary: a failed integer parse
+is a `ValueError` (out of range → `OverflowError`), a checked narrowing conversion an `OverflowError`, an I/O
+failure an `IOError`, a `str` bridge over invalid UTF-8 an `EncodingError`, an out-of-bounds index an
+`IndexError`, a missing `map` key a `KeyError`. A `Result` / `Either` carries them and `?` / `??` / `guard`
+thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes the kind.
 
 **Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, `MatchError`,
 `IndexError`, `KeyError`, `AliasError`, `StackOverflowError`, `SendOnClosedError`, `DeadlockError`) or
@@ -115,22 +123,23 @@ with **`is`** ([Type tests](specs.md)):
 match guard { work() } {
     Left(v)  => use(v)
     Right(e) => {
-        if e is NotFound { rebuild() }          # branch on the concrete type
-        else if e is Overflow { alert(e) }      # a built-in abort, reified by guard
+        if e is IOError { rebuild() }           # branch on the taxonomy kind
+        else if e is OverflowError { alert(e) }  # a built-in abort, reified by guard
         else { report(e.message()) }            # everything else — a catch-all is required
     }
 }
 ```
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
-but **not the concrete type's own fields** — the value was erased and is never re-constructed. The set of
-errors reachable here is **open** (any `raise`, any built-in abort, any library `Err`), so an `is`-chain
-can never be exhaustive: a **catch-all is mandatory**, and an unmatched error aborts (`MatchError`) like
-any uncovered `match`.
+but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
+is implemented **for the error taxonomy** — the six built-in kinds and any built-in abort a `guard` reifies;
+the general existential test `x is T` for a **non-error** type is **not yet available**. The set of errors
+reachable here is treated as **open** for coverage, so an `is`-chain can never be exhaustive: a **catch-all is
+mandatory**, and an unmatched error aborts (`MatchError`) like any uncovered `match`.
 
-This splits error handling by whether you own a **closed** set. When you need an error's **data**, keep it
-concrete — an **`Either[T, MyErrorEnum]`** (never erased) whose variants a `match` reads by value, with
-payloads and coverage warnings. When the set is **open**, or you only recognize a few types, take the
-erased **`Result[T]`** and `is`-dispatch with a catch-all. So the return type is a contract: an erased
-`Result` says "branch and use the `Error` interface"; a concrete `Either` says "here is my full error
-taxonomy, data and all".
+This splits error handling by whether you own a **closed** set. When you need an error's **kind** decided by
+value, keep it concrete — an **`Either[T, ValueError]`** (never erased) whose right a `match` reads by value.
+When you only recognize a few kinds, take the erased **`Result[T]`** and `is`-dispatch with a catch-all. So the
+return type is a contract: an erased `Result` says "branch and use the `Error` interface"; a concrete `Either`
+says "here is my exact error kind". (A user-defined error `enum` gathering several kinds into one closed sum
+is deferred with user error types above.)

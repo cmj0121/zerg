@@ -497,10 +497,13 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   fields become parameters in declaration order, positional then named) and `Circle(3.0)` an enum variant.
   The name **shares the value namespace** with functions, so a type and a function cannot share a name (Zerg
   has no overloading). The field-wise `T(...)` is **public and primitive**; a custom constructor is a named
-  associated function (an inherent `impl`) that builds via `T(...)`. **`#[sealed]`** demotes `T(...)` to
-  module-private, so external code must use a public custom constructor — the module still builds with
-  `T(...)` internally.
-- **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias; may be generic.
+  associated function (an inherent `impl`) that builds via `T(...)`. **`#[sealed]`** is _intended_ to demote
+  `T(...)` to module-private (external code must then use a public custom constructor, the module still
+  building with `T(...)` internally), but is **recognized-and-rejected, not yet implemented** this phase (see
+  [Decorators](decorators.md)).
+- **`type X = Y`.** A **strong typedef** — a new, distinct type, not a transparent alias, lowering to `Y` at
+  runtime. The `generics?` slot is **parsed** but a **generic** alias `type X[T] = …` is **not yet
+  implemented** this phase (rejected in semantic analysis).
 - **Compile-time constants (implicit).** Compile-time folding is **implicit** and independent of the `const`
   keyword (which only marks a shadow-proof binding — Group 4). Any binding — `:=` or `const` — whose
   initializer is a `const-expr` is **folded at compile time** and may be used where a compile-time value is
@@ -549,8 +552,11 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   declaration is a **semantic** rule — `#[derive(Encode, Decode)]` on a `struct`/`enum` asks the compiler to
   **generate** the canonical impls of the named specs by reading the type's structure (see
   [Derive & Default Behavior](derive.md)); a logging decorator would sit on a `fn`. Decorators are a
-  **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); other directives
-  (layout, FFI…) will slot in here later. `#[` is the one `#` that is not a comment — the lexer peeks one
+  **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or
+  misspelled decorator is a compile error**, never silently dropped. Implemented today: `#[derive]`,
+  `#[dyn]`, `#[test]`; `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` / `#[align]`) are
+  reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a comment — the lexer
+  peeks one
   character.
 
 ## Group 8 — Null-safety & Errors

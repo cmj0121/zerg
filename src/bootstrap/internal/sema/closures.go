@@ -48,26 +48,35 @@ func (c *checker) leaveClosure() map[string]*symbol {
 // checkClosure/synthFn once the body has been checked and the closure's function type
 // (fn) is known.
 func (c *checker) resolveClosure(fe *ast.FnExpr, fn *types.Fn, captured map[string]*symbol) {
-	if len(captured) > 0 {
-		// A `mut` capture is never legal; an immutable capture is legal but its
-		// environment representation is a later iteration.
-		for name, sym := range captured {
-			if sym.mutable {
-				c.errorf(fe.Span(), "cannot capture the mutable variable %q in a closure; snapshot it into an immutable binding first", name)
-				return
-			}
+	caps := make([]Capture, 0, len(captured))
+	for name, sym := range captured {
+		// A `mut` capture is never legal: the value cannot change through the capture, so
+		// the intent (mutate shared state) is unmet — snapshot it into an immutable
+		// binding first (docs/functions.md).
+		if sym.mutable {
+			c.errorf(fe.Span(), "cannot capture the mutable variable %q in a closure; snapshot it into an immutable binding first", name)
+			return
 		}
-		c.errorf(fe.Span(), "a closure that captures a variable is not yet supported; refer only to parameters and top-level names, or pass state as a parameter")
-		return
+		// Capture is by copy. A POD value copies by bits and its environment can be a plain
+		// (leaked, like a string) box; a value that owns heap storage (Ref/list/map/chan)
+		// would need its refcount bumped / a deep copy and a matching environment free,
+		// which is deferred with the rest of the closure-environment ownership story.
+		if !podCapture(sym.typ) {
+			c.errorf(fe.Span(), "capturing a non-POD value (%s) in a closure is not yet supported; pass it as a parameter", sym.typ)
+			return
+		}
+		caps = append(caps, Capture{Name: name, Type: sym.typ})
 	}
-	c.liftClosure(fe, fn)
+	// A deterministic order (by name) so the generated environment struct is stable.
+	sortCaptures(caps)
+	c.liftClosure(fe, fn, caps)
 }
 
-// liftClosure synthesizes a top-level function from a non-capturing closure: a
-// FuncDecl whose body is the closure's, and a matching FuncSig registered under a fresh
-// name, so mono enqueues it and emit lowers it like any function. The value of the
-// closure expression is then that function (emit spells its name).
-func (c *checker) liftClosure(fe *ast.FnExpr, fn *types.Fn) {
+// liftClosure synthesizes a top-level function from a closure: a FuncDecl whose body is
+// the closure's, and a matching FuncSig registered under a fresh name, so mono enqueues
+// it and emit lowers it like any function. A capturing closure records its captures so
+// the backend can build the environment the lifted function reads.
+func (c *checker) liftClosure(fe *ast.FnExpr, fn *types.Fn, caps []Capture) {
 	name := c.freshLambdaName()
 
 	params := make([]ast.Param, len(fe.Params))
@@ -89,7 +98,28 @@ func (c *checker) liftClosure(fe *ast.FnExpr, fn *types.Fn) {
 		Ret:        retOrNil(fn.Ret),
 		Decl:       decl,
 	}
-	c.info.Lambdas[fe] = &Lambda{Name: name, Decl: decl}
+	c.info.Lambdas[fe] = &Lambda{Name: name, Decl: decl, Captures: caps}
+}
+
+// podCapture reports whether a captured value is plain-old-data — copied by bits, owning
+// no heap storage — so it can live in a leaked environment box. A value that owns heap
+// storage (a Ref, list, map, or channel) is not, and is deferred.
+func podCapture(t Type) bool {
+	switch t.(type) {
+	case *types.Ref, *types.List, *types.Map, *types.Chan:
+		return false
+	}
+	return true
+}
+
+// sortCaptures orders captures by name, so a closure's environment struct and its field
+// order are deterministic run to run.
+func sortCaptures(caps []Capture) {
+	for i := 1; i < len(caps); i++ {
+		for j := i; j > 0 && caps[j-1].Name > caps[j].Name; j-- {
+			caps[j-1], caps[j] = caps[j], caps[j-1]
+		}
+	}
 }
 
 // freshLambdaName returns a synthesized name for a lifted closure that no user

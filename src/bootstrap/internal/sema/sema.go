@@ -127,10 +127,19 @@ type Info struct {
 	FuncValues map[*ast.Ident]string
 }
 
-// Lambda is a non-capturing closure lifted to a top-level function.
+// Lambda is a closure lifted to a top-level function. A capturing closure carries its
+// captures (docs/functions.md: "a closure is a scope-owned struct whose fields are its
+// captures"); the backend puts them in an environment the lifted function reads.
 type Lambda struct {
+	Name     string
+	Decl     *ast.FuncDecl
+	Captures []Capture // empty for a non-capturing closure
+}
+
+// Capture is one variable a closure captures by copy: its source name and type.
+type Capture struct {
 	Name string
-	Decl *ast.FuncDecl
+	Type Type
 }
 
 // Check resolves and type-checks the file, returning the analysis info and any

@@ -117,9 +117,11 @@ type emitter struct {
 	// function used as a value to its env-ignoring adapter; lambdaDecls is the set of
 	// lifted-closure FuncDecls, which get the uniform closure calling convention's
 	// leading env parameter. All empty for a program that names no function value.
-	fntypes     map[string]*fnCarrier
-	fnthunks    map[string]*fnThunk
-	lambdaDecls map[*ast.FuncDecl]bool
+	fntypes      map[string]*fnCarrier
+	fnthunks     map[string]*fnThunk
+	lambdaDecls  map[*ast.FuncDecl]bool
+	lambdaByDecl map[*ast.FuncDecl]*sema.Lambda // a lifted closure's captures, by its decl
+	envTypes     map[string]string              // capturing lambda name -> its env struct C name
 
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
@@ -268,6 +270,11 @@ func (e *emitter) program() {
 	// Result/Either/optional carriers, before any prototype that names one as a
 	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
 	e.emitResultTypedefs()
+
+	// Closure environment structs, after every type a capture may be (a struct, tuple,
+	// or function value) and before the lambdas that read them. Emits nothing when no
+	// closure captures.
+	e.emitEnvTypedefs()
 
 	// '#[dyn]' witness-table struct types, before any prototype that names one
 	e.witnessStructs()
@@ -475,11 +482,25 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, sig))
 
 	e.indent++
-	if e.isLambdaInst(inst) {
-		// a non-capturing lifted closure carries the leading env by convention but does
-		// not read it; mark it used so the C compiler stays quiet. (A capturing closure
-		// reads it instead — a later iteration.)
-		e.line("(void)zg_env;")
+	if lam, ok := e.lambdaOf(inst); ok {
+		if len(lam.Captures) == 0 {
+			// a non-capturing closure carries the leading env by convention but never reads
+			// it; mark it used so the C compiler stays quiet.
+			e.line("(void)zg_env;")
+		} else {
+			// a capturing closure reads its captures from the environment: bind each source
+			// name to a field access, so a body reference resolves to it (a parameter or an
+			// inner local declared later shadows it, exactly as in source).
+			envType := e.envTypes[lam.Name]
+			top := e.scopes[len(e.scopes)-1]
+			for _, cap := range lam.Captures {
+				// a parameter of the same name shadows the capture; never overwrite it. (A
+				// capture is a free variable, so this cannot actually collide, but be safe.)
+				if _, param := top[cap.Name]; !param {
+					top[cap.Name] = fmt.Sprintf("((%s *)zg_env)->zg_%s", envType, cap.Name)
+				}
+			}
+		}
 	}
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
 	// One teardown frame spans the parameters and the top-level body: a by-value Ref

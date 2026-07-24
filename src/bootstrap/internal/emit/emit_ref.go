@@ -185,6 +185,13 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesStrConcat() {
 		e.needsRuntime = true
 	}
+	// A capturing closure allocates its environment box through the runtime allocator.
+	for _, lam := range e.info.Lambdas {
+		if len(lam.Captures) > 0 {
+			e.needsRuntime = true
+			break
+		}
+	}
 	// A conversion that can fail calls a zrt_conv_* helper, which raises OverflowError
 	// through zrt_abort. A program whose conversions are all lossless emits plain casts
 	// and stays byte-identical.

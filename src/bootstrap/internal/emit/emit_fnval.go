@@ -99,12 +99,53 @@ func (e *emitter) prepareFnTypes() {
 
 // prepareLambdaDecls records the synthesized FuncDecl of each lifted closure, so the
 // backend can give a lambda instance the leading `void *env` parameter of the uniform
-// closure calling convention.
+// closure calling convention, and assigns each CAPTURING closure an environment struct
+// name.
 func (e *emitter) prepareLambdaDecls() {
 	e.lambdaDecls = map[*ast.FuncDecl]bool{}
+	e.lambdaByDecl = map[*ast.FuncDecl]*sema.Lambda{}
+	e.envTypes = map[string]string{}
 	for _, lam := range e.info.Lambdas {
 		e.lambdaDecls[lam.Decl] = true
+		e.lambdaByDecl[lam.Decl] = lam
+		if len(lam.Captures) > 0 {
+			e.envTypes[lam.Name] = "zg_env_" + lam.Name
+		}
 	}
+}
+
+// lambdaOf returns the lifted closure an instance came from, if any.
+func (e *emitter) lambdaOf(inst *mono.Instance) (*sema.Lambda, bool) {
+	if inst == nil {
+		return nil, false
+	}
+	lam, ok := e.lambdaByDecl[inst.Origin]
+	return lam, ok
+}
+
+// emitEnvTypedefs writes the environment struct of each capturing closure — one field
+// per capture — after the nominal types (a capture may be a user struct) and before the
+// functions that read it. Emits nothing when no closure captures.
+func (e *emitter) emitEnvTypedefs() {
+	for _, lam := range e.orderedCaptureLambdas() {
+		var b string
+		for _, cap := range lam.Captures {
+			b += fmt.Sprintf("%s zg_%s; ", e.ctype(cap.Type), cap.Name)
+		}
+		e.line(fmt.Sprintf("typedef struct { %s} %s;", b, e.envTypes[lam.Name]))
+	}
+}
+
+// orderedCaptureLambdas returns the capturing closures in a deterministic order.
+func (e *emitter) orderedCaptureLambdas() []*sema.Lambda {
+	out := make([]*sema.Lambda, 0, len(e.envTypes))
+	for _, lam := range e.info.Lambdas {
+		if len(lam.Captures) > 0 {
+			out = append(out, lam)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // prepareFnThunks assigns a thunk name to each named function used as a value, keyed by
@@ -240,14 +281,28 @@ func (e *emitter) namedFnValue(name string) (string, bool) {
 	return fmt.Sprintf("((%s){ %s, (void *)0 })", t.carrier, t.name), true
 }
 
-// lambdaValue lowers a lifted closure used as a value to a closure literal: the lifted
-// function as code, and (for a non-capturing closure) a NULL environment.
+// lambdaValue lowers a lifted closure used as a value to a closure literal. A
+// non-capturing closure has a NULL environment; a capturing one allocates an
+// environment box, copies each capture into it, and carries it as the environment.
 func (e *emitter) lambdaValue(lam *sema.Lambda) string {
 	carrier := "zg_fn_0"
 	if c, ok := e.fnTypeFor(fnTypeOfSig(e.info.Funcs[lam.Name])); ok {
 		carrier = c.name
 	}
-	return fmt.Sprintf("((%s){ %s, (void *)0 })", carrier, e.prog.CallTarget(lam.Name))
+	code := e.prog.CallTarget(lam.Name)
+	if len(lam.Captures) == 0 {
+		return fmt.Sprintf("((%s){ %s, (void *)0 })", carrier, code)
+	}
+	// Capture by copy into a fresh environment box. The box is plain (leaked) heap, like
+	// a string's, since captures are POD; the closure-environment ownership story frees
+	// it later. Each capture is read from the enclosing scope by its source name.
+	env := e.envTypes[lam.Name]
+	var b string
+	b += fmt.Sprintf("%s *_e = (%s *)zrt_alloc(sizeof(%s)); ", env, env, env)
+	for _, cap := range lam.Captures {
+		b += fmt.Sprintf("_e->zg_%s = %s; ", cap.Name, e.resolve(cap.Name))
+	}
+	return fmt.Sprintf("({ %s((%s){ %s, (void *)_e }); })", b, carrier, code)
 }
 
 // isLambdaInst reports whether an instance is a lifted closure, which the uniform

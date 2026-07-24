@@ -186,14 +186,20 @@ func (e *emitter) tupleFor(t sema.Type) (*tupleCarrier, bool) {
 // tuple is emitted after that inner tuple's typedef (C needs the complete type
 // first), so the emit order follows element dependencies. Emits nothing when the
 // program registered no tuple.
-func (e *emitter) emitTupleTypedefs() {
-	done := map[string]bool{}
+// emitTupleTypedefs writes the tuple value carriers. Like emitResultTypedefs it runs in
+// two passes around the nominal typedefs: with plainOnly it emits only the tuples whose
+// elements are all plain (non-nominal), so a struct can hold one as a field; the second
+// pass emits the rest, which name a nominal now complete. A top-level tuple selected for
+// the plain pass has no nominal element, so none of its (recursively emitted) element
+// tuples do either — the recursion needs no per-element filter. The tupleDone set carries
+// between passes so no tuple is emitted twice.
+func (e *emitter) emitTupleTypedefs(plainOnly bool) {
 	var emit func(c *tupleCarrier)
 	emit = func(c *tupleCarrier) {
-		if done[c.name] {
+		if e.tupleDone[c.name] {
 			return
 		}
-		done[c.name] = true
+		e.tupleDone[c.name] = true
 		for _, el := range c.elems {
 			if inner, ok := e.tupleFor(el); ok {
 				emit(inner) // an element tuple's typedef must precede this one
@@ -205,12 +211,31 @@ func (e *emitter) emitTupleTypedefs() {
 		}
 		e.line(fmt.Sprintf("typedef struct { %s} %s;", b, c.name))
 	}
+	any := false
 	for _, c := range e.orderedTuples() {
+		if e.tupleDone[c.name] {
+			continue
+		}
+		if plainOnly && e.tupleDependsOnNominal(c) {
+			continue // an element names a nominal struct/enum: emit after the struct typedefs
+		}
 		emit(c)
+		any = true
 	}
-	if len(e.tuples) > 0 {
+	if any {
 		e.blank()
 	}
+}
+
+// tupleDependsOnNominal reports whether any of a tuple carrier's elements names a nominal
+// struct/enum by value, so its typedef must follow the nominal ones.
+func (e *emitter) tupleDependsOnNominal(c *tupleCarrier) bool {
+	for _, el := range c.elems {
+		if e.dependsOnNominal(el) {
+			return true
+		}
+	}
+	return false
 }
 
 // orderedTuples returns the tuple carriers sorted by generated name, so the emitted

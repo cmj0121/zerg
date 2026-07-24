@@ -665,6 +665,12 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		return fmt.Sprintf("zrt_chan_sender_copy(%s)", base)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(typ), base)
+	case *types.Opt:
+		// a non-boxed Opt whose element is non-POD (a `str?`/`Ref[T]?`/`list[T]?`/…): its
+		// carrier copies by value, and when present its payload is retained/deep-copied so
+		// both holders own it. A boxed Opt took the isBoxedOpt arm above; a POD Opt (int?)
+		// took the containsRef early return and copies with a bare `=` (byte-identical).
+		return e.optFieldCopy(t, base)
 	}
 	e.unsupportedRef(x, typ)
 	return base
@@ -806,6 +812,11 @@ func (e *emitter) emitRefHelpers() {
 	// Map key/val vtables + copy/drop definitions (after the list helpers so a map value
 	// that is a list can call the list's zg_listcopy_/zg_listdropenv_).
 	e.emitMapHelpers()
+	// Cleanup-stack drop thunks for every non-boxed non-POD Opt carrier (after the
+	// struct/list/map helpers so an Opt-of-struct/list/map payload can call their
+	// zg_drop_/zrt_list_drop/zrt_map_drop). A POD Opt carrier owns nothing, so it emits
+	// no thunk and a value-only program stays byte-identical.
+	e.emitOptDropHelpers()
 	// Function-value teardown helpers: the env-slot drop guard and each capturing
 	// lambda's env drop thunk (emitted after the env typedefs, before any body). Emits
 	// nothing unless the program manages a closure environment (byte-identical otherwise).
@@ -1032,6 +1043,32 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 	e.blank()
 }
 
+// emitOptDropHelpers writes, for every non-boxed non-POD Opt carrier the program uses, a
+// cleanup-stack drop thunk `zg_dropenv_<carrier>`: it reads the carrier through its slot
+// and, when present, field-drops the payload. A non-POD Opt LOCAL schedules this thunk on
+// the runtime cleanup stack (registerDrop), so its payload is released exactly once at
+// scope exit. A POD Opt carrier owns nothing and emits no thunk (byte-identical).
+func (e *emitter) emitOptDropHelpers() {
+	for _, c := range e.orderedCarriers() {
+		if c.kind != carrierOpt || !e.containsRef(c.left) {
+			continue
+		}
+		e.line(fmt.Sprintf("static void zg_dropenv_%s(void *p) {", c.name))
+		e.indent++
+		e.line(fmt.Sprintf("%s *o = (%s *)p;", c.name, c.name))
+		e.line(fmt.Sprintf("if (o->tag == 0) { %s }", e.fieldDrop(c.left, "o->"+c.okField())))
+		e.indent--
+		e.line("}")
+		e.blank()
+	}
+}
+
+// optDropEnvName is the cleanup-stack drop thunk for a non-boxed non-POD Opt local.
+func (e *emitter) optDropEnvName(t sema.Type) string {
+	c, _ := e.carrierFor(t)
+	return "zg_dropenv_" + c.name
+}
+
 // fieldCopy renders the retained/deep copy of one non-POD field access.
 func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	// a managed str field/element/value retains its cell (S2).
@@ -1059,9 +1096,46 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	case *types.Enum:
 		// a recursive/non-POD enum field deep-copies through its generated helper (S1).
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
+	case *types.Opt:
+		// a non-boxed non-POD Opt field/element/value: copy the carrier by value and, when
+		// present, retain/deep-copy its payload (boxed and POD Opts never reach here).
+		return e.optFieldCopy(t, access)
 	}
 	e.unsupportedRef(nil, t)
 	return access
+}
+
+// optFieldCopy renders the retained/deep copy of a non-boxed non-POD Opt carrier: the
+// carrier is copied by value, and when it is present (tag 0) its payload is field-copied
+// (retained/deep-copied) so both holders own it; an absent carrier carries as-is. A POD
+// Opt never reaches here (its containsRef is false, so it copies with a bare `=`).
+func (e *emitter) optFieldCopy(t sema.Type, access string) string {
+	c, ok := e.carrierFor(t)
+	if !ok {
+		e.unsupportedRef(nil, t)
+		return access
+	}
+	// optFieldCopy runs both during helper emission (structCopyDrop, before any function
+	// body, when e.used is nil) and inside a function body, so the temp name is minted from
+	// the always-present counter rather than freshName (which writes the nil e.used map).
+	e.counter++
+	tmp := fmt.Sprintf("zg_optc__%d", e.counter)
+	slot := tmp + "." + c.okField()
+	return fmt.Sprintf("({ %s %s = %s; if (%s.tag == 0) { %s = %s; } %s; })",
+		c.name, tmp, access, tmp, slot, e.fieldCopy(t.(*types.Opt).Elem, slot), tmp)
+}
+
+// optFieldDrop renders the release/deep drop of a non-boxed non-POD Opt carrier: when it
+// is present (tag 0) its payload is field-dropped; an absent carrier owns nothing. A POD
+// Opt never reaches here.
+func (e *emitter) optFieldDrop(t sema.Type, access string) string {
+	c, ok := e.carrierFor(t)
+	if !ok {
+		e.unsupportedRef(nil, t)
+		return ";"
+	}
+	slot := fmt.Sprintf("(%s).%s", access, c.okField())
+	return fmt.Sprintf("if ((%s).tag == 0) { %s }", access, e.fieldDrop(t.(*types.Opt).Elem, slot))
 }
 
 // fieldDrop renders the release/deep drop of one non-POD field access.
@@ -1089,6 +1163,9 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	case *types.Enum:
 		// a recursive/non-POD enum field deep-drops through its generated helper (S1).
 		return fmt.Sprintf("%s(&%s);", e.dropHelperName(t), access)
+	case *types.Opt:
+		// a non-boxed non-POD Opt field/element/value: release its payload only when present.
+		return e.optFieldDrop(t, access)
 	}
 	e.unsupportedRef(nil, t)
 	return ";"

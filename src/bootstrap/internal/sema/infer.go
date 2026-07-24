@@ -138,9 +138,9 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 				return c.scalarConversion(n, callee.Name, target), true
 			}
 			if target == Str {
-				c.errorf(n.Span(), "converting to str is not yet supported; build one from a list[byte]/list[rune]")
-				c.synthArgs(n)
-				return Str, true
+				// `str(bytes)` / `str(runes)` builds a str from a byte or rune list, validated
+				// (docs/collections.md) — not the scalar re-construction.
+				return c.strFromList(n), true
 			}
 		}
 	case *ast.Bracket:
@@ -168,6 +168,18 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 				elem = c.exprAsType(callee.Elems[0])
 			}
 			return c.ptrCast(n, &types.Ptr{Elem: elem}), true
+		case "list":
+			// list[byte](s) / list[rune](s) -> a str's bytes / code points
+			// (docs/collections.md). Only the byte/rune element is a str bridge; any other
+			// `list[T](...)` is not a conversion and falls through.
+			if c.shadowed("list") || len(callee.Elems) != 1 {
+				return nil, false
+			}
+			elem := c.exprAsType(callee.Elems[0])
+			if !isByteOrRune(elem) {
+				return nil, false
+			}
+			return c.strToList(n, elem), true
 		}
 	}
 	return nil, false

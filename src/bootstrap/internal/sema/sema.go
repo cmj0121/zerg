@@ -119,6 +119,11 @@ type Info struct {
 	// here. Empty for a program with no closure literal, which stays byte-identical.
 	Lambdas map[*ast.FnExpr]*Lambda
 
+	// StrForIn is set when the program iterates a str (`for c in s`), which the backend
+	// lowers over the runtime (zrt_str_runes + a temporary list). It pulls in the runtime
+	// even when nothing else does. False for a program with no str iteration.
+	StrForIn bool
+
 	// FuncValues records each bare top-level function NAME used as a value (not called):
 	// the identifier maps to the function's name. The backend generates one env-taking
 	// thunk per named function so it fits the uniform closure value `{ code, env }`, and
@@ -777,6 +782,12 @@ func (c *checker) forInElem(n *ast.ForStmt) Type {
 	// FORK-MAP-ITER: the value is reached via `m[k]`).
 	if mp, ok := it.(*types.Map); ok {
 		return mp.Key
+	}
+	// `for c in s` iterates a str as its code points (docs/collections.md, types.md): the
+	// loop variable binds a rune. A str is not indexable, so this is the forward scan.
+	if it == Str {
+		c.info.StrForIn = true
+		return types.Rune
 	}
 	if !bad(it) {
 		c.errorf(n.Iter.Span(), "for-in over %s is not yet supported", it)

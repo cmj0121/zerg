@@ -341,6 +341,16 @@ uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi);
 int64_t  zrt_conv_i_from_f(double v, double lo, double hi);
 uint64_t zrt_conv_u_from_f(double v, double hi);
 
+/* --- str <-> list bridge (str.c, docs/collections.md) ----------------------
+ *
+ * A str bridges to a list[byte] (raw octets) or list[rune] (code points) for scanning
+ * and editing; going TO a str validates the str invariant (valid UTF-8, no NUL) and
+ * raises EncodingError on violation, going FROM a str never fails. */
+zrt_list zrt_str_bytes(const char *s);
+zrt_list zrt_str_runes(const char *s);
+const char *zrt_str_from_bytes(zrt_list bytes);
+const char *zrt_str_from_runes(zrt_list runes);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

@@ -111,6 +111,19 @@ type Info struct {
 	// for a program with no `#[test]`; a normal `zerg build` filters test functions out
 	// before this pass, so it is empty there too.
 	Tests []*FuncSig
+
+	// Lambdas records each NON-CAPTURING closure literal that is lifted to a top-level
+	// function (docs/functions.md): the checker synthesizes a `FuncDecl` + `FuncSig` for
+	// it (registered in Funcs under the lambda's name), and mono/emit treat it as an
+	// ordinary function. A closure that captures is gated instead, so it never appears
+	// here. Empty for a program with no closure literal, which stays byte-identical.
+	Lambdas map[*ast.FnExpr]*Lambda
+}
+
+// Lambda is a non-capturing closure lifted to a top-level function.
+type Lambda struct {
+	Name string
+	Decl *ast.FuncDecl
 }
 
 // Check resolves and type-checks the file, returning the analysis info and any
@@ -130,6 +143,7 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 		Brackets:  map[*ast.Bracket]BracketRes{},
 		Patterns:  map[*ast.NamePattern]NameRes{},
 		NsMembers: map[*ast.Field]string{},
+		Lambdas:   map[*ast.FnExpr]*Lambda{},
 	}
 
 	r := &resolver{info: info}
@@ -171,6 +185,14 @@ type checker struct {
 	loopDepth  int
 	inUnsafe   bool            // inside an `unsafe fn` body or an `unsafe { }` block-expression (group 12)
 	derived    []*ast.ImplDecl // '#[derive]'-synthesized impls, type-checked after the file (U5)
+
+	// captureStack tracks the closures being checked so a reference to an ENCLOSING
+	// local is recorded as a capture (docs/functions.md). Each frame remembers the
+	// scope depth at the closure's entry; a lookup that resolves below that depth is a
+	// capture of that closure. Empty outside any closure body.
+	captureStack []*captureFrame
+	// lambdaSeq numbers the lifted lambdas so each gets a distinct synthesized name.
+	lambdaSeq int
 
 	// constEdges is the module-constant dependency graph the resolver recorded: an
 	// edge a -> b when constant a's initializer references module constant b. The
@@ -1007,6 +1029,13 @@ func (c *checker) declare(span token.Span, name string, typ Type, mutable bool) 
 func (c *checker) lookup(name string) *symbol {
 	for i := len(c.scopes) - 1; i >= 0; i-- {
 		if s, ok := c.scopes[i][name]; ok {
+			// A name found BELOW a closure's entry depth is a capture of that closure —
+			// and of every closure nested outside it that also encloses this reference.
+			for _, f := range c.captureStack {
+				if i < f.boundary {
+					f.captured[name] = s
+				}
+			}
 			return s
 		}
 	}

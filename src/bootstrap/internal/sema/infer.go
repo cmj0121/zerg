@@ -1088,6 +1088,7 @@ func (c *checker) typeArgExprs(elems []ast.Expr) []Type {
 // omitted parameter type from the expected type's corresponding parameter
 // (DESIGN-1b §4.4).
 func (c *checker) checkClosure(fe *ast.FnExpr, want *types.Fn) Type {
+	c.enterClosure()
 	c.pushScope()
 	for i := range fe.Params {
 		p := &fe.Params[i]
@@ -1110,6 +1111,7 @@ func (c *checker) checkClosure(fe *ast.FnExpr, want *types.Fn) Type {
 	}
 	c.curFn = saved
 	c.popScope()
+	c.resolveClosure(fe, want, c.leaveClosure())
 	return want
 }
 
@@ -1117,6 +1119,7 @@ func (c *checker) checkClosure(fe *ast.FnExpr, want *types.Fn) Type {
 // parameter must then carry an explicit type annotation.
 func (c *checker) synthFn(fe *ast.FnExpr) Type {
 	fn := &types.Fn{}
+	c.enterClosure()
 	c.pushScope()
 	for i := range fe.Params {
 		p := &fe.Params[i]
@@ -1140,6 +1143,7 @@ func (c *checker) synthFn(fe *ast.FnExpr) Type {
 	}
 	c.curFn = saved
 	c.popScope()
+	c.resolveClosure(fe, fn, c.leaveClosure())
 	return fn
 }
 

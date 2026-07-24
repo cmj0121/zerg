@@ -1184,12 +1184,12 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(x.Span(), "the `is` type test is not yet supported")
 		return "0"
 	case *ast.FnExpr:
-		// A closure reaching expr() is used AS A VALUE — bound, passed, returned, or
-		// stored — which needs a full closure conversion (a fn-pointer + captured
-		// environment struct) not yet implemented. Rather than silently lower it to a
-		// `void` value / `0` that miscompiles, fail cleanly here (completeness iteration
-		// 2, U5(a)). A closure invoked inline where it is defined does not pass through
-		// this path.
+		// A closure reaching expr() is used AS A VALUE. A non-capturing one was lifted to
+		// a top-level function (sema/mono), so its value is that function's designator. A
+		// capturing closure is gated in sema and never reaches here.
+		if lam, ok := e.info.Lambdas[n]; ok {
+			return e.prog.CallTarget(lam.Name)
+		}
 		e.diags.Add(n.Span(), "a closure used as a value is not yet supported")
 		return "0"
 	default:

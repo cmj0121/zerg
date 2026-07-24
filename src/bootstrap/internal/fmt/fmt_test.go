@@ -286,3 +286,19 @@ func TestPrintNeverEmitsSemicolons(t *testing.T) {
 		t.Fatalf("canonical output must not contain ';':\n%s", out)
 	}
 }
+
+// TestDestructuringBindRoundTrip pins the canonical layout of the destructuring bind
+// targets '(a, b) := e' and 'P{x, y} := e' (GRAMMAR bind-target), so the round-trip
+// oracle keeps the reprints honest for the new surface.
+func TestDestructuringBindRoundTrip(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"fn f() {\n(a,b):=pair\n}", "fn f() {\n\t(a, b) := pair\n}\n"},
+		{"fn f() {\nmut (a, b) := pair\n}", "fn f() {\n\tmut (a, b) := pair\n}\n"},
+		{"fn f() {\n(a, (b, c)) := t\n}", "fn f() {\n\t(a, (b, c)) := t\n}\n"},
+		{"fn f() {\nDiv{q, r} := d\n}", "fn f() {\n\tDiv{q, r} := d\n}\n"},
+	} {
+		if got := mustRoundTrip(t, tc.src); got != tc.want {
+			t.Fatalf("destructuring bind round-trip\n--- got ---\n%q\n--- want ---\n%q", got, tc.want)
+		}
+	}
+}

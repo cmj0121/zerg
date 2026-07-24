@@ -232,3 +232,38 @@ func TestErrorRecovery(t *testing.T) {
 		t.Fatalf("got %d decls, want 2 (recovery should keep fn b)", len(file.Items))
 	}
 }
+
+// TestDestructuringBindParses covers the destructuring bind targets '(a, b) := e' and
+// 'P{x, y} := e' (GRAMMAR bind-target): they parse cleanly into a BindStmt carrying a
+// tuple/struct pattern target, and are kept distinct from a destructuring reassign
+// ('… = e', already parsed via the assign-target path).
+func TestDestructuringBindParses(t *testing.T) {
+	for _, src := range []string{
+		"fn f() {\n  (a, b) := pair\n}",
+		"fn f() {\n  mut (a, b) := pair\n}",
+		"fn f() {\n  (a, (b, c)) := t\n}",
+		"fn f() {\n  Div{q, r} := d\n}",
+	} {
+		file, diags := Parse(src)
+		if len(diags) != 0 {
+			t.Fatalf("a destructuring bind must parse cleanly, got %v for %q", diags, src)
+		}
+		fn, ok := file.Items[0].(*ast.FuncDecl)
+		if !ok || len(fn.Body.Stmts) == 0 {
+			t.Fatalf("expected a function body statement for %q", src)
+		}
+		last := fn.Body.Stmts[len(fn.Body.Stmts)-1]
+		b, ok := last.(*ast.BindStmt)
+		if !ok || b.Target == nil {
+			t.Fatalf("expected a BindStmt with a destructuring target for %q, got %T", src, last)
+		}
+	}
+	// a destructuring REASSIGN keeps parsing as a reassignment, not a bind.
+	file, diags := Parse("fn f() {\n  (a, b) = pair\n}")
+	if len(diags) != 0 {
+		t.Fatalf("a destructuring reassign must still parse cleanly, got %v", diags)
+	}
+	if _, ok := file.Items[0].(*ast.FuncDecl).Body.Stmts[0].(*ast.Reassign); !ok {
+		t.Fatalf("'(a, b) = pair' must remain a Reassign, not a bind")
+	}
+}

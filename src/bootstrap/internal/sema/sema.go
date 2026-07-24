@@ -172,6 +172,10 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	r.resolveFile(file)
 
 	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}}
+	// Validate every declaration's decorators first (GRAMMAR group 7 is a fixed,
+	// compiler-owned set): an unknown or not-yet-supported decorator is a clean error
+	// rather than a silent no-op.
+	c.checkDecorators(file)
 	c.collectTypes(file)
 	// The spec/impl registry is built before signatures so a generic parameter's
 	// spec bound ('[T: Ord]') can be resolved to the SpecDef it carries (U3): the

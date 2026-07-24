@@ -5,18 +5,32 @@ import (
 	"testing"
 )
 
-// --- SLICE 6: A9 transparent type alias `type X = Y` --------------------------
+// --- SLICE 6: A9 strong typedef `type X = Y` (newtype) ------------------------
 
-// TestTypeAliasRuns covers A9: a non-generic alias `type Id = int` is transparent —
-// every use resolves to the underlying type, so a parameter, return, and annotated
-// binding of type Id are all plain int. Before the fix the alias resolved to Unknown
-// and lowered to a `void` C type.
-func TestTypeAliasRuns(t *testing.T) {
+// TestNewtypeConversionsRun covers A9 (revised): a non-generic `type Id = int` is a
+// DISTINCT nominal type (a newtype) that lowers to its underlying int. Both explicit
+// conversion directions work — `Id(x)` constructs one and `int(id)` extracts it —
+// and the value round-trips through a parameter and return of type Id.
+func TestNewtypeConversionsRun(t *testing.T) {
 	got := runProgram(t, "type Id = int\n"+
 		"fn f(a: Id) -> Id {\n\treturn a\n}\n"+
-		"fn main() {\n\tx: Id = 5\n\tprint f(x)\n}\n")
-	if got != "5\n" {
-		t.Fatalf("type-alias program = %q, want %q", got, "5\n")
+		"fn main() {\n\tx: Id = Id(5)\n\tprint int(f(x))\n\tprint int(Id(42))\n}\n")
+	if got != "5\n42\n" {
+		t.Fatalf("newtype program = %q, want %q", got, "5\n42\n")
+	}
+}
+
+// TestNewtypeDistinctRejected pins the identity difference: an int is not an Id and an
+// Id is not an int, so a bare assignment either way is a type error — a value only
+// crosses the boundary through an explicit conversion.
+func TestNewtypeDistinctRejected(t *testing.T) {
+	for _, src := range []string{
+		"type Id = int\nfn main() {\n\tx: Id = 5\n\tprint int(x)\n}\n",
+		"type Id = int\nfn main() {\n\ty: int = Id(5)\n\tprint y\n}\n",
+	} {
+		if _, _, diags := Compile(src); len(diags) == 0 {
+			t.Fatalf("expected a distinct-type diagnostic for: %s", src)
+		}
 	}
 }
 

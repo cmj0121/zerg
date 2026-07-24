@@ -53,41 +53,83 @@ func fstrNeedsRuntime(node ast.Expr) bool {
 // fstrExpr lowers an f-string to a `const char*` value: each part renders to a
 // fragment and the fragments fold right through zrt_str_concat. A lone text part is
 // its literal (no concat); an empty f-string is the empty literal.
+//
+// Unmanaged (S2 off) this is byte-identical to the pre-S2 backend: plain concat, text as
+// a C literal, result leaked. Managed, every fragment is a cell and the fold releases
+// each intermediate; the escaping result is always OWNED (an immortal literal, a fresh
+// producer, or — for a lone borrowed hole `f"{s}"` — a retain), so its consumer can move
+// or drop it uniformly.
 func (e *emitter) fstrExpr(n *ast.FStr) string {
-	frags := make([]string, 0, len(n.Parts))
+	if !e.strManaged {
+		frags := make([]string, 0, len(n.Parts))
+		for i := range n.Parts {
+			code, _ := e.fstrFrag(n.Parts[i])
+			frags = append(frags, code)
+		}
+		if len(frags) == 0 {
+			return `""`
+		}
+		out := frags[len(frags)-1]
+		for i := len(frags) - 2; i >= 0; i-- {
+			out = fmt.Sprintf("zrt_str_concat(%s, %s)", frags[i], out)
+		}
+		return out
+	}
+
+	type frag struct {
+		code  string
+		owned bool
+	}
+	frags := make([]frag, 0, len(n.Parts))
 	for i := range n.Parts {
-		frags = append(frags, e.fstrPart(n.Parts[i]))
+		code, owned := e.fstrFrag(n.Parts[i])
+		frags = append(frags, frag{code, owned})
 	}
 	if len(frags) == 0 {
-		return `""`
+		return e.strLiteral("") // an immortal empty cell — owned
 	}
-	out := frags[len(frags)-1]
+	if len(frags) == 1 {
+		if frags[0].owned {
+			return frags[0].code
+		}
+		// a lone borrowed hole `f"{s}"`: hand back an owned copy so the consumer can move it.
+		return fmt.Sprintf("zrt_str_retain(%s)", frags[0].code)
+	}
+	acc := frags[len(frags)-1]
 	for i := len(frags) - 2; i >= 0; i-- {
-		out = fmt.Sprintf("zrt_str_concat(%s, %s)", frags[i], out)
+		acc = frag{e.strConcatC(frags[i].code, acc.code, frags[i].owned, acc.owned), true}
 	}
-	return out
+	return acc.code
 }
 
-// fstrPart renders one f-string part to a `const char*` fragment: a text part is a C
-// string literal; a hole renders its expression through the Format `:spec` impl or
-// its `display()` (with a `!s`/`!r`/`!a` conversion picking the view).
-func (e *emitter) fstrPart(p ast.FStrPart) string {
+// fstrFrag renders one f-string part to a `const char*` fragment and reports whether the
+// fragment is OWNED (a fresh producer or an immortal literal, which the consumer may
+// release) as opposed to BORROWED (a bare str variable in a `{s}` hole, owned by its
+// binding). A text part is a string literal (a cell when managed); a hole renders its
+// expression through the Format `:spec` impl or its `display()`.
+func (e *emitter) fstrFrag(p ast.FStrPart) (string, bool) {
 	if p.Expr == nil {
-		return cString(p.Text)
+		return e.strLiteral(p.Text), true
 	}
 	if p.Debug {
 		// `{expr=}` self-documentation (reprint the source text, then '=', then the
 		// value) is deferred to a later iteration; reject it rather than silently drop
 		// the '=' prefix (DESIGN-1f §6 lists it as delay-able).
 		e.diags.Add(p.Expr.Span(), "f-string self-documenting '{expr=}' is not supported yet")
-		return `""`
+		return `""`, true
 	}
 	t := e.cur.ExprType(e.info, p.Expr)
 	code := e.expr(p.Expr)
 	if p.HasSpec {
-		return e.formatCall(p, t, code)
+		// every Format `:spec` path is a producer call (owned).
+		return e.formatCall(p, t, code), true
 	}
-	return e.displayCall(p.Expr, t, code)
+	// display: a str `{s}` hole renders as the value itself (owned iff it is a producer,
+	// not a borrowed lvalue); every scalar display is a producer call (owned).
+	if numericDisplay(t) == dispStr {
+		return e.displayCall(p.Expr, t, code), e.strOwned(p.Expr)
+	}
+	return e.displayCall(p.Expr, t, code), true
 }
 
 // displayCall renders a hole's value through the built-in `display()` for its static

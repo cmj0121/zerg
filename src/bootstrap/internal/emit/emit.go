@@ -148,6 +148,16 @@ type emitter struct {
 	// for a program with no f-string, which therefore stays byte-identical.
 	needsFormat bool
 
+	// strManaged is set when the program PRODUCES a heap string (S2): a concat, an
+	// f-string with a hole/join, or a `str(bytes|runes)` conversion. When set, EVERY str
+	// value in the program is a refcounted `[zrt_ref_hdr | bytes]` cell (a literal is an
+	// immortal cell), str becomes non-POD (e.containsRef(str)==true), and its copy/drop
+	// retain/release the cell; strLits maps each distinct literal value to its emitted
+	// immortal-cell index. When UNSET, str stays a bare `const char*` literal with no
+	// retain/release, so a program that produces no heap string (every numbered example)
+	// is byte-identical. Implies needsRuntime.
+	strManaged bool
+
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
 	// plus its recv/force helpers; recvElems is those element types in that order.
@@ -767,7 +777,7 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	}
 	target := e.assignTarget(n.Target)
 	t := e.cur.ExprType(e.info, targetExpr(n.Target))
-	if !containsRef(t) {
+	if !e.containsRef(t) {
 		e.line(fmt.Sprintf("%s = %s;", target, e.expr(n.Value)))
 		return
 	}
@@ -824,7 +834,15 @@ func (e *emitter) printStmt(n *ast.PrintStmt) {
 	case dispBool:
 		e.line(fmt.Sprintf("printf(\"%%s\\n\", (%s) ? \"true\" : \"false\");", v))
 	case dispStr:
-		e.line(fmt.Sprintf("printf(\"%%s\\n\", %s);", v))
+		// A managed print of an OWNED str temporary (a concat/f-string/conversion result, or
+		// a literal) releases it after the write so it does not leak; a borrowed variable is
+		// left to its binding's drop. Unmanaged, this is the plain byte-identical printf.
+		if e.strManaged && e.strOwned(n.Value) {
+			p := e.freshName("ps")
+			e.line(fmt.Sprintf("{ const char *%s = %s; printf(\"%%s\\n\", %s); zrt_str_release(%s); }", p, v, p, p))
+		} else {
+			e.line(fmt.Sprintf("printf(\"%%s\\n\", %s);", v))
+		}
 	}
 }
 
@@ -954,7 +972,7 @@ func (e *emitter) forInStr(n *ast.ForStmt) {
 // The iterated list is frozen against structural change (sema), so the length read
 // each turn is stable.
 func (e *emitter) forInList(n *ast.ForStmt, lt *types.List) {
-	nonPOD := containsRef(lt.Elem)
+	nonPOD := e.containsRef(lt.Elem)
 	if n.Mut && nonPOD {
 		// A `for mut x` over a non-POD element needs move/ownership tracking on the
 		// per-iteration write-back that the MVP loop-var machinery does not model; gate it
@@ -988,7 +1006,7 @@ func (e *emitter) forInList(n *ast.ForStmt, lt *types.List) {
 // var. Split from forInList so a fresh iterable can be materialized and dropped around
 // it.
 func (e *emitter) forInListBody(n *ast.ForStmt, lt *types.List, base string) {
-	nonPOD := containsRef(lt.Elem)
+	nonPOD := e.containsRef(lt.Elem)
 	iv := e.freshName("i")
 	ct := e.ctype(lt.Elem)
 	e.line(fmt.Sprintf("for (size_t %s = 0; %s < zrt_list_len(&(%s)); %s++) {", iv, iv, base, iv))
@@ -1133,11 +1151,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return "false"
 	case *ast.StrLit:
-		return cString(n.Value)
+		return e.strLiteral(n.Value)
 	case *ast.RawStrLit:
 		// A raw string r"…" carries no escapes; lower its DECODED content (never the
 		// surface .Text, which keeps the r"…" delimiters for fmt only) as a C string.
-		return cString(n.Value)
+		return e.strLiteral(n.Value)
 	case *ast.RuneLit:
 		// A rune is an int32_t code point (cType maps types.Rune). Lower the DECODED
 		// scalar, never the surface lexeme, so 'a' becomes 97 not "'a'".

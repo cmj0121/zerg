@@ -21,6 +21,10 @@ void zrt_retain(void *ref) {
 	if (ref == NULL) {
 		return;
 	}
+	/* An immortal cell (a string literal / constant result) is never counted. */
+	if (((zrt_ref_hdr *)ref)->rc == ZRT_RC_IMMORTAL) {
+		return;
+	}
 	((zrt_ref_hdr *)ref)->rc++;
 }
 
@@ -35,6 +39,10 @@ void zrt_release(void *ref) {
 		return;
 	}
 	h = (zrt_ref_hdr *)ref;
+	/* An immortal cell (a string literal / constant result) is never freed. */
+	if (h->rc == ZRT_RC_IMMORTAL) {
+		return;
+	}
 	if (--h->rc == 0) {
 		if (h->drop != NULL) {
 			h->drop(zrt_ref_payload(h));

@@ -46,6 +46,14 @@ typedef struct {
 	zrt_drop_fn drop; /* run at rc==0 before free (NULL = nothing to drop) */
 } zrt_ref_hdr;
 
+/* ZRT_RC_IMMORTAL is the sentinel refcount of a cell that must never be freed: a
+ * value in static storage (a string literal, a constant result such as the "true"/
+ * "false" of zrt_display_bool). zrt_retain/zrt_release short-circuit on it, so such a
+ * cell can be bound, copied, and "released" at scope exit without ever touching its
+ * backing memory. A heap cell keeps a normal count and frees at zero. This is the one
+ * mechanism that lets literals and heap strings share one `const char*` ABI (S2). */
+#define ZRT_RC_IMMORTAL ((size_t)SIZE_MAX)
+
 /* zrt_ref_alloc allocates a Ref holding payload_sz bytes with refcount 1 and
  * the given drop function, and returns the header pointer. */
 void *zrt_ref_alloc(size_t payload_sz, zrt_drop_fn drop);
@@ -429,6 +437,21 @@ bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired);
 /* zrt_str_concat returns a fresh heap string holding a followed by b (a NULL operand
  * is the empty string). It joins the parts of a lowered f-string. */
 const char *zrt_str_concat(const char *a, const char *b);
+
+/* zrt_str_retain / zrt_str_release are the `const char*`-typed refcount wrappers for a
+ * MANAGED str value (S2): a managed str IS the payload of a `[zrt_ref_hdr | bytes,'\0']`
+ * cell, so the header is recovered by `((zrt_ref_hdr*)p) - 1`. retain bumps the count and
+ * returns the same pointer (so a copy site is one expression); release drops it, freeing
+ * the cell at zero. A string LITERAL is an immortal cell, so both are no-ops on it. These
+ * are emitted only for a program the compiler marks str-managed; an unmanaged program
+ * keeps `str` a bare `const char*` and never calls them. */
+const char *zrt_str_retain(const char *s);
+void        zrt_str_release(const char *s);
+
+/* zrt_str_elem_vt is the list-element vtable for a `list[str]` whose elements are managed
+ * str cells: copy retains, drop releases. zrt_os_args builds the command-line args list
+ * with it so the list owns and frees its argv cells. Declared after zrt_elem_vt. */
+extern const zrt_elem_vt zrt_str_elem_vt;
 
 /* zrt_display_* render a value's human `display()` text (the f-string `{x}` default
  * and the `!s` conversion). A `str` displays as itself, so it has no entry here. */

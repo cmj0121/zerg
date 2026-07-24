@@ -89,11 +89,17 @@ func (e *emitter) loopMark() string {
 // release); a non-POD struct registers its address with the type's drop-env thunk.
 // A POD binding owns no teardown and is not registered.
 func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
-	if !containsRef(typ) || len(e.drops) == 0 {
+	if !e.containsRef(typ) || len(e.drops) == 0 {
 		return
 	}
 	top := e.curScope()
 	top.items = append(top.items, dropItem{cname: cname, typ: typ})
+	// A managed str local registers its slot with the zg_str_drop guard (S2), so a later
+	// `del`/reassignment retargets the release and the cell is freed exactly once.
+	if typ.Kind() == types.KStr {
+		e.line(fmt.Sprintf("zrt_defer(zg_str_drop, &%s);", cname))
+		return
+	}
 	switch t := typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
@@ -134,6 +140,10 @@ func (e *emitter) findDrop(cname string) (dropItem, bool) {
 // drop the old value before the new one is bound). Unlike a scope-exit release it
 // runs immediately, on the normal path only.
 func (e *emitter) emitInlineDrop(it dropItem) {
+	if it.typ.Kind() == types.KStr {
+		e.line(fmt.Sprintf("zrt_str_release(%s);", it.cname))
+		return
+	}
 	switch t := it.typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
@@ -161,6 +171,13 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 	it, ok := e.findDrop(cname)
 	if !ok {
 		return // POD, a borrow (mut &), or a captured value: nothing to free
+	}
+	// `del s` of a managed str releases the cell now and nulls the slot, so the scope-exit
+	// guard skips it — freed exactly once whether or not the `del` is reached (S2).
+	if it.typ.Kind() == types.KStr {
+		e.line(fmt.Sprintf("zrt_str_release(%s);", cname))
+		e.line(fmt.Sprintf("%s = NULL;", cname))
+		return
 	}
 	switch t := it.typ.(type) {
 	case *types.Ref:
@@ -190,7 +207,7 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 // omitted `as y` binds a fresh hidden name held only for the scope's duration.
 func (e *emitter) withStmt(n *ast.WithStmt) {
 	rt := e.cur.ExprType(e.info, n.Resource)
-	if !containsRef(rt) {
+	if !e.containsRef(rt) {
 		// GATE (A6): `with` teardown rides the runtime cleanup stack, which only knows
 		// how to release a Ref-bearing resource. A resource with no automatic cleanup (a
 		// POD struct/value) would bind and run the body with NO teardown scheduled — a
@@ -202,7 +219,7 @@ func (e *emitter) withStmt(n *ast.WithStmt) {
 	e.line("{")
 	e.indent++
 	e.pushScope()
-	need := containsRef(rt) || e.directTeardown(n.Body.Stmts)
+	need := e.containsRef(rt) || e.directTeardown(n.Body.Stmts)
 	e.openScope(need, false)
 
 	name := n.Var
@@ -350,7 +367,7 @@ func (e *emitter) directTeardown(stmts []ast.Stmt) bool {
 		case *ast.DeferStmt:
 			return true
 		case *ast.BindStmt:
-			if containsRef(e.cur.BindType(e.info, n)) {
+			if e.containsRef(e.cur.BindType(e.info, n)) {
 				return true
 			}
 		}
@@ -370,11 +387,11 @@ func (e *emitter) subtreeTeardown(stmts []ast.Stmt) bool {
 			case *ast.DeferStmt:
 				found = true
 			case *ast.BindStmt:
-				if containsRef(e.cur.BindType(e.info, n)) {
+				if e.containsRef(e.cur.BindType(e.info, n)) {
 					found = true
 				}
 			case *ast.WithStmt:
-				if containsRef(e.cur.ExprType(e.info, n.Resource)) {
+				if e.containsRef(e.cur.ExprType(e.info, n.Resource)) {
 					found = true
 				}
 			}
@@ -386,11 +403,11 @@ func (e *emitter) subtreeTeardown(stmts []ast.Stmt) bool {
 // anyRefParam reports whether an instance takes a by-value Ref parameter, which the
 // function root must schedule for release on return.
 func (e *emitter) anyRefParam(inst *mono.Instance) bool {
-	if inst.Recv != nil && containsRef(inst.Recv) {
+	if inst.Recv != nil && e.containsRef(inst.Recv) {
 		return true
 	}
 	for _, p := range inst.Params {
-		if containsRef(p) {
+		if e.containsRef(p) {
 			return true
 		}
 	}

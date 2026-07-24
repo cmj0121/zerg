@@ -15,6 +15,12 @@
 
 #include <string.h>
 
+/* str_alloc returns the payload of a fresh rc=1 string cell holding n bytes: a managed
+ * str value (S2) IS this payload pointer. `str(bytes)` / `str(runes)` are heap producers,
+ * so the str they build is a cell the compiler refcounts and frees, in place of the old
+ * never-freed zrt_alloc. */
+static char *str_alloc(size_t n) { return (char *)zrt_ref_payload(zrt_ref_alloc(n, NULL)); }
+
 /* --- UTF-8 decode (str -> list) -------------------------------------------- */
 
 /* seq_len returns the byte length of the UTF-8 sequence a lead byte opens (1..4). A str
@@ -133,7 +139,7 @@ const char *zrt_str_from_bytes(zrt_list bytes) {
 	if (!utf8_ok(data, n)) {
 		zrt_abort("EncodingError: bytes are not valid UTF-8 for a str");
 	}
-	char *out = (char *)zrt_alloc(n + 1);
+	char *out = str_alloc(n + 1);
 	if (n > 0) {
 		memcpy(out, data, n);
 	}
@@ -212,7 +218,7 @@ const char *zrt_str_from_runes(zrt_list runes) {
 		}
 		total += (size_t)len;
 	}
-	char *out = (char *)zrt_alloc(total + 1);
+	char *out = str_alloc(total + 1);
 	size_t o = 0;
 	for (size_t i = 0; i < n; i++) {
 		uint32_t cp = (uint32_t)cps[i];

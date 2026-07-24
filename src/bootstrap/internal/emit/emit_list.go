@@ -176,7 +176,7 @@ func (e *emitter) emitListForwardDecls() {
 	for _, c := range e.orderedLists() {
 		e.line(fmt.Sprintf("static zrt_list zg_listcopy_%d(zrt_list s);", c.id))
 		e.line(fmt.Sprintf("static void zg_listdropenv_%d(void *p);", c.id))
-		if containsRef(c.elem) {
+		if e.containsRef(c.elem) {
 			e.line(fmt.Sprintf("static void zg_lcopy_%d(void *dst, const void *src);", c.id))
 			e.line(fmt.Sprintf("static void zg_ldrop_%d(void *elem);", c.id))
 		}
@@ -192,7 +192,7 @@ func (e *emitter) emitListForwardDecls() {
 func (e *emitter) emitListHelpers() {
 	for _, c := range e.orderedLists() {
 		ct := e.ctype(c.elem)
-		if containsRef(c.elem) {
+		if e.containsRef(c.elem) {
 			src := fmt.Sprintf("(*(%s*)src)", ct)
 			e.line(fmt.Sprintf("static void zg_lcopy_%d(void *dst, const void *src) { *(%s*)dst = %s; }",
 				c.id, ct, e.fieldCopy(c.elem, src)))
@@ -278,7 +278,7 @@ func (e *emitter) listIndex(n *ast.Bracket, lt *types.List) string {
 	}
 	// materialized base: copy the element out before the temporary list is dropped.
 	val := slot
-	if containsRef(lt.Elem) {
+	if e.containsRef(lt.Elem) {
 		val = e.fieldCopy(lt.Elem, slot)
 	}
 	r := e.freshName("le")
@@ -313,7 +313,7 @@ func (e *emitter) listMethodEmit(n *ast.Call) (string, bool) {
 		p := e.freshName("gp")
 		slot := fmt.Sprintf("(*(%s*)%s)", ct, p)
 		some := e.wrapValue(optT, lt.Elem, slot)
-		if containsRef(lt.Elem) {
+		if e.containsRef(lt.Elem) {
 			some = e.wrapValue(optT, lt.Elem, e.fieldCopy(lt.Elem, slot))
 		}
 		none := e.wrapValue(optT, sema.Nil, "0")

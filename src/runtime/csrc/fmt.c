@@ -19,9 +19,41 @@
 #include <stdio.h>
 #include <string.h>
 
-/* dup_n copies n bytes of s into a fresh NUL-terminated heap block. */
+/* str_alloc returns the payload of a fresh rc=1 string cell holding n bytes: a managed
+ * str value (S2) IS this payload pointer, its `[zrt_ref_hdr | bytes]` header one step
+ * behind it. Every heap string this file produces goes through here so the compiler can
+ * refcount and free it, in place of the old never-freed zrt_alloc. */
+static char *str_alloc(size_t n) { return (char *)zrt_ref_payload(zrt_ref_alloc(n, NULL)); }
+
+/* zrt_str_retain / zrt_str_release: the const char*-typed refcount wrappers (S2). They
+ * recover the cell header from the payload pointer and defer to zrt_retain/zrt_release,
+ * which no-op on an immortal (literal) cell. */
+const char *zrt_str_retain(const char *s) {
+	if (s != NULL) {
+		zrt_retain((zrt_ref_hdr *)s - 1);
+	}
+	return s;
+}
+
+void zrt_str_release(const char *s) {
+	if (s != NULL) {
+		zrt_release((zrt_ref_hdr *)s - 1);
+	}
+}
+
+/* zrt_str_elem_vt is the list element vtable for a `list[str]` of managed cells: a copy
+ * retains each element, a drop releases it. zrt_os_args uses it so the args list owns and
+ * frees its cells; a str-managed program's own list[str] uses the compiler-emitted vtable,
+ * which is identical (retain/release). */
+static void str_elem_copy(void *dst, const void *src) {
+	*(const char **)dst = zrt_str_retain(*(const char *const *)src);
+}
+static void str_elem_drop(void *elem) { zrt_str_release(*(const char **)elem); }
+const zrt_elem_vt zrt_str_elem_vt = {str_elem_copy, str_elem_drop};
+
+/* dup_n copies n bytes of s into a fresh NUL-terminated string cell. */
 static char *dup_n(const char *s, size_t n) {
-	char *p = (char *)zrt_alloc(n + 1);
+	char *p = str_alloc(n + 1);
 	if (n > 0) {
 		memcpy(p, s, n);
 	}
@@ -37,7 +69,7 @@ const char *zrt_str_concat(const char *a, const char *b) {
 		b = "";
 	}
 	size_t la = strlen(a), lb = strlen(b);
-	char  *p = (char *)zrt_alloc(la + lb + 1);
+	char  *p = str_alloc(la + lb + 1);
 	memcpy(p, a, la);
 	memcpy(p + la, b, lb);
 	p[la + lb] = '\0';
@@ -64,7 +96,16 @@ const char *zrt_display_float(double v) {
 	return dup_n(buf, n < 0 ? 0 : (size_t)n);
 }
 
-const char *zrt_display_bool(bool v) { return v ? "true" : "false"; }
+/* zrt_display_bool renders the constant text "true"/"false". Under S2 these are not C
+ * literals but IMMORTAL string cells, so a managed program can treat every str value —
+ * including this constant result — uniformly as a cell (retain/release are no-ops on it). */
+const char *zrt_display_bool(bool v) {
+	static struct {
+		zrt_ref_hdr h;
+		char        b[6];
+	} t = {{ZRT_RC_IMMORTAL, NULL}, "true"}, f = {{ZRT_RC_IMMORTAL, NULL}, "false"};
+	return (const char *)zrt_ref_payload(v ? (void *)&t : (void *)&f);
+}
 
 /* --- spec parsing ----------------------------------------------------------- */
 
@@ -143,7 +184,7 @@ static const char *pad_field(const char *body, char align_default, const fmt_spe
 	}
 	size_t total = (size_t)f->width, padn = total - len, left = 0, right = 0;
 	char   align = f->align ? f->align : align_default;
-	char  *p = (char *)zrt_alloc(total + 1);
+	char  *p = str_alloc(total + 1);
 	if (align == '<') {
 		right = padn;
 	} else if (align == '^') {
@@ -243,7 +284,7 @@ const char *zrt_fmt_int(int64_t v, const char *spec) {
 	/* '=' (or an implicit zero-pad) puts the fill BETWEEN the leader and digits. */
 	if ((f.align == '=' || (f.zero && f.align == 0)) && f.width > (long)bi) {
 		size_t total = (size_t)f.width, padn = total - (size_t)bi;
-		char  *p = (char *)zrt_alloc(total + 1);
+		char  *p = str_alloc(total + 1);
 		memcpy(p, lead, (size_t)li);
 		memset(p + li, f.fill, padn);
 		/* copy the reversed digits in order after the fill */
@@ -286,7 +327,7 @@ const char *zrt_fmt_float(double v, const char *spec) {
 		size_t len = strlen(body);
 		if ((size_t)f.width > len) {
 			size_t total = (size_t)f.width, padn = total - len;
-			char  *p = (char *)zrt_alloc(total + 1);
+			char  *p = str_alloc(total + 1);
 			size_t lead = (body[0] == '-' || body[0] == '+' || body[0] == ' ') ? 1 : 0;
 			memcpy(p, body, lead);
 			memset(p + lead, f.fill, padn);

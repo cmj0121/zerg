@@ -37,7 +37,14 @@ import (
 // also a ref type). Such a type is NOT plain-old-data: copying it must retain and
 // dropping it must release. Every primitive, str, and ptr — and any struct/tuple/
 // array built only from those — is POD, so its copy is a bare C '='.
-func containsRef(t sema.Type) bool {
+func (e *emitter) containsRef(t sema.Type) bool {
+	// A str is non-POD exactly when the program is str-managed (S2): then every str is a
+	// refcounted cell whose copy retains and whose drop releases. In an unmanaged program
+	// str stays plain-old-data (a bare const char* literal), so nothing here fires and the
+	// emitted C is byte-identical.
+	if t != nil && t.Kind() == types.KStr {
+		return e.strManaged
+	}
 	switch x := t.(type) {
 	case *types.Ref:
 		return true
@@ -55,24 +62,24 @@ func containsRef(t sema.Type) bool {
 		// actually reaches a copy site this phase, but POD-ness must still exclude it.
 		return true
 	case *types.Tuple:
-		for _, e := range x.Elems {
-			if containsRef(e) {
+		for _, el := range x.Elems {
+			if e.containsRef(el) {
 				return true
 			}
 		}
 	case *types.Array:
-		return containsRef(x.Elem)
+		return e.containsRef(x.Elem)
 	case *types.Opt:
-		return containsRef(x.Elem)
+		return e.containsRef(x.Elem)
 	case *types.Struct:
 		for _, ft := range structFieldTypes(x) {
-			if containsRef(ft) {
+			if e.containsRef(ft) {
 				return true
 			}
 		}
 	case *types.Enum:
 		for _, pt := range enumPayloadTypes(x) {
-			if containsRef(pt) {
+			if e.containsRef(pt) {
 				return true
 			}
 		}
@@ -135,6 +142,15 @@ func paramSub(params []*types.Param, args []sema.Type) map[string]sema.Type {
 // program, keeping that program byte-identical.
 func (e *emitter) prepareRuntime() {
 	e.refnewIdx = map[string]int{}
+	// Decide str management FIRST (S2): programUsesRef (below) consults containsRef, which
+	// treats str as non-POD exactly when e.strManaged is set, so the flag must be settled
+	// before any POD-ness question is asked. A program that produces a heap string manages
+	// ALL its strings as cells and needs the runtime; one that produces none leaves str a
+	// bare const char* and stays byte-identical.
+	e.strManaged = e.programProducesHeapStr()
+	if e.strManaged {
+		e.needsRuntime = true
+	}
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
@@ -303,21 +319,21 @@ func (e *emitter) programUsesResultNil() bool {
 // pulls in the runtime for value-copy/refcount code.
 func (e *emitter) programUsesRef() bool {
 	for _, t := range e.info.BindTypes {
-		if containsRef(t) {
+		if e.containsRef(t) {
 			return true
 		}
 	}
 	for _, t := range e.info.ExprTypes {
-		if containsRef(t) {
+		if e.containsRef(t) {
 			return true
 		}
 	}
 	for _, sig := range e.info.Funcs {
-		if containsRef(sig.Ret) {
+		if e.containsRef(sig.Ret) {
 			return true
 		}
 		for _, p := range sig.Params {
-			if containsRef(p) {
+			if e.containsRef(p) {
 				return true
 			}
 		}
@@ -381,7 +397,7 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 		// into a value, THEN release the transient box, so it is freed exactly once. A
 		// non-POD payload (Ref-of-Ref) is left on the plain read (the value would need its
 		// own retain before the release); it is exotic and keeps the prior behaviour.
-		if !containsRef(elem) && e.producesOwnedTransientRef(n.Args[0].Value) {
+		if !e.containsRef(elem) && e.producesOwnedTransientRef(n.Args[0].Value) {
 			box := e.freshName("drefbox")
 			val := e.freshName("drefval")
 			ct := e.ctype(elem)
@@ -482,8 +498,14 @@ func (e *emitter) refnewName(elem sema.Type) string {
 // is moved unchanged, so a newly built Ref is not over-counted.
 func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 	base := e.expr(x)
-	if !containsRef(typ) || !e.namesStorage(x) {
+	if !e.containsRef(typ) || !e.namesStorage(x) {
 		return base
+	}
+	// A managed str that names existing storage retains the cell so both holders own it
+	// (S2). A fresh producer took the early return above and is moved, so a newly built
+	// string is not over-counted.
+	if typ.Kind() == types.KStr {
+		return fmt.Sprintf("zrt_str_retain(%s)", base)
 	}
 	switch t := typ.(type) {
 	case *types.Ref:
@@ -560,9 +582,9 @@ func (e *emitter) producesOwnedTransientRef(x ast.Expr) bool {
 	}
 	switch b := e.cur.ExprType(e.info, br.Base).(type) {
 	case *types.List:
-		return containsRef(b.Elem)
+		return e.containsRef(b.Elem)
 	case *types.Map:
-		return containsRef(b.Val)
+		return e.containsRef(b.Val)
 	}
 	return false
 }
@@ -602,6 +624,19 @@ func (e *emitter) emitRefHelpers() {
 		e.indent++
 		e.line("void **s = (void **)slot;")
 		e.line("if (*s != NULL) { zrt_release(*s); }")
+		e.indent--
+		e.line("}")
+		e.blank()
+	}
+	// zg_str_drop is the cleanup-stack thunk for a managed str local (S2): it releases the
+	// current cell through the binding's slot unless a `del`/reassignment nulled it, so a
+	// later `del` retargets the release and a str is freed exactly once on every path. It
+	// mirrors zg_ref_drop for a `const char*` slot; emitted only for a str-managed program.
+	if e.strManaged {
+		e.line("static void zg_str_drop(void *slot) {")
+		e.indent++
+		e.line("const char **s = (const char **)slot;")
+		e.line("if (*s != NULL) { zrt_str_release(*s); }")
 		e.indent--
 		e.line("}")
 		e.blank()
@@ -668,7 +703,7 @@ func (e *emitter) programHasRefLocal() bool {
 			// iteration (forInListBody), so the thunk must be emitted even when the program
 			// binds no other bare Ref local.
 			if f, ok := s.(*ast.ForStmt); ok && f.Iter != nil {
-				if lt, ok := inst.ExprType(e.info, f.Iter).(*types.List); ok && containsRef(lt.Elem) {
+				if lt, ok := inst.ExprType(e.info, f.Iter).(*types.List); ok && e.containsRef(lt.Elem) {
 					found = true
 				}
 			}
@@ -684,13 +719,13 @@ func (e *emitter) programHasRefLocal() bool {
 // holds a Ref (its fields/payloads are already concrete).
 func (e *emitter) tiContainsRef(ti *mono.TypeInstance) bool {
 	for _, f := range ti.Fields {
-		if containsRef(f.Type) {
+		if e.containsRef(f.Type) {
 			return true
 		}
 	}
 	for _, v := range ti.Variants {
 		for _, pt := range v.Payload {
-			if containsRef(pt) {
+			if e.containsRef(pt) {
 				return true
 			}
 		}
@@ -708,7 +743,7 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 	e.indent++
 	e.line(fmt.Sprintf("%s r = x;", name))
 	for _, f := range ti.Fields {
-		if !containsRef(f.Type) {
+		if !e.containsRef(f.Type) {
 			continue
 		}
 		e.line(fmt.Sprintf("r.zg_%s = %s;", f.Name, e.fieldCopy(f.Type, "x.zg_"+f.Name)))
@@ -721,7 +756,7 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 	e.indent++
 	for i := len(ti.Fields) - 1; i >= 0; i-- {
 		f := ti.Fields[i]
-		if !containsRef(f.Type) {
+		if !e.containsRef(f.Type) {
 			continue
 		}
 		e.line(e.fieldDrop(f.Type, "x->zg_"+f.Name))
@@ -738,6 +773,10 @@ func (e *emitter) structCopyDrop(ti *mono.TypeInstance) {
 
 // fieldCopy renders the retained/deep copy of one non-POD field access.
 func (e *emitter) fieldCopy(t sema.Type, access string) string {
+	// a managed str field/element/value retains its cell (S2).
+	if t != nil && t.Kind() == types.KStr {
+		return fmt.Sprintf("zrt_str_retain(%s)", access)
+	}
 	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
@@ -756,6 +795,10 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 
 // fieldDrop renders the release/deep drop of one non-POD field access.
 func (e *emitter) fieldDrop(t sema.Type, access string) string {
+	// a managed str field/element/value releases its cell (S2).
+	if t != nil && t.Kind() == types.KStr {
+		return fmt.Sprintf("zrt_str_release(%s);", access)
+	}
 	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_release(%s);", access)
@@ -779,7 +822,7 @@ func (e *emitter) refnewHelper(elem sema.Type) {
 	ct := e.ctype(elem)
 	idx := e.refnewIdx[elem.String()]
 	// A non-POD struct payload needs a thunk adapting its typed drop to void*.
-	if _, ok := elem.(*types.Struct); ok && containsRef(elem) {
+	if _, ok := elem.(*types.Struct); ok && e.containsRef(elem) {
 		e.line(fmt.Sprintf("static void zg_refdrop_%d(void *p) { %s((%s*)p); }", idx, e.dropHelperName(elem), ct))
 	}
 	e.line(fmt.Sprintf("static void *zg_refnew_%d(%s v) {", idx, ct))
@@ -797,7 +840,7 @@ func (e *emitter) refnewHelper(elem sema.Type) {
 // helper to the runtime's void* signature. A payload that itself holds a Ref but is
 // not a supported struct shape is reported (see unsupportedRef).
 func (e *emitter) refDropFn(elem sema.Type) string {
-	if !containsRef(elem) {
+	if !e.containsRef(elem) {
 		return "NULL"
 	}
 	if _, ok := elem.(*types.Struct); ok {

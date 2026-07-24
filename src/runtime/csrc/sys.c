@@ -93,9 +93,17 @@ bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired) {
  * its by-value parameter at scope exit. */
 zrt_list zrt_os_args(int argc, char **argv) {
 	zrt_list l;
-	zrt_list_init(&l, sizeof(const char *), NULL);
+	/* Each argv string is copied into an rc=1 string CELL (S2), and the list carries the
+	 * str element vtable (retain on copy, release on drop). This gives a str-managed program
+	 * a real cell to retain/release — a raw argv pointer would crash header recovery — while
+	 * keeping the list alloc/free BALANCED: the list's own drop releases each cell. The one
+	 * shape serves managed and unmanaged programs alike. */
+	zrt_list_init(&l, sizeof(const char *), &zrt_str_elem_vt);
 	for (int i = 1; i < argc; i++) {
-		const char *s = argv[i];
+		size_t      n = strlen(argv[i]);
+		char       *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
+		memcpy(p, argv[i], n + 1);
+		const char *s = p; /* rc=1, owned by the list */
 		zrt_list_push(&l, &s);
 	}
 	return l;

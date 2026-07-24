@@ -148,6 +148,16 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	if sum, ok := c.builtinSum(ref); ok {
 		return sum
 	}
+	// the built-in erased error `Err` (docs/errors.md, GRAMMAR group 8): the Right side
+	// of a Result and the common carrier every built-in error kind constructs, nameable
+	// in a signature (`fn f(e: Err)`). The named kinds themselves are `is` targets and
+	// constructors, not distinct types — they all erase to Err.
+	if ref.Name == "Err" {
+		if len(ref.Args) != 0 {
+			c.errorf(ref.Span(), "type %q takes no type arguments", ref.Name)
+		}
+		return errType
+	}
 	if sym := c.module.lookup(ref.Name); sym != nil && sym.Kind == SymType {
 		// A9 (revised): a strong typedef `type X = Y` is a DISTINCT nominal type (a
 		// newtype), identical only to itself; its underlying representation is filled by

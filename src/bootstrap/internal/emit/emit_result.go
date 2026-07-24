@@ -160,6 +160,21 @@ func isErrType(t sema.Type) bool {
 	return ok && s.Def != nil && s.Def.Name == "Err"
 }
 
+// programUsesErr reports whether the program names a built-in error value anywhere — a
+// kind constructor `ValueError(...)`, a raised or bound Err, an `err.message()`, or an
+// `is <Kind>` test — each of which the backend lowers to a `zrt_err` from zergrt.h. It
+// gates the runtime include for an error-only program that registers no Result carrier
+// (a bare `is`/constructor with no `guard`). A program that names no Err has no Err-typed
+// expression, so this stays false and its C is byte-identical.
+func (e *emitter) programUsesErr() bool {
+	for _, t := range e.info.ExprTypes {
+		if isErrType(t) {
+			return true
+		}
+	}
+	return false
+}
+
 // leftOf returns the Left/Ok/element type of an Either or optional (nil otherwise).
 func leftOf(t sema.Type) sema.Type {
 	switch x := t.(type) {

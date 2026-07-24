@@ -157,6 +157,20 @@ func (c *checker) scalarConversion(n *ast.Call, name string, target Type) Type {
 		}
 		return target
 	}
+	// `int(v)` on an enum READS its stored discriminant (docs/types.md, GRAMMAR group 7).
+	// Only a payload-free (C-style) enum carries a meaningful discriminant — its native
+	// integer repr; a payload enum keeps its tag opaque and match-only, so reading it as
+	// an int is rejected. `E.of(n)` (enumOfCall) is the reverse.
+	if en, ok := types.Underlying(src).(*types.Enum); ok {
+		if target != Int {
+			c.errorf(n.Span(), "an enum discriminant reads as int, not %s", name)
+			return target
+		}
+		if en.Def == nil || en.Def.Enum == nil || !en.Def.Enum.CStyle {
+			c.errorf(n.Span(), "cannot read a discriminant from %s: only a payload-free (C-style) enum has one", src)
+		}
+		return Int
+	}
 	if _, ok := ScalarOf(src); !ok {
 		c.errorf(n.Span(), "cannot convert %s to %s: only a scalar converts by re-construction", src, name)
 		return target

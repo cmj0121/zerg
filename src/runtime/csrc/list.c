@@ -51,14 +51,14 @@ void zrt_list_push(zrt_list *l, const void *elem) {
 
 void *zrt_list_at(zrt_list *l, size_t i) {
 	if (i >= l->len) {
-		zrt_abort("index out of range");
+		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: index out of range");
 	}
 	return l->data + i * l->elemsz;
 }
 
 void zrt_list_set(zrt_list *l, size_t i, const void *elem) {
 	if (i >= l->len) {
-		zrt_abort("index out of range");
+		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: index out of range");
 	}
 	uint8_t *slot = l->data + i * l->elemsz;
 	if (l->vt != NULL && l->vt->drop != NULL) {

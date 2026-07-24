@@ -262,6 +262,12 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesResultNil() {
 		e.needsRuntime = true
 	}
+	// A built-in error value (`ValueError(...)`, a raised/bound Err, `err.message()`, or an
+	// `is <Kind>` test) lowers to a `zrt_err` from zergrt.h, so it needs the runtime even
+	// when the program registers no Result carrier (GRAMMAR group 8).
+	if e.programUsesErr() {
+		e.needsRuntime = true
+	}
 	// Concatenating two strings calls zrt_str_concat, which rides in the always-linked
 	// fmt.c, so the program needs the runtime. A str comparison lowers to strcmp and
 	// needs nothing beyond <string.h>.

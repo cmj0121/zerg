@@ -274,11 +274,33 @@ func (e *emitter) withStmt(n *ast.WithStmt) {
 // non-string operand carries a placeholder message for the MVP (a per-type
 // display() is a later iteration).
 func (e *emitter) raiseStmt(n *ast.RaiseStmt) {
+	// An Err-VALUED operand (a built-in error kind `raise ValueError("bad")`, or any
+	// value already of type Err) carries its own kind and message, so it is raised
+	// directly — this is what lets a `guard`/`?` recover the actual kind (docs/errors.md).
+	// A `from cause` wraps it in a nested Err. A non-Err operand (a bare string, or a
+	// value with no display() yet) falls back to a message-only Err.
+	if isErrType(e.cur.ExprType(e.info, n.Value)) {
+		err := e.expr(n.Value)
+		if n.From != nil {
+			err = fmt.Sprintf("zrt_err_with_cause((%s).msg, %s)", e.expr(n.Value), e.raiseCause(n.From))
+		}
+		e.line(fmt.Sprintf("zrt_raise_err(%s);", err))
+		return
+	}
 	err := fmt.Sprintf("zrt_err_new(%s)", e.errMessage(n.Value))
 	if n.From != nil {
-		err = fmt.Sprintf("zrt_err_with_cause(%s, zrt_err_new(%s))", e.errMessage(n.Value), e.errMessage(n.From))
+		err = fmt.Sprintf("zrt_err_with_cause(%s, %s)", e.errMessage(n.Value), e.raiseCause(n.From))
 	}
 	e.line(fmt.Sprintf("zrt_raise_err(%s);", err))
+}
+
+// raiseCause renders the `from cause` Err of a `raise e from cause`: an Err-valued cause
+// is carried whole (kind and message), any other value becomes a message-only Err.
+func (e *emitter) raiseCause(x ast.Expr) string {
+	if isErrType(e.cur.ExprType(e.info, x)) {
+		return e.expr(x)
+	}
+	return fmt.Sprintf("zrt_err_new(%s)", e.errMessage(x))
 }
 
 // errMessage renders the C string message for a raised value: a string literal

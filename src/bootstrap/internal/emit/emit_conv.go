@@ -42,6 +42,13 @@ func (e *emitter) convCallEmit(n *ast.Call) (string, bool) {
 	if id.Name == "int" && e.cur.ExprType(e.info, n.Args[0].Value) == sema.Str {
 		return fmt.Sprintf("zrt_parse_int(%s)", e.expr(n.Args[0].Value)), true
 	}
+	// `int(v)` on a C-style enum READS its stored discriminant — the enum's tagged-union
+	// `tag` field holds the discriminant for a payload-free enum (sema restricts it there).
+	if id.Name == "int" {
+		if _, ok := e.cur.ExprType(e.info, n.Args[0].Value).(*types.Enum); ok {
+			return fmt.Sprintf("((int64_t)(%s).tag)", e.expr(n.Args[0].Value)), true
+		}
+	}
 	srcS, ok := sema.ScalarOf(e.cur.ExprType(e.info, n.Args[0].Value))
 	if !ok {
 		return "", false

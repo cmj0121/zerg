@@ -1354,6 +1354,14 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:
+		// a qualified nullary enum variant value `E.Green`: the enum name is a value
+		// namespace, so this is the variant value, not a struct field access. The base
+		// identifier resolves to the enum TYPE symbol, which a struct-typed value never does.
+		if id, ok := n.X.(*ast.Ident); ok {
+			if sym, ok := e.info.Refs[id]; ok && sym.Kind == sema.SymType {
+				return e.constructVariant(n, nil, n.Name)
+			}
+		}
 		// a cross-module function reached through a namespace member, used as a value, is a
 		// closure literal over its env-ignoring thunk — the Field analogue of a bare function
 		// name (checked before the const/binding member, which spells `zg_<key>`).
@@ -1452,10 +1460,16 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.AsmExpr:
 		return e.asmExpr(n)
 	case *ast.IsExpr:
-		// The `x is T` type test parses and type-checks (yielding bool) but has no backend
-		// lowering yet — a runtime type test needs type tags the MVP does not carry. Gate it
-		// as a normal user-facing Phase diagnostic rather than letting it fall to the
-		// internal-error backstop below.
+		// `err is ValueError` (and the other built-in error kinds) dispatches on the Err's
+		// kind tag — the documented way to distinguish an erased error (docs/errors.md,
+		// "Handling errors by type"). It lowers to a kind comparison on the runtime zrt_err.
+		if kind, ok := sema.ErrKind(n.TypeName); ok && isErrType(e.cur.ExprType(e.info, n.X)) {
+			return fmt.Sprintf("((%s).kind == %d)", e.expr(n.X), kind)
+		}
+		// Any other `x is T` type test parses and type-checks (yielding bool) but has no
+		// backend lowering yet — a general runtime type test needs type tags the MVP does
+		// not carry. Gate it as a normal user-facing Phase diagnostic rather than letting it
+		// fall to the internal-error backstop below.
 		e.diags.Add(x.Span(), "the `is` type test is not yet supported")
 		return "0"
 	case *ast.FnExpr:
@@ -1722,6 +1736,12 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 		}
 		return fmt.Sprintf("(%s == %s)", place, lit)
 	case *ast.VariantPattern:
+		// `Left(v)` / `Right(e)` on an Either/Result carrier: the tag selects the side and
+		// the sub-pattern binds it (a Result's `Right(e)` binds the erased Err for an
+		// `is`-dispatch). Handled before the enum path since an Either is not an enum.
+		if _, ok := placeT.(*types.Either); ok {
+			return e.eitherPatternWalk(p, place, placeT, scope)
+		}
 		// The arm matches when the discriminant equals this variant's tag AND every
 		// payload sub-pattern matches. Each payload element i is located at the union
 		// place `place.u.<V>.f<i>` and typed from the specialized enum instance, then
@@ -1904,6 +1924,39 @@ func (e *emitter) listPatternWalk(p *ast.ListPattern, place string, placeT sema.
 // variantTag returns the discriminant of a named variant of an enum subject, read
 // from the specialized enum instance (0 when the type or variant is not found, a
 // case a checked program does not reach).
+// eitherPatternWalk lowers a `Left(v)` / `Right(e)` pattern against an Either/Result
+// carrier place: tag 0 is the Left/Ok side, tag 1 the Right/Err side. It binds the
+// sub-pattern at the carrier's corresponding member — `.ok`/`.left` for Left, `.err`
+// (Result) or `.right` (Either) for Right — so a Result's `Right(e)` binds the erased
+// Err ready for an `is`-dispatch on its kind (docs/errors.md).
+func (e *emitter) eitherPatternWalk(p *ast.VariantPattern, place string, placeT sema.Type, scope map[string]string) string {
+	ei := placeT.(*types.Either)
+	c, ok := e.carrierFor(placeT)
+	if !ok {
+		return "0" // an un-modelled Either carrier (e.g. a channel recv): leave it
+	}
+	var tag int
+	var member string
+	var elemT sema.Type
+	if p.Name == "Left" {
+		tag, member, elemT = 0, c.okField(), ei.Left
+	} else {
+		tag, elemT = 1, ei.Right
+		if c.kind == carrierResult {
+			member = "err"
+		} else {
+			member = "right"
+		}
+	}
+	test := fmt.Sprintf("(%s.tag == %d)", place, tag)
+	if len(p.Elems) == 1 {
+		if t := e.patternWalk(p.Elems[0], place+"."+member, elemT, scope); t != "" {
+			test = fmt.Sprintf("(%s && %s)", test, t)
+		}
+	}
+	return test
+}
+
 func (e *emitter) variantTag(subjT sema.Type, name string) int {
 	if ti := e.prog.EnumInstance(subjT); ti != nil {
 		if v, ok := ti.Variant(name); ok {
@@ -1919,6 +1972,15 @@ func (e *emitter) call(n *ast.Call) string {
 	}
 	// a primitive conversion `T(x)`; after ptrCallEmit, which owns `uint(p)`.
 	if s, ok := e.convCallEmit(n); ok {
+		return s
+	}
+	// the enum discriminant reverse `E.of(n) -> E?` (GRAMMAR group 7).
+	if s, ok := e.enumOfEmit(n); ok {
+		return s
+	}
+	// a built-in error constructor `ValueError("msg")` and the `err.message()` accessor
+	// (GRAMMAR group 8, docs/errors.md).
+	if s, ok := e.errCallEmit(n); ok {
 		return s
 	}
 	// a str<->list bridge: `str(bytes)`, `list[byte](s)`, etc.
@@ -2229,6 +2291,79 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 	return b.String()
 }
 
+// enumOfEmit lowers the discriminant reverse `E.of(n) -> E?` (GRAMMAR group 7): given
+// an int, it yields `Some(variant)` when n equals a C-style variant's discriminant,
+// else `None`. It is the inverse of `int(v)`. Lowered as a statement-expression whose
+// switch tests n against each distinct discriminant; a matched value builds the enum
+// (its tag IS the discriminant) into the optional's Ok, and the default is the empty
+// optional. Reports false for any other call so `call` falls through.
+func (e *emitter) enumOfEmit(n *ast.Call) (string, bool) {
+	fld, ok := n.Callee.(*ast.Field)
+	if !ok || fld.Name != "of" || len(n.Args) != 1 {
+		return "", false
+	}
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if sym, ok := e.info.Refs[id]; !ok || sym.Kind != sema.SymType {
+		return "", false
+	}
+	opt, ok := e.cur.ExprType(e.info, n).(*types.Opt)
+	if !ok {
+		return "", false
+	}
+	c, ok := e.carrierFor(opt)
+	if !ok {
+		return "", false
+	}
+	ti := e.prog.EnumInstance(opt.Elem)
+	if ti == nil {
+		return "", false
+	}
+	enumC := e.ctype(opt.Elem)
+	nv := e.freshName("ofn")
+	rv := e.freshName("ofr")
+	var labels strings.Builder
+	seen := map[int]bool{}
+	for _, v := range ti.Variants {
+		if seen[v.Tag] {
+			continue
+		}
+		seen[v.Tag] = true
+		fmt.Fprintf(&labels, "case %d: ", v.Tag)
+	}
+	return fmt.Sprintf("({ int64_t %s = (%s); %s %s; switch (%s) { %s"+
+		"%s = (%s){ .tag = 0, .%s = (%s){ .tag = (int32_t)%s } }; break; "+
+		"default: %s = (%s){ .tag = 1 }; break; } %s; })",
+		nv, e.expr(n.Args[0].Value), c.name, rv, nv, labels.String(),
+		rv, c.name, c.okField(), enumC, nv,
+		rv, c.name, rv), true
+}
+
+// errCallEmit lowers the built-in error surface (GRAMMAR group 8, docs/errors.md): a
+// kind constructor `ValueError("msg")` builds an Err value carrying the kind and message
+// (the runtime `zrt_err`, the same value a guard-recovered abort yields), and
+// `err.message()` reads its message string. Reports false for any other call so `call`
+// falls through. The Err is the erased common carrier — a fixed kind tag on one value —
+// so the Result/Either lowering is unchanged.
+func (e *emitter) errCallEmit(n *ast.Call) (string, bool) {
+	switch callee := n.Callee.(type) {
+	case *ast.Ident:
+		if _, shadowed := e.info.Refs[callee]; shadowed {
+			return "", false
+		}
+		if kind, ok := sema.ErrKind(callee.Name); ok && len(n.Args) == 1 {
+			return fmt.Sprintf("zrt_err_new_kind(%d, %s)", kind, e.expr(n.Args[0].Value)), true
+		}
+	case *ast.Field:
+		if callee.Name == "message" && len(n.Args) == 0 && isErrType(e.cur.ExprType(e.info, callee.X)) {
+			return fmt.Sprintf("(%s).msg", e.expr(callee.X)), true
+		}
+	}
+	return "", false
+}
+
 // payloadSlot renders one enum-variant payload argument at construction. A BOXED slot
 // (S1) allocates a fresh cell and MOVES/RETAINS the copied payload into it via
 // zg_refnew_<n>(copyValue(...)); a non-POD inline slot copies (retain/deep-copy) so the
@@ -2269,6 +2404,12 @@ func (e *emitter) ctype(t sema.Type) string {
 	if _, ok := t.(*types.Named); ok {
 		// a strong typedef lowers to its underlying representation — no distinct C type.
 		return e.ctype(types.Underlying(t))
+	}
+	// the built-in erased error `Err` is the runtime carrier value (GRAMMAR group 8): a
+	// bound error (`e := ValueError("x")`) and a Result's Right side are both the C
+	// `zrt_err`, so a fixed kind tag on one value distinguishes them.
+	if isErrType(t) {
+		return "zrt_err"
 	}
 	if isResultNil(t) {
 		return "zrt_result_nil"

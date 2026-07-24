@@ -118,14 +118,14 @@ zrt_list zrt_read_file(const char *path) {
 	zrt_list_init(&l, sizeof(uint8_t), NULL);
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		zrt_abort("IOError: cannot open file");
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot open file");
 	}
 	uint8_t buf[4096];
 	for (;;) {
 		ssize_t n = read(fd, buf, sizeof(buf));
 		if (n < 0) {
 			close(fd);
-			zrt_abort("IOError: read failed");
+			zrt_abort_kind(ZRT_ERR_IO, "IOError: read failed");
 		}
 		if (n == 0) {
 			break;

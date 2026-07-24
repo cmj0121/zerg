@@ -20,6 +20,40 @@ var errDef = &types.TypeDef{Name: "Err", Struct: &types.StructDef{}}
 //nolint:gochecknoglobals // a single interned built-in nominal type.
 var errType Type = &types.Struct{Def: errDef}
 
+// errKinds is the FIXED, built-in error taxonomy (docs/errors.md, GRAMMAR group 8):
+// the nameable error types a program may CHOOSE from but cannot extend this phase. Each
+// name is both a constructor `Name(msg) -> Err` (its message payload) and an `is`
+// target on an Err. The integer value is the discriminating kind; it is MIRRORED by the
+// runtime (src/runtime/csrc/zergrt.h ZRT_ERR_*) so a runtime abort ("ValueError: …",
+// "IOError: …") and a `raise ValueError("…")` reify to the same kind. These are modeled
+// as one common carrier (the erased `Err`, C `zrt_err`) tagged by kind rather than a
+// user-extensible hierarchy — the minimal MVP shape that keeps the Result/Either
+// lowering (emit_result.go) unchanged while making the named kinds real at the surface.
+//
+//nolint:gochecknoglobals // a fixed, compiler-owned lookup table.
+var errKinds = map[string]int{
+	"ValueError":    1,
+	"OverflowError": 2,
+	"IOError":       3,
+	"EncodingError": 4,
+	"IndexError":    5,
+	"KeyError":      6,
+}
+
+// ErrKind reports the built-in error kind a name denotes and whether it is one, so the
+// backend can lower `Name(msg)` and `err is Name` to the shared kind constant.
+func ErrKind(name string) (int, bool) {
+	k, ok := errKinds[name]
+	return k, ok
+}
+
+// isErr reports whether a type is the built-in erased error `Err` (the Right of a
+// Result, and what every built-in error kind constructs).
+func isErr(t Type) bool {
+	s, ok := t.(*types.Struct)
+	return ok && s.Def == errDef
+}
+
 // resultType builds 'Result[T]' — the sum 'Either[T, Err]' a guard block yields
 // (DESIGN-1b §6).
 func resultType(t Type) Type { return &types.Either{Left: t, Right: errType} }

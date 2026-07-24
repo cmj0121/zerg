@@ -137,7 +137,7 @@ const char *zrt_str_from_bytes(zrt_list bytes) {
 	const uint8_t *data = bytes.data;
 	size_t n = bytes.len;
 	if (!utf8_ok(data, n)) {
-		zrt_abort("EncodingError: bytes are not valid UTF-8 for a str");
+		zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: bytes are not valid UTF-8 for a str");
 	}
 	char *out = str_alloc(n + 1);
 	if (n > 0) {
@@ -173,7 +173,7 @@ static int enc_len(int32_t cp) {
  * conversion is re-construction, checked). */
 int64_t zrt_parse_int(const char *s) {
 	if (s == NULL || *s == 0) {
-		zrt_abort("ValueError: cannot parse an integer from an empty string");
+		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an integer from an empty string");
 	}
 	const char *p = s;
 	int neg = 0;
@@ -182,7 +182,7 @@ int64_t zrt_parse_int(const char *s) {
 		p++;
 	}
 	if (*p == 0) {
-		zrt_abort("ValueError: cannot parse an integer from a lone sign");
+		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an integer from a lone sign");
 	}
 	/* Accumulate magnitude as unsigned; the signed range is asymmetric, so the limit is
 	 * 2^63 for a negative value and 2^63-1 for a non-negative one. */
@@ -190,11 +190,11 @@ int64_t zrt_parse_int(const char *s) {
 	uint64_t acc = 0;
 	for (; *p != 0; p++) {
 		if (*p < '0' || *p > '9') {
-			zrt_abort("ValueError: invalid digit while parsing an integer");
+			zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid digit while parsing an integer");
 		}
 		uint64_t d = (uint64_t)(*p - '0');
 		if (acc > (limit - d) / 10) {
-			zrt_abort("OverflowError: integer literal out of range");
+			zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer literal out of range");
 		}
 		acc = acc * 10 + d;
 	}
@@ -214,7 +214,7 @@ const char *zrt_str_from_runes(zrt_list runes) {
 	for (size_t i = 0; i < n; i++) {
 		int len = enc_len(cps[i]);
 		if (len == 0) {
-			zrt_abort("EncodingError: rune is not a valid code point for a str");
+			zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: rune is not a valid code point for a str");
 		}
 		total += (size_t)len;
 	}

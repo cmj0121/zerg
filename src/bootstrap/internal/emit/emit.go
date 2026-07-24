@@ -113,9 +113,13 @@ type emitter struct {
 	tuples map[string]*tupleCarrier
 
 	// First-class function values (docs/functions.md). fntypes maps a function type's
-	// spelling to its generated `zg_fn_<n>` pointer typedef. Empty for a program that
-	// names no function value, which therefore stays byte-identical.
-	fntypes map[string]*fnCarrier
+	// spelling to its generated `zg_fn_<n>` struct typedef; fnthunks maps a named
+	// function used as a value to its env-ignoring adapter; lambdaDecls is the set of
+	// lifted-closure FuncDecls, which get the uniform closure calling convention's
+	// leading env parameter. All empty for a program that names no function value.
+	fntypes     map[string]*fnCarrier
+	fnthunks    map[string]*fnThunk
+	lambdaDecls map[*ast.FuncDecl]bool
 
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
@@ -278,6 +282,9 @@ func (e *emitter) program() {
 	}
 	// per-module init function prototypes (Phase 1g S3); none for a no-init program.
 	e.emitInitPrototypes()
+	// env-ignoring value thunks for named functions used as values, after the prototypes
+	// they forward to. Emits nothing for a program that takes no function value.
+	e.emitFnThunks()
 	e.blank()
 
 	// concrete witness tables, after the impl-method prototypes their slots name
@@ -415,7 +422,20 @@ func (e *emitter) prototype(inst *mono.Instance) string {
 		return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, b.String())
 	}
 	params := paramList(len(inst.Params), func(i int) string { return e.declParamType(inst, i) })
-	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
+	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, e.withEnvParam(inst, params))
+}
+
+// withEnvParam prepends the uniform closure calling convention's leading `void *env`
+// parameter to a lifted-closure instance's parameter list. Every other function is
+// unchanged, so its emitted C stays byte-identical.
+func (e *emitter) withEnvParam(inst *mono.Instance, params string) string {
+	if !e.isLambdaInst(inst) {
+		return params
+	}
+	if params == "void" || params == "" {
+		return "void *zg_env"
+	}
+	return "void *zg_env, " + params
 }
 
 func (e *emitter) function(inst *mono.Instance) {
@@ -442,9 +462,25 @@ func (e *emitter) function(inst *mono.Instance) {
 	rest := paramNames(len(inst.Params), func(i int) string {
 		return e.declParamType(inst, i) + " " + e.declareName(inst.ParamNames[i])
 	})
-	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, joinParams(recv, rest)))
+	sig := joinParams(recv, rest)
+	if e.isLambdaInst(inst) {
+		// the uniform closure calling convention: a lifted closure takes its environment
+		// first. A non-capturing closure ignores it (see the `(void)zg_env` below).
+		if sig == "void" || sig == "" {
+			sig = "void *zg_env"
+		} else {
+			sig = "void *zg_env, " + sig
+		}
+	}
+	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, sig))
 
 	e.indent++
+	if e.isLambdaInst(inst) {
+		// a non-capturing lifted closure carries the leading env by convention but does
+		// not read it; mark it used so the C compiler stays quiet. (A capturing closure
+		// reads it instead — a later iteration.)
+		e.line("(void)zg_env;")
+	}
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
 	// One teardown frame spans the parameters and the top-level body: a by-value Ref
 	// parameter is the callee's own holder and is released when the function returns
@@ -1060,6 +1096,13 @@ func (e *emitter) expr(x ast.Expr) string {
 		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
 			return e.constructVariant(n, nil, sym.Variant.Name)
 		}
+		// a bare top-level function name used as a value is a closure literal over its
+		// env-ignoring thunk (docs/functions.md).
+		if name, ok := e.info.FuncValues[n]; ok {
+			if s, ok := e.namedFnValue(name); ok {
+				return s
+			}
+		}
 		// a `mut &x` parameter is pointer storage: every mention reads through it.
 		if e.identIsByRef(n) {
 			return "(*" + e.resolve(n.Name) + ")"
@@ -1185,10 +1228,10 @@ func (e *emitter) expr(x ast.Expr) string {
 		return "0"
 	case *ast.FnExpr:
 		// A closure reaching expr() is used AS A VALUE. A non-capturing one was lifted to
-		// a top-level function (sema/mono), so its value is that function's designator. A
-		// capturing closure is gated in sema and never reaches here.
+		// a top-level function (sema/mono), so its value is a closure literal over that
+		// function with a NULL environment. A capturing closure is gated in sema.
 		if lam, ok := e.info.Lambdas[n]; ok {
-			return e.prog.CallTarget(lam.Name)
+			return e.lambdaValue(lam)
 		}
 		e.diags.Add(n.Span(), "a closure used as a value is not yet supported")
 		return "0"

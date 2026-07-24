@@ -118,6 +118,13 @@ type Info struct {
 	// ordinary function. A closure that captures is gated instead, so it never appears
 	// here. Empty for a program with no closure literal, which stays byte-identical.
 	Lambdas map[*ast.FnExpr]*Lambda
+
+	// FuncValues records each bare top-level function NAME used as a value (not called):
+	// the identifier maps to the function's name. The backend generates one env-taking
+	// thunk per named function so it fits the uniform closure value `{ code, env }`, and
+	// spells the identifier as that closure literal. Empty for a program that takes no
+	// function value.
+	FuncValues map[*ast.Ident]string
 }
 
 // Lambda is a non-capturing closure lifted to a top-level function.
@@ -136,14 +143,15 @@ type Lambda struct {
 // diagnostics are concatenated.
 func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	info := &Info{
-		Funcs:     map[string]*FuncSig{},
-		ExprTypes: map[ast.Expr]Type{},
-		BindTypes: map[*ast.BindStmt]Type{},
-		Refs:      map[*ast.Ident]*Symbol{},
-		Brackets:  map[*ast.Bracket]BracketRes{},
-		Patterns:  map[*ast.NamePattern]NameRes{},
-		NsMembers: map[*ast.Field]string{},
-		Lambdas:   map[*ast.FnExpr]*Lambda{},
+		Funcs:      map[string]*FuncSig{},
+		ExprTypes:  map[ast.Expr]Type{},
+		BindTypes:  map[*ast.BindStmt]Type{},
+		Refs:       map[*ast.Ident]*Symbol{},
+		Brackets:   map[*ast.Bracket]BracketRes{},
+		Patterns:   map[*ast.NamePattern]NameRes{},
+		NsMembers:  map[*ast.Field]string{},
+		Lambdas:    map[*ast.FnExpr]*Lambda{},
+		FuncValues: map[*ast.Ident]string{},
 	}
 
 	r := &resolver{info: info}

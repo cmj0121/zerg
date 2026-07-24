@@ -284,7 +284,11 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 	// A bare top-level function name used as a value is a first-class function value
 	// (docs/functions.md): its type is the function's input/output contract.
 	if sig, ok := c.info.Funcs[n.Name]; ok {
-		return c.funcValueType(sig, n.Span())
+		t := c.funcValueType(sig, n.Span())
+		if !bad(t) {
+			c.info.FuncValues[n] = n.Name
+		}
+		return t
 	}
 	c.errorf(n.Span(), "undefined name %q", n.Name)
 	return Invalid

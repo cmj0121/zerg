@@ -5,25 +5,42 @@ import (
 	"sort"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/mono"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// First-class function values (docs/functions.md). A `fn(P...) -> R` value lowers to a
-// C function pointer. A named top-level function used as a value is that function's
-// designator (`zg_<name>`, which decays to a pointer); a call through a function value
-// is an ordinary C call through the pointer. To give the type a spellable C name in
-// every position (a parameter, a field, a local, a return), each distinct function
-// type gets a `typedef R (*zg_fn_<n>)(P...);` — mirroring the tuple/Result carriers.
+// First-class function values (docs/functions.md). A function value carries both code
+// and, for a closure, its captured environment — "a closure is a scope-owned struct
+// whose fields are its captures." So a `fn(P...) -> R` value lowers to a UNIFORM fat
+// pair:
 //
-// This file is iteration 1: NAMED function values and calls through them. A closure
-// literal used as a value is a later iteration (emit still gates it).
+//	typedef struct { R (*code)(void *env, P...); void *env; } zg_fn_<n>;
+//
+// The code pointer always takes a leading `void *env`, so every function value is
+// called the same way — `f.code(f.env, args)` — whether or not it captures:
+//
+//   - a NAMED function used as a value gets a generated env-ignoring thunk and env=NULL;
+//   - a NON-CAPTURING closure is a lifted function that takes (and ignores) env, env=NULL;
+//   - a CAPTURING closure is a lifted function that reads env, and env is a refcounted
+//     box of its captures (a later iteration).
+//
+// env=NULL is the whole story for this iteration: no closure captures yet, so a
+// function value is plain data and copies/drops trivially.
 
-// fnCarrier is one generated function-pointer typedef: its C name and the function
+// fnCarrier is one generated function-value struct typedef: its C name and the function
 // type it spells.
 type fnCarrier struct {
 	name string
 	fn   *types.Fn
+}
+
+// fnThunk is one generated env-ignoring adapter for a named function used as a value.
+type fnThunk struct {
+	name    string    // the thunk's C name
+	target  string    // the named function's mangled C name
+	fn      *types.Fn // the function's value type (for the signature)
+	carrier string    // the fn-value struct typedef name
 }
 
 // prepareFnTypes numbers every distinct function TYPE the program uses as a value, so
@@ -39,9 +56,6 @@ func (e *emitter) prepareFnTypes() {
 		if !ok || fn == nil {
 			return
 		}
-		// A function type still mentioning a type parameter is a generic template, never
-		// a ground value type (generic function values are gated in sema); skip it so no
-		// `void`-parameter typedef is emitted.
 		if mentionsParam(fn) {
 			return
 		}
@@ -50,7 +64,7 @@ func (e *emitter) prepareFnTypes() {
 		}
 		seen[fn.String()] = fn
 		for _, p := range fn.Params {
-			consider(p.Type) // a parameter may itself be a function type
+			consider(p.Type)
 		}
 		consider(fn.Ret)
 	}
@@ -78,12 +92,64 @@ func (e *emitter) prepareFnTypes() {
 		name := e.freshCarrierName("zg_fn_%d", &i, reserved)
 		e.fntypes[k] = &fnCarrier{name: name, fn: seen[k]}
 	}
+
+	e.prepareLambdaDecls()
+	e.prepareFnThunks(reserved, &i)
 }
 
-// emitFnTypedefs writes each function-pointer typedef, before the prototypes that may
-// name one as a parameter/field/return type. A function type whose parameter or result
-// is itself a function value is emitted after that inner typedef, so C sees the
-// complete type first. Emits nothing when the program registered none.
+// prepareLambdaDecls records the synthesized FuncDecl of each lifted closure, so the
+// backend can give a lambda instance the leading `void *env` parameter of the uniform
+// closure calling convention.
+func (e *emitter) prepareLambdaDecls() {
+	e.lambdaDecls = map[*ast.FuncDecl]bool{}
+	for _, lam := range e.info.Lambdas {
+		e.lambdaDecls[lam.Decl] = true
+	}
+}
+
+// prepareFnThunks assigns a thunk name to each named function used as a value, keyed by
+// the function name (one thunk per function, regardless of how many use sites).
+func (e *emitter) prepareFnThunks(reserved map[string]bool, i *int) {
+	e.fnthunks = map[string]*fnThunk{}
+	for _, name := range e.info.FuncValues {
+		if _, done := e.fnthunks[name]; done {
+			continue
+		}
+		sig, ok := e.info.Funcs[name]
+		if !ok {
+			continue
+		}
+		fn := fnTypeOfSig(sig)
+		carrier, ok := e.fnTypeFor(fn)
+		if !ok {
+			continue
+		}
+		thunk := e.freshCarrierName("zg_fnthunk_%d", i, reserved)
+		e.fnthunks[name] = &fnThunk{name: thunk, target: e.prog.CallTarget(name), fn: fn, carrier: carrier.name}
+	}
+}
+
+// fnTypeOfSig builds the function-value type of a signature (its parameters, each with
+// its `mut &` marker, and its result) — the same shape sema.funcValueType produces.
+func fnTypeOfSig(sig *sema.FuncSig) *types.Fn {
+	fn := &types.Fn{Ret: sig.Ret}
+	for i, pt := range sig.Params {
+		fn.Params = append(fn.Params, types.Param0{Type: pt, ByRef: sigParamByRef(sig, i)})
+	}
+	return fn
+}
+
+// sigParamByRef reports whether a signature's i-th parameter is a `mut &` reference.
+func sigParamByRef(sig *sema.FuncSig, i int) bool {
+	if sig.Decl == nil || i >= len(sig.Decl.Params) {
+		return false
+	}
+	return sig.Decl.Params[i].Ref
+}
+
+// emitFnTypedefs writes each function-value struct typedef, before the prototypes that
+// may name one. An inner function-typed parameter/result is emitted first, so C sees the
+// complete type. Emits nothing when the program registered none.
 func (e *emitter) emitFnTypedefs() {
 	done := map[string]bool{}
 	var emit func(c *fnCarrier)
@@ -100,30 +166,57 @@ func (e *emitter) emitFnTypedefs() {
 		if inner, ok := e.fnTypeFor(c.fn.Ret); ok {
 			emit(inner)
 		}
-		e.line(fmt.Sprintf("typedef %s (*%s)(%s);", e.fnRetType(c.fn.Ret), c.name, e.fnParamList(c.fn)))
+		e.line(fmt.Sprintf("typedef struct { %s (*code)(%s); void *env; } %s;",
+			e.fnRetType(c.fn.Ret), e.fnCodeParamList(c.fn), c.name))
 	}
 	for _, c := range e.orderedFnTypes() {
 		emit(c)
 	}
 }
 
-// fnParamList renders a function type's parameters as a C parameter-type list. A
-// `mut &` parameter is a pointer, exactly as in a signature (emit_byref.go). An empty
-// list spells `void`, C's no-parameter marker.
-func (e *emitter) fnParamList(fn *types.Fn) string {
-	if len(fn.Params) == 0 {
-		return "void"
-	}
-	parts := make([]string, len(fn.Params))
-	for i, p := range fn.Params {
-		parts[i] = e.paramType(p.Type)
-		if p.ByRef {
-			parts[i] += "*"
+// emitFnThunks writes each named-function value thunk: an env-ignoring adapter that
+// forwards to the function, giving it the uniform closure calling convention. Emitted
+// after the function prototypes it forwards to.
+func (e *emitter) emitFnThunks() {
+	for _, t := range e.orderedFnThunks() {
+		names := make([]string, len(t.fn.Params))
+		params := make([]string, len(t.fn.Params))
+		for i, p := range t.fn.Params {
+			names[i] = "a" + fmt.Sprint(i)
+			ct := e.paramType(p.Type)
+			if p.ByRef {
+				ct += "*"
+			}
+			params[i] = ct + " " + names[i]
 		}
+		sig := "void *env"
+		for _, p := range params {
+			sig += ", " + p
+		}
+		call := fmt.Sprintf("%s(%s)", t.target, joinArgs(names))
+		e.line(fmt.Sprintf("static %s %s(%s) {", e.fnRetType(t.fn.Ret), t.name, sig))
+		e.indent++
+		e.line("(void)env;")
+		if t.fn.Ret == nil || t.fn.Ret == sema.Nil {
+			e.line(call + ";")
+		} else {
+			e.line("return " + call + ";")
+		}
+		e.indent--
+		e.line("}")
 	}
-	out := parts[0]
-	for _, s := range parts[1:] {
-		out += ", " + s
+}
+
+// fnCodeParamList renders the parameter list of a function value's code pointer: the
+// leading `void *env`, then each declared parameter (a `mut &` one as a pointer).
+func (e *emitter) fnCodeParamList(fn *types.Fn) string {
+	out := "void *"
+	for _, p := range fn.Params {
+		ct := e.paramType(p.Type)
+		if p.ByRef {
+			ct += "*"
+		}
+		out += ", " + ct
 	}
 	return out
 }
@@ -137,22 +230,37 @@ func (e *emitter) fnRetType(ret sema.Type) string {
 	return e.ctype(ret)
 }
 
-// fnTypeFor returns the typedef registered for a function type, if any.
-func (e *emitter) fnTypeFor(t sema.Type) (*fnCarrier, bool) {
-	if t == nil || len(e.fntypes) == 0 {
-		return nil, false
+// namedFnValue lowers a named top-level function used as a value to a closure literal:
+// its env-ignoring thunk as code, and a NULL environment.
+func (e *emitter) namedFnValue(name string) (string, bool) {
+	t, ok := e.fnthunks[name]
+	if !ok {
+		return "", false
 	}
-	c, ok := e.fntypes[t.String()]
-	return c, ok
+	return fmt.Sprintf("((%s){ %s, (void *)0 })", t.carrier, t.name), true
 }
 
-// indirectCallEmit lowers a call through a function VALUE — a fn-typed local/param, a
-// fn-typed struct field, or any expression of function type — to an ordinary C call
-// through the pointer. It reports false for a direct call of a named top-level
-// function (handled by the direct path) and for a call whose callee is not a function
-// value, leaving those byte-identical.
+// lambdaValue lowers a lifted closure used as a value to a closure literal: the lifted
+// function as code, and (for a non-capturing closure) a NULL environment.
+func (e *emitter) lambdaValue(lam *sema.Lambda) string {
+	carrier := "zg_fn_0"
+	if c, ok := e.fnTypeFor(fnTypeOfSig(e.info.Funcs[lam.Name])); ok {
+		carrier = c.name
+	}
+	return fmt.Sprintf("((%s){ %s, (void *)0 })", carrier, e.prog.CallTarget(lam.Name))
+}
+
+// isLambdaInst reports whether an instance is a lifted closure, which the uniform
+// calling convention gives a leading `void *env` parameter.
+func (e *emitter) isLambdaInst(inst *mono.Instance) bool {
+	return inst != nil && e.lambdaDecls[inst.Origin]
+}
+
+// indirectCallEmit lowers a call through a function VALUE to a call through its code
+// pointer, passing the environment first. The callee is bound to a temporary so a
+// callee with side effects (a call that returns a closure) is evaluated once. It reports
+// false for a direct named call and for a non-function callee.
 func (e *emitter) indirectCallEmit(n *ast.Call) (string, bool) {
-	// A bare name that IS a top-level function is a direct call, not a value call.
 	if id, ok := n.Callee.(*ast.Ident); ok {
 		if _, isFn := e.info.Funcs[id.Name]; isFn {
 			return "", false
@@ -162,17 +270,16 @@ func (e *emitter) indirectCallEmit(n *ast.Call) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	args := make([]string, len(n.Args))
+	carrier := e.ctype(fn)
+	args := []string{"_cl.env"}
 	for i, a := range n.Args {
-		// a `mut &` parameter of the function type binds the caller's variable, so the
-		// argument is passed by address — exactly as a direct call to such a function.
 		if i < len(fn.Params) && fn.Params[i].ByRef {
-			args[i] = e.addressOf(a.Value)
+			args = append(args, e.addressOf(a.Value))
 			continue
 		}
-		args[i] = e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value)
+		args = append(args, e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
 	}
-	return fmt.Sprintf("%s(%s)", e.expr(n.Callee), joinArgs(args)), true
+	return fmt.Sprintf("({ %s _cl = %s; _cl.code(%s); })", carrier, e.expr(n.Callee), joinArgs(args)), true
 }
 
 // joinArgs joins a comma-separated argument list.
@@ -187,12 +294,30 @@ func joinArgs(args []string) string {
 	return out
 }
 
-// orderedFnTypes returns the function-type carriers in a deterministic order (by
-// generated name), so the emitted typedefs are stable run to run.
+// fnTypeFor returns the typedef registered for a function type, if any.
+func (e *emitter) fnTypeFor(t sema.Type) (*fnCarrier, bool) {
+	if t == nil || len(e.fntypes) == 0 {
+		return nil, false
+	}
+	c, ok := e.fntypes[t.String()]
+	return c, ok
+}
+
+// orderedFnTypes returns the function-type carriers in a deterministic order.
 func (e *emitter) orderedFnTypes() []*fnCarrier {
 	out := make([]*fnCarrier, 0, len(e.fntypes))
 	for _, c := range e.fntypes {
 		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+// orderedFnThunks returns the value thunks in a deterministic order.
+func (e *emitter) orderedFnThunks() []*fnThunk {
+	out := make([]*fnThunk, 0, len(e.fnthunks))
+	for _, t := range e.fnthunks {
+		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out

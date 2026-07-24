@@ -58,19 +58,20 @@ func registerBlessed(reg *SpecRegistry) {
 // accepts a primitive operand. No method is registered: the backend keeps a
 // primitive comparison's native C `==` / `<` (mono.lowerCompare leaves a
 // non-nominal operand untouched), so the impl is a bound-resolution witness only.
-// Eq covers every scalar whose native C equality is content-correct (the integers,
-// floats, bool, rune, byte); Ord covers the ordered numerics. `str` is deliberately
-// omitted: native C `==` / `<` on a `const char*` compares POINTERS, not content, so
-// a content-correct str Eq/Ord is deferred rather than lowered to a silently wrong
-// comparison. Registration runs after coherence, so a user's (orphan) `impl Eq for
-// int` is still reported, and an already-present key is never overwritten.
+// Eq covers every scalar whose comparison is content-correct (the integers, floats,
+// bool, rune, byte); Ord covers the ordered numerics. `str` is in both: its C `==`/`<`
+// would compare POINTERS, so the backend lowers a str comparison to strcmp instead
+// (emit.strBinary) — content-correct, and lexicographic by code point as
+// docs/collections.md specifies. Registration runs after coherence, so a user's
+// (orphan) `impl Eq for int` is still reported, and an already-present key is never
+// overwritten.
 func registerPrimitiveBlessed(reg *SpecRegistry) {
 	if reg.byKey == nil {
 		reg.byKey = map[implKey]*types.ImplDef{}
 	}
 	fixed := &types.Fixed{}
-	eqTargets := []types.Type{types.Int, types.Uint, types.Float, types.Bool, types.Rune, types.Byte, fixed}
-	ordTargets := []types.Type{types.Int, types.Uint, types.Float, types.Rune, types.Byte, fixed}
+	eqTargets := []types.Type{types.Int, types.Uint, types.Float, types.Bool, types.Rune, types.Byte, types.Str, fixed}
+	ordTargets := []types.Type{types.Int, types.Uint, types.Float, types.Rune, types.Byte, types.Str, fixed}
 	add := func(sp *types.SpecDef, t types.Type) {
 		if sp == nil {
 			return

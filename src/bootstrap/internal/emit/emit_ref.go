@@ -178,6 +178,12 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesResultNil() {
 		e.needsRuntime = true
 	}
+	// Concatenating two strings calls zrt_str_concat, which rides in the always-linked
+	// fmt.c, so the program needs the runtime. A str comparison lowers to strcmp and
+	// needs nothing beyond <string.h>.
+	if e.programUsesStrConcat() {
+		e.needsRuntime = true
+	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}

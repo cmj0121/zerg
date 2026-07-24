@@ -487,10 +487,21 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	}
 	switch {
 	case isArithOp(n.Op):
+		// `str` implements Add (docs/collections.md): `a + b` concatenates into a new
+		// str. Only '+' joins two strings — the rest of the arithmetic family stays
+		// numeric-only, so `s - t` keeps its "matching numeric operands" diagnostic.
+		if n.Op == token.Plus && lt == Str && rt == Str {
+			return Str
+		}
 		return c.numericResult(n, lt, rt)
 	case isBitOp(n.Op):
 		return c.bitResult(n, lt, rt)
 	case isOrderOp(n.Op):
+		// `str` implements Ord (docs/collections.md): it sorts lexicographically by
+		// code point, which the backend lowers to strcmp.
+		if lt == Str && rt == Str {
+			return Bool
+		}
 		if bad(c.numericResult(n, lt, rt)) {
 			return Invalid
 		}

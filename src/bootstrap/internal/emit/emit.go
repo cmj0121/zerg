@@ -1018,6 +1018,11 @@ func (e *emitter) expr(x ast.Expr) string {
 				return s
 			}
 		}
+		// `str` is not a native C operand: '+' concatenates through the runtime and a
+		// comparison goes through strcmp (see emit_str.go).
+		if s, ok := e.strBinary(n); ok {
+			return s
+		}
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
 	case *ast.Call:
 		return e.call(n)

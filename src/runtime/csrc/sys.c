@@ -9,6 +9,7 @@
  */
 #include "zergrt.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -97,5 +98,34 @@ zrt_list zrt_os_args(int argc, char **argv) {
 		const char *s = argv[i];
 		zrt_list_push(&l, &s);
 	}
+	return l;
+}
+
+/* zrt_read_file reads the whole file at `path` into a list[byte] — the MVP source-input
+ * leaf the stdlib `io` module lowers onto until the FFI binder lands (like the write
+ * intrinsics above). A missing or unreadable file raises IOError, which `guard` can
+ * demote to a Result. */
+zrt_list zrt_read_file(const char *path) {
+	zrt_list l;
+	zrt_list_init(&l, sizeof(uint8_t), NULL);
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		zrt_abort("IOError: cannot open file");
+	}
+	uint8_t buf[4096];
+	for (;;) {
+		ssize_t n = read(fd, buf, sizeof(buf));
+		if (n < 0) {
+			close(fd);
+			zrt_abort("IOError: read failed");
+		}
+		if (n == 0) {
+			break;
+		}
+		for (ssize_t i = 0; i < n; i++) {
+			zrt_list_push(&l, &buf[i]);
+		}
+	}
+	close(fd);
 	return l;
 }

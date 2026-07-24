@@ -30,3 +30,11 @@ pub fn write_int(n: int) -> Result[nil] {
 	__zrt_write_int(1, n)
 	return nil
 }
+
+# read_file reads the whole file at path into a list[byte] — the MVP source-input leaf,
+# over the compiler read intrinsic (the FFI stand-in, like the writers). A missing or
+# unreadable file raises IOError, which `guard { io.read_file(p) }` demotes to a Result.
+# Decode the bytes with `str(...)` when the contents are text.
+pub fn read_file(path: str) -> list[byte] {
+	return __zrt_read_file(path)
+}

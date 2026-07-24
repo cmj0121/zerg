@@ -131,14 +131,14 @@ func TestConvFixedWidthOverflowAborts(t *testing.T) {
 	}
 }
 
-// TestConvNonScalarRejected keeps the mechanism to scalars: a str is built from a
-// list[byte]/list[rune] with validation, which is a different mechanism, and
-// converting a container is not a conversion at all.
+// TestConvNonScalarRejected keeps the mechanism narrow: a str is built from a
+// list[byte]/list[rune] with validation (not str(42)), and converting a container is
+// not a conversion. (int(str) IS a parse — a runtime check, not a compile error — so it
+// is covered by the parse tests, not here.)
 func TestConvNonScalarRejected(t *testing.T) {
 	for _, src := range []string{
 		"fn main() {\n\tprint str(42)\n}\n",
 		"fn main() {\n\txs := [1, 2]\n\tprint int(xs)\n}\n",
-		"fn main() {\n\tprint int(\"nope\")\n}\n",
 		"fn main() {\n\tprint int(1, 2)\n}\n",
 	} {
 		if _, _, diags := Compile(src); len(diags) == 0 {

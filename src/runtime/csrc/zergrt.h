@@ -322,6 +322,25 @@ _Noreturn void zrt_raise_err(zrt_err e);
  * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
 zrt_err zrt_taken_err(void);
 
+/* --- checked primitive conversions (conv.c, docs/types.md) ------------------
+ *
+ * `T(x)` converts by re-construction; a narrowing conversion whose value does not
+ * fit the target raises OverflowError. Each helper aborts through zrt_abort, so
+ * `guard { byte(x) }` catches it and yields a Result. The compiler passes the
+ * target's bounds and calls one of these ONLY when the source range is not provably
+ * inside the target range — a widening conversion stays a plain C cast. */
+int64_t  zrt_conv_i_from_i(int64_t v, int64_t lo, int64_t hi);
+uint64_t zrt_conv_u_from_i(int64_t v, uint64_t hi);
+int64_t  zrt_conv_i_from_u(uint64_t v, int64_t hi);
+uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi);
+
+/* float -> integer truncates toward zero and raises when the TRUNCATED value is out
+ * of range, or the input is NaN/+-Inf. lo/hi are the target's bounds as doubles; the
+ * test is over the open interval (lo-1, hi+1), so 255.7 converts to 255 while 256.0
+ * still raises. */
+int64_t  zrt_conv_i_from_f(double v, double lo, double hi);
+uint64_t zrt_conv_u_from_f(double v, double hi);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just
@@ -430,8 +449,10 @@ static inline bool zrt_result_is_err(zrt_result_nil r) {
 	return r.tag != 0;
 }
 
-/* zrt_main_fn is the shape of a `fn main() -> Result[nil]` after lowering. */
+/* zrt_main_fn is the shape of a `fn main() -> Result[nil]` after lowering;
+ * zrt_main_args_fn is its `fn main(args: list[str]) -> Result[nil]` counterpart. */
 typedef zrt_result_nil (*zrt_main_fn)(void);
+typedef zrt_result_nil (*zrt_main_args_fn)(zrt_list);
 
 /* zrt_run is the C entry shim for a `fn main() -> Result[nil]` program: it
  * installs the root abort handler (its setjmp lives in this function's own
@@ -439,6 +460,13 @@ typedef zrt_result_nil (*zrt_main_fn)(void);
  * unwinds top-level defers, and maps the outcome to a process exit code (0 Ok,
  * 1 Err or abort). Value-only programs do not use this shim. */
 int zrt_run(zrt_main_fn fn);
+
+/* zrt_run_args is zrt_run for a main that takes the command-line args list. */
+int zrt_run_args(zrt_main_args_fn fn, zrt_list args);
+
+/* zrt_os_args builds the `list[str]` a `fn main(args: list[str])` receives from the C
+ * entry's argc/argv, skipping the program name (argv[0]). */
+zrt_list zrt_os_args(int argc, char **argv);
 
 /* --- concurrency: coroutine scheduler + spawn (sched.c, ctx_<arch>) ----------
  *

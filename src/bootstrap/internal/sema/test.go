@@ -9,7 +9,7 @@ import (
 
 // This file is the Phase 1i U1 test-discovery layer. `#[test]` is a compiler-owned
 // decorator — a fixed member of GRAMMAR group 7's decorator set, recognized here the
-// same way `#[derive]`/`#[extern]`/`#[dyn]` are, not a user-defined attribute. It
+// same way `#[derive]`/`#[dyn]` are, not a user-defined attribute. It
 // marks a top-level function the `zerg test` runner executes; `zerg build` never sees
 // one (the driver filters test functions out before this pass), so a `#[test]` beside
 // ordinary code cannot change a normal build's emitted C.

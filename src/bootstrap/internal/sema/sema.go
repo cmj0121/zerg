@@ -152,6 +152,10 @@ func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 type symbol struct {
 	typ     Type
 	mutable bool
+	// byref marks a 'mut &x' parameter — a mutable reference to the CALLER's
+	// variable rather than storage this body owns (GRAMMAR group 5). It is mutable
+	// inside the callee, and the backend gives it pointer storage.
+	byref bool
 }
 
 type checker struct {
@@ -331,7 +335,7 @@ func (c *checker) collectFuncItems(items []ast.Stmt, inUnsafe bool) {
 			}
 			sig := c.buildSig(n)
 			c.info.Funcs[n.Name] = sig
-			// A `#[test]` function is a compiler-owned decorator (like #[derive]/#[extern]):
+			// A `#[test]` function is a compiler-owned decorator (like #[derive]/#[dyn]):
 			// collect it into Info.Tests after validating its shape (Phase 1i U1). A normal
 			// build never reaches here for a test function — the driver filters them out —
 			// so this fires only under `zerg test`.
@@ -438,28 +442,6 @@ func (c *checker) checkDyn(fn *ast.FuncDecl, env *GenericEnv) bool {
 }
 
 // hasDecorator reports whether a decorator run contains an item of the given name.
-// externSymbol returns the C symbol a function's `#[extern("c_symbol")]` decorator
-// binds it to, and whether the function carries one. It is the FFI import binder
-// (Phase 1f U5, docs/ffi.md): the decorated `unsafe fn` names a foreign C symbol
-// verbatim (no mangling), and the backend lowers the function body to a thunk that
-// forwards its parameters to that symbol. A missing or non-string argument yields no
-// binding (reported where the decorator is validated).
-// ExternSymbol is exported for the backend (internal/emit), which lowers an
-// #[extern]-bound function to a thunk forwarding to the named C symbol.
-func ExternSymbol(fn *ast.FuncDecl) (string, bool) {
-	for _, deco := range fn.Decorators {
-		for _, item := range deco.Items {
-			if item.Name != "extern" || len(item.Args) != 1 {
-				continue
-			}
-			if lit, ok := item.Args[0].X.(*ast.StrLit); ok {
-				return lit.Value, true
-			}
-		}
-	}
-	return "", false
-}
-
 func hasDecorator(decos []*ast.Decorator, name string) bool {
 	for _, deco := range decos {
 		for _, item := range deco.Items {
@@ -642,13 +624,6 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 	c.curFn = sig
 	c.typeParams = sig.Generic.merged(savedTP)
 
-	// An #[extern("c_symbol")]-bound foreign binding must be declared `unsafe fn`
-	// (its call is a foreign call, always unsafe — docs/ffi.md); the compiler
-	// supplies its body (a thunk to the C symbol), so an empty source body is fine.
-	if sym, ok := ExternSymbol(fn); ok && !fn.Unsafe {
-		c.errorf(fn.Span(), "an #[extern(%q)] foreign binding must be declared `unsafe fn`", sym)
-	}
-
 	// The body of an `unsafe fn` is an unsafe context throughout (group 12), so a
 	// foreign call inside it is legal without a nested `unsafe { }`.
 	savedUnsafe := c.inUnsafe
@@ -659,6 +634,15 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 
 	c.pushScope() // parameter scope; the body opens a nested scope so 'mut n := n' can shadow
 	if recv != nil {
+		// A `mut fn` is exactly the `mut &this` case (GRAMMAR group 5): the method
+		// mutates its receiver IN PLACE. The backend still passes the receiver by value,
+		// so the mutation would be made to the callee's copy and silently discarded at
+		// the call site. Gate it loudly rather than emit that. (A `mut &` PARAMETER does
+		// write back — that lowering is in emit_byref.go; only the receiver is missing,
+		// because its dispatch also runs through the dyn/erased witness paths.)
+		if fn.Mut {
+			c.errorf(fn.Span(), "a `mut fn` method's receiver is not yet written back to the caller; take a `mut &` parameter instead")
+		}
 		c.declare(fn.Span(), "this", recv, fn.Mut)
 	}
 	for i, p := range fn.Params {
@@ -666,7 +650,15 @@ func (c *checker) checkFunc(fn *ast.FuncDecl, recv Type) {
 		if i < len(sig.Params) {
 			pt = sig.Params[i]
 		}
-		c.declare(p.Span(), p.Name, pt, false)
+		// A parameter passes BY VALUE and is immutable; `mut &x` instead binds a
+		// mutable reference to the caller's variable, so it IS assignable here and the
+		// write is visible to the caller (GRAMMAR group 5).
+		c.declare(p.Span(), p.Name, pt, p.Ref)
+		if p.Ref {
+			if sym := c.lookup(p.Name); sym != nil {
+				sym.byref = true
+			}
+		}
 	}
 	if fn.Body != nil {
 		c.checkBlock(fn.Body)

@@ -162,10 +162,10 @@ func (c *checker) inferFStr(n *ast.FStr) Type {
 }
 
 // inferUnsafe types the function-body `unsafe { block }` block-expression (GRAMMAR
-// group 12): raw operations — foreign calls, `asm`, raw-pointer ops — are legal
-// inside, and it yields the block's value. It marks the body an unsafe context so a
-// foreign (`#[extern]`-bound) call within it is accepted; outside such a context
-// that same call is rejected (docs/ffi.md: a foreign call is unsafe).
+// group 12): raw operations — `unsafe fn` calls, `asm`, raw-pointer ops — are legal
+// inside, and it yields the block's value. It marks the body an unsafe context so an
+// `unsafe fn` call within it is accepted; outside such a context that same call is
+// rejected.
 func (c *checker) inferUnsafe(n *ast.UnsafeExpr) Type {
 	saved := c.inUnsafe
 	c.inUnsafe = true
@@ -487,10 +487,21 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	}
 	switch {
 	case isArithOp(n.Op):
+		// `str` implements Add (docs/collections.md): `a + b` concatenates into a new
+		// str. Only '+' joins two strings — the rest of the arithmetic family stays
+		// numeric-only, so `s - t` keeps its "matching numeric operands" diagnostic.
+		if n.Op == token.Plus && lt == Str && rt == Str {
+			return Str
+		}
 		return c.numericResult(n, lt, rt)
 	case isBitOp(n.Op):
 		return c.bitResult(n, lt, rt)
 	case isOrderOp(n.Op):
+		// `str` implements Ord (docs/collections.md): it sorts lexicographically by
+		// code point, which the backend lowers to strcmp.
+		if lt == Str && rt == Str {
+			return Bool
+		}
 		if bad(c.numericResult(n, lt, rt)) {
 			return Invalid
 		}

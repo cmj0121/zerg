@@ -59,13 +59,6 @@ type Manifest struct {
 	// always-linked core units). A program with no f-string leaves it false and stays
 	// byte-identical.
 	NeedsFormat bool
-
-	// NeedsFFI reports whether the program binds a foreign C symbol through an
-	// `#[extern("c_symbol")]` function (Phase 1f U5): its emitted C includes the
-	// standard headers that declare libc symbols and its link line adds the math
-	// library. A program that binds no foreign symbol leaves it false and stays
-	// byte-identical.
-	NeedsFFI bool
 }
 
 // Emit lowers the monomorphized program to C source. It renders each instance in
@@ -78,7 +71,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat, NeedsFFI: e.needsFFI}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
 }
 
 type emitter struct {
@@ -144,12 +137,6 @@ type emitter struct {
 	// for a program with no f-string, which therefore stays byte-identical.
 	needsFormat bool
 
-	// needsFFI is set when the program binds a foreign C symbol through an
-	// `#[extern]` function (Phase 1f U5): it drives the NeedsFFI manifest flag and the
-	// standard-header includes. False for a program that binds no foreign symbol,
-	// which therefore stays byte-identical.
-	needsFFI bool
-
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
 	// plus its recv/force helpers; recvElems is those element types in that order.
@@ -209,19 +196,28 @@ func (e *emitter) program() {
 		case !ok:
 			e.diags.Add(token.Span{}, "no 'main' function to build a program")
 			return
-		case len(main.Params) != 0:
-			e.diags.Add(main.Decl.Span(), "'main' must take no parameters in Phase 0")
+		case len(main.Params) > 1:
+			e.diags.Add(main.Decl.Span(), "'main' takes either no parameters or one 'args: list[str]'")
+		case len(main.Params) == 1 && !isStrList(main.Params[0]):
+			e.diags.Add(main.Decl.Span(), "'main' parameter must be 'list[str]' (the command-line arguments)")
 		case main.Ret != sema.Nil && main.Ret != sema.Int && !isResultNil(main.Ret):
-			e.diags.Add(main.Decl.Span(), "'main' must return nil, int, or Result[nil] in Phase 0")
+			e.diags.Add(main.Decl.Span(), "'main' must return nil, int, or Result[nil]")
 		}
 
 		// A 'Result[nil]' main is the additive runtime-entry path: it pulls in the C
 		// runtime (header + link). A program that uses Ref[T] (or any non-POD value)
-		// pulls it in too. Every other (value-only) main leaves needsRuntime false, so
-		// no include is printed and the C stays byte-identical to Phase 0.
-		e.needsRuntime = isResultNil(main.Ret)
+		// pulls it in too. A 'main(args)' likewise needs it — zrt_os_args builds the
+		// list over the runtime. Every other (value-only) main leaves needsRuntime
+		// false, so no include is printed and the C stays byte-identical to Phase 0.
+		e.needsRuntime = isResultNil(main.Ret) || len(main.Params) == 1
 	}
 	e.prepareRuntime()
+	// prepareRuntime settles e.concurrency, so the args/scheduler conflict is judged
+	// only now: the scheduler entry shims take a zero-argument function pointer, so
+	// threading the args list through a concurrent main is not wired yet.
+	if main != nil && len(main.Params) == 1 && e.concurrency {
+		e.diags.Add(main.Decl.Span(), "a 'main(args)' in a concurrent program is not yet supported")
+	}
 	// A prepare pass may reject the program with a clean diagnostic before any C is
 	// written — notably prepareMaps' post-monomorphization map-key Hash gate, which
 	// sees a generic map's substituted (concrete) key. Abort here so a rejected map
@@ -236,11 +232,6 @@ func (e *emitter) program() {
 	e.line("#include <stdint.h>")
 	e.line("#include <stdbool.h>")
 	e.line("#include <string.h>")
-	if e.needsFFI {
-		// declarations for the libc symbols an `#[extern]` binding may forward to.
-		e.line("#include <math.h>")
-		e.line("#include <stdlib.h>")
-	}
 	if e.needsRuntime {
 		e.line("#include \"zergrt.h\"")
 	}
@@ -409,11 +400,11 @@ func (e *emitter) prototype(inst *mono.Instance) string {
 		b.WriteString(e.ctype(inst.Recv))
 		for i := range inst.Params {
 			b.WriteString(", ")
-			b.WriteString(e.paramType(inst.Params[i]))
+			b.WriteString(e.declParamType(inst, i))
 		}
 		return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, b.String())
 	}
-	params := paramList(len(inst.Params), func(i int) string { return e.paramType(inst.Params[i]) })
+	params := paramList(len(inst.Params), func(i int) string { return e.declParamType(inst, i) })
 	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
 }
 
@@ -424,10 +415,6 @@ func (e *emitter) function(inst *mono.Instance) {
 	}
 	if inst.RecvErased {
 		e.methodFunction(inst)
-		return
-	}
-	if sym, ok := sema.ExternSymbol(inst.Origin); ok {
-		e.externFunction(inst, sym)
 		return
 	}
 	fn := inst.Origin
@@ -443,7 +430,7 @@ func (e *emitter) function(inst *mono.Instance) {
 		recv = append(recv, e.ctype(inst.Recv)+" "+e.declareName("this"))
 	}
 	rest := paramNames(len(inst.Params), func(i int) string {
-		return e.paramType(inst.Params[i]) + " " + e.declareName(inst.ParamNames[i])
+		return e.declParamType(inst, i) + " " + e.declareName(inst.ParamNames[i])
 	})
 	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, joinParams(recv, rest)))
 
@@ -457,6 +444,11 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.openScope(need, false)
 	e.fnMark = e.curScope().markVar
 	for i, p := range inst.Params {
+		// A by-ref parameter is a BORROW: the caller keeps the variable, so ending this
+		// call must not free it (docs/memory.md's lifetime table).
+		if isByRefParam(inst, i) {
+			continue
+		}
 		e.registerDrop(e.resolve(inst.ParamNames[i]), p, fn)
 	}
 	for _, s := range fn.Body.Stmts {
@@ -482,33 +474,6 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.popScope()
 }
 
-// externFunction emits the thunk for an `#[extern("c_symbol")]`-bound function
-// (Phase 1f U5, the FFI import binder): a body-less `unsafe fn` whose compiler-
-// supplied body forwards its parameters, in order, to the named C symbol taken
-// verbatim (no mangling). The parameters already carry their FFI-safe C types
-// (int→int64_t, float→double, str→const char*), so the forward is a direct call
-// with the result cast to the Zerg-mapped return type; the standard headers that
-// declare libc symbols (math.h/stdlib.h/string.h) ride in under the needsFFI gate.
-func (e *emitter) externFunction(inst *mono.Instance, sym string) {
-	e.cur = inst
-	names := make([]string, len(inst.ParamNames))
-	params := make([]string, len(inst.ParamNames))
-	for i := range inst.ParamNames {
-		names[i] = "a" + strconv.Itoa(i)
-		params[i] = e.paramType(inst.Params[i]) + " " + names[i]
-	}
-	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, strings.Join(params, ", ")))
-	e.indent++
-	call := fmt.Sprintf("%s(%s)", sym, strings.Join(names, ", "))
-	if inst.Ret == sema.Nil {
-		e.line(call + ";")
-	} else {
-		e.line(fmt.Sprintf("return (%s)%s;", e.ctype(inst.Ret), call))
-	}
-	e.indent--
-	e.line("}")
-}
-
 // endsWithReturn reports whether a block's last statement is an unconditional
 // return (a 'return ... if c' may fall through, so it does not count).
 func endsWithReturn(b *ast.Block) bool {
@@ -524,12 +489,36 @@ func endsWithReturn(b *ast.Block) bool {
 // entry shim zrt_run, which installs the root abort handler, runs main under a
 // root scope, and maps the Result to a process exit code.
 func (e *emitter) cMain(main *sema.FuncSig) {
-	e.line("int main(void) {")
+	takesArgs := len(main.Params) == 1
+	if takesArgs {
+		// A main that takes the command-line args needs argc/argv, so the C entry grows
+		// its parameters and builds the `list[str]` main receives by value.
+		e.line("int main(int argc, char **argv) {")
+	} else {
+		e.line("int main(void) {")
+	}
 	e.indent++
 	// Run every module's init in dependency order before main's body (Phase 1g S3);
 	// nothing is emitted for a program with no init and no module constant, so its
 	// entry stays byte-identical.
 	e.emitInitCalls()
+	if takesArgs {
+		// concurrency + args is rejected above, so only the non-scheduler shapes reach
+		// here. main owns the list as its by-value parameter and frees it at scope exit.
+		e.line("zrt_list zg_args = zrt_os_args(argc, argv);")
+		switch {
+		case isResultNil(main.Ret):
+			e.line("return zrt_run_args(zg_main, zg_args);")
+		case main.Ret == sema.Int:
+			e.line("return (int)zg_main(zg_args);")
+		default:
+			e.line("zg_main(zg_args);")
+			e.line("return 0;")
+		}
+		e.indent--
+		e.line("}")
+		return
+	}
 	switch {
 	case e.concurrency:
 		// A concurrent program runs main as the first coroutine under the scheduler
@@ -567,6 +556,13 @@ func isResultNil(t sema.Type) bool {
 		return false
 	}
 	return e.Left == types.Nil || e.Left.Kind() == types.KUnknown
+}
+
+// isStrList reports whether a type is `list[str]` — the one shape a `main` parameter
+// may take (the command-line arguments).
+func isStrList(t sema.Type) bool {
+	l, ok := t.(*types.List)
+	return ok && l.Elem == types.Str
 }
 
 // --- statements ---------------------------------------------------------------
@@ -1054,6 +1050,10 @@ func (e *emitter) expr(x ast.Expr) string {
 		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
 			return e.constructVariant(n, nil, sym.Variant.Name)
 		}
+		// a `mut &x` parameter is pointer storage: every mention reads through it.
+		if e.identIsByRef(n) {
+			return "(*" + e.resolve(n.Name) + ")"
+		}
 		return e.resolve(n.Name)
 	case *ast.Unary:
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
@@ -1066,6 +1066,11 @@ func (e *emitter) expr(x ast.Expr) string {
 			if s, ok := e.mapMembership(n); ok {
 				return s
 			}
+		}
+		// `str` is not a native C operand: '+' concatenates through the runtime and a
+		// comparison goes through strcmp (see emit_str.go).
+		if s, ok := e.strBinary(n); ok {
+			return s
 		}
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
 	case *ast.Call:
@@ -1574,6 +1579,10 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.ptrCallEmit(n); ok {
 		return s
 	}
+	// a primitive conversion `T(x)`; after ptrCallEmit, which owns `uint(p)`.
+	if s, ok := e.convCallEmit(n); ok {
+		return s
+	}
 	if s, ok := e.listMethodEmit(n); ok {
 		return s
 	}
@@ -1608,10 +1617,17 @@ func (e *emitter) call(n *ast.Call) string {
 			}
 		}
 	}
+	byref := e.calleeByRefArgs(id)
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
 			args.WriteString(", ")
+		}
+		// a `mut &` parameter binds the caller's variable itself — pass its address, and
+		// never a copy, which is the whole point of the writeback.
+		if byref != nil && i < len(byref) && byref[i] {
+			args.WriteString(e.addressOf(a.Value))
+			continue
 		}
 		// a by-value argument is copied (retain / deep copy) when it names existing
 		// storage, so the callee's own holder is independent; POD args are unchanged.

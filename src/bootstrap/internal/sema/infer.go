@@ -118,14 +118,27 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.ptrCast(n, &types.Ptr{}), true
 		case "uint":
 			// uint(p) -> uint: a ptr-to-integer cast, recognized only when the argument
-			// is a raw pointer, so a future numeric `uint(x)` conversion is not masked.
+			// is a raw pointer, so it does not mask the numeric `uint(x)` conversion the
+			// scalar path below handles.
 			if len(n.Args) == 1 {
 				if _, ok := c.synth(n.Args[0].Value).(*types.Ptr); ok {
 					c.unsafeOp(n.Span(), "a pointer cast")
 					return types.Uint, true
 				}
 			}
-			return nil, false
+		}
+		// A callee naming a primitive type is a CONVERSION, `T(x)` — a re-construction
+		// of x's value as a T (docs/types.md). Building a `str` is not this mechanism
+		// (it validates a list[byte]/list[rune]), so it is reported rather than guessed.
+		if target := primitiveNamed(callee.Name); target != nil {
+			if _, ok := ScalarOf(target); ok {
+				return c.scalarConversion(n, callee.Name, target), true
+			}
+			if target == Str {
+				c.errorf(n.Span(), "converting to str is not yet supported; build one from a list[byte]/list[rune]")
+				c.synthArgs(n)
+				return Str, true
+			}
 		}
 	case *ast.Bracket:
 		id, ok := callee.Base.(*ast.Ident)
@@ -323,21 +336,16 @@ func (c *checker) callFunc(n *ast.Call, sig *FuncSig) Type {
 		return c.callGeneric(n, sig)
 	}
 	c.bindCallArgs(sig.Name, n, sig.ParamNames, sig.Params, sig.Defaults)
+	c.checkByRefArgs(sig, n)
 	return sig.Ret
 }
 
 // checkUnsafeCall enforces group 12's rule that an unsafe call is legal only inside
-// an unsafe context: a foreign call (a call to an `#[extern]`-bound C symbol, per
-// docs/ffi.md) and a call to an `unsafe fn` — including a `fn` declared inside a
-// module-level `unsafe { }` group (Phase 1h U2) — are both rejected outside an
-// `unsafe fn` body or `unsafe { }` block. It generalizes 1f's checkForeignCall: the
-// foreign case is the extern subset.
+// an unsafe context: a call to an `unsafe fn` — including a `fn` declared inside a
+// module-level `unsafe { }` group (Phase 1h U2) — is rejected outside an `unsafe fn`
+// body or `unsafe { }` block.
 func (c *checker) checkUnsafeCall(sig *FuncSig, span token.Span) {
 	if sig == nil || sig.Decl == nil || c.inUnsafe {
-		return
-	}
-	if sym, ok := ExternSymbol(sig.Decl); ok {
-		c.errorf(span, "foreign call to %q is unsafe; call it inside an `unsafe { }` block", sym)
 		return
 	}
 	if sig.Decl.Unsafe {

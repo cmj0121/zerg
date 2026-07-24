@@ -1,16 +1,14 @@
 # math — basic mathematics (Phase 1f, bundle MVP).
 #
 # Bundled into a program that writes `import "math"`; its members are reached
-# through the namespace, as `math.abs(-3)` or `math.sqrt(2.0)`. The pure-arithmetic
-# functions (abs / fabs / min / max) are ordinary safe Zerg; the transcendental
-# functions (sqrt / pow) are FOREIGN bindings onto libc `<math.h>` through the FFI
-# import binder (`#[extern("c_symbol")]`, docs/ffi.md U5). A foreign call is unsafe,
-# so `math.sqrt`/`math.pow` are `unsafe fn`s callable only inside `unsafe { … }` —
-# exactly the boundary docs/ffi.md fixes for importing a C symbol.
+# through the namespace, as `math.abs(-3)` or `math.max(3, 9)`. Every function here is
+# ordinary safe Zerg over the primitive numeric types.
 #
-# MVP scope: the sample above plus the arithmetic helpers. A richer surface
-# (floor/ceil/round, the trigonometric family, the PI/E constants) is a
-# straightforward extension of the same two mechanisms and is deferred.
+# The transcendental family (sqrt / pow / the trigonometric functions) and the
+# PI/E constants want a foreign binding onto libc `<math.h>`; that rides on the FFI
+# import facility (docs/ffi.md — a stdlib facility, no `extern` keyword), which is
+# deferred, so they are not offered yet. A richer pure surface (floor/ceil/round on
+# the integer helpers) is a straightforward extension and is likewise deferred.
 
 # abs returns the absolute value of the integer x.
 pub fn abs(x: int) -> int {
@@ -42,16 +40,4 @@ pub fn max(a: int, b: int) -> int {
 		return a
 	}
 	return b
-}
-
-# sqrt is the non-negative square root of x, bound to libc `sqrt` (a foreign call —
-# invoke inside `unsafe { … }`).
-#[extern("sqrt")]
-pub unsafe fn sqrt(x: float) -> float {
-}
-
-# pow raises base to exp, bound to libc `pow` (a foreign call — invoke inside
-# `unsafe { … }`).
-#[extern("pow")]
-pub unsafe fn pow(base: float, exp: float) -> float {
 }

@@ -178,11 +178,17 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesResultNil() {
 		e.needsRuntime = true
 	}
-	// A program binding a foreign C symbol (an `#[extern]` function) pulls in the
-	// standard headers that declare libc symbols; the foreign thunk itself needs no
-	// Zerg runtime. A program with no such binding stays byte-identical.
-	if e.programUsesFFI() {
-		e.needsFFI = true
+	// Concatenating two strings calls zrt_str_concat, which rides in the always-linked
+	// fmt.c, so the program needs the runtime. A str comparison lowers to strcmp and
+	// needs nothing beyond <string.h>.
+	if e.programUsesStrConcat() {
+		e.needsRuntime = true
+	}
+	// A conversion that can fail calls a zrt_conv_* helper, which raises OverflowError
+	// through zrt_abort. A program whose conversions are all lossless emits plain casts
+	// and stays byte-identical.
+	if e.programUsesCheckedConv() {
+		e.needsRuntime = true
 	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
@@ -244,22 +250,6 @@ func (e *emitter) programUsesIO() bool {
 			continue
 		}
 		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" {
-			return true
-		}
-	}
-	return false
-}
-
-// programUsesFFI reports whether any function this program emits binds a foreign C
-// symbol through an `#[extern]` decorator (Phase 1f U5). Such a function lowers to a
-// thunk forwarding to a libc symbol, so its emitted C needs the standard headers. A
-// program with no `#[extern]` function leaves it false and stays byte-identical.
-func (e *emitter) programUsesFFI() bool {
-	for _, inst := range e.prog.Funcs {
-		if inst.Origin == nil {
-			continue
-		}
-		if _, ok := sema.ExternSymbol(inst.Origin); ok {
 			return true
 		}
 	}

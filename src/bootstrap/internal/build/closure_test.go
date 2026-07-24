@@ -101,21 +101,15 @@ func TestClosureLifting(t *testing.T) {
 }
 
 // TestCapturingClosureGated keeps the boundary of what capture supports: a `mut`
-// variable can never be captured (the value cannot change through the capture), and a
-// non-POD capture (a value owning heap storage) waits on the environment ownership
-// story. An immutable POD capture, by contrast, now works (see the RUN tests).
+// variable can never be captured (the grammar captures immutable captures, and the
+// value cannot change through the capture). An immutable capture — POD or NON-POD —
+// works (see the RUN tests; a non-POD capture is retained into the refcounted env box).
 func TestCapturingClosureGated(t *testing.T) {
 	for _, tc := range []struct{ name, src, want string }{
 		{
 			"a mut capture",
 			"fn main() {\n\tmut acc := 0\n\tf := fn(n: int) -> int { return n + acc }\n\tprint f(5)\n}\n",
 			"cannot capture the mutable variable",
-		},
-		{
-			"a non-POD capture",
-			"fn run(f: fn() -> int) -> int { return f() }\n" +
-				"fn main() {\n\txs := [1, 2, 3]\n\tprint run(fn() -> int { return xs.len() })\n}\n",
-			"capturing a non-POD value",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

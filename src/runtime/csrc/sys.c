@@ -82,3 +82,20 @@ bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired) {
 	return __atomic_compare_exchange_n(p, &expect, desired, false, __ATOMIC_SEQ_CST,
 	                                   __ATOMIC_SEQ_CST);
 }
+
+/* zrt_os_args builds a `list[str]` of the command-line arguments — the value a
+ * `fn main(args: list[str])` receives. The program name (argv[0]) is skipped: `args`
+ * is the program's own interface, so `myprog build a.zg` yields ["build", "a.zg"]
+ * (docs/package.md). Each element is a `const char*` copied BY VALUE (a str is a
+ * pointer); the argv strings the C runtime owns outlive the program, so nothing is
+ * duplicated. The one heap allocation is the list's own buffer, which main frees as
+ * its by-value parameter at scope exit. */
+zrt_list zrt_os_args(int argc, char **argv) {
+	zrt_list l;
+	zrt_list_init(&l, sizeof(const char *), NULL);
+	for (int i = 1; i < argc; i++) {
+		const char *s = argv[i];
+		zrt_list_push(&l, &s);
+	}
+	return l;
+}

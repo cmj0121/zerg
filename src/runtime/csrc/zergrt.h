@@ -449,8 +449,10 @@ static inline bool zrt_result_is_err(zrt_result_nil r) {
 	return r.tag != 0;
 }
 
-/* zrt_main_fn is the shape of a `fn main() -> Result[nil]` after lowering. */
+/* zrt_main_fn is the shape of a `fn main() -> Result[nil]` after lowering;
+ * zrt_main_args_fn is its `fn main(args: list[str]) -> Result[nil]` counterpart. */
 typedef zrt_result_nil (*zrt_main_fn)(void);
+typedef zrt_result_nil (*zrt_main_args_fn)(zrt_list);
 
 /* zrt_run is the C entry shim for a `fn main() -> Result[nil]` program: it
  * installs the root abort handler (its setjmp lives in this function's own
@@ -458,6 +460,13 @@ typedef zrt_result_nil (*zrt_main_fn)(void);
  * unwinds top-level defers, and maps the outcome to a process exit code (0 Ok,
  * 1 Err or abort). Value-only programs do not use this shim. */
 int zrt_run(zrt_main_fn fn);
+
+/* zrt_run_args is zrt_run for a main that takes the command-line args list. */
+int zrt_run_args(zrt_main_args_fn fn, zrt_list args);
+
+/* zrt_os_args builds the `list[str]` a `fn main(args: list[str])` receives from the C
+ * entry's argc/argv, skipping the program name (argv[0]). */
+zrt_list zrt_os_args(int argc, char **argv);
 
 /* --- concurrency: coroutine scheduler + spawn (sched.c, ctx_<arch>) ----------
  *

@@ -196,19 +196,28 @@ func (e *emitter) program() {
 		case !ok:
 			e.diags.Add(token.Span{}, "no 'main' function to build a program")
 			return
-		case len(main.Params) != 0:
-			e.diags.Add(main.Decl.Span(), "'main' must take no parameters in Phase 0")
+		case len(main.Params) > 1:
+			e.diags.Add(main.Decl.Span(), "'main' takes either no parameters or one 'args: list[str]'")
+		case len(main.Params) == 1 && !isStrList(main.Params[0]):
+			e.diags.Add(main.Decl.Span(), "'main' parameter must be 'list[str]' (the command-line arguments)")
 		case main.Ret != sema.Nil && main.Ret != sema.Int && !isResultNil(main.Ret):
-			e.diags.Add(main.Decl.Span(), "'main' must return nil, int, or Result[nil] in Phase 0")
+			e.diags.Add(main.Decl.Span(), "'main' must return nil, int, or Result[nil]")
 		}
 
 		// A 'Result[nil]' main is the additive runtime-entry path: it pulls in the C
 		// runtime (header + link). A program that uses Ref[T] (or any non-POD value)
-		// pulls it in too. Every other (value-only) main leaves needsRuntime false, so
-		// no include is printed and the C stays byte-identical to Phase 0.
-		e.needsRuntime = isResultNil(main.Ret)
+		// pulls it in too. A 'main(args)' likewise needs it — zrt_os_args builds the
+		// list over the runtime. Every other (value-only) main leaves needsRuntime
+		// false, so no include is printed and the C stays byte-identical to Phase 0.
+		e.needsRuntime = isResultNil(main.Ret) || len(main.Params) == 1
 	}
 	e.prepareRuntime()
+	// prepareRuntime settles e.concurrency, so the args/scheduler conflict is judged
+	// only now: the scheduler entry shims take a zero-argument function pointer, so
+	// threading the args list through a concurrent main is not wired yet.
+	if main != nil && len(main.Params) == 1 && e.concurrency {
+		e.diags.Add(main.Decl.Span(), "a 'main(args)' in a concurrent program is not yet supported")
+	}
 	// A prepare pass may reject the program with a clean diagnostic before any C is
 	// written — notably prepareMaps' post-monomorphization map-key Hash gate, which
 	// sees a generic map's substituted (concrete) key. Abort here so a rejected map
@@ -480,12 +489,36 @@ func endsWithReturn(b *ast.Block) bool {
 // entry shim zrt_run, which installs the root abort handler, runs main under a
 // root scope, and maps the Result to a process exit code.
 func (e *emitter) cMain(main *sema.FuncSig) {
-	e.line("int main(void) {")
+	takesArgs := len(main.Params) == 1
+	if takesArgs {
+		// A main that takes the command-line args needs argc/argv, so the C entry grows
+		// its parameters and builds the `list[str]` main receives by value.
+		e.line("int main(int argc, char **argv) {")
+	} else {
+		e.line("int main(void) {")
+	}
 	e.indent++
 	// Run every module's init in dependency order before main's body (Phase 1g S3);
 	// nothing is emitted for a program with no init and no module constant, so its
 	// entry stays byte-identical.
 	e.emitInitCalls()
+	if takesArgs {
+		// concurrency + args is rejected above, so only the non-scheduler shapes reach
+		// here. main owns the list as its by-value parameter and frees it at scope exit.
+		e.line("zrt_list zg_args = zrt_os_args(argc, argv);")
+		switch {
+		case isResultNil(main.Ret):
+			e.line("return zrt_run_args(zg_main, zg_args);")
+		case main.Ret == sema.Int:
+			e.line("return (int)zg_main(zg_args);")
+		default:
+			e.line("zg_main(zg_args);")
+			e.line("return 0;")
+		}
+		e.indent--
+		e.line("}")
+		return
+	}
 	switch {
 	case e.concurrency:
 		// A concurrent program runs main as the first coroutine under the scheduler
@@ -523,6 +556,13 @@ func isResultNil(t sema.Type) bool {
 		return false
 	}
 	return e.Left == types.Nil || e.Left.Kind() == types.KUnknown
+}
+
+// isStrList reports whether a type is `list[str]` — the one shape a `main` parameter
+// may take (the command-line arguments).
+func isStrList(t sema.Type) bool {
+	l, ok := t.(*types.List)
+	return ok && l.Elem == types.Str
 }
 
 // --- statements ---------------------------------------------------------------

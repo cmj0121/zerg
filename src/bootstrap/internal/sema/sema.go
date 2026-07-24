@@ -263,8 +263,26 @@ func (c *checker) collectTypes(file *ast.File) {
 			c.fillStruct(n)
 		case *ast.EnumDecl:
 			c.fillEnum(n)
+		case *ast.TypeDecl:
+			c.fillAlias(n)
 		}
 	}
+}
+
+// fillAlias resolves a strong typedef's underlying representation into its TypeDef
+// (the resolver created the empty TypeDef during surface collection), so a use site
+// can reach it through types.Underlying and a conversion knows the scalar it targets.
+// A generic alias `type X[T] = …` is not yet supported and is gated at its use site,
+// so it is skipped here.
+func (c *checker) fillAlias(n *ast.TypeDecl) {
+	if n.Generics != nil || n.Alias == nil {
+		return
+	}
+	sym := c.module.local(n.Name)
+	if sym == nil || sym.TypeDef == nil {
+		return
+	}
+	sym.TypeDef.Alias = c.resolveType(n.Alias)
 }
 
 func (c *checker) fillStruct(n *ast.StructDecl) {

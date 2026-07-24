@@ -45,6 +45,9 @@ type Scalar struct {
 // `nil` deliberately do not: a str is built from a list[byte]/list[rune] with
 // validation (docs/collections.md), which is a different mechanism.
 func ScalarOf(t Type) (Scalar, bool) {
+	// a strong typedef behaves as its underlying representation once its identity has
+	// been checked, so `int(c)` extracts a Celsius and `Celsius(x)` re-constructs one.
+	t = types.Underlying(t)
 	switch x := t.(type) {
 	case *types.Primitive:
 		switch x.Kind() {
@@ -81,6 +84,14 @@ func ScalarOf(t Type) (Scalar, bool) {
 // pointer equality, because the fixed-width family (i32, u16, ...) is built fresh per
 // mention and is not interned the way the named primitives are.
 func ConversionTarget(name string, result Type) (Scalar, bool) {
+	if named, ok := result.(*types.Named); ok {
+		// a newtype conversion `X(x)`: the callee spells the newtype's own name and the
+		// conversion targets its underlying scalar (ScalarOf unwraps it).
+		if named.Def != nil && named.Def.Name == name {
+			return ScalarOf(result)
+		}
+		return Scalar{}, false
+	}
 	t := primitiveNamed(name)
 	if t == nil || result == nil || !types.Identical(t, result) {
 		return Scalar{}, false

@@ -60,6 +60,9 @@ const (
 	// user-declared nominal types
 	KStruct
 	KEnum
+	// KNamed is a strong typedef 'type X = Y' (a newtype): a distinct nominal type
+	// over an underlying representation.
+	KNamed
 
 	// generics
 	KParam    // an abstract, bound-constrained type parameter
@@ -423,6 +426,34 @@ type Enum struct {
 func (*Enum) typ()             {}
 func (*Enum) Kind() Kind       { return KEnum }
 func (e *Enum) String() string { return nominalString(e.Def.Name, e.Args) }
+
+// Named is a strong typedef 'type X = Y' (a newtype): a distinct nominal type over
+// an underlying representation. Its Def carries the declared name and, once the
+// checker has resolved it, the underlying type in Def.Alias. Two Named types are
+// identical only when they share a *TypeDef, so a Celsius is not an int; a value
+// crosses the boundary only through an explicit conversion ('Celsius(x)' / 'int(c)').
+// It lowers to its underlying type in the backend (no runtime or emit cost), so the
+// distinction lives purely at the type layer.
+type Named struct{ Def *TypeDef }
+
+func (*Named) typ()             {}
+func (*Named) Kind() Kind       { return KNamed }
+func (n *Named) String() string { return n.Def.Name }
+
+// Underlying unwraps a strong typedef to its representation type, following a chain
+// of newtypes ('type B = A' over 'type A = int') to the non-newtype it ultimately
+// stands for; every other type is returned unchanged. Backend lowering and the
+// scalar-conversion machinery use it so a newtype behaves as its underlying type once
+// its identity has been checked.
+func Underlying(t Type) Type {
+	for {
+		n, ok := t.(*Named)
+		if !ok || n.Def == nil || n.Def.Alias == nil {
+			return t
+		}
+		t = n.Def.Alias
+	}
+}
 
 // nominalString renders a nominal type's source spelling, appending its type
 // arguments '[A, B]' when applied, so a diagnostic distinguishes 'Box[int]' from

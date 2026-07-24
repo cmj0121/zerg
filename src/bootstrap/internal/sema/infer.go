@@ -405,6 +405,12 @@ func (c *checker) callIndirect(n *ast.Call, fn *types.Fn) Type {
 // field name, with defaults. The result is the nominal struct type.
 func (c *checker) construct(n *ast.Call, sym *Symbol) Type {
 	def := sym.TypeDef
+	if def != nil && def.Alias != nil {
+		// a strong typedef `type X = Y` (newtype) constructs by conversion from its
+		// underlying representation: `Celsius(x)` re-constructs x's value as a distinct
+		// Celsius, the mirror of the `int(c)` extraction.
+		return c.newtypeConversion(n, def)
+	}
 	if def == nil || def.Struct == nil {
 		// enum-variant or alias construction is not modelled here (FORK-2/4).
 		c.synthArgs(n)
@@ -423,6 +429,32 @@ func (c *checker) construct(n *ast.Call, sym *Symbol) Type {
 	}
 	c.bindCallArgs(def.Name, n, pnames, ptypes, defaults)
 	return c.namedTypeUse(sym, nil)
+}
+
+// newtypeConversion types a strong-typedef conversion `X(v)` (a newtype `type X =
+// Y`): it re-constructs v's value as the distinct type X, reusing the scalar
+// conversion rule over X's underlying representation. Only a scalar-underlying
+// newtype converts this phase, and the argument must itself be a scalar.
+func (c *checker) newtypeConversion(n *ast.Call, def *types.TypeDef) Type {
+	named := &types.Named{Def: def}
+	if _, ok := ScalarOf(named); !ok {
+		c.errorf(n.Span(), "cannot construct %s: only a newtype over a scalar type converts by re-construction", def.Name)
+		c.synthArgs(n)
+		return named
+	}
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "conversion %s(x) takes exactly one value, got %d", def.Name, len(n.Args))
+		c.synthArgs(n)
+		return named
+	}
+	src := c.synth(n.Args[0].Value)
+	if bad(src) {
+		return named
+	}
+	if _, ok := ScalarOf(src); !ok {
+		c.errorf(n.Span(), "cannot convert %s to %s: only a scalar converts by re-construction", src, def.Name)
+	}
+	return named
 }
 
 // constructGeneric checks a generic struct construction 'T(...)', inferring the

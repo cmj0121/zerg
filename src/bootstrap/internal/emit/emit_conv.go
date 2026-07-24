@@ -6,6 +6,7 @@ import (
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
 // This file lowers the primitive conversion `T(x)` (docs/types.md, "Type
@@ -24,11 +25,14 @@ func (e *emitter) convCallEmit(n *ast.Call) (string, bool) {
 	if !ok || len(n.Args) != 1 {
 		return "", false
 	}
-	// A name bound to a user symbol is that symbol's call, never a conversion.
-	if _, shadowed := e.info.Refs[id]; shadowed {
-		return "", false
-	}
 	dst := e.cur.ExprType(e.info, n)
+	// A name bound to a user symbol is that symbol's call, never a conversion — EXCEPT
+	// a newtype conversion `X(x)`, whose callee legitimately resolves to the type X.
+	if !newtypeConv(id, dst) {
+		if _, shadowed := e.info.Refs[id]; shadowed {
+			return "", false
+		}
+	}
 	dstS, ok := sema.ConversionTarget(id.Name, dst)
 	if !ok {
 		return "", false
@@ -43,6 +47,15 @@ func (e *emitter) convCallEmit(n *ast.Call) (string, bool) {
 		return "", false
 	}
 	return e.convExpr(dstS, srcS, e.ctype(dst), e.expr(n.Args[0].Value)), true
+}
+
+// newtypeConv reports whether the call `id(x)` is a strong-typedef conversion `X(x)`
+// — the callee names the newtype and the result is that nominal type. Such a
+// conversion legitimately resolves the callee to the type symbol, so the generic "a
+// resolved ref is that symbol's call, not a conversion" guard must not skip it.
+func newtypeConv(id *ast.Ident, dst sema.Type) bool {
+	named, ok := dst.(*types.Named)
+	return ok && named.Def != nil && named.Def.Name == id.Name
 }
 
 // convExpr renders the conversion itself: a zero test into bool, a plain cast when
@@ -141,8 +154,10 @@ func (e *emitter) programUsesCheckedConv() bool {
 		if !ok {
 			continue
 		}
-		if _, shadowed := e.info.Refs[id]; shadowed {
-			continue
+		if !newtypeConv(id, dst) {
+			if _, shadowed := e.info.Refs[id]; shadowed {
+				continue
+			}
 		}
 		dstS, ok := sema.ConversionTarget(id.Name, dst)
 		if !ok || dstS.Class == sema.ScalarBool {

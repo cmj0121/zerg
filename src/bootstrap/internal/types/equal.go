@@ -65,6 +65,10 @@ func Identical(a, b Type) bool {
 	case *Enum:
 		y := b.(*Enum)
 		return x.Def == y.Def && identicalList(x.Args, y.Args)
+	case *Named:
+		// a strong typedef is identical only to itself (by its *TypeDef), never to its
+		// underlying type — the property that makes it a distinct newtype.
+		return x.Def == b.(*Named).Def
 	case *Param:
 		return x == b.(*Param) // a type parameter equals only itself
 	case *ValParam:

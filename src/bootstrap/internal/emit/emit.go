@@ -1990,6 +1990,10 @@ func (e *emitter) assignTarget(t ast.AssignTarget) string {
 // every other type falls to the primitive mapping — so a non-generic program's C is
 // unchanged.
 func (e *emitter) ctype(t sema.Type) string {
+	if _, ok := t.(*types.Named); ok {
+		// a strong typedef lowers to its underlying representation — no distinct C type.
+		return e.ctype(types.Underlying(t))
+	}
 	if isResultNil(t) {
 		return "zrt_result_nil"
 	}
@@ -2109,6 +2113,8 @@ func fixedCType(f *types.Fixed) string {
 }
 
 func zeroValue(t sema.Type) string {
+	// a strong typedef zero-inits as its underlying representation.
+	t = types.Underlying(t)
 	if isResultNil(t) {
 		return "zrt_result_ok()"
 	}

@@ -831,8 +831,25 @@ func (e *emitter) programHasRefLocal() bool {
 		}
 		return e.isBoxedOpt(t)
 	}
+	// A destructuring bind whose RHS tuple has a bare Ref leaf registers that leaf's slot
+	// with the zg_ref_drop guard (registerDestructureDrops), so the thunk must exist even
+	// though the binding's own type is the tuple, not a Ref. A struct-of-Ref leaf uses its
+	// own drop-env thunk instead, so only bare Ref leaves reached through tuples count.
+	var tupleHasBareRef func(t sema.Type) bool
+	tupleHasBareRef = func(t sema.Type) bool {
+		tup, ok := t.(*types.Tuple)
+		if !ok {
+			return false
+		}
+		for _, el := range tup.Elems {
+			if isRef(el) || tupleHasBareRef(el) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, t := range e.info.BindTypes {
-		if isRef(t) {
+		if isRef(t) || tupleHasBareRef(t) {
 			return true
 		}
 	}

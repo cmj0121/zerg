@@ -849,7 +849,32 @@ func (e *emitter) destructureBind(n *ast.BindStmt) {
 	t := e.cur.ExprType(e.info, n.Value)
 	tmp := e.freshName("db")
 	e.line(fmt.Sprintf("%s = %s;", e.localDecl(t, tmp), e.copyValue(t, n.Value)))
+	// The RHS temp owns any non-POD leaves it holds; schedule their teardown so a
+	// destructured tuple/struct of Refs/managed strs is released at scope exit (mirroring
+	// the normal bind path's registerDrop). Every leaf name is only an ALIAS of a temp
+	// sub-place, so a leaf that is later copied retains independently and the temp's own
+	// drop still releases each field exactly once — no double-free.
+	e.registerDestructureDrops(tmp, t, n)
 	e.patternWalk(n.Target, tmp, t, e.scopes[len(e.scopes)-1])
+}
+
+// registerDestructureDrops schedules teardown for a destructuring bind's RHS temp. A
+// nominal struct/enum temp registers its own generated drop-env thunk (like any bound
+// name), but a tuple carrier has no such thunk, so it recurses into each element place
+// (`place.f<i>`) and registers each non-POD leaf directly — a bare Ref/str/list leaf
+// through its slot guard, a nested struct/enum through its drop-env. A wholly-POD temp
+// owns nothing and registers nothing (byte-identical for a POD destructure).
+func (e *emitter) registerDestructureDrops(place string, t sema.Type, at ast.Node) {
+	if !e.containsRef(t) {
+		return
+	}
+	if tup, ok := t.(*types.Tuple); ok {
+		for i, el := range tup.Elems {
+			e.registerDestructureDrops(fmt.Sprintf("%s.f%d", place, i), el, at)
+		}
+		return
+	}
+	e.registerDrop(place, t, at)
 }
 
 // targetIsPlace reports whether an assignment target is a sub-place — a field,
@@ -1547,19 +1572,80 @@ func (e *emitter) exprList(xs []ast.Expr) string {
 	return b.String()
 }
 
-// lowerMatch lowers a match to a nested C ternary. The subject is a name or
-// literal (a Phase 0 restriction), so it is safe to reference in each arm without
-// hoisting. The last arm is an unguarded catch-all, forming the final else.
+// lowerMatch lowers a match to a nested C ternary. A trivial subject — a name/field or
+// a scalar/string literal — is side-effect-free and cheap to repeat, so it is spliced
+// verbatim into every arm (the historic byte-identical lowering, 07_match). A
+// non-trivial subject (a call, a composite producer) is hoisted into a single temp so
+// it is evaluated exactly once and, when non-POD, owned and released once instead of
+// re-evaluated and leaked. The last arm is an unguarded catch-all, forming the final
+// else.
 func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
-	subj := e.expr(m.Subject)
 	subjT := e.cur.ExprType(e.info, m.Subject)
+	gt := e.cur.ExprType(e.info, m)
+	if isTrivialMatchSubject(m.Subject) {
+		return e.lowerMatchArms(m, e.expr(m.Subject), subjT, gt)
+	}
+	return e.lowerMatchHoisted(m, subjT, gt)
+}
+
+// lowerMatchArms builds the nested ternary over a match's arms, referencing subj (a
+// name, a literal, or a hoisted temp) in every arm's test and body. Each arm body flows
+// through copyValue against the match's result type gt, so a body that names still-owned
+// storage (an enum payload binding, a borrowed variable, a field) is retained before it
+// is consumed as owned — exactly as blockValueInto does for an if/block expression.
+func (e *emitter) lowerMatchArms(m *ast.MatchExpr, subj string, subjT, gt sema.Type) string {
 	n := len(m.Arms)
-	result := e.armValue(m.Arms[n-1], subj, subjT)
+	result := e.armValue(m.Arms[n-1], subj, subjT, gt)
 	for i := n - 2; i >= 0; i-- {
-		test, body := e.armTestAndValue(m.Arms[i], subj, subjT)
+		test, body := e.armTestAndValue(m.Arms[i], subj, subjT, gt)
 		result = fmt.Sprintf("(%s ? %s : %s)", test, body, result)
 	}
 	return result
+}
+
+// lowerMatchHoisted evaluates a non-trivial subject ONCE into a temp, then references
+// the temp in every arm — so a side-effecting subject (a call) runs exactly once and a
+// non-POD producer subject is owned by the temp and released at scope exit rather than
+// leaking. It wraps the arms in a GNU statement-expression, the same value mechanism the
+// if-/block-expression lowerings use; because every example match has a name subject,
+// none reaches this path and their C stays byte-identical.
+func (e *emitter) lowerMatchHoisted(m *ast.MatchExpr, subjT, gt sema.Type) string {
+	res := ""
+	if e.ctype(gt) != "void" {
+		res = e.freshName("match")
+	}
+	need := e.containsRef(subjT)
+	body := e.capture(func() {
+		e.openScope(need, false)
+		tmp := e.freshName("subj")
+		e.line(fmt.Sprintf("%s = %s;", e.localDecl(subjT, tmp), e.copyValue(subjT, m.Subject)))
+		e.registerDrop(tmp, subjT, m.Subject)
+		arms := e.lowerMatchArms(m, tmp, subjT, gt)
+		if res != "" {
+			e.line(fmt.Sprintf("%s = %s;", res, arms))
+		} else {
+			e.line(arms + ";")
+		}
+		e.closeScope()
+	})
+	return e.wrapStmtExpr(gt, res, body)
+}
+
+// isTrivialMatchSubject reports whether a match subject is side-effect-free and cheap to
+// reference repeatedly, so it can be spliced into every arm rather than hoisted: a bare
+// name, a field access over such a subject, or a scalar/string literal. A call or a
+// composite producer (a tuple/list/map literal) is NOT trivial — repeating it would
+// re-run its effects and re-build its value — and is hoisted instead.
+func isTrivialMatchSubject(x ast.Expr) bool {
+	switch t := x.(type) {
+	case *ast.Ident,
+		*ast.IntLit, *ast.FloatLit, *ast.BoolLit, *ast.NilLit,
+		*ast.StrLit, *ast.RawStrLit, *ast.RuneLit, *ast.ByteLit:
+		return true
+	case *ast.Field:
+		return isTrivialMatchSubject(t.X)
+	}
+	return false
 }
 
 // --- expression-as-value (if-expr / block-expr) -------------------------------
@@ -1702,18 +1788,21 @@ func (e *emitter) blockExprValue(b *ast.Block) string {
 	return e.wrapStmtExpr(gt, res, body)
 }
 
-// armValue emits an arm's body with the pattern's names bound to the subject.
-func (e *emitter) armValue(arm ast.MatchArm, subj string, subjT sema.Type) string {
+// armValue emits an arm's body with the pattern's names bound to the subject. The body
+// is copied against the match's result type gt, so an arm yielding borrowed non-POD
+// storage is retained before it is consumed as owned (no double-free / UAF).
+func (e *emitter) armValue(arm ast.MatchArm, subj string, subjT, gt sema.Type) string {
 	e.pushScope()
 	e.patternWalk(arm.Pat, subj, subjT, e.scopes[len(e.scopes)-1])
-	v := e.expr(arm.Body)
+	v := e.copyValue(gt, arm.Body)
 	e.popScope()
 	return v
 }
 
 // armTestAndValue emits an arm's match test and body, with the pattern's names in
-// scope for both the guard and the body.
-func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type) (test, body string) {
+// scope for both the guard and the body. The body is copied against the match's result
+// type gt (see armValue).
+func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT, gt sema.Type) (test, body string) {
 	e.pushScope()
 	test = e.patternWalk(arm.Pat, subj, subjT, e.scopes[len(e.scopes)-1])
 	if arm.Guard != nil {
@@ -1724,7 +1813,7 @@ func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type
 			test = fmt.Sprintf("(%s && %s)", test, g)
 		}
 	}
-	body = e.expr(arm.Body)
+	body = e.copyValue(gt, arm.Body)
 	e.popScope()
 	if test == "" {
 		test = "1" // a non-last unguarded catch-all is rejected by sema

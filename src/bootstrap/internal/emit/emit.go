@@ -129,6 +129,16 @@ type emitter struct {
 	lambdaByDecl map[*ast.FuncDecl]*sema.Lambda // a lifted closure's captures, by its decl
 	envTypes     map[string]string              // capturing lambda name -> its env struct C name
 
+	// fnEnvManaged is set when some closure captures a NON-POD immutable value
+	// (a Ref/list/map/str/boxed recursive value). When set, EVERY closure's
+	// environment is a refcounted box (zrt_ref_alloc) that retains its non-POD captures
+	// and releases them at rc==0, and a function VALUE becomes non-POD
+	// (e.containsRef(fn)==true): copying one retains its env, dropping one releases it,
+	// so a captured value's lifetime is extended past the defining scope. When UNSET (no
+	// capture, or POD-only captures — every existing closure program), a function value
+	// stays plain data with a leaked/absent env and the emitted C is byte-identical.
+	fnEnvManaged bool
+
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
 	// the drop-env thunk); every list is the same C header (zrt_list), only its element
@@ -522,12 +532,18 @@ func (e *emitter) function(inst *mono.Instance) {
 			// name to a field access, so a body reference resolves to it (a parameter or an
 			// inner local declared later shadows it, exactly as in source).
 			envType := e.envTypes[lam.Name]
+			// A managed env is a refcounted box, so the struct is reached through the payload
+			// pointer; an unmanaged (POD-only) env IS the struct pointer, kept byte-identical.
+			envPtr := "zg_env"
+			if e.fnEnvManaged {
+				envPtr = "zrt_ref_payload(zg_env)"
+			}
 			top := e.scopes[len(e.scopes)-1]
 			for _, cap := range lam.Captures {
 				// a parameter of the same name shadows the capture; never overwrite it. (A
 				// capture is a free variable, so this cannot actually collide, but be safe.)
 				if _, param := top[cap.Name]; !param {
-					top[cap.Name] = fmt.Sprintf("((%s *)zg_env)->zg_%s", envType, cap.Name)
+					top[cap.Name] = fmt.Sprintf("((%s *)%s)->zg_%s", envType, envPtr, cap.Name)
 				}
 			}
 		}

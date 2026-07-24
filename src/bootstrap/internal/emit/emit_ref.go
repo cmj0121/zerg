@@ -46,6 +46,12 @@ func (e *emitter) containsRef(t sema.Type) bool {
 		return e.strManaged
 	}
 	switch x := t.(type) {
+	case *types.Fn:
+		// A function value is non-POD exactly when the program manages closure environments
+		// (some closure captures a non-POD immutable value): then its env is a refcounted box
+		// whose copy retains and whose drop releases. In every other program a function value
+		// is plain {code, env=NULL/leaked} data and stays byte-identical.
+		return e.fnEnvManaged
 	case *types.Ref:
 		return true
 	case *types.List:
@@ -212,6 +218,16 @@ func (e *emitter) prepareRuntime() {
 	// bare const char* and stays byte-identical.
 	e.strManaged = e.programProducesHeapStr()
 	if e.strManaged {
+		e.needsRuntime = true
+	}
+	// Decide closure-env management BEFORE any POD-ness question (programUsesRef below
+	// consults containsRef, which treats a function value as non-POD exactly when this
+	// flag is set). A program that captures a non-POD immutable value in a closure boxes
+	// its environments and refcounts its function values; one that captures none leaves
+	// every function value plain data and stays byte-identical. It must be settled after
+	// strManaged, since a captured str is non-POD only in a str-managed program.
+	e.fnEnvManaged = e.programHasNonPODCapture()
+	if e.fnEnvManaged {
 		e.needsRuntime = true
 	}
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
@@ -622,6 +638,10 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		return fmt.Sprintf("zrt_str_retain(%s)", base)
 	}
 	switch t := typ.(type) {
+	case *types.Fn:
+		// copying a function value that names existing storage retains its refcounted
+		// environment box, so both holders own the captured cells (a managed program).
+		return e.fnValCopy(typ, base)
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", base)
 	case *types.Enum:
@@ -786,6 +806,10 @@ func (e *emitter) emitRefHelpers() {
 	// Map key/val vtables + copy/drop definitions (after the list helpers so a map value
 	// that is a list can call the list's zg_listcopy_/zg_listdropenv_).
 	e.emitMapHelpers()
+	// Function-value teardown helpers: the env-slot drop guard and each capturing
+	// lambda's env drop thunk (emitted after the env typedefs, before any body). Emits
+	// nothing unless the program manages a closure environment (byte-identical otherwise).
+	e.emitFnEnvHelpers()
 	e.emitDeferHelpers()
 	e.emitSpawnHelpers()
 	e.emitChanHelpers()
@@ -1002,6 +1026,9 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	}
 	switch t.(type) {
+	case *types.Fn:
+		// a function-value field/element retains its refcounted environment box (managed).
+		return e.fnValCopy(t, access)
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	case *types.List:
@@ -1031,6 +1058,9 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 		return fmt.Sprintf("zrt_release(%s);", access)
 	}
 	switch t.(type) {
+	case *types.Fn:
+		// a function-value field/element releases its refcounted environment box (managed).
+		return fmt.Sprintf("zrt_release((%s).env);", access)
 	case *types.Ref:
 		return fmt.Sprintf("zrt_release(%s);", access)
 	case *types.List:

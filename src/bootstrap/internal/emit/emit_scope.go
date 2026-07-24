@@ -108,6 +108,10 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		return
 	}
 	switch t := typ.(type) {
+	case *types.Fn:
+		// a function-value local releases its refcounted environment box at scope exit
+		// through the generic env-slot guard (a NULL env is a no-op) — managed only.
+		e.line(fmt.Sprintf("zrt_defer(zg_fnval_drop, &%s);", cname))
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
 	case *types.Enum:
@@ -160,6 +164,10 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		return
 	}
 	switch t := it.typ.(type) {
+	case *types.Fn:
+		// release a function-value local's refcounted environment box in place (a
+		// reassignment drops the old closure before binding the new one) — managed only.
+		e.line(fmt.Sprintf("zrt_release((%s).env);", it.cname))
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
 	case *types.Enum:

@@ -11,12 +11,12 @@ import (
 // whose captures are its free variables. "A closure is a scope-owned struct whose
 // fields are its captures"; capture is by copy, of immutable values and channels only.
 //
-// This is iteration 2: a NON-CAPTURING closure — one whose body references no enclosing
-// local — is lifted to an ordinary top-level function, so it needs no environment and
-// reuses the whole function machinery. A closure that DOES capture is gated pending the
-// captured-environment representation (iteration 3), except a `mut` capture, which is
-// never legal (the value cannot be mutated through the capture, so it must be
-// snapshotted first).
+// A closure is lifted to an ordinary top-level function, reusing the whole function
+// machinery. A NON-CAPTURING closure needs no environment. A CAPTURING closure records
+// its captures (POD only for now) so the backend builds the environment its lifted
+// function reads (emit_fnval.go). Two captures stay illegal: a `mut` variable (the value
+// cannot be mutated through the capture, so snapshot it first) and a value owning heap
+// storage (a Ref/list/map/chan — the environment-ownership story is deferred).
 
 // captureFrame records, while a closure body is checked, the scope depth at the
 // closure's entry and the enclosing locals its body referenced.

@@ -64,6 +64,9 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		}
 		if s := c.lookup(id.Name); s != nil {
 			if fn, ok := underlyingFn(s.typ); ok {
+				// record the callee's function type so the backend spells the call as an
+				// indirect call through the value, not a direct named call.
+				c.info.ExprTypes[id] = s.typ
 				return c.callIndirect(n, fn)
 			}
 			if !bad(s.typ) {
@@ -278,7 +281,10 @@ func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type 
 		}
 	}
 	if _, ok := c.info.Funcs[res.Key]; ok {
-		c.errorf(n.Span(), "functions are not first-class values in Phase 0: %q", n.Name)
+		// A same-module function name is a first-class value (check.go); a cross-module
+		// one reached through a namespace member needs its resolved cross-module linkage
+		// as a value, which is not wired yet.
+		c.errorf(n.Span(), "a function from another module is not yet a first-class value: %q; wrap it in a local function", n.Name)
 		return Invalid
 	}
 	c.memberError(n, local, n.Name, false)

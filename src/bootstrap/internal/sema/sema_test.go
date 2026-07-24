@@ -171,8 +171,10 @@ func TestUndefinedFunction(t *testing.T) {
 	wantErr(t, "fn f() { g() }", "undefined function")
 }
 
-func TestFunctionNotFirstClass(t *testing.T) {
-	wantErr(t, "fn g() { nop }\nfn f() { print g }", "first-class")
+// A generic function has no single value type until it is monomorphized, so it is not
+// yet a first-class value; a non-generic function name IS one (see the build tests).
+func TestGenericFunctionNotFirstClass(t *testing.T) {
+	wantErr(t, "fn id[T](x: T) -> T { return x }\nfn f() { g := id\n  print g(1) }", "first-class")
 }
 
 func TestRedeclareInScope(t *testing.T) {

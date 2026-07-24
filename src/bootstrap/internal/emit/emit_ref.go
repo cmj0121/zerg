@@ -156,6 +156,7 @@ func (e *emitter) prepareRuntime() {
 	// prepass so a tuple's element ctype (which a Result carrier may influence) is
 	// settled. Leaves the tuple map empty for a program with no tuple value.
 	e.prepareTuples()
+	e.prepareFnTypes()
 	// Number the list instances (docs/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()

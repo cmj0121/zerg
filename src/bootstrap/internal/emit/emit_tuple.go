@@ -143,6 +143,13 @@ func mentionsParam(t sema.Type) bool {
 		return mentionsParam(x.Elem)
 	case *types.Either:
 		return mentionsParam(x.Left) || mentionsParam(x.Right)
+	case *types.Fn:
+		for _, p := range x.Params {
+			if mentionsParam(p.Type) {
+				return true
+			}
+		}
+		return x.Ret != nil && mentionsParam(x.Ret)
 	case *types.Tuple:
 		for _, el := range x.Elems {
 			if mentionsParam(el) {

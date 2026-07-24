@@ -112,6 +112,11 @@ type emitter struct {
 	// stays byte-identical.
 	tuples map[string]*tupleCarrier
 
+	// First-class function values (docs/functions.md). fntypes maps a function type's
+	// spelling to its generated `zg_fn_<n>` pointer typedef. Empty for a program that
+	// names no function value, which therefore stays byte-identical.
+	fntypes map[string]*fnCarrier
+
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
 	// the drop-env thunk); every list is the same C header (zrt_list), only its element
@@ -240,6 +245,11 @@ func (e *emitter) program() {
 		e.line("#include \"zrt_test.h\"")
 	}
 	e.blank()
+
+	// First-class function-value pointer typedefs, BEFORE the nominal types, since a
+	// struct may hold a function-value field (`run: fn(int) -> int`) and C needs the
+	// typedef name to declare that field. Emits nothing for a program with none.
+	e.emitFnTypedefs()
 
 	// specialized nominal types, each before the functions that use it
 	for _, ti := range e.prog.Types {
@@ -1617,6 +1627,11 @@ func (e *emitter) call(n *ast.Call) string {
 			}
 		}
 	}
+	// a call through a function VALUE (a fn-typed field/local/expr) — after the
+	// construct/method/dyn paths, so only a genuine value call reaches here.
+	if s, ok := e.indirectCallEmit(n); ok {
+		return s
+	}
 	byref := e.calleeByRefArgs(id)
 	var args strings.Builder
 	for i, a := range n.Args {
@@ -1916,6 +1931,10 @@ func (e *emitter) ctype(t sema.Type) string {
 			return "void*"
 		}
 		return e.ctype(p.Elem) + "*"
+	}
+	if c, ok := e.fnTypeFor(t); ok {
+		// a first-class function value is a C function pointer, spelled by its typedef.
+		return c.name
 	}
 	if name, ok := e.prog.TypeName(t); ok {
 		return name

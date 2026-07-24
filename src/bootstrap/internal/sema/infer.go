@@ -118,14 +118,27 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.ptrCast(n, &types.Ptr{}), true
 		case "uint":
 			// uint(p) -> uint: a ptr-to-integer cast, recognized only when the argument
-			// is a raw pointer, so a future numeric `uint(x)` conversion is not masked.
+			// is a raw pointer, so it does not mask the numeric `uint(x)` conversion the
+			// scalar path below handles.
 			if len(n.Args) == 1 {
 				if _, ok := c.synth(n.Args[0].Value).(*types.Ptr); ok {
 					c.unsafeOp(n.Span(), "a pointer cast")
 					return types.Uint, true
 				}
 			}
-			return nil, false
+		}
+		// A callee naming a primitive type is a CONVERSION, `T(x)` — a re-construction
+		// of x's value as a T (docs/types.md). Building a `str` is not this mechanism
+		// (it validates a list[byte]/list[rune]), so it is reported rather than guessed.
+		if target := primitiveNamed(callee.Name); target != nil {
+			if _, ok := ScalarOf(target); ok {
+				return c.scalarConversion(n, callee.Name, target), true
+			}
+			if target == Str {
+				c.errorf(n.Span(), "converting to str is not yet supported; build one from a list[byte]/list[rune]")
+				c.synthArgs(n)
+				return Str, true
+			}
 		}
 	case *ast.Bracket:
 		id, ok := callee.Base.(*ast.Ident)

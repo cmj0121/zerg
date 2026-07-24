@@ -322,6 +322,25 @@ _Noreturn void zrt_raise_err(zrt_err e);
  * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
 zrt_err zrt_taken_err(void);
 
+/* --- checked primitive conversions (conv.c, docs/types.md) ------------------
+ *
+ * `T(x)` converts by re-construction; a narrowing conversion whose value does not
+ * fit the target raises OverflowError. Each helper aborts through zrt_abort, so
+ * `guard { byte(x) }` catches it and yields a Result. The compiler passes the
+ * target's bounds and calls one of these ONLY when the source range is not provably
+ * inside the target range — a widening conversion stays a plain C cast. */
+int64_t  zrt_conv_i_from_i(int64_t v, int64_t lo, int64_t hi);
+uint64_t zrt_conv_u_from_i(int64_t v, uint64_t hi);
+int64_t  zrt_conv_i_from_u(uint64_t v, int64_t hi);
+uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi);
+
+/* float -> integer truncates toward zero and raises when the TRUNCATED value is out
+ * of range, or the input is NaN/+-Inf. lo/hi are the target's bounds as doubles; the
+ * test is over the open interval (lo-1, hi+1), so 255.7 converts to 255 while 256.0
+ * still raises. */
+int64_t  zrt_conv_i_from_f(double v, double lo, double hi);
+uint64_t zrt_conv_u_from_f(double v, double hi);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

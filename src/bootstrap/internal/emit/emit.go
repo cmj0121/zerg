@@ -1530,6 +1530,10 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.ptrCallEmit(n); ok {
 		return s
 	}
+	// a primitive conversion `T(x)`; after ptrCallEmit, which owns `uint(p)`.
+	if s, ok := e.convCallEmit(n); ok {
+		return s
+	}
 	if s, ok := e.listMethodEmit(n); ok {
 		return s
 	}

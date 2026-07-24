@@ -184,6 +184,12 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesStrConcat() {
 		e.needsRuntime = true
 	}
+	// A conversion that can fail calls a zrt_conv_* helper, which raises OverflowError
+	// through zrt_abort. A program whose conversions are all lossless emits plain casts
+	// and stays byte-identical.
+	if e.programUsesCheckedConv() {
+		e.needsRuntime = true
+	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}

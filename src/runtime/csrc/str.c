@@ -159,6 +159,45 @@ static int enc_len(int32_t cp) {
 	return 4;
 }
 
+/* --- number parsing (str -> int) ------------------------------------------- */
+
+/* zrt_parse_int parses a decimal integer from s — an optional '+'/'-' then one or more
+ * digits, nothing else — and raises ValueError on an empty string, a stray character, or
+ * a value outside the int64 range. It is `int(s)` for a str argument (docs/types.md:
+ * conversion is re-construction, checked). */
+int64_t zrt_parse_int(const char *s) {
+	if (s == NULL || *s == 0) {
+		zrt_abort("ValueError: cannot parse an integer from an empty string");
+	}
+	const char *p = s;
+	int neg = 0;
+	if (*p == '+' || *p == '-') {
+		neg = (*p == '-');
+		p++;
+	}
+	if (*p == 0) {
+		zrt_abort("ValueError: cannot parse an integer from a lone sign");
+	}
+	/* Accumulate magnitude as unsigned; the signed range is asymmetric, so the limit is
+	 * 2^63 for a negative value and 2^63-1 for a non-negative one. */
+	uint64_t limit = neg ? 9223372036854775808ULL : 9223372036854775807ULL;
+	uint64_t acc = 0;
+	for (; *p != 0; p++) {
+		if (*p < '0' || *p > '9') {
+			zrt_abort("ValueError: invalid digit while parsing an integer");
+		}
+		uint64_t d = (uint64_t)(*p - '0');
+		if (acc > (limit - d) / 10) {
+			zrt_abort("OverflowError: integer literal out of range");
+		}
+		acc = acc * 10 + d;
+	}
+	if (neg) {
+		return (acc == 9223372036854775808ULL) ? (-9223372036854775807LL - 1) : -(int64_t)acc;
+	}
+	return (int64_t)acc;
+}
+
 /* zrt_str_from_runes builds a str from a list[rune], encoding each code point to UTF-8
  * and raising EncodingError on an invalid one (a surrogate, out of range, or U+0000,
  * whose byte would be a NUL). */

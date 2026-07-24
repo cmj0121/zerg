@@ -107,6 +107,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.writeIntrinsic(n, Str), true
 		case "__zrt_write_int":
 			return c.writeIntrinsic(n, Int), true
+		case "__zrt_read_file":
+			return c.readFileIntrinsic(n), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -315,6 +317,20 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	c.check(n.Args[0].Value, Int)
 	c.check(n.Args[1].Value, vt)
 	return Int
+}
+
+// readFileIntrinsic checks the source-input intrinsic `__zrt_read_file(path)`: a str
+// path, yielding a list[byte] of the file's contents. It is the MVP leaf the stdlib `io`
+// module lowers onto until the FFI binder lands (like the write intrinsics).
+func (c *checker) readFileIntrinsic(n *ast.Call) Type {
+	result := &types.List{Elem: types.Byte}
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "read-file intrinsic takes (path), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return result
+	}
+	c.check(n.Args[0].Value, Str)
+	return result
 }
 
 // atomicIntrinsic checks a compiler atomic-cell intrinsic `__zrt_atomic_<op>(a,

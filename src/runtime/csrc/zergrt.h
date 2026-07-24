@@ -351,6 +351,14 @@ zrt_list zrt_str_runes(const char *s);
 const char *zrt_str_from_bytes(zrt_list bytes);
 const char *zrt_str_from_runes(zrt_list runes);
 
+/* zrt_parse_int is `int(s)` for a str: a checked decimal parse that raises ValueError on
+ * a malformed string and OverflowError outside the int64 range (str.c). */
+int64_t zrt_parse_int(const char *s);
+
+/* zrt_read_file reads a whole file into a list[byte], raising IOError on failure — the
+ * MVP source-input leaf the `io` module lowers onto (sys.c). */
+zrt_list zrt_read_file(const char *path);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

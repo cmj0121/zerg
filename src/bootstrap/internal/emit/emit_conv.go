@@ -33,6 +33,11 @@ func (e *emitter) convCallEmit(n *ast.Call) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// `int(s)` parses a decimal integer from a str through the runtime (raises on a
+	// malformed string), which is not a scalar re-construction.
+	if id.Name == "int" && e.cur.ExprType(e.info, n.Args[0].Value) == sema.Str {
+		return fmt.Sprintf("zrt_parse_int(%s)", e.expr(n.Args[0].Value)), true
+	}
 	srcS, ok := sema.ScalarOf(e.cur.ExprType(e.info, n.Args[0].Value))
 	if !ok {
 		return "", false
@@ -142,6 +147,10 @@ func (e *emitter) programUsesCheckedConv() bool {
 		dstS, ok := sema.ConversionTarget(id.Name, dst)
 		if !ok || dstS.Class == sema.ScalarBool {
 			continue
+		}
+		// `int(s)` parses through the runtime, which can raise.
+		if id.Name == "int" && e.info.ExprTypes[call.Args[0].Value] == sema.Str {
+			return true
 		}
 		srcS, ok := sema.ScalarOf(e.info.ExprTypes[call.Args[0].Value])
 		if ok && !sema.Lossless(srcS, dstS) {

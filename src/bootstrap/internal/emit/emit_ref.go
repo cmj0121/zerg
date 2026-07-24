@@ -261,7 +261,7 @@ func (e *emitter) programUsesIO() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" {
+		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" || id.Name == "__zrt_read_file" {
 			return true
 		}
 	}
@@ -393,6 +393,9 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	if s, ok := e.atomicIntrinsicEmit(n); ok {
 		return s, true
 	}
+	if s, ok := e.readFileIntrinsicEmit(n); ok {
+		return s, true
+	}
 	return e.writeIntrinsicEmit(n)
 }
 
@@ -449,6 +452,20 @@ func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 		return fmt.Sprintf("((int64_t)zrt_write_int(%s, %s))", fd, val), true
 	}
 	return "", false
+}
+
+// readFileIntrinsicEmit lowers `__zrt_read_file(path)` — the io source-input leaf — to
+// its sys.c primitive, yielding a list[byte]. A shadowed name is left to the ordinary
+// call path.
+func (e *emitter) readFileIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok || id.Name != "__zrt_read_file" || len(n.Args) != 1 {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	return fmt.Sprintf("zrt_read_file(%s)", e.expr(n.Args[0].Value)), true
 }
 
 // refnewName is the allocation helper for a Ref whose payload is elem.

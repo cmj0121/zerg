@@ -132,6 +132,12 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.chanDropThunk(t), cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("zrt_defer(zg_dropenv_%s, &%s);", e.ctype(typ), cname))
+	case *types.Opt:
+		// a non-boxed non-POD Opt local (`s: str?`, a `Ref[T]?`/`list[T]?`/…) frees its
+		// payload at scope exit through its carrier's generated drop-env thunk, which
+		// guards on presence (an absent carrier owns nothing). A boxed Opt took the
+		// isBoxedOpt slot-guard path above; a POD Opt owns nothing and never reaches here.
+		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.optDropEnvName(typ), cname))
 	default:
 		// an unsupported non-POD shape (e.g. a tuple holding a Ref): report it against the
 		// binding's own span rather than 0:0 (completeness iteration 3, F5).
@@ -180,6 +186,10 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
+	case *types.Opt:
+		// release a non-boxed non-POD Opt local's payload in place (a reassignment drops the
+		// old optional before binding the new one), guarded on presence.
+		e.line(e.optFieldDrop(t, it.cname))
 	default:
 		e.unsupportedRef(nil, it.typ)
 	}

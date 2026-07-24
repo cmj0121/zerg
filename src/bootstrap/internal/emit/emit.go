@@ -211,6 +211,14 @@ type emitter struct {
 	used    map[string]bool
 	counter int
 
+	// Carrier/tuple typedefs are emitted in two passes around the nominal struct/enum
+	// typedefs: a plain-payload carrier/tuple (a `str?`, `(int, str)`, …) precedes the
+	// structs so a struct can hold it by value as a field, while a nominal-wrapping one
+	// (`Box?`, `(Box, int)`) follows them. These sets record what each pass already wrote
+	// so the second pass does not re-emit it. Both nil for a program with no carrier/tuple.
+	carrierDone map[string]bool
+	tupleDone   map[string]bool
+
 	// Test-driver state (Phase 1i U2). testMode makes program() emit a generated test
 	// driver (cTestMain) in place of the ordinary `main`, forcing the runtime on; tests
 	// is the ordered set of `#[test]` signatures the driver runs. Both zero-valued for a
@@ -283,19 +291,23 @@ func (e *emitter) program() {
 	// typedef name to declare that field. Emits nothing for a program with none.
 	e.emitFnTypedefs()
 
+	// Plain-payload tuple/carrier typedefs BEFORE the nominal types, since a struct may
+	// hold one by value as a field (`name: str?`, `pos: (int, int)`) and C needs the
+	// typedef complete to declare that field. A tuple/carrier that itself wraps a nominal
+	// (`Box?`) is deferred to the second pass below, after the struct it depends on.
+	e.carrierDone, e.tupleDone = map[string]bool{}, map[string]bool{}
+	e.emitTupleTypedefs(true)
+	e.emitResultTypedefs(true)
+
 	// specialized nominal types, each before the functions that use it
 	for _, ti := range e.prog.Types {
 		e.typedef(ti)
 	}
 
-	// Tuple value carriers (completeness iteration 2, U2), before the Result carriers
-	// and prototypes that may name a tuple as an element/parameter/return type. Emits
-	// nothing for a program with no tuple value.
-	e.emitTupleTypedefs()
-
-	// Result/Either/optional carriers, before any prototype that names one as a
-	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
-	e.emitResultTypedefs()
+	// The remaining tuple/carrier typedefs (those wrapping a nominal struct/enum), now
+	// that the nominal typedefs they name by value are complete.
+	e.emitTupleTypedefs(false)
+	e.emitResultTypedefs(false)
 
 	// The shared range value carrier, before any prototype/body that names a range
 	// value. Emits nothing for a program that materializes no range value.
@@ -999,8 +1011,17 @@ func (e *emitter) ifChain(branches []ast.IfBranch, elseB *ast.Block) {
 	e.line("{")
 	e.indent++
 	e.pushScope()
+	// The evaluated optional temp OWNS its value: a non-POD optional is copyValue'd (a named
+	// source is retained/deep-copied, a fresh producer is moved) and its teardown scheduled
+	// on a local frame, so its payload is released exactly once at the block's exit whether
+	// present or absent. The bound name below is a BORROW of that payload (a plain read, never
+	// registered), so the then-block uses it without a second owner — no double-free. A POD
+	// optional owns nothing: copyValue is a bare `=`, no mark and no drop are emitted, and the
+	// block stays byte-identical.
+	e.openScope(e.containsRef(optT), false)
 	tmp := e.freshName("ifopt")
-	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.expr(br.Cond)))
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.copyValue(optT, br.Cond)))
+	e.registerDrop(tmp, optT, br.Cond)
 	e.line(fmt.Sprintf("if (%s) {", e.optPresentTest(optT, tmp)))
 	e.pushScope()
 	e.indent++
@@ -1010,6 +1031,7 @@ func (e *emitter) ifChain(branches []ast.IfBranch, elseB *ast.Block) {
 	e.body(br.Body, false)
 	e.popScope()
 	tail()
+	e.closeScope()
 	e.popScope()
 	e.indent--
 	e.line("}")
@@ -1753,8 +1775,16 @@ func (e *emitter) ifExprChain(branches []ast.IfBranch, elseB *ast.Block, res str
 	e.line("{")
 	e.indent++
 	e.pushScope()
+	// The evaluated optional temp OWNS its value (see ifChain): a non-POD optional is
+	// copyValue'd and its teardown scheduled locally, and the bound name is a BORROW of the
+	// payload. The taken branch's value escapes into `res`, but blockValueInto copyValue's it
+	// (retains/deep-copies a borrowed payload), so `res` owns an independent copy that survives
+	// the temp's own drop at the block's exit — no double-free, no use-after-free. A POD
+	// optional owns nothing, so no mark/drop is emitted and the block stays byte-identical.
+	e.openScope(e.containsRef(optT), false)
 	tmp := e.freshName("ifopt")
-	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.expr(br.Cond)))
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.copyValue(optT, br.Cond)))
+	e.registerDrop(tmp, optT, br.Cond)
 	e.line(fmt.Sprintf("if (%s) {", e.optPresentTest(optT, tmp)))
 	e.pushScope()
 	cname := e.declareName(br.Bind)
@@ -1762,6 +1792,7 @@ func (e *emitter) ifExprChain(branches []ast.IfBranch, elseB *ast.Block, res str
 	e.blockValueInto(res, gt, br.Body)
 	e.popScope()
 	tail()
+	e.closeScope()
 	e.popScope()
 	e.indent--
 	e.line("}")

@@ -201,8 +201,20 @@ func isBadType(t sema.Type) bool {
 // emitResultTypedefs writes every carrier's struct typedef, before the function
 // prototypes that name one as a return/parameter type. Emits nothing when the
 // program registered no carrier.
-func (e *emitter) emitResultTypedefs() {
+// emitResultTypedefs writes each carrier's struct typedef. It runs in two passes around
+// the nominal struct/enum typedefs: with plainOnly it emits only the carriers whose
+// payload is a plain (non-nominal) type, so a struct can hold one as a field; the second
+// pass (plainOnly=false) emits the rest, which wrap a nominal now complete. The carrierDone
+// set carries between passes so no carrier is emitted twice.
+func (e *emitter) emitResultTypedefs(plainOnly bool) {
+	any := false
 	for _, c := range e.orderedCarriers() {
+		if e.carrierDone[c.name] {
+			continue
+		}
+		if plainOnly && e.carrierDependsOnNominal(c) {
+			continue // wraps a nominal struct/enum: emit after the struct typedefs
+		}
 		lc := e.ctype(c.left)
 		switch c.kind {
 		case carrierResult:
@@ -212,10 +224,47 @@ func (e *emitter) emitResultTypedefs() {
 		case carrierEither:
 			e.line(fmt.Sprintf("typedef struct { int32_t tag; %s left; %s right; } %s;", lc, e.ctype(c.right), c.name))
 		}
+		e.carrierDone[c.name] = true
+		any = true
 	}
-	if len(e.carriers) > 0 {
+	if any {
 		e.blank()
 	}
+}
+
+// carrierDependsOnNominal reports whether a carrier's by-value payload names a nominal
+// struct/enum typedef, so its own typedef must follow the nominal ones.
+func (e *emitter) carrierDependsOnNominal(c *carrier) bool {
+	if e.dependsOnNominal(c.left) {
+		return true
+	}
+	return c.kind == carrierEither && e.dependsOnNominal(c.right)
+}
+
+// dependsOnNominal reports whether a type, used as a by-value C struct member, requires a
+// nominal struct/enum typedef to be complete first. A nominal struct/enum is such a
+// member; a tuple or optional/either carrier is one when a payload is. A str/Ref/list/map/
+// channel/boxed-optional member is a pointer or a runtime type (always available), so it
+// imposes no ordering.
+func (e *emitter) dependsOnNominal(t sema.Type) bool {
+	switch x := t.(type) {
+	case *types.Struct, *types.Enum:
+		return true
+	case *types.Tuple:
+		for _, el := range x.Elems {
+			if e.dependsOnNominal(el) {
+				return true
+			}
+		}
+	case *types.Opt:
+		if e.isBoxedOpt(x) {
+			return false // a boxed optional is a void* cell, not a by-value nominal
+		}
+		return e.dependsOnNominal(x.Elem)
+	case *types.Either:
+		return e.dependsOnNominal(x.Left) || e.dependsOnNominal(x.Right)
+	}
+	return false
 }
 
 // emitResultHelpers writes each carrier's force-unwrap helper `zg_force_<name>`,
@@ -390,17 +439,35 @@ func (e *emitter) rightLiteral(ret sema.Type, errExpr string, op *carrier) strin
 // short-circuiting ternary that evaluates a once.
 func (e *emitter) coalesceExpr(n *ast.Coalesce) string {
 	opT := e.cur.ExprType(e.info, n.X)
+	elem := leftOf(opT)
 	acc, cname := e.carrierAccess(opT)
 	tmp := e.freshName("co")
+	// `a ?? b` yields an OWNED value (strOwned treats it so, and a bind/return moves it): a
+	// non-POD Left taken from a NAMED operand's payload is a borrow, so it is retained/deep-
+	// copied here to become an independent owner (the operand's own drop still releases its
+	// copy); a fresh producer's payload is already owned and moved. The default `b` is
+	// copyValue'd the same way. A POD element copies by value, so this is byte-identical.
+	left := e.ownedCarrierLeft(elem, n.X, tmp+"."+acc)
 	if div, ok := n.Y.(*ast.Diverge); ok {
-		leftC := e.ctype(leftOf(opT))
+		leftC := e.ctype(elem)
 		val := e.freshName("cov")
 		body := e.capture(func() { e.divergeStmt(div) })
-		return fmt.Sprintf("({ %s %s = %s; %s %s; if (%s.tag == 0) { %s = %s.%s; } else { %s } %s; })",
-			cname, tmp, e.expr(n.X), leftC, val, tmp, val, tmp, acc, body, val)
+		return fmt.Sprintf("({ %s %s = %s; %s %s; if (%s.tag == 0) { %s = %s; } else { %s } %s; })",
+			cname, tmp, e.expr(n.X), leftC, val, tmp, val, left, body, val)
 	}
-	return fmt.Sprintf("({ %s %s = %s; %s.tag == 0 ? %s.%s : (%s); })",
-		cname, tmp, e.expr(n.X), tmp, tmp, acc, e.expr(n.Y))
+	return fmt.Sprintf("({ %s %s = %s; %s.tag == 0 ? %s : (%s); })",
+		cname, tmp, e.expr(n.X), tmp, left, e.copyValue(elem, n.Y))
+}
+
+// ownedCarrierLeft renders an OWNED copy of a carrier operand's Left payload accessed by
+// `access`: when the operand names storage its non-POD payload is retained/deep-copied (so
+// the operand and the result each own it), and a fresh producer's payload is moved. A POD
+// payload copies by value, so the caller stays byte-identical.
+func (e *emitter) ownedCarrierLeft(elem sema.Type, opX ast.Expr, access string) string {
+	if e.containsRef(elem) && e.namesStorage(opX) {
+		return e.fieldCopy(elem, access)
+	}
+	return access
 }
 
 // optChainExpr lowers `x?.f` (OptChain): when the optional x is present, read field
@@ -437,7 +504,11 @@ func (e *emitter) forceExpr(n *ast.Force) string {
 		}
 	}
 	if c, ok := e.carrierFor(opT); ok {
-		return fmt.Sprintf("zg_force_%s(%s)", c.name, e.expr(n.X))
+		// `x!` yields an OWNED value: a non-POD payload forced out of a NAMED operand is a
+		// borrow of the operand's payload, so it is retained/deep-copied here (the operand's
+		// own drop still releases its copy); a fresh producer's payload is already owned. A
+		// POD payload passes through, so this is byte-identical.
+		return e.ownedCarrierLeft(c.left, n.X, fmt.Sprintf("zg_force_%s(%s)", c.name, e.expr(n.X)))
 	}
 	return e.expr(n.X)
 }

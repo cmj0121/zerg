@@ -294,12 +294,17 @@ func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type 
 			return Invalid
 		}
 	}
-	if _, ok := c.info.Funcs[res.Key]; ok {
-		// A same-module function name is a first-class value (check.go); a cross-module
-		// one reached through a namespace member needs its resolved cross-module linkage
-		// as a value, which is not wired yet.
-		c.errorf(n.Span(), "a function from another module is not yet a first-class value: %q; wrap it in a local function", n.Name)
-		return Invalid
+	if sig, ok := c.info.Funcs[res.Key]; ok {
+		// A same-module function name is a first-class value (check.go); a cross-module one
+		// reached through a namespace member is the same value, keyed on its resolved merged
+		// name so the backend emits the same env-taking thunk / closure value (NsFuncValues).
+		// Visibility is already enforced by resolveMember (a non-pub member never reaches
+		// here). A generic function is rejected inside funcValueType, as for a same-module one.
+		t := c.funcValueType(sig, n.Span())
+		if !bad(t) {
+			c.info.NsFuncValues[n] = res.Key
+		}
+		return t
 	}
 	c.memberError(n, local, n.Name, false)
 	return Invalid

@@ -130,6 +130,14 @@ type Info struct {
 	// spells the identifier as that closure literal. Empty for a program that takes no
 	// function value.
 	FuncValues map[*ast.Ident]string
+
+	// NsFuncValues records each cross-module namespace member `ns.func` used as a VALUE
+	// (not called): the member-access node maps to the resolved merged top-level name
+	// (honoring a one-level `import pub` re-export). It is the Field analogue of
+	// FuncValues — the backend emits the same env-taking thunk / closure value keyed on
+	// that name, so `f := text.split; f(x)` calls it. Empty for a program that takes no
+	// cross-module function value.
+	NsFuncValues map[*ast.Field]string
 }
 
 // Lambda is a closure lifted to a top-level function. A capturing closure carries its
@@ -157,15 +165,16 @@ type Capture struct {
 // diagnostics are concatenated.
 func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	info := &Info{
-		Funcs:      map[string]*FuncSig{},
-		ExprTypes:  map[ast.Expr]Type{},
-		BindTypes:  map[*ast.BindStmt]Type{},
-		Refs:       map[*ast.Ident]*Symbol{},
-		Brackets:   map[*ast.Bracket]BracketRes{},
-		Patterns:   map[*ast.NamePattern]NameRes{},
-		NsMembers:  map[*ast.Field]string{},
-		Lambdas:    map[*ast.FnExpr]*Lambda{},
-		FuncValues: map[*ast.Ident]string{},
+		Funcs:        map[string]*FuncSig{},
+		ExprTypes:    map[ast.Expr]Type{},
+		BindTypes:    map[*ast.BindStmt]Type{},
+		Refs:         map[*ast.Ident]*Symbol{},
+		Brackets:     map[*ast.Bracket]BracketRes{},
+		Patterns:     map[*ast.NamePattern]NameRes{},
+		NsMembers:    map[*ast.Field]string{},
+		Lambdas:      map[*ast.FnExpr]*Lambda{},
+		FuncValues:   map[*ast.Ident]string{},
+		NsFuncValues: map[*ast.Field]string{},
 	}
 
 	r := &resolver{info: info}

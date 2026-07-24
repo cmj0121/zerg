@@ -152,22 +152,35 @@ func (e *emitter) orderedCaptureLambdas() []*sema.Lambda {
 // the function name (one thunk per function, regardless of how many use sites).
 func (e *emitter) prepareFnThunks(reserved map[string]bool, i *int) {
 	e.fnthunks = map[string]*fnThunk{}
+	// A same-module bare function name (FuncValues) and a cross-module namespace member
+	// used as a value (NsFuncValues) both key their thunk on the resolved merged function
+	// name, so one env-ignoring adapter serves every use site regardless of which surface
+	// named it.
 	for _, name := range e.info.FuncValues {
-		if _, done := e.fnthunks[name]; done {
-			continue
-		}
-		sig, ok := e.info.Funcs[name]
-		if !ok {
-			continue
-		}
-		fn := fnTypeOfSig(sig)
-		carrier, ok := e.fnTypeFor(fn)
-		if !ok {
-			continue
-		}
-		thunk := e.freshCarrierName("zg_fnthunk_%d", i, reserved)
-		e.fnthunks[name] = &fnThunk{name: thunk, target: e.prog.CallTarget(name), fn: fn, carrier: carrier.name}
+		e.prepareFnThunk(name, reserved, i)
 	}
+	for _, name := range e.info.NsFuncValues {
+		e.prepareFnThunk(name, reserved, i)
+	}
+}
+
+// prepareFnThunk assigns (once) the env-ignoring adapter of the named function used as
+// a value, keyed by the function's merged name.
+func (e *emitter) prepareFnThunk(name string, reserved map[string]bool, i *int) {
+	if _, done := e.fnthunks[name]; done {
+		return
+	}
+	sig, ok := e.info.Funcs[name]
+	if !ok {
+		return
+	}
+	fn := fnTypeOfSig(sig)
+	carrier, ok := e.fnTypeFor(fn)
+	if !ok {
+		return
+	}
+	thunk := e.freshCarrierName("zg_fnthunk_%d", i, reserved)
+	e.fnthunks[name] = &fnThunk{name: thunk, target: e.prog.CallTarget(name), fn: fn, carrier: carrier.name}
 }
 
 // fnTypeOfSig builds the function-value type of a signature (its parameters, each with

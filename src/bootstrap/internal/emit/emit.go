@@ -1354,6 +1354,14 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:
+		// a cross-module function reached through a namespace member, used as a value, is a
+		// closure literal over its env-ignoring thunk — the Field analogue of a bare function
+		// name (checked before the const/binding member, which spells `zg_<key>`).
+		if key, ok := e.info.NsFuncValues[n]; ok {
+			if s, ok := e.namedFnValue(key); ok {
+				return s
+			}
+		}
 		if s, ok := e.namespaceMemberValue(n); ok {
 			return s
 		}

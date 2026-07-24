@@ -5,7 +5,9 @@ named arguments, and closure capture. Part of the [Language Reference](language.
 [繁體中文](functions.zh-TW.md).
 
 A function is a **first-class value**: it has a type, and can be passed as an argument, returned,
-stored in a field, and bound to a variable. A function type is written `fn(P...) -> R`; a parameter's
+stored in a field, and bound to a variable. This holds **across modules** too — a function named through
+another module is an ordinary value: `f := other.helper` binds it, then `f(x)` calls it, exactly as for a
+local function. A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they
 differ in calling convention — mutable-reference vs copy). Visibility is **not** part of the type: `pub`
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
@@ -57,8 +59,11 @@ already taken for formatting; `print` stays a built-in construct, not a user-def
 
 **Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** A
 `mut` variable cannot be captured; snapshot it into an immutable binding first (`snap := n`). Capture
-is by copy — a captured channel is refcount-bumped, everything else deep-copied — so a closure that
-escapes its defining scope carries its own copies and can never dangle. Equivalently:
+is **by copy** in meaning — a captured channel is refcount-bumped, and a **non-POD immutable value** (a
+`list` / `map` / `str`, a `Ref`, or a boxed value) is **retained into the closure's refcounted environment**
+rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
+carries its own captures and can never dangle. Because every capture is immutable, retaining versus cloning
+is unobservable. Equivalently:
 
 > A closure is a scope-owned struct whose fields are its captures.
 

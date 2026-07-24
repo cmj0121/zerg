@@ -105,6 +105,12 @@ type emitter struct {
 	carriers    map[string]*carrier
 	needsResult bool
 
+	// needsRange is set when the program materializes a range VALUE (a range bound to
+	// a name, or passed/returned as a value) — so the shared `zg_range` carrier typedef
+	// is emitted. An inline membership `v in lo..hi` lowers to a bounds test and does not
+	// set it, so a program that only tests membership stays free of the typedef.
+	needsRange bool
+
 	// Tuple value carriers (completeness iteration 2, U2). tuples maps a tuple type's
 	// spelling to its generated per-shape C struct (`zg_tuple_<n>` with fields
 	// `.f0, .f1, …`), mirroring the Result carrier: an INTERNAL monomorphized layout,
@@ -122,6 +128,16 @@ type emitter struct {
 	lambdaDecls  map[*ast.FuncDecl]bool
 	lambdaByDecl map[*ast.FuncDecl]*sema.Lambda // a lifted closure's captures, by its decl
 	envTypes     map[string]string              // capturing lambda name -> its env struct C name
+
+	// fnEnvManaged is set when some closure captures a NON-POD immutable value
+	// (a Ref/list/map/str/boxed recursive value). When set, EVERY closure's
+	// environment is a refcounted box (zrt_ref_alloc) that retains its non-POD captures
+	// and releases them at rc==0, and a function VALUE becomes non-POD
+	// (e.containsRef(fn)==true): copying one retains its env, dropping one releases it,
+	// so a captured value's lifetime is extended past the defining scope. When UNSET (no
+	// capture, or POD-only captures — every existing closure program), a function value
+	// stays plain data with a leaked/absent env and the emitted C is byte-identical.
+	fnEnvManaged bool
 
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
@@ -147,6 +163,16 @@ type emitter struct {
 	// helpers. It drives the NeedsFormat manifest flag and implies needsRuntime. False
 	// for a program with no f-string, which therefore stays byte-identical.
 	needsFormat bool
+
+	// strManaged is set when the program PRODUCES a heap string (S2): a concat, an
+	// f-string with a hole/join, or a `str(bytes|runes)` conversion. When set, EVERY str
+	// value in the program is a refcounted `[zrt_ref_hdr | bytes]` cell (a literal is an
+	// immortal cell), str becomes non-POD (e.containsRef(str)==true), and its copy/drop
+	// retain/release the cell; strLits maps each distinct literal value to its emitted
+	// immortal-cell index. When UNSET, str stays a bare `const char*` literal with no
+	// retain/release, so a program that produces no heap string (every numbered example)
+	// is byte-identical. Implies needsRuntime.
+	strManaged bool
 
 	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
 	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
@@ -271,6 +297,10 @@ func (e *emitter) program() {
 	// return/parameter type (Phase 1f U0). Emits nothing for a program with none.
 	e.emitResultTypedefs()
 
+	// The shared range value carrier, before any prototype/body that names a range
+	// value. Emits nothing for a program that materializes no range value.
+	e.emitRangeTypedef()
+
 	// Closure environment structs, after every type a capture may be (a struct, tuple,
 	// or function value) and before the lambdas that read them. Emits nothing when no
 	// closure captures.
@@ -328,11 +358,21 @@ func (e *emitter) typedef(ti *mono.TypeInstance) {
 	e.line("typedef struct {")
 	e.indent++
 	for _, f := range ti.Fields {
-		e.line(e.ctype(f.Type) + " zg_" + f.Name + ";")
+		e.line(e.slotCtype(f.Type, f.Boxed) + " zg_" + f.Name + ";")
 	}
 	e.indent--
 	e.line("} " + ti.Mangled + ";")
 	e.blank()
+}
+
+// slotCtype renders a struct field or enum payload slot's C type. A Boxed slot (S1) is
+// heap-indirected through a refcounted cell, so it is a `void*` regardless of its
+// nominal payload type; every other slot keeps its ordinary ctype.
+func (e *emitter) slotCtype(t sema.Type, boxed bool) string {
+	if boxed {
+		return "void*"
+	}
+	return e.ctype(t)
 }
 
 // enumTypedef emits a specialized enum as a tagged union: an 'int32_t tag' holding
@@ -353,7 +393,7 @@ func (e *emitter) enumTypedef(ti *mono.TypeInstance) {
 			var b strings.Builder
 			b.WriteString("struct { ")
 			for i, pt := range v.Payload {
-				fmt.Fprintf(&b, "%s f%d; ", e.ctype(pt), i)
+				fmt.Fprintf(&b, "%s f%d; ", e.slotCtype(pt, v.Boxed[i]), i)
 			}
 			b.WriteString("} " + v.Name + ";")
 			e.line(b.String())
@@ -492,12 +532,18 @@ func (e *emitter) function(inst *mono.Instance) {
 			// name to a field access, so a body reference resolves to it (a parameter or an
 			// inner local declared later shadows it, exactly as in source).
 			envType := e.envTypes[lam.Name]
+			// A managed env is a refcounted box, so the struct is reached through the payload
+			// pointer; an unmanaged (POD-only) env IS the struct pointer, kept byte-identical.
+			envPtr := "zg_env"
+			if e.fnEnvManaged {
+				envPtr = "zrt_ref_payload(zg_env)"
+			}
 			top := e.scopes[len(e.scopes)-1]
 			for _, cap := range lam.Captures {
 				// a parameter of the same name shadows the capture; never overwrite it. (A
 				// capture is a free variable, so this cannot actually collide, but be safe.)
 				if _, param := top[cap.Name]; !param {
-					top[cap.Name] = fmt.Sprintf("((%s *)zg_env)->zg_%s", envType, cap.Name)
+					top[cap.Name] = fmt.Sprintf("((%s *)%s)->zg_%s", envType, envPtr, cap.Name)
 				}
 			}
 		}
@@ -639,6 +685,10 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.NopStmt:
 		e.line(";")
 	case *ast.BindStmt:
+		if n.Target != nil {
+			e.destructureBind(n)
+			return
+		}
 		t := e.cur.BindType(e.info, n)
 		// resolve the RHS before declaring the name, so 'mut n := n' reads the
 		// outer binding (matching ':=' semantics). A non-POD RHS is copied (retain /
@@ -767,7 +817,7 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	}
 	target := e.assignTarget(n.Target)
 	t := e.cur.ExprType(e.info, targetExpr(n.Target))
-	if !containsRef(t) {
+	if !e.containsRef(t) {
 		e.line(fmt.Sprintf("%s = %s;", target, e.expr(n.Value)))
 		return
 	}
@@ -781,7 +831,50 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	} else if targetIsPlace(n.Target) {
 		e.line(e.fieldDrop(t, target))
 	}
-	e.line(fmt.Sprintf("%s = %s;", target, e.copyValue(t, n.Value)))
+	// Move/retain the new value into the (now released) slot, coercing to the target type —
+	// for a boxed `Opt` field (S1) this allocates the nullable box (Some) or NULL (None).
+	// The release-old → move/retain-new → store order is load-bearing for a boxed field: a
+	// field has no slot guard, so overwriting before releasing would leak the old cell.
+	vt := e.cur.ExprType(e.info, n.Value)
+	e.line(fmt.Sprintf("%s = %s;", target, e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
+}
+
+// destructureBind lowers a destructuring bind '(a, b) := e' / 'P{x, y} := e'. It
+// materializes the RHS once into a temp of the tuple/struct type, then binds each leaf
+// name to its sub-place inside the temp (`tmp.f<i>` for a tuple element, `tmp.zg_<f>`
+// for a struct field) — reusing the match pattern walk, so a nested '(a, (b, c))'
+// destructures too. Every subsequent read of a leaf resolves to its sub-place, so no
+// per-component copy is made; the temp stays live for the enclosing block.
+func (e *emitter) destructureBind(n *ast.BindStmt) {
+	t := e.cur.ExprType(e.info, n.Value)
+	tmp := e.freshName("db")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(t, tmp), e.copyValue(t, n.Value)))
+	// The RHS temp owns any non-POD leaves it holds; schedule their teardown so a
+	// destructured tuple/struct of Refs/managed strs is released at scope exit (mirroring
+	// the normal bind path's registerDrop). Every leaf name is only an ALIAS of a temp
+	// sub-place, so a leaf that is later copied retains independently and the temp's own
+	// drop still releases each field exactly once — no double-free.
+	e.registerDestructureDrops(tmp, t, n)
+	e.patternWalk(n.Target, tmp, t, e.scopes[len(e.scopes)-1])
+}
+
+// registerDestructureDrops schedules teardown for a destructuring bind's RHS temp. A
+// nominal struct/enum temp registers its own generated drop-env thunk (like any bound
+// name), but a tuple carrier has no such thunk, so it recurses into each element place
+// (`place.f<i>`) and registers each non-POD leaf directly — a bare Ref/str/list leaf
+// through its slot guard, a nested struct/enum through its drop-env. A wholly-POD temp
+// owns nothing and registers nothing (byte-identical for a POD destructure).
+func (e *emitter) registerDestructureDrops(place string, t sema.Type, at ast.Node) {
+	if !e.containsRef(t) {
+		return
+	}
+	if tup, ok := t.(*types.Tuple); ok {
+		for i, el := range tup.Elems {
+			e.registerDestructureDrops(fmt.Sprintf("%s.f%d", place, i), el, at)
+		}
+		return
+	}
+	e.registerDrop(place, t, at)
 }
 
 // targetIsPlace reports whether an assignment target is a sub-place — a field,
@@ -824,11 +917,30 @@ func (e *emitter) printStmt(n *ast.PrintStmt) {
 	case dispBool:
 		e.line(fmt.Sprintf("printf(\"%%s\\n\", (%s) ? \"true\" : \"false\");", v))
 	case dispStr:
-		e.line(fmt.Sprintf("printf(\"%%s\\n\", %s);", v))
+		// A managed print of an OWNED str temporary (a concat/f-string/conversion result, or
+		// a literal) releases it after the write so it does not leak; a borrowed variable is
+		// left to its binding's drop. Unmanaged, this is the plain byte-identical printf.
+		if e.strManaged && e.strOwned(n.Value) {
+			p := e.freshName("ps")
+			e.line(fmt.Sprintf("{ const char *%s = %s; printf(\"%%s\\n\", %s); zrt_str_release(%s); }", p, v, p, p))
+		} else {
+			e.line(fmt.Sprintf("printf(\"%%s\\n\", %s);", v))
+		}
 	}
 }
 
 func (e *emitter) ifStmt(n *ast.IfStmt) {
+	// A plain if/else-if/else chain keeps the flat `} else if` spelling (byte-identical).
+	// A chain with a binding head `if x := opt` nests, since each binding head must
+	// evaluate its optional into a temp before the presence test.
+	if !anyIfBind(n.Branches) {
+		e.ifStmtFlat(n)
+		return
+	}
+	e.ifChain(n.Branches, n.Else)
+}
+
+func (e *emitter) ifStmtFlat(n *ast.IfStmt) {
 	for i, br := range n.Branches {
 		kw := "if"
 		if i > 0 {
@@ -842,6 +954,95 @@ func (e *emitter) ifStmt(n *ast.IfStmt) {
 		e.body(n.Else, false)
 	}
 	e.line("}")
+}
+
+// anyIfBind reports whether any branch of a chain is a binding head `if x := opt`.
+func anyIfBind(branches []ast.IfBranch) bool {
+	for _, br := range branches {
+		if br.Bind != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ifChain emits an if/else-if/else statement chain that contains at least one binding
+// head. A plain branch keeps `if (cond) { body }`; a binding head `if x := opt`
+// evaluates the optional into a temp and, when it is present, binds x to the unwrapped
+// value for the then-body only. Later branches form the `else` tail recursively, so a
+// later branch's optional is evaluated only when the earlier tests fail.
+func (e *emitter) ifChain(branches []ast.IfBranch, elseB *ast.Block) {
+	br := branches[0]
+	tail := func() {
+		switch {
+		case len(branches) > 1:
+			e.line("} else {")
+			e.indent++
+			e.ifChain(branches[1:], elseB)
+			e.indent--
+			e.line("}")
+		case elseB != nil:
+			e.line("} else {")
+			e.body(elseB, false)
+			e.line("}")
+		default:
+			e.line("}")
+		}
+	}
+	if br.Bind == "" {
+		e.line(fmt.Sprintf("if (%s) {", e.expr(br.Cond)))
+		e.body(br.Body, false)
+		tail()
+		return
+	}
+	optT := e.cur.ExprType(e.info, br.Cond)
+	e.line("{")
+	e.indent++
+	e.pushScope()
+	tmp := e.freshName("ifopt")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.expr(br.Cond)))
+	e.line(fmt.Sprintf("if (%s) {", e.optPresentTest(optT, tmp)))
+	e.pushScope()
+	e.indent++
+	cname := e.declareName(br.Bind)
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optElem(optT), cname), e.optUnwrapValue(optT, tmp)))
+	e.indent--
+	e.body(br.Body, false)
+	e.popScope()
+	tail()
+	e.popScope()
+	e.indent--
+	e.line("}")
+}
+
+// optPresentTest renders the presence test of an evaluated optional temp: a carrier
+// optional is present when its tag is 0; a boxed nullable optional when its cell is
+// non-NULL.
+func (e *emitter) optPresentTest(optT sema.Type, tmp string) string {
+	if e.isBoxedOpt(optT) {
+		return tmp + " != NULL"
+	}
+	return tmp + ".tag == 0"
+}
+
+// optUnwrapValue renders the unwrapped element value of an evaluated optional temp: a
+// carrier optional reads its `.ok` field; a boxed nullable optional reads through the
+// cell's payload.
+func (e *emitter) optUnwrapValue(optT sema.Type, tmp string) string {
+	if e.isBoxedOpt(optT) {
+		elem := optT.(*types.Opt).Elem
+		return fmt.Sprintf("(*(%s*)zrt_ref_payload(%s))", e.ctype(elem), tmp)
+	}
+	return tmp + ".ok"
+}
+
+// optElem returns the element type of an optional, or Unknown when the type is not an
+// optional (a checked binding head always yields an optional).
+func optElem(optT sema.Type) sema.Type {
+	if o, ok := optT.(*types.Opt); ok {
+		return o.Elem
+	}
+	return types.Unknown
 }
 
 func (e *emitter) forStmt(n *ast.ForStmt) {
@@ -954,7 +1155,7 @@ func (e *emitter) forInStr(n *ast.ForStmt) {
 // The iterated list is frozen against structural change (sema), so the length read
 // each turn is stable.
 func (e *emitter) forInList(n *ast.ForStmt, lt *types.List) {
-	nonPOD := containsRef(lt.Elem)
+	nonPOD := e.containsRef(lt.Elem)
 	if n.Mut && nonPOD {
 		// A `for mut x` over a non-POD element needs move/ownership tracking on the
 		// per-iteration write-back that the MVP loop-var machinery does not model; gate it
@@ -988,7 +1189,7 @@ func (e *emitter) forInList(n *ast.ForStmt, lt *types.List) {
 // var. Split from forInList so a fresh iterable can be materialized and dropped around
 // it.
 func (e *emitter) forInListBody(n *ast.ForStmt, lt *types.List, base string) {
-	nonPOD := containsRef(lt.Elem)
+	nonPOD := e.containsRef(lt.Elem)
 	iv := e.freshName("i")
 	ct := e.ctype(lt.Elem)
 	e.line(fmt.Sprintf("for (size_t %s = 0; %s < zrt_list_len(&(%s)); %s++) {", iv, iv, base, iv))
@@ -1133,11 +1334,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return "false"
 	case *ast.StrLit:
-		return cString(n.Value)
+		return e.strLiteral(n.Value)
 	case *ast.RawStrLit:
 		// A raw string r"…" carries no escapes; lower its DECODED content (never the
 		// surface .Text, which keeps the r"…" delimiters for fmt only) as a C string.
-		return cString(n.Value)
+		return e.strLiteral(n.Value)
 	case *ast.RuneLit:
 		// A rune is an int32_t code point (cType maps types.Rune). Lower the DECODED
 		// scalar, never the surface lexeme, so 'a' becomes 97 not "'a'".
@@ -1167,11 +1368,21 @@ func (e *emitter) expr(x ast.Expr) string {
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
 	case *ast.Binary:
 		if md, ok := e.cur.OpCalls[n]; ok {
-			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.expr(n.R))
+			// The right operand is a by-value ARGUMENT the impl method consumes (drops), so an
+			// lvalue operand is copied (retain/deep-copy) exactly as the plain call path copies
+			// its args — otherwise a non-POD/boxed operand is double-freed when the callee
+			// releases its param (DESIGN-refcount §7 risk 8). The left operand is the borrowed
+			// receiver (never dropped by the callee), so it is passed raw. POD operands copy with
+			// a bare `=`, so an existing derived comparison stays byte-identical.
+			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.copyValue(e.cur.ExprType(e.info, n.R), n.R))
 		}
 		// `k in m` over a map lowers to a membership probe on the runtime table.
 		if n.Op == token.In {
 			if s, ok := e.mapMembership(n); ok {
+				return s
+			}
+			// `v in lo..hi` range membership lowers to an inline bounds test.
+			if s, ok := e.rangeMembership(n); ok {
 				return s
 			}
 		}
@@ -1184,6 +1395,22 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:
+		// a qualified nullary enum variant value `E.Green`: the enum name is a value
+		// namespace, so this is the variant value, not a struct field access. The base
+		// identifier resolves to the enum TYPE symbol, which a struct-typed value never does.
+		if id, ok := n.X.(*ast.Ident); ok {
+			if sym, ok := e.info.Refs[id]; ok && sym.Kind == sema.SymType {
+				return e.constructVariant(n, nil, n.Name)
+			}
+		}
+		// a cross-module function reached through a namespace member, used as a value, is a
+		// closure literal over its env-ignoring thunk — the Field analogue of a bare function
+		// name (checked before the const/binding member, which spells `zg_<key>`).
+		if key, ok := e.info.NsFuncValues[n]; ok {
+			if s, ok := e.namedFnValue(key); ok {
+				return s
+			}
+		}
 		if s, ok := e.namespaceMemberValue(n); ok {
 			return s
 		}
@@ -1236,8 +1463,7 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(n.Span(), "a map literal is not yet supported")
 		return "0"
 	case *ast.Range:
-		e.diags.Add(n.Span(), "a range value is not yet supported")
-		return "0"
+		return e.rangeValue(n)
 	case *ast.CmdLit:
 		e.diags.Add(n.Span(), "a command literal is not yet supported")
 		return "0"
@@ -1275,10 +1501,16 @@ func (e *emitter) expr(x ast.Expr) string {
 	case *ast.AsmExpr:
 		return e.asmExpr(n)
 	case *ast.IsExpr:
-		// The `x is T` type test parses and type-checks (yielding bool) but has no backend
-		// lowering yet — a runtime type test needs type tags the MVP does not carry. Gate it
-		// as a normal user-facing Phase diagnostic rather than letting it fall to the
-		// internal-error backstop below.
+		// `err is ValueError` (and the other built-in error kinds) dispatches on the Err's
+		// kind tag — the documented way to distinguish an erased error (docs/errors.md,
+		// "Handling errors by type"). It lowers to a kind comparison on the runtime zrt_err.
+		if kind, ok := sema.ErrKind(n.TypeName); ok && isErrType(e.cur.ExprType(e.info, n.X)) {
+			return fmt.Sprintf("((%s).kind == %d)", e.expr(n.X), kind)
+		}
+		// Any other `x is T` type test parses and type-checks (yielding bool) but has no
+		// backend lowering yet — a general runtime type test needs type tags the MVP does
+		// not carry. Gate it as a normal user-facing Phase diagnostic rather than letting it
+		// fall to the internal-error backstop below.
 		e.diags.Add(x.Span(), "the `is` type test is not yet supported")
 		return "0"
 	case *ast.FnExpr:
@@ -1340,19 +1572,80 @@ func (e *emitter) exprList(xs []ast.Expr) string {
 	return b.String()
 }
 
-// lowerMatch lowers a match to a nested C ternary. The subject is a name or
-// literal (a Phase 0 restriction), so it is safe to reference in each arm without
-// hoisting. The last arm is an unguarded catch-all, forming the final else.
+// lowerMatch lowers a match to a nested C ternary. A trivial subject — a name/field or
+// a scalar/string literal — is side-effect-free and cheap to repeat, so it is spliced
+// verbatim into every arm (the historic byte-identical lowering, 07_match). A
+// non-trivial subject (a call, a composite producer) is hoisted into a single temp so
+// it is evaluated exactly once and, when non-POD, owned and released once instead of
+// re-evaluated and leaked. The last arm is an unguarded catch-all, forming the final
+// else.
 func (e *emitter) lowerMatch(m *ast.MatchExpr) string {
-	subj := e.expr(m.Subject)
 	subjT := e.cur.ExprType(e.info, m.Subject)
+	gt := e.cur.ExprType(e.info, m)
+	if isTrivialMatchSubject(m.Subject) {
+		return e.lowerMatchArms(m, e.expr(m.Subject), subjT, gt)
+	}
+	return e.lowerMatchHoisted(m, subjT, gt)
+}
+
+// lowerMatchArms builds the nested ternary over a match's arms, referencing subj (a
+// name, a literal, or a hoisted temp) in every arm's test and body. Each arm body flows
+// through copyValue against the match's result type gt, so a body that names still-owned
+// storage (an enum payload binding, a borrowed variable, a field) is retained before it
+// is consumed as owned — exactly as blockValueInto does for an if/block expression.
+func (e *emitter) lowerMatchArms(m *ast.MatchExpr, subj string, subjT, gt sema.Type) string {
 	n := len(m.Arms)
-	result := e.armValue(m.Arms[n-1], subj, subjT)
+	result := e.armValue(m.Arms[n-1], subj, subjT, gt)
 	for i := n - 2; i >= 0; i-- {
-		test, body := e.armTestAndValue(m.Arms[i], subj, subjT)
+		test, body := e.armTestAndValue(m.Arms[i], subj, subjT, gt)
 		result = fmt.Sprintf("(%s ? %s : %s)", test, body, result)
 	}
 	return result
+}
+
+// lowerMatchHoisted evaluates a non-trivial subject ONCE into a temp, then references
+// the temp in every arm — so a side-effecting subject (a call) runs exactly once and a
+// non-POD producer subject is owned by the temp and released at scope exit rather than
+// leaking. It wraps the arms in a GNU statement-expression, the same value mechanism the
+// if-/block-expression lowerings use; because every example match has a name subject,
+// none reaches this path and their C stays byte-identical.
+func (e *emitter) lowerMatchHoisted(m *ast.MatchExpr, subjT, gt sema.Type) string {
+	res := ""
+	if e.ctype(gt) != "void" {
+		res = e.freshName("match")
+	}
+	need := e.containsRef(subjT)
+	body := e.capture(func() {
+		e.openScope(need, false)
+		tmp := e.freshName("subj")
+		e.line(fmt.Sprintf("%s = %s;", e.localDecl(subjT, tmp), e.copyValue(subjT, m.Subject)))
+		e.registerDrop(tmp, subjT, m.Subject)
+		arms := e.lowerMatchArms(m, tmp, subjT, gt)
+		if res != "" {
+			e.line(fmt.Sprintf("%s = %s;", res, arms))
+		} else {
+			e.line(arms + ";")
+		}
+		e.closeScope()
+	})
+	return e.wrapStmtExpr(gt, res, body)
+}
+
+// isTrivialMatchSubject reports whether a match subject is side-effect-free and cheap to
+// reference repeatedly, so it can be spliced into every arm rather than hoisted: a bare
+// name, a field access over such a subject, or a scalar/string literal. A call or a
+// composite producer (a tuple/list/map literal) is NOT trivial — repeating it would
+// re-run its effects and re-build its value — and is hoisted instead.
+func isTrivialMatchSubject(x ast.Expr) bool {
+	switch t := x.(type) {
+	case *ast.Ident,
+		*ast.IntLit, *ast.FloatLit, *ast.BoolLit, *ast.NilLit,
+		*ast.StrLit, *ast.RawStrLit, *ast.RuneLit, *ast.ByteLit:
+		return true
+	case *ast.Field:
+		return isTrivialMatchSubject(t.X)
+	}
+	return false
 }
 
 // --- expression-as-value (if-expr / block-expr) -------------------------------
@@ -1414,6 +1707,10 @@ func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 		res = e.freshName("if")
 	}
 	body := e.capture(func() {
+		if anyIfBind(n.Branches) {
+			e.ifExprChain(n.Branches, n.Else, res, gt)
+			return
+		}
 		for i, br := range n.Branches {
 			kw := "if"
 			if i > 0 {
@@ -1427,6 +1724,47 @@ func (e *emitter) ifExprValue(n *ast.IfExpr) string {
 		e.line("}")
 	})
 	return e.wrapStmtExpr(gt, res, body)
+}
+
+// ifExprChain lowers an if-EXPRESSION chain that contains a binding head into the
+// captured body of ifExprValue. It mirrors ifChain but assigns each taken branch's
+// value into res (via blockValueInto) rather than running the body for effect; an
+// if-expression always has a trailing else, so the tail always terminates in one.
+func (e *emitter) ifExprChain(branches []ast.IfBranch, elseB *ast.Block, res string, gt sema.Type) {
+	br := branches[0]
+	tail := func() {
+		e.line("} else {")
+		if len(branches) > 1 {
+			e.indent++
+			e.ifExprChain(branches[1:], elseB, res, gt)
+			e.indent--
+		} else {
+			e.blockValueInto(res, gt, elseB)
+		}
+		e.line("}")
+	}
+	if br.Bind == "" {
+		e.line(fmt.Sprintf("if (%s) {", e.expr(br.Cond)))
+		e.blockValueInto(res, gt, br.Body)
+		tail()
+		return
+	}
+	optT := e.cur.ExprType(e.info, br.Cond)
+	e.line("{")
+	e.indent++
+	e.pushScope()
+	tmp := e.freshName("ifopt")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optT, tmp), e.expr(br.Cond)))
+	e.line(fmt.Sprintf("if (%s) {", e.optPresentTest(optT, tmp)))
+	e.pushScope()
+	cname := e.declareName(br.Bind)
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(optElem(optT), cname), e.optUnwrapValue(optT, tmp)))
+	e.blockValueInto(res, gt, br.Body)
+	e.popScope()
+	tail()
+	e.popScope()
+	e.indent--
+	e.line("}")
 }
 
 // blockExprValue lowers a block-EXPRESSION to a GNU statement-expression whose value
@@ -1450,18 +1788,21 @@ func (e *emitter) blockExprValue(b *ast.Block) string {
 	return e.wrapStmtExpr(gt, res, body)
 }
 
-// armValue emits an arm's body with the pattern's names bound to the subject.
-func (e *emitter) armValue(arm ast.MatchArm, subj string, subjT sema.Type) string {
+// armValue emits an arm's body with the pattern's names bound to the subject. The body
+// is copied against the match's result type gt, so an arm yielding borrowed non-POD
+// storage is retained before it is consumed as owned (no double-free / UAF).
+func (e *emitter) armValue(arm ast.MatchArm, subj string, subjT, gt sema.Type) string {
 	e.pushScope()
 	e.patternWalk(arm.Pat, subj, subjT, e.scopes[len(e.scopes)-1])
-	v := e.expr(arm.Body)
+	v := e.copyValue(gt, arm.Body)
 	e.popScope()
 	return v
 }
 
 // armTestAndValue emits an arm's match test and body, with the pattern's names in
-// scope for both the guard and the body.
-func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type) (test, body string) {
+// scope for both the guard and the body. The body is copied against the match's result
+// type gt (see armValue).
+func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT, gt sema.Type) (test, body string) {
 	e.pushScope()
 	test = e.patternWalk(arm.Pat, subj, subjT, e.scopes[len(e.scopes)-1])
 	if arm.Guard != nil {
@@ -1472,7 +1813,7 @@ func (e *emitter) armTestAndValue(arm ast.MatchArm, subj string, subjT sema.Type
 			test = fmt.Sprintf("(%s && %s)", test, g)
 		}
 	}
-	body = e.expr(arm.Body)
+	body = e.copyValue(gt, arm.Body)
 	e.popScope()
 	if test == "" {
 		test = "1" // a non-last unguarded catch-all is rejected by sema
@@ -1500,6 +1841,12 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 		}
 		return fmt.Sprintf("(%s == %s)", place, lit)
 	case *ast.VariantPattern:
+		// `Left(v)` / `Right(e)` on an Either/Result carrier: the tag selects the side and
+		// the sub-pattern binds it (a Result's `Right(e)` binds the erased Err for an
+		// `is`-dispatch). Handled before the enum path since an Either is not an enum.
+		if _, ok := placeT.(*types.Either); ok {
+			return e.eitherPatternWalk(p, place, placeT, scope)
+		}
 		// The arm matches when the discriminant equals this variant's tag AND every
 		// payload sub-pattern matches. Each payload element i is located at the union
 		// place `place.u.<V>.f<i>` and typed from the specialized enum instance, then
@@ -1507,9 +1854,10 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 		// sub-pattern contributes its own test and bindings instead of being dropped.
 		tests := []string{fmt.Sprintf("(%s.tag == %d)", place, e.variantTag(placeT, p.Name))}
 		var payload []sema.Type
+		var boxed []bool
 		if ti := e.prog.EnumInstance(placeT); ti != nil {
 			if v, ok := ti.Variant(p.Name); ok {
-				payload = v.Payload
+				payload, boxed = v.Payload, v.Boxed
 			}
 		}
 		for i, el := range p.Elems {
@@ -1518,6 +1866,13 @@ func (e *emitter) patternWalk(pat ast.Pattern, place string, placeT sema.Type, s
 				et = payload[i]
 			}
 			sub := fmt.Sprintf("%s.u.%s.f%d", place, p.Name, i)
+			// A BOXED payload slot (S1) holds a `void*` cell: bind/match reads THROUGH the box
+			// (zrt_ref_payload), so a nested pattern (`Add(Add(_,_), _)`) recurses through
+			// another deref and a name binding borrows the payload (no retain — copyValue at a
+			// use site retains if needed).
+			if i < len(boxed) && boxed[i] {
+				sub = e.boxDeref(sub, et)
+			}
 			if t := e.patternWalk(el, sub, et, scope); t != "" {
 				tests = append(tests, t)
 			}
@@ -1674,6 +2029,39 @@ func (e *emitter) listPatternWalk(p *ast.ListPattern, place string, placeT sema.
 // variantTag returns the discriminant of a named variant of an enum subject, read
 // from the specialized enum instance (0 when the type or variant is not found, a
 // case a checked program does not reach).
+// eitherPatternWalk lowers a `Left(v)` / `Right(e)` pattern against an Either/Result
+// carrier place: tag 0 is the Left/Ok side, tag 1 the Right/Err side. It binds the
+// sub-pattern at the carrier's corresponding member — `.ok`/`.left` for Left, `.err`
+// (Result) or `.right` (Either) for Right — so a Result's `Right(e)` binds the erased
+// Err ready for an `is`-dispatch on its kind (docs/errors.md).
+func (e *emitter) eitherPatternWalk(p *ast.VariantPattern, place string, placeT sema.Type, scope map[string]string) string {
+	ei := placeT.(*types.Either)
+	c, ok := e.carrierFor(placeT)
+	if !ok {
+		return "0" // an un-modelled Either carrier (e.g. a channel recv): leave it
+	}
+	var tag int
+	var member string
+	var elemT sema.Type
+	if p.Name == "Left" {
+		tag, member, elemT = 0, c.okField(), ei.Left
+	} else {
+		tag, elemT = 1, ei.Right
+		if c.kind == carrierResult {
+			member = "err"
+		} else {
+			member = "right"
+		}
+	}
+	test := fmt.Sprintf("(%s.tag == %d)", place, tag)
+	if len(p.Elems) == 1 {
+		if t := e.patternWalk(p.Elems[0], place+"."+member, elemT, scope); t != "" {
+			test = fmt.Sprintf("(%s && %s)", test, t)
+		}
+	}
+	return test
+}
+
 func (e *emitter) variantTag(subjT sema.Type, name string) int {
 	if ti := e.prog.EnumInstance(subjT); ti != nil {
 		if v, ok := ti.Variant(name); ok {
@@ -1689,6 +2077,15 @@ func (e *emitter) call(n *ast.Call) string {
 	}
 	// a primitive conversion `T(x)`; after ptrCallEmit, which owns `uint(p)`.
 	if s, ok := e.convCallEmit(n); ok {
+		return s
+	}
+	// the enum discriminant reverse `E.of(n) -> E?` (GRAMMAR group 7).
+	if s, ok := e.enumOfEmit(n); ok {
+		return s
+	}
+	// a built-in error constructor `ValueError("msg")` and the `err.message()` accessor
+	// (GRAMMAR group 8, docs/errors.md).
+	if s, ok := e.errCallEmit(n); ok {
 		return s
 	}
 	// a str<->list bridge: `str(bytes)`, `list[byte](s)`, etc.
@@ -1881,7 +2278,12 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	}
 	args := recv
 	for _, a := range n.Args {
-		args += ", " + e.expr(a.Value)
+		// A by-value argument is CONSUMED by the callee (its body registers the param's drop),
+		// so an lvalue argument must be copied (retain/deep-copy) here or the callee's release
+		// double-frees the caller's value — the enum analogue of the struct discipline, newly
+		// load-bearing for a boxed/recursive arg (DESIGN-refcount §7 risk 8). A POD arg copies
+		// with a bare `=`, so an existing method call stays byte-identical.
+		args += ", " + e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value)
 	}
 	return fmt.Sprintf("%s(%s)", md.Mangled, args)
 }
@@ -1889,18 +2291,49 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 // construct lowers a struct construction 'T(...)' to a C compound literal of the
 // specialized struct type, with arguments in field-declaration order.
 func (e *emitter) construct(n *ast.Call) string {
-	name := e.ctype(e.cur.ExprType(e.info, n))
-	body := e.constructArgs(n.Args)
+	t := e.cur.ExprType(e.info, n)
+	name := e.ctype(t)
+	si := e.prog.StructInstance(t)
+	var parts []string
+	for i, a := range n.Args {
+		parts = append(parts, e.fieldSlot(si, i, a.Value))
+	}
 	// A5: backfill trailing omitted fields with their (constant) default expressions,
 	// in field-declaration order. A fully-specified construction has none and stays
 	// byte-identical.
-	for _, def := range e.trailingFieldDefaults(n, len(n.Args)) {
-		if body != "" {
-			body += ", "
-		}
-		body += e.expr(def)
+	provided := len(n.Args)
+	for j, def := range e.trailingFieldDefaults(n, provided) {
+		parts = append(parts, e.fieldSlot(si, provided+j, def))
 	}
-	return "((" + name + "){" + body + "})"
+	return "((" + name + "){" + strings.Join(parts, ", ") + "})"
+}
+
+// fieldSlot renders one struct-construction field value. A non-POD or boxed field
+// (S1/S2) is copied (retain/deep-copy an lvalue, move a fresh producer) and coerced to
+// the field type — for a boxed `Opt` field this allocates the nullable box (Some) or
+// NULL (None) via wrapValue. This closes the pre-existing gap where a struct built from
+// a BORROWED str/Ref variable did not retain (leak/double-free). A POD field stays the
+// byte-identical raw expression, so an existing value struct construction is unchanged.
+func (e *emitter) fieldSlot(si *mono.TypeInstance, i int, arg ast.Expr) string {
+	ft, boxed := e.fieldTypeBoxed(si, i)
+	if ft == nil {
+		return e.expr(arg)
+	}
+	if boxed || e.containsRef(ft) {
+		et := e.cur.ExprType(e.info, arg)
+		return e.wrapValue(ft, et, e.copyValue(et, arg))
+	}
+	return e.expr(arg)
+}
+
+// fieldTypeBoxed returns the i-th field's concrete type and boxed mark from a struct
+// instance, or (nil, false) when the instance or index is unavailable (a defensive
+// fallback that keeps the raw expression).
+func (e *emitter) fieldTypeBoxed(si *mono.TypeInstance, i int) (sema.Type, bool) {
+	if si == nil || i >= len(si.Fields) {
+		return nil, false
+	}
+	return si.Fields[i].Type, si.Fields[i].Boxed
 }
 
 // trailingFieldDefaults returns the default expressions for the struct fields a
@@ -1940,9 +2373,11 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 	t := e.cur.ExprType(e.info, node)
 	cname := e.ctype(t)
 	tag := 0
+	var payload []sema.Type
+	var boxed []bool
 	if ti := e.prog.EnumInstance(t); ti != nil {
 		if v, ok := ti.Variant(name); ok {
-			tag = v.Tag
+			tag, payload, boxed = v.Tag, v.Payload, v.Boxed
 		}
 	}
 	var b strings.Builder
@@ -1953,7 +2388,7 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			fmt.Fprintf(&b, ".f%d = %s", i, e.expr(a.Value))
+			fmt.Fprintf(&b, ".f%d = %s", i, e.payloadSlot(payload, boxed, i, a.Value))
 		}
 		b.WriteString("}")
 	}
@@ -1961,16 +2396,97 @@ func (e *emitter) constructVariant(node ast.Expr, args []ast.Arg, name string) s
 	return b.String()
 }
 
-// constructArgs renders a construction's positional argument values in order.
-func (e *emitter) constructArgs(args []ast.Arg) string {
-	var b strings.Builder
-	for i, a := range args {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(e.expr(a.Value))
+// enumOfEmit lowers the discriminant reverse `E.of(n) -> E?` (GRAMMAR group 7): given
+// an int, it yields `Some(variant)` when n equals a C-style variant's discriminant,
+// else `None`. It is the inverse of `int(v)`. Lowered as a statement-expression whose
+// switch tests n against each distinct discriminant; a matched value builds the enum
+// (its tag IS the discriminant) into the optional's Ok, and the default is the empty
+// optional. Reports false for any other call so `call` falls through.
+func (e *emitter) enumOfEmit(n *ast.Call) (string, bool) {
+	fld, ok := n.Callee.(*ast.Field)
+	if !ok || fld.Name != "of" || len(n.Args) != 1 {
+		return "", false
 	}
-	return b.String()
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if sym, ok := e.info.Refs[id]; !ok || sym.Kind != sema.SymType {
+		return "", false
+	}
+	opt, ok := e.cur.ExprType(e.info, n).(*types.Opt)
+	if !ok {
+		return "", false
+	}
+	c, ok := e.carrierFor(opt)
+	if !ok {
+		return "", false
+	}
+	ti := e.prog.EnumInstance(opt.Elem)
+	if ti == nil {
+		return "", false
+	}
+	enumC := e.ctype(opt.Elem)
+	nv := e.freshName("ofn")
+	rv := e.freshName("ofr")
+	var labels strings.Builder
+	seen := map[int]bool{}
+	for _, v := range ti.Variants {
+		if seen[v.Tag] {
+			continue
+		}
+		seen[v.Tag] = true
+		fmt.Fprintf(&labels, "case %d: ", v.Tag)
+	}
+	return fmt.Sprintf("({ int64_t %s = (%s); %s %s; switch (%s) { %s"+
+		"%s = (%s){ .tag = 0, .%s = (%s){ .tag = (int32_t)%s } }; break; "+
+		"default: %s = (%s){ .tag = 1 }; break; } %s; })",
+		nv, e.expr(n.Args[0].Value), c.name, rv, nv, labels.String(),
+		rv, c.name, c.okField(), enumC, nv,
+		rv, c.name, rv), true
+}
+
+// errCallEmit lowers the built-in error surface (GRAMMAR group 8, docs/errors.md): a
+// kind constructor `ValueError("msg")` builds an Err value carrying the kind and message
+// (the runtime `zrt_err`, the same value a guard-recovered abort yields), and
+// `err.message()` reads its message string. Reports false for any other call so `call`
+// falls through. The Err is the erased common carrier — a fixed kind tag on one value —
+// so the Result/Either lowering is unchanged.
+func (e *emitter) errCallEmit(n *ast.Call) (string, bool) {
+	switch callee := n.Callee.(type) {
+	case *ast.Ident:
+		if _, shadowed := e.info.Refs[callee]; shadowed {
+			return "", false
+		}
+		if kind, ok := sema.ErrKind(callee.Name); ok && len(n.Args) == 1 {
+			return fmt.Sprintf("zrt_err_new_kind(%d, %s)", kind, e.expr(n.Args[0].Value)), true
+		}
+	case *ast.Field:
+		if callee.Name == "message" && len(n.Args) == 0 && isErrType(e.cur.ExprType(e.info, callee.X)) {
+			return fmt.Sprintf("(%s).msg", e.expr(callee.X)), true
+		}
+	}
+	return "", false
+}
+
+// payloadSlot renders one enum-variant payload argument at construction. A BOXED slot
+// (S1) allocates a fresh cell and MOVES/RETAINS the copied payload into it via
+// zg_refnew_<n>(copyValue(...)); a non-POD inline slot copies (retain/deep-copy) so the
+// new value owns it; a POD slot stays the byte-identical raw expression, so an existing
+// payload-enum program is unchanged (DESIGN-refcount §7 risk 2/6). The copyValue is what
+// keeps the refcount balanced: a fresh rvalue is moved, an lvalue is retained.
+func (e *emitter) payloadSlot(payload []sema.Type, boxed []bool, i int, arg ast.Expr) string {
+	if i >= len(payload) {
+		return e.expr(arg)
+	}
+	pt := payload[i]
+	if i < len(boxed) && boxed[i] {
+		return fmt.Sprintf("%s(%s)", e.refnewName(boxPayloadType(pt)), e.copyValue(pt, arg))
+	}
+	if e.containsRef(pt) {
+		return e.copyValue(pt, arg)
+	}
+	return e.expr(arg)
 }
 
 // assignTarget lowers a reassignment target. The Phase 0 backend only lowers the
@@ -1990,8 +2506,24 @@ func (e *emitter) assignTarget(t ast.AssignTarget) string {
 // every other type falls to the primitive mapping — so a non-generic program's C is
 // unchanged.
 func (e *emitter) ctype(t sema.Type) string {
+	if _, ok := t.(*types.Named); ok {
+		// a strong typedef lowers to its underlying representation — no distinct C type.
+		return e.ctype(types.Underlying(t))
+	}
+	// the built-in erased error `Err` is the runtime carrier value (GRAMMAR group 8): a
+	// bound error (`e := ValueError("x")`) and a Result's Right side are both the C
+	// `zrt_err`, so a fixed kind tag on one value distinguishes them.
+	if isErrType(t) {
+		return "zrt_err"
+	}
 	if isResultNil(t) {
 		return "zrt_result_nil"
+	}
+	// An `Opt[T]` whose T is a cyclic nominal is a nullable heap box, not the optional
+	// carrier (S1 §5): None≡NULL, Some≡a Ref[T] cell, so its C type is `void*`. This keeps
+	// a standalone `x: Node? = n.next` the same representation as the boxed field read.
+	if o, ok := t.(*types.Opt); ok && e.isCyclicNominal(o.Elem) {
+		return "void*"
 	}
 	if ei, ok := t.(*types.Either); ok {
 		// the Result[T] a `<-ch` yields: a generated tagged carrier struct keyed by the
@@ -1999,6 +2531,11 @@ func (e *emitter) ctype(t sema.Type) string {
 		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
 			return fmt.Sprintf("zg_recv_%d", idx)
 		}
+	}
+	// a range value: one shared carrier struct (int64 bounds + inclusive flag), so a
+	// `r := lo..hi` bound name and a membership `v in r` read the same shape.
+	if _, ok := t.(*types.Range); ok {
+		return "zg_range"
 	}
 	// a general Result/Either/optional value: its monomorphized carrier (Phase 1f U0).
 	if c, ok := e.carrierFor(t); ok {
@@ -2109,6 +2646,8 @@ func fixedCType(f *types.Fixed) string {
 }
 
 func zeroValue(t sema.Type) string {
+	// a strong typedef zero-inits as its underlying representation.
+	t = types.Underlying(t)
 	if isResultNil(t) {
 		return "zrt_result_ok()"
 	}

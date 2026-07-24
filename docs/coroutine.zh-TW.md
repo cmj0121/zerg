@@ -6,7 +6,9 @@ Zerg 的並行**只有 coroutine + channel**——沒有共享可變狀態、沒
 ## `spawn`
 
 `spawn f(args)` 在 **M:N scheduler** 上啟動一個 coroutine（Go 的 `go`）。它**不回傳任何東西**——沒有 handle、沒有
-join/await；結果與完成**只能靠 channel** 觀察。
+join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是任何呼叫——一個普通函式、一個**方法**(`spawn
+obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
+(`defer f.close()`)。
 
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
 - **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會

@@ -114,6 +114,35 @@ func (e *emitter) prepareLambdaDecls() {
 	}
 }
 
+// programHasNonPODCapture reports whether any closure captures a NON-POD immutable
+// value (a Ref/list/map/str/boxed recursive value) — the single trigger that boxes
+// every closure's environment as a refcounted cell and makes a function value non-POD
+// (fnEnvManaged). A program with no capture, or with POD-only captures, leaves it false
+// and keeps the leaked-plain-env, byte-identical path.
+func (e *emitter) programHasNonPODCapture() bool {
+	for _, lam := range e.info.Lambdas {
+		for _, cap := range lam.Captures {
+			if e.containsRef(cap.Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// envHasNonPOD reports whether a capturing lambda's environment box holds any non-POD
+// capture — so it needs a per-lambda drop thunk (zg_envdrop_<lam>) that releases those
+// cells at rc==0. A POD-only env (a managed program's int-capturing closure) frees with
+// a NULL drop.
+func (e *emitter) envHasNonPOD(lam *sema.Lambda) bool {
+	for _, cap := range lam.Captures {
+		if e.containsRef(cap.Type) {
+			return true
+		}
+	}
+	return false
+}
+
 // lambdaOf returns the lifted closure an instance came from, if any.
 func (e *emitter) lambdaOf(inst *mono.Instance) (*sema.Lambda, bool) {
 	if inst == nil {
@@ -152,22 +181,35 @@ func (e *emitter) orderedCaptureLambdas() []*sema.Lambda {
 // the function name (one thunk per function, regardless of how many use sites).
 func (e *emitter) prepareFnThunks(reserved map[string]bool, i *int) {
 	e.fnthunks = map[string]*fnThunk{}
+	// A same-module bare function name (FuncValues) and a cross-module namespace member
+	// used as a value (NsFuncValues) both key their thunk on the resolved merged function
+	// name, so one env-ignoring adapter serves every use site regardless of which surface
+	// named it.
 	for _, name := range e.info.FuncValues {
-		if _, done := e.fnthunks[name]; done {
-			continue
-		}
-		sig, ok := e.info.Funcs[name]
-		if !ok {
-			continue
-		}
-		fn := fnTypeOfSig(sig)
-		carrier, ok := e.fnTypeFor(fn)
-		if !ok {
-			continue
-		}
-		thunk := e.freshCarrierName("zg_fnthunk_%d", i, reserved)
-		e.fnthunks[name] = &fnThunk{name: thunk, target: e.prog.CallTarget(name), fn: fn, carrier: carrier.name}
+		e.prepareFnThunk(name, reserved, i)
 	}
+	for _, name := range e.info.NsFuncValues {
+		e.prepareFnThunk(name, reserved, i)
+	}
+}
+
+// prepareFnThunk assigns (once) the env-ignoring adapter of the named function used as
+// a value, keyed by the function's merged name.
+func (e *emitter) prepareFnThunk(name string, reserved map[string]bool, i *int) {
+	if _, done := e.fnthunks[name]; done {
+		return
+	}
+	sig, ok := e.info.Funcs[name]
+	if !ok {
+		return
+	}
+	fn := fnTypeOfSig(sig)
+	carrier, ok := e.fnTypeFor(fn)
+	if !ok {
+		return
+	}
+	thunk := e.freshCarrierName("zg_fnthunk_%d", i, reserved)
+	e.fnthunks[name] = &fnThunk{name: thunk, target: e.prog.CallTarget(name), fn: fn, carrier: carrier.name}
 }
 
 // fnTypeOfSig builds the function-value type of a signature (its parameters, each with
@@ -293,16 +335,101 @@ func (e *emitter) lambdaValue(lam *sema.Lambda) string {
 	if len(lam.Captures) == 0 {
 		return fmt.Sprintf("((%s){ %s, (void *)0 })", carrier, code)
 	}
-	// Capture by copy into a fresh environment box. The box is plain (leaked) heap, like
-	// a string's, since captures are POD; the closure-environment ownership story frees
-	// it later. Each capture is read from the enclosing scope by its source name.
 	env := e.envTypes[lam.Name]
+	if e.fnEnvManaged {
+		// Managed: the environment is a REFCOUNTED box (zrt_ref_alloc), so the closure value
+		// can retain/release it (a captured non-POD value's lifetime is extended past the
+		// defining scope). Each non-POD capture is RETAINED into it (fieldCopy, like a struct
+		// field); a POD capture copies by bits. The box carries a per-lambda drop thunk that
+		// releases its non-POD captures at rc==0 (NULL when the env holds only POD captures).
+		var b string
+		b += fmt.Sprintf("void *_e = zrt_ref_alloc(sizeof(%s), %s); ", env, e.envDropFn(lam))
+		b += fmt.Sprintf("%s *_p = (%s *)zrt_ref_payload(_e); ", env, env)
+		for _, cap := range lam.Captures {
+			b += fmt.Sprintf("_p->zg_%s = %s; ", cap.Name, e.captureInit(cap))
+		}
+		return fmt.Sprintf("({ %s((%s){ %s, _e }); })", b, carrier, code)
+	}
+	// Unmanaged (POD-only captures): the box is plain (leaked) heap, like a string's;
+	// each capture copies by bits, read from the enclosing scope by its source name.
 	var b string
 	b += fmt.Sprintf("%s *_e = (%s *)zrt_alloc(sizeof(%s)); ", env, env, env)
 	for _, cap := range lam.Captures {
 		b += fmt.Sprintf("_e->zg_%s = %s; ", cap.Name, e.resolve(cap.Name))
 	}
 	return fmt.Sprintf("({ %s((%s){ %s, (void *)_e }); })", b, carrier, code)
+}
+
+// captureInit renders the initializer that stores one capture into a managed env box:
+// a non-POD capture is RETAINED/deep-copied (fieldCopy — a Ref bumps its refcount, a
+// list/map/str deep-copies/retains), a POD capture copies its bits by source name.
+func (e *emitter) captureInit(cap sema.Capture) string {
+	src := e.resolve(cap.Name)
+	if e.containsRef(cap.Type) {
+		return e.fieldCopy(cap.Type, src)
+	}
+	return src
+}
+
+// envDropFn is the zrt_drop_fn a managed closure's environment box carries: a thunk
+// that releases the env's non-POD captures at rc==0, or NULL when it holds only POD
+// captures (nothing to tear down).
+func (e *emitter) envDropFn(lam *sema.Lambda) string {
+	if e.envHasNonPOD(lam) {
+		return "&zg_envdrop_" + lam.Name
+	}
+	return "NULL"
+}
+
+// fnValCopy renders the retained copy of a function value that names existing storage:
+// the fat {code, env} pair copies by bits and its refcounted environment box is
+// retained, so both holders own the captured cells. zrt_ref_copy tolerates a NULL env
+// (a named-function value or a non-capturing closure), so this is uniform across every
+// function-value shape in a managed program.
+func (e *emitter) fnValCopy(typ sema.Type, base string) string {
+	tmp := e.freshName("fc")
+	return fmt.Sprintf("({ %s %s = %s; zrt_ref_copy(%s.env); %s; })", e.ctype(typ), tmp, base, tmp, tmp)
+}
+
+// emitFnEnvHelpers writes the function-value teardown helpers a managed program needs:
+// the generic env-slot drop thunk (zg_fnval_drop, releasing a fn local's env box at
+// scope exit) and one per-capturing-lambda env drop thunk (zg_envdrop_<lam>, releasing
+// its non-POD captures at rc==0). Emits nothing when the program manages no closure
+// environment, keeping every other program byte-identical.
+func (e *emitter) emitFnEnvHelpers() {
+	if !e.fnEnvManaged {
+		return
+	}
+	// The generic slot guard for a function-value local: a fn value is a fat {code, env}
+	// pair whose env is the SECOND pointer-sized word (every carrier shares the layout
+	// `{ R (*code)(...); void *env; }`), so releasing the box needs no per-carrier thunk.
+	// A NULL env (a named-function value / non-capturing closure) is a no-op.
+	e.line("static void zg_fnval_drop(void *slot) {")
+	e.indent++
+	e.line("void *env = ((void **)slot)[1];")
+	e.line("if (env != NULL) { zrt_release(env); }")
+	e.indent--
+	e.line("}")
+	e.blank()
+	for _, lam := range e.orderedCaptureLambdas() {
+		if !e.envHasNonPOD(lam) {
+			continue
+		}
+		env := e.envTypes[lam.Name]
+		e.line(fmt.Sprintf("static void zg_envdrop_%s(void *p) {", lam.Name))
+		e.indent++
+		e.line(fmt.Sprintf("%s *e = (%s *)p;", env, env))
+		for i := len(lam.Captures) - 1; i >= 0; i-- {
+			cap := lam.Captures[i]
+			if !e.containsRef(cap.Type) {
+				continue
+			}
+			e.line(e.fieldDrop(cap.Type, "e->zg_"+cap.Name))
+		}
+		e.indent--
+		e.line("}")
+		e.blank()
+	}
 }
 
 // isLambdaInst reports whether an instance is a lifted closure, which the uniform

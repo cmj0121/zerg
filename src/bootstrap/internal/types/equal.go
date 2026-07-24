@@ -56,6 +56,9 @@ func Identical(a, b Type) bool {
 		return Identical(x.Elem, b.(*Ref).Elem)
 	case *Opt:
 		return Identical(x.Elem, b.(*Opt).Elem)
+	case *Range:
+		y := b.(*Range)
+		return x.Inclusive == y.Inclusive && Identical(x.Elem, y.Elem)
 	case *Either:
 		y := b.(*Either)
 		return Identical(x.Left, y.Left) && Identical(x.Right, y.Right)
@@ -65,6 +68,10 @@ func Identical(a, b Type) bool {
 	case *Enum:
 		y := b.(*Enum)
 		return x.Def == y.Def && identicalList(x.Args, y.Args)
+	case *Named:
+		// a strong typedef is identical only to itself (by its *TypeDef), never to its
+		// underlying type — the property that makes it a distinct newtype.
+		return x.Def == b.(*Named).Def
 	case *Param:
 		return x == b.(*Param) // a type parameter equals only itself
 	case *ValParam:

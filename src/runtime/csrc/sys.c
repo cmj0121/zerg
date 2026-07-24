@@ -93,9 +93,17 @@ bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired) {
  * its by-value parameter at scope exit. */
 zrt_list zrt_os_args(int argc, char **argv) {
 	zrt_list l;
-	zrt_list_init(&l, sizeof(const char *), NULL);
+	/* Each argv string is copied into an rc=1 string CELL (S2), and the list carries the
+	 * str element vtable (retain on copy, release on drop). This gives a str-managed program
+	 * a real cell to retain/release — a raw argv pointer would crash header recovery — while
+	 * keeping the list alloc/free BALANCED: the list's own drop releases each cell. The one
+	 * shape serves managed and unmanaged programs alike. */
+	zrt_list_init(&l, sizeof(const char *), &zrt_str_elem_vt);
 	for (int i = 1; i < argc; i++) {
-		const char *s = argv[i];
+		size_t      n = strlen(argv[i]);
+		char       *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
+		memcpy(p, argv[i], n + 1);
+		const char *s = p; /* rc=1, owned by the list */
 		zrt_list_push(&l, &s);
 	}
 	return l;
@@ -110,14 +118,14 @@ zrt_list zrt_read_file(const char *path) {
 	zrt_list_init(&l, sizeof(uint8_t), NULL);
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		zrt_abort("IOError: cannot open file");
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot open file");
 	}
 	uint8_t buf[4096];
 	for (;;) {
 		ssize_t n = read(fd, buf, sizeof(buf));
 		if (n < 0) {
 			close(fd);
-			zrt_abort("IOError: read failed");
+			zrt_abort_kind(ZRT_ERR_IO, "IOError: read failed");
 		}
 		if (n == 0) {
 			break;

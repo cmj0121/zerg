@@ -58,14 +58,12 @@ func TestFillFormRuns(t *testing.T) {
 	}
 }
 
-// TestRangeValueGate covers A8: a range value 0..5 is gated cleanly.
-func TestRangeValueGate(t *testing.T) {
-	code, _, diags := Compile("fn main() {\n r := 0..5\n print 0\n}")
-	if len(diags) == 0 || code != "" {
-		t.Fatalf("a range value should be gated, got code=%q diags=%v", code, diags)
-	}
-	if !strings.Contains(diags[0].Msg, "range value is not yet supported") {
-		t.Fatalf("expected the range-value gate diagnostic, got: %v", diags)
+// TestRangeValueBoundRuns covers the range-value support (superseding the former A8
+// gate): a range 0..5 bound to a name is a real value, and `v in r` reads its bounds.
+func TestRangeValueBoundRuns(t *testing.T) {
+	got := runProgramRT(t, "fn main() {\n r := 0..5\n print 3 in r\n print 5 in r\n}")
+	if got != "true\nfalse\n" {
+		t.Fatalf("range-value membership = %q, want %q", got, "true\nfalse\n")
 	}
 }
 

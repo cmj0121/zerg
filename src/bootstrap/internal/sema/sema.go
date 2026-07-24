@@ -130,6 +130,14 @@ type Info struct {
 	// spells the identifier as that closure literal. Empty for a program that takes no
 	// function value.
 	FuncValues map[*ast.Ident]string
+
+	// NsFuncValues records each cross-module namespace member `ns.func` used as a VALUE
+	// (not called): the member-access node maps to the resolved merged top-level name
+	// (honoring a one-level `import pub` re-export). It is the Field analogue of
+	// FuncValues — the backend emits the same env-taking thunk / closure value keyed on
+	// that name, so `f := text.split; f(x)` calls it. Empty for a program that takes no
+	// cross-module function value.
+	NsFuncValues map[*ast.Field]string
 }
 
 // Lambda is a closure lifted to a top-level function. A capturing closure carries its
@@ -157,21 +165,26 @@ type Capture struct {
 // diagnostics are concatenated.
 func Check(file *ast.File) (*Info, []diag.Diagnostic) {
 	info := &Info{
-		Funcs:      map[string]*FuncSig{},
-		ExprTypes:  map[ast.Expr]Type{},
-		BindTypes:  map[*ast.BindStmt]Type{},
-		Refs:       map[*ast.Ident]*Symbol{},
-		Brackets:   map[*ast.Bracket]BracketRes{},
-		Patterns:   map[*ast.NamePattern]NameRes{},
-		NsMembers:  map[*ast.Field]string{},
-		Lambdas:    map[*ast.FnExpr]*Lambda{},
-		FuncValues: map[*ast.Ident]string{},
+		Funcs:        map[string]*FuncSig{},
+		ExprTypes:    map[ast.Expr]Type{},
+		BindTypes:    map[*ast.BindStmt]Type{},
+		Refs:         map[*ast.Ident]*Symbol{},
+		Brackets:     map[*ast.Bracket]BracketRes{},
+		Patterns:     map[*ast.NamePattern]NameRes{},
+		NsMembers:    map[*ast.Field]string{},
+		Lambdas:      map[*ast.FnExpr]*Lambda{},
+		FuncValues:   map[*ast.Ident]string{},
+		NsFuncValues: map[*ast.Field]string{},
 	}
 
 	r := &resolver{info: info}
 	r.resolveFile(file)
 
 	c := &checker{info: info, module: r.module, constEdges: r.constEdges, frozenLists: map[*symbol]int{}}
+	// Validate every declaration's decorators first (GRAMMAR group 7 is a fixed,
+	// compiler-owned set): an unknown or not-yet-supported decorator is a clean error
+	// rather than a silent no-op.
+	c.checkDecorators(file)
 	c.collectTypes(file)
 	// The spec/impl registry is built before signatures so a generic parameter's
 	// spec bound ('[T: Ord]') can be resolved to the SpecDef it carries (U3): the
@@ -263,8 +276,26 @@ func (c *checker) collectTypes(file *ast.File) {
 			c.fillStruct(n)
 		case *ast.EnumDecl:
 			c.fillEnum(n)
+		case *ast.TypeDecl:
+			c.fillAlias(n)
 		}
 	}
+}
+
+// fillAlias resolves a strong typedef's underlying representation into its TypeDef
+// (the resolver created the empty TypeDef during surface collection), so a use site
+// can reach it through types.Underlying and a conversion knows the scalar it targets.
+// A generic alias `type X[T] = …` is not yet supported and is gated at its use site,
+// so it is skipped here.
+func (c *checker) fillAlias(n *ast.TypeDecl) {
+	if n.Generics != nil || n.Alias == nil {
+		return
+	}
+	sym := c.module.local(n.Name)
+	if sym == nil || sym.TypeDef == nil {
+		return
+	}
+	sym.TypeDef.Alias = c.resolveType(n.Alias)
 }
 
 func (c *checker) fillStruct(n *ast.StructDecl) {
@@ -859,8 +890,7 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		var ends []map[*symbol]liveness
 		for _, br := range n.Branches {
 			c.dead = c.snapshotFrom(incoming)
-			c.checkCond(br.Cond)
-			c.checkBlock(br.Body)
+			c.checkBranch(br)
 			ends = append(ends, c.dead)
 		}
 		if n.Else != nil {
@@ -1006,6 +1036,39 @@ func (c *checker) checkWith(n *ast.WithStmt) {
 		c.checkStmt(s)
 	}
 	c.popScope()
+}
+
+// checkBranch type-checks one if/else-if branch (statement form). A plain head is a
+// boolean condition; a binding head `if x := opt` binds x to the unwrapped optional
+// element in a scope wrapping the body, which runs only when the optional is present
+// (like Swift `if let`).
+func (c *checker) checkBranch(br ast.IfBranch) {
+	if br.Bind != "" {
+		elem := c.ifBindElem(br)
+		c.pushScope()
+		c.declare(br.Body.Span(), br.Bind, elem, false)
+		c.checkBlock(br.Body)
+		c.popScope()
+		return
+	}
+	c.checkCond(br.Cond)
+	c.checkBlock(br.Body)
+}
+
+// ifBindElem types an `if x := opt` binding head: its operand (carried in br.Cond)
+// must be an optional 'T?', and the head binds T — the block runs only on the present
+// (Some) case. A non-optional operand is a clean error.
+func (c *checker) ifBindElem(br ast.IfBranch) Type {
+	t := c.synth(br.Cond)
+	if bad(t) {
+		return t
+	}
+	opt, ok := t.(*types.Opt)
+	if !ok {
+		c.errorf(br.Cond.Span(), "an `if %s :=` binding head requires an optional value, found %s", br.Bind, t)
+		return Invalid
+	}
+	return opt.Elem
 }
 
 func (c *checker) checkCond(e ast.Expr) {

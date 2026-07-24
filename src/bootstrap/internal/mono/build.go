@@ -43,6 +43,7 @@ func BuildWithInit(file *ast.File, info *sema.Info, plan *module.InitPlan) *Prog
 		w.specialize(in)
 	}
 	w.buildInits(plan)
+	MarkBoxing(w.prog)
 	return w.prog
 }
 
@@ -432,10 +433,17 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	for _, a := range n.Args {
 		w.walkExpr(in, a.Value)
 	}
-	if w.walkMethodCall(in, n) {
+	// Try the erased provided-self-call path FIRST: inside a `#[dyn]` provided default
+	// body an unoverridden provided method the impl omits must dispatch through its
+	// ERASED-receiver instance (W3), not the static namespace. Now that provided
+	// defaults are also registered in the concrete method namespace (for the static
+	// path), walkMethodCall would otherwise intercept such a self-call with a by-value
+	// instance — wrong for an erased `this`. walkProvidedSelfCall is a no-op for a
+	// non-erased instance, so a concrete receiver still falls through to walkMethodCall.
+	if w.walkProvidedSelfCall(in, n) {
 		return
 	}
-	if w.walkProvidedSelfCall(in, n) {
+	if w.walkMethodCall(in, n) {
 		return
 	}
 	if br, ok := n.Callee.(*ast.Bracket); ok {
@@ -642,6 +650,9 @@ func (w *worker) registerEnum(x *types.Enum) {
 			w.collectType(st)
 			vi.Payload = append(vi.Payload, st)
 		}
+		// Boxed is parallel to Payload so a later structural query is index-safe; the
+		// MarkBoxing pass flips the slots it must heap-indirect to break a cycle.
+		vi.Boxed = make([]bool, len(vi.Payload))
 		ti.Variants = append(ti.Variants, vi)
 	}
 	w.prog.Types = append(w.prog.Types, ti)

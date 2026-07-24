@@ -13,10 +13,11 @@ import (
 //
 // A closure is lifted to an ordinary top-level function, reusing the whole function
 // machinery. A NON-CAPTURING closure needs no environment. A CAPTURING closure records
-// its captures (POD only for now) so the backend builds the environment its lifted
-// function reads (emit_fnval.go). Two captures stay illegal: a `mut` variable (the value
-// cannot be mutated through the capture, so snapshot it first) and a value owning heap
-// storage (a Ref/list/map/chan — the environment-ownership story is deferred).
+// its captures — POD or NON-POD — so the backend builds the environment its lifted
+// function reads (emit_fnval.go): a POD capture copies by bits, a non-POD capture
+// (Ref/list/map/str/boxed) is retained into a refcounted environment box and released
+// when the closure value is dropped. One capture stays illegal: a `mut` variable (the
+// grammar captures immutable captures, so snapshot it into an immutable binding first).
 
 // captureFrame records, while a closure body is checked, the scope depth at the
 // closure's entry and the enclosing locals its body referenced.
@@ -50,21 +51,19 @@ func (c *checker) leaveClosure() map[string]*symbol {
 func (c *checker) resolveClosure(fe *ast.FnExpr, fn *types.Fn, captured map[string]*symbol) {
 	caps := make([]Capture, 0, len(captured))
 	for name, sym := range captured {
-		// A `mut` capture is never legal: the value cannot change through the capture, so
-		// the intent (mutate shared state) is unmet — snapshot it into an immutable
-		// binding first (docs/functions.md).
+		// A `mut` capture is never legal: the grammar captures IMMUTABLE captures, and the
+		// value cannot change through the capture, so the intent (mutate shared state) is
+		// unmet — snapshot it into an immutable binding first (docs/functions.md).
 		if sym.mutable {
 			c.errorf(fe.Span(), "cannot capture the mutable variable %q in a closure; snapshot it into an immutable binding first", name)
 			return
 		}
-		// Capture is by copy. A POD value copies by bits and its environment can be a plain
-		// (leaked, like a string) box; a value that owns heap storage (Ref/list/map/chan)
-		// would need its refcount bumped / a deep copy and a matching environment free,
-		// which is deferred with the rest of the closure-environment ownership story.
-		if !podCapture(sym.typ) {
-			c.errorf(fe.Span(), "capturing a non-POD value (%s) in a closure is not yet supported; pass it as a parameter", sym.typ)
-			return
-		}
+		// Capture is by copy — of an IMMUTABLE value, POD or not. A POD value copies by
+		// bits; a non-POD value (a Ref/list/map/str/boxed recursive value) is RETAINED into
+		// the closure's refcounted environment box (copyValue at env construction, like a
+		// struct field) and RELEASED when the closure value is dropped, so its lifetime is
+		// correctly extended past the defining scope (emit/emit_fnval.go). This is now
+		// expressible because refcount exists (S1/S2); the old non-POD refusal is gone.
 		caps = append(caps, Capture{Name: name, Type: sym.typ})
 	}
 	// A deterministic order (by name) so the generated environment struct is stable.
@@ -99,17 +98,6 @@ func (c *checker) liftClosure(fe *ast.FnExpr, fn *types.Fn, caps []Capture) {
 		Decl:       decl,
 	}
 	c.info.Lambdas[fe] = &Lambda{Name: name, Decl: decl, Captures: caps}
-}
-
-// podCapture reports whether a captured value is plain-old-data — copied by bits, owning
-// no heap storage — so it can live in a leaked environment box. A value that owns heap
-// storage (a Ref, list, map, or channel) is not, and is deferred.
-func podCapture(t Type) bool {
-	switch t.(type) {
-	case *types.Ref, *types.List, *types.Map, *types.Chan:
-		return false
-	}
-	return true
 }
 
 // sortCaptures orders captures by name, so a closure's environment struct and its field

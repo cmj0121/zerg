@@ -308,6 +308,13 @@ func (p *printer) bind(n *ast.BindStmt) {
 	if n.Mut {
 		p.write("mut ")
 	}
+	if n.Target != nil {
+		// a destructuring bind '(a, b) := e' / 'P{x, y} := e' (inferred ':=' only).
+		p.pattern(n.Target)
+		p.write(" := ")
+		p.expr(n.Value, precLowest)
+		return
+	}
 	p.write(n.Name)
 	if n.Type != nil {
 		p.write(": ")

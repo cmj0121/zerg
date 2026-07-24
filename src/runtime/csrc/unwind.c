@@ -132,10 +132,22 @@ _Noreturn void zrt_abort(const char *msg) {
 	zrt_unwind_abort(msg);
 }
 
+_Noreturn void zrt_abort_kind(int kind, const char *msg) {
+	/* Like zrt_abort, but the stashed Err carries a built-in KIND so a guard-recovered
+	 * intrinsic error is distinguishable (`err is ValueError`, etc.). */
+	g_tls.taken = zrt_err_new_kind(kind, msg);
+	zrt_unwind_abort(msg);
+}
+
 zrt_err zrt_err_new(const char *msg) {
+	return zrt_err_new_kind(ZRT_ERR_NONE, msg);
+}
+
+zrt_err zrt_err_new_kind(int kind, const char *msg) {
 	zrt_err e;
 	e.msg = msg;
 	e.cause = NULL;
+	e.kind = kind;
 	return e;
 }
 
@@ -144,6 +156,7 @@ zrt_err zrt_err_with_cause(const char *msg, zrt_err cause) {
 	e.msg = msg;
 	e.cause = (zrt_err *)zrt_alloc(sizeof(zrt_err));
 	*e.cause = cause;
+	e.kind = ZRT_ERR_NONE;
 	return e;
 }
 

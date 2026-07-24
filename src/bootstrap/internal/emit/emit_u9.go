@@ -64,30 +64,44 @@ func (e *emitter) programUsesConcurrency() bool {
 }
 
 // containsChan reports whether a type transitively holds a channel (chan[T]), the
-// value form that pulls in the scheduler. It mirrors containsRef's structural walk.
+// value form that pulls in the scheduler. It mirrors containsRef's structural walk, with
+// a visited set so a recursive (S1) type terminates instead of looping forever — a
+// nominal already on the walk contributes no new channel, so revisiting it yields false.
 func containsChan(t sema.Type) bool {
+	return containsChanSeen(t, map[string]bool{})
+}
+
+func containsChanSeen(t sema.Type, seen map[string]bool) bool {
 	switch x := t.(type) {
 	case *types.Chan:
 		return true
 	case *types.Tuple:
 		for _, el := range x.Elems {
-			if containsChan(el) {
+			if containsChanSeen(el, seen) {
 				return true
 			}
 		}
 	case *types.Array:
-		return containsChan(x.Elem)
+		return containsChanSeen(x.Elem, seen)
 	case *types.Opt:
-		return containsChan(x.Elem)
+		return containsChanSeen(x.Elem, seen)
 	case *types.Struct:
+		if seen[x.String()] {
+			return false
+		}
+		seen[x.String()] = true
 		for _, ft := range structFieldTypes(x) {
-			if containsChan(ft) {
+			if containsChanSeen(ft, seen) {
 				return true
 			}
 		}
 	case *types.Enum:
+		if seen[x.String()] {
+			return false
+		}
+		seen[x.String()] = true
 		for _, pt := range enumPayloadTypes(x) {
-			if containsChan(pt) {
+			if containsChanSeen(pt, seen) {
 				return true
 			}
 		}
@@ -104,19 +118,17 @@ func containsChan(t sema.Type) bool {
 func (e *emitter) spawnStmt(n *ast.SpawnStmt) {
 	idx, ok := e.spawnIdx[n]
 	if !ok {
-		e.diags.Add(n.Span(), "spawn supports only a direct function call in Phase 1e")
+		e.diags.Add(n.Span(), "spawn supports only a direct, namespace, or method function call in Phase 1e")
 		return
 	}
 	call, _ := n.Call.(*ast.Call)
-	if len(call.Args) == 0 {
+	_, recv, _, _, _ := e.capturedCall(call)
+	if recv == nil && len(call.Args) == 0 {
 		e.line(fmt.Sprintf("zrt_spawn(zg_spawnthunk_%d, NULL);", idx))
 		return
 	}
 	env := e.freshName("senv")
-	var b []string
-	for _, a := range call.Args {
-		b = append(b, e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
-	}
+	b := e.captureValues(recv, call.Args) // spawn OWNS its receiver (the coroutine may outlive the spawner's scope)
 	e.line(fmt.Sprintf("zg_spawnenv_%d *%s = zrt_alloc(sizeof(zg_spawnenv_%d));", idx, env, idx))
 	e.line(fmt.Sprintf("*%s = (zg_spawnenv_%d){ %s };", env, idx, joinComma(b)))
 	e.line(fmt.Sprintf("zrt_spawn(zg_spawnthunk_%d, %s);", idx, env))
@@ -142,37 +154,39 @@ func (e *emitter) emitSpawnHelpers() {
 			if !ok {
 				return
 			}
-			id, ok := call.Callee.(*ast.Ident)
+			target, recv, recvT, erased, ok := e.capturedCall(call)
 			if !ok {
 				return
 			}
 			idx := len(e.spawnIdx)
 			e.spawnIdx[sp] = idx
-			e.emitSpawnThunk(idx, e.callTarget(call, id), call.Args)
+			e.emitSpawnThunk(idx, target, recv, recvT, erased, call.Args)
 		})
 	}
 	e.cur = nil
 }
 
-// emitSpawnThunk writes one spawned call's env struct (when it has captured args) and
-// its coroutine trampoline. The trampoline runs on the coroutine's own stack: it makes
-// the call with the captured arguments (which the callee releases on return, as any
-// by-value call does), then frees the heap env.
-func (e *emitter) emitSpawnThunk(idx int, target string, args []ast.Arg) {
-	if len(args) == 0 {
+// emitSpawnThunk writes one spawned call's env struct (when it captures a receiver or
+// args) and its coroutine trampoline. The trampoline runs on the coroutine's own stack:
+// it makes the call with the captured receiver/arguments (the argument copies released
+// by the callee on return, as any by-value call does), then frees the heap env.
+func (e *emitter) emitSpawnThunk(idx int, target string, recv ast.Expr, recvT sema.Type, erased bool, args []ast.Arg) {
+	if recv == nil && len(args) == 0 {
 		e.line(fmt.Sprintf("static void zg_spawnthunk_%d(void *p) { (void)p; %s(); }", idx, target))
 		e.blank()
 		return
 	}
-	e.line(fmt.Sprintf("typedef struct { %s } zg_spawnenv_%d;", e.deferFields(args), idx))
+	e.line(fmt.Sprintf("typedef struct { %s } zg_spawnenv_%d;", e.captureFields(recvT, args), idx))
 	e.line(fmt.Sprintf("static void zg_spawnthunk_%d(void *p) {", idx))
 	e.indent++
 	e.line(fmt.Sprintf("zg_spawnenv_%d *zg_e = (zg_spawnenv_%d *)p;", idx, idx))
-	var call []string
-	for i := range args {
-		call = append(call, fmt.Sprintf("zg_e->f%d", i))
+	e.line(fmt.Sprintf("%s(%s);", target, captureCallArgs("zg_e", recv != nil, erased, len(args))))
+	// The coroutine OWNS its captured receiver (spawnStmt retained/deep-copied it), so a
+	// non-POD receiver's owned copy is released here — after the call, before the env is
+	// freed — balancing the capture retain (a method borrows its receiver, never releasing it).
+	if recv != nil {
+		e.releaseOwnedReceiver("zg_e", recvT)
 	}
-	e.line(fmt.Sprintf("%s(%s);", target, joinComma(call)))
 	e.line("zrt_free(p);")
 	e.indent--
 	e.line("}")

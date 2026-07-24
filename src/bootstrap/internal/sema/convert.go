@@ -45,6 +45,9 @@ type Scalar struct {
 // `nil` deliberately do not: a str is built from a list[byte]/list[rune] with
 // validation (docs/collections.md), which is a different mechanism.
 func ScalarOf(t Type) (Scalar, bool) {
+	// a strong typedef behaves as its underlying representation once its identity has
+	// been checked, so `int(c)` extracts a Celsius and `Celsius(x)` re-constructs one.
+	t = types.Underlying(t)
 	switch x := t.(type) {
 	case *types.Primitive:
 		switch x.Kind() {
@@ -81,6 +84,14 @@ func ScalarOf(t Type) (Scalar, bool) {
 // pointer equality, because the fixed-width family (i32, u16, ...) is built fresh per
 // mention and is not interned the way the named primitives are.
 func ConversionTarget(name string, result Type) (Scalar, bool) {
+	if named, ok := result.(*types.Named); ok {
+		// a newtype conversion `X(x)`: the callee spells the newtype's own name and the
+		// conversion targets its underlying scalar (ScalarOf unwraps it).
+		if named.Def != nil && named.Def.Name == name {
+			return ScalarOf(result)
+		}
+		return Scalar{}, false
+	}
 	t := primitiveNamed(name)
 	if t == nil || result == nil || !types.Identical(t, result) {
 		return Scalar{}, false
@@ -145,6 +156,20 @@ func (c *checker) scalarConversion(n *ast.Call, name string, target Type) Type {
 			c.errorf(n.Span(), "cannot parse a str to %s; only int(s) parses a string", name)
 		}
 		return target
+	}
+	// `int(v)` on an enum READS its stored discriminant (docs/types.md, GRAMMAR group 7).
+	// Only a payload-free (C-style) enum carries a meaningful discriminant — its native
+	// integer repr; a payload enum keeps its tag opaque and match-only, so reading it as
+	// an int is rejected. `E.of(n)` (enumOfCall) is the reverse.
+	if en, ok := types.Underlying(src).(*types.Enum); ok {
+		if target != Int {
+			c.errorf(n.Span(), "an enum discriminant reads as int, not %s", name)
+			return target
+		}
+		if en.Def == nil || en.Def.Enum == nil || !en.Def.Enum.CStyle {
+			c.errorf(n.Span(), "cannot read a discriminant from %s: only a payload-free (C-style) enum has one", src)
+		}
+		return Int
 	}
 	if _, ok := ScalarOf(src); !ok {
 		c.errorf(n.Span(), "cannot convert %s to %s: only a scalar converts by re-construction", src, name)

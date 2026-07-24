@@ -72,12 +72,41 @@ func (c *checker) exhaustive(subjT Type, arms []ast.MatchArm) (string, bool) {
 	switch s := subjT.(type) {
 	case *types.Enum:
 		return c.enumExhaustive(s, arms)
+	case *types.Either:
+		return c.eitherExhaustive(arms)
 	case *types.Primitive:
 		if s.Kind() == types.KBool {
 			return c.boolExhaustive(arms)
 		}
 	}
 	return "a catch-all '_' arm", false
+}
+
+// eitherExhaustive reports whether an Either/Result subject's arms cover both sides —
+// `Left` and `Right` (or a catch-all, already handled by the caller). It mirrors
+// enumExhaustive over the two fixed cases.
+func (c *checker) eitherExhaustive(arms []ast.MatchArm) (string, bool) {
+	var left, right bool
+	for _, a := range arms {
+		if a.Guard != nil {
+			continue
+		}
+		if p, ok := a.Pat.(*ast.VariantPattern); ok {
+			switch p.Name {
+			case "Left":
+				left = true
+			case "Right":
+				right = true
+			}
+		}
+	}
+	switch {
+	case !left:
+		return "the Left case", false
+	case !right:
+		return "the Right case", false
+	}
+	return "", true
 }
 
 // hasCatchAll reports whether any unguarded arm matches every value (a wildcard or
@@ -240,9 +269,39 @@ func (c *checker) checkLitPattern(p *ast.LitPattern, subjT Type) {
 	}
 }
 
+// eitherArm reports the payload type a Left/Right variant pattern binds on an
+// Either/Result subject (docs/errors.md: `match r { Left(v) => …; Right(e) => … }`),
+// and whether the name is one of the two. `Left` carries the value/Ok side, `Right`
+// the propagated/Err side — so a Result's `Right(e)` binds the erased `Err`, ready for
+// an `is`-dispatch on its kind. This is the sole non-enum match subject.
+func eitherArm(subjT Type, name string) (Type, bool) {
+	ei, ok := subjT.(*types.Either)
+	if !ok {
+		return nil, false
+	}
+	switch name {
+	case "Left":
+		return ei.Left, true
+	case "Right":
+		return ei.Right, true
+	}
+	return nil, false
+}
+
 // checkVariantPattern validates a variant pattern against the subject enum and
 // binds its payload sub-patterns against the variant's payload types (M1).
 func (c *checker) checkVariantPattern(p *ast.VariantPattern, subjT Type) {
+	// `Left(v)` / `Right(e)` on an Either/Result subject binds the corresponding side.
+	if et, ok := eitherArm(subjT, p.Name); ok {
+		if len(p.Elems) != 1 {
+			c.errorf(p.Span(), "%s(x) binds exactly one value, got %d", p.Name, len(p.Elems))
+			et = types.Unknown
+		}
+		for _, sub := range p.Elems {
+			c.checkPattern(sub, et)
+		}
+		return
+	}
 	vd := c.checkVariantMember(p.Span(), p.Name, subjT, len(p.Elems), true)
 	var payload []Type
 	if vd != nil {

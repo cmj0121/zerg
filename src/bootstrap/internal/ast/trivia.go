@@ -91,6 +91,9 @@ func (c *triviaCollector) node(n Node) {
 		c.block(v)
 	case *BindStmt:
 		c.self(v)
+		if v.Target != nil {
+			c.node(v.Target)
+		}
 		c.expr(v.Value)
 	case *Reassign:
 		c.self(v)

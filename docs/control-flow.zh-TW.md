@@ -12,8 +12,11 @@
 **`if`**——作為 **statement** 時，`if cond { … }`（可接 `else` / `else if`）為副作用而跑、不產出值；條件是 `bool`
 （沒有 truthiness）。帶**強制結尾 `else`** 時它反而是 **expression**（`if-expr`，一個 `primary`）：它產出**被選中分支
 的區塊值**，且**每個分支必須產出相同型別**（`x := if hot { warm() } else { cool() }`）。在 statement 位置以 statement
-形式為準，所以到達 `:=`、`return`、或引數的是那個值形式。**綁定形式** `if x := expr { … }` 只在 `expr` 命中 pattern
-`x` 時跑區塊——「值存在」測試的單臂 `match` 語法糖（`if v := <-ch { use(v) }` 只在 `Left` 時觸發）。
+形式為準，所以到達 `:=`、`return`、或引數的是那個值形式。**綁定形式** `if x := expr { … }`(if-let)只在 `expr`
+**存在**時跑區塊——一個持有值的 optional、一個收到值的 `<-ch`(一個 `Left`)——並把**解包後的值**綁成 `x`、**僅在
+then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是「值存在」測試的單臂 `match` 語法糖(`if v := <-ch
+{ use(v) }` 只在 `Left` 時觸發),並在 **`if` 能出現的任何位置**都可用——作為 statement、作為運算式(帶尾隨 `else`)、
+以及作為被回傳的 if 運算式(`return if x := opt { use(x) } else { fallback }`)。
 
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為

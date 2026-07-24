@@ -43,6 +43,14 @@ type Program struct {
 	Inits   []InitGroup
 	InitCtx *Instance
 
+	// CyclicTypes is the set of specialized nominal types (keyed by Mangled) that take
+	// part in a type-graph cycle — every type that owns a boxed (back-edge) slot or is
+	// the target of one (S1, MarkBoxing). The emitter reads it as a type-level query: an
+	// `Opt[T]` whose T is cyclic lowers to a nullable heap box (`void*`, None≡NULL), not
+	// the optional carrier, and such an `Opt` is a non-POD leaf in containsRef. Empty for
+	// a program that defines no recursive type, which therefore stays byte-identical.
+	CyclicTypes map[string]bool
+
 	byMangled   map[string]*Instance
 	typeByKey   map[string]*TypeInstance
 	witByGlobal map[string]*Witness
@@ -147,18 +155,25 @@ type TypeInstance struct {
 }
 
 // FieldInst is one specialized struct field: its source name and concrete type.
+// Boxed marks a self-referential field the MarkBoxing pass cut to break a type-graph
+// cycle (S1): its value is heap-indirected through a refcounted box, so the emitter
+// lowers it to `void*` and retains/releases it as a Ref[payload] cell.
 type FieldInst struct {
-	Name string
-	Type types.Type
+	Name  string
+	Type  types.Type
+	Boxed bool
 }
 
 // VariantInst is one specialized enum variant: its source name, its zero-based tag
 // (the discriminant the emitter tests and derive orders by), and its payload
-// element types specialized to the instance's type arguments.
+// element types specialized to the instance's type arguments. Boxed is parallel to
+// Payload: Boxed[i] marks a self-referential payload slot the MarkBoxing pass cut to
+// break a type-graph cycle (S1), heap-indirected through a refcounted box.
 type VariantInst struct {
 	Name    string
 	Tag     int
 	Payload []types.Type
+	Boxed   []bool
 }
 
 // ExprType returns the concrete type of expression e within this instance, reading

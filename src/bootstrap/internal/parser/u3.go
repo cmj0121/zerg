@@ -329,6 +329,49 @@ func (p *parser) looksLikeStructReassign() bool {
 	return false
 }
 
+// afterMatched returns the kind of the token immediately after the bracket opened at
+// index `open` closes (its nesting depth returns to zero). A statement separator at
+// depth 1 aborts the scan (returns Illegal), so a peek never runs past a statement
+// boundary; unbalanced or exhausted input returns EOF.
+func (p *parser) afterMatched(open int) token.Kind {
+	depth := 0
+	for i := open; i < len(p.toks); i++ {
+		switch p.toks[i].Kind {
+		case token.LBrace, token.LParen, token.LBrack:
+			depth++
+		case token.RBrace, token.RParen, token.RBrack:
+			depth--
+			if depth == 0 {
+				if i+1 < len(p.toks) {
+					return p.toks[i+1].Kind
+				}
+				return token.EOF
+			}
+		case token.Semi:
+			if depth == 1 {
+				return token.Illegal
+			}
+		case token.EOF:
+			return token.EOF
+		}
+	}
+	return token.EOF
+}
+
+// looksLikeTupleBind reports whether a '(' at the cursor opens a tuple destructuring
+// bind target (its matching ')' is followed by ':='), rather than a parenthesized
+// expression or a tuple literal statement.
+func (p *parser) looksLikeTupleBind() bool {
+	return p.at(token.LParen) && p.afterMatched(p.pos) == token.Walrus
+}
+
+// looksLikeStructBind reports whether an 'Ident {' at the cursor opens a struct
+// destructuring bind target (its matching '}' is followed by ':='), rather than a
+// struct-shape reassignment ('… } =') or an identifier followed by a block.
+func (p *parser) looksLikeStructBind() bool {
+	return p.afterMatched(p.pos+1) == token.Walrus
+}
+
 // parseStructReassign parses 'Type{field-targets} = expr'.
 func (p *parser) parseStructReassign() ast.Stmt {
 	name := p.expect(token.Ident)

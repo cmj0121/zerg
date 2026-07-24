@@ -13,9 +13,13 @@ passed **by value**. Copy-by-value is the semantics; the compiler elides copies 
 - **Extract / return** — unwrap (`?`, `!`), `match`, and `return` copy out; the source is never
   invalidated. Move is only a silent optimization when the source is dead afterward.
 
-Recursive and self-referential types need no pointer — declare the field directly (e.g. `Node?` →
-`Node`) and the compiler auto-inserts the heap indirection; such values stay scope-owned and
-copy-by-value like any other.
+Recursive and self-referential types need no pointer — declare the field directly (e.g. `Node?`, or an
+`enum Expr { Num(int); Add(Expr, Expr) }`) and the compiler **auto-boxes the self-referential slot behind a
+refcounted cell**. A recursive value therefore copies **by reference** (refcount-shared), not by deep clone:
+copying bumps the cell's count rather than duplicating the whole chain, and the chain is freed at the last
+holder's scope exit. Two MVP caveats hold this phase: a runtime **cycle** built by reassigning a recursive
+field through a `mut` binding **leaks** (there is no cycle collector yet), and freeing a long chain recurses
+**O(depth)** on the C stack.
 
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
 **inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never
@@ -49,14 +53,18 @@ predictably; the `and` / `or` short-circuit is this rule with the right operand 
 the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The
 runtime counts holders and frees it at the **last** holder's scope exit; everything else stays pure
 scope-owned, no GC/refcount. Copying a value refcount-bumps any `Ref` value it (transitively) contains
-and deep-copies the rest; a `Ref` value is shared, never duplicated.
+and deep-copies the rest; a `Ref` value is shared, never duplicated. (As an **implementation detail**,
+runtime `str` values the program produces are likewise refcounted internally and freed at last use — no
+surface change, but produced strings no longer leak.)
 
-**Refcounting is cycle-complete by construction**, so it needs no cycle collector and no weak
-reference: a `Ref[T]`'s referent is **fixed when the box is built** (to point elsewhere, build a new
-`Ref`), and with values immutable by default and constructed bottom-up there is no way to make an
-existing `Ref` point back at a later one — a reference cycle can never form, so the last-holder free is
-always complete. (The lone pathological case — a `chan` buffering a reference to itself — is a
-programmer error, not a checked one.)
+For the **explicit** ref-counted values, **refcounting is cycle-complete by construction**, so they need no
+cycle collector and no weak reference: a `Ref[T]`'s referent is **fixed when the box is built** (to point
+elsewhere, build a new `Ref`), and with values immutable by default and constructed bottom-up there is no way
+to make an existing `Ref` point back at a later one — a reference cycle can never form, so the last-holder
+free is always complete. (The lone pathological case — a `chan` buffering a reference to itself — is a
+programmer error, not a checked one.) The one exception is the **auto-boxed recursive cell** above: because a
+`mut` recursive field can be reassigned into a back-edge, a cycle _can_ form there — and, this phase, is **not
+collected and leaks** (a bounded, documented MVP gap, the cost of allowing self-referential types directly).
 
 ## `Ref[T]` — a resource that outlives its scope
 

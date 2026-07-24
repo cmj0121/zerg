@@ -1,0 +1,14 @@
+# other — a directory module reached as `import "other"`. It exports a plain function
+# that the entry module takes as a first-class VALUE (not only calls), exercising the
+# cross-module function-as-value path (`f := other.helper`).
+
+# helper is a cross-module function bound as a value and called through that value.
+pub fn helper(x: int) -> int {
+	return x + 1
+}
+
+# secret is module-private, so it is never reachable as `other.secret` — it only
+# proves visibility is still enforced on the value path.
+fn secret(x: int) -> int {
+	return x * 10
+}

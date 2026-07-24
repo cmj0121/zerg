@@ -484,11 +484,21 @@ func (p *parser) parseStmt() ast.Stmt {
 	case token.Const:
 		p.advance()
 		return p.parseBinding(t.Span.Start, false, true)
+	case token.LParen:
+		// '(a, b) := e' — a tuple destructuring bind; otherwise fall through to the
+		// expression path (a parenthesized expression or a tuple literal statement).
+		if p.looksLikeTupleBind() {
+			return p.parseBinding(t.Span.Start, false, false)
+		}
 	case token.Ident:
 		switch p.peek(1).Kind {
 		case token.Walrus, token.Colon:
 			return p.parseBinding(t.Span.Start, false, false)
 		case token.LBrace:
+			// 'P{x, y} := e' — a struct destructuring bind; else 'P{x, y} = e' reassign.
+			if p.looksLikeStructBind() {
+				return p.parseBinding(t.Span.Start, false, false)
+			}
 			if p.looksLikeStructReassign() {
 				return p.parseStructReassign()
 			}
@@ -551,9 +561,18 @@ func (p *parser) parseReturnIf(kw token.Token, r *ast.ReturnStmt) ast.Stmt {
 	return spanned(r, span(kw.Span.Start, end))
 }
 
-// parseBinding parses 'name := e' / 'name: T = e' (the leading mut/const keyword,
-// when present, has already been consumed).
+// parseBinding parses 'name := e' / 'name: T = e', or a destructuring bind
+// 'tuple-pat := e' / 'struct-pat := e' (the leading mut/const keyword, when present,
+// has already been consumed). A destructuring bind takes the inferred ':=' form only
+// (GRAMMAR bind-target).
 func (p *parser) parseBinding(start token.Pos, mut, konst bool) ast.Stmt {
+	if p.atBindTarget() {
+		target := p.parseBindTarget()
+		p.expect(token.Walrus)
+		val := p.parseExpr()
+		return spanned(&ast.BindStmt{Mut: mut, Const: konst, Target: target, Value: val},
+			token.Span{Start: start, End: val.Span().End})
+	}
 	name := p.expect(token.Ident)
 	b := &ast.BindStmt{Mut: mut, Const: konst, Name: name.Lexeme}
 	switch {
@@ -567,6 +586,29 @@ func (p *parser) parseBinding(start token.Pos, mut, konst bool) ast.Stmt {
 		p.fail(p.cur().Span, "expected ':=' or ': type =' in binding")
 	}
 	return spanned(b, token.Span{Start: start, End: b.Value.Span().End})
+}
+
+// atBindTarget reports whether the cursor begins a destructuring bind target — a
+// tuple '(…)' or a struct 'Type{…}' pattern — as opposed to a plain identifier name.
+func (p *parser) atBindTarget() bool {
+	return p.at(token.LParen) || (p.at(token.Ident) && p.peek(1).Kind == token.LBrace)
+}
+
+// parseBindTarget parses a destructuring bind-target pattern: a tuple '(a, b)' or a
+// struct 'Type{x, y}' shape (its leaves are names or nested tuple/struct patterns), or
+// a bare identifier NamePattern (GRAMMAR bind-target). It reuses the group-6 pattern
+// parsers, so a nested '(a, (b, c))' works.
+func (p *parser) parseBindTarget() ast.Pattern {
+	switch {
+	case p.at(token.LParen):
+		return p.parseTuplePattern()
+	case p.at(token.Ident) && p.peek(1).Kind == token.LBrace:
+		name := p.advance()
+		return p.parseStructPattern(name)
+	default:
+		id := p.expect(token.Ident)
+		return spanned(&ast.NamePattern{Name: id.Lexeme}, id.Span)
+	}
 }
 
 // --- expressions --------------------------------------------------------------

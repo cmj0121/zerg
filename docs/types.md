@@ -85,6 +85,12 @@ enum Either[X, Y] {         # generic sum type
 }
 ```
 
+**Recursive and self-referential types** work directly — a `struct Node { next: Node? }`, an
+`enum Expr { Num(int); Add(Expr, Expr) }` — with **no pointer**: the compiler auto-boxes the self-referential
+slot behind a refcounted cell, so such a value copies **by reference** (refcount-shared), not by deep clone.
+Its MVP limits (a `mut`-built cycle leaks; a long chain frees in O(depth)) are the [Values & Memory](memory.md)
+reference.
+
 `Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
 (see [Null-safety & Errors](errors.md)). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
 variant, to construct and to `match`; there is no per-variant privacy.
@@ -94,8 +100,9 @@ turns on whether _every_ variant is fieldless. A **fieldless** `enum` may give a
 `= <discriminant>` — a **compile-time-constant integer**, distinct across variants (an unspecified one is
 the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**: `variant = <int>`. Such an
 enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
-`int(v)` **reads** the value and `E.of(n) -> E?` **reverses** it (an unknown `n` yielding `nil`, never a
-wrong variant). A specific width is the opt-in layout decorator `#[repr]`; the serialized/wire form is the
+the **enum name is a value namespace** — `Color.Green` names the variant and `Color.of(n)` reverses a number
+— with `int(v)` **reading** the discriminant and `E.of(n) -> E?` **reversing** it (an unknown `n` yielding
+`nil`, never a wrong variant). A specific width is the opt-in layout decorator `#[repr]`; the serialized/wire form is the
 `Encode` / `Decode` impl, never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
@@ -118,12 +125,16 @@ destructured — so multiple return needs no separate mechanism ([Pattern matchi
 **`type X = Y`** defines a **new, distinct type** — not a transparent alias. `X` takes on `Y`'s
 representation and implementation (its fields or variants, and its `spec` impls, now with `This` = `X`), yet
 is a **separate identity**: `X` and `Y` are **different types even when structurally identical**, and there
-is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion. It
-may be generic (`type Result[T] = Either[T, Err]`). This is the **strong-typedef** tool — a `UserId` that
-behaves like an `int` but can never be passed where a plain `int` or a `ProductId` is wanted — and it is
-distinct from the single-field-struct **newtype**, which _wraps_ a value behind a new field and fresh impls
-rather than reusing the whole shape. The prelude's **`Result[T]`** and **`T?`** are exactly this over
-`Either`, which is why they are distinct from each other and need an explicit `ok_or` / `ok` to cross.
+is **no cast** between them — you convert by **re-construction** (`X(y)` / `Y(x)`), like any conversion. A
+**monomorphic** `type X = Y` **lowers to `Y`** at runtime — the distinctness is **compile-time only**, so a
+`Celsius = int` costs nothing (no box, no wrapper) yet a `Celsius` is never an `int` without an explicit
+`int(c)` / `Celsius(x)`. A **generic** alias `type X[T] = …` is **not yet supported** this phase (parsed, but
+rejected). This is the **strong-typedef** tool — a `UserId` that behaves like an `int` but can never be passed
+where a plain `int` or a `ProductId` is wanted — and it is distinct from the single-field-struct **newtype**,
+which _wraps_ a value behind a new field and fresh impls rather than reusing the whole shape. The prelude's
+**`Result[T]`** and **`T?`** are the compiler-provided, generic form of exactly this over `Either` (built in,
+not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
+and need an explicit `ok_or` / `ok` to cross.
 
 ## Construction & encapsulation
 

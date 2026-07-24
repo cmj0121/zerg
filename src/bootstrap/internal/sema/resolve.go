@@ -360,6 +360,11 @@ func (r *resolver) resolveStmt(s ast.Stmt) {
 		if n.Value != nil {
 			r.resolveExpr(n.Value) // RHS resolves before the name is in scope
 		}
+		if n.Target != nil {
+			// a destructuring bind '(a, b) := e' / 'P{x, y} := e': declare every leaf name.
+			r.declareBindTarget(n.Target, n.Mut, n.Const)
+			return
+		}
 		kind := SymVar
 		if n.Const {
 			kind = SymConst
@@ -439,6 +444,40 @@ func (r *resolver) resolveSelect(n *ast.SelectStmt) {
 		}
 		r.resolveExpr(arm.Body)
 		r.pop()
+	}
+}
+
+// declareBindTarget declares every leaf name of a destructuring bind target as a
+// fresh binding (GRAMMAR bind-target): a tuple/struct pattern's leaves are names or
+// nested tuple/struct patterns, and a struct shorthand '{x}' binds the field name x.
+// Unlike a match pattern, a bind-target leaf is always a fresh binding (never a
+// nullary variant).
+func (r *resolver) declareBindTarget(pat ast.Pattern, mut, konst bool) {
+	kind := SymVar
+	if konst {
+		kind = SymConst
+	}
+	switch p := pat.(type) {
+	case *ast.NamePattern:
+		r.declareBinding(&Symbol{
+			Name: p.Name, Kind: kind, Mutable: mut, Const: konst, Span: p.Span(), Type: types.Unknown,
+		})
+	case *ast.TuplePattern:
+		for _, sub := range p.Elems {
+			r.declareBindTarget(sub, mut, konst)
+		}
+	case *ast.StructPattern:
+		for _, f := range p.Fields {
+			if f.Pat != nil {
+				r.declareBindTarget(f.Pat, mut, konst)
+			} else {
+				r.declareBinding(&Symbol{
+					Name: f.Name, Kind: kind, Mutable: mut, Const: konst, Span: p.Span(), Type: types.Unknown,
+				})
+			}
+		}
+	default:
+		r.errorf(pat.Span(), "a bind target must be a name, tuple, or struct pattern")
 	}
 }
 

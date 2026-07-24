@@ -127,6 +127,11 @@ func (e *emitter) prepareResults() {
 func (e *emitter) isCarrierType(t sema.Type) bool {
 	switch x := t.(type) {
 	case *types.Opt:
+		// A cyclic-nominal Opt is a nullable heap box (`void*`, None≡NULL), NOT a carrier
+		// (S1 §5): it must not register a `zg_opt_<n>` struct wrapping a void*.
+		if e.isCyclicNominal(x.Elem) {
+			return false
+		}
 		return e.ctype(x.Elem) != "void"
 	case *types.Either:
 		if isResultNil(t) {
@@ -153,6 +158,21 @@ func (e *emitter) carrierFor(t sema.Type) (*carrier, bool) {
 func isErrType(t sema.Type) bool {
 	s, ok := t.(*types.Struct)
 	return ok && s.Def != nil && s.Def.Name == "Err"
+}
+
+// programUsesErr reports whether the program names a built-in error value anywhere — a
+// kind constructor `ValueError(...)`, a raised or bound Err, an `err.message()`, or an
+// `is <Kind>` test — each of which the backend lowers to a `zrt_err` from zergrt.h. It
+// gates the runtime include for an error-only program that registers no Result carrier
+// (a bare `is`/constructor with no `guard`). A program that names no Err has no Err-typed
+// expression, so this stays false and its C is byte-identical.
+func (e *emitter) programUsesErr() bool {
+	for _, t := range e.info.ExprTypes {
+		if isErrType(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // leftOf returns the Left/Ok/element type of an Either or optional (nil otherwise).
@@ -257,6 +277,19 @@ func (e *emitter) zeroValueC(t sema.Type) string {
 func (e *emitter) wrapValue(target, vt sema.Type, code string) string {
 	if target == nil {
 		return code
+	}
+	// A cyclic-nominal Opt target is a nullable heap box (S1 §5): `nil` is NULL (None); a
+	// bare-payload value (a Some-coercion `Node -> Node?`) allocates a fresh cell and MOVES
+	// the copied payload into it; a value already of the boxed-Opt type is a box, passed
+	// through (copyValue already retained a shared one).
+	if e.isBoxedOpt(target) {
+		if vt == sema.Nil {
+			return "NULL"
+		}
+		if types.Identical(target, vt) {
+			return code
+		}
+		return fmt.Sprintf("%s(%s)", e.refnewName(target.(*types.Opt).Elem), code)
 	}
 	// A `Result[nil]` target uses the tag-only zrt_result_nil representation, so it is
 	// reconciled here before the structural short-circuit below — `Result[nil]`'s Left
@@ -390,6 +423,14 @@ func (e *emitter) optChainExpr(n *ast.OptChain) string {
 // which raises an Err on a Right/nil. Any other operand is left unchanged.
 func (e *emitter) forceExpr(n *ast.Force) string {
 	opT := e.cur.ExprType(e.info, n.X)
+	// A boxed nullable Opt (`Node?`, S1) is a `void*` cell: force reads its payload through
+	// the box, raising on None (a NULL box) exactly as the carrier force does on nil.
+	if e.isBoxedOpt(opT) {
+		box := e.freshName("fb")
+		ct := e.ctype(opT.(*types.Opt).Elem)
+		return fmt.Sprintf("({ void *%s = %s; if (%s == NULL) { zrt_raise_err(zrt_err_new(\"force-unwrap of nil\")); } (*(%s*)zrt_ref_payload(%s)); })",
+			box, e.expr(n.X), box, ct, box)
+	}
 	if ei, ok := opT.(*types.Either); ok {
 		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
 			return fmt.Sprintf("zg_force_%d(%s)", idx, e.expr(n.X))

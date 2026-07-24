@@ -148,17 +148,28 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	if sum, ok := c.builtinSum(ref); ok {
 		return sum
 	}
+	// the built-in erased error `Err` (docs/errors.md, GRAMMAR group 8): the Right side
+	// of a Result and the common carrier every built-in error kind constructs, nameable
+	// in a signature (`fn f(e: Err)`). The named kinds themselves are `is` targets and
+	// constructors, not distinct types — they all erase to Err.
+	if ref.Name == "Err" {
+		if len(ref.Args) != 0 {
+			c.errorf(ref.Span(), "type %q takes no type arguments", ref.Name)
+		}
+		return errType
+	}
 	if sym := c.module.lookup(ref.Name); sym != nil && sym.Kind == SymType {
-		// A9: a transparent type alias `type X = Y` resolves to its UNDERLYING type, so
-		// the alias name is never retained in ExprTypes/BindTypes (and never splits a
-		// carrier/tuple String() key). A generic alias `type X[T] = …` is not yet
-		// supported and is gated cleanly (FORK-A9: non-generic aliases only).
+		// A9 (revised): a strong typedef `type X = Y` is a DISTINCT nominal type (a
+		// newtype), identical only to itself; its underlying representation is filled by
+		// collectTypes and reached through types.Underlying. A value crosses the boundary
+		// only by an explicit conversion `X(v)` / `Y(x)`. A generic alias `type X[T] = …`
+		// is not yet supported and is gated cleanly (FORK-A9: non-generic aliases only).
 		if td, ok := sym.Decl.(*ast.TypeDecl); ok && td.Alias != nil {
 			if td.Generics != nil {
 				c.errorf(ref.Span(), "a generic type alias is not yet supported")
 				return Invalid
 			}
-			return c.resolveType(td.Alias)
+			return &types.Named{Def: sym.TypeDef}
 		}
 		return c.namedTypeUse(sym, c.typeArgs(refArgExprs(ref)))
 	}

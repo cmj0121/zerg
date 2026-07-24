@@ -56,10 +56,16 @@ const (
 	KOpt
 	// KEither is Either[X, Y] (Result[T] = Either[T, Err]); T? uses KOpt instead.
 	KEither
+	// KRange is a half-open/inclusive numeric range 'lo..hi' / 'lo..=hi' used as a
+	// value (membership 'v in r', or a bound name). Its element type is integral.
+	KRange
 
 	// user-declared nominal types
 	KStruct
 	KEnum
+	// KNamed is a strong typedef 'type X = Y' (a newtype): a distinct nominal type
+	// over an underlying representation.
+	KNamed
 
 	// generics
 	KParam    // an abstract, bound-constrained type parameter
@@ -302,6 +308,19 @@ func (*Opt) typ()             {}
 func (*Opt) Kind() Kind       { return KOpt }
 func (o *Opt) String() string { return o.Elem.String() + "?" }
 
+// Range is a numeric range value 'lo..hi' (half-open) or 'lo..=hi' (inclusive),
+// over an integral element type. Inclusive marks the '..=' form; a range used only
+// to drive a for-in loop never becomes a Range value (that stays sugar), so this
+// type appears only for a range membership 'v in r' or a range bound to a name.
+type Range struct {
+	Elem      Type
+	Inclusive bool
+}
+
+func (*Range) typ()             {}
+func (*Range) Kind() Kind       { return KRange }
+func (r *Range) String() string { return "range[" + r.Elem.String() + "]" }
+
 // Either is the sum 'Either[X, Y]' (Result[T] = Either[T, Err]).
 type Either struct{ Left, Right Type }
 
@@ -423,6 +442,34 @@ type Enum struct {
 func (*Enum) typ()             {}
 func (*Enum) Kind() Kind       { return KEnum }
 func (e *Enum) String() string { return nominalString(e.Def.Name, e.Args) }
+
+// Named is a strong typedef 'type X = Y' (a newtype): a distinct nominal type over
+// an underlying representation. Its Def carries the declared name and, once the
+// checker has resolved it, the underlying type in Def.Alias. Two Named types are
+// identical only when they share a *TypeDef, so a Celsius is not an int; a value
+// crosses the boundary only through an explicit conversion ('Celsius(x)' / 'int(c)').
+// It lowers to its underlying type in the backend (no runtime or emit cost), so the
+// distinction lives purely at the type layer.
+type Named struct{ Def *TypeDef }
+
+func (*Named) typ()             {}
+func (*Named) Kind() Kind       { return KNamed }
+func (n *Named) String() string { return n.Def.Name }
+
+// Underlying unwraps a strong typedef to its representation type, following a chain
+// of newtypes ('type B = A' over 'type A = int') to the non-newtype it ultimately
+// stands for; every other type is returned unchanged. Backend lowering and the
+// scalar-conversion machinery use it so a newtype behaves as its underlying type once
+// its identity has been checked.
+func Underlying(t Type) Type {
+	for {
+		n, ok := t.(*Named)
+		if !ok || n.Def == nil || n.Def.Alias == nil {
+			return t
+		}
+		t = n.Def.Alias
+	}
+}
 
 // nominalString renders a nominal type's source spelling, appending its type
 // arguments '[A, B]' when applied, so a diagnostic distinguishes 'Box[int]' from

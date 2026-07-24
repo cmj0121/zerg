@@ -46,6 +46,14 @@ typedef struct {
 	zrt_drop_fn drop; /* run at rc==0 before free (NULL = nothing to drop) */
 } zrt_ref_hdr;
 
+/* ZRT_RC_IMMORTAL is the sentinel refcount of a cell that must never be freed: a
+ * value in static storage (a string literal, a constant result such as the "true"/
+ * "false" of zrt_display_bool). zrt_retain/zrt_release short-circuit on it, so such a
+ * cell can be bound, copied, and "released" at scope exit without ever touching its
+ * backing memory. A heap cell keeps a normal count and frees at zero. This is the one
+ * mechanism that lets literals and heap strings share one `const char*` ABI (S2). */
+#define ZRT_RC_IMMORTAL ((size_t)SIZE_MAX)
+
 /* zrt_ref_alloc allocates a Ref holding payload_sz bytes with refcount 1 and
  * the given drop function, and returns the header pointer. */
 void *zrt_ref_alloc(size_t payload_sz, zrt_drop_fn drop);
@@ -245,9 +253,27 @@ typedef struct zrt_frame {
  * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
  * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
  * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
+/* zrt_err_kind is the FIXED, built-in error taxonomy (docs/errors.md, GRAMMAR group
+ * 8). Users choose from these named kinds but cannot define their own this phase. The
+ * kind lets a `guard`/`?`-recovered Err be distinguished at the language surface (the
+ * `is <Kind>` test lowers to `err.kind == <this>`), so a runtime abort ("ValueError:
+ * …", "IOError: …") and a `raise ValueError("…")` reify to the same nameable kind.
+ * These integer values are MIRRORED by the compiler (internal/sema/builtins.go); keep
+ * the two in lockstep. ZRT_ERR_NONE is the untyped/generic Err a bare abort carries. */
+enum {
+	ZRT_ERR_NONE     = 0,
+	ZRT_ERR_VALUE    = 1, /* ValueError */
+	ZRT_ERR_OVERFLOW = 2, /* OverflowError */
+	ZRT_ERR_IO       = 3, /* IOError */
+	ZRT_ERR_ENCODING = 4, /* EncodingError */
+	ZRT_ERR_INDEX    = 5, /* IndexError */
+	ZRT_ERR_KEY      = 6, /* KeyError */
+};
+
 typedef struct zrt_err {
 	const char     *msg;
 	struct zrt_err *cause;
+	int             kind; /* a zrt_err_kind (ZRT_ERR_*); ZRT_ERR_NONE for a generic Err */
 } zrt_err;
 
 typedef struct {
@@ -303,10 +329,22 @@ void zrt_handler_pop(zrt_frame *frame);
  * alias violation and OOM all funnel through. */
 _Noreturn void zrt_abort(const char *msg);
 
+/* zrt_abort_kind is zrt_abort carrying a built-in error KIND (a ZRT_ERR_* value), so a
+ * guard-recovered intrinsic abort (int-parse ValueError, a checked-conversion
+ * OverflowError, io IOError, the str bridge's EncodingError, a bounds IndexError/
+ * KeyError) reifies to the matching nameable kind. `zrt_abort(msg)` is the ZRT_ERR_NONE
+ * case. */
+_Noreturn void zrt_abort_kind(int kind, const char *msg);
+
 /* --- Err value + carrying abort (unwind.c, Decision D) -------------------- */
 
-/* zrt_err_new builds an Err with the given message and no cause. */
+/* zrt_err_new builds an Err with the given message, no cause, and the generic kind
+ * (ZRT_ERR_NONE). */
 zrt_err zrt_err_new(const char *msg);
+
+/* zrt_err_new_kind builds an Err with a built-in KIND (a ZRT_ERR_* value) and message,
+ * no cause — the value a `raise ValueError("…")` carries. */
+zrt_err zrt_err_new_kind(int kind, const char *msg);
 
 /* zrt_err_with_cause builds an Err chained to a cause: `raise e from c` records c
  * so a handler can walk the chain. The cause is copied to the heap (the caller's
@@ -429,6 +467,21 @@ bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired);
 /* zrt_str_concat returns a fresh heap string holding a followed by b (a NULL operand
  * is the empty string). It joins the parts of a lowered f-string. */
 const char *zrt_str_concat(const char *a, const char *b);
+
+/* zrt_str_retain / zrt_str_release are the `const char*`-typed refcount wrappers for a
+ * MANAGED str value (S2): a managed str IS the payload of a `[zrt_ref_hdr | bytes,'\0']`
+ * cell, so the header is recovered by `((zrt_ref_hdr*)p) - 1`. retain bumps the count and
+ * returns the same pointer (so a copy site is one expression); release drops it, freeing
+ * the cell at zero. A string LITERAL is an immortal cell, so both are no-ops on it. These
+ * are emitted only for a program the compiler marks str-managed; an unmanaged program
+ * keeps `str` a bare `const char*` and never calls them. */
+const char *zrt_str_retain(const char *s);
+void        zrt_str_release(const char *s);
+
+/* zrt_str_elem_vt is the list-element vtable for a `list[str]` whose elements are managed
+ * str cells: copy retains, drop releases. zrt_os_args builds the command-line args list
+ * with it so the list owns and frees its argv cells. Declared after zrt_elem_vt. */
+extern const zrt_elem_vt zrt_str_elem_vt;
 
 /* zrt_display_* render a value's human `display()` text (the f-string `{x}` default
  * and the `!s` conversion). A `str` displays as itself, so it has no entry here. */

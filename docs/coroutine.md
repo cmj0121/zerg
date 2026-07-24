@@ -7,7 +7,9 @@ futures, no join/handle. It builds on the memory and error models in the
 ## `spawn`
 
 `spawn f(args)` starts a coroutine (Go's `go`) on an **M:N scheduler**. It **returns nothing** — no
-handle, no join/await; you observe results and completion **only through channels**.
+handle, no join/await; you observe results and completion **only through channels**. The callee is any
+call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
+mirroring `defer`, which takes the same callee forms (`defer f.close()`).
 
 - **Fire-and-forget** — the runtime never tracks or joins the coroutine; to learn an outcome it must
   send it over a channel the observer holds.

@@ -443,9 +443,10 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
 - **建構（Construction）。** 型別名同時是它的**建構子**——`User(id: 1, name: "x")` 建一個 struct（field 依宣告順序
   成為參數，positional 先、named 後）、`Circle(3.0)` 建一個 enum variant。這個名字與 function **共用 value 命名
   空間**,所以型別和 function 不能同名（Zerg 無 overloading）。field-wise `T(...)` 是**公開且基元**;自訂 constructor
-  是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** 把 `T(...)` 降為模組私有,外部須改走公開的
-  自訂 constructor——模組內部仍以 `T(...)` 建。
-- **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別，非透明別名；可泛型。
+  是具名關聯函式（inherent `impl`）,內部經 `T(...)` 建。**`#[sealed]`** *原意*是把 `T(...)` 降為模組私有(外部須改走
+  公開的自訂 constructor、模組內部仍以 `T(...)` 建),但這個階段是**被識別並拒絕、尚未實作**(見 [Decorators](decorators.zh-TW.md))。
+- **`type X = Y`。** 一個**強 typedef**——全新、獨立的型別,非透明別名,在 runtime 降低成 `Y`。`generics?` 槽會被
+  **解析**,但**泛型** alias `type X[T] = …` 這個階段**尚未實作**(在語意分析階段被拒絕)。
 - **編譯期常數（隱含）。** 編譯期摺疊是**隱含**的、與 `const` 關鍵字無關（`const` 只標記 shadow-proof 綁定，見
   group 4）。任何 RHS 是 `const-expr` 的綁定（`:=` 或 `const`）都會被**編譯期摺疊**，並可用於任何需要編譯期值之處：
   陣列長度 `[T; N]`、enum discriminant、decorator 引數、值泛型引數。若某名字用在這類位置但其 RHS 不可摺疊 → 使用點
@@ -481,7 +482,9 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   （`decorated-decl`，group 1）並綁定之。哪個 decorator 能用在哪種宣告是**語意**規則——`struct`/`enum` 上的
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見
   [Derive & Default Behavior](derive.md)）；logging decorator 則會掛在 `fn` 上。decorator 是**固定、compiler
-  擁有**的集合——使用者不可自訂（Zerg 無 macro）；其他指令（layout、FFI…）日後於此加入。`#[` 是唯一不算註解的
+  擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator 是編譯錯誤**,絕不被默默丟棄。今日已實作:
+  `#[derive]`、`#[dyn]`、`#[test]`;`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,
+  在實作前會被識別並拒絕。`#[` 是唯一不算註解的
   `#`——lexer peek 一字元即分辨。
 
 ## Group 8 — Null-safety & Errors

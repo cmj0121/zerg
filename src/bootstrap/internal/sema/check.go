@@ -107,11 +107,7 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 		c.synth(n.X)
 		return Bool
 	case *ast.Range:
-		c.synth(n.Lo)
-		if n.Hi != nil {
-			c.synth(n.Hi)
-		}
-		return types.Unknown
+		return c.synthRange(n)
 	case *ast.MatchExpr:
 		return c.inferMatch(n)
 	case *ast.Coalesce:
@@ -214,6 +210,16 @@ func (c *checker) inferIfExpr(n *ast.IfExpr) Type {
 		}
 	}
 	for _, br := range n.Branches {
+		if br.Bind != "" {
+			// a binding head `if x := opt`: bind the unwrapped element for the then-body,
+			// which yields the branch value only when the optional is present.
+			elem := c.ifBindElem(br)
+			c.pushScope()
+			c.declare(br.Body.Span(), br.Bind, elem, false)
+			merge(c.synthBlock(br.Body))
+			c.popScope()
+			continue
+		}
 		c.checkCond(br.Cond)
 		merge(c.synthBlock(br.Body))
 	}
@@ -297,6 +303,18 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 // --- bindings -----------------------------------------------------------------
 
 func (c *checker) checkBind(b *ast.BindStmt) {
+	if b.Target != nil {
+		// a destructuring bind '(a, b) := e' / 'P{x, y} := e': infer the RHS and bind each
+		// leaf name against its inferred component type.
+		t := c.synth(b.Value)
+		if t == Nil {
+			c.errorf(b.Span(), "cannot infer a type from nil; use a type annotation")
+			t = Invalid
+		}
+		c.info.BindTypes[b] = t
+		c.checkBindTarget(b.Target, t, b.Mut)
+		return
+	}
 	var typ Type
 	if b.Type != nil {
 		declared := c.resolveType(b.Type)
@@ -320,6 +338,50 @@ func (c *checker) checkBind(b *ast.BindStmt) {
 	}
 	c.info.BindTypes[b] = typ
 	c.declare(b.Span(), b.Name, typ, b.Mut)
+}
+
+// checkBindTarget binds a destructuring bind target's leaf names against the RHS type
+// t, declaring each with the given mutability (GRAMMAR bind-target). A tuple target
+// destructures a tuple RHS component-wise; a struct target reads its fields by name; a
+// nested tuple/struct recurses.
+func (c *checker) checkBindTarget(pat ast.Pattern, t Type, mut bool) {
+	switch p := pat.(type) {
+	case *ast.NamePattern:
+		c.declare(p.Span(), p.Name, t, mut)
+	case *ast.TuplePattern:
+		tup, _ := t.(*types.Tuple)
+		if tup != nil && len(tup.Elems) != len(p.Elems) {
+			c.errorf(p.Span(), "cannot destructure %s into %d name(s)", t, len(p.Elems))
+		}
+		for i, sub := range p.Elems {
+			et := types.Type(types.Unknown)
+			if tup != nil && i < len(tup.Elems) {
+				et = tup.Elems[i]
+			}
+			c.checkBindTarget(sub, et, mut)
+		}
+	case *ast.StructPattern:
+		st, _ := t.(*types.Struct)
+		for _, f := range p.Fields {
+			ft := types.Type(types.Unknown)
+			if st != nil && st.Def != nil && st.Def.Struct != nil {
+				if fd := findField(st.Def, f.Name); fd != nil {
+					ft = fd.Type
+				} else if !bad(t) {
+					c.errorf(p.Span(), "type %s has no field %q", st.Def.Name, f.Name)
+				}
+			}
+			if f.Pat == nil {
+				c.declare(p.Span(), f.Name, ft, mut)
+			} else {
+				c.checkBindTarget(f.Pat, ft, mut)
+			}
+		}
+	default:
+		if !bad(t) {
+			c.errorf(pat.Span(), "a bind target must be a name, tuple, or struct pattern")
+		}
+	}
 }
 
 // isVoidTryBind reports whether an initializer is a `?` propagate whose operand is a
@@ -444,6 +506,47 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 
 // --- operators ----------------------------------------------------------------
 
+// synthRange types a range expression 'lo..hi' / 'lo..=hi' / 'lo..' (GRAMMAR group
+// 4). Both bounds must be the same INTEGRAL type (int, byte, rune, or a fixed-width
+// integer), which becomes the range's element type — so a membership 'v in r' and a
+// range bound to a name are typed. A for-in over a range never reaches here (it is
+// special-cased on the raw bounds), so this only serves the value/membership forms.
+func (c *checker) synthRange(n *ast.Range) Type {
+	lo := c.synth(n.Lo)
+	elem := lo
+	if n.Hi != nil {
+		hi := c.synth(n.Hi)
+		elem = c.unifyRangeBounds(n, lo, hi)
+	}
+	if !bad(elem) && !isIntegral(elem) {
+		c.errorf(n.Span(), "a range value requires integral bounds, found %s", elem)
+		elem = Invalid
+	}
+	return &types.Range{Elem: elem, Inclusive: n.Inclusive}
+}
+
+// unifyRangeBounds reconciles a range's two bound types, allowing an untyped integer
+// literal to adopt the other bound's integral type, and returns the common element
+// type (Invalid with a diagnostic when they disagree).
+func (c *checker) unifyRangeBounds(n *ast.Range, lo, hi Type) Type {
+	switch {
+	case bad(lo):
+		return hi
+	case bad(hi):
+		return lo
+	case types.Identical(lo, hi):
+		return lo
+	case isIntegral(lo) && hi == Int && isIntLit(n.Hi):
+		c.info.ExprTypes[n.Hi] = lo
+		return lo
+	case isIntegral(hi) && lo == Int && isIntLit(n.Lo):
+		c.info.ExprTypes[n.Lo] = hi
+		return hi
+	}
+	c.errorf(n.Span(), "range bounds must have the same type, found %s and %s", lo, hi)
+	return Invalid
+}
+
 func (c *checker) inferUnary(n *ast.Unary) Type {
 	t := c.synth(n.X)
 	if bad(t) {
@@ -549,6 +652,14 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		// (zrt_map_has hashes it as a key). Any other membership yields bool unchecked.
 		if mt, ok := rt.(*types.Map); ok && !bad(lt) && !bad(mt.Key) && !c.assignable(mt.Key, n.L, lt) {
 			c.errorf(n.L.Span(), "cannot test membership of %s in a map with key %s", lt, mt.Key)
+			return Invalid
+		}
+		// `v in lo..hi` range membership: the tested value must be assignable to the
+		// range's integral element type ('lo <= v and v < hi' for '..', '<= hi' for
+		// '..='). This is the half-open/inclusive containment the grammar's `in` sugar
+		// desugars to.
+		if rg, ok := rt.(*types.Range); ok && !bad(lt) && !bad(rg.Elem) && !c.assignable(rg.Elem, n.L, lt) {
+			c.errorf(n.L.Span(), "cannot test membership of %s in a range of %s", lt, rg.Elem)
 			return Invalid
 		}
 		// membership test 'v in coll' yields bool (GRAMMAR group 4).

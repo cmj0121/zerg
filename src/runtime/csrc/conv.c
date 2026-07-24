@@ -26,28 +26,28 @@ static const char *const kFloatMsg = "OverflowError: float conversion out of ran
 
 int64_t zrt_conv_i_from_i(int64_t v, int64_t lo, int64_t hi) {
 	if (v < lo || v > hi) {
-		zrt_abort(kRangeMsg);
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kRangeMsg);
 	}
 	return v;
 }
 
 uint64_t zrt_conv_u_from_i(int64_t v, uint64_t hi) {
 	if (v < 0 || (uint64_t)v > hi) {
-		zrt_abort(kRangeMsg);
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kRangeMsg);
 	}
 	return (uint64_t)v;
 }
 
 int64_t zrt_conv_i_from_u(uint64_t v, int64_t hi) {
 	if (hi < 0 || v > (uint64_t)hi) {
-		zrt_abort(kRangeMsg);
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kRangeMsg);
 	}
 	return (int64_t)v;
 }
 
 uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi) {
 	if (v > hi) {
-		zrt_abort(kRangeMsg);
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kRangeMsg);
 	}
 	return v;
 }
@@ -61,14 +61,14 @@ uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi) {
  * |v| below the target width, which is what makes the C cast itself well-defined. */
 int64_t zrt_conv_i_from_f(double v, double lo, double hi) {
 	if (!(v > lo - 1.0 && v < hi + 1.0)) {
-		zrt_abort(kFloatMsg);
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kFloatMsg);
 	}
 	return (int64_t)v;
 }
 
 uint64_t zrt_conv_u_from_f(double v, double hi) {
 	if (!(v > -1.0 && v < hi + 1.0)) {
-		zrt_abort(kFloatMsg);
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kFloatMsg);
 	}
 	if (v <= 0.0) {
 		/* (-1, 0] truncates to zero; casting a negative double to an unsigned type

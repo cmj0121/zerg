@@ -120,7 +120,7 @@ void *zrt_map_get(zrt_map *m, const void *key) {
 void *zrt_map_index(zrt_map *m, const void *key) {
 	void *v = zrt_map_get(m, key);
 	if (v == NULL) {
-		zrt_abort("key not found");
+		zrt_abort_kind(ZRT_ERR_KEY, "KeyError: key not found");
 	}
 	return v;
 }

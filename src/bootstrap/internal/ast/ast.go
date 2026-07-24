@@ -102,14 +102,17 @@ type Block struct {
 type NopStmt struct{ base }
 
 // BindStmt introduces a name: 'x := e', 'mut x := e', or 'x: T = e'. A nil Type
-// means the type is inferred from Value.
+// means the type is inferred from Value. A destructuring bind '(a, b) := e' or
+// 'P{x, y} := e' instead carries its bind-target pattern in Target (Name is ""); the
+// simple named form leaves Target nil (GRAMMAR bind-target).
 type BindStmt struct {
 	base
-	Mut   bool
-	Const bool
-	Name  string
-	Type  Type
-	Value Expr
+	Mut    bool
+	Const  bool
+	Name   string
+	Type   Type
+	Target Pattern // destructuring bind target; nil for the simple named form
+	Value  Expr
 }
 
 // PrintStmt is 'print e'.

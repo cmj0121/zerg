@@ -143,6 +143,15 @@ func (w *worker) enqueueMethodInstance(recv types.Type, m *types.ImplMethod) *In
 		return in
 	}
 	subT := nominalSubT(recv)
+	// A PROVIDED spec default body was type-checked with the abstract self 'This'; map
+	// it to the concrete receiver so the shared body's This-typed sub-expressions and its
+	// `this.other()` self-calls resolve concretely during the walk and the emit (the same
+	// overlay the `#[dyn]` erased-receiver instance uses in mono/dyn.go). An impl-written
+	// method was already checked against the concrete type, so it leaves This unset and
+	// stays byte-identical.
+	if m.Provided {
+		subT["This"] = recv
+	}
 	in := &Instance{
 		Origin:      fn,
 		Mangled:     mangled,

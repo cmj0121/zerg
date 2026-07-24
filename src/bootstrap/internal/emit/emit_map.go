@@ -205,7 +205,7 @@ func (e *emitter) emitMapForwardDecls() {
 	for _, c := range e.orderedMaps() {
 		e.line(fmt.Sprintf("static zrt_map zg_mapcopy_%d(zrt_map s);", c.id))
 		e.line(fmt.Sprintf("static void zg_mapdropenv_%d(void *p);", c.id))
-		if containsRef(c.val) {
+		if e.containsRef(c.val) {
 			e.line(fmt.Sprintf("static void zg_mvcopy_%d(void *dst, const void *src);", c.id))
 			e.line(fmt.Sprintf("static void zg_mvdrop_%d(void *val);", c.id))
 		}
@@ -223,7 +223,7 @@ func (e *emitter) emitMapHelpers() {
 		hash, eq := mapHashEq(c.key)
 		vct := e.ctype(c.val)
 		valCopy, valDrop := "NULL", "NULL"
-		if containsRef(c.val) {
+		if e.containsRef(c.val) {
 			src := fmt.Sprintf("(*(%s*)src)", vct)
 			e.line(fmt.Sprintf("static void zg_mvcopy_%d(void *dst, const void *src) { *(%s*)dst = %s; }",
 				c.id, vct, e.fieldCopy(c.val, src)))
@@ -376,7 +376,7 @@ func (e *emitter) mapIndex(n *ast.Bracket, mt *types.Map) string {
 	}
 	// materialized base: copy the value out before the temporary map is dropped.
 	val := slot
-	if containsRef(mt.Val) {
+	if e.containsRef(mt.Val) {
 		val = e.fieldCopy(mt.Val, slot)
 	}
 	r := e.freshName("mr")
@@ -411,7 +411,7 @@ func (e *emitter) mapMethodEmit(n *ast.Call) (string, bool) {
 		p := e.freshName("gp")
 		slot := fmt.Sprintf("(*(%s*)%s)", vct, p)
 		some := e.wrapValue(optT, mt.Val, slot)
-		if containsRef(mt.Val) {
+		if e.containsRef(mt.Val) {
 			some = e.wrapValue(optT, mt.Val, e.fieldCopy(mt.Val, slot))
 		}
 		none := e.wrapValue(optT, sema.Nil, "0")

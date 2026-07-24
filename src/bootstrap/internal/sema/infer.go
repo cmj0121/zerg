@@ -17,6 +17,12 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		return t
 	}
 	if fld, ok := n.Callee.(*ast.Field); ok {
+		if t, handled := c.enumNamespaceCall(n, fld); handled {
+			return t
+		}
+		if t, handled := c.errMessageCall(n, fld); handled {
+			return t
+		}
 		if t, handled := c.namespaceCall(n, fld); handled {
 			return t
 		}
@@ -97,6 +103,12 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 	case *ast.Ident:
 		if c.shadowed(callee.Name) {
 			return nil, false
+		}
+		// A built-in error kind used as a constructor — `ValueError("msg")` — builds an
+		// `Err` of that kind carrying the message (docs/errors.md, GRAMMAR group 8). The
+		// fixed set is compiler-owned; a user cannot add one this phase.
+		if _, ok := errKinds[callee.Name]; ok {
+			return c.errConstruct(n, callee.Name), true
 		}
 		switch callee.Name {
 		case "Ref":
@@ -294,12 +306,17 @@ func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type 
 			return Invalid
 		}
 	}
-	if _, ok := c.info.Funcs[res.Key]; ok {
-		// A same-module function name is a first-class value (check.go); a cross-module
-		// one reached through a namespace member needs its resolved cross-module linkage
-		// as a value, which is not wired yet.
-		c.errorf(n.Span(), "a function from another module is not yet a first-class value: %q; wrap it in a local function", n.Name)
-		return Invalid
+	if sig, ok := c.info.Funcs[res.Key]; ok {
+		// A same-module function name is a first-class value (check.go); a cross-module one
+		// reached through a namespace member is the same value, keyed on its resolved merged
+		// name so the backend emits the same env-taking thunk / closure value (NsFuncValues).
+		// Visibility is already enforced by resolveMember (a non-pub member never reaches
+		// here). A generic function is rejected inside funcValueType, as for a same-module one.
+		t := c.funcValueType(sig, n.Span())
+		if !bad(t) {
+			c.info.NsFuncValues[n] = res.Key
+		}
+		return t
 	}
 	c.memberError(n, local, n.Name, false)
 	return Invalid
@@ -405,6 +422,12 @@ func (c *checker) callIndirect(n *ast.Call, fn *types.Fn) Type {
 // field name, with defaults. The result is the nominal struct type.
 func (c *checker) construct(n *ast.Call, sym *Symbol) Type {
 	def := sym.TypeDef
+	if def != nil && def.Alias != nil {
+		// a strong typedef `type X = Y` (newtype) constructs by conversion from its
+		// underlying representation: `Celsius(x)` re-constructs x's value as a distinct
+		// Celsius, the mirror of the `int(c)` extraction.
+		return c.newtypeConversion(n, def)
+	}
 	if def == nil || def.Struct == nil {
 		// enum-variant or alias construction is not modelled here (FORK-2/4).
 		c.synthArgs(n)
@@ -423,6 +446,32 @@ func (c *checker) construct(n *ast.Call, sym *Symbol) Type {
 	}
 	c.bindCallArgs(def.Name, n, pnames, ptypes, defaults)
 	return c.namedTypeUse(sym, nil)
+}
+
+// newtypeConversion types a strong-typedef conversion `X(v)` (a newtype `type X =
+// Y`): it re-constructs v's value as the distinct type X, reusing the scalar
+// conversion rule over X's underlying representation. Only a scalar-underlying
+// newtype converts this phase, and the argument must itself be a scalar.
+func (c *checker) newtypeConversion(n *ast.Call, def *types.TypeDef) Type {
+	named := &types.Named{Def: def}
+	if _, ok := ScalarOf(named); !ok {
+		c.errorf(n.Span(), "cannot construct %s: only a newtype over a scalar type converts by re-construction", def.Name)
+		c.synthArgs(n)
+		return named
+	}
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "conversion %s(x) takes exactly one value, got %d", def.Name, len(n.Args))
+		c.synthArgs(n)
+		return named
+	}
+	src := c.synth(n.Args[0].Value)
+	if bad(src) {
+		return named
+	}
+	if _, ok := ScalarOf(src); !ok {
+		c.errorf(n.Span(), "cannot convert %s to %s: only a scalar converts by re-construction", src, def.Name)
+	}
+	return named
 }
 
 // constructGeneric checks a generic struct construction 'T(...)', inferring the
@@ -561,6 +610,103 @@ func (c *checker) enumType(sym *Symbol) Type {
 		return &types.Enum{Def: sym.TypeDef}
 	}
 	return types.Unknown
+}
+
+// enumTypeNamed reports the enum type an identifier names when it is an enum type
+// symbol not shadowed by a value binding, so the enum name acts as a VALUE NAMESPACE
+// (GRAMMAR group 7): `E.of(n)` reverses a discriminant and `E.Variant(...)` is a
+// qualified variant constructor.
+func (c *checker) enumTypeNamed(id *ast.Ident) (*types.Enum, *Symbol, bool) {
+	if c.lookup(id.Name) != nil {
+		return nil, nil, false // a local value binding shadows the type name
+	}
+	sym := c.module.lookup(id.Name)
+	if sym == nil || sym.Kind != SymType || sym.TypeDef == nil || sym.TypeDef.Enum == nil {
+		return nil, nil, false
+	}
+	return &types.Enum{Def: sym.TypeDef}, sym, true
+}
+
+// enumNamespaceCall checks a call whose callee reaches into an enum name as a value
+// namespace: `E.of(n) -> E?` (the discriminant reverse) or `E.Variant(...)` (a
+// qualified variant constructor, the mirror of the bare `Variant(...)`). It reports
+// true once it owns an enum-namespace callee so inferCall does not fall through.
+func (c *checker) enumNamespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
+	id, ok := fld.X.(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	en, sym, ok := c.enumTypeNamed(id)
+	if !ok {
+		return nil, false
+	}
+	if fld.Name == "of" {
+		return c.enumOfCall(n, en), true
+	}
+	if vsym := c.enumVariantSym(sym, fld.Name); vsym != nil {
+		c.info.ExprTypes[fld] = en
+		return c.constructVariant(n, vsym), true
+	}
+	c.errorf(fld.Span(), "enum %s has no variant or member %q", en.Def.Name, fld.Name)
+	c.synthArgs(n)
+	return Invalid, true
+}
+
+// enumOfCall checks `E.of(n) -> E?` (docs/types.md, GRAMMAR group 7): the discriminant
+// reverse of `int(v)`. It takes one int, and yields an optional of the enum — `Some`
+// when n matches a variant's discriminant, `None` otherwise. Only a payload-free
+// (C-style) enum has discriminants to reverse.
+func (c *checker) enumOfCall(n *ast.Call, en *types.Enum) Type {
+	if en.Def == nil || en.Def.Enum == nil || !en.Def.Enum.CStyle {
+		c.errorf(n.Span(), "%s.of(n) needs a payload-free (C-style) enum with discriminants", en.Def.Name)
+	}
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "%s.of(n) takes exactly one int, got %d", en.Def.Name, len(n.Args))
+		c.synthArgs(n)
+		return &types.Opt{Elem: en}
+	}
+	c.checkArg(en.Def.Name+".of", 0, n.Args[0].Value, Int)
+	return &types.Opt{Elem: en}
+}
+
+// errConstruct checks a built-in error constructor `ValueError("msg")` (docs/errors.md,
+// GRAMMAR group 8): one str message, yielding the erased `Err` tagged with the kind.
+// The message is required so a caught error is readable via `.message()`.
+func (c *checker) errConstruct(n *ast.Call, name string) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "%s(msg) takes exactly one str message, got %d", name, len(n.Args))
+		c.synthArgs(n)
+		return errType
+	}
+	c.checkArg(name, 0, n.Args[0].Value, Str)
+	return errType
+}
+
+// errMessageCall checks `err.message() -> str` on an erased Err (the `Error` interface's
+// message accessor, docs/errors.md): the message string a caught/guarded error carries.
+// It reports true once it owns an Err `.message()` callee so inferCall does not fall
+// through to the field-access diagnostic.
+func (c *checker) errMessageCall(n *ast.Call, fld *ast.Field) (Type, bool) {
+	if fld.Name != "message" || !isErr(c.synth(fld.X)) {
+		return nil, false
+	}
+	if len(n.Args) != 0 {
+		c.errorf(n.Span(), "message() takes no arguments, got %d", len(n.Args))
+		c.synthArgs(n)
+	}
+	return Str, true
+}
+
+// enumVariantSym builds a variant symbol for a qualified access `E.Variant`, reading
+// the variant from the enum's own definition (so it is unambiguous even when another
+// enum shares the variant name). It returns nil when the enum has no such variant.
+func (c *checker) enumVariantSym(sym *Symbol, name string) *Symbol {
+	for _, v := range sym.TypeDef.Enum.Variants {
+		if v.Name == name {
+			return &Symbol{Name: name, Kind: SymVariant, Variant: v, TypeDef: sym.TypeDef}
+		}
+	}
+	return nil
 }
 
 // bindCallArgs binds call arguments to declared parameters and checks each. The
@@ -956,6 +1102,23 @@ func (c *checker) inferField(n *ast.Field) Type {
 	if id, ok := n.X.(*ast.Ident); ok {
 		if sym := c.module.lookup(id.Name); sym != nil && sym.Kind == SymNamespace {
 			return c.namespaceMember(n, sym, id.Name)
+		}
+		// a qualified nullary enum variant used as a value: `Color.Green` (GRAMMAR group 7,
+		// the enum name as a value namespace). A payload variant needs a `Variant(...)` call
+		// and is left to the ordinary paths.
+		if en, sym, ok := c.enumTypeNamed(id); ok {
+			if vsym := c.enumVariantSym(sym, n.Name); vsym != nil {
+				if len(vsym.Variant.Payload) != 0 {
+					c.errorf(n.Span(), "variant %q requires a payload; use %s.%s(...)", n.Name, en.Def.Name, n.Name)
+					return Invalid
+				}
+				c.info.ExprTypes[n] = en
+				return en
+			}
+			if n.Name != "of" {
+				c.errorf(n.Span(), "enum %s has no variant %q", en.Def.Name, n.Name)
+				return Invalid
+			}
 		}
 	}
 	xt := c.synth(n.X)

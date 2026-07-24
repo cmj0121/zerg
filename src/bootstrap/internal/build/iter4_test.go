@@ -13,7 +13,7 @@ func TestFStrHoleNamespaceCall(t *testing.T) {
 	src := "import \"math\"\n" +
 		"fn main() -> Result[nil] {\n" +
 		"\tprint f\"{math.abs(-5)}\"\n" +
-		"\tr := unsafe { math.sqrt(16.0) }\n" +
+		"\tr := math.fabs(-16.0)\n" +
 		"\tprint f\"{r:.1f}\"\n" +
 		"\treturn nil\n" +
 		"}\n"
@@ -76,39 +76,32 @@ func TestTupleValueLowers(t *testing.T) {
 	}
 }
 
-// TestBundleImportMath covers the stdlib math module (Phase 1f U4): the pure
-// arithmetic helpers bundle and resolve as ordinary namespace members, while the
-// transcendental functions are `#[extern]`-bound foreign calls (U5) that lower to a
-// libc thunk, pull in <math.h>, and set NeedsFFI.
+// TestBundleImportMath covers the stdlib math module (Phase 1f U4): its arithmetic
+// helpers bundle and resolve as ordinary namespace members over the primitive numeric
+// types. The module is pure safe Zerg — the transcendental family wants the deferred
+// FFI import facility (docs/ffi.md) and is not offered.
 func TestBundleImportMath(t *testing.T) {
 	src := "import \"math\"\n" +
 		"fn main() -> Result[nil] {\n" +
 		"\tprint math.abs(-7)\n" +
 		"\tprint math.max(3, 9)\n" +
-		"\tr := unsafe { math.sqrt(16.0) }\n" +
-		"\tprint r\n" +
-		"\tp := unsafe { math.pow(2.0, 10.0) }\n" +
-		"\tprint p\n" +
+		"\tprint math.min(3, 9)\n" +
+		"\tprint math.fabs(-2.5)\n" +
 		"\treturn nil\n" +
 		"}\n"
-	code, manifest, diags := Compile(src)
+	code, _, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
 	for _, want := range []string{
-		"#include <math.h>",
-		"double zg_math__sqrt(double",
-		"return (double)sqrt(",
-		"double zg_math__pow(double",
-		"return (double)pow(",
 		"zg_math__abs(",
+		"zg_math__max(",
+		"zg_math__min(",
+		"zg_math__fabs(",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q:\n%s", want, code)
 		}
-	}
-	if !manifest.NeedsFFI {
-		t.Fatalf("import math (sqrt/pow) should set NeedsFFI, got %+v", manifest)
 	}
 }
 
@@ -146,54 +139,38 @@ func TestBundleImportAtomic(t *testing.T) {
 	}
 }
 
-// TestExternForeignBinding covers the FFI import binder (Phase 1f U5): a user
-// `#[extern("c_symbol")] unsafe fn` lowers to a thunk forwarding to the C symbol
-// verbatim and is callable from inside an `unsafe { }` block.
-func TestExternForeignBinding(t *testing.T) {
-	src := "#[extern(\"strlen\")]\n" +
-		"unsafe fn c_strlen(s: str) -> int {\n" +
+// TestUnsafeCallOutsideUnsafeRejected checks GRAMMAR group 12's rule: a call to an
+// `unsafe fn` is legal only inside an unsafe context, so calling one from ordinary
+// code errors.
+func TestUnsafeCallOutsideUnsafeRejected(t *testing.T) {
+	src := "unsafe fn raw() -> int {\n" +
+		"\treturn 7\n" +
 		"}\n" +
 		"fn main() -> Result[nil] {\n" +
-		"\tprint unsafe { c_strlen(\"hello\") }\n" +
+		"\tprint raw()\n" +
 		"\treturn nil\n" +
 		"}\n"
-	code, manifest, diags := Compile(src)
+	_, _, diags := Compile(src)
+	if len(diags) == 0 {
+		t.Fatalf("a call to an unsafe fn outside `unsafe` should be rejected")
+	}
+}
+
+// TestUnsafeCallInsideUnsafeAccepted is its converse: the same call inside an
+// `unsafe { }` block-expression type-checks and lowers to the ordinary mangled call.
+func TestUnsafeCallInsideUnsafeAccepted(t *testing.T) {
+	src := "unsafe fn raw() -> int {\n" +
+		"\treturn 7\n" +
+		"}\n" +
+		"fn main() -> Result[nil] {\n" +
+		"\tprint unsafe { raw() }\n" +
+		"\treturn nil\n" +
+		"}\n"
+	code, _, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if !strings.Contains(code, "return (int64_t)strlen(") {
-		t.Fatalf("emitted C missing the strlen thunk:\n%s", code)
-	}
-	if !manifest.NeedsFFI {
-		t.Fatalf("an #[extern] binding should set NeedsFFI, got %+v", manifest)
-	}
-}
-
-// TestForeignCallOutsideUnsafeRejected checks docs/ffi.md's rule: a foreign call is
-// unsafe, so calling an `#[extern]`-bound symbol outside an unsafe context errors.
-func TestForeignCallOutsideUnsafeRejected(t *testing.T) {
-	src := "#[extern(\"strlen\")]\n" +
-		"unsafe fn c_strlen(s: str) -> int {\n" +
-		"}\n" +
-		"fn main() -> Result[nil] {\n" +
-		"\tprint c_strlen(\"oops\")\n" +
-		"\treturn nil\n" +
-		"}\n"
-	_, _, diags := Compile(src)
-	if len(diags) == 0 {
-		t.Fatalf("a foreign call outside `unsafe` should be rejected")
-	}
-}
-
-// TestExternRequiresUnsafeFn checks that an `#[extern]` foreign binding must be
-// declared `unsafe fn` (the binding names an unsafe foreign call).
-func TestExternRequiresUnsafeFn(t *testing.T) {
-	src := "#[extern(\"strlen\")]\n" +
-		"fn c_strlen(s: str) -> int {\n" +
-		"}\n" +
-		"fn main() -> Result[nil] { return nil }\n"
-	_, _, diags := Compile(src)
-	if len(diags) == 0 {
-		t.Fatalf("an #[extern] binding on a non-unsafe fn should be rejected")
+	if !strings.Contains(code, "zg_raw()") {
+		t.Fatalf("emitted C missing the unsafe fn call:\n%s", code)
 	}
 }

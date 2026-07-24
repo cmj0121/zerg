@@ -157,8 +157,46 @@ func (c *checker) collectImpl(reg *SpecRegistry, n *ast.ImplDecl) *types.ImplDef
 	reg.Impls = append(reg.Impls, impl)
 	if impl.Spec != nil {
 		c.checkAssocBindings(n, impl)
+		c.registerProvidedMethods(reg, impl)
 	}
 	return impl
+}
+
+// registerProvidedMethods registers, into the target type's one method namespace,
+// each PROVIDED (default-body) method of the impl's spec (and its super-specs) that
+// the impl does NOT override — so a `Foo(...).hello()` call to a provided default
+// resolves on the STATIC (monomorphized) path exactly like an impl-written method,
+// instead of reaching cc as a null callee (GRAMMAR group 7). An impl-written method,
+// registered first by addMethod, WINS: a provided default is skipped when the name is
+// already taken. The entry is marked Provided so mono maps its abstract 'This' to the
+// concrete receiver when it lowers the shared default body. The `#[dyn]` witness path
+// (mono/dyn.go) is unaffected: it consults impl.Methods and the spec closure directly,
+// not this namespace.
+func (c *checker) registerProvidedMethods(reg *SpecRegistry, impl *types.ImplDef) {
+	head := nominalHead(impl.Target)
+	if head == nil {
+		return
+	}
+	ms := reg.Methods[head]
+	if ms == nil {
+		ms = &types.MethodSet{Owner: head, Methods: map[string]types.MethodRef{}}
+		reg.Methods[head] = ms
+	}
+	for _, sp := range reg.SpecClosure(impl.Spec) {
+		for _, m := range sp.Methods {
+			if !m.Provided {
+				continue // a required signature has no default body to inherit
+			}
+			if _, overridden := impl.Methods[m.Name]; overridden {
+				continue // the impl's own method wins over the spec default
+			}
+			if _, taken := ms.Methods[m.Name]; taken {
+				continue // already registered (an impl method or an earlier provided default)
+			}
+			pm := &types.ImplMethod{Name: m.Name, Sig: m.Sig, Mut: m.Mut, Provided: true, Decl: m.Decl}
+			ms.Methods[m.Name] = types.MethodRef{Impl: impl, Method: pm}
+		}
+	}
 }
 
 // addMethod inserts a method into the target type's one method namespace,

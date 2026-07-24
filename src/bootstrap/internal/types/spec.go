@@ -74,7 +74,13 @@ type ImplMethod struct {
 	Name string
 	Sig  *Fn
 	Mut  bool
-	Decl any
+	// Provided is true when this entry is a spec's PROVIDED (default) method
+	// registered into a concrete type's namespace because the impl did not override
+	// it (GRAMMAR group 7). Its body was type-checked with the abstract self 'This',
+	// so lowering it for a concrete receiver must map This -> the receiver type. A
+	// real impl-written method (checked against the concrete target) leaves it false.
+	Provided bool
+	Decl     any
 }
 
 // MethodSet is a nominal type's single method namespace. Every method and

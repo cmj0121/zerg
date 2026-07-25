@@ -18,11 +18,12 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
 
 - **空的 `spec`** 是合法的 bound、被所有型別滿足，但它保證**零**行為：這種 `T` 只有 memory model 給的**結構能力**
   ——copy 它、`del` 它、當參數傳、存起來、送進 channel——連一個 method 都沒有。
-- **`Object`** 是頂層 `spec`，被每個型別**自動實作**。它提供一組最小的 method——`equal`、`copy`、`debug`……由結構
-  逐欄位 **auto-derive**（含 `Ref` 值則 refcount++，與 copy 規則一致），外加 `display`——其預設 body 就是 `debug`
-  （見 [Formatting & Text](format.zh-TW.md)）。型別可**明確覆寫**其中任何一個（例如不計順序的 `equal`），否則沿用衍生版本。因為每個型別都實作 `Object`，`T: Object` 這個 bound **從不縮小**
-  可接受的型別集——它只是解鎖那些 method。這套 compiler 擁有的**結構化衍生**可 opt-in 延伸到 `Ord` /
-  `Hash` / `Encode` / …——見 [Derive 與預設行為](derive.zh-TW.md) 參考。
+- **相等、排序與雜湊都是 opt-in、絕非自動。** 沒有**自動實作的 `Object` spec**、也沒有隱式的 `==`。一個型別只有透過
+  **`#[derive(Eq)]`** 或手寫 `impl Eq` 才取得結構化相等（`==` / `!=`）,透過 `derive(Ord)` 取得全序,透過
+  `derive(Hash)` 取得雜湊（**[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。*每個*值不靠任何 spec bound
+  就有的,是記憶體模型保證的**結構性記憶體操作**——copy、`del`、傳參、存起來、送進 channel——因為那些是表徵的性質、
+  不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（`Eq` / `Ord` **[implemented]**、`Hash` /
+  `Encode` / `Decode` **[not yet]**）見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。抹除是**對值單向**的——一旦
@@ -32,7 +33,7 @@ boxed，具體值就被隱藏、**永遠無法還原**（不能 downcast、不�
 
 在一個 boxed 值上，**unary** 操作會 dispatch 到真實型別、可用：它的 spec method，加上 `copy`（產生一個獨立的新
 box——內含 `Ref` 值 refcount-bump）與 `debug`，以及結構性記憶體操作（`del`、傳參、存欄位、送 channel）。但
-**binary same-type** 操作——`equal` / `==`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
+**binary same-type** 操作——`Eq` 的 `==` / `!=`、`Ord` 比較、以及因此的 `Hash` keying——**不可用**：它們的 `other: This`
 運算元正是抹除掉的具體型別，而 `is` 只測身分、絕不把它交回。兩個 boxed 值因此**永遠不能以值比較**。box 一個值是為了
 動態 dispatch 它的 spec method；要比較、排序或當 key，就留著具體型別（monomorphized 的 `[T: S]` bound）。
 
@@ -49,7 +50,13 @@ concrete bound 的 generic 會在產出的 C 裡 **monomorphize**——編譯器
 一個**實作**（型別滿足某 spec）本身不帶可見性標記：coherence 要求一組 `(型別, spec)`（含參數）到處都解析到同一個實作，
 因此實作既不能被藏、也不能被複製——它的作用範圍恰好是「型別與 spec 同時可見之處」。實作是為**具體或泛型型別**寫的
 （`list[T]` 可以實作 `Iterator`）；以 bound 為條件、涵蓋「所有滿足某 spec 的型別」的 blanket 實作**不提供**，以保持
-解析可判定。唯一「所有型別都有」的情況是 `Object`，由編譯器 auto-derive、而非使用者手寫。
+解析可判定。**沒有「所有型別都有」的實作**:連相等都是 per-type opt-in 的 `Eq`、在你要求處由 `derive` 生成,絕非隱式
+的 blanket impl。
+
+> **[deviation]** 意圖中的 coherence 規則是**全程式每組 `(spec, 型別)` 唯一一個 impl**、以每個具體實例化為鍵——所以
+> `impl X for list[int]` 與 `impl X for list[str]` 是**不同**、各自可解析——並跨 package 強制 orphan rule。bootstrap 是
+> **單一模組**,其 coherence 鍵**過度近似**:它不區分泛型引數,所以 `list[int]` 與 `list[str]` 相撞、第二個實例化會被
+> 誤判為重複 impl 而拒絕。per-instantiation 規則如所規範成立;bootstrap 尚未精確強制它。
 
 因為 spec 是 nominal，兩個各自獨立宣告的 spec 可能撞用同一個 method 名。型別仍可同時實作兩者、並各別當其一使用——
 歧義只存在於「同一個值必須**同時**滿足兩者」之處（`T: X + Y` 的 bound、型別為 `X + Y` 的值、或對同時實作兩者的值
@@ -105,8 +112,8 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
 你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派(見 [Null-safety 與錯誤處理](errors.zh-TW.md))
-——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般存在性測試 `x is T`
-**尚未提供**。
+——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類（**[implemented]**）,而對**非錯誤**型別的一般
+存在性測試 `x is T` 是 **[not yet]**。
 
 ## Method、`this` / `This` 與 default body
 
@@ -136,9 +143,9 @@ spec 的 method 分兩種：
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
-**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立:
-`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑 spec 的 **default body**——不需要 `#[dyn]`、也不需要裝箱,所以
-provided method 並不侷限於動態分派那條路徑。
+**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立
+（**[implemented]**）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑 spec 的 **default body**——不需要 `#[dyn]`、
+也不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
 
@@ -172,28 +179,27 @@ function。
 
 ## 內建 spec（Built-in specs）
 
-多數是 **opt-in**——型別實作它才取得——除了 `Object`
-**為每個型別 auto-derive** 的那組（皆可 override）：
+每個內建行為都是一個 spec、**靠實作（或 derive）它才取得**——沒有自動實作的頂層 spec、也沒有隱式的。通用的結構性
+操作（`copy`、`del`、傳參、存起來、送進 channel）屬於**記憶體模型**、不屬於任何 spec bound（見
+[值與記憶體](memory.zh-TW.md)）;其中 `copy` 對每個型別都被強制、永不缺席。`debug` / `display`——開發者取向與給人看
+的文字渲染,`display` 預設為 `debug`——屬於 [Formatting & Text](format.zh-TW.md);它們的**結構化 auto-derive** 是
+**[not yet]**。其餘一切都是型別 **opt-in** 的 spec、由泛型 bound 把關:
 
-| `Object` method | 驅動                 | 說明                                                  |
-| --------------- | -------------------- | ----------------------------------------------------- |
-| `copy`          | copy-by-value        | 由記憶體模型**強制**——永不缺席                        |
-| `equal`         | `==` / `!=`          | **結構性**；channel 或 `fn` 以 identity 比            |
-| `debug`         | logging、stderr      | 開發者取向；**auto-derive**、可 override              |
-| `display`       | `f"…"`、對使用者顯示 | 給人看；**預設 body 就是 `debug`**、要漂亮就 override |
+- **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
+  比較。一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。**[implemented]**
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
-「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等永遠是**結構性**的 `equal`。**`is`**
-關鍵字問的是另一件事——existential 上的**型別身分**測試 `x is T`（見型別測試）——「這裡 box 的是哪個具體型別？」，
-而非「這兩個是不是同一個值？」。
+「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
+**`is`** 關鍵字問的是另一件事——existential 上的**型別身分**測試 `x is T`（見型別測試）——「這裡 box 的是哪個具體
+型別？」，而非「這兩個是不是同一個值？」。
 
-**Opt-in**——實作該 spec 才取得能力；泛型 bound 以它把關：
+其餘的 spec 同樣是 **opt-in**——實作（或 derive）該 spec 才取得能力；泛型 bound 以它把關：
 
-- **`Ord`**——一個與 `equal` 一致的 **total** order,由**單一必需的 `less`**(`<`)定義;`<=` `>` `>=` 與 sort 都由它
-  配 `equal` 導出,而 `min` / `max` / `clamp` 是建在 `Ord` bound 上的普通 stdlib helper——**沒有三路 `Ordering`**
-  值,只有 `less` 與 `equal`。`str` 依 **code point 字典序**排序(＝ byte 序,因其 UTF-8 有效——非 locale
-  collation,那是另一個 stdlib 功能);`float` 同時退出 `Ord` 與 `Hash`(理由見下)。
-- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key。
+- **`Ord`**——一個與 `Eq` 一致的 **total** order,由**單一必需的 `less`**(`<`)定義、並要求 `Eq` 為 super-spec
+  (`spec Ord: Eq`);`<=` `>` `>=` 與 sort 都由它配 `Eq` 導出,而 `min` / `max` / `clamp` 是建在 `Ord` bound 上的普通
+  stdlib helper——**沒有三路 `Ordering`** 值,只有 `less` 與 `Eq`。`str` 依 **code point 字典序**排序(＝ byte 序,因其
+  UTF-8 有效——非 locale collation,那是另一個 stdlib 功能);`float` 同時退出 `Ord` 與 `Hash`(理由見下)。**[implemented]**
+- **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key。**[not yet]**
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、
   `code() -> byte?`（可選小碼）。
@@ -216,8 +222,8 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 可多載**；bitwise 符號（`& | ^ ~`，見 [整數運算](types.zh-TW.md)）永不與它們撞臉。
 
 `float` 退出 `Ord` 與 `Hash`——`NaN` 破壞全序與 `equal ⇒ hash`——所以 `float` 永遠不是排序集合的元素、也不是 key，
-而一個**含** `float` 的複合型別會透明地繼承這點：它 auto-derived 的 `equal` 用 `==` 比那個欄位，所以對 `NaN`
-**非自反**，`Ord`/`Hash` 也**不會白得**。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
+而一個**含** `float` 的複合型別會透明地繼承這點：一個 **derive 出的 `Eq`** 用 `==` 比那個欄位，所以對 `NaN`
+**非自反**，該型別也**得不到** `Ord`/`Hash`。要讓這種型別當 key 或可排序，作者得**顯式實作**、並處理 `float` 的兩個
 陷阱：`Hash` 需要一個**自反**的 `equal` 並 canonicalize **`±0.0`**（相等、故必須同 hash）；`Ord` 需要一個
 **total order**（IEEE `totalOrder`，`NaN` 排到端點）。一個 stdlib 的 total-order／hashable `float` wrapper 延後。
 

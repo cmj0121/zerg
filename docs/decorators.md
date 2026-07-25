@@ -8,11 +8,12 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-Three decorators are **implemented** today — `#[derive]`, `#[dyn]`, and `#[test]`:
+Three decorators are **[implemented]** today — `#[derive]`, `#[dyn]`, and `#[test]`:
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
-  from the type's **structure**: `Object` (always derived) plus opt-in `Ord`, `Hash`, `Encode`, `Decode`. A
-  user spec can never be derived (`#[derive(MySpec)]` is a compile error). See
+  from the type's **structure**. The blessed set is **`Eq`** and **`Ord`** (**[implemented]**), with
+  **`Hash`**, **`Encode`**, and **`Decode`** specified but **[not yet]**; there is **no auto-derived
+  `Object`**. A user spec can never be derived (`#[derive(MySpec)]` is a compile error). See
   **[Derive & Default Behavior](derive.md)**.
 - **`#[dyn]`** — on a generic `fn`. Compiles the generic to **one shared witness-table body** instead of
   monomorphizing per type argument — trading zero-cost for smaller code, and letting the compiler cap
@@ -29,10 +30,10 @@ is a "not yet supported" **compile error**, never a silent no-op:
 - **`#[sealed]`** — on a `struct`. _Intended_ to demote the default field-wise `T(…)` constructor to
   **module-private**, so external code must build through a public custom constructor (a named associated
   `fn`) while the module still builds with `T(…)` internally — pairing with private, defaulted fields to
-  enforce an invariant. **Not yet implemented.**
+  enforce an invariant. **[not yet]**
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators. Reserved for
   controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
-  [Values & Memory](memory.md)). **Not yet implemented.**
+  [Values & Memory](memory.md)). **[not yet]**
 
 ## Not a macro
 

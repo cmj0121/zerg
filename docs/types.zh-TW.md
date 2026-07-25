@@ -43,6 +43,13 @@
   皆非負時完全 elide**（最常見、零成本）。`a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
   （`OverflowError`）；truncating 與 flooring 變體屬 stdlib（延後）。
 
+> **[deviation]** 上述整套整數算術安全契約——checked 的 `+`/`-`/`*` raise `OverflowError`、`/` 與 `%` 的 Euclidean
+> 正負號、`a/0` 與 `a%0` raise `DivideByZeroError`、位移量 `≥` 型別寬度 raise `OverflowError`——是**意圖中**的語意、
+> 但**尚未強制**。今天每一個都降成純 C 運算子:`+` 與 `+%` 產生**相同**的碼(都環繞)、signed 溢位與除以零是 C 的
+> **undefined behavior** 而非乾淨的 abort、`%` 是 C 的 truncation(號隨被除數)而非 Euclidean。`DivideByZeroError`
+> 本身也是 **[not yet]** 的錯誤種類——它**不在**六種內建種類之列（見 [Errors](errors.zh-TW.md)）,所以即使檢查落地,
+> 該 abort 目前也沒有獨立的具現化種類。
+
 ### 數值字面量（Numeric literals）
 
 數值字面量是 **untyped** 的——它採用 context 要求的型別（typed binding `x: uint = 5`、typed 參數、`return`、或與它
@@ -51,8 +58,14 @@
 
 - 字面量**放不進**要求的型別 → **compile error**（`byte = 300`、`uint = -1`、超過 i64 的 `int` 字面量）——不是
   runtime overflow。
-- **整數與 float 分開**：整數字面量絕不變成 `float`；要 float 就寫 `1.0` 或 `float(1)`（沒有隱式 int→float，那會
-  悄悄失精度）。
+
+  > **[deviation]** 今天的 fit-check 只涵蓋**固定寬度階梯**（`i8` / `u16` / … ）。**具名**原始型別 `int` / `uint` /
+  > `byte` / `rune` **不**做範圍檢查,所以 `byte = 300` 與 `uint = -1` 目前被**接受**(超過 i64 的 `int` 字面量仍被
+  > 拒絕)。規則如所規範成立;bootstrap 這個階段尚未對具名原始型別強制它。
+
+- **有型別的 `float` context 接受一個 untyped 整數字面量**:`x: float = 1` 合法——`1` 如同任何 untyped 字面量採用其
+  context 那樣採用 `float`。永不隱式發生的是一個**已定型的 `int` 值**變成 `float`;那需要 `float(i)`(沒有隱式
+  int→float,那會失精度)。帶小數或指數的字面量(`1.0`、`1e3`)從一開始就是 `float`、絕不是 `int`。
 
 ## 使用者定義型別（User-Defined Types）
 
@@ -89,7 +102,8 @@ Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝�
 enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）;**enum 名稱是一個值命名空間**
 ——`Color.Green` 指名該 variant、`Color.of(n)` 由數字反轉回來——其中 `int(v)` **讀**出 discriminant、
 `E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。要指定寬度就用 opt-in layout 裝飾器
-`#[repr]`；序列化/wire 形式則是 `Encode` / `Decode` impl、絕不是裝飾器。
+`#[repr]`（**[not yet]**——今天保留且會大聲拒絕,見 [Decorator](decorators.zh-TW.md)）;序列化/wire 形式則是
+`Encode` / `Decode` impl（**[not yet]**）、絕不是裝飾器。
 
 一個 **payload** `enum`（任一 variant 帶欄位）則保持其 **tag opaque、只可 match**——不允許 `= 5`，你 `match` 的是
 variant、絕不是 tag。要把這種 variant 綁定某個特定整數，就寫**顯式轉換**：一個從 variant 到數字的 `match`，再一個
@@ -99,7 +113,7 @@ tag 的 bytes 重讀——而且它天然吸收 baked-in 值給不了的不連�
 一個 **tuple**——`(int, str)`，欄位以位置存取 `.0`、`.1`——不過就是一個**匿名 `struct`**：同一個積型別，只是不具名、
 供一次性的位置束用（多重回傳、`divmod -> (int, int)`）。因為匿名，它是全語言**唯一結構化定型**的形式——`(int, str)`
 不管寫在哪都是同一個型別，而每個具名 `struct` 與 `enum` 仍是 **nominal**。它沿用整套積型別機制——copy-by-value、
-以及編譯器的結構化 `Object` / `Ord` / `Hash` / … 衍生（見 [Spec 與 Generics](specs.zh-TW.md)）——但因為沒有名字可掛，**沒有 inherent
+以及編譯器的結構化 `Eq` / `Ord` / `Hash` / … 衍生（見 [Spec 與 Generics](specs.zh-TW.md)）——但因為沒有名字可掛，**沒有 inherent
 method、也沒有自己的 `spec` impl**：一旦某個值需要行為、nominal 身分、或值得閱讀的欄位名，就改用具名 `struct`。
 tuple 的結果是 **first-class**——可存、可傳、可解構——所以多重回傳不需要任何額外機制（見 [模式比對](control-flow.zh-TW.md)）。
 
@@ -112,6 +126,10 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 `ProductId` 傳進去——並與單欄位 struct 的 **newtype** 有別:newtype 是把值*包*進一個新欄位、配全新 impl,而非沿用整個
 形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
 `type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
+
+> **[deviation]** bootstrap 只對**純量**底型 `Y` 實作 `type X = Y`,而新型別**不**繼承 `Y` 的算術或 `spec` impl——
+> 一個 `Celsius = int` 不先 `int(c)` 就不接受 `+`,與上面的繼承規則相反——且 `type Name = str` 目前被**拒絕**。意圖
+> 中的語意(一個沿用 `Y` 整個表示與 impl 的全新身分)成立;bootstrap 這個階段只涵蓋純量、無 impl 的情形。
 
 ## 建構與封裝（Construction & encapsulation）
 
@@ -142,8 +160,9 @@ name: base.name)` 產生一個**新**值、`base` 原封不動——這適用於
 
 Zerg **以重新建構（re-construction）轉換、絕不以重新詮釋（reinterpret）**——一次轉換 `T(x)` 是*用 `x` 的值建一個
 新的 `T`*、如同 constructor；**沒有 C 式的 cast** 把一種型別的位元當成另一種來看（reinterpret），也不提供。三種
-型別操作因此清楚分開：**建**一個新值（`T(x)`，這裡）、**測**一個 existential 的身分（`x is T` → `bool`，見 [型別測試](specs.zh-TW.md)）、
-以及**絕不**把一種型別的儲存重新詮釋成另一種。
+型別操作因此清楚分開：**建**一個新值（`T(x)`，這裡）、**測**一個 existential 的身分（`x is T` → `bool`，見
+[型別測試](specs.zh-TW.md)——這個階段 **[not yet]** 支援非錯誤型別,今天只有錯誤分類可 `is` 測試）、以及**絕不**
+把一種型別的儲存重新詮釋成另一種。
 
 轉換**預設顯式**——`int` 不是 `bool`；要轉就用 constructor 風格呼叫建一個（`bool(8)`、`int(c)`）。primitive 之間的
 轉換由**編譯器內建**；使用者型別不能對 primitive 加。

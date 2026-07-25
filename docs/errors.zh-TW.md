@@ -25,14 +25,21 @@ fn load() -> Result[Config] {
 }
 ```
 
+> **[deviation]** `?` 定義在任何 `Either[X, Y]` 上——拆出 `Left`、把 `Right` 原封不動提早 return——但 bootstrap 只
+> 忠實地穿引 `Result[T]`。在**一般的 `Either`** 上,右側 payload 目前被**丟棄**(一次靜默的誤編譯);而對
+> **`Result[nil]`** 的 `?` 抵達後端時是一個 `void` 型別的 binding、而非乾淨地傳播(一個 fail-loud 的 sema 缺口)。意圖
+> 中的行為是在每種情形都把 `Right` 值原封不動穿引。
+
 **`??`——預設值。** `a ?? b`：`a` 有左值就用它，否則用 `b`（右值被丟棄）；短路、右結合可串接，適用任何 `Either`。
 
 **`?.`——optional chain（只限 `T?`）。** `a?.b`：`a` 有值就取 `.b`，否則整串在原地短路成 `nil`（與 `?` 不同，
 不會從函式 return）；用在任何非 `T?` 型別都是 compile error。
 
-**`!`——force-unwrap（值 → abort）。** `x!` 拆出左值，否則 **raise** `UnwrapError`——刻意的「我確定它有值」逃生口，
-是從值那層跨進 abort 的一種入口。（邏輯否定用關鍵字 `not`，所以 postfix
-`!` 空出來給它。）
+**`!`——force-unwrap（值 → abort）。** `x!` 拆出左值，否則對一個缺席的 optional **raise**——刻意的「我確定它有值」
+逃生口，是從值那層跨進 abort 的一種入口。（邏輯否定用關鍵字 `not`，所以 postfix `!` 空出來給它。）
+
+> **[not yet]** 作為獨立、可 `is` 測試的錯誤**種類**的 `UnwrapError` 尚未建置;今天該 abort 以一般訊息觸發、不在下方
+> 六種分類之列。
 
 ```text
 port := lookup("PORT") ?? 8080
@@ -46,19 +53,22 @@ addr := config?.server?.host ?? "localhost"
 一個 **`raise e from cause`** 形式會把 `cause` 記成 `e` 的 `unwrap()`——一個 **nested** abort,把底層 `Err` 包進更高
 層的一個、而不遺失它,餵的是每個 `Error` 都有的那條 cause chain;裸的 `raise e` 則原封不動攜帶 `e`。
 
-**內建的錯誤分類。** 這個階段提供**固定的六種**錯誤:**`ValueError`**、**`OverflowError`**、**`IOError`**、
-**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
+**內建的錯誤分類。** 這個階段提供**固定的六種**錯誤 **[implemented]**:**`ValueError`**、**`OverflowError`**、
+**`IOError`**、**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
 ——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](specs.zh-TW.md)——的 `struct` / `enum`)
 **尚未支援**。每一種都是完整的 `Err`:帶訊息建構(`raise ValueError("bad input")`)、放進 `Result` 右側、**也**可被
 `raise`、讀 `err.message()`、用 `err is ValueError` 測試,而 `guard` 會把它還原成 `Right(err)`、message／cause／code
 完整。runtime **自身的內建失敗也 raise 對應的種類**,使 library 與 runtime 的錯誤共用一套詞彙:整數解析失敗是
 `ValueError`(超出範圍→`OverflowError`)、一次 checked 收窄轉換是 `OverflowError`、I/O 失敗是 `IOError`、對無效
 UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺少的 `map` 鍵是 `KeyError`。`Result` / `Either`
-攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。
+攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。abort 契約本身——
+寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](conformance.zh-TW.md)。
 
-**Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`、`MatchError`、`IndexError`、
-`KeyError`、`AliasError`、`StackOverflowError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的
-`Err`——代表 **bug**，不是預期內的失敗。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
+**Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
+用到的 fault 名稱裡,今天只有六個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+`EncodingError`、`IndexError`、`KeyError`（**[implemented]**）。其餘尚未被標種類:`UnwrapError`、`DivideByZeroError`、
+`MatchError`、`AliasError`、`SendOnClosedError` 是 **[not yet]**（abort 仍可能觸發、但以一般訊息、無獨立具現化種類）,
+而 `StackOverflowError` 與 `DeadlockError` 是 **[deviation]**（見下）。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
 出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
 裸的 `abort()`。unwind 抵達某條 stack
@@ -74,6 +84,12 @@ fire-and-forget——見 [Concurrency](coroutine.zh-TW.md)）。
 coroutine 的——並**自己檢查呼叫深度**，在一個呼叫將超出 stack 的當下就 raise 這個 abort（一次會跑 `defer` 的乾淨
 unwind），所以失控的遞迴**永不**變成 C 的 stack smash。Zerg **不做 tail-call 優化**——`for` 才是迴圈、有界 stack
 就夠——因此無界遞迴是一個確定的 `StackOverflowError`、絕不是無聲的卡死。
+
+> **[deviation]** bootstrap 尚未擁有或深度檢查 stack;stack 溢位是一次無法回復的 `SIGSEGV` / stack-smash、會終止
+> 行程而**不跑** `defer`,而非乾淨的 `StackOverflowError` unwind（見 [Conformance](conformance.zh-TW.md) 的
+> runtime-abort deviation）。意圖中的安全網成立;這個階段尚未建置。另外,一個 **`DeadlockError`**——每個 coroutine 都
+> 阻塞、無法再前進——同樣意圖是一次乾淨的 abort,但 bootstrap runtime 改為**帶報告 hard-`exit`**、不 unwind;而**對
+> 已關閉 channel 的 send** 今天以一般訊息 abort,特定的 `SendOnClosedError` 種類是 **[not yet]**。
 
 **`guard`——把 abort 降級成值（abort → 值）。** `guard { … }` 執行一個區塊，並把其中任何 abort 具現化成 `Err`，
 因此整個運算式恆為 **`Result[T]`**（`T` = 區塊的值型別）：正常結果 `v` 變成 `Left(v)`，攜帶 `err` 的 abort 變成
@@ -112,9 +128,11 @@ match guard { work() } {
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——那六種內建錯誤,以及任何被 `guard` 具現化的內建
-abort;對**非錯誤**型別的一般存在性測試 `x is T` **尚未提供**。這裡可達的錯誤集合在覆蓋上被視為**開放**,所以 `is`
-串永遠無法窮盡:**catch-all 必備**,未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort(`MatchError`)。
+——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**（**[implemented]**）——那六種內建錯誤,以及任何被
+`guard` 具現化的內建 abort;對**非錯誤**型別的一般存在性測試 `x is T` 是 **[not yet]**。這裡可達的錯誤集合在覆蓋上被
+視為**開放**,所以 `is` 串永遠無法窮盡:**catch-all 必備**。未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort——但
+`MatchError` 是 **[not yet]** 的具現化種類,且因為最後一個 `match` arm 一律無條件,compiler 今天永不 emit 一個(catch-all
+的要求是靜態規則、不是 runtime `MatchError`)。
 
 這把錯誤處理依「你握不握有**封閉**集合」分成兩路。需要以值決定錯誤**種類**時,就讓它保持具體——一個
 **`Either[T, ValueError]`**(從不抹除),其右側由 `match` 以值讀出。只認得少數幾種時,收下被抹除的 **`Result[T]`**、用

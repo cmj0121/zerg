@@ -51,6 +51,15 @@ the grammar:
   `a % 0` raise `DivideByZeroError`, and `INT_MIN / -1` overflows (`OverflowError`); truncating and
   flooring variants are stdlib (deferred).
 
+> **[deviation]** The whole integer arithmetic-safety contract above — checked `+`/`-`/`*` raising
+> `OverflowError`, the Euclidean sign of `/` and `%`, `a/0` and `a%0` raising `DivideByZeroError`, and a
+> shift `≥` the type width raising `OverflowError` — is the **intended** semantics but is **not yet
+> enforced**. Today each of these lowers to the plain C operator: `+` and `+%` emit **identical** code
+> (both wrap), signed overflow and division by zero are C **undefined behavior** rather than a clean
+> abort, and `%` is C truncation (sign-of-dividend), not Euclidean. `DivideByZeroError` is itself **[not yet]**
+> an error kind — not one of the six built-in kinds ([Errors](errors.md)) — so even once the checks land the
+> abort has no distinct reified kind yet.
+
 ### Numeric literals
 
 A numeric literal is **untyped** — it adopts the type its context demands (a typed binding `x: uint = 5`,
@@ -60,8 +69,17 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
 
 - A literal that **does not fit** its required type is a **compile error** (`byte = 300`, `uint = -1`, an
   `int` literal past i64) — never a runtime overflow.
-- **Integer and float stay separate**: an integer literal never becomes a `float`; write `1.0` or
-  `float(1)` for a float (there is no implicit int→float, which could silently lose precision).
+
+  > **[deviation]** The fit-check today covers only the **fixed-width ladder** (`i8` / `u16` / … ). The
+  > **named** primitives `int` / `uint` / `byte` / `rune` are **not** range-checked, so `byte = 300` and
+  > `uint = -1` are currently **accepted** (an `int` literal past i64 is still rejected). The rule stands
+  > as specified; the bootstrap does not yet enforce it for the named primitives.
+
+- **A typed `float` context accepts an untyped integer literal**: `x: float = 1` is legal — the `1` adopts
+  `float` like any untyped literal adopting its context. What never happens implicitly is an
+  already-typed **`int` value** becoming a `float`; that needs `float(i)` (no silent int→float, which
+  could lose precision). A fractional or exponent literal (`1.0`, `1e3`) is a `float` from the start and
+  never an `int`.
 
 ## User-Defined Types
 
@@ -102,8 +120,9 @@ the previous `+ 1`, counting from `0`) — making it a **C-style integer enum**:
 enum has a **native, C-compatible integer repr** (backing `int` by one default rule, no annotation needed);
 the **enum name is a value namespace** — `Color.Green` names the variant and `Color.of(n)` reverses a number
 — with `int(v)` **reading** the discriminant and `E.of(n) -> E?` **reversing** it (an unknown `n` yielding
-`nil`, never a wrong variant). A specific width is the opt-in layout decorator `#[repr]`; the serialized/wire form is the
-`Encode` / `Decode` impl, never a decorator.
+`nil`, never a wrong variant). A specific width is the opt-in layout decorator `#[repr]` (**[not yet]** —
+reserved and rejected loudly today, see [Decorators](decorators.md)); the serialized/wire form is the
+`Encode` / `Decode` impl (**[not yet]**), never a decorator.
 
 A **payload** `enum` (any variant carries fields) keeps its **tag opaque and match-only** — no `= 5` is
 allowed, and you `match` on the variant, never on a tag. To bind such a variant to a specific integer,
@@ -116,7 +135,7 @@ A **tuple** — `(int, str)`, its fields reached positionally as `.0`, `.1` — 
 `struct`**: the same product type, spelled without a name for a transient positional bundle (a multiple
 return, a `divmod -> (int, int)`). Being anonymous it is the language's **one structurally typed** form —
 `(int, str)` is the same type wherever written, while every named `struct` and `enum` stays **nominal**.
-It rides the whole product machinery — copy-by-value, and the compiler's structural `Object` / `Ord` /
+It rides the whole product machinery — copy-by-value, and the compiler's structural `Eq` / `Ord` /
 `Hash` / … derivation (see [Specs & Generics](specs.md)) — but, with no name to attach one to, carries **no inherent
 methods and no `spec` impl of its own**: reach for a named `struct` the moment a value wants behavior, a
 nominal identity, or field names worth reading. A tuple result is **first-class** — stored, passed, or
@@ -135,6 +154,12 @@ which _wraps_ a value behind a new field and fresh impls rather than reusing the
 **`Result[T]`** and **`T?`** are the compiler-provided, generic form of exactly this over `Either` (built in,
 not something you can yet spell yourself with a generic `type`), which is why they are distinct from each other
 and need an explicit `ok_or` / `ok` to cross.
+
+> **[deviation]** The bootstrap implements `type X = Y` only for a **scalar** underlying `Y`, and the new
+> type does **not** inherit `Y`'s arithmetic or `spec` impls — a `Celsius = int` will not accept `+`
+> without an explicit `int(c)`, contrary to the inheritance rule above — while `type Name = str` is
+> currently **rejected**. The intended semantics (a fresh identity reusing `Y`'s whole representation and
+> impls) stand; the bootstrap covers only the scalar, impl-less case this phase.
 
 ## Construction & encapsulation
 
@@ -174,7 +199,8 @@ intermediate states — against immutable-by-default and valid-at-construction.
 Zerg **converts by re-construction, never by reinterpretation** — a conversion `T(x)` _builds a new `T`_
 from `x`'s value, the way a constructor does; there is **no C-style cast** that views one type's bytes as
 another (a `reinterpret`), and none is offered. The three type operations stay cleanly apart: **build** a
-new value (`T(x)`, here), **test** an existential's identity (`x is T` → `bool`, [Type tests](specs.md)), and
+new value (`T(x)`, here), **test** an existential's identity (`x is T` → `bool`, [Type tests](specs.md) —
+**[not yet]** for non-error types this phase; only the error taxonomy is `is`-testable today), and
 **never** reinterpret one type's storage as another.
 
 Conversion is **explicit by default** — an `int` isn't a `bool`; build one with a constructor-style call

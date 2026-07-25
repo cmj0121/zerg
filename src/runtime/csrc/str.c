@@ -132,11 +132,15 @@ static int utf8_ok(const uint8_t *b, size_t n) {
 
 /* zrt_str_from_bytes builds a str from a list[byte], validating the str invariant and
  * raising EncodingError on violation. The bytes are copied into a fresh NUL-terminated
- * buffer the caller now owns; the source list is untouched. */
+ * buffer the caller now owns. It CONSUMES the source list — dropping it on both the
+ * success and the raise path — so a caller passing a temporary needs no post-call drop
+ * that a raise's unwind would skip (the emit hands over an owned list: a fresh rvalue
+ * directly, a named list as a copy). */
 const char *zrt_str_from_bytes(zrt_list bytes) {
 	const uint8_t *data = bytes.data;
 	size_t n = bytes.len;
 	if (!utf8_ok(data, n)) {
+		zrt_list_drop(&bytes);
 		zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: bytes are not valid UTF-8 for a str");
 	}
 	char *out = str_alloc(n + 1);
@@ -144,6 +148,7 @@ const char *zrt_str_from_bytes(zrt_list bytes) {
 		memcpy(out, data, n);
 	}
 	out[n] = 0;
+	zrt_list_drop(&bytes);
 	return out;
 }
 
@@ -206,7 +211,8 @@ int64_t zrt_parse_int(const char *s) {
 
 /* zrt_str_from_runes builds a str from a list[rune], encoding each code point to UTF-8
  * and raising EncodingError on an invalid one (a surrogate, out of range, or U+0000,
- * whose byte would be a NUL). */
+ * whose byte would be a NUL). Like zrt_str_from_bytes it CONSUMES the source list,
+ * dropping it on both the success and the raise path. */
 const char *zrt_str_from_runes(zrt_list runes) {
 	const int32_t *cps = (const int32_t *)runes.data;
 	size_t n = runes.len;
@@ -214,6 +220,7 @@ const char *zrt_str_from_runes(zrt_list runes) {
 	for (size_t i = 0; i < n; i++) {
 		int len = enc_len(cps[i]);
 		if (len == 0) {
+			zrt_list_drop(&runes);
 			zrt_abort_kind(ZRT_ERR_ENCODING, "EncodingError: rune is not a valid code point for a str");
 		}
 		total += (size_t)len;
@@ -239,5 +246,6 @@ const char *zrt_str_from_runes(zrt_list runes) {
 		}
 	}
 	out[o] = 0;
+	zrt_list_drop(&runes);
 	return out;
 }

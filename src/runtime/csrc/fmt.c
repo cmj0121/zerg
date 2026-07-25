@@ -306,7 +306,10 @@ const char *zrt_fmt_uint(uint64_t v, const char *spec) {
 	}
 	fmt_spec f;
 	parse_spec(spec, &f);
-	return pad_field(zrt_display_uint(v), '>', &f);
+	const char *body = zrt_display_uint(v); /* a fresh cell; pad_field copies, so free it here */
+	const char *out = pad_field(body, '>', &f);
+	zrt_str_release(body);
+	return out;
 }
 
 const char *zrt_fmt_float(double v, const char *spec) {
@@ -351,6 +354,8 @@ const char *zrt_fmt_str(const char *s, const char *spec) {
 	if (f.prec >= 0 && (size_t)f.prec < len) {
 		len = (size_t)f.prec; /* precision truncates a string */
 	}
-	char *body = dup_n(s, len);
-	return pad_field(body, '<', &f);
+	char       *body = dup_n(s, len);
+	const char *out = pad_field(body, '<', &f); /* pad_field always returns a fresh cell */
+	zrt_str_release(body);                       /* so the dup_n intermediate is ours to free */
+	return out;
 }

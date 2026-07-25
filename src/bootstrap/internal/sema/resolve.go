@@ -655,6 +655,19 @@ func (r *resolver) resolveFStrParts(parts []ast.FStrPart) {
 // type arguments; otherwise the base's binding decides — a generic function or a
 // type constructor takes type arguments, any value is indexed.
 func (r *resolver) resolveBracket(n *ast.Bracket) {
+	// sizeof[T] / alignof[T] are compile-time built-ins whose bracket holds a TYPE, not an
+	// index — so neither the base name nor the type argument is resolved as a value (a user
+	// may still shadow the name with an ordinary binding, which takes over).
+	if id, ok := n.Base.(*ast.Ident); ok && (id.Name == "sizeof" || id.Name == "alignof") &&
+		r.scope.lookup(id.Name) == nil {
+		r.info.Brackets[n] = BracketRes{Kind: BracketTypeArg}
+		// resolve the type argument (so a user type like Point links) but NOT the base name
+		// (sizeof/alignof are built-ins, not symbols).
+		for _, el := range n.Elems {
+			r.resolveExpr(el)
+		}
+		return
+	}
 	r.resolveExpr(n.Base)
 	kind := r.bracketByBase(n.Base)
 	if n.Comma {

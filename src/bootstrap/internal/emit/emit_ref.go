@@ -380,8 +380,8 @@ func (e *emitter) programUsesRuntimeStmt() bool {
 	return false
 }
 
-// programUsesIO reports whether the program lowers a stdlib `io` write intrinsic
-// (`__zrt_write` / `__zrt_write_int`) — the leaf of a bundled io function. A shadowed
+// programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic
+// (`__zrt_write` / `__zrt_read_file`) — the leaf of a bundled io function. A shadowed
 // spelling is left to the ordinary call path (info.Refs records the user binding), so
 // it does not count as an io use.
 func (e *emitter) programUsesIO() bool {
@@ -397,7 +397,7 @@ func (e *emitter) programUsesIO() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" || id.Name == "__zrt_read_file" {
+		if id.Name == "__zrt_write" || id.Name == "__zrt_read_file" {
 			return true
 		}
 	}
@@ -567,11 +567,11 @@ func (e *emitter) atomicIntrinsicEmit(n *ast.Call) (string, bool) {
 	return fmt.Sprintf("%s(%s)", fn, strings.Join(args, ", ")), true
 }
 
-// writeIntrinsicEmit lowers the Phase 1f io write intrinsics — `__zrt_write(fd, s)`
-// and `__zrt_write_int(fd, n)` — that the stdlib `io` module's leaves call. Each
-// maps to its always-linked sys.c primitive, cast to the intrinsic's int result. A
-// name shadowed by a user binding (recorded in info.Refs) is left to the ordinary
-// call path, so the intrinsic never masks a user symbol.
+// writeIntrinsicEmit lowers the io write intrinsic `__zrt_write(fd, s)` that the
+// stdlib `io` module's write leaf calls, mapping it to the always-linked sys.c
+// `zrt_write_str` primitive, cast to the intrinsic's int result. A name shadowed by a
+// user binding (recorded in info.Refs) is left to the ordinary call path, so the
+// intrinsic never masks a user symbol. (Decimal conversion is pure Zerg in io.zg.)
 func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
 	if !ok || len(n.Args) != 2 {
@@ -581,11 +581,8 @@ func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 		return "", false
 	}
 	fd, val := e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)
-	switch id.Name {
-	case "__zrt_write":
+	if id.Name == "__zrt_write" {
 		return fmt.Sprintf("((int64_t)zrt_write_str(%s, %s))", fd, val), true
-	case "__zrt_write_int":
-		return fmt.Sprintf("((int64_t)zrt_write_int(%s, %s))", fd, val), true
 	}
 	return "", false
 }

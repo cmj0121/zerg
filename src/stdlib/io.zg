@@ -6,9 +6,12 @@
 # surface writes best-effort over the runtime's `zrt_write` and never yields an
 # Err yet (structured write failures land with the full Writer spec later).
 #
-# The leaf primitives call the compiler write intrinsics (`__zrt_write` /
-# `__zrt_write_int`), the MVP stand-ins for the FFI binder: once the binder lands
-# these become ordinary `unsafe` foreign calls with no change to this surface.
+# Zerg is zero-external-dependency like Go: the stdlib reaches the OS through the
+# self runtime's own primitives, never an FFI binding onto a third-party library.
+# So all I/O *logic* lives here in pure Zerg — e.g. the decimal conversion in
+# `write_int` — and only the irreducible syscall leaves stay in the runtime, reached
+# through the thin compiler primitive `__zrt_write` (write a str to an fd) and the
+# whole-file read leaf `__zrt_read_file`.
 
 # write writes s to standard output (fd 1) with no trailing newline. (`print` is a
 # reserved keyword — the ambient no-import shortcut — so the module's newline-free
@@ -25,10 +28,30 @@ pub fn println(s: str) -> Result[nil] {
 	return nil
 }
 
-# write_int writes the decimal text of n to standard output (fd 1).
+# write_int writes the decimal text of n to standard output (fd 1). The conversion is
+# pure Zerg: digits are peeled off with `% 10` / `/ 10` — the single digit is negated,
+# never the whole value, so INT_MIN never overflows — collected least-significant-first,
+# then reversed into a str and written through the `write` leaf.
 pub fn write_int(n: int) -> Result[nil] {
-	__zrt_write_int(1, n)
-	return nil
+	mut digits: list[byte] = []
+	mut v := n
+	neg := v < 0
+	for {
+		d := v % 10
+		digit := if d < 0 { -d } else { d }
+		digits.append(byte(48 + digit))       # 48 == '0'
+		v = v / 10
+		if v == 0 { break }
+	}
+	if neg { digits.append(byte(45)) }         # 45 == '-'
+	mut out: list[byte] = []
+	mut i := digits.len() - 1
+	for {
+		out.append(digits[i])
+		if i == 0 { break }
+		i = i - 1
+	}
+	return write(str(out))
 }
 
 # read_file reads the whole file at path into a list[byte] — the MVP source-input leaf,

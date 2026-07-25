@@ -51,7 +51,7 @@ func TestBundleImportIO(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	for _, want := range []string{"zg_io__println(", "zg_io__write(", "zg_io__write_int(", "zrt_write_str(", "zrt_write_int("} {
+	for _, want := range []string{"zg_io__println(", "zg_io__write(", "zg_io__write_int(", "zrt_write_str("} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q:\n%s", want, code)
 		}

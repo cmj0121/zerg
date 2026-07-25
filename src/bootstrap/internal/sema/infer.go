@@ -117,8 +117,6 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.derefRef(n), true
 		case "__zrt_write":
 			return c.writeIntrinsic(n, Str), true
-		case "__zrt_write_int":
-			return c.writeIntrinsic(n, Int), true
 		case "__zrt_read_file":
 			return c.readFileIntrinsic(n), true
 		case "__zrt_atomic_load":
@@ -322,9 +320,10 @@ func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type 
 	return Invalid
 }
 
-// writeIntrinsic checks a compiler write intrinsic `__zrt_write(fd, value)`: a file
-// descriptor and a value of vt (str or int). It is the MVP leaf the stdlib `io`
-// module lowers onto until the FFI binder lands; it yields the byte count (int).
+// writeIntrinsic checks the compiler write intrinsic `__zrt_write(fd, value)`: a file
+// descriptor and a value of vt (str). It is the irreducible write leaf the stdlib `io`
+// module lowers onto — the runtime's own syscall wrapper, not an FFI binding; it yields
+// the byte count (int). All higher-level formatting (e.g. decimal) is pure Zerg.
 func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	if len(n.Args) != 2 {
 		c.errorf(n.Span(), "write intrinsic takes (fd, value), got %d argument(s)", len(n.Args))

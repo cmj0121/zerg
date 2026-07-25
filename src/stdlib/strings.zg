@@ -1,0 +1,181 @@
+# strings — text utilities over the built-in str (pure-Zerg stdlib).
+#
+# Bundled into a program that writes `import "strings"`; members are reached through
+# the namespace, as `strings.split(line, ",")` or `strings.join(parts, "/")`. Every
+# function here is ordinary safe Zerg — it decodes the str to its bytes with the
+# `list[byte](s)` built-in, works at the byte level, and rebuilds a str with `str(bs)`.
+# There is no foreign binding: Zerg is zero-external-dependency like Go.
+#
+# Byte-level search is UTF-8 correct: UTF-8 is self-synchronising, so a valid str
+# needle only ever matches a haystack at a code-point boundary. Offsets returned by
+# `index_of` are therefore BYTE offsets (as in Go's `strings.Index`), not rune counts.
+# Case folding (`to_upper` / `to_lower`) is ASCII-only — a non-ASCII byte is passed
+# through unchanged; full Unicode folding needs case tables (deferred).
+
+# match_at reports whether needle occurs in haystack starting exactly at byte offset
+# `at`. An empty needle matches anywhere in range; an out-of-range window never matches
+# (so callers need not bound-check before asking). Module-private.
+fn match_at(hay: list[byte], nee: list[byte], at: int) -> bool {
+	m := nee.len()
+	if at < 0 or at + m > hay.len() {
+		return false
+	}
+	mut k := 0
+	for k < m {
+		if hay[at + k] != nee[k] {
+			return false
+		}
+		k = k + 1
+	}
+	return true
+}
+
+# is_space reports whether b is an ASCII whitespace byte (space, tab, LF, CR).
+# Module-private.
+fn is_space(b: byte) -> bool {
+	v := int(b)
+	return v == 32 or v == 9 or v == 10 or v == 13
+}
+
+# has_prefix reports whether s begins with prefix. An empty prefix is always a prefix.
+pub fn has_prefix(s: str, prefix: str) -> bool {
+	return match_at(list[byte](s), list[byte](prefix), 0)
+}
+
+# has_suffix reports whether s ends with suffix. An empty suffix is always a suffix.
+pub fn has_suffix(s: str, suffix: str) -> bool {
+	hay := list[byte](s)
+	suf := list[byte](suffix)
+	return match_at(hay, suf, hay.len() - suf.len())
+}
+
+# index_of returns the BYTE offset of the first occurrence of sub in s, or -1 when sub
+# is absent. An empty sub is found at 0. The offset is a byte index, not a rune count.
+pub fn index_of(s: str, sub: str) -> int {
+	hay := list[byte](s)
+	nee := list[byte](sub)
+	n := hay.len()
+	mut i := 0
+	for i <= n {
+		if match_at(hay, nee, i) {
+			return i
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# contains reports whether sub occurs anywhere in s. An empty sub is always contained.
+pub fn contains(s: str, sub: str) -> bool {
+	return index_of(s, sub) >= 0
+}
+
+# split breaks s into the pieces separated by sep, returning every piece between
+# occurrences (so N separators yield N+1 pieces, and a piece may be empty). Splitting on
+# an empty separator raises ValueError — demote it with `guard { strings.split(s, x) }`.
+pub fn split(s: str, sep: str) -> list[str] {
+	hay := list[byte](s)
+	sepb := list[byte](sep)
+	m := sepb.len()
+	if m == 0 {
+		raise "strings.split: empty separator"
+	}
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	n := hay.len()
+	mut i := 0
+	for i < n {
+		if match_at(hay, sepb, i) {
+			out.append(str(cur))
+			cur = []
+			i = i + m
+		} else {
+			cur.append(hay[i])
+			i = i + 1
+		}
+	}
+	out.append(str(cur))
+	return out
+}
+
+# join concatenates the parts with sep between each adjacent pair (the inverse of
+# split); an empty list yields the empty string, a single part yields that part.
+pub fn join(parts: list[str], sep: str) -> str {
+	mut out := ""
+	n := parts.len()
+	mut i := 0
+	for i < n {
+		if i > 0 {
+			out = out + sep
+		}
+		out = out + parts[i]
+		i = i + 1
+	}
+	return out
+}
+
+# repeat returns s concatenated with itself count times (count 0 yields the empty
+# string). A negative count raises ValueError.
+pub fn repeat(s: str, count: int) -> str {
+	if count < 0 {
+		raise "strings.repeat: negative count"
+	}
+	mut out := ""
+	mut i := 0
+	for i < count {
+		out = out + s
+		i = i + 1
+	}
+	return out
+}
+
+# trim removes leading and trailing ASCII whitespace (space, tab, LF, CR) from s.
+pub fn trim(s: str) -> str {
+	b := list[byte](s)
+	n := b.len()
+	mut lo := 0
+	for lo < n and is_space(b[lo]) {
+		lo = lo + 1
+	}
+	mut hi := n
+	for hi > lo and is_space(b[hi - 1]) {
+		hi = hi - 1
+	}
+	mut out: list[byte] = []
+	mut i := lo
+	for i < hi {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# to_upper returns s with every ASCII lowercase letter folded to uppercase; every other
+# byte (including all non-ASCII) is passed through unchanged.
+pub fn to_upper(s: str) -> str {
+	mut out: list[byte] = []
+	for c in list[byte](s) {
+		v := int(c)
+		if v >= 97 and v <= 122 {
+			out.append(byte(v - 32))
+		} else {
+			out.append(c)
+		}
+	}
+	return str(out)
+}
+
+# to_lower returns s with every ASCII uppercase letter folded to lowercase; every other
+# byte (including all non-ASCII) is passed through unchanged.
+pub fn to_lower(s: str) -> str {
+	mut out: list[byte] = []
+	for c in list[byte](s) {
+		v := int(c)
+		if v >= 65 and v <= 90 {
+			out.append(byte(v + 32))
+		} else {
+			out.append(c)
+		}
+	}
+	return str(out)
+}

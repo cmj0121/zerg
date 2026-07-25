@@ -107,12 +107,12 @@ func TestStrScanLowering(t *testing.T) {
 	}
 }
 
-// TestStrBridgeRejected keeps the surface honest: only byte/rune bridges, only a str
-// source, and str(x) only from a byte/rune list.
+// TestStrBridgeRejected keeps the surface honest: `str(x)` builds from a byte/rune list
+// or a scalar only (not a list[int]); `list[byte]/[rune]` bridge only from a str; and a
+// str is not indexable.
 func TestStrBridgeRejected(t *testing.T) {
 	for _, tc := range []struct{ name, src string }{
 		{"str is not indexable", "fn main() {\n\tprint \"hi\"[0]\n}\n"},
-		{"str from a non-list", "fn main() {\n\tprint str(42)\n}\n"},
 		{"str from a list[int]", "fn main() {\n\tprint str([1, 2, 3])\n}\n"},
 		{"list[byte] from a non-str", "fn main() {\n\tprint list[byte](42)\n}\n"},
 	} {

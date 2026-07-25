@@ -10,9 +10,9 @@ pub fn exists(path: str) -> bool {
 	return __zrt_exists(path)
 }
 
-# remove deletes the file at path. It raises IOError when the path is missing or cannot
-# be removed (e.g. a non-empty directory), which `guard { fs.remove(p) }` demotes to a
-# Result.
+# remove deletes the FILE at path. It raises IOError when the path is missing or cannot be
+# removed — including when it is a directory (this removes files only) — which
+# `guard { fs.remove(p) }` demotes to a Result.
 pub fn remove(path: str) {
 	__zrt_remove(path)
 }

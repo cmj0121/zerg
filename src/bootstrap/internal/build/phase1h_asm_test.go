@@ -3,15 +3,27 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// asmCorpusArch is the architecture the inline-asm run corpora target: the `add %0, %1,
+// %2` three-operand form and the 1h_unsafe conformance program are written in AArch64
+// assembly, so they compile-and-run only on arm64. On another host they would assemble
+// to an illegal instruction; the arch-independent lowering-SHAPE tests still run
+// everywhere. (The C-codegen path itself is portable — see docs/ffi.md; only the inline
+// asm text is arch-specific.)
+const asmCorpusArch = "arm64"
 
 // TestAsmAddCompileAndRun is the Phase 1h U3 end-to-end oracle: an inline `asm`
 // integer add inside an `unsafe { }` block-expression must lower to a GCC
 // extended-asm statement, compile, and run — computing 3 + 4 = 7 in a register and
 // observing the result.
 func TestAsmAddCompileAndRun(t *testing.T) {
+	if runtime.GOARCH != asmCorpusArch {
+		t.Skipf("inline-asm add corpus is %s assembly; host is %s", asmCorpusArch, runtime.GOARCH)
+	}
 	cc := findCC()
 	if cc == "" {
 		t.Skip("no C compiler found")
@@ -101,6 +113,9 @@ func TestAsmRejectedInSafeCode(t *testing.T) {
 // pointer-cast round trip, a null test, a mutable global mutated by an unsafe group
 // fn, and an inline-asm add — and must compile and run with the expected output.
 func TestUnsafeConformanceCorpus(t *testing.T) {
+	if runtime.GOARCH != asmCorpusArch {
+		t.Skipf("1h_unsafe corpus embeds %s inline asm; host is %s", asmCorpusArch, runtime.GOARCH)
+	}
 	cc := findCC()
 	if cc == "" {
 		t.Skip("no C compiler found")

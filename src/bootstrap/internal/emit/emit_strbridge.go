@@ -10,8 +10,11 @@ import (
 // The str <-> list bridge lowering (docs/collections.md). `list[byte](s)` / `list[rune](s)`
 // decode a str to its octets / code points; `str(bytes)` / `str(runes)` build a str back,
 // validating the str invariant and raising on violation. Each is one runtime call
-// (str.c). The list argument passes by value — a header copy that shares the buffer — and
-// the runtime only reads it, so the caller keeps ownership and drops the list as usual.
+// (str.c). `str(list)` CONSUMES its list argument (str.c drops it on both the success and
+// the raise path), so strFromList hands the runtime an OWNED list: a fresh (rvalue) list
+// goes straight over, while a named list passes a fresh copy so the owner keeps its own
+// scope-exit drop. This is what makes `str(<temporary>)` leak-free even when it raises —
+// an unwind can't skip a post-call drop that no longer exists.
 
 // strBridgeEmit lowers a str<->list conversion, reporting false for any other call. It
 // runs before the ordinary call paths so `str(...)` and `list[byte](...)` never fall
@@ -33,9 +36,9 @@ func (e *emitter) strBridgeEmit(n *ast.Call) (string, bool) {
 		}
 		switch lt.Elem {
 		case types.Byte:
-			return fmt.Sprintf("zrt_str_from_bytes(%s)", e.expr(arg)), true
+			return e.strFromList("zrt_str_from_bytes", arg), true
 		case types.Rune:
-			return fmt.Sprintf("zrt_str_from_runes(%s)", e.expr(arg)), true
+			return e.strFromList("zrt_str_from_runes", arg), true
 		}
 		return "", false
 	case *ast.Bracket:
@@ -56,4 +59,16 @@ func (e *emitter) strBridgeEmit(n *ast.Call) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// strFromList lowers `str(list)` given the runtime consumer fn. Because the runtime
+// CONSUMES (drops) the list, it must receive an OWNED one: a fresh rvalue goes straight
+// over (already owned), while a named list (namesStorage) passes a deep copy so the
+// runtime drops the copy and the named owner still drops its own at scope exit.
+func (e *emitter) strFromList(fn string, arg ast.Expr) string {
+	if !e.namesStorage(arg) {
+		return fmt.Sprintf("%s(%s)", fn, e.expr(arg))
+	}
+	c := e.freshName("sfbcopy")
+	return fmt.Sprintf("({ zrt_list %s; zrt_list_copy(&%s, &(%s)); %s(%s); })", c, c, e.expr(arg), fn, c)
 }

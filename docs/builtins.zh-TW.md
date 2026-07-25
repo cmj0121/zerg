@@ -11,14 +11,14 @@
 
 ## 總覽
 
-| 內建                                          | 簽名                                | 摘要                          |
-| --------------------------------------------- | ----------------------------------- | ----------------------------- |
-| [`Ref`](#ref) / [`deref`](#deref)             | `Ref(x) -> Ref[T]`, `deref(r) -> T` | 建立 / 讀取 refcounted box    |
-| [轉換](#原生型別轉換primitive-conversions)    | `int(x)` `float(x)` … `T(x)`        | 原生型別重新建構              |
-| [`int(s)`](#解析字串parsing-a-string)         | `int(s: str) -> int`                | 解析十進位字串                |
-| [str/list 橋接](#str--list-橋接)              | `str(bytes)`, `list[byte](s)`       | str ⇄ list（另有 `runes`）    |
-| [error kind](#error-建構子error-constructors) | `ValueError(msg)` … `KeyError(msg)` | 建出固定 kind 的 `Err`        |
-| [raw pointer](#raw-pointer僅限-unsafe)        | `addr` `ptr` `ptr[T]` `.load` …     | bare-metal——**僅限 `unsafe`** |
+| 內建                                          | 簽名                          | 摘要                          |
+| --------------------------------------------- | ----------------------------- | ----------------------------- |
+| [`Ref`](#ref) / [`deref`](#deref)             | `Ref(x)`, `deref(r)`          | 建立 / 讀取 refcounted box    |
+| [轉換](#原生型別轉換primitive-conversions)    | `int(x)` … `T(x)`             | 原生型別重新建構              |
+| [數字解析](#解析字串parsing-a-string)         | `int(s)` `uint(s)` `float(s)` | 從字串解析數字                |
+| [str 橋接](#str--list-橋接)                   | `str(42)`, `str(bytes)`       | scalar display 或 str ⇄ list  |
+| [error kind](#error-建構子error-constructors) | `ValueError(msg)` …           | 建出固定 kind 的 `Err`        |
+| [raw pointer](#raw-pointer僅限-unsafe)        | `addr` `ptr` `.load` …        | bare-metal——**僅限 `unsafe`** |
 
 ## `Ref`
 
@@ -39,11 +39,14 @@
 
 ## 解析字串（Parsing a string）
 
-`int(s: str) -> int` 是唯一**解析**而非重新建構的轉換：讀一個可選符號與十進位數字，字串格式錯誤 raise `ValueError`、
-超出範圍 raise `OverflowError`。用 `guard { int(s) } ?? default` 降級。
+`int(s: str) -> int`、`uint(s: str) -> uint`、`float(s: str) -> float` 是**解析**字串（而非重新建構值）的轉換：
+讀出數字文字，格式錯誤 raise `ValueError`、超出範圍 raise `OverflowError`。用 `guard { int(s) } ?? default`
+降級。其餘目標不解析（`bool(s)` / `byte(s)` 會被拒）。
 
 ## str ⇄ list 橋接
 
+- `str(x: T) -> str`、`T` 為 **scalar**——渲染值的內建 `display()`（`str(42)` → `"42"`），與 `print`、f-string
+  hole 產生的文字相同。
 - `str(bytes: list[byte]) -> str` / `str(runes: list[rune]) -> str`——組出 `str`，並**驗證**不變式（合法 UTF-8、
   無內嵌 NUL）；非法序列 raise `EncodingError`。
 - `list[byte](s: str) -> list[byte]` / `list[rune](s: str) -> list[rune]`——把 `str` 拆成 octets 或 Unicode

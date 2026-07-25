@@ -7,7 +7,10 @@ named arguments, and closure capture. Part of the [Language Reference](language.
 A function is a **first-class value**: it has a type, and can be passed as an argument, returned,
 stored in a field, and bound to a variable. This holds **across modules** too — a function named through
 another module is an ordinary value: `f := other.helper` binds it, then `f(x)` calls it, exactly as for a
-local function. A function type is written `fn(P...) -> R`; a parameter's
+local function. Binding a **bare top-level function** as a value, and doing so **across modules**, are both
+**[implemented]**. A **generic** function is **not first-class until instantiated**: the un-instantiated
+generic name is not itself a value — it becomes one only once its type arguments are fixed at a use site.
+A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they
 differ in calling convention — mutable-reference vs copy). Visibility is **not** part of the type: `pub`
 exports a top-level function's **name**, never travels with the value, and is meaningless on an
@@ -42,6 +45,12 @@ greet("Sam", "Hi", true)     # all positional
   **evaluated at the call site each time** it is used, never once at definition, so there is no
   shared-mutable-default trap; it is an ordinary expression and may read earlier parameters (evaluation is
   left-to-right). A parameter with no default stays **mandatory**.
+
+  > **[deviation]** Today only a **self-contained simple constant** default (a literal such as `443` or
+  > `"Hello"`) is lowered correctly. A **non-trivial** default expression — one built from an operator or a
+  > call, e.g. `greeting: str = "a" + "b"` — is currently **mishandled** rather than evaluated per call as
+  > specified. Keep defaults to simple constants until this is fixed.
+
 - A **named argument** passes a parameter by its name (`loud: true`) — which is what lets you **skip a
   defaulted parameter** in the middle. The rule is the usual one: positional arguments fill left-to-right,
   any parameter may instead be given by name, a defaulted one may be omitted, and **once you name an argument
@@ -57,10 +66,11 @@ A **variadic** parameter is deliberately **not** offered — pass a `list[T]` ex
 called `sum([1, 2, 3])`). This keeps the call model and the C ABI flat, and matches the no-variadics stance
 already taken for formatting; `print` stays a built-in construct, not a user-definable variadic.
 
-**Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** A
-`mut` variable cannot be captured; snapshot it into an immutable binding first (`snap := n`). Capture
-is **by copy** in meaning — a captured channel is refcount-bumped, and a **non-POD immutable value** (a
-`list` / `map` / `str`, a `Ref`, or a boxed value) is **retained into the closure's refcounted environment**
+**Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** Capturing
+an **immutable** value — a plain scalar, or a **non-POD** value (a `list` / `map` / `str`, a `Ref`, or a
+boxed value) — is **[implemented]**; capturing a **`mut`** binding is **[not yet]** — snapshot it into an
+immutable binding first (`snap := n`). Capture is **by copy** in meaning — a captured channel is
+refcount-bumped, and a **non-POD immutable value** is **retained into the closure's refcounted environment**
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope
 carries its own captures and can never dangle. Because every capture is immutable, retaining versus cloning
 is unobservable. Equivalently:

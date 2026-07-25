@@ -4,12 +4,16 @@ Zerg's built-in containers — **`list`**, **`map`**, **`set`**, plus the fixed-
 one canonical type per role, no variant zoo. They're just ordinary **scope-owned values**, built on the
 [Language Reference](language.md). Also in [繁體中文](collections.zh-TW.md).
 
-| Type        | Role                        | Element / key requirement | Iteration order     |
-| ----------- | --------------------------- | ------------------------- | ------------------- |
-| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |
-| `map[K, V]` | an **associative** table    | `K: Hash`                 | **insertion** order |
-| `set[T]`    | a **unique-membership** set | `T: Hash`                 | **insertion** order |
-| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         |
+| Type        | Role                        | Element / key requirement | Iteration order     | Status            |
+| ----------- | --------------------------- | ------------------------- | ------------------- | ----------------- |
+| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         | **[implemented]** |
+| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order | **[implemented]** |
+| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]**     |
+| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         | **[implemented]** |
+
+The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
+(see [Keys](#keys--eq-free-hash-explicit) below), and `set[T]` is **[not yet]** in both type and value
+position.
 
 Richer shapes are compositions, not new built-ins. `list[byte]` is the raw byte sequence (indexable, may
 hold a NUL); `str` stays a separate immutable primitive (below).
@@ -17,10 +21,13 @@ hold a NUL); `str` stays a separate immutable primitive (below).
 ## Values, not references
 
 A collection is a **scope-owned value**: **copy-by-value** (the compiler elides or moves when safe), freed
-at scope exit, **no aliasing** — copying deep-copies elements and refcount-bumps any contained `Ref` value (a
-channel or `Ref[T]`), the existing memory rule. There's no shared container hiding behind two names: you
-share for **reading** with an immutable pass, for **mutation** with a `mut &` parameter; a collection sent
-over a channel is copied like any other payload.
+at scope exit, **no aliasing** — copying **deep-copies** the elements and **retains** (refcount-bumps) any
+**reference-counted** element it holds: a `chan`, a `Ref[T]`, a `str`, or the boxed tail of a recursive
+type. That is exactly the memory rule — the value-type parts are copied, the reference-counted parts shared
+(see [Values & Memory](memory.md#copy-vs-reference-semantics)). There's no shared container hiding behind two
+names: you share for **reading** with an immutable pass, for **mutation** with a `mut &` parameter; a
+collection sent over a channel is copied like any other payload. `list` and `map` value semantics are
+**[implemented]**.
 
 ## Mutability — one per-binding knob
 
@@ -42,13 +49,18 @@ mut ys := [1, 2, 3]
 ys.append(4)               # grow  ·  ys[0] = 9  # edit  ·  ys = [2, 4]  # rebind
 ```
 
-## Keys — `equal` free, `Hash` explicit
+## Keys — `Eq` free, `Hash` explicit
 
 `list[T]` takes **any** `T` (only the structural ops every value has). A `map` key / `set` element needs
-**`Hash`** (keys compare by `equal`). The two halves are deliberately asymmetric: `Object` **auto-derives `equal`**,
-but **`Hash` is not derived — a type implements it explicitly** to be a key, keeping "what can be a key" an
-opt-in, `safe by default` choice. The author owns the contract the compiler can't check: **equal ⇒ same
-hash**. Because a key is **copied in** as a frozen snapshot, even a `mut` collection is usable as one.
+both **equality** and **`Hash`** — a key compares by `==` and hashes. Neither is automatic: equality is
+opt-in via **`derive(Eq)`** (or a hand-written `impl Eq`), and **`Hash` is likewise explicit** — a type gains
+it through `derive(Hash)` or by hand — keeping "what can be a key" an opt-in, `safe by default` choice. The
+author owns the contract the compiler can't check: **equal ⇒ same hash**. Because a key is **copied in** as a
+frozen snapshot, even a `mut` collection is usable as one.
+
+> **Status.** The intended rule — **any `Eq + Hash` type** as a key — is **[not yet]**. This phase a `map`
+> key is restricted to **`int`** or **`str`**; `derive(Hash)` and general keyed types are not built, and
+> `set[T]` is **[not yet]** entirely.
 
 ## Access — `[]` asserts, `.get` checks
 
@@ -74,19 +86,28 @@ value semantics hold while the read-only case stays **zero-copy**; COW is an uno
 alongside copy-elision and the move (Values & Memory), adding no visible sharing, only a cheaper `copy`.
 
 So a lexer scans by index (`xs[i]` is O(1)) and takes read-only `slice` windows at no copy cost,
-materializing a `str` only when it keeps a token. The **`x[a..b]`** slice-index sugar is deferred to the
-grammar (see Deferred); `slice(a, b)` is the operation until then.
+materializing a `str` only when it keeps a token.
+
+> **[not yet]** Slicing is unbuilt this phase: neither `xs.slice(a, b)` nor the **`x[a..b]`** slice-index
+> sugar (the latter also deferred at the grammar level — see [Deferred](#deferred)) is available yet. The
+> read-only, copy-on-write design above is the intended semantics.
 
 ## Order & equality
 
 `list` walks in index order; `map`/`set` in **insertion order** — deterministic, no hash-ordering surprise.
 Iterating reads each element **by value** (elidable to read-only by-ref); to edit in place, bind `mut x`
-(a by-ref, requiring the collection be `mut`). Equality is structural: `list`s compare **in order**,
-`map`s/`set`s **order-insensitively** (insertion order governs iteration, never equality).
+(a by-ref, requiring the collection be `mut`). The intended structural equality is that `list`s compare
+**in order** and `map`s / `set`s compare **order-insensitively** (insertion order governs iteration, never
+equality).
+
+> **[not yet]** Container equality is unbuilt: comparing two `list`s or two `map`s with `==` / `!=` is a
+> **loud compile error** today, and `set[T]` does not exist yet. Only **`str ==`** compares. `for mut x`
+> over a collection of **non-POD** elements (a `list[str]`, or elements of a recursive / boxed type) is also
+> **[not yet]** — over POD elements it is available.
 
 ```text
 for x in xs { total = total + x }         # read
-for mut x in ys { x = x * 2 }             # edit in place — ys must be mut
+for mut x in ys { x = x * 2 }             # edit in place — ys must be mut (POD elements today)
 ```
 
 ## Iterating & mutation
@@ -117,8 +138,8 @@ compile-time evaluation, so `[int; f(x)]` is an error.
 
 ```text
 xs: [int; 4] = [1, 2, 3, 4]     # a list literal, typed as an array by its target — length must be 4
-buf := [0; 256]                 # fill form: 256 copies → [int; 256]
-row := [b'\0'; WIDTH]           # WIDTH is a top-level const
+buf := [0; 256]                 # bare := — this is a list[int] of 256, NOT an array [int; 256]
+row := [b'\0'; WIDTH]           # WIDTH is a top-level const — also a list under bare :=
 ```
 
 An array is an ordinary **value**: copy-by-value copies all `N` elements (bumping any contained `Ref`), it
@@ -126,16 +147,25 @@ is freed at scope exit, and it never aliases — exactly the container value mod
 of the rules already stated for `list`:
 
 - **Build** — the list literal `[a, b, …]` is **context-typed**: a `list[T]` by default, an array when the
-  target is `[T; N]` (its length is checked at compile time). The **fill form `[v; N]`** makes `N` copies of
-  `v` — the way to build a large array without spelling every element; there is no implicit zero-fill.
+  target is `[T; N]` (its length is checked at compile time). The **fill form `[v; N]`** is intended to make
+  **`N` copies of `v`** — the way to build a large collection without spelling every element; there is no
+  implicit zero-fill. Under a bare `:=` the fill form builds a **`list[T]`**, not the array type `[T; N]`;
+  the array-typed fill form (in explicit `[T; N]` position) is **[not yet]**.
+
+  > **[deviation]** The list fill form currently **re-evaluates `v` on each of the `N` iterations** instead
+  > of copying one value `N` times. With a pure constant (`[0; 256]`) this is harmless, but a fill whose
+  > element expression has a side effect or observable cost is evaluated `N` times rather than once.
+
 - **Access** — `a[i]` by value, bounds-checked → `IndexError`, with a constant index outside `[0, N)` caught
   at **compile time**; `a.get(i) -> T?` is the checked path. `mut a` edits elements in place (`a[i] = v`) but
   can **never grow or shrink** — the size is in the type; a plain `a` is frozen.
 - **Length** — `a.len()` is `N`, itself a compile-time constant.
-- **Iterate / derive / slice** — it implements `Iterator`/`Iterable` (`for x in a`, `for mut x in a`),
-  derives `Object` always and `Ord`/`Hash`/`Encode` element-wise when `T` has them (two same-type arrays
-  compare and hash element-wise), and `a.slice(p, q)` yields a **read-only `list[T]`** view — the COW bridge
-  from an array back into the list family.
+- **Iterate / derive / slice** — it implements `Iterator` / `Iterable` (`for x in a`; **`for mut x in a`
+  over non-POD elements is [not yet]**), and derives **element-wise**: an array derives `Eq` / `Ord`
+  (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
+  compare (and hash) element-wise. There is **no** blanket auto-derived `Object`; equality comes only from
+  `derive(Eq)` on the element. `a.slice(p, q)` is intended to yield a **read-only `list[T]`** view — the COW
+  bridge from an array back into the list family — but slicing is **[not yet]** (see [Slicing](#slicing--read-only-subranges)).
 
 ## Strings & bytes
 
@@ -156,5 +186,10 @@ element or a key. (Rendering a non-text value to text — an `int` to `"42"`, `f
 
 ## Deferred
 
+- **`set[T]`** — the unique-membership set is specified above but **[not yet]** built, in both type and
+  value position.
+- **Container equality** — structural `==` / `!=` on `list` and `map` is **[not yet]**; only `str ==`
+  compares today.
+- **Slicing** — both `slice(a, b)` and the **`x[a..b]` slice-index sugar** (the range-index form, also a
+  grammar/syntax concern) are **[not yet]**.
 - **Ordered variants** — a sorted `map`/`set` keyed on `Ord` rather than `Hash`, if wanted.
-- **`x[a..b]` slice-index sugar** — the range-index form of `slice(a, b)`; a grammar/syntax concern.

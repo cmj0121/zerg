@@ -7,7 +7,9 @@ small core it already gives you. Part of the [Language Reference](language.md). 
 ## Closures & higher-order functions
 
 Zerg's anonymous function `fn(…) -> R { … }` **is** the closure — first-class, capturing only immutable
-values and channels, by copy (see [Functions & Closures](functions.md)). There is deliberately **no terser
+values and channels, by copy (see [Functions & Closures](functions.md)). Capturing an **immutable** value —
+a scalar, or a non-POD `str` / `list` / `map` / `Ref` — is **[implemented]**; capturing a **`mut`** binding
+is **[not yet]** (snapshot it into an immutable binding first). There is deliberately **no terser
 `|x|` lambda**: a little verbosity nudges you toward Zerg's procedural-first style rather than deep
 functional chains. Three ways to keep closures readable, in order of preference:
 
@@ -80,6 +82,15 @@ q := new_query().where("age > 18").order("name").limit(10)
 ```
 
 To mutate the builder in place instead, use a `mut fn` method on a `mut` binding (inside a block or `with`).
+
+## Destructuring & pattern support
+
+Destructuring binds directly at a `:=`: a tuple `(a, b) := e` and a struct `P{x, y} := e` both unpack in one
+step **[implemented]** — the everyday way a multiple return or a small record is consumed. In a `match` (see
+[Control Flow](control-flow.md)) the **struct**, **tuple**, **variant**, **wildcard `_`**, **`as`**,
+**range**, and **negative-literal** patterns, together with their **nesting**, are **[implemented]**. Two
+forms `GRAMMAR` allows are **[not yet]**: an **or-pattern that binds** (`A(x) | B(x) =>`) and a **list
+pattern** (`[h, ..t]`) — the list pattern parses and type-checks but is rejected at code generation.
 
 ## Deliberately not added
 

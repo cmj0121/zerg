@@ -17,9 +17,11 @@ Recursive and self-referential types need no pointer — declare the field direc
 `enum Expr { Num(int); Add(Expr, Expr) }`) and the compiler **auto-boxes the self-referential slot behind a
 refcounted cell**. A recursive value therefore copies **by reference** (refcount-shared), not by deep clone:
 copying bumps the cell's count rather than duplicating the whole chain, and the chain is freed at the last
-holder's scope exit. Two MVP caveats hold this phase: a runtime **cycle** built by reassigning a recursive
-field through a `mut` binding **leaks** (there is no cycle collector yet), and freeing a long chain recurses
-**O(depth)** on the C stack.
+holder's scope exit. Two bounded MVP artifacts hold this phase: a runtime **cycle** built by
+reassigning a recursive field through a `mut` binding **leaks**, as there is no cycle collector yet
+(**[deviation]**); and freeing a long chain **recurses O(depth) on the native C stack** and can overflow it
+(**[deviation]** — the same unrecoverable stack-overflow deviation catalogued in
+[Conformance](conformance.md) and [Errors](errors.md)).
 
 **A `struct`'s layout is its declaration.** Fields sit in **declaration order**, the value is laid out
 **inline** in its owner (no indirection beyond the recursive auto-boxing above), and the compiler **never
@@ -45,9 +47,16 @@ through:
 - **Channels** — shared by ref across coroutines, for communication only.
 
 **Evaluation order is left-to-right.** Function arguments, operator operands, and the elements of a
-`list`/`map` literal, or a `set(...)` constructor, evaluate **in source order**, deterministically — unlike C, whose
-argument-evaluation order is unspecified. So side effects (a `mut &` argument, an abort) sequence
-predictably; the `and` / `or` short-circuit is this rule with the right operand skipped ([Built-in specs](specs.md)).
+`list` / `map` literal or a `set(...)` constructor evaluate **in source order**, deterministically — so a
+side effect (a `mut &` argument, an abort) sequences predictably, unlike C, whose argument-evaluation order
+is unspecified.
+
+> **[deviation]** The bootstrap orders only the **elements of a literal** left-to-right; **function-call
+> arguments and binary operands** inherit C's unspecified order, so `add(f(1), g(2))` may evaluate `g(2)`
+> before `f(1)`. The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — **are**
+> honored left-to-right: the left operand is evaluated first and the right is skipped when the left decides
+> the result **[implemented]**. [Conformance](conformance.md) lists the call-argument / operand order as an
+> implementation-defined point until the intended left-to-right rule is enforced.
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
 the built-in **`chan`**, or a stdlib **`Ref[T]`** box — is shared **by reference**, not copied. The
@@ -65,6 +74,44 @@ free is always complete. (The lone pathological case — a `chan` buffering a re
 programmer error, not a checked one.) The one exception is the **auto-boxed recursive cell** above: because a
 `mut` recursive field can be reassigned into a back-edge, a cycle _can_ form there — and, this phase, is **not
 collected and leaks** (a bounded, documented MVP gap, the cost of allowing self-referential types directly).
+
+## Copy vs reference semantics
+
+Whether two names share storage is decided by one line, drawn between two disjoint categories:
+
+- A **value type** — every scalar, a `struct`, a tuple, and the heap containers `list` and `map` — is
+  **copied**. A scalar, `struct`, or tuple is copied inline; a `list` or `map` is **deep-copied**, its
+  elements copied by this same rule. Two names of a value type therefore **never alias**: writing through
+  one changes only that holder's own copy. **[implemented]**
+- A **reference-counted value** — a `str`, a `chan`, a `Ref[T]`, and the **auto-boxed sub-nodes of a
+  recursive type** — is **shared**: copying retains the existing cell (refcount++) instead of duplicating
+  it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
+  visible via every holder** of that tail. **[implemented]**
+
+Copying a composite applies the rule field by field — its value-type parts are copied and any
+reference-counted part it contains (transitively) is retained. Because a `str` is immutable and a
+`Ref[T]`'s referent is fixed at construction, the only place a shared mutation is observable is the
+auto-boxed cell of a **`mut` recursive** binding:
+
+```text
+mut a := [1, 2, 3]                # value type
+b := a                            # deep copy — b is an independent list
+a[0] = 9                          # a is [9, 2, 3]; b stays [1, 2, 3] — no alias
+
+struct Node { value: int; next: Node? }
+mut n := Node(value: 1, next: Node(value: 2, next: nil))
+m := n                            # the struct is copied; its boxed `next` tail is refcount-shared
+n.next!.value = 99                # reaches the shared tail — m.next!.value reads 99 too
+```
+
+## Drop order
+
+At scope exit, locals drop in **reverse construction order** — last constructed, first freed — so teardown
+mirrors setup **[implemented]**. The order is pinned **inside an aggregate** too: a `struct`'s fields and an
+`enum` payload's slots drop in **reverse declaration order** **[implemented]**. A `defer` runs at block exit
+on **every** path, **including the abort-unwind path**, and several `defer`s in a block run
+**last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
+order **[implemented]**.
 
 ## `Ref[T]` — a resource that outlives its scope
 
@@ -124,6 +171,12 @@ the storage.
 | captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it              |
 | channel, `Ref[T]`                     | ref  | drops a holder (refcount--); last holder runs **`drop`** (a channel closes) |
 
+> **Status.** `del` of a `Ref` value — a `chan` or a `Ref[T]` — dropping a holder (and running `drop` at
+> the last one) is **[implemented]**. `del` of an **owning** value — a local `struct`, `list`, or `map` —
+> to free its storage **early** is **[not yet]**: today such a `del` revokes the name's access, but the
+> storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above is
+> thus the intended behavior, not yet the bootstrap's for owning values.
+
 `del` can never dangle: revoking a borrow cannot free storage another name owns, and Zerg's existing
 rules already stop an owner from outliving-then-freeing under a live borrower (a `mut &` parameter is
 confined to its call; an escaping closure owns copies of its captures). The compiler knows statically
@@ -156,3 +209,7 @@ drops in reverse construction order, so teardown mirrors setup. Three constructs
 cleanup fires: `del` revokes a name **now**; `defer` fires at **this block's** exit; a `Ref[T]` drop fires
 at the **last holder's** exit. The dividing line is a single question — does the resource escape its
 scope? **No → `defer`; yes → `Ref[T]`.**
+
+A **`with` block** scopes such a resource to a lexical region, running its release at block exit. Today it
+is limited to **Ref-bearing** resources (a `chan` or a `Ref[T]`); `with` over a general `Scoped` value is
+**[not yet]**.

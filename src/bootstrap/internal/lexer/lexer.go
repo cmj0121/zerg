@@ -4,6 +4,12 @@
 // a line break when the last token can end an item, suppressed inside an unclosed
 // '(' or '[' (but not '{').
 //
+// Comments and blank lines are not dropped: they are collected as trivia
+// (DESIGN-1a §2). Full-line comments, folded '##' doc-comment blocks, and
+// collapsed blank-line runs become the Leading trivia of the next real token; a
+// same-line comment after a token becomes that token's Trailing trivia (attached
+// by Tokenize, which sees the already-emitted token).
+//
 // The lexer recognizes the full lexical surface it can (so the token vocabulary is
 // forward-compatible), and records a diagnostic for constructs the Phase 0 pipeline
 // does not yet accept (f-strings, command literals, decorators) rather than
@@ -24,29 +30,80 @@ type Lexer struct {
 	line int // 1-based current line
 	col  int // 1-based current column
 
-	depth int        // nesting of '(' and '[' — suppresses ASI while > 0
-	prev  token.Kind // kind of the previous emitted token, for ASI
-	diags diag.List
+	depth      int        // nesting of '(' and '[' — suppresses ASI while > 0
+	depthStack []int      // saved depth per open '{' — a block re-enables ASI inside parens
+	prev       token.Kind // kind of the previous emitted token, for ASI
+	diags      diag.List
+
+	pending   []token.Trivia // leading trivia awaiting the next real token
+	trail     []token.Trivia // trailing trivia detected for the previously emitted token
+	nlRun     int            // consecutive newlines since the last token or comment
+	onTokLine bool           // a real (non-Semi) token has been emitted on the current line
+
+	modes []fmode // f-string / f-cmd interpolation mode stack (DESIGN-1a §4)
+}
+
+// fmode is one frame of the interpolation mode stack: either the text of an
+// f-string / f-cmd (fmStr) or the expression inside a '{ … }' hole (fmHole).
+type fmode struct {
+	hole  bool // false: string/cmd text mode; true: inside a hole's expression
+	cmd   bool // for text mode: a backtick f-cmd rather than a double-quoted f-string
+	depth int  // for hole mode: nesting of '(' '[' '{' within the hole
+}
+
+func (l *Lexer) pushMode(m fmode) { l.modes = append(l.modes, m) }
+func (l *Lexer) popMode()         { l.modes = l.modes[:len(l.modes)-1] }
+func (l *Lexer) topMode() *fmode {
+	if len(l.modes) == 0 {
+		return nil
+	}
+	return &l.modes[len(l.modes)-1]
 }
 
 // New builds a lexer over the given source text.
 func New(src string) *Lexer {
-	return &Lexer{src: src, offs: 0, line: 1, col: 1, prev: token.Semi}
+	// nlRun starts at 1 as if a newline preceded the file, so a blank first line
+	// registers as a BlankLine trivia.
+	return &Lexer{src: src, offs: 0, line: 1, col: 1, prev: token.Semi, nlRun: 1}
 }
 
 // Tokenize scans src to completion, returning the token stream (terminated by an
-// EOF token) and any diagnostics gathered along the way.
+// EOF token) and any diagnostics gathered along the way. Leading trivia is
+// attached by Next itself; trailing trivia — a same-line comment after a token —
+// is attached here, onto the most recent real token.
 func Tokenize(src string) ([]token.Token, []diag.Diagnostic) {
 	l := New(src)
 	var toks []token.Token
 	for {
 		t := l.Next()
+		if tr := l.takeTrailing(); len(tr) > 0 {
+			attachTrailing(toks, tr)
+		}
 		toks = append(toks, t)
 		if t.Kind == token.EOF {
 			break
 		}
 	}
 	return toks, l.diags.Items()
+}
+
+// attachTrailing hangs a same-line trailing comment on the most recent real
+// token, skipping any Semi the ASI rule inserted after it.
+func attachTrailing(toks []token.Token, tr []token.Trivia) {
+	for i := len(toks) - 1; i >= 0; i-- {
+		if toks[i].Kind != token.Semi {
+			toks[i].Trailing = append(toks[i].Trailing, tr...)
+			return
+		}
+	}
+}
+
+// takeTrailing returns and clears the trailing trivia staged for the previously
+// emitted token.
+func (l *Lexer) takeTrailing() []token.Trivia {
+	tr := l.trail
+	l.trail = nil
+	return tr
 }
 
 // Diagnostics returns the diagnostics gathered so far.
@@ -91,9 +148,16 @@ func isIdent(c byte) bool { return isLetter(c) || isDigit(c) || c == '_' }
 // --- token production ----------------------------------------------------------
 
 // Next returns the next token, inserting a ';' at line breaks per the ASI rule.
+// Comments and blank lines encountered along the way are collected as trivia
+// rather than dropped.
 func (l *Lexer) Next() token.Token {
-	// Skip horizontal whitespace and comments; a significant newline yields a
-	// Semi token, otherwise the newline is consumed and scanning continues.
+	// Inside an f-string / f-cmd text chunk the next token is a text piece, a hole
+	// opener, or the closing quote — driven by the interpolation mode stack.
+	if top := l.topMode(); top != nil && !top.hole {
+		return l.nextInText(top)
+	}
+	// Skip horizontal whitespace; a significant newline yields a Semi token, a
+	// comment becomes trivia, otherwise scanning continues.
 	for !l.eof() {
 		switch l.at(0) {
 		case ' ', '\t', '\r':
@@ -101,6 +165,15 @@ func (l *Lexer) Next() token.Token {
 		case '\n':
 			start := l.pos()
 			l.advance()
+			l.onTokLine = false
+			l.nlRun++
+			if l.nlRun == 2 {
+				// the line just ended was blank; a longer run stays one trivia
+				l.pending = append(l.pending, token.Trivia{
+					Kind: token.BlankLine,
+					Span: token.Span{Start: start, End: start},
+				})
+			}
 			if l.depth == 0 && l.prev.EndsItem() {
 				return l.emit(token.Semi, start, ";")
 			}
@@ -110,7 +183,7 @@ func (l *Lexer) Next() token.Token {
 				// '#[' opens a decorator, not a comment; scanToken reports it.
 				return l.scanToken()
 			}
-			l.skipComment()
+			l.scanComment()
 		default:
 			return l.scanToken()
 		}
@@ -118,10 +191,19 @@ func (l *Lexer) Next() token.Token {
 	return l.emit(token.EOF, l.pos(), "")
 }
 
-// emit records prev and returns a token with the given span.
+// emit records prev and returns a token with the given span. Pending leading
+// trivia is attached to every real token (and to EOF, so end-of-file trivia is
+// not lost) but flows past inserted Semi tokens onto the next item.
 func (l *Lexer) emit(k token.Kind, start token.Pos, lexeme string) token.Token {
 	l.prev = k
-	return token.Token{Kind: k, Lexeme: lexeme, Span: token.Span{Start: start, End: l.pos()}}
+	t := token.Token{Kind: k, Lexeme: lexeme, Span: token.Span{Start: start, End: l.pos()}}
+	if k != token.Semi {
+		t.Leading = l.pending
+		l.pending = nil
+		l.onTokLine = true
+		l.nlRun = 0
+	}
+	return t
 }
 
 func (l *Lexer) emitStr(k token.Kind, start token.Pos, lexeme, value string) token.Token {
@@ -130,26 +212,64 @@ func (l *Lexer) emitStr(k token.Kind, start token.Pos, lexeme, value string) tok
 	return t
 }
 
-// skipComment consumes a line comment or doc comment to end of line. The '#['
-// decorator form is separated out by Next before this is called.
-func (l *Lexer) skipComment() {
+// scanComment consumes a '#' or '##' comment to end of line and records it as
+// trivia: trailing when a token already sits on this line, otherwise leading.
+// Consecutive full-line '##' lines fold into a single DocComment block.
+func (l *Lexer) scanComment() {
+	start := l.pos()
 	for !l.eof() && l.at(0) != '\n' {
 		l.advance()
 	}
+	text := strings.TrimRight(l.src[start.Offset:l.offs], " \t\r")
+	kind := token.LineComment
+	if strings.HasPrefix(text, "##") {
+		kind = token.DocComment
+	}
+	tr := token.Trivia{Kind: kind, Text: text, Span: token.Span{Start: start, End: l.pos()}}
+	l.nlRun = 0
+	if l.onTokLine {
+		l.trail = append(l.trail, tr)
+		return
+	}
+	// fold a '##' line into a directly preceding DocComment block (a blank line
+	// or ordinary comment in between breaks the run)
+	if kind == token.DocComment && len(l.pending) > 0 {
+		if last := &l.pending[len(l.pending)-1]; last.Kind == token.DocComment {
+			last.Text += "\n" + text
+			last.Span.End = tr.Span.End
+			return
+		}
+	}
+	l.pending = append(l.pending, tr)
 }
 
 func (l *Lexer) scanToken() token.Token {
 	start := l.pos()
 	c := l.at(0)
 
-	// literal prefixes: r"…" raw string, b'…' byte, f"…"/f`…` (unsupported here).
+	// Inside a hole, the '}' that closes it, a ':' format spec, and a '!r'/'!s'/'!a'
+	// conversion are lexed specially (they are not ordinary expression tokens).
+	if top := l.topMode(); top != nil && top.hole && top.depth == 0 {
+		switch {
+		case c == '}':
+			return l.closeHole(start)
+		case c == ':':
+			return l.scanFmtSpec(start)
+		case c == '!' && isConv(l.at(1)) && (l.at(2) == '}' || l.at(2) == ':'):
+			return l.scanConv(start)
+		}
+	}
+
+	// literal prefixes: r"…" raw string, b'…' byte, f"…"/f`…` interpolation.
 	switch {
 	case c == 'r' && l.at(1) == '"':
 		return l.scanRawString(start)
 	case c == 'b' && l.at(1) == '\'':
 		return l.scanByte(start)
-	case c == 'f' && (l.at(1) == '"' || l.at(1) == '`'):
-		return l.unsupported(start, 2, "f-strings are a Phase 1 feature")
+	case c == 'f' && l.at(1) == '"':
+		return l.beginFString(start)
+	case c == 'f' && l.at(1) == '`':
+		return l.beginFCmd(start)
 	}
 
 	switch {
@@ -162,9 +282,9 @@ func (l *Lexer) scanToken() token.Token {
 	case c == '\'':
 		return l.scanRune(start)
 	case c == '`':
-		return l.unsupported(start, 1, "command literals are a Phase 1 feature")
+		return l.scanCmd(start)
 	case c == '#': // '#[' decorator — the only '#' that reaches scanToken
-		return l.unsupported(start, 2, "decorators are a Phase 1 feature")
+		return l.scanDecoratorOpen(start)
 	}
 	return l.scanOperator(start)
 }
@@ -181,6 +301,12 @@ func (l *Lexer) scanIdent(start token.Pos) token.Token {
 // accepted only between two digits.
 func (l *Lexer) scanNumber(start token.Pos) token.Token {
 	kind := token.Int
+	// A number in tuple-index position — after a '.' — is a bare decimal integer,
+	// never a float: 'a.0.1' is '(a.0).1', not 'a.(0.1)' (GRAMMAR group 4).
+	if l.prev == token.Dot {
+		l.consumeDigits(isDigit)
+		return l.emit(token.Int, start, l.src[start.Offset:l.offs])
+	}
 	if l.at(0) == '0' && (l.at(1) == 'x' || l.at(1) == 'o' || l.at(1) == 'b') {
 		base := l.at(1)
 		l.advance() // 0
@@ -265,6 +391,9 @@ func (l *Lexer) scanString(start token.Pos) token.Token {
 		}
 		sb.WriteByte(l.advance())
 	}
+	if strings.IndexByte(sb.String(), 0) >= 0 {
+		return l.illegal(start, "a string literal may not contain a NUL")
+	}
 	return l.emitStr(token.Str, start, l.src[start.Offset:l.offs], sb.String())
 }
 
@@ -291,6 +420,9 @@ func (l *Lexer) scanTripleString(start token.Pos) token.Token {
 		}
 		sb.WriteByte(l.advance())
 	}
+	if strings.IndexByte(sb.String(), 0) >= 0 {
+		return l.illegal(start, "a string literal may not contain a NUL")
+	}
 	return l.emitStr(token.Str, start, l.src[start.Offset:l.offs], sb.String())
 }
 
@@ -309,6 +441,9 @@ func (l *Lexer) scanRawString(start token.Pos) token.Token {
 	}
 	value := l.src[contentStart:l.offs]
 	l.advance() // closing "
+	if strings.IndexByte(value, 0) >= 0 {
+		return l.illegal(start, "a string literal may not contain a NUL")
+	}
 	return l.emitStr(token.RawStr, start, l.src[start.Offset:l.offs], value)
 }
 
@@ -523,36 +658,46 @@ func (l *Lexer) scanOperator(start token.Pos) token.Token {
 		return emit(token.Comma, 0)
 	case '(':
 		l.depth++
+		l.holeDepth(+1)
 		return emit(token.LParen, 0)
 	case ')':
 		if l.depth > 0 {
 			l.depth--
 		}
+		l.holeDepth(-1)
 		return emit(token.RParen, 0)
 	case '[':
 		l.depth++
+		l.holeDepth(+1)
 		return emit(token.LBrack, 0)
 	case ']':
 		if l.depth > 0 {
 			l.depth--
 		}
+		l.holeDepth(-1)
 		return emit(token.RBrack, 0)
 	case '{':
+		// A '{' opens a block or map composite. Inside it, ASI resumes even when the
+		// brace itself sits inside an unclosed '(' or '[' — so a multi-line closure or
+		// block passed as a call argument gets its statements separated. Save the
+		// enclosing paren/bracket depth and reset, restoring it at the matching '}'.
+		l.depthStack = append(l.depthStack, l.depth)
+		l.depth = 0
+		l.holeDepth(+1)
 		return emit(token.LBrace, 0)
 	case '}':
+		// a hole-closing '}' at depth 0 is intercepted in scanToken; this reaches
+		// scanOperator only for a nested map/block brace, so it decrements depth.
+		if n := len(l.depthStack); n > 0 {
+			l.depth = l.depthStack[n-1]
+			l.depthStack = l.depthStack[:n-1]
+		}
+		l.holeDepth(-1)
 		return emit(token.RBrace, 0)
 	case ';':
 		return emit(token.Semi, 0)
 	}
 	return l.illegal(start, "unexpected character %q", string(c))
-}
-
-// unsupported consumes width characters and reports a not-yet-supported construct.
-func (l *Lexer) unsupported(start token.Pos, width int, msg string) token.Token {
-	for i := 0; i < width && !l.eof(); i++ {
-		l.advance()
-	}
-	return l.illegal(start, "%s", msg)
 }
 
 // illegal records a diagnostic spanning [start, cursor) and returns an Illegal

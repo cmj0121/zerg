@@ -39,7 +39,7 @@ func TestCodegenGolden(t *testing.T) {
 				t.Fatalf("read golden: %v", err)
 			}
 
-			code, diags := Compile(string(src))
+			code, _, diags := Compile(string(src))
 			if len(diags) != 0 {
 				t.Fatalf("compile diagnostics: %v", diags)
 			}

@@ -1,0 +1,18 @@
+# Cross-module function-as-value (compile + run): the entry module binds a function
+# from another module as a first-class value and calls it, and also passes such a
+# value straight as an argument.
+#
+# Build and run it with:  zerg build main.zg && ./a.out
+import "other"
+
+# apply calls a function value — the callee is a cross-module function passed in.
+fn apply(f: fn(int) -> int, v: int) -> int {
+	return f(v)
+}
+
+fn main() {
+	f := other.helper # bind a cross-module function as a VALUE
+	print f(10)       # 11 — called through the bound value
+
+	print apply(other.helper, 20) # 21 — the value passed straight as an argument
+}

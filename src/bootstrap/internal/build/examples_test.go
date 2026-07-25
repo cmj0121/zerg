@@ -32,7 +32,7 @@ func TestExamplesCompile(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", zg, err)
 			}
-			code, diags := Compile(string(src))
+			code, _, diags := Compile(string(src))
 			if len(diags) != 0 {
 				t.Fatalf("%s should compile, got diagnostics: %v", name, diags)
 			}

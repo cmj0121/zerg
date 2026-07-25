@@ -3,8 +3,9 @@
 函式作為一等值、它的型別追蹤什麼與不追蹤什麼、預設參數與具名引數,以及閉包捕獲。屬於
 [語言參考](language.zh-TW.md) 的一部分。亦有 [English](functions.md) 版本。
 
-函式是**一等值（first-class value）**：它有型別，可當引數傳遞、可回傳、可存進欄位、可綁定到變數。函式型別寫成
-`fn(P...) -> R`；參數的 `mut &` 是**型別的一部分**，所以 `fn(mut &int) -> bool` 與 `fn(int) -> bool` 是不同型別
+函式是**一等值（first-class value）**：它有型別，可當引數傳遞、可回傳、可存進欄位、可綁定到變數。這**跨模組**也
+成立——透過另一個模組指名的函式就是一個普通的值:`f := other.helper` 綁定它,接著 `f(x)` 呼叫它,與本地函式完全一樣。
+函式型別寫成 `fn(P...) -> R`；參數的 `mut &` 是**型別的一部分**，所以 `fn(mut &int) -> bool` 與 `fn(int) -> bool` 是不同型別
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。
 
@@ -45,8 +46,10 @@ _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名�
 variadic。
 
 **閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** `mut` 變數不能被捕獲；要用先
-快照成 immutable binding（`snap := n`）。捕獲是複製——捕獲的 channel 做 refcount++、其餘深拷貝——所以逃出定義
-scope 的閉包帶著自己的副本，永不懸空。等價地說：
+快照成 immutable binding（`snap := n`）。捕獲在語意上是**複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的
+immutable 值**(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)是**被 retain 進閉包的 refcounted 環境**、
+而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。因為每個捕獲都是
+immutable,retain 或 clone 都不可觀察。等價地說:
 
 > 一個閉包就是一個 scope-owned struct，它的欄位就是它的捕獲。
 

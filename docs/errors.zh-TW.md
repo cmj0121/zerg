@@ -46,9 +46,15 @@ addr := config?.server?.host ?? "localhost"
 一個 **`raise e from cause`** 形式會把 `cause` 記成 `e` 的 `unwrap()`——一個 **nested** abort,把底層 `Err` 包進更高
 層的一個、而不遺失它,餵的是每個 `Error` 都有的那條 cause chain;裸的 `raise e` 則原封不動攜帶 `e`。
 
-**自訂 error 型別。** 任何實作 **`Error`** spec（`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`——見內建
-spec）的型別都是 `Err`：它可放進 `Result` 的右側，**也**可被 `raise`，而 `guard` 會把它還原成 `Right(e)`、
-message／cause／code 完整。單一錯誤用 `struct`、一個家族用 `enum`——同一個值服務兩層，由 bridge 轉換。
+**內建的錯誤分類。** 這個階段提供**固定的六種**錯誤:**`ValueError`**、**`OverflowError`**、**`IOError`**、
+**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
+——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](specs.zh-TW.md)——的 `struct` / `enum`)
+**尚未支援**。每一種都是完整的 `Err`:帶訊息建構(`raise ValueError("bad input")`)、放進 `Result` 右側、**也**可被
+`raise`、讀 `err.message()`、用 `err is ValueError` 測試,而 `guard` 會把它還原成 `Right(err)`、message／cause／code
+完整。runtime **自身的內建失敗也 raise 對應的種類**,使 library 與 runtime 的錯誤共用一套詞彙:整數解析失敗是
+`ValueError`(超出範圍→`OverflowError`)、一次 checked 收窄轉換是 `OverflowError`、I/O 失敗是 `IOError`、對無效
+UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺少的 `map` 鍵是 `KeyError`。`Result` / `Either`
+攜帶它們,`?` / `??` / `guard` 原封不動地穿引;對具體 `Either[T, Kind]` 的 `match` 則分辨其種類。
 
 **Aborts。** 一次 abort——內建的（`OverflowError`、`DivideByZeroError`、`UnwrapError`、`MatchError`、`IndexError`、
 `KeyError`、`AliasError`、`StackOverflowError`、`SendOnClosedError`、`DeadlockError`）或任何你 `raise` 的
@@ -98,18 +104,19 @@ fn read_config(s: str) -> Result[Config] {
 match guard { work() } {
     Left(v)  => use(v)
     Right(e) => {
-        if e is NotFound { rebuild() }          # 就具體型別分支
-        else if e is Overflow { alert(e) }      # 內建 abort，被 guard 具現化
+        if e is IOError { rebuild() }           # 就分類種類分支
+        else if e is OverflowError { alert(e) }  # 內建 abort，被 guard 具現化
         else { report(e.message()) }            # 其餘——catch-all 必備
     }
 }
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。這裡可達的錯誤集合是**開放**的（任何 `raise`、任何內建 abort、任何 library `Err`），
-所以 `is` 串永遠無法窮盡：**catch-all 必備**，未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort（`MatchError`）。
+——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——那六種內建錯誤,以及任何被 `guard` 具現化的內建
+abort;對**非錯誤**型別的一般存在性測試 `x is T` **尚未提供**。這裡可達的錯誤集合在覆蓋上被視為**開放**,所以 `is`
+串永遠無法窮盡:**catch-all 必備**,未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort(`MatchError`)。
 
-這把錯誤處理依「你握不握有**封閉**集合」分成兩路。需要錯誤的**資料**時，就讓它保持具體——一個
-**`Either[T, MyErrorEnum]`**（從不抹除），其 variant 由 `match` 以值讀出、帶 payload 與覆蓋警告。集合**開放**、或你只
-認得少數幾種時，收下被抹除的 **`Result[T]`**、用 `is` 分派並留 catch-all。於是回傳型別本身就是契約：抹除的 `Result`
-說「分支、用 `Error` 介面」，具體的 `Either` 說「這是我完整的錯誤分類，含資料」。
+這把錯誤處理依「你握不握有**封閉**集合」分成兩路。需要以值決定錯誤**種類**時,就讓它保持具體——一個
+**`Either[T, ValueError]`**(從不抹除),其右側由 `match` 以值讀出。只認得少數幾種時,收下被抹除的 **`Result[T]`**、用
+`is` 分派並留 catch-all。於是回傳型別本身就是契約:抹除的 `Result` 說「分支、用 `Error` 介面」,具體的 `Either` 說
+「這是我確切的錯誤種類」。(把多種錯誤聚成一個封閉 sum 的自訂 error `enum`,與上面的自訂 error 型別一同延後。)

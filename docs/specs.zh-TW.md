@@ -104,7 +104,9 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 
 因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
 你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
-guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派（見 [Null-safety 與錯誤處理](errors.zh-TW.md)）。
+guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派(見 [Null-safety 與錯誤處理](errors.zh-TW.md))
+——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般存在性測試 `x is T`
+**尚未提供**。
 
 ## Method、`this` / `This` 與 default body
 
@@ -134,7 +136,9 @@ spec 的 method 分兩種：
 **dispatch 一致。** 每個 spec method，不論 required 或 provided，都解析到該型別的 **canonical impl**——有覆寫用
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
-**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。
+**monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立:
+`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑 spec 的 **default body**——不需要 `#[dyn]`、也不需要裝箱,所以
+provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
 

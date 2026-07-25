@@ -1,0 +1,40 @@
+# io — minimal standard-stream output (Phase 1f, bundle MVP).
+#
+# Bundled into a program that writes `import "io"`; its members are reached
+# through the namespace, as `io.println(...)`. Each writer returns `Result[nil]`
+# per docs/io.md — a write failure is a value, not an abort — though this minimal
+# surface writes best-effort over the runtime's `zrt_write` and never yields an
+# Err yet (structured write failures land with the full Writer spec later).
+#
+# The leaf primitives call the compiler write intrinsics (`__zrt_write` /
+# `__zrt_write_int`), the MVP stand-ins for the FFI binder: once the binder lands
+# these become ordinary `unsafe` foreign calls with no change to this surface.
+
+# write writes s to standard output (fd 1) with no trailing newline. (`print` is a
+# reserved keyword — the ambient no-import shortcut — so the module's newline-free
+# writer is named `write`, matching the `write`/`write_str` verbs in docs/io.md.)
+pub fn write(s: str) -> Result[nil] {
+	__zrt_write(1, s)
+	return nil
+}
+
+# println writes s to standard output (fd 1) followed by a newline.
+pub fn println(s: str) -> Result[nil] {
+	__zrt_write(1, s)
+	__zrt_write(1, "\n")
+	return nil
+}
+
+# write_int writes the decimal text of n to standard output (fd 1).
+pub fn write_int(n: int) -> Result[nil] {
+	__zrt_write_int(1, n)
+	return nil
+}
+
+# read_file reads the whole file at path into a list[byte] — the MVP source-input leaf,
+# over the compiler read intrinsic (the FFI stand-in, like the writers). A missing or
+# unreadable file raises IOError, which `guard { io.read_file(p) }` demotes to a Result.
+# Decode the bytes with `str(...)` when the contents are text.
+pub fn read_file(path: str) -> list[byte] {
+	return __zrt_read_file(path)
+}

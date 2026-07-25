@@ -2,10 +2,13 @@
 
 A **decorator** is a `#[…]` prefix on a declaration — a directive to the compiler. The set is **fixed and
 compiler-owned**: users cannot define new ones (Zerg has **no macros**), so nothing outside this page can
-rewrite your code. Each decorator binds to the declaration that follows it. Part of the
+rewrite your code. Because the set is closed, an **unknown or misspelled decorator is a compile error** — it
+is never silently ignored. Each decorator binds to the declaration that follows it. Part of the
 [Language Reference](language.md). Also in [繁體中文](decorators.zh-TW.md).
 
 ## The set
+
+Three decorators are **implemented** today — `#[derive]`, `#[dyn]`, and `#[test]`:
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**: `Object` (always derived) plus opt-in `Ord`, `Hash`, `Encode`, `Decode`. A
@@ -14,9 +17,22 @@ rewrite your code. Each decorator binds to the declaration that follows it. Part
 - **`#[dyn]`** — on a generic `fn`. Compiles the generic to **one shared witness-table body** instead of
   monomorphizing per type argument — trading zero-cost for smaller code, and letting the compiler cap
   instantiation bloat. See **[Grammar](grammar.md)** (group 7).
-- **`#[sealed]`** — on a `struct`. Demotes the default field-wise `T(…)` constructor to **module-private**, so
-  external code must build through a public custom constructor (a named associated `fn`); the module itself
-  still builds with `T(…)` internally. Pairs with private, defaulted fields to enforce an invariant.
+- **`#[test]`** — on a `fn`. Marks the function as a test case, compiled and run **only in a test build** and
+  excluded from a normal one. The function takes no parameters; a failing assertion or an abort inside it
+  fails the test (see [Modules, Packages & Programs](package.md) on where tests live).
+
+## Recognized but not yet supported
+
+Four more decorator names are **recognized** by the compiler but **rejected loudly** this phase — using one
+is a "not yet supported" **compile error**, never a silent no-op:
+
+- **`#[sealed]`** — on a `struct`. _Intended_ to demote the default field-wise `T(…)` constructor to
+  **module-private**, so external code must build through a public custom constructor (a named associated
+  `fn`) while the module still builds with `T(…)` internally — pairing with private, defaulted fields to
+  enforce an invariant. **Not yet implemented.**
+- **`#[repr]`** / **`#[packed]`** / **`#[align]`** — the memory-**layout** decorators. Reserved for
+  controlling in-memory width, padding, and alignment against an external ABI (see _Kept rare_ and
+  [Values & Memory](memory.md)). **Not yet implemented.**
 
 ## Not a macro
 
@@ -34,6 +50,8 @@ external ABI. On the default path, day to day, you write no decorators at all.
 
 ## Reserved
 
-The set grows only as the compiler gains directives — memory **layout** control (`#[repr]`, `#[packed]`,
-`#[align]`), **logging** / instrumentation, and **FFI** are the likely next entries. Until a decorator is
-listed here it is not valid syntax.
+The set grows only as the compiler gains directives. The layout decorators (`#[repr]`, `#[packed]`,
+`#[align]`) and `#[sealed]` are already **reserved names** — recognized and rejected loudly (above) until
+implemented — and **logging** / instrumentation and **FFI** are the likely next entries. Any name **not**
+listed on this page is not a reserved decorator at all: it is a **compile error**, so a typo can never pass
+as a directive the compiler silently drops.

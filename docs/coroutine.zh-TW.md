@@ -6,7 +6,9 @@ Zerg 的並行**只有 coroutine + channel**——沒有共享可變狀態、沒
 ## `spawn`
 
 `spawn f(args)` 在 **M:N scheduler** 上啟動一個 coroutine（Go 的 `go`）。它**不回傳任何東西**——沒有 handle、沒有
-join/await；結果與完成**只能靠 channel** 觀察。
+join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是任何呼叫——一個普通函式、一個**方法**(`spawn
+obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
+(`defer f.close()`)。
 
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
 - **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會
@@ -119,7 +121,7 @@ Zerg **沒有 explicit `close`**。channel 在其**最後一個 send 能力持�
 
 ```text
 {
-    out := ch.send
+    out: chan[int]<- = ch
     produce(out)
 }              # out 的 scope 結束 → 自動 close（若是最後 sender）
 cleanup()
@@ -139,9 +141,9 @@ auto-close 是 **level-triggered**：send-count 一碰 0 就開火，沒有「�
 
 ```text
 ch := chan[int]()
-spawn consumer(ch.recv)     # 建立者仍握著雙向的 `ch`
+spawn consumer(ch)          # ch 在 consumer 的 `<-chan[int]` 參數處窄化;建立者仍握著雙向的 `ch`
 ... 延遲 ...                # 安全：建立者的端讓 send-count ≥ 1 撐過延遲
-spawn producer(ch.send)
+spawn producer(ch)          # ch 在 producer 的 `chan[int]<-` 參數處窄化
 ```
 
 安全：建立者握著 send 能力端時，consumer 只是 **block**。只有當你**先放掉自己的 send 端**、*再*延遲、而 producer
@@ -154,8 +156,9 @@ spawn producer(ch.send)
 （`<-ch`，給 consumer）。
 
 **narrowing 是單向的**，絕不能回到雙向——這是安全保證：send-only 端**不可能**偷收值，receive-only 端也不可能插入
-值。它是一個安全的內建 upcast，在明確方向型別的目標處觸發（參數、`return`、typed binding）；顯式 narrow（`ch.send`
-/ `ch.recv`）則丟掉你自己的雙向貢獻。
+值。它是一個安全的內建 upcast，在明確方向型別的目標處觸發（參數、`return`、typed binding），且**不會**放掉你自己的
+持有——目標拿到一個窄化的視角，你仍保有自己的雙向端。要真正放掉自己的端（你的雙向貢獻），用 `del ch` 或結束它的
+scope（更窄的區塊），如前所述。
 
 方向也正是讓 auto-close **精準**的關鍵，因為 refcount 依方向計數：send-only 計入 send-count、receive-only 計入
 receive-count、雙向**兩者都計入**。所以要看到「producer 做完」的 consumer 必須持 **receive-only** 端——雙向
@@ -235,7 +238,8 @@ fn counter(inbox: <-chan[Cmd]) {
 
 - **tell**（fire-and-forget）就是一次普通 send——`inbox <- Add(5)`。
 - **ask**（request-reply）送一條全新 reply channel 並 block 等它——
-  `rep := chan[int]();  inbox <- Get(rep.send);  v := <-rep!`。
+  `rep := chan[int]();  inbox <- Get(rep);  v := <-rep!`。`Get` 的欄位型別為 `chan[int]<-`，故 `rep` 進入訊息時
+  窄化成 send-only，而 caller 保有它的 receive 端。
 - **收尾自動**——最後一個 client 放掉 send 端時，`inbox` 關閉、`for` 結束、owner 的 `mut` state 釋放；就是既有的
   channel-close 與 scope-owned 規則，沒有新增。
 

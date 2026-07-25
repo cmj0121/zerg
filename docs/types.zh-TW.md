@@ -75,14 +75,20 @@ enum Either[X, Y] {         # 泛型 sum type
 }
 ```
 
+**遞迴與自我參照型別**可直接運作——一個 `struct Node { next: Node? }`、一個 `enum Expr { Num(int); Add(Expr,
+Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝箱在一個 refcounted cell 之後,所以這種值的複製是**按
+參照**(refcount 共享),不是深拷貝。它的 MVP 限制(以 `mut` 建出的循環會洩漏;長鏈以 O(depth) 釋放)見
+[值與記憶體](memory.zh-TW.md)。
+
 其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別（見 [Null-safety 與錯誤處理](errors.zh-TW.md)）。一個 `enum`
 的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
 
 一個 `enum` 的 **discriminant 對「fieldless enum」與「payload enum」行為不同**——分界在於是否*每一個* variant 都無
 欄位。一個 **fieldless** `enum` 可以給某個 variant 明確的 `= <discriminant>`——一個 **compile-time 常數整數**、
 在各 variant 間互異（未指定者為前一個 `+ 1`、從 `0` 起算）——使它成為 **C 式整數 enum**：`variant = <int>`。這種
-enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）；`int(v)` **讀**出該值，
-`E.of(n) -> E?` **反轉**回來（未知的 `n` 給 `nil`、絕不變成錯的 variant）。要指定寬度就用 opt-in layout 裝飾器
+enum 有**原生、C 相容的整數 repr**（依一條 default 規則以 `int` 為底、不需標註）;**enum 名稱是一個值命名空間**
+——`Color.Green` 指名該 variant、`Color.of(n)` 由數字反轉回來——其中 `int(v)` **讀**出 discriminant、
+`E.of(n) -> E?` **反轉**回來(未知的 `n` 給 `nil`、絕不變成錯的 variant)。要指定寬度就用 opt-in layout 裝飾器
 `#[repr]`；序列化/wire 形式則是 `Encode` / `Decode` impl、絕不是裝飾器。
 
 一個 **payload** `enum`（任一 variant 帶欄位）則保持其 **tag opaque、只可 match**——不允許 `= 5`，你 `match` 的是
@@ -99,11 +105,13 @@ tuple 的結果是 **first-class**——可存、可傳、可解構——所以�
 
 **`type X = Y`** 定義一個**全新、獨立的型別**——不是透明 alias。`X` 承接 `Y` 的表示與實作（它的欄位或 variant、
 以及它的 `spec` impl,現在 `This` = `X`),但是一個**獨立身分**:`X` 與 `Y` 是**不同型別、即使結構完全相同**,而且
-兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。它可以泛型
-(`type Result[T] = Either[T, Err]`)。這是 **strong-typedef** 工具——一個 `UserId`,行為像 `int`、卻永遠不能被當作
-一個裸 `int` 或 `ProductId` 傳進去——並與單欄位 struct 的 **newtype** 有別:newtype 是把值*包*進一個新欄位、配全新
-impl,而非沿用整個形狀。prelude 的 **`Result[T]`** 與 **`T?`** 正是它在 `Either` 上的實例,這也是為什麼它們彼此不同、
-要用 `ok_or` / `ok` 顯式跨越。
+兩者間**不能 cast**——要轉換就 **re-construction**(`X(y)` / `Y(x)`),與任何轉換一樣。一個**單型**的 `type X = Y`
+在 runtime **降低成 `Y`**——區別**只在編譯期**,所以 `Celsius = int` 不花任何成本(無 box、無包裝),而一個 `Celsius`
+沒有明確的 `int(c)` / `Celsius(x)` 就永遠不是 `int`。一個**泛型** alias `type X[T] = …` 這個階段**尚未支援**(會被
+解析、但被拒絕)。這是 **strong-typedef** 工具——一個 `UserId`,行為像 `int`、卻永遠不能被當作一個裸 `int` 或
+`ProductId` 傳進去——並與單欄位 struct 的 **newtype** 有別:newtype 是把值*包*進一個新欄位、配全新 impl,而非沿用整個
+形狀。prelude 的 **`Result[T]`** 與 **`T?`** 是它在 `Either` 上、由 compiler 提供的泛型形式(內建,而非你目前能用泛型
+`type` 自己寫出的東西),這也是為什麼它們彼此不同、要用 `ok_or` / `ok` 顯式跨越。
 
 ## 建構與封裝（Construction & encapsulation）
 

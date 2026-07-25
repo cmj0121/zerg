@@ -1,0 +1,13 @@
+# init demo: the imported module `m` runs its init() once and its module constant
+# is evaluated at init; main observes the constant through m's pub accessor.
+#   zerg build examples/1g/init/main.zg
+# Expected output:
+#   1     — m's init() ran once, before main's body
+#   40    — the module constant, evaluated at init
+#   40    — again; init ran only once
+import "m"
+
+fn main() {
+	print m.get() # 40
+	print m.get() # 40 — init still ran only once (a single "1" above)
+}

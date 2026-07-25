@@ -1,0 +1,10 @@
+# import pub re-export demo: main imports mid, which re-exports deep. So deep's
+# public `hello` is reachable through the mid namespace as `mid.hello()`.
+#   zerg build examples/1g/reexport/main.zg
+# Expected output:
+#   7
+import "mid"
+
+fn main() {
+	print mid.hello() # 7 — re-exported through mid from deep
+}

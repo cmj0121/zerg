@@ -621,9 +621,8 @@ guard-expr    ::= 'guard' block                     # yields Result[T]; T = the 
 # 'chan[T](cap?)' (capacity 0 = unbuffered rendezvous); 'ch <- v' sends, '<-ch'
 # receives yielding Result[T] (Right = closed, carrying StopIteration or a crash
 # Err). A bare 'chan[T]' is bidirectional and narrows to '<-chan[T]' / 'chan[T]<-'
-# or via the values 'ch.recv' / 'ch.send'. There is NO explicit close (the channel
-# auto-closes when its last sender leaves) and NO 'yield'. 'select' is the only
-# multi-way wait.
+# via a type annotation. There is NO explicit close (the channel auto-closes when
+# its last sender leaves) and NO 'yield'. 'select' is the only multi-way wait.
 
 spawn-stmt   ::= 'spawn' expr                  # fire-and-forget; expr is a call
 send-stmt    ::= expr '<-' expr                # 'ch <- v'; send yields no value

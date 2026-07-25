@@ -11,8 +11,11 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 - **取值 / 回傳**——unwrap（`?`、`!`）、`match`、`return` 都是複製出來；來源永不失效。move 只是來源之後死掉時的
   隱形最佳化。
 
-遞迴與自我參照型別不需要 pointer——直接宣告欄位（例如 `Node?` → `Node`），編譯器**自動**插入 heap 間接；這類值
-一樣是 scope-owned 且 copy-by-value。
+遞迴與自我參照型別不需要 pointer——直接宣告欄位(例如 `Node?`,或 `enum Expr { Num(int); Add(Expr, Expr) }`),
+編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
+深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。這個階段有兩個 MVP 注意事項:
+透過 `mut` binding 重新指派遞迴欄位而建出的 runtime **循環**會**洩漏**(尚無循環收集器),而釋放一條長鏈會在 C stack
+上遞迴 **O(depth)**。
 
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
@@ -39,12 +42,15 @@ deterministic——不像 C 的引數求值順序是 unspecified。所以副作�
 **Reference-counted 的值**是 scope-owning 的唯一例外：型別實作 **`Ref`** 的值——內建的 **`chan`**，或 stdlib 的
 **`Ref[T]`** 盒——以 **reference** 共享、而非複製。runtime 計數持有者，在**最後**一個持有者的 scope 退出時釋放；
 其餘一切純 scope-owned、無 GC/refcount。複製一個值時，會對它（遞迴）包含的每個 `Ref` 值做 refcount++、深拷貝其餘
-部分；`Ref` 值永遠共享、絕不被複製。
+部分；`Ref` 值永遠共享、絕不被複製。(作為**實作細節**,程式產生的 runtime `str` 值在內部同樣被 refcount、並於最後
+使用處釋放——表面沒有改變,但產生的字串不再洩漏。)
 
-**refcount 在構造上就是 cycle-complete**，所以不需要循環收集器、也不需要 weak reference：`Ref[T]` 的 referent
-在**盒子建構時就固定**（要指別處就建一個新的 `Ref`），而值 immutable-by-default、又是 bottom-up 建構，沒有辦法讓
-一個既存的 `Ref` 回頭指向後建的值——參照循環永遠形不成，所以「最後持有者釋放」永遠是完整的。（唯一的退化個案
-——`chan` 把指向自己的 reference buffer 進自己——是 programmer error、不是被檢查的個案。）
+對**明確的** refcounted 值而言,**refcount 在構造上就是 cycle-complete**,所以不需要循環收集器、也不需要 weak
+reference:`Ref[T]` 的 referent 在**盒子建構時就固定**(要指別處就建一個新的 `Ref`),而值 immutable-by-default、又是
+bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值——參照循環永遠形不成,所以「最後持有者釋放」永遠是完整
+的。(唯一的退化個案——`chan` 把指向自己的 reference buffer 進自己——是 programmer error、不是被檢查的個案。)唯一的
+例外是上面那個**自動裝箱的遞迴 cell**:因為 `mut` 遞迴欄位可被重新指派成一條 back-edge,循環*可以*在那裡形成——而且
+這個階段**不被收集、會洩漏**(一個有界、已載明的 MVP 缺口,是直接允許自我參照型別的代價)。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 

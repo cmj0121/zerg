@@ -3,13 +3,13 @@
 # A numeric literal is untyped and adopts the type its context needs,
 # so a plain `2` becomes `2.0` where a float is expected.
 fn average(a: float, b: float) -> float {
-    return (a + b) / 2.0
+	return (a + b) / 2.0
 }
 
 fn main() {
-    print 1.5 + 2.5           # 4
-    print 10.0 / 4.0          # 2.5
-    x: float = 3             # 3 adopts float -> 3.0
-    print x / 2.0            # 1.5
-    print average(2.0, 5.0)  # 3.5
+	print 1.5 + 2.5 # 4
+	print 10.0 / 4.0 # 2.5
+	x: float = 3 # 3 adopts float -> 3.0
+	print x / 2.0 # 1.5
+	print average(2.0, 5.0) # 3.5
 }

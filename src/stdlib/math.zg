@@ -1,0 +1,43 @@
+# math — basic mathematics (Phase 1f, bundle MVP).
+#
+# Bundled into a program that writes `import "math"`; its members are reached
+# through the namespace, as `math.abs(-3)` or `math.max(3, 9)`. Every function here is
+# ordinary safe Zerg over the primitive numeric types.
+#
+# The transcendental family (sqrt / pow / the trigonometric functions) and the
+# PI/E constants want a foreign binding onto libc `<math.h>`; that rides on the FFI
+# import facility (docs/ffi.md — a stdlib facility, no `extern` keyword), which is
+# deferred, so they are not offered yet. A richer pure surface (floor/ceil/round on
+# the integer helpers) is a straightforward extension and is likewise deferred.
+
+# abs returns the absolute value of the integer x.
+pub fn abs(x: int) -> int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+# fabs returns the absolute value of the float x.
+pub fn fabs(x: float) -> float {
+	if x < 0.0 {
+		return -x
+	}
+	return x
+}
+
+# min returns the smaller of two integers.
+pub fn min(a: int, b: int) -> int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+# max returns the larger of two integers.
+pub fn max(a: int, b: int) -> int {
+	if a > b {
+		return a
+	}
+	return b
+}

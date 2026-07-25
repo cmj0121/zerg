@@ -1,0 +1,8 @@
+# visibility demo (negative): calling lib's module-private helper across the module
+# boundary is rejected. Building this must fail with a visibility diagnostic.
+#   zerg build examples/1g/private/main.zg   # error: helper is not a public member
+import "lib"
+
+fn main() {
+	print lib.helper() # ERROR: `helper` is not a public member of module `lib`
+}

@@ -17,6 +17,7 @@ For the compiler-provided functions that need **no** import, see [Built-in Funct
 | [`io`](#io)           | `import "io"`      | standard-stream output and whole-file read/write |
 | [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal        |
 | [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch  |
+| [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`           |
 | [`time`](#time)       | `import "time"`    | wall-clock and monotonic clocks                  |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
@@ -57,6 +58,27 @@ binary was built for. The program's own arguments arrive as `fn main(args: list[
 | `exit(code: int)`       | terminate the process with `code` (does not return)  |
 | `platform() -> str`     | target OS — `"linux"`, `"darwin"`, `"windows"`, …    |
 | `arch() -> str`         | target CPU — `"arm64"`, `"x86_64"`, …                |
+
+## `strings`
+
+Text utilities over the built-in `str`. Each function decodes the str to its bytes, works at the byte
+level, and rebuilds a `str` — no foreign binding. Byte-level search is **UTF-8 correct** (UTF-8
+self-synchronises, so a valid needle only matches at a code-point boundary); `index_of` returns a **byte**
+offset, like Go's `strings.Index`. Case folding is **ASCII-only** — a non-ASCII byte is passed through
+unchanged. An empty `split` separator, or a negative `repeat` count, raises `ValueError`.
+
+| Function                               | Summary                                             |
+| -------------------------------------- | --------------------------------------------------- |
+| `has_prefix(s: str, prefix: str)`      | whether `s` begins with `prefix` (`-> bool`)        |
+| `has_suffix(s: str, suffix: str)`      | whether `s` ends with `suffix` (`-> bool`)          |
+| `contains(s: str, sub: str) -> bool`   | whether `sub` occurs anywhere in `s`                |
+| `index_of(s: str, sub: str) -> int`    | byte offset of the first `sub`, or `-1` when absent |
+| `split(s: str, sep: str) -> list[str]` | pieces between each `sep` (N seps → N+1 pieces)     |
+| `join(parts: list[str], sep: str)`     | concatenate `parts` with `sep` between (`-> str`)   |
+| `repeat(s: str, count: int) -> str`    | `s` concatenated `count` times                      |
+| `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace              |
+| `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase           |
+| `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase           |
 
 ## `time`
 

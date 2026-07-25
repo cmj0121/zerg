@@ -16,6 +16,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../src/runtime/README.
 | [`io`](#io)           | `import "io"`      | 標準串流輸出，以及整檔讀／寫       |
 | [`fs`](#fs)           | `import "fs"`      | 檔案系統結構——存在與否、刪除       |
 | [`os`](#os)           | `import "os"`      | 環境變數、程序結束、目標平台／架構 |
+| [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
 | [`time`](#time)       | `import "time"`    | 牆鐘與單調時鐘                     |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
@@ -56,6 +57,26 @@ leaf。
 | `exit(code: int)`       | 以 `code` 結束程序（不返回）                   |
 | `platform() -> str`     | 目標 OS——`"linux"`、`"darwin"`、`"windows"`、… |
 | `arch() -> str`         | 目標 CPU——`"arm64"`、`"x86_64"`、…             |
+
+## `strings`
+
+內建 `str` 上的文字工具。每個函式先把 str 解碼成位元組、在位元組層級運算、再重組回 `str`——無外部綁定。位元組層級
+搜尋是 **UTF-8 正確**的（UTF-8 自我同步，合法的 needle 只會在 code-point 邊界匹配）；`index_of` 回傳**位元組**
+offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**——非 ASCII 位元組原樣通過。空的 `split` 分隔字串、
+或負的 `repeat` 次數，會 raise `ValueError`。
+
+| 函式                                   | 摘要                                       |
+| -------------------------------------- | ------------------------------------------ |
+| `has_prefix(s: str, prefix: str)`      | `s` 是否以 `prefix` 開頭（`-> bool`）      |
+| `has_suffix(s: str, suffix: str)`      | `s` 是否以 `suffix` 結尾（`-> bool`）      |
+| `contains(s: str, sub: str) -> bool`   | `sub` 是否出現在 `s` 中                    |
+| `index_of(s: str, sub: str) -> int`    | 首個 `sub` 的位元組 offset，找不到回 `-1`  |
+| `split(s: str, sep: str) -> list[str]` | 各 `sep` 之間的片段（N 個 sep → N+1 片段） |
+| `join(parts: list[str], sep: str)`     | 以 `sep` 串接 `parts`（`-> str`）          |
+| `repeat(s: str, count: int) -> str`    | 把 `s` 串接 `count` 次                     |
+| `trim(s: str) -> str`                  | 去除前後的 ASCII 空白                      |
+| `to_upper(s: str) -> str`              | 把 ASCII 小寫字母折成大寫                  |
+| `to_lower(s: str) -> str`              | 把 ASCII 大寫字母折成小寫                  |
 
 ## `time`
 

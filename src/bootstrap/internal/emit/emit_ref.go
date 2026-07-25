@@ -380,10 +380,18 @@ func (e *emitter) programUsesRuntimeStmt() bool {
 	return false
 }
 
-// programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic
-// (`__zrt_write` / `__zrt_read_file`) — the leaf of a bundled io function. A shadowed
-// spelling is left to the ordinary call path (info.Refs records the user binding), so
-// it does not count as an io use.
+// ioIntrinsicNames are the stdlib `io` syscall floor intrinsics — the leaves of a
+// bundled io function: the write leaf and the whole-file open/read/close leaves.
+var ioIntrinsicNames = map[string]bool{
+	"__zrt_write": true,
+	"__zrt_open":  true,
+	"__zrt_read":  true,
+	"__zrt_close": true,
+}
+
+// programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic —
+// the leaf of a bundled io function. A shadowed spelling is left to the ordinary call
+// path (info.Refs records the user binding), so it does not count as an io use.
 func (e *emitter) programUsesIO() bool {
 	for node := range e.info.ExprTypes {
 		call, ok := node.(*ast.Call)
@@ -397,7 +405,7 @@ func (e *emitter) programUsesIO() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		if id.Name == "__zrt_write" || id.Name == "__zrt_read_file" {
+		if ioIntrinsicNames[id.Name] {
 			return true
 		}
 	}
@@ -529,7 +537,7 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	if s, ok := e.atomicIntrinsicEmit(n); ok {
 		return s, true
 	}
-	if s, ok := e.readFileIntrinsicEmit(n); ok {
+	if s, ok := e.fileIntrinsicEmit(n); ok {
 		return s, true
 	}
 	return e.writeIntrinsicEmit(n)
@@ -587,18 +595,28 @@ func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 	return "", false
 }
 
-// readFileIntrinsicEmit lowers `__zrt_read_file(path)` — the io source-input leaf — to
-// its sys.c primitive, yielding a list[byte]. A shadowed name is left to the ordinary
-// call path.
-func (e *emitter) readFileIntrinsicEmit(n *ast.Call) (string, bool) {
+// fileIntrinsicEmit lowers the io whole-file read floor — `__zrt_open(path)`,
+// `__zrt_read(fd)`, and `__zrt_close(fd)` — that io.read_file drives from pure Zerg.
+// Each maps to its always-linked sys.c leaf: open/close cast to their int result, read
+// yielding a list[byte] chunk. A shadowed name is left to the ordinary call path.
+func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
-	if !ok || id.Name != "__zrt_read_file" || len(n.Args) != 1 {
+	if !ok || len(n.Args) != 1 {
 		return "", false
 	}
 	if _, shadowed := e.info.Refs[id]; shadowed {
 		return "", false
 	}
-	return fmt.Sprintf("zrt_read_file(%s)", e.expr(n.Args[0].Value)), true
+	arg := e.expr(n.Args[0].Value)
+	switch id.Name {
+	case "__zrt_open":
+		return fmt.Sprintf("((int64_t)zrt_open(%s))", arg), true
+	case "__zrt_read":
+		return fmt.Sprintf("zrt_read_fd(%s)", arg), true
+	case "__zrt_close":
+		return fmt.Sprintf("((int64_t)zrt_close(%s))", arg), true
+	}
+	return "", false
 }
 
 // refnewName is the allocation helper for a Ref whose payload is elem.

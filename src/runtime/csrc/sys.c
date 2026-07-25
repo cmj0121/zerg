@@ -243,3 +243,39 @@ bool zrt_has_env(const char *key) {
 void zrt_exit(int64_t code) {
 	exit((int)code);
 }
+
+/*
+ * Filesystem-write leaves the stdlib `io.write_file` and `fs` modules lower onto. Thin
+ * wrappers; the open/write/close orchestration of io.write_file is pure Zerg.
+ */
+
+/* zrt_open_write opens path for writing, creating or truncating it (mode 0644), and
+ * returns its fd — aborting IOError when it cannot be opened. */
+int64_t zrt_open_write(const char *path) {
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot open file for writing");
+	}
+	return (int64_t)fd;
+}
+
+/* zrt_write_bytes writes all of a list[byte] to fd, aborting IOError on failure. It only
+ * READS the list (the caller keeps ownership and drops it as usual). */
+void zrt_write_bytes(int64_t fd, zrt_list bytes) {
+	if (bytes.len > 0 && zrt_write((int)fd, bytes.data, bytes.len) < 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: write failed");
+	}
+}
+
+/* zrt_exists reports whether a file or directory exists at path. */
+bool zrt_exists(const char *path) {
+	return access(path, F_OK) == 0;
+}
+
+/* zrt_remove deletes the file at path, aborting IOError on failure (e.g. it is missing
+ * or is a non-empty directory). */
+void zrt_remove(const char *path) {
+	if (unlink(path) != 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot remove file");
+	}
+}

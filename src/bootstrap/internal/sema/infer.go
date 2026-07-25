@@ -133,6 +133,14 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_exit":
 			return c.unaryIntrinsic(n, Int, Nil), true
+		case "__zrt_open_write":
+			return c.unaryIntrinsic(n, Str, Int), true
+		case "__zrt_write_bytes":
+			return c.writeBytesIntrinsic(n), true
+		case "__zrt_exists":
+			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_remove":
+			return c.unaryIntrinsic(n, Str, Nil), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -372,6 +380,20 @@ func (c *checker) nullaryIntrinsic(n *ast.Call, ret Type) Type {
 		c.synthArgs(n)
 	}
 	return ret
+}
+
+// writeBytesIntrinsic checks the write floor intrinsic `__zrt_write_bytes(fd, data)`: an
+// int fd and a list[byte] payload, yielding nil. io.write_file drives it from pure Zerg;
+// a write failure aborts IOError in the runtime.
+func (c *checker) writeBytesIntrinsic(n *ast.Call) Type {
+	if len(n.Args) != 2 {
+		c.errorf(n.Span(), "write-bytes intrinsic takes (fd, data), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return Nil
+	}
+	c.check(n.Args[0].Value, Int)
+	c.check(n.Args[1].Value, &types.List{Elem: types.Byte})
+	return Nil
 }
 
 // readIntrinsic checks the read floor intrinsic `__zrt_read(fd)`: an int fd, yielding

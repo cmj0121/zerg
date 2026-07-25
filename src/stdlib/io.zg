@@ -70,3 +70,13 @@ pub fn read_file(path: str) -> list[byte] {
 	__zrt_close(fd)
 	return out
 }
+
+# write_file writes data to the file at path, creating it or truncating an existing one —
+# pure-Zerg orchestration over the runtime's open-write/write/close floor, symmetric with
+# read_file. A failure to open or write raises IOError, which `guard { io.write_file(p, d) }`
+# demotes to a Result. Encode text with `list[byte](s)` first.
+pub fn write_file(path: str, data: list[byte]) {
+	fd := __zrt_open_write(path)
+	__zrt_write_bytes(fd, data)
+	__zrt_close(fd)
+}

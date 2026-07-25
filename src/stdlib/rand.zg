@@ -1,0 +1,43 @@
+# rand — a pseudo-random generator (pure Zerg, zero runtime leaves).
+#
+# Bundled into a program that writes `import "rand"`. A fast, deterministic,
+# NON-cryptographic generator (xorshift64*): the same seed always yields the same
+# sequence. Entirely pure Zerg — no syscall. The generator state is a plain `uint` the
+# caller holds; each draw ADVANCES it in place through a `mut &` reference (no hidden
+# mutable global — safe by default):
+#
+#   mut g := rand.seed(42)
+#   x := rand.next(g)           # a full 64-bit value; g advances
+#   d := rand.below(g, 6)       # a value in [0, 6); g advances
+#
+# For anything security-sensitive (keys, tokens) this is the wrong tool — it is
+# predictable from its seed.
+
+# seed builds a generator state from n. xorshift64* requires a NON-zero state, so a zero
+# seed is mapped to a fixed non-zero constant; every other seed is used as-is.
+pub fn seed(n: uint) -> uint {
+	if n == 0 {
+		return 0x2545F4914F6CDD1D
+	}
+	return n
+}
+
+# next advances the generator g IN PLACE (three xor-shifts) and returns the next 64-bit
+# value (the state scrambled by a multiply — the `*` of xorshift64*). Uses `uint`
+# throughout, whose overflow wraps by definition, never a trap.
+pub fn next(mut &g: uint) -> uint {
+	mut x := g
+	x = x ^ (x >> 12)
+	x = x ^ (x << 25)
+	x = x ^ (x >> 27)
+	g = x
+	return x * 0x2545F4914F6CDD1D
+}
+
+# below advances g and returns a value in [0, n). n must be positive; a non-positive n
+# aborts (a zero divides, a negative fails the uint conversion) — demote with `guard` if
+# the bound may be non-positive. The modulo reduction has a slight bias for very large n,
+# acceptable for a general-purpose generator.
+pub fn below(mut &g: uint, n: int) -> int {
+	return int(next(g) % uint(n))
+}

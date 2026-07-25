@@ -2,6 +2,7 @@ package build
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,4 +167,27 @@ func writeReadProg(t *testing.T) string {
 		t.Fatalf("write prog: %v", err)
 	}
 	return p
+}
+
+// TestReadFileMultiChunk drives io.read_file's pure-Zerg loop across more than one
+// runtime read chunk: a 10000-byte file spans three 4096-byte __zrt_read calls, so the
+// bytes at the 4096 seams (index 4095/4096) prove the loop stitches chunks in order.
+// Running under ASan/UBSan also asserts each per-iteration chunk list is freed.
+func TestReadFileMultiChunk(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(p, bytes.Repeat([]byte("A"), 10000), 0o644); err != nil {
+		t.Fatalf("write big file: %v", err)
+	}
+	src := fmt.Sprintf("import \"io\"\n"+
+		"fn main() -> Result[nil] {\n"+
+		"\tdata := io.read_file(%q)\n"+
+		"\tio.write_int(data.len())\n\tio.println(\"\")\n"+
+		"\tio.write_int(int(data[4095]))\n\tio.println(\"\")\n"+
+		"\tio.write_int(int(data[4096]))\n\tio.println(\"\")\n"+
+		"\treturn nil\n}\n", p)
+	got := runProgramRT(t, src)
+	if want := "10000\n65\n65\n"; got != want {
+		t.Fatalf("read_file multi-chunk: got %q, want %q", got, want)
+	}
 }

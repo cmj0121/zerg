@@ -99,3 +99,19 @@ func TestNoImportManifestClean(t *testing.T) {
 		t.Fatalf("a value-only program should need no runtime, got %+v", manifest)
 	}
 }
+
+// TestWriteIntPureZerg exercises io.write_int's pure-Zerg decimal conversion end to end
+// under ASan/UBSan: zero, a negative, and INT_MIN+1 (the near-overflow boundary the
+// per-digit negation avoids). A clean run also asserts the transient digit lists are
+// freed — the conversion allocates no leaked storage.
+func TestWriteIntPureZerg(t *testing.T) {
+	got := runProgramRT(t, "import \"io\"\n"+
+		"fn main() -> Result[nil] {\n"+
+		"\tio.write_int(0)\n\tio.println(\"\")\n"+
+		"\tio.write_int(-42)\n\tio.println(\"\")\n"+
+		"\tio.write_int(-9223372036854775807)\n\tio.println(\"\")\n"+
+		"\treturn nil\n}\n")
+	if want := "0\n-42\n-9223372036854775807\n"; got != want {
+		t.Fatalf("write_int: got %q, want %q", got, want)
+	}
+}

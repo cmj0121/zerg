@@ -1,8 +1,13 @@
 # Zerg Grammar
 
 The formal surface grammar of the language — what is syntactically well-formed, independent of what any
-program means. The authoritative productions live in the root [`GRAMMAR`](../GRAMMAR) file; this page is
-its prose companion. Part of the [Language Reference](language.md). Also in [繁體中文](grammar.zh-TW.md).
+program means. The root [`GRAMMAR`](../GRAMMAR) file is the **normative** definition of Zerg syntax; **this
+page is its informative prose companion** and defers to it on any discrepancy. Part of the
+[Language Reference](language.md). Also in [繁體中文](grammar.zh-TW.md).
+
+Syntax being well-formed is separate from a feature being built: a construct can be recognized by the
+grammar yet **[not yet]** at code generation, or its runtime behavior a **[deviation]** — this page notes
+those where the surface form invites them. See [Conformance](conformance.md) for the status markers.
 
 ## How the grammar is written
 
@@ -177,7 +182,8 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal — r
   shell), its argv split on whitespace (quotes respected), so no interpolation and no injection/glob/pipe. The
   interpolating `` f`…` `` form (group 5) instead runs through a **shell** and **shell-quotes** each hole
   (`{x:raw}` opts out). Execution — pipes as `Reader`/`Writer`, the process `Ref[proc]` — is **stdlib**
-  ([Process & I/O](io.md)), not grammar.
+  ([Process & I/O](io.md)), not grammar. Both command-literal forms are **[not yet]**: recognized by the
+  grammar but **rejected at code generation** this phase.
 
 `f"…"` string interpolation is **not** here — it is an expression, deferred to a later group and its own
 commit.
@@ -285,12 +291,14 @@ print       ::= 'print' expr
 A hole is **Python-style**: `expr`, then an optional `=`, `!` conversion, and `:` format spec. `f"sum={x + y}"`
 renders each hole through `display()` and joins the pieces — it **desugars at compile time** to `str`
 concatenation, with no runtime format engine. The same `{ … }` holes power the interpolating **command
-literal** `` f`…` `` (the group-3 command literal): it runs through a shell and **shell-quotes** each hole
-(`{x:raw}` opts out), so a value splices in as one safe argument.
+literal** `` f`…` `` (the group-3 command literal, **[not yet]**): it runs through a shell and
+**shell-quotes** each hole (`{x:raw}` opts out), so a value splices in as one safe argument.
 
-- **`{x}`** → `x.display()`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` / `display` /
-  ascii. **`{x=}`** is self-documenting: it emits the expression's source text and `=`, then the value
-  (`f"{n=}"` → `n=42`).
+- **`{x}`** renders through `display`. **`{x!r}`** / **`{x!s}`** / **`{x!a}`** convert first — `debug` /
+  `display` / ascii. `!s` is **[implemented]**; `!r` and `!a` are **[deviation]** — currently **aliased to
+  `display`** rather than the distinct debug/ASCII renderings ([Format](format.md)). **`{x=}`** is
+  self-documenting: it emits the expression's source text and `=`, then the value (`f"{n=}"` → `n=42`) —
+  **[not yet]**, parsed but rejected at code generation.
 - **`{x:spec}`** hands `spec` to the type's **`Format`** protocol — `f"{pi:.2f}"`, `f"{n:04d}"`,
   `f"{p:>10}"`. The spec **string's meaning is the type's** (stdlib numbers/`str` read the usual
   fill/align/sign/`#`/`0`/width/`.precision`/type); the grammar treats it as opaque up to `}`.
@@ -705,7 +713,9 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   is **module-private** (never `pub`). Prefer the **safe** alternative — an immutable `:=` holding a stdlib
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
-  `store` / `fetch_add` / `compare_exchange` and a memory-ordering argument.
+  `store` / `fetch_add` / `compare_exchange` and a memory-ordering argument. **[implemented]** today only for
+  **`Atomic[int]`** with **sequential consistency**; the **memory-ordering argument** and a **generic
+  `Atomic[T]`** are **[not yet]**.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);
   `ptr[T]` types that address to a pointee `T` (same width — `[T]` only types the load/store/offset). Because
   `T` is any type, **function pointers** fall out for free — `ptr[fn(int) -> nil]` (an interrupt vector) — as

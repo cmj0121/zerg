@@ -77,16 +77,23 @@ error). The extensible tier is the behavioral default above; the structural tier
 
 ## The derivable specs
 
-The blessed set — each with a canonical structural reading the compiler owns. `Object` is always
-derived; the rest are **opt-in** via `derive`:
+The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
+via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. Only **`Eq`** and
+**`Ord`** are **[implemented]**; **`Hash`**, **`Encode`**, and **`Decode`** are specified here but **[not
+yet: Phase 2]** — naming one in a `#[derive(…)]` is a clean compile error today.
 
-| Spec     | Structural rule                                | Requires (each field) | Excludes                 |
-| -------- | ---------------------------------------------- | --------------------- | ------------------------ |
-| `Object` | `equal`/`copy`/`debug` per field (overridable) | —                     | —                        |
-| `Ord`    | lexicographic by field, then by variant order  | `Ord`                 | any `float` field        |
-| `Hash`   | mix field / tag hashes (`equal ⇒ same hash`)   | `Hash`                | any `float` field        |
-| `Encode` | product per field; sum: tag then payload       | `Encode`              | `chan`/`Ref`/`fn`/handle |
-| `Decode` | rebuild per field / from tag + payload         | `Decode`              | `chan`/`Ref`/`fn`/handle |
+| Spec     | Structural rule                               | Requires (each field) | Excludes                 |
+| -------- | --------------------------------------------- | --------------------- | ------------------------ |
+| `Eq`     | `eq`/`ne` (`==` / `!=`) per field             | `Eq`                  | —                        |
+| `Ord`    | lexicographic by field, then by variant order | `Eq` and `Ord`        | any `float` field        |
+| `Hash`   | mix field / tag hashes (`equal ⇒ same hash`)  | `Hash`                | any `float` field        |
+| `Encode` | product per field; sum: tag then payload      | `Encode`              | `chan`/`Ref`/`fn`/handle |
+| `Decode` | rebuild per field / from tag + payload        | `Decode`              | `chan`/`Ref`/`fn`/handle |
+
+`Eq` is the sole source of `==` / `!=` on a `struct` or `enum`: a type with neither `#[derive(Eq)]` nor a
+hand-written `impl Eq` **cannot** be compared with `==` — that is a compile error, not a silent structural
+default. `Ord` requires `Eq` (the super-spec `spec Ord: Eq`), so `#[derive(Ord)]` obliges you to derive —
+or hand-write — `Eq` as well.
 
 A field that fails the requirement makes the derive a **compile error naming that field**, never a
 silent skip — `#[derive(Ord)]` on a `T` with a `float` field is rejected exactly as the hand-written rule in
@@ -97,8 +104,9 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 
 - **Recursive / self-referential** (auto-boxed) types derive fine — the generated impl recurses through
   the transparent box like any other field.
-- **A `Ref` value** (`chan`, `Ref[T]`) follows `Object.copy` (refcount-bump) and compares by identity
-  under `equal`; it is not `Encode`/`Decode`, so a type holding one cannot derive those.
+- **A `Ref` value** (`chan`, `Ref[T]`) copies by refcount-bump (the memory model's rule, not a spec) and,
+  under a derived `Eq`, compares by identity; it is not `Encode`/`Decode`, so a type holding one cannot
+  derive those.
 - **Adding an `enum` variant** re-derives automatically — there is no `match` for the author to update,
   because the compiler, not user code, walks the structure.
 
@@ -113,6 +121,11 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 - Only a **blessed** spec may appear in `#[derive(…)]`; a user spec there is a compile error.
 
 ## Serialization — the worked example
+
+> **[not yet: Phase 2]** `Encode` / `Decode` — and the `Sink` / `Source` specs used below — are specified
+> but not implemented; `#[derive(Encode, Decode)]` is a compile error today, since the blessed derivable
+> set is exactly `Eq` and `Ord`. The example below illustrates the **intended** shape of structural
+> derivation for when they land.
 
 Serialization is the case structural derive exists to serve: a mechanical, field-by-field mapping no
 one should hand-write per type, yet one that needs neither reflection nor a macro.

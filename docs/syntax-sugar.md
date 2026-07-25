@@ -27,6 +27,15 @@ full treatment is in the [Language Reference](language.md). Also in [繁體中�
 | `a ?? b` / `a?.m` / `e!`                 | default; optional chain to `nil`; force-unwrap or raise `UnwrapError`  |
 | `del ch`                                 | drop this holder now — closes the channel if it was the last sender    |
 
+**Status.** Every row above is **[implemented]** with two exceptions inside f-string interpolation. The
+self-documenting `f"{x=}"` is **[not yet]** — it is parsed but rejected at code generation. The `!r`
+(debug) and `!a` (ascii) conversions are a **[deviation]**: both are currently **aliased to `display`**
+(that is, they render as `!s`), pending the distinct `debug`/ASCII renderings. Plain holes `{x}`, the
+format spec `{x:spec}`, and `!s` are implemented for scalars and `str`; a **composite** hole (a `struct`,
+`list`, or `map`) is still rejected, so structural rendering is **[not yet]** — see
+[Formatting & Text](format.md). The interpolating command literal `` f`…` `` (grammar, not listed here) is
+likewise **[not yet]**. Each desugaring above is otherwise exactly as written.
+
 ## What is deliberately **not** sugar
 
 To keep the core honest, some look-alikes are their own thing, not rewrites:

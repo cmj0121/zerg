@@ -14,8 +14,9 @@ copy-by-value 是語意；編譯器會在安全時省略複製：
 遞迴與自我參照型別不需要 pointer——直接宣告欄位(例如 `Node?`,或 `enum Expr { Num(int); Add(Expr, Expr) }`),
 編譯器把那個自我參照的槽**自動裝箱在一個 refcounted cell 之後**。因此遞迴值的複製是**按參照**(refcount 共享),不是
 深拷貝:複製只令該 cell 的計數遞增、而非複製整條鏈,鏈則在最後持有者的 scope 結束時釋放。這個階段有兩個 MVP 注意事項:
-透過 `mut` binding 重新指派遞迴欄位而建出的 runtime **循環**會**洩漏**(尚無循環收集器),而釋放一條長鏈會在 C stack
-上遞迴 **O(depth)**。
+透過 `mut` binding 重新指派遞迴欄位而建出的 runtime **循環**會**洩漏**——尚無循環收集器(**[deviation]**);而釋放
+一條長鏈會在原生 C stack 上**遞迴 O(depth)**、並可能將其溢位(**[deviation]**——即 [Conformance](conformance.zh-TW.md)
+與 [Errors](errors.zh-TW.md) 所載、同一個不可回復的 stack-overflow deviation)。
 
 **一個 `struct` 的佈局就是它的宣告。** 欄位照**宣告序**排、值 **inline** 嵌在它的擁有者裡（除了上述遞迴 auto-boxing
 之外沒有間接），而且編譯器**絕不重排**——所以一個 Zerg `struct` _就是_ 一個 C `struct`、field-for-field、自然對齊
@@ -35,9 +36,15 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
   **abort**（`AliasError`）。檢查只插在「`mut &` 引數可能動態別名」的呼叫點。
 - **Channel**——在 coroutine 之間以 by ref 共享，僅用於通訊。
 
-**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都**依原始碼順序**求值、
-deterministic——不像 C 的引數求值順序是 unspecified。所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測；
-`and`／`or` 的短路就是這條規則加上「跳過右運算元」（見 [內建 spec](specs.zh-TW.md)）。
+**求值順序是左到右。** 函式引數、運算子的運算元、以及 `list`／`map` literal 或 `set(...)` constructor 的元素都
+**依原始碼順序**求值、deterministic——所以副作用（一個 `mut &` 引數、一次 abort）的次序可預測，不像 C 的引數
+求值順序是 unspecified。
+
+> **[deviation]** bootstrap 目前只把 **literal 的元素**依左到右排序；**函式呼叫的引數與二元運算元**沿用 C 的
+> unspecified 順序，所以 `add(f(1), g(2))` 可能先算 `g(2)` 再算 `f(1)`。**短路**運算子——`and`、`or`、`??`、`?.`,
+> 以及 `?` unwrap——**確實**依左到右生效：先求值左運算元，當左邊已決定結果時就跳過右邊 **[implemented]**。
+> [Conformance](conformance.zh-TW.md) 把「呼叫引數／運算元的順序」列為 implementation-defined 之點，直到預期的
+> 左到右規則被強制為止。
 
 **Reference-counted 的值**是 scope-owning 的唯一例外：型別實作 **`Ref`** 的值——內建的 **`chan`**，或 stdlib 的
 **`Ref[T]`** 盒——以 **reference** 共享、而非複製。runtime 計數持有者，在**最後**一個持有者的 scope 退出時釋放；
@@ -51,6 +58,39 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
 的。(唯一的退化個案——`chan` 把指向自己的 reference buffer 進自己——是 programmer error、不是被檢查的個案。)唯一的
 例外是上面那個**自動裝箱的遞迴 cell**:因為 `mut` 遞迴欄位可被重新指派成一條 back-edge,循環*可以*在那裡形成——而且
 這個階段**不被收集、會洩漏**(一個有界、已載明的 MVP 缺口,是直接允許自我參照型別的代價)。
+
+## 複製語意 vs 參照語意
+
+兩個名字是否共享儲存，由一條界線決定，畫在兩個互斥的類別之間：
+
+- **值型別（value type）**——每個 scalar、一個 `struct`、一個 tuple，以及 heap 容器 `list` 與 `map`——都是
+  **被複製**的。scalar、`struct`、tuple 以 inline 複製；`list` 或 `map` 則**深拷貝**，其元素依同一條規則複製。所以
+  值型別的兩個名字**永不 alias**：透過其一寫入，只改變那個持有者自己的 copy。**[implemented]**
+- **Reference-counted 值**——一個 `str`、一個 `chan`、一個 `Ref[T]`，以及**遞迴型別的自動裝箱子節點**——是
+  **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
+  一次變動，會經由該 tail 的每個持有者都看得見**。**[implemented]**
+
+複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
+retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
+遞迴** binding 的自動裝箱 cell：
+
+```text
+mut a := [1, 2, 3]                # 值型別
+b := a                            # 深拷貝——b 是獨立的 list
+a[0] = 9                          # a 是 [9, 2, 3]；b 仍是 [1, 2, 3]——無 alias
+
+struct Node { value: int; next: Node? }
+mut n := Node(value: 1, next: Node(value: 2, next: nil))
+m := n                            # struct 被複製；它裝箱的 `next` tail 是 refcount-shared
+n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也讀到 99
+```
+
+## 釋放順序（Drop order）
+
+離開 scope 時，local 依**建構的逆序**釋放——最後建構的最先釋放——於是拆解鏡射建構 **[implemented]**。順序在
+**聚合體內部**也被釘住：一個 `struct` 的欄位與一個 `enum` payload 的槽依**宣告的逆序**釋放 **[implemented]**。一個
+`defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
+**後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯 **[implemented]**。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 
@@ -102,6 +142,11 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | closure body 內的捕獲值        | 否           | 結束**本次 invocation** 的存取 → 不釋放；下次呼叫仍有                        |
 | channel、`Ref[T]`              | refcounted   | 放掉這個 holder（refcount--）；最後 holder 跑 **`drop`**（channel 即 close） |
 
+> **狀態。** `del` 一個 `Ref` 值——一個 `chan` 或一個 `Ref[T]`——放掉一個 holder（並在最後一個跑 `drop`）是
+> **[implemented]**。`del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是
+> **[not yet]**：今天這樣的 `del` 會撤銷名字的存取，但儲存是在一般的 scope 退出時回收、而非在 `del` 當下。所以
+> 上表「釋放儲存」那一列，對擁有值而言是預期行為、尚非 bootstrap 現況。
+
 `del` 永不懸空：撤銷一個借用不可能釋放別的名字所擁有的儲存，而 Zerg 既有規則已擋掉「owner 在 borrower 仍存活時
 就釋放」（`mut &` 參數受限於該次呼叫；逃逸的 closure 擁有捕獲的副本）。編譯器靜態就知道每個 `del` 是釋放還是純
 撤銷——只有 `Ref` 值（channel 與 `Ref[T]`）帶 runtime refcount。
@@ -129,3 +174,6 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 拆解正好鏡射建構。三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時
 觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →
 `defer`；會 → `Ref[T]`。**
+
+一個 **`with` block** 把這種資源綁進一段語彙區間、在 block 退出時跑它的釋放。今天它僅限於 **Ref-bearing** 資源
+（一個 `chan` 或一個 `Ref[T]`）；`with` 施於一個一般的 `Scoped` 值是 **[not yet]**。

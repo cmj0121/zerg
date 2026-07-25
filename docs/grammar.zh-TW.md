@@ -1,8 +1,11 @@
 # Zerg 文法（Grammar）
 
-語言的形式表面文法——什麼在語法上是合法的，與程式的語意無關。權威的 production 定義在根目錄的
-[`GRAMMAR`](../GRAMMAR) 檔，本頁是它的散文說明。屬於 [語言參考](language.zh-TW.md) 的一部分。亦有
-[English](grammar.md) 版本。
+語言的形式表面文法——什麼在語法上是合法的，與程式的語意無關。根目錄的 [`GRAMMAR`](../GRAMMAR) 檔是 Zerg 語法的
+**規範性**定義；**本頁是它的資訊性散文伴讀**，遇任何歧異以 `GRAMMAR` 為準。屬於 [語言參考](language.zh-TW.md) 的
+一部分。亦有 [English](grammar.md) 版本。
+
+語法合法與特性已建置是兩回事：一個構造可以被文法辨識、卻在程式碼生成時 **[not yet]**，或其 runtime 行為是一個
+**[deviation]**——本頁在表面寫法會誘發這些的地方加以標註。狀態標記見 [Conformance](conformance.zh-TW.md)。
 
 ## 文法怎麼寫
 
@@ -169,7 +172,8 @@ cmd-lit     ::= '`' cmd-char* '`'                        # COMMAND literal——
 - **command literal。** 反引號 `` `git status` `` 是一個**命令**——一個**直接**執行（不經 shell）的子行程，argv 以
   空白切分（尊重引號），因此沒有插值、沒有注入／glob／pipe。插值的 `` f`…` `` 形式（group 5）改為經過 **shell** 並
   對每個 hole **shell-quote**（`{x:raw}` 可退出）。執行面——pipe 作為 `Reader`／`Writer`、行程 `Ref[proc]`——屬
-  **stdlib**（[Process & I/O](io.zh-TW.md)），非文法。
+  **stdlib**（[Process & I/O](io.zh-TW.md)），非文法。兩種命令字面量形式皆為 **[not yet]**：被文法辨識，但此階段
+  在**程式碼生成時被拒絕**。
 
 `f"…"` 字串插值**不在**此處——它是 expression，留待之後的 group 及其獨立 commit。
 
@@ -264,11 +268,13 @@ print       ::= 'print' expr
 
 洞是 **Python 式**：`expr`，其後選用 `=`、`!` 轉換、`:` format spec。`f"sum={x + y}"` 把每個洞經 `display()`
 算出並串接——**編譯期 desugar** 成 `str` 串接，沒有 runtime format engine。同一套 `{ … }` 洞也驅動插值的**命令
-literal** `` f`…` ``（group 3 的 command literal）：它經過 shell 執行並對每個洞 **shell-quote**（`{x:raw}` 可退出），
-使值以單一安全引數插入。
+literal** `` f`…` ``（group 3 的 command literal，**[not yet]**）：它經過 shell 執行並對每個洞 **shell-quote**
+（`{x:raw}` 可退出），使值以單一安全引數插入。
 
-- **`{x}`** → `x.display()`。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
-  **`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）。
+- **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
+  `!s` 為 **[implemented]**；`!r` 與 `!a` 為 **[deviation]**——目前**別名到 `display`**，而非獨立的 debug／ASCII
+  渲染（[Format](format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——
+  **[not yet]**，已被解析但在程式碼生成時被拒絕。
 - **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
   只當它是到 `}` 為止的不透明字串。
@@ -613,7 +619,9 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 - **全域可變狀態。** _無可變全域_（group 10）的唯一例外，是**在 module 層級 `unsafe { … }` 分組內**的 `mut` 綁定——
   裸機逃生口（page table 與觸碰它的函式，放在一起）。**沒有 `unsafe mut` 前綴**、無 `static` 關鍵字。可變全域為
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
-  **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `fetch_add` / `compare_exchange` 與 memory-ordering 參數。
+  **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `fetch_add` / `compare_exchange` 與
+  memory-ordering 參數。今日 **[implemented]** 的僅 **sequential consistency** 的 **`Atomic[int]`**；
+  **memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與

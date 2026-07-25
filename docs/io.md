@@ -13,7 +13,18 @@ each reusing an existing model:
 - a **handle** is a `Ref[T]` — a file or socket, scope-owned and closed exactly once;
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
+> **Status.** The bootstrap ships a **subset** of this surface. **[implemented]:** whole-file read —
+> `io.read_file(path) -> list[byte]` (a missing or unreadable file raises **`IOError`**, which
+> `guard { io.read_file(p) }` demotes to a `Result`; decode with `str(…)` when the bytes are text) — and a
+> minimal set of stdout writers (`io.write` / `io.println` / `io.write_int`) plus the `print` keyword. The
+> **`Reader` / `Writer` spec surface** — `read_bytes` / `read()` / `write` and the `io.stdin` · `io.stdout`
+> · `io.stderr` stream objects described below — is **[not yet]**: the intended semantics stand as
+> specified, but only the whole-file and best-effort-write leaves are wired today.
+
 ## Streams — `Reader` & `Writer`
+
+**[not yet]** — the streaming surface below is specified but unbuilt; today use `io.read_file` for input
+and `io.write` / `io.println` for output.
 
 Each has **one required method**; the rest are provided defaults (Specs & Generics), so a new stream
 supplies the primitive and inherits the conveniences.
@@ -53,17 +64,32 @@ A missing file is an **expected** value-failure, never an abort. Open modes, see
 `io` methods — stdlib detail, not new concepts. A **socket** is the same shape: a `Ref[handle]` that is a
 `Reader` and `Writer`, its network API left to `io`.
 
+> **[not yet]** The `File` handle and `open` / `create` are unbuilt this phase; the one wired input path is
+> the whole-file `io.read_file(path) -> list[byte]`, which raises **`IOError`** on a missing or unreadable
+> file (demote with `guard`), consistent with "a missing file is an expected value-failure" once `guard`ed.
+
 ## Standard streams
 
 `import "io"` binds **`io.stdin`** (`Reader`), **`io.stdout`** and **`io.stderr`** (`Writer`s) — read-only
 OS facts through the stdlib, like `env` and the clock ([Modules, Packages & Programs](package.md)), never
-`main` parameters. The **`print`** keyword is the no-import shortcut — `print x` writes `x.display()` and a
-newline to stdout, best-effort; use `io.stdout` when you need the `Result`, `io.stderr`, or raw bytes.
+`main` parameters. The **`print`** keyword is the no-import shortcut — `print x` writes the value's
+`display` rendering and a newline to stdout, best-effort; use `io.stdout` when you need the `Result`,
+`io.stderr`, or raw bytes.
 
 ```text
 import "io"
 for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
+
+> **[not yet]** The `io.stdin` / `io.stdout` / `io.stderr` stream objects are unbuilt; the wired stdout
+> writers this phase are the free functions `io.write(s)` / `io.println(s)` / `io.write_int(n)` (each
+> returns `Result[nil]` but writes best-effort, never yielding an `Err` yet).
+>
+> **[deviation] / [implementation-defined] buffering.** `print` writes through **buffered libc stdio**
+> while `io.*` writes go **unbuffered** through `write(2)`. Their output can therefore **interleave out of
+> source order** — an `io.*` write may appear before an earlier `print` still sitting in the libc buffer.
+> The spec does not fix a buffering discipline across the two; to force ordering, keep a run of output on
+> one path, or flush. (See [Conformance](conformance.md) on implementation-defined behavior.)
 
 ## Blocking — at the coroutine, not the thread
 
@@ -73,7 +99,15 @@ Native `io` reads synchronously but never blocks the runtime: a `read_bytes`/`wr
 exception is the FFI edge: a blocking **foreign (FFI) C call** parks its whole OS thread, since Zerg does not
 own that frame ([FFI](ffi.md)).
 
+> **[not yet] / [deviation]** Coroutine-parking `io` is part of the unbuilt stream surface above. And under
+> today's **N:1** runtime ([Coroutines & Channels](coroutine.md)) there is a single thread, so a blocking
+> **foreign call blocks the whole program**, not just its coroutine — the intended per-thread parking
+> arrives with the M:N scheduler.
+
 ## Process & command execution
+
+**[not yet]** — command literals are recognized by the grammar but **rejected at code generation** this
+phase; the intended model below stands unchanged for when the runtime lands.
 
 A child process is spawned with a **backtick command literal** and observed through the same streams — its
 pipes are `Reader`s and a `Writer`, its handle a `Ref[proc]` whose `drop` waits for (or kills) it, reaping

@@ -202,7 +202,7 @@ discriminant 的具體 C layout 是待決細節——見「待決問題」。）
 
 ## 並行跨越邊界
 
-Zerg 的並行——M:N scheduler 上的 `spawn`，以及 `chan`——是 **runtime 內部的，不跨界**。`chan` 與 coroutine
+Zerg 的並行——cooperative scheduler 上的 `spawn`，以及 `chan`——是 **runtime 內部的，不跨界**。`chan` 與 coroutine
 handle 並非 FFI-safe，不得出現在外部綁定的簽章或匯出面上；結果與完成仍只在 Zerg **內部**經由 channel 傳遞。
 
 - **一次阻塞的外部呼叫會阻塞它的 OS thread。** scheduler 把眾多 coroutine 多工到少數 OS thread 上；一個

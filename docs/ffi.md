@@ -232,7 +232,7 @@ C layout of that discriminant is a deferred detail — see Open questions.)
 
 ## Concurrency across the boundary
 
-Zerg's concurrency — `spawn` on the M:N scheduler, and `chan` — is **runtime-internal and does not
+Zerg's concurrency — `spawn` on the cooperative scheduler, and `chan` — is **runtime-internal and does not
 cross**. `chan` and coroutine handles are not FFI-safe and may not appear in a foreign binding's signature
 or on the exported surface; results and completion still travel by channel **inside** Zerg only.
 

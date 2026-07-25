@@ -5,7 +5,8 @@ Zerg 的並行**只有 coroutine + channel**——沒有共享可變狀態、沒
 
 ## `spawn`
 
-`spawn f(args)` 在 **M:N scheduler** 上啟動一個 coroutine（Go 的 `go`）。它**不回傳任何東西**——沒有 handle、沒有
+`spawn f(args)` 在 runtime scheduler 上啟動一個 coroutine（Go 的 `go`；預期的 **M:N** 模型與當前單執行緒
+**[deviation]** 見「排程與公平性」）。它**不回傳任何東西**——沒有 handle、沒有
 join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是任何呼叫——一個普通函式、一個**方法**(`spawn
 obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
 (`defer f.close()`)。
@@ -37,8 +38,10 @@ channel——但那是協作式通知、不是 ownership：coroutine 觀察到 c
 
 > **一個 channel 的 `send` happens-before 對應的 `receive` 完成。**
 
-接收端因此看到的是**完整建構好**的 payload（在 send 當下快照）；除此之外沒有任何跨 coroutine 的 ordering 存在、也
-不需要。這就是 memory model 的全部。
+這條 happens-before 邊是 **[implemented]** 的保證。接收端因此看到的是**完整建構好**的 payload（在 send 當下快照）；
+除此之外沒有任何跨 coroutine 的 ordering 存在、也不需要。這就是 memory model 的全部。任何**超出**這條邊的
+ordering——ready coroutine 被恢復的 run-queue 順序、未同步 coroutine 之間的交錯——都是
+**[implementation-defined]**：今日 N:1 runtime 以決定性 FIFO 順序恢復可執行的 coroutine，但任何程式都不得依賴它。
 
 **什麼能跨越邊界**——作為 `spawn`／closure capture，或 channel payload：
 
@@ -68,6 +71,11 @@ ch := chan[int](64)    # buffered，容量 64
 
 容量是唯一可調之處；**send 在滿時 block、receive 在空時 block**。unbuffered（容量 0）是 rendezvous——send 只有在
 receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
+
+本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send abort、
+最後 sender 自動 close——皆為 **[implemented]**。與規格分歧的兩處是 send-to-closed 的 abort **種類**
+（`SendOnClosedError` 為 **[not yet]**——abort 仍會以泛用訊息觸發）與 `DeadlockError`（**[deviation]**，見 `select`
+與「收尾與 deadlock」）。
 
 ### 送出——`ch <- v`
 
@@ -168,8 +176,10 @@ consumer 會被算成 sender，害 channel 永遠開著。雙向端適合**對�
 
 ## `select`——同時等多條 channel
 
-`select` 是**唯一**的多路等待：它盯住多個 send/receive 操作，block 到其中一個 **ready**，執行那條 arm；平手時
-**公平**任選（不依位置，故無 arm 餓死）。
+`select` 是**唯一**的多路等待：它盯住多個 send/receive 操作，block 到其中一個 **ready**，執行那條 arm。在**多條
+arm 同時 ready** 時，勝出者是 **[implementation-defined]**——規格只固定選擇**不依位置**，故沒有 arm 因所在位置而
+餓死；預期性質是**公平**。bootstrap 以決定性的**round-robin rotor** 實現它（把同一種公平套用在單次等待上），但
+conforming 實作可任選一條 ready arm，所以任何程式都不得依賴哪條勝出。
 
 ```text
 select {
@@ -247,6 +257,11 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 同一個 owner 講話。這才是共享可變 state 的方式、而非 `Ref[T]`：`Ref[T]` **唯讀**地分享一個值，actor 則在一個 owner
 背後**序列化寫入**。必須被序列化的資源（非 thread-safe 的 `Ref[handle]`）同樣由一個 actor 獨佔。
 
+對單一共享純量，較低階的替代是用不可變 `:=` 持有一個 stdlib **`Atomic`**（綁定不可變，atomic 內部可變——見
+[Module 與 Program](package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `fetch_add` /
+`compare_exchange`。今日 **[implemented]** 的是僅 **sequential-consistency** ordering 的 **`Atomic[int]`**；顯式的
+**memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
+
 ## producer——generator pattern
 
 **generator 不是語言特性**——它就是一個**送值到 channel 的 coroutine**，由消費者用 `for v in ch` drain。那條
@@ -287,18 +302,24 @@ channel。讓一個死亡變得*致命*是觀察者的職責（對 `Right(err)` 
 
 ## 排程與公平性
 
-M:N scheduler 是**公平的**：每個 **ready** 的 coroutine 終究會被排到，且**沒有任何 coroutine 能無限期餓死其他
+**預期。** `spawn` 讓 coroutine 跑在**搶佔式 M:N scheduler** 上（多條 coroutine 多工於數條 OS thread），而該
+scheduler 是**公平的**：每個 **ready** 的 coroutine 終究會被排到，且**沒有任何 coroutine 能無限期餓死其他
 人**——即使是一個從不碰 channel 的 CPU-bound 迴圈也不行。你可以放心 `spawn`；一個忙碌的 worker 凍不住無關的
-coroutine。
+coroutine。這是對**可觀察性質、而非機制**的保證：公平**如何**達成——搶佔、compiler 插入的 safepoint、reduction
+計數——是語言不固定的實作細節；只承諾那個性質。
 
-這是對**可觀察性質、而非機制**的保證。公平**如何**達成——搶佔、compiler 插入的 safepoint、reduction 計數——是語言
-不固定的實作細節；只承諾那個性質。
+> **[deviation]** bootstrap scheduler 是**合作式 N:1**——單一 OS thread、無搶佔——coroutine **只在 channel 或
+> `select` 的 park 點**讓出。所以公平保證今日**並不成立**：一個**從不碰 channel 的 CPU-bound coroutine 會餓死
+> 一切**，因為沒有東西能搶佔它。具體地說，`spawn(spin); spawn(work)`（`spin` 不做任何 channel 操作而空轉）會
+> **hang**——`work` 永遠不會跑。預期的 M:N 搶佔式 scheduler 一如規格所述；在它落地前，讓每條 coroutine 皆由
+> channel 驅動，使它會 park 並讓別人跑。
 
-兩條界限框住它：
+兩條界限框住預期模型：
 
 - **一次阻塞的 foreign（FFI）呼叫無法被搶佔。** 它把 OS thread 停在一個 Zerg 不擁有的 C frame 裡（見
-  [FFI](ffi.zh-TW.md)）；公平只涵蓋 Zerg 的 coroutine，不涵蓋卡在 C 裡的 thread。runtime 可能長 thread pool，但
-  一次長阻塞呼叫就是佔用 thread——優先用非阻塞的 C API。
+  [FFI](ffi.zh-TW.md)）；公平只涵蓋 Zerg 的 coroutine，不涵蓋卡在 C 裡的 thread。在預期的 M:N runtime 下其他
+  thread 仍前進，但一次長阻塞呼叫就是佔用 thread——優先用非阻塞的 C API。**[deviation]** 在今日 N:1 runtime 下
+  **只有一條 thread**，所以一次阻塞的 FFI 呼叫會阻塞**整個程式**，而不只是它那條 coroutine。
 - **公平讓 _ready_ 的前進，不解 _卡住_ 的。** 當每個 coroutine 都阻塞、毫無前進可能時，那是 deadlock，另外處理
   （見下）；`select` 的公平 tie-break 就是把同一種公平套用在一次等待上。
 
@@ -310,3 +331,8 @@ coroutine。
   是**呼叫端**的決定（例如帶 cancel 或 timeout arm 的 `select`）。
 - **全域 deadlock 偵測**——若每個 coroutine 都 block、無可能前進，runtime 會 raise **`DeadlockError`** 而非默默卡死。
   一個孤零零卡住、而其他 coroutine 仍在前進的 sender，不會被單獨偵測。
+
+  > **[deviation]** `DeadlockError` 規格上是一次**乾淨 abort**——它 unwind stack、跑 pending `defer`，並像任何
+  > abort 一樣可被 `guard` 攔。bootstrap 則改為**以診斷報告 hard-`exit` 行程**，**不**跑任何 `defer`、不 unwind，
+  > 所以該 deadlock 今日**無法被攔**（見 [錯誤處理](errors.zh-TW.md)、[Conformance](conformance.zh-TW.md)）。
+  > 預期的乾淨 abort 行為一如規格；此階段尚未實作。

@@ -30,6 +30,12 @@ fn load() -> Result[Config] {
 }
 ```
 
+> **[deviation]** `?` is defined on any `Either[X, Y]` — unwrap the `Left`, early-return the `Right`
+> unchanged — but the bootstrap threads only `Result[T]` faithfully. On a **general `Either`** the right
+> payload is currently **dropped** (a silent miscompile), and `?` on a **`Result[nil]`** reaches the
+> backend as a `void`-typed binding rather than propagating cleanly (a fail-loud sema gap). The intended
+> behavior threads the `Right` value unchanged in every case.
+
 **`??` — default.** `a ?? b` yields `a`'s left value if present, else `b` (right discarded); it
 short-circuits, chains right-to-left, and works on any `Either`.
 
@@ -37,9 +43,12 @@ short-circuits, chains right-to-left, and works on any `Either`.
 the chain to `nil` in place (unlike `?`, never returns from the function); use on any non-`T?` type
 is a compile error.
 
-**`!` — force-unwrap (value → abort).** `x!` unwraps the left value or **raises** `UnwrapError` — the
-deliberate "I know it's set" hatch, a crossing from the value tier into an abort. (Logical negation is
+**`!` — force-unwrap (value → abort).** `x!` unwraps the left value or **raises** on an absent optional —
+the deliberate "I know it's set" hatch, a crossing from the value tier into an abort. (Logical negation is
 the keyword `not`, so postfix `!` is free.)
+
+> **[not yet]** `UnwrapError` as a distinct, `is`-testable error **kind** is not built; today the abort
+> fires with a generic message and is not one of the six taxonomy kinds below.
 
 ```text
 port := lookup("PORT") ?? 8080
@@ -55,9 +64,9 @@ A **`raise e from cause`** form records `cause` as `e`'s `unwrap()` — a **nest
 lower-level `Err` in a higher-level one without losing it, feeding the same cause chain every `Error`
 exposes; a bare `raise e` carries `e` unchanged.
 
-**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds — **`ValueError`**,
-**`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`** — and you **choose
-from these**; **defining your own** error type (a `struct` / `enum` implementing the **`Error`** spec —
+**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds **[implemented]** —
+**`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**
+— and you **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the **`Error`** spec —
 `message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](specs.md)) is **not yet
 supported**. Each kind is a full `Err`: construct one with a message (`raise ValueError("bad input")`), let it
 sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`, and have
@@ -66,11 +75,17 @@ failures raise the matching kind**, so library and runtime errors share one voca
 is a `ValueError` (out of range → `OverflowError`), a checked narrowing conversion an `OverflowError`, an I/O
 failure an `IOError`, a `str` bridge over invalid UTF-8 an `EncodingError`, an out-of-bounds index an
 `IndexError`, a missing `map` key a `KeyError`. A `Result` / `Either` carries them and `?` / `??` / `guard`
-thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes the kind.
+thread them unchanged; a `match` on a concrete `Either[T, Kind]` distinguishes the kind. The abort
+contract itself — the message written to stderr, exit status 1, the `Kind: message` line — is
+[Conformance](conformance.md).
 
-**Aborts.** An abort — a built-in (`OverflowError`, `DivideByZeroError`, `UnwrapError`, `MatchError`,
-`IndexError`, `KeyError`, `AliasError`, `StackOverflowError`, `SendOnClosedError`, `DeadlockError`) or
-any `Err` you `raise` — marks a **bug**, not an expected failure. It is **not catchable as control flow**: no `try`/`catch`,
+**Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
+expected failure. Of the fault names this chapter uses, only six reify as `is`-testable **kinds** today:
+`ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError` (**[implemented]**).
+The rest are **not** yet kind-tagged: `UnwrapError`, `DivideByZeroError`, `MatchError`, `AliasError`, and
+`SendOnClosedError` are **[not yet]** (the abort may still fire, with a generic message and no distinct
+reified kind), while `StackOverflowError` and `DeadlockError` are **[deviation]** (see below). It is **not
+catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
 `defer`s** and is freed in order, its `Ref` values (channels and `Ref[T]`) refcount-decremented, exactly
@@ -89,6 +104,14 @@ main one and each coroutine's — and **checks call depth itself**, raising this
 runs `defer`s) the instant a call would exceed the stack, so runaway recursion **never** becomes a C
 stack smash. Zerg does **not** optimize tail calls — `for` is the loop, so a bounded stack is enough —
 which makes an unbounded recursion a definite `StackOverflowError`, never a silent hang.
+
+> **[deviation]** The bootstrap does **not** yet own or depth-check the stack: a stack overflow is an
+> unrecoverable `SIGSEGV` / stack-smash that terminates the process **without** running `defer`s, not a
+> clean `StackOverflowError` unwind (see [Conformance](conformance.md), the runtime-abort deviation). The
+> intended safety net stands; it is not built this phase. Relatedly, a **`DeadlockError`** — every
+> coroutine blocked with no progress possible — is intended as a clean abort too, but the bootstrap runtime
+> **hard-`exit`s with a report** instead of unwinding; and a **send on a closed channel** aborts today with
+> a generic message, the specific `SendOnClosedError` kind being **[not yet]**.
 
 **`guard` — demote an abort to a value (abort → value).** `guard { … }` runs a block and reifies any
 abort inside it as an `Err`, so the expression is always a **`Result[T]`** (`T` = the block's value
@@ -132,10 +155,12 @@ match guard { work() } {
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
-is implemented **for the error taxonomy** — the six built-in kinds and any built-in abort a `guard` reifies;
-the general existential test `x is T` for a **non-error** type is **not yet available**. The set of errors
-reachable here is treated as **open** for coverage, so an `is`-chain can never be exhaustive: a **catch-all is
-mandatory**, and an unmatched error aborts (`MatchError`) like any uncovered `match`.
+is implemented **for the error taxonomy** (**[implemented]**) — the six built-in kinds and any built-in
+abort a `guard` reifies; the general existential test `x is T` for a **non-error** type is **[not yet]**.
+The set of errors reachable here is treated as **open** for coverage, so an `is`-chain can never be
+exhaustive: a **catch-all is mandatory**. An unmatched error would abort like any uncovered `match` — but
+`MatchError` is **[not yet]** a reified kind, and because the final `match` arm is always unconditional the
+compiler never emits one today (the catch-all requirement is a static rule, not a runtime `MatchError`).
 
 This splits error handling by whether you own a **closed** set. When you need an error's **kind** decided by
 value, keep it concrete — an **`Either[T, ValueError]`** (never erased) whose right a `match` reads by value.

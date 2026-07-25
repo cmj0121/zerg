@@ -6,8 +6,10 @@
 ## Closure 與高階函式
 
 Zerg 的匿名函式 `fn(…) -> R { … }` **就是** closure——first-class,只以 copy capture immutable 值與 channel
-（見 [函式與閉包](functions.zh-TW.md)）。刻意**沒有更短的 `|x|` lambda**:一點點冗長會把你**推向** Zerg 的
-procedural-first 風格,而非深層 functional 鏈。讓 closure 好讀的三招,依偏好排序:
+（見 [函式與閉包](functions.zh-TW.md)）。捕獲一個 **immutable** 值——一個 scalar,或一個 non-POD 的
+`str` / `list` / `map` / `Ref`——是 **[implemented]**；捕獲一個 **`mut`** binding 是 **[not yet]**（先把它
+快照成 immutable binding）。刻意**沒有更短的 `|x|` lambda**:一點點冗長會把你**推向** Zerg 的 procedural-first
+風格,而非深層 functional 鏈。讓 closure 好讀的三招,依偏好排序:
 
 1. **把函式命名**——first-class 函式可具名傳遞,具名的 `fn` 可重用、可測試,呼叫端也乾淨。
 2. **寫 `for` 迴圈**——往往最清楚,也最 procedural-first。
@@ -74,6 +76,14 @@ q := new_query().where("age > 18").order("name").limit(10)
 ```
 
 若要就地改 builder,則在 block 或 `with` 內,對 `mut` binding 用 `mut fn` 方法。
+
+## 解構與 pattern 支援
+
+解構可直接在 `:=` 綁定:一個 tuple `(a, b) := e` 與一個 struct `P{x, y} := e` 都一步解開 **[implemented]**——這是消費
+多重回傳或小型 record 的日常方式。在 `match`(見 [控制流](control-flow.zh-TW.md))中,**struct**、**tuple**、
+**variant**、**萬用 `_`**、**`as`**、**range**、與**負數 literal** pattern,連同它們的**巢狀**,都是
+**[implemented]**。`GRAMMAR` 允許但 **[not yet]** 的有兩種:一個**帶綁定的 or-pattern**(`A(x) | B(x) =>`)與一個
+**list pattern**(`[h, ..t]`)——list pattern 會 parse 且通過型別檢查,但在 code generation 被拒絕。
 
 ## 刻意不加的
 

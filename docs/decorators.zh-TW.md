@@ -7,11 +7,12 @@
 
 ## 集合
 
-目前**已實作**的有三個——`#[derive]`、`#[dyn]`、`#[test]`:
+目前 **[implemented]** 的有三個——`#[derive]`、`#[dyn]`、`#[test]`:
 
-- **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl:
-  `Object`（一律生成）加上可選的 `Ord`、`Hash`、`Encode`、`Decode`。使用者 spec 不可被 derive（`#[derive(MySpec)]`
-  為編譯錯誤）。見 **[Derive & Default Behavior](derive.zh-TW.md)**。
+- **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
+  受祝福集合是 **`Eq`** 與 **`Ord`**（**[implemented]**），而 **`Hash`**、**`Encode`**、**`Decode`** 已規範、但
+  **[not yet]**;**沒有自動 derive 的 `Object`**。使用者 spec 不可被 derive（`#[derive(MySpec)]` 為編譯錯誤）。見
+  **[Derive & Default Behavior](derive.zh-TW.md)**。
 - **`#[dyn]`** — 掛在泛型 `fn`。把泛型編成**一份共享的 witness-table body**,而非依型別引數各自 monomorphize——以
   zero-cost 換較小的碼,並讓 compiler 封頂實例化膨脹。見 **[Grammar](grammar.zh-TW.md)**（group 7）。
 - **`#[test]`** — 掛在 `fn`。把該函式標記為測試案例,**只在測試建置**中編譯與執行,一般建置則排除。函式不帶參數;
@@ -24,9 +25,9 @@
 
 - **`#[sealed]`** — 掛在 `struct`。*原意*是把預設的 field-wise `T(…)` constructor 降為**模組私有**,外部必須改走
   公開的自訂 constructor（具名關聯 `fn`）,而模組自身仍以 `T(…)` 建——搭配私有、帶 default 的 field 以強制不變量。
-  **尚未實作。**
+  **[not yet]**
 - **`#[repr]`** / **`#[packed]`** / **`#[align]`** — 記憶體 **layout** decorator。保留以對接外部 ABI 時控制記憶體寬度、
-  padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**尚未實作。**
+  padding 與對齊（見〈保持稀少〉與 [值與記憶體](memory.zh-TW.md)）。**[not yet]**
 
 ## 不是 macro
 

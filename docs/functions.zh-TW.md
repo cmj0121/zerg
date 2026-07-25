@@ -5,6 +5,8 @@
 
 函式是**一等值（first-class value）**：它有型別，可當引數傳遞、可回傳、可存進欄位、可綁定到變數。這**跨模組**也
 成立——透過另一個模組指名的函式就是一個普通的值:`f := other.helper` 綁定它,接著 `f(x)` 呼叫它,與本地函式完全一樣。
+把一個**裸的 top-level 函式**綁成值、以及**跨模組**這麼做,都是 **[implemented]**。一個 **generic** 函式
+**在實例化之前不是一等值**:未實例化的 generic 名字本身不是值——唯有它的型別引數在使用點被固定後才成為值。
 函式型別寫成 `fn(P...) -> R`；參數的 `mut &` 是**型別的一部分**，所以 `fn(mut &int) -> bool` 與 `fn(int) -> bool` 是不同型別
 （兩者 calling convention 不同——就地 by-ref vs 複製）。可見性**不**屬於型別：`pub` 匯出的是 top-level 函式的
 **名字**，永不隨值移動，對匿名函式也無意義。
@@ -33,6 +35,11 @@ greet("Sam", "Hi", true)     # 全 positional
 - 一個參數可宣告**預設值**——引數被省略時呼叫端所用的運算式。它在**每次被用到時於呼叫端求值**、絕不是在定義處
   求值一次，所以沒有 shared-mutable-default 的陷阱；它是普通運算式，且可讀取前面的參數（求值由左往右）。沒有預設
   的參數仍是**必填**。
+
+  > **[deviation]** 今天只有**自足的簡單常數**預設（一個 literal，如 `443` 或 `"Hello"`）會被正確 lower。一個
+  > **非平凡**的預設運算式——由運算子或呼叫組成者，例如 `greeting: str = "a" + "b"`——目前會被**錯誤處理**,而非
+  > 如規格所述每次呼叫求值。在修好之前,預設值請保持為簡單常數。
+
 - 一個**具名引數**以參數名字傳入（`loud: true`）——這正是讓你能**跳過中間的預設參數**的關鍵。規則就是慣例那套：
   positional 引數由左往右填、任何參數都可改用具名、有預設的可省略，而且**一旦具名，其後全部都要具名**（具名之後
   不能再回到 positional）。
@@ -45,9 +52,10 @@ _型別_：`fn(str, str, bool) -> str` 是型別，預設住在宣告裡、名�
 模型與 C ABI 都保持扁平，也符合 formatting 已採的 no-variadics 立場；`print` 保持是內建構造、不是使用者可定義的
 variadic。
 
-**閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** `mut` 變數不能被捕獲；要用先
-快照成 immutable binding（`snap := n`）。捕獲在語意上是**複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的
-immutable 值**(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)是**被 retain 進閉包的 refcounted 環境**、
+**閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲一個 **immutable** 值——一個
+單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——是 **[implemented]**；
+捕獲一個 **`mut`** binding 是 **[not yet]**——先把它快照成 immutable binding（`snap := n`）。捕獲在語意上是
+**複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
 而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。因為每個捕獲都是
 immutable,retain 或 clone 都不可觀察。等價地說:
 

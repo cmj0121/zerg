@@ -71,16 +71,22 @@ behavioral default；結構這一層是封閉的。
 
 ## 可 derive 的 spec 清單
 
-這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。`Object` 一律 derive；其餘經由
-`derive` **opt-in**：
+這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
+**沒有自動 derive 的相等**、也沒有隱式的 `Object`。只有 **`Eq`** 與 **`Ord`** 是 **[implemented]**;**`Hash`**、
+**`Encode`**、**`Decode`** 在此規範、但 **[not yet: Phase 2]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的
+編譯錯誤。
 
-| Spec     | 結構規則                                                | 要求（每個欄位） | 排除                           |
-| -------- | ------------------------------------------------------- | ---------------- | ------------------------------ |
-| `Object` | `equal`/`copy`/`debug`，逐欄位（可覆寫）                | —                | —                              |
-| `Ord`    | 依宣告順序 lexicographic（先 variant 順序、再 payload） | `Ord`            | 任何 `float` 欄位              |
-| `Hash`   | 合併各欄位 / tag 的 hash，維持 `equal ⇒ 同 hash`        | `Hash`           | 任何 `float` 欄位              |
-| `Encode` | product 逐欄位、sum 先 tag 再 payload                   | `Encode`         | `chan` / `Ref` / `fn` / handle |
-| `Decode` | 逐欄位 / 由 tag + payload 重建                          | `Decode`         | `chan` / `Ref` / `fn` / handle |
+| Spec     | 結構規則                                      | 要求（每欄位） | 排除                           |
+| -------- | --------------------------------------------- | -------------- | ------------------------------ |
+| `Eq`     | 逐欄位 `eq`/`ne`（`==` / `!=`）               | `Eq`           | —                              |
+| `Ord`    | 逐欄位 lexicographic、再依 variant 順序       | `Eq` 與 `Ord`  | 任何 `float` 欄位              |
+| `Hash`   | 合併各欄位 / tag 的 hash（`equal ⇒ 同 hash`） | `Hash`         | 任何 `float` 欄位              |
+| `Encode` | product 逐欄位、sum 先 tag 再 payload         | `Encode`       | `chan` / `Ref` / `fn` / handle |
+| `Decode` | 逐欄位 / 由 tag + payload 重建                | `Decode`       | `chan` / `Ref` / `fn` / handle |
+
+`Eq` 是 `struct` / `enum` 上 `==` / `!=` 的唯一來源:一個既無 `#[derive(Eq)]`、也無手寫 `impl Eq` 的型別**不能**
+用 `==` 比較——那是編譯錯誤、不是靜默的結構化 default。`Ord` 要求 `Eq`(super-spec `spec Ord: Eq`),所以
+`#[derive(Ord)]` 也逼你一併 derive——或手寫——`Eq`。
 
 不符要求的欄位會讓 derive 變成**點名該欄位的編譯錯誤**，絕不靜默略過——`#[derive(Ord)]` 若含 `float`
 欄位會被拒，正如 [Spec 與 Generics](specs.zh-TW.md) 裡手寫規則所要求（`float` 無 total order；請手寫並以
@@ -90,8 +96,8 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 
 - **遞迴 / 自我指涉**（auto-boxed）型別可正常 derive——生成的 impl 會像對待任何欄位一樣，遞迴穿過那層
   透明的 box。
-- **`Ref` 值**（`chan`、`Ref[T]`）遵循 `Object.copy`（refcount-bump），並在 `equal` 下以 identity 比較；
-  它不是 `Encode`/`Decode`，所以持有它的型別無法 derive 那兩者。
+- **`Ref` 值**（`chan`、`Ref[T]`）以 refcount-bump 複製（記憶體模型的規則、不是 spec），並在 derive 出的 `Eq`
+  下以 identity 比較；它不是 `Encode`/`Decode`，所以持有它的型別無法 derive 那兩者。
 - **新增一個 `enum` variant** 會自動重新 derive——作者沒有 `match` 要更新，因為走訪結構的是 compiler，
   不是使用者程式。
 
@@ -105,6 +111,10 @@ canonical `±0.0`、把 `NaN` 放在一端來處理）。
 - `#[derive(…)]` 內只能是**受祝福**的 spec；放使用者 spec 是編譯錯誤。
 
 ## Serialization——完整範例
+
+> **[not yet: Phase 2]** `Encode` / `Decode`——以及下方用到的 `Sink` / `Source` spec——都已規範、但尚未實作;
+> 今天 `#[derive(Encode, Decode)]` 是編譯錯誤,因為受祝福的可 derive 集合恰是 `Eq` 與 `Ord`。以下範例展示的是
+> 結構化 derive **意圖中**的樣貌。
 
 serialization 正是 structural derive 存在的目的：一種機械式、逐欄位的對映，沒人該為每個型別手寫，但它
 既不需要 reflection、也不需要 macro。

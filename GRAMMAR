@@ -530,7 +530,7 @@ const-expr   ::= expr        # SEMANTIC restriction: compile-time-foldable (see 
 # type's structure; other decorators (layout, logging, FFI, …) slot in here later.
 decorator    ::= '#[' deco-item ( ',' deco-item )* ']'
 deco-item    ::= identifier ( '(' deco-arg ( ',' deco-arg )* ')' )?
-deco-arg     ::= type-name | const-expr        # derive(Encode, Decode), align(16), align(SIZE*2), …
+deco-arg     ::= type-name | const-expr        # derive(Eq, Ord), align(16), align(SIZE*2), …
 
 # A generic parameter may carry a spec BOUND — 'T: Ord' means every method a body calls
 # on a T comes from the named specs (a '+' conjunction: 'T: Ord + Hash' grants both).

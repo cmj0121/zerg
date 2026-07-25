@@ -4,12 +4,15 @@ Zerg 的內建容器——**`list`**、**`map`**、**`set`**，外加定長的 *
 型別，不弄變體動物園。它們就是普通的 **scope-owned 值**，建立在 [語言參考](language.zh-TW.md) 之上。也有
 [English](collections.md) 版本。
 
-| 型別        | 角色                 | 元素／key 需求       | iteration 順序 |
-| ----------- | -------------------- | -------------------- | -------------- |
-| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         |
-| `map[K, V]` | 一張**關聯**表       | `K: Hash`            | **插入**序     |
-| `set[T]`    | 一個**唯一成員**集合 | `T: Hash`            | **插入**序     |
-| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         |
+| 型別        | 角色                 | 元素／key 需求       | iteration 順序 | 狀態              |
+| ----------- | -------------------- | -------------------- | -------------- | ----------------- |
+| `list[T]`   | 一個**有序序列**     | 任意 `T`（無 bound） | 索引序         | **[implemented]** |
+| `map[K, V]` | 一張**關聯**表       | `K: Eq + Hash`       | **插入**序     | **[implemented]** |
+| `set[T]`    | 一個**唯一成員**集合 | `T: Eq + Hash`       | **插入**序     | **[not yet]**     |
+| `[T; N]`    | 一個**定長陣列**     | 任意 `T`（無 bound） | 索引序         | **[implemented]** |
+
+上表的 `map` key 需求是預期的那一種；這個階段 key 僅限 **`int`** 或 **`str`**（見下方 [key](#keyeq-免費hash-顯式)），
+而 `set[T]` 在型別與值兩種位置都是 **[not yet]**。
 
 更豐富的形狀都是組合出來的，不是新的內建型別。`list[byte]` 是原始位元組序列（可索引、可含 NUL）；`str` 還是獨立的
 immutable primitive（見下）。
@@ -17,9 +20,11 @@ immutable primitive（見下）。
 ## 是值，不是 reference
 
 collection 是 **scope-owned 值**：**copy-by-value**（compiler 安全時 elide 或 move）、scope 一結束就釋放、**無
-aliasing**——複製會深拷貝元素、並對含有的 `Ref` 值（channel 或 `Ref[T]`）refcount-bump，就是既有的記憶體規則。
-不會有「兩個名字共用一個容器」這種事：要共享來讀就用不可變傳參，要共享來改就用 `mut &` param；經 channel 傳送的
-collection 跟其他 payload 一樣，都是用複製的。
+aliasing**——複製會**深拷貝**元素、並對它持有的任何 **reference-counted** 元素做 **retain**（refcount-bump）：一個
+`chan`、一個 `Ref[T]`、一個 `str`、或一個遞迴型別的裝箱 tail。這正是那條記憶體規則——值型別的部分被複製、
+reference-counted 的部分被共享（見 [值與記憶體](memory.zh-TW.md#複製語意-vs-參照語意)）。不會有「兩個名字共用一個
+容器」這種事：要共享來讀就用不可變傳參，要共享來改就用 `mut &` param；經 channel 傳送的 collection 跟其他 payload
+一樣，都是用複製的。`list` 與 `map` 的值語意是 **[implemented]**。
 
 ## 可變性——一個 per-binding 的 knob
 
@@ -40,12 +45,16 @@ mut ys := [1, 2, 3]
 ys.append(4)               # 增長 · ys[0] = 9  # 改 · ys = [2, 4]  # 重指
 ```
 
-## key——`equal` 免費、`Hash` 顯式
+## key——`Eq` 免費、`Hash` 顯式
 
-`list[T]` 接受**任意** `T`（只需每個值都有的結構操作）。`map` 的 key／`set` 的元素需要 **`Hash`**（key 以 `equal` 比較）。
-這兩半是刻意不對稱的：`Object` 會 **auto-derive `equal`**，但 **`Hash` 不 derive——型別得自己顯式實作**才能當 key，讓
-「什麼能當 key」是 opt-in、`safe by default` 的決定。作者要負起 compiler 無法檢查的契約：**equal ⇒ same hash**。
-因為 key 是用凍結快照 **copy-in** 進去的，所以就算是 `mut` collection 也能拿來當 key。
+`list[T]` 接受**任意** `T`（只需每個值都有的結構操作）。`map` 的 key／`set` 的元素同時需要**相等性**與 **`Hash`**
+——key 以 `==` 比較並雜湊。兩者都不是自動的：相等性經 **`derive(Eq)`**（或手寫 `impl Eq`）opt-in，而 **`Hash` 同樣
+顯式**——型別經 `derive(Hash)` 或手寫取得——讓「什麼能當 key」是 opt-in、`safe by default` 的決定。作者要負起
+compiler 無法檢查的契約：**equal ⇒ same hash**。因為 key 是用凍結快照 **copy-in** 進去的，所以就算是 `mut`
+collection 也能拿來當 key。
+
+> **狀態。** 預期的規則——**任何 `Eq + Hash` 型別**皆可當 key——是 **[not yet]**。這個階段 `map` 的 key 僅限
+> **`int`** 或 **`str`**；`derive(Hash)` 與一般的 keyed 型別尚未建置，而 `set[T]` 整體是 **[not yet]**。
 
 ## 存取——`[]` 斷言、`.get` 檢查
 
@@ -70,17 +79,23 @@ semantics，而唯讀情況維持**零拷貝**；COW 是與 copy-elision、move 
 任何看得見的共享，只是讓 `copy` 更便宜。
 
 於是 lexer 用索引掃描（`xs[i]` 為 O(1)）、用 `slice` 取唯讀窗格而零複製，只在保留一個 token 時才實體化成 `str`。
-**`x[a..b]`** slice-index 語法糖延後到 grammar（見待決）；在那之前用 `slice(a, b)`。
+
+> **[not yet]** 切片這個階段尚未建置：`xs.slice(a, b)` 與 **`x[a..b]`** slice-index 語法糖（後者在 grammar 層也
+> 延後——見 [待決](#待決)）都還不可用。上面那個唯讀、copy-on-write 的設計是預期語意。
 
 ## 順序與相等性
 
 `list` 依索引序走訪；`map`／`set` 依**插入序**——有決定性、不會有 hash 亂序的驚嚇。走訪時**以值讀取每個元素**（可
-elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 collection 是 `mut`）。相等性是結構性的：`list`
+elide 成唯讀 by-ref）；要就地改就綁 `mut x`（一個 by-ref，要求 collection 是 `mut`）。預期的結構相等性是：`list`
 **依序**比，`map`／`set` **與順序無關**（插入序決定 iteration，永遠不會決定相等）。
+
+> **[not yet]** 容器相等性尚未建置：今天用 `==` / `!=` 比較兩個 `list` 或兩個 `map` 是一個**大聲的 compile
+> error**，而 `set[T]` 還不存在。只有 **`str ==`** 能比。`for mut x` 走訪一個 **non-POD** 元素的 collection
+> （一個 `list[str]`、或遞迴／裝箱型別的元素）也是 **[not yet]**——走訪 POD 元素則可用。
 
 ```text
 for x in xs { total = total + x }         # 讀取
-for mut x in ys { x = x * 2 }             # 就地改——ys 必須是 mut
+for mut x in ys { x = x * 2 }             # 就地改——ys 必須是 mut（今天限 POD 元素）
 ```
 
 ## 迭代與變動
@@ -108,22 +123,30 @@ N 是一個**編譯期常數**——整數 literal、top-level 或**型別 `cons
 
 ```text
 xs: [int; 4] = [1, 2, 3, 4]     # 一個 list literal，由目標型別定型為陣列——長度須為 4
-buf := [0; 256]                 # fill 形式：256 份 → [int; 256]
-row := [b'\0'; WIDTH]           # WIDTH 是 top-level const
+buf := [0; 256]                 # 裸 := ——這是 256 個的 list[int]，不是陣列 [int; 256]
+row := [b'\0'; WIDTH]           # WIDTH 是 top-level const——在裸 := 下也是 list
 ```
 
 陣列是個普通的**值**：copy-by-value 複製全部 N 個元素（bump 所含的任何 `Ref`）、scope 結束釋放、絕不 alias——就是
 容器的值模型。其餘一切都從 `list` 已述的規則掉出來：
 
 - **建構**——list literal `[a, b, …]` 是 **context-typed**：預設 `list[T]`，當目標是 `[T; N]` 時才是陣列（長度在
-  編譯期查）。**fill 形式 `[v; N]`** 做出 N 份 `v`——用來建大陣列而不必逐一列出；沒有隱式 zero-fill。
+  編譯期查）。**fill 形式 `[v; N]`** 意圖做出 **N 份 `v`**——用來建大集合而不必逐一列出；沒有隱式 zero-fill。在裸
+  `:=` 下 fill 形式建的是一個 **`list[T]`**，不是陣列型別 `[T; N]`；陣列定型的 fill 形式（在明確的 `[T; N]` 位置）是
+  **[not yet]**。
+
+  > **[deviation]** list fill 形式目前在 **N 次迭代的每一次都重新求值 `v`**，而非把一個值複製 N 份。用純常數
+  > （`[0; 256]`）時無害，但一個元素運算式帶有副作用或可觀察成本的 fill，會被求值 N 次、而非一次。
+
 - **存取**——`a[i]` by value、bounds-check → `IndexError`，而落在 `[0, N)` 之外的**常數** index 在**編譯期**就被
   抓出；`a.get(i) -> T?` 是 checked 路徑。`mut a` 可原地改元素（`a[i] = v`），但**永遠不能 grow/shrink**——大小在
   型別裡；plain `a` 則凍結。
 - **長度**——`a.len()` 就是 N，本身是編譯期常數。
-- **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`、`for mut x in a`），恆 derive `Object`、
-  並在 `T` 具備時逐元素 derive `Ord`／`Hash`／`Encode`（兩個同型別陣列逐元素比較與雜湊），而 `a.slice(p, q)` 產出
-  **唯讀 `list[T]`** view——從陣列橋回 list 家族的 COW 通道。
+- **迭代／derive／slice**——它實作 `Iterator`／`Iterable`（`for x in a`；**`for mut x in a` 走訪 non-POD 元素是
+  [not yet]**），並**逐元素** derive：當元素型別 `T` 具備時，陣列才逐元素 derive `Eq`／`Ord`（以及建置後的
+  `Hash`／`Encode`）——兩個同型別陣列於是逐元素比較（與雜湊）。**沒有**任何一律 auto-derive 的 `Object`；相等性只來自
+  元素上的 `derive(Eq)`。`a.slice(p, q)` 意圖產出**唯讀 `list[T]`** view——從陣列橋回 list 家族的 COW 通道——但切片是
+  **[not yet]**（見 [切片](#切片唯讀子區間)）。
 
 ## 字串與位元組
 
@@ -141,5 +164,8 @@ list-collect，別用重複的 `+`（那樣每一步都會複製整個累積字�
 
 ## 待決
 
+- **`set[T]`**——唯一成員集合已在上文載明，但 **[not yet]** 尚未建置，型別與值兩種位置皆然。
+- **容器相等性**——`list` 與 `map` 上的結構性 `==` / `!=` 是 **[not yet]**；今天只有 `str ==` 能比。
+- **切片**——`slice(a, b)` 與 **`x[a..b]` slice-index 語法糖**（range-index 形式，也屬 grammar／語法層）都是
+  **[not yet]**。
 - **有序變體**——以 `Ord`（而非 `Hash`）為 key 的排序 `map`／`set`，如果有需要的話。
-- **`x[a..b]` slice-index 語法糖**——`slice(a, b)` 的 range-index 形式；屬 grammar／語法層，延後。

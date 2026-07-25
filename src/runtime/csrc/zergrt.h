@@ -417,6 +417,14 @@ const char *zrt_getenv(const char *key);
 bool        zrt_has_env(const char *key);
 void        zrt_exit(int64_t code);
 
+/* Filesystem-write leaves (sys.c): the stdlib `io.write_file` drives zrt_open_write (an
+ * fd, IOError on fail), zrt_write_bytes (write all of a borrowed list[byte], IOError on
+ * fail), and zrt_close from pure Zerg; the `fs` module uses zrt_exists / zrt_remove. */
+int64_t zrt_open_write(const char *path);
+void    zrt_write_bytes(int64_t fd, zrt_list bytes);
+bool    zrt_exists(const char *path);
+void    zrt_remove(const char *path);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

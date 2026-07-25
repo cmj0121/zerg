@@ -386,10 +386,12 @@ func (e *emitter) programUsesRuntimeStmt() bool {
 // ioIntrinsicNames are the stdlib `io` syscall floor intrinsics — the leaves of a
 // bundled io function: the write leaf and the whole-file open/read/close leaves.
 var ioIntrinsicNames = map[string]bool{
-	"__zrt_write": true,
-	"__zrt_open":  true,
-	"__zrt_read":  true,
-	"__zrt_close": true,
+	"__zrt_write":       true,
+	"__zrt_open":        true,
+	"__zrt_read":        true,
+	"__zrt_close":       true,
+	"__zrt_open_write":  true,
+	"__zrt_write_bytes": true,
 }
 
 // sysFloorIntrinsics are the non-io runtime floor leaves other bundled stdlib modules
@@ -404,6 +406,8 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_getenv":    true,
 	"__zrt_has_env":   true,
 	"__zrt_exit":      true,
+	"__zrt_exists":    true,
+	"__zrt_remove":    true,
 }
 
 // programUsesSysFloor reports whether the program lowers a non-io sys-floor intrinsic, so
@@ -618,6 +622,10 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return fmt.Sprintf("zrt_has_env(%s)", arg), true
 		case "__zrt_exit":
 			return fmt.Sprintf("zrt_exit(%s)", arg), true
+		case "__zrt_exists":
+			return fmt.Sprintf("zrt_exists(%s)", arg), true
+		case "__zrt_remove":
+			return fmt.Sprintf("zrt_remove(%s)", arg), true
 		}
 	}
 	return "", false
@@ -669,8 +677,13 @@ func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 		return "", false
 	}
 	fd, val := e.expr(n.Args[0].Value), e.expr(n.Args[1].Value)
-	if id.Name == "__zrt_write" {
+	switch id.Name {
+	case "__zrt_write":
 		return fmt.Sprintf("((int64_t)zrt_write_str(%s, %s))", fd, val), true
+	case "__zrt_write_bytes":
+		// void call used as a nil statement; the list is borrowed (read-only), so the
+		// caller (io.write_file) keeps ownership and drops it as usual.
+		return fmt.Sprintf("zrt_write_bytes(%s, %s)", fd, val), true
 	}
 	return "", false
 }
@@ -691,6 +704,8 @@ func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 	switch id.Name {
 	case "__zrt_open":
 		return fmt.Sprintf("((int64_t)zrt_open(%s))", arg), true
+	case "__zrt_open_write":
+		return fmt.Sprintf("((int64_t)zrt_open_write(%s))", arg), true
 	case "__zrt_read":
 		return fmt.Sprintf("zrt_read_fd(%s)", arg), true
 	case "__zrt_close":

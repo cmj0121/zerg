@@ -165,9 +165,10 @@ int64_t zrt_close(int64_t fd) {
  * all higher-level logic (durations, formatting) is pure Zerg above them.
  */
 
-/* zrt_time_unix returns the wall-clock time in whole seconds since the Unix epoch. */
+/* zrt_time_unix returns the wall-clock time in whole seconds since the Unix epoch. `ts`
+ * is zero-initialised so a (near-impossible) clock_gettime failure yields 0, not garbage. */
 int64_t zrt_time_unix(void) {
-	struct timespec ts;
+	struct timespec ts = {0};
 	clock_gettime(CLOCK_REALTIME, &ts);
 	return (int64_t)ts.tv_sec;
 }
@@ -175,7 +176,7 @@ int64_t zrt_time_unix(void) {
 /* zrt_time_mono returns a monotonic clock reading in nanoseconds — meaningful only as a
  * difference between two readings (measuring elapsed time), not as an absolute date. */
 int64_t zrt_time_mono(void) {
-	struct timespec ts;
+	struct timespec ts = {0};
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }
@@ -272,8 +273,8 @@ bool zrt_exists(const char *path) {
 	return access(path, F_OK) == 0;
 }
 
-/* zrt_remove deletes the file at path, aborting IOError on failure (e.g. it is missing
- * or is a non-empty directory). */
+/* zrt_remove deletes the file at path, aborting IOError on failure — e.g. it is missing,
+ * or it is a directory (unlink removes files only, never a directory). */
 void zrt_remove(const char *path) {
 	if (unlink(path) != 0) {
 		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot remove file");

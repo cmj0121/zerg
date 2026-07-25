@@ -134,15 +134,17 @@ func TestReadFileMissingGuarded(t *testing.T) {
 	}
 }
 
-// TestReadFileLowering pins the emitted C and that io.read_file lowers through the
-// intrinsic to the runtime.
+// TestReadFileLowering pins the emitted C: io.read_file's pure-Zerg loop lowers through
+// the open/read/close floor intrinsics to their runtime leaves.
 func TestReadFileLowering(t *testing.T) {
 	code, manifest, diags := CompileProgram(writeReadProg(t))
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if !strings.Contains(code, "zrt_read_file(") {
-		t.Fatalf("io.read_file should lower to zrt_read_file:\n%s", code)
+	for _, want := range []string{"zrt_open(", "zrt_read_fd(", "zrt_close("} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("io.read_file should lower to %s:\n%s", want, code)
+		}
 	}
 	if !manifest.NeedsRuntime {
 		t.Fatalf("read_file should need the runtime, got %+v", manifest)

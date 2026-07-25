@@ -8,10 +8,10 @@
 #
 # Zerg is zero-external-dependency like Go: the stdlib reaches the OS through the
 # self runtime's own primitives, never an FFI binding onto a third-party library.
-# So all I/O *logic* lives here in pure Zerg — e.g. the decimal conversion in
-# `write_int` — and only the irreducible syscall leaves stay in the runtime, reached
-# through the thin compiler primitive `__zrt_write` (write a str to an fd) and the
-# whole-file read leaf `__zrt_read_file`.
+# So all I/O *logic* lives here in pure Zerg — the decimal conversion in `write_int`,
+# the read loop in `read_file` — and only the irreducible syscall leaves stay in the
+# runtime, reached through the thin compiler primitives `__zrt_write` (write a str to
+# an fd) and the whole-file read floor `__zrt_open` / `__zrt_read` / `__zrt_close`.
 
 # write writes s to standard output (fd 1) with no trailing newline. (`print` is a
 # reserved keyword — the ambient no-import shortcut — so the module's newline-free
@@ -54,10 +54,19 @@ pub fn write_int(n: int) -> Result[nil] {
 	return write(str(out))
 }
 
-# read_file reads the whole file at path into a list[byte] — the MVP source-input leaf,
-# over the compiler read intrinsic (the FFI stand-in, like the writers). A missing or
-# unreadable file raises IOError, which `guard { io.read_file(p) }` demotes to a Result.
-# Decode the bytes with `str(...)` when the contents are text.
+# read_file reads the whole file at path into a list[byte] — pure-Zerg orchestration
+# over the runtime's open/read/close floor. It opens the file (a missing or unreadable
+# file raises IOError in the floor, which `guard { io.read_file(p) }` demotes to a
+# Result), loops the read leaf appending each chunk until end of input, then closes the
+# fd. Decode the bytes with `str(...)` when the contents are text.
 pub fn read_file(path: str) -> list[byte] {
-	return __zrt_read_file(path)
+	fd := __zrt_open(path)
+	mut out: list[byte] = []
+	for {
+		chunk := __zrt_read(fd)
+		if chunk.len() == 0 { break }
+		for b in chunk { out.append(b) }
+	}
+	__zrt_close(fd)
+	return out
 }

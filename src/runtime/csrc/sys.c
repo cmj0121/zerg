@@ -109,31 +109,43 @@ zrt_list zrt_os_args(int argc, char **argv) {
 	return l;
 }
 
-/* zrt_read_file reads the whole file at `path` into a list[byte] — the MVP source-input
- * leaf the stdlib `io` module lowers onto until the FFI binder lands (like the write
- * intrinsics above). A missing or unreadable file raises IOError, which `guard` can
- * demote to a Result. */
-zrt_list zrt_read_file(const char *path) {
-	zrt_list l;
-	zrt_list_init(&l, sizeof(uint8_t), NULL);
+/*
+ * Whole-file read floor (Phase 1, pure-Zerg io). These are the irreducible syscall
+ * leaves the stdlib `io.read_file` lowers onto — thin 1:1 wrappers, no loop of their
+ * own: the open/read-chunk/close ORCHESTRATION lives in pure Zerg (src/stdlib/io.zg),
+ * per the zero-external-dependency principle (the runtime is the self syscall layer,
+ * like Go's). An fd crosses to Zerg as a plain int.
+ */
+
+/* zrt_open opens path read-only and returns its fd, aborting IOError when the file
+ * cannot be opened (a value-failure that `guard { io.read_file(p) }` demotes). */
+int64_t zrt_open(const char *path) {
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot open file");
 	}
+	return (int64_t)fd;
+}
+
+/* zrt_read_fd reads up to 4096 bytes from fd into a fresh list[byte] chunk — one
+ * iteration of io.read_file's pure-Zerg loop. An empty chunk marks end of input; a
+ * read error aborts IOError. */
+zrt_list zrt_read_fd(int64_t fd) {
+	zrt_list l;
+	zrt_list_init(&l, sizeof(uint8_t), NULL);
 	uint8_t buf[4096];
-	for (;;) {
-		ssize_t n = read(fd, buf, sizeof(buf));
-		if (n < 0) {
-			close(fd);
-			zrt_abort_kind(ZRT_ERR_IO, "IOError: read failed");
-		}
-		if (n == 0) {
-			break;
-		}
-		for (ssize_t i = 0; i < n; i++) {
-			zrt_list_push(&l, &buf[i]);
-		}
+	ssize_t n = read((int)fd, buf, sizeof(buf));
+	if (n < 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: read failed");
 	}
-	close(fd);
+	for (ssize_t i = 0; i < n; i++) {
+		zrt_list_push(&l, &buf[i]);
+	}
 	return l;
+}
+
+/* zrt_close closes fd, returning close(2)'s status; io.read_file calls it once the
+ * loop hits end of input. */
+int64_t zrt_close(int64_t fd) {
+	return (int64_t)close((int)fd);
 }

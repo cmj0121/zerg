@@ -117,8 +117,12 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.derefRef(n), true
 		case "__zrt_write":
 			return c.writeIntrinsic(n, Str), true
-		case "__zrt_read_file":
-			return c.readFileIntrinsic(n), true
+		case "__zrt_open":
+			return c.fdIntrinsic(n, Str, Int), true
+		case "__zrt_read":
+			return c.readIntrinsic(n), true
+		case "__zrt_close":
+			return c.fdIntrinsic(n, Int, Int), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -335,17 +339,30 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	return Int
 }
 
-// readFileIntrinsic checks the source-input intrinsic `__zrt_read_file(path)`: a str
-// path, yielding a list[byte] of the file's contents. It is the MVP leaf the stdlib `io`
-// module lowers onto until the FFI binder lands (like the write intrinsics).
-func (c *checker) readFileIntrinsic(n *ast.Call) Type {
+// fdIntrinsic checks a one-argument whole-file floor intrinsic that yields an int:
+// `__zrt_open(path)` (arg str, an fd out) and `__zrt_close(fd)` (arg int, a status
+// out). These are the runtime's own syscall leaves that io.read_file drives from pure
+// Zerg; a failed open aborts IOError in the runtime.
+func (c *checker) fdIntrinsic(n *ast.Call, arg, ret Type) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "file intrinsic takes 1 argument, got %d", len(n.Args))
+		c.synthArgs(n)
+		return ret
+	}
+	c.check(n.Args[0].Value, arg)
+	return ret
+}
+
+// readIntrinsic checks the read floor intrinsic `__zrt_read(fd)`: an int fd, yielding
+// one list[byte] chunk (empty at end of input). io.read_file loops it in pure Zerg.
+func (c *checker) readIntrinsic(n *ast.Call) Type {
 	result := &types.List{Elem: types.Byte}
 	if len(n.Args) != 1 {
-		c.errorf(n.Span(), "read-file intrinsic takes (path), got %d argument(s)", len(n.Args))
+		c.errorf(n.Span(), "read intrinsic takes (fd), got %d argument(s)", len(n.Args))
 		c.synthArgs(n)
 		return result
 	}
-	c.check(n.Args[0].Value, Str)
+	c.check(n.Args[0].Value, Int)
 	return result
 }
 

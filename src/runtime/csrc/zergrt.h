@@ -393,9 +393,13 @@ const char *zrt_str_from_runes(zrt_list runes);
  * a malformed string and OverflowError outside the int64 range (str.c). */
 int64_t zrt_parse_int(const char *s);
 
-/* zrt_read_file reads a whole file into a list[byte], raising IOError on failure — the
- * MVP source-input leaf the `io` module lowers onto (sys.c). */
-zrt_list zrt_read_file(const char *path);
+/* Whole-file read floor (sys.c): thin syscall leaves the stdlib `io.read_file` drives
+ * from pure Zerg. zrt_open returns an fd (IOError on a failed open); zrt_read_fd reads
+ * one up-to-4096-byte list[byte] chunk (empty = end of input, IOError on error);
+ * zrt_close closes the fd. */
+int64_t zrt_open(const char *path);
+zrt_list zrt_read_fd(int64_t fd);
+int64_t  zrt_close(int64_t fd);
 
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 

@@ -18,6 +18,7 @@ For the compiler-provided functions that need **no** import, see [Built-in Funct
 | [`fs`](#fs)           | `import "fs"`      | filesystem structure — existence, removal        |
 | [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch  |
 | [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`           |
+| [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser |
 | [`time`](#time)       | `import "time"`    | wall-clock and monotonic clocks                  |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
@@ -79,6 +80,27 @@ unchanged. An empty `split` separator, or a negative `repeat` count, raises `Val
 | `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace              |
 | `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase           |
 | `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase           |
+
+## `ascii`
+
+Single-byte **ASCII** classification — the honest tool for tokenising ASCII source (a byte ≥ 128 is never a
+letter/digit/space here). The predicate set mirrors C's `<ctype.h>`; `to_upper` / `to_lower` are the
+single-byte counterparts of the `strings` case folds; `digit_val` / `hex_val` map a digit byte to its value
+(or `-1`) for hand-rolled number scanning. Every function is pure value arithmetic — no allocation.
+
+| Function                    | Summary                                                      |
+| --------------------------- | ------------------------------------------------------------ |
+| `is_digit(b: byte) -> bool` | `b` is `'0'..'9'`                                            |
+| `is_alpha(b: byte) -> bool` | `b` is `'A'..'Z'` or `'a'..'z'`                              |
+| `is_alnum(b: byte) -> bool` | `b` is a letter or a decimal digit                           |
+| `is_hex_digit(b: byte)`     | `b` is `'0'..'9'` / `'a'..'f'` / `'A'..'F'` (`-> bool`)      |
+| `is_upper(b: byte) -> bool` | `b` is `'A'..'Z'`                                            |
+| `is_lower(b: byte) -> bool` | `b` is `'a'..'z'`                                            |
+| `is_space(b: byte) -> bool` | `b` is ASCII whitespace (tab..CR, space) — the C isspace set |
+| `to_upper(b: byte) -> byte` | fold an ASCII lowercase letter to uppercase (else unchanged) |
+| `to_lower(b: byte) -> byte` | fold an ASCII uppercase letter to lowercase (else unchanged) |
+| `digit_val(b: byte) -> int` | value `0..9` of a decimal digit, or `-1`                     |
+| `hex_val(b: byte) -> int`   | value `0..15` of a hex digit (either case), or `-1`          |
 
 ## `time`
 

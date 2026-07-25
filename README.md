@@ -107,6 +107,7 @@ Pure-Zerg packages over the self runtime (zero external dependency), reached wit
 | **`fs`**      | `exists` / `remove`                          |
 | **`os`**      | `env`, `exit`, `platform`, `arch`            |
 | **`strings`** | `split` / `join`, search, trim, case folding |
+| **`ascii`**   | byte classification for a tokeniser          |
 | **`time`**    | `now` (wall clock), `monotonic`              |
 | **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`  |
 | **`rand`**    | a deterministic, non-cryptographic generator |

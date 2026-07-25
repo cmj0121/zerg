@@ -188,6 +188,13 @@ There is **no import block** in the grammar either. Binding a foreign C symbol �
 **verbatim** (no mangling, the name taken as written) into an **`unsafe fn`**-typed callable whose
 signature you supply, type-checked as FFI-safe like any boundary declaration.
 
+> **The standard library does not use this to reach the OS.** Binding a foreign symbol is for a program
+> that links a **third-party** C library (sqlite, a codec, …). Zerg itself is **zero-dependency, like Go**:
+> its own standard library reaches the operating system only through the **self runtime** — the syscall
+> floor in the C runtime — and never binds libc / libm here. So `io` and `math` are **pure Zerg over the
+> runtime**, not FFI clients (`io.read_file` loops the runtime's syscall leaves; `math.sqrt` is a numerical
+> algorithm). The runtime is the one floor; the FFI import above is how a **program** reaches beyond it.
+
 **A foreign call is `unsafe`.** Calling such a binding is legal **only inside an `unsafe` context**. The
 current unsafe model has three shapes: an **`unsafe { … }` block-expression** in a function body (it
 yields the block's value, as in `open` above); a standalone **`unsafe fn`**, unsafe throughout its body

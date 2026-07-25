@@ -11,8 +11,8 @@
   的構造就不是 Zerg 程式。
 - `docs/` 下的規格章節對**語義**為 normative——static（typing、name resolution、coherence、visibility）與
   dynamic（求值、記憶體、並行、錯誤）——並以引用 `GRAMMAR` 取代重述語法。
-- **[Compiler Internals](internals.md)** 註記（若存在）為 **informative**：描述參考 bootstrap 如何把 Zerg 降到
-  C，對 conforming implementation 沒有約束力。
+- 關於**參考 bootstrap** 如何把 Zerg 降到 C 的註記——其 C ABI、name mangling 與記憶體佈局——為 **informative**：
+  它們記錄的是某一個實作，對 conforming implementation 沒有約束力。
 - 英文文本具權威；`*.zh-TW.md` 版本是與之 lockstep 的翻譯，本身不帶獨立的 normative 效力。
 
 一個 **conforming implementation** 會接受每個「特性標為 implemented 且格式良好」的程式、依所述規則拒絕每個格式

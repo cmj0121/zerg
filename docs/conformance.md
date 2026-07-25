@@ -13,8 +13,8 @@ observable contracts (diagnostics, runtime abort, undefined behavior) every othe
 - The specification chapters under `docs/` are normative for **semantics** — static (typing, name
   resolution, coherence, visibility) and dynamic (evaluation, memory, concurrency, errors) — and reference
   `GRAMMAR` for surface forms rather than restating it.
-- The **[Compiler Internals](internals.md)** notes (if present) are **informative**: they describe how the
-  reference bootstrap lowers Zerg to C, and are not binding on a conforming implementation.
+- Notes on how the **reference bootstrap** lowers Zerg to C — its C ABI, name mangling, and memory layout —
+  are **informative**: they document one implementation and are not binding on a conforming implementation.
 - The English text is authoritative; the `*.zh-TW.md` editions are translations kept in lockstep and carry
   no independent normative weight.
 

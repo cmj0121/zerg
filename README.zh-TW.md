@@ -102,6 +102,7 @@ struct Point { x: int; y: int }
 | **`fs`**      | `exists` / `remove`                  |
 | **`os`**      | `env`、`exit`、`platform`、`arch`    |
 | **`strings`** | `split` / `join`、搜尋、trim、大小寫 |
+| **`ascii`**   | tokeniser 用的位元組分類             |
 | **`time`**    | `now`（牆鐘）、`monotonic`           |
 | **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e` |
 | **`rand`**    | 確定性、非密碼學產生器               |

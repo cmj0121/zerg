@@ -17,6 +17,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../src/runtime/README.
 | [`fs`](#fs)           | `import "fs"`      | 檔案系統結構——存在與否、刪除       |
 | [`os`](#os)           | `import "os"`      | 環境變數、程序結束、目標平台／架構 |
 | [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
+| [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
 | [`time`](#time)       | `import "time"`    | 牆鐘與單調時鐘                     |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
@@ -77,6 +78,26 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 | `trim(s: str) -> str`                  | 去除前後的 ASCII 空白                      |
 | `to_upper(s: str) -> str`              | 把 ASCII 小寫字母折成大寫                  |
 | `to_lower(s: str) -> str`              | 把 ASCII 大寫字母折成小寫                  |
+
+## `ascii`
+
+單位元組 **ASCII** 分類——tokenise ASCII 原始碼的誠實工具（此處 byte ≥ 128 一律不算字母／數字／空白）。述詞集
+對應 C 的 `<ctype.h>`；`to_upper` / `to_lower` 是 `strings` 大小寫折疊的單位元組版本；`digit_val` / `hex_val`
+把數字位元組映成其值（否則 `-1`），供手寫數字掃描。每個函式都是純值運算——不配置記憶體。
+
+| 函式                        | 摘要                                               |
+| --------------------------- | -------------------------------------------------- |
+| `is_digit(b: byte) -> bool` | `b` 是否為 `'0'..'9'`                              |
+| `is_alpha(b: byte) -> bool` | `b` 是否為 `'A'..'Z'` 或 `'a'..'z'`                |
+| `is_alnum(b: byte) -> bool` | `b` 是否為字母或十進位數字                         |
+| `is_hex_digit(b: byte)`     | `b` 是否為 `'0'..'9'` / `'a'..'f'` / `'A'..'F'`    |
+| `is_upper(b: byte) -> bool` | `b` 是否為 `'A'..'Z'`                              |
+| `is_lower(b: byte) -> bool` | `b` 是否為 `'a'..'z'`                              |
+| `is_space(b: byte) -> bool` | `b` 是否為 ASCII 空白（tab..CR、space）——C isspace |
+| `to_upper(b: byte) -> byte` | 把 ASCII 小寫字母折成大寫（否則原樣）              |
+| `to_lower(b: byte) -> byte` | 把 ASCII 大寫字母折成小寫（否則原樣）              |
+| `digit_val(b: byte) -> int` | 十進位數字的值 `0..9`，否則 `-1`                   |
+| `hex_val(b: byte) -> int`   | 十六進位數字（不分大小寫）的值 `0..15`，否則 `-1`  |
 
 ## `time`
 

@@ -559,6 +559,20 @@ func (e *emitter) subtreeTeardown(stmts []ast.Stmt) bool {
 				if e.containsRef(e.cur.ExprType(e.info, n.Resource)) {
 					found = true
 				}
+			case *ast.IfStmt:
+				// An if-let head over a non-POD optional (`if s := getStr()` with a `str?`,
+				// or a boxed `Node?`) evaluates the optional into a temp whose teardown is
+				// scheduled on the cleanup stack (ifChain). It is a teardown SOURCE, so the
+				// enclosing fn/loop must record a mark: an early `return`/`break`/`continue`
+				// inside the then-block unwinds to that mark, running the deferred drop —
+				// without the mark the early exit takes the no-unwind fast path and leaks the
+				// payload. The drop still runs exactly once (the normal end-of-block unwind, or
+				// the early-exit unwind that supersedes it).
+				for _, br := range n.Branches {
+					if br.Bind != "" && e.containsRef(e.cur.ExprType(e.info, br.Cond)) {
+						found = true
+					}
+				}
 			}
 		})
 	}

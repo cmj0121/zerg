@@ -198,37 +198,18 @@ func isBadType(t sema.Type) bool {
 
 // --- generated typedefs / helpers --------------------------------------------
 
-// emitResultTypedefs writes every carrier's struct typedef, before the function
-// prototypes that name one as a return/parameter type. Emits nothing when the
-// program registered no carrier.
-// emitResultTypedefs writes each carrier's struct typedef. It runs in two passes around
-// the nominal struct/enum typedefs: with plainOnly it emits only the carriers whose
-// payload is a plain (non-nominal) type, so a struct can hold one as a field; the second
-// pass (plainOnly=false) emits the rest, which wrap a nominal now complete. The carrierDone
-// set carries between passes so no carrier is emitted twice.
-func (e *emitter) emitResultTypedefs(plainOnly bool) {
-	any := false
-	for _, c := range e.orderedCarriers() {
-		if e.carrierDone[c.name] {
-			continue
-		}
-		if plainOnly && e.carrierDependsOnNominal(c) {
-			continue // wraps a nominal struct/enum: emit after the struct typedefs
-		}
-		lc := e.ctype(c.left)
-		switch c.kind {
-		case carrierResult:
-			e.line(fmt.Sprintf("typedef struct { int32_t tag; %s ok; zrt_err err; } %s;", lc, c.name))
-		case carrierOpt:
-			e.line(fmt.Sprintf("typedef struct { int32_t tag; %s ok; } %s;", lc, c.name))
-		case carrierEither:
-			e.line(fmt.Sprintf("typedef struct { int32_t tag; %s left; %s right; } %s;", lc, e.ctype(c.right), c.name))
-		}
-		e.carrierDone[c.name] = true
-		any = true
-	}
-	if any {
-		e.blank()
+// emitOneCarrier writes one carrier's struct typedef. Placement (relative to the nominal
+// struct/enum and tuple typedefs it may embed by value) is decided by emitTypeTypedefs's
+// topological order.
+func (e *emitter) emitOneCarrier(c *carrier) {
+	lc := e.ctype(c.left)
+	switch c.kind {
+	case carrierResult:
+		e.line(fmt.Sprintf("typedef struct { int32_t tag; %s ok; zrt_err err; } %s;", lc, c.name))
+	case carrierOpt:
+		e.line(fmt.Sprintf("typedef struct { int32_t tag; %s ok; } %s;", lc, c.name))
+	case carrierEither:
+		e.line(fmt.Sprintf("typedef struct { int32_t tag; %s left; %s right; } %s;", lc, e.ctype(c.right), c.name))
 	}
 }
 

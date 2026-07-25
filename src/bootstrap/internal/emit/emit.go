@@ -211,14 +211,6 @@ type emitter struct {
 	used    map[string]bool
 	counter int
 
-	// Carrier/tuple typedefs are emitted in two passes around the nominal struct/enum
-	// typedefs: a plain-payload carrier/tuple (a `str?`, `(int, str)`, …) precedes the
-	// structs so a struct can hold it by value as a field, while a nominal-wrapping one
-	// (`Box?`, `(Box, int)`) follows them. These sets record what each pass already wrote
-	// so the second pass does not re-emit it. Both nil for a program with no carrier/tuple.
-	carrierDone map[string]bool
-	tupleDone   map[string]bool
-
 	// Test-driver state (Phase 1i U2). testMode makes program() emit a generated test
 	// driver (cTestMain) in place of the ordinary `main`, forcing the runtime on; tests
 	// is the ordered set of `#[test]` signatures the driver runs. Both zero-valued for a
@@ -291,23 +283,13 @@ func (e *emitter) program() {
 	// typedef name to declare that field. Emits nothing for a program with none.
 	e.emitFnTypedefs()
 
-	// Plain-payload tuple/carrier typedefs BEFORE the nominal types, since a struct may
-	// hold one by value as a field (`name: str?`, `pos: (int, int)`) and C needs the
-	// typedef complete to declare that field. A tuple/carrier that itself wraps a nominal
-	// (`Box?`) is deferred to the second pass below, after the struct it depends on.
-	e.carrierDone, e.tupleDone = map[string]bool{}, map[string]bool{}
-	e.emitTupleTypedefs(true)
-	e.emitResultTypedefs(true)
-
-	// specialized nominal types, each before the functions that use it
-	for _, ti := range e.prog.Types {
-		e.typedef(ti)
-	}
-
-	// The remaining tuple/carrier typedefs (those wrapping a nominal struct/enum), now
-	// that the nominal typedefs they name by value are complete.
-	e.emitTupleTypedefs(false)
-	e.emitResultTypedefs(false)
+	// Struct/enum, tuple, and carrier typedefs, in one topological order: each is emitted
+	// after every type it embeds BY VALUE (a struct after its non-boxed field types, a
+	// carrier after its payload, a tuple after its elements), so an arbitrary nesting
+	// (`Outer { kid: Inner? }` -> `Inner?` -> `Inner`) orders correctly. A boxed/pointer/
+	// runtime member (str/Ref/list/map/boxed-optional/fn/channel) is a complete C type, so
+	// it imposes no order.
+	e.emitTypeTypedefs()
 
 	// The shared range value carrier, before any prototype/body that names a range
 	// value. Emits nothing for a program that materializes no range value.
@@ -375,6 +357,161 @@ func (e *emitter) typedef(ti *mono.TypeInstance) {
 	e.indent--
 	e.line("} " + ti.Mangled + ";")
 	e.blank()
+}
+
+// emitTypeTypedefs writes the struct/enum, tuple, and carrier typedefs in one topological
+// order: a node is emitted only once every type it embeds BY VALUE is emitted, and among the
+// ready nodes the lowest (rank, index) wins. The ranks — plain tuple (0), plain carrier (1),
+// struct/enum (2), nominal-wrapping tuple (3), nominal-wrapping carrier (4) — make the order
+// reproduce the historic plain-then-nominal two-pass whenever no struct embeds a
+// nominal-wrapping carrier, so an existing program stays byte-identical; the dependency
+// edges additionally satisfy an arbitrary nesting (Outer -> Inner? -> Inner) the two-pass
+// could not. S1 boxing breaks every by-value cycle, so the graph is a DAG.
+func (e *emitter) emitTypeTypedefs() {
+	type node struct {
+		key  string
+		rank int
+		idx  int
+		deps []string
+		emit func()
+	}
+	var nodes []*node
+	byKey := map[string]*node{}
+	add := func(n *node) {
+		nodes = append(nodes, n)
+		byKey[n.key] = n
+	}
+	for i, ti := range e.prog.Types {
+		ti := ti
+		add(&node{key: "T:" + ti.Mangled, rank: 2, idx: i, deps: e.nominalDepKeys(ti), emit: func() { e.typedef(ti) }})
+	}
+	for i, c := range e.orderedTuples() {
+		c := c
+		rank := 0
+		if e.tupleDependsOnNominal(c) {
+			rank = 3
+		}
+		add(&node{key: "U:" + c.name, rank: rank, idx: i, deps: e.tupleDepKeys(c), emit: func() { e.emitOneTuple(c); e.blank() }})
+	}
+	for i, c := range e.orderedCarriers() {
+		c := c
+		rank := 1
+		if e.carrierDependsOnNominal(c) {
+			rank = 4
+		}
+		add(&node{key: "C:" + c.name, rank: rank, idx: i, deps: e.carrierDepKeys(c), emit: func() { e.emitOneCarrier(c); e.blank() }})
+	}
+
+	emitted := map[string]bool{}
+	// pick returns the lowest-(rank, idx) not-yet-emitted node; when readyOnly it considers
+	// only nodes whose every in-graph dependency is already emitted.
+	pick := func(readyOnly bool) *node {
+		var best *node
+		for _, n := range nodes {
+			if emitted[n.key] {
+				continue
+			}
+			if readyOnly {
+				ready := true
+				for _, d := range n.deps {
+					if dn, ok := byKey[d]; ok && !emitted[dn.key] {
+						ready = false
+						break
+					}
+				}
+				if !ready {
+					continue
+				}
+			}
+			if best == nil || n.rank < best.rank || (n.rank == best.rank && n.idx < best.idx) {
+				best = n
+			}
+		}
+		return best
+	}
+	for range nodes {
+		n := pick(true)
+		if n == nil {
+			// A residual by-value cycle should not occur (S1 boxing breaks every back edge);
+			// break it deterministically rather than drop a typedef.
+			n = pick(false)
+		}
+		n.emit()
+		emitted[n.key] = true
+	}
+}
+
+// nominalDepKeys returns the type-graph node keys a struct/enum instance embeds BY VALUE:
+// each non-boxed field (struct) or payload slot (enum) contributes its type's direct
+// by-value dependencies. A boxed slot (S1) is a `void*` cell and imposes no order.
+func (e *emitter) nominalDepKeys(ti *mono.TypeInstance) []string {
+	var ks []string
+	for _, f := range ti.Fields {
+		if !f.Boxed {
+			ks = append(ks, e.byValueDepKeys(f.Type)...)
+		}
+	}
+	for _, v := range ti.Variants {
+		for i, pt := range v.Payload {
+			if !v.Boxed[i] {
+				ks = append(ks, e.byValueDepKeys(pt)...)
+			}
+		}
+	}
+	return ks
+}
+
+// tupleDepKeys / carrierDepKeys return the by-value dependency node keys of a tuple or
+// Result/optional/Either carrier — its element / payload types.
+func (e *emitter) tupleDepKeys(c *tupleCarrier) []string {
+	var ks []string
+	for _, el := range c.elems {
+		ks = append(ks, e.byValueDepKeys(el)...)
+	}
+	return ks
+}
+
+func (e *emitter) carrierDepKeys(c *carrier) []string {
+	ks := e.byValueDepKeys(c.left)
+	if c.kind == carrierEither {
+		ks = append(ks, e.byValueDepKeys(c.right)...)
+	}
+	return ks
+}
+
+// byValueDepKeys returns the type-graph node keys a type embeds BY VALUE: a nominal
+// struct/enum, or a tuple/optional/Either carrier. It mirrors dependsOnNominal's structural
+// recursion but yields the DIRECT dependency node (which carries its own further deps)
+// rather than a bool. A boxed-optional / str / Ref / list / map / channel / fn member is a
+// pointer or a runtime type — always a complete C type — so it contributes no edge.
+func (e *emitter) byValueDepKeys(t sema.Type) []string {
+	switch x := t.(type) {
+	case *types.Struct, *types.Enum:
+		return []string{"T:" + e.ctype(t)}
+	case *types.Tuple:
+		if c, ok := e.tupleFor(t); ok {
+			return []string{"U:" + c.name}
+		}
+		var ks []string
+		for _, el := range x.Elems {
+			ks = append(ks, e.byValueDepKeys(el)...)
+		}
+		return ks
+	case *types.Opt:
+		if e.isBoxedOpt(x) {
+			return nil
+		}
+		if c, ok := e.carrierFor(t); ok {
+			return []string{"C:" + c.name}
+		}
+		return e.byValueDepKeys(x.Elem)
+	case *types.Either:
+		if c, ok := e.carrierFor(t); ok {
+			return []string{"C:" + c.name}
+		}
+		return append(e.byValueDepKeys(x.Left), e.byValueDepKeys(x.Right)...)
+	}
+	return nil
 }
 
 // slotCtype renders a struct field or enum payload slot's C type. A Boxed slot (S1) is
@@ -2350,11 +2487,30 @@ func (e *emitter) fieldSlot(si *mono.TypeInstance, i int, arg ast.Expr) string {
 	if ft == nil {
 		return e.expr(arg)
 	}
-	if boxed || e.containsRef(ft) {
+	// A POD optional field (`int?`/`bool?`/`float?`) is a value CARRIER (`{tag, ok}`) even
+	// though containsRef is false, so its argument must be wrapped (Some -> `{.tag=0,.ok=v}`
+	// / nil -> `{.tag=1}`) exactly like a non-POD (`str?`) or boxed field — emitting the raw
+	// value would land it in the carrier's `tag` slot and read back as absent. A non-POD or
+	// boxed field already takes this branch via containsRef/boxed; a plain (non-carrier) POD
+	// field stays the byte-identical raw expression.
+	if boxed || e.containsRef(ft) || e.isOptCarrierType(ft) {
 		et := e.cur.ExprType(e.info, arg)
 		return e.wrapValue(ft, et, e.copyValue(et, arg))
 	}
 	return e.expr(arg)
+}
+
+// isOptCarrierType reports whether a type is a non-boxed Optional that lowers to a value
+// carrier (`{tag, ok}`) — the shape a struct-field construction must route through
+// wrapValue. A boxed optional (`Node?`, a `void*` cell) is not a value carrier and takes
+// the boxed slot path instead.
+func (e *emitter) isOptCarrierType(t sema.Type) bool {
+	o, ok := t.(*types.Opt)
+	if !ok || e.isBoxedOpt(o) {
+		return false
+	}
+	_, has := e.carrierFor(o)
+	return has
 }
 
 // fieldTypeBoxed returns the i-th field's concrete type and boxed mark from a struct

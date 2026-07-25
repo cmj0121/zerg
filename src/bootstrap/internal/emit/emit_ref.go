@@ -271,6 +271,9 @@ func (e *emitter) prepareRuntime() {
 		e.needsIO = true
 		e.needsRuntime = true
 	}
+	if e.programUsesSysFloor() {
+		e.needsRuntime = true
+	}
 	if e.programUsesFormat() {
 		e.needsFormat = true
 		e.needsRuntime = true
@@ -387,6 +390,37 @@ var ioIntrinsicNames = map[string]bool{
 	"__zrt_open":  true,
 	"__zrt_read":  true,
 	"__zrt_close": true,
+}
+
+// sysFloorIntrinsics are the non-io runtime floor leaves other bundled stdlib modules
+// lower onto (the `time` clock leaves; os/fs join later). Like the io floor they live in
+// the always-linked sys.c, so a program that lowers one needs the runtime — but not the
+// io-specific NeedsIO flag.
+var sysFloorIntrinsics = map[string]bool{
+	"__zrt_time_unix": true,
+	"__zrt_time_mono": true,
+}
+
+// programUsesSysFloor reports whether the program lowers a non-io sys-floor intrinsic, so
+// the runtime is linked. A shadowed spelling is left to the ordinary call path.
+func (e *emitter) programUsesSysFloor() bool {
+	for node := range e.info.ExprTypes {
+		call, ok := node.(*ast.Call)
+		if !ok {
+			continue
+		}
+		id, ok := call.Callee.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if _, shadowed := e.info.Refs[id]; shadowed {
+			continue
+		}
+		if sysFloorIntrinsics[id.Name] {
+			return true
+		}
+	}
+	return false
 }
 
 // programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic —
@@ -540,7 +574,30 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	if s, ok := e.fileIntrinsicEmit(n); ok {
 		return s, true
 	}
+	if s, ok := e.sysIntrinsicEmit(n); ok {
+		return s, true
+	}
 	return e.writeIntrinsicEmit(n)
+}
+
+// sysIntrinsicEmit lowers the non-io sys-floor intrinsics that the stdlib drives — the
+// `time` clock leaves `__zrt_time_unix()` / `__zrt_time_mono()`, each a nullary call to
+// its always-linked sys.c leaf. A shadowed name is left to the ordinary call path.
+func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok || len(n.Args) != 0 {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	switch id.Name {
+	case "__zrt_time_unix":
+		return "((int64_t)zrt_time_unix())", true
+	case "__zrt_time_mono":
+		return "((int64_t)zrt_time_mono())", true
+	}
+	return "", false
 }
 
 // atomicIntrinsicEmit lowers the Phase 1f Atomic[int] intrinsics — `__zrt_atomic_load`

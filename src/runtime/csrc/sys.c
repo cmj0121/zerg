@@ -7,11 +7,20 @@
  * isolated marks the one spot a freestanding backend swaps libc read/write for a
  * platform console.
  */
+
+/* Ask for the POSIX.1-2008 surface BEFORE any header: under a strict `-std=c11` glibc
+ * hides POSIX declarations (clock_gettime, the CLOCK_* macros, open/read/…) unless a
+ * feature-test macro is set. macOS exposes them regardless; this keeps Linux in step. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "zergrt.h"
 
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 void zrt_report(const char *msg) {
@@ -148,4 +157,24 @@ zrt_list zrt_read_fd(int64_t fd) {
  * loop hits end of input. */
 int64_t zrt_close(int64_t fd) {
 	return (int64_t)close((int)fd);
+}
+
+/*
+ * Clock leaves the stdlib `time` module lowers onto. Thin wrappers over clock_gettime;
+ * all higher-level logic (durations, formatting) is pure Zerg above them.
+ */
+
+/* zrt_time_unix returns the wall-clock time in whole seconds since the Unix epoch. */
+int64_t zrt_time_unix(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (int64_t)ts.tv_sec;
+}
+
+/* zrt_time_mono returns a monotonic clock reading in nanoseconds — meaningful only as a
+ * difference between two readings (measuring elapsed time), not as an absolute date. */
+int64_t zrt_time_mono(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }

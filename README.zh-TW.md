@@ -78,6 +78,37 @@ struct Point { x: int; y: int }
 
 控制流保持扁平：`break` / `continue` 只作用於最近的 `for`，且**沒有 loop label**——要離開外層迴圈，抽成函式並 `return`。
 
+## 內建函式（Built-in functions）
+
+一組**固定**的、編譯器內建的函式——免 `import`：
+
+| 內建                                      | 作用                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------- |
+| `Ref(x)` / `deref(r)`                     | 建立 / 讀取 reference-counted box                                          |
+| `int` `uint` `float` `bool` `byte` `rune` | 原生型別轉換 `T(x)`；`int("…")` 另會解析十進位字串                         |
+| `str(bytes)`、`list[byte](s)`             | str ⇄ list 的橋接（另有 `runes`）                                          |
+| `ValueError` … `KeyError`                 | 建出該固定 kind 的 `Err`                                                   |
+| `addr` `ptr` `ptr[T]` `uint(p)`           | raw pointer 運算——**僅限 `unsafe`**（加上 `.load` / `.store` / `.offset`） |
+
+`print` 是**關鍵字**、不是函式；`list.len()` 這類是**方法**。完整細節見 **[內建函式](docs/builtins.zh-TW.md)**。
+
+## 標準函式庫（Standard library）
+
+站在自帶 runtime 上的純 Zerg 套件（零外部依賴），以 `import "<name>"` 取得：
+
+| 套件          | 提供                                 |
+| ------------- | ------------------------------------ |
+| **`io`**      | stdout 寫入、整檔讀／寫              |
+| **`fs`**      | `exists` / `remove`                  |
+| **`os`**      | `env`、`exit`、`platform`、`arch`    |
+| **`time`**    | `now`（牆鐘）、`monotonic`           |
+| **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e` |
+| **`rand`**    | 確定性、非密碼學產生器               |
+| **`atomic`**  | 安全的共享可變原語                   |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne` |
+
+完整目錄與簽名見 **[標準函式庫](docs/stdlib.zh-TW.md)**。
+
 ## 編譯流程（Compile Flow）
 
 ```text

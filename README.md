@@ -82,6 +82,38 @@ Each form desugars to the core — the full table is in **[Syntax Sugar](docs/sy
 Control flow stays flat: `break` / `continue` act only on the nearest `for`, and there are **no loop
 labels** — to leave an outer loop, extract a function and `return`.
 
+## Built-in functions
+
+A small, **fixed** set of compiler-recognized functions — no `import` needed:
+
+| Built-in                                  | Does                                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `Ref(x)` / `deref(r)`                     | construct / read the reference-counted box                                |
+| `int` `uint` `float` `bool` `byte` `rune` | primitive conversion `T(x)`; `int("…")` also parses a decimal string      |
+| `str(bytes)`, `list[byte](s)`             | the str ⇄ list bridges (also `runes`)                                     |
+| `ValueError` … `KeyError`                 | build an `Err` of that fixed kind                                         |
+| `addr` `ptr` `ptr[T]` `uint(p)`           | raw-pointer ops — **`unsafe` only** (plus `.load` / `.store` / `.offset`) |
+
+`print` is a **keyword**, not a function; `list.len()` and friends are **methods**. Full detail —
+**[Built-in Functions](docs/builtins.md)**.
+
+## Standard library
+
+Pure-Zerg packages over the self runtime (zero external dependency), reached with `import "<name>"`:
+
+| Package       | Provides                                     |
+| ------------- | -------------------------------------------- |
+| **`io`**      | stdout writers, whole-file read/write        |
+| **`fs`**      | `exists` / `remove`                          |
+| **`os`**      | `env`, `exit`, `platform`, `arch`            |
+| **`time`**    | `now` (wall clock), `monotonic`              |
+| **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`  |
+| **`rand`**    | a deterministic, non-cryptographic generator |
+| **`atomic`**  | the safe shared-mutable primitive            |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne`         |
+
+Full catalogue with signatures — **[Standard Library](docs/stdlib.md)**.
+
 ## Compile Flow
 
 ```text

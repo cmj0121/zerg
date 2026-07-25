@@ -12,14 +12,14 @@ Not listed here, because they are **not** built-in functions: `print` / `raise` 
 
 ## Summary
 
-| Built-in                                     | Signature                           | Summary                            |
-| -------------------------------------------- | ----------------------------------- | ---------------------------------- |
-| [`Ref`](#ref) / [`deref`](#deref)            | `Ref(x) -> Ref[T]`, `deref(r) -> T` | build / read a refcounted box      |
-| [conversions](#primitive-conversions)        | `int(x)` `float(x)` … `T(x)`        | primitive re-construction          |
-| [`int(s)`](#parsing-a-string)                | `int(s: str) -> int`                | parse a decimal string             |
-| [`str` / `list` bridges](#str--list-bridges) | `str(bytes)`, `list[byte](s)`       | str ⇄ list (also `runes`)          |
-| [error kinds](#error-constructors)           | `ValueError(msg)` … `KeyError(msg)` | build an `Err` of a fixed kind     |
-| [raw pointers](#raw-pointers-unsafe)         | `addr` `ptr` `ptr[T]` `.load` …     | bare-metal ops — **`unsafe` only** |
+| Built-in                              | Signature                     | Summary                        |
+| ------------------------------------- | ----------------------------- | ------------------------------ |
+| [`Ref`](#ref) / [`deref`](#deref)     | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
+| [conversions](#primitive-conversions) | `int(x)` … `T(x)`             | primitive re-construction      |
+| [number parse](#parsing-a-string)     | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
+| [str bridges](#str--list-bridges)     | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
+| [error kinds](#error-constructors)    | `ValueError(msg)` …           | build an `Err` of a kind       |
+| [raw pointers](#raw-pointers-unsafe)  | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
 
 ## `Ref`
 
@@ -41,12 +41,15 @@ loses range), so a conversion is checked, not silent. See [Types](types.md).
 
 ## Parsing a string
 
-`int(s: str) -> int` is the one conversion that **parses** rather than re-constructs: it reads an optional
-sign and decimal digits, raising `ValueError` on a malformed string and `OverflowError` on an out-of-range
-value. Demote the failure with `guard { int(s) } ?? default`.
+`int(s: str) -> int`, `uint(s: str) -> uint`, and `float(s: str) -> float` are the conversions that
+**parse** a string rather than re-construct a value: each reads the number's text, raising `ValueError` on
+a malformed string and `OverflowError` on an out-of-range value. Demote the failure with
+`guard { int(s) } ?? default`. No other target parses (`bool(s)` / `byte(s)` are rejected).
 
 ## `str` ⇄ `list` bridges
 
+- `str(x: T) -> str` where `T` is a **scalar** — render the value's built-in `display()` as text
+  (`str(42)` → `"42"`), the same text `print` and an f-string hole produce.
 - `str(bytes: list[byte]) -> str` / `str(runes: list[rune]) -> str` — build a `str`, **validating** the
   invariant (valid UTF-8, no embedded NUL); an invalid sequence raises `EncodingError`.
 - `list[byte](s: str) -> list[byte]` / `list[rune](s: str) -> list[rune]` — decode a `str` to its octets

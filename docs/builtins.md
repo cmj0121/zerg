@@ -12,14 +12,15 @@ Not listed here, because they are **not** built-in functions: `print` / `raise` 
 
 ## Summary
 
-| Built-in                              | Signature                     | Summary                        |
-| ------------------------------------- | ----------------------------- | ------------------------------ |
-| [`Ref`](#ref) / [`deref`](#deref)     | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
-| [conversions](#primitive-conversions) | `int(x)` … `T(x)`             | primitive re-construction      |
-| [number parse](#parsing-a-string)     | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
-| [str bridges](#str--list-bridges)     | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
-| [error kinds](#error-constructors)    | `ValueError(msg)` …           | build an `Err` of a kind       |
-| [raw pointers](#raw-pointers-unsafe)  | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
+| Built-in                                 | Signature                     | Summary                        |
+| ---------------------------------------- | ----------------------------- | ------------------------------ |
+| [`Ref`](#ref) / [`deref`](#deref)        | `Ref(x)`, `deref(r)`          | build / read a refcounted box  |
+| [conversions](#primitive-conversions)    | `int(x)` … `T(x)`             | primitive re-construction      |
+| [number parse](#parsing-a-string)        | `int(s)` `uint(s)` `float(s)` | parse a number from a str      |
+| [str bridges](#str--list-bridges)        | `str(42)`, `str(bytes)`       | scalar display / str ⇄ list    |
+| [error kinds](#error-constructors)       | `ValueError(msg)` …           | build an `Err` of a kind       |
+| [raw pointers](#raw-pointers-unsafe)     | `addr` `ptr` `.load` …        | bare-metal — **`unsafe` only** |
+| [`sizeof` / `alignof`](#sizeof--alignof) | `sizeof[T]`, `alignof[T]`     | a type's size / alignment      |
 
 ## `Ref`
 
@@ -70,3 +71,10 @@ Legal **only inside an `unsafe` context**. The free functions `addr(x) -> ptr[T]
 addressable value), `ptr(p) -> ptr` / `ptr[T](p) -> ptr[T]` (a raw-address cast), and `uint(p) -> uint`
 (a pointer-to-integer cast); plus the pointer **methods** `p.load()`, `p.store(v)`, and `p.offset(n)`.
 These are the one door to bare-metal work. See [Values & Memory](memory.md).
+
+## `sizeof` / `alignof`
+
+`sizeof[T] -> uint` and `alignof[T] -> uint` are a type's **byte size** and **alignment**, resolved at
+**compile time** — the one built-in that needs compiler layout knowledge, unexpressible in pure Zerg. The
+argument is a **type**, written like a type argument on `list[T]`: `sizeof[int]` (8), `sizeof[Point]`,
+`sizeof[list[byte]]`. Mainly for FFI and low-level layout. See [Values & Memory](memory.md).

@@ -19,6 +19,7 @@
 | [str 橋接](#str--list-橋接)                   | `str(42)`, `str(bytes)`       | scalar display 或 str ⇄ list  |
 | [error kind](#error-建構子error-constructors) | `ValueError(msg)` …           | 建出固定 kind 的 `Err`        |
 | [raw pointer](#raw-pointer僅限-unsafe)        | `addr` `ptr` `.load` …        | bare-metal——**僅限 `unsafe`** |
+| [`sizeof` / `alignof`](#sizeof--alignof)      | `sizeof[T]`, `alignof[T]`     | 型別的大小 / 對齊             |
 
 ## `Ref`
 
@@ -66,3 +67,9 @@
 **只在 `unsafe` 情境內**合法。自由函式 `addr(x) -> ptr[T]`（可定址值的位址）、`ptr(p) -> ptr` /
 `ptr[T](p) -> ptr[T]`（raw-address cast）、`uint(p) -> uint`（指標轉整數）；以及指標**方法** `p.load()`、
 `p.store(v)`、`p.offset(n)`。這是通往 bare-metal 的唯一入口。見 [值與記憶體](memory.zh-TW.md)。
+
+## `sizeof` / `alignof`
+
+`sizeof[T] -> uint` 與 `alignof[T] -> uint` 是型別的**位元組大小**與**對齊**，在**編譯期**決定——這是唯一需要
+編譯器 layout 知識、純 Zerg 表達不出來的 built-in。引數是**型別**，寫法與 `list[T]` 的型別引數一致：`sizeof[int]`
+（8）、`sizeof[Point]`、`sizeof[list[byte]]`。主要用於 FFI 與低階 layout。見 [值與記憶體](memory.zh-TW.md)。

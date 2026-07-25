@@ -162,6 +162,12 @@ grammar 裡也**沒有匯入區塊**。綁定一個外部 C 符號——把 `sql
 可呼叫——是一個 **stdlib 設施**：stdlib 把一個 linker 符號**原封不動**（不 mangle、名字照字面採用）解析成一個
 **`unsafe fn`** 型別的可呼叫值，其簽章由你提供，並與任何邊界宣告一樣被檢查為 FFI-safe。
 
+> **標準函式庫不靠這個碰 OS。** 綁定外部符號是給**連結第三方 C 庫**（sqlite、某個 codec……）的程式用的。
+> Zerg 本身是 **zero-dependency，like Go**：它自己的標準函式庫只透過 **self runtime**——C runtime 裡的
+> syscall floor——碰作業系統，絕不在這裡綁 libc / libm。所以 `io` 與 `math` 是**站在 runtime 上的純 Zerg**、
+> 而非 FFI 客戶（`io.read_file` 走 runtime 的 syscall leaf 迴圈；`math.sqrt` 是數值演算法）。runtime 是唯一
+> 底層；上面那套 FFI import，是**程式**要伸手到底層之外時用的。
+
 **外部呼叫是 `unsafe`。** 呼叫這樣一個綁定，**只在 `unsafe` 情境內**合法。目前的 unsafe 模型有三種形狀：函式
 本體內的一個 **`unsafe { … }` block-expression**（它產出區塊的值，如上面的 `open`）；一個獨立的 **`unsafe
 fn`**，其整個本體都是 unsafe、且只能從 unsafe 呼叫；以及一個**module 層級的 `unsafe { … }`**，它把宣告**分組**

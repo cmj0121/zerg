@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,25 @@ func TestWriteFileRoundTrip(t *testing.T) {
 	}
 	if string(data) != "hello zerg" {
 		t.Fatalf("on-disk content: got %q, want %q", data, "hello zerg")
+	}
+}
+
+// TestFSRemoveMissingAborts checks fs.remove of a missing path raises IOError.
+func TestFSRemoveMissingAborts(t *testing.T) {
+	out := runProgramRTAbort(t, "import \"fs\"\n"+
+		"fn main() {\n\tfs.remove(\"/no/such/zerg/path\")\n}\n")
+	if !strings.Contains(out, "IOError") {
+		t.Fatalf("fs.remove of a missing path should raise IOError, got %q", out)
+	}
+}
+
+// TestWriteFileFailsAborts checks io.write_file to an unopenable path raises IOError.
+func TestWriteFileFailsAborts(t *testing.T) {
+	out := runProgramRTAbort(t, "import \"io\"\n"+
+		"fn main() -> Result[nil] {\n"+
+		"\tio.write_file(\"/no/such/zerg/dir/f.txt\", list[byte](\"x\"))\n"+
+		"\treturn nil\n}\n")
+	if !strings.Contains(out, "IOError") {
+		t.Fatalf("io.write_file to a bad path should raise IOError, got %q", out)
 	}
 }

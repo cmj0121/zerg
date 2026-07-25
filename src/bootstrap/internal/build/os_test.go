@@ -36,6 +36,16 @@ func TestOSPlatformRuns(t *testing.T) {
 	}
 }
 
+// TestOSExitRuns checks os.exit terminates the process with a non-zero status after its
+// preceding output and before anything that follows.
+func TestOSExitRuns(t *testing.T) {
+	out := runProgramRTAbort(t, "import \"os\"\n"+
+		"fn main() {\n\tprint \"before\"\n\tos.exit(2)\n\tprint \"after\"\n}\n")
+	if !strings.Contains(out, "before") || strings.Contains(out, "after") {
+		t.Fatalf("os.exit: want output before the exit and none after, got %q", out)
+	}
+}
+
 // TestOSLowering pins the emitted C: the os leaves lower to their sys.c primitives and
 // pull in the runtime.
 func TestOSLowering(t *testing.T) {

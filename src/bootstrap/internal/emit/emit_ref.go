@@ -886,9 +886,35 @@ func (e *emitter) programHasRefLocal() bool {
 					found = true
 				}
 			}
+			// An if-let over a boxed nullable-Opt subject (`if n := node.next` with
+			// `next: Node?`) evaluates the optional into a `void*` temp and registers it with
+			// the zg_ref_drop slot guard (ifChain/registerDrop), even though the subject is
+			// neither a bare-Ref local nor a boxed-Opt BINDING. So the thunk must be emitted
+			// even when the program binds no other Ref local.
+			if ifst, ok := s.(*ast.IfStmt); ok {
+				for _, br := range ifst.Branches {
+					if br.Bind != "" && e.isBoxedOpt(inst.ExprType(e.info, br.Cond)) {
+						found = true
+					}
+				}
+			}
 		})
 		if found {
 			return true
+		}
+	}
+	// The if-EXPRESSION binding-head form (`x := if n := node.next { … } else { … }`)
+	// registers the same boxed-Opt slot guard. An IfExpr is an expression (walkStmts does
+	// not descend into it), so scan the recorded expression types directly for one.
+	for node := range e.info.ExprTypes {
+		ie, ok := node.(*ast.IfExpr)
+		if !ok {
+			continue
+		}
+		for _, br := range ie.Branches {
+			if br.Bind != "" && e.isBoxedOpt(e.info.ExprTypes[br.Cond]) {
+				return true
+			}
 		}
 	}
 	return false

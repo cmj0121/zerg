@@ -980,22 +980,29 @@ func (e *emitter) reassign(n *ast.Reassign) {
 		e.line(fmt.Sprintf("%s = %s;", target, rhs))
 		return
 	}
+	// Materialize the new value into a temp BEFORE releasing the old one. The RHS may
+	// read the target itself — `s = s + x` str accumulation, `xs = xs.tail` — and the
+	// inline drop below does NOT null the slot, so releasing first would free the very
+	// cell the RHS then reads (a use-after-free that silently loses the accumulator).
+	// The temp holds a retained reference across the release, so the old cell stays live
+	// until the RHS has consumed it.
+	vt := e.cur.ExprType(e.info, n.Value)
+	newVal := e.freshName("as")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(t, newVal), e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
 	// Release the old value before overwriting, so a Ref (or Ref-holding) target does
-	// not leak or, if the new value aliases the old, double-free. A whole-binding
-	// target (a name) is found in the scope's drop items and released through the
-	// binding; a sub-place target (a field or index) is not tracked as a binding, so
-	// the old value occupying that place is released directly in place.
+	// not leak. A whole-binding target (a name) is found in the scope's drop items and
+	// released through the binding; a sub-place target (a field or index) is not tracked
+	// as a binding, so the old value occupying that place is released directly in place.
 	if it, ok := e.findDrop(target); ok {
 		e.emitInlineDrop(it)
 	} else if targetIsPlace(n.Target) {
 		e.line(e.fieldDrop(t, target))
 	}
-	// Move/retain the new value into the (now released) slot, coercing to the target type —
-	// for a boxed `Opt` field (S1) this allocates the nullable box (Some) or NULL (None).
-	// The release-old → move/retain-new → store order is load-bearing for a boxed field: a
-	// field has no slot guard, so overwriting before releasing would leak the old cell.
-	vt := e.cur.ExprType(e.info, n.Value)
-	e.line(fmt.Sprintf("%s = %s;", target, e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
+	// Move the already-retained new value into the (now released) slot. The
+	// retain-new → release-old → store order is load-bearing: for a boxed `Opt` field
+	// (no slot guard) storing before releasing would leak the old cell, and for a
+	// self-referential RHS releasing before materializing would free it early.
+	e.line(fmt.Sprintf("%s = %s;", target, newVal))
 }
 
 // destructureBind lowers a destructuring bind '(a, b) := e' / 'P{x, y} := e'. It

@@ -574,8 +574,40 @@ func (e *emitter) subtreeTeardown(stmts []ast.Stmt) bool {
 					}
 				}
 			}
+			// The if-EXPRESSION binding-head form (`x := if s := f() { …; return; … } else { … }`)
+			// is the same teardown SOURCE as the IfStmt case — ifExprChain evaluates the optional
+			// into a temp and schedules its drop — but an IfExpr is an EXPRESSION, so walkStmt
+			// never descends into it. Scan the statement's own expressions for one, so a deep
+			// return/break/continue out of an if-expr then-block unwinds to the enclosing fn/loop
+			// mark and runs the deferred drop (else the early exit leaks the payload).
+			for _, ex := range stmtExprs(x) {
+				if e.exprHasIfLetTeardown(ex) {
+					found = true
+				}
+			}
 		})
 	}
+	return found
+}
+
+// exprHasIfLetTeardown reports whether an expression subtree contains an if-EXPRESSION
+// binding head over a non-POD optional — a teardown SOURCE the enclosing fn/loop must
+// record a mark for, mirroring the IfStmt if-let case. An IfExpr is an expression, so
+// walkStmt cannot reach it; this walks the expression tree (including the statements of
+// any block-valued sub-expression) to find one.
+func (e *emitter) exprHasIfLetTeardown(x ast.Expr) bool {
+	found := false
+	walkExpr(x, func(ex ast.Expr) {
+		ie, ok := ex.(*ast.IfExpr)
+		if !ok {
+			return
+		}
+		for _, br := range ie.Branches {
+			if br.Bind != "" && e.containsRef(e.cur.ExprType(e.info, br.Cond)) {
+				found = true
+			}
+		}
+	})
 	return found
 }
 
@@ -621,6 +653,160 @@ func walkStmt(s ast.Stmt, fn func(ast.Stmt)) {
 	case *ast.WithStmt:
 		walkStmts(n.Body, fn)
 	}
+}
+
+// walkExpr applies fn to x and every expression nested within it, descending into the
+// statements (and their expressions) of any block-valued sub-expression — an
+// if/guard/match/block/unsafe/closure used as a value. walkStmt only descends
+// statements, so this is the companion used to find an expression teardown source (an
+// if-EXPRESSION binding head) wherever it is nested. A nil expression is a no-op.
+func walkExpr(x ast.Expr, fn func(ast.Expr)) {
+	if x == nil {
+		return
+	}
+	fn(x)
+	switch v := x.(type) {
+	case *ast.Unary:
+		walkExpr(v.X, fn)
+	case *ast.Binary:
+		walkExpr(v.L, fn)
+		walkExpr(v.R, fn)
+	case *ast.Call:
+		walkExpr(v.Callee, fn)
+		for _, a := range v.Args {
+			walkExpr(a.Value, fn)
+		}
+	case *ast.Field:
+		walkExpr(v.X, fn)
+	case *ast.OptChain:
+		walkExpr(v.X, fn)
+	case *ast.TupleIndex:
+		walkExpr(v.X, fn)
+	case *ast.Coalesce:
+		walkExpr(v.X, fn)
+		walkExpr(v.Y, fn)
+	case *ast.Try:
+		walkExpr(v.X, fn)
+	case *ast.Force:
+		walkExpr(v.X, fn)
+	case *ast.Recv:
+		walkExpr(v.X, fn)
+	case *ast.IsExpr:
+		walkExpr(v.X, fn)
+	case *ast.Range:
+		walkExpr(v.Lo, fn)
+		walkExpr(v.Hi, fn)
+	case *ast.Diverge:
+		walkExpr(v.Value, fn)
+		walkExpr(v.From, fn)
+	case *ast.Bracket:
+		walkExpr(v.Base, fn)
+		for _, el := range v.Elems {
+			walkExpr(el, fn)
+		}
+	case *ast.TupleLit:
+		for _, el := range v.Elems {
+			walkExpr(el, fn)
+		}
+	case *ast.ListLit:
+		for _, el := range v.Elems {
+			walkExpr(el, fn)
+		}
+	case *ast.ListFill:
+		walkExpr(v.Value, fn)
+		walkExpr(v.Count, fn)
+	case *ast.MapLit:
+		for _, en := range v.Entries {
+			walkExpr(en.Key, fn)
+			walkExpr(en.Value, fn)
+		}
+	case *ast.FStr:
+		for _, p := range v.Parts {
+			walkExpr(p.Expr, fn)
+		}
+	case *ast.FCmd:
+		for _, p := range v.Parts {
+			walkExpr(p.Expr, fn)
+		}
+	case *ast.MatchExpr:
+		walkExpr(v.Subject, fn)
+		for _, arm := range v.Arms {
+			walkExpr(arm.Guard, fn)
+			walkExpr(arm.Body, fn)
+		}
+	case *ast.IfExpr:
+		for _, br := range v.Branches {
+			walkExpr(br.Cond, fn)
+			walkBlockExprs(br.Body, fn)
+		}
+		walkBlockExprs(v.Else, fn)
+	case *ast.GuardExpr:
+		walkBlockExprs(v.Body, fn)
+	case *ast.UnsafeExpr:
+		walkBlockExprs(v.Body, fn)
+	case *ast.FnExpr:
+		walkBlockExprs(v.Body, fn)
+	case *ast.ChanNew:
+		walkExpr(v.Cap, fn)
+	case *ast.Block:
+		walkBlockExprs(v, fn)
+	}
+}
+
+// walkBlockExprs applies fn to every expression appearing in a block's statements
+// (and, recursively, the block's nested statements and block-valued expressions).
+func walkBlockExprs(b *ast.Block, fn func(ast.Expr)) {
+	if b == nil {
+		return
+	}
+	walkStmts(b, func(s ast.Stmt) {
+		for _, ex := range stmtExprs(s) {
+			walkExpr(ex, fn)
+		}
+	})
+}
+
+// stmtExprs returns the expressions a statement holds directly (not the expressions of
+// its nested statement blocks, which walkStmts descends). walkExpr then walks each for a
+// nested teardown-source expression.
+func stmtExprs(s ast.Stmt) []ast.Expr {
+	switch n := s.(type) {
+	case *ast.BindStmt:
+		return []ast.Expr{n.Value}
+	case *ast.ReturnStmt:
+		return []ast.Expr{n.Value, n.Cond}
+	case *ast.PrintStmt:
+		return []ast.Expr{n.Value}
+	case *ast.ExprStmt:
+		return []ast.Expr{n.X}
+	case *ast.Reassign:
+		return []ast.Expr{n.Value}
+	case *ast.SendStmt:
+		return []ast.Expr{n.Chan, n.Value}
+	case *ast.RaiseStmt:
+		return []ast.Expr{n.Value, n.From}
+	case *ast.DeferStmt:
+		return []ast.Expr{n.Call}
+	case *ast.SpawnStmt:
+		return []ast.Expr{n.Call}
+	case *ast.IfStmt:
+		out := make([]ast.Expr, 0, len(n.Branches))
+		for _, br := range n.Branches {
+			out = append(out, br.Cond)
+		}
+		return out
+	case *ast.ForStmt:
+		return []ast.Expr{n.Cond, n.Iter}
+	case *ast.WithStmt:
+		return []ast.Expr{n.Resource}
+	case *ast.SelectStmt:
+		out := make([]ast.Expr, 0, len(n.Arms)*3)
+		for _, arm := range n.Arms {
+			out = append(out, arm.Chan, arm.Value, arm.Body)
+		}
+		return out
+	}
+	return nil
 }
 
 // --- small string helpers -----------------------------------------------------

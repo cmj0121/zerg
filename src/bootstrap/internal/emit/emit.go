@@ -967,7 +967,17 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	target := e.assignTarget(n.Target)
 	t := e.cur.ExprType(e.info, targetExpr(n.Target))
 	if !e.containsRef(t) {
-		e.line(fmt.Sprintf("%s = %s;", target, e.expr(n.Value)))
+		// A POD optional target (`int?`/`bool?`/`float?`) is a value CARRIER (`{tag, ok}`)
+		// even though containsRef is false, so the new value must be wrapped into the carrier
+		// (Some -> `{.tag=0,.ok=v}` / nil -> `{.tag=1}`) exactly like its bind initializer —
+		// a raw store would land the value in the carrier's `tag` slot and read back as absent
+		// (a silent miscompile), mirroring fieldSlot. A plain (non-carrier) POD target stays
+		// the byte-identical raw assignment.
+		rhs := e.expr(n.Value)
+		if e.isOptCarrierType(t) {
+			rhs = e.wrapValue(t, e.cur.ExprType(e.info, n.Value), rhs)
+		}
+		e.line(fmt.Sprintf("%s = %s;", target, rhs))
 		return
 	}
 	// Release the old value before overwriting, so a Ref (or Ref-holding) target does
@@ -2312,18 +2322,24 @@ func (e *emitter) call(n *ast.Call) string {
 			continue
 		}
 		// a by-value argument is copied (retain / deep copy) when it names existing
-		// storage, so the callee's own holder is independent; POD args are unchanged.
-		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+		// storage, so the callee's own holder is independent; POD args are unchanged. The
+		// copy is then coerced into the declared parameter type, so a value passed to an
+		// optional-carrier parameter is wrapped into the carrier (Some/None) rather than
+		// stored raw in the `tag` slot. wrapValue passes an equal-typed argument through
+		// unchanged, so a non-coercing call stays byte-identical.
+		argT := e.cur.ExprType(e.info, a.Value)
+		args.WriteString(e.wrapValue(e.calleeParamType(id, i), argT, e.copyValue(argT, a.Value)))
 	}
 	// A5: backfill trailing omitted parameters with their (constant) default
 	// expressions, in declaration order, so a `fn f(a, b = 10)` called as `f(1)`
 	// still passes the default. A fully-applied call has no trailing defaults and
 	// stays byte-identical.
-	for i, def := range e.trailingDefaults(id, len(n.Args)) {
+	provided := len(n.Args)
+	for i, def := range e.trailingDefaults(id, provided) {
 		if args.Len() > 0 || i > 0 {
 			args.WriteString(", ")
 		}
-		args.WriteString(e.expr(def))
+		args.WriteString(e.paramDefaultArg(id, provided+i, def))
 	}
 	return fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String())
 }
@@ -2353,6 +2369,46 @@ func (e *emitter) trailingDefaults(id *ast.Ident, provided int) []ast.Expr {
 		out = append(out, fd.Params[i].Default)
 	}
 	return out
+}
+
+// calleeParamType returns the i-th declared parameter type of a direct function call's
+// callee, or nil when the callee is not a resolved plain function or has no such
+// parameter (an indirect/method/namespace call, or an out-of-range index). The emitter
+// coerces each argument into this type through wrapValue, so a value passed to an
+// optional-carrier parameter is wrapped into the carrier. A generic callee's parameter is
+// still an unsubstituted type variable here, which is not a carrier — wrapValue passes it
+// through, so a generic call is byte-identical.
+func (e *emitter) calleeParamType(id *ast.Ident, i int) sema.Type {
+	if id == nil {
+		return nil
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok || sym == nil {
+		return nil
+	}
+	fd, ok := sym.Decl.(*ast.FuncDecl)
+	if !ok {
+		return nil
+	}
+	sig, ok := e.info.Funcs[fd.Name]
+	if !ok || i >= len(sig.Params) {
+		return nil
+	}
+	return sig.Params[i]
+}
+
+// paramDefaultArg renders a backfilled trailing parameter default (FORK-A5) coerced into
+// the callee's declared parameter type. A defaulted optional parameter
+// (`fn f(p: int? = 8080)`) must wrap its constant default into the carrier, exactly like a
+// struct field default — a raw value in an optional-carrier parameter slot is a loud cc
+// type error / silent miscompile. A non-carrier parameter (or an unresolved callee) is the
+// byte-identical raw expression.
+func (e *emitter) paramDefaultArg(id *ast.Ident, i int, def ast.Expr) string {
+	pt := e.calleeParamType(id, i)
+	if pt == nil {
+		return e.expr(def)
+	}
+	return e.defaultWrap(pt, def)
 }
 
 // namespaceCallEmit lowers a single-level imported-module member call
@@ -2471,7 +2527,7 @@ func (e *emitter) construct(n *ast.Call) string {
 	// byte-identical.
 	provided := len(n.Args)
 	for j, def := range e.trailingFieldDefaults(n, provided) {
-		parts = append(parts, e.fieldSlot(si, provided+j, def))
+		parts = append(parts, e.fieldDefaultSlot(si, provided+j, def))
 	}
 	return "((" + name + "){" + strings.Join(parts, ", ") + "})"
 }
@@ -2498,6 +2554,41 @@ func (e *emitter) fieldSlot(si *mono.TypeInstance, i int, arg ast.Expr) string {
 		return e.wrapValue(ft, et, e.copyValue(et, arg))
 	}
 	return e.expr(arg)
+}
+
+// fieldDefaultSlot renders a backfilled struct-field default (FORK-A5) coerced into the
+// field type. It mirrors fieldSlot, but because a default expression carries no recorded
+// ExprType (checkConstDefault validates its shape only, so e.cur.ExprType is bad), it
+// derives the value type through defaultWrap — so a defaulted optional field
+// (`port: int? = 8080`, docs/grammar.md's headline example) wraps its default into the
+// carrier (`{tag, ok}`) instead of dropping the raw value into the `tag` slot, where it
+// would read back as absent (a silent miscompile). A plain (non-carrier) POD field default
+// stays the byte-identical raw expression.
+func (e *emitter) fieldDefaultSlot(si *mono.TypeInstance, i int, def ast.Expr) string {
+	ft, boxed := e.fieldTypeBoxed(si, i)
+	if ft == nil {
+		return e.expr(def)
+	}
+	if boxed || e.containsRef(ft) || e.isOptCarrierType(ft) {
+		return e.defaultWrap(ft, def)
+	}
+	return e.expr(def)
+}
+
+// defaultWrap coerces a constant DEFAULT expression (a struct field or a function
+// parameter default, FORK-A5) into a target slot type. A default carries no recorded
+// ExprType, so wrapValue cannot read the value type from e.info; this derives it — `nil`
+// is the empty optional / NULL box, and any other constant is the target optional's bare
+// element (its Some payload) or, for a non-optional target, the target itself. wrapValue
+// passes a non-carrier target through unchanged, so a plain POD default is byte-identical.
+func (e *emitter) defaultWrap(target sema.Type, def ast.Expr) string {
+	vt := target
+	if _, isNil := def.(*ast.NilLit); isNil {
+		vt = sema.Nil
+	} else if o, ok := target.(*types.Opt); ok {
+		vt = o.Elem
+	}
+	return e.wrapValue(target, vt, e.copyValue(vt, def))
 }
 
 // isOptCarrierType reports whether a type is a non-boxed Optional that lowers to a value
@@ -2669,6 +2760,16 @@ func (e *emitter) payloadSlot(payload []sema.Type, boxed []bool, i int, arg ast.
 	pt := payload[i]
 	if i < len(boxed) && boxed[i] {
 		return fmt.Sprintf("%s(%s)", e.refnewName(boxPayloadType(pt)), e.copyValue(pt, arg))
+	}
+	// An optional-carrier payload (`Some(int?)` — POD `int?` or non-POD `str?`/`Inner?`) is
+	// a value CARRIER (`{tag, ok}`), so the argument must be wrapped (Some -> `{.tag=0,.ok=v}`
+	// / nil -> `{.tag=1}`) exactly like a struct field (fieldSlot). Emitting the raw value
+	// would land it in the carrier's `tag` slot and match back as absent (silent miscompile),
+	// or fail cc for a non-POD payload (loud). A boxed (cyclic) optional payload took the
+	// boxed branch above; a non-optional payload is unaffected.
+	if e.isOptCarrierType(pt) {
+		et := e.cur.ExprType(e.info, arg)
+		return e.wrapValue(pt, et, e.copyValue(et, arg))
 	}
 	if e.containsRef(pt) {
 		return e.copyValue(pt, arg)

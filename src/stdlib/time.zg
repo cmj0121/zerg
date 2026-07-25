@@ -1,0 +1,21 @@
+# time — clocks (pure-Zerg stdlib over the runtime clock floor).
+#
+# Bundled into a program that writes `import "time"`; members are reached through the
+# namespace, as `time.now()`. Zerg is zero-external-dependency: the two irreducible
+# clock reads are thin runtime leaves (`__zrt_time_unix` / `__zrt_time_mono`, over
+# clock_gettime); any higher-level logic (durations, formatting) is pure Zerg above them.
+
+# now returns the wall-clock time in whole seconds since the Unix epoch (1970-01-01 UTC).
+# It can jump backwards when the system clock is adjusted — for measuring elapsed time use
+# `monotonic` instead.
+pub fn now() -> int {
+	return __zrt_time_unix()
+}
+
+# monotonic returns a monotonic clock reading in nanoseconds. Its absolute value is
+# meaningless (it is not a date); only the DIFFERENCE between two readings is — the
+# elapsed time, which never runs backwards. Typical use: `start := time.monotonic()` …
+# `elapsed := time.monotonic() - start`.
+pub fn monotonic() -> int {
+	return __zrt_time_mono()
+}

@@ -123,6 +123,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.readIntrinsic(n), true
 		case "__zrt_close":
 			return c.fdIntrinsic(n, Int, Int), true
+		case "__zrt_time_unix", "__zrt_time_mono":
+			return c.nullaryIntrinsic(n, Int), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -350,6 +352,17 @@ func (c *checker) fdIntrinsic(n *ast.Call, arg, ret Type) Type {
 		return ret
 	}
 	c.check(n.Args[0].Value, arg)
+	return ret
+}
+
+// nullaryIntrinsic checks a zero-argument runtime intrinsic that yields ret — the
+// stdlib `time` clock leaves (`__zrt_time_unix` / `__zrt_time_mono`), thin wrappers with
+// no inputs.
+func (c *checker) nullaryIntrinsic(n *ast.Call, ret Type) Type {
+	if len(n.Args) != 0 {
+		c.errorf(n.Span(), "intrinsic takes no arguments, got %d", len(n.Args))
+		c.synthArgs(n)
+	}
 	return ret
 }
 

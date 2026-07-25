@@ -19,7 +19,7 @@ import (
 
 // files holds the embedded stdlib module sources.
 //
-//go:embed io.zg testing.zg atomic.zg math.zg
+//go:embed io.zg testing.zg atomic.zg math.zg time.zg
 var files embed.FS
 
 // FS returns the embedded standard-library source tree as an fs.FS, so the module

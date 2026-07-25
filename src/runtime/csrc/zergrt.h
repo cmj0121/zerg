@@ -401,6 +401,12 @@ int64_t zrt_open(const char *path);
 zrt_list zrt_read_fd(int64_t fd);
 int64_t  zrt_close(int64_t fd);
 
+/* Clock leaves the stdlib `time` module lowers onto (sys.c): zrt_time_unix is wall-clock
+ * seconds since the Unix epoch; zrt_time_mono is a monotonic nanosecond reading, valid
+ * only as a difference. */
+int64_t zrt_time_unix(void);
+int64_t zrt_time_mono(void);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

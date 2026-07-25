@@ -19,6 +19,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -177,4 +178,68 @@ int64_t zrt_time_mono(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
+/*
+ * Process & platform leaves the stdlib `os` module lowers onto. A str returned to Zerg
+ * must be a MANAGED cell (a str-managed program releases it, so a static/foreign pointer
+ * would crash header recovery) — sys_str_cell copies a C string into a fresh rc=1 cell,
+ * the same shape zrt_os_args builds.
+ */
+
+/* sys_str_cell copies the NUL-terminated s (NULL treated as "") into a fresh str cell. */
+static const char *sys_str_cell(const char *s) {
+	if (s == NULL) {
+		s = "";
+	}
+	size_t n = strlen(s);
+	char  *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
+	memcpy(p, s, n + 1);
+	return p;
+}
+
+/* zrt_platform / zrt_arch return the TARGET OS / architecture as a str. They resolve at
+ * C-compile time (#ifdef), so the value is exactly the platform `cc` built for. */
+const char *zrt_platform(void) {
+#if defined(__APPLE__)
+	return sys_str_cell("darwin");
+#elif defined(__linux__)
+	return sys_str_cell("linux");
+#elif defined(_WIN32)
+	return sys_str_cell("windows");
+#elif defined(__FreeBSD__)
+	return sys_str_cell("freebsd");
+#else
+	return sys_str_cell("unknown");
+#endif
+}
+
+const char *zrt_arch(void) {
+#if defined(__aarch64__) || defined(__arm64__)
+	return sys_str_cell("arm64");
+#elif defined(__x86_64__) || defined(_M_X64)
+	return sys_str_cell("x86_64");
+#elif defined(__i386__)
+	return sys_str_cell("x86");
+#elif defined(__riscv) && __riscv_xlen == 64
+	return sys_str_cell("riscv64");
+#else
+	return sys_str_cell("unknown");
+#endif
+}
+
+/* zrt_getenv returns a COPY of environment variable key's value (an empty str when the
+ * variable is unset — pair with zrt_has_env to tell the two apart). */
+const char *zrt_getenv(const char *key) {
+	return sys_str_cell(getenv(key));
+}
+
+/* zrt_has_env reports whether environment variable key is set. */
+bool zrt_has_env(const char *key) {
+	return getenv(key) != NULL;
+}
+
+/* zrt_exit terminates the process with the given status code; it does not return. */
+void zrt_exit(int64_t code) {
+	exit((int)code);
 }

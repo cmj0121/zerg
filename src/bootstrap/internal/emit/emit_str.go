@@ -127,7 +127,34 @@ func (e *emitter) strLiteral(value string) string {
 // conversion. It is the S2 gate: when true, str is managed (every str value is a cell);
 // when false, str stays a bare const char* and the program is byte-identical.
 func (e *emitter) programProducesHeapStr() bool {
-	return e.programUsesStrConcat() || e.programUsesFormat() || e.programUsesStrConv()
+	return e.programUsesStrConcat() || e.programUsesFormat() || e.programUsesStrConv() ||
+		e.programUsesStrIntrinsic()
+}
+
+// programUsesStrIntrinsic reports whether the program lowers a str-PRODUCING runtime
+// intrinsic — the os leaves `__zrt_getenv` / `__zrt_platform` / `__zrt_arch`, each of
+// which returns a FRESH str cell (sys.c's sys_str_cell). Like the other heap-str
+// producers this makes str managed, so a managed program retains/releases the cell
+// instead of leaking it.
+func (e *emitter) programUsesStrIntrinsic() bool {
+	for node := range e.info.ExprTypes {
+		call, ok := node.(*ast.Call)
+		if !ok {
+			continue
+		}
+		id, ok := call.Callee.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if _, shadowed := e.info.Refs[id]; shadowed {
+			continue
+		}
+		switch id.Name {
+		case "__zrt_getenv", "__zrt_platform", "__zrt_arch":
+			return true
+		}
+	}
+	return false
 }
 
 // programUsesStrConv reports whether the program builds a str from a byte/rune list

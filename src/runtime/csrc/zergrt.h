@@ -407,6 +407,16 @@ int64_t  zrt_close(int64_t fd);
 int64_t zrt_time_unix(void);
 int64_t zrt_time_mono(void);
 
+/* Process & platform leaves the stdlib `os` module lowers onto (sys.c). zrt_platform /
+ * zrt_arch return the compile-time TARGET OS / arch as a fresh str cell; zrt_getenv
+ * returns a COPY of an env var's value ("" when unset) and zrt_has_env tells set from
+ * unset; zrt_exit terminates the process (does not return). */
+const char *zrt_platform(void);
+const char *zrt_arch(void);
+const char *zrt_getenv(const char *key);
+bool        zrt_has_env(const char *key);
+void        zrt_exit(int64_t code);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

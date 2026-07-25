@@ -2429,27 +2429,56 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	if !ok || sym.Kind != sema.SymNamespace {
 		return "", false
 	}
+	// The resolved merged name (which follows a one-level `import pub` re-export, Phase 1g
+	// S2) is read from sema's NsMembers table when present, falling back to the direct
+	// spelling; it keys both the call target and the function's by-ref parameter shape.
+	key := sema.NamespaceMemberName(sym, id.Name, fld.Name)
+	if k, ok := e.info.NsMembers[fld]; ok {
+		key = k
+	}
+	// A `mut &` parameter of the resolved function takes the argument's ADDRESS, exactly
+	// as a direct call does — sema already checked each such argument is a mut lvalue.
+	byref := e.namespaceByRefArgs(key)
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
 			args.WriteString(", ")
 		}
-		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+		if i < len(byref) && byref[i] {
+			args.WriteString(e.addressOf(a.Value))
+		} else {
+			args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+		}
 	}
 	// A non-generic member calls the bundled top-level function directly; a generic
-	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name
-	// mono recorded for this call site. The resolved merged name (which follows a
-	// one-level `import pub` re-export, Phase 1g S2) is read from sema's NsMembers
-	// table when present, falling back to the direct spelling.
-	key := sema.NamespaceMemberName(sym, id.Name, fld.Name)
-	if k, ok := e.info.NsMembers[fld]; ok {
-		key = k
-	}
+	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name mono
+	// recorded for this call site.
 	target := e.prog.CallTarget(key)
 	if m, ok := e.cur.Calls[n]; ok {
 		target = m
 	}
 	return fmt.Sprintf("%s(%s)", target, args.String()), true
+}
+
+// namespaceByRefArgs reports, per argument position of a resolved namespace member call
+// keyed by its merged name, whether the parameter is a `mut &` reference (so the argument
+// passes by address, like a direct call). It returns nil when the function is unknown or
+// declares no such parameter, leaving those calls byte-identical.
+func (e *emitter) namespaceByRefArgs(key string) []bool {
+	sig, ok := e.info.Funcs[key]
+	if !ok || sig == nil || sig.Decl == nil {
+		return nil
+	}
+	var out []bool
+	for i, p := range sig.Decl.Params {
+		if p.Ref {
+			if out == nil {
+				out = make([]bool, len(sig.Decl.Params))
+			}
+			out[i] = true
+		}
+	}
+	return out
 }
 
 // namespaceMemberValue lowers a non-call namespace member access `ns.member` used as

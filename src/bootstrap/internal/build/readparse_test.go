@@ -50,12 +50,14 @@ func TestIntParseLowering(t *testing.T) {
 // TestStrParseRejected keeps the surface narrow: only int(s) parses a string; a str to
 // another scalar is not yet a parse, and a scalar int(x) still converts.
 func TestStrParseRejected(t *testing.T) {
+	// int/uint/float parse a string; every other target does not.
 	for _, src := range []string{
-		"fn main() {\n\tprint uint(\"5\")\n}\n",
 		"fn main() {\n\tprint byte(\"5\")\n}\n",
+		"fn main() {\n\tprint bool(\"true\")\n}\n",
+		"fn main() {\n\tprint rune(\"a\")\n}\n",
 	} {
 		if _, _, diags := Compile(src); len(diags) == 0 {
-			t.Fatalf("parsing a str to a non-int should be rejected: %s", src)
+			t.Fatalf("parsing a str to a non-int/uint/float should be rejected: %s", src)
 		}
 	}
 }

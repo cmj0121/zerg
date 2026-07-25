@@ -13,6 +13,8 @@
 
 #include "zergrt.h"
 
+#include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* str_alloc returns the payload of a fresh rc=1 string cell holding n bytes: a managed
@@ -207,6 +209,54 @@ int64_t zrt_parse_int(const char *s) {
 		return (acc == 9223372036854775808ULL) ? (-9223372036854775807LL - 1) : -(int64_t)acc;
 	}
 	return (int64_t)acc;
+}
+
+/* zrt_parse_uint parses an unsigned decimal from s — an optional '+' then one or more
+ * digits — raising ValueError on an empty string, a stray character (a '-' included), and
+ * OverflowError above UINT64_MAX. It is `uint(s)` for a str argument. */
+uint64_t zrt_parse_uint(const char *s) {
+	if (s == NULL || *s == 0) {
+		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an unsigned integer from an empty string");
+	}
+	const char *p = s;
+	if (*p == '+') {
+		p++;
+	}
+	if (*p == 0) {
+		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse an unsigned integer from a lone sign");
+	}
+	uint64_t acc = 0;
+	for (; *p != 0; p++) {
+		if (*p < '0' || *p > '9') {
+			zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid digit while parsing an unsigned integer");
+		}
+		uint64_t d = (uint64_t)(*p - '0');
+		if (acc > (UINT64_MAX - d) / 10) {
+			zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: unsigned integer out of range");
+		}
+		acc = acc * 10 + d;
+	}
+	return acc;
+}
+
+/* zrt_parse_float parses a floating-point value from s over the C library's strtod,
+ * requiring the WHOLE string to be consumed — it raises ValueError on an empty or
+ * malformed string and OverflowError when the value is out of double's range. It is
+ * `float(s)` for a str argument. */
+double zrt_parse_float(const char *s) {
+	if (s == NULL || *s == 0) {
+		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: cannot parse a float from an empty string");
+	}
+	errno = 0;
+	char  *end = NULL;
+	double v = strtod(s, &end);
+	if (end == s || *end != 0) {
+		zrt_abort_kind(ZRT_ERR_VALUE, "ValueError: invalid characters while parsing a float");
+	}
+	if (errno == ERANGE) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: float out of range");
+	}
+	return v;
 }
 
 /* zrt_str_from_runes builds a str from a list[rune], encoding each code point to UTF-8

@@ -157,9 +157,10 @@ func (e *emitter) programUsesStrIntrinsic() bool {
 	return false
 }
 
-// programUsesStrConv reports whether the program builds a str from a byte/rune list
-// (`str(bytes)` / `str(runes)`), a heap producer (str.c). The list->str bridge is the
-// only str-returning conversion; `list[byte](s)` goes the other way (it yields a list).
+// programUsesStrConv reports whether the program builds a str through the `str(x)`
+// conversion — a byte/rune list bridge (`str(bytes)` / `str(runes)`) or a scalar's
+// display (`str(42)`), both heap producers (str.c / fmt.c). `list[byte](s)` goes the
+// other way (it yields a list) and does not count.
 func (e *emitter) programUsesStrConv() bool {
 	for node, t := range e.info.ExprTypes {
 		call, ok := node.(*ast.Call)
@@ -173,10 +174,15 @@ func (e *emitter) programUsesStrConv() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		if lt, ok := e.info.ExprTypes[call.Args[0].Value].(*types.List); ok {
+		argT := e.info.ExprTypes[call.Args[0].Value]
+		if lt, ok := argT.(*types.List); ok {
 			if lt.Elem == types.Byte || lt.Elem == types.Rune {
 				return true
 			}
+			continue
+		}
+		if _, ok := sema.ScalarOf(argT); ok {
+			return true // str(scalar): the display render is a heap str
 		}
 	}
 	return false

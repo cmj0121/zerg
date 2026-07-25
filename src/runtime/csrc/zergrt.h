@@ -389,9 +389,12 @@ zrt_list zrt_str_runes(const char *s);
 const char *zrt_str_from_bytes(zrt_list bytes);
 const char *zrt_str_from_runes(zrt_list runes);
 
-/* zrt_parse_int is `int(s)` for a str: a checked decimal parse that raises ValueError on
- * a malformed string and OverflowError outside the int64 range (str.c). */
-int64_t zrt_parse_int(const char *s);
+/* zrt_parse_int / zrt_parse_uint / zrt_parse_float are `int(s)` / `uint(s)` / `float(s)`
+ * for a str: checked parses that raise ValueError on a malformed string and OverflowError
+ * out of range (str.c). */
+int64_t  zrt_parse_int(const char *s);
+uint64_t zrt_parse_uint(const char *s);
+double   zrt_parse_float(const char *s);
 
 /* Whole-file read floor (sys.c): thin syscall leaves the stdlib `io.read_file` drives
  * from pure Zerg. zrt_open returns an fd (IOError on a failed open); zrt_read_fd reads

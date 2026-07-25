@@ -33,19 +33,24 @@ func (c *checker) strToList(n *ast.Call, elem Type) Type {
 	return result
 }
 
-// strFromList types `str(bytes)` / `str(runes)` — a str built from a byte or rune list,
-// validated (valid UTF-8, no NUL) and raising on violation. The argument must be a
-// `list[byte]` or `list[rune]`.
+// strFromList types the `str(x)` conversion: a `list[byte]`/`list[rune]` builds a str
+// from its octets/code points (validated — valid UTF-8, no NUL, raising on violation),
+// and a SCALAR renders its value as text (`str(42)` -> "42"). Any other argument is
+// rejected.
 func (c *checker) strFromList(n *ast.Call) Type {
 	if len(n.Args) != 1 {
-		c.errorf(n.Span(), "str(x) builds a str from one list[byte]/list[rune], got %d arguments", len(n.Args))
+		c.errorf(n.Span(), "str(x) takes one scalar or list[byte]/list[rune], got %d arguments", len(n.Args))
 		c.synthArgs(n)
 		return Str
 	}
 	src := c.synth(n.Args[0].Value)
-	if !bad(src) && !isByteOrRuneList(src) {
-		c.errorf(n.Args[0].Value.Span(), "cannot build a str from %s; str(x) takes a list[byte] or list[rune]", src)
+	if bad(src) || isByteOrRuneList(src) {
+		return Str
 	}
+	if _, ok := ScalarOf(src); ok {
+		return Str // str(scalar): the value's text rendering
+	}
+	c.errorf(n.Args[0].Value.Span(), "cannot build a str from %s; str(x) takes a scalar or a list[byte]/list[rune]", src)
 	return Str
 }
 

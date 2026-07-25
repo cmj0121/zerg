@@ -149,11 +149,12 @@ func (c *checker) scalarConversion(n *ast.Call, name string, target Type) Type {
 	if bad(src) {
 		return target
 	}
-	// `int(s)` parses a decimal integer from a str — a checked re-construction that raises
-	// on a malformed string (docs/types.md). Other str parses (uint/float) are deferred.
+	// `int(s)` / `uint(s)` / `float(s)` parse a number from a str — a checked re-construction
+	// that raises on a malformed or out-of-range string (docs/types.md). Any other target
+	// (e.g. `bool(s)` / `byte(s)`) is not a parse.
 	if src == Str {
-		if target != Int {
-			c.errorf(n.Span(), "cannot parse a str to %s; only int(s) parses a string", name)
+		if target != Int && target != types.Uint && target != Float {
+			c.errorf(n.Span(), "cannot parse a str to %s; only int / uint / float parse a string", name)
 		}
 		return target
 	}

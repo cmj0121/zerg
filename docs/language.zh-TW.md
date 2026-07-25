@@ -1,7 +1,45 @@
 # Zerg 語言參考（Language Reference）
 
-[README](../README.zh-TW.md) 中設計原則背後的詳細語意。本頁是**地圖**：每一節說明一個主題決定了什麼、並連到它的完整參考。
-亦有 [English](language.md) 版本。
+[README](../README.zh-TW.md) 中設計原則背後的詳細語意。本頁是規格的**前言與地圖**：先陳述閱讀慣例，再索引每一章、
+概述各章決定了什麼。每則概述都連到它的完整參考。亦有 [English](language.md) 版本。
+
+## 如何閱讀本規格
+
+`docs/` 各章對**語意具規範性**；根目錄的 [`GRAMMAR`](../GRAMMAR) 檔對**語法**具規範性。Zerg 以整體被規範，而
+Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記**，標出語言與當前編譯器之間的落差：
+
+| 標記                         | 意義                                           |
+| ---------------------------- | ---------------------------------------------- |
+| **[implemented]**            | bootstrap 編譯器一如規格實作。                 |
+| **[not yet: Phase N]**       | 已規範、尚未建置；使用它是一個乾淨的編譯錯誤。 |
+| **[implementation-defined]** | 規格不釘定；conforming 實作自行選擇。          |
+| **[deviation]**              | bootstrap 當前行為與規格不符（一個 bug）。     |
+
+**[Conformance](conformance.zh-TW.md)** 章定義這些標記、「conforming」的意義，以及每一章倚賴的可觀察契約
+（diagnostics、runtime abort、undefined 與 implementation-defined 行為）。請先讀它。
+
+## 章節
+
+| 章節                                           | 涵蓋                                                     |
+| ---------------------------------------------- | -------------------------------------------------------- |
+| [Conformance](conformance.zh-TW.md)            | 閱讀慣例、狀態標記、diagnostics/abort 契約               |
+| [型別](types.zh-TW.md)                         | primitive、`struct`、`enum`、tuple、strong-typedef、轉換 |
+| [值與記憶體](memory.zh-TW.md)                  | scope ownership、`mut &`、`del` / `defer`、`Ref[T]`      |
+| [Spec 與 Generics](specs.zh-TW.md)             | `spec` 作 bound / conformance / 型別；泛型；`is` 測試    |
+| [Derive 與預設行為](derive.zh-TW.md)           | 結構化衍生 vs spec 的 default method                     |
+| [Decorator](decorators.zh-TW.md)               | 固定、compiler 擁有的 `#[…]` 指令集                      |
+| [Null-safety 與錯誤處理](errors.zh-TW.md)      | `Result[T]` / `T?`、`?` `??` `?.` `!` `raise` `guard`    |
+| [控制流與模式比對](control-flow.zh-TW.md)      | `if`、`for`、`match` 與 pattern                          |
+| [慣用法](patterns.zh-TW.md)                    | closure、pipeline、builder——道地寫法，無新語法           |
+| [函式與閉包](functions.zh-TW.md)               | 一等函式、預設值、named args、closure                    |
+| [Collection](collections.zh-TW.md)             | `list`、`map`、`set`、定長 `[T; N]` 陣列                 |
+| [Coroutines 與 Channels](coroutine.zh-TW.md)   | `spawn`、channel、`select`、排程                         |
+| [Process 與 I/O](io.zh-TW.md)                  | stream、file、stdio、process——`io` package               |
+| [格式化與文字](format.zh-TW.md)                | `display` / `debug` 渲染、`f"…"`、`print`                |
+| [Module、Package 與 Program](package.zh-TW.md) | 組織、可見性、coherence、程式啟動                        |
+| [語法糖](syntax-sugar.zh-TW.md)                | 每個表面寫法與它 desugar 回的核心                        |
+| [文法](grammar.zh-TW.md)                       | 形式表面文法（`GRAMMAR` 的散文伴讀）                     |
+| [FFI](ffi.zh-TW.md)                            | C ABI 邊界——`pub` export、unsafe foreign import          |
 
 ## 型別（Types）
 
@@ -12,15 +50,17 @@
 ## Spec 與 Generics（Specs & Generics）
 
 Zerg 如何抽象行為。**`spec`** 是唯一機制——一個 nominal 介面,同時扮演泛型 **bound**、型別所宣告的 **conformance**,以及
-**型別本身**（heap-boxed、動態 dispatch 的 existential）。涵蓋內建 spec（`Object`、`Ord`、`Hash`、`Error`、運算子）、
-迭代協定,以及 `is` 型別測試。見 **[Spec 與 Generics](specs.zh-TW.md)**。
+**型別本身**（heap-boxed、動態 dispatch 的 existential）。涵蓋內建 spec（`Eq`、`Ord`、`Hash`、`Error`、運算子——
+**沒有 auto-implement 的 `Object` spec**、也沒有隱式 `==`：相等與排序是經 `derive(Eq)` / `derive(Ord)` 或手寫 impl
+**opt-in**）、迭代協定,以及 `is` 型別測試（對 existential 的 `x is T` 為 **[implemented]**；對任意值的一般 `x is T`
+為 **[not yet]**）。見 **[Spec 與 Generics](specs.zh-TW.md)**。
 
 ## Decorator 與 compiler 代寫的行為
 
 compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decorator** 請求：`struct`/`enum` 上的
 `#[derive(Encode, Decode)]` 會生成逐欄位(與逐 variant)的 canonical impl。可 derive 的是一組**固定、compiler 擁有的
-受祝福 spec**——`Object`(一律 derive)以及可 opt-in 的 `Ord`、`Hash`、`Encode`、`Decode`。**使用者 spec 永遠不能被
-derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 field 的程式,而那只有 compiler 能做——**沒有 macro**。要
+受祝福 spec**——全部 opt-in：`Eq`、`Ord`、`Hash`、`Encode`、`Decode`（沒有一律 derive 的 `Object`）。**使用者 spec
+永遠不能被 derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 field 的程式,而那只有 compiler 能做——**沒有 macro**。要
 客製就手寫 `impl X for Y`。decorator 是 Zerg 給這類 compiler 指令的唯一通道,且保持封閉(使用者不可自訂)。`derive`
 只是一個小固定集合中的一員——`#[dyn]`、`#[sealed]` 等——完整清單見 **[Decorator](decorators.zh-TW.md)**。另見
 **[Derive 與預設行為](derive.zh-TW.md)**。
@@ -43,8 +83,8 @@ derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 fiel
 
 ## 格式化與文字（Formatting & Text）
 
-一個值如何變成文字——結構化 **auto-derive 的 `debug`** 與給人看的 **`display`**（兩者都是 `Object` method）、`f"…"` 內插,
-以及永遠在 scope 內的 `print` 關鍵字。見 **[格式化與文字](format.zh-TW.md)**。
+一個值如何變成文字——結構化的 **`debug`** 與給人看的 **`display`**，兩者是**內建的值渲染**（不是任何 `Object` spec
+的 method）、`f"…"` 內插,以及永遠在 scope 內的 `print` 關鍵字。見 **[格式化與文字](format.zh-TW.md)**。
 
 ## Null-safety 與錯誤處理（Null-safety & Errors）
 
@@ -53,9 +93,11 @@ derive**(`#[derive(MySpec)]` 是編譯錯誤)：從結構產碼需要會讀 fiel
 
 ## 並行（Concurrency）
 
-Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）跑在 **M:N scheduler** 上,fire-and-forget、無
-join/handle,只捕獲 **immutable 值與 channel**。channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的 `Ref`
-型別;`Ref[T]` 是它持有資源的手足——見 [值與記憶體](memory.zh-TW.md)）——payload 複製、在最後一個 sender 離場時
+Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）,fire-and-forget、無 join/handle,只捕獲
+**immutable 值與 channel**。預期的 scheduler 是搶佔式 **M:N**，但 bootstrap 今日跑的是合作式 **N:1** 單執行緒
+（**[deviation]**——一個從不 park 的 CPU-bound coroutine 會餓死其餘；見
+[Coroutines 與 Channels](coroutine.zh-TW.md)）。channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的
+`Ref` 型別;`Ref[T]` 是它持有資源的手足——見 [值與記憶體](memory.zh-TW.md)）——payload 複製、在最後一個 sender 離場時
 **自動 close**、以 **`Result[T]`** 接收（`Right` = 已關,攜帶崩潰 `Err` 或 `StopIteration` 哨兵）、並用 **`select`** 多路等待。
 
 完整模型——buffering、receive/close 語意、directional 端、`select`、deadlock——見

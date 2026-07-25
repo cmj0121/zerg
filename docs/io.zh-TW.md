@@ -11,7 +11,16 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 - **handle** 是 `Ref[T]`——檔案或 socket，scope-owned、恰好關一次；
 - **失敗是值**——會失敗的呼叫回 `Result[T]`、以 `?` 傳播；EOF 不算。
 
+> **狀態。** bootstrap 只出貨這個面的**子集**。**[implemented]：** 整檔讀取——
+> `io.read_file(path) -> list[byte]`（檔案不存在或不可讀會 raise **`IOError`**，可用 `guard { io.read_file(p) }`
+> 降級為 `Result`；內容為文字時以 `str(…)` 解碼）——以及一組最小的 stdout 寫出器（`io.write` / `io.println` /
+> `io.write_int`）加上 `print` 關鍵字。**`Reader` / `Writer` spec 面**——下文的 `read_bytes` / `read()` / `write`
+> 與 `io.stdin` · `io.stdout` · `io.stderr` 串流物件——為 **[not yet]**：預期語意一如規格所述，但今日只接了整檔與
+> best-effort 寫出這兩個葉子。
+
 ## 串流——`Reader` 與 `Writer`
+
+**[not yet]**——下方的串流面雖有規格但尚未建置；今日輸入用 `io.read_file`、輸出用 `io.write` / `io.println`。
 
 各只有**一個 required method**；其餘是 provided default（Spec 與 Generics），所以新串流只要供給 primitive 就繼承
 所有便利方法。
@@ -47,17 +56,30 @@ create(path: str) -> Result[File]      # 寫/truncate；File 實作 Writer
 檔案不存在是**預期**的 value 失敗、絕非 abort。開檔模式、seek、metadata 都是 `io` method——stdlib 細節、不是新
 概念。**socket** 是同一形狀：一個既是 `Reader` 又是 `Writer` 的 `Ref[handle]`，網路 API 留給 `io`。
 
+> **[not yet]** `File` handle 與 `open` / `create` 此階段尚未建置；唯一接好的輸入路徑是整檔的
+> `io.read_file(path) -> list[byte]`，它在檔案不存在或不可讀時 raise **`IOError`**（用 `guard` 降級）——一經
+> `guard` 便與「檔案不存在是預期的 value 失敗」一致。
+
 ## 標準串流
 
 `import "io"` 綁定 **`io.stdin`**（`Reader`）、**`io.stdout`** 與 **`io.stderr`**（`Writer`）——透過 stdlib 取得的
 唯讀 OS 事實，跟 `env` 與 clock 同級（[Module、Package 與 Program](package.zh-TW.md)），絕非 `main` 參數。
-**`print`** 關鍵字是免 import 捷徑——`print x` 把 `x.display()` 加換行寫到 stdout、盡力而為；要 `Result`、
+**`print`** 關鍵字是免 import 捷徑——`print x` 把值的 `display` 渲染加換行寫到 stdout、盡力而為；要 `Result`、
 `io.stderr`、或原始 bytes 才用 `io.stdout`。
 
 ```text
 import "io"
 for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 ```
+
+> **[not yet]** `io.stdin` / `io.stdout` / `io.stderr` 串流物件尚未建置；此階段接好的 stdout 寫出器是自由函式
+> `io.write(s)` / `io.println(s)` / `io.write_int(n)`（各回 `Result[nil]`，但為 best-effort 寫出，尚不會產出
+> `Err`）。
+>
+> **[deviation] / [implementation-defined] 緩衝。** `print` 走**有緩衝的 libc stdio**，而 `io.*` 寫出走
+> **無緩衝**的 `write(2)`。兩者的輸出因此可能**不依原始碼順序交錯**——一次 `io.*` 寫出可能出現在仍留在 libc
+> 緩衝裡的較早 `print` 之前。規格不固定兩者之間的緩衝規範；要強制順序，就把一段輸出集中在同一條路徑上，或手動
+> flush。（見 [Conformance](conformance.zh-TW.md) 論 implementation-defined 行為。）
 
 ## 阻塞——在 coroutine、不在 thread
 
@@ -66,7 +88,13 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 `async`／`await`、沒有 function coloring。唯一例外是 FFI 邊界：一個阻塞的 **foreign（FFI）C 呼叫**會停泊整條 OS
 thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
+> **[not yet] / [deviation]** 會停泊 coroutine 的 `io` 屬於上文尚未建置的串流面。且在今日的 **N:1** runtime
+> 下（[Coroutine 與 Channel](coroutine.zh-TW.md)）只有單一 thread，所以一次阻塞的 **foreign 呼叫會阻塞整個
+> 程式**，而非只有它那條 coroutine——預期的每-thread 停泊隨 M:N scheduler 到來。
+
 ## Process 與命令執行
+
+**[not yet]**——命令字面量雖被文法辨識，但此階段在**程式碼生成時被拒絕**；下方的預期模型不變，待 runtime 落地。
 
 子行程用**反引號命令字面量**啟動，並透過同一套串流觀察——它的 pipe 是 `Reader` 與 `Writer`、它的 handle 是一個
 `Ref[proc]`，其 `drop` 會 wait（或 kill）它、恰好回收一次。**`f` 標出危險：**

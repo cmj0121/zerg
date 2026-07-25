@@ -1,8 +1,49 @@
 # Zerg Language Reference
 
 The detailed semantics behind the design principles in the [README](../README.md). This page is the
-**map**: each section states what a topic decides and links to its full reference. Also in
+**front matter and map** of the specification: it states the reading conventions, then indexes every
+chapter and summarizes what each decides. Each summary links to its full reference. Also in
 [繁體中文](language.zh-TW.md).
+
+## How to read this specification
+
+The `docs/` chapters are **normative for semantics**; the root [`GRAMMAR`](../GRAMMAR) file is normative
+for **syntax**. Zerg is specified as a whole, while the Phase-1 bootstrap implements a subset, so every
+feature carries a **status marker** that flags the gap between the language and the current compiler:
+
+| Marker                       | Meaning                                                           |
+| ---------------------------- | ----------------------------------------------------------------- |
+| **[implemented]**            | The bootstrap compiler implements this as specified.              |
+| **[not yet: Phase N]**       | Specified, not yet built; using it is a clean compile error.      |
+| **[implementation-defined]** | The spec does not pin this; a conforming implementation chooses.  |
+| **[deviation]**              | The bootstrap's current behavior does not match the spec (a bug). |
+
+The **[Conformance](conformance.md)** chapter defines these markers, what "conforming" means, and the
+observable contracts (diagnostics, runtime abort, undefined vs implementation-defined behavior) every
+other chapter relies on. Read it first.
+
+## Chapters
+
+| Chapter                                            | Covers                                                            |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| [Conformance](conformance.md)                      | reading conventions, status markers, diagnostics/abort contracts  |
+| [Types](types.md)                                  | primitives, `struct`, `enum`, tuples, strong-typedefs, conversion |
+| [Values & Memory](memory.md)                       | scope ownership, `mut &`, `del` / `defer`, `Ref[T]`               |
+| [Specs & Generics](specs.md)                       | `spec` as bound / conformance / type; generics; the `is` test     |
+| [Derive & Default Behavior](derive.md)             | structural derivation vs spec default methods                     |
+| [Decorators](decorators.md)                        | the fixed, compiler-owned `#[…]` directive set                    |
+| [Null-safety & Errors](errors.md)                  | `Result[T]` / `T?`, `?` `??` `?.` `!` `raise` `guard`             |
+| [Control Flow & Pattern Matching](control-flow.md) | `if`, `for`, `match`, and patterns                                |
+| [Patterns & Idioms](patterns.md)                   | closures, pipelines, builders — the Zerg way, no new syntax       |
+| [Functions & Closures](functions.md)               | first-class functions, defaults, named args, closures             |
+| [Collections](collections.md)                      | `list`, `map`, `set`, the fixed-size `[T; N]` array               |
+| [Coroutines & Channels](coroutine.md)              | `spawn`, channels, `select`, scheduling                           |
+| [Process & I/O](io.md)                             | streams, files, stdio, processes — the `io` package               |
+| [Formatting & Text](format.md)                     | `display` / `debug` rendering, `f"…"`, `print`                    |
+| [Modules, Packages & Programs](package.md)         | organization, visibility, coherence, program start                |
+| [Syntax Sugar](syntax-sugar.md)                    | every surface form and the core it desugars to                    |
+| [Grammar](grammar.md)                              | the formal surface grammar (companion to `GRAMMAR`)               |
+| [FFI](ffi.md)                                      | the C ABI boundary — `pub` export, unsafe foreign import          |
 
 ## Types
 
@@ -15,17 +56,19 @@ reinterpret). See **[Types](types.md)**.
 
 How Zerg abstracts over behavior. A **`spec`** is the one mechanism — a nominal interface that serves
 as a generic **bound**, a **conformance** a type declares, and a **type** in its own right (a
-heap-boxed, dynamically dispatched existential). Covers the built-in specs (`Object`, `Ord`, `Hash`,
-`Error`, the operators), the iteration protocol, and the `is` type test. See
-**[Specs & Generics](specs.md)**.
+heap-boxed, dynamically dispatched existential). Covers the built-in specs (`Eq`, `Ord`, `Hash`, `Error`,
+the operators — there is **no auto-implemented `Object` spec** and no implicit `==`: equality and ordering
+are **opt-in** via `derive(Eq)` / `derive(Ord)` or a hand-written impl), the iteration protocol, and the
+`is` type test (`x is T` on an existential is **[implemented]**; a general `x is T` on an arbitrary value
+is **[not yet]**). See **[Specs & Generics](specs.md)**.
 
 ## Decorators & compiler-derived behavior
 
 The compiler can **write an implementation for you** from a type's **structure**, requested with a
 **decorator** on the type: `#[derive(Encode, Decode)]` on a `struct`/`enum` generates the canonical,
 field-by-field (and variant-by-variant) impls. What it derives is a **fixed, compiler-owned set of blessed
-specs** — `Object` (always derived) and, opt-in, `Ord`, `Hash`, `Encode`, `Decode`. A **user spec can never
-be derived** (`#[derive(MySpec)]` is a compile error): generating from structure needs code that reads
+specs** — all **opt-in**: `Eq`, `Ord`, `Hash`, `Encode`, `Decode` (there is no always-derived `Object`).
+A **user spec can never be derived** (`#[derive(MySpec)]` is a compile error): generating from structure needs code that reads
 fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
 `impl X for Y`. Decorators are Zerg's one channel for such compiler directives, and it stays closed (users
 cannot define new ones). `derive` is one of a small fixed set — `#[dyn]`, `#[sealed]`, and more — listed in
@@ -54,9 +97,9 @@ arguments, and closures that capture only immutable values and channels, by copy
 
 ## Formatting & Text
 
-How a value becomes text — the structurally **auto-derived `debug`** and the human-facing
-**`display`** (both `Object` methods), `f"…"` interpolation, and the always-in-scope `print`
-keyword. See **[Formatting & Text](format.md)**.
+How a value becomes text — the structural **`debug`** and the human-facing **`display`**, which are
+**built-in value renderings** (not methods of any `Object` spec), `f"…"` interpolation, and the
+always-in-scope `print` keyword. See **[Formatting & Text](format.md)**.
 
 ## Null-safety & Errors
 
@@ -66,8 +109,10 @@ tiers, and `is` dispatches on an erased `Err`. See **[Null-safety & Errors](erro
 
 ## Concurrency
 
-Zerg is concurrent through **coroutines and channels only**: `spawn` (Go's `go`) on an **M:N
-scheduler**, fire-and-forget with no join/handle, capturing **only immutable values and channels**.
+Zerg is concurrent through **coroutines and channels only**: `spawn` (Go's `go`), fire-and-forget with
+no join/handle, capturing **only immutable values and channels**. The intended scheduler is a preemptive
+**M:N** one, but the bootstrap runs a cooperative **N:1** single thread today (**[deviation]** — a
+CPU-bound coroutine that never parks starves the rest; see [Coroutines & Channels](coroutine.md)).
 Channels are the reference-counted, by-ref **conduit** (a `Ref` type built for communication;
 `Ref[T]` is its resource-holding sibling — see [Values & Memory](memory.md)) — payloads copied,
 **auto-closed** when their last sender leaves, received as **`Result[T]`** (`Right` = closed,

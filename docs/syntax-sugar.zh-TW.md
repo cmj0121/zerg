@@ -26,6 +26,13 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise          |
 | `del ch`                              | 現在就 drop 這個持有者——若是最後 sender 便關閉 channel           |
 
+**狀態。** 上表每一列皆為 **[implemented]**，唯 f-string 內插有兩處例外。自述的 `f"{x=}"` 為 **[not yet]**——已被
+解析，但在程式碼生成時被拒絕。`!r`（debug）與 `!a`（ascii）轉換是 **[deviation]**：兩者目前皆**別名到 `display`**
+（即渲染得與 `!s` 相同），待獨立的 `debug`／ASCII 渲染。純 `{x}` 洞、format spec `{x:spec}` 與 `!s` 已對純量與
+`str` 實作；**複合值**洞（`struct`、`list`、`map`）仍被拒絕，故結構化渲染為 **[not yet]**——見
+[格式化與文字](format.zh-TW.md)。內插命令字面量 `` f`…` ``（屬文法、未列於此）同樣為 **[not yet]**。上表其餘各
+desugar 一如所寫。
+
 ## 刻意**不是**語法糖的
 
 為了讓核心誠實,有些看起來像糖的其實是獨立的東西,不是改寫:

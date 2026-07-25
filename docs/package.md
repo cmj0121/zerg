@@ -52,16 +52,22 @@ coroutine to a channel-observed finish if it must complete first; see
 [Coroutines & Channels](coroutine.md)).
 
 Outside `main` lives only **immutable top-level state** — constants, functions, types, and specs —
-readied before `main` runs. Top-level constants are initialized in **dependency order**; if they form a cycle,
-that's a compile error.
+readied before `main` runs. Top-level constants are initialized in **dependency order** — a
+constant is ready before any constant whose initializer reads it — a topological order of the reads-from
+graph; if they form a cycle, that's a compile error. Where the graph leaves two constants unordered
+(neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
+**source order** within a module. This whole ordering — topological, with the module-name-then-source
+tie-break — is **[implemented]**.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
-first-uses still run them once), in **dependency order** (a module's imports initialize first), before any
-of that module's own code. `init()` carries multi-step or effectful startup (open a resource, register,
-seed) rather than hiding it in a constant's initializer, and readies the module's immutable state. There
-is still **no mutable global**: shared mutable state travels by value or through channels, never a
-module-level variable.
+first-uses still run them once), in **declaration (FIFO) order** within a module and in **dependency
+order** across modules (a module's imports initialize first), before any of that module's own code and
+before `main`. That each `init()` runs **exactly once, in FIFO order, before `main`** is **[implemented]**.
+`init()` carries multi-step or effectful startup (open a resource, register, seed) rather than hiding it in
+a constant's initializer, and readies the module's immutable state. There is still **no mutable global**:
+shared mutable state travels by value or through channels, never a module-level variable — a top-level
+binding may not be `mut` outside a module-level `unsafe { … }` group (**[implemented]**).
 
 If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
 there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
@@ -161,12 +167,20 @@ and the prelude (see The prelude & std). What you import depends on the distance
 Because every dependency is written down, the import graph is explicit — which is what lets module and
 package **cycles be rejected**.
 
+> **[implemented].** The surface these sections describe is wired today: **string-path imports**
+> (`import "util/text"`), **parenthesized import groups** (`import ( … )`), and **one-level `import pub`
+> re-export** onto the root module's public surface. (The re-export is one level: `import pub` exposes the
+> named module on this module's surface; it does not transitively re-export what that module itself
+> re-exports.)
+
 ### The prelude & std
 
 The **prelude** is not imported — its names are **built into the toolchain** and bound in every module
 from the start, exactly like the primitive keywords. It holds what the language itself leans on: the
-types the operators desugar to (`Either`, `Result`, `T?`, `nil`), the built-in specs (`Object`, `Error`,
-`Ord`, `Hash`, `Iterator`/`Iterable`, `Ref`, the operator specs — see [Specs & Generics](specs.md)),
+types the operators desugar to (`Either`, `Result`, `T?`, `nil`), the built-in specs (`Eq`, `Ord`, `Hash`,
+`Error`, `Iterator`/`Iterable`, `Ref`, and the operator specs — see [Specs & Generics](specs.md); there is
+**no `Object` spec** — equality and ordering are opt-in via `derive(Eq)` / `derive(Ord)`, and `display` /
+`debug` are built-in value renderings, not spec methods, see [Format](format.md)),
 and a few pervasive types — the `list`, `map`, and `set` containers (see
 [Collections](collections.md)) and the `Ref[T]` resource box. (Primitives — `bool`, `int`, `str`, … —
 and `chan`, plus the `defer` and `print` constructs, are likewise grammar and runtime, not imported

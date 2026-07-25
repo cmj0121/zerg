@@ -6,7 +6,8 @@ futures, no join/handle. It builds on the memory and error models in the
 
 ## `spawn`
 
-`spawn f(args)` starts a coroutine (Go's `go`) on an **M:N scheduler**. It **returns nothing** — no
+`spawn f(args)` starts a coroutine (Go's `go`) on the runtime scheduler (see Scheduling & fairness for
+the intended **M:N** model and the current single-thread **[deviation]**). It **returns nothing** — no
 handle, no join/await; you observe results and completion **only through channels**. The callee is any
 call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
 mirroring `defer`, which takes the same callee forms (`defer f.close()`).
@@ -43,8 +44,11 @@ rest follows from it:
 
 > **A `send` on a channel happens-before the matching `receive` completes.**
 
-The receiver sees the payload fully built (it was snapshotted at the send); no other cross-coroutine
-ordering exists or is needed. That is the whole memory model.
+This happens-before edge is the **[implemented]** guarantee. The receiver sees the payload fully built
+(it was snapshotted at the send); no other cross-coroutine ordering exists or is needed. That is the
+whole memory model. Any ordering **beyond** this edge — the run-queue order in which ready coroutines are
+resumed, the interleaving of unsynchronized coroutines — is **[implementation-defined]**: today the N:1
+runtime resumes runnable coroutines in a deterministic FIFO order, but no program may rely on it.
 
 **What may cross a boundary** — as a `spawn`/closure capture or a channel payload:
 
@@ -77,6 +81,12 @@ ch := chan[int](64)    # buffered, capacity 64
 Capacity is the only knob; **send blocks when full, receive blocks when empty**. Unbuffered
 (capacity 0) is a rendezvous — the send completes only when a receiver takes the value, and is Zerg's
 one synchronization primitive.
+
+The whole channel core in this chapter — buffered and unbuffered blocking, a close signalling the
+receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[implemented]**.
+The two channel behaviors that diverge from the spec are the abort **kind** on a send-to-closed
+(`SendOnClosedError` is **[not yet]** — the abort fires with a generic message) and `DeadlockError`
+(**[deviation]**, under `select` and Termination & deadlock).
 
 ### Send — `ch <- v`
 
@@ -191,7 +201,11 @@ routes any value to any receiver, a race, not a conversation.
 ## `select` — waiting on many channels
 
 `select` is the **only** multi-way wait: it watches several send/receive operations, blocks until one
-is **ready**, and runs that arm; ties are broken **fairly** (not by position, so no arm starves).
+is **ready**, and runs that arm. Among **several ready arms** the winner is **[implementation-defined]** —
+the spec fixes only that the choice is **not positional**, so no arm is starved by where it is written;
+the intended property is **fairness**. The bootstrap realizes it with a deterministic **round-robin
+rotor** (the same fairness applied to a single wait), but a conforming implementation may choose any
+ready arm, so no program may depend on which one wins.
 
 ```text
 select {
@@ -275,6 +289,12 @@ and coroutine that holds it talks to the one owner. This, not a `Ref[T]`, is how
 a `Ref[T]` shares a value **read-only**, an actor **serializes writes** behind an owner. A resource that
 must be serialized (a non-thread-safe `Ref[handle]`) is likewise owned by one actor.
 
+For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`** held behind an immutable
+`:=` (the binding is immutable; the atomic's interior is not — see [Modules & Programs](package.md)). It
+provides lock-free `load` / `store` / `fetch_add` / `compare_exchange`. **[implemented]** today for
+**`Atomic[int]`** with **sequential-consistency** ordering only; the explicit **memory-ordering argument**
+and a **generic `Atomic[T]`** are **[not yet]**.
+
 ## A producer — the generator pattern
 
 A **generator is not a language feature** — it is a **coroutine that sends to a channel**, drained by the
@@ -320,19 +340,28 @@ _fatal_ is the observer's job (react to `Right(err)` and abort), never the `spaw
 
 ## Scheduling & fairness
 
-The M:N scheduler is **fair**: every **ready** coroutine eventually runs, and **no coroutine can
-indefinitely starve others** — not even a CPU-bound one that never touches a channel. You may `spawn`
-freely; a busy worker cannot freeze unrelated coroutines.
+**Intended.** `spawn` runs coroutines on a **preemptive M:N scheduler** (many coroutines multiplexed over
+several OS threads), and that scheduler is **fair**: every **ready** coroutine eventually runs, and **no
+coroutine can indefinitely starve others** — not even a CPU-bound one that never touches a channel. You may
+`spawn` freely; a busy worker cannot freeze unrelated coroutines. This is a guarantee about the
+**observable property, not the mechanism**: _how_ fairness is achieved — preemption, compiler-inserted
+safepoints, reduction counting — is an implementation detail the language does not fix; only the property
+is promised.
 
-This is a guarantee about the **observable property, not the mechanism**. _How_ fairness is achieved —
-preemption, compiler-inserted safepoints, reduction counting — is an implementation detail the language
-doesn't fix; only the property is promised.
+> **[deviation]** The bootstrap scheduler is **cooperative N:1** — a single OS thread, no preemption — and
+> a coroutine yields **only at a channel or `select` park point**. So the fairness guarantee does **not**
+> hold today: a **CPU-bound coroutine that never touches a channel starves everything**, since nothing can
+> preempt it. Concretely, `spawn(spin); spawn(work)` (where `spin` loops without a channel op) **hangs** —
+> `work` never runs. The intended M:N preemptive scheduler stands as specified; until it lands, keep every
+> coroutine channel-driven so it parks and lets others run.
 
-Two limits bound it:
+Two limits bound the intended model:
 
 - **A blocking foreign (FFI) call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
-  own (see [FFI](ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. The runtime may grow
-  its thread pool, but a long blocking call is thread-occupying — prefer non-blocking C APIs.
+  own (see [FFI](ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. Under the intended M:N
+  runtime other threads still progress, but a long blocking call is thread-occupying — prefer non-blocking C
+  APIs. **[deviation]** Under today's N:1 runtime there is **only one thread**, so a blocking FFI call blocks
+  the **whole program**, not just its coroutine.
 - **Fairness moves the _ready_; it does not unstick the _blocked_.** When every coroutine is blocked with
   no possible progress that is a deadlock, caught separately (below); the `select` tie-break is this same
   fairness applied to a single wait.
@@ -348,3 +377,9 @@ Two limits bound it:
 - **Global deadlock detection** — if every coroutine is blocked with no possible progress, the runtime
   raises **`DeadlockError`** rather than hanging. A lone blocked sender while others progress is not
   individually detected.
+
+  > **[deviation]** `DeadlockError` is specified as a **clean abort** — it unwinds the stack, runs the
+  > pending `defer`s, and is catchable by `guard` like any other abort. The bootstrap instead **hard-`exit`s
+  > the process with a diagnostic report**, running **no** `defer`s and no unwind, so the deadlock is
+  > **uncatchable** today (see [Errors](errors.md), [Conformance](conformance.md)). The intended clean-abort
+  > behavior stands; it is not built this phase.

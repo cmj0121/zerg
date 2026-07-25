@@ -118,13 +118,21 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 		case "__zrt_write":
 			return c.writeIntrinsic(n, Str), true
 		case "__zrt_open":
-			return c.fdIntrinsic(n, Str, Int), true
+			return c.unaryIntrinsic(n, Str, Int), true
 		case "__zrt_read":
 			return c.readIntrinsic(n), true
 		case "__zrt_close":
-			return c.fdIntrinsic(n, Int, Int), true
+			return c.unaryIntrinsic(n, Int, Int), true
 		case "__zrt_time_unix", "__zrt_time_mono":
 			return c.nullaryIntrinsic(n, Int), true
+		case "__zrt_platform", "__zrt_arch":
+			return c.nullaryIntrinsic(n, Str), true
+		case "__zrt_getenv":
+			return c.unaryIntrinsic(n, Str, Str), true
+		case "__zrt_has_env":
+			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_exit":
+			return c.unaryIntrinsic(n, Int, Nil), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -341,13 +349,13 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	return Int
 }
 
-// fdIntrinsic checks a one-argument whole-file floor intrinsic that yields an int:
-// `__zrt_open(path)` (arg str, an fd out) and `__zrt_close(fd)` (arg int, a status
-// out). These are the runtime's own syscall leaves that io.read_file drives from pure
-// Zerg; a failed open aborts IOError in the runtime.
-func (c *checker) fdIntrinsic(n *ast.Call, arg, ret Type) Type {
+// unaryIntrinsic checks a one-argument runtime floor intrinsic of type `(arg) -> ret` —
+// the io whole-file leaves (`__zrt_open` str->int, `__zrt_close` int->int) and the os
+// leaves (`__zrt_getenv` str->str, `__zrt_has_env` str->bool, `__zrt_exit` int->nil).
+// These are the runtime's own leaves the stdlib drives from pure Zerg.
+func (c *checker) unaryIntrinsic(n *ast.Call, arg, ret Type) Type {
 	if len(n.Args) != 1 {
-		c.errorf(n.Span(), "file intrinsic takes 1 argument, got %d", len(n.Args))
+		c.errorf(n.Span(), "intrinsic takes 1 argument, got %d", len(n.Args))
 		c.synthArgs(n)
 		return ret
 	}

@@ -399,6 +399,11 @@ var ioIntrinsicNames = map[string]bool{
 var sysFloorIntrinsics = map[string]bool{
 	"__zrt_time_unix": true,
 	"__zrt_time_mono": true,
+	"__zrt_platform":  true,
+	"__zrt_arch":      true,
+	"__zrt_getenv":    true,
+	"__zrt_has_env":   true,
+	"__zrt_exit":      true,
 }
 
 // programUsesSysFloor reports whether the program lowers a non-io sys-floor intrinsic, so
@@ -580,22 +585,40 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	return e.writeIntrinsicEmit(n)
 }
 
-// sysIntrinsicEmit lowers the non-io sys-floor intrinsics that the stdlib drives — the
-// `time` clock leaves `__zrt_time_unix()` / `__zrt_time_mono()`, each a nullary call to
-// its always-linked sys.c leaf. A shadowed name is left to the ordinary call path.
+// sysIntrinsicEmit lowers the non-io sys-floor intrinsics the stdlib drives — the `time`
+// clock leaves and the `os` process/platform leaves — each to its always-linked sys.c
+// primitive. A shadowed name is left to the ordinary call path.
 func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
-	if !ok || len(n.Args) != 0 {
+	if !ok {
 		return "", false
 	}
 	if _, shadowed := e.info.Refs[id]; shadowed {
 		return "", false
 	}
-	switch id.Name {
-	case "__zrt_time_unix":
-		return "((int64_t)zrt_time_unix())", true
-	case "__zrt_time_mono":
-		return "((int64_t)zrt_time_mono())", true
+	if len(n.Args) == 0 {
+		switch id.Name {
+		case "__zrt_time_unix":
+			return "((int64_t)zrt_time_unix())", true
+		case "__zrt_time_mono":
+			return "((int64_t)zrt_time_mono())", true
+		case "__zrt_platform":
+			return "zrt_platform()", true
+		case "__zrt_arch":
+			return "zrt_arch()", true
+		}
+		return "", false
+	}
+	if len(n.Args) == 1 {
+		arg := e.expr(n.Args[0].Value)
+		switch id.Name {
+		case "__zrt_getenv":
+			return fmt.Sprintf("zrt_getenv(%s)", arg), true
+		case "__zrt_has_env":
+			return fmt.Sprintf("zrt_has_env(%s)", arg), true
+		case "__zrt_exit":
+			return fmt.Sprintf("zrt_exit(%s)", arg), true
+		}
 	}
 	return "", false
 }

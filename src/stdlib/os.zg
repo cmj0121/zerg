@@ -1,0 +1,36 @@
+# os — process & platform facts (pure-Zerg stdlib over the runtime).
+#
+# Bundled into a program that writes `import "os"`; members are reached through the
+# namespace, as `os.platform()`. Zerg is zero-external-dependency: each fact is a thin
+# runtime leaf (`getenv` / `exit`, or a compile-time `#ifdef` for platform/arch); the
+# null-safety logic (an unset variable is `nil`) is pure Zerg above them. The program's
+# own arguments arrive as `fn main(args: list[str])`, not from here.
+
+# env returns the value of environment variable key, or nil when it is unset. (An unset
+# variable and one set to the empty string are told apart here — both a plain lookup and
+# `os.env(k) ?? default` do the right thing.)
+pub fn env(key: str) -> str? {
+	if __zrt_has_env(key) {
+		return __zrt_getenv(key)
+	}
+	return nil
+}
+
+# exit terminates the process immediately with status code. It does not return, and it
+# runs no pending `defer`s — use it for a top-level, deliberate early exit.
+pub fn exit(code: int) {
+	__zrt_exit(code)
+}
+
+# platform returns the target operating system as a lowercase name — "linux", "darwin",
+# "windows", "freebsd", or "unknown". It is decided at C-compile time, so it names the
+# platform the binary was built for.
+pub fn platform() -> str {
+	return __zrt_platform()
+}
+
+# arch returns the target CPU architecture — "arm64", "x86_64", "x86", "riscv64", or
+# "unknown" — likewise fixed at compile time.
+pub fn arch() -> str {
+	return __zrt_arch()
+}

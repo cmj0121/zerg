@@ -1599,6 +1599,17 @@ func (e *emitter) expr(x ast.Expr) string {
 			}
 			return e.expr(n.Base) + "[" + e.expr(n.Elems[0]) + "]"
 		}
+		// sizeof[T] / alignof[T]: a compile-time uint from C's sizeof / _Alignof of the
+		// type argument (recorded on the bracket by sema).
+		if id, ok := n.Base.(*ast.Ident); ok && (id.Name == "sizeof" || id.Name == "alignof") {
+			if args := e.info.Brackets[n].Args; len(args) == 1 {
+				op := "sizeof"
+				if id.Name == "alignof" {
+					op = "_Alignof"
+				}
+				return fmt.Sprintf("((uint64_t)%s(%s))", op, e.ctype(args[0]))
+			}
+		}
 		return "0"
 	case *ast.ListLit:
 		// A list literal in fixed-array position ([int; N] = [a, b, …]) lowers to a C

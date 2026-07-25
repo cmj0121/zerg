@@ -1279,6 +1279,14 @@ func (c *checker) inferBracket(n *ast.Bracket) Type {
 	if res.Kind == BracketTypeArg {
 		res.Args = c.typeArgExprs(n.Elems)
 		c.info.Brackets[n] = res
+		// sizeof[T] / alignof[T]: the byte size / alignment of a type, a compile-time uint.
+		if id, ok := n.Base.(*ast.Ident); ok && (id.Name == "sizeof" || id.Name == "alignof") &&
+			!c.shadowed(id.Name) {
+			if len(res.Args) != 1 {
+				c.errorf(n.Span(), "%s[T] takes exactly one type argument", id.Name)
+			}
+			return types.Uint
+		}
 		return types.Unknown
 	}
 	xt := c.synth(n.Base)

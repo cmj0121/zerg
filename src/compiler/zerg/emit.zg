@@ -30,6 +30,9 @@ struct Emitter {
 	var_name: list[str]
 	var_enum: list[str]
 	var_tag: list[int]
+	vf_variant: list[str]
+	vf_index: list[int]
+	vf_boxed: list[bool]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -198,13 +201,48 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 		em.enum_names.append(ed.name)
 		mut j := 0
 		for j < ed.variants.len() {
-			em.var_name.append(ed.variants[j].name)
+			v := ed.variants[j]
+			em.var_name.append(v.name)
 			em.var_enum.append(ed.name)
 			em.var_tag.append(j)
+			mut k := 0
+			for k < v.fields.len() {
+				em.vf_variant.append(v.name)
+				em.vf_index.append(k)
+				# a field whose type is the enclosing enum is boxed (leak-style void*)
+				em.vf_boxed.append(c_named_of(v.fields[k]) == ed.name)
+				k = k + 1
+			}
 			j = j + 1
 		}
 		i = i + 1
 	}
+}
+
+# c_is_boxed reports whether payload field `idx` of variant `variant` is a ref-boxed
+# (self-recursive) field.
+fn c_is_boxed(mut &em: Emitter, variant: str, idx: int) -> bool {
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_variant[i] == variant and em.vf_index[i] == idx {
+			return em.vf_boxed[i]
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# c_needs_runtime reports whether any enum has a boxed field, so the translation unit
+# must include and link the runtime.
+fn c_needs_runtime(mut &em: Emitter) -> bool {
+	mut i := 0
+	for i < em.vf_boxed.len() {
+		if em.vf_boxed[i] {
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
@@ -261,7 +299,12 @@ fn c_enum_typedef(ed: EnumDecl) -> str {
 				out = out + "        struct { "
 				mut j := 0
 				for j < v.fields.len() {
-					out = out + c_type(v.fields[j]) + " f" + strconv.to_string(j, 10) + "; "
+					# a self-recursive field is a ref-box (void*), else its value type
+					mut ct := c_type(v.fields[j])
+					if c_named_of(v.fields[j]) == ed.name {
+						ct = "void*"
+					}
+					out = out + ct + " f" + strconv.to_string(j, 10) + "; "
 					j = j + 1
 				}
 				out = out + "} " + v.name + ";\n"
@@ -271,6 +314,34 @@ fn c_enum_typedef(ed: EnumDecl) -> str {
 		out = out + "    } u;\n"
 	}
 	return out + "} zg_" + ed.name + ";\n\n"
+}
+
+# c_refbox_helpers emits, for an enum with self-recursive fields, a no-op drop and a
+# refnew that boxes a value into a leaked ref cell (never released — batch tool).
+fn c_refbox_helpers(ed: EnumDecl) -> str {
+	mut anybox := false
+	mut i := 0
+	for i < ed.variants.len() {
+		v := ed.variants[i]
+		mut j := 0
+		for j < v.fields.len() {
+			if c_named_of(v.fields[j]) == ed.name {
+				anybox = true
+			}
+			j = j + 1
+		}
+		i = i + 1
+	}
+	if not anybox {
+		return ""
+	}
+	nm := ed.name
+	mut out := "static void zg_noopdrop_" + nm + "(void* p) { (void)p; }\n"
+	out = out + "static void* zg_refnew_" + nm + "(zg_" + nm + " v) {\n"
+	out = out + "    void* r = zrt_ref_alloc(sizeof(zg_" + nm + "), &zg_noopdrop_" + nm + ");\n"
+	out = out + "    *(zg_" + nm + "*)zrt_ref_payload(r) = v;\n"
+	out = out + "    return r;\n}\n\n"
+	return out
 }
 
 # --- operators -----------------------------------------------------------------
@@ -393,7 +464,12 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 			if i > 0 {
 				out = out + ", "
 			}
-			out = out + ".f" + strconv.to_string(i, 10) + " = " + c_expr(em, args[i], sb)
+			mut val := c_expr(em, args[i], sb)
+			if c_is_boxed(em, name, i) {
+				# box a self-recursive payload into a leaked ref cell
+				val = "zg_refnew_" + en + "(" + val + ")"
+			}
+			out = out + ".f" + strconv.to_string(i, 10) + " = " + val
 			i = i + 1
 		}
 		out = out + "}"
@@ -461,15 +537,21 @@ fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
 
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
 # constructor arm aliases each payload name to its `s.u.Var.fK` field access.
-fn c_arm_subst(a: Arm, s: str, sb: Subst) -> Subst {
+fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> Subst {
 	if a.pat == 1 {
 		return c_extend(sb, a.bind, s)
 	}
 	if a.pat == 3 {
+		en := c_variant_enum(em, a.ctor)
 		mut r := sb
 		mut i := 0
 		for i < a.binds.len() {
-			r = c_extend(r, a.binds[i], s + ".u." + a.ctor + ".f" + strconv.to_string(i, 10))
+			mut acc := s + ".u." + a.ctor + ".f" + strconv.to_string(i, 10)
+			if c_is_boxed(em, a.ctor, i) {
+				# unbox a self-recursive payload back to the enum value
+				acc = "(*(zg_" + en + "*)zrt_ref_payload(" + acc + "))"
+			}
+			r = c_extend(r, a.binds[i], acc)
 			i = i + 1
 		}
 		return r
@@ -485,18 +567,18 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
 	if a.pat == 3 {
 		base := "(" + s + ".tag == " + strconv.to_string(c_variant_tag(em, a.ctor), 10) + ")"
 		if a.has_guard {
-			return "(" + base + " && " + c_expr(em, a.guard_expr, c_arm_subst(a, s, sb)) + ")"
+			return "(" + base + " && " + c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb)) + ")"
 		}
 		return base
 	}
 	if a.has_guard {
-		return c_expr(em, a.guard_expr, c_arm_subst(a, s, sb))
+		return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb))
 	}
 	return "1"
 }
 
 fn c_arm_body(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
-	return c_expr(em, a.body, c_arm_subst(a, s, sb))
+	return c_expr(em, a.body, c_arm_subst(em, a, s, sb))
 }
 
 # --- type inference ------------------------------------------------------------
@@ -688,12 +770,16 @@ fn c_has_main(f: File) -> bool {
 # emit_c lowers Zerg source to a complete C translation unit.
 pub fn emit_c(src: str) -> str {
 	f := parse(src)
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 	mut out := "// Generated by zergc (self-host). Do not edit.\n"
-	out = out + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n\n"
+	out = out + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
+	if c_needs_runtime(em) {
+		out = out + "#include \"zergrt.h\"\n"
+	}
+	out = out + "\n"
 	mut i := 0
 	for i < f.structs.len() {
 		out = out + c_struct_typedef(f.structs[i])
@@ -702,6 +788,11 @@ pub fn emit_c(src: str) -> str {
 	i = 0
 	for i < f.enums.len() {
 		out = out + c_enum_typedef(f.enums[i])
+		i = i + 1
+	}
+	i = 0
+	for i < f.enums.len() {
+		out = out + c_refbox_helpers(f.enums[i])
 		i = i + 1
 	}
 	i = 0

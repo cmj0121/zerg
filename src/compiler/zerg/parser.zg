@@ -1,0 +1,441 @@
+# parser — tokens to an AST for the self-hosting Zerg compiler (M2).
+#
+# A recursive-descent parser over the token stream, following the GRAMMAR group-4
+# precedence ladder (or < and < cmp < add < mul < unary < call < primary). It covers the
+# Zerg-boot subset the examples corpus needs: function declarations; the binding,
+# assignment, print, return / return-if, if / else-if / else, for, break, continue, nop,
+# and bare-expression statements; and the literal / identifier / unary / binary / call /
+# match expression forms. Operators are stored by their Zerg spelling; the emitter maps
+# them to C. Forms outside the subset are skipped rather than parsed.
+
+# Parser holds the token list and the read cursor.
+struct Parser {
+	toks: list[Token]
+	pos: int
+}
+
+fn cur(mut &p: Parser) -> Token {
+	if p.pos < p.toks.len() {
+		return p.toks[p.pos]
+	}
+	return Token(Eof, "", "", 0, 0)
+}
+
+fn cur_kind(mut &p: Parser) -> Kind {
+	return cur(p).kind
+}
+
+fn peek_kind(mut &p: Parser, n: int) -> Kind {
+	j := p.pos + n
+	if j < p.toks.len() {
+		return p.toks[j].kind
+	}
+	return Eof
+}
+
+fn p_at(mut &p: Parser, k: Kind) -> bool {
+	return cur_kind(p) == k
+}
+
+fn p_advance(mut &p: Parser) {
+	p.pos = p.pos + 1
+}
+
+# expect consumes the current token when it is of the wanted kind; on a mismatch it
+# leaves the cursor put (the subset corpus is well-formed, so this is a no-op there).
+fn expect(mut &p: Parser, k: Kind) {
+	if p_at(p, k) {
+		p_advance(p)
+	}
+}
+
+fn skip_semis(mut &p: Parser) {
+	for p_at(p, Semi) {
+		p_advance(p)
+	}
+}
+
+# ident_name extracts the identifier spelling from an EIdent expression (the assignment
+# and call targets in the subset), or "" for anything else.
+fn ident_name(e: Expr) -> str {
+	return match e {
+		EIdent(n) => n
+		_ => ""
+	}
+}
+
+# --- types ---------------------------------------------------------------------
+
+fn parse_type(mut &p: Parser) -> Ty {
+	name := cur(p).lexeme
+	p_advance(p)
+	if name == "int" {
+		return TInt
+	}
+	if name == "float" {
+		return TFloat
+	}
+	if name == "str" {
+		return TStr
+	}
+	if name == "bool" {
+		return TBool
+	}
+	return TUnknown
+}
+
+# --- declarations --------------------------------------------------------------
+
+# parse turns source into a File. Only function declarations are recognised at the top
+# level (the examples corpus); any other top-level token is skipped.
+pub fn parse(src: str) -> File {
+	toks := tokenize(src)
+	mut p := Parser(toks, 0)
+	mut fns: list[FnDecl] = []
+	skip_semis(p)
+	for not p_at(p, Eof) {
+		if p_at(p, Fn) {
+			fns.append(parse_fn(p))
+		} else {
+			p_advance(p)
+		}
+		skip_semis(p)
+	}
+	return File(fns)
+}
+
+fn parse_fn(mut &p: Parser) -> FnDecl {
+	p_advance(p) # 'fn'
+	name := cur(p).lexeme
+	p_advance(p) # name
+	expect(p, LParen)
+	mut params: list[Param] = []
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		pname := cur(p).lexeme
+		p_advance(p)
+		expect(p, Colon)
+		pty := parse_type(p)
+		params.append(Param(pname, pty))
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+	}
+	expect(p, RParen)
+	mut has_ret := false
+	mut ret := TVoid
+	if p_at(p, Arrow) {
+		p_advance(p)
+		ret = parse_type(p)
+		has_ret = true
+	}
+	body := parse_block(p)
+	return FnDecl(name, params, has_ret, ret, body)
+}
+
+fn parse_block(mut &p: Parser) -> list[Stmt] {
+	expect(p, LBrace)
+	mut body: list[Stmt] = []
+	skip_semis(p)
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		body.append(parse_stmt(p))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return body
+}
+
+# --- statements ----------------------------------------------------------------
+
+fn parse_stmt(mut &p: Parser) -> Stmt {
+	k := cur_kind(p)
+	if k == Nop {
+		p_advance(p)
+		return SNop
+	}
+	if k == Print {
+		p_advance(p)
+		return SPrint(parse_expr(p))
+	}
+	if k == Return {
+		return parse_return(p)
+	}
+	if k == Break {
+		p_advance(p)
+		return SBreak
+	}
+	if k == Continue {
+		p_advance(p)
+		return SContinue
+	}
+	if k == If {
+		return parse_if(p)
+	}
+	if k == For {
+		return parse_for(p)
+	}
+	if k == Mut {
+		p_advance(p)
+		return parse_binding(p, true)
+	}
+	if k == Const {
+		p_advance(p)
+		return parse_binding(p, false)
+	}
+	if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
+		return parse_binding(p, false)
+	}
+	# expression statement or reassignment
+	e := parse_expr(p)
+	if p_at(p, Assign) {
+		p_advance(p)
+		rhs := parse_expr(p)
+		return SAssign(ident_name(e), rhs)
+	}
+	return SExpr(e)
+}
+
+# parse_binding parses `name := e` (inferred) or `name: T = e` (typed). const is folded
+# into an immutable let (is_mut false); the emitter treats both as a plain C local.
+fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
+	name := cur(p).lexeme
+	p_advance(p)
+	if p_at(p, Walrus) {
+		p_advance(p)
+		return SLet(name, TUnknown, false, is_mut, parse_expr(p))
+	}
+	expect(p, Colon)
+	ty := parse_type(p)
+	expect(p, Assign)
+	return SLet(name, ty, true, is_mut, parse_expr(p))
+}
+
+fn parse_return(mut &p: Parser) -> Stmt {
+	p_advance(p) # 'return'
+	if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof) {
+		return SReturn(false, ENil)
+	}
+	e := parse_expr(p)
+	if p_at(p, If) {
+		p_advance(p)
+		return SReturnIf(e, parse_expr(p))
+	}
+	return SReturn(true, e)
+}
+
+fn parse_if(mut &p: Parser) -> Stmt {
+	p_advance(p) # 'if'
+	cond := parse_expr(p)
+	then_body := parse_block(p)
+	mut has_else := false
+	mut else_body: list[Stmt] = []
+	if p_at(p, Else) {
+		p_advance(p)
+		has_else = true
+		if p_at(p, If) {
+			# else-if: the else block is a single nested if statement
+			else_body.append(parse_if(p))
+		} else {
+			else_body = parse_block(p)
+		}
+	}
+	return SIf(cond, then_body, has_else, else_body)
+}
+
+fn parse_for(mut &p: Parser) -> Stmt {
+	p_advance(p) # 'for'
+	if p_at(p, LBrace) {
+		return SFor(false, ENil, parse_block(p))
+	}
+	cond := parse_expr(p)
+	body := parse_block(p)
+	return SFor(true, cond, body)
+}
+
+# --- expressions ---------------------------------------------------------------
+
+fn is_add_op(k: Kind) -> bool {
+	return k == Plus or k == Minus or k == Pipe or k == Caret or k == PlusMod or k == MinusMod
+}
+
+fn is_mul_op(k: Kind) -> bool {
+	return k == Star or k == Slash or k == Percent or k == StarMod or k == Shl or k == Shr or k == Amp
+}
+
+fn is_cmp_op(k: Kind) -> bool {
+	return k == EqEq or k == Ne or k == Lt or k == Gt or k == Le or k == Ge
+}
+
+fn is_unary_op(k: Kind) -> bool {
+	return k == Minus or k == Not or k == Tilde or k == MinusMod
+}
+
+fn parse_expr(mut &p: Parser) -> Expr {
+	return parse_or(p)
+}
+
+fn parse_or(mut &p: Parser) -> Expr {
+	mut left := parse_and(p)
+	for p_at(p, Or) {
+		p_advance(p)
+		left = EBinary("or", left, parse_and(p))
+	}
+	return left
+}
+
+fn parse_and(mut &p: Parser) -> Expr {
+	mut left := parse_cmp(p)
+	for p_at(p, And) {
+		p_advance(p)
+		left = EBinary("and", left, parse_cmp(p))
+	}
+	return left
+}
+
+# parse_cmp is non-associative: at most one comparison operator.
+fn parse_cmp(mut &p: Parser) -> Expr {
+	left := parse_add(p)
+	if is_cmp_op(cur_kind(p)) {
+		op := kind_name(cur_kind(p))
+		p_advance(p)
+		return EBinary(op, left, parse_add(p))
+	}
+	return left
+}
+
+fn parse_add(mut &p: Parser) -> Expr {
+	mut left := parse_mul(p)
+	for is_add_op(cur_kind(p)) {
+		op := kind_name(cur_kind(p))
+		p_advance(p)
+		left = EBinary(op, left, parse_mul(p))
+	}
+	return left
+}
+
+fn parse_mul(mut &p: Parser) -> Expr {
+	mut left := parse_unary(p)
+	for is_mul_op(cur_kind(p)) {
+		op := kind_name(cur_kind(p))
+		p_advance(p)
+		left = EBinary(op, left, parse_unary(p))
+	}
+	return left
+}
+
+fn parse_unary(mut &p: Parser) -> Expr {
+	if is_unary_op(cur_kind(p)) {
+		op := kind_name(cur_kind(p))
+		p_advance(p)
+		return EUnary(op, parse_unary(p))
+	}
+	return parse_postfix(p)
+}
+
+# parse_postfix parses a primary then a chain of calls. In the subset the callee is
+# always a bare identifier, so a call collapses to ECall(name, args).
+fn parse_postfix(mut &p: Parser) -> Expr {
+	mut e := parse_primary(p)
+	for p_at(p, LParen) {
+		name := ident_name(e)
+		p_advance(p) # '('
+		mut args: list[Expr] = []
+		for not p_at(p, RParen) and not p_at(p, Eof) {
+			args.append(parse_expr(p))
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
+		}
+		expect(p, RParen)
+		e = ECall(name, args)
+	}
+	return e
+}
+
+fn parse_primary(mut &p: Parser) -> Expr {
+	t := cur(p)
+	k := t.kind
+	if k == Int {
+		p_advance(p)
+		return EInt(t.lexeme)
+	}
+	if k == Float {
+		p_advance(p)
+		return EFloat(t.lexeme)
+	}
+	if k == Str {
+		p_advance(p)
+		return EStr(t.value)
+	}
+	if k == True {
+		p_advance(p)
+		return EBool(true)
+	}
+	if k == False {
+		p_advance(p)
+		return EBool(false)
+	}
+	if k == Nil {
+		p_advance(p)
+		return ENil
+	}
+	if k == Ident {
+		p_advance(p)
+		return EIdent(t.lexeme)
+	}
+	if k == LParen {
+		p_advance(p)
+		inner := parse_expr(p)
+		expect(p, RParen)
+		return inner
+	}
+	if k == Match {
+		return parse_match(p)
+	}
+	p_advance(p)
+	return ENil
+}
+
+fn parse_match(mut &p: Parser) -> Expr {
+	p_advance(p) # 'match'
+	scrut := parse_expr(p)
+	expect(p, LBrace)
+	skip_semis(p)
+	mut arms: list[Arm] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		arms.append(parse_arm(p))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return EMatch(scrut, arms)
+}
+
+# parse_arm parses one `pattern [if guard] => body` arm. A bare identifier binds the
+# scrutinee (or is the `_` wildcard); anything else is a literal pattern matched by
+# equality.
+fn parse_arm(mut &p: Parser) -> Arm {
+	mut pat := 0
+	mut lit := ENil
+	mut bind := ""
+	if p_at(p, Ident) {
+		name := cur(p).lexeme
+		p_advance(p)
+		if name == "_" {
+			pat = 2
+		} else {
+			pat = 1
+			bind = name
+		}
+	} else {
+		lit = parse_expr(p)
+	}
+	mut has_guard := false
+	mut grd := ENil
+	if p_at(p, If) {
+		p_advance(p)
+		has_guard = true
+		grd = parse_expr(p)
+	}
+	expect(p, FatArrow)
+	body := parse_expr(p)
+	return Arm(pat, lit, bind, has_guard, grd, body)
+}

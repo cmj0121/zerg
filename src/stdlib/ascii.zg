@@ -12,8 +12,7 @@
 
 # is_digit reports whether b is an ASCII decimal digit, '0'..'9'.
 pub fn is_digit(b: byte) -> bool {
-	v := int(b)
-	return v >= 48 and v <= 57
+	return digit_val(b) >= 0
 }
 
 # is_upper reports whether b is an ASCII uppercase letter, 'A'..'Z'.
@@ -41,14 +40,7 @@ pub fn is_alnum(b: byte) -> bool {
 # is_hex_digit reports whether b is an ASCII hexadecimal digit, '0'..'9' / 'a'..'f' /
 # 'A'..'F'.
 pub fn is_hex_digit(b: byte) -> bool {
-	v := int(b)
-	if v >= 48 and v <= 57 {
-		return true
-	}
-	if v >= 97 and v <= 102 {
-		return true
-	}
-	return v >= 65 and v <= 70
+	return hex_val(b) >= 0
 }
 
 # is_space reports whether b is an ASCII whitespace byte — space (0x20), tab (0x09),

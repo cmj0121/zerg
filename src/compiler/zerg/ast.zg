@@ -74,6 +74,7 @@ enum Stmt {
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
 	SForIn(str, Expr, list[Stmt])
+	SGuard(list[Stmt])
 	SBreak
 	SContinue
 	SNop

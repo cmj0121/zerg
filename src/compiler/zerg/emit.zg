@@ -237,6 +237,33 @@ fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> Ty {
 	return TUnknown
 }
 
+# c_struct_field_ty_at returns the type of a struct's idx-th field (declaration order).
+fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
+	mut n := 0
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sname {
+			if n == idx {
+				return em.fld_ty[i]
+			}
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return TUnknown
+}
+
+# c_field_init emits a constructor argument, initialising an empty-list `[]` to a
+# properly sized runtime list from the destination field's element type (a bare `[]`
+# alone has no type context and would otherwise emit a malformed zero list).
+fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
+	if c_is_list(fty) and c_is_listlit(arg) {
+		em.used_rt = true
+		return "zg_empty_list(sizeof(" + c_type(c_list_elem(fty)) + "))"
+	}
+	return c_expr(em, arg, sb)
+}
+
 # c_struct_typedef emits a value struct as a C typedef with zg_-mangled fields.
 fn c_struct_typedef(sd: StructDecl) -> str {
 	mut out := "typedef struct {\n"
@@ -634,13 +661,32 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 # construction as a plain compound literal (both are PascalCase constructors), and any
 # other call as a function call.
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+	if c_is_intrinsic(name) {
+		em.used_rt = true
+		return c_intrinsic(name) + "(" + c_args(em, args, sb) + ")"
+	}
 	if c_is_ctor(name) {
 		if c_is_variant(em, name) {
 			return c_variant_ctor(em, name, args, sb)
 		}
-		return "(zg_" + name + "){" + c_args(em, args, sb) + "}"
+		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
 	return "zg_" + name + "(" + c_call_args(em, name, args, sb) + ")"
+}
+
+# c_struct_args emits a struct constructor's arguments, giving each field's type as
+# context so an empty-list argument is initialised correctly.
+fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> str {
+	mut out := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_field_init(em, c_struct_field_ty_at(em, sname, i), args[i], sb)
+		i = i + 1
+	}
+	return out
 }
 
 # c_call_args emits a call's arguments, taking the address of any argument bound to a
@@ -674,7 +720,7 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 			if i > 0 {
 				out = out + ", "
 			}
-			mut val := c_expr(em, args[i], sb)
+			mut val := c_field_init(em, c_variant_field_ty(em, name, i), args[i], sb)
 			if c_is_boxed(em, name, i) {
 				# box a self-recursive payload into a leaked ref cell
 				val = "zg_refnew_" + en + "(" + val + ")"
@@ -833,6 +879,9 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
+	if c_is_intrinsic(name) {
+		return c_intrinsic_ret(name)
+	}
 	if c_is_variant(em, name) {
 		return TNamed(c_variant_enum(em, name))
 	}
@@ -840,6 +889,44 @@ fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
 		return TNamed(name)
 	}
 	return c_lookup_sig_ret(em, name)
+}
+
+# c_is_intrinsic reports whether a name is a runtime intrinsic (a __zrt_ primitive).
+fn c_is_intrinsic(name: str) -> bool {
+	b := list[byte](name)
+	if b.len() < 2 {
+		return false
+	}
+	return b[0] == b'_' and b[1] == b'_'
+}
+
+# c_intrinsic maps a __zrt_ intrinsic to its runtime C symbol.
+fn c_intrinsic(name: str) -> str {
+	if name == "__zrt_write" {
+		return "zrt_write_str"
+	}
+	if name == "__zrt_read" {
+		return "zrt_read_fd"
+	}
+	b := list[byte](name)
+	mut out: list[byte] = []
+	mut i := 2
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# c_intrinsic_ret gives the result type of the intrinsics the compiler's I/O uses.
+fn c_intrinsic_ret(name: str) -> Ty {
+	if name == "__zrt_read" {
+		return TList(TByte)
+	}
+	if name == "__zrt_open" {
+		return TInt
+	}
+	return TNil
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
@@ -882,6 +969,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
+		SGuard(body) => c_block(em, body, ind)
 		SBreak => ind + "break;\n"
 		SContinue => ind + "continue;\n"
 		SNop => ""
@@ -899,14 +987,20 @@ fn c_is_listlit(e: Expr) -> bool {
 # list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
 # index) is emitted as a C lvalue.
 fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
-	nm := ident_name(lhs)
-	if nm != "" and c_is_list(c_lookup_var(em, nm)) and c_is_listlit(rhs) {
+	lt := c_infer(em, lhs)
+	lv := c_expr(em, lhs, c_nosub())
+	if c_is_list(lt) and c_is_listlit(rhs) {
+		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
-		et := c_type(c_list_elem(c_lookup_var(em, nm)))
-		mut out := ind + "zrt_list_init(&zg_" + nm + ", sizeof(" + et + "), &zg_listvt);\n"
-		return out + c_pushes(em, "zg_" + nm, et, rhs, ind)
+		et := c_type(c_list_elem(lt))
+		mut out := ind + "zrt_list_init(&(" + lv + "), sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes(em, "(" + lv + ")", et, rhs, ind)
 	}
-	return ind + c_expr(em, lhs, c_nosub()) + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+	if c_is_list(lt) and c_is_lvalue(rhs) {
+		# value semantics: assigning an existing list makes an independent copy
+		return ind + "zrt_list_copy(&(" + lv + "), &(" + c_expr(em, rhs, c_nosub()) + "));\n"
+	}
+	return ind + lv + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
 }
 
 # c_pushes emits a zrt_list_push per element of a list literal.
@@ -966,6 +1060,11 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 		mut out := ind + "zrt_list zg_" + name + "; zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
 		return out + c_pushes(em, "zg_" + name, et, ival, ind)
 	}
+	if c_is_lvalue(ival) {
+		# value semantics: binding from an existing list makes an independent copy so a
+		# later append does not alias the source (leak-style still never drops)
+		return ind + "zrt_list zg_" + name + "; zrt_list_copy(&zg_" + name + ", &(" + c_expr(em, ival, c_nosub()) + "));\n"
+	}
 	return ind + "zrt_list zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
 }
 
@@ -981,10 +1080,18 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 }
 
 fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
-	if has_val {
+	# `return nil` from a nil/Result[nil] function is a bare C return
+	if has_val and not c_is_nil_expr(e) {
 		return ind + "return " + c_expr(em, e, c_nosub()) + ";\n"
 	}
 	return ind + "return;\n"
+}
+
+fn c_is_nil_expr(e: Expr) -> bool {
+	return match e {
+		ENil => true
+		_ => false
+	}
 }
 
 fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
@@ -1018,10 +1125,18 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 # --- declaration emission ------------------------------------------------------
 
 fn c_ret_type(fn_d: FnDecl) -> str {
-	if fn_d.has_ret {
+	if fn_d.has_ret and not c_is_nil_ty(fn_d.ret) {
 		return c_type(fn_d.ret)
 	}
 	return "void"
+}
+
+fn c_is_nil_ty(t: Ty) -> bool {
+	return match t {
+		TNil => true
+		TVoid => true
+		_ => false
+	}
 }
 
 fn c_param_types(fn_d: FnDecl) -> str {
@@ -1079,6 +1194,17 @@ fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
 		if f.fns[i].name == "main" {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_main_has_args(f: File) -> bool {
+	mut i := 0
+	for i < f.fns.len() {
+		if f.fns[i].name == "main" and f.fns[i].params.len() > 0 {
 			return true
 		}
 		i = i + 1
@@ -1156,7 +1282,13 @@ fn c_emit_file(f: File) -> str {
 	}
 	mut mainw := ""
 	if c_has_main(f) {
-		mainw = "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+		if c_main_has_args(f) {
+			# main(args): build the arg list from argv via the runtime
+			em.used_rt = true
+			mainw = "int main(int argc, char** argv) {\n    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
+		} else {
+			mainw = "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+		}
 	}
 
 	rt := c_needs_runtime(em) or em.used_rt
@@ -1170,7 +1302,8 @@ fn c_emit_file(f: File) -> str {
 	}
 	hdr = hdr + "\n"
 	if em.used_rt {
-		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
+		hdr = hdr + "static zrt_list zg_empty_list(size_t esz) { zrt_list l; zrt_list_init(&l, esz, &zg_listvt); return l; }\n\n"
 	}
 	if em.used_str {
 		hdr = hdr + c_str_helpers()

@@ -76,6 +76,14 @@ fn parse_type(mut &p: Parser) -> Ty {
 		expect(p, RBrack)
 		return TList(elem)
 	}
+	if name == "Result" and p_at(p, LBrack) {
+		# the subset ignores the error channel: Result[T] is treated as T's happy path,
+		# and Result[nil] as void
+		p_advance(p)
+		inner := parse_type(p)
+		expect(p, RBrack)
+		return inner
+	}
 	if name == "int" {
 		return TInt
 	}
@@ -94,6 +102,9 @@ fn parse_type(mut &p: Parser) -> Ty {
 	if name == "uint" {
 		# the subset models uint as int64_t (it never parses top-bit values)
 		return TInt
+	}
+	if name == "nil" {
+		return TNil
 	}
 	return TNamed(name)
 }
@@ -280,6 +291,17 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	}
 	if k == For {
 		return parse_for(p)
+	}
+	if k == Guard {
+		# guard { ... } (optionally with a trailing else): the subset runs the happy
+		# path only, so emit the guarded block's statements
+		p_advance(p)
+		body := parse_block(p)
+		if p_at(p, Else) {
+			p_advance(p)
+			parse_block(p)
+		}
+		return SGuard(body)
 	}
 	if k == Mut {
 		p_advance(p)

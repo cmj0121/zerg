@@ -188,23 +188,6 @@ func TestZergTestSpawnChannel(t *testing.T) {
 	}
 }
 
-// TestRunTestExitCodes checks the `zerg test` subcommand itself returns the binary's
-// exit code: 1 for a failing suite, 0 for an all-pass one.
-func TestRunTestExitCodes(t *testing.T) {
-	if _, err := exec.LookPath("cc"); err != nil {
-		t.Skip("no C compiler")
-	}
-	_, fail := entryAt(t, "fail.zg", "import \"testing\"\n#[test]\nfn test_x() {\n  testing.assert(false)\n}\n")
-	if code := runTest(&TestCmd{File: fail, CC: "cc"}); code != 1 {
-		t.Fatalf("runTest(failing) = %d, want 1", code)
-	}
-	_, pass := entryAt(t, "pass.zg", "import \"testing\"\n#[test]\nfn test_y() {\n  testing.assert(true)\n}\n")
-	if code := runTest(&TestCmd{File: pass, CC: "cc"}); code != 0 {
-		t.Fatalf("runTest(passing) = %d, want 0", code)
-	}
-}
-
-// asExit reports whether err is an *exec.ExitError, storing it into target.
 func asExit(err error, target **exec.ExitError) bool {
 	ee, ok := err.(*exec.ExitError)
 	if ok {

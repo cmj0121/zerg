@@ -1,0 +1,88 @@
+# ast — the syntax tree of the self-hosting Zerg compiler (M2).
+#
+# The node set covers the Zerg-boot subset the compiler is written in and the examples
+# corpus targets: function declarations, the statement forms (bindings, assignment,
+# print, return / return-if, if / else, for, break / continue, nop, bare expression),
+# and the expression forms (literals, identifiers, unary / binary operators, calls,
+# and match). Expr and Stmt are recursive enums (auto-boxed by the runtime); the parser
+# builds them and the emitter walks them to C.
+#
+# Literal nodes keep the surface lexeme (EInt / EFloat) so numbers emit verbatim, per the
+# language's literal-surface invariant; EStr keeps the decoded value and the emitter
+# re-escapes it into a C string literal. The value-type node is named Ty, not Type, which
+# the bootstrap reserves.
+
+# Ty is the small set of value types the subset needs, plus TVoid for a function with no
+# return and TUnknown as the inference bottom.
+enum Ty {
+	TInt
+	TFloat
+	TStr
+	TBool
+	TNil
+	TVoid
+	TUnknown
+}
+
+# Expr is an expression node.
+enum Expr {
+	EInt(str)
+	EFloat(str)
+	EStr(str)
+	EBool(bool)
+	ENil
+	EIdent(str)
+	EUnary(str, Expr)
+	EBinary(str, Expr, Expr)
+	ECall(str, list[Expr])
+	EMatch(Expr, list[Arm])
+}
+
+# Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
+# equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`. An arm may
+# carry an `if` guard.
+struct Arm {
+	pat: int
+	lit: Expr
+	bind: str
+	has_guard: bool
+	guard_expr: Expr
+	body: Expr
+}
+
+# Stmt is a statement node. Blocks are plain list[Stmt]; the `has_*` flags stand in for
+# the optional parts the subset's flat enums cannot express as optionals.
+enum Stmt {
+	SLet(str, Ty, bool, bool, Expr)
+	SAssign(str, Expr)
+	SPrint(Expr)
+	SReturn(bool, Expr)
+	SReturnIf(Expr, Expr)
+	SExpr(Expr)
+	SIf(Expr, list[Stmt], bool, list[Stmt])
+	SFor(bool, Expr, list[Stmt])
+	SBreak
+	SContinue
+	SNop
+}
+
+# Param is one function parameter: its name and declared type.
+struct Param {
+	name: str
+	ty: Ty
+}
+
+# FnDecl is a function declaration: name, parameters, an optional return type
+# (has_ret false means it returns nothing), and the body block.
+struct FnDecl {
+	name: str
+	params: list[Param]
+	has_ret: bool
+	ret: Ty
+	body: list[Stmt]
+}
+
+# File is a whole parsed source file: its function declarations in source order.
+struct File {
+	fns: list[FnDecl]
+}

@@ -654,11 +654,19 @@ func (r *resolver) resolveFStrParts(parts []ast.FStrPart) {
 // type-argument list (DESIGN-1b §2.2, GRAMMAR group 4): a comma is unambiguously
 // type arguments; otherwise the base's binding decides — a generic function or a
 // type constructor takes type arguments, any value is indexed.
+// IsSizeofBuiltin reports whether name is one of the compile-time layout built-ins whose
+// bracket holds a TYPE argument — `sizeof` / `alignof`. It is the single authority for
+// that name set, shared by resolve, infer, mono, and emit so the four stages agree on
+// which brackets are a type-arg built-in rather than an index.
+func IsSizeofBuiltin(name string) bool {
+	return name == "sizeof" || name == "alignof"
+}
+
 func (r *resolver) resolveBracket(n *ast.Bracket) {
 	// sizeof[T] / alignof[T] are compile-time built-ins whose bracket holds a TYPE, not an
 	// index — so neither the base name nor the type argument is resolved as a value (a user
 	// may still shadow the name with an ordinary binding, which takes over).
-	if id, ok := n.Base.(*ast.Ident); ok && (id.Name == "sizeof" || id.Name == "alignof") &&
+	if id, ok := n.Base.(*ast.Ident); ok && IsSizeofBuiltin(id.Name) &&
 		r.scope.lookup(id.Name) == nil {
 		r.info.Brackets[n] = BracketRes{Kind: BracketTypeArg}
 		// resolve the type argument (so a user type like Point links) but NOT the base name

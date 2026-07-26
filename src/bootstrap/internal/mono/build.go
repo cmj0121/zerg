@@ -327,7 +327,7 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 	case *ast.Bracket:
 		// sizeof[T] / alignof[T]: the type argument (not the base/elems as values) must be
 		// collected so its C type — a struct never otherwise instantiated — is emitted.
-		if id, ok := n.Base.(*ast.Ident); ok && (id.Name == "sizeof" || id.Name == "alignof") &&
+		if id, ok := n.Base.(*ast.Ident); ok && sema.IsSizeofBuiltin(id.Name) &&
 			len(w.info.Brackets[n].Args) == 1 {
 			w.collectType(w.info.Brackets[n].Args[0])
 		} else {

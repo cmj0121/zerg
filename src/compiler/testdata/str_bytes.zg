@@ -1,0 +1,20 @@
+fn upper_first(s: str) -> str {
+	bs := list[byte](s)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < bs.len() {
+		c := bs[i]
+		if i == 0 and c >= b'a' and c <= b'z' {
+			out.append(byte(int(c) - 32))
+		} else {
+			out.append(c)
+		}
+		i = i + 1
+	}
+	return str(out)
+}
+fn main() {
+	print upper_first("hello")
+	print upper_first("world") + "!"
+	print upper_first("hello") == "Hello"
+}

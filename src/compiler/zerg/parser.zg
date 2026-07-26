@@ -81,7 +81,7 @@ fn parse_type(mut &p: Parser) -> Ty {
 	if name == "bool" {
 		return TBool
 	}
-	return TUnknown
+	return TNamed(name)
 }
 
 # --- declarations --------------------------------------------------------------
@@ -91,17 +91,39 @@ fn parse_type(mut &p: Parser) -> Ty {
 pub fn parse(src: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0)
+	mut structs: list[StructDecl] = []
 	mut fns: list[FnDecl] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Fn) {
 			fns.append(parse_fn(p))
+		} else if p_at(p, Struct) {
+			structs.append(parse_struct(p))
 		} else {
 			p_advance(p)
 		}
 		skip_semis(p)
 	}
-	return File(fns)
+	return File(structs, fns)
+}
+
+fn parse_struct(mut &p: Parser) -> StructDecl {
+	p_advance(p) # 'struct'
+	name := cur(p).lexeme
+	p_advance(p) # name
+	expect(p, LBrace)
+	skip_semis(p)
+	mut fields: list[FieldDef] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		fname := cur(p).lexeme
+		p_advance(p)
+		expect(p, Colon)
+		fty := parse_type(p)
+		fields.append(FieldDef(fname, fty))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return StructDecl(name, fields)
 }
 
 fn parse_fn(mut &p: Parser) -> FnDecl {
@@ -335,18 +357,25 @@ fn parse_unary(mut &p: Parser) -> Expr {
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
 	mut e := parse_primary(p)
-	for p_at(p, LParen) {
-		name := ident_name(e)
-		p_advance(p) # '('
-		mut args: list[Expr] = []
-		for not p_at(p, RParen) and not p_at(p, Eof) {
-			args.append(parse_expr(p))
-			if p_at(p, Comma) {
-				p_advance(p)
+	for p_at(p, LParen) or p_at(p, Dot) {
+		if p_at(p, Dot) {
+			p_advance(p)
+			fld := cur(p).lexeme
+			p_advance(p)
+			e = EField(e, fld)
+		} else {
+			name := ident_name(e)
+			p_advance(p) # '('
+			mut args: list[Expr] = []
+			for not p_at(p, RParen) and not p_at(p, Eof) {
+				args.append(parse_expr(p))
+				if p_at(p, Comma) {
+					p_advance(p)
+				}
 			}
+			expect(p, RParen)
+			e = ECall(name, args)
 		}
-		expect(p, RParen)
-		e = ECall(name, args)
 	}
 	return e
 }

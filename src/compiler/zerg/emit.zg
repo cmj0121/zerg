@@ -33,8 +33,13 @@ struct Emitter {
 	vf_variant: list[str]
 	vf_index: list[int]
 	vf_boxed: list[bool]
+	vf_ty: list[Ty]
 	used_rt: bool
 	used_str: bool
+	ref_names: list[str]
+	pr_fn: list[str]
+	pr_idx: list[int]
+	pr_ref: list[bool]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -118,6 +123,7 @@ fn c_is_bool_op(oper: str) -> bool {
 fn c_reset_env(mut &em: Emitter) {
 	em.env_names = []
 	em.env_tys = []
+	em.ref_names = []
 }
 
 fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
@@ -143,8 +149,39 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		em.sig_names.append(fn_i.name)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
+		mut j := 0
+		for j < fn_i.params.len() {
+			em.pr_fn.append(fn_i.name)
+			em.pr_idx.append(j)
+			em.pr_ref.append(fn_i.params[j].is_ref)
+			j = j + 1
+		}
 		i = i + 1
 	}
+}
+
+# c_param_is_ref reports whether parameter `idx` of function `fname` is a mutable
+# reference (so a call must pass its argument's address).
+fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
+			return em.pr_ref[i]
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
+	mut i := 0
+	for i < em.ref_names.len() {
+		if em.ref_names[i] == name {
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
@@ -237,6 +274,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 				em.vf_index.append(k)
 				# a field whose type is the enclosing enum is boxed (leak-style void*)
 				em.vf_boxed.append(c_named_of(v.fields[k]) == ed.name)
+				em.vf_ty.append(v.fields[k])
 				k = k + 1
 			}
 			j = j + 1
@@ -256,6 +294,29 @@ fn c_is_boxed(mut &em: Emitter, variant: str, idx: int) -> bool {
 		i = i + 1
 	}
 	return false
+}
+
+fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_variant[i] == variant and em.vf_index[i] == idx {
+			return em.vf_ty[i]
+		}
+		i = i + 1
+	}
+	return TUnknown
+}
+
+# c_bind_env registers an enum constructor arm's payload names in the variable
+# environment with their field types, so type inference inside the arm resolves them.
+fn c_bind_env(mut &em: Emitter, a: Arm) {
+	if a.pat == 3 {
+		mut i := 0
+		for i < a.binds.len() {
+			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i))
+			i = i + 1
+		}
+	}
 }
 
 # c_needs_runtime reports whether any enum has a boxed field, so the translation unit
@@ -465,6 +526,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		EListLit(elems) => "(zrt_list){0}"
 		EConv(ty, x) => c_conv(em, ty, x, sb)
+		EIf(cond, then_e, else_e) => "(" + c_expr(em, cond, sb) + " ? " + c_expr(em, then_e, sb) + " : " + c_expr(em, else_e, sb) + ")"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 	}
 }
@@ -472,7 +534,8 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
-	if c_is_str(c_infer(em, a)) {
+	ta := c_infer(em, a)
+	if c_is_str(ta) {
 		if oper == "+" {
 			em.used_str = true
 			em.used_rt = true
@@ -485,7 +548,27 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 			return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") != 0)"
 		}
 	}
+	# enum equality compares the tag (the subset only == tag-only enums like Kind)
+	if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=") {
+		return "((" + c_expr(em, a, sb) + ").tag " + oper + " (" + c_expr(em, b, sb) + ").tag)"
+	}
 	return "(" + c_expr(em, a, sb) + " " + c_binop(oper) + " " + c_expr(em, b, sb) + ")"
+}
+
+# c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
+fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	if nm == "" {
+		return false
+	}
+	mut i := 0
+	for i < em.enum_names.len() {
+		if em.enum_names[i] == nm {
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 # c_conv lowers a type conversion. str(bytes) and list[byte](str) go through the emitted
@@ -510,7 +593,22 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	ct := c_type(c_list_elem(c_infer(em, target)))
-	return "(*(" + ct + "*)zrt_list_at(&(" + c_expr(em, target, sb) + "), " + c_expr(em, idx, sb) + "))"
+	tgt := c_expr(em, target, sb)
+	ix := c_expr(em, idx, sb)
+	if c_is_lvalue(target) {
+		return "(*(" + ct + "*)zrt_list_at(&(" + tgt + "), " + ix + "))"
+	}
+	# a call/conversion result is an rvalue; materialise it so its address is taken
+	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)zrt_list_at(&zg_ix, " + ix + ")); })"
+}
+
+fn c_is_lvalue(e: Expr) -> bool {
+	return match e {
+		EIdent(_) => true
+		EField(_, _) => true
+		EIndex(_, _) => true
+		_ => false
+	}
 }
 
 # c_method lowers a `target.meth(args)`: a list target uses the runtime list methods
@@ -529,7 +627,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 		}
 		return tgt
 	}
-	return "zg_" + meth + "(" + c_args(em, args, sb) + ")"
+	return "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -542,7 +640,26 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		}
 		return "(zg_" + name + "){" + c_args(em, args, sb) + "}"
 	}
-	return "zg_" + name + "(" + c_args(em, args, sb) + ")"
+	return "zg_" + name + "(" + c_call_args(em, name, args, sb) + ")"
+}
+
+# c_call_args emits a call's arguments, taking the address of any argument bound to a
+# mutable-reference parameter (which is a C pointer).
+fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str {
+	mut out := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		mut a := c_expr(em, args[i], sb)
+		if c_param_is_ref(em, fname, i) {
+			a = "&(" + a + ")"
+		}
+		out = out + a
+		i = i + 1
+	}
+	return out
 }
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
@@ -593,6 +710,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	}
 	if c_is_variant(em, n) {
 		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
+	}
+	if c_is_ref_name(em, n) {
+		# a mutable-reference parameter is a pointer; dereference it on use
+		return "(*zg_" + n + ")"
 	}
 	return "zg_" + n
 }
@@ -653,6 +774,7 @@ fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> Subst {
 }
 
 fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+	c_bind_env(em, a)
 	if a.pat == 0 {
 		# literal pattern: scrutinee equals the literal
 		return "(" + s + " == " + c_expr(em, a.lit, sb) + ")"
@@ -671,6 +793,7 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
 }
 
 fn c_arm_body(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+	c_bind_env(em, a)
 	return c_expr(em, a.body, c_arm_subst(em, a, s, sb))
 }
 
@@ -692,6 +815,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => TUnknown
 		EConv(ty, x) => ty
+		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
 	}
 }
@@ -750,7 +874,7 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 	return match s {
 		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, ival, ind)
-		SAssign(name, rhs) => c_assign(em, name, rhs, ind)
+		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
 		SReturnIf(val, cond) => ind + "if (" + c_expr(em, cond, c_nosub()) + ") { return " + c_expr(em, val, c_nosub()) + "; }\n"
@@ -771,17 +895,18 @@ fn c_is_listlit(e: Expr) -> bool {
 	}
 }
 
-# c_assign lowers `name = rhs`. Re-assigning a list literal re-initialises the list
-# (leak-style: the old buffer is abandoned); anything else is a plain assignment.
-fn c_assign(mut &em: Emitter, name: str, rhs: Expr, ind: str) -> str {
-	vt := c_lookup_var(em, name)
-	if c_is_list(vt) and c_is_listlit(rhs) {
+# c_assign lowers `lhs = rhs`. Re-assigning a list literal to a name re-initialises the
+# list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
+# index) is emitted as a C lvalue.
+fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
+	nm := ident_name(lhs)
+	if nm != "" and c_is_list(c_lookup_var(em, nm)) and c_is_listlit(rhs) {
 		em.used_rt = true
-		et := c_type(c_list_elem(vt))
-		mut out := ind + "zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
-		return out + c_pushes(em, "zg_" + name, et, rhs, ind)
+		et := c_type(c_list_elem(c_lookup_var(em, nm)))
+		mut out := ind + "zrt_list_init(&zg_" + nm + ", sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes(em, "zg_" + nm, et, rhs, ind)
 	}
-	return ind + "zg_" + name + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+	return ind + c_expr(em, lhs, c_nosub()) + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
 }
 
 # c_pushes emits a zrt_list_push per element of a list literal.
@@ -809,9 +934,14 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
 	c_add_var(em, var, elem)
-	mut out := ind + "for (size_t zg_i = 0; zg_i < zrt_list_len(&(" + it + ")); zg_i++) {\n"
-	out = out + ind + "    " + et + " zg_" + var + " = (*(" + et + "*)zrt_list_at(&(" + it + "), zg_i));\n"
-	out = out + c_block(em, body, ind + "    ")
+	# wrap in a block and materialize the iterable into a local so a call-result rvalue is
+	# addressable and sequential loops do not clash on the temp name
+	in2 := ind + "    "
+	mut out := ind + "{\n" + in2 + "zrt_list zg_it = " + it + ";\n"
+	out = out + in2 + "for (size_t zg_i = 0; zg_i < zrt_list_len(&zg_it); zg_i++) {\n"
+	out = out + in2 + "    " + et + " zg_" + var + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
+	out = out + c_block(em, body, in2 + "    ")
+	out = out + in2 + "}\n"
 	return out + ind + "}\n"
 }
 
@@ -904,7 +1034,12 @@ fn c_param_types(fn_d: FnDecl) -> str {
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_type(fn_d.params[i].ty)
+		pm := fn_d.params[i]
+		mut ct := c_type(pm.ty)
+		if pm.is_ref {
+			ct = ct + "*"
+		}
+		out = out + ct
 		i = i + 1
 	}
 	return out
@@ -927,7 +1062,12 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			}
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty)
-			sig = sig + c_type(pm.ty) + " zg_" + pm.name
+			if pm.is_ref {
+				em.ref_names.append(pm.name)
+				sig = sig + c_type(pm.ty) + "* zg_" + pm.name
+			} else {
+				sig = sig + c_type(pm.ty) + " zg_" + pm.name
+			}
 			i = i + 1
 		}
 	}
@@ -978,20 +1118,22 @@ pub fn emit_files(srcs: list[str]) -> str {
 # em.used_rt), then the header is assembled with the runtime include and the shared list
 # vtable added only when the program needs them.
 fn c_emit_file(f: File) -> str {
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 
+	# enums first: a struct may hold an enum by value (a struct is never held by an enum
+	# except through an opaque zrt_list), so enum typedefs must precede struct typedefs.
 	mut types := ""
 	mut i := 0
-	for i < f.structs.len() {
-		types = types + c_struct_typedef(f.structs[i])
+	for i < f.enums.len() {
+		types = types + c_enum_typedef(f.enums[i])
 		i = i + 1
 	}
 	i = 0
-	for i < f.enums.len() {
-		types = types + c_enum_typedef(f.enums[i])
+	for i < f.structs.len() {
+		types = types + c_struct_typedef(f.structs[i])
 		i = i + 1
 	}
 	i = 0

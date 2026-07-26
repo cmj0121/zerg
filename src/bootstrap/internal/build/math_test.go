@@ -50,3 +50,26 @@ func TestMathConstantsRuns(t *testing.T) {
 		t.Fatalf("math constants: got %q, want %q", got, want)
 	}
 }
+
+// TestMathRoundingRuns covers the rounding family trunc/floor/ceil/round over positive
+// and negative inputs, the half-away-from-zero rule, and an already-integral value
+// (which the >= 2^52 guard returns unchanged). Integral floats print without a decimal.
+func TestMathRoundingRuns(t *testing.T) {
+	got := runProgramRT(t, "import \"math\"\n"+
+		"fn main() {\n"+
+		"\tprint math.trunc(2.7)\n"+ // 2
+		"\tprint math.trunc(-2.7)\n"+ // -2
+		"\tprint math.floor(2.7)\n"+ // 2
+		"\tprint math.floor(-2.1)\n"+ // -3
+		"\tprint math.ceil(2.1)\n"+ // 3
+		"\tprint math.ceil(-2.7)\n"+ // -2
+		"\tprint math.round(2.5)\n"+ // 3
+		"\tprint math.round(-2.5)\n"+ // -3
+		"\tprint math.round(2.4)\n"+ // 2
+		"\tprint math.round(-2.4)\n"+ // -2
+		"\tprint math.floor(5.0)\n"+ // 5 (already integral)
+		"}\n")
+	if want := "2\n-2\n2\n-3\n3\n-2\n3\n-3\n2\n-2\n5\n"; got != want {
+		t.Fatalf("math rounding: got %q, want %q", got, want)
+	}
+}

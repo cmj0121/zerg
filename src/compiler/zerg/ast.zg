@@ -22,6 +22,7 @@ enum Ty {
 	TNil
 	TVoid
 	TUnknown
+	TNamed(str)
 }
 
 # Expr is an expression node.
@@ -35,6 +36,7 @@ enum Expr {
 	EUnary(str, Expr)
 	EBinary(str, Expr, Expr)
 	ECall(str, list[Expr])
+	EField(Expr, str)
 	EMatch(Expr, list[Arm])
 }
 
@@ -82,7 +84,21 @@ struct FnDecl {
 	body: list[Stmt]
 }
 
-# File is a whole parsed source file: its function declarations in source order.
+# FieldDef is one struct field: its name and declared type.
+struct FieldDef {
+	name: str
+	ty: Ty
+}
+
+# StructDecl is a struct type declaration: its name and fields in source order.
+struct StructDecl {
+	name: str
+	fields: list[FieldDef]
+}
+
+# File is a whole parsed source file: its struct and function declarations in source
+# order.
 struct File {
+	structs: list[StructDecl]
 	fns: list[FnDecl]
 }

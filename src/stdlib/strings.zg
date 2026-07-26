@@ -10,7 +10,9 @@
 # needle only ever matches a haystack at a code-point boundary. Offsets returned by
 # `index_of` are therefore BYTE offsets (as in Go's `strings.Index`), not rune counts.
 # Case folding (`to_upper` / `to_lower`) is ASCII-only — a non-ASCII byte is passed
-# through unchanged; full Unicode folding needs case tables (deferred).
+# through unchanged; full Unicode folding needs case tables (deferred). Byte-level
+# classification (whitespace, case) is shared with the `ascii` module.
+import "ascii"
 
 # match_at reports whether needle occurs in haystack starting exactly at byte offset
 # `at`. An empty needle matches anywhere in range; an out-of-range window never matches
@@ -28,13 +30,6 @@ fn match_at(hay: list[byte], nee: list[byte], at: int) -> bool {
 		k = k + 1
 	}
 	return true
-}
-
-# is_space reports whether b is an ASCII whitespace byte (space, tab, LF, CR).
-# Module-private.
-fn is_space(b: byte) -> bool {
-	v := int(b)
-	return v == 32 or v == 9 or v == 10 or v == 13
 }
 
 # has_prefix reports whether s begins with prefix. An empty prefix is always a prefix.
@@ -99,46 +94,58 @@ pub fn split(s: str, sep: str) -> list[str] {
 }
 
 # join concatenates the parts with sep between each adjacent pair (the inverse of
-# split); an empty list yields the empty string, a single part yields that part.
+# split); an empty list yields the empty string, a single part yields that part. It
+# accumulates in a byte list (decoding sep once) so the whole build is linear, not the
+# quadratic re-copy a chain of `+` concatenations would cost.
 pub fn join(parts: list[str], sep: str) -> str {
-	mut out := ""
+	sepb := list[byte](sep)
+	mut out: list[byte] = []
 	n := parts.len()
 	mut i := 0
 	for i < n {
 		if i > 0 {
-			out = out + sep
+			for c in sepb {
+				out.append(c)
+			}
 		}
-		out = out + parts[i]
+		for c in list[byte](parts[i]) {
+			out.append(c)
+		}
 		i = i + 1
 	}
-	return out
+	return str(out)
 }
 
 # repeat returns s concatenated with itself count times (count 0 yields the empty
-# string). A negative count raises ValueError.
+# string). A negative count raises ValueError. It decodes s once and appends its bytes,
+# so the build is linear in the output length rather than the quadratic re-copy of `+`.
 pub fn repeat(s: str, count: int) -> str {
 	if count < 0 {
 		raise "strings.repeat: negative count"
 	}
-	mut out := ""
+	sb := list[byte](s)
+	mut out: list[byte] = []
 	mut i := 0
 	for i < count {
-		out = out + s
+		for c in sb {
+			out.append(c)
+		}
 		i = i + 1
 	}
-	return out
+	return str(out)
 }
 
-# trim removes leading and trailing ASCII whitespace (space, tab, LF, CR) from s.
+# trim removes leading and trailing ASCII whitespace (the `ascii.is_space` set — space,
+# tab, LF, VT, FF, CR) from s.
 pub fn trim(s: str) -> str {
 	b := list[byte](s)
 	n := b.len()
 	mut lo := 0
-	for lo < n and is_space(b[lo]) {
+	for lo < n and ascii.is_space(b[lo]) {
 		lo = lo + 1
 	}
 	mut hi := n
-	for hi > lo and is_space(b[hi - 1]) {
+	for hi > lo and ascii.is_space(b[hi - 1]) {
 		hi = hi - 1
 	}
 	mut out: list[byte] = []
@@ -151,31 +158,23 @@ pub fn trim(s: str) -> str {
 }
 
 # to_upper returns s with every ASCII lowercase letter folded to uppercase; every other
-# byte (including all non-ASCII) is passed through unchanged.
+# byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
+# `ascii.to_upper`.
 pub fn to_upper(s: str) -> str {
 	mut out: list[byte] = []
 	for c in list[byte](s) {
-		v := int(c)
-		if v >= 97 and v <= 122 {
-			out.append(byte(v - 32))
-		} else {
-			out.append(c)
-		}
+		out.append(ascii.to_upper(c))
 	}
 	return str(out)
 }
 
 # to_lower returns s with every ASCII uppercase letter folded to lowercase; every other
-# byte (including all non-ASCII) is passed through unchanged.
+# byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
+# `ascii.to_lower`.
 pub fn to_lower(s: str) -> str {
 	mut out: list[byte] = []
 	for c in list[byte](s) {
-		v := int(c)
-		if v >= 65 and v <= 90 {
-			out.append(byte(v + 32))
-		} else {
-			out.append(c)
-		}
+		out.append(ascii.to_lower(c))
 	}
 	return str(out)
 }
@@ -231,15 +230,16 @@ pub fn replace(s: str, old: str, new: str) -> str {
 }
 
 # trim_prefix returns s without a single leading prefix; if s does not start with
-# prefix, s is returned unchanged.
+# prefix, s is returned unchanged. It decodes s and prefix once and checks with match_at
+# directly (rather than re-decoding through has_prefix).
 pub fn trim_prefix(s: str, prefix: str) -> str {
-	if not has_prefix(s, prefix) {
+	b := list[byte](s)
+	p := list[byte](prefix)
+	if not match_at(b, p, 0) {
 		return s
 	}
-	b := list[byte](s)
-	p := list[byte](prefix).len()
 	mut out: list[byte] = []
-	mut i := p
+	mut i := p.len()
 	for i < b.len() {
 		out.append(b[i])
 		i = i + 1
@@ -248,13 +248,15 @@ pub fn trim_prefix(s: str, prefix: str) -> str {
 }
 
 # trim_suffix returns s without a single trailing suffix; if s does not end with
-# suffix, s is returned unchanged.
+# suffix, s is returned unchanged. It decodes s and suffix once and checks with match_at
+# directly (rather than re-decoding through has_suffix).
 pub fn trim_suffix(s: str, suffix: str) -> str {
-	if not has_suffix(s, suffix) {
+	b := list[byte](s)
+	sf := list[byte](suffix)
+	hi := b.len() - sf.len()
+	if not match_at(b, sf, hi) {
 		return s
 	}
-	b := list[byte](s)
-	hi := b.len() - list[byte](suffix).len()
 	mut out: list[byte] = []
 	mut i := 0
 	for i < hi {
@@ -274,7 +276,7 @@ pub fn fields(s: str) -> list[str] {
 	mut cur: list[byte] = []
 	mut i := 0
 	for i < n {
-		if is_space(b[i]) {
+		if ascii.is_space(b[i]) {
 			if cur.len() > 0 {
 				out.append(str(cur))
 				cur = []

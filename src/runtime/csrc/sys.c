@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -279,4 +280,43 @@ void zrt_remove(const char *path) {
 	if (unlink(path) != 0) {
 		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot remove file");
 	}
+}
+
+/* zrt_exec runs argv[0] with arguments argv (PATH-searched), waits for the child, and
+ * returns its exit status — 128+signal if it died on a signal, 127 if exec failed, -1 if
+ * it could not fork. The process-spawn floor the stdlib `os.run` and command literals
+ * lower onto, over the POSIX fork / exec / wait syscalls only (zero third-party
+ * dependency). argv holds `const char *` elements; the child image is a shallow view of
+ * them, valid until exec replaces the address space. */
+int64_t zrt_exec(zrt_list argv) {
+	size_t n = zrt_list_len(&argv);
+	char **av = (char **)malloc((n + 1) * sizeof(char *));
+	if (av == NULL) {
+		return -1;
+	}
+	for (size_t i = 0; i < n; i++) {
+		av[i] = *(char **)zrt_list_at(&argv, i);
+	}
+	av[n] = NULL;
+	pid_t pid = fork();
+	if (pid < 0) {
+		free(av);
+		return -1;
+	}
+	if (pid == 0) {
+		execvp(av[0], av);
+		_exit(127); /* exec failed */
+	}
+	free(av);
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0) {
+		return -1;
+	}
+	if (WIFEXITED(status)) {
+		return (int64_t)WEXITSTATUS(status);
+	}
+	if (WIFSIGNALED(status)) {
+		return (int64_t)(128 + WTERMSIG(status));
+	}
+	return -1;
 }

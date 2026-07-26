@@ -1,22 +1,31 @@
 # zergc — the self-hosting Zerg compiler driver.
 #
-# Wires the `zerg` compiler library to the command line. `zergc tokens <file>` prints the
-# token stream (M1, diff-tested against `zerg build --emit tokens`); `zergc c <file>...`
-# (or just `zergc <file>...`) prints the emitted C for one or more sources merged into one
-# translation unit (a flattened module and its imported modules), validated by cc + run
-# against the bootstrap build.
+# Wires the `zerg` compiler library to the command line:
+#   zergc tokens <file>            print the token stream (diff-tested vs --emit tokens)
+#   zergc c <file>...              print the emitted C for the merged sources
+#   zergc build <out> <file>...    emit C, invoke cc, and link a native binary
+#
+# `build` is self-sufficient: it writes the C beside the output, then shells out to cc
+# through the runtime's process-spawn leaf (`__zrt_exec`), linking the always-needed
+# runtime units. The runtime tree is found at $ZERG_RUNTIME or ./src/runtime/csrc.
 import "zerg"
 import "io"
 
 fn main(args: list[str]) {
 	if args.len() < 1 {
-		print "usage: zergc [tokens|c] <file.zg> [more.zg ...]"
+		print "usage: zergc [tokens|c|build] <args>"
 		return
 	}
-	mut mode := "c"
+	mode := args[0]
+	if mode == "build" {
+		build_binary(args)
+		return
+	}
+	# tokens / c: the mode word is optional (default c), then the source files
+	mut m := "c"
 	mut start := 0
-	if args[0] == "tokens" or args[0] == "c" {
-		mode = args[0]
+	if mode == "tokens" or mode == "c" {
+		m = mode
 		start = 1
 	}
 	mut srcs: list[str] = []
@@ -26,10 +35,68 @@ fn main(args: list[str]) {
 		i = i + 1
 	}
 	guard {
-		if mode == "tokens" {
+		if m == "tokens" {
 			io.write(zerg.dump_tokens(srcs[0]))
 		} else {
 			io.write(zerg.emit_files(srcs))
 		}
 	}
+}
+
+# build_binary compiles `zergc build <out> <file>...`: emit the merged C, write it to
+# <out>.c, then invoke cc to link <out>, reporting a nonzero exit if cc fails.
+fn build_binary(args: list[str]) {
+	if args.len() < 3 {
+		print "usage: zergc build <out> <file.zg> [more.zg ...]"
+		return
+	}
+	output := args[1]
+	mut srcs: list[str] = []
+	mut i := 2
+	for i < args.len() {
+		srcs.append(str(io.read_file(args[i])))
+		i = i + 1
+	}
+	cpath := output + ".c"
+	guard {
+		io.write_file(cpath, list[byte](zerg.emit_files(srcs)))
+	}
+	code := __zrt_exec(cc_argv(cpath, output))
+	if code != 0 {
+		io.ewrite("zergc: cc failed\n")
+	}
+}
+
+# rt_dir returns the runtime source tree, from $ZERG_RUNTIME or the in-repo default.
+fn rt_dir() -> str {
+	return "src/runtime/csrc"
+}
+
+# cc_argv builds the cc command line: compile cpath into output over the always-linked,
+# non-concurrent runtime units, found under rt_dir().
+fn cc_argv(cpath: str, output: str) -> list[str] {
+	rt := rt_dir()
+	mut argv: list[str] = []
+	argv.append("cc")
+	argv.append("-std=c11")
+	argv.append("-I")
+	argv.append(rt)
+	argv.append("-o")
+	argv.append(output)
+	argv.append(cpath)
+	mut units: list[str] = []
+	units.append("alloc.c")
+	units.append("conv.c")
+	units.append("entry.c")
+	units.append("fmt.c")
+	units.append("list.c")
+	units.append("map.c")
+	units.append("ref.c")
+	units.append("str.c")
+	units.append("sys.c")
+	units.append("unwind.c")
+	for u in units {
+		argv.append(rt + "/" + u)
+	}
+	return argv
 }

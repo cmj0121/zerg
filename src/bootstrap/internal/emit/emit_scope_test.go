@@ -66,25 +66,30 @@ func TestScopeEmit(t *testing.T) {
 			},
 		},
 		{
-			// reassigning a Ref binding releases the old value then retains the new, so
-			// the target does not leak or double-free (review R3).
+			// reassigning a Ref binding retains the new value into a temp, releases the
+			// old value, then stores the temp — so the target does not leak or double-free
+			// and a self-referential RHS keeps the old cell live across the release
+			// (review R3; temp-first ordering fixes the `s = s + x` use-after-free).
 			name:        "reassign-ref-binding-releases-old",
 			src:         "fn main() {\n a := Ref(1)\n mut b := Ref(2)\n b = a\n print deref(b)\n}",
 			wantRuntime: true,
 			wantContains: []string{
-				"zrt_release(zg_b);",         // release old Ref(2) before overwrite
-				"zg_b = zrt_ref_copy(zg_a);", // retain the aliased new value
+				"void* zg_as = zrt_ref_copy(zg_a);", // retain the aliased new value into a temp first
+				"zrt_release(zg_b);",                // then release old Ref(2)
+				"zg_b = zg_as;",                     // then store the temp
 			},
 		},
 		{
-			// reassigning a Ref-typed field releases the old field value in place before
-			// storing the new one (review R8: a sub-place not tracked as a binding).
+			// reassigning a Ref-typed field materializes the new box into a temp, releases
+			// the old field value in place, then stores the temp (review R8: a sub-place not
+			// tracked as a binding; temp-first ordering avoids a self-referential UAF).
 			name:        "reassign-ref-field-releases-old",
 			src:         "struct Box { v: Ref[int] }\nfn main() {\n mut a := Box(Ref(1))\n a.v = Ref(2)\n print deref(a.v)\n}",
 			wantRuntime: true,
 			wantContains: []string{
-				"zrt_release(zg_a.zg_v);",     // release old field Ref(1)
-				"zg_a.zg_v = zg_refnew_0(2);", // store the new box
+				"void* zg_as = zg_refnew_0(2);", // materialize the new box into a temp first
+				"zrt_release(zg_a.zg_v);",       // then release old field Ref(1)
+				"zg_a.zg_v = zg_as;",            // then store the temp
 			},
 		},
 		{

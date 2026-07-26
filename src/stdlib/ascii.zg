@@ -1,0 +1,99 @@
+# ascii — ASCII byte classification (pure-Zerg stdlib).
+#
+# Bundled into a program that writes `import "ascii"`; members are reached through the
+# namespace, as `ascii.is_digit(b)` or `ascii.hex_val(b)`. Every function takes a single
+# `byte` and decides purely from its value — no allocation, no runtime leaf.
+#
+# The scope is deliberately ASCII: a byte >= 128 is never a letter/digit/space here, so
+# these predicates are the honest tool for tokenising ASCII source (the classification a
+# lexer needs — the `is_*` set mirrors C's <ctype.h>). Full Unicode classification needs
+# code-point tables and is a separate concern. Case folding of a whole `str` is
+# `strings.to_upper` / `strings.to_lower`; these are the single-byte counterparts.
+
+# is_digit reports whether b is an ASCII decimal digit, '0'..'9'.
+pub fn is_digit(b: byte) -> bool {
+	return digit_val(b) >= 0
+}
+
+# is_upper reports whether b is an ASCII uppercase letter, 'A'..'Z'.
+pub fn is_upper(b: byte) -> bool {
+	v := int(b)
+	return v >= 65 and v <= 90
+}
+
+# is_lower reports whether b is an ASCII lowercase letter, 'a'..'z'.
+pub fn is_lower(b: byte) -> bool {
+	v := int(b)
+	return v >= 97 and v <= 122
+}
+
+# is_alpha reports whether b is an ASCII letter, 'A'..'Z' or 'a'..'z'.
+pub fn is_alpha(b: byte) -> bool {
+	return is_upper(b) or is_lower(b)
+}
+
+# is_alnum reports whether b is an ASCII letter or decimal digit.
+pub fn is_alnum(b: byte) -> bool {
+	return is_alpha(b) or is_digit(b)
+}
+
+# is_hex_digit reports whether b is an ASCII hexadecimal digit, '0'..'9' / 'a'..'f' /
+# 'A'..'F'.
+pub fn is_hex_digit(b: byte) -> bool {
+	return hex_val(b) >= 0
+}
+
+# is_space reports whether b is an ASCII whitespace byte — space (0x20), tab (0x09),
+# newline (0x0A), vertical tab (0x0B), form feed (0x0C), or carriage return (0x0D), the
+# same set as C's isspace.
+pub fn is_space(b: byte) -> bool {
+	v := int(b)
+	if v == 32 {
+		return true
+	}
+	return v >= 9 and v <= 13
+}
+
+# to_upper folds an ASCII lowercase letter to its uppercase form; every other byte
+# (including all non-ASCII) is returned unchanged.
+pub fn to_upper(b: byte) -> byte {
+	if is_lower(b) {
+		return byte(int(b) - 32)
+	}
+	return b
+}
+
+# to_lower folds an ASCII uppercase letter to its lowercase form; every other byte
+# (including all non-ASCII) is returned unchanged.
+pub fn to_lower(b: byte) -> byte {
+	if is_upper(b) {
+		return byte(int(b) + 32)
+	}
+	return b
+}
+
+# digit_val returns the numeric value 0..9 of an ASCII decimal digit, or -1 when b is
+# not a digit — the building block for parsing a decimal number by hand.
+pub fn digit_val(b: byte) -> int {
+	v := int(b)
+	if v >= 48 and v <= 57 {
+		return v - 48
+	}
+	return -1
+}
+
+# hex_val returns the numeric value 0..15 of an ASCII hexadecimal digit (either case),
+# or -1 when b is not a hex digit — the building block for parsing a `0x…` literal.
+pub fn hex_val(b: byte) -> int {
+	v := int(b)
+	if v >= 48 and v <= 57 {
+		return v - 48
+	}
+	if v >= 97 and v <= 102 {
+		return v - 87
+	}
+	if v >= 65 and v <= 70 {
+		return v - 55
+	}
+	return -1
+}

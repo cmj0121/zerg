@@ -1,0 +1,293 @@
+# strings — text utilities over the built-in str (pure-Zerg stdlib).
+#
+# Bundled into a program that writes `import "strings"`; members are reached through
+# the namespace, as `strings.split(line, ",")` or `strings.join(parts, "/")`. Every
+# function here is ordinary safe Zerg — it decodes the str to its bytes with the
+# `list[byte](s)` built-in, works at the byte level, and rebuilds a str with `str(bs)`.
+# There is no foreign binding: Zerg is zero-external-dependency like Go.
+#
+# Byte-level search is UTF-8 correct: UTF-8 is self-synchronising, so a valid str
+# needle only ever matches a haystack at a code-point boundary. Offsets returned by
+# `index_of` are therefore BYTE offsets (as in Go's `strings.Index`), not rune counts.
+# Case folding (`to_upper` / `to_lower`) is ASCII-only — a non-ASCII byte is passed
+# through unchanged; full Unicode folding needs case tables (deferred). Byte-level
+# classification (whitespace, case) is shared with the `ascii` module.
+import "ascii"
+
+# match_at reports whether needle occurs in haystack starting exactly at byte offset
+# `at`. An empty needle matches anywhere in range; an out-of-range window never matches
+# (so callers need not bound-check before asking). Module-private.
+fn match_at(hay: list[byte], nee: list[byte], at: int) -> bool {
+	m := nee.len()
+	if at < 0 or at + m > hay.len() {
+		return false
+	}
+	mut k := 0
+	for k < m {
+		if hay[at + k] != nee[k] {
+			return false
+		}
+		k = k + 1
+	}
+	return true
+}
+
+# has_prefix reports whether s begins with prefix. An empty prefix is always a prefix.
+pub fn has_prefix(s: str, prefix: str) -> bool {
+	return match_at(list[byte](s), list[byte](prefix), 0)
+}
+
+# has_suffix reports whether s ends with suffix. An empty suffix is always a suffix.
+pub fn has_suffix(s: str, suffix: str) -> bool {
+	hay := list[byte](s)
+	suf := list[byte](suffix)
+	return match_at(hay, suf, hay.len() - suf.len())
+}
+
+# index_of returns the BYTE offset of the first occurrence of sub in s, or -1 when sub
+# is absent. An empty sub is found at 0. The offset is a byte index, not a rune count.
+pub fn index_of(s: str, sub: str) -> int {
+	hay := list[byte](s)
+	nee := list[byte](sub)
+	n := hay.len()
+	mut i := 0
+	for i <= n {
+		if match_at(hay, nee, i) {
+			return i
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+# contains reports whether sub occurs anywhere in s. An empty sub is always contained.
+pub fn contains(s: str, sub: str) -> bool {
+	return index_of(s, sub) >= 0
+}
+
+# split breaks s into the pieces separated by sep, returning every piece between
+# occurrences (so N separators yield N+1 pieces, and a piece may be empty). Splitting on
+# an empty separator raises ValueError — demote it with `guard { strings.split(s, x) }`.
+pub fn split(s: str, sep: str) -> list[str] {
+	hay := list[byte](s)
+	sepb := list[byte](sep)
+	m := sepb.len()
+	if m == 0 {
+		raise "strings.split: empty separator"
+	}
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	n := hay.len()
+	mut i := 0
+	for i < n {
+		if match_at(hay, sepb, i) {
+			out.append(str(cur))
+			cur = []
+			i = i + m
+		} else {
+			cur.append(hay[i])
+			i = i + 1
+		}
+	}
+	out.append(str(cur))
+	return out
+}
+
+# join concatenates the parts with sep between each adjacent pair (the inverse of
+# split); an empty list yields the empty string, a single part yields that part. It
+# accumulates in a byte list (decoding sep once) so the whole build is linear, not the
+# quadratic re-copy a chain of `+` concatenations would cost.
+pub fn join(parts: list[str], sep: str) -> str {
+	sepb := list[byte](sep)
+	mut out: list[byte] = []
+	n := parts.len()
+	mut i := 0
+	for i < n {
+		if i > 0 {
+			for c in sepb {
+				out.append(c)
+			}
+		}
+		for c in list[byte](parts[i]) {
+			out.append(c)
+		}
+		i = i + 1
+	}
+	return str(out)
+}
+
+# repeat returns s concatenated with itself count times (count 0 yields the empty
+# string). A negative count raises ValueError. It decodes s once and appends its bytes,
+# so the build is linear in the output length rather than the quadratic re-copy of `+`.
+pub fn repeat(s: str, count: int) -> str {
+	if count < 0 {
+		raise "strings.repeat: negative count"
+	}
+	sb := list[byte](s)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < count {
+		for c in sb {
+			out.append(c)
+		}
+		i = i + 1
+	}
+	return str(out)
+}
+
+# trim removes leading and trailing ASCII whitespace (the `ascii.is_space` set — space,
+# tab, LF, VT, FF, CR) from s.
+pub fn trim(s: str) -> str {
+	b := list[byte](s)
+	n := b.len()
+	mut lo := 0
+	for lo < n and ascii.is_space(b[lo]) {
+		lo = lo + 1
+	}
+	mut hi := n
+	for hi > lo and ascii.is_space(b[hi - 1]) {
+		hi = hi - 1
+	}
+	mut out: list[byte] = []
+	mut i := lo
+	for i < hi {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# to_upper returns s with every ASCII lowercase letter folded to uppercase; every other
+# byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
+# `ascii.to_upper`.
+pub fn to_upper(s: str) -> str {
+	mut out: list[byte] = []
+	for c in list[byte](s) {
+		out.append(ascii.to_upper(c))
+	}
+	return str(out)
+}
+
+# to_lower returns s with every ASCII uppercase letter folded to lowercase; every other
+# byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
+# `ascii.to_lower`.
+pub fn to_lower(s: str) -> str {
+	mut out: list[byte] = []
+	for c in list[byte](s) {
+		out.append(ascii.to_lower(c))
+	}
+	return str(out)
+}
+
+# count returns the number of non-overlapping occurrences of sub in s. An empty sub
+# raises ValueError.
+pub fn count(s: str, sub: str) -> int {
+	hay := list[byte](s)
+	nee := list[byte](sub)
+	m := nee.len()
+	if m == 0 {
+		raise "strings.count: empty substring"
+	}
+	n := hay.len()
+	mut c := 0
+	mut i := 0
+	for i <= n - m {
+		if match_at(hay, nee, i) {
+			c = c + 1
+			i = i + m
+		} else {
+			i = i + 1
+		}
+	}
+	return c
+}
+
+# replace returns s with every non-overlapping occurrence of old replaced by new,
+# scanning left to right. An empty old raises ValueError.
+pub fn replace(s: str, old: str, new: str) -> str {
+	oldb := list[byte](old)
+	m := oldb.len()
+	if m == 0 {
+		raise "strings.replace: empty target"
+	}
+	hay := list[byte](s)
+	newb := list[byte](new)
+	n := hay.len()
+	mut out: list[byte] = []
+	mut i := 0
+	for i < n {
+		if match_at(hay, oldb, i) {
+			for c in newb {
+				out.append(c)
+			}
+			i = i + m
+		} else {
+			out.append(hay[i])
+			i = i + 1
+		}
+	}
+	return str(out)
+}
+
+# trim_prefix returns s without a single leading prefix; if s does not start with
+# prefix, s is returned unchanged. It decodes s and prefix once and checks with match_at
+# directly (rather than re-decoding through has_prefix).
+pub fn trim_prefix(s: str, prefix: str) -> str {
+	b := list[byte](s)
+	p := list[byte](prefix)
+	if not match_at(b, p, 0) {
+		return s
+	}
+	mut out: list[byte] = []
+	mut i := p.len()
+	for i < b.len() {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# trim_suffix returns s without a single trailing suffix; if s does not end with
+# suffix, s is returned unchanged. It decodes s and suffix once and checks with match_at
+# directly (rather than re-decoding through has_suffix).
+pub fn trim_suffix(s: str, suffix: str) -> str {
+	b := list[byte](s)
+	sf := list[byte](suffix)
+	hi := b.len() - sf.len()
+	if not match_at(b, sf, hi) {
+		return s
+	}
+	mut out: list[byte] = []
+	mut i := 0
+	for i < hi {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# fields splits s around each run of ASCII whitespace, returning the non-empty pieces
+# (so leading, trailing, and repeated whitespace never yield an empty field). An all-
+# whitespace or empty s yields an empty list.
+pub fn fields(s: str) -> list[str] {
+	b := list[byte](s)
+	n := b.len()
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	mut i := 0
+	for i < n {
+		if ascii.is_space(b[i]) {
+			if cur.len() > 0 {
+				out.append(str(cur))
+				cur = []
+			}
+		} else {
+			cur.append(b[i])
+		}
+		i = i + 1
+	}
+	if cur.len() > 0 {
+		out.append(str(cur))
+	}
+	return out
+}

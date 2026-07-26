@@ -16,18 +16,20 @@ binary. Programs are fast to write, easy to read, and overwhelmingly straightfor
 
 ## Design Principles
 
-| Principle        | Description                                                                      |
-| ---------------- | -------------------------------------------------------------------------------- |
-| small and crisp  | minimal syntax                                                                   |
-| safe by default  | immutable and private unless explicitly `mut` / `pub`                            |
-| null-safe        | optionals instead of null; no billion-dollar mistake                             |
-| concurrent       | built-in coroutines and channels (a cooperative **N:1** scheduler in this phase) |
-| procedural-first | straightforward, top-down control flow                                           |
-| scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are  |
-|                  | reference-counted                                                                |
-| strongly typed   | catch errors at compile time                                                     |
-| explicit casts   | no implicit conversion by default; a value converts by re-construction (`T(x)`)  |
-| copy-by-value    | value types are copied on assignment; a reference-counted value is shared        |
+| Principle        | Description                                                                                           |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| small and crisp  | minimal syntax                                                                                        |
+| safe by default  | immutable and private unless explicitly `mut` / `pub`                                                 |
+| null-safe        | optionals instead of null; no billion-dollar mistake                                                  |
+| concurrent       | built-in coroutines and channels (a cooperative **N:1** scheduler in this phase)                      |
+| procedural-first | straightforward, top-down control flow                                                                |
+| scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are                       |
+|                  | reference-counted                                                                                     |
+| strongly typed   | catch errors at compile time                                                                          |
+| explicit casts   | no implicit conversion by default; a value converts by re-construction (`T(x)`)                       |
+| copy-by-value    | value types are copied on assignment; a reference-counted value is shared                             |
+| zero-dependency  | like Go — no third-party library. The **runtime** (fixed by spec + its C impl) is the only floor      |
+|                  | reaching the OS; the **stdlib** is pure Zerg over it, an implementation detail bound by its interface |
 
 Full semantics — primitive & user types, conversions, the memory model, concurrency, and null-safety —
 are in the **[Language Specification](docs/language.md)**, with companion chapters for
@@ -80,6 +82,41 @@ Each form desugars to the core — the full table is in **[Syntax Sugar](docs/sy
 Control flow stays flat: `break` / `continue` act only on the nearest `for`, and there are **no loop
 labels** — to leave an outer loop, extract a function and `return`.
 
+## Built-in functions
+
+A small, **fixed** set of compiler-recognized functions — no `import` needed:
+
+| Built-in                                  | Does                                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `Ref(x)` / `deref(r)`                     | construct / read the reference-counted box                                |
+| `int` `uint` `float` `bool` `byte` `rune` | primitive conversion `T(x)`; `int("…")` also parses a decimal string      |
+| `str(bytes)`, `list[byte](s)`             | the str ⇄ list bridges (also `runes`)                                     |
+| `ValueError` … `KeyError`                 | build an `Err` of that fixed kind                                         |
+| `addr` `ptr` `ptr[T]` `uint(p)`           | raw-pointer ops — **`unsafe` only** (plus `.load` / `.store` / `.offset`) |
+
+`print` is a **keyword**, not a function; `list.len()` and friends are **methods**. Full detail —
+**[Built-in Functions](docs/builtins.md)**.
+
+## Standard library
+
+Pure-Zerg packages over the self runtime (zero external dependency), reached with `import "<name>"`:
+
+| Package       | Provides                                       |
+| ------------- | ---------------------------------------------- |
+| **`io`**      | stdout writers, whole-file & stdin read/write  |
+| **`fs`**      | `exists` / `remove`                            |
+| **`os`**      | `env`, `exit`, `platform`, `arch`              |
+| **`strings`** | `split` / `join`, search, trim, case folding   |
+| **`ascii`**   | byte classification for a tokeniser            |
+| **`strconv`** | base-N `parse_int` / `to_string`, `parse_bool` |
+| **`time`**    | `now` (wall clock), `monotonic`                |
+| **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`    |
+| **`rand`**    | a deterministic, non-cryptographic generator   |
+| **`atomic`**  | the safe shared-mutable primitive              |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne`           |
+
+Full catalogue with signatures — **[Standard Library](docs/stdlib.md)**.
+
 ## Compile Flow
 
 ```text
@@ -116,6 +153,14 @@ labels** — to leave an outer loop, extract a function and `return`.
 
 Bootstrap compiler: **Go**, intentionally minimal. It emits C and shells out to `cc`; a small hosted
 runtime (in C) provides the scheduler, channels, reference counting, and the string/collection primitives.
+
+**Zero-dependency, in two layers.** A compiled program links no third-party library. The **runtime** — the
+small C floor that reaches the OS through the platform C library (libc / libSystem) and nothing else — is
+fixed by **both the specification and its implementation** (the semantics, plus the concrete layout and ABI
+the compiler depends on). The **standard library** (`src/stdlib/*.zg`) is **pure Zerg** built on that floor,
+an implementation detail bound **only by its interface** — so `io.read_file` loops the runtime's syscall
+leaves and `math.sqrt` is a Zerg algorithm, never a libc / libm binding. See
+[`src/runtime/README.md`](src/runtime/README.md).
 
 ## Status & Limitations
 

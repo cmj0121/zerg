@@ -325,9 +325,16 @@ func (w *worker) walkExpr(in *Instance, e ast.Expr) {
 	case *ast.TupleIndex:
 		w.walkExpr(in, n.X)
 	case *ast.Bracket:
-		w.walkExpr(in, n.Base)
-		for _, el := range n.Elems {
-			w.walkExpr(in, el)
+		// sizeof[T] / alignof[T]: the type argument (not the base/elems as values) must be
+		// collected so its C type — a struct never otherwise instantiated — is emitted.
+		if id, ok := n.Base.(*ast.Ident); ok && sema.IsSizeofBuiltin(id.Name) &&
+			len(w.info.Brackets[n].Args) == 1 {
+			w.collectType(w.info.Brackets[n].Args[0])
+		} else {
+			w.walkExpr(in, n.Base)
+			for _, el := range n.Elems {
+				w.walkExpr(in, el)
+			}
 		}
 	case *ast.ListLit:
 		for _, el := range n.Elems {

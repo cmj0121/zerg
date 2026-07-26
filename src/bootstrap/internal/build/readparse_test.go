@@ -2,6 +2,7 @@ package build
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,12 +50,14 @@ func TestIntParseLowering(t *testing.T) {
 // TestStrParseRejected keeps the surface narrow: only int(s) parses a string; a str to
 // another scalar is not yet a parse, and a scalar int(x) still converts.
 func TestStrParseRejected(t *testing.T) {
+	// int/uint/float parse a string; every other target does not.
 	for _, src := range []string{
-		"fn main() {\n\tprint uint(\"5\")\n}\n",
 		"fn main() {\n\tprint byte(\"5\")\n}\n",
+		"fn main() {\n\tprint bool(\"true\")\n}\n",
+		"fn main() {\n\tprint rune(\"a\")\n}\n",
 	} {
 		if _, _, diags := Compile(src); len(diags) == 0 {
-			t.Fatalf("parsing a str to a non-int should be rejected: %s", src)
+			t.Fatalf("parsing a str to a non-int/uint/float should be rejected: %s", src)
 		}
 	}
 }
@@ -134,15 +137,17 @@ func TestReadFileMissingGuarded(t *testing.T) {
 	}
 }
 
-// TestReadFileLowering pins the emitted C and that io.read_file lowers through the
-// intrinsic to the runtime.
+// TestReadFileLowering pins the emitted C: io.read_file's pure-Zerg loop lowers through
+// the open/read/close floor intrinsics to their runtime leaves.
 func TestReadFileLowering(t *testing.T) {
 	code, manifest, diags := CompileProgram(writeReadProg(t))
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if !strings.Contains(code, "zrt_read_file(") {
-		t.Fatalf("io.read_file should lower to zrt_read_file:\n%s", code)
+	for _, want := range []string{"zrt_open(", "zrt_read_fd(", "zrt_close("} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("io.read_file should lower to %s:\n%s", want, code)
+		}
 	}
 	if !manifest.NeedsRuntime {
 		t.Fatalf("read_file should need the runtime, got %+v", manifest)
@@ -164,4 +169,27 @@ func writeReadProg(t *testing.T) string {
 		t.Fatalf("write prog: %v", err)
 	}
 	return p
+}
+
+// TestReadFileMultiChunk drives io.read_file's pure-Zerg loop across more than one
+// runtime read chunk: a 10000-byte file spans three 4096-byte __zrt_read calls, so the
+// bytes at the 4096 seams (index 4095/4096) prove the loop stitches chunks in order.
+// Running under ASan/UBSan also asserts each per-iteration chunk list is freed.
+func TestReadFileMultiChunk(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(p, bytes.Repeat([]byte("A"), 10000), 0o644); err != nil {
+		t.Fatalf("write big file: %v", err)
+	}
+	src := fmt.Sprintf("import \"io\"\n"+
+		"fn main() -> Result[nil] {\n"+
+		"\tdata := io.read_file(%q)\n"+
+		"\tio.write_int(data.len())\n\tio.println(\"\")\n"+
+		"\tio.write_int(int(data[4095]))\n\tio.println(\"\")\n"+
+		"\tio.write_int(int(data[4096]))\n\tio.println(\"\")\n"+
+		"\treturn nil\n}\n", p)
+	got := runProgramRT(t, src)
+	if want := "10000\n65\n65\n"; got != want {
+		t.Fatalf("read_file multi-chunk: got %q, want %q", got, want)
+	}
 }

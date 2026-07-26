@@ -1,0 +1,18 @@
+# fs — filesystem operations (pure-Zerg stdlib over the runtime).
+#
+# Bundled into a program that writes `import "fs"`; members are reached through the
+# namespace, as `fs.exists(path)`. This module is the filesystem STRUCTURE — whether a
+# path is there, and removing one; reading and writing a file's CONTENTS is `io`
+# (`io.read_file` / `io.write_file`). Each op is a thin runtime leaf.
+
+# exists reports whether a file or directory exists at path.
+pub fn exists(path: str) -> bool {
+	return __zrt_exists(path)
+}
+
+# remove deletes the FILE at path. It raises IOError when the path is missing or cannot be
+# removed — including when it is a directory (this removes files only) — which
+# `guard { fs.remove(p) }` demotes to a Result.
+pub fn remove(path: str) {
+	__zrt_remove(path)
+}

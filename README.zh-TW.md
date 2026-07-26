@@ -13,18 +13,20 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把你的 Zerg
 
 ## 設計原則（Design Principles）
 
-| 原則             | 說明                                                              |
-| ---------------- | ----------------------------------------------------------------- |
-| small and crisp  | 最精簡的語法                                                      |
-| safe by default  | 除非明確標記 `mut` / `pub`，否則預設 immutable 且 private         |
-| null-safe        | 以 optional 取代 null；沒有那個造成十億美元損失的錯誤             |
-| concurrent       | 內建 coroutine 與 channel（本階段為 cooperative 的 **N:1** 排程） |
-| procedural-first | 直白、由上而下的控制流程                                          |
-| scope-owned      | 無 tracing GC——值在離開 scope 時釋放；recursive 型別與字串採      |
-|                  | reference counting                                                |
-| strongly typed   | 在編譯期就抓出錯誤                                                |
-| explicit casts   | 預設無隱式轉換；值以 re-construction（`T(x)`）轉換                |
-| copy-by-value    | value 型別在指派時複製；reference-counted 的值則共享              |
+| 原則             | 說明                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| small and crisp  | 最精簡的語法                                                                                |
+| safe by default  | 除非明確標記 `mut` / `pub`，否則預設 immutable 且 private                                   |
+| null-safe        | 以 optional 取代 null；沒有那個造成十億美元損失的錯誤                                       |
+| concurrent       | 內建 coroutine 與 channel（本階段為 cooperative 的 **N:1** 排程）                           |
+| procedural-first | 直白、由上而下的控制流程                                                                    |
+| scope-owned      | 無 tracing GC——值在離開 scope 時釋放；recursive 型別與字串採                                |
+|                  | reference counting                                                                          |
+| strongly typed   | 在編譯期就抓出錯誤                                                                          |
+| explicit casts   | 預設無隱式轉換；值以 re-construction（`T(x)`）轉換                                          |
+| copy-by-value    | value 型別在指派時複製；reference-counted 的值則共享                                        |
+| zero-dependency  | like Go——不依賴任何第三方庫。**runtime**（由 spec 與其 C 實作共同框定）是唯一碰 OS 的底層； |
+|                  | **stdlib** 是站在其上的純 Zerg，屬實作細節，只受其 interface 約束                           |
 
 完整語意——primitive 與使用者型別、型別轉換、記憶體模型、並行、null-safety——見
 **[語言規格（Language Specification）](docs/language.zh-TW.md)**，另有配套章節：**[Module、Package 與
@@ -76,6 +78,40 @@ struct Point { x: int; y: int }
 
 控制流保持扁平：`break` / `continue` 只作用於最近的 `for`，且**沒有 loop label**——要離開外層迴圈，抽成函式並 `return`。
 
+## 內建函式（Built-in functions）
+
+一組**固定**的、編譯器內建的函式——免 `import`：
+
+| 內建                                      | 作用                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------- |
+| `Ref(x)` / `deref(r)`                     | 建立 / 讀取 reference-counted box                                          |
+| `int` `uint` `float` `bool` `byte` `rune` | 原生型別轉換 `T(x)`；`int("…")` 另會解析十進位字串                         |
+| `str(bytes)`、`list[byte](s)`             | str ⇄ list 的橋接（另有 `runes`）                                          |
+| `ValueError` … `KeyError`                 | 建出該固定 kind 的 `Err`                                                   |
+| `addr` `ptr` `ptr[T]` `uint(p)`           | raw pointer 運算——**僅限 `unsafe`**（加上 `.load` / `.store` / `.offset`） |
+
+`print` 是**關鍵字**、不是函式；`list.len()` 這類是**方法**。完整細節見 **[內建函式](docs/builtins.zh-TW.md)**。
+
+## 標準函式庫（Standard library）
+
+站在自帶 runtime 上的純 Zerg 套件（零外部依賴），以 `import "<name>"` 取得：
+
+| 套件          | 提供                                 |
+| ------------- | ------------------------------------ |
+| **`io`**      | stdout 寫入、整檔與 stdin 讀／寫     |
+| **`fs`**      | `exists` / `remove`                  |
+| **`os`**      | `env`、`exit`、`platform`、`arch`    |
+| **`strings`** | `split` / `join`、搜尋、trim、大小寫 |
+| **`ascii`**   | tokeniser 用的位元組分類             |
+| **`strconv`** | base-N `parse_int` / `to_string`     |
+| **`time`**    | `now`（牆鐘）、`monotonic`           |
+| **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e` |
+| **`rand`**    | 確定性、非密碼學產生器               |
+| **`atomic`**  | 安全的共享可變原語                   |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne` |
+
+完整目錄與簽名見 **[標準函式庫](docs/stdlib.zh-TW.md)**。
+
 ## 編譯流程（Compile Flow）
 
 ```text
@@ -112,6 +148,12 @@ struct Point { x: int; y: int }
 
 Bootstrap 編譯器：以 **Go** 撰寫，刻意保持最小化。它產出 C 並外呼 `cc`；一個以 C 寫成的小型 hosted runtime
 提供排程器、channel、reference counting，以及字串／collection 的原語。
+
+**Zero-dependency，兩層。** 編譯後的程式不連結任何第三方庫。**runtime**——透過平台 C 函式庫
+（libc / libSystem）碰 OS、別無其他的那一小塊 C 底層——由 **spec 與其實作共同框定**（語意，加上編譯器所依賴的
+具體 layout 與 ABI）。**標準函式庫**（`src/stdlib/*.zg`）是站在該底層上的**純 Zerg**，屬實作細節，**只受其
+interface 約束**——所以 `io.read_file` 走的是 runtime 的 syscall leaf 迴圈、`math.sqrt` 是純 Zerg 演算法，絕非
+綁 libc / libm。詳見 [`src/runtime/README.md`](src/runtime/README.md)。
 
 ## 狀態與限制
 

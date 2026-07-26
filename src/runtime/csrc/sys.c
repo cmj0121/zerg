@@ -7,11 +7,21 @@
  * isolated marks the one spot a freestanding backend swaps libc read/write for a
  * platform console.
  */
+
+/* Ask for the POSIX.1-2008 surface BEFORE any header: under a strict `-std=c11` glibc
+ * hides POSIX declarations (clock_gettime, the CLOCK_* macros, open/read/…) unless a
+ * feature-test macro is set. macOS exposes them regardless; this keeps Linux in step. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "zergrt.h"
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 void zrt_report(const char *msg) {
@@ -109,31 +119,164 @@ zrt_list zrt_os_args(int argc, char **argv) {
 	return l;
 }
 
-/* zrt_read_file reads the whole file at `path` into a list[byte] — the MVP source-input
- * leaf the stdlib `io` module lowers onto until the FFI binder lands (like the write
- * intrinsics above). A missing or unreadable file raises IOError, which `guard` can
- * demote to a Result. */
-zrt_list zrt_read_file(const char *path) {
-	zrt_list l;
-	zrt_list_init(&l, sizeof(uint8_t), NULL);
+/*
+ * Whole-file read floor (Phase 1, pure-Zerg io). These are the irreducible syscall
+ * leaves the stdlib `io.read_file` lowers onto — thin 1:1 wrappers, no loop of their
+ * own: the open/read-chunk/close ORCHESTRATION lives in pure Zerg (src/stdlib/io.zg),
+ * per the zero-external-dependency principle (the runtime is the self syscall layer,
+ * like Go's). An fd crosses to Zerg as a plain int.
+ */
+
+/* zrt_open opens path read-only and returns its fd, aborting IOError when the file
+ * cannot be opened (a value-failure that `guard { io.read_file(p) }` demotes). */
+int64_t zrt_open(const char *path) {
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot open file");
 	}
+	return (int64_t)fd;
+}
+
+/* zrt_read_fd reads up to 4096 bytes from fd into a fresh list[byte] chunk — one
+ * iteration of io.read_file's pure-Zerg loop. An empty chunk marks end of input; a
+ * read error aborts IOError. */
+zrt_list zrt_read_fd(int64_t fd) {
+	zrt_list l;
+	zrt_list_init(&l, sizeof(uint8_t), NULL);
 	uint8_t buf[4096];
-	for (;;) {
-		ssize_t n = read(fd, buf, sizeof(buf));
-		if (n < 0) {
-			close(fd);
-			zrt_abort_kind(ZRT_ERR_IO, "IOError: read failed");
-		}
-		if (n == 0) {
-			break;
-		}
-		for (ssize_t i = 0; i < n; i++) {
-			zrt_list_push(&l, &buf[i]);
-		}
+	ssize_t n = read((int)fd, buf, sizeof(buf));
+	if (n < 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: read failed");
 	}
-	close(fd);
+	for (ssize_t i = 0; i < n; i++) {
+		zrt_list_push(&l, &buf[i]);
+	}
 	return l;
+}
+
+/* zrt_close closes fd, returning close(2)'s status; io.read_file calls it once the
+ * loop hits end of input. */
+int64_t zrt_close(int64_t fd) {
+	return (int64_t)close((int)fd);
+}
+
+/*
+ * Clock leaves the stdlib `time` module lowers onto. Thin wrappers over clock_gettime;
+ * all higher-level logic (durations, formatting) is pure Zerg above them.
+ */
+
+/* zrt_time_unix returns the wall-clock time in whole seconds since the Unix epoch. `ts`
+ * is zero-initialised so a (near-impossible) clock_gettime failure yields 0, not garbage. */
+int64_t zrt_time_unix(void) {
+	struct timespec ts = {0};
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (int64_t)ts.tv_sec;
+}
+
+/* zrt_time_mono returns a monotonic clock reading in nanoseconds — meaningful only as a
+ * difference between two readings (measuring elapsed time), not as an absolute date. */
+int64_t zrt_time_mono(void) {
+	struct timespec ts = {0};
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+}
+
+/*
+ * Process & platform leaves the stdlib `os` module lowers onto. A str returned to Zerg
+ * must be a MANAGED cell (a str-managed program releases it, so a static/foreign pointer
+ * would crash header recovery) — sys_str_cell copies a C string into a fresh rc=1 cell,
+ * the same shape zrt_os_args builds.
+ */
+
+/* sys_str_cell copies the NUL-terminated s (NULL treated as "") into a fresh str cell. */
+static const char *sys_str_cell(const char *s) {
+	if (s == NULL) {
+		s = "";
+	}
+	size_t n = strlen(s);
+	char  *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
+	memcpy(p, s, n + 1);
+	return p;
+}
+
+/* zrt_platform / zrt_arch return the TARGET OS / architecture as a str. They resolve at
+ * C-compile time (#ifdef), so the value is exactly the platform `cc` built for. */
+const char *zrt_platform(void) {
+#if defined(__APPLE__)
+	return sys_str_cell("darwin");
+#elif defined(__linux__)
+	return sys_str_cell("linux");
+#elif defined(_WIN32)
+	return sys_str_cell("windows");
+#elif defined(__FreeBSD__)
+	return sys_str_cell("freebsd");
+#else
+	return sys_str_cell("unknown");
+#endif
+}
+
+const char *zrt_arch(void) {
+#if defined(__aarch64__) || defined(__arm64__)
+	return sys_str_cell("arm64");
+#elif defined(__x86_64__) || defined(_M_X64)
+	return sys_str_cell("x86_64");
+#elif defined(__i386__)
+	return sys_str_cell("x86");
+#elif defined(__riscv) && __riscv_xlen == 64
+	return sys_str_cell("riscv64");
+#else
+	return sys_str_cell("unknown");
+#endif
+}
+
+/* zrt_getenv returns a COPY of environment variable key's value (an empty str when the
+ * variable is unset — pair with zrt_has_env to tell the two apart). */
+const char *zrt_getenv(const char *key) {
+	return sys_str_cell(getenv(key));
+}
+
+/* zrt_has_env reports whether environment variable key is set. */
+bool zrt_has_env(const char *key) {
+	return getenv(key) != NULL;
+}
+
+/* zrt_exit terminates the process with the given status code; it does not return. */
+void zrt_exit(int64_t code) {
+	exit((int)code);
+}
+
+/*
+ * Filesystem-write leaves the stdlib `io.write_file` and `fs` modules lower onto. Thin
+ * wrappers; the open/write/close orchestration of io.write_file is pure Zerg.
+ */
+
+/* zrt_open_write opens path for writing, creating or truncating it (mode 0644), and
+ * returns its fd — aborting IOError when it cannot be opened. */
+int64_t zrt_open_write(const char *path) {
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot open file for writing");
+	}
+	return (int64_t)fd;
+}
+
+/* zrt_write_bytes writes all of a list[byte] to fd, aborting IOError on failure. It only
+ * READS the list (the caller keeps ownership and drops it as usual). */
+void zrt_write_bytes(int64_t fd, zrt_list bytes) {
+	if (bytes.len > 0 && zrt_write((int)fd, bytes.data, bytes.len) < 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: write failed");
+	}
+}
+
+/* zrt_exists reports whether a file or directory exists at path. */
+bool zrt_exists(const char *path) {
+	return access(path, F_OK) == 0;
+}
+
+/* zrt_remove deletes the file at path, aborting IOError on failure — e.g. it is missing,
+ * or it is a directory (unlink removes files only, never a directory). */
+void zrt_remove(const char *path) {
+	if (unlink(path) != 0) {
+		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot remove file");
+	}
 }

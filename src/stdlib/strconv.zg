@@ -1,0 +1,155 @@
+# strconv — numeric text conversion in an arbitrary base (pure-Zerg stdlib).
+#
+# Bundled into a program that writes `import "strconv"`; members are reached through the
+# namespace, as `strconv.parse_int(tok, 16)` or `strconv.to_string(n, 2)`. This is the
+# base-aware layer the built-in conversions do NOT cover: `int(s)` / `uint(s)` /
+# `float(s)` parse decimal only, and `str(n)` formats decimal only. Here `base` is any
+# radix 2..36, with digits '0'..'9' then 'a'..'z' (case-insensitive on input) — enough to
+# read a `0x…` / `0b…` literal by hand or render a hex dump.
+#
+# A malformed string, a digit outside the base, or a base outside 2..36 raises
+# ValueError, which `guard { strconv.parse_int(s, b) }` demotes to a Result. Overflow of
+# the target type is NOT separately diagnosed this phase (a value past the type's range
+# wraps, or traps under the sanitiser); parse trusted or bounded text.
+
+# digit_for maps an ASCII alphanumeric byte to its base value 0..35, or -1 when it is not
+# an alphanumeric — '0'..'9' -> 0..9, 'a'..'z' / 'A'..'Z' -> 10..35. Module-private.
+fn digit_for(b: byte) -> int {
+	v := int(b)
+	if v >= 48 and v <= 57 {
+		return v - 48
+	}
+	if v >= 97 and v <= 122 {
+		return v - 87
+	}
+	if v >= 65 and v <= 90 {
+		return v - 55
+	}
+	return -1
+}
+
+# digit_char maps a base value 0..35 to its lowercase ASCII digit. Module-private.
+fn digit_char(d: int) -> byte {
+	if d < 10 {
+		return byte(48 + d)
+	}
+	return byte(97 + d - 10)
+}
+
+# check_base raises unless base is a legal radix, 2..36. Module-private.
+fn check_base(base: int) {
+	if base < 2 or base > 36 {
+		raise "strconv: base out of range (2..36)"
+	}
+}
+
+# parse_int parses a signed integer written in the given base, with an optional leading
+# '+' or '-'. It raises ValueError on an empty string, a missing digit, or a digit that
+# is not valid for the base.
+pub fn parse_int(s: str, base: int) -> int {
+	check_base(base)
+	b := list[byte](s)
+	n := b.len()
+	if n == 0 {
+		raise "strconv.parse_int: empty string"
+	}
+	mut i := 0
+	mut neg := false
+	if b[0] == byte(43) {
+		i = 1
+	} else if b[0] == byte(45) {
+		neg = true
+		i = 1
+	}
+	if i >= n {
+		raise "strconv.parse_int: no digits"
+	}
+	mut val := 0
+	for i < n {
+		d := digit_for(b[i])
+		if d < 0 or d >= base {
+			raise "strconv.parse_int: invalid digit for base"
+		}
+		val = val * base + d
+		i = i + 1
+	}
+	if neg {
+		return -val
+	}
+	return val
+}
+
+# parse_uint parses an unsigned integer written in the given base, with an optional
+# leading '+'. It raises ValueError on an empty string, a missing digit, a leading '-', or
+# a digit that is not valid for the base. Use this (not parse_int) for a value that fills
+# the top bit, e.g. a 64-bit hex mask.
+pub fn parse_uint(s: str, base: int) -> uint {
+	check_base(base)
+	b := list[byte](s)
+	n := b.len()
+	if n == 0 {
+		raise "strconv.parse_uint: empty string"
+	}
+	mut i := 0
+	if b[0] == byte(43) {
+		i = 1
+	}
+	if i >= n {
+		raise "strconv.parse_uint: no digits"
+	}
+	mut val: uint = 0
+	ubase := uint(base)
+	for i < n {
+		d := digit_for(b[i])
+		if d < 0 or d >= base {
+			raise "strconv.parse_uint: invalid digit for base"
+		}
+		val = val * ubase + uint(d)
+		i = i + 1
+	}
+	return val
+}
+
+# to_string renders n in the given base, lowercase, with a leading '-' for a negative
+# value. Digits are peeled off with `% base` / `/ base` — the single digit is negated,
+# never the whole value, so INT_MIN never overflows — and reversed into the result.
+pub fn to_string(n: int, base: int) -> str {
+	check_base(base)
+	mut digits: list[byte] = []
+	mut v := n
+	neg := v < 0
+	for {
+		d := v % base
+		mag := if d < 0 { -d } else { d }
+		digits.append(digit_char(mag))
+		v = v / base
+		if v == 0 {
+			break
+		}
+	}
+	if neg {
+		digits.append(byte(45))
+	}
+	mut out: list[byte] = []
+	mut i := digits.len() - 1
+	for {
+		out.append(digits[i])
+		if i == 0 {
+			break
+		}
+		i = i - 1
+	}
+	return str(out)
+}
+
+# parse_bool parses the literal `"true"` or `"false"`; any other string raises
+# ValueError.
+pub fn parse_bool(s: str) -> bool {
+	if s == "true" {
+		return true
+	}
+	if s == "false" {
+		return false
+	}
+	raise "strconv.parse_bool: not a bool"
+}

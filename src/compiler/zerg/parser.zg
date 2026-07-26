@@ -7,6 +7,7 @@
 # and bare-expression statements; and the literal / identifier / unary / binary / call /
 # match expression forms. Operators are stored by their Zerg spelling; the emitter maps
 # them to C. Forms outside the subset are skipped rather than parsed.
+import "strconv"
 
 # Parser holds the token list and the read cursor.
 struct Parser {
@@ -87,7 +88,31 @@ fn parse_type(mut &p: Parser) -> Ty {
 	if name == "bool" {
 		return TBool
 	}
+	if name == "byte" {
+		return TByte
+	}
 	return TNamed(name)
+}
+
+# is_conv reports whether a callee name is a scalar type conversion.
+fn is_conv(name: str) -> bool {
+	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool"
+}
+
+fn conv_ty(name: str) -> Ty {
+	if name == "int" {
+		return TInt
+	}
+	if name == "byte" {
+		return TByte
+	}
+	if name == "float" {
+		return TFloat
+	}
+	if name == "bool" {
+		return TBool
+	}
+	return TStr
 }
 
 # --- declarations --------------------------------------------------------------
@@ -430,8 +455,14 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 				e = EField(e, fld)
 			}
 		} else {
-			# free call: name(args)
-			e = ECall(ident_name(e), parse_call_args(p))
+			# free call: name(args), or a scalar type conversion like int(x)
+			name := ident_name(e)
+			args := parse_call_args(p)
+			if is_conv(name) {
+				e = EConv(conv_ty(name), args[0])
+			} else {
+				e = ECall(name, args)
+			}
 		}
 	}
 	return e
@@ -457,6 +488,11 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EInt(t.lexeme)
 	}
+	if k == Byte {
+		# a byte literal b'x' becomes its decimal code point
+		p_advance(p)
+		return EInt(strconv.to_string(int(list[byte](t.value)[0]), 10))
+	}
 	if k == Float {
 		p_advance(p)
 		return EFloat(t.lexeme)
@@ -478,6 +514,15 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return ENil
 	}
 	if k == Ident {
+		# list[T](x) — a list-type conversion (e.g. list[byte](s))
+		if t.lexeme == "list" and peek_kind(p, 1) == LBrack {
+			p_advance(p) # 'list'
+			p_advance(p) # '['
+			elem := parse_type(p)
+			expect(p, RBrack)
+			args := parse_call_args(p)
+			return EConv(TList(elem), args[0])
+		}
 		p_advance(p)
 		return EIdent(t.lexeme)
 	}

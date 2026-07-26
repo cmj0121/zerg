@@ -68,6 +68,44 @@ Validation is `zergc --emit c → cc → run`, diffing the program's output agai
 Go-bootstrap build over the corpus. Determinism (required anyway by the M5 fixpoint) is
 what makes this stable; byte-identical C is explicitly a non-goal.
 
+## Growing emit to the self-compile subset (M3 → M5)
+
+The examples subset (scalars, functions, if / for, match on int) is done end-to-end. The
+compiler's own source needs far more, so emit grows feature by feature, each validated by
+an end-to-end test program before the next. The C shapes the Go bootstrap emits (the
+target) are:
+
+| feature           | C shape                                                           | runtime? |
+| ----------------- | ----------------------------------------------------------------- | -------- |
+| struct            | `typedef struct {…} zg_T;` value; `(zg_T){a,b}`; `p.zg_f`         | no       |
+| enum with payload | `{int32_t tag; union{ struct{…} Var; } u;}`; `.tag` / `.u.Var.fN` | no       |
+| recursive enum    | payload fields become `void*` ref-boxes                           | yes      |
+| list[T]           | `zrt_list` + `zrt_list_init/push/len/at`; for-in is an index loop | yes      |
+| str build / ops   | `list[byte](s)` / `str(bs)` / `+` / `==`                          | yes      |
+
+**Leak-style emit is the simplification.** A self-hosting compiler is a batch tool: it
+compiles once and exits, so it never needs to free. Emit therefore **reuses the runtime's
+data-structure primitives** (`zrt_list_*`, `zrt_ref_alloc` / `zrt_ref_payload` for boxing)
+but **skips the whole memory-management discipline** the Go emit threads through every
+function — no `zrt_scope_mark` / `zrt_defer` / `zrt_unwind_to`, no per-type
+copy / drop / release, ref-boxes allocated and never released, lists with a `{NULL,NULL}`
+element vtable. The OS reclaims on exit. This still honours the "emit C, reuse the runtime"
+decision — the runtime data structures are reused — while cutting the bulk of the Go
+emit's complexity. Determinism (the only property M5 needs) is unaffected by leaking.
+
+**Increment ladder toward M5** (each end-to-end tested, then committed):
+
+1. structs — decl, construction, field access, `mut &` params, field mutation _(no runtime)_
+2. enums with payload — tagged union, construction, match destructuring _(no runtime)_
+3. recursive enums — `void*` ref-boxing, leak-style _(runtime)_
+4. list[T] + for-in — `zrt_list`, index-loop, monomorphized per element type _(runtime)_
+5. str building / ops — `list[byte]` ↔ `str`, `+`, `==` _(runtime)_
+6. generics / monomorphization — one concrete emission per instantiation used in source
+7. imports — emit the flattened multi-file module as one translation unit
+
+When all seven are in and the corpus of feature programs plus the stdlib compile and run
+identically, the compiler can attempt its own source, and M5 begins.
+
 ## Self-host proof (M5)
 
 The acceptance bar is a byte-identical fixpoint:

@@ -71,6 +71,20 @@ pub fn read_file(path: str) -> list[byte] {
 	return out
 }
 
+# read_stdin reads all of standard input (fd 0) to end of input into a list[byte] — the
+# same read loop as read_file, but over the already-open stdin fd, so there is no open or
+# close. It blocks until the stream reaches EOF, so it is the whole-input read a filter
+# uses; decode the bytes with `str(...)` for text. Returns an empty list on empty input.
+pub fn read_stdin() -> list[byte] {
+	mut out: list[byte] = []
+	for {
+		chunk := __zrt_read(0)
+		if chunk.len() == 0 { break }
+		for b in chunk { out.append(b) }
+	}
+	return out
+}
+
 # write_file writes data to the file at path, creating it or truncating an existing one —
 # pure-Zerg orchestration over the runtime's open-write/write/close floor, symmetric with
 # read_file. A failure to open or write raises IOError, which `guard { io.write_file(p, d) }`

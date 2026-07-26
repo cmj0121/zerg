@@ -1,0 +1,449 @@
+# emit — AST to C for the self-hosting Zerg compiler (M3).
+#
+# Lowers a parsed File to C over the same shape the Go bootstrap emits: an include
+# header, forward declarations, the function definitions with `zg_`-mangled names, and
+# an `int main` wrapper that calls `zg_main`. The bar is functional equivalence, not
+# byte-identical C — the emitted C must compile and behave identically to the bootstrap
+# build.
+#
+# Expressions are built as strings (each match arm yields C text), so no void-valued
+# match is needed. A small type inference — over the function signature table and the
+# per-function variable environment held in Emitter — picks the printf format for `print`
+# and resolves numeric promotion. All helpers are `c_`-prefixed to stay clear of the
+# lexer / parser names in this one flattened module.
+import "ascii"
+import "strconv"
+
+# Emitter carries the per-function variable environment (name -> type) and the
+# whole-file function signature table (name -> return type).
+struct Emitter {
+	env_names: list[str]
+	env_tys: list[Ty]
+	sig_names: list[str]
+	sig_rets: list[Ty]
+	sig_hasret: list[bool]
+}
+
+# --- type helpers --------------------------------------------------------------
+
+# c_type maps a value type to its C spelling.
+fn c_type(t: Ty) -> str {
+	return match t {
+		TInt => "int64_t"
+		TFloat => "double"
+		TStr => "const char*"
+		TBool => "bool"
+		TVoid => "void"
+		_ => "int64_t"
+	}
+}
+
+fn c_is_float(t: Ty) -> bool {
+	return match t {
+		TFloat => true
+		_ => false
+	}
+}
+
+# c_is_bool_op reports whether a binary operator yields a bool (comparisons and the
+# logical connectives).
+fn c_is_bool_op(oper: str) -> bool {
+	if oper == "==" or oper == "!=" or oper == "<" or oper == ">" or oper == "<=" or oper == ">=" {
+		return true
+	}
+	return oper == "and" or oper == "or"
+}
+
+# --- environment + signatures --------------------------------------------------
+
+fn c_reset_env(mut &em: Emitter) {
+	em.env_names = []
+	em.env_tys = []
+}
+
+fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
+	em.env_names.append(name)
+	em.env_tys.append(t)
+}
+
+fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
+	mut i := em.env_names.len() - 1
+	for i >= 0 {
+		if em.env_names[i] == name {
+			return em.env_tys[i]
+		}
+		i = i - 1
+	}
+	return TUnknown
+}
+
+fn c_build_sigs(mut &em: Emitter, f: File) {
+	mut i := 0
+	for i < f.fns.len() {
+		fn_i := f.fns[i]
+		em.sig_names.append(fn_i.name)
+		em.sig_rets.append(fn_i.ret)
+		em.sig_hasret.append(fn_i.has_ret)
+		i = i + 1
+	}
+}
+
+fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
+	mut i := 0
+	for i < em.sig_names.len() {
+		if em.sig_names[i] == name {
+			if em.sig_hasret[i] {
+				return em.sig_rets[i]
+			}
+			return TVoid
+		}
+		i = i + 1
+	}
+	return TUnknown
+}
+
+# --- operators -----------------------------------------------------------------
+
+# c_binop maps a Zerg binary operator spelling to its C form; the wrapping operators
+# lower to the plain C operator (arithmetic does not yet trap).
+fn c_binop(oper: str) -> str {
+	if oper == "and" {
+		return "&&"
+	}
+	if oper == "or" {
+		return "||"
+	}
+	if oper == "*%" {
+		return "*"
+	}
+	if oper == "+%" {
+		return "+"
+	}
+	if oper == "-%" {
+		return "-"
+	}
+	return oper
+}
+
+fn c_unop(oper: str) -> str {
+	if oper == "not" {
+		return "!"
+	}
+	if oper == "-%" {
+		return "-"
+	}
+	return oper
+}
+
+# --- integer literal normalisation ---------------------------------------------
+
+# c_int_dec renders an integer lexeme (decimal / 0x / 0o / 0b, with '_' groups) as a
+# plain decimal string, matching how the bootstrap lowers integer literals.
+fn c_int_dec(lex: str) -> str {
+	b := list[byte](lex)
+	n := b.len()
+	mut base := 10
+	mut start := 0
+	if n >= 2 and b[0] == b'0' {
+		c := b[1]
+		if c == b'x' or c == b'X' {
+			base = 16
+			start = 2
+		} else if c == b'o' or c == b'O' {
+			base = 8
+			start = 2
+		} else if c == b'b' or c == b'B' {
+			base = 2
+			start = 2
+		}
+	}
+	mut val := 0
+	mut i := start
+	for i < n {
+		ch := b[i]
+		if ch != b'_' {
+			val = val * base + ascii.hex_val(ch)
+		}
+		i = i + 1
+	}
+	return strconv.to_string(val, 10)
+}
+
+fn c_bool(b: bool) -> str {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+# --- expression emission -------------------------------------------------------
+
+# c_expr renders an expression as C. `bind` / `sub` implement a single-name substitution:
+# an EIdent equal to `bind` emits `sub` verbatim instead of a mangled name — this is how a
+# match arm's bound scrutinee name is spliced into its guard and body.
+fn c_expr(e: Expr, bind: str, sub: str) -> str {
+	return match e {
+		EInt(lex) => c_int_dec(lex)
+		EFloat(lex) => lex
+		EStr(v) => quote(v)
+		EBool(b) => c_bool(b)
+		ENil => "0"
+		EIdent(n) => c_ident(n, bind, sub)
+		EUnary(oper, x) => "(" + c_unop(oper) + c_expr(x, bind, sub) + ")"
+		EBinary(oper, a, b) => "(" + c_expr(a, bind, sub) + " " + c_binop(oper) + " " + c_expr(b, bind, sub) + ")"
+		ECall(name, args) => "zg_" + name + "(" + c_args(args, bind, sub) + ")"
+		EMatch(scrut, arms) => c_match(scrut, arms, bind, sub)
+	}
+}
+
+fn c_ident(n: str, bind: str, sub: str) -> str {
+	if bind != "" and n == bind {
+		return sub
+	}
+	return "zg_" + n
+}
+
+fn c_args(args: list[Expr], bind: str, sub: str) -> str {
+	mut out := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_expr(args[i], bind, sub)
+		i = i + 1
+	}
+	return out
+}
+
+# c_match lowers a match expression to a right-nested C ternary, the last arm as the
+# final else (the subset requires an exhaustive catch-all last arm).
+fn c_match(scrut: Expr, arms: list[Arm], bind: str, sub: str) -> str {
+	s := c_expr(scrut, bind, sub)
+	return c_arms(arms, 0, s)
+}
+
+fn c_arms(arms: list[Arm], i: int, s: str) -> str {
+	a := arms[i]
+	if i == arms.len() - 1 {
+		return c_arm_body(a, s)
+	}
+	cond := c_arm_cond(a, s)
+	body := c_arm_body(a, s)
+	rest := c_arms(arms, i + 1, s)
+	return "(" + cond + " ? " + body + " : " + rest + ")"
+}
+
+fn c_arm_cond(a: Arm, s: str) -> str {
+	if a.pat == 0 {
+		# literal pattern: scrutinee equals the literal
+		return "(" + s + " == " + c_expr(a.lit, "", "") + ")"
+	}
+	if a.has_guard {
+		# a bind arm splices the scrutinee for its name; a wildcard arm has no name
+		if a.pat == 1 {
+			return c_expr(a.guard_expr, a.bind, s)
+		}
+		return c_expr(a.guard_expr, "", "")
+	}
+	return "1"
+}
+
+fn c_arm_body(a: Arm, s: str) -> str {
+	if a.pat == 1 {
+		return c_expr(a.body, a.bind, s)
+	}
+	return c_expr(a.body, "", "")
+}
+
+# --- type inference ------------------------------------------------------------
+
+fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
+	return match e {
+		EInt(_) => TInt
+		EFloat(_) => TFloat
+		EStr(_) => TStr
+		EBool(_) => TBool
+		ENil => TNil
+		EIdent(n) => c_lookup_var(em, n)
+		EUnary(oper, x) => c_infer_unary(em, oper, x)
+		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
+		ECall(name, args) => c_lookup_sig_ret(em, name)
+		EMatch(scrut, arms) => c_infer(em, arms[0].body)
+	}
+}
+
+fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
+	if oper == "not" {
+		return TBool
+	}
+	return c_infer(em, x)
+}
+
+fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
+	if c_is_bool_op(oper) {
+		return TBool
+	}
+	if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b)) {
+		return TFloat
+	}
+	return TInt
+}
+
+# --- statement emission --------------------------------------------------------
+
+fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
+	return match s {
+		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, ival, ind)
+		SAssign(name, rhs) => ind + "zg_" + name + " = " + c_expr(rhs, "", "") + ";\n"
+		SPrint(e) => c_print(em, e, ind)
+		SReturn(has_val, e) => c_return(has_val, e, ind)
+		SReturnIf(val, cond) => ind + "if (" + c_expr(cond, "", "") + ") { return " + c_expr(val, "", "") + "; }\n"
+		SExpr(e) => ind + c_expr(e, "", "") + ";\n"
+		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
+		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
+		SBreak => ind + "break;\n"
+		SContinue => ind + "continue;\n"
+		SNop => ""
+	}
+}
+
+fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
+	mut eff := ty
+	if not has_type {
+		eff = c_infer(em, ival)
+	}
+	c_add_var(em, name, eff)
+	return ind + c_type(eff) + " zg_" + name + " = " + c_expr(ival, "", "") + ";\n"
+}
+
+fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
+	ty := c_infer(em, e)
+	ex := c_expr(e, "", "")
+	return match ty {
+		TStr => ind + "printf(\"%s\\n\", " + ex + ");\n"
+		TFloat => ind + "printf(\"%g\\n\", " + ex + ");\n"
+		TBool => ind + "printf(\"%s\\n\", (" + ex + ") ? \"true\" : \"false\");\n"
+		_ => ind + "printf(\"%lld\\n\", (long long)(" + ex + "));\n"
+	}
+}
+
+fn c_return(has_val: bool, e: Expr, ind: str) -> str {
+	if has_val {
+		return ind + "return " + c_expr(e, "", "") + ";\n"
+	}
+	return ind + "return;\n"
+}
+
+fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
+	mut out := ind + "if (" + c_expr(cond, "", "") + ") {\n"
+	out = out + c_block(em, then_body, ind + "    ")
+	out = out + ind + "}"
+	if has_else {
+		out = out + " else {\n" + c_block(em, else_body, ind + "    ") + ind + "}"
+	}
+	return out + "\n"
+}
+
+fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: str) -> str {
+	mut head := ind + "for (;;) {\n"
+	if has_cond {
+		head = ind + "while (" + c_expr(cond, "", "") + ") {\n"
+	}
+	return head + c_block(em, body, ind + "    ") + ind + "}\n"
+}
+
+fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	mut out := ""
+	mut i := 0
+	for i < body.len() {
+		out = out + c_stmt(em, body[i], ind)
+		i = i + 1
+	}
+	return out
+}
+
+# --- declaration emission ------------------------------------------------------
+
+fn c_ret_type(fn_d: FnDecl) -> str {
+	if fn_d.has_ret {
+		return c_type(fn_d.ret)
+	}
+	return "void"
+}
+
+fn c_param_types(fn_d: FnDecl) -> str {
+	if fn_d.params.len() == 0 {
+		return "void"
+	}
+	mut out := ""
+	mut i := 0
+	for i < fn_d.params.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_type(fn_d.params[i].ty)
+		i = i + 1
+	}
+	return out
+}
+
+fn c_proto(fn_d: FnDecl) -> str {
+	return c_ret_type(fn_d) + " zg_" + fn_d.name + "(" + c_param_types(fn_d) + ");\n"
+}
+
+fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
+	c_reset_env(em)
+	mut sig := c_ret_type(fn_d) + " zg_" + fn_d.name + "("
+	if fn_d.params.len() == 0 {
+		sig = sig + "void"
+	} else {
+		mut i := 0
+		for i < fn_d.params.len() {
+			if i > 0 {
+				sig = sig + ", "
+			}
+			pm := fn_d.params[i]
+			c_add_var(em, pm.name, pm.ty)
+			sig = sig + c_type(pm.ty) + " zg_" + pm.name
+			i = i + 1
+		}
+	}
+	sig = sig + ") {\n"
+	return sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+}
+
+fn c_has_main(f: File) -> bool {
+	mut i := 0
+	for i < f.fns.len() {
+		if f.fns[i].name == "main" {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# emit_c lowers Zerg source to a complete C translation unit.
+pub fn emit_c(src: str) -> str {
+	f := parse(src)
+	mut em := Emitter([], [], [], [], [])
+	c_build_sigs(em, f)
+	mut out := "// Generated by zergc (self-host). Do not edit.\n"
+	out = out + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n\n"
+	mut i := 0
+	for i < f.fns.len() {
+		out = out + c_proto(f.fns[i])
+		i = i + 1
+	}
+	out = out + "\n"
+	i = 0
+	for i < f.fns.len() {
+		out = out + c_fn(em, f.fns[i])
+		i = i + 1
+	}
+	if c_has_main(f) {
+		out = out + "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+	}
+	return out
+}

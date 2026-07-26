@@ -23,6 +23,7 @@ enum Ty {
 	TVoid
 	TUnknown
 	TNamed(str)
+	TList(Ty)
 }
 
 # Expr is an expression node.
@@ -37,6 +38,9 @@ enum Expr {
 	EBinary(str, Expr, Expr)
 	ECall(str, list[Expr])
 	EField(Expr, str)
+	EIndex(Expr, Expr)
+	EMethod(Expr, str, list[Expr])
+	EListLit(list[Expr])
 	EMatch(Expr, list[Arm])
 }
 
@@ -66,6 +70,7 @@ enum Stmt {
 	SExpr(Expr)
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
+	SForIn(str, Expr, list[Stmt])
 	SBreak
 	SContinue
 	SNop

@@ -26,6 +26,31 @@ struct Emitter {
 	fld_struct: list[str]
 	fld_name: list[str]
 	fld_ty: list[Ty]
+	enum_names: list[str]
+	var_name: list[str]
+	var_enum: list[str]
+	var_tag: list[int]
+}
+
+# Subst is an active set of identifier substitutions: an EIdent whose name appears in
+# `names` emits the parallel `repls` entry instead of a mangled name. It splices a match
+# arm's bound names — a scrutinee alias, or an enum payload field access — into the arm's
+# guard and body.
+struct Subst {
+	names: list[str]
+	repls: list[str]
+}
+
+fn c_nosub() -> Subst {
+	return Subst([], [])
+}
+
+fn c_extend(sb: Subst, name: str, repl: str) -> Subst {
+	mut nn := sb.names
+	mut rr := sb.repls
+	nn.append(name)
+	rr.append(repl)
+	return Subst(nn, rr)
 }
 
 # --- type helpers --------------------------------------------------------------
@@ -166,6 +191,88 @@ fn c_named_of(t: Ty) -> str {
 	}
 }
 
+fn c_build_enums(mut &em: Emitter, f: File) {
+	mut i := 0
+	for i < f.enums.len() {
+		ed := f.enums[i]
+		em.enum_names.append(ed.name)
+		mut j := 0
+		for j < ed.variants.len() {
+			em.var_name.append(ed.variants[j].name)
+			em.var_enum.append(ed.name)
+			em.var_tag.append(j)
+			j = j + 1
+		}
+		i = i + 1
+	}
+}
+
+fn c_is_variant(mut &em: Emitter, name: str) -> bool {
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_name[i] == name {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_variant_enum(mut &em: Emitter, name: str) -> str {
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_name[i] == name {
+			return em.var_enum[i]
+		}
+		i = i + 1
+	}
+	return ""
+}
+
+fn c_variant_tag(mut &em: Emitter, name: str) -> int {
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_name[i] == name {
+			return em.var_tag[i]
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+# c_enum_typedef emits an enum as a C tagged union: an int32 tag plus a union of the
+# payload-carrying variants (omitted when every variant is tag-only).
+fn c_enum_typedef(ed: EnumDecl) -> str {
+	mut out := "typedef struct {\n    int32_t tag;\n"
+	mut anyf := false
+	mut i := 0
+	for i < ed.variants.len() {
+		if ed.variants[i].fields.len() > 0 {
+			anyf = true
+		}
+		i = i + 1
+	}
+	if anyf {
+		out = out + "    union {\n"
+		i = 0
+		for i < ed.variants.len() {
+			v := ed.variants[i]
+			if v.fields.len() > 0 {
+				out = out + "        struct { "
+				mut j := 0
+				for j < v.fields.len() {
+					out = out + c_type(v.fields[j]) + " f" + strconv.to_string(j, 10) + "; "
+					j = j + 1
+				}
+				out = out + "} " + v.name + ";\n"
+			}
+			i = i + 1
+		}
+		out = out + "    } u;\n"
+	}
+	return out + "} zg_" + ed.name + ";\n\n"
+}
+
 # --- operators -----------------------------------------------------------------
 
 # c_binop maps a Zerg binary operator spelling to its C form; the wrapping operators
@@ -245,46 +352,90 @@ fn c_bool(b: bool) -> str {
 # c_expr renders an expression as C. `bind` / `sub` implement a single-name substitution:
 # an EIdent equal to `bind` emits `sub` verbatim instead of a mangled name — this is how a
 # match arm's bound scrutinee name is spliced into its guard and body.
-fn c_expr(e: Expr, bind: str, sub: str) -> str {
+fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
 		EInt(lex) => c_int_dec(lex)
 		EFloat(lex) => lex
 		EStr(v) => quote(v)
 		EBool(b) => c_bool(b)
 		ENil => "0"
-		EIdent(n) => c_ident(n, bind, sub)
-		EUnary(oper, x) => "(" + c_unop(oper) + c_expr(x, bind, sub) + ")"
-		EBinary(oper, a, b) => "(" + c_expr(a, bind, sub) + " " + c_binop(oper) + " " + c_expr(b, bind, sub) + ")"
-		ECall(name, args) => c_call(name, args, bind, sub)
-		EField(target, fld) => c_expr(target, bind, sub) + ".zg_" + fld
-		EMatch(scrut, arms) => c_match(scrut, arms, bind, sub)
+		EIdent(n) => c_ident_val(em, n, sb)
+		EUnary(oper, x) => "(" + c_unop(oper) + c_expr(em, x, sb) + ")"
+		EBinary(oper, a, b) => "(" + c_expr(em, a, sb) + " " + c_binop(oper) + " " + c_expr(em, b, sb) + ")"
+		ECall(name, args) => c_call(em, name, args, sb)
+		EField(target, fld) => c_expr(em, target, sb) + ".zg_" + fld
+		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 	}
 }
 
-# c_call emits a struct construction as a C compound literal and any other call as a
-# plain function call (a PascalCase name is a type constructor).
-fn c_call(name: str, args: list[Expr], bind: str, sub: str) -> str {
+# c_call emits an enum-variant construction as a tagged-union literal, a struct
+# construction as a plain compound literal (both are PascalCase constructors), and any
+# other call as a function call.
+fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_ctor(name) {
-		return "(zg_" + name + "){" + c_args(args, bind, sub) + "}"
+		if c_is_variant(em, name) {
+			return c_variant_ctor(em, name, args, sb)
+		}
+		return "(zg_" + name + "){" + c_args(em, args, sb) + "}"
 	}
-	return "zg_" + name + "(" + c_args(args, bind, sub) + ")"
+	return "zg_" + name + "(" + c_args(em, args, sb) + ")"
 }
 
-fn c_ident(n: str, bind: str, sub: str) -> str {
-	if bind != "" and n == bind {
-		return sub
+# c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
+# omitted for a tag-only variant).
+fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+	en := c_variant_enum(em, name)
+	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, name), 10)
+	if args.len() > 0 {
+		out = out + ", .u." + name + " = {"
+		mut i := 0
+		for i < args.len() {
+			if i > 0 {
+				out = out + ", "
+			}
+			out = out + ".f" + strconv.to_string(i, 10) + " = " + c_expr(em, args[i], sb)
+			i = i + 1
+		}
+		out = out + "}"
+	}
+	return out + "}"
+}
+
+fn c_ident(n: str, sb: Subst) -> str {
+	mut i := 0
+	for i < sb.names.len() {
+		if sb.names[i] == n {
+			return sb.repls[i]
+		}
+		i = i + 1
 	}
 	return "zg_" + n
 }
 
-fn c_args(args: list[Expr], bind: str, sub: str) -> str {
+# c_ident_val resolves a bare name: a match binding wins, then a nullary enum variant
+# (constructed as a tag-only literal), otherwise a mangled variable reference.
+fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
+	mut i := 0
+	for i < sb.names.len() {
+		if sb.names[i] == n {
+			return sb.repls[i]
+		}
+		i = i + 1
+	}
+	if c_is_variant(em, n) {
+		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
+	}
+	return "zg_" + n
+}
+
+fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_expr(args[i], bind, sub)
+		out = out + c_expr(em, args[i], sb)
 		i = i + 1
 	}
 	return out
@@ -292,42 +443,60 @@ fn c_args(args: list[Expr], bind: str, sub: str) -> str {
 
 # c_match lowers a match expression to a right-nested C ternary, the last arm as the
 # final else (the subset requires an exhaustive catch-all last arm).
-fn c_match(scrut: Expr, arms: list[Arm], bind: str, sub: str) -> str {
-	s := c_expr(scrut, bind, sub)
-	return c_arms(arms, 0, s)
+fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
+	s := c_expr(em, scrut, sb)
+	return c_arms(em, arms, 0, s, sb)
 }
 
-fn c_arms(arms: list[Arm], i: int, s: str) -> str {
+fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
 	a := arms[i]
 	if i == arms.len() - 1 {
-		return c_arm_body(a, s)
+		return c_arm_body(em, a, s, sb)
 	}
-	cond := c_arm_cond(a, s)
-	body := c_arm_body(a, s)
-	rest := c_arms(arms, i + 1, s)
+	cond := c_arm_cond(em, a, s, sb)
+	body := c_arm_body(em, a, s, sb)
+	rest := c_arms(em, arms, i + 1, s, sb)
 	return "(" + cond + " ? " + body + " : " + rest + ")"
 }
 
-fn c_arm_cond(a: Arm, s: str) -> str {
+# c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
+# constructor arm aliases each payload name to its `s.u.Var.fK` field access.
+fn c_arm_subst(a: Arm, s: str, sb: Subst) -> Subst {
+	if a.pat == 1 {
+		return c_extend(sb, a.bind, s)
+	}
+	if a.pat == 3 {
+		mut r := sb
+		mut i := 0
+		for i < a.binds.len() {
+			r = c_extend(r, a.binds[i], s + ".u." + a.ctor + ".f" + strconv.to_string(i, 10))
+			i = i + 1
+		}
+		return r
+	}
+	return sb
+}
+
+fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
 	if a.pat == 0 {
 		# literal pattern: scrutinee equals the literal
-		return "(" + s + " == " + c_expr(a.lit, "", "") + ")"
+		return "(" + s + " == " + c_expr(em, a.lit, sb) + ")"
+	}
+	if a.pat == 3 {
+		base := "(" + s + ".tag == " + strconv.to_string(c_variant_tag(em, a.ctor), 10) + ")"
+		if a.has_guard {
+			return "(" + base + " && " + c_expr(em, a.guard_expr, c_arm_subst(a, s, sb)) + ")"
+		}
+		return base
 	}
 	if a.has_guard {
-		# a bind arm splices the scrutinee for its name; a wildcard arm has no name
-		if a.pat == 1 {
-			return c_expr(a.guard_expr, a.bind, s)
-		}
-		return c_expr(a.guard_expr, "", "")
+		return c_expr(em, a.guard_expr, c_arm_subst(a, s, sb))
 	}
 	return "1"
 }
 
-fn c_arm_body(a: Arm, s: str) -> str {
-	if a.pat == 1 {
-		return c_expr(a.body, a.bind, s)
-	}
-	return c_expr(a.body, "", "")
+fn c_arm_body(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+	return c_expr(em, a.body, c_arm_subst(a, s, sb))
 }
 
 # --- type inference ------------------------------------------------------------
@@ -339,7 +508,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EStr(_) => TStr
 		EBool(_) => TBool
 		ENil => TNil
-		EIdent(n) => c_lookup_var(em, n)
+		EIdent(n) => c_infer_ident(em, n)
 		EUnary(oper, x) => c_infer_unary(em, oper, x)
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		ECall(name, args) => c_infer_call(em, name)
@@ -349,10 +518,20 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
+	if c_is_variant(em, name) {
+		return TNamed(c_variant_enum(em, name))
+	}
 	if c_is_ctor(name) {
 		return TNamed(name)
 	}
 	return c_lookup_sig_ret(em, name)
+}
+
+fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
+	if c_is_variant(em, n) {
+		return TNamed(c_variant_enum(em, n))
+	}
+	return c_lookup_var(em, n)
 }
 
 fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
@@ -377,11 +556,11 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 	return match s {
 		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, ival, ind)
-		SAssign(name, rhs) => ind + "zg_" + name + " = " + c_expr(rhs, "", "") + ";\n"
+		SAssign(name, rhs) => ind + "zg_" + name + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
 		SPrint(e) => c_print(em, e, ind)
-		SReturn(has_val, e) => c_return(has_val, e, ind)
-		SReturnIf(val, cond) => ind + "if (" + c_expr(cond, "", "") + ") { return " + c_expr(val, "", "") + "; }\n"
-		SExpr(e) => ind + c_expr(e, "", "") + ";\n"
+		SReturn(has_val, e) => c_return(em, has_val, e, ind)
+		SReturnIf(val, cond) => ind + "if (" + c_expr(em, cond, c_nosub()) + ") { return " + c_expr(em, val, c_nosub()) + "; }\n"
+		SExpr(e) => ind + c_expr(em, e, c_nosub()) + ";\n"
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SBreak => ind + "break;\n"
@@ -396,12 +575,12 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 		eff = c_infer(em, ival)
 	}
 	c_add_var(em, name, eff)
-	return ind + c_type(eff) + " zg_" + name + " = " + c_expr(ival, "", "") + ";\n"
+	return ind + c_type(eff) + " zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	ty := c_infer(em, e)
-	ex := c_expr(e, "", "")
+	ex := c_expr(em, e, c_nosub())
 	return match ty {
 		TStr => ind + "printf(\"%s\\n\", " + ex + ");\n"
 		TFloat => ind + "printf(\"%g\\n\", " + ex + ");\n"
@@ -410,15 +589,15 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	}
 }
 
-fn c_return(has_val: bool, e: Expr, ind: str) -> str {
+fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	if has_val {
-		return ind + "return " + c_expr(e, "", "") + ";\n"
+		return ind + "return " + c_expr(em, e, c_nosub()) + ";\n"
 	}
 	return ind + "return;\n"
 }
 
 fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
-	mut out := ind + "if (" + c_expr(cond, "", "") + ") {\n"
+	mut out := ind + "if (" + c_expr(em, cond, c_nosub()) + ") {\n"
 	out = out + c_block(em, then_body, ind + "    ")
 	out = out + ind + "}"
 	if has_else {
@@ -430,7 +609,7 @@ fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, els
 fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: str) -> str {
 	mut head := ind + "for (;;) {\n"
 	if has_cond {
-		head = ind + "while (" + c_expr(cond, "", "") + ") {\n"
+		head = ind + "while (" + c_expr(em, cond, c_nosub()) + ") {\n"
 	}
 	return head + c_block(em, body, ind + "    ") + ind + "}\n"
 }
@@ -509,14 +688,20 @@ fn c_has_main(f: File) -> bool {
 # emit_c lowers Zerg source to a complete C translation unit.
 pub fn emit_c(src: str) -> str {
 	f := parse(src)
-	mut em := Emitter([], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
+	c_build_enums(em, f)
 	mut out := "// Generated by zergc (self-host). Do not edit.\n"
 	out = out + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n\n"
 	mut i := 0
 	for i < f.structs.len() {
 		out = out + c_struct_typedef(f.structs[i])
+		i = i + 1
+	}
+	i = 0
+	for i < f.enums.len() {
+		out = out + c_enum_typedef(f.enums[i])
 		i = i + 1
 	}
 	i = 0

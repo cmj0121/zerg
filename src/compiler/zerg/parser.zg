@@ -92,6 +92,7 @@ pub fn parse(src: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0)
 	mut structs: list[StructDecl] = []
+	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
@@ -99,12 +100,53 @@ pub fn parse(src: str) -> File {
 			fns.append(parse_fn(p))
 		} else if p_at(p, Struct) {
 			structs.append(parse_struct(p))
+		} else if p_at(p, Enum) {
+			enums.append(parse_enum(p))
 		} else {
 			p_advance(p)
 		}
 		skip_semis(p)
 	}
-	return File(structs, fns)
+	return File(structs, enums, fns)
+}
+
+fn parse_enum(mut &p: Parser) -> EnumDecl {
+	p_advance(p) # 'enum'
+	name := cur(p).lexeme
+	p_advance(p) # name
+	expect(p, LBrace)
+	skip_semis(p)
+	mut variants: list[VariantDef] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		vname := cur(p).lexeme
+		p_advance(p)
+		mut fields: list[Ty] = []
+		if p_at(p, LParen) {
+			p_advance(p)
+			for not p_at(p, RParen) and not p_at(p, Eof) {
+				fields.append(parse_type(p))
+				if p_at(p, Comma) {
+					p_advance(p)
+				}
+			}
+			expect(p, RParen)
+		}
+		variants.append(VariantDef(vname, fields))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return EnumDecl(name, variants)
+}
+
+# is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
+# a type / enum-variant name versus a lowercase binding.
+fn is_pascal(s: str) -> bool {
+	b := list[byte](s)
+	if b.len() == 0 {
+		return false
+	}
+	v := int(b[0])
+	return v >= 65 and v <= 90
 }
 
 fn parse_struct(mut &p: Parser) -> StructDecl {
@@ -445,11 +487,28 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	mut pat := 0
 	mut lit := ENil
 	mut bind := ""
+	mut ctor := ""
+	mut binds: list[str] = []
 	if p_at(p, Ident) {
 		name := cur(p).lexeme
 		p_advance(p)
 		if name == "_" {
 			pat = 2
+		} else if is_pascal(name) {
+			# enum constructor pattern: `Variant` or `Variant(a, b)`
+			pat = 3
+			ctor = name
+			if p_at(p, LParen) {
+				p_advance(p)
+				for not p_at(p, RParen) and not p_at(p, Eof) {
+					binds.append(cur(p).lexeme)
+					p_advance(p)
+					if p_at(p, Comma) {
+						p_advance(p)
+					}
+				}
+				expect(p, RParen)
+			}
 		} else {
 			pat = 1
 			bind = name
@@ -466,5 +525,5 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	}
 	expect(p, FatArrow)
 	body := parse_expr(p)
-	return Arm(pat, lit, bind, has_guard, grd, body)
+	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }

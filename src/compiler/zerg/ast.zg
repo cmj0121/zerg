@@ -41,12 +41,15 @@ enum Expr {
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
-# equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`. An arm may
+# equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`, 3 = enum
+# constructor (`ctor` names the variant; `binds` names its payload fields). An arm may
 # carry an `if` guard.
 struct Arm {
 	pat: int
 	lit: Expr
 	bind: str
+	ctor: str
+	binds: list[str]
 	has_guard: bool
 	guard_expr: Expr
 	body: Expr
@@ -96,9 +99,23 @@ struct StructDecl {
 	fields: list[FieldDef]
 }
 
-# File is a whole parsed source file: its struct and function declarations in source
-# order.
+# VariantDef is one enum variant: its name and its payload field types (empty for a
+# tag-only variant). The variant's tag is its position in the enum.
+struct VariantDef {
+	name: str
+	fields: list[Ty]
+}
+
+# EnumDecl is an enum type declaration: its name and variants in source (tag) order.
+struct EnumDecl {
+	name: str
+	variants: list[VariantDef]
+}
+
+# File is a whole parsed source file: its struct, enum, and function declarations in
+# source order.
 struct File {
 	structs: list[StructDecl]
+	enums: list[EnumDecl]
 	fns: list[FnDecl]
 }

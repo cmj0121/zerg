@@ -44,6 +44,8 @@ other chapter relies on. Read it first.
 | [Syntax Sugar](syntax-sugar.md)                    | every surface form and the core it desugars to                    |
 | [Grammar](grammar.md)                              | the formal surface grammar (companion to `GRAMMAR`)               |
 | [FFI](ffi.md)                                      | the C ABI boundary — `pub` export, unsafe foreign import          |
+| [Built-in Functions](builtins.md)                  | the fixed no-import functions — `Ref`, conversions, error kinds   |
+| [Standard Library](stdlib.md)                      | the bundled `import` packages — io, fs, os, time, math, rand, …   |
 
 ## Types
 
@@ -94,6 +96,27 @@ A function is a **first-class value** whose type is its input/output contract an
 effect tracking beyond argument mutation and recoverable error. Covers default parameters, named
 arguments, and closures that capture only immutable values and channels, by copy. See
 **[Functions & Closures](functions.md)**.
+
+## Built-in functions
+
+A small, **fixed** set of compiler-recognized functions need no `import` — the only free-function calls
+the language itself provides. A user cannot add to the set.
+
+- **`Ref(x)` / `deref(r)`** — construct and read the reference-counted box ([Values & Memory](memory.md)).
+- **Primitive conversion `T(x)`** — `int` / `uint` / `float` / `bool` / `byte` / `rune` (and the
+  fixed-width `i8`…`i64` / `u8`…`u64` / `f32` / `f64`): a **re-construction** with range checks, never a
+  reinterpretation; `int("…")` additionally **parses** a decimal string ([Types](types.md)).
+- **`str(bytes)` / `str(runes)`** and **`list[byte](s)` / `list[rune](s)`** — the str ⇄ list bridges,
+  validating the `str` invariant ([Collections](collections.md)).
+- **Error constructors** — the fixed `ValueError` / `OverflowError` / `IOError` / `EncodingError` /
+  `IndexError` / `KeyError`, each building an `Err` of that kind ([Null-safety & Errors](errors.md)).
+- **Raw-pointer builtins (`unsafe` only)** — `addr` / `ptr` / `ptr[T]` / `uint(p)`, and the pointer
+  methods `.load` / `.store` / `.offset` ([Values & Memory](memory.md)).
+
+Everything else that looks callable is **not** a built-in function: `print` / `raise` / `guard` / `spawn`
+/ `defer` / `del` are **keywords**; `list.len()` / `map.get()` are **methods** on a built-in type; and
+`math.sqrt` / `io.read_file` are **stdlib** functions reached with `import`. The per-function detail is in
+**[Built-in Functions](builtins.md)**; the importable packages are in **[Standard Library](stdlib.md)**.
 
 ## Formatting & Text
 

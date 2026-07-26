@@ -271,6 +271,9 @@ func (e *emitter) prepareRuntime() {
 		e.needsIO = true
 		e.needsRuntime = true
 	}
+	if e.programUsesSysFloor() {
+		e.needsRuntime = true
+	}
 	if e.programUsesFormat() {
 		e.needsFormat = true
 		e.needsRuntime = true
@@ -380,11 +383,48 @@ func (e *emitter) programUsesRuntimeStmt() bool {
 	return false
 }
 
-// programUsesIO reports whether the program lowers a stdlib `io` write intrinsic
-// (`__zrt_write` / `__zrt_write_int`) — the leaf of a bundled io function. A shadowed
-// spelling is left to the ordinary call path (info.Refs records the user binding), so
-// it does not count as an io use.
-func (e *emitter) programUsesIO() bool {
+// ioIntrinsicNames are the stdlib `io` syscall floor intrinsics — the leaves of a
+// bundled io function: the write leaf and the whole-file open/read/close leaves.
+var ioIntrinsicNames = map[string]bool{
+	"__zrt_write":       true,
+	"__zrt_open":        true,
+	"__zrt_read":        true,
+	"__zrt_close":       true,
+	"__zrt_open_write":  true,
+	"__zrt_write_bytes": true,
+}
+
+// sysFloorIntrinsics are the non-io runtime floor leaves other bundled stdlib modules
+// lower onto (the `time` clock leaves; os/fs join later). Like the io floor they live in
+// the always-linked sys.c, so a program that lowers one needs the runtime — but not the
+// io-specific NeedsIO flag.
+var sysFloorIntrinsics = map[string]bool{
+	"__zrt_time_unix": true,
+	"__zrt_time_mono": true,
+	"__zrt_platform":  true,
+	"__zrt_arch":      true,
+	"__zrt_getenv":    true,
+	"__zrt_has_env":   true,
+	"__zrt_exit":      true,
+	"__zrt_exists":    true,
+	"__zrt_remove":    true,
+}
+
+// strProducingIntrinsics are the sys-floor leaves that return a FRESH str cell
+// (sys.c's sys_str_cell) — the os `env`/`platform`/`arch` leaves. Lowering one makes the
+// program's str management active, so the cell is retained/released instead of leaked.
+var strProducingIntrinsics = map[string]bool{
+	"__zrt_getenv":   true,
+	"__zrt_platform": true,
+	"__zrt_arch":     true,
+}
+
+// programCallsIntrinsic reports whether the program lowers any intrinsic whose spelling
+// is in names. A shadowed spelling (info.Refs records a user binding of that name) is
+// left to the ordinary call path, so it does not count. This is the shared scan behind
+// the per-category predicates (io floor, sys floor, str-producing) — the shadow-skip
+// rule lives here once instead of in each caller.
+func (e *emitter) programCallsIntrinsic(names map[string]bool) bool {
 	for node := range e.info.ExprTypes {
 		call, ok := node.(*ast.Call)
 		if !ok {
@@ -397,11 +437,24 @@ func (e *emitter) programUsesIO() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		if id.Name == "__zrt_write" || id.Name == "__zrt_write_int" || id.Name == "__zrt_read_file" {
+		if names[id.Name] {
 			return true
 		}
 	}
 	return false
+}
+
+// programUsesSysFloor reports whether the program lowers a non-io sys-floor intrinsic, so
+// the runtime is linked. A shadowed spelling is left to the ordinary call path.
+func (e *emitter) programUsesSysFloor() bool {
+	return e.programCallsIntrinsic(sysFloorIntrinsics)
+}
+
+// programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic —
+// the leaf of a bundled io function. A shadowed spelling is left to the ordinary call
+// path (info.Refs records the user binding), so it does not count as an io use.
+func (e *emitter) programUsesIO() bool {
+	return e.programCallsIntrinsic(ioIntrinsicNames)
 }
 
 // programUsesResultNil reports whether any Result[nil] value appears in the program
@@ -529,10 +582,55 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	if s, ok := e.atomicIntrinsicEmit(n); ok {
 		return s, true
 	}
-	if s, ok := e.readFileIntrinsicEmit(n); ok {
+	if s, ok := e.fileIntrinsicEmit(n); ok {
+		return s, true
+	}
+	if s, ok := e.sysIntrinsicEmit(n); ok {
 		return s, true
 	}
 	return e.writeIntrinsicEmit(n)
+}
+
+// sysIntrinsicEmit lowers the non-io sys-floor intrinsics the stdlib drives — the `time`
+// clock leaves and the `os` process/platform leaves — each to its always-linked sys.c
+// primitive. A shadowed name is left to the ordinary call path.
+func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	if len(n.Args) == 0 {
+		switch id.Name {
+		case "__zrt_time_unix":
+			return "((int64_t)zrt_time_unix())", true
+		case "__zrt_time_mono":
+			return "((int64_t)zrt_time_mono())", true
+		case "__zrt_platform":
+			return "zrt_platform()", true
+		case "__zrt_arch":
+			return "zrt_arch()", true
+		}
+		return "", false
+	}
+	if len(n.Args) == 1 {
+		arg := e.expr(n.Args[0].Value)
+		switch id.Name {
+		case "__zrt_getenv":
+			return fmt.Sprintf("zrt_getenv(%s)", arg), true
+		case "__zrt_has_env":
+			return fmt.Sprintf("zrt_has_env(%s)", arg), true
+		case "__zrt_exit":
+			return fmt.Sprintf("zrt_exit(%s)", arg), true
+		case "__zrt_exists":
+			return fmt.Sprintf("zrt_exists(%s)", arg), true
+		case "__zrt_remove":
+			return fmt.Sprintf("zrt_remove(%s)", arg), true
+		}
+	}
+	return "", false
 }
 
 // atomicIntrinsicEmit lowers the Phase 1f Atomic[int] intrinsics — `__zrt_atomic_load`
@@ -567,11 +665,11 @@ func (e *emitter) atomicIntrinsicEmit(n *ast.Call) (string, bool) {
 	return fmt.Sprintf("%s(%s)", fn, strings.Join(args, ", ")), true
 }
 
-// writeIntrinsicEmit lowers the Phase 1f io write intrinsics — `__zrt_write(fd, s)`
-// and `__zrt_write_int(fd, n)` — that the stdlib `io` module's leaves call. Each
-// maps to its always-linked sys.c primitive, cast to the intrinsic's int result. A
-// name shadowed by a user binding (recorded in info.Refs) is left to the ordinary
-// call path, so the intrinsic never masks a user symbol.
+// writeIntrinsicEmit lowers the io write intrinsic `__zrt_write(fd, s)` that the
+// stdlib `io` module's write leaf calls, mapping it to the always-linked sys.c
+// `zrt_write_str` primitive, cast to the intrinsic's int result. A name shadowed by a
+// user binding (recorded in info.Refs) is left to the ordinary call path, so the
+// intrinsic never masks a user symbol. (Decimal conversion is pure Zerg in io.zg.)
 func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
 	if !ok || len(n.Args) != 2 {
@@ -584,24 +682,38 @@ func (e *emitter) writeIntrinsicEmit(n *ast.Call) (string, bool) {
 	switch id.Name {
 	case "__zrt_write":
 		return fmt.Sprintf("((int64_t)zrt_write_str(%s, %s))", fd, val), true
-	case "__zrt_write_int":
-		return fmt.Sprintf("((int64_t)zrt_write_int(%s, %s))", fd, val), true
+	case "__zrt_write_bytes":
+		// void call used as a nil statement; the list is borrowed (read-only), so the
+		// caller (io.write_file) keeps ownership and drops it as usual.
+		return fmt.Sprintf("zrt_write_bytes(%s, %s)", fd, val), true
 	}
 	return "", false
 }
 
-// readFileIntrinsicEmit lowers `__zrt_read_file(path)` — the io source-input leaf — to
-// its sys.c primitive, yielding a list[byte]. A shadowed name is left to the ordinary
-// call path.
-func (e *emitter) readFileIntrinsicEmit(n *ast.Call) (string, bool) {
+// fileIntrinsicEmit lowers the io whole-file read floor — `__zrt_open(path)`,
+// `__zrt_read(fd)`, and `__zrt_close(fd)` — that io.read_file drives from pure Zerg.
+// Each maps to its always-linked sys.c leaf: open/close cast to their int result, read
+// yielding a list[byte] chunk. A shadowed name is left to the ordinary call path.
+func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 	id, ok := n.Callee.(*ast.Ident)
-	if !ok || id.Name != "__zrt_read_file" || len(n.Args) != 1 {
+	if !ok || len(n.Args) != 1 {
 		return "", false
 	}
 	if _, shadowed := e.info.Refs[id]; shadowed {
 		return "", false
 	}
-	return fmt.Sprintf("zrt_read_file(%s)", e.expr(n.Args[0].Value)), true
+	arg := e.expr(n.Args[0].Value)
+	switch id.Name {
+	case "__zrt_open":
+		return fmt.Sprintf("((int64_t)zrt_open(%s))", arg), true
+	case "__zrt_open_write":
+		return fmt.Sprintf("((int64_t)zrt_open_write(%s))", arg), true
+	case "__zrt_read":
+		return fmt.Sprintf("zrt_read_fd(%s)", arg), true
+	case "__zrt_close":
+		return fmt.Sprintf("((int64_t)zrt_close(%s))", arg), true
+	}
+	return "", false
 }
 
 // refnewName is the allocation helper for a Ref whose payload is elem.

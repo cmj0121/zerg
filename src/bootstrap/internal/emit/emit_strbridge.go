@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -22,7 +23,7 @@ import (
 func (e *emitter) strBridgeEmit(n *ast.Call) (string, bool) {
 	switch callee := n.Callee.(type) {
 	case *ast.Ident:
-		// str(bytes) / str(runes): a str built from a byte or rune list.
+		// str(bytes) / str(runes): a str from a byte/rune list; str(scalar): its display.
 		if callee.Name != "str" || len(n.Args) != 1 {
 			return "", false
 		}
@@ -30,15 +31,20 @@ func (e *emitter) strBridgeEmit(n *ast.Call) (string, bool) {
 			return "", false
 		}
 		arg := n.Args[0].Value
-		lt, ok := e.cur.ExprType(e.info, arg).(*types.List)
-		if !ok {
+		at := e.cur.ExprType(e.info, arg)
+		if lt, ok := at.(*types.List); ok {
+			switch lt.Elem {
+			case types.Byte:
+				return e.strFromList("zrt_str_from_bytes", arg), true
+			case types.Rune:
+				return e.strFromList("zrt_str_from_runes", arg), true
+			}
 			return "", false
 		}
-		switch lt.Elem {
-		case types.Byte:
-			return e.strFromList("zrt_str_from_bytes", arg), true
-		case types.Rune:
-			return e.strFromList("zrt_str_from_runes", arg), true
+		// str(scalar): render the value's built-in display() — the same text `print` and
+		// an f-string hole produce (byte/rune render as their integer value).
+		if _, ok := sema.ScalarOf(at); ok {
+			return e.displayCall(arg, at, e.expr(arg)), true
 		}
 		return "", false
 	case *ast.Bracket:

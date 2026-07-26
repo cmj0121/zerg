@@ -37,10 +37,17 @@ func (e *emitter) convCallEmit(n *ast.Call) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	// `int(s)` parses a decimal integer from a str through the runtime (raises on a
-	// malformed string), which is not a scalar re-construction.
-	if id.Name == "int" && e.cur.ExprType(e.info, n.Args[0].Value) == sema.Str {
-		return fmt.Sprintf("zrt_parse_int(%s)", e.expr(n.Args[0].Value)), true
+	// `int(s)` / `uint(s)` / `float(s)` parse a number from a str through the runtime
+	// (raising on a malformed or out-of-range string), not a scalar re-construction.
+	if e.cur.ExprType(e.info, n.Args[0].Value) == sema.Str {
+		switch id.Name {
+		case "int":
+			return fmt.Sprintf("zrt_parse_int(%s)", e.expr(n.Args[0].Value)), true
+		case "uint":
+			return fmt.Sprintf("zrt_parse_uint(%s)", e.expr(n.Args[0].Value)), true
+		case "float":
+			return fmt.Sprintf("zrt_parse_float(%s)", e.expr(n.Args[0].Value)), true
+		}
 	}
 	// `int(v)` on a C-style enum READS its stored discriminant — the enum's tagged-union
 	// `tag` field holds the discriminant for a payload-free enum (sema restricts it there).

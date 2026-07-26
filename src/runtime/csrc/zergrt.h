@@ -389,13 +389,44 @@ zrt_list zrt_str_runes(const char *s);
 const char *zrt_str_from_bytes(zrt_list bytes);
 const char *zrt_str_from_runes(zrt_list runes);
 
-/* zrt_parse_int is `int(s)` for a str: a checked decimal parse that raises ValueError on
- * a malformed string and OverflowError outside the int64 range (str.c). */
-int64_t zrt_parse_int(const char *s);
+/* zrt_parse_int / zrt_parse_uint / zrt_parse_float are `int(s)` / `uint(s)` / `float(s)`
+ * for a str: checked parses that raise ValueError on a malformed string and OverflowError
+ * out of range (str.c). */
+int64_t  zrt_parse_int(const char *s);
+uint64_t zrt_parse_uint(const char *s);
+double   zrt_parse_float(const char *s);
 
-/* zrt_read_file reads a whole file into a list[byte], raising IOError on failure — the
- * MVP source-input leaf the `io` module lowers onto (sys.c). */
-zrt_list zrt_read_file(const char *path);
+/* Whole-file read floor (sys.c): thin syscall leaves the stdlib `io.read_file` drives
+ * from pure Zerg. zrt_open returns an fd (IOError on a failed open); zrt_read_fd reads
+ * one up-to-4096-byte list[byte] chunk (empty = end of input, IOError on error);
+ * zrt_close closes the fd. */
+int64_t zrt_open(const char *path);
+zrt_list zrt_read_fd(int64_t fd);
+int64_t  zrt_close(int64_t fd);
+
+/* Clock leaves the stdlib `time` module lowers onto (sys.c): zrt_time_unix is wall-clock
+ * seconds since the Unix epoch; zrt_time_mono is a monotonic nanosecond reading, valid
+ * only as a difference. */
+int64_t zrt_time_unix(void);
+int64_t zrt_time_mono(void);
+
+/* Process & platform leaves the stdlib `os` module lowers onto (sys.c). zrt_platform /
+ * zrt_arch return the compile-time TARGET OS / arch as a fresh str cell; zrt_getenv
+ * returns a COPY of an env var's value ("" when unset) and zrt_has_env tells set from
+ * unset; zrt_exit terminates the process (does not return). */
+const char *zrt_platform(void);
+const char *zrt_arch(void);
+const char *zrt_getenv(const char *key);
+bool        zrt_has_env(const char *key);
+void        zrt_exit(int64_t code);
+
+/* Filesystem-write leaves (sys.c): the stdlib `io.write_file` drives zrt_open_write (an
+ * fd, IOError on fail), zrt_write_bytes (write all of a borrowed list[byte], IOError on
+ * fail), and zrt_close from pure Zerg; the `fs` module uses zrt_exists / zrt_remove. */
+int64_t zrt_open_write(const char *path);
+void    zrt_write_bytes(int64_t fd, zrt_list bytes);
+bool    zrt_exists(const char *path);
+void    zrt_remove(const char *path);
 
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 

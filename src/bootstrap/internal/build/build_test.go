@@ -51,7 +51,7 @@ func TestBundleImportIO(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	for _, want := range []string{"zg_io__println(", "zg_io__write(", "zg_io__write_int(", "zrt_write_str(", "zrt_write_int("} {
+	for _, want := range []string{"zg_io__println(", "zg_io__write(", "zg_io__write_int(", "zrt_write_str("} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q:\n%s", want, code)
 		}
@@ -97,5 +97,21 @@ func TestNoImportManifestClean(t *testing.T) {
 	}
 	if manifest.NeedsIO || manifest.NeedsRuntime {
 		t.Fatalf("a value-only program should need no runtime, got %+v", manifest)
+	}
+}
+
+// TestWriteIntPureZerg exercises io.write_int's pure-Zerg decimal conversion end to end
+// under ASan/UBSan: zero, a negative, and INT_MIN+1 (the near-overflow boundary the
+// per-digit negation avoids). A clean run also asserts the transient digit lists are
+// freed — the conversion allocates no leaked storage.
+func TestWriteIntPureZerg(t *testing.T) {
+	got := runProgramRT(t, "import \"io\"\n"+
+		"fn main() -> Result[nil] {\n"+
+		"\tio.write_int(0)\n\tio.println(\"\")\n"+
+		"\tio.write_int(-42)\n\tio.println(\"\")\n"+
+		"\tio.write_int(-9223372036854775807)\n\tio.println(\"\")\n"+
+		"\treturn nil\n}\n")
+	if want := "0\n-42\n-9223372036854775807\n"; got != want {
+		t.Fatalf("write_int: got %q, want %q", got, want)
 	}
 }

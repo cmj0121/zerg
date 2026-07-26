@@ -117,10 +117,30 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.derefRef(n), true
 		case "__zrt_write":
 			return c.writeIntrinsic(n, Str), true
-		case "__zrt_write_int":
-			return c.writeIntrinsic(n, Int), true
-		case "__zrt_read_file":
-			return c.readFileIntrinsic(n), true
+		case "__zrt_open":
+			return c.unaryIntrinsic(n, Str, Int), true
+		case "__zrt_read":
+			return c.readIntrinsic(n), true
+		case "__zrt_close":
+			return c.unaryIntrinsic(n, Int, Int), true
+		case "__zrt_time_unix", "__zrt_time_mono":
+			return c.nullaryIntrinsic(n, Int), true
+		case "__zrt_platform", "__zrt_arch":
+			return c.nullaryIntrinsic(n, Str), true
+		case "__zrt_getenv":
+			return c.unaryIntrinsic(n, Str, Str), true
+		case "__zrt_has_env":
+			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_exit":
+			return c.unaryIntrinsic(n, Int, Nil), true
+		case "__zrt_open_write":
+			return c.unaryIntrinsic(n, Str, Int), true
+		case "__zrt_write_bytes":
+			return c.writeBytesIntrinsic(n), true
+		case "__zrt_exists":
+			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_remove":
+			return c.unaryIntrinsic(n, Str, Nil), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -322,9 +342,10 @@ func (c *checker) namespaceMember(n *ast.Field, sym *Symbol, local string) Type 
 	return Invalid
 }
 
-// writeIntrinsic checks a compiler write intrinsic `__zrt_write(fd, value)`: a file
-// descriptor and a value of vt (str or int). It is the MVP leaf the stdlib `io`
-// module lowers onto until the FFI binder lands; it yields the byte count (int).
+// writeIntrinsic checks the compiler write intrinsic `__zrt_write(fd, value)`: a file
+// descriptor and a value of vt (str). It is the irreducible write leaf the stdlib `io`
+// module lowers onto — the runtime's own syscall wrapper, not an FFI binding; it yields
+// the byte count (int). All higher-level formatting (e.g. decimal) is pure Zerg.
 func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	if len(n.Args) != 2 {
 		c.errorf(n.Span(), "write intrinsic takes (fd, value), got %d argument(s)", len(n.Args))
@@ -336,17 +357,55 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 	return Int
 }
 
-// readFileIntrinsic checks the source-input intrinsic `__zrt_read_file(path)`: a str
-// path, yielding a list[byte] of the file's contents. It is the MVP leaf the stdlib `io`
-// module lowers onto until the FFI binder lands (like the write intrinsics).
-func (c *checker) readFileIntrinsic(n *ast.Call) Type {
+// unaryIntrinsic checks a one-argument runtime floor intrinsic of type `(arg) -> ret` —
+// the io whole-file leaves (`__zrt_open` str->int, `__zrt_close` int->int) and the os
+// leaves (`__zrt_getenv` str->str, `__zrt_has_env` str->bool, `__zrt_exit` int->nil).
+// These are the runtime's own leaves the stdlib drives from pure Zerg.
+func (c *checker) unaryIntrinsic(n *ast.Call, arg, ret Type) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "intrinsic takes 1 argument, got %d", len(n.Args))
+		c.synthArgs(n)
+		return ret
+	}
+	c.check(n.Args[0].Value, arg)
+	return ret
+}
+
+// nullaryIntrinsic checks a zero-argument runtime intrinsic that yields ret — the
+// stdlib `time` clock leaves (`__zrt_time_unix` / `__zrt_time_mono`), thin wrappers with
+// no inputs.
+func (c *checker) nullaryIntrinsic(n *ast.Call, ret Type) Type {
+	if len(n.Args) != 0 {
+		c.errorf(n.Span(), "intrinsic takes no arguments, got %d", len(n.Args))
+		c.synthArgs(n)
+	}
+	return ret
+}
+
+// writeBytesIntrinsic checks the write floor intrinsic `__zrt_write_bytes(fd, data)`: an
+// int fd and a list[byte] payload, yielding nil. io.write_file drives it from pure Zerg;
+// a write failure aborts IOError in the runtime.
+func (c *checker) writeBytesIntrinsic(n *ast.Call) Type {
+	if len(n.Args) != 2 {
+		c.errorf(n.Span(), "write-bytes intrinsic takes (fd, data), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return Nil
+	}
+	c.check(n.Args[0].Value, Int)
+	c.check(n.Args[1].Value, &types.List{Elem: types.Byte})
+	return Nil
+}
+
+// readIntrinsic checks the read floor intrinsic `__zrt_read(fd)`: an int fd, yielding
+// one list[byte] chunk (empty at end of input). io.read_file loops it in pure Zerg.
+func (c *checker) readIntrinsic(n *ast.Call) Type {
 	result := &types.List{Elem: types.Byte}
 	if len(n.Args) != 1 {
-		c.errorf(n.Span(), "read-file intrinsic takes (path), got %d argument(s)", len(n.Args))
+		c.errorf(n.Span(), "read intrinsic takes (fd), got %d argument(s)", len(n.Args))
 		c.synthArgs(n)
 		return result
 	}
-	c.check(n.Args[0].Value, Str)
+	c.check(n.Args[0].Value, Int)
 	return result
 }
 
@@ -1220,6 +1279,14 @@ func (c *checker) inferBracket(n *ast.Bracket) Type {
 	if res.Kind == BracketTypeArg {
 		res.Args = c.typeArgExprs(n.Elems)
 		c.info.Brackets[n] = res
+		// sizeof[T] / alignof[T]: the byte size / alignment of a type, a compile-time uint.
+		if id, ok := n.Base.(*ast.Ident); ok && IsSizeofBuiltin(id.Name) &&
+			!c.shadowed(id.Name) {
+			if len(res.Args) != 1 {
+				c.errorf(n.Span(), "%s[T] takes exactly one type argument", id.Name)
+			}
+			return types.Uint
+		}
 		return types.Unknown
 	}
 	xt := c.synth(n.Base)

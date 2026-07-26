@@ -980,22 +980,29 @@ func (e *emitter) reassign(n *ast.Reassign) {
 		e.line(fmt.Sprintf("%s = %s;", target, rhs))
 		return
 	}
+	// Materialize the new value into a temp BEFORE releasing the old one. The RHS may
+	// read the target itself — `s = s + x` str accumulation, `xs = xs.tail` — and the
+	// inline drop below does NOT null the slot, so releasing first would free the very
+	// cell the RHS then reads (a use-after-free that silently loses the accumulator).
+	// The temp holds a retained reference across the release, so the old cell stays live
+	// until the RHS has consumed it.
+	vt := e.cur.ExprType(e.info, n.Value)
+	newVal := e.freshName("as")
+	e.line(fmt.Sprintf("%s = %s;", e.localDecl(t, newVal), e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
 	// Release the old value before overwriting, so a Ref (or Ref-holding) target does
-	// not leak or, if the new value aliases the old, double-free. A whole-binding
-	// target (a name) is found in the scope's drop items and released through the
-	// binding; a sub-place target (a field or index) is not tracked as a binding, so
-	// the old value occupying that place is released directly in place.
+	// not leak. A whole-binding target (a name) is found in the scope's drop items and
+	// released through the binding; a sub-place target (a field or index) is not tracked
+	// as a binding, so the old value occupying that place is released directly in place.
 	if it, ok := e.findDrop(target); ok {
 		e.emitInlineDrop(it)
 	} else if targetIsPlace(n.Target) {
 		e.line(e.fieldDrop(t, target))
 	}
-	// Move/retain the new value into the (now released) slot, coercing to the target type —
-	// for a boxed `Opt` field (S1) this allocates the nullable box (Some) or NULL (None).
-	// The release-old → move/retain-new → store order is load-bearing for a boxed field: a
-	// field has no slot guard, so overwriting before releasing would leak the old cell.
-	vt := e.cur.ExprType(e.info, n.Value)
-	e.line(fmt.Sprintf("%s = %s;", target, e.wrapValue(t, vt, e.copyValue(vt, n.Value))))
+	// Move the already-retained new value into the (now released) slot. The
+	// retain-new → release-old → store order is load-bearing: for a boxed `Opt` field
+	// (no slot guard) storing before releasing would leak the old cell, and for a
+	// self-referential RHS releasing before materializing would free it early.
+	e.line(fmt.Sprintf("%s = %s;", target, newVal))
 }
 
 // destructureBind lowers a destructuring bind '(a, b) := e' / 'P{x, y} := e'. It
@@ -1598,6 +1605,17 @@ func (e *emitter) expr(x ast.Expr) string {
 				return e.mapIndex(n, mt)
 			}
 			return e.expr(n.Base) + "[" + e.expr(n.Elems[0]) + "]"
+		}
+		// sizeof[T] / alignof[T]: a compile-time uint from C's sizeof / _Alignof of the
+		// type argument (recorded on the bracket by sema).
+		if id, ok := n.Base.(*ast.Ident); ok && sema.IsSizeofBuiltin(id.Name) {
+			if args := e.info.Brackets[n].Args; len(args) == 1 {
+				op := "sizeof"
+				if id.Name == "alignof" {
+					op = "_Alignof"
+				}
+				return fmt.Sprintf("((uint64_t)%s(%s))", op, e.ctype(args[0]))
+			}
 		}
 		return "0"
 	case *ast.ListLit:
@@ -2429,27 +2447,56 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 	if !ok || sym.Kind != sema.SymNamespace {
 		return "", false
 	}
+	// The resolved merged name (which follows a one-level `import pub` re-export, Phase 1g
+	// S2) is read from sema's NsMembers table when present, falling back to the direct
+	// spelling; it keys both the call target and the function's by-ref parameter shape.
+	key := sema.NamespaceMemberName(sym, id.Name, fld.Name)
+	if k, ok := e.info.NsMembers[fld]; ok {
+		key = k
+	}
+	// A `mut &` parameter of the resolved function takes the argument's ADDRESS, exactly
+	// as a direct call does — sema already checked each such argument is a mut lvalue.
+	byref := e.namespaceByRefArgs(key)
 	var args strings.Builder
 	for i, a := range n.Args {
 		if i > 0 {
 			args.WriteString(", ")
 		}
-		args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+		if i < len(byref) && byref[i] {
+			args.WriteString(e.addressOf(a.Value))
+		} else {
+			args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
+		}
 	}
 	// A non-generic member calls the bundled top-level function directly; a generic
-	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name
-	// mono recorded for this call site. The resolved merged name (which follows a
-	// one-level `import pub` re-export, Phase 1g S2) is read from sema's NsMembers
-	// table when present, falling back to the direct spelling.
-	key := sema.NamespaceMemberName(sym, id.Name, fld.Name)
-	if k, ok := e.info.NsMembers[fld]; ok {
-		key = k
-	}
+	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name mono
+	// recorded for this call site.
 	target := e.prog.CallTarget(key)
 	if m, ok := e.cur.Calls[n]; ok {
 		target = m
 	}
 	return fmt.Sprintf("%s(%s)", target, args.String()), true
+}
+
+// namespaceByRefArgs reports, per argument position of a resolved namespace member call
+// keyed by its merged name, whether the parameter is a `mut &` reference (so the argument
+// passes by address, like a direct call). It returns nil when the function is unknown or
+// declares no such parameter, leaving those calls byte-identical.
+func (e *emitter) namespaceByRefArgs(key string) []bool {
+	sig, ok := e.info.Funcs[key]
+	if !ok || sig == nil || sig.Decl == nil {
+		return nil
+	}
+	var out []bool
+	for i, p := range sig.Decl.Params {
+		if p.Ref {
+			if out == nil {
+				out = make([]bool, len(sig.Decl.Params))
+			}
+			out[i] = true
+		}
+	}
+	return out
 }
 
 // namespaceMemberValue lowers a non-call namespace member access `ns.member` used as

@@ -1,0 +1,25 @@
+enum Tree {
+	Leaf(int)
+	Node(Tree, Tree)
+}
+fn sum(t: Tree) -> int {
+	return match t {
+		Leaf(n) => n
+		Node(a, b) => sum(a) + sum(b)
+	}
+}
+fn depth(t: Tree) -> int {
+	return match t {
+		Leaf(n) => 1
+		Node(a, b) => 1 + max(depth(a), depth(b))
+	}
+}
+fn max(a: int, b: int) -> int {
+	return a if a > b
+	return b
+}
+fn main() {
+	t := Node(Leaf(1), Node(Leaf(2), Leaf(3)))
+	print sum(t)
+	print depth(t)
+}

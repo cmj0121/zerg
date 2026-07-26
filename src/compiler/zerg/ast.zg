@@ -22,6 +22,7 @@ enum Ty {
 	TNil
 	TVoid
 	TUnknown
+	TByte
 	TNamed(str)
 	TList(Ty)
 }
@@ -41,6 +42,7 @@ enum Expr {
 	EIndex(Expr, Expr)
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
+	EConv(Ty, Expr)
 	EMatch(Expr, list[Arm])
 }
 

@@ -1,0 +1,15 @@
+struct Pair {
+	a: int
+	b: int
+}
+struct Box {
+	lo: Pair
+	hi: Pair
+}
+fn main() {
+	bx := Box(Pair(1, 2), Pair(3, 4))
+	print bx.lo.a + bx.hi.b
+	print bx.lo.b
+	s: str = "tag"
+	print s
+}

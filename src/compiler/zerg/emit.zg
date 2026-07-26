@@ -923,7 +923,7 @@ fn c_intrinsic_ret(name: str) -> Ty {
 	if name == "__zrt_read" {
 		return TList(TByte)
 	}
-	if name == "__zrt_open" {
+	if name == "__zrt_open" or name == "__zrt_exec" {
 		return TInt
 	}
 	return TNil

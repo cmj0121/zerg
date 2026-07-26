@@ -36,6 +36,8 @@ stream surface is specified in [Process & I/O](io.md) but **not yet** built — 
 | ----------------------------------------- | --------------------------------------------------------- |
 | `write(s: str) -> Result[nil]`            | write `s` to stdout, no trailing newline                  |
 | `println(s: str) -> Result[nil]`          | write `s` to stdout with a trailing newline               |
+| `ewrite(s: str) -> Result[nil]`           | write `s` to stderr, no trailing newline                  |
+| `eprintln(s: str) -> Result[nil]`         | write `s` to stderr with a trailing newline               |
 | `write_int(n: int) -> Result[nil]`        | write the decimal text of `n` to stdout                   |
 | `read_file(path: str) -> list[byte]`      | read a whole file's bytes (raises `IOError`)              |
 | `read_stdin() -> list[byte]`              | read all of standard input (fd 0) to EOF                  |
@@ -149,6 +151,10 @@ libm binding). A domain error (e.g. `sqrt` of a negative) raises, demotable with
 | `max(a: int, b: int) -> int`          | the larger of two integers                        |
 | `sqrt(x: float) -> float`             | square root (Newton's method); negative raises    |
 | `pow(base: float, exp: int) -> float` | integer exponent by squaring                      |
+| `trunc(x: float) -> float`            | drop the fractional part, toward zero             |
+| `floor(x: float) -> float`            | greatest integer `<= x`                           |
+| `ceil(x: float) -> float`             | least integer `>= x`                              |
+| `round(x: float) -> float`            | nearest integer, halves away from zero            |
 | `pi() -> float`                       | π (a function; the grammar has no value constant) |
 | `e() -> float`                        | Euler's number                                    |
 

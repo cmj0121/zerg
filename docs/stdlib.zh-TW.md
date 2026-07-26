@@ -35,6 +35,8 @@ leaf。
 | ----------------------------------------- | ------------------------------------------ |
 | `write(s: str) -> Result[nil]`            | 把 `s` 寫到 stdout，無結尾換行             |
 | `println(s: str) -> Result[nil]`          | 把 `s` 寫到 stdout，含結尾換行             |
+| `ewrite(s: str) -> Result[nil]`           | 把 `s` 寫到 stderr，無結尾換行             |
+| `eprintln(s: str) -> Result[nil]`         | 把 `s` 寫到 stderr，含結尾換行             |
 | `write_int(n: int) -> Result[nil]`        | 把 `n` 的十進位文字寫到 stdout             |
 | `read_file(path: str) -> list[byte]`      | 讀整個檔案的位元組（raise `IOError`）      |
 | `read_stdin() -> list[byte]`              | 讀取整個標準輸入（fd 0）至 EOF             |
@@ -144,6 +146,10 @@ primitive 上的數值輔助，加上**純 Zerg** transcendentals（數值演算
 | `max(a: int, b: int) -> int`          | 兩整數的較大者                             |
 | `sqrt(x: float) -> float`             | 平方根（Newton's method）；負數 raise      |
 | `pow(base: float, exp: int) -> float` | 整數指數（by squaring）                    |
+| `trunc(x: float) -> float`            | 去掉小數部分，朝零                         |
+| `floor(x: float) -> float`            | 不大於 `x` 的最大整數                      |
+| `ceil(x: float) -> float`             | 不小於 `x` 的最小整數                      |
+| `round(x: float) -> float`            | 最近整數，逢半朝遠離零                     |
 | `pi() -> float`                       | π（以函式提供；grammar 無 value constant） |
 | `e() -> float`                        | 尤拉數                                     |
 

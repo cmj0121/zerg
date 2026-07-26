@@ -93,6 +93,52 @@ pub fn pow(base: float, exp: int) -> float {
 	return result
 }
 
+# no_fraction reports whether x's magnitude is large enough that a float64 holds no
+# fractional part (>= 2^52) — such a value is already integral, and int() of it would
+# overflow, so the rounding family returns it unchanged. Module-private.
+fn no_fraction(x: float) -> bool {
+	return fabs(x) >= 4503599627370496.0
+}
+
+# trunc returns x with its fractional part removed, rounding toward zero: trunc(2.7) is
+# 2.0 and trunc(-2.7) is -2.0. Computed in pure Zerg — for |x| < 2^52 through the checked
+# int truncation, and a larger x (already integral) returned as is.
+pub fn trunc(x: float) -> float {
+	if no_fraction(x) {
+		return x
+	}
+	return float(int(x))
+}
+
+# floor returns the greatest integer value not greater than x: floor(2.7) is 2.0 and
+# floor(-2.1) is -3.0.
+pub fn floor(x: float) -> float {
+	t := trunc(x)
+	if t > x {
+		return t - 1.0
+	}
+	return t
+}
+
+# ceil returns the least integer value not less than x: ceil(2.1) is 3.0 and ceil(-2.7)
+# is -2.0.
+pub fn ceil(x: float) -> float {
+	t := trunc(x)
+	if t < x {
+		return t + 1.0
+	}
+	return t
+}
+
+# round returns x rounded to the nearest integer, with a half rounded away from zero:
+# round(2.5) is 3.0 and round(-2.5) is -3.0.
+pub fn round(x: float) -> float {
+	if x < 0.0 {
+		return -floor(-x + 0.5)
+	}
+	return floor(x + 0.5)
+}
+
 # pi returns an approximation of the ratio of a circle's circumference to its diameter.
 # It is a function, not a constant binding, because the grammar has no module-level
 # value declaration yet (a `math.PI` value would need that surface).

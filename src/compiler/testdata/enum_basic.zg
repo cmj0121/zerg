@@ -1,0 +1,17 @@
+enum Shape {
+	Dot
+	Line(int)
+	Rect(int, int)
+}
+fn area(s: Shape) -> int {
+	return match s {
+		Dot => 0
+		Line(n) => n
+		Rect(w, h) => w * h
+	}
+}
+fn main() {
+	print area(Dot)
+	print area(Line(7))
+	print area(Rect(3, 4))
+}

@@ -123,9 +123,31 @@ self-host is real.
 ## Bootstrap minimization (M6)
 
 Once the fixpoint holds, the Go bootstrap only needs to compile the `Zerg-boot` subset the
-`src/compiler/*.zg` sources actually use. M6 surveys that subset and strips every Go
-`sema`/`emit` branch off that happy path, keeping the minimal seed that still builds the
-whole self-host compiler.
+`src/compiler/*.zg` sources (and their imports `io` / `ascii` / `strconv`) actually use.
+Every removal is guarded by `scripts/selfhost-fixpoint.sh` — a change is kept only if the
+whole chain still self-hosts.
+
+**The Zerg-boot subset** (what the minimal bootstrap MUST keep):
+
+- declarations: `fn` (incl. `mut &` reference params), `struct`, `enum` (incl.
+  self-recursive), `#[derive(Eq)]`, `import`, `pub`
+- statements: `x := e` / `x: T = e` / `mut` / `const` bindings, assignment to a name /
+  field / index lvalue, `print`, `return` (incl. `return e if c`), `if` / `else if` /
+  `else`, `for cond` / `for` / `for x in xs`, `break`, `continue`, `nop`, `guard`, `raise`
+- expressions: int / float / str / bool / byte literals, `nil`, identifiers, unary /
+  binary operators, calls, field access, indexing, method calls, list literals `[]`,
+  conversions (`int`/`byte`/`str`/`list[T]`(x)), `match` (literal / bind / wildcard /
+  constructor patterns, optional guard), if-expressions
+- types: `int`, `float`, `str`, `bool`, `byte`, `nil`, `list[T]`, named struct/enum,
+  `Result[T]`
+- the `__zrt_*` runtime intrinsics the bundled stdlib lowers onto
+
+**Strippable** (NOT in the subset — the self-host source never uses them): closures /
+first-class functions; coroutines (`spawn` / `chan` / `select`); `map[K,V]`; `spec` /
+`impl` and generic _function_ definitions; `unsafe` / `asm` / `ptr`; f-strings and command
+literals; `with` / `defer` / `del`; optionals (`T?` / `??` / `!`) beyond `Result`. The
+non-build subcommands (`fmt` / `lint` / `test`) are also dropped — the minimal seed is
+`zerg build` only; the self-host compiler can reimplement the tools in Zerg later.
 
 ## Performance: parallelism & caching (M7)
 

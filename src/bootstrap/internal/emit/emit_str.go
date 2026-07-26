@@ -132,29 +132,11 @@ func (e *emitter) programProducesHeapStr() bool {
 }
 
 // programUsesStrIntrinsic reports whether the program lowers a str-PRODUCING runtime
-// intrinsic — the os leaves `__zrt_getenv` / `__zrt_platform` / `__zrt_arch`, each of
-// which returns a FRESH str cell (sys.c's sys_str_cell). Like the other heap-str
-// producers this makes str managed, so a managed program retains/releases the cell
-// instead of leaking it.
+// intrinsic — the os leaves in strProducingIntrinsics, each of which returns a FRESH str
+// cell (sys.c's sys_str_cell). Like the other heap-str producers this makes str managed,
+// so a managed program retains/releases the cell instead of leaking it.
 func (e *emitter) programUsesStrIntrinsic() bool {
-	for node := range e.info.ExprTypes {
-		call, ok := node.(*ast.Call)
-		if !ok {
-			continue
-		}
-		id, ok := call.Callee.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if _, shadowed := e.info.Refs[id]; shadowed {
-			continue
-		}
-		switch id.Name {
-		case "__zrt_getenv", "__zrt_platform", "__zrt_arch":
-			return true
-		}
-	}
-	return false
+	return e.programCallsIntrinsic(strProducingIntrinsics)
 }
 
 // programUsesStrConv reports whether the program builds a str through the `str(x)`

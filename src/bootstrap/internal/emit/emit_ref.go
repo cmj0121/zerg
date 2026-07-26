@@ -410,9 +410,21 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_remove":    true,
 }
 
-// programUsesSysFloor reports whether the program lowers a non-io sys-floor intrinsic, so
-// the runtime is linked. A shadowed spelling is left to the ordinary call path.
-func (e *emitter) programUsesSysFloor() bool {
+// strProducingIntrinsics are the sys-floor leaves that return a FRESH str cell
+// (sys.c's sys_str_cell) — the os `env`/`platform`/`arch` leaves. Lowering one makes the
+// program's str management active, so the cell is retained/released instead of leaked.
+var strProducingIntrinsics = map[string]bool{
+	"__zrt_getenv":   true,
+	"__zrt_platform": true,
+	"__zrt_arch":     true,
+}
+
+// programCallsIntrinsic reports whether the program lowers any intrinsic whose spelling
+// is in names. A shadowed spelling (info.Refs records a user binding of that name) is
+// left to the ordinary call path, so it does not count. This is the shared scan behind
+// the per-category predicates (io floor, sys floor, str-producing) — the shadow-skip
+// rule lives here once instead of in each caller.
+func (e *emitter) programCallsIntrinsic(names map[string]bool) bool {
 	for node := range e.info.ExprTypes {
 		call, ok := node.(*ast.Call)
 		if !ok {
@@ -425,34 +437,24 @@ func (e *emitter) programUsesSysFloor() bool {
 		if _, shadowed := e.info.Refs[id]; shadowed {
 			continue
 		}
-		if sysFloorIntrinsics[id.Name] {
+		if names[id.Name] {
 			return true
 		}
 	}
 	return false
 }
 
+// programUsesSysFloor reports whether the program lowers a non-io sys-floor intrinsic, so
+// the runtime is linked. A shadowed spelling is left to the ordinary call path.
+func (e *emitter) programUsesSysFloor() bool {
+	return e.programCallsIntrinsic(sysFloorIntrinsics)
+}
+
 // programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic —
 // the leaf of a bundled io function. A shadowed spelling is left to the ordinary call
 // path (info.Refs records the user binding), so it does not count as an io use.
 func (e *emitter) programUsesIO() bool {
-	for node := range e.info.ExprTypes {
-		call, ok := node.(*ast.Call)
-		if !ok {
-			continue
-		}
-		id, ok := call.Callee.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if _, shadowed := e.info.Refs[id]; shadowed {
-			continue
-		}
-		if ioIntrinsicNames[id.Name] {
-			return true
-		}
-	}
-	return false
+	return e.programCallsIntrinsic(ioIntrinsicNames)
 }
 
 // programUsesResultNil reports whether any Result[nil] value appears in the program

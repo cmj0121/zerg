@@ -43,6 +43,7 @@ enum Expr {
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
 	EConv(Ty, Expr)
+	EIf(Expr, Expr, Expr)
 	EMatch(Expr, list[Arm])
 }
 
@@ -65,7 +66,7 @@ struct Arm {
 # the optional parts the subset's flat enums cannot express as optionals.
 enum Stmt {
 	SLet(str, Ty, bool, bool, Expr)
-	SAssign(str, Expr)
+	SAssign(Expr, Expr)
 	SPrint(Expr)
 	SReturn(bool, Expr)
 	SReturnIf(Expr, Expr)
@@ -78,10 +79,12 @@ enum Stmt {
 	SNop
 }
 
-# Param is one function parameter: its name and declared type.
+# Param is one function parameter: its name, declared type, and whether it is a mutable
+# reference (`mut &name: T`), which lowers to a C pointer.
 struct Param {
 	name: str
 	ty: Ty
+	is_ref: bool
 }
 
 # FnDecl is a function declaration: name, parameters, an optional return type

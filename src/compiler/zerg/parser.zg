@@ -91,16 +91,20 @@ fn parse_type(mut &p: Parser) -> Ty {
 	if name == "byte" {
 		return TByte
 	}
+	if name == "uint" {
+		# the subset models uint as int64_t (it never parses top-bit values)
+		return TInt
+	}
 	return TNamed(name)
 }
 
 # is_conv reports whether a callee name is a scalar type conversion.
 fn is_conv(name: str) -> bool {
-	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool"
+	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool" or name == "uint"
 }
 
 fn conv_ty(name: str) -> Ty {
-	if name == "int" {
+	if name == "int" or name == "uint" {
 		return TInt
 	}
 	if name == "byte" {
@@ -206,11 +210,20 @@ fn parse_fn(mut &p: Parser) -> FnDecl {
 	expect(p, LParen)
 	mut params: list[Param] = []
 	for not p_at(p, RParen) and not p_at(p, Eof) {
+		# an optional `mut &` prefix marks a mutable-reference parameter
+		mut is_ref := false
+		if p_at(p, Mut) {
+			p_advance(p)
+			if p_at(p, Amp) {
+				p_advance(p)
+				is_ref = true
+			}
+		}
 		pname := cur(p).lexeme
 		p_advance(p)
 		expect(p, Colon)
 		pty := parse_type(p)
-		params.append(Param(pname, pty))
+		params.append(Param(pname, pty, is_ref))
 		if p_at(p, Comma) {
 			p_advance(p)
 		}
@@ -279,12 +292,11 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
 		return parse_binding(p, false)
 	}
-	# expression statement or reassignment
+	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
 	if p_at(p, Assign) {
 		p_advance(p)
-		rhs := parse_expr(p)
-		return SAssign(ident_name(e), rhs)
+		return SAssign(e, parse_expr(p))
 	}
 	return SExpr(e)
 }
@@ -544,6 +556,23 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		}
 		expect(p, RBrack)
 		return EListLit(elems)
+	}
+	if k == If {
+		# if-expression: if cond { expr } else { expr }
+		p_advance(p)
+		cond := parse_expr(p)
+		expect(p, LBrace)
+		skip_semis(p)
+		then_e := parse_expr(p)
+		skip_semis(p)
+		expect(p, RBrace)
+		expect(p, Else)
+		expect(p, LBrace)
+		skip_semis(p)
+		else_e := parse_expr(p)
+		skip_semis(p)
+		expect(p, RBrace)
+		return EIf(cond, then_e, else_e)
 	}
 	if k == Match {
 		return parse_match(p)

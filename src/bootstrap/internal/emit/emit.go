@@ -1608,7 +1608,7 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		// sizeof[T] / alignof[T]: a compile-time uint from C's sizeof / _Alignof of the
 		// type argument (recorded on the bracket by sema).
-		if id, ok := n.Base.(*ast.Ident); ok && (id.Name == "sizeof" || id.Name == "alignof") {
+		if id, ok := n.Base.(*ast.Ident); ok && sema.IsSizeofBuiltin(id.Name) {
 			if args := e.info.Brackets[n].Args; len(args) == 1 {
 				op := "sizeof"
 				if id.Name == "alignof" {

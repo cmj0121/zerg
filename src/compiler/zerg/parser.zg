@@ -69,6 +69,12 @@ fn ident_name(e: Expr) -> str {
 fn parse_type(mut &p: Parser) -> Ty {
 	name := cur(p).lexeme
 	p_advance(p)
+	if name == "list" and p_at(p, LBrack) {
+		p_advance(p)
+		elem := parse_type(p)
+		expect(p, RBrack)
+		return TList(elem)
+	}
 	if name == "int" {
 		return TInt
 	}
@@ -310,6 +316,14 @@ fn parse_for(mut &p: Parser) -> Stmt {
 	if p_at(p, LBrace) {
 		return SFor(false, ENil, parse_block(p))
 	}
+	# for-in: `for name in iterable { ... }`
+	if p_at(p, Ident) and peek_kind(p, 1) == In {
+		vname := cur(p).lexeme
+		p_advance(p) # name
+		p_advance(p) # 'in'
+		iter := parse_expr(p)
+		return SForIn(vname, iter, parse_block(p))
+	}
 	cond := parse_expr(p)
 	body := parse_block(p)
 	return SFor(true, cond, body)
@@ -399,27 +413,41 @@ fn parse_unary(mut &p: Parser) -> Expr {
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
 	mut e := parse_primary(p)
-	for p_at(p, LParen) or p_at(p, Dot) {
-		if p_at(p, Dot) {
+	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) {
+		if p_at(p, LBrack) {
+			p_advance(p) # '['
+			idx := parse_expr(p)
+			expect(p, RBrack)
+			e = EIndex(e, idx)
+		} else if p_at(p, Dot) {
 			p_advance(p)
 			fld := cur(p).lexeme
 			p_advance(p)
-			e = EField(e, fld)
-		} else {
-			name := ident_name(e)
-			p_advance(p) # '('
-			mut args: list[Expr] = []
-			for not p_at(p, RParen) and not p_at(p, Eof) {
-				args.append(parse_expr(p))
-				if p_at(p, Comma) {
-					p_advance(p)
-				}
+			if p_at(p, LParen) {
+				# method call: target.method(args)
+				e = EMethod(e, fld, parse_call_args(p))
+			} else {
+				e = EField(e, fld)
 			}
-			expect(p, RParen)
-			e = ECall(name, args)
+		} else {
+			# free call: name(args)
+			e = ECall(ident_name(e), parse_call_args(p))
 		}
 	}
 	return e
+}
+
+fn parse_call_args(mut &p: Parser) -> list[Expr] {
+	p_advance(p) # '('
+	mut args: list[Expr] = []
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		args.append(parse_expr(p))
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+	}
+	expect(p, RParen)
+	return args
 }
 
 fn parse_primary(mut &p: Parser) -> Expr {
@@ -458,6 +486,19 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		inner := parse_expr(p)
 		expect(p, RParen)
 		return inner
+	}
+	if k == LBrack {
+		# list literal: [] or [a, b, ...]
+		p_advance(p)
+		mut elems: list[Expr] = []
+		for not p_at(p, RBrack) and not p_at(p, Eof) {
+			elems.append(parse_expr(p))
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
+		}
+		expect(p, RBrack)
+		return EListLit(elems)
 	}
 	if k == Match {
 		return parse_match(p)

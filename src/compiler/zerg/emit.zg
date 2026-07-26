@@ -33,6 +33,7 @@ struct Emitter {
 	vf_variant: list[str]
 	vf_index: list[int]
 	vf_boxed: list[bool]
+	used_rt: bool
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -67,7 +68,23 @@ fn c_type(t: Ty) -> str {
 		TBool => "bool"
 		TVoid => "void"
 		TNamed(nm) => "zg_" + nm
+		TList(_) => "zrt_list"
 		_ => "int64_t"
+	}
+}
+
+# c_list_elem returns the element type of a list type, or TUnknown otherwise.
+fn c_list_elem(t: Ty) -> Ty {
+	return match t {
+		TList(e) => e
+		_ => TUnknown
+	}
+}
+
+fn c_is_list(t: Ty) -> bool {
+	return match t {
+		TList(_) => true
+		_ => false
 	}
 }
 
@@ -435,8 +452,33 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EBinary(oper, a, b) => "(" + c_expr(em, a, sb) + " " + c_binop(oper) + " " + c_expr(em, b, sb) + ")"
 		ECall(name, args) => c_call(em, name, args, sb)
 		EField(target, fld) => c_expr(em, target, sb) + ".zg_" + fld
+		EIndex(target, idx) => c_index(em, target, idx, sb)
+		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
+		EListLit(elems) => "(zrt_list){0}"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 	}
+}
+
+# c_index lowers `xs[i]` to a runtime list read, casting the element pointer to the
+# element C type inferred for the target.
+fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
+	em.used_rt = true
+	ct := c_type(c_list_elem(c_infer(em, target)))
+	return "(*(" + ct + "*)zrt_list_at(&(" + c_expr(em, target, sb) + "), " + c_expr(em, idx, sb) + "))"
+}
+
+# c_method lowers the list methods the subset uses: len and append.
+fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+	tgt := c_expr(em, target, sb)
+	if meth == "len" {
+		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
+	}
+	if meth == "append" {
+		et := c_type(c_list_elem(c_infer(em, target)))
+		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+	}
+	return tgt
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -595,8 +637,18 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		ECall(name, args) => c_infer_call(em, name)
 		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
+		EIndex(target, idx) => c_list_elem(c_infer(em, target))
+		EMethod(target, meth, args) => c_infer_method(meth)
+		EListLit(elems) => TUnknown
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
 	}
+}
+
+fn c_infer_method(meth: str) -> Ty {
+	if meth == "len" {
+		return TInt
+	}
+	return TNil
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
@@ -638,17 +690,69 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 	return match s {
 		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, ival, ind)
-		SAssign(name, rhs) => ind + "zg_" + name + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+		SAssign(name, rhs) => c_assign(em, name, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
 		SReturnIf(val, cond) => ind + "if (" + c_expr(em, cond, c_nosub()) + ") { return " + c_expr(em, val, c_nosub()) + "; }\n"
 		SExpr(e) => ind + c_expr(em, e, c_nosub()) + ";\n"
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
+		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		SBreak => ind + "break;\n"
 		SContinue => ind + "continue;\n"
 		SNop => ""
 	}
+}
+
+fn c_is_listlit(e: Expr) -> bool {
+	return match e {
+		EListLit(_) => true
+		_ => false
+	}
+}
+
+# c_assign lowers `name = rhs`. Re-assigning a list literal re-initialises the list
+# (leak-style: the old buffer is abandoned); anything else is a plain assignment.
+fn c_assign(mut &em: Emitter, name: str, rhs: Expr, ind: str) -> str {
+	vt := c_lookup_var(em, name)
+	if c_is_list(vt) and c_is_listlit(rhs) {
+		em.used_rt = true
+		et := c_type(c_list_elem(vt))
+		mut out := ind + "zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes(em, "zg_" + name, et, rhs, ind)
+	}
+	return ind + "zg_" + name + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+}
+
+# c_pushes emits a zrt_list_push per element of a list literal.
+fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
+	return match lit {
+		EListLit(elems) => c_pushes_of(em, target, et, elems, ind)
+		_ => ""
+	}
+}
+
+fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: str) -> str {
+	mut out := ""
+	mut i := 0
+	for i < elems.len() {
+		out = out + ind + "{ " + et + " zg_le = " + c_expr(em, elems[i], c_nosub()) + "; zrt_list_push(&" + target + ", &zg_le); }\n"
+		i = i + 1
+	}
+	return out
+}
+
+# c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
+fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	em.used_rt = true
+	elem := c_list_elem(c_infer(em, iter))
+	et := c_type(elem)
+	it := c_expr(em, iter, c_nosub())
+	c_add_var(em, var, elem)
+	mut out := ind + "for (size_t zg_i = 0; zg_i < zrt_list_len(&(" + it + ")); zg_i++) {\n"
+	out = out + ind + "    " + et + " zg_" + var + " = (*(" + et + "*)zrt_list_at(&(" + it + "), zg_i));\n"
+	out = out + c_block(em, body, ind + "    ")
+	return out + ind + "}\n"
 }
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
@@ -657,7 +761,22 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 		eff = c_infer(em, ival)
 	}
 	c_add_var(em, name, eff)
+	if c_is_list(eff) {
+		return c_let_list(em, name, eff, ival, ind)
+	}
 	return ind + c_type(eff) + " zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
+}
+
+# c_let_list declares a list binding: a list-literal initializer becomes an init plus a
+# push per element; any other initializer (a call or another list) is a plain copy.
+fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
+	em.used_rt = true
+	if c_is_listlit(ival) {
+		et := c_type(c_list_elem(eff))
+		mut out := ind + "zrt_list zg_" + name + "; zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes(em, "zg_" + name, et, ival, ind)
+	}
+	return ind + "zrt_list zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
@@ -767,47 +886,59 @@ fn c_has_main(f: File) -> bool {
 	return false
 }
 
-# emit_c lowers Zerg source to a complete C translation unit.
+# emit_c lowers Zerg source to a complete C translation unit. The body is generated
+# first (so list use sets em.used_rt), then the header is assembled with the runtime
+# include and the shared list vtable added only when the program needs them.
 pub fn emit_c(src: str) -> str {
 	f := parse(src)
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
-	mut out := "// Generated by zergc (self-host). Do not edit.\n"
-	out = out + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
-	if c_needs_runtime(em) {
-		out = out + "#include \"zergrt.h\"\n"
-	}
-	out = out + "\n"
+
+	mut types := ""
 	mut i := 0
 	for i < f.structs.len() {
-		out = out + c_struct_typedef(f.structs[i])
+		types = types + c_struct_typedef(f.structs[i])
 		i = i + 1
 	}
 	i = 0
 	for i < f.enums.len() {
-		out = out + c_enum_typedef(f.enums[i])
+		types = types + c_enum_typedef(f.enums[i])
 		i = i + 1
 	}
 	i = 0
 	for i < f.enums.len() {
-		out = out + c_refbox_helpers(f.enums[i])
+		types = types + c_refbox_helpers(f.enums[i])
 		i = i + 1
 	}
+
+	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
-		out = out + c_proto(f.fns[i])
+		protos = protos + c_proto(f.fns[i])
 		i = i + 1
 	}
-	out = out + "\n"
+	mut defs := ""
 	i = 0
 	for i < f.fns.len() {
-		out = out + c_fn(em, f.fns[i])
+		defs = defs + c_fn(em, f.fns[i])
 		i = i + 1
 	}
+	mut mainw := ""
 	if c_has_main(f) {
-		out = out + "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+		mainw = "int main(void) {\n    zg_main();\n    return 0;\n}\n"
 	}
-	return out
+
+	rt := c_needs_runtime(em) or em.used_rt
+	mut hdr := "// Generated by zergc (self-host). Do not edit.\n"
+	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
+	if rt {
+		hdr = hdr + "#include \"zergrt.h\"\n"
+	}
+	hdr = hdr + "\n"
+	if em.used_rt {
+		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n\n"
+	}
+	return hdr + types + protos + "\n" + defs + mainw
 }

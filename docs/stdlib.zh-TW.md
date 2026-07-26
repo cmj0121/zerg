@@ -18,6 +18,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../src/runtime/README.
 | [`os`](#os)           | `import "os"`      | 環境變數、程序結束、目標平台／架構 |
 | [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
 | [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
+| [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換           |
 | [`time`](#time)       | `import "time"`    | 牆鐘與單調時鐘                     |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
@@ -36,6 +37,7 @@ leaf。
 | `println(s: str) -> Result[nil]`          | 把 `s` 寫到 stdout，含結尾換行             |
 | `write_int(n: int) -> Result[nil]`        | 把 `n` 的十進位文字寫到 stdout             |
 | `read_file(path: str) -> list[byte]`      | 讀整個檔案的位元組（raise `IOError`）      |
+| `read_stdin() -> list[byte]`              | 讀取整個標準輸入（fd 0）至 EOF             |
 | `write_file(path: str, data: list[byte])` | 建立/截斷並寫入整個檔案（raise `IOError`） |
 
 ## `fs`
@@ -78,6 +80,13 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 | `trim(s: str) -> str`                  | 去除前後的 ASCII 空白                      |
 | `to_upper(s: str) -> str`              | 把 ASCII 小寫字母折成大寫                  |
 | `to_lower(s: str) -> str`              | 把 ASCII 大寫字母折成小寫                  |
+| `count(s: str, sub: str) -> int`       | `sub` 的非重疊出現次數                     |
+| `replace(s: str, old: str, new: str)`  | 把每個 `old` 換成 `new`                    |
+| `trim_prefix(s: str, prefix: str)`     | 去掉一個前綴 `prefix`，否則原樣            |
+| `trim_suffix(s: str, suffix: str)`     | 去掉一個後綴 `suffix`，否則原樣            |
+| `fields(s: str) -> list[str]`          | 依空白區段切分，無空片段                   |
+
+`count` 與 `replace` 對空的 needle raise `ValueError`，與 `split` 一致。
 
 ## `ascii`
 
@@ -98,6 +107,20 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 | `to_lower(b: byte) -> byte` | 把 ASCII 大寫字母折成小寫（否則原樣）              |
 | `digit_val(b: byte) -> int` | 十進位數字的值 `0..9`，否則 `-1`                   |
 | `hex_val(b: byte) -> int`   | 十六進位數字（不分大小寫）的值 `0..15`，否則 `-1`  |
+
+## `strconv`
+
+任意 **base** 2..36 的數字文字轉換（數字為 `'0'..'9'` 接 `'a'..'z'`，輸入不分大小寫）——這是內建轉換未涵蓋的
+層：`int(s)` / `uint(s)` / `float(s)` 只解析十進位、`str(n)` 只輸出十進位。用來手動讀 `0x…` / `0b…` 字面量或
+輸出 hex dump。base 非法、位數超出 base、或字串格式錯誤 raise `ValueError`；目標型別的 overflow 本階段**不**另行
+診斷（請解析有界文字）。
+
+| 函式                                    | 摘要                                    |
+| --------------------------------------- | --------------------------------------- |
+| `parse_int(s: str, base: int) -> int`   | `base` 的有號整數，可帶 `+`/`-`         |
+| `parse_uint(s: str, base: int) -> uint` | `base` 的無號整數（可填滿最高位）       |
+| `to_string(n: int, base: int) -> str`   | 以 `base` 輸出 `n`，小寫，INT_MIN-safe  |
+| `parse_bool(s: str) -> bool`            | `"true"` / `"false"`，否則 `ValueError` |
 
 ## `time`
 

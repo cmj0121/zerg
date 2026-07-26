@@ -19,6 +19,7 @@ For the compiler-provided functions that need **no** import, see [Built-in Funct
 | [`os`](#os)           | `import "os"`      | environment, process exit, target platform/arch  |
 | [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`           |
 | [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser |
+| [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base     |
 | [`time`](#time)       | `import "time"`    | wall-clock and monotonic clocks                  |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
@@ -37,6 +38,7 @@ stream surface is specified in [Process & I/O](io.md) but **not yet** built — 
 | `println(s: str) -> Result[nil]`          | write `s` to stdout with a trailing newline               |
 | `write_int(n: int) -> Result[nil]`        | write the decimal text of `n` to stdout                   |
 | `read_file(path: str) -> list[byte]`      | read a whole file's bytes (raises `IOError`)              |
+| `read_stdin() -> list[byte]`              | read all of standard input (fd 0) to EOF                  |
 | `write_file(path: str, data: list[byte])` | create/truncate and write a whole file (raises `IOError`) |
 
 ## `fs`
@@ -80,6 +82,13 @@ unchanged. An empty `split` separator, or a negative `repeat` count, raises `Val
 | `trim(s: str) -> str`                  | drop leading/trailing ASCII whitespace              |
 | `to_upper(s: str) -> str`              | fold ASCII lowercase letters to uppercase           |
 | `to_lower(s: str) -> str`              | fold ASCII uppercase letters to lowercase           |
+| `count(s: str, sub: str) -> int`       | number of non-overlapping occurrences of `sub`      |
+| `replace(s: str, old: str, new: str)`  | replace every occurrence of `old` with `new`        |
+| `trim_prefix(s: str, prefix: str)`     | drop one leading `prefix`, else `s` unchanged       |
+| `trim_suffix(s: str, suffix: str)`     | drop one trailing `suffix`, else `s` unchanged      |
+| `fields(s: str) -> list[str]`          | split around whitespace runs, no empty pieces       |
+
+`count` and `replace` raise `ValueError` on an empty needle, like `split`.
 
 ## `ascii`
 
@@ -101,6 +110,21 @@ single-byte counterparts of the `strings` case folds; `digit_val` / `hex_val` ma
 | `to_lower(b: byte) -> byte` | fold an ASCII uppercase letter to lowercase (else unchanged) |
 | `digit_val(b: byte) -> int` | value `0..9` of a decimal digit, or `-1`                     |
 | `hex_val(b: byte) -> int`   | value `0..15` of a hex digit (either case), or `-1`          |
+
+## `strconv`
+
+Numeric text conversion in an arbitrary **base** 2..36 (digits `'0'..'9'` then `'a'..'z'`, case-insensitive
+on input) — the layer the built-ins do not cover, since `int(s)` / `uint(s)` / `float(s)` parse decimal only
+and `str(n)` formats decimal only. Use it to read a `0x…` / `0b…` literal by hand or render a hex dump. A bad
+base, an out-of-base digit, or a malformed string raises `ValueError`; overflow of the target type is **not**
+separately diagnosed this phase (parse bounded text).
+
+| Function                                | Summary                                        |
+| --------------------------------------- | ---------------------------------------------- |
+| `parse_int(s: str, base: int) -> int`   | signed integer in `base`, optional `+`/`-`     |
+| `parse_uint(s: str, base: int) -> uint` | unsigned integer in `base` (fills the top bit) |
+| `to_string(n: int, base: int) -> str`   | render `n` in `base`, lowercase, INT_MIN-safe  |
+| `parse_bool(s: str) -> bool`            | `"true"` / `"false"`, else `ValueError`        |
 
 ## `time`
 

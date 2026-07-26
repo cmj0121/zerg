@@ -427,6 +427,7 @@ int64_t zrt_open_write(const char *path);
 void    zrt_write_bytes(int64_t fd, zrt_list bytes);
 bool    zrt_exists(const char *path);
 void    zrt_remove(const char *path);
+int64_t zrt_exec(zrt_list argv);
 
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 

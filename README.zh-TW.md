@@ -98,11 +98,12 @@ struct Point { x: int; y: int }
 
 | 套件          | 提供                                 |
 | ------------- | ------------------------------------ |
-| **`io`**      | stdout 寫入、整檔讀／寫              |
+| **`io`**      | stdout 寫入、整檔與 stdin 讀／寫     |
 | **`fs`**      | `exists` / `remove`                  |
 | **`os`**      | `env`、`exit`、`platform`、`arch`    |
 | **`strings`** | `split` / `join`、搜尋、trim、大小寫 |
 | **`ascii`**   | tokeniser 用的位元組分類             |
+| **`strconv`** | base-N `parse_int` / `to_string`     |
 | **`time`**    | `now`（牆鐘）、`monotonic`           |
 | **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e` |
 | **`rand`**    | 確定性、非密碼學產生器               |

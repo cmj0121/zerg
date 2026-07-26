@@ -101,18 +101,19 @@ A small, **fixed** set of compiler-recognized functions — no `import` needed:
 
 Pure-Zerg packages over the self runtime (zero external dependency), reached with `import "<name>"`:
 
-| Package       | Provides                                     |
-| ------------- | -------------------------------------------- |
-| **`io`**      | stdout writers, whole-file read/write        |
-| **`fs`**      | `exists` / `remove`                          |
-| **`os`**      | `env`, `exit`, `platform`, `arch`            |
-| **`strings`** | `split` / `join`, search, trim, case folding |
-| **`ascii`**   | byte classification for a tokeniser          |
-| **`time`**    | `now` (wall clock), `monotonic`              |
-| **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`  |
-| **`rand`**    | a deterministic, non-cryptographic generator |
-| **`atomic`**  | the safe shared-mutable primitive            |
-| **`testing`** | `assert` / `assert_eq` / `assert_ne`         |
+| Package       | Provides                                       |
+| ------------- | ---------------------------------------------- |
+| **`io`**      | stdout writers, whole-file & stdin read/write  |
+| **`fs`**      | `exists` / `remove`                            |
+| **`os`**      | `env`, `exit`, `platform`, `arch`              |
+| **`strings`** | `split` / `join`, search, trim, case folding   |
+| **`ascii`**   | byte classification for a tokeniser            |
+| **`strconv`** | base-N `parse_int` / `to_string`, `parse_bool` |
+| **`time`**    | `now` (wall clock), `monotonic`                |
+| **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`    |
+| **`rand`**    | a deterministic, non-cryptographic generator   |
+| **`atomic`**  | the safe shared-mutable primitive              |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne`           |
 
 Full catalogue with signatures — **[Standard Library](docs/stdlib.md)**.
 

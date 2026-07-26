@@ -73,3 +73,36 @@ func TestStringsSplitEmptySepAborts(t *testing.T) {
 		t.Fatalf("expected empty-separator abort, got %q", out)
 	}
 }
+
+// TestStringsCountReplace covers count (non-overlapping) and replace (all occurrences,
+// including a no-match pass-through).
+func TestStringsCountReplace(t *testing.T) {
+	got := runProgramRTBalanced(t, "import \"strings\"\n"+
+		"fn main() {\n"+
+		"\tprint strings.count(\"banana\", \"a\")\n"+ // 3
+		"\tprint strings.count(\"aaaa\", \"aa\")\n"+ // 2 (non-overlapping)
+		"\tprint strings.count(\"abc\", \"x\")\n"+ // 0
+		"\tprint strings.replace(\"a.b.c\", \".\", \"/\")\n"+ // a/b/c
+		"\tprint strings.replace(\"hello\", \"l\", \"L\")\n"+ // heLLo
+		"\tprint strings.replace(\"xyz\", \"q\", \"Q\")\n"+ // xyz
+		"}\n")
+	if want := "3\n2\n0\na/b/c\nheLLo\nxyz\n"; got != want {
+		t.Fatalf("strings count/replace: got %q, want %q", got, want)
+	}
+}
+
+// TestStringsTrimAffixFields covers trim_prefix / trim_suffix (with the no-match
+// pass-through) and fields (splitting around whitespace runs, no empty pieces).
+func TestStringsTrimAffixFields(t *testing.T) {
+	got := runProgramRTBalanced(t, "import \"strings\"\n"+
+		"fn main() {\n"+
+		"\tprint \"[\" + strings.trim_prefix(\"foobar\", \"foo\") + \"]\"\n"+ // [bar]
+		"\tprint \"[\" + strings.trim_prefix(\"foobar\", \"xxx\") + \"]\"\n"+ // [foobar]
+		"\tprint \"[\" + strings.trim_suffix(\"foobar\", \"bar\") + \"]\"\n"+ // [foo]
+		"\tprint strings.join(strings.fields(\"  the   quick brown  \"), \"|\")\n"+ // the|quick|brown
+		"\tprint strings.fields(\"   \").len()\n"+ // 0
+		"}\n")
+	if want := "[bar]\n[foobar]\n[foo]\nthe|quick|brown\n0\n"; got != want {
+		t.Fatalf("strings trim/fields: got %q, want %q", got, want)
+	}
+}

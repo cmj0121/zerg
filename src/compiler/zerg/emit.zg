@@ -513,18 +513,23 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	return "(*(" + ct + "*)zrt_list_at(&(" + c_expr(em, target, sb) + "), " + c_expr(em, idx, sb) + "))"
 }
 
-# c_method lowers the list methods the subset uses: len and append.
+# c_method lowers a `target.meth(args)`: a list target uses the runtime list methods
+# (len / append); any other target is a module-qualified free call (e.g. ascii.is_digit),
+# emitted as the bare mangled function since the module is flattened into this unit.
 fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
-	em.used_rt = true
-	tgt := c_expr(em, target, sb)
-	if meth == "len" {
-		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
+	if c_is_list(c_infer(em, target)) {
+		em.used_rt = true
+		tgt := c_expr(em, target, sb)
+		if meth == "len" {
+			return "((int64_t)zrt_list_len(&(" + tgt + ")))"
+		}
+		if meth == "append" {
+			et := c_type(c_list_elem(c_infer(em, target)))
+			return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+		}
+		return tgt
 	}
-	if meth == "append" {
-		et := c_type(c_list_elem(c_infer(em, target)))
-		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
-	}
-	return tgt
+	return "zg_" + meth + "(" + c_args(em, args, sb) + ")"
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -684,18 +689,23 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ECall(name, args) => c_infer_call(em, name)
 		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
 		EIndex(target, idx) => c_list_elem(c_infer(em, target))
-		EMethod(target, meth, args) => c_infer_method(meth)
+		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => TUnknown
 		EConv(ty, x) => ty
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
 	}
 }
 
-fn c_infer_method(meth: str) -> Ty {
-	if meth == "len" {
-		return TInt
+# c_infer_methcall types a method call: a list target's len is int; any other target is a
+# module-qualified free call, typed from the (merged) function signature table.
+fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
+	if c_is_list(c_infer(em, target)) {
+		if meth == "len" {
+			return TInt
+		}
+		return TNil
 	}
-	return TNil
+	return c_lookup_sig_ret(em, meth)
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
@@ -936,11 +946,38 @@ fn c_has_main(f: File) -> bool {
 	return false
 }
 
-# emit_c lowers Zerg source to a complete C translation unit. The body is generated
-# first (so list use sets em.used_rt), then the header is assembled with the runtime
-# include and the shared list vtable added only when the program needs them.
+# emit_c lowers one Zerg source file to a complete C translation unit.
 pub fn emit_c(src: str) -> str {
-	f := parse(src)
+	return c_emit_file(parse(src))
+}
+
+# emit_files lowers several sources (a flattened module and its imported modules) to one
+# C translation unit by merging their declarations, then emitting as a whole.
+pub fn emit_files(srcs: list[str]) -> str {
+	mut structs: list[StructDecl] = []
+	mut enums: list[EnumDecl] = []
+	mut fns: list[FnDecl] = []
+	mut i := 0
+	for i < srcs.len() {
+		f := parse(srcs[i])
+		for s in f.structs {
+			structs.append(s)
+		}
+		for e in f.enums {
+			enums.append(e)
+		}
+		for fnd in f.fns {
+			fns.append(fnd)
+		}
+		i = i + 1
+	}
+	return c_emit_file(File(structs, enums, fns))
+}
+
+# c_emit_file lowers a parsed File. The body is generated first (so list use sets
+# em.used_rt), then the header is assembled with the runtime include and the shared list
+# vtable added only when the program needs them.
+fn c_emit_file(f: File) -> str {
 	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)

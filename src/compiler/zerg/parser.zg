@@ -190,6 +190,12 @@ pub fn imports_of(src: str) -> list[str] {
 # they are consumed and yield "" rather than a half-read path.
 fn parse_import(mut &p: Parser) -> str {
 	p_advance(p)
+	# `import pub "x"` re-exports what it imports. The driver has to LOAD it either way —
+	# a re-exported module is part of the program — so the marker is consumed and the
+	# path read as usual.
+	if p_at(p, Pub) {
+		p_advance(p)
+	}
 	if p_at(p, Str) {
 		t := cur(p)
 		p_advance(p)
@@ -245,6 +251,11 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		# a field may be declared `pub`; visibility does not reach the emitted C, which is
+		# one flat struct either way, so the marker is read and dropped
+		if p_at(p, Pub) {
+			p_advance(p)
+		}
 		fname := cur(p).lexeme
 		p_advance(p)
 		expect(p, Colon)

@@ -43,7 +43,8 @@ func (w *worker) walkMethodCall(in *Instance, n *ast.Call) bool {
 		return false
 	}
 	inst := w.enqueueMethodInstance(recv, m)
-	in.MethodCalls[n] = &MethodDispatch{Mangled: inst.Mangled, Decl: m.Decl}
+	decl, _ := m.Decl.(*ast.FuncDecl)
+	in.MethodCalls[n] = &MethodDispatch{Mangled: inst.Mangled, Decl: decl}
 	return true
 }
 

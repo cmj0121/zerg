@@ -94,10 +94,13 @@ type Instance struct {
 type MethodDispatch struct {
 	Mangled string
 	// Decl is the method's own declaration, so the backend can read what only the
-	// declaration knows — the parameter defaults a call site may leave out. It is
-	// `any` because that is how the method carries it; the backend type-asserts to
-	// *ast.FuncDecl and does nothing when it is anything else.
-	Decl any
+	// declaration knows — the parameter defaults a call site may leave out, and which
+	// parameters are `mut &`. It is narrowed to the concrete node HERE rather than
+	// carried as the `any` that types.ImplMethod holds it in: `types` is a leaf package
+	// kept free of the syntax tree, but this one already spells *ast.Call, so the
+	// assertion belongs on this side of the boundary and not in every backend that reads
+	// it. nil when the method's declaration is not a function declaration.
+	Decl *ast.FuncDecl
 }
 
 // TypeInstance is one specialized nominal type to emit: the mangled C type name,

@@ -2307,7 +2307,31 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 		// with a bare `=`, so an existing method call stays byte-identical.
 		args += ", " + e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value)
 	}
+	// Backfill the trailing parameters the call omitted, from the method's own declared
+	// defaults — the same rule a free call gets, read off the same node. Without it a
+	// method could declare a default that no call site was ever allowed to leave out.
+	for _, def := range e.methodTrailingDefaults(md, len(n.Args)) {
+		args += ", " + e.expr(def)
+	}
 	return fmt.Sprintf("%s(%s)", md.Mangled, args)
+}
+
+// methodTrailingDefaults returns the default expressions for the parameters a method call
+// omits. It mirrors trailingDefaults, reading the declaration the dispatch resolved to
+// rather than one a callee identifier names — a method call has no such identifier.
+func (e *emitter) methodTrailingDefaults(md *mono.MethodDispatch, provided int) []ast.Expr {
+	fd, ok := md.Decl.(*ast.FuncDecl)
+	if !ok || provided >= len(fd.Params) {
+		return nil
+	}
+	var out []ast.Expr
+	for i := provided; i < len(fd.Params); i++ {
+		if fd.Params[i].Default == nil {
+			return nil // a gap without a default is a sema error, not our backfill
+		}
+		out = append(out, fd.Params[i].Default)
+	}
+	return out
 }
 
 // construct lowers a struct construction 'T(...)' to a C compound literal of the

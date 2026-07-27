@@ -20,6 +20,7 @@ fn options() -> list[cli.Opt] {
 	mut o: list[cli.Opt] = []
 	o.append(cli.opt("emit", "e", "stop after a stage: tokens, ast, c, lib, bin (default: lib)"))
 	o.append(cli.opt("output", "o", "where to write the result (default: the source name)"))
+	o.append(cli.opt("jobs", "j", "how many units to compile at once (default: 4)"))
 	o.append(cli.flag("help", "h", "show this message"))
 	o.append(cli.flag("version", "V", "show the version"))
 	return o
@@ -47,27 +48,40 @@ fn main(args: list[str]) {
 		files.append(p.args[i])
 		i = i + 1
 	}
-	run_command(cmd, files, cli.value_or(p, "emit", "lib"), cli.get(p, "output"))
+	run_command(cmd, files, cli.value_or(p, "emit", "lib"), cli.get(p, "output"), job_count(cli.value_or(p, "jobs", "4")))
 }
 
 # run_command dispatches a sub-command. `build` is the one that reads --emit; the other
 # commands name a single job and do it.
-fn run_command(cmd: str, files: list[str], emit: str, out: str) {
+# job_count reads -j, falling back to one job rather than none when it is not a number —
+# a bad value should slow the build down, not stop it.
+fn job_count(v: str) -> int {
+	mut n := 0
+	guard {
+		n = strconv.parse_int(v, 10)
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+fn run_command(cmd: str, files: list[str], emit: str, out: str, jobs: int) {
 	need_files(cmd, files)
 	if cmd == "build" {
-		build_stage(files, emit, out)
+		build_stage(files, emit, out, jobs)
 		return
 	}
 	if cmd == "c" {
-		build_stage(files, "c", out)
+		build_stage(files, "c", out, jobs)
 		return
 	}
 	if cmd == "tokens" {
-		build_stage(files, "tokens", out)
+		build_stage(files, "tokens", out, jobs)
 		return
 	}
 	if cmd == "ast" {
-		build_stage(files, "ast", out)
+		build_stage(files, "ast", out, jobs)
 		return
 	}
 	if cmd == "fmt" {
@@ -126,7 +140,7 @@ fn help_text() -> str {
 # program. Compiling to an object leaves it composable — several modules can be built
 # separately and linked once — and `--emit bin` is the step that says "this one is the
 # program".
-fn build_stage(files: list[str], emit: str, out: str) {
+fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	if emit == "tokens" {
 		guard {
 			io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
@@ -147,8 +161,11 @@ fn build_stage(files: list[str], emit: str, out: str) {
 		# separate compilation: the unit DECLARES the whole program but DEFINES only this
 		# module, so its object can be linked beside the objects of the modules it imports.
 		units := load_units(files[0])
-		own := units[units.len() - 1]
-		compile_to(zerg.emit_unit(deps_of(units, own.name), own.srcs), output + ".o", true)
+		mut trees: list[zerg.File] = []
+		for u in units {
+			trees.append(zerg.merge_files(u.srcs))
+		}
+		compile_to(zerg.emit_unit(zerg.merge_asts(trees), trees[trees.len() - 1]), output + ".o", true)
 		return
 	}
 	srcs := load_sources(files)
@@ -160,7 +177,7 @@ fn build_stage(files: list[str], emit: str, out: str) {
 		return
 	}
 	if emit == "bin" {
-		link_program(files[0], output)
+		link_program(files[0], output, jobs)
 		return
 	}
 	io.ewrite("zerg: unknown stage " + emit + " (want tokens, ast, c, lib, or bin)\n")
@@ -171,42 +188,124 @@ fn build_stage(files: list[str], emit: str, out: str) {
 # own object, then one link. A unit whose object is already in the cache is not compiled
 # again — which is the whole point of splitting the build up, since most rebuilds change
 # one module and leave the rest exactly as they were.
-fn link_program(entry: str, output: str) {
+fn link_program(entry: str, output: str, jobs: int) {
 	units := load_units(entry)
-	mut objs: list[str] = []
-	mut compiled := 0
+	# Parse each unit ONCE, then build the whole-program view from those trees: emitting N
+	# units used to re-parse the whole program N times, which cost more than the C
+	# compiler did.
+	mut trees: list[zerg.File] = []
 	for u in units {
-		code := zerg.emit_unit(deps_of(units, u.name), u.srcs)
-		obj := cache_path(unit_key(code))
-		if not __zrt_exists(obj) {
-			compile_to(code, obj, true)
-			compiled = compiled + 1
-		}
-		objs.append(obj)
+		trees.append(zerg.merge_files(u.srcs))
 	}
-	if __zrt_exec(link_argv(objs, output)) != 0 {
+	prog := zerg.merge_asts(trees)
+	mut objs: list[str] = []
+	mut todo_c: list[str] = []
+	mut todo_o: list[str] = []
+	mut ui := 0
+	for ui < units.len() {
+		code := zerg.emit_unit(prog, trees[ui])
+		obj := cache_path(unit_key(code))
+		objs.append(obj)
+		if not __zrt_exists(obj) {
+			cpath := obj + ".c"
+			guard {
+				io.write_file(cpath, list[byte](code))
+			}
+			todo_c.append(cpath)
+			todo_o.append(obj)
+		}
+		ui = ui + 1
+	}
+	# The runtime is compiled the same way, and cached the same way. It changes far less
+	# often than the program does, so recompiling its ten translation units on every link
+	# was the largest thing a rebuild was paying for.
+	for rc in rt_sources() {
+		obj := cache_path(file_key(rc))
+		objs.append(obj)
+		if not __zrt_exists(obj) {
+			todo_c.append(rc)
+			todo_o.append(obj)
+		}
+	}
+	compile_batch(todo_c, todo_o, jobs)
+	if __zrt_exec(link_objs_argv(objs, output)) != 0 {
 		io.ewrite("zerg: link failed\n")
 		__zrt_exit(1)
 	}
 }
 
-# link_argv builds the final cc command: every unit's object, plus the runtime.
-fn link_argv(objs: list[str], output: str) -> list[str] {
+# rt_sources are the runtime translation units, as paths.
+fn rt_sources() -> list[str] {
 	rt := rt_dir()
+	mut out: list[str] = []
+	for u in rt_units() {
+		out.append(rt + "/" + u)
+	}
+	return out
+}
+
+# file_key hashes a file the cache is keyed on. The runtime header goes into the key
+# beside the source, because every runtime unit includes it and a change there changes
+# what the object means.
+fn file_key(path: str) -> str {
+	mut body := ""
+	guard {
+		body = str(io.read_file(path)) + str(io.read_file(rt_dir() + "/zergrt.h"))
+	}
+	return unit_key(body)
+}
+
+# link_objs_argv links objects only — everything was compiled beforehand.
+fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append("cc")
 	argv.append("-std=c11")
-	argv.append("-I")
-	argv.append(rt)
 	argv.append("-o")
 	argv.append(output)
 	for o in objs {
 		argv.append(o)
 	}
-	for u in rt_units() {
-		argv.append(rt + "/" + u)
-	}
 	return argv
+}
+
+# compile_batch runs the cc invocations, `jobs` of them at a time. Each unit is
+# independent — separate compilation is what made that true — so the only ordering that
+# matters is that they all finish before the link.
+#
+# It fills a batch, waits for the batch, then starts the next. A sliding window would keep
+# every core busy at the edges; batching keeps the bookkeeping to two lists, and with a
+# handful of units per build the difference is not what anyone is waiting on.
+fn compile_batch(cpaths: list[str], opaths: list[str], jobs: int) {
+	mut running: list[int] = []
+	mut i := 0
+	for i < cpaths.len() {
+		pid := __zrt_proc_spawn(cc_object_argv(cpaths[i], opaths[i]))
+		if pid < 0 {
+			io.ewrite("zerg: cannot start cc\n")
+			__zrt_exit(1)
+		}
+		running.append(pid)
+		i = i + 1
+		if running.len() >= jobs {
+			reap(running)
+			running = []
+		}
+	}
+	reap(running)
+}
+
+# reap waits for every child in the batch and fails the build if any cc did.
+fn reap(pids: list[int]) {
+	mut bad := false
+	for p in pids {
+		if __zrt_proc_wait(p) != 0 {
+			bad = true
+		}
+	}
+	if bad {
+		io.ewrite("zerg: cc failed\n")
+		__zrt_exit(1)
+	}
 }
 
 # --- the build cache -----------------------------------------------------------------------
@@ -328,20 +427,6 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 		}
 	}
 	units.append(Unit(name, srcs))
-}
-
-# deps_of returns every source in the program EXCEPT the given unit's own — the view a
-# separately-compiled unit needs to type its bodies and declare what it calls outward.
-fn deps_of(units: list[Unit], self_name: str) -> list[str] {
-	mut out: list[str] = []
-	for u in units {
-		if u.name != self_name {
-			for s in u.srcs {
-				out.append(s)
-			}
-		}
-	}
-	return out
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module

@@ -23,6 +23,10 @@ struct Lex {
 	stack: list[int]
 	sp: int
 	prev: Kind
+	# keep_trivia makes a comment a TOKEN instead of nothing. The compiler never sets it —
+	# it would only have to skip them again — but the formatter cannot do its job without
+	# them, and a formatter that eats comments is not one anybody would run twice.
+	keep_trivia: bool
 }
 
 # --- character helpers ---------------------------------------------------------
@@ -100,6 +104,9 @@ fn next(mut &l: Lex) -> Token {
 			if at(l, 1) == b'[' {
 				return scan_token(l)
 			}
+			if l.keep_trivia {
+				return scan_comment(l, l.line, l.col)
+			}
 			skip_comment(l)
 		} else {
 			return scan_token(l)
@@ -112,6 +119,16 @@ fn skip_comment(mut &l: Lex) {
 	for not eof(l) and at(l, 0) != byte(10) {
 		advance(l)
 	}
+}
+
+# scan_comment reads a `#` comment to the end of its line and returns it as a token,
+# lexeme and all, so the formatter can put it back exactly as written.
+fn scan_comment(mut &l: Lex, sline: int, scol: int) -> Token {
+	mut sb: list[byte] = []
+	for not eof(l) and at(l, 0) != byte(10) {
+		sb.append(advance(l))
+	}
+	return emit(l, Comment, sline, scol, str(sb))
 }
 
 fn scan_token(mut &l: Lex) -> Token {
@@ -583,8 +600,17 @@ fn brace_pop(mut &l: Lex) {
 # tokenize scans src to completion, returning the token stream terminated by an Eof
 # token.
 fn tokenize(src: str) -> list[Token] {
+	return lex_with(src, false)
+}
+
+# tokenize_trivia lexes with comments retained, for the formatter.
+pub fn tokenize_trivia(src: str) -> list[Token] {
+	return lex_with(src, true)
+}
+
+fn lex_with(src: str, keep: bool) -> list[Token] {
 	b := list[byte](src)
-	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Semi)
+	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Semi, keep)
 	mut out: list[Token] = []
 	for true {
 		t := next(l)

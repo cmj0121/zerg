@@ -18,8 +18,9 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic bitwise booleans countdown enum_basic enum_guard factorial fib fizzbuzz floats gcd \
-	fn_value hello list_basic list_str method_chain power rec_expr rec_tree str_bytes struct_basic struct_nested sumto
+CORPUS_PASS := arithmetic bitwise booleans countdown default_params enum_basic enum_guard factorial fib fizzbuzz \
+	floats gcd fn_value hello list_basic list_str method_chain power raise_kind rec_expr rec_tree str_bytes \
+	struct_basic struct_nested sumto
 
 .PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt help $(SUBDIR)
 

@@ -1,12 +1,8 @@
 SUBDIR := editors src/bootstrap
 
-# The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. The seed
-# resolves imports itself, so it builds zerg from the entry file alone; zerg has no
-# module loader, so rebuilding it with itself takes the whole source list, driver first.
-ZERG_SRCS := src/compiler/zergc.zg \
-	src/stdlib/io.zg src/stdlib/ascii.zg src/stdlib/strconv.zg \
-	src/compiler/zerg/token.zg src/compiler/zerg/lexer.zg src/compiler/zerg/ast.zg \
-	src/compiler/zerg/parser.zg src/compiler/zerg/emit.zg
+# The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. Both
+# resolve `import` themselves, so either builds the compiler from the entry file alone.
+ZERG_ENTRY := src/compiler/zergc.zg
 
 # The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
 # which is what `zerg` is growing toward, while the seed is covered by its own unit
@@ -15,7 +11,7 @@ ZERG_SRCS := src/compiler/zergc.zg \
 # is a feature landing, and moves into this list.
 CORPUS_PASS := arithmetic bitwise booleans factorial fib fizzbuzz floats gcd hello power sumto
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus selfhost help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt selfhost help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -31,7 +27,7 @@ test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 run: $(SUBDIR)                  # run in the local environment
 
 build: $(SUBDIR)                # build the toolchain: the zerg0 seed, then zerg itself
-	./bin/zerg0 build src/compiler/zergc.zg -o ./bin/zerg
+	./bin/zerg0 build $(ZERG_ENTRY) -o ./bin/zerg
 
 install: $(SUBDIR)              # install editor integrations (nvim syntax) locally
 
@@ -62,7 +58,7 @@ corpus:                         # run zerg against the test-data corpus it now o
 	@fail=0; \
 	for name in $(CORPUS_PASS); do \
 		src=test-data/codegen/$$name.zg; \
-		./bin/zerg build ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
+		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
 		got=$$(./bin/corpus-case 2>/dev/null); \
 		[ "$$got" = "$$(cat test-data/codegen/$$name.out)" ] || { echo "OUTPUT $$name"; fail=1; }; \
 	done; \
@@ -70,7 +66,15 @@ corpus:                         # run zerg against the test-data corpus it now o
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	echo "corpus: $(words $(CORPUS_PASS))/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
 
+lint:                           # lint the compiler and stdlib with zerg itself
+	$(MAKE) build
+	./bin/zerg lint $(ZERG_ENTRY)
+
+fmt:                            # rewrite the compiler and stdlib in canonical style
+	$(MAKE) build
+	@./bin/zerg fmt $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg || true
+
 selfhost:                       # have the built zerg rebuild itself, closing the chain
 	$(MAKE) build
-	./bin/zerg build ./bin/zerg-stage2 $(ZERG_SRCS)
+	./bin/zerg build --emit bin -o ./bin/zerg-stage2 $(ZERG_ENTRY)
 	@echo "self-host chain closed: bin/zerg-stage2 built by bin/zerg"

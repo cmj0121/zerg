@@ -1,0 +1,235 @@
+# The formatter rewrites a source in the one canonical style, from TOKENS rather than
+# from the AST. That is the whole design decision: an AST has already thrown away the
+# comments and the blank lines a reader put there, and a formatter that eats those is one
+# nobody runs twice. The token stream keeps them (lexer's trivia mode), so this pass can
+# be strict about spacing and indentation while leaving everything a human wrote in place.
+#
+# The rules, in full:
+#   * a tab per nesting level, `}` closing at the level it opened
+#   * one statement per line — the lexer's inserted `;` IS the line break
+#   * one space around a binary operator, after a comma, and around `=>`
+#   * no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
+#   * a blank line in the source survives as exactly one blank line
+#   * a comment keeps its text, on its own line or trailing the code it followed
+#
+# It is idempotent by construction: the output is built from the same token stream the
+# input would produce, so formatting formatted source changes nothing.
+
+# fmt_src returns src rewritten in canonical form.
+pub fn fmt_src(src: str) -> str {
+	toks := tokenize_trivia(src)
+	mut out: list[byte] = []
+	mut depth := 0
+	mut col := 0 # bytes written on the current line
+	mut prev := Semi # the last token that mattered for spacing
+	mut prev_line := 0
+	mut i := 0
+	for i < toks.len() {
+		t := toks[i]
+		if is_eof(t.kind) {
+			break
+		}
+		if is_semi(t.kind) {
+			if col > 0 {
+				out.append(byte(10))
+				col = 0
+			}
+			prev = t.kind
+			prev_line = t.line
+			i = i + 1
+		} else {
+			# A line break the author put INSIDE an expression is kept: the lexer inserts no
+			# `;` there (the line did not end an item), and joining it back up would turn a
+			# wrapped list or a built-up string into one unreadable line. The continuation is
+			# indented one level past its statement, which is what makes it read as one.
+			if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
+				out.append(byte(10))
+				fmt_indent(out, depth + 1)
+				col = depth + 1
+			}
+			# A `}` closes its block: it dedents before it is written, and it always starts
+			# a line. The lexer's inserted `;` cannot be relied on for either — it only
+			# fires at bracket depth 0 — so block structure is the formatter's own rule.
+			if is_rbrace(t.kind) {
+				if depth > 0 {
+					depth = depth - 1
+				}
+				if col > 0 {
+					out.append(byte(10))
+					col = 0
+				}
+			}
+			if col == 0 {
+				# a blank line in the source survives, but only one
+				if prev_line > 0 and t.line > prev_line + 1 {
+					out.append(byte(10))
+				}
+				fmt_indent(out, depth)
+				col = depth
+			} else if fmt_space_between(prev, t.kind) {
+				out.append(b' ')
+				col = col + 1
+			}
+			fmt_write(out, fmt_text(t))
+			col = col + 1
+			# a `{` opens a block: whatever follows starts on its own line, one deeper
+			if is_lbrace(t.kind) {
+				depth = depth + 1
+				out.append(byte(10))
+				col = 0
+			}
+			# a comment runs to end of line: close the line so nothing joins it
+			if is_comment(t.kind) {
+				out.append(byte(10))
+				col = 0
+			}
+			prev = t.kind
+			prev_line = t.line
+			i = i + 1
+		}
+	}
+	if col > 0 {
+		out.append(byte(10))
+	}
+	return str(out)
+}
+
+# fmt_text is what a token contributes to the output: its exact source spelling.
+fn fmt_text(t: Token) -> str {
+	if is_comment(t.kind) {
+		return t.lexeme
+	}
+	if t.lexeme != "" {
+		return t.lexeme
+	}
+	return kind_name(t.kind)
+}
+
+fn fmt_write(mut &out: list[byte], s: str) {
+	for c in list[byte](s) {
+		out.append(c)
+	}
+}
+
+fn fmt_indent(mut &out: list[byte], depth: int) {
+	mut i := 0
+	for i < depth {
+		out.append(byte(9))
+		i = i + 1
+	}
+}
+
+# fmt_space_between decides whether two adjacent tokens are separated by a space. The
+# defaults are "yes" — words and operators breathe — and the exceptions are the shapes
+# where a space would be wrong: inside brackets, before punctuation that binds tight, and
+# between a callee and its argument list.
+fn fmt_space_between(prev: Kind, k: Kind) -> bool {
+	if is_open(prev) {
+		return false # `(x`, `[x`
+	}
+	if is_close(k) or is_comma(k) {
+		return false # `x)`, `x]`, `x,`
+	}
+	if is_open(k) and binds_tight(prev) {
+		return false # `f(`, `xs[`
+	}
+	if is_dot(prev) or is_dot(k) {
+		return false # `a.b`
+	}
+	if is_colon(k) {
+		return false # `name: T`
+	}
+	if is_unary_prefix(prev) {
+		return false # `-x`, `&x`
+	}
+	return true
+}
+
+# binds_tight reports whether a `(` or `[` after this token opens a call or an index
+# rather than a grouping — the difference between `f(x)` and `if (x)`.
+fn binds_tight(k: Kind) -> bool {
+	return match k {
+		Ident => true
+		RParen => true
+		RBrack => true
+		Str => true
+		Int => true
+		_ => false
+	}
+}
+
+fn is_open(k: Kind) -> bool {
+	return match k {
+		LParen => true
+		LBrack => true
+		Hash => true
+		_ => false
+	}
+}
+
+fn is_close(k: Kind) -> bool {
+	return match k {
+		RParen => true
+		RBrack => true
+		_ => false
+	}
+}
+
+fn is_comma(k: Kind) -> bool {
+	return match k {
+		Comma => true
+		_ => false
+	}
+}
+
+fn is_dot(k: Kind) -> bool {
+	return match k {
+		Dot => true
+		_ => false
+	}
+}
+
+fn is_colon(k: Kind) -> bool {
+	return match k {
+		Colon => true
+		_ => false
+	}
+}
+
+# is_unary_prefix reports the tokens that attach to what follows them: `&` in `mut &p`.
+# `not` is deliberately NOT here — it is a WORD, and `not x` written as `notx` is a
+# different identifier, not a negation.
+fn is_unary_prefix(k: Kind) -> bool {
+	return match k {
+		Amp => true
+		_ => false
+	}
+}
+
+fn is_semi(k: Kind) -> bool {
+	return match k {
+		Semi => true
+		_ => false
+	}
+}
+
+fn is_lbrace(k: Kind) -> bool {
+	return match k {
+		LBrace => true
+		_ => false
+	}
+}
+
+fn is_rbrace(k: Kind) -> bool {
+	return match k {
+		RBrace => true
+		_ => false
+	}
+}
+
+fn is_comment(k: Kind) -> bool {
+	return match k {
+		Comment => true
+		_ => false
+	}
+}

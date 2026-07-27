@@ -733,17 +733,6 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 	return out + "}"
 }
 
-fn c_ident(n: str, sb: Subst) -> str {
-	mut i := 0
-	for i < sb.names.len() {
-		if sb.names[i] == n {
-			return sb.repls[i]
-		}
-		i = i + 1
-	}
-	return "zg_" + n
-}
-
 # c_ident_val resolves a bare name: a match binding wins, then a nullary enum variant
 # (constructed as a tag-only literal), otherwise a mangled variable reference.
 fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
@@ -923,8 +912,17 @@ fn c_intrinsic_ret(name: str) -> Ty {
 	if name == "__zrt_read" {
 		return TList(TByte)
 	}
+	if name == "__zrt_listdir" {
+		return TList(TStr)
+	}
 	if name == "__zrt_open" or name == "__zrt_exec" {
 		return TInt
+	}
+	if name == "__zrt_getenv" {
+		return TStr
+	}
+	if name == "__zrt_has_env" or name == "__zrt_exists" {
+		return TBool
 	}
 	return TNil
 }
@@ -1217,15 +1215,20 @@ pub fn emit_c(src: str) -> str {
 	return c_emit_file(parse(src))
 }
 
-# emit_files lowers several sources (a flattened module and its imported modules) to one
-# C translation unit by merging their declarations, then emitting as a whole.
-pub fn emit_files(srcs: list[str]) -> str {
+# merge_files parses several sources (a flattened module and its imported modules) and
+# returns them as one File, declarations in source order. The whole-program view every
+# pass wants: the emitter lowers it, the linter walks it.
+pub fn merge_files(srcs: list[str]) -> File {
+	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
 	mut i := 0
 	for i < srcs.len() {
 		f := parse(srcs[i])
+		for im in f.imports {
+			imports.append(im)
+		}
 		for s in f.structs {
 			structs.append(s)
 		}
@@ -1237,7 +1240,12 @@ pub fn emit_files(srcs: list[str]) -> str {
 		}
 		i = i + 1
 	}
-	return c_emit_file(File(structs, enums, fns))
+	return File(imports, structs, enums, fns)
+}
+
+# emit_files lowers several sources to one C translation unit.
+pub fn emit_files(srcs: list[str]) -> str {
+	return c_emit_file(merge_files(srcs))
 }
 
 # c_emit_file lowers a parsed File. The body is generated first (so list use sets

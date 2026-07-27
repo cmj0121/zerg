@@ -350,7 +350,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		# added here. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
 		# a notion of methods at all.
-		params.append(Param("this", TNamed(recv), false))
+		params.append(Param("this", TNamed(recv), false, false, ENil))
 	}
 	for not p_at(p, RParen) and not p_at(p, Eof) {
 		# an optional `mut &` prefix marks a mutable-reference parameter
@@ -366,7 +366,15 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		p_advance(p)
 		expect(p, Colon)
 		pty := parse_type(p)
-		params.append(Param(pname, pty, is_ref))
+		# `= <constant>` makes the parameter optional at the call site
+		mut has_def := false
+		mut def := ENil
+		if p_at(p, Assign) {
+			p_advance(p)
+			def = parse_expr(p)
+			has_def = true
+		}
+		params.append(Param(pname, pty, is_ref, has_def, def))
 		if p_at(p, Comma) {
 			p_advance(p)
 		}

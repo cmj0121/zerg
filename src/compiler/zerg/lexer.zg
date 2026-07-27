@@ -1,0 +1,701 @@
+# lexer — Zerg source text to a token stream (self-hosting compiler, M1).
+#
+# A port of the Go bootstrap's internal/lexer, following GRAMMAR group 2. It skips
+# horizontal whitespace and comments, inserts a ';' at a line break when the previous
+# token can end an item (ASI) — suppressed inside an unclosed '(' or '[' but not '{' —
+# and scans the literal, keyword, identifier, operator, and punctuation forms.
+#
+# Trivia (comments, blank lines) is not retained: the `--emit tokens` view the diff-test
+# oracle prints never shows it, so the subset lexer simply drops it. The interpolation
+# forms (f-strings, f-cmds, decorators) are deferred; they do not appear in the M1 corpus.
+import "ascii"
+import "strconv"
+
+# Lex holds the scan state. `stack` + `sp` implement the brace-depth stack over an
+# append-only list (list has no pop): push writes at sp and bumps it, pop just drops sp.
+struct Lex {
+	src: list[byte]
+	n: int
+	offs: int
+	line: int
+	col: int
+	depth: int
+	stack: list[int]
+	sp: int
+	prev: Kind
+}
+
+# --- character helpers ---------------------------------------------------------
+
+# at returns the byte i positions ahead of the cursor, or 0 past end of input. It
+# takes the lexer by reference purely to avoid copying the source list on every peek.
+fn at(mut &l: Lex, i: int) -> byte {
+	j := l.offs + i
+	if j < l.n {
+		return l.src[j]
+	}
+	return byte(0)
+}
+
+fn eof(mut &l: Lex) -> bool {
+	return l.offs >= l.n
+}
+
+# advance consumes one byte, tracking line and column.
+fn advance(mut &l: Lex) -> byte {
+	c := l.src[l.offs]
+	l.offs = l.offs + 1
+	if c == byte(10) {
+		l.line = l.line + 1
+		l.col = 1
+	} else {
+		l.col = l.col + 1
+	}
+	return c
+}
+
+fn is_ident(c: byte) -> bool {
+	return ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_'
+}
+
+# lexeme_from returns the source slice [a, cursor) as a str, read straight from the
+# source list (no list slicing built-in exists).
+fn lexeme_from(mut &l: Lex, a: int) -> str {
+	mut out: list[byte] = []
+	mut i := a
+	for i < l.offs {
+		out.append(l.src[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# --- token production ----------------------------------------------------------
+
+fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
+	l.prev = k
+	return Token(k, lexeme, "", line, col)
+}
+
+fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {
+	l.prev = k
+	return Token(k, lexeme, value, line, col)
+}
+
+# next returns the next token, inserting a ';' at a line break per the ASI rule and
+# dropping comments and blank lines along the way.
+fn next(mut &l: Lex) -> Token {
+	for not eof(l) {
+		c := at(l, 0)
+		if c == b' ' or c == byte(9) or c == byte(13) {
+			advance(l)
+		} else if c == byte(10) {
+			sline := l.line
+			scol := l.col
+			advance(l)
+			if l.depth == 0 and ends_item(l.prev) {
+				return emit(l, Semi, sline, scol, ";")
+			}
+		} else if c == b'#' {
+			if at(l, 1) == b'[' {
+				return scan_token(l)
+			}
+			skip_comment(l)
+		} else {
+			return scan_token(l)
+		}
+	}
+	return emit(l, Eof, l.line, l.col, "")
+}
+
+fn skip_comment(mut &l: Lex) {
+	for not eof(l) and at(l, 0) != byte(10) {
+		advance(l)
+	}
+}
+
+fn scan_token(mut &l: Lex) -> Token {
+	sline := l.line
+	scol := l.col
+	soff := l.offs
+	c := at(l, 0)
+
+	# literal prefixes
+	if c == b'r' and at(l, 1) == b'"' {
+		return scan_raw_string(l, sline, scol, soff)
+	}
+	if c == b'b' and at(l, 1) == b'\'' {
+		advance(l) # b
+		return scan_char_lit(l, Byte, true, sline, scol, soff)
+	}
+
+	if ascii.is_alpha(c) or c == b'_' {
+		return scan_ident(l, sline, scol, soff)
+	}
+	if ascii.is_digit(c) {
+		return scan_number(l, sline, scol, soff)
+	}
+	if c == b'"' {
+		return scan_string(l, sline, scol, soff)
+	}
+	if c == b'\'' {
+		return scan_char_lit(l, Rune, false, sline, scol, soff)
+	}
+	if c == b'`' {
+		return scan_cmd(l, sline, scol, soff)
+	}
+	if c == b'#' {
+		# '#[' opens a decorator; depth is bumped, suppressing ASI until the ']'
+		advance(l) # '#'
+		advance(l) # '['
+		l.depth = l.depth + 1
+		return emit(l, Hash, sline, scol, "#[")
+	}
+	return scan_operator(l, sline, scol, soff)
+}
+
+fn scan_ident(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	for not eof(l) and is_ident(at(l, 0)) {
+		advance(l)
+	}
+	lexeme := lexeme_from(l, soff)
+	return emit(l, lookup_keyword(lexeme), sline, scol, lexeme)
+}
+
+# --- numbers -------------------------------------------------------------------
+
+fn based_valid(c: byte, base: byte) -> bool {
+	v := int(c)
+	if base == b'x' {
+		return ascii.is_hex_digit(c)
+	}
+	if base == b'o' {
+		return v >= 48 and v <= 55
+	}
+	return v == 48 or v == 49
+}
+
+fn consume_dec(mut &l: Lex) {
+	for not eof(l) {
+		c := at(l, 0)
+		if ascii.is_digit(c) {
+			advance(l)
+		} else if c == b'_' and ascii.is_digit(at(l, 1)) {
+			advance(l)
+		} else {
+			return
+		}
+	}
+}
+
+fn consume_based(mut &l: Lex, base: byte) {
+	for not eof(l) {
+		c := at(l, 0)
+		if based_valid(c, base) {
+			advance(l)
+		} else if c == b'_' and based_valid(at(l, 1), base) {
+			advance(l)
+		} else {
+			return
+		}
+	}
+}
+
+fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	# a number just after '.' is a bare decimal tuple index, never a float
+	if l.prev == Dot {
+		consume_dec(l)
+		return emit(l, Int, sline, scol, lexeme_from(l, soff))
+	}
+	if at(l, 0) == b'0' and (at(l, 1) == b'x' or at(l, 1) == b'o' or at(l, 1) == b'b') {
+		base := at(l, 1)
+		advance(l) # 0
+		advance(l) # x/o/b
+		consume_based(l, base)
+		return emit(l, Int, sline, scol, lexeme_from(l, soff))
+	}
+
+	consume_dec(l)
+	mut kind := Int
+	# fractional part: '.' immediately followed by a digit
+	if at(l, 0) == b'.' and ascii.is_digit(at(l, 1)) {
+		kind = Float
+		advance(l) # .
+		consume_dec(l)
+	}
+	# exponent: e/E [sign] digits
+	if at(l, 0) == b'e' or at(l, 0) == b'E' {
+		nx := at(l, 1)
+		if ascii.is_digit(nx) or (nx == b'+' or nx == b'-') and ascii.is_digit(at(l, 2)) {
+			kind = Float
+			advance(l) # e/E
+			if at(l, 0) == b'+' or at(l, 0) == b'-' {
+				advance(l)
+			}
+			consume_dec(l)
+		}
+	}
+	return emit(l, kind, sline, scol, lexeme_from(l, soff))
+}
+
+# --- strings, runes, bytes, commands -------------------------------------------
+
+# utf8_encode returns the UTF-8 bytes of a code point (for the '\u{...}' escape).
+fn utf8_encode(cp: int) -> list[byte] {
+	mut r: list[byte] = []
+	if cp < 128 {
+		r.append(byte(cp))
+	} else if cp < 2048 {
+		r.append(byte(192 + cp / 64))
+		r.append(byte(128 + cp % 64))
+	} else if cp < 65536 {
+		r.append(byte(224 + cp / 4096))
+		r.append(byte(128 + cp / 64 % 64))
+		r.append(byte(128 + cp % 64))
+	} else {
+		r.append(byte(240 + cp / 262144))
+		r.append(byte(128 + cp / 4096 % 64))
+		r.append(byte(128 + cp / 64 % 64))
+		r.append(byte(128 + cp % 64))
+	}
+	return r
+}
+
+# decode_escape consumes a backslash escape at the cursor and returns its decoded
+# bytes. byte_mode selects the '\xHH' form; otherwise '\u{...}' is accepted.
+fn decode_escape(mut &l: Lex, byte_mode: bool) -> list[byte] {
+	advance(l) # backslash
+	c := advance(l)
+	mut r: list[byte] = []
+	if c == b'n' {
+		r.append(byte(10))
+	} else if c == b't' {
+		r.append(byte(9))
+	} else if c == b'r' {
+		r.append(byte(13))
+	} else if c == b'0' {
+		r.append(byte(0))
+	} else if c == b'\\' {
+		r.append(byte(92))
+	} else if c == b'\'' {
+		r.append(byte(39))
+	} else if c == b'"' {
+		r.append(byte(34))
+	} else if c == b'x' and byte_mode {
+		hi := ascii.hex_val(advance(l))
+		lo := ascii.hex_val(advance(l))
+		r.append(byte(hi * 16 + lo))
+	} else if c == b'u' and not byte_mode {
+		advance(l) # {
+		mut cp := 0
+		for ascii.is_hex_digit(at(l, 0)) {
+			cp = cp * 16 + ascii.hex_val(advance(l))
+		}
+		advance(l) # }
+		for e in utf8_encode(cp) {
+			r.append(e)
+		}
+	} else {
+		r.append(c)
+	}
+	return r
+}
+
+fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	if at(l, 1) == b'"' and at(l, 2) == b'"' {
+		return scan_triple_string(l, sline, scol, soff)
+	}
+	advance(l) # opening "
+	mut sb: list[byte] = []
+	for true {
+		if eof(l) or at(l, 0) == byte(10) {
+			return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+		}
+		c := at(l, 0)
+		if c == b'"' {
+			advance(l)
+			break
+		}
+		if c == b'\\' {
+			for e in decode_escape(l, false) {
+				sb.append(e)
+			}
+		} else {
+			sb.append(advance(l))
+		}
+	}
+	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	advance(l)
+	advance(l)
+	advance(l) # opening """
+	mut sb: list[byte] = []
+	for true {
+		if eof(l) {
+			return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+		}
+		if at(l, 0) == b'"' and at(l, 1) == b'"' and at(l, 2) == b'"' {
+			advance(l)
+			advance(l)
+			advance(l)
+			break
+		}
+		if at(l, 0) == b'\\' {
+			for e in decode_escape(l, false) {
+				sb.append(e)
+			}
+		} else {
+			sb.append(advance(l))
+		}
+	}
+	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	advance(l) # r
+	advance(l) # opening "
+	mut sb: list[byte] = []
+	for true {
+		if eof(l) or at(l, 0) == byte(10) {
+			return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+		}
+		if at(l, 0) == b'"' {
+			break
+		}
+		sb.append(advance(l))
+	}
+	advance(l) # closing "
+	return emit_val(l, RawStr, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+# scan_char_lit scans a single-quoted rune or byte literal; the cursor sits on the
+# opening quote, and byte_mode selects the byte form's '\xHH' escape.
+fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int, soff: int) -> Token {
+	advance(l) # opening '
+	mut sb: list[byte] = []
+	if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\'' {
+		return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+	}
+	if at(l, 0) == b'\\' {
+		for e in decode_escape(l, byte_mode) {
+			sb.append(e)
+		}
+	} else {
+		sb.append(advance(l))
+	}
+	if at(l, 0) != b'\'' {
+		return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+	}
+	advance(l) # closing '
+	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	advance(l) # opening `
+	mut sb: list[byte] = []
+	for true {
+		if eof(l) {
+			return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+		}
+		if at(l, 0) == b'`' {
+			advance(l)
+			break
+		}
+		sb.append(advance(l))
+	}
+	return emit_val(l, Cmd, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+# --- operators and punctuation -------------------------------------------------
+
+# op advances `extra` further bytes past the already-consumed first, then emits.
+fn op(mut &l: Lex, k: Kind, sline: int, scol: int, soff: int, extra: int) -> Token {
+	mut i := 0
+	for i < extra {
+		advance(l)
+		i = i + 1
+	}
+	return emit(l, k, sline, scol, lexeme_from(l, soff))
+}
+
+fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	c := advance(l)
+	two := at(l, 0)
+	if c == b'+' {
+		if two == b'%' {
+			return op(l, PlusMod, sline, scol, soff, 1)
+		}
+		return op(l, Plus, sline, scol, soff, 0)
+	}
+	if c == b'-' {
+		if two == b'%' {
+			return op(l, MinusMod, sline, scol, soff, 1)
+		}
+		if two == b'>' {
+			return op(l, Arrow, sline, scol, soff, 1)
+		}
+		return op(l, Minus, sline, scol, soff, 0)
+	}
+	if c == b'*' {
+		if two == b'%' {
+			return op(l, StarMod, sline, scol, soff, 1)
+		}
+		return op(l, Star, sline, scol, soff, 0)
+	}
+	if c == b'/' {
+		return op(l, Slash, sline, scol, soff, 0)
+	}
+	if c == b'%' {
+		return op(l, Percent, sline, scol, soff, 0)
+	}
+	if c == b'&' {
+		return op(l, Amp, sline, scol, soff, 0)
+	}
+	if c == b'|' {
+		return op(l, Pipe, sline, scol, soff, 0)
+	}
+	if c == b'^' {
+		return op(l, Caret, sline, scol, soff, 0)
+	}
+	if c == b'~' {
+		return op(l, Tilde, sline, scol, soff, 0)
+	}
+	if c == b'<' {
+		if two == b'<' {
+			return op(l, Shl, sline, scol, soff, 1)
+		}
+		if two == b'=' {
+			return op(l, Le, sline, scol, soff, 1)
+		}
+		if two == b'-' {
+			return op(l, LArrow, sline, scol, soff, 1)
+		}
+		return op(l, Lt, sline, scol, soff, 0)
+	}
+	if c == b'>' {
+		if two == b'>' {
+			return op(l, Shr, sline, scol, soff, 1)
+		}
+		if two == b'=' {
+			return op(l, Ge, sline, scol, soff, 1)
+		}
+		return op(l, Gt, sline, scol, soff, 0)
+	}
+	if c == b'=' {
+		if two == b'=' {
+			return op(l, EqEq, sline, scol, soff, 1)
+		}
+		if two == b'>' {
+			return op(l, FatArrow, sline, scol, soff, 1)
+		}
+		return op(l, Assign, sline, scol, soff, 0)
+	}
+	if c == b'!' {
+		if two == b'=' {
+			return op(l, Ne, sline, scol, soff, 1)
+		}
+		return op(l, Bang, sline, scol, soff, 0)
+	}
+	if c == b':' {
+		if two == b'=' {
+			return op(l, Walrus, sline, scol, soff, 1)
+		}
+		return op(l, Colon, sline, scol, soff, 0)
+	}
+	if c == b'?' {
+		if two == b'?' {
+			return op(l, Coalesce, sline, scol, soff, 1)
+		}
+		if two == b'.' {
+			return op(l, OptDot, sline, scol, soff, 1)
+		}
+		return op(l, Question, sline, scol, soff, 0)
+	}
+	if c == b'.' {
+		if two == b'.' {
+			if at(l, 1) == b'=' {
+				return op(l, DotDotEq, sline, scol, soff, 2)
+			}
+			return op(l, DotDot, sline, scol, soff, 1)
+		}
+		return op(l, Dot, sline, scol, soff, 0)
+	}
+	if c == b',' {
+		return op(l, Comma, sline, scol, soff, 0)
+	}
+	if c == b'(' {
+		l.depth = l.depth + 1
+		return op(l, LParen, sline, scol, soff, 0)
+	}
+	if c == b')' {
+		if l.depth > 0 {
+			l.depth = l.depth - 1
+		}
+		return op(l, RParen, sline, scol, soff, 0)
+	}
+	if c == b'[' {
+		l.depth = l.depth + 1
+		return op(l, LBrack, sline, scol, soff, 0)
+	}
+	if c == b']' {
+		if l.depth > 0 {
+			l.depth = l.depth - 1
+		}
+		return op(l, RBrack, sline, scol, soff, 0)
+	}
+	if c == b'{' {
+		brace_push(l)
+		return op(l, LBrace, sline, scol, soff, 0)
+	}
+	if c == b'}' {
+		brace_pop(l)
+		return op(l, RBrace, sline, scol, soff, 0)
+	}
+	if c == b';' {
+		return op(l, Semi, sline, scol, soff, 0)
+	}
+	return op(l, Illegal, sline, scol, soff, 0)
+}
+
+# brace_push saves the enclosing paren/bracket depth and resets it, so ASI resumes
+# inside a '{ }' block even when the brace itself sits in an unclosed '(' or '['.
+fn brace_push(mut &l: Lex) {
+	if l.sp < l.stack.len() {
+		l.stack[l.sp] = l.depth
+	} else {
+		l.stack.append(l.depth)
+	}
+	l.sp = l.sp + 1
+	l.depth = 0
+}
+
+fn brace_pop(mut &l: Lex) {
+	if l.sp > 0 {
+		l.sp = l.sp - 1
+		l.depth = l.stack[l.sp]
+	}
+}
+
+# --- public surface ------------------------------------------------------------
+
+# tokenize scans src to completion, returning the token stream terminated by an Eof
+# token.
+fn tokenize(src: str) -> list[Token] {
+	b := list[byte](src)
+	mut l := Lex(b, b.len(), 0, 1, 1, 0, [], 0, Semi)
+	mut out: list[Token] = []
+	for true {
+		t := next(l)
+		out.append(t)
+		if is_eof(t.kind) {
+			break
+		}
+	}
+	return out
+}
+
+fn is_eof(k: Kind) -> bool {
+	return match k {
+		Eof => true
+		_ => false
+	}
+}
+
+# token_category classifies a kind for rendering: 1 -> NAME(lexeme), 2 -> NAME(quoted
+# value), 0 -> the bare kind name.
+fn token_category(k: Kind) -> int {
+	return match k {
+		Int => 1
+		Float => 1
+		Ident => 1
+		Str => 2
+		RawStr => 2
+		Rune => 2
+		Byte => 2
+		Cmd => 2
+		FStrBegin => 2
+		FStrText => 2
+		FCmdBegin => 2
+		FCmdText => 2
+		Conv => 2
+		FmtSpec => 2
+		_ => 0
+	}
+}
+
+# quote renders s the way Go's %q does for the common cases: wrapped in double quotes
+# with the standard escapes and an '\xHH' fallback for other control bytes.
+fn quote(s: str) -> str {
+	mut out: list[byte] = []
+	out.append(byte(34)) # "
+	for c in list[byte](s) {
+		v := int(c)
+		if v == 34 {
+			out.append(byte(92))
+			out.append(byte(34))
+		} else if v == 92 {
+			out.append(byte(92))
+			out.append(byte(92))
+		} else if v == 10 {
+			out.append(byte(92))
+			out.append(b'n')
+		} else if v == 9 {
+			out.append(byte(92))
+			out.append(b't')
+		} else if v == 13 {
+			out.append(byte(92))
+			out.append(b'r')
+		} else if v >= 32 and v <= 126 {
+			out.append(c)
+		} else {
+			out.append(byte(92))
+			out.append(b'x')
+			out.append(hex_digit(v / 16))
+			out.append(hex_digit(v % 16))
+		}
+	}
+	out.append(byte(34)) # "
+	return str(out)
+}
+
+fn hex_digit(n: int) -> byte {
+	if n < 10 {
+		return byte(48 + n)
+	}
+	return byte(97 + n - 10)
+}
+
+fn render_token(t: Token) -> str {
+	cat := token_category(t.kind)
+	if cat == 1 {
+		return kind_name(t.kind) + "(" + t.lexeme + ")"
+	}
+	if cat == 2 {
+		return kind_name(t.kind) + "(" + quote(t.value) + ")"
+	}
+	return kind_name(t.kind)
+}
+
+# dump_tokens renders the whole stream in the bootstrap's `--emit tokens` format —
+# `line:col\t<token>` per line, the Eof token omitted — for byte-exact diff-testing.
+pub fn dump_tokens(src: str) -> str {
+	toks := tokenize(src)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < toks.len() {
+		t := toks[i]
+		if is_eof(t.kind) {
+			break
+		}
+		line := strconv.to_string(t.line, 10)
+		col := strconv.to_string(t.col, 10)
+		s := line + ":" + col + "\t" + render_token(t) + "\n"
+		for c in list[byte](s) {
+			out.append(c)
+		}
+		i = i + 1
+	}
+	return str(out)
+}

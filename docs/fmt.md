@@ -71,9 +71,10 @@ together.
 
 ### F4xx — rewrites
 
-| Code   | Rule                                                                   | Default |
-| ------ | ---------------------------------------------------------------------- | ------- |
-| `F401` | `if c { return x }` becomes the guard it is sugar for, `return x if c` | on      |
+| Code   | Rule                                                                      | Default |
+| ------ | ------------------------------------------------------------------------- | ------- |
+| `F401` | `if c { return x }` becomes the guard it is sugar for, `return x if c`    | on      |
+| `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
 
 `GRAMMAR` defines `return x if c` **as** sugar for `if c { return x }`, so the two say the
 same thing and one of them says it in four lines. The formatter picks the short one, which
@@ -104,6 +105,27 @@ It rewrites only what it can rewrite **without losing anything**, and declines o
 - no `else` — an else has a second branch the guard form cannot carry;
 - no comment anywhere inside, because a comment is something a person put there and this
   pass has nowhere to put it back.
+
+`F402` is the Go convention, and for the same reason: an import list is read far more
+often than it is edited, and one that is grouped and sorted answers "does this file use X"
+by looking rather than by scanning. The standard library goes first because it is the part
+a reader already knows; everything else is what this program brought.
+
+```zerg
+import "cli"
+import "io"
+import "strconv"
+
+import "zerg"
+```
+
+What counts as standard library is the fixed bundled set. A module resolves by its LAST
+path segment, so `import "std/io"` groups with `import "io"`.
+
+It rewrites only a run of plain `import "path"` statements and declines the moment
+anything else appears among them — a comment, which belongs to the import it sits on and
+would be stranded by sorting, or an `import pub`, whose re-export is an ordering the
+author chose.
 
 ### Which rules can be switched off
 

@@ -23,17 +23,40 @@ in the language itself. This directory is the target of the `feat/self-hosting` 
 
 ```text
 src/compiler/
-  zergc.zg        # driver program: import "zerg"; main() [M1: token dump]
+  zergc.zg        # the driver: argument parsing, module loading, cc invocation
   zerg/           # the compiler library — one directory module, shared scope
-    token.zg      # Kind enum + Token type (mirrors internal/token)   [M1]
-    lexer.zg      # source text -> token stream                       [M1]
-    ast.zg        # recursive AST node types (enum payloads)          [M2]
-    parser.zg     # tokens -> AST                                     [M2]
-    emit.zg       # AST -> C, with the minimal typecheck emit needs   [M3]
-src/stdlib/
-  cli.zg          # standalone CLI arg parser (argparse/kong-like)    [M0]
-  os.zg           # + run()/process wrapper over __zrt_exec           [M0]
+    token.zg      # Kind enum + Token type
+    lexer.zg      # source text -> token stream (comments kept on request)
+    ast.zg        # recursive AST node types (enum payloads)
+    parser.zg     # tokens -> AST
+    emit.zg       # AST -> C, with the minimal typecheck emit needs
+    fmt.zg        # tokens -> canonical source
+    lint.zg       # AST -> findings
 ```
+
+## Using it
+
+```sh
+zerg build <file.zg>    # compile a program (-o picks the output; default: the source name)
+zerg fmt <file.zg>...   # rewrite sources in the canonical style, in place
+zerg lint <file.zg>...  # report unused imports and dead private code; nonzero if any
+zerg c <file.zg>        # print the emitted C
+zerg --help             # commands, flags, and the environment variables below
+```
+
+The compiler resolves `import` itself and works from any directory. Where it looks is
+answered by the environment first and the in-repo layout last, so a checkout needs no
+setup and an install needs no checkout:
+
+| Variable       | Is                    | Defaults to                   |
+| -------------- | --------------------- | ----------------------------- |
+| `ZERG_ROOT`    | the installation root | the current directory         |
+| `ZERG_RUNTIME` | the runtime C sources | `$ZERG_ROOT/src/runtime/csrc` |
+| `ZERG_STDLIB`  | the standard library  | `$ZERG_ROOT/src/stdlib`       |
+
+An import resolves against the entry file's own directory first, then the standard
+library, and a module is either `<name>.zg` or a DIRECTORY of sources read in sorted
+order — sorted because the emitted C must not depend on what a filesystem hands back.
 
 The `zerg/` module sub-level — which the original proposal called redundant — is in
 fact required by two bootstrap facts found while building M1: (1) an `import "x"`

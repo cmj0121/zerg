@@ -1,79 +1,372 @@
-# zergc — the self-hosting Zerg compiler driver.
+# zerg — the self-hosting Zerg compiler.
 #
-# Wires the `zerg` compiler library to the command line:
-#   zergc tokens <file>            print the token stream (diff-tested vs --emit tokens)
-#   zergc c <file>...              print the emitted C for the merged sources
-#   zergc build <out> <file>...    emit C, invoke cc, and link a native binary
-#
-# `build` is self-sufficient: it writes the C beside the output, then shells out to cc
-# through the runtime's process-spawn leaf (`__zrt_exec`), linking the always-needed
-# runtime units. The runtime tree is found at $ZERG_RUNTIME or ./src/runtime/csrc.
+# One tool, a few sub-commands, and the flags every tool owes its user: --help, --version,
+# and --emit to stop after a stage. Argument parsing is the stdlib `cli` module, so the
+# help text is rendered from the same option list the parser used and cannot drift from
+# it. `build` is self-sufficient — it emits C beside the output, then invokes cc through
+# the runtime's process-spawn leaf — and the compiler resolves `import` itself, so it
+# works from any directory.
 import "zerg"
 import "io"
+import "cli"
+
+fn version() -> str {
+	return "zerg 0.1.0 (self-hosted)"
+}
+
+# options declares the command line once: the parser reads it, and --help renders it.
+fn options() -> list[cli.Opt] {
+	mut o: list[cli.Opt] = []
+	o.append(cli.opt("emit", "e", "stop after a stage: tokens, ast, c, lib, bin (default: lib)"))
+	o.append(cli.opt("output", "o", "where to write the result (default: the source name)"))
+	o.append(cli.flag("help", "h", "show this message"))
+	o.append(cli.flag("version", "V", "show the version"))
+	return o
+}
 
 fn main(args: list[str]) {
-	if args.len() < 1 {
-		print "usage: zergc [tokens|c|build] <args>"
+	p := cli.parse_argv(args, options())
+	if p.err != "" {
+		io.ewrite("zerg: " + p.err + "\n")
+		io.ewrite(usage_line() + "\n")
+		__zrt_exit(2)
+	}
+	if cli.has(p, "version") {
+		io.write(version() + "\n")
 		return
 	}
-	mode := args[0]
-	if mode == "build" {
-		build_binary(args)
+	if cli.has(p, "help") or p.args.len() < 1 {
+		io.write(help_text())
 		return
 	}
-	# tokens / c: the mode word is optional (default c), then the source files
-	mut m := "c"
-	mut start := 0
-	if mode == "tokens" or mode == "c" {
-		m = mode
-		start = 1
-	}
-	mut srcs: list[str] = []
-	mut i := start
-	for i < args.len() {
-		srcs.append(str(io.read_file(args[i])))
+	cmd := p.args[0]
+	mut files: list[str] = []
+	mut i := 1
+	for i < p.args.len() {
+		files.append(p.args[i])
 		i = i + 1
 	}
-	guard {
-		if m == "tokens" {
-			io.write(zerg.dump_tokens(srcs[0]))
-		} else {
-			io.write(zerg.emit_files(srcs))
-		}
+	run_command(cmd, files, cli.value_or(p, "emit", "lib"), cli.get(p, "output"))
+}
+
+# run_command dispatches a sub-command. `build` is the one that reads --emit; the other
+# commands name a single job and do it.
+fn run_command(cmd: str, files: list[str], emit: str, out: str) {
+	need_files(cmd, files)
+	if cmd == "build" {
+		build_stage(files, emit, out)
+		return
+	}
+	if cmd == "c" {
+		build_stage(files, "c", out)
+		return
+	}
+	if cmd == "tokens" {
+		build_stage(files, "tokens", out)
+		return
+	}
+	if cmd == "ast" {
+		build_stage(files, "ast", out)
+		return
+	}
+	if cmd == "fmt" {
+		run_fmt(files)
+		return
+	}
+	if cmd == "lint" {
+		run_lint(files)
+		return
+	}
+	io.ewrite("zerg: unknown command " + cmd + "\n")
+	io.ewrite(usage_line() + "\n")
+	__zrt_exit(2)
+}
+
+# need_files exits with a usage error when a sub-command that reads sources got none.
+fn need_files(cmd: str, files: list[str]) {
+	if files.len() < 1 {
+		io.ewrite("zerg: " + cmd + " needs at least one .zg file\n")
+		io.ewrite(usage_line() + "\n")
+		__zrt_exit(2)
 	}
 }
 
-# build_binary compiles `zergc build <out> <file>...`: emit the merged C, write it to
-# <out>.c, then invoke cc to link <out>, reporting a nonzero exit if cc fails.
-fn build_binary(args: list[str]) {
-	if args.len() < 3 {
-		print "usage: zergc build <out> <file.zg> [more.zg ...]"
+fn usage_line() -> str {
+	return "usage: zerg <command> [options] <file.zg>..."
+}
+
+fn help_text() -> str {
+	head := version() + "\n\n" + usage_line() + "\n\n" +
+		"Commands:\n" +
+		"  build <file.zg>    compile a program (see --emit)\n" +
+		"  fmt <file.zg>...   rewrite sources in the canonical style\n" +
+		"  lint <file.zg>...  report unused imports and dead private code\n" +
+		"  c <file.zg>        print the emitted C (same as --emit c)\n" +
+		"  tokens <file.zg>   print the token stream\n" +
+		"  ast <file.zg>      print the parsed tree\n\n"
+	body := "\nStages (--emit):\n" +
+		"  tokens             the token stream, on stdout\n" +
+		"  ast                the parsed tree, on stdout\n" +
+		"  c                  the emitted C, on stdout\n" +
+		"  lib                compile the C to an object file (default)\n" +
+		"  bin                link an executable\n" +
+		"\nEnvironment:\n" +
+		"  ZERG_ROOT          installation root (default: the current directory)\n" +
+		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
+		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
+	return cli.usage(head, options(), body)
+}
+
+# build_stage runs the pipeline as far as `emit` asks and no further. The early stages
+# print to stdout because they are something a person is reading; the two that produce a
+# FILE take an output path, defaulting to the entry file's name.
+#
+# `lib` is the default deliberately: a source is a module until something asks it to be a
+# program. Compiling to an object leaves it composable — several modules can be built
+# separately and linked once — and `--emit bin` is the step that says "this one is the
+# program".
+fn build_stage(files: list[str], emit: str, out: str) {
+	if emit == "tokens" {
+		guard {
+			io.write(zerg.dump_tokens(str(io.read_file(files[0]))))
+		}
 		return
 	}
-	output := args[1]
-	mut srcs: list[str] = []
-	mut i := 2
-	for i < args.len() {
-		srcs.append(str(io.read_file(args[i])))
-		i = i + 1
+	if emit == "ast" {
+		guard {
+			io.write(zerg.dump_ast(zerg.merge_files(load_sources(files))))
+		}
+		return
 	}
+	srcs := load_sources(files)
+	code := zerg.emit_files(srcs)
+	if emit == "c" {
+		guard {
+			io.write(code)
+		}
+		return
+	}
+	mut output := out
+	if output == "" {
+		output = drop_ext(files[0])
+	}
+	if emit == "lib" {
+		compile_to(code, output + ".o", true)
+		return
+	}
+	if emit == "bin" {
+		compile_to(code, output, false)
+		return
+	}
+	io.ewrite("zerg: unknown stage " + emit + " (want tokens, ast, c, lib, or bin)\n")
+	__zrt_exit(2)
+}
+
+# compile_to writes the emitted C beside its product and hands it to cc — compiled only
+# (`-c`, an object) or compiled and linked against the runtime (an executable).
+fn compile_to(code: str, output: str, object_only: bool) {
 	cpath := output + ".c"
 	guard {
-		io.write_file(cpath, list[byte](zerg.emit_files(srcs)))
+		io.write_file(cpath, list[byte](code))
 	}
-	code := __zrt_exec(cc_argv(cpath, output))
-	if code != 0 {
-		io.ewrite("zergc: cc failed\n")
+	mut argv: list[str] = []
+	if object_only {
+		argv = cc_object_argv(cpath, output)
+	} else {
+		argv = cc_argv(cpath, output)
+	}
+	if __zrt_exec(argv) != 0 {
+		io.ewrite("zerg: cc failed\n")
+		__zrt_exit(1)
 	}
 }
 
-# rt_dir returns the runtime source tree, from $ZERG_RUNTIME or the in-repo default.
+# drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
+fn drop_ext(path: str) -> str {
+	if not has_suffix(path, ".zg") {
+		return path
+	}
+	b := list[byte](path)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() - 3 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# load_sources loads every named entry with its imports, keeping one copy of a module
+# that several entries share.
+fn load_sources(files: list[str]) -> list[str] {
+	mut seen: list[str] = []
+	mut srcs: list[str] = []
+	for f in files {
+		load_into(f, dir_of(f), seen, srcs)
+	}
+	return srcs
+}
+
+# --- installation layout -------------------------------------------------------------
+#
+# The compiler has to work from any directory, so nothing below is a relative path the
+# process happens to be standing next to. Each location is answered by an environment
+# variable first, then by a root that is itself answered the same way, and the in-repo
+# layout is only the last resort — which is what makes a checkout work with no setup.
+
+# env_or reads an environment variable, or gives fallback when it is unset.
+fn env_or(key: str, fallback: str) -> str {
+	if __zrt_has_env(key) {
+		return __zrt_getenv(key)
+	}
+	return fallback
+}
+
+# zerg_root is the installation root: $ZERG_ROOT, else the current directory (the repo
+# checkout, where src/runtime and src/stdlib sit).
+fn zerg_root() -> str {
+	return env_or("ZERG_ROOT", ".")
+}
+
+# rt_dir returns the runtime source tree — $ZERG_RUNTIME, else <root>/src/runtime/csrc.
+# It is probed rather than assumed, so a wrong root fails as a missing-runtime message
+# instead of a wall of cc errors about a header that was never there.
 fn rt_dir() -> str {
-	return "src/runtime/csrc"
+	if __zrt_has_env("ZERG_RUNTIME") {
+		return __zrt_getenv("ZERG_RUNTIME")
+	}
+	return join_path(zerg_root(), "src/runtime/csrc")
+}
+
+# stdlib_dir returns the standard library sources — $ZERG_STDLIB, else <root>/src/stdlib.
+fn stdlib_dir() -> str {
+	if __zrt_has_env("ZERG_STDLIB") {
+		return __zrt_getenv("ZERG_STDLIB")
+	}
+	return join_path(zerg_root(), "src/stdlib")
+}
+
+# --- paths -----------------------------------------------------------------------------
+
+# join_path joins a directory and a name, treating "" and "." as "here".
+fn join_path(dir: str, name: str) -> str {
+	if dir == "" or dir == "." {
+		return name
+	}
+	return dir + "/" + name
+}
+
+# dir_of returns the directory part of a path, or "." when it names a bare file.
+fn dir_of(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut seen := false
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i
+			seen = true
+		}
+		i = i + 1
+	}
+	if not seen {
+		return "."
+	}
+	mut out: list[byte] = []
+	mut j := 0
+	for j < cut {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# has_suffix reports whether s ends with suffix.
+fn has_suffix(s: str, suffix: str) -> bool {
+	b := list[byte](s)
+	x := list[byte](suffix)
+	if x.len() > b.len() {
+		return false
+	}
+	mut i := 0
+	for i < x.len() {
+		if b[b.len() - x.len() + i] != x[i] {
+			return false
+		}
+		i = i + 1
+	}
+	return true
+}
+
+# --- module resolution ------------------------------------------------------------------
+
+# module_files resolves one import path to the source files that make up that module,
+# searched in the entry program's own directory first (a user module beside the program),
+# then the standard library. A module is either a single `<path>.zg` file or a DIRECTORY
+# of them — the compiler's own `zerg` module is the second kind, and its files are read in
+# the sorted order the runtime guarantees so the emitted C never depends on the
+# filesystem. An unresolvable import yields an empty list; the caller reports it.
+fn module_files(path: str, from_dir: str) -> list[str] {
+	mut roots: list[str] = []
+	roots.append(from_dir)
+	roots.append(stdlib_dir())
+	for root in roots {
+		file := join_path(root, path + ".zg")
+		if __zrt_exists(file) {
+			mut one: list[str] = []
+			one.append(file)
+			return one
+		}
+		dir := join_path(root, path)
+		if __zrt_exists(dir) {
+			mut many: list[str] = []
+			for name in __zrt_listdir(dir) {
+				if has_suffix(name, ".zg") {
+					many.append(join_path(dir, name))
+				}
+			}
+			if many.len() > 0 {
+				return many
+			}
+		}
+	}
+	mut none: list[str] = []
+	return none
+}
+
+fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str]) {
+	for s in seen {
+		if s == file {
+			return
+		}
+	}
+	seen.append(file)
+	src := str(io.read_file(file))
+	for im in zerg.imports_of(src) {
+		for dep in module_files(im, from_dir) {
+			load_into(dep, from_dir, seen, srcs)
+		}
+	}
+	srcs.append(src)
 }
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,
 # non-concurrent runtime units, found under rt_dir().
+# cc_object_argv compiles the emitted C to an object without linking: a module is not a
+# program, so it has no entry to link against and no runtime to pull in yet.
+fn cc_object_argv(cpath: str, output: str) -> list[str] {
+	mut argv: list[str] = []
+	argv.append("cc")
+	argv.append("-std=c11")
+	argv.append("-I")
+	argv.append(rt_dir())
+	argv.append("-c")
+	argv.append("-o")
+	argv.append(output)
+	argv.append(cpath)
+	return argv
+}
+
 fn cc_argv(cpath: str, output: str) -> list[str] {
 	rt := rt_dir()
 	mut argv: list[str] = []
@@ -99,4 +392,33 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 		argv.append(rt + "/" + u)
 	}
 	return argv
+}
+
+# --- fmt / lint ------------------------------------------------------------------------
+
+# run_fmt rewrites each named file in place. Reading and writing the same path means a
+# formatted file is byte-identical to what it was, so running fmt twice is a no-op.
+fn run_fmt(files: list[str]) {
+	for f in files {
+		src := str(io.read_file(f))
+		out := zerg.fmt_src(src)
+		if out != src {
+			guard {
+				io.write_file(f, list[byte](out))
+			}
+			io.write(f + "\n")
+		}
+	}
+}
+
+# run_lint reports every finding in the loaded program and exits nonzero when there is
+# one, so `zerg lint` can gate a build rather than merely inform.
+fn run_lint(files: list[str]) {
+	findings := zerg.lint_files(load_sources(files))
+	for f in findings {
+		io.write(f + "\n")
+	}
+	if findings.len() > 0 {
+		__zrt_exit(1)
+	}
 }

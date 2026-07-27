@@ -53,17 +53,27 @@ pub fn write_int(n: int) -> Result[nil] {
 	neg := v < 0
 	for {
 		d := v % 10
-		digit := if d < 0 { -d } else { d }
-		digits.append(byte(48 + digit))       # 48 == '0'
+		digit := if d < 0 {
+			- d
+		} else {
+			d
+		}
+		digits.append(byte(48 + digit)) # 48 == '0'
 		v = v / 10
-		if v == 0 { break }
+		if v == 0 {
+			break
+		}
 	}
-	if neg { digits.append(byte(45)) }         # 45 == '-'
+	if neg {
+		digits.append(byte(45))
+	} # 45 == '-'
 	mut out: list[byte] = []
 	mut i := digits.len() - 1
 	for {
 		out.append(digits[i])
-		if i == 0 { break }
+		if i == 0 {
+			break
+		}
 		i = i - 1
 	}
 	return write(str(out))
@@ -79,8 +89,12 @@ pub fn read_file(path: str) -> list[byte] {
 	mut out: list[byte] = []
 	for {
 		chunk := __zrt_read(fd)
-		if chunk.len() == 0 { break }
-		for b in chunk { out.append(b) }
+		if chunk.len() == 0 {
+			break
+		}
+		for b in chunk {
+			out.append(b)
+		}
 	}
 	__zrt_close(fd)
 	return out
@@ -94,8 +108,12 @@ pub fn read_stdin() -> list[byte] {
 	mut out: list[byte] = []
 	for {
 		chunk := __zrt_read(0)
-		if chunk.len() == 0 { break }
-		for b in chunk { out.append(b) }
+		if chunk.len() == 0 {
+			break
+		}
+		for b in chunk {
+			out.append(b)
+		}
 	}
 	return out
 }

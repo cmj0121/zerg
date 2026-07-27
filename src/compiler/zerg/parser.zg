@@ -68,8 +68,18 @@ fn ident_name(e: Expr) -> str {
 # --- types ---------------------------------------------------------------------
 
 fn parse_type(mut &p: Parser) -> Ty {
-	name := cur(p).lexeme
+	mut name := cur(p).lexeme
 	p_advance(p)
+	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
+	# scope, so the qualifier only says where the type came from and the last segment is
+	# the name. Reading it this way is what lets a program use a type another module
+	# declares — without it the qualifier parses as a type of its own and the emitter
+	# spells a name nothing declared.
+	for p_at(p, Dot) {
+		p_advance(p)
+		name = cur(p).lexeme
+		p_advance(p)
+	}
 	if name == "list" and p_at(p, LBrack) {
 		p_advance(p)
 		elem := parse_type(p)
@@ -132,18 +142,30 @@ fn conv_ty(name: str) -> Ty {
 
 # --- declarations --------------------------------------------------------------
 
-# parse turns source into a File. Only function declarations are recognised at the top
-# level (the examples corpus); any other top-level token is skipped.
+# parse turns source into a File. Imports, structs, enums, and functions are recognised
+# at the top level; any other top-level token is skipped.
 pub fn parse(src: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0)
+	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
-		if p_at(p, Fn) {
-			fns.append(parse_fn(p))
+		if p_at(p, Import) {
+			path := parse_import(p)
+			if path != "" {
+				imports.append(path)
+			}
+		} else if p_at(p, Pub) {
+			# `pub` binds to the declaration that follows it
+			p_advance(p)
+			if p_at(p, Fn) {
+				fns.append(parse_fn(p, true))
+			}
+		} else if p_at(p, Fn) {
+			fns.append(parse_fn(p, false))
 		} else if p_at(p, Struct) {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
@@ -153,7 +175,27 @@ pub fn parse(src: str) -> File {
 		}
 		skip_semis(p)
 	}
-	return File(structs, enums, fns)
+	return File(imports, structs, enums, fns)
+}
+
+# imports_of returns just the import paths of a source, for the driver's module loader:
+# it resolves and loads a program's dependencies before anything is emitted, so it needs
+# the import list alone and not the cost of keeping a whole parse around.
+pub fn imports_of(src: str) -> list[str] {
+	return parse(src).imports
+}
+
+# parse_import reads `import "path"` and yields the quoted path. The `pub` prefix form
+# and the parenthesized group are outside the subset the compiler's own source uses, so
+# they are consumed and yield "" rather than a half-read path.
+fn parse_import(mut &p: Parser) -> str {
+	p_advance(p)
+	if p_at(p, Str) {
+		t := cur(p)
+		p_advance(p)
+		return t.value # the decoded path, without its quotes
+	}
+	return ""
 }
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {
@@ -214,7 +256,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	return StructDecl(name, fields)
 }
 
-fn parse_fn(mut &p: Parser) -> FnDecl {
+fn parse_fn(mut &p: Parser, is_pub: bool) -> FnDecl {
 	p_advance(p) # 'fn'
 	name := cur(p).lexeme
 	p_advance(p) # name
@@ -248,7 +290,7 @@ fn parse_fn(mut &p: Parser) -> FnDecl {
 		has_ret = true
 	}
 	body := parse_block(p)
-	return FnDecl(name, params, has_ret, ret, body)
+	return FnDecl(name, params, has_ret, ret, body, is_pub)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {

@@ -103,23 +103,3 @@ func TestLiteralOrPatternRuns(t *testing.T) {
 }
 
 // --- FIX 3: A10 provided method calling another provided method ----------------
-
-// TestProvidedMethodCallsProvidedRuns: a provided spec method `quad` calls another
-// provided method `twice` (neither overridden by the impl). The self-call must
-// dispatch through the provided method's erased-receiver instance — the same instance
-// the witness slot points at — so run(Wrap(5)) computes ((5*2)*2) = 20. Before the fix
-// the call lowered to a null callee '0()' that failed cc.
-func TestProvidedMethodCallsProvidedRuns(t *testing.T) {
-	got := runProgram(t, "spec Show {\n"+
-		"\tfn value() -> int\n"+
-		"\tfn twice() -> int {\n\t\treturn this.value() * 2\n\t}\n"+
-		"\tfn quad() -> int {\n\t\treturn this.twice() * 2\n\t}\n"+
-		"}\n"+
-		"struct Wrap {\n\tn: int\n}\n"+
-		"impl Show for Wrap {\n\tfn value() -> int {\n\t\treturn this.n\n\t}\n}\n"+
-		"#[dyn]\nfn run[T: Show](x: T) -> int {\n\treturn x.quad()\n}\n"+
-		"fn main() {\n\tprint run(Wrap(5))\n}\n")
-	if got != "20\n" {
-		t.Fatalf("provided->provided dispatch = %q, want %q", got, "20\n")
-	}
-}

@@ -19,7 +19,7 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 JOBS ?= 4
 
 CORPUS_PASS := arithmetic bitwise booleans countdown enum_basic enum_guard factorial fib fizzbuzz floats gcd \
-	hello list_basic list_str method_chain power rec_expr rec_tree str_bytes struct_basic struct_nested sumto
+	fn_value hello list_basic list_str method_chain power rec_expr rec_tree str_bytes struct_basic struct_nested sumto
 
 .PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt help $(SUBDIR)
 

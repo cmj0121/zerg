@@ -736,7 +736,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EField(target, fld) => c_expr(em, target, sb) + ".zg_" + fld
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
-		EListLit(elems) => "(zrt_list){0}"
+		EListLit(elems) => c_list_lit(em, elems, sb)
 		EConv(ty, x) => c_conv(em, ty, x, sb)
 		EIf(cond, then_e, else_e) => "(" + c_expr(em, cond, sb) + " ? " + c_expr(em, then_e, sb) + " : " + c_expr(em, else_e, sb) + ")"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
@@ -888,6 +888,34 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
 # construction as a plain compound literal (both are PascalCase constructors), and any
 # other call as a function call.
+# c_list_lit builds a list literal used AS A VALUE — passed to a function, returned,
+# handed straight to a method. It lowers the way `append` does: allocate, then push each
+# element in order, inside a statement expression that yields the list.
+#
+# Before this, a list literal in an expression emitted `(zrt_list){0}` and its ELEMENTS
+# WERE DROPPED — `f([a, b])` silently passed an empty list. Nothing said so, which made it
+# the worst kind of wrong: a program that ran and was simply not what was written.
+#
+# An empty literal keeps the zeroed form. It carries no element type of its own, so the
+# one that fits comes from the declaration it initializes, and the binding and field paths
+# already supply it.
+fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
+	if elems.len() == 0 {
+		return "(zrt_list){0}"
+	}
+	em.used_rt = true
+	et := c_type(c_infer(em, elems[0]))
+	mut out := "({ zrt_list zg_ll = zg_empty_list(sizeof(" + et + "));"
+	mut i := 0
+	for i < elems.len() {
+		tmp := "zg_ll" + strconv.to_string(i, 10)
+		out = out + " " + et + " " + tmp + " = " + c_expr(em, elems[i], sb) + ";"
+		out = out + " zrt_list_push(&zg_ll, &" + tmp + ");"
+		i = i + 1
+	}
+	return out + " zg_ll; })"
+}
+
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(name) {
 		em.used_rt = true
@@ -1189,7 +1217,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
 		EIndex(target, idx) => c_list_elem(c_infer(em, target))
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
-		EListLit(elems) => TUnknown
+		EListLit(elems) => c_infer_listlit(em, elems)
 		EConv(ty, x) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
@@ -1279,6 +1307,15 @@ fn c_intrinsic_ret(name: str) -> Ty {
 		return TBool
 	}
 	return TNil
+}
+
+# c_infer_listlit types a list literal from its FIRST element. An empty one names no
+# element type at all, so it stays unknown and takes the type of whatever it initializes.
+fn c_infer_listlit(mut &em: Emitter, elems: list[Expr]) -> Ty {
+	if elems.len() == 0 {
+		return TUnknown
+	}
+	return TList(c_infer(em, elems[0]))
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {

@@ -1,0 +1,1021 @@
+# emit — AST to C for the self-hosting Zerg compiler (M3).
+#
+# Lowers a parsed File to C over the same shape the Go bootstrap emits: an include
+# header, forward declarations, the function definitions with `zg_`-mangled names, and
+# an `int main` wrapper that calls `zg_main`. The bar is functional equivalence, not
+# byte-identical C — the emitted C must compile and behave identically to the bootstrap
+# build.
+#
+# Expressions are built as strings (each match arm yields C text), so no void-valued
+# match is needed. A small type inference — over the function signature table and the
+# per-function variable environment held in Emitter — picks the printf format for `print`
+# and resolves numeric promotion. All helpers are `c_`-prefixed to stay clear of the
+# lexer / parser names in this one flattened module.
+import "ascii"
+import "strconv"
+
+# Emitter carries the per-function variable environment (name -> type) and the
+# whole-file function signature table (name -> return type).
+struct Emitter {
+	env_names: list[str]
+	env_tys: list[Ty]
+	sig_names: list[str]
+	sig_rets: list[Ty]
+	sig_hasret: list[bool]
+	struct_names: list[str]
+	fld_struct: list[str]
+	fld_name: list[str]
+	fld_ty: list[Ty]
+	enum_names: list[str]
+	var_name: list[str]
+	var_enum: list[str]
+	var_tag: list[int]
+	vf_variant: list[str]
+	vf_index: list[int]
+	vf_boxed: list[bool]
+	used_rt: bool
+	used_str: bool
+}
+
+# Subst is an active set of identifier substitutions: an EIdent whose name appears in
+# `names` emits the parallel `repls` entry instead of a mangled name. It splices a match
+# arm's bound names — a scrutinee alias, or an enum payload field access — into the arm's
+# guard and body.
+struct Subst {
+	names: list[str]
+	repls: list[str]
+}
+
+fn c_nosub() -> Subst {
+	return Subst([], [])
+}
+
+fn c_extend(sb: Subst, name: str, repl: str) -> Subst {
+	mut nn := sb.names
+	mut rr := sb.repls
+	nn.append(name)
+	rr.append(repl)
+	return Subst(nn, rr)
+}
+
+# --- type helpers --------------------------------------------------------------
+
+# c_type maps a value type to its C spelling.
+fn c_type(t: Ty) -> str {
+	return match t {
+		TInt => "int64_t"
+		TFloat => "double"
+		TStr => "const char*"
+		TBool => "bool"
+		TVoid => "void"
+		TByte => "uint8_t"
+		TNamed(nm) => "zg_" + nm
+		TList(_) => "zrt_list"
+		_ => "int64_t"
+	}
+}
+
+fn c_is_str(t: Ty) -> bool {
+	return match t {
+		TStr => true
+		_ => false
+	}
+}
+
+# c_list_elem returns the element type of a list type, or TUnknown otherwise.
+fn c_list_elem(t: Ty) -> Ty {
+	return match t {
+		TList(e) => e
+		_ => TUnknown
+	}
+}
+
+fn c_is_list(t: Ty) -> bool {
+	return match t {
+		TList(_) => true
+		_ => false
+	}
+}
+
+fn c_is_float(t: Ty) -> bool {
+	return match t {
+		TFloat => true
+		_ => false
+	}
+}
+
+# c_is_bool_op reports whether a binary operator yields a bool (comparisons and the
+# logical connectives).
+fn c_is_bool_op(oper: str) -> bool {
+	if oper == "==" or oper == "!=" or oper == "<" or oper == ">" or oper == "<=" or oper == ">=" {
+		return true
+	}
+	return oper == "and" or oper == "or"
+}
+
+# --- environment + signatures --------------------------------------------------
+
+fn c_reset_env(mut &em: Emitter) {
+	em.env_names = []
+	em.env_tys = []
+}
+
+fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
+	em.env_names.append(name)
+	em.env_tys.append(t)
+}
+
+fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
+	mut i := em.env_names.len() - 1
+	for i >= 0 {
+		if em.env_names[i] == name {
+			return em.env_tys[i]
+		}
+		i = i - 1
+	}
+	return TUnknown
+}
+
+fn c_build_sigs(mut &em: Emitter, f: File) {
+	mut i := 0
+	for i < f.fns.len() {
+		fn_i := f.fns[i]
+		em.sig_names.append(fn_i.name)
+		em.sig_rets.append(fn_i.ret)
+		em.sig_hasret.append(fn_i.has_ret)
+		i = i + 1
+	}
+}
+
+fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
+	mut i := 0
+	for i < em.sig_names.len() {
+		if em.sig_names[i] == name {
+			if em.sig_hasret[i] {
+				return em.sig_rets[i]
+			}
+			return TVoid
+		}
+		i = i + 1
+	}
+	return TUnknown
+}
+
+# c_is_ctor reports whether a name denotes a type constructor rather than a function
+# call — Zerg types are PascalCase and functions snake_case, so an uppercase first
+# letter is the tell.
+fn c_is_ctor(name: str) -> bool {
+	b := list[byte](name)
+	if b.len() == 0 {
+		return false
+	}
+	return ascii.is_upper(b[0])
+}
+
+fn c_build_structs(mut &em: Emitter, f: File) {
+	mut i := 0
+	for i < f.structs.len() {
+		sd := f.structs[i]
+		em.struct_names.append(sd.name)
+		mut j := 0
+		for j < sd.fields.len() {
+			fd := sd.fields[j]
+			em.fld_struct.append(sd.name)
+			em.fld_name.append(fd.name)
+			em.fld_ty.append(fd.ty)
+			j = j + 1
+		}
+		i = i + 1
+	}
+}
+
+fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> Ty {
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == sname and em.fld_name[i] == fname {
+			return em.fld_ty[i]
+		}
+		i = i + 1
+	}
+	return TUnknown
+}
+
+# c_struct_typedef emits a value struct as a C typedef with zg_-mangled fields.
+fn c_struct_typedef(sd: StructDecl) -> str {
+	mut out := "typedef struct {\n"
+	mut i := 0
+	for i < sd.fields.len() {
+		fd := sd.fields[i]
+		out = out + "    " + c_type(fd.ty) + " zg_" + fd.name + ";\n"
+		i = i + 1
+	}
+	return out + "} zg_" + sd.name + ";\n\n"
+}
+
+# c_named_of returns the struct name of a TNamed type, or "" otherwise.
+fn c_named_of(t: Ty) -> str {
+	return match t {
+		TNamed(nm) => nm
+		_ => ""
+	}
+}
+
+fn c_build_enums(mut &em: Emitter, f: File) {
+	mut i := 0
+	for i < f.enums.len() {
+		ed := f.enums[i]
+		em.enum_names.append(ed.name)
+		mut j := 0
+		for j < ed.variants.len() {
+			v := ed.variants[j]
+			em.var_name.append(v.name)
+			em.var_enum.append(ed.name)
+			em.var_tag.append(j)
+			mut k := 0
+			for k < v.fields.len() {
+				em.vf_variant.append(v.name)
+				em.vf_index.append(k)
+				# a field whose type is the enclosing enum is boxed (leak-style void*)
+				em.vf_boxed.append(c_named_of(v.fields[k]) == ed.name)
+				k = k + 1
+			}
+			j = j + 1
+		}
+		i = i + 1
+	}
+}
+
+# c_is_boxed reports whether payload field `idx` of variant `variant` is a ref-boxed
+# (self-recursive) field.
+fn c_is_boxed(mut &em: Emitter, variant: str, idx: int) -> bool {
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_variant[i] == variant and em.vf_index[i] == idx {
+			return em.vf_boxed[i]
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# c_needs_runtime reports whether any enum has a boxed field, so the translation unit
+# must include and link the runtime.
+fn c_needs_runtime(mut &em: Emitter) -> bool {
+	mut i := 0
+	for i < em.vf_boxed.len() {
+		if em.vf_boxed[i] {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_is_variant(mut &em: Emitter, name: str) -> bool {
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_name[i] == name {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_variant_enum(mut &em: Emitter, name: str) -> str {
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_name[i] == name {
+			return em.var_enum[i]
+		}
+		i = i + 1
+	}
+	return ""
+}
+
+fn c_variant_tag(mut &em: Emitter, name: str) -> int {
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_name[i] == name {
+			return em.var_tag[i]
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+# c_enum_typedef emits an enum as a C tagged union: an int32 tag plus a union of the
+# payload-carrying variants (omitted when every variant is tag-only).
+fn c_enum_typedef(ed: EnumDecl) -> str {
+	mut out := "typedef struct {\n    int32_t tag;\n"
+	mut anyf := false
+	mut i := 0
+	for i < ed.variants.len() {
+		if ed.variants[i].fields.len() > 0 {
+			anyf = true
+		}
+		i = i + 1
+	}
+	if anyf {
+		out = out + "    union {\n"
+		i = 0
+		for i < ed.variants.len() {
+			v := ed.variants[i]
+			if v.fields.len() > 0 {
+				out = out + "        struct { "
+				mut j := 0
+				for j < v.fields.len() {
+					# a self-recursive field is a ref-box (void*), else its value type
+					mut ct := c_type(v.fields[j])
+					if c_named_of(v.fields[j]) == ed.name {
+						ct = "void*"
+					}
+					out = out + ct + " f" + strconv.to_string(j, 10) + "; "
+					j = j + 1
+				}
+				out = out + "} " + v.name + ";\n"
+			}
+			i = i + 1
+		}
+		out = out + "    } u;\n"
+	}
+	return out + "} zg_" + ed.name + ";\n\n"
+}
+
+# c_refbox_helpers emits, for an enum with self-recursive fields, a no-op drop and a
+# refnew that boxes a value into a leaked ref cell (never released — batch tool).
+fn c_refbox_helpers(ed: EnumDecl) -> str {
+	mut anybox := false
+	mut i := 0
+	for i < ed.variants.len() {
+		v := ed.variants[i]
+		mut j := 0
+		for j < v.fields.len() {
+			if c_named_of(v.fields[j]) == ed.name {
+				anybox = true
+			}
+			j = j + 1
+		}
+		i = i + 1
+	}
+	if not anybox {
+		return ""
+	}
+	nm := ed.name
+	mut out := "static void zg_noopdrop_" + nm + "(void* p) { (void)p; }\n"
+	out = out + "static void* zg_refnew_" + nm + "(zg_" + nm + " v) {\n"
+	out = out + "    void* r = zrt_ref_alloc(sizeof(zg_" + nm + "), &zg_noopdrop_" + nm + ");\n"
+	out = out + "    *(zg_" + nm + "*)zrt_ref_payload(r) = v;\n"
+	out = out + "    return r;\n}\n\n"
+	return out
+}
+
+# --- operators -----------------------------------------------------------------
+
+# c_binop maps a Zerg binary operator spelling to its C form; the wrapping operators
+# lower to the plain C operator (arithmetic does not yet trap).
+fn c_binop(oper: str) -> str {
+	if oper == "and" {
+		return "&&"
+	}
+	if oper == "or" {
+		return "||"
+	}
+	if oper == "*%" {
+		return "*"
+	}
+	if oper == "+%" {
+		return "+"
+	}
+	if oper == "-%" {
+		return "-"
+	}
+	return oper
+}
+
+fn c_unop(oper: str) -> str {
+	if oper == "not" {
+		return "!"
+	}
+	if oper == "-%" {
+		return "-"
+	}
+	return oper
+}
+
+# --- integer literal normalisation ---------------------------------------------
+
+# c_int_dec renders an integer lexeme (decimal / 0x / 0o / 0b, with '_' groups) as a
+# plain decimal string, matching how the bootstrap lowers integer literals.
+fn c_int_dec(lex: str) -> str {
+	b := list[byte](lex)
+	n := b.len()
+	mut base := 10
+	mut start := 0
+	if n >= 2 and b[0] == b'0' {
+		c := b[1]
+		if c == b'x' or c == b'X' {
+			base = 16
+			start = 2
+		} else if c == b'o' or c == b'O' {
+			base = 8
+			start = 2
+		} else if c == b'b' or c == b'B' {
+			base = 2
+			start = 2
+		}
+	}
+	mut val := 0
+	mut i := start
+	for i < n {
+		ch := b[i]
+		if ch != b'_' {
+			val = val * base + ascii.hex_val(ch)
+		}
+		i = i + 1
+	}
+	return strconv.to_string(val, 10)
+}
+
+fn c_bool(b: bool) -> str {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+# --- expression emission -------------------------------------------------------
+
+# c_expr renders an expression as C. `bind` / `sub` implement a single-name substitution:
+# an EIdent equal to `bind` emits `sub` verbatim instead of a mangled name — this is how a
+# match arm's bound scrutinee name is spliced into its guard and body.
+fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
+	return match e {
+		EInt(lex) => c_int_dec(lex)
+		EFloat(lex) => lex
+		EStr(v) => quote(v)
+		EBool(b) => c_bool(b)
+		ENil => "0"
+		EIdent(n) => c_ident_val(em, n, sb)
+		EUnary(oper, x) => "(" + c_unop(oper) + c_expr(em, x, sb) + ")"
+		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
+		ECall(name, args) => c_call(em, name, args, sb)
+		EField(target, fld) => c_expr(em, target, sb) + ".zg_" + fld
+		EIndex(target, idx) => c_index(em, target, idx, sb)
+		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
+		EListLit(elems) => "(zrt_list){0}"
+		EConv(ty, x) => c_conv(em, ty, x, sb)
+		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
+	}
+}
+
+# c_binexpr lowers a binary expression, special-casing string concatenation and equality
+# (which are not C operators on const char*).
+fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
+	if c_is_str(c_infer(em, a)) {
+		if oper == "+" {
+			em.used_str = true
+			em.used_rt = true
+			return "zgs_concat(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ")"
+		}
+		if oper == "==" {
+			return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") == 0)"
+		}
+		if oper == "!=" {
+			return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") != 0)"
+		}
+	}
+	return "(" + c_expr(em, a, sb) + " " + c_binop(oper) + " " + c_expr(em, b, sb) + ")"
+}
+
+# c_conv lowers a type conversion. str(bytes) and list[byte](str) go through the emitted
+# string helpers; the scalar casts are plain C casts.
+fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
+	inner := c_expr(em, x, sb)
+	if c_is_str(ty) {
+		em.used_str = true
+		em.used_rt = true
+		return "zgs_from_bytes(" + inner + ")"
+	}
+	if c_is_list(ty) {
+		em.used_str = true
+		em.used_rt = true
+		return "zgs_to_bytes(" + inner + ")"
+	}
+	return "((" + c_type(ty) + ")(" + inner + "))"
+}
+
+# c_index lowers `xs[i]` to a runtime list read, casting the element pointer to the
+# element C type inferred for the target.
+fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
+	em.used_rt = true
+	ct := c_type(c_list_elem(c_infer(em, target)))
+	return "(*(" + ct + "*)zrt_list_at(&(" + c_expr(em, target, sb) + "), " + c_expr(em, idx, sb) + "))"
+}
+
+# c_method lowers the list methods the subset uses: len and append.
+fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+	tgt := c_expr(em, target, sb)
+	if meth == "len" {
+		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
+	}
+	if meth == "append" {
+		et := c_type(c_list_elem(c_infer(em, target)))
+		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+	}
+	return tgt
+}
+
+# c_call emits an enum-variant construction as a tagged-union literal, a struct
+# construction as a plain compound literal (both are PascalCase constructors), and any
+# other call as a function call.
+fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+	if c_is_ctor(name) {
+		if c_is_variant(em, name) {
+			return c_variant_ctor(em, name, args, sb)
+		}
+		return "(zg_" + name + "){" + c_args(em, args, sb) + "}"
+	}
+	return "zg_" + name + "(" + c_args(em, args, sb) + ")"
+}
+
+# c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
+# omitted for a tag-only variant).
+fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+	en := c_variant_enum(em, name)
+	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, name), 10)
+	if args.len() > 0 {
+		out = out + ", .u." + name + " = {"
+		mut i := 0
+		for i < args.len() {
+			if i > 0 {
+				out = out + ", "
+			}
+			mut val := c_expr(em, args[i], sb)
+			if c_is_boxed(em, name, i) {
+				# box a self-recursive payload into a leaked ref cell
+				val = "zg_refnew_" + en + "(" + val + ")"
+			}
+			out = out + ".f" + strconv.to_string(i, 10) + " = " + val
+			i = i + 1
+		}
+		out = out + "}"
+	}
+	return out + "}"
+}
+
+fn c_ident(n: str, sb: Subst) -> str {
+	mut i := 0
+	for i < sb.names.len() {
+		if sb.names[i] == n {
+			return sb.repls[i]
+		}
+		i = i + 1
+	}
+	return "zg_" + n
+}
+
+# c_ident_val resolves a bare name: a match binding wins, then a nullary enum variant
+# (constructed as a tag-only literal), otherwise a mangled variable reference.
+fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
+	mut i := 0
+	for i < sb.names.len() {
+		if sb.names[i] == n {
+			return sb.repls[i]
+		}
+		i = i + 1
+	}
+	if c_is_variant(em, n) {
+		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
+	}
+	return "zg_" + n
+}
+
+fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
+	mut out := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_expr(em, args[i], sb)
+		i = i + 1
+	}
+	return out
+}
+
+# c_match lowers a match expression to a right-nested C ternary, the last arm as the
+# final else (the subset requires an exhaustive catch-all last arm).
+fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
+	s := c_expr(em, scrut, sb)
+	return c_arms(em, arms, 0, s, sb)
+}
+
+fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
+	a := arms[i]
+	if i == arms.len() - 1 {
+		return c_arm_body(em, a, s, sb)
+	}
+	cond := c_arm_cond(em, a, s, sb)
+	body := c_arm_body(em, a, s, sb)
+	rest := c_arms(em, arms, i + 1, s, sb)
+	return "(" + cond + " ? " + body + " : " + rest + ")"
+}
+
+# c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
+# constructor arm aliases each payload name to its `s.u.Var.fK` field access.
+fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> Subst {
+	if a.pat == 1 {
+		return c_extend(sb, a.bind, s)
+	}
+	if a.pat == 3 {
+		en := c_variant_enum(em, a.ctor)
+		mut r := sb
+		mut i := 0
+		for i < a.binds.len() {
+			mut acc := s + ".u." + a.ctor + ".f" + strconv.to_string(i, 10)
+			if c_is_boxed(em, a.ctor, i) {
+				# unbox a self-recursive payload back to the enum value
+				acc = "(*(zg_" + en + "*)zrt_ref_payload(" + acc + "))"
+			}
+			r = c_extend(r, a.binds[i], acc)
+			i = i + 1
+		}
+		return r
+	}
+	return sb
+}
+
+fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+	if a.pat == 0 {
+		# literal pattern: scrutinee equals the literal
+		return "(" + s + " == " + c_expr(em, a.lit, sb) + ")"
+	}
+	if a.pat == 3 {
+		base := "(" + s + ".tag == " + strconv.to_string(c_variant_tag(em, a.ctor), 10) + ")"
+		if a.has_guard {
+			return "(" + base + " && " + c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb)) + ")"
+		}
+		return base
+	}
+	if a.has_guard {
+		return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb))
+	}
+	return "1"
+}
+
+fn c_arm_body(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+	return c_expr(em, a.body, c_arm_subst(em, a, s, sb))
+}
+
+# --- type inference ------------------------------------------------------------
+
+fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
+	return match e {
+		EInt(_) => TInt
+		EFloat(_) => TFloat
+		EStr(_) => TStr
+		EBool(_) => TBool
+		ENil => TNil
+		EIdent(n) => c_infer_ident(em, n)
+		EUnary(oper, x) => c_infer_unary(em, oper, x)
+		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
+		ECall(name, args) => c_infer_call(em, name)
+		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
+		EIndex(target, idx) => c_list_elem(c_infer(em, target))
+		EMethod(target, meth, args) => c_infer_method(meth)
+		EListLit(elems) => TUnknown
+		EConv(ty, x) => ty
+		EMatch(scrut, arms) => c_infer(em, arms[0].body)
+	}
+}
+
+fn c_infer_method(meth: str) -> Ty {
+	if meth == "len" {
+		return TInt
+	}
+	return TNil
+}
+
+fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
+	if c_is_variant(em, name) {
+		return TNamed(c_variant_enum(em, name))
+	}
+	if c_is_ctor(name) {
+		return TNamed(name)
+	}
+	return c_lookup_sig_ret(em, name)
+}
+
+fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
+	if c_is_variant(em, n) {
+		return TNamed(c_variant_enum(em, n))
+	}
+	return c_lookup_var(em, n)
+}
+
+fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
+	if oper == "not" {
+		return TBool
+	}
+	return c_infer(em, x)
+}
+
+fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
+	if c_is_bool_op(oper) {
+		return TBool
+	}
+	if oper == "+" and c_is_str(c_infer(em, a)) {
+		return TStr
+	}
+	if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b)) {
+		return TFloat
+	}
+	return TInt
+}
+
+# --- statement emission --------------------------------------------------------
+
+fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
+	return match s {
+		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, ival, ind)
+		SAssign(name, rhs) => c_assign(em, name, rhs, ind)
+		SPrint(e) => c_print(em, e, ind)
+		SReturn(has_val, e) => c_return(em, has_val, e, ind)
+		SReturnIf(val, cond) => ind + "if (" + c_expr(em, cond, c_nosub()) + ") { return " + c_expr(em, val, c_nosub()) + "; }\n"
+		SExpr(e) => ind + c_expr(em, e, c_nosub()) + ";\n"
+		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
+		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
+		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
+		SBreak => ind + "break;\n"
+		SContinue => ind + "continue;\n"
+		SNop => ""
+	}
+}
+
+fn c_is_listlit(e: Expr) -> bool {
+	return match e {
+		EListLit(_) => true
+		_ => false
+	}
+}
+
+# c_assign lowers `name = rhs`. Re-assigning a list literal re-initialises the list
+# (leak-style: the old buffer is abandoned); anything else is a plain assignment.
+fn c_assign(mut &em: Emitter, name: str, rhs: Expr, ind: str) -> str {
+	vt := c_lookup_var(em, name)
+	if c_is_list(vt) and c_is_listlit(rhs) {
+		em.used_rt = true
+		et := c_type(c_list_elem(vt))
+		mut out := ind + "zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes(em, "zg_" + name, et, rhs, ind)
+	}
+	return ind + "zg_" + name + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+}
+
+# c_pushes emits a zrt_list_push per element of a list literal.
+fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
+	return match lit {
+		EListLit(elems) => c_pushes_of(em, target, et, elems, ind)
+		_ => ""
+	}
+}
+
+fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: str) -> str {
+	mut out := ""
+	mut i := 0
+	for i < elems.len() {
+		out = out + ind + "{ " + et + " zg_le = " + c_expr(em, elems[i], c_nosub()) + "; zrt_list_push(&" + target + ", &zg_le); }\n"
+		i = i + 1
+	}
+	return out
+}
+
+# c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
+fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	em.used_rt = true
+	elem := c_list_elem(c_infer(em, iter))
+	et := c_type(elem)
+	it := c_expr(em, iter, c_nosub())
+	c_add_var(em, var, elem)
+	mut out := ind + "for (size_t zg_i = 0; zg_i < zrt_list_len(&(" + it + ")); zg_i++) {\n"
+	out = out + ind + "    " + et + " zg_" + var + " = (*(" + et + "*)zrt_list_at(&(" + it + "), zg_i));\n"
+	out = out + c_block(em, body, ind + "    ")
+	return out + ind + "}\n"
+}
+
+fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
+	mut eff := ty
+	if not has_type {
+		eff = c_infer(em, ival)
+	}
+	c_add_var(em, name, eff)
+	if c_is_list(eff) {
+		return c_let_list(em, name, eff, ival, ind)
+	}
+	return ind + c_type(eff) + " zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
+}
+
+# c_let_list declares a list binding: a list-literal initializer becomes an init plus a
+# push per element; any other initializer (a call or another list) is a plain copy.
+fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
+	em.used_rt = true
+	if c_is_listlit(ival) {
+		et := c_type(c_list_elem(eff))
+		mut out := ind + "zrt_list zg_" + name + "; zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes(em, "zg_" + name, et, ival, ind)
+	}
+	return ind + "zrt_list zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
+}
+
+fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
+	ty := c_infer(em, e)
+	ex := c_expr(em, e, c_nosub())
+	return match ty {
+		TStr => ind + "printf(\"%s\\n\", " + ex + ");\n"
+		TFloat => ind + "printf(\"%g\\n\", " + ex + ");\n"
+		TBool => ind + "printf(\"%s\\n\", (" + ex + ") ? \"true\" : \"false\");\n"
+		_ => ind + "printf(\"%lld\\n\", (long long)(" + ex + "));\n"
+	}
+}
+
+fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
+	if has_val {
+		return ind + "return " + c_expr(em, e, c_nosub()) + ";\n"
+	}
+	return ind + "return;\n"
+}
+
+fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
+	mut out := ind + "if (" + c_expr(em, cond, c_nosub()) + ") {\n"
+	out = out + c_block(em, then_body, ind + "    ")
+	out = out + ind + "}"
+	if has_else {
+		out = out + " else {\n" + c_block(em, else_body, ind + "    ") + ind + "}"
+	}
+	return out + "\n"
+}
+
+fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: str) -> str {
+	mut head := ind + "for (;;) {\n"
+	if has_cond {
+		head = ind + "while (" + c_expr(em, cond, c_nosub()) + ") {\n"
+	}
+	return head + c_block(em, body, ind + "    ") + ind + "}\n"
+}
+
+fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	mut out := ""
+	mut i := 0
+	for i < body.len() {
+		out = out + c_stmt(em, body[i], ind)
+		i = i + 1
+	}
+	return out
+}
+
+# --- declaration emission ------------------------------------------------------
+
+fn c_ret_type(fn_d: FnDecl) -> str {
+	if fn_d.has_ret {
+		return c_type(fn_d.ret)
+	}
+	return "void"
+}
+
+fn c_param_types(fn_d: FnDecl) -> str {
+	if fn_d.params.len() == 0 {
+		return "void"
+	}
+	mut out := ""
+	mut i := 0
+	for i < fn_d.params.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_type(fn_d.params[i].ty)
+		i = i + 1
+	}
+	return out
+}
+
+fn c_proto(fn_d: FnDecl) -> str {
+	return c_ret_type(fn_d) + " zg_" + fn_d.name + "(" + c_param_types(fn_d) + ");\n"
+}
+
+fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
+	c_reset_env(em)
+	mut sig := c_ret_type(fn_d) + " zg_" + fn_d.name + "("
+	if fn_d.params.len() == 0 {
+		sig = sig + "void"
+	} else {
+		mut i := 0
+		for i < fn_d.params.len() {
+			if i > 0 {
+				sig = sig + ", "
+			}
+			pm := fn_d.params[i]
+			c_add_var(em, pm.name, pm.ty)
+			sig = sig + c_type(pm.ty) + " zg_" + pm.name
+			i = i + 1
+		}
+	}
+	sig = sig + ") {\n"
+	return sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+}
+
+fn c_has_main(f: File) -> bool {
+	mut i := 0
+	for i < f.fns.len() {
+		if f.fns[i].name == "main" {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# emit_c lowers Zerg source to a complete C translation unit. The body is generated
+# first (so list use sets em.used_rt), then the header is assembled with the runtime
+# include and the shared list vtable added only when the program needs them.
+pub fn emit_c(src: str) -> str {
+	f := parse(src)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false)
+	c_build_sigs(em, f)
+	c_build_structs(em, f)
+	c_build_enums(em, f)
+
+	mut types := ""
+	mut i := 0
+	for i < f.structs.len() {
+		types = types + c_struct_typedef(f.structs[i])
+		i = i + 1
+	}
+	i = 0
+	for i < f.enums.len() {
+		types = types + c_enum_typedef(f.enums[i])
+		i = i + 1
+	}
+	i = 0
+	for i < f.enums.len() {
+		types = types + c_refbox_helpers(f.enums[i])
+		i = i + 1
+	}
+
+	mut protos := ""
+	i = 0
+	for i < f.fns.len() {
+		protos = protos + c_proto(f.fns[i])
+		i = i + 1
+	}
+	mut defs := ""
+	i = 0
+	for i < f.fns.len() {
+		defs = defs + c_fn(em, f.fns[i])
+		i = i + 1
+	}
+	mut mainw := ""
+	if c_has_main(f) {
+		mainw = "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+	}
+
+	rt := c_needs_runtime(em) or em.used_rt
+	mut hdr := "// Generated by zergc (self-host). Do not edit.\n"
+	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
+	if em.used_str {
+		hdr = hdr + "#include <stdlib.h>\n"
+	}
+	if rt {
+		hdr = hdr + "#include \"zergrt.h\"\n"
+	}
+	hdr = hdr + "\n"
+	if em.used_rt {
+		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n\n"
+	}
+	if em.used_str {
+		hdr = hdr + c_str_helpers()
+	}
+	return hdr + types + protos + "\n" + defs + mainw
+}
+
+# c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,
+# concatenation and byte<->str conversion malloc fresh buffers that are never freed (a
+# batch compiler exits and the OS reclaims).
+fn c_str_helpers() -> str {
+	mut out := "static char* zgs_concat(const char* a, const char* b) {\n"
+	out = out + "    size_t la = strlen(a), lb = strlen(b);\n"
+	out = out + "    char* r = (char*)malloc(la + lb + 1);\n"
+	out = out + "    memcpy(r, a, la); memcpy(r + la, b, lb); r[la + lb] = 0;\n"
+	out = out + "    return r;\n}\n"
+	out = out + "static char* zgs_from_bytes(zrt_list bs) {\n"
+	out = out + "    size_t n = zrt_list_len(&bs);\n"
+	out = out + "    char* r = (char*)malloc(n + 1);\n"
+	out = out + "    for (size_t i = 0; i < n; i++) r[i] = (char)(*(uint8_t*)zrt_list_at(&bs, i));\n"
+	out = out + "    r[n] = 0;\n    return r;\n}\n"
+	out = out + "static zrt_list zgs_to_bytes(const char* s) {\n"
+	out = out + "    zrt_list l; zrt_list_init(&l, sizeof(uint8_t), &zg_listvt);\n"
+	out = out + "    for (size_t i = 0; s[i]; i++) { uint8_t b = (uint8_t)s[i]; zrt_list_push(&l, &b); }\n"
+	out = out + "    return l;\n}\n\n"
+	return out
+}

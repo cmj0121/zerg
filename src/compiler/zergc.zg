@@ -1,71 +1,197 @@
-# zergc — the self-hosting Zerg compiler driver.
+# zerg — the self-hosting Zerg compiler.
 #
-# Wires the `zerg` compiler library to the command line:
-#   zergc tokens <file>            print the token stream (diff-tested vs --emit tokens)
-#   zergc c <file>...              print the emitted C for the merged sources
-#   zergc build <out> <file>...    emit C, invoke cc, and link a native binary
-#
-# `build` is self-sufficient: it writes the C beside the output, then shells out to cc
-# through the runtime's process-spawn leaf (`__zrt_exec`), linking the always-needed
-# runtime units. The runtime tree is found at $ZERG_RUNTIME or ./src/runtime/csrc.
+# One tool, a few sub-commands, and the two flags every tool owes its user: --help and
+# --version. `build` is self-sufficient — it emits C beside the output, then links it by
+# shelling out to cc through the runtime's process-spawn leaf (`__zrt_exec`) — and the
+# compiler resolves `import` itself, so it works from any directory.
 import "zerg"
 import "io"
 
+fn version() -> str {
+	return "zerg 0.1.0 (self-hosted)"
+}
+
+# Opts is one parsed command line: the sub-command, its output path, its file arguments,
+# and the two flags that short-circuit everything else. `bad` carries the first usage
+# error, which is reported instead of guessing at what was meant.
+struct Opts {
+	cmd: str
+	out: str
+	files: list[str]
+	help: bool
+	version: bool
+	bad: str
+}
+
 fn main(args: list[str]) {
-	if args.len() < 1 {
-		print "usage: zergc [tokens|c|build] <args>"
+	mut o := Opts("", "", [], false, false, "")
+	parse_args(args, o)
+	if o.bad != "" {
+		io.ewrite("zerg: " + o.bad + "\n")
+		io.ewrite(usage_line() + "\n")
+		__zrt_exit(2)
+	}
+	if o.version {
+		io.write(version() + "\n")
 		return
 	}
-	mode := args[0]
-	if mode == "build" {
-		build_binary(args)
+	if o.help or o.cmd == "" {
+		io.write(help_text())
 		return
 	}
-	# tokens / c: the mode word is optional (default c), then the source files
-	mut m := "c"
-	mut start := 0
-	if mode == "tokens" or mode == "c" {
-		m = mode
-		start = 1
-	}
-	guard {
-		if m == "tokens" {
-			io.write(zerg.dump_tokens(str(io.read_file(args[start]))))
+	run_command(o)
+}
+
+# parse_args reads the command line: the first non-flag word is the sub-command, `-o`
+# takes the next word, and everything else is a file. Flags are accepted anywhere, so
+# `zerg build prog.zg -o out` and `zerg build -o out prog.zg` mean the same thing.
+fn parse_args(args: list[str], mut &o: Opts) {
+	mut i := 0
+	for i < args.len() {
+		a := args[i]
+		if a == "-h" or a == "--help" {
+			o.help = true
+		} else if a == "-V" or a == "--version" {
+			o.version = true
+		} else if a == "-o" or a == "--output" {
+			if i + 1 >= args.len() {
+				o.bad = "flag " + a + " needs a path"
+				return
+			}
+			o.out = args[i + 1]
+			i = i + 1
+		} else if is_flag(a) {
+			o.bad = "unknown flag " + a
+			return
+		} else if o.cmd == "" {
+			o.cmd = a
 		} else {
-			io.write(zerg.emit_files(load_sources(args, start)))
+			o.files.append(a)
 		}
+		i = i + 1
 	}
 }
 
-# build_binary compiles `zergc build <out> <file.zg>`: load the entry file with everything
-# it imports, emit the merged C beside the output, then invoke cc to link <out>. Extra
-# files may still be listed explicitly; they are loaded the same way, imports and all.
-fn build_binary(args: list[str]) {
-	if args.len() < 3 {
-		print "usage: zergc build <out> <file.zg> [more.zg ...]"
+# is_flag reports whether a word looks like an option rather than a value.
+fn is_flag(a: str) -> bool {
+	b := list[byte](a)
+	if b.len() < 2 {
+		return false
+	}
+	return b[0] == b'-'
+}
+
+fn run_command(o: Opts) {
+	if o.cmd == "build" {
+		build_binary(o)
 		return
 	}
-	output := args[1]
-	srcs := load_sources(args, 2)
+	if o.cmd == "c" {
+		need_files(o)
+		guard {
+			io.write(zerg.emit_files(load_sources(o.files)))
+		}
+		return
+	}
+	if o.cmd == "tokens" {
+		need_files(o)
+		guard {
+			io.write(zerg.dump_tokens(str(io.read_file(o.files[0]))))
+		}
+		return
+	}
+	if o.cmd == "fmt" {
+		need_files(o)
+		run_fmt(o.files)
+		return
+	}
+	if o.cmd == "lint" {
+		need_files(o)
+		run_lint(o.files)
+		return
+	}
+	io.ewrite("zerg: unknown command " + o.cmd + "\n")
+	io.ewrite(usage_line() + "\n")
+	__zrt_exit(2)
+}
+
+# need_files exits with a usage error when a sub-command that reads sources got none.
+fn need_files(o: Opts) {
+	if o.files.len() < 1 {
+		io.ewrite("zerg: " + o.cmd + " needs at least one .zg file\n")
+		io.ewrite(usage_line() + "\n")
+		__zrt_exit(2)
+	}
+}
+
+fn usage_line() -> str {
+	return "usage: zerg <command> [-o <path>] <file.zg>..."
+}
+
+fn help_text() -> str {
+	return version() + "\n\n" +
+		usage_line() + "\n\n" +
+		"Commands:\n" +
+		"  build <file.zg>    compile a program to a native binary\n" +
+		"  fmt <file.zg>...   rewrite sources in the canonical style\n" +
+		"  lint <file.zg>...  report unused imports and dead private code\n" +
+		"  c <file.zg>        print the emitted C\n" +
+		"  tokens <file.zg>   print the token stream\n" +
+		"\n" +
+		"Flags:\n" +
+		"  -o, --output PATH  where build writes the binary (default: the source name)\n" +
+		"  -h, --help         show this message\n" +
+		"  -V, --version      show the version\n" +
+		"\n" +
+		"Environment:\n" +
+		"  ZERG_ROOT          installation root (default: the current directory)\n" +
+		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
+		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
+}
+
+# build_binary compiles `zerg build <file.zg>`: load the entry file with everything it
+# imports, emit the merged C beside the output, then invoke cc to link it. Without -o the
+# binary takes the entry file's name without its extension, as `cc` does.
+fn build_binary(o: Opts) {
+	need_files(o)
+	mut output := o.out
+	if output == "" {
+		output = drop_ext(o.files[0])
+	}
+	srcs := load_sources(o.files)
 	cpath := output + ".c"
 	guard {
 		io.write_file(cpath, list[byte](zerg.emit_files(srcs)))
 	}
 	code := __zrt_exec(cc_argv(cpath, output))
 	if code != 0 {
-		io.ewrite("zergc: cc failed\n")
+		io.ewrite("zerg: cc failed\n")
+		__zrt_exit(1)
 	}
 }
 
-# load_sources loads every entry named from args[start:], each with its imports, keeping
-# one copy of a module that several entries share.
-fn load_sources(args: list[str], start: int) -> list[str] {
+# drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
+fn drop_ext(path: str) -> str {
+	if not has_suffix(path, ".zg") {
+		return path
+	}
+	b := list[byte](path)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < b.len() - 3 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# load_sources loads every named entry with its imports, keeping one copy of a module
+# that several entries share.
+fn load_sources(files: list[str]) -> list[str] {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
-	mut i := start
-	for i < args.len() {
-		load_into(args[i], dir_of(args[i]), seen, srcs)
-		i = i + 1
+	for f in files {
+		load_into(f, dir_of(f), seen, srcs)
 	}
 	return srcs
 }
@@ -251,4 +377,16 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 		argv.append(rt + "/" + u)
 	}
 	return argv
+}
+
+# --- fmt / lint ------------------------------------------------------------------------
+
+fn run_fmt(files: list[str]) {
+	io.ewrite("zerg: fmt is not implemented yet\n")
+	__zrt_exit(2)
+}
+
+fn run_lint(files: list[str]) {
+	io.ewrite("zerg: lint is not implemented yet\n")
+	__zrt_exit(2)
 }

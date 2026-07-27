@@ -4,8 +4,8 @@
 " covers the core groups 1-7: nop, lexical (comments/identifiers/keywords),
 " literals, operators, functions, control flow, and types — plus the group-12
 " danger surface (`unsafe` / `asm`, in an alarming colour) and cross-cutting
-" polish: call highlighting, TODO markers, invalid-escape errors, brace folding,
-" and multi-line sync.
+" polish: call highlighting, TODO markers, invalid-escape errors, and sync.
+" Folding lives in the ftplugin — see the note above `syntax sync` below.
 "
 " Maintainer: Zerg project
 " Filenames:  *.zg
@@ -145,13 +145,16 @@ syntax match zergType "\<\u\w*\>"
 " The match wildcard `_`, highlighted as special.
 syntax match zergWildcard "\<_\>"
 
-" --- folding & sync ------------------------------------------------------------
+" --- sync ----------------------------------------------------------------------
 
-" Fold on braces (enable with `setlocal foldmethod=syntax`; the ftplugin does).
-syntax region zergFold start="{" end="}" transparent fold
+" Folding is NOT done here. A syntax fold always begins on the line its region
+" opens on, which would hide the `fn name(...)` line of the function being
+" folded; the ftplugin's 'foldexpr' folds the body and leaves that line visible.
+" This file still carries the folding's other half: the syntax items below are
+" what tell a brace inside a string or a comment from one that opens a block.
 
 " Zerg has no multi-line tokens, but resync a little above the screen top so
-" brace folds and any long line stay correct when scrolling.
+" folds and any long line stay correct when scrolling.
 syntax sync minlines=50
 
 " --- highlight links ------------------------------------------------------------

@@ -145,6 +145,49 @@ syntax match zergType "\<\u\w*\>"
 " The match wildcard `_`, highlighted as special.
 syntax match zergWildcard "\<_\>"
 
+" --- example code inside a comment ---------------------------------------------
+
+" A fenced block in a comment is Zerg, and reads as Zerg:
+"
+"   # ```zerg
+"   # fn main() {
+"   #     print greet("world")
+"   # }
+"   # ```
+"
+" The fence is explicit on purpose, the way Rust marks a doc example rather than
+" the way Go infers one from indentation. A comment carries both kinds of block —
+" source, and a sample of what the program PRINTS — and inferring from layout
+" alone highlights the second one as if it were the first: in this repo's own
+" `cli` module a pasted help screen would light up `Options:` as a field name,
+" `--output` as operators and `VALUE` as a type. Wrong highlighting is worse than
+" none, so the author says which is which and the highlighter never guesses.
+"
+" The '#' that opens each line stays a comment; everything after it is code. It is
+" matched at the START of the line, so it wins over the ordinary comment rule
+" (which begins at the '#' itself, one column later), while a '#' further along
+" the line is still an ordinary comment — the example's own comments keep working.
+" The contents are named rather than taken as `TOP`. TOP would be every non-contained item
+" — which includes zergCommentBar's competitor, the ordinary comment rule — and that one
+" swallows the line from the '#' onward, leaving the example a comment again. The bar has
+" to be the item that claims the '#', so the set is explicit and the bar leads it.
+"
+" Being explicit means it can be forgotten, and it had been: zergDocComment was missing, so
+" a '##' line inside an example went unhighlighted, the ordinary comment rule refusing '##'
+" on purpose. Anything added above belongs here too.
+syntax match zergCommentBar "^\s*#" contained
+
+syntax cluster zergCodeItems contains=zergCommentBar,zergComment,zergDocComment,
+      \zergDecorator,zergStatement,zergKeyword,zergDanger,zergOperator,zergType,
+      \zergBoolean,zergConstant,zergNumber,zergFloat,zergCharacter,zergString,
+      \zergRawString,zergFString,zergDeclName,zergCall,zergWildcard
+
+syntax region zergCommentCode
+      \ matchgroup=zergCommentFence
+      \ start="^\s*#\s*```\%(\w\+\)\?\s*$"
+      \ end="^\s*#\s*```\s*$"
+      \ contains=@zergCodeItems
+
 " --- sync ----------------------------------------------------------------------
 
 " Folding is NOT done here. A syntax fold always begins on the line its region
@@ -182,6 +225,8 @@ highlight default link zergWildcard   Special
 highlight default link zergTodo       Todo
 highlight default link zergEscapeError Error
 highlight default link zergDecorator  PreProc
+highlight default link zergCommentBar   Comment
+highlight default link zergCommentFence SpecialComment
 highlight default link zergFormatSpec Special
 highlight default link zergFormatConv Special
 

@@ -84,3 +84,23 @@ jobs:
             exit 1
           fi
           printf '\nAll %d examples built and ran cleanly.\n' "${#examples[@]}"
+
+      # --- 5. the seed's actual contract: it builds the self-hosting compiler ----
+      # Nothing else in this pipeline exercises src/compiler/, so a seed change that
+      # breaks the one thing the seed exists for would otherwise pass CI.
+      - name: Build the self-hosting compiler with the seed
+        run: make build
+
+      # --- 6. the corpus the self-hosting compiler owns --------------------------
+      # Best-effort: the corpus is a submodule declared over SSH, so a fork without
+      # access skips it rather than failing.
+      - name: Fetch test-data submodule (best-effort, over HTTPS)
+        id: corpus_fetch
+        continue-on-error: true
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Run the corpus with the self-hosting compiler
+        if: steps.corpus_fetch.outcome == 'success'
+        run: make corpus

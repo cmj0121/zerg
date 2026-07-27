@@ -34,9 +34,3 @@ func TestReservedLayoutDecoratorsNotYetSupported(t *testing.T) {
 	wantErr(t, "#[packed]\nstruct P {\n\tx: int\n}", "#[packed] is not yet supported")
 	wantErr(t, "#[repr]\nstruct P {\n\tx: int\n}", "#[repr] is not yet supported")
 }
-
-// TestUnknownDecoratorInUnsafeGroup checks the pass descends into a module-level
-// `unsafe { }` group, so a bad decorator on an item inside it is still caught.
-func TestUnknownDecoratorInUnsafeGroup(t *testing.T) {
-	wantErr(t, "unsafe {\n#[bogus]\nstruct P {\n\tx: int\n}\n}", `unknown decorator "bogus"`)
-}

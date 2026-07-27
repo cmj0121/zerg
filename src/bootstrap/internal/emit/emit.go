@@ -1683,10 +1683,6 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.guardExpr(n)
 	case *ast.FStr:
 		return e.fstrExpr(n)
-	case *ast.UnsafeExpr:
-		return e.unsafeExpr(n)
-	case *ast.AsmExpr:
-		return e.asmExpr(n)
 	case *ast.IsExpr:
 		// `err is ValueError` (and the other built-in error kinds) dispatches on the Err's
 		// kind tag — the documented way to distinguish an erased error (docs/errors.md,
@@ -1718,33 +1714,6 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(x.Span(), "internal: unsupported expression node %T", x)
 		return "0"
 	}
-}
-
-// unsafeExpr lowers the function-body `unsafe { block }` block-expression (GRAMMAR
-// group 12): the unsafe marker guides the front-end only (a foreign call is legal
-// inside), so the backend simply yields the block's value. It renders as a GNU
-// statement-expression running the block's statements and yielding its trailing
-// expression, mirroring guardExpr's inline-block shape.
-func (e *emitter) unsafeExpr(n *ast.UnsafeExpr) string {
-	stmts := n.Body.Stmts
-	var last ast.Expr
-	if k := len(stmts); k > 0 {
-		if es, ok := stmts[k-1].(*ast.ExprStmt); ok {
-			last, stmts = es.X, stmts[:k-1]
-		}
-	}
-	body := e.capture(func() {
-		e.pushScope()
-		for _, s := range stmts {
-			e.stmt(s)
-		}
-		e.popScope()
-	})
-	value := "0"
-	if last != nil {
-		value = e.expr(last)
-	}
-	return fmt.Sprintf("({ %s%s; })", body, value)
 }
 
 // exprList renders a comma-separated list of expressions.
@@ -2268,10 +2237,7 @@ func (e *emitter) variantTag(subjT sema.Type, name string) int {
 }
 
 func (e *emitter) call(n *ast.Call) string {
-	if s, ok := e.ptrCallEmit(n); ok {
-		return s
-	}
-	// a primitive conversion `T(x)`; after ptrCallEmit, which owns `uint(p)`.
+	// a primitive conversion `T(x)`.
 	if s, ok := e.convCallEmit(n); ok {
 		return s
 	}

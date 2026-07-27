@@ -78,30 +78,6 @@ func TestTupleWithListTypeDiagnostic(t *testing.T) {
 	}
 }
 
-// --- A5: ptr[T]? --------------------------------------------------------------
-
-// TestPtrOptDiagnostic: `ptr[T]?` is not a real type (GRAMMAR group 12) — a raw pointer
-// is already nullable — so it is rejected rather than silently wrapped as a tagged
-// optional.
-func TestPtrOptDiagnostic(t *testing.T) {
-	code, _, diags := Compile("fn main() {\n\tunsafe {\n\t\tx: int = 1\n\t\tp: ptr[int]? = addr(x)\n\t\tprint 0\n\t}\n}\n")
-	if len(diags) == 0 || code != "" {
-		t.Fatalf("ptr[T]? must gate; diags=%v code=%q", diags, code)
-	}
-	if !strings.Contains(diags[0].Msg, "may not be optional") {
-		t.Fatalf("unexpected diagnostic: %v", diags[0].Msg)
-	}
-}
-
-// TestPtrTypeStillCompiles: a plain `ptr[int]` binding still type-checks — the optional
-// rejection does not touch the ordinary raw-pointer type.
-func TestPtrTypeStillCompiles(t *testing.T) {
-	_, _, diags := Compile("fn main() {\n\tunsafe {\n\t\tx: int = 1\n\t\tp: ptr[int] = addr(x)\n\t\tprint 0\n\t}\n}\n")
-	if len(diags) != 0 {
-		t.Fatalf("a plain ptr[int] should compile, got: %v", diags)
-	}
-}
-
 // --- A6: `with <non-Ref resource>` (GATE) ---------------------------------------
 
 // TestWithPodResourceDiagnostic: a `with` over a POD resource (no automatic cleanup)

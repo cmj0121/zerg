@@ -128,10 +128,6 @@ func (c *checker) synthExpr(e ast.Expr) Type {
 		return c.inferRecv(n)
 	case *ast.FStr:
 		return c.inferFStr(n)
-	case *ast.UnsafeExpr:
-		return c.inferUnsafe(n)
-	case *ast.AsmExpr:
-		return c.inferAsm(n)
 	case *ast.IfExpr:
 		return c.inferIfExpr(n)
 	case *ast.Block:
@@ -155,18 +151,6 @@ func (c *checker) inferFStr(n *ast.FStr) Type {
 		}
 	}
 	return Str
-}
-
-// inferUnsafe types the function-body `unsafe { block }` block-expression (GRAMMAR
-// group 12): raw operations — `unsafe fn` calls, `asm`, raw-pointer ops — are legal
-// inside, and it yields the block's value. It marks the body an unsafe context so an
-// `unsafe fn` call within it is accepted; outside such a context that same call is
-// rejected.
-func (c *checker) inferUnsafe(n *ast.UnsafeExpr) Type {
-	saved := c.inUnsafe
-	c.inUnsafe = true
-	defer func() { c.inUnsafe = saved }()
-	return c.synthBlock(n.Body)
 }
 
 // synthBlock types a block as an expression and returns its value type: the type
@@ -279,12 +263,6 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 	// a module constant (a top-level ':=', Phase 1g S3) is a value in the module
 	// surface: its type is filled by checkModuleConsts before any body is checked.
 	if sym := c.module.lookup(n.Name); sym != nil && (sym.Kind == SymConst || sym.Kind == SymVar) {
-		// a module-level mutable global (a `mut` inside an unsafe group) is shared
-		// mutable state, so even READING it requires an unsafe context (Phase 1h U2);
-		// a plain top-level `:=` constant stays freely readable.
-		if sym.Kind == SymVar && sym.Mutable {
-			c.unsafeOp(n.Span(), "reading a mutable global")
-		}
 		return sym.Type
 	}
 	// A bare top-level function name used as a value is a first-class function value
@@ -462,14 +440,9 @@ func (c *checker) lvalue(e ast.Expr) (t Type, mutable bool, name string, ok bool
 			c.checkLive(sym, x.Span(), x.Name)
 			return sym.typ, sym.mutable, x.Name, true
 		}
-		// A module-level binding assigned from a body: a mutable global (a `mut` inside
-		// a module unsafe group, Phase 1h U2) is a writable place; a top-level `:=`
-		// constant reports as immutable so the reassignment is rejected. Writing a
-		// mutable global is shared-state mutation, so it too requires an unsafe context.
+		// A module-level binding assigned from a body: a top-level `:=` constant reports
+		// as immutable so the reassignment is rejected.
 		if sym := c.module.lookup(x.Name); sym != nil && (sym.Kind == SymVar || sym.Kind == SymConst) {
-			if sym.Kind == SymVar && sym.Mutable {
-				c.unsafeOp(x.Span(), "writing a mutable global")
-			}
 			return sym.Type, sym.Mutable, x.Name, true
 		}
 		c.errorf(x.Span(), "undefined name %q", x.Name)

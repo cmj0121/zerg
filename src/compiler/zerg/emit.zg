@@ -19,6 +19,11 @@ import "strconv"
 struct Emitter {
 	env_names: list[str]
 	env_tys: list[Ty]
+	# env_cnames is each binding's C NAME. A Zerg binding may shadow one already in scope
+	# — `mut n := n` rebinding a parameter is the ordinary way to get a mutable copy — but
+	# C has no shadowing inside a function, so the second one has to be spelled
+	# differently or the C compiler rejects the redefinition.
+	env_cnames: list[str]
 	sig_names: list[str]
 	sig_rets: list[Ty]
 	sig_hasret: list[bool]
@@ -123,12 +128,50 @@ fn c_is_bool_op(oper: str) -> bool {
 fn c_reset_env(mut &em: Emitter) {
 	em.env_names = []
 	em.env_tys = []
+	em.env_cnames = []
 	em.ref_names = []
 }
 
 fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
+	cname := c_fresh_cname(em, name)
 	em.env_names.append(name)
 	em.env_tys.append(t)
+	em.env_cnames.append(cname)
+}
+
+# c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
+# that is already taken by a binding still in scope.
+fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
+	base := "zg_" + name
+	mut cand := base
+	mut n := 0
+	for c_cname_taken(em, cand) {
+		n = n + 1
+		cand = base + "__" + strconv.to_string(n, 10)
+	}
+	return cand
+}
+
+fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
+	for c in em.env_cnames {
+		if c == cand {
+			return true
+		}
+	}
+	return false
+}
+
+# c_var_cname resolves a source name to the C name its binding took — the innermost one,
+# so a shadowing binding wins from its declaration onward.
+fn c_var_cname(mut &em: Emitter, name: str) -> str {
+	mut i := em.env_names.len() - 1
+	for i >= 0 {
+		if em.env_names[i] == name {
+			return em.env_cnames[i]
+		}
+		i = i - 1
+	}
+	return "zg_" + name
 }
 
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
@@ -750,7 +793,7 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return "(*zg_" + n + ")"
 	}
-	return "zg_" + n
+	return c_var_cname(em, n)
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
@@ -1002,6 +1045,36 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 }
 
 # c_pushes emits a zrt_list_push per element of a list literal.
+# c_elem_exprs renders a list literal's elements in the CURRENT scope, before a binding
+# that would shadow one of the names they mention enters it.
+fn c_elem_exprs(mut &em: Emitter, lit: Expr) -> list[str] {
+	mut out: list[str] = []
+	match lit {
+		EListLit(elems) => c_elem_exprs_into(em, elems, out)
+		_ => c_skip()
+	}
+	return out
+}
+
+fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], mut &out: list[str]) {
+	for e in elems {
+		out.append(c_expr(em, e, c_nosub()))
+	}
+}
+
+fn c_skip() {
+	nop
+}
+
+# c_pushes_strs assembles the pushes from already-rendered element expressions.
+fn c_pushes_strs(target: str, et: str, vals: list[str], ind: str) -> str {
+	mut out := ""
+	for v in vals {
+		out = out + ind + "{ " + et + " zg_le = " + v + "; zrt_list_push(&" + target + ", &zg_le); }\n"
+	}
+	return out
+}
+
 fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
 	return match lit {
 		EListLit(elems) => c_pushes_of(em, target, et, elems, ind)
@@ -1042,28 +1115,40 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	if not has_type {
 		eff = c_infer(em, ival)
 	}
-	c_add_var(em, name, eff)
 	if c_is_list(eff) {
 		return c_let_list(em, name, eff, ival, ind)
 	}
-	return ind + c_type(eff) + " zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
+	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
+	# right-hand side names the OUTER n, and resolving it after would make the new
+	# variable initialize itself.
+	val := c_expr(em, ival, c_nosub())
+	c_add_var(em, name, eff)
+	return ind + c_type(eff) + " " + c_var_cname(em, name) + " = " + val + ";\n"
 }
 
 # c_let_list declares a list binding: a list-literal initializer becomes an init plus a
 # push per element; any other initializer (a call or another list) is a plain copy.
 fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
 	em.used_rt = true
+	# as in c_let: the initializer names what was in scope BEFORE this binding
 	if c_is_listlit(ival) {
 		et := c_type(c_list_elem(eff))
-		mut out := ind + "zrt_list zg_" + name + "; zrt_list_init(&zg_" + name + ", sizeof(" + et + "), &zg_listvt);\n"
-		return out + c_pushes(em, "zg_" + name, et, ival, ind)
+		vals := c_elem_exprs(em, ival)
+		c_add_var(em, name, eff)
+		cname := c_var_cname(em, name)
+		mut out := ind + "zrt_list " + cname + "; zrt_list_init(&" + cname + ", sizeof(" + et + "), &zg_listvt);\n"
+		return out + c_pushes_strs(cname, et, vals, ind)
 	}
-	if c_is_lvalue(ival) {
+	val := c_expr(em, ival, c_nosub())
+	lv := c_is_lvalue(ival)
+	c_add_var(em, name, eff)
+	cname := c_var_cname(em, name)
+	if lv {
 		# value semantics: binding from an existing list makes an independent copy so a
 		# later append does not alias the source (leak-style still never drops)
-		return ind + "zrt_list zg_" + name + "; zrt_list_copy(&zg_" + name + ", &(" + c_expr(em, ival, c_nosub()) + "));\n"
+		return ind + "zrt_list " + cname + "; zrt_list_copy(&" + cname + ", &(" + val + "));\n"
 	}
-	return ind + "zrt_list zg_" + name + " = " + c_expr(em, ival, c_nosub()) + ";\n"
+	return ind + "zrt_list " + cname + " = " + val + ";\n"
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
@@ -1299,7 +1384,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

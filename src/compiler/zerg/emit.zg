@@ -301,12 +301,11 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 	}
 }
 
-# c_param_is_ref reports whether parameter `idx` of function `fname` is a mutable
-# reference (so a call must pass its argument's address).
 # c_param_row finds a parameter's row in the tables c_build_sigs filled, or -1 when the
 # function has no such parameter. Everything asked ABOUT a parameter — is it a reference,
-# does it have a default, what is that default — reads its row, so the search happens once
-# per question rather than once per field, and the three answers cannot drift apart.
+# what is its type, does it have a default, what is that default — reads its row, so the
+# search happens once per question rather than once per field, and the answers cannot
+# drift apart.
 #
 # c_build_sigs appends a function's parameters CONTIGUOUSLY in index order, so the row a
 # function's parameter 0 sits at fixes every other one; the scan below stops as soon as it
@@ -328,14 +327,6 @@ fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 		i = i + 1
 	}
 	return - 1
-}
-
-fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
-	row := c_param_row(em, fname, idx)
-	if row < 0 {
-		return false
-	}
-	return em.pr_ref[row]
 }
 
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
@@ -471,7 +462,96 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 		em.used_rt = true
 		return "zg_empty_list(sizeof(" + c_type(c_list_elem(fty)) + "))"
 	}
-	return c_expr(em, arg, sb)
+	return c_copied(em, fty, arg, sb)
+}
+
+# --- value semantics -----------------------------------------------------------------------
+#
+# "Two names of a value type never alias: writing through one is never visible through the
+# other" (docs/memory.md). A scalar or a plain struct gets that from C's own `=`. A `list`
+# does not: it is a handle onto a heap buffer, so a C `=` hands out a second name for the
+# SAME elements — and a struct holding one inherits the problem however deep it sits.
+#
+# So a copy of anything that holds a list goes through a generated per-type helper, and
+# every place a value is COPIED calls it: a binding, an assignment, a field of a struct
+# being built. The helper is where the rule lives, rather than each of those sites knowing
+# how to walk a type.
+#
+# Why the bug survived so long: appending through a shared buffer is invisible. A zrt_list
+# carries its own length, so a push bumps only the writer's, and the reader — whose length
+# never moved — sees nothing. Every list the compiler's own source touches is append-only,
+# so its own tests could never have caught this. It takes a write to an index the other
+# holder can already see, which is what test-data/codegen/value_semantics.zg does.
+
+# c_needs_copy reports whether copying a value of this type has to do more than a C `=`.
+fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
+	if c_is_list(t) {
+		return true
+	}
+	nm := c_named_of(t)
+	if nm == "" {
+		return false
+	}
+	# A struct cannot contain itself BY VALUE — that would have no finite size — so this
+	# recursion always terminates. A self-referential type reaches itself through a list,
+	# which answers true above without recursing.
+	mut i := 0
+	for i < em.fld_struct.len() {
+		if em.fld_struct[i] == nm and c_needs_copy(em, em.fld_ty[i]) {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# c_copied renders an expression as an INDEPENDENT copy of itself, when its type needs one.
+#
+# A freshly built value — a call's result, a constructor, a literal — is already nobody
+# else's, so copying it would only cost. Only an lvalue can be a second name for something.
+fn c_copied(mut &em: Emitter, t: Ty, e: Expr, sb: Subst) -> str {
+	rendered := c_expr(em, e, sb)
+	if not c_is_lvalue(e) or not c_needs_copy(em, t) {
+		return rendered
+	}
+	return c_copy_of(em, t, rendered)
+}
+
+# c_copy_of is HOW a copy is spelled, given something already rendered: a list through the
+# runtime, anything else through its generated helper. It is separate from c_copied so
+# that the helpers below spell a copy the same way every call site does — the rule for
+# what a deep copy IS lives in one function, and a second kind of type that needs one is
+# added here alone.
+fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
+	if c_is_list(t) {
+		em.used_rt = true
+		return "({ zrt_list zg_cp; zrt_list_copy(&zg_cp, &(" + x + ")); zg_cp; })"
+	}
+	return "zg_copy_" + c_named_of(t) + "(" + x + ")"
+}
+
+# c_copy_helpers emits one `zg_copy_<T>` per struct that holds a list, after the typedefs
+# and before anything that calls them.
+fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
+	mut out := ""
+	for sd in f.structs {
+		if c_needs_copy(em, TNamed(sd.name)) {
+			out = out + c_copy_helper(em, sd)
+		}
+	}
+	return out
+}
+
+fn c_copy_helper(mut &em: Emitter, sd: StructDecl) -> str {
+	nm := "zg_" + sd.name
+	mut out := "static " + nm + " zg_copy_" + sd.name + "(" + nm + " v) {\n"
+	out = out + "    " + nm + " r = v;\n"
+	for fd in sd.fields {
+		if c_needs_copy(em, fd.ty) {
+			out = out + "    r.zg_" + fd.name + " = " + c_copy_of(em, fd.ty, "v.zg_" + fd.name) + ";\n"
+		}
+	}
+	return out + "    return r;\n}\n\n"
 }
 
 # c_struct_typedef emits a value struct as a C typedef with zg_-mangled fields.
@@ -905,8 +985,11 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
 	}
 	if meth == "append" {
+		# the element is copied INTO the list, so the list owns it and the caller's name
+		# for it goes on being its own
 		et := c_type(c_list_elem(tty))
-		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+		el := c_copied(em, c_list_elem(tty), args[0], sb)
+		return "({ " + et + " zg_le = " + el + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 	}
 	return tgt
 }
@@ -916,20 +999,11 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 # index 0 there — get that wrong and a `mut &` argument is passed by value to the slot
 # after the one that wanted its address.
 fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: Subst) -> str {
-	mut out := c_expr(em, target, sb)
-	mut i := 0
-	for i < args.len() {
-		mut a := c_expr(em, args[i], sb)
-		if c_param_is_ref(em, key, i + 1) {
-			a = "&(" + a + ")"
-		}
-		out = out + ", " + a
-		i = i + 1
-	}
-	# the receiver already stands where parameter 0 does, so the first argument a method
-	# can omit is at args.len() + 1 — and there is always a leading argument to separate
+	# the receiver is parameter 0 and is passed by value, so it is copied like any other;
+	# the written arguments then start at 1, and there is always a leading one to separate
 	# from, which a free call cannot assume
-	return out + c_default_args(em, key, args.len() + 1, true)
+	recv := c_copied(em, c_param_ty(em, key, 0), target, sb)
+	return recv + c_args_from(em, key, 1, args, true, sb)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -1008,20 +1082,55 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 # c_call_args emits a call's arguments, taking the address of any argument bound to a
 # mutable-reference parameter (which is a C pointer).
 fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str {
+	return c_args_from(em, fname, 0, args, false, sb)
+}
+
+# c_args_from renders a call's written arguments against the parameters starting at `base`,
+# then the defaults for whatever was left off. `base` is 0 for a free call and 1 for a
+# method, whose receiver already stands where parameter 0 does — the shift is written down
+# once here rather than in each caller, because getting it wrong passes a `mut &` argument
+# by value into the slot after the one that wanted its address.
+fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bool, sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
-		if i > 0 {
+		if lead or i > 0 {
 			out = out + ", "
 		}
-		mut a := c_expr(em, args[i], sb)
-		if c_param_is_ref(em, fname, i) {
-			a = "&(" + a + ")"
-		}
-		out = out + a
+		out = out + c_arg(em, key, base + i, args[i], sb)
 		i = i + 1
 	}
-	return out + c_default_args(em, fname, args.len(), out != "")
+	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+}
+
+# c_arg renders ONE argument against the parameter it fills. A `mut &` parameter takes the
+# caller's variable itself — that is the whole point of the writeback — and every other
+# one takes a value the callee OWNS, which is why it is copied.
+#
+# Copying here rather than at the `return` is what lets a function hand back a parameter:
+# once the callee's copy is its own, returning it aliases nothing, and a call's result can
+# go on being treated as nobody else's. Copying at the return instead would have to copy a
+# local that is about to die, which is pure waste and needs escape analysis to avoid.
+fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
+	# the one place that reads the row directly rather than through the per-column
+	# helpers: it needs two answers about the same parameter, and asking twice would walk
+	# the whole program's parameter table twice for every argument of every call
+	row := c_param_row(em, fname, idx)
+	if row >= 0 and em.pr_ref[row] {
+		return "&(" + c_expr(em, a, sb) + ")"
+	}
+	if row < 0 {
+		return c_expr(em, a, sb)
+	}
+	return c_copied(em, em.pr_ty[row], a, sb)
+}
+
+fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return TUnknown
+	}
+	return em.pr_ty[row]
 }
 
 # c_default_args fills in the parameters a call left off the end, in declaration order,
@@ -1401,11 +1510,9 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 		mut out := ind + "zrt_list_init(&(" + lv + "), sizeof(" + et + "), &zg_listvt);\n"
 		return out + c_pushes(em, "(" + lv + ")", et, rhs, ind)
 	}
-	if c_is_list(lt) and c_is_lvalue(rhs) {
-		# value semantics: assigning an existing list makes an independent copy
-		return ind + "zrt_list_copy(&(" + lv + "), &(" + c_expr(em, rhs, c_nosub()) + "));\n"
-	}
-	return ind + lv + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+	# Every other assignment copies through the one rule — including a list, which used to
+	# have its own branch here saying the same thing a second way.
+	return ind + lv + " = " + c_copied(em, lt, rhs, c_nosub()) + ";\n"
 }
 
 # c_pushes emits a zrt_list_push per element of a list literal.
@@ -1485,7 +1592,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
 	# right-hand side names the OUTER n, and resolving it after would make the new
 	# variable initialize itself.
-	val := c_expr(em, ival, c_nosub())
+	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff)
 	return ind + c_type(eff) + " " + c_var_cname(em, name) + " = " + val + ";\n"
 }
@@ -1503,16 +1610,11 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 		mut out := ind + "zrt_list " + cname + "; zrt_list_init(&" + cname + ", sizeof(" + et + "), &zg_listvt);\n"
 		return out + c_pushes_strs(cname, et, vals, ind)
 	}
-	val := c_expr(em, ival, c_nosub())
-	lv := c_is_lvalue(ival)
+	# Anything else — another list, a call's result — binds through the one copy rule, the
+	# same one every other site uses.
+	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff)
-	cname := c_var_cname(em, name)
-	if lv {
-		# value semantics: binding from an existing list makes an independent copy so a
-		# later append does not alias the source (leak-style still never drops)
-		return ind + "zrt_list " + cname + "; zrt_list_copy(&" + cname + ", &(" + val + "));\n"
-	}
-	return ind + "zrt_list " + cname + " = " + val + ";\n"
+	return ind + "zrt_list " + c_var_cname(em, name) + " = " + val + ";\n"
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
@@ -1859,6 +1961,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 		types = types + c_refbox_helpers(f.enums[i])
 		i = i + 1
 	}
+	# after the typedefs, because a helper names the struct it copies, and before the
+	# prototypes and bodies, which are what call them
+	types = types + c_copy_helpers(em, f)
 
 	mut protos := ""
 	i = 0

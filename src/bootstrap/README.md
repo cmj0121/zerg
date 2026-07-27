@@ -26,20 +26,23 @@ nonzero — enough to locate the problem, no more.
 ## The bootstrap chain
 
 ```text
-make build                        # or by hand, the two steps it runs:
+make build                        # or by hand, the three steps it runs:
 go build -o bin/zerg0 ./cmd/zerg  # 1. the Go seed — named zerg0, not zerg
-zerg0 build src/compiler/zergc.zg -o bin/zerg
-                                  # 2. the seed builds the self-hosting compiler
-zerg build <out> <file.zg>...     # 3. zerg builds programs — and itself
+zerg0 build src/compiler/zergc.zg -o bin/.zerg-stage1
+                                  # 2. the seed builds an INTERMEDIATE compiler
+zerg build --emit bin -o bin/zerg src/compiler/zergc.zg
+                                  # 3. the intermediate builds the zerg that ships
 ```
 
-Step 3 closing on itself is the point of the whole directory: after that, the seed is only
-needed to re-derive `zerg` from source on a machine that has no `zerg` yet.
+The compiler that ships is built by a compiler written in Zerg, not by the seed — the seed
+only has to produce an intermediate good enough to build the real one. That keeps the seed
+off the delivery path, and it means every build exercises the self-host path. After that,
+the seed is only needed to re-derive `zerg` on a machine that has no `zerg` yet.
 
 ## What the seed supports
 
 Every entry below is exercised by the self-host source (`src/compiler/zergc.zg`,
-`src/compiler/zerg/*.zg`) or by the stdlib modules it imports (`io`, `ascii`, `strconv`),
+`src/compiler/zerg/*.zg`) or by the stdlib modules it imports (`io`, `ascii`, `strconv`, `cli`),
 which is why it is still here.
 
 | Feature                         | Notes                                                             |
@@ -125,6 +128,7 @@ asked to lower it. Narrowing the parser is a separate pass.
 src/bootstrap/
   cmd/zerg/        # the build-only driver: flags, cc invocation, exit codes
   internal/
+    token/         # token kinds and their spellings
     lexer/         # source text -> tokens
     parser/        # tokens -> AST
     ast/           # AST node types

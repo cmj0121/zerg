@@ -39,7 +39,10 @@ var Files embed.FS
 // runtime is needed (fmt.c carries the Phase 1f display/Format helpers). The
 // concurrency units (sched.c + a context switch) are added separately by
 // ConcurrencyCUnits.
-var coreCUnits = []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"}
+// map.c is NOT here: no compiler can emit a map value today (both reject the literal),
+// so linking it put ~9KB of unreachable code in every binary. The source stays — the
+// feature is specified — but nothing links it until something can call it.
+var coreCUnits = []string{"alloc.c", "ref.c", "list.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"}
 
 // Materialize writes the whole embedded runtime tree (header, core units, and the
 // concurrency sources) into dir and returns the paths of the CORE C translation

@@ -192,7 +192,8 @@ an `Atomic[int]` cell whose contents mutate through sequentially-consistent oper
 
 ## `testing`
 
-Assertion helpers for `#[test]` functions ([`zerg test`](package.md)). A satisfied assertion is `nil`; a
+Assertion helpers for `#[test]` functions. **[not yet]** — no compiler builds a test binary
+today. A satisfied assertion is `nil`; a
 violated one `raise`s so an enclosing `guard` recovers it, or it aborts with the message.
 
 | Function                                      | Summary                   |

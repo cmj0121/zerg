@@ -328,6 +328,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SPrint(parse_expr(p))
 	}
+	if k == Raise {
+		p_advance(p)
+		return SRaise(parse_expr(p))
+	}
 	if k == Return {
 		return parse_return(p)
 	}

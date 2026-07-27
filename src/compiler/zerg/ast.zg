@@ -89,13 +89,21 @@ struct Param {
 	is_ref: bool
 }
 
-# FnDecl is a function declaration: name, parameters, an optional return type
-# (has_ret false means it returns nothing), the body block, and whether it was declared
-# `pub`. Visibility does not change the emitted C — every function is one flat C symbol —
-# but the linter needs it: an unused PRIVATE function is dead code, while an unused public
-# one is simply part of a module's interface.
+# FnDecl is a function declaration: name, the type it is a METHOD of ("" for a free
+# function), parameters, an optional return type (has_ret false means it returns nothing),
+# the body block, and whether it was declared `pub`. Visibility does not change the
+# emitted C — but the linter needs it: an unused PRIVATE function is dead code, while an
+# unused public one is simply part of a module's interface.
+#
+# A method is a plain FnDecl with `recv` set. The parser flattens an `impl T { … }` block
+# into these, prepending a `this: T` parameter, so the receiver is an ordinary first
+# argument from here down and nothing else in the compiler has to know about impls. Only
+# the C NAME differs: a free function is one flat `zg_<name>`, a method is
+# `zg_<T>_<name>`, which is also what keeps a method off the flat name space a program
+# shares with every module it imports.
 struct FnDecl {
 	name: str
+	recv: str
 	params: list[Param]
 	has_ret: bool
 	ret: Ty
@@ -163,7 +171,7 @@ pub fn dump_ast(f: File) -> str {
 		}
 	}
 	for fn_d in f.fns {
-		out = out + "\t" + fn_kind(fn_d) + " " + fn_d.name + "(" + params_of(fn_d) + ")"
+		out = out + "\t" + fn_kind(fn_d) + " " + qual_name(fn_d) + "(" + params_of(fn_d) + ")"
 		if fn_d.has_ret {
 			out = out + " -> " + ty_name(fn_d.ret)
 		}
@@ -178,6 +186,15 @@ fn fn_kind(f: FnDecl) -> str {
 		return "pub fn"
 	}
 	return "fn"
+}
+
+# qual_name shows a method as `Type.name`, so the `--emit ast` view says which impl a
+# function came from — the tree is otherwise flat and two types may name a method alike.
+fn qual_name(f: FnDecl) -> str {
+	if f.recv != "" {
+		return f.recv + "." + f.name
+	}
+	return f.name
 }
 
 fn params_of(f: FnDecl) -> str {

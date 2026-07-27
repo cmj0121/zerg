@@ -184,13 +184,19 @@ needs cannot get through that. `make corpus` and `make lint` are the checks on t
   conversions (`int`/`byte`/`str`/`list[T]`(x)), `match` (literal / bind / wildcard /
   constructor patterns, optional guard), if-expressions
 - types: `int`, `float`, `str`, `bool`, `byte`, `nil`, `list[T]`, named struct/enum,
-  `Result[T]`
+  `Result[T]`, `This` inside an `impl`
+- inherent `impl T { … }` methods with a **value receiver**: the parser flattens the block
+  into ordinary functions carrying a `this: T` first parameter, and the C name is
+  `zg_<T>_<name>` rather than the flat `zg_<name>` a free function gets. A `mut fn`
+  (mutable receiver) is _not_ in the subset — take a `mut &` parameter, or return a new
+  value, which is what a chainable builder does anyway.
 - the `__zrt_*` runtime intrinsics the bundled stdlib lowers onto
 
 **Strippable** (NOT in the subset — the self-host source never uses them): closures /
-first-class functions; coroutines (`spawn` / `chan` / `select`); `map[K,V]`; `spec` /
-`impl` and generic _function_ definitions; `unsafe` / `asm` / `ptr`; f-strings and command
-literals; `with` / `defer` / `del`; optionals (`T?` / `??` / `!`) beyond `Result`. The
+first-class functions; coroutines (`spawn` / `chan` / `select`); `map[K,V]`; `spec`
+(and so `impl Spec for T`) and generic _function_ definitions; `unsafe` / `asm` / `ptr`;
+f-strings and command literals; `with` / `defer` / `del`; optionals (`T?` / `??` / `!`)
+beyond `Result`. The
 non-build subcommands (`fmt` / `lint` / `test`) are also dropped — the minimal seed is
 `zerg build` only; the self-host compiler can reimplement the tools in Zerg later.
 

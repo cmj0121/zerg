@@ -185,16 +185,39 @@ fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 	return TUnknown
 }
 
+# c_sig_key is how a function is looked up in the signature and parameter tables. A free
+# function is keyed by its bare name; a method by `Type#name`. The '#' cannot occur in an
+# identifier, so a method can never be mistaken for the free function of the same name —
+# which is the whole point, since `App.parse` and the compiler's own `parse` must coexist.
+fn c_sig_key(recv: str, name: str) -> str {
+	if recv == "" {
+		return name
+	}
+	return recv + "#" + name
+}
+
+# c_fn_cname is the C symbol a function is emitted as. Free functions share one flat
+# `zg_<name>` space with every module of the program; a method is `zg_<Type>_<name>`, off
+# that space and unable to collide with it, since a type name is PascalCase and so cannot
+# be confused with the snake_case free functions it sits beside.
+fn c_fn_cname(recv: str, name: str) -> str {
+	if recv == "" {
+		return "zg_" + name
+	}
+	return "zg_" + recv + "_" + name
+}
+
 fn c_build_sigs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.fns.len() {
 		fn_i := f.fns[i]
-		em.sig_names.append(fn_i.name)
+		key := c_sig_key(fn_i.recv, fn_i.name)
+		em.sig_names.append(key)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
 		mut j := 0
 		for j < fn_i.params.len() {
-			em.pr_fn.append(fn_i.name)
+			em.pr_fn.append(key)
 			em.pr_idx.append(j)
 			em.pr_ref.append(fn_i.params[j].is_ref)
 			j = j + 1
@@ -239,6 +262,24 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
 		i = i + 1
 	}
 	return TUnknown
+}
+
+# c_has_method reports whether type `recv` declares a method `meth`. It asks about
+# EXISTENCE, which the return type cannot answer for itself: a method returning nothing is
+# TVoid and an unknown name is TUnknown, and those must not be confused.
+fn c_has_method(mut &em: Emitter, recv: str, meth: str) -> bool {
+	if recv == "" {
+		return false
+	}
+	key := c_sig_key(recv, meth)
+	mut i := 0
+	for i < em.sig_names.len() {
+		if em.sig_names[i] == key {
+			return true
+		}
+		i = i + 1
+	}
+	return false
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -681,23 +722,57 @@ fn c_is_lvalue(e: Expr) -> bool {
 	}
 }
 
-# c_method lowers a `target.meth(args)`: a list target uses the runtime list methods
-# (len / append); any other target is a module-qualified free call (e.g. ascii.is_digit),
-# emitted as the bare mangled function since the module is flattened into this unit.
+# c_method lowers a `target.meth(args)`, which is three different things wearing one
+# syntax, told apart by what the target's type turns out to be:
+#
+#   * a LIST target      — the runtime list methods (len / append);
+#   * a VALUE receiver   — a method on a named type, called as `zg_<Type>_<meth>` with the
+#                          receiver passed first, since the parser made `this` parameter 0;
+#   * anything else      — a module-qualified free call (`ascii.is_digit`), emitted as the
+#                          bare mangled function, because a module flattens into this unit
+#                          and `ascii` is a namespace rather than a value.
+#
+# The order matters and so does the last case being the fallback: a module name infers to
+# no type at all, so it can never be mistaken for a receiver. The reverse mistake — a
+# receiver read as a namespace — would emit a call to a function nothing declares, which
+# the C compiler rejects. Neither way is silent.
 fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
-	if c_is_list(c_infer(em, target)) {
+	tty := c_infer(em, target)
+	if c_is_list(tty) {
 		em.used_rt = true
 		tgt := c_expr(em, target, sb)
 		if meth == "len" {
 			return "((int64_t)zrt_list_len(&(" + tgt + ")))"
 		}
 		if meth == "append" {
-			et := c_type(c_list_elem(c_infer(em, target)))
+			et := c_type(c_list_elem(tty))
 			return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 		}
 		return tgt
 	}
+	recv := c_named_of(tty)
+	if c_has_method(em, recv, meth) {
+		return c_fn_cname(recv, meth) + "(" + c_recv_args(em, c_sig_key(recv, meth), target, args, sb) + ")"
+	}
 	return "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
+}
+
+# c_recv_args renders a method call's arguments: the receiver first, then the written
+# ones. Their parameter indices are shifted by one against the table, because `this` holds
+# index 0 there — get that wrong and a `mut &` argument is passed by value to the slot
+# after the one that wanted its address.
+fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: Subst) -> str {
+	mut out := c_expr(em, target, sb)
+	mut i := 0
+	for i < args.len() {
+		mut a := c_expr(em, args[i], sb)
+		if c_param_is_ref(em, key, i + 1) {
+			a = "&(" + a + ")"
+		}
+		out = out + ", " + a
+		i = i + 1
+	}
+	return out
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -898,14 +973,23 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	}
 }
 
-# c_infer_methcall types a method call: a list target's len is int; any other target is a
-# module-qualified free call, typed from the (merged) function signature table.
+# c_infer_methcall types a method call the same three ways c_method lowers it, and must
+# keep agreeing with it: a list target's len is int, a value receiver's method is typed
+# from its own entry, and anything else is a module-qualified free call typed from the
+# flat one. Typing a method off the receiver is what makes a CHAIN work — the target of
+# `.b()` in `a.b().c()` is itself a method call, so this recurses and each link is typed
+# from the one before it.
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
-	if c_is_list(c_infer(em, target)) {
+	tty := c_infer(em, target)
+	if c_is_list(tty) {
 		if meth == "len" {
 			return TInt
 		}
 		return TNil
+	}
+	recv := c_named_of(tty)
+	if c_has_method(em, recv, meth) {
+		return c_lookup_sig_ret(em, c_sig_key(recv, meth))
 	}
 	return c_lookup_sig_ret(em, meth)
 }
@@ -1292,12 +1376,12 @@ fn c_param_types(fn_d: FnDecl) -> str {
 }
 
 fn c_proto(fn_d: FnDecl) -> str {
-	return c_ret_type(fn_d) + " zg_" + fn_d.name + "(" + c_param_types(fn_d) + ");\n"
+	return c_ret_type(fn_d) + " " + c_fn_cname(fn_d.recv, fn_d.name) + "(" + c_param_types(fn_d) + ");\n"
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	c_reset_env(em)
-	mut sig := c_ret_type(fn_d) + " zg_" + fn_d.name + "("
+	mut sig := c_ret_type(fn_d) + " " + c_fn_cname(fn_d.recv, fn_d.name) + "("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {
@@ -1321,10 +1405,12 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	return sig + c_block(em, fn_d.body, "    ") + "}\n\n"
 }
 
+# The entry point is the FREE function `main`; a method named `main` is an ordinary method
+# of its type and must not be mistaken for it, which is what the receiver test rules out.
 fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
-		if f.fns[i].name == "main" {
+		if f.fns[i].name == "main" and f.fns[i].recv == "" {
 			return true
 		}
 		i = i + 1
@@ -1335,7 +1421,7 @@ fn c_has_main(f: File) -> bool {
 fn c_main_has_args(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
-		if f.fns[i].name == "main" and f.fns[i].params.len() > 0 {
+		if f.fns[i].name == "main" and f.fns[i].recv == "" and f.fns[i].params.len() > 0 {
 			return true
 		}
 		i = i + 1

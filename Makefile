@@ -11,7 +11,7 @@ ZERG_ENTRY := src/compiler/zergc.zg
 # is a feature landing, and moves into this list.
 CORPUS_PASS := arithmetic bitwise booleans factorial fib fizzbuzz floats gcd hello power sumto
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus selfhost help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt selfhost help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -65,6 +65,14 @@ corpus:                         # run zerg against the test-data corpus it now o
 	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	echo "corpus: $(words $(CORPUS_PASS))/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
+
+lint:                           # lint the compiler and stdlib with zerg itself
+	$(MAKE) build
+	./bin/zerg lint $(ZERG_ENTRY)
+
+fmt:                            # rewrite the compiler and stdlib in canonical style
+	$(MAKE) build
+	@./bin/zerg fmt $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg || true
 
 selfhost:                       # have the built zerg rebuild itself, closing the chain
 	$(MAKE) build

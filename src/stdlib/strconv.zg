@@ -25,7 +25,7 @@ fn digit_for(b: byte) -> int {
 	if v >= 65 and v <= 90 {
 		return v - 55
 	}
-	return -1
+	return - 1
 }
 
 # digit_char maps a base value 0..35 to its lowercase ASCII digit. Module-private.
@@ -74,7 +74,7 @@ pub fn parse_int(s: str, base: int) -> int {
 		i = i + 1
 	}
 	if neg {
-		return -val
+		return - val
 	}
 	return val
 }
@@ -120,7 +120,11 @@ pub fn to_string(n: int, base: int) -> str {
 	neg := v < 0
 	for {
 		d := v % base
-		mag := if d < 0 { -d } else { d }
+		mag := if d < 0 {
+			- d
+		} else {
+			d
+		}
 		digits.append(digit_char(mag))
 		v = v / base
 		if v == 0 {

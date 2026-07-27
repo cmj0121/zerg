@@ -13,33 +13,25 @@
 
 # abs returns the absolute value of the integer x.
 pub fn abs(x: int) -> int {
-	if x < 0 {
-		return - x
-	}
+	return - x if x < 0
 	return x
 }
 
 # fabs returns the absolute value of the float x.
 pub fn fabs(x: float) -> float {
-	if x < 0.0 {
-		return - x
-	}
+	return - x if x < 0.0
 	return x
 }
 
 # min returns the smaller of two integers.
 pub fn min(a: int, b: int) -> int {
-	if a < b {
-		return a
-	}
+	return a if a < b
 	return b
 }
 
 # max returns the larger of two integers.
 pub fn max(a: int, b: int) -> int {
-	if a > b {
-		return a
-	}
+	return a if a > b
 	return b
 }
 
@@ -51,9 +43,7 @@ pub fn sqrt(x: float) -> float {
 	if x < 0.0 {
 		raise "math.sqrt: domain error (negative input)"
 	}
-	if x == 0.0 {
-		return 0.0
-	}
+	return 0.0 if x == 0.0
 	mut guess := x
 	mut i := 0
 	for i < 100 {
@@ -64,9 +54,7 @@ pub fn sqrt(x: float) -> float {
 		} else {
 			diff
 		}
-		if adiff < 0.0000000001 {
-			return next
-		}
+		return next if adiff < 0.0000000001
 		guess = next
 		i = i + 1
 	}
@@ -108,9 +96,7 @@ fn no_fraction(x: float) -> bool {
 # 2.0 and trunc(-2.7) is -2.0. Computed in pure Zerg — for |x| < 2^52 through the checked
 # int truncation, and a larger x (already integral) returned as is.
 pub fn trunc(x: float) -> float {
-	if no_fraction(x) {
-		return x
-	}
+	return x if no_fraction(x)
 	return float(int(x))
 }
 
@@ -118,9 +104,7 @@ pub fn trunc(x: float) -> float {
 # floor(-2.1) is -3.0.
 pub fn floor(x: float) -> float {
 	t := trunc(x)
-	if t > x {
-		return t - 1.0
-	}
+	return t - 1.0 if t > x
 	return t
 }
 
@@ -128,18 +112,14 @@ pub fn floor(x: float) -> float {
 # is -2.0.
 pub fn ceil(x: float) -> float {
 	t := trunc(x)
-	if t < x {
-		return t + 1.0
-	}
+	return t + 1.0 if t < x
 	return t
 }
 
 # round returns x rounded to the nearest integer, with a half rounded away from zero:
 # round(2.5) is 3.0 and round(-2.5) is -3.0.
 pub fn round(x: float) -> float {
-	if x < 0.0 {
-		return - floor(- x + 0.5)
-	}
+	return - floor(- x + 0.5) if x < 0.0
 	return floor(x + 0.5)
 }
 

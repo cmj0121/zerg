@@ -10,9 +10,7 @@
 # variable and one set to the empty string are told apart here — both a plain lookup and
 # `os.env(k) ?? default` do the right thing.)
 pub fn env(key: str) -> str ? {
-	if __zrt_has_env(key) {
-		return __zrt_getenv(key)
-	}
+	return __zrt_getenv(key) if __zrt_has_env(key)
 	return nil
 }
 

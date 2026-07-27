@@ -19,14 +19,10 @@ import "ascii"
 # (so callers need not bound-check before asking). Module-private.
 fn match_at(hay: list[byte], nee: list[byte], at: int) -> bool {
 	m := nee.len()
-	if at < 0 or at + m > hay.len() {
-		return false
-	}
+	return false if at < 0 or at + m > hay.len()
 	mut k := 0
 	for k < m {
-		if hay[at + k] != nee[k] {
-			return false
-		}
+		return false if hay[at + k] != nee[k]
 		k = k + 1
 	}
 	return true
@@ -52,9 +48,7 @@ pub fn index_of(s: str, sub: str) -> int {
 	n := hay.len()
 	mut i := 0
 	for i <= n {
-		if match_at(hay, nee, i) {
-			return i
-		}
+		return i if match_at(hay, nee, i)
 		i = i + 1
 	}
 	return - 1
@@ -235,9 +229,7 @@ pub fn replace(s: str, old: str, new: str) -> str {
 pub fn trim_prefix(s: str, prefix: str) -> str {
 	b := list[byte](s)
 	p := list[byte](prefix)
-	if not match_at(b, p, 0) {
-		return s
-	}
+	return s if not match_at(b, p, 0)
 	mut out: list[byte] = []
 	mut i := p.len()
 	for i < b.len() {
@@ -254,9 +246,7 @@ pub fn trim_suffix(s: str, suffix: str) -> str {
 	b := list[byte](s)
 	sf := list[byte](suffix)
 	hi := b.len() - sf.len()
-	if not match_at(b, sf, hi) {
-		return s
-	}
+	return s if not match_at(b, sf, hi)
 	mut out: list[byte] = []
 	mut i := 0
 	for i < hi {

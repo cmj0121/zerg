@@ -41,10 +41,22 @@ struct Emitter {
 	vf_ty: list[Ty]
 	used_rt: bool
 	used_str: bool
+	# used_fnptr records that some function was held as a VALUE, so the generic function
+	# pointer the header typedefs is only there for a program that has one.
+	used_fnptr: bool
 	ref_names: list[str]
 	pr_fn: list[str]
 	pr_idx: list[int]
 	pr_ref: list[bool]
+	# pr_ty is each parameter's TYPE, parallel to pr_fn / pr_idx. It is what lets a bare
+	# function name be given a type when it is used as a value: `fn(P...) -> R` needs the
+	# P's, and the return table alone has only the R.
+	pr_ty: list[Ty]
+	# pr_hasdef / pr_def carry each parameter's DEFAULT, so a call that omits a trailing
+	# argument can be given it. The default belongs to the callee's declaration, and a call
+	# site is nowhere near it, which is the whole reason it has to be in a table.
+	pr_hasdef: list[bool]
+	pr_def: list[Expr]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -81,7 +93,67 @@ fn c_type(t: Ty) -> str {
 		TByte => "uint8_t"
 		TNamed(nm) => "zg_" + nm
 		TList(_) => "zrt_list"
+		TFn(_, _) => "zg_fnptr"
 		_ => "int64_t"
+	}
+}
+
+# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer — and
+# cast back to its real signature at the call. C guarantees exactly this round trip
+# between function pointer types and no more, which is why the storage type is a function
+# pointer rather than `void*`: converting a function pointer to an object pointer is not
+# something the standard promises.
+#
+# A single storage type is also what keeps the declarator problem away. A C function
+# pointer spells its name INSIDE the type — `int64_t (*f)(const char*)` — and every type
+# in this emitter is a string that gets a name appended to it. A typedef sidesteps that
+# for every function type at once, with no table of them to build and keep.
+fn c_fnptr_typedef() -> str {
+	return "typedef void (*zg_fnptr)(void);\n"
+}
+
+# c_fnptr_cast is the cast back to a real signature, `(R (*)(P, ...))`.
+fn c_fnptr_cast(t: Ty) -> str {
+	return match t {
+		TFn(ps, r) => "(" + c_type(r) + " (*)(" + c_ptypes(ps) + "))"
+		_ => ""
+	}
+}
+
+fn c_ptypes(ps: list[Ty]) -> str {
+	if ps.len() == 0 {
+		return "void"
+	}
+	mut out := ""
+	mut i := 0
+	for i < ps.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_type(ps[i])
+		i = i + 1
+	}
+	return out
+}
+
+fn c_is_fn(t: Ty) -> bool {
+	return match t {
+		TFn(_, _) => true
+		_ => false
+	}
+}
+
+fn c_fn_ret(t: Ty) -> Ty {
+	return match t {
+		TFn(_, r) => r
+		_ => TUnknown
+	}
+}
+
+fn c_is_unknown(t: Ty) -> bool {
+	return match t {
+		TUnknown => true
+		_ => false
 	}
 }
 
@@ -185,18 +257,44 @@ fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 	return TUnknown
 }
 
+# c_sig_key is how a function is looked up in the signature and parameter tables. A free
+# function is keyed by its bare name; a method by `Type#name`. The '#' cannot occur in an
+# identifier, so a method can never be mistaken for the free function of the same name —
+# which is the whole point, since `App.parse` and the compiler's own `parse` must coexist.
+fn c_sig_key(recv: str, name: str) -> str {
+	if recv == "" {
+		return name
+	}
+	return recv + "#" + name
+}
+
+# c_fn_cname is the C symbol a function is emitted as. Free functions share one flat
+# `zg_<name>` space with every module of the program; a method is `zg_<Type>_<name>`, off
+# that space and unable to collide with it, since a type name is PascalCase and so cannot
+# be confused with the snake_case free functions it sits beside.
+fn c_fn_cname(recv: str, name: str) -> str {
+	if recv == "" {
+		return "zg_" + name
+	}
+	return "zg_" + recv + "_" + name
+}
+
 fn c_build_sigs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.fns.len() {
 		fn_i := f.fns[i]
-		em.sig_names.append(fn_i.name)
+		key := c_sig_key(fn_i.recv, fn_i.name)
+		em.sig_names.append(key)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
 		mut j := 0
 		for j < fn_i.params.len() {
-			em.pr_fn.append(fn_i.name)
+			em.pr_fn.append(key)
 			em.pr_idx.append(j)
 			em.pr_ref.append(fn_i.params[j].is_ref)
+			em.pr_ty.append(fn_i.params[j].ty)
+			em.pr_hasdef.append(fn_i.params[j].has_def)
+			em.pr_def.append(fn_i.params[j].def)
 			j = j + 1
 		}
 		i = i + 1
@@ -205,15 +303,39 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 
 # c_param_is_ref reports whether parameter `idx` of function `fname` is a mutable
 # reference (so a call must pass its argument's address).
-fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
+# c_param_row finds a parameter's row in the tables c_build_sigs filled, or -1 when the
+# function has no such parameter. Everything asked ABOUT a parameter — is it a reference,
+# does it have a default, what is that default — reads its row, so the search happens once
+# per question rather than once per field, and the three answers cannot drift apart.
+#
+# c_build_sigs appends a function's parameters CONTIGUOUSLY in index order, so the row a
+# function's parameter 0 sits at fixes every other one; the scan below stops as soon as it
+# is past that block, which is what keeps a fully-applied call — nearly every call — from
+# walking the whole program's parameters to learn it has no default to backfill.
+fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	mut i := 0
+	mut seen := false
 	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
-			return em.pr_ref[i]
+		if em.pr_fn[i] == fname {
+			if em.pr_idx[i] == idx {
+				return i
+			}
+			seen = true
+		} else if seen {
+			# past the function's own block: it has no parameter idx
+			return - 1
 		}
 		i = i + 1
 	}
-	return false
+	return - 1
+}
+
+fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return false
+	}
+	return em.pr_ref[row]
 }
 
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
@@ -241,6 +363,25 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
 	return TUnknown
 }
 
+# c_has_method reports whether type `recv` declares a method `meth`, and c_is_free_fn
+# whether a bare name is a free function — a method is excluded from the second, since it
+# is keyed by its type and has no bare name to be reached by.
+#
+# Both ask about EXISTENCE, which the signature table answers with TUnknown: a declared
+# function that returns nothing is TVoid, and no declared return type is ever TUnknown, so
+# the two cannot be confused. Deriving them from the one lookup rather than scanning the
+# table again is what keeps them from drifting away from it.
+fn c_has_method(mut &em: Emitter, recv: str, meth: str) -> bool {
+	if recv == "" {
+		return false
+	}
+	return not c_is_unknown(c_lookup_sig_ret(em, c_sig_key(recv, meth)))
+}
+
+fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
+	return not c_is_unknown(c_lookup_sig_ret(em, n))
+}
+
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
 # call — Zerg types are PascalCase and functions snake_case, so an uppercase first
 # letter is the tell.
@@ -250,6 +391,32 @@ fn c_is_ctor(name: str) -> bool {
 		return false
 	}
 	return ascii.is_upper(b[0])
+}
+
+# c_scan_fnptr decides up front whether the program spells a function type anywhere in a
+# DECLARATION — a struct field, a parameter, a result. It has to run before anything is
+# emitted, because those declarations are written out before any body is: a struct typedef
+# naming `zg_fnptr` would otherwise reach the C compiler ahead of the typedef that defines
+# it. (A body that merely holds a function in a local sets the flag as it goes; by then the
+# header has not been assembled yet.)
+fn c_scan_fnptr(mut &em: Emitter, f: File) {
+	for s in f.structs {
+		for fd in s.fields {
+			if c_is_fn(fd.ty) {
+				em.used_fnptr = true
+			}
+		}
+	}
+	for fn_i in f.fns {
+		if c_is_fn(fn_i.ret) {
+			em.used_fnptr = true
+		}
+		for pm in fn_i.params {
+			if c_is_fn(pm.ty) {
+				em.used_fnptr = true
+			}
+		}
+	}
 }
 
 fn c_build_structs(mut &em: Emitter, f: File) {
@@ -594,7 +761,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EField(target, fld) => c_expr(em, target, sb) + ".zg_" + fld
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
-		EListLit(elems) => "(zrt_list){0}"
+		EListLit(elems) => c_list_lit(em, elems, sb)
 		EConv(ty, x) => c_conv(em, ty, x, sb)
 		EIf(cond, then_e, else_e) => "(" + c_expr(em, cond, sb) + " ? " + c_expr(em, then_e, sb) + " : " + c_expr(em, else_e, sb) + ")"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
@@ -681,32 +848,138 @@ fn c_is_lvalue(e: Expr) -> bool {
 	}
 }
 
-# c_method lowers a `target.meth(args)`: a list target uses the runtime list methods
-# (len / append); any other target is a module-qualified free call (e.g. ascii.is_digit),
-# emitted as the bare mangled function since the module is flattened into this unit.
-fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
-	if c_is_list(c_infer(em, target)) {
-		em.used_rt = true
-		tgt := c_expr(em, target, sb)
-		if meth == "len" {
-			return "((int64_t)zrt_list_len(&(" + tgt + ")))"
-		}
-		if meth == "append" {
-			et := c_type(c_list_elem(c_infer(em, target)))
-			return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
-		}
-		return tgt
+# `target.meth(args)` is FOUR different things wearing one syntax, told apart by what the
+# target's type turns out to be:
+#
+#   * a LIST target      — the runtime list methods (len / append);
+#   * a VALUE receiver   — a method on a named type, called as `zg_<Type>_<meth>` with the
+#                          receiver passed first, since the parser made `this` parameter 0;
+#   * a FIELD holding a function — `this.action(c)` calls the callback the value carries,
+#                          which is a different thing from a method of the same name;
+#   * anything else      — a module-qualified free call (`ascii.is_digit`), emitted as the
+#                          bare mangled function, because a module flattens into this unit
+#                          and `ascii` is a namespace rather than a value.
+#
+# The order matters and so does the last case being the fallback: a module name infers to
+# no type at all, so it can never be mistaken for a receiver. The reverse mistake — a
+# receiver read as a namespace — would emit a call to a function nothing declares, which
+# the C compiler rejects. Neither way is silent.
+#
+# Which one it is has to be decided identically when the call is EMITTED and when it is
+# TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
+enum MethKind {
+	MList
+	MRecv
+	MFnField
+	MFree
+}
+
+fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
+	if c_is_list(tty) {
+		return MList
 	}
-	return "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
+	if c_has_method(em, c_named_of(tty), meth) {
+		return MRecv
+	}
+	if c_is_fn(c_field_ty(em, c_named_of(tty), meth)) {
+		return MFnField
+	}
+	return MFree
+}
+
+fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	tty := c_infer(em, target)
+	recv := c_named_of(tty)
+	return match c_meth_kind(em, tty, meth) {
+		MList => c_list_method(em, target, meth, args, tty, sb)
+		MRecv => c_fn_cname(recv, meth) + "(" + c_recv_args(em, c_sig_key(recv, meth), target, args, sb) + ")"
+		MFnField => "(" + c_fnptr_cast(c_field_ty(em, recv, meth)) + c_expr(em, target, sb) + ".zg_" + meth + ")(" + c_args(em, args, sb) + ")"
+		_ => "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
+	}
+}
+
+fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	em.used_rt = true
+	tgt := c_expr(em, target, sb)
+	if meth == "len" {
+		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
+	}
+	if meth == "append" {
+		et := c_type(c_list_elem(tty))
+		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+	}
+	return tgt
+}
+
+# c_recv_args renders a method call's arguments: the receiver first, then the written
+# ones. Their parameter indices are shifted by one against the table, because `this` holds
+# index 0 there — get that wrong and a `mut &` argument is passed by value to the slot
+# after the one that wanted its address.
+fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: Subst) -> str {
+	mut out := c_expr(em, target, sb)
+	mut i := 0
+	for i < args.len() {
+		mut a := c_expr(em, args[i], sb)
+		if c_param_is_ref(em, key, i + 1) {
+			a = "&(" + a + ")"
+		}
+		out = out + ", " + a
+		i = i + 1
+	}
+	# the receiver already stands where parameter 0 does, so the first argument a method
+	# can omit is at args.len() + 1 — and there is always a leading argument to separate
+	# from, which a free call cannot assume
+	return out + c_default_args(em, key, args.len() + 1, true)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
 # construction as a plain compound literal (both are PascalCase constructors), and any
 # other call as a function call.
+# c_list_lit builds a list literal used AS A VALUE — passed to a function, returned,
+# handed straight to a method. It lowers the way `append` does: allocate, then push each
+# element in order, inside a statement expression that yields the list.
+#
+# Before this, a list literal in an expression emitted `(zrt_list){0}` and its ELEMENTS
+# WERE DROPPED — `f([a, b])` silently passed an empty list. Nothing said so, which made it
+# the worst kind of wrong: a program that ran and was simply not what was written.
+#
+# An empty literal keeps the zeroed form. It carries no element type of its own, so the
+# one that fits comes from the declaration it initializes, and the binding and field paths
+# already supply it.
+fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
+	if elems.len() == 0 {
+		return "(zrt_list){0}"
+	}
+	em.used_rt = true
+	et := c_type(c_infer(em, elems[0]))
+	mut out := "({ zrt_list zg_ll = zg_empty_list(sizeof(" + et + "));"
+	mut i := 0
+	for i < elems.len() {
+		tmp := "zg_ll" + strconv.to_string(i, 10)
+		out = out + " " + et + " " + tmp + " = " + c_expr(em, elems[i], sb) + ";"
+		out = out + " zrt_list_push(&zg_ll, &" + tmp + ");"
+		i = i + 1
+	}
+	return out + " zg_ll; })"
+}
+
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(name) {
 		em.used_rt = true
 		return c_intrinsic(name) + "(" + c_args(em, args, sb) + ")"
+	}
+	# a built-in error constructor, `ValueError("bad input")`. It is PascalCase, so without
+	# this it reads as a struct constructor and emits a compound literal of a type nothing
+	# declared — which cc rejects, loudly but a long way from the source that meant it.
+	if c_err_kind(name) > 0 {
+		em.used_rt = true
+		return "zrt_err_new_kind(" + strconv.to_string(c_err_kind(name), 10) + ", " + c_args(em, args, sb) + ")"
+	}
+	# calling a BINDING that holds a function: cast the stored generic pointer back to the
+	# signature its type carries, then call through it
+	bt := c_lookup_var(em, name)
+	if c_is_fn(bt) {
+		return "(" + c_fnptr_cast(bt) + c_ident_val(em, name, sb) + ")(" + c_args(em, args, sb) + ")"
 	}
 	if c_is_ctor(name) {
 		if c_is_variant(em, name) {
@@ -748,7 +1021,46 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str
 		out = out + a
 		i = i + 1
 	}
+	return out + c_default_args(em, fname, args.len(), out != "")
+}
+
+# c_default_args fills in the parameters a call left off the end, in declaration order,
+# taking each one's declared default. C has no such notion, so the backfill happens here:
+# every emitted call is fully applied whatever the source wrote.
+#
+# It stops at the first parameter with no default, which is also where the language stops
+# — a parameter without one is mandatory, and a call missing it is a call that is wrong.
+# Emitting the arguments it DOES have and no more would produce C that cc rejects, which
+# is the failure this compiler wants when a program is wrong.
+fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
+	mut out := ""
+	mut lead := sep
+	mut idx := given
+	for c_param_has_def(em, fname, idx) {
+		if lead {
+			out = out + ", "
+		}
+		lead = true
+		out = out + c_expr(em, c_param_def(em, fname, idx), c_nosub())
+		idx = idx + 1
+	}
 	return out
+}
+
+fn c_param_has_def(mut &em: Emitter, fname: str, idx: int) -> bool {
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return false
+	}
+	return em.pr_hasdef[row]
+}
+
+fn c_param_def(mut &em: Emitter, fname: str, idx: int) -> Expr {
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return ENil
+	}
+	return em.pr_def[row]
 }
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
@@ -793,7 +1105,34 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return "(*zg_" + n + ")"
 	}
+	# A bare function NAME used where a value is wanted is that function as a value. It is
+	# only reached when nothing has bound the name, so a binding always wins — which is the
+	# ordinary scoping rule, and it means a local can shadow a function without surprise.
+	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
+		em.used_fnptr = true
+		return "((zg_fnptr)zg_" + n + ")"
+	}
 	return c_var_cname(em, n)
+}
+
+fn c_is_bound(mut &em: Emitter, n: str) -> bool {
+	return not c_is_unknown(c_lookup_var(em, n))
+}
+
+# c_fn_ty_of builds the `fn(P...) -> R` type of a named free function, reading the
+# parameter types back out of the table c_build_sigs filled.
+fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
+	# one pass: c_build_sigs appends a function's parameters contiguously and in index
+	# order, so collecting the rows that name it collects them already in order
+	mut ptys: list[Ty] = []
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == n {
+			ptys.append(em.pr_ty[i])
+		}
+		i = i + 1
+	}
+	return TFn(ptys, c_lookup_sig_ret(em, n))
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
@@ -891,23 +1230,33 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
 		EIndex(target, idx) => c_list_elem(c_infer(em, target))
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
-		EListLit(elems) => TUnknown
+		EListLit(elems) => c_infer_listlit(em, elems)
 		EConv(ty, x) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
 	}
 }
 
-# c_infer_methcall types a method call: a list target's len is int; any other target is a
-# module-qualified free call, typed from the (merged) function signature table.
+# c_infer_methcall types a method call from the SAME decision c_method lowers it by, so
+# the two cannot disagree about what a call is. Typing it off the receiver is what makes a
+# CHAIN work — the target of `.b()` in `a.b().c()` is itself a method call, so this
+# recurses and each link is typed from the one before it.
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
-	if c_is_list(c_infer(em, target)) {
-		if meth == "len" {
-			return TInt
-		}
-		return TNil
+	tty := c_infer(em, target)
+	recv := c_named_of(tty)
+	return match c_meth_kind(em, tty, meth) {
+		MList => c_list_method_ret(meth)
+		MRecv => c_lookup_sig_ret(em, c_sig_key(recv, meth))
+		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
+		_ => c_lookup_sig_ret(em, meth)
 	}
-	return c_lookup_sig_ret(em, meth)
+}
+
+fn c_list_method_ret(meth: str) -> Ty {
+	if meth == "len" {
+		return TInt
+	}
+	return TNil
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
@@ -970,11 +1319,25 @@ fn c_intrinsic_ret(name: str) -> Ty {
 	return TNil
 }
 
+# c_infer_listlit types a list literal from its FIRST element. An empty one names no
+# element type at all, so it stays unknown and takes the type of whatever it initializes.
+fn c_infer_listlit(mut &em: Emitter, elems: list[Expr]) -> Ty {
+	if elems.len() == 0 {
+		return TUnknown
+	}
+	return TList(c_infer(em, elems[0]))
+}
+
 fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
 	if c_is_variant(em, n) {
 		return TNamed(c_variant_enum(em, n))
 	}
-	return c_lookup_var(em, n)
+	t := c_lookup_var(em, n)
+	# nothing bound the name, but a function answers to it: the name IS that function
+	if c_is_unknown(t) and c_is_free_fn(em, n) {
+		return c_fn_ty_of(em, n)
+	}
+	return t
 }
 
 fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
@@ -1240,7 +1603,45 @@ fn c_is_wrapped(s: str) -> bool {
 
 fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
+	# `raise ValueError("…")` already names an Err; only a bare message needs one built
+	# around it. Wrapping both would make an Err whose payload is an Err.
+	if c_is_err_ctor(em, x) {
+		return ind + "zrt_raise_err(" + c_expr(em, x, c_nosub()) + ");\n"
+	}
 	return ind + "zrt_raise_err(zrt_err_new(" + c_expr(em, x, c_nosub()) + "));\n"
+}
+
+fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
+	return match x {
+		ECall(nm, _) => c_err_kind(nm) > 0
+		_ => false
+	}
+}
+
+# c_err_kind maps a built-in error name to the kind tag the runtime carries, or 0 for a
+# name that is not one. The numbers are MIRRORED from the runtime's ZRT_ERR_* enum and
+# from the seed's own table, so a `raise ValueError(…)` and a runtime abort that says
+# "ValueError" reify to the same kind whichever compiler built the program.
+fn c_err_kind(name: str) -> int {
+	if name == "ValueError" {
+		return 1
+	}
+	if name == "OverflowError" {
+		return 2
+	}
+	if name == "IOError" {
+		return 3
+	}
+	if name == "EncodingError" {
+		return 4
+	}
+	if name == "IndexError" {
+		return 5
+	}
+	if name == "KeyError" {
+		return 6
+	}
+	return 0
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
@@ -1292,12 +1693,12 @@ fn c_param_types(fn_d: FnDecl) -> str {
 }
 
 fn c_proto(fn_d: FnDecl) -> str {
-	return c_ret_type(fn_d) + " zg_" + fn_d.name + "(" + c_param_types(fn_d) + ");\n"
+	return c_ret_type(fn_d) + " " + c_fn_cname(fn_d.recv, fn_d.name) + "(" + c_param_types(fn_d) + ");\n"
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	c_reset_env(em)
-	mut sig := c_ret_type(fn_d) + " zg_" + fn_d.name + "("
+	mut sig := c_ret_type(fn_d) + " " + c_fn_cname(fn_d.recv, fn_d.name) + "("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
 	} else {
@@ -1321,10 +1722,12 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	return sig + c_block(em, fn_d.body, "    ") + "}\n\n"
 }
 
+# The entry point is the FREE function `main`; a method named `main` is an ordinary method
+# of its type and must not be mistaken for it, which is what the receiver test rules out.
 fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
-		if f.fns[i].name == "main" {
+		if f.fns[i].name == "main" and f.fns[i].recv == "" {
 			return true
 		}
 		i = i + 1
@@ -1335,7 +1738,7 @@ fn c_has_main(f: File) -> bool {
 fn c_main_has_args(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
-		if f.fns[i].name == "main" and f.fns[i].params.len() > 0 {
+		if f.fns[i].name == "main" and f.fns[i].recv == "" and f.fns[i].params.len() > 0 {
 			return true
 		}
 		i = i + 1
@@ -1432,10 +1835,11 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
+	c_scan_fnptr(em, f)
 
 	# enums first: a struct may hold an enum by value (a struct is never held by an enum
 	# except through an opaque zrt_list), so enum typedefs must precede struct typedefs.
@@ -1488,6 +1892,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
 	if em.used_str {
 		hdr = hdr + "#include <stdlib.h>\n"
+	}
+	if em.used_fnptr {
+		hdr = hdr + c_fnptr_typedef()
 	}
 	if rt {
 		hdr = hdr + "#include \"zergrt.h\"\n"

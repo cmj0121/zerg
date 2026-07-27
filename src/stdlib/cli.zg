@@ -1,213 +1,937 @@
-# cli — command-line parsing, and the help text that comes with it.
+# cli — command lines: the arguments, the sub-commands, and the help text that comes
+# with them.
 #
 # A tool's argument handling is the first thing its users meet and the last thing anyone
 # wants to write twice, so this is a module rather than a habit each program repeats. It
 # parses what a POSIX-ish tool accepts — `-o value`, `--output value`, `--output=value`,
-# bundled short flags, a `--` that ends option parsing — and renders `--help` from the
-# same option list it parsed with, so the help can never drift from the behaviour.
+# bundled short flags, a `--` that ends option parsing — dispatches sub-commands, and
+# renders `--help` from the same declarations it parsed with, so the help can never drift
+# from the behaviour.
 #
-# It stays inside the language's own subset: no closures, no maps, no optionals. Results
-# come back in parallel lists, read through `get`/`has`/`value_or`, which is why the API
-# is a handful of small functions rather than a builder.
+# Nothing here is written down twice. A command is DECLARED — its arguments, its
+# sub-commands, the function each one runs — and the declaration is the only description
+# of the command line that exists. The parser reads it, the help renderer reads it, and
+# the validator reads it, so there is no second copy to fall behind.
+#
+# `-h` / `--help` exists for every command, generated from that declaration; `.no_help()`
+# takes it back for a tool that needs `-h` to mean something else. `--version` exists only
+# where `.version(ver)` declares it, because most sub-commands have no version of their own.
+#
+# Declaring the same short letter or long name twice is a mistake in the PROGRAM, not in
+# what its user typed, so it raises where it is written rather than failing later on a
+# command line that happens to reach it.
+#
+# Example — a tool with two sub-commands, whole front end:
+#
+# ```zerg
+# import "cli"
+# import "io"
+#
+# fn main(argv: list[str]) {
+#     root := (cli.command("wc", "count what is in a file")
+#         .version("wc 1.0.0")
+#         .sub(count_cmd())
+#         .sub(check_cmd()))
+#     __zrt_exit(root.exec(argv))
+# }
+#
+# fn count_cmd() -> cli.Command {
+#     # a multi-line chain is wrapped in parentheses: a line break after ')' would
+#     # otherwise end the statement
+#     return (cli.command("count", "count lines or bytes")
+#         .opt("o", "output", "write the count here")
+#         .flag("l", "lines", "count lines instead of bytes")
+#         .required("f", "format", "how to print the count", "plain")
+#         .add(cli.positional("file", "the file to read").required().repeated())
+#         .run(do_count))
+# }
+#
+# fn do_count(c: cli.Ctx) -> int {
+#     for f in c.args() {
+#         io.println(f + ": " + count_one(f, c.has("lines")))
+#     }
+#     return 0
+# }
+# ```
+#
+# `wc count --help` prints this, with no help text written by hand:
+#
+#     count — count lines or bytes
+#
+#     usage: wc count [options] <file>...
+#
+#     Options:
+#       -o, --output VALUE    write the count here
+#       -l, --lines           count lines instead of bytes
+#       -f, --format VALUE    how to print the count (default: plain)
+#       -h, --help            show this help message and exit
+#
+# and `wc count --oops` prints `wc count: unknown option --oops` on stderr and exits 2.
+import "io"
+import "strconv"
 
-# Opt is one option's declaration: its long name (without `--`), its short letter (without
-# `-`, "" when it has none), whether it takes a value, and the one-line help.
-pub struct Opt {
-	long: str
+# --- declaring an argument --------------------------------------------------------------
+
+# ArgKind is what an argument IS, which decides how it is read off the command line: a
+# flag is present or absent, an option is followed by a value, and a positional has no
+# name at all and is taken in order.
+#[derive(Eq)]
+pub enum ArgKind {
+	FlagArg
+	ValueArg
+	PosArg
+}
+
+# Argument is one declaration. `fallback` is the value used when the command line does not
+# give one, `env_key` an environment variable consulted before it, `group` the mutually
+# exclusive set it belongs to, and `section` the heading it is listed under in the help.
+#
+# It is built by `argument` / `flag` / `positional` and refined by the methods below, so a
+# program never spells the fields — which is why adding one here does not break callers.
+pub struct Argument {
 	short: str
-	takes_value: bool
+	long: str
 	help: str
+	fallback: str
+	kind: ArgKind
+	need: bool
+	repeats: bool
+	env_key: str
+	group: str
+	section: str
 }
 
-# opt declares a value-taking option; flag declares a boolean one.
-pub fn opt(long: str, short: str, help: str) -> Opt {
-	return Opt(long, short, true, help)
+# argument declares an option that takes a value. The short letter comes first because it
+# is the part that always exists; everything after it may be left off.
+pub fn argument(short: str, long: str = "", help: str = "", fallback: str = "") -> Argument {
+	return Argument(short, long, help, fallback, ValueArg, false, false, "", "", "")
 }
 
-pub fn flag(long: str, short: str, help: str) -> Opt {
-	return Opt(long, short, false, help)
+# flag declares a boolean: present or absent, never followed by a value.
+pub fn flag(short: str, long: str = "", help: str = "") -> Argument {
+	return Argument(short, long, help, "", FlagArg, false, false, "", "", "")
 }
 
-# Parsed is the result: the options seen (names parallel to values, "" for a boolean), the
-# positional arguments in order, and the first usage error. A caller checks `err` before
-# anything else — a half-understood command line is worth refusing, not guessing at.
-pub struct Parsed {
+# positional declares an argument with no name of its own, taken in declaration order. The
+# name is what the help calls it and what `Ctx.get` reads it back by.
+pub fn positional(name: str, help: str = "") -> Argument {
+	return Argument("", name, help, "", PosArg, false, false, "", "", "")
+}
+
+# Every builder below takes the receiver by value, changes the ONE field it is named for,
+# and returns the result. Naming that field is the whole point: a builder that respelled
+# all ten positionally would have to be edited for every field added, and `need` beside
+# `repeats` — two adjacent bools — could be swapped and still compile.
+impl Argument {
+	# required makes an absent argument a usage error. It reads as "must have a value" —
+	# the command line, the environment variable, and the fallback all satisfy it, so
+	# `required` with a fallback is a value that is always there rather than a contradiction.
+	pub fn required() -> This {
+		mut a := this
+		a.need = true
+		return a
+	}
+
+	# repeated lets an argument be given more than once. A repeated positional takes every
+	# remaining one, which is how a file list is declared.
+	pub fn repeated() -> This {
+		mut a := this
+		a.repeats = true
+		return a
+	}
+
+	# env names an environment variable to read when the command line is silent. It is
+	# consulted BEFORE the fallback, so a deployment can set what a default would have said.
+	pub fn env(key: str) -> This {
+		mut a := this
+		a.env_key = key
+		return a
+	}
+
+	# section puts the argument under its own heading in the help, for a command with more
+	# options than one list can be read as.
+	pub fn section(title: str) -> This {
+		mut a := this
+		a.section = title
+		return a
+	}
+
+	# name is what the argument is known by — the long form when it has one, else the short
+	# letter. It is the key `Ctx.has` / `Ctx.get` read it back by.
+	pub fn name() -> str {
+		if this.long != "" {
+			return this.long
+		}
+		return this.short
+	}
+
+	# label renders the argument's invocation for the help: `-o, --output VALUE`, and
+	# `VALUE...` for one that may be repeated. The trailing `...` is the same mark a
+	# repeatable positional carries in the usage line — a help screen generated from a
+	# declaration should say everything the declaration does, and `.repeated()` was the one
+	# thing it declared and did not mention.
+	pub fn label() -> str {
+		if this.kind == PosArg {
+			return "    <" + this.long + ">"
+		}
+		mut s := "    "
+		if this.short != "" {
+			s = "-" + this.short + ", "
+		}
+		s = s + "--" + this.long
+		if this.kind == ValueArg {
+			s = s + " VALUE"
+			if this.repeats {
+				s = s + "..."
+			}
+		}
+		return s
+	}
+
+	# describe is the help line's right-hand side: the description, and what happens when
+	# the argument is left out, which is a question every reader of a help screen has.
+	pub fn describe() -> str {
+		mut s := this.help
+		if this.env_key != "" {
+			s = s + " [$" + this.env_key + "]"
+		}
+		if this.fallback != "" {
+			s = s + " (default: " + this.fallback + ")"
+		}
+		return s
+	}
+}
+
+# --- the parsed result ------------------------------------------------------------------
+
+# Ctx is what a command's function is given: the arguments that were resolved, the
+# positionals left over, and the path of command names that led here. Values are read by
+# NAME — the long form, or the short letter when there is no long one.
+pub struct Ctx {
 	names: list[str]
 	values: list[str]
-	args: list[str]
-	err: str
+	rest: list[str]
+	cmd_path: str
 }
 
-# parse_argv reads argv (WITHOUT the program name — that is what `fn main(args)`
-# receives) against a list of declared options.
-#
-# The name is `parse_argv`, not `parse`: every module in a program shares one flat scope,
-# so a stdlib function called `parse` would collide with any program that has its own —
-# and the compiler's own front end does. Names in a shared module have to be specific.
-pub fn parse_argv(argv: list[str], opts: list[Opt]) -> Parsed {
-	mut p := Parsed([], [], [], "")
-	mut only_args := false
-	mut i := 0
-	for i < argv.len() {
-		a := argv[i]
-		if only_args {
-			p.args.append(a)
-		} else if a == "--" {
-			only_args = true
-		} else if is_long(a) {
-			i = parse_long(a, argv, i, opts, p)
-		} else if is_short(a) {
-			i = parse_short(a, argv, i, opts, p)
-		} else {
-			p.args.append(a)
-		}
-		if p.err != "" {
-			return p
-		}
-		i = i + 1
-	}
-	return p
-}
-
-# parse_long handles `--name` and `--name=value`, returning the index it consumed to.
-fn parse_long(a: str, argv: list[str], i: int, opts: list[Opt], mut &p: Parsed) -> int {
-	body := drop_prefix(a, 2)
-	name := before_eq(body)
-	o := find_long(opts, name)
-	if o.long == "" {
-		p.err = "unknown option --" + name
-		return i
-	}
-	if not o.takes_value {
-		if has_eq(body) {
-			p.err = "option --" + name + " takes no value"
-			return i
-		}
-		record(p, o.long, "")
-		return i
-	}
-	if has_eq(body) {
-		record(p, o.long, after_eq(body))
-		return i
-	}
-	if i + 1 >= argv.len() {
-		p.err = "option --" + name + " needs a value"
-		return i
-	}
-	record(p, o.long, argv[i + 1])
-	return i + 1
-}
-
-# parse_short handles `-o value` and bundled boolean flags like `-abc`. A value-taking
-# option ends the bundle, so `-o out` works and `-ao out` does too.
-fn parse_short(a: str, argv: list[str], i: int, opts: list[Opt], mut &p: Parsed) -> int {
-	letters := list[byte](drop_prefix(a, 1))
-	mut j := 0
-	mut at := i
-	for j < letters.len() {
-		mut one: list[byte] = []
-		one.append(letters[j])
-		s := str(one)
-		o := find_short(opts, s)
-		if o.long == "" {
-			p.err = "unknown option -" + s
-			return at
-		}
-		if not o.takes_value {
-			record(p, o.long, "")
-			j = j + 1
-		} else if j + 1 < letters.len() {
-			# the rest of the bundle is the value: `-oout`
-			mut rest: list[byte] = []
-			mut k := j + 1
-			for k < letters.len() {
-				rest.append(letters[k])
-				k = k + 1
-			}
-			record(p, o.long, str(rest))
-			return at
-		} else if at + 1 < argv.len() {
-			record(p, o.long, argv[at + 1])
-			return at + 1
-		} else {
-			p.err = "option -" + s + " needs a value"
-			return at
-		}
-	}
-	return at
-}
-
-fn record(mut &p: Parsed, long: str, value: str) {
-	p.names.append(long)
-	p.values.append(value)
-}
-
-# --- reading the result ------------------------------------------------------------------
-
-# has reports whether an option was given at all.
-pub fn has(p: Parsed, long: str) -> bool {
-	for n in p.names {
-		if n == long {
+# Arguments are held as two parallel lists — the names given, and the value each carries —
+# in the scan as they were typed and in the Ctx as they resolved. Both are read the same
+# three ways, so the three readers are written once here and both structs call them.
+fn names_have(names: list[str], name: str) -> bool {
+	for n in names {
+		if n == name {
 			return true
 		}
 	}
 	return false
 }
 
-# get returns an option's value, or "" when it was not given. A repeated option keeps the
-# LAST value, which is what a user expects from `zerg build --emit c --emit bin`.
-pub fn get(p: Parsed, long: str) -> str {
+# last_at answers with the LAST value under a name, which is what a user expects from
+# `zerg build --emit c --emit bin`.
+fn last_at(names: list[str], values: list[str], name: str) -> str {
 	mut out := ""
 	mut i := 0
-	for i < p.names.len() {
-		if p.names[i] == long {
-			out = p.values[i]
+	for i < names.len() {
+		if names[i] == name {
+			out = values[i]
 		}
 		i = i + 1
 	}
 	return out
 }
 
-# value_or returns an option's value, or fallback when it was not given.
-pub fn value_or(p: Parsed, long: str, fallback: str) -> str {
-	if has(p, long) {
-		return get(p, long)
-	}
-	return fallback
-}
-
-# --- help ---------------------------------------------------------------------------------
-
-# usage renders the help text from the same options the parser was given, so the two
-# cannot disagree. `head` is the summary line, `body` any extra sections the caller wants
-# printed after the options (commands, environment variables); either may be "".
-pub fn usage(head: str, opts: list[Opt], body: str) -> str {
-	mut out := head
-	if opts.len() > 0 {
-		out = out + "\nOptions:\n"
-		for o in opts {
-			out = out + "  " + opt_label(o) + pad(opt_label(o), 22) + o.help + "\n"
+fn values_at(names: list[str], values: list[str], name: str) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < names.len() {
+		if names[i] == name {
+			out.append(values[i])
 		}
-	}
-	if body != "" {
-		out = out + body
+		i = i + 1
 	}
 	return out
 }
 
-# opt_label renders an option's invocation: `-o, --output VALUE`.
-fn opt_label(o: Opt) -> str {
-	mut s := ""
-	if o.short != "" {
-		s = "-" + o.short + ", "
-	} else {
-		s = "    "
+impl Ctx {
+	# has reports whether an argument resolved to anything at all. A flag that was given
+	# resolves to "1"; an option resolves to its value, its environment variable, or its
+	# fallback, whichever came first.
+	pub fn has(name: str) -> bool {
+		return names_have(this.names, name)
 	}
-	s = s + "--" + o.long
-	if o.takes_value {
-		s = s + " VALUE"
+
+	# get returns an argument's value, or "" when it resolved to nothing.
+	pub fn get(name: str) -> str {
+		return last_at(this.names, this.values, name)
+	}
+
+	# all returns every value an argument was given, in order, for a repeated one.
+	pub fn all(name: str) -> list[str] {
+		return values_at(this.names, this.values, name)
+	}
+
+	# int_of reads an argument as a decimal number, falling back rather than failing: a
+	# value that is not a number should not be the thing that stops a program that has
+	# somewhere sensible to go.
+	pub fn int_of(name: str, fallback: int) -> int {
+		if not this.has(name) {
+			return fallback
+		}
+		mut n := fallback
+		guard {
+			n = strconv.parse_int(this.get(name), 10)
+		}
+		return n
+	}
+
+	# args returns the positional arguments, in order.
+	pub fn args() -> list[str] {
+		return this.rest
+	}
+
+	# path is the command names that led here, joined — "zerg build" — which is what an
+	# error message and a usage line should say rather than just the leaf's own name.
+	pub fn path() -> str {
+		return this.cmd_path
+	}
+}
+
+# --- declaring a command ------------------------------------------------------------------
+
+# Command is a program, or one of its sub-commands: the same shape either way, which is
+# what lets a sub-command have sub-commands of its own.
+#
+# `action` is the function it runs, returning the process's exit status. A command with
+# sub-commands and no action of its own prints its help when given none, which is the
+# behaviour a bare `git` has.
+pub struct Command {
+	name: str
+	about: str
+	ver: str
+	usage_text: str
+	args: list[Argument]
+	subs: list[Command]
+	action: fn (Ctx) -> int
+	has_action: bool
+	footer: str
+	auto_help: bool
+	group_names: list[str]
+	group_need: list[bool]
+}
+
+# no_action is what a command runs before one is declared. It is never reached — a command
+# without an action prints its help instead — but a function-typed field has to hold some
+# function, and a named one that does nothing is the honest thing to put there.
+fn no_action(c: Ctx) -> int {
+	return 0
+}
+
+# command starts a declaration.
+pub fn command(name: str, about: str = "") -> Command {
+	return Command(name, about, "", "", [], [], no_action, false, "", true, [], [])
+}
+
+impl Command {
+	# --- what the command is ---
+
+	# version declares `-V` / `--version` and the text it prints. The short letter is an
+	# uppercase `-V` by POSIX habit: lowercase `-v` is where users expect `--verbose`, and a
+	# tool that spends it on a flag people pass once has nothing left for the one they pass
+	# all the time.
+	pub fn version(ver: str) -> This {
+		mut c := this
+		c.ver = ver
+		return c
+	}
+
+	# usage overrides the generated `usage:` line, for a command whose shape the generator
+	# cannot know.
+	pub fn usage(line: str) -> This {
+		mut c := this
+		c.usage_text = line
+		return c
+	}
+
+	# epilog is text printed after everything else — the place for the environment
+	# variables, the exit codes, the examples.
+	pub fn epilog(text: str) -> This {
+		mut c := this
+		c.footer = text
+		return c
+	}
+
+	# no_help takes back the automatic `-h` / `--help`, for a tool that needs `-h` to mean
+	# something else. The help TEXT is still generated; only the flag is gone.
+	pub fn no_help() -> This {
+		mut c := this
+		c.auto_help = false
+		return c
+	}
+
+	# run declares the function this command performs, which is handed a Ctx and returns
+	# the process's exit status.
+	pub fn run(f: fn (Ctx) -> int) -> This {
+		mut c := this
+		c.action = f
+		c.has_action = true
+		return c
+	}
+
+	# --- what it accepts ---
+
+	# add takes a fully-formed Argument. It is the low-level door: the shorthands below are
+	# it with the common shape filled in, and anything they cannot say is said here.
+	pub fn add(a: Argument) -> This {
+		this.reject_duplicate(a)
+		mut xs := this.args
+		xs.append(a)
+		mut c := this
+		c.args = xs
+		return c
+	}
+
+	# opt declares an option that takes a value and may be left out.
+	pub fn opt(short: str, long: str = "", help: str = "", fallback: str = "") -> This {
+		return this.add(argument(short, long, help, fallback))
+	}
+
+	# required declares an option that must resolve to a value — from the command line, its
+	# environment variable, or its fallback. Missing all three is a usage error.
+	pub fn required(short: str, long: str = "", help: str = "", fallback: str = "") -> This {
+		return this.add(argument(short, long, help, fallback).required())
+	}
+
+	# flag declares a boolean.
+	pub fn flag(short: str, long: str = "", help: str = "") -> This {
+		return this.add(flag(short, long, help))
+	}
+
+	# pos declares a positional argument, taken in declaration order.
+	pub fn pos(name: str, help: str = "") -> This {
+		return this.add(positional(name, help))
+	}
+
+	# exclusive declares a set of arguments of which at most one may be given. It DECLARES
+	# them as well as groups them, so the set is written once:
+	#
+	# ```zerg
+	# .exclusive([cli.flag("c", "check"), cli.flag("w", "write")])
+	# ```
+	pub fn exclusive(args: list[Argument]) -> This {
+		return this.grouped(args, false)
+	}
+
+	# one_of is exclusive AND mandatory: exactly one of the set must be given. It is its own
+	# name rather than a boolean on `exclusive`, because "at most one" and "exactly one" are
+	# two constraints and `.exclusive(xs, true)` says neither of them at a call site.
+	pub fn one_of(args: list[Argument]) -> This {
+		return this.grouped(args, true)
+	}
+
+	fn grouped(args: list[Argument], need: bool) -> This {
+		gname := "exclusive-" + strconv.to_string(this.group_names.len(), 10)
+		mut c := this
+		for a in args {
+			c = c.add(in_group(a, gname))
+		}
+		mut gn := c.group_names
+		mut gr := c.group_need
+		gn.append(gname)
+		gr.append(need)
+		c.group_names = gn
+		c.group_need = gr
+		return c
+	}
+
+	# sub adds a sub-command. A command and its sub-commands are the same shape, so a
+	# sub-command may have its own.
+	pub fn sub(s: Command) -> This {
+		for x in this.subs {
+			if x.name == s.name {
+				raise ValueError("cli: sub-command " + s.name + " is declared twice")
+			}
+		}
+		mut ss := this.subs
+		ss.append(s)
+		mut c := this
+		c.subs = ss
+		return c
+	}
+
+	# reject_duplicate refuses a short letter or long name that is already declared. This
+	# is a mistake in the PROGRAM, so it raises where it is written — waiting until a user
+	# happens to type the ambiguous flag would report it in the wrong place, to the wrong
+	# person, and only sometimes.
+	fn reject_duplicate(a: Argument) {
+		for x in this.args {
+			if a.short != "" and x.short == a.short {
+				raise ValueError("cli: -" + a.short + " is declared twice on " + this.name)
+			}
+			if a.long != "" and x.long == a.long {
+				raise ValueError("cli: --" + a.long + " is declared twice on " + this.name)
+			}
+		}
+		if this.auto_help {
+			if a.short == "h" or a.long == "help" {
+				raise ValueError("cli: -h/--help is automatic on " + this.name + " (use .no_help() to take it back)")
+			}
+		}
+		if this.ver != "" {
+			if a.short == "V" or a.long == "version" {
+				raise ValueError("cli: -V/--version is declared by .version() on " + this.name)
+			}
+		}
+	}
+}
+
+# in_group returns a copy of an argument placed in a mutually exclusive group. It is a
+# free function rather than an Argument method because a group is the COMMAND's idea — an
+# argument on its own belongs to no set.
+fn in_group(a: Argument, g: str) -> Argument {
+	return Argument(a.short, a.long, a.help, a.fallback, a.kind, a.need, a.repeats, a.env_key, g, a.section)
+}
+
+# --- scanning the command line --------------------------------------------------------------
+
+# Scan is one pass over argv against one command's declarations: the arguments that were
+# GIVEN (names parallel to values, "1" for a flag), the positionals, the first usage error,
+# and where a sub-command name appeared — `sub_at` is -1 when none did.
+#
+# What was given is kept apart from what was RESOLVED, and the difference is load-bearing:
+# an exclusive group is about what the user typed, so a default filling a slot must not
+# make two options look mutually given.
+struct Scan {
+	names: list[str]
+	values: list[str]
+	rest: list[str]
+	err: str
+	sub_at: int
+}
+
+# scan walks argv until it runs out or reaches a sub-command name. Everything before that
+# name belongs to this command, everything after it to the sub-command — which is what
+# `git --git-dir=x log --oneline` means, and why the split is a position and not a rule
+# about which flags exist.
+fn scan(c: Command, argv: list[str]) -> Scan {
+	opts := all_args(c)
+	mut s := Scan([], [], [], "", - 1)
+	mut only_args := false
+	mut i := 0
+	for i < argv.len() {
+		a := argv[i]
+		if only_args {
+			s.rest.append(a)
+		} else if a == "--" {
+			only_args = true
+		} else if is_long(a) {
+			i = scan_long(a, argv, i, opts, s)
+		} else if is_short(a) {
+			i = scan_short(a, argv, i, opts, s)
+		} else if has_sub(c, a) {
+			s.sub_at = i
+			return s
+		} else {
+			s.rest.append(a)
+		}
+		if s.err != "" {
+			return s
+		}
+		i = i + 1
 	}
 	return s
+}
+
+# scan_long handles `--name` and `--name=value`, returning the index it consumed to.
+fn scan_long(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Scan) -> int {
+	body := drop_prefix(a, 2)
+	name := before_eq(body)
+	o := find_long(opts, name)
+	if o.long == "" {
+		s.err = "unknown option --" + name
+		return i
+	}
+	if o.kind == FlagArg {
+		if has_eq(body) {
+			s.err = "option --" + name + " takes no value"
+			return i
+		}
+		record(s, o.name(), "1")
+		return i
+	}
+	if has_eq(body) {
+		record(s, o.name(), after_eq(body))
+		return i
+	}
+	if i + 1 >= argv.len() {
+		s.err = "option --" + name + " needs a value"
+		return i
+	}
+	record(s, o.name(), argv[i + 1])
+	return i + 1
+}
+
+# scan_short handles `-o value` and bundled boolean flags like `-abc`. A value-taking
+# option ends the bundle, so `-o out` works and `-ao out` does too.
+fn scan_short(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Scan) -> int {
+	letters := list[byte](drop_prefix(a, 1))
+	mut j := 0
+	mut at := i
+	for j < letters.len() {
+		mut one: list[byte] = []
+		one.append(letters[j])
+		ch := str(one)
+		o := find_short(opts, ch)
+		if o.short == "" {
+			s.err = "unknown option -" + ch
+			return at
+		}
+		if o.kind == FlagArg {
+			record(s, o.name(), "1")
+			j = j + 1
+		} else if j + 1 < letters.len() {
+			# the rest of the bundle is the value: `-oout`
+			mut restb: list[byte] = []
+			mut k := j + 1
+			for k < letters.len() {
+				restb.append(letters[k])
+				k = k + 1
+			}
+			record(s, o.name(), str(restb))
+			return at
+		} else if at + 1 < argv.len() {
+			record(s, o.name(), argv[at + 1])
+			return at + 1
+		} else {
+			s.err = "option -" + ch + " needs a value"
+			return at
+		}
+	}
+	return at
+}
+
+fn record(mut &s: Scan, name: str, value: str) {
+	s.names.append(name)
+	s.values.append(value)
+}
+
+# --- the declarations a command actually parses with -----------------------------------------
+
+# all_args is what a command parses with: its own declarations plus the ones it gets for
+# free. Generating them HERE, in the one place both the parser and the help renderer ask,
+# is what keeps `--help` from being a flag the help screen forgets to mention.
+fn all_args(c: Command) -> list[Argument] {
+	mut out: list[Argument] = []
+	for a in c.args {
+		out.append(a)
+	}
+	if c.auto_help {
+		out.append(flag("h", "help", "show this help message and exit"))
+	}
+	if c.ver != "" {
+		out.append(flag("V", "version", "show the version and exit"))
+	}
+	return out
+}
+
+# The two finders answer with a NAMELESS argument when there is none, which is the same
+# thing `argument("")` builds — so the miss is spelled by the constructor rather than by a
+# ten-field literal that would have to be edited alongside the struct.
+fn find_long(opts: list[Argument], name: str) -> Argument {
+	for o in opts {
+		if o.kind != PosArg and o.long == name {
+			return o
+		}
+	}
+	return argument("")
+}
+
+fn find_short(opts: list[Argument], letter: str) -> Argument {
+	for o in opts {
+		if o.kind != PosArg and o.short != "" and o.short == letter {
+			return o
+		}
+	}
+	return argument("")
+}
+
+fn find_sub(c: Command, name: str) -> Command {
+	for s in c.subs {
+		if s.name == name {
+			return s
+		}
+	}
+	return command("")
+}
+
+fn has_sub(c: Command, name: str) -> bool {
+	return find_sub(c, name).name != ""
+}
+
+# --- resolving ----------------------------------------------------------------------------
+
+# resolve turns what was GIVEN into what the command's function sees: every declaration
+# that got a value, from the command line, then the environment, then its fallback. That
+# order is the point — a deployment sets an environment variable to override a default,
+# and a user's command line overrides them both.
+fn resolve(c: Command, s: Scan, path: str) -> Ctx {
+	mut ctx := Ctx([], [], s.rest, path)
+	for a in c.args {
+		if a.kind == PosArg {
+			nop
+		} else if given(s, a.name()) {
+			for v in values_of(s, a.name()) {
+				ctx.names.append(a.name())
+				ctx.values.append(v)
+			}
+		} else if a.env_key != "" and __zrt_has_env(a.env_key) {
+			ctx.names.append(a.name())
+			ctx.values.append(__zrt_getenv(a.env_key))
+		} else if a.fallback != "" {
+			ctx.names.append(a.name())
+			ctx.values.append(a.fallback)
+		}
+	}
+	bind_positionals(c, s, ctx)
+	return ctx
+}
+
+# bind_positionals gives the leftover tokens their declared names, in order. A repeated
+# positional takes every one that is left, which is why it can only be the last that
+# matters — anything declared after it would never see a token.
+fn bind_positionals(c: Command, s: Scan, mut &ctx: Ctx) {
+	mut at := 0
+	for a in c.args {
+		if a.kind != PosArg {
+			nop
+		} else if a.repeats {
+			for at < s.rest.len() {
+				ctx.names.append(a.name())
+				ctx.values.append(s.rest[at])
+				at = at + 1
+			}
+		} else if at < s.rest.len() {
+			ctx.names.append(a.name())
+			ctx.values.append(s.rest[at])
+			at = at + 1
+		} else if a.fallback != "" {
+			ctx.names.append(a.name())
+			ctx.values.append(a.fallback)
+		}
+	}
+}
+
+fn given(s: Scan, name: str) -> bool {
+	return names_have(s.names, name)
+}
+
+fn values_of(s: Scan, name: str) -> list[str] {
+	return values_at(s.names, s.values, name)
+}
+
+# --- validating -----------------------------------------------------------------------------
+
+# validate reports the first thing wrong with a command line that parsed. Parsing answers
+# "is this spelled like an argument"; this answers "is this a command line the program
+# accepts", which is a separate question and a later one.
+fn validate(c: Command, s: Scan, ctx: Ctx) -> str {
+	for a in c.args {
+		if a.need and not ctx.has(a.name()) {
+			if a.kind == PosArg {
+				return "missing required argument <" + a.name() + ">"
+			}
+			return "missing required option --" + a.name()
+		}
+	}
+	return validate_groups(c, s)
+}
+
+# validate_groups checks the mutually exclusive sets against what the user TYPED, not
+# against what was resolved: a default filling one slot must not make two options look as
+# though both were asked for.
+fn validate_groups(c: Command, s: Scan) -> str {
+	mut gi := 0
+	for gi < c.group_names.len() {
+		g := c.group_names[gi]
+		mut seen := 0
+		mut first := ""
+		mut clash := ""
+		for a in c.args {
+			if a.group == g and given(s, a.name()) {
+				seen = seen + 1
+				if first == "" {
+					first = a.name()
+				} else {
+					clash = a.name()
+				}
+			}
+		}
+		if seen > 1 {
+			return "--" + first + " and --" + clash + " cannot be given together"
+		}
+		if seen == 0 and c.group_need[gi] {
+			return "one of " + group_list(c, g) + " is required"
+		}
+		gi = gi + 1
+	}
+	return ""
+}
+
+fn group_list(c: Command, g: str) -> str {
+	mut out := ""
+	for a in c.args {
+		if a.group == g {
+			if out != "" {
+				out = out + ", "
+			}
+			out = out + "--" + a.name()
+		}
+	}
+	return out
+}
+
+# --- rendering the help -----------------------------------------------------------------------
+
+impl Command {
+	# render returns this command's help text — the same text `--help` prints, for a
+	# program that would rather place it itself.
+	pub fn render() -> str {
+		return this.render_as(this.name)
+	}
+
+	# render_as is render under the name a command was REACHED by, so a sub-command's help
+	# says `usage: zerg build …` rather than `usage: build …`. Only dispatch knows that
+	# path, which is why it is a parameter and not a field.
+	fn render_as(path: str) -> str {
+		mut out := ""
+		if this.about != "" {
+			out = this.name + " — " + this.about + "\n\n"
+		}
+		out = out + "usage: " + this.usage_of(path) + "\n"
+		out = out + this.command_list()
+		out = out + this.option_lists()
+		if this.footer != "" {
+			out = out + "\n" + this.footer
+		}
+		return out
+	}
+
+	# usage_of is the declared usage line, or one built from what the command accepts —
+	# which is possible precisely because the arguments are declared rather than parsed by
+	# hand somewhere else.
+	fn usage_of(path: str) -> str {
+		if this.usage_text != "" {
+			return this.usage_text
+		}
+		mut out := path
+		if this.subs.len() > 0 {
+			out = out + " <command>"
+		}
+		if takes_options(this) {
+			out = out + " [options]"
+		}
+		for a in this.args {
+			if a.kind == PosArg {
+				out = out + " " + positional_form(a)
+			}
+		}
+		return out
+	}
+
+	fn command_list() -> str {
+		if this.subs.len() == 0 {
+			return ""
+		}
+		mut out := "\nCommands:\n"
+		for s in this.subs {
+			out = out + "  " + s.name + pad(s.name, 20) + s.about + "\n"
+		}
+		return out
+	}
+
+	# option_lists prints each section under its own heading, in the order the sections
+	# were first declared, so a command with many options reads as groups rather than as
+	# one wall.
+	fn option_lists() -> str {
+		opts := all_args(this)
+		mut out := ""
+		for title in section_titles(opts) {
+			out = out + "\n" + title + ":\n"
+			for a in opts {
+				if section_of(a) == title {
+					lbl := a.label()
+					out = out + "  " + lbl + pad(lbl, 22) + a.describe() + "\n"
+				}
+			}
+		}
+		return out
+	}
+}
+
+fn takes_options(c: Command) -> bool {
+	for a in all_args(c) {
+		if a.kind != PosArg {
+			return true
+		}
+	}
+	return false
+}
+
+fn positional_form(a: Argument) -> str {
+	mut out := "<" + a.name() + ">"
+	if not a.need {
+		out = "[" + out + "]"
+	}
+	if a.repeats {
+		out = out + "..."
+	}
+	return out
+}
+
+fn section_of(a: Argument) -> str {
+	if a.section != "" {
+		return a.section
+	}
+	if a.kind == PosArg {
+		return "Arguments"
+	}
+	return "Options"
+}
+
+# section_titles lists each heading once: what the command OPERATES ON first, then the
+# program's own sections in the order it declared them, then the options.
+#
+# The two built-in headings get a fixed place and the declared ones do not, and the
+# difference is whose decision each is. A section a program names is a decision it made,
+# and sorting those would put them in an order it did not choose. `Arguments` and
+# `Options` are not named by anyone — they are where everything unlabelled lands — so
+# leaving them to declaration order meant a command that happened to declare a positional
+# first printed its help upside down against its sibling. `zerg build` listed Options
+# above Arguments and `zerg lint` the other way, in one tool, for no reason a reader could
+# see. Positionals first, catch-all last, matching what clap and argparse do.
+fn section_titles(opts: list[Argument]) -> list[str] {
+	mut out: list[str] = []
+	if has_section(opts, "Arguments") {
+		out.append("Arguments")
+	}
+	for a in opts {
+		t := section_of(a)
+		if t != "Arguments" and t != "Options" and not names_have(out, t) {
+			out.append(t)
+		}
+	}
+	if has_section(opts, "Options") {
+		out.append("Options")
+	}
+	return out
+}
+
+fn has_section(opts: list[Argument], title: str) -> bool {
+	for a in opts {
+		if section_of(a) == title {
+			return true
+		}
+	}
+	return false
 }
 
 # pad returns the spaces that bring s up to width, or one space when it is already past.
@@ -227,25 +951,84 @@ fn pad(s: str, width: int) -> str {
 	return str(out)
 }
 
-# --- lookup and small string helpers --------------------------------------------------------
+# --- running --------------------------------------------------------------------------------
 
-fn find_long(opts: list[Opt], name: str) -> Opt {
-	for o in opts {
-		if o.long == name {
-			return o
-		}
+impl Command {
+	# exec parses argv, answers `--help` / `--version`, dispatches to the sub-command that
+	# was named, and runs the function that command declared — returning the exit status
+	# for the process. It is the whole of a `main`:
+	#
+	#     fn main(argv: list[str]) {
+	#         __zrt_exit(root.exec(argv))
+	#     }
+	#
+	# argv is WITHOUT the program name, which is what `fn main(args)` receives.
+	pub fn exec(argv: list[str]) -> int {
+		return this.dispatch(argv, this.name)
 	}
-	return Opt("", "", false, "")
+
+	fn dispatch(argv: list[str], path: str) -> int {
+		s := scan(this, argv)
+		if s.err != "" {
+			return this.refuse(path, s.err)
+		}
+		# --help and --version are answered by the command they were written BEFORE, which
+		# is why this comes ahead of the sub-command hand-off: `wc --help count` is asking
+		# wc, and `wc count --help` is asking count.
+		if this.auto_help and given(s, "help") {
+			io.write(this.render_as(path))
+			return 0
+		}
+		if this.ver != "" and given(s, "version") {
+			io.println(this.ver)
+			return 0
+		}
+		if s.sub_at >= 0 {
+			sc := find_sub(this, argv[s.sub_at])
+			return sc.dispatch(tail(argv, s.sub_at + 1), path + " " + sc.name)
+		}
+		ctx := resolve(this, s, path)
+		verr := validate(this, s, ctx)
+		if verr != "" {
+			return this.refuse(path, verr)
+		}
+		# A command with no function of its own is a place sub-commands hang from, so being
+		# asked to run it is being asked what it can do — which the help answers. Being
+		# given a WORD it does not know is a different question, and refusing it is the
+		# answer: printing the help there would exit 0 on a command line that was wrong.
+		if not this.has_action {
+			if this.subs.len() > 0 and s.rest.len() > 0 {
+				return this.refuse(path, "unknown command " + s.rest[0])
+			}
+			io.write(this.render_as(path))
+			return 0
+		}
+		return this.action(ctx)
+	}
+
+	# refuse reports a bad command line the way a tool should: the program's own name, the
+	# message, and where to look — on stderr, exiting 2, which is the usage-error status a
+	# shell script can tell apart from the program failing at its actual job.
+	fn refuse(path: str, msg: str) -> int {
+		io.eprintln(path + ": " + msg)
+		if this.auto_help {
+			io.eprintln("try `" + path + " --help` for the options")
+		}
+		return 2
+	}
 }
 
-fn find_short(opts: list[Opt], letter: str) -> Opt {
-	for o in opts {
-		if o.short != "" and o.short == letter {
-			return o
-		}
+fn tail(xs: list[str], at: int) -> list[str] {
+	mut out: list[str] = []
+	mut i := at
+	for i < xs.len() {
+		out.append(xs[i])
+		i = i + 1
 	}
-	return Opt("", "", false, "")
+	return out
 }
+
+# --- small string helpers ----------------------------------------------------------------
 
 # is_long reports `--name`; is_short reports `-x` but not a bare `-`.
 fn is_long(a: str) -> bool {

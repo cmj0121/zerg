@@ -68,8 +68,8 @@ already taken for formatting; `print` stays a built-in construct, not a user-def
 
 **Closures capture by the same rule as `spawn`: only immutable values and channels, copied in.** Capturing
 an **immutable** value — a plain scalar, or a **non-POD** value (a `list` / `map` / `str`, a `Ref`, or a
-boxed value) — is **[not yet]**, along with the rest of closures and function values,
-which the seed no longer builds; capturing a **`mut`** binding is **[not yet]** too — snapshot it into an
+boxed value) — is **[not yet]**, along with the rest of closures; capturing a **`mut`** binding is
+**[not yet]** too — snapshot it into an
 immutable binding first (`snap := n`). Capture is **by copy** in meaning — a captured channel is
 refcount-bumped, and a **non-POD immutable value** is **retained into the closure's refcounted environment**
 rather than eagerly deep-cloned, a plain scalar simply copied — so a closure that escapes its defining scope

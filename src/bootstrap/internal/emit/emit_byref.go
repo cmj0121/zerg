@@ -77,6 +77,14 @@ func (e *emitter) calleeByRefArgs(id *ast.Ident) []bool {
 	if !ok {
 		return nil
 	}
+	return byRefOf(fd)
+}
+
+// byRefOf reports, per declared parameter, whether it is `mut &`. It answers nil when
+// none is, so a call with no by-ref parameter allocates nothing and stays byte-identical.
+// A direct call, a namespace call and a method call all ask it of the same node — the
+// declaration — which is what keeps one answer from being three.
+func byRefOf(fd *ast.FuncDecl) []bool {
 	var out []bool
 	for i, p := range fd.Params {
 		if !p.Ref {

@@ -1,0 +1,19 @@
+# zergc — the self-hosting Zerg compiler driver (M1: token dump).
+#
+# For now it wires the `zerg` compiler library's lexer to the command line: read a
+# source file and print its token stream in the same format as the bootstrap's
+# `zerg build --emit tokens`, so the two can be diff-tested byte-for-byte. Later
+# milestones grow this into the full lex -> parse -> emit -> cc pipeline.
+import "zerg"
+import "io"
+
+fn main(args: list[str]) {
+	if args.len() < 1 {
+		print "usage: zergc <file.zg>"
+		return
+	}
+	src := str(io.read_file(args[0]))
+	guard {
+		io.write(zerg.dump_tokens(src))
+	}
+}

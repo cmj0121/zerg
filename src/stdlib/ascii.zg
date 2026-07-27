@@ -48,27 +48,21 @@ pub fn is_hex_digit(b: byte) -> bool {
 # same set as C's isspace.
 pub fn is_space(b: byte) -> bool {
 	v := int(b)
-	if v == 32 {
-		return true
-	}
+	return true if v == 32
 	return v >= 9 and v <= 13
 }
 
 # to_upper folds an ASCII lowercase letter to its uppercase form; every other byte
 # (including all non-ASCII) is returned unchanged.
 pub fn to_upper(b: byte) -> byte {
-	if is_lower(b) {
-		return byte(int(b) - 32)
-	}
+	return byte(int(b) - 32) if is_lower(b)
 	return b
 }
 
 # to_lower folds an ASCII uppercase letter to its lowercase form; every other byte
 # (including all non-ASCII) is returned unchanged.
 pub fn to_lower(b: byte) -> byte {
-	if is_upper(b) {
-		return byte(int(b) + 32)
-	}
+	return byte(int(b) + 32) if is_upper(b)
 	return b
 }
 
@@ -76,9 +70,7 @@ pub fn to_lower(b: byte) -> byte {
 # not a digit — the building block for parsing a decimal number by hand.
 pub fn digit_val(b: byte) -> int {
 	v := int(b)
-	if v >= 48 and v <= 57 {
-		return v - 48
-	}
+	return v - 48 if v >= 48 and v <= 57
 	return - 1
 }
 
@@ -86,14 +78,8 @@ pub fn digit_val(b: byte) -> int {
 # or -1 when b is not a hex digit — the building block for parsing a `0x…` literal.
 pub fn hex_val(b: byte) -> int {
 	v := int(b)
-	if v >= 48 and v <= 57 {
-		return v - 48
-	}
-	if v >= 97 and v <= 102 {
-		return v - 87
-	}
-	if v >= 65 and v <= 70 {
-		return v - 55
-	}
+	return v - 48 if v >= 48 and v <= 57
+	return v - 87 if v >= 97 and v <= 102
+	return v - 55 if v >= 65 and v <= 70
 	return - 1
 }

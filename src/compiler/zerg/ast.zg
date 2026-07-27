@@ -131,7 +131,7 @@ struct EnumDecl {
 # function declarations in source order. Imports are kept (rather than skipped with the
 # rest of the out-of-subset surface) because the driver resolves them into the source
 # list it compiles, and the linter reports the ones nothing uses.
-struct File {
+pub struct File {
 	imports: list[str]
 	structs: list[StructDecl]
 	enums: list[EnumDecl]

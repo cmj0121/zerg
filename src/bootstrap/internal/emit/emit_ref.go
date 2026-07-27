@@ -214,12 +214,6 @@ func (e *emitter) prepareRuntime() {
 	if e.strManaged {
 		e.needsRuntime = true
 	}
-	// Decide closure-env management BEFORE any POD-ness question (programUsesRef below
-	// consults containsRef, which treats a function value as non-POD exactly when this
-	// flag is set). A program that captures a non-POD immutable value in a closure boxes
-	// its environments and refcounts its function values; one that captures none leaves
-	// every function value plain data and stays byte-identical. It must be settled after
-	// strManaged, since a captured str is non-POD only in a str-managed program.
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
@@ -738,13 +732,6 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		// copying a list value that names existing storage deep-copies its buffer (each
 		// element via the instance vtable), so the two holders never alias.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), base)
-	case *types.Chan:
-		// copying a channel handle retains it; a send-capable handle (bidi/send-only)
-		// also bumps the sender count, a receive-only handle does not.
-		if t.Dir == types.ChanRecv {
-			return fmt.Sprintf("zrt_chan_copy(%s)", base)
-		}
-		return fmt.Sprintf("zrt_chan_sender_copy(%s)", base)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(typ), base)
 	case *types.Opt:

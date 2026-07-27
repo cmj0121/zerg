@@ -28,11 +28,10 @@ import (
 // discovery order), the specialized nominal types they use, the shared analysis
 // Info that backs each overlay, and the 'main' instance (nil when absent).
 type Program struct {
-	Info      *sema.Info
-	Funcs     []*Instance
-	Types     []*TypeInstance
-	Witnesses []*Witness
-	Main      *Instance
+	Info  *sema.Info
+	Funcs []*Instance
+	Types []*TypeInstance
+	Main  *Instance
 
 	// Inits is the module-initialization plan the emitter lowers (Phase 1g S3): the
 	// modules that own an `init()` block or a module constant, in dependency order.
@@ -51,9 +50,8 @@ type Program struct {
 	// a program that defines no recursive type, which therefore stays byte-identical.
 	CyclicTypes map[string]bool
 
-	byMangled   map[string]*Instance
-	typeByKey   map[string]*TypeInstance
-	witByGlobal map[string]*Witness
+	byMangled map[string]*Instance
+	typeByKey map[string]*TypeInstance
 }
 
 // InitGroup is one module's initialization content the emitter renders into a
@@ -79,25 +77,12 @@ type Instance struct {
 	Params     []types.Type
 	Ret        types.Type
 
-	// Recv is the receiver type of an impl-method instance (nil for a free
-	// function). RecvErased marks a witness-table method whose receiver is passed as
-	// an opaque 'const void*' and cast to Recv in a prologue (DESIGN-1c §6.1).
-	Recv       types.Type
-	RecvErased bool
-
-	// Dyn marks the single erased body of a '#[dyn]' generic (DESIGN-1c §6): its
-	// type-parameter-typed parameters (Erased[i] true) render as 'const void*' and
-	// it takes a trailing witness-table pointer for DynSpec. DynSites records, per
-	// call to this dyn function from the current body, the concrete witness to pass.
-	Dyn      bool
-	DynSpec  *types.SpecDef
-	Erased   []bool
-	DynParam string // the witness pointer parameter name inside a dyn body ("w")
+	// Recv is the receiver type of an impl-method instance (nil for a free function).
+	Recv types.Type
 
 	subT        map[string]types.Type
 	subV        map[string]types.ConstVal
 	Calls       map[*ast.Call]string
-	DynSites    map[*ast.Call]*DynSite
 	MethodCalls map[*ast.Call]*MethodDispatch
 	OpCalls     map[*ast.Binary]*MethodDispatch
 }
@@ -108,36 +93,6 @@ type Instance struct {
 // argument (DESIGN-1c §3.3/§6, B1/B2).
 type MethodDispatch struct {
 	Mangled string
-	// Erased marks a dispatch whose target instance takes an opaque 'const void*'
-	// receiver (a spec provided-method body called from another provided body, W3):
-	// the receiver is address-taken and cast, not passed by value.
-	Erased bool
-}
-
-// DynSite is a call to a '#[dyn]' function from within some body: the witness the
-// call must pass and which positional arguments are erased (address-taken to a
-// 'const void*'). The emitter reads it to spell the dispatch.
-type DynSite struct {
-	Callee  string   // the dyn function's mangled name
-	Witness *Witness // the concrete witness table to pass
-	Erased  []bool   // per argument, whether it is erased to an opaque pointer
-}
-
-// Witness is one concrete witness table for a (spec, type) pair (DESIGN-1c §6.1):
-// a C global of the spec's witness struct whose slots hold the impl methods'
-// addresses. It is emitted once and shared by every dyn call at that type.
-type Witness struct {
-	Global string // the C global variable name, e.g. 'zg_witness_Show__Wrap'
-	Struct string // the witness struct type name, e.g. 'zg_witness_Show'
-	Spec   *types.SpecDef
-	Slots  []WitnessSlot
-}
-
-// WitnessSlot binds one spec method name to the mangled C name of the impl method
-// that fills it for this type.
-type WitnessSlot struct {
-	Method string
-	Fn     string
 }
 
 // TypeInstance is one specialized nominal type to emit: the mangled C type name,

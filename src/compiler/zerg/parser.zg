@@ -87,6 +87,24 @@ fn parse_type(mut &p: Parser) -> Ty {
 	if name == "This" and p.impl_ty != "" {
 		return TNamed(p.impl_ty)
 	}
+	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
+	if name == "fn" and p_at(p, LParen) {
+		p_advance(p)
+		mut ptys: list[Ty] = []
+		for not p_at(p, RParen) and not p_at(p, Eof) {
+			ptys.append(parse_type(p))
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
+		}
+		expect(p, RParen)
+		mut fret := TVoid
+		if p_at(p, Arrow) {
+			p_advance(p)
+			fret = parse_type(p)
+		}
+		return TFn(ptys, fret)
+	}
 	if name == "list" and p_at(p, LBrack) {
 		p_advance(p)
 		elem := parse_type(p)

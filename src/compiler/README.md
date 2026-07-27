@@ -45,28 +45,29 @@ those enums, with `zergc.zg` as a thin driver that only ever calls the module's 
 functions — never constructs a variant. The original `src/compiler/zerg/` instinct was
 right.
 
-## Diff-test harness
+## The corpus
 
-Every front/back-end pass has a golden oracle in the Go bootstrap:
+`test-data/` is this compiler's. It describes the LANGUAGE — which is what `zerg` is
+growing toward — so it follows the language, not the seed; the Go seed in
+[`src/bootstrap/`](../bootstrap) covers its own narrow contract with unit tests and reads
+none of it.
 
-| pass   | oracle                            |
-| ------ | --------------------------------- |
-| lexer  | `zerg build --emit tokens <file>` |
-| parser | `zerg build --emit ast <file>`    |
-| emit   | `zerg build --emit c <file>`      |
+```sh
+make corpus     # build zerg, then run it over test-data/codegen/
+```
 
-`scripts/selfhost-difftest.sh` runs a pass of the Zerg compiler against the matching
-Go-bootstrap oracle over a corpus (`examples/*.zg` + `test-data/`) and reports the first
-divergence. This is the primary correctness signal until M5.
+Each case is a `.zg` program beside the stdout it must produce. The Makefile's
+`CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves
+it is a regression and fails the target. The remaining cases are reported, not enforced —
+they need generics, `derive`, spec bounds, or `#[dyn]`, none of which the self-hosting
+compiler has yet. Each one that starts passing is a feature landing, and moves into the
+list.
 
-**Emit is validated end-to-end, not byte-exact.** The lexer and parser are structural,
-so they are diff-tested byte-for-byte (tokens; and a structural AST dump). The emitter is
-not: reproducing the Go bootstrap's exact C formatting and naming across ~9.5k LOC would
-cost far more than it is worth. Instead the emit bar is **functional equivalence** — the
-emitted C must compile and the program must behave identically to the Go-bootstrap build.
-Validation is `zergc --emit c → cc → run`, diffing the program's output against the
-Go-bootstrap build over the corpus. Determinism (required anyway by the M5 fixpoint) is
-what makes this stable; byte-identical C is explicitly a non-goal.
+**Emit is validated end-to-end, not byte-exact.** Reproducing the Go seed's exact C
+formatting and naming across ~9.5k LOC would cost far more than it is worth, so the bar
+is **functional equivalence**: the emitted C must compile and the program must print what
+the corpus says. Determinism (required anyway by the fixpoint) is what makes that stable;
+byte-identical C is explicitly a non-goal.
 
 ## Growing emit to the self-compile subset (M3 → M5)
 

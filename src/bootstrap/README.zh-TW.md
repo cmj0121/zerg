@@ -134,8 +134,11 @@ src/bootstrap/
 
 ```sh
 zerg0 build --emit c src/compiler/zergc.zg > after.c  # 與改動前的擷取結果比對
-go build ./... && go test ./...                       # 種子自己的測試
+go build ./... && go test ./...                       # 種子自己的測試（只有單元測試）
 make build                                            # 而且自舉鏈仍能閉合
 ```
+
+種子只由單元測試覆蓋。`test-data/` 語料描述的是語言，因此歸自舉編譯器所有，由 `make corpus` 執行——見
+[`src/compiler/README.md`](../compiler/README.md)。
 
 想把語言覆蓋率加回這裡，幾乎總是錯的選擇：自舉編譯器才是語言生長的地方。種子只需要好到足以建出它。

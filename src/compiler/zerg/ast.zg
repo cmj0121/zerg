@@ -89,13 +89,17 @@ struct Param {
 }
 
 # FnDecl is a function declaration: name, parameters, an optional return type
-# (has_ret false means it returns nothing), and the body block.
+# (has_ret false means it returns nothing), the body block, and whether it was declared
+# `pub`. Visibility does not change the emitted C — every function is one flat C symbol —
+# but the linter needs it: an unused PRIVATE function is dead code, while an unused public
+# one is simply part of a module's interface.
 struct FnDecl {
 	name: str
 	params: list[Param]
 	has_ret: bool
 	ret: Ty
 	body: list[Stmt]
+	is_pub: bool
 }
 
 # FieldDef is one struct field: its name and declared type.

@@ -145,9 +145,13 @@ before and after; if it is not, the difference is the change's real blast radius
 
 ```sh
 zerg0 build --emit c src/compiler/zergc.zg > after.c  # compare against a pre-change capture
-go build ./... && go test ./...                       # the seed's own suite
+go build ./... && go test ./...                       # the seed's own suite (unit tests only)
 make build                                            # and the chain still closes
 ```
+
+The seed is covered by unit tests alone. The `test-data/` corpus describes the language,
+so it belongs to the self-hosting compiler and is run by `make corpus` — see
+[`src/compiler/README.md`](../compiler/README.md).
 
 Adding language coverage back here is almost always the wrong move: the self-hosting
 compiler is where the language grows. The seed only has to stay good enough to build it.

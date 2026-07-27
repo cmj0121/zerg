@@ -32,10 +32,24 @@ stable target and the gaps are explicit. Every feature carries one of:
 
 | Marker                       | Meaning                                                                          |
 | ---------------------------- | -------------------------------------------------------------------------------- |
-| **[implemented]**            | The bootstrap compiler implements this as specified.                             |
+| **[implemented]**            | The SEED (`zerg0`) implements this as specified.                                 |
 | **[not yet: Phase N]**       | Specified, not yet built. Using it is a clean compile error today.               |
 | **[implementation-defined]** | The spec deliberately does not pin this; a conforming implementation may choose. |
-| **[deviation]**              | The bootstrap's current behavior does **not** match this spec; a tracked bug.    |
+| **[deviation]**              | The seed's current behavior does **not** match this spec; a tracked bug.         |
+
+**Which compiler a marker refers to.** There are two: `zerg0`, the Go-hosted seed whose
+only job is building the compiler, and `zerg`, the self-hosted compiler that ships. The
+markers in this specification are measured against the **seed**, because it is the wider
+of the two — `zerg` implements a subset of what the seed does, and that subset is
+documented in [`src/compiler/README.md`](../src/compiler/README.md) rather than marked
+per-feature here. A feature marked **[implemented]** may therefore be one `zerg` does not
+accept yet.
+
+Some features were specified, built in the seed, and then REMOVED from it when the seed
+was cut down to its one job — closures and function values, `map[K, V]`, coroutines,
+channels and `select`, `#[dyn]` dispatch, and `unsafe` pointers and inline assembly. Those
+are marked **[not yet]** again: the seed rejects them with a diagnostic, which is exactly
+what that marker promises.
 
 A section with no marker inherits the marker of its enclosing feature; a paragraph may override with its
 own. A **[deviation]** always states both the specified behavior and what the bootstrap does instead.

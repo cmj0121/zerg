@@ -22,20 +22,21 @@ zerg0 build -o out --keep-c f.zg   # 指定輸出路徑，並保留產生的 .c
 ## 自舉鏈
 
 ```text
-make build                        # 或者手動跑它的兩個步驟：
+make build                        # 或者手動跑它的三個步驟：
 go build -o bin/zerg0 ./cmd/zerg  # 1. Go 種子——叫 zerg0，不叫 zerg
-zerg0 build src/compiler/zergc.zg -o bin/zerg
-                                  # 2. 種子建出自舉編譯器
-zerg build <out> <file.zg>...     # 3. zerg 建置程式——也建置它自己
+zerg0 build src/compiler/zergc.zg -o bin/.zerg-stage1
+                                  # 2. 種子建出一個「中繼」編譯器
+zerg build --emit bin -o bin/zerg src/compiler/zergc.zg
+                                  # 3. 由中繼建出實際出貨的 zerg
 ```
 
-第 3 步能對自己閉合，正是整個目錄存在的意義：在那之後，種子只在「機器上還沒有 `zerg`」時，才需要從原始碼重新
-推導出 `zerg`。
+出貨的編譯器是由「以 Zerg 寫成的編譯器」建出的，不是由種子——種子只需要造出一個夠好的中繼。這讓種子離開
+交付路徑，也讓每一次建置都走過自舉路徑。在那之後，種子只在「機器上還沒有 `zerg`」時，才需要重新推導出它。
 
 ## 種子支援什麼
 
 以下每一項都被自舉原始碼（`src/compiler/zergc.zg`、`src/compiler/zerg/*.zg`）或它匯入的 stdlib 模組（`io`、
-`ascii`、`strconv`）實際用到——這就是它們還在的理由。
+`ascii`、`strconv`、`cli`）實際用到——這就是它們還在的理由。
 
 | 特性                            | 說明                                                  |
 | ------------------------------- | ----------------------------------------------------- |
@@ -115,6 +116,7 @@ pattern        ::= identifier ( '(' identifier ( ',' identifier )* ')' )? | '_'
 src/bootstrap/
   cmd/zerg/        # 只做 build 的 driver：旗標、呼叫 cc、exit code
   internal/
+    token/         # token 種類與其拼法
     lexer/         # 原始碼文字 -> token
     parser/        # token -> AST
     ast/           # AST 節點型別

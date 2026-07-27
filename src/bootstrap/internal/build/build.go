@@ -51,28 +51,6 @@ func CompileProgram(entryPath string) (string, emit.Manifest, []diag.Diagnostic)
 	return compileWith(loader, string(src))
 }
 
-// CheckProgram runs only the front-end of the whole-program pipeline over the entry
-// file — module resolution, name resolution, and type checking — and returns its
-// diagnostics (empty on success). It is the shared basis for `zerg lint`, which
-// layers its lint-only findings on a program the compiler already accepts; stopping
-// before mono/emit means it reports exactly the compile-time errors without lowering.
-func CheckProgram(entryPath string) []diag.Diagnostic {
-	src, err := os.ReadFile(entryPath) //nolint:gosec // the entry source the user asked to lint
-	if err != nil {
-		var diags diag.List
-		diags.Add(token.Span{}, "cannot read entry file %q: %v", entryPath, err)
-		return diags.Items()
-	}
-	root := module.OSProvider{Root: filepath.Dir(entryPath)}
-	loader := module.NewLoader(root, stdlibProvider{})
-	file, _, diags := loader.LoadProgram(string(src))
-	if len(diags) > 0 {
-		return diags
-	}
-	_, diags = sema.Check(file)
-	return diags
-}
-
 // compileWith runs the shared inner pipeline over a configured loader.
 func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []diag.Diagnostic) {
 	file, plan, diags := loader.LoadProgram(src)

@@ -14,6 +14,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -140,16 +141,9 @@ func writeCSource(cmd *BuildCmd, code string) (string, func(), error) {
 	cerr := f.Close()
 	if werr != nil || cerr != nil {
 		_ = os.Remove(path)
-		return "", func() {}, fmt.Errorf("write temp C: %w", cmpErr(werr, cerr))
+		return "", func() {}, fmt.Errorf("write temp C: %w", errors.Join(werr, cerr))
 	}
 	return path, func() { _ = os.Remove(path) }, nil
-}
-
-func cmpErr(a, b error) error {
-	if a != nil {
-		return a
-	}
-	return b
 }
 
 // reportDiags prints each diagnostic as 'file:line:col: message' to stderr.

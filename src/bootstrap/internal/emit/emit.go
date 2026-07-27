@@ -172,44 +172,29 @@ type emitter struct {
 	scopes  []map[string]string
 	used    map[string]bool
 	counter int
-
-	// Test-driver state (Phase 1i U2). testMode makes program() emit a generated test
-	// driver (cTestMain) in place of the ordinary `main`, forcing the runtime on; tests
-	// is the ordered set of `#[test]` signatures the driver runs. Both zero-valued for a
-	// normal build, which is therefore unaffected.
-	testMode bool
-	tests    []*sema.FuncSig
 }
 
 func (e *emitter) program() {
-	// A test translation unit (Phase 1i U2) has no ordinary `main`: its entry is a
-	// generated test driver, and it always needs the runtime (the guard/abort handler
-	// runs each test). A normal program looks up and validates `main` as before.
-	var main *sema.FuncSig
-	if e.testMode {
-		e.needsRuntime = true
-	} else {
-		var ok bool
-		main, ok = e.info.Funcs["main"]
-		switch {
-		case !ok:
-			e.diags.Add(token.Span{}, "no 'main' function to build a program")
-			return
-		case len(main.Params) > 1:
-			e.diags.Add(main.Decl.Span(), "'main' takes either no parameters or one 'args: list[str]'")
-		case len(main.Params) == 1 && !isStrList(main.Params[0]):
-			e.diags.Add(main.Decl.Span(), "'main' parameter must be 'list[str]' (the command-line arguments)")
-		case main.Ret != sema.Nil && main.Ret != sema.Int && !isResultNil(main.Ret):
-			e.diags.Add(main.Decl.Span(), "'main' must return nil, int, or Result[nil]")
-		}
-
-		// A 'Result[nil]' main is the additive runtime-entry path: it pulls in the C
-		// runtime (header + link). A program that uses Ref[T] (or any non-POD value)
-		// pulls it in too. A 'main(args)' likewise needs it — zrt_os_args builds the
-		// list over the runtime. Every other (value-only) main leaves needsRuntime
-		// false, so no include is printed and the C stays byte-identical to Phase 0.
-		e.needsRuntime = isResultNil(main.Ret) || len(main.Params) == 1
+	main, ok := e.info.Funcs["main"]
+	switch {
+	case !ok:
+		e.diags.Add(token.Span{}, "no 'main' function to build a program")
+		return
+	case len(main.Params) > 1:
+		e.diags.Add(main.Decl.Span(), "'main' takes either no parameters or one 'args: list[str]'")
+	case len(main.Params) == 1 && !isStrList(main.Params[0]):
+		e.diags.Add(main.Decl.Span(), "'main' parameter must be 'list[str]' (the command-line arguments)")
+	case main.Ret != sema.Nil && main.Ret != sema.Int && !isResultNil(main.Ret):
+		e.diags.Add(main.Decl.Span(), "'main' must return nil, int, or Result[nil]")
 	}
+
+	// A 'Result[nil]' main is the additive runtime-entry path: it pulls in the C
+	// runtime (header + link). A program that uses Ref[T] (or any non-POD value)
+	// pulls it in too. A 'main(args)' likewise needs it — zrt_os_args builds the
+	// list over the runtime. Every other (value-only) main leaves needsRuntime
+	// false, so no include is printed and the C stays byte-identical to Phase 0.
+	e.needsRuntime = isResultNil(main.Ret) || len(main.Params) == 1
+
 	e.prepareRuntime()
 	// A prepare pass may reject the program with a clean diagnostic before any C is
 	// written — notably prepareMaps' post-monomorphization map-key Hash gate, which
@@ -227,10 +212,6 @@ func (e *emitter) program() {
 	e.line("#include <string.h>")
 	if e.needsRuntime {
 		e.line("#include \"zergrt.h\"")
-	}
-	if e.testMode {
-		// the test-driver reporting/summary helpers (Phase 1i).
-		e.line("#include \"zrt_test.h\"")
 	}
 	e.blank()
 
@@ -272,10 +253,6 @@ func (e *emitter) program() {
 	// for a program with no init and no module constant.
 	e.emitInitFunctions()
 
-	if e.testMode {
-		e.cTestMain()
-		return
-	}
 	e.cMain(main)
 }
 

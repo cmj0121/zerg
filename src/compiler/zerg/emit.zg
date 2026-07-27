@@ -1005,7 +1005,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
-		SReturnIf(val, cond) => ind + "if (" + c_expr(em, cond, c_nosub()) + ") { return " + c_expr(em, val, c_nosub()) + "; }\n"
+		SReturnIf(val, cond) => ind + "if " + c_cond(em, cond) + " { return " + c_expr(em, val, c_nosub()) + "; }\n"
 		SExpr(e) => ind + c_expr(em, e, c_nosub()) + ";\n"
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
@@ -1179,7 +1179,7 @@ fn c_is_nil_expr(e: Expr) -> bool {
 }
 
 fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
-	mut out := ind + "if (" + c_expr(em, cond, c_nosub()) + ") {\n"
+	mut out := ind + "if " + c_cond(em, cond) + " {\n"
 	out = out + c_block(em, then_body, ind + "    ")
 	out = out + ind + "}"
 	if has_else {
@@ -1191,7 +1191,7 @@ fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, els
 fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: str) -> str {
 	mut head := ind + "for (;;) {\n"
 	if has_cond {
-		head = ind + "while (" + c_expr(em, cond, c_nosub()) + ") {\n"
+		head = ind + "while " + c_cond(em, cond) + " {\n"
 	}
 	return head + c_block(em, body, ind + "    ") + ind + "}\n"
 }
@@ -1201,6 +1201,43 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 # its message, which is what the seed does too. Before this existed, `raise` parsed as
 # nothing at all: the error path fell off the end of the function and the caller carried
 # on with whatever was in the return register.
+# c_cond renders a condition for `if` / `while`. Most expressions already come back fully
+# parenthesized, and wrapping those again produces `if ((a == b))` — which the C compiler
+# warns about, 112 times in one build of this compiler. That noise is not free: it is what
+# a real warning has to be spotted among, and one nearly was not.
+fn c_cond(mut &em: Emitter, x: Expr) -> str {
+	rendered := c_expr(em, x, c_nosub())
+	if c_is_wrapped(rendered) {
+		return rendered
+	}
+	return "(" + rendered + ")"
+}
+
+# c_is_wrapped reports whether s is enclosed by ONE pair of parentheses — its first
+# character opening the pair its last character closes, rather than two adjacent groups
+# like `(a) + (b)`.
+fn c_is_wrapped(s: str) -> bool {
+	b := list[byte](s)
+	if b.len() < 2 or b[0] != b'(' or b[b.len() - 1] != b')' {
+		return false
+	}
+	mut depth := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'(' {
+			depth = depth + 1
+		}
+		if b[i] == b')' {
+			depth = depth - 1
+			if depth == 0 and i < b.len() - 1 {
+				return false
+			}
+		}
+		i = i + 1
+	}
+	return true
+}
+
 fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 	return ind + "zrt_raise_err(zrt_err_new(" + c_expr(em, x, c_nosub()) + "));\n"

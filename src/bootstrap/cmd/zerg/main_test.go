@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,72 +16,10 @@ func writeSrc(t *testing.T, src string) string {
 	return p
 }
 
-func TestRunFmtToStdout(t *testing.T) {
-	src := writeSrc(t, "fn main() { print 1 + 2 }")
-	if code := runFmt(&FmtCmd{File: src}); code != 0 {
-		t.Errorf("fmt run = %d, want 0", code)
-	}
-	// stdout mode must not touch the file
-	got, err := os.ReadFile(src)
-	if err != nil || string(got) != "fn main() { print 1 + 2 }" {
-		t.Errorf("source file changed without --write: %q (%v)", got, err)
-	}
-}
-
-func TestRunFmtWrite(t *testing.T) {
-	src := writeSrc(t, "fn main() { print 1 + 2 }")
-	if code := runFmt(&FmtCmd{File: src, Write: true}); code != 0 {
-		t.Fatalf("fmt --write run = %d, want 0", code)
-	}
-	got, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	want := "fn main() {\n\tprint 1 + 2\n}\n"
-	if string(got) != want {
-		t.Fatalf("rewritten file = %q, want %q", got, want)
-	}
-	// a second --write run is a no-op on canonical input
-	if code := runFmt(&FmtCmd{File: src, Write: true}); code != 0 {
-		t.Fatalf("second fmt --write run = %d, want 0", code)
-	}
-	again, _ := os.ReadFile(src)
-	if string(again) != want {
-		t.Fatalf("canonical file changed on rerun: %q", again)
-	}
-}
-
-func TestRunFmtParseError(t *testing.T) {
-	if code := runFmt(&FmtCmd{File: writeSrc(t, "fn f( {")}); code != 1 {
-		t.Errorf("parse-error run = %d, want 1", code)
-	}
-}
-
-func TestRunFmtReadError(t *testing.T) {
-	if code := runFmt(&FmtCmd{File: "/no/such/file.zg"}); code != 1 {
-		t.Errorf("missing-file run = %d, want 1", code)
-	}
-}
-
-func TestCmpErr(t *testing.T) {
-	a, b := errors.New("a"), errors.New("b")
-	if cmpErr(a, b) != a {
-		t.Errorf("cmpErr(a, b) should return a")
-	}
-	if cmpErr(nil, b) != b {
-		t.Errorf("cmpErr(nil, b) should return b")
-	}
-	if cmpErr(nil, nil) != nil {
-		t.Errorf("cmpErr(nil, nil) should return nil")
-	}
-}
-
 func TestRunBuildEmitStages(t *testing.T) {
 	src := "fn main() {\n  print 1 + 2\n}"
-	for _, emit := range []string{"tokens", "ast", "c"} {
-		if code := runBuild(&BuildCmd{File: writeSrc(t, src), Emit: emit, Output: "a.out"}); code != 0 {
-			t.Errorf("runBuild(--emit %s) = %d, want 0", emit, code)
-		}
+	if code := runBuild(&BuildCmd{File: writeSrc(t, src), Emit: "c", Output: "a.out"}); code != 0 {
+		t.Errorf("runBuild(--emit c) = %d, want 0", code)
 	}
 }
 
@@ -102,13 +39,6 @@ func TestRunBuildSemaError(t *testing.T) {
 func TestRunBuildReadError(t *testing.T) {
 	if code := runBuild(&BuildCmd{File: "/no/such/file.zg", Emit: "c"}); code != 1 {
 		t.Errorf("missing-file run = %d, want 1", code)
-	}
-}
-
-func TestRunBuildTokensDiagnostic(t *testing.T) {
-	// a malformed literal makes the lexer report a diagnostic.
-	if code := runBuild(&BuildCmd{File: writeSrc(t, "fn f() { x := 0xZZ }"), Emit: "tokens"}); code != 1 {
-		t.Errorf("tokens dump with diagnostic = %d, want 1", code)
 	}
 }
 
@@ -164,29 +94,5 @@ func TestRunBuildCCFailure(t *testing.T) {
 	src := writeSrc(t, "fn main() { print 1 }")
 	if code := runBuild(&BuildCmd{File: src, Emit: "bin", CC: "cc-does-not-exist", Output: filepath.Join(t.TempDir(), "x")}); code != 1 {
 		t.Errorf("bad-cc run = %d, want 1", code)
-	}
-}
-
-func TestRunLintClean(t *testing.T) {
-	// A used import and a used private helper produce no findings: clean exit.
-	src := writeSrc(t, "fn helper() -> int {\n\treturn 2\n}\nfn main() {\n\tprint helper()\n}\n")
-	if code := runLint(&LintCmd{File: src}); code != 0 {
-		t.Errorf("lint of a clean program = %d, want 0", code)
-	}
-}
-
-func TestRunLintUnusedImport(t *testing.T) {
-	// An unused import is a lint finding: non-zero exit.
-	src := writeSrc(t, "import \"io\"\nfn main() {\n\tprint 1\n}\n")
-	if code := runLint(&LintCmd{File: src}); code != 1 {
-		t.Errorf("lint of an unused import = %d, want 1", code)
-	}
-}
-
-func TestRunLintCompileError(t *testing.T) {
-	// A program that does not type-check is reported (exit 1), not linted further.
-	src := writeSrc(t, "fn main() {\n\tprint undefined_name\n}\n")
-	if code := runLint(&LintCmd{File: src}); code != 1 {
-		t.Errorf("lint of a broken program = %d, want 1", code)
 	}
 }

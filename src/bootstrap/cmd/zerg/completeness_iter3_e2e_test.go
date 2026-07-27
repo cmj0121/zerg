@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,7 +143,7 @@ func TestTryResultNilPropagatesErr(t *testing.T) {
 		bin := buildIter3(t, src, true)
 		stdout, _, err := run(t, bin)
 		var exit *exec.ExitError
-		if !asExit(err, &exit) || exit.ExitCode() == 0 {
+		if !errors.As(err, &exit) || exit.ExitCode() == 0 {
 			t.Fatalf("want non-zero exit (Err propagated), got err=%v", err)
 		}
 		if stdout != "" {

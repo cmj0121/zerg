@@ -1,9 +1,10 @@
-# The Zerg toolchain driver (Go host).
+# The Zerg bootstrap seed (Go host).
 #
-# Builds the `zerg` driver into the repo-root bin/. Invoked directly
+# Builds the `zerg0` seed into the repo-root bin/. Invoked directly
 # (`make -C src/bootstrap build`) or through the root Makefile's SUBDIR fan-out.
+# The name `zerg` belongs to the self-hosting compiler this seed builds.
 BIN     := $(CURDIR)/../../bin
-BINARY  := $(BIN)/zerg
+BINARY  := $(BIN)/zerg0
 GO      := go
 PKG     := ./cmd/zerg
 

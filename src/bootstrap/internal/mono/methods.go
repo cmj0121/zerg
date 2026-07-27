@@ -102,10 +102,6 @@ func (w *worker) explicitCall(in *Instance, br *ast.Bracket, n *ast.Call) {
 		}
 		sema.Unify(sig.Params[i], in.ExprType(w.info, exprs[i]), subT, subV)
 	}
-	if sig.Dyn {
-		w.dynCall(in, sig, n)
-		return
-	}
 	callee := w.enqueueFn(sig.Decl, subT, subV)
 	in.Calls[n] = callee.Mangled
 }
@@ -152,14 +148,17 @@ func (w *worker) enqueueMethodInstance(recv types.Type, m *types.ImplMethod) *In
 	if m.Provided {
 		subT["This"] = recv
 	}
+	ret := m.Sig.Ret
+	if ret == nil {
+		ret = types.Nil // a method with no '-> type' returns nil
+	}
 	in := &Instance{
 		Origin:      fn,
 		Mangled:     mangled,
 		Recv:        recv,
-		Ret:         sema.Substitute(orNil(m.Sig.Ret), subT, nil),
+		Ret:         sema.Substitute(ret, subT, nil),
 		subT:        subT,
 		Calls:       map[*ast.Call]string{},
-		DynSites:    map[*ast.Call]*DynSite{},
 		MethodCalls: map[*ast.Call]*MethodDispatch{},
 		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}

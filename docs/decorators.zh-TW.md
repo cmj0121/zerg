@@ -7,7 +7,8 @@
 
 ## 集合
 
-目前 **[implemented]** 的有三個——`#[derive]`、`#[dyn]`、`#[test]`:
+目前 **[implemented]** 的只有一個——`#[derive]`。`#[dyn]` 與 `#[test]` 是 **[not yet]**：兩者都曾建成，
+又在種子被裁減到「只建編譯器」時移除，使用任一個都會得到乾淨的錯誤（`#[dyn] is not yet supported`）:
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
   受祝福集合是 **`Eq`** 與 **`Ord`**（**[implemented]**），而 **`Hash`**、**`Encode`**、**`Decode`** 已規範、但

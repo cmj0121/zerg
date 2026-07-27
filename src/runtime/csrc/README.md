@@ -37,14 +37,17 @@ the compiler emits.
 
 - **`entry.c`** — the program-entry shim (`zrt_run` sets up and runs `main`).
 - **`unwind.c`** — the abort / unwind mechanism and the `defer` cleanup stack.
-- **`sys.c`** — the minimal system surface: the `write` / `read` / `open` / `close` syscall floor the stdlib `io`
+- **`sys.c`** — the minimal system surface: the process floor the self-hosted compiler is built on
+  (`zrt_exec`, `zrt_proc_spawn` / `zrt_proc_wait`, `zrt_mkdir`, `zrt_listdir`), and the `write` / `read` /
+  `open` / `close` syscall floor the stdlib `io`
   lowers onto, abort reporting, the `Atomic[int]` operations, and the command-line `args`.
 
 ### Header & tests
 
 - **`zergrt.h`** — the **sole** public header; the compiler's emitted C includes only this, and only when the
   program needs the runtime.
-- **`zrt_test.c` / `zrt_test.h`** — the `#[test]` runner harness behind `zerg test`.
+- **`zrt_test.c` / `zrt_test.h`** — the `#[test]` runner harness. Unreferenced: no compiler emits a test
+  binary today, so nothing links these.
 
 ## Conventions
 

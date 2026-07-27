@@ -1,0 +1,250 @@
+# The linter reports what the compiler already knows but has no reason to say: code that
+# is written, compiled, and never reached. Every check here is answered from the parsed
+# File alone — no types, no flow analysis — which keeps it honest about what it can claim.
+#
+# What it reports, and why each one is worth a line:
+#   * an unused import — the module is read, parsed, and merged into the program for
+#     nothing, and it lies to the next reader about what this file depends on
+#   * an unused private function — a public one is a module's interface and may have no
+#     caller in this program, but a private one with no caller is simply dead
+#   * a binding that is never read — the value was computed for nobody
+#
+# Findings come back as plain strings in source order. The driver prints them and exits
+# nonzero, so `zerg lint` is usable as a gate rather than as decoration.
+
+# lint_files reports every finding across a loaded program (the entry file plus the
+# modules it imports, as the driver resolved them).
+pub fn lint_files(srcs: list[str]) -> list[str] {
+	f := merge_files(srcs)
+	mut out: list[str] = []
+	# Names used ANYWHERE in the program: a private function called from another module
+	# of the same program is used, so the whole merged File is the unit of judgement.
+	mut ids: list[str] = []
+	mut calls: list[str] = []
+	mut ns: list[str] = []
+	for fd in f.fns {
+		walk_body(fd.body, ids, calls, ns)
+	}
+	lint_imports(f, ns, ids, out)
+	lint_dead_fns(f, calls, ids, out)
+	lint_unread_bindings(f, out)
+	return out
+}
+
+# lint_imports reports an import whose namespace nothing reaches through.
+fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
+	for im in f.imports {
+		name := last_segment(im)
+		if not has_str(ns, name) and not has_str(ids, name) {
+			out.append("unused import \"" + im + "\"")
+		}
+	}
+}
+
+# lint_dead_fns reports a private function nothing calls. `main` is the program's entry —
+# the runtime calls it, so it is never "unused" no matter what the source says.
+fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str]) {
+	for fd in f.fns {
+		if fd.is_pub or fd.name == "main" {
+			continue_marker()
+		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
+			out.append("private function `" + fd.name + "` is never called")
+		}
+	}
+}
+
+# lint_unread_bindings reports a binding whose name is never mentioned again inside the
+# function that declared it. It is deliberately per-function and name-based: the subset
+# has no shadowing rules to model, and a name that reappears anywhere in the body is
+# enough to call the binding read.
+fn lint_unread_bindings(f: File, mut &out: list[str]) {
+	for fd in f.fns {
+		mut names: list[str] = []
+		collect_binds(fd.body, names)
+		for n in names {
+			mut ids: list[str] = []
+			mut calls: list[str] = []
+			mut ns: list[str] = []
+			walk_body(fd.body, ids, calls, ns)
+			if count_str(ids, n) == 0 {
+				out.append("binding `" + n + "` in `" + fd.name + "` is never read")
+			}
+		}
+	}
+}
+
+# --- collection ------------------------------------------------------------------------
+
+# collect_binds gathers the names a block binds, descending into nested blocks.
+fn collect_binds(body: list[Stmt], mut &names: list[str]) {
+	for s in body {
+		match s {
+			SLet(name, ty, is_mut, has_ty, value) => collect_binds_let(name, names)
+			SIf(cond, then_b, has_else, else_b) => collect_binds_if(then_b, else_b, names)
+			SFor(is_cond, cond, body_b) => collect_binds(body_b, names)
+			SForIn(name, iter, body_b) => collect_binds(body_b, names)
+			SGuard(body_b) => collect_binds(body_b, names)
+			_ => skip()
+		}
+	}
+}
+
+fn collect_binds_let(name: str, mut &names: list[str]) {
+	names.append(name)
+}
+
+fn collect_binds_if(then_b: list[Stmt], else_b: list[Stmt], mut &names: list[str]) {
+	collect_binds(then_b, names)
+	collect_binds(else_b, names)
+}
+
+# walk_body records every identifier read, every called function name, and every namespace
+# a method call goes through, for a whole block.
+fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	for s in body {
+		match s {
+			SLet(name, ty, is_mut, has_ty, value) => walk_expr(value, ids, calls, ns)
+			SAssign(target, value) => walk_pair(target, value, ids, calls, ns)
+			SPrint(x) => walk_expr(x, ids, calls, ns)
+			SReturn(has_value, value) => walk_expr(value, ids, calls, ns)
+			SReturnIf(value, cond) => walk_pair(value, cond, ids, calls, ns)
+			SExpr(x) => walk_expr(x, ids, calls, ns)
+			SIf(cond, then_b, has_else, else_b) => walk_if(cond, then_b, else_b, ids, calls, ns)
+			SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
+			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
+			SGuard(body_b) => walk_body(body_b, ids, calls, ns)
+			SRaise(x) => walk_expr(x, ids, calls, ns)
+			_ => skip()
+		}
+	}
+}
+
+fn walk_pair(a: Expr, b: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(a, ids, calls, ns)
+	walk_expr(b, ids, calls, ns)
+}
+
+fn walk_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(cond, ids, calls, ns)
+	walk_body(then_b, ids, calls, ns)
+	walk_body(else_b, ids, calls, ns)
+}
+
+fn walk_loop(head: Expr, body_b: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(head, ids, calls, ns)
+	walk_body(body_b, ids, calls, ns)
+}
+
+# walk_expr records the names an expression reaches for.
+fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	match e {
+		EIdent(name) => ids.append(name)
+		EUnary(oper, x) => walk_expr(x, ids, calls, ns)
+		EBinary(oper, a, b) => walk_pair(a, b, ids, calls, ns)
+		ECall(name, args) => walk_call(name, args, ids, calls, ns)
+		EField(target, name) => walk_expr(target, ids, calls, ns)
+		EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
+		EMethod(target, meth, args) => walk_method(target, args, ids, calls, ns)
+		EListLit(elems) => walk_all(elems, ids, calls, ns)
+		EConv(ty, x) => walk_expr(x, ids, calls, ns)
+		EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
+		EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
+		_ => skip()
+	}
+}
+
+fn walk_call(name: str, args: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	calls.append(name)
+	walk_all(args, ids, calls, ns)
+}
+
+# walk_method records the receiver of `x.m(...)`. When the receiver is a bare name it may
+# be a MODULE namespace (`io.write(…)`) rather than a value, which is exactly what tells
+# an import apart from a dead one — so it is recorded as both.
+fn walk_method(target: Expr, args: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	match target {
+		EIdent(name) => ns.append(name)
+		_ => skip()
+	}
+	walk_expr(target, ids, calls, ns)
+	walk_all(args, ids, calls, ns)
+}
+
+fn walk_three(a: Expr, b: Expr, c: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(a, ids, calls, ns)
+	walk_expr(b, ids, calls, ns)
+	walk_expr(c, ids, calls, ns)
+}
+
+fn walk_all(es: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	for x in es {
+		walk_expr(x, ids, calls, ns)
+	}
+}
+
+fn walk_match(scrut: Expr, arms: list[Arm], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(scrut, ids, calls, ns)
+	for a in arms {
+		walk_expr(a.body, ids, calls, ns)
+		if a.has_guard {
+			walk_expr(a.guard_expr, ids, calls, ns)
+		}
+	}
+}
+
+# --- helpers -----------------------------------------------------------------------------
+
+# last_segment is the namespace an import is reached through: `import "a/b"` binds `b`.
+fn last_segment(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut seen := false
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+			seen = true
+		}
+		i = i + 1
+	}
+	if not seen {
+		return path
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+fn has_str(xs: list[str], want: str) -> bool {
+	for x in xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
+fn count_str(xs: list[str], want: str) -> int {
+	mut n := 0
+	for x in xs {
+		if x == want {
+			n = n + 1
+		}
+	}
+	return n
+}
+
+# skip is the no-op a match arm needs: an arm is an EXPRESSION, so a case with nothing to
+# do still has to call something.
+fn skip() {
+	nop
+}
+
+# continue_marker stands in for a `continue` the subset's match-arm form cannot host.
+fn continue_marker() {
+	nop
+}

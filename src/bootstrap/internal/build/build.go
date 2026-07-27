@@ -51,28 +51,6 @@ func CompileProgram(entryPath string) (string, emit.Manifest, []diag.Diagnostic)
 	return compileWith(loader, string(src))
 }
 
-// CheckProgram runs only the front-end of the whole-program pipeline over the entry
-// file — module resolution, name resolution, and type checking — and returns its
-// diagnostics (empty on success). It is the shared basis for `zerg lint`, which
-// layers its lint-only findings on a program the compiler already accepts; stopping
-// before mono/emit means it reports exactly the compile-time errors without lowering.
-func CheckProgram(entryPath string) []diag.Diagnostic {
-	src, err := os.ReadFile(entryPath) //nolint:gosec // the entry source the user asked to lint
-	if err != nil {
-		var diags diag.List
-		diags.Add(token.Span{}, "cannot read entry file %q: %v", entryPath, err)
-		return diags.Items()
-	}
-	root := module.OSProvider{Root: filepath.Dir(entryPath)}
-	loader := module.NewLoader(root, stdlibProvider{})
-	file, _, diags := loader.LoadProgram(string(src))
-	if len(diags) > 0 {
-		return diags
-	}
-	_, diags = sema.Check(file)
-	return diags
-}
-
 // compileWith runs the shared inner pipeline over a configured loader.
 func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []diag.Diagnostic) {
 	file, plan, diags := loader.LoadProgram(src)
@@ -89,33 +67,6 @@ func compileWith(loader *module.Loader, src string) (string, emit.Manifest, []di
 		return "", emit.Manifest{}, diags
 	}
 	return emit.Emit(mono.BuildWithInit(file, info, plan))
-}
-
-// CompileTests lowers a program to a TEST binary's C: the `zerg test` counterpart of
-// CompileProgram (Phase 1i U2). It runs the same load -> sema pipeline but KEEPS the
-// `#[test]` functions (so sema fills Info.Tests), then emits a test-driver entry
-// (emit.EmitTests) instead of the ordinary `main`. The driver runs each test under
-// the runtime's guard/abort handler and reports pass/fail, so the emitted C always
-// needs the runtime. A program with no `#[test]` compiles to a driver that runs zero
-// tests and exits 0.
-func CompileTests(entryPath string) (string, emit.Manifest, []diag.Diagnostic) {
-	src, err := os.ReadFile(entryPath) //nolint:gosec // the entry source the user asked to test
-	if err != nil {
-		var diags diag.List
-		diags.Add(token.Span{}, "cannot read entry file %q: %v", entryPath, err)
-		return "", emit.Manifest{}, diags.Items()
-	}
-	root := module.OSProvider{Root: filepath.Dir(entryPath)}
-	loader := module.NewLoader(root, stdlibProvider{})
-	file, plan, diags := loader.LoadProgram(string(src))
-	if len(diags) > 0 {
-		return "", emit.Manifest{}, diags
-	}
-	info, diags := sema.Check(file)
-	if len(diags) > 0 {
-		return "", emit.Manifest{}, diags
-	}
-	return emit.EmitTests(mono.BuildWithInit(file, info, plan), info.Tests)
 }
 
 // dropTestItems returns items with every `#[test]` function removed, descending into

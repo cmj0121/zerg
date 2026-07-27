@@ -1,0 +1,377 @@
+# token — the lexical vocabulary of the self-hosting Zerg compiler.
+#
+# A port of the Go bootstrap's internal/token: the Kind enum names every lexical
+# category, Token pairs a kind with its source lexeme / decoded value and a start
+# position, and the helpers (kind_name, lookup_keyword, ends_item) drive the lexer
+# and the `--emit tokens` rendering. This file is part of the `zerg` module — its
+# enum variants are shared across the sibling lexer / parser / emit files, but never
+# constructed from outside the module (a bootstrap limitation on cross-module enum
+# variants), so the driver only calls the module's pub functions.
+
+# Kind enumerates the lexical categories a token can belong to. The set mirrors
+# GRAMMAR group 2 so the vocabulary is forward-compatible even where the current
+# lexer does not yet emit every kind (f-strings, decorators).
+#[derive(Eq)]
+enum Kind {
+	Eof
+	Illegal
+	Semi
+
+	# literals and names
+	Ident
+	Int
+	Float
+	Str
+	RawStr
+	Rune
+	Byte
+	Cmd
+
+	# structured f-string / f-cmd tokens (not yet emitted by the subset lexer)
+	FStrBegin
+	FStrText
+	FStrEnd
+	FCmdBegin
+	FCmdText
+	FCmdEnd
+	Conv
+	FmtSpec
+	Hash
+
+	# keywords
+	Fn
+	Return
+	If
+	Else
+	For
+	In
+	Break
+	Continue
+	Nop
+	Mut
+	Const
+	True
+	False
+	Nil
+	Print
+	And
+	Or
+	Not
+	Is
+	This
+	As
+	Pub
+	Import
+	From
+	Match
+	Spawn
+	Select
+	Struct
+	Enum
+	Spec
+	Chan
+	Type
+	Impl
+	Package
+	Init
+	Defer
+	Del
+	Raise
+	Guard
+	With
+	Unsafe
+	Ptr
+	Asm
+
+	# operators and punctuation
+	Plus
+	Minus
+	Star
+	Slash
+	Percent
+	PlusMod
+	MinusMod
+	StarMod
+	Amp
+	Pipe
+	Caret
+	Tilde
+	Shl
+	Shr
+	EqEq
+	Ne
+	Lt
+	Gt
+	Le
+	Ge
+	Assign
+	Walrus
+	Colon
+	Arrow
+	FatArrow
+	LArrow
+	Coalesce
+	Question
+	Bang
+	OptDot
+	Dot
+	DotDot
+	DotDotEq
+	Comma
+	LParen
+	RParen
+	LBrack
+	RBrack
+	LBrace
+	RBrace
+
+	# Trivia. Only the formatter asks for it: the compiler's own tokenize drops comments,
+	# so no Kind below this line is ever seen by the parser.
+	Comment
+}
+
+# Token is a single lexical unit: its kind, the exact source lexeme, the decoded
+# value for string-like literals, and the 1-based line/column where it starts.
+struct Token {
+	kind: Kind
+	lexeme: str
+	value: str
+	line: int
+	col: int
+}
+
+# kind_name renders a kind exactly as the bootstrap's token.Kind.String, so the
+# `--emit tokens` output matches byte-for-byte.
+fn kind_name(k: Kind) -> str {
+	return match k {
+		Eof => "EOF"
+		Illegal => "ILLEGAL"
+		Semi => ";"
+		Ident => "IDENT"
+		Int => "INT"
+		Float => "FLOAT"
+		Str => "STR"
+		RawStr => "RAWSTR"
+		Rune => "RUNE"
+		Byte => "BYTE"
+		Cmd => "CMD"
+		FStrBegin => "FSTR_BEGIN"
+		FStrText => "FSTR_TEXT"
+		FStrEnd => "FSTR_END"
+		FCmdBegin => "FCMD_BEGIN"
+		FCmdText => "FCMD_TEXT"
+		FCmdEnd => "FCMD_END"
+		Conv => "CONV"
+		FmtSpec => "FMTSPEC"
+		Hash => "#["
+		Fn => "fn"
+		Return => "return"
+		If => "if"
+		Else => "else"
+		For => "for"
+		In => "in"
+		Break => "break"
+		Continue => "continue"
+		Nop => "nop"
+		Mut => "mut"
+		Const => "const"
+		True => "true"
+		False => "false"
+		Nil => "nil"
+		Print => "print"
+		And => "and"
+		Or => "or"
+		Not => "not"
+		Is => "is"
+		This => "this"
+		As => "as"
+		Pub => "pub"
+		Import => "import"
+		From => "from"
+		Match => "match"
+		Spawn => "spawn"
+		Select => "select"
+		Struct => "struct"
+		Enum => "enum"
+		Spec => "spec"
+		Chan => "chan"
+		Type => "type"
+		Impl => "impl"
+		Package => "package"
+		Init => "init"
+		Defer => "defer"
+		Del => "del"
+		Raise => "raise"
+		Guard => "guard"
+		With => "with"
+		Unsafe => "unsafe"
+		Ptr => "ptr"
+		Asm => "asm"
+		Plus => "+"
+		Minus => "-"
+		Star => "*"
+		Slash => "/"
+		Percent => "%"
+		PlusMod => "+%"
+		MinusMod => "-%"
+		StarMod => "*%"
+		Amp => "&"
+		Pipe => "|"
+		Caret => "^"
+		Tilde => "~"
+		Shl => "<<"
+		Shr => ">>"
+		EqEq => "=="
+		Ne => "!="
+		Lt => "<"
+		Gt => ">"
+		Le => "<="
+		Ge => ">="
+		Assign => "="
+		Walrus => ":="
+		Colon => ":"
+		Arrow => "->"
+		FatArrow => "=>"
+		LArrow => "<-"
+		Coalesce => "??"
+		Question => "?"
+		Bang => "!"
+		OptDot => "?."
+		Dot => "."
+		DotDot => ".."
+		DotDotEq => "..="
+		Comma => ","
+		LParen => "("
+		RParen => ")"
+		LBrack => "["
+		RBrack => "]"
+		LBrace => "{"
+		Comment => "COMMENT"
+		_ => "}"
+	}
+}
+
+# lookup_keyword maps an identifier spelling to its reserved kind, or Ident when the
+# word is not a keyword.
+fn lookup_keyword(w: str) -> Kind {
+	if w == "fn" {
+		return Fn
+	} else if w == "return" {
+		return Return
+	} else if w == "if" {
+		return If
+	} else if w == "else" {
+		return Else
+	} else if w == "for" {
+		return For
+	} else if w == "in" {
+		return In
+	} else if w == "break" {
+		return Break
+	} else if w == "continue" {
+		return Continue
+	} else if w == "nop" {
+		return Nop
+	} else if w == "mut" {
+		return Mut
+	} else if w == "const" {
+		return Const
+	} else if w == "true" {
+		return True
+	} else if w == "false" {
+		return False
+	} else if w == "nil" {
+		return Nil
+	} else if w == "print" {
+		return Print
+	} else if w == "and" {
+		return And
+	} else if w == "or" {
+		return Or
+	} else if w == "not" {
+		return Not
+	} else if w == "is" {
+		return Is
+	} else if w == "this" {
+		return This
+	} else if w == "as" {
+		return As
+	} else if w == "pub" {
+		return Pub
+	} else if w == "import" {
+		return Import
+	} else if w == "from" {
+		return From
+	} else if w == "match" {
+		return Match
+	} else if w == "spawn" {
+		return Spawn
+	} else if w == "select" {
+		return Select
+	} else if w == "struct" {
+		return Struct
+	} else if w == "enum" {
+		return Enum
+	} else if w == "spec" {
+		return Spec
+	} else if w == "chan" {
+		return Chan
+	} else if w == "type" {
+		return Type
+	} else if w == "impl" {
+		return Impl
+	} else if w == "package" {
+		return Package
+	} else if w == "init" {
+		return Init
+	} else if w == "defer" {
+		return Defer
+	} else if w == "del" {
+		return Del
+	} else if w == "raise" {
+		return Raise
+	} else if w == "guard" {
+		return Guard
+	} else if w == "with" {
+		return With
+	} else if w == "unsafe" {
+		return Unsafe
+	} else if w == "ptr" {
+		return Ptr
+	} else if w == "asm" {
+		return Asm
+	}
+	return Ident
+}
+
+# ends_item reports whether a token of this kind can end a grammatical item, which
+# is what lets the lexer insert a ';' at a following line break (GRAMMAR group 2,
+# ASI).
+fn ends_item(k: Kind) -> bool {
+	return match k {
+		Ident => true
+		Int => true
+		Float => true
+		Str => true
+		RawStr => true
+		Rune => true
+		Byte => true
+		Cmd => true
+		FStrEnd => true
+		FCmdEnd => true
+		RParen => true
+		RBrack => true
+		RBrace => true
+		Question => true
+		Bang => true
+		True => true
+		False => true
+		Nil => true
+		This => true
+		Return => true
+		Break => true
+		Continue => true
+		Nop => true
+		_ => false
+	}
+}

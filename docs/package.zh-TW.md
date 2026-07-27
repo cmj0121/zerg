@@ -18,7 +18,7 @@ Zerg 原始碼如何組織、建置與啟動。本文建立在 [語言參考](la
 
 ### Program 與 entry point
 
-**program 是一次建置**，不是某種特殊的 package。你把 compiler 指向一個 **entry 檔**——`zerg entry.zg`——它就以
+**program 是一次建置**，不是某種特殊的 package。你把 compiler 指向一個 **entry 檔**——`zerg build --emit bin entry.zg`——它就以
 這個檔為根展開建置，沿著它的 import 走遍整張依賴 DAG。
 
 - entry 檔名**不是保留字**；由建置指令指定。語言要求的是**內容**：entry 檔必須定義一個頂層 **`main`** entry

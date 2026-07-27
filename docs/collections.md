@@ -7,7 +7,7 @@ one canonical type per role, no variant zoo. They're just ordinary **scope-owned
 | Type        | Role                        | Element / key requirement | Iteration order     | Status            |
 | ----------- | --------------------------- | ------------------------- | ------------------- | ----------------- |
 | `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         | **[implemented]** |
-| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order | **[implemented]** |
+| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order | **[not yet]**     |
 | `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]**     |
 | `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         | **[implemented]** |
 

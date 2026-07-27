@@ -17,10 +17,14 @@
 
 #include "zergrt.h"
 
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -273,10 +277,135 @@ bool zrt_exists(const char *path) {
 	return access(path, F_OK) == 0;
 }
 
+/* zrt_listdir returns the entry NAMES directly under path (no "." or "..", no recursion,
+ * not path-prefixed) as a list[str], or an empty list when path is not a readable
+ * directory — a missing directory is an answer here, not an abort, since the caller is
+ * probing a search path. The names are sorted, because a compiler that reads a directory
+ * must not let the filesystem's order decide its output: the emitted C has to be
+ * reproducible for the self-host fixpoint to mean anything. */
+zrt_list zrt_listdir(const char *path) {
+	zrt_list l;
+	zrt_list_init(&l, sizeof(const char *), &zrt_str_elem_vt);
+	DIR *d = opendir(path);
+	if (d == NULL) {
+		return l;
+	}
+	struct dirent *e;
+	while ((e = readdir(d)) != NULL) {
+		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+			continue;
+		}
+		size_t      n = strlen(e->d_name);
+		char       *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
+		memcpy(p, e->d_name, n + 1);
+		const char *s = p; /* rc=1, owned by the list */
+		/* insertion sort into the list: a directory read is small (a module's files), and
+		 * this keeps the ordering guarantee in one place instead of a second pass. */
+		size_t i = zrt_list_len(&l);
+		zrt_list_push(&l, &s);
+		while (i > 0) {
+			const char **prev = (const char **)zrt_list_at(&l, i - 1);
+			const char **cur  = (const char **)zrt_list_at(&l, i);
+			if (strcmp(*prev, *cur) <= 0) {
+				break;
+			}
+			const char *tmp = *prev;
+			*prev           = *cur;
+			*cur            = tmp;
+			i--;
+		}
+	}
+	closedir(d);
+	return l;
+}
+
+/* zrt_mkdir creates a directory, including any missing parents, and says nothing when it
+ * already exists — the `mkdir -p` shape, because every caller wants "make sure this path
+ * is there" rather than "create exactly this one". It returns true when the directory
+ * exists afterwards, so a caller that cannot write its cache can carry on without one
+ * instead of dying over a convenience. */
+bool zrt_mkdir(const char *path) {
+	char   buf[1024];
+	size_t n = strlen(path);
+	if (n == 0 || n >= sizeof(buf)) {
+		return false;
+	}
+	memcpy(buf, path, n + 1);
+	for (size_t i = 1; i <= n; i++) {
+		if (buf[i] != '/' && buf[i] != '\0') {
+			continue;
+		}
+		char saved = buf[i];
+		buf[i]     = '\0';
+		if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
+			return false;
+		}
+		buf[i] = saved;
+	}
+	return true;
+}
+
 /* zrt_remove deletes the file at path, aborting IOError on failure — e.g. it is missing,
  * or it is a directory (unlink removes files only, never a directory). */
 void zrt_remove(const char *path) {
 	if (unlink(path) != 0) {
 		zrt_abort_kind(ZRT_ERR_IO, "IOError: cannot remove file");
 	}
+}
+
+/* zrt_exec runs argv[0] with arguments argv (PATH-searched), waits for the child, and
+ * returns its exit status — 128+signal if it died on a signal, 127 if exec failed, -1 if
+ * it could not fork. The process-spawn floor the stdlib `os.run` and command literals
+ * lower onto, over the POSIX fork / exec / wait syscalls only (zero third-party
+ * dependency). argv holds `const char *` elements; the child image is a shallow view of
+ * them, valid until exec replaces the address space. */
+int64_t zrt_exec(zrt_list argv) {
+	int64_t pid = zrt_proc_spawn(argv);
+	if (pid < 0) {
+		return -1;
+	}
+	return zrt_proc_wait(pid);
+}
+
+/* zrt_proc_spawn starts argv[0] with arguments argv (PATH-searched) and returns immediately
+ * with the child's pid, or -1. It is the half of exec that lets a caller have SEVERAL
+ * children running at once — a build compiling its units in parallel is the reason it
+ * exists — and it pairs with zrt_wait, which collects one. */
+int64_t zrt_proc_spawn(zrt_list argv) {
+	size_t n  = zrt_list_len(&argv);
+	char **av = (char **)malloc((n + 1) * sizeof(char *));
+	if (av == NULL) {
+		return -1;
+	}
+	for (size_t i = 0; i < n; i++) {
+		av[i] = *(char **)zrt_list_at(&argv, i);
+	}
+	av[n] = NULL;
+	pid_t pid = fork();
+	if (pid < 0) {
+		free(av);
+		return -1;
+	}
+	if (pid == 0) {
+		execvp(av[0], av);
+		_exit(127); /* exec failed */
+	}
+	free(av);
+	return (int64_t)pid;
+}
+
+/* zrt_proc_wait blocks until the given child exits and returns its status the way a shell
+ * reports one: the exit code, or 128+signal when it was killed. */
+int64_t zrt_proc_wait(int64_t pid) {
+	int status = 0;
+	if (waitpid((pid_t)pid, &status, 0) < 0) {
+		return -1;
+	}
+	if (WIFEXITED(status)) {
+		return (int64_t)WEXITSTATUS(status);
+	}
+	if (WIFSIGNALED(status)) {
+		return (int64_t)(128 + WTERMSIG(status));
+	}
+	return -1;
 }

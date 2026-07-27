@@ -44,7 +44,8 @@ rest follows from it:
 
 > **A `send` on a channel happens-before the matching `receive` completes.**
 
-This happens-before edge is the **[implemented]** guarantee. The receiver sees the payload fully built
+This happens-before edge is the **[not yet]** guarantee — coroutines and channels were
+built and then removed from the seed, so `spawn` is a clean error today. The receiver sees the payload fully built
 (it was snapshotted at the send); no other cross-coroutine ordering exists or is needed. That is the
 whole memory model. Any ordering **beyond** this edge — the run-queue order in which ready coroutines are
 resumed, the interleaving of unsynchronized coroutines — is **[implementation-defined]**: today the N:1
@@ -83,7 +84,7 @@ Capacity is the only knob; **send blocks when full, receive blocks when empty**.
 one synchronization primitive.
 
 The whole channel core in this chapter — buffered and unbuffered blocking, a close signalling the
-receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[implemented]**.
+receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[not yet]**.
 The two channel behaviors that diverge from the spec are the abort **kind** on a send-to-closed
 (`SendOnClosedError` is **[not yet]** — the abort fires with a generic message) and `DeadlockError`
 (**[deviation]**, under `select` and Termination & deadlock).

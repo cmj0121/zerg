@@ -14,14 +14,15 @@ C 函式庫（libc / libSystem，與 Go 相同的地基）碰 OS，別無其他�
 - **`csrc/`**——runtime **本體**，以 C 加上一小塊 per-architecture 組合語言核心構成。這是 `cc` 連進程式的部分：
   allocator、reference counting、collections、strings、formatting、scheduler、channels、syscall floor、以及
   unwind 機制。逐檔對照見 [`csrc/README.md`](csrc/README.md)。
-- **`embed.go`**——Go 黏合碼（不會進到程式裡）。它用 `go:embed` 把 `csrc/` 整棵嵌進 `zerg` binary，好讓
+- **`embed.go`**——Go 黏合碼（不會進到程式裡）。它用 `go:embed` 把 `csrc/` 整棵嵌進 `zerg0` **種子**，好讓
   `zerg build` 能把原始碼 materialize 到 emit 出的 C 旁邊交給 `cc`。
 - **`runtime_test.go`**——直接編譯並測試 C runtime 的 Go 測試（透過 `csrc/zrt_test.*`）。
 - **`go.mod`**——runtime 的 Go module，接進根目錄的 `go.work`。
 
 ## 它如何進到程式
 
-1. 工具鏈建置時，C 原始碼被嵌入 `zerg` binary（`embed.go`、`go:embed`）。
+1. 工具鏈建置時，C 原始碼被嵌入 `zerg0` 種子（`embed.go`、`go:embed`）。自舉的 `zerg` 不內嵌它們：
+   它從磁碟讀取，位置是 `$ZERG_RUNTIME` 或 `$ZERG_ROOT/src/runtime/csrc`。
 2. `zerg build foo.zg` 為 `foo` emit C，把 runtime 原始碼 **materialize** 到旁邊，再呼叫 `cc`。
 3. `cc` 編譯並連結成單一 binary。不需要 runtime 的 value-only 程式一點都不連——它 emit 出的 C 是自足的。
 

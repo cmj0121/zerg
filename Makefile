@@ -8,7 +8,14 @@ ZERG_SRCS := src/compiler/zergc.zg \
 	src/compiler/zerg/token.zg src/compiler/zerg/lexer.zg src/compiler/zerg/ast.zg \
 	src/compiler/zerg/parser.zg src/compiler/zerg/emit.zg
 
-.PHONY: all clean test run build install uninstall upgrade examples selfhost help $(SUBDIR)
+# The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
+# which is what `zerg` is growing toward, while the seed is covered by its own unit
+# tests. CORPUS_PASS is the set `zerg` compiles and runs correctly today — the gate. The
+# rest of test-data/codegen/ is reported but not enforced: each case that starts passing
+# is a feature landing, and moves into this list.
+CORPUS_PASS := arithmetic bitwise booleans factorial fib fizzbuzz floats gcd hello power sumto
+
+.PHONY: all clean test run build install uninstall upgrade examples corpus selfhost help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -48,6 +55,20 @@ examples:                       # build the examples corpus with the seed
 		echo "Building $$src..."; \
 		./bin/zerg0 build $$src --emit c     >/dev/null || exit 1; \
 	done
+
+corpus:                         # run zerg against the test-data corpus it now owns
+	$(MAKE) build
+	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@fail=0; \
+	for name in $(CORPUS_PASS); do \
+		src=test-data/codegen/$$name.zg; \
+		./bin/zerg build ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
+		got=$$(./bin/corpus-case 2>/dev/null); \
+		[ "$$got" = "$$(cat test-data/codegen/$$name.out)" ] || { echo "OUTPUT $$name"; fail=1; }; \
+	done; \
+	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
+	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
+	echo "corpus: $(words $(CORPUS_PASS))/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
 
 selfhost:                       # have the built zerg rebuild itself, closing the chain
 	$(MAKE) build

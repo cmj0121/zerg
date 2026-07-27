@@ -346,9 +346,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	mut sb: list[byte] = []
 	for true {
 		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
-		if at(l, 0) == b'"' {
-			break
-		}
+		break if at(l, 0) == b'"'
 		sb.append(advance(l))
 	}
 	advance(l) # closing "
@@ -529,9 +527,7 @@ fn lex_with(src: str, keep: bool) -> list[Token] {
 	for true {
 		t := next(l)
 		out.append(t)
-		if is_eof(t.kind) {
-			break
-		}
+		break if is_eof(t.kind)
 	}
 	return out
 }
@@ -620,9 +616,7 @@ pub fn dump_tokens(src: str) -> str {
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
-		if is_eof(t.kind) {
-			break
-		}
+		break if is_eof(t.kind)
 		line := strconv.to_string(t.line, 10)
 		col := strconv.to_string(t.col, 10)
 		s := line + ":" + col + "\t" + render_token(t) + "\n"

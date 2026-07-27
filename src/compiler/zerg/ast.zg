@@ -137,3 +137,134 @@ struct File {
 	enums: list[EnumDecl]
 	fns: list[FnDecl]
 }
+
+# --- rendering ---------------------------------------------------------------------------
+
+# dump_ast renders a parsed file as an indented tree — the `--emit ast` view. It is a
+# debugging aid, so it shows SHAPE rather than every payload: each declaration, and each
+# statement by kind with the expression kinds under it. That is what answers "did the
+# parser see what I wrote", which is the only question this view exists for.
+pub fn dump_ast(f: File) -> str {
+	mut out := "file\n"
+	for im in f.imports {
+		out = out + "\timport \"" + im + "\"\n"
+	}
+	for s in f.structs {
+		out = out + "\tstruct " + s.name + "\n"
+		for fd in s.fields {
+			out = out + "\t\tfield " + fd.name + ": " + ty_name(fd.ty) + "\n"
+		}
+	}
+	for e in f.enums {
+		out = out + "\tenum " + e.name + "\n"
+		for v in e.variants {
+			out = out + "\t\tvariant " + v.name + "\n"
+		}
+	}
+	for fn_d in f.fns {
+		out = out + "\t" + fn_kind(fn_d) + " " + fn_d.name + "(" + params_of(fn_d) + ")"
+		if fn_d.has_ret {
+			out = out + " -> " + ty_name(fn_d.ret)
+		}
+		out = out + "\n"
+		out = out + dump_block(fn_d.body, "\t\t")
+	}
+	return out
+}
+
+fn fn_kind(f: FnDecl) -> str {
+	if f.is_pub {
+		return "pub fn"
+	}
+	return "fn"
+}
+
+fn params_of(f: FnDecl) -> str {
+	mut out := ""
+	mut i := 0
+	for i < f.params.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		p := f.params[i]
+		if p.is_ref {
+			out = out + "mut &"
+		}
+		out = out + p.name + ": " + ty_name(p.ty)
+		i = i + 1
+	}
+	return out
+}
+
+fn dump_block(body: list[Stmt], ind: str) -> str {
+	mut out := ""
+	for s in body {
+		out = out + dump_stmt(s, ind)
+	}
+	return out
+}
+
+fn dump_stmt(s: Stmt, ind: str) -> str {
+	return match s {
+		SLet(name, ty, is_mut, has_ty, value) => ind + "let " + name + " = " + expr_kind(value) + "\n"
+		SAssign(target, value) => ind + "assign " + expr_kind(target) + " = " + expr_kind(value) + "\n"
+		SPrint(x) => ind + "print " + expr_kind(x) + "\n"
+		SReturn(has_value, value) => ind + "return " + expr_kind(value) + "\n"
+		SReturnIf(value, cond) => ind + "return-if " + expr_kind(cond) + "\n"
+		SExpr(x) => ind + "expr " + expr_kind(x) + "\n"
+		SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
+		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
+		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
+		SGuard(body_b) => ind + "guard\n" + dump_block(body_b, ind + "\t")
+		SBreak => ind + "break\n"
+		SContinue => ind + "continue\n"
+		_ => ind + "nop\n"
+	}
+}
+
+fn dump_if(cond: Expr, then_b: list[Stmt], else_b: list[Stmt], ind: str) -> str {
+	mut out := ind + "if " + expr_kind(cond) + "\n" + dump_block(then_b, ind + "\t")
+	if else_b.len() > 0 {
+		out = out + ind + "else\n" + dump_block(else_b, ind + "\t")
+	}
+	return out
+}
+
+# expr_kind names an expression's shape, with the leaf's own text where it has one.
+fn expr_kind(e: Expr) -> str {
+	return match e {
+		EInt(lex) => "int " + lex
+		EFloat(lex) => "float " + lex
+		EStr(v) => "str"
+		EBool(v) => "bool"
+		ENil => "nil"
+		EIdent(n) => "ident " + n
+		EUnary(oper, x) => "unary " + oper
+		EBinary(oper, a, b) => "binary " + oper
+		ECall(name, args) => "call " + name
+		EField(target, name) => "field ." + name
+		EIndex(target, idx) => "index"
+		EMethod(target, meth, args) => "method ." + meth
+		EListLit(elems) => "list-literal"
+		EConv(ty, x) => "convert " + ty_name(ty)
+		EIf(cond, then_e, else_e) => "if-expr"
+		EMatch(scrut, arms) => "match"
+		_ => "?"
+	}
+}
+
+# ty_name spells a type the way the source does.
+fn ty_name(t: Ty) -> str {
+	return match t {
+		TInt => "int"
+		TFloat => "float"
+		TStr => "str"
+		TBool => "bool"
+		TNil => "nil"
+		TVoid => "void"
+		TByte => "byte"
+		TNamed(n) => n
+		TList(e) => "list[" + ty_name(e) + "]"
+		_ => "?"
+	}
+}

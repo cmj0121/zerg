@@ -31,7 +31,7 @@ func EmitTests(prog *mono.Program, tests []*sema.FuncSig) (string, Manifest, []d
 		return "", Manifest{}, e.diags.Items()
 	}
 	return e.sb.String(), Manifest{
-		NeedsRuntime: true, Concurrency: e.concurrency, NeedsResult: e.needsResult,
+		NeedsRuntime: true, NeedsResult: e.needsResult,
 		NeedsIO: e.needsIO, NeedsFormat: e.needsFormat,
 	}, nil
 }
@@ -64,12 +64,7 @@ func (e *emitter) cTestMain() {
 	e.line("int main(void) {")
 	e.indent++
 	e.emitInitCalls()
-	if e.concurrency {
-		// run the whole suite as coroutine 0 so a test's `spawn`/channel is scheduled.
-		e.line(fmt.Sprintf("zrt_sched_run(%s);", testBodyFn))
-	} else {
-		e.line(testBodyFn + "();")
-	}
+	e.line(testBodyFn + "();")
 	e.line("return zrt_test_summary();")
 	e.indent--
 	e.line("}")

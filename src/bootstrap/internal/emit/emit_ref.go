@@ -46,12 +46,6 @@ func (e *emitter) containsRef(t sema.Type) bool {
 		return e.strManaged
 	}
 	switch x := t.(type) {
-	case *types.Fn:
-		// A function value is non-POD exactly when the program manages closure environments
-		// (some closure captures a non-POD immutable value): then its env is a refcounted box
-		// whose copy retains and whose drop releases. In every other program a function value
-		// is plain {code, env=NULL/leaked} data and stays byte-identical.
-		return e.fnEnvManaged
 	case *types.Ref:
 		return true
 	case *types.List:
@@ -226,32 +220,16 @@ func (e *emitter) prepareRuntime() {
 	// its environments and refcounts its function values; one that captures none leaves
 	// every function value plain data and stays byte-identical. It must be settled after
 	// strManaged, since a captured str is non-POD only in a str-managed program.
-	e.fnEnvManaged = e.programHasNonPODCapture()
-	if e.fnEnvManaged {
-		e.needsRuntime = true
-	}
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
-	// Concurrency is the 1e gate: a program that uses `spawn` (or a channel) links the
-	// scheduler and runs main under it. It implies the runtime. A program with none of
-	// these leaves it false and links nothing new, so its C stays byte-identical.
-	if e.programUsesConcurrency() {
-		e.concurrency = true
-		e.needsRuntime = true
-	}
-	// Number the channel receive element types and detect channel-handle drops, so the
-	// Result[T] carriers and drop thunks are ready before any body is emitted.
-	e.prepareChannels()
-	// Number the general Result/Either/optional carriers (Phase 1f U0), after the
-	// channel prepass so a channel recv's Result[T] keeps its own carrier and is not
-	// double-registered. Sets needsResult/needsRuntime only when a carrier is found.
+	// Number the general Result/Either/optional carriers (Phase 1f U0). Sets
+	// needsResult/needsRuntime only when a carrier is found.
 	e.prepareResults()
 	// Number the tuple value shapes (completeness iteration 2, U2), after the Result
 	// prepass so a tuple's element ctype (which a Result carrier may influence) is
 	// settled. Leaves the tuple map empty for a program with no tuple value.
 	e.prepareTuples()
-	e.prepareFnTypes()
 	// Detect whether the program materializes a range value, so the shared zg_range
 	// carrier typedef is emitted. Leaves needsRange false for a program that uses no
 	// range value (including a pure `v in lo..hi` membership), which stays byte-identical.
@@ -259,9 +237,6 @@ func (e *emitter) prepareRuntime() {
 	// Number the list instances (docs/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()
-	// Number the map instances (docs/collections.md), keyed by the K,V pair. Leaves the
-	// map map empty for a program with no map value, which stays byte-identical.
-	e.prepareMaps()
 	// A program that imports io (lowers a write intrinsic) or that carries a
 	// Result[nil] in any signature (e.g. a bundled io function) needs the runtime:
 	// the io primitives ride in the always-linked sys.c, and Result[nil] spells
@@ -753,10 +728,6 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		return fmt.Sprintf("zrt_str_retain(%s)", base)
 	}
 	switch t := typ.(type) {
-	case *types.Fn:
-		// copying a function value that names existing storage retains its refcounted
-		// environment box, so both holders own the captured cells (a managed program).
-		return e.fnValCopy(typ, base)
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", base)
 	case *types.Enum:
@@ -767,10 +738,6 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		// copying a list value that names existing storage deep-copies its buffer (each
 		// element via the instance vtable), so the two holders never alias.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), base)
-	case *types.Map:
-		// copying a map value that names existing storage deep-copies its storage (each
-		// value via the instance vtable), so the two holders never alias.
-		return fmt.Sprintf("%s(%s)", e.mapCopyFn(t), base)
 	case *types.Chan:
 		// copying a channel handle retains it; a send-capable handle (bidi/send-only)
 		// also bumps the sender count, a receive-only handle does not.
@@ -905,7 +872,6 @@ func (e *emitter) emitRefHelpers() {
 	// follow after the struct helpers, where a list-of-struct's element thunk can see
 	// the struct's own zg_copy_.
 	e.emitListForwardDecls()
-	e.emitMapForwardDecls()
 	for _, ti := range e.prog.Types {
 		if !e.tiContainsRef(ti) {
 			continue
@@ -924,21 +890,12 @@ func (e *emitter) emitRefHelpers() {
 	// List element vtables + copy/drop definitions (after the struct helpers so a
 	// list-of-struct's element thunk can call the struct's zg_copy_/zg_drop_).
 	e.emitListHelpers()
-	// Map key/val vtables + copy/drop definitions (after the list helpers so a map value
-	// that is a list can call the list's zg_listcopy_/zg_listdropenv_).
-	e.emitMapHelpers()
 	// Cleanup-stack drop thunks for every non-boxed non-POD Opt carrier (after the
 	// struct/list/map helpers so an Opt-of-struct/list/map payload can call their
 	// zg_drop_/zrt_list_drop/zrt_map_drop). A POD Opt carrier owns nothing, so it emits
 	// no thunk and a value-only program stays byte-identical.
 	e.emitOptDropHelpers()
-	// Function-value teardown helpers: the env-slot drop guard and each capturing
-	// lambda's env drop thunk (emitted after the env typedefs, before any body). Emits
-	// nothing unless the program manages a closure environment (byte-identical otherwise).
-	e.emitFnEnvHelpers()
 	e.emitDeferHelpers()
-	e.emitSpawnHelpers()
-	e.emitChanHelpers()
 	// Result/Either/optional force helpers (Phase 1f U0); emits nothing when the
 	// program registered no carrier.
 	e.emitResultHelpers()
@@ -1221,17 +1178,11 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	}
 	switch t.(type) {
-	case *types.Fn:
-		// a function-value field/element retains its refcounted environment box (managed).
-		return e.fnValCopy(t, access)
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	case *types.List:
 		// a list field / element deep-copies through its instance's value copy helper.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), access)
-	case *types.Map:
-		// a map field / element / value deep-copies through its instance's value copy helper.
-		return fmt.Sprintf("%s(%s)", e.mapCopyFn(t), access)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(t), access)
 	case *types.Enum:

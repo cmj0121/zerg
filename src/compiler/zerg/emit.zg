@@ -915,7 +915,7 @@ fn c_intrinsic_ret(name: str) -> Ty {
 	if name == "__zrt_listdir" {
 		return TList(TStr)
 	}
-	if name == "__zrt_open" or name == "__zrt_exec" {
+	if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait" {
 		return TInt
 	}
 	if name == "__zrt_getenv" {
@@ -1249,20 +1249,40 @@ pub fn emit_files(srcs: list[str]) -> str {
 	return c_emit_file(merge_files(srcs))
 }
 
-# emit_unit lowers ONE module for separate compilation: `deps` is everything the module
-# can see, `own` the files of the module itself. The result declares the whole program but
-# defines only this module, so the objects of two modules that share an import can be
-# linked together — which whole-program emission cannot do, since each object would carry
-# its own copy of the shared module.
-pub fn emit_unit(deps: list[str], own: list[str]) -> str {
-	mut all: list[str] = []
-	for d in deps {
-		all.append(d)
+# emit_unit lowers ONE module for separate compilation, from ALREADY PARSED input: `prog`
+# is the whole program, `own` the module whose bodies this unit defines. The result
+# declares the program but defines only the module, so the objects of two modules that
+# share an import can be linked together — which whole-program emission cannot do, since
+# each object would carry its own copy of the shared module.
+#
+# It takes trees rather than sources because a build emits one unit per module: parsing
+# the whole program again for each of them made a six-module build parse six times, and
+# that, not the C compiler, was where its time went.
+pub fn emit_unit(prog: File, own: File) -> str {
+	return c_emit_unit(prog, own, false)
+}
+
+# merge_asts joins already-parsed files into the whole-program view, in order.
+pub fn merge_asts(fs: list[File]) -> File {
+	mut imports: list[str] = []
+	mut structs: list[StructDecl] = []
+	mut enums: list[EnumDecl] = []
+	mut fns: list[FnDecl] = []
+	for f in fs {
+		for im in f.imports {
+			imports.append(im)
+		}
+		for s in f.structs {
+			structs.append(s)
+		}
+		for e in f.enums {
+			enums.append(e)
+		}
+		for fnd in f.fns {
+			fns.append(fnd)
+		}
 	}
-	for o in own {
-		all.append(o)
-	}
-	return c_emit_unit(merge_files(all), merge_files(own), false)
+	return File(imports, structs, enums, fns)
 }
 
 # c_emit_file lowers a parsed File. The body is generated first (so list use sets

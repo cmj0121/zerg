@@ -36,13 +36,15 @@ C 函式庫（libc / libSystem）之上，另有一小塊 per-architecture 組�
 
 - **`entry.c`**——program-entry shim（`zrt_run` 佈置並執行 `main`）。
 - **`unwind.c`**——abort / unwind 機制與 `defer` 的 cleanup stack。
-- **`sys.c`**——最小系統表面：標準函式庫 `io` 下沉所到的 `write` / `read` / `open` / `close` syscall floor、
-  abort 回報、`Atomic[int]` 運算，以及命令列 `args`。
+- **`sys.c`**——最小系統表面：自舉編譯器賴以建置的行程底層（`zrt_exec`、`zrt_proc_spawn` /
+  `zrt_proc_wait`、`zrt_mkdir`、`zrt_listdir`）、標準函式庫 `io` 下沉所到的 `write` / `read` / `open` /
+  `close` syscall floor、abort 回報、`Atomic[int]` 運算，以及命令列 `args`。
 
 ### Header & tests
 
 - **`zergrt.h`**——**唯一**的公開 header；編譯器 emit 的 C 只 include 這一個，且僅在程式需要 runtime 時。
-- **`zrt_test.c` / `zrt_test.h`**——`zerg test` 背後的 `#[test]` runner harness。
+- **`zrt_test.c` / `zrt_test.h`**——`#[test]` runner harness。目前無人引用：沒有編譯器會產生測試
+  binary，因此沒有任何建置會連結它們。
 
 ## 慣例
 

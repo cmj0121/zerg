@@ -561,9 +561,10 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   **generate** the canonical impls of the named specs by reading the type's structure (see
   [Derive & Default Behavior](derive.md)); a logging decorator would sit on a `fn`. Decorators are a
   **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or
-  misspelled decorator is a compile error**, never silently dropped. Implemented today: `#[derive]`,
-  `#[dyn]`, `#[test]`; `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` / `#[align]`) are
-  reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a comment — the lexer
+  misspelled decorator is a compile error**, never silently dropped. Implemented today: `#[derive]`.
+  `#[dyn]` and `#[test]` were built and then removed with the rest of what the seed no longer needs, so
+  they join `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` / `#[align]`) as reserved
+  names, recognized-and-rejected until built. `#[` is the one `#` that is not a comment — the lexer
   peeks one
   character.
 

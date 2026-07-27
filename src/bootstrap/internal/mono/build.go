@@ -705,14 +705,6 @@ func methodMangle(recv types.Type, name string) string {
 	return "zgm_" + typeCode(recv) + "_" + name
 }
 
-// witnessStructName is the shared witness struct type of a spec ('zgs_<Spec>').
-func witnessStructName(spec string) string { return "zgs_" + spec }
-
-// witnessGlobalName is the concrete witness table of a (spec, type) pair.
-func witnessGlobalName(spec string, recv types.Type) string {
-	return "zgw_" + lenTag(spec) + typeCode(recv)
-}
-
 // lenTag length-delimits an identifier as '<len>_<ident>', so a name boundary is
 // unambiguous even when the identifier or what follows contains '_'.
 func lenTag(s string) string { return strconv.Itoa(len(s)) + "_" + s }

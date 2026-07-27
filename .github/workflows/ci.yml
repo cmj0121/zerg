@@ -2,9 +2,11 @@
 #
 # The pipeline mirrors the bootstrap -> MVP flow end to end:
 #   1. build the Go-hosted bootstrap seed (bin/zerg0)
-#   2. check the bootstrap works (its Go test suite)
-#   3. build the MVP example programs WITH that bootstrap
+#   2. check the seed works (its Go test suite)
+#   3. build the MVP example programs WITH that seed
 #   4. check every example is workable — compiled to a native binary and run
+#   5. build the self-hosting compiler, which is the seed's whole reason to exist
+#   6. run the test-data corpus with that compiler
 #
 # It runs on Linux (x86_64) and macOS (arm64) so both the portable POSIX-C runtime
 # and both coroutine context-switch asm variants (ctx_x86_64.S / ctx_arm64.S) are

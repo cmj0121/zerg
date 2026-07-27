@@ -108,10 +108,6 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		return
 	}
 	switch typ.(type) {
-	case *types.Fn:
-		// a function-value local releases its refcounted environment box at scope exit
-		// through the generic env-slot guard (a NULL env is a no-op) — managed only.
-		e.line(fmt.Sprintf("zrt_defer(zg_fnval_drop, &%s);", cname))
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
 	case *types.Enum:
@@ -162,18 +158,12 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		return
 	}
 	switch t := it.typ.(type) {
-	case *types.Fn:
-		// release a function-value local's refcounted environment box in place (a
-		// reassignment drops the old closure before binding the new one) — managed only.
-		e.line(fmt.Sprintf("zrt_release((%s).env);", it.cname))
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_release(%s);", it.cname))
 	case *types.Enum:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.List:
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
-	case *types.Map:
-		e.line(fmt.Sprintf("zrt_map_drop(&%s);", it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.Opt:
@@ -327,7 +317,7 @@ func (e *emitter) deferStmt(n *ast.DeferStmt) {
 		return
 	}
 	call, _ := n.Call.(*ast.Call)
-	_, recv, _, _, _ := e.capturedCall(call)
+	_, recv, _, _ := e.capturedCall(call)
 	if recv == nil && len(call.Args) == 0 {
 		e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, NULL);", idx))
 		return
@@ -358,13 +348,13 @@ func (e *emitter) emitDeferHelpers() {
 			if !ok {
 				return
 			}
-			target, recv, recvT, erased, ok := e.capturedCall(call)
+			target, recv, recvT, ok := e.capturedCall(call)
 			if !ok {
 				return
 			}
 			idx := len(e.deferIdx)
 			e.deferIdx[d] = idx
-			e.emitDeferThunk(idx, target, recv, recvT, erased, call.Args)
+			e.emitDeferThunk(idx, target, recv, recvT, call.Args)
 		})
 	}
 	e.cur = nil
@@ -372,7 +362,7 @@ func (e *emitter) emitDeferHelpers() {
 
 // emitDeferThunk writes one deferred call's env struct (when it captures a receiver or
 // args) and its cleanup-stack thunk.
-func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT sema.Type, erased bool, args []ast.Arg) {
+func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT sema.Type, args []ast.Arg) {
 	if recv == nil && len(args) == 0 {
 		e.line(fmt.Sprintf("static void zg_deferfn_%d(void *p) { (void)p; %s(); }", idx, target))
 		e.blank()
@@ -382,7 +372,7 @@ func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT se
 	e.line(fmt.Sprintf("static void zg_deferfn_%d(void *p) {", idx))
 	e.indent++
 	e.line(fmt.Sprintf("zg_deferenv_%d *zg_c = (zg_deferenv_%d *)p;", idx, idx))
-	e.line(fmt.Sprintf("%s(%s);", target, captureCallArgs("zg_c", recv != nil, erased, len(args))))
+	e.line(fmt.Sprintf("%s(%s);", target, captureCallArgs("zg_c", recv != nil, len(args))))
 	// The defer OWNS its captured receiver (deferStmt retained/deep-copied it), so a non-POD
 	// receiver's owned copy is released here, after the call — balancing the capture retain
 	// and freeing it exactly once whether the original was dropped, `del`'d, or a temporary.
@@ -394,7 +384,7 @@ func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT se
 	e.blank()
 }
 
-// --- captured (defer/spawn) call plumbing -------------------------------------
+// --- captured (defer) call plumbing -------------------------------------------
 
 // capturedCall resolves a defer/spawn call's callee to its mangled C target and, for a
 // method callee, the borrowed receiver to capture alongside the arguments. It accepts a
@@ -402,11 +392,11 @@ func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT se
 // to the merged top-level function, like namespaceCallEmit), and a method
 // `recv.method(args)` (the receiver is captured as the leading value, dispatched like
 // methodCall). It returns ok=false for any other callee (e.g. a call through a function
-// value), which leaves deferIdx/spawnIdx unset so the site reports the loud stub.
-func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, recvT sema.Type, erased, ok bool) {
+// value), which leaves deferIdx unset so the site reports the loud stub.
+func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, recvT sema.Type, ok bool) {
 	switch callee := call.Callee.(type) {
 	case *ast.Ident:
-		return e.callTarget(call, callee), nil, nil, false, true
+		return e.callTarget(call, callee), nil, nil, true
 	case *ast.Field:
 		if id, isID := callee.X.(*ast.Ident); isID {
 			if sym, found := e.info.Refs[id]; found && sym.Kind == sema.SymNamespace {
@@ -418,14 +408,14 @@ func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, re
 				if m, has := e.cur.Calls[call]; has {
 					t = m
 				}
-				return t, nil, nil, false, true
+				return t, nil, nil, true
 			}
 		}
 		if md, found := e.cur.MethodCalls[call]; found {
-			return md.Mangled, callee.X, e.cur.ExprType(e.info, callee.X), md.Erased, true
+			return md.Mangled, callee.X, e.cur.ExprType(e.info, callee.X), true
 		}
 	}
-	return "", nil, nil, false, false
+	return "", nil, nil, false
 }
 
 // captureValues renders the initializer values for a captured defer/spawn env. Every
@@ -485,17 +475,13 @@ func (e *emitter) captureFields(recvT sema.Type, args []ast.Arg) string {
 }
 
 // captureCallArgs renders a defer/spawn thunk's call arguments, unpacked from the env
-// pointer named ptr (e.g. "zg_c"): the receiver first when present (address-taken and
-// const-cast for an erased provided-method dispatch, W3), then each argument field.
-func captureCallArgs(ptr string, hasRecv, erased bool, nargs int) string {
+// pointer named ptr (e.g. "zg_c"): the receiver first when present, then each argument
+// field.
+func captureCallArgs(ptr string, hasRecv bool, nargs int) string {
 	var out []string
 	fi := 0
 	if hasRecv {
-		r := fmt.Sprintf("%s->f%d", ptr, fi)
-		if erased {
-			r = "(const void*)&" + r
-		}
-		out = append(out, r)
+		out = append(out, fmt.Sprintf("%s->f%d", ptr, fi))
 		fi++
 	}
 	for j := 0; j < nargs; j++ {

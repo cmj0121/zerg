@@ -148,14 +148,17 @@ func (w *worker) enqueueMethodInstance(recv types.Type, m *types.ImplMethod) *In
 	if m.Provided {
 		subT["This"] = recv
 	}
+	ret := m.Sig.Ret
+	if ret == nil {
+		ret = types.Nil // a method with no '-> type' returns nil
+	}
 	in := &Instance{
 		Origin:      fn,
 		Mangled:     mangled,
 		Recv:        recv,
-		Ret:         sema.Substitute(orNil(m.Sig.Ret), subT, nil),
+		Ret:         sema.Substitute(ret, subT, nil),
 		subT:        subT,
 		Calls:       map[*ast.Call]string{},
-		DynSites:    map[*ast.Call]*DynSite{},
 		MethodCalls: map[*ast.Call]*MethodDispatch{},
 		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}
@@ -171,15 +174,6 @@ func (w *worker) enqueueMethodInstance(recv types.Type, m *types.ImplMethod) *In
 	w.prog.Funcs = append(w.prog.Funcs, in)
 	w.queue = append(w.queue, in)
 	return in
-}
-
-// orNil returns t, or the nil type when t is nil, so an instance's return type is
-// always set.
-func orNil(t types.Type) types.Type {
-	if t == nil {
-		return types.Nil
-	}
-	return t
 }
 
 // nominalHeadT returns the *TypeDef of a nominal (struct or enum) type, or nil.

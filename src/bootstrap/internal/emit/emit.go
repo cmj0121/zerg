@@ -109,12 +109,6 @@ type emitter struct {
 	// stays byte-identical.
 	lists map[string]*listCarrier
 
-	// Map instances (docs/collections.md). maps a map[K,V] type's spelling to its
-	// generated per-instance helpers (the key/val vtable, the by-value copy, and the
-	// drop-env thunk); every map is the same C header (zrt_map), only its value copy/drop
-	// (and the int/str hash+eq) differ. Empty for a program that names no map value,
-	// which therefore stays byte-identical.
-
 	// needsIO is set when the program lowers a stdlib `io` write intrinsic (Phase
 	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
 	// program that never imports io, which therefore stays byte-identical.
@@ -135,17 +129,6 @@ type emitter struct {
 	// retain/release, so a program that produces no heap string (every numbered example)
 	// is byte-identical. Implies needsRuntime.
 	strManaged bool
-
-	// Channel state (Phase 1e slice C2). recvIdx numbers the distinct element types a
-	// `<-ch` receives, so each gets a stable Result[T] carrier struct (zg_recv_<n>)
-	// plus its recv/force helpers; recvElems is those element types in that order.
-	// needChanDrop/needChanSenderDrop record whether the program drops any receive-only
-	// / send-capable channel handle, gating the two drop thunks so a program that drops
-	// neither emits neither. All empty/false for a program with no channels.
-	recvIdx            map[string]int
-	recvElems          []sema.Type
-	needChanDrop       bool
-	needChanSenderDrop bool
 
 	// Ref[T] runtime state (Phase 1d iteration 2). refnewIdx numbers the distinct
 	// Ref construction element types so each gets a stable zg_refnew_<n> helper;
@@ -197,10 +180,8 @@ func (e *emitter) program() {
 
 	e.prepareRuntime()
 	// A prepare pass may reject the program with a clean diagnostic before any C is
-	// written — notably prepareMaps' post-monomorphization map-key Hash gate, which
-	// sees a generic map's substituted (concrete) key. Abort here so a rejected map
-	// instance never reaches its helper emission (mapHashEq, which reads a fixed 8-byte
-	// key) or the C backend; Emit already discards the buffer when diags is non-empty.
+	// written. Abort here so a rejected instance never reaches its helper emission or
+	// the C backend; Emit already discards the buffer when diags is non-empty.
 	if !e.diags.Empty() {
 		return
 	}
@@ -2303,13 +2284,6 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	field, _ := n.Callee.(*ast.Field)
 	recv := e.expr(field.X)
-	// W3: a dispatch to a provided-method body takes an opaque 'const void*' receiver
-	// (its prologue casts it back to the concrete type), so the by-value receiver — the
-	// erased body's own `this` local — is address-taken and cast, exactly as a dyn
-	// dispatch does. An ordinary impl-method target takes `this` by value, unchanged.
-	if md.Erased {
-		recv = "(const void*)&(" + recv + ")"
-	}
 	args := recv
 	for _, a := range n.Args {
 		// A by-value argument is CONSUMED by the callee (its body registers the param's drop),
@@ -2622,13 +2596,6 @@ func (e *emitter) ctype(t sema.Type) string {
 	// a standalone `x: Node? = n.next` the same representation as the boxed field read.
 	if o, ok := t.(*types.Opt); ok && e.isCyclicNominal(o.Elem) {
 		return "void*"
-	}
-	if ei, ok := t.(*types.Either); ok {
-		// the Result[T] a `<-ch` yields: a generated tagged carrier struct keyed by the
-		// received element type (tag 0 = Left(value), 1 = Right(closed/crash)).
-		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
-			return fmt.Sprintf("zg_recv_%d", idx)
-		}
 	}
 	// a range value: one shared carrier struct (int64 bounds + inclusive flag), so a
 	// `r := lo..hi` bound name and a membership `v in r` read the same shape.

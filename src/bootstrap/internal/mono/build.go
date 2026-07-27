@@ -30,10 +30,9 @@ func BuildWithInit(file *ast.File, info *sema.Info, plan *module.InitPlan) *Prog
 	w := &worker{
 		info: info,
 		prog: &Program{
-			Info:        info,
-			byMangled:   map[string]*Instance{},
-			typeByKey:   map[string]*TypeInstance{},
-			witByGlobal: map[string]*Witness{},
+			Info:      info,
+			byMangled: map[string]*Instance{},
+			typeByKey: map[string]*TypeInstance{},
 		},
 	}
 	w.seedFuncs(file.Items)
@@ -77,7 +76,6 @@ func (w *worker) buildInits(plan *module.InitPlan) {
 	}
 	ctx := &Instance{
 		Calls:       map[*ast.Call]string{},
-		DynSites:    map[*ast.Call]*DynSite{},
 		MethodCalls: map[*ast.Call]*MethodDispatch{},
 		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}
@@ -169,7 +167,6 @@ func (w *worker) enqueueFn(fn *ast.FuncDecl, subT map[string]types.Type, subV ma
 		subT:        subT,
 		subV:        subV,
 		Calls:       map[*ast.Call]string{},
-		DynSites:    map[*ast.Call]*DynSite{},
 		MethodCalls: map[*ast.Call]*MethodDispatch{},
 		OpCalls:     map[*ast.Binary]*MethodDispatch{},
 	}

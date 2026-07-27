@@ -137,9 +137,6 @@ func (e *emitter) isCarrierType(t sema.Type) bool {
 		if isResultNil(t) {
 			return false
 		}
-		if _, ok := e.recvIdx[x.Left.String()]; ok {
-			return false // a channel recv carrier already covers this Left type
-		}
 		return e.ctype(x.Left) != "void"
 	}
 	return false
@@ -479,11 +476,6 @@ func (e *emitter) forceExpr(n *ast.Force) string {
 		return fmt.Sprintf("({ void *%s = %s; if (%s == NULL) { zrt_raise_err(zrt_err_new(\"force-unwrap of nil\")); } (*(%s*)zrt_ref_payload(%s)); })",
 			box, e.expr(n.X), box, ct, box)
 	}
-	if ei, ok := opT.(*types.Either); ok {
-		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
-			return fmt.Sprintf("zg_force_%d(%s)", idx, e.expr(n.X))
-		}
-	}
 	if c, ok := e.carrierFor(opT); ok {
 		// `x!` yields an OWNED value: a non-POD payload forced out of a NAMED operand is a
 		// borrow of the operand's payload, so it is retained/deep-copied here (the operand's
@@ -559,15 +551,10 @@ func (e *emitter) guardErr(gt sema.Type, res string) string {
 }
 
 // carrierAccess returns a carrier operand's Left member accessor and its C type
-// name, covering both a general carrier and a channel recv carrier (`.val`).
+// name.
 func (e *emitter) carrierAccess(t sema.Type) (accessor, cname string) {
 	if c, ok := e.carrierFor(t); ok {
 		return c.okField(), c.name
-	}
-	if ei, ok := t.(*types.Either); ok {
-		if idx, ok := e.recvIdx[ei.Left.String()]; ok {
-			return "val", fmt.Sprintf("zg_recv_%d", idx)
-		}
 	}
 	return "ok", e.ctype(t)
 }

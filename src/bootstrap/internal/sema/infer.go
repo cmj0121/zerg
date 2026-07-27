@@ -134,6 +134,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_listdir":
 			return c.unaryIntrinsic(n, Str, &types.List{Elem: types.Str}), true
+		case "__zrt_mkdir":
+			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_remove":
 			return c.unaryIntrinsic(n, Str, Nil), true
 		case "__zrt_exec":

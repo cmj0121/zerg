@@ -429,6 +429,10 @@ bool    zrt_exists(const char *path);
 void    zrt_remove(const char *path);
 int64_t zrt_exec(zrt_list argv);
 
+/* zrt_mkdir creates a directory and any missing parents (`mkdir -p`), reporting whether
+ * it exists afterwards. Creating one that is already there is success. */
+bool zrt_mkdir(const char *path);
+
 /* zrt_listdir returns the sorted entry names directly under path as a list[str] (empty
  * when path is not a readable directory). Sorted because a compiler that resolves a
  * directory module through it must emit the same C on every machine. */

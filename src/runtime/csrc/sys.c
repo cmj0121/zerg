@@ -18,10 +18,12 @@
 #include "zergrt.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -315,6 +317,32 @@ zrt_list zrt_listdir(const char *path) {
 	}
 	closedir(d);
 	return l;
+}
+
+/* zrt_mkdir creates a directory, including any missing parents, and says nothing when it
+ * already exists — the `mkdir -p` shape, because every caller wants "make sure this path
+ * is there" rather than "create exactly this one". It returns true when the directory
+ * exists afterwards, so a caller that cannot write its cache can carry on without one
+ * instead of dying over a convenience. */
+bool zrt_mkdir(const char *path) {
+	char   buf[1024];
+	size_t n = strlen(path);
+	if (n == 0 || n >= sizeof(buf)) {
+		return false;
+	}
+	memcpy(buf, path, n + 1);
+	for (size_t i = 1; i <= n; i++) {
+		if (buf[i] != '/' && buf[i] != '\0') {
+			continue;
+		}
+		char saved = buf[i];
+		buf[i]     = '\0';
+		if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
+			return false;
+		}
+		buf[i] = saved;
+	}
+	return true;
 }
 
 /* zrt_remove deletes the file at path, aborting IOError on failure — e.g. it is missing,

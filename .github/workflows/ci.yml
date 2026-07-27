@@ -1,7 +1,7 @@
 # Continuous integration for the Zerg toolchain.
 #
 # The pipeline mirrors the bootstrap -> MVP flow end to end:
-#   1. build the Go-hosted bootstrap driver (bin/zerg)
+#   1. build the Go-hosted bootstrap seed (bin/zerg0)
 #   2. check the bootstrap works (its Go test suite)
 #   3. build the MVP example programs WITH that bootstrap
 #   4. check every example is workable — compiled to a native binary and run
@@ -56,7 +56,7 @@ jobs:
         run: make -C src/bootstrap build
 
       - name: Smoke-check the bootstrap binary
-        run: ./bin/zerg --help
+        run: ./bin/zerg0 --help
 
       # --- 2. check the bootstrap is working -------------------------------------
       - name: Test the bootstrap
@@ -78,7 +78,7 @@ jobs:
           for src in "${examples[@]}"; do
             bin="$workdir/$(printf '%s' "$src" | tr '/' '_').bin"
             printf ':: %s\n' "$src"
-            if ! ./bin/zerg build "$src" -o "$bin"; then
+            if ! ./bin/zerg0 build "$src" -o "$bin"; then
               printf '   BUILD FAILED\n'
               fail=1
               continue

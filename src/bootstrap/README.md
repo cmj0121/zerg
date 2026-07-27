@@ -3,7 +3,7 @@
 English | [繁體中文](README.zh-TW.md)
 
 A Go-hosted Zerg compiler whose only remaining job is to **build the self-hosting compiler
-in `src/compiler/`**. It is a seed, not a product: once `zergc` compiles itself, everything
+in `src/compiler/`**. It is a seed, not a product: once `zerg` compiles itself, everything
 a user-facing toolchain does (`fmt`, `lint`, `test`, diagnostics worth reading) belongs to
 the Zerg-written compiler, and the seed keeps only what the first build needs.
 
@@ -15,9 +15,9 @@ silently miscompiled.
 ## Usage
 
 ```sh
-zerg build <file.zg>              # compile and link a binary (default --emit bin)
-zerg build --emit c <file.zg>     # stop after emitting the C translation unit
-zerg build -o out --keep-c f.zg   # choose the output path, keep the generated .c
+zerg0 build <file.zg>              # compile and link a binary (default --emit bin)
+zerg0 build --emit c <file.zg>     # stop after emitting the C translation unit
+zerg0 build -o out --keep-c f.zg   # choose the output path, keep the generated .c
 ```
 
 `build` is the only subcommand. Failures print `file:line:col: message` on stderr and exit
@@ -26,13 +26,15 @@ nonzero — enough to locate the problem, no more.
 ## The bootstrap chain
 
 ```text
-go build ./cmd/zerg              # 1. the Go seed
-zerg build src/compiler/zergc.zg # 2. the seed builds the self-hosting compiler
-zergc build <out> <file.zg>...   # 3. zergc builds programs — and itself
+make build                        # or by hand, the two steps it runs:
+go build -o bin/zerg0 ./cmd/zerg  # 1. the Go seed — named zerg0, not zerg
+zerg0 build src/compiler/zergc.zg -o bin/zerg
+                                  # 2. the seed builds the self-hosting compiler
+zerg build <out> <file.zg>...     # 3. zerg builds programs — and itself
 ```
 
 Step 3 closing on itself is the point of the whole directory: after that, the seed is only
-needed to re-derive `zergc` from source on a machine that has no `zergc` yet.
+needed to re-derive `zerg` from source on a machine that has no `zerg` yet.
 
 ## What the seed supports
 
@@ -54,7 +56,7 @@ which is why it is still here.
 | tuples, optionals, `defer`      | retained: cheap, and still reachable from the subset              |
 | `spec` / `impl` methods         | statically dispatched                                             |
 | modules                         | `import "path"`, module-qualified calls, whole-program flattening |
-| `__zrt_*` intrinsics            | the runtime floor, including `__zrt_exec` (how `zergc` runs `cc`) |
+| `__zrt_*` intrinsics            | the runtime floor, including `__zrt_exec` (how `zerg` runs `cc`)  |
 
 ## The grammar the seed lowers
 
@@ -142,9 +144,9 @@ must not move**. If a change is genuinely dead-code removal, the emitted C is by
 before and after; if it is not, the difference is the change's real blast radius.
 
 ```sh
-zerg build --emit c src/compiler/zergc.zg > after.c   # compare against a pre-change capture
+zerg0 build --emit c src/compiler/zergc.zg > after.c  # compare against a pre-change capture
 go build ./... && go test ./...                       # the seed's own suite
-zerg build src/compiler/zergc.zg -o zergc             # and the chain still closes
+make build                                            # and the chain still closes
 ```
 
 Adding language coverage back here is almost always the wrong move: the self-hosting

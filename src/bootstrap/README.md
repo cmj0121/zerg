@@ -106,15 +106,15 @@ not a comma.
 These were removed because the self-host source uses none of them. Each is rejected loudly
 — a diagnostic and a nonzero exit, never a silently dropped construct.
 
-| Removed              | What happens now                                       |
-| -------------------- | ------------------------------------------------------ |
-| `map[K, V]`          | rejected                                               |
-| closures / fn values | `a closure used as a value is not yet supported`       |
-| channels             | rejected                                               |
-| `spawn`, `select`    | `statement not supported by the bootstrap seed`        |
-| `#[dyn]` dispatch    | the decorator is ignored; the call monomorphizes       |
-| `zerg test` backend  | gone — running Zerg tests is the Zerg toolchain's job  |
-| `--emit tokens/ast`  | gone — `--emit c` and a linked binary are what remains |
+| Removed             | What happens now                                       |
+| ------------------- | ------------------------------------------------------ |
+| `map[K, V]`         | rejected                                               |
+| function values     | `a function used as a value is not yet supported`      |
+| channels            | rejected                                               |
+| `spawn`, `select`   | `statement not supported by the bootstrap seed`        |
+| `#[dyn]` dispatch   | `#[dyn] is not yet supported`                          |
+| `zerg test` backend | gone — running Zerg tests is the Zerg toolchain's job  |
+| `--emit tokens/ast` | gone — `--emit c` and a linked binary are what remains |
 
 The front-end still _parses_ some of this syntax; the rejection happens when the backend is
 asked to lower it. Narrowing the parser is a separate pass.

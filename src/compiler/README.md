@@ -172,8 +172,9 @@ self-host is real.
 
 Once the fixpoint holds, the Go bootstrap only needs to compile the `Zerg-boot` subset the
 `src/compiler/*.zg` sources (and their imports `io` / `ascii` / `strconv`) actually use.
-Every removal is guarded by `scripts/selfhost-fixpoint.sh` — a change is kept only if the
-whole chain still self-hosts.
+Every removal is guarded by `make build` itself: the seed builds an intermediate, the
+intermediate builds the shipped compiler, and a seed that lost something the compiler
+needs cannot get through that. `make corpus` and `make lint` are the checks on top.
 
 **The Zerg-boot subset** (what the minimal bootstrap MUST keep):
 

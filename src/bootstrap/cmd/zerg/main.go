@@ -23,9 +23,6 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/build"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/diag"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/emit"
-	"github.com/cmj0121/zerg/src/bootstrap/internal/lexer"
-	"github.com/cmj0121/zerg/src/bootstrap/internal/parser"
-	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	runtime "github.com/cmj0121/zerg/src/runtime"
 )
 
@@ -39,7 +36,7 @@ type CLI struct {
 type BuildCmd struct {
 	File   string `arg:"" name:"file" help:"the Zerg source file to compile" type:"existingfile"`
 	Output string `short:"o" name:"output" default:"a.out" help:"output binary path"`
-	Emit   string `name:"emit" enum:"tokens,ast,c,bin" default:"bin" help:"stop after a stage: tokens, ast, c; or bin to link a binary"`
+	Emit   string `name:"emit" enum:"c,bin" default:"bin" help:"stop after emitting C (c), or bin to link a binary"`
 	CC     string `name:"cc" default:"cc" help:"C compiler used to link the emitted C"`
 	KeepC  bool   `name:"keep-c" help:"keep the generated .c file next to the output"`
 }
@@ -63,19 +60,6 @@ func main() {
 // runBuild executes the compile pipeline for an already-parsed command line and
 // returns the process exit code.
 func runBuild(cmd *BuildCmd) int {
-	src, err := os.ReadFile(cmd.File)
-	if err != nil {
-		log.Error().Err(err).Msg("cannot read source")
-		return 1
-	}
-
-	if cmd.Emit == "tokens" {
-		return dumpTokens(string(src))
-	}
-	if cmd.Emit == "ast" {
-		return dumpAST(cmd.File, string(src))
-	}
-
 	log.Debug().Str("file", cmd.File).Msg("compiling")
 	// Compile as a whole program: `import "a/b"` roots in the entry file's
 	// directory tree, falling back to the embedded stdlib. A single-file entry with
@@ -164,35 +148,6 @@ func cmpErr(a, b error) error {
 		return a
 	}
 	return b
-}
-
-// dumpTokens prints the token stream for debugging the lexer.
-func dumpTokens(src string) int {
-	toks, diags := lexer.Tokenize(src)
-	for _, t := range toks {
-		if t.Kind == token.EOF {
-			break
-		}
-		fmt.Printf("%s\t%s\n", t.Span.Start, t)
-	}
-	for _, d := range diags {
-		fmt.Fprintln(os.Stderr, d.Error())
-	}
-	if len(diags) > 0 {
-		return 1
-	}
-	return 0
-}
-
-// dumpAST parses and reports the number of top-level items.
-func dumpAST(file, src string) int {
-	f, diags := parser.Parse(src)
-	if len(diags) > 0 {
-		reportDiags(file, diags)
-		return 1
-	}
-	fmt.Printf("%d top-level item(s) parsed\n", len(f.Items))
-	return 0
 }
 
 // reportDiags prints each diagnostic as 'file:line:col: message' to stderr.

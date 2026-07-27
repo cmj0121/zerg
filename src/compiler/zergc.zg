@@ -9,6 +9,7 @@
 import "zerg"
 import "io"
 import "cli"
+import "strconv"
 
 fn version() -> str {
 	return "zerg 0.1.0 (self-hosted)"
@@ -138,6 +139,18 @@ fn build_stage(files: list[str], emit: str, out: str) {
 		}
 		return
 	}
+	mut output := out
+	if output == "" {
+		output = drop_ext(files[0])
+	}
+	if emit == "lib" {
+		# separate compilation: the unit DECLARES the whole program but DEFINES only this
+		# module, so its object can be linked beside the objects of the modules it imports.
+		units := load_units(files[0])
+		own := units[units.len() - 1]
+		compile_to(zerg.emit_unit(deps_of(units, own.name), own.srcs), output + ".o", true)
+		return
+	}
 	srcs := load_sources(files)
 	code := zerg.emit_files(srcs)
 	if emit == "c" {
@@ -146,20 +159,91 @@ fn build_stage(files: list[str], emit: str, out: str) {
 		}
 		return
 	}
-	mut output := out
-	if output == "" {
-		output = drop_ext(files[0])
-	}
-	if emit == "lib" {
-		compile_to(code, output + ".o", true)
-		return
-	}
 	if emit == "bin" {
-		compile_to(code, output, false)
+		link_program(files[0], output)
 		return
 	}
 	io.ewrite("zerg: unknown stage " + emit + " (want tokens, ast, c, lib, or bin)\n")
 	__zrt_exit(2)
+}
+
+# link_program builds a program the way a project is built: every unit compiled to its
+# own object, then one link. A unit whose object is already in the cache is not compiled
+# again — which is the whole point of splitting the build up, since most rebuilds change
+# one module and leave the rest exactly as they were.
+fn link_program(entry: str, output: str) {
+	units := load_units(entry)
+	mut objs: list[str] = []
+	mut compiled := 0
+	for u in units {
+		code := zerg.emit_unit(deps_of(units, u.name), u.srcs)
+		obj := cache_path(unit_key(code))
+		if not __zrt_exists(obj) {
+			compile_to(code, obj, true)
+			compiled = compiled + 1
+		}
+		objs.append(obj)
+	}
+	if __zrt_exec(link_argv(objs, output)) != 0 {
+		io.ewrite("zerg: link failed\n")
+		__zrt_exit(1)
+	}
+}
+
+# link_argv builds the final cc command: every unit's object, plus the runtime.
+fn link_argv(objs: list[str], output: str) -> list[str] {
+	rt := rt_dir()
+	mut argv: list[str] = []
+	argv.append("cc")
+	argv.append("-std=c11")
+	argv.append("-I")
+	argv.append(rt)
+	argv.append("-o")
+	argv.append(output)
+	for o in objs {
+		argv.append(o)
+	}
+	for u in rt_units() {
+		argv.append(rt + "/" + u)
+	}
+	return argv
+}
+
+# --- the build cache -----------------------------------------------------------------------
+#
+# The cache is keyed on CONTENT, not on timestamps: the same emitted C always compiles to
+# the same object, which is a property the self-host fixpoint already proves. So a unit's
+# key is a hash of the C it emitted — which folds in its own source, everything it can see,
+# and the compiler that produced it, since a change to any of those changes the C.
+
+# cache_dir is $ZERG_CACHE, else <root>/.zerg-cache, created on demand. A cache that
+# cannot be created is not fatal: the build carries on without one.
+fn cache_dir() -> str {
+	dir := env_or("ZERG_CACHE", join_path(zerg_root(), ".zerg-cache"))
+	__zrt_mkdir(dir)
+	return dir
+}
+
+fn cache_path(key: str) -> str {
+	return join_path(cache_dir(), key + ".o")
+}
+
+# unit_key hashes a unit's emitted C with FNV-1a (32-bit — the 64-bit basis does not fit
+# an integer literal yet), and puts the LENGTH in the name beside it. The length is there
+# because a hash this size is a cheap guard rather than a proof: two different units
+# colliding would link the wrong object, and requiring the byte counts to match as well
+# makes that far less likely. A cryptographic digest is the upgrade to make when the
+# standard library has one.
+fn unit_key(code: str) -> str {
+	b := list[byte](code)
+	mut h := 2166136261
+	mut i := 0
+	for i < b.len() {
+		h = h ^ int(b[i])
+		h = (h * 16777619) % 4294967296
+		i = i + 1
+	}
+	return strconv.to_string(h, 16) + "-" + strconv.to_string(b.len(), 16)
 }
 
 # compile_to writes the emitted C beside its product and hands it to cc — compiled only
@@ -194,6 +278,70 @@ fn drop_ext(path: str) -> str {
 		i = i + 1
 	}
 	return str(out)
+}
+
+# --- compilation units --------------------------------------------------------------------
+#
+# A UNIT is what gets compiled to one object: a module. A file module is one unit of one
+# file; a directory module is one unit of several, because its files share a scope and
+# cannot be split. Separate compilation is unit-by-unit, which is what makes a build
+# cacheable (a unit's object survives a change elsewhere) and parallelizable (units with
+# no dependency between them can compile at once).
+
+# Unit is one module: the name it is known by (its import path, or the entry file's path)
+# and the sources that make it up.
+struct Unit {
+	name: str
+	srcs: list[str]
+}
+
+# load_units returns every unit of the program, dependencies before dependents, the entry
+# last. A unit is loaded once however many modules import it.
+fn load_units(entry: str) -> list[Unit] {
+	mut seen: list[str] = []
+	mut units: list[Unit] = []
+	mut one: list[str] = []
+	one.append(entry)
+	load_unit(one, entry, dir_of(entry), seen, units)
+	return units
+}
+
+fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], mut &units: list[Unit]) {
+	for s in seen {
+		if s == name {
+			return
+		}
+	}
+	seen.append(name)
+	mut srcs: list[str] = []
+	for f in files {
+		guard {
+			srcs.append(str(io.read_file(f)))
+		}
+	}
+	for src in srcs {
+		for im in zerg.imports_of(src) {
+			deps := module_files(im, from_dir)
+			if deps.len() > 0 {
+				load_unit(deps, im, from_dir, seen, units)
+			}
+		}
+	}
+	units.append(Unit(name, srcs))
+}
+
+# deps_of returns every source in the program EXCEPT the given unit's own — the view a
+# separately-compiled unit needs to type its bodies and declare what it calls outward.
+fn deps_of(units: list[Unit], self_name: str) -> list[str] {
+	mut out: list[str] = []
+	for u in units {
+		if u.name != self_name {
+			for s in u.srcs {
+				out.append(s)
+			}
+		}
+	}
+	return out
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
@@ -352,6 +500,22 @@ fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,
 # non-concurrent runtime units, found under rt_dir().
+# rt_units are the runtime translation units every linked program needs.
+fn rt_units() -> list[str] {
+	mut units: list[str] = []
+	units.append("alloc.c")
+	units.append("conv.c")
+	units.append("entry.c")
+	units.append("fmt.c")
+	units.append("list.c")
+	units.append("map.c")
+	units.append("ref.c")
+	units.append("str.c")
+	units.append("sys.c")
+	units.append("unwind.c")
+	return units
+}
+
 # cc_object_argv compiles the emitted C to an object without linking: a module is not a
 # program, so it has no entry to link against and no runtime to pull in yet.
 fn cc_object_argv(cpath: str, output: str) -> list[str] {
@@ -377,18 +541,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 	argv.append("-o")
 	argv.append(output)
 	argv.append(cpath)
-	mut units: list[str] = []
-	units.append("alloc.c")
-	units.append("conv.c")
-	units.append("entry.c")
-	units.append("fmt.c")
-	units.append("list.c")
-	units.append("map.c")
-	units.append("ref.c")
-	units.append("str.c")
-	units.append("sys.c")
-	units.append("unwind.c")
-	for u in units {
+	for u in rt_units() {
 		argv.append(rt + "/" + u)
 	}
 	return argv

@@ -22,7 +22,7 @@ CORPUS_PASS := arithmetic bitwise booleans countdown default_params enum_basic e
 	floats gcd fn_value hello list_basic list_literal list_str method_chain power raise_kind rec_expr rec_tree \
 	str_bytes struct_basic struct_nested sumto value_semantics
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -65,6 +65,19 @@ examples:                       # build the examples corpus with the seed
 		echo "Building $$src..."; \
 		./bin/zerg0 build $$src --emit c     >/dev/null || exit 1; \
 	done
+
+fmt-corpus:                     # every test-data/fmt case must already be canonical
+	$(MAKE) build
+	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@fail=0; tmp=$$(mktemp -d); \
+	for src in test-data/fmt/*.zg; do \
+		cp $$src $$tmp/case.zg; \
+		./bin/zerg fmt $$tmp/case.zg >/dev/null; \
+		cmp -s $$src $$tmp/case.zg || { echo "FMT    $$(basename $$src)"; fail=1; }; \
+	done; \
+	rm -rf $$tmp; \
+	[ $$fail -eq 0 ] || { echo "fmt-corpus: a case is not in canonical form — the formatter changed it"; exit 1; }; \
+	echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
 
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build

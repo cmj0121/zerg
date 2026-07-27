@@ -93,6 +93,11 @@ type Instance struct {
 // argument (DESIGN-1c §3.3/§6, B1/B2).
 type MethodDispatch struct {
 	Mangled string
+	// Decl is the method's own declaration, so the backend can read what only the
+	// declaration knows — the parameter defaults a call site may leave out. It is
+	// `any` because that is how the method carries it; the backend type-asserts to
+	// *ast.FuncDecl and does nothing when it is anything else.
+	Decl any
 }
 
 // TypeInstance is one specialized nominal type to emit: the mangled C type name,

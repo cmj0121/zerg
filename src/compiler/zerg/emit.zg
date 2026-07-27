@@ -893,6 +893,13 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		em.used_rt = true
 		return c_intrinsic(name) + "(" + c_args(em, args, sb) + ")"
 	}
+	# a built-in error constructor, `ValueError("bad input")`. It is PascalCase, so without
+	# this it reads as a struct constructor and emits a compound literal of a type nothing
+	# declared — which cc rejects, loudly but a long way from the source that meant it.
+	if c_err_kind(name) > 0 {
+		em.used_rt = true
+		return "zrt_err_new_kind(" + strconv.to_string(c_err_kind(name), 10) + ", " + c_args(em, args, sb) + ")"
+	}
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
@@ -1549,7 +1556,45 @@ fn c_is_wrapped(s: str) -> bool {
 
 fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
+	# `raise ValueError("…")` already names an Err; only a bare message needs one built
+	# around it. Wrapping both would make an Err whose payload is an Err.
+	if c_is_err_ctor(em, x) {
+		return ind + "zrt_raise_err(" + c_expr(em, x, c_nosub()) + ");\n"
+	}
 	return ind + "zrt_raise_err(zrt_err_new(" + c_expr(em, x, c_nosub()) + "));\n"
+}
+
+fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
+	return match x {
+		ECall(nm, _) => c_err_kind(nm) > 0
+		_ => false
+	}
+}
+
+# c_err_kind maps a built-in error name to the kind tag the runtime carries, or 0 for a
+# name that is not one. The numbers are MIRRORED from the runtime's ZRT_ERR_* enum and
+# from the seed's own table, so a `raise ValueError(…)` and a runtime abort that says
+# "ValueError" reify to the same kind whichever compiler built the program.
+fn c_err_kind(name: str) -> int {
+	if name == "ValueError" {
+		return 1
+	}
+	if name == "OverflowError" {
+		return 2
+	}
+	if name == "IOError" {
+		return 3
+	}
+	if name == "EncodingError" {
+		return 4
+	}
+	if name == "IndexError" {
+		return 5
+	}
+	if name == "KeyError" {
+		return 6
+	}
+	return 0
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {

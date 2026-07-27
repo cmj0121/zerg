@@ -20,15 +20,17 @@ const (
 )
 
 // knownDecorators is the fixed set of compiler decorators. IMPLEMENTED (accepted):
-// derive/dyn/test. RESERVED (docs/decorators.md "Reserved" — the layout family plus
-// the ctor-sealing directive): sealed/align/packed/repr — recognized so a typo is
-// distinguishable, but rejected loudly until each is actually built.
+// derive/test. RESERVED (docs/decorators.md "Reserved" — the layout family plus the
+// ctor-sealing directive): sealed/align/packed/repr — recognized so a typo is
+// distinguishable, but rejected loudly until each is actually built. `dyn` joined
+// them when the seed dropped its witness-table dispatch: accepting it silently would
+// hand back N monomorphized bodies where the author asked for one erased body.
 //
 //nolint:gochecknoglobals // a fixed, compiler-owned decorator set.
 var knownDecorators = map[string]decoratorStatus{
 	"derive": decoKnown,
-	"dyn":    decoKnown,
 	"test":   decoKnown,
+	"dyn":    decoReserved,
 	"sealed": decoReserved,
 	"align":  decoReserved,
 	"packed": decoReserved,

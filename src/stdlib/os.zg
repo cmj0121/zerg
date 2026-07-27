@@ -22,6 +22,14 @@ pub fn exit(code: int) {
 	__zrt_exit(code)
 }
 
+# run executes argv[0] with the given arguments (searching PATH), waits for it, and
+# returns its exit status — 128+signal if it died on a signal, 127 if the program could
+# not be executed. This is the process-spawn floor for tooling that shells out (a
+# compiler invoking `cc`); it is the one runtime leaf that starts another process.
+pub fn run(argv: list[str]) -> int {
+	return __zrt_exec(argv)
+}
+
 # platform returns the target operating system as a lowercase name — "linux", "darwin",
 # "windows", "freebsd", or "unknown". It is decided at C-compile time, so it names the
 # platform the binary was built for.

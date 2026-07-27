@@ -429,6 +429,11 @@ bool    zrt_exists(const char *path);
 void    zrt_remove(const char *path);
 int64_t zrt_exec(zrt_list argv);
 
+/* zrt_listdir returns the sorted entry names directly under path as a list[str] (empty
+ * when path is not a readable directory). Sorted because a compiler that resolves a
+ * directory module through it must emit the same C on every machine. */
+zrt_list zrt_listdir(const char *path);
+
 /* --- minimal sys surface (sys.c) ----------------------------------------- */
 
 /* zrt_report writes a diagnostic line to stderr. The MVP sys surface is just

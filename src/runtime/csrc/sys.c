@@ -17,6 +17,7 @@
 
 #include "zergrt.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,6 +273,48 @@ void zrt_write_bytes(int64_t fd, zrt_list bytes) {
 /* zrt_exists reports whether a file or directory exists at path. */
 bool zrt_exists(const char *path) {
 	return access(path, F_OK) == 0;
+}
+
+/* zrt_listdir returns the entry NAMES directly under path (no "." or "..", no recursion,
+ * not path-prefixed) as a list[str], or an empty list when path is not a readable
+ * directory — a missing directory is an answer here, not an abort, since the caller is
+ * probing a search path. The names are sorted, because a compiler that reads a directory
+ * must not let the filesystem's order decide its output: the emitted C has to be
+ * reproducible for the self-host fixpoint to mean anything. */
+zrt_list zrt_listdir(const char *path) {
+	zrt_list l;
+	zrt_list_init(&l, sizeof(const char *), &zrt_str_elem_vt);
+	DIR *d = opendir(path);
+	if (d == NULL) {
+		return l;
+	}
+	struct dirent *e;
+	while ((e = readdir(d)) != NULL) {
+		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+			continue;
+		}
+		size_t      n = strlen(e->d_name);
+		char       *p = (char *)zrt_ref_payload(zrt_ref_alloc(n + 1, NULL));
+		memcpy(p, e->d_name, n + 1);
+		const char *s = p; /* rc=1, owned by the list */
+		/* insertion sort into the list: a directory read is small (a module's files), and
+		 * this keeps the ordering guarantee in one place instead of a second pass. */
+		size_t i = zrt_list_len(&l);
+		zrt_list_push(&l, &s);
+		while (i > 0) {
+			const char **prev = (const char **)zrt_list_at(&l, i - 1);
+			const char **cur  = (const char **)zrt_list_at(&l, i);
+			if (strcmp(*prev, *cur) <= 0) {
+				break;
+			}
+			const char *tmp = *prev;
+			*prev           = *cur;
+			*cur            = tmp;
+			i--;
+		}
+	}
+	closedir(d);
+	return l;
 }
 
 /* zrt_remove deletes the file at path, aborting IOError on failure — e.g. it is missing,

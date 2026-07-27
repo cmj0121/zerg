@@ -124,6 +124,10 @@ enum Kind {
 	RBrack
 	LBrace
 	RBrace
+
+	# Trivia. Only the formatter asks for it: the compiler's own tokenize drops comments,
+	# so no Kind below this line is ever seen by the parser.
+	Comment
 }
 
 # Token is a single lexical unit: its kind, the exact source lexeme, the decoded
@@ -242,6 +246,7 @@ fn kind_name(k: Kind) -> str {
 		LBrack => "["
 		RBrack => "]"
 		LBrace => "{"
+		Comment => "COMMENT"
 		_ => "}"
 	}
 }

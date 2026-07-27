@@ -36,15 +36,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The test-data submodule (golden corpora) is declared with an SSH URL; fetch it
-      # over HTTPS since the repo is public. Best-effort: the golden tests t.Skip when it
-      # is absent, so a failed fetch only narrows coverage — it never fails the build.
-      - name: Fetch test-data submodule (best-effort, over HTTPS)
-        continue-on-error: true
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule update --init --recursive
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

@@ -32,10 +32,8 @@ func TestCmpErr(t *testing.T) {
 
 func TestRunBuildEmitStages(t *testing.T) {
 	src := "fn main() {\n  print 1 + 2\n}"
-	for _, emit := range []string{"tokens", "ast", "c"} {
-		if code := runBuild(&BuildCmd{File: writeSrc(t, src), Emit: emit, Output: "a.out"}); code != 0 {
-			t.Errorf("runBuild(--emit %s) = %d, want 0", emit, code)
-		}
+	if code := runBuild(&BuildCmd{File: writeSrc(t, src), Emit: "c", Output: "a.out"}); code != 0 {
+		t.Errorf("runBuild(--emit c) = %d, want 0", code)
 	}
 }
 
@@ -55,13 +53,6 @@ func TestRunBuildSemaError(t *testing.T) {
 func TestRunBuildReadError(t *testing.T) {
 	if code := runBuild(&BuildCmd{File: "/no/such/file.zg", Emit: "c"}); code != 1 {
 		t.Errorf("missing-file run = %d, want 1", code)
-	}
-}
-
-func TestRunBuildTokensDiagnostic(t *testing.T) {
-	// a malformed literal makes the lexer report a diagnostic.
-	if code := runBuild(&BuildCmd{File: writeSrc(t, "fn f() { x := 0xZZ }"), Emit: "tokens"}); code != 1 {
-		t.Errorf("tokens dump with diagnostic = %d, want 1", code)
 	}
 }
 

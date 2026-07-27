@@ -2134,13 +2134,24 @@ func (e *emitter) trailingDefaults(id *ast.Ident, provided int) []ast.Expr {
 		return nil
 	}
 	fd, ok := sym.Decl.(*ast.FuncDecl)
-	if !ok || provided >= len(fd.Params) {
+	if !ok {
+		return nil
+	}
+	return defaultsFrom(fd, provided)
+}
+
+// defaultsFrom returns the default expressions for the parameters at index >= provided.
+// It stops at the first gap without one, because that is a sema error rather than
+// something to backfill, and it answers nil when nothing is omitted — so a fully-applied
+// call is unaffected. A direct call and a method call read it off the same node.
+func defaultsFrom(fd *ast.FuncDecl, provided int) []ast.Expr {
+	if provided >= len(fd.Params) {
 		return nil
 	}
 	var out []ast.Expr
 	for i := provided; i < len(fd.Params); i++ {
 		if fd.Params[i].Default == nil {
-			return nil // a gap without a default is a sema error, not our backfill
+			return nil
 		}
 		out = append(out, fd.Params[i].Default)
 	}
@@ -2324,37 +2335,23 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	return fmt.Sprintf("%s(%s)", md.Mangled, args)
 }
 
-// methodByRefArgs reports, per written argument, whether the method declares that
-// parameter `mut &`. The receiver is implicit and takes no slot in the declaration, so
-// the indices line up with the call's own arguments and need no offset.
+// A method call reads its by-ref flags and its parameter defaults off the SAME node a
+// direct call does — the declaration — through the same two helpers. It reaches that node
+// differently, because a method call has no callee identifier to resolve: mono carries the
+// declaration on the dispatch. The receiver is implicit and takes no slot in the
+// declaration, so the indices line up with the call's own arguments and need no offset.
 func (e *emitter) methodByRefArgs(md *mono.MethodDispatch) []bool {
-	fd, ok := md.Decl.(*ast.FuncDecl)
-	if !ok {
+	if md.Decl == nil {
 		return nil
 	}
-	out := make([]bool, len(fd.Params))
-	for i, p := range fd.Params {
-		out[i] = p.Ref
-	}
-	return out
+	return byRefOf(md.Decl)
 }
 
-// methodTrailingDefaults returns the default expressions for the parameters a method call
-// omits. It mirrors trailingDefaults, reading the declaration the dispatch resolved to
-// rather than one a callee identifier names — a method call has no such identifier.
 func (e *emitter) methodTrailingDefaults(md *mono.MethodDispatch, provided int) []ast.Expr {
-	fd, ok := md.Decl.(*ast.FuncDecl)
-	if !ok || provided >= len(fd.Params) {
+	if md.Decl == nil {
 		return nil
 	}
-	var out []ast.Expr
-	for i := provided; i < len(fd.Params); i++ {
-		if fd.Params[i].Default == nil {
-			return nil // a gap without a default is a sema error, not our backfill
-		}
-		out = append(out, fd.Params[i].Default)
-	}
-	return out
+	return defaultsFrom(md.Decl, provided)
 }
 
 // construct lowers a struct construction 'T(...)' to a C compound literal of the

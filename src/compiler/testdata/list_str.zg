@@ -1,9 +1,0 @@
-fn main() {
-	mut names: list[str] = []
-	names.append("alice")
-	names.append("bob")
-	for n in names {
-		print n
-	}
-	print names.len()
-}

@@ -360,7 +360,19 @@ void zrt_remove(const char *path) {
  * dependency). argv holds `const char *` elements; the child image is a shallow view of
  * them, valid until exec replaces the address space. */
 int64_t zrt_exec(zrt_list argv) {
-	size_t n = zrt_list_len(&argv);
+	int64_t pid = zrt_proc_spawn(argv);
+	if (pid < 0) {
+		return -1;
+	}
+	return zrt_proc_wait(pid);
+}
+
+/* zrt_proc_spawn starts argv[0] with arguments argv (PATH-searched) and returns immediately
+ * with the child's pid, or -1. It is the half of exec that lets a caller have SEVERAL
+ * children running at once — a build compiling its units in parallel is the reason it
+ * exists — and it pairs with zrt_wait, which collects one. */
+int64_t zrt_proc_spawn(zrt_list argv) {
+	size_t n  = zrt_list_len(&argv);
 	char **av = (char **)malloc((n + 1) * sizeof(char *));
 	if (av == NULL) {
 		return -1;
@@ -379,8 +391,14 @@ int64_t zrt_exec(zrt_list argv) {
 		_exit(127); /* exec failed */
 	}
 	free(av);
+	return (int64_t)pid;
+}
+
+/* zrt_proc_wait blocks until the given child exits and returns its status the way a shell
+ * reports one: the exit code, or 128+signal when it was killed. */
+int64_t zrt_proc_wait(int64_t pid) {
 	int status = 0;
-	if (waitpid(pid, &status, 0) < 0) {
+	if (waitpid((pid_t)pid, &status, 0) < 0) {
 		return -1;
 	}
 	if (WIFEXITED(status)) {

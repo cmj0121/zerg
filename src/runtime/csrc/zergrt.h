@@ -429,6 +429,13 @@ bool    zrt_exists(const char *path);
 void    zrt_remove(const char *path);
 int64_t zrt_exec(zrt_list argv);
 
+/* zrt_proc_spawn starts a child and returns its pid without waiting; zrt_proc_wait
+ * collects one. (The coroutine zrt_spawn above is a different thing entirely.)
+ * Together they are zrt_exec taken apart, so a caller can have several children running
+ * — which is how a build compiles its units in parallel. */
+int64_t zrt_proc_spawn(zrt_list argv);
+int64_t zrt_proc_wait(int64_t pid);
+
 /* zrt_mkdir creates a directory and any missing parents (`mkdir -p`), reporting whether
  * it exists afterwards. Creating one that is already there is success. */
 bool zrt_mkdir(const char *path);

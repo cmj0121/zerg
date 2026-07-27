@@ -36,7 +36,8 @@ fn root() -> cli.Command {
 		.epilog(env_help())
 		.sub(build_cmd())
 		.sub(fmt_cmd())
-		.sub(lint_cmd()))
+		.sub(lint_cmd())
+	)
 }
 
 # build is the only command that compiles; how FAR it goes is `--emit`, not a command of
@@ -49,34 +50,38 @@ fn build_cmd() -> cli.Command {
 		.opt("o", "output", "where to write the result (default: the source name)")
 		.opt("j", "jobs", "how many units to compile at once", "4")
 		.add(cli.positional("file.zg", "the source to compile").required().repeated())
-		.run(do_build))
+		.run(do_build)
+	)
 }
 
 fn fmt_cmd() -> cli.Command {
 	return (cli.command("fmt", "rewrite sources in the canonical style")
+		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. F401; repeatable").repeated())
 		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
-		.run(do_fmt))
+		.run(do_fmt)
+	)
 }
 
 fn lint_cmd() -> cli.Command {
 	return (cli.command("lint", "report unused imports and dead private code")
 		.add(cli.positional("file.zg", "the sources to check").required().repeated())
-		.run(do_lint))
+		.run(do_lint)
+	)
 }
 
 # env_help is the part of the help no declaration can produce: where the compiler looks
 # for the things it is not carrying.
 fn env_help() -> str {
 	return "Stages (--emit):\n" +
-		 "  tokens             the token stream, on stdout\n" +
-		 "  ast                the parsed tree, on stdout\n" +
-		 "  c                  the emitted C, on stdout\n" +
-		 "  lib                compile the C to an object file (default)\n" +
-		 "  bin                link an executable\n" +
-		 "\nEnvironment:\n" +
-		 "  ZERG_ROOT          installation root (default: the current directory)\n" +
-		 "  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
-		 "  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
+		"  tokens             the token stream, on stdout\n" +
+		"  ast                the parsed tree, on stdout\n" +
+		"  c                  the emitted C, on stdout\n" +
+		"  lib                compile the C to an object file (default)\n" +
+		"  bin                link an executable\n" +
+		"\nEnvironment:\n" +
+		"  ZERG_ROOT          installation root (default: the current directory)\n" +
+		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
+		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
 }
 
 # --- what each sub-command does -------------------------------------------------------------
@@ -92,7 +97,7 @@ fn do_build(c: cli.Ctx) -> int {
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
-	run_fmt(c.args())
+	run_fmt(c.args(), c.all("off"))
 	return 0
 }
 
@@ -107,9 +112,7 @@ fn job_count(v: str) -> int {
 	guard {
 		n = strconv.parse_int(v, 10)
 	}
-	if n < 1 {
-		return 1
-	}
+	return 1 if n < 1
 	return n
 }
 
@@ -347,9 +350,7 @@ fn compile_to(code: str, output: str, object_only: bool) {
 
 # drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
 fn drop_ext(path: str) -> str {
-	if not has_suffix(path, ".zg") {
-		return path
-	}
+	return path if not has_suffix(path, ".zg")
 	b := list[byte](path)
 	mut out: list[byte] = []
 	mut i := 0
@@ -388,9 +389,7 @@ fn load_units(entry: str) -> list[Unit] {
 
 fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], mut &units: list[Unit]) {
 	for s in seen {
-		if s == name {
-			return
-		}
+		return if s == name
 	}
 	seen.append(name)
 	mut srcs: list[str] = []
@@ -430,9 +429,7 @@ fn load_sources(files: list[str]) -> list[str] {
 
 # env_or reads an environment variable, or gives fallback when it is unset.
 fn env_or(key: str, fallback: str) -> str {
-	if __zrt_has_env(key) {
-		return __zrt_getenv(key)
-	}
+	return __zrt_getenv(key) if __zrt_has_env(key)
 	return fallback
 }
 
@@ -446,17 +443,13 @@ fn zerg_root() -> str {
 # It is probed rather than assumed, so a wrong root fails as a missing-runtime message
 # instead of a wall of cc errors about a header that was never there.
 fn rt_dir() -> str {
-	if __zrt_has_env("ZERG_RUNTIME") {
-		return __zrt_getenv("ZERG_RUNTIME")
-	}
+	return __zrt_getenv("ZERG_RUNTIME") if __zrt_has_env("ZERG_RUNTIME")
 	return join_path(zerg_root(), "src/runtime/csrc")
 }
 
 # stdlib_dir returns the standard library sources — $ZERG_STDLIB, else <root>/src/stdlib.
 fn stdlib_dir() -> str {
-	if __zrt_has_env("ZERG_STDLIB") {
-		return __zrt_getenv("ZERG_STDLIB")
-	}
+	return __zrt_getenv("ZERG_STDLIB") if __zrt_has_env("ZERG_STDLIB")
 	return join_path(zerg_root(), "src/stdlib")
 }
 
@@ -464,9 +457,7 @@ fn stdlib_dir() -> str {
 
 # join_path joins a directory and a name, treating "" and "." as "here".
 fn join_path(dir: str, name: str) -> str {
-	if dir == "" or dir == "." {
-		return name
-	}
+	return name if dir == "" or dir == "."
 	return dir + "/" + name
 }
 
@@ -483,9 +474,7 @@ fn dir_of(path: str) -> str {
 		}
 		i = i + 1
 	}
-	if not seen {
-		return "."
-	}
+	return "." if not seen
 	mut out: list[byte] = []
 	mut j := 0
 	for j < cut {
@@ -499,14 +488,10 @@ fn dir_of(path: str) -> str {
 fn has_suffix(s: str, suffix: str) -> bool {
 	b := list[byte](s)
 	x := list[byte](suffix)
-	if x.len() > b.len() {
-		return false
-	}
+	return false if x.len() > b.len()
 	mut i := 0
 	for i < x.len() {
-		if b[b.len() - x.len() + i] != x[i] {
-			return false
-		}
+		return false if b[b.len() - x.len() + i] != x[i]
 		i = i + 1
 	}
 	return true
@@ -539,9 +524,7 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 					many.append(join_path(dir, name))
 				}
 			}
-			if many.len() > 0 {
-				return many
-			}
+			return many if many.len() > 0
 		}
 	}
 	mut none: list[str] = []
@@ -550,9 +533,7 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str]) {
 	for s in seen {
-		if s == file {
-			return
-		}
+		return if s == file
 	}
 	seen.append(file)
 	src := str(io.read_file(file))
@@ -616,10 +597,10 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 
 # run_fmt rewrites each named file in place. Reading and writing the same path means a
 # formatted file is byte-identical to what it was, so running fmt twice is a no-op.
-fn run_fmt(files: list[str]) {
+fn run_fmt(files: list[str], off: list[str]) {
 	for f in files {
 		src := str(io.read_file(f))
-		out := zerg.fmt_src(src)
+		out := zerg.fmt_src_off(src, off)
 		if out != src {
 			guard {
 				io.write_file(f, list[byte](out))
@@ -638,8 +619,6 @@ fn run_lint(files: list[str]) -> int {
 	for f in findings {
 		io.write(f + "\n")
 	}
-	if findings.len() > 0 {
-		return 1
-	}
+	return 1 if findings.len() > 0
 	return 0
 }

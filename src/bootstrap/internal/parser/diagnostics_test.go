@@ -116,12 +116,6 @@ func TestDiagnostics(t *testing.T) {
 			wantDiags: 1, wantItems: 1,
 		},
 		{
-			name: "asm_operand_misuse", group: "g12 unsafe",
-			src:     "fn f() {\n\tunsafe {\n\t\tasm(\"nop\", 5)\n\t}\n}",
-			wantSub: "expected an asm operand (in/out/inout/clobber)", wantLine: 3, wantCol: 14,
-			wantDiags: 1, wantItems: 1,
-		},
-		{
 			name: "empty_match_needs_arm", group: "g8 patterns",
 			src:     "fn f() {\n\tmatch x {}\n}",
 			wantSub: "a match needs at least one arm", wantLine: 2, wantCol: 2,

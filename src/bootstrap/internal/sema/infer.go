@@ -26,13 +26,6 @@ func (c *checker) inferCall(n *ast.Call) Type {
 		if t, handled := c.namespaceCall(n, fld); handled {
 			return t
 		}
-		// A method on a raw-pointer receiver (`p.load()` / `.store()` / `.offset()`) is
-		// a compiler-recognized unsafe intrinsic, dispatched on the receiver's static
-		// type; a receiver of any other type falls through to the ordinary paths.
-		if pt, ok := c.synth(fld.X).(*types.Ptr); ok {
-			t, _ := c.ptrMethodCall(n, fld, pt)
-			return t
-		}
 		// A method on a built-in list receiver (`.len()` / `.get(i)` / `.append(v)`) is a
 		// compiler intrinsic (list is not a user struct), dispatched on the receiver's
 		// static type before the nominal-method path.
@@ -149,22 +142,6 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.atomicIntrinsic(n, 2, Int), true
 		case "__zrt_atomic_cas":
 			return c.atomicIntrinsic(n, 3, Bool), true
-		case "addr":
-			// addr(x) -> ptr[T]: the address of an addressable value (U1).
-			return c.ptrAddr(n), true
-		case "ptr":
-			// ptr(p) / ptr(u) -> bare `ptr`: a raw-address cast (any ptr or uint).
-			return c.ptrCast(n, &types.Ptr{}), true
-		case "uint":
-			// uint(p) -> uint: a ptr-to-integer cast, recognized only when the argument
-			// is a raw pointer, so it does not mask the numeric `uint(x)` conversion the
-			// scalar path below handles.
-			if len(n.Args) == 1 {
-				if _, ok := c.synth(n.Args[0].Value).(*types.Ptr); ok {
-					c.unsafeOp(n.Span(), "a pointer cast")
-					return types.Uint, true
-				}
-			}
 		}
 		// A callee naming a primitive type is a CONVERSION, `T(x)` — a re-construction
 		// of x's value as a T (docs/types.md). Building a `str` is not this mechanism
@@ -194,16 +171,6 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 				elem = c.exprAsType(callee.Elems[0])
 			}
 			return c.constructRef(n, elem), true
-		case "ptr":
-			// ptr[T](p) -> ptr[T]: a typed-pointer cast (U1).
-			if c.shadowed("ptr") {
-				return nil, false
-			}
-			var elem Type
-			if len(callee.Elems) == 1 {
-				elem = c.exprAsType(callee.Elems[0])
-			}
-			return c.ptrCast(n, &types.Ptr{Elem: elem}), true
 		case "list":
 			// list[byte](s) / list[rune](s) -> a str's bytes / code points
 			// (docs/collections.md). Only the byte/rune element is a str bridge; any other

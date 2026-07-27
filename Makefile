@@ -1,12 +1,8 @@
 SUBDIR := editors src/bootstrap
 
-# The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. The seed
-# resolves imports itself, so it builds zerg from the entry file alone; zerg has no
-# module loader, so rebuilding it with itself takes the whole source list, driver first.
-ZERG_SRCS := src/compiler/zergc.zg \
-	src/stdlib/io.zg src/stdlib/ascii.zg src/stdlib/strconv.zg \
-	src/compiler/zerg/token.zg src/compiler/zerg/lexer.zg src/compiler/zerg/ast.zg \
-	src/compiler/zerg/parser.zg src/compiler/zerg/emit.zg
+# The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. Both
+# resolve `import` themselves, so either builds the compiler from the entry file alone.
+ZERG_ENTRY := src/compiler/zergc.zg
 
 # The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
 # which is what `zerg` is growing toward, while the seed is covered by its own unit
@@ -31,7 +27,7 @@ test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 run: $(SUBDIR)                  # run in the local environment
 
 build: $(SUBDIR)                # build the toolchain: the zerg0 seed, then zerg itself
-	./bin/zerg0 build src/compiler/zergc.zg -o ./bin/zerg
+	./bin/zerg0 build $(ZERG_ENTRY) -o ./bin/zerg
 
 install: $(SUBDIR)              # install editor integrations (nvim syntax) locally
 
@@ -72,5 +68,5 @@ corpus:                         # run zerg against the test-data corpus it now o
 
 selfhost:                       # have the built zerg rebuild itself, closing the chain
 	$(MAKE) build
-	./bin/zerg build ./bin/zerg-stage2 $(ZERG_SRCS)
+	./bin/zerg build ./bin/zerg-stage2 $(ZERG_ENTRY)
 	@echo "self-host chain closed: bin/zerg-stage2 built by bin/zerg"

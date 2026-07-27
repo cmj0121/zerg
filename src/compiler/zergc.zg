@@ -28,35 +28,25 @@ fn main(args: list[str]) {
 		m = mode
 		start = 1
 	}
-	mut srcs: list[str] = []
-	mut i := start
-	for i < args.len() {
-		srcs.append(str(io.read_file(args[i])))
-		i = i + 1
-	}
 	guard {
 		if m == "tokens" {
-			io.write(zerg.dump_tokens(srcs[0]))
+			io.write(zerg.dump_tokens(str(io.read_file(args[start]))))
 		} else {
-			io.write(zerg.emit_files(srcs))
+			io.write(zerg.emit_files(load_sources(args, start)))
 		}
 	}
 }
 
-# build_binary compiles `zergc build <out> <file>...`: emit the merged C, write it to
-# <out>.c, then invoke cc to link <out>, reporting a nonzero exit if cc fails.
+# build_binary compiles `zergc build <out> <file.zg>`: load the entry file with everything
+# it imports, emit the merged C beside the output, then invoke cc to link <out>. Extra
+# files may still be listed explicitly; they are loaded the same way, imports and all.
 fn build_binary(args: list[str]) {
 	if args.len() < 3 {
 		print "usage: zergc build <out> <file.zg> [more.zg ...]"
 		return
 	}
 	output := args[1]
-	mut srcs: list[str] = []
-	mut i := 2
-	for i < args.len() {
-		srcs.append(str(io.read_file(args[i])))
-		i = i + 1
-	}
+	srcs := load_sources(args, 2)
 	cpath := output + ".c"
 	guard {
 		io.write_file(cpath, list[byte](zerg.emit_files(srcs)))
@@ -67,9 +57,171 @@ fn build_binary(args: list[str]) {
 	}
 }
 
-# rt_dir returns the runtime source tree, from $ZERG_RUNTIME or the in-repo default.
+# load_sources loads every entry named from args[start:], each with its imports, keeping
+# one copy of a module that several entries share.
+fn load_sources(args: list[str], start: int) -> list[str] {
+	mut seen: list[str] = []
+	mut srcs: list[str] = []
+	mut i := start
+	for i < args.len() {
+		load_into(args[i], dir_of(args[i]), seen, srcs)
+		i = i + 1
+	}
+	return srcs
+}
+
+# --- installation layout -------------------------------------------------------------
+#
+# The compiler has to work from any directory, so nothing below is a relative path the
+# process happens to be standing next to. Each location is answered by an environment
+# variable first, then by a root that is itself answered the same way, and the in-repo
+# layout is only the last resort — which is what makes a checkout work with no setup.
+
+# env_or reads an environment variable, or gives fallback when it is unset.
+fn env_or(key: str, fallback: str) -> str {
+	if __zrt_has_env(key) {
+		return __zrt_getenv(key)
+	}
+	return fallback
+}
+
+# zerg_root is the installation root: $ZERG_ROOT, else the current directory (the repo
+# checkout, where src/runtime and src/stdlib sit).
+fn zerg_root() -> str {
+	return env_or("ZERG_ROOT", ".")
+}
+
+# rt_dir returns the runtime source tree — $ZERG_RUNTIME, else <root>/src/runtime/csrc.
+# It is probed rather than assumed, so a wrong root fails as a missing-runtime message
+# instead of a wall of cc errors about a header that was never there.
 fn rt_dir() -> str {
-	return "src/runtime/csrc"
+	if __zrt_has_env("ZERG_RUNTIME") {
+		return __zrt_getenv("ZERG_RUNTIME")
+	}
+	return join_path(zerg_root(), "src/runtime/csrc")
+}
+
+# stdlib_dir returns the standard library sources — $ZERG_STDLIB, else <root>/src/stdlib.
+fn stdlib_dir() -> str {
+	if __zrt_has_env("ZERG_STDLIB") {
+		return __zrt_getenv("ZERG_STDLIB")
+	}
+	return join_path(zerg_root(), "src/stdlib")
+}
+
+# --- paths -----------------------------------------------------------------------------
+
+# join_path joins a directory and a name, treating "" and "." as "here".
+fn join_path(dir: str, name: str) -> str {
+	if dir == "" or dir == "." {
+		return name
+	}
+	return dir + "/" + name
+}
+
+# dir_of returns the directory part of a path, or "." when it names a bare file.
+fn dir_of(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut seen := false
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i
+			seen = true
+		}
+		i = i + 1
+	}
+	if not seen {
+		return "."
+	}
+	mut out: list[byte] = []
+	mut j := 0
+	for j < cut {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# has_suffix reports whether s ends with suffix.
+fn has_suffix(s: str, suffix: str) -> bool {
+	b := list[byte](s)
+	x := list[byte](suffix)
+	if x.len() > b.len() {
+		return false
+	}
+	mut i := 0
+	for i < x.len() {
+		if b[b.len() - x.len() + i] != x[i] {
+			return false
+		}
+		i = i + 1
+	}
+	return true
+}
+
+# --- module resolution ------------------------------------------------------------------
+
+# module_files resolves one import path to the source files that make up that module,
+# searched in the entry program's own directory first (a user module beside the program),
+# then the standard library. A module is either a single `<path>.zg` file or a DIRECTORY
+# of them — the compiler's own `zerg` module is the second kind, and its files are read in
+# the sorted order the runtime guarantees so the emitted C never depends on the
+# filesystem. An unresolvable import yields an empty list; the caller reports it.
+fn module_files(path: str, from_dir: str) -> list[str] {
+	mut roots: list[str] = []
+	roots.append(from_dir)
+	roots.append(stdlib_dir())
+	for root in roots {
+		file := join_path(root, path + ".zg")
+		if __zrt_exists(file) {
+			mut one: list[str] = []
+			one.append(file)
+			return one
+		}
+		dir := join_path(root, path)
+		if __zrt_exists(dir) {
+			mut many: list[str] = []
+			for name in __zrt_listdir(dir) {
+				if has_suffix(name, ".zg") {
+					many.append(join_path(dir, name))
+				}
+			}
+			if many.len() > 0 {
+				return many
+			}
+		}
+	}
+	mut none: list[str] = []
+	return none
+}
+
+# load_program reads the entry file and everything it imports, transitively, and returns
+# the sources in dependency order (a module before the file that imports it). Each module
+# is loaded once: `seen` holds the resolved paths, so a diamond of imports — or a module
+# that imports one already pulled in — costs nothing and cannot loop.
+fn load_program(entry: str) -> list[str] {
+	mut seen: list[str] = []
+	mut srcs: list[str] = []
+	load_into(entry, dir_of(entry), seen, srcs)
+	return srcs
+}
+
+fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str]) {
+	for s in seen {
+		if s == file {
+			return
+		}
+	}
+	seen.append(file)
+	src := str(io.read_file(file))
+	for im in zerg.imports_of(src) {
+		for dep in module_files(im, from_dir) {
+			load_into(dep, from_dir, seen, srcs)
+		}
+	}
+	srcs.append(src)
 }
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,

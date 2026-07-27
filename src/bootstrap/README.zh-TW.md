@@ -3,7 +3,7 @@
 [English](README.md) | 繁體中文
 
 一個以 Go 實作的 Zerg 編譯器，如今唯一的職責是**建置 `src/compiler/` 裡的自舉編譯器**。它是種子，不是產品：當
-`zergc` 能編譯自己之後，使用者工具鏈該做的事（`fmt`、`lint`、`test`、值得一讀的診斷訊息）都屬於那個以 Zerg 寫成
+`zerg` 能編譯自己之後，使用者工具鏈該做的事（`fmt`、`lint`、`test`、值得一讀的診斷訊息）都屬於那個以 Zerg 寫成
 的編譯器，種子只保留第一次建置所需的部分。
 
 這個唯一目的就是設計準則。種子只支援 `Zerg-boot` 子集——自舉原始碼實際用到的那一小片語言——別無其他。超出子集的
@@ -12,9 +12,9 @@
 ## 用法
 
 ```sh
-zerg build <file.zg>              # 編譯並連結成執行檔（預設 --emit bin）
-zerg build --emit c <file.zg>     # 只到產生 C translation unit 為止
-zerg build -o out --keep-c f.zg   # 指定輸出路徑，並保留產生的 .c
+zerg0 build <file.zg>              # 編譯並連結成執行檔（預設 --emit bin）
+zerg0 build --emit c <file.zg>     # 只到產生 C translation unit 為止
+zerg0 build -o out --keep-c f.zg   # 指定輸出路徑，並保留產生的 .c
 ```
 
 `build` 是唯一的子命令。失敗時在 stderr 印出 `file:line:col: message` 並以非零值結束——足以定位問題，不多說。
@@ -22,34 +22,36 @@ zerg build -o out --keep-c f.zg   # 指定輸出路徑，並保留產生的 .c
 ## 自舉鏈
 
 ```text
-go build ./cmd/zerg              # 1. Go 種子
-zerg build src/compiler/zergc.zg # 2. 種子建出自舉編譯器
-zergc build <out> <file.zg>...   # 3. zergc 建置程式——也建置它自己
+make build                        # 或者手動跑它的兩個步驟：
+go build -o bin/zerg0 ./cmd/zerg  # 1. Go 種子——叫 zerg0，不叫 zerg
+zerg0 build src/compiler/zergc.zg -o bin/zerg
+                                  # 2. 種子建出自舉編譯器
+zerg build <out> <file.zg>...     # 3. zerg 建置程式——也建置它自己
 ```
 
-第 3 步能對自己閉合，正是整個目錄存在的意義：在那之後，種子只在「機器上還沒有 `zergc`」時，才需要從原始碼重新
-推導出 `zergc`。
+第 3 步能對自己閉合，正是整個目錄存在的意義：在那之後，種子只在「機器上還沒有 `zerg`」時，才需要從原始碼重新
+推導出 `zerg`。
 
 ## 種子支援什麼
 
 以下每一項都被自舉原始碼（`src/compiler/zergc.zg`、`src/compiler/zerg/*.zg`）或它匯入的 stdlib 模組（`io`、
 `ascii`、`strconv`）實際用到——這就是它們還在的理由。
 
-| 特性                            | 說明                                                   |
-| ------------------------------- | ------------------------------------------------------ |
-| value struct                    | 宣告、建構、欄位存取、巢狀                             |
-| enum——plain 與 payload          | tagged union；變體以**裸名**建構                       |
-| 遞迴 enum                       | 自我指涉的 payload，自動 boxing（`Expr`、`Stmt`）      |
-| `match`                         | 運算式 arm、以換行分隔，支援解構                       |
-| `list[T]`                       | `append` / `len` / `x[i]` 讀寫、`for … in`             |
-| `str` 與 `byte`                 | 串接、`str(bytes)` / `list[byte](str)`、f-string       |
-| `Result[nil]`、`guard`、`raise` | driver 與 `strconv` 使用的錯誤路徑                     |
-| `mut &` 參數                    | by-reference 接收者（`fn at(mut &l: Lex, …)`）         |
-| 泛型                            | 編譯期單態化                                           |
-| tuple、optional、`defer`        | 保留：成本低，且從子集內仍可觸及                       |
-| `spec` / `impl` method          | 靜態分派                                               |
-| 模組                            | `import "path"`、模組限定呼叫、whole-program 攤平      |
-| `__zrt_*` intrinsic             | runtime 底層，含 `__zrt_exec`（`zergc` 藉此執行 `cc`） |
+| 特性                            | 說明                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| value struct                    | 宣告、建構、欄位存取、巢狀                            |
+| enum——plain 與 payload          | tagged union；變體以**裸名**建構                      |
+| 遞迴 enum                       | 自我指涉的 payload，自動 boxing（`Expr`、`Stmt`）     |
+| `match`                         | 運算式 arm、以換行分隔，支援解構                      |
+| `list[T]`                       | `append` / `len` / `x[i]` 讀寫、`for … in`            |
+| `str` 與 `byte`                 | 串接、`str(bytes)` / `list[byte](str)`、f-string      |
+| `Result[nil]`、`guard`、`raise` | driver 與 `strconv` 使用的錯誤路徑                    |
+| `mut &` 參數                    | by-reference 接收者（`fn at(mut &l: Lex, …)`）        |
+| 泛型                            | 編譯期單態化                                          |
+| tuple、optional、`defer`        | 保留：成本低，且從子集內仍可觸及                      |
+| `spec` / `impl` method          | 靜態分派                                              |
+| 模組                            | `import "path"`、模組限定呼叫、whole-program 攤平     |
+| `__zrt_*` intrinsic             | runtime 底層，含 `__zrt_exec`（`zerg` 藉此執行 `cc`） |
 
 ## 種子能 lower 的文法
 
@@ -131,9 +133,9 @@ src/bootstrap/
 相同；若不相同，那個差異就是這項改動真正的影響半徑。
 
 ```sh
-zerg build --emit c src/compiler/zergc.zg > after.c   # 與改動前的擷取結果比對
+zerg0 build --emit c src/compiler/zergc.zg > after.c  # 與改動前的擷取結果比對
 go build ./... && go test ./...                       # 種子自己的測試
-zerg build src/compiler/zergc.zg -o zergc             # 而且自舉鏈仍能閉合
+make build                                            # 而且自舉鏈仍能閉合
 ```
 
 想把語言覆蓋率加回這裡，幾乎總是錯的選擇：自舉編譯器才是語言生長的地方。種子只需要好到足以建出它。

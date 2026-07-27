@@ -1,12 +1,14 @@
-// Command zerg is the minimal Zerg bootstrap seed (M6): a single 'build'
+// Command zerg0 is the minimal Zerg bootstrap seed (M6): a single 'build'
 // subcommand that drives the compile pipeline (lex -> parse -> sema -> emit C ->
 // cc -> binary) — the one capability needed to build the self-hosting Zerg
 // compiler. The fmt / lint / test subcommands were dropped once the compiler
 // self-hosts; the Zerg-written toolchain reimplements those.
 //
+// It is named zerg0, not zerg: `zerg` is the compiler this one exists to build.
+//
 // Usage:
 //
-//	zerg build [flags] <file.zg>
+//	zerg0 build [flags] <file.zg>
 //
 // See --help for the flags (output path, --emit stage, --cc, verbosity).
 package main
@@ -44,7 +46,7 @@ type BuildCmd struct {
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
-		kong.Name("zerg"),
+		kong.Name("zerg0"),
 		kong.Description("The minimal Zerg bootstrap seed: compile a .zg source with 'build'."),
 		kong.UsageOnError(),
 	)

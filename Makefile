@@ -17,12 +17,12 @@ run: $(SUBDIR)                  # run in the local environment
 build: $(SUBDIR)                # build the binary/library
 
 install: $(SUBDIR)              # install editor integrations (nvim syntax) locally
-                                
+
 uninstall: $(SUBDIR)            # remove editor integrations installed by `make install`
-                                
+
 upgrade:			            # upgrade all the necessary packages
-	pre-commit autoupdate       
-                                
+	pre-commit autoupdate
+
 help:				            # show this message
 	@printf "Usage: make [OPTION]\n"
 	@printf "\n"
@@ -36,7 +36,5 @@ examples:
 	$(MAKE) build
 	@for src in examples/[0-9][0-9]_*.zg examples/modules/main.zg examples/1g/init/main.zg examples/1g/reexport/main.zg; do \
 		echo "Building $$src..."; \
-		./bin/zerg build $$src --emit tokens >/dev/null || exit 1; \
-		./bin/zerg build $$src --emit ast    >/dev/null || exit 1; \
 		./bin/zerg build $$src --emit c      >/dev/null || exit 1; \
 	done

@@ -46,6 +46,7 @@ other chapter relies on. Read it first.
 | [FFI](ffi.md)                                      | the C ABI boundary — `pub` export, unsafe foreign import          |
 | [Built-in Functions](builtins.md)                  | the fixed no-import functions — `Ref`, conversions, error kinds   |
 | [Standard Library](stdlib.md)                      | the bundled `import` packages — io, fs, os, time, math, rand, …   |
+| [Formatter & Linter Rules](fmt.md)                 | every rule `zerg fmt` and `zerg lint` apply, and its code         |
 
 ## Types
 

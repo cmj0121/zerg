@@ -368,18 +368,20 @@ var ioIntrinsicNames = map[string]bool{
 // the always-linked sys.c, so a program that lowers one needs the runtime — but not the
 // io-specific NeedsIO flag.
 var sysFloorIntrinsics = map[string]bool{
-	"__zrt_time_unix": true,
-	"__zrt_time_mono": true,
-	"__zrt_platform":  true,
-	"__zrt_arch":      true,
-	"__zrt_getenv":    true,
-	"__zrt_has_env":   true,
-	"__zrt_exit":      true,
-	"__zrt_exists":    true,
-	"__zrt_remove":    true,
-	"__zrt_exec":      true,
-	"__zrt_listdir":   true,
-	"__zrt_mkdir":     true,
+	"__zrt_time_unix":  true,
+	"__zrt_time_mono":  true,
+	"__zrt_platform":   true,
+	"__zrt_arch":       true,
+	"__zrt_getenv":     true,
+	"__zrt_has_env":    true,
+	"__zrt_exit":       true,
+	"__zrt_exists":     true,
+	"__zrt_remove":     true,
+	"__zrt_exec":       true,
+	"__zrt_listdir":    true,
+	"__zrt_mkdir":      true,
+	"__zrt_proc_spawn": true,
+	"__zrt_proc_wait":  true,
 }
 
 // strProducingIntrinsics are the sys-floor leaves that return a FRESH str cell
@@ -690,6 +692,10 @@ func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 		return fmt.Sprintf("zrt_listdir(%s)", arg), true
 	case "__zrt_mkdir":
 		return fmt.Sprintf("zrt_mkdir(%s)", arg), true
+	case "__zrt_proc_spawn":
+		return fmt.Sprintf("((int64_t)zrt_proc_spawn(%s))", arg), true
+	case "__zrt_proc_wait":
+		return fmt.Sprintf("((int64_t)zrt_proc_wait(%s))", arg), true
 	}
 	return "", false
 }

@@ -136,6 +136,10 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, &types.List{Elem: types.Str}), true
 		case "__zrt_mkdir":
 			return c.unaryIntrinsic(n, Str, Bool), true
+		case "__zrt_proc_spawn":
+			return c.execIntrinsic(n), true
+		case "__zrt_proc_wait":
+			return c.unaryIntrinsic(n, Int, Int), true
 		case "__zrt_remove":
 			return c.unaryIntrinsic(n, Str, Nil), true
 		case "__zrt_exec":

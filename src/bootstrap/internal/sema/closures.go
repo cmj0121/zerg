@@ -14,7 +14,7 @@ import (
 // A closure is lifted to an ordinary top-level function, reusing the whole function
 // machinery. A NON-CAPTURING closure needs no environment. A CAPTURING closure records
 // its captures — POD or NON-POD — so the backend builds the environment its lifted
-// function reads (emit_fnval.go): a POD capture copies by bits, a non-POD capture
+// function reads: a POD capture copies by bits, a non-POD capture
 // (Ref/list/map/str/boxed) is retained into a refcounted environment box and released
 // when the closure value is dropped. One capture stays illegal: a `mut` variable (the
 // grammar captures immutable captures, so snapshot it into an immutable binding first).
@@ -62,8 +62,8 @@ func (c *checker) resolveClosure(fe *ast.FnExpr, fn *types.Fn, captured map[stri
 		// bits; a non-POD value (a Ref/list/map/str/boxed recursive value) is RETAINED into
 		// the closure's refcounted environment box (copyValue at env construction, like a
 		// struct field) and RELEASED when the closure value is dropped, so its lifetime is
-		// correctly extended past the defining scope (emit/emit_fnval.go). This is now
-		// expressible because refcount exists (S1/S2); the old non-POD refusal is gone.
+		// correctly extended past the defining scope. This is now expressible because
+		// refcount exists (S1/S2); the old non-POD refusal is gone.
 		caps = append(caps, Capture{Name: name, Type: sym.typ})
 	}
 	// A deterministic order (by name) so the generated environment struct is stable.

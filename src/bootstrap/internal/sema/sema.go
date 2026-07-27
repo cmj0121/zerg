@@ -60,10 +60,6 @@ type FuncSig struct {
 	Ret        Type // Nil when the function has no '-> type'
 	Decl       *ast.FuncDecl
 	Generic    *GenericEnv
-	// Dyn is true when the function carries the '#[dyn]' decorator, asking the
-	// backend to compile it to one shared witness-table body rather than
-	// monomorphizing per type argument (Phase 1c §6).
-	Dyn bool
 	// TestLabel is the human-readable `module::surface` name of a `#[test]` function
 	// (Phase 1i U1), set when the signature is collected into Info.Tests. It is empty
 	// for a non-test function, so a normal build never reads it.
@@ -107,9 +103,9 @@ type Info struct {
 
 	// Tests lists every `#[test]` function's signature, in the flattened whole-program
 	// order — entry-module tests (file order) first, then imported modules by canonical
-	// name — so `zerg test` runs them deterministically (Phase 1i U1/U3). It is empty
-	// for a program with no `#[test]`; a normal `zerg build` filters test functions out
-	// before this pass, so it is empty there too.
+	// name. The seed has no test runner, so a `build` filters test functions out before
+	// this pass and it stays empty; the collection is kept for the Zerg-written
+	// toolchain, which is where running tests now lives.
 	Tests []*FuncSig
 
 	// Lambdas records each NON-CAPTURING closure literal that is lifted to a top-level
@@ -410,10 +406,9 @@ func (c *checker) collectFuncItems(items []ast.Stmt, inUnsafe bool) {
 			}
 			sig := c.buildSig(n)
 			c.info.Funcs[n.Name] = sig
-			// A `#[test]` function is a compiler-owned decorator (like #[derive]/#[dyn]):
-			// collect it into Info.Tests after validating its shape (Phase 1i U1). A normal
-			// build never reaches here for a test function — the driver filters them out —
-			// so this fires only under `zerg test`.
+			// A `#[test]` function is a compiler-owned decorator (like #[derive]):
+			// collect it into Info.Tests after validating its shape (Phase 1i U1). A build
+			// never reaches here for a test function — the pipeline filters them out first.
 			if hasDecorator(n.Decorators, "test") {
 				c.collectTest(n, sig)
 			}
@@ -428,7 +423,6 @@ func (c *checker) collectFuncItems(items []ast.Stmt, inUnsafe bool) {
 func (c *checker) buildSig(fn *ast.FuncDecl) *FuncSig {
 	sig := &FuncSig{Name: fn.Name, Ret: Nil, Decl: fn}
 	sig.Generic = c.genericEnv(fn.Generics)
-	sig.Dyn = c.checkDyn(fn, sig.Generic)
 	saved := c.typeParams
 	c.typeParams = sig.Generic.merged(saved)
 	for _, p := range fn.Params {
@@ -496,24 +490,6 @@ func (c *checker) checkConstDefault(e ast.Expr, own map[string]bool) bool {
 		c.errorf(e.Span(), msg)
 		return false
 	}
-}
-
-// checkDyn reports whether a function carries the '#[dyn]' decorator and enforces
-// its one rule (DESIGN-1c §6.3): '#[dyn]' cannot erase a value (const) generic,
-// since a compile-time value has no witness-table slot. A '#[dyn]' over a
-// parameter list holding any '[N: int]' value parameter is a compile-time error.
-func (c *checker) checkDyn(fn *ast.FuncDecl, env *GenericEnv) bool {
-	if !hasDecorator(fn.Decorators, "dyn") {
-		return false
-	}
-	if env != nil {
-		for _, name := range env.Names {
-			if _, isVal := env.Params[name].(*types.ValParam); isVal {
-				c.errorf(fn.Span(), "#[dyn] cannot erase value generic %q: a compile-time value has no witness-table slot", name)
-			}
-		}
-	}
-	return true
 }
 
 // hasDecorator reports whether a decorator run contains an item of the given name.

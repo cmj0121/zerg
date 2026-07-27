@@ -40,17 +40,21 @@ Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.z
 先建置 bootstrap 工具鏈（需要 Go ≥ 1.26 與一個 C 編譯器），再編譯一支程式：
 
 ```sh
-make                       # 把單一的 `zerg` binary 建到 ./bin/
+make                        # ./bin/zerg0（Go 種子），再由它建出 ./bin/zerg
 cat > hello.zg <<'ZG'
 fn main() {
     print "hello, world"
 }
 ZG
-./bin/zerg build hello.zg  # 產生 C，再呼叫 cc → ./hello
-./hello                    # hello, world
+./bin/zerg0 build hello.zg  # 產生 C，再呼叫 cc → ./hello
+./hello                     # hello, world
 ```
 
-單一的 `zerg` 工具帶著你需要的子指令：
+`make` 會建出兩個編譯器。`zerg0` 是以 Go 實作的種子——quickstart 用的就是它，今天整條工具鏈也仍由它承擔。
+`zerg` 是種子從 [`src/compiler/`](src/compiler) 建出的自舉編譯器；它能編譯自己，但還不是你日常會拿起的那把
+工具（需要顯式列出原始檔，且以 repo 根目錄為基準解析 runtime）。這個名字保留給它，因為那是它要去的地方。
+
+單一的 `zerg` 工具預計帶著你需要的子指令：
 
 | 指令                | 作用                                 |
 | ------------------- | ------------------------------------ |

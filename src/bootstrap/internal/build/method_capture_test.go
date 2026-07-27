@@ -30,24 +30,6 @@ func TestDeferMethodRuns(t *testing.T) {
 	}
 }
 
-// TestSpawnMethodRuns proves a spawned method runs on a coroutine: the worker sends its
-// id on a captured channel argument, and main observes it — leak-balanced (the channel
-// arg is retained into the heap env and released by the method's own param drop).
-func TestSpawnMethodRuns(t *testing.T) {
-	got := runProgramRTBalanced(t,
-		"struct Worker {\n\tpub id: int\n}\n"+
-			"impl Worker {\n\tpub fn run(ch: chan[int]) {\n\t\tch <- this.id\n\t}\n}\n"+
-			"fn main() {\n"+
-			"\tch := chan[int](1)\n"+
-			"\tw := Worker(id: 42)\n"+
-			"\tspawn w.run(ch)\n"+
-			"\tprint (<-ch)!\n"+
-			"}\n")
-	if want := "42\n"; got != want {
-		t.Fatalf("spawn-method channel: got %q, want %q", got, want)
-	}
-}
-
 // TestDeferMethodNonPodTemporaryReceiver is the ownership regression for the defer
 // receiver: a `defer` over a NON-POD TEMPORARY receiver (`defer make_res().use()`) has no
 // surviving owner for the temporary, so a bare borrow would leak (or dangle) it. The defer
@@ -109,32 +91,5 @@ func TestDeferMethodRunsOnAbortPath(t *testing.T) {
 	}
 	if strings.Contains(out, "AddressSanitizer") || strings.Contains(out, "runtime error") {
 		t.Fatalf("abort-unwind release must be sanitizer-clean; output:\n%s", out)
-	}
-}
-
-// TestSpawnMethodNonPodReceiverOutlivesScope is the ownership regression for the spawn
-// receiver: a fire-and-forget coroutine can run AFTER the spawner's scope has dropped
-// the receiver (sched.c never joins it), so a NON-POD receiver must be OWNED by the
-// coroutine, not borrowed, or its inner cells dangle (use-after-free / double-free).
-// Here `start` spawns `b.emit(ch)` and RETURNS immediately — dropping its local Box (and
-// releasing the ORIGINAL Ref) before the coroutine runs; main only reads the channel
-// afterward, from a longer-lived scope. It must be alloc/free balanced with no UAF under
-// ASan+UBSan, which holds only because the coroutine deep-copied the receiver and the
-// trampoline releases that copy.
-func TestSpawnMethodNonPodReceiverOutlivesScope(t *testing.T) {
-	got := runProgramRTBalanced(t,
-		"struct Box {\n\tr: Ref[int]\n}\n"+
-			"impl Box {\n\tpub fn emit(ch: chan[int]) {\n\t\tch <- deref(this.r)\n\t}\n}\n"+
-			"fn start(ch: chan[int]) {\n"+
-			"\tb := Box(r: Ref(99))\n"+
-			"\tspawn b.emit(ch)\n"+ // start() returns here -> b (and the ORIGINAL Ref) is dropped
-			"}\n"+
-			"fn main() {\n"+
-			"\tch := chan[int](1)\n"+
-			"\tstart(ch)\n"+ // spawner scope exits before the coroutine runs
-			"\tprint (<-ch)!\n"+ // now the coroutine runs and reads its OWN receiver copy
-			"}\n")
-	if want := "99\n"; got != want {
-		t.Fatalf("spawn non-POD receiver UAF regression: got %q, want %q", got, want)
 	}
 }

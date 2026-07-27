@@ -174,14 +174,3 @@ func TestMainBadSignatureRejected(t *testing.T) {
 		})
 	}
 }
-
-// TestMainArgsConcurrentGated holds the gate: threading the args list through the
-// scheduler entry is not wired, so a concurrent main(args) fails loudly.
-func TestMainArgsConcurrentGated(t *testing.T) {
-	src := "fn work() {\n\tprint 1\n}\n" +
-		"fn main(args: list[str]) {\n\tspawn work()\n\tprint args.len()\n}\n"
-	_, _, diags := Compile(src)
-	if len(diags) == 0 {
-		t.Fatalf("a concurrent main(args) should be gated")
-	}
-}

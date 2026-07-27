@@ -10,10 +10,9 @@ ZERG_SRCS := src/compiler/zergc.zg \
 
 .PHONY: all clean test run build install uninstall upgrade examples selfhost help $(SUBDIR)
 
-all: $(SUBDIR)                  # default action
+all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
 	@git config commit.template .git-commit-template
-	@$(MAKE) build
 
 clean: $(SUBDIR)                # clean-up environment
 	@find . -name '*.sw[po]' -delete
@@ -43,8 +42,8 @@ help:				            # show this message
 $(SUBDIR):
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 
-examples:
-	$(MAKE) build
+examples:                       # build the examples corpus with the seed
+	$(MAKE) -C src/bootstrap build
 	@for src in examples/[0-9][0-9]_*.zg examples/modules/main.zg examples/1g/init/main.zg examples/1g/reexport/main.zg; do \
 		echo "Building $$src..."; \
 		./bin/zerg0 build $$src --emit c     >/dev/null || exit 1; \

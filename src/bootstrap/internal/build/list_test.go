@@ -43,7 +43,7 @@ func runProgramRTBalanced(t *testing.T, src string) string {
 	if cc == "" {
 		t.Skip("no C compiler found")
 	}
-	code, manifest, diags := Compile(src)
+	code, _, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
@@ -56,9 +56,6 @@ func runProgramRTBalanced(t *testing.T, src string) string {
 	// version; the paths in cfiles are unchanged, so the link line is the same.
 	if err := os.WriteFile(filepath.Join(dir, "alloc.c"), []byte(countingAllocC), 0o644); err != nil {
 		t.Fatalf("write counting alloc.c: %v", err)
-	}
-	if manifest.Concurrency {
-		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
 	}
 	cpath := filepath.Join(dir, "prog.c")
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {
@@ -101,7 +98,7 @@ func runProgramRTAbort(t *testing.T, src string) string {
 	if cc == "" {
 		t.Skip("no C compiler found")
 	}
-	code, manifest, diags := Compile(src)
+	code, _, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
@@ -109,9 +106,6 @@ func runProgramRTAbort(t *testing.T, src string) string {
 	cfiles, err := runtime.Materialize(dir)
 	if err != nil {
 		t.Fatalf("materialize runtime: %v", err)
-	}
-	if manifest.Concurrency {
-		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
 	}
 	cpath := filepath.Join(dir, "prog.c")
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {

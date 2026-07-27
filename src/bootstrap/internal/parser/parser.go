@@ -260,9 +260,6 @@ func (p *parser) parseTopStmt() ast.Stmt {
 	case p.at(token.Hash), p.at(token.Pub):
 		// '#[…]' or a 'pub' prefix can only introduce a declaration.
 		return p.parseDecl()
-	case p.at(token.Unsafe) && p.peek(1).Kind == token.LBrace:
-		// module-level 'unsafe { … }' is the declaration group, not a block-expr.
-		return p.parseUnsafeGroup()
 	case p.startsDecl():
 		// struct/enum/spec/impl/type/init/fn, possibly behind unsafe/mut modifiers.
 		return p.parseDecl()
@@ -298,7 +295,6 @@ func (p *parser) syncDecl() {
 func (p *parser) parseFuncDecl() ast.Decl {
 	start := p.cur().Span.Start
 	pub := p.accept(token.Pub) // single-file for now; visibility preserved for fmt
-	unsafe := p.accept(token.Unsafe)
 	mut := p.accept(token.Mut)
 	if !p.at(token.Fn) {
 		p.fail(p.cur().Span, "expected a function declaration")
@@ -320,7 +316,6 @@ func (p *parser) parseFuncDecl() ast.Decl {
 	body := p.parseBlock()
 	return spanned(&ast.FuncDecl{
 		Pub:      pub,
-		Unsafe:   unsafe,
 		Mut:      mut,
 		Name:     name.Lexeme,
 		NameEnd:  name.Span.End,
@@ -902,18 +897,6 @@ func (p *parser) parsePrimary() ast.Expr {
 		return p.parseFCmd()
 	case token.Chan:
 		return p.parseChanNew()
-	case token.Asm:
-		return p.parseAsm()
-	case token.Ptr:
-		// `ptr` in expression position is the head of a raw-pointer cast — `ptr(p)` or
-		// `ptr[T](p)` (GRAMMAR group 12) — parsed as an ordinary callee so the postfix
-		// chain forms the Bracket/Call; sema recognizes it as an unsafe ptr intrinsic.
-		p.advance()
-		return spanned(&ast.Ident{Name: "ptr"}, t.Span)
-	case token.Unsafe:
-		if p.peek(1).Kind == token.LBrace {
-			return p.parseUnsafeExpr()
-		}
 	case token.LParen:
 		return p.parseParenOrTuple()
 	case token.LBrack:

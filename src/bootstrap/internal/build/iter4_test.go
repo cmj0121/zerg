@@ -138,39 +138,3 @@ func TestBundleImportAtomic(t *testing.T) {
 		t.Fatalf("import atomic should set NeedsRuntime, got %+v", manifest)
 	}
 }
-
-// TestUnsafeCallOutsideUnsafeRejected checks GRAMMAR group 12's rule: a call to an
-// `unsafe fn` is legal only inside an unsafe context, so calling one from ordinary
-// code errors.
-func TestUnsafeCallOutsideUnsafeRejected(t *testing.T) {
-	src := "unsafe fn raw() -> int {\n" +
-		"\treturn 7\n" +
-		"}\n" +
-		"fn main() -> Result[nil] {\n" +
-		"\tprint raw()\n" +
-		"\treturn nil\n" +
-		"}\n"
-	_, _, diags := Compile(src)
-	if len(diags) == 0 {
-		t.Fatalf("a call to an unsafe fn outside `unsafe` should be rejected")
-	}
-}
-
-// TestUnsafeCallInsideUnsafeAccepted is its converse: the same call inside an
-// `unsafe { }` block-expression type-checks and lowers to the ordinary mangled call.
-func TestUnsafeCallInsideUnsafeAccepted(t *testing.T) {
-	src := "unsafe fn raw() -> int {\n" +
-		"\treturn 7\n" +
-		"}\n" +
-		"fn main() -> Result[nil] {\n" +
-		"\tprint unsafe { raw() }\n" +
-		"\treturn nil\n" +
-		"}\n"
-	code, _, diags := Compile(src)
-	if len(diags) != 0 {
-		t.Fatalf("unexpected diagnostics: %v", diags)
-	}
-	if !strings.Contains(code, "zg_raw()") {
-		t.Fatalf("emitted C missing the unsafe fn call:\n%s", code)
-	}
-}

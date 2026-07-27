@@ -20,7 +20,7 @@ func runProgramRTSplit(t *testing.T, src string) (string, string) {
 	if cc == "" {
 		t.Skip("no C compiler found")
 	}
-	code, manifest, diags := Compile(src)
+	code, _, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
@@ -28,9 +28,6 @@ func runProgramRTSplit(t *testing.T, src string) (string, string) {
 	cfiles, err := runtime.Materialize(dir)
 	if err != nil {
 		t.Fatalf("materialize runtime: %v", err)
-	}
-	if manifest.Concurrency {
-		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
 	}
 	cpath := filepath.Join(dir, "prog.c")
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {

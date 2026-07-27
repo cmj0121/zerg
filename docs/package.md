@@ -21,7 +21,8 @@ Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two 
 ### Programs & the entry point
 
 A **program is a build**, not a special kind of package. You point the compiler at an **entry file** —
-`zerg entry.zg` — and it roots the build there, following its imports out across the dependency DAG.
+`zerg build --emit bin entry.zg` — and it roots the build there, following its imports out across the
+dependency DAG.
 
 - The entry filename is **not reserved**; the build invocation designates it. What the language
   requires is **content**: the entry file must define a top-level **`main`** entry function — its shape

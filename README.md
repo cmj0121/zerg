@@ -43,26 +43,32 @@ are in the **[Language Specification](docs/language.md)**, with companion chapte
 Build the bootstrap toolchain (Go ≥ 1.26 and a C compiler are required), then compile a program:
 
 ```sh
-make                       # build the single `zerg` binary into ./bin/
+make                                 # ./bin/zerg0 (the Go seed), then ./bin/zerg
 cat > hello.zg <<'ZG'
 fn main() {
     print "hello, world"
 }
 ZG
-./bin/zerg build hello.zg  # emit C, then invoke cc → ./hello
-./hello                    # hello, world
+./bin/zerg build --emit bin hello.zg # emit C, then invoke cc → ./hello
+./hello                              # hello, world
 ```
 
-The one `zerg` tool carries the sub-commands you need:
+`make` builds two compilers, and the second is the one you use. `zerg0` is the Go-hosted
+seed, cut down to a single job: building the compiler. `zerg` is that compiler — written
+in Zerg, in [`src/compiler/`](src/compiler), and compiled by itself (the seed only builds
+an intermediate, which builds the one that ships).
 
-| Command             | What it does                                        |
-| ------------------- | --------------------------------------------------- |
-| `zerg build <file>` | compile a `.zg` program to a native binary          |
-| `zerg fmt <file>`   | format source to the one canonical style            |
-| `zerg lint <file>`  | report unused imports and dead private declarations |
-| `zerg test <file>`  | run the program's `#[test]` functions               |
+| Command                     | What it does                                              |
+| --------------------------- | --------------------------------------------------------- |
+| `zerg build <file>`         | compile a module to an object (`--emit lib`, the default) |
+| `zerg build --emit bin <f>` | link a program                                            |
+| `zerg fmt <file>`           | rewrite source in the one canonical style                 |
+| `zerg lint <file>`          | report unused imports and dead private declarations       |
 
-`zerg build … --emit c` (or `tokens` / `ast`) prints the intermediate form instead of building.
+`--emit` also takes `tokens`, `ast`, and `c` to print an intermediate form instead of
+producing a file. A program is built module by module: `-j` compiles several units at
+once, and results are cached by content in `.zerg-cache/`, so a rebuild that changes one
+module recompiles one module.
 
 ## A small core, a little sugar
 
@@ -86,13 +92,13 @@ labels** — to leave an outer loop, extract a function and `return`.
 
 A small, **fixed** set of compiler-recognized functions — no `import` needed:
 
-| Built-in                                  | Does                                                                      |
-| ----------------------------------------- | ------------------------------------------------------------------------- |
-| `Ref(x)` / `deref(r)`                     | construct / read the reference-counted box                                |
-| `int` `uint` `float` `bool` `byte` `rune` | primitive conversion `T(x)`; `int("…")` also parses a decimal string      |
-| `str(bytes)`, `list[byte](s)`             | the str ⇄ list bridges (also `runes`)                                     |
-| `ValueError` … `KeyError`                 | build an `Err` of that fixed kind                                         |
-| `addr` `ptr` `ptr[T]` `uint(p)`           | raw-pointer ops — **`unsafe` only** (plus `.load` / `.store` / `.offset`) |
+| Built-in                                  | Does                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------------- |
+| `Ref(x)` / `deref(r)`                     | construct / read the reference-counted box                           |
+| `int` `uint` `float` `bool` `byte` `rune` | primitive conversion `T(x)`; `int("…")` also parses a decimal string |
+| `str(bytes)`, `list[byte](s)`             | the str ⇄ list bridges (also `runes`)                                |
+| `ValueError` … `KeyError`                 | build an `Err` of that fixed kind                                    |
+| `addr` `ptr` `ptr[T]` `uint(p)`           | raw-pointer ops — specified, **not built by either compiler today**  |
 
 `print` is a **keyword**, not a function; `list.len()` and friends are **methods**. Full detail —
 **[Built-in Functions](docs/builtins.md)**.
@@ -105,9 +111,10 @@ Pure-Zerg packages over the self runtime (zero external dependency), reached wit
 | ------------- | ---------------------------------------------- |
 | **`io`**      | stdout writers, whole-file & stdin read/write  |
 | **`fs`**      | `exists` / `remove`                            |
-| **`os`**      | `env`, `exit`, `platform`, `arch`              |
+| **`os`**      | `env`, `exit`, `platform`, `arch`, `run`       |
 | **`strings`** | `split` / `join`, search, trim, case folding   |
 | **`ascii`**   | byte classification for a tokeniser            |
+| **`cli`**     | option parsing and the `--help` it renders     |
 | **`strconv`** | base-N `parse_int` / `to_string`, `parse_bool` |
 | **`time`**    | `now` (wall clock), `monotonic`                |
 | **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`    |
@@ -164,17 +171,32 @@ leaves and `math.sqrt` is a Zerg algorithm, never a libc / libm binding. See
 
 ## Status & Limitations
 
-Zerg is a Phase-1 MVP. The bootstrap compiler is complete enough to compile non-trivial programs — it
-lexes, parses, type-checks, monomorphizes generics, and emits C over a hosted runtime, and it self-hosts
-its own front-end primitives (string scanning, file reading, integer parsing). The specification defines
-the whole language and marks each feature's status; the headline gaps a newcomer should know:
+Zerg is a Phase-1 MVP, and there are now **two** compilers, which is what any status claim
+has to be read against:
 
-**Implemented.** Value & reference types, structs, enums with payloads, generics + monomorphization,
-`spec` / `impl` with provided methods, `derive(Eq, Ord)`, pattern matching, optionals with `?` / `??` / `!`
-/ `guard`, a fixed built-in error taxonomy, recursive types (auto-boxed, reference-counted), closures
-(including capturing), coroutines + channels + `select` (a cooperative **N:1** scheduler), modules with
-`pub` visibility and `init()`, raw pointers and inline assembly under `unsafe`, and the `build` / `fmt` /
-`lint` / `test` tools.
+- **`zerg`** — the compiler written in Zerg, the one that ships. It compiles itself, and
+  the language it accepts is the smaller of the two: structs, enums (payload and
+  recursive), `match`, `list[T]`, strings and bytes, `mut &` parameters, `guard` / `raise`,
+  and modules. It does **not** yet have generics, `spec` / `impl`, `derive`, or optionals.
+- **`zerg0`** — the Go-hosted seed, whose only job is building `zerg`. It supports the
+  `Zerg-boot` subset, written down as a grammar in
+  [`src/bootstrap/README.md`](src/bootstrap/README.md), and rejects everything else
+  loudly rather than miscompiling it.
+
+The specification below describes the whole intended language and marks each feature's
+status. Those markers describe the LANGUAGE as designed, not either compiler's current
+reach — the two lists above are the reach.
+
+**Implemented in the seed (and so buildable today).** Value & reference types, structs,
+enums with payloads, generics + monomorphization, `spec` / `impl` with provided methods,
+`derive(Eq, Ord)`, pattern matching, optionals with `?` / `??` / `!` / `guard`, a fixed
+built-in error taxonomy, recursive types (auto-boxed, reference-counted), tuples, `defer`,
+ranges, f-strings, and modules with `pub` visibility and `init()`.
+
+**Removed from the toolchain** (designed, specified, and not currently built by either
+compiler): closures and function values, `map[K, V]`, coroutines + channels + `select`,
+`#[dyn]` dynamic dispatch, raw pointers and inline assembly under `unsafe`, and the
+`zerg test` runner. The seed rejects each with a diagnostic and a nonzero exit.
 
 **Not yet (defined, marked in the spec).** Arithmetic that traps on overflow / division-by-zero and the
 wrapping `+%` operators (today arithmetic lowers to plain C); the full `derive` set beyond `Eq` / `Ord`

@@ -186,7 +186,7 @@ d := rand.below(g, 6)    # g 推進；d 落在 [0, 6)
 
 ## `testing`
 
-`#[test]` 函式用的斷言輔助（[`zerg test`](package.zh-TW.md)）。滿足的斷言是 `nil`；違反的會 `raise`，讓外圍
+`#[test]` 函式用的斷言輔助。**[not yet]**——目前沒有任何編譯器會產生測試 binary。滿足的斷言是 `nil`；違反的會 `raise`，讓外圍
 `guard` 接住，或帶訊息 abort。
 
 | 函式                                          | 摘要              |

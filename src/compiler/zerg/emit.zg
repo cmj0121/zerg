@@ -303,15 +303,39 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 
 # c_param_is_ref reports whether parameter `idx` of function `fname` is a mutable
 # reference (so a call must pass its argument's address).
-fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
+# c_param_row finds a parameter's row in the tables c_build_sigs filled, or -1 when the
+# function has no such parameter. Everything asked ABOUT a parameter — is it a reference,
+# does it have a default, what is that default — reads its row, so the search happens once
+# per question rather than once per field, and the three answers cannot drift apart.
+#
+# c_build_sigs appends a function's parameters CONTIGUOUSLY in index order, so the row a
+# function's parameter 0 sits at fixes every other one; the scan below stops as soon as it
+# is past that block, which is what keeps a fully-applied call — nearly every call — from
+# walking the whole program's parameters to learn it has no default to backfill.
+fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	mut i := 0
+	mut seen := false
 	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
-			return em.pr_ref[i]
+		if em.pr_fn[i] == fname {
+			if em.pr_idx[i] == idx {
+				return i
+			}
+			seen = true
+		} else if seen {
+			# past the function's own block: it has no parameter idx
+			return - 1
 		}
 		i = i + 1
 	}
-	return false
+	return - 1
+}
+
+fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return false
+	}
+	return em.pr_ref[row]
 }
 
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
@@ -339,22 +363,23 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
 	return TUnknown
 }
 
-# c_has_method reports whether type `recv` declares a method `meth`. It asks about
-# EXISTENCE, which the return type cannot answer for itself: a method returning nothing is
-# TVoid and an unknown name is TUnknown, and those must not be confused.
+# c_has_method reports whether type `recv` declares a method `meth`, and c_is_free_fn
+# whether a bare name is a free function — a method is excluded from the second, since it
+# is keyed by its type and has no bare name to be reached by.
+#
+# Both ask about EXISTENCE, which the signature table answers with TUnknown: a declared
+# function that returns nothing is TVoid, and no declared return type is ever TUnknown, so
+# the two cannot be confused. Deriving them from the one lookup rather than scanning the
+# table again is what keeps them from drifting away from it.
 fn c_has_method(mut &em: Emitter, recv: str, meth: str) -> bool {
 	if recv == "" {
 		return false
 	}
-	key := c_sig_key(recv, meth)
-	mut i := 0
-	for i < em.sig_names.len() {
-		if em.sig_names[i] == key {
-			return true
-		}
-		i = i + 1
-	}
-	return false
+	return not c_is_unknown(c_lookup_sig_ret(em, c_sig_key(recv, meth)))
+}
+
+fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
+	return not c_is_unknown(c_lookup_sig_ret(em, n))
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
@@ -823,12 +848,14 @@ fn c_is_lvalue(e: Expr) -> bool {
 	}
 }
 
-# c_method lowers a `target.meth(args)`, which is three different things wearing one
-# syntax, told apart by what the target's type turns out to be:
+# `target.meth(args)` is FOUR different things wearing one syntax, told apart by what the
+# target's type turns out to be:
 #
 #   * a LIST target      — the runtime list methods (len / append);
 #   * a VALUE receiver   — a method on a named type, called as `zg_<Type>_<meth>` with the
 #                          receiver passed first, since the parser made `this` parameter 0;
+#   * a FIELD holding a function — `this.action(c)` calls the callback the value carries,
+#                          which is a different thing from a method of the same name;
 #   * anything else      — a module-qualified free call (`ascii.is_digit`), emitted as the
 #                          bare mangled function, because a module flattens into this unit
 #                          and `ascii` is a namespace rather than a value.
@@ -837,31 +864,51 @@ fn c_is_lvalue(e: Expr) -> bool {
 # no type at all, so it can never be mistaken for a receiver. The reverse mistake — a
 # receiver read as a namespace — would emit a call to a function nothing declares, which
 # the C compiler rejects. Neither way is silent.
+#
+# Which one it is has to be decided identically when the call is EMITTED and when it is
+# TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
+enum MethKind {
+	MList
+	MRecv
+	MFnField
+	MFree
+}
+
+fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
+	if c_is_list(tty) {
+		return MList
+	}
+	if c_has_method(em, c_named_of(tty), meth) {
+		return MRecv
+	}
+	if c_is_fn(c_field_ty(em, c_named_of(tty), meth)) {
+		return MFnField
+	}
+	return MFree
+}
+
 fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
 	tty := c_infer(em, target)
-	if c_is_list(tty) {
-		em.used_rt = true
-		tgt := c_expr(em, target, sb)
-		if meth == "len" {
-			return "((int64_t)zrt_list_len(&(" + tgt + ")))"
-		}
-		if meth == "append" {
-			et := c_type(c_list_elem(tty))
-			return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
-		}
-		return tgt
-	}
 	recv := c_named_of(tty)
-	if c_has_method(em, recv, meth) {
-		return c_fn_cname(recv, meth) + "(" + c_recv_args(em, c_sig_key(recv, meth), target, args, sb) + ")"
+	return match c_meth_kind(em, tty, meth) {
+		MList => c_list_method(em, target, meth, args, tty, sb)
+		MRecv => c_fn_cname(recv, meth) + "(" + c_recv_args(em, c_sig_key(recv, meth), target, args, sb) + ")"
+		MFnField => "(" + c_fnptr_cast(c_field_ty(em, recv, meth)) + c_expr(em, target, sb) + ".zg_" + meth + ")(" + c_args(em, args, sb) + ")"
+		_ => "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
 	}
-	# a FIELD holding a function — `this.action(c)` calls the callback the value carries,
-	# which is a different thing from a method and has to be looked up as a field
-	fty := c_field_ty(em, recv, meth)
-	if c_is_fn(fty) {
-		return "(" + c_fnptr_cast(fty) + c_expr(em, target, sb) + ".zg_" + meth + ")(" + c_args(em, args, sb) + ")"
+}
+
+fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	em.used_rt = true
+	tgt := c_expr(em, target, sb)
+	if meth == "len" {
+		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
 	}
-	return "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
+	if meth == "append" {
+		et := c_type(c_list_elem(tty))
+		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+	}
+	return tgt
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -1001,25 +1048,19 @@ fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 }
 
 fn c_param_has_def(mut &em: Emitter, fname: str, idx: int) -> bool {
-	mut i := 0
-	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
-			return em.pr_hasdef[i]
-		}
-		i = i + 1
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return false
 	}
-	return false
+	return em.pr_hasdef[row]
 }
 
 fn c_param_def(mut &em: Emitter, fname: str, idx: int) -> Expr {
-	mut i := 0
-	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
-			return em.pr_def[i]
-		}
-		i = i + 1
+	row := c_param_row(em, fname, idx)
+	if row < 0 {
+		return ENil
 	}
-	return ENil
+	return em.pr_def[row]
 }
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
@@ -1074,50 +1115,22 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	return c_var_cname(em, n)
 }
 
-# c_is_free_fn reports whether a bare name is a free function of the program — a method is
-# excluded, since it is keyed by its type and has no bare name to be reached by.
-fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
-	mut i := 0
-	for i < em.sig_names.len() {
-		if em.sig_names[i] == n {
-			return true
-		}
-		i = i + 1
-	}
-	return false
-}
-
 fn c_is_bound(mut &em: Emitter, n: str) -> bool {
-	mut i := 0
-	for i < em.env_names.len() {
-		if em.env_names[i] == n {
-			return true
-		}
-		i = i + 1
-	}
-	return false
+	return not c_is_unknown(c_lookup_var(em, n))
 }
 
 # c_fn_ty_of builds the `fn(P...) -> R` type of a named free function, reading the
 # parameter types back out of the table c_build_sigs filled.
 fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
+	# one pass: c_build_sigs appends a function's parameters contiguously and in index
+	# order, so collecting the rows that name it collects them already in order
 	mut ptys: list[Ty] = []
-	mut idx := 0
-	for idx < 64 {
-		mut found := false
-		mut i := 0
-		for i < em.pr_fn.len() {
-			if em.pr_fn[i] == n and em.pr_idx[i] == idx {
-				ptys.append(em.pr_ty[i])
-				found = true
-			}
-			i = i + 1
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == n {
+			ptys.append(em.pr_ty[i])
 		}
-		if not found {
-			idx = 64
-		} else {
-			idx = idx + 1
-		}
+		i = i + 1
 	}
 	return TFn(ptys, c_lookup_sig_ret(em, n))
 }
@@ -1224,29 +1237,26 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	}
 }
 
-# c_infer_methcall types a method call the same three ways c_method lowers it, and must
-# keep agreeing with it: a list target's len is int, a value receiver's method is typed
-# from its own entry, and anything else is a module-qualified free call typed from the
-# flat one. Typing a method off the receiver is what makes a CHAIN work — the target of
-# `.b()` in `a.b().c()` is itself a method call, so this recurses and each link is typed
-# from the one before it.
+# c_infer_methcall types a method call from the SAME decision c_method lowers it by, so
+# the two cannot disagree about what a call is. Typing it off the receiver is what makes a
+# CHAIN work — the target of `.b()` in `a.b().c()` is itself a method call, so this
+# recurses and each link is typed from the one before it.
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	tty := c_infer(em, target)
-	if c_is_list(tty) {
-		if meth == "len" {
-			return TInt
-		}
-		return TNil
-	}
 	recv := c_named_of(tty)
-	if c_has_method(em, recv, meth) {
-		return c_lookup_sig_ret(em, c_sig_key(recv, meth))
+	return match c_meth_kind(em, tty, meth) {
+		MList => c_list_method_ret(meth)
+		MRecv => c_lookup_sig_ret(em, c_sig_key(recv, meth))
+		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
+		_ => c_lookup_sig_ret(em, meth)
 	}
-	fty := c_field_ty(em, recv, meth)
-	if c_is_fn(fty) {
-		return c_fn_ret(fty)
+}
+
+fn c_list_method_ret(meth: str) -> Ty {
+	if meth == "len" {
+		return TInt
 	}
-	return c_lookup_sig_ret(em, meth)
+	return TNil
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {

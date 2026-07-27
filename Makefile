@@ -58,7 +58,7 @@ corpus:                         # run zerg against the test-data corpus it now o
 	@fail=0; \
 	for name in $(CORPUS_PASS); do \
 		src=test-data/codegen/$$name.zg; \
-		./bin/zerg build ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
+		./bin/zerg build -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
 		got=$$(./bin/corpus-case 2>/dev/null); \
 		[ "$$got" = "$$(cat test-data/codegen/$$name.out)" ] || { echo "OUTPUT $$name"; fail=1; }; \
 	done; \
@@ -68,5 +68,5 @@ corpus:                         # run zerg against the test-data corpus it now o
 
 selfhost:                       # have the built zerg rebuild itself, closing the chain
 	$(MAKE) build
-	./bin/zerg build ./bin/zerg-stage2 $(ZERG_ENTRY)
+	./bin/zerg build -o ./bin/zerg-stage2 $(ZERG_ENTRY)
 	@echo "self-host chain closed: bin/zerg-stage2 built by bin/zerg"

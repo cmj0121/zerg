@@ -23,7 +23,8 @@
 #   F201  one space around a binary operator, after a comma, around `=>`
 #   F202  no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
 #   F301  a comment keeps its text, on its own line or trailing the code it followed
-#   F401  `if c { return x }` becomes the guard it is sugar for, `return x if c`
+#   F401  a one-jump if-block becomes the postfix guard it is sugar for —
+#         `return x if c`, `break if c`, `continue if c`
 #   F402  imports group — standard library first, then the rest — each group alphabetical
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
@@ -62,16 +63,21 @@ fn fmt_is_off(off: list[str], code: str) -> bool {
 	return false
 }
 
-# --- rule: an if-block whose only statement returns becomes a return guard ------------------
+# --- rule F401: an if-block whose only statement JUMPS becomes the postfix guard ------------
 #
-# `return x if c` is defined by GRAMMAR as sugar for `if c { return x }`, so the two say
+# GRAMMAR defines `return x if c`, `break if c` and `continue if c` as sugar for
+# `if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say
 # the same thing and one of them says it in four lines. The formatter picks the short one,
 # which is what a guard clause is for: the exceptional exit stops interrupting the shape of
-# the function it guards.
+# the code it guards.
+#
+# Preferring the sugar is the general rule here, not a special case for `return`: where the
+# language offers a shorter surface for exactly what is written, the canonical form is the
+# shorter one, and a reader stops having to notice that the two are the same thing.
 #
 # It rewrites only what it can rewrite WITHOUT LOSING anything:
 #
-#   * exactly one statement in the block, and it is a `return`;
+#   * exactly one statement in the block, and it is a jump;
 #   * no `else` — an else has a second branch that the guard form cannot carry;
 #   * no comment anywhere inside, because a comment is something a person put there and
 #     this pass has nowhere to put it back.
@@ -102,18 +108,21 @@ fn fmt_guard_at(toks: list[Token], at: int, out: list[Token]) -> int {
 	lb := fmt_block_start(toks, at)
 	return 0 if lb == 0
 	rb := fmt_block_end(toks, lb)
-	return 0 if rb == 0 or not fmt_is_lone_return(toks, lb, rb) or fmt_has_else(toks, rb)
+	return 0 if rb == 0 or not fmt_is_lone_jump(toks, lb, rb) or fmt_has_else(toks, rb)
 	return lb
 }
 
-# fmt_emit_guard writes `return <value> if <cond>` from the pieces of `if <cond> { return
-# <value> }`, all on the `if`'s own line so the printer lays it out as one statement.
+# fmt_emit_guard writes `<jump> <value?> if <cond>` from the pieces of `if <cond> { <jump>
+# <value?> }`, all on the `if`'s own line so the printer lays it out as one statement.
 fn fmt_emit_guard(toks: list[Token], at: int, lb: int, rb: int, mut &out: list[Token]) {
 	ln := toks[at].line
 	col := toks[at].col
-	out.append(Token(Return, "return", "", ln, col))
-	# the returned value: everything between `return` and the `}`, minus the separators
-	mut i := fmt_ret_at(toks, lb) + 1
+	jump := fmt_jump_at(toks, lb)
+	# the jump as it was written — `return`, `break` or `continue`
+	out.append(fmt_on_line(toks[jump], ln))
+	# a returned value, if there is one: everything between the jump and the `}`, minus
+	# the separators. `break` and `continue` carry none, so this loop runs zero times.
+	mut i := jump + 1
 	for i < rb {
 		if not is_semi(toks[i].kind) {
 			out.append(fmt_on_line(toks[i], ln))
@@ -171,10 +180,10 @@ fn fmt_block_end(toks: list[Token], lb: int) -> int {
 	return 0
 }
 
-# fmt_is_lone_return reports whether the block holds exactly one statement, a `return`,
-# with no comment and no nested block.
-fn fmt_is_lone_return(toks: list[Token], lb: int, rb: int) -> bool {
-	r := fmt_ret_at(toks, lb)
+# fmt_is_lone_jump reports whether the block holds exactly one statement, a jump, with no
+# comment and no nested block.
+fn fmt_is_lone_jump(toks: list[Token], lb: int, rb: int) -> bool {
+	r := fmt_jump_at(toks, lb)
 	return false if r < 0
 	mut i := r + 1
 	for i < rb {
@@ -188,15 +197,16 @@ fn fmt_is_lone_return(toks: list[Token], lb: int, rb: int) -> bool {
 	return true
 }
 
-# fmt_ret_at is the index of the block's `return`, skipping the separators the lexer put
-# after the `{`, or -1 when the first thing in the block is not a return.
-fn fmt_ret_at(toks: list[Token], lb: int) -> int {
+# fmt_jump_at is the index of the block's jump — `return`, `break` or `continue` — skipping
+# the separators the lexer put after the `{`, or -1 when the first thing in the block is
+# not one.
+fn fmt_jump_at(toks: list[Token], lb: int) -> int {
 	mut i := lb + 1
 	for i < toks.len() {
 		k := toks[i].kind
 		if is_semi(k) {
 			i = i + 1
-		} else if k == Return {
+		} else if is_jump(k) {
 			return i
 		} else {
 			return - 1
@@ -259,9 +269,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
-		if is_eof(t.kind) {
-			break
-		}
+		break if is_eof(t.kind)
 		if is_semi(t.kind) {
 			if col > 0 {
 				out.append(byte(10))
@@ -682,4 +690,10 @@ fn fmt_before(a: str, b: str) -> bool {
 		i = i + 1
 	}
 	return x.len() < y.len()
+}
+
+# is_jump reports the three statements that leave the block they are in, and so are the
+# ones the postfix guard is defined for.
+fn is_jump(k: Kind) -> bool {
+	return k == Return or k == Break or k == Continue
 }

@@ -2,7 +2,13 @@ SUBDIR := editors src/bootstrap
 
 # The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. Both
 # resolve `import` themselves, so either builds the compiler from the entry file alone.
+#
+# The `zerg` that ships is compiled BY zerg, not by the seed: the seed only has to produce
+# a good-enough intermediate, which then builds the real one. That keeps the seed off the
+# delivery path, and it means every build exercises the self-host path rather than leaving
+# it to a separate command nobody runs.
 ZERG_ENTRY := src/compiler/zergc.zg
+ZERG_STAGE1 := ./bin/.zerg-stage1
 
 # The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
 # which is what `zerg` is growing toward, while the seed is covered by its own unit
@@ -12,9 +18,10 @@ ZERG_ENTRY := src/compiler/zergc.zg
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic bitwise booleans factorial fib fizzbuzz floats gcd hello power sumto
+CORPUS_PASS := arithmetic bitwise booleans enum_basic enum_guard factorial fib fizzbuzz floats gcd \
+	hello list_basic list_str power rec_expr rec_tree str_bytes struct_basic struct_nested sumto
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt selfhost help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -23,15 +30,17 @@ all: build                      # default action
 clean: $(SUBDIR)                # clean-up environment
 	@find . -name '*.sw[po]' -delete
 	@rm -rf bin/examples
-	@rm -f bin/zerg bin/zerg-stage2 bin/zerg.c bin/zerg-stage2.c
+	@rm -f bin/zerg bin/zerg.c bin/.zerg-stage1 bin/.zerg-stage1.c
 	@rm -rf .zerg-cache
 
 test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 
 run: $(SUBDIR)                  # run in the local environment
 
-build: $(SUBDIR)                # build the toolchain: the zerg0 seed, then zerg itself
-	./bin/zerg0 build $(ZERG_ENTRY) -o ./bin/zerg
+build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, then zerg
+	./bin/zerg0 build $(ZERG_ENTRY) -o $(ZERG_STAGE1)
+	$(ZERG_STAGE1) build --emit bin -j $(JOBS) -o ./bin/zerg $(ZERG_ENTRY)
+	@rm -f $(ZERG_STAGE1) $(ZERG_STAGE1).c
 
 install: $(SUBDIR)              # install editor integrations (nvim syntax) locally
 
@@ -77,8 +86,3 @@ lint:                           # lint the compiler and stdlib with zerg itself
 fmt:                            # rewrite the compiler and stdlib in canonical style
 	$(MAKE) build
 	@./bin/zerg fmt $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg || true
-
-selfhost:                       # have the built zerg rebuild itself, closing the chain
-	$(MAKE) build
-	./bin/zerg build --emit bin -j $(JOBS) -o ./bin/zerg-stage2 $(ZERG_ENTRY)
-	@echo "self-host chain closed: bin/zerg-stage2 built by bin/zerg"

@@ -1011,6 +1011,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		SGuard(body) => c_block(em, body, ind)
+		SRaise(x) => c_raise(em, x, ind)
 		SBreak => ind + "break;\n"
 		SContinue => ind + "continue;\n"
 		SNop => ""
@@ -1193,6 +1194,16 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 		head = ind + "while (" + c_expr(em, cond, c_nosub()) + ") {\n"
 	}
 	return head + c_block(em, body, ind + "    ") + ind + "}\n"
+}
+
+# c_raise lowers `raise e` to the runtime's abort path. Nothing catches it here — `guard`
+# lowers to a plain block in this compiler — so an unhandled raise ends the process with
+# its message, which is what the seed does too. Before this existed, `raise` parsed as
+# nothing at all: the error path fell off the end of the function and the caller carried
+# on with whatever was in the return register.
+fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
+	em.used_rt = true
+	return ind + "zrt_raise_err(zrt_err_new(" + c_expr(em, x, c_nosub()) + "));\n"
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {

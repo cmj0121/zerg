@@ -75,6 +75,7 @@ enum Stmt {
 	SFor(bool, Expr, list[Stmt])
 	SForIn(str, Expr, list[Stmt])
 	SGuard(list[Stmt])
+	SRaise(Expr)
 	SBreak
 	SContinue
 	SNop
@@ -216,6 +217,7 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		SGuard(body_b) => ind + "guard\n" + dump_block(body_b, ind + "\t")
+		SRaise(x) => ind + "raise " + expr_kind(x) + "\n"
 		SBreak => ind + "break\n"
 		SContinue => ind + "continue\n"
 		_ => ind + "nop\n"

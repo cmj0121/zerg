@@ -228,6 +228,9 @@ func (e *emitter) prepareRuntime() {
 	// carrier typedef is emitted. Leaves needsRange false for a program that uses no
 	// range value (including a pure `v in lo..hi` membership), which stays byte-identical.
 	e.prepareRange()
+	// Detect whether the program holds a function as a value, so the shared function
+	// pointer typedef is emitted ahead of the declarations that name it.
+	e.prepareFnValues()
 	// Number the list instances (docs/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()

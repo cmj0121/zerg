@@ -39,9 +39,9 @@ src/compiler/
 ```sh
 zerg build <file.zg>    # compile a module to an object (--emit bin links a program)
 zerg build --emit bin -j8 app.zg   # a program, eight units compiling at once
+zerg build --emit c <file.zg>      # stop at the C; likewise `tokens` and `ast`
 zerg fmt <file.zg>...   # rewrite sources in the canonical style, in place
 zerg lint <file.zg>...  # report unused imports and dead private code; nonzero if any
-zerg c <file.zg>        # print the emitted C
 zerg --help             # commands, flags, and the environment variables below
 ```
 

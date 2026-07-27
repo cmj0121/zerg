@@ -715,6 +715,14 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.raiseStmt(n)
 	case *ast.ExprStmt:
 		e.line(e.expr(n.X) + ";")
+	default:
+		// The statement half of the anti-silence net the expression dispatch already
+		// carries: every statement the backend lowers has an explicit case above, so a
+		// node reaching here is one the seed does not implement (a `spawn`, a channel
+		// send, a `select`). Emitting nothing for it would silently drop the statement
+		// from the program — fail loudly instead, since Emit discards its output while
+		// diags are non-empty.
+		e.diags.Add(s.Span(), "statement not supported by the bootstrap seed: %T", s)
 	}
 }
 

@@ -97,15 +97,15 @@ pattern        ::= identifier ( '(' identifier ( ',' identifier )* ')' )? | '_'
 
 以下都因自舉原始碼完全沒用到而被移除。每一項都會大聲拒絕——一則診斷加非零 exit，絕不靜默丟棄語法。
 
-| 已移除              | 現在的行為                                       |
-| ------------------- | ------------------------------------------------ |
-| `map[K, V]`         | 拒絕                                             |
-| closure / 函式值    | `a closure used as a value is not yet supported` |
-| channel             | 拒絕                                             |
-| `spawn`、`select`   | `statement not supported by the bootstrap seed`  |
-| `#[dyn]` 動態分派   | 裝飾詞被忽略；該呼叫改為單態化                   |
-| `zerg test` 後端    | 移除——執行 Zerg 測試是 Zerg 工具鏈的職責         |
-| `--emit tokens/ast` | 移除——只留 `--emit c` 與連結出的執行檔           |
+| 已移除              | 現在的行為                                        |
+| ------------------- | ------------------------------------------------- |
+| `map[K, V]`         | 拒絕                                              |
+| 函式值              | `a function used as a value is not yet supported` |
+| channel             | 拒絕                                              |
+| `spawn`、`select`   | `statement not supported by the bootstrap seed`   |
+| `#[dyn]` 動態分派   | `#[dyn] is not yet supported`                     |
+| `zerg test` 後端    | 移除——執行 Zerg 測試是 Zerg 工具鏈的職責          |
+| `--emit tokens/ast` | 移除——只留 `--emit c` 與連結出的執行檔            |
 
 前端仍會**解析**其中部分語法；拒絕發生在後端被要求 lower 它的時候。收窄 parser 是另一輪的工作。
 

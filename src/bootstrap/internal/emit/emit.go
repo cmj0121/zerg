@@ -2299,7 +2299,15 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	field, _ := n.Callee.(*ast.Field)
 	recv := e.expr(field.X)
 	args := recv
-	for _, a := range n.Args {
+	byref := e.methodByRefArgs(md)
+	for i, a := range n.Args {
+		// A `mut &` parameter binds the caller's variable itself — pass its address, and
+		// never a copy, which is the whole point of the writeback. Passing the value here
+		// handed a `zrt_list` to a `zrt_list*` parameter, which cc rejected.
+		if i < len(byref) && byref[i] {
+			args += ", " + e.addressOf(a.Value)
+			continue
+		}
 		// A by-value argument is CONSUMED by the callee (its body registers the param's drop),
 		// so an lvalue argument must be copied (retain/deep-copy) here or the callee's release
 		// double-frees the caller's value — the enum analogue of the struct discipline, newly
@@ -2314,6 +2322,21 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 		args += ", " + e.expr(def)
 	}
 	return fmt.Sprintf("%s(%s)", md.Mangled, args)
+}
+
+// methodByRefArgs reports, per written argument, whether the method declares that
+// parameter `mut &`. The receiver is implicit and takes no slot in the declaration, so
+// the indices line up with the call's own arguments and need no offset.
+func (e *emitter) methodByRefArgs(md *mono.MethodDispatch) []bool {
+	fd, ok := md.Decl.(*ast.FuncDecl)
+	if !ok {
+		return nil
+	}
+	out := make([]bool, len(fd.Params))
+	for i, p := range fd.Params {
+		out[i] = p.Ref
+	}
+	return out
 }
 
 // methodTrailingDefaults returns the default expressions for the parameters a method call

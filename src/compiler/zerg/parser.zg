@@ -394,11 +394,11 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	return parse_return(p) if k == Return
 	if k == Break {
 		p_advance(p)
-		return SBreak
+		return parse_jump_guard(p, SBreak)
 	}
 	if k == Continue {
 		p_advance(p)
-		return SContinue
+		return parse_jump_guard(p, SContinue)
 	}
 	return parse_if(p) if k == If
 	return parse_for(p) if k == For
@@ -444,6 +444,22 @@ fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
 	ty := parse_type(p)
 	expect(p, Assign)
 	return SLet(name, ty, true, is_mut, parse_expr(p))
+}
+
+# parse_jump_guard reads the optional trailing `if cond` on a `break` or a `continue` —
+# the same postfix `if` a conditional return takes (GRAMMAR group 6) — and desugars it
+# into the `if cond { jump }` it is defined as. Going through the block form means the
+# emitter needs to know nothing about it.
+#
+# Without this the `if` was left for the next statement to read, so `break if c` broke
+# unconditionally and the condition became a dangling if with no block. Silently.
+fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
+	return jump if not p_at(p, If)
+	p_advance(p)
+	mut body: list[Stmt] = []
+	body.append(jump)
+	mut none: list[Stmt] = []
+	return SIf(parse_expr(p), body, false, none)
 }
 
 fn parse_return(mut &p: Parser) -> Stmt {

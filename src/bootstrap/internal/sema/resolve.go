@@ -202,16 +202,9 @@ func nsTag(sym *Symbol, local string) string {
 	return local
 }
 
-// ModuleMember is the top-level name a bundled stdlib module's public member takes
-// after the bundle importer prefixes it with its namespace (Decision C, the single-
-// unit bundle MVP): `io.println` resolves to the merged function `io__println`. The
-// prefix keeps a bundled internal from leaking into the user's unqualified scope and
-// from colliding with a user or another module's name. A later phase's module graph
-// (1g) replaces the resolver, not this spelling.
-func ModuleMember(namespace, member string) string { return namespace + "__" + member }
-
-// moduleMember is the package-internal spelling of ModuleMember.
-func moduleMember(namespace, member string) string { return ModuleMember(namespace, member) }
+// moduleMember is the top-level name a bundled stdlib module's public member takes
+// after flattening: `<namespace>__<member>`.
+func moduleMember(namespace, member string) string { return namespace + "__" + member }
 
 // NamespaceMemberName is the merged top-level name of member reached through the
 // namespace symbol sym (bound to the local name local): the canonical-module

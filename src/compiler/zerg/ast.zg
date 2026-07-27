@@ -123,9 +123,12 @@ struct EnumDecl {
 	variants: list[VariantDef]
 }
 
-# File is a whole parsed source file: its struct, enum, and function declarations in
-# source order.
+# File is a whole parsed source file: its import paths, and its struct, enum, and
+# function declarations in source order. Imports are kept (rather than skipped with the
+# rest of the out-of-subset surface) because the driver resolves them into the source
+# list it compiles, and the linter reports the ones nothing uses.
 struct File {
+	imports: list[str]
 	structs: list[StructDecl]
 	enums: list[EnumDecl]
 	fns: list[FnDecl]

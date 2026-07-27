@@ -132,17 +132,23 @@ fn conv_ty(name: str) -> Ty {
 
 # --- declarations --------------------------------------------------------------
 
-# parse turns source into a File. Only function declarations are recognised at the top
-# level (the examples corpus); any other top-level token is skipped.
+# parse turns source into a File. Imports, structs, enums, and functions are recognised
+# at the top level; any other top-level token is skipped.
 pub fn parse(src: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0)
+	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
-		if p_at(p, Fn) {
+		if p_at(p, Import) {
+			path := parse_import(p)
+			if path != "" {
+				imports.append(path)
+			}
+		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p))
 		} else if p_at(p, Struct) {
 			structs.append(parse_struct(p))
@@ -153,7 +159,27 @@ pub fn parse(src: str) -> File {
 		}
 		skip_semis(p)
 	}
-	return File(structs, enums, fns)
+	return File(imports, structs, enums, fns)
+}
+
+# imports_of returns just the import paths of a source, for the driver's module loader:
+# it resolves and loads a program's dependencies before anything is emitted, so it needs
+# the import list alone and not the cost of keeping a whole parse around.
+pub fn imports_of(src: str) -> list[str] {
+	return parse(src).imports
+}
+
+# parse_import reads `import "path"` and yields the quoted path. The `pub` prefix form
+# and the parenthesized group are outside the subset the compiler's own source uses, so
+# they are consumed and yield "" rather than a half-read path.
+fn parse_import(mut &p: Parser) -> str {
+	p_advance(p)
+	if p_at(p, Str) {
+		t := cur(p)
+		p_advance(p)
+		return t.value # the decoded path, without its quotes
+	}
+	return ""
 }
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {

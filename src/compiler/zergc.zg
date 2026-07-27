@@ -130,23 +130,23 @@ fn usage_line() -> str {
 
 fn help_text() -> str {
 	return version() + "\n\n" +
-		usage_line() + "\n\n" +
-		"Commands:\n" +
-		"  build <file.zg>    compile a program to a native binary\n" +
-		"  fmt <file.zg>...   rewrite sources in the canonical style\n" +
-		"  lint <file.zg>...  report unused imports and dead private code\n" +
-		"  c <file.zg>        print the emitted C\n" +
-		"  tokens <file.zg>   print the token stream\n" +
-		"\n" +
-		"Flags:\n" +
-		"  -o, --output PATH  where build writes the binary (default: the source name)\n" +
-		"  -h, --help         show this message\n" +
-		"  -V, --version      show the version\n" +
-		"\n" +
-		"Environment:\n" +
-		"  ZERG_ROOT          installation root (default: the current directory)\n" +
-		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
-		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
+		 usage_line() + "\n\n" +
+		 "Commands:\n" +
+		 "  build <file.zg>    compile a program to a native binary\n" +
+		 "  fmt <file.zg>...   rewrite sources in the canonical style\n" +
+		 "  lint <file.zg>...  report unused imports and dead private code\n" +
+		 "  c <file.zg>        print the emitted C\n" +
+		 "  tokens <file.zg>   print the token stream\n" +
+		 "\n" +
+		 "Flags:\n" +
+		 "  -o, --output PATH  where build writes the binary (default: the source name)\n" +
+		 "  -h, --help         show this message\n" +
+		 "  -V, --version      show the version\n" +
+		 "\n" +
+		 "Environment:\n" +
+		 "  ZERG_ROOT          installation root (default: the current directory)\n" +
+		 "  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
+		 "  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
 }
 
 # build_binary compiles `zerg build <file.zg>`: load the entry file with everything it
@@ -370,9 +370,19 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 
 # --- fmt / lint ------------------------------------------------------------------------
 
+# run_fmt rewrites each named file in place. Reading and writing the same path means a
+# formatted file is byte-identical to what it was, so running fmt twice is a no-op.
 fn run_fmt(files: list[str]) {
-	io.ewrite("zerg: fmt is not implemented yet\n")
-	__zrt_exit(2)
+	for f in files {
+		src := str(io.read_file(f))
+		out := zerg.fmt_src(src)
+		if out != src {
+			guard {
+				io.write_file(f, list[byte](out))
+			}
+			io.write(f + "\n")
+		}
+	}
 }
 
 # run_lint reports every finding in the loaded program and exits nonzero when there is

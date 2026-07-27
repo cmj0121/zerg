@@ -1,58 +1,105 @@
 # zerg — the self-hosting Zerg compiler.
 #
-# One tool, a few sub-commands, and the flags every tool owes its user: --help, --version,
-# and --emit to stop after a stage. Argument parsing is the stdlib `cli` module, so the
-# help text is rendered from the same option list the parser used and cannot drift from
-# it. `build` is self-sufficient — it emits C beside the output, then invokes cc through
-# the runtime's process-spawn leaf — and the compiler resolves `import` itself, so it
-# works from any directory.
+# Three commands — build, fmt, lint — and the flags every tool owes its user: --help,
+# --version, and --emit to stop after a stage. There are three because there are three
+# JOBS: compiling is one of them however far along the pipeline you stop it, so the token
+# stream, the tree, and the C are `--emit` values rather than commands of their own.
+#
+# The command line is DECLARED with the stdlib `cli` module — each command with its own
+# arguments and the function it runs — so the help text is generated from the same
+# declarations the parser used and cannot drift from them.
+# `build` is self-sufficient — it emits C beside the output, then invokes cc through the
+# runtime's process-spawn leaf — and the compiler resolves `import` itself, so it works
+# from any directory.
 import "zerg"
 import "io"
 import "cli"
 import "strconv"
 
-fn version() -> str {
+# banner is the one line `--version` prints. It cannot be called `version`: a program and
+# the modules it imports flatten into one scope, and `cli.version` is a name in it.
+fn banner() -> str {
 	return "zerg 0.1.0 (self-hosted)"
 }
 
-# options declares the command line once: the parser reads it, and --help renders it.
-fn options() -> list[cli.Opt] {
-	mut o: list[cli.Opt] = []
-	o.append(cli.opt("emit", "e", "stop after a stage: tokens, ast, c, lib, bin (default: lib)"))
-	o.append(cli.opt("output", "o", "where to write the result (default: the source name)"))
-	o.append(cli.opt("jobs", "j", "how many units to compile at once (default: 4)"))
-	o.append(cli.flag("help", "h", "show this message"))
-	o.append(cli.flag("version", "V", "show the version"))
-	return o
-}
-
 fn main(args: list[str]) {
-	p := cli.parse_argv(args, options())
-	if p.err != "" {
-		io.ewrite("zerg: " + p.err + "\n")
-		io.ewrite(usage_line() + "\n")
-		__zrt_exit(2)
-	}
-	if cli.has(p, "version") {
-		io.write(version() + "\n")
-		return
-	}
-	if cli.has(p, "help") or p.args.len() < 1 {
-		io.write(help_text())
-		return
-	}
-	cmd := p.args[0]
-	mut files: list[str] = []
-	mut i := 1
-	for i < p.args.len() {
-		files.append(p.args[i])
-		i = i + 1
-	}
-	run_command(cmd, files, cli.value_or(p, "emit", "lib"), cli.get(p, "output"), job_count(cli.value_or(p, "jobs", "4")))
+	__zrt_exit(root().exec(args))
 }
 
-# run_command dispatches a sub-command. `build` is the one that reads --emit; the other
-# commands name a single job and do it.
+# root declares the whole command line once. Every sub-command names the function it runs,
+# so dispatch is the declaration rather than a chain of string comparisons beside it.
+fn root() -> cli.Command {
+	# a multi-line chain is wrapped in parentheses: a line break after ')' would otherwise
+	# end the statement
+	return (cli.command("zerg", "the self-hosting Zerg compiler")
+		.version(banner())
+		.epilog(env_help())
+		.sub(build_cmd())
+		.sub(fmt_cmd())
+		.sub(lint_cmd()))
+}
+
+# build is the only command that compiles; how FAR it goes is `--emit`, not a command of
+# its own. The token stream, the tree, and the C are stages of one pipeline, so naming
+# them as sub-commands said twice what `--emit` already says — and left a reader to
+# discover that `zerg c f.zg` and `zerg build --emit c f.zg` were the same thing.
+fn build_cmd() -> cli.Command {
+	return (cli.command("build", "compile a program (see --emit)")
+		.opt("e", "emit", "stop after a stage: tokens, ast, c, lib, bin", "lib")
+		.opt("o", "output", "where to write the result (default: the source name)")
+		.opt("j", "jobs", "how many units to compile at once", "4")
+		.add(cli.positional("file.zg", "the source to compile").required().repeated())
+		.run(do_build))
+}
+
+fn fmt_cmd() -> cli.Command {
+	return (cli.command("fmt", "rewrite sources in the canonical style")
+		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
+		.run(do_fmt))
+}
+
+fn lint_cmd() -> cli.Command {
+	return (cli.command("lint", "report unused imports and dead private code")
+		.add(cli.positional("file.zg", "the sources to check").required().repeated())
+		.run(do_lint))
+}
+
+# env_help is the part of the help no declaration can produce: where the compiler looks
+# for the things it is not carrying.
+fn env_help() -> str {
+	return "Stages (--emit):\n" +
+		 "  tokens             the token stream, on stdout\n" +
+		 "  ast                the parsed tree, on stdout\n" +
+		 "  c                  the emitted C, on stdout\n" +
+		 "  lib                compile the C to an object file (default)\n" +
+		 "  bin                link an executable\n" +
+		 "\nEnvironment:\n" +
+		 "  ZERG_ROOT          installation root (default: the current directory)\n" +
+		 "  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
+		 "  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
+}
+
+# --- what each sub-command does -------------------------------------------------------------
+#
+# Each is handed the parsed command line and returns the process's exit status. There is no
+# argument checking here: a missing file or an unreadable flag was refused before the
+# function was ever called, which is the point of declaring the command line rather than
+# unpicking it.
+
+fn do_build(c: cli.Ctx) -> int {
+	build_stage(c.args(), c.get("emit"), c.get("output"), job_count(c.get("jobs")))
+	return 0
+}
+
+fn do_fmt(c: cli.Ctx) -> int {
+	run_fmt(c.args())
+	return 0
+}
+
+fn do_lint(c: cli.Ctx) -> int {
+	return run_lint(c.args())
+}
+
 # job_count reads -j, falling back to one job rather than none when it is not a number —
 # a bad value should slow the build down, not stop it.
 fn job_count(v: str) -> int {
@@ -64,72 +111,6 @@ fn job_count(v: str) -> int {
 		return 1
 	}
 	return n
-}
-
-fn run_command(cmd: str, files: list[str], emit: str, out: str, jobs: int) {
-	need_files(cmd, files)
-	if cmd == "build" {
-		build_stage(files, emit, out, jobs)
-		return
-	}
-	if cmd == "c" {
-		build_stage(files, "c", out, jobs)
-		return
-	}
-	if cmd == "tokens" {
-		build_stage(files, "tokens", out, jobs)
-		return
-	}
-	if cmd == "ast" {
-		build_stage(files, "ast", out, jobs)
-		return
-	}
-	if cmd == "fmt" {
-		run_fmt(files)
-		return
-	}
-	if cmd == "lint" {
-		run_lint(files)
-		return
-	}
-	io.ewrite("zerg: unknown command " + cmd + "\n")
-	io.ewrite(usage_line() + "\n")
-	__zrt_exit(2)
-}
-
-# need_files exits with a usage error when a sub-command that reads sources got none.
-fn need_files(cmd: str, files: list[str]) {
-	if files.len() < 1 {
-		io.ewrite("zerg: " + cmd + " needs at least one .zg file\n")
-		io.ewrite(usage_line() + "\n")
-		__zrt_exit(2)
-	}
-}
-
-fn usage_line() -> str {
-	return "usage: zerg <command> [options] <file.zg>..."
-}
-
-fn help_text() -> str {
-	head := version() + "\n\n" + usage_line() + "\n\n" +
-		"Commands:\n" +
-		"  build <file.zg>    compile a program (see --emit)\n" +
-		"  fmt <file.zg>...   rewrite sources in the canonical style\n" +
-		"  lint <file.zg>...  report unused imports and dead private code\n" +
-		"  c <file.zg>        print the emitted C (same as --emit c)\n" +
-		"  tokens <file.zg>   print the token stream\n" +
-		"  ast <file.zg>      print the parsed tree\n\n"
-	body := "\nStages (--emit):\n" +
-		"  tokens             the token stream, on stdout\n" +
-		"  ast                the parsed tree, on stdout\n" +
-		"  c                  the emitted C, on stdout\n" +
-		"  lib                compile the C to an object file (default)\n" +
-		"  bin                link an executable\n" +
-		"\nEnvironment:\n" +
-		"  ZERG_ROOT          installation root (default: the current directory)\n" +
-		"  ZERG_RUNTIME       runtime C sources (default: $ZERG_ROOT/src/runtime/csrc)\n" +
-		"  ZERG_STDLIB        standard library sources (default: $ZERG_ROOT/src/stdlib)\n"
-	return cli.usage(head, options(), body)
 }
 
 # build_stage runs the pipeline as far as `emit` asks and no further. The early stages
@@ -648,14 +629,17 @@ fn run_fmt(files: list[str]) {
 	}
 }
 
-# run_lint reports every finding in the loaded program and exits nonzero when there is
-# one, so `zerg lint` can gate a build rather than merely inform.
-fn run_lint(files: list[str]) {
+# run_lint reports every finding in the loaded program and RETURNS a nonzero status when
+# there is one, so `zerg lint` can gate a build rather than merely inform. It returns the
+# status rather than exiting on it because a sub-command's function is what decides the
+# process's exit, and it is the only thing that knows what the finding meant.
+fn run_lint(files: list[str]) -> int {
 	findings := zerg.lint_files(load_sources(files))
 	for f in findings {
 		io.write(f + "\n")
 	}
 	if findings.len() > 0 {
-		__zrt_exit(1)
+		return 1
 	}
+	return 0
 }

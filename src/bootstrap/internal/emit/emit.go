@@ -95,6 +95,12 @@ type emitter struct {
 	// set it, so a program that only tests membership stays free of the typedef.
 	needsRange bool
 
+	// needsFnPtr is set when the program HOLDS a function — bound to a name, stored in a
+	// field, passed as an argument — so the shared generic function pointer typedef is
+	// emitted. A program that only ever calls functions directly leaves it false and stays
+	// byte-identical.
+	needsFnPtr bool
+
 	// Tuple value carriers (completeness iteration 2, U2). tuples maps a tuple type's
 	// spelling to its generated per-shape C struct (`zg_tuple_<n>` with fields
 	// `.f0, .f1, …`), mirroring the Result carrier: an INTERNAL monomorphized layout,
@@ -202,6 +208,11 @@ func (e *emitter) program() {
 	// (`Outer { kid: Inner? }` -> `Inner?` -> `Inner`) orders correctly. A boxed/pointer/
 	// runtime member (str/Ref/list/map/boxed-optional/fn/channel) is a complete C type, so
 	// it imposes no order.
+	// The shared function pointer, BEFORE the struct typedefs rather than beside the range
+	// carrier below: a struct field may hold a function, and that field's declaration names
+	// `zg_fnptr`. Emits nothing for a program that holds no function.
+	e.emitFnPtrTypedef()
+
 	e.emitTypeTypedefs()
 
 	// The shared range value carrier, before any prototype/body that names a range
@@ -1347,9 +1358,8 @@ func (e *emitter) expr(x ast.Expr) string {
 		// value, which the seed does not carry — same boundary as a closure below.
 		// Without this the name would spell its own mangled C symbol and bind into a
 		// `void` local, which only fails later as cc noise about generated code.
-		if _, ok := e.info.FuncValues[n]; ok {
-			e.diags.Add(n.Span(), "a function used as a value is not yet supported")
-			return "0"
+		if name, ok := e.info.FuncValues[n]; ok {
+			return e.fnValue(name)
 		}
 		// a `mut &x` parameter is pointer storage: every mention reads through it.
 		if e.identIsByRef(n) {
@@ -1392,10 +1402,10 @@ func (e *emitter) expr(x ast.Expr) string {
 			}
 		}
 		// `mod.f` taken as a value rather than called: the Field analogue of the bare
-		// function name above, and outside the seed for the same reason.
-		if _, ok := e.info.NsFuncValues[n]; ok {
-			e.diags.Add(n.Span(), "a function used as a value is not yet supported")
-			return "0"
+		// function name above, and the same value — a module flattens into one program, so
+		// the resolved merged name is what it holds.
+		if key, ok := e.info.NsFuncValues[n]; ok {
+			return e.fnValue(key)
 		}
 		if s, ok := e.namespaceMemberValue(n); ok {
 			return s
@@ -2054,6 +2064,10 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.builtinCallEmit(n); ok {
 		return s
 	}
+	// a call THROUGH a value that holds a function, rather than a call OF a function
+	if s, ok := e.fnValueCall(n); ok {
+		return s
+	}
 	if s, ok := e.namespaceCallEmit(n); ok {
 		return s
 	}
@@ -2120,13 +2134,24 @@ func (e *emitter) trailingDefaults(id *ast.Ident, provided int) []ast.Expr {
 		return nil
 	}
 	fd, ok := sym.Decl.(*ast.FuncDecl)
-	if !ok || provided >= len(fd.Params) {
+	if !ok {
+		return nil
+	}
+	return defaultsFrom(fd, provided)
+}
+
+// defaultsFrom returns the default expressions for the parameters at index >= provided.
+// It stops at the first gap without one, because that is a sema error rather than
+// something to backfill, and it answers nil when nothing is omitted — so a fully-applied
+// call is unaffected. A direct call and a method call read it off the same node.
+func defaultsFrom(fd *ast.FuncDecl, provided int) []ast.Expr {
+	if provided >= len(fd.Params) {
 		return nil
 	}
 	var out []ast.Expr
 	for i := provided; i < len(fd.Params); i++ {
 		if fd.Params[i].Default == nil {
-			return nil // a gap without a default is a sema error, not our backfill
+			return nil
 		}
 		out = append(out, fd.Params[i].Default)
 	}
@@ -2285,7 +2310,15 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 	field, _ := n.Callee.(*ast.Field)
 	recv := e.expr(field.X)
 	args := recv
-	for _, a := range n.Args {
+	byref := e.methodByRefArgs(md)
+	for i, a := range n.Args {
+		// A `mut &` parameter binds the caller's variable itself — pass its address, and
+		// never a copy, which is the whole point of the writeback. Passing the value here
+		// handed a `zrt_list` to a `zrt_list*` parameter, which cc rejected.
+		if i < len(byref) && byref[i] {
+			args += ", " + e.addressOf(a.Value)
+			continue
+		}
 		// A by-value argument is CONSUMED by the callee (its body registers the param's drop),
 		// so an lvalue argument must be copied (retain/deep-copy) here or the callee's release
 		// double-frees the caller's value — the enum analogue of the struct discipline, newly
@@ -2293,7 +2326,32 @@ func (e *emitter) methodCall(n *ast.Call, md *mono.MethodDispatch) string {
 		// with a bare `=`, so an existing method call stays byte-identical.
 		args += ", " + e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value)
 	}
+	// Backfill the trailing parameters the call omitted, from the method's own declared
+	// defaults — the same rule a free call gets, read off the same node. Without it a
+	// method could declare a default that no call site was ever allowed to leave out.
+	for _, def := range e.methodTrailingDefaults(md, len(n.Args)) {
+		args += ", " + e.expr(def)
+	}
 	return fmt.Sprintf("%s(%s)", md.Mangled, args)
+}
+
+// A method call reads its by-ref flags and its parameter defaults off the SAME node a
+// direct call does — the declaration — through the same two helpers. It reaches that node
+// differently, because a method call has no callee identifier to resolve: mono carries the
+// declaration on the dispatch. The receiver is implicit and takes no slot in the
+// declaration, so the indices line up with the call's own arguments and need no offset.
+func (e *emitter) methodByRefArgs(md *mono.MethodDispatch) []bool {
+	if md.Decl == nil {
+		return nil
+	}
+	return byRefOf(md.Decl)
+}
+
+func (e *emitter) methodTrailingDefaults(md *mono.MethodDispatch, provided int) []ast.Expr {
+	if md.Decl == nil {
+		return nil
+	}
+	return defaultsFrom(md.Decl, provided)
 }
 
 // construct lowers a struct construction 'T(...)' to a C compound literal of the
@@ -2669,6 +2727,10 @@ func (e *emitter) localDecl(t sema.Type, name string) string {
 func cType(t sema.Type) string {
 	if f, ok := t.(*types.Fixed); ok {
 		return fixedCType(f)
+	}
+	// a held function is the one generic function pointer, cast back at the call site
+	if _, ok := t.(*types.Fn); ok {
+		return "zg_fnptr"
 	}
 	switch t {
 	case sema.Int:

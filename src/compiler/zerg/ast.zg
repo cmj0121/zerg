@@ -14,6 +14,11 @@
 
 # Ty is the small set of value types the subset needs, plus TVoid for a function with no
 # return and TUnknown as the inference bottom.
+#
+# TFn is a function's type — its parameters and its result, and only that, which is what
+# the language says a function type is. It exists so a function can be held: bound to a
+# name, stored in a field, passed as an argument. Only a NAMED top-level function can be
+# held that way here; a closure literal captures, and capture is not in the subset.
 enum Ty {
 	TInt
 	TFloat
@@ -25,6 +30,7 @@ enum Ty {
 	TByte
 	TNamed(str)
 	TList(Ty)
+	TFn(list[Ty], Ty)
 }
 
 # Expr is an expression node.
@@ -81,21 +87,37 @@ enum Stmt {
 	SNop
 }
 
-# Param is one function parameter: its name, declared type, and whether it is a mutable
-# reference (`mut &name: T`), which lowers to a C pointer.
+# Param is one function parameter: its name, declared type, whether it is a mutable
+# reference (`mut &name: T`), which lowers to a C pointer, and an optional DEFAULT — the
+# expression a call uses when it omits the argument.
+#
+# A default is what makes an input optional; the language has no overloading, so this is
+# where the flexibility comes from. Only a self-contained constant is carried, which is
+# also all the seed lowers correctly (docs/functions.md) — a default built from an
+# operator or a call is specified to be evaluated per call and is not honoured here.
 struct Param {
 	name: str
 	ty: Ty
 	is_ref: bool
+	has_def: bool
+	def: Expr
 }
 
-# FnDecl is a function declaration: name, parameters, an optional return type
-# (has_ret false means it returns nothing), the body block, and whether it was declared
-# `pub`. Visibility does not change the emitted C — every function is one flat C symbol —
-# but the linter needs it: an unused PRIVATE function is dead code, while an unused public
-# one is simply part of a module's interface.
+# FnDecl is a function declaration: name, the type it is a METHOD of ("" for a free
+# function), parameters, an optional return type (has_ret false means it returns nothing),
+# the body block, and whether it was declared `pub`. Visibility does not change the
+# emitted C — but the linter needs it: an unused PRIVATE function is dead code, while an
+# unused public one is simply part of a module's interface.
+#
+# A method is a plain FnDecl with `recv` set. The parser flattens an `impl T { … }` block
+# into these, prepending a `this: T` parameter, so the receiver is an ordinary first
+# argument from here down and nothing else in the compiler has to know about impls. Only
+# the C NAME differs: a free function is one flat `zg_<name>`, a method is
+# `zg_<T>_<name>`, which is also what keeps a method off the flat name space a program
+# shares with every module it imports.
 struct FnDecl {
 	name: str
+	recv: str
 	params: list[Param]
 	has_ret: bool
 	ret: Ty
@@ -163,7 +185,7 @@ pub fn dump_ast(f: File) -> str {
 		}
 	}
 	for fn_d in f.fns {
-		out = out + "\t" + fn_kind(fn_d) + " " + fn_d.name + "(" + params_of(fn_d) + ")"
+		out = out + "\t" + fn_kind(fn_d) + " " + qual_name(fn_d) + "(" + params_of(fn_d) + ")"
 		if fn_d.has_ret {
 			out = out + " -> " + ty_name(fn_d.ret)
 		}
@@ -178,6 +200,15 @@ fn fn_kind(f: FnDecl) -> str {
 		return "pub fn"
 	}
 	return "fn"
+}
+
+# qual_name shows a method as `Type.name`, so the `--emit ast` view says which impl a
+# function came from — the tree is otherwise flat and two types may name a method alike.
+fn qual_name(f: FnDecl) -> str {
+	if f.recv != "" {
+		return f.recv + "." + f.name
+	}
+	return f.name
 }
 
 fn params_of(f: FnDecl) -> str {
@@ -267,6 +298,20 @@ fn ty_name(t: Ty) -> str {
 		TByte => "byte"
 		TNamed(n) => n
 		TList(e) => "list[" + ty_name(e) + "]"
+		TFn(ps, r) => "fn(" + ty_names(ps) + ") -> " + ty_name(r)
 		_ => "?"
 	}
+}
+
+fn ty_names(ts: list[Ty]) -> str {
+	mut out := ""
+	mut i := 0
+	for i < ts.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + ty_name(ts[i])
+		i = i + 1
+	}
+	return out
 }

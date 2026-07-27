@@ -9,10 +9,12 @@
 # them to C. Forms outside the subset are skipped rather than parsed.
 import "strconv"
 
-# Parser holds the token list and the read cursor.
+# Parser holds the token list, the read cursor, and — while an `impl T { … }` block is
+# being read — the type that block is for, which is what `This` names inside it.
 struct Parser {
 	toks: list[Token]
 	pos: int
+	impl_ty: str
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -80,6 +82,29 @@ fn parse_type(mut &p: Parser) -> Ty {
 		name = cur(p).lexeme
 		p_advance(p)
 	}
+	# `This` is the self type: inside an impl it is the type that impl is for. Resolving it
+	# at parse time keeps it out of the emitter, which has no notion of a self type.
+	if name == "This" and p.impl_ty != "" {
+		return TNamed(p.impl_ty)
+	}
+	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
+	if name == "fn" and p_at(p, LParen) {
+		p_advance(p)
+		mut ptys: list[Ty] = []
+		for not p_at(p, RParen) and not p_at(p, Eof) {
+			ptys.append(parse_type(p))
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
+		}
+		expect(p, RParen)
+		mut fret := TVoid
+		if p_at(p, Arrow) {
+			p_advance(p)
+			fret = parse_type(p)
+		}
+		return TFn(ptys, fret)
+	}
 	if name == "list" and p_at(p, LBrack) {
 		p_advance(p)
 		elem := parse_type(p)
@@ -142,11 +167,11 @@ fn conv_ty(name: str) -> Ty {
 
 # --- declarations --------------------------------------------------------------
 
-# parse turns source into a File. Imports, structs, enums, and functions are recognised
-# at the top level; any other top-level token is skipped.
+# parse turns source into a File. Imports, structs, enums, functions, and `impl` blocks
+# are recognised at the top level; any other top-level token is skipped.
 pub fn parse(src: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0)
+	mut p := Parser(toks, 0, "")
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -162,14 +187,16 @@ pub fn parse(src: str) -> File {
 			# `pub` binds to the declaration that follows it
 			p_advance(p)
 			if p_at(p, Fn) {
-				fns.append(parse_fn(p, true))
+				fns.append(parse_fn(p, true, ""))
 			}
 		} else if p_at(p, Fn) {
-			fns.append(parse_fn(p, false))
+			fns.append(parse_fn(p, false, ""))
 		} else if p_at(p, Struct) {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
 			enums.append(parse_enum(p))
+		} else if p_at(p, Impl) {
+			parse_impl(p, fns)
 		} else {
 			p_advance(p)
 		}
@@ -267,12 +294,64 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	return StructDecl(name, fields)
 }
 
-fn parse_fn(mut &p: Parser, is_pub: bool) -> FnDecl {
+# parse_impl reads an `impl T { … }` block and appends its methods to the file's flat
+# function list, each carrying `T` as its receiver.
+#
+# The type is taken as the LAST type name before the `{`, at bracket depth zero. That one
+# rule reads all three spellings the grammar allows — `impl T`, `impl T[A]`, and the spec
+# form `impl Spec for T` — and lands on T in every one of them, which matters because the
+# methods belong to T in all three.
+fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
+	p_advance(p) # 'impl'
+	mut target := ""
+	mut depth := 0
+	for not p_at(p, Eof) and not (p_at(p, LBrace) and depth == 0) {
+		if p_at(p, LBrack) {
+			depth = depth + 1
+		} else if p_at(p, RBrack) {
+			depth = depth - 1
+		} else if depth == 0 and p_at(p, Ident) {
+			target = cur(p).lexeme
+		}
+		p_advance(p)
+	}
+	expect(p, LBrace)
+	skip_semis(p)
+	# `This` inside the block names the type the block is for; the parser resolves it here
+	# rather than leaving a name the emitter would have to spell and could not.
+	outer := p.impl_ty
+	p.impl_ty = target
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		mut is_pub := false
+		if p_at(p, Pub) {
+			p_advance(p)
+			is_pub = true
+		}
+		if p_at(p, Fn) {
+			fns.append(parse_fn(p, is_pub, target))
+		} else {
+			# an associated binding or any other impl item is outside the subset
+			p_advance(p)
+		}
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	p.impl_ty = outer
+}
+
+fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 	p_advance(p) # 'fn'
 	name := cur(p).lexeme
 	p_advance(p) # name
 	expect(p, LParen)
 	mut params: list[Param] = []
+	if recv != "" {
+		# The receiver is not written in the parameter list — `this` is implicit — so it is
+		# added here. From this point on a method is an ordinary function whose first
+		# argument happens to be called `this`, which is why nothing below the parser needs
+		# a notion of methods at all.
+		params.append(Param("this", TNamed(recv), false, false, ENil))
+	}
 	for not p_at(p, RParen) and not p_at(p, Eof) {
 		# an optional `mut &` prefix marks a mutable-reference parameter
 		mut is_ref := false
@@ -287,7 +366,15 @@ fn parse_fn(mut &p: Parser, is_pub: bool) -> FnDecl {
 		p_advance(p)
 		expect(p, Colon)
 		pty := parse_type(p)
-		params.append(Param(pname, pty, is_ref))
+		# `= <constant>` makes the parameter optional at the call site
+		mut has_def := false
+		mut def := ENil
+		if p_at(p, Assign) {
+			p_advance(p)
+			def = parse_expr(p)
+			has_def = true
+		}
+		params.append(Param(pname, pty, is_ref, has_def, def))
 		if p_at(p, Comma) {
 			p_advance(p)
 		}
@@ -301,7 +388,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool) -> FnDecl {
 		has_ret = true
 	}
 	body := parse_block(p)
-	return FnDecl(name, params, has_ret, ret, body, is_pub)
+	return FnDecl(name, recv, params, has_ret, ret, body, is_pub)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {
@@ -603,6 +690,11 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	if k == Nil {
 		p_advance(p)
 		return ENil
+	}
+	if k == This {
+		# the receiver reads as an ordinary binding, because the parser made it one
+		p_advance(p)
+		return EIdent("this")
 	}
 	if k == Ident {
 		# list[T](x) — a list-type conversion (e.g. list[byte](s))

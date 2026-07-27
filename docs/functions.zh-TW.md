@@ -54,7 +54,7 @@ variadic。
 
 **閉包的捕獲規則與 `spawn` 相同：只捕獲 immutable 值與 channel，且以複製帶入。** 捕獲一個 **immutable** 值——一個
 單純的 scalar,或一個 **non-POD** 值(一個 `list` / `map` / `str`、一個 `Ref`、或一個裝箱值)——是 **[not yet]**,
-連同 closure 與函式值的其餘部分,種子都已不再建置；
+連同 closure 的其餘部分；
 捕獲一個 **`mut`** binding 是 **[not yet]**——先把它快照成 immutable binding（`snap := n`）。捕獲在語意上是
 **複製**——捕獲的 channel 做 refcount++,而一個 **non-POD 的 immutable 值**是**被 retain 進閉包的 refcounted 環境**、
 而非急切深拷貝,單純的 scalar 則直接複製——所以逃出定義 scope 的閉包帶著自己的捕獲、永不懸空。因為每個捕獲都是

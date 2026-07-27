@@ -1218,16 +1218,24 @@ func (c *checker) methodCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 	m := ref.Method
 	subT := nominalArgs(rt)
 	var pnames []string
+	// A method's parameters may declare defaults exactly as a free function's do — the
+	// declaration is the same node — so they have to be read out of it here. Passing an
+	// all-false slice instead made every method call fully-positional, and a builder
+	// method like `opt(short, long = "", help = "")` unusable.
+	defaults := make([]bool, len(m.Sig.Params))
 	if fn, ok := m.Decl.(*ast.FuncDecl); ok {
-		for _, p := range fn.Params {
+		for i, p := range fn.Params {
 			pnames = append(pnames, p.Name)
+			if i < len(defaults) && p.Default != nil {
+				defaults[i] = true
+			}
 		}
 	}
 	ptypes := make([]Type, len(m.Sig.Params))
 	for i, p := range m.Sig.Params {
 		ptypes[i] = substitute(p.Type, subT, nil)
 	}
-	c.bindCallArgs(head.Name+"."+fld.Name, n, pnames, ptypes, make([]bool, len(ptypes)))
+	c.bindCallArgs(head.Name+"."+fld.Name, n, pnames, ptypes, defaults)
 	if m.Sig.Ret == nil {
 		return Nil, true
 	}

@@ -24,6 +24,7 @@
 #   F202  no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
 #   F301  a comment keeps its text, on its own line or trailing the code it followed
 #   F401  `if c { return x }` becomes the guard it is sugar for, `return x if c`
+#   F402  imports group — standard library first, then the rest — each group alphabetical
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -47,6 +48,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	mut toks := tokenize_trivia(src)
 	if not fmt_is_off(off, "F401") {
 		toks = fmt_guards(toks)
+	}
+	if not fmt_is_off(off, "F402") {
+		toks = fmt_imports(toks)
 	}
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
@@ -488,4 +492,194 @@ fn is_comment(k: Kind) -> bool {
 		Comment => true
 		_ => false
 	}
+}
+
+# --- rule F402: imports group, standard library first, each group alphabetical -------------
+#
+# The Go convention, and for the same reason: an import list is READ far more often than it
+# is edited, and one that is grouped and sorted answers "does this file use X" by looking
+# rather than by scanning. The standard library goes first because it is the part a reader
+# already knows; everything else is what this program brought.
+#
+#     import "cli"          import "cli"
+#     import "zerg"    →    import "io"
+#     import "io"
+#                           import "zerg"
+#
+# What counts as standard library is the fixed bundled set, named below. The formatter
+# cannot ask the filesystem — it is handed a string, not a directory — and the set is
+# closed, so naming it here costs one line per module and is checked by the resolver
+# failing loudly on anything else.
+#
+# It rewrites only a run of plain `import "path"` statements at the top of the file, and
+# declines the moment anything else appears among them: a comment (which belongs to the
+# import it sits on, and sorting would strand it), or an `import pub` (whose re-export is
+# an ordering the author chose). Anything declined is left exactly as written.
+fn fmt_imports(toks: list[Token]) -> list[Token] {
+	first := fmt_first_import(toks)
+	return toks if first < 0
+	last := fmt_import_run_end(toks, first)
+	return toks if last < 0
+	paths := fmt_run_paths(toks, first, last)
+	return toks if paths.len() < 2
+	mut out: list[Token] = []
+	mut i := 0
+	for i < first {
+		out.append(toks[i])
+		i = i + 1
+	}
+	ln := toks[first].line
+	end := fmt_emit_imports(paths, ln, out)
+	# Every token after the run shifts by however many lines the run grew or shrank, so the
+	# blank line the author left before the next declaration is still there.
+	shift := end - toks[last].line
+	mut j := last + 1
+	for j < toks.len() {
+		out.append(fmt_on_line(toks[j], toks[j].line + shift))
+		j = j + 1
+	}
+	return out
+}
+
+# fmt_emit_imports writes the sorted paths, a blank line between the two groups, and
+# answers with the line the last one landed on.
+fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int {
+	mut ln := start
+	mut wrote := false
+	for std in [true, false] {
+		mut group := false
+		for p in fmt_sorted(fmt_group(paths, std)) {
+			if wrote {
+				ln = ln + 1
+				if not group {
+					ln = ln + 1 # the blank line between the groups
+				}
+			}
+			out.append(Token(Import, "import", "", ln, 0))
+			out.append(Token(Str, "\"" + p + "\"", p, ln, 0))
+			out.append(Token(Semi, ";", "", ln, 0))
+			wrote = true
+			group = true
+		}
+	}
+	return ln
+}
+
+fn fmt_group(paths: list[str], std: bool) -> list[str] {
+	mut out: list[str] = []
+	for p in paths {
+		if fmt_is_stdlib(p) == std {
+			out.append(p)
+		}
+	}
+	return out
+}
+
+# fmt_sorted returns the paths in alphabetical order. An import list is a handful of names,
+# so an insertion sort is the whole of what this needs.
+fn fmt_sorted(paths: list[str]) -> list[str] {
+	mut out: list[str] = []
+	for p in paths {
+		mut at := 0
+		for at < out.len() and fmt_before(out[at], p) {
+			at = at + 1
+		}
+		out.append(p)
+		mut k := out.len() - 1
+		for k > at {
+			out[k] = out[k - 1]
+			k = k - 1
+		}
+		out[at] = p
+	}
+	return out
+}
+
+# fmt_is_stdlib reports whether a path names a bundled module. A module resolves by its
+# LAST path segment (`import "std/io"` and `import "io"` are the same module), which is
+# what the driver's resolver does, so the test is on that segment.
+fn fmt_is_stdlib(path: str) -> bool {
+	name := fmt_last_segment(path)
+	for m in ["ascii", "atomic", "cli", "fs", "io", "math", "os", "rand", "strconv", "strings", "testing", "time"] {
+		return true if m == name
+	}
+	return false
+}
+
+fn fmt_last_segment(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# fmt_first_import is the index of the first `import`, or -1 when the file has none.
+fn fmt_first_import(toks: list[Token]) -> int {
+	mut i := 0
+	for i < toks.len() {
+		return i if toks[i].kind == Import
+		i = i + 1
+	}
+	return - 1
+}
+
+# fmt_import_run_end is the index of the last token of the run of plain imports starting at
+# `first`, or -1 when the run holds anything this pass will not reorder.
+fn fmt_import_run_end(toks: list[Token], first: int) -> int {
+	mut i := first
+	mut last := - 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if k == Import {
+			return - 1 if toks[i + 1].kind != Str
+			last = i + 1
+			i = i + 2
+		} else if is_semi(k) {
+			last = i
+			i = i + 1
+		} else {
+			return last
+		}
+	}
+	return last
+}
+
+fn fmt_run_paths(toks: list[Token], first: int, last: int) -> list[str] {
+	mut out: list[str] = []
+	mut i := first
+	for i <= last {
+		if toks[i].kind == Import {
+			out.append(toks[i + 1].value)
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# fmt_before reports whether a sorts before b, byte by byte. It is spelled out rather than
+# written `a < b`: this compiler compares strings for EQUALITY only, and an ordering
+# comparison on `str` would compare the pointers — which sorts by where the strings
+# happen to sit in memory, silently, and differently on every run.
+fn fmt_before(a: str, b: str) -> bool {
+	x := list[byte](a)
+	y := list[byte](b)
+	mut i := 0
+	for i < x.len() and i < y.len() {
+		return true if x[i] < y[i]
+		return false if x[i] > y[i]
+		i = i + 1
+	}
+	return x.len() < y.len()
 }

@@ -2,12 +2,15 @@
 # is written, compiled, and never reached. Every check here is answered from the parsed
 # File alone — no types, no flow analysis — which keeps it honest about what it can claim.
 #
-# What it reports, and why each one is worth a line:
-#   * an unused import — the module is read, parsed, and merged into the program for
-#     nothing, and it lies to the next reader about what this file depends on
-#   * an unused private function — a public one is a module's interface and may have no
-#     caller in this program, but a private one with no caller is simply dead
-#   * a binding that is never read — the value was computed for nobody
+# Every finding carries a CODE, so it can be named — in a diagnostic, in a review, in a
+# suppression. The prefix groups them the way the formatter's does (see fmt.zg): `L1xx` is
+# dead code, things written that nothing reaches.
+#
+#   L101  an unused import — the module is read, parsed, and merged into the program for
+#         nothing, and it lies to the next reader about what this file depends on
+#   L102  an unused private function — a public one is a module's interface and may have
+#         no caller in this program, but a private one with no caller is simply dead
+#   L103  a binding that is never read — the value was computed for nobody
 #
 # Findings come back as plain strings in source order. The driver prints them and exits
 # nonzero, so `zerg lint` is usable as a gate rather than as decoration.
@@ -36,7 +39,7 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 	for im in f.imports {
 		name := last_segment(im)
 		if not has_str(ns, name) and not has_str(ids, name) {
-			out.append("unused import \"" + im + "\"")
+			out.append("L101 unused import \"" + im + "\"")
 		}
 	}
 }
@@ -48,7 +51,7 @@ fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str])
 		if fd.is_pub or fd.name == "main" {
 			continue_marker()
 		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
-			out.append("private function `" + fd.name + "` is never called")
+			out.append("L102 private function `" + fd.name + "` is never called")
 		}
 	}
 }
@@ -67,7 +70,7 @@ fn lint_unread_bindings(f: File, mut &out: list[str]) {
 			mut ns: list[str] = []
 			walk_body(fd.body, ids, calls, ns)
 			if count_str(ids, n) == 0 {
-				out.append("binding `" + n + "` in `" + fd.name + "` is never read")
+				out.append("L103 binding `" + n + "` in `" + fd.name + "` is never read")
 			}
 		}
 	}
@@ -213,9 +216,7 @@ fn last_segment(path: str) -> str {
 		}
 		i = i + 1
 	}
-	if not seen {
-		return path
-	}
+	return path if not seen
 	mut out: list[byte] = []
 	mut j := cut
 	for j < b.len() {
@@ -227,9 +228,7 @@ fn last_segment(path: str) -> str {
 
 fn has_str(xs: list[str], want: str) -> bool {
 	for x in xs {
-		if x == want {
-			return true
-		}
+		return true if x == want
 	}
 	return false
 }

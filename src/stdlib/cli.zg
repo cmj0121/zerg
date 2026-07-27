@@ -159,9 +159,7 @@ impl Argument {
 	# name is what the argument is known by — the long form when it has one, else the short
 	# letter. It is the key `Ctx.has` / `Ctx.get` read it back by.
 	pub fn name() -> str {
-		if this.long != "" {
-			return this.long
-		}
+		return this.long if this.long != ""
 		return this.short
 	}
 
@@ -171,9 +169,7 @@ impl Argument {
 	# declaration should say everything the declaration does, and `.repeated()` was the one
 	# thing it declared and did not mention.
 	pub fn label() -> str {
-		if this.kind == PosArg {
-			return "    <" + this.long + ">"
-		}
+		return "    <" + this.long + ">" if this.kind == PosArg
 		mut s := "    "
 		if this.short != "" {
 			s = "-" + this.short + ", "
@@ -219,9 +215,7 @@ pub struct Ctx {
 # three ways, so the three readers are written once here and both structs call them.
 fn names_have(names: list[str], name: str) -> bool {
 	for n in names {
-		if n == name {
-			return true
-		}
+		return true if n == name
 	}
 	return false
 }
@@ -274,9 +268,7 @@ impl Ctx {
 	# value that is not a number should not be the thing that stops a program that has
 	# somewhere sensible to go.
 	pub fn int_of(name: str, fallback: int) -> int {
-		if not this.has(name) {
-			return fallback
-		}
+		return fallback if not this.has(name)
 		mut n := fallback
 		guard {
 			n = strconv.parse_int(this.get(name), 10)
@@ -533,9 +525,7 @@ fn scan(c: Command, argv: list[str]) -> Scan {
 		} else {
 			s.rest.append(a)
 		}
-		if s.err != "" {
-			return s
-		}
+		return s if s.err != ""
 		i = i + 1
 	}
 	return s
@@ -638,27 +628,21 @@ fn all_args(c: Command) -> list[Argument] {
 # ten-field literal that would have to be edited alongside the struct.
 fn find_long(opts: list[Argument], name: str) -> Argument {
 	for o in opts {
-		if o.kind != PosArg and o.long == name {
-			return o
-		}
+		return o if o.kind != PosArg and o.long == name
 	}
 	return argument("")
 }
 
 fn find_short(opts: list[Argument], letter: str) -> Argument {
 	for o in opts {
-		if o.kind != PosArg and o.short != "" and o.short == letter {
-			return o
-		}
+		return o if o.kind != PosArg and o.short != "" and o.short == letter
 	}
 	return argument("")
 }
 
 fn find_sub(c: Command, name: str) -> Command {
 	for s in c.subs {
-		if s.name == name {
-			return s
-		}
+		return s if s.name == name
 	}
 	return command("")
 }
@@ -736,9 +720,7 @@ fn values_of(s: Scan, name: str) -> list[str] {
 fn validate(c: Command, s: Scan, ctx: Ctx) -> str {
 	for a in c.args {
 		if a.need and not ctx.has(a.name()) {
-			if a.kind == PosArg {
-				return "missing required argument <" + a.name() + ">"
-			}
+			return "missing required argument <" + a.name() + ">" if a.kind == PosArg
 			return "missing required option --" + a.name()
 		}
 	}
@@ -765,12 +747,8 @@ fn validate_groups(c: Command, s: Scan) -> str {
 				}
 			}
 		}
-		if seen > 1 {
-			return "--" + first + " and --" + clash + " cannot be given together"
-		}
-		if seen == 0 and c.group_need[gi] {
-			return "one of " + group_list(c, g) + " is required"
-		}
+		return "--" + first + " and --" + clash + " cannot be given together" if seen > 1
+		return "one of " + group_list(c, g) + " is required" if seen == 0 and c.group_need[gi]
 		gi = gi + 1
 	}
 	return ""
@@ -819,9 +797,7 @@ impl Command {
 	# which is possible precisely because the arguments are declared rather than parsed by
 	# hand somewhere else.
 	fn usage_of(path: str) -> str {
-		if this.usage_text != "" {
-			return this.usage_text
-		}
+		return this.usage_text if this.usage_text != ""
 		mut out := path
 		if this.subs.len() > 0 {
 			out = out + " <command>"
@@ -838,9 +814,7 @@ impl Command {
 	}
 
 	fn command_list() -> str {
-		if this.subs.len() == 0 {
-			return ""
-		}
+		return "" if this.subs.len() == 0
 		mut out := "\nCommands:\n"
 		for s in this.subs {
 			out = out + "  " + s.name + pad(s.name, 20) + s.about + "\n"
@@ -869,9 +843,7 @@ impl Command {
 
 fn takes_options(c: Command) -> bool {
 	for a in all_args(c) {
-		if a.kind != PosArg {
-			return true
-		}
+		return true if a.kind != PosArg
 	}
 	return false
 }
@@ -888,12 +860,8 @@ fn positional_form(a: Argument) -> str {
 }
 
 fn section_of(a: Argument) -> str {
-	if a.section != "" {
-		return a.section
-	}
-	if a.kind == PosArg {
-		return "Arguments"
-	}
+	return a.section if a.section != ""
+	return "Arguments" if a.kind == PosArg
 	return "Options"
 }
 
@@ -927,9 +895,7 @@ fn section_titles(opts: list[Argument]) -> list[str] {
 
 fn has_section(opts: list[Argument], title: str) -> bool {
 	for a in opts {
-		if section_of(a) == title {
-			return true
-		}
+		return true if section_of(a) == title
 	}
 	return false
 }
@@ -939,9 +905,7 @@ fn pad(s: str, width: int) -> str {
 	# bound first: the self-hosted emitter cannot take the length of a conversion in place
 	b := list[byte](s)
 	n := width - b.len()
-	if n < 1 {
-		return " "
-	}
+	return " " if n < 1
 	mut out: list[byte] = []
 	mut i := 0
 	for i < n {
@@ -969,9 +933,7 @@ impl Command {
 
 	fn dispatch(argv: list[str], path: str) -> int {
 		s := scan(this, argv)
-		if s.err != "" {
-			return this.refuse(path, s.err)
-		}
+		return this.refuse(path, s.err) if s.err != ""
 		# --help and --version are answered by the command they were written BEFORE, which
 		# is why this comes ahead of the sub-command hand-off: `wc --help count` is asking
 		# wc, and `wc count --help` is asking count.
@@ -989,17 +951,13 @@ impl Command {
 		}
 		ctx := resolve(this, s, path)
 		verr := validate(this, s, ctx)
-		if verr != "" {
-			return this.refuse(path, verr)
-		}
+		return this.refuse(path, verr) if verr != ""
 		# A command with no function of its own is a place sub-commands hang from, so being
 		# asked to run it is being asked what it can do — which the help answers. Being
 		# given a WORD it does not know is a different question, and refusing it is the
 		# answer: printing the help there would exit 0 on a command line that was wrong.
 		if not this.has_action {
-			if this.subs.len() > 0 and s.rest.len() > 0 {
-				return this.refuse(path, "unknown command " + s.rest[0])
-			}
+			return this.refuse(path, "unknown command " + s.rest[0]) if this.subs.len() > 0 and s.rest.len() > 0
 			io.write(this.render_as(path))
 			return 0
 		}
@@ -1054,9 +1012,7 @@ fn drop_prefix(s: str, n: int) -> str {
 
 fn has_eq(s: str) -> bool {
 	for c in list[byte](s) {
-		if c == b'=' {
-			return true
-		}
+		return true if c == b'='
 	}
 	return false
 }
@@ -1066,9 +1022,7 @@ fn before_eq(s: str) -> str {
 	mut out: list[byte] = []
 	mut i := 0
 	for i < b.len() {
-		if b[i] == b'=' {
-			return str(out)
-		}
+		return str(out) if b[i] == b'='
 		out.append(b[i])
 		i = i + 1
 	}

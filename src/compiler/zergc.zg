@@ -323,17 +323,6 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 	return none
 }
 
-# load_program reads the entry file and everything it imports, transitively, and returns
-# the sources in dependency order (a module before the file that imports it). Each module
-# is loaded once: `seen` holds the resolved paths, so a diamond of imports — or a module
-# that imports one already pulled in — costs nothing and cannot loop.
-fn load_program(entry: str) -> list[str] {
-	mut seen: list[str] = []
-	mut srcs: list[str] = []
-	load_into(entry, dir_of(entry), seen, srcs)
-	return srcs
-}
-
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str]) {
 	for s in seen {
 		if s == file {
@@ -386,7 +375,14 @@ fn run_fmt(files: list[str]) {
 	__zrt_exit(2)
 }
 
+# run_lint reports every finding in the loaded program and exits nonzero when there is
+# one, so `zerg lint` can gate a build rather than merely inform.
 fn run_lint(files: list[str]) {
-	io.ewrite("zerg: lint is not implemented yet\n")
-	__zrt_exit(2)
+	findings := zerg.lint_files(load_sources(files))
+	for f in findings {
+		io.write(f + "\n")
+	}
+	if findings.len() > 0 {
+		__zrt_exit(1)
+	}
 }

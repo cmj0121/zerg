@@ -148,8 +148,14 @@ pub fn parse(src: str) -> File {
 			if path != "" {
 				imports.append(path)
 			}
+		} else if p_at(p, Pub) {
+			# `pub` binds to the declaration that follows it
+			p_advance(p)
+			if p_at(p, Fn) {
+				fns.append(parse_fn(p, true))
+			}
 		} else if p_at(p, Fn) {
-			fns.append(parse_fn(p))
+			fns.append(parse_fn(p, false))
 		} else if p_at(p, Struct) {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
@@ -240,7 +246,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	return StructDecl(name, fields)
 }
 
-fn parse_fn(mut &p: Parser) -> FnDecl {
+fn parse_fn(mut &p: Parser, is_pub: bool) -> FnDecl {
 	p_advance(p) # 'fn'
 	name := cur(p).lexeme
 	p_advance(p) # name
@@ -274,7 +280,7 @@ fn parse_fn(mut &p: Parser) -> FnDecl {
 		has_ret = true
 	}
 	body := parse_block(p)
-	return FnDecl(name, params, has_ret, ret, body)
+	return FnDecl(name, params, has_ret, ret, body, is_pub)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {

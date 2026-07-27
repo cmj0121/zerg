@@ -60,10 +60,6 @@ type FuncSig struct {
 	Ret        Type // Nil when the function has no '-> type'
 	Decl       *ast.FuncDecl
 	Generic    *GenericEnv
-	// TestLabel is the human-readable `module::surface` name of a `#[test]` function
-	// (Phase 1i U1), set when the signature is collected into Info.Tests. It is empty
-	// for a non-test function, so a normal build never reads it.
-	TestLabel string
 }
 
 // Info is the result of a successful check, consumed by the emitter. The Phase 0
@@ -100,13 +96,6 @@ type Info struct {
 	// type. It is empty for a program with no module constant, which stays
 	// byte-identical.
 	ConstOrder []*ast.BindStmt
-
-	// Tests lists every `#[test]` function's signature, in the flattened whole-program
-	// order — entry-module tests (file order) first, then imported modules by canonical
-	// name. The seed has no test runner, so a `build` filters test functions out before
-	// this pass and it stays empty; the collection is kept for the Zerg-written
-	// toolchain, which is where running tests now lives.
-	Tests []*FuncSig
 
 	// Lambdas records each NON-CAPTURING closure literal that is lifted to a top-level
 	// function (docs/functions.md): the checker synthesizes a `FuncDecl` + `FuncSig` for
@@ -406,12 +395,6 @@ func (c *checker) collectFuncItems(items []ast.Stmt, inUnsafe bool) {
 			}
 			sig := c.buildSig(n)
 			c.info.Funcs[n.Name] = sig
-			// A `#[test]` function is a compiler-owned decorator (like #[derive]):
-			// collect it into Info.Tests after validating its shape (Phase 1i U1). A build
-			// never reaches here for a test function — the pipeline filters them out first.
-			if hasDecorator(n.Decorators, "test") {
-				c.collectTest(n, sig)
-			}
 		case *ast.UnsafeGroup:
 			c.collectFuncItems(n.Items, true)
 		}

@@ -37,7 +37,8 @@ src/compiler/
 ## Using it
 
 ```sh
-zerg build <file.zg>    # compile a program (-o picks the output; default: the source name)
+zerg build <file.zg>    # compile a module to an object (--emit bin links a program)
+zerg build --emit bin -j8 app.zg   # a program, eight units compiling at once
 zerg fmt <file.zg>...   # rewrite sources in the canonical style, in place
 zerg lint <file.zg>...  # report unused imports and dead private code; nonzero if any
 zerg c <file.zg>        # print the emitted C
@@ -53,6 +54,7 @@ setup and an install needs no checkout:
 | `ZERG_ROOT`    | the installation root | the current directory         |
 | `ZERG_RUNTIME` | the runtime C sources | `$ZERG_ROOT/src/runtime/csrc` |
 | `ZERG_STDLIB`  | the standard library  | `$ZERG_ROOT/src/stdlib`       |
+| `ZERG_CACHE`   | the build cache       | `$ZERG_ROOT/.zerg-cache`      |
 
 An import resolves against the entry file's own directory first, then the standard
 library, and a module is either `<name>.zg` or a DIRECTORY of sources read in sorted
@@ -67,6 +69,28 @@ The library must therefore live in one directory module (`zerg/`) whose files sh
 those enums, with `zergc.zg` as a thin driver that only ever calls the module's `pub`
 functions — never constructs a variant. The original `src/compiler/zerg/` instinct was
 right.
+
+## How a build is put together
+
+A program is compiled UNIT by unit. A unit is a module — one file, or the several files of
+a directory module, which share a scope and cannot be split — and each becomes its own
+object, which one link puts together. That split is what everything else rests on:
+
+- **Separate compilation.** A unit declares the whole program but defines only its own
+  module, so two modules that share an import can be linked side by side. Whole-program
+  emission cannot: each object would carry its own copy of the shared module.
+- **Caching.** A unit's key is a hash of the C it emitted — which already folds in its own
+  source, everything it can see, and the compiler that produced it, since a change to any
+  of those changes the C. Content, not timestamps, which is safe precisely because the
+  fixpoint proves emission is deterministic. Change a comment and nothing recompiles: a
+  comment does not reach the emitted C. The runtime's translation units are cached the
+  same way.
+- **Parallelism.** Units do not depend on each other once emitted, so `-j` compiles
+  several at once. It comes from OS processes, not coroutines: the runtime's scheduler is
+  cooperative N:1, so coroutines give concurrency, not CPU parallelism.
+
+Building the compiler with itself, six units: 1.28s at `-j1`, 0.56s at `-j4`, 0.33s when
+nothing changed.
 
 ## The corpus
 

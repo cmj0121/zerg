@@ -9,6 +9,9 @@ ZERG_ENTRY := src/compiler/zergc.zg
 # tests. CORPUS_PASS is the set `zerg` compiles and runs correctly today — the gate. The
 # rest of test-data/codegen/ is reported but not enforced: each case that starts passing
 # is a feature landing, and moves into this list.
+# JOBS is how many units the self-hosted compiler builds at once.
+JOBS ?= 4
+
 CORPUS_PASS := arithmetic bitwise booleans factorial fib fizzbuzz floats gcd hello power sumto
 
 .PHONY: all clean test run build install uninstall upgrade examples corpus lint fmt selfhost help $(SUBDIR)
@@ -21,6 +24,7 @@ clean: $(SUBDIR)                # clean-up environment
 	@find . -name '*.sw[po]' -delete
 	@rm -rf bin/examples
 	@rm -f bin/zerg bin/zerg-stage2 bin/zerg.c bin/zerg-stage2.c
+	@rm -rf .zerg-cache
 
 test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 
@@ -76,5 +80,5 @@ fmt:                            # rewrite the compiler and stdlib in canonical s
 
 selfhost:                       # have the built zerg rebuild itself, closing the chain
 	$(MAKE) build
-	./bin/zerg build --emit bin -o ./bin/zerg-stage2 $(ZERG_ENTRY)
+	./bin/zerg build --emit bin -j $(JOBS) -o ./bin/zerg-stage2 $(ZERG_ENTRY)
 	@echo "self-host chain closed: bin/zerg-stage2 built by bin/zerg"

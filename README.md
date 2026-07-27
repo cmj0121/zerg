@@ -43,17 +43,23 @@ are in the **[Language Specification](docs/language.md)**, with companion chapte
 Build the bootstrap toolchain (Go ≥ 1.26 and a C compiler are required), then compile a program:
 
 ```sh
-make                       # build the single `zerg` binary into ./bin/
+make                        # ./bin/zerg0 (the Go seed), then ./bin/zerg (built by it)
 cat > hello.zg <<'ZG'
 fn main() {
     print "hello, world"
 }
 ZG
-./bin/zerg build hello.zg  # emit C, then invoke cc → ./hello
-./hello                    # hello, world
+./bin/zerg0 build hello.zg  # emit C, then invoke cc → ./hello
+./hello                     # hello, world
 ```
 
-The one `zerg` tool carries the sub-commands you need:
+`make` builds two compilers. `zerg0` is the Go-hosted seed — the one the quickstart uses,
+and the one that still carries the whole toolchain today. `zerg` is the self-hosting
+compiler the seed builds from [`src/compiler/`](src/compiler); it compiles itself, but is
+not yet the tool you reach for (it takes an explicit source list and resolves the runtime
+relative to the repo root). The name is reserved for it because that is where it is going.
+
+The one `zerg` tool is meant to carry the sub-commands you need:
 
 | Command             | What it does                                        |
 | ------------------- | --------------------------------------------------- |

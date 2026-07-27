@@ -6,11 +6,10 @@ import "testing"
 // accepted, an unknown one is a clean error rather than a silent no-op, and a
 // recognized-but-unimplemented one is rejected with a distinct "not yet supported".
 
-// TestKnownDecoratorsAccepted checks the implemented decorators (derive/dyn/test)
+// TestKnownDecoratorsAccepted checks the implemented decorators (derive/test)
 // still pass the validation pass untouched.
 func TestKnownDecoratorsAccepted(t *testing.T) {
 	wantOK(t, "#[derive(Eq)]\nstruct P {\n\tx: int\n}")
-	wantOK(t, "#[dyn]\nfn id[T](x: T) -> T {\n\treturn x\n}")
 	wantOK(t, "#[test]\nfn t() {\n}")
 }
 
@@ -35,8 +34,9 @@ func TestReservedLayoutDecoratorsNotYetSupported(t *testing.T) {
 	wantErr(t, "#[repr]\nstruct P {\n\tx: int\n}", "#[repr] is not yet supported")
 }
 
-// TestUnknownDecoratorInUnsafeGroup checks the pass descends into a module-level
-// `unsafe { }` group, so a bad decorator on an item inside it is still caught.
-func TestUnknownDecoratorInUnsafeGroup(t *testing.T) {
-	wantErr(t, "unsafe {\n#[bogus]\nstruct P {\n\tx: int\n}\n}", `unknown decorator "bogus"`)
+// TestDynNotYetSupported holds the seed's boundary: witness-table dispatch left with
+// the rest of the erased-generic machinery, so '#[dyn]' is reserved rather than
+// silently monomorphized — the author asked for one erased body, not N.
+func TestDynNotYetSupported(t *testing.T) {
+	wantErr(t, "#[dyn]\nfn id[T](x: T) -> T {\n\treturn x\n}", "#[dyn] is not yet supported")
 }

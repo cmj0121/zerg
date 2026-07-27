@@ -16,23 +16,15 @@
 # an alphanumeric — '0'..'9' -> 0..9, 'a'..'z' / 'A'..'Z' -> 10..35. Module-private.
 fn digit_for(b: byte) -> int {
 	v := int(b)
-	if v >= 48 and v <= 57 {
-		return v - 48
-	}
-	if v >= 97 and v <= 122 {
-		return v - 87
-	}
-	if v >= 65 and v <= 90 {
-		return v - 55
-	}
+	return v - 48 if v >= 48 and v <= 57
+	return v - 87 if v >= 97 and v <= 122
+	return v - 55 if v >= 65 and v <= 90
 	return - 1
 }
 
 # digit_char maps a base value 0..35 to its lowercase ASCII digit. Module-private.
 fn digit_char(d: int) -> byte {
-	if d < 10 {
-		return byte(48 + d)
-	}
+	return byte(48 + d) if d < 10
 	return byte(97 + d - 10)
 }
 
@@ -73,9 +65,7 @@ pub fn parse_int(s: str, base: int) -> int {
 		val = val * base + d
 		i = i + 1
 	}
-	if neg {
-		return - val
-	}
+	return - val if neg
 	return val
 }
 
@@ -149,11 +139,7 @@ pub fn to_string(n: int, base: int) -> str {
 # parse_bool parses the literal `"true"` or `"false"`; any other string raises
 # ValueError.
 pub fn parse_bool(s: str) -> bool {
-	if s == "true" {
-		return true
-	}
-	if s == "false" {
-		return false
-	}
+	return true if s == "true"
+	return false if s == "false"
 	raise "strconv.parse_bool: not a bool"
 }

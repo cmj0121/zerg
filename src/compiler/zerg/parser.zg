@@ -18,9 +18,7 @@ struct Parser {
 }
 
 fn cur(mut &p: Parser) -> Token {
-	if p.pos < p.toks.len() {
-		return p.toks[p.pos]
-	}
+	return p.toks[p.pos] if p.pos < p.toks.len()
 	return Token(Eof, "", "", 0, 0)
 }
 
@@ -30,9 +28,7 @@ fn cur_kind(mut &p: Parser) -> Kind {
 
 fn peek_kind(mut &p: Parser, n: int) -> Kind {
 	j := p.pos + n
-	if j < p.toks.len() {
-		return p.toks[j].kind
-	}
+	return p.toks[j].kind if j < p.toks.len()
 	return Eof
 }
 
@@ -84,9 +80,7 @@ fn parse_type(mut &p: Parser) -> Ty {
 	}
 	# `This` is the self type: inside an impl it is the type that impl is for. Resolving it
 	# at parse time keeps it out of the emitter, which has no notion of a self type.
-	if name == "This" and p.impl_ty != "" {
-		return TNamed(p.impl_ty)
-	}
+	return TNamed(p.impl_ty) if name == "This" and p.impl_ty != ""
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
 	if name == "fn" and p_at(p, LParen) {
 		p_advance(p)
@@ -119,28 +113,16 @@ fn parse_type(mut &p: Parser) -> Ty {
 		expect(p, RBrack)
 		return inner
 	}
-	if name == "int" {
-		return TInt
-	}
-	if name == "float" {
-		return TFloat
-	}
-	if name == "str" {
-		return TStr
-	}
-	if name == "bool" {
-		return TBool
-	}
-	if name == "byte" {
-		return TByte
-	}
+	return TInt if name == "int"
+	return TFloat if name == "float"
+	return TStr if name == "str"
+	return TBool if name == "bool"
+	return TByte if name == "byte"
 	if name == "uint" {
 		# the subset models uint as int64_t (it never parses top-bit values)
 		return TInt
 	}
-	if name == "nil" {
-		return TNil
-	}
+	return TNil if name == "nil"
 	return TNamed(name)
 }
 
@@ -150,18 +132,10 @@ fn is_conv(name: str) -> bool {
 }
 
 fn conv_ty(name: str) -> Ty {
-	if name == "int" or name == "uint" {
-		return TInt
-	}
-	if name == "byte" {
-		return TByte
-	}
-	if name == "float" {
-		return TFloat
-	}
-	if name == "bool" {
-		return TBool
-	}
+	return TInt if name == "int" or name == "uint"
+	return TByte if name == "byte"
+	return TFloat if name == "float"
+	return TBool if name == "bool"
 	return TStr
 }
 
@@ -263,9 +237,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 # a type / enum-variant name versus a lowercase binding.
 fn is_pascal(s: str) -> bool {
 	b := list[byte](s)
-	if b.len() == 0 {
-		return false
-	}
+	return false if b.len() == 0
 	v := int(b[0])
 	return v >= 65 and v <= 90
 }
@@ -419,9 +391,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SRaise(parse_expr(p))
 	}
-	if k == Return {
-		return parse_return(p)
-	}
+	return parse_return(p) if k == Return
 	if k == Break {
 		p_advance(p)
 		return SBreak
@@ -430,12 +400,8 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SContinue
 	}
-	if k == If {
-		return parse_if(p)
-	}
-	if k == For {
-		return parse_for(p)
-	}
+	return parse_if(p) if k == If
+	return parse_for(p) if k == For
 	if k == Guard {
 		# guard { ... } (optionally with a trailing else): the subset runs the happy
 		# path only, so emit the guarded block's statements
@@ -455,9 +421,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return parse_binding(p, false)
 	}
-	if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon) {
-		return parse_binding(p, false)
-	}
+	return parse_binding(p, false) if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon)
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
 	if p_at(p, Assign) {
@@ -484,8 +448,19 @@ fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
 
 fn parse_return(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'return'
-	if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof) {
-		return SReturn(false, ENil)
+	return SReturn(false, ENil) if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof)
+	# `return if c` — a bare early exit under a guard. It is desugared here into the
+	# `if c { return }` it is defined as, because SReturnIf carries a VALUE and a bare
+	# return has none; going through the block form means the emitter needs to know
+	# nothing about it. Without this the `if` fell through to parse_expr and was read as an
+	# if-EXPRESSION with no block, which swallowed the rest of the function — silently, and
+	# only where the formatter had just produced the form.
+	if p_at(p, If) {
+		p_advance(p)
+		mut body: list[Stmt] = []
+		body.append(SReturn(false, ENil))
+		mut none: list[Stmt] = []
+		return SIf(parse_expr(p), body, false, none)
 	}
 	e := parse_expr(p)
 	if p_at(p, If) {
@@ -516,9 +491,7 @@ fn parse_if(mut &p: Parser) -> Stmt {
 
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
-	if p_at(p, LBrace) {
-		return SFor(false, ENil, parse_block(p))
-	}
+	return SFor(false, ENil, parse_block(p)) if p_at(p, LBrace)
 	# for-in: `for name in iterable { ... }`
 	if p_at(p, Ident) and peek_kind(p, 1) == In {
 		vname := cur(p).lexeme
@@ -745,9 +718,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, RBrace)
 		return EIf(cond, then_e, else_e)
 	}
-	if k == Match {
-		return parse_match(p)
-	}
+	return parse_match(p) if k == Match
 	p_advance(p)
 	return ENil
 }

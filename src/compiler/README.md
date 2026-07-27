@@ -107,21 +107,10 @@ Each case is a `.zg` program beside the stdout it must produce. The Makefile's
 `CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves
 it is a regression and fails the target. The remaining cases are reported, not enforced —
 eight of them need generics, `derive`, spec bounds, or `#[dyn]`, none of which the
-self-hosting compiler has yet. Two are not missing features but BUGS, and both are the
-kind worth naming:
-
-- `countdown` — `mut n := n` shadowing a parameter emits `int64_t zg_n = zg_n;`, which C
-  rejects as a redefinition. The seed gives every local a unique C name; this emitter does
-  not. Loud: the C compiler refuses it.
-- `value_semantics` — copying a STRUCT copies its `list` fields shallowly, so two names
-  share one buffer and a write by index through either is seen by the other. That breaks
-  the guarantee in [docs/memory.md](../../docs/memory.md) that two names of a value type
-  never alias. **Silent**: the program runs and prints the wrong number. The list paths
-  themselves are right (a list-typed binding or assignment already emits `zrt_list_copy`);
-  what is missing is a per-struct copy that reaches its list fields, which is what the seed
-  generates. Note `append` alone does not expose it — a `zrt_list` carries its own length,
-  so appending through a shared buffer bumps only the writer's — which is why it went
-  unnoticed: everything the compiler's own source does to a list is an append.
+self-hosting compiler has yet. One is not a missing feature but a BUG: `countdown` —
+`mut n := n` shadowing a parameter emits `int64_t zg_n = zg_n;`, which C rejects as a
+redefinition. The seed gives every local a unique C name; this emitter does not. It is at
+least loud: the C compiler refuses it.
 
 Each case that starts passing is a fix or a feature landing, and moves into the list.
 

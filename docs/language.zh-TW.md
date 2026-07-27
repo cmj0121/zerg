@@ -42,6 +42,7 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 | [FFI](ffi.zh-TW.md)                                 | C ABI 邊界——`pub` export、unsafe foreign import          |
 | [內建函式（Built-in Functions）](builtins.zh-TW.md) | 免 import 的固定函式——`Ref`、轉換、error kind            |
 | [標準函式庫（Standard Library）](stdlib.zh-TW.md)   | 可 import 的隨附套件——io、fs、os、time、math、rand…      |
+| [格式化器與檢查器規則](fmt.zh-TW.md)                | `zerg fmt` 與 `zerg lint` 的每一條規則及其代碼           |
 
 ## 型別（Types）
 

@@ -196,18 +196,14 @@ pub fn dump_ast(f: File) -> str {
 }
 
 fn fn_kind(f: FnDecl) -> str {
-	if f.is_pub {
-		return "pub fn"
-	}
+	return "pub fn" if f.is_pub
 	return "fn"
 }
 
 # qual_name shows a method as `Type.name`, so the `--emit ast` view says which impl a
 # function came from — the tree is otherwise flat and two types may name a method alike.
 fn qual_name(f: FnDecl) -> str {
-	if f.recv != "" {
-		return f.recv + "." + f.name
-	}
+	return f.recv + "." + f.name if f.recv != ""
 	return f.name
 }
 

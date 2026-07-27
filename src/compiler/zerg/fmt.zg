@@ -4,25 +4,258 @@
 # nobody runs twice. The token stream keeps them (lexer's trivia mode), so this pass can
 # be strict about spacing and indentation while leaving everything a human wrote in place.
 #
-# The rules, in full:
-#   * a tab per nesting level, `}` closing at the level it opened
-#   * one statement per line — the lexer's inserted `;` IS the line break
-#   * one space around a binary operator, after a comma, and around `=>`
-#   * no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
-#   * a blank line in the source survives as exactly one blank line
-#   * a comment keeps its text, on its own line or trailing the code it followed
+# Every rule has a CODE, so it can be named — in a diagnostic, in a review, on a command
+# line that turns it off. The prefix groups them, the way a Python linter's does, and the
+# grouping is by WHAT A RULE DOES rather than by which pass implements it:
 #
-# It is idempotent by construction: the output is built from the same token stream the
-# input would produce, so formatting formatted source changes nothing.
+#   F1xx  layout        where the line breaks and how far it is indented
+#   F2xx  spacing       where a space goes between two tokens
+#   F3xx  trivia        what happens to what a person wrote for a person
+#   F4xx  rewrites      the rules that MOVE code rather than space it
+#
+# The full table, and the same one docs/fmt.md carries:
+#
+#   F101  one tab per nesting level; `}` closes at the level it opened
+#   F102  one statement per line — the lexer's inserted `;` IS the line break
+#   F103  a wrapped expression continues one level in from its statement
+#   F104  a run of blank lines survives as exactly one
+#   F105  a group that spans lines closes on its own line
+#   F201  one space around a binary operator, after a comma, around `=>`
+#   F202  no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
+#   F301  a comment keeps its text, on its own line or trailing the code it followed
+#   F401  `if c { return x }` becomes the guard it is sugar for, `return x if c`
+#   F402  imports group — standard library first, then the rest — each group alphabetical
+#
+# F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
+# options for them is a formatter two people configure differently. F4xx is different —
+# it changes the code's SHAPE, not its spacing — so it is the group that can be switched
+# off, and `zerg fmt --off F401` does. F105 sits in layout rather than in rewrites because
+# it only decides where an existing token goes.
+#
+# The formatter is idempotent by construction: the output is built from the same token
+# stream the input would produce, so formatting formatted source changes nothing. A rule
+# that MOVES code is a pre-pass over the tokens, so the printer stays one straight walk
+# and the rewrite is not tangled through it.
 
-# fmt_src returns src rewritten in canonical form.
+# fmt_src returns src rewritten in canonical form, every rule enabled.
 pub fn fmt_src(src: str) -> str {
-	toks := tokenize_trivia(src)
+	mut none: list[str] = []
+	return fmt_src_off(src, none)
+}
+
+# fmt_src_off is fmt_src with the named rules switched off.
+pub fn fmt_src_off(src: str, off: list[str]) -> str {
+	mut toks := tokenize_trivia(src)
+	if not fmt_is_off(off, "F401") {
+		toks = fmt_guards(toks)
+	}
+	if not fmt_is_off(off, "F402") {
+		toks = fmt_imports(toks)
+	}
+	return fmt_toks(toks, fmt_is_off(off, "F105"))
+}
+
+fn fmt_is_off(off: list[str], code: str) -> bool {
+	for c in off {
+		return true if c == code
+	}
+	return false
+}
+
+# --- rule: an if-block whose only statement returns becomes a return guard ------------------
+#
+# `return x if c` is defined by GRAMMAR as sugar for `if c { return x }`, so the two say
+# the same thing and one of them says it in four lines. The formatter picks the short one,
+# which is what a guard clause is for: the exceptional exit stops interrupting the shape of
+# the function it guards.
+#
+# It rewrites only what it can rewrite WITHOUT LOSING anything:
+#
+#   * exactly one statement in the block, and it is a `return`;
+#   * no `else` — an else has a second branch that the guard form cannot carry;
+#   * no comment anywhere inside, because a comment is something a person put there and
+#     this pass has nowhere to put it back.
+#
+# Anything else is left exactly as written. A formatter that ate a comment is a formatter
+# nobody runs twice.
+fn fmt_guards(toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		lb := fmt_guard_at(toks, i, out)
+		if lb > 0 {
+			rb := fmt_block_end(toks, lb)
+			fmt_emit_guard(toks, i, lb, rb, out)
+			i = rb + 1
+		} else {
+			out.append(toks[i])
+			i = i + 1
+		}
+	}
+	return out
+}
+
+# fmt_guard_at answers with the `{` of a rewritable if-block starting at `at`, or 0 when
+# the shape is anything else. Every reason to decline is here, in one place.
+fn fmt_guard_at(toks: list[Token], at: int, out: list[Token]) -> int {
+	return 0 if toks[at].kind != If or fmt_is_else_if(out)
+	lb := fmt_block_start(toks, at)
+	return 0 if lb == 0
+	rb := fmt_block_end(toks, lb)
+	return 0 if rb == 0 or not fmt_is_lone_return(toks, lb, rb) or fmt_has_else(toks, rb)
+	return lb
+}
+
+# fmt_emit_guard writes `return <value> if <cond>` from the pieces of `if <cond> { return
+# <value> }`, all on the `if`'s own line so the printer lays it out as one statement.
+fn fmt_emit_guard(toks: list[Token], at: int, lb: int, rb: int, mut &out: list[Token]) {
+	ln := toks[at].line
+	col := toks[at].col
+	out.append(Token(Return, "return", "", ln, col))
+	# the returned value: everything between `return` and the `}`, minus the separators
+	mut i := fmt_ret_at(toks, lb) + 1
+	for i < rb {
+		if not is_semi(toks[i].kind) {
+			out.append(fmt_on_line(toks[i], ln))
+		}
+		i = i + 1
+	}
+	out.append(Token(If, "if", "", ln, col))
+	# the condition: everything between `if` and the `{`
+	mut j := at + 1
+	for j < lb {
+		out.append(fmt_on_line(toks[j], ln))
+		j = j + 1
+	}
+	out.append(Token(Semi, ";", "", ln, col))
+}
+
+fn fmt_on_line(t: Token, ln: int) -> Token {
+	return Token(t.kind, t.lexeme, t.value, ln, t.col)
+}
+
+# fmt_block_start finds the `{` that opens the if's block: the first one at bracket depth
+# zero, so a `{` inside the condition's parentheses is not mistaken for it. It answers 0
+# when the shape is not an if-block at all.
+fn fmt_block_start(toks: list[Token], at: int) -> int {
+	mut depth := 0
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_open(k) {
+			depth = depth + 1
+		} else if is_close(k) {
+			depth = depth - 1
+		} else if is_lbrace(k) and depth == 0 {
+			return i
+		} else if is_semi(k) or is_comment(k) {
+			return 0
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+fn fmt_block_end(toks: list[Token], lb: int) -> int {
+	mut depth := 0
+	mut i := lb
+	for i < toks.len() {
+		if is_lbrace(toks[i].kind) {
+			depth = depth + 1
+		} else if is_rbrace(toks[i].kind) {
+			depth = depth - 1
+			return i if depth == 0
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+# fmt_is_lone_return reports whether the block holds exactly one statement, a `return`,
+# with no comment and no nested block.
+fn fmt_is_lone_return(toks: list[Token], lb: int, rb: int) -> bool {
+	r := fmt_ret_at(toks, lb)
+	return false if r < 0
+	mut i := r + 1
+	for i < rb {
+		k := toks[i].kind
+		return false if is_comment(k) or is_lbrace(k)
+		if is_semi(k) and fmt_more_after(toks, i, rb) {
+			return false # a second statement
+		}
+		i = i + 1
+	}
+	return true
+}
+
+# fmt_ret_at is the index of the block's `return`, skipping the separators the lexer put
+# after the `{`, or -1 when the first thing in the block is not a return.
+fn fmt_ret_at(toks: list[Token], lb: int) -> int {
+	mut i := lb + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_semi(k) {
+			i = i + 1
+		} else if k == Return {
+			return i
+		} else {
+			return - 1
+		}
+	}
+	return - 1
+}
+
+fn fmt_more_after(toks: list[Token], at: int, rb: int) -> bool {
+	mut i := at + 1
+	for i < rb {
+		return true if not is_semi(toks[i].kind)
+		i = i + 1
+	}
+	return false
+}
+
+fn fmt_has_else(toks: list[Token], rb: int) -> bool {
+	mut i := rb + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_semi(k) {
+			i = i + 1
+		} else {
+			return k == Else
+		}
+	}
+	return false
+}
+
+# fmt_is_else_if reports whether the `if` about to be read is the tail of an `else if`,
+# which is a branch of an existing chain rather than a guard of its own.
+fn fmt_is_else_if(out: list[Token]) -> bool {
+	return false if out.len() == 0
+	return out[out.len() - 1].kind == Else
+}
+
+# --- printing -------------------------------------------------------------------------
+
+fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	mut out: list[byte] = []
 	mut depth := 0
 	mut col := 0 # bytes written on the current line
 	mut prev := Semi # the last token that mattered for spacing
 	mut prev_line := 0
+	# One entry per open `(` or `[`: the source line it opened on, and the indent its
+	# closer belongs at. A group that opened on an EARLIER line gets its closer on a line
+	# of its own — which is what turns a wrapped chain into a shape with a visible end,
+	#
+	#     a := (builder()
+	#         .run()
+	#         .fast()
+	#     )
+	#
+	# instead of a `))` that a reader has to count. `psp` is the height rather than the
+	# list's length, so the two lists are reused instead of regrown per group.
+	mut pline: list[int] = []
+	mut pind: list[int] = []
+	mut psp := 0
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
@@ -42,10 +275,26 @@ pub fn fmt_src(src: str) -> str {
 			# `;` there (the line did not end an item), and joining it back up would turn a
 			# wrapped list or a built-up string into one unreadable line. The continuation is
 			# indented one level past its statement, which is what makes it read as one.
-			if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
+			# A closer whose opener was on an earlier line starts its own line, at the
+			# indent the opener's line had. (That indent is never 0 in practice: a group
+			# spanning lines is inside a statement, and a statement is inside a block.)
+			#
+			# It is checked BEFORE the generic continuation, and instead of it: once the
+			# closer sits on its own line, the continuation rule would see a line break too
+			# and break a second time. Running both is what made the first version rewrite
+			# already-formatted source — the one thing this formatter promises not to do.
+			closer := not no_close and is_close(t.kind) and psp > 0 and pline[psp - 1] < t.line
+			mut broke := false
+			if col > 0 and closer {
+				out.append(byte(10))
+				fmt_indent(out, pind[psp - 1])
+				col = pind[psp - 1]
+				broke = true
+			} else if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
 				out.append(byte(10))
 				fmt_indent(out, depth + 1)
 				col = depth + 1
+				broke = true
 			}
 			# A `}` closes its block: it dedents before it is written, and it always starts
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
@@ -66,12 +315,27 @@ pub fn fmt_src(src: str) -> str {
 				}
 				fmt_indent(out, depth)
 				col = depth
-			} else if fmt_space_between(prev, t.kind) {
+			} else if not broke and fmt_space_between(prev, t.kind) {
+				# a line just broken is at its indent and nothing more: the spacing rule
+				# asks about two tokens ON a line, and after `x,` it would put the space
+				# that belongs after the comma at the START of the next line
 				out.append(b' ')
 				col = col + 1
 			}
 			fmt_write(out, fmt_text(t))
 			col = col + 1
+			if is_open(t.kind) {
+				if psp < pline.len() {
+					pline[psp] = t.line
+					pind[psp] = depth
+				} else {
+					pline.append(t.line)
+					pind.append(depth)
+				}
+				psp = psp + 1
+			} else if is_close(t.kind) and psp > 0 {
+				psp = psp - 1
+			}
 			# a `{` opens a block: whatever follows starts on its own line, one deeper
 			if is_lbrace(t.kind) {
 				depth = depth + 1
@@ -96,12 +360,8 @@ pub fn fmt_src(src: str) -> str {
 
 # fmt_text is what a token contributes to the output: its exact source spelling.
 fn fmt_text(t: Token) -> str {
-	if is_comment(t.kind) {
-		return t.lexeme
-	}
-	if t.lexeme != "" {
-		return t.lexeme
-	}
+	return t.lexeme if is_comment(t.kind)
+	return t.lexeme if t.lexeme != ""
 	return kind_name(t.kind)
 }
 
@@ -232,4 +492,194 @@ fn is_comment(k: Kind) -> bool {
 		Comment => true
 		_ => false
 	}
+}
+
+# --- rule F402: imports group, standard library first, each group alphabetical -------------
+#
+# The Go convention, and for the same reason: an import list is READ far more often than it
+# is edited, and one that is grouped and sorted answers "does this file use X" by looking
+# rather than by scanning. The standard library goes first because it is the part a reader
+# already knows; everything else is what this program brought.
+#
+#     import "cli"          import "cli"
+#     import "zerg"    →    import "io"
+#     import "io"
+#                           import "zerg"
+#
+# What counts as standard library is the fixed bundled set, named below. The formatter
+# cannot ask the filesystem — it is handed a string, not a directory — and the set is
+# closed, so naming it here costs one line per module and is checked by the resolver
+# failing loudly on anything else.
+#
+# It rewrites only a run of plain `import "path"` statements at the top of the file, and
+# declines the moment anything else appears among them: a comment (which belongs to the
+# import it sits on, and sorting would strand it), or an `import pub` (whose re-export is
+# an ordering the author chose). Anything declined is left exactly as written.
+fn fmt_imports(toks: list[Token]) -> list[Token] {
+	first := fmt_first_import(toks)
+	return toks if first < 0
+	last := fmt_import_run_end(toks, first)
+	return toks if last < 0
+	paths := fmt_run_paths(toks, first, last)
+	return toks if paths.len() < 2
+	mut out: list[Token] = []
+	mut i := 0
+	for i < first {
+		out.append(toks[i])
+		i = i + 1
+	}
+	ln := toks[first].line
+	end := fmt_emit_imports(paths, ln, out)
+	# Every token after the run shifts by however many lines the run grew or shrank, so the
+	# blank line the author left before the next declaration is still there.
+	shift := end - toks[last].line
+	mut j := last + 1
+	for j < toks.len() {
+		out.append(fmt_on_line(toks[j], toks[j].line + shift))
+		j = j + 1
+	}
+	return out
+}
+
+# fmt_emit_imports writes the sorted paths, a blank line between the two groups, and
+# answers with the line the last one landed on.
+fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int {
+	mut ln := start
+	mut wrote := false
+	for std in [true, false] {
+		mut group := false
+		for p in fmt_sorted(fmt_group(paths, std)) {
+			if wrote {
+				ln = ln + 1
+				if not group {
+					ln = ln + 1 # the blank line between the groups
+				}
+			}
+			out.append(Token(Import, "import", "", ln, 0))
+			out.append(Token(Str, "\"" + p + "\"", p, ln, 0))
+			out.append(Token(Semi, ";", "", ln, 0))
+			wrote = true
+			group = true
+		}
+	}
+	return ln
+}
+
+fn fmt_group(paths: list[str], std: bool) -> list[str] {
+	mut out: list[str] = []
+	for p in paths {
+		if fmt_is_stdlib(p) == std {
+			out.append(p)
+		}
+	}
+	return out
+}
+
+# fmt_sorted returns the paths in alphabetical order. An import list is a handful of names,
+# so an insertion sort is the whole of what this needs.
+fn fmt_sorted(paths: list[str]) -> list[str] {
+	mut out: list[str] = []
+	for p in paths {
+		mut at := 0
+		for at < out.len() and fmt_before(out[at], p) {
+			at = at + 1
+		}
+		out.append(p)
+		mut k := out.len() - 1
+		for k > at {
+			out[k] = out[k - 1]
+			k = k - 1
+		}
+		out[at] = p
+	}
+	return out
+}
+
+# fmt_is_stdlib reports whether a path names a bundled module. A module resolves by its
+# LAST path segment (`import "std/io"` and `import "io"` are the same module), which is
+# what the driver's resolver does, so the test is on that segment.
+fn fmt_is_stdlib(path: str) -> bool {
+	name := fmt_last_segment(path)
+	for m in ["ascii", "atomic", "cli", "fs", "io", "math", "os", "rand", "strconv", "strings", "testing", "time"] {
+		return true if m == name
+	}
+	return false
+}
+
+fn fmt_last_segment(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# fmt_first_import is the index of the first `import`, or -1 when the file has none.
+fn fmt_first_import(toks: list[Token]) -> int {
+	mut i := 0
+	for i < toks.len() {
+		return i if toks[i].kind == Import
+		i = i + 1
+	}
+	return - 1
+}
+
+# fmt_import_run_end is the index of the last token of the run of plain imports starting at
+# `first`, or -1 when the run holds anything this pass will not reorder.
+fn fmt_import_run_end(toks: list[Token], first: int) -> int {
+	mut i := first
+	mut last := - 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if k == Import {
+			return - 1 if toks[i + 1].kind != Str
+			last = i + 1
+			i = i + 2
+		} else if is_semi(k) {
+			last = i
+			i = i + 1
+		} else {
+			return last
+		}
+	}
+	return last
+}
+
+fn fmt_run_paths(toks: list[Token], first: int, last: int) -> list[str] {
+	mut out: list[str] = []
+	mut i := first
+	for i <= last {
+		if toks[i].kind == Import {
+			out.append(toks[i + 1].value)
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# fmt_before reports whether a sorts before b, byte by byte. It is spelled out rather than
+# written `a < b`: this compiler compares strings for EQUALITY only, and an ordering
+# comparison on `str` would compare the pointers — which sorts by where the strings
+# happen to sit in memory, silently, and differently on every run.
+fn fmt_before(a: str, b: str) -> bool {
+	x := list[byte](a)
+	y := list[byte](b)
+	mut i := 0
+	for i < x.len() and i < y.len() {
+		return true if x[i] < y[i]
+		return false if x[i] > y[i]
+		i = i + 1
+	}
+	return x.len() < y.len()
 }

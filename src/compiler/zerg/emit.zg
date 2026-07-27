@@ -121,9 +121,7 @@ fn c_fnptr_cast(t: Ty) -> str {
 }
 
 fn c_ptypes(ps: list[Ty]) -> str {
-	if ps.len() == 0 {
-		return "void"
-	}
+	return "void" if ps.len() == 0
 	mut out := ""
 	mut i := 0
 	for i < ps.len() {
@@ -189,9 +187,7 @@ fn c_is_float(t: Ty) -> bool {
 # c_is_bool_op reports whether a binary operator yields a bool (comparisons and the
 # logical connectives).
 fn c_is_bool_op(oper: str) -> bool {
-	if oper == "==" or oper == "!=" or oper == "<" or oper == ">" or oper == "<=" or oper == ">=" {
-		return true
-	}
+	return true if oper == "==" or oper == "!=" or oper == "<" or oper == ">" or oper == "<=" or oper == ">="
 	return oper == "and" or oper == "or"
 }
 
@@ -226,9 +222,7 @@ fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
 
 fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
 	for c in em.env_cnames {
-		if c == cand {
-			return true
-		}
+		return true if c == cand
 	}
 	return false
 }
@@ -238,9 +232,7 @@ fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
 fn c_var_cname(mut &em: Emitter, name: str) -> str {
 	mut i := em.env_names.len() - 1
 	for i >= 0 {
-		if em.env_names[i] == name {
-			return em.env_cnames[i]
-		}
+		return em.env_cnames[i] if em.env_names[i] == name
 		i = i - 1
 	}
 	return "zg_" + name
@@ -249,9 +241,7 @@ fn c_var_cname(mut &em: Emitter, name: str) -> str {
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 	mut i := em.env_names.len() - 1
 	for i >= 0 {
-		if em.env_names[i] == name {
-			return em.env_tys[i]
-		}
+		return em.env_tys[i] if em.env_names[i] == name
 		i = i - 1
 	}
 	return TUnknown
@@ -262,9 +252,7 @@ fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 # identifier, so a method can never be mistaken for the free function of the same name —
 # which is the whole point, since `App.parse` and the compiler's own `parse` must coexist.
 fn c_sig_key(recv: str, name: str) -> str {
-	if recv == "" {
-		return name
-	}
+	return name if recv == ""
 	return recv + "#" + name
 }
 
@@ -273,9 +261,7 @@ fn c_sig_key(recv: str, name: str) -> str {
 # that space and unable to collide with it, since a type name is PascalCase and so cannot
 # be confused with the snake_case free functions it sits beside.
 fn c_fn_cname(recv: str, name: str) -> str {
-	if recv == "" {
-		return "zg_" + name
-	}
+	return "zg_" + name if recv == ""
 	return "zg_" + recv + "_" + name
 }
 
@@ -301,12 +287,11 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 	}
 }
 
-# c_param_is_ref reports whether parameter `idx` of function `fname` is a mutable
-# reference (so a call must pass its argument's address).
 # c_param_row finds a parameter's row in the tables c_build_sigs filled, or -1 when the
 # function has no such parameter. Everything asked ABOUT a parameter — is it a reference,
-# does it have a default, what is that default — reads its row, so the search happens once
-# per question rather than once per field, and the three answers cannot drift apart.
+# what is its type, does it have a default, what is that default — reads its row, so the
+# search happens once per question rather than once per field, and the answers cannot
+# drift apart.
 #
 # c_build_sigs appends a function's parameters CONTIGUOUSLY in index order, so the row a
 # function's parameter 0 sits at fixes every other one; the scan below stops as soon as it
@@ -317,9 +302,7 @@ fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	mut seen := false
 	for i < em.pr_fn.len() {
 		if em.pr_fn[i] == fname {
-			if em.pr_idx[i] == idx {
-				return i
-			}
+			return i if em.pr_idx[i] == idx
 			seen = true
 		} else if seen {
 			# past the function's own block: it has no parameter idx
@@ -330,20 +313,10 @@ fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	return - 1
 }
 
-fn c_param_is_ref(mut &em: Emitter, fname: str, idx: int) -> bool {
-	row := c_param_row(em, fname, idx)
-	if row < 0 {
-		return false
-	}
-	return em.pr_ref[row]
-}
-
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
 	for i < em.ref_names.len() {
-		if em.ref_names[i] == name {
-			return true
-		}
+		return true if em.ref_names[i] == name
 		i = i + 1
 	}
 	return false
@@ -353,9 +326,7 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
 	mut i := 0
 	for i < em.sig_names.len() {
 		if em.sig_names[i] == name {
-			if em.sig_hasret[i] {
-				return em.sig_rets[i]
-			}
+			return em.sig_rets[i] if em.sig_hasret[i]
 			return TVoid
 		}
 		i = i + 1
@@ -372,9 +343,7 @@ fn c_lookup_sig_ret(mut &em: Emitter, name: str) -> Ty {
 # the two cannot be confused. Deriving them from the one lookup rather than scanning the
 # table again is what keeps them from drifting away from it.
 fn c_has_method(mut &em: Emitter, recv: str, meth: str) -> bool {
-	if recv == "" {
-		return false
-	}
+	return false if recv == ""
 	return not c_is_unknown(c_lookup_sig_ret(em, c_sig_key(recv, meth)))
 }
 
@@ -387,9 +356,7 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # letter is the tell.
 fn c_is_ctor(name: str) -> bool {
 	b := list[byte](name)
-	if b.len() == 0 {
-		return false
-	}
+	return false if b.len() == 0
 	return ascii.is_upper(b[0])
 }
 
@@ -439,9 +406,7 @@ fn c_build_structs(mut &em: Emitter, f: File) {
 fn c_field_ty(mut &em: Emitter, sname: str, fname: str) -> Ty {
 	mut i := 0
 	for i < em.fld_struct.len() {
-		if em.fld_struct[i] == sname and em.fld_name[i] == fname {
-			return em.fld_ty[i]
-		}
+		return em.fld_ty[i] if em.fld_struct[i] == sname and em.fld_name[i] == fname
 		i = i + 1
 	}
 	return TUnknown
@@ -453,9 +418,7 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 	mut i := 0
 	for i < em.fld_struct.len() {
 		if em.fld_struct[i] == sname {
-			if n == idx {
-				return em.fld_ty[i]
-			}
+			return em.fld_ty[i] if n == idx
 			n = n + 1
 		}
 		i = i + 1
@@ -471,7 +434,88 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 		em.used_rt = true
 		return "zg_empty_list(sizeof(" + c_type(c_list_elem(fty)) + "))"
 	}
-	return c_expr(em, arg, sb)
+	return c_copied(em, fty, arg, sb)
+}
+
+# --- value semantics -----------------------------------------------------------------------
+#
+# "Two names of a value type never alias: writing through one is never visible through the
+# other" (docs/memory.md). A scalar or a plain struct gets that from C's own `=`. A `list`
+# does not: it is a handle onto a heap buffer, so a C `=` hands out a second name for the
+# SAME elements — and a struct holding one inherits the problem however deep it sits.
+#
+# So a copy of anything that holds a list goes through a generated per-type helper, and
+# every place a value is COPIED calls it: a binding, an assignment, a field of a struct
+# being built. The helper is where the rule lives, rather than each of those sites knowing
+# how to walk a type.
+#
+# Why the bug survived so long: appending through a shared buffer is invisible. A zrt_list
+# carries its own length, so a push bumps only the writer's, and the reader — whose length
+# never moved — sees nothing. Every list the compiler's own source touches is append-only,
+# so its own tests could never have caught this. It takes a write to an index the other
+# holder can already see, which is what test-data/codegen/value_semantics.zg does.
+
+# c_needs_copy reports whether copying a value of this type has to do more than a C `=`.
+fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
+	return true if c_is_list(t)
+	nm := c_named_of(t)
+	return false if nm == ""
+	# A struct cannot contain itself BY VALUE — that would have no finite size — so this
+	# recursion always terminates. A self-referential type reaches itself through a list,
+	# which answers true above without recursing.
+	mut i := 0
+	for i < em.fld_struct.len() {
+		return true if em.fld_struct[i] == nm and c_needs_copy(em, em.fld_ty[i])
+		i = i + 1
+	}
+	return false
+}
+
+# c_copied renders an expression as an INDEPENDENT copy of itself, when its type needs one.
+#
+# A freshly built value — a call's result, a constructor, a literal — is already nobody
+# else's, so copying it would only cost. Only an lvalue can be a second name for something.
+fn c_copied(mut &em: Emitter, t: Ty, e: Expr, sb: Subst) -> str {
+	rendered := c_expr(em, e, sb)
+	return rendered if not c_is_lvalue(e) or not c_needs_copy(em, t)
+	return c_copy_of(em, t, rendered)
+}
+
+# c_copy_of is HOW a copy is spelled, given something already rendered: a list through the
+# runtime, anything else through its generated helper. It is separate from c_copied so
+# that the helpers below spell a copy the same way every call site does — the rule for
+# what a deep copy IS lives in one function, and a second kind of type that needs one is
+# added here alone.
+fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
+	if c_is_list(t) {
+		em.used_rt = true
+		return "({ zrt_list zg_cp; zrt_list_copy(&zg_cp, &(" + x + ")); zg_cp; })"
+	}
+	return "zg_copy_" + c_named_of(t) + "(" + x + ")"
+}
+
+# c_copy_helpers emits one `zg_copy_<T>` per struct that holds a list, after the typedefs
+# and before anything that calls them.
+fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
+	mut out := ""
+	for sd in f.structs {
+		if c_needs_copy(em, TNamed(sd.name)) {
+			out = out + c_copy_helper(em, sd)
+		}
+	}
+	return out
+}
+
+fn c_copy_helper(mut &em: Emitter, sd: StructDecl) -> str {
+	nm := "zg_" + sd.name
+	mut out := "static " + nm + " zg_copy_" + sd.name + "(" + nm + " v) {\n"
+	out = out + "    " + nm + " r = v;\n"
+	for fd in sd.fields {
+		if c_needs_copy(em, fd.ty) {
+			out = out + "    r.zg_" + fd.name + " = " + c_copy_of(em, fd.ty, "v.zg_" + fd.name) + ";\n"
+		}
+	}
+	return out + "    return r;\n}\n\n"
 }
 
 # c_struct_typedef emits a value struct as a C typedef with zg_-mangled fields.
@@ -525,9 +569,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 fn c_is_boxed(mut &em: Emitter, variant: str, idx: int) -> bool {
 	mut i := 0
 	for i < em.vf_variant.len() {
-		if em.vf_variant[i] == variant and em.vf_index[i] == idx {
-			return em.vf_boxed[i]
-		}
+		return em.vf_boxed[i] if em.vf_variant[i] == variant and em.vf_index[i] == idx
 		i = i + 1
 	}
 	return false
@@ -536,9 +578,7 @@ fn c_is_boxed(mut &em: Emitter, variant: str, idx: int) -> bool {
 fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 	mut i := 0
 	for i < em.vf_variant.len() {
-		if em.vf_variant[i] == variant and em.vf_index[i] == idx {
-			return em.vf_ty[i]
-		}
+		return em.vf_ty[i] if em.vf_variant[i] == variant and em.vf_index[i] == idx
 		i = i + 1
 	}
 	return TUnknown
@@ -561,9 +601,7 @@ fn c_bind_env(mut &em: Emitter, a: Arm) {
 fn c_needs_runtime(mut &em: Emitter) -> bool {
 	mut i := 0
 	for i < em.vf_boxed.len() {
-		if em.vf_boxed[i] {
-			return true
-		}
+		return true if em.vf_boxed[i]
 		i = i + 1
 	}
 	return false
@@ -572,9 +610,7 @@ fn c_needs_runtime(mut &em: Emitter) -> bool {
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
 	for i < em.var_name.len() {
-		if em.var_name[i] == name {
-			return true
-		}
+		return true if em.var_name[i] == name
 		i = i + 1
 	}
 	return false
@@ -583,9 +619,7 @@ fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 fn c_variant_enum(mut &em: Emitter, name: str) -> str {
 	mut i := 0
 	for i < em.var_name.len() {
-		if em.var_name[i] == name {
-			return em.var_enum[i]
-		}
+		return em.var_enum[i] if em.var_name[i] == name
 		i = i + 1
 	}
 	return ""
@@ -594,9 +628,7 @@ fn c_variant_enum(mut &em: Emitter, name: str) -> str {
 fn c_variant_tag(mut &em: Emitter, name: str) -> int {
 	mut i := 0
 	for i < em.var_name.len() {
-		if em.var_name[i] == name {
-			return em.var_tag[i]
-		}
+		return em.var_tag[i] if em.var_name[i] == name
 		i = i + 1
 	}
 	return 0
@@ -656,9 +688,7 @@ fn c_refbox_helpers(ed: EnumDecl) -> str {
 		}
 		i = i + 1
 	}
-	if not anybox {
-		return ""
-	}
+	return "" if not anybox
 	nm := ed.name
 	mut out := "static void zg_noopdrop_" + nm + "(void* p) { (void)p; }\n"
 	out = out + "static void* zg_refnew_" + nm + "(zg_" + nm + " v) {\n"
@@ -673,31 +703,17 @@ fn c_refbox_helpers(ed: EnumDecl) -> str {
 # c_binop maps a Zerg binary operator spelling to its C form; the wrapping operators
 # lower to the plain C operator (arithmetic does not yet trap).
 fn c_binop(oper: str) -> str {
-	if oper == "and" {
-		return "&&"
-	}
-	if oper == "or" {
-		return "||"
-	}
-	if oper == "*%" {
-		return "*"
-	}
-	if oper == "+%" {
-		return "+"
-	}
-	if oper == "-%" {
-		return "-"
-	}
+	return "&&" if oper == "and"
+	return "||" if oper == "or"
+	return "*" if oper == "*%"
+	return "+" if oper == "+%"
+	return "-" if oper == "-%"
 	return oper
 }
 
 fn c_unop(oper: str) -> str {
-	if oper == "not" {
-		return "!"
-	}
-	if oper == "-%" {
-		return "-"
-	}
+	return "!" if oper == "not"
+	return "-" if oper == "-%"
 	return oper
 }
 
@@ -736,9 +752,7 @@ fn c_int_dec(lex: str) -> str {
 }
 
 fn c_bool(b: bool) -> str {
-	if b {
-		return "true"
-	}
+	return "true" if b
 	return "false"
 }
 
@@ -778,31 +792,21 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 			em.used_rt = true
 			return "zgs_concat(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ")"
 		}
-		if oper == "==" {
-			return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") == 0)"
-		}
-		if oper == "!=" {
-			return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") != 0)"
-		}
+		return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") == 0)" if oper == "=="
+		return "(strcmp(" + c_expr(em, a, sb) + ", " + c_expr(em, b, sb) + ") != 0)" if oper == "!="
 	}
 	# enum equality compares the tag (the subset only == tag-only enums like Kind)
-	if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=") {
-		return "((" + c_expr(em, a, sb) + ").tag " + oper + " (" + c_expr(em, b, sb) + ").tag)"
-	}
+	return "((" + c_expr(em, a, sb) + ").tag " + oper + " (" + c_expr(em, b, sb) + ").tag)" if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=")
 	return "(" + c_expr(em, a, sb) + " " + c_binop(oper) + " " + c_expr(em, b, sb) + ")"
 }
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
 fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 	nm := c_named_of(t)
-	if nm == "" {
-		return false
-	}
+	return false if nm == ""
 	mut i := 0
 	for i < em.enum_names.len() {
-		if em.enum_names[i] == nm {
-			return true
-		}
+		return true if em.enum_names[i] == nm
 		i = i + 1
 	}
 	return false
@@ -832,9 +836,7 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	ct := c_type(c_list_elem(c_infer(em, target)))
 	tgt := c_expr(em, target, sb)
 	ix := c_expr(em, idx, sb)
-	if c_is_lvalue(target) {
-		return "(*(" + ct + "*)zrt_list_at(&(" + tgt + "), " + ix + "))"
-	}
+	return "(*(" + ct + "*)zrt_list_at(&(" + tgt + "), " + ix + "))" if c_is_lvalue(target)
 	# a call/conversion result is an rvalue; materialise it so its address is taken
 	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)zrt_list_at(&zg_ix, " + ix + ")); })"
 }
@@ -875,15 +877,9 @@ enum MethKind {
 }
 
 fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
-	if c_is_list(tty) {
-		return MList
-	}
-	if c_has_method(em, c_named_of(tty), meth) {
-		return MRecv
-	}
-	if c_is_fn(c_field_ty(em, c_named_of(tty), meth)) {
-		return MFnField
-	}
+	return MList if c_is_list(tty)
+	return MRecv if c_has_method(em, c_named_of(tty), meth)
+	return MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 	return MFree
 }
 
@@ -901,12 +897,13 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
 	tgt := c_expr(em, target, sb)
-	if meth == "len" {
-		return "((int64_t)zrt_list_len(&(" + tgt + ")))"
-	}
+	return "((int64_t)zrt_list_len(&(" + tgt + ")))" if meth == "len"
 	if meth == "append" {
+		# the element is copied INTO the list, so the list owns it and the caller's name
+		# for it goes on being its own
 		et := c_type(c_list_elem(tty))
-		return "({ " + et + " zg_le = " + c_expr(em, args[0], sb) + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
+		el := c_copied(em, c_list_elem(tty), args[0], sb)
+		return "({ " + et + " zg_le = " + el + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 	}
 	return tgt
 }
@@ -916,20 +913,11 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 # index 0 there — get that wrong and a `mut &` argument is passed by value to the slot
 # after the one that wanted its address.
 fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: Subst) -> str {
-	mut out := c_expr(em, target, sb)
-	mut i := 0
-	for i < args.len() {
-		mut a := c_expr(em, args[i], sb)
-		if c_param_is_ref(em, key, i + 1) {
-			a = "&(" + a + ")"
-		}
-		out = out + ", " + a
-		i = i + 1
-	}
-	# the receiver already stands where parameter 0 does, so the first argument a method
-	# can omit is at args.len() + 1 — and there is always a leading argument to separate
+	# the receiver is parameter 0 and is passed by value, so it is copied like any other;
+	# the written arguments then start at 1, and there is always a leading one to separate
 	# from, which a free call cannot assume
-	return out + c_default_args(em, key, args.len() + 1, true)
+	recv := c_copied(em, c_param_ty(em, key, 0), target, sb)
+	return recv + c_args_from(em, key, 1, args, true, sb)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -947,9 +935,7 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 # one that fits comes from the declaration it initializes, and the binding and field paths
 # already supply it.
 fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
-	if elems.len() == 0 {
-		return "(zrt_list){0}"
-	}
+	return "(zrt_list){0}" if elems.len() == 0
 	em.used_rt = true
 	et := c_type(c_infer(em, elems[0]))
 	mut out := "({ zrt_list zg_ll = zg_empty_list(sizeof(" + et + "));"
@@ -978,13 +964,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	if c_is_fn(bt) {
-		return "(" + c_fnptr_cast(bt) + c_ident_val(em, name, sb) + ")(" + c_args(em, args, sb) + ")"
-	}
+	return "(" + c_fnptr_cast(bt) + c_ident_val(em, name, sb) + ")(" + c_args(em, args, sb) + ")" if c_is_fn(bt)
 	if c_is_ctor(name) {
-		if c_is_variant(em, name) {
-			return c_variant_ctor(em, name, args, sb)
-		}
+		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
 	return "zg_" + name + "(" + c_call_args(em, name, args, sb) + ")"
@@ -1008,20 +990,49 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 # c_call_args emits a call's arguments, taking the address of any argument bound to a
 # mutable-reference parameter (which is a C pointer).
 fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str {
+	return c_args_from(em, fname, 0, args, false, sb)
+}
+
+# c_args_from renders a call's written arguments against the parameters starting at `base`,
+# then the defaults for whatever was left off. `base` is 0 for a free call and 1 for a
+# method, whose receiver already stands where parameter 0 does — the shift is written down
+# once here rather than in each caller, because getting it wrong passes a `mut &` argument
+# by value into the slot after the one that wanted its address.
+fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bool, sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
-		if i > 0 {
+		if lead or i > 0 {
 			out = out + ", "
 		}
-		mut a := c_expr(em, args[i], sb)
-		if c_param_is_ref(em, fname, i) {
-			a = "&(" + a + ")"
-		}
-		out = out + a
+		out = out + c_arg(em, key, base + i, args[i], sb)
 		i = i + 1
 	}
-	return out + c_default_args(em, fname, args.len(), out != "")
+	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+}
+
+# c_arg renders ONE argument against the parameter it fills. A `mut &` parameter takes the
+# caller's variable itself — that is the whole point of the writeback — and every other
+# one takes a value the callee OWNS, which is why it is copied.
+#
+# Copying here rather than at the `return` is what lets a function hand back a parameter:
+# once the callee's copy is its own, returning it aliases nothing, and a call's result can
+# go on being treated as nobody else's. Copying at the return instead would have to copy a
+# local that is about to die, which is pure waste and needs escape analysis to avoid.
+fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
+	# the one place that reads the row directly rather than through the per-column
+	# helpers: it needs two answers about the same parameter, and asking twice would walk
+	# the whole program's parameter table twice for every argument of every call
+	row := c_param_row(em, fname, idx)
+	return "&(" + c_expr(em, a, sb) + ")" if row >= 0 and em.pr_ref[row]
+	return c_expr(em, a, sb) if row < 0
+	return c_copied(em, em.pr_ty[row], a, sb)
+}
+
+fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
+	row := c_param_row(em, fname, idx)
+	return TUnknown if row < 0
+	return em.pr_ty[row]
 }
 
 # c_default_args fills in the parameters a call left off the end, in declaration order,
@@ -1049,17 +1060,13 @@ fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 
 fn c_param_has_def(mut &em: Emitter, fname: str, idx: int) -> bool {
 	row := c_param_row(em, fname, idx)
-	if row < 0 {
-		return false
-	}
+	return false if row < 0
 	return em.pr_hasdef[row]
 }
 
 fn c_param_def(mut &em: Emitter, fname: str, idx: int) -> Expr {
 	row := c_param_row(em, fname, idx)
-	if row < 0 {
-		return ENil
-	}
+	return ENil if row < 0
 	return em.pr_def[row]
 }
 
@@ -1093,14 +1100,10 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	mut i := 0
 	for i < sb.names.len() {
-		if sb.names[i] == n {
-			return sb.repls[i]
-		}
+		return sb.repls[i] if sb.names[i] == n
 		i = i + 1
 	}
-	if c_is_variant(em, n) {
-		return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}"
-	}
+	return "(zg_" + c_variant_enum(em, n) + "){.tag = " + strconv.to_string(c_variant_tag(em, n), 10) + "}" if c_is_variant(em, n)
 	if c_is_ref_name(em, n) {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return "(*zg_" + n + ")"
@@ -1157,9 +1160,7 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 
 fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
 	a := arms[i]
-	if i == arms.len() - 1 {
-		return c_arm_body(em, a, s, sb)
-	}
+	return c_arm_body(em, a, s, sb) if i == arms.len() - 1
 	cond := c_arm_cond(em, a, s, sb)
 	body := c_arm_body(em, a, s, sb)
 	rest := c_arms(em, arms, i + 1, s, sb)
@@ -1169,9 +1170,7 @@ fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
 # constructor arm aliases each payload name to its `s.u.Var.fK` field access.
 fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> Subst {
-	if a.pat == 1 {
-		return c_extend(sb, a.bind, s)
-	}
+	return c_extend(sb, a.bind, s) if a.pat == 1
 	if a.pat == 3 {
 		en := c_variant_enum(em, a.ctor)
 		mut r := sb
@@ -1198,14 +1197,10 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
 	}
 	if a.pat == 3 {
 		base := "(" + s + ".tag == " + strconv.to_string(c_variant_tag(em, a.ctor), 10) + ")"
-		if a.has_guard {
-			return "(" + base + " && " + c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb)) + ")"
-		}
+		return "(" + base + " && " + c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb)) + ")" if a.has_guard
 		return base
 	}
-	if a.has_guard {
-		return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb))
-	}
+	return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb)) if a.has_guard
 	return "1"
 }
 
@@ -1253,42 +1248,28 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 }
 
 fn c_list_method_ret(meth: str) -> Ty {
-	if meth == "len" {
-		return TInt
-	}
+	return TInt if meth == "len"
 	return TNil
 }
 
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
-	if c_is_intrinsic(name) {
-		return c_intrinsic_ret(name)
-	}
-	if c_is_variant(em, name) {
-		return TNamed(c_variant_enum(em, name))
-	}
-	if c_is_ctor(name) {
-		return TNamed(name)
-	}
+	return c_intrinsic_ret(name) if c_is_intrinsic(name)
+	return TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
+	return TNamed(name) if c_is_ctor(name)
 	return c_lookup_sig_ret(em, name)
 }
 
 # c_is_intrinsic reports whether a name is a runtime intrinsic (a __zrt_ primitive).
 fn c_is_intrinsic(name: str) -> bool {
 	b := list[byte](name)
-	if b.len() < 2 {
-		return false
-	}
+	return false if b.len() < 2
 	return b[0] == b'_' and b[1] == b'_'
 }
 
 # c_intrinsic maps a __zrt_ intrinsic to its runtime C symbol.
 fn c_intrinsic(name: str) -> str {
-	if name == "__zrt_write" {
-		return "zrt_write_str"
-	}
-	if name == "__zrt_read" {
-		return "zrt_read_fd"
-	}
+	return "zrt_write_str" if name == "__zrt_write"
+	return "zrt_read_fd" if name == "__zrt_read"
 	b := list[byte](name)
 	mut out: list[byte] = []
 	mut i := 2
@@ -1301,62 +1282,38 @@ fn c_intrinsic(name: str) -> str {
 
 # c_intrinsic_ret gives the result type of the intrinsics the compiler's I/O uses.
 fn c_intrinsic_ret(name: str) -> Ty {
-	if name == "__zrt_read" {
-		return TList(TByte)
-	}
-	if name == "__zrt_listdir" {
-		return TList(TStr)
-	}
-	if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait" {
-		return TInt
-	}
-	if name == "__zrt_getenv" {
-		return TStr
-	}
-	if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" {
-		return TBool
-	}
+	return TList(TByte) if name == "__zrt_read"
+	return TList(TStr) if name == "__zrt_listdir"
+	return TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
+	return TStr if name == "__zrt_getenv"
+	return TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir"
 	return TNil
 }
 
 # c_infer_listlit types a list literal from its FIRST element. An empty one names no
 # element type at all, so it stays unknown and takes the type of whatever it initializes.
 fn c_infer_listlit(mut &em: Emitter, elems: list[Expr]) -> Ty {
-	if elems.len() == 0 {
-		return TUnknown
-	}
+	return TUnknown if elems.len() == 0
 	return TList(c_infer(em, elems[0]))
 }
 
 fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
-	if c_is_variant(em, n) {
-		return TNamed(c_variant_enum(em, n))
-	}
+	return TNamed(c_variant_enum(em, n)) if c_is_variant(em, n)
 	t := c_lookup_var(em, n)
 	# nothing bound the name, but a function answers to it: the name IS that function
-	if c_is_unknown(t) and c_is_free_fn(em, n) {
-		return c_fn_ty_of(em, n)
-	}
+	return c_fn_ty_of(em, n) if c_is_unknown(t) and c_is_free_fn(em, n)
 	return t
 }
 
 fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
-	if oper == "not" {
-		return TBool
-	}
+	return TBool if oper == "not"
 	return c_infer(em, x)
 }
 
 fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
-	if c_is_bool_op(oper) {
-		return TBool
-	}
-	if oper == "+" and c_is_str(c_infer(em, a)) {
-		return TStr
-	}
-	if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b)) {
-		return TFloat
-	}
+	return TBool if c_is_bool_op(oper)
+	return TStr if oper == "+" and c_is_str(c_infer(em, a))
+	return TFloat if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b))
 	return TInt
 }
 
@@ -1401,11 +1358,9 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 		mut out := ind + "zrt_list_init(&(" + lv + "), sizeof(" + et + "), &zg_listvt);\n"
 		return out + c_pushes(em, "(" + lv + ")", et, rhs, ind)
 	}
-	if c_is_list(lt) and c_is_lvalue(rhs) {
-		# value semantics: assigning an existing list makes an independent copy
-		return ind + "zrt_list_copy(&(" + lv + "), &(" + c_expr(em, rhs, c_nosub()) + "));\n"
-	}
-	return ind + lv + " = " + c_expr(em, rhs, c_nosub()) + ";\n"
+	# Every other assignment copies through the one rule — including a list, which used to
+	# have its own branch here saying the same thing a second way.
+	return ind + lv + " = " + c_copied(em, lt, rhs, c_nosub()) + ";\n"
 }
 
 # c_pushes emits a zrt_list_push per element of a list literal.
@@ -1479,13 +1434,11 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	if not has_type {
 		eff = c_infer(em, ival)
 	}
-	if c_is_list(eff) {
-		return c_let_list(em, name, eff, ival, ind)
-	}
+	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
 	# right-hand side names the OUTER n, and resolving it after would make the new
 	# variable initialize itself.
-	val := c_expr(em, ival, c_nosub())
+	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff)
 	return ind + c_type(eff) + " " + c_var_cname(em, name) + " = " + val + ";\n"
 }
@@ -1503,16 +1456,11 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 		mut out := ind + "zrt_list " + cname + "; zrt_list_init(&" + cname + ", sizeof(" + et + "), &zg_listvt);\n"
 		return out + c_pushes_strs(cname, et, vals, ind)
 	}
-	val := c_expr(em, ival, c_nosub())
-	lv := c_is_lvalue(ival)
+	# Anything else — another list, a call's result — binds through the one copy rule, the
+	# same one every other site uses.
+	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff)
-	cname := c_var_cname(em, name)
-	if lv {
-		# value semantics: binding from an existing list makes an independent copy so a
-		# later append does not alias the source (leak-style still never drops)
-		return ind + "zrt_list " + cname + "; zrt_list_copy(&" + cname + ", &(" + val + "));\n"
-	}
-	return ind + "zrt_list " + cname + " = " + val + ";\n"
+	return ind + "zrt_list " + c_var_cname(em, name) + " = " + val + ";\n"
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
@@ -1528,9 +1476,7 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 
 fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# `return nil` from a nil/Result[nil] function is a bare C return
-	if has_val and not c_is_nil_expr(e) {
-		return ind + "return " + c_expr(em, e, c_nosub()) + ";\n"
-	}
+	return ind + "return " + c_expr(em, e, c_nosub()) + ";\n" if has_val and not c_is_nil_expr(e)
 	return ind + "return;\n"
 }
 
@@ -1570,9 +1516,7 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 # a real warning has to be spotted among, and one nearly was not.
 fn c_cond(mut &em: Emitter, x: Expr) -> str {
 	rendered := c_expr(em, x, c_nosub())
-	if c_is_wrapped(rendered) {
-		return rendered
-	}
+	return rendered if c_is_wrapped(rendered)
 	return "(" + rendered + ")"
 }
 
@@ -1581,9 +1525,7 @@ fn c_cond(mut &em: Emitter, x: Expr) -> str {
 # like `(a) + (b)`.
 fn c_is_wrapped(s: str) -> bool {
 	b := list[byte](s)
-	if b.len() < 2 or b[0] != b'(' or b[b.len() - 1] != b')' {
-		return false
-	}
+	return false if b.len() < 2 or b[0] != b'(' or b[b.len() - 1] != b')'
 	mut depth := 0
 	mut i := 0
 	for i < b.len() {
@@ -1592,9 +1534,7 @@ fn c_is_wrapped(s: str) -> bool {
 		}
 		if b[i] == b')' {
 			depth = depth - 1
-			if depth == 0 and i < b.len() - 1 {
-				return false
-			}
+			return false if depth == 0 and i < b.len() - 1
 		}
 		i = i + 1
 	}
@@ -1605,9 +1545,7 @@ fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 	# `raise ValueError("…")` already names an Err; only a bare message needs one built
 	# around it. Wrapping both would make an Err whose payload is an Err.
-	if c_is_err_ctor(em, x) {
-		return ind + "zrt_raise_err(" + c_expr(em, x, c_nosub()) + ");\n"
-	}
+	return ind + "zrt_raise_err(" + c_expr(em, x, c_nosub()) + ");\n" if c_is_err_ctor(em, x)
 	return ind + "zrt_raise_err(zrt_err_new(" + c_expr(em, x, c_nosub()) + "));\n"
 }
 
@@ -1623,24 +1561,12 @@ fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 # from the seed's own table, so a `raise ValueError(…)` and a runtime abort that says
 # "ValueError" reify to the same kind whichever compiler built the program.
 fn c_err_kind(name: str) -> int {
-	if name == "ValueError" {
-		return 1
-	}
-	if name == "OverflowError" {
-		return 2
-	}
-	if name == "IOError" {
-		return 3
-	}
-	if name == "EncodingError" {
-		return 4
-	}
-	if name == "IndexError" {
-		return 5
-	}
-	if name == "KeyError" {
-		return 6
-	}
+	return 1 if name == "ValueError"
+	return 2 if name == "OverflowError"
+	return 3 if name == "IOError"
+	return 4 if name == "EncodingError"
+	return 5 if name == "IndexError"
+	return 6 if name == "KeyError"
 	return 0
 }
 
@@ -1657,9 +1583,7 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 # --- declaration emission ------------------------------------------------------
 
 fn c_ret_type(fn_d: FnDecl) -> str {
-	if fn_d.has_ret and not c_is_nil_ty(fn_d.ret) {
-		return c_type(fn_d.ret)
-	}
+	return c_type(fn_d.ret) if fn_d.has_ret and not c_is_nil_ty(fn_d.ret)
 	return "void"
 }
 
@@ -1672,9 +1596,7 @@ fn c_is_nil_ty(t: Ty) -> bool {
 }
 
 fn c_param_types(fn_d: FnDecl) -> str {
-	if fn_d.params.len() == 0 {
-		return "void"
-	}
+	return "void" if fn_d.params.len() == 0
 	mut out := ""
 	mut i := 0
 	for i < fn_d.params.len() {
@@ -1727,9 +1649,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
-		if f.fns[i].name == "main" and f.fns[i].recv == "" {
-			return true
-		}
+		return true if f.fns[i].name == "main" and f.fns[i].recv == ""
 		i = i + 1
 	}
 	return false
@@ -1738,9 +1658,7 @@ fn c_has_main(f: File) -> bool {
 fn c_main_has_args(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
-		if f.fns[i].name == "main" and f.fns[i].recv == "" and f.fns[i].params.len() > 0 {
-			return true
-		}
+		return true if f.fns[i].name == "main" and f.fns[i].recv == "" and f.fns[i].params.len() > 0
 		i = i + 1
 	}
 	return false
@@ -1859,6 +1777,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 		types = types + c_refbox_helpers(f.enums[i])
 		i = i + 1
 	}
+	# after the typedefs, because a helper names the struct it copies, and before the
+	# prototypes and bodies, which are what call them
+	types = types + c_copy_helpers(em, f)
 
 	mut protos := ""
 	i = 0

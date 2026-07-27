@@ -16,9 +16,7 @@
 # seed builds a generator state from n. xorshift64* requires a NON-zero state, so a zero
 # seed is mapped to a fixed non-zero constant; every other seed is used as-is.
 pub fn seed(n: uint) -> uint {
-	if n == 0 {
-		return 0x2545F4914F6CDD1D
-	}
+	return 0x2545F4914F6CDD1D if n == 0
 	return n
 }
 

@@ -38,7 +38,8 @@ channel——但那是協作式通知、不是 ownership：coroutine 觀察到 c
 
 > **一個 channel 的 `send` happens-before 對應的 `receive` 完成。**
 
-這條 happens-before 邊是 **[implemented]** 的保證。接收端因此看到的是**完整建構好**的 payload（在 send 當下快照）；
+這條 happens-before 邊是 **[not yet]** 的保證——coroutine 與 channel 曾建成，又已從種子移除，因此今天
+`spawn` 會得到乾淨的錯誤。接收端因此看到的是**完整建構好**的 payload（在 send 當下快照）；
 除此之外沒有任何跨 coroutine 的 ordering 存在、也不需要。這就是 memory model 的全部。任何**超出**這條邊的
 ordering——ready coroutine 被恢復的 run-queue 順序、未同步 coroutine 之間的交錯——都是
 **[implementation-defined]**：今日 N:1 runtime 以決定性 FIFO 順序恢復可執行的 coroutine，但任何程式都不得依賴它。
@@ -73,7 +74,7 @@ ch := chan[int](64)    # buffered，容量 64
 receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
 
 本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send abort、
-最後 sender 自動 close——皆為 **[implemented]**。與規格分歧的兩處是 send-to-closed 的 abort **種類**
+最後 sender 自動 close——皆為 **[not yet]**。與規格分歧的兩處是 send-to-closed 的 abort **種類**
 （`SendOnClosedError` 為 **[not yet]**——abort 仍會以泛用訊息觸發）與 `DeadlockError`（**[deviation]**，見 `select`
 與「收尾與 deadlock」）。
 

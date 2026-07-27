@@ -8,7 +8,9 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-Three decorators are **[implemented]** today — `#[derive]`, `#[dyn]`, and `#[test]`:
+One decorator is **[implemented]** today — `#[derive]`. `#[dyn]` and `#[test]` are
+**[not yet]**: both were built and then removed when the seed was cut down to building the
+compiler, and using either is a clean error (`#[dyn] is not yet supported`).
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
   from the type's **structure**. The blessed set is **`Eq`** and **`Ord`** (**[implemented]**), with

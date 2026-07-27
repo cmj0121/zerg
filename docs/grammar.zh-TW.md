@@ -489,7 +489,7 @@ tags: str? }` → `Config(host: "x")` 得 `port = 8080`、`tags = nil`,而省略
   `#[derive(Encode, Decode)]` 請 compiler 讀該型別的**結構**、**生成**所列 spec 的 canonical impl（見
   [Derive & Default Behavior](derive.md)）；logging decorator 則會掛在 `fn` 上。decorator 是**固定、compiler
   擁有**的集合——使用者不可自訂(Zerg 無 macro);**未知或拼錯的 decorator 是編譯錯誤**,絕不被默默丟棄。今日已實作:
-  `#[derive]`、`#[dyn]`、`#[test]`;`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,
+  `#[derive]`（`#[dyn]` 與 `#[test]` 曾建成又已移除）;`#[sealed]` 與 layout 指令(`#[repr]` / `#[packed]` / `#[align]`)是保留名稱,
   在實作前會被識別並拒絕。`#[` 是唯一不算註解的
   `#`——lexer peek 一字元即分辨。
 

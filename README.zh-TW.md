@@ -40,30 +40,29 @@ Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.z
 先建置 bootstrap 工具鏈（需要 Go ≥ 1.26 與一個 C 編譯器），再編譯一支程式：
 
 ```sh
-make                        # ./bin/zerg0（Go 種子），再由它建出 ./bin/zerg
+make                                 # ./bin/zerg0（Go 種子），再建出 ./bin/zerg
 cat > hello.zg <<'ZG'
 fn main() {
     print "hello, world"
 }
 ZG
-./bin/zerg0 build hello.zg  # 產生 C，再呼叫 cc → ./hello
-./hello                     # hello, world
+./bin/zerg build --emit bin hello.zg # 產生 C，再呼叫 cc → ./hello
+./hello                              # hello, world
 ```
 
-`make` 會建出兩個編譯器。`zerg0` 是以 Go 實作的種子——quickstart 用的就是它，今天整條工具鏈也仍由它承擔。
-`zerg` 是種子從 [`src/compiler/`](src/compiler) 建出的自舉編譯器；它能編譯自己，但還不是你日常會拿起的那把
-工具（需要顯式列出原始檔，且以 repo 根目錄為基準解析 runtime）。這個名字保留給它，因為那是它要去的地方。
+`make` 會建出兩個編譯器，你用的是第二個。`zerg0` 是以 Go 實作的種子，已被裁減到只剩一個工作：建出編譯器。
+`zerg` 就是那個編譯器——以 Zerg 寫成，位於 [`src/compiler/`](src/compiler)，並且由它自己編譯（種子只建出一個
+中繼，再由中繼建出最終出貨的那個）。
 
-單一的 `zerg` 工具預計帶著你需要的子指令：
+| 指令                        | 作用                                        |
+| --------------------------- | ------------------------------------------- |
+| `zerg build <file>`         | 把一個模組編成 object（`--emit lib`，預設） |
+| `zerg build --emit bin <f>` | 連結成一支程式                              |
+| `zerg fmt <file>`           | 把原始碼改寫成唯一的正規風格                |
+| `zerg lint <file>`          | 回報未使用的 import 與死掉的私有宣告        |
 
-| 指令                | 作用                                 |
-| ------------------- | ------------------------------------ |
-| `zerg build <file>` | 把一支 `.zg` 程式編成原生 binary     |
-| `zerg fmt <file>`   | 把原始碼格式化成唯一的正規風格       |
-| `zerg lint <file>`  | 回報未使用的 import 與死掉的私有宣告 |
-| `zerg test <file>`  | 執行程式裡的 `#[test]` 函式          |
-
-`zerg build … --emit c`（或 `tokens` / `ast`）會印出中間形式，而不是實際建置。
+`--emit` 另外接受 `tokens`、`ast`、`c`，印出中間形式而不產生檔案。程式是逐模組建置的：`-j` 可同時編譯多個
+單元，結果以內容為鍵快取在 `.zerg-cache/`，所以只改一個模組的重建就只重編那一個模組。
 
 ## 小核心，一點糖
 
@@ -86,13 +85,13 @@ struct Point { x: int; y: int }
 
 一組**固定**的、編譯器內建的函式——免 `import`：
 
-| 內建                                      | 作用                                                                       |
-| ----------------------------------------- | -------------------------------------------------------------------------- |
-| `Ref(x)` / `deref(r)`                     | 建立 / 讀取 reference-counted box                                          |
-| `int` `uint` `float` `bool` `byte` `rune` | 原生型別轉換 `T(x)`；`int("…")` 另會解析十進位字串                         |
-| `str(bytes)`、`list[byte](s)`             | str ⇄ list 的橋接（另有 `runes`）                                          |
-| `ValueError` … `KeyError`                 | 建出該固定 kind 的 `Err`                                                   |
-| `addr` `ptr` `ptr[T]` `uint(p)`           | raw pointer 運算——**僅限 `unsafe`**（加上 `.load` / `.store` / `.offset`） |
+| 內建                                      | 作用                                                     |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `Ref(x)` / `deref(r)`                     | 建立 / 讀取 reference-counted box                        |
+| `int` `uint` `float` `bool` `byte` `rune` | 原生型別轉換 `T(x)`；`int("…")` 另會解析十進位字串       |
+| `str(bytes)`、`list[byte](s)`             | str ⇄ list 的橋接（另有 `runes`）                        |
+| `ValueError` … `KeyError`                 | 建出該固定 kind 的 `Err`                                 |
+| `addr` `ptr` `ptr[T]` `uint(p)`           | raw pointer 運算——已寫入規格，**目前兩個編譯器都不支援** |
 
 `print` 是**關鍵字**、不是函式；`list.len()` 這類是**方法**。完整細節見 **[內建函式](docs/builtins.zh-TW.md)**。
 
@@ -100,19 +99,20 @@ struct Point { x: int; y: int }
 
 站在自帶 runtime 上的純 Zerg 套件（零外部依賴），以 `import "<name>"` 取得：
 
-| 套件          | 提供                                 |
-| ------------- | ------------------------------------ |
-| **`io`**      | stdout 寫入、整檔與 stdin 讀／寫     |
-| **`fs`**      | `exists` / `remove`                  |
-| **`os`**      | `env`、`exit`、`platform`、`arch`    |
-| **`strings`** | `split` / `join`、搜尋、trim、大小寫 |
-| **`ascii`**   | tokeniser 用的位元組分類             |
-| **`strconv`** | base-N `parse_int` / `to_string`     |
-| **`time`**    | `now`（牆鐘）、`monotonic`           |
-| **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e` |
-| **`rand`**    | 確定性、非密碼學產生器               |
-| **`atomic`**  | 安全的共享可變原語                   |
-| **`testing`** | `assert` / `assert_eq` / `assert_ne` |
+| 套件          | 提供                                     |
+| ------------- | ---------------------------------------- |
+| **`io`**      | stdout 寫入、整檔與 stdin 讀／寫         |
+| **`fs`**      | `exists` / `remove`                      |
+| **`os`**      | `env`、`exit`、`platform`、`arch`、`run` |
+| **`strings`** | `split` / `join`、搜尋、trim、大小寫     |
+| **`ascii`**   | tokeniser 用的位元組分類                 |
+| **`cli`**     | 選項解析與據以產生的 `--help`            |
+| **`strconv`** | base-N `parse_int` / `to_string`         |
+| **`time`**    | `now`（牆鐘）、`monotonic`               |
+| **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e`     |
+| **`rand`**    | 確定性、非密碼學產生器                   |
+| **`atomic`**  | 安全的共享可變原語                       |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne`     |
 
 完整目錄與簽名見 **[標準函式庫](docs/stdlib.zh-TW.md)**。
 
@@ -161,16 +161,25 @@ interface 約束**——所以 `io.read_file` 走的是 runtime 的 syscall leaf
 
 ## 狀態與限制
 
-Zerg 是 Phase-1 MVP。bootstrap 編譯器已能編譯非平凡的程式——它做 lex、parse、type-check、把 generic
-monomorphize，並在 hosted runtime 上產出 C，也已 self-host 自己前端所需的原語（字串掃描、讀檔、整數解析）。
-規格書定義整個語言並標註每項的狀態；新手該知道的重點缺口：
+Zerg 是 Phase-1 MVP，而現在有**兩個**編譯器——任何狀態說法都必須對照它們來讀：
 
-**已實作（Implemented）。** value 與 reference 型別、struct、帶 payload 的 enum、generics +
+- **`zerg`**——以 Zerg 寫成、實際出貨的那個。它能編譯自己，而它接受的語言是兩者中較小的：struct、enum
+  （payload 與遞迴）、`match`、`list[T]`、字串與 byte、`mut &` 參數、`guard` / `raise`，以及模組。它**還
+  沒有**泛型、`spec` / `impl`、`derive` 或 optional。
+- **`zerg0`**——以 Go 實作的種子，唯一職責是建出 `zerg`。它支援 `Zerg-boot` 子集（以文法寫在
+  [`src/bootstrap/README.md`](src/bootstrap/README.md)），其餘一律大聲拒絕，而不是誤編譯。
+
+下面的規格書描述的是**設計中的整個語言**，每項的標記說的是語言本身，不是任一編譯器目前的觸及範圍——上面
+那兩份清單才是。
+
+**種子已實作（因此今天建得出來）。** value 與 reference 型別、struct、帶 payload 的 enum、generics +
 monomorphization、帶 provided method 的 `spec` / `impl`、`derive(Eq, Ord)`、pattern matching、帶
 `?` / `??` / `!` / `guard` 的 optional、固定的內建 error taxonomy、recursive 型別（auto-boxed、
-reference-counted）、closure（含捕捉）、coroutine + channel + `select`（cooperative 的 **N:1** 排程）、
-帶 `pub` 可見性與 `init()` 的 module、`unsafe` 下的 raw pointer 與 inline assembly，以及 `build` / `fmt`
-/ `lint` / `test` 工具。
+reference-counted）、tuple、`defer`、range、f-string，以及帶 `pub` 可見性與 `init()` 的 module。
+
+**已從工具鏈移除**（已設計、已寫入規格，但目前兩個編譯器都不支援）：closure 與函式值、`map[K, V]`、
+coroutine + channel + `select`、`#[dyn]` 動態分派、`unsafe` 下的 raw pointer 與 inline assembly，以及
+`zerg test` 執行器。種子對每一項都以診斷訊息與非零 exit 拒絕。
 
 **尚未實作（Not yet，規格中已定義並標註）。** 溢位／除零會 trap 的算術與 wrapping 的 `+%` 系列運算子
 （目前算術降成純 C）；`Eq` / `Ord` 以外的完整 `derive` 集（`Hash` / `Encode` / `Decode`）；`set[T]`；

@@ -15,14 +15,16 @@ Zerg**.
 - **`csrc/`** — the runtime **itself**, in C plus a small per-architecture assembly core. This is what `cc` links
   into a program: allocator, reference counting, collections, strings, formatting, the scheduler, channels, the
   syscall floor, and the unwind mechanism. See [`csrc/README.md`](csrc/README.md) for the file-by-file map.
-- **`embed.go`** — Go glue (not shipped into a program). It `go:embed`s the `csrc/` tree into the `zerg` binary so
+- **`embed.go`** — Go glue (not shipped into a program). It `go:embed`s the `csrc/` tree into the `zerg0` SEED binary so
   `zerg build` can materialize the sources next to the emitted C for `cc`.
 - **`runtime_test.go`** — Go tests that compile and exercise the C runtime directly (via `csrc/zrt_test.*`).
 - **`go.mod`** — the runtime's Go module, wired into the root `go.work`.
 
 ## How it reaches a program
 
-1. At toolchain build time the C sources are embedded into the `zerg` binary (`embed.go`, `go:embed`).
+1. At toolchain build time the C sources are embedded into the `zerg0` seed (`embed.go`, `go:embed`). The
+   self-hosted `zerg` does not embed them: it reads the tree from disk, at `$ZERG_RUNTIME` or
+   `$ZERG_ROOT/src/runtime/csrc`.
 2. `zerg build foo.zg` emits C for `foo`, **materializes** the runtime sources beside it, and invokes `cc`.
 3. `cc` compiles and links them into one binary. A value-only program that needs no runtime links none of it — its
    emitted C is self-contained.

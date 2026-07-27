@@ -2,7 +2,7 @@
 
 The Zerg compiler, written in Zerg. It lexes, parses, and emits C over the existing
 runtime floor, then invokes `cc` — the same pipeline the Go bootstrap runs, re-expressed
-in the language itself. This directory is the target of the `feat/self-hosting` effort.
+in the language itself. The compiler here is the one that ships; the Go seed exists to build it.
 
 ## Confirmed decisions
 
@@ -106,8 +106,11 @@ make corpus     # build zerg, then run it over test-data/codegen/
 Each case is a `.zg` program beside the stdout it must produce. The Makefile's
 `CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves
 it is a regression and fails the target. The remaining cases are reported, not enforced —
-they need generics, `derive`, spec bounds, or `#[dyn]`, none of which the self-hosting
-compiler has yet. Each one that starts passing is a feature landing, and moves into the
+eight of them need generics, `derive`, spec bounds, or `#[dyn]`, none of which the
+self-hosting compiler has yet. The ninth, `countdown`, is not a missing feature but a
+BUG: `mut n := n` shadowing a parameter emits `int64_t zg_n = zg_n;`, which C rejects as
+a redefinition — the seed gives every local a unique C name and the self-hosted emitter
+does not. Each case that starts passing is a fix or a feature landing, and moves into the
 list.
 
 **Emit is validated end-to-end, not byte-exact.** Reproducing the Go seed's exact C
@@ -154,24 +157,17 @@ emit's complexity. Determinism (the only property M5 needs) is unaffected by lea
 When all seven are in and the corpus of feature programs plus the stdlib compile and run
 identically, the compiler can attempt its own source, and M5 begins.
 
-## Self-host proof (M5)
+## Self-host proof
 
-The acceptance bar is a byte-identical fixpoint:
-
-```text
-stage0 = Go bootstrap
-stage1 = stage0 compiles the src/compiler/*.zg sources
-stage2 = stage1 compiles the same sources
-assert  sha256(stage1) == sha256(stage2)
-```
-
-When stage1 and stage2 agree byte-for-byte, the compiler reproduces itself and the
-self-host is real.
+The compiler reproducing itself is what makes "self-hosting" a claim rather than a
+description, and `make build` is where it is checked: the seed builds an intermediate, the
+intermediate builds the compiler that ships, and a compiler that cannot reproduce itself
+cannot get through that. `make corpus` and `make lint` are the checks layered on top.
 
 ## Bootstrap minimization (M6)
 
 Once the fixpoint holds, the Go bootstrap only needs to compile the `Zerg-boot` subset the
-`src/compiler/*.zg` sources (and their imports `io` / `ascii` / `strconv`) actually use.
+`src/compiler/*.zg` sources (and their imports `io` / `ascii` / `strconv` / `cli`) actually use.
 Every removal is guarded by `make build` itself: the seed builds an intermediate, the
 intermediate builds the shipped compiler, and a seed that lost something the compiler
 needs cannot get through that. `make corpus` and `make lint` are the checks on top.

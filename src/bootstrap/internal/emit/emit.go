@@ -2237,6 +2237,18 @@ func (e *emitter) namespaceCallEmit(n *ast.Call) (string, bool) {
 			args.WriteString(e.copyValue(e.cur.ExprType(e.info, a.Value), a.Value))
 		}
 	}
+	// Backfill the trailing parameters the call omitted, from the member's own declared
+	// defaults — the third and last call shape to read them off the declaration, beside a
+	// direct call and a method call. Without it `cli.argument("O", "off", "help")` reached
+	// cc as a three-argument call to a four-parameter function.
+	if sig, ok := e.info.Funcs[key]; ok && sig != nil && sig.Decl != nil {
+		for _, def := range defaultsFrom(sig.Decl, len(n.Args)) {
+			if args.Len() > 0 {
+				args.WriteString(", ")
+			}
+			args.WriteString(e.expr(def))
+		}
+	}
 	// A non-generic member calls the bundled top-level function directly; a generic
 	// member (e.g. `testing.assert_eq`) dispatches to the per-instance mangled name mono
 	// recorded for this call site.
@@ -2256,16 +2268,7 @@ func (e *emitter) namespaceByRefArgs(key string) []bool {
 	if !ok || sig == nil || sig.Decl == nil {
 		return nil
 	}
-	var out []bool
-	for i, p := range sig.Decl.Params {
-		if p.Ref {
-			if out == nil {
-				out = make([]bool, len(sig.Decl.Params))
-			}
-			out[i] = true
-		}
-	}
-	return out
+	return byRefOf(sig.Decl)
 }
 
 // namespaceMemberValue lowers a non-call namespace member access `ns.member` used as

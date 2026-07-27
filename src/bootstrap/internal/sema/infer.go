@@ -141,6 +141,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Str, Bool), true
 		case "__zrt_remove":
 			return c.unaryIntrinsic(n, Str, Nil), true
+		case "__zrt_exec":
+			return c.execIntrinsic(n), true
 		case "__zrt_atomic_load":
 			return c.atomicIntrinsic(n, 1, Int), true
 		case "__zrt_atomic_store", "__zrt_atomic_swap", "__zrt_atomic_add":
@@ -407,6 +409,18 @@ func (c *checker) readIntrinsic(n *ast.Call) Type {
 	}
 	c.check(n.Args[0].Value, Int)
 	return result
+}
+
+// execIntrinsic checks the process-spawn leaf `__zrt_exec(argv)`: argv is a list[str]
+// (argv[0] is the program, PATH-searched), and the result is the child's exit status.
+func (c *checker) execIntrinsic(n *ast.Call) Type {
+	if len(n.Args) != 1 {
+		c.errorf(n.Span(), "exec intrinsic takes (argv), got %d argument(s)", len(n.Args))
+		c.synthArgs(n)
+		return Int
+	}
+	c.check(n.Args[0].Value, &types.List{Elem: types.Str})
+	return Int
 }
 
 // atomicIntrinsic checks a compiler atomic-cell intrinsic `__zrt_atomic_<op>(a,

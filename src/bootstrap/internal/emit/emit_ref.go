@@ -408,6 +408,7 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_exit":      true,
 	"__zrt_exists":    true,
 	"__zrt_remove":    true,
+	"__zrt_exec":      true,
 }
 
 // strProducingIntrinsics are the sys-floor leaves that return a FRESH str cell
@@ -712,6 +713,8 @@ func (e *emitter) fileIntrinsicEmit(n *ast.Call) (string, bool) {
 		return fmt.Sprintf("zrt_read_fd(%s)", arg), true
 	case "__zrt_close":
 		return fmt.Sprintf("((int64_t)zrt_close(%s))", arg), true
+	case "__zrt_exec":
+		return fmt.Sprintf("((int64_t)zrt_exec(%s))", arg), true
 	}
 	return "", false
 }

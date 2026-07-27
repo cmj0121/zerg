@@ -52,6 +52,11 @@ struct Emitter {
 	# function name be given a type when it is used as a value: `fn(P...) -> R` needs the
 	# P's, and the return table alone has only the R.
 	pr_ty: list[Ty]
+	# pr_hasdef / pr_def carry each parameter's DEFAULT, so a call that omits a trailing
+	# argument can be given it. The default belongs to the callee's declaration, and a call
+	# site is nowhere near it, which is the whole reason it has to be in a table.
+	pr_hasdef: list[bool]
+	pr_def: list[Expr]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -288,6 +293,8 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 			em.pr_idx.append(j)
 			em.pr_ref.append(fn_i.params[j].is_ref)
 			em.pr_ty.append(fn_i.params[j].ty)
+			em.pr_hasdef.append(fn_i.params[j].has_def)
+			em.pr_def.append(fn_i.params[j].def)
 			j = j + 1
 		}
 		i = i + 1
@@ -872,7 +879,10 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 		out = out + ", " + a
 		i = i + 1
 	}
-	return out
+	# the receiver already stands where parameter 0 does, so the first argument a method
+	# can omit is at args.len() + 1 — and there is always a leading argument to separate
+	# from, which a free call cannot assume
+	return out + c_default_args(em, key, args.len() + 1, true)
 }
 
 # c_call emits an enum-variant construction as a tagged-union literal, a struct
@@ -929,7 +939,52 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str
 		out = out + a
 		i = i + 1
 	}
+	return out + c_default_args(em, fname, args.len(), out != "")
+}
+
+# c_default_args fills in the parameters a call left off the end, in declaration order,
+# taking each one's declared default. C has no such notion, so the backfill happens here:
+# every emitted call is fully applied whatever the source wrote.
+#
+# It stops at the first parameter with no default, which is also where the language stops
+# — a parameter without one is mandatory, and a call missing it is a call that is wrong.
+# Emitting the arguments it DOES have and no more would produce C that cc rejects, which
+# is the failure this compiler wants when a program is wrong.
+fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
+	mut out := ""
+	mut lead := sep
+	mut idx := given
+	for c_param_has_def(em, fname, idx) {
+		if lead {
+			out = out + ", "
+		}
+		lead = true
+		out = out + c_expr(em, c_param_def(em, fname, idx), c_nosub())
+		idx = idx + 1
+	}
 	return out
+}
+
+fn c_param_has_def(mut &em: Emitter, fname: str, idx: int) -> bool {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
+			return em.pr_hasdef[i]
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_param_def(mut &em: Emitter, fname: str, idx: int) -> Expr {
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == fname and em.pr_idx[i] == idx {
+			return em.pr_def[i]
+		}
+		i = i + 1
+	}
+	return ENil
 }
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
@@ -1688,7 +1743,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

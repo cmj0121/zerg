@@ -87,12 +87,20 @@ enum Stmt {
 	SNop
 }
 
-# Param is one function parameter: its name, declared type, and whether it is a mutable
-# reference (`mut &name: T`), which lowers to a C pointer.
+# Param is one function parameter: its name, declared type, whether it is a mutable
+# reference (`mut &name: T`), which lowers to a C pointer, and an optional DEFAULT — the
+# expression a call uses when it omits the argument.
+#
+# A default is what makes an input optional; the language has no overloading, so this is
+# where the flexibility comes from. Only a self-contained constant is carried, which is
+# also all the seed lowers correctly (docs/functions.md) — a default built from an
+# operator or a call is specified to be evaluated per call and is not honoured here.
 struct Param {
 	name: str
 	ty: Ty
 	is_ref: bool
+	has_def: bool
+	def: Expr
 }
 
 # FnDecl is a function declaration: name, the type it is a METHOD of ("" for a free

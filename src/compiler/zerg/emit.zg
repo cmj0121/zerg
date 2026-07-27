@@ -41,10 +41,17 @@ struct Emitter {
 	vf_ty: list[Ty]
 	used_rt: bool
 	used_str: bool
+	# used_fnptr records that some function was held as a VALUE, so the generic function
+	# pointer the header typedefs is only there for a program that has one.
+	used_fnptr: bool
 	ref_names: list[str]
 	pr_fn: list[str]
 	pr_idx: list[int]
 	pr_ref: list[bool]
+	# pr_ty is each parameter's TYPE, parallel to pr_fn / pr_idx. It is what lets a bare
+	# function name be given a type when it is used as a value: `fn(P...) -> R` needs the
+	# P's, and the return table alone has only the R.
+	pr_ty: list[Ty]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -81,7 +88,67 @@ fn c_type(t: Ty) -> str {
 		TByte => "uint8_t"
 		TNamed(nm) => "zg_" + nm
 		TList(_) => "zrt_list"
+		TFn(_, _) => "zg_fnptr"
 		_ => "int64_t"
+	}
+}
+
+# A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer — and
+# cast back to its real signature at the call. C guarantees exactly this round trip
+# between function pointer types and no more, which is why the storage type is a function
+# pointer rather than `void*`: converting a function pointer to an object pointer is not
+# something the standard promises.
+#
+# A single storage type is also what keeps the declarator problem away. A C function
+# pointer spells its name INSIDE the type — `int64_t (*f)(const char*)` — and every type
+# in this emitter is a string that gets a name appended to it. A typedef sidesteps that
+# for every function type at once, with no table of them to build and keep.
+fn c_fnptr_typedef() -> str {
+	return "typedef void (*zg_fnptr)(void);\n"
+}
+
+# c_fnptr_cast is the cast back to a real signature, `(R (*)(P, ...))`.
+fn c_fnptr_cast(t: Ty) -> str {
+	return match t {
+		TFn(ps, r) => "(" + c_type(r) + " (*)(" + c_ptypes(ps) + "))"
+		_ => ""
+	}
+}
+
+fn c_ptypes(ps: list[Ty]) -> str {
+	if ps.len() == 0 {
+		return "void"
+	}
+	mut out := ""
+	mut i := 0
+	for i < ps.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_type(ps[i])
+		i = i + 1
+	}
+	return out
+}
+
+fn c_is_fn(t: Ty) -> bool {
+	return match t {
+		TFn(_, _) => true
+		_ => false
+	}
+}
+
+fn c_fn_ret(t: Ty) -> Ty {
+	return match t {
+		TFn(_, r) => r
+		_ => TUnknown
+	}
+}
+
+fn c_is_unknown(t: Ty) -> bool {
+	return match t {
+		TUnknown => true
+		_ => false
 	}
 }
 
@@ -220,6 +287,7 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 			em.pr_fn.append(key)
 			em.pr_idx.append(j)
 			em.pr_ref.append(fn_i.params[j].is_ref)
+			em.pr_ty.append(fn_i.params[j].ty)
 			j = j + 1
 		}
 		i = i + 1
@@ -291,6 +359,32 @@ fn c_is_ctor(name: str) -> bool {
 		return false
 	}
 	return ascii.is_upper(b[0])
+}
+
+# c_scan_fnptr decides up front whether the program spells a function type anywhere in a
+# DECLARATION — a struct field, a parameter, a result. It has to run before anything is
+# emitted, because those declarations are written out before any body is: a struct typedef
+# naming `zg_fnptr` would otherwise reach the C compiler ahead of the typedef that defines
+# it. (A body that merely holds a function in a local sets the flag as it goes; by then the
+# header has not been assembled yet.)
+fn c_scan_fnptr(mut &em: Emitter, f: File) {
+	for s in f.structs {
+		for fd in s.fields {
+			if c_is_fn(fd.ty) {
+				em.used_fnptr = true
+			}
+		}
+	}
+	for fn_i in f.fns {
+		if c_is_fn(fn_i.ret) {
+			em.used_fnptr = true
+		}
+		for pm in fn_i.params {
+			if c_is_fn(pm.ty) {
+				em.used_fnptr = true
+			}
+		}
+	}
 }
 
 fn c_build_structs(mut &em: Emitter, f: File) {
@@ -754,6 +848,12 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	if c_has_method(em, recv, meth) {
 		return c_fn_cname(recv, meth) + "(" + c_recv_args(em, c_sig_key(recv, meth), target, args, sb) + ")"
 	}
+	# a FIELD holding a function — `this.action(c)` calls the callback the value carries,
+	# which is a different thing from a method and has to be looked up as a field
+	fty := c_field_ty(em, recv, meth)
+	if c_is_fn(fty) {
+		return "(" + c_fnptr_cast(fty) + c_expr(em, target, sb) + ".zg_" + meth + ")(" + c_args(em, args, sb) + ")"
+	}
 	return "zg_" + meth + "(" + c_call_args(em, meth, args, sb) + ")"
 }
 
@@ -782,6 +882,12 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_intrinsic(name) {
 		em.used_rt = true
 		return c_intrinsic(name) + "(" + c_args(em, args, sb) + ")"
+	}
+	# calling a BINDING that holds a function: cast the stored generic pointer back to the
+	# signature its type carries, then call through it
+	bt := c_lookup_var(em, name)
+	if c_is_fn(bt) {
+		return "(" + c_fnptr_cast(bt) + c_ident_val(em, name, sb) + ")(" + c_args(em, args, sb) + ")"
 	}
 	if c_is_ctor(name) {
 		if c_is_variant(em, name) {
@@ -868,7 +974,62 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		# a mutable-reference parameter is a pointer; dereference it on use
 		return "(*zg_" + n + ")"
 	}
+	# A bare function NAME used where a value is wanted is that function as a value. It is
+	# only reached when nothing has bound the name, so a binding always wins — which is the
+	# ordinary scoping rule, and it means a local can shadow a function without surprise.
+	if c_is_free_fn(em, n) and not c_is_bound(em, n) {
+		em.used_fnptr = true
+		return "((zg_fnptr)zg_" + n + ")"
+	}
 	return c_var_cname(em, n)
+}
+
+# c_is_free_fn reports whether a bare name is a free function of the program — a method is
+# excluded, since it is keyed by its type and has no bare name to be reached by.
+fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
+	mut i := 0
+	for i < em.sig_names.len() {
+		if em.sig_names[i] == n {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_is_bound(mut &em: Emitter, n: str) -> bool {
+	mut i := 0
+	for i < em.env_names.len() {
+		if em.env_names[i] == n {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+# c_fn_ty_of builds the `fn(P...) -> R` type of a named free function, reading the
+# parameter types back out of the table c_build_sigs filled.
+fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
+	mut ptys: list[Ty] = []
+	mut idx := 0
+	for idx < 64 {
+		mut found := false
+		mut i := 0
+		for i < em.pr_fn.len() {
+			if em.pr_fn[i] == n and em.pr_idx[i] == idx {
+				ptys.append(em.pr_ty[i])
+				found = true
+			}
+			i = i + 1
+		}
+		if not found {
+			idx = 64
+		} else {
+			idx = idx + 1
+		}
+	}
+	return TFn(ptys, c_lookup_sig_ret(em, n))
 }
 
 fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
@@ -991,6 +1152,10 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	if c_has_method(em, recv, meth) {
 		return c_lookup_sig_ret(em, c_sig_key(recv, meth))
 	}
+	fty := c_field_ty(em, recv, meth)
+	if c_is_fn(fty) {
+		return c_fn_ret(fty)
+	}
 	return c_lookup_sig_ret(em, meth)
 }
 
@@ -1058,7 +1223,12 @@ fn c_infer_ident(mut &em: Emitter, n: str) -> Ty {
 	if c_is_variant(em, n) {
 		return TNamed(c_variant_enum(em, n))
 	}
-	return c_lookup_var(em, n)
+	t := c_lookup_var(em, n)
+	# nothing bound the name, but a function answers to it: the name IS that function
+	if c_is_unknown(t) and c_is_free_fn(em, n) {
+		return c_fn_ty_of(em, n)
+	}
+	return t
 }
 
 fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
@@ -1518,10 +1688,11 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
+	c_scan_fnptr(em, f)
 
 	# enums first: a struct may hold an enum by value (a struct is never held by an enum
 	# except through an opaque zrt_list), so enum typedefs must precede struct typedefs.
@@ -1574,6 +1745,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
 	if em.used_str {
 		hdr = hdr + "#include <stdlib.h>\n"
+	}
+	if em.used_fnptr {
+		hdr = hdr + c_fnptr_typedef()
 	}
 	if rt {
 		hdr = hdr + "#include \"zergrt.h\"\n"

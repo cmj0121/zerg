@@ -14,6 +14,11 @@
 
 # Ty is the small set of value types the subset needs, plus TVoid for a function with no
 # return and TUnknown as the inference bottom.
+#
+# TFn is a function's type — its parameters and its result, and only that, which is what
+# the language says a function type is. It exists so a function can be held: bound to a
+# name, stored in a field, passed as an argument. Only a NAMED top-level function can be
+# held that way here; a closure literal captures, and capture is not in the subset.
 enum Ty {
 	TInt
 	TFloat
@@ -25,6 +30,7 @@ enum Ty {
 	TByte
 	TNamed(str)
 	TList(Ty)
+	TFn(list[Ty], Ty)
 }
 
 # Expr is an expression node.
@@ -284,6 +290,20 @@ fn ty_name(t: Ty) -> str {
 		TByte => "byte"
 		TNamed(n) => n
 		TList(e) => "list[" + ty_name(e) + "]"
+		TFn(ps, r) => "fn(" + ty_names(ps) + ") -> " + ty_name(r)
 		_ => "?"
 	}
+}
+
+fn ty_names(ts: list[Ty]) -> str {
+	mut out := ""
+	mut i := 0
+	for i < ts.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + ty_name(ts[i])
+		i = i + 1
+	}
+	return out
 }

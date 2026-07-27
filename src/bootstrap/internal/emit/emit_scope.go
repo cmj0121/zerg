@@ -107,7 +107,7 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
 		return
 	}
-	switch t := typ.(type) {
+	switch typ.(type) {
 	case *types.Fn:
 		// a function-value local releases its refcounted environment box at scope exit
 		// through the generic env-slot guard (a NULL env is a no-op) — managed only.
@@ -122,14 +122,6 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		// a list frees its buffer (and drops each element) at scope exit through its
 		// instance's drop-env thunk, scheduled on the runtime cleanup stack.
 		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.listDropEnv(typ), cname))
-	case *types.Map:
-		// a map frees its storage (and drops each key/value) at scope exit through its
-		// instance's drop-env thunk, scheduled on the runtime cleanup stack.
-		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.mapDropEnv(typ), cname))
-	case *types.Chan:
-		// a channel handle releases at scope exit through a slot guard (so a later `del`
-		// nulls the slot); a send-capable handle releases as a sender (may auto-close).
-		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.chanDropThunk(t), cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("zrt_defer(zg_dropenv_%s, &%s);", e.ctype(typ), cname))
 	case *types.Opt:
@@ -182,8 +174,6 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
 	case *types.Map:
 		e.line(fmt.Sprintf("zrt_map_drop(&%s);", it.cname))
-	case *types.Chan:
-		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.Opt:
@@ -221,19 +211,13 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 		return
 	}
-	switch t := it.typ.(type) {
+	switch it.typ.(type) {
 	case *types.Ref:
 		// Release now and null the slot. The scope-exit guard reads the slot, so it
 		// skips a nulled binding — the box is freed exactly once whether or not the
 		// `del` is reached on a given path (flow-consistent, and safe under a
 		// conditional del because zrt_release(NULL) is a no-op).
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
-		e.line(fmt.Sprintf("%s = NULL;", cname))
-	case *types.Chan:
-		// `del ch` (GRAMMAR group 11) drops a channel refcount now — and for a
-		// send-capable handle, closes the channel if it was the last sender. Nulling the
-		// slot makes the scope-exit guard skip it, so the drop happens exactly once.
-		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)
@@ -799,12 +783,6 @@ func stmtExprs(s ast.Stmt) []ast.Expr {
 		return []ast.Expr{n.Cond, n.Iter}
 	case *ast.WithStmt:
 		return []ast.Expr{n.Resource}
-	case *ast.SelectStmt:
-		out := make([]ast.Expr, 0, len(n.Arms)*3)
-		for _, arm := range n.Arms {
-			out = append(out, arm.Chan, arm.Value, arm.Body)
-		}
-		return out
 	}
 	return nil
 }

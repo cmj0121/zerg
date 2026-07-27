@@ -440,16 +440,6 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	for _, a := range n.Args {
 		w.walkExpr(in, a.Value)
 	}
-	// Try the erased provided-self-call path FIRST: inside a `#[dyn]` provided default
-	// body an unoverridden provided method the impl omits must dispatch through its
-	// ERASED-receiver instance (W3), not the static namespace. Now that provided
-	// defaults are also registered in the concrete method namespace (for the static
-	// path), walkMethodCall would otherwise intercept such a self-call with a by-value
-	// instance — wrong for an erased `this`. walkProvidedSelfCall is a no-op for a
-	// non-erased instance, so a concrete receiver still falls through to walkMethodCall.
-	if w.walkProvidedSelfCall(in, n) {
-		return
-	}
 	if w.walkMethodCall(in, n) {
 		return
 	}
@@ -466,10 +456,6 @@ func (w *worker) walkCall(in *Instance, n *ast.Call) {
 	}
 	sig, ok := w.info.Funcs[id.Name]
 	if !ok || sig.Generic == nil {
-		return
-	}
-	if sig.Dyn {
-		w.dynCall(in, sig, n)
 		return
 	}
 	subT, subV := w.resolveArgs(in, sig, n)
@@ -500,10 +486,6 @@ func (w *worker) walkNamespaceCall(in *Instance, n *ast.Call) bool {
 	sig, ok := w.info.Funcs[sema.NamespaceMemberName(sym, id.Name, fld.Name)]
 	if !ok || sig.Generic == nil {
 		return true // a non-generic namespace member: emit resolves it directly
-	}
-	if sig.Dyn {
-		w.dynCall(in, sig, n)
-		return true
 	}
 	subT, subV := w.resolveArgs(in, sig, n)
 	callee := w.enqueueFn(sig.Decl, subT, subV)

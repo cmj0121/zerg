@@ -121,12 +121,6 @@ func link(cmd *BuildCmd, code string, manifest emit.Manifest) int {
 			log.Error().Err(err).Msg("cannot write runtime sources")
 			return 1
 		}
-		// A concurrent program (spawn/channel) additionally links the scheduler and
-		// the context switch selected by the host arch (Fork-F); a non-concurrent
-		// program links exactly the Phase 1d set, so its command line is unchanged.
-		if manifest.Concurrency {
-			cfiles = append(cfiles, runtime.ConcurrencyCUnits(rtdir, runtime.HostArch())...)
-		}
 		args = append([]string{"-std=c11", "-I", rtdir, "-o", cmd.Output, cpath}, cfiles...)
 	}
 

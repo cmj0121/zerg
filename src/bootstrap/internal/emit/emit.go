@@ -32,13 +32,6 @@ type Manifest struct {
 	// linked against the src/runtime tree.
 	NeedsRuntime bool
 
-	// Concurrency reports whether the program uses concurrency (a `spawn`, or a
-	// channel value/op). When set, the driver additionally links the scheduler and
-	// the per-arch context switch, and the entry runs main under the scheduler
-	// (zrt_sched_main). It implies NeedsRuntime. A non-concurrent program leaves it
-	// false, links nothing new, and stays byte-identical to the Phase 1d path.
-	Concurrency bool
-
 	// NeedsResult reports whether the program lowers a general Result/Either/optional
 	// carrier (Phase 1f U0) — a construction, a `?`/`??`/`!`/`?.`/`guard`, or an
 	// Either/optional signature. It implies NeedsRuntime (the carriers carry a
@@ -71,7 +64,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
 }
 
 type emitter struct {
@@ -87,15 +80,6 @@ type emitter struct {
 	// zergrt.h" line and the returned Manifest. Value-only programs leave it
 	// false, so their emitted C is byte-identical to Phase 0.
 	needsRuntime bool
-
-	// concurrency is set when this program uses `spawn` or a channel (Phase 1e). It
-	// drives the returned Manifest's Concurrency flag (the driver then links the
-	// scheduler + context switch) and the scheduler entry in cMain, and implies
-	// needsRuntime. spawnIdx numbers each `spawn f(args)` site so it shares one
-	// generated env struct + trampoline (like deferIdx). Both empty/false for a
-	// non-concurrent program, which therefore stays byte-identical to Phase 1d.
-	concurrency bool
-	spawnIdx    map[*ast.SpawnStmt]int
 
 	// Result/Either/optional carriers (Phase 1f U0). carriers maps a type's spelling
 	// to its generated C carrier (a monomorphized tagged struct generalizing the
@@ -118,27 +102,6 @@ type emitter struct {
 	// stays byte-identical.
 	tuples map[string]*tupleCarrier
 
-	// First-class function values (docs/functions.md). fntypes maps a function type's
-	// spelling to its generated `zg_fn_<n>` struct typedef; fnthunks maps a named
-	// function used as a value to its env-ignoring adapter; lambdaDecls is the set of
-	// lifted-closure FuncDecls, which get the uniform closure calling convention's
-	// leading env parameter. All empty for a program that names no function value.
-	fntypes      map[string]*fnCarrier
-	fnthunks     map[string]*fnThunk
-	lambdaDecls  map[*ast.FuncDecl]bool
-	lambdaByDecl map[*ast.FuncDecl]*sema.Lambda // a lifted closure's captures, by its decl
-	envTypes     map[string]string              // capturing lambda name -> its env struct C name
-
-	// fnEnvManaged is set when some closure captures a NON-POD immutable value
-	// (a Ref/list/map/str/boxed recursive value). When set, EVERY closure's
-	// environment is a refcounted box (zrt_ref_alloc) that retains its non-POD captures
-	// and releases them at rc==0, and a function VALUE becomes non-POD
-	// (e.containsRef(fn)==true): copying one retains its env, dropping one releases it,
-	// so a captured value's lifetime is extended past the defining scope. When UNSET (no
-	// capture, or POD-only captures — every existing closure program), a function value
-	// stays plain data with a leaked/absent env and the emitted C is byte-identical.
-	fnEnvManaged bool
-
 	// List instances (docs/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
 	// the drop-env thunk); every list is the same C header (zrt_list), only its element
@@ -151,7 +114,6 @@ type emitter struct {
 	// drop-env thunk); every map is the same C header (zrt_map), only its value copy/drop
 	// (and the int/str hash+eq) differ. Empty for a program that names no map value,
 	// which therefore stays byte-identical.
-	maps map[string]*mapCarrier
 
 	// needsIO is set when the program lowers a stdlib `io` write intrinsic (Phase
 	// 1f). It drives the NeedsIO manifest flag and implies needsRuntime. False for a
@@ -249,12 +211,6 @@ func (e *emitter) program() {
 		e.needsRuntime = isResultNil(main.Ret) || len(main.Params) == 1
 	}
 	e.prepareRuntime()
-	// prepareRuntime settles e.concurrency, so the args/scheduler conflict is judged
-	// only now: the scheduler entry shims take a zero-argument function pointer, so
-	// threading the args list through a concurrent main is not wired yet.
-	if main != nil && len(main.Params) == 1 && e.concurrency {
-		e.diags.Add(main.Decl.Span(), "a 'main(args)' in a concurrent program is not yet supported")
-	}
 	// A prepare pass may reject the program with a clean diagnostic before any C is
 	// written — notably prepareMaps' post-monomorphization map-key Hash gate, which
 	// sees a generic map's substituted (concrete) key. Abort here so a rejected map
@@ -278,11 +234,6 @@ func (e *emitter) program() {
 	}
 	e.blank()
 
-	// First-class function-value pointer typedefs, BEFORE the nominal types, since a
-	// struct may hold a function-value field (`run: fn(int) -> int`) and C needs the
-	// typedef name to declare that field. Emits nothing for a program with none.
-	e.emitFnTypedefs()
-
 	// Struct/enum, tuple, and carrier typedefs, in one topological order: each is emitted
 	// after every type it embeds BY VALUE (a struct after its non-boxed field types, a
 	// carrier after its payload, a tuple after its elements), so an arbitrary nesting
@@ -295,14 +246,6 @@ func (e *emitter) program() {
 	// value. Emits nothing for a program that materializes no range value.
 	e.emitRangeTypedef()
 
-	// Closure environment structs, after every type a capture may be (a struct, tuple,
-	// or function value) and before the lambdas that read them. Emits nothing when no
-	// closure captures.
-	e.emitEnvTypedefs()
-
-	// '#[dyn]' witness-table struct types, before any prototype that names one
-	e.witnessStructs()
-
 	// module-constant globals, evaluated at init (Phase 1g S3); none for a program
 	// with no module constant, which therefore stays byte-identical.
 	e.emitModuleConstGlobals()
@@ -313,13 +256,7 @@ func (e *emitter) program() {
 	}
 	// per-module init function prototypes (Phase 1g S3); none for a no-init program.
 	e.emitInitPrototypes()
-	// env-ignoring value thunks for named functions used as values, after the prototypes
-	// they forward to. Emits nothing for a program that takes no function value.
-	e.emitFnThunks()
 	e.blank()
-
-	// concrete witness tables, after the impl-method prototypes their slots name
-	e.witnessGlobals()
 
 	// Ref[T] copy/drop and allocation helpers (Phase 1d), after the struct typedefs
 	// they reference and before the function bodies that call them. Emits nothing
@@ -605,9 +542,6 @@ func joinParams(recv, rest []string) string {
 // prototype renders a forward declaration with parameter types only, using the
 // instance's mangled C name and its concrete (specialized) signature.
 func (e *emitter) prototype(inst *mono.Instance) string {
-	if inst.Dyn || inst.RecvErased {
-		return e.erasedSignature(inst, false)
-	}
 	if inst.Recv != nil {
 		var b strings.Builder
 		b.WriteString(e.ctype(inst.Recv))
@@ -618,31 +552,10 @@ func (e *emitter) prototype(inst *mono.Instance) string {
 		return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, b.String())
 	}
 	params := paramList(len(inst.Params), func(i int) string { return e.declParamType(inst, i) })
-	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, e.withEnvParam(inst, params))
-}
-
-// withEnvParam prepends the uniform closure calling convention's leading `void *env`
-// parameter to a lifted-closure instance's parameter list. Every other function is
-// unchanged, so its emitted C stays byte-identical.
-func (e *emitter) withEnvParam(inst *mono.Instance, params string) string {
-	if !e.isLambdaInst(inst) {
-		return params
-	}
-	if params == "void" || params == "" {
-		return "void *zg_env"
-	}
-	return "void *zg_env, " + params
+	return fmt.Sprintf("%s %s(%s)", e.ctype(inst.Ret), inst.Mangled, params)
 }
 
 func (e *emitter) function(inst *mono.Instance) {
-	if inst.Dyn {
-		e.dynFunction(inst)
-		return
-	}
-	if inst.RecvErased {
-		e.methodFunction(inst)
-		return
-	}
 	fn := inst.Origin
 	e.cur = inst
 	e.resetUsed()
@@ -659,44 +572,9 @@ func (e *emitter) function(inst *mono.Instance) {
 		return e.declParamType(inst, i) + " " + e.declareName(inst.ParamNames[i])
 	})
 	sig := joinParams(recv, rest)
-	if e.isLambdaInst(inst) {
-		// the uniform closure calling convention: a lifted closure takes its environment
-		// first. A non-capturing closure ignores it (see the `(void)zg_env` below).
-		if sig == "void" || sig == "" {
-			sig = "void *zg_env"
-		} else {
-			sig = "void *zg_env, " + sig
-		}
-	}
 	e.line(fmt.Sprintf("%s %s(%s) {", e.ctype(inst.Ret), inst.Mangled, sig))
 
 	e.indent++
-	if lam, ok := e.lambdaOf(inst); ok {
-		if len(lam.Captures) == 0 {
-			// a non-capturing closure carries the leading env by convention but never reads
-			// it; mark it used so the C compiler stays quiet.
-			e.line("(void)zg_env;")
-		} else {
-			// a capturing closure reads its captures from the environment: bind each source
-			// name to a field access, so a body reference resolves to it (a parameter or an
-			// inner local declared later shadows it, exactly as in source).
-			envType := e.envTypes[lam.Name]
-			// A managed env is a refcounted box, so the struct is reached through the payload
-			// pointer; an unmanaged (POD-only) env IS the struct pointer, kept byte-identical.
-			envPtr := "zg_env"
-			if e.fnEnvManaged {
-				envPtr = "zrt_ref_payload(zg_env)"
-			}
-			top := e.scopes[len(e.scopes)-1]
-			for _, cap := range lam.Captures {
-				// a parameter of the same name shadows the capture; never overwrite it. (A
-				// capture is a free variable, so this cannot actually collide, but be safe.)
-				if _, param := top[cap.Name]; !param {
-					top[cap.Name] = fmt.Sprintf("((%s *)%s)->zg_%s", envType, envPtr, cap.Name)
-				}
-			}
-		}
-	}
 	e.pushScope() // body scope, nested so a body binding can shadow a parameter
 	// One teardown frame spans the parameters and the top-level body: a by-value Ref
 	// parameter is the callee's own holder and is released when the function returns
@@ -782,18 +660,6 @@ func (e *emitter) cMain(main *sema.FuncSig) {
 		return
 	}
 	switch {
-	case e.concurrency:
-		// A concurrent program runs main as the first coroutine under the scheduler
-		// (Fork-F), one entry per main return shape; the scheduler drains the run queue
-		// and maps main's outcome to the exit code.
-		switch {
-		case isResultNil(main.Ret):
-			e.line("return zrt_sched_main(zg_main);")
-		case main.Ret == sema.Int:
-			e.line("return zrt_sched_main_int(zg_main);")
-		default:
-			e.line("return zrt_sched_main_nil(zg_main);")
-		}
 	case isResultNil(main.Ret):
 		e.line("return zrt_run(zg_main);")
 	case main.Ret == sema.Int:
@@ -866,12 +732,6 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.delStmt(n)
 	case *ast.DeferStmt:
 		e.deferStmt(n)
-	case *ast.SpawnStmt:
-		e.spawnStmt(n)
-	case *ast.SendStmt:
-		e.sendStmt(n)
-	case *ast.SelectStmt:
-		e.selectStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:
@@ -956,11 +816,6 @@ func (e *emitter) reassign(n *ast.Reassign) {
 	// `xs[i] = v` on a list target sets in place through the runtime (drop-old +
 	// store-new), before the ordinary place-assignment paths.
 	if s, ok := e.listIndexAssign(n); ok {
-		e.line(s + ";")
-		return
-	}
-	// `m[k] = v` on a map target inserts/updates in place through the runtime.
-	if s, ok := e.mapIndexAssign(n); ok {
 		e.line(s + ";")
 		return
 	}
@@ -1265,12 +1120,6 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 		e.forInList(n, lt)
 		return
 	}
-	// A map[K, V]: walk its entry vector in INSERTION order, binding each KEY into a `K k`
-	// local the body reads; the value is reached via `m[k]` (FORK-MAP-ITER).
-	if mt, ok := e.cur.ExprType(e.info, n.Iter).(*types.Map); ok {
-		e.forInMap(n, mt)
-		return
-	}
 	// A str: iterate its code points. Materialize the runes into a temporary list and
 	// walk it, so the body's loop variable binds each rune (docs/collections.md).
 	if e.cur.ExprType(e.info, n.Iter) == sema.Str {
@@ -1528,13 +1377,6 @@ func (e *emitter) expr(x ast.Expr) string {
 		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
 			return e.constructVariant(n, nil, sym.Variant.Name)
 		}
-		// a bare top-level function name used as a value is a closure literal over its
-		// env-ignoring thunk (docs/functions.md).
-		if name, ok := e.info.FuncValues[n]; ok {
-			if s, ok := e.namedFnValue(name); ok {
-				return s
-			}
-		}
 		// a `mut &x` parameter is pointer storage: every mention reads through it.
 		if e.identIsByRef(n) {
 			return "(*" + e.resolve(n.Name) + ")"
@@ -1552,11 +1394,7 @@ func (e *emitter) expr(x ast.Expr) string {
 			// a bare `=`, so an existing derived comparison stays byte-identical.
 			return fmt.Sprintf("%s(%s, %s)", md.Mangled, e.expr(n.L), e.copyValue(e.cur.ExprType(e.info, n.R), n.R))
 		}
-		// `k in m` over a map lowers to a membership probe on the runtime table.
 		if n.Op == token.In {
-			if s, ok := e.mapMembership(n); ok {
-				return s
-			}
 			// `v in lo..hi` range membership lowers to an inline bounds test.
 			if s, ok := e.rangeMembership(n); ok {
 				return s
@@ -1579,14 +1417,6 @@ func (e *emitter) expr(x ast.Expr) string {
 				return e.constructVariant(n, nil, n.Name)
 			}
 		}
-		// a cross-module function reached through a namespace member, used as a value, is a
-		// closure literal over its env-ignoring thunk — the Field analogue of a bare function
-		// name (checked before the const/binding member, which spells `zg_<key>`).
-		if key, ok := e.info.NsFuncValues[n]; ok {
-			if s, ok := e.namedFnValue(key); ok {
-				return s
-			}
-		}
 		if s, ok := e.namespaceMemberValue(n); ok {
 			return s
 		}
@@ -1598,11 +1428,6 @@ func (e *emitter) expr(x ast.Expr) string {
 			// native `base[idx]`.
 			if lt, ok := e.cur.ExprType(e.info, n.Base).(*types.List); ok {
 				return e.listIndex(n, lt)
-			}
-			// a map[K, V] index reads the value through the runtime (aborting on a missing
-			// key = KeyError) and copies it out to an owned value.
-			if mt, ok := e.cur.ExprType(e.info, n.Base).(*types.Map); ok {
-				return e.mapIndex(n, mt)
 			}
 			return e.expr(n.Base) + "[" + e.expr(n.Elems[0]) + "]"
 		}
@@ -1642,11 +1467,8 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(n.Span(), "a fill-form list literal is not yet supported")
 		return "0"
 	case *ast.MapLit:
-		// A map[K, V] value lowers to a statement-expression that builds a zrt_map,
-		// inserting each entry by value; a program that names no map registers no instance.
-		if t, ok := e.cur.ExprType(e.info, n).(*types.Map); ok {
-			return e.mapLit(n, t)
-		}
+		// map literals are not supported by the minimized bootstrap (the self-host
+		// compiler uses none).
 		e.diags.Add(n.Span(), "a map literal is not yet supported")
 		return "0"
 	case *ast.Range:
@@ -1667,10 +1489,6 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.tupleLit(n)
 	case *ast.TupleIndex:
 		return e.tupleIndex(n)
-	case *ast.ChanNew:
-		return e.chanNew(n)
-	case *ast.Recv:
-		return e.recvExpr(n)
 	case *ast.Force:
 		return e.forceExpr(n)
 	case *ast.Try:
@@ -1697,12 +1515,8 @@ func (e *emitter) expr(x ast.Expr) string {
 		e.diags.Add(x.Span(), "the `is` type test is not yet supported")
 		return "0"
 	case *ast.FnExpr:
-		// A closure reaching expr() is used AS A VALUE. A non-capturing one was lifted to
-		// a top-level function (sema/mono), so its value is a closure literal over that
-		// function with a NULL environment. A capturing closure is gated in sema.
-		if lam, ok := e.info.Lambdas[n]; ok {
-			return e.lambdaValue(lam)
-		}
+		// A closure used as a value: first-class function values are not supported by the
+		// minimized bootstrap (the self-host compiler uses none).
 		e.diags.Add(n.Span(), "a closure used as a value is not yet supported")
 		return "0"
 	default:
@@ -2257,22 +2071,11 @@ func (e *emitter) call(n *ast.Call) string {
 	if s, ok := e.listMethodEmit(n); ok {
 		return s
 	}
-	if s, ok := e.mapMethodEmit(n); ok {
-		return s
-	}
 	if s, ok := e.builtinCallEmit(n); ok {
 		return s
 	}
 	if s, ok := e.namespaceCallEmit(n); ok {
 		return s
-	}
-	if site, ok := e.cur.DynSites[n]; ok {
-		return e.dynCallSite(n, site)
-	}
-	if e.cur.Dyn {
-		if s := e.dynDispatch(n); s != "" {
-			return s
-		}
 	}
 	if md, ok := e.cur.MethodCalls[n]; ok {
 		return e.methodCall(n, md)
@@ -2287,11 +2090,6 @@ func (e *emitter) call(n *ast.Call) string {
 				return e.constructVariant(n, n.Args, sym.Variant.Name)
 			}
 		}
-	}
-	// a call through a function VALUE (a fn-typed field/local/expr) — after the
-	// construct/method/dyn paths, so only a genuine value call reaches here.
-	if s, ok := e.indirectCallEmit(n); ok {
-		return s
 	}
 	byref := e.calleeByRefArgs(id)
 	var args strings.Builder
@@ -2871,10 +2669,6 @@ func (e *emitter) ctype(t sema.Type) string {
 			return "void*"
 		}
 		return e.ctype(p.Elem) + "*"
-	}
-	if c, ok := e.fnTypeFor(t); ok {
-		// a first-class function value is a C function pointer, spelled by its typedef.
-		return c.name
 	}
 	if name, ok := e.prog.TypeName(t); ok {
 		return name

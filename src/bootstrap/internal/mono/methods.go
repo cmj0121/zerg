@@ -102,10 +102,6 @@ func (w *worker) explicitCall(in *Instance, br *ast.Bracket, n *ast.Call) {
 		}
 		sema.Unify(sig.Params[i], in.ExprType(w.info, exprs[i]), subT, subV)
 	}
-	if sig.Dyn {
-		w.dynCall(in, sig, n)
-		return
-	}
 	callee := w.enqueueFn(sig.Decl, subT, subV)
 	in.Calls[n] = callee.Mangled
 }
@@ -175,6 +171,15 @@ func (w *worker) enqueueMethodInstance(recv types.Type, m *types.ImplMethod) *In
 	w.prog.Funcs = append(w.prog.Funcs, in)
 	w.queue = append(w.queue, in)
 	return in
+}
+
+// orNil returns t, or the nil type when t is nil, so an instance's return type is
+// always set.
+func orNil(t types.Type) types.Type {
+	if t == nil {
+		return types.Nil
+	}
+	return t
 }
 
 // nominalHeadT returns the *TypeDef of a nominal (struct or enum) type, or nil.

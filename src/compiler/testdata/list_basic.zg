@@ -1,0 +1,16 @@
+fn sum(xs: list[int]) -> int {
+	mut s := 0
+	for v in xs {
+		s = s + v
+	}
+	return s
+}
+fn main() {
+	mut xs: list[int] = []
+	xs.append(10)
+	xs.append(20)
+	xs.append(12)
+	print sum(xs)
+	print xs.len()
+	print xs[1]
+}

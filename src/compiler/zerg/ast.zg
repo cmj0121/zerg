@@ -22,6 +22,9 @@ enum Ty {
 	TNil
 	TVoid
 	TUnknown
+	TByte
+	TNamed(str)
+	TList(Ty)
 }
 
 # Expr is an expression node.
@@ -35,16 +38,24 @@ enum Expr {
 	EUnary(str, Expr)
 	EBinary(str, Expr, Expr)
 	ECall(str, list[Expr])
+	EField(Expr, str)
+	EIndex(Expr, Expr)
+	EMethod(Expr, str, list[Expr])
+	EListLit(list[Expr])
+	EConv(Ty, Expr)
 	EMatch(Expr, list[Arm])
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
-# equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`. An arm may
+# equality), 1 = binding (bind the scrutinee to `bind`), 2 = wildcard `_`, 3 = enum
+# constructor (`ctor` names the variant; `binds` names its payload fields). An arm may
 # carry an `if` guard.
 struct Arm {
 	pat: int
 	lit: Expr
 	bind: str
+	ctor: str
+	binds: list[str]
 	has_guard: bool
 	guard_expr: Expr
 	body: Expr
@@ -61,6 +72,7 @@ enum Stmt {
 	SExpr(Expr)
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
+	SForIn(str, Expr, list[Stmt])
 	SBreak
 	SContinue
 	SNop
@@ -82,7 +94,35 @@ struct FnDecl {
 	body: list[Stmt]
 }
 
-# File is a whole parsed source file: its function declarations in source order.
+# FieldDef is one struct field: its name and declared type.
+struct FieldDef {
+	name: str
+	ty: Ty
+}
+
+# StructDecl is a struct type declaration: its name and fields in source order.
+struct StructDecl {
+	name: str
+	fields: list[FieldDef]
+}
+
+# VariantDef is one enum variant: its name and its payload field types (empty for a
+# tag-only variant). The variant's tag is its position in the enum.
+struct VariantDef {
+	name: str
+	fields: list[Ty]
+}
+
+# EnumDecl is an enum type declaration: its name and variants in source (tag) order.
+struct EnumDecl {
+	name: str
+	variants: list[VariantDef]
+}
+
+# File is a whole parsed source file: its struct, enum, and function declarations in
+# source order.
 struct File {
+	structs: list[StructDecl]
+	enums: list[EnumDecl]
 	fns: list[FnDecl]
 }

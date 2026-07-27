@@ -1,0 +1,16 @@
+struct Point {
+	x: int
+	y: int
+}
+fn mk(a: int, b: int) -> Point {
+	return Point(a, b)
+}
+fn manhattan(p: Point) -> int {
+	return p.x + p.y
+}
+fn main() {
+	p := mk(3, 4)
+	print manhattan(p)
+	print p.x
+	print p.y
+}

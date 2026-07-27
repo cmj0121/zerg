@@ -7,6 +7,7 @@
 # and bare-expression statements; and the literal / identifier / unary / binary / call /
 # match expression forms. Operators are stored by their Zerg spelling; the emitter maps
 # them to C. Forms outside the subset are skipped rather than parsed.
+import "strconv"
 
 # Parser holds the token list and the read cursor.
 struct Parser {
@@ -69,6 +70,12 @@ fn ident_name(e: Expr) -> str {
 fn parse_type(mut &p: Parser) -> Ty {
 	name := cur(p).lexeme
 	p_advance(p)
+	if name == "list" and p_at(p, LBrack) {
+		p_advance(p)
+		elem := parse_type(p)
+		expect(p, RBrack)
+		return TList(elem)
+	}
 	if name == "int" {
 		return TInt
 	}
@@ -81,7 +88,31 @@ fn parse_type(mut &p: Parser) -> Ty {
 	if name == "bool" {
 		return TBool
 	}
-	return TUnknown
+	if name == "byte" {
+		return TByte
+	}
+	return TNamed(name)
+}
+
+# is_conv reports whether a callee name is a scalar type conversion.
+fn is_conv(name: str) -> bool {
+	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool"
+}
+
+fn conv_ty(name: str) -> Ty {
+	if name == "int" {
+		return TInt
+	}
+	if name == "byte" {
+		return TByte
+	}
+	if name == "float" {
+		return TFloat
+	}
+	if name == "bool" {
+		return TBool
+	}
+	return TStr
 }
 
 # --- declarations --------------------------------------------------------------
@@ -91,17 +122,81 @@ fn parse_type(mut &p: Parser) -> Ty {
 pub fn parse(src: str) -> File {
 	toks := tokenize(src)
 	mut p := Parser(toks, 0)
+	mut structs: list[StructDecl] = []
+	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Fn) {
 			fns.append(parse_fn(p))
+		} else if p_at(p, Struct) {
+			structs.append(parse_struct(p))
+		} else if p_at(p, Enum) {
+			enums.append(parse_enum(p))
 		} else {
 			p_advance(p)
 		}
 		skip_semis(p)
 	}
-	return File(fns)
+	return File(structs, enums, fns)
+}
+
+fn parse_enum(mut &p: Parser) -> EnumDecl {
+	p_advance(p) # 'enum'
+	name := cur(p).lexeme
+	p_advance(p) # name
+	expect(p, LBrace)
+	skip_semis(p)
+	mut variants: list[VariantDef] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		vname := cur(p).lexeme
+		p_advance(p)
+		mut fields: list[Ty] = []
+		if p_at(p, LParen) {
+			p_advance(p)
+			for not p_at(p, RParen) and not p_at(p, Eof) {
+				fields.append(parse_type(p))
+				if p_at(p, Comma) {
+					p_advance(p)
+				}
+			}
+			expect(p, RParen)
+		}
+		variants.append(VariantDef(vname, fields))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return EnumDecl(name, variants)
+}
+
+# is_pascal reports whether a name starts with an uppercase ASCII letter — the tell for
+# a type / enum-variant name versus a lowercase binding.
+fn is_pascal(s: str) -> bool {
+	b := list[byte](s)
+	if b.len() == 0 {
+		return false
+	}
+	v := int(b[0])
+	return v >= 65 and v <= 90
+}
+
+fn parse_struct(mut &p: Parser) -> StructDecl {
+	p_advance(p) # 'struct'
+	name := cur(p).lexeme
+	p_advance(p) # name
+	expect(p, LBrace)
+	skip_semis(p)
+	mut fields: list[FieldDef] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		fname := cur(p).lexeme
+		p_advance(p)
+		expect(p, Colon)
+		fty := parse_type(p)
+		fields.append(FieldDef(fname, fty))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return StructDecl(name, fields)
 }
 
 fn parse_fn(mut &p: Parser) -> FnDecl {
@@ -246,6 +341,14 @@ fn parse_for(mut &p: Parser) -> Stmt {
 	if p_at(p, LBrace) {
 		return SFor(false, ENil, parse_block(p))
 	}
+	# for-in: `for name in iterable { ... }`
+	if p_at(p, Ident) and peek_kind(p, 1) == In {
+		vname := cur(p).lexeme
+		p_advance(p) # name
+		p_advance(p) # 'in'
+		iter := parse_expr(p)
+		return SForIn(vname, iter, parse_block(p))
+	}
 	cond := parse_expr(p)
 	body := parse_block(p)
 	return SFor(true, cond, body)
@@ -335,20 +438,47 @@ fn parse_unary(mut &p: Parser) -> Expr {
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
 	mut e := parse_primary(p)
-	for p_at(p, LParen) {
-		name := ident_name(e)
-		p_advance(p) # '('
-		mut args: list[Expr] = []
-		for not p_at(p, RParen) and not p_at(p, Eof) {
-			args.append(parse_expr(p))
-			if p_at(p, Comma) {
-				p_advance(p)
+	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) {
+		if p_at(p, LBrack) {
+			p_advance(p) # '['
+			idx := parse_expr(p)
+			expect(p, RBrack)
+			e = EIndex(e, idx)
+		} else if p_at(p, Dot) {
+			p_advance(p)
+			fld := cur(p).lexeme
+			p_advance(p)
+			if p_at(p, LParen) {
+				# method call: target.method(args)
+				e = EMethod(e, fld, parse_call_args(p))
+			} else {
+				e = EField(e, fld)
+			}
+		} else {
+			# free call: name(args), or a scalar type conversion like int(x)
+			name := ident_name(e)
+			args := parse_call_args(p)
+			if is_conv(name) {
+				e = EConv(conv_ty(name), args[0])
+			} else {
+				e = ECall(name, args)
 			}
 		}
-		expect(p, RParen)
-		e = ECall(name, args)
 	}
 	return e
+}
+
+fn parse_call_args(mut &p: Parser) -> list[Expr] {
+	p_advance(p) # '('
+	mut args: list[Expr] = []
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		args.append(parse_expr(p))
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+	}
+	expect(p, RParen)
+	return args
 }
 
 fn parse_primary(mut &p: Parser) -> Expr {
@@ -357,6 +487,11 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	if k == Int {
 		p_advance(p)
 		return EInt(t.lexeme)
+	}
+	if k == Byte {
+		# a byte literal b'x' becomes its decimal code point
+		p_advance(p)
+		return EInt(strconv.to_string(int(list[byte](t.value)[0]), 10))
 	}
 	if k == Float {
 		p_advance(p)
@@ -379,6 +514,15 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return ENil
 	}
 	if k == Ident {
+		# list[T](x) — a list-type conversion (e.g. list[byte](s))
+		if t.lexeme == "list" and peek_kind(p, 1) == LBrack {
+			p_advance(p) # 'list'
+			p_advance(p) # '['
+			elem := parse_type(p)
+			expect(p, RBrack)
+			args := parse_call_args(p)
+			return EConv(TList(elem), args[0])
+		}
 		p_advance(p)
 		return EIdent(t.lexeme)
 	}
@@ -387,6 +531,19 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		inner := parse_expr(p)
 		expect(p, RParen)
 		return inner
+	}
+	if k == LBrack {
+		# list literal: [] or [a, b, ...]
+		p_advance(p)
+		mut elems: list[Expr] = []
+		for not p_at(p, RBrack) and not p_at(p, Eof) {
+			elems.append(parse_expr(p))
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
+		}
+		expect(p, RBrack)
+		return EListLit(elems)
 	}
 	if k == Match {
 		return parse_match(p)
@@ -416,11 +573,28 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	mut pat := 0
 	mut lit := ENil
 	mut bind := ""
+	mut ctor := ""
+	mut binds: list[str] = []
 	if p_at(p, Ident) {
 		name := cur(p).lexeme
 		p_advance(p)
 		if name == "_" {
 			pat = 2
+		} else if is_pascal(name) {
+			# enum constructor pattern: `Variant` or `Variant(a, b)`
+			pat = 3
+			ctor = name
+			if p_at(p, LParen) {
+				p_advance(p)
+				for not p_at(p, RParen) and not p_at(p, Eof) {
+					binds.append(cur(p).lexeme)
+					p_advance(p)
+					if p_at(p, Comma) {
+						p_advance(p)
+					}
+				}
+				expect(p, RParen)
+			}
 		} else {
 			pat = 1
 			bind = name
@@ -437,5 +611,5 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	}
 	expect(p, FatArrow)
 	body := parse_expr(p)
-	return Arm(pat, lit, bind, has_guard, grd, body)
+	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }

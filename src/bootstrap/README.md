@@ -112,7 +112,7 @@ These were removed because the self-host source uses none of them. Each is rejec
 | Removed             | What happens now                                       |
 | ------------------- | ------------------------------------------------------ |
 | `map[K, V]`         | rejected                                               |
-| function values     | `a function used as a value is not yet supported`      |
+| closures            | `a closure used as a value is not yet supported`       |
 | channels            | rejected                                               |
 | `spawn`, `select`   | `statement not supported by the bootstrap seed`        |
 | `#[dyn]` dispatch   | `#[dyn] is not yet supported`                          |

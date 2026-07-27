@@ -68,8 +68,18 @@ fn ident_name(e: Expr) -> str {
 # --- types ---------------------------------------------------------------------
 
 fn parse_type(mut &p: Parser) -> Ty {
-	name := cur(p).lexeme
+	mut name := cur(p).lexeme
 	p_advance(p)
+	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
+	# scope, so the qualifier only says where the type came from and the last segment is
+	# the name. Reading it this way is what lets a program use a type another module
+	# declares — without it the qualifier parses as a type of its own and the emitter
+	# spells a name nothing declared.
+	for p_at(p, Dot) {
+		p_advance(p)
+		name = cur(p).lexeme
+		p_advance(p)
+	}
 	if name == "list" and p_at(p, LBrack) {
 		p_advance(p)
 		elem := parse_type(p)

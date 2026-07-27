@@ -1362,6 +1362,14 @@ func (e *emitter) expr(x ast.Expr) string {
 		if sym, ok := e.info.Refs[n]; ok && sym.Kind == sema.SymVariant {
 			return e.constructVariant(n, nil, sym.Variant.Name)
 		}
+		// A bare function name used as a VALUE (sema records it here) is a function
+		// value, which the seed does not carry — same boundary as a closure below.
+		// Without this the name would spell its own mangled C symbol and bind into a
+		// `void` local, which only fails later as cc noise about generated code.
+		if _, ok := e.info.FuncValues[n]; ok {
+			e.diags.Add(n.Span(), "a function used as a value is not yet supported")
+			return "0"
+		}
 		// a `mut &x` parameter is pointer storage: every mention reads through it.
 		if e.identIsByRef(n) {
 			return "(*" + e.resolve(n.Name) + ")"
@@ -1401,6 +1409,12 @@ func (e *emitter) expr(x ast.Expr) string {
 			if sym, ok := e.info.Refs[id]; ok && sym.Kind == sema.SymType {
 				return e.constructVariant(n, nil, n.Name)
 			}
+		}
+		// `mod.f` taken as a value rather than called: the Field analogue of the bare
+		// function name above, and outside the seed for the same reason.
+		if _, ok := e.info.NsFuncValues[n]; ok {
+			e.diags.Add(n.Span(), "a function used as a value is not yet supported")
+			return "0"
 		}
 		if s, ok := e.namespaceMemberValue(n); ok {
 			return s

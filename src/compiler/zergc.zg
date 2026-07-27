@@ -593,7 +593,6 @@ fn rt_units() -> list[str] {
 	units.append("entry.c")
 	units.append("fmt.c")
 	units.append("list.c")
-	units.append("map.c")
 	units.append("ref.c")
 	units.append("str.c")
 	units.append("sys.c")

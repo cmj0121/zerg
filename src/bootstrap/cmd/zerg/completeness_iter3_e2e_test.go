@@ -10,6 +10,15 @@ import (
 	runtime "github.com/cmj0121/zerg/src/runtime"
 )
 
+// asExit reports whether err is an *exec.ExitError, storing it in target when it is.
+func asExit(err error, target **exec.ExitError) bool {
+	ee, ok := err.(*exec.ExitError)
+	if ok {
+		*target = ee
+	}
+	return ok
+}
+
 // buildIter3 compiles src, links it against the materialized runtime, and returns the
 // built binary path (skipping when no C compiler is available). Unlike the
 // feature-specific harnesses it asserts no manifest flags, so it serves any of the

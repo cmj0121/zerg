@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,15 +10,6 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/build"
 	runtime "github.com/cmj0121/zerg/src/runtime"
 )
-
-// asExit reports whether err is an *exec.ExitError, storing it in target when it is.
-func asExit(err error, target **exec.ExitError) bool {
-	ee, ok := err.(*exec.ExitError)
-	if ok {
-		*target = ee
-	}
-	return ok
-}
 
 // buildIter3 compiles src, links it against the materialized runtime, and returns the
 // built binary path (skipping when no C compiler is available). Unlike the
@@ -151,7 +143,7 @@ func TestTryResultNilPropagatesErr(t *testing.T) {
 		bin := buildIter3(t, src, true)
 		stdout, _, err := run(t, bin)
 		var exit *exec.ExitError
-		if !asExit(err, &exit) || exit.ExitCode() == 0 {
+		if !errors.As(err, &exit) || exit.ExitCode() == 0 {
 			t.Fatalf("want non-zero exit (Err propagated), got err=%v", err)
 		}
 		if stdout != "" {

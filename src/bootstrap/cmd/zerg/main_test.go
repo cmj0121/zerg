@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,19 +14,6 @@ func writeSrc(t *testing.T, src string) string {
 		t.Fatalf("write source: %v", err)
 	}
 	return p
-}
-
-func TestCmpErr(t *testing.T) {
-	a, b := errors.New("a"), errors.New("b")
-	if cmpErr(a, b) != a {
-		t.Errorf("cmpErr(a, b) should return a")
-	}
-	if cmpErr(nil, b) != b {
-		t.Errorf("cmpErr(nil, b) should return b")
-	}
-	if cmpErr(nil, nil) != nil {
-		t.Errorf("cmpErr(nil, nil) should return nil")
-	}
 }
 
 func TestRunBuildEmitStages(t *testing.T) {

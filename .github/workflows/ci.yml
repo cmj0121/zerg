@@ -26,6 +26,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A stale `docs/…md` path has NO other signal: most of them are plain-text citations
+  # in source comments, which markdownlint, prettier and every link checker are blind
+  # to. If CI does not catch it, nothing does — so this runs on its own, needs no
+  # toolchain, and finishes in seconds.
+  docs-links:
+    name: docs links resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check every docs path the repo cites
+        run: make docs-links
+
   bootstrap-and-examples:
     name: bootstrap + examples (${{ matrix.os }})
     strategy:

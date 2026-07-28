@@ -342,7 +342,14 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	mut sb: list[byte] = []
 	mut depth := 0 # 0 = literal text, above it = inside a `{ … }` hole
 	for true {
-		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		# An f-string RAISES where a plain string yields an Illegal token, and the reason is
+		# that nothing downstream reads Illegal: parse_primary steps over it and answers
+		# ENil, so a malformed literal would compile to a program that silently lacks it.
+		# The forms below cannot be recovered from either — an unclosed hole has no end to
+		# guess at — so the lexer is where they stop.
+		if eof(l) or at(l, 0) == byte(10) {
+			raise "f-string: unterminated literal: " + lexeme_from(l, soff)
+		}
 		c := at(l, 0)
 		if depth > 0 {
 			if c == b'{' {
@@ -364,8 +371,7 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 			sb.append(advance(l))
 			sb.append(advance(l))
 		} else if c == b'}' {
-			# a bare `}` is not text: `}}` is how one is written
-			return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+			raise "f-string: a bare '}' is not text — write '}}' for one: " + lexeme_from(l, soff)
 		} else if c == b'{' {
 			depth = 1
 			sb.append(advance(l))

@@ -986,7 +986,15 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
-	tgt := c_expr(em, target, sb)
+	# every list method takes the list's ADDRESS, and a slice or a call result has none —
+	# it is materialised into a temp first so `xs[a..b].len()` is addressable
+	return c_list_method_rv(em, target, meth, args, tty, sb) if not c_is_lvalue(target)
+	return c_list_method_on(em, c_expr(em, target, sb), meth, args, tty, sb)
+}
+
+# c_list_method_on is the lowering itself, given a target already rendered — so the lvalue
+# and rvalue paths spell a method exactly the same way.
+fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	return f"((int64_t)zrt_list_len(&({tgt})))" if meth == "len"
 	if meth == "append" {
 		# the element is copied INTO the list, so the list owns it and the caller's name
@@ -1357,6 +1365,14 @@ fn c_elem_ty(mut &em: Emitter, target: Expr, idx: Expr) -> Ty {
 	return c_list_elem(t)
 }
 
+# c_list_method_rv is a list method on an RVALUE: bind it, then call the method on the
+# binding, so the whole thing is still one expression.
+fn c_list_method_rv(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	src := c_expr(em, target, sb)
+	inner := c_list_method_on(em, "zg_rv", meth, args, tty, sb)
+	return "({ zrt_list zg_rv = " + src + "; " + inner + "; })"
+}
+
 fn c_map_method_ret(meth: str) -> Ty {
 	return TInt if meth == "len"
 	return TBool if meth == "has"
@@ -1606,7 +1622,7 @@ fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 	name := c_call_name(x)
 	if name == "" {
-		raise "defer takes a direct function call"
+		raise "NotImplemented: defer of anything but a direct function call"
 	}
 	args := c_call_args_of(x)
 	idx := em.dfn_n
@@ -1775,7 +1791,7 @@ fn c_map_method(mut &em: Emitter, target: Expr, meth: str, tty: Ty, sb: Subst) -
 	tgt := c_expr(em, target, sb)
 	return f"((int64_t)zrt_map_len(&({tgt})))" if meth == "len"
 	return f"zrt_map_has(&({tgt}), &zg_mk)" if meth == "has"
-	raise f"a map has no method `{meth}` yet"
+	raise f"NotImplemented: the map method `{meth}`"
 }
 
 fn c_index_target(e: Expr) -> Expr {
@@ -1938,7 +1954,7 @@ fn c_tuple_tys(t: Ty) -> list[Ty] {
 }
 
 fn c_range_unsupported() -> str {
-	raise "a range is only supported as a `for … in` iterable so far, not as a value"
+	raise "NotImplemented: a range used as a value — it is a `for … in` iterable so far"
 }
 
 fn c_is_range(e: Expr) -> bool {

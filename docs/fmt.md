@@ -73,13 +73,22 @@ together.
 
 | Code   | Rule                                                                      | Default |
 | ------ | ------------------------------------------------------------------------- | ------- |
-| `F401` | `if c { return x }` becomes the guard it is sugar for, `return x if c`    | on      |
+| `F401` | a one-jump if-block becomes the postfix guard it is sugar for             | on      |
 | `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
 
-`GRAMMAR` defines `return x if c` **as** sugar for `if c { return x }`, so the two say the
+`GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
+`if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
 same thing and one of them says it in four lines. The formatter picks the short one, which
 is what a guard clause is for: the exceptional exit stops interrupting the shape of the
-function it guards. A bare early exit works the same way — `return if c`.
+code it guards. A bare early exit works the same way — `return if c`.
+
+Preferring the sugar is the general rule, not a special case for `return`: **where the
+language offers a shorter surface for exactly what is written, the canonical form is the
+shorter one**, and a reader stops having to notice that the two are the same thing.
+
+Note what this postfix `if` is NOT. It attaches to a jump, not to an expression — Zerg has
+no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:
+`x := if c { 1 } else { 2 }`.
 
 ```zerg
 fn clamp(n: int) -> int {        # before
@@ -101,7 +110,7 @@ fn clamp(n: int) -> int {        # after
 
 It rewrites only what it can rewrite **without losing anything**, and declines otherwise:
 
-- exactly one statement in the block, and it is a `return`;
+- exactly one statement in the block, and it is a jump;
 - no `else` — an else has a second branch the guard form cannot carry;
 - no comment anywhere inside, because a comment is something a person put there and this
   pass has nowhere to put it back.

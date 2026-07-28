@@ -171,7 +171,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		link_program(files[0], output, jobs)
 		return
 	}
-	io.ewrite("zerg: unknown stage " + emit + " (want tokens, ast, c, lib, or bin)\n")
+	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, c, lib, or bin)\n")
 	__zrt_exit(2)
 }
 
@@ -232,7 +232,7 @@ fn rt_sources() -> list[str] {
 	rt := rt_dir()
 	mut out: list[str] = []
 	for u in rt_units() {
-		out.append(rt + "/" + u)
+		out.append(f"{rt}/{u}")
 	}
 	return out
 }
@@ -335,7 +335,7 @@ fn unit_key(code: str) -> str {
 		h = (h * 16777619) % 4294967296
 		i = i + 1
 	}
-	return strconv.to_string(h, 16) + "-" + strconv.to_string(b.len(), 16)
+	return f"{strconv.to_string(h, 16)}-{strconv.to_string(b.len(), 16)}"
 }
 
 # compile_to writes the emitted C beside its product and hands it to cc — compiled only
@@ -467,7 +467,7 @@ fn stdlib_dir() -> str {
 # join_path joins a directory and a name, treating "" and "." as "here".
 fn join_path(dir: str, name: str) -> str {
 	return name if dir == "" or dir == "."
-	return dir + "/" + name
+	return f"{dir}/{name}"
 }
 
 # dir_of returns the directory part of a path, or "." when it names a bare file.
@@ -597,7 +597,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 	argv.append(output)
 	argv.append(cpath)
 	for u in rt_units() {
-		argv.append(rt + "/" + u)
+		argv.append(f"{rt}/{u}")
 	}
 	return argv
 }

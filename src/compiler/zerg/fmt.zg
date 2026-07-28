@@ -29,7 +29,7 @@
 #   F403  an argument list is one line, or one element per line — never half of each
 #   F404  two or more imports become one parenthesized group
 #   F405  a string built with `+` becomes the f-string it already is
-#   F406  a blank line after a run of guards, and before a comment that heads a chunk
+#   F406  a blank line where one is load-bearing — guard runs, declaration runs, comments
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —

@@ -122,14 +122,14 @@ with no way to tell them apart by looking.
 
 ### F4xx — rewrites
 
-| Code   | Rule                                                                      | Default |
-| ------ | ------------------------------------------------------------------------- | ------- |
-| `F401` | a one-jump if-block becomes the postfix guard it is sugar for             | on      |
-| `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
-| `F403` | an argument list is one line, or one element per line — never half        | on      |
-| `F404` | two or more imports become one parenthesized group                        | on      |
-| `F405` | a string built with `+` becomes the f-string it already is                | on      |
-| `F406` | a blank line after a run of guards, and before a comment heading a chunk  | on      |
+| Code   | Rule                                                                           | Default |
+| ------ | ------------------------------------------------------------------------------ | ------- |
+| `F401` | a one-jump if-block becomes the postfix guard it is sugar for                  | on      |
+| `F402` | imports group — standard library first, then the rest — each alphabetical      | on      |
+| `F403` | an argument list is one line, or one element per line — never half             | on      |
+| `F404` | two or more imports become one parenthesized group                             | on      |
+| `F405` | a string built with `+` becomes the f-string it already is                     | on      |
+| `F406` | a blank line where one is load-bearing: guard runs, declaration runs, comments | on      |
 
 `GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
 `if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
@@ -326,6 +326,28 @@ One guard is part of the line it guards. Two or more are a **table of exits**, a
 wants an edge — both of them, so a run that starts mid-function gets a blank in front as
 well. At the top of a body the `{` is already that edge. That restraint is most of the
 rule: 182 of this tree's 218 guard runs are a single guard and none of them is touched.
+
+A **run of three or more declarations** starting mid-block gets a blank in front of it, and
+nothing after it:
+
+```zerg
+fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
+    em.used_rt = true
+
+    ct := c_type(c_list_elem(c_infer(em, target)))
+    tgt := c_expr(em, target, sb)
+    ix := c_expr(em, idx, sb)
+```
+
+The asymmetry with a guard run is structural. A guard run is **terminal** — nothing after
+it consumes it, which is why it reads as a table and wants both edges. A declaration run is
+a **preamble**: of this tree's 167 runs, 106 are followed by a `for` that references every
+name they declare, and 86 of those are the shape where the last declaration is the
+induction variable of the very next line. A blank there would split `i = 0` from `i < n`.
+It has no far edge because it has not finished being read.
+
+Three, not two — two declarations are a pair, not a paragraph, the same step this rule
+takes when it says one guard is part of the line it guards.
 
 A comment on its **own line**, with code before and after it, gets a blank in front. A
 comment there heads a new chunk — that is what makes it its own line rather than a trailing

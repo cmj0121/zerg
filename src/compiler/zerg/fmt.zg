@@ -339,7 +339,24 @@ fn fmt_blank_mark(toks: list[Token], mut &at: list[bool]) {
 			group = group - 1
 		}
 		end := fmt_guard_end(toks, i)
-		if end < 0 {
+		dend := fmt_decl_end(toks, i)
+		if end < 0 and dend >= 0 {
+			# a run of declarations gets a leading edge and NOTHING after it
+			mut dn := 1
+			mut dlast := dend
+			mut dnxt := fmt_next_code(toks, dend)
+			for dnxt >= 0 {
+				e := fmt_decl_end(toks, dnxt)
+				break if e < 0
+				dn = dn + 1
+				dlast = e
+				dnxt = fmt_next_code(toks, e)
+			}
+			if dn >= fmt_decl_min() and fmt_blank_lead(toks, i) {
+				at[i] = true
+			}
+			i = dlast + 1
+		} else if end < 0 {
 			# `group == 0` keeps this out of a wrapped argument list: a comment among a
 			# list's elements belongs to the element it sits on, and a blank line there
 			# separates it from the very thing it is about.
@@ -407,6 +424,68 @@ fn fmt_blank_leads(toks: list[Token], at: int) -> bool {
 		i = i + 1
 	}
 	return false
+}
+
+# fmt_decl_min is how many declarations make a paragraph. Two are a pair — `sline` and
+# `scol` are one thought written twice — which is the same step this rule already takes
+# when it says one guard is part of the line it guards.
+fn fmt_decl_min() -> int {
+	return 3
+}
+
+# fmt_decl_end is the index of the `;` closing the declaration starting at `at`, or -1 when
+# the statement there is anything else. The forms are `x := e`, `mut x := e` and the typed
+# `x: T = e`.
+#
+# A `{` at depth zero declines it, the way it declines a guard: `x := if c { 1 } else { 2 }`
+# is a statement with a shape of its own and not part of any preamble.
+fn fmt_decl_end(toks: list[Token], at: int) -> int {
+	mut i := at
+	if toks[i].kind == Mut {
+		i = i + 1
+	}
+	return - 1 if toks[i].kind != Ident
+	i = i + 1
+	if toks[i].kind == Colon {
+		# `x: T = e` — step over the type to the `=` that opens the value
+		mut j := i + 1
+		mut d := 0
+		for j < toks.len() {
+			k := toks[j].kind
+			if is_bracket(k) {
+				d = d + 1
+			} else if is_close(k) {
+				d = d - 1
+			} else if d == 0 and k == Assign {
+				break
+			} else if is_semi(k) or is_lbrace(k) or is_comment(k) {
+				return - 1
+			}
+			j = j + 1
+		}
+		return - 1 if j >= toks.len()
+		i = j
+	} else if toks[i].kind != Walrus {
+		return - 1
+	}
+	mut depth := 0
+	mut j := i + 1
+	for j < toks.len() {
+		k := toks[j].kind
+		if is_bracket(k) {
+			depth = depth + 1
+		} else if is_close(k) {
+			depth = depth - 1
+		} else if is_lbrace(k) and depth == 0 {
+			return - 1
+		} else if is_semi(k) and depth == 0 {
+			return j
+		} else if is_comment(k) or is_eof(k) {
+			return - 1
+		}
+		j = j + 1
+	}
+	return - 1
 }
 
 # fmt_blank_lead reports whether a blank belongs in FRONT of a run: there has to be code

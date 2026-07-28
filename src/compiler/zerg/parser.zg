@@ -68,6 +68,7 @@ fn ident_name(e: Expr) -> str {
 fn parse_type(mut &p: Parser) -> Ty {
 	mut name := cur(p).lexeme
 	p_advance(p)
+
 	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
 	# scope, so the qualifier only says where the type came from and the last segment is
 	# the name. Reading it this way is what lets a program use a type another module
@@ -78,9 +79,11 @@ fn parse_type(mut &p: Parser) -> Ty {
 		name = cur(p).lexeme
 		p_advance(p)
 	}
+
 	# `This` is the self type: inside an impl it is the type that impl is for. Resolving it
 	# at parse time keeps it out of the emitter, which has no notion of a self type.
 	return TNamed(p.impl_ty) if name == "This" and p.impl_ty != ""
+
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
 	if name == "fn" and p_at(p, LParen) {
 		p_advance(p)
@@ -113,11 +116,13 @@ fn parse_type(mut &p: Parser) -> Ty {
 		expect(p, RBrack)
 		return inner
 	}
+
 	return TInt if name == "int"
 	return TFloat if name == "float"
 	return TStr if name == "str"
 	return TBool if name == "bool"
 	return TByte if name == "byte"
+
 	if name == "uint" {
 		# the subset models uint as int64_t (it never parses top-bit values)
 		return TInt
@@ -136,6 +141,7 @@ fn conv_ty(name: str) -> Ty {
 	return TByte if name == "byte"
 	return TFloat if name == "float"
 	return TBool if name == "bool"
+
 	return TStr
 }
 
@@ -207,6 +213,7 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 		if path != "" {
 			imports.append(path)
 		}
+
 		# a spec that read nothing would leave the position where it was: step over the
 		# token rather than reading it forever
 		if p.pos == at {
@@ -326,6 +333,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	}
 	expect(p, LBrace)
 	skip_semis(p)
+
 	# `This` inside the block names the type the block is for; the parser resolves it here
 	# rather than leaving a name the emitter would have to spell and could not.
 	outer := p.impl_ty
@@ -375,6 +383,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		p_advance(p)
 		expect(p, Colon)
 		pty := parse_type(p)
+
 		# `= <constant>` makes the parameter optional at the call site
 		mut has_def := false
 		mut def := ENil
@@ -437,8 +446,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return parse_jump_guard(p, SContinue)
 	}
+
 	return parse_if(p) if k == If
 	return parse_for(p) if k == For
+
 	if k == Guard {
 		# guard { ... } (optionally with a trailing else): the subset runs the happy
 		# path only, so emit the guarded block's statements
@@ -459,6 +470,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		return parse_binding(p, false)
 	}
 	return parse_binding(p, false) if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon)
+
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
 	if p_at(p, Assign) {
@@ -502,6 +514,7 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 fn parse_return(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'return'
 	return SReturn(false, ENil) if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof)
+
 	# `return if c` — a bare early exit under a guard. It is desugared here into the
 	# `if c { return }` it is defined as, because SReturnIf carries a VALUE and a bare
 	# return has none; going through the block form means the emitter needs to know
@@ -545,6 +558,7 @@ fn parse_if(mut &p: Parser) -> Stmt {
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
 	return SFor(false, ENil, parse_block(p)) if p_at(p, LBrace)
+
 	# for-in: `for name in iterable { ... }`
 	if p_at(p, Ident) and peek_kind(p, 1) == In {
 		vname := cur(p).lexeme
@@ -914,8 +928,10 @@ fn fstr_slice(src: list[byte], lo: int, hi: int) -> str {
 # the reason this exists: two bytes would leave its `{` to be read as a hole.
 fn fstr_esc_end(src: list[byte], at: int) -> int {
 	n := src.len()
+
 	return at + 1 if at + 1 >= n
 	return at + 2 if src[at + 1] != b'u'
+
 	mut i := at + 2
 	for i < n {
 		return i + 1 if src[i] == b'}'
@@ -968,7 +984,7 @@ fn fstr_quote_end(src: list[byte], at: int) -> int {
 # running it through the lexer — so `\n` and `\u{…}` mean here exactly what they mean in a
 # `"…"`, rather than through a second escape table that would drift from the first.
 fn fstr_text(raw: str) -> str {
-	toks := tokenize("\"" + fstr_unbrace(raw) + "\"")
+	toks := tokenize(f"\"{fstr_unbrace(raw)}\"")
 	return toks[0].value if toks[0].kind == Str
 	raise "f-string: malformed literal text: " + raw
 }
@@ -1000,6 +1016,7 @@ fn fstr_unbrace(raw: str) -> str {
 # inside a hole; p.impl_ty rides along so `this` resolves as it does outside one.
 fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
+
 	toks := tokenize(hole)
 	mut hp := Parser(toks, 0, p.impl_ty)
 	e := parse_expr(hp)

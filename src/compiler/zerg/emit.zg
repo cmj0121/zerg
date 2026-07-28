@@ -79,6 +79,14 @@ struct Emitter {
 	# holding the hash and equality for the key type.
 	mvt_names: list[str]
 	mvt_decls: list[str]
+
+	# dfn_decls are the generated defer thunks and their env structs, one per site.
+	# fn_mark is the cleanup-stack mark a `return` unwinds to, and loop_mark the one a
+	# `break` or `continue` unwinds to — empty when there is no defer to run.
+	dfn_decls: list[str]
+	dfn_n: int
+	fn_mark: str
+	loop_mark: str
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1435,15 +1443,16 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
-		SReturnIf(val, cond) => ind + "if " + c_cond(em, cond) + " { return " + c_expr(em, val, c_nosub()) + "; }\n"
+		SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
 		SExpr(e) => f"{ind}{c_expr(em, e, c_nosub())};\n"
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		SGuard(body) => c_block(em, body, ind)
 		SRaise(x) => c_raise(em, x, ind)
-		SBreak => ind + "break;\n"
-		SContinue => ind + "continue;\n"
+		SDefer(x) => c_defer(em, x, ind)
+		SBreak => c_jump(em, "break", ind)
+		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
 	}
 }
@@ -1578,6 +1587,96 @@ fn c_init_calls(f: File) -> str {
 		}
 	}
 	return out
+}
+
+# --- defer ----------------------------------------------------------------------
+#
+# GRAMMAR runs a defer at the enclosing BLOCK's exit, on every path out, last-scheduled-
+# first — which is the runtime's cleanup stack exactly. A block holding one takes a mark
+# on entry and unwinds to it on the way out; `return` unwinds the whole function's stack
+# and `break`/`continue` the loop's.
+#
+# What may be deferred is a direct CALL, which is the same limit the seed sets. The call's
+# arguments are captured BY VALUE into a per-site env struct at the point the defer runs,
+# so a later reassignment of an argument does not change what the deferred call sees.
+fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
+	em.used_rt = true
+	name := c_call_name(x)
+	if name == "" {
+		raise "defer takes a direct function call"
+	}
+	args := c_call_args_of(x)
+	idx := em.dfn_n
+	em.dfn_n = idx + 1
+	tag := strconv.to_string(idx, 10)
+	if args.len() == 0 {
+		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
+		# better as concatenation
+		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		return ind + "zrt_defer(zg_dfn_" + tag + ", NULL);\n"
+	}
+	mut fields := ""
+	mut vals := ""
+	mut call := ""
+	mut i := 0
+	for i < args.len() {
+		ft := c_type(c_infer(em, args[i]))
+		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
+		if i > 0 {
+			vals = vals + ", "
+			call = call + ", "
+		}
+		vals = vals + c_expr(em, args[i], c_nosub())
+		call = call + "e->f" + strconv.to_string(i, 10)
+		i = i + 1
+	}
+	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
+	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; zg_" + name + "(" + call + "); }\n")
+	mut out := ind + "zg_denv_" + tag + " zg_de" + tag + " = { " + vals + " };\n"
+	return out + ind + "zrt_defer(zg_dfn_" + tag + ", &zg_de" + tag + ");\n"
+}
+
+fn c_call_name(e: Expr) -> str {
+	return match e {
+		ECall(n, _) => n
+		_ => ""
+	}
+}
+
+fn c_call_args_of(e: Expr) -> list[Expr] {
+	mut none: list[Expr] = []
+	return match e {
+		ECall(_, a) => a
+		_ => none
+	}
+}
+
+fn c_has_defer(body: list[Stmt]) -> bool {
+	for st in body {
+		return true if c_is_defer(st)
+	}
+	return false
+}
+
+fn c_is_defer(s: Stmt) -> bool {
+	return match s {
+		SDefer(_) => true
+		_ => false
+	}
+}
+
+# c_return_if is the postfix guard's return. It goes through c_return so the defers run on
+# this path too — a guard is an exit like any other, and it is the path a `defer` most
+# often exists for.
+fn c_return_if(mut &em: Emitter, val: Expr, cond: Expr, ind: str) -> str {
+	body := c_return(em, true, val, ind + "    ")
+	return ind + "if " + c_cond(em, cond) + " {\n" + body + ind + "}\n"
+}
+
+# c_jump is `break` / `continue` with the loop's defers run first.
+fn c_jump(mut &em: Emitter, kw: str, ind: str) -> str {
+	return f"{ind}{kw};\n" if em.loop_mark == ""
+	return f"{ind}zrt_unwind_to({em.loop_mark});\n{ind}{kw};\n"
 }
 
 # --- maps -----------------------------------------------------------------------
@@ -1942,9 +2041,19 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 }
 
 fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
-	# `return nil` from a nil/Result[nil] function is a bare C return
-	return f"{ind}return {c_expr(em, e, c_nosub())};\n" if has_val and not c_is_nil_expr(e)
-	return ind + "return;\n"
+	# the value is computed BEFORE the defers run, which is what makes `defer` unable to
+	# change what is returned
+	mut pre := ""
+	if em.fn_mark != "" {
+		pre = f"{ind}zrt_unwind_to({em.fn_mark});\n"
+	}
+	if has_val and not c_is_nil_expr(e) {
+		v := c_expr(em, e, c_nosub())
+		return f"{ind}return {v};\n" if pre == ""
+		rt := c_type(c_infer(em, e))
+		return ind + "{ " + rt + " zg_rv = " + v + ";\n" + pre + ind + "return zg_rv; }\n"
+	}
+	return pre + ind + "return;\n"
 }
 
 fn c_is_nil_expr(e: Expr) -> bool {
@@ -2040,6 +2149,7 @@ fn c_err_kind(name: str) -> int {
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	return c_block_marked(em, body, ind) if c_has_defer(body)
 	mut out := ""
 	mut i := 0
 	for i < body.len() {
@@ -2047,6 +2157,28 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 		i = i + 1
 	}
 	return out
+}
+
+# c_block_marked wraps a block that schedules a defer: a mark on entry, an unwind on the
+# way out. The mark's NAME is what a return or a jump inside unwinds to, so it is saved
+# and restored around the body — an inner block must not leave its own mark visible to the
+# statements that follow it.
+fn c_block_marked(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	tag := strconv.to_string(em.dfn_n, 10)
+	mark := f"zg_mk{tag}"
+	em.dfn_n = em.dfn_n + 1
+	outer_fn := em.fn_mark
+	if em.fn_mark == "" {
+		em.fn_mark = mark
+	}
+	mut out := f"{ind}size_t {mark} = zrt_scope_mark();\n"
+	mut i := 0
+	for i < body.len() {
+		out = out + c_stmt(em, body[i], ind)
+		i = i + 1
+	}
+	em.fn_mark = outer_fn
+	return out + f"{ind}zrt_unwind_to({mark});\n"
 }
 
 # --- declaration emission ------------------------------------------------------
@@ -2230,7 +2362,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, "", "")
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -2320,7 +2452,13 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.mvt_decls {
 		tups = tups + d
 	}
-	return f"{hdr}{types}{tups}{globals}{protos}\n{defs}{mainw}"
+	# the defer thunks go AFTER the prototypes — each one calls a program function — and
+	# before the bodies that schedule them
+	mut dfns := ""
+	for d in em.dfn_decls {
+		dfns = dfns + d
+	}
+	return f"{hdr}{types}{tups}{globals}{protos}\n{dfns}{defs}{mainw}"
 }
 
 # c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,

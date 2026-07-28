@@ -119,6 +119,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
 			SGuard(body_b) => walk_body(body_b, ids, calls, ns)
 			SRaise(x) => walk_expr(x, ids, calls, ns)
+		SDefer(x) => walk_expr(x, ids, calls, ns)
 			_ => skip()
 		}
 	}

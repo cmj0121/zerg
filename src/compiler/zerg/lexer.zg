@@ -729,6 +729,7 @@ pub fn dump_tokens(src: str) -> str {
 	for i < toks.len() {
 		t := toks[i]
 		break if is_eof(t.kind)
+
 		line := strconv.to_string(t.line, 10)
 		col := strconv.to_string(t.col, 10)
 		s := f"{line}:{col}\t{render_token(t)}\n"

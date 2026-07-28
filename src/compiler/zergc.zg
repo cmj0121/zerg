@@ -189,6 +189,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	for u in units {
 		trees.append(zerg.merge_files(u.srcs))
 	}
+
 	prog := zerg.merge_asts(trees)
 	mut objs: list[str] = []
 	mut todo_c: list[str] = []
@@ -360,6 +361,7 @@ fn compile_to(code: str, output: str, object_only: bool) {
 # drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
 fn drop_ext(path: str) -> str {
 	return path if not has_suffix(path, ".zg")
+
 	b := list[byte](path)
 	mut out: list[byte] = []
 	mut i := 0

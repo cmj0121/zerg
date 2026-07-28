@@ -523,6 +523,7 @@ fn fmt_blank_here(toks: list[Token], at: int) -> bool {
 # which is a statement of a different shape and not part of any table.
 fn fmt_guard_end(toks: list[Token], at: int) -> int {
 	return - 1 if not is_jump(toks[at].kind)
+
 	mut depth := 0
 	mut seen := false
 	mut i := at + 1
@@ -1659,6 +1660,7 @@ fn fmt_emit_group(toks: list[Token], first: int, last: int, mut &out: list[Token
 	ln := toks[first].line
 	out.append(Token(Import, "import", "", ln, 0))
 	out.append(Token(LParen, "(", "", ln, 0))
+
 	mut cur := ln
 	mut src := - 1
 	mut i := first

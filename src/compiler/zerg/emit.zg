@@ -871,6 +871,7 @@ fn c_display(t: Ty, inner: str) -> str {
 # element C type inferred for the target.
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.used_rt = true
+
 	ct := c_type(c_list_elem(c_infer(em, target)))
 	tgt := c_expr(em, target, sb)
 	ix := c_expr(em, idx, sb)
@@ -977,6 +978,7 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 	return "(zrt_list){0}" if elems.len() == 0
 	em.used_rt = true
+
 	et := c_type(c_infer(em, elems[0]))
 	mut out := "({ zrt_list zg_ll = zg_empty_list(sizeof(" + et + "));"
 	mut i := 0
@@ -1206,6 +1208,7 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
 	a := arms[i]
 	return c_arm_body(em, a, s, sb) if i == arms.len() - 1
+
 	cond := c_arm_cond(em, a, s, sb)
 	body := c_arm_body(em, a, s, sb)
 	rest := c_arms(em, arms, i + 1, s, sb)
@@ -1465,6 +1468,7 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
 fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
 	em.used_rt = true
+
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())

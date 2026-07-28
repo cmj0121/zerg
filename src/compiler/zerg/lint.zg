@@ -141,6 +141,11 @@ fn walk_loop(head: Expr, body_b: list[Stmt], mut &ids: list[str], mut &calls: li
 }
 
 # walk_expr records the names an expression reaches for.
+fn walk_two_lists(a: list[Expr], b: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_all(a, ids, calls, ns)
+	walk_all(b, ids, calls, ns)
+}
+
 fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match e {
 		EIdent(name) => ids.append(name)
@@ -156,6 +161,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
 		ERange(lo, hi, inclusive) => walk_pair(lo, hi, ids, calls, ns)
 		ETuple(elems) => walk_all(elems, ids, calls, ns)
+		EMapLit(ks, vs) => walk_two_lists(ks, vs, ids, calls, ns)
 		_ => skip()
 	}
 }

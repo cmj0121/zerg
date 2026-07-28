@@ -74,6 +74,11 @@ struct Emitter {
 	# distinct shape, generated on demand and emitted with the other typedefs.
 	tup_names: list[str]
 	tup_decls: list[str]
+
+	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
+	# holding the hash and equality for the key type.
+	mvt_names: list[str]
+	mvt_decls: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -112,6 +117,7 @@ fn c_type(t: Ty) -> str {
 		TList(_) => "zrt_list"
 		TFn(_, _) => "zg_fnptr"
 		TTuple(ts) => c_tuple_cname(ts)
+		TMap(_, _) => "zrt_map"
 		_ => "int64_t"
 	}
 }
@@ -817,6 +823,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		# reads as an int.
 		ERange(lo, hi, inclusive) => c_range_unsupported()
 		ETuple(elems) => c_tuple_lit(em, elems, sb)
+		EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
 	}
 }
 
@@ -899,8 +906,10 @@ fn c_display(t: Ty, inner: str) -> str {
 # element C type inferred for the target.
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.used_rt = true
+	tty := c_infer(em, target)
+	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 
-	ct := c_type(c_list_elem(c_infer(em, target)))
+	ct := c_type(c_list_elem(tty))
 	tgt := c_expr(em, target, sb)
 	ix := c_expr(em, idx, sb)
 	return f"(*({ct}*)zrt_list_at(&({tgt}), {ix}))" if c_is_lvalue(target)
@@ -939,6 +948,7 @@ fn c_is_lvalue(e: Expr) -> bool {
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
 	MList
+	MMap
 	MRecv
 	MFnField
 	MFree
@@ -946,6 +956,7 @@ enum MethKind {
 
 fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
 	return MList if c_is_list(tty)
+	return MMap if c_is_map(tty)
 	return MRecv if c_has_method(em, c_named_of(tty), meth)
 	return MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
@@ -957,6 +968,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MList => c_list_method(em, target, meth, args, tty, sb)
+		MMap => c_map_method(em, target, meth, tty, sb)
 		MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
 		_ => f"zg_{meth}({c_call_args(em, meth, args, sb)})"
@@ -1299,7 +1311,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		ECall(name, args) => c_infer_call(em, name)
 		EField(target, fld) => c_field_ty_of(em, target, fld)
-		EIndex(target, idx) => c_list_elem(c_infer(em, target))
+		EIndex(target, idx) => c_elem_ty(em, target)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)
 		EConv(ty, x) => ty
@@ -1307,6 +1319,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
 		ERange(lo, hi, inclusive) => TUnknown
 		ETuple(elems) => c_tuple_ty(em, elems)
+		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 	}
 }
 
@@ -1319,10 +1332,24 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MList => c_list_method_ret(meth)
+		MMap => c_map_method_ret(meth)
 		MRecv => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
 		_ => c_lookup_sig_ret(em, meth)
 	}
+}
+
+# c_elem_ty is what `x[i]` yields: a map indexes to its VALUE type, a list to its element.
+fn c_elem_ty(mut &em: Emitter, target: Expr) -> Ty {
+	t := c_infer(em, target)
+	return c_map_val_ty(t) if c_is_map(t)
+	return c_list_elem(t)
+}
+
+fn c_map_method_ret(meth: str) -> Ty {
+	return TInt if meth == "len"
+	return TBool if meth == "has"
+	return TNil
 }
 
 fn c_list_method_ret(meth: str) -> Ty {
@@ -1432,6 +1459,14 @@ fn c_is_listlit(e: Expr) -> bool {
 # list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
 # index) is emitted as a C lvalue.
 fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
+	# `m[k] = v` INSERTS, so it is a set rather than a store through the index
+	if c_is_index(lhs) {
+		tt := c_infer(em, c_index_target(lhs))
+		if c_is_map(tt) {
+			em.used_rt = true
+			return c_map_set(em, c_index_target(lhs), c_index_key(lhs), rhs, tt, ind)
+		}
+	}
 	lt := c_infer(em, lhs)
 	lv := c_expr(em, lhs, c_nosub())
 	if c_is_list(lt) and c_is_listlit(rhs) {
@@ -1543,6 +1578,121 @@ fn c_init_calls(f: File) -> str {
 		}
 	}
 	return out
+}
+
+# --- maps -----------------------------------------------------------------------
+#
+# A map is the runtime's `zrt_map` by value, plus one static vtable per distinct shape
+# saying how to hash and compare its key. The runtime provides the hash/eq leaves for the
+# two key types the language builds in.
+fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
+	name := f"zg_mapvt_{c_ident_safe(c_type(kt))}_{c_ident_safe(c_type(vt))}"
+	for n in em.mvt_names {
+		return name if n == name
+	}
+	mut hash := "zrt_hash_int"
+	mut eq := "zrt_eq_int"
+	if c_is_str(kt) {
+		hash = "zrt_hash_str"
+		eq = "zrt_eq_str"
+	}
+	em.mvt_names.append(name)
+	# NULL copy/drop is the runtime's memcpy fast path, which is what a POD key or value
+	# wants; a key or value that owns storage is not supported yet.
+	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, NULL, NULL, NULL, NULL }};\n")
+	return name
+}
+
+fn c_map_lit_ty(mut &em: Emitter, ks: list[Expr], vs: list[Expr]) -> Ty {
+	return TMap(TUnknown, TUnknown) if ks.len() == 0
+	return TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
+}
+
+# c_map_lit builds the map in a statement expression: init, then one set per entry, in
+# the order they were written.
+fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+	kt := c_map_key_ty(c_map_lit_ty(em, ks, vs))
+	vt := c_map_val_ty(c_map_lit_ty(em, ks, vs))
+	vtn := c_map_vt(em, kt, vt)
+	kc := c_type(kt)
+	vc := c_type(vt)
+	mut out := f"({{ zrt_map zg_mm; zrt_map_init(&zg_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
+	mut i := 0
+	for i < ks.len() {
+		out = out + f" {{ {kc} zg_mk = {c_expr(em, ks[i], sb)}; {vc} zg_mv = {c_expr(em, vs[i], sb)}; zrt_map_set(&zg_mm, &zg_mk, &zg_mv); }}"
+		i = i + 1
+	}
+	return out + " zg_mm; })"
+}
+
+# c_map_index lowers `m[k]`. The key is materialised into a temp because zrt_map_index
+# takes its ADDRESS, and a literal or call result has none.
+fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
+	kc := c_type(c_map_key_ty(tty))
+	vc := c_type(c_map_val_ty(tty))
+	tgt := c_expr(em, target, sb)
+	return f"({{ {kc} zg_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&({tgt}), &zg_mk)); }})"
+}
+
+# c_map_set lowers `m[k] = v`. Both sides go through temps for the same reason.
+fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind: str) -> str {
+	kc := c_type(c_map_key_ty(tty))
+	vc := c_type(c_map_val_ty(tty))
+	tgt := c_expr(em, target, c_nosub())
+	k := c_expr(em, idx, c_nosub())
+	v := c_expr(em, rhs, c_nosub())
+	return f"{ind}{{ {kc} zg_mk = {k}; {vc} zg_mv = {v}; zrt_map_set(&({tgt}), &zg_mk, &zg_mv); }}\n"
+}
+
+fn c_map_method(mut &em: Emitter, target: Expr, meth: str, tty: Ty, sb: Subst) -> str {
+	em.used_rt = true
+	tgt := c_expr(em, target, sb)
+	return f"((int64_t)zrt_map_len(&({tgt})))" if meth == "len"
+	return f"zrt_map_has(&({tgt}), &zg_mk)" if meth == "has"
+	raise f"a map has no method `{meth}` yet"
+}
+
+fn c_index_target(e: Expr) -> Expr {
+	return match e {
+		EIndex(t, _) => t
+		_ => ENil
+	}
+}
+
+fn c_index_key(e: Expr) -> Expr {
+	return match e {
+		EIndex(_, i) => i
+		_ => ENil
+	}
+}
+
+fn c_is_index(e: Expr) -> bool {
+	return match e {
+		EIndex(_, _) => true
+		_ => false
+	}
+}
+
+fn c_is_map(t: Ty) -> bool {
+	return match t {
+		TMap(_, _) => true
+		_ => false
+	}
+}
+
+fn c_map_key_ty(t: Ty) -> Ty {
+	return match t {
+		TMap(k, _) => k
+		_ => TUnknown
+	}
+}
+
+fn c_map_val_ty(t: Ty) -> Ty {
+	return match t {
+		TMap(_, v) => v
+		_ => TUnknown
+	}
 }
 
 # --- tuples ---------------------------------------------------------------------
@@ -2080,7 +2230,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -2165,6 +2315,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	# here — after defs, emitted before them
 	mut tups := ""
 	for d in em.tup_decls {
+		tups = tups + d
+	}
+	for d in em.mvt_decls {
 		tups = tups + d
 	}
 	return f"{hdr}{types}{tups}{globals}{protos}\n{defs}{mainw}"

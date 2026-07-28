@@ -102,6 +102,16 @@ fn parse_type(mut &p: Parser) -> Ty {
 		}
 		return TFn(ptys, fret)
 	}
+	if name == "map" and p_at(p, LBrack) {
+		p_advance(p)
+		kt := parse_type(p)
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+		vt := parse_type(p)
+		expect(p, RBrack)
+		return TMap(kt, vt)
+	}
 	if name == "list" and p_at(p, LBrack) {
 		p_advance(p)
 		elem := parse_type(p)
@@ -197,6 +207,32 @@ pub fn parse(src: str) -> File {
 # the import list alone and not the cost of keeping a whole parse around.
 pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
+}
+
+# parse_map_lit reads `{k: v, …}` and the empty `{:}`.
+#
+# The `:` is what makes a map literal unambiguous: GRAMMAR gives the empty map the
+# spelling `{:}` rather than `{}` precisely so that a brace with no colon in it is ALWAYS
+# a block. Nothing here has to guess.
+fn parse_map_lit(mut &p: Parser) -> Expr {
+	p_advance(p) # '{'
+	mut ks: list[Expr] = []
+	mut vs: list[Expr] = []
+	if p_at(p, Colon) {
+		# the empty map, `{:}`
+		p_advance(p)
+		expect(p, RBrace)
+		return EMapLit(ks, vs)
+	}
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		ks.append(parse_expr(p))
+		expect(p, Colon)
+		vs.append(parse_expr(p))
+		break if not p_at(p, Comma)
+		p_advance(p)
+	}
+	expect(p, RBrace)
+	return EMapLit(ks, vs)
 }
 
 # parse_spec consumes a `spec S { … }` declaration whole and yields nothing.
@@ -866,6 +902,9 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		}
 		expect(p, RParen)
 		return ETuple(elems)
+	}
+	if k == LBrace {
+		return parse_map_lit(p)
 	}
 	if k == LBrack {
 		# list literal: [] or [a, b, ...]

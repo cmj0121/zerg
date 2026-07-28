@@ -13,11 +13,21 @@
  * Splitting the two lets a channel close (senders -> 0) while receivers still drain
  * its buffer, and lets the object outlive its close until the last holder leaves.
  *
- * Send and recv are the two blocking points. Under the N:1 cooperative scheduler
- * they PARK the running coroutine (zrt_sched_park) on the channel's send/recv queue
- * and are woken (zrt_sched_wake) by the counterparty's hand-off or by close. A parked
- * coroutine's waiter node lives on its own (suspended) stack, so no queue node is
- * heap-allocated and, single-threaded, no queue operation needs a lock (Fork-E).
+ * Send and recv are the two blocking points. They PARK the running coroutine on the
+ * channel's send/recv queue and are woken (zrt_sched_wake) by the counterparty's
+ * hand-off or by close. A parked coroutine's waiter node still lives on its own
+ * (suspended) stack, so no queue node is heap-allocated — a suspended stack does not
+ * move, and that holds with any number of workers.
+ *
+ * What does NOT hold under M:N is the old "single-threaded, so no lock" (Fork-E). Every
+ * field below is now guarded by the channel's own `lock`, and a coroutine that must
+ * block hands that lock to the scheduler (zrt_sched_park_unlock) instead of releasing
+ * it first: releasing it before the switch completes would let a counterparty on
+ * another worker wake a coroutine that is still running, and run it twice.
+ *
+ * LOCK ORDER is channel first, scheduler second — zrt_sched_wake takes the scheduler
+ * lock while this file holds a channel lock, and nothing ever takes them the other way
+ * round.
  */
 #include "zergrt.h"
 
@@ -48,6 +58,7 @@ typedef struct zrt_waiter {
  * a buffered channel (cap > 0); an unbuffered channel (cap == 0) hands off directly
  * between a sender and a receiver. */
 struct zrt_chan {
+	zrt_mutex      lock;    /* guards every field below, and both wait queues */
 	size_t         rc;      /* holder count; last holder frees */
 	size_t         senders; /* send-capable handles; zero -> auto-close */
 	bool           closed;  /* set once senders reaches zero */
@@ -146,6 +157,7 @@ static void ring_get(zrt_chan *ch, void *out) {
 
 zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 	zrt_chan *ch = (zrt_chan *)zrt_alloc(sizeof(*ch));
+	zrt_mutex_init(&ch->lock);
 	ch->rc = 1;
 	ch->senders = 1; /* the new bidirectional handle is a sender */
 	ch->closed = false;
@@ -160,6 +172,7 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 }
 
 static void chan_free(zrt_chan *ch) {
+	zrt_mutex_destroy(&ch->lock);
 	if (ch->buf != NULL) {
 		zrt_free(ch->buf);
 	}
@@ -183,29 +196,45 @@ static void chan_close(zrt_chan *ch, const char *err) {
 }
 
 zrt_chan *zrt_chan_copy(zrt_chan *ch) {
+	zrt_mutex_lock(&ch->lock);
 	ch->rc++;
+	zrt_mutex_unlock(&ch->lock);
 	return ch;
 }
 
 zrt_chan *zrt_chan_sender_copy(zrt_chan *ch) {
+	zrt_mutex_lock(&ch->lock);
 	ch->rc++;
 	ch->senders++;
+	zrt_mutex_unlock(&ch->lock);
 	return ch;
 }
 
 void zrt_chan_release(zrt_chan *ch) {
-	if (--ch->rc == 0) {
+	/* the count must drop under the lock, but chan_free must NOT run under it — it
+	 * destroys the lock it would be holding. So the decision is made inside and acted
+	 * on outside, which is also why the last holder is the only one that can free: no
+	 * other thread can still be looking at a channel whose count it just took to zero. */
+	zrt_mutex_lock(&ch->lock);
+	bool last = (--ch->rc == 0);
+	zrt_mutex_unlock(&ch->lock);
+	if (last) {
 		chan_free(ch);
 	}
 }
 
 void zrt_chan_sender_release(zrt_chan *ch) {
+	zrt_mutex_lock(&ch->lock);
 	if (--ch->senders == 0) {
 		/* the last sender left: auto-close. A crashing sender (Fork-C) carries a crash
-		 * Err so a receiver observes Right(Err) rather than the ordinary StopIteration. */
+		 * Err so a receiver observes Right(Err) rather than the ordinary StopIteration.
+		 * chan_close wakes the parked receivers, so it runs with the lock held — waking
+		 * takes the scheduler lock, which is the allowed order. */
 		chan_close(ch, zrt_crash_active() ? "coroutine crashed" : NULL);
 	}
-	if (--ch->rc == 0) {
+	bool last = (--ch->rc == 0);
+	zrt_mutex_unlock(&ch->lock);
+	if (last) {
 		chan_free(ch);
 	}
 }
@@ -213,7 +242,9 @@ void zrt_chan_sender_release(zrt_chan *ch) {
 /* --- send / recv ------------------------------------------------------------- */
 
 void zrt_chan_send(zrt_chan *ch, const void *val) {
+	zrt_mutex_lock(&ch->lock);
 	if (ch->closed) {
+		zrt_mutex_unlock(&ch->lock);
 		zrt_abort("send on a closed channel");
 	}
 	/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
@@ -221,18 +252,22 @@ void zrt_chan_send(zrt_chan *ch, const void *val) {
 	if (r != NULL) {
 		memcpy(r->val, val, ch->elemsz);
 		r->done = true;
-		zrt_sched_wake(r->co);
+		zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
+		zrt_mutex_unlock(&ch->lock);
 		return;
 	}
 	/* buffered with room: enqueue and return without blocking. */
 	if (ch->len < ch->cap) {
 		ring_put(ch, val);
+		zrt_mutex_unlock(&ch->lock);
 		return;
 	}
-	/* full (or unbuffered with no receiver): park until a receiver takes the value. */
+	/* full (or unbuffered with no receiver): park until a receiver takes the value. The
+	 * lock goes to the scheduler, which releases it once this coroutine is off the CPU —
+	 * a receiver must not be able to find this waiter before then. */
 	zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL, NULL};
 	wq_push(&ch->sendq_head, &ch->sendq_tail, &w);
-	zrt_sched_park();
+	zrt_sched_park_unlock(&ch->lock);
 	if (!w.done) {
 		/* woken without a taker: the channel closed under us. */
 		zrt_abort("send on a closed channel");
@@ -240,6 +275,7 @@ void zrt_chan_send(zrt_chan *ch, const void *val) {
 }
 
 int zrt_chan_recv(zrt_chan *ch, void *out) {
+	zrt_mutex_lock(&ch->lock);
 	for (;;) {
 		/* a buffered value is available: take it, then let a parked sender fill the
 		 * freed slot so a full buffer keeps flowing. */
@@ -251,6 +287,7 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 				s->done = true;
 				zrt_sched_wake(s->co);
 			}
+			zrt_mutex_unlock(&ch->lock);
 			return 0;
 		}
 		/* no buffered value but a parked sender: take its value directly (unbuffered
@@ -260,25 +297,33 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 			memcpy(out, s->val, ch->elemsz);
 			s->done = true;
 			zrt_sched_wake(s->co);
+			zrt_mutex_unlock(&ch->lock);
 			return 0;
 		}
 		/* empty and closed: the Right of Result[T] (StopIteration or a crash Err). */
 		if (ch->closed) {
+			zrt_mutex_unlock(&ch->lock);
 			return 1;
 		}
 		/* empty and open: park until a sender hands off or the channel closes. */
 		zrt_waiter w = {zrt_sched_current(), out, false, NULL, NULL};
 		wq_push(&ch->recvq_head, &ch->recvq_tail, &w);
-		zrt_sched_park();
+		zrt_sched_park_unlock(&ch->lock);
 		if (w.done) {
 			return 0; /* a sender rendezvoused straight into *out. */
 		}
-		/* woken by close (or spuriously): loop to re-check buffer/senders/closed. */
+		/* Woken by close, or spuriously. Re-take the lock and re-check everything: with
+		 * several workers the state that woke us may already have been taken by another
+		 * receiver, which is exactly why this is a loop and not an if. */
+		zrt_mutex_lock(&ch->lock);
 	}
 }
 
 const char *zrt_chan_err(zrt_chan *ch) {
-	return ch->err;
+	zrt_mutex_lock(&ch->lock);
+	const char *e = ch->err;
+	zrt_mutex_unlock(&ch->lock);
+	return e;
 }
 
 /* --- select ------------------------------------------------------------------ */

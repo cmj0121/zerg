@@ -615,11 +615,37 @@ void zrt_ctx_init(zrt_ctx *c, void *stack_base, size_t size, void (*entry)(void 
  * returned. It saves only callee-saved state (no signal mask), so it is cheap. */
 void zrt_ctx_swap(zrt_ctx *from, zrt_ctx *to);
 
+/* ZRT_THREAD_LOCAL marks a variable each OS thread gets its own copy of — the
+ * scheduler's "which coroutine is running here" and "where do I swap back to" are
+ * per-worker once there is more than one worker. With thread_none.c there is only
+ * ever one thread, so the qualifier is empty and the variable is an ordinary global,
+ * which is exactly what it was before M:N. */
+#if defined(_MSC_VER)
+#define ZRT_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+#define ZRT_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+#define ZRT_THREAD_LOCAL __thread
+#else
+#define ZRT_THREAD_LOCAL /* single-threaded host: an ordinary global */
+#endif
+
+typedef struct zrt_thread { void *slots[4]; } zrt_thread;
+typedef struct zrt_mutex  { void *slots[10]; } zrt_mutex;
+typedef struct zrt_cond   { void *slots[10]; } zrt_cond;
+
 /* zrt_coro_state is a coroutine's scheduling state. RUNNABLE sits on the run queue;
  * BLOCKED is parked on a channel wait queue (1e channels, C2); DONE has finished its
  * thunk and awaits reclamation by the scheduler. */
 typedef enum {
 	ZRT_CORO_RUNNABLE,
+	/* PARKING is the instant between "I have decided to block" and "I am off the CPU".
+	 * It exists only because M > 1: a coroutine that announced BLOCKED while still
+	 * running could be woken, queued, and picked up by a second worker before it
+	 * finished switching away — the same coroutine on two stacks at once. A parking
+	 * coroutine is invisible to zrt_sched_wake; the worker that swapped it out is what
+	 * turns it into BLOCKED, under the scheduler lock, once the switch is complete. */
+	ZRT_CORO_PARKING,
 	ZRT_CORO_BLOCKED,
 	ZRT_CORO_DONE,
 } zrt_coro_state;
@@ -636,6 +662,7 @@ typedef struct zrt_coro {
 	void           (*thunk)(void *env); /* the marshalled call (spawn trampoline body) */
 	void            *env;               /* heap-owned argument environment; thunk frees it */
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
+	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
 
@@ -657,9 +684,6 @@ typedef struct zrt_coro {
  * 40 — so 10 pointers (80 bytes) clears all of them. A backend static_asserts its
  * own type fits.
  */
-typedef struct zrt_thread { void *slots[4]; } zrt_thread;
-typedef struct zrt_mutex  { void *slots[10]; } zrt_mutex;
-typedef struct zrt_cond   { void *slots[10]; } zrt_cond;
 
 /* zrt_thread_supported reports whether this build can actually run more than one
  * OS thread. The scheduler asks once, to decide how many workers to start. */
@@ -729,6 +753,14 @@ zrt_coro *zrt_sched_current(void);
  * queue and the scheduler resumes it. A no-op outside a coroutine. It is the single
  * blocking primitive the channel send/recv paths (C2) park on. */
 void zrt_sched_park(void);
+
+/* zrt_sched_park_unlock is zrt_sched_park for a caller holding a lock that guards the
+ * wait queue it just joined. Releasing that lock before switching away would open the
+ * window PARKING exists to close, so the lock is handed to the scheduler: the worker
+ * releases it once the coroutine is off the CPU and marked BLOCKED, both under the
+ * scheduler lock. Every channel operation blocks through this, never through the bare
+ * park. */
+void zrt_sched_park_unlock(zrt_mutex *m);
 
 /* zrt_sched_wake marks a BLOCKED coroutine RUNNABLE and pushes it onto the run queue,
  * so the scheduler resumes it. The channel send/recv/close paths call it to hand a

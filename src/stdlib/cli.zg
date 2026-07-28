@@ -65,8 +65,10 @@
 #       -h, --help            show this help message and exit
 #
 # and `wc count --oops` prints `wc count: unknown option --oops` on stderr and exits 2.
-import "io"
-import "strconv"
+import (
+	"io"
+	"strconv"
+)
 
 # --- declaring an argument --------------------------------------------------------------
 

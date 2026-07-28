@@ -128,6 +128,7 @@ with no way to tell them apart by looking.
 | `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
 | `F403` | an argument list is one line, or one element per line — never half        | on      |
 | `F404` | two or more imports become one parenthesized group                        | on      |
+| `F406` | a blank line after a run of guards, and before a comment heading a chunk  | on      |
 
 `GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
 `if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
@@ -276,6 +277,38 @@ a closer that nothing follows; on several, a multi-line parameter list is the on
 the grammar does not accept one, and dropping it in a signature while keeping it in a call
 would be one shape in two spellings.
 
+`F406` writes a blank line, and the bar for doing that is deliberately high: this whole
+tree has **ten** blank lines inside function bodies, and `fmt.zg` — 1300 lines of it — has
+none. So the rule puts one in exactly two places, both of them places the authors here
+already put one.
+
+A run of **more than one** guard is followed by a blank:
+
+```zerg
+fn conv_ty(s: str) -> Ty {        fn conv_ty(s: str) -> Ty {
+    return TInt if s == "int"         return TInt if s == "int"
+    return TStr if s == "str"    →    return TStr if s == "str"
+    return TNil
+}                                     return TNil
+                                  }
+```
+
+One guard is part of the line it guards. Two or more are a **table of exits**, and a table
+wants an edge. That restraint is most of the rule: 182 of this tree's 218 guard runs are a
+single guard and none of them is touched.
+
+A comment on its **own line**, with code before and after it, gets a blank in front. A
+comment there heads a new chunk of the function — that is what makes it its own line rather
+than a trailing one — and half the blank lines already in this tree's bodies are that shape.
+
+It declines in four cases: a comment at the top level, which heads a declaration whose
+spacing is the author's; a comment inside a wrapped argument list, which belongs to the
+element it sits on and would be separated from it; a comment with only the closing `}`
+after it, which heads nothing; and a blank that is already there.
+
+What it deliberately does **not** do is put a blank after a nested block's `}`. That is 683
+places in this tree — not a rule about readability but a rewrite of the tree.
+
 ### Which rules can be switched off
 
 `F1xx`–`F3xx` are not negotiable: they are what "canonical" means, and a formatter with
@@ -283,7 +316,8 @@ options for them is a formatter two people configure differently. `F4xx` changes
 code's **shape** rather than its spacing, so it is the group `--off` exists for. `F105`
 sits in layout rather than in rewrites because it only decides where an existing token
 goes; `F403` is a rewrite for the same reason in reverse — it inserts line breaks nobody
-wrote and drops a token a joined list no longer needs.
+wrote and drops a token a joined list no longer needs, and `F406` writes a line nobody
+wrote at all.
 
 ## `zerg lint`
 

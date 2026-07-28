@@ -1104,10 +1104,16 @@ fn fmt_run_specs(toks: list[Token], first: int, last: int) -> int {
 # rather than by scanning. The standard library goes first because it is the part a reader
 # already knows; everything else is what this program brought.
 #
-#     import "cli"          import "cli"
-#     import "zerg"    →    import "io"
-#     import "io"
-#                           import "zerg"
+#     import "cli"          import (
+#     import "zerg"    →        "cli"
+#     import "io"               "io"
+#
+#                               "zerg"
+#                           )
+#
+# The parentheses are F404, which runs next and folds what this rule has just ordered —
+# they are in the picture because it is what `zerg fmt` prints, and a comment showing the
+# intermediate state would be showing something nobody ever sees.
 #
 # What counts as standard library is the fixed bundled set, named below. The formatter
 # cannot ask the filesystem — it is handed a string, not a directory — and the set is

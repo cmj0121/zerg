@@ -162,13 +162,15 @@ import，排序會讓它變成孤兒），或 `import pub`（它的 re-export �
 
 ```zerg
 import "cli"          import (
-import "io"      →        "cli"
-import "strconv"          "io"
-                          "strconv"
-import "zerg"
+import "zerg"    →        "cli"
+import "io"               "io"
+
                           "zerg"
                       )
 ```
+
+那裡的排序是 `F402` 的，括號是 `F404` 的。兩者一起呈現，因為那才是 `zerg fmt` 印出來的東西——
+中間那個狀態沒有人看得到。
 
 **只有一個 import 就不動它。** 這是 gofmt 的答案，理由也是 gofmt 的：group 的用途是把一份清單
 綁在一起，而只有一個元素的清單，就是那個敘述本身加上兩行儀式。

@@ -5,7 +5,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// Built-in map[K, V] methods (docs/collections.md, GRAMMAR group 4). A map is not a
+// Built-in map[K, V] methods (docs/code/collections.md, GRAMMAR group 4). A map is not a
 // user struct, so its methods are compiler intrinsics dispatched on the receiver's
 // static `*types.Map` type (like the list intrinsics), typed here and lowered in
 // emit_map.go. Two are modelled this iteration:

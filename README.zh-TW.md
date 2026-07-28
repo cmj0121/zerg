@@ -30,10 +30,10 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把你的 Zerg
 
 完整語意——primitive 與使用者型別、型別轉換、記憶體模型、並行、null-safety——見
 **[語言規格（Language Specification）](docs/language.zh-TW.md)**，另有配套章節：**[Module、Package 與
-Program](docs/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/coroutine.zh-TW.md)**、
-**[文法（Grammar）](docs/grammar.zh-TW.md)**、**[語法糖（Syntax Sugar）](docs/syntax-sugar.zh-TW.md)**、
-**[Collection](docs/collections.zh-TW.md)**、**[Derive 與預設行為](docs/derive.zh-TW.md)**、
-**[Process 與 I/O](docs/io.zh-TW.md)**、與 **[FFI](docs/ffi.zh-TW.md)**。
+Program](docs/runtime/package.zh-TW.md)**、**[Coroutines 與 Channels](docs/code/coroutine.zh-TW.md)**、
+**[文法（Grammar）](docs/surface/grammar.zh-TW.md)**、**[語法糖（Syntax Sugar）](docs/surface/syntax-sugar.zh-TW.md)**、
+**[Collection](docs/code/collections.zh-TW.md)**、**[Derive 與預設行為](docs/core/derive.zh-TW.md)**、
+**[Process 與 I/O](docs/runtime/io.zh-TW.md)**、與 **[FFI](docs/runtime/ffi.zh-TW.md)**。
 
 ## 快速上手（Quickstart）
 
@@ -77,7 +77,7 @@ print f"{count} × {ratio:.2f}"  # Python 式插值 → str 串接
 struct Point { x: int; y: int }
 ```
 
-每個寫法都 desugar 回核心——完整列表見 **[語法糖（Syntax Sugar）](docs/syntax-sugar.zh-TW.md)**。
+每個寫法都 desugar 回核心——完整列表見 **[語法糖（Syntax Sugar）](docs/surface/syntax-sugar.zh-TW.md)**。
 
 控制流保持扁平：`break` / `continue` 只作用於最近的 `for`，且**沒有 loop label**——要離開外層迴圈，抽成函式並 `return`。
 
@@ -93,7 +93,7 @@ struct Point { x: int; y: int }
 | `ValueError` … `KeyError`                 | 建出該固定 kind 的 `Err`                                 |
 | `addr` `ptr` `ptr[T]` `uint(p)`           | raw pointer 運算——已寫入規格，**目前兩個編譯器都不支援** |
 
-`print` 是**關鍵字**、不是函式；`list.len()` 這類是**方法**。完整細節見 **[內建函式](docs/builtins.zh-TW.md)**。
+`print` 是**關鍵字**、不是函式；`list.len()` 這類是**方法**。完整細節見 **[內建函式](docs/runtime/builtins.zh-TW.md)**。
 
 ## 標準函式庫（Standard library）
 
@@ -114,7 +114,7 @@ struct Point { x: int; y: int }
 | **`atomic`**  | 安全的共享可變原語                       |
 | **`testing`** | `assert` / `assert_eq` / `assert_ne`     |
 
-完整目錄與簽名見 **[標準函式庫](docs/stdlib.zh-TW.md)**。
+完整目錄與簽名見 **[標準函式庫](docs/runtime/stdlib.zh-TW.md)**。
 
 ## 編譯流程（Compile Flow）
 

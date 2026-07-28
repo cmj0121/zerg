@@ -98,7 +98,7 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return nil, false
 		}
 		// A built-in error kind used as a constructor — `ValueError("msg")` — builds an
-		// `Err` of that kind carrying the message (docs/errors.md, GRAMMAR group 8). The
+		// `Err` of that kind carrying the message (docs/code/errors.md, GRAMMAR group 8). The
 		// fixed set is compiler-owned; a user cannot add one this phase.
 		if _, ok := errKinds[callee.Name]; ok {
 			return c.errConstruct(n, callee.Name), true
@@ -152,7 +152,7 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.atomicIntrinsic(n, 3, Bool), true
 		}
 		// A callee naming a primitive type is a CONVERSION, `T(x)` — a re-construction
-		// of x's value as a T (docs/types.md). Building a `str` is not this mechanism
+		// of x's value as a T (docs/core/types.md). Building a `str` is not this mechanism
 		// (it validates a list[byte]/list[rune]), so it is reported rather than guessed.
 		if target := primitiveNamed(callee.Name); target != nil {
 			if _, ok := ScalarOf(target); ok {
@@ -160,7 +160,7 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			}
 			if target == Str {
 				// `str(bytes)` / `str(runes)` builds a str from a byte or rune list, validated
-				// (docs/collections.md) — not the scalar re-construction.
+				// (docs/code/collections.md) — not the scalar re-construction.
 				return c.strFromList(n), true
 			}
 		}
@@ -181,7 +181,7 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.constructRef(n, elem), true
 		case "list":
 			// list[byte](s) / list[rune](s) -> a str's bytes / code points
-			// (docs/collections.md). Only the byte/rune element is a str bridge; any other
+			// (docs/code/collections.md). Only the byte/rune element is a str bridge; any other
 			// `list[T](...)` is not a conversion and falls through.
 			if c.shadowed("list") || len(callee.Elems) != 1 {
 				return nil, false
@@ -700,7 +700,7 @@ func (c *checker) enumNamespaceCall(n *ast.Call, fld *ast.Field) (Type, bool) {
 	return Invalid, true
 }
 
-// enumOfCall checks `E.of(n) -> E?` (docs/types.md, GRAMMAR group 7): the discriminant
+// enumOfCall checks `E.of(n) -> E?` (docs/core/types.md, GRAMMAR group 7): the discriminant
 // reverse of `int(v)`. It takes one int, and yields an optional of the enum — `Some`
 // when n matches a variant's discriminant, `None` otherwise. Only a payload-free
 // (C-style) enum has discriminants to reverse.
@@ -717,7 +717,7 @@ func (c *checker) enumOfCall(n *ast.Call, en *types.Enum) Type {
 	return &types.Opt{Elem: en}
 }
 
-// errConstruct checks a built-in error constructor `ValueError("msg")` (docs/errors.md,
+// errConstruct checks a built-in error constructor `ValueError("msg")` (docs/code/errors.md,
 // GRAMMAR group 8): one str message, yielding the erased `Err` tagged with the kind.
 // The message is required so a caught error is readable via `.message()`.
 func (c *checker) errConstruct(n *ast.Call, name string) Type {
@@ -731,7 +731,7 @@ func (c *checker) errConstruct(n *ast.Call, name string) Type {
 }
 
 // errMessageCall checks `err.message() -> str` on an erased Err (the `Error` interface's
-// message accessor, docs/errors.md): the message string a caught/guarded error carries.
+// message accessor, docs/code/errors.md): the message string a caught/guarded error carries.
 // It reports true once it owns an Err `.message()` callee so inferCall does not fall
 // through to the field-access diagnostic.
 func (c *checker) errMessageCall(n *ast.Call, fld *ast.Field) (Type, bool) {

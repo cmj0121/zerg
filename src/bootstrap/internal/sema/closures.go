@@ -7,7 +7,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// Closure literals (docs/functions.md). A closure `fn(...) { }` is a first-class value
+// Closure literals (docs/code/functions.md). A closure `fn(...) { }` is a first-class value
 // whose captures are its free variables. "A closure is a scope-owned struct whose
 // fields are its captures"; capture is by copy, of immutable values and channels only.
 //
@@ -53,7 +53,7 @@ func (c *checker) resolveClosure(fe *ast.FnExpr, fn *types.Fn, captured map[stri
 	for name, sym := range captured {
 		// A `mut` capture is never legal: the grammar captures IMMUTABLE captures, and the
 		// value cannot change through the capture, so the intent (mutate shared state) is
-		// unmet — snapshot it into an immutable binding first (docs/functions.md).
+		// unmet — snapshot it into an immutable binding first (docs/code/functions.md).
 		if sym.mutable {
 			c.errorf(fe.Span(), "cannot capture the mutable variable %q in a closure; snapshot it into an immutable binding first", name)
 			return

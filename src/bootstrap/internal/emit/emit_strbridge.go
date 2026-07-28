@@ -8,7 +8,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// The str <-> list bridge lowering (docs/collections.md). `list[byte](s)` / `list[rune](s)`
+// The str <-> list bridge lowering (docs/code/collections.md). `list[byte](s)` / `list[rune](s)`
 // decode a str to its octets / code points; `str(bytes)` / `str(runes)` build a str back,
 // validating the str invariant and raising on violation. Each is one runtime call
 // (str.c). `str(list)` CONSUMES its list argument (str.c drops it on both the success and

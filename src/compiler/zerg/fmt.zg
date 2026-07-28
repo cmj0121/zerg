@@ -13,7 +13,7 @@
 #   F3xx  trivia        what happens to what a person wrote for a person
 #   F4xx  rewrites      the rules that MOVE code rather than space it
 #
-# The full table, and the same one docs/fmt.md carries:
+# The full table, and the same one docs/tooling/fmt.md carries:
 #
 #   F101  one tab per nesting level; `}` closes at the level it opened
 #   F102  one statement per line — the lexer's inserted `;` IS the line break

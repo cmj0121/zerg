@@ -101,7 +101,7 @@ bool zrt_atomic_cas(int64_t *p, int64_t expect, int64_t desired) {
 /* zrt_os_args builds a `list[str]` of the command-line arguments — the value a
  * `fn main(args: list[str])` receives. The program name (argv[0]) is skipped: `args`
  * is the program's own interface, so `myprog build a.zg` yields ["build", "a.zg"]
- * (docs/package.md). Each element is a `const char*` copied BY VALUE (a str is a
+ * (docs/runtime/package.md). Each element is a `const char*` copied BY VALUE (a str is a
  * pointer); the argv strings the C runtime owns outlive the program, so nothing is
  * duplicated. The one heap allocation is the list's own buffer, which main frees as
  * its by-value parameter at scope exit. */

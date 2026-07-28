@@ -13,7 +13,7 @@ import (
 // `const char*`, so neither operator the language gives it maps to a C operator on
 // that pointer:
 //
-//   - `a + b` concatenates into a NEW str (docs/collections.md: `str` implements Add),
+//   - `a + b` concatenates into a NEW str (docs/code/collections.md: `str` implements Add),
 //     which is the runtime's zrt_str_concat — it allocates a fresh Zerg-owned string.
 //   - a comparison sorts lexicographically by code point (`str` implements Ord), which
 //     is strcmp. A native `==` would compare POINTERS instead, so two equal strings

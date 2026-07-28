@@ -5,7 +5,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// Built-in list[T] methods (docs/collections.md, GRAMMAR group 4). A list is not a
+// Built-in list[T] methods (docs/code/collections.md, GRAMMAR group 4). A list is not a
 // user struct, so its methods are compiler intrinsics dispatched on the receiver's
 // static `*types.List` type (like the raw-pointer methods), typed here and lowered
 // in emit_list.go. Three are modelled this iteration:

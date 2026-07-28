@@ -51,7 +51,7 @@ func (e *emitter) containsRef(t sema.Type) bool {
 	case *types.List:
 		// a list is NEVER plain-old-data: even a list[int] owns a heap buffer, so a bare
 		// C `=` would alias it and double-free at the two holders' scope exits. It must
-		// always flow through zrt_list_copy / zrt_list_drop (docs/collections.md).
+		// always flow through zrt_list_copy / zrt_list_drop (docs/code/collections.md).
 		return true
 	case *types.Map:
 		// a map is NEVER plain-old-data (like a list): even a map[int,int] owns heap
@@ -231,7 +231,7 @@ func (e *emitter) prepareRuntime() {
 	// Detect whether the program holds a function as a value, so the shared function
 	// pointer typedef is emitted ahead of the declarations that name it.
 	e.prepareFnValues()
-	// Number the list instances (docs/collections.md), keyed by element type. Leaves
+	// Number the list instances (docs/code/collections.md), keyed by element type. Leaves
 	// the list map empty for a program with no list value, which stays byte-identical.
 	e.prepareLists()
 	// A program that imports io (lowers a write intrinsic) or that carries a

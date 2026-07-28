@@ -5,7 +5,7 @@ package emit
 // becomes a C string literal; a hole `{expr}` renders through the value's built-in
 // `display()` and a `{expr:spec}` hole through its `Format` impl (fmt.c), with the
 // rendering picked by the hole's static type — the per-type Format protocol of
-// docs/format.md, realized as a compiler-recognized lowering for the MVP's scalar
+// docs/runtime/format.md, realized as a compiler-recognized lowering for the MVP's scalar
 // and str built-ins. The parts join through zrt_str_concat.
 //
 // The whole surface is additive and gated on f-string use (needsFormat): a program

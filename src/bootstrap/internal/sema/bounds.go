@@ -62,7 +62,7 @@ func registerBlessed(reg *SpecRegistry) {
 // bool, rune, byte); Ord covers the ordered numerics. `str` is in both: its C `==`/`<`
 // would compare POINTERS, so the backend lowers a str comparison to strcmp instead
 // (emit.strBinary) — content-correct, and lexicographic by code point as
-// docs/collections.md specifies. Registration runs after coherence, so a user's
+// docs/code/collections.md specifies. Registration runs after coherence, so a user's
 // (orphan) `impl Eq for int` is still reported, and an already-present key is never
 // overwritten.
 func registerPrimitiveBlessed(reg *SpecRegistry) {

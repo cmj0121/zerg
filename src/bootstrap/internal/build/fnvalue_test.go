@@ -2,7 +2,7 @@ package build
 
 import "testing"
 
-// First-class function VALUES, end to end (docs/functions.md). The front end always
+// First-class function VALUES, end to end (docs/code/functions.md). The front end always
 // typed these; the backend used to refuse them, so each case here is a spelling that
 // returned a diagnostic before and now runs.
 //

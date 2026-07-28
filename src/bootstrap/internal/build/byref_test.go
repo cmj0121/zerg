@@ -6,7 +6,7 @@ import (
 )
 
 // RUN-based tests for the `mut &` mutable-reference parameter (GRAMMAR group 5,
-// docs/memory.md) — Zerg's one explicit by-ref path. Each program is compiled, linked
+// docs/core/memory.md) — Zerg's one explicit by-ref path. Each program is compiled, linked
 // against the runtime under ASan+UBSan, and executed, so a passing test asserts the
 // caller actually observes the callee's write.
 

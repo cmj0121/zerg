@@ -158,6 +158,7 @@ fn clamp(n: int) -> int {        # before
 fn clamp(n: int) -> int {        # after
     return 0 if n < 0
     return 9 if n > 9
+
     return n
 }
 ```
@@ -298,8 +299,9 @@ wants an edge. That restraint is most of the rule: 182 of this tree's 218 guard 
 single guard and none of them is touched.
 
 A comment on its **own line**, with code before and after it, gets a blank in front. A
-comment there heads a new chunk of the function — that is what makes it its own line rather
-than a trailing one — and half the blank lines already in this tree's bodies are that shape.
+comment there heads a new chunk — that is what makes it its own line rather than a trailing
+one — and half the blank lines already in this tree's bodies are that shape. It applies in
+any block, so a `struct`'s commented field group gets the same separation Go's does.
 
 It declines in four cases: a comment at the top level, which heads a declaration whose
 spacing is the author's; a comment inside a wrapped argument list, which belongs to the

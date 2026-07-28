@@ -69,6 +69,39 @@ together.
 | ------ | -------------------------------------------------------------------------- |
 | `F301` | a comment keeps its text, on its own line or trailing the code it followed |
 
+### Examples in comments
+
+A code example inside a comment is marked with a **doctest prompt** — `>>>` opens a
+top-level item, `...` continues it:
+
+```zerg
+# Example — greeting someone:
+#
+# >>> fn main() {
+# ...     print greet("world")
+# ... }
+#
+# and it prints:
+#
+#     hello, world
+```
+
+`F301` keeps all of it exactly as written; the prompt is a convention the formatter
+reads nothing into. Which prompt a line carries is likewise an authoring convention —
+both mean "the rest of this line is Zerg".
+
+The marker is **explicit**, and that is the load-bearing decision. A comment carries two
+kinds of indented block: source, and a sample of what the program **prints**. Inferring
+from layout alone would highlight the second as if it were the first — in `cli`'s own
+header a pasted help screen would light up `Options:` as a field name, `--output` as
+operators and `VALUE` as a type. Wrong highlighting is worse than none, so the author says
+which is which.
+
+It is a prompt rather than a `fence because comments are to become documentation,
+and that generator emits markdown — so` is the **output** syntax. Spelling the input
+the same way would leave a generator that must pass one through while producing the other
+with no way to tell them apart by looking.
+
 ### F4xx — rewrites
 
 | Code   | Rule                                                                      | Default |

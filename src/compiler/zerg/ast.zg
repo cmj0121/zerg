@@ -65,6 +65,10 @@ enum Expr {
 	# EMapLit is `{k: v, …}` and the empty `{:}`. The keys and values are held as two
 	# parallel lists, in the order they were written — a map keeps insertion order.
 	EMapLit(list[Expr], list[Expr])
+
+	# EFn is `fn(p: T) -> R { … }` in expression position. It carries what a FnDecl does
+	# minus the name, because that is what it is: a function with nowhere to put its name.
+	EFn(list[Param], bool, Ty, list[Stmt])
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -303,6 +307,7 @@ fn expr_kind(e: Expr) -> str {
 		ERange(lo, hi, inclusive) => "range"
 		ETuple(elems) => "tuple"
 		EMapLit(ks, vs) => "map-literal"
+		EFn(ps, has_ret, ret, body) => "fn-expr"
 		_ => "?"
 	}
 }

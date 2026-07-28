@@ -212,6 +212,42 @@ pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
 }
 
+# parse_fn_expr reads `fn(p: T) -> R { … }` in expression position — the same shape a
+# declaration has, minus the name. GRAMMAR gives a fn-expr no generic parameters, so there
+# is no bracket group to read here.
+fn parse_fn_expr(mut &p: Parser) -> Expr {
+	p_advance(p) # 'fn'
+	expect(p, LParen)
+	mut params: list[Param] = []
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		mut is_ref := false
+		if p_at(p, Mut) {
+			p_advance(p)
+			if p_at(p, Amp) {
+				p_advance(p)
+				is_ref = true
+			}
+		}
+		pname := cur(p).lexeme
+		p_advance(p)
+		expect(p, Colon)
+		pty := parse_type(p)
+		params.append(Param(pname, pty, is_ref, false, ENil))
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+	}
+	expect(p, RParen)
+	mut ret := TVoid
+	mut has_ret := false
+	if p_at(p, Arrow) {
+		p_advance(p)
+		ret = parse_type(p)
+		has_ret = true
+	}
+	return EFn(params, has_ret, ret, parse_block(p))
+}
+
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
 #
 # The `:` is what makes a map literal unambiguous: GRAMMAR gives the empty map the
@@ -912,9 +948,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EIdent(t.lexeme)
 	}
 	if k == Fn {
-		# a closure used as a value: parse_primary had no case, so it answered ENil and the
-		# parameter list was then read as a call's arguments
-		raise "NotImplemented: a closure used as a value"
+		return parse_fn_expr(p)
 	}
 	if k == Unsafe {
 		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and

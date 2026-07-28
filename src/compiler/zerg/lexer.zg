@@ -25,6 +25,7 @@ struct Lex {
 	stack: list[int]
 	sp: int
 	prev: Kind
+
 	# keep_trivia makes a comment a TOKEN instead of nothing. The compiler never sets it —
 	# it would only have to skip them again — but the formatter cannot do its job without
 	# them, and a formatter that eats comments is not one anybody would run twice.
@@ -101,6 +102,7 @@ fn next(mut &l: Lex) -> Token {
 		} else if c == b'#' {
 			return scan_token(l) if at(l, 1) == b'['
 			return scan_comment(l, l.line, l.col) if l.keep_trivia
+
 			skip_comment(l)
 		} else {
 			return scan_token(l)
@@ -143,6 +145,7 @@ fn scan_token(mut &l: Lex) -> Token {
 	return scan_string(l, sline, scol, soff) if c == b'"'
 	return scan_char_lit(l, Rune, false, sline, scol, soff) if c == b'\''
 	return scan_cmd(l, sline, scol, soff) if c == b'`'
+
 	if c == b'#' {
 		# '#[' opens a decorator; depth is bumped, suppressing ASI until the ']'
 		advance(l) # '#'
@@ -167,6 +170,7 @@ fn based_valid(c: byte, base: byte) -> bool {
 	v := int(c)
 	return ascii.is_hex_digit(c) if base == b'x'
 	return v >= 48 and v <= 55 if base == b'o'
+
 	return v == 48 or v == 49
 }
 
@@ -212,12 +216,14 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 
 	consume_dec(l)
 	mut kind := Int
+
 	# fractional part: '.' immediately followed by a digit
 	if at(l, 0) == b'.' and ascii.is_digit(at(l, 1)) {
 		kind = Float
 		advance(l) # .
 		consume_dec(l)
 	}
+
 	# exponent: e/E [sign] digits
 	if at(l, 0) == b'e' or at(l, 0) == b'E' {
 		nx := at(l, 1)
@@ -349,6 +355,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	for true {
 		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		break if at(l, 0) == b'"'
+
 		sb.append(advance(l))
 	}
 	advance(l) # closing "
@@ -409,6 +416,7 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	if c == b'-' {
 		return op(l, MinusMod, sline, scol, soff, 1) if two == b'%'
 		return op(l, Arrow, sline, scol, soff, 1) if two == b'>'
+
 		return op(l, Minus, sline, scol, soff, 0)
 	}
 	if c == b'*' {
@@ -421,20 +429,24 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	return op(l, Pipe, sline, scol, soff, 0) if c == b'|'
 	return op(l, Caret, sline, scol, soff, 0) if c == b'^'
 	return op(l, Tilde, sline, scol, soff, 0) if c == b'~'
+
 	if c == b'<' {
 		return op(l, Shl, sline, scol, soff, 1) if two == b'<'
 		return op(l, Le, sline, scol, soff, 1) if two == b'='
 		return op(l, LArrow, sline, scol, soff, 1) if two == b'-'
+
 		return op(l, Lt, sline, scol, soff, 0)
 	}
 	if c == b'>' {
 		return op(l, Shr, sline, scol, soff, 1) if two == b'>'
 		return op(l, Ge, sline, scol, soff, 1) if two == b'='
+
 		return op(l, Gt, sline, scol, soff, 0)
 	}
 	if c == b'=' {
 		return op(l, EqEq, sline, scol, soff, 1) if two == b'='
 		return op(l, FatArrow, sline, scol, soff, 1) if two == b'>'
+
 		return op(l, Assign, sline, scol, soff, 0)
 	}
 	if c == b'!' {
@@ -448,6 +460,7 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	if c == b'?' {
 		return op(l, Coalesce, sline, scol, soff, 1) if two == b'?'
 		return op(l, OptDot, sline, scol, soff, 1) if two == b'.'
+
 		return op(l, Question, sline, scol, soff, 0)
 	}
 	if c == b'.' {
@@ -607,6 +620,7 @@ fn render_token(t: Token) -> str {
 	cat := token_category(t.kind)
 	return kind_name(t.kind) + "(" + t.lexeme + ")" if cat == 1
 	return kind_name(t.kind) + "(" + quote(t.value) + ")" if cat == 2
+
 	return kind_name(t.kind)
 }
 

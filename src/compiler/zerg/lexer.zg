@@ -137,6 +137,7 @@ fn scan_token(mut &l: Lex) -> Token {
 	# literal prefixes
 	return scan_raw_string(l, sline, scol, soff) if c == b'r' and at(l, 1) == b'"'
 	return scan_fstring(l, sline, scol, soff) if c == b'f' and at(l, 1) == b'"'
+
 	if c == b'b' and at(l, 1) == b'\'' {
 		advance(l) # b
 		return scan_char_lit(l, Byte, true, sline, scol, soff)
@@ -170,6 +171,7 @@ fn scan_ident(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 
 fn based_valid(c: byte, base: byte) -> bool {
 	v := int(c)
+
 	return ascii.is_hex_digit(c) if base == b'x'
 	return v >= 48 and v <= 55 if base == b'o'
 
@@ -514,6 +516,7 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		return op(l, StarMod, sline, scol, soff, 1) if two == b'%'
 		return op(l, Star, sline, scol, soff, 0)
 	}
+
 	return op(l, Slash, sline, scol, soff, 0) if c == b'/'
 	return op(l, Percent, sline, scol, soff, 0) if c == b'%'
 	return op(l, Amp, sline, scol, soff, 0) if c == b'&'
@@ -710,8 +713,9 @@ fn hex_digit(n: int) -> byte {
 
 fn render_token(t: Token) -> str {
 	cat := token_category(t.kind)
-	return kind_name(t.kind) + "(" + t.lexeme + ")" if cat == 1
-	return kind_name(t.kind) + "(" + quote(t.value) + ")" if cat == 2
+
+	return f"{kind_name(t.kind)}({t.lexeme})" if cat == 1
+	return f"{kind_name(t.kind)}({quote(t.value)})" if cat == 2
 
 	return kind_name(t.kind)
 }
@@ -727,7 +731,7 @@ pub fn dump_tokens(src: str) -> str {
 		break if is_eof(t.kind)
 		line := strconv.to_string(t.line, 10)
 		col := strconv.to_string(t.col, 10)
-		s := line + ":" + col + "\t" + render_token(t) + "\n"
+		s := f"{line}:{col}\t{render_token(t)}\n"
 		for c in list[byte](s) {
 			out.append(c)
 		}

@@ -270,7 +270,7 @@ func (c *checker) checkLitPattern(p *ast.LitPattern, subjT Type) {
 }
 
 // eitherArm reports the payload type a Left/Right variant pattern binds on an
-// Either/Result subject (docs/errors.md: `match r { Left(v) => …; Right(e) => … }`),
+// Either/Result subject (docs/code/errors.md: `match r { Left(v) => …; Right(e) => … }`),
 // and whether the name is one of the two. `Left` carries the value/Ok side, `Right`
 // the propagated/Err side — so a Result's `Right(e)` binds the erased `Err`, ready for
 // an `is`-dispatch on its kind. This is the sole non-enum match subject.

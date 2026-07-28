@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// RUN-based tests for string scanning (docs/collections.md): a str is not indexable, so
+// RUN-based tests for string scanning (docs/code/collections.md): a str is not indexable, so
 // you bridge to a list[byte] (raw octets) or list[rune] (code points), scan/index that,
 // and build a str back with str(...), which validates the str invariant and raises on
 // violation. A str also iterates as its runes. Each program is compiled, linked, and

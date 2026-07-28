@@ -3,7 +3,7 @@ package sema
 import "github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 
 // This file is the decorator-validation pass. Decorators are a fixed, compiler-owned
-// set (GRAMMAR group 7, docs/decorators.md): a user cannot define one (Zerg has no
+// set (GRAMMAR group 7, docs/core/decorators.md): a user cannot define one (Zerg has no
 // macros). An unknown name is therefore a typo or an invented attribute that would
 // otherwise compile clean with NO effect, so it is rejected here. A recognized-but-
 // unimplemented layout decorator is rejected with a distinct "not yet supported"
@@ -20,7 +20,7 @@ const (
 )
 
 // knownDecorators is the fixed set of compiler decorators. IMPLEMENTED (accepted):
-// derive/test. RESERVED (docs/decorators.md "Reserved" — the layout family plus the
+// derive/test. RESERVED (docs/core/decorators.md "Reserved" — the layout family plus the
 // ctor-sealing directive): sealed/align/packed/repr — recognized so a typo is
 // distinguishable, but rejected loudly until each is actually built. `dyn` joined
 // them when the seed dropped its witness-table dispatch: accepting it silently would

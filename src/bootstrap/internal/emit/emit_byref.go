@@ -13,7 +13,7 @@ import (
 // whole writeback — C's own by-reference idiom, with the language rules (a `mut`
 // lvalue argument, no aliasing) already enforced by the front end.
 //
-// The callee does NOT own a by-ref parameter: docs/memory.md's lifetime table ends
+// The callee does NOT own a by-ref parameter: docs/core/memory.md's lifetime table ends
 // this call's borrow without freeing, since the caller keeps the variable. So a by-ref
 // parameter is skipped when the function registers its parameter drops — releasing it
 // would free storage the caller still holds.

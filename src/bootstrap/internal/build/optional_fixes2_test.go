@@ -18,7 +18,7 @@ import "testing"
 
 // TestOptFix2PODFieldDefault: `struct Cfg { port: int? = 8080 }` — the backfilled default
 // must wrap into the carrier, not drop 8080 raw into the `tag` slot. Before the fix
-// `Cfg().port ?? -1` read as -1 (absent). This is docs/grammar.md's headline example.
+// `Cfg().port ?? -1` read as -1 (absent). This is docs/surface/grammar.md's headline example.
 func TestOptFix2PODFieldDefault(t *testing.T) {
 	src := "struct Cfg {\n\tport: int? = 8080\n}\n" +
 		"fn main() {\n\tprint (Cfg().port ?? -1)\n}\n"

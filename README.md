@@ -33,10 +33,10 @@ binary. Programs are fast to write, easy to read, and overwhelmingly straightfor
 
 Full semantics — primitive & user types, conversions, the memory model, concurrency, and null-safety —
 are in the **[Language Specification](docs/language.md)**, with companion chapters for
-**[Modules, Packages & Programs](docs/package.md)**, **[Coroutines & Channels](docs/coroutine.md)**,
-**[Grammar](docs/grammar.md)**, **[Syntax Sugar](docs/syntax-sugar.md)**,
-**[Collections](docs/collections.md)**, **[Derive & Default Behavior](docs/derive.md)**,
-**[Process & I/O](docs/io.md)**, and the **[FFI](docs/ffi.md)**.
+**[Modules, Packages & Programs](docs/runtime/package.md)**, **[Coroutines & Channels](docs/code/coroutine.md)**,
+**[Grammar](docs/surface/grammar.md)**, **[Syntax Sugar](docs/surface/syntax-sugar.md)**,
+**[Collections](docs/code/collections.md)**, **[Derive & Default Behavior](docs/core/derive.md)**,
+**[Process & I/O](docs/runtime/io.md)**, and the **[FFI](docs/runtime/ffi.md)**.
 
 ## Quickstart
 
@@ -83,7 +83,7 @@ print f"{count} × {ratio:.2f}"  # Python-style interpolation → str concatenat
 struct Point { x: int; y: int }
 ```
 
-Each form desugars to the core — the full table is in **[Syntax Sugar](docs/syntax-sugar.md)**.
+Each form desugars to the core — the full table is in **[Syntax Sugar](docs/surface/syntax-sugar.md)**.
 
 Control flow stays flat: `break` / `continue` act only on the nearest `for`, and there are **no loop
 labels** — to leave an outer loop, extract a function and `return`.
@@ -101,7 +101,7 @@ A small, **fixed** set of compiler-recognized functions — no `import` needed:
 | `addr` `ptr` `ptr[T]` `uint(p)`           | raw-pointer ops — specified, **not built by either compiler today**  |
 
 `print` is a **keyword**, not a function; `list.len()` and friends are **methods**. Full detail —
-**[Built-in Functions](docs/builtins.md)**.
+**[Built-in Functions](docs/runtime/builtins.md)**.
 
 ## Standard library
 
@@ -122,7 +122,7 @@ Pure-Zerg packages over the self runtime (zero external dependency), reached wit
 | **`atomic`**  | the safe shared-mutable primitive              |
 | **`testing`** | `assert` / `assert_eq` / `assert_ne`           |
 
-Full catalogue with signatures — **[Standard Library](docs/stdlib.md)**.
+Full catalogue with signatures — **[Standard Library](docs/runtime/stdlib.md)**.
 
 ## Compile Flow
 

@@ -2,7 +2,7 @@
 #
 # Bundled into a program that writes `import "io"`; its members are reached
 # through the namespace, as `io.println(...)`. Each writer returns `Result[nil]`
-# per docs/io.md — a write failure is a value, not an abort — though this minimal
+# per docs/runtime/io.md — a write failure is a value, not an abort — though this minimal
 # surface writes best-effort over the runtime's `zrt_write` and never yields an
 # Err yet (structured write failures land with the full Writer spec later).
 #
@@ -15,7 +15,7 @@
 
 # write writes s to standard output (fd 1) with no trailing newline. (`print` is a
 # reserved keyword — the ambient no-import shortcut — so the module's newline-free
-# writer is named `write`, matching the `write`/`write_str` verbs in docs/io.md.)
+# writer is named `write`, matching the `write`/`write_str` verbs in docs/runtime/io.md.)
 pub fn write(s: str) -> Result[nil] {
 	__zrt_write(1, s)
 	return nil

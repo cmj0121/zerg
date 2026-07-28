@@ -5,7 +5,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// Primitive conversion — `T(x)` (docs/types.md, "Type Conversion").
+// Primitive conversion — `T(x)` (docs/core/types.md, "Type Conversion").
 //
 // Zerg converts by RE-CONSTRUCTION, never by reinterpretation: `T(x)` builds a new T
 // from x's value, the way a constructor does. There is no C-style cast that views one
@@ -43,7 +43,7 @@ type Scalar struct {
 
 // ScalarOf reports a type's scalar shape, and whether it has one at all. `str` and
 // `nil` deliberately do not: a str is built from a list[byte]/list[rune] with
-// validation (docs/collections.md), which is a different mechanism.
+// validation (docs/code/collections.md), which is a different mechanism.
 func ScalarOf(t Type) (Scalar, bool) {
 	// a strong typedef behaves as its underlying representation once its identity has
 	// been checked, so `int(c)` extracts a Celsius and `Celsius(x)` re-constructs one.
@@ -109,7 +109,7 @@ func Lossless(src, dst Scalar) bool {
 		return true
 	case ScalarFloat:
 		// Widening into a float never raises: an out-of-range float is +-Inf, which
-		// docs/types.md makes an IEEE value rather than an abort. A float-to-float
+		// docs/core/types.md makes an IEEE value rather than an abort. A float-to-float
 		// narrowing (f64 -> f32) likewise saturates to +-Inf by IEEE rules.
 		return true
 	case ScalarSigned:
@@ -150,7 +150,7 @@ func (c *checker) scalarConversion(n *ast.Call, name string, target Type) Type {
 		return target
 	}
 	// `int(s)` / `uint(s)` / `float(s)` parse a number from a str — a checked re-construction
-	// that raises on a malformed or out-of-range string (docs/types.md). Any other target
+	// that raises on a malformed or out-of-range string (docs/core/types.md). Any other target
 	// (e.g. `bool(s)` / `byte(s)`) is not a parse.
 	if src == Str {
 		if target != Int && target != types.Uint && target != Float {
@@ -158,7 +158,7 @@ func (c *checker) scalarConversion(n *ast.Call, name string, target Type) Type {
 		}
 		return target
 	}
-	// `int(v)` on an enum READS its stored discriminant (docs/types.md, GRAMMAR group 7).
+	// `int(v)` on an enum READS its stored discriminant (docs/core/types.md, GRAMMAR group 7).
 	// Only a payload-free (C-style) enum carries a meaningful discriminant — its native
 	// integer repr; a payload enum keeps its tag opaque and match-only, so reading it as
 	// an int is rejected. `E.of(n)` (enumOfCall) is the reverse.

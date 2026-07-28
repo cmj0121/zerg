@@ -51,17 +51,17 @@ file:line:col: message
 ## Runtime abort 契約
 
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或
-一個沒有 `guard`/`?` 復原的內建 runtime fault（見 [Errors](errors.md)）。abort 時 runtime：
+一個沒有 `guard`/`?` 復原的內建 runtime fault（見 [Errors](code/errors.zh-TW.md)）。abort 時 runtime：
 
 1. 把錯誤訊息寫到**標準錯誤**，後接一個換行；
 2. 執行被展開路徑上待決的 `defer`（與正常 return 路徑用的是同一個 cleanup stack）；並
 3. 以 exit 狀態 **1** 終止行程。
 
 一個內建錯誤的訊息形式為 `Kind: text`（例如 `IndexError: list index out of range`）。確切的 `text` 非 normative；
-taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會引發它們見 [Errors](errors.md)。
+taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會引發它們見 [Errors](code/errors.zh-TW.md)。
 
 > **[deviation]** runtime 無法攔截的硬體 fault——今天是 coroutine stack 溢出越過其 guard page，或 `main` 未受保護
-> 的原生 stack——會以 signal 終止行程、不執行 `defer`，而非乾淨的 `StackOverflowError` abort。見 [Errors](errors.md)。
+> 的原生 stack——會以 signal 終止行程、不執行 `defer`，而非乾淨的 `StackOverflowError` abort。見 [Errors](code/errors.zh-TW.md)。
 
 ## Undefined 與 implementation-defined behavior
 
@@ -69,11 +69,11 @@ taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會�
 
 - **Undefined behavior（UB）**——規格對結果不作任何要求。conforming 程式必須避免它；conforming implementation 則
   可做任何事，包含崩潰。Zerg 的設計目標是**從 safe code 無法觸及任何 UB**；凡 bootstrap 目前仍容許 UB 之處，該章
-  會標為 **[deviation]**（例如整數溢位與除以零今天降成純 C，而非 trap——見 [Types](types.md)）。
+  會標為 **[deviation]**（例如整數溢位與除以零今天降成純 C，而非 trap——見 [Types](core/types.zh-TW.md)）。
 - **Implementation-defined**——結果是實作所記錄的一組選項之一，但規格不釘死。conforming 程式不應依賴特定選擇。
-  目前的 implementation-defined 點（各於其章節詳述）包含：call 引數與運算元的求值順序（[Memory Model](memory.md)
-  ——規格意圖的左到右順序**[not yet]** 尚未強制）；`select` 在多個就緒 arm 間的勝出 arm（[Coroutines](coroutine.md)）；
-  浮點渲染的精度與拼法（[Format](format.md)）；以及超出「送出→接收 happens-before」保證之外的任何 coroutine 排序
-  （[Coroutines](coroutine.md)）。
+  目前的 implementation-defined 點（各於其章節詳述）包含：call 引數與運算元的求值順序（[Memory Model](core/memory.zh-TW.md)
+  ——規格意圖的左到右順序**[not yet]** 尚未強制）；`select` 在多個就緒 arm 間的勝出 arm（[Coroutines](code/coroutine.zh-TW.md)）；
+  浮點渲染的精度與拼法（[Format](runtime/format.zh-TW.md)）；以及超出「送出→接收 happens-before」保證之外的任何 coroutine 排序
+  （[Coroutines](code/coroutine.zh-TW.md)）。
 
 規格既未要求、也未標為 implementation-defined 的任何事物，皆為 unspecified、可能變動；請勿倚賴。

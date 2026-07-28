@@ -9,7 +9,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// This file lowers the primitive conversion `T(x)` (docs/types.md, "Type
+// This file lowers the primitive conversion `T(x)` (docs/core/types.md, "Type
 // Conversion"). Zerg converts by RE-CONSTRUCTION: the emitted C builds a new T from
 // x's value, and a narrowing conversion whose value does not fit RAISES OverflowError
 // through the runtime's zrt_conv_* helpers — which `guard { byte(x) }` catches.

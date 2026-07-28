@@ -20,7 +20,7 @@ var errDef = &types.TypeDef{Name: "Err", Struct: &types.StructDef{}}
 //nolint:gochecknoglobals // a single interned built-in nominal type.
 var errType Type = &types.Struct{Def: errDef}
 
-// errKinds is the FIXED, built-in error taxonomy (docs/errors.md, GRAMMAR group 8):
+// errKinds is the FIXED, built-in error taxonomy (docs/code/errors.md, GRAMMAR group 8):
 // the nameable error types a program may CHOOSE from but cannot extend this phase. Each
 // name is both a constructor `Name(msg) -> Err` (its message payload) and an `is`
 // target on an Err. The integer value is the discriminating kind; it is MIRRORED by the

@@ -1,4 +1,4 @@
-/* conv.c — checked primitive conversions (docs/types.md, "Type Conversion").
+/* conv.c — checked primitive conversions (docs/core/types.md, "Type Conversion").
  *
  * Zerg converts by RE-CONSTRUCTION, never by reinterpretation: `T(x)` builds a new
  * T from x's value. Narrowing can lose the value, so it is checked like arithmetic —

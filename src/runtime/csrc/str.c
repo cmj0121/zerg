@@ -1,4 +1,4 @@
-/* str.c — the str <-> list[byte] / list[rune] bridge (docs/collections.md).
+/* str.c — the str <-> list[byte] / list[rune] bridge (docs/code/collections.md).
  *
  * A `str` is a distinct immutable primitive that is NOT indexable and holds no embedded
  * NUL; to scan or edit text you bridge through a `list[byte]` (raw octets) or a
@@ -176,7 +176,7 @@ static int enc_len(int32_t cp) {
 
 /* zrt_parse_int parses a decimal integer from s — an optional '+'/'-' then one or more
  * digits, nothing else — and raises ValueError on an empty string, a stray character, or
- * a value outside the int64 range. It is `int(s)` for a str argument (docs/types.md:
+ * a value outside the int64 range. It is `int(s)` for a str argument (docs/core/types.md:
  * conversion is re-construction, checked). */
 int64_t zrt_parse_int(const char *s) {
 	if (s == NULL || *s == 0) {

@@ -440,7 +440,7 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 # --- value semantics -----------------------------------------------------------------------
 #
 # "Two names of a value type never alias: writing through one is never visible through the
-# other" (docs/memory.md). A scalar or a plain struct gets that from C's own `=`. A `list`
+# other" (docs/core/memory.md). A scalar or a plain struct gets that from C's own `=`. A `list`
 # does not: it is a handle onto a heap buffer, so a C `=` hands out a second name for the
 # SAME elements — and a struct holding one inherits the problem however deep it sits.
 #

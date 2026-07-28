@@ -100,8 +100,9 @@ docs-links:                     # every docs path the repo cites must resolve
 	done; \
 	for f in $$(git ls-files 'docs/**/*.md' 'docs/*.md'); do \
 		d=$$(dirname $$f); \
-		for l in $$(sed -E 's/\]\(/\n\]\(/g' $$f | sed -nE 's/^\]\(([^):]+\.md)(#[^)]*)?\).*/\1/p'); do \
-			[ -f "$$d/$$l" ] || { echo "LINK   $$f -> $$l"; fail=1; }; \
+		for l in $$(sed -E 's/\]\(/\n\]\(/g' $$f \
+			| sed -nE 's/^\]\((\.\.\/[^)#:]*|[^)#:]*\.md)(#[^)]*)?\).*/\1/p'); do \
+			[ -e "$$d/$$l" ] || { echo "LINK   $$f -> $$l"; fail=1; }; \
 		done; \
 	done; \
 	[ $$fail -eq 0 ] || { echo "docs-links: a cited path does not exist"; exit 1; }; \

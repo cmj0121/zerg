@@ -98,7 +98,7 @@ type Info struct {
 	ConstOrder []*ast.BindStmt
 
 	// Lambdas records each NON-CAPTURING closure literal that is lifted to a top-level
-	// function (docs/functions.md): the checker synthesizes a `FuncDecl` + `FuncSig` for
+	// function (docs/code/functions.md): the checker synthesizes a `FuncDecl` + `FuncSig` for
 	// it (registered in Funcs under the lambda's name), and mono/emit treat it as an
 	// ordinary function. A closure that captures is gated instead, so it never appears
 	// here. Empty for a program with no closure literal, which stays byte-identical.
@@ -126,7 +126,7 @@ type Info struct {
 }
 
 // Lambda is a closure lifted to a top-level function. A capturing closure carries its
-// captures (docs/functions.md: "a closure is a scope-owned struct whose fields are its
+// captures (docs/code/functions.md: "a closure is a scope-owned struct whose fields are its
 // captures"); the backend puts them in an environment the lifted function reads.
 type Lambda struct {
 	Name     string
@@ -207,7 +207,7 @@ type checker struct {
 	derived    []*ast.ImplDecl // '#[derive]'-synthesized impls, type-checked after the file (U5)
 
 	// captureStack tracks the closures being checked so a reference to an ENCLOSING
-	// local is recorded as a capture (docs/functions.md). Each frame remembers the
+	// local is recorded as a capture (docs/code/functions.md). Each frame remembers the
 	// scope depth at the closure's entry; a lookup that resolves below that depth is a
 	// capture of that closure. Empty outside any closure body.
 	captureStack []*captureFrame
@@ -230,7 +230,7 @@ type checker struct {
 	// frozenLists counts, per list-binding symbol, the number of enclosing `for x in
 	// xs` loops iterating it: a list is frozen against structural change (append or
 	// rebind) while it is being iterated, so an iterator can never be invalidated
-	// (docs/collections.md). Editing an ELEMENT in place (`for mut x`) stays allowed.
+	// (docs/code/collections.md). Editing an ELEMENT in place (`for mut x`) stays allowed.
 	frozenLists map[*symbol]int
 }
 
@@ -724,7 +724,7 @@ func (c *checker) checkForIn(n *ast.ForStmt) {
 	incoming := c.snapshotDead()
 	c.loopDepth++
 	// Freeze the iterated list against structural change (append/rebind) for the loop
-	// body, so an iterator is never invalidated (docs/collections.md). A `for mut x`
+	// body, so an iterator is never invalidated (docs/code/collections.md). A `for mut x`
 	// in-place element edit stays allowed; only append/rebind of the list are rejected.
 	if frozen := c.iteratedListSym(n); frozen != nil {
 		c.frozenLists[frozen]++
@@ -768,12 +768,12 @@ func (c *checker) forInElem(n *ast.ForStmt) Type {
 	if lst, ok := it.(*types.List); ok {
 		return lst.Elem
 	}
-	// `for k in m` binds the KEY, walking the map in insertion order (docs/collections.md;
+	// `for k in m` binds the KEY, walking the map in insertion order (docs/code/collections.md;
 	// FORK-MAP-ITER: the value is reached via `m[k]`).
 	if mp, ok := it.(*types.Map); ok {
 		return mp.Key
 	}
-	// `for c in s` iterates a str as its code points (docs/collections.md, types.md): the
+	// `for c in s` iterates a str as its code points (docs/code/collections.md, types.md): the
 	// loop variable binds a rune. A str is not indexable, so this is the forward scan.
 	if it == Str {
 		c.info.StrForIn = true

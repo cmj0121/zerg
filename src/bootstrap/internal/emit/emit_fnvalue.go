@@ -8,7 +8,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// First-class function VALUES in the backend (docs/functions.md): a named top-level
+// First-class function VALUES in the backend (docs/code/functions.md): a named top-level
 // function bound to a name, stored in a field, passed as an argument, and called back
 // through. The front end has always typed these — sema records each one in FuncValues /
 // NsFuncValues — and only the lowering was missing, so using one was a clean diagnostic

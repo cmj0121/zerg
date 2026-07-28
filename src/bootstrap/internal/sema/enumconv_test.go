@@ -3,7 +3,7 @@ package sema
 import "testing"
 
 // TestEnumIntConversion covers `int(v)` reading a C-style enum's discriminant
-// (docs/types.md, GRAMMAR group 7): a payload-free enum has one, a payload enum does
+// (docs/core/types.md, GRAMMAR group 7): a payload-free enum has one, a payload enum does
 // not, and `int(v)` targets int, never another scalar.
 func TestEnumIntConversion(t *testing.T) {
 	const cstyle = "enum Color {\n  Red = 1\n  Green\n  Blue = 10\n}\n"
@@ -22,7 +22,7 @@ func TestEnumIntConversion(t *testing.T) {
 	})
 }
 
-// TestEnumOfReverse covers `E.of(n) -> E?` — the discriminant reverse (docs/types.md):
+// TestEnumOfReverse covers `E.of(n) -> E?` — the discriminant reverse (docs/core/types.md):
 // the enum name is a value namespace exposing `of`, which yields an optional of the
 // enum, and it needs a payload-free enum with discriminants.
 func TestEnumOfReverse(t *testing.T) {

@@ -1,19 +1,19 @@
 /*
- * map.c - the Zerg runtime built-in `map[K, V]` container (docs/collections.md).
+ * map.c - the Zerg runtime built-in `map[K, V]` container (docs/code/collections.md).
  *
  * A map is a BY-VALUE header (`zrt_map`); only its storage is heap. The header is
  * embedded inline in whatever holds it (a local, a field, a list element, another
  * map's value) exactly like a list, so copying/dropping a map is the compiler's job
  * at every scope boundary — this file owns only the storage.
  *
- * The table is INSERTION-ORDERED open-addressing (docs/collections.md: map iterates
+ * The table is INSERTION-ORDERED open-addressing (docs/code/collections.md: map iterates
  * in insertion order):
  *   - `entries` is an insertion-order array of `entrysz`-byte records, each laid out
  *     `[ size_t hash | key (keysz) | val (valsz) ]`. Iteration walks it 0..len.
  *   - `buckets` is a linear-probe hash index of `nbuckets` slots, each holding a
  *     1-based entry index (0 = empty). A lookup hashes the key, probes buckets, and
  *     compares against the entry's stored hash then vt->eq. There is NO tombstone —
- *     removal is deferred (see docs/collections.md Deferred), so probing never has to
+ *     removal is deferred (see docs/code/collections.md Deferred), so probing never has to
  *     skip a deleted slot.
  * Load factor 0.75 triggers a rehash that rebuilds `buckets` from `entries` in their
  * existing insertion order, so growth never reorders iteration.
@@ -235,7 +235,7 @@ void zrt_map_drop(zrt_map *m) {
 	m->nbuckets = 0;
 }
 
-/* --- built-in Hash for int and str keys (docs/collections.md) ----------------- */
+/* --- built-in Hash for int and str keys (docs/code/collections.md) ----------------- */
 
 size_t zrt_hash_int(const void *key) {
 	/* splitmix64 finalizer: a strong bit-mix so a linear-probe table stays well spread. */

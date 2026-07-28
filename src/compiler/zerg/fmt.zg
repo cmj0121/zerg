@@ -17,7 +17,7 @@
 #
 #   F101  one tab per nesting level; `}` closes at the level it opened
 #   F102  one statement per line — the lexer's inserted `;` IS the line break
-#   F103  a wrapped expression continues one level in from its statement
+#   F103  a wrapped expression continues one level in per open bracket
 #   F104  a run of blank lines survives as exactly one
 #   F105  a group that spans lines closes on its own line
 #   F201  one space around a binary operator, after a comma, around `=>`
@@ -252,8 +252,8 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	mut col := 0 # bytes written on the current line
 	mut prev := Semi # the last token that mattered for spacing
 	mut prev_line := 0
-	# One entry per open `(` or `[`: the source line it opened on, and the indent its
-	# closer belongs at. A group that opened on an EARLIER line gets its closer on a line
+	# One entry per open `(` or `[`: the source line it opened on, and the block depth its
+	# statement sits at. A group that opened on an EARLIER line gets its closer on a line
 	# of its own — which is what turns a wrapped chain into a shape with a visible end,
 	#
 	#     a := (builder()
@@ -263,6 +263,12 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	#
 	# instead of a `))` that a reader has to count. `psp` is the height rather than the
 	# list's length, so the two lists are reused instead of regrown per group.
+	#
+	# Both indents are measured from that block depth PLUS the group height, so a nested
+	# group steps in one level per open bracket and its closer lands under its own opener.
+	# Anchoring a closer to the statement instead put every closer of a nest in the same
+	# column — a reader could not tell which one closed which, and an inner closer sat to
+	# the LEFT of the content it closed.
 	mut pline: list[int] = []
 	mut pind: list[int] = []
 	mut psp := 0
@@ -295,13 +301,18 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 			mut broke := false
 			if col > 0 and closer {
 				out.append(byte(10))
-				fmt_indent(out, pind[psp - 1])
-				col = pind[psp - 1]
+				ci := pind[psp - 1] + psp - 1
+				fmt_indent(out, ci)
+				col = ci
 				broke = true
 			} else if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
 				out.append(byte(10))
-				fmt_indent(out, depth + 1)
-				col = depth + 1
+				mut ci := depth + 1
+				if psp > 0 {
+					ci = pind[psp - 1] + psp
+				}
+				fmt_indent(out, ci)
+				col = ci
 				broke = true
 			}
 			# A `}` closes its block: it dedents before it is written, and it always starts

@@ -1,5 +1,7 @@
 # Self-hosting Zerg compiler
 
+English | [繁體中文](README.zh-TW.md)
+
 The Zerg compiler, written in Zerg. It lexes, parses, and emits C over the existing
 runtime floor, then invokes `cc` — the same pipeline the Go bootstrap runs, re-expressed
 in the language itself. The compiler here is the one that ships; the Go seed exists to build it.
@@ -205,9 +207,9 @@ non-build subcommands (`fmt` / `lint` / `test`) are also dropped — the minimal
 `zerg fmt` writes them — so the seed must lex and parse `f"…"` to build stage 1. It already
 did; what changed is that it is now load-bearing rather than incidental. The shipped
 compiler accepts the plain hole only: no `:spec`, no `!r`/`!s`/`!a`, no `{x=}`, and no
-`f\`…\``command form, each refused by name rather than by silence. It desugars in the
-parser to the`+` chain the form is defined to be, so the AST and the emitter know nothing
-about f-strings at all.
+interpolating command form, each refused by name rather than by silence. It desugars in
+the parser to the `+` chain the form is defined to be, so the AST and the emitter know
+nothing about f-strings at all.
 
 ## Performance: parallelism & caching (M7)
 

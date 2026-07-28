@@ -114,4 +114,6 @@ lint:                           # lint the compiler and stdlib with zerg itself
 
 fmt:                            # rewrite the compiler and stdlib in canonical style
 	$(MAKE) build
-	@./bin/zerg fmt $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg || true
+	@for f in $(ZERG_ENTRY) src/compiler/zerg/*.zg src/stdlib/*.zg; do \
+		./bin/zerg fmt $$f || { echo "fmt: failed on $$f"; exit 1; }; \
+	done

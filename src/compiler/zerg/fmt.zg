@@ -28,6 +28,8 @@
 #   F402  imports group — standard library first, then the rest — each group alphabetical
 #   F403  an argument list is one line, or one element per line — never half of each
 #   F404  two or more imports become one parenthesized group
+#   F405  a string built with `+` becomes the f-string it already is
+#   F406  a blank line where one is load-bearing — guard runs, declaration runs, comments
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -58,8 +60,14 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	if not fmt_is_off(off, "F404") {
 		toks = fmt_import_group(toks)
 	}
+	if not fmt_is_off(off, "F405") {
+		toks = fmt_fstr(toks)
+	}
 	if not fmt_is_off(off, "F403") {
 		toks = fmt_wrap(toks)
+	}
+	if not fmt_is_off(off, "F406") {
+		toks = fmt_blank(toks)
 	}
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
@@ -126,8 +134,10 @@ fn fmt_emit_guard(toks: list[Token], at: int, lb: int, rb: int, mut &out: list[T
 	ln := toks[at].line
 	col := toks[at].col
 	jump := fmt_jump_at(toks, lb)
+
 	# the jump as it was written — `return`, `break` or `continue`
 	out.append(fmt_on_line(toks[jump], ln))
+
 	# a returned value, if there is one: everything between the jump and the `}`, minus
 	# the separators. `break` and `continue` carry none, so this loop runs zero times.
 	mut i := jump + 1
@@ -138,6 +148,7 @@ fn fmt_emit_guard(toks: list[Token], at: int, lb: int, rb: int, mut &out: list[T
 		i = i + 1
 	}
 	out.append(Token(If, "if", "", ln, col))
+
 	# the condition: everything between `if` and the `{`
 	mut j := at + 1
 	for j < lb {
@@ -250,6 +261,631 @@ fn fmt_has_else(toks: list[Token], rb: int) -> bool {
 fn fmt_is_else_if(out: list[Token]) -> bool {
 	return false if out.len() == 0
 	return out[out.len() - 1].kind == Else
+}
+
+# --- rule F406: a blank line where one is load-bearing ---------------------------------------
+#
+# The bar for this rule is high, because the tree it formats has TEN blank lines inside
+# function bodies in total, and this file — 1300 lines of it — has none. So the rule puts
+# one in exactly two places, and both are places the authors here already put one.
+#
+# A run of MORE THAN ONE guard is followed by a blank:
+#
+#     fn conv_ty(s: str) -> Ty {      fn conv_ty(s: str) -> Ty {
+#         return TInt if s == "int"       return TInt if s == "int"
+#         return TStr if s == "str"       return TStr if s == "str"
+#         return TNil               →
+#     }                                   return TNil
+#                                     }
+#
+# One guard is part of the line it guards; two or more are a TABLE of exits, and a table
+# wants an edge. That restraint is most of the rule: 182 of this tree's 218 guard runs are
+# a single guard and none of them is touched.
+#
+# A comment on its OWN line, with code before it, gets a blank in front. A comment there
+# heads a new chunk of the function — that is what makes it its own line rather than a
+# trailing one — and half of the blank lines already in this tree's bodies are exactly it.
+#
+# What it does NOT do, though the shape suggests it: a blank after a nested block's `}`.
+# That is 683 places, which is not a rule about readability but a rewrite of the tree.
+#
+# It is F4xx and switchable because it inserts a line nobody wrote — the same test that put
+# F403 there. It runs LAST, after F403, because F403 renumbers lines and this rule's whole
+# job is to decide line numbers; running it earlier would have its work rewritten.
+fn fmt_blank(toks: list[Token]) -> list[Token] {
+	mut at: list[bool] = []
+	mut i := 0
+	for i < toks.len() {
+		at.append(false)
+		i = i + 1
+	}
+	fmt_blank_mark(toks, at)
+
+	# The blank is made by SHIFTING every later token down a line, not by widening the gap
+	# the run leaves behind. Widening does not work: the `;` the lexer inserts after a `}`
+	# prints nothing but still moves the printer's `prev_line`, so a gap opened before that
+	# `;` is closed again by it — which is why F401 can collapse a four-line if-block onto
+	# one line without leaving a blank where the block used to be.
+	mut out: list[Token] = []
+	mut shift := 0
+	mut j := 0
+	for j < toks.len() {
+		if at[j] {
+			shift = shift + 1
+		}
+		out.append(fmt_on_line(toks[j], toks[j].line + shift))
+		j = j + 1
+	}
+	return out
+}
+
+# fmt_blank_mark marks each token that a blank line goes in FRONT of. It tracks the block
+# depth because a comment only heads a chunk INSIDE a body: at the top level a comment is
+# a declaration's doc comment, or one of an import's, and the blank line between those is
+# the author's to place.
+fn fmt_blank_mark(toks: list[Token], mut &at: list[bool]) {
+	mut depth := 0
+	mut group := 0
+	mut i := 0
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_lbrace(k) {
+			depth = depth + 1
+		} else if is_rbrace(k) and depth > 0 {
+			depth = depth - 1
+		} else if is_bracket(k) {
+			group = group + 1
+		} else if is_close(k) and group > 0 {
+			group = group - 1
+		}
+		end := fmt_guard_end(toks, i)
+		dend := fmt_decl_end(toks, i)
+		if end < 0 and dend >= 0 {
+			# a run of declarations gets a leading edge and NOTHING after it
+			mut dn := 1
+			mut dlast := dend
+			mut dnxt := fmt_next_code(toks, dend)
+			for dnxt >= 0 {
+				e := fmt_decl_end(toks, dnxt)
+				break if e < 0
+				dn = dn + 1
+				dlast = e
+				dnxt = fmt_next_code(toks, e)
+			}
+			if dn >= fmt_decl_min() and fmt_blank_lead(toks, i) {
+				at[i] = true
+			}
+			i = dlast + 1
+		} else if end < 0 {
+			# `group == 0` keeps this out of a wrapped argument list: a comment among a
+			# list's elements belongs to the element it sits on, and a blank line there
+			# separates it from the very thing it is about.
+			if depth > 0 and group == 0 and fmt_blank_comment(toks, i) {
+				at[i] = true
+			}
+			i = i + 1
+		} else {
+			# walk the whole run, so the mark lands after the LAST of its guards
+			mut n := 1
+			mut last := end
+			mut nxt := fmt_next_code(toks, end)
+			for nxt >= 0 {
+				e := fmt_guard_end(toks, nxt)
+				break if e < 0
+				n = n + 1
+				last = e
+				nxt = fmt_next_code(toks, e)
+			}
+			if n > 1 {
+				# a table gets both edges. The leading one is only wanted where the run
+				# starts mid-function: at the top of a body the `{` is already the edge.
+				if fmt_blank_lead(toks, i) {
+					at[i] = true
+				}
+				if fmt_blank_here(toks, nxt) {
+					at[nxt] = true
+				}
+			}
+			i = last + 1
+		}
+	}
+}
+
+# fmt_blank_comment reports a comment on its own line with code before it AND code after it
+# — the shape that heads a new chunk. A comment TRAILING code shares that code's line and is
+# part of it; a comment under another comment is one block and is not split; and a comment
+# with nothing but the closing `}` after it heads nothing, so a blank would only push it
+# away from what it is commenting ON.
+fn fmt_blank_comment(toks: list[Token], at: int) -> bool {
+	return false if not is_comment(toks[at].kind)
+	return false if at == 0
+
+	p := fmt_prev_code(toks, at)
+	return false if p < 0
+	k := toks[p].kind
+	return false if is_comment(k) or is_lbrace(k)
+
+	# on the same line as what precedes it, this is a trailing comment
+	return false if toks[at].line == toks[p].line
+	return false if not fmt_blank_leads(toks, at)
+
+	return fmt_blank_here(toks, at)
+}
+
+# fmt_blank_leads reports whether a comment block has any code after it to head.
+fn fmt_blank_leads(toks: list[Token], at: int) -> bool {
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+
+		return false if is_rbrace(k) or is_eof(k)
+		return true if not is_semi(k) and not is_comment(k)
+
+		i = i + 1
+	}
+	return false
+}
+
+# fmt_decl_min is how many declarations make a paragraph. Two are a pair — `sline` and
+# `scol` are one thought written twice — which is the same step this rule already takes
+# when it says one guard is part of the line it guards.
+fn fmt_decl_min() -> int {
+	return 3
+}
+
+# fmt_decl_end is the index of the `;` closing the declaration starting at `at`, or -1 when
+# the statement there is anything else. The forms are `x := e`, `mut x := e` and the typed
+# `x: T = e`.
+#
+# A `{` at depth zero declines it, the way it declines a guard: `x := if c { 1 } else { 2 }`
+# is a statement with a shape of its own and not part of any preamble.
+fn fmt_decl_end(toks: list[Token], at: int) -> int {
+	mut i := at
+	if toks[i].kind == Mut {
+		i = i + 1
+	}
+	return - 1 if toks[i].kind != Ident
+	i = i + 1
+	if toks[i].kind == Colon {
+		# `x: T = e` — step over the type to the `=` that opens the value
+		mut j := i + 1
+		mut d := 0
+		for j < toks.len() {
+			k := toks[j].kind
+			if is_bracket(k) {
+				d = d + 1
+			} else if is_close(k) {
+				d = d - 1
+			} else if d == 0 and k == Assign {
+				break
+			} else if is_semi(k) or is_lbrace(k) or is_comment(k) {
+				return - 1
+			}
+			j = j + 1
+		}
+		return - 1 if j >= toks.len()
+		i = j
+	} else if toks[i].kind != Walrus {
+		return - 1
+	}
+	mut depth := 0
+	mut j := i + 1
+	for j < toks.len() {
+		k := toks[j].kind
+		if is_bracket(k) {
+			depth = depth + 1
+		} else if is_close(k) {
+			depth = depth - 1
+		} else if is_lbrace(k) and depth == 0 {
+			return - 1
+		} else if is_semi(k) and depth == 0 {
+			return j
+		} else if is_comment(k) or is_eof(k) {
+			return - 1
+		}
+		j = j + 1
+	}
+	return - 1
+}
+
+# fmt_blank_lead reports whether a blank belongs in FRONT of a run: there has to be code
+# ahead of it to be separated from, and that code must not be a comment. A comment there is
+# the run's heading, and F406 has already put a blank in front of IT — putting a second one
+# between the heading and the table would split the two things that go together.
+fn fmt_blank_lead(toks: list[Token], at: int) -> bool {
+	p := fmt_prev_code(toks, at)
+	return false if p < 0
+	k := toks[p].kind
+	return false if is_lbrace(k) or is_comment(k)
+	return fmt_blank_here(toks, at)
+}
+
+# fmt_blank_here is every reason a blank line is NOT wanted at `at`, in one place.
+fn fmt_blank_here(toks: list[Token], at: int) -> bool {
+	return false if at <= 0
+	k := toks[at].kind
+
+	# nothing to be separated FROM: a blank before a closer, or at the end of the file
+	return false if is_rbrace(k) or is_eof(k)
+
+	# a blank is already there. The gap is measured against the token immediately before,
+	# because that is what the printer's `prev_line` will hold — a `;` among them prints
+	# nothing and still counts.
+	return false if toks[at].line - toks[at - 1].line >= 2
+	return true
+}
+
+# fmt_guard_end is the index of the `;` closing the postfix guard that starts at `at`, or
+# -1 when the statement there is anything else.
+#
+# A guard is a jump with an `if` after it and no block of its own. The `{` test is what
+# tells it from `return if c { 1 } else { 2 }` — a jump whose VALUE is an if-expression,
+# which is a statement of a different shape and not part of any table.
+fn fmt_guard_end(toks: list[Token], at: int) -> int {
+	return - 1 if not is_jump(toks[at].kind)
+
+	mut depth := 0
+	mut seen := false
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_lbrace(k) {
+			return - 1 if depth == 0
+			depth = depth + 1
+		} else if is_bracket(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			depth = depth - 1
+		} else if is_semi(k) and depth == 0 {
+			return i if seen
+			return - 1
+		} else if is_comment(k) or is_eof(k) {
+			return - 1
+		} else if k == If and depth == 0 {
+			seen = true
+		}
+		i = i + 1
+	}
+	return - 1
+}
+
+# fmt_next_code is the next token that is not a separator. The `;`s are skipped because
+# they are what stands between one guard of a run and the next.
+fn fmt_next_code(toks: list[Token], at: int) -> int {
+	mut i := at + 1
+	for i < toks.len() {
+		return i if not is_semi(toks[i].kind)
+		i = i + 1
+	}
+	return - 1
+}
+
+fn fmt_prev_code(toks: list[Token], at: int) -> int {
+	mut i := at - 1
+	for i >= 0 {
+		return i if not is_semi(toks[i].kind)
+		i = i - 1
+	}
+	return - 1
+}
+
+# --- rule F405: a string built with `+` becomes the f-string it already is -------------------
+#
+# A chain of `+` over strings says what an f-string says, in more punctuation:
+#
+#     "n=" + s + " of " + t      →      f"n={s} of {t}"
+#
+# The formatter has no types, and does not need them here. `+` is never heterogeneous —
+# the emitter lowers it to a string concat exactly when the LEFT operand is a str, and
+# there is no `+` on any other composite — so ONE string literal anywhere in a chain types
+# the whole of it. That is the trigger.
+#
+# The trap this rule is mostly built around is precedence: `+` shares its level with `-`,
+# `|`, `^`, `+%` and `-%`, so `"a" + b - c` parses as `("a" + b) - c` and the `+` chain is
+# NOT the whole token run. Rewriting the run would re-associate the expression. What may
+# appear between operands is therefore a whitelist rather than a blacklist, and any of
+# those five at the chain's own depth ends it.
+#
+# `strconv.to_string(X, 10)` narrows to `{X}`. Base 10 is what a hole renders in anyway, so
+# the call says nothing the braces do not — and every other base is a conversion a hole has
+# no spelling for, so it keeps its call. The test is on the LEXEME `10`, not the value:
+# `0xa` is the same number and not the same statement of intent.
+#
+# It declines, each for its own reason:
+#
+#   * fewer than 3 operands — two is one `+`, already the shortest way to say it;
+#   * no string literal — nothing proves the chain is a string;
+#   * no hole — an all-literal chain gains nothing from an `f`, which is what leaves
+#     zergc's nine-line help text alone;
+#   * a chain spanning more than one line — its author's breaks say where the pieces are,
+#     and staying inside one line means this rule never touches a line number, so it
+#     composes with F403 and F406 without either seeing the other;
+#   * a raw or triple-quoted literal, or one carrying `\u{…}`, whose braces belong to the
+#     escape and cannot be doubled;
+#   * a hole whose text carries `"`, `\`, `{` or `}` — the f-string's own delimiters;
+#   * a literal carrying a brace. Doubling it is correct and reads worse than what it
+#     replaces: this tree builds C, and `f"{ind}{{\n"` asks a reader to decide per brace
+#     whether it is a hole or an escape. Correctness was never the question there;
+#   * the accumulation `out = out + …`, which is 88 of this tree's concatenations and the
+#     dominant idiom. `f"{out}…"` re-reads the accumulator as a hole, so the one thing the
+#     statement is DOING becomes indistinguishable from the values being interpolated.
+fn fmt_fstr_min() -> int {
+	return 3
+}
+
+# Fstr is what rendering a chain answers with: the whole f-string lexeme, and whether the
+# chain was one this rule may rewrite. They come out together because BUILDING the text is
+# what finds the operand that declines it.
+struct Fstr {
+	text: str
+	ok: bool
+}
+
+fn fmt_fstr(toks: list[Token]) -> list[Token] {
+	mut head: list[int] = []
+	mut i := 0
+	for i < toks.len() {
+		head.append(- 1)
+		i = i + 1
+	}
+	fmt_fstr_mark(toks, head)
+	mut out: list[Token] = []
+	mut j := 0
+	for j < toks.len() {
+		if head[j] >= 0 {
+			r := fmt_fstr_render(toks, j, head[j])
+			out.append(Token(FStr, r.text, "", toks[j].line, toks[j].col))
+			j = head[j] + 1
+		} else {
+			out.append(toks[j])
+			j = j + 1
+		}
+	}
+	return out
+}
+
+# fmt_fstr_mark records, on each rewritable chain's FIRST token, the index of its last.
+# Every `+` of one chain walks out to the same pair, so writing the same answer twice is
+# how the overlapping anchors settle.
+fn fmt_fstr_mark(toks: list[Token], mut &head: list[int]) {
+	mut i := 0
+	for i < toks.len() {
+		if toks[i].kind == Plus {
+			lo := fmt_fstr_lo(toks, i)
+			hi := fmt_fstr_hi(toks, i)
+			r := fmt_fstr_render(toks, lo, hi)
+			if r.ok and not fmt_fstr_accum(toks, lo) {
+				head[lo] = hi
+			}
+		}
+		i = i + 1
+	}
+}
+
+# fmt_fstr_atom is what a chain may hold BETWEEN its operators at its own bracket depth.
+# It is a whitelist and deliberately narrow: what is outside it is what the rewrite would
+# get wrong. Inside a bracket anything goes — the walk only tests at depth zero.
+fn fmt_fstr_atom(k: Kind) -> bool {
+	return match k {
+		Ident => true
+		Str => true
+		Int => true
+		Float => true
+		True => true
+		False => true
+		Nil => true
+		This => true
+		Dot => true
+		LParen => true
+		RParen => true
+		LBrack => true
+		RBrack => true
+		_ => false
+	}
+}
+
+# fmt_fstr_lo walks left from a `+` to the chain's first token. A CLOSING bracket met going
+# left opens a group to step over; an OPENING one at depth zero is the bracket holding the
+# chain, and stops the walk without being taken.
+fn fmt_fstr_lo(toks: list[Token], p: int) -> int {
+	mut d := 0
+	mut lo := p
+	mut i := p - 1
+	for i >= 0 {
+		k := toks[i].kind
+		if is_close(k) {
+			d = d + 1
+		} else if is_bracket(k) {
+			break if d == 0
+			d = d - 1
+		} else if d == 0 and not fmt_fstr_atom(k) and k != Plus {
+			break
+		}
+		lo = i
+		i = i - 1
+	}
+	return lo
+}
+
+fn fmt_fstr_hi(toks: list[Token], p: int) -> int {
+	mut d := 0
+	mut hi := p
+	mut i := p + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_bracket(k) {
+			d = d + 1
+		} else if is_close(k) {
+			break if d == 0
+			d = d - 1
+		} else if d == 0 and not fmt_fstr_atom(k) and k != Plus {
+			break
+		}
+		hi = i
+		i = i + 1
+	}
+	return hi
+}
+
+# fmt_fstr_accum reports the `out = out + …` shape by comparing the assignment's target
+# with the chain's first operand.
+fn fmt_fstr_accum(toks: list[Token], lo: int) -> bool {
+	return false if lo < 2
+	return false if toks[lo - 1].kind != Assign
+
+	mut i := lo - 2
+	mut j := lo
+	for i >= 0 and toks[i].kind != Semi and not is_lbrace(toks[i].kind) {
+		return false if toks[j].kind != toks[i].kind or toks[j].lexeme != toks[i].lexeme
+		i = i - 1
+		j = j + 1
+	}
+	return true
+}
+
+# fmt_fstr_render builds the f-string a chain would become, and answers whether it may.
+fn fmt_fstr_render(toks: list[Token], lo: int, hi: int) -> Fstr {
+	return Fstr("", false) if hi <= lo
+	return Fstr("", false) if toks[lo].line != toks[hi].line
+
+	mut text := ""
+	mut parts := 0
+	mut lits := 0
+	mut holes := 0
+	mut d := 0
+	mut a := lo
+	mut i := lo
+	for i <= hi + 1 {
+		fin := i > hi
+		mut k := Semi
+		if not fin {
+			k = toks[i].kind
+		}
+		if not fin and is_bracket(k) {
+			d = d + 1
+		} else if not fin and is_close(k) {
+			d = d - 1
+		}
+		if fin or (d == 0 and k == Plus) {
+			return Fstr("", false) if i <= a
+			piece := fmt_fstr_part(toks, a, i - 1)
+			return Fstr("", false) if not piece.ok
+			text = text + piece.text
+			parts = parts + 1
+			if a == i - 1 and toks[a].kind == Str {
+				lits = lits + 1
+			} else {
+				holes = holes + 1
+			}
+			a = i + 1
+		}
+		i = i + 1
+	}
+	return Fstr("", false) if parts < fmt_fstr_min() or lits == 0 or holes == 0
+	return Fstr(f"f\"{text}\"", true)
+}
+
+# fmt_fstr_part renders one operand: a string literal contributes its text, anything else
+# becomes a `{ … }` hole spelled the way the printer would spell it on one line.
+fn fmt_fstr_part(toks: list[Token], lo: int, hi: int) -> Fstr {
+	if lo == hi and toks[lo].kind == Str {
+		return Fstr("", false) if not fmt_fstr_lit_ok(toks[lo])
+		return Fstr(fmt_fstr_lit(toks[lo].lexeme), true)
+	}
+	s: str = fmt_fstr_span(toks, fmt_fstr_arg_lo(toks, lo, hi), fmt_fstr_arg_hi(toks, lo, hi))
+	return Fstr("", false) if not fmt_fstr_hole_ok(s)
+	return Fstr("{" + s + "}", true)
+}
+
+# fmt_fstr_is_dec reports the `strconv.to_string(X, 10)` shape, whose whole content is the
+# base a hole renders in anyway.
+fn fmt_fstr_is_dec(toks: list[Token], lo: int, hi: int) -> bool {
+	return false if hi - lo < 7
+	return false if toks[lo].kind != Ident or toks[lo].lexeme != "strconv"
+	return false if not is_dot(toks[lo + 1].kind)
+	return false if toks[lo + 2].kind != Ident or toks[lo + 2].lexeme != "to_string"
+	return false if toks[lo + 3].kind != LParen
+	return false if fmt_wrap_end(toks, lo + 3) != hi
+	return false if toks[hi - 1].kind != Int or toks[hi - 1].lexeme != "10"
+
+	return is_comma(toks[hi - 2].kind)
+}
+
+fn fmt_fstr_arg_lo(toks: list[Token], lo: int, hi: int) -> int {
+	return lo + 4 if fmt_fstr_is_dec(toks, lo, hi)
+	return lo
+}
+
+fn fmt_fstr_arg_hi(toks: list[Token], lo: int, hi: int) -> int {
+	return hi - 3 if fmt_fstr_is_dec(toks, lo, hi)
+	return hi
+}
+
+# fmt_fstr_span spells a token run the way the printer would on ONE line, through the
+# printer's own spacing predicate — so a hole's text is already canonical and formatting
+# the result again changes nothing.
+fn fmt_fstr_span(toks: list[Token], lo: int, hi: int) -> str {
+	mut out := ""
+	mut prev := Semi
+	mut i := lo
+	for i <= hi {
+		t := toks[i]
+		if i > lo and fmt_space_between(prev, t.kind) {
+			out = out + " "
+		}
+		out = out + fmt_text(t)
+		prev = t.kind
+		i = i + 1
+	}
+	return out
+}
+
+# fmt_fstr_lit_ok is every reason a string literal declines to be an f-string's text.
+fn fmt_fstr_lit_ok(t: Token) -> bool {
+	b := list[byte](t.lexeme)
+	n := b.len()
+
+	return false if n < 2 or b[0] != b'"'
+	return false if n >= 3 and b[1] == b'"' and b[2] == b'"'
+
+	mut i := 1
+	for i < n - 1 {
+		c := b[i]
+
+		# `\u{…}`'s braces belong to the escape: doubling breaks it and not doubling reads
+		# as a hole, so there is no spelling and the chain keeps its `+`
+		return false if c == b'\\' and i + 1 < n and b[i + 1] == b'u'
+		if c == b'\\' {
+			i = i + 2
+		} else {
+			# a brace is correct doubled and worse to read, so it declines instead
+			return false if c == b'{' or c == b'}'
+			i = i + 1
+		}
+	}
+	return true
+}
+
+fn fmt_fstr_lit(lex: str) -> str {
+	b := list[byte](lex)
+	mut out: list[byte] = []
+	mut i := 1
+	for i < b.len() - 1 {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# fmt_fstr_hole_ok refuses a hole carrying the f-string's own delimiters. What this really
+# catches is inside an operand's brackets, which is where they occur — `dump(b, ind + "\t")`
+# is a hole this rule cannot spell.
+fn fmt_fstr_hole_ok(s: str) -> bool {
+	return false if s == ""
+	for c in list[byte](s) {
+		return false if c == b'"' or c == b'\\' or c == b'{' or c == b'}'
+	}
+	return true
 }
 
 # --- rule F403: an argument list is one line, or one element per line -----------------------
@@ -408,6 +1044,7 @@ fn fmt_wrap_scan(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], 
 fn fmt_wrap_opens(toks: list[Token], at: int) -> bool {
 	return false if not is_bracket(toks[at].kind)
 	return false if at > 0 and is_hash(toks[at - 1].kind)
+
 	return true
 }
 
@@ -424,11 +1061,14 @@ fn fmt_wrap_group(
 	depth: int
 ) -> Wrap {
 	close := fmt_wrap_end(toks, open)
+
 	return Wrap(open + 1, col) if close == 0
 	return Wrap(close + 1, col) if fmt_wrap_has_comment(toks, open, close)
+
 	flat := fmt_wrap_flat_width(wid, open + 1, close)
 	elems := fmt_wrap_elem_count(toks, open, close)
 	return fmt_wrap_free(toks, brk, drop, wid, open, close, col, flat, depth) if elems == 0
+
 	# Both thresholds VETO a join; neither orders a split. A group is broken up only when
 	# its author already broke it — this rule then decides whether it stays broken, and
 	# makes it break all the way rather than around one element.
@@ -617,8 +1257,10 @@ fn fmt_wrap_elem_count(toks: list[Token], open: int, close: int) -> int {
 		}
 		i = i + 1
 	}
+
 	return 0 if commas == 0
 	return commas if is_comma(toks[close - 1].kind)
+
 	return commas + 1
 }
 
@@ -654,6 +1296,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	mut col := 0 # bytes written on the current line
 	mut prev := Semi # the last token that mattered for spacing
 	mut prev_line := 0
+
 	# One entry per open `(` or `[`: the source line it opened on, and the block depth its
 	# statement sits at. A group that opened on an EARLIER line gets its closer on a line
 	# of its own — which is what turns a wrapped chain into a shape with a visible end,
@@ -709,6 +1352,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				broke = true
 			} else if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
 				out.append(byte(10))
+
 				# F104 applies inside a group as well as between statements. Only the other
 				# branch used to check for it, so a blank line a person left among a wrapped
 				# list's elements — the separator between an import group's two halves, for
@@ -724,6 +1368,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				col = ci
 				broke = true
 			}
+
 			# A `}` closes its block: it dedents before it is written, and it always starts
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
 			# fires at bracket depth 0 — so block structure is the formatter's own rule.
@@ -741,6 +1386,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				if prev_line > 0 and t.line > prev_line + 1 {
 					out.append(byte(10))
 				}
+
 				# A line can also start with no break of its own to account for: after a
 				# comment, which runs to end of line, or after a `}`. Inside a group that is
 				# still open it belongs at the group's indent all the same — otherwise a
@@ -776,12 +1422,14 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 			} else if is_close(t.kind) and psp > 0 {
 				psp = psp - 1
 			}
+
 			# a `{` opens a block: whatever follows starts on its own line, one deeper
 			if is_lbrace(t.kind) {
 				depth = depth + 1
 				out.append(byte(10))
 				col = 0
 			}
+
 			# a comment runs to end of line: close the line so nothing joins it
 			if is_comment(t.kind) {
 				out.append(byte(10))
@@ -802,6 +1450,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 fn fmt_text(t: Token) -> str {
 	return t.lexeme if is_comment(t.kind)
 	return t.lexeme if t.lexeme != ""
+
 	return kind_name(t.kind)
 }
 
@@ -981,8 +1630,10 @@ fn fmt_import_group(toks: list[Token]) -> list[Token] {
 	first := fmt_first_import(toks)
 	return toks if first < 0
 	last := fmt_group_run_end(toks, first)
+
 	return toks if last < 0
 	return toks if fmt_run_specs(toks, first, last) < 2
+
 	mut out: list[Token] = []
 	mut i := 0
 	for i < first {
@@ -990,6 +1641,7 @@ fn fmt_import_group(toks: list[Token]) -> list[Token] {
 		i = i + 1
 	}
 	end := fmt_emit_group(toks, first, last, out)
+
 	# Every token after the run shifts by however many lines the run grew, so the blank
 	# line the author left before the next declaration is still there.
 	shift := end - toks[last].line
@@ -1008,12 +1660,14 @@ fn fmt_emit_group(toks: list[Token], first: int, last: int, mut &out: list[Token
 	ln := toks[first].line
 	out.append(Token(Import, "import", "", ln, 0))
 	out.append(Token(LParen, "(", "", ln, 0))
+
 	mut cur := ln
 	mut src := - 1
 	mut i := first
 	for i <= last {
 		if toks[i].kind == Import {
 			cur = cur + 1
+
 			# a blank line between two imports is the group separator F402 wrote, and it
 			# means the same thing inside the parentheses as it did outside them
 			if src >= 0 and toks[i].line > src + 1 {
@@ -1078,8 +1732,10 @@ fn fmt_more_imports_after(toks: list[Token], at: int) -> bool {
 	mut i := at
 	for i < toks.len() {
 		k := toks[i].kind
+
 		return true if k == Import
 		return false if not is_semi(k) and not is_comment(k)
+
 		i = i + 1
 	}
 	return false
@@ -1139,6 +1795,7 @@ fn fmt_imports(toks: list[Token]) -> list[Token] {
 	}
 	ln := toks[first].line
 	end := fmt_emit_imports(paths, ln, out)
+
 	# Every token after the run shifts by however many lines the run grew or shrank, so the
 	# blank line the author left before the next declaration is still there.
 	shift := end - toks[last].line
@@ -1165,7 +1822,7 @@ fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int 
 				}
 			}
 			out.append(Token(Import, "import", "", ln, 0))
-			out.append(Token(Str, "\"" + p + "\"", p, ln, 0))
+			out.append(Token(Str, f"\"{p}\"", p, ln, 0))
 			out.append(Token(Semi, ";", "", ln, 0))
 			wrote = true
 			group = true
@@ -1288,6 +1945,7 @@ fn fmt_before(a: str, b: str) -> bool {
 	for i < x.len() and i < y.len() {
 		return true if x[i] < y[i]
 		return false if x[i] > y[i]
+
 		i = i + 1
 	}
 	return x.len() < y.len()

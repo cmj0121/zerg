@@ -69,6 +69,7 @@ pub fn split(s: str, sep: str) -> list[str] {
 	if m == 0 {
 		raise "strings.split: empty separator"
 	}
+
 	mut out: list[str] = []
 	mut cur: list[byte] = []
 	n := hay.len()
@@ -117,6 +118,7 @@ pub fn repeat(s: str, count: int) -> str {
 	if count < 0 {
 		raise "strings.repeat: negative count"
 	}
+
 	sb := list[byte](s)
 	mut out: list[byte] = []
 	mut i := 0
@@ -182,6 +184,7 @@ pub fn count(s: str, sub: str) -> int {
 	if m == 0 {
 		raise "strings.count: empty substring"
 	}
+
 	n := hay.len()
 	mut c := 0
 	mut i := 0
@@ -204,6 +207,7 @@ pub fn replace(s: str, old: str, new: str) -> str {
 	if m == 0 {
 		raise "strings.replace: empty target"
 	}
+
 	hay := list[byte](s)
 	newb := list[byte](new)
 	n := hay.len()

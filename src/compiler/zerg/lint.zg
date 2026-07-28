@@ -20,6 +20,7 @@
 pub fn lint_files(srcs: list[str]) -> list[str] {
 	f := merge_files(srcs)
 	mut out: list[str] = []
+
 	# Names used ANYWHERE in the program: a private function called from another module
 	# of the same program is used, so the whole merged File is the unit of judgement.
 	mut ids: list[str] = []
@@ -39,7 +40,7 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 	for im in f.imports {
 		name := last_segment(im)
 		if not has_str(ns, name) and not has_str(ids, name) {
-			out.append("L101 unused import \"" + im + "\"")
+			out.append(f"L101 unused import \"{im}\"")
 		}
 	}
 }
@@ -51,7 +52,7 @@ fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str])
 		if fd.is_pub or fd.name == "main" {
 			continue_marker()
 		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
-			out.append("L102 private function `" + fd.name + "` is never called")
+			out.append(f"L102 private function `{fd.name}` is never called")
 		}
 	}
 }
@@ -70,7 +71,7 @@ fn lint_unread_bindings(f: File, mut &out: list[str]) {
 			mut ns: list[str] = []
 			walk_body(fd.body, ids, calls, ns)
 			if count_str(ids, n) == 0 {
-				out.append("L103 binding `" + n + "` in `" + fd.name + "` is never read")
+				out.append(f"L103 binding `{n}` in `{fd.name}` is never read")
 			}
 		}
 	}

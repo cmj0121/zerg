@@ -203,7 +203,7 @@ fn fn_kind(f: FnDecl) -> str {
 # qual_name shows a method as `Type.name`, so the `--emit ast` view says which impl a
 # function came from — the tree is otherwise flat and two types may name a method alike.
 fn qual_name(f: FnDecl) -> str {
-	return f.recv + "." + f.name if f.recv != ""
+	return f"{f.recv}.{f.name}" if f.recv != ""
 	return f.name
 }
 
@@ -234,17 +234,17 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, is_mut, has_ty, value) => ind + "let " + name + " = " + expr_kind(value) + "\n"
-		SAssign(target, value) => ind + "assign " + expr_kind(target) + " = " + expr_kind(value) + "\n"
-		SPrint(x) => ind + "print " + expr_kind(x) + "\n"
-		SReturn(has_value, value) => ind + "return " + expr_kind(value) + "\n"
-		SReturnIf(value, cond) => ind + "return-if " + expr_kind(cond) + "\n"
-		SExpr(x) => ind + "expr " + expr_kind(x) + "\n"
+		SLet(name, ty, is_mut, has_ty, value) => f"{ind}let {name} = {expr_kind(value)}\n"
+		SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
+		SPrint(x) => f"{ind}print {expr_kind(x)}\n"
+		SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"
+		SReturnIf(value, cond) => f"{ind}return-if {expr_kind(cond)}\n"
+		SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
 		SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
 		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
 		SGuard(body_b) => ind + "guard\n" + dump_block(body_b, ind + "\t")
-		SRaise(x) => ind + "raise " + expr_kind(x) + "\n"
+		SRaise(x) => f"{ind}raise {expr_kind(x)}\n"
 		SBreak => ind + "break\n"
 		SContinue => ind + "continue\n"
 		_ => ind + "nop\n"
@@ -293,8 +293,8 @@ fn ty_name(t: Ty) -> str {
 		TVoid => "void"
 		TByte => "byte"
 		TNamed(n) => n
-		TList(e) => "list[" + ty_name(e) + "]"
-		TFn(ps, r) => "fn(" + ty_names(ps) + ") -> " + ty_name(r)
+		TList(e) => f"list[{ty_name(e)}]"
+		TFn(ps, r) => f"fn({ty_names(ps)}) -> {ty_name(r)}"
 		_ => "?"
 	}
 }

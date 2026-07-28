@@ -888,6 +888,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIdent(t.lexeme)
 	}
+	if k == Cmd {
+		# A command literal runs a process, and what the EXPRESSION is worth — an exit
+		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
+		# leaves open. Until that is answered it refuses by name: today it parsed as
+		# nothing at all, so `c := `echo hi`` silently bound 0.
+		raise "a command literal is not supported yet: " + t.lexeme
+	}
 	if k == LParen {
 		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
 		# so the first element is read before deciding which this is

@@ -709,6 +709,13 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				broke = true
 			} else if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
 				out.append(byte(10))
+				# F104 applies inside a group as well as between statements. Only the other
+				# branch used to check for it, so a blank line a person left among a wrapped
+				# list's elements — the separator between an import group's two halves, for
+				# one — was closed up as if it had never been written.
+				if t.line > prev_line + 1 {
+					out.append(byte(10))
+				}
 				mut ci := depth + 1
 				if psp > 0 {
 					ci = pind[psp - 1] + psp

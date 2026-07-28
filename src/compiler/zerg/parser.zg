@@ -102,6 +102,9 @@ fn parse_type(mut &p: Parser) -> Ty {
 		}
 		return TFn(ptys, fret)
 	}
+	if name == "chan" {
+		raise "NotImplemented: chan"
+	}
 	if name == "map" and p_at(p, LBrack) {
 		p_advance(p)
 		kt := parse_type(p)
@@ -480,6 +483,11 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 	p_advance(p) # 'fn'
 	name := cur(p).lexeme
 	p_advance(p) # name
+	# `fn f[T](x: T)` — the bracket group was read as the parameter list, so `[T]` became
+	# two parameters named `[` and `]` and the C came out unparseable
+	if p_at(p, LBrack) {
+		raise "NotImplemented: a generic function definition"
+	}
 	expect(p, LParen)
 	mut params: list[Param] = []
 	if recv != "" {
@@ -570,6 +578,21 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	return parse_if(p) if k == If
 	return parse_for(p) if k == For
 
+	# The forms below parse to NOTHING today. Each was silently dropped: `spawn f()` ran
+	# f() inline, `with`/`del` vanished, a `select` block's arms were read as loose
+	# statements. Refusing by name is the least a compiler owes a program it cannot build.
+	if k == Spawn {
+		raise "NotImplemented: spawn"
+	}
+	if k == Select {
+		raise "NotImplemented: select"
+	}
+	if k == With {
+		raise "NotImplemented: with"
+	}
+	if k == Del {
+		raise "NotImplemented: del"
+	}
 	if k == Defer {
 		p_advance(p)
 		return SDefer(parse_expr(p))
@@ -888,12 +911,25 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIdent(t.lexeme)
 	}
+	if k == Fn {
+		# a closure used as a value: parse_primary had no case, so it answered ENil and the
+		# parameter list was then read as a call's arguments
+		raise "NotImplemented: a closure used as a value"
+	}
+	if k == Unsafe {
+		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and
+		# its statements never ran
+		raise "NotImplemented: unsafe"
+	}
+	if k == Asm {
+		raise "NotImplemented: asm"
+	}
 	if k == Cmd {
 		# A command literal runs a process, and what the EXPRESSION is worth — an exit
 		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
 		# leaves open. Until that is answered it refuses by name: today it parsed as
 		# nothing at all, so `c := `echo hi`` silently bound 0.
-		raise "a command literal is not supported yet: " + t.lexeme
+		raise "NotImplemented: a command literal — " + t.lexeme
 	}
 	if k == LParen {
 		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
@@ -1209,15 +1245,15 @@ fn fstr_reject(hole: str) {
 			depth = depth - 1
 			i = i + 1
 		} else if depth == 0 and c == b':' {
-			raise "f-string: a ':spec' format spec is not supported yet: {" + hole + "}"
+			raise "NotImplemented: an f-string ':spec' format spec — {" + hole + "}"
 		} else if depth == 0 and c == b'!' and i + 1 < n and fstr_is_conv(b[i + 1]) {
-			raise "f-string: an '!r' / '!s' / '!a' conversion is not supported yet: {" + hole + "}"
+			raise "NotImplemented: an f-string '!r' / '!s' / '!a' conversion — {" + hole + "}"
 		} else {
 			i = i + 1
 		}
 	}
 	if fstr_is_selfdoc(b) {
-		raise "f-string: the '{expr=}' self-documenting form is not supported yet: {" + hole + "}"
+		raise "NotImplemented: the f-string '{expr=}' self-documenting form — {" + hole + "}"
 	}
 }
 

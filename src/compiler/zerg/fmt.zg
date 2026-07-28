@@ -425,9 +425,26 @@ fn fmt_wrap_group(
 	flat := fmt_wrap_flat_width(wid, open + 1, close)
 	elems := fmt_wrap_elem_count(toks, open, close)
 	return fmt_wrap_free(toks, brk, drop, wid, open, close, col, flat, depth) if elems == 0
-	fits := col + flat <= fmt_wrap_max() and elems < fmt_wrap_elems()
-	return fmt_wrap_join(toks, brk, drop, open, close, col + flat) if fits
-	return fmt_wrap_split(toks, brk, drop, wid, open, close, depth)
+	# Both thresholds VETO a join; neither orders a split. A group is broken up only when
+	# its author already broke it — this rule then decides whether it stays broken, and
+	# makes it break all the way rather than around one element.
+	#
+	# Ordering a split reads well until you see what it does, because this walk sees one
+	# group at a time and not the whole line. When a line runs long the group that crosses
+	# column 80 is the LAST one on it, which is almost never the one worth breaking:
+	# `return 0 if a or b or c(x, y)` would put `c`'s two arguments on three lines while
+	# the condition that actually made the line long — and that has no brackets to break
+	# at — stayed as it was. The count is no better: `scan(l, Rune, false, a, b, c)` fits
+	# in 55 columns and reads as a line, and a rule that split it on the count alone made
+	# eight lines out of one.
+	#
+	# So a line its author fitted on one line stays there, and what this rule owns is the
+	# shape of the groups that are already wrapped.
+	over := col + flat > fmt_wrap_max()
+	many := elems >= fmt_wrap_elems()
+	spans := fmt_wrap_spans(brk, open, close)
+	return fmt_wrap_split(toks, brk, drop, wid, open, close, depth) if spans and (over or many)
+	return fmt_wrap_join(toks, brk, drop, open, close, col + flat)
 }
 
 # fmt_wrap_join puts the whole group on one line. The trailing comma goes with it: it is
@@ -450,6 +467,12 @@ fn fmt_wrap_join(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], 
 
 # fmt_wrap_split gives every top-level element its own line. The opener ends its line and
 # the closer starts one, so the elements are a column a reader can run an eye down.
+#
+# The trailing comma goes here too, and for a harder reason than it goes when a group is
+# joined: a multi-line parameter list is the one place the grammar does NOT accept one, so
+# a formatter that kept it there would print a function nothing can parse back. Dropping
+# it in a signature and keeping it in a call would be one shape in two spellings, which is
+# what canonical means there is not, so it goes from both.
 fn fmt_wrap_split(
 	toks: list[Token],
 	mut &brk: list[int],
@@ -462,6 +485,9 @@ fn fmt_wrap_split(
 	inner := (depth + 1) * fmt_wrap_tab()
 	fmt_wrap_break_at(brk, open + 1)
 	fmt_wrap_break_at(brk, close)
+	if close > open + 1 and is_comma(toks[close - 1].kind) {
+		drop[close - 1] = true
+	}
 	mut col := inner
 	mut i := open + 1
 	for i < close {

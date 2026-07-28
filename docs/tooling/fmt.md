@@ -128,6 +128,7 @@ with no way to tell them apart by looking.
 | `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
 | `F403` | an argument list is one line, or one element per line — never half        | on      |
 | `F404` | two or more imports become one parenthesized group                        | on      |
+| `F405` | a string built with `+` becomes the f-string it already is                | on      |
 | `F406` | a blank line after a run of guards, and before a comment heading a chunk  | on      |
 
 `GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
@@ -277,6 +278,33 @@ The **trailing comma goes** either way, joined or split. On one line it is a com
 a closer that nothing follows; on several, a multi-line parameter list is the one place
 the grammar does not accept one, and dropping it in a signature while keeping it in a call
 would be one shape in two spellings.
+
+`F405` is `F401`'s principle applied to strings: where the language offers a shorter
+surface for exactly what is written, the canonical form is the shorter one.
+
+```zerg
+"n=" + s + " of " + t                    →   f"n={s} of {t}"
+"v=" + strconv.to_string(n, 10) + "!"    →   f"v={n}!"
+```
+
+The formatter has no types and does not need them here. `+` is never heterogeneous — the
+emitter lowers it to a string concat exactly when the left operand is a `str` — so **one
+string literal anywhere in a chain types the whole of it**. That is the trigger.
+
+`strconv.to_string(X, 10)` narrows to `{X}`, since base 10 is what a hole renders in
+anyway. Every other base keeps its call: a hole has no spelling for one.
+
+The trap this rule is mostly built around is **precedence**. `+` shares its level with
+`-`, `|`, `^`, `+%` and `-%`, so `"a" + b - c` parses as `("a" + b) - c` and the `+` chain
+is _not_ the whole token run — rewriting the run would re-associate the expression. What
+may sit between operands is therefore a whitelist, and any of those five at the chain's own
+depth ends it.
+
+It declines on: fewer than three operands; no literal; no hole; a chain spanning more than
+one line; a raw, triple-quoted or `\u{…}` literal; a hole carrying `"`, `\`, `{` or `}`;
+a literal carrying a brace, which is correct doubled and reads worse than what it replaces;
+and the accumulation `out = out + …`, where a hole would make the accumulator
+indistinguishable from the values being interpolated.
 
 `F406` writes a blank line, and the bar for doing that is deliberately high: this whole
 tree has **ten** blank lines inside function bodies, and `fmt.zg` — 1300 lines of it — has

@@ -22,7 +22,7 @@ CORPUS_PASS := arithmetic bitwise booleans countdown default_params enum_basic e
 	floats gcd fn_value hello list_basic list_literal list_str method_chain power raise_kind rec_expr rec_tree \
 	str_bytes struct_basic struct_nested sumto value_semantics
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus docs-links lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -92,6 +92,20 @@ corpus:                         # run zerg against the test-data corpus it now o
 	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
 	echo "corpus: $(words $(CORPUS_PASS))/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
+
+docs-links:                     # every docs path the repo cites must resolve
+	@fail=0; \
+	for p in $$(git grep -hoE 'docs/[A-Za-z0-9_./-]+\.md' -- . ':!docs' | sort -u); do \
+		[ -f "$$p" ] || { echo "CITED  $$p"; fail=1; }; \
+	done; \
+	for f in $$(git ls-files 'docs/**/*.md' 'docs/*.md'); do \
+		d=$$(dirname $$f); \
+		for l in $$(sed -E 's/\]\(/\n\]\(/g' $$f | sed -nE 's/^\]\(([^):]+\.md)(#[^)]*)?\).*/\1/p'); do \
+			[ -f "$$d/$$l" ] || { echo "LINK   $$f -> $$l"; fail=1; }; \
+		done; \
+	done; \
+	[ $$fail -eq 0 ] || { echo "docs-links: a cited path does not exist"; exit 1; }; \
+	echo "docs-links: every cited docs path resolves"
 
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build

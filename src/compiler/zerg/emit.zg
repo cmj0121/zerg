@@ -63,6 +63,30 @@ struct Emitter {
 	# site is nowhere near it, which is the whole reason it has to be in a table.
 	pr_hasdef: list[bool]
 	pr_def: list[Expr]
+
+	# k_names / k_tys are the module CONSTANTS. They are C globals, so they are in scope
+	# in every function — c_reset_env seeds the per-function env from them rather than
+	# starting empty, which is what lets a body name one.
+	k_names: list[str]
+	k_tys: list[Ty]
+
+	# tup_names / tup_decls are the tuple CARRIERS. A tuple is a plain C struct, one per
+	# distinct shape, generated on demand and emitted with the other typedefs.
+	tup_names: list[str]
+	tup_decls: list[str]
+
+	# mvt_names / mvt_decls are the map VTABLES — one static per distinct key/value shape,
+	# holding the hash and equality for the key type.
+	mvt_names: list[str]
+	mvt_decls: list[str]
+
+	# dfn_decls are the generated defer thunks and their env structs, one per site.
+	# fn_mark is the cleanup-stack mark a `return` unwinds to, and loop_mark the one a
+	# `break` or `continue` unwinds to — empty when there is no defer to run.
+	dfn_decls: list[str]
+	dfn_n: int
+	fn_mark: str
+	loop_mark: str
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -100,6 +124,8 @@ fn c_type(t: Ty) -> str {
 		TNamed(nm) => "zg_" + nm
 		TList(_) => "zrt_list"
 		TFn(_, _) => "zg_fnptr"
+		TTuple(ts) => c_tuple_cname(ts)
+		TMap(_, _) => "zrt_map"
 		_ => "int64_t"
 	}
 }
@@ -204,6 +230,16 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_tys = []
 	em.env_cnames = []
 	em.ref_names = []
+
+	# a module constant is a global: in scope everywhere, so every function body starts
+	# with them already bound
+	mut i := 0
+	for i < em.k_names.len() {
+		em.env_names.append(em.k_names[i])
+		em.env_tys.append(em.k_tys[i])
+		em.env_cnames.append("zg_" + em.k_names[i])
+		i = i + 1
+	}
 }
 
 fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
@@ -782,13 +818,20 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EUnary(oper, x) => f"({c_unop(oper)}{c_expr(em, x, sb)})"
 		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
 		ECall(name, args) => c_call(em, name, args, sb)
-		EField(target, fld) => f"{c_expr(em, target, sb)}.zg_{fld}"
+		EField(target, fld) => c_fieldref(em, target, fld, sb)
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		EListLit(elems) => c_list_lit(em, elems, sb)
 		EConv(ty, x) => c_conv(em, ty, x, sb)
 		EIf(cond, then_e, else_e) => f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
+		# A range reaching HERE is one used as a value — a slice bound or a match arm —
+		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
+		# forms have no lowering yet, and saying so is better than emitting something that
+		# reads as an int.
+		ERange(lo, hi, inclusive) => c_range_unsupported()
+		ETuple(elems) => c_tuple_lit(em, elems, sb)
+		EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
 	}
 }
 
@@ -871,8 +914,11 @@ fn c_display(t: Ty, inner: str) -> str {
 # element C type inferred for the target.
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.used_rt = true
+	tty := c_infer(em, target)
+	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
+	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
 
-	ct := c_type(c_list_elem(c_infer(em, target)))
+	ct := c_type(c_list_elem(tty))
 	tgt := c_expr(em, target, sb)
 	ix := c_expr(em, idx, sb)
 	return f"(*({ct}*)zrt_list_at(&({tgt}), {ix}))" if c_is_lvalue(target)
@@ -885,7 +931,7 @@ fn c_is_lvalue(e: Expr) -> bool {
 	return match e {
 		EIdent(_) => true
 		EField(_, _) => true
-		EIndex(_, _) => true
+		EIndex(t, i) => not c_is_range(i)
 		_ => false
 	}
 }
@@ -911,6 +957,7 @@ fn c_is_lvalue(e: Expr) -> bool {
 # TYPED, so it is decided once, here, and both ask. Deciding it twice is how the two drift.
 enum MethKind {
 	MList
+	MMap
 	MRecv
 	MFnField
 	MFree
@@ -918,6 +965,7 @@ enum MethKind {
 
 fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
 	return MList if c_is_list(tty)
+	return MMap if c_is_map(tty)
 	return MRecv if c_has_method(em, c_named_of(tty), meth)
 	return MFnField if c_is_fn(c_field_ty(em, c_named_of(tty), meth))
 
@@ -929,6 +977,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MList => c_list_method(em, target, meth, args, tty, sb)
+		MMap => c_map_method(em, target, meth, tty, sb)
 		MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
 		_ => f"zg_{meth}({c_call_args(em, meth, args, sb)})"
@@ -1270,13 +1319,16 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EUnary(oper, x) => c_infer_unary(em, oper, x)
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		ECall(name, args) => c_infer_call(em, name)
-		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
-		EIndex(target, idx) => c_list_elem(c_infer(em, target))
+		EField(target, fld) => c_field_ty_of(em, target, fld)
+		EIndex(target, idx) => c_elem_ty(em, target, idx)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)
 		EConv(ty, x) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
+		ERange(lo, hi, inclusive) => TUnknown
+		ETuple(elems) => c_tuple_ty(em, elems)
+		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 	}
 }
 
@@ -1289,10 +1341,26 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
 		MList => c_list_method_ret(meth)
+		MMap => c_map_method_ret(meth)
 		MRecv => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
 		_ => c_lookup_sig_ret(em, meth)
 	}
+}
+
+# c_elem_ty is what `x[i]` yields: a map indexes to its VALUE type, a list to its element.
+fn c_elem_ty(mut &em: Emitter, target: Expr, idx: Expr) -> Ty {
+	t := c_infer(em, target)
+	# a slice is the same kind of container as what it came from
+	return t if c_is_range(idx)
+	return c_map_val_ty(t) if c_is_map(t)
+	return c_list_elem(t)
+}
+
+fn c_map_method_ret(meth: str) -> Ty {
+	return TInt if meth == "len"
+	return TBool if meth == "has"
+	return TNil
 }
 
 fn c_list_method_ret(meth: str) -> Ty {
@@ -1378,15 +1446,16 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
-		SReturnIf(val, cond) => ind + "if " + c_cond(em, cond) + " { return " + c_expr(em, val, c_nosub()) + "; }\n"
+		SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
 		SExpr(e) => f"{ind}{c_expr(em, e, c_nosub())};\n"
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
 		SGuard(body) => c_block(em, body, ind)
 		SRaise(x) => c_raise(em, x, ind)
-		SBreak => ind + "break;\n"
-		SContinue => ind + "continue;\n"
+		SDefer(x) => c_defer(em, x, ind)
+		SBreak => c_jump(em, "break", ind)
+		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
 	}
 }
@@ -1402,6 +1471,14 @@ fn c_is_listlit(e: Expr) -> bool {
 # list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
 # index) is emitted as a C lvalue.
 fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
+	# `m[k] = v` INSERTS, so it is a set rather than a store through the index
+	if c_is_index(lhs) {
+		tt := c_infer(em, c_index_target(lhs))
+		if c_is_map(tt) {
+			em.used_rt = true
+			return c_map_set(em, c_index_target(lhs), c_index_key(lhs), rhs, tt, ind)
+		}
+	}
 	lt := c_infer(em, lhs)
 	lv := c_expr(em, lhs, c_nosub())
 	if c_is_list(lt) and c_is_listlit(rhs) {
@@ -1465,21 +1542,477 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 	return out
 }
 
+# c_const_globals declares each module constant as a C global and records its type, so
+# c_reset_env can put it in scope. The VALUE is not written here: a C global's initializer
+# must be a constant expression and `const s = "a" + "b"` is not one, so the assignment
+# goes into main alongside the init() calls — which is also what makes the order defined.
+fn c_const_globals(mut &em: Emitter, f: File) -> str {
+	mut out := ""
+	for c in f.consts {
+		name := c_let_name(c)
+		ty := c_infer(em, c_let_value(c))
+		em.k_names.append(name)
+		em.k_tys.append(ty)
+		out = out + f"static {c_type(ty)} zg_{name};\n"
+	}
+	return out
+}
+
+# c_const_assigns is the constants' values, assigned before any init() runs.
+fn c_const_assigns(mut &em: Emitter, f: File) -> str {
+	mut out := ""
+	for c in f.consts {
+		out = out + f"    zg_{c_let_name(c)} = {c_expr(em, c_let_value(c), c_nosub())};\n"
+	}
+	return out
+}
+
+fn c_let_name(s: Stmt) -> str {
+	return match s {
+		SLet(n, _, _, _, _) => n
+		_ => ""
+	}
+}
+
+fn c_let_value(s: Stmt) -> Expr {
+	return match s {
+		SLet(_, _, _, _, v) => v
+		_ => ENil
+	}
+}
+
+# c_init_calls is the `init()` invocations main opens with, in declaration order.
+fn c_init_calls(f: File) -> str {
+	mut out := ""
+	for fd in f.fns {
+		if is_init_name(fd.name) {
+			out = out + "    zg_" + fd.name + "();\n"
+		}
+	}
+	return out
+}
+
+# --- defer ----------------------------------------------------------------------
+#
+# GRAMMAR runs a defer at the enclosing BLOCK's exit, on every path out, last-scheduled-
+# first — which is the runtime's cleanup stack exactly. A block holding one takes a mark
+# on entry and unwinds to it on the way out; `return` unwinds the whole function's stack
+# and `break`/`continue` the loop's.
+#
+# What may be deferred is a direct CALL, which is the same limit the seed sets. The call's
+# arguments are captured BY VALUE into a per-site env struct at the point the defer runs,
+# so a later reassignment of an argument does not change what the deferred call sees.
+fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
+	em.used_rt = true
+	name := c_call_name(x)
+	if name == "" {
+		raise "defer takes a direct function call"
+	}
+	args := c_call_args_of(x)
+	idx := em.dfn_n
+	em.dfn_n = idx + 1
+	tag := strconv.to_string(idx, 10)
+	if args.len() == 0 {
+		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
+		# better as concatenation
+		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		return ind + "zrt_defer(zg_dfn_" + tag + ", NULL);\n"
+	}
+	mut fields := ""
+	mut vals := ""
+	mut call := ""
+	mut i := 0
+	for i < args.len() {
+		ft := c_type(c_infer(em, args[i]))
+		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
+		if i > 0 {
+			vals = vals + ", "
+			call = call + ", "
+		}
+		vals = vals + c_expr(em, args[i], c_nosub())
+		call = call + "e->f" + strconv.to_string(i, 10)
+		i = i + 1
+	}
+	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
+	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; zg_" + name + "(" + call + "); }\n")
+	mut out := ind + "zg_denv_" + tag + " zg_de" + tag + " = { " + vals + " };\n"
+	return out + ind + "zrt_defer(zg_dfn_" + tag + ", &zg_de" + tag + ");\n"
+}
+
+fn c_call_name(e: Expr) -> str {
+	return match e {
+		ECall(n, _) => n
+		_ => ""
+	}
+}
+
+fn c_call_args_of(e: Expr) -> list[Expr] {
+	mut none: list[Expr] = []
+	return match e {
+		ECall(_, a) => a
+		_ => none
+	}
+}
+
+fn c_has_defer(body: list[Stmt]) -> bool {
+	for st in body {
+		return true if c_is_defer(st)
+	}
+	return false
+}
+
+fn c_is_defer(s: Stmt) -> bool {
+	return match s {
+		SDefer(_) => true
+		_ => false
+	}
+}
+
+# c_return_if is the postfix guard's return. It goes through c_return so the defers run on
+# this path too — a guard is an exit like any other, and it is the path a `defer` most
+# often exists for.
+fn c_return_if(mut &em: Emitter, val: Expr, cond: Expr, ind: str) -> str {
+	body := c_return(em, true, val, ind + "    ")
+	return ind + "if " + c_cond(em, cond) + " {\n" + body + ind + "}\n"
+}
+
+# c_jump is `break` / `continue` with the loop's defers run first.
+fn c_jump(mut &em: Emitter, kw: str, ind: str) -> str {
+	return f"{ind}{kw};\n" if em.loop_mark == ""
+	return f"{ind}zrt_unwind_to({em.loop_mark});\n{ind}{kw};\n"
+}
+
+# --- maps -----------------------------------------------------------------------
+#
+# A map is the runtime's `zrt_map` by value, plus one static vtable per distinct shape
+# saying how to hash and compare its key. The runtime provides the hash/eq leaves for the
+# two key types the language builds in.
+fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
+	name := f"zg_mapvt_{c_ident_safe(c_type(kt))}_{c_ident_safe(c_type(vt))}"
+	for n in em.mvt_names {
+		return name if n == name
+	}
+	mut hash := "zrt_hash_int"
+	mut eq := "zrt_eq_int"
+	if c_is_str(kt) {
+		hash = "zrt_hash_str"
+		eq = "zrt_eq_str"
+	}
+	em.mvt_names.append(name)
+	# NULL copy/drop is the runtime's memcpy fast path, which is what a POD key or value
+	# wants; a key or value that owns storage is not supported yet.
+	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, NULL, NULL, NULL, NULL }};\n")
+	return name
+}
+
+fn c_map_lit_ty(mut &em: Emitter, ks: list[Expr], vs: list[Expr]) -> Ty {
+	return TMap(TUnknown, TUnknown) if ks.len() == 0
+	return TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
+}
+
+# c_map_lit builds the map in a statement expression: init, then one set per entry, in
+# the order they were written.
+fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+	kt := c_map_key_ty(c_map_lit_ty(em, ks, vs))
+	vt := c_map_val_ty(c_map_lit_ty(em, ks, vs))
+	vtn := c_map_vt(em, kt, vt)
+	kc := c_type(kt)
+	vc := c_type(vt)
+	mut out := f"({{ zrt_map zg_mm; zrt_map_init(&zg_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
+	mut i := 0
+	for i < ks.len() {
+		out = out + f" {{ {kc} zg_mk = {c_expr(em, ks[i], sb)}; {vc} zg_mv = {c_expr(em, vs[i], sb)}; zrt_map_set(&zg_mm, &zg_mk, &zg_mv); }}"
+		i = i + 1
+	}
+	return out + " zg_mm; })"
+}
+
+# c_slice lowers `xs[a..b]` — GRAMMAR says a slice IS an index by a range, which is why it
+# needs no node of its own.
+#
+# The elements are copied into a fresh list rather than shared with the source. A list is
+# a value in this language, so a slice that aliased its source would be the odd one out —
+# and the runtime has no slice primitive to alias with anyway. The source is materialised
+# into a temp first, so a call result is indexed once rather than per element.
+fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
+	et := c_type(c_list_elem(tty))
+	src := c_expr(em, target, sb)
+	lo := c_expr(em, c_range_lo(idx), sb)
+	hi := c_expr(em, c_range_hi(idx), sb)
+	mut cmp := " < "
+	if c_range_incl(idx) {
+		cmp = " <= "
+	}
+	mut out := "({ zrt_list zg_ss = " + src + "; zrt_list zg_sl;"
+	out = out + " zrt_list_init(&zg_sl, sizeof(" + et + "), &zg_listvt);"
+	out = out + " for (size_t zg_si = (size_t)(" + lo + "); zg_si" + cmp + "(size_t)(" + hi + "); zg_si++)"
+	out = out + " zrt_list_push(&zg_sl, zrt_list_at(&zg_ss, zg_si));"
+	return out + " zg_sl; })"
+}
+
+# c_map_index lowers `m[k]`. The key is materialised into a temp because zrt_map_index
+# takes its ADDRESS, and a literal or call result has none.
+fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
+	kc := c_type(c_map_key_ty(tty))
+	vc := c_type(c_map_val_ty(tty))
+	tgt := c_expr(em, target, sb)
+	return f"({{ {kc} zg_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&({tgt}), &zg_mk)); }})"
+}
+
+# c_map_set lowers `m[k] = v`. Both sides go through temps for the same reason.
+fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind: str) -> str {
+	kc := c_type(c_map_key_ty(tty))
+	vc := c_type(c_map_val_ty(tty))
+	tgt := c_expr(em, target, c_nosub())
+	k := c_expr(em, idx, c_nosub())
+	v := c_expr(em, rhs, c_nosub())
+	return f"{ind}{{ {kc} zg_mk = {k}; {vc} zg_mv = {v}; zrt_map_set(&({tgt}), &zg_mk, &zg_mv); }}\n"
+}
+
+fn c_map_method(mut &em: Emitter, target: Expr, meth: str, tty: Ty, sb: Subst) -> str {
+	em.used_rt = true
+	tgt := c_expr(em, target, sb)
+	return f"((int64_t)zrt_map_len(&({tgt})))" if meth == "len"
+	return f"zrt_map_has(&({tgt}), &zg_mk)" if meth == "has"
+	raise f"a map has no method `{meth}` yet"
+}
+
+fn c_index_target(e: Expr) -> Expr {
+	return match e {
+		EIndex(t, _) => t
+		_ => ENil
+	}
+}
+
+fn c_index_key(e: Expr) -> Expr {
+	return match e {
+		EIndex(_, i) => i
+		_ => ENil
+	}
+}
+
+fn c_is_index(e: Expr) -> bool {
+	return match e {
+		EIndex(_, _) => true
+		_ => false
+	}
+}
+
+fn c_is_map(t: Ty) -> bool {
+	return match t {
+		TMap(_, _) => true
+		_ => false
+	}
+}
+
+fn c_map_key_ty(t: Ty) -> Ty {
+	return match t {
+		TMap(k, _) => k
+		_ => TUnknown
+	}
+}
+
+fn c_map_val_ty(t: Ty) -> Ty {
+	return match t {
+		TMap(_, v) => v
+		_ => TUnknown
+	}
+}
+
+# --- tuples ---------------------------------------------------------------------
+#
+# A tuple is a plain C struct, one carrier per distinct SHAPE. The name is built from the
+# element types, so two tuples of the same shape share one carrier and two of different
+# shapes cannot collide.
+fn c_tuple_ty(mut &em: Emitter, elems: list[Expr]) -> Ty {
+	mut tys: list[Ty] = []
+	for e in elems {
+		tys.append(c_infer(em, e))
+	}
+	return TTuple(tys)
+}
+
+# c_tuple_cname is the carrier's C name. It is a PURE function of the shape because c_type
+# needs the same spelling and has no Emitter to ask — registering the typedef is
+# c_tuple_name's job, and every tuple reaches it through its literal.
+fn c_tuple_cname(tys: list[Ty]) -> str {
+	mut name := "zg_tup"
+	for t in tys {
+		name = name + "_" + c_ident_safe(c_type(t))
+	}
+	return name
+}
+
+# c_tuple_name is c_tuple_cname plus the typedef it needs. A C identifier cannot hold `*`
+# or a space, so each element type is flattened into one.
+fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
+	name := c_tuple_cname(tys)
+	for n in em.tup_names {
+		return name if n == name
+	}
+	mut decl := "typedef struct {"
+	mut i := 0
+	for i < tys.len() {
+		decl = decl + f" {c_type(tys[i])} f{strconv.to_string(i, 10)};"
+		i = i + 1
+	}
+	em.tup_names.append(name)
+	em.tup_decls.append(decl + f" }} {name};\n")
+	return name
+}
+
+fn c_ident_safe(s: str) -> str {
+	mut out: list[byte] = []
+	for c in list[byte](s) {
+		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
+			out.append(c)
+		} else if c == b'*' {
+			out.append(b'p')
+		}
+	}
+	return str(out)
+}
+
+fn c_tuple_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
+	mut tys: list[Ty] = []
+	for e in elems {
+		tys.append(c_infer(em, e))
+	}
+	name := c_tuple_name(em, tys)
+	mut out := f"({name}){{"
+	mut i := 0
+	for i < elems.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_expr(em, elems[i], sb)
+		i = i + 1
+	}
+	return out + "}"
+}
+
+# c_fieldref lowers `x.name`. A field whose name is a NUMBER is a tuple element — GRAMMAR
+# reads a tuple back by static index, `t.0`, and the parser gives that the same EField node
+# a struct field gets, so the number is what tells them apart.
+fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
+	t := c_infer(em, target)
+	if c_is_tuple(t) and c_all_digits(fld) {
+		ts := c_tuple_tys(t)
+		# `int(s)` is a CAST here, not a parse — the index has to come from strconv
+		i := strconv.parse_int(fld, 10)
+		return ts[i] if i >= 0 and i < ts.len()
+		return TUnknown
+	}
+	return c_field_ty(em, c_named_of(t), fld)
+}
+
+fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
+	tgt := c_expr(em, target, sb)
+	return f"{tgt}.f{fld}" if c_all_digits(fld)
+	return f"{tgt}.zg_{fld}"
+}
+
+fn c_all_digits(s: str) -> bool {
+	b := list[byte](s)
+	return false if b.len() == 0
+	for c in b {
+		return false if not ascii.is_digit(c)
+	}
+	return true
+}
+
+fn c_is_tuple(t: Ty) -> bool {
+	return match t {
+		TTuple(_) => true
+		_ => false
+	}
+}
+
+fn c_tuple_tys(t: Ty) -> list[Ty] {
+	mut none: list[Ty] = []
+	return match t {
+		TTuple(ts) => ts
+		_ => none
+	}
+}
+
+fn c_range_unsupported() -> str {
+	raise "a range is only supported as a `for … in` iterable so far, not as a value"
+}
+
+fn c_is_range(e: Expr) -> bool {
+	return match e {
+		ERange(_, _, _) => true
+		_ => false
+	}
+}
+
+# The range accessors. emit.zg's match is an EXPRESSION — every arm yields a value — so a
+# node is taken apart one field at a time rather than in a block-bodied arm.
+fn c_range_lo(e: Expr) -> Expr {
+	return match e {
+		ERange(a, _, _) => a
+		_ => ENil
+	}
+}
+
+fn c_range_hi(e: Expr) -> Expr {
+	return match e {
+		ERange(_, b, _) => b
+		_ => ENil
+	}
+}
+
+fn c_range_incl(e: Expr) -> bool {
+	return match e {
+		ERange(_, _, incl) => incl
+		_ => false
+	}
+}
+
+# c_forrange lowers `for v in a..b` to a counted loop. The loop variable is an int and is
+# in scope for the body, which is what makes the bound expressions ordinary ints too. The
+# upper bound is read once into a temp, so an expression bound is not re-evaluated on
+# every iteration the way a C `for` header would.
+fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	lo := c_expr(em, c_range_lo(iter), c_nosub())
+	hi := c_expr(em, c_range_hi(iter), c_nosub())
+	c_add_var(em, var, TInt)
+	# the C name the binding actually took: a second loop over the same source name is a
+	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zg_v`
+	cv := c_var_cname(em, var)
+	mut cmp := " < "
+	if c_range_incl(iter) {
+		cmp = " <= "
+	}
+	in2 := ind + "    "
+	mut out := ind + "{\n" + in2 + "int64_t zg_hi = " + hi + ";\n"
+	out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + cmp + "zg_hi; " + cv + "++) {\n"
+	out = out + c_block(em, body, in2 + "    ")
+	out = out + in2 + "}\n"
+	return out + ind + "}\n"
+}
+
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
 fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	# A RANGE is not a container, so it never touches the list runtime: `for i in a..b` is
+	# the counted C loop it already means.
+	return c_forrange(em, var, iter, body, ind) if c_is_range(iter)
 	em.used_rt = true
 
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
 	c_add_var(em, var, elem)
+	cv := c_var_cname(em, var)
 
 	# wrap in a block and materialize the iterable into a local so a call-result rvalue is
 	# addressable and sequential loops do not clash on the temp name
 	in2 := ind + "    "
 	mut out := ind + "{\n" + in2 + "zrt_list zg_it = " + it + ";\n"
 	out = out + in2 + "for (size_t zg_i = 0; zg_i < zrt_list_len(&zg_it); zg_i++) {\n"
-	out = out + in2 + "    " + et + " zg_" + var + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
+	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
 	out = out + c_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	return out + ind + "}\n"
@@ -1534,9 +2067,19 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 }
 
 fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
-	# `return nil` from a nil/Result[nil] function is a bare C return
-	return f"{ind}return {c_expr(em, e, c_nosub())};\n" if has_val and not c_is_nil_expr(e)
-	return ind + "return;\n"
+	# the value is computed BEFORE the defers run, which is what makes `defer` unable to
+	# change what is returned
+	mut pre := ""
+	if em.fn_mark != "" {
+		pre = f"{ind}zrt_unwind_to({em.fn_mark});\n"
+	}
+	if has_val and not c_is_nil_expr(e) {
+		v := c_expr(em, e, c_nosub())
+		return f"{ind}return {v};\n" if pre == ""
+		rt := c_type(c_infer(em, e))
+		return ind + "{ " + rt + " zg_rv = " + v + ";\n" + pre + ind + "return zg_rv; }\n"
+	}
+	return pre + ind + "return;\n"
 }
 
 fn c_is_nil_expr(e: Expr) -> bool {
@@ -1632,6 +2175,7 @@ fn c_err_kind(name: str) -> int {
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	return c_block_marked(em, body, ind) if c_has_defer(body)
 	mut out := ""
 	mut i := 0
 	for i < body.len() {
@@ -1639,6 +2183,28 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 		i = i + 1
 	}
 	return out
+}
+
+# c_block_marked wraps a block that schedules a defer: a mark on entry, an unwind on the
+# way out. The mark's NAME is what a return or a jump inside unwinds to, so it is saved
+# and restored around the body — an inner block must not leave its own mark visible to the
+# statements that follow it.
+fn c_block_marked(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	tag := strconv.to_string(em.dfn_n, 10)
+	mark := f"zg_mk{tag}"
+	em.dfn_n = em.dfn_n + 1
+	outer_fn := em.fn_mark
+	if em.fn_mark == "" {
+		em.fn_mark = mark
+	}
+	mut out := f"{ind}size_t {mark} = zrt_scope_mark();\n"
+	mut i := 0
+	for i < body.len() {
+		out = out + c_stmt(em, body[i], ind)
+		i = i + 1
+	}
+	em.fn_mark = outer_fn
+	return out + f"{ind}zrt_unwind_to({mark});\n"
 }
 
 # --- declaration emission ------------------------------------------------------
@@ -1738,6 +2304,7 @@ pub fn merge_files(srcs: list[str]) -> File {
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
+	mut consts: list[Stmt] = []
 	mut i := 0
 	for i < srcs.len() {
 		f := parse(srcs[i])
@@ -1753,9 +2320,12 @@ pub fn merge_files(srcs: list[str]) -> File {
 		for fnd in f.fns {
 			fns.append(fnd)
 		}
+		for c in f.consts {
+			consts.append(c)
+		}
 		i = i + 1
 	}
-	return File(imports, structs, enums, fns)
+	return File(imports, structs, enums, fns, consts)
 }
 
 # emit_files lowers several sources to one C translation unit — the whole program in one
@@ -1783,7 +2353,11 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
+	mut consts: list[Stmt] = []
 	for f in fs {
+		for c in f.consts {
+			consts.append(c)
+		}
 		for im in f.imports {
 			imports.append(im)
 		}
@@ -1797,7 +2371,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 			fns.append(fnd)
 		}
 	}
-	return File(imports, structs, enums, fns)
+	return File(imports, structs, enums, fns, consts)
 }
 
 # c_emit_file lowers a parsed File. The body is generated first (so list use sets
@@ -1814,7 +2388,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, "", "")
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -1843,6 +2417,8 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	# prototypes and bodies, which are what call them
 	types = types + c_copy_helpers(em, f)
 
+	# the constants are declared before the prototypes, so a body may name one
+	globals := c_const_globals(em, f)
 	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
@@ -1857,12 +2433,15 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	}
 	mut mainw := ""
 	if c_has_main(own) {
+		# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
+		# each once
+		inits := c_const_assigns(em, own) + c_init_calls(own)
 		if c_main_has_args(own) {
 			# main(args): build the arg list from argv via the runtime
 			em.used_rt = true
-			mainw = "int main(int argc, char** argv) {\n    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
+			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
 		} else {
-			mainw = "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
 		}
 	}
 
@@ -1890,7 +2469,22 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if em.used_str {
 		hdr = hdr + c_str_helpers()
 	}
-	return f"{hdr}{types}{protos}\n{defs}{mainw}"
+	# the tuple carriers are collected while the bodies are lowered, so they are gathered
+	# here — after defs, emitted before them
+	mut tups := ""
+	for d in em.tup_decls {
+		tups = tups + d
+	}
+	for d in em.mvt_decls {
+		tups = tups + d
+	}
+	# the defer thunks go AFTER the prototypes — each one calls a program function — and
+	# before the bodies that schedule them
+	mut dfns := ""
+	for d in em.dfn_decls {
+		dfns = dfns + d
+	}
+	return f"{hdr}{types}{tups}{globals}{protos}\n{dfns}{defs}{mainw}"
 }
 
 # c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,

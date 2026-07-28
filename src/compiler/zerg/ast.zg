@@ -31,6 +31,8 @@ enum Ty {
 	TNamed(str)
 	TList(Ty)
 	TFn(list[Ty], Ty)
+	TTuple(list[Ty])
+	TMap(Ty, Ty)
 }
 
 # Expr is an expression node.
@@ -51,6 +53,18 @@ enum Expr {
 	EConv(Ty, Expr)
 	EIf(Expr, Expr, Expr)
 	EMatch(Expr, list[Arm])
+
+	# ERange is `a..b` / `a..=b`. GRAMMAR puts it between comparison and addition, so
+	# `v in 0..10` reads `v in (0..10)`. `inclusive` is the `..=` form.
+	ERange(Expr, Expr, bool)
+
+	# ETuple is `(a, b)`. A tuple is read back by STATIC index — `t.0` — which parses as
+	# an EField whose name is a number, so no separate access node is needed.
+	ETuple(list[Expr])
+
+	# EMapLit is `{k: v, …}` and the empty `{:}`. The keys and values are held as two
+	# parallel lists, in the order they were written — a map keeps insertion order.
+	EMapLit(list[Expr], list[Expr])
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -85,6 +99,10 @@ enum Stmt {
 	SBreak
 	SContinue
 	SNop
+
+	# SDefer is `defer f(a)`. GRAMMAR runs it at the enclosing BLOCK's exit, on every path
+	# out, last-scheduled-first.
+	SDefer(Expr)
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable
@@ -159,6 +177,10 @@ pub struct File {
 	structs: list[StructDecl]
 	enums: list[EnumDecl]
 	fns: list[FnDecl]
+
+	# consts are the module-level `const` bindings, each an SLet. They are not statements
+	# of any function: they become C globals, assigned once before anything runs.
+	consts: list[Stmt]
 }
 
 # --- rendering ---------------------------------------------------------------------------
@@ -278,6 +300,9 @@ fn expr_kind(e: Expr) -> str {
 		EConv(ty, x) => "convert " + ty_name(ty)
 		EIf(cond, then_e, else_e) => "if-expr"
 		EMatch(scrut, arms) => "match"
+		ERange(lo, hi, inclusive) => "range"
+		ETuple(elems) => "tuple"
+		EMapLit(ks, vs) => "map-literal"
 		_ => "?"
 	}
 }

@@ -186,13 +186,15 @@ per line, with `F402`'s blank line surviving as the separator inside it:
 
 ```zerg
 import "cli"          import (
-import "io"      →        "cli"
-import "strconv"          "io"
-                          "strconv"
-import "zerg"
+import "zerg"    →        "cli"
+import "io"               "io"
+
                           "zerg"
                       )
 ```
+
+The ordering there is `F402`'s and the parentheses are `F404`'s. Both are shown together
+because that is what `zerg fmt` prints — the state in between is one nobody ever sees.
 
 **One import is left as it is.** That is gofmt's answer and for gofmt's reason: the group
 holds a list together, and a list of one is the statement itself with two lines of

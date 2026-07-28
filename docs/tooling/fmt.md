@@ -36,7 +36,7 @@ input would produce, so formatting formatted source changes nothing.
 | `F101` | one tab per nesting level; `}` closes at the level it opened            |
 | `F102` | one statement per line — the lexer's inserted `;` **is** the line break |
 | `F103` | a wrapped expression continues one level in per open bracket            |
-| `F104` | a run of blank lines survives as exactly one                            |
+| `F104` | a run of blank lines survives as exactly one, inside a group too        |
 | `F105` | a group that spans lines closes on its own line                         |
 
 `F105` is what gives a wrapped chain a visible end:
@@ -127,6 +127,7 @@ with no way to tell them apart by looking.
 | `F401` | a one-jump if-block becomes the postfix guard it is sugar for             | on      |
 | `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
 | `F403` | an argument list is one line, or one element per line — never half        | on      |
+| `F404` | two or more imports become one parenthesized group                        | on      |
 
 `GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
 `if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
@@ -172,14 +173,6 @@ often than it is edited, and one that is grouped and sorted answers "does this f
 by looking rather than by scanning. The standard library goes first because it is the part
 a reader already knows; everything else is what this program brought.
 
-```zerg
-import "cli"
-import "io"
-import "strconv"
-
-import "zerg"
-```
-
 What counts as standard library is the fixed bundled set. A module resolves by its LAST
 path segment, so `import "std/io"` groups with `import "io"`.
 
@@ -187,6 +180,45 @@ It rewrites only a run of plain `import "path"` statements and declines the mome
 anything else appears among them — a comment, which belongs to the import it sits on and
 would be stranded by sorting, or an `import pub`, whose re-export is an ordering the
 author chose.
+
+`F404` then folds the run into the parenthesized form `GRAMMAR` gives `import`, one spec
+per line, with `F402`'s blank line surviving as the separator inside it:
+
+```zerg
+import "cli"          import (
+import "zerg"    →        "cli"
+import "io"               "io"
+
+                          "zerg"
+                      )
+```
+
+The ordering there is `F402`'s and the parentheses are `F404`'s. Both are shown together
+because that is what `zerg fmt` prints — the state in between is one nobody ever sees.
+
+**One import is left as it is.** That is gofmt's answer and for gofmt's reason: the group
+holds a list together, and a list of one is the statement itself with two lines of
+ceremony around it.
+
+Unlike `F402`, `F404` takes `pub` and `as` with it — those are what `F402` declines over
+because it **reorders**, and this rule moves nothing past anything:
+
+```zerg
+import (
+    "io"
+    pub "util/text"
+    "a/text" as at
+)
+```
+
+It declines on a comment between the imports, for `F401`'s reason, and leaves a run that
+is already grouped alone. A comment **after** the run belongs to the next declaration, so
+it ends the run rather than declining it.
+
+Writing this form is also what found that the self-hosted parser could not read it back:
+the group was consumed and yielded no path at all, so a file importing through one handed
+the driver an empty import list — and the failure surfaced stages later as an unknown
+type name rather than at the import that was never read.
 
 `F105` says where a closer goes once a group already spans lines. `F403` says what shape
 a group that spans them takes. **A line its author fitted on one line stays on one line** —

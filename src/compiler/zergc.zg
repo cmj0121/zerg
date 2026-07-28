@@ -11,11 +11,13 @@
 # `build` is self-sufficient — it emits C beside the output, then invokes cc through the
 # runtime's process-spawn leaf — and the compiler resolves `import` itself, so it works
 # from any directory.
-import "cli"
-import "io"
-import "strconv"
+import (
+	"cli"
+	"io"
+	"strconv"
 
-import "zerg"
+	"zerg"
+)
 
 # banner is the one line `--version` prints. It cannot be called `version`: a program and
 # the modules it imports flatten into one scope, and `cli.version` is a name in it.

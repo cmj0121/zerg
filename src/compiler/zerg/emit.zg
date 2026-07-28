@@ -11,8 +11,10 @@
 # per-function variable environment held in Emitter — picks the printf format for `print`
 # and resolves numeric promotion. All helpers are `c_`-prefixed to stay clear of the
 # lexer / parser names in this one flattened module.
-import "ascii"
-import "strconv"
+import (
+	"ascii"
+	"strconv"
+)
 
 # Emitter carries the per-function variable environment (name -> type) and the
 # whole-file function signature table (name -> return type).

@@ -28,6 +28,7 @@
 #   F402  imports group — standard library first, then the rest — each group alphabetical
 #   F403  an argument list is one line, or one element per line — never half of each
 #   F404  two or more imports become one parenthesized group
+#   F406  a blank line after a run of guards, and before a comment that heads a chunk
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -60,6 +61,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	}
 	if not fmt_is_off(off, "F403") {
 		toks = fmt_wrap(toks)
+	}
+	if not fmt_is_off(off, "F406") {
+		toks = fmt_blank(toks)
 	}
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
@@ -250,6 +254,205 @@ fn fmt_has_else(toks: list[Token], rb: int) -> bool {
 fn fmt_is_else_if(out: list[Token]) -> bool {
 	return false if out.len() == 0
 	return out[out.len() - 1].kind == Else
+}
+
+# --- rule F406: a blank line where one is load-bearing ---------------------------------------
+#
+# The bar for this rule is high, because the tree it formats has TEN blank lines inside
+# function bodies in total, and this file — 1300 lines of it — has none. So the rule puts
+# one in exactly two places, and both are places the authors here already put one.
+#
+# A run of MORE THAN ONE guard is followed by a blank:
+#
+#     fn conv_ty(s: str) -> Ty {      fn conv_ty(s: str) -> Ty {
+#         return TInt if s == "int"       return TInt if s == "int"
+#         return TStr if s == "str"       return TStr if s == "str"
+#         return TNil               →
+#     }                                   return TNil
+#                                     }
+#
+# One guard is part of the line it guards; two or more are a TABLE of exits, and a table
+# wants an edge. That restraint is most of the rule: 182 of this tree's 218 guard runs are
+# a single guard and none of them is touched.
+#
+# A comment on its OWN line, with code before it, gets a blank in front. A comment there
+# heads a new chunk of the function — that is what makes it its own line rather than a
+# trailing one — and half of the blank lines already in this tree's bodies are exactly it.
+#
+# What it does NOT do, though the shape suggests it: a blank after a nested block's `}`.
+# That is 683 places, which is not a rule about readability but a rewrite of the tree.
+#
+# It is F4xx and switchable because it inserts a line nobody wrote — the same test that put
+# F403 there. It runs LAST, after F403, because F403 renumbers lines and this rule's whole
+# job is to decide line numbers; running it earlier would have its work rewritten.
+fn fmt_blank(toks: list[Token]) -> list[Token] {
+	mut at: list[bool] = []
+	mut i := 0
+	for i < toks.len() {
+		at.append(false)
+		i = i + 1
+	}
+	fmt_blank_mark(toks, at)
+	# The blank is made by SHIFTING every later token down a line, not by widening the gap
+	# the run leaves behind. Widening does not work: the `;` the lexer inserts after a `}`
+	# prints nothing but still moves the printer's `prev_line`, so a gap opened before that
+	# `;` is closed again by it — which is why F401 can collapse a four-line if-block onto
+	# one line without leaving a blank where the block used to be.
+	mut out: list[Token] = []
+	mut shift := 0
+	mut j := 0
+	for j < toks.len() {
+		if at[j] {
+			shift = shift + 1
+		}
+		out.append(fmt_on_line(toks[j], toks[j].line + shift))
+		j = j + 1
+	}
+	return out
+}
+
+# fmt_blank_mark marks each token that a blank line goes in FRONT of. It tracks the block
+# depth because a comment only heads a chunk INSIDE a body: at the top level a comment is
+# a declaration's doc comment, or one of an import's, and the blank line between those is
+# the author's to place.
+fn fmt_blank_mark(toks: list[Token], mut &at: list[bool]) {
+	mut depth := 0
+	mut group := 0
+	mut i := 0
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_lbrace(k) {
+			depth = depth + 1
+		} else if is_rbrace(k) and depth > 0 {
+			depth = depth - 1
+		} else if is_bracket(k) {
+			group = group + 1
+		} else if is_close(k) and group > 0 {
+			group = group - 1
+		}
+		end := fmt_guard_end(toks, i)
+		if end < 0 {
+			# `group == 0` keeps this out of a wrapped argument list: a comment among a
+			# list's elements belongs to the element it sits on, and a blank line there
+			# separates it from the very thing it is about.
+			if depth > 0 and group == 0 and fmt_blank_comment(toks, i) {
+				at[i] = true
+			}
+			i = i + 1
+		} else {
+			# walk the whole run, so the mark lands after the LAST of its guards
+			mut n := 1
+			mut last := end
+			mut nxt := fmt_next_code(toks, end)
+			for nxt >= 0 {
+				e := fmt_guard_end(toks, nxt)
+				break if e < 0
+				n = n + 1
+				last = e
+				nxt = fmt_next_code(toks, e)
+			}
+			if fmt_blank_here(toks, nxt) and n > 1 {
+				at[nxt] = true
+			}
+			i = last + 1
+		}
+	}
+}
+
+# fmt_blank_comment reports a comment on its own line with code before it AND code after it
+# — the shape that heads a new chunk. A comment TRAILING code shares that code's line and is
+# part of it; a comment under another comment is one block and is not split; and a comment
+# with nothing but the closing `}` after it heads nothing, so a blank would only push it
+# away from what it is commenting ON.
+fn fmt_blank_comment(toks: list[Token], at: int) -> bool {
+	return false if not is_comment(toks[at].kind)
+	return false if at == 0
+	p := fmt_prev_code(toks, at)
+	return false if p < 0
+	k := toks[p].kind
+	return false if is_comment(k) or is_lbrace(k)
+	# on the same line as what precedes it, this is a trailing comment
+	return false if toks[at].line == toks[p].line
+	return false if not fmt_blank_leads(toks, at)
+	return fmt_blank_here(toks, at)
+}
+
+# fmt_blank_leads reports whether a comment block has any code after it to head.
+fn fmt_blank_leads(toks: list[Token], at: int) -> bool {
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		return false if is_rbrace(k) or is_eof(k)
+		return true if not is_semi(k) and not is_comment(k)
+		i = i + 1
+	}
+	return false
+}
+
+# fmt_blank_here is every reason a blank line is NOT wanted at `at`, in one place.
+fn fmt_blank_here(toks: list[Token], at: int) -> bool {
+	return false if at <= 0
+	k := toks[at].kind
+	# nothing to be separated FROM: a blank before a closer, or at the end of the file
+	return false if is_rbrace(k) or is_eof(k)
+	# a blank is already there. The gap is measured against the token immediately before,
+	# because that is what the printer's `prev_line` will hold — a `;` among them prints
+	# nothing and still counts.
+	return false if toks[at].line - toks[at - 1].line >= 2
+	return true
+}
+
+# fmt_guard_end is the index of the `;` closing the postfix guard that starts at `at`, or
+# -1 when the statement there is anything else.
+#
+# A guard is a jump with an `if` after it and no block of its own. The `{` test is what
+# tells it from `return if c { 1 } else { 2 }` — a jump whose VALUE is an if-expression,
+# which is a statement of a different shape and not part of any table.
+fn fmt_guard_end(toks: list[Token], at: int) -> int {
+	return - 1 if not is_jump(toks[at].kind)
+	mut depth := 0
+	mut seen := false
+	mut i := at + 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_lbrace(k) {
+			return - 1 if depth == 0
+			depth = depth + 1
+		} else if is_bracket(k) {
+			depth = depth + 1
+		} else if is_close(k) or is_rbrace(k) {
+			depth = depth - 1
+		} else if is_semi(k) and depth == 0 {
+			return i if seen
+			return - 1
+		} else if is_comment(k) or is_eof(k) {
+			return - 1
+		} else if k == If and depth == 0 {
+			seen = true
+		}
+		i = i + 1
+	}
+	return - 1
+}
+
+# fmt_next_code is the next token that is not a separator. The `;`s are skipped because
+# they are what stands between one guard of a run and the next.
+fn fmt_next_code(toks: list[Token], at: int) -> int {
+	mut i := at + 1
+	for i < toks.len() {
+		return i if not is_semi(toks[i].kind)
+		i = i + 1
+	}
+	return - 1
+}
+
+fn fmt_prev_code(toks: list[Token], at: int) -> int {
+	mut i := at - 1
+	for i >= 0 {
+		return i if not is_semi(toks[i].kind)
+		i = i - 1
+	}
+	return - 1
 }
 
 # --- rule F403: an argument list is one line, or one element per line -----------------------

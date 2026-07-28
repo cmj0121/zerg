@@ -130,8 +130,10 @@ fn fmt_emit_guard(toks: list[Token], at: int, lb: int, rb: int, mut &out: list[T
 	ln := toks[at].line
 	col := toks[at].col
 	jump := fmt_jump_at(toks, lb)
+
 	# the jump as it was written — `return`, `break` or `continue`
 	out.append(fmt_on_line(toks[jump], ln))
+
 	# a returned value, if there is one: everything between the jump and the `}`, minus
 	# the separators. `break` and `continue` carry none, so this loop runs zero times.
 	mut i := jump + 1
@@ -142,6 +144,7 @@ fn fmt_emit_guard(toks: list[Token], at: int, lb: int, rb: int, mut &out: list[T
 		i = i + 1
 	}
 	out.append(Token(If, "if", "", ln, col))
+
 	# the condition: everything between `if` and the `{`
 	mut j := at + 1
 	for j < lb {
@@ -293,6 +296,7 @@ fn fmt_blank(toks: list[Token]) -> list[Token] {
 		i = i + 1
 	}
 	fmt_blank_mark(toks, at)
+
 	# The blank is made by SHIFTING every later token down a line, not by widening the gap
 	# the run leaves behind. Widening does not work: the `;` the lexer inserts after a `}`
 	# prints nothing but still moves the printer's `prev_line`, so a gap opened before that
@@ -367,13 +371,16 @@ fn fmt_blank_mark(toks: list[Token], mut &at: list[bool]) {
 fn fmt_blank_comment(toks: list[Token], at: int) -> bool {
 	return false if not is_comment(toks[at].kind)
 	return false if at == 0
+
 	p := fmt_prev_code(toks, at)
 	return false if p < 0
 	k := toks[p].kind
 	return false if is_comment(k) or is_lbrace(k)
+
 	# on the same line as what precedes it, this is a trailing comment
 	return false if toks[at].line == toks[p].line
 	return false if not fmt_blank_leads(toks, at)
+
 	return fmt_blank_here(toks, at)
 }
 
@@ -384,6 +391,7 @@ fn fmt_blank_leads(toks: list[Token], at: int) -> bool {
 		k := toks[i].kind
 		return false if is_rbrace(k) or is_eof(k)
 		return true if not is_semi(k) and not is_comment(k)
+
 		i = i + 1
 	}
 	return false
@@ -393,8 +401,10 @@ fn fmt_blank_leads(toks: list[Token], at: int) -> bool {
 fn fmt_blank_here(toks: list[Token], at: int) -> bool {
 	return false if at <= 0
 	k := toks[at].kind
+
 	# nothing to be separated FROM: a blank before a closer, or at the end of the file
 	return false if is_rbrace(k) or is_eof(k)
+
 	# a blank is already there. The gap is measured against the token immediately before,
 	# because that is what the printer's `prev_line` will hold — a `;` among them prints
 	# nothing and still counts.
@@ -611,6 +621,7 @@ fn fmt_wrap_scan(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], 
 fn fmt_wrap_opens(toks: list[Token], at: int) -> bool {
 	return false if not is_bracket(toks[at].kind)
 	return false if at > 0 and is_hash(toks[at - 1].kind)
+
 	return true
 }
 
@@ -629,9 +640,11 @@ fn fmt_wrap_group(
 	close := fmt_wrap_end(toks, open)
 	return Wrap(open + 1, col) if close == 0
 	return Wrap(close + 1, col) if fmt_wrap_has_comment(toks, open, close)
+
 	flat := fmt_wrap_flat_width(wid, open + 1, close)
 	elems := fmt_wrap_elem_count(toks, open, close)
 	return fmt_wrap_free(toks, brk, drop, wid, open, close, col, flat, depth) if elems == 0
+
 	# Both thresholds VETO a join; neither orders a split. A group is broken up only when
 	# its author already broke it — this rule then decides whether it stays broken, and
 	# makes it break all the way rather than around one element.
@@ -822,6 +835,7 @@ fn fmt_wrap_elem_count(toks: list[Token], open: int, close: int) -> int {
 	}
 	return 0 if commas == 0
 	return commas if is_comma(toks[close - 1].kind)
+
 	return commas + 1
 }
 
@@ -857,6 +871,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	mut col := 0 # bytes written on the current line
 	mut prev := Semi # the last token that mattered for spacing
 	mut prev_line := 0
+
 	# One entry per open `(` or `[`: the source line it opened on, and the block depth its
 	# statement sits at. A group that opened on an EARLIER line gets its closer on a line
 	# of its own — which is what turns a wrapped chain into a shape with a visible end,
@@ -912,6 +927,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				broke = true
 			} else if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
 				out.append(byte(10))
+
 				# F104 applies inside a group as well as between statements. Only the other
 				# branch used to check for it, so a blank line a person left among a wrapped
 				# list's elements — the separator between an import group's two halves, for
@@ -927,6 +943,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				col = ci
 				broke = true
 			}
+
 			# A `}` closes its block: it dedents before it is written, and it always starts
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
 			# fires at bracket depth 0 — so block structure is the formatter's own rule.
@@ -944,6 +961,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				if prev_line > 0 and t.line > prev_line + 1 {
 					out.append(byte(10))
 				}
+
 				# A line can also start with no break of its own to account for: after a
 				# comment, which runs to end of line, or after a `}`. Inside a group that is
 				# still open it belongs at the group's indent all the same — otherwise a
@@ -979,12 +997,14 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 			} else if is_close(t.kind) and psp > 0 {
 				psp = psp - 1
 			}
+
 			# a `{` opens a block: whatever follows starts on its own line, one deeper
 			if is_lbrace(t.kind) {
 				depth = depth + 1
 				out.append(byte(10))
 				col = 0
 			}
+
 			# a comment runs to end of line: close the line so nothing joins it
 			if is_comment(t.kind) {
 				out.append(byte(10))
@@ -1005,6 +1025,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 fn fmt_text(t: Token) -> str {
 	return t.lexeme if is_comment(t.kind)
 	return t.lexeme if t.lexeme != ""
+
 	return kind_name(t.kind)
 }
 
@@ -1186,6 +1207,7 @@ fn fmt_import_group(toks: list[Token]) -> list[Token] {
 	last := fmt_group_run_end(toks, first)
 	return toks if last < 0
 	return toks if fmt_run_specs(toks, first, last) < 2
+
 	mut out: list[Token] = []
 	mut i := 0
 	for i < first {
@@ -1193,6 +1215,7 @@ fn fmt_import_group(toks: list[Token]) -> list[Token] {
 		i = i + 1
 	}
 	end := fmt_emit_group(toks, first, last, out)
+
 	# Every token after the run shifts by however many lines the run grew, so the blank
 	# line the author left before the next declaration is still there.
 	shift := end - toks[last].line
@@ -1217,6 +1240,7 @@ fn fmt_emit_group(toks: list[Token], first: int, last: int, mut &out: list[Token
 	for i <= last {
 		if toks[i].kind == Import {
 			cur = cur + 1
+
 			# a blank line between two imports is the group separator F402 wrote, and it
 			# means the same thing inside the parentheses as it did outside them
 			if src >= 0 and toks[i].line > src + 1 {
@@ -1283,6 +1307,7 @@ fn fmt_more_imports_after(toks: list[Token], at: int) -> bool {
 		k := toks[i].kind
 		return true if k == Import
 		return false if not is_semi(k) and not is_comment(k)
+
 		i = i + 1
 	}
 	return false
@@ -1342,6 +1367,7 @@ fn fmt_imports(toks: list[Token]) -> list[Token] {
 	}
 	ln := toks[first].line
 	end := fmt_emit_imports(paths, ln, out)
+
 	# Every token after the run shifts by however many lines the run grew or shrank, so the
 	# blank line the author left before the next declaration is still there.
 	shift := end - toks[last].line
@@ -1491,6 +1517,7 @@ fn fmt_before(a: str, b: str) -> bool {
 	for i < x.len() and i < y.len() {
 		return true if x[i] < y[i]
 		return false if x[i] > y[i]
+
 		i = i + 1
 	}
 	return x.len() < y.len()

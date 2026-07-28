@@ -181,6 +181,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 # one module and leave the rest exactly as they were.
 fn link_program(entry: str, output: str, jobs: int) {
 	units := load_units(entry)
+
 	# Parse each unit ONCE, then build the whole-program view from those trees: emitting N
 	# units used to re-parse the whole program N times, which cost more than the C
 	# compiler did.
@@ -207,6 +208,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 		}
 		ui = ui + 1
 	}
+
 	# The runtime is compiled the same way, and cached the same way. It changes far less
 	# often than the program does, so recompiling its ten translation units on every link
 	# was the largest thing a rebuild was paying for.

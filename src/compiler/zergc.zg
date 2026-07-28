@@ -171,7 +171,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		link_program(files[0], output, jobs)
 		return
 	}
-	io.ewrite("zerg: unknown stage " + emit + " (want tokens, ast, c, lib, or bin)\n")
+	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, c, lib, or bin)\n")
 	__zrt_exit(2)
 }
 
@@ -181,6 +181,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 # one module and leave the rest exactly as they were.
 fn link_program(entry: str, output: str, jobs: int) {
 	units := load_units(entry)
+
 	# Parse each unit ONCE, then build the whole-program view from those trees: emitting N
 	# units used to re-parse the whole program N times, which cost more than the C
 	# compiler did.
@@ -188,6 +189,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	for u in units {
 		trees.append(zerg.merge_files(u.srcs))
 	}
+
 	prog := zerg.merge_asts(trees)
 	mut objs: list[str] = []
 	mut todo_c: list[str] = []
@@ -207,6 +209,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 		}
 		ui = ui + 1
 	}
+
 	# The runtime is compiled the same way, and cached the same way. It changes far less
 	# often than the program does, so recompiling its ten translation units on every link
 	# was the largest thing a rebuild was paying for.
@@ -230,7 +233,7 @@ fn rt_sources() -> list[str] {
 	rt := rt_dir()
 	mut out: list[str] = []
 	for u in rt_units() {
-		out.append(rt + "/" + u)
+		out.append(f"{rt}/{u}")
 	}
 	return out
 }
@@ -333,7 +336,7 @@ fn unit_key(code: str) -> str {
 		h = (h * 16777619) % 4294967296
 		i = i + 1
 	}
-	return strconv.to_string(h, 16) + "-" + strconv.to_string(b.len(), 16)
+	return f"{strconv.to_string(h, 16)}-{strconv.to_string(b.len(), 16)}"
 }
 
 # compile_to writes the emitted C beside its product and hands it to cc — compiled only
@@ -358,6 +361,7 @@ fn compile_to(code: str, output: str, object_only: bool) {
 # drop_ext removes a trailing ".zg" so `zerg build hello.zg` writes `hello`.
 fn drop_ext(path: str) -> str {
 	return path if not has_suffix(path, ".zg")
+
 	b := list[byte](path)
 	mut out: list[byte] = []
 	mut i := 0
@@ -465,7 +469,7 @@ fn stdlib_dir() -> str {
 # join_path joins a directory and a name, treating "" and "." as "here".
 fn join_path(dir: str, name: str) -> str {
 	return name if dir == "" or dir == "."
-	return dir + "/" + name
+	return f"{dir}/{name}"
 }
 
 # dir_of returns the directory part of a path, or "." when it names a bare file.
@@ -595,7 +599,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 	argv.append(output)
 	argv.append(cpath)
 	for u in rt_units() {
-		argv.append(rt + "/" + u)
+		argv.append(f"{rt}/{u}")
 	}
 	return argv
 }

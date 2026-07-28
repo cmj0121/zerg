@@ -45,6 +45,7 @@ for {
     line := <-input ?? break       # drain until the channel closes
     continue if line.empty()       # skip blank lines
     break if line == "quit"        # stop on a sentinel
+
     handle(line)
 }
 ```

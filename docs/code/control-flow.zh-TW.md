@@ -37,6 +37,7 @@ for {
     line := <-input ?? break       # 收到 channel 關閉為止
     continue if line.empty()       # 跳過空行
     break if line == "quit"        # 遇到 sentinel 就停
+
     handle(line)
 }
 ```

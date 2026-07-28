@@ -68,6 +68,7 @@ fn ident_name(e: Expr) -> str {
 fn parse_type(mut &p: Parser) -> Ty {
 	mut name := cur(p).lexeme
 	p_advance(p)
+
 	# A MODULE-QUALIFIED type, `cli.Opt`: every module of a program flattens into one
 	# scope, so the qualifier only says where the type came from and the last segment is
 	# the name. Reading it this way is what lets a program use a type another module
@@ -78,9 +79,11 @@ fn parse_type(mut &p: Parser) -> Ty {
 		name = cur(p).lexeme
 		p_advance(p)
 	}
+
 	# `This` is the self type: inside an impl it is the type that impl is for. Resolving it
 	# at parse time keeps it out of the emitter, which has no notion of a self type.
 	return TNamed(p.impl_ty) if name == "This" and p.impl_ty != ""
+
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
 	if name == "fn" and p_at(p, LParen) {
 		p_advance(p)
@@ -113,11 +116,13 @@ fn parse_type(mut &p: Parser) -> Ty {
 		expect(p, RBrack)
 		return inner
 	}
+
 	return TInt if name == "int"
 	return TFloat if name == "float"
 	return TStr if name == "str"
 	return TBool if name == "bool"
 	return TByte if name == "byte"
+
 	if name == "uint" {
 		# the subset models uint as int64_t (it never parses top-bit values)
 		return TInt
@@ -136,6 +141,7 @@ fn conv_ty(name: str) -> Ty {
 	return TByte if name == "byte"
 	return TFloat if name == "float"
 	return TBool if name == "bool"
+
 	return TStr
 }
 
@@ -207,6 +213,7 @@ fn parse_import(mut &p: Parser, mut &imports: list[str]) {
 		if path != "" {
 			imports.append(path)
 		}
+
 		# a spec that read nothing would leave the position where it was: step over the
 		# token rather than reading it forever
 		if p.pos == at {
@@ -326,6 +333,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	}
 	expect(p, LBrace)
 	skip_semis(p)
+
 	# `This` inside the block names the type the block is for; the parser resolves it here
 	# rather than leaving a name the emitter would have to spell and could not.
 	outer := p.impl_ty
@@ -375,6 +383,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		p_advance(p)
 		expect(p, Colon)
 		pty := parse_type(p)
+
 		# `= <constant>` makes the parameter optional at the call site
 		mut has_def := false
 		mut def := ENil
@@ -437,8 +446,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return parse_jump_guard(p, SContinue)
 	}
+
 	return parse_if(p) if k == If
 	return parse_for(p) if k == For
+
 	if k == Guard {
 		# guard { ... } (optionally with a trailing else): the subset runs the happy
 		# path only, so emit the guarded block's statements
@@ -459,6 +470,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		return parse_binding(p, false)
 	}
 	return parse_binding(p, false) if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon)
+
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
 	if p_at(p, Assign) {
@@ -502,6 +514,7 @@ fn parse_jump_guard(mut &p: Parser, jump: Stmt) -> Stmt {
 fn parse_return(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'return'
 	return SReturn(false, ENil) if p_at(p, Semi) or p_at(p, RBrace) or p_at(p, Eof)
+
 	# `return if c` — a bare early exit under a guard. It is desugared here into the
 	# `if c { return }` it is defined as, because SReturnIf carries a VALUE and a bare
 	# return has none; going through the block form means the emitter needs to know
@@ -545,6 +558,7 @@ fn parse_if(mut &p: Parser) -> Stmt {
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
 	return SFor(false, ENil, parse_block(p)) if p_at(p, LBrace)
+
 	# for-in: `for name in iterable { ... }`
 	if p_at(p, Ident) and peek_kind(p, 1) == In {
 		vname := cur(p).lexeme
@@ -705,6 +719,10 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EStr(t.value)
 	}
+	if k == FStr {
+		p_advance(p)
+		return fstr_expr(p, t)
+	}
 	if k == True {
 		p_advance(p)
 		return EBool(true)
@@ -836,4 +854,227 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	expect(p, FatArrow)
 	body := parse_expr(p)
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
+}
+
+# --- f-strings ---------------------------------------------------------------------------
+#
+# An f-string DESUGARS here into the `+` chain it is defined to be, so ast.zg and emit.zg
+# know nothing about f-strings: no node, no case, no runtime format engine. `f"a{x}b"`
+# builds precisely the tree `"a" + str(x) + "b"` would.
+#
+# The fold is LEFT-leaning and always SEEDED with a str literal, and both halves are
+# load-bearing. c_binexpr decides string concatenation from the LEFT operand's inferred
+# type alone: with an EStr on the left every step lowers to zgs_concat. A right fold — the
+# shape the seed uses — puts a hole on the left instead, and a hole that infers int falls
+# through to the numeric path as `(zg_n + "b")`, which is valid C pointer arithmetic. No
+# diagnostic, wrong output. The empty leading `""` of `f"{s}"` costs one concat and buys
+# that away.
+#
+# Every hole is wrapped in `str(…)`, which is `display()` for a scalar and identity for a
+# str, so a hole renders whatever it holds.
+fn fstr_expr(mut &p: Parser, t: Token) -> Expr {
+	src := list[byte](t.value)
+	n := src.len()
+	mut acc: Expr = ENil
+	mut have := false
+	mut lo := 0 # start of the literal run being gathered
+	mut i := 0
+	for i < n {
+		c := src[i]
+		if c == b'{' and i + 1 < n and src[i + 1] == b'{' {
+			i = i + 2
+		} else if c == b'}' and i + 1 < n and src[i + 1] == b'}' {
+			i = i + 2
+		} else if c == b'\\' {
+			i = fstr_esc_end(src, i)
+		} else if c == b'{' {
+			txt := fstr_slice(src, lo, i)
+
+			# the first part is emitted even when empty, so the fold is seeded with a str
+			if txt != "" or not have {
+				acc = fstr_join(acc, have, EStr(fstr_text(txt)))
+				have = true
+			}
+			end := fstr_hole_end(src, i)
+			acc = fstr_join(acc, have, fstr_hole(p, fstr_slice(src, i + 1, end)))
+			have = true
+			i = end + 1
+			lo = i
+		} else {
+			i = i + 1
+		}
+	}
+	tail := fstr_slice(src, lo, n)
+	return fstr_join(acc, have, EStr(fstr_text(tail))) if tail != "" or not have
+	return acc
+}
+
+fn fstr_join(acc: Expr, have: bool, part: Expr) -> Expr {
+	return part if not have
+	return EBinary("+", acc, part)
+}
+
+fn fstr_slice(src: list[byte], lo: int, hi: int) -> str {
+	mut out: list[byte] = []
+	mut i := lo
+	for i < hi {
+		out.append(src[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+# fstr_esc_end steps over a backslash escape. `\u{…}` carries braces of its own, which is
+# the reason this exists: two bytes would leave its `{` to be read as a hole.
+fn fstr_esc_end(src: list[byte], at: int) -> int {
+	n := src.len()
+
+	return at + 1 if at + 1 >= n
+	return at + 2 if src[at + 1] != b'u'
+
+	mut i := at + 2
+	for i < n {
+		return i + 1 if src[i] == b'}'
+		i = i + 1
+	}
+	return n
+}
+
+# fstr_hole_end is the index of the `}` closing the hole that opens at `at`, counting the
+# braces a nested list or map literal brings with it.
+fn fstr_hole_end(src: list[byte], at: int) -> int {
+	n := src.len()
+	mut depth := 0
+	mut i := at
+	for i < n {
+		c := src[i]
+		if c == b'"' or c == b'\'' {
+			i = fstr_quote_end(src, i)
+		} else {
+			if c == b'{' {
+				depth = depth + 1
+			} else if c == b'}' {
+				depth = depth - 1
+				return i if depth == 0
+			}
+			i = i + 1
+		}
+	}
+	return n
+}
+
+fn fstr_quote_end(src: list[byte], at: int) -> int {
+	n := src.len()
+	q := src[at]
+	mut i := at + 1
+	for i < n {
+		if src[i] == b'\\' {
+			i = i + 2
+		} else if src[i] == q {
+			return i + 1
+		} else {
+			i = i + 1
+		}
+	}
+	return n
+}
+
+# fstr_text decodes one chunk of literal text: `{{` and `}}` collapse to one brace, and the
+# backslash escapes are decoded by wrapping the chunk back into a plain string literal and
+# running it through the lexer — so `\n` and `\u{…}` mean here exactly what they mean in a
+# `"…"`, rather than through a second escape table that would drift from the first.
+fn fstr_text(raw: str) -> str {
+	toks := tokenize(f"\"{fstr_unbrace(raw)}\"")
+	return toks[0].value if toks[0].kind == Str
+	raise "f-string: malformed literal text: " + raw
+}
+
+fn fstr_unbrace(raw: str) -> str {
+	b := list[byte](raw)
+	n := b.len()
+	mut out: list[byte] = []
+	mut i := 0
+	for i < n {
+		c := b[i]
+		if c == b'\\' and i + 1 < n {
+			out.append(c)
+			out.append(b[i + 1])
+			i = i + 2
+		} else if (c == b'{' or c == b'}') and i + 1 < n and b[i + 1] == c {
+			out.append(c)
+			i = i + 2
+		} else {
+			out.append(c)
+			i = i + 1
+		}
+	}
+	return str(out)
+}
+
+# fstr_hole turns one hole's source into an expression. It is RE-LEXED and parsed by the
+# ordinary machinery, so anything the compiler can parse in an expression position works
+# inside a hole; p.impl_ty rides along so `this` resolves as it does outside one.
+fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
+	fstr_reject(hole)
+
+	toks := tokenize(hole)
+	mut hp := Parser(toks, 0, p.impl_ty)
+	e := parse_expr(hp)
+
+	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
+	# silent wrong answer this path exists to avoid
+	if not p_at(hp, Eof) and not p_at(hp, Semi) {
+		raise "f-string: a hole must be a single expression: {" + hole + "}"
+	}
+	return EConv(TStr, e)
+}
+
+# fstr_reject refuses the hole forms this compiler does not implement, naming which one.
+#
+# GRAMMAR gives a hole three optional tails, and every one of them needs a STATIC TYPE to
+# mean anything — the seed picks its display and format leaves from it. This compiler
+# desugars in the PARSER, where no type exists yet. Dropping a `:04d` would print the wrong
+# text and say nothing, so each is refused by name instead.
+fn fstr_reject(hole: str) {
+	b := list[byte](hole)
+	n := b.len()
+	mut depth := 0
+	mut i := 0
+	for i < n {
+		c := b[i]
+		if c == b'"' or c == b'\'' {
+			i = fstr_quote_end(b, i)
+		} else if c == b'(' or c == b'[' or c == b'{' {
+			depth = depth + 1
+			i = i + 1
+		} else if c == b')' or c == b']' or c == b'}' {
+			depth = depth - 1
+			i = i + 1
+		} else if depth == 0 and c == b':' {
+			raise "f-string: a ':spec' format spec is not supported yet: {" + hole + "}"
+		} else if depth == 0 and c == b'!' and i + 1 < n and fstr_is_conv(b[i + 1]) {
+			raise "f-string: an '!r' / '!s' / '!a' conversion is not supported yet: {" + hole + "}"
+		} else {
+			i = i + 1
+		}
+	}
+	if fstr_is_selfdoc(b) {
+		raise "f-string: the '{expr=}' self-documenting form is not supported yet: {" + hole + "}"
+	}
+}
+
+fn fstr_is_conv(c: byte) -> bool {
+	return c == b'r' or c == b's' or c == b'a'
+}
+
+# fstr_is_selfdoc reports a hole ending in `=`, the self-documenting form — but not one
+# ending in a comparison, whose `=` is the second half of an operator.
+fn fstr_is_selfdoc(b: list[byte]) -> bool {
+	mut i := b.len() - 1
+	for i >= 0 and b[i] == b' ' {
+		i = i - 1
+	}
+	return false if i < 1 or b[i] != b'='
+	p := b[i - 1]
+	return p != b'=' and p != b'!' and p != b'<' and p != b'>'
 }

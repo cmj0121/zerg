@@ -169,10 +169,10 @@ impl Argument {
 	# declaration should say everything the declaration does, and `.repeated()` was the one
 	# thing it declared and did not mention.
 	pub fn label() -> str {
-		return "    <" + this.long + ">" if this.kind == PosArg
+		return f"    <{this.long}>" if this.kind == PosArg
 		mut s := "    "
 		if this.short != "" {
-			s = "-" + this.short + ", "
+			s = f"-{this.short}, "
 		}
 		s = s + "--" + this.long
 		if this.kind == ValueArg {
@@ -440,7 +440,7 @@ impl Command {
 	pub fn sub(s: Command) -> This {
 		for x in this.subs {
 			if x.name == s.name {
-				raise ValueError("cli: sub-command " + s.name + " is declared twice")
+				raise ValueError(f"cli: sub-command {s.name} is declared twice")
 			}
 		}
 		mut ss := this.subs
@@ -457,15 +457,15 @@ impl Command {
 	fn reject_duplicate(a: Argument) {
 		for x in this.args {
 			if a.short != "" and x.short == a.short {
-				raise ValueError("cli: -" + a.short + " is declared twice on " + this.name)
+				raise ValueError(f"cli: -{a.short} is declared twice on {this.name}")
 			}
 			if a.long != "" and x.long == a.long {
-				raise ValueError("cli: --" + a.long + " is declared twice on " + this.name)
+				raise ValueError(f"cli: --{a.long} is declared twice on {this.name}")
 			}
 		}
 		if this.auto_help {
 			if a.short == "h" or a.long == "help" {
-				raise ValueError("cli: -h/--help is automatic on " + this.name + " (use .no_help() to take it back)")
+				raise ValueError(f"cli: -h/--help is automatic on {this.name} (use .no_help() to take it back)")
 			}
 		}
 		if this.ver != "" {
@@ -542,7 +542,7 @@ fn scan_long(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Scan
 	}
 	if o.kind == FlagArg {
 		if has_eq(body) {
-			s.err = "option --" + name + " takes no value"
+			s.err = f"option --{name} takes no value"
 			return i
 		}
 		record(s, o.name(), "1")
@@ -553,7 +553,7 @@ fn scan_long(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Scan
 		return i
 	}
 	if i + 1 >= argv.len() {
-		s.err = "option --" + name + " needs a value"
+		s.err = f"option --{name} needs a value"
 		return i
 	}
 	record(s, o.name(), argv[i + 1])
@@ -592,7 +592,7 @@ fn scan_short(a: str, argv: list[str], i: int, opts: list[Argument], mut &s: Sca
 			record(s, o.name(), argv[at + 1])
 			return at + 1
 		} else {
-			s.err = "option -" + ch + " needs a value"
+			s.err = f"option -{ch} needs a value"
 			return at
 		}
 	}
@@ -720,7 +720,7 @@ fn values_of(s: Scan, name: str) -> list[str] {
 fn validate(c: Command, s: Scan, ctx: Ctx) -> str {
 	for a in c.args {
 		if a.need and not ctx.has(a.name()) {
-			return "missing required argument <" + a.name() + ">" if a.kind == PosArg
+			return f"missing required argument <{a.name()}>" if a.kind == PosArg
 			return "missing required option --" + a.name()
 		}
 	}
@@ -747,8 +747,10 @@ fn validate_groups(c: Command, s: Scan) -> str {
 				}
 			}
 		}
-		return "--" + first + " and --" + clash + " cannot be given together" if seen > 1
-		return "one of " + group_list(c, g) + " is required" if seen == 0 and c.group_need[gi]
+
+		return f"--{first} and --{clash} cannot be given together" if seen > 1
+		return f"one of {group_list(c, g)} is required" if seen == 0 and c.group_need[gi]
+
 		gi = gi + 1
 	}
 	return ""
@@ -782,7 +784,7 @@ impl Command {
 	fn render_as(path: str) -> str {
 		mut out := ""
 		if this.about != "" {
-			out = this.name + " — " + this.about + "\n\n"
+			out = f"{this.name} — {this.about}\n\n"
 		}
 		out = out + "usage: " + this.usage_of(path) + "\n"
 		out = out + this.command_list()
@@ -849,9 +851,9 @@ fn takes_options(c: Command) -> bool {
 }
 
 fn positional_form(a: Argument) -> str {
-	mut out := "<" + a.name() + ">"
+	mut out := f"<{a.name()}>"
 	if not a.need {
-		out = "[" + out + "]"
+		out = f"[{out}]"
 	}
 	if a.repeats {
 		out = out + "..."
@@ -862,6 +864,7 @@ fn positional_form(a: Argument) -> str {
 fn section_of(a: Argument) -> str {
 	return a.section if a.section != ""
 	return "Arguments" if a.kind == PosArg
+
 	return "Options"
 }
 
@@ -934,6 +937,7 @@ impl Command {
 	fn dispatch(argv: list[str], path: str) -> int {
 		s := scan(this, argv)
 		return this.refuse(path, s.err) if s.err != ""
+
 		# --help and --version are answered by the command they were written BEFORE, which
 		# is why this comes ahead of the sub-command hand-off: `wc --help count` is asking
 		# wc, and `wc count --help` is asking count.
@@ -947,11 +951,12 @@ impl Command {
 		}
 		if s.sub_at >= 0 {
 			sc := find_sub(this, argv[s.sub_at])
-			return sc.dispatch(tail(argv, s.sub_at + 1), path + " " + sc.name)
+			return sc.dispatch(tail(argv, s.sub_at + 1), f"{path} {sc.name}")
 		}
 		ctx := resolve(this, s, path)
 		verr := validate(this, s, ctx)
 		return this.refuse(path, verr) if verr != ""
+
 		# A command with no function of its own is a place sub-commands hang from, so being
 		# asked to run it is being asked what it can do — which the help answers. Being
 		# given a WORD it does not know is a different question, and refusing it is the
@@ -968,9 +973,9 @@ impl Command {
 	# message, and where to look — on stderr, exiting 2, which is the usage-error status a
 	# shell script can tell apart from the program failing at its actual job.
 	fn refuse(path: str, msg: str) -> int {
-		io.eprintln(path + ": " + msg)
+		io.eprintln(f"{path}: {msg}")
 		if this.auto_help {
-			io.eprintln("try `" + path + " --help` for the options")
+			io.eprintln(f"try `{path} --help` for the options")
 		}
 		return 2
 	}

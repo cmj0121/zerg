@@ -639,6 +639,55 @@ typedef struct zrt_coro {
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
 
+/* --- threads: the M of M:N ---------------------------------------------------
+ *
+ * zrt_thread / zrt_mutex / zrt_cond are a SHIM over the host's threading, in exactly
+ * the shape zrt_ctx is a shim over the host's context switch: an opaque slot array
+ * big enough for every backend, and one implementation per platform selected at
+ * build time (thread_pthread.c, thread_win32.c, or thread_none.c as the floor).
+ *
+ * thread_none.c is not a stub — it is the SEMANTICS the other two must match with
+ * M = 1. On a host without threads (a freestanding target, a wasm build) the
+ * scheduler runs every coroutine on the calling thread, which is precisely what it
+ * did before M:N existed. A program's OUTPUT must not depend on which backend it
+ * got; only whether two coroutines can occupy two CPUs at once.
+ *
+ * The slot counts are sized for the largest known layout: pthread_mutex_t is 64
+ * bytes on macOS and 40 on glibc, pthread_cond_t 48, and a Win32 CRITICAL_SECTION
+ * 40 — so 10 pointers (80 bytes) clears all of them. A backend static_asserts its
+ * own type fits.
+ */
+typedef struct zrt_thread { void *slots[4]; } zrt_thread;
+typedef struct zrt_mutex  { void *slots[10]; } zrt_mutex;
+typedef struct zrt_cond   { void *slots[10]; } zrt_cond;
+
+/* zrt_thread_supported reports whether this build can actually run more than one
+ * OS thread. The scheduler asks once, to decide how many workers to start. */
+bool zrt_thread_supported(void);
+
+/* zrt_cpu_count is the host's usable parallelism, or 1 when it cannot be told. */
+size_t zrt_cpu_count(void);
+
+/* zrt_thread_start runs fn(arg) on a new OS thread; false means the thread could not
+ * be created and the caller must run the work itself. zrt_thread_join waits for one
+ * started thread. */
+bool zrt_thread_start(zrt_thread *t, void (*fn)(void *arg), void *arg);
+void zrt_thread_join(zrt_thread *t);
+
+/* The mutex is NOT recursive: the scheduler and the channels each take one lock at a
+ * time and never re-enter. zrt_cond_wait atomically releases m and blocks until a
+ * signal or broadcast, then re-acquires it. */
+void zrt_mutex_init(zrt_mutex *m);
+void zrt_mutex_destroy(zrt_mutex *m);
+void zrt_mutex_lock(zrt_mutex *m);
+void zrt_mutex_unlock(zrt_mutex *m);
+
+void zrt_cond_init(zrt_cond *c);
+void zrt_cond_destroy(zrt_cond *c);
+void zrt_cond_wait(zrt_cond *c, zrt_mutex *m);
+void zrt_cond_signal(zrt_cond *c);
+void zrt_cond_broadcast(zrt_cond *c);
+
 /* ZRT_CORO_STACK is the fixed per-coroutine stack size (Fork-B: fixed size + guard
  * page, not growable). Kept in one place so a later phase can retune it or move to a
  * growable stack without the backend re-emitting anything. */

@@ -39,7 +39,7 @@ func TestRawStringLiteralRuns(t *testing.T) {
 	}
 }
 
-// TestListLiteralValueRuns covers the list[T] container (docs/collections.md): a list
+// TestListLiteralValueRuns covers the list[T] container (docs/code/collections.md): a list
 // literal builds a real zrt_list a subsequent index reads by value. (A fixed-array
 // [int;N] initializer keeps its own path — see the value-generic emit test.)
 func TestListLiteralValueRuns(t *testing.T) {

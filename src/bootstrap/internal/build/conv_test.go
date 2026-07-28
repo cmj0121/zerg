@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// RUN-based tests for the primitive conversion `T(x)` (docs/types.md, "Type
+// RUN-based tests for the primitive conversion `T(x)` (docs/core/types.md, "Type
 // Conversion"): a re-construction of x's value as a T, checked so that a narrowing
 // conversion which does not fit raises OverflowError.
 

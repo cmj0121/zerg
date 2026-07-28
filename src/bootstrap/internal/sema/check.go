@@ -266,7 +266,7 @@ func (c *checker) inferIdent(n *ast.Ident) Type {
 		return sym.Type
 	}
 	// A bare top-level function name used as a value is a first-class function value
-	// (docs/functions.md): its type is the function's input/output contract.
+	// (docs/code/functions.md): its type is the function's input/output contract.
 	if sig, ok := c.info.Funcs[n.Name]; ok {
 		t := c.funcValueType(sig, n.Span())
 		if !bad(t) {
@@ -401,7 +401,7 @@ func (c *checker) checkAssign(n *ast.Reassign) {
 		c.errorf(n.Span(), "cannot assign to immutable binding %q", name)
 	}
 	// Rebinding the whole list a `for x in xs` loop is iterating invalidates its
-	// cursor, so it is rejected inside the loop (docs/collections.md). An element
+	// cursor, so it is rejected inside the loop (docs/code/collections.md). An element
 	// write `xs[i] = v` is not a rebind and stays allowed (its target is a Bracket).
 	if lv, ok := n.Target.(*ast.LValueTarget); ok {
 		if _, isList := lty.(*types.List); isList && c.listIsFrozen(lv.X) {
@@ -568,7 +568,7 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	}
 	switch {
 	case isArithOp(n.Op):
-		// `str` implements Add (docs/collections.md): `a + b` concatenates into a new
+		// `str` implements Add (docs/code/collections.md): `a + b` concatenates into a new
 		// str. Only '+' joins two strings — the rest of the arithmetic family stays
 		// numeric-only, so `s - t` keeps its "matching numeric operands" diagnostic.
 		if n.Op == token.Plus && lt == Str && rt == Str {
@@ -578,7 +578,7 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 	case isBitOp(n.Op):
 		return c.bitResult(n, lt, rt)
 	case isOrderOp(n.Op):
-		// `str` implements Ord (docs/collections.md): it sorts lexicographically by
+		// `str` implements Ord (docs/code/collections.md): it sorts lexicographically by
 		// code point, which the backend lowers to strcmp.
 		if lt == Str && rt == Str {
 			return Bool
@@ -595,7 +595,7 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 			c.errorf(n.Span(), "list equality (%q) is not yet supported", n.Op)
 			return Invalid
 		}
-		// Map equality (order-insensitive, docs/collections.md) is not implemented; gate it
+		// Map equality (order-insensitive, docs/code/collections.md) is not implemented; gate it
 		// cleanly so two same-type maps don't satisfy `comparable` and emit `zg_a == zg_b`
 		// on the runtime map struct, which cc rejects.
 		if isMapType(lt) || isMapType(rt) {

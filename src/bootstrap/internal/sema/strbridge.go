@@ -5,7 +5,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// The str <-> list bridge (docs/collections.md). A `str` is not indexable and holds no
+// The str <-> list bridge (docs/code/collections.md). A `str` is not indexable and holds no
 // NUL; to scan or edit text you convert it to a `list[byte]` (raw octets) or a
 // `list[rune]` (code points), and build a str back from such a list with `str(...)`,
 // which validates the str invariant and raises on violation. These are the only

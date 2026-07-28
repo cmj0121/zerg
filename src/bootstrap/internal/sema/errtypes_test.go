@@ -2,7 +2,7 @@ package sema
 
 import "testing"
 
-// TestBuiltinErrorConstructors covers the fixed, built-in error taxonomy (docs/errors.md,
+// TestBuiltinErrorConstructors covers the fixed, built-in error taxonomy (docs/code/errors.md,
 // GRAMMAR group 8): a named kind is a constructor `Name(msg) -> Err` and requires one str
 // message.
 func TestBuiltinErrorConstructors(t *testing.T) {
@@ -20,7 +20,7 @@ func TestBuiltinErrorConstructors(t *testing.T) {
 }
 
 // TestErrorRaiseAndInspect covers raising a built-in error and inspecting it: `raise`
-// takes an Err, `is <Kind>` tests it, and `.message()` reads it (docs/errors.md).
+// takes an Err, `is <Kind>` tests it, and `.message()` reads it (docs/code/errors.md).
 func TestErrorRaiseAndInspect(t *testing.T) {
 	t.Run("raise takes a built-in error", func(t *testing.T) {
 		wantOK(t, "fn f(bad: bool) -> int {\n  if bad {\n    raise IOError(\"down\")\n  }\n  return 0\n}")
@@ -35,7 +35,7 @@ func TestErrorRaiseAndInspect(t *testing.T) {
 
 // TestErrorResultMatch covers destructuring a guard's Result with `Left`/`Right` and
 // distinguishing the caught error by kind — the observable path errors flow through
-// (docs/errors.md: `match r { Left(v) => …; Right(e) => … }`).
+// (docs/code/errors.md: `match r { Left(v) => …; Right(e) => … }`).
 func TestErrorResultMatch(t *testing.T) {
 	src := "fn risky() -> int {\n  raise ValueError(\"x\")\n}\n" +
 		"fn f() -> int {\n  r := guard { risky() }\n  return match r {\n" +

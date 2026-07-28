@@ -4,7 +4,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 )
 
-// The `mut &` mutable-reference parameter (GRAMMAR group 5, docs/memory.md) — Zerg's
+// The `mut &` mutable-reference parameter (GRAMMAR group 5, docs/core/memory.md) — Zerg's
 // one explicit by-ref path, and the only way code shares storage short of a `chan` or
 // a `Ref[T]` box.
 //

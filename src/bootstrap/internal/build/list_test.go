@@ -82,7 +82,7 @@ func runProgramRTBalanced(t *testing.T, src string) string {
 	return stdout.String()
 }
 
-// RUN-based tests for the built-in list[T] container (docs/collections.md), one per
+// RUN-based tests for the built-in list[T] container (docs/code/collections.md), one per
 // implemented slice L1-L8. Every program is compiled to C, linked against the
 // materialized runtime under ASan+UBSan (via runProgramRT / runProgramRTAbort), and
 // executed, so a passing test asserts a clean exit + exact stdout with no memory

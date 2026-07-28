@@ -163,6 +163,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		ERange(lo, hi, inclusive) => walk_pair(lo, hi, ids, calls, ns)
 		ETuple(elems) => walk_all(elems, ids, calls, ns)
 		EMapLit(ks, vs) => walk_two_lists(ks, vs, ids, calls, ns)
+		EFn(ps, has_ret, ret, body) => walk_body(body, ids, calls, ns)
 		_ => skip()
 	}
 }

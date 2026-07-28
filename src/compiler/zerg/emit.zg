@@ -85,6 +85,11 @@ struct Emitter {
 	# `break` or `continue` unwinds to — empty when there is no defer to run.
 	dfn_decls: list[str]
 	dfn_n: int
+
+	# lam_defs are the lambdas lifted out of expression position, each a whole C function,
+	# and lam_n numbers them.
+	lam_defs: list[str]
+	lam_n: int
 	fn_mark: str
 	loop_mark: str
 }
@@ -832,6 +837,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		ERange(lo, hi, inclusive) => c_range_unsupported()
 		ETuple(elems) => c_tuple_lit(em, elems, sb)
 		EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
+		EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
 	}
 }
 
@@ -980,7 +986,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 		MMap => c_map_method(em, target, meth, tty, sb)
 		MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
-		_ => f"zg_{meth}({c_call_args(em, meth, args, sb)})"
+		_ => c_free_method(em, target, meth, args, sb)
 	}
 }
 
@@ -1004,6 +1010,18 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		return "({ " + et + " zg_le = " + el + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 	}
 	return tgt
+}
+
+# c_free_method is the last resort: a `target.meth(…)` whose target type carries no such
+# method. It is a real call only when `meth` names a function — otherwise the old fallback
+# emitted `zg_meth(…)` for a function nobody declared, and the diagnostic came from the C
+# compiler pointing at generated code. `s.len()` is the common way in: a str has no
+# methods here, and the message now says so at the Zerg level.
+fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	if not c_name_in(em.sig_names, meth) {
+		raise "NotImplemented: the method `" + meth + "` on a " + ty_name(c_infer(em, target))
+	}
+	return f"zg_{meth}({c_call_args(em, meth, args, sb)})"
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written
@@ -1337,6 +1355,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ERange(lo, hi, inclusive) => TUnknown
 		ETuple(elems) => c_tuple_ty(em, elems)
 		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
+		EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
 	}
 }
 
@@ -1606,6 +1625,82 @@ fn c_init_calls(f: File) -> str {
 		}
 	}
 	return out
+}
+
+# --- lambdas ----------------------------------------------------------------------
+#
+# A `fn(x: T) -> R { … }` in expression position is LIFTED to a top-level C function and
+# the expression becomes a pointer to it. That works because this compiler already carries
+# a held function as one type — `zg_fnptr`, cast back to its real signature at the call —
+# so a lambda with nothing captured is indistinguishable from a named function used as a
+# value, which already worked.
+#
+# CAPTURE is the line. A body naming anything that is not one of its parameters, a global,
+# or another function would need an environment to carry it, and an environment is a
+# different value shape than a bare pointer. That is refused by name rather than half-done.
+fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> str {
+	free := c_lambda_free(em, ps, body)
+	if free != "" {
+		raise "NotImplemented: a closure capturing `" + free + "` — a lambda may only use its parameters"
+	}
+	tag := strconv.to_string(em.lam_n, 10)
+	em.lam_n = em.lam_n + 1
+	name := "lambda__" + tag
+
+	# the lambda's body is emitted with its OWN environment; the one belonging to the
+	# function being emitted is put back afterwards, since the lambda is in the middle of
+	# one of its expressions
+	saved_names := em.env_names
+	saved_tys := em.env_tys
+	saved_cnames := em.env_cnames
+	saved_refs := em.ref_names
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false)))
+	em.env_names = saved_names
+	em.env_tys = saved_tys
+	em.env_cnames = saved_cnames
+	em.ref_names = saved_refs
+	em.used_fnptr = true
+	return "((zg_fnptr)zg_" + name + ")"
+}
+
+fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
+	mut tys: list[Ty] = []
+	for pm in ps {
+		tys.append(pm.ty)
+	}
+	mut r := TVoid
+	if has_ret {
+		r = ret
+	}
+	return TFn(tys, r)
+}
+
+# c_lambda_free is the first name a lambda's body uses that it did not declare — "" when
+# there is none. A parameter, a module constant, and a function are all fine; anything
+# else would have to be carried in an environment.
+fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
+	mut ids: list[str] = []
+	mut calls: list[str] = []
+	mut ns: list[str] = []
+	walk_body(body, ids, calls, ns)
+	mut bound: list[str] = []
+	for pm in ps {
+		bound.append(pm.name)
+	}
+	collect_binds(body, bound)
+	for id in ids {
+		if not c_name_in(bound, id) and not c_name_in(em.k_names, id) and not c_name_in(em.sig_names, id) {
+			return id
+		}
+	}
+	return ""
+}
+
+fn c_name_in(names: list[str], name: str) -> bool {
+	for n in names {
+		return true if n == name
+	}
+	return false
 }
 
 # --- defer ----------------------------------------------------------------------
@@ -2404,7 +2499,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, "", "")
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, "", "")
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -2500,7 +2595,14 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.dfn_decls {
 		dfns = dfns + d
 	}
-	return f"{hdr}{types}{tups}{globals}{protos}\n{dfns}{defs}{mainw}"
+	# a lifted lambda is a whole function, emitted BEFORE the bodies that name it: the
+	# prototypes above cover the program's own functions, not one this pass invented, so
+	# the definition has to be what the use sees
+	mut lams := ""
+	for d in em.lam_defs {
+		lams = lams + d
+	}
+	return f"{hdr}{types}{tups}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }
 
 # c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,

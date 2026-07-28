@@ -49,7 +49,8 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 # the runtime calls it, so it is never "unused" no matter what the source says.
 fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str]) {
 	for fd in f.fns {
-		if fd.is_pub or fd.name == "main" {
+		# `init` is called by the generated main, the same way the runtime calls `main`
+		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
 			continue_marker()
 		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
 			out.append(f"L102 private function `{fd.name}` is never called")
@@ -118,6 +119,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
 			SGuard(body_b) => walk_body(body_b, ids, calls, ns)
 			SRaise(x) => walk_expr(x, ids, calls, ns)
+		SDefer(x) => walk_expr(x, ids, calls, ns)
 			_ => skip()
 		}
 	}
@@ -140,6 +142,11 @@ fn walk_loop(head: Expr, body_b: list[Stmt], mut &ids: list[str], mut &calls: li
 }
 
 # walk_expr records the names an expression reaches for.
+fn walk_two_lists(a: list[Expr], b: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_all(a, ids, calls, ns)
+	walk_all(b, ids, calls, ns)
+}
+
 fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match e {
 		EIdent(name) => ids.append(name)
@@ -153,6 +160,9 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EConv(ty, x) => walk_expr(x, ids, calls, ns)
 		EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
 		EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
+		ERange(lo, hi, inclusive) => walk_pair(lo, hi, ids, calls, ns)
+		ETuple(elems) => walk_all(elems, ids, calls, ns)
+		EMapLit(ks, vs) => walk_two_lists(ks, vs, ids, calls, ns)
 		_ => skip()
 	}
 }

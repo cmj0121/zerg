@@ -323,18 +323,21 @@ fn conv_ty(s: str) -> Ty {        fn conv_ty(s: str) -> Ty {
 ```
 
 One guard is part of the line it guards. Two or more are a **table of exits**, and a table
-wants an edge. That restraint is most of the rule: 182 of this tree's 218 guard runs are a
-single guard and none of them is touched.
+wants an edge — both of them, so a run that starts mid-function gets a blank in front as
+well. At the top of a body the `{` is already that edge. That restraint is most of the
+rule: 182 of this tree's 218 guard runs are a single guard and none of them is touched.
 
 A comment on its **own line**, with code before and after it, gets a blank in front. A
 comment there heads a new chunk — that is what makes it its own line rather than a trailing
 one — and half the blank lines already in this tree's bodies are that shape. It applies in
 any block, so a `struct`'s commented field group gets the same separation Go's does.
 
-It declines in four cases: a comment at the top level, which heads a declaration whose
-spacing is the author's; a comment inside a wrapped argument list, which belongs to the
-element it sits on and would be separated from it; a comment with only the closing `}`
-after it, which heads nothing; and a blank that is already there.
+It declines in five cases: a comment ahead of a guard run, which is that run's **heading**
+— the blank goes in front of the comment, not between it and the table it introduces; a
+comment at the top level, which heads a declaration whose spacing is the author's; a
+comment inside a wrapped argument list, which belongs to the element it sits on and would
+be separated from it; a comment with only the closing `}` after it, which heads nothing;
+and a blank that is already there.
 
 What it deliberately does **not** do is put a blank after a nested block's `}`. That is 683
 places in this tree — not a rule about readability but a rewrite of the tree.

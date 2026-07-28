@@ -359,8 +359,15 @@ fn fmt_blank_mark(toks: list[Token], mut &at: list[bool]) {
 				last = e
 				nxt = fmt_next_code(toks, e)
 			}
-			if fmt_blank_here(toks, nxt) and n > 1 {
-				at[nxt] = true
+			if n > 1 {
+				# a table gets both edges. The leading one is only wanted where the run
+				# starts mid-function: at the top of a body the `{` is already the edge.
+				if fmt_blank_lead(toks, i) {
+					at[i] = true
+				}
+				if fmt_blank_here(toks, nxt) {
+					at[nxt] = true
+				}
 			}
 			i = last + 1
 		}
@@ -393,12 +400,25 @@ fn fmt_blank_leads(toks: list[Token], at: int) -> bool {
 	mut i := at + 1
 	for i < toks.len() {
 		k := toks[i].kind
+
 		return false if is_rbrace(k) or is_eof(k)
 		return true if not is_semi(k) and not is_comment(k)
 
 		i = i + 1
 	}
 	return false
+}
+
+# fmt_blank_lead reports whether a blank belongs in FRONT of a run: there has to be code
+# ahead of it to be separated from, and that code must not be a comment. A comment there is
+# the run's heading, and F406 has already put a blank in front of IT — putting a second one
+# between the heading and the table would split the two things that go together.
+fn fmt_blank_lead(toks: list[Token], at: int) -> bool {
+	p := fmt_prev_code(toks, at)
+	return false if p < 0
+	k := toks[p].kind
+	return false if is_lbrace(k) or is_comment(k)
+	return fmt_blank_here(toks, at)
 }
 
 # fmt_blank_here is every reason a blank line is NOT wanted at `at`, in one place.
@@ -632,6 +652,7 @@ fn fmt_fstr_hi(toks: list[Token], p: int) -> int {
 fn fmt_fstr_accum(toks: list[Token], lo: int) -> bool {
 	return false if lo < 2
 	return false if toks[lo - 1].kind != Assign
+
 	mut i := lo - 2
 	mut j := lo
 	for i >= 0 and toks[i].kind != Semi and not is_lbrace(toks[i].kind) {
@@ -646,6 +667,7 @@ fn fmt_fstr_accum(toks: list[Token], lo: int) -> bool {
 fn fmt_fstr_render(toks: list[Token], lo: int, hi: int) -> Fstr {
 	return Fstr("", false) if hi <= lo
 	return Fstr("", false) if toks[lo].line != toks[hi].line
+
 	mut text := ""
 	mut parts := 0
 	mut lits := 0
@@ -680,7 +702,7 @@ fn fmt_fstr_render(toks: list[Token], lo: int, hi: int) -> Fstr {
 		i = i + 1
 	}
 	return Fstr("", false) if parts < fmt_fstr_min() or lits == 0 or holes == 0
-	return Fstr("f\"" + text + "\"", true)
+	return Fstr(f"f\"{text}\"", true)
 }
 
 # fmt_fstr_part renders one operand: a string literal contributes its text, anything else
@@ -705,6 +727,7 @@ fn fmt_fstr_is_dec(toks: list[Token], lo: int, hi: int) -> bool {
 	return false if toks[lo + 3].kind != LParen
 	return false if fmt_wrap_end(toks, lo + 3) != hi
 	return false if toks[hi - 1].kind != Int or toks[hi - 1].lexeme != "10"
+
 	return is_comma(toks[hi - 2].kind)
 }
 
@@ -741,11 +764,14 @@ fn fmt_fstr_span(toks: list[Token], lo: int, hi: int) -> str {
 fn fmt_fstr_lit_ok(t: Token) -> bool {
 	b := list[byte](t.lexeme)
 	n := b.len()
+
 	return false if n < 2 or b[0] != b'"'
 	return false if n >= 3 and b[1] == b'"' and b[2] == b'"'
+
 	mut i := 1
 	for i < n - 1 {
 		c := b[i]
+
 		# `\u{…}`'s braces belong to the escape: doubling breaks it and not doubling reads
 		# as a hole, so there is no spelling and the chain keeps its `+`
 		return false if c == b'\\' and i + 1 < n and b[i + 1] == b'u'
@@ -955,6 +981,7 @@ fn fmt_wrap_group(
 	depth: int
 ) -> Wrap {
 	close := fmt_wrap_end(toks, open)
+
 	return Wrap(open + 1, col) if close == 0
 	return Wrap(close + 1, col) if fmt_wrap_has_comment(toks, open, close)
 
@@ -1150,6 +1177,7 @@ fn fmt_wrap_elem_count(toks: list[Token], open: int, close: int) -> int {
 		}
 		i = i + 1
 	}
+
 	return 0 if commas == 0
 	return commas if is_comma(toks[close - 1].kind)
 
@@ -1522,6 +1550,7 @@ fn fmt_import_group(toks: list[Token]) -> list[Token] {
 	first := fmt_first_import(toks)
 	return toks if first < 0
 	last := fmt_group_run_end(toks, first)
+
 	return toks if last < 0
 	return toks if fmt_run_specs(toks, first, last) < 2
 
@@ -1622,6 +1651,7 @@ fn fmt_more_imports_after(toks: list[Token], at: int) -> bool {
 	mut i := at
 	for i < toks.len() {
 		k := toks[i].kind
+
 		return true if k == Import
 		return false if not is_semi(k) and not is_comment(k)
 
@@ -1711,7 +1741,7 @@ fn fmt_emit_imports(paths: list[str], start: int, mut &out: list[Token]) -> int 
 				}
 			}
 			out.append(Token(Import, "import", "", ln, 0))
-			out.append(Token(Str, "\"" + p + "\"", p, ln, 0))
+			out.append(Token(Str, f"\"{p}\"", p, ln, 0))
 			out.append(Token(Semi, ";", "", ln, 0))
 			wrote = true
 			group = true

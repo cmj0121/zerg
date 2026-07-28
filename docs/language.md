@@ -24,29 +24,56 @@ other chapter relies on. Read it first.
 
 ## Chapters
 
-| Chapter                                            | Covers                                                            |
-| -------------------------------------------------- | ----------------------------------------------------------------- |
-| [Conformance](conformance.md)                      | reading conventions, status markers, diagnostics/abort contracts  |
-| [Types](types.md)                                  | primitives, `struct`, `enum`, tuples, strong-typedefs, conversion |
-| [Values & Memory](memory.md)                       | scope ownership, `mut &`, `del` / `defer`, `Ref[T]`               |
-| [Specs & Generics](specs.md)                       | `spec` as bound / conformance / type; generics; the `is` test     |
-| [Derive & Default Behavior](derive.md)             | structural derivation vs spec default methods                     |
-| [Decorators](decorators.md)                        | the fixed, compiler-owned `#[…]` directive set                    |
-| [Null-safety & Errors](errors.md)                  | `Result[T]` / `T?`, `?` `??` `?.` `!` `raise` `guard`             |
-| [Control Flow & Pattern Matching](control-flow.md) | `if`, `for`, `match`, and patterns                                |
-| [Patterns & Idioms](patterns.md)                   | closures, pipelines, builders — the Zerg way, no new syntax       |
-| [Functions & Closures](functions.md)               | first-class functions, defaults, named args, closures             |
-| [Collections](collections.md)                      | `list`, `map`, `set`, the fixed-size `[T; N]` array               |
-| [Coroutines & Channels](coroutine.md)              | `spawn`, channels, `select`, scheduling                           |
-| [Process & I/O](io.md)                             | streams, files, stdio, processes — the `io` package               |
-| [Formatting & Text](format.md)                     | `display` / `debug` rendering, `f"…"`, `print`                    |
-| [Modules, Packages & Programs](package.md)         | organization, visibility, coherence, program start                |
-| [Syntax Sugar](syntax-sugar.md)                    | every surface form and the core it desugars to                    |
-| [Grammar](grammar.md)                              | the formal surface grammar (companion to `GRAMMAR`)               |
-| [FFI](ffi.md)                                      | the C ABI boundary — `pub` export, unsafe foreign import          |
-| [Built-in Functions](builtins.md)                  | the fixed no-import functions — `Ref`, conversions, error kinds   |
-| [Standard Library](stdlib.md)                      | the bundled `import` packages — io, fs, os, time, math, rand, …   |
-| [Formatter & Linter Rules](fmt.md)                 | every rule `zerg fmt` and `zerg lint` apply, and its code         |
+### Reading this reference
+
+| Chapter                       | Covers                                                           |
+| ----------------------------- | ---------------------------------------------------------------- |
+| [Conformance](conformance.md) | reading conventions, status markers, diagnostics/abort contracts |
+
+### The type system
+
+| Chapter                                | Covers                                                            |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| [Types](types.md)                      | primitives, `struct`, `enum`, tuples, strong-typedefs, conversion |
+| [Values & Memory](memory.md)           | scope ownership, `mut &`, `del` / `defer`, `Ref[T]`               |
+| [Specs & Generics](specs.md)           | `spec` as bound / conformance / type; generics; the `is` test     |
+| [Derive & Default Behavior](derive.md) | structural derivation vs spec default methods                     |
+| [Decorators](decorators.md)            | the fixed, compiler-owned `#[…]` directive set                    |
+
+### Writing code
+
+| Chapter                                            | Covers                                                      |
+| -------------------------------------------------- | ----------------------------------------------------------- |
+| [Control Flow & Pattern Matching](control-flow.md) | `if`, `for`, `match`, and patterns                          |
+| [Functions & Closures](functions.md)               | first-class functions, defaults, named args, closures       |
+| [Null-safety & Errors](errors.md)                  | `Result[T]` / `T?`, `?` `??` `?.` `!` `raise` `guard`       |
+| [Collections](collections.md)                      | `list`, `map`, `set`, the fixed-size `[T; N]` array         |
+| [Coroutines & Channels](coroutine.md)              | `spawn`, channels, `select`, scheduling                     |
+| [Patterns & Idioms](patterns.md)                   | closures, pipelines, builders — the Zerg way, no new syntax |
+
+### The surface
+
+| Chapter                         | Covers                                              |
+| ------------------------------- | --------------------------------------------------- |
+| [Syntax Sugar](syntax-sugar.md) | every surface form and the core it desugars to      |
+| [Grammar](grammar.md)           | the formal surface grammar (companion to `GRAMMAR`) |
+
+### Programs, and the world outside them
+
+| Chapter                                    | Covers                                                          |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| [Modules, Packages & Programs](package.md) | organization, visibility, coherence, program start              |
+| [Process & I/O](io.md)                     | streams, files, stdio, processes — the `io` package             |
+| [Formatting & Text](format.md)             | `display` / `debug` rendering, `f"…"`, `print`                  |
+| [Built-in Functions](builtins.md)          | the fixed no-import functions — `Ref`, conversions, error kinds |
+| [Standard Library](stdlib.md)              | the bundled `import` packages — io, fs, os, time, math, rand, … |
+| [FFI](ffi.md)                              | the C ABI boundary — `pub` export, unsafe foreign import        |
+
+### Tooling
+
+| Chapter                            | Covers                                                    |
+| ---------------------------------- | --------------------------------------------------------- |
+| [Formatter & Linter Rules](fmt.md) | every rule `zerg fmt` and `zerg lint` apply, and its code |
 
 ## Types
 
@@ -144,26 +171,3 @@ carrying a crash `Err` or the `StopIteration` sentinel), and multiplexed with **
 
 The full model — buffering, receive/close semantics, directional ends, `select`, and deadlock — is
 the **[Coroutines & Channels](coroutine.md)** reference.
-
-## Companion references
-
-Built on the core language above:
-
-- **[Grammar](grammar.md)** — the formal surface grammar (W3C-EBNF), the authoritative
-  [`GRAMMAR`](../GRAMMAR) file, and the nvim syntax tooling.
-- **[Syntax Sugar](syntax-sugar.md)** — every convenient surface form and the core it desugars to,
-  collected in one table.
-- **[Patterns & Idioms](patterns.md)** — the Zerg way to write closures, chained pipelines, and
-  builders (named functions, named args + defaults) without extra syntax.
-- **[Collections](collections.md)** — the built-in containers `list`, `map`, `set`, and the
-  fixed-size `[T; N]` array; one canonical type per role.
-- **[Derive & Default Behavior](derive.md)** — the two sources of "free" behavior: the compiler's
-  structural derivation and a spec's default methods, and the firm line between them.
-- **[Decorators](decorators.md)** — the fixed, compiler-owned set of `#[…]` directives (`derive`, `dyn`,
-  `sealed`, …), what each does, and why the set stays closed.
-- **[Modules, Packages & Programs](package.md)** — how source is organized into modules and
-  packages, how visibility and coherence hold across them, and where a program starts.
-- **[FFI](ffi.md)** — the C ABI boundary: exporting Zerg through its `pub` surface, and importing C
-  as a stdlib facility (an unsafe foreign call).
-- **[Process & I/O](io.md)** — the checked I/O surface (streams, files, stdio, processes), imported
-  as the `io` package.

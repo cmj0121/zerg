@@ -20,29 +20,56 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 
 ## 章節
 
-| 章節                                                | 涵蓋                                                     |
-| --------------------------------------------------- | -------------------------------------------------------- |
-| [Conformance](conformance.zh-TW.md)                 | 閱讀慣例、狀態標記、diagnostics/abort 契約               |
-| [型別](types.zh-TW.md)                              | primitive、`struct`、`enum`、tuple、strong-typedef、轉換 |
-| [值與記憶體](memory.zh-TW.md)                       | scope ownership、`mut &`、`del` / `defer`、`Ref[T]`      |
-| [Spec 與 Generics](specs.zh-TW.md)                  | `spec` 作 bound / conformance / 型別；泛型；`is` 測試    |
-| [Derive 與預設行為](derive.zh-TW.md)                | 結構化衍生 vs spec 的 default method                     |
-| [Decorator](decorators.zh-TW.md)                    | 固定、compiler 擁有的 `#[…]` 指令集                      |
-| [Null-safety 與錯誤處理](errors.zh-TW.md)           | `Result[T]` / `T?`、`?` `??` `?.` `!` `raise` `guard`    |
-| [控制流與模式比對](control-flow.zh-TW.md)           | `if`、`for`、`match` 與 pattern                          |
-| [慣用法](patterns.zh-TW.md)                         | closure、pipeline、builder——道地寫法，無新語法           |
-| [函式與閉包](functions.zh-TW.md)                    | 一等函式、預設值、named args、closure                    |
-| [Collection](collections.zh-TW.md)                  | `list`、`map`、`set`、定長 `[T; N]` 陣列                 |
-| [Coroutines 與 Channels](coroutine.zh-TW.md)        | `spawn`、channel、`select`、排程                         |
-| [Process 與 I/O](io.zh-TW.md)                       | stream、file、stdio、process——`io` package               |
-| [格式化與文字](format.zh-TW.md)                     | `display` / `debug` 渲染、`f"…"`、`print`                |
-| [Module、Package 與 Program](package.zh-TW.md)      | 組織、可見性、coherence、程式啟動                        |
-| [語法糖](syntax-sugar.zh-TW.md)                     | 每個表面寫法與它 desugar 回的核心                        |
-| [文法](grammar.zh-TW.md)                            | 形式表面文法（`GRAMMAR` 的散文伴讀）                     |
-| [FFI](ffi.zh-TW.md)                                 | C ABI 邊界——`pub` export、unsafe foreign import          |
-| [內建函式（Built-in Functions）](builtins.zh-TW.md) | 免 import 的固定函式——`Ref`、轉換、error kind            |
-| [標準函式庫（Standard Library）](stdlib.zh-TW.md)   | 可 import 的隨附套件——io、fs、os、time、math、rand…      |
-| [格式化器與檢查器規則](fmt.zh-TW.md)                | `zerg fmt` 與 `zerg lint` 的每一條規則及其代碼           |
+### 閱讀本文件
+
+| 章節                                | 涵蓋                                       |
+| ----------------------------------- | ------------------------------------------ |
+| [Conformance](conformance.zh-TW.md) | 閱讀慣例、狀態標記、diagnostics/abort 契約 |
+
+### 型別系統
+
+| 章節                                 | 涵蓋                                                     |
+| ------------------------------------ | -------------------------------------------------------- |
+| [型別](types.zh-TW.md)               | primitive、`struct`、`enum`、tuple、strong-typedef、轉換 |
+| [值與記憶體](memory.zh-TW.md)        | scope ownership、`mut &`、`del` / `defer`、`Ref[T]`      |
+| [Spec 與 Generics](specs.zh-TW.md)   | `spec` 作 bound / conformance / 型別；泛型；`is` 測試    |
+| [Derive 與預設行為](derive.zh-TW.md) | 結構化衍生 vs spec 的 default method                     |
+| [Decorator](decorators.zh-TW.md)     | 固定、compiler 擁有的 `#[…]` 指令集                      |
+
+### 寫程式
+
+| 章節                                         | 涵蓋                                                  |
+| -------------------------------------------- | ----------------------------------------------------- |
+| [控制流與模式比對](control-flow.zh-TW.md)    | `if`、`for`、`match` 與 pattern                       |
+| [函式與閉包](functions.zh-TW.md)             | 一等函式、預設值、named args、closure                 |
+| [Null-safety 與錯誤處理](errors.zh-TW.md)    | `Result[T]` / `T?`、`?` `??` `?.` `!` `raise` `guard` |
+| [Collection](collections.zh-TW.md)           | `list`、`map`、`set`、定長 `[T; N]` 陣列              |
+| [Coroutines 與 Channels](coroutine.zh-TW.md) | `spawn`、channel、`select`、排程                      |
+| [慣用法](patterns.zh-TW.md)                  | closure、pipeline、builder——道地寫法，無新語法        |
+
+### 表面形式
+
+| 章節                            | 涵蓋                                 |
+| ------------------------------- | ------------------------------------ |
+| [語法糖](syntax-sugar.zh-TW.md) | 每個表面寫法與它 desugar 回的核心    |
+| [文法](grammar.zh-TW.md)        | 形式表面文法（`GRAMMAR` 的散文伴讀） |
+
+### 程式，以及它以外的世界
+
+| 章節                                                | 涵蓋                                                |
+| --------------------------------------------------- | --------------------------------------------------- |
+| [Module、Package 與 Program](package.zh-TW.md)      | 組織、可見性、coherence、程式啟動                   |
+| [Process 與 I/O](io.zh-TW.md)                       | stream、file、stdio、process——`io` package          |
+| [格式化與文字](format.zh-TW.md)                     | `display` / `debug` 渲染、`f"…"`、`print`           |
+| [內建函式（Built-in Functions）](builtins.zh-TW.md) | 免 import 的固定函式——`Ref`、轉換、error kind       |
+| [標準函式庫（Standard Library）](stdlib.zh-TW.md)   | 可 import 的隨附套件——io、fs、os、time、math、rand… |
+| [FFI](ffi.zh-TW.md)                                 | C ABI 邊界——`pub` export、unsafe foreign import     |
+
+### 工具
+
+| 章節                                 | 涵蓋                                           |
+| ------------------------------------ | ---------------------------------------------- |
+| [格式化器與檢查器規則](fmt.zh-TW.md) | `zerg fmt` 與 `zerg lint` 的每一條規則及其代碼 |
 
 ## 型別（Types）
 
@@ -125,21 +152,3 @@ Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）,fire-a
 
 完整模型——buffering、receive/close 語意、directional 端、`select`、deadlock——見
 **[Coroutines 與 Channels](coroutine.zh-TW.md)** 參考文件。
-
-## 配套參考（Companion references）
-
-建立在上述核心語言之上：
-
-- **[文法（Grammar）](grammar.zh-TW.md)**——形式表面文法（W3C-EBNF）、權威的 [`GRAMMAR`](../GRAMMAR) 檔,與 nvim 語法工具。
-- **[語法糖（Syntax Sugar）](syntax-sugar.zh-TW.md)**——每個方便的表面寫法,以及它 desugar 回的核心,收在一張表。
-- **[慣用法（Patterns & Idioms）](patterns.zh-TW.md)**——closure、鏈式 pipeline、builder 的道地寫法（具名函式、named
-  args + 預設值）,不需額外語法。
-- **[Collection](collections.zh-TW.md)**——內建容器 `list`、`map`、`set`,以及定長 `[T; N]` 陣列;一角色一個 canonical 型別。
-- **[Derive 與預設行為](derive.zh-TW.md)**——兩種「免費」行為的來源：compiler 的結構化衍生,與 spec 的 default method,
-  以及兩者之間那條明確界線。
-- **[Decorator](decorators.zh-TW.md)**——固定、compiler 擁有的 `#[…]` 指令集（`derive`、`dyn`、`sealed`……）,各自
-  做什麼,以及這個集合為何保持封閉。
-- **[Module、Package 與 Program](package.zh-TW.md)**——原始碼如何組織成 module 與 package、可見性與 coherence 如何跨越
-  它們,以及程式從何啟動。
-- **[FFI](ffi.zh-TW.md)**——C ABI 邊界：以 `pub` 表面 export Zerg、import C 則是 stdlib 設施（一次 unsafe 的 foreign call）。
-- **[Process 與 I/O](io.zh-TW.md)**——有檢查的 I/O 面（stream、file、stdio、process）,以 `io` package 匯入。

@@ -32,7 +32,8 @@ fn main(args: list[str]) {
 fn root() -> cli.Command {
 	# a multi-line chain is wrapped in parentheses: a line break after ')' would otherwise
 	# end the statement
-	return (cli.command("zerg", "the self-hosting Zerg compiler")
+	return (
+		cli.command("zerg", "the self-hosting Zerg compiler")
 		.version(banner())
 		.epilog(env_help())
 		.sub(build_cmd())
@@ -46,7 +47,8 @@ fn root() -> cli.Command {
 # them as sub-commands said twice what `--emit` already says — and left a reader to
 # discover that `zerg c f.zg` and `zerg build --emit c f.zg` were the same thing.
 fn build_cmd() -> cli.Command {
-	return (cli.command("build", "compile a program (see --emit)")
+	return (
+		cli.command("build", "compile a program (see --emit)")
 		.opt("e", "emit", "stop after a stage: tokens, ast, c, lib, bin", "lib")
 		.opt("o", "output", "where to write the result (default: the source name)")
 		.opt("j", "jobs", "how many units to compile at once", "4")
@@ -56,7 +58,8 @@ fn build_cmd() -> cli.Command {
 }
 
 fn fmt_cmd() -> cli.Command {
-	return (cli.command("fmt", "rewrite sources in the canonical style")
+	return (
+		cli.command("fmt", "rewrite sources in the canonical style")
 		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. F401; repeatable").repeated())
 		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
 		.run(do_fmt)
@@ -64,7 +67,8 @@ fn fmt_cmd() -> cli.Command {
 }
 
 fn lint_cmd() -> cli.Command {
-	return (cli.command("lint", "report unused imports and dead private code")
+	return (
+		cli.command("lint", "report unused imports and dead private code")
 		.add(cli.positional("file.zg", "the sources to check").required().repeated())
 		.run(do_lint)
 	)

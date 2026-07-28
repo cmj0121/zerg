@@ -35,14 +35,15 @@ input would produce, so formatting formatted source changes nothing.
 | ------ | ----------------------------------------------------------------------- |
 | `F101` | one tab per nesting level; `}` closes at the level it opened            |
 | `F102` | one statement per line — the lexer's inserted `;` **is** the line break |
-| `F103` | a wrapped expression continues one level in from its statement          |
+| `F103` | a wrapped expression continues one level in per open bracket            |
 | `F104` | a run of blank lines survives as exactly one                            |
 | `F105` | a group that spans lines closes on its own line                         |
 
 `F105` is what gives a wrapped chain a visible end:
 
 ```zerg
-a := (builder()
+a := (
+    builder()
     .run()
     .fast()
 )
@@ -50,6 +51,23 @@ a := (builder()
 
 rather than a `))` a reader has to count. It applies to any `(` or `[` whose closer is on
 a later line than its opener, so a wrapped argument list gets the same shape.
+
+`F103` counts brackets rather than statements, so a nested group steps in one level per
+open bracket and each closer lands under its own opener:
+
+```zerg
+x := sum(
+    sum(
+        1,
+        2
+    ),
+    3
+)
+```
+
+Measuring from the statement instead put every closer of a nest in one column, where a
+reader could not tell which closed which — and left an inner closer to the LEFT of the
+content it closed.
 
 Parentheses around a multi-line chain are not decoration — they are what makes it parse.
 A line break after `)` ends the statement (see the ASI rule in [`GRAMMAR`](../../GRAMMAR)),
@@ -108,6 +126,7 @@ with no way to tell them apart by looking.
 | ------ | ------------------------------------------------------------------------- | ------- |
 | `F401` | a one-jump if-block becomes the postfix guard it is sugar for             | on      |
 | `F402` | imports group — standard library first, then the rest — each alphabetical | on      |
+| `F403` | an argument list is one line, or one element per line — never half        | on      |
 
 `GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
 `if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
@@ -169,13 +188,70 @@ anything else appears among them — a comment, which belongs to the import it s
 would be stranded by sorting, or an `import pub`, whose re-export is an ordering the
 author chose.
 
+`F105` says where a closer goes once a group already spans lines. `F403` says what shape
+a group that spans them takes. **A line its author fitted on one line stays on one line** —
+this rule never breaks up a group that was not already broken.
+
+A group its author DID break is joined back onto one line unless one of these vetoes it:
+
+- printed flat, it would end at or past column 80 — a tab counts as 4;
+- it holds 6 or more top-level elements.
+
+When one does, the group breaks at **every** top-level comma instead. Never half of each:
+a group broken around one of its elements used to print the rest after the closer, leaving
+a `), 3` hanging off the end, which is neither shape.
+
+```zerg
+x := sum(                        # before
+    1,
+    2,
+)
+y := sum(sum(
+    1,
+    2,
+), 3)
+
+x := sum(1, 2)                   # after
+y := sum(sum(1, 2), 3)
+```
+
+Width is the real judgement and the count is the backstop for what width cannot see: six
+arguments read as a list to scan rather than a line to read, however short each one is.
+
+Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
+time rather than the whole line, so the group that crosses column 80 is the last one on
+the line rather than the one worth breaking — in `return 0 if a or b or c(x, y)` it is
+`c`, whose two arguments would go on three lines while the condition that actually made
+the line long, and that has no brackets to break at, stayed as it was.
+
+A group with **no top-level comma** is exempt from both. A chain and a parenthesised
+expression break where their author broke them — those breaks say where the steps are,
+not that the line ran out of room. What they get is the opener ending its own line, so
+every step starts in the same column:
+
+```zerg
+n := (
+    builder()
+    .run()
+)
+```
+
+Like `F401`, it declines outright when a comment is anywhere inside: a comment is
+something a person put there and joining lines has nowhere to put it back.
+
+The **trailing comma goes** either way, joined or split. On one line it is a comma before
+a closer that nothing follows; on several, a multi-line parameter list is the one place
+the grammar does not accept one, and dropping it in a signature while keeping it in a call
+would be one shape in two spellings.
+
 ### Which rules can be switched off
 
 `F1xx`–`F3xx` are not negotiable: they are what "canonical" means, and a formatter with
 options for them is a formatter two people configure differently. `F4xx` changes the
 code's **shape** rather than its spacing, so it is the group `--off` exists for. `F105`
 sits in layout rather than in rewrites because it only decides where an existing token
-goes.
+goes; `F403` is a rewrite for the same reason in reverse — it inserts line breaks nobody
+wrote and drops a token a joined list no longer needs.
 
 ## `zerg lint`
 

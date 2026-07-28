@@ -986,7 +986,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 		MMap => c_map_method(em, target, meth, tty, sb)
 		MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
-		_ => f"zg_{meth}({c_call_args(em, meth, args, sb)})"
+		_ => c_free_method(em, target, meth, args, sb)
 	}
 }
 
@@ -1010,6 +1010,18 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		return "({ " + et + " zg_le = " + el + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 	}
 	return tgt
+}
+
+# c_free_method is the last resort: a `target.meth(…)` whose target type carries no such
+# method. It is a real call only when `meth` names a function — otherwise the old fallback
+# emitted `zg_meth(…)` for a function nobody declared, and the diagnostic came from the C
+# compiler pointing at generated code. `s.len()` is the common way in: a str has no
+# methods here, and the message now says so at the Zerg level.
+fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	if not c_name_in(em.sig_names, meth) {
+		raise "NotImplemented: the method `" + meth + "` on a " + ty_name(c_infer(em, target))
+	}
+	return f"zg_{meth}({c_call_args(em, meth, args, sb)})"
 }
 
 # c_recv_args renders a method call's arguments: the receiver first, then the written

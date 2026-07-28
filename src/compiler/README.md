@@ -196,10 +196,18 @@ needs cannot get through that. `make corpus` and `make lint` are the checks on t
 **Strippable** (NOT in the subset — the self-host source never uses them): closures /
 first-class functions; coroutines (`spawn` / `chan` / `select`); `map[K,V]`; `spec`
 (and so `impl Spec for T`) and generic _function_ definitions; `unsafe` / `asm` / `ptr`;
-f-strings and command literals; `with` / `defer` / `del`; optionals (`T?` / `??` / `!`)
+command literals; `with` / `defer` / `del`; optionals (`T?` / `??` / `!`)
 beyond `Result`. The
 non-build subcommands (`fmt` / `lint` / `test`) are also dropped — the minimal seed is
 `zerg build` only; the self-host compiler can reimplement the tools in Zerg later.
+
+**F-strings left that list** when `F405` landed. The self-host source now uses them —
+`zerg fmt` writes them — so the seed must lex and parse `f"…"` to build stage 1. It already
+did; what changed is that it is now load-bearing rather than incidental. The shipped
+compiler accepts the plain hole only: no `:spec`, no `!r`/`!s`/`!a`, no `{x=}`, and no
+`f\`…\``command form, each refused by name rather than by silence. It desugars in the
+parser to the`+` chain the form is defined to be, so the AST and the emitter know nothing
+about f-strings at all.
 
 ## Performance: parallelism & caching (M7)
 

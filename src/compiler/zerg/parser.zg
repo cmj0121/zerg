@@ -212,6 +212,26 @@ pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
 }
 
+# parse_fill reads the tail of `[v; N]` and expands it: the count is a const-expr, and an
+# integer literal is the whole of that this compiler evaluates, so N copies are written out
+# here rather than carried as a shape the emitter would have to understand.
+fn parse_fill(mut &p: Parser, v: Expr) -> Expr {
+	n := cur(p)
+	mut out: list[Expr] = []
+	if n.kind != Int {
+		raise "NotImplemented: a fill count that is not an integer literal"
+	}
+	p_advance(p)
+	expect(p, RBrack)
+	mut i := 0
+	count := strconv.parse_int(n.lexeme, 10)
+	for i < count {
+		out.append(v)
+		i = i + 1
+	}
+	return EListLit(out)
+}
+
 # parse_fn_expr reads `fn(p: T) -> R { … }` in expression position — the same shape a
 # declaration has, minus the name. GRAMMAR gives a fn-expr no generic parameters, so there
 # is no bracket group to read here.
@@ -909,7 +929,9 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EFloat(t.lexeme)
 	}
-	if k == Str {
+	if k == Str or k == RawStr {
+		# a raw string differs from a plain one only in what the LEXER did with the
+		# backslashes; by here both carry their text in `value`
 		p_advance(p)
 		return EStr(t.value)
 	}
@@ -988,11 +1010,18 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return parse_map_lit(p)
 	}
 	if k == LBrack {
-		# list literal: [] or [a, b, ...]
+		# list literal: [] or [a, b, ...], or the FILL form [v; N]
 		p_advance(p)
 		mut elems: list[Expr] = []
 		for not p_at(p, RBrack) and not p_at(p, Eof) {
 			elems.append(parse_expr(p))
+			# `[v; N]` is N copies of v. The `;` is the lexer's statement separator
+			# elsewhere, which is exactly why it needs handling here: without it the
+			# count was read as a second ELEMENT and the list came out the wrong length.
+			if p_at(p, Semi) and elems.len() == 1 {
+				p_advance(p)
+				return parse_fill(p, elems[0])
+			}
 			if p_at(p, Comma) {
 				p_advance(p)
 			}

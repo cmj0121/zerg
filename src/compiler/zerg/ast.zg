@@ -31,6 +31,7 @@ enum Ty {
 	TNamed(str)
 	TList(Ty)
 	TFn(list[Ty], Ty)
+	TTuple(list[Ty])
 }
 
 # Expr is an expression node.
@@ -55,6 +56,10 @@ enum Expr {
 	# ERange is `a..b` / `a..=b`. GRAMMAR puts it between comparison and addition, so
 	# `v in 0..10` reads `v in (0..10)`. `inclusive` is the `..=` form.
 	ERange(Expr, Expr, bool)
+
+	# ETuple is `(a, b)`. A tuple is read back by STATIC index — `t.0` — which parses as
+	# an EField whose name is a number, so no separate access node is needed.
+	ETuple(list[Expr])
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -287,6 +292,7 @@ fn expr_kind(e: Expr) -> str {
 		EIf(cond, then_e, else_e) => "if-expr"
 		EMatch(scrut, arms) => "match"
 		ERange(lo, hi, inclusive) => "range"
+		ETuple(elems) => "tuple"
 		_ => "?"
 	}
 }

@@ -6,8 +6,9 @@
 # and scans the literal, keyword, identifier, operator, and punctuation forms.
 #
 # Trivia (comments, blank lines) is not retained: the `--emit tokens` view the diff-test
-# oracle prints never shows it, so the subset lexer simply drops it. The interpolation
-# forms (f-strings, f-cmds, decorators) are deferred; they do not appear in the M1 corpus.
+# oracle prints never shows it, so the subset lexer simply drops it. An f-string is scanned
+# WHOLE, as one FStr token the parser cuts up (scan_fstring); the f-cmd and decorator
+# interpolation forms are still deferred.
 import (
 	"ascii"
 	"strconv"
@@ -135,6 +136,7 @@ fn scan_token(mut &l: Lex) -> Token {
 
 	# literal prefixes
 	return scan_raw_string(l, sline, scol, soff) if c == b'r' and at(l, 1) == b'"'
+	return scan_fstring(l, sline, scol, soff) if c == b'f' and at(l, 1) == b'"'
 	if c == b'b' and at(l, 1) == b'\'' {
 		advance(l) # b
 		return scan_char_lit(l, Byte, true, sline, scol, soff)
@@ -322,6 +324,89 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		}
 	}
 	return emit_val(l, Str, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+# scan_fstring scans an f-string as ONE token: the lexeme is the verbatim source `f"a{x}b"`
+# and the value is the RAW inner text — holes, escapes and `{{` exactly as written. Cutting
+# it into text and holes is the parser's job, which re-lexes each hole.
+#
+# Keeping the literal whole, rather than the seed's FStrBegin/LBrace/…/FStrEnd stream, is
+# what lets `zerg fmt` print it back byte for byte. The formatter shares this lexer, and
+# its printer treats every `{` as a block opener and every `}` as a closer — a hole's
+# braces in the token stream would have it tear an f-string across four indented lines.
+# The cost is that `zerg fmt` does not reach INSIDE a hole, and that `--emit tokens` no
+# longer matches the seed for a source that has one.
+fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
+	advance(l) # f
+	advance(l) # opening "
+	mut sb: list[byte] = []
+	mut depth := 0 # 0 = literal text, above it = inside a `{ … }` hole
+	for true {
+		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		c := at(l, 0)
+		if depth > 0 {
+			if c == b'{' {
+				depth = depth + 1
+			} else if c == b'}' {
+				depth = depth - 1
+			} else if c == b'"' or c == b'\'' {
+				copy_quoted(l, sb, c)
+				continue
+			}
+			sb.append(advance(l))
+		} else if c == b'"' {
+			advance(l) # closing "
+			break
+		} else if c == b'{' and at(l, 1) == b'{' {
+			sb.append(advance(l))
+			sb.append(advance(l))
+		} else if c == b'}' and at(l, 1) == b'}' {
+			sb.append(advance(l))
+			sb.append(advance(l))
+		} else if c == b'}' {
+			# a bare `}` is not text: `}}` is how one is written
+			return emit(l, Illegal, sline, scol, lexeme_from(l, soff))
+		} else if c == b'{' {
+			depth = 1
+			sb.append(advance(l))
+		} else if c == b'\\' {
+			copy_escape(l, sb)
+		} else {
+			sb.append(advance(l))
+		}
+	}
+	return emit_val(l, FStr, sline, scol, lexeme_from(l, soff), str(sb))
+}
+
+# copy_escape copies a backslash escape through VERBATIM, so the parser decodes it with the
+# same table a plain string uses. `\u{…}` carries braces of its own, which is why the whole
+# escape is taken here — two bytes would leave its `{` to be read as a hole.
+fn copy_escape(mut &l: Lex, mut &sb: list[byte]) {
+	sb.append(advance(l)) # backslash
+	return if eof(l)
+	c := advance(l)
+	sb.append(c)
+	return if c != b'u'
+	for not eof(l) {
+		e := advance(l)
+		sb.append(e)
+		break if e == b'}'
+	}
+}
+
+# copy_quoted copies a string or rune literal written INSIDE a hole, escapes and all, so a
+# brace or quote of its own is not read as the f-string's.
+fn copy_quoted(mut &l: Lex, mut &sb: list[byte], q: byte) {
+	sb.append(advance(l)) # opening quote
+	for not eof(l) and at(l, 0) != byte(10) {
+		if at(l, 0) == b'\\' {
+			copy_escape(l, sb)
+		} else {
+			c := advance(l)
+			sb.append(c)
+			break if c == q
+		}
+	}
 }
 
 fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
@@ -562,6 +647,7 @@ fn token_category(k: Kind) -> int {
 		Float => 1
 		Ident => 1
 		Str => 2
+		FStr => 2
 		RawStr => 2
 		Rune => 2
 		Byte => 2

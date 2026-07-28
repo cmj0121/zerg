@@ -27,6 +27,13 @@ enum Kind {
 	Byte
 	Cmd
 
+	# FStr is a WHOLE f-string, lexeme and all — `f"a{x}b"` is one token, and splitting it
+	# into text and holes is the parser's job. The seed lexes the structured stream below
+	# instead; this compiler does not, because the formatter shares this lexer and the
+	# printer treats every `{` as a block opener, so a hole's braces would have `zerg fmt`
+	# tear the literal across four indented lines.
+	FStr
+
 	# structured f-string / f-cmd tokens (not yet emitted by the subset lexer)
 	FStrBegin
 	FStrText
@@ -155,6 +162,7 @@ fn kind_name(k: Kind) -> str {
 		Rune => "RUNE"
 		Byte => "BYTE"
 		Cmd => "CMD"
+		FStr => "FSTR"
 		FStrBegin => "FSTR_BEGIN"
 		FStrText => "FSTR_TEXT"
 		FStrEnd => "FSTR_END"
@@ -357,6 +365,7 @@ fn ends_item(k: Kind) -> bool {
 		Rune => true
 		Byte => true
 		Cmd => true
+		FStr => true
 		FStrEnd => true
 		FCmdEnd => true
 		RParen => true

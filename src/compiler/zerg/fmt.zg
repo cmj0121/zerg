@@ -26,6 +26,7 @@
 #   F401  a one-jump if-block becomes the postfix guard it is sugar for —
 #         `return x if c`, `break if c`, `continue if c`
 #   F402  imports group — standard library first, then the rest — each group alphabetical
+#   F403  an argument list is one line, or one element per line — never half of each
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -52,6 +53,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	}
 	if not fmt_is_off(off, "F402") {
 		toks = fmt_imports(toks)
+	}
+	if not fmt_is_off(off, "F403") {
+		toks = fmt_wrap(toks)
 	}
 	return fmt_toks(toks, fmt_is_off(off, "F105"))
 }
@@ -242,6 +246,374 @@ fn fmt_has_else(toks: list[Token], rb: int) -> bool {
 fn fmt_is_else_if(out: list[Token]) -> bool {
 	return false if out.len() == 0
 	return out[out.len() - 1].kind == Else
+}
+
+# --- rule F403: an argument list is one line, or one element per line -----------------------
+#
+# F105 decides where a closer goes once a group already spans lines. F403 decides WHETHER
+# it spans them at all. A group that fits is joined even if its author broke it, and one
+# that does not fit breaks at EVERY top-level comma — never half of each, which is what
+# used to leave `), 3` hanging off the end of a closer.
+#
+# It fits when both hold:
+#
+#   * printed flat, the group ends before column 80 — a tab counts as 4;
+#   * it has fewer than 6 top-level elements.
+#
+# Width is the real judgement here and the count is a backstop for what width cannot see:
+# six arguments read as a list to scan rather than a line to read, however short each is.
+#
+# A group with NO top-level comma is exempt from both. A chain and a parenthesised
+# expression break where their author broke them — those breaks say where the steps are,
+# not that the line ran out of room. What they do get is the opener ending its own line,
+# so every step of a chain starts in the same column:
+#
+#     n := (
+#         builder()
+#         .run()
+#     )
+#
+# It declines outright when a comment is anywhere inside, for F401's reason: a comment is
+# something a person put there, and joining lines has nowhere to put it back.
+#
+# This belongs in F4xx and is switchable, unlike F105: it does not merely place a token
+# that already exists, it inserts breaks the author did not write and drops the trailing
+# comma that a joined list no longer needs.
+#
+# The pass rewrites each token's LINE and the printer stays one straight walk, which is
+# how every rule that moves code works here.
+
+# fmt_wrap_max is the column a flat group must end before; fmt_wrap_tab is what one tab
+# counts as while measuring, and fmt_wrap_elems is the element count that breaks a group
+# however narrow it is.
+fn fmt_wrap_max() -> int {
+	return 80
+}
+
+fn fmt_wrap_tab() -> int {
+	return 4
+}
+
+fn fmt_wrap_elems() -> int {
+	return 6
+}
+
+# Wrap is where a group's decision leaves the scan: the index just past its closer, and
+# the column the line is at once the closer is printed.
+struct Wrap {
+	next: int
+	col: int
+}
+
+fn fmt_wrap(toks: list[Token]) -> list[Token] {
+	mut brk := fmt_wrap_breaks(toks)
+	mut drop: list[bool] = []
+	mut i := 0
+	for i < toks.len() {
+		drop.append(false)
+		i = i + 1
+	}
+	wid := fmt_wrap_widths(toks)
+	fmt_wrap_scan(toks, brk, drop, wid)
+	return fmt_wrap_relines(toks, brk, drop)
+}
+
+# fmt_wrap_breaks reads the author's line breaks off the tokens as a count per token — 0
+# for "same line", 1 for a break, 2 for a break with a blank line kept (F104). Deciding on
+# THIS rather than on the line numbers themselves is what lets a decision be rewritten
+# without renumbering everything after it.
+fn fmt_wrap_breaks(toks: list[Token]) -> list[int] {
+	mut brk: list[int] = []
+	mut i := 0
+	for i < toks.len() {
+		mut d := 0
+		if i > 0 {
+			g := toks[i].line - toks[i - 1].line
+			if g >= 2 {
+				d = 2
+			} else if g == 1 {
+				d = 1
+			}
+		}
+		brk.append(d)
+		i = i + 1
+	}
+	return brk
+}
+
+# fmt_wrap_widths is what each token costs on a flat line, its own text plus the space
+# F201/F202 would put before it. Measuring from the same predicate the printer uses is
+# what keeps the estimate and the output from drifting apart.
+fn fmt_wrap_widths(toks: list[Token]) -> list[int] {
+	mut w: list[int] = []
+	mut prev := Semi
+	mut i := 0
+	for i < toks.len() {
+		t := toks[i]
+		s: str = fmt_text(t)
+		b := list[byte](s)
+		mut n := b.len()
+		if i > 0 and fmt_space_between(prev, t.kind) {
+			n = n + 1
+		}
+		w.append(n)
+		if not is_semi(t.kind) {
+			prev = t.kind
+		}
+		i = i + 1
+	}
+	return w
+}
+
+# fmt_wrap_scan walks the top level and hands every bracket group to the decision. `col`
+# is the flat column the line has reached, which is what a group is measured against —
+# the same left-to-right walk the printer makes, so a group is judged where it lands.
+fn fmt_wrap_scan(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], wid: list[int]) {
+	mut depth := 0
+	mut col := 0
+	mut i := 0
+	for i < toks.len() {
+		t := toks[i]
+		if is_semi(t.kind) {
+			col = depth * fmt_wrap_tab()
+			i = i + 1
+		} else {
+			if is_rbrace(t.kind) and depth > 0 {
+				depth = depth - 1
+			}
+			if brk[i] > 0 or i == 0 {
+				col = depth * fmt_wrap_tab()
+			}
+			if fmt_wrap_opens(toks, i) {
+				r := fmt_wrap_group(toks, brk, drop, wid, i, col + wid[i], depth)
+				col = r.col
+				i = r.next
+			} else {
+				if is_lbrace(t.kind) {
+					depth = depth + 1
+				}
+				col = col + wid[i]
+				i = i + 1
+			}
+		}
+	}
+}
+
+# fmt_wrap_opens reports whether token `at` opens a group this rule may decide. A `#[`
+# is a decorator's brackets rather than a list's, and its shape is the language's.
+fn fmt_wrap_opens(toks: list[Token], at: int) -> bool {
+	return false if not is_bracket(toks[at].kind)
+	return false if at > 0 and is_hash(toks[at - 1].kind)
+	return true
+}
+
+# fmt_wrap_group decides the one group opening at `open`. `col` is where the line stands
+# with the opener printed; `depth` is the indent level the group's own line is at, so its
+# elements sit one level in from it and its closer lands back on it.
+fn fmt_wrap_group(
+	toks: list[Token],
+	mut &brk: list[int],
+	mut &drop: list[bool],
+	wid: list[int],
+	open: int,
+	col: int,
+	depth: int
+) -> Wrap {
+	close := fmt_wrap_end(toks, open)
+	return Wrap(open + 1, col) if close == 0
+	return Wrap(close + 1, col) if fmt_wrap_has_comment(toks, open, close)
+	flat := fmt_wrap_flat_width(wid, open + 1, close)
+	elems := fmt_wrap_elem_count(toks, open, close)
+	return fmt_wrap_free(toks, brk, drop, wid, open, close, col, flat, depth) if elems == 0
+	fits := col + flat <= fmt_wrap_max() and elems < fmt_wrap_elems()
+	return fmt_wrap_join(toks, brk, drop, open, close, col + flat) if fits
+	return fmt_wrap_split(toks, brk, drop, wid, open, close, depth)
+}
+
+# fmt_wrap_join puts the whole group on one line. The trailing comma goes with it: it is
+# there to make a broken list's last element look like the others, and on one line it is
+# a comma before a closer that nothing follows.
+#
+# Joining a group joins everything nested inside it, so every trailing comma down there
+# is answered here too — the inner groups are never visited again.
+fn fmt_wrap_join(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], open: int, close: int, col: int) -> Wrap {
+	mut i := open + 1
+	for i <= close {
+		brk[i] = 0
+		if is_comma(toks[i].kind) and i + 1 <= close and is_close(toks[i + 1].kind) {
+			drop[i] = true
+		}
+		i = i + 1
+	}
+	return Wrap(close + 1, col)
+}
+
+# fmt_wrap_split gives every top-level element its own line. The opener ends its line and
+# the closer starts one, so the elements are a column a reader can run an eye down.
+fn fmt_wrap_split(
+	toks: list[Token],
+	mut &brk: list[int],
+	mut &drop: list[bool],
+	wid: list[int],
+	open: int,
+	close: int,
+	depth: int
+) -> Wrap {
+	inner := (depth + 1) * fmt_wrap_tab()
+	fmt_wrap_break_at(brk, open + 1)
+	fmt_wrap_break_at(brk, close)
+	mut col := inner
+	mut i := open + 1
+	for i < close {
+		if fmt_wrap_opens(toks, i) {
+			r := fmt_wrap_group(toks, brk, drop, wid, i, col + wid[i], depth + 1)
+			col = r.col
+			i = r.next
+		} else {
+			if is_comma(toks[i].kind) and i + 1 < close {
+				fmt_wrap_break_at(brk, i + 1)
+				col = inner
+			} else {
+				col = col + wid[i]
+			}
+			i = i + 1
+		}
+	}
+	return Wrap(close + 1, depth * fmt_wrap_tab() + 1)
+}
+
+# fmt_wrap_free is a group with no top-level comma — a chain, or parentheses around an
+# expression. Its breaks are the author's and stay, but if it spans lines at all then its
+# opener ends its line, so every step starts in the same column.
+fn fmt_wrap_free(
+	toks: list[Token],
+	mut &brk: list[int],
+	mut &drop: list[bool],
+	wid: list[int],
+	open: int,
+	close: int,
+	col: int,
+	flat: int,
+	depth: int
+) -> Wrap {
+	return Wrap(close + 1, col + flat) if not fmt_wrap_spans(brk, open, close)
+	inner := (depth + 1) * fmt_wrap_tab()
+	fmt_wrap_break_at(brk, open + 1)
+	fmt_wrap_break_at(brk, close)
+	mut c := inner
+	mut i := open + 1
+	for i < close {
+		if fmt_wrap_opens(toks, i) {
+			r := fmt_wrap_group(toks, brk, drop, wid, i, c + wid[i], depth + 1)
+			c = r.col
+			i = r.next
+		} else {
+			if brk[i] > 0 {
+				c = inner
+			}
+			c = c + wid[i]
+			i = i + 1
+		}
+	}
+	return Wrap(close + 1, depth * fmt_wrap_tab() + 1)
+}
+
+fn fmt_wrap_break_at(mut &brk: list[int], at: int) {
+	if at < brk.len() and brk[at] == 0 {
+		brk[at] = 1
+	}
+}
+
+fn fmt_wrap_spans(brk: list[int], open: int, close: int) -> bool {
+	mut i := open + 1
+	for i <= close {
+		return true if brk[i] > 0
+		i = i + 1
+	}
+	return false
+}
+
+# fmt_wrap_end is the index of the bracket that closes the one at `open`.
+fn fmt_wrap_end(toks: list[Token], open: int) -> int {
+	mut d := 0
+	mut i := open
+	for i < toks.len() {
+		k := toks[i].kind
+		if is_bracket(k) {
+			d = d + 1
+		} else if is_close(k) {
+			d = d - 1
+			return i if d == 0
+		}
+		i = i + 1
+	}
+	return 0
+}
+
+fn fmt_wrap_has_comment(toks: list[Token], open: int, close: int) -> bool {
+	mut i := open + 1
+	for i < close {
+		return true if is_comment(toks[i].kind)
+		i = i + 1
+	}
+	return false
+}
+
+fn fmt_wrap_flat_width(wid: list[int], lo: int, hi: int) -> int {
+	mut n := 0
+	mut i := lo
+	for i <= hi {
+		n = n + wid[i]
+		i = i + 1
+	}
+	return n
+}
+
+# fmt_wrap_elem_count is how many top-level elements the group holds, and 0 when it has no
+# top-level comma at all — the shape that is exempt. A trailing comma closes the last
+# element rather than opening another.
+fn fmt_wrap_elem_count(toks: list[Token], open: int, close: int) -> int {
+	mut commas := 0
+	mut d := 0
+	mut i := open + 1
+	for i < close {
+		k := toks[i].kind
+		if is_bracket(k) or is_lbrace(k) {
+			d = d + 1
+		} else if is_close(k) or is_rbrace(k) {
+			d = d - 1
+		} else if is_comma(k) and d == 0 {
+			commas = commas + 1
+		}
+		i = i + 1
+	}
+	return 0 if commas == 0
+	return commas if is_comma(toks[close - 1].kind)
+	return commas + 1
+}
+
+# fmt_wrap_relines writes the decisions back as line numbers, which is the only thing the
+# printer reads. A dropped token hands its break to whatever takes its place.
+fn fmt_wrap_relines(toks: list[Token], brk: list[int], drop: list[bool]) -> list[Token] {
+	mut out: list[Token] = []
+	mut line := 1
+	mut pend := 0
+	mut i := 0
+	for i < toks.len() {
+		if i > 0 {
+			pend = pend + brk[i]
+		}
+		if drop[i] {
+			i = i + 1
+		} else {
+			line = line + pend
+			pend = 0
+			t := toks[i]
+			out.append(Token(t.kind, t.lexeme, t.value, line, t.col))
+			i = i + 1
+		}
+	}
+	return out
 }
 
 # --- printing -------------------------------------------------------------------------
@@ -450,6 +822,23 @@ fn is_close(k: Kind) -> bool {
 	return match k {
 		RParen => true
 		RBrack => true
+		_ => false
+	}
+}
+
+# is_bracket is is_open without the `#` of a decorator: the openers that have a closer to
+# pair with, which is what a group's extent is counted from.
+fn is_bracket(k: Kind) -> bool {
+	return match k {
+		LParen => true
+		LBrack => true
+		_ => false
+	}
+}
+
+fn is_hash(k: Kind) -> bool {
+	return match k {
+		Hash => true
 		_ => false
 	}
 }

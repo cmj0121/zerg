@@ -849,10 +849,23 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EIdent(t.lexeme)
 	}
 	if k == LParen {
+		# `(e)` is grouping and `(a, b)` is a tuple — the comma is what tells them apart,
+		# so the first element is read before deciding which this is
 		p_advance(p)
 		inner := parse_expr(p)
+		if not p_at(p, Comma) {
+			expect(p, RParen)
+			return inner
+		}
+		mut elems: list[Expr] = []
+		elems.append(inner)
+		for p_at(p, Comma) {
+			p_advance(p)
+			break if p_at(p, RParen)
+			elems.append(parse_expr(p))
+		}
 		expect(p, RParen)
-		return inner
+		return ETuple(elems)
 	}
 	if k == LBrack {
 		# list literal: [] or [a, b, ...]

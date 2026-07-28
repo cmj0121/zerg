@@ -69,6 +69,11 @@ struct Emitter {
 	# starting empty, which is what lets a body name one.
 	k_names: list[str]
 	k_tys: list[Ty]
+
+	# tup_names / tup_decls are the tuple CARRIERS. A tuple is a plain C struct, one per
+	# distinct shape, generated on demand and emitted with the other typedefs.
+	tup_names: list[str]
+	tup_decls: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -106,6 +111,7 @@ fn c_type(t: Ty) -> str {
 		TNamed(nm) => "zg_" + nm
 		TList(_) => "zrt_list"
 		TFn(_, _) => "zg_fnptr"
+		TTuple(ts) => c_tuple_cname(ts)
 		_ => "int64_t"
 	}
 }
@@ -798,7 +804,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EUnary(oper, x) => f"({c_unop(oper)}{c_expr(em, x, sb)})"
 		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
 		ECall(name, args) => c_call(em, name, args, sb)
-		EField(target, fld) => f"{c_expr(em, target, sb)}.zg_{fld}"
+		EField(target, fld) => c_fieldref(em, target, fld, sb)
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		EListLit(elems) => c_list_lit(em, elems, sb)
@@ -810,6 +816,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		# forms have no lowering yet, and saying so is better than emitting something that
 		# reads as an int.
 		ERange(lo, hi, inclusive) => c_range_unsupported()
+		ETuple(elems) => c_tuple_lit(em, elems, sb)
 	}
 }
 
@@ -1291,7 +1298,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EUnary(oper, x) => c_infer_unary(em, oper, x)
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
 		ECall(name, args) => c_infer_call(em, name)
-		EField(target, fld) => c_field_ty(em, c_named_of(c_infer(em, target)), fld)
+		EField(target, fld) => c_field_ty_of(em, target, fld)
 		EIndex(target, idx) => c_list_elem(c_infer(em, target))
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)
@@ -1299,6 +1306,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
 		ERange(lo, hi, inclusive) => TUnknown
+		ETuple(elems) => c_tuple_ty(em, elems)
 	}
 }
 
@@ -1535,6 +1543,123 @@ fn c_init_calls(f: File) -> str {
 		}
 	}
 	return out
+}
+
+# --- tuples ---------------------------------------------------------------------
+#
+# A tuple is a plain C struct, one carrier per distinct SHAPE. The name is built from the
+# element types, so two tuples of the same shape share one carrier and two of different
+# shapes cannot collide.
+fn c_tuple_ty(mut &em: Emitter, elems: list[Expr]) -> Ty {
+	mut tys: list[Ty] = []
+	for e in elems {
+		tys.append(c_infer(em, e))
+	}
+	return TTuple(tys)
+}
+
+# c_tuple_cname is the carrier's C name. It is a PURE function of the shape because c_type
+# needs the same spelling and has no Emitter to ask — registering the typedef is
+# c_tuple_name's job, and every tuple reaches it through its literal.
+fn c_tuple_cname(tys: list[Ty]) -> str {
+	mut name := "zg_tup"
+	for t in tys {
+		name = name + "_" + c_ident_safe(c_type(t))
+	}
+	return name
+}
+
+# c_tuple_name is c_tuple_cname plus the typedef it needs. A C identifier cannot hold `*`
+# or a space, so each element type is flattened into one.
+fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
+	name := c_tuple_cname(tys)
+	for n in em.tup_names {
+		return name if n == name
+	}
+	mut decl := "typedef struct {"
+	mut i := 0
+	for i < tys.len() {
+		decl = decl + f" {c_type(tys[i])} f{strconv.to_string(i, 10)};"
+		i = i + 1
+	}
+	em.tup_names.append(name)
+	em.tup_decls.append(decl + f" }} {name};\n")
+	return name
+}
+
+fn c_ident_safe(s: str) -> str {
+	mut out: list[byte] = []
+	for c in list[byte](s) {
+		if ascii.is_alpha(c) or ascii.is_digit(c) or c == b'_' {
+			out.append(c)
+		} else if c == b'*' {
+			out.append(b'p')
+		}
+	}
+	return str(out)
+}
+
+fn c_tuple_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
+	mut tys: list[Ty] = []
+	for e in elems {
+		tys.append(c_infer(em, e))
+	}
+	name := c_tuple_name(em, tys)
+	mut out := f"({name}){{"
+	mut i := 0
+	for i < elems.len() {
+		if i > 0 {
+			out = out + ", "
+		}
+		out = out + c_expr(em, elems[i], sb)
+		i = i + 1
+	}
+	return out + "}"
+}
+
+# c_fieldref lowers `x.name`. A field whose name is a NUMBER is a tuple element — GRAMMAR
+# reads a tuple back by static index, `t.0`, and the parser gives that the same EField node
+# a struct field gets, so the number is what tells them apart.
+fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
+	t := c_infer(em, target)
+	if c_is_tuple(t) and c_all_digits(fld) {
+		ts := c_tuple_tys(t)
+		# `int(s)` is a CAST here, not a parse — the index has to come from strconv
+		i := strconv.parse_int(fld, 10)
+		return ts[i] if i >= 0 and i < ts.len()
+		return TUnknown
+	}
+	return c_field_ty(em, c_named_of(t), fld)
+}
+
+fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
+	tgt := c_expr(em, target, sb)
+	return f"{tgt}.f{fld}" if c_all_digits(fld)
+	return f"{tgt}.zg_{fld}"
+}
+
+fn c_all_digits(s: str) -> bool {
+	b := list[byte](s)
+	return false if b.len() == 0
+	for c in b {
+		return false if not ascii.is_digit(c)
+	}
+	return true
+}
+
+fn c_is_tuple(t: Ty) -> bool {
+	return match t {
+		TTuple(_) => true
+		_ => false
+	}
+}
+
+fn c_tuple_tys(t: Ty) -> list[Ty] {
+	mut none: list[Ty] = []
+	return match t {
+		TTuple(ts) => ts
+		_ => none
+	}
 }
 
 fn c_range_unsupported() -> str {
@@ -1955,7 +2080,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -2036,7 +2161,13 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if em.used_str {
 		hdr = hdr + c_str_helpers()
 	}
-	return f"{hdr}{types}{globals}{protos}\n{defs}{mainw}"
+	# the tuple carriers are collected while the bodies are lowered, so they are gathered
+	# here — after defs, emitted before them
+	mut tups := ""
+	for d in em.tup_decls {
+		tups = tups + d
+	}
+	return f"{hdr}{types}{tups}{globals}{protos}\n{defs}{mainw}"
 }
 
 # c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,

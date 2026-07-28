@@ -6,7 +6,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
-// First-class function values (docs/functions.md): a function is a value with a type
+// First-class function values (docs/code/functions.md): a function is a value with a type
 // `fn(P...) -> R`, and can be passed as an argument, returned, stored in a field, and
 // bound to a variable. This file types a bare top-level function NAME used as a value.
 // A closure literal (`fn(...) { }`) is a separate surface (checkClosure/synthFn); an
@@ -33,7 +33,7 @@ func (c *checker) funcValueType(sig *FuncSig, span token.Span) Type {
 }
 
 // paramByRef reports whether a function's i-th declared parameter is a `mut &`
-// mutable reference — part of the function's type (docs/functions.md).
+// mutable reference — part of the function's type (docs/code/functions.md).
 func paramByRef(fn *ast.FuncDecl, i int) bool {
 	if fn == nil || i >= len(fn.Params) {
 		return false

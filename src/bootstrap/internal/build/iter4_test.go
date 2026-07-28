@@ -79,7 +79,7 @@ func TestTupleValueLowers(t *testing.T) {
 // TestBundleImportMath covers the stdlib math module (Phase 1f U4): its arithmetic
 // helpers bundle and resolve as ordinary namespace members over the primitive numeric
 // types. The module is pure safe Zerg — the transcendental family wants the deferred
-// FFI import facility (docs/ffi.md) and is not offered.
+// FFI import facility (docs/runtime/ffi.md) and is not offered.
 func TestBundleImportMath(t *testing.T) {
 	src := "import \"math\"\n" +
 		"fn main() -> Result[nil] {\n" +

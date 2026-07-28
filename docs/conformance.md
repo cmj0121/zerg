@@ -71,7 +71,7 @@ are rejected is (see each chapter's rules; the reject list is normative, the mes
 ## Runtime abort contract
 
 An **uncaught error** ends the program deterministically: a `raise` that reaches `main` uncaught, a failed
-force `!` on an absent optional, or a built-in runtime fault (see [Errors](errors.md)) that no `guard`/`?`
+force `!` on an absent optional, or a built-in runtime fault (see [Errors](code/errors.md)) that no `guard`/`?`
 recovers. On abort the runtime:
 
 1. writes the error's message to **standard error**, followed by a newline;
@@ -79,12 +79,12 @@ recovers. On abort the runtime:
 3. terminates the process with exit status **1**.
 
 A built-in error's message has the form `Kind: text` (for example `IndexError: list index out of range`).
-The exact `text` is not normative; the `Kind:` prefix for a taxonomy error is. See [Errors](errors.md) for
+The exact `text` is not normative; the `Kind:` prefix for a taxonomy error is. See [Errors](code/errors.md) for
 the built-in error kinds and which operations raise them.
 
 > **[deviation]** A hardware fault that the runtime cannot intercept — today, a coroutine stack overflowing
 > past its guard page, or `main`'s unguarded native stack — terminates the process by signal without
-> running `defer`s, rather than as a clean `StackOverflowError` abort. See [Errors](errors.md).
+> running `defer`s, rather than as a clean `StackOverflowError` abort. See [Errors](code/errors.md).
 
 ## Undefined and implementation-defined behavior
 
@@ -94,14 +94,14 @@ The specification uses these terms precisely:
   avoid it; a conforming implementation may do anything, including crash. Zerg's design goal is to have
   **no reachable UB from safe code**; where the bootstrap currently admits UB, the chapter marks it a
   **[deviation]** (for example, integer overflow and division by zero lower to plain C today rather than
-  trapping — see [Types](types.md)).
+  trapping — see [Types](core/types.md)).
 - **Implementation-defined** — the result is one of a set the implementation documents but the spec does
   not fix. A conforming program should not depend on a particular choice. Current implementation-defined
   points, each detailed in its chapter, include: the evaluation order of call arguments and operator
-  operands ([Memory Model](memory.md) — the spec's intended left-to-right order is **[not yet]** enforced);
-  the winning arm of a `select` among several ready arms ([Coroutines](coroutine.md)); the precision and
-  spelling of floating-point rendering ([Format](format.md)); and any coroutine ordering beyond the
-  guaranteed send→receive happens-before ([Coroutines](coroutine.md)).
+  operands ([Memory Model](core/memory.md) — the spec's intended left-to-right order is **[not yet]** enforced);
+  the winning arm of a `select` among several ready arms ([Coroutines](code/coroutine.md)); the precision and
+  spelling of floating-point rendering ([Format](runtime/format.md)); and any coroutine ordering beyond the
+  guaranteed send→receive happens-before ([Coroutines](code/coroutine.md)).
 
 Anything the specification neither requires nor marks implementation-defined is unspecified and may change;
 do not rely on it.

@@ -3,7 +3,7 @@ package build
 import "testing"
 
 // TestEnumDiscriminantRoundTrip is the end-to-end oracle for the enum discriminant
-// surface (docs/types.md, GRAMMAR group 7): `int(v)` reads a C-style enum's stored
+// surface (docs/core/types.md, GRAMMAR group 7): `int(v)` reads a C-style enum's stored
 // discriminant, `E.of(n)` reverses it — `Some(variant)` on a match, `None` otherwise —
 // and `E.of(int(v))` round-trips. The enum `Red = 1; Green; Blue = 10` exercises the
 // explicit + continued discriminants.

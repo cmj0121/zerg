@@ -108,7 +108,7 @@ type emitter struct {
 	// stays byte-identical.
 	tuples map[string]*tupleCarrier
 
-	// List instances (docs/collections.md). lists maps a list element type's spelling
+	// List instances (docs/code/collections.md). lists maps a list element type's spelling
 	// to its generated per-instance helpers (the element vtable, the by-value copy, and
 	// the drop-env thunk); every list is the same C header (zrt_list), only its element
 	// copy/drop differ. Empty for a program that names no list value, which therefore
@@ -554,7 +554,7 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.fnMark = e.curScope().markVar
 	for i, p := range inst.Params {
 		// A by-ref parameter is a BORROW: the caller keeps the variable, so ending this
-		// call must not free it (docs/memory.md's lifetime table).
+		// call must not free it (docs/core/memory.md's lifetime table).
 		if isByRefParam(inst, i) {
 			continue
 		}
@@ -1098,7 +1098,7 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 		return
 	}
 	// A str: iterate its code points. Materialize the runes into a temporary list and
-	// walk it, so the body's loop variable binds each rune (docs/collections.md).
+	// walk it, so the body's loop variable binds each rune (docs/code/collections.md).
 	if e.cur.ExprType(e.info, n.Iter) == sema.Str {
 		e.forInStr(n)
 		return
@@ -1493,7 +1493,7 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.fstrExpr(n)
 	case *ast.IsExpr:
 		// `err is ValueError` (and the other built-in error kinds) dispatches on the Err's
-		// kind tag — the documented way to distinguish an erased error (docs/errors.md,
+		// kind tag — the documented way to distinguish an erased error (docs/code/errors.md,
 		// "Handling errors by type"). It lowers to a kind comparison on the runtime zrt_err.
 		if kind, ok := sema.ErrKind(n.TypeName); ok && isErrType(e.cur.ExprType(e.info, n.X)) {
 			return fmt.Sprintf("((%s).kind == %d)", e.expr(n.X), kind)
@@ -2002,7 +2002,7 @@ func (e *emitter) listPatternWalk(p *ast.ListPattern, place string, placeT sema.
 // carrier place: tag 0 is the Left/Ok side, tag 1 the Right/Err side. It binds the
 // sub-pattern at the carrier's corresponding member — `.ok`/`.left` for Left, `.err`
 // (Result) or `.right` (Either) for Right — so a Result's `Right(e)` binds the erased
-// Err ready for an `is`-dispatch on its kind (docs/errors.md).
+// Err ready for an `is`-dispatch on its kind (docs/code/errors.md).
 func (e *emitter) eitherPatternWalk(p *ast.VariantPattern, place string, placeT sema.Type, scope map[string]string) string {
 	ei := placeT.(*types.Either)
 	c, ok := e.carrierFor(placeT)
@@ -2050,7 +2050,7 @@ func (e *emitter) call(n *ast.Call) string {
 		return s
 	}
 	// a built-in error constructor `ValueError("msg")` and the `err.message()` accessor
-	// (GRAMMAR group 8, docs/errors.md).
+	// (GRAMMAR group 8, docs/code/errors.md).
 	if s, ok := e.errCallEmit(n); ok {
 		return s
 	}
@@ -2405,7 +2405,7 @@ func (e *emitter) fieldSlot(si *mono.TypeInstance, i int, arg ast.Expr) string {
 // field type. It mirrors fieldSlot, but because a default expression carries no recorded
 // ExprType (checkConstDefault validates its shape only, so e.cur.ExprType is bad), it
 // derives the value type through defaultWrap — so a defaulted optional field
-// (`port: int? = 8080`, docs/grammar.md's headline example) wraps its default into the
+// (`port: int? = 8080`, docs/surface/grammar.md's headline example) wraps its default into the
 // carrier (`{tag, ok}`) instead of dropping the raw value into the `tag` slot, where it
 // would read back as absent (a silent miscompile). A plain (non-carrier) POD field default
 // stays the byte-identical raw expression.
@@ -2569,7 +2569,7 @@ func (e *emitter) enumOfEmit(n *ast.Call) (string, bool) {
 		rv, c.name, rv), true
 }
 
-// errCallEmit lowers the built-in error surface (GRAMMAR group 8, docs/errors.md): a
+// errCallEmit lowers the built-in error surface (GRAMMAR group 8, docs/code/errors.md): a
 // kind constructor `ValueError("msg")` builds an Err value carrying the kind and message
 // (the runtime `zrt_err`, the same value a guard-recovered abort yields), and
 // `err.message()` reads its message string. Reports false for any other call so `call`

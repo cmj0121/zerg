@@ -3,7 +3,7 @@ package build
 import "testing"
 
 // TestErrorRaiseGuardMatch is the end-to-end oracle for the fixed built-in error set
-// (docs/errors.md, GRAMMAR group 8): a function raises a named error, the caller's
+// (docs/code/errors.md, GRAMMAR group 8): a function raises a named error, the caller's
 // `guard` demotes the abort to a Result, a `match` destructures it, and `is` distinguishes
 // the kind while `.message()` reads the message. It confirms the kind survives the abort
 // round-trip.

@@ -253,7 +253,7 @@ typedef struct zrt_frame {
  * optional chained cause. It is INTERNAL — never FFI-frozen — so a later phase may
  * add fields without breaking any ABI (a Result is never FFI-safe). `raise e`,
  * `x!`, and an abort carry one; a surrounding `guard`/`?` reads it back. */
-/* zrt_err_kind is the FIXED, built-in error taxonomy (docs/errors.md, GRAMMAR group
+/* zrt_err_kind is the FIXED, built-in error taxonomy (docs/code/errors.md, GRAMMAR group
  * 8). Users choose from these named kinds but cannot define their own this phase. The
  * kind lets a `guard`/`?`-recovered Err be distinguished at the language surface (the
  * `is <Kind>` test lowers to `err.kind == <this>`), so a runtime abort ("ValueError:
@@ -360,7 +360,7 @@ _Noreturn void zrt_raise_err(zrt_err e);
  * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
 zrt_err zrt_taken_err(void);
 
-/* --- checked primitive conversions (conv.c, docs/types.md) ------------------
+/* --- checked primitive conversions (conv.c, docs/core/types.md) ------------------
  *
  * `T(x)` converts by re-construction; a narrowing conversion whose value does not
  * fit the target raises OverflowError. Each helper aborts through zrt_abort, so
@@ -379,7 +379,7 @@ uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi);
 int64_t  zrt_conv_i_from_f(double v, double lo, double hi);
 uint64_t zrt_conv_u_from_f(double v, double hi);
 
-/* --- str <-> list bridge (str.c, docs/collections.md) ----------------------
+/* --- str <-> list bridge (str.c, docs/code/collections.md) ----------------------
  *
  * A str bridges to a list[byte] (raw octets) or list[rune] (code points) for scanning
  * and editing; going TO a str validates the str invariant (valid UTF-8, no NUL) and

@@ -268,7 +268,7 @@ func (e *emitter) withStmt(n *ast.WithStmt) {
 func (e *emitter) raiseStmt(n *ast.RaiseStmt) {
 	// An Err-VALUED operand (a built-in error kind `raise ValueError("bad")`, or any
 	// value already of type Err) carries its own kind and message, so it is raised
-	// directly — this is what lets a `guard`/`?` recover the actual kind (docs/errors.md).
+	// directly — this is what lets a `guard`/`?` recover the actual kind (docs/code/errors.md).
 	// A `from cause` wraps it in a nested Err. A non-Err operand (a bare string, or a
 	// value with no display() yet) falls back to a message-only Err.
 	if isErrType(e.cur.ExprType(e.info, n.Value)) {

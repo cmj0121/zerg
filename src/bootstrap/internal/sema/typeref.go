@@ -148,7 +148,7 @@ func (c *checker) resolveTypeRef(ref *ast.TypeRef) types.Type {
 	if sum, ok := c.builtinSum(ref); ok {
 		return sum
 	}
-	// the built-in erased error `Err` (docs/errors.md, GRAMMAR group 8): the Right side
+	// the built-in erased error `Err` (docs/code/errors.md, GRAMMAR group 8): the Right side
 	// of a Result and the common carrier every built-in error kind constructs, nameable
 	// in a signature (`fn f(e: Err)`). The named kinds themselves are `is` targets and
 	// constructors, not distinct types — they all erase to Err.
@@ -215,7 +215,7 @@ func (c *checker) builtinGeneric(ref *ast.TypeRef) (types.Type, bool) {
 	return nil, false
 }
 
-// checkMapKey enforces the map key bound (docs/collections.md: `K: Hash`). This phase
+// checkMapKey enforces the map key bound (docs/code/collections.md: `K: Hash`). This phase
 // lands only the built-in Hash for int and str keys; any other concrete key type is
 // rejected with a clean diagnostic rather than reaching a backend with no vtable for it.
 // A bad/unknown key (a cascading error, or an unresolved generic parameter) is left

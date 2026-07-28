@@ -12,7 +12,7 @@ import (
 )
 
 // RUN-based tests for `fn main(args: list[str])` — the command-line arguments the
-// program receives (docs/package.md). The program name (argv[0]) is NOT included, so
+// program receives (docs/runtime/package.md). The program name (argv[0]) is NOT included, so
 // `args` is the program's own interface; the first real argument is `args[0]`.
 
 // runWithArgs compiles src, links it against the runtime with the counting allocator

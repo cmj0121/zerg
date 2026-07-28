@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// RUN-based tests for the `str` operators docs/collections.md gives the type — Add
+// RUN-based tests for the `str` operators docs/code/collections.md gives the type — Add
 // (`a + b` concatenates into a new str) and Ord (lexicographic by code point, with Eq
 // underneath). Each program is compiled, linked against the materialized runtime under
 // ASan+UBSan, and executed, so a passing test asserts a clean exit and exact stdout.

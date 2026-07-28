@@ -1,6 +1,6 @@
 package emit
 
-// This file carries the built-in list[T] container's C backend (docs/collections.md).
+// This file carries the built-in list[T] container's C backend (docs/code/collections.md).
 // A list is a by-value header (zrt_list, list.c) whose only heap is its element
 // buffer; the header copies/drops through value semantics exactly like a Ref or a
 // tuple carrier. Per distinct list ELEMENT type the backend emits:

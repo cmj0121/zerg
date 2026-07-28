@@ -3,7 +3,7 @@
 # The formal surface grammar of the Zerg language, written in W3C-style EBNF and
 # built up one grammar group at a time, from core to minor. This file is the single
 # source of truth for what is syntactically well-formed; the prose companion lives in
-# docs/grammar.md (and docs/grammar.zh-TW.md).
+# docs/surface/grammar.md (and docs/surface/grammar.zh-TW.md).
 #
 # ----------------------------------------------------------------------------------
 # Notation (W3C-style EBNF)
@@ -161,7 +161,7 @@ exponent    ::= ( 'e' | 'E' ) ( '+' | '-' )? dec-int
 # whitespace (quotes respected) — no interpolation, so no injection/glob/pipe. The interpolating f-form
 # 'f`...`' (group 5) instead runs through a SHELL and shell-quotes each '{ … }' hole ('{x:raw}' opts out).
 # It processes no backslash escapes (a raw text). The execution surface — pipes as Reader/Writer, the
-# process 'Ref[proc]' — is STDLIB (docs/io.md), not grammar.
+# process 'Ref[proc]' — is STDLIB (docs/runtime/io.md), not grammar.
 rune-lit    ::= "'" ( rune-char | escape ) "'"
 byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
@@ -745,4 +745,4 @@ asm-operand  ::= 'in'    '(' str-lit ')' expr      # a value into a register/con
 #                     STDLIB facility, not syntax — the stdlib binds foreign symbols and a
 #                     foreign call is UNSAFE (allowed only inside 'unsafe'). There is no
 #                     'extern' keyword. FFI EXPORT needs no syntax either: a package's 'pub'
-#                     surface already IS its C ABI (see docs/ffi.md).
+#                     surface already IS its C ABI (see docs/runtime/ffi.md).

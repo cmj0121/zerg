@@ -188,15 +188,18 @@ anything else appears among them — a comment, which belongs to the import it s
 would be stranded by sorting, or an `import pub`, whose re-export is an ordering the
 author chose.
 
-`F105` says where a closer goes once a group already spans lines. `F403` is what decides
-whether it spans them. A group is printed on one line when **both** hold:
+`F105` says where a closer goes once a group already spans lines. `F403` says what shape
+a group that spans them takes. **A line its author fitted on one line stays on one line** —
+this rule never breaks up a group that was not already broken.
 
-- printed flat, it ends before column 80 — a tab counts as 4;
-- it holds fewer than 6 top-level elements.
+A group its author DID break is joined back onto one line unless one of these vetoes it:
 
-Otherwise it breaks at **every** top-level comma. Never half of each: a group broken
-around one of its elements used to print the rest after the closer, leaving a `), 3`
-hanging off the end, which is neither shape.
+- printed flat, it would end at or past column 80 — a tab counts as 4;
+- it holds 6 or more top-level elements.
+
+When one does, the group breaks at **every** top-level comma instead. Never half of each:
+a group broken around one of its elements used to print the rest after the closer, leaving
+a `), 3` hanging off the end, which is neither shape.
 
 ```zerg
 x := sum(                        # before
@@ -215,6 +218,12 @@ y := sum(sum(1, 2), 3)
 Width is the real judgement and the count is the backstop for what width cannot see: six
 arguments read as a list to scan rather than a line to read, however short each one is.
 
+Neither threshold **orders** a break, and that is deliberate. The pass sees one group at a
+time rather than the whole line, so the group that crosses column 80 is the last one on
+the line rather than the one worth breaking — in `return 0 if a or b or c(x, y)` it is
+`c`, whose two arguments would go on three lines while the condition that actually made
+the line long, and that has no brackets to break at, stayed as it was.
+
 A group with **no top-level comma** is exempt from both. A chain and a parenthesised
 expression break where their author broke them — those breaks say where the steps are,
 not that the line ran out of room. What they get is the opener ending its own line, so
@@ -228,9 +237,12 @@ n := (
 ```
 
 Like `F401`, it declines outright when a comment is anywhere inside: a comment is
-something a person put there and joining lines has nowhere to put it back. Joining also
-drops the trailing comma, which is there to make a broken list's last element look like
-the others and on one line is a comma before a closer that nothing follows.
+something a person put there and joining lines has nowhere to put it back.
+
+The **trailing comma goes** either way, joined or split. On one line it is a comma before
+a closer that nothing follows; on several, a multi-line parameter list is the one place
+the grammar does not accept one, and dropping it in a signature while keeping it in a call
+would be one shape in two spellings.
 
 ### Which rules can be switched off
 

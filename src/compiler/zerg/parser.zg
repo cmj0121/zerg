@@ -173,6 +173,8 @@ pub fn parse(src: str) -> File {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
 			enums.append(parse_enum(p))
+		} else if p_at(p, Spec) {
+			parse_spec(p)
 		} else if p_at(p, Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
@@ -195,6 +197,44 @@ pub fn parse(src: str) -> File {
 # the import list alone and not the cost of keeping a whole parse around.
 pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
+}
+
+# parse_spec consumes a `spec S { … }` declaration whole and yields nothing.
+#
+# A spec is an INTERFACE: it declares signatures, and the code for them lives in the
+# `impl S for T` blocks, which parse_impl already reads. So there is nothing here to lower
+# — but there is something to skip, and skipping it correctly is the point. parse's
+# fallthrough advances ONE token, which left the body's `fn show() -> str` to be read as a
+# top-level function with no block; the emitter then wrote a non-void C function with an
+# empty body, which is undefined behaviour that only warns.
+#
+# Provided default methods inside a spec are not supported yet and are skipped with the
+# rest of the block.
+fn parse_spec(mut &p: Parser) {
+	p_advance(p) # 'spec'
+	skip_to_block_end(p)
+}
+
+# skip_to_block_end consumes tokens through the matching `}` of the next `{`. Anything
+# before that brace — a name, generic parameters, a bound — goes with it.
+fn skip_to_block_end(mut &p: Parser) {
+	for not p_at(p, LBrace) and not p_at(p, Eof) {
+		p_advance(p)
+	}
+	return if p_at(p, Eof)
+	mut depth := 0
+	for not p_at(p, Eof) {
+		if p_at(p, LBrace) {
+			depth = depth + 1
+		} else if p_at(p, RBrace) {
+			depth = depth - 1
+			if depth == 0 {
+				p_advance(p)
+				return
+			}
+		}
+		p_advance(p)
+	}
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so

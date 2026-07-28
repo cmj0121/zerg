@@ -147,46 +147,62 @@ syntax match zergWildcard "\<_\>"
 
 " --- example code inside a comment ---------------------------------------------
 
-" A fenced block in a comment is Zerg, and reads as Zerg:
+" A code example in a comment is Zerg, and reads as Zerg. It is marked with a
+" doctest prompt: `>>>` opens a top-level item, `...` continues it.
 "
-"   # ```zerg
-"   # fn main() {
-"   #     print greet("world")
-"   # }
-"   # ```
+"   # >>> fn main() {
+"   # ...     print greet("world")
+"   # ... }
 "
-" The fence is explicit on purpose, the way Rust marks a doc example rather than
-" the way Go infers one from indentation. A comment carries both kinds of block —
-" source, and a sample of what the program PRINTS — and inferring from layout
-" alone highlights the second one as if it were the first: in this repo's own
-" `cli` module a pasted help screen would light up `Options:` as a field name,
-" `--output` as operators and `VALUE` as a type. Wrong highlighting is worse than
-" none, so the author says which is which and the highlighter never guesses.
+" Which prompt a line carries is an authoring convention, not a distinction this
+" file parses — both mean "the rest of this line is Zerg".
 "
-" The '#' that opens each line stays a comment; everything after it is code. It is
-" matched at the START of the line, so it wins over the ordinary comment rule
-" (which begins at the '#' itself, one column later), while a '#' further along
-" the line is still an ordinary comment — the example's own comments keep working.
-" The contents are named rather than taken as `TOP`. TOP would be every non-contained item
-" — which includes zergCommentBar's competitor, the ordinary comment rule — and that one
-" swallows the line from the '#' onward, leaving the example a comment again. The bar has
-" to be the item that claims the '#', so the set is explicit and the bar leads it.
+" The marker is EXPLICIT, and that is the load-bearing decision. A comment carries
+" two kinds of indented block — source, and a sample of what the program PRINTS —
+" and inferring from layout alone highlights the second as if it were the first:
+" in this repo's own `cli` module a pasted help screen would light up `Options:`
+" as a field name, `--output` as operators and `VALUE` as a type. Wrong
+" highlighting is worse than none, so the author says which is which and the
+" highlighter never guesses.
 "
-" Being explicit means it can be forgotten, and it had been: zergDocComment was missing, so
-" a '##' line inside an example went unhighlighted, the ordinary comment rule refusing '##'
-" on purpose. Anything added above belongs here too.
+" It is a PROMPT rather than a ``` fence because comments are to become
+" documentation, and that generator emits markdown — so ``` is the output syntax.
+" Spelling the input the same way would leave a generator that must pass one
+" through while producing the other with no way to tell them apart by looking.
+"
+" There is no `matchgroup`: with one, the whole start match — including the '#' —
+" takes the group's colour, and the '#' would read as a different kind of thing
+" than every other '#' in the file. Without one the start text belongs to the
+" region and its contained items claim it, so the bar takes the '#' and the prompt
+" takes the prompt.
+"
+" The bar is matched at the START of the line, so it wins over the ordinary comment
+" rule (which begins at the '#' itself, one column later), while a '#' further
+" along the line is still an ordinary comment — the example's own comments keep
+" working. The contents are named rather than taken as `TOP`: TOP would include
+" that ordinary comment rule, which swallows the line from the '#' onward and
+" leaves the example a comment again.
+"
+" Being explicit means the list can be forgotten, and it had been — zergDocComment
+" was missing, so a '##' line inside an example went unhighlighted. Anything added
+" above belongs here too.
 syntax match zergCommentBar "^\s*#" contained
 
-syntax cluster zergCodeItems contains=zergCommentBar,zergComment,zergDocComment,
-      \zergDecorator,zergStatement,zergKeyword,zergDanger,zergOperator,zergType,
-      \zergBoolean,zergConstant,zergNumber,zergFloat,zergCharacter,zergString,
-      \zergRawString,zergFString,zergDeclName,zergCall,zergWildcard
+" The prompt is anchored behind the '#' so a `...` in code is never mistaken for
+" one. (`..` and `..=` are range operators; `...` is not an operator at all.) The
+" lookbehind is width-bounded, the same idiom the `impl … for` rule above uses.
+syntax match zergDocPrompt "\%(^\s*#\s\+\)\@40<=\%(>>>\|\.\.\.\)" contained
 
-syntax region zergCommentCode
-      \ matchgroup=zergCommentFence
-      \ start="^\s*#\s*```\%(\w\+\)\?\s*$"
-      \ end="^\s*#\s*```\s*$"
-      \ contains=@zergCodeItems
+syntax cluster zergCodeItems contains=zergCommentBar,zergDocPrompt,zergComment,
+      \zergDocComment,zergDecorator,zergStatement,zergKeyword,zergDanger,
+      \zergOperator,zergType,zergBoolean,zergConstant,zergNumber,zergFloat,
+      \zergCharacter,zergString,zergRawString,zergFString,zergDeclName,zergCall,
+      \zergWildcard
+
+" One line, one region: `end="$"` with keepend means there is no start/end pair to
+" get wrong and no unterminated-marker failure mode.
+syntax region zergCommentCode start="^\s*#\s\+\%(>>>\|\.\.\.\)" end="$"
+      \ keepend contains=@zergCodeItems
 
 " --- sync ----------------------------------------------------------------------
 
@@ -226,7 +242,7 @@ highlight default link zergTodo       Todo
 highlight default link zergEscapeError Error
 highlight default link zergDecorator  PreProc
 highlight default link zergCommentBar   Comment
-highlight default link zergCommentFence SpecialComment
+highlight default link zergDocPrompt   SpecialComment
 highlight default link zergFormatSpec Special
 highlight default link zergFormatConv Special
 

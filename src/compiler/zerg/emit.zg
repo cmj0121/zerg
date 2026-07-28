@@ -823,14 +823,26 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 	return false
 }
 
-# c_conv lowers a type conversion. str(bytes) and list[byte](str) go through the emitted
-# string helpers; the scalar casts are plain C casts.
+# c_conv lowers a type conversion. list[byte](str) goes through the emitted string helper
+# and the scalar casts are plain C casts; `str(x)` is the one that reads its SOURCE type.
+#
+# `str` is two conversions wearing one name. Over a `list[byte]` it is the bridge back to a
+# string — the meaning every `str(out)` in this tree relies on. Over anything else it is
+# `display()`: the text a value shows as, which is what `print` writes and what an
+# f-string's `{x}` interpolates.
+#
+# Dispatching on the source is what makes the second of those exist at all. Emitting the
+# bridge unconditionally handed `zgs_from_bytes` an `int64_t`, so `str(n)` was not a thing
+# anyone could write — a cc type error with no Zerg diagnostic in front of it. The three
+# display leaves are already in the runtime header for the seed's f-strings.
 fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	inner := c_expr(em, x, sb)
 	if c_is_str(ty) {
 		em.used_str = true
 		em.used_rt = true
-		return "zgs_from_bytes(" + inner + ")"
+		return inner if c_is_str(c_infer(em, x))
+		return "zgs_from_bytes(" + inner + ")" if c_is_list(c_infer(em, x))
+		return c_display(c_infer(em, x), inner)
 	}
 	if c_is_list(ty) {
 		em.used_str = true
@@ -838,6 +850,18 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 		return "zgs_to_bytes(" + inner + ")"
 	}
 	return "((" + c_type(ty) + ")(" + inner + "))"
+}
+
+# c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
+# through the unsigned one, and anything whose type did not survive inference falls to the
+# integer one — where the C cast is what reports it, rather than this pass guessing.
+fn c_display(t: Ty, inner: str) -> str {
+	return match t {
+		TBool => "zrt_display_bool(" + inner + ")"
+		TFloat => "zrt_display_float((double)(" + inner + "))"
+		TByte => "zrt_display_uint((uint64_t)(" + inner + "))"
+		_ => "zrt_display_int((int64_t)(" + inner + "))"
+	}
 }
 
 # c_index lowers `xs[i]` to a runtime list read, casting the element pointer to the

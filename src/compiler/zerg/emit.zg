@@ -1471,6 +1471,17 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 	return out
 }
 
+# c_init_calls is the `init()` invocations main opens with, in declaration order.
+fn c_init_calls(f: File) -> str {
+	mut out := ""
+	for fd in f.fns {
+		if is_init_name(fd.name) {
+			out = out + "    zg_" + fd.name + "();\n"
+		}
+	}
+	return out
+}
+
 fn c_range_unsupported() -> str {
 	raise "a range is only supported as a `for … in` iterable so far, not as a value"
 }
@@ -1924,12 +1935,15 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	}
 	mut mainw := ""
 	if c_has_main(own) {
+		# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
+		# each once
+		inits := c_init_calls(own)
 		if c_main_has_args(own) {
 			# main(args): build the arg list from argv via the runtime
 			em.used_rt = true
-			mainw = "int main(int argc, char** argv) {\n    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
+			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
 		} else {
-			mainw = "int main(void) {\n    zg_main();\n    return 0;\n}\n"
+			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
 		}
 	}
 

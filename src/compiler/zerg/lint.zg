@@ -49,7 +49,8 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 # the runtime calls it, so it is never "unused" no matter what the source says.
 fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str]) {
 	for fd in f.fns {
-		if fd.is_pub or fd.name == "main" {
+		# `init` is called by the generated main, the same way the runtime calls `main`
+		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
 			continue_marker()
 		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
 			out.append(f"L102 private function `{fd.name}` is never called")

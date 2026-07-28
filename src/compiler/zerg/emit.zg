@@ -1473,13 +1473,14 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
 	c_add_var(em, var, elem)
+	cv := c_var_cname(em, var)
 
 	# wrap in a block and materialize the iterable into a local so a call-result rvalue is
 	# addressable and sequential loops do not clash on the temp name
 	in2 := ind + "    "
 	mut out := ind + "{\n" + in2 + "zrt_list zg_it = " + it + ";\n"
 	out = out + in2 + "for (size_t zg_i = 0; zg_i < zrt_list_len(&zg_it); zg_i++) {\n"
-	out = out + in2 + "    " + et + " zg_" + var + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
+	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
 	out = out + c_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	return out + ind + "}\n"

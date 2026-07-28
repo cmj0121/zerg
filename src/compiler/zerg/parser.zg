@@ -570,6 +570,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	return parse_if(p) if k == If
 	return parse_for(p) if k == For
 
+	if k == Defer {
+		p_advance(p)
+		return SDefer(parse_expr(p))
+	}
 	if k == Guard {
 		# guard { ... } (optionally with a trailing else): the subset runs the happy
 		# path only, so emit the guarded block's statements

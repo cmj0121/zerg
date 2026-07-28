@@ -99,6 +99,10 @@ enum Stmt {
 	SBreak
 	SContinue
 	SNop
+
+	# SDefer is `defer f(a)`. GRAMMAR runs it at the enclosing BLOCK's exit, on every path
+	# out, last-scheduled-first.
+	SDefer(Expr)
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable

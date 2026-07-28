@@ -156,6 +156,7 @@ pub fn parse(src: str) -> File {
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
+	mut consts: list[Stmt] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Import) {
@@ -172,6 +173,11 @@ pub fn parse(src: str) -> File {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
 			enums.append(parse_enum(p))
+		} else if p_at(p, Const) {
+			# `const` at the top level is a module constant, not a statement: it becomes a
+			# C global rather than a local of any function
+			p_advance(p)
+			consts.append(parse_binding(p, false))
 		} else if p_at(p, Init) {
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
@@ -181,7 +187,7 @@ pub fn parse(src: str) -> File {
 		}
 		skip_semis(p)
 	}
-	return File(imports, structs, enums, fns)
+	return File(imports, structs, enums, fns, consts)
 }
 
 # imports_of returns just the import paths of a source, for the driver's module loader:

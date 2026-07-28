@@ -163,6 +163,10 @@ pub struct File {
 	structs: list[StructDecl]
 	enums: list[EnumDecl]
 	fns: list[FnDecl]
+
+	# consts are the module-level `const` bindings, each an SLet. They are not statements
+	# of any function: they become C globals, assigned once before anything runs.
+	consts: list[Stmt]
 }
 
 # --- rendering ---------------------------------------------------------------------------

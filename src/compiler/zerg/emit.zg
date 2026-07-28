@@ -63,6 +63,12 @@ struct Emitter {
 	# site is nowhere near it, which is the whole reason it has to be in a table.
 	pr_hasdef: list[bool]
 	pr_def: list[Expr]
+
+	# k_names / k_tys are the module CONSTANTS. They are C globals, so they are in scope
+	# in every function — c_reset_env seeds the per-function env from them rather than
+	# starting empty, which is what lets a body name one.
+	k_names: list[str]
+	k_tys: list[Ty]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -204,6 +210,16 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_tys = []
 	em.env_cnames = []
 	em.ref_names = []
+
+	# a module constant is a global: in scope everywhere, so every function body starts
+	# with them already bound
+	mut i := 0
+	for i < em.k_names.len() {
+		em.env_names.append(em.k_names[i])
+		em.env_tys.append(em.k_tys[i])
+		em.env_cnames.append("zg_" + em.k_names[i])
+		i = i + 1
+	}
 }
 
 fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
@@ -1471,6 +1487,45 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 	return out
 }
 
+# c_const_globals declares each module constant as a C global and records its type, so
+# c_reset_env can put it in scope. The VALUE is not written here: a C global's initializer
+# must be a constant expression and `const s = "a" + "b"` is not one, so the assignment
+# goes into main alongside the init() calls — which is also what makes the order defined.
+fn c_const_globals(mut &em: Emitter, f: File) -> str {
+	mut out := ""
+	for c in f.consts {
+		name := c_let_name(c)
+		ty := c_infer(em, c_let_value(c))
+		em.k_names.append(name)
+		em.k_tys.append(ty)
+		out = out + f"static {c_type(ty)} zg_{name};\n"
+	}
+	return out
+}
+
+# c_const_assigns is the constants' values, assigned before any init() runs.
+fn c_const_assigns(mut &em: Emitter, f: File) -> str {
+	mut out := ""
+	for c in f.consts {
+		out = out + f"    zg_{c_let_name(c)} = {c_expr(em, c_let_value(c), c_nosub())};\n"
+	}
+	return out
+}
+
+fn c_let_name(s: Stmt) -> str {
+	return match s {
+		SLet(n, _, _, _, _) => n
+		_ => ""
+	}
+}
+
+fn c_let_value(s: Stmt) -> Expr {
+	return match s {
+		SLet(_, _, _, _, v) => v
+		_ => ENil
+	}
+}
+
 # c_init_calls is the `init()` invocations main opens with, in declaration order.
 fn c_init_calls(f: File) -> str {
 	mut out := ""
@@ -1816,6 +1871,7 @@ pub fn merge_files(srcs: list[str]) -> File {
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
+	mut consts: list[Stmt] = []
 	mut i := 0
 	for i < srcs.len() {
 		f := parse(srcs[i])
@@ -1831,9 +1887,12 @@ pub fn merge_files(srcs: list[str]) -> File {
 		for fnd in f.fns {
 			fns.append(fnd)
 		}
+		for c in f.consts {
+			consts.append(c)
+		}
 		i = i + 1
 	}
-	return File(imports, structs, enums, fns)
+	return File(imports, structs, enums, fns, consts)
 }
 
 # emit_files lowers several sources to one C translation unit — the whole program in one
@@ -1861,7 +1920,11 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
 	mut fns: list[FnDecl] = []
+	mut consts: list[Stmt] = []
 	for f in fs {
+		for c in f.consts {
+			consts.append(c)
+		}
 		for im in f.imports {
 			imports.append(im)
 		}
@@ -1875,7 +1938,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 			fns.append(fnd)
 		}
 	}
-	return File(imports, structs, enums, fns)
+	return File(imports, structs, enums, fns, consts)
 }
 
 # c_emit_file lowers a parsed File. The body is generated first (so list use sets
@@ -1892,7 +1955,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -1921,6 +1984,8 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	# prototypes and bodies, which are what call them
 	types = types + c_copy_helpers(em, f)
 
+	# the constants are declared before the prototypes, so a body may name one
+	globals := c_const_globals(em, f)
 	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
@@ -1937,7 +2002,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if c_has_main(own) {
 		# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
 		# each once
-		inits := c_init_calls(own)
+		inits := c_const_assigns(em, own) + c_init_calls(own)
 		if c_main_has_args(own) {
 			# main(args): build the arg list from argv via the runtime
 			em.used_rt = true
@@ -1971,7 +2036,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if em.used_str {
 		hdr = hdr + c_str_helpers()
 	}
-	return f"{hdr}{types}{protos}\n{defs}{mainw}"
+	return f"{hdr}{types}{globals}{protos}\n{defs}{mainw}"
 }
 
 # c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,

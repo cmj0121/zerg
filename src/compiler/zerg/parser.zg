@@ -614,13 +614,24 @@ fn parse_and(mut &p: Parser) -> Expr {
 
 # parse_cmp is non-associative: at most one comparison operator.
 fn parse_cmp(mut &p: Parser) -> Expr {
-	left := parse_add(p)
+	left := parse_range(p)
 	if is_cmp_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		return EBinary(op, left, parse_add(p))
+		return EBinary(op, left, parse_range(p))
 	}
 	return left
+}
+
+# parse_range reads `a..b` and `a..=b`. GRAMMAR puts this level between comparison and
+# addition, which is what makes `v in 0..10` read as `v in (0..10)` rather than
+# `(v in 0)..10` — the bound is an add-expr, so arithmetic inside it needs no parentheses.
+fn parse_range(mut &p: Parser) -> Expr {
+	lo := parse_add(p)
+	k := cur_kind(p)
+	return lo if k != DotDot and k != DotDotEq
+	p_advance(p)
+	return ERange(lo, parse_add(p), k == DotDotEq)
 }
 
 fn parse_add(mut &p: Parser) -> Expr {

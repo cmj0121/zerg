@@ -27,6 +27,7 @@
 #         `return x if c`, `break if c`, `continue if c`
 #   F402  imports group — standard library first, then the rest — each group alphabetical
 #   F403  an argument list is one line, or one element per line — never half of each
+#   F404  two or more imports become one parenthesized group
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -53,6 +54,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	}
 	if not fmt_is_off(off, "F402") {
 		toks = fmt_imports(toks)
+	}
+	if not fmt_is_off(off, "F404") {
+		toks = fmt_import_group(toks)
 	}
 	if not fmt_is_off(off, "F403") {
 		toks = fmt_wrap(toks)
@@ -705,6 +709,13 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				broke = true
 			} else if col > 0 and t.line > prev_line and not is_rbrace(t.kind) {
 				out.append(byte(10))
+				# F104 applies inside a group as well as between statements. Only the other
+				# branch used to check for it, so a blank line a person left among a wrapped
+				# list's elements — the separator between an import group's two halves, for
+				# one — was closed up as if it had never been written.
+				if t.line > prev_line + 1 {
+					out.append(byte(10))
+				}
 				mut ci := depth + 1
 				if psp > 0 {
 					ci = pind[psp - 1] + psp
@@ -940,6 +951,152 @@ fn is_comment(k: Kind) -> bool {
 	}
 }
 
+# --- rule F404: many imports become one parenthesized group --------------------------------
+#
+# GRAMMAR gives `import` two forms, one spec or a parenthesized list of them, and says the
+# formatter writes one spec per line. Two or more imports become the group:
+#
+#     import "cli"          import (
+#     import "io"      →        "cli"
+#                               "io"
+#                           )
+#
+# ONE import is left as it is, which is gofmt's answer and for gofmt's reason: the group's
+# job is to hold a list together, and a list of one is the statement itself with two lines
+# of ceremony around it.
+#
+# Unlike F402 this rule takes `pub` and `as` with it. Those are what F402 declines over
+# because it REORDERS — a re-export is an ordering the author chose — and this rule moves
+# nothing past anything, so the objection does not apply. `import ( pub "…" )` is the spec
+# grammar as GRAMMAR writes it.
+#
+# It runs AFTER F402, so the blank line between the standard library and the rest survives
+# into the group, where it is the same separator Go's is.
+#
+# A comment among the imports declines the whole run, for F401's reason: a comment belongs
+# to the import it sits on, and there is nowhere to put it back once the statements it sat
+# between are one statement. A run already in group form is left alone, which is what makes
+# running the rule twice a no-op.
+fn fmt_import_group(toks: list[Token]) -> list[Token] {
+	first := fmt_first_import(toks)
+	return toks if first < 0
+	last := fmt_group_run_end(toks, first)
+	return toks if last < 0
+	return toks if fmt_run_specs(toks, first, last) < 2
+	mut out: list[Token] = []
+	mut i := 0
+	for i < first {
+		out.append(toks[i])
+		i = i + 1
+	}
+	end := fmt_emit_group(toks, first, last, out)
+	# Every token after the run shifts by however many lines the run grew, so the blank
+	# line the author left before the next declaration is still there.
+	shift := end - toks[last].line
+	mut j := last + 1
+	for j < toks.len() {
+		out.append(fmt_on_line(toks[j], toks[j].line + shift))
+		j = j + 1
+	}
+	return out
+}
+
+# fmt_emit_group writes `import (`, one spec per line, and the `)`, and answers with the
+# line the closer landed on. Each spec keeps its own tokens — `pub`, the path, `as` and the
+# name — so nothing is re-spelled from a value that was parsed out of it.
+fn fmt_emit_group(toks: list[Token], first: int, last: int, mut &out: list[Token]) -> int {
+	ln := toks[first].line
+	out.append(Token(Import, "import", "", ln, 0))
+	out.append(Token(LParen, "(", "", ln, 0))
+	mut cur := ln
+	mut src := - 1
+	mut i := first
+	for i <= last {
+		if toks[i].kind == Import {
+			cur = cur + 1
+			# a blank line between two imports is the group separator F402 wrote, and it
+			# means the same thing inside the parentheses as it did outside them
+			if src >= 0 and toks[i].line > src + 1 {
+				cur = cur + 1
+			}
+			src = toks[i].line
+			mut j := i + 1
+			for j <= last and toks[j].kind != Import and not is_semi(toks[j].kind) {
+				out.append(fmt_on_line(toks[j], cur))
+				j = j + 1
+			}
+			i = j
+		} else {
+			i = i + 1
+		}
+	}
+	cur = cur + 1
+	out.append(Token(RParen, ")", "", cur, 0))
+	out.append(Token(Semi, ";", "", cur, 0))
+	return cur
+}
+
+# fmt_group_run_end is the index of the last token of the run of import statements starting
+# at `first`, or -1 when the run holds something this rule will not fold up.
+fn fmt_group_run_end(toks: list[Token], first: int) -> int {
+	mut i := first
+	mut last := - 1
+	for i < toks.len() {
+		k := toks[i].kind
+		if k == Import {
+			# already a group: folding a fold is what would make this rule non-idempotent
+			return - 1 if toks[i + 1].kind == LParen
+			mut j := i + 1
+			if toks[j].kind == Pub {
+				j = j + 1
+			}
+			return - 1 if toks[j].kind != Str
+			j = j + 1
+			if toks[j].kind == As {
+				j = j + 1
+				return - 1 if toks[j].kind != Ident
+				j = j + 1
+			}
+			last = j - 1
+			i = j
+		} else if is_semi(k) {
+			last = i
+			i = i + 1
+		} else if is_comment(k) and fmt_more_imports_after(toks, i) {
+			# a comment BETWEEN imports: it belongs to the one it sits on and the fold has
+			# nowhere to put it back. A comment after the run is just the next
+			# declaration's, and ends the run rather than declining it.
+			return - 1
+		} else {
+			return last
+		}
+	}
+	return last
+}
+
+fn fmt_more_imports_after(toks: list[Token], at: int) -> bool {
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+		return true if k == Import
+		return false if not is_semi(k) and not is_comment(k)
+		i = i + 1
+	}
+	return false
+}
+
+fn fmt_run_specs(toks: list[Token], first: int, last: int) -> int {
+	mut n := 0
+	mut i := first
+	for i <= last {
+		if toks[i].kind == Import {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n
+}
+
 # --- rule F402: imports group, standard library first, each group alphabetical -------------
 #
 # The Go convention, and for the same reason: an import list is READ far more often than it
@@ -947,10 +1104,16 @@ fn is_comment(k: Kind) -> bool {
 # rather than by scanning. The standard library goes first because it is the part a reader
 # already knows; everything else is what this program brought.
 #
-#     import "cli"          import "cli"
-#     import "zerg"    →    import "io"
-#     import "io"
-#                           import "zerg"
+#     import "cli"          import (
+#     import "zerg"    →        "cli"
+#     import "io"               "io"
+#
+#                               "zerg"
+#                           )
+#
+# The parentheses are F404, which runs next and folds what this rule has just ordered —
+# they are in the picture because it is what `zerg fmt` prints, and a comment showing the
+# intermediate state would be showing something nobody ever sees.
 #
 # What counts as standard library is the fixed bundled set, named below. The formatter
 # cannot ask the filesystem — it is handed a string, not a directory — and the set is

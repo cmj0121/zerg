@@ -8,8 +8,10 @@
 # Trivia (comments, blank lines) is not retained: the `--emit tokens` view the diff-test
 # oracle prints never shows it, so the subset lexer simply drops it. The interpolation
 # forms (f-strings, f-cmds, decorators) are deferred; they do not appear in the M1 corpus.
-import "ascii"
-import "strconv"
+import (
+	"ascii"
+	"strconv"
+)
 
 # Lex holds the scan state. `stack` + `sp` implement the brace-depth stack over an
 # append-only list (list has no pop): push writes at sp and bumps it, pop just drops sp.

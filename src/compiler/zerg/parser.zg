@@ -153,10 +153,7 @@ pub fn parse(src: str) -> File {
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Import) {
-			path := parse_import(p)
-			if path != "" {
-				imports.append(path)
-			}
+			parse_import(p, imports)
 		} else if p_at(p, Pub) {
 			# `pub` binds to the declaration that follows it
 			p_advance(p)
@@ -186,23 +183,63 @@ pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
 }
 
-# parse_import reads `import "path"` and yields the quoted path. The `pub` prefix form
-# and the parenthesized group are outside the subset the compiler's own source uses, so
-# they are consumed and yield "" rather than a half-read path.
-fn parse_import(mut &p: Parser) -> str {
-	p_advance(p)
-	# `import pub "x"` re-exports what it imports. The driver has to LOAD it either way —
-	# a re-exported module is part of the program — so the marker is consumed and the
-	# path read as usual.
+# parse_import reads both forms GRAMMAR gives an import — one spec, or a parenthesized
+# group of them — and appends every path it binds.
+#
+# The group matters more than it looks: F404 writes it, and a parser that skipped it would
+# hand the driver an EMPTY import list for a file that imports things. Nothing would fail
+# at the parse — the module loader would simply not load `io`, and the failure would
+# surface later and elsewhere as an unknown name.
+fn parse_import(mut &p: Parser, mut &imports: list[str]) {
+	p_advance(p) # 'import'
+	if not p_at(p, LParen) {
+		path := parse_import_spec(p)
+		if path != "" {
+			imports.append(path)
+		}
+		return
+	}
+	p_advance(p) # '('
+	skip_semis(p)
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		at := p.pos
+		path := parse_import_spec(p)
+		if path != "" {
+			imports.append(path)
+		}
+		# a spec that read nothing would leave the position where it was: step over the
+		# token rather than reading it forever
+		if p.pos == at {
+			p_advance(p)
+		}
+		skip_semis(p)
+	}
+	if p_at(p, RParen) {
+		p_advance(p)
+	}
+}
+
+# parse_import_spec reads `pub? "path" (as name)?` and yields the path, or "" when what is
+# there is not a spec at all.
+#
+# `pub` re-exports what it imports. The driver has to LOAD it either way — a re-exported
+# module is part of the program — so the marker is consumed and the path read as usual.
+# `as` renames the namespace, which is a binding this parser does not track, so the name
+# is consumed and the path is what comes back.
+fn parse_import_spec(mut &p: Parser) -> str {
 	if p_at(p, Pub) {
 		p_advance(p)
 	}
-	if p_at(p, Str) {
-		t := cur(p)
-		p_advance(p)
-		return t.value # the decoded path, without its quotes
+	return "" if not p_at(p, Str)
+	t := cur(p)
+	p_advance(p) # the path
+	if p_at(p, As) {
+		p_advance(p) # 'as'
+		if p_at(p, Ident) {
+			p_advance(p)
+		}
 	}
-	return ""
+	return t.value # the decoded path, without its quotes
 }
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {

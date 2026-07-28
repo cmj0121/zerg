@@ -60,9 +60,7 @@ pub fn write_int(n: int) -> Result[nil] {
 		}
 		digits.append(byte(48 + digit)) # 48 == '0'
 		v = v / 10
-		if v == 0 {
-			break
-		}
+		break if v == 0
 	}
 	if neg {
 		digits.append(byte(45))
@@ -71,9 +69,7 @@ pub fn write_int(n: int) -> Result[nil] {
 	mut i := digits.len() - 1
 	for {
 		out.append(digits[i])
-		if i == 0 {
-			break
-		}
+		break if i == 0
 		i = i - 1
 	}
 	return write(str(out))
@@ -89,9 +85,7 @@ pub fn read_file(path: str) -> list[byte] {
 	mut out: list[byte] = []
 	for {
 		chunk := __zrt_read(fd)
-		if chunk.len() == 0 {
-			break
-		}
+		break if chunk.len() == 0
 		for b in chunk {
 			out.append(b)
 		}
@@ -108,9 +102,7 @@ pub fn read_stdin() -> list[byte] {
 	mut out: list[byte] = []
 	for {
 		chunk := __zrt_read(0)
-		if chunk.len() == 0 {
-			break
-		}
+		break if chunk.len() == 0
 		for b in chunk {
 			out.append(b)
 		}

@@ -704,8 +704,20 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				if prev_line > 0 and t.line > prev_line + 1 {
 					out.append(byte(10))
 				}
-				fmt_indent(out, depth)
-				col = depth
+				# A line can also start with no break of its own to account for: after a
+				# comment, which runs to end of line, or after a `}`. Inside a group that is
+				# still open it belongs at the group's indent all the same — otherwise a
+				# comment among a wrapped list's elements dropped the element after it back
+				# to the statement's own level.
+				mut ci := depth
+				if psp > 0 {
+					ci = pind[psp - 1] + psp
+					if is_close(t.kind) {
+						ci = ci - 1
+					}
+				}
+				fmt_indent(out, ci)
+				col = ci
 			} else if not broke and fmt_space_between(prev, t.kind) {
 				# a line just broken is at its indent and nothing more: the spacing rule
 				# asks about two tokens ON a line, and after `x,` it would put the space

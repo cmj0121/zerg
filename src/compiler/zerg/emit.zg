@@ -802,6 +802,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 			em.used_rt = true
 			return f"zgs_concat({c_expr(em, a, sb)}, {c_expr(em, b, sb)})"
 		}
+
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) == 0)" if oper == "=="
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) != 0)" if oper == "!="
 	}
@@ -840,6 +841,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	if c_is_str(ty) {
 		em.used_str = true
 		em.used_rt = true
+
 		return inner if c_is_str(c_infer(em, x))
 		return f"zgs_from_bytes({inner})" if c_is_list(c_infer(em, x))
 
@@ -1064,6 +1066,7 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
 	# helpers: it needs two answers about the same parameter, and asking twice would walk
 	# the whole program's parameter table twice for every argument of every call
 	row := c_param_row(em, fname, idx)
+
 	return f"&({c_expr(em, a, sb)})" if row >= 0 and em.pr_ref[row]
 	return c_expr(em, a, sb) if row < 0
 

@@ -211,6 +211,27 @@ interpolating command form, each refused by name rather than by silence. It desu
 the parser to the `+` chain the form is defined to be, so the AST and the emitter know
 nothing about f-strings at all.
 
+## What the shipped compiler accepts
+
+The Zerg-boot list above answers a different question from this one. It says what the
+**seed** must keep to build stage 1; it does not say what `zerg` itself understands, and
+the two have been drifting apart. What the shipped compiler accepts beyond that subset:
+
+| form                              | note                                              |
+| --------------------------------- | ------------------------------------------------- |
+| `a..b` / `a..=b`, `for i in a..b` | as a `for` iterable; as a value it is refused     |
+| `init()`                          | many, each once, in declaration order             |
+| module-level `const`              | a C global, assigned before any `init()`          |
+| `spec S { … }`                    | consumed whole; `impl S for T` already worked     |
+| `(a, b)` and `t.0`                | one carrier struct per distinct shape             |
+| `map[K,V]`, `{k: v}`, `{:}`       | POD keys and values                               |
+| `defer f(args)`                   | at the enclosing block's exit, arguments by value |
+
+Still missing, and each is refused by name rather than mis-emitted where the parser can
+tell: closures and `fn` values, `spawn` / `chan` / `select`, generic **function**
+definitions, slicing `xs[a..b]` (which needs a runtime leaf that does not exist yet),
+and the command literal.
+
 ## Performance: parallelism & caching (M7)
 
 A post-fixpoint performance layer. Correctness and a deterministic fixpoint come first

@@ -789,6 +789,11 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EConv(ty, x) => c_conv(em, ty, x, sb)
 		EIf(cond, then_e, else_e) => f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
+		# A range reaching HERE is one used as a value — a slice bound or a match arm —
+		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
+		# forms have no lowering yet, and saying so is better than emitting something that
+		# reads as an int.
+		ERange(lo, hi, inclusive) => c_range_unsupported()
 	}
 }
 
@@ -1277,6 +1282,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EConv(ty, x) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer(em, arms[0].body)
+		ERange(lo, hi, inclusive) => TUnknown
 	}
 }
 
@@ -1465,8 +1471,68 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 	return out
 }
 
+fn c_range_unsupported() -> str {
+	raise "a range is only supported as a `for … in` iterable so far, not as a value"
+}
+
+fn c_is_range(e: Expr) -> bool {
+	return match e {
+		ERange(_, _, _) => true
+		_ => false
+	}
+}
+
+# The range accessors. emit.zg's match is an EXPRESSION — every arm yields a value — so a
+# node is taken apart one field at a time rather than in a block-bodied arm.
+fn c_range_lo(e: Expr) -> Expr {
+	return match e {
+		ERange(a, _, _) => a
+		_ => ENil
+	}
+}
+
+fn c_range_hi(e: Expr) -> Expr {
+	return match e {
+		ERange(_, b, _) => b
+		_ => ENil
+	}
+}
+
+fn c_range_incl(e: Expr) -> bool {
+	return match e {
+		ERange(_, _, incl) => incl
+		_ => false
+	}
+}
+
+# c_forrange lowers `for v in a..b` to a counted loop. The loop variable is an int and is
+# in scope for the body, which is what makes the bound expressions ordinary ints too. The
+# upper bound is read once into a temp, so an expression bound is not re-evaluated on
+# every iteration the way a C `for` header would.
+fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	lo := c_expr(em, c_range_lo(iter), c_nosub())
+	hi := c_expr(em, c_range_hi(iter), c_nosub())
+	c_add_var(em, var, TInt)
+	# the C name the binding actually took: a second loop over the same source name is a
+	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zg_v`
+	cv := c_var_cname(em, var)
+	mut cmp := " < "
+	if c_range_incl(iter) {
+		cmp = " <= "
+	}
+	in2 := ind + "    "
+	mut out := ind + "{\n" + in2 + "int64_t zg_hi = " + hi + ";\n"
+	out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + cmp + "zg_hi; " + cv + "++) {\n"
+	out = out + c_block(em, body, in2 + "    ")
+	out = out + in2 + "}\n"
+	return out + ind + "}\n"
+}
+
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
 fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	# A RANGE is not a container, so it never touches the list runtime: `for i in a..b` is
+	# the counted C loop it already means.
+	return c_forrange(em, var, iter, body, ind) if c_is_range(iter)
 	em.used_rt = true
 
 	elem := c_list_elem(c_infer(em, iter))

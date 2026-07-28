@@ -172,6 +172,8 @@ pub fn parse(src: str) -> File {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
 			enums.append(parse_enum(p))
+		} else if p_at(p, Init) {
+			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
 			parse_impl(p, fns)
 		} else {
@@ -187,6 +189,42 @@ pub fn parse(src: str) -> File {
 # the import list alone and not the cost of keeping a whole parse around.
 pub fn imports_of(src: str) -> list[str] {
 	return parse(src).imports
+}
+
+# parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
+# nothing downstream needs a second notion of a callable. GRAMMAR allows MANY of them and
+# runs each once in declaration order, so the name carries the position it was read at —
+# `init` twice over would otherwise be one C symbol twice.
+#
+# The name is not one a program can write (`init` is a keyword), which is what keeps it
+# from colliding with anything the source declares.
+fn parse_init(mut &p: Parser, at: int) -> FnDecl {
+	p_advance(p) # 'init'
+	expect(p, LParen)
+	expect(p, RParen)
+	mut params: list[Param] = []
+	body := parse_block(p)
+	return FnDecl(init_name(at), "", params, false, TVoid, body, false)
+}
+
+pub fn init_name(at: int) -> str {
+	return "init__" + strconv.to_string(at, 10)
+}
+
+pub fn is_init_name(name: str) -> bool {
+	return strings_has_prefix(name, "init__")
+}
+
+fn strings_has_prefix(s: str, pre: str) -> bool {
+	b := list[byte](s)
+	q := list[byte](pre)
+	return false if b.len() < q.len()
+	mut i := 0
+	for i < q.len() {
+		return false if b[i] != q[i]
+		i = i + 1
+	}
+	return true
 }
 
 # parse_import reads both forms GRAMMAR gives an import — one spec, or a parenthesized

@@ -235,6 +235,7 @@ void zrt_sched_wake(zrt_coro *co) {
 static void sched_init(void) {
 	zrt_mutex_init(&g_lock);
 	zrt_cond_init(&g_cond);
+	zrt_chan_select_init();
 	g_runq_head = NULL;
 	g_runq_tail = NULL;
 	t_current = NULL;

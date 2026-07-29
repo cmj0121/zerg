@@ -76,3 +76,7 @@ void zrt_cond_destroy(zrt_cond *c) { pthread_cond_destroy(as_cond(c)); }
 void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) { pthread_cond_wait(as_cond(c), as_mutex(m)); }
 void zrt_cond_signal(zrt_cond *c) { pthread_cond_signal(as_cond(c)); }
 void zrt_cond_broadcast(zrt_cond *c) { pthread_cond_broadcast(as_cond(c)); }
+
+bool zrt_atomic_claim(bool *flag) {
+	return __atomic_exchange_n(flag, true, __ATOMIC_ACQ_REL) == false;
+}

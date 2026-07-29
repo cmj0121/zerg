@@ -712,6 +712,14 @@ void zrt_cond_wait(zrt_cond *c, zrt_mutex *m);
 void zrt_cond_signal(zrt_cond *c);
 void zrt_cond_broadcast(zrt_cond *c);
 
+/* zrt_atomic_claim atomically moves *flag from false to true, answering whether THIS
+ * call was the one that moved it. It exists for select: one select parks a waiter on
+ * every channel it watches, all sharing a single "already fired" flag, and each of
+ * those channels is guarded by its OWN lock — so two workers can reach the flag under
+ * two different locks at the same instant. No lock can order that; only an atomic can.
+ * With no threads it is a plain read-then-write, which is what it always was. */
+bool zrt_atomic_claim(bool *flag);
+
 /* ZRT_CORO_STACK is the fixed per-coroutine stack size (Fork-B: fixed size + guard
  * page, not growable). Kept in one place so a later phase can retune it or move to a
  * growable stack without the backend re-emitting anything. */
@@ -861,6 +869,9 @@ typedef struct {
  * independently value-ready when a `done` arm is present — it routes to `done` — so a
  * `select`-loop over producers terminates via `done` once every producer's channel has
  * auto-closed rather than spinning on Right. */
+/* zrt_chan_select_init prepares select's own lock; the scheduler calls it at start. */
+void zrt_chan_select_init(void);
+
 int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done);
 #define ZRT_SEL_DEFAULT (-1)
 #define ZRT_SEL_DONE (-2)

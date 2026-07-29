@@ -740,7 +740,21 @@ func (p *parser) parseUnary() ast.Expr {
 // parsePostfix parses the recv-base then its postfix chain: '.id', '.N', a call
 // '(args)', an index/type-args '[elems]', '?', '!', and '?.id' (GRAMMAR group 4).
 func (p *parser) parsePostfix() ast.Expr {
-	e := p.parseRecvBase()
+	return p.parseChain(p.parseRecvBase(), true)
+}
+
+// parseChain applies a postfix chain to e. withTry decides whether '?' and '!' belong to
+// it, and the two answers are what put a receive at the right level.
+//
+// A receive's OPERAND takes the chain without them: `<-a.b` is a receive from the field
+// `a.b`, not a field of `<-a` (GRAMMAR group 9 — recv-base is its own level). Without
+// that, a channel held in a struct field could be sent on but never received from, and
+// the diagnostic named the struct: _receive '<-' requires a channel, found Hub_.
+//
+// The receive's RESULT takes them: `<-ch!` forces the Result the receive produced, which
+// is what the corpus and the chapter write. Applied to the operand instead it would force
+// the CHANNEL, which is not a Result at all.
+func (p *parser) parseChain(e ast.Expr, withTry bool) ast.Expr {
 	for {
 		switch p.cur().Kind {
 		case token.Dot:
@@ -755,9 +769,15 @@ func (p *parser) parsePostfix() ast.Expr {
 		case token.LBrack:
 			e = p.parseBracket(e)
 		case token.Question:
+			if !withTry {
+				return e
+			}
 			q := p.advance()
 			e = spanned(&ast.Try{X: e}, token.Span{Start: e.Span().Start, End: q.Span.End})
 		case token.Bang:
+			if !withTry {
+				return e
+			}
 			b := p.advance()
 			e = spanned(&ast.Force{X: e}, token.Span{Start: e.Span().Start, End: b.Span.End})
 		default:
@@ -792,7 +812,7 @@ func (p *parser) parseRecvBase() ast.Expr {
 		x := p.parseRecvBase()
 		return spanned(&ast.Recv{X: x}, token.Span{Start: arrow.Span.Start, End: x.Span().End})
 	}
-	return p.parsePrimary()
+	return p.parseChain(p.parsePrimary(), false)
 }
 
 // parseCall parses a call's argument list: positional arguments first, then named

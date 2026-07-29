@@ -1110,6 +1110,39 @@ fn parse_try(mut &p: Parser) -> Expr {
 		}
 		p_advance(p)
 		e = EForce(e)
+
+		# What follows a `!` belongs to the value it produced. `(<-ch)![0]` indexes the list
+		# the receive answered with, and `(<-ch)!.field` reads a field of it — the receive-
+		# and-force idiom the chapter is written in, applied to a payload that is not a
+		# scalar. Because the `!` level sits above parse_postfix, the chain had already been
+		# read and finished, so the `[0]` was simply DROPPED: the emitted C printed the whole
+		# list and only cc objected, against generated code.
+		e = parse_chain_tail(p, e)
+	}
+	return e
+}
+
+# parse_chain_tail continues a postfix chain on an expression that is already built: a
+# field, a method call, an index. A bare `(` is deliberately not here — a free call needs
+# an identifier for its name, and the thing to the left of one of these is a value.
+fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
+	mut e := e0
+	for p_at(p, Dot) or p_at(p, LBrack) {
+		if p_at(p, LBrack) {
+			p_advance(p) # '['
+			idx := parse_expr(p)
+			expect(p, RBrack)
+			e = EIndex(e, idx)
+		} else {
+			p_advance(p) # '.'
+			fld := cur(p).lexeme
+			p_advance(p)
+			if p_at(p, LParen) {
+				e = EMethod(e, fld, parse_call_args(p))
+			} else {
+				e = EField(e, fld)
+			}
+		}
 	}
 	return e
 }

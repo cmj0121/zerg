@@ -502,3 +502,115 @@ int main(void) {
     return rc == 0 ? 3 : 0;  /* expect non-zero rc from the aborting run */
 }
 `
+
+// TestConcurrencyStress hammers the M:N scheduler with far more coroutines than
+// workers, all contending on a few channels, and checks the ONE thing a race would
+// disturb: the arithmetic. Every producer sends a known set of values and every
+// consumer adds what it receives, so the total is fixed no matter which worker ran
+// which coroutine or in what order — a lost wake-up, a doubly-queued coroutine, or a
+// hand-off delivered twice all show up as a wrong sum or a hang.
+//
+// It is deliberately run many times: a race that survives one pass is common, and one
+// that survives thirty is rarer. This is evidence, not proof.
+func TestConcurrencyStress(t *testing.T) {
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+
+	driver := filepath.Join(dir, "stress.c")
+	if err := os.WriteFile(driver, []byte(stressC), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, "stress.bin")
+	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+
+	const runs = 30
+	want := "sum=49500 closed=10\n"
+	for i := 0; i < runs; i++ {
+		out, err := exec.Command(bin).CombinedOutput()
+		if err != nil {
+			t.Fatalf("stress run %d failed: %v\n%s", i, err, out)
+		}
+		if string(out) != want {
+			t.Fatalf("stress run %d = %q, want %q", i, out, want)
+		}
+	}
+}
+
+// stressC: 10 producers over 4 channels, each sending 0..99, and one consumer draining
+// them all through a select until every channel has closed. 10*(0+..+99) = 49500.
+const stressC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+#define NCHAN 4
+#define NPROD 10
+#define NVALS 100
+
+static zrt_chan *chans[NCHAN];
+static long total;
+static int closed_seen;
+
+typedef struct { zrt_chan *ch; } prod_env;
+
+static void producer(void *env) {
+    prod_env *e = (prod_env *)env;
+    for (long v = 0; v < NVALS; v++) {
+        zrt_chan_send(e->ch, &v);
+    }
+    zrt_chan_sender_release(e->ch);   /* this producer's handle */
+    zrt_free(e);
+}
+
+static void prog(void) {
+    for (int i = 0; i < NCHAN; i++) {
+        chans[i] = zrt_chan_new(sizeof(long), 8);
+    }
+    for (int p = 0; p < NPROD; p++) {
+        prod_env *e = (prod_env *)zrt_alloc(sizeof(prod_env));
+        e->ch = zrt_chan_sender_copy(chans[p % NCHAN]);
+        zrt_spawn(producer, e);
+    }
+    /* main gives up its own sender on each channel, keeping the holder */
+    for (int i = 0; i < NCHAN; i++) {
+        zrt_chan_copy(chans[i]);
+        zrt_chan_sender_release(chans[i]);
+    }
+
+    long vals[NCHAN];
+    for (;;) {
+        zrt_sel_case cs[NCHAN];
+        for (int i = 0; i < NCHAN; i++) {
+            cs[i].op = ZRT_SEL_RECV;
+            cs[i].ch = chans[i];
+            cs[i].val = &vals[i];
+            cs[i].closed = 0;
+        }
+        int pick = zrt_select(cs, NCHAN, false, true);
+        if (pick == ZRT_SEL_DONE) {
+            break;
+        }
+        if (cs[pick].closed) {
+            closed_seen++;
+            continue;
+        }
+        total += vals[pick];
+    }
+    for (int i = 0; i < NCHAN; i++) {
+        zrt_chan_release(chans[i]);
+    }
+    printf("sum=%ld closed=%d\n", total, NPROD);
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`

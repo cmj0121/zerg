@@ -663,6 +663,7 @@ typedef struct zrt_coro {
 	void            *env;               /* heap-owned argument environment; thunk frees it */
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
 	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
+	bool             woken;              /* a wake arrived while PARKING; see sched.c */
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
 

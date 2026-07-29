@@ -418,7 +418,17 @@ static int sel_try_send(zrt_chan *ch, const void *val) {
  * value-ready). With no recv case it is vacuously true. Drives the `done` arm. */
 static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
 	for (size_t i = 0; i < n; i++) {
-		if (cases[i].op == ZRT_SEL_RECV && !cases[i].ch->closed) {
+		if (cases[i].op != ZRT_SEL_RECV) {
+			continue;
+		}
+		/* `closed` is written by whichever worker released the last sender, so reading it
+		 * bare is a race — and losing it is not a wrong answer but a HANG: the select
+		 * sees an open channel, parks, and the close that would have woken it already
+		 * happened. */
+		zrt_mutex_lock(&cases[i].ch->lock);
+		bool c = cases[i].ch->closed;
+		zrt_mutex_unlock(&cases[i].ch->lock);
+		if (!c) {
 			return false;
 		}
 	}
@@ -454,7 +464,13 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 			for (size_t k = 0; k < n; k++) {
 				size_t i = (start + k) % n;
 				zrt_sel_case *c = &cases[i];
-				if (c->op == ZRT_SEL_RECV && c->ch->closed) {
+				if (c->op != ZRT_SEL_RECV) {
+					continue;
+				}
+				zrt_mutex_lock(&c->ch->lock);
+				bool shut = c->ch->closed;
+				zrt_mutex_unlock(&c->ch->lock);
+				if (shut) {
 					c->closed = 1;
 					zrt_mutex_unlock(&g_sel_lock);
 					return (int)i;

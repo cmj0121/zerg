@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
@@ -76,6 +77,34 @@ void zrt_cond_destroy(zrt_cond *c) { pthread_cond_destroy(as_cond(c)); }
 void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) { pthread_cond_wait(as_cond(c), as_mutex(m)); }
 void zrt_cond_signal(zrt_cond *c) { pthread_cond_signal(as_cond(c)); }
 void zrt_cond_broadcast(zrt_cond *c) { pthread_cond_broadcast(as_cond(c)); }
+
+void zrt_cond_timedwait(zrt_cond *c, zrt_mutex *m, int64_t ns) {
+	/* pthread_cond_timedwait wants an ABSOLUTE deadline on the condvar's clock, which is
+	 * CLOCK_REALTIME by default — so the relative span the scheduler computed from the
+	 * monotonic clock is converted here rather than at the call site. A wall clock that
+	 * jumps can make this wait long or short; the caller re-reads the monotonic clock and
+	 * loops, so a jump costs an extra turn and never a missed deadline.
+	 *
+	 * The reading comes from gettimeofday rather than clock_gettime, which would be the
+	 * better clock but is hidden by a strict `-std=c11` glibc unless _POSIX_C_SOURCE is
+	 * defined before the headers — and asking for strict POSIX here also hides
+	 * _SC_NPROCESSORS_ONLN on macOS, which would silently drop this scheduler to one
+	 * worker. Microseconds are ample for a wait the Win32 backend rounds to whole
+	 * milliseconds anyway. */
+	if (ns < 0) {
+		ns = 0;
+	}
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	struct timespec ts;
+	ts.tv_sec = tv.tv_sec + (time_t)(ns / 1000000000);
+	ts.tv_nsec = tv.tv_usec * 1000 + (long)(ns % 1000000000);
+	if (ts.tv_nsec >= 1000000000) {
+		ts.tv_sec += 1;
+		ts.tv_nsec -= 1000000000;
+	}
+	pthread_cond_timedwait(as_cond(c), as_mutex(m), &ts);
+}
 
 bool zrt_atomic_claim(bool *flag) {
 	return __atomic_exchange_n(flag, true, __ATOMIC_ACQ_REL) == false;

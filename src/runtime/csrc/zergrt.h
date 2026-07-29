@@ -261,13 +261,16 @@ typedef struct zrt_frame {
  * These integer values are MIRRORED by the compiler (internal/sema/builtins.go); keep
  * the two in lockstep. ZRT_ERR_NONE is the untyped/generic Err a bare abort carries. */
 enum {
-	ZRT_ERR_NONE     = 0,
-	ZRT_ERR_VALUE    = 1, /* ValueError */
-	ZRT_ERR_OVERFLOW = 2, /* OverflowError */
-	ZRT_ERR_IO       = 3, /* IOError */
-	ZRT_ERR_ENCODING = 4, /* EncodingError */
-	ZRT_ERR_INDEX    = 5, /* IndexError */
-	ZRT_ERR_KEY      = 6, /* KeyError */
+	ZRT_ERR_NONE           = 0,
+	ZRT_ERR_VALUE          = 1, /* ValueError */
+	ZRT_ERR_OVERFLOW       = 2, /* OverflowError */
+	ZRT_ERR_IO             = 3, /* IOError */
+	ZRT_ERR_ENCODING       = 4, /* EncodingError */
+	ZRT_ERR_INDEX          = 5, /* IndexError */
+	ZRT_ERR_KEY            = 6, /* KeyError */
+	ZRT_ERR_DEADLOCK       = 7, /* DeadlockError (docs/code/coroutine.md) */
+	ZRT_ERR_SEND_ON_CLOSED = 8, /* SendOnClosedError */
+	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
 };
 
 typedef struct zrt_err {
@@ -675,6 +678,9 @@ typedef struct zrt_coro {
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
 	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
 	bool             woken;              /* a wake arrived while PARKING; see sched.c */
+	bool             is_main;           /* coroutine 0: its end is the program's end */
+	bool             deadlocked;        /* resumed to raise DeadlockError; see sched.c */
+	int64_t          deadline;          /* zrt_sleep_ns wake time (zrt_time_mono); 0 = none */
 	void            *tsan_fiber;        /* ZRT_TSAN only; NULL otherwise. See below. */
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
@@ -758,6 +764,15 @@ void zrt_cond_wait(zrt_cond *c, zrt_mutex *m);
 void zrt_cond_signal(zrt_cond *c);
 void zrt_cond_broadcast(zrt_cond *c);
 
+/* zrt_cond_timedwait is zrt_cond_wait that also gives up after ns nanoseconds. It is
+ * what makes a timer cost nothing while it is pending: an idle worker with a deadline
+ * ahead of it SLEEPS until then instead of spinning on the clock, and any enqueue in the
+ * meantime still wakes it early through the ordinary signal. A spurious or early return
+ * is allowed — every caller re-checks — and ns <= 0 returns at once. On thread_none.c,
+ * where no other thread exists to signal, this is the one wait that can still end, which
+ * is why timers work with M = 1 exactly as they do with M workers. */
+void zrt_cond_timedwait(zrt_cond *c, zrt_mutex *m, int64_t ns);
+
 /* zrt_atomic_claim atomically moves *flag from false to true, answering whether THIS
  * call was the one that moved it. It exists for select: one select parks a waiter on
  * every channel it watches, all sharing a single "already fired" flag, and each of
@@ -781,21 +796,47 @@ void zrt_spawn(void (*thunk)(void *env), void *env);
  * (channel send/recv add more in C2). A no-op when not inside a coroutine. */
 void zrt_yield(void);
 
+/* zrt_sleep_ns parks the running coroutine until at least ns nanoseconds of monotonic
+ * time have passed, then makes it runnable again. It is the runtime's whole TIMER
+ * surface — deliberately, because a timer in Zerg is not a primitive but a channel
+ * (docs/code/coroutine.md, Timers & cancellation): the stdlib's `after(d)` is a
+ * coroutine that sleeps and then sends, and `ticker(d)` is that in a loop, both written
+ * in Zerg over this one leaf. Nothing here knows what a duration is or how to format
+ * one; the policy lives above.
+ *
+ * Two properties the scheduler owes it. A pending sleep costs no CPU: the worker that
+ * runs out of work sleeps to the nearest deadline (zrt_cond_timedwait) rather than
+ * looking at the clock in a loop. And a sleeping coroutine is NOT a deadlock — it is
+ * going to make progress on its own — so the detector stands down while any sleep is
+ * pending, which is what lets a `select` on a timeout arm wait without being killed for
+ * waiting.
+ *
+ * A sleep is never interrupted: ns <= 0 returns at once, and there is no cancel. A
+ * coroutine sleeping when main returns is abandoned like any other. A no-op outside a
+ * coroutine. */
+void zrt_sleep_ns(int64_t ns);
+
 /* zrt_sched_main / _nil / _int are the concurrency program-entry shims, one per
  * `main` return shape. Each starts the scheduler, runs main as the first coroutine,
- * drains the run queue (so fire-and-forget coroutines get to run — they are never
- * joined but are not killed), and returns main's outcome as the process exit code
- * (an aborting main yields 1, as zrt_run does). The backend selects one by main's
- * type when the Manifest reports Concurrency. */
+ * and returns main's outcome as the process exit code (an aborting main yields 1, as
+ * zrt_run does). The backend selects one by main's type when the Manifest reports
+ * Concurrency.
+ *
+ * MAIN'S END IS THE PROGRAM'S END (docs/code/coroutine.md, Termination & deadlock):
+ * once main's coroutine finishes — by returning or by crashing — the scheduler stops
+ * handing out work and every worker stands down. A `spawn` that has not finished is
+ * abandoned where it stands, so a coroutine that must complete has to be driven to a
+ * channel-observed completion; there is no join. */
 int zrt_sched_main(zrt_main_fn fn);
 int zrt_sched_main_nil(void (*fn)(void));
 int zrt_sched_main_int(int64_t (*fn)(void));
 
-/* zrt_sched_run starts the scheduler, runs fn as the first coroutine (coroutine 0),
- * and drains the run queue. Unlike the _main shims it maps no return value to an exit
- * code — the `zerg test` driver (Phase 1i) uses it so a `#[test]` that `spawn`s or
- * uses a channel runs under the scheduler like a normal program, then reads its own
- * pass/fail tally for the exit code. Linked only into a concurrent test binary. */
+/* zrt_sched_run starts the scheduler and runs fn as the first coroutine (coroutine 0),
+ * with the same lifetime the _main shims have: fn's end ends the program. Unlike them
+ * it maps no return value to an exit code — the `zerg test` driver (Phase 1i) uses it
+ * so a `#[test]` that `spawn`s or uses a channel runs under the scheduler like a normal
+ * program, then reads its own pass/fail tally for the exit code. Linked only into a
+ * concurrent test binary. */
 void zrt_sched_run(void (*fn)(void));
 
 /* zrt_sched_current returns the running coroutine, or NULL when the scheduler loop
@@ -805,16 +846,30 @@ zrt_coro *zrt_sched_current(void);
 /* zrt_sched_park marks the current coroutine BLOCKED and returns control to the
  * scheduler; it returns once a zrt_sched_wake puts the coroutine back on the run
  * queue and the scheduler resumes it. A no-op outside a coroutine. It is the single
- * blocking primitive the channel send/recv paths (C2) park on. */
-void zrt_sched_park(void);
+ * blocking primitive the channel send/recv paths (C2) park on.
+ *
+ * It answers HOW the park ended. False is the ordinary wake: a counterparty handed off,
+ * or a close, or nothing at all (a stray token), and the caller re-scans as it always
+ * did. True means the deadlock detector chose this coroutine to carry DeadlockError —
+ * nothing woke it and nothing will. A caller that sees true owes two things, in order:
+ * take its waiter back out of every queue it is on, because the abort is about to
+ * unwind the stack that waiter lives on, and then call zrt_sched_deadlock. */
+bool zrt_sched_park(void);
 
 /* zrt_sched_park_unlock is zrt_sched_park for a caller holding a lock that guards the
  * wait queue it just joined. Releasing that lock before switching away would open the
  * window PARKING exists to close, so the lock is handed to the scheduler: the worker
  * releases it once the coroutine is off the CPU and marked BLOCKED, both under the
  * scheduler lock. Every channel operation blocks through this, never through the bare
- * park. */
-void zrt_sched_park_unlock(zrt_mutex *m);
+ * park. Its return value is zrt_sched_park's. */
+bool zrt_sched_park_unlock(zrt_mutex *m);
+
+/* zrt_sched_deadlock raises DeadlockError on the CALLING coroutine's stack: a clean
+ * abort that unwinds, runs the pending `defer`s, and is catchable by a `guard` like any
+ * other (docs/code/coroutine.md, Termination & deadlock). Only a park site that has just
+ * been told its park ended in a deadlock may call it, and only after unlinking itself
+ * from every wait queue. */
+_Noreturn void zrt_sched_deadlock(void);
 
 /* zrt_sched_wake marks a BLOCKED coroutine RUNNABLE and pushes it onto the run queue,
  * so the scheduler resumes it. The channel send/recv/close paths call it to hand a
@@ -862,17 +917,26 @@ void zrt_chan_send(zrt_chan *ch, const void *val);
  * closes. On a Right result zrt_chan_err reports the reason (see below). */
 int zrt_chan_recv(zrt_chan *ch, void *out);
 
-/* zrt_chan_err reports why a recv returned 1 (Right): NULL is the ordinary close
- * (StopIteration), a non-NULL string is the message of a sender coroutine that crashed
- * (Fork-C: an unhandled coroutine abort closes the channels it sends on with a crash
- * Err). Valid immediately after a zrt_chan_recv that returned 1. */
+/* zrt_chan_close_err returns the Err a recv's Right carries — the whole Err, which is
+ * the point: an ordinary close answers the StopIteration sentinel (kind
+ * ZRT_ERR_STOP_ITERATION), and a close caused by a crashing last sender (Fork-C) answers
+ * that coroutine's OWN Err, message, cause and kind intact, so the reason it died
+ * reaches the receiver rather than a stand-in string. Reading `kind` is how the two are
+ * told apart; nothing needs to match on a message. Valid immediately after a
+ * zrt_chan_recv that returned 1, and this is what a `Result[T]`'s Right is built from. */
+zrt_err zrt_chan_close_err(zrt_chan *ch);
+
+/* zrt_chan_err is the old string-shaped view of the same close reason: NULL for the
+ * ordinary end, the crash message otherwise. It survives only because the `for v in ch`
+ * lowering in both compilers still calls it; it discards the kind and the cause, which
+ * is exactly what the Result carrier must not do. Delete it with its last caller. */
 const char *zrt_chan_err(zrt_chan *ch);
 
 /* zrt_crash_active reports whether the abort currently unwinding is an unhandled
  * coroutine crash (unwind.c sets it while running the crashing coroutine's cleanup
- * stack). zrt_chan_sender_release reads it so a channel auto-closed by a crashing last
- * sender carries a crash Err rather than the ordinary StopIteration. Always false on a
- * normal path. */
+ * stack). zrt_chan_sender_release reads it, alongside zrt_taken_err for the Err itself,
+ * so a channel auto-closed by a crashing last sender carries that crash rather than the
+ * ordinary StopIteration. Always false on a normal path. */
 bool zrt_crash_active(void);
 
 /* --- concurrency: select (chan.c) -------------------------------------------
@@ -908,6 +972,9 @@ typedef struct {
  * on a closed channel aborts). Ties among ready cases are broken fairly by a rotating
  * start so no arm starves. When no case is value-ready it resolves in this order:
  *   - has_done and every watched recv channel is closed-and-drained -> ZRT_SEL_DONE;
+ *   - no `done` arm and a recv channel closed by a CRASH -> that recv fires as Right;
+ *   - no `done` arm, no `_`, and every watched recv channel cleanly closed -> the select
+ *     can never fire again, so it raises DeadlockError (a clean, catchable abort);
  *   - no `done` arm and some recv channel is closed -> that recv fires as Right (closed);
  *   - has_default -> ZRT_SEL_DEFAULT (the non-blocking `_`, never parks);
  *   - otherwise PARK on every case's channel at once and re-scan when any wakes it.

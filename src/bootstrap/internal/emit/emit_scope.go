@@ -107,9 +107,14 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
 		return
 	}
-	switch typ.(type) {
+	switch t := typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
+	case *types.Chan:
+		// a channel handle releases at scope exit through a slot guard (so a later `del`
+		// nulls the slot); a send-capable handle releases as a sender, which is what closes
+		// the channel when the last one leaves — the language has no explicit close.
+		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.chanDropThunk(t), cname))
 	case *types.Enum:
 		// a recursive/non-POD enum local (S1) frees its boxed payload cells at scope exit
 		// through its generated drop-env thunk, like a struct.
@@ -164,6 +169,8 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.List:
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
+	case *types.Chan:
+		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.Opt:
@@ -201,7 +208,7 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 		return
 	}
-	switch it.typ.(type) {
+	switch t := it.typ.(type) {
 	case *types.Ref:
 		// Release now and null the slot. The scope-exit guard reads the slot, so it
 		// skips a nulled binding — the box is freed exactly once whether or not the
@@ -209,6 +216,8 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 		// conditional del because zrt_release(NULL) is a no-op).
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
+	case *types.Chan:
+		e.delChan(n, cname, t)
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)
 	}
@@ -622,6 +631,15 @@ func walkStmt(s ast.Stmt, fn func(ast.Stmt)) {
 		walkStmts(n.Body, fn)
 	case *ast.WithStmt:
 		walkStmts(n.Body, fn)
+	case *ast.SelectStmt:
+		// A select arm's body is an EXPRESSION, but the block form of it holds statements
+		// the enclosing function owns just as much as an if-branch's — a `spawn` or a
+		// binding written there must be found by the prepasses and by subtreeTeardown.
+		for _, arm := range n.Arms {
+			if blk, ok := arm.Body.(*ast.Block); ok {
+				walkStmts(blk, fn)
+			}
+		}
 	}
 }
 
@@ -769,6 +787,14 @@ func stmtExprs(s ast.Stmt) []ast.Expr {
 		return []ast.Expr{n.Cond, n.Iter}
 	case *ast.WithStmt:
 		return []ast.Expr{n.Resource}
+	case *ast.SelectStmt:
+		// The arm HEADS only: walkStmt descends a block-form arm body as statements, and
+		// handing the body back here as well would walk everything inside it twice.
+		out := make([]ast.Expr, 0, len(n.Arms)*2)
+		for _, arm := range n.Arms {
+			out = append(out, arm.Chan, arm.Value)
+		}
+		return out
 	}
 	return nil
 }

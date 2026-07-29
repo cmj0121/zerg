@@ -119,17 +119,37 @@ func (p *parser) parseSelectArm() ast.SelectArm {
 	p.expect(token.LArrow)
 	val := p.parseExpr()
 	p.expect(token.FatArrow)
-	body := p.parseExpr()
+	body := p.parseSelectArmBody()
 	arm := ast.SelectArm{Kind: ast.SelectSend, Chan: ch, Value: val, Body: body}
 	arm.SetSpan(span(start, body.Span().End))
 	return arm
+}
+
+// parseSelectArmBody parses an arm's body, which GRAMMAR group 9 makes a STATEMENT. A
+// select arm runs rather than yields: the select is a statement and produces no value, and
+// both compilers lower an arm to if/else, which is exactly what can hold a statement — the
+// contrast is a `match` arm, whose body must yield the match's value.
+//
+// It was an expression, so the two spellings the chapter itself uses — `done => break` and
+// a bare `_ => tick()` beside `v := <-a => print v!` — did not parse here, while the
+// shipped compiler took them. A body that already is an expression stays one, so a call or
+// a `{ … }` block is unchanged; anything else becomes a one-statement block, which is the
+// shape the arm lowering already handles.
+func (p *parser) parseSelectArmBody() ast.Expr {
+	s := p.parseStmt()
+	if es, ok := s.(*ast.ExprStmt); ok {
+		return es.X
+	}
+	b := &ast.Block{Stmts: []ast.Stmt{s}}
+	b.SetSpan(s.Span())
+	return b
 }
 
 // finishSelectHead parses the '=> body' of a bare 'done'/'_' arm.
 func (p *parser) finishSelectHead(start token.Pos, kind ast.SelectArmKind) ast.SelectArm {
 	p.advance() // 'done' or '_'
 	p.expect(token.FatArrow)
-	body := p.parseExpr()
+	body := p.parseSelectArmBody()
 	arm := ast.SelectArm{Kind: kind, Body: body}
 	arm.SetSpan(span(start, body.Span().End))
 	return arm
@@ -141,7 +161,7 @@ func (p *parser) finishSelectRecv(start token.Pos, bind string, hasBind bool) as
 	p.expect(token.LArrow)
 	ch := p.parseExpr()
 	p.expect(token.FatArrow)
-	body := p.parseExpr()
+	body := p.parseSelectArmBody()
 	arm := ast.SelectArm{Kind: ast.SelectRecv, Bind: bind, HasBind: hasBind, Chan: ch, Body: body}
 	arm.SetSpan(span(start, body.Span().End))
 	return arm

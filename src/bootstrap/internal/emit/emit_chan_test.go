@@ -352,10 +352,10 @@ func TestChannelRefusals(t *testing.T) {
 			want: "does not lower a 'main(args)' in a concurrent program",
 		},
 		{
-			// `close` is a statement and never a value: its lowering is several C statements
-			// plus a rebinding of the channel's slot, which no expression position can hold.
-			name: "close-behind-a-defer",
-			src:  "fn main() {\n  ch := chan[int](1)\n  defer close(ch)\n  ch <- 1\n}",
+			// `close` is a statement and never a value. `defer` is the one statement that
+			// takes it (GRAMMAR group 11); a `spawn` and an expression are not.
+			name: "close-behind-a-spawn",
+			src:  "fn main() {\n  ch := chan[int](1)\n  spawn close(ch)\n}",
 			want: "'close' is a statement, not a value",
 		},
 	}

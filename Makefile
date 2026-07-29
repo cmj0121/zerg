@@ -19,7 +19,7 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 JOBS ?= 4
 
 CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_crash \
-	conc_defer_close conc_fanin conc_forin conc_select conc_spawn countdown default_params enum_basic enum_guard factorial \
+	conc_defer_close conc_fanin conc_forin conc_payload_copy conc_select conc_spawn countdown default_params enum_basic enum_guard factorial \
 	fib fizzbuzz floats gcd fn_value hello list_basic list_literal list_str method_chain power raise_kind \
 	rec_expr rec_tree str_bytes struct_basic struct_nested sumto value_semantics
 
@@ -155,6 +155,16 @@ fixpoint:                       # prove the compiler still emits the same C for 
 sanitize-conc:                  # run the concurrency corpus under address/UB/leak sanitizers
 	$(MAKE) build
 	./scripts/sanitize-conc.sh
+
+# Every other gate here asks what the toolchain BUILDS. This one asks what it turns away,
+# and the property it pins is not that a bad program fails — it always did — but WHO says
+# so. A program the compiler emits anyway reaches cc, which reports a real error against
+# generated C in .zerg-cache, at a line the programmer cannot open. That regresses silently,
+# because the case still "fails". Not in `test` for the same reason `corpus` is not: it
+# needs the whole toolchain, both compilers, built.
+refuse:                         # every program that must be turned away, is — by the compiler
+	$(MAKE) build
+	./scripts/refuse-check.sh
 
 docs-links:                     # every docs path the repo cites must resolve
 	@fail=0; \

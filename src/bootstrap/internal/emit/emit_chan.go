@@ -254,9 +254,19 @@ func (e *emitter) rejectDirectionalChans() {
 		if inst.Origin == nil || inst.Origin.Module != "" {
 			continue
 		}
-		refuse(inst.Origin.Span(), inst.Ret)
-		for _, p := range inst.Params {
-			refuse(inst.Origin.Span(), p)
+		// A signature's refusal points at the TYPE that was written, not at the `fn` that
+		// opens the declaration: reporting a parameter's channel direction at 1:1 sends a
+		// reader to the top of the file to look for something spelled further down. The
+		// declaration's own span is the fallback for an instance whose parameters do not
+		// line up with the source's — a method, whose receiver is not written in the list.
+		refuse(declSpan(inst.Origin, inst.Origin.Ret), inst.Ret)
+		aligned := inst.Origin.Params != nil && len(inst.Params) == len(inst.Origin.Params)
+		for i, p := range inst.Params {
+			at := inst.Origin.Span()
+			if aligned {
+				at = declSpan(inst.Origin, inst.Origin.Params[i].Type)
+			}
+			refuse(at, p)
 		}
 		walkStmts(inst.Origin.Body, func(s ast.Stmt) {
 			if b, ok := s.(*ast.BindStmt); ok {
@@ -276,21 +286,27 @@ func (e *emitter) rejectDirectionalChans() {
 	}
 }
 
+// declSpan is the span of a written type, or the declaration's own when the type was not
+// written at all (an omitted result) or carries no position.
+func declSpan(d *ast.FuncDecl, t ast.Type) token.Span {
+	if t == nil {
+		return d.Span()
+	}
+	at := t.Span()
+	if at.Start.Line == 0 {
+		return d.Span()
+	}
+	return at
+}
+
 // directionalChan reports whether a type is a narrowed channel end, spelled the way the
-// source writes it. types.Chan.String() drops the direction, so the diagnostic would name
-// the same `chan[T]` it is refusing without this.
+// source writes it — which is what types.Chan.String() answers.
 func directionalChan(t sema.Type) (string, bool) {
 	ch, ok := t.(*types.Chan)
-	if !ok {
+	if !ok || ch.Dir == types.ChanBidi {
 		return "", false
 	}
-	switch ch.Dir {
-	case types.ChanRecv:
-		return "<-chan[" + ch.Elem.String() + "]", true
-	case types.ChanSend:
-		return "chan[" + ch.Elem.String() + "]<-", true
-	}
-	return "", false
+	return ch.String(), true
 }
 
 // chanReleaseFn / chanDropThunk name the release entry and the scope-exit drop thunk for

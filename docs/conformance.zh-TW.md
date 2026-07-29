@@ -36,9 +36,10 @@ Zerg 是以整體來規範；Phase-1 bootstrap 實作其中一個子集。與其
 編譯器。本規格中的標記以**種子**為量測基準，逐特性標註的也是它的子集；出貨的 `zerg` 自己的子集則記載於
 [`src/compiler/README.md`](../src/compiler/README.md)。因此一個標為 **[implemented]** 的特性，`zerg` 可能還不接受。
 
-種子**不再一律是兩者中較寬的那個**。它在語言的大部分較寬——closure 與函式值、`map[K, V]`、`impl` 方法、`match`
-arm body 可以是區塊——但在**並行上較窄**：`zerg` 會降階 directional channel 端、方法與帶命名空間的 `spawn` 被呼叫
-者、以及種子拒絕的 stdlib timer。`is` 型別測試現在**兩邊一模一樣**：對 `Err` 測一個 error kind，其餘一律指名拒絕。
+種子**不再一律是兩者中較寬的那個**。它在語言的大部分較寬——closure 與函式值、`map[K, V]`、`impl` 方法、
+`Ref[T]`、`match` arm body 可以是區塊——但在**並行上大多較窄**：`zerg` 會降階 directional channel 端、方法與帶命
+名空間的 `spawn` 被呼叫者、以及種子拒絕的 stdlib timer；接收運算子 `?` 則反過來，種子有做而 `zerg` 拒絕。
+`is` 型別測試現在**兩邊一模一樣**：對 `Err` 測一個 error kind，其餘一律指名拒絕。
 凡差異對程式有影響之處，該章會講明它在談哪一個編譯器；而 **[deviation]** 在主體不是種子時會指名主體。
 
 有些特性曾被規範、在種子裡建成，之後在種子被削減到只剩單一職責時**移除**——closure 與函式值、`map[K, V]`、
@@ -46,10 +47,14 @@ arm body 可以是區塊——但在**並行上較窄**：`zerg` 會降階 direc
 而那正是這個標記所承諾的。
 
 **並行是例外，而且是一個更窄的主張。** coroutine、channel 與 `select` 曾被移除、之後又復原：種子降階**happy
-path**——`chan[T](cap)`、`ch <- v`、真正回傳 `Result[T]` 的 `<-ch`、`close(ch)`、`spawn f(args)`、四種 arm 形狀俱
-全的 `select`，以及 `for v in ch`——並**指名拒絕六種形狀**而不是誤譯它們：**directional channel 型別**、被呼叫者
-為**方法**／**帶命名空間的函式**／**closure** 的 `spawn`、跨越 `spawn` 的 **`mut &`** 引數，以及並行程式裡的
-**`main(args)`**。每一種都是乾淨的診斷加上非零的 exit code。見 [Coroutines](code/coroutine.zh-TW.md)。
+path**——`chan[T](cap)`、`ch <- v`、真正回傳 `Result[T]` 的 `<-ch`、`close(ch)` 與 `defer close(ch)`、
+`spawn f(args)`、四種 arm 形狀俱全的 `select`，以及 `for v in ch`——並**指名拒絕五種形狀**而不是誤譯它們：
+**directional channel 型別**，以及被呼叫者為**方法**／**帶命名空間的函式**／**closure**、或帶著跨越 `spawn` 的
+**`mut &`** 引數的 `spawn`。每一種都是乾淨的診斷加上非零的 exit code。見 [Coroutines](code/coroutine.zh-TW.md)。
+
+另有兩項屬於**兩個編譯器都沒有**，而不是種子獨有。並行程式裡的 **`main(args)`** 兩邊都拒絕——scheduler 的進入
+點 shim 只吃無參數的函式指標；而接收運算子 **`?`** 是並行這一塊唯一**種子比較寬**的地方：種子有做，`zerg` 指名
+拒絕。
 
 沒有標記的小節沿用其外層特性的標記；段落可用自己的標記覆寫。**[deviation]** 一律同時陳述「規格所定行為」與
 「該實作實際的作法」。

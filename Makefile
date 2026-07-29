@@ -18,9 +18,17 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic bitwise booleans countdown default_params enum_basic enum_guard factorial fib fizzbuzz \
-	floats gcd fn_value hello list_basic list_literal list_str method_chain power raise_kind rec_expr rec_tree \
-	str_bytes struct_basic struct_nested sumto value_semantics
+CORPUS_PASS := arithmetic bitwise booleans conc_chan_buffer conc_fanin conc_select conc_spawn countdown \
+	default_params enum_basic enum_guard factorial fib fizzbuzz floats gcd fn_value hello list_basic \
+	list_literal list_str method_chain power raise_kind rec_expr rec_tree str_bytes struct_basic \
+	struct_nested sumto value_semantics
+
+# A `conc_` case is run more than once. Every other case is a function of its source, so
+# one run answers the question; a concurrent one is a function of its source AND of an
+# interleaving the scheduler picks fresh each time, and a race that shows up one run in
+# twenty would sail through a single attempt. Repetition is what makes it a gate rather
+# than a coin toss. They are milliseconds each, so the whole corpus stays quick.
+CORPUS_CONC_REPS ?= 10
 
 .PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus docs-links lint fmt help $(SUBDIR)
 
@@ -86,8 +94,14 @@ corpus:                         # run zerg against the test-data corpus it now o
 	for name in $(CORPUS_PASS); do \
 		src=test-data/codegen/$$name.zg; \
 		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
-		got=$$(./bin/corpus-case 2>/dev/null); \
-		[ "$$got" = "$$(cat test-data/codegen/$$name.out)" ] || { echo "OUTPUT $$name"; fail=1; }; \
+		want=$$(cat test-data/codegen/$$name.out); \
+		reps=1; case $$name in conc_*) reps=$(CORPUS_CONC_REPS);; esac; \
+		n=0; \
+		while [ $$n -lt $$reps ]; do \
+			got=$$(./bin/corpus-case 2>/dev/null); \
+			[ "$$got" = "$$want" ] || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
+			n=$$((n+1)); \
+		done; \
 	done; \
 	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \

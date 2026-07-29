@@ -826,14 +826,16 @@ fn fmt_fstr_arg_hi(toks: list[Token], lo: int, hi: int) -> int {
 # the result again changes nothing.
 fn fmt_fstr_span(toks: list[Token], lo: int, hi: int) -> str {
 	mut out := ""
+	mut prev2 := Semi
 	mut prev := Semi
 	mut i := lo
 	for i <= hi {
 		t := toks[i]
-		if i > lo and fmt_space_between(prev, t.kind) {
+		if i > lo and fmt_space_between(toks, i, prev2, prev) {
 			out = out + " "
 		}
 		out = out + fmt_text(t)
+		prev2 = prev
 		prev = t.kind
 		i = i + 1
 	}
@@ -986,6 +988,7 @@ fn fmt_wrap_breaks(toks: list[Token]) -> list[int] {
 # what keeps the estimate and the output from drifting apart.
 fn fmt_wrap_widths(toks: list[Token]) -> list[int] {
 	mut w: list[int] = []
+	mut prev2 := Semi
 	mut prev := Semi
 	mut i := 0
 	for i < toks.len() {
@@ -993,11 +996,12 @@ fn fmt_wrap_widths(toks: list[Token]) -> list[int] {
 		s: str = fmt_text(t)
 		b := list[byte](s)
 		mut n := b.len()
-		if i > 0 and fmt_space_between(prev, t.kind) {
+		if i > 0 and fmt_space_between(toks, i, prev2, prev) {
 			n = n + 1
 		}
 		w.append(n)
 		if not is_semi(t.kind) {
+			prev2 = prev
 			prev = t.kind
 		}
 		i = i + 1
@@ -1294,6 +1298,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 	mut out: list[byte] = []
 	mut depth := 0
 	mut col := 0 # bytes written on the current line
+	mut prev2 := Semi # the one before it — `<-` needs a token of context on each side
 	mut prev := Semi # the last token that mattered for spacing
 	mut prev_line := 0
 
@@ -1326,6 +1331,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				out.append(byte(10))
 				col = 0
 			}
+			prev2 = prev
 			prev = t.kind
 			prev_line = t.line
 			i = i + 1
@@ -1401,7 +1407,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				}
 				fmt_indent(out, ci)
 				col = ci
-			} else if not broke and fmt_space_between(prev, t.kind) {
+			} else if not broke and fmt_space_between(toks, i, prev2, prev) {
 				# a line just broken is at its indent and nothing more: the spacing rule
 				# asks about two tokens ON a line, and after `x,` it would put the space
 				# that belongs after the comma at the START of the next line
@@ -1435,6 +1441,7 @@ fn fmt_toks(toks: list[Token], no_close: bool) -> str {
 				out.append(byte(10))
 				col = 0
 			}
+			prev2 = prev
 			prev = t.kind
 			prev_line = t.line
 			i = i + 1
@@ -1472,7 +1479,22 @@ fn fmt_indent(mut &out: list[byte], depth: int) {
 # defaults are "yes" — words and operators breathe — and the exceptions are the shapes
 # where a space would be wrong: inside brackets, before punctuation that binds tight, and
 # between a callee and its argument list.
-fn fmt_space_between(prev: Kind, k: Kind) -> bool {
+#
+# `<-` needs one token of context on EACH side, which is why the pair became a window of
+# four. This formatter is token-based and builds no tree, so the four spellings of `<-`
+# are told apart only by their neighbours:
+#
+#     ch <- v          infix send      — a space on both sides
+#     <-ch             prefix receive  — tight on the right
+#     <-chan[T]        recv-only type  — tight on the right
+#     chan[T]<-        send-only type  — tight on the LEFT
+#
+# The first three are separated from the fourth by what FOLLOWS the arrow: only the
+# trailing type marker is followed by something that cannot begin an item. The prefix
+# forms are separated from the infix one by what PRECEDES the arrow: only the infix send
+# has an operand in front of it.
+fn fmt_space_between(toks: list[Token], i: int, prev2: Kind, prev: Kind) -> bool {
+	k := toks[i].kind
 	if is_open(prev) {
 		return false # `(x`, `[x`
 	}
@@ -1480,10 +1502,10 @@ fn fmt_space_between(prev: Kind, k: Kind) -> bool {
 		return false # `x)`, `x]`, `x,`
 	}
 	if is_open(k) and binds_tight(prev) {
-		return false # `f(`, `xs[`
+		return false # `f(`, `xs[`, `chan[`
 	}
 	if is_dot(prev) or is_dot(k) {
-		return false # `a.b`
+		return false # `a.b`, `a?.b`
 	}
 	if is_colon(k) {
 		return false # `name: T`
@@ -1491,7 +1513,69 @@ fn fmt_space_between(prev: Kind, k: Kind) -> bool {
 	if is_unary_prefix(prev) {
 		return false # `-x`, `&x`
 	}
+	if is_postfix(k) {
+		return false # `v!`, `x?` — a postfix operator belongs to the operand on its left
+	}
+	if is_larrow(k) and closes_chan_type(toks, i - 1) {
+		return false # `chan[int]<-` — the arrow ends a send-only type
+	}
+	if is_larrow(prev) and not ends_item(prev2) {
+		return false # `<-ch`, `<-chan[int]` — the arrow leads what follows it
+	}
 	return true
+}
+
+# closes_chan_type reports whether the token at `i` is the `]` closing a `chan[…]` — which
+# is the ONE thing a send-only `<-` can follow.
+#
+# It replaces a guess about what came AFTER the arrow. That guess — "a trailing marker is
+# followed by something that cannot begin an item" — is true of `chan[T]<-,` and
+# `chan[T]<-)`, and false of the return type in `fn mk() -> chan[int]<- {`: a `{` begins a
+# block, so the marker read as a send and took a space it must not have. Looking left
+# answers the question instead of approximating it, and it cannot confuse the two — a send
+# `xs[0] <- v` closes a bracket too, but that bracket's `[` follows a NAME, not `chan`.
+fn closes_chan_type(toks: list[Token], i: int) -> bool {
+	return false if i < 0 or toks[i].kind != RBrack
+	mut depth := 0
+	mut j := i
+	for j >= 0 {
+		k := toks[j].kind
+		if k == RBrack {
+			depth = depth + 1
+		}
+		if k == LBrack {
+			depth = depth - 1
+			return j > 0 and is_chan(toks[j - 1].kind) if depth == 0
+		}
+		j = j - 1
+	}
+	return false
+}
+
+fn is_chan(k: Kind) -> bool {
+	return match k {
+		Chan => true
+		_ => false
+	}
+}
+
+# is_postfix names the operators that follow their operand. Both are unambiguous: `!=` and
+# `??` are tokens of their own, so a bare `!` is always the force-unwrap and a bare `?` is
+# always the propagate. The formatter never learned either, so `print v!` came back as
+# `print v !` — an operator adrift from the thing it operates on.
+fn is_postfix(k: Kind) -> bool {
+	return match k {
+		Bang => true
+		Question => true
+		_ => false
+	}
+}
+
+fn is_larrow(k: Kind) -> bool {
+	return match k {
+		LArrow => true
+		_ => false
+	}
 }
 
 # binds_tight reports whether a `(` or `[` after this token opens a call or an index
@@ -1503,6 +1587,12 @@ fn binds_tight(k: Kind) -> bool {
 		RBrack => true
 		Str => true
 		Int => true
+
+		# `chan[T]` and `ptr[T]` are the two type constructors spelled with a KEYWORD rather
+		# than a name, so the Ident case above does not reach them and `chan [int]` came out
+		# with a space no other type has
+		Chan => true
+		Ptr => true
 		_ => false
 	}
 }
@@ -1548,9 +1638,12 @@ fn is_comma(k: Kind) -> bool {
 	}
 }
 
+# is_dot covers BOTH accessors: `.` and the optional chain `?.`, which is one token and
+# binds exactly as tightly. Without the second, `b?.value` came back as `b ?. value`.
 fn is_dot(k: Kind) -> bool {
 	return match k {
 		Dot => true
+		OptDot => true
 		_ => false
 	}
 }

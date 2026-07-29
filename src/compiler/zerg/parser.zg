@@ -65,7 +65,45 @@ fn ident_name(e: Expr) -> str {
 
 # --- types ---------------------------------------------------------------------
 
+# ty_is_chan / ty_chan_elem are the two questions the directional forms ask about a type
+# already read. The emitter has its own pair; the parser cannot reach them, and a type is
+# small enough that two matches cost less than a shared module would.
+fn ty_is_chan(t: Ty) -> bool {
+	return match t {
+		TChan(_, _) => true
+		_ => false
+	}
+}
+
+fn ty_chan_elem(t: Ty) -> Ty {
+	return match t {
+		TChan(e, _) => e
+		_ => TUnknown
+	}
+}
+
+# parse_type reads a type expression, including the two DIRECTIONAL channel spellings
+# GRAMMAR gives: `<-chan[T]` is receive-only and `chan[T]<-` is send-only.
+#
+# Neither is ambiguous here, and the reason is structural rather than lucky: parse_type is
+# a closed sub-grammar that NEVER calls parse_expr, and it is only ever entered from a
+# type position — a parameter type, the type after `->`, a struct field, the `:` of a typed
+# binding, an enum variant's field, a type argument. None of those can begin an expression,
+# so a leading `<-` there can only be a direction and never a receive. The trailing form
+# cannot collide with `send-stmt ::= expr '<-' expr` for the mirror reason: parse_type is
+# never entered from a statement position, so `ch <- v` does not reach here. The trailing
+# `<-` is also only looked for after the `]` of a `chan[…]`, never after a name or any
+# other type, which is what keeps it away from anything else a `<-` could follow.
 fn parse_type(mut &p: Parser) -> Ty {
+	if p_at(p, LArrow) {
+		p_advance(p)
+		inner := parse_type(p)
+		if not ty_is_chan(inner) {
+			raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type"
+		}
+		return TChan(ty_chan_elem(inner), 2)
+	}
+
 	mut name := cur(p).lexeme
 	p_advance(p)
 
@@ -106,7 +144,12 @@ fn parse_type(mut &p: Parser) -> Ty {
 		p_advance(p)
 		elem := parse_type(p)
 		expect(p, RBrack)
-		# a bare `chan[T]` is bidirectional; the two directional spellings are a later unit
+		# the trailing `<-` — and ONLY here, right after the `]` that closed a channel's
+		# element type, so nothing else that a `<-` may follow is ever eaten
+		if p_at(p, LArrow) {
+			p_advance(p)
+			return TChan(elem, 1)
+		}
 		return TChan(elem, 0)
 	}
 	if name == "map" and p_at(p, LBrack) {
@@ -347,11 +390,29 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 # A statement rather than an expression, because `print v` is the most obvious thing to
 # write in an arm and `print` is a statement here. Reading it as an expression consumed
 # nothing, and the arm loop then read the rest of the body as further arms.
+#
+# A bare REASSIGNMENT is the one statement refused, because it is the one that reads as
+# something else: `done => running = false` looks like an arm binding a name, and GRAMMAR
+# makes an arm body an `expr` while a reassignment is a `simple-stmt` — the Go seed reads
+# the same source and rejects it. The braced form says what was meant and is grammatical,
+# because a block IS a primary. Nothing depends on the looseness: the corpus already
+# writes `done => { running = false }`.
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return parse_block(p) if p_at(p, LBrace)
 	mut one: list[Stmt] = []
-	one.append(parse_stmt(p))
+	st := parse_stmt(p)
+	if is_assign_stmt(st) {
+		raise "a select arm's body is an expression, not a reassignment: write `=> { … }` around it"
+	}
+	one.append(st)
 	return one
+}
+
+fn is_assign_stmt(s: Stmt) -> bool {
+	return match s {
+		SAssign(_, _) => true
+		_ => false
+	}
 }
 
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
@@ -1326,6 +1387,21 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	}
 	expect(p, FatArrow)
 	body := parse_expr(p)
+
+	# GRAMMAR makes an arm's body an `expr`, and a block is a primary — so `X => { … }` is
+	# grammatical and a bare statement is not. c_match lowers a match to a ternary chain
+	# and can hold neither, which is a general `match` gap rather than a channel one.
+	#
+	# What is fixed here is only the DIAGNOSTIC. `Add(d) => n = n + d` used to leave the
+	# `= n + d` behind, and the arm loop then read the wreckage as further arms and emitted
+	# C that only cc could object to. A leftover `=` or `<-` after a body is exactly that
+	# situation, and it is now said in Zerg's own words.
+	if p_at(p, Assign) {
+		raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower"
+	}
+	if p_at(p, LArrow) {
+		raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower"
+	}
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }
 

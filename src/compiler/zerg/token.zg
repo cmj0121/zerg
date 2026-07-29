@@ -373,6 +373,19 @@ fn ends_item(k: Kind) -> bool {
 		RBrace => true
 		Question => true
 		Bang => true
+
+		# `chan[T]<-` — the send-only direction marker is the one `<-` that ENDS something
+		# rather than pointing at what follows it, and a struct field or a `type` alias
+		# written with one is a whole item at the end of its line. Without this the line
+		# break after it was insignificant and the NEXT line was read as a continuation of
+		# the field: the formatter re-indented it under the field it had swallowed, which is
+		# a layout the compiler still reads back, so nothing failed and the source was
+		# quietly wrong.
+		#
+		# The cost is that a SEND may no longer be split after its arrow — `ch <-` then the
+		# value on the next line is now two statements. Nothing in this tree writes that, and
+		# the formatter never produces it, so the marker wins the token.
+		LArrow => true
 		True => true
 		False => true
 		Nil => true

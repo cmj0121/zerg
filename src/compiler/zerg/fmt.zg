@@ -1064,14 +1064,14 @@ fn fmt_wrap_group(
 	col: int,
 	depth: int
 ) -> Wrap {
-	close := fmt_wrap_end(toks, open)
+	shut := fmt_wrap_end(toks, open)
 
-	return Wrap(open + 1, col) if close == 0
-	return Wrap(close + 1, col) if fmt_wrap_has_comment(toks, open, close)
+	return Wrap(open + 1, col) if shut == 0
+	return Wrap(shut + 1, col) if fmt_wrap_has_comment(toks, open, shut)
 
-	flat := fmt_wrap_flat_width(wid, open + 1, close)
-	elems := fmt_wrap_elem_count(toks, open, close)
-	return fmt_wrap_free(toks, brk, drop, wid, open, close, col, flat, depth) if elems == 0
+	flat := fmt_wrap_flat_width(wid, open + 1, shut)
+	elems := fmt_wrap_elem_count(toks, open, shut)
+	return fmt_wrap_free(toks, brk, drop, wid, open, shut, col, flat, depth) if elems == 0
 
 	# Both thresholds VETO a join; neither orders a split. A group is broken up only when
 	# its author already broke it — this rule then decides whether it stays broken, and
@@ -1090,9 +1090,9 @@ fn fmt_wrap_group(
 	# shape of the groups that are already wrapped.
 	over := col + flat > fmt_wrap_max()
 	many := elems >= fmt_wrap_elems()
-	spans := fmt_wrap_spans(brk, open, close)
-	return fmt_wrap_split(toks, brk, drop, wid, open, close, depth) if spans and (over or many)
-	return fmt_wrap_join(toks, brk, drop, open, close, col + flat)
+	spans := fmt_wrap_spans(brk, open, shut)
+	return fmt_wrap_split(toks, brk, drop, wid, open, shut, depth) if spans and (over or many)
+	return fmt_wrap_join(toks, brk, drop, open, shut, col + flat)
 }
 
 # fmt_wrap_join puts the whole group on one line. The trailing comma goes with it: it is
@@ -1101,16 +1101,16 @@ fn fmt_wrap_group(
 #
 # Joining a group joins everything nested inside it, so every trailing comma down there
 # is answered here too — the inner groups are never visited again.
-fn fmt_wrap_join(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], open: int, close: int, col: int) -> Wrap {
+fn fmt_wrap_join(toks: list[Token], mut &brk: list[int], mut &drop: list[bool], open: int, shut: int, col: int) -> Wrap {
 	mut i := open + 1
-	for i <= close {
+	for i <= shut {
 		brk[i] = 0
-		if is_comma(toks[i].kind) and i + 1 <= close and is_close(toks[i + 1].kind) {
+		if is_comma(toks[i].kind) and i + 1 <= shut and is_close(toks[i + 1].kind) {
 			drop[i] = true
 		}
 		i = i + 1
 	}
-	return Wrap(close + 1, col)
+	return Wrap(shut + 1, col)
 }
 
 # fmt_wrap_split gives every top-level element its own line. The opener ends its line and
@@ -1127,24 +1127,24 @@ fn fmt_wrap_split(
 	mut &drop: list[bool],
 	wid: list[int],
 	open: int,
-	close: int,
+	shut: int,
 	depth: int
 ) -> Wrap {
 	inner := (depth + 1) * fmt_wrap_tab()
 	fmt_wrap_break_at(brk, open + 1)
-	fmt_wrap_break_at(brk, close)
-	if close > open + 1 and is_comma(toks[close - 1].kind) {
-		drop[close - 1] = true
+	fmt_wrap_break_at(brk, shut)
+	if shut > open + 1 and is_comma(toks[shut - 1].kind) {
+		drop[shut - 1] = true
 	}
 	mut col := inner
 	mut i := open + 1
-	for i < close {
+	for i < shut {
 		if fmt_wrap_opens(toks, i) {
 			r := fmt_wrap_group(toks, brk, drop, wid, i, col + wid[i], depth + 1)
 			col = r.col
 			i = r.next
 		} else {
-			if is_comma(toks[i].kind) and i + 1 < close {
+			if is_comma(toks[i].kind) and i + 1 < shut {
 				fmt_wrap_break_at(brk, i + 1)
 				col = inner
 			} else {
@@ -1153,7 +1153,7 @@ fn fmt_wrap_split(
 			i = i + 1
 		}
 	}
-	return Wrap(close + 1, depth * fmt_wrap_tab() + 1)
+	return Wrap(shut + 1, depth * fmt_wrap_tab() + 1)
 }
 
 # fmt_wrap_free is a group with no top-level comma — a chain, or parentheses around an
@@ -1165,18 +1165,18 @@ fn fmt_wrap_free(
 	mut &drop: list[bool],
 	wid: list[int],
 	open: int,
-	close: int,
+	shut: int,
 	col: int,
 	flat: int,
 	depth: int
 ) -> Wrap {
-	return Wrap(close + 1, col + flat) if not fmt_wrap_spans(brk, open, close)
+	return Wrap(shut + 1, col + flat) if not fmt_wrap_spans(brk, open, shut)
 	inner := (depth + 1) * fmt_wrap_tab()
 	fmt_wrap_break_at(brk, open + 1)
-	fmt_wrap_break_at(brk, close)
+	fmt_wrap_break_at(brk, shut)
 	mut c := inner
 	mut i := open + 1
-	for i < close {
+	for i < shut {
 		if fmt_wrap_opens(toks, i) {
 			r := fmt_wrap_group(toks, brk, drop, wid, i, c + wid[i], depth + 1)
 			c = r.col
@@ -1189,7 +1189,7 @@ fn fmt_wrap_free(
 			i = i + 1
 		}
 	}
-	return Wrap(close + 1, depth * fmt_wrap_tab() + 1)
+	return Wrap(shut + 1, depth * fmt_wrap_tab() + 1)
 }
 
 fn fmt_wrap_break_at(mut &brk: list[int], at: int) {
@@ -1198,9 +1198,9 @@ fn fmt_wrap_break_at(mut &brk: list[int], at: int) {
 	}
 }
 
-fn fmt_wrap_spans(brk: list[int], open: int, close: int) -> bool {
+fn fmt_wrap_spans(brk: list[int], open: int, shut: int) -> bool {
 	mut i := open + 1
-	for i <= close {
+	for i <= shut {
 		return true if brk[i] > 0
 		i = i + 1
 	}
@@ -1224,9 +1224,9 @@ fn fmt_wrap_end(toks: list[Token], open: int) -> int {
 	return 0
 }
 
-fn fmt_wrap_has_comment(toks: list[Token], open: int, close: int) -> bool {
+fn fmt_wrap_has_comment(toks: list[Token], open: int, shut: int) -> bool {
 	mut i := open + 1
-	for i < close {
+	for i < shut {
 		return true if is_comment(toks[i].kind)
 		i = i + 1
 	}
@@ -1246,11 +1246,11 @@ fn fmt_wrap_flat_width(wid: list[int], lo: int, hi: int) -> int {
 # fmt_wrap_elem_count is how many top-level elements the group holds, and 0 when it has no
 # top-level comma at all — the shape that is exempt. A trailing comma closes the last
 # element rather than opening another.
-fn fmt_wrap_elem_count(toks: list[Token], open: int, close: int) -> int {
+fn fmt_wrap_elem_count(toks: list[Token], open: int, shut: int) -> int {
 	mut commas := 0
 	mut d := 0
 	mut i := open + 1
-	for i < close {
+	for i < shut {
 		k := toks[i].kind
 		if is_bracket(k) or is_lbrace(k) {
 			d = d + 1
@@ -1263,7 +1263,7 @@ fn fmt_wrap_elem_count(toks: list[Token], open: int, close: int) -> int {
 	}
 
 	return 0 if commas == 0
-	return commas if is_comma(toks[close - 1].kind)
+	return commas if is_comma(toks[shut - 1].kind)
 
 	return commas + 1
 }
@@ -1590,9 +1590,11 @@ fn binds_tight(k: Kind) -> bool {
 
 		# `chan[T]` and `ptr[T]` are the two type constructors spelled with a KEYWORD rather
 		# than a name, so the Ident case above does not reach them and `chan [int]` came out
-		# with a space no other type has
+		# with a space no other type has. `close(ch)` is the third: a statement whose
+		# argument is parenthesized, written the way the call it used to be was.
 		Chan => true
 		Ptr => true
+		Close => true
 		_ => false
 	}
 }

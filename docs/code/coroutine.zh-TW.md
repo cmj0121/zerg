@@ -70,8 +70,9 @@ coroutine。
 
 channel 是一條型別化的 by-ref 管道，payload **複製**流過它。它是一個 **reference-counted 的值**——`Ref` 的內建
 實作者（與 `Ref[T]` 並列；見 [值與記憶體](../core/memory.zh-TW.md)），scope-owning 的例外：在最後一個持有者的 scope 結束時
-free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**（可被送進另一條
-channel）。
+free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**：
+可以放進 struct 欄位、當成 enum payload 攜帶——actor 的 ask 就是這樣攜帶它的回覆 channel——也可以
+送進另一條 channel。**[implemented]**，兩個編譯器皆然。
 
 ```text
 ch := chan[int]()      # unbuffered——每次 send 與一次 receive rendezvous
@@ -81,8 +82,9 @@ ch := chan[int](64)    # buffered，容量 64
 容量是唯一可調之處；**send 在滿時 block、receive 在空時 block**。unbuffered（容量 0）是 rendezvous——send 只有在
 receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
 
-本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send abort、
-最後 sender 自動 close——皆為 **[implemented]**。兩個 channel 錯誤種類都已**具現化且叫得出名字**：對已關閉 channel
+本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send
+abort、最後 sender 自動 close，以及 payload 在**送出當下深拷貝**、使 receiver 絕不共享 sender 的儲存
+——皆為 **[implemented]**。兩個 channel 錯誤種類都已**具現化且叫得出名字**：對已關閉 channel
 的 send 以 `SendOnClosedError` raise，`DeadlockError` 則是「收尾與 deadlock」所述的乾淨、可攔截 abort，兩者都能用
 一般的 `err is …` 測試（見 [錯誤處理](errors.zh-TW.md)）。
 

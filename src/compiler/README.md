@@ -103,16 +103,23 @@ none of it.
 
 ```sh
 make corpus     # build zerg, then run it over test-data/codegen/
+make refuse     # every program that must be turned away, is — by the compiler
 ```
 
 Each case is a `.zg` program beside the stdout it must produce. The Makefile's
 `CORPUS_PASS` is the set `zerg` gets right today and is the **gate**: a case that leaves
-it is a regression and fails the target. The remaining cases are reported, not enforced —
-eight of them need generics, `derive`, spec bounds, or `#[dyn]`, none of which the
-self-hosting compiler has yet. One is not a missing feature but a BUG: `countdown` —
-`mut n := n` shadowing a parameter emits `int64_t zg_n = zg_n;`, which C rejects as a
-redefinition. The seed gives every local a unique C name; this emitter does not. It is at
-least loud: the C compiler refuses it.
+it is a regression and fails the target. The remaining eight are reported, not enforced:
+they need generic **function** definitions, a generic type parameter as a field's type,
+`derive`, spec bounds, or `#[dyn]`, none of which the self-hosting compiler has yet. Each
+is refused by name — `gen_struct` answers _no type named `T` (field `Box.val`)_ — rather
+than mis-emitted.
+
+`make refuse` is the other side of that. Every gate here asks what the toolchain BUILDS,
+and the property a refusal needs is not that a bad program fails — it always did — but WHO
+says so. A program the compiler emits anyway reaches cc, which reports a real error against
+generated C under `.zerg-cache`, at a line the programmer cannot open. So each case in
+`scripts/refuse-check.sh` asserts three things: a non-zero exit, the expected sentence, and
+no mention of the cache.
 
 Each case that starts passing is a fix or a feature landing, and moves into the list.
 
@@ -227,10 +234,18 @@ the two have been drifting apart. What the shipped compiler accepts beyond that 
 | `map[K,V]`, `{k: v}`, `{:}`       | POD keys and values                               |
 | `defer f(args)`                   | at the enclosing block's exit, arguments by value |
 
-Still missing, and each is refused by name rather than mis-emitted where the parser can
-tell: closures and `fn` values, `spawn` / `chan` / `select`, generic **function**
-definitions, slicing `xs[a..b]` (which needs a runtime leaf that does not exist yet),
-and the command literal.
+Concurrency is here in full and is where this compiler is now the WIDER of the two:
+`chan[T](cap)`, `ch <- v`, `<-ch` as a real `Result[T]`, `close(ch)` and `defer close(ch)`,
+`select` with all four arm shapes and a statement for an arm body, `for v in ch`, the
+directional ends `<-chan[T]` / `chan[T]<-`, a `spawn` on a method or a namespaced function,
+and the stdlib timers. A channel is first-class here too — held in a struct field, carried
+as an enum payload, sent over another channel — and a payload is deep-copied at the send,
+so a receiver never shares the sender's buffer.
+
+Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (which takes
+`std/atomic` with it), the `?` operator, a block as a `match` arm body, generic **function**
+definitions, a generic type parameter used as a field's type, named-argument struct
+construction `T(a: 1)`, and the command literal.
 
 ## Performance: parallelism & caching (M7)
 

@@ -19,3 +19,74 @@ pub fn now() -> int {
 pub fn monotonic() -> int {
 	return __zrt_time_mono()
 }
+
+# --- timers -------------------------------------------------------------------------
+#
+# A TIMER IS A CHANNEL. Zerg has no timeout primitive, no deadline argument on a receive
+# and no cancellation token, because it does not need any: a `select` arm receiving from
+# `after(d)` IS a timeout, and one receiving from a cancel channel IS cancellation. The
+# whole of the runtime's timer surface is one leaf, `__zrt_sleep_ns`, which parks the
+# running coroutine until a monotonic deadline passes; everything a caller sees is written
+# here, in Zerg, over that. The scheduler makes the two promises this rests on: a worker
+# with nothing to run sleeps to the nearest deadline rather than spinning, and a pending
+# sleep is not a deadlock — a coroutine that is going to wake on its own is making
+# progress, so a `select` waiting on a timer is not killed for waiting.
+#
+#     select {
+#         v := <-work            => handle(v!)
+#         _ := <-time.after(500) => give_up()      # 500ns; a timeout, with no new syntax
+#     }
+#
+# THE COST IS A COROUTINE. Each live timer is one, and a coroutine owns a 256KB stack, so
+# a timer is far from free: an `after` inside a loop allocates one per iteration and each
+# lives until its deadline passes and its value is taken. A `ticker` never ends at all —
+# nothing cancels a sleep — so it holds its coroutine until the program does.
+#
+# Durations are NANOSECONDS, the unit `monotonic` already reads and the unit the runtime
+# leaf takes. A duration <= 0 fires at once.
+
+# after answers a receive-only channel that delivers one value once d nanoseconds have
+# passed. The end handed back cannot send, which is the point: only the timer fires the
+# timer, and a receiver cannot make it go off early by mistake.
+pub fn after(d: int) -> <-chan[int] {
+	ch := chan[int](1)
+	spawn timer_once(ch, d)
+	return ch
+}
+
+# ticker answers a receive-only channel that delivers a value every d nanoseconds. The
+# channel holds ONE tick: a receiver that falls behind makes the ticker park on the send
+# rather than queue ticks up, so a slow consumer slows the ticker instead of accumulating
+# a backlog it can never catch up with.
+#
+# There is no stop: a sleep cannot be cancelled, so the coroutine lives until the program
+# does. A ticker belongs at the top of a program, not inside a loop.
+pub fn ticker(d: int) -> <-chan[int] {
+	ch := chan[int](1)
+	spawn timer_loop(ch, d)
+	return ch
+}
+
+# timer_once and timer_loop take a SEND-ONLY end, which is also what keeps the channel
+# open: a send-only handle counts as a sender, so the channel a timer feeds stays open for
+# exactly as long as its timer coroutine is alive, and closes when the coroutine returns.
+# `after`'s own bidirectional handle is released when `after` returns.
+#
+# THE VALUE IS THE MONOTONIC READING at the moment the timer fired, not a placeholder. A
+# tick has to carry something, and this is the one fact a timer knows that its receiver
+# does not: a tick may be delivered arbitrarily later than it fired — a receiver busy
+# elsewhere, or a ticker parked on a full channel — and the reading is how a receiver that
+# cares can tell how late it is. `chan[nil]` would say "no information" more precisely and
+# the self-hosted compiler accepts it, but the seed's parser has no `nil` type at all, so
+# every seed-built program that imports this module would stop compiling to make a point.
+fn timer_once(out: chan[int]<-, d: int) {
+	__zrt_sleep_ns(d)
+	out <- __zrt_time_mono()
+}
+
+fn timer_loop(out: chan[int]<-, d: int) {
+	for {
+		__zrt_sleep_ns(d)
+		out <- __zrt_time_mono()
+	}
+}

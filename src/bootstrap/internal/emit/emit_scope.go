@@ -304,11 +304,22 @@ func (e *emitter) raiseCause(x ast.Expr) string {
 	return fmt.Sprintf("zrt_err_new(%s)", e.errMessage(x))
 }
 
-// errMessage renders the C string message for a raised value: a string literal
-// verbatim, any other expression a placeholder (its display() is a later iteration).
+// errMessage renders the C string message for a raised value: a string literal verbatim,
+// any other `str`-typed expression rendered, and a non-str value a placeholder (its
+// display() is a later iteration).
+//
+// The literal fast path stays first so `raise "boom"` still emits a plain C literal. What
+// it used to be alone: every other operand became the literal `"raise"` and the expression
+// was never rendered at all, so `raise "cannot close " + name` aborted with the word
+// "raise" — a diagnostic that told the reader nothing, and one the self-hosted compiler
+// has always got right. That mattered most for the compiler the seed builds, whose own
+// error messages are almost all concatenations.
 func (e *emitter) errMessage(x ast.Expr) string {
 	if s, ok := x.(*ast.StrLit); ok {
 		return cString(s.Value)
+	}
+	if e.isStrExpr(x) {
+		return e.expr(x)
 	}
 	return "\"raise\""
 }

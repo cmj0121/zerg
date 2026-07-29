@@ -639,6 +639,17 @@ typedef struct zrt_cond   { void *slots[10]; } zrt_cond;
  * thunk and awaits reclamation by the scheduler. */
 typedef enum {
 	ZRT_CORO_RUNNABLE,
+	/* RUNNING is "on a CPU right now", and it is distinct from RUNNABLE because a wake
+	 * has to tell the two apart. Waking a RUNNABLE coroutine is a no-op — it is already
+	 * queued and will run. Waking a RUNNING one cannot be, and cannot queue it either:
+	 * the wake has to be REMEMBERED, so that the park this coroutine is on its way to
+	 * does not block on news that already arrived.
+	 *
+	 * A select is what makes that window reachable. It pushes a waiter onto every
+	 * channel it watches, and can only hold one channel lock at a time, so the moment
+	 * the first waiter is visible a counterparty can claim it — while the select is
+	 * still RUNNING, several statements away from parking. */
+	ZRT_CORO_RUNNING,
 	/* PARKING is the instant between "I have decided to block" and "I am off the CPU".
 	 * It exists only because M > 1: a coroutine that announced BLOCKED while still
 	 * running could be woken, queued, and picked up by a second worker before it
@@ -664,7 +675,6 @@ typedef struct zrt_coro {
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
 	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
 	bool             woken;              /* a wake arrived while PARKING; see sched.c */
-	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
 
 /* --- threads: the M of M:N ---------------------------------------------------

@@ -76,7 +76,7 @@ func TestChannelLowering(t *testing.T) {
 		"typedef struct { int32_t tag; int64_t ok; zrt_err err; } zg_result_0;", // the general carrier
 		"static zg_result_0 zg_chanrecv_0(zrt_chan *ch) {",
 		"r.tag = (int32_t)zrt_chan_recv(ch, &r.ok);",
-		"r.err = zrt_err_new(m == NULL ? \"StopIteration\" : m);", // the close carries its reason
+		"if (r.tag != 0) { r.err = zrt_chan_close_err(ch); }", // the close carries its whole Err
 		"zg_chanrecv_0(",                 // <-ch
 		"zg_force_zg_result_0(",          // (<-ch)! goes through the general carrier's force helper
 		"zrt_defer(zg_chan_sender_drop,", // the handle's scope-exit drop
@@ -210,7 +210,8 @@ func TestForInChannel(t *testing.T) {
 	code, _ := emitWithManifest(t, src)
 	for _, want := range []string{
 		"while (zrt_chan_recv(zg_cit, &zg_v) == 0) {",
-		"if (zrt_chan_err(zg_cit) != NULL) { zrt_abort(zrt_chan_err(zg_cit)); }",
+		"zrt_err zg_cerr = zrt_chan_close_err(zg_cit);",
+		"if (zg_cerr.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zg_cerr); }",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("emitted C missing %q\n%s", want, code)
@@ -220,6 +221,51 @@ func TestForInChannel(t *testing.T) {
 	// ends the stream ends the loop instead of reaching the body.
 	if strings.Contains(code, "zg_chanrecv_") {
 		t.Fatalf("a for-in over a channel must not build a Result carrier\n%s", code)
+	}
+}
+
+// TestReceiveRightCarriesTheKind pins the one thing a Right must not lose: its KIND.
+// Every place a receive can produce one — the recv helper, a select recv arm's bind, and
+// the reason a `for v in ch` reads after the loop — takes the channel's whole Err from
+// zrt_chan_close_err, so a clean close answers `err is StopIteration` by kind and a crash
+// close arrives with the crashing coroutine's own kind, message and cause. Building the
+// Err from a message here instead (the shape this replaced) left the kind 0, which made
+// `err is StopIteration` FALSE and left a receiver comparing strings — the exact thing
+// docs/code/coroutine.md's Receive table exists to rule out.
+func TestReceiveRightCarriesTheKind(t *testing.T) {
+	const src = "fn produce(ch: chan[int]) {\n" +
+		"  ch <- 1\n" +
+		"}\n" +
+		"fn main() {\n" +
+		"  ch := chan[int](1)\n" +
+		"  spawn produce(ch)\n" +
+		"  del ch\n" +
+		"  r := <-ch\n" +
+		"  select {\n" +
+		"    x := <-ch => { print x! }\n" +
+		"    _ => { print 0 }\n" +
+		"  }\n" +
+		"  for v in ch {\n" +
+		"    print v\n" +
+		"  }\n" +
+		"  print r!\n" +
+		"}"
+	code, _ := emitWithManifest(t, src)
+	for _, want := range []string{
+		"if (r.tag != 0) { r.err = zrt_chan_close_err(ch); }",                   // a bare `<-ch`
+		"zg_x.err = zrt_chan_close_err(zg_selcs[0].ch); }",                      // a select recv arm
+		"if (zg_cerr.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zg_cerr);", // `for v in ch`
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("emitted C missing %q\n%s", want, code)
+		}
+	}
+	// The message-shaped construction is what discarded the kind, and the string-shaped
+	// runtime view it read is gone from the runtime entirely.
+	for _, bad := range []string{"zrt_err_new(\"StopIteration\")", "zrt_chan_err("} {
+		if strings.Contains(code, bad) {
+			t.Fatalf("a receive's Right must not be built by %q\n%s", bad, code)
+		}
 	}
 }
 

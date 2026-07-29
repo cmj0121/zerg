@@ -284,14 +284,27 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	if c_is_unknown(ft) {
 		raise "no field `" + fld + "` on " + ty_name(inner) + " (optional chain `?." + fld + "`)"
 	}
+	# a field that is ALREADY optional flattens: `T??` is not a type — GRAMMAR's
+	# `type ::= base-type '?'?` allows exactly one marker — and "nil in place" means the
+	# chain answers the same shape whether the absence came from the operand or the field.
+	mut oft := ft
+	if c_is_opt(ft) {
+		oft = c_opt_elem(ft)
+	}
 	src := c_opt_name(em, inner)
-	dst := c_opt_name(em, ft)
+	dst := c_opt_name(em, oft)
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 	tv := "zg_oc" + tag
 	rv := "zg_ocr" + tag
 	mut out := f"({{ {src} {tv} = {c_expr(em, target, sb)}; {dst} {rv};"
-	out = out + " if (" + c_res_is_left(tv) + ") { " + c_res_mark_left(rv) + " " + c_res_ok(rv) + " = " + c_res_ok(tv) + ".zg_" + fld + "; }"
+	acc := c_res_ok(tv) + ".zg_" + fld
+	mut take := c_res_mark_left(rv) + " " + c_res_ok(rv) + " = " + acc + ";"
+	if c_is_opt(ft) {
+		# the field carries its own tag, so the answer IS the field
+		take = rv + " = " + acc + ";"
+	}
+	out = out + " if (" + c_res_is_left(tv) + ") { " + take + " }"
 	return out + " else { " + c_res_mark_right(rv) + " } " + rv + "; })"
 }
 
@@ -334,6 +347,7 @@ fn c_optchain_ty(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	return TUnknown if not c_is_opt(t)
 	ft := c_field_ty(em, c_named_of(c_opt_elem(t)), fld)
 	return TUnknown if c_is_unknown(ft)
+	return ft if c_is_opt(ft)
 	return TOpt(ft)
 }
 

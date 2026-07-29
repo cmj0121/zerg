@@ -33,6 +33,7 @@ enum Ty {
 	TFn(list[Ty], Ty)
 	TTuple(list[Ty])
 	TMap(Ty, Ty)
+	TChan(Ty)
 }
 
 # Expr is an expression node.
@@ -69,6 +70,11 @@ enum Expr {
 	# EFn is `fn(p: T) -> R { … }` in expression position. It carries what a FnDecl does
 	# minus the name, because that is what it is: a function with nowhere to put its name.
 	EFn(list[Param], bool, Ty, list[Stmt])
+
+	# EChanNew is `chan[T](cap)`, and ERecv is the prefix `<-ch`. A send is a STATEMENT
+	# (GRAMMAR: it yields no value), so it is in Stmt rather than here.
+	EChanNew(Ty, Expr)
+	ERecv(Expr)
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -107,6 +113,10 @@ enum Stmt {
 	# SDefer is `defer f(a)`. GRAMMAR runs it at the enclosing BLOCK's exit, on every path
 	# out, last-scheduled-first.
 	SDefer(Expr)
+
+	# SSpawn is `spawn f(a)` — fire-and-forget. SSend is `ch <- v`.
+	SSpawn(Expr)
+	SSend(Expr, Expr)
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable
@@ -308,6 +318,8 @@ fn expr_kind(e: Expr) -> str {
 		ETuple(elems) => "tuple"
 		EMapLit(ks, vs) => "map-literal"
 		EFn(ps, has_ret, ret, body) => "fn-expr"
+		EChanNew(t, cap) => "chan-new"
+		ERecv(ch) => "recv"
 		_ => "?"
 	}
 }

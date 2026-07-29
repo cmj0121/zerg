@@ -153,17 +153,13 @@ func (e *emitter) prepareChannels() {
 			consider(ei.Left)
 		}
 	}
-	// One walk of the bodies, for two facts. A `select` recv arm binds its `id` to Result[T]
-	// like a bare `<-ch`, so its element type needs a carrier too — and its channel is reached
-	// through the arm rather than an ast.Recv node. A `del` is noted here because the hold it
-	// keeps needs the plain-hold thunk (delChan).
-	hasDel := false
+	// One walk of the bodies, for one fact: a `select` recv arm binds its `id` to Result[T]
+	// like a bare `<-ch`, so its element type needs a carrier too — and its channel is
+	// reached through the arm rather than an ast.Recv node.
 	for _, inst := range e.prog.Funcs {
 		e.cur = inst
 		walkStmts(inst.Origin.Body, func(s ast.Stmt) {
 			switch n := s.(type) {
-			case *ast.DelStmt:
-				hasDel = true
 			case *ast.SelectStmt:
 				for i := range n.Arms {
 					if arm := &n.Arms[i]; arm.Kind == ast.SelectRecv {
@@ -188,11 +184,9 @@ func (e *emitter) prepareChannels() {
 	}
 
 	// Every channel a seed program can hold is bidirectional — a directional one was refused
-	// above — so a held handle always needs the SENDER drop thunk. The plain-hold thunk is
-	// for the hold `del ch` keeps; a `del` names a source identifier rather than a resolved
-	// symbol, so this pass cannot tell WHICH name it names and emits the thunk whenever a
-	// program has both a `del` and a handle. It is a static function either way, so
-	// over-emitting it costs nothing but its own definition.
+	// above — so a held handle always needs the SENDER drop thunk, and only that one. The
+	// plain-hold thunk existed for the hold the old `del ch` kept behind; `close(ch)` moves
+	// no count at all now, so nothing in a seed program is dropped as a plain hold.
 	holdsChan := false
 	note := func(t sema.Type) {
 		if _, ok := t.(*types.Chan); ok {
@@ -212,7 +206,11 @@ func (e *emitter) prepareChannels() {
 		}
 	}
 	e.needChanSenderDrop = holdsChan
-	e.needChanDrop = holdsChan && hasDel
+	// The plain-hold thunk has no user left. chanDropThunk names it only for a ChanRecv
+	// handle, and rejectDirectionalChans refuses every directional type the seed could
+	// declare one from — so if that refusal is ever lifted without lifting this, the C names
+	// a function nothing defined and cc says so. Loud, which is the seed's whole contract.
+	e.needChanDrop = false
 }
 
 // rejectDirectionalChans refuses a receive-only / send-only channel type in a signature
@@ -277,63 +275,57 @@ func (e *emitter) chanDropThunk(t *types.Chan) string {
 	return "zg_chan_sender_drop"
 }
 
-// --- del ----------------------------------------------------------------------
+// --- close ---------------------------------------------------------------------
 
-// delChan lowers `del ch`. On a send-capable handle it gives up the SEND end and KEEPS an
-// ordinary hold, because that is what the statement is for: the language has no explicit
-// close, a channel closes when its last send end leaves, and `del ch` is how a spawner says
-// "no more sends from me" so a producer coroutine's end is the last one. The name has to
-// stay usable afterwards — giving up your send end and then draining what the producer
-// sends is the shape every concurrent program is written in.
+// closeCallStmt lowers a `close(ch)` statement, reporting whether the expression was one.
 //
-// The runtime has no sender-only release (zrt_chan_sender_release drops the hold too), so
-// the hold is taken again first and moved to a fresh slot: the original slot is nulled so
-// its scope-exit sender drop skips it, and the survivor carries the one hold that is left.
-// Counting it out for `ch := chan[int](); spawn p(ch); del ch`: new gives rc1/s1, the spawn
-// capture rc2/s2, the copy rc3/s2, the sender release rc2/s1 — so the producer's own
-// parameter drop takes the send count to zero and closes the channel, and the survivor's
-// scope-exit drop takes the last hold.
-func (e *emitter) delChan(n *ast.DelStmt, cname string, t *types.Chan) {
-	if t.Dir == types.ChanRecv {
-		// no send end to give up, so `del` is the ordinary revoke of the hold
-		e.line(fmt.Sprintf("zrt_chan_release(%s);", cname))
-		e.line(fmt.Sprintf("%s = NULL;", cname))
-		return
+// `close(ch)` marks the CHANNEL no-longer-sendable. It is a property of the channel and
+// not of a holder, so it moves no count: `ch` keeps its reference and stays readable, a
+// receive drains what is buffered and then answers the Right, and closing twice changes
+// nothing. That is the whole lowering — one runtime call.
+//
+// It does NOT replace auto-close, which stays the everyday shape: a producer closes by
+// FINISHING, its unwind dropping the last send end. Two things depend on that and an
+// explicit flag cannot do either — a crashing producer never reaches a `close` call, and
+// its unwind is what carries the crash Err to the receiver; and four producers fanning in
+// need no coordination because the last to return closes. `close` is the conditional,
+// early form: end this stream before my scope does.
+//
+// It stays a STATEMENT rather than a value. Nothing in the lowering forbids an expression
+// today, but `close` yields nothing a program can use, and keeping one spelling is what
+// lets both compilers say the same thing about it.
+func (e *emitter) closeCallStmt(x ast.Expr) bool {
+	call, ok := x.(*ast.Call)
+	if !ok || !isCloseCall(call) {
+		return false
 	}
-	if !e.curScopeOwnsDrop(cname) {
-		// The survivor's release is pushed on the runtime cleanup stack HERE, so it is
-		// popped when this block unwinds — which is the wrong scope if the binding belongs
-		// to an enclosing one, and would free the channel while that scope still names it.
-		e.diags.Add(n.Span(), "the bootstrap seed lowers 'del' on a channel only in the block that binds it")
-		return
+	if len(call.Args) != 1 {
+		return true // sema reported the arity; emit nothing rather than guess
 	}
-	keep := e.freshName("chk")
-	e.line(fmt.Sprintf("zrt_chan *%s = zrt_chan_copy(%s);", keep, cname))
-	e.line(fmt.Sprintf("zrt_chan_sender_release(%s);", cname))
-	e.line(fmt.Sprintf("%s = NULL;", cname))
-	e.line(fmt.Sprintf("zrt_defer(zg_chan_drop, &%s);", keep))
-	kept := &types.Chan{Elem: t.Elem, Dir: types.ChanRecv}
-	top := e.curScope()
-	top.items = append(top.items, dropItem{cname: keep, typ: kept})
-	e.scopes[len(e.scopes)-1][n.Name] = keep
+	if _, ok := e.cur.ExprType(e.info, call.Args[0].Value).(*types.Chan); !ok {
+		return true // sema reported the non-channel
+	}
+	e.line(fmt.Sprintf("zrt_chan_close(%s);", e.expr(call.Args[0].Value)))
+	return true
 }
 
-// curScopeOwnsDrop reports whether the INNERMOST teardown frame is the one holding a C
-// name's drop — i.e. whether the binding was made in this block. findDrop deliberately
-// searches outward; this must not, because the question is which frame owns the release.
-func (e *emitter) curScopeOwnsDrop(cname string) bool {
-	for _, it := range e.curScope().items {
-		if it.cname == cname {
-			return true
-		}
+// closeOutOfStatement refuses a `close(...)` written where a statement cannot go — inside
+// an expression, or behind a `defer` or a `spawn` — reporting whether it was one. It is the
+// one message for all three, because they are one mistake.
+func (e *emitter) closeOutOfStatement(call *ast.Call) bool {
+	if !isCloseCall(call) {
+		return false
 	}
-	return false
+	e.diags.Add(call.Span(), "'close' is a statement, not a value: write `close(ch)` on a line of its own")
+	return true
 }
 
-// --- expressions / statements ------------------------------------------------
+// isCloseCall reports whether a call names the `close` built-in.
+func isCloseCall(call *ast.Call) bool {
+	id, ok := call.Callee.(*ast.Ident)
+	return ok && id.Name == "close"
+}
 
-// chanNew lowers `chan[T](cap?)` to zrt_chan_new(sizeof(T), cap) — an omitted capacity is
-// the unbuffered rendezvous (0). The fresh handle is bidirectional (rc = senders = 1).
 func (e *emitter) chanNew(n *ast.ChanNew) string {
 	ch, ok := e.cur.ExprType(e.info, n).(*types.Chan)
 	if !ok {

@@ -217,7 +217,11 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 	case *types.Chan:
-		e.delChan(n, cname, t)
+		// `del ch` revokes the name like any other owning binding: the handle it owned goes
+		// with it, send capability and hold together. Giving up only the send end is what
+		// `close(ch)` is for, and the two are no longer the same statement.
+		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), cname))
+		e.line(fmt.Sprintf("%s = NULL;", cname))
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)
 	}
@@ -333,6 +337,9 @@ func (e *emitter) errMessage(x ast.Expr) string {
 func (e *emitter) deferStmt(n *ast.DeferStmt) {
 	idx, ok := e.deferIdx[n]
 	if !ok {
+		if c, isCall := n.Call.(*ast.Call); isCall && isCloseCall(c) {
+			return // emitDeferHelpers already refused it by name; one message, not two
+		}
 		e.diags.Add(n.Span(), "defer supports only a direct, namespace, or method function call in Phase 1d")
 		return
 	}
@@ -414,6 +421,9 @@ func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT se
 // methodCall). It returns ok=false for any other callee (e.g. a call through a function
 // value), which leaves deferIdx unset so the site reports the loud stub.
 func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, recvT sema.Type, ok bool) {
+	if e.closeOutOfStatement(call) {
+		return "", nil, nil, false
+	}
 	switch callee := call.Callee.(type) {
 	case *ast.Ident:
 		return e.callTarget(call, callee), nil, nil, true

@@ -757,6 +757,11 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.RaiseStmt:
 		e.raiseStmt(n)
 	case *ast.ExprStmt:
+		// `close(ch)` is a statement rather than a value (closeCallStmt says why), so it is
+		// taken here before the expression dispatch ever sees the call.
+		if e.closeCallStmt(n.X) {
+			return
+		}
 		e.line(e.expr(n.X) + ";")
 	default:
 		// The statement half of the anti-silence net the expression dispatch already
@@ -2106,6 +2111,10 @@ func (e *emitter) variantTag(subjT sema.Type, name string) int {
 }
 
 func (e *emitter) call(n *ast.Call) string {
+	// `close(ch)` reaching the expression dispatch is a `close` where a statement cannot go.
+	if e.closeOutOfStatement(n) {
+		return ""
+	}
 	// a primitive conversion `T(x)`.
 	if s, ok := e.convCallEmit(n); ok {
 		return s

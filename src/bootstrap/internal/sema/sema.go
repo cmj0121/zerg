@@ -892,18 +892,15 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		// 'del name' revokes a binding's access now (GRAMMAR group 11); for a Ref the
 		// emitter drops a refcount. It marks the name dead on this path so a later use
 		// is rejected (DESIGN-1d §5.1); revoking is idempotent.
+		// A channel is no exception. `del ch` used to keep the name live, because it was the
+		// only spelling for "I am done sending" — but that made `del` mean two different
+		// things, and it left `ch <- v` after a `del ch` typechecking on a handle whose send
+		// end was gone. Giving up the send end is `close(ch)` now, so `del` means one thing
+		// again for every type.
 		sym := c.lookup(n.Name)
-		switch {
-		case sym == nil:
+		if sym == nil {
 			c.errorf(n.Span(), "undefined name %q", n.Name)
-		case isChan(sym.typ):
-			// A channel is the one exception: `del ch` gives up the SEND end and keeps the
-			// receive one (docs/code/coroutine.md — it closes the channel if you were its
-			// last sender), so the name stays live. It has to: giving up your send end so a
-			// producer coroutine's becomes the last, then draining what that producer sends,
-			// is the shape a concurrent program is written in, and revoking here would make
-			// `del ch` followed by a receive unwritable.
-		default:
+		} else {
 			c.revoke(sym)
 		}
 	case *ast.RaiseStmt:

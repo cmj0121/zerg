@@ -94,6 +94,14 @@ func (c *checker) inferCall(n *ast.Call) Type {
 func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 	switch callee := n.Callee.(type) {
 	case *ast.Ident:
+		// `close(ch)` says this holder is done sending (docs/code/coroutine.md). It is
+		// resolved BEFORE the shadowing test, unlike every other builtin here: it is not a
+		// name a program may bind, overload or redefine, so a user symbol of the same name
+		// never takes it over. The file method `f.close()` is a *ast.Field callee and is
+		// untouched by this case.
+		if callee.Name == "close" {
+			return c.closeChan(n), true
+		}
 		if c.shadowed(callee.Name) {
 			return nil, false
 		}

@@ -2526,6 +2526,11 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 	}
 	lt := c_infer(em, lhs)
 	lv := c_expr(em, lhs, c_nosub())
+	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it
+	# absent, `x = 5` present. Without it the C compiler saw an int where a carrier goes.
+	if c_is_opt(lt) {
+		return f"{ind}{lv} = {c_opt_fit(em, lt, rhs, c_nosub())};\n"
+	}
 	if c_is_list(lt) and c_is_listlit(rhs) {
 		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
@@ -2820,7 +2825,11 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	c_chan_op_check(cty, 1)
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
-	return ind + "{ " + ct + " zg_sv = " + c_copied(em, elem, v, c_nosub()) + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
+	mut sv := c_copied(em, elem, v, c_nosub())
+	if c_is_opt(elem) {
+		sv = c_opt_fit(em, elem, v, c_nosub())
+	}
+	return ind + "{ " + ct + " zg_sv = " + sv + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
 }
 
 # c_spawn lowers `spawn f(args)`. It is the same shape as a defer — a per-site env
@@ -3811,6 +3820,12 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
 	return c_let_chan(em, name, eff, ival, ind) if ty_is_chan(eff)
 
+	# an optional does not fit a declaration that promised a value: there is no implicit
+	# unwrap in the language, and letting one through emitted a carrier where a scalar went
+	if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival)) {
+		raise "`" + name + "` is declared " + ty_name(eff) + " and the value is " + ty_name(c_infer(em, ival)) + ": unwrap it with `?? …`, `!` or `if " + name + " := …`"
+	}
+
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one
 	if has_type and c_is_opt(eff) {
 		c_add_var(em, name, eff)
@@ -3929,6 +3944,13 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	ty := c_infer(em, e)
+	# An optional has no display of its own: it is a value that may not be there, and what
+	# to show for the absent side is the program's decision. `print x ?? "…"` or `print x!`
+	# says which one was meant; printing the carrier itself used to reach cc as an integer
+	# cast of a struct.
+	if c_is_opt(ty) {
+		raise "`print` needs a value, and " + ty_name(ty) + " may not have one — say which with `?? …` or `!`"
+	}
 	ex := c_expr(em, e, c_nosub())
 	return match ty {
 		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"

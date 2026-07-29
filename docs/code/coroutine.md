@@ -7,10 +7,18 @@ futures, no join/handle. It builds on the memory and error models in the
 ## `spawn`
 
 `spawn f(args)` starts a coroutine (Go's `go`) on the runtime scheduler (see Scheduling & fairness for
-the intended **M:N** model and the current single-thread **[deviation]**). It **returns nothing** — no
+the **M:N** model and the **[deviation]** that it is not preemptive). It **returns nothing** — no
 handle, no join/await; you observe results and completion **only through channels**. The callee is any
 call — a plain function, a **method** (`spawn obj.run()`), or a **namespaced** function (`spawn mod.work()`),
 mirroring `defer`, which takes the same callee forms (`defer f.close()`).
+
+> **[not yet]** Scoped to the **seed**, which lowers `spawn` on a **direct function call** only: a
+> method, a namespaced function and a closure are each refused **by name** — _the bootstrap seed
+> lowers `spawn` only on a direct function call_ — never mis-emitted. The shipped `zerg` lowers all
+> **three** spec forms, `spawn f(a)`, `spawn obj.run(a)` and `spawn mod.work(a)`; a method's receiver
+> crosses as an ordinary by-value capture, like every other argument. A **closure literal** is not one
+> of the three and both compilers refuse it by name — a lambda may capture nothing this phase, so
+> there would be no environment to hand a coroutine even if the shape were accepted.
 
 - **Fire-and-forget** — the runtime never tracks or joins the coroutine; to learn an outcome it must
   send it over a channel the observer holds.
@@ -30,11 +38,13 @@ to its spawning scope is exactly **structured concurrency** (a nursery that join
 it to keep `spawn` handle-less and the model small. The costs are accepted and explicit: **no join, no
 parent-waits, no automatic failure propagation** — coordination is the caller's, always through channels. A
 child's failure reaches others only as a `Right(err)` on a channel close (see Unhandled aborts); at program
-end, still-running coroutines are abandoned where they stand (see Termination & deadlock).
+end, still-running coroutines are simply no longer scheduled (see Termination & deadlock).
 
-A scope-owned _value_ may still **signal** a coroutine — a resource whose `drop` closes a cancel channel the
-coroutine watches — but that is cooperative signalling, not ownership: the coroutine observes the close and
-_chooses_ to stop, and stays free to ignore it. The coroutine itself is never reclaimed by a scope.
+A scope-owned _value_ may still **signal** a coroutine — a resource whose `drop` **sends** on a cancel
+channel the coroutine watches — but that is cooperative signalling, not ownership: the coroutine observes
+the value and _chooses_ to stop, and stays free to ignore it. The coroutine itself is never reclaimed by a
+scope. (It must be a send, not a close: a cleanly closed receive arm is dropped rather than fired — see
+`select`.)
 
 ## Sharing & the memory model
 
@@ -44,12 +54,12 @@ rest follows from it:
 
 > **A `send` on a channel happens-before the matching `receive` completes.**
 
-This happens-before edge is the **[not yet]** guarantee — coroutines and channels were
-built and then removed from the seed, so `spawn` is a clean error today. The receiver sees the payload fully built
+This happens-before edge is **[implemented]**, in both compilers. The receiver sees the payload fully built
 (it was snapshotted at the send); no other cross-coroutine ordering exists or is needed. That is the
 whole memory model. Any ordering **beyond** this edge — the run-queue order in which ready coroutines are
-resumed, the interleaving of unsynchronized coroutines — is **[implementation-defined]**: today the N:1
-runtime resumes runnable coroutines in a deterministic FIFO order, but no program may rely on it.
+resumed, the interleaving of unsynchronized coroutines — is **[implementation-defined]**: today several
+worker threads drain one shared FIFO run queue, so a coroutine may resume on a different worker each
+time and nothing about the interleaving is repeatable. No program may rely on it.
 
 **What may cross a boundary** — as a `spawn`/closure capture or a channel payload:
 
@@ -84,10 +94,17 @@ Capacity is the only knob; **send blocks when full, receive blocks when empty**.
 one synchronization primitive.
 
 The whole channel core in this chapter — buffered and unbuffered blocking, a close signalling the
-receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[not yet]**.
-The two channel behaviors that diverge from the spec are the abort **kind** on a send-to-closed
-(`SendOnClosedError` is **[not yet]** — the abort fires with a generic message) and `DeadlockError`
-(**[deviation]**, under `select` and Termination & deadlock).
+receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[implemented]**.
+Both channel error kinds are **reified and nameable**: a send on a closed channel raises
+`SendOnClosedError`, `DeadlockError` is the clean, catchable abort described under Termination &
+deadlock, and each answers an ordinary `err is …` test (see [Errors](errors.md)).
+
+**`StopIteration` is nameable but deliberately not constructible.** A receiver may write
+`err is StopIteration` to tell a clean end from a crash; **no** program can `raise StopIteration(…)` —
+the name is not a constructor, and writing one is a compile error in **both** compilers. The asymmetry
+is the whole point of testing by **kind** rather than by comparing the message: a sender able to raise
+the sentinel would close its channel wearing the end-of-stream marker, and its consumer would read a
+crash as a clean finish.
 
 ### Send — `ch <- v`
 
@@ -118,44 +135,102 @@ Most code treats **any `Right` as "stop"**, inspecting `err` only when it needs 
 need falls out of existing operators — the **receiver** chooses:
 
 ```text
-v := <-ch?                 # propagate the close reason up (a crash cascades)
-v := <-ch!                 # force: a crash Err re-raises as an abort here
-v := <-ch ?? fallback      # default on any close
+v := (<-ch)?               # propagate the close reason up (a crash cascades)
+v := (<-ch)!               # force: a crash Err re-raises as an abort here
+v := (<-ch) ?? fallback    # default on any close
 if v := <-ch { … }         # run the block only on a value (Left)
 for { v := <-ch ?? break }               # drain until any close
+for v in ch { use(v) }                   # the same drain, ending on a clean close
 match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 ```
 
 Because closed is the `Right` side, `chan[U?]` is unambiguous: a **sent `nil`** is `Left(nil)`, a
 **closed** channel is `Right`.
 
-## Closing — automatic, on the last sender
+> **[not yet]** Every operator above is built **except `?`**. `?` early-returns the `Right` from the
+> **enclosing** function, which requires `Result[T]` to survive in a **signature** — the error model
+> of [Errors](errors.md), not a channel feature. Both compilers refuse it cleanly (_`?` can only be
+> used in a function returning Either, Result, or an optional_), so nothing is mis-emitted; until it
+> lands, propagate with `(<-ch)!` or absorb with `??`.
 
-Zerg has **no explicit `close`**. A channel closes when its **last send-capable holder's scope
-exits** — the refcount is split by direction:
+The `match` line above also carries a restriction, and it is the one most likely to bite: what may
+stand in an arm.
+
+> **[deviation]** The spec makes a `match` arm's body an expression, and a block **is** an
+> expression, so `Left(v) => { … }` is grammatical and the seed accepts it. The shipped `zerg` does
+> **not**: `c_match` lowers to a ternary chain, which cannot hold a block, and the arm is refused
+> (_a block used as an expression_) — so a statement such as `print` may not stand in an arm there.
+> The workaround is to make the arm a **call** whose value is the arm's value, as the actor example
+> below does. `select` arms are unaffected: they lower to if/else and take blocks in both compilers.
+
+## Closing — automatic on the last sender, `close(ch)` when it must be early
+
+A channel closes **by itself** when its **last send-capable holder goes** — the refcount is split by
+direction:
 
 - **send-count → 0 ⇒ close** (receivers still drain what is buffered),
 - **no holders ⇒ free**.
 
-Normal completion and a crash close through the **same** path: an aborting producer's unwind drops
-its send end (decrementing channel refcounts), and if it was the last sender the channel closes —
-**with a reason**: `StopIteration` for a clean exit, the crashing `Err` for an abort. The receiver reads
-that as the `Right` above, so a crash reaches the consumer as an ordinary error, never an orphaned
-channel it blocks on forever.
+**A holder goes when its binding's scope exits**, on **every** path out — the end of the block, a
+`return`, a `break` or `continue`, or an abort unwind. **[implemented]**
 
-**Early close = narrow the scope** — to signal "no more values" before the producer's scope ends, put
-its send end in a tighter block:
+That is the everyday form, and the **only** one a crashing producer can take: an abort never reaches a
+statement, so the unwind dropping its send end is what carries the reason. Normal completion and a
+crash therefore close through the **same** path — **with a reason**: `StopIteration` for a clean exit,
+the crashing `Err` for an abort. The receiver reads that as the `Right` above, so a crash reaches the
+consumer as an ordinary error, never an orphaned channel it blocks on forever.
+
+### `close(ch)` — ending a stream early
+
+`close(ch)` is the **conditional** form: end this stream _before_ my scope does. It is a **statement,
+not a call** — `close` is a keyword, it names no function and yields no value, so it cannot be passed,
+bound or spawned. `defer` takes it as its one non-expression form.
 
 ```text
-{
-    out: chan[int]<- = ch
-    produce(out)
-}              # out's scope ends → auto-close (if last sender)
-cleanup()
+close(ch)              # this stream is over
+defer close(ch)        # …at the block's exit, on every path out including an abort unwind
 ```
 
-`del ch` does the same directly — dropping your hold now closes the channel if you were its last sender,
-without a tighter block (see [Values & Memory](../core/memory.md)).
+It marks the **channel**, not a holder, and everything follows from that:
+
+- **Idempotent by construction** — closing a closed channel changes nothing. No error, no abort, no
+  bookkeeping to police.
+- **No count moves**, so `ch` stays a perfectly good handle afterwards: still readable, still copyable.
+- **Buffered values are still delivered** — a receive hands over what the channel holds before it
+  answers the `Right`.
+- **A send after it aborts** (`SendOnClosedError`) rather than being quietly dropped.
+- **A receive-only end may not close** — a consumer must not end a stream on the producers' behalf. It
+  is a compile error (_cannot close a receive-only channel_).
+
+`close` does **not** replace auto-close, and two shapes say why. A **crashing** producer never reaches
+any statement. And in **fan-in** the last of several producers to finish ends the stream with no
+coordination at all — a channel-level close called by one sibling would end it for the others, which
+is precisely the footgun this design avoids.
+
+### Early close = narrow the scope
+
+The third way needs no statement at all: put the send end in a tighter scope and let the exit close
+it. Since scope exit now releases what a channel binding holds, the natural spelling is a **factory** —
+create the channel, `spawn` the producer, and hand back a **receive-only** end:
+
+```text
+fn source(n: int) -> <-chan[int] {
+    ch := chan[int](4)
+    spawn producer(ch, n)
+    return ch              # `ch`'s own hold ends with `source` — the producer is the last sender
+}
+
+for v in source(4) { use(v) }   # the caller was never a sender, so it cannot hold the stream open
+```
+
+This is the shape the rest of this chapter is written in, and the reason it works is the
+per-direction refcount: the caller's end counts toward receive-count only, so the stream ends exactly
+when the producer does.
+
+`del ch` is **not** how you stop sending. `del` means one thing for every type — **revoke this name**
+— so it drops this binding's hold _and_ makes any later use of `ch` a compile error (_`ch` is used
+after del_); see [Values & Memory](../core/memory.md). Use it to give up a hold you are finished with,
+never as a signal to a consumer.
 
 ### The send-coverage invariant
 
@@ -188,8 +263,10 @@ for a producer) or **receive-only** (`<-ch`, for a consumer).
 **Narrowing is one-way**, never back to bidirectional — the safety guarantee: a send-only end
 **cannot** receive (steal) values, a receive-only end cannot inject. It is a safe built-in upcast at
 a directional-typed target (parameter, `return`, typed binding) and does **not** drop your own hold —
-the target gets a narrowed view while you keep your bidirectional end. To actually drop your own end
-(your bidirectional contribution) use `del ch` or end its scope (a tighter block), as above.
+the target gets a narrowed view while you keep your bidirectional end. A narrowed binding takes a
+reference **of its own**, so ending its scope gives that reference back: to drop your own
+contribution, end the binding's scope (the factory above, or a tighter block), `close(ch)` to end the
+stream while keeping the handle, or `del ch` to give up the hold and the name together.
 
 Direction is also what makes auto-close **precise**, since the refcount is per direction: send-only
 counts toward send-count, receive-only toward receive-count, bidirectional toward **both**. So a
@@ -233,25 +310,79 @@ The granularity is deliberate: a single receive surfaces closure per value; `sel
 clean close into one `done` while still surfacing a crash — so a clean close never joins the "has
 data" race and nothing spins.
 
+Two consequences of the drop rule are worth stating outright, because a `select` that ignores them
+hangs rather than misbehaves:
+
+- **Closing a channel does not fire its own arm.** A clean close removes that arm from the wait; it
+  never becomes ready. Whatever a close is meant to signal must arrive through `done`, or be **sent**
+  as a value.
+- **`done` needs _every_ watched receive channel closed.** One channel that stays open — a cancel
+  channel the canceller still holds, a mailbox nobody has finished with — keeps `done` from ever
+  firing. If the remaining arms then close, the `select` has nothing left that can become ready, and
+  the runtime reports it where the program's outcome is decided: `DeadlockError`, raised on `main`.
+
 ## Timers & cancellation
 
 **Timeouts** and **cancellation** both fall out of channels and `select` — no new primitive.
 
-- **A timer is a channel.** A stdlib `after(d)` yields a receive-only channel that becomes ready **once**
-  after a duration `d` (`ticker(d)` fires repeatedly); a `select` receive arm on it is a **timeout**. `d`
-  is a stdlib duration and the clock is an ambient-OS stdlib facility (like `env`), never a primitive.
-- **Cancellation is a channel.** Hand a coroutine a **cancel channel** to watch in its `select`; the
-  canceller closes it and the coroutine sees that arm fire and bails. Because `spawn` is fire-and-forget
-  with **no handle, there's no preemptive kill** — cancellation is **cooperative**: a coroutine ends
-  only by returning, or by observing a cancel or timeout arm and choosing to stop.
+- **A timer is a channel.** `time.after(d)` yields a receive-only channel that becomes ready **once**
+  after `d` (`time.ticker(d)` fires repeatedly); a `select` receive arm on it is a **timeout**. `d` is
+  a stdlib duration in **nanoseconds** and the clock is an ambient-OS stdlib facility (like `env`),
+  never a primitive. **[implemented]** — see [Standard Library](../runtime/stdlib.md).
+- **Cancellation is a channel.** Hand a coroutine a **cancel channel** to watch in its `select`, and
+  cancel by **sending a value** on it. Because `spawn` is fire-and-forget with **no handle, there's no
+  preemptive kill** — cancellation is **cooperative**: a coroutine ends only by returning, or by
+  observing a cancel or timeout arm and choosing to stop.
+
+**Cancel by sending, not by closing.** A close is an end-of-stream, not an event: a cleanly closed
+receive arm is _dropped_, so closing `cancel` never fires the `cancel` arm. Closing it feeds `done`
+instead — and `done` waits for **every** watched receive channel, so it fires only once the work is
+finished too. The two are complementary rather than interchangeable: **send** to stop early, **close**
+(or simply let the last holder go) to say "there will be no cancellation", which is what lets `done`
+fire when the work runs out.
 
 ```text
-select {
-    v := <-work           => handle(v)   # real work
-    _ := <-after(timeout) => stop()      # timeout — the timer channel became ready
-    _ := <-cancel         => stop()      # cancellation — someone closed `cancel`
+fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
+    mut total := 0
+
+    for {
+        select {
+            v := <-work                => { total = total + v! }
+            _ := <-cancel              => { out <- total  return }   # stopped early — a value was SENT
+            _ := <-time.after(1000000) => { out <- total  return }   # timeout — 1ms, in nanoseconds
+            done                       => { out <- total  return }   # work and cancel both closed
+        }
+    }
+}
+
+fn main() {
+    cancel := chan[int](1)
+    out := chan[int](1)
+
+    spawn stage(source(3), cancel, out)
+
+    cancel <- 1        # stop it now …
+    # close(cancel)    # … or: no cancellation — let the work finish and `done` fire
+
+    print (<-out)!
 }
 ```
+
+The `done` arm is not decoration. Without it — and without a `_` — a `select` whose channels have all
+closed aborts with `DeadlockError`, which is how a forgotten shutdown announces itself.
+
+**A timer costs a coroutine.** `after` and `ticker` are ordinary Zerg over one runtime leaf that parks
+a coroutine until a monotonic deadline, so **each live timer is a coroutine with its own 256KB stack**.
+An `after` inside a loop — as in the `select` above — allocates one **per iteration**, and each lives
+until its deadline passes and its value is taken. **A `ticker` cannot be stopped**: nothing cancels a
+sleep, so its coroutine lives until the program does. Put a ticker at the top of a program, not inside
+a loop.
+
+> **[not yet]** In the **seed**. `after` and `ticker` answer a **receive-only** channel, and a
+> directional channel type is one of the shapes the seed refuses by name, so a seed-built program
+> cannot call either — the two clock functions `now` and `monotonic` are all it can reach. The
+> scheduler half is built in the runtime for both: an idle worker sleeps to the nearest deadline
+> instead of spinning, and a pending sleep is never called a deadlock.
 
 ## Shared state — the actor pattern
 
@@ -267,21 +398,33 @@ enum Cmd {
     Get(chan[int]<-)          # a read — carries a reply channel
 }
 
+fn answer(rep: chan[int]<-, n: int) -> int {
+    rep <- n                         # reply on the caller's channel…
+    return n                         # …and leave the state as it was
+}
+
 fn counter(inbox: <-chan[Cmd]) {
     mut n := 0                       # the state: a plain mut int, owned here alone
+
     for cmd in inbox {               # drains until the last sender leaves
-        match cmd {
-            Add(d)   => n = n + d    # the write happens inside the owner
-            Get(rep) => rep <- n     # reply on the caller's channel
+        n = match cmd {              # every write to the state is this one assignment
+            Add(d)   => n + d        # the write happens inside the owner
+            Get(rep) => answer(rep, n)
         }
     }
 }
 ```
 
+`answer` exists because **a match arm's body is an expression**: a send is a statement and cannot
+stand in an arm, so the reply travels through a call whose value is the state to keep. That also has
+the pleasant effect of making the owner's state writable in exactly one place. (A block `{ … }` is an
+expression in the grammar and would serve here, but not in the shipped `zerg` — see the `[deviation]`
+under Receive.)
+
 - **tell** (fire-and-forget) is a plain send — `inbox <- Add(5)`.
 - **ask** (request-reply) sends a fresh reply channel and blocks on it —
-  `rep := chan[int]();  inbox <- Get(rep);  v := <-rep!`. `Get`'s field is typed `chan[int]<-`, so `rep`
-  narrows to send-only as it enters the message, while the caller keeps its receive end.
+  `rep := chan[int](1);  inbox <- Get(rep);  v := (<-rep)!`. `Get`'s field is typed `chan[int]<-`, so
+  `rep` narrows to send-only as it enters the message, while the caller keeps its receive end.
 - **Teardown is automatic** — when the last client drops its send end, `inbox` closes, the `for` ends,
   and the owner's `mut` state is freed; the ordinary channel-close and scope-owned rules, nothing added.
 
@@ -292,7 +435,7 @@ must be serialized (a non-thread-safe `Ref[handle]`) is likewise owned by one ac
 
 For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`** held behind an immutable
 `:=` (the binding is immutable; the atomic's interior is not — see [Modules & Programs](../runtime/package.md)). It
-provides lock-free `load` / `store` / `fetch_add` / `compare_exchange`. **[implemented]** today for
+provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`. **[implemented]** today for
 **`Atomic[int]`** with **sequential-consistency** ordering only; the explicit **memory-ordering argument**
 and a **generic `Atomic[T]`** are **[not yet]**.
 
@@ -306,13 +449,20 @@ no generator type; the `send` is the yield.
 ```text
 fn range_gen(lo: int, hi: int, out: chan[int]<-) {
     mut n := lo
+
     for n < hi {
         out <- n            # "yield" n — blocks until the consumer takes it
         n = n + 1
     }
 }                           # out's scope ends → channel closes (if last sender)
 
-for v in producer(range_gen) { use(v) }   # drains until StopIteration
+fn range(lo: int, hi: int) -> <-chan[int] {
+    ch := chan[int]()
+    spawn range_gen(lo, hi, ch)
+    return ch               # the caller gets a receive-only end and is never a sender
+}
+
+for v in range(0, 10) { use(v) }   # drains until StopIteration
 ```
 
 Early consumer exit is the one wrinkle. If the consumer stops first (a `break`), a blocking `out <- n` waits
@@ -349,38 +499,65 @@ coroutine can indefinitely starve others** — not even a CPU-bound one that nev
 safepoints, reduction counting — is an implementation detail the language does not fix; only the property
 is promised.
 
-> **[deviation]** The bootstrap scheduler is **cooperative N:1** — a single OS thread, no preemption — and
-> a coroutine yields **only at a channel or `select` park point**. So the fairness guarantee does **not**
-> hold today: a **CPU-bound coroutine that never touches a channel starves everything**, since nothing can
-> preempt it. Concretely, `spawn(spin); spawn(work)` (where `spin` loops without a channel op) **hangs** —
-> `work` never runs. The intended M:N preemptive scheduler stands as specified; until it lands, keep every
-> coroutine channel-driven so it parks and lets others run.
+**Today.** The scheduler **is M:N** — `M` worker OS threads (one per CPU by default) drain one shared FIFO
+run queue, and a coroutine migrates freely between workers, so it may resume on a thread it never started
+on. What it is **not** is preemptive.
 
-Two limits bound the intended model:
+> **[deviation]** The spec requires that no coroutine can indefinitely starve others; the scheduler is
+> **cooperative**, so a coroutine yields **only** at a channel operation, a `select`, or a sleep, and
+> nothing takes it off its worker until it does. A **CPU-bound coroutine that never parks therefore
+> occupies one worker** for as long as it runs. The shape of the failure is a count, not a switch: one
+> spinner costs a core, `M` spinners leave nothing to run anything else — including `main` — and on a
+> single-CPU host (`M` = 1) the first spinner is already the whole program. Preemption and
+> compiler-inserted safepoints are **deferred**, not abandoned; until one lands, keep every coroutine
+> channel-driven so it parks and lets others run, and treat any unbounded compute loop as needing a
+> channel operation in it.
+
+Two limits bound the model:
 
 - **A blocking foreign (FFI) call is not preemptible.** It parks its OS thread inside a C frame Zerg does not
-  own (see [FFI](../runtime/ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. Under the intended M:N
-  runtime other threads still progress, but a long blocking call is thread-occupying — prefer non-blocking C
-  APIs. **[deviation]** Under today's N:1 runtime there is **only one thread**, so a blocking FFI call blocks
-  the **whole program**, not just its coroutine.
+  own (see [FFI](../runtime/ffi.md)); fairness covers Zerg coroutines, not a thread stuck in C. It occupies **one
+  worker** and the others keep running — the same accounting as a CPU-bound coroutine — but a long blocking
+  call is thread-occupying, so prefer non-blocking C APIs, and expect it to block the whole program when
+  `M` is 1.
 - **Fairness moves the _ready_; it does not unstick the _blocked_.** When every coroutine is blocked with
   no possible progress that is a deadlock, caught separately (below); the `select` tie-break is this same
   fairness applied to a single wait.
 
 ## Termination & deadlock
 
-- **Program lifetime** — when the main stack returns, the **program ends**; still-running coroutines
-  stop where they are and the OS reclaims everything. There's no join, so drive a coroutine to a
-  channel-observed completion if it must finish before exit.
+- **Program lifetime** — when the main stack returns, the **program ends**. There's no join, so drive
+  a coroutine to a channel-observed completion if it must finish before exit.
+
+  What ending the program guarantees is a statement about the **run queue**: nothing parked is ever
+  resumed and nothing queued is ever started. It does **not** stop a coroutine that is already
+  **running**, because nothing preempts one (see Scheduling & fairness) — a coroutine mid-computation
+  on another worker runs on until it parks or returns, and the process outlives `main` for exactly
+  that long. Both halves are observable. With a single worker a spinning coroutine holds it, so
+  `main` cannot resume — let alone return — until that coroutine yields; with several workers `main`
+  returns while the spinner is still going, and the process ends when the spinner does.
+
+  > **[deviation]** The spec's "still-running coroutines stop where they are" is the preemptive
+  > reading, and the scheduler is not preemptive. Treat `main` returning as _no further scheduling_,
+  > not as a kill, and give any coroutine whose work must be cut short a cancel channel to observe.
+
 - **A send with no receivers just blocks** — even when the receive side is provably empty forever,
   Zerg doesn't abort it; waiting or bailing is the **caller's** call (e.g. a `select` with a cancel
   or timeout arm).
 - **Global deadlock detection** — if every coroutine is blocked with no possible progress, the runtime
   raises **`DeadlockError`** rather than hanging. A lone blocked sender while others progress is not
-  individually detected.
+  individually detected, and a pending sleep is not a deadlock — a coroutine waiting on a timer is going
+  to make progress, so the detector stands down while any sleep is outstanding.
 
-  > **[deviation]** `DeadlockError` is specified as a **clean abort** — it unwinds the stack, runs the
-  > pending `defer`s, and is catchable by `guard` like any other abort. The bootstrap instead **hard-`exit`s
-  > the process with a diagnostic report**, running **no** `defer`s and no unwind, so the deadlock is
-  > **uncatchable** today (see [Errors](errors.md), [Conformance](../conformance.md)). The intended clean-abort
-  > behavior stands; it is not built this phase.
+  `DeadlockError` is a **clean abort** like any other: it unwinds, runs the pending `defer`s, and a
+  `guard` catches it. Two properties are worth knowing before catching one.
+
+  - **The victim is `main`.** The abort is raised on `main`'s coroutine, never on an arbitrary member of
+    the blocked cycle. A deadlock is a statement about the **whole program**, so it lands where the
+    program's outcome is decided — in `main`'s `guard` and `main`'s exit status. Handing it to some other
+    coroutine's `guard`, which knows nothing about the global condition, would let it be swallowed.
+  - **Every detection raises; there is no one-shot.** A `guard` inside a retry loop therefore turns a
+    deadlock into a **livelock** — the program keeps going round, reporting its reason each time. That is
+    the deliberate trade: a one-shot detector goes silent on the second occurrence and hangs, which is
+    the exact failure this mechanism exists to prevent. A `guard` around a deadlock should change
+    something or stop, not retry unchanged.

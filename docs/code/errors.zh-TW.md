@@ -65,11 +65,18 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
-用到的 fault 名稱裡,今天只有六個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
-`EncodingError`、`IndexError`、`KeyError`（**[implemented]**）。其餘尚未被標種類:`UnwrapError`、`DivideByZeroError`、
-`MatchError`、`AliasError`、`SendOnClosedError` 是 **[not yet]**（abort 仍可能觸發、但以一般訊息、無獨立具現化種類）,
-而 `StackOverflowError` 與 `DeadlockError` 是 **[deviation]**（見下）。它**不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到
-出錯處續算。語意上它是一次**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
+用到的 fault 名稱裡,今天有九個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+`EncodingError`、`IndexError`、`KeyError`，再加上並行那章指名的三個——`SendOnClosedError`、`DeadlockError` 與
+`StopIteration`（**[implemented]**）。其餘在語言表面還**叫不出名字**:`UnwrapError`、`DivideByZeroError`、
+`MatchError` 與 `AliasError` 是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯
+錯誤（那個名字不在這九個之列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
+
+**`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
+`raise StopIteration("…")` 在**兩個編譯器**裡都是編譯錯誤。channel 的乾淨關閉以它作為**種類**、而非訊息字串
+攜帶——這正是 consumer 不必比對字串就能分辨乾淨結束與崩潰的原因;一個能 raise 這個哨兵的 sender 恰恰會破壞這件事
+（見 [Concurrency](coroutine.zh-TW.md)）。`StackOverflowError` 則是 **[deviation]**（見下）。
+abort **不可被當控制流攔截**：沒有 `try`/`catch`、不能檢視是「哪一種」abort、也不能回到出錯處續算。語意上它是一次
+**會執行 scope 清理的 stack unwind**——從 raise 點到它停下之處，每一層 scope 都**先跑
 它的 `defer`**、再按序釋放，其 `Ref` 值（channel 與 `Ref[T]`）的 refcount 遞減，與正常的 scope 結束完全相同；絕不是
 裸的 `abort()`。unwind 抵達某條 stack
 頂端就讓那條 stack crash：主 stack 結束整個程式，coroutine 的 stack 只結束該 coroutine（`spawn` 是
@@ -87,9 +94,12 @@ unwind），所以失控的遞迴**永不**變成 C 的 stack smash。Zerg **不
 
 > **[deviation]** bootstrap 尚未擁有或深度檢查 stack;stack 溢位是一次無法回復的 `SIGSEGV` / stack-smash、會終止
 > 行程而**不跑** `defer`,而非乾淨的 `StackOverflowError` unwind（見 [Conformance](../conformance.zh-TW.md) 的
-> runtime-abort deviation）。意圖中的安全網成立;這個階段尚未建置。另外,一個 **`DeadlockError`**——每個 coroutine 都
-> 阻塞、無法再前進——同樣意圖是一次乾淨的 abort,但 bootstrap runtime 改為**帶報告 hard-`exit`**、不 unwind;而**對
-> 已關閉 channel 的 send** 今天以一般訊息 abort,特定的 `SendOnClosedError` 種類是 **[not yet]**。
+> runtime-abort deviation）。意圖中的安全網成立;這個階段尚未建置。
+
+一個 **`DeadlockError`**——每個 coroutine 都阻塞、無法再前進——現在已是規格所要求的那次乾淨 abort:它 unwind、跑
+pending `defer`，`guard` 也攔得住。它在 `main` 的 coroutine 上 raise，而且**每一次**偵測都會重新 raise、不是只有
+一次，所以一個原封不動重試的 `guard` 會把 deadlock 變成 livelock;兩者為何都是刻意的，見
+[Concurrency](coroutine.zh-TW.md)。
 
 **`guard`——把 abort 降級成值（abort → 值）。** `guard { … }` 執行一個區塊，並把其中任何 abort 具現化成 `Err`，
 因此整個運算式恆為 **`Result[T]`**（`T` = 區塊的值型別）：正常結果 `v` 變成 `Left(v)`，攜帶 `err` 的 abort 變成

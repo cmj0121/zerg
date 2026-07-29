@@ -80,11 +80,19 @@ contract itself — the message written to stderr, exit status 1, the `Kind: mes
 [Conformance](../conformance.md).
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
-expected failure. Of the fault names this chapter uses, only six reify as `is`-testable **kinds** today:
-`ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError` (**[implemented]**).
-The rest are **not** yet kind-tagged: `UnwrapError`, `DivideByZeroError`, `MatchError`, `AliasError`, and
-`SendOnClosedError` are **[not yet]** (the abort may still fire, with a generic message and no distinct
-reified kind), while `StackOverflowError` and `DeadlockError` are **[deviation]** (see below). It is **not
+expected failure. Of the fault names this chapter uses, nine reify as `is`-testable **kinds** today:
+`ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, plus the three the
+concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` (**[implemented]**).
+The rest cannot be **named** at the surface yet: `UnwrapError`, `DivideByZeroError`, `MatchError` and
+`AliasError` are **[not yet]** — writing `err is AliasError` is a clean, named compile error in **both**
+compilers, the name not being one of the nine — and the abort carries no distinct reified kind for them,
+only a generic message.
+
+**`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
+of `is` and may **not** call: `raise StopIteration("…")` is a compile error in **both** compilers. A
+channel's clean close carries it as a **kind** rather than a message, which is what lets a consumer tell a
+clean end from a crash without comparing strings; a sender able to raise the sentinel would defeat exactly
+that (see [Concurrency](coroutine.md)). `StackOverflowError` is a **[deviation]** (see below). An abort is **not
 catchable as control flow**: no `try`/`catch`,
 no inspecting _which_ abort fired, no resuming the failed expression. Semantically it is a **stack
 unwind that runs scope cleanup** — every scope from the raise point to where it stops **runs its
@@ -108,10 +116,12 @@ which makes an unbounded recursion a definite `StackOverflowError`, never a sile
 > **[deviation]** The bootstrap does **not** yet own or depth-check the stack: a stack overflow is an
 > unrecoverable `SIGSEGV` / stack-smash that terminates the process **without** running `defer`s, not a
 > clean `StackOverflowError` unwind (see [Conformance](../conformance.md), the runtime-abort deviation). The
-> intended safety net stands; it is not built this phase. Relatedly, a **`DeadlockError`** — every
-> coroutine blocked with no progress possible — is intended as a clean abort too, but the bootstrap runtime
-> **hard-`exit`s with a report** instead of unwinding; and a **send on a closed channel** aborts today with
-> a generic message, the specific `SendOnClosedError` kind being **[not yet]**.
+> intended safety net stands; it is not built this phase.
+
+A **`DeadlockError`** — every coroutine blocked with no progress possible — is now the clean abort the spec
+asks for: it unwinds, runs the pending `defer`s, and a `guard` catches it. It is raised on `main`'s
+coroutine and re-raised on **every** detection rather than once, so a `guard` that retries unchanged turns
+the deadlock into a livelock; see [Concurrency](coroutine.md) for why both are deliberate.
 
 **`guard` — demote an abort to a value (abort → value).** `guard { … }` runs a block and reifies any
 abort inside it as an `Err`, so the expression is always a **`Result[T]`** (`T` = the block's value

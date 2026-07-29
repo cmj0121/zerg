@@ -1745,8 +1745,22 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		}
 		m = m + 1
 	}
+	# The teardown is a DEFER, not a statement after the call, because a coroutine can
+	# leave without returning. An unhandled abort longjmps straight past everything
+	# following the call, and what got skipped was the sender release — so the channel
+	# kept a sender that no longer existed, never reached zero, never closed, and every
+	# receiver waiting on it blocked forever. A crash became a deadlock.
+	#
+	# A defer runs on both exits, which is exactly the difference: on the ordinary one it
+	# is the coroutine giving up its handles, and on the crash one it is what lets the
+	# close carry the crash Err a receiver is meant to see (Fork-C).
+	dropfn := "zg_spawndrop_" + tag
+	mut dd := "static void " + dropfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
+	dd = dd + drops + " zrt_free(p); }\n"
+	em.dfn_decls.append(dd)
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
-	th = th + " zg_" + name + "(" + call + ");" + drops + " zrt_free(p); }\n"
+	th = th + " zrt_defer(" + dropfn + ", p);"
+	th = th + " zg_" + name + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
 	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
 	mut j := 0
@@ -2359,11 +2373,50 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 }
 
 # c_forin lowers `for v in xs { ... }` to an index loop over the runtime list.
+# c_forchan lowers `for v in ch`. The channel IS the iterator: it yields values until its
+# last sender leaves, and that close is the StopIteration which ends the loop. There is no
+# generator type and no `yield` keyword in this language because this is where they would
+# have gone — a producer coroutine sending to a channel is the generator, and the `send`
+# is the yield.
+#
+# A closed channel still hands over what it is holding, so the loop drains the buffer
+# before it ends; that is zrt_chan_recv's own rule, not something repeated here.
+#
+# The one thing a close does NOT say by itself is WHY. An ordinary close and a sender that
+# crashed both end the receive, so the reason is read after the loop: NULL is the ordinary
+# end, and a message means a sender died and this loop has been handed a truncated stream.
+# Ending quietly there would turn a crash into a short answer, which is the failure this
+# language is least willing to produce.
+fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], ind: str) -> str {
+	em.used_conc = true
+	elem := c_chan_elem(t)
+	et := c_type(elem)
+	it := c_expr(em, iter, c_nosub())
+	c_add_var(em, var, elem)
+	cv := c_var_cname(em, var)
+
+	# a block, so the handle and the loop variable are scoped to the loop and sequential
+	# or nested `for … in ch` loops cannot collide on the name
+	in2 := ind + "    "
+	mut out := ind + "{\n" + in2 + "zrt_chan *zg_cit = " + it + ";\n"
+	out = out + in2 + et + " " + cv + ";\n"
+	out = out + in2 + "while (zrt_chan_recv(zg_cit, &" + cv + ") == 0) {\n"
+	out = out + c_block(em, body, in2 + "    ")
+	out = out + in2 + "}\n"
+	out = out + in2 + "if (zrt_chan_err(zg_cit) != NULL) { zrt_abort(zrt_chan_err(zg_cit)); }\n"
+	return out + ind + "}\n"
+}
+
 fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
 	# A RANGE is not a container, so it never touches the list runtime: `for i in a..b` is
 	# the counted C loop it already means.
 	return c_forrange(em, var, iter, body, ind) if c_is_range(iter)
 	em.used_rt = true
+
+	# A CHANNEL is the other thing that is iterated without being a container: the loop
+	# is the receive, and the close is what ends it.
+	ct := c_infer(em, iter)
+	return c_forchan(em, var, iter, ct, body, ind) if c_is_chan(ct)
 
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)

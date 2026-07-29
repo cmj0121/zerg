@@ -144,6 +144,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 		SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
 		SSelect(arms) => walk_sel(arms, ids, calls, ns)
 		SDel(n) => ids.append(n)
+		SClose(ch, at_exit) => walk_expr(ch, ids, calls, ns)
 			_ => skip()
 		}
 	}

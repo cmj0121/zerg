@@ -65,23 +65,6 @@ fn ident_name(e: Expr) -> str {
 
 # --- types ---------------------------------------------------------------------
 
-# ty_is_chan / ty_chan_elem are the two questions the directional forms ask about a type
-# already read. The emitter has its own pair; the parser cannot reach them, and a type is
-# small enough that two matches cost less than a shared module would.
-fn ty_is_chan(t: Ty) -> bool {
-	return match t {
-		TChan(_, _) => true
-		_ => false
-	}
-}
-
-fn ty_chan_elem(t: Ty) -> Ty {
-	return match t {
-		TChan(e, _) => e
-		_ => TUnknown
-	}
-}
-
 # parse_type reads a type expression, including the two DIRECTIONAL channel spellings
 # GRAMMAR gives: `<-chan[T]` is receive-only and `chan[T]<-` is send-only.
 #
@@ -808,8 +791,16 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SDel(name)
 	}
+	if k == Close {
+		return parse_close(p, false)
+	}
 	if k == Defer {
 		p_advance(p)
+
+		# `defer close(ch)` — the one statement `defer` takes besides a call, because
+		# `close` is a keyword and its argument is a channel rather than a callee. Every
+		# other deferred form is an expression and goes through parse_expr below.
+		return parse_close(p, true) if p_at(p, Close)
 		return SDefer(parse_expr(p))
 	}
 	if k == Mut {
@@ -1315,13 +1306,24 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	return ENil
 }
 
+# parse_close reads `close ( expr )`, the channel's one built-in statement. `at_exit` is
+# set for the `defer close(ch)` form, which is the same statement with the block's exit as
+# its moment.
+fn parse_close(mut &p: Parser, at_exit: bool) -> Stmt {
+	p_advance(p) # 'close'
+	expect(p, LParen)
+	ch := parse_expr(p)
+	expect(p, RParen)
+	return SClose(ch, at_exit)
+}
+
 # is_stmt_kw names the keywords that can only begin a STATEMENT. It is deliberately a
 # list of keywords rather than "anything unrecognised": the parser skips out-of-subset
 # surface elsewhere on purpose, and turning every unknown token into an error would
 # refuse programs this compiler is meant to read past.
 fn is_stmt_kw(k: Kind) -> bool {
 	return true if k == Print or k == Raise or k == Return or k == Nop
-	return true if k == Break or k == Continue or k == Del or k == Defer
+	return true if k == Break or k == Continue or k == Del or k == Defer or k == Close
 	return k == Spawn or k == Select or k == For or k == With
 }
 

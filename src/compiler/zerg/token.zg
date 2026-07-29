@@ -83,6 +83,7 @@ enum Kind {
 	Init
 	Defer
 	Del
+	Close
 	Raise
 	Guard
 	With
@@ -209,6 +210,7 @@ fn kind_name(k: Kind) -> str {
 		Init => "init"
 		Defer => "defer"
 		Del => "del"
+		Close => "close"
 		Raise => "raise"
 		Guard => "guard"
 		With => "with"
@@ -336,6 +338,8 @@ fn lookup_keyword(w: str) -> Kind {
 		return Defer
 	} else if w == "del" {
 		return Del
+	} else if w == "close" {
+		return Close
 	} else if w == "raise" {
 		return Raise
 	} else if w == "guard" {

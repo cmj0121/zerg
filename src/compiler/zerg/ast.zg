@@ -161,6 +161,16 @@ enum Stmt {
 	# ends, so `del` no longer has to be pressed into either job.
 	SDel(str)
 
+	# SClose is `close(ch)` — end this stream before my scope does. It is a STATEMENT and
+	# not a call: `close` is a keyword, there is no symbol to take the address of, and it
+	# yields no value, so it is shaped like SDel rather than pretending to be an ECall the
+	# emitter has to intercept before every dispatch.
+	#
+	# The bool is `defer close(ch)`: the same close, run at the enclosing block's exit on
+	# every path out. It rides here rather than inside SDefer because SDefer carries an
+	# EXPRESSION and this is not one — and the two lower through one callee anyway.
+	SClose(Expr, bool)
+
 	# SIfLet is `if v := e { … } else { … }` — run the block only when `e` is a Left, with
 	# `v` bound to what it held. It is a statement of its own rather than an SIf over some
 	# condition expression because the binding only exists inside the then-branch, which no
@@ -404,6 +414,24 @@ fn ty_name(t: Ty) -> str {
 		TResult(e) => f"Result[{ty_name(e)}]"
 		TErr => "Err"
 		_ => "?"
+	}
+}
+
+# ty_is_chan / ty_chan_elem are the two shape questions asked about a channel type, and
+# they live here — beside the spelling — because both the parser and the emitter ask them.
+# The parser needs them to read the directional forms and the emitter needs them on nearly
+# every lowering path; a type is a type, and one pair is what keeps the two from drifting.
+fn ty_is_chan(t: Ty) -> bool {
+	return match t {
+		TChan(_, _) => true
+		_ => false
+	}
+}
+
+fn ty_chan_elem(t: Ty) -> Ty {
+	return match t {
+		TChan(e, _) => e
+		_ => TUnknown
 	}
 }
 

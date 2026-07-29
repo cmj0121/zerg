@@ -3,14 +3,27 @@
 # The pipeline mirrors the bootstrap -> MVP flow end to end:
 #   1. build the Go-hosted bootstrap seed (bin/zerg0)
 #   2. check the seed works (its Go test suite)
-#   3. build the MVP example programs WITH that seed
-#   4. check every example is workable — compiled to a native binary and run
-#   5. build the self-hosting compiler, which is the seed's whole reason to exist
-#   6. run the test-data corpus with that compiler
+#   3. check the runtime works, as C — the scheduler's only race gate
+#   4. build the MVP example programs WITH that seed
+#   5. check every example is workable — compiled to a native binary and run
+#   6. build the self-hosting compiler, which is the seed's whole reason to exist
+#   7. run the test-data corpus with that compiler
+#
+# Two gates run beside it, each answering a question the pipeline above cannot: that the
+# compiler still compiles itself to the same C (`fixpoint`), and that the concurrency
+# corpus is clean under the sanitizers (`sanitizers`).
 #
 # It runs on Linux (x86_64) and macOS (arm64) so both the portable POSIX-C runtime
 # and both coroutine context-switch asm variants (ctx_x86_64.S / ctx_arm64.S) are
 # exercised — the same C codegen target that lets Zerg cross-compile through `cc`.
+#
+# ThreadSanitizer is deliberately absent. It builds and runs — the fiber annotations in
+# zergrt.h are there for it — but the park protocol has a coroutine take a channel's lock
+# and the SCHEDULER release it once that coroutine is off the CPU, and TSan counts fibers
+# as threads, so it stops deriving happens-before from a mutex released by someone other
+# than its owner and then reads every access under that lock as a race. Its reports are
+# output about a model that does not fit, not findings; src/runtime/README.md sets out what
+# it would take to change that. A job producing them would be a job nobody reads.
 name: CI
 
 on:
@@ -69,7 +82,17 @@ jobs:
       - name: Test the bootstrap
         run: make -C src/bootstrap test
 
-      # --- 3 + 4. build every MVP example WITH the bootstrap, then run it ---------
+      # --- 3. check the runtime is working, as C ---------------------------------
+      # This suite compiles csrc/ with the host cc and runs it, which is the only place
+      # the runtime is exercised as C rather than as a by-product of a Zerg program. It
+      # holds TestSchedulerCompilesAndRuns, TestChannelsCompileAndRun and
+      # TestConcurrencyStress — the scheduler's only race gate — and it had never run on
+      # CI, on either platform, though `make test` has reached it since the day
+      # src/runtime/Makefile existed.
+      - name: Test the runtime
+        run: make -C src/runtime test
+
+      # --- 4 + 5. build every MVP example WITH the bootstrap, then run it ---------
       - name: Build & run all examples
         shell: bash
         run: |
@@ -101,13 +124,13 @@ jobs:
           fi
           printf '\nAll %d examples built and ran cleanly.\n' "${#examples[@]}"
 
-      # --- 5. the seed's actual contract: it builds the self-hosting compiler ----
+      # --- 6. the seed's actual contract: it builds the self-hosting compiler ----
       # Nothing else in this pipeline exercises src/compiler/, so a seed change that
       # breaks the one thing the seed exists for would otherwise pass CI.
       - name: Build the self-hosting compiler with the seed
         run: make build
 
-      # --- 6. the corpus the self-hosting compiler owns --------------------------
+      # --- 7. the corpus the self-hosting compiler owns --------------------------
       # Best-effort: the corpus is a submodule declared over SSH, so a fork without
       # access skips it rather than failing.
       - name: Fetch test-data submodule (best-effort, over HTTPS)
@@ -120,3 +143,65 @@ jobs:
       - name: Run the corpus with the self-hosting compiler
         if: steps.corpus_fetch.outcome == 'success'
         run: make corpus
+
+  # The compiler compiles itself, so a codegen change that makes it emit subtly different
+  # C for its own source has no other signal: every corpus case still passes, because the
+  # one program large enough to reach a rare emitter path is the compiler. `make build`
+  # already builds the two stages this compares and threw the intermediate away.
+  #
+  # One platform is enough. The property under test is that a compiler reproduces its own
+  # output, which is a property of the emitter and not of the host; the two hosts are
+  # already compared by everything else in this file. It needs no corpus and builds its
+  # stages into a temp directory of its own, so it runs on a bare checkout.
+  fixpoint:
+    name: the compiler is a fixpoint of itself
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bootstrap/go.mod
+          cache-dependency-path: src/bootstrap/go.sum
+
+      - name: Build the compiler twice and compare what it emits
+        run: make fixpoint
+
+  # `make corpus` checks what the concurrency cases PRINT, and a stack freed under a live
+  # fiber or a channel the scheduler forgot on the way out changes nothing it can see: the
+  # program prints the right numbers and leaves the damage behind. This rebuilds those same
+  # cases against AddressSanitizer, UndefinedBehaviourSanitizer and LeakSanitizer.
+  #
+  # Linux, and only Linux, because LeakSanitizer does not exist on macOS — that is not an
+  # oversight to correct later, it is why leaks in this repo have historically been found
+  # here and not on a developer's machine. The address and UB halves do run on macOS
+  # through `make -C src/runtime test`, which the job above now runs on both platforms.
+  sanitizers:
+    name: concurrency corpus under the sanitizers (linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/bootstrap/go.mod
+          cache-dependency-path: src/bootstrap/go.sum
+
+      # Same best-effort as the corpus above, and for the same reason: the cases live in a
+      # submodule declared over SSH. Without them there is nothing to sanitize.
+      - name: Fetch test-data submodule (best-effort, over HTTPS)
+        id: corpus_fetch
+        continue-on-error: true
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule update --init --recursive
+
+      - name: Build every conc_* case with the sanitizers on, and run it
+        if: steps.corpus_fetch.outcome == 'success'
+        run: make sanitize-conc

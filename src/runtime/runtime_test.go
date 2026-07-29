@@ -1,12 +1,16 @@
 package runtime
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // findCC locates a C compiler, or "" when none is installed.
@@ -18,6 +22,85 @@ func findCC() string {
 	}
 	return ""
 }
+
+// buildConcurrent compiles a C driver against the core runtime plus the concurrency
+// units and returns the binary. Every scheduler test opens with the same six lines, and
+// spelling them out each time buries what the test is actually about.
+func buildConcurrent(t *testing.T, name, src string) string {
+	t.Helper()
+	cc := findCC()
+	if cc == "" {
+		t.Skip("no C compiler found")
+	}
+	dir := t.TempDir()
+	cfiles, err := Materialize(dir)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	driver := filepath.Join(dir, name+".c")
+	if err := os.WriteFile(driver, []byte(src), 0o644); err != nil {
+		t.Fatalf("write driver: %v", err)
+	}
+	bin := filepath.Join(dir, name+".bin")
+	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		t.Fatalf("cc failed: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// runBounded runs bin under a deadline and returns its STDOUT and exit code; stderr is
+// dropped, since an abort's diagnostic goes there and would interleave with the assertions.
+//
+// The deadline is the point of this helper. Everything the scheduler tests guard against —
+// a lost wake-up, a deadlock the detector stopped catching, a timer that never fires, a
+// waiter left dangling in a queue — presents as a program that simply never finishes, and
+// a test that hangs eats the whole suite's budget without naming what broke.
+//
+// `workers` is the ZRT_WORKERS value: "1" forces the single-worker path, which is how a
+// bug in the scheduler's logic is told apart from a race between workers. Every test here
+// runs both ways, because each has caught a failure the other did not.
+func runBounded(t *testing.T, bin, workers string, d time.Duration) (string, int) {
+	t.Helper()
+	out, _, code := runBoundedStreams(t, bin, workers, d)
+	return out, code
+}
+
+// runBoundedStreams is runBounded with the abort diagnostic KEPT. The `Kind: text` line
+// the abort contract makes normative lands on stderr, so the one test that reads it needs
+// the stream every other test here deliberately drops.
+func runBoundedStreams(t *testing.T, bin, workers string, d time.Duration) (string, string, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	if workers != "" {
+		cmd.Env = append(os.Environ(), "ZRT_WORKERS="+workers)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("%s (ZRT_WORKERS=%q) did not finish within %s; output so far %q",
+			filepath.Base(bin), workers, d, stdout.String())
+	}
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return stdout.String(), stderr.String(), 0
+	case errors.As(err, &exit):
+		return stdout.String(), stderr.String(), exit.ExitCode()
+	default:
+		t.Fatalf("run %s: %v", bin, err)
+		return "", "", 0
+	}
+}
+
+// workerModes are the two scheduler shapes every concurrency test is run under: the
+// machine's real worker count, and one worker.
+var workerModes = []string{"", "1"}
 
 // TestEmbedShipsTree asserts the runtime tree is embedded and Materialize lays
 // down the header plus exactly the C translation units the driver links.
@@ -290,38 +373,22 @@ func TestEmbedHasNoStrayFiles(t *testing.T) {
 
 // TestSchedulerCompilesAndRuns is the concurrency smoke: it links the core runtime
 // with the scheduler and the host's context switch, then drives zrt_spawn and the
-// nil-main entry shim. It asserts the spawned coroutine actually runs (on its own
-// stack) and that the run queue drains so fire-and-forget coroutines complete before
-// the program exits.
+// nil-main entry shim. It asserts the spawned coroutines actually run, each on its own
+// stack, and that main can observe them finishing.
+//
+// It counts rather than naming who printed what. Two coroutines that both become
+// runnable can occupy two workers at once, so the order their output reaches the pipe
+// in is not a property of the scheduler — asserting it would make this test fail on a
+// machine with more cores rather than on a bug.
 func TestSchedulerCompilesAndRuns(t *testing.T) {
-	cc := findCC()
-	if cc == "" {
-		t.Skip("no C compiler found")
-	}
-	dir := t.TempDir()
-	cfiles, err := Materialize(dir)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	bin := buildConcurrent(t, "sched_smoke", schedSmokeC)
 
-	driver := filepath.Join(dir, "sched_smoke.c")
-	if err := os.WriteFile(driver, []byte(schedSmokeC), 0o644); err != nil {
-		t.Fatalf("write driver: %v", err)
-	}
-	bin := filepath.Join(dir, "sched_smoke.bin")
-	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
-	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
-		t.Fatalf("cc failed: %v\n%s", err, out)
-	}
-
-	out, err := exec.Command(bin).CombinedOutput()
-	if err != nil {
-		t.Fatalf("scheduler smoke run failed: %v\n%s", err, out)
-	}
-	want := "main\nco-a\nco-b\n"
-	if string(out) != want {
-		t.Fatalf("scheduler smoke output = %q, want %q", out, want)
+	want := "main\nran=2 sum=3\n"
+	for _, w := range workerModes {
+		out, code := runBounded(t, bin, w, 20*time.Second)
+		if out != want || code != 0 {
+			t.Fatalf("ZRT_WORKERS=%q: scheduler smoke = %q exit=%d, want %q exit=0", w, out, code, want)
+		}
 	}
 }
 
@@ -332,37 +399,16 @@ func TestSchedulerCompilesAndRuns(t *testing.T) {
 // crash Err (recv -> Right/Err). Each producer runs as a coroutine that parks/rendezvous
 // with main, proving park/wake across a real context switch.
 func TestChannelsCompileAndRun(t *testing.T) {
-	cc := findCC()
-	if cc == "" {
-		t.Skip("no C compiler found")
-	}
-	dir := t.TempDir()
-	cfiles, err := Materialize(dir)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
+	bin := buildConcurrent(t, "chan_smoke", chanSmokeC)
 
-	driver := filepath.Join(dir, "chan_smoke.c")
-	if err := os.WriteFile(driver, []byte(chanSmokeC), 0o644); err != nil {
-		t.Fatalf("write driver: %v", err)
-	}
-	bin := filepath.Join(dir, "chan_smoke.bin")
-	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
-	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
-		t.Fatalf("cc failed: %v\n%s", err, out)
-	}
-
-	// Capture stdout only: a crashing coroutine reports "boom" on stderr (expected).
-	out, err := exec.Command(bin).Output()
-	if err != nil {
-		t.Fatalf("channel smoke run failed: %v\n%s", err, out)
-	}
 	want := "A=1\nA=2\nA-closed err=0\n" +
 		"B=10\nB=20\nB-closed err=0\n" +
-		"C=1 r=0\nC-crash r=1 err=coroutine crashed\n"
-	if string(out) != want {
-		t.Fatalf("channel smoke output = %q, want %q", out, want)
+		"C=1 r=0\nC-crash r=1 err=boom kind=3\n"
+	for _, w := range workerModes {
+		out, code := runBounded(t, bin, w, 20*time.Second)
+		if out != want || code != 0 {
+			t.Fatalf("ZRT_WORKERS=%q: channel smoke = %q exit=%d, want %q exit=0", w, out, code, want)
+		}
 	}
 }
 
@@ -398,7 +444,7 @@ static void producer_crash(void *env) {
     zrt_chan *ch = (zrt_chan *)env;
     zrt_defer(chan_sender_drop, &ch); /* released on every exit, incl. the crash unwind */
     long v = 1; zrt_chan_send(ch, &v);
-    zrt_abort("boom");                /* unhandled: closes ch with a crash Err */
+    zrt_abort_kind(ZRT_ERR_IO, "boom"); /* unhandled: closes ch with THIS Err, kind and all */
 }
 
 static void prog_main(void) {
@@ -409,7 +455,7 @@ static void prog_main(void) {
     zrt_chan_copy(a);
     zrt_spawn(producer_buffered, a);
     while (zrt_chan_recv(a, &out) == 0) { printf("A=%ld\n", out); }
-    printf("A-closed err=%d\n", zrt_chan_err(a) != NULL);
+    printf("A-closed err=%d\n", zrt_chan_close_err(a).kind != ZRT_ERR_STOP_ITERATION);
     zrt_chan_release(a);
 
     /* B: unbuffered rendezvous (cap 0). */
@@ -417,7 +463,7 @@ static void prog_main(void) {
     zrt_chan_copy(b);
     zrt_spawn(producer_rendezvous, b);
     while (zrt_chan_recv(b, &out) == 0) { printf("B=%ld\n", out); }
-    printf("B-closed err=%d\n", zrt_chan_err(b) != NULL);
+    printf("B-closed err=%d\n", zrt_chan_close_err(b).kind != ZRT_ERR_STOP_ITERATION);
     zrt_chan_release(b);
 
     /* C: crashing last sender closes with a crash Err. */
@@ -427,7 +473,7 @@ static void prog_main(void) {
     int r1 = zrt_chan_recv(c, &out);
     printf("C=%ld r=%d\n", out, r1);
     int r2 = zrt_chan_recv(c, &out);
-    printf("C-crash r=%d err=%s\n", r2, zrt_chan_err(c));
+    printf("C-crash r=%d err=%s kind=%d\n", r2, zrt_chan_close_err(c).msg, zrt_chan_close_err(c).kind);
     zrt_chan_release(c);
 }
 
@@ -436,19 +482,42 @@ int main(void) {
 }
 `
 
-// schedSmokeC spawns two coroutines from a nil main, then returns; the scheduler
-// must still run both queued coroutines (fire-and-forget) before the program exits.
+// schedSmokeC spawns two coroutines from a nil main and waits for both through a
+// channel. Waiting is not ceremony: main returning ends the program, so a coroutine
+// that must finish has to be driven to a channel-observed completion — this is the
+// shape every concurrent Zerg program now has to take.
 const schedSmokeC = `
 #include "zergrt.h"
 #include <stdio.h>
 
-static void co_a(void *env) { (void)env; printf("co-a\n"); }
-static void co_b(void *env) { (void)env; printf("co-b\n"); }
+typedef struct { zrt_chan *ch; long id; } co_env;
+
+static void co_send(void *env) {
+    co_env *e = (co_env *)env;
+    zrt_chan_send(e->ch, &e->id);
+    zrt_chan_sender_release(e->ch);
+    zrt_free(e);
+}
+
+static void spawn_sender(zrt_chan *ch, long id) {
+    co_env *e = (co_env *)zrt_alloc(sizeof(co_env));
+    e->ch = zrt_chan_sender_copy(ch);
+    e->id = id;
+    zrt_spawn(co_send, e);
+}
 
 static void prog_main(void) {
     printf("main\n");
-    zrt_spawn(co_a, NULL);
-    zrt_spawn(co_b, NULL);
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 2);
+    spawn_sender(ch, 1);
+    spawn_sender(ch, 2);
+    zrt_chan_copy(ch);
+    zrt_chan_sender_release(ch); /* main keeps a receive-only hold */
+
+    long v, ran = 0, sum = 0;
+    while (zrt_chan_recv(ch, &v) == 0) { ran++; sum += v; }
+    printf("ran=%ld sum=%ld\n", ran, sum);
+    zrt_chan_release(ch);
 }
 
 int main(void) {
@@ -512,37 +581,23 @@ int main(void) {
 //
 // It is deliberately run many times: a race that survives one pass is common, and one
 // that survives thirty is rarer. This is evidence, not proof.
+//
+// And it is run with one worker as well as with the machine's own count. That mode used
+// to be untested here, and it was hiding a livelock: with several channels closing at
+// different times, `select` kept re-scanning instead of parking, and the coroutines that
+// would have unstuck it were sitting runnable behind the one worker that never yielded.
+// Several workers hid it, because another worker ran them.
 func TestConcurrencyStress(t *testing.T) {
-	cc := findCC()
-	if cc == "" {
-		t.Skip("no C compiler found")
-	}
-	dir := t.TempDir()
-	cfiles, err := Materialize(dir)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	cfiles = append(cfiles, ConcurrencyCUnits(dir, HostArch())...)
-
-	driver := filepath.Join(dir, "stress.c")
-	if err := os.WriteFile(driver, []byte(stressC), 0o644); err != nil {
-		t.Fatalf("write driver: %v", err)
-	}
-	bin := filepath.Join(dir, "stress.bin")
-	args := append([]string{"-std=c11", "-I", dir, "-o", bin, driver}, cfiles...)
-	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
-		t.Fatalf("cc failed: %v\n%s", err, out)
-	}
+	bin := buildConcurrent(t, "stress", stressC)
 
 	const runs = 30
 	want := "sum=49500 closed=10\n"
-	for i := 0; i < runs; i++ {
-		out, err := exec.Command(bin).CombinedOutput()
-		if err != nil {
-			t.Fatalf("stress run %d failed: %v\n%s", i, err, out)
-		}
-		if string(out) != want {
-			t.Fatalf("stress run %d = %q, want %q", i, out, want)
+	for _, w := range workerModes {
+		for i := 0; i < runs; i++ {
+			out, code := runBounded(t, bin, w, 30*time.Second)
+			if out != want || code != 0 {
+				t.Fatalf("stress run %d (ZRT_WORKERS=%q) = %q exit=%d, want %q exit=0", i, w, out, code, want)
+			}
 		}
 	}
 }
@@ -610,6 +665,426 @@ static void prog(void) {
         zrt_chan_release(chans[i]);
     }
     printf("sum=%ld closed=%d\n", total, NPROD);
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// TestMainReturnEndsProgram pins the program lifetime: main's coroutine finishing ends
+// the program, and a `spawn` still in flight is abandoned where it stands rather than
+// drained (docs/code/coroutine.md, Termination & deadlock). The worker here is parked on
+// a channel main holds the only sender for, so under the old drain-to-empty scheduler
+// this program could not terminate at all — which is why the case is worth a test rather
+// than a comment.
+//
+// It asserts the two things that do not depend on which worker ran what: the exit code is
+// main's, and the sentinel only reachable by outliving main never prints. It deliberately
+// does NOT assert that the worker failed to start; a coroutine already on a CPU runs to
+// its next scheduling point, and that point is a property of the machine, not the design.
+func TestMainReturnEndsProgram(t *testing.T) {
+	bin := buildConcurrent(t, "lifetime", lifetimeC)
+	for _, w := range workerModes {
+		out, code := runBounded(t, bin, w, 20*time.Second)
+		if code != 7 {
+			t.Errorf("ZRT_WORKERS=%q: exit = %d, want main's 7", w, code)
+		}
+		if !strings.Contains(out, "main-end\n") {
+			t.Errorf("ZRT_WORKERS=%q: main did not run to its end: %q", w, out)
+		}
+		if strings.Contains(out, "worker-end") {
+			t.Errorf("ZRT_WORKERS=%q: an abandoned coroutine outlived main: %q", w, out)
+		}
+	}
+}
+
+// lifetimeC: the worker announces itself on `ready` so main knows it is really running,
+// then parks forever on `never`. main takes the announcement and returns 7.
+const lifetimeC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+typedef struct { zrt_chan *ready; zrt_chan *never; } wenv;
+
+static void worker(void *env) {
+    wenv *e = (wenv *)env;
+    long v = 1;
+    zrt_chan_send(e->ready, &v);
+    zrt_chan_sender_release(e->ready);
+    zrt_chan_recv(e->never, &v);   /* main holds the only sender: this never returns */
+    printf("worker-end\n");        /* reachable only by outliving main */
+}
+
+static int64_t prog_main(void) {
+    zrt_chan *ready = zrt_chan_new(sizeof(long), 0);
+    zrt_chan *never = zrt_chan_new(sizeof(long), 0);
+    wenv *e = (wenv *)zrt_alloc(sizeof(wenv));
+    e->ready = zrt_chan_sender_copy(ready);
+    e->never = zrt_chan_copy(never);   /* receive-only: adds no sender */
+    zrt_spawn(worker, e);
+
+    long v;
+    zrt_chan_recv(ready, &v);      /* the worker is live and about to park */
+    printf("main-end\n");
+    return 7;
+}
+
+int main(void) { return zrt_sched_main_int(prog_main); }
+`
+
+// TestDeadlockIsACleanAbort covers DeadlockError as the spec writes it: an abort like any
+// other, so it unwinds, runs the pending `defer`s, and a `guard` catches it with the
+// DeadlockError kind rather than the process dying uncatchably where it stood.
+//
+// The second half is the part that would otherwise only show up as memory corruption. The
+// scheduler resumes a PARKED coroutine to carry the raise, and that coroutine's waiter is
+// a struct on the stack the abort is about to unwind — so the raise must take it back out
+// of the channel's queue first. A dangling waiter is invisible until something hands off
+// to it, which is why the driver goes on to send one value: it lands in the SECOND
+// receive's variable, or it lands in a dead frame and the receive never completes.
+func TestDeadlockIsACleanAbort(t *testing.T) {
+	t.Run("caught", func(t *testing.T) {
+		bin := buildConcurrent(t, "deadlock_caught", deadlockCaughtC)
+		want := "caught kind=7\nsecond-recv r=0 v=42\ndefer ran\n"
+		for _, w := range workerModes {
+			out, code := runBounded(t, bin, w, 20*time.Second)
+			if out != want || code != 0 {
+				t.Errorf("ZRT_WORKERS=%q: out=%q exit=%d, want %q exit=0", w, out, code, want)
+			}
+		}
+	})
+	t.Run("uncaught", func(t *testing.T) {
+		bin := buildConcurrent(t, "deadlock_fatal", deadlockFatalC)
+		want := "before\ndefer ran\n"
+		for _, w := range workerModes {
+			out, code := runBounded(t, bin, w, 20*time.Second)
+			if out != want || code != 1 {
+				t.Errorf("ZRT_WORKERS=%q: out=%q exit=%d, want %q exit=1", w, out, code, want)
+			}
+		}
+	})
+}
+
+// deadlockCaughtC: main receives on a channel it holds the only sender for, so nothing can
+// ever hand off — the detector resumes main to raise, a guard catches it, and the program
+// carries on. The receive AFTER the catch is the regression: it uses a different target
+// variable from the first, so a waiter left behind by the raise would take the value into
+// the dead frame and this receive would hang instead of answering 42.
+const deadlockCaughtC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <setjmp.h>
+
+static void say_defer(void *env) { (void)env; printf("defer ran\n"); }
+
+static void sender(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    long v = 42;
+    zrt_chan_send(ch, &v);
+    zrt_chan_sender_release(ch);
+}
+
+static void prog(void) {
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 0);
+    zrt_defer(say_defer, NULL);
+
+    long first = 0;
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) {
+        zrt_chan_recv(ch, &first);   /* nobody can ever send: the detector raises here */
+        zrt_handler_pop(&f);
+        printf("no raise (WRONG)\n");
+        return;
+    }
+    zrt_handler_pop(&f);
+    printf("caught kind=%d\n", zrt_taken_err().kind);
+
+    long second = 0;
+    zrt_spawn(sender, zrt_chan_sender_copy(ch));
+    int r = zrt_chan_recv(ch, &second);
+    printf("second-recv r=%d v=%ld\n", r, second);
+    zrt_chan_release(ch);
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// deadlockFatalC: the same deadlock with no guard over it. The abort still unwinds — the
+// defer runs — and main dying ends the program with main's non-zero outcome, which is the
+// exit code the old hard-exit produced, now reached the clean way. A second coroutine is
+// parked alongside so the deadlock is a real cycle rather than a lone coroutine.
+const deadlockFatalC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static void say_defer(void *env) { (void)env; printf("defer ran\n"); }
+
+static void sleeper(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    long v;
+    zrt_chan_recv(ch, &v);
+    printf("sleeper woke (WRONG)\n");
+}
+
+static void prog(void) {
+    zrt_chan *other = zrt_chan_new(sizeof(long), 0);
+    zrt_spawn(sleeper, zrt_chan_sender_copy(other));
+
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 0);
+    zrt_defer(say_defer, NULL);
+    printf("before\n");
+    fflush(stdout);
+
+    long v;
+    zrt_chan_recv(ch, &v);
+    printf("after (WRONG)\n");
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// TestBuiltinAbortsNameTheirKind pins the message shape the abort contract makes normative
+// (docs/conformance.md, "Runtime abort contract"): a built-in error's message is
+// `Kind: text`, where the text is the runtime's to word but the `Kind:` prefix is not. Every
+// other zrt_abort_kind site was written that way from the start; the two the concurrency
+// work added were not, and a taxonomy error whose own message will not say which kind it is
+// makes the conformance claim false for the reader who only ever sees stderr.
+func TestBuiltinAbortsNameTheirKind(t *testing.T) {
+	cases := []struct {
+		name   string
+		src    string
+		prefix string
+	}{
+		{"send_on_closed", sendOnClosedC, "SendOnClosedError: "},
+		{"deadlock", deadlockFatalC, "DeadlockError: "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := buildConcurrent(t, tc.name, tc.src)
+			for _, w := range workerModes {
+				_, errOut, code := runBoundedStreams(t, bin, w, 20*time.Second)
+				if code != 1 {
+					t.Errorf("ZRT_WORKERS=%q: exit=%d, want 1", w, code)
+				}
+				// The prefix is the assertion, not the whole line: the text after it is
+				// explicitly not normative, and a second detection can add a line below.
+				if !strings.HasPrefix(errOut, tc.prefix) {
+					t.Errorf("ZRT_WORKERS=%q: stderr=%q, want it to start %q", w, errOut, tc.prefix)
+				}
+				if strings.TrimSpace(strings.TrimPrefix(errOut, tc.prefix)) == "" {
+					t.Errorf("ZRT_WORKERS=%q: stderr=%q is a kind with no text", w, errOut)
+				}
+			}
+		})
+	}
+}
+
+// sendOnClosedC: main gives up the only send end, which closes the channel cleanly, then
+// sends on the receive handle it kept. Nothing can take that value and nothing ever will,
+// so the send is the dead letter the abort is for. The receive handle is also what keeps
+// the channel alive across the release — sender_release drops the refcount too, and the
+// last drop frees it.
+const sendOnClosedC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static void prog(void) {
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 1);
+    zrt_chan *rx = zrt_chan_copy(ch);   /* a receive handle: refcount only, not a sender */
+    zrt_chan_sender_release(ch);        /* the last sender leaves: the channel closes clean */
+    printf("before\n");
+    fflush(stdout);
+
+    long v = 1;
+    zrt_chan_send(rx, &v);
+    printf("after (WRONG)\n");
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// TestSelectResolvesClosedChannels pins how `select` ends when the channels it watches
+// stop producing. The three answers are different on purpose (docs/code/coroutine.md,
+// the `select` section):
+//
+//   - every watched receive channel closed CLEANLY, with no `done` and no `_` to say so:
+//     the select is waiting for something that can no longer happen, so it raises
+//     DeadlockError — the safety net for a forgotten shutdown arm. Before this it returned
+//     a case index and the arm ran over a stale value;
+//   - a channel closed by a CRASH still surfaces as that arm's Right, even when everything
+//     else is shut, because the one thing a select must never do is swallow the error its
+//     producer died of — and the Err it surfaces is the producer's own, message and all;
+//   - a `_` arm means the select never waits, so there is no deadlock to raise: the closed
+//     arm resolves as its Right instead, which is the same order the runtime already used.
+func TestSelectResolvesClosedChannels(t *testing.T) {
+	bin := buildConcurrent(t, "select_closed", selectClosedC)
+	want := "all-clean: kind=7\ncrash: closed=1 msg=producer died kind=3\ndefault: pick=0 closed=1\n"
+	for _, w := range workerModes {
+		out, code := runBounded(t, bin, w, 20*time.Second)
+		if out != want || code != 0 {
+			t.Errorf("ZRT_WORKERS=%q: out=%q exit=%d, want %q exit=0", w, out, code, want)
+		}
+	}
+}
+
+// selectClosedC drives the three closure answers in turn. `quiet` ends normally so its
+// channel closes clean; `crasher` aborts with a kind, so its channel closes carrying that
+// very Err.
+const selectClosedC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <setjmp.h>
+
+static void chan_sender_drop(void *slot) {
+    zrt_chan **s = (zrt_chan **)slot;
+    if (*s != NULL) { zrt_chan_sender_release(*s); }
+}
+
+static void quiet(void *env) { zrt_chan_sender_release((zrt_chan *)env); }
+
+static void crasher(void *env) {
+    zrt_chan *ch = (zrt_chan *)env;
+    zrt_defer(chan_sender_drop, &ch);   /* released on the crash unwind, closing ch */
+    zrt_abort_kind(ZRT_ERR_IO, "producer died");
+}
+
+/* hand the channel to a coroutine and give up main's own sender, so the coroutine
+ * leaving is what closes it. */
+static zrt_chan *closed_by(void (*body)(void *)) {
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 0);
+    zrt_spawn(body, zrt_chan_sender_copy(ch));
+    zrt_chan_copy(ch);
+    zrt_chan_sender_release(ch);
+    return ch;
+}
+
+/* wait_shut blocks until ch is closed. Each case below is about how a select resolves
+ * once every arm has shut, and without this the select can run while one producer has
+ * not been scheduled yet — it would then answer the arm that HAS closed, correctly, and
+ * the test would be asserting a different question than the one it means to ask. A
+ * receive on a channel with no values does exactly this wait: it returns only on close. */
+static void wait_shut(zrt_chan *ch) {
+    long v;
+    zrt_chan_recv(ch, &v);
+}
+
+static void case_all_clean(void) {
+    zrt_chan *a = closed_by(quiet), *b = closed_by(quiet);
+    wait_shut(a); wait_shut(b);
+    long v;
+    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, a, &v, 0}, {ZRT_SEL_RECV, b, &v, 0}};
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) {
+        int pick = zrt_select(cs, 2, false, false);   /* no done, no _ */
+        zrt_handler_pop(&f);
+        printf("all-clean: no raise, pick=%d (WRONG)\n", pick);
+    } else {
+        zrt_handler_pop(&f);
+        printf("all-clean: kind=%d\n", zrt_taken_err().kind);
+    }
+    zrt_chan_release(a); zrt_chan_release(b);
+}
+
+static void case_crash(void) {
+    zrt_chan *a = closed_by(quiet), *b = closed_by(crasher);
+    wait_shut(a); wait_shut(b);
+    long v;
+    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, a, &v, 0}, {ZRT_SEL_RECV, b, &v, 0}};
+    int pick = zrt_select(cs, 2, false, false);
+    zrt_err e = zrt_chan_close_err(cs[pick].ch);
+    printf("crash: closed=%d msg=%s kind=%d\n", cs[pick].closed, e.msg, e.kind);
+    zrt_chan_release(a); zrt_chan_release(b);
+}
+
+static void case_default(void) {
+    zrt_chan *a = closed_by(quiet);
+    wait_shut(a);
+    long v;
+    zrt_sel_case cs[1] = {{ZRT_SEL_RECV, a, &v, 0}};
+    int pick = zrt_select(cs, 1, true, false);   /* has _, so no DeadlockError */
+    printf("default: pick=%d closed=%d\n", pick, pick >= 0 ? cs[pick].closed : 0);
+    zrt_chan_release(a);
+}
+
+static void prog(void) { case_all_clean(); case_crash(); case_default(); }
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// TestTimerParksAndWakes covers the timer leaf the stdlib's `after`/`ticker` are built on.
+// The driver is `after(d)` written in C — a coroutine that sleeps and then sends — because
+// that is the whole shape of the feature: the runtime owns only the sleep, and a timer is
+// a channel like any other.
+//
+// Three assertions, one per requirement. The select fires on the timer arm rather than
+// raising, which proves a pending sleep suspends the deadlock detector — the arm it waits
+// beside can never produce, so without that suspension this program would abort instead of
+// waiting. The elapsed time is at least the requested one, so the sleep is a deadline and
+// not a yield. And the CPU burned is a small fraction of the time waited, which is the
+// no-busy-wait requirement stated as something a test can actually see.
+func TestTimerParksAndWakes(t *testing.T) {
+	bin := buildConcurrent(t, "timer", timerC)
+	want := "pick=1 waited-full=1 cpu-under-tenth=1\n"
+	for _, w := range workerModes {
+		out, code := runBounded(t, bin, w, 30*time.Second)
+		if out != want || code != 0 {
+			t.Errorf("ZRT_WORKERS=%q: out=%q exit=%d, want %q exit=0", w, out, code, want)
+		}
+	}
+}
+
+const timerC = `
+#include "zergrt.h"
+#include <stdio.h>
+#include <sys/resource.h>
+
+#define SLEEP_MS 200
+#define SLEEP_NS ((int64_t)SLEEP_MS * 1000000)
+
+typedef struct { zrt_chan *ch; int64_t ns; } tenv;
+
+/* stdlib after(d), in C: sleep the duration, then hand one value to the channel and let
+ * go of it. Unit 5 writes this in Zerg over the same leaf. */
+static void after_body(void *env) {
+    tenv *e = (tenv *)env;
+    zrt_sleep_ns(e->ns);
+    long v = 1;
+    zrt_chan_send(e->ch, &v);
+    zrt_chan_sender_release(e->ch);
+    zrt_free(e);
+}
+
+static long cpu_ms(void) {
+    struct rusage r;
+    getrusage(RUSAGE_SELF, &r);
+    return (r.ru_utime.tv_sec + r.ru_stime.tv_sec) * 1000
+         + (r.ru_utime.tv_usec + r.ru_stime.tv_usec) / 1000;
+}
+
+static void prog(void) {
+    zrt_chan *timer = zrt_chan_new(sizeof(long), 1);
+    zrt_chan *work = zrt_chan_new(sizeof(long), 1);  /* main holds its sender: never fires */
+    tenv *e = (tenv *)zrt_alloc(sizeof(tenv));
+    e->ch = zrt_chan_sender_copy(timer);
+    e->ns = SLEEP_NS;
+    zrt_spawn(after_body, e);
+    zrt_chan_copy(timer);
+    zrt_chan_sender_release(timer);
+
+    int64_t t0 = zrt_time_mono();
+    long c0 = cpu_ms();
+    long v;
+    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, work, &v, 0}, {ZRT_SEL_RECV, timer, &v, 0}};
+    int pick = zrt_select(cs, 2, false, false);   /* no done, no _: a deadlock would raise */
+    long waited = (long)((zrt_time_mono() - t0) / 1000000);
+    long burned = cpu_ms() - c0;
+
+    /* the clock is allowed a little slack either way; the CPU budget is a tenth of the
+     * wait, which a spin would blow through by two orders of magnitude. */
+    printf("pick=%d waited-full=%d cpu-under-tenth=%d\n",
+           pick, waited + 5 >= SLEEP_MS, burned < SLEEP_MS / 10);
+    zrt_chan_release(timer);
+    zrt_chan_release(work);
 }
 
 int main(void) { return zrt_sched_main_nil(prog); }

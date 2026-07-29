@@ -27,13 +27,32 @@ Zerg 是以整體來規範；Phase-1 bootstrap 實作其中一個子集。與其
 
 | 標記                         | 意義                                                   |
 | ---------------------------- | ------------------------------------------------------ |
-| **[implemented]**            | bootstrap 編譯器已依規格實作。                         |
+| **[implemented]**            | 種子（`zerg0`）已依規格實作。                          |
 | **[not yet: Phase N]**       | 已規範、尚未建置。今天使用它會是一個乾淨的編譯錯誤。   |
 | **[implementation-defined]** | 規格刻意不釘死；conforming implementation 可自行選擇。 |
-| **[deviation]**              | bootstrap 目前行為**不**符合此規格；一個被追蹤的 bug。 |
+| **[deviation]**              | 某個實作目前行為**不**符合此規格；一個被追蹤的 bug。   |
+
+**一個標記指的是哪個編譯器。** 有兩個：`zerg0`，Go 主導的種子，唯一的工作是建置編譯器；以及 `zerg`，出貨的自舉
+編譯器。本規格中的標記以**種子**為量測基準，逐特性標註的也是它的子集；出貨的 `zerg` 自己的子集則記載於
+[`src/compiler/README.md`](../src/compiler/README.md)。因此一個標為 **[implemented]** 的特性，`zerg` 可能還不接受。
+
+種子**不再一律是兩者中較寬的那個**。它在語言的大部分較寬——closure 與函式值、`map[K, V]`、`impl` 方法、`match`
+arm body 可以是區塊——但在**並行上較窄**：`zerg` 會降階 directional channel 端、方法與帶命名空間的 `spawn` 被呼叫
+者、以及種子拒絕的 stdlib timer。`is` 型別測試現在**兩邊一模一樣**：對 `Err` 測一個 error kind，其餘一律指名拒絕。
+凡差異對程式有影響之處，該章會講明它在談哪一個編譯器；而 **[deviation]** 在主體不是種子時會指名主體。
+
+有些特性曾被規範、在種子裡建成，之後在種子被削減到只剩單一職責時**移除**——closure 與函式值、`map[K, V]`、
+`#[dyn]` dispatch、以及 `unsafe` 指標與 inline assembly。它們重新被標為 **[not yet]**：種子會以一則診斷拒絕它們，
+而那正是這個標記所承諾的。
+
+**並行是例外，而且是一個更窄的主張。** coroutine、channel 與 `select` 曾被移除、之後又復原：種子降階**happy
+path**——`chan[T](cap)`、`ch <- v`、真正回傳 `Result[T]` 的 `<-ch`、`close(ch)`、`spawn f(args)`、四種 arm 形狀俱
+全的 `select`，以及 `for v in ch`——並**指名拒絕六種形狀**而不是誤譯它們：**directional channel 型別**、被呼叫者
+為**方法**／**帶命名空間的函式**／**closure** 的 `spawn`、跨越 `spawn` 的 **`mut &`** 引數，以及並行程式裡的
+**`main(args)`**。每一種都是乾淨的診斷加上非零的 exit code。見 [Coroutines](code/coroutine.zh-TW.md)。
 
 沒有標記的小節沿用其外層特性的標記；段落可用自己的標記覆寫。**[deviation]** 一律同時陳述「規格所定行為」與
-「bootstrap 實際的作法」。
+「該實作實際的作法」。
 
 ## 診斷契約
 

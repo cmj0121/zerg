@@ -62,7 +62,7 @@ struct zrt_chan {
 	size_t         rc;      /* holder count; last holder frees */
 	size_t         senders; /* send-capable handles; zero -> auto-close */
 	bool           closed;  /* set once senders reaches zero */
-	const char    *err;     /* close reason: NULL = StopIteration, else a crash Err */
+	zrt_err        err;     /* why it closed; see chan_close. Valid from construction. */
 	size_t         elemsz;  /* element size in bytes (memcpy unit) */
 	size_t         cap;     /* ring capacity; 0 = unbuffered rendezvous */
 	size_t         head;    /* ring read cursor */
@@ -152,13 +152,22 @@ static void ring_get(zrt_chan *ch, void *out) {
 
 /* --- construction / lifetime ------------------------------------------------- */
 
+/* chan_stop_iteration is the Err a CLEAN close carries: the end-of-stream sentinel the
+ * spec names StopIteration, which is an ordinary ending and not a failure. Giving it a
+ * kind of its own is what lets a receiver tell a clean close from a crash without
+ * matching on a message — and the taxonomy has no way to raise StopIteration from
+ * Zerg, so no crash Err can wear this kind by accident. */
+static zrt_err chan_stop_iteration(void) {
+	return zrt_err_new_kind(ZRT_ERR_STOP_ITERATION, "channel closed");
+}
+
 zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 	zrt_chan *ch = (zrt_chan *)zrt_alloc(sizeof(*ch));
 	zrt_mutex_init(&ch->lock);
 	ch->rc = 1;
 	ch->senders = 1; /* the new bidirectional handle is a sender */
 	ch->closed = false;
-	ch->err = NULL;
+	ch->err = chan_stop_iteration(); /* zrt_alloc is malloc: never leave the reason garbage */
 	ch->elemsz = elemsz;
 	ch->cap = cap;
 	ch->head = ch->tail = ch->len = 0;
@@ -176,20 +185,29 @@ static void chan_free(zrt_chan *ch) {
 	zrt_free(ch);
 }
 
-/* chan_close flips the channel to closed with the given reason (NULL = StopIteration,
- * else a crash Err) and wakes every parked receiver, each of which re-checks and takes
- * the Right of Result[T]. It only flips a flag and wakes — freeing stays with rc. When
- * senders has reached zero no sender can be parked, so sendq is empty here. */
-static void chan_close(zrt_chan *ch, const char *err) {
+/* chan_close flips the channel to closed carrying the Err a receiver will read back as
+ * the Right of Result[T], and wakes every parked receiver. It only flips a flag and
+ * wakes — freeing stays with rc. When senders has reached zero no sender can be parked,
+ * so sendq is empty here.
+ *
+ * The Err is stored BY VALUE, and the value is all the channel owns: `msg` and `cause`
+ * are pointers into storage the crashing coroutine never owned either — a message is a
+ * literal or an interned string and a cause is a heap box, both leaked for the MVP like
+ * every other Err. So the copy outlives the stack it came from, which it must: the
+ * coroutine that crashed is unwinding as this runs, and by the time a receiver reads
+ * the Err that coroutine is gone. */
+static void chan_close(zrt_chan *ch, zrt_err err) {
 	if (ch->closed) {
 		return;
 	}
 	ch->closed = true;
 	ch->err = err;
-	for (zrt_waiter *w = ch->recvq_head; w != NULL; w = w->next) {
+	/* wq_pop, not wq_take: a close wakes every waiter and claims none of them — a select
+	 * parked on a recv arm here must keep its one fire for the arm it eventually takes. */
+	for (zrt_waiter *w = wq_pop(&ch->recvq_head, &ch->recvq_tail); w != NULL;
+	     w = wq_pop(&ch->recvq_head, &ch->recvq_tail)) {
 		zrt_sched_wake(w->co);
 	}
-	ch->recvq_head = ch->recvq_tail = NULL;
 }
 
 zrt_chan *zrt_chan_copy(zrt_chan *ch) {
@@ -223,11 +241,13 @@ void zrt_chan_release(zrt_chan *ch) {
 void zrt_chan_sender_release(zrt_chan *ch) {
 	zrt_mutex_lock(&ch->lock);
 	if (--ch->senders == 0) {
-		/* the last sender left: auto-close. A crashing sender (Fork-C) carries a crash
-		 * Err so a receiver observes Right(Err) rather than the ordinary StopIteration.
-		 * chan_close wakes the parked receivers, so it runs with the lock held — waking
-		 * takes the scheduler lock, which is the allowed order. */
-		chan_close(ch, zrt_crash_active() ? "coroutine crashed" : NULL);
+		/* the last sender left: auto-close. A crashing sender (Fork-C) hands the channel
+		 * its OWN in-flight Err — message, cause and kind intact — so the receiver reads
+		 * back what actually went wrong rather than a stand-in string; a crash reason a
+		 * receiver cannot read is a crash reason lost. chan_close wakes the parked
+		 * receivers, so it runs with the lock held — waking takes the scheduler lock,
+		 * which is the allowed order. */
+		chan_close(ch, zrt_crash_active() ? zrt_taken_err() : chan_stop_iteration());
 	}
 	bool last = (--ch->rc == 0);
 	zrt_mutex_unlock(&ch->lock);
@@ -238,36 +258,70 @@ void zrt_chan_sender_release(zrt_chan *ch) {
 
 /* --- send / recv ------------------------------------------------------------- */
 
+/* chan_send_closed is the one diagnostic a dead letter gets, in the one place its kind
+ * is written down. A send on a closed channel is a program error, not a value: the
+ * counterparty is gone and there is nothing to hand the value to. */
+static _Noreturn void chan_send_closed(void) {
+	zrt_abort_kind(ZRT_ERR_SEND_ON_CLOSED, "SendOnClosedError: send on a closed channel");
+}
+
+/* chan_deadlock is the protocol every park point in this file owes the abort that follows
+ * it: TAKE YOUR WAITER OUT BEFORE YOU UNWIND. `w` lives on the stack DeadlockError is
+ * about to unwind, and a queue that still points at it is a hand-off into freed memory the
+ * moment anything touches this channel again. Written once because it is a rule about the
+ * queues rather than about either operation, and because a third park point added later
+ * has to obey it too. */
+static _Noreturn void chan_deadlock(zrt_chan *ch, zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
+	zrt_mutex_lock(&ch->lock);
+	wq_remove(head, tail, w);
+	zrt_mutex_unlock(&ch->lock);
+	zrt_sched_deadlock();
+}
+
+/* A LOOP, like the receive below, and for the reason every park site in this runtime is
+ * one: a park that returns is not a promise that what you parked for has happened. It can
+ * end on a wake token an earlier `select` left standing (chan.c's select leaves one
+ * deliberately; it is one-shot and survives to the coroutine's next park). Reading such a
+ * wake as "no taker, so the channel closed" reported SendOnClosedError on a channel that
+ * was open — and left `w` linked on the send queue while its stack unwound. */
 void zrt_chan_send(zrt_chan *ch, const void *val) {
 	zrt_mutex_lock(&ch->lock);
-	if (ch->closed) {
-		zrt_mutex_unlock(&ch->lock);
-		zrt_abort("send on a closed channel");
-	}
-	/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
-	zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
-	if (r != NULL) {
-		memcpy(r->val, val, ch->elemsz);
-		r->done = true;
-		zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
-		zrt_mutex_unlock(&ch->lock);
-		return;
-	}
-	/* buffered with room: enqueue and return without blocking. */
-	if (ch->len < ch->cap) {
-		ring_put(ch, val);
-		zrt_mutex_unlock(&ch->lock);
-		return;
-	}
-	/* full (or unbuffered with no receiver): park until a receiver takes the value. The
-	 * lock goes to the scheduler, which releases it once this coroutine is off the CPU —
-	 * a receiver must not be able to find this waiter before then. */
-	zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL, NULL};
-	wq_push(&ch->sendq_head, &ch->sendq_tail, &w);
-	zrt_sched_park_unlock(&ch->lock);
-	if (!w.done) {
-		/* woken without a taker: the channel closed under us. */
-		zrt_abort("send on a closed channel");
+	for (;;) {
+		if (ch->closed) {
+			zrt_mutex_unlock(&ch->lock);
+			chan_send_closed();
+		}
+		/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
+		zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
+		if (r != NULL) {
+			memcpy(r->val, val, ch->elemsz);
+			r->done = true;
+			zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
+			zrt_mutex_unlock(&ch->lock);
+			return;
+		}
+		/* buffered with room: enqueue and return without blocking. */
+		if (ch->len < ch->cap) {
+			ring_put(ch, val);
+			zrt_mutex_unlock(&ch->lock);
+			return;
+		}
+		/* full (or unbuffered with no receiver): park until a receiver takes the value. The
+		 * lock goes to the scheduler, which releases it once this coroutine is off the CPU —
+		 * a receiver must not be able to find this waiter before then. */
+		zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL, NULL};
+		wq_push(&ch->sendq_head, &ch->sendq_tail, &w);
+		if (zrt_sched_park_unlock(&ch->lock)) {
+			chan_deadlock(ch, &ch->sendq_head, &ch->sendq_tail, &w);
+		}
+		if (w.done) {
+			return; /* a receiver took the value straight out of *val. */
+		}
+		/* Woken without a taker: an explicit close (which unlinked us on its way past), or
+		 * a stray token. Re-take the lock, unlink if we are still on the queue, and let the
+		 * top of the loop decide which it was. */
+		zrt_mutex_lock(&ch->lock);
+		wq_remove(&ch->sendq_head, &ch->sendq_tail, &w);
 	}
 }
 
@@ -305,7 +359,9 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		/* empty and open: park until a sender hands off or the channel closes. */
 		zrt_waiter w = {zrt_sched_current(), out, false, NULL, NULL};
 		wq_push(&ch->recvq_head, &ch->recvq_tail, &w);
-		zrt_sched_park_unlock(&ch->lock);
+		if (zrt_sched_park_unlock(&ch->lock)) {
+			chan_deadlock(ch, &ch->recvq_head, &ch->recvq_tail, &w);
+		}
 		if (w.done) {
 			return 0; /* a sender rendezvoused straight into *out. */
 		}
@@ -316,11 +372,46 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 	}
 }
 
-const char *zrt_chan_err(zrt_chan *ch) {
+zrt_err zrt_chan_close_err(zrt_chan *ch) {
 	zrt_mutex_lock(&ch->lock);
-	const char *e = ch->err;
+	zrt_err e = ch->err;
 	zrt_mutex_unlock(&ch->lock);
 	return e;
+}
+
+/* zrt_chan_close is the EXPLICIT close behind Zerg's `close(ch)`: it marks the CHANNEL
+ * no-longer-sendable. It is a property of the channel and not of a holder, so it touches
+ * neither rc nor senders — every handle keeps its reference and stays readable, and a
+ * receive drains what is buffered before answering the Right, exactly as an auto-close
+ * does.
+ *
+ * It is idempotent: chan_close returns early on an already-closed channel, so FIRST CLOSE
+ * WINS for the recorded reason. That is a real trade — a producer that crashes after an
+ * explicit close does not overwrite the clean StopIteration with its own Err, so its
+ * receiver reads an ordinary end. The crash still reports on stderr through the crashing
+ * coroutine's own handler, so the failure is not lost, only its path to that receiver.
+ *
+ * Explicit close is the one that can happen while senders REMAIN, which is why it wakes
+ * the send queue and the auto-close path does not: a sender parked waiting for a taker
+ * would otherwise sleep forever. Each wakes with `done` false and aborts with
+ * SendOnClosedError, and the queue is emptied here — a woken sender's waiter lives on the
+ * stack it is about to unwind, so leaving it linked would be a hand-off into freed
+ * memory.
+ *
+ * The drain is wq_pop and NOT wq_take: wq_take claims a select's shared flag, and a select
+ * parked on a send arm of this channel would have its one fire swallowed by a close that
+ * was only supposed to wake it. Popping wakes every waiter and claims nothing, which is
+ * what a close means — go and look again. */
+void zrt_chan_close(zrt_chan *ch) {
+	zrt_mutex_lock(&ch->lock);
+	if (!ch->closed) {
+		chan_close(ch, chan_stop_iteration());
+		for (zrt_waiter *w = wq_pop(&ch->sendq_head, &ch->sendq_tail); w != NULL;
+		     w = wq_pop(&ch->sendq_head, &ch->sendq_tail)) {
+			zrt_sched_wake(w->co);
+		}
+	}
+	zrt_mutex_unlock(&ch->lock);
 }
 
 /* --- select ------------------------------------------------------------------ */
@@ -384,14 +475,24 @@ static int sel_try_recv(zrt_chan *ch, void *out) {
 	return r;
 }
 
+/* sel_send_closed answers whether a send arm's channel has closed, which is the arm
+ * aborting rather than the arm being ready (DESIGN-1e §4.2: a closed send case selected
+ * aborts). It is a separate question from readiness because of WHERE the abort has to
+ * happen: an abort longjmps out, so raising it from inside sel_try_send would leave both
+ * the channel's lock and select's own lock held for the rest of the program, and every
+ * later select would hang on a lock whose owner is gone. The caller asks first, unwinds
+ * its locks, and only then aborts. */
+static bool sel_send_closed(zrt_chan *ch) {
+	zrt_mutex_lock(&ch->lock);
+	bool closed = ch->closed;
+	zrt_mutex_unlock(&ch->lock);
+	return closed;
+}
+
 /* sel_try_send performs a send on ch if it can proceed without blocking (a parked live
- * receiver, or buffer room), returning 1; it returns 0 when the channel would block.
- * Sending on a closed channel is a program error and aborts (DESIGN-1e §4.2: a closed
- * send case selected aborts). It mirrors zrt_chan_send's ready path. */
+ * receiver, or buffer room), returning 1; it returns 0 when the channel would block. It
+ * mirrors zrt_chan_send's ready path. */
 static int sel_try_send_locked(zrt_chan *ch, const void *val) {
-	if (ch->closed) {
-		zrt_abort("send on a closed channel");
-	}
 	zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
 	if (r != NULL) {
 		memcpy(r->val, val, ch->elemsz);
@@ -413,31 +514,52 @@ static int sel_try_send(zrt_chan *ch, const void *val) {
 	return r;
 }
 
-/* sel_all_recv_closed reports whether every watched recv case is FINISHED: closed and
- * drained, both. With no recv case it is vacuously true. Drives the `done` arm.
+/* sel_shut_scan reads, in one pass, everything this select needs to know about closure:
+ * which recv arms are FINISHED (closed AND drained, recorded into shut[]), whether they
+ * all are, the first one in fair order, and the first whose close carried a crash. Every
+ * closure question the resolution below asks is answered from this one scan.
  *
- * Closed alone is not enough, and the difference is values. The scan that ran before
- * this holds one channel's lock at a time, so a sender can fill a channel this scan
- * already passed and then close it, all before the last channel has been looked at —
- * and `done` would end the select over a buffer that still has values in it. A closed
- * channel keeps delivering what it already holds; only an empty one is over. */
-static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
-	for (size_t i = 0; i < n; i++) {
+ * Closed alone is not finished, and the difference is values. This holds one channel's
+ * lock at a time, so a sender can fill a channel already passed and then close it before
+ * the last is looked at — and `done` would end the select over a buffer that still has
+ * values in it. A closed channel keeps delivering what it already holds; only an empty
+ * one is over.
+ *
+ * The reads must be under the lock even though only a flag is wanted: `closed` is
+ * written by whichever worker released the last sender, and losing it is not a wrong
+ * answer but a HANG — the select sees an open channel, parks, and the close that would
+ * have woken it already happened. */
+typedef struct {
+	bool all;   /* every watched recv arm is finished (vacuously true with none) */
+	int  first; /* first finished recv arm in fair order, or -1 */
+	int  crash; /* first finished recv arm whose close carried a crash Err, or -1 */
+} sel_shut;
+
+static sel_shut sel_shut_scan(const zrt_sel_case *cases, bool *shut, size_t n, size_t start) {
+	sel_shut r = {true, -1, -1};
+	for (size_t k = 0; k < n; k++) {
+		size_t i = (start + k) % n;
+		shut[i] = false;
 		if (cases[i].op != ZRT_SEL_RECV) {
 			continue;
 		}
-		/* `closed` is written by whichever worker released the last sender, so reading it
-		 * bare is a race — and losing it is not a wrong answer but a HANG: the select
-		 * sees an open channel, parks, and the close that would have woken it already
-		 * happened. */
 		zrt_mutex_lock(&cases[i].ch->lock);
 		bool over = cases[i].ch->closed && cases[i].ch->len == 0 && cases[i].ch->sendq_head == NULL;
+		bool crashed = over && cases[i].ch->err.kind != ZRT_ERR_STOP_ITERATION;
 		zrt_mutex_unlock(&cases[i].ch->lock);
+		shut[i] = over;
 		if (!over) {
-			return false;
+			r.all = false;
+			continue;
+		}
+		if (r.first < 0) {
+			r.first = (int)i;
+		}
+		if (crashed && r.crash < 0) {
+			r.crash = (int)i;
 		}
 	}
-	return true;
+	return r;
 }
 
 /* sel_ready_locked answers whether a scan of this one case would find something to do,
@@ -447,11 +569,17 @@ static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
  * waiter reads as ready here, because telling that apart means consuming it. The cost of
  * saying yes wrongly is one extra scan before parking again; the cost of saying no
  * wrongly would be a hang, so the error is taken in the harmless direction. */
-static bool sel_ready_locked(const zrt_sel_case *c) {
+static bool sel_ready_locked(const zrt_sel_case *c, bool was_shut) {
 	const zrt_chan *ch = c->ch;
 	if (c->op == ZRT_SEL_RECV) {
-		/* a buffered value, a sender to take one from, or a close to report */
-		return ch->len > 0 || ch->sendq_head != NULL || ch->closed;
+		/* a buffered value, a sender to take one from, or a close this select has not
+		 * already accounted for. `was_shut` is what keeps the generosity from becoming a
+		 * livelock: a channel that was ALREADY finished when the resolution above ran is
+		 * not news, and calling it ready would send this select round the loop forever
+		 * without ever parking — which, with one worker, also means the coroutines that
+		 * would have unstuck it never get to run. A close that arrived since is news, and
+		 * that is exactly the race the re-scan exists for. */
+		return ch->len > 0 || ch->sendq_head != NULL || (ch->closed && !was_shut);
 	}
 	/* room in the buffer, a receiver to hand to, or a close (which aborts, but is
 	 * something this select must proceed to rather than sleep through) */
@@ -499,35 +627,46 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 					zrt_mutex_unlock(&g_sel_lock);
 					return (int)i;
 				}
+			} else if (sel_send_closed(c->ch)) {
+				zrt_mutex_unlock(&g_sel_lock); /* the abort never comes back for it */
+				chan_send_closed();
 			} else if (sel_try_send(c->ch, c->val)) {
 				zrt_mutex_unlock(&g_sel_lock);
 				return (int)i;
 			}
 		}
-		/* nothing value-ready. `done` fires once every watched recv channel has closed. */
-		if (has_done && sel_all_recv_closed(cases, n)) {
+		/* Nothing value-ready, so closure decides. One scan answers every question that
+		 * follows, and shut[] is kept for the re-scan after the park. */
+		bool shut[n];
+		sel_shut sh = sel_shut_scan(cases, shut, n, start);
+		if (has_done && sh.all) {
 			zrt_mutex_unlock(&g_sel_lock);
-			return ZRT_SEL_DONE;
+			return ZRT_SEL_DONE; /* the select is exhausted: every producer has finished */
 		}
-		/* with no `done` arm to absorb closure, a closed recv channel fires as Right. */
 		if (!has_done) {
-			for (size_t k = 0; k < n; k++) {
-				size_t i = (start + k) % n;
-				zrt_sel_case *c = &cases[i];
-				if (c->op != ZRT_SEL_RECV) {
-					continue;
-				}
-				/* closed AND drained, for the reason sel_all_recv_closed gives: a channel
-				 * the scan already passed can be filled and closed before this runs, and
-				 * firing Right over it would discard what it still holds. */
-				zrt_mutex_lock(&c->ch->lock);
-				bool shut = c->ch->closed && c->ch->len == 0 && c->ch->sendq_head == NULL;
-				zrt_mutex_unlock(&c->ch->lock);
-				if (shut) {
-					c->closed = 1;
-					zrt_mutex_unlock(&g_sel_lock);
-					return (int)i;
-				}
+			if (sh.crash >= 0) {
+				/* a crash close is news, not an ending: it outranks both the clean closes
+				 * beside it and the deadlock below, because the one thing this select must
+				 * never do is swallow the error its producer died of. */
+				cases[sh.crash].closed = 1;
+				zrt_mutex_unlock(&g_sel_lock);
+				return sh.crash;
+			}
+			if (sh.all && sh.first >= 0 && !has_default) {
+				/* every channel this select watches has closed cleanly, and the select has
+				 * neither a `done` to end on nor a `_` to fall through to — so it is waiting
+				 * for something that can no longer happen. Raising is the safety net for a
+				 * forgotten shutdown arm; the alternative is a select that runs an arm over
+				 * a value nobody sent, or one that sleeps for good. */
+				zrt_mutex_unlock(&g_sel_lock);
+				zrt_sched_deadlock();
+			}
+			if (sh.first >= 0) {
+				/* some arms are still open, so this is not the end of the select — but with
+				 * no `done` to route it to, closure is reported per arm as the Right. */
+				cases[sh.first].closed = 1;
+				zrt_mutex_unlock(&g_sel_lock);
+				return sh.first;
 			}
 		}
 		/* the non-blocking `_`: nothing ready, so run its arm without parking. */
@@ -569,7 +708,7 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 		bool ready = false;
 		for (size_t i = 0; i < n && !ready; i++) {
 			zrt_mutex_lock(&cases[i].ch->lock);
-			ready = sel_ready_locked(&cases[i]);
+			ready = sel_ready_locked(&cases[i], shut[i]);
 			zrt_mutex_unlock(&cases[i].ch->lock);
 		}
 		if (ready) {
@@ -590,13 +729,21 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 		}
 		/* the select lock goes to the scheduler, released once this coroutine is off the
 		 * CPU — the same hand-off a plain recv makes with the channel lock. */
-		zrt_sched_park_unlock(&g_sel_lock);
+		bool deadlocked = zrt_sched_park_unlock(&g_sel_lock);
 		zrt_mutex_lock(&g_sel_lock);
 		int fired = sel_unlink(cases, ws, n, &claimed);
 		if (fired >= 0) {
 			cases[fired].closed = 0; /* a hand-off delivered a real value (Left) */
 			zrt_mutex_unlock(&g_sel_lock);
 			return fired;
+		}
+		if (deadlocked) {
+			/* the deadlock detector resumed us to carry the raise, and sel_unlink has
+			 * already taken every waiter back off every channel — which a select must do
+			 * on this path more than any other, since `ws` lives on the stack the abort is
+			 * about to unwind and it was on as many queues as the select had arms. */
+			zrt_mutex_unlock(&g_sel_lock);
+			zrt_sched_deadlock();
 		}
 		/* woken by a close (no hand-off): loop and re-scan — a closed recv now routes to
 		 * `done` or fires as Right per the resolution order above. */

@@ -76,6 +76,23 @@ void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) { SleepConditionVariableCS(as_cond
 void zrt_cond_signal(zrt_cond *c) { WakeConditionVariable(as_cond(c)); }
 void zrt_cond_broadcast(zrt_cond *c) { WakeAllConditionVariable(as_cond(c)); }
 
+void zrt_cond_timedwait(zrt_cond *c, zrt_mutex *m, int64_t ns) {
+	/* Win32 counts in whole milliseconds, so a sub-millisecond span rounds UP: waking a
+	 * touch late costs one scheduling turn, while rounding down to zero would turn the
+	 * wait into a spin against the clock. The rounding is written as a division plus a
+	 * remainder test rather than the usual (ns + 999999) / 1000000 because ns is a full
+	 * int64 and that addition can overflow it; and a span too long for a DWORD is capped
+	 * rather than truncated, since the caller re-reads the clock and waits again. */
+	if (ns < 0) {
+		ns = 0;
+	}
+	int64_t ms = ns / 1000000 + ((ns % 1000000 != 0) ? 1 : 0);
+	if (ms > 0x7FFFFFFF) {
+		ms = 0x7FFFFFFF;
+	}
+	SleepConditionVariableCS(as_cond(c), as_mutex(m), (DWORD)ms);
+}
+
 bool zrt_atomic_claim(bool *flag) {
 	/* a bool is one byte; InterlockedExchange8 is the matching width */
 	return InterlockedExchange8((volatile char *)flag, 1) == 0;

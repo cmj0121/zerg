@@ -40,8 +40,9 @@ func TestIfBindExpressionRuns(t *testing.T) {
 	}
 }
 
-// TestIfBindNonOptionalRejected covers the type-check: an `if x :=` head over a
-// non-optional value is a clean error (the block only runs on the present case).
+// TestIfBindNonOptionalRejected covers the type-check: an `if x :=` head over a value that
+// carries no presence — neither an optional nor a Result — is a clean error (the block only
+// runs on the present case, and a plain int has no absent one).
 func TestIfBindNonOptionalRejected(t *testing.T) {
 	src := "fn main() {\n\tif x := 5 {\n\t\tprint x\n\t}\n}\n"
 	code, _, diags := Compile(src)
@@ -55,7 +56,7 @@ func TestIfBindNonOptionalRejected(t *testing.T) {
 			t.Fatalf("must be a clean gate, got internal error: %v", diags)
 		}
 	}
-	if !strings.Contains(joined, "requires an optional value") {
-		t.Fatalf("expected the optional-required diagnostic, got: %v", diags)
+	if !strings.Contains(joined, "requires an optional or a Result value") {
+		t.Fatalf("expected the presence-carrier diagnostic, got: %v", diags)
 	}
 }

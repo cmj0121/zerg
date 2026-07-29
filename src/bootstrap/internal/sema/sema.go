@@ -773,6 +773,17 @@ func (c *checker) forInElem(n *ast.ForStmt) Type {
 	if mp, ok := it.(*types.Map); ok {
 		return mp.Key
 	}
+	// `for v in ch` receives until the channel closes: the channel IS the iterator, which is
+	// why the language needs no `yield` keyword and no generator type (docs/code/coroutine.md).
+	// The loop variable binds the ELEMENT, not the `Result[T]` a bare `<-ch` yields — the
+	// Right that ends the stream is what ends the loop, so it is never handed to the body.
+	if ch, ok := it.(*types.Chan); ok {
+		if ch.Dir == types.ChanSend {
+			c.errorf(n.Iter.Span(), "cannot receive from a send-only channel %s", ch)
+			return Invalid
+		}
+		return ch.Elem
+	}
 	// `for c in s` iterates a str as its code points (docs/code/collections.md, types.md): the
 	// loop variable binds a rune. A str is not indexable, so this is the forward scan.
 	if it == Str {
@@ -881,10 +892,16 @@ func (c *checker) checkStmt(s ast.Stmt) {
 		// 'del name' revokes a binding's access now (GRAMMAR group 11); for a Ref the
 		// emitter drops a refcount. It marks the name dead on this path so a later use
 		// is rejected (DESIGN-1d §5.1); revoking is idempotent.
-		if sym := c.lookup(n.Name); sym != nil {
-			c.revoke(sym)
-		} else {
+		// A channel is no exception. `del ch` used to keep the name live, because it was the
+		// only spelling for "I am done sending" — but that made `del` mean two different
+		// things, and it left `ch <- v` after a `del ch` typechecking on a handle whose send
+		// end was gone. Giving up the send end is `close(ch)` now, so `del` means one thing
+		// again for every type.
+		sym := c.lookup(n.Name)
+		if sym == nil {
 			c.errorf(n.Span(), "undefined name %q", n.Name)
+		} else {
+			c.revoke(sym)
 		}
 	case *ast.RaiseStmt:
 		// 'raise e (from c)' diverges (never). With no stdlib Error spec yet, any
@@ -1014,20 +1031,27 @@ func (c *checker) checkBranch(br ast.IfBranch) {
 	c.checkBlock(br.Body)
 }
 
-// ifBindElem types an `if x := opt` binding head: its operand (carried in br.Cond)
-// must be an optional 'T?', and the head binds T — the block runs only on the present
-// (Some) case. A non-optional operand is a clean error.
+// ifBindElem types an `if x := e` binding head: its operand (carried in br.Cond) must be
+// an optional 'T?' or a 'Result[T]', and the head binds T — the block runs only on the
+// present (Some / Left) case. Both are "a value or nothing", and both carry it in the same
+// tag-0 slot, which is what lets `if v := <-ch { … }` read a receive (docs/code/coroutine.md).
+// A general 'Either[L, R]' is NOT one of these: its Right is a value in its own right, not
+// an absence, so it goes through `match`. Anything else is a clean error.
 func (c *checker) ifBindElem(br ast.IfBranch) Type {
 	t := c.synth(br.Cond)
 	if bad(t) {
 		return t
 	}
-	opt, ok := t.(*types.Opt)
-	if !ok {
-		c.errorf(br.Cond.Span(), "an `if %s :=` binding head requires an optional value, found %s", br.Bind, t)
-		return Invalid
+	switch x := t.(type) {
+	case *types.Opt:
+		return x.Elem
+	case *types.Either:
+		if isErr(x.Right) {
+			return x.Left
+		}
 	}
-	return opt.Elem
+	c.errorf(br.Cond.Span(), "an `if %s :=` binding head requires an optional or a Result value, found %s", br.Bind, t)
+	return Invalid
 }
 
 func (c *checker) checkCond(e ast.Expr) {

@@ -121,10 +121,10 @@ nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
 chan  type   impl    package  init
-defer del    raise   guard    is       not
-and   or     print   this     with     as
-from  true   false   nil      const    unsafe
-ptr   asm
+defer del    close   raise    guard    is
+not   and    or      print    this     with
+as    from   true    false    nil      const
+unsafe ptr   asm
 ```
 
 （`derive` 不是關鍵字——它是 `#[derive(…)]` 裡的 decorator 名稱。）
@@ -525,7 +525,11 @@ postfix       += '?' | '!' | '?.' identifier
 ```text
 spawn-stmt  ::= 'spawn' expr
 send-stmt   ::= expr '<-' expr
+close-stmt  ::= 'close' '(' expr ')'          # 提早結束這條 stream；expr 是一條 channel
 chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
+chan-type   ::= 'chan' '[' type ']'           # 雙向
+              | '<-' 'chan' '[' type ']'      # receive-only（接收方），Go 風格
+              | 'chan' '[' type ']' '<-'      # send-only（送出方），Go 風格
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
 select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
@@ -541,7 +545,12 @@ send-arm    ::= expr '<-' expr '=>' expr
   （攜 `StopIteration` 或 crash `Err`）。receive 先綁定,故 `(<-ch)?`、`<-ch!`、`<-ch ?? d` 與 group-8 運算子組合。
 - **`select { … }`** 是唯一的多路等待:跑第一個 ready 的 arm（公平 tie）。**`done`** 在所有被監看的 receive channel
   都關閉時觸發一次;**`_`** 在此刻無 arm ready 時觸發（non-blocking）——兩者皆**contextual**,只在 select-arm 開頭
-  特殊。**沒有明確 close**（channel 在最後 sender 離開時自動關）、**沒有 `yield`**。
+  特殊。**沒有 `yield`**。
+- **`close(ch)`** 用來**提早**結束一條 stream。channel 平常會在最後一個 sender 離開時**自己**關閉——那是日常形式，
+  也是崩潰中的 producer 唯一能走的那條。`close` 是**敘述、不是呼叫**：它是關鍵字，不指涉任何函式、也不產生值，
+  所以不能被傳遞、綁定或 spawn；`defer` 把它列為唯一一個非運算式的形式（**`defer close(ch)`**）。它標記的是
+  **channel**、不是某個持有者——每個 handle 仍可讀、buffered 的值仍會排空、關兩次什麼都不改，而 **receive-only**
+  端不得 close。
 
 ## Group 10 — Modules & Programs
 
@@ -584,14 +593,17 @@ init-decl   ::= 'init' '(' ')' block
 三個構造共用一條軸——清理**何時**觸發。
 
 ```text
-defer-stmt ::= 'defer' expr
+defer-stmt ::= 'defer' ( expr | close-stmt )   # 一個運算式，或唯一那個不是運算式的敘述
 del-stmt   ::= 'del' identifier
 ```
 
 - **`defer expr`** 在**所在 block 退出**時執行 `expr`,**每一條離開路徑**都跑——正常、`return`、或 abort unwind——
   以後登記先跑的順序。它是「綁在 scope 上副作用」的 procedural 工具（放鎖、flush buffer、關 scope-local 資源）。
+  它另外也接受 **`close(ch)`**（group 9）；之所以要特別列出，是因為 `close` 是關鍵字而非被呼叫者，單靠
+  `defer expr` 永遠碰不到它。
 - **`del name`** **當下**撤銷該名字對其儲存的存取;唯有被撤銷的是**擁有權**存取且無其他 holder 時才釋放儲存。對
-  `Ref[T]` / `chan` 則是放掉一個 refcount——**`del ch`** 若你是最後 sender 便關閉 channel。
+  `Ref[T]` / `chan` 則是放掉一個 refcount **並且**撤銷名字，所以名字之後不能再用——`del ch` 不是用來結束一條
+  stream 的（那是 `close(ch)`，或該 binding 的 scope 離開）。
 - 軸上第三點——**`Ref[T]` drop** 於最後 holder 的 scope 退出時——不是 statement,由 scope ownership 掉出來。分界是
   `defer` vs `Ref[T]`:資源會逃出其 scope 嗎?不會 → `defer`;會 → `Ref[T]`。
 
@@ -619,7 +631,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 - **全域可變狀態。** _無可變全域_（group 10）的唯一例外，是**在 module 層級 `unsafe { … }` 分組內**的 `mut` 綁定——
   裸機逃生口（page table 與觸碰它的函式，放在一起）。**沒有 `unsafe mut` 前綴**、無 `static` 關鍵字。可變全域為
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
-  **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `fetch_add` / `compare_exchange` 與
+  **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
   memory-ordering 參數。今日 **[implemented]** 的僅 **sequential consistency** 的 **`Atomic[int]`**；
   **memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該

@@ -21,7 +21,7 @@ func runProgramRT(t *testing.T, src string) string {
 	if cc == "" {
 		t.Skip("no C compiler found")
 	}
-	code, _, diags := Compile(src)
+	code, manifest, diags := Compile(src)
 	if len(diags) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
@@ -29,6 +29,13 @@ func runProgramRT(t *testing.T, src string) string {
 	cfiles, err := runtime.Materialize(dir)
 	if err != nil {
 		t.Fatalf("materialize runtime: %v", err)
+	}
+	// Mirror the driver's link line: the scheduler and the context switch ride in their own
+	// translation units and come in only under Concurrency, so a program that reaches them
+	// (any `spawn`/channel, and any `import "time"`, whose timers are coroutines) would
+	// otherwise fail to link on zrt_sched_main / zrt_chan_* / zrt_sleep_ns.
+	if manifest.Concurrency {
+		cfiles = append(cfiles, runtime.ConcurrencyCUnits(dir, runtime.HostArch())...)
 	}
 	cpath := filepath.Join(dir, "prog.c")
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {

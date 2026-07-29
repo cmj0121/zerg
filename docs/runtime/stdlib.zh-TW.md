@@ -19,7 +19,7 @@ syscall／硬體 leaf 在 C runtime（見 [`src/runtime`](../../src/runtime/READ
 | [`strings`](#strings) | `import "strings"` | 內建 `str` 上的文字工具            |
 | [`ascii`](#ascii)     | `import "ascii"`   | tokeniser 用的單位元組 ASCII 分類  |
 | [`strconv`](#strconv) | `import "strconv"` | 任意 base 的數字文字轉換           |
-| [`time`](#time)       | `import "time"`    | 牆鐘與單調時鐘                     |
+| [`time`](#time)       | `import "time"`    | 時鐘，以及以 channel 呈現的 timer  |
 | [`math`](#math)       | `import "math"`    | 數值輔助與純 Zerg transcendentals  |
 | [`rand`](#rand)       | `import "rand"`    | 確定性、非密碼學的產生器           |
 | [`atomic`](#atomic)   | `import "atomic"`  | 安全的共享可變原語                 |
@@ -126,12 +126,28 @@ offset，與 Go 的 `strings.Index` 一致。大小寫折疊**僅限 ASCII**—�
 
 ## `time`
 
-時鐘。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。
+時鐘與 timer。`now` 是日期；`monotonic` 只有作為**差值**（經過時間）才有意義，且永不倒退。**timer 就是一條
+channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它們的一條 `select` arm 就是 timeout 或一次 tick，
+不需要任何新語法（見 [Coroutines](../code/coroutine.zh-TW.md)）。duration 的單位是**奈秒**，與 `monotonic` 的讀數
+同單位；`<= 0` 的 duration 會立刻觸發。
 
-| 函式                 | 摘要                              |
-| -------------------- | --------------------------------- |
-| `now() -> int`       | 牆鐘時間，Unix epoch 起算的整數秒 |
-| `monotonic() -> int` | 單調時鐘讀數（奈秒；請取差值）    |
+| 函式                       | 摘要                                           |
+| -------------------------- | ---------------------------------------------- |
+| `now() -> int`             | 牆鐘時間，Unix epoch 起算的整數秒              |
+| `monotonic() -> int`       | 單調時鐘讀數（奈秒；請取差值）                 |
+| `after(d) -> <-chan[int]`  | `d` 奈秒過後送出一個值，僅一次                 |
+| `ticker(d) -> <-chan[int]` | 每 `d` 奈秒送出一個值；channel 只裝**一** tick |
+
+送出的值是 **timer 觸發當下的 monotonic 讀數**，不是佔位符：一次 tick 可能比它觸發的時刻晚任意久才送達，而這個讀數
+正是「在乎的接收者」用來判斷自己遲了多少的依據。接收者跟不上的 `ticker` 會**停在 send 上**、而不是把 tick 排隊起來，
+所以慢的 consumer 是讓 ticker 變慢，而不是累積一個永遠追不完的 backlog。
+
+**成本，以及唯一缺的那件事。** 每一個活著的 timer 都是**一條帶著自己 256KB stack 的 coroutine**，所以放在迴圈裡
+的 `after` 會每一輪配置一個。而且**沒有 stop**：一次 sleep 無法取消，所以 `ticker` 的 coroutine 會活到程式結束
+——請把它放在程式頂端，不要放在迴圈裡。
+
+> **[not yet]** 在**種子**上。`after` 與 `ticker` 回傳的是 **receive-only** channel，而那正是種子指名拒絕的形狀之
+> 一，所以種子建置出來的程式只碰得到 `now` 與 `monotonic`。
 
 ## `math`
 

@@ -99,10 +99,10 @@ Native `io` reads synchronously but never blocks the runtime: a `read_bytes`/`wr
 exception is the FFI edge: a blocking **foreign (FFI) C call** parks its whole OS thread, since Zerg does not
 own that frame ([FFI](ffi.md)).
 
-> **[not yet] / [deviation]** Coroutine-parking `io` is part of the unbuilt stream surface above. And under
-> today's **N:1** runtime ([Coroutines & Channels](../code/coroutine.md)) there is a single thread, so a blocking
-> **foreign call blocks the whole program**, not just its coroutine — the intended per-thread parking
-> arrives with the M:N scheduler.
+> **[not yet]** Coroutine-parking `io` is part of the unbuilt stream surface above. Per-thread parking of a
+> blocking foreign call has arrived with the **M:N** scheduler ([Coroutines & Channels](../code/coroutine.md)): such
+> a call now occupies **one worker** while the others keep running Zerg coroutines. On a single-worker host
+> it is still the whole program that stops.
 
 ## Process & command execution
 

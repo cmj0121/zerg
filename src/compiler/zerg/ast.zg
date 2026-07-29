@@ -33,7 +33,22 @@ enum Ty {
 	TFn(list[Ty], Ty)
 	TTuple(list[Ty])
 	TMap(Ty, Ty)
-	TChan(Ty)
+
+	# TChan carries its element type and its DIRECTION — 0 bidirectional, 1 send-only
+	# (`chan[T]<-`), 2 receive-only (`<-chan[T]`). A direction is a purely compile-time
+	# property: all three are the same `zrt_chan*` at runtime, so it rides as a field
+	# rather than as three variants that would triple every match over Ty.
+	TChan(Ty, int)
+
+	# TResult is `Result[T]`, the carrier a receive answers with: Left(v) is a value,
+	# Right(err) is why there will not be one. It is produced by INFERENCE — from `<-ch`
+	# and from a select receive arm — rather than by a type annotation, because parse_type
+	# still erases `Result[T]` in a signature; making a signature carry one is a separate
+	# unit, and it drags the whole error model in with it.
+	#
+	# TErr is `Err` itself, the Right payload. It is the runtime's zrt_err by value.
+	TResult(Ty)
+	TErr
 }
 
 # Expr is an expression node.
@@ -75,6 +90,32 @@ enum Expr {
 	# (GRAMMAR: it yields no value), so it is in Stmt rather than here.
 	EChanNew(Ty, Expr)
 	ERecv(Expr)
+
+	# EForce is `e!` — read the Left out of a Result, or re-raise the Right as an abort
+	# here. It is the operator that turns "this might have ended" back into a plain value
+	# for code that has nothing better to do about it than stop.
+	EForce(Expr)
+
+	# ECoalesce is `a ?? b` — the Left of `a`, or `b` when `a` is a Right. The third field
+	# is the DIVERGENT form, `a ?? break` / `?? continue` / `?? return …` / `?? raise …`:
+	# the spec writes `for { v := <-ch ?? break }` as the way to drain a channel, and a
+	# jump is a statement, so it cannot be carried in the second field. When the third is
+	# non-empty the second is ignored.
+	ECoalesce(Expr, Expr, list[Stmt])
+
+	# EGuard is `guard { … }`, and it is an EXPRESSION (GRAMMAR:614) yielding `Result[T]`
+	# where T is the block's value: an abort inside the block becomes Right(err) instead of
+	# ending the program, a normal completion becomes Left(v). It is the sole way back from
+	# the abort tier, which is why it carries a whole block rather than an expression — the
+	# thing being guarded is usually several statements.
+	EGuard(list[Stmt])
+
+	# EIs is the type test `x is Name` (GRAMMAR:219, at the comparison level and equally
+	# non-associative). The right side is held as a NAME rather than a parsed Ty because
+	# the grammar spells it `type-name` and nothing resolves it here — the emitter decides
+	# what a name means. This phase answers only the built-in error kinds, which are the
+	# one taxonomy carrying a runtime tag to compare.
+	EIs(Expr, str)
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -104,7 +145,6 @@ enum Stmt {
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
 	SForIn(str, Expr, list[Stmt])
-	SGuard(list[Stmt])
 	SRaise(Expr)
 	SBreak
 	SContinue
@@ -122,9 +162,27 @@ enum Stmt {
 	# because every arm carries the same four things in different combinations.
 	SSelect(list[SelArm])
 
-	# SDel is `del name`. For a channel it drops a SENDER handle, which is how a channel
-	# closes — the language has no explicit close.
+	# SDel is `del name` — it REVOKES the name, for every type alike. It used to mean
+	# something else for a channel, giving up a send end while leaving the name readable;
+	# that is `close(ch)` now, and a channel binding gives up what it holds when its scope
+	# ends, so `del` no longer has to be pressed into either job.
 	SDel(str)
+
+	# SClose is `close(ch)` — end this stream before my scope does. It is a STATEMENT and
+	# not a call: `close` is a keyword, there is no symbol to take the address of, and it
+	# yields no value, so it is shaped like SDel rather than pretending to be an ECall the
+	# emitter has to intercept before every dispatch.
+	#
+	# The bool is `defer close(ch)`: the same close, run at the enclosing block's exit on
+	# every path out. It rides here rather than inside SDefer because SDefer carries an
+	# EXPRESSION and this is not one — and the two lower through one callee anyway.
+	SClose(Expr, bool)
+
+	# SIfLet is `if v := e { … } else { … }` — run the block only when `e` is a Left, with
+	# `v` bound to what it held. It is a statement of its own rather than an SIf over some
+	# condition expression because the binding only exists inside the then-branch, which no
+	# condition can express.
+	SIfLet(str, Expr, list[Stmt], bool, list[Stmt])
 }
 
 # SelArm is one select arm. `op` is 0 recv, 1 send, 2 done, 3 default — the same order
@@ -296,9 +354,9 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		SReturnIf(value, cond) => f"{ind}return-if {expr_kind(cond)}\n"
 		SExpr(x) => f"{ind}expr {expr_kind(x)}\n"
 		SIf(cond, then_b, has_else, else_b) => dump_if(cond, then_b, else_b, ind)
+		SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
 		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
-		SGuard(body_b) => ind + "guard\n" + dump_block(body_b, ind + "\t")
 		SRaise(x) => f"{ind}raise {expr_kind(x)}\n"
 		SBreak => ind + "break\n"
 		SContinue => ind + "continue\n"
@@ -339,6 +397,10 @@ fn expr_kind(e: Expr) -> str {
 		EFn(ps, has_ret, ret, body) => "fn-expr"
 		EChanNew(t, cap) => "chan-new"
 		ERecv(ch) => "recv"
+		EForce(x) => "force"
+		ECoalesce(a, b, jump) => "coalesce"
+		EGuard(body) => "guard"
+		EIs(x, name) => "is " + name
 		_ => "?"
 	}
 }
@@ -356,8 +418,37 @@ fn ty_name(t: Ty) -> str {
 		TNamed(n) => n
 		TList(e) => f"list[{ty_name(e)}]"
 		TFn(ps, r) => f"fn({ty_names(ps)}) -> {ty_name(r)}"
+		TChan(e, dir) => chan_ty_name(e, dir)
+		TResult(e) => f"Result[{ty_name(e)}]"
+		TErr => "Err"
 		_ => "?"
 	}
+}
+
+# ty_is_chan / ty_chan_elem are the two shape questions asked about a channel type, and
+# they live here — beside the spelling — because both the parser and the emitter ask them.
+# The parser needs them to read the directional forms and the emitter needs them on nearly
+# every lowering path; a type is a type, and one pair is what keeps the two from drifting.
+fn ty_is_chan(t: Ty) -> bool {
+	return match t {
+		TChan(_, _) => true
+		_ => false
+	}
+}
+
+fn ty_chan_elem(t: Ty) -> Ty {
+	return match t {
+		TChan(e, _) => e
+		_ => TUnknown
+	}
+}
+
+# chan_ty_name spells a channel end the way the source does, direction and all, so a
+# diagnostic about one can say which end it is talking about.
+fn chan_ty_name(elem: Ty, dir: int) -> str {
+	return f"chan[{ty_name(elem)}]<-" if dir == 1
+	return f"<-chan[{ty_name(elem)}]" if dir == 2
+	return f"chan[{ty_name(elem)}]"
 }
 
 fn ty_names(ts: list[Ty]) -> str {

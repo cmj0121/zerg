@@ -39,3 +39,9 @@ runtime 是**最薄的底層**：raw syscall、記憶體、reference counting、
 所有更高層的邏輯都在它之上以純 Zerg 實作（[`src/stdlib/`](../stdlib)）——例如 `io.read_file` 的 read loop 與
 `io.write_int` 的十進位轉換，都是純 Zerg 站在 runtime 的 syscall leaf 上；`math` 的 `sqrt` / `pow` 則是純 Zerg
 數值演算法，而非綁 libm。把這條線守清楚，正是語言得以自足的原因。
+
+timer 也落在這條線上，而且正好標出它的位置。runtime 只擁有一件 coroutine 無法自己完成的事：停到某個 deadline
+（`zrt_sleep_ns`）。它非得由 scheduler 擁有不可，因為閒置的 worker 必須睡到那個 deadline，而 deadlock 偵測也必須
+知道「正在睡的 coroutine 遲早會自己往前走」。程式真正會用到的東西全都是它之上的 Zerg——`time.after(d)` 是一個先睡
+再送值的 coroutine、`ticker(d)` 是同一件事放進迴圈、timeout 則是對兩者回傳的 channel 開一個 `select` arm。runtime
+裡沒有 duration 型別、沒有格式化、也沒有任何 policy，因為這些都不需要放在裡面。

@@ -94,13 +94,21 @@ func (c *checker) inferCall(n *ast.Call) Type {
 func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 	switch callee := n.Callee.(type) {
 	case *ast.Ident:
+		// `close(ch)` says this holder is done sending (docs/code/coroutine.md). It is
+		// resolved BEFORE the shadowing test, unlike every other builtin here: it is not a
+		// name a program may bind, overload or redefine, so a user symbol of the same name
+		// never takes it over. The file method `f.close()` is a *ast.Field callee and is
+		// untouched by this case.
+		if callee.Name == "close" {
+			return c.closeChan(n), true
+		}
 		if c.shadowed(callee.Name) {
 			return nil, false
 		}
 		// A built-in error kind used as a constructor — `ValueError("msg")` — builds an
 		// `Err` of that kind carrying the message (docs/code/errors.md, GRAMMAR group 8). The
 		// fixed set is compiler-owned; a user cannot add one this phase.
-		if _, ok := errKinds[callee.Name]; ok {
+		if _, ok := ErrCtorKind(callee.Name); ok {
 			return c.errConstruct(n, callee.Name), true
 		}
 		switch callee.Name {
@@ -118,6 +126,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Int, Int), true
 		case "__zrt_time_unix", "__zrt_time_mono":
 			return c.nullaryIntrinsic(n, Int), true
+		case "__zrt_sleep_ns":
+			return c.unaryIntrinsic(n, Int, Nil), true
 		case "__zrt_platform", "__zrt_arch":
 			return c.nullaryIntrinsic(n, Str), true
 		case "__zrt_getenv":
@@ -336,7 +346,8 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 
 // unaryIntrinsic checks a one-argument runtime floor intrinsic of type `(arg) -> ret` —
 // the io whole-file leaves (`__zrt_open` str->int, `__zrt_close` int->int) and the os
-// leaves (`__zrt_getenv` str->str, `__zrt_has_env` str->bool, `__zrt_exit` int->nil).
+// leaves (`__zrt_getenv` str->str, `__zrt_has_env` str->bool, `__zrt_exit` int->nil), and
+// the scheduler timer leaf (`__zrt_sleep_ns` int->nil) the `time` timers park on.
 // These are the runtime's own leaves the stdlib drives from pure Zerg.
 func (c *checker) unaryIntrinsic(n *ast.Call, arg, ret Type) Type {
 	if len(n.Args) != 1 {

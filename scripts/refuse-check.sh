@@ -141,6 +141,51 @@ fn main() {
 }
 EOF
 
+# --- null safety: an optional says what it is at every edge ------------------------
+
+expect "$ZERG" optional-into-a-value "unwrap it with" <<'EOF'
+fn main() {
+	x: int? = 5
+	y: int = x
+	print y
+}
+EOF
+
+expect "$ZERG" print-of-an-optional "may not have one" <<'EOF'
+fn main() {
+	x: int? = nil
+	print x
+}
+EOF
+
+expect "$ZERG" chain-through-a-value "is not one" <<'EOF'
+struct P {
+	n: int
+}
+fn main() {
+	p := P(1)
+	print p?.n
+}
+EOF
+
+expect "$ZERG" missing-required-field "needs a value for field" <<'EOF'
+struct P {
+	n: int
+	m: int
+}
+fn main() {
+	p := P(1)
+	print p.n
+}
+EOF
+
+expect "$ZERG" try-without-an-optional-result "must answer a \`T?\`" <<'EOF'
+fn head(x: int?) -> int {
+	return x?
+}
+fn main() { print head(1) }
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

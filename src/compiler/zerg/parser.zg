@@ -102,8 +102,11 @@ fn parse_type(mut &p: Parser) -> Ty {
 		}
 		return TFn(ptys, fret)
 	}
-	if name == "chan" {
-		raise "NotImplemented: chan"
+	if name == "chan" and p_at(p, LBrack) {
+		p_advance(p)
+		elem := parse_type(p)
+		expect(p, RBrack)
+		return TChan(elem)
 	}
 	if name == "map" and p_at(p, LBrack) {
 		p_advance(p)
@@ -638,7 +641,8 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# f() inline, `with`/`del` vanished, a `select` block's arms were read as loose
 	# statements. Refusing by name is the least a compiler owes a program it cannot build.
 	if k == Spawn {
-		raise "NotImplemented: spawn"
+		p_advance(p)
+		return SSpawn(parse_expr(p))
 	}
 	if k == Select {
 		raise "NotImplemented: select"
@@ -676,6 +680,12 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
+	if p_at(p, LArrow) {
+		# `ch <- v` sends. It is a STATEMENT, not an expression: GRAMMAR gives it no
+		# value, which is also what tells it from the prefix receive.
+		p_advance(p)
+		return SSend(e, parse_expr(p))
+	}
 	if p_at(p, Assign) {
 		p_advance(p)
 		return SAssign(e, parse_expr(p))
@@ -858,6 +868,12 @@ fn parse_mul(mut &p: Parser) -> Expr {
 }
 
 fn parse_unary(mut &p: Parser) -> Expr {
+	# `<-ch` receives. GRAMMAR gives it its own level (recv-base) so `<-a.b` reads as
+	# `<-(a.b)` and a chain of them nests, which is what recursing here gives.
+	if p_at(p, LArrow) {
+		p_advance(p)
+		return ERecv(parse_unary(p))
+	}
 	if is_unary_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
@@ -971,6 +987,21 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	}
 	if k == Fn {
 		return parse_fn_expr(p)
+	}
+	if k == Chan {
+		# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
+		# rendezvous, which is what a bare `chan[T]()` means
+		p_advance(p)
+		expect(p, LBrack)
+		elem := parse_type(p)
+		expect(p, RBrack)
+		expect(p, LParen)
+		mut cap: Expr = EInt("0")
+		if not p_at(p, RParen) {
+			cap = parse_expr(p)
+		}
+		expect(p, RParen)
+		return EChanNew(elem, cap)
 	}
 	if k == Unsafe {
 		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and

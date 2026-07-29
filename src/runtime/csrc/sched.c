@@ -46,6 +46,9 @@
  * resumes on another must find the resuming worker's context, not the one it left. */
 static ZRT_THREAD_LOCAL zrt_ctx t_sched_ctx;
 
+/* this worker's own fiber handle, so a switch back out of a coroutine can name where it
+ * is going. NULL, and never read, outside a ThreadSanitizer build. */
+static ZRT_THREAD_LOCAL void *t_sched_fiber;
 static ZRT_THREAD_LOCAL zrt_coro *t_current;
 
 /* SHARED, under g_lock: the one FIFO run queue every worker drains, the live count,
@@ -157,6 +160,7 @@ void zrt_spawn(void (*thunk)(void *env), void *env) {
 	co->stack_size = total;
 	co->state = ZRT_CORO_RUNNABLE;
 	co->woken = false; /* zrt_alloc is malloc, not calloc: an unset flag is a stray wake */
+	co->tsan_fiber = ZRT_TSAN_FIBER_NEW(); /* NULL, and free, unless this is a TSan build */
 	co->thunk = thunk;
 	co->env = env;
 	co->tls.stack = NULL;
@@ -273,6 +277,7 @@ static void sched_init(void) {
  * snapshot it back on return. A DONE coroutine is reclaimed (its stack unmapped and
  * its cleanup buffer freed); a coroutine that yielded is re-enqueued. */
 static void sched_run(void) {
+	t_sched_fiber = ZRT_TSAN_FIBER_SELF();
 	zrt_mutex_lock(&g_lock);
 	for (;;) {
 		zrt_coro *co = runq_pop();
@@ -315,7 +320,11 @@ static void sched_run(void) {
 		 * resume on this one. */
 		t_current = co;
 		zrt_tls_load(&co->tls);
+		/* the two announcements bracketing the switch are what let ThreadSanitizer follow
+		 * a coroutine across stacks and across workers; both vanish in a normal build. */
+		ZRT_TSAN_FIBER_SWITCH(co->tsan_fiber);
 		zrt_ctx_swap(&t_sched_ctx, &co->ctx); /* run it until it yields, parks, or finishes */
+		ZRT_TSAN_FIBER_SWITCH(t_sched_fiber);
 		zrt_tls_save(&co->tls);
 		t_current = NULL;
 
@@ -340,6 +349,7 @@ static void sched_run(void) {
 		switch (co->state) {
 		case ZRT_CORO_DONE:
 			zrt_tls_free(&co->tls);
+			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
 			munmap(co->stack, co->stack_size);
 			zrt_free(co);
 			g_live--;

@@ -600,7 +600,10 @@ fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' 
 # operators bridge the tiers:
 #   x?            propagate — unwrap the Left, else early-return the Right from the fn
 #   a ?? b        default   — a's Left if present, else b; right-assoc, short-circuits
-#   a?.b          optional chain (T? only) — read .b when present, else nil in place
+#   a?.b          optional chain (T? only) — read .b when present, else nil in place.
+#                 A field that is ITSELF optional flattens: the chain answers that field's
+#                 type, never 'T??' — 'base-type ?' takes exactly one marker (group 7), so
+#                 a nested optional is not a type the language can write or unwrap.
 #   x!            force-unwrap — unwrap the Left, else raise UnwrapError (value → abort)
 #   raise e       abort with an Err (value → abort); 'raise e from c' records c as cause
 #   guard { … }   demote an abort in the block back to a value → Result[T] (abort → value)

@@ -44,6 +44,13 @@ example `io.read_file`'s read loop and `io.write_int`'s decimal conversion are Z
 leaves, and `math`'s `sqrt` / `pow` are Zerg numerical algorithms, never a libm binding. Keeping this line sharp is
 what makes the language self-contained.
 
+Timers sit on that line too, and show where it falls. The runtime owns exactly one thing a coroutine cannot do for
+itself: park until a deadline (`zrt_sleep_ns`), which needs the scheduler because an idle worker has to sleep to that
+deadline and because the deadlock detector has to know a sleeping coroutine is going to make progress. Everything a
+program actually uses is Zerg above it — `time.after(d)` is a coroutine that sleeps and then sends, `ticker(d)` is
+that in a loop, and a timeout is a `select` arm on the channel either returns. No duration type, no formatting and no
+policy is built into the runtime, because none of it has to be.
+
 ## Testing the scheduler, and where ThreadSanitizer stops
 
 `make -C src/runtime test` compiles `csrc/` with the host `cc` and runs it. That suite is the only place the runtime
@@ -55,6 +62,18 @@ nothing about the order is promised, so it checks the one thing an interleaving 
 producer sends a known set of values, the consumer adds up what arrives, and the total is fixed. A lost wake-up hangs
 it, a doubly-queued coroutine or a hand-off delivered twice moves the sum. It runs many times, because a race that
 survives one pass is ordinary.
+
+Every concurrency test runs twice: once with the machine's worker count and once with `ZRT_WORKERS=1`. The point is
+to tell two failures apart — a bug in the scheduler's own logic survives with one worker, while a race needs several
+— and the single-worker mode is the harsher of the two, because nothing else is running to paper over a coroutine
+that never yields. It earned its place immediately: `select` had a livelock that only one worker could expose, since
+with several the coroutines that would have unstuck it were simply run by somebody else.
+
+Alongside the stress test, the suite pins the behaviours the scheduler promises rather than only its consistency:
+that main returning ends the program, that a deadlock is a clean catchable abort which leaves no waiter behind in a
+channel's queue, that `select` raises rather than firing an arm when everything it watches has closed, and that a
+timer wakes on time without burning a CPU while it waits. Each of those fails by hanging, so each runs under its own
+deadline — a regression names itself instead of stopping the suite.
 
 **ThreadSanitizer builds and runs, but is not a gate.** A binary is instrumented with `-fsanitize=thread` like any
 other; the fiber annotations in `zergrt.h` are what make that possible at all, since without them TSan follows a

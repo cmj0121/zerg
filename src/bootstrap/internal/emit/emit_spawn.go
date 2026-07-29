@@ -95,6 +95,9 @@ func (e *emitter) emitSpawnHelpers() {
 // scope is gone — so the borrow has no owner to point at. Today it reaches cc and dies
 // there, which tells the reader nothing about the program.
 func (e *emitter) spawnTarget(call *ast.Call) (string, bool) {
+	if e.closeOutOfStatement(call) {
+		return "", false
+	}
 	id, ok := call.Callee.(*ast.Ident)
 	if !ok {
 		e.diags.Add(call.Span(), "%s", errSpawnCallee)

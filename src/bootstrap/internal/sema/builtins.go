@@ -89,13 +89,6 @@ func isErr(t Type) bool {
 // (DESIGN-1b §6).
 func resultType(t Type) Type { return &types.Either{Left: t, Right: errType} }
 
-// isChan reports whether a type is a channel, whose `del` gives up the send end rather
-// than revoking the name (docs/code/coroutine.md).
-func isChan(t Type) bool {
-	_, ok := t.(*types.Chan)
-	return ok
-}
-
 // ResultOf builds 'Result[T]' for the backend. A `select` recv arm's bind is declared into
 // the arm's scope rather than recorded in Info, so the emitter cannot read that type back
 // and has to name it — and it must be the SAME type checkSelect gave the bind, or the

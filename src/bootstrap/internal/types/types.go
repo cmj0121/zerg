@@ -229,9 +229,23 @@ type Chan struct {
 	Dir  ChanDir
 }
 
-func (*Chan) typ()             {}
-func (*Chan) Kind() Kind       { return KChan }
-func (c *Chan) String() string { return "chan[" + c.Elem.String() + "]" }
+func (*Chan) typ()       {}
+func (*Chan) Kind() Kind { return KChan }
+
+// String spells the DIRECTION, because a name that drops it says the same thing on both
+// sides of a mismatch: "cannot bind chan[int] to a chan[int] binding" reported a real
+// error while naming nothing that differed, and "cannot send on a receive-only channel
+// chan[int]" named the rule it was enforcing and then printed the type that does not
+// break it. Spelling is the source's: `<-chan[T]` receives, `chan[T]<-` sends.
+func (c *Chan) String() string {
+	switch c.Dir {
+	case ChanRecv:
+		return "<-chan[" + c.Elem.String() + "]"
+	case ChanSend:
+		return "chan[" + c.Elem.String() + "]<-"
+	}
+	return "chan[" + c.Elem.String() + "]"
+}
 
 // Param0 is one parameter position of a function type: its type and whether it is
 // passed by mutable reference ('mut &').

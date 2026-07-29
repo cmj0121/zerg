@@ -20,7 +20,7 @@ For the compiler-provided functions that need **no** import, see [Built-in Funct
 | [`strings`](#strings) | `import "strings"` | text utilities over the built-in `str`           |
 | [`ascii`](#ascii)     | `import "ascii"`   | single-byte ASCII classification for a tokeniser |
 | [`strconv`](#strconv) | `import "strconv"` | numeric text conversion in an arbitrary base     |
-| [`time`](#time)       | `import "time"`    | wall-clock and monotonic clocks                  |
+| [`time`](#time)       | `import "time"`    | clocks, and timers as channels                   |
 | [`math`](#math)       | `import "math"`    | numeric helpers and pure-Zerg transcendentals    |
 | [`rand`](#rand)       | `import "rand"`    | a deterministic, non-cryptographic generator     |
 | [`atomic`](#atomic)   | `import "atomic"`  | the safe shared-mutable primitive                |
@@ -130,13 +130,30 @@ separately diagnosed this phase (parse bounded text).
 
 ## `time`
 
-Clocks. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed time) and never runs
-backwards.
+Clocks and timers. `now` is a date; `monotonic` is meaningful only as a **difference** (elapsed time) and
+never runs backwards. **A timer is a channel** — `after` and `ticker` answer receive-only channels, so a
+`select` arm on one is a timeout or a tick with no new syntax (see [Coroutines](../code/coroutine.md)).
+Durations are **nanoseconds**, the unit `monotonic` reads; a duration `<= 0` fires at once.
 
-| Function             | Summary                                              |
-| -------------------- | ---------------------------------------------------- |
-| `now() -> int`       | wall-clock time, whole seconds since the Unix epoch  |
-| `monotonic() -> int` | a monotonic reading in nanoseconds (use differences) |
+| Function                   | Summary                                                       |
+| -------------------------- | ------------------------------------------------------------- |
+| `now() -> int`             | wall-clock time, whole seconds since the Unix epoch           |
+| `monotonic() -> int`       | a monotonic reading in nanoseconds (use differences)          |
+| `after(d) -> <-chan[int]`  | one value once `d` nanoseconds have passed                    |
+| `ticker(d) -> <-chan[int]` | a value every `d` nanoseconds; the channel holds **one** tick |
+
+The value delivered is the **monotonic reading at the moment the timer fired**, not a placeholder: a tick
+may arrive arbitrarily later than it fired, and the reading is how a receiver that cares tells how late it
+is. A `ticker` that a receiver falls behind on **parks on the send** rather than queueing ticks, so a slow
+consumer slows the ticker instead of building a backlog.
+
+**Cost, and the one thing missing.** Each live timer is a **coroutine with its own 256KB stack**, so an
+`after` inside a loop allocates one per iteration. There is **no stop**: a sleep cannot be cancelled, so a
+`ticker`'s coroutine lives until the program does — put one at the top of a program, not in a loop.
+
+> **[not yet]** In the **seed**. `after` and `ticker` return a **receive-only** channel, which is one of
+> the shapes the seed refuses by name, so only `now` and `monotonic` are reachable from a seed-built
+> program.
 
 ## `math`
 

@@ -144,11 +144,12 @@ compiler 能依型別的**結構**幫你**寫出實作**,以型別上的 **decor
 ## 並行（Concurrency）
 
 Zerg 的並行**只有 coroutine 與 channel**：`spawn`（Go 的 `go`）,fire-and-forget、無 join/handle,只捕獲
-**immutable 值與 channel**。預期的 scheduler 是搶佔式 **M:N**，但 bootstrap 今日跑的是合作式 **N:1** 單執行緒
-（**[deviation]**——一個從不 park 的 CPU-bound coroutine 會餓死其餘；見
-[Coroutines 與 Channels](code/coroutine.zh-TW.md)）。channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的
+**immutable 值與 channel**。scheduler 是 **M:N**——數條 worker OS thread 抽同一條共享 run queue——但是**合作式、
+非搶佔式**（**[deviation]**——一個從不 park 的 CPU-bound coroutine 會佔住一條 worker，數量到達 worker 數就讓整個
+程式停擺；見 [Coroutines 與 Channels](code/coroutine.zh-TW.md)）。channel 是 reference-counted 的 by-ref **管道**（一個為通訊而生的
 `Ref` 型別;`Ref[T]` 是它持有資源的手足——見 [值與記憶體](core/memory.zh-TW.md)）——payload 複製、在最後一個 sender 離場時
-**自動 close**、以 **`Result[T]`** 接收（`Right` = 已關,攜帶崩潰 `Err` 或 `StopIteration` 哨兵）、並用 **`select`** 多路等待。
+**自動 close**——或由 channel 專屬的敘述 **`close(ch)`** 提早結束——以 **`Result[T]`** 接收（`Right` = 已關,攜帶
+崩潰 `Err` 或 `StopIteration` 哨兵）、並用 **`select`** 多路等待。
 
-完整模型——buffering、receive/close 語意、directional 端、`select`、deadlock——見
+完整模型——buffering、receive/close 語意、directional 端、`select`、timer、deadlock——見
 **[Coroutines 與 Channels](code/coroutine.zh-TW.md)** 參考文件。

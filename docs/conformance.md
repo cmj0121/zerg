@@ -35,24 +35,40 @@ stable target and the gaps are explicit. Every feature carries one of:
 | **[implemented]**            | The SEED (`zerg0`) implements this as specified.                                 |
 | **[not yet: Phase N]**       | Specified, not yet built. Using it is a clean compile error today.               |
 | **[implementation-defined]** | The spec deliberately does not pin this; a conforming implementation may choose. |
-| **[deviation]**              | The seed's current behavior does **not** match this spec; a tracked bug.         |
+| **[deviation]**              | An implementation's behavior does **not** match this spec; a tracked bug.        |
 
 **Which compiler a marker refers to.** There are two: `zerg0`, the Go-hosted seed whose
 only job is building the compiler, and `zerg`, the self-hosted compiler that ships. The
-markers in this specification are measured against the **seed**, because it is the wider
-of the two — `zerg` implements a subset of what the seed does, and that subset is
-documented in [`src/compiler/README.md`](../src/compiler/README.md) rather than marked
-per-feature here. A feature marked **[implemented]** may therefore be one `zerg` does not
-accept yet.
+markers in this specification are measured against the **seed**, and its subset is the
+one documented per-feature here; the shipped `zerg`'s own subset is described in
+[`src/compiler/README.md`](../src/compiler/README.md). A feature marked
+**[implemented]** may therefore be one `zerg` does not accept yet.
+
+The seed is **no longer uniformly the wider of the two**. It is wider on most of the
+language — closures and function values, `map[K, V]`, `impl` methods, a block as a `match`
+arm body — and **narrower on concurrency**, where `zerg` lowers directional channel ends,
+method and namespaced `spawn` callees and the stdlib timers that the seed refuses. The
+`is` type test is now **the same in both**: an error kind against an `Err`, and a named
+refusal for anything else. Where the difference matters
+to a program, the chapter says which compiler it is talking about, and a **[deviation]**
+names its subject when that subject is not the seed.
 
 Some features were specified, built in the seed, and then REMOVED from it when the seed
-was cut down to its one job — closures and function values, `map[K, V]`, coroutines,
-channels and `select`, `#[dyn]` dispatch, and `unsafe` pointers and inline assembly. Those
-are marked **[not yet]** again: the seed rejects them with a diagnostic, which is exactly
-what that marker promises.
+was cut down to its one job — closures and function values, `map[K, V]`, `#[dyn]`
+dispatch, and `unsafe` pointers and inline assembly. Those are marked **[not yet]** again:
+the seed rejects them with a diagnostic, which is exactly what that marker promises.
+
+**Concurrency is the exception, and a narrower claim.** Coroutines, channels and `select`
+were removed and then restored: the seed lowers the **happy path** — `chan[T](cap)`,
+`ch <- v`, `<-ch` as a real `Result[T]`, `close(ch)`, `spawn f(args)`, `select` with all
+four arm shapes, and `for v in ch` — and refuses **six shapes** by name rather than
+mis-emitting them: a **directional channel type**, a `spawn` whose callee is a **method**,
+a **namespaced** function or a **closure**, a **`mut &`** argument crossing a `spawn`, and
+a **`main(args)`** in a concurrent program. Each is a clean diagnostic and a nonzero exit.
+See [Coroutines](code/coroutine.md).
 
 A section with no marker inherits the marker of its enclosing feature; a paragraph may override with its
-own. A **[deviation]** always states both the specified behavior and what the bootstrap does instead.
+own. A **[deviation]** always states both the specified behavior and what the implementation does instead.
 
 ## Diagnostics contract
 

@@ -18,7 +18,7 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把你的 Zerg
 | small and crisp  | 最精簡的語法                                                                                |
 | safe by default  | 除非明確標記 `mut` / `pub`，否則預設 immutable 且 private                                   |
 | null-safe        | 以 optional 取代 null；沒有那個造成十億美元損失的錯誤                                       |
-| concurrent       | 內建 coroutine 與 channel（本階段為 cooperative 的 **N:1** 排程）                           |
+| concurrent       | 內建 coroutine 與 channel（本階段為 cooperative、非搶佔的 **M:N** 排程）                    |
 | procedural-first | 直白、由上而下的控制流程                                                                    |
 | scope-owned      | 無 tracing GC——值在離開 scope 時釋放；recursive 型別與字串採                                |
 |                  | reference counting                                                                          |
@@ -99,20 +99,20 @@ struct Point { x: int; y: int }
 
 站在自帶 runtime 上的純 Zerg 套件（零外部依賴），以 `import "<name>"` 取得：
 
-| 套件          | 提供                                     |
-| ------------- | ---------------------------------------- |
-| **`io`**      | stdout 寫入、整檔與 stdin 讀／寫         |
-| **`fs`**      | `exists` / `remove`                      |
-| **`os`**      | `env`、`exit`、`platform`、`arch`、`run` |
-| **`strings`** | `split` / `join`、搜尋、trim、大小寫     |
-| **`ascii`**   | tokeniser 用的位元組分類                 |
-| **`cli`**     | 選項解析與據以產生的 `--help`            |
-| **`strconv`** | base-N `parse_int` / `to_string`         |
-| **`time`**    | `now`（牆鐘）、`monotonic`               |
-| **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e`     |
-| **`rand`**    | 確定性、非密碼學產生器                   |
-| **`atomic`**  | 安全的共享可變原語                       |
-| **`testing`** | `assert` / `assert_eq` / `assert_ne`     |
+| 套件          | 提供                                         |
+| ------------- | -------------------------------------------- |
+| **`io`**      | stdout 寫入、整檔與 stdin 讀／寫             |
+| **`fs`**      | `exists` / `remove`                          |
+| **`os`**      | `env`、`exit`、`platform`、`arch`、`run`     |
+| **`strings`** | `split` / `join`、搜尋、trim、大小寫         |
+| **`ascii`**   | tokeniser 用的位元組分類                     |
+| **`cli`**     | 選項解析與據以產生的 `--help`                |
+| **`strconv`** | base-N `parse_int` / `to_string`             |
+| **`time`**    | `now`、`monotonic`、`after` / `ticker` timer |
+| **`math`**    | 數值輔助、`sqrt` / `pow`、`pi` / `e`         |
+| **`rand`**    | 確定性、非密碼學產生器                       |
+| **`atomic`**  | 安全的共享可變原語                           |
+| **`testing`** | `assert` / `assert_eq` / `assert_ne`         |
 
 完整目錄與簽名見 **[標準函式庫](docs/runtime/stdlib.zh-TW.md)**。
 
@@ -178,13 +178,23 @@ monomorphization、帶 provided method 的 `spec` / `impl`、`derive(Eq, Ord)`�
 reference-counted）、tuple、`defer`、range、f-string，以及帶 `pub` 可見性與 `init()` 的 module。
 
 **已從工具鏈移除**（已設計、已寫入規格，但目前兩個編譯器都不支援）：closure 與函式值、`map[K, V]`、
-coroutine + channel + `select`、`#[dyn]` 動態分派、`unsafe` 下的 raw pointer 與 inline assembly，以及
-`zerg test` 執行器。種子對每一項都以診斷訊息與非零 exit 拒絕。
+`#[dyn]` 動態分派、`unsafe` 下的 raw pointer 與 inline assembly，以及 `zerg test` 執行器。種子對每一項都以
+診斷訊息與非零 exit 拒絕。
+
+**並行回來了，而且兩個編譯器並不相同。** `zerg` 實作了整章——回傳 `Result[T]` 的 receive、directional channel 端
+（`<-chan[T]` / `chan[T]<-`）、`close(ch)` 與 `defer close(ch)`、scope 離開時歸還、帶 `done` 的 `select`，以及
+`time.after` / `time.ticker`。**種子**帶的是 happy path——`chan[T](cap)`、`ch <- v`、`<-ch`、`close(ch)`、
+`spawn f(args)`、`select`、`for v in ch`——並**指名拒絕六種形狀**：directional channel 型別、被呼叫者為方法／帶
+命名空間的函式／closure 的 `spawn`、跨越 `spawn` 的 `mut &` 引數，以及並行程式裡的 `main(args)`。有一個缺口方向
+相反：`zerg` 的 `match` arm body 不能是區塊，而種子可以。
 
 **尚未實作（Not yet，規格中已定義並標註）。** 溢位／除零會 trap 的算術與 wrapping 的 `+%` 系列運算子
 （目前算術降成純 C）；`Eq` / `Ord` 以外的完整 `derive` 集（`Hash` / `Encode` / `Decode`）；`set[T]`；
-`list` / `map` 的相等比較；command literal（`` `git status` ``）；非-error 型別的 `is` 測試；可搶占的
-**M:N** 排程器；`Reader` / `stdin` I/O 介面；generic type alias；以及規格狀態標記所追蹤的一批較小的形式。
+`list` / `map` 的相等比較；command literal（`` `git status` ``）；非-error 型別的 `is` 測試；排程器的**搶佔**
+（**M:N** 排程器本身已經在了——但還沒有任何東西能在一條 coroutine 自己 park 之前把它從 worker 上拿下來，所以一個
+CPU-bound 的 coroutine 會佔住一條 worker，數量到達 worker 數就讓整個程式停擺）；施於 receive 的 `?`，它要等
+`Result[T]` 能在簽章裡存活；`Reader` / `stdin` I/O 介面；generic type alias；以及規格狀態標記所追蹤的一批較小的
+形式。
 
 **已知偏差（規格對照目前行為記錄的 bug）。** 有少數可觀察行為尚未符合意圖語意——bootstrap 目前 emit `-std=c11`
 而非規格所定的 C17 預設 / C99 fallback；call 引數與運算元的左到右求值順序尚未強制；以及 named integer 型別的

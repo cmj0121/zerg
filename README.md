@@ -21,7 +21,7 @@ binary. Programs are fast to write, easy to read, and overwhelmingly straightfor
 | small and crisp  | minimal syntax                                                                                        |
 | safe by default  | immutable and private unless explicitly `mut` / `pub`                                                 |
 | null-safe        | optionals instead of null; no billion-dollar mistake                                                  |
-| concurrent       | built-in coroutines and channels (a cooperative **N:1** scheduler in this phase)                      |
+| concurrent       | built-in coroutines and channels (a cooperative, non-preemptive **M:N** scheduler in this phase)      |
 | procedural-first | straightforward, top-down control flow                                                                |
 | scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are                       |
 |                  | reference-counted                                                                                     |
@@ -116,7 +116,7 @@ Pure-Zerg packages over the self runtime (zero external dependency), reached wit
 | **`ascii`**   | byte classification for a tokeniser            |
 | **`cli`**     | option parsing and the `--help` it renders     |
 | **`strconv`** | base-N `parse_int` / `to_string`, `parse_bool` |
-| **`time`**    | `now` (wall clock), `monotonic`                |
+| **`time`**    | `now`, `monotonic`, `after` / `ticker` timers  |
 | **`math`**    | numeric helpers, `sqrt` / `pow`, `pi` / `e`    |
 | **`rand`**    | a deterministic, non-cryptographic generator   |
 | **`atomic`**  | the safe shared-mutable primitive              |
@@ -194,15 +194,27 @@ built-in error taxonomy, recursive types (auto-boxed, reference-counted), tuples
 ranges, f-strings, and modules with `pub` visibility and `init()`.
 
 **Removed from the toolchain** (designed, specified, and not currently built by either
-compiler): closures and function values, `map[K, V]`, coroutines + channels + `select`,
-`#[dyn]` dynamic dispatch, raw pointers and inline assembly under `unsafe`, and the
-`zerg test` runner. The seed rejects each with a diagnostic and a nonzero exit.
+compiler): closures and function values, `map[K, V]`, `#[dyn]` dynamic dispatch, raw
+pointers and inline assembly under `unsafe`, and the `zerg test` runner. The seed rejects
+each with a diagnostic and a nonzero exit.
+
+**Concurrency is back, and the two compilers differ.** `zerg` implements the whole chapter
+— `Result[T]` receives, directional channel ends (`<-chan[T]` / `chan[T]<-`), `close(ch)`
+and `defer close(ch)`, scope-exit release, `select` with `done`, and `time.after` /
+`time.ticker`. The **seed** carries the happy path — `chan[T](cap)`, `ch <- v`, `<-ch`,
+`close(ch)`, `spawn f(args)`, `select`, `for v in ch` — and refuses **six shapes** by name:
+a directional channel type, a `spawn` whose callee is a method, a namespaced function or a
+closure, a `mut &` argument crossing a `spawn`, and a `main(args)` in a concurrent program.
+One gap runs the other way: `zerg` has no block as a `match` arm body, which the seed has.
 
 **Not yet (defined, marked in the spec).** Arithmetic that traps on overflow / division-by-zero and the
 wrapping `+%` operators (today arithmetic lowers to plain C); the full `derive` set beyond `Eq` / `Ord`
 (`Hash` / `Encode` / `Decode`); `set[T]`; `list` / `map` equality; command literals (`` `git status` ``);
-the `is` type-test for non-error types; a preemptive **M:N** scheduler; the `Reader` / `stdin` I/O surface;
-generic type aliases; and a handful of smaller forms tracked in the spec's status markers.
+the `is` type-test for non-error types; scheduler **preemption** (the **M:N** scheduler itself is here —
+nothing yet takes a coroutine off its worker until it parks, so a CPU-bound coroutine occupies one worker
+and as many of them as there are workers stop the program); `?` on a receive, which waits on `Result[T]`
+surviving in a signature; the `Reader` / `stdin` I/O surface; generic type aliases; and a handful of
+smaller forms tracked in the spec's status markers.
 
 **Known deviations (bugs the spec records against current behavior).** A few observable behaviors do not
 yet match the intended semantics — the bootstrap emits `-std=c11` rather than the specified C17-default /

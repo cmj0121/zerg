@@ -161,13 +161,15 @@ tiers, and `is` dispatches on an erased `Err`. See **[Null-safety & Errors](code
 ## Concurrency
 
 Zerg is concurrent through **coroutines and channels only**: `spawn` (Go's `go`), fire-and-forget with
-no join/handle, capturing **only immutable values and channels**. The intended scheduler is a preemptive
-**M:N** one, but the bootstrap runs a cooperative **N:1** single thread today (**[deviation]** — a
-CPU-bound coroutine that never parks starves the rest; see [Coroutines & Channels](code/coroutine.md)).
+no join/handle, capturing **only immutable values and channels**. The scheduler is **M:N** — worker OS
+threads over one shared run queue — but **cooperative, not preemptive** (**[deviation]** — a CPU-bound
+coroutine that never parks occupies a worker, and as many of them as there are workers stop the program;
+see [Coroutines & Channels](code/coroutine.md)).
 Channels are the reference-counted, by-ref **conduit** (a `Ref` type built for communication;
 `Ref[T]` is its resource-holding sibling — see [Values & Memory](core/memory.md)) — payloads copied,
-**auto-closed** when their last sender leaves, received as **`Result[T]`** (`Right` = closed,
-carrying a crash `Err` or the `StopIteration` sentinel), and multiplexed with **`select`**.
+**auto-closed** when their last sender leaves — or ended early by the channel-only statement
+**`close(ch)`** — received as **`Result[T]`** (`Right` = closed, carrying a crash `Err` or the
+`StopIteration` sentinel), and multiplexed with **`select`**.
 
-The full model — buffering, receive/close semantics, directional ends, `select`, and deadlock — is
-the **[Coroutines & Channels](code/coroutine.md)** reference.
+The full model — buffering, receive/close semantics, directional ends, `select`, timers, and deadlock —
+is the **[Coroutines & Channels](code/coroutine.md)** reference.

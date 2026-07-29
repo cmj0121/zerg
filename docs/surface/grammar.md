@@ -125,10 +125,10 @@ nop   fn     mut     pub      return   import
 if    else   for     in       break    continue
 match spawn  select  struct   enum     spec
 chan  type   impl    package  init
-defer del    raise   guard    is       not
-and   or     print   this     with     as
-from  true   false   nil      const    unsafe
-ptr   asm
+defer del    close   raise    guard    is
+not   and    or      print    this     with
+as    from   true    false    nil      const
+unsafe ptr   asm
 ```
 
 (`derive` is not a keyword — it is the decorator name in `#[derive(…)]`.)
@@ -603,7 +603,11 @@ Concurrency is **coroutines + channels only** (CSP) — no shared mutable state,
 ```text
 spawn-stmt  ::= 'spawn' expr
 send-stmt   ::= expr '<-' expr
+close-stmt  ::= 'close' '(' expr ')'          # end this stream early; expr is a channel
 chan-new    ::= 'chan' '[' type ']' '(' expr? ')'
+chan-type   ::= 'chan' '[' type ']'           # bidirectional
+              | '<-' 'chan' '[' type ']'      # receive-only (a receiver), Go-style
+              | 'chan' '[' type ']' '<-'      # send-only (a sender), Go-style
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
 select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
@@ -620,8 +624,13 @@ send-arm    ::= expr '<-' expr '=>' expr
   binds first, so `(<-ch)?`, `<-ch!`, and `<-ch ?? d` compose with the group-8 operators.
 - **`select { … }`** is the only multi-way wait: it runs the first ready arm (fair ties). **`done`** fires
   once when every watched receive channel has closed; **`_`** fires when nothing is ready (non-blocking) —
-  both are **contextual**, special only as a select-arm head. There is **no explicit close** (a channel
-  auto-closes when its last sender leaves) and **no `yield`**.
+  both are **contextual**, special only as a select-arm head. There is **no `yield`**.
+- **`close(ch)`** ends a stream **early**. A channel normally closes **by itself** when its last sender
+  leaves — the everyday form, and the only one a crashing producer can take. `close` is a **statement and
+  not a call**: it is a keyword, names no function and yields no value, so it cannot be passed, bound or
+  spawned, and `defer` spells it out as its one non-expression form (**`defer close(ch)`**). It marks the
+  **channel**, not a holder — every handle stays readable, buffered values still drain, closing twice
+  changes nothing, and a **receive-only** end may not close.
 
 ## Group 10 — Modules & Programs
 
@@ -670,16 +679,18 @@ init-decl   ::= 'init' '(' ')' block
 Three constructs share one axis — **when** cleanup fires.
 
 ```text
-defer-stmt ::= 'defer' expr
+defer-stmt ::= 'defer' ( expr | close-stmt )   # an expression, or the one statement that is not one
 del-stmt   ::= 'del' identifier
 ```
 
 - **`defer expr`** runs `expr` at the **enclosing block's exit**, on **every path out** — normal, `return`,
   or an abort unwind — in last-scheduled-first order. It is the procedural tool for a scope-bound effect
-  (release a lock, flush a buffer, close a scope-local resource).
+  (release a lock, flush a buffer, close a scope-local resource). It also takes **`close(ch)`** (group 9),
+  spelled out because `close` is a keyword rather than a callee, so `defer expr` alone could never reach it.
 - **`del name`** revokes that name's access to its storage **now**; the storage is freed only if the revoked
   access was the **owning** one and no other holder remains. For a `Ref[T]` / `chan` it drops a refcount
-  instead — **`del ch`** closes a channel if you were its last sender.
+  **and** revokes the name, so the name is unusable afterwards — `del ch` is not how a stream is ended
+  (that is `close(ch)`, or the binding's scope exit).
 - The third point on the axis — a **`Ref[T]` drop** at the last holder's scope exit — is not a statement;
   it falls out of scope ownership. The dividing question is `defer` vs `Ref[T]`: does the resource escape
   its scope? No → `defer`; yes → `Ref[T]`.
@@ -714,7 +725,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   is **module-private** (never `pub`). Prefer the **safe** alternative — an immutable `:=` holding a stdlib
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
-  `store` / `fetch_add` / `compare_exchange` and a memory-ordering argument. **[implemented]** today only for
+  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[implemented]** today only for
   **`Atomic[int]`** with **sequential consistency**; the **memory-ordering argument** and a **generic
   `Atomic[T]`** are **[not yet]**.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);

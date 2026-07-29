@@ -24,7 +24,7 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `print x`                             | best-effort 把 `x.display()` 加換行寫到 stdout                   |
 | `e?`                                  | 取出 `Left`,否則從函式提前 return 那個 `Right`                   |
 | `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise          |
-| `del ch`                              | 現在就 drop 這個持有者——若是最後 sender 便關閉 channel           |
+| `del ch`                              | 撤銷名字**並**放掉這個持有者（要結束 stream 請用 `close(ch)`）   |
 
 **狀態。** 上表每一列皆為 **[implemented]**，唯 f-string 內插有兩處例外。自述的 `f"{x=}"` 為 **[not yet]**——已被
 解析，但在程式碼生成時被拒絕。`!r`（debug）與 `!a`（ascii）轉換是 **[deviation]**：兩者目前皆**別名到 `display`**

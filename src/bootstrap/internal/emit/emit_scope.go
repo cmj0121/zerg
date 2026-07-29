@@ -337,13 +337,22 @@ func (e *emitter) errMessage(x ast.Expr) string {
 func (e *emitter) deferStmt(n *ast.DeferStmt) {
 	idx, ok := e.deferIdx[n]
 	if !ok {
-		if c, isCall := n.Call.(*ast.Call); isCall && isCloseCall(c) {
-			return // emitDeferHelpers already refused it by name; one message, not two
-		}
 		e.diags.Add(n.Span(), "defer supports only a direct, namespace, or method function call in Phase 1d")
 		return
 	}
 	call, _ := n.Call.(*ast.Call)
+	// `defer close(ch)` is the one non-expression form defer takes (GRAMMAR group 11).
+	// It captures the channel and nothing else: close marks the CHANNEL rather than a
+	// holder, so no count moves and there is no receiver to own.
+	if isCloseCall(call) {
+		if len(call.Args) != 1 {
+			return // sema reported the arity
+		}
+		env := e.freshName("denv")
+		e.line(fmt.Sprintf("zg_deferenv_%d %s = { %s };", idx, env, e.expr(call.Args[0].Value)))
+		e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, &%s);", idx, env))
+		return
+	}
 	_, recv, _, _ := e.capturedCall(call)
 	if recv == nil && len(call.Args) == 0 {
 		e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, NULL);", idx))
@@ -375,6 +384,19 @@ func (e *emitter) emitDeferHelpers() {
 			if !ok {
 				return
 			}
+			// close is a keyword and names no function, so it has no call target to
+			// resolve; its thunk is written here rather than routed through capturedCall,
+			// which refuses a close for the two statements that may NOT take one — a
+			// `spawn`, and an expression.
+			if isCloseCall(call) {
+				if len(call.Args) != 1 {
+					return
+				}
+				idx := len(e.deferIdx)
+				e.deferIdx[d] = idx
+				e.emitDeferCloseThunk(idx)
+				return
+			}
 			target, recv, recvT, ok := e.capturedCall(call)
 			if !ok {
 				return
@@ -385,6 +407,23 @@ func (e *emitter) emitDeferHelpers() {
 		})
 	}
 	e.cur = nil
+}
+
+// emitDeferCloseThunk writes the env struct and cleanup-stack thunk for a
+// `defer close(ch)`. The env holds the channel handle and nothing else.
+//
+// Ordering falls out of the stack being LIFO: a channel binding registers its release
+// when the binding is made, which is always BEFORE the defer that closes it, so the close
+// runs first and never sees a freed channel.
+func (e *emitter) emitDeferCloseThunk(idx int) {
+	e.line(fmt.Sprintf("typedef struct { zrt_chan *ch; } zg_deferenv_%d;", idx))
+	e.line(fmt.Sprintf("static void zg_deferfn_%d(void *p) {", idx))
+	e.indent++
+	e.line(fmt.Sprintf("zg_deferenv_%d *zg_c = (zg_deferenv_%d *)p;", idx, idx))
+	e.line("zrt_chan_close(zg_c->ch);")
+	e.indent--
+	e.line("}")
+	e.blank()
 }
 
 // emitDeferThunk writes one deferred call's env struct (when it captures a receiver or

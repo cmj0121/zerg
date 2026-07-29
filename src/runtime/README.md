@@ -43,3 +43,29 @@ primitives, text rendering. All higher-level logic lives in pure Zerg above it (
 example `io.read_file`'s read loop and `io.write_int`'s decimal conversion are Zerg over the runtime's syscall
 leaves, and `math`'s `sqrt` / `pow` are Zerg numerical algorithms, never a libm binding. Keeping this line sharp is
 what makes the language self-contained.
+
+## Testing the scheduler, and where ThreadSanitizer stops
+
+`make -C src/runtime test` compiles `csrc/` with the host `cc` and runs it. That suite is the only place the runtime
+is exercised as C rather than as a by-product of a Zerg program, and until it was wired into the root `make test` it
+never ran at all — a `map` bug and three scheduler races all lived here undisturbed.
+
+`TestConcurrencyStress` is the part that watches for races. It cannot check _when_ things happened, because under M:N
+nothing about the order is promised, so it checks the one thing an interleaving may not change: the arithmetic. Every
+producer sends a known set of values, the consumer adds up what arrives, and the total is fixed. A lost wake-up hangs
+it, a doubly-queued coroutine or a hand-off delivered twice moves the sum. It runs many times, because a race that
+survives one pass is ordinary.
+
+**ThreadSanitizer builds and runs, but is not a gate.** A binary is instrumented with `-fsanitize=thread` like any
+other; the fiber annotations in `zergrt.h` are what make that possible at all, since without them TSan follows a
+`zrt_ctx_swap` onto a stack it has no shadow for and dies on a signal rather than reporting anything.
+
+What it then reports is, so far, all one artifact. The park protocol has a coroutine acquire a channel's lock and the
+_scheduler_ release it, once the coroutine is off the CPU — that hand-off is the whole point, because a counterparty
+must not find a waiter belonging to a coroutine that is still running. It happens on one OS thread, so pthreads is
+satisfied, but TSan counts fibers as threads: it sees a mutex released by someone other than its owner and stops
+deriving happens-before from it, after which every access under that lock reads as a race. The reports are real
+output about a model that does not fit, not findings — each one lands on a line that provably holds the lock.
+
+So the stress test is the gate and TSan is a tool to reach for deliberately. Making it a gate needs the hand-off
+described to TSan rather than hidden from it, and that is not done.

@@ -1126,7 +1126,12 @@ fn parse_try(mut &p: Parser) -> Expr {
 	mut e := parse_unary(p)
 	for p_at(p, Bang) or p_at(p, Question) {
 		if p_at(p, Question) {
-			raise "NotImplemented: the `?` operator — it early-returns the Err from the enclosing function, which needs `Result[T]` in a signature"
+			# `x?` is built rather than refused here: whether it CAN be written depends on the
+			# enclosing function's result type, which the parser does not know. The emitter
+			# does, and refuses by name there.
+			p_advance(p)
+			e = parse_chain_tail(p, ETry(e))
+			continue
 		}
 		p_advance(p)
 		e = EForce(e)

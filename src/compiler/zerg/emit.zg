@@ -295,6 +295,40 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	return out + " else { " + c_res_mark_right(rv) + " } " + rv + "; })"
 }
 
+# c_try lowers `x?` (GRAMMAR group 8): the payload, or an early return of the absent side
+# from the ENCLOSING function. It is a control transfer written as an expression, so what
+# it needs is not a lowering trick but a RESULT TYPE that can carry the thing it returns —
+# which is why the function's own signature decides whether it can be written at all.
+#
+# Scoped to the optional. A `Result[T]` operand needs `Result[T]` to survive in a signature,
+# and this compiler still erases it there, so that half is refused by name rather than
+# early-returning a carrier the caller was never given.
+#
+# The early return runs the same cleanup an ordinary `return` does — the defers, then every
+# binding's release — because it IS an ordinary return, just written inside an expression.
+fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
+	t := c_infer(em, x)
+	if not c_is_opt(t) {
+		raise "NotImplemented: `?` on a " + ty_name(t) + " — it early-returns the absent side from the enclosing function, which needs a `T?` result (a `Result[T]` in a signature is a unit of its own)"
+	}
+	if not c_is_opt(em.fn_ret) {
+		raise "`?` early-returns the absent side, so the enclosing function must answer a `T?` — this one answers " + ty_name(em.fn_ret)
+	}
+	elem := c_opt_elem(t)
+	src := c_opt_name(em, elem)
+	rcn := c_opt_name(em, c_opt_elem(em.fn_ret))
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	tv := "zg_tr" + tag
+	mut out := f"({{ {src} {tv} = {c_expr(em, x, sb)};"
+	out = out + " if (" + c_res_is_right(tv) + ") {"
+	if em.fn_mark != "" {
+		out = out + " zrt_unwind_to(" + em.fn_mark + ");"
+	}
+	out = out + " " + c_release_from(em, 0, "")
+	return out + " return (" + rcn + "){ .tag = 1 }; } " + c_res_ok(tv) + "; })"
+}
+
 fn c_optchain_ty(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	t := c_infer(em, target)
 	return TUnknown if not c_is_opt(t)
@@ -1415,6 +1449,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		ECall(name, args) => c_call(em, name, args, sb)
 		EField(target, fld) => c_fieldref(em, target, fld, sb)
 		EOptChain(target, fld) => c_optchain(em, target, fld, sb)
+		ETry(x) => c_try(em, x, sb)
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		EListLit(elems) => c_list_lit(em, elems, sb)
@@ -1763,6 +1798,7 @@ fn c_is_lvalue(e: Expr) -> bool {
 		EIdent(_) => true
 		EField(_, _) => true
 		EOptChain(_, _) => false
+		ETry(_) => false
 		EIndex(t, i) => not c_is_range(i)
 		_ => false
 	}
@@ -2232,6 +2268,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ECall(name, args) => c_infer_call(em, name)
 		EField(target, fld) => c_field_ty_of(em, target, fld)
 		EOptChain(target, fld) => c_optchain_ty(em, target, fld)
+		ETry(x) => c_carrier_elem(c_infer(em, x))
 		EIndex(target, idx) => c_elem_ty(em, target, idx)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)

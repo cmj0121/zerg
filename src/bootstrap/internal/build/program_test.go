@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,17 @@ func TestCompileProgramMatchesCompile(t *testing.T) {
 			src, err := os.ReadFile(zg)
 			if err != nil {
 				t.Fatalf("read %s: %v", zg, err)
+			}
+			// An example past the seed's line has no C to compare, but the two entry
+			// points must still agree — a refusal that only one of them reaches would
+			// be the same divergence this test exists to catch.
+			if beyondSeed(string(src)) {
+				want := checkSeedRefuses(t, name, string(src))
+				_, _, got := CompileProgram(zg)
+				if fmt.Sprint(got) != fmt.Sprint(want) {
+					t.Fatalf("%s: CompileProgram refused differently from Compile:\n got %v\nwant %v", name, got, want)
+				}
+				return
 			}
 			strCode, _, sd := Compile(string(src))
 			if len(sd) != 0 {

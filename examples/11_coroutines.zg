@@ -14,6 +14,10 @@
 # closes by itself once its last sender lets go of it. A channel type names
 # which way an end points — `chan[int]<-` sends only, `<-chan[int]` receives
 # only — and those two are what make "its last sender" exact.
+#
+# beyond-the-seed: a directional channel end. The bootstrap seed refuses one by
+# name rather than approximate the per-direction refcount that keeps auto-close
+# exact, so this example is built by `zerg` — which is what `make examples` uses.
 fn squares(out: chan[int]<-, n: int) {
 	mut i := 1
 

@@ -1,0 +1,64 @@
+# 11 — Coroutines: `spawn` a function, and watch it through a channel.
+#
+# `spawn f(x)` runs `f` as a coroutine and returns immediately. Nothing comes
+# back — there is no handle to hold and nothing to join — so a channel is the
+# only way to see what the coroutine did. `chan[T]()` makes one, `ch <- v`
+# sends into it, and `<-ch` receives.
+#
+# A receive answers `Result[int]`: either a value, or the fact that the channel
+# has closed. The end of a stream is therefore something you read, not a crash.
+# `!` takes the value and aborts if there is none; `if v := <-ch` takes it only
+# when one is there.
+#
+# Nothing below says when the channel ends, because nothing has to: a channel
+# closes by itself once its last sender lets go of it. A channel type names
+# which way an end points — `chan[int]<-` sends only, `<-chan[int]` receives
+# only — and those two are what make "its last sender" exact.
+fn squares(out: chan[int]<-, n: int) {
+	mut i := 1
+
+	for i <= n {
+		out <- i * i # unbuffered, so each send waits for its receive
+		i = i + 1
+	}
+}
+
+# A source is a factory: it makes the channel, starts the producer on it, and
+# hands back the receiving end alone. Two things then hold: `ch` belongs to
+# this scope and is given back when the scope ends, so `source` stops being a
+# sender the moment it returns; and the caller is handed `<-chan[int]`, which
+# cannot send, so the caller can never hold the channel open by accident. That
+# leaves `squares` as the only sender — and the channel closes when it returns.
+#
+# (A producer that wants to end its stream early, before it runs out of values,
+# says `close(out)`. This one has nothing to cut short.)
+fn source(n: int) -> <-chan[int] {
+	ch := chan[int]()
+	spawn squares(ch, n)
+
+	return ch # a two-way end narrows to receive-only on the way out
+}
+
+fn main() {
+	rx := source(4)
+
+	print <-rx! # 1 — one receive, one value
+
+	# `for v in rx` is that receive repeated: the channel IS the iterator, and
+	# it yields until the close ends the loop. This is why the language needs
+	# no `yield` and no generator type — the coroutine above is the generator,
+	# and its send is the yield.
+	for v in rx {
+		print v # 4, then 9, then 16
+	}
+
+	# one producer on one channel means one order, so the five lines this
+	# program prints are the same on every run and under any number of worker
+	# threads. Past the close a receive still answers, and here it is the
+	# `else` that runs.
+	if v := <-rx {
+		print v
+	} else {
+		print "the channel is closed"
+	}
+}

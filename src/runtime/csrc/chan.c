@@ -202,10 +202,12 @@ static void chan_close(zrt_chan *ch, zrt_err err) {
 	}
 	ch->closed = true;
 	ch->err = err;
-	for (zrt_waiter *w = ch->recvq_head; w != NULL; w = w->next) {
+	/* wq_pop, not wq_take: a close wakes every waiter and claims none of them — a select
+	 * parked on a recv arm here must keep its one fire for the arm it eventually takes. */
+	for (zrt_waiter *w = wq_pop(&ch->recvq_head, &ch->recvq_tail); w != NULL;
+	     w = wq_pop(&ch->recvq_head, &ch->recvq_tail)) {
 		zrt_sched_wake(w->co);
 	}
-	ch->recvq_head = ch->recvq_tail = NULL;
 }
 
 zrt_chan *zrt_chan_copy(zrt_chan *ch) {
@@ -263,45 +265,63 @@ static _Noreturn void chan_send_closed(void) {
 	zrt_abort_kind(ZRT_ERR_SEND_ON_CLOSED, "SendOnClosedError: send on a closed channel");
 }
 
+/* chan_deadlock is the protocol every park point in this file owes the abort that follows
+ * it: TAKE YOUR WAITER OUT BEFORE YOU UNWIND. `w` lives on the stack DeadlockError is
+ * about to unwind, and a queue that still points at it is a hand-off into freed memory the
+ * moment anything touches this channel again. Written once because it is a rule about the
+ * queues rather than about either operation, and because a third park point added later
+ * has to obey it too. */
+static _Noreturn void chan_deadlock(zrt_chan *ch, zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
+	zrt_mutex_lock(&ch->lock);
+	wq_remove(head, tail, w);
+	zrt_mutex_unlock(&ch->lock);
+	zrt_sched_deadlock();
+}
+
+/* A LOOP, like the receive below, and for the reason every park site in this runtime is
+ * one: a park that returns is not a promise that what you parked for has happened. It can
+ * end on a wake token an earlier `select` left standing (chan.c's select leaves one
+ * deliberately; it is one-shot and survives to the coroutine's next park). Reading such a
+ * wake as "no taker, so the channel closed" reported SendOnClosedError on a channel that
+ * was open — and left `w` linked on the send queue while its stack unwound. */
 void zrt_chan_send(zrt_chan *ch, const void *val) {
 	zrt_mutex_lock(&ch->lock);
-	if (ch->closed) {
-		zrt_mutex_unlock(&ch->lock);
-		chan_send_closed();
-	}
-	/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
-	zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
-	if (r != NULL) {
-		memcpy(r->val, val, ch->elemsz);
-		r->done = true;
-		zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
-		zrt_mutex_unlock(&ch->lock);
-		return;
-	}
-	/* buffered with room: enqueue and return without blocking. */
-	if (ch->len < ch->cap) {
-		ring_put(ch, val);
-		zrt_mutex_unlock(&ch->lock);
-		return;
-	}
-	/* full (or unbuffered with no receiver): park until a receiver takes the value. The
-	 * lock goes to the scheduler, which releases it once this coroutine is off the CPU —
-	 * a receiver must not be able to find this waiter before then. */
-	zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL, NULL};
-	wq_push(&ch->sendq_head, &ch->sendq_tail, &w);
-	if (zrt_sched_park_unlock(&ch->lock)) {
-		/* the deadlock detector resumed us to carry the raise. `w` lives on the stack the
-		 * abort is about to unwind, and the send queue still points at it, so it has to
-		 * come back out before we leave — a dangling waiter is a hand-off into freed
-		 * memory the moment anything touches this channel again. */
+	for (;;) {
+		if (ch->closed) {
+			zrt_mutex_unlock(&ch->lock);
+			chan_send_closed();
+		}
+		/* a waiting receiver takes the value directly (rendezvous / buffered hand-off). */
+		zrt_waiter *r = wq_take(&ch->recvq_head, &ch->recvq_tail);
+		if (r != NULL) {
+			memcpy(r->val, val, ch->elemsz);
+			r->done = true;
+			zrt_sched_wake(r->co); /* channel lock held, scheduler lock taken inside */
+			zrt_mutex_unlock(&ch->lock);
+			return;
+		}
+		/* buffered with room: enqueue and return without blocking. */
+		if (ch->len < ch->cap) {
+			ring_put(ch, val);
+			zrt_mutex_unlock(&ch->lock);
+			return;
+		}
+		/* full (or unbuffered with no receiver): park until a receiver takes the value. The
+		 * lock goes to the scheduler, which releases it once this coroutine is off the CPU —
+		 * a receiver must not be able to find this waiter before then. */
+		zrt_waiter w = {zrt_sched_current(), (void *)val, false, NULL, NULL};
+		wq_push(&ch->sendq_head, &ch->sendq_tail, &w);
+		if (zrt_sched_park_unlock(&ch->lock)) {
+			chan_deadlock(ch, &ch->sendq_head, &ch->sendq_tail, &w);
+		}
+		if (w.done) {
+			return; /* a receiver took the value straight out of *val. */
+		}
+		/* Woken without a taker: an explicit close (which unlinked us on its way past), or
+		 * a stray token. Re-take the lock, unlink if we are still on the queue, and let the
+		 * top of the loop decide which it was. */
 		zrt_mutex_lock(&ch->lock);
 		wq_remove(&ch->sendq_head, &ch->sendq_tail, &w);
-		zrt_mutex_unlock(&ch->lock);
-		zrt_sched_deadlock();
-	}
-	if (!w.done) {
-		/* woken without a taker: the channel closed under us. */
-		chan_send_closed();
 	}
 }
 
@@ -340,12 +360,7 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		zrt_waiter w = {zrt_sched_current(), out, false, NULL, NULL};
 		wq_push(&ch->recvq_head, &ch->recvq_tail, &w);
 		if (zrt_sched_park_unlock(&ch->lock)) {
-			/* the deadlock detector resumed us to carry the raise; unlink `w` before the
-			 * abort unwinds the stack it lives on. */
-			zrt_mutex_lock(&ch->lock);
-			wq_remove(&ch->recvq_head, &ch->recvq_tail, &w);
-			zrt_mutex_unlock(&ch->lock);
-			zrt_sched_deadlock();
+			chan_deadlock(ch, &ch->recvq_head, &ch->recvq_tail, &w);
 		}
 		if (w.done) {
 			return 0; /* a sender rendezvoused straight into *out. */
@@ -381,15 +396,20 @@ zrt_err zrt_chan_close_err(zrt_chan *ch) {
  * would otherwise sleep forever. Each wakes with `done` false and aborts with
  * SendOnClosedError, and the queue is emptied here — a woken sender's waiter lives on the
  * stack it is about to unwind, so leaving it linked would be a hand-off into freed
- * memory. */
+ * memory.
+ *
+ * The drain is wq_pop and NOT wq_take: wq_take claims a select's shared flag, and a select
+ * parked on a send arm of this channel would have its one fire swallowed by a close that
+ * was only supposed to wake it. Popping wakes every waiter and claims nothing, which is
+ * what a close means — go and look again. */
 void zrt_chan_close(zrt_chan *ch) {
 	zrt_mutex_lock(&ch->lock);
 	if (!ch->closed) {
 		chan_close(ch, chan_stop_iteration());
-		for (zrt_waiter *w = ch->sendq_head; w != NULL; w = w->next) {
+		for (zrt_waiter *w = wq_pop(&ch->sendq_head, &ch->sendq_tail); w != NULL;
+		     w = wq_pop(&ch->sendq_head, &ch->sendq_tail)) {
 			zrt_sched_wake(w->co);
 		}
-		ch->sendq_head = ch->sendq_tail = NULL;
 	}
 	zrt_mutex_unlock(&ch->lock);
 }

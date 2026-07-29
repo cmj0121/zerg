@@ -67,14 +67,17 @@ static ZRT_THREAD_LOCAL zrt_ctx t_sched_ctx;
 static ZRT_THREAD_LOCAL void *t_sched_fiber;
 static ZRT_THREAD_LOCAL zrt_coro *t_current;
 
-/* SHARED, under g_lock: the one FIFO run queue every worker drains, the live count,
- * and the bookkeeping that decides when the program is over. g_cond wakes a worker
+/* SHARED, under g_lock: the one FIFO run queue every worker drains and the
+ * bookkeeping that decides when the program is over. g_cond wakes a worker
  * that is waiting for work; g_idle counts the workers currently waiting on it, which
  * is what tells "everyone is idle and coroutines remain" (a deadlock) from "everyone
  * is idle because there is nothing to do this instant".
  *
  * g_done is the program's end, and only main's coroutine finishing sets it: a worker
- * that sees it stops taking work rather than draining what is left. */
+ * that sees it stops taking work rather than draining what is left. There is no live
+ * count beside it: main's coroutine outlives every other, so "main has finished" is
+ * always the earlier end, and the deadlock criterion below counts what is RUNNING and
+ * what is SLEEPING rather than what exists. */
 static zrt_mutex g_lock;
 static zrt_cond g_cond;
 static zrt_coro *g_runq_head;
@@ -86,13 +89,6 @@ static bool g_done;
 /* main's outcome, mapped to the process exit code; pessimistically 1 so an
  * aborting main (whose thunk never records success) exits non-zero, as zrt_run. */
 static int g_exit_code;
-
-/* the number of live (not-yet-reclaimed) coroutines, under g_lock. When every worker
- * is idle while this is non-zero, every remaining coroutine is parked on a channel
- * with nothing left to wake it — a deadlock (§1.4). It no longer ends the program at
- * zero: main's coroutine is counted here and outlives every other, so main finishing
- * is the earlier and the only end. */
-static size_t g_live;
 
 /* main's coroutine, under g_lock. The scheduler needs to reach it by name for one
  * thing: a deadlock is an abort, an abort runs on the stack it belongs to, and the
@@ -124,15 +120,15 @@ static zrt_coro *g_main_co;
 static size_t g_live_running;
 
 /* the coroutines parked in zrt_sleep_ns, under g_lock, ordered by deadline so the head
- * is always the next one due; g_timers is its length. They are threaded on qnext, which
- * they can borrow because a sleeping coroutine is on no other queue — it is BLOCKED, so
- * the run queue does not hold it, and it never joined a channel's wait queue.
+ * is always the next one due. They are threaded on qnext, which they can borrow because
+ * a sleeping coroutine is on no other queue — it is BLOCKED, so the run queue does not
+ * hold it, and it never joined a channel's wait queue.
  *
- * The count is read for a second thing besides "is anything due": it is what stops the
- * deadlock detector. Every worker idle with coroutines left is a deadlock only if none
- * of those coroutines is going to move again by itself, and a sleeping one is. */
+ * A NON-EMPTY LIST IS READ FOR TWO THINGS: whether anything may be due, and whether the
+ * deadlock detector should stand down. Every worker idle with coroutines left is a
+ * deadlock only if none of those coroutines is going to move again by itself, and a
+ * sleeping one is. */
 static zrt_coro *g_timerq;
-static size_t g_timers;
 
 /* runq_push / runq_pop assume g_lock is HELD. They are the only two places the queue
  * is touched, which is what keeps the locking discipline reviewable in one screen. */
@@ -171,18 +167,21 @@ static void timerq_insert(zrt_coro *co) {
 	}
 	co->qnext = *link;
 	*link = co;
-	g_timers++;
 }
 
 /* timers_fire_due moves every coroutine whose deadline has passed back onto the run
  * queue; g_lock is HELD. Sorted order means it stops at the first one that is not due,
- * so this costs nothing on the overwhelmingly common pass where none is. */
+ * so this costs nothing on the overwhelmingly common pass where none is — and the empty
+ * list is answered before the clock is read, since the scheduler loop calls this on every
+ * turn and most programs never sleep at all. */
 static void timers_fire_due(void) {
+	if (g_timerq == NULL) {
+		return;
+	}
 	int64_t now = zrt_time_mono();
 	while (g_timerq != NULL && g_timerq->deadline <= now) {
 		zrt_coro *co = g_timerq;
 		g_timerq = co->qnext;
-		g_timers--;
 		co->state = ZRT_CORO_RUNNABLE;
 		runq_push(co); /* clears qnext, which the timer queue was borrowing */
 	}
@@ -193,14 +192,23 @@ void zrt_sleep_ns(int64_t ns) {
 	if (co == NULL || ns <= 0) {
 		return; /* outside a coroutine there is nothing to park, and a past deadline is now */
 	}
-	co->deadline = zrt_time_mono() + ns;
-	/* The worker that swaps us out is what files us on the timer queue, for the reason
-	 * PARKING exists at all: until the switch is complete this coroutine is still on a
-	 * CPU, and a queue another worker can reach must not name it yet.
+	int64_t deadline = zrt_time_mono() + ns;
+	/* A LOOP, re-reading the clock, because a park is not a promise that the thing you
+	 * parked for has happened — it is only a promise that you left the CPU. A wake token
+	 * left standing by an earlier `select` (chan.c: the token is one-shot and survives to
+	 * the coroutine's NEXT park) makes the very next park return at once, and a sleep that
+	 * trusted one park returned before its deadline. Every other park site in this runtime
+	 * already re-scans in a loop; a deadline is just the condition this one re-scans.
 	 *
-	 * The park's answer is not read because it cannot be true here: the detector stands
-	 * down while any sleep is pending, and this coroutine's own sleep is one. */
-	zrt_sched_park();
+	 * The deadline is re-armed each turn: co->deadline is what tells the worker swapping
+	 * us out to file us on the timer queue rather than leave us blocked forever, and the
+	 * worker is what does the filing — for the reason PARKING exists at all, that until
+	 * the switch is complete this coroutine is still on a CPU and a queue another worker
+	 * can reach must not name it yet. */
+	while (zrt_time_mono() < deadline) {
+		co->deadline = deadline;
+		zrt_sched_park();
+	}
 	co->deadline = 0;
 }
 
@@ -280,7 +288,6 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	if (is_main) {
 		g_main_co = co;
 	}
-	g_live++;
 	runq_push(co);
 	zrt_cond_signal(&g_cond); /* a worker may be waiting for exactly this */
 	zrt_mutex_unlock(&g_lock);
@@ -329,17 +336,21 @@ bool zrt_sched_park_unlock(zrt_mutex *m) {
 	return park_resumed(co);
 }
 
-bool zrt_sched_park(void) {
+void zrt_sched_park(void) {
 	zrt_coro *co = t_current;
 	if (co == NULL) {
-		return false; /* not inside a coroutine: cannot block */
+		return; /* not inside a coroutine: cannot block */
 	}
 	co->park_lock = NULL;
 	co->state = ZRT_CORO_PARKING;
 	zrt_ctx_swap(&co->ctx, &t_sched_ctx);
 	/* Resumed. A wake re-enqueued us and SOME worker swapped us back in — not
-	 * necessarily the one we parked on, which is why nothing here may cache a worker. */
-	return park_resumed(co);
+	 * necessarily the one we parked on, which is why nothing here may cache a worker.
+	 *
+	 * The deadlock flag is consumed rather than answered: the bare park is only reached
+	 * from zrt_sleep_ns, and the detector stands down while any sleep is pending, so it
+	 * cannot be set here. Consuming it keeps the one-shot rule true for the next park. */
+	(void)park_resumed(co);
 }
 
 _Noreturn void zrt_sched_deadlock(void) {
@@ -397,8 +408,6 @@ static void sched_init(void) {
 	t_current = NULL;
 	g_main_co = NULL;
 	g_timerq = NULL;
-	g_timers = 0;
-	g_live = 0;
 	g_live_running = 0;
 	g_idle = 0;
 	g_workers = 0;
@@ -421,9 +430,7 @@ static void sched_run(void) {
 		if (g_done) {
 			break; /* main has finished: stand down, whatever is still queued */
 		}
-		if (g_timers > 0) {
-			timers_fire_due(); /* a due sleep is runnable work, so look before the queue */
-		}
+		timers_fire_due(); /* a due sleep is runnable work, so look before the queue */
 		zrt_coro *co = runq_pop();
 		if (co == NULL) {
 			/* Coroutines remain but none is runnable HERE, which is three different
@@ -432,7 +439,7 @@ static void sched_run(void) {
 			 * and nothing sleeping, so nobody can ever wake anybody and this is a deadlock;
 			 * or the other workers still hold work, and this one waits for them. */
 			g_idle++;
-			if (g_timers > 0) {
+			if (g_timerq != NULL) {
 				/* A sleep is pending, so this is not a deadlock however idle everyone is —
 				 * that coroutine will become runnable on its own. Sleep to its deadline
 				 * rather than to a signal: with one worker there is nobody to signal, and
@@ -506,7 +513,6 @@ static void sched_run(void) {
 			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
 			munmap(co->stack, co->stack_size);
 			zrt_free(co);
-			g_live--;
 			if (was_main) {
 				/* main is over, so the program is. Every other worker is either idle or
 				 * between two coroutines, so broadcast rather than signal: each has to

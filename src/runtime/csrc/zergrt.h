@@ -845,8 +845,23 @@ zrt_coro *zrt_sched_current(void);
 
 /* zrt_sched_park marks the current coroutine BLOCKED and returns control to the
  * scheduler; it returns once a zrt_sched_wake puts the coroutine back on the run
- * queue and the scheduler resumes it. A no-op outside a coroutine. It is the single
- * blocking primitive the channel send/recv paths (C2) park on.
+ * queue and the scheduler resumes it. A no-op outside a coroutine.
+ *
+ * IT ANSWERS NOTHING, and a caller must not read a returning park as "the thing I
+ * parked for has happened". A park can end for a reason that is none of the caller's:
+ * a wake meant for something else, or a token an earlier `select` left standing. Every
+ * caller therefore re-tests its own condition in a loop — zrt_sleep_ns re-reads the
+ * clock, the channel paths re-scan their queues.
+ *
+ * A waiter on a wait queue parks through zrt_sched_park_unlock, not through this. */
+void zrt_sched_park(void);
+
+/* zrt_sched_park_unlock is zrt_sched_park for a caller holding a lock that guards the
+ * wait queue it just joined. Releasing that lock before switching away would open the
+ * window PARKING exists to close, so the lock is handed to the scheduler: the worker
+ * releases it once the coroutine is off the CPU and marked BLOCKED, both under the
+ * scheduler lock. Every channel operation blocks through this, never through the bare
+ * park.
  *
  * It answers HOW the park ended. False is the ordinary wake: a counterparty handed off,
  * or a close, or nothing at all (a stray token), and the caller re-scans as it always
@@ -854,14 +869,6 @@ zrt_coro *zrt_sched_current(void);
  * nothing woke it and nothing will. A caller that sees true owes two things, in order:
  * take its waiter back out of every queue it is on, because the abort is about to
  * unwind the stack that waiter lives on, and then call zrt_sched_deadlock. */
-bool zrt_sched_park(void);
-
-/* zrt_sched_park_unlock is zrt_sched_park for a caller holding a lock that guards the
- * wait queue it just joined. Releasing that lock before switching away would open the
- * window PARKING exists to close, so the lock is handed to the scheduler: the worker
- * releases it once the coroutine is off the CPU and marked BLOCKED, both under the
- * scheduler lock. Every channel operation blocks through this, never through the bare
- * park. Its return value is zrt_sched_park's. */
 bool zrt_sched_park_unlock(zrt_mutex *m);
 
 /* zrt_sched_deadlock raises DeadlockError on the CALLING coroutine's stack: a clean

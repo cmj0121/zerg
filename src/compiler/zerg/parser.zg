@@ -812,17 +812,6 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SDefer(parse_expr(p))
 	}
-	if k == Guard {
-		# guard { ... } (optionally with a trailing else): the subset runs the happy
-		# path only, so emit the guarded block's statements
-		p_advance(p)
-		body := parse_block(p)
-		if p_at(p, Else) {
-			p_advance(p)
-			parse_block(p)
-		}
-		return SGuard(body)
-	}
 	if k == Mut {
 		p_advance(p)
 		return parse_binding(p, true)
@@ -1230,6 +1219,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, RParen)
 		return EChanNew(elem, cap)
 	}
+	if k == Guard {
+		# `guard { … }` is an EXPRESSION (GRAMMAR:614) yielding Result[T], not a statement.
+		# It was read as one before, which is why `n := guard { f() } ?? 0` — the form the
+		# spec writes the operator with — was refused outright, and why a statement-position
+		# guard lowered to a bare block that caught nothing at all.
+		p_advance(p)
+		return EGuard(parse_block(p))
+	}
 	if k == Unsafe {
 		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and
 		# its statements never ran
@@ -1325,7 +1322,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 fn is_stmt_kw(k: Kind) -> bool {
 	return true if k == Print or k == Raise or k == Return or k == Nop
 	return true if k == Break or k == Continue or k == Del or k == Defer
-	return k == Spawn or k == Select or k == For or k == Guard or k == With
+	return k == Spawn or k == Select or k == For or k == With
 }
 
 fn parse_match(mut &p: Parser) -> Expr {

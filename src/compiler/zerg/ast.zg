@@ -102,6 +102,13 @@ enum Expr {
 	# jump is a statement, so it cannot be carried in the second field. When the third is
 	# non-empty the second is ignored.
 	ECoalesce(Expr, Expr, list[Stmt])
+
+	# EGuard is `guard { … }`, and it is an EXPRESSION (GRAMMAR:614) yielding `Result[T]`
+	# where T is the block's value: an abort inside the block becomes Right(err) instead of
+	# ending the program, a normal completion becomes Left(v). It is the sole way back from
+	# the abort tier, which is why it carries a whole block rather than an expression — the
+	# thing being guarded is usually several statements.
+	EGuard(list[Stmt])
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -131,7 +138,6 @@ enum Stmt {
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
 	SForIn(str, Expr, list[Stmt])
-	SGuard(list[Stmt])
 	SRaise(Expr)
 	SBreak
 	SContinue
@@ -149,8 +155,10 @@ enum Stmt {
 	# because every arm carries the same four things in different combinations.
 	SSelect(list[SelArm])
 
-	# SDel is `del name`. For a channel it drops a SENDER handle, which is how a channel
-	# closes — the language has no explicit close.
+	# SDel is `del name` — it REVOKES the name, for every type alike. It used to mean
+	# something else for a channel, giving up a send end while leaving the name readable;
+	# that is `close(ch)` now, and a channel binding gives up what it holds when its scope
+	# ends, so `del` no longer has to be pressed into either job.
 	SDel(str)
 
 	# SIfLet is `if v := e { … } else { … }` — run the block only when `e` is a Left, with
@@ -332,7 +340,6 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
 		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
-		SGuard(body_b) => ind + "guard\n" + dump_block(body_b, ind + "\t")
 		SRaise(x) => f"{ind}raise {expr_kind(x)}\n"
 		SBreak => ind + "break\n"
 		SContinue => ind + "continue\n"
@@ -375,6 +382,7 @@ fn expr_kind(e: Expr) -> str {
 		ERecv(ch) => "recv"
 		EForce(x) => "force"
 		ECoalesce(a, b, jump) => "coalesce"
+		EGuard(body) => "guard"
 		_ => "?"
 	}
 }

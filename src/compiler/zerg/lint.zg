@@ -84,19 +84,30 @@ fn lint_unread_bindings(f: File, mut &out: list[str]) {
 fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 	for s in body {
 		match s {
-			SLet(name, ty, is_mut, has_ty, value) => collect_binds_let(name, names)
+			SLet(name, ty, is_mut, has_ty, value) => collect_binds_let(name, value, names)
 			SIf(cond, then_b, has_else, else_b) => collect_binds_if(then_b, else_b, names)
 			SFor(is_cond, cond, body_b) => collect_binds(body_b, names)
 			SForIn(name, iter, body_b) => collect_binds(body_b, names)
 			SIfLet(name, value, then_b, has_else, else_b) => collect_binds_iflet(name, then_b, else_b, names)
-			SGuard(body_b) => collect_binds(body_b, names)
+			SExpr(x) => collect_binds_expr(x, names)
 			_ => skip()
 		}
 	}
 }
 
-fn collect_binds_let(name: str, mut &names: list[str]) {
+fn collect_binds_let(name: str, value: Expr, mut &names: list[str]) {
 	names.append(name)
+	collect_binds_expr(value, names)
+}
+
+# collect_binds_expr descends into the one EXPRESSION that carries a block of its own.
+# `guard` is an expression (GRAMMAR:614), so a binding made inside one is reached from the
+# statement that holds the guard rather than from a statement of its own.
+fn collect_binds_expr(e: Expr, mut &names: list[str]) {
+	match e {
+		EGuard(body_b) => collect_binds(body_b, names)
+		_ => skip()
+	}
 }
 
 fn collect_binds_if(then_b: list[Stmt], else_b: list[Stmt], mut &names: list[str]) {
@@ -127,7 +138,6 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SIfLet(name, value, then_b, has_else, else_b) => walk_if(value, then_b, else_b, ids, calls, ns)
 			SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
 			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
-			SGuard(body_b) => walk_body(body_b, ids, calls, ns)
 			SRaise(x) => walk_expr(x, ids, calls, ns)
 		SDefer(x) => walk_expr(x, ids, calls, ns)
 		SSpawn(x) => walk_expr(x, ids, calls, ns)
@@ -190,6 +200,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		ERecv(ch) => walk_expr(ch, ids, calls, ns)
 		EForce(x) => walk_expr(x, ids, calls, ns)
 		ECoalesce(a, b, jump) => walk_coalesce(a, b, jump, ids, calls, ns)
+		EGuard(body) => walk_body(body, ids, calls, ns)
 		_ => skip()
 	}
 }

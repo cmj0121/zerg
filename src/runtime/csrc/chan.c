@@ -413,9 +413,14 @@ static int sel_try_send(zrt_chan *ch, const void *val) {
 	return r;
 }
 
-/* sel_all_recv_closed reports whether every watched recv case's channel has closed (its
- * buffer is drained by the time this runs, since a buffered value would have been
- * value-ready). With no recv case it is vacuously true. Drives the `done` arm. */
+/* sel_all_recv_closed reports whether every watched recv case is FINISHED: closed and
+ * drained, both. With no recv case it is vacuously true. Drives the `done` arm.
+ *
+ * Closed alone is not enough, and the difference is values. The scan that ran before
+ * this holds one channel's lock at a time, so a sender can fill a channel this scan
+ * already passed and then close it, all before the last channel has been looked at —
+ * and `done` would end the select over a buffer that still has values in it. A closed
+ * channel keeps delivering what it already holds; only an empty one is over. */
 static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
 	for (size_t i = 0; i < n; i++) {
 		if (cases[i].op != ZRT_SEL_RECV) {
@@ -426,9 +431,9 @@ static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
 		 * sees an open channel, parks, and the close that would have woken it already
 		 * happened. */
 		zrt_mutex_lock(&cases[i].ch->lock);
-		bool c = cases[i].ch->closed;
+		bool over = cases[i].ch->closed && cases[i].ch->len == 0 && cases[i].ch->sendq_head == NULL;
 		zrt_mutex_unlock(&cases[i].ch->lock);
-		if (!c) {
+		if (!over) {
 			return false;
 		}
 	}
@@ -467,8 +472,11 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 				if (c->op != ZRT_SEL_RECV) {
 					continue;
 				}
+				/* closed AND drained, for the reason sel_all_recv_closed gives: a channel
+				 * the scan already passed can be filled and closed before this runs, and
+				 * firing Right over it would discard what it still holds. */
 				zrt_mutex_lock(&c->ch->lock);
-				bool shut = c->ch->closed;
+				bool shut = c->ch->closed && c->ch->len == 0 && c->ch->sendq_head == NULL;
 				zrt_mutex_unlock(&c->ch->lock);
 				if (shut) {
 					c->closed = 1;

@@ -82,7 +82,9 @@ A channel is a typed, by-ref conduit whose payloads are **copied** through it. I
 **reference-counted value** — the built-in implementer of `Ref` (alongside `Ref[T]`; see
 [Values & Memory](../core/memory.md)), the exception to scope-owning: freed when its last holder's scope
 exits, and copying a value refcount-bumps any `Ref` value it contains while deep-copying the rest. A
-channel is **FIFO** and **first-class** (it can be sent over another channel).
+channel is **FIFO** and **first-class**: it can be held in a struct field, carried as an enum
+payload — which is how an actor's ask carries its reply channel — and sent over another
+channel. **[implemented]**, in both compilers.
 
 ```text
 ch := chan[int]()      # unbuffered — every send rendezvous with a receive
@@ -94,7 +96,8 @@ Capacity is the only knob; **send blocks when full, receive blocks when empty**.
 one synchronization primitive.
 
 The whole channel core in this chapter — buffered and unbuffered blocking, a close signalling the
-receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[implemented]**.
+receiver, a send on a closed channel aborting, the last sender auto-closing, and a payload
+**deep-copied at the send** so a receiver never shares the sender's storage — is **[implemented]**.
 Both channel error kinds are **reified and nameable**: a send on a closed channel raises
 `SendOnClosedError`, `DeadlockError` is the clean, catchable abort described under Termination &
 deadlock, and each answers an ordinary `err is …` test (see [Errors](errors.md)).

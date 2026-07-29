@@ -156,6 +156,16 @@ sanitize-conc:                  # run the concurrency corpus under address/UB/le
 	$(MAKE) build
 	./scripts/sanitize-conc.sh
 
+# Every other gate here asks what the toolchain BUILDS. This one asks what it turns away,
+# and the property it pins is not that a bad program fails — it always did — but WHO says
+# so. A program the compiler emits anyway reaches cc, which reports a real error against
+# generated C in .zerg-cache, at a line the programmer cannot open. That regresses silently,
+# because the case still "fails". Not in `test` for the same reason `corpus` is not: it
+# needs the whole toolchain, both compilers, built.
+refuse:                         # every program that must be turned away, is — by the compiler
+	$(MAKE) build
+	./scripts/refuse-check.sh
+
 docs-links:                     # every docs path the repo cites must resolve
 	@fail=0; \
 	for p in $$(git grep -hoE 'docs/[A-Za-z0-9_./-]+\.md' -- . ':!docs' | sort -u); do \

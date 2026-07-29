@@ -45,6 +45,7 @@
  * notion of what it is currently running; a coroutine that parks on one worker and
  * resumes on another must find the resuming worker's context, not the one it left. */
 static ZRT_THREAD_LOCAL zrt_ctx t_sched_ctx;
+
 static ZRT_THREAD_LOCAL zrt_coro *t_current;
 
 /* SHARED, under g_lock: the one FIFO run queue every worker drains, the live count,
@@ -155,6 +156,7 @@ void zrt_spawn(void (*thunk)(void *env), void *env) {
 	co->stack = stack_alloc(ZRT_CORO_STACK, &total);
 	co->stack_size = total;
 	co->state = ZRT_CORO_RUNNABLE;
+	co->woken = false; /* zrt_alloc is malloc, not calloc: an unset flag is a stray wake */
 	co->thunk = thunk;
 	co->env = env;
 	co->tls.stack = NULL;
@@ -226,16 +228,24 @@ void zrt_sched_wake(zrt_coro *co) {
 		co->state = ZRT_CORO_RUNNABLE;
 		runq_push(co);
 		zrt_cond_signal(&g_cond);
-	} else if (co->state == ZRT_CORO_PARKING) {
-		/* It has decided to block but is still switching out, so it cannot be queued
-		 * yet — queueing it here would let a second worker run it on its own stack while
-		 * it is still on this one. The wake is REMEMBERED instead, and the worker
-		 * completing the park queues it rather than marking it blocked.
+	} else if (co->state == ZRT_CORO_RUNNING || co->state == ZRT_CORO_PARKING) {
+		/* Not parked yet, so it cannot be queued: queueing a coroutine that is on a CPU
+		 * would let a second worker run it on its own stack while it is still on this
+		 * one. The wake is REMEMBERED instead, and the worker completing the park honours
+		 * it rather than marking the coroutine blocked.
 		 *
-		 * Only select reaches this. A plain send or recv hands its channel lock to the
-		 * scheduler, so a counterparty cannot even find the waiter until the switch is
-		 * done; a select parks on several channels and must release each one's lock to
-		 * take the next, which is the window this closes. */
+		 * The flag is a park token, in the sense Go's note and Rust's thread::park use:
+		 * it does not name a channel or a reason, it only says "the next park must not
+		 * block, because the news you are about to wait for has already arrived". That is
+		 * why a stray one is harmless — every parking caller here (both channel ops and
+		 * select) re-scans in a loop and parks again if nothing was actually ready.
+		 *
+		 * Only select reaches this. A plain send or recv hands its one channel lock to
+		 * the scheduler, so a counterparty cannot even find the waiter until the switch
+		 * is done; a select pushes a waiter onto every channel it watches and can hold
+		 * only one of those locks at a time, so from the first push onward it is visible
+		 * to a counterparty while still RUNNING. Missing that wake is not a wrong answer,
+		 * it is a hang — the select parks on a hand-off that has already happened. */
 		co->woken = true;
 	}
 	zrt_mutex_unlock(&g_lock);
@@ -293,6 +303,9 @@ static void sched_run(void) {
 			continue;
 		}
 		g_live_running++;
+		/* under g_lock, before any other thread can observe it: from here until it parks
+		 * or finishes, a wake must be remembered rather than queued or discarded. */
+		co->state = ZRT_CORO_RUNNING;
 		zrt_mutex_unlock(&g_lock);
 
 		/* OUTSIDE the lock: this is the only part that runs user code, and holding the
@@ -334,7 +347,9 @@ static void sched_run(void) {
 				zrt_cond_broadcast(&g_cond); /* the last one: let every worker finish */
 			}
 			break;
+		case ZRT_CORO_RUNNING: /* swapped out without saying why: treat as a yield */
 		case ZRT_CORO_RUNNABLE:
+			co->state = ZRT_CORO_RUNNABLE;
 			runq_push(co); /* voluntarily yielded: back on the queue */
 			zrt_cond_signal(&g_cond);
 			break;

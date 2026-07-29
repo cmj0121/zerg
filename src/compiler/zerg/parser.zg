@@ -77,7 +77,24 @@ fn ident_name(e: Expr) -> str {
 # never entered from a statement position, so `ch <- v` does not reach here. The trailing
 # `<-` is also only looked for after the `]` of a `chan[…]`, never after a name or any
 # other type, which is what keeps it away from anything else a `<-` could follow.
+# parse_type reads a type and, when a `?` follows it, wraps it as the OPTIONAL of that
+# type (GRAMMAR group 7: `type ::= base-type '?'?`). The suffix used to be left in the
+# stream: `x: int? = nil` bound a plain `int` and `nil` lowered to `0`, so an absent value
+# became the number zero and nothing said so.
+#
+# It is one wrapper around the whole reader rather than a case inside it, because the
+# suffix follows a COMPLETE type — `list[int]?`, `P?`, `chan[int]?` — and every one of
+# those is built somewhere below.
 fn parse_type(mut &p: Parser) -> Ty {
+	t := parse_base_type(p)
+	if p_at(p, Question) {
+		p_advance(p)
+		return TOpt(t)
+	}
+	return t
+}
+
+fn parse_base_type(mut &p: Parser) -> Ty {
 	if p_at(p, LArrow) {
 		p_advance(p)
 		inner := parse_type(p)

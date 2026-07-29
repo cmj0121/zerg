@@ -642,10 +642,16 @@ chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional cap
 # 'done' fires once when every watched receive channel has closed; '_' fires when
 # nothing is ready (non-blocking). Both 'done' and '_' are contextual — special only
 # as a select-arm head.
+#
+# An arm's body is a STATEMENT, not an expression: 'select' is a statement and yields
+# nothing, so an arm RUNS rather than yields — which is what lets 'done => break' and
+# 'v := <-ch => print v!' mean what they read as. A block is a statement like any other,
+# so '=> { … }' is the multi-statement form. The contrast is a 'match' arm (group 4),
+# whose body must YIELD the match's value and is therefore an expression.
 select-stmt  ::= 'select' '{' select-arm+ '}'
-select-arm   ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
-recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
-send-arm     ::= expr '<-' expr '=>' expr    # '=>' separates the arm head from its body
+select-arm   ::= recv-arm | send-arm | 'done' '=>' stmt | '_' '=>' stmt
+recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' stmt
+send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from its body
 
 # ==================================================================================
 # 10. Modules & Programs

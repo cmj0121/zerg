@@ -12,6 +12,15 @@
 #         no caller in this program, but a private one with no caller is simply dead
 #   L103  a binding that is never read — the value was computed for nobody
 #
+# `L2xx` is NULL SAFETY: an optional handled in a way that works but says the wrong thing.
+# Nothing here is a compile error — each of these programs runs — which is exactly why a
+# linter is where they belong.
+#
+#   L201  `?? nil` — a fallback that is itself the absent value, so the `??` changes
+#         nothing: the result is optional either way
+#   L202  `x!` inside a function whose result is a `T?` — the absence can be HANDED BACK
+#         with `?` instead of turned into an abort, and `!` is the easier key to reach
+#
 # Findings come back as plain strings in source order. The driver prints them and exits
 # nonzero, so `zerg lint` is usable as a gate rather than as decoration.
 
@@ -32,7 +41,108 @@ pub fn lint_files(srcs: list[str]) -> list[str] {
 	lint_imports(f, ns, ids, out)
 	lint_dead_fns(f, calls, ids, out)
 	lint_unread_bindings(f, out)
+	lint_optionals(f, out)
 	return out
+}
+
+# --- L2xx: null safety -------------------------------------------------------------------
+#
+# Both checks are answered from the parsed File alone, like every other rule here. That is
+# what keeps them honest: `?? nil` is a SHAPE, and so is a `!` inside a function whose
+# declared result is a `T?`. Neither needs to know a type that was not written down.
+fn lint_optionals(f: File, mut &out: list[str]) {
+	for fd in f.fns {
+		lint_opt_body(fd.body, fd.name, c_ret_is_opt(fd), out)
+	}
+}
+
+fn c_ret_is_opt(fd: FnDecl) -> bool {
+	return false if not fd.has_ret
+	return match fd.ret {
+		TOpt(_) => true
+		_ => false
+	}
+}
+
+fn lint_opt_body(body: list[Stmt], fname: str, ret_opt: bool, mut &out: list[str]) {
+	for s in body {
+		match s {
+			SLet(nm, ty, im, ht, v) => lint_opt_expr(v, fname, ret_opt, out)
+			SAssign(lhs, rhs) => lint_opt_expr(rhs, fname, ret_opt, out)
+			SPrint(v) => lint_opt_expr(v, fname, ret_opt, out)
+			SReturn(hv, v) => lint_opt_expr(v, fname, ret_opt, out)
+			SExpr(v) => lint_opt_expr(v, fname, ret_opt, out)
+			SIf(c, tb, he, eb) => lint_opt_two(tb, eb, fname, ret_opt, out)
+			SIfLet(nm, v, tb, he, eb) => lint_opt_two(tb, eb, fname, ret_opt, out)
+			SFor(hc, c, b) => lint_opt_body(b, fname, ret_opt, out)
+			SForIn(nm, it, b) => lint_opt_body(b, fname, ret_opt, out)
+			SSelect(arms) => lint_opt_arms(arms, fname, ret_opt, out)
+			_ => lint_skip()
+		}
+	}
+}
+
+fn lint_opt_two(a: list[Stmt], b: list[Stmt], fname: str, ret_opt: bool, mut &out: list[str]) {
+	lint_opt_body(a, fname, ret_opt, out)
+	lint_opt_body(b, fname, ret_opt, out)
+}
+
+fn lint_opt_arms(arms: list[SelArm], fname: str, ret_opt: bool, mut &out: list[str]) {
+	for a in arms {
+		lint_opt_body(a.body, fname, ret_opt, out)
+	}
+}
+
+fn lint_opt_expr(e: Expr, fname: str, ret_opt: bool, mut &out: list[str]) {
+	match e {
+		ECoalesce(a, b, jump) => lint_opt_coalesce(a, b, fname, ret_opt, out)
+		EForce(x) => lint_opt_force(x, fname, ret_opt, out)
+		EBinary(op, a, b) => lint_opt_pair(a, b, fname, ret_opt, out)
+		EUnary(op, x) => lint_opt_expr(x, fname, ret_opt, out)
+		EField(t, nm) => lint_opt_expr(t, fname, ret_opt, out)
+		EOptChain(t, nm) => lint_opt_expr(t, fname, ret_opt, out)
+		ETry(x) => lint_opt_expr(x, fname, ret_opt, out)
+		ECall(nm, args) => lint_opt_args(args, fname, ret_opt, out)
+		EMethod(t, nm, args) => lint_opt_args(args, fname, ret_opt, out)
+		_ => lint_skip()
+	}
+}
+
+fn lint_opt_pair(a: Expr, b: Expr, fname: str, ret_opt: bool, mut &out: list[str]) {
+	lint_opt_expr(a, fname, ret_opt, out)
+	lint_opt_expr(b, fname, ret_opt, out)
+}
+
+fn lint_opt_args(args: list[Expr], fname: str, ret_opt: bool, mut &out: list[str]) {
+	for a in args {
+		lint_opt_expr(a, fname, ret_opt, out)
+	}
+}
+
+fn lint_opt_coalesce(a: Expr, b: Expr, fname: str, ret_opt: bool, mut &out: list[str]) {
+	if is_nil_expr(b) {
+		out.append(f"L201 `?? nil` in `{fname}` changes nothing — the result is optional either way")
+	}
+	lint_opt_expr(a, fname, ret_opt, out)
+	lint_opt_expr(b, fname, ret_opt, out)
+}
+
+fn lint_opt_force(x: Expr, fname: str, ret_opt: bool, mut &out: list[str]) {
+	if ret_opt {
+		out.append(f"L202 `!` in `{fname}`, which answers a `T?` — `?` hands the absence back instead of aborting")
+	}
+	lint_opt_expr(x, fname, ret_opt, out)
+}
+
+fn is_nil_expr(e: Expr) -> bool {
+	return match e {
+		ENil => true
+		_ => false
+	}
+}
+
+fn lint_skip() {
+	return
 }
 
 # lint_imports reports an import whose namespace nothing reaches through.
@@ -187,6 +297,8 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EBinary(oper, a, b) => walk_pair(a, b, ids, calls, ns)
 		ECall(name, args) => walk_call(name, args, ids, calls, ns)
 		EField(target, name) => walk_expr(target, ids, calls, ns)
+		EOptChain(target, name) => walk_expr(target, ids, calls, ns)
+		ETry(x) => walk_expr(x, ids, calls, ns)
 		EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
 		EMethod(target, meth, args) => walk_method(target, meth, args, ids, calls, ns)
 		EListLit(elems) => walk_all(elems, ids, calls, ns)

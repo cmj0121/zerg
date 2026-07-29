@@ -100,7 +100,7 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 		// A built-in error kind used as a constructor — `ValueError("msg")` — builds an
 		// `Err` of that kind carrying the message (docs/code/errors.md, GRAMMAR group 8). The
 		// fixed set is compiler-owned; a user cannot add one this phase.
-		if _, ok := errKinds[callee.Name]; ok {
+		if _, ok := ErrCtorKind(callee.Name); ok {
 			return c.errConstruct(n, callee.Name), true
 		}
 		switch callee.Name {

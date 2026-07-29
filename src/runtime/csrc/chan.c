@@ -260,7 +260,7 @@ void zrt_chan_sender_release(zrt_chan *ch) {
  * is written down. A send on a closed channel is a program error, not a value: the
  * counterparty is gone and there is nothing to hand the value to. */
 static _Noreturn void chan_send_closed(void) {
-	zrt_abort_kind(ZRT_ERR_SEND_ON_CLOSED, "send on a closed channel");
+	zrt_abort_kind(ZRT_ERR_SEND_ON_CLOSED, "SendOnClosedError: send on a closed channel");
 }
 
 void zrt_chan_send(zrt_chan *ch, const void *val) {
@@ -362,11 +362,6 @@ zrt_err zrt_chan_close_err(zrt_chan *ch) {
 	zrt_err e = ch->err;
 	zrt_mutex_unlock(&ch->lock);
 	return e;
-}
-
-const char *zrt_chan_err(zrt_chan *ch) {
-	zrt_err e = zrt_chan_close_err(ch);
-	return (e.kind == ZRT_ERR_STOP_ITERATION) ? NULL : e.msg;
 }
 
 /* --- select ------------------------------------------------------------------ */

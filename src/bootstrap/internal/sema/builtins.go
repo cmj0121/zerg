@@ -20,31 +20,62 @@ var errDef = &types.TypeDef{Name: "Err", Struct: &types.StructDef{}}
 //nolint:gochecknoglobals // a single interned built-in nominal type.
 var errType Type = &types.Struct{Def: errDef}
 
+// errKind is one entry of the taxonomy: the discriminating integer, and whether the name
+// is also a CONSTRUCTOR. Every name is an `is` target; `ctor` is the narrower permission
+// to build one by hand with `Name(msg)`, which not every kind may grant (see errKinds).
+type errKind struct {
+	kind int
+	ctor bool
+}
+
 // errKinds is the FIXED, built-in error taxonomy (docs/code/errors.md, GRAMMAR group 8):
 // the nameable error types a program may CHOOSE from but cannot extend this phase. Each
-// name is both a constructor `Name(msg) -> Err` (its message payload) and an `is`
-// target on an Err. The integer value is the discriminating kind; it is MIRRORED by the
-// runtime (src/runtime/csrc/zergrt.h ZRT_ERR_*) so a runtime abort ("ValueError: …",
-// "IOError: …") and a `raise ValueError("…")` reify to the same kind. These are modeled
-// as one common carrier (the erased `Err`, C `zrt_err`) tagged by kind rather than a
-// user-extensible hierarchy — the minimal MVP shape that keeps the Result/Either
-// lowering (emit_result.go) unchanged while making the named kinds real at the surface.
+// name is an `is` target on an Err, and all but one are also a constructor
+// `Name(msg) -> Err` (its message payload). The integer value is the discriminating kind;
+// it is MIRRORED by the runtime (src/runtime/csrc/zergrt.h ZRT_ERR_*) so a runtime abort
+// ("ValueError: …", "IOError: …") and a `raise ValueError("…")` reify to the same kind.
+// These are modeled as one common carrier (the erased `Err`, C `zrt_err`) tagged by kind
+// rather than a user-extensible hierarchy — the minimal MVP shape that keeps the
+// Result/Either lowering (emit_result.go) unchanged while making the named kinds real at
+// the surface.
+//
+// `StopIteration` is the one name a program may TEST but not CONSTRUCT, and the asymmetry
+// is load-bearing rather than tidy. It is not a failure but the end-of-stream sentinel a
+// clean channel close carries (chan.c chan_stop_iteration), and the runtime tells a clean
+// close from a crashing one by that kind alone — `ch->err.kind != ZRT_ERR_STOP_ITERATION`
+// is the whole test, in the receive lowering's Right and in select's crash-close scan.
+// Were the name constructible, `raise StopIteration("…")` in a sender would close its
+// channel wearing the sentinel's kind, and every receiver would read a crash as a clean
+// end. Denying the constructor is what keeps that reasoning true; `err is StopIteration`
+// — the reason a consumer can tell the two apart at the surface — costs nothing and stays.
 //
 //nolint:gochecknoglobals // a fixed, compiler-owned lookup table.
-var errKinds = map[string]int{
-	"ValueError":    1,
-	"OverflowError": 2,
-	"IOError":       3,
-	"EncodingError": 4,
-	"IndexError":    5,
-	"KeyError":      6,
+var errKinds = map[string]errKind{
+	"ValueError":        {1, true},
+	"OverflowError":     {2, true},
+	"IOError":           {3, true},
+	"EncodingError":     {4, true},
+	"IndexError":        {5, true},
+	"KeyError":          {6, true},
+	"DeadlockError":     {7, true},
+	"SendOnClosedError": {8, true},
+	"StopIteration":     {9, false},
 }
 
 // ErrKind reports the built-in error kind a name denotes and whether it is one, so the
-// backend can lower `Name(msg)` and `err is Name` to the shared kind constant.
+// backend can lower `err is Name` to the shared kind constant. Every name in the taxonomy
+// is testable this way; whether it can also be BUILT is ErrCtorKind's narrower question.
 func ErrKind(name string) (int, bool) {
 	k, ok := errKinds[name]
-	return k, ok
+	return k.kind, ok
+}
+
+// ErrCtorKind reports the kind `Name(msg)` constructs, and whether the name is a
+// constructor at all — the `is`-only names (StopIteration) answer false, so the call falls
+// through to the ordinary paths and is reported as the undefined name it is.
+func ErrCtorKind(name string) (int, bool) {
+	k, ok := errKinds[name]
+	return k.kind, ok && k.ctor
 }
 
 // isErr reports whether a type is the built-in erased error `Err` (the Right of a

@@ -27,6 +27,20 @@ struct Emitter {
 	# C has no shadowing inside a function, so the second one has to be spelled
 	# differently or the C compiler rejects the redefinition.
 	env_cnames: list[str]
+
+	# env_dead is each binding's liveness after a `del`, in the same order: 0 live, 1
+	# revoked on every path reaching here, 2 revoked on some paths and not others. It is
+	# what makes `del` mean anything — without it `del v` followed by a use of `v` compiled
+	# happily for every type, and the statement was a comment with a keyword in front.
+	env_dead: list[int]
+
+	# chan_cnames / chan_dirs are the CHANNEL BINDINGS whose scope has not ended yet, in
+	# declaration order, with the direction each one holds its reference as. A channel
+	# binding owns what it holds — a holder count, and a send count too when it is
+	# send-capable — and gives it back when its scope ends, which is what makes the spec's
+	# "close early by narrowing the scope" idiom work without any statement at all.
+	chan_cnames: list[str]
+	chan_dirs: list[int]
 	sig_names: list[str]
 	sig_rets: list[Ty]
 	sig_hasret: list[bool]
@@ -354,6 +368,9 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_names = []
 	em.env_tys = []
 	em.env_cnames = []
+	em.env_dead = []
+	em.chan_cnames = []
+	em.chan_dirs = []
 	em.ref_names = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
@@ -363,6 +380,7 @@ fn c_reset_env(mut &em: Emitter) {
 		em.env_names.append(em.k_names[i])
 		em.env_tys.append(em.k_tys[i])
 		em.env_cnames.append("zg_" + em.k_names[i])
+		em.env_dead.append(0)
 		i = i + 1
 	}
 }
@@ -372,6 +390,7 @@ fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
 	em.env_names.append(name)
 	em.env_tys.append(t)
 	em.env_cnames.append(cname)
+	em.env_dead.append(0)
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -412,6 +431,115 @@ fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 		i = i - 1
 	}
 	return TUnknown
+}
+
+# --- `del` liveness ----------------------------------------------------------------
+#
+# `del name` revokes a name's access (GRAMMAR group 11, docs/core/memory.md). The
+# revocation is the entire statement — it emits no C — so it is worth only as much as the
+# check that a revoked name is never read again, and the check has to be FLOW-SENSITIVE or
+# it says the wrong thing about an `if` that revokes on one branch.
+#
+# The model is the seed's (src/bootstrap/internal/sema/sema.go, the `liveness` type and
+# mergeDead), carried on the flat env stack this emitter already keeps: a name dead on
+# every path reaching a use is a hard use-after-del, dead on some paths but not others is
+# its own case, and the two get different words because they are different mistakes.
+#
+# It rides the emission walk rather than a pass of its own, which is why the merge points
+# are written out at each control-flow form: the emitter already visits a body exactly
+# once, in source order.
+
+# c_live_idx is the index of the innermost binding of a name, or -1 when nothing binds it.
+fn c_live_idx(mut &em: Emitter, name: str) -> int {
+	mut i := em.env_names.len() - 1
+	for i >= 0 {
+		return i if em.env_names[i] == name
+		i = i - 1
+	}
+	return -1
+}
+
+# c_live_del marks a name revoked on this path. Revoking is idempotent, so a symmetric
+# `del` on both branches of an `if` merges cleanly back to revoked.
+fn c_live_del(mut &em: Emitter, name: str) {
+	idx := c_live_idx(em, name)
+	return if idx < 0
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		if i == idx {
+			out.append(1)
+		} else {
+			out.append(em.env_dead[i])
+		}
+		i = i + 1
+	}
+	em.env_dead = out
+}
+
+# c_live_use refuses a read of a revoked name. This is the whole payoff: what used to be a
+# use-after-free waiting to happen is a diagnostic at the line that wrote it.
+fn c_live_use(mut &em: Emitter, name: str) {
+	idx := c_live_idx(em, name)
+	return if idx < 0
+	if em.env_dead[idx] == 1 {
+		raise "`" + name + "` is used after del"
+	}
+	if em.env_dead[idx] == 2 {
+		raise "`" + name + "` is used after del on some paths"
+	}
+}
+
+# c_live_save copies the current liveness, so a branch can be analysed from the shared
+# entry state and its end merged rather than leaking into its sibling.
+fn c_live_save(mut &em: Emitter) -> list[int] {
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		out.append(em.env_dead[i])
+		i = i + 1
+	}
+	return out
+}
+
+# c_live_restore puts a saved entry state back, so the next branch starts where the first
+# one did. A binding the branch declared is past the end of the saved list and stays as it
+# is — it is out of scope by the time this matters.
+fn c_live_restore(mut &em: Emitter, saved: list[int]) {
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		if i < saved.len() {
+			out.append(saved[i])
+		} else {
+			out.append(em.env_dead[i])
+		}
+		i = i + 1
+	}
+	em.env_dead = out
+}
+
+# c_live_merge joins one path's end state into the current one, entry by entry.
+fn c_live_merge(mut &em: Emitter, other: list[int]) {
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		if i < other.len() {
+			out.append(c_live_join(em.env_dead[i], other[i]))
+		} else {
+			out.append(em.env_dead[i])
+		}
+		i = i + 1
+	}
+	em.env_dead = out
+}
+
+# c_live_join is the two-path join: revoked on both stays revoked, live on both stays live,
+# and one of each is the inconsistent case a later use is refused for.
+fn c_live_join(a: int, b: int) -> int {
+	return 0 if a == 0 and b == 0
+	return 1 if a == 1 and b == 1
+	return 2
 }
 
 # c_sig_key is how a function is looked up in the signature and parameter tables. A free
@@ -973,6 +1101,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		ERecv(ch) => c_recv(em, ch, sb)
 		EForce(x) => c_force(em, x, sb)
 		ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
+		EGuard(body) => c_guard(em, body, sb)
 	}
 }
 
@@ -1019,6 +1148,170 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 		out = out + c_stmt(em, s, "")
 	}
 	return out + f"}} {val}; }})"
+}
+
+# --- guard: the way back from the abort tier --------------------------------------
+#
+# `guard { … }` runs its block under a CATCHING abort handler and answers a `Result[T]`:
+# the block's value as the Left, or — when something inside aborted — the Err it carried
+# as the Right. It is the only construct that stops an abort, which is why the whole of
+# the runtime's handler protocol shows up here and nowhere else:
+#
+#   zrt_handler_push_catch  links a frame and marks it `catches`, so an abort landing on
+#                           it prints NO diagnostic — the program is handling the error
+#                           and the message rides in the Err instead;
+#   setjmp(frame.buf)       arms the landing pad. It has to be evaluated in the ENCLOSING
+#                           function's own activation — a longjmp into a frame that has
+#                           returned is undefined — which is why this is a C statement
+#                           expression rather than a call to a helper;
+#   zrt_abort               unwinds every pending defer/drop down to frame.mark and
+#                           longjmps here, leaving the frame LINKED: the landing pad owns
+#                           the pop, on both paths, which is what keeps the handler chain
+#                           balanced when a guard is caught and when it is not;
+#   zrt_taken_err           hands back the Err the abort carried.
+#
+# The chain lives in the per-coroutine zrt_tls the scheduler swaps at every context
+# switch, so a `guard` catches aborts on the CURRENT stack only — a coroutine spawned
+# inside the block has a handler chain of its own and its crash is untouched, exactly as
+# docs/code/errors.md says.
+#
+# One C hazard is inherited rather than solved, and is the reason a guarded block is
+# usually written as one call: an automatic variable of the enclosing function that is
+# MODIFIED inside the block and read after a caught abort has an indeterminate value
+# unless it is `volatile` (C99 7.13.2.1). A variable only read, or written before the
+# guard, is unaffected — longjmp restores the register state setjmp saw.
+fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
+	em.used_rt = true
+	c_guard_no_jump(body, false)
+	vt := c_guard_val_ty(em, body)
+	cn := c_carrier_name(em, c_guard_elem(vt))
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	fr := "zg_gf" + tag
+	res := "zg_gr" + tag
+
+	n := body.len()
+	mut upto := n
+	if n > 0 and c_is_expr_stmt(body[n - 1]) {
+		upto = n - 1
+	}
+	mut inner := ""
+	mut i := 0
+	for i < upto {
+		inner = inner + c_stmt(em, body[i], "")
+		i = i + 1
+	}
+	inner = inner + c_guard_ok(em, body, upto, vt, res, sb)
+
+	mut out := "({ zrt_frame " + fr + "; " + cn + " " + res + " = {0}; zrt_handler_push_catch(&" + fr + ");"
+	out = out + " if (setjmp(" + fr + ".buf) == 0) { " + inner
+	out = out + " zrt_unwind_to(" + fr + ".mark); zrt_handler_pop(&" + fr + "); }"
+	out = out + " else { zrt_handler_pop(&" + fr + "); " + res + ".tag = 1; " + res + ".err = zrt_taken_err(); }"
+	return out + " " + res + "; })"
+}
+
+# c_guard_ok writes the Left: the block ran to its end, so its value is the answer.
+fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, sb: Subst) -> str {
+	# a block whose last statement is not an expression has no value at all (GRAMMAR: it
+	# is `nil`), so the tag alone is what there is to say
+	return res + ".tag = 0;" if upto == body.len()
+
+	val := c_expr(em, c_expr_stmt_of(body[upto]), sb)
+
+	# FLATTENING: a block that already yields a Result IS the answer. An abort inside and a
+	# Right handed back are the same ending, so they must not nest (docs/code/errors.md).
+	return res + " = " + val + ";" if c_is_result(vt)
+
+	# a value-less last expression still has to RUN — it was written for its effect
+	return val + "; " + res + ".tag = 0;" if c_is_nil_ty(vt)
+	return res + ".tag = 0; " + res + ".ok = " + val + ";"
+}
+
+# c_guard_val_ty is the guarded BLOCK's value type. GRAMMAR gives a block the value of its
+# last statement, and only an expression statement has one — every other statement, and an
+# empty block, yields `nil`.
+#
+# It is deliberately computed from the source BEFORE the block is emitted, because
+# c_infer(EGuard) has to answer the same thing for a caller that types the guard without
+# lowering it (`guard { … } ?? 0` types its left side first). That is also the one thing it
+# cannot do: a name bound INSIDE the block is not in scope yet, so it is refused by name
+# rather than typed as whatever `int64_t` would make of it.
+fn c_guard_val_ty(mut &em: Emitter, body: list[Stmt]) -> Ty {
+	n := body.len()
+	return TNil if n == 0
+	return TNil if not c_is_expr_stmt(body[n - 1])
+	t := c_infer(em, c_expr_stmt_of(body[n - 1]))
+	if c_is_unknown(t) {
+		raise "NotImplemented: a `guard` whose block ends in a name bound inside it — give the block a call or a literal as its value"
+	}
+	return TNil if c_is_nil_ty(t)
+	return t
+}
+
+# c_guard_elem is the guard's Result PAYLOAD: the block's value type, or — when that is
+# already a Result — the type it carries, which is the flattening rule.
+fn c_guard_elem(vt: Ty) -> Ty {
+	return c_result_elem(vt) if c_is_result(vt)
+	return vt
+}
+
+fn c_is_expr_stmt(s: Stmt) -> bool {
+	return match s {
+		SExpr(_) => true
+		_ => false
+	}
+}
+
+fn c_expr_stmt_of(s: Stmt) -> Expr {
+	return match s {
+		SExpr(x) => x
+		_ => ENil
+	}
+}
+
+# c_guard_no_jump refuses a jump that would LEAVE the guarded block: a `return`, or a
+# `break`/`continue` belonging to a loop outside the guard. Either one jumps out of the C
+# statement expression with the catching frame still linked, and the next abort anywhere
+# in the program lands on an activation that has already returned. There is no lowering
+# for that short of a second unwind path, so it is named instead of miscompiled.
+#
+# `in_loop` is set for the body of a loop written INSIDE the guard, whose break belongs to
+# it and never crosses the frame.
+fn c_guard_no_jump(body: list[Stmt], in_loop: bool) {
+	for s in body {
+		match s {
+			SReturn(has_val, e) => c_guard_jump_err("return")
+			SReturnIf(v, cond) => c_guard_jump_err("return")
+			SBreak => c_guard_loop_jump("break", in_loop)
+			SContinue => c_guard_loop_jump("continue", in_loop)
+			SIf(cond, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
+			SIfLet(nm, v, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
+			SFor(is_cond, cond, body_b) => c_guard_no_jump(body_b, true)
+			SForIn(nm, it, body_b) => c_guard_no_jump(body_b, true)
+			SSelect(arms) => c_guard_no_jump_sel(arms, in_loop)
+			_ => c_skip()
+		}
+	}
+}
+
+fn c_guard_no_jump_two(a: list[Stmt], b: list[Stmt], in_loop: bool) {
+	c_guard_no_jump(a, in_loop)
+	c_guard_no_jump(b, in_loop)
+}
+
+fn c_guard_no_jump_sel(arms: list[SelArm], in_loop: bool) {
+	for a in arms {
+		c_guard_no_jump(a.body, in_loop)
+	}
+}
+
+fn c_guard_loop_jump(kw: str, in_loop: bool) {
+	return if in_loop
+	c_guard_jump_err(kw)
+}
+
+fn c_guard_jump_err(kw: str) {
+	raise "NotImplemented: `" + kw + "` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
@@ -1247,6 +1540,12 @@ fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 }
 
 fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+	# a `close` reaching the expression dispatch is one written where a statement cannot go.
+	# It is checked ahead of every user symbol, so no binding or declaration can take the
+	# name over — `close` is a built-in and not something a program may define.
+	if name == "close" {
+		raise "'close' is a statement, not a value: write `close(ch)` on a line of its own"
+	}
 	if c_is_intrinsic(name) {
 		em.used_rt = true
 		return f"{c_intrinsic(name)}({c_args(em, args, sb)})"
@@ -1418,6 +1717,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		em.used_fnptr = true
 		return f"((zg_fnptr)zg_{n})"
 	}
+
+	# every read of a binding funnels through here, which is what makes this the one place
+	# a use after `del` has to be caught
+	c_live_use(em, n)
 	return c_var_cname(em, n)
 }
 
@@ -1576,6 +1879,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ERecv(ch) => TResult(c_chan_elem(c_infer(em, ch)))
 		EForce(x) => c_result_elem(c_infer(em, x))
 		ECoalesce(a, b, jump) => c_result_elem(c_infer(em, a))
+		EGuard(body) => TResult(c_guard_elem(c_guard_val_ty(em, body)))
 	}
 }
 
@@ -1702,12 +2006,11 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
 		SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
-		SExpr(e) => f"{ind}{c_expr(em, e, c_nosub())};\n"
+		SExpr(e) => c_expr_stmt(em, e, ind)
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
 		SIfLet(name, value, then_body, has_else, else_body) => c_iflet(em, name, value, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
-		SGuard(body) => c_block(em, body, ind)
 		SRaise(x) => c_raise(em, x, ind)
 		SDefer(x) => c_defer(em, x, ind)
 		SSpawn(x) => c_spawn(em, x, ind)
@@ -1717,6 +2020,27 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
+	}
+}
+
+# c_expr_stmt lowers a bare expression statement. A `guard` in statement position is a
+# guard whose Result nobody reads — which is legal, and is what `guard { risky() }` means —
+# but the C it lowers to is a statement expression, and one whose value is discarded draws
+# a -Wunused-value. Writing the discard down as a cast says the same thing to the reader
+# and keeps the build log free of nine warnings nobody should have to learn to ignore.
+fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
+	# `close(ch)` is a statement rather than a value, so it is taken before the expression
+	# dispatch ever sees the call
+	return c_close(em, c_call_args_of(e), ind) if c_is_close_call(e)
+	rendered := c_expr(em, e, c_nosub())
+	return f"{ind}(void)({rendered});\n" if c_is_guard(e)
+	return f"{ind}{rendered};\n"
+}
+
+fn c_is_guard(e: Expr) -> bool {
+	return match e {
+		EGuard(_) => true
+		_ => false
 	}
 }
 
@@ -2153,29 +2477,61 @@ fn c_spawn_no_borrow(mut &em: Emitter, cal: Callee) {
 	}
 }
 
-# c_del lowers `del name`. A channel has no explicit close in this language: it closes
-# when its last SENDER handle goes, so `del ch` drops one. That is what lets a receiver
-# ever see the end of a stream — the creator is a sender too, and until it says
-# otherwise the channel can never reach zero.
+# c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL
+# no-longer-sendable. That is a property of the channel and not of a holder, so it moves
+# no count: `ch` keeps its reference and stays readable, a receive drains what is buffered
+# and then answers the Right, and closing an already-closed channel changes nothing. One
+# runtime call is the whole lowering.
 #
-# For anything that is not a channel this is a no-op today: revoking a plain name's
-# access needs the ownership tracking the subset does not have.
-fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
-	t := c_lookup_var(em, name)
+# It does NOT replace auto-close, which stays the everyday shape — a producer closes by
+# FINISHING. Two things depend on that and a flag cannot do either: a crashing producer
+# never reaches a `close` call, and its unwind is what carries the crash Err to the
+# receiver; and four producers fanning into one channel need no coordination because the
+# last one to return closes it. A channel-level close called by one of them would end the
+# stream for its siblings, which is the footgun this language was designed around. `close`
+# is the conditional, early form: end this stream before my scope does.
+#
+# Two refusals, and both are bugs the type system can catch: a non-channel has no send end
+# at all, and a receive-only end must not be able to end a stream on the producers' behalf.
+fn c_close(mut &em: Emitter, args: list[Expr], ind: str) -> str {
+	if args.len() != 1 {
+		raise "close takes exactly one argument, the channel to close"
+	}
+	t := c_infer(em, args[0])
 	if not c_is_chan(t) {
-		return ind + "/* del " + name + " */\n"
+		raise "close requires a channel, found " + ty_name(t)
+	}
+	if c_chan_dir(t) == 2 {
+		raise "cannot close a receive-only channel " + ty_name(t) + ": a consumer may not end a stream on the producers' behalf"
 	}
 	em.used_rt = true
 	em.used_conc = true
-	cn := c_var_cname(em, name)
+	return f"{ind}zrt_chan_close({c_expr(em, args[0], c_nosub())});\n"
+}
 
-	# a receive-only end has no send capability to give up, and giving up its holder is the
-	# one thing `del` must not do (see the table above)
-	return ind + "/* del " + name + " — a receive-only end is not a sender */\n" if c_chan_dir(t) == 2
+# c_is_close_call reports whether an expression is a call of the `close` built-in. It is
+# NOT a name a program can bind: the check runs before any user symbol is consulted, so
+# `close` cannot be defined, shadowed or overloaded. The file method `f.close()` is an
+# EMethod and never reaches here.
+fn c_is_close_call(e: Expr) -> bool {
+	return match e {
+		ECall(n, _) => n == "close"
+		_ => false
+	}
+}
 
-	# sender_release drops the sender AND the holder, so the copy in front puts the holder
-	# back: `del ch` is a DOWNGRADE, not a handoff
-	return ind + "zrt_chan_copy(" + cn + "); zrt_chan_sender_release(" + cn + ");\n"
+# c_del lowers `del name`: it REVOKES the name, and nothing else. The revocation is the
+# whole statement — c_live_del records it and c_live_use rejects a later read, which is
+# what makes `del` mean one thing for every type.
+#
+# It emits no C. A channel handle is not released here for the same reason scope exit does
+# not release one (see the table above): this emitter has no copy discipline for channels,
+# so a second name for one handle is an alias, and dropping the holder would free storage
+# another name still points at. Giving up the SEND end is `close(ch)`, which is a different
+# statement now and keeps its holder on purpose.
+fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
+	c_live_del(em, name)
+	return ind + "/* del " + name + " */\n"
 }
 
 fn c_is_chan(t: Ty) -> bool {
@@ -2253,6 +2609,14 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_done + ");\n"
 
 	# the dispatch. Each recv arm's binding is already in scope, so its body just runs.
+	#
+	# Exactly one arm runs, so for the liveness they are branches of one `if`: each body is
+	# analysed from the SAME entry state and their ends are joined. Without the restore a
+	# `del` in the first arm would be carried into the second, and a perfectly good read
+	# there would be refused.
+	entry := c_live_save(em)
+	mut acc := entry
+	mut acc_set := false
 	mut first := true
 	mut k := 0
 	for a in arms {
@@ -2302,9 +2666,17 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 			em.env_names.append(a.bind)
 			em.env_tys.append(TResult(elem))
 			em.env_cnames.append(rr)
+			em.env_dead.append(0)
 		}
+		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")
+		if acc_set {
+			c_live_merge(em, acc)
+		}
+		acc = c_live_save(em)
+		acc_set = true
 	}
+	c_live_restore(em, acc)
 	if not first {
 		out = out + in2 + "}\n"
 	}
@@ -2338,11 +2710,17 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_names := em.env_names
 	saved_tys := em.env_tys
 	saved_cnames := em.env_cnames
+	saved_dead := em.env_dead
+	saved_chan_cnames := em.chan_cnames
+	saved_chan_dirs := em.chan_dirs
 	saved_refs := em.ref_names
 	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false)))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
+	em.env_dead = saved_dead
+	em.chan_cnames = saved_chan_cnames
+	em.chan_dirs = saved_chan_dirs
 	em.ref_names = saved_refs
 	em.used_fnptr = true
 	return "((zg_fnptr)zg_" + name + ")"
@@ -2453,6 +2831,11 @@ struct Callee {
 # lambda here may capture nothing (c_lambda refuses it), so there would be no environment
 # to hand a coroutine even if the shape were accepted.
 fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
+	# `close` is a built-in statement, not a function: there is no symbol to capture into a
+	# thunk's env, and its lowering is a block rather than a call
+	if c_is_close_call(x) {
+		raise "'close' is a statement, not a value: write `close(ch)` on a line of its own"
+	}
 	n := c_call_name(x)
 	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
 	if not c_is_method_expr(x) {
@@ -2874,7 +3257,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	in2 := ind + "    "
 	mut out := ind + "{\n" + in2 + "int64_t zg_hi = " + hi + ";\n"
 	out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + cmp + "zg_hi; " + cv + "++) {\n"
-	out = out + c_block(em, body, in2 + "    ")
+	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	return out + ind + "}\n"
 }
@@ -2913,7 +3296,7 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	mut out := ind + "{\n" + in2 + "zrt_chan *zg_cit = " + it + ";\n"
 	out = out + in2 + et + " " + cv + ";\n"
 	out = out + in2 + "while (zrt_chan_recv(zg_cit, &" + cv + ") == 0) {\n"
-	out = out + c_block(em, body, in2 + "    ")
+	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	out = out + in2 + "{ zrt_err zg_ce = zrt_chan_close_err(zg_cit);\n"
 	out = out + in2 + "  if (zg_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zg_ce); } }\n"
@@ -2943,7 +3326,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	mut out := ind + "{\n" + in2 + "zrt_list zg_it = " + it + ";\n"
 	out = out + in2 + "for (size_t zg_i = 0; zg_i < zrt_list_len(&zg_it); zg_i++) {\n"
 	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
-	out = out + c_block(em, body, in2 + "    ")
+	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	return out + ind + "}\n"
 }
@@ -2956,6 +3339,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 		eff = c_infer(em, ival)
 	}
 	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
+	return c_let_chan(em, name, eff, ival, ind) if c_is_chan(eff)
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
 	# right-hand side names the OUTER n, and resolving it after would make the new
@@ -2963,6 +3347,78 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff)
 	return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {val};\n"
+}
+
+# c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:
+#
+# It TAKES a reference. An initializer that names existing storage — another binding, a
+# parameter — is somebody else's handle, so this binding takes one of its own, by ITS OWN
+# direction: `tx: chan[int]<- = ch` counts as a sender, `rx: <-chan[int] = ch` counts only
+# as a holder. A freshly built handle (`chan[T](n)`, a call's result) already carries
+# exactly one reference and this binding takes it over, so copying there would leak one.
+#
+# And it GIVES IT BACK at scope exit (c_chan_scope_end). That is the half this emitter did
+# not have, and its absence is why a narrowed binding used to be a bare alias and why the
+# spec's "close early by narrowing the scope" could not work: nothing ever gave the origin
+# handle up, so `senders` never reached zero on its own and every stream needed a statement
+# to end it. With both halves the counts move only where a handle moves, and every handle
+# has exactly one owner.
+fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	dir := c_chan_dir(eff)
+	mut val := c_expr(em, ival, c_nosub())
+	if c_is_lvalue(ival) {
+		val = c_chan_copy_fn(dir) + "(" + val + ")"
+	}
+	c_add_var(em, name, eff)
+	cn := c_var_cname(em, name)
+	em.chan_cnames.append(cn)
+	em.chan_dirs.append(dir)
+	return f"{ind}zrt_chan *{cn} = {val};\n"
+}
+
+# c_chan_scope_end releases every channel binding made since `keep` — the scope that is
+# ending — innermost first, and drops them from the live list.
+#
+# It is emitted rather than deferred, which is the one thing it does not share with the
+# seed. The cost is a channel bound in a frame that ABORTS: its release is skipped and the
+# handle leaks, as everything else in this emitter does on that path. It buys not having to
+# hand the runtime the address of a C local whose block may end before the cleanup stack is
+# unwound, which would be a use-after-free rather than a leak. A coroutine's own handle is
+# unaffected either way: `spawn` releases its capture from the thunk's defer, which does run
+# on the crash path, and that is what closes a channel whose producer died.
+fn c_chan_scope_end(mut &em: Emitter, keep: int, ind: str) -> str {
+	return "" if em.chan_cnames.len() <= keep
+	mut out := ""
+	mut i := em.chan_cnames.len() - 1
+	for i >= keep {
+		out = out + ind + c_chan_release_fn(em.chan_dirs[i]) + "(" + em.chan_cnames[i] + ");\n"
+		i = i - 1
+	}
+	em.chan_cnames = c_strs_take(em.chan_cnames, keep)
+	em.chan_dirs = c_ints_take(em.chan_dirs, keep)
+	return out
+}
+
+fn c_strs_take(xs: list[str], n: int) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < n {
+		out.append(xs[i])
+		i = i + 1
+	}
+	return out
+}
+
+fn c_ints_take(xs: list[int], n: int) -> list[int] {
+	mut out: list[int] = []
+	mut i := 0
+	for i < n {
+		out.append(xs[i])
+		i = i + 1
+	}
+	return out
 }
 
 # c_let_list declares a list binding: a list-literal initializer becomes an init plus a
@@ -3007,16 +3463,44 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	if em.fn_mark != "" {
 		pre = f"{ind}zrt_unwind_to({em.fn_mark});\n"
 	}
+
+	# every channel binding in scope gives its reference back on this path too, after the
+	# defers (which may still name one) and after the return value has been computed
+	pre = pre + c_chan_returning(em, ind)
 	if has_val and not c_is_nil_expr(e) {
 		if em.fn_has_ret {
 			c_chan_check(c_infer(em, e), em.fn_ret, "return")
 		}
-		v := c_expr(em, e, c_nosub())
+		mut v := c_expr(em, e, c_nosub())
+
+		# A channel travelling OUT is a handle the caller will own, so it carries a reference
+		# of its own — taken by the RETURN TYPE's direction, which is what makes
+		# `fn source() -> <-chan[int] { ch := chan[int](); spawn p(ch); return ch }` work:
+		# the caller gets a receive-only holder, `ch`'s own send end goes with this scope, and
+		# the producer is left as the last sender. Without the copy the release below would
+		# take the count the caller is about to rely on.
+		if em.fn_has_ret and c_is_chan(em.fn_ret) and c_is_lvalue(e) {
+			em.used_conc = true
+			v = c_chan_copy_fn(c_chan_dir(em.fn_ret)) + "(" + v + ")"
+		}
 		return f"{ind}return {v};\n" if pre == ""
 		rt := c_type(c_infer(em, e))
 		return ind + "{ " + rt + " zg_rv = " + v + ";\n" + pre + ind + "return zg_rv; }\n"
 	}
 	return pre + ind + "return;\n"
+}
+
+# c_chan_returning renders the release of every channel binding in scope, for a `return`.
+# It does NOT drop them from the live list: the block they belong to still has to release
+# them on its own fall-through path, and a return is one path out of several.
+fn c_chan_returning(mut &em: Emitter, ind: str) -> str {
+	mut out := ""
+	mut i := em.chan_cnames.len() - 1
+	for i >= 0 {
+		out = out + ind + c_chan_release_fn(em.chan_dirs[i]) + "(" + em.chan_cnames[i] + ");\n"
+		i = i - 1
+	}
+	return out
 }
 
 fn c_is_nil_expr(e: Expr) -> bool {
@@ -3026,13 +3510,20 @@ fn c_is_nil_expr(e: Expr) -> bool {
 	}
 }
 
+# Each branch is analysed from the SAME entry liveness and the two ends are joined, so a
+# `del` on one arm leaves the name inconsistent rather than dead — and a use after the `if`
+# gets the message that says so. With no `else`, the fall-through path is the entry state.
 fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
 	mut out := ind + "if " + c_cond(em, cond) + " {\n"
+	entry := c_live_save(em)
 	out = out + c_block(em, then_body, ind + "    ")
+	then_end := c_live_save(em)
+	c_live_restore(em, entry)
 	out = out + ind + "}"
 	if has_else {
 		out = out + " else {\n" + c_block(em, else_body, ind + "    ") + ind + "}"
 	}
+	c_live_merge(em, then_end)
 	return out + "\n"
 }
 
@@ -3061,11 +3552,15 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
 	out = out + f"{in2}if ({tmp}.tag == 0) {{\n"
 	out = out + f"{in2}    {c_type(elem)} {cv} = {tmp}.ok;\n"
+	entry := c_live_save(em)
 	out = out + c_block(em, then_body, in2 + "    ")
+	then_end := c_live_save(em)
+	c_live_restore(em, entry)
 	out = out + in2 + "}"
 	if has_else {
 		out = out + " else {\n" + c_block(em, else_body, in2 + "    ") + in2 + "}"
 	}
+	c_live_merge(em, then_end)
 	return out + "\n" + ind + "}\n"
 }
 
@@ -3074,12 +3569,22 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 	if has_cond {
 		head = ind + "while " + c_cond(em, cond) + " {\n"
 	}
-	return head + c_block(em, body, ind + "    ") + ind + "}\n"
+	return head + c_loop_block(em, body, ind + "    ") + ind + "}\n"
 }
 
-# c_raise lowers `raise e` to the runtime's abort path. Nothing catches it here — `guard`
-# lowers to a plain block in this compiler — so an unhandled raise ends the process with
-# its message, which is what the seed does too. Before this existed, `raise` parsed as
+# c_loop_block emits a loop BODY. It exists for the liveness rather than the C: a loop may
+# run zero times, so the body's end state joins with the entry state instead of replacing
+# it — a name revoked inside a loop is INCONSISTENT after it, not dead.
+fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	entry := c_live_save(em)
+	out := c_block(em, body, ind)
+	c_live_merge(em, entry)
+	return out
+}
+
+# c_raise lowers `raise e` to the runtime's abort path: it unwinds to the innermost
+# handler, which is an enclosing `guard`'s catching frame when there is one and the
+# program's reporting root when there is not. Before this existed, `raise` parsed as
 # nothing at all: the error path fell off the end of the function and the caller carried
 # on with whatever was in the return register.
 # c_cond renders a condition for `if` / `while`. Most expressions already come back fully
@@ -3155,14 +3660,21 @@ fn c_err_kind(name: str) -> int {
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
-	return c_block_marked(em, body, ind) if c_has_defer(body)
+	keep := em.chan_cnames.len()
 	mut out := ""
-	mut i := 0
-	for i < body.len() {
-		out = out + c_stmt(em, body[i], ind)
-		i = i + 1
+	if c_has_defer(body) {
+		out = c_block_marked(em, body, ind)
+	} else {
+		mut i := 0
+		for i < body.len() {
+			out = out + c_stmt(em, body[i], ind)
+			i = i + 1
+		}
 	}
-	return out
+
+	# a channel bound in this block gives its reference back here. A `return` inside the
+	# block already released everything on its way out, so what follows one is dead C.
+	return out + c_chan_scope_end(em, keep, ind)
 }
 
 # c_block_marked wraps a block that schedules a defer: a mark on entry, an unwind on the
@@ -3397,7 +3909,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, false, 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, false, 0)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

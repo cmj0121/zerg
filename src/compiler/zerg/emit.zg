@@ -716,6 +716,77 @@ fn c_is_ctor(name: str) -> bool {
 # naming `zg_fnptr` would otherwise reach the C compiler ahead of the typedef that defines
 # it. (A body that merely holds a function in a local sets the flag as it goes; by then the
 # header has not been assembled yet.)
+# c_check_named_types refuses a DECLARATION that names a type nothing declares. Every
+# other named type resolves to a C typedef this unit writes; one that resolves to nothing
+# was still spelled `zg_<Name>` and handed to cc, which rejected it against a line of
+# generated C under .zerg-cache — the same "loudly, but a long way from the source" the
+# error-constructor case above already names. `Ref[T]` is the one that matters today: the
+# self-hosted compiler has no Ref, so `std/atomic` reached cc as `zg_Ref` rather than being
+# turned away here.
+#
+# It runs over DECLARATIONS only — struct fields, parameters, results — because those are
+# written out before any body is, so this is the earliest point where the whole program's
+# type names are known and nothing has been emitted yet.
+fn c_check_named_types(mut &em: Emitter, f: File) {
+	for s in f.structs {
+		for fd in s.fields {
+			c_check_named_ty(em, fd.ty, "field `" + s.name + "." + fd.name + "`")
+		}
+	}
+	for fn_i in f.fns {
+		c_check_named_ty(em, fn_i.ret, "the result of `" + fn_i.name + "`")
+		for pm in fn_i.params {
+			c_check_named_ty(em, pm.ty, "parameter `" + pm.name + "` of `" + fn_i.name + "`")
+		}
+	}
+}
+
+# c_check_named_ty walks a type to its named leaves. A container is transparent here: the
+# name that fails to resolve is just as unspellable inside a `list[…]` or a `chan[…]`.
+fn c_check_named_ty(mut &em: Emitter, t: Ty, site: str) {
+	match t {
+		TNamed(nm) => c_check_type_name(em, nm, site)
+		TList(el) => c_check_named_ty(em, el, site)
+		TChan(el, _) => c_check_named_ty(em, el, site)
+		TMap(k, v) => c_check_named_ty_two(em, k, v, site)
+		TResult(el) => c_check_named_ty(em, el, site)
+		TTuple(ts) => c_check_named_ty_list(em, ts, site)
+		TFn(ps, r) => c_check_named_fn(em, ps, r, site)
+		_ => c_skip()
+	}
+}
+
+fn c_check_named_ty_two(mut &em: Emitter, a: Ty, b: Ty, site: str) {
+	c_check_named_ty(em, a, site)
+	c_check_named_ty(em, b, site)
+}
+
+fn c_check_named_ty_list(mut &em: Emitter, ts: list[Ty], site: str) {
+	for t in ts {
+		c_check_named_ty(em, t, site)
+	}
+}
+
+fn c_check_named_fn(mut &em: Emitter, ps: list[Ty], r: Ty, site: str) {
+	c_check_named_ty_list(em, ps, site)
+	c_check_named_ty(em, r, site)
+}
+
+fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
+	return if c_is_struct_name(em, nm)
+	return if c_is_enum_ty(em, TNamed(nm))
+	raise "no type named `" + nm + "` (" + site + ")"
+}
+
+fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
+	mut i := 0
+	for i < em.struct_names.len() {
+		return true if em.struct_names[i] == nm
+		i = i + 1
+	}
+	return false
+}
+
 fn c_scan_fnptr(mut &em: Emitter, f: File) {
 	for s in f.structs {
 		for fd in s.fields {
@@ -4013,6 +4084,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
+	c_check_named_types(em, f)
 	c_scan_fnptr(em, f)
 
 	# enums first: a struct may hold an enum by value (a struct is never held by an enum

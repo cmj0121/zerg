@@ -277,7 +277,8 @@ receive arm 綁定的型別與一般 receive 相同——`Result[T]`：有值時
 
 ## Timer 與 cancellation
 
-**timeout** 與 **cancellation** 都從 channel 與 `select` 掉出來——沒有新 primitive。
+**timeout** 與 **cancellation** 都從 channel 與 `select` 掉出來——沒有新 primitive。本節的完整可執行版本是
+[`examples/13_cancel.zg`](../../examples/13_cancel.zg)，`make examples` 會用 `zerg` 建置它**並執行**。
 
 - **timer 就是一條 channel。** `time.after(d)` 回傳一條 receive-only channel，在 `d` 之後**一次**變成可接收
   （`time.ticker(d)` 則重複觸發）；`select` 對它的一個 receive arm 就是 **timeout**。`d` 是以**奈秒**為單位的
@@ -334,6 +335,8 @@ fn main() {
 > sleep 絕不會被當成 deadlock。
 
 ## 共享狀態——actor pattern
+
+本節的完整可執行版本是 [`examples/12_actor.zg`](../../examples/12_actor.zg)，由 `make examples` 建置並執行。
 
 Zerg 沒有鎖、也沒有共享可變狀態，但真實程式需要協調的可變 state——counter、cache、registry。答案是一個
 **pattern**、不是新原語：一個 **actor** 就是一個**獨佔**某份 `mut` state 的 coroutine，只能經由 channel 上的訊息

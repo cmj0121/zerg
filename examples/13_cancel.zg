@@ -1,0 +1,81 @@
+# 13 — Timeout and cancellation: both are channels, and `select` waits on them.
+#
+# Neither is a new primitive. A timer IS a channel — `time.after(d)` hands back
+# one that becomes ready once, after `d` nanoseconds — so a timeout is just a
+# receive arm. Cancellation is a channel too: hand the worker one to watch, and
+# cancel by SENDING on it.
+#
+# Sending is the part worth remembering. A close is an end-of-stream, not an
+# event: a cleanly closed receive arm is DROPPED rather than fired, so closing
+# `cancel` would never fire the cancel arm. It feeds `done` instead — which
+# waits for every watched receive channel — so closing it means "there will be
+# no cancellation", which is exactly what lets `done` fire when the work runs
+# out. Send to stop early; close to say you never will.
+#
+# `spawn` is fire-and-forget with no handle, so there is nothing to kill: a
+# coroutine ends by returning, or by observing an arm and choosing to stop.
+#
+# beyond-the-seed: a directional channel end and the stdlib timers. The
+# bootstrap seed refuses both by name, so this example is built by `zerg`.
+
+import "std/time"
+
+fn gen(out: chan[int]<-, n: int) {
+	mut i := 0
+
+	for i < n {
+		out <- i
+		i = i + 1
+	}
+}
+
+# source is the factory shape: make the channel, spawn the producer, hand back a
+# RECEIVE-ONLY end. The caller was never a sender, so it cannot hold the stream
+# open, and `source`'s own end goes with the function — leaving the producer as
+# the last sender by construction.
+fn source(n: int) -> <-chan[int] {
+	ch := chan[int](2)
+	spawn gen(ch, n)
+	return ch
+}
+
+fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
+	mut total := 0
+
+	for {
+		select {
+			# a value arrived — the arm body is a plain reassignment
+			v := <-work => total = total + v!
+
+			# stopped early: a value was SENT on cancel
+			_ := <-cancel => {
+				out <- total
+				return
+			}
+
+			# timed out — 1ms, in nanoseconds
+			_ := <-time.after(1000000) => {
+				out <- total
+				return
+			}
+
+			# work and cancel have both closed
+			done => {
+				out <- total
+				return
+			}
+		}
+	}
+}
+
+fn main() {
+	cancel := chan[int](1)
+	out := chan[int](1)
+
+	spawn stage(source(3), cancel, out)
+
+	cancel <- 1 # stop it now …
+	# close(cancel)  # … or: no cancellation — let the work finish and `done` fire
+
+	print (<-out)!
+}

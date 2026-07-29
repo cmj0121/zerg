@@ -323,7 +323,9 @@ hangs rather than misbehaves:
 
 ## Timers & cancellation
 
-**Timeouts** and **cancellation** both fall out of channels and `select` — no new primitive.
+**Timeouts** and **cancellation** both fall out of channels and `select` — no new primitive. The
+worked version of this section is [`examples/13_cancel.zg`](../../examples/13_cancel.zg), which
+`make examples` builds with `zerg` **and runs**.
 
 - **A timer is a channel.** `time.after(d)` yields a receive-only channel that becomes ready **once**
   after `d` (`time.ticker(d)` fires repeatedly); a `select` receive arm on it is a **timeout**. `d` is
@@ -385,6 +387,9 @@ a loop.
 > instead of spinning, and a pending sleep is never called a deadlock.
 
 ## Shared state — the actor pattern
+
+The worked version of this section is [`examples/12_actor.zg`](../../examples/12_actor.zg), built and
+run by `make examples`.
 
 Zerg has no locks and no shared mutable state, yet real programs need coordinated mutable state — a
 counter, a cache, a registry. The answer is a **pattern**, not a new primitive: an **actor** is a

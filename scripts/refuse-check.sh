@@ -186,6 +186,49 @@ fn head(x: int?) -> int {
 fn main() { print head(1) }
 EOF
 
+# --- lint: what the toolchain must SAY something about ----------------------------
+#
+# A finding is not a refusal — these programs compile and run — so they are checked
+# through `zerg lint`, which exits non-zero when it has something to report. Same three
+# assertions: it must speak, it must say the expected thing, and it must be the compiler
+# saying it.
+expect_lint() {
+	local name=$1 want=$2
+	local src="$tmp/$name.zg"
+	cat >"$src"
+
+	local out status
+	out=$("$ZERG" lint "$src" 2>&1)
+	status=$?
+
+	if [ $status -eq 0 ]; then
+		echo "SILENT    $name — lint had nothing to say"
+		fail=$((fail + 1))
+		return
+	fi
+	case $out in
+	*"$want"*) pass=$((pass + 1)) ;;
+	*)
+		echo "MESSAGE   $name — wanted \"$want\", got: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		;;
+	esac
+}
+
+expect_lint coalesce-with-nil "L201" <<'EOF'
+fn keep(x: int?) -> int? {
+	return x ?? nil
+}
+fn main() { print keep(1) ?? -1 }
+EOF
+
+expect_lint force-where-try-fits "L202" <<'EOF'
+fn forced(x: int?) -> int? {
+	return x!
+}
+fn main() { print forced(2) ?? -1 }
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

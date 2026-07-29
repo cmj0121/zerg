@@ -400,6 +400,15 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_proc_wait":  true,
 }
 
+// schedFloorIntrinsics are the runtime floor leaves that ride in sched.c rather than in the
+// always-linked sys.c — today the timer leaf the stdlib `time` timers park on. sched.c is
+// linked ONLY under the Concurrency manifest flag, so lowering one of these must set
+// Concurrency (which implies NeedsRuntime): recording it as a sys floor leaf instead would
+// emit a call to a symbol the link line does not carry.
+var schedFloorIntrinsics = map[string]bool{
+	"__zrt_sleep_ns": true,
+}
+
 // strProducingIntrinsics are the sys-floor leaves that return a FRESH str cell
 // (sys.c's sys_str_cell) — the os `env`/`platform`/`arch` leaves. Lowering one makes the
 // program's str management active, so the cell is retained/released instead of leaked.
@@ -438,6 +447,13 @@ func (e *emitter) programCallsIntrinsic(names map[string]bool) bool {
 // the runtime is linked. A shadowed spelling is left to the ordinary call path.
 func (e *emitter) programUsesSysFloor() bool {
 	return e.programCallsIntrinsic(sysFloorIntrinsics)
+}
+
+// programUsesSchedFloor reports whether the program lowers a scheduler-floor intrinsic, so
+// the scheduler translation units are linked. A shadowed spelling is left to the ordinary
+// call path.
+func (e *emitter) programUsesSchedFloor() bool {
+	return e.programCallsIntrinsic(schedFloorIntrinsics)
 }
 
 // programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic —
@@ -578,7 +594,29 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	if s, ok := e.sysIntrinsicEmit(n); ok {
 		return s, true
 	}
+	if s, ok := e.schedIntrinsicEmit(n); ok {
+		return s, true
+	}
 	return e.writeIntrinsicEmit(n)
+}
+
+// schedIntrinsicEmit lowers the scheduler-floor intrinsics — today the `time` timer leaf —
+// to their sched.c primitive. It is separate from sysIntrinsicEmit because the two differ in
+// where they ride and therefore in what a program that calls one has to link: sched.c comes
+// in only under the Concurrency manifest flag, which programUsesSchedFloor sets. A shadowed
+// name is left to the ordinary call path.
+func (e *emitter) schedIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok || len(n.Args) != 1 {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	if id.Name != "__zrt_sleep_ns" {
+		return "", false
+	}
+	return fmt.Sprintf("zrt_sleep_ns(%s)", e.expr(n.Args[0].Value)), true
 }
 
 // sysIntrinsicEmit lowers the non-io sys-floor intrinsics the stdlib drives — the `time`

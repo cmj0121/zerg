@@ -70,6 +70,11 @@ enum Expr {
 	EBinary(str, Expr, Expr)
 	ECall(str, list[Expr])
 	EField(Expr, str)
+
+	# EOptChain is `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
+	# PLACE — the result is itself an optional, which is what lets a chain keep going
+	# without a test at every link.
+	EOptChain(Expr, str)
 	EIndex(Expr, Expr)
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
@@ -392,6 +397,7 @@ fn expr_kind(e: Expr) -> str {
 		EBinary(oper, a, b) => "binary " + oper
 		ECall(name, args) => "call " + name
 		EField(target, name) => "field ." + name
+		EOptChain(target, name) => "optional chain ?." + name
 		EIndex(target, idx) => "index"
 		EMethod(target, meth, args) => "method ." + meth
 		EListLit(elems) => "list-literal"

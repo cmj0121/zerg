@@ -1147,8 +1147,13 @@ fn parse_try(mut &p: Parser) -> Expr {
 # an identifier for its name, and the thing to the left of one of these is a value.
 fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 	mut e := e0
-	for p_at(p, Dot) or p_at(p, LBrack) {
-		if p_at(p, LBrack) {
+	for p_at(p, Dot) or p_at(p, LBrack) or p_at(p, OptDot) {
+		if p_at(p, OptDot) {
+			p_advance(p)
+			fld := cur(p).lexeme
+			p_advance(p)
+			e = EOptChain(e, fld)
+		} else if p_at(p, LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
 			expect(p, RBrack)
@@ -1186,8 +1191,15 @@ fn parse_unary(mut &p: Parser) -> Expr {
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
 	mut e := parse_primary(p)
-	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) {
-		if p_at(p, LBrack) {
+	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) or p_at(p, OptDot) {
+		if p_at(p, OptDot) {
+			# `a?.b` — the lexer has produced this token since it existed and no parser ever
+			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
+			p_advance(p)
+			fld := cur(p).lexeme
+			p_advance(p)
+			e = EOptChain(e, fld)
+		} else if p_at(p, LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
 			expect(p, RBrack)

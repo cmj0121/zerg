@@ -101,30 +101,33 @@ func TestChannelUnbufferedCap(t *testing.T) {
 	}
 }
 
-// TestDelChannelKeepsHold pins what `del ch` means: it gives up the SEND end and keeps an
-// ordinary hold, so the name stays usable. The runtime has no sender-only release, so the
-// hold is taken again first and moved to a slot of its own — and the original slot is
-// nulled so its scope-exit sender drop does not release the hold a second time.
-func TestDelChannelKeepsHold(t *testing.T) {
+// TestCloseMovesNoCount pins what `close(ch)` means: it marks the CHANNEL
+// no-longer-sendable, which is a property of the channel and not of a holder. So the
+// lowering is one runtime call and nothing else — no copy, no release, no rebinding — and
+// `ch` keeps its reference, stays readable, and is still dropped once at scope exit.
+func TestCloseMovesNoCount(t *testing.T) {
 	const src = "fn produce(ch: chan[int]) {\n" +
 		"  ch <- 1\n" +
 		"}\n" +
 		"fn main() {\n" +
 		"  ch := chan[int](1)\n" +
 		"  spawn produce(ch)\n" +
-		"  del ch\n" +
+		"  close(ch)\n" +
 		"  print (<-ch)!\n" +
 		"}"
 	code, _ := emitWithManifest(t, src)
-	for _, want := range []string{
-		"zrt_chan *zg_chk = zrt_chan_copy(zg_ch);",
-		"zrt_chan_sender_release(zg_ch);",
-		"zg_ch = NULL;",
-		"zrt_defer(zg_chan_drop, &zg_chk);",
-		"zg_chanrecv_0(zg_chk)", // the receive afterwards reads the surviving hold
-	} {
-		if !strings.Contains(code, want) {
-			t.Fatalf("emitted C missing %q\n%s", want, code)
+	if !strings.Contains(code, "zrt_chan_close(zg_ch);") {
+		t.Fatalf("emitted C missing the close call\n%s", code)
+	}
+	// the receive afterwards reads the SAME handle: close moved no count and rebound nothing.
+	if !strings.Contains(code, "zg_chanrecv_0(zg_ch)") {
+		t.Fatalf("a receive after close must read the same handle\n%s", code)
+	}
+	// the old lowering gave up the send end and kept a plain hold in a fresh slot. Nothing
+	// of it should survive, or `close` is quietly still the statement it replaced.
+	for _, bad := range []string{"zrt_chan_copy(zg_ch)", "zg_ch = NULL;", "zg_chan_drop"} {
+		if strings.Contains(code, bad) {
+			t.Fatalf("close must not move a count: found %q\n%s", bad, code)
 		}
 	}
 }
@@ -202,7 +205,7 @@ func TestForInChannel(t *testing.T) {
 		"fn main() {\n" +
 		"  ch := chan[int](1)\n" +
 		"  spawn produce(ch)\n" +
-		"  del ch\n" +
+		"  close(ch)\n" +
 		"  for v in ch {\n" +
 		"    print v\n" +
 		"  }\n" +
@@ -239,7 +242,7 @@ func TestReceiveRightCarriesTheKind(t *testing.T) {
 		"fn main() {\n" +
 		"  ch := chan[int](1)\n" +
 		"  spawn produce(ch)\n" +
-		"  del ch\n" +
+		"  close(ch)\n" +
 		"  r := <-ch\n" +
 		"  select {\n" +
 		"    x := <-ch => { print x! }\n" +
@@ -279,7 +282,7 @@ func TestSpawnEnvFreedOnAbort(t *testing.T) {
 		"fn main() {\n" +
 		"  ch := chan[int](1)\n" +
 		"  spawn produce(ch)\n" +
-		"  del ch\n" +
+		"  close(ch)\n" +
 		"  for v in ch {\n" +
 		"    print v\n" +
 		"  }\n" +
@@ -321,7 +324,7 @@ func TestChannelRefusals(t *testing.T) {
 			// hold — the send count would never reach zero and every receiver would hang.
 			name: "directional-parameter",
 			src: "fn produce(out: chan[int]<-) {\n  out <- 1\n}\n" +
-				"fn main() {\n  ch := chan[int]()\n  spawn produce(ch)\n  del ch\n  print (<-ch)!\n}",
+				"fn main() {\n  ch := chan[int]()\n  spawn produce(ch)\n  close(ch)\n  print (<-ch)!\n}",
 			want: "does not lower a directional channel type chan[int]<-",
 		},
 		{
@@ -332,30 +335,28 @@ func TestChannelRefusals(t *testing.T) {
 		{
 			name: "spawn-method-callee",
 			src: "struct Box {\n  n: int\n}\nimpl Box {\n  fn run() {\n    print this.n\n  }\n}\n" +
-				"fn main() {\n  b := Box(1)\n  ch := chan[int](1)\n  spawn b.run()\n  del ch\n}",
+				"fn main() {\n  b := Box(1)\n  ch := chan[int](1)\n  spawn b.run()\n  close(ch)\n}",
 			want: "lowers 'spawn' only on a direct function call",
 		},
 		{
 			name: "mut-ref-across-spawn",
 			src: "fn bump(mut &n: int, ch: chan[int]) {\n  n = n + 1\n  ch <- n\n}\n" +
-				"fn main() {\n  mut n := 0\n  ch := chan[int](1)\n  spawn bump(n, ch)\n  del ch\n  print (<-ch)!\n}",
+				"fn main() {\n  mut n := 0\n  ch := chan[int](1)\n  spawn bump(n, ch)\n  close(ch)\n  print (<-ch)!\n}",
 			want: "cannot pass a 'mut &' argument across a 'spawn'",
 		},
 		{
 			// The scheduler entry shims take a zero-argument function pointer.
 			name: "main-args-with-concurrency",
 			src: "fn produce(ch: chan[int]) {\n  ch <- 1\n}\n" +
-				"fn main(args: list[str]) {\n  ch := chan[int](1)\n  spawn produce(ch)\n  del ch\n  print (<-ch)!\n}",
+				"fn main(args: list[str]) {\n  ch := chan[int](1)\n  spawn produce(ch)\n  close(ch)\n  print (<-ch)!\n}",
 			want: "does not lower a 'main(args)' in a concurrent program",
 		},
 		{
-			// The survivor's release is pushed on the cleanup stack where the `del` runs, so a
-			// `del` in an inner block would free the channel at that block's exit while the
-			// enclosing scope still names it.
-			name: "del-outside-the-binding-block",
-			src: "fn produce(ch: chan[int]) {\n  ch <- 1\n}\n" +
-				"fn main() {\n  ch := chan[int](1)\n  spawn produce(ch)\n  if true {\n    del ch\n  }\n  print (<-ch)!\n}",
-			want: "lowers 'del' on a channel only in the block that binds it",
+			// `close` is a statement and never a value: its lowering is several C statements
+			// plus a rebinding of the channel's slot, which no expression position can hold.
+			name: "close-behind-a-defer",
+			src:  "fn main() {\n  ch := chan[int](1)\n  defer close(ch)\n  ch <- 1\n}",
+			want: "'close' is a statement, not a value",
 		},
 	}
 	for _, tc := range cases {

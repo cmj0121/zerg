@@ -382,8 +382,10 @@ func (e *emitter) recvExpr(n *ast.Recv) string {
 // before it ends; that is zrt_chan_recv's own rule, not something repeated here.
 //
 // The one thing a close does not say by itself is WHY, so the reason is read once the loop
-// is over: NULL is the ordinary end, and a message means a sender died and this loop was
-// handed a truncated stream. Ending quietly there would turn a crash into a short answer.
+// is over: the StopIteration KIND is the ordinary end, and any other kind means a sender
+// died and this loop was handed a truncated stream. Ending quietly there would turn a
+// crash into a short answer, so the sender's own Err is re-raised whole — message, cause
+// and kind — rather than a message copied out of it.
 func (e *emitter) forInChan(n *ast.ForStmt, ct *types.Chan) {
 	it := e.freshName("cit")
 	e.line("{")
@@ -396,7 +398,9 @@ func (e *emitter) forInChan(n *ast.ForStmt, ct *types.Chan) {
 	e.body(n.Body, true)
 	e.line("}")
 	e.popScope()
-	e.line(fmt.Sprintf("if (zrt_chan_err(%s) != NULL) { zrt_abort(zrt_chan_err(%s)); }", it, it))
+	ce := e.freshName("cerr")
+	e.line(fmt.Sprintf("zrt_err %s = zrt_chan_close_err(%s);", ce, it))
+	e.line(fmt.Sprintf("if (%s.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(%s); }", ce, ce))
 	e.indent--
 	e.line("}")
 }
@@ -490,7 +494,7 @@ func (e *emitter) selectDispatch(
 		e.indent++
 		e.pushScope()
 		if op.recv && op.arm.HasBind && op.arm.Bind != "" && op.arm.Bind != "_" {
-			e.selectRecvBind(op, vals[k], fmt.Sprintf("%s[%d].closed", cs, k))
+			e.selectRecvBind(op, vals[k], fmt.Sprintf("%s[%d]", cs, k))
 		}
 		e.selectArmBody(op.arm.Body)
 		e.popScope()
@@ -521,17 +525,19 @@ func (e *emitter) selectDispatch(
 // selectRecvBind declares a recv arm's `id`, holding the same `Result[T]` a bare `<-ch`
 // yields. The runtime performed the receive into val and reported closure through the
 // descriptor's `closed` output, so the carrier is assembled from those two rather than by
-// calling the recv helper again — which would take a SECOND value off the channel.
-func (e *emitter) selectRecvBind(op selOp, val, closed string) {
+// calling the recv helper again — which would take a SECOND value off the channel. The
+// Right side reads the arm's own channel out of the descriptor (`slot.ch`) so the close
+// reason arrives whole, the same Err a bare `<-ch` would have carried.
+func (e *emitter) selectRecvBind(op selOp, val, slot string) {
 	c, ok := e.carrierFor(sema.ResultOf(op.elem))
 	if !ok {
 		return
 	}
 	cname := e.declareName(op.arm.Bind)
 	e.line(fmt.Sprintf("%s %s = {0};", c.name, cname))
-	e.line(fmt.Sprintf("%s.tag = (int32_t)%s;", cname, closed))
-	e.line(fmt.Sprintf("if (%s.tag == 0) { %s.%s = %s; } else { %s.err = zrt_err_new(\"StopIteration\"); }",
-		cname, cname, c.okField(), val, cname))
+	e.line(fmt.Sprintf("%s.tag = (int32_t)%s.closed;", cname, slot))
+	e.line(fmt.Sprintf("if (%s.tag == 0) { %s.%s = %s; } else { %s.err = zrt_chan_close_err(%s.ch); }",
+		cname, cname, c.okField(), val, cname, slot))
 }
 
 // selectArmBody emits a select arm's body, run for effect. A block body's statements are
@@ -593,9 +599,11 @@ func (e *emitter) emitChanHelpers() {
 // receive cannot be a single C expression and needs this to become one.
 //
 // The Right side carries WHY the channel ended, which is the whole reason a receive is a
-// Result rather than an optional: zrt_chan_err answers NULL for the ordinary close (the
-// StopIteration sentinel) and the message of a sender that aborted while holding the last
-// send end. Reporting a crash as an ordinary end would turn it into a short answer.
+// Result rather than an optional: zrt_chan_close_err hands back the channel's WHOLE Err —
+// the StopIteration sentinel (by kind) for an ordinary close, and the own Err of a sender
+// that aborted while holding the last send end, message, cause and kind intact. Building
+// an Err from a message here instead would leave `err is StopIteration` false and force
+// the receiver to compare strings, which is exactly what carrying a kind exists to avoid.
 func (e *emitter) emitChanRecvHelper(idx int, elem sema.Type) {
 	c, ok := e.carrierFor(sema.ResultOf(elem))
 	if !ok {
@@ -605,12 +613,7 @@ func (e *emitter) emitChanRecvHelper(idx int, elem sema.Type) {
 	e.indent++
 	e.line(fmt.Sprintf("%s r = {0};", c.name))
 	e.line(fmt.Sprintf("r.tag = (int32_t)zrt_chan_recv(ch, &r.%s);", c.okField()))
-	e.line("if (r.tag != 0) {")
-	e.indent++
-	e.line("const char *m = zrt_chan_err(ch);")
-	e.line("r.err = zrt_err_new(m == NULL ? \"StopIteration\" : m);")
-	e.indent--
-	e.line("}")
+	e.line("if (r.tag != 0) { r.err = zrt_chan_close_err(ch); }")
 	e.line("return r;")
 	e.indent--
 	e.line("}")

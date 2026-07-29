@@ -914,7 +914,7 @@ void zrt_chan_send(zrt_chan *ch, const void *val);
 /* zrt_chan_recv receives one element into *out. It returns 0 for a value (the Left of
  * Result[T]) and 1 when the channel is closed and drained (the Right). When empty and
  * open it PARKS the caller on the receive queue until a value arrives or the channel
- * closes. On a Right result zrt_chan_err reports the reason (see below). */
+ * closes. On a Right result zrt_chan_close_err reports the reason (see below). */
 int zrt_chan_recv(zrt_chan *ch, void *out);
 
 /* zrt_chan_close_err returns the Err a recv's Right carries — the whole Err, which is
@@ -925,12 +925,6 @@ int zrt_chan_recv(zrt_chan *ch, void *out);
  * told apart; nothing needs to match on a message. Valid immediately after a
  * zrt_chan_recv that returned 1, and this is what a `Result[T]`'s Right is built from. */
 zrt_err zrt_chan_close_err(zrt_chan *ch);
-
-/* zrt_chan_err is the old string-shaped view of the same close reason: NULL for the
- * ordinary end, the crash message otherwise. It survives only because the `for v in ch`
- * lowering in both compilers still calls it; it discards the kind and the cause, which
- * is exactly what the Result carrier must not do. Delete it with its last caller. */
-const char *zrt_chan_err(zrt_chan *ch);
 
 /* zrt_crash_active reports whether the abort currently unwinding is an unhandled
  * coroutine crash (unwind.c sets it while running the crashing coroutine's cleanup

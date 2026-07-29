@@ -2646,7 +2646,7 @@ func (e *emitter) errCallEmit(n *ast.Call) (string, bool) {
 		if _, shadowed := e.info.Refs[callee]; shadowed {
 			return "", false
 		}
-		if kind, ok := sema.ErrKind(callee.Name); ok && len(n.Args) == 1 {
+		if kind, ok := sema.ErrCtorKind(callee.Name); ok && len(n.Args) == 1 {
 			return fmt.Sprintf("zrt_err_new_kind(%d, %s)", kind, e.expr(n.Args[0].Value)), true
 		}
 	case *ast.Field:

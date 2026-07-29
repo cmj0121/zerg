@@ -2518,6 +2518,16 @@ fn c_recv_helper(mut &em: Emitter, elem: Ty) -> str {
 	return name
 }
 
+# c_send lowers `ch <- v`. The payload is SNAPSHOTTED at the send (docs/code/coroutine.md,
+# the Send table), which for anything holding a list means a deep copy and not a C `=`:
+# the runtime memcpy's the bytes it is handed, so handing it the sender's own list handle
+# gave the receiver a second name for the sender's buffer. Writing through either was then
+# visible through the other — across a coroutine boundary, which is the one place the whole
+# memory model says cannot happen ("no shared mutable Zerg state").
+#
+# c_copied is the same rule every other copy site uses, and it costs nothing where nothing
+# is shared: a scalar, or a freshly built value that is nobody else's yet, renders as
+# itself.
 fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
@@ -2525,7 +2535,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	c_chan_op_check(cty, 1)
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
-	return ind + "{ " + ct + " zg_sv = " + c_expr(em, v, c_nosub()) + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
+	return ind + "{ " + ct + " zg_sv = " + c_copied(em, elem, v, c_nosub()) + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
 }
 
 # c_spawn lowers `spawn f(args)`. It is the same shape as a defer — a per-site env

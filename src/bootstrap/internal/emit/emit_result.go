@@ -86,6 +86,12 @@ func (e *emitter) prepareResults() {
 	for _, t := range e.info.ExprTypes {
 		consider(t)
 	}
+	// A `select` recv arm binds the same `Result[T]` a bare `<-ch` yields, but its bind is
+	// declared into the arm's own scope rather than recorded as an expression type — so its
+	// carrier is registered from the channel prepass's element list instead.
+	for _, elem := range e.recvElems {
+		consider(sema.ResultOf(elem))
+	}
 
 	keys := make([]string, 0, len(seen))
 	for k := range seen {
@@ -122,8 +128,10 @@ func (e *emitter) prepareResults() {
 }
 
 // isCarrierType reports whether a type needs a generated carrier: an optional, or an
-// Either that is neither the tag-only `Result[nil]` nor a channel recv's Result[T]
-// (kept on their existing paths), and whose Left has a real C type.
+// Either that is not the tag-only `Result[nil]` (kept on its own path) and whose Left has
+// a real C type. A channel receive's `Result[T]` is one of these like any other, which is
+// what makes `?`/`!`/`??`/`if v :=`/`match` work on a receive with no channel-specific
+// code behind them.
 func (e *emitter) isCarrierType(t sema.Type) bool {
 	switch x := t.(type) {
 	case *types.Opt:

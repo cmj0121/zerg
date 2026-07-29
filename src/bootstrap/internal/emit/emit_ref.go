@@ -58,8 +58,9 @@ func (e *emitter) containsRef(t sema.Type) bool {
 		// storage, so it must always flow through zrt_map_copy / zrt_map_drop.
 		return true
 	case *types.Chan:
-		// a channel is a ref type per memory.md; its runtime is 1e, so it never
-		// actually reaches a copy site this phase, but POD-ness must still exclude it.
+		// a channel is a ref type per memory.md: copying a handle retains it and dropping
+		// one releases it, and for a send-capable handle that release is what closes the
+		// channel. A bare C `=` would lose the count and the channel would never close.
 		return true
 	case *types.Tuple:
 		for _, el := range x.Elems {
@@ -217,6 +218,18 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
+	// Concurrency is the gate a program links the scheduler from: a `spawn` or a channel
+	// pulls it in, and implies the runtime. A program with neither leaves it false and
+	// links nothing new.
+	if e.programUsesConcurrency() {
+		e.concurrency = true
+		e.needsRuntime = true
+	}
+	// Number the channel receive element types and detect channel-handle drops, BEFORE the
+	// Result prepass: each of those element types needs a `Result[T]` carrier, and for a
+	// select recv arm — whose bind is declared into the arm's scope rather than recorded as
+	// an expression type — this pass is the only place that type is known.
+	e.prepareChannels()
 	// Number the general Result/Either/optional carriers (Phase 1f U0). Sets
 	// needsResult/needsRuntime only when a carrier is found.
 	e.prepareResults()
@@ -747,6 +760,15 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		// copying a list value that names existing storage deep-copies its buffer (each
 		// element via the instance vtable), so the two holders never alias.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), base)
+	case *types.Chan:
+		// copying a channel handle retains it; a send-capable handle (bidi/send-only) also
+		// bumps the sender count, a receive-only handle does not. The count is what closes
+		// the channel — the language has no explicit close — so this is the one copy in the
+		// language whose meaning depends on the handle's direction.
+		if t.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_copy(%s)", base)
+		}
+		return fmt.Sprintf("zrt_chan_sender_copy(%s)", base)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(typ), base)
 	case *types.Opt:
@@ -898,6 +920,8 @@ func (e *emitter) emitRefHelpers() {
 	// no thunk and a value-only program stays byte-identical.
 	e.emitOptDropHelpers()
 	e.emitDeferHelpers()
+	e.emitSpawnHelpers()
+	e.emitChanHelpers()
 	// Result/Either/optional force helpers (Phase 1f U0); emits nothing when the
 	// program registered no carrier.
 	e.emitResultHelpers()

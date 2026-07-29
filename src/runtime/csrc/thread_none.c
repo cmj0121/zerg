@@ -17,7 +17,13 @@
  *     (it has no idle workers to park), so reaching it means a caller assumed
  *     threads exist, and saying so beats hanging.
  */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "zergrt.h"
+
+#include <time.h>
 
 bool zrt_thread_supported(void) { return false; }
 
@@ -44,6 +50,21 @@ void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) {
 	(void)c;
 	(void)m;
 	zrt_report("zrt_cond_wait with no thread support (would never wake)");
+}
+
+void zrt_cond_timedwait(zrt_cond *c, zrt_mutex *m, int64_t ns) {
+	(void)c;
+	(void)m;
+	/* The one wait this backend CAN honour, and the reason timers work here at all: with
+	 * a single thread nothing can signal, so a bounded wait is simply a sleep, and the
+	 * scheduler's idle worker wakes at the deadline exactly as it would with M workers.
+	 * The mutex is not released because on this backend it locks nothing. */
+	if (ns > 0) {
+		struct timespec ts;
+		ts.tv_sec = (time_t)(ns / 1000000000);
+		ts.tv_nsec = (long)(ns % 1000000000);
+		nanosleep(&ts, NULL);
+	}
 }
 
 void zrt_cond_signal(zrt_cond *c) { (void)c; }

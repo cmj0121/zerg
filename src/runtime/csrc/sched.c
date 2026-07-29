@@ -226,6 +226,17 @@ void zrt_sched_wake(zrt_coro *co) {
 		co->state = ZRT_CORO_RUNNABLE;
 		runq_push(co);
 		zrt_cond_signal(&g_cond);
+	} else if (co->state == ZRT_CORO_PARKING) {
+		/* It has decided to block but is still switching out, so it cannot be queued
+		 * yet — queueing it here would let a second worker run it on its own stack while
+		 * it is still on this one. The wake is REMEMBERED instead, and the worker
+		 * completing the park queues it rather than marking it blocked.
+		 *
+		 * Only select reaches this. A plain send or recv hands its channel lock to the
+		 * scheduler, so a counterparty cannot even find the waiter until the switch is
+		 * done; a select parks on several channels and must release each one's lock to
+		 * take the next, which is the window this closes. */
+		co->woken = true;
 	}
 	zrt_mutex_unlock(&g_lock);
 }
@@ -301,10 +312,16 @@ static void sched_run(void) {
 			/* the switch is complete, so the coroutine may now be woken. Both halves
 			 * happen under g_lock, which is the lock zrt_sched_wake takes — so a wake
 			 * cannot land between them and be missed. */
-			co->state = ZRT_CORO_BLOCKED;
 			if (co->park_lock != NULL) {
 				zrt_mutex_unlock(co->park_lock);
 				co->park_lock = NULL;
+			}
+			if (co->woken) {
+				/* a wake arrived while it was still switching out: honour it now */
+				co->woken = false;
+				co->state = ZRT_CORO_RUNNABLE;
+			} else {
+				co->state = ZRT_CORO_BLOCKED;
 			}
 		}
 		switch (co->state) {

@@ -408,28 +408,16 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 # write in an arm and `print` is a statement here. Reading it as an expression consumed
 # nothing, and the arm loop then read the rest of the body as further arms.
 #
-# A bare REASSIGNMENT is the one statement refused, because it is the one that reads as
-# something else: `done => running = false` looks like an arm binding a name, and GRAMMAR
-# makes an arm body an `expr` while a reassignment is a `simple-stmt` — the Go seed reads
-# the same source and rejects it. The braced form says what was meant and is grammatical,
-# because a block IS a primary. Nothing depends on the looseness: the corpus already
-# writes `done => { running = false }`.
+# A bare REASSIGNMENT used to be refused here, on the grounds that GRAMMAR made an arm body
+# an `expr` while a reassignment is a `simple-stmt`, and that the seed rejected it too. The
+# grammar settled the other way — an arm RUNS rather than yields, so its body is a stmt —
+# and the seed reads one now, so `v := <-work => total = total + v!` is an ordinary arm and
+# no longer needs braces to say what it plainly says.
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return parse_block(p) if p_at(p, LBrace)
 	mut one: list[Stmt] = []
-	st := parse_stmt(p)
-	if is_assign_stmt(st) {
-		raise "a select arm's body is an expression, not a reassignment: write `=> { … }` around it"
-	}
-	one.append(st)
+	one.append(parse_stmt(p))
 	return one
-}
-
-fn is_assign_stmt(s: Stmt) -> bool {
-	return match s {
-		SAssign(_, _) => true
-		_ => false
-	}
 }
 
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.

@@ -126,6 +126,8 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.unaryIntrinsic(n, Int, Int), true
 		case "__zrt_time_unix", "__zrt_time_mono":
 			return c.nullaryIntrinsic(n, Int), true
+		case "__zrt_sleep_ns":
+			return c.unaryIntrinsic(n, Int, Nil), true
 		case "__zrt_platform", "__zrt_arch":
 			return c.nullaryIntrinsic(n, Str), true
 		case "__zrt_getenv":
@@ -344,7 +346,8 @@ func (c *checker) writeIntrinsic(n *ast.Call, vt Type) Type {
 
 // unaryIntrinsic checks a one-argument runtime floor intrinsic of type `(arg) -> ret` —
 // the io whole-file leaves (`__zrt_open` str->int, `__zrt_close` int->int) and the os
-// leaves (`__zrt_getenv` str->str, `__zrt_has_env` str->bool, `__zrt_exit` int->nil).
+// leaves (`__zrt_getenv` str->str, `__zrt_has_env` str->bool, `__zrt_exit` int->nil), and
+// the scheduler timer leaf (`__zrt_sleep_ns` int->nil) the `time` timers park on.
 // These are the runtime's own leaves the stdlib drives from pure Zerg.
 func (c *checker) unaryIntrinsic(n *ast.Call, arg, ret Type) Type {
 	if len(n.Args) != 1 {

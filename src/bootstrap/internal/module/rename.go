@@ -92,6 +92,7 @@ func (r *renamer) renameItem(it ast.Stmt) {
 	switch n := it.(type) {
 	case *ast.FuncDecl:
 		n.Name = r.mangle(n.Name)
+		n.Module = r.tag
 		r.renameFunc(n)
 	case *ast.StructDecl:
 		n.Name = r.mangle(n.Name)
@@ -186,6 +187,7 @@ func (r *renamer) renameSpec(n *ast.SpecDecl) {
 func (r *renamer) renameImplItem(item ast.ImplItem) {
 	switch it := item.(type) {
 	case *ast.FuncDecl:
+		it.Module = r.tag
 		r.renameFunc(it)
 	case *ast.AssocBind:
 		r.renameType(it.Type)

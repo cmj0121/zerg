@@ -35,11 +35,16 @@ import (
 // --- concurrency build gate ---------------------------------------------------
 
 // programUsesConcurrency reports whether the program uses concurrency: any function body
-// contains a `spawn`/send/`select`, or any binding, expression, or signature type
-// transitively holds a channel. It is the single trigger for Manifest.Concurrency
-// (mirroring programUsesRef), so a value-only program links none of the scheduler and
-// stays byte-identical.
+// contains a `spawn`/send/`select`, any binding, expression, or signature type transitively
+// holds a channel, or the program lowers a scheduler-floor intrinsic. It is the single
+// trigger for Manifest.Concurrency (mirroring programUsesRef), so a value-only program links
+// none of the scheduler and stays byte-identical.
 func (e *emitter) programUsesConcurrency() bool {
+	// A scheduler-floor intrinsic is a use of the scheduler even in a program that names no
+	// channel and no `spawn`: its primitive lives in sched.c, which only Concurrency links.
+	if e.programUsesSchedFloor() {
+		return true
+	}
 	for _, inst := range e.prog.Funcs {
 		found := false
 		walkStmts(inst.Origin.Body, func(s ast.Stmt) {
@@ -183,8 +188,7 @@ func (e *emitter) prepareChannels() {
 		e.recvElems = append(e.recvElems, seen[k])
 	}
 
-	// Every channel a seed program can hold is bidirectional — a directional one was refused
-	// above — so a held handle always needs the SENDER drop thunk, and only that one. The
+	// A held handle needs the SENDER drop thunk, and in practice only that one. The
 	// plain-hold thunk existed for the hold the old `del ch` kept behind; `close(ch)` moves
 	// no count at all now, so nothing in a seed program is dropped as a plain hold.
 	holdsChan := false
@@ -207,9 +211,11 @@ func (e *emitter) prepareChannels() {
 	}
 	e.needChanSenderDrop = holdsChan
 	// The plain-hold thunk has no user left. chanDropThunk names it only for a ChanRecv
-	// handle, and rejectDirectionalChans refuses every directional type the seed could
-	// declare one from — so if that refusal is ever lifted without lifting this, the C names
-	// a function nothing defined and cc says so. Loud, which is the seed's whole contract.
+	// handle, and rejectDirectionalChans refuses every directional type the PROGRAM could
+	// declare one from. A bundled module is not refused (see there) and could in principle
+	// drop one, so this is no longer an impossibility — it is a loud failure: the C would
+	// name a function nothing defined and cc would say so, which is the seed's whole
+	// contract. No stdlib module drops a receive-only handle today.
 	e.needChanDrop = false
 }
 
@@ -218,25 +224,55 @@ func (e *emitter) prepareChannels() {
 // the seed's release path is chosen from the handle's direction at the DECLARATION, and
 // getting that wrong silently leaks a channel or closes it early — so the seed says it
 // cannot lower one rather than guessing. The self-hosted compiler is where directions land.
-// Both maps are walked in Go's random order, which does not reach the output: diag.List
-// sorts every diagnostic by source offset on the way out.
+//
+// It is scoped to the PROGRAM's own code — the entry module — and not to an imported
+// module bundled in beside it. The whole-program flatten hands the seed every member of
+// every module it imports, reachable or not, so `import "time"` alone drags in `after` and
+// `ticker`, whose ends are receive-only; refusing over those would stop a program that only
+// reads `time.now()` over a signature it never asked for. Nothing is lost by letting them
+// through: a directional handle cannot reach the program's own code without appearing there
+// as a signature, a binding, or an expression — all three of which are refused below — so
+// every release path the seed would actually have to choose is still named.
+//
+// Instances are walked in the monomorphizer's order, which does not reach the output:
+// diag.List sorts every diagnostic by source offset on the way out.
 func (e *emitter) rejectDirectionalChans() {
+	// One refusal per source line: a narrowed end is reached both as a binding and as the
+	// call that produced it, and naming the same line twice says nothing the first did not.
+	// Keying on the line is sound because only the entry module is walked, so every span
+	// counted here is a position in the one file the program was compiled from.
+	seen := map[int]bool{}
 	refuse := func(at token.Span, t sema.Type) {
-		if d, ok := directionalChan(t); ok {
-			e.diags.Add(at, "the bootstrap seed does not lower a directional channel type %s; use a bidirectional chan[T]", d)
+		d, ok := directionalChan(t)
+		if !ok || seen[at.Start.Line] {
+			return
 		}
+		seen[at.Start.Line] = true
+		e.diags.Add(at, "the bootstrap seed does not lower a directional channel type %s; use a bidirectional chan[T]", d)
 	}
-	for _, sig := range e.info.Funcs {
-		if sig.Decl == nil {
+	for _, inst := range e.prog.Funcs {
+		if inst.Origin == nil || inst.Origin.Module != "" {
 			continue
 		}
-		refuse(sig.Decl.Span(), sig.Ret)
-		for _, p := range sig.Params {
-			refuse(sig.Decl.Span(), p)
+		refuse(inst.Origin.Span(), inst.Ret)
+		for _, p := range inst.Params {
+			refuse(inst.Origin.Span(), p)
 		}
-	}
-	for b, t := range e.info.BindTypes {
-		refuse(b.Span(), t)
+		walkStmts(inst.Origin.Body, func(s ast.Stmt) {
+			if b, ok := s.(*ast.BindStmt); ok {
+				refuse(b.Span(), e.info.BindTypes[b])
+			}
+		})
+		// Calls only. Every other directional expression in the program's own code READS
+		// something already declared directional — a parameter, a binding — and both are
+		// refused above, so walking them all would repeat one refusal per mention. A call is
+		// the one shape neither covers: a bundled module's function can HAND BACK a narrowed
+		// end (`time.after(d)`), and the value is refused whether or not it is ever bound.
+		walkBlockExprs(inst.Origin.Body, func(x ast.Expr) {
+			if _, ok := x.(*ast.Call); ok {
+				refuse(x.Span(), e.info.ExprTypes[x])
+			}
+		})
 	}
 }
 

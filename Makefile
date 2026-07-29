@@ -18,10 +18,10 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic bitwise booleans conc_chan_buffer conc_fanin conc_select conc_spawn countdown \
-	default_params enum_basic enum_guard factorial fib fizzbuzz floats gcd fn_value hello list_basic \
-	list_literal list_str method_chain power raise_kind rec_expr rec_tree str_bytes struct_basic \
-	struct_nested sumto value_semantics
+CORPUS_PASS := arithmetic bitwise booleans conc_chan_buffer conc_crash conc_fanin conc_forin conc_select \
+	conc_spawn countdown default_params enum_basic enum_guard factorial fib fizzbuzz floats gcd fn_value \
+	hello list_basic list_literal list_str method_chain power raise_kind rec_expr rec_tree str_bytes \
+	struct_basic struct_nested sumto value_semantics
 
 # A `conc_` case is run more than once. Every other case is a function of its source, so
 # one run answers the question; a concurrent one is a function of its source AND of an

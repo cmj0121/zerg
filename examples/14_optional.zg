@@ -1,0 +1,55 @@
+# 14 — A value that may not be there: `T?`, and the four ways to ask.
+#
+# Zerg has no null. What it has is a TYPE that says a value may be absent —
+# `int?` — and `nil` as that absent value. The type is the whole point: a
+# plain `int` can never be missing, so nothing that takes one has to check,
+# and the compiler will not let an `int?` stand where an `int` was promised.
+#
+# Four operators read one, and each says something different about what you
+# want when the value is not there:
+#
+#     x ?? d     use d instead              — carry on with a default
+#     a?.b       read .b, or stay absent    — keep asking down a chain
+#     x!         insist; abort if it is not — "I know it is set"
+#     x?         hand the absence back      — my caller can deal with it
+#
+# There is no fifth way and no implicit unwrap: an optional that is never
+# asked cannot be mistaken for a value.
+#
+# beyond-the-seed: the implicit `nil` of an omitted `T?` field. The bootstrap
+# seed asks for every field by count, so this example is built by `zerg` —
+# which is what `make examples` uses.
+
+struct Config {
+	name: str
+	port: int?
+}
+
+# `?` needs a result that can carry an absence, which is what `-> int?` is.
+# If `c` is absent the function returns absent, in one character.
+fn port_of(c: Config?) -> int? {
+	cfg := c?
+	return cfg.port
+}
+
+fn main() {
+	# `port` was not given, and the ONE implicit default is `nil` for a `T?`
+	# field — its natural absent state. Every other field is required.
+	fallback := Config("fallback")
+	print fallback.port ?? 8080
+
+	live := Config("live", 9000)
+	print live.port ?? 8080
+
+	# ?. reads through, and stays absent when there is nothing to read
+	missing: Config? = nil
+	print missing?.name ?? "no config"
+
+	# ? hands the absence to the caller, who defaults it here
+	print port_of(live) ?? -1
+	print port_of(missing) ?? -1
+
+	# ! is the hatch: it aborts rather than guessing, so use it where the
+	# value is known to be there
+	print live.port!
+}

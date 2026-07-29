@@ -211,9 +211,15 @@ desugar 成這個形式本來被定義成的那條 `+` 鏈，所以 AST 與 emit
 payload 攜帶、送進另一條 channel——而且 payload 在送出當下深拷貝，所以 receiver 絕不會共享
 sender 的緩衝區。
 
-仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（它會一併帶走 `std/atomic`）、`?`
-運算子、`match` arm body 用區塊、泛型**函式**定義、把泛型型別參數當成欄位型別、具名引數的
-struct 建構 `T(a: 1)`，以及 command literal。
+null safety 在這裡是完整的：`T?` 是一個有自己 carrier 的型別、`nil` 是它的缺席值，而 GRAMMAR
+group 8 的四個運算子都讀得懂它——`??`（右結合、短路、右側可以是發散敘述）、`?.`（欄位本身是
+optional 時會壓平）、`!`，以及 `?`（把缺席從一個結果載得住它的函式提早 return 出去）。宣告會補上
+建構時省略的部分：`T?` 欄位補 `nil`，其餘則指名報錯。
+
+仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（它會一併帶走 `std/atomic`）、對
+**`Result[T]`** 的 `?`（它需要 `Result[T]` 能存活於簽章，與上面 `T?` 那一半不同）、`match` arm
+body 用區塊、泛型**函式**定義、把泛型型別參數當成欄位型別、具名引數的 struct 建構 `T(a: 1)`，以及
+command literal。
 
 ## 效能：平行與快取（M7）
 

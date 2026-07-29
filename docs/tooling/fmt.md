@@ -80,6 +80,13 @@ together.
 | ------ | ------------------------------------------------------------------------- |
 | `F201` | one space around a binary operator, after a comma, and around `=>`        |
 | `F202` | no space after `(` `[`, before `)` `]` `,`, or between a name and its `(` |
+| `F203` | a prefix operator is tight to its operand — `-1`, `&x`, `<-ch`            |
+
+`F203` is decided by what is to the LEFT, not by which token it is. `-` is a negation and a
+subtraction, `<-` is a receive and a send and a direction marker; each is prefix exactly
+when nothing before it could be an operand. Getting one backwards reprints to a STABLE
+wrong answer — `-1` became `- 1`, and stayed that way on the second pass — so an
+idempotence check cannot see it and only a case containing the shape can.
 
 ### F3xx — trivia
 
@@ -398,9 +405,35 @@ L102 private function `never` is never called
 L103 binding `unused` in `main` is never read
 ```
 
+### L2xx — null safety
+
+Nothing here is a compile error: each of these programs runs, and does something slightly
+other than what it says. That is what makes them a linter's business rather than the
+compiler's.
+
+| Code   | Finding                               | Why it is worth a line                                                |
+| ------ | ------------------------------------- | --------------------------------------------------------------------- |
+| `L201` | `?? nil`                              | the fallback IS the absent value, so the `??` changes nothing         |
+| `L202` | `!` in a function that answers a `T?` | `?` hands the absence back; `!` aborts instead, and is easier to type |
+
+```text
+L201 `?? nil` in `keep` changes nothing — the result is optional either way
+L202 `!` in `forced`, which answers a `T?` — `?` hands the absence back instead of aborting
+```
+
+Both are answered from the parsed file alone, like every other rule here — `?? nil` is a
+shape, and so is a `!` inside a function whose declared result carries an absence. Neither
+needs a type nobody wrote down.
+
 `main` is never reported by `L102`: the runtime calls it, whatever the source says.
 
 ## Adding a rule
+
+A new SURFACE FORM needs a case in `test-data/fmt/` in the same change, not only a rule.
+The formatter's failures are stable — a form printed wrongly is printed the same wrong way
+on the second pass — so `make fmt-corpus` is green until some case actually contains the
+shape. Both spacing defects found so far (`chan[T]<-` and friends, then `-1`) hid in forms
+no case had.
 
 Give it the next number in the group its EFFECT belongs to, add it to the table in
 [`src/compiler/zerg/fmt.zg`](../../src/compiler/zerg/fmt.zg) or

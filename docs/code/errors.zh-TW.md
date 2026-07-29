@@ -25,15 +25,20 @@ fn load() -> Result[Config] {
 }
 ```
 
-> **[deviation]** `?` 定義在任何 `Either[X, Y]` 上——拆出 `Left`、把 `Right` 原封不動提早 return——但 bootstrap 只
-> 忠實地穿引 `Result[T]`。在**一般的 `Either`** 上,右側 payload 目前被**丟棄**(一次靜默的誤編譯);而對
-> **`Result[nil]`** 的 `?` 抵達後端時是一個 `void` 型別的 binding、而非乾淨地傳播(一個 fail-loud 的 sema 缺口)。意圖
-> 中的行為是在每種情形都把 `Right` 值原封不動穿引。
+> **[deviation]** `?` 定義在任何 `Either[X, Y]` 上——拆出 `Left`、把 `Right` 原封不動提早 return——而兩個編譯器
+> 各覆蓋其中一半。**種子**穿引 `Result[T]`：在**一般的 `Either`** 上右側 payload 被**丟棄**（一次靜默的誤編譯），
+> 而對 **`Result[nil]`** 的 `?` 抵達後端時是一個 `void` 型別的 binding（一個 fail-loud 的 sema 缺口）。
+>
+> 出貨的 **`zerg`** 穿引的則是 **`T?`**：缺席會提早 return，外圍函式必須回答一個 `T?` 才載得住它。
+> `Result` 那一半在那裡被**指名拒絕**，因為 `Result[T]` 還無法存活於簽章。
+>
+> 意圖中的行為是在每種情形都把 `Right` 值原封不動穿引。
 
 **`??`——預設值。** `a ?? b`：`a` 有左值就用它，否則用 `b`（右值被丟棄）；短路、右結合可串接，適用任何 `Either`。
 
 **`?.`——optional chain（只限 `T?`）。** `a?.b`：`a` 有值就取 `.b`，否則整串在原地短路成 `nil`（與 `?` 不同，
-不會從函式 return）；用在任何非 `T?` 型別都是 compile error。
+不會從函式 return）；用在任何非 `T?` 型別都是 compile error。若該欄位**本身就是 optional 就會壓平**——整串回答的
+是那個欄位的型別，而不是巢狀的 `T??`（那不是這個語言寫得出來的型別）。**[implemented]**，兩個編譯器皆然。
 
 **`!`——force-unwrap（值 → abort）。** `x!` 拆出左值，否則對一個缺席的 optional **raise**——刻意的「我確定它有值」
 逃生口，是從值那層跨進 abort 的一種入口。（邏輯否定用關鍵字 `not`，所以 postfix `!` 空出來給它。）

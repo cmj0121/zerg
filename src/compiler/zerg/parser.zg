@@ -77,7 +77,24 @@ fn ident_name(e: Expr) -> str {
 # never entered from a statement position, so `ch <- v` does not reach here. The trailing
 # `<-` is also only looked for after the `]` of a `chan[…]`, never after a name or any
 # other type, which is what keeps it away from anything else a `<-` could follow.
+# parse_type reads a type and, when a `?` follows it, wraps it as the OPTIONAL of that
+# type (GRAMMAR group 7: `type ::= base-type '?'?`). The suffix used to be left in the
+# stream: `x: int? = nil` bound a plain `int` and `nil` lowered to `0`, so an absent value
+# became the number zero and nothing said so.
+#
+# It is one wrapper around the whole reader rather than a case inside it, because the
+# suffix follows a COMPLETE type — `list[int]?`, `P?`, `chan[int]?` — and every one of
+# those is built somewhere below.
 fn parse_type(mut &p: Parser) -> Ty {
+	t := parse_base_type(p)
+	if p_at(p, Question) {
+		p_advance(p)
+		return TOpt(t)
+	}
+	return t
+}
+
+fn parse_base_type(mut &p: Parser) -> Ty {
 	if p_at(p, LArrow) {
 		p_advance(p)
 		inner := parse_type(p)
@@ -995,20 +1012,23 @@ fn parse_expr(mut &p: Parser) -> Expr {
 # parse_coalesce reads `a ?? b`, the OUTERMOST binary level. It sits there because its
 # right-hand side may be a DIVERGENT STATEMENT — the spec drains a channel with
 # `for { v := <-ch ?? break }` — and a statement cannot be an operand of anything, so no
-# level can sit outside it. GRAMMAR fixes no precedence for `??`; this is where it goes.
+# level can sit outside it. GRAMMAR makes it the loosest binary, and RIGHT-ASSOCIATIVE.
+#
+# The recursion is that associativity, and it is not cosmetic. Read left-to-right,
+# `a ?? b ?? 7` groups as `(a ?? b) ?? 7`, whose left operand is a fallback that may itself
+# be absent — so the inner ternary had to yield a bare value and an optional at once, and
+# the C it emitted did not compile. Grouped right, each `??` peels exactly one layer:
+# `b ?? 7` is a value, and `a ?? that` is a value.
 fn parse_coalesce(mut &p: Parser) -> Expr {
-	mut left := parse_or(p)
-	for p_at(p, Coalesce) {
-		p_advance(p)
-		mut jump: list[Stmt] = []
-		if is_divergent(cur_kind(p)) {
-			jump.append(parse_stmt(p))
-			left = ECoalesce(left, ENil, jump)
-		} else {
-			left = ECoalesce(left, parse_or(p), jump)
-		}
+	left := parse_or(p)
+	return left if not p_at(p, Coalesce)
+	p_advance(p)
+	mut jump: list[Stmt] = []
+	if is_divergent(cur_kind(p)) {
+		jump.append(parse_stmt(p))
+		return ECoalesce(left, ENil, jump)
 	}
-	return left
+	return ECoalesce(left, parse_coalesce(p), jump)
 }
 
 # is_divergent names the statements that LEAVE, which are the ones `??` may take on its
@@ -1106,7 +1126,12 @@ fn parse_try(mut &p: Parser) -> Expr {
 	mut e := parse_unary(p)
 	for p_at(p, Bang) or p_at(p, Question) {
 		if p_at(p, Question) {
-			raise "NotImplemented: the `?` operator — it early-returns the Err from the enclosing function, which needs `Result[T]` in a signature"
+			# `x?` is built rather than refused here: whether it CAN be written depends on the
+			# enclosing function's result type, which the parser does not know. The emitter
+			# does, and refuses by name there.
+			p_advance(p)
+			e = parse_chain_tail(p, ETry(e))
+			continue
 		}
 		p_advance(p)
 		e = EForce(e)
@@ -1127,8 +1152,13 @@ fn parse_try(mut &p: Parser) -> Expr {
 # an identifier for its name, and the thing to the left of one of these is a value.
 fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
 	mut e := e0
-	for p_at(p, Dot) or p_at(p, LBrack) {
-		if p_at(p, LBrack) {
+	for p_at(p, Dot) or p_at(p, LBrack) or p_at(p, OptDot) {
+		if p_at(p, OptDot) {
+			p_advance(p)
+			fld := cur(p).lexeme
+			p_advance(p)
+			e = EOptChain(e, fld)
+		} else if p_at(p, LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
 			expect(p, RBrack)
@@ -1166,8 +1196,15 @@ fn parse_unary(mut &p: Parser) -> Expr {
 # always a bare identifier, so a call collapses to ECall(name, args).
 fn parse_postfix(mut &p: Parser) -> Expr {
 	mut e := parse_primary(p)
-	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) {
-		if p_at(p, LBrack) {
+	for p_at(p, LParen) or p_at(p, Dot) or p_at(p, LBrack) or p_at(p, OptDot) {
+		if p_at(p, OptDot) {
+			# `a?.b` — the lexer has produced this token since it existed and no parser ever
+			# consumed it, so `x := p?.n` bound `p` and the `.n` was simply dropped.
+			p_advance(p)
+			fld := cur(p).lexeme
+			p_advance(p)
+			e = EOptChain(e, fld)
+		} else if p_at(p, LBrack) {
 			p_advance(p) # '['
 			idx := parse_expr(p)
 			expect(p, RBrack)

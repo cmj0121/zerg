@@ -1504,6 +1504,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SSpawn(x) => c_spawn(em, x, ind)
 		SSend(ch, v) => c_send(em, ch, v, ind)
 		SSelect(arms) => c_select(em, arms, ind)
+		SDel(n) => c_del(em, n, ind)
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
@@ -1733,16 +1734,60 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_spawnenv_" + tag + ";\n")
+	# A channel argument is a HANDLE, not a value: the coroutine gets its own sender
+	# handle, and drops it when it returns. Without that the channel's sender count never
+	# moves and it can never close — every `done` arm waits forever.
+	mut drops := ""
+	mut m := 0
+	for m < args.len() {
+		if c_is_chan(c_infer(em, args[m])) {
+			drops = drops + " zrt_chan_sender_release(e->f" + strconv.to_string(m, 10) + ");"
+		}
+		m = m + 1
+	}
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
-	th = th + " zg_" + name + "(" + call + "); zrt_free(p); }\n"
+	th = th + " zg_" + name + "(" + call + ");" + drops + " zrt_free(p); }\n"
 	em.dfn_decls.append(th)
 	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
 	mut j := 0
 	for j < args.len() {
-		out = out + ind + "zg_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + c_expr(em, args[j], c_nosub()) + ";\n"
+		mut v := c_expr(em, args[j], c_nosub())
+		if c_is_chan(c_infer(em, args[j])) {
+			v = "zrt_chan_sender_copy(" + v + ")"
+		}
+		out = out + ind + "zg_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
 	}
 	return out + ind + "zrt_spawn(zg_spawn_" + tag + ", zg_se" + tag + ");\n"
+}
+
+# c_del lowers `del name`. A channel has no explicit close in this language: it closes
+# when its last SENDER handle goes, so `del ch` drops one. That is what lets a receiver
+# ever see the end of a stream — the creator is a sender too, and until it says
+# otherwise the channel can never reach zero.
+#
+# For anything that is not a channel this is a no-op today: revoking a plain name's
+# access needs the ownership tracking the subset does not have.
+fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
+	t := c_lookup_var(em, name)
+	if not c_is_chan(t) {
+		return ind + "/* del " + name + " */\n"
+	}
+	em.used_rt = true
+	em.used_conc = true
+	# A handle is a holder AND a sender, and sender_release drops both — so a bare
+	# release would free the channel out from under a name that still receives on it.
+	# `del ch` is a DOWNGRADE: keep the holder, give up the sender. The copy first is
+	# what keeps the holder count where it was.
+	cn := c_var_cname(em, name)
+	return ind + "zrt_chan_copy(" + cn + "); zrt_chan_sender_release(" + cn + ");\n"
+}
+
+fn c_is_chan(t: Ty) -> bool {
+	return match t {
+		TChan(_) => true
+		_ => false
+	}
 }
 
 # c_select lowers `select { … }` onto zrt_select: an array of case descriptors, one call

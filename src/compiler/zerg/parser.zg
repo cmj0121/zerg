@@ -724,7 +724,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		raise "NotImplemented: with"
 	}
 	if k == Del {
-		raise "NotImplemented: del"
+		p_advance(p)
+		name := cur(p).lexeme
+		p_advance(p)
+		return SDel(name)
 	}
 	if k == Defer {
 		p_advance(p)

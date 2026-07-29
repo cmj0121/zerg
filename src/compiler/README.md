@@ -242,8 +242,16 @@ and the stdlib timers. A channel is first-class here too — held in a struct fi
 as an enum payload, sent over another channel — and a payload is deep-copied at the send,
 so a receiver never shares the sender's buffer.
 
+Null safety is here in full: `T?` is a type with its own carrier, `nil` is its absent
+value, and all four of GRAMMAR group 8's operators read one — `??` (right-associative,
+short-circuiting, and taking a divergent right-hand side), `?.` (flattening when the field
+is itself optional), `!`, and `?`, which early-returns the absence from a function whose
+result can carry it. A declaration fills what a construction leaves off, `nil` for a `T?`
+field and a named error for anything else.
+
 Still missing, and each refused by name rather than mis-emitted: `Ref[T]` (which takes
-`std/atomic` with it), the `?` operator, a block as a `match` arm body, generic **function**
+`std/atomic` with it), `?` over a **`Result[T]`** (which needs `Result[T]` to survive in a
+signature, unlike the `T?` half above), a block as a `match` arm body, generic **function**
 definitions, a generic type parameter used as a field's type, named-argument struct
 construction `T(a: 1)`, and the command literal.
 

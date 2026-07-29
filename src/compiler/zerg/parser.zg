@@ -1010,13 +1010,27 @@ fn parse_and(mut &p: Parser) -> Expr {
 	return left
 }
 
-# parse_cmp is non-associative: at most one comparison operator.
+# parse_cmp is non-associative: at most one comparison operator, or one `is` type test
+# (GRAMMAR:219 puts the two at the same level and allows only one of them).
 fn parse_cmp(mut &p: Parser) -> Expr {
 	left := parse_range(p)
 	if is_cmp_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
 		return EBinary(op, left, parse_range(p))
+	}
+	if p_at(p, Is) {
+		p_advance(p)
+
+		# The right side is a bare name, not an expression: reading it as one would make
+		# `e is StopIteration` an ident lookup for a name nothing declares. Refusing here
+		# is what keeps a malformed test from reaching the emitter as something else.
+		if not p_at(p, Ident) {
+			raise f"`is` wants a type name on its right, found `{cur(p).lexeme}`"
+		}
+		name := cur(p).lexeme
+		p_advance(p)
+		return EIs(left, name)
 	}
 	return left
 }

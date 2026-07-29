@@ -202,6 +202,10 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EForce(x) => walk_expr(x, ids, calls, ns)
 		ECoalesce(a, b, jump) => walk_coalesce(a, b, jump, ids, calls, ns)
 		EGuard(body) => walk_body(body, ids, calls, ns)
+
+		# only the SUBJECT is a name the program bound — the right side of `is` is an error
+		# kind, so counting it as a use would keep an unused import alive.
+		EIs(x, name) => walk_expr(x, ids, calls, ns)
 		_ => skip()
 	}
 }

@@ -131,3 +131,75 @@ func TestSelectArmDivergeBody(t *testing.T) {
 		}
 	}
 }
+
+// TestChannelInAStructField covers a channel held in a container. fieldCopy/fieldDrop had
+// no channel arm, so a struct or an enum holding one could not be BUILT — the program was
+// refused with "copying a chan[int] is not supported in Phase 1d iteration 2", at 0:0.
+// Sending and receiving through the field exercises both halves of the retain/release.
+func TestChannelInAStructField(t *testing.T) {
+	const src = "struct Hub { inbox: chan[int] }\n" +
+		"fn feed(h: Hub) {\n" +
+		"  h.inbox <- 9\n" +
+		"}\n" +
+		"fn main() {\n" +
+		"  h := Hub(chan[int](1))\n" +
+		"  feed(h)\n" +
+		"  print (<-h.inbox)!\n" +
+		"}"
+	for _, got := range runConcProgram(t, src, false) {
+		if got != "9\n" {
+			t.Fatalf("a channel field must send and receive, got %q", got)
+		}
+	}
+}
+
+// TestChannelInAnEnumPayload is the shape that blocked the actor pattern: an ask carries
+// its reply channel in the message, so the message type holds a channel.
+func TestChannelInAnEnumPayload(t *testing.T) {
+	const src = "enum Cmd { Add(int)  Get(chan[int]) }\n" +
+		"fn serve(inbox: chan[Cmd], n: int) {\n" +
+		"  m := (<-inbox)!\n" +
+		"  match m {\n" +
+		"    Add(d) => n + d\n" +
+		"    Get(rep) => answer(rep, n)\n" +
+		"  }\n" +
+		"}\n" +
+		"fn answer(rep: chan[int], n: int) -> int {\n" +
+		"  rep <- n\n" +
+		"  return n\n" +
+		"}\n" +
+		"fn main() {\n" +
+		"  inbox := chan[Cmd](1)\n" +
+		"  rep := chan[int](1)\n" +
+		"  inbox <- Get(rep)\n" +
+		"  serve(inbox, 5)\n" +
+		"  print (<-rep)!\n" +
+		"}"
+	for _, got := range runConcProgram(t, src, false) {
+		if got != "5\n" {
+			t.Fatalf("an enum payload must carry a channel, got %q", got)
+		}
+	}
+}
+
+// TestReceiveBindsToTheField pins the precedence GRAMMAR gives recv-base. `<-h.inbox` used
+// to parse as `(<-h).inbox`, so the operand was the STRUCT and the diagnostic named it:
+// "receive '<-' requires a channel, found Hub". The second half of the same rule is that
+// `!` stays OUTSIDE the operand — `<-ch!` forces the Result the receive produced, not the
+// channel — so both readings are asserted here together.
+func TestReceiveBindsToTheField(t *testing.T) {
+	const src = "struct Hub { inbox: chan[int] }\n" +
+		"fn main() {\n" +
+		"  h := Hub(chan[int](2))\n" +
+		"  h.inbox <- 4\n" +
+		"  h.inbox <- 6\n" +
+		"  v := <-h.inbox\n" +
+		"  print v!\n" +
+		"  print <-h.inbox!\n" +
+		"}"
+	for _, got := range runConcProgram(t, src, false) {
+		if got != "4\n6\n" {
+			t.Fatalf("a receive must read the field it is written against, got %q", got)
+		}
+	}
+}

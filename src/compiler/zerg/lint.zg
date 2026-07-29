@@ -123,6 +123,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 		SSpawn(x) => walk_expr(x, ids, calls, ns)
 		SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
 		SSelect(arms) => walk_sel(arms, ids, calls, ns)
+		SDel(n) => ids.append(n)
 			_ => skip()
 		}
 	}

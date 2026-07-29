@@ -121,6 +121,10 @@ enum Stmt {
 	# SSelect is `select { … }`. Its arms are a struct rather than four Stmt variants
 	# because every arm carries the same four things in different combinations.
 	SSelect(list[SelArm])
+
+	# SDel is `del name`. For a channel it drops a SENDER handle, which is how a channel
+	# closes — the language has no explicit close.
+	SDel(str)
 }
 
 # SelArm is one select arm. `op` is 0 recv, 1 send, 2 done, 3 default — the same order

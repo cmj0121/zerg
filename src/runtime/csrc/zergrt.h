@@ -926,6 +926,15 @@ int zrt_chan_recv(zrt_chan *ch, void *out);
  * zrt_chan_recv that returned 1, and this is what a `Result[T]`'s Right is built from. */
 zrt_err zrt_chan_close_err(zrt_chan *ch);
 
+/* zrt_chan_close is the EXPLICIT close behind Zerg's `close(ch)`: a flag on the CHANNEL,
+ * not a give-up of the caller's own share. It touches neither rc nor senders, so every
+ * handle keeps its reference and stays readable; it is idempotent, so first close wins for
+ * the recorded reason; and it wakes any parked SENDER, which the auto-close path never has
+ * to do because that one runs only when the last sender has already left. It does not
+ * replace auto-close: a crashing producer never reaches a `close` call, and its unwind is
+ * what carries the crash Err to the receiver. */
+void zrt_chan_close(zrt_chan *ch);
+
 /* zrt_crash_active reports whether the abort currently unwinding is an unhandled
  * coroutine crash (unwind.c sets it while running the crashing coroutine's cleanup
  * stack). zrt_chan_sender_release reads it, alongside zrt_taken_err for the Err itself,

@@ -364,6 +364,36 @@ zrt_err zrt_chan_close_err(zrt_chan *ch) {
 	return e;
 }
 
+/* zrt_chan_close is the EXPLICIT close behind Zerg's `close(ch)`: it marks the CHANNEL
+ * no-longer-sendable. It is a property of the channel and not of a holder, so it touches
+ * neither rc nor senders — every handle keeps its reference and stays readable, and a
+ * receive drains what is buffered before answering the Right, exactly as an auto-close
+ * does.
+ *
+ * It is idempotent: chan_close returns early on an already-closed channel, so FIRST CLOSE
+ * WINS for the recorded reason. That is a real trade — a producer that crashes after an
+ * explicit close does not overwrite the clean StopIteration with its own Err, so its
+ * receiver reads an ordinary end. The crash still reports on stderr through the crashing
+ * coroutine's own handler, so the failure is not lost, only its path to that receiver.
+ *
+ * Explicit close is the one that can happen while senders REMAIN, which is why it wakes
+ * the send queue and the auto-close path does not: a sender parked waiting for a taker
+ * would otherwise sleep forever. Each wakes with `done` false and aborts with
+ * SendOnClosedError, and the queue is emptied here — a woken sender's waiter lives on the
+ * stack it is about to unwind, so leaving it linked would be a hand-off into freed
+ * memory. */
+void zrt_chan_close(zrt_chan *ch) {
+	zrt_mutex_lock(&ch->lock);
+	if (!ch->closed) {
+		chan_close(ch, chan_stop_iteration());
+		for (zrt_waiter *w = ch->sendq_head; w != NULL; w = w->next) {
+			zrt_sched_wake(w->co);
+		}
+		ch->sendq_head = ch->sendq_tail = NULL;
+	}
+	zrt_mutex_unlock(&ch->lock);
+}
+
 /* --- select ------------------------------------------------------------------ */
 
 /* g_sel_rot rotates the fair ready-scan's start index so that, when several arms are

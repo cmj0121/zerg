@@ -27,6 +27,27 @@ struct Emitter {
 	# C has no shadowing inside a function, so the second one has to be spelled
 	# differently or the C compiler rejects the redefinition.
 	env_cnames: list[str]
+
+	# env_dead is each binding's liveness after a `del`, in the same order: 0 live, 1
+	# revoked on every path reaching here, 2 revoked on some paths and not others. It is
+	# what makes `del` mean anything — without it `del v` followed by a use of `v` compiled
+	# happily for every type, and the statement was a comment with a keyword in front.
+	env_dead: list[int]
+
+	# rel_cnames / rel_fns are the PENDING RELEASES: every binding in scope that owns what
+	# it holds, in declaration order, paired with the runtime function that gives it back.
+	# Today only channel bindings are on it — a channel binding owns a holder count, and a
+	# send count too when it is send-capable, and giving those back is what makes the spec's
+	# "close early by narrowing the scope" idiom work without any statement at all — but the
+	# list is deliberately type-agnostic: a `str`, `list` or `map` binding joins it by
+	# registering a name and a release function, and every exit path already handles it.
+	#
+	# The list is consumed at the THREE places control leaves a block, and all three go
+	# through c_release_from: falling off its end (c_block), `return` (c_return), and
+	# `break`/`continue` (c_jump). A fourth exit gets one place to call, which is the whole
+	# reason the pair is not shaped like the thing it releases.
+	rel_cnames: list[str]
+	rel_fns: list[str]
 	sig_names: list[str]
 	sig_rets: list[Ty]
 	sig_hasret: list[bool]
@@ -99,6 +120,35 @@ struct Emitter {
 	used_conc: bool
 	fn_mark: str
 	loop_mark: str
+
+	# loop_rel is the pending-release depth at the innermost enclosing loop BODY's entry —
+	# what a `break` or a `continue` has to release on its way out. c_loop_block saves and
+	# restores it, so a nested loop cannot leave its own depth visible to the outer one.
+	loop_rel: int
+
+	# res_names / res_decls are the `Result[T]` CARRIERS — one C struct per distinct
+	# payload shape, plus the `zg_force_*` helper that reads it back. They are registered
+	# exactly the way tup_names / tup_decls are, and for the same reason: the name is a
+	# pure function of the shape, so two modules of one program spell it alike.
+	res_names: list[str]
+	res_decls: list[str]
+
+	# fn_ret is the return type of the function currently being emitted, TVoid when it
+	# declares none. A `return` is a place a value fills a DECLARED slot, so it is one of
+	# the sites where a channel direction has to be checked — and the declared type is
+	# nowhere near the statement, so it rides here. c_fn saves and restores it, which is
+	# what keeps a lambda's own return type from leaking into the function it sits inside.
+	#
+	# There is no `has_ret` beside it: a function that declares no return type has TVoid
+	# here, and every reader is asking whether this is a CHANNEL, which TVoid is not.
+	fn_ret: Ty
+
+	# op_n numbers the temporaries the Result operators need. It is DELIBERATELY not
+	# dfn_n: that counter names the defer thunks, the spawn envs and the block marks, and
+	# a new operator drawing from it would renumber every one of them downstream — a
+	# whole-file diff for a change that touched one expression, and the first thing a
+	# fixpoint failure would show.
+	op_n: int
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -138,9 +188,139 @@ fn c_type(t: Ty) -> str {
 		TFn(_, _) => "zg_fnptr"
 		TTuple(ts) => c_tuple_cname(ts)
 		TMap(_, _) => "zrt_map"
-		TChan(_) => "zrt_chan*"
+		TChan(_, _) => "zrt_chan*"
+		TResult(el) => c_carrier_cname(el)
+		TErr => "zrt_err"
 		_ => "int64_t"
 	}
+}
+
+# --- the Result carrier -----------------------------------------------------------
+#
+# `Result[T]` is a plain C struct: a tag, the value, and the Err saying why there is not
+# one. That encoding is shared with the Go seed and with the runtime's own zrt_result_nil,
+# on purpose — the same program built by either toolchain has to behave the same way. The
+# fields themselves are spelled in one place, beside the typedef further down.
+#
+# c_carrier_cname is the name, and it is a PURE function of the payload shape for two
+# reasons, both of them hard. c_type has to be able to spell it and has no Emitter to
+# ask, which is the constraint c_tuple_cname already lives under. And a build emits ONE
+# TRANSLATION UNIT PER MODULE, each with an Emitter of its own, so any serial number
+# would give the same shape two different names in two units and the prototypes would
+# stop matching. A shape key cannot drift, because it depends on nothing.
+#
+# Two payloads whose C type coincides — `Result[list[int]]` and `Result[list[str]]` are
+# both `zrt_list` — share one carrier. That is harmless: the C is identical, and the
+# tuple carriers have behaved this way since they existed.
+fn c_carrier_cname(elem: Ty) -> str {
+	return "zg_res_" + c_ident_safe(c_type(elem))
+}
+
+fn c_is_result(t: Ty) -> bool {
+	return match t {
+		TResult(_) => true
+		_ => false
+	}
+}
+
+fn c_result_elem(t: Ty) -> Ty {
+	return match t {
+		TResult(e) => e
+		_ => TUnknown
+	}
+}
+
+fn c_is_err_ty(t: Ty) -> bool {
+	return match t {
+		TErr => true
+		_ => false
+	}
+}
+
+# --- the carrier's field layout, written down once ---------------------------------
+#
+# THE LAYOUT LIVES HERE AND NOWHERE ELSE. The typedef below declares it and the accessors
+# beside it are how every operator reads and writes one, so `??`, `!`, `guard`, `match`,
+# `if let`, `select` and the receive helper name no field of their own. That is not tidiness:
+# the layout has to stay byte-compatible with the Go seed's emit_result.go, because the same
+# program built by either toolchain has to behave the same way — and the fixpoint gate cannot
+# see it drift, since the self-hosted compiler is only ever compared with itself. One place
+# to change is the whole of the protection.
+#
+# `tag == 0` is Left(v) and reads `.ok`; `tag == 1` is Right(err) and reads `.err`.
+
+fn c_res_tag(r: str) -> str {
+	return r + ".tag"
+}
+
+fn c_res_ok(r: str) -> str {
+	return r + ".ok"
+}
+
+fn c_res_err(r: str) -> str {
+	return r + ".err"
+}
+
+fn c_res_is_left(r: str) -> str {
+	return c_res_tag(r) + " == 0"
+}
+
+fn c_res_is_right(r: str) -> str {
+	return c_res_tag(r) + " != 0"
+}
+
+# c_res_mark_left / c_res_mark_right are the discriminant WRITES — a whole C statement,
+# because that is how a carrier is filled in the statement contexts (`guard`, `select`)
+# where a compound literal cannot go.
+fn c_res_mark_left(r: str) -> str {
+	return c_res_tag(r) + " = 0;"
+}
+
+fn c_res_mark_right(r: str) -> str {
+	return c_res_tag(r) + " = 1;"
+}
+
+# c_carrier_name is c_carrier_cname plus the typedef and the force helper it needs,
+# registered once per shape. Every operator that reads a Result back goes through the
+# accessors above rather than writing `.ok` / `.err` itself, which is what will let a
+# second kind of carrier — an optional, an either — be added by giving it its own set
+# instead of by revisiting each operator.
+fn c_carrier_name(mut &em: Emitter, elem: Ty) -> str {
+	name := c_carrier_cname(elem)
+	return name if c_name_in(em.res_names, name)
+	# the carrier embeds a zrt_err, so the runtime header has to be there
+	em.used_rt = true
+	em.res_names.append(name)
+	ct := c_type(elem)
+	mut d := f"typedef struct {{ int32_t tag; {ct} ok; zrt_err err; }} {name};\n"
+	d = d + "static " + ct + " zg_force_" + name + "(" + name + " r) {\n"
+	d = d + "    if (" + c_res_is_right("r") + ") { zg_force_fail(" + c_res_err("r") + "); }\n"
+	d = d + "    return " + c_res_ok("r") + ";\n}\n"
+	em.res_decls.append(d)
+	return name
+}
+
+# c_carrier_prelude is what every force helper lands on: an Err that was never meant to
+# be forced, re-raised as the abort it is.
+#
+# The Err goes up WHOLE — message, cause and kind — with only the kind's NAME prefixed
+# onto the message, which is the same `Kind: message` shape a runtime abort already
+# reports. That prefix is the whole reason this is not a one-liner: a clean close carries
+# the message "channel closed" under the kind StopIteration, and an abort that said only
+# "channel closed" would leave the reader to guess which of the two endings they had.
+# A generic Err (kind NONE, what a bare `raise "…"` builds) has no name to add, so a
+# crash reason arrives verbatim — which is what makes a forced crash readable at all.
+fn c_carrier_prelude() -> str {
+	mut out := "static const char *zg_err_kindname(int k) {\n"
+	for nm in c_err_kinds() {
+		out = out + "    if (k == " + strconv.to_string(c_err_kind(nm), 10) + ") { return \"" + nm + "\"; }\n"
+	}
+	out = out + "    return NULL;\n}\n"
+	out = out + "static void zg_force_fail(zrt_err e) {\n"
+	out = out + "    const char *k = zg_err_kindname(e.kind);\n"
+	out = out + "    if (k != NULL) { e.msg = zrt_str_concat(k, zrt_str_concat(\": \", e.msg)); }\n"
+	out = out + "    zrt_raise_err(e);\n}\n"
+	return out
 }
 
 # A held function is stored as ONE C type, `zg_fnptr` — a generic function pointer — and
@@ -242,6 +422,10 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_names = []
 	em.env_tys = []
 	em.env_cnames = []
+	em.env_dead = []
+	em.rel_cnames = []
+	em.rel_fns = []
+	em.loop_rel = 0
 	em.ref_names = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
@@ -251,6 +435,7 @@ fn c_reset_env(mut &em: Emitter) {
 		em.env_names.append(em.k_names[i])
 		em.env_tys.append(em.k_tys[i])
 		em.env_cnames.append("zg_" + em.k_names[i])
+		em.env_dead.append(0)
 		i = i + 1
 	}
 }
@@ -260,6 +445,7 @@ fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
 	em.env_names.append(name)
 	em.env_tys.append(t)
 	em.env_cnames.append(cname)
+	em.env_dead.append(0)
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -300,6 +486,115 @@ fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 		i = i - 1
 	}
 	return TUnknown
+}
+
+# --- `del` liveness ----------------------------------------------------------------
+#
+# `del name` revokes a name's access (GRAMMAR group 11, docs/core/memory.md). The
+# revocation is the entire statement — it emits no C — so it is worth only as much as the
+# check that a revoked name is never read again, and the check has to be FLOW-SENSITIVE or
+# it says the wrong thing about an `if` that revokes on one branch.
+#
+# The model is the seed's (src/bootstrap/internal/sema/sema.go, the `liveness` type and
+# mergeDead), carried on the flat env stack this emitter already keeps: a name dead on
+# every path reaching a use is a hard use-after-del, dead on some paths but not others is
+# its own case, and the two get different words because they are different mistakes.
+#
+# It rides the emission walk rather than a pass of its own, which is why the merge points
+# are written out at each control-flow form: the emitter already visits a body exactly
+# once, in source order.
+
+# c_live_idx is the index of the innermost binding of a name, or -1 when nothing binds it.
+fn c_live_idx(mut &em: Emitter, name: str) -> int {
+	mut i := em.env_names.len() - 1
+	for i >= 0 {
+		return i if em.env_names[i] == name
+		i = i - 1
+	}
+	return -1
+}
+
+# c_live_del marks a name revoked on this path. Revoking is idempotent, so a symmetric
+# `del` on both branches of an `if` merges cleanly back to revoked.
+fn c_live_del(mut &em: Emitter, name: str) {
+	idx := c_live_idx(em, name)
+	return if idx < 0
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		if i == idx {
+			out.append(1)
+		} else {
+			out.append(em.env_dead[i])
+		}
+		i = i + 1
+	}
+	em.env_dead = out
+}
+
+# c_live_use refuses a read of a revoked name. This is the whole payoff: what used to be a
+# use-after-free waiting to happen is a diagnostic at the line that wrote it.
+fn c_live_use(mut &em: Emitter, name: str) {
+	idx := c_live_idx(em, name)
+	return if idx < 0
+	if em.env_dead[idx] == 1 {
+		raise "`" + name + "` is used after del"
+	}
+	if em.env_dead[idx] == 2 {
+		raise "`" + name + "` is used after del on some paths"
+	}
+}
+
+# c_live_save copies the current liveness, so a branch can be analysed from the shared
+# entry state and its end merged rather than leaking into its sibling.
+fn c_live_save(mut &em: Emitter) -> list[int] {
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		out.append(em.env_dead[i])
+		i = i + 1
+	}
+	return out
+}
+
+# c_live_restore puts a saved entry state back, so the next branch starts where the first
+# one did. A binding the branch declared is past the end of the saved list and stays as it
+# is — it is out of scope by the time this matters.
+fn c_live_restore(mut &em: Emitter, saved: list[int]) {
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		if i < saved.len() {
+			out.append(saved[i])
+		} else {
+			out.append(em.env_dead[i])
+		}
+		i = i + 1
+	}
+	em.env_dead = out
+}
+
+# c_live_merge joins one path's end state into the current one, entry by entry.
+fn c_live_merge(mut &em: Emitter, other: list[int]) {
+	mut out: list[int] = []
+	mut i := 0
+	for i < em.env_dead.len() {
+		if i < other.len() {
+			out.append(c_live_join(em.env_dead[i], other[i]))
+		} else {
+			out.append(em.env_dead[i])
+		}
+		i = i + 1
+	}
+	em.env_dead = out
+}
+
+# c_live_join is the two-path join: revoked on both stays revoked, live on both stays live,
+# and one of each is the inconsistent case a later use is refused for.
+fn c_live_join(a: int, b: int) -> int {
+	return 0 if a == 0 and b == 0
+	return 1 if a == 1 and b == 1
+	return 2
 }
 
 # c_sig_key is how a function is looked up in the signature and parameter tables. A free
@@ -485,6 +780,9 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # properly sized runtime list from the destination field's element type (a bare `[]`
 # alone has no type context and would otherwise emit a malformed zero list).
 fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
+	if ty_is_chan(fty) {
+		c_chan_check(c_infer(em, arg), fty, "field")
+	}
 	if c_is_list(fty) and c_is_listlit(arg) {
 		em.used_rt = true
 		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}))"
@@ -643,8 +941,18 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 
 # c_bind_env registers an enum constructor arm's payload names in the variable
 # environment with their field types, so type inference inside the arm resolves them.
-fn c_bind_env(mut &em: Emitter, a: Arm) {
-	if a.pat == 3 {
+fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
+	if a.pat == 3 and c_is_result(st) {
+		# a Result's payload types are not in the variant table: Left carries the value,
+		# Right carries an Err
+		if a.binds.len() > 0 {
+			if c_result_tag(a.ctor) == 0 {
+				c_add_var(em, a.binds[0], c_result_elem(st))
+			} else {
+				c_add_var(em, a.binds[0], TErr)
+			}
+		}
+	} else if a.pat == 3 {
 		mut i := 0
 		for i < a.binds.len() {
 			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i))
@@ -848,7 +1156,220 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
 		EChanNew(t, cap) => c_chan_new(em, t, cap, sb)
 		ERecv(ch) => c_recv(em, ch, sb)
+		EForce(x) => c_force(em, x, sb)
+		ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
+		EGuard(body) => c_guard(em, body, sb)
+		EIs(x, name) => c_is_test(em, x, name, sb)
 	}
+}
+
+# --- reading a Result back --------------------------------------------------------
+
+# c_force lowers `e!`: the Left, or the Right re-raised as an abort right here. The work
+# is in the per-carrier helper, so this is only the call — which is what keeps `!` from
+# knowing how a carrier is spelled.
+fn c_force(mut &em: Emitter, x: Expr, sb: Subst) -> str {
+	t := c_infer(em, x)
+	if not c_is_result(t) {
+		raise "NotImplemented: `!` on a " + ty_name(t) + " — it forces a Result[T]"
+	}
+	name := c_carrier_name(em, c_result_elem(t))
+	return f"zg_force_{name}({c_expr(em, x, sb)})"
+}
+
+# c_coalesce lowers `a ?? b`: the Left of `a`, or the fallback. The operand is bound to a
+# temp first because it is read twice — the tag and then the value — and `a` is most
+# often a receive, which is the most side-effecting expression the language has.
+#
+# The DIVERGENT form (`?? break`, `?? return …`) needs a statement where the value would
+# go, so it takes the if/else shape instead of the conditional one. Its statements go
+# through the ordinary c_stmt, which is what gives `break` the loop's defers for free.
+# Nothing falls out of the else branch — the parser only routes statements that LEAVE
+# here — so the result temp is read only where it was written.
+fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -> str {
+	t := c_infer(em, a)
+	if not c_is_result(t) {
+		raise "NotImplemented: `??` on a " + ty_name(t) + " — its left side is a Result[T]"
+	}
+	elem := c_result_elem(t)
+	cn := c_carrier_name(em, elem)
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	tmp := "zg_co" + tag
+	head := f"({{ {cn} {tmp} = {c_expr(em, a, sb)};"
+	return head + " " + c_res_is_left(tmp) + " ? " + c_res_ok(tmp) + " : (" + c_expr(em, b, sb) + "); })" if jump.len() == 0
+
+	val := "zg_cov" + tag
+	mut out := f"{head} {c_type(elem)} {val};"
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_ok(tmp) + "; } else { "
+	for s in jump {
+		out = out + c_stmt(em, s, "")
+	}
+	return out + f"}} {val}; }})"
+}
+
+# --- guard: the way back from the abort tier --------------------------------------
+#
+# `guard { … }` runs its block under a CATCHING abort handler and answers a `Result[T]`:
+# the block's value as the Left, or — when something inside aborted — the Err it carried
+# as the Right. It is the only construct that stops an abort, which is why the whole of
+# the runtime's handler protocol shows up here and nowhere else:
+#
+#   zrt_handler_push_catch  links a frame and marks it `catches`, so an abort landing on
+#                           it prints NO diagnostic — the program is handling the error
+#                           and the message rides in the Err instead;
+#   setjmp(frame.buf)       arms the landing pad. It has to be evaluated in the ENCLOSING
+#                           function's own activation — a longjmp into a frame that has
+#                           returned is undefined — which is why this is a C statement
+#                           expression rather than a call to a helper;
+#   zrt_abort               unwinds every pending defer/drop down to frame.mark and
+#                           longjmps here, leaving the frame LINKED: the landing pad owns
+#                           the pop, on both paths, which is what keeps the handler chain
+#                           balanced when a guard is caught and when it is not;
+#   zrt_taken_err           hands back the Err the abort carried.
+#
+# The chain lives in the per-coroutine zrt_tls the scheduler swaps at every context
+# switch, so a `guard` catches aborts on the CURRENT stack only — a coroutine spawned
+# inside the block has a handler chain of its own and its crash is untouched, exactly as
+# docs/code/errors.md says.
+#
+# One C hazard is inherited rather than solved, and is the reason a guarded block is
+# usually written as one call: an automatic variable of the enclosing function that is
+# MODIFIED inside the block and read after a caught abort has an indeterminate value
+# unless it is `volatile` (C99 7.13.2.1). A variable only read, or written before the
+# guard, is unaffected — longjmp restores the register state setjmp saw.
+fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
+	em.used_rt = true
+	c_guard_no_jump(body, false)
+	vt := c_guard_val_ty(em, body)
+	cn := c_carrier_name(em, c_guard_elem(vt))
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	fr := "zg_gf" + tag
+	res := "zg_gr" + tag
+
+	n := body.len()
+	mut upto := n
+	if n > 0 and c_is_expr_stmt(body[n - 1]) {
+		upto = n - 1
+	}
+	mut inner := ""
+	mut i := 0
+	for i < upto {
+		inner = inner + c_stmt(em, body[i], "")
+		i = i + 1
+	}
+	inner = inner + c_guard_ok(em, body, upto, vt, res, sb)
+
+	mut out := "({ zrt_frame " + fr + "; " + cn + " " + res + " = {0}; zrt_handler_push_catch(&" + fr + ");"
+	out = out + " if (setjmp(" + fr + ".buf) == 0) { " + inner
+	out = out + " zrt_unwind_to(" + fr + ".mark); zrt_handler_pop(&" + fr + "); }"
+	out = out + " else { zrt_handler_pop(&" + fr + "); " + c_res_mark_right(res) + " " + c_res_err(res) + " = zrt_taken_err(); }"
+	return out + " " + res + "; })"
+}
+
+# c_guard_ok writes the Left: the block ran to its end, so its value is the answer.
+fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, sb: Subst) -> str {
+	# a block whose last statement is not an expression has no value at all (GRAMMAR: it
+	# is `nil`), so the tag alone is what there is to say
+	return c_res_mark_left(res) if upto == body.len()
+
+	val := c_expr(em, c_expr_stmt_of(body[upto]), sb)
+
+	# FLATTENING: a block that already yields a Result IS the answer. An abort inside and a
+	# Right handed back are the same ending, so they must not nest (docs/code/errors.md).
+	return res + " = " + val + ";" if c_is_result(vt)
+
+	# a value-less last expression still has to RUN — it was written for its effect
+	return val + "; " + c_res_mark_left(res) if c_is_nil_ty(vt)
+	return c_res_mark_left(res) + " " + c_res_ok(res) + " = " + val + ";"
+}
+
+# c_guard_val_ty is the guarded BLOCK's value type. GRAMMAR gives a block the value of its
+# last statement, and only an expression statement has one — every other statement, and an
+# empty block, yields `nil`.
+#
+# It is deliberately computed from the source BEFORE the block is emitted, because
+# c_infer(EGuard) has to answer the same thing for a caller that types the guard without
+# lowering it (`guard { … } ?? 0` types its left side first). That is also the one thing it
+# cannot do: a name bound INSIDE the block is not in scope yet, so it is refused by name
+# rather than typed as whatever `int64_t` would make of it.
+fn c_guard_val_ty(mut &em: Emitter, body: list[Stmt]) -> Ty {
+	n := body.len()
+	return TNil if n == 0
+	return TNil if not c_is_expr_stmt(body[n - 1])
+	t := c_infer(em, c_expr_stmt_of(body[n - 1]))
+	if c_is_unknown(t) {
+		raise "NotImplemented: a `guard` whose block ends in a name bound inside it — give the block a call or a literal as its value"
+	}
+	return TNil if c_is_nil_ty(t)
+	return t
+}
+
+# c_guard_elem is the guard's Result PAYLOAD: the block's value type, or — when that is
+# already a Result — the type it carries, which is the flattening rule.
+fn c_guard_elem(vt: Ty) -> Ty {
+	return c_result_elem(vt) if c_is_result(vt)
+	return vt
+}
+
+fn c_is_expr_stmt(s: Stmt) -> bool {
+	return match s {
+		SExpr(_) => true
+		_ => false
+	}
+}
+
+fn c_expr_stmt_of(s: Stmt) -> Expr {
+	return match s {
+		SExpr(x) => x
+		_ => ENil
+	}
+}
+
+# c_guard_no_jump refuses a jump that would LEAVE the guarded block: a `return`, or a
+# `break`/`continue` belonging to a loop outside the guard. Either one jumps out of the C
+# statement expression with the catching frame still linked, and the next abort anywhere
+# in the program lands on an activation that has already returned. There is no lowering
+# for that short of a second unwind path, so it is named instead of miscompiled.
+#
+# `in_loop` is set for the body of a loop written INSIDE the guard, whose break belongs to
+# it and never crosses the frame.
+fn c_guard_no_jump(body: list[Stmt], in_loop: bool) {
+	for s in body {
+		match s {
+			SReturn(has_val, e) => c_guard_jump_err("return")
+			SReturnIf(v, cond) => c_guard_jump_err("return")
+			SBreak => c_guard_loop_jump("break", in_loop)
+			SContinue => c_guard_loop_jump("continue", in_loop)
+			SIf(cond, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
+			SIfLet(nm, v, then_b, has_else, else_b) => c_guard_no_jump_two(then_b, else_b, in_loop)
+			SFor(is_cond, cond, body_b) => c_guard_no_jump(body_b, true)
+			SForIn(nm, it, body_b) => c_guard_no_jump(body_b, true)
+			SSelect(arms) => c_guard_no_jump_sel(arms, in_loop)
+			_ => c_skip()
+		}
+	}
+}
+
+fn c_guard_no_jump_two(a: list[Stmt], b: list[Stmt], in_loop: bool) {
+	c_guard_no_jump(a, in_loop)
+	c_guard_no_jump(b, in_loop)
+}
+
+fn c_guard_no_jump_sel(arms: list[SelArm], in_loop: bool) {
+	for a in arms {
+		c_guard_no_jump(a.body, in_loop)
+	}
+}
+
+fn c_guard_loop_jump(kw: str, in_loop: bool) {
+	return if in_loop
+	c_guard_jump_err(kw)
+}
+
+fn c_guard_jump_err(kw: str) {
+	raise "NotImplemented: `" + kw + "` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
@@ -869,6 +1390,25 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# enum equality compares the tag (the subset only == tag-only enums like Kind)
 	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=")
 	return f"({c_expr(em, a, sb)} {c_binop(oper)} {c_expr(em, b, sb)})"
+}
+
+# c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime
+# type tag — its `kind` — so an error-kind test is a comparison of that tag, exactly as the
+# seed lowers it. Every other `x is T` is a general runtime type test, which needs tags no
+# value carries this phase; it is refused BY NAME here rather than lowered to something
+# that reads as a bool. Both refusals matter more than they look: until this function
+# existed the `is` token was consumed by nobody and dropped, so a test emitted a stray `0;`
+# and an undeclared `zg_<Name>` — C that cannot be traced back to the Zerg that meant it.
+fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
+	t := c_infer(em, x)
+	kind := c_err_kind(name)
+	if kind == 0 {
+		raise "NotImplemented: `is " + name + "` — only the built-in error kinds can be named in an `is` test"
+	}
+	if not c_is_err_ty(t) {
+		raise "`is " + name + "` wants an Err on its left, found a " + ty_name(t)
+	}
+	return f"(({c_expr(em, x, sb)}).kind == {kind})"
 }
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
@@ -1086,6 +1626,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# this it reads as a struct constructor and emits a compound literal of a type nothing
 	# declared — which cc rejects, loudly but a long way from the source that meant it.
 	if c_err_kind(name) > 0 {
+		if not c_err_constructible(name) {
+			raise "`" + name + "` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish"
+		}
 		em.used_rt = true
 		return f"zrt_err_new_kind({c_err_kind(name)}, {c_args(em, args, sb)})"
 	}
@@ -1157,6 +1700,12 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
 	return f"&({c_expr(em, a, sb)})" if row >= 0 and em.pr_ref[row]
 	return c_expr(em, a, sb) if row < 0
 
+	# guarded on the DECLARED type, which is already in hand: c_chan_check answers nothing
+	# unless it is a channel, and the c_infer it would otherwise take walks the argument's
+	# whole tree — on every argument of every call — only to be thrown away.
+	if ty_is_chan(em.pr_ty[row]) {
+		c_chan_check(c_infer(em, a), em.pr_ty[row], "argument " + strconv.to_string(idx, 10) + " of `" + fname + "`")
+	}
 	return c_copied(em, em.pr_ty[row], a, sb)
 }
 
@@ -1247,6 +1796,10 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		em.used_fnptr = true
 		return f"((zg_fnptr)zg_{n})"
 	}
+
+	# every read of a binding funnels through here, which is what makes this the one place
+	# a use after `del` has to be caught
+	c_live_use(em, n)
 	return c_var_cname(em, n)
 }
 
@@ -1285,25 +1838,57 @@ fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
 
 # c_match lowers a match expression to a right-nested C ternary, the last arm as the
 # final else (the subset requires an exhaustive catch-all last arm).
+#
+# The scrutinee is bound to a temp first unless it is already an lvalue. Every arm's
+# condition and body has the scrutinee spliced into it, so pasting the expression itself
+# would evaluate it once PER ARM — which for `match f(x)` is a call repeated and for
+# `match <-ch` is a second value taken off the channel and thrown away. An lvalue is left
+# alone: re-reading a name costs nothing and does nothing, and leaving it alone is what
+# keeps the emitted C for everything that already worked exactly where it was.
+#
+# A scrutinee whose type inference could not name is also left alone: the temp needs a C
+# type to be declared with, and guessing one would turn a typing gap into wrong C.
 fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
+	st := c_infer(em, scrut)
 	s := c_expr(em, scrut, sb)
-	return c_arms(em, arms, 0, s, sb)
+	return c_arms(em, arms, 0, s, st, sb) if c_is_lvalue(scrut) or c_is_unknown(st)
+
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	tmp := "zg_ms" + tag
+	return f"({{ {c_type(st)} {tmp} = {s}; {c_arms(em, arms, 0, tmp, st, sb)}; }})"
 }
 
-fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, sb: Subst) -> str {
+fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, st: Ty, sb: Subst) -> str {
 	a := arms[i]
-	return c_arm_body(em, a, s, sb) if i == arms.len() - 1
+	return c_arm_body(em, a, s, st, sb) if i == arms.len() - 1
 
-	cond := c_arm_cond(em, a, s, sb)
-	body := c_arm_body(em, a, s, sb)
-	rest := c_arms(em, arms, i + 1, s, sb)
+	cond := c_arm_cond(em, a, s, st, sb)
+	body := c_arm_body(em, a, s, st, sb)
+	rest := c_arms(em, arms, i + 1, s, st, sb)
 	return f"({cond} ? {body} : {rest})"
+}
+
+# c_result_tag is which side of a Result a constructor pattern names. A Result is not a
+# declared enum — it has no row in the variant table — so `Left` and `Right` are answered
+# here rather than looked up, and anything else is a pattern the type does not have.
+fn c_result_tag(ctor: str) -> int {
+	return 0 if ctor == "Left"
+	return 1 if ctor == "Right"
+	raise "NotImplemented: the pattern `" + ctor + "` on a Result[T] — it has Left and Right"
 }
 
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
 # constructor arm aliases each payload name to its `s.u.Var.fK` field access.
-fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> Subst {
+fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> Subst {
 	return c_extend(sb, a.bind, s) if a.pat == 1
+	if a.pat == 3 and c_is_result(st) {
+		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
+		# kind the variant table describes, so the field is named directly
+		return sb if a.binds.len() == 0
+		return c_extend(sb, a.binds[0], c_res_ok(s)) if c_result_tag(a.ctor) == 0
+		return c_extend(sb, a.binds[0], c_res_err(s))
+	}
 	if a.pat == 3 {
 		en := c_variant_enum(em, a.ctor)
 		mut r := sb
@@ -1322,24 +1907,27 @@ fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> Subst {
 	return sb
 }
 
-fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
-	c_bind_env(em, a)
+fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	c_bind_env(em, a, st)
 	if a.pat == 0 {
 		# literal pattern: scrutinee equals the literal
 		return f"({s} == {c_expr(em, a.lit, sb)})"
 	}
 	if a.pat == 3 {
-		base := f"({s}.tag == {c_variant_tag(em, a.ctor)})"
-		return f"({base} && {c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb))})" if a.has_guard
+		mut base := f"({s}.tag == {c_variant_tag(em, a.ctor)})"
+		if c_is_result(st) {
+			base = "(" + c_res_tag(s) + " == " + strconv.to_string(c_result_tag(a.ctor), 10) + ")"
+		}
+		return f"({base} && {c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
 		return base
 	}
-	return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, sb)) if a.has_guard
+	return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb)) if a.has_guard
 	return "1"
 }
 
-fn c_arm_body(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
-	c_bind_env(em, a)
-	return c_expr(em, a.body, c_arm_subst(em, a, s, sb))
+fn c_arm_body(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	c_bind_env(em, a, st)
+	return c_expr(em, a.body, c_arm_subst(em, a, s, st, sb))
 }
 
 # --- type inference ------------------------------------------------------------
@@ -1366,8 +1954,12 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ETuple(elems) => c_tuple_ty(em, elems)
 		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 		EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
-		EChanNew(t, cap) => TChan(t)
-		ERecv(ch) => c_chan_elem(c_infer(em, ch))
+		EChanNew(t, cap) => TChan(t, 0)
+		ERecv(ch) => TResult(ty_chan_elem(c_infer(em, ch)))
+		EForce(x) => c_result_elem(c_infer(em, x))
+		ECoalesce(a, b, jump) => c_result_elem(c_infer(em, a))
+		EGuard(body) => TResult(c_guard_elem(c_guard_val_ty(em, body)))
+		EIs(x, name) => TBool
 	}
 }
 
@@ -1494,20 +2086,39 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
 		SReturnIf(val, cond) => c_return_if(em, val, cond, ind)
-		SExpr(e) => f"{ind}{c_expr(em, e, c_nosub())};\n"
+		SExpr(e) => c_expr_stmt(em, e, ind)
 		SIf(cond, then_body, has_else, else_body) => c_if(em, cond, then_body, has_else, else_body, ind)
+		SIfLet(name, value, then_body, has_else, else_body) => c_iflet(em, name, value, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
-		SGuard(body) => c_block(em, body, ind)
 		SRaise(x) => c_raise(em, x, ind)
 		SDefer(x) => c_defer(em, x, ind)
 		SSpawn(x) => c_spawn(em, x, ind)
 		SSend(ch, v) => c_send(em, ch, v, ind)
 		SSelect(arms) => c_select(em, arms, ind)
 		SDel(n) => c_del(em, n, ind)
+		SClose(ch, at_exit) => c_close(em, ch, at_exit, ind)
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
+	}
+}
+
+# c_expr_stmt lowers a bare expression statement. A `guard` in statement position is a
+# guard whose Result nobody reads — which is legal, and is what `guard { risky() }` means —
+# but the C it lowers to is a statement expression, and one whose value is discarded draws
+# a -Wunused-value. Writing the discard down as a cast says the same thing to the reader
+# and keeps the build log free of nine warnings nobody should have to learn to ignore.
+fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
+	rendered := c_expr(em, e, c_nosub())
+	return f"{ind}(void)({rendered});\n" if c_is_guard(e)
+	return f"{ind}{rendered};\n"
+}
+
+fn c_is_guard(e: Expr) -> bool {
+	return match e {
+		EGuard(_) => true
+		_ => false
 	}
 }
 
@@ -1650,43 +2261,161 @@ fn c_init_calls(f: File) -> str {
 # copies elemsz bytes through it — so each goes through a temp: a literal has no
 # address, and neither does a call result.
 #
-# A receive needs one helper per element type because zrt_chan_recv reports closure
-# through its return value while writing the element through a pointer, and an
-# expression has to be one or the other. The helper aborts on a closed channel, which
-# is the happy path this compiler implements: reading a Result[T] back at the surface
-# needs the Result carrier the subset does not have yet.
+# A receive yields a real `Result[T]` on the carrier above, so every operator that reads
+# a Result back — `!`, `??`, `if v := <-ch`, `match <-ch { Left … Right … }` — works on a
+# receive with no channel-specific code behind it. It also means a close can say WHY:
+# there is somewhere to put "no value, and here is the reason", which a bare `T` had not.
 fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	em.used_conc = true
 	return f"zrt_chan_new(sizeof({c_type(t)}), (size_t)({c_expr(em, cap, sb)}))"
 }
 
-fn c_chan_elem(t: Ty) -> Ty {
+# --- channel direction ------------------------------------------------------------
+#
+# A direction is a purely COMPILE-TIME property: `chan[T]`, `chan[T]<-` and `<-chan[T]`
+# are all one `zrt_chan*`, so nothing below decides a C type. What it decides is two
+# things — which operations a name may perform, and which of the runtime's two reference
+# counts a handle joins when it is handed over (c_spawn, c_del).
+
+# c_chan_dir is a channel end's direction: 0 bidirectional, 1 send-only (`chan[T]<-`),
+# 2 receive-only (`<-chan[T]`). Anything that is not a channel answers 0, so a caller may
+# ask without testing first.
+fn c_chan_dir(t: Ty) -> int {
 	return match t {
-		TChan(e) => e
-		_ => TUnknown
+		TChan(_, d) => d
+		_ => 0
 	}
+}
+
+# c_chan_dir_ok reports whether an end of direction `have` may fill a slot declared
+# `want`. Narrowing is the spec's one-way built-in upcast: a bidirectional end becomes
+# either single direction, and a single direction never goes back and never crosses.
+fn c_chan_dir_ok(have: int, want: int) -> bool {
+	return true if want == have
+	return true if have == 0
+	return false
+}
+
+# c_chan_check is the narrowing check at every place a channel end fills a declared slot:
+# a call argument, a `return`, a typed binding, a struct or variant field. It emits
+# nothing — a direction costs no code — so this is the whole of it.
+fn c_chan_check(have: Ty, want: Ty, site: str) {
+	if ty_is_chan(have) and ty_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want)) {
+		raise "a channel direction only narrows: a " + ty_name(have) + " cannot fill a " + ty_name(want) + " (" + site + ")"
+	}
+}
+
+# c_chan_op_check is the OTHER half of a direction: not where a handle may go, but what a
+# name may DO with one. `op` numbers the operation the way c_chan_dir numbers the ends —
+# 0 receive, 1 send, 2 close — and each refusal is worded exactly once here, for the six
+# lowering sites that ask: `<-ch`, `ch <- v`, `close(ch)`, both kinds of `select` arm, and
+# `for v in ch`. A seventh gets the wording rather than a paraphrase of it.
+fn c_chan_op_check(t: Ty, op: int) {
+	dir := c_chan_dir(t)
+	if op == 0 and dir == 1 {
+		# the guarantee the send-only end exists for: it cannot receive (steal) values
+		raise "cannot receive on a send-only " + ty_name(t)
+	}
+	if op == 1 and dir == 2 {
+		raise "cannot send on a receive-only " + ty_name(t)
+	}
+	if op == 2 and dir == 2 {
+		raise "cannot close a receive-only channel " + ty_name(t) + ": a consumer may not end a stream on the producers' behalf"
+	}
+}
+
+# --- what a direction does to the two reference counts -----------------------------
+#
+# The runtime keeps two counts on a channel (src/runtime/csrc/chan.c): `rc`, the holder
+# count, whose last holder frees the object; and `senders`, the count of SEND-CAPABLE
+# holders, whose reaching zero is what CLOSES the channel. There are two pairs of
+# operations over them:
+#
+#     zrt_chan_copy(c)            rc++
+#     zrt_chan_release(c)         rc--                       (frees at zero)
+#     zrt_chan_sender_copy(c)     rc++, senders++
+#     zrt_chan_sender_release(c)  senders--  (closes at zero), then rc--
+#
+# So per-direction counting is not a new mechanism — it is choosing which pair to call.
+# A handle's direction says whether it is send-capable, and therefore whether it counts
+# toward the close:
+#
+#   handle's direction        handed over (copy)     that handle dropped (release)
+#   ------------------------  ---------------------  ------------------------------
+#   bidirectional chan[T]     zrt_chan_sender_copy   zrt_chan_sender_release
+#   send-only     chan[T]<-   zrt_chan_sender_copy   zrt_chan_sender_release
+#   receive-only  <-chan[T]   zrt_chan_copy          zrt_chan_release
+#
+# Now the paths an end can travel, and what each does:
+#
+#   a BINDING            takes a reference of its OWN, by its own direction, and gives it
+#                        back when its scope ends (c_let_chan registers it on the
+#                        pending-release list; c_release_from is what spends it). An
+#                        initializer naming existing storage is copied; a freshly built
+#                        handle already carries exactly one reference and is taken over.
+#                        This is what makes "close early by narrowing the scope" work with
+#                        no statement at all.
+#   a `spawn` argument   a handle is duplicated, and its direction is the CALLEE
+#                        PARAMETER's, not the caller variable's — that is the whole point:
+#                        `spawn consumer(ch)` where consumer takes a `<-chan[T]` must not
+#                        add a sender. Copy on capture, release in the spawn thunk's defer
+#                        (which runs on the crash path too).
+#   a plain call argument  no copy and no release. The callee borrows the caller's handle
+#                        for the duration of a call the caller is blocked inside, so the
+#                        counts cannot move under it and there is nothing to balance.
+#   a parameter          same: it is the borrowed handle, dropped by doing nothing.
+#   a return             the handle travels out, so it carries a reference of its own,
+#                        taken by the RETURN TYPE's direction — and then this frame's own
+#                        bindings are released, as on any other exit.
+#   `del name`           nothing at all. It REVOKES the name and no count moves, because
+#                        the binding it names is on the pending-release list and its scope
+#                        will give the reference back whether or not it was revoked.
+#
+# The single rule underneath all of it: a count moves only where a HANDLE moves, and every
+# handle has exactly one owner.
+
+fn c_chan_copy_fn(dir: int) -> str {
+	return "zrt_chan_copy" if dir == 2
+	return "zrt_chan_sender_copy"
+}
+
+fn c_chan_release_fn(dir: int) -> str {
+	return "zrt_chan_release" if dir == 2
+	return "zrt_chan_sender_release"
 }
 
 fn c_recv(mut &em: Emitter, ch: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	elem := c_chan_elem(c_infer(em, ch))
+	cty := c_infer(em, ch)
+
+	c_chan_op_check(cty, 0)
+	elem := ty_chan_elem(cty)
 	return f"{c_recv_helper(em, elem)}({c_expr(em, ch, sb)})"
 }
 
 # c_recv_helper registers one element type's receive helper and answers its name.
+#
+# There has to be a helper because the runtime reports closure through zrt_chan_recv's
+# RETURN value while writing the element through a pointer, and a C expression can be one
+# of those or the other, not both. The helper is where the two become one `Result[T]`.
+#
+# The Right carries WHY, which is the entire reason a receive answers a Result rather
+# than an optional. zrt_chan_close_err hands back the whole Err — a clean close under the
+# StopIteration kind, a crash close carrying the dead coroutine's own message, cause and
+# kind. Reading the KIND is how the two are told apart; nothing here matches on a string,
+# and nothing invents a stand-in for a reason the channel already knows.
 fn c_recv_helper(mut &em: Emitter, elem: Ty) -> str {
-	ct := c_type(elem)
-	name := "zg_recv_" + c_ident_safe(ct)
-	for n in em.rcv_names {
-		return name if n == name
-	}
+	cn := c_carrier_name(em, elem)
+	name := "zg_recv_" + c_ident_safe(c_type(elem))
+	return name if c_name_in(em.rcv_names, name)
 	em.rcv_names.append(name)
-	mut d := "static " + ct + " " + name + "(zrt_chan *ch) {\n"
-	d = d + "    " + ct + " v;\n"
-	d = d + "    if (zrt_chan_recv(ch, &v) != 0) { zrt_abort(\"receive on a closed channel\"); }\n"
-	d = d + "    return v;\n}\n"
+	mut d := "static " + cn + " " + name + "(zrt_chan *ch) {\n"
+	d = d + "    " + cn + " r = {0};\n"
+	d = d + "    " + c_res_tag("r") + " = (int32_t)zrt_chan_recv(ch, &" + c_res_ok("r") + ");\n"
+	d = d + "    if (" + c_res_is_right("r") + ") { " + c_res_err("r") + " = zrt_chan_close_err(ch); }\n"
+	d = d + "    return r;\n}\n"
 	em.rcv_decls.append(d)
 	return name
 }
@@ -1694,7 +2423,9 @@ fn c_recv_helper(mut &em: Emitter, elem: Ty) -> str {
 fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	elem := c_chan_elem(c_infer(em, ch))
+	cty := c_infer(em, ch)
+	c_chan_op_check(cty, 1)
+	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
 	return ind + "{ " + ct + " zg_sv = " + c_expr(em, v, c_nosub()) + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
 }
@@ -1706,45 +2437,54 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	name := c_call_name(x)
-	if name == "" {
-		raise "NotImplemented: spawn of anything but a direct function call"
-	}
-	args := c_call_args_of(x)
+	cal := c_callee_of(em, x, "spawn")
+	args := cal.args
+	c_spawn_no_borrow(em, cal)
 	idx := em.dfn_n
 	em.dfn_n = idx + 1
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
-		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
 		return ind + "zrt_spawn(zg_spawn_" + tag + ", NULL);\n"
 	}
+	# ONE pass over the arguments for everything the env struct needs to know: each one's
+	# type, its field, its place in the call, and — for a channel — the direction it is
+	# captured and released at. Each answer is asked for once. Nothing here renders an
+	# argument's VALUE: c_expr mutates the emitter, so a pass whose strings are discarded
+	# still bumps the temp counter, registers carriers and can append a whole static
+	# function nobody calls. The values are rendered exactly once, below.
+	#
+	# A channel argument is a HANDLE, not a value: the coroutine gets its own handle and
+	# drops it when it returns. Without that the channel's counts never move and it can
+	# never close — every `done` arm waits forever.
+	#
+	# WHICH handle is decided by the CALLEE PARAMETER's direction, not by the caller's
+	# variable. A consumer declared `<-chan[T]` takes a holder and not a sender, so it does
+	# not hold the channel open; before this every spawned argument took a sender, and a
+	# consumer you spawned counted as a producer that never finished. `dirs` carries that
+	# direction per argument, or -1 for an argument that is not a channel at all.
 	mut fields := ""
-	mut vals := ""
 	mut call := ""
+	mut drops := ""
+	mut dirs: list[int] = []
 	mut i := 0
 	for i < args.len() {
-		ft := c_type(c_infer(em, args[i]))
-		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
+		fi := "f" + strconv.to_string(i, 10)
+		at := c_infer(em, args[i])
+		fields = fields + " " + c_type(at) + " " + fi + ";"
 		if i > 0 {
-			vals = vals + ", "
 			call = call + ", "
 		}
-		vals = vals + c_expr(em, args[i], c_nosub())
-		call = call + "e->f" + strconv.to_string(i, 10)
+		call = call + "e->" + fi
+		mut dir := 0 - 1
+		if ty_is_chan(at) {
+			dir = c_chan_dir(c_param_ty(em, cal.key, i))
+			drops = drops + " " + c_chan_release_fn(dir) + "(e->" + fi + ");"
+		}
+		dirs.append(dir)
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_spawnenv_" + tag + ";\n")
-	# A channel argument is a HANDLE, not a value: the coroutine gets its own sender
-	# handle, and drops it when it returns. Without that the channel's sender count never
-	# moves and it can never close — every `done` arm waits forever.
-	mut drops := ""
-	mut m := 0
-	for m < args.len() {
-		if c_is_chan(c_infer(em, args[m])) {
-			drops = drops + " zrt_chan_sender_release(e->f" + strconv.to_string(m, 10) + ");"
-		}
-		m = m + 1
-	}
 	# The teardown is a DEFER, not a statement after the call, because a coroutine can
 	# leave without returning. An unhandled abort longjmps straight past everything
 	# following the call, and what got skipped was the sender release — so the channel
@@ -1760,14 +2500,14 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.dfn_decls.append(dd)
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
 	th = th + " zrt_defer(" + dropfn + ", p);"
-	th = th + " zg_" + name + "(" + call + "); }\n"
+	th = th + " " + cal.cname + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
 	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
 	mut j := 0
 	for j < args.len() {
 		mut v := c_expr(em, args[j], c_nosub())
-		if c_is_chan(c_infer(em, args[j])) {
-			v = "zrt_chan_sender_copy(" + v + ")"
+		if dirs[j] >= 0 {
+			v = c_chan_copy_fn(dirs[j]) + "(" + v + ")"
 		}
 		out = out + ind + "zg_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
@@ -1775,42 +2515,99 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	return out + ind + "zrt_spawn(zg_spawn_" + tag + ", zg_se" + tag + ");\n"
 }
 
-# c_del lowers `del name`. A channel has no explicit close in this language: it closes
-# when its last SENDER handle goes, so `del ch` drops one. That is what lets a receiver
-# ever see the end of a stream — the creator is a sender too, and until it says
-# otherwise the channel can never reach zero.
+# c_spawn_no_borrow refuses a `mut &` argument crossing a spawn. GRAMMAR says a borrow
+# cannot ESCAPE — be captured by a spawn — and the reason is concrete: a `mut &` lowers to
+# a pointer into the CALLER's frame, and a coroutine outlives the statement that started
+# it, so the frame it points into may be gone before it is written through. Until now this
+# reached cc and died there on a type mismatch, which is a diagnostic about generated C.
 #
-# For anything that is not a channel this is a no-op today: revoking a plain name's
-# access needs the ownership tracking the subset does not have.
-fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
-	t := c_lookup_var(em, name)
-	if not c_is_chan(t) {
-		return ind + "/* del " + name + " */\n"
+# The test is the callee's `mut &` MARK, never "is this argument a pointer in C" — which is
+# precisely what leaves the legal captures alone. A channel argument is a `zrt_chan*` and a
+# `Ref[T]` is a pointer too, but neither carries the mark, and neither is a borrow of a
+# frame: they are handles onto the heap, which is what makes them safe to send.
+#
+# Only the CALLEE side is checked, which is a departure from the design's two-sided rule.
+# The caller-side half — "this argument names the enclosing function's own `mut &`
+# parameter" — would be a false refusal here: c_ident_val dereferences a `mut &` name on
+# every use, so `spawn f(x)` inside `fn g(mut &x: int)` captures x's VALUE and no pointer
+# escapes. Taking the address is only written `mut &x` at the call site, and that requires a
+# callee declaring `mut &`, which the check below already catches.
+fn c_spawn_no_borrow(mut &em: Emitter, cal: Callee) {
+	mut i := 0
+	for i < cal.args.len() {
+		row := c_param_row(em, cal.key, i)
+		if row >= 0 and em.pr_ref[row] {
+			raise "a `mut &` argument cannot cross a `spawn`: a borrow may not escape the frame it points into"
+		}
+		i = i + 1
 	}
-	em.used_rt = true
-	em.used_conc = true
-	# A handle is a holder AND a sender, and sender_release drops both — so a bare
-	# release would free the channel out from under a name that still receives on it.
-	# `del ch` is a DOWNGRADE: keep the holder, give up the sender. The copy first is
-	# what keeps the holder count where it was.
-	cn := c_var_cname(em, name)
-	return ind + "zrt_chan_copy(" + cn + "); zrt_chan_sender_release(" + cn + ");\n"
 }
 
-fn c_is_chan(t: Ty) -> bool {
-	return match t {
-		TChan(_) => true
-		_ => false
+# c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL
+# no-longer-sendable. That is a property of the channel and not of a holder, so it moves
+# no count: `ch` keeps its reference and stays readable, a receive drains what is buffered
+# and then answers the Right, and closing an already-closed channel changes nothing. One
+# runtime call is the whole lowering.
+#
+# It does NOT replace auto-close, which stays the everyday shape — a producer closes by
+# FINISHING. Two things depend on that and a flag cannot do either: a crashing producer
+# never reaches a `close` call, and its unwind is what carries the crash Err to the
+# receiver; and four producers fanning into one channel need no coordination because the
+# last one to return closes it. A channel-level close called by one of them would end the
+# stream for its siblings, which is the footgun this language was designed around. `close`
+# is the conditional, early form: end this stream before my scope does.
+#
+# Two refusals, and both are bugs the type system can catch: a non-channel has no send end
+# at all, and a receive-only end must not be able to end a stream on the producers' behalf.
+#
+# `at_exit` is `defer close(ch)`: the same close, at the enclosing block's exit. It goes
+# through the ORDINARY defer machinery, because c_close_callee makes the close look like
+# any other call — which is the whole reason `close` is a statement node rather than an
+# intercepted ECall. As a call it had no symbol to put in a thunk's env, so `defer`,
+# `spawn` and every other position a call can reach each needed a refusal of its own.
+fn c_close(mut &em: Emitter, ch: Expr, at_exit: bool, ind: str) -> str {
+	cal := c_close_callee(em, ch)
+	return c_defer_of(em, cal, ind) if at_exit
+	return ind + cal.cname + "(" + c_expr(em, ch, c_nosub()) + ");\n"
+}
+
+# c_close_callee is `close(ch)` as a CALLEE — the runtime function and its one argument —
+# after the two checks a close owes. There is no user symbol behind it: `close` is a
+# keyword, so it cannot be defined, shadowed or overloaded, and the file method `f.close()`
+# is an EMethod that never comes near here.
+fn c_close_callee(mut &em: Emitter, ch: Expr) -> Callee {
+	t := c_infer(em, ch)
+	if not ty_is_chan(t) {
+		raise "close requires a channel, found " + ty_name(t)
 	}
+	c_chan_op_check(t, 2)
+	em.used_rt = true
+	em.used_conc = true
+	mut args: list[Expr] = []
+	args.append(ch)
+	return Callee("zrt_chan_close", args, "")
+}
+
+# c_del lowers `del name`: it REVOKES the name, and nothing else. The revocation is the
+# whole statement — c_live_del records it and c_live_use rejects a later read, which is
+# what makes `del` mean one thing for every type.
+#
+# It emits no C. A channel handle is not released here because the binding already owes
+# its reference to the pending-release list, and the scope that ends pays it — releasing
+# again would be the double-release the list exists to rule out. Giving up the SEND end
+# early is `close(ch)`, a statement of its own, and it keeps its holder on purpose.
+fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
+	c_live_del(em, name)
+	return ind + "/* del " + name + " */\n"
 }
 
 # c_select lowers `select { … }` onto zrt_select: an array of case descriptors, one call
 # that picks a ready arm (or parks on all of them), and an if-chain on what it returned.
 #
 # A receive arm's value has to land somewhere the runtime can write BEFORE the call — it
-# takes an address — so each recv arm declares its variable up front and hands over its
-# address. That is also what makes `v := <-ch => …` bind: the arm body sees the same
-# variable, already filled by the time its branch runs.
+# takes an address — so each recv arm declares a slot up front and hands over its address.
+# The arm's BINDING is assembled from that slot later, inside the branch that won, because
+# a `Result[T]` needs the `closed` flag the call has not set yet.
 #
 # `done` and `_` are not cases. They are flags on the call and constants in the answer,
 # which is exactly how the runtime models them.
@@ -1835,30 +2632,53 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	cs := "zg_cs" + tag
 	mut out := ind + "{\n" + in2 + "zrt_sel_case " + cs + "[" + strconv.to_string(n, 10) + "];\n"
 
-	# the case array, and a slot for every receive arm's value
+	# the case array, and a slot for every receive arm's value. `elems` keeps each case's
+	# element type as it is worked out, indexed the way the case array is, so the dispatch
+	# below can build a recv arm's carrier without inferring the arm's channel a second
+	# time — that expression may be a call, and c_infer walks its whole tree.
+	mut elems: list[Ty] = []
 	mut idx := 0
 	for a in arms {
 		if a.op == 0 {
-			elem := c_chan_elem(c_infer(em, a.ch))
+			cty := c_infer(em, a.ch)
+			c_chan_op_check(cty, 0)
+			elem := ty_chan_elem(cty)
+			elems.append(elem)
 			nm := "zg_rv" + tag + "_" + strconv.to_string(idx, 10)
 			out = out + in2 + c_type(elem) + " " + nm + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_RECV;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].closed = 0;\n"
 			idx = idx + 1
 		} else if a.op == 1 {
-			elem := c_chan_elem(c_infer(em, a.ch))
+			cty := c_infer(em, a.ch)
+			c_chan_op_check(cty, 1)
+			elem := ty_chan_elem(cty)
+			elems.append(elem)
 			nm := "zg_sv" + tag + "_" + strconv.to_string(idx, 10)
 			out = out + in2 + c_type(elem) + " " + nm + " = " + c_expr(em, a.val, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+			# `closed` is an OUTPUT the runtime writes on the receive path only, and it is
+			# read below without asking which arm won — so a send case's slot has to start
+			# at a defined value rather than at whatever the stack held
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].closed = 0;\n"
 			idx = idx + 1
 		}
 	}
 	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_done + ");\n"
 
 	# the dispatch. Each recv arm's binding is already in scope, so its body just runs.
+	#
+	# Exactly one arm runs, so for the liveness they are branches of one `if`: each body is
+	# analysed from the SAME entry state and their ends are joined. Without the restore a
+	# `del` in the first arm would be carried into the second, and a perfectly good read
+	# there would be refused.
+	entry := c_live_save(em)
+	mut acc := entry
+	mut acc_set := false
 	mut first := true
 	mut k := 0
 	for a in arms {
@@ -1871,22 +2691,54 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 		} else {
 			cond = "zg_pick" + tag + " == ZRT_SEL_DEFAULT"
 		}
-		# the arm's name is bound to ITS OWN slot, right before its body — every recv arm
-		# may call the variable `v`, and binding them all up front would leave each body
-		# reading the last one's slot
-		if a.op == 0 and a.bind != "" {
-			em.env_names.append(a.bind)
-			em.env_tys.append(c_chan_elem(c_infer(em, a.ch)))
-			em.env_cnames.append("zg_rv" + tag + "_" + strconv.to_string(k - 1, 10))
-		}
 		mut kw := "} else if ("
 		if first {
 			kw = "if ("
 			first = false
 			out = out + in2
 		}
-		out = out + kw + cond + ") {\n" + c_block(em, a.body, in2 + "    ")
+		out = out + kw + cond + ") {\n"
+
+		# A receive arm binds the same `Result[T]` a plain `<-ch` yields, and it is built
+		# HERE — inside the branch that won — from the two things the runtime already
+		# answered: the value it wrote into the slot, and the `closed` flag beside it.
+		#
+		# This is the fix for the one silent wrong answer in the chapter. The flag was
+		# never read, so an arm that fired because its channel had closed ran over the slot
+		# from the PREVIOUS receive: the program printed a value that was never sent, as
+		# many times as the loop went round, and exited 0. A crash close reached nobody.
+		#
+		# Calling the receive helper again instead would take a second value off the
+		# channel; and the reason is read from the descriptor's own `ch`, never by
+		# re-rendering the arm's channel expression, which may be a call or an index.
+		if a.op == 0 and a.bind != "" {
+			elem := elems[k - 1]
+			cn := c_carrier_name(em, elem)
+			slot := cs + "[" + strconv.to_string(k - 1, 10) + "]"
+			rr := "zg_rr" + tag + "_" + strconv.to_string(k - 1, 10)
+			in3 := in2 + "    "
+			out = out + in3 + cn + " " + rr + " = {0};\n"
+			out = out + in3 + c_res_tag(rr) + " = (int32_t)" + slot + ".closed;\n"
+			out = out + in3 + "if (" + c_res_is_right(rr) + ") { " + c_res_err(rr) + " = zrt_chan_close_err(" + slot + ".ch); }\n"
+			out = out + in3 + "else { " + c_res_ok(rr) + " = zg_rv" + tag + "_" + strconv.to_string(k - 1, 10) + "; }\n"
+
+			# bound right before the body, not up front: every recv arm may call its
+			# variable `v`, and one environment entry per arm would leave each body
+			# reading the last one's
+			em.env_names.append(a.bind)
+			em.env_tys.append(TResult(elem))
+			em.env_cnames.append(rr)
+			em.env_dead.append(0)
+		}
+		c_live_restore(em, entry)
+		out = out + c_block(em, a.body, in2 + "    ")
+		if acc_set {
+			c_live_merge(em, acc)
+		}
+		acc = c_live_save(em)
+		acc_set = true
 	}
+	c_live_restore(em, acc)
 	if not first {
 		out = out + in2 + "}\n"
 	}
@@ -1920,11 +2772,19 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_names := em.env_names
 	saved_tys := em.env_tys
 	saved_cnames := em.env_cnames
+	saved_dead := em.env_dead
+	saved_rel_cnames := em.rel_cnames
+	saved_rel_fns := em.rel_fns
+	saved_loop_rel := em.loop_rel
 	saved_refs := em.ref_names
 	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false)))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
+	em.env_dead = saved_dead
+	em.rel_cnames = saved_rel_cnames
+	em.rel_fns = saved_rel_fns
+	em.loop_rel = saved_loop_rel
 	em.ref_names = saved_refs
 	em.used_fnptr = true
 	return "((zg_fnptr)zg_" + name + ")"
@@ -1981,19 +2841,22 @@ fn c_name_in(names: list[str], name: str) -> bool {
 # arguments are captured BY VALUE into a per-site env struct at the point the defer runs,
 # so a later reassignment of an argument does not change what the deferred call sees.
 fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
+	return c_defer_of(em, c_callee_of(em, x, "defer"), ind)
+}
+
+# c_defer_of schedules an already-resolved CALLEE at the enclosing block's exit. `defer f(a)`
+# reaches it through c_defer and `defer close(ch)` through c_close, and neither knows about
+# the other: a deferred thing is a function and its arguments, whatever wrote it down.
+fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	em.used_rt = true
-	name := c_call_name(x)
-	if name == "" {
-		raise "NotImplemented: defer of anything but a direct function call"
-	}
-	args := c_call_args_of(x)
+	args := cal.args
 	idx := em.dfn_n
 	em.dfn_n = idx + 1
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
 		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
 		# better as concatenation
-		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
 		return ind + "zrt_defer(zg_dfn_" + tag + ", NULL);\n"
 	}
 	mut fields := ""
@@ -2012,9 +2875,90 @@ fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
-	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; zg_" + name + "(" + call + "); }\n")
+	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
 	mut out := ind + "zg_denv_" + tag + " zg_de" + tag + " = { " + vals + " };\n"
 	return out + ind + "zrt_defer(zg_dfn_" + tag + ", &zg_de" + tag + ");\n"
+}
+
+# Callee is the three things a `spawn` and a `defer` each need about what they are about
+# to call: the C symbol, the arguments in the order that symbol takes them, and the key
+# its row in the parameter table is under.
+#
+# Both statements build the same per-site env struct and the same thunk that unpacks it,
+# so the question "what is being called" is asked in one place. Before this they each had
+# their own copy of it, and each copy knew only about a direct call.
+struct Callee {
+	cname: str
+	args: list[Expr]
+	key: str
+}
+
+# c_callee_of answers that question, or refuses by name. `what` is the statement asking,
+# so the diagnostic says `spawn` or `defer` rather than describing both.
+#
+# The three shapes the spec gives are a plain function `f(a)`, a method `obj.run()`, and a
+# namespaced function `mod.work()`. A closure literal is NOT among them and cannot be: a
+# lambda here may capture nothing (c_lambda refuses it), so there would be no environment
+# to hand a coroutine even if the shape were accepted.
+fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
+	n := c_call_name(x)
+	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
+	if not c_is_method_expr(x) {
+		raise "NotImplemented: " + what + " of anything but a function, a method, or a namespaced function"
+	}
+	tgt := c_meth_target_of(x)
+	m := c_meth_name_of(x)
+	margs := c_meth_args_of(x)
+	recv := c_named_of(c_infer(em, tgt))
+
+	if not c_has_method(em, recv, m) {
+		# `mod.work()` — a module namespace flattens into the one program-wide function
+		# space, so a namespaced callee IS the free function of that name, exactly as an
+		# ordinary `mod.work()` call is lowered
+		if not c_name_in(em.sig_names, m) {
+			raise "NotImplemented: " + what + " of `" + m + "` — not a function, a method, or a namespaced function"
+		}
+		return Callee(c_fn_cname("", m), margs, m)
+	}
+
+	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the
+	# impl block — so it leads the argument list and the parameter table lines up with no
+	# shift. It is captured BY VALUE, like every other argument.
+	mut all: list[Expr] = []
+	all.append(tgt)
+	for a in margs {
+		all.append(a)
+	}
+	return Callee(c_fn_cname(recv, m), all, c_sig_key(recv, m))
+}
+
+fn c_is_method_expr(e: Expr) -> bool {
+	return match e {
+		EMethod(_, _, _) => true
+		_ => false
+	}
+}
+
+fn c_meth_target_of(e: Expr) -> Expr {
+	return match e {
+		EMethod(t, _, _) => t
+		_ => ENil
+	}
+}
+
+fn c_meth_name_of(e: Expr) -> str {
+	return match e {
+		EMethod(_, m, _) => m
+		_ => ""
+	}
+}
+
+fn c_meth_args_of(e: Expr) -> list[Expr] {
+	mut none: list[Expr] = []
+	return match e {
+		EMethod(_, _, a) => a
+		_ => none
+	}
 }
 
 fn c_call_name(e: Expr) -> str {
@@ -2039,9 +2983,13 @@ fn c_has_defer(body: list[Stmt]) -> bool {
 	return false
 }
 
+# c_is_defer is asked of a statement, not of a keyword: `defer close(ch)` schedules work at
+# the block's exit exactly as `defer f()` does, so a block holding one needs the same mark.
+# Answering only for SDefer left the close on the cleanup stack with no unwind to run it.
 fn c_is_defer(s: Stmt) -> bool {
 	return match s {
 		SDefer(_) => true
+		SClose(ch, at_exit) => at_exit
 		_ => false
 	}
 }
@@ -2054,10 +3002,18 @@ fn c_return_if(mut &em: Emitter, val: Expr, cond: Expr, ind: str) -> str {
 	return ind + "if " + c_cond(em, cond) + " {\n" + body + ind + "}\n"
 }
 
-# c_jump is `break` / `continue` with the loop's defers run first.
+# c_jump is `break` / `continue` with the loop's defers run first and everything the loop
+# BODY bound released after them — the same two halves, in the same order, as the `return`
+# above. Emitting the keyword alone is what made `for { ch := chan[int](1); … break }`
+# leave a sender behind: the channel never reached zero, never closed, and the deadlock
+# that followed surfaced on main, nowhere near the `break`.
+#
+# The releases stop at em.loop_rel rather than at zero: a binding made OUTSIDE the loop is
+# still in scope after the jump, and its own block releases it.
 fn c_jump(mut &em: Emitter, kw: str, ind: str) -> str {
-	return f"{ind}{kw};\n" if em.loop_mark == ""
-	return f"{ind}zrt_unwind_to({em.loop_mark});\n{ind}{kw};\n"
+	rel := c_release_from(em, em.loop_rel, ind)
+	return rel + f"{ind}{kw};\n" if em.loop_mark == ""
+	return f"{ind}zrt_unwind_to({em.loop_mark});\n" + rel + f"{ind}{kw};\n"
 }
 
 # --- maps -----------------------------------------------------------------------
@@ -2282,12 +3238,23 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 		return ts[i] if i >= 0 and i < ts.len()
 		return TUnknown
 	}
+	# An Err is a RUNTIME struct, not a declared one, so its two readable fields are
+	# answered here. They are deliberately the whole set: a message to report and a kind
+	# to compare, which is what `Right(e)` needs to be worth binding.
+	if c_is_err_ty(t) {
+		return TStr if fld == "msg"
+		return TInt if fld == "kind"
+		raise "NotImplemented: the field `" + fld + "` on an Err — it has `msg` and `kind`"
+	}
 	return c_field_ty(em, c_named_of(t), fld)
 }
 
 fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	tgt := c_expr(em, target, sb)
 	return f"{tgt}.f{fld}" if c_all_digits(fld)
+
+	# an Err's fields are the runtime's own, so they carry no `zg_` mangling
+	return f"{tgt}.{fld}" if c_is_err_ty(c_infer(em, target))
 	return f"{tgt}.zg_{fld}"
 }
 
@@ -2367,7 +3334,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	in2 := ind + "    "
 	mut out := ind + "{\n" + in2 + "int64_t zg_hi = " + hi + ";\n"
 	out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + cmp + "zg_hi; " + cv + "++) {\n"
-	out = out + c_block(em, body, in2 + "    ")
+	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	return out + ind + "}\n"
 }
@@ -2383,13 +3350,16 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 # before it ends; that is zrt_chan_recv's own rule, not something repeated here.
 #
 # The one thing a close does NOT say by itself is WHY. An ordinary close and a sender that
-# crashed both end the receive, so the reason is read after the loop: NULL is the ordinary
-# end, and a message means a sender died and this loop has been handed a truncated stream.
-# Ending quietly there would turn a crash into a short answer, which is the failure this
-# language is least willing to produce.
+# crashed both end the receive, so the reason is read after the loop, and it is read as the
+# whole Err: the StopIteration KIND is the ordinary end, and anything else is the Err of a
+# sender that died while this loop was reading it — re-raised here, message, cause and kind
+# intact. Ending quietly instead would turn a crash into a short answer, which is the
+# failure this language is least willing to produce, and re-raising a stand-in string
+# would keep the failure while losing the reason for it.
 fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], ind: str) -> str {
 	em.used_conc = true
-	elem := c_chan_elem(t)
+	c_chan_op_check(t, 0)
+	elem := ty_chan_elem(t)
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
 	c_add_var(em, var, elem)
@@ -2401,9 +3371,10 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	mut out := ind + "{\n" + in2 + "zrt_chan *zg_cit = " + it + ";\n"
 	out = out + in2 + et + " " + cv + ";\n"
 	out = out + in2 + "while (zrt_chan_recv(zg_cit, &" + cv + ") == 0) {\n"
-	out = out + c_block(em, body, in2 + "    ")
+	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
-	out = out + in2 + "if (zrt_chan_err(zg_cit) != NULL) { zrt_abort(zrt_chan_err(zg_cit)); }\n"
+	out = out + in2 + "{ zrt_err zg_ce = zrt_chan_close_err(zg_cit);\n"
+	out = out + in2 + "  if (zg_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zg_ce); } }\n"
 	return out + ind + "}\n"
 }
 
@@ -2416,7 +3387,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# A CHANNEL is the other thing that is iterated without being a container: the loop
 	# is the receive, and the close is what ends it.
 	ct := c_infer(em, iter)
-	return c_forchan(em, var, iter, ct, body, ind) if c_is_chan(ct)
+	return c_forchan(em, var, iter, ct, body, ind) if ty_is_chan(ct)
 
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
@@ -2430,17 +3401,22 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	mut out := ind + "{\n" + in2 + "zrt_list zg_it = " + it + ";\n"
 	out = out + in2 + "for (size_t zg_i = 0; zg_i < zrt_list_len(&zg_it); zg_i++) {\n"
 	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
-	out = out + c_block(em, body, in2 + "    ")
+	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	return out + ind + "}\n"
 }
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
 	mut eff := ty
-	if not has_type {
+	if has_type {
+		if ty_is_chan(ty) {
+			c_chan_check(c_infer(em, ival), ty, "binding `" + name + "`")
+		}
+	} else {
 		eff = c_infer(em, ival)
 	}
 	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
+	return c_let_chan(em, name, eff, ival, ind) if ty_is_chan(eff)
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
 	# right-hand side names the OUTER n, and resolving it after would make the new
@@ -2448,6 +3424,86 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff)
 	return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {val};\n"
+}
+
+# c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:
+#
+# It TAKES a reference. An initializer that names existing storage — another binding, a
+# parameter — is somebody else's handle, so this binding takes one of its own, by ITS OWN
+# direction: `tx: chan[int]<- = ch` counts as a sender, `rx: <-chan[int] = ch` counts only
+# as a holder. A freshly built handle (`chan[T](n)`, a call's result) already carries
+# exactly one reference and this binding takes it over, so copying there would leak one.
+#
+# And it GIVES IT BACK at scope exit (c_pend_release). That is the half this emitter did
+# not have, and its absence is why a narrowed binding used to be a bare alias and why the
+# spec's "close early by narrowing the scope" could not work: nothing ever gave the origin
+# handle up, so `senders` never reached zero on its own and every stream needed a statement
+# to end it. With both halves the counts move only where a handle moves, and every handle
+# has exactly one owner.
+fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	dir := c_chan_dir(eff)
+	mut val := c_expr(em, ival, c_nosub())
+	if c_is_lvalue(ival) {
+		val = c_chan_copy_fn(dir) + "(" + val + ")"
+	}
+	c_add_var(em, name, eff)
+	cn := c_var_cname(em, name)
+	c_pend_release(em, cn, c_chan_release_fn(dir))
+	return f"{ind}zrt_chan *{cn} = {val};\n"
+}
+
+# c_pend_release records that `cname` owns something `relfn` gives back, until its scope
+# ends. It is the ONE way onto the pending-release list, so a type that starts owning its
+# storage joins by calling this and needs no exit path of its own.
+fn c_pend_release(mut &em: Emitter, cname: str, relfn: str) {
+	em.rel_cnames.append(cname)
+	em.rel_fns.append(relfn)
+}
+
+# c_release_from renders the release of every pending binding at index `keep` or above,
+# innermost first. It is what every exit from a block goes through — falling off the end,
+# a `return`, a `break` or a `continue` — and it only RENDERS: dropping the entries is the
+# business of the one exit that actually ends the scope (c_scope_end). A `return` and a
+# jump are each one path out of several, and the block still has to release on its own.
+#
+# Releases are emitted rather than deferred, which is the one thing this does not share
+# with the seed. The cost is a binding in a frame that ABORTS: its release is skipped and
+# the handle leaks, as everything else in this emitter does on that path. It buys not
+# having to hand the runtime the address of a C local whose block may end before the
+# cleanup stack is unwound, which would be a use-after-free rather than a leak. A
+# coroutine's own handle is unaffected either way: `spawn` releases its capture from the
+# thunk's defer, which does run on the crash path, and that is what closes a channel whose
+# producer died.
+fn c_release_from(mut &em: Emitter, keep: int, ind: str) -> str {
+	mut out := ""
+	mut i := em.rel_cnames.len() - 1
+	for i >= keep {
+		out = out + ind + em.rel_fns[i] + "(" + em.rel_cnames[i] + ");\n"
+		i = i - 1
+	}
+	return out
+}
+
+# c_scope_end is c_release_from for the exit that ends the scope: it renders the releases
+# and then drops them, so the statements after the block no longer see them.
+fn c_scope_end(mut &em: Emitter, keep: int, ind: str) -> str {
+	return "" if em.rel_cnames.len() <= keep
+	out := c_release_from(em, keep, ind)
+	em.rel_cnames = c_strs_take(em.rel_cnames, keep)
+	em.rel_fns = c_strs_take(em.rel_fns, keep)
+	return out
+}
+
+fn c_strs_take(xs: list[str], n: int) -> list[str] {
+	mut out: list[str] = []
+	mut i := 0
+	for i < n {
+		out.append(xs[i])
+		i = i + 1
+	}
+	return out
 }
 
 # c_let_list declares a list binding: a list-literal initializer becomes an init plus a
@@ -2477,6 +3533,8 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	ex := c_expr(em, e, c_nosub())
 	return match ty {
 		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
+		# an Err shows as what went wrong; the kind is there to be compared, not read out
+		TErr => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
 		TFloat => f"{ind}printf(\"%g\\n\", {ex});\n"
 		TBool => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
 		_ => f"{ind}printf(\"%lld\\n\", (long long)({ex}));\n"
@@ -2490,10 +3548,37 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	if em.fn_mark != "" {
 		pre = f"{ind}zrt_unwind_to({em.fn_mark});\n"
 	}
+
+	# every binding in scope gives its reference back on this path too, after the defers
+	# (which may still name one) and after the return value has been computed. The whole
+	# list goes: a `return` leaves the FUNCTION, and c_reset_env starts each one empty.
+	pre = pre + c_release_from(em, 0, ind)
 	if has_val and not c_is_nil_expr(e) {
-		v := c_expr(em, e, c_nosub())
+		# the returned expression's type is wanted on two conditions that rarely coincide —
+		# a channel return type, and a defer to unwind past — so it is inferred once, and
+		# only when one of them holds. The ordinary `return x` infers nothing.
+		ret_chan := ty_is_chan(em.fn_ret)
+		mut et := TUnknown
+		if ret_chan or pre != "" {
+			et = c_infer(em, e)
+		}
+		if ret_chan {
+			c_chan_check(et, em.fn_ret, "return")
+		}
+		mut v := c_expr(em, e, c_nosub())
+
+		# A channel travelling OUT is a handle the caller will own, so it carries a reference
+		# of its own — taken by the RETURN TYPE's direction, which is what makes
+		# `fn source() -> <-chan[int] { ch := chan[int](); spawn p(ch); return ch }` work:
+		# the caller gets a receive-only holder, `ch`'s own send end goes with this scope, and
+		# the producer is left as the last sender. Without the copy the release below would
+		# take the count the caller is about to rely on.
+		if ret_chan and c_is_lvalue(e) {
+			em.used_conc = true
+			v = c_chan_copy_fn(c_chan_dir(em.fn_ret)) + "(" + v + ")"
+		}
 		return f"{ind}return {v};\n" if pre == ""
-		rt := c_type(c_infer(em, e))
+		rt := c_type(et)
 		return ind + "{ " + rt + " zg_rv = " + v + ";\n" + pre + ind + "return zg_rv; }\n"
 	}
 	return pre + ind + "return;\n"
@@ -2506,14 +3591,58 @@ fn c_is_nil_expr(e: Expr) -> bool {
 	}
 }
 
+# Each branch is analysed from the SAME entry liveness and the two ends are joined, so a
+# `del` on one arm leaves the name inconsistent rather than dead — and a use after the `if`
+# gets the message that says so. With no `else`, the fall-through path is the entry state.
 fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
 	mut out := ind + "if " + c_cond(em, cond) + " {\n"
+	entry := c_live_save(em)
 	out = out + c_block(em, then_body, ind + "    ")
+	then_end := c_live_save(em)
+	c_live_restore(em, entry)
 	out = out + ind + "}"
 	if has_else {
 		out = out + " else {\n" + c_block(em, else_body, ind + "    ") + ind + "}"
 	}
+	c_live_merge(em, then_end)
 	return out + "\n"
+}
+
+# c_iflet lowers `if v := e { … } else { … }`: run the block only on a Left, with `v`
+# holding what it carried. The whole thing is wrapped in a C block so the carrier temp is
+# scoped to it and two of these in a row cannot collide.
+#
+# The binding's C name comes from c_add_var rather than being written down here, because
+# an outer `v` may already be in scope and C has no shadowing inside a function.
+fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
+	t := c_infer(em, value)
+	if not c_is_result(t) {
+		raise "NotImplemented: `if " + name + " := …` over a " + ty_name(t) + " — it binds the Left of a Result[T]"
+	}
+	elem := c_result_elem(t)
+	cn := c_carrier_name(em, elem)
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	tmp := "zg_il" + tag
+
+	# the initializer is rendered BEFORE the binding enters scope, as in c_let
+	val := c_expr(em, value, c_nosub())
+	c_add_var(em, name, elem)
+	cv := c_var_cname(em, name)
+	in2 := ind + "    "
+	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
+	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
+	out = out + in2 + "    " + c_type(elem) + " " + cv + " = " + c_res_ok(tmp) + ";\n"
+	entry := c_live_save(em)
+	out = out + c_block(em, then_body, in2 + "    ")
+	then_end := c_live_save(em)
+	c_live_restore(em, entry)
+	out = out + in2 + "}"
+	if has_else {
+		out = out + " else {\n" + c_block(em, else_body, in2 + "    ") + in2 + "}"
+	}
+	c_live_merge(em, then_end)
+	return out + "\n" + ind + "}\n"
 }
 
 fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: str) -> str {
@@ -2521,12 +3650,27 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 	if has_cond {
 		head = ind + "while " + c_cond(em, cond) + " {\n"
 	}
-	return head + c_block(em, body, ind + "    ") + ind + "}\n"
+	return head + c_loop_block(em, body, ind + "    ") + ind + "}\n"
 }
 
-# c_raise lowers `raise e` to the runtime's abort path. Nothing catches it here — `guard`
-# lowers to a plain block in this compiler — so an unhandled raise ends the process with
-# its message, which is what the seed does too. Before this existed, `raise` parsed as
+# c_loop_block emits a loop BODY. It exists for two things the C does not say: a loop may
+# run zero times, so the body's end state joins with the entry state instead of replacing
+# it — a name revoked inside a loop is INCONSISTENT after it, not dead — and this is where
+# a `break` or a `continue` inside the body learns how much of the pending-release list is
+# the body's own.
+fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
+	entry := c_live_save(em)
+	outer_rel := em.loop_rel
+	em.loop_rel = em.rel_cnames.len()
+	out := c_block(em, body, ind)
+	em.loop_rel = outer_rel
+	c_live_merge(em, entry)
+	return out
+}
+
+# c_raise lowers `raise e` to the runtime's abort path: it unwinds to the innermost
+# handler, which is an enclosing `guard`'s catching frame when there is one and the
+# program's reporting root when there is not. Before this existed, `raise` parsed as
 # nothing at all: the error path fell off the end of the function and the caller carried
 # on with whatever was in the return register.
 # c_cond renders a condition for `if` / `while`. Most expressions already come back fully
@@ -2563,9 +3707,11 @@ fn c_is_wrapped(s: str) -> bool {
 fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 
-	# `raise ValueError("…")` already names an Err; only a bare message needs one built
-	# around it. Wrapping both would make an Err whose payload is an Err.
-	return f"{ind}zrt_raise_err({c_expr(em, x, c_nosub())});\n" if c_is_err_ctor(em, x)
+	# `raise ValueError("…")` already names an Err, and so does an Err VALUE — the `e` a
+	# `Right(e)` handed over. Only a bare message needs one built around it; wrapping
+	# either of the others would make an Err whose payload is an Err, and re-raising a
+	# caught one is the whole point of being able to bind it.
+	return f"{ind}zrt_raise_err({c_expr(em, x, c_nosub())});\n" if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
 	return f"{ind}zrt_raise_err(zrt_err_new({c_expr(em, x, c_nosub())}));\n"
 }
 
@@ -2580,26 +3726,58 @@ fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 # name that is not one. The numbers are MIRRORED from the runtime's ZRT_ERR_* enum and
 # from the seed's own table, so a `raise ValueError(…)` and a runtime abort that says
 # "ValueError" reify to the same kind whichever compiler built the program.
-fn c_err_kind(name: str) -> int {
-	return 1 if name == "ValueError"
-	return 2 if name == "OverflowError"
-	return 3 if name == "IOError"
-	return 4 if name == "EncodingError"
-	return 5 if name == "IndexError"
-	return 6 if name == "KeyError"
+# c_err_kinds is THE table of nameable error kinds, in kind order: the i-th name has kind
+# i + 1, and kind 0 is the untyped Err a bare `raise` carries. Those numbers are the
+# runtime's ABI (zergrt.h's zrt_err_kind), so the ORDER here is not free.
+#
+# Both directions read this one list — c_err_kind maps a name to its number, and the
+# prelude's zg_err_kindname maps the number back to the `Kind: ` prefix a forced Err
+# reports under. A second copy is how a tenth kind arrives with half a mapping and loses
+# its prefix silently, which is exactly the failure the prefix exists to prevent.
+#
+# The last three are the ones the concurrency chapter names. DeadlockError and
+# SendOnClosedError are raised by the runtime, and StopIteration is the sentinel a clean
+# channel close carries — a kind rather than a message, which is what lets a receiver tell
+# an ordinary ending from a crash without matching on text.
+fn c_err_kinds() -> list[str] {
+	return ["ValueError", "OverflowError", "IOError", "EncodingError", "IndexError", "KeyError", "DeadlockError", "SendOnClosedError", "StopIteration"]
+}
 
+fn c_err_kind(name: str) -> int {
+	kinds := c_err_kinds()
+	mut i := 0
+	for i < kinds.len() {
+		return i + 1 if kinds[i] == name
+		i = i + 1
+	}
 	return 0
 }
 
+# c_err_constructible splits the table in the one place it is not symmetric: every kind can
+# be NAMED on the right of `is`, but StopIteration cannot be CALLED. It is the sentinel a
+# clean close carries, so a program able to build one could hand a consumer a crash wearing
+# the marker for an ordinary ending — and `err is StopIteration` would answer yes. Testing
+# by kind is only worth more than comparing the message because this asymmetry holds.
+fn c_err_constructible(name: str) -> bool {
+	return name != "StopIteration"
+}
+
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
-	return c_block_marked(em, body, ind) if c_has_defer(body)
+	keep := em.rel_cnames.len()
 	mut out := ""
-	mut i := 0
-	for i < body.len() {
-		out = out + c_stmt(em, body[i], ind)
-		i = i + 1
+	if c_has_defer(body) {
+		out = c_block_marked(em, body, ind)
+	} else {
+		mut i := 0
+		for i < body.len() {
+			out = out + c_stmt(em, body[i], ind)
+			i = i + 1
+		}
 	}
-	return out
+
+	# a binding made in this block gives its reference back here. A `return` inside the
+	# block already released everything on its way out, so what follows one is dead C.
+	return out + c_scope_end(em, keep, ind)
 }
 
 # c_block_marked wraps a block that schedules a defer: a mark on entry, an unwind on the
@@ -2664,6 +3842,11 @@ fn c_proto(fn_d: FnDecl) -> str {
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	c_reset_env(em)
+
+	# a lambda is emitted through here in the middle of an enclosing function's expression,
+	# so the enclosing return type is put back on the way out
+	saved_ret := em.fn_ret
+	em.fn_ret = fn_d.ret
 	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
@@ -2685,7 +3868,9 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 		}
 	}
 	sig = sig + ") {\n"
-	return sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+	out := sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+	em.fn_ret = saved_ret
+	return out
 }
 
 # The entry point is the FREE function `main`; a method named `main` is an ordinary method
@@ -2694,6 +3879,25 @@ fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
 		return true if f.fns[i].name == "main" and f.fns[i].recv == ""
+		i = i + 1
+	}
+	return false
+}
+
+# c_main_ret_is_int reports whether the entry point answers an `int`, which is the one
+# return shape that becomes the process exit code. `-> Result[nil]` is not one of these:
+# parse_type still erases it to nil, so it emits a void main and takes the nil path, which
+# is the same shim the seed picks for it.
+fn c_main_ret_is_int(f: File) -> bool {
+	mut i := 0
+	for i < f.fns.len() {
+		fn_i := f.fns[i]
+		if fn_i.name == "main" and fn_i.recv == "" and fn_i.has_ret {
+			return match fn_i.ret {
+				TInt => true
+				_ => false
+			}
+		}
 		i = i + 1
 	}
 	return false
@@ -2805,7 +4009,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "")
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -2858,7 +4062,18 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 			em.used_rt = true
 			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
 			if em.used_conc {
+				# the scheduler's program-entry shims all take a NULLARY function pointer
+				# (zergrt.h) — there is no shape that carries an argument — so running
+				# main(args) as coroutine 0 needs a runtime shim that does not exist yet
 				raise "NotImplemented: main(args) in a program that uses concurrency"
+			}
+		} else if c_main_ret_is_int(own) {
+			# main's value IS the exit code. Calling an `int64_t (*)(void)` through the
+			# `void (*)(void)` shim was undefined behaviour AND threw the code away, so
+			# every concurrent `fn main() -> int` exited 0 whatever it returned.
+			mainw = "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n"
+			if em.used_conc {
+				mainw = "int main(void) {\n" + inits + "    return (int)zrt_sched_main_int(zg_main);\n}\n"
 			}
 		} else {
 			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
@@ -2903,6 +4118,17 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.mvt_decls {
 		tups = tups + d
 	}
+	# The Result carriers come LAST of the typedefs, because a carrier holds its payload
+	# BY VALUE and the payload may be any of the shapes above it: a scalar, a runtime list
+	# or map, a struct, an enum, a tuple. Everything it could name has been written by
+	# here. The force helpers ride along with them, ahead of the bodies that call them.
+	mut ress := ""
+	if em.res_decls.len() > 0 {
+		ress = c_carrier_prelude()
+	}
+	for d in em.res_decls {
+		ress = ress + d
+	}
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
@@ -2919,7 +4145,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.lam_defs {
 		lams = lams + d
 	}
-	return f"{hdr}{types}{tups}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
+	return f"{hdr}{types}{tups}{ress}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }
 
 # c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,

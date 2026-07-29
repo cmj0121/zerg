@@ -107,9 +107,14 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
 		return
 	}
-	switch typ.(type) {
+	switch t := typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
+	case *types.Chan:
+		// a channel handle releases at scope exit through a slot guard (so a later `del`
+		// nulls the slot); a send-capable handle releases as a sender, which is what closes
+		// the channel when the last one leaves — the language has no explicit close.
+		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.chanDropThunk(t), cname))
 	case *types.Enum:
 		// a recursive/non-POD enum local (S1) frees its boxed payload cells at scope exit
 		// through its generated drop-env thunk, like a struct.
@@ -164,6 +169,8 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.List:
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
+	case *types.Chan:
+		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.Opt:
@@ -201,13 +208,19 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 		return
 	}
-	switch it.typ.(type) {
+	switch t := it.typ.(type) {
 	case *types.Ref:
 		// Release now and null the slot. The scope-exit guard reads the slot, so it
 		// skips a nulled binding — the box is freed exactly once whether or not the
 		// `del` is reached on a given path (flow-consistent, and safe under a
 		// conditional del because zrt_release(NULL) is a no-op).
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
+		e.line(fmt.Sprintf("%s = NULL;", cname))
+	case *types.Chan:
+		// `del ch` revokes the name like any other owning binding: the handle it owned goes
+		// with it, send capability and hold together. Giving up only the send end is what
+		// `close(ch)` is for, and the two are no longer the same statement.
+		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)
@@ -295,11 +308,22 @@ func (e *emitter) raiseCause(x ast.Expr) string {
 	return fmt.Sprintf("zrt_err_new(%s)", e.errMessage(x))
 }
 
-// errMessage renders the C string message for a raised value: a string literal
-// verbatim, any other expression a placeholder (its display() is a later iteration).
+// errMessage renders the C string message for a raised value: a string literal verbatim,
+// any other `str`-typed expression rendered, and a non-str value a placeholder (its
+// display() is a later iteration).
+//
+// The literal fast path stays first so `raise "boom"` still emits a plain C literal. What
+// it used to be alone: every other operand became the literal `"raise"` and the expression
+// was never rendered at all, so `raise "cannot close " + name` aborted with the word
+// "raise" — a diagnostic that told the reader nothing, and one the self-hosted compiler
+// has always got right. That mattered most for the compiler the seed builds, whose own
+// error messages are almost all concatenations.
 func (e *emitter) errMessage(x ast.Expr) string {
 	if s, ok := x.(*ast.StrLit); ok {
 		return cString(s.Value)
+	}
+	if e.isStrExpr(x) {
+		return e.expr(x)
 	}
 	return "\"raise\""
 }
@@ -313,6 +337,9 @@ func (e *emitter) errMessage(x ast.Expr) string {
 func (e *emitter) deferStmt(n *ast.DeferStmt) {
 	idx, ok := e.deferIdx[n]
 	if !ok {
+		if c, isCall := n.Call.(*ast.Call); isCall && isCloseCall(c) {
+			return // emitDeferHelpers already refused it by name; one message, not two
+		}
 		e.diags.Add(n.Span(), "defer supports only a direct, namespace, or method function call in Phase 1d")
 		return
 	}
@@ -394,6 +421,9 @@ func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT se
 // methodCall). It returns ok=false for any other callee (e.g. a call through a function
 // value), which leaves deferIdx unset so the site reports the loud stub.
 func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, recvT sema.Type, ok bool) {
+	if e.closeOutOfStatement(call) {
+		return "", nil, nil, false
+	}
 	switch callee := call.Callee.(type) {
 	case *ast.Ident:
 		return e.callTarget(call, callee), nil, nil, true
@@ -622,6 +652,15 @@ func walkStmt(s ast.Stmt, fn func(ast.Stmt)) {
 		walkStmts(n.Body, fn)
 	case *ast.WithStmt:
 		walkStmts(n.Body, fn)
+	case *ast.SelectStmt:
+		// A select arm's body is an EXPRESSION, but the block form of it holds statements
+		// the enclosing function owns just as much as an if-branch's — a `spawn` or a
+		// binding written there must be found by the prepasses and by subtreeTeardown.
+		for _, arm := range n.Arms {
+			if blk, ok := arm.Body.(*ast.Block); ok {
+				walkStmts(blk, fn)
+			}
+		}
 	}
 }
 
@@ -769,6 +808,14 @@ func stmtExprs(s ast.Stmt) []ast.Expr {
 		return []ast.Expr{n.Cond, n.Iter}
 	case *ast.WithStmt:
 		return []ast.Expr{n.Resource}
+	case *ast.SelectStmt:
+		// The arm HEADS only: walkStmt descends a block-form arm body as statements, and
+		// handing the body back here as well would walk everything inside it twice.
+		out := make([]ast.Expr, 0, len(n.Arms)*2)
+		for _, arm := range n.Arms {
+			out = append(out, arm.Chan, arm.Value)
+		}
+		return out
 	}
 	return nil
 }

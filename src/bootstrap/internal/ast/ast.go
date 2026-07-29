@@ -86,6 +86,15 @@ type FuncDecl struct {
 	Params     []Param
 	Ret        Type
 	Body       *Block
+
+	// Module is the canonical C-mangle tag of the IMPORTED module this declaration was
+	// bundled in from, "" for the program's own (entry) source. The whole-program flatten
+	// merges every module's items into one unit and mangles their names in place, which
+	// erases where a declaration came from — and a back end that is deliberately narrower
+	// than the language needs that back, so it can tell a shape the PROGRAM asked for from
+	// one it merely bundled. Not syntax: the parser never sets it and the formatter never
+	// reads it, so a round-trip is unaffected.
+	Module string
 }
 
 // Block is a brace-delimited statement list. End holds any dangling trivia

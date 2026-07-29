@@ -521,25 +521,70 @@ fn module_files(path: str, from_dir: str) -> list[str] {
 	roots.append(from_dir)
 	roots.append(stdlib_dir())
 	for root in roots {
-		file := join_path(root, path + ".zg")
-		if __zrt_exists(file) {
-			mut one: list[str] = []
-			one.append(file)
-			return one
-		}
-		dir := join_path(root, path)
-		if __zrt_exists(dir) {
-			mut many: list[str] = []
-			for name in __zrt_listdir(dir) {
-				if has_suffix(name, ".zg") {
-					many.append(join_path(dir, name))
-				}
-			}
-			return many if many.len() > 0
+		found := module_at(root, path)
+		return found if found.len() > 0
+	}
+
+	# The LAST-SEGMENT alias. A module is named by the last segment of its path — `import
+	# "std/time"` and `import "time"` are the same module (docs/tooling/fmt.md) — and the
+	# stdlib is one flat directory, so a path that resolves nowhere is retried at its last
+	# segment. The seed has done this since 1g; without it here the two compilers disagree
+	# about what a program imports, and the disagreement is SILENT until use: the namespace
+	# is bound from the path either way, so `import "std/time"` loaded no files at all and
+	# `time.now()` read as a method on nothing.
+	seg := path_tail(path)
+	if seg != path {
+		for root in roots {
+			found := module_at(root, seg)
+			return found if found.len() > 0
 		}
 	}
 	mut none: list[str] = []
 	return none
+}
+
+# module_at resolves one import path under one root: a single `<path>.zg` file, or a
+# DIRECTORY of them read in sorted order so the emitted C never depends on the filesystem.
+fn module_at(root: str, path: str) -> list[str] {
+	file := join_path(root, path + ".zg")
+	if __zrt_exists(file) {
+		mut one: list[str] = []
+		one.append(file)
+		return one
+	}
+	dir := join_path(root, path)
+	if __zrt_exists(dir) {
+		mut many: list[str] = []
+		for name in __zrt_listdir(dir) {
+			if has_suffix(name, ".zg") {
+				many.append(join_path(dir, name))
+			}
+		}
+		return many
+	}
+	mut none: list[str] = []
+	return none
+}
+
+# path_tail is the last '/'-separated segment of an import path, which is the module's
+# name.
+fn path_tail(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
 }
 
 fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str]) {

@@ -58,8 +58,9 @@ func (e *emitter) containsRef(t sema.Type) bool {
 		// storage, so it must always flow through zrt_map_copy / zrt_map_drop.
 		return true
 	case *types.Chan:
-		// a channel is a ref type per memory.md; its runtime is 1e, so it never
-		// actually reaches a copy site this phase, but POD-ness must still exclude it.
+		// a channel is a ref type per memory.md: copying a handle retains it and dropping
+		// one releases it, and for a send-capable handle that release is what closes the
+		// channel. A bare C `=` would lose the count and the channel would never close.
 		return true
 	case *types.Tuple:
 		for _, el := range x.Elems {
@@ -217,6 +218,18 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesRef() || e.programUsesRuntimeStmt() {
 		e.needsRuntime = true
 	}
+	// Concurrency is the gate a program links the scheduler from: a `spawn` or a channel
+	// pulls it in, and implies the runtime. A program with neither leaves it false and
+	// links nothing new.
+	if e.programUsesConcurrency() {
+		e.concurrency = true
+		e.needsRuntime = true
+	}
+	// Number the channel receive element types and detect channel-handle drops, BEFORE the
+	// Result prepass: each of those element types needs a `Result[T]` carrier, and for a
+	// select recv arm — whose bind is declared into the arm's scope rather than recorded as
+	// an expression type — this pass is the only place that type is known.
+	e.prepareChannels()
 	// Number the general Result/Either/optional carriers (Phase 1f U0). Sets
 	// needsResult/needsRuntime only when a carrier is found.
 	e.prepareResults()
@@ -387,6 +400,15 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_proc_wait":  true,
 }
 
+// schedFloorIntrinsics are the runtime floor leaves that ride in sched.c rather than in the
+// always-linked sys.c — today the timer leaf the stdlib `time` timers park on. sched.c is
+// linked ONLY under the Concurrency manifest flag, so lowering one of these must set
+// Concurrency (which implies NeedsRuntime): recording it as a sys floor leaf instead would
+// emit a call to a symbol the link line does not carry.
+var schedFloorIntrinsics = map[string]bool{
+	"__zrt_sleep_ns": true,
+}
+
 // strProducingIntrinsics are the sys-floor leaves that return a FRESH str cell
 // (sys.c's sys_str_cell) — the os `env`/`platform`/`arch` leaves. Lowering one makes the
 // program's str management active, so the cell is retained/released instead of leaked.
@@ -425,6 +447,13 @@ func (e *emitter) programCallsIntrinsic(names map[string]bool) bool {
 // the runtime is linked. A shadowed spelling is left to the ordinary call path.
 func (e *emitter) programUsesSysFloor() bool {
 	return e.programCallsIntrinsic(sysFloorIntrinsics)
+}
+
+// programUsesSchedFloor reports whether the program lowers a scheduler-floor intrinsic, so
+// the scheduler translation units are linked. A shadowed spelling is left to the ordinary
+// call path.
+func (e *emitter) programUsesSchedFloor() bool {
+	return e.programCallsIntrinsic(schedFloorIntrinsics)
 }
 
 // programUsesIO reports whether the program lowers a stdlib `io` syscall intrinsic —
@@ -565,7 +594,29 @@ func (e *emitter) builtinCallEmit(n *ast.Call) (string, bool) {
 	if s, ok := e.sysIntrinsicEmit(n); ok {
 		return s, true
 	}
+	if s, ok := e.schedIntrinsicEmit(n); ok {
+		return s, true
+	}
 	return e.writeIntrinsicEmit(n)
+}
+
+// schedIntrinsicEmit lowers the scheduler-floor intrinsics — today the `time` timer leaf —
+// to their sched.c primitive. It is separate from sysIntrinsicEmit because the two differ in
+// where they ride and therefore in what a program that calls one has to link: sched.c comes
+// in only under the Concurrency manifest flag, which programUsesSchedFloor sets. A shadowed
+// name is left to the ordinary call path.
+func (e *emitter) schedIntrinsicEmit(n *ast.Call) (string, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok || len(n.Args) != 1 {
+		return "", false
+	}
+	if _, shadowed := e.info.Refs[id]; shadowed {
+		return "", false
+	}
+	if id.Name != "__zrt_sleep_ns" {
+		return "", false
+	}
+	return fmt.Sprintf("zrt_sleep_ns(%s)", e.expr(n.Args[0].Value)), true
 }
 
 // sysIntrinsicEmit lowers the non-io sys-floor intrinsics the stdlib drives — the `time`
@@ -747,6 +798,15 @@ func (e *emitter) copyValue(typ sema.Type, x ast.Expr) string {
 		// copying a list value that names existing storage deep-copies its buffer (each
 		// element via the instance vtable), so the two holders never alias.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), base)
+	case *types.Chan:
+		// copying a channel handle retains it; a send-capable handle (bidi/send-only) also
+		// bumps the sender count, a receive-only handle does not. The count is what closes
+		// the channel — the language has no explicit close — so this is the one copy in the
+		// language whose meaning depends on the handle's direction.
+		if t.Dir == types.ChanRecv {
+			return fmt.Sprintf("zrt_chan_copy(%s)", base)
+		}
+		return fmt.Sprintf("zrt_chan_sender_copy(%s)", base)
 	case *types.Struct:
 		return fmt.Sprintf("%s(%s)", e.copyHelperName(typ), base)
 	case *types.Opt:
@@ -898,6 +958,8 @@ func (e *emitter) emitRefHelpers() {
 	// no thunk and a value-only program stays byte-identical.
 	e.emitOptDropHelpers()
 	e.emitDeferHelpers()
+	e.emitSpawnHelpers()
+	e.emitChanHelpers()
 	// Result/Either/optional force helpers (Phase 1f U0); emits nothing when the
 	// program registered no carrier.
 	e.emitResultHelpers()

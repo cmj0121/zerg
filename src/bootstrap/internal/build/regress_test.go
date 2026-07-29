@@ -28,6 +28,12 @@ func TestExamplesNoSyntheticNames(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", zg, err)
 			}
+			// An example past the seed's line emits no C at all, so it has no name to
+			// check; that its refusal is the clean, named one is asserted there.
+			if beyondSeed(string(src)) {
+				checkSeedRefuses(t, name, string(src))
+				return
+			}
 			code, _, diags := Compile(string(src))
 			if len(diags) != 0 {
 				t.Fatalf("%s should compile: %v", name, diags)

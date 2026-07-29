@@ -65,7 +65,28 @@ fn ident_name(e: Expr) -> str {
 
 # --- types ---------------------------------------------------------------------
 
+# parse_type reads a type expression, including the two DIRECTIONAL channel spellings
+# GRAMMAR gives: `<-chan[T]` is receive-only and `chan[T]<-` is send-only.
+#
+# Neither is ambiguous here, and the reason is structural rather than lucky: parse_type is
+# a closed sub-grammar that NEVER calls parse_expr, and it is only ever entered from a
+# type position — a parameter type, the type after `->`, a struct field, the `:` of a typed
+# binding, an enum variant's field, a type argument. None of those can begin an expression,
+# so a leading `<-` there can only be a direction and never a receive. The trailing form
+# cannot collide with `send-stmt ::= expr '<-' expr` for the mirror reason: parse_type is
+# never entered from a statement position, so `ch <- v` does not reach here. The trailing
+# `<-` is also only looked for after the `]` of a `chan[…]`, never after a name or any
+# other type, which is what keeps it away from anything else a `<-` could follow.
 fn parse_type(mut &p: Parser) -> Ty {
+	if p_at(p, LArrow) {
+		p_advance(p)
+		inner := parse_type(p)
+		if not ty_is_chan(inner) {
+			raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type"
+		}
+		return TChan(ty_chan_elem(inner), 2)
+	}
+
 	mut name := cur(p).lexeme
 	p_advance(p)
 
@@ -106,7 +127,13 @@ fn parse_type(mut &p: Parser) -> Ty {
 		p_advance(p)
 		elem := parse_type(p)
 		expect(p, RBrack)
-		return TChan(elem)
+		# the trailing `<-` — and ONLY here, right after the `]` that closed a channel's
+		# element type, so nothing else that a `<-` may follow is ever eaten
+		if p_at(p, LArrow) {
+			p_advance(p)
+			return TChan(elem, 1)
+		}
+		return TChan(elem, 0)
 	}
 	if name == "map" and p_at(p, LBrack) {
 		p_advance(p)
@@ -125,13 +152,22 @@ fn parse_type(mut &p: Parser) -> Ty {
 		return TList(elem)
 	}
 	if name == "Result" and p_at(p, LBrack) {
-		# the subset ignores the error channel: Result[T] is treated as T's happy path,
-		# and Result[nil] as void
+		# A SIGNATURE's Result is still erased to its happy path. The carrier this unit
+		# builds is produced by inference — from `<-ch` — and stops there on purpose: a
+		# `Result[T]` in a signature is what `?` needs, and `?` early-returns the Right from
+		# the ENCLOSING function, which turns every `io.*` return type in this compiler's
+		# own sources into a carrier and drags `guard` and `raise` along with it. That is
+		# the error model, not a channel feature, so it is a unit of its own.
 		p_advance(p)
 		inner := parse_type(p)
 		expect(p, RBrack)
 		return inner
 	}
+
+	# `Err` is the Right payload made nameable, which is what lets a `Right(e)` be passed
+	# to something. Without this it read as a user type named Err and the emitter spelled
+	# `zg_Err`, a type nothing declares.
+	return TErr if name == "Err"
 
 	return TInt if name == "int"
 	return TFloat if name == "float"
@@ -337,11 +373,29 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 # A statement rather than an expression, because `print v` is the most obvious thing to
 # write in an arm and `print` is a statement here. Reading it as an expression consumed
 # nothing, and the arm loop then read the rest of the body as further arms.
+#
+# A bare REASSIGNMENT is the one statement refused, because it is the one that reads as
+# something else: `done => running = false` looks like an arm binding a name, and GRAMMAR
+# makes an arm body an `expr` while a reassignment is a `simple-stmt` — the Go seed reads
+# the same source and rejects it. The braced form says what was meant and is grammatical,
+# because a block IS a primary. Nothing depends on the looseness: the corpus already
+# writes `done => { running = false }`.
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return parse_block(p) if p_at(p, LBrace)
 	mut one: list[Stmt] = []
-	one.append(parse_stmt(p))
+	st := parse_stmt(p)
+	if is_assign_stmt(st) {
+		raise "a select arm's body is an expression, not a reassignment: write `=> { … }` around it"
+	}
+	one.append(st)
 	return one
+}
+
+fn is_assign_stmt(s: Stmt) -> bool {
+	return match s {
+		SAssign(_, _) => true
+		_ => false
+	}
 }
 
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
@@ -361,7 +415,15 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 	}
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
 		ks.append(parse_expr(p))
-		expect(p, Colon)
+
+		# no colon, so by the rule above this brace was a BLOCK, and this parser has no
+		# block expression. It used to read on regardless and build a map out of whatever
+		# the block's statements happened to parse as — a match arm written
+		# `Right(e) => { report(e); stop() }` came out as a one-entry map and ran neither.
+		if not p_at(p, Colon) {
+			raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here"
+		}
+		p_advance(p)
 		vs.append(parse_expr(p))
 		break if not p_at(p, Comma)
 		p_advance(p)
@@ -729,20 +791,17 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SDel(name)
 	}
+	if k == Close {
+		return parse_close(p, false)
+	}
 	if k == Defer {
 		p_advance(p)
+
+		# `defer close(ch)` — the one statement `defer` takes besides a call, because
+		# `close` is a keyword and its argument is a channel rather than a callee. Every
+		# other deferred form is an expression and goes through parse_expr below.
+		return parse_close(p, true) if p_at(p, Close)
 		return SDefer(parse_expr(p))
-	}
-	if k == Guard {
-		# guard { ... } (optionally with a trailing else): the subset runs the happy
-		# path only, so emit the guarded block's statements
-		p_advance(p)
-		body := parse_block(p)
-		if p_at(p, Else) {
-			p_advance(p)
-			parse_block(p)
-		}
-		return SGuard(body)
 	}
 	if k == Mut {
 		p_advance(p)
@@ -827,6 +886,30 @@ fn parse_return(mut &p: Parser) -> Stmt {
 
 fn parse_if(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'if'
+
+	# `if v := e { … }` — the binding form. It is told from an ordinary condition by the
+	# `:=` alone, one token of lookahead, because no condition may contain one. Without
+	# this the `:=` was read as the start of a second expression and the rest of the
+	# function came apart, silently.
+	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
+		name := cur(p).lexeme
+		p_advance(p) # name
+		p_advance(p) # ':='
+		value := parse_expr(p)
+		then_body := parse_block(p)
+		mut has_else_l := false
+		mut else_body_l: list[Stmt] = []
+		if p_at(p, Else) {
+			p_advance(p)
+			has_else_l = true
+			if p_at(p, If) {
+				else_body_l.append(parse_if(p))
+			} else {
+				else_body_l = parse_block(p)
+			}
+		}
+		return SIfLet(name, value, then_body, has_else_l, else_body_l)
+	}
 	cond := parse_expr(p)
 	then_body := parse_block(p)
 	mut has_else := false
@@ -880,7 +963,33 @@ fn is_unary_op(k: Kind) -> bool {
 }
 
 fn parse_expr(mut &p: Parser) -> Expr {
-	return parse_or(p)
+	return parse_coalesce(p)
+}
+
+# parse_coalesce reads `a ?? b`, the OUTERMOST binary level. It sits there because its
+# right-hand side may be a DIVERGENT STATEMENT — the spec drains a channel with
+# `for { v := <-ch ?? break }` — and a statement cannot be an operand of anything, so no
+# level can sit outside it. GRAMMAR fixes no precedence for `??`; this is where it goes.
+fn parse_coalesce(mut &p: Parser) -> Expr {
+	mut left := parse_or(p)
+	for p_at(p, Coalesce) {
+		p_advance(p)
+		mut jump: list[Stmt] = []
+		if is_divergent(cur_kind(p)) {
+			jump.append(parse_stmt(p))
+			left = ECoalesce(left, ENil, jump)
+		} else {
+			left = ECoalesce(left, parse_or(p), jump)
+		}
+	}
+	return left
+}
+
+# is_divergent names the statements that LEAVE, which are the ones `??` may take on its
+# right: after one of them there is no value to have produced, which is exactly why they
+# are allowed where an expression is otherwise required.
+fn is_divergent(k: Kind) -> bool {
+	return k == Break or k == Continue or k == Return or k == Raise
 }
 
 fn parse_or(mut &p: Parser) -> Expr {
@@ -901,13 +1010,27 @@ fn parse_and(mut &p: Parser) -> Expr {
 	return left
 }
 
-# parse_cmp is non-associative: at most one comparison operator.
+# parse_cmp is non-associative: at most one comparison operator, or one `is` type test
+# (GRAMMAR:219 puts the two at the same level and allows only one of them).
 fn parse_cmp(mut &p: Parser) -> Expr {
 	left := parse_range(p)
 	if is_cmp_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
 		return EBinary(op, left, parse_range(p))
+	}
+	if p_at(p, Is) {
+		p_advance(p)
+
+		# The right side is a bare name, not an expression: reading it as one would make
+		# `e is StopIteration` an ident lookup for a name nothing declares. Refusing here
+		# is what keeps a malformed test from reaching the emitter as something else.
+		if not p_at(p, Ident) {
+			raise f"`is` wants a type name on its right, found `{cur(p).lexeme}`"
+		}
+		name := cur(p).lexeme
+		p_advance(p)
+		return EIs(left, name)
 	}
 	return left
 }
@@ -934,13 +1057,35 @@ fn parse_add(mut &p: Parser) -> Expr {
 }
 
 fn parse_mul(mut &p: Parser) -> Expr {
-	mut left := parse_unary(p)
+	mut left := parse_try(p)
 	for is_mul_op(cur_kind(p)) {
 		op := kind_name(cur_kind(p))
 		p_advance(p)
-		left = EBinary(op, left, parse_unary(p))
+		left = EBinary(op, left, parse_try(p))
 	}
 	return left
+}
+
+# parse_try reads the postfix `!` (and refuses the postfix `?`). It sits OUTSIDE
+# parse_unary rather than inside parse_postfix, and that placement is the whole point:
+# the spec writes `v := <-ch!`, meaning "force the Result this receive produced". Read
+# inside parse_postfix the `!` would bind to `ch` and give `ERecv(EForce(ch))` — forcing
+# the CHANNEL, which is not a Result at all. Out here it gives `EForce(ERecv(ch))`.
+#
+# `?` is refused rather than lowered. It early-returns the Right from the enclosing
+# function, so it needs a signature that can carry one, and signatures still erase
+# `Result[T]`. Until then it must say so: it used to fall off the end of parse_primary
+# and emit a dead `0;`, which is a wrong program that compiles.
+fn parse_try(mut &p: Parser) -> Expr {
+	mut e := parse_unary(p)
+	for p_at(p, Bang) or p_at(p, Question) {
+		if p_at(p, Question) {
+			raise "NotImplemented: the `?` operator — it early-returns the Err from the enclosing function, which needs `Result[T]` in a signature"
+		}
+		p_advance(p)
+		e = EForce(e)
+	}
+	return e
 }
 
 fn parse_unary(mut &p: Parser) -> Expr {
@@ -1079,6 +1224,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, RParen)
 		return EChanNew(elem, cap)
 	}
+	if k == Guard {
+		# `guard { … }` is an EXPRESSION (GRAMMAR:614) yielding Result[T], not a statement.
+		# It was read as one before, which is why `n := guard { f() } ?? 0` — the form the
+		# spec writes the operator with — was refused outright, and why a statement-position
+		# guard lowered to a bare block that caught nothing at all.
+		p_advance(p)
+		return EGuard(parse_block(p))
+	}
 	if k == Unsafe {
 		# GRAMMAR makes this a block-EXPRESSION; today the block was swallowed whole and
 		# its statements never ran
@@ -1154,8 +1307,38 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EIf(cond, then_e, else_e)
 	}
 	return parse_match(p) if k == Match
+
+	# A STATEMENT standing where an expression is wanted. The common way in is a match
+	# arm — GRAMMAR makes an arm's body an expression, and `Left(v) => print v` is the
+	# first thing anyone writes — where the statement used to be consumed as NOTHING: the
+	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
+	# that compiles and is not the one that was written, so it is named instead.
+	if is_stmt_kw(k) {
+		raise "NotImplemented: `" + t.lexeme + "` is a statement, and an expression is wanted here"
+	}
 	p_advance(p)
 	return ENil
+}
+
+# parse_close reads `close ( expr )`, the channel's one built-in statement. `at_exit` is
+# set for the `defer close(ch)` form, which is the same statement with the block's exit as
+# its moment.
+fn parse_close(mut &p: Parser, at_exit: bool) -> Stmt {
+	p_advance(p) # 'close'
+	expect(p, LParen)
+	ch := parse_expr(p)
+	expect(p, RParen)
+	return SClose(ch, at_exit)
+}
+
+# is_stmt_kw names the keywords that can only begin a STATEMENT. It is deliberately a
+# list of keywords rather than "anything unrecognised": the parser skips out-of-subset
+# surface elsewhere on purpose, and turning every unknown token into an error would
+# refuse programs this compiler is meant to read past.
+fn is_stmt_kw(k: Kind) -> bool {
+	return true if k == Print or k == Raise or k == Return or k == Nop
+	return true if k == Break or k == Continue or k == Del or k == Defer or k == Close
+	return k == Spawn or k == Select or k == For or k == With
 }
 
 fn parse_match(mut &p: Parser) -> Expr {
@@ -1217,6 +1400,21 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	}
 	expect(p, FatArrow)
 	body := parse_expr(p)
+
+	# GRAMMAR makes an arm's body an `expr`, and a block is a primary — so `X => { … }` is
+	# grammatical and a bare statement is not. c_match lowers a match to a ternary chain
+	# and can hold neither, which is a general `match` gap rather than a channel one.
+	#
+	# What is fixed here is only the DIAGNOSTIC. `Add(d) => n = n + d` used to leave the
+	# `= n + d` behind, and the arm loop then read the wreckage as further arms and emitted
+	# C that only cc could object to. A leftover `=` or `<-` after a body is exactly that
+	# situation, and it is now said in Zerg's own words.
+	if p_at(p, Assign) {
+		raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower"
+	}
+	if p_at(p, LArrow) {
+		raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower"
+	}
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }
 

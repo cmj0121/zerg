@@ -48,7 +48,7 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 statement      ::= simple-stmt | compound-stmt | decorated-decl
 simple-stmt    ::= nop | binding | reassign | print | return | raise | break
                  | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
-                 | del-stmt | expr-stmt
+                 | del-stmt | close-stmt | expr-stmt
 compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
 
 # A declaration introduces a name — a type, a function, or a module item. A DECORATOR
@@ -113,8 +113,8 @@ keyword    ::= 'nop'   | 'fn'    | 'mut'    | 'pub'     | 'return' | 'import'
              | 'if'    | 'else'  | 'for'    | 'in'      | 'break'  | 'continue'
              | 'match' | 'spawn' | 'select' | 'struct'  | 'enum'   | 'spec'
              | 'chan'  | 'type'  | 'impl'   | 'package' | 'init'
-             | 'defer' | 'del'   | 'raise'  | 'guard'   | 'is'    | 'not'
-             | 'and'   | 'or'    | 'print'  | 'this'    | 'with'  | 'as'
+             | 'defer' | 'del'   | 'close'  | 'raise'   | 'guard' | 'is'
+             | 'not'   | 'and'   | 'or'     | 'print'   | 'this'  | 'with'  | 'as'
              | 'from'  | 'true'  | 'false'  | 'nil'
              | 'unsafe'| 'ptr'   | 'asm'   | 'const'
 # ('derive' is not a keyword — it is a compiler decorator name, '#[derive(...)]'.)
@@ -621,11 +621,21 @@ guard-expr    ::= 'guard' block                     # yields Result[T]; T = the 
 # 'chan[T](cap?)' (capacity 0 = unbuffered rendezvous); 'ch <- v' sends, '<-ch'
 # receives yielding Result[T] (Right = closed, carrying StopIteration or a crash
 # Err). A bare 'chan[T]' is bidirectional and narrows to '<-chan[T]' / 'chan[T]<-'
-# via a type annotation. There is NO explicit close (the channel auto-closes when
-# its last sender leaves) and NO 'yield'. 'select' is the only multi-way wait.
+# via a type annotation. There is NO 'yield'. 'select' is the only multi-way wait.
+#
+# A channel closes BY ITSELF when its last sender leaves — that is the everyday form,
+# and the only one a crashing producer can take (its unwind is what carries the crash
+# Err to the receiver). 'close(ch)' is the CONDITIONAL, early form: end this stream
+# before my scope does. It is a STATEMENT and not a call — 'close' is a keyword, it
+# names no function, and it yields no value, so it cannot be passed, spawned or bound.
+# It marks the CHANNEL, not a holder: every handle keeps its reference and stays
+# readable, a receive drains what is buffered before answering the Right, and closing
+# twice changes nothing. A receive-only end may not close — a consumer must not end a
+# stream on the producers' behalf.
 
 spawn-stmt   ::= 'spawn' expr                  # fire-and-forget; expr is a call
 send-stmt    ::= expr '<-' expr                # 'ch <- v'; send yields no value
+close-stmt   ::= 'close' '(' expr ')'          # end this stream early; expr is a channel
 chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional capacity
 
 # 'select' watches several send/receive arms, runs the first ready one (fair ties).
@@ -686,7 +696,12 @@ init-decl    ::= 'init' '(' ')' block                # lazy setup; many allowed,
 # holder remains (a Ref[T]/chan drops a refcount instead — 'del ch' closes a channel
 # if you were its last sender). ('Ref[T]' drop, the third point on the axis, fires at
 # the last holder's scope exit — not a statement.)
-defer-stmt   ::= 'defer' expr            # run at block exit, every path incl. abort
+#
+# 'defer' takes an EXPRESSION — a call — or the one statement that is not one:
+# 'defer close(ch)' (group 9), which ends a stream at the block's exit on every path
+# out, including an abort unwind. It is spelled out here because 'close' is a keyword
+# and not a callee, so 'defer expr' alone could never reach it.
+defer-stmt   ::= 'defer' ( expr | close-stmt )   # run at block exit, every path incl. abort
 del-stmt     ::= 'del' identifier        # revoke a name's access now
 
 # ==================================================================================

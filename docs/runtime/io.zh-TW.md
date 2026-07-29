@@ -88,9 +88,9 @@ for line in io.stdin.read() { io.stdout.write_str(transform(line))? }
 `async`／`await`、沒有 function coloring。唯一例外是 FFI 邊界：一個阻塞的 **foreign（FFI）C 呼叫**會停泊整條 OS
 thread，因為 Zerg 不擁有那個 frame（[FFI](ffi.zh-TW.md)）。
 
-> **[not yet] / [deviation]** 會停泊 coroutine 的 `io` 屬於上文尚未建置的串流面。且在今日的 **N:1** runtime
-> 下（[Coroutine 與 Channel](../code/coroutine.zh-TW.md)）只有單一 thread，所以一次阻塞的 **foreign 呼叫會阻塞整個
-> 程式**，而非只有它那條 coroutine——預期的每-thread 停泊隨 M:N scheduler 到來。
+> **[not yet]** 會停泊 coroutine 的 `io` 屬於上文尚未建置的串流面。阻塞 foreign 呼叫的「每-thread 停泊」已隨
+> **M:N** scheduler 到來（[Coroutine 與 Channel](../code/coroutine.zh-TW.md)）：這樣一次呼叫現在只佔住**一條
+> worker**，其餘 worker 仍照跑 Zerg coroutine。在單 worker 的主機上，停下來的仍然是整個程式。
 
 ## Process 與命令執行
 

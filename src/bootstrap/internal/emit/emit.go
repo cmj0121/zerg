@@ -32,6 +32,13 @@ type Manifest struct {
 	// linked against the src/runtime tree.
 	NeedsRuntime bool
 
+	// Concurrency reports whether the program uses concurrency (a `spawn`, or a
+	// channel value/op). When set, the driver additionally links the scheduler and
+	// the per-arch context switch, and the entry runs main under the scheduler
+	// (zrt_sched_main). It implies NeedsRuntime. A program that touches no channel
+	// and no `spawn` leaves it false, so it links none of the scheduler.
+	Concurrency bool
+
 	// NeedsResult reports whether the program lowers a general Result/Either/optional
 	// carrier (Phase 1f U0) — a construction, a `?`/`??`/`!`/`?.`/`guard`, or an
 	// Either/optional signature. It implies NeedsRuntime (the carriers carry a
@@ -64,7 +71,7 @@ func Emit(prog *mono.Program) (string, Manifest, []diag.Diagnostic) {
 	if !e.diags.Empty() {
 		return "", Manifest{}, e.diags.Items()
 	}
-	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
+	return e.sb.String(), Manifest{NeedsRuntime: e.needsRuntime, Concurrency: e.concurrency, NeedsResult: e.needsResult, NeedsIO: e.needsIO, NeedsFormat: e.needsFormat}, nil
 }
 
 type emitter struct {
@@ -80,6 +87,21 @@ type emitter struct {
 	// zergrt.h" line and the returned Manifest. Value-only programs leave it
 	// false, so their emitted C is byte-identical to Phase 0.
 	needsRuntime bool
+
+	// Concurrency state (GRAMMAR group 9). concurrency is set when the program touches a
+	// channel or a `spawn`; it drives the Manifest flag the driver links the scheduler
+	// from, and the scheduler entry in cMain, and implies needsRuntime. spawnIdx numbers
+	// each `spawn f(args)` site so it shares one generated env struct + trampoline (like
+	// deferIdx). recvIdx/recvElems number the distinct `<-ch` element types, each of which
+	// gets a receive helper building its Result[T]; needChanDrop / needChanSenderDrop gate
+	// the two scope-exit drop thunks, one per handle direction. All empty/false for a
+	// program with no concurrency, which therefore links none of the scheduler.
+	concurrency        bool
+	spawnIdx           map[*ast.SpawnStmt]int
+	recvIdx            map[string]int
+	recvElems          []sema.Type
+	needChanDrop       bool
+	needChanSenderDrop bool
 
 	// Result/Either/optional carriers (Phase 1f U0). carriers maps a type's spelling
 	// to its generated C carrier (a monomorphized tagged struct generalizing the
@@ -185,6 +207,12 @@ func (e *emitter) program() {
 	e.needsRuntime = isResultNil(main.Ret) || len(main.Params) == 1
 
 	e.prepareRuntime()
+	// prepareRuntime settles e.concurrency, so the args/scheduler conflict is judged only
+	// now: the scheduler entry shims take a zero-argument function pointer, so threading
+	// the args list through a concurrent main is not wired.
+	if len(main.Params) == 1 && e.concurrency {
+		e.diags.Add(main.Decl.Span(), "the bootstrap seed does not lower a 'main(args)' in a concurrent program")
+	}
 	// A prepare pass may reject the program with a clean diagnostic before any C is
 	// written. Abort here so a rejected instance never reaches its helper emission or
 	// the C backend; Emit already discards the buffer when diags is non-empty.
@@ -629,6 +657,11 @@ func (e *emitter) cMain(main *sema.FuncSig) {
 		return
 	}
 	switch {
+	case e.concurrency:
+		// A concurrent program runs main as the first coroutine under the scheduler; the
+		// scheduler drains the run queue and maps main's outcome to the exit code. One shim
+		// per return shape, named from the same three-way question the plain entries ask.
+		e.line(fmt.Sprintf("return %s(zg_main);", schedEntry(main.Ret)))
 	case isResultNil(main.Ret):
 		e.line("return zrt_run(zg_main);")
 	case main.Ret == sema.Int:
@@ -639,6 +672,18 @@ func (e *emitter) cMain(main *sema.FuncSig) {
 	}
 	e.indent--
 	e.line("}")
+}
+
+// schedEntry names the scheduler program-entry shim for a main return shape (sched.c).
+func schedEntry(ret sema.Type) string {
+	switch {
+	case isResultNil(ret):
+		return "zrt_sched_main"
+	case ret == sema.Int:
+		return "zrt_sched_main_int"
+	default:
+		return "zrt_sched_main_nil"
+	}
 }
 
 // isResultNil reports whether a type is Zerg's 'Result[nil]' (the sum
@@ -701,19 +746,29 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.delStmt(n)
 	case *ast.DeferStmt:
 		e.deferStmt(n)
+	case *ast.SpawnStmt:
+		e.spawnStmt(n)
+	case *ast.SendStmt:
+		e.sendStmt(n)
+	case *ast.SelectStmt:
+		e.selectStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:
 		e.raiseStmt(n)
 	case *ast.ExprStmt:
+		// `close(ch)` is a statement rather than a value (closeCallStmt says why), so it is
+		// taken here before the expression dispatch ever sees the call.
+		if e.closeCallStmt(n.X) {
+			return
+		}
 		e.line(e.expr(n.X) + ";")
 	default:
 		// The statement half of the anti-silence net the expression dispatch already
 		// carries: every statement the backend lowers has an explicit case above, so a
-		// node reaching here is one the seed does not implement (a `spawn`, a channel
-		// send, a `select`). Emitting nothing for it would silently drop the statement
-		// from the program — fail loudly instead, since Emit discards its output while
-		// diags are non-empty.
+		// node reaching here is one the seed does not implement. Emitting nothing for it
+		// would silently drop the statement from the program — fail loudly instead, since
+		// Emit discards its output while diags are non-empty.
 		e.diags.Add(s.Span(), "statement not supported by the bootstrap seed: %T", s)
 	}
 }
@@ -1050,6 +1105,11 @@ func optElem(optT sema.Type) sema.Type {
 	if o, ok := optT.(*types.Opt); ok {
 		return o.Elem
 	}
+	// A `Result[T]` head binds its Left, which lives in the same tag-0 slot an optional's
+	// value does — so the present-test and the unwrap above need no case of their own.
+	if ei, ok := optT.(*types.Either); ok {
+		return ei.Left
+	}
 	return types.Unknown
 }
 
@@ -1095,6 +1155,12 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	// frame, so a non-POD element copy is released per iteration.
 	if lt, ok := e.cur.ExprType(e.info, n.Iter).(*types.List); ok {
 		e.forInList(n, lt)
+		return
+	}
+	// A channel: the loop IS the receive, and the close is what ends it. A channel is the
+	// other thing iterated without being a container (docs/code/coroutine.md).
+	if ct, ok := e.cur.ExprType(e.info, n.Iter).(*types.Chan); ok {
+		e.forInChan(n, ct)
 		return
 	}
 	// A str: iterate its code points. Materialize the runes into a temporary list and
@@ -1479,6 +1545,10 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.tupleLit(n)
 	case *ast.TupleIndex:
 		return e.tupleIndex(n)
+	case *ast.ChanNew:
+		return e.chanNew(n)
+	case *ast.Recv:
+		return e.recvExpr(n)
 	case *ast.Force:
 		return e.forceExpr(n)
 	case *ast.Try:
@@ -2041,6 +2111,10 @@ func (e *emitter) variantTag(subjT sema.Type, name string) int {
 }
 
 func (e *emitter) call(n *ast.Call) string {
+	// `close(ch)` reaching the expression dispatch is a `close` where a statement cannot go.
+	if e.closeOutOfStatement(n) {
+		return ""
+	}
 	// a primitive conversion `T(x)`.
 	if s, ok := e.convCallEmit(n); ok {
 		return s
@@ -2581,7 +2655,7 @@ func (e *emitter) errCallEmit(n *ast.Call) (string, bool) {
 		if _, shadowed := e.info.Refs[callee]; shadowed {
 			return "", false
 		}
-		if kind, ok := sema.ErrKind(callee.Name); ok && len(n.Args) == 1 {
+		if kind, ok := sema.ErrCtorKind(callee.Name); ok && len(n.Args) == 1 {
 			return fmt.Sprintf("zrt_err_new_kind(%d, %s)", kind, e.expr(n.Args[0].Value)), true
 		}
 	case *ast.Field:

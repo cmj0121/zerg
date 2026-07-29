@@ -1710,6 +1710,16 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args(em, args, sb)})" if c_is_fn(bt)
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
+		# A PascalCase call that names no declared type is not a constructor of anything.
+		# It used to emit a compound literal of that name anyway — `Left(1)` became
+		# `(zg_Left){1}` — which cc rejected against generated C. `Left` and `Right` are the
+		# ones a reader reaches for: they are the two sides of the carrier a receive answers
+		# with, and both compilers describe them, but neither offers them as CONSTRUCTORS.
+		# A `Result[T]` is produced by `<-ch` and by `guard`, never written by hand, so the
+		# refusal is the accurate answer rather than a missing feature.
+		if not c_is_struct_name(em, name) {
+			raise "no type named `" + name + "` to construct"
+		}
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"

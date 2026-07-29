@@ -48,3 +48,12 @@ void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) {
 
 void zrt_cond_signal(zrt_cond *c) { (void)c; }
 void zrt_cond_broadcast(zrt_cond *c) { (void)c; }
+
+bool zrt_atomic_claim(bool *flag) {
+	/* one thread: nothing can interleave between the read and the write */
+	if (*flag) {
+		return false;
+	}
+	*flag = true;
+	return true;
+}

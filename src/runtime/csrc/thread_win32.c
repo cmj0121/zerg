@@ -75,3 +75,8 @@ void zrt_cond_destroy(zrt_cond *c) { (void)c; /* no destroy in the Win32 API */ 
 void zrt_cond_wait(zrt_cond *c, zrt_mutex *m) { SleepConditionVariableCS(as_cond(c), as_mutex(m), INFINITE); }
 void zrt_cond_signal(zrt_cond *c) { WakeConditionVariable(as_cond(c)); }
 void zrt_cond_broadcast(zrt_cond *c) { WakeAllConditionVariable(as_cond(c)); }
+
+bool zrt_atomic_claim(bool *flag) {
+	/* a bool is one byte; InterlockedExchange8 is the matching width */
+	return InterlockedExchange8((volatile char *)flag, 1) == 0;
+}

@@ -63,14 +63,24 @@ func buildConcurrent(t *testing.T, name, src string) string {
 // runs both ways, because each has caught a failure the other did not.
 func runBounded(t *testing.T, bin, workers string, d time.Duration) (string, int) {
 	t.Helper()
+	out, _, code := runBoundedStreams(t, bin, workers, d)
+	return out, code
+}
+
+// runBoundedStreams is runBounded with the abort diagnostic KEPT. The `Kind: text` line
+// the abort contract makes normative lands on stderr, so the one test that reads it needs
+// the stream every other test here deliberately drops.
+func runBoundedStreams(t *testing.T, bin, workers string, d time.Duration) (string, string, int) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin)
 	if workers != "" {
 		cmd.Env = append(os.Environ(), "ZRT_WORKERS="+workers)
 	}
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		t.Fatalf("%s (ZRT_WORKERS=%q) did not finish within %s; output so far %q",
@@ -79,12 +89,12 @@ func runBounded(t *testing.T, bin, workers string, d time.Duration) (string, int
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
-		return stdout.String(), 0
+		return stdout.String(), stderr.String(), 0
 	case errors.As(err, &exit):
-		return stdout.String(), exit.ExitCode()
+		return stdout.String(), stderr.String(), exit.ExitCode()
 	default:
 		t.Fatalf("run %s: %v", bin, err)
-		return "", 0
+		return "", "", 0
 	}
 }
 
@@ -827,6 +837,66 @@ static void prog(void) {
 
     long v;
     zrt_chan_recv(ch, &v);
+    printf("after (WRONG)\n");
+}
+
+int main(void) { return zrt_sched_main_nil(prog); }
+`
+
+// TestBuiltinAbortsNameTheirKind pins the message shape the abort contract makes normative
+// (docs/conformance.md, "Runtime abort contract"): a built-in error's message is
+// `Kind: text`, where the text is the runtime's to word but the `Kind:` prefix is not. Every
+// other zrt_abort_kind site was written that way from the start; the two the concurrency
+// work added were not, and a taxonomy error whose own message will not say which kind it is
+// makes the conformance claim false for the reader who only ever sees stderr.
+func TestBuiltinAbortsNameTheirKind(t *testing.T) {
+	cases := []struct {
+		name   string
+		src    string
+		prefix string
+	}{
+		{"send_on_closed", sendOnClosedC, "SendOnClosedError: "},
+		{"deadlock", deadlockFatalC, "DeadlockError: "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := buildConcurrent(t, tc.name, tc.src)
+			for _, w := range workerModes {
+				_, errOut, code := runBoundedStreams(t, bin, w, 20*time.Second)
+				if code != 1 {
+					t.Errorf("ZRT_WORKERS=%q: exit=%d, want 1", w, code)
+				}
+				// The prefix is the assertion, not the whole line: the text after it is
+				// explicitly not normative, and a second detection can add a line below.
+				if !strings.HasPrefix(errOut, tc.prefix) {
+					t.Errorf("ZRT_WORKERS=%q: stderr=%q, want it to start %q", w, errOut, tc.prefix)
+				}
+				if strings.TrimSpace(strings.TrimPrefix(errOut, tc.prefix)) == "" {
+					t.Errorf("ZRT_WORKERS=%q: stderr=%q is a kind with no text", w, errOut)
+				}
+			}
+		})
+	}
+}
+
+// sendOnClosedC: main gives up the only send end, which closes the channel cleanly, then
+// sends on the receive handle it kept. Nothing can take that value and nothing ever will,
+// so the send is the dead letter the abort is for. The receive handle is also what keeps
+// the channel alive across the release — sender_release drops the refcount too, and the
+// last drop frees it.
+const sendOnClosedC = `
+#include "zergrt.h"
+#include <stdio.h>
+
+static void prog(void) {
+    zrt_chan *ch = zrt_chan_new(sizeof(long), 1);
+    zrt_chan *rx = zrt_chan_copy(ch);   /* a receive handle: refcount only, not a sender */
+    zrt_chan_sender_release(ch);        /* the last sender leaves: the channel closes clean */
+    printf("before\n");
+    fflush(stdout);
+
+    long v = 1;
+    zrt_chan_send(rx, &v);
     printf("after (WRONG)\n");
 }
 

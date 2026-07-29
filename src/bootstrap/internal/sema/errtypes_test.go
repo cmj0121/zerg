@@ -10,12 +10,62 @@ func TestBuiltinErrorConstructors(t *testing.T) {
 		wantOK(t, "fn f() -> Err {\n  return ValueError(\"bad\")\n}")
 	})
 	t.Run("every documented kind is nameable", func(t *testing.T) {
-		for _, k := range []string{"ValueError", "OverflowError", "IOError", "EncodingError", "IndexError", "KeyError"} {
+		for _, k := range []string{
+			"ValueError", "OverflowError", "IOError", "EncodingError", "IndexError", "KeyError",
+			"DeadlockError", "SendOnClosedError",
+		} {
 			wantOK(t, "fn f() -> Err {\n  return "+k+"(\"m\")\n}")
 		}
 	})
 	t.Run("the message is required and a str", func(t *testing.T) {
 		wantErr(t, "fn f() -> Err {\n  return ValueError(1)\n}", "cannot use")
+	})
+	t.Run("the sentinel kind is not a constructor", func(t *testing.T) {
+		wantErr(t, "fn f() -> Err {\n  return StopIteration(\"m\")\n}", "StopIteration")
+	})
+}
+
+// TestErrKindTableMirrorsTheRuntime pins the two questions the table answers separately.
+// The integer is the whole contract with the runtime: it is what `zrt_err.kind` holds, so
+// a value that drifts from src/runtime/csrc/zergrt.h ZRT_ERR_* silently makes a runtime
+// abort and a hand-written `raise` of the same name two different errors. And the second
+// column says which names a program may BUILD: every kind is an `is` target, but
+// StopIteration is the runtime's end-of-stream sentinel, and a channel tells a clean close
+// from a crash by that kind alone — a forgeable one would let a crash pass for a clean end.
+func TestErrKindTableMirrorsTheRuntime(t *testing.T) {
+	cases := []struct {
+		name string
+		kind int
+		ctor bool
+	}{
+		{"ValueError", 1, true},
+		{"OverflowError", 2, true},
+		{"IOError", 3, true},
+		{"EncodingError", 4, true},
+		{"IndexError", 5, true},
+		{"KeyError", 6, true},
+		{"DeadlockError", 7, true},
+		{"SendOnClosedError", 8, true},
+		{"StopIteration", 9, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k, ok := ErrKind(tc.name)
+			if !ok || k != tc.kind {
+				t.Errorf("ErrKind(%q) = %d, %v; want %d, true", tc.name, k, ok, tc.kind)
+			}
+			if _, ok := ErrCtorKind(tc.name); ok != tc.ctor {
+				t.Errorf("ErrCtorKind(%q) constructible = %v, want %v", tc.name, ok, tc.ctor)
+			}
+		})
+	}
+	t.Run("a name outside the taxonomy is neither", func(t *testing.T) {
+		if _, ok := ErrKind("NopeError"); ok {
+			t.Error("ErrKind accepted a name the taxonomy does not have")
+		}
+		if _, ok := ErrCtorKind("NopeError"); ok {
+			t.Error("ErrCtorKind accepted a name the taxonomy does not have")
+		}
 	})
 }
 

@@ -117,6 +117,21 @@ enum Stmt {
 	# SSpawn is `spawn f(a)` — fire-and-forget. SSend is `ch <- v`.
 	SSpawn(Expr)
 	SSend(Expr, Expr)
+
+	# SSelect is `select { … }`. Its arms are a struct rather than four Stmt variants
+	# because every arm carries the same four things in different combinations.
+	SSelect(list[SelArm])
+}
+
+# SelArm is one select arm. `op` is 0 recv, 1 send, 2 done, 3 default — the same order
+# the runtime's ZRT_SEL_* constants use for the first two, so the emitter maps rather
+# than translates. `bind` is the receive arm's optional name ("" when absent or `_`).
+pub struct SelArm {
+	op: int
+	bind: str
+	ch: Expr
+	val: Expr
+	body: list[Stmt]
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable

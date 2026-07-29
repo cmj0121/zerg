@@ -70,8 +70,9 @@ coroutine。
 
 channel 是一條型別化的 by-ref 管道，payload **複製**流過它。它是一個 **reference-counted 的值**——`Ref` 的內建
 實作者（與 `Ref[T]` 並列；見 [值與記憶體](../core/memory.zh-TW.md)），scope-owning 的例外：在最後一個持有者的 scope 結束時
-free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**（可被送進另一條
-channel）。
+free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**：
+可以放進 struct 欄位、當成 enum payload 攜帶——actor 的 ask 就是這樣攜帶它的回覆 channel——也可以
+送進另一條 channel。**[implemented]**，兩個編譯器皆然。
 
 ```text
 ch := chan[int]()      # unbuffered——每次 send 與一次 receive rendezvous
@@ -81,8 +82,9 @@ ch := chan[int](64)    # buffered，容量 64
 容量是唯一可調之處；**send 在滿時 block、receive 在空時 block**。unbuffered（容量 0）是 rendezvous——send 只有在
 receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
 
-本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send abort、
-最後 sender 自動 close——皆為 **[implemented]**。兩個 channel 錯誤種類都已**具現化且叫得出名字**：對已關閉 channel
+本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send
+abort、最後 sender 自動 close，以及 payload 在**送出當下深拷貝**、使 receiver 絕不共享 sender 的儲存
+——皆為 **[implemented]**。兩個 channel 錯誤種類都已**具現化且叫得出名字**：對已關閉 channel
 的 send 以 `SendOnClosedError` raise，`DeadlockError` 則是「收尾與 deadlock」所述的乾淨、可攔截 abort，兩者都能用
 一般的 `err is …` 測試（見 [錯誤處理](errors.zh-TW.md)）。
 
@@ -129,17 +131,21 @@ match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 
 因為關閉落在 `Right`，`chan[U?]` 不再含糊：**送了一個 `nil`** 是 `Left(nil)`，**關閉**是 `Right`。
 
-> **[not yet]** 上面每一個運算子都已建置，**只有 `?` 除外**。`?` 會把 `Right` 從**外圍函式**提早 return 出去，
-> 這需要 `Result[T]` 能在**簽章**裡存活——那是 [錯誤處理](errors.zh-TW.md) 的錯誤模型，不是 channel 特性。兩個編
-> 譯器都乾淨地拒絕它（_`?` can only be used in a function returning Either, Result, or an optional_），不會誤譯；
-> 在它落地前，用 `(<-ch)!` 往上傳、或用 `??` 吸收。
+> **[not yet]** 在**出貨的 `zerg`** 上；而且這是本章唯一一處**種子比較寬**的地方。上面每一個運算子在兩個編譯器
+> 都已建置，只有 `?` 例外，而 `?` 是**種子有做**的：`v := (<-ch)?` 會把 `Right` 從外圍函式提早 return 出去，而
+> `Result[T]` 在種子的**簽章**裡活得下來、載得住它。`zerg` 則指名拒絕（_the `?` operator — it early-returns the
+> Err from the enclosing function, which needs `Result[T]` in a signature_），不會誤譯；在它於該處落地前，用
+> `(<-ch)!` 往上傳、或用 `??` 吸收。`?` 需要的是 [錯誤處理](errors.zh-TW.md) 的錯誤模型，而不是任何 channel 特
+> 性——一個簽章叫得出名字的 `Result[T]`。
 
 上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
 
 > **[deviation]** 規格讓 `match` arm 的 body 是一個運算式，而區塊**本身就是**運算式，所以 `Left(v) => { … }` 合
 > 文法，種子也接受。出貨的 `zerg` 則**不**：`c_match` 降階成三元運算鏈，容不下一個區塊，於是那條 arm 被拒絕
 > （_a block used as an expression_）——因此像 `print` 這種敘述不能站在那裡。變通做法是把 arm 寫成一次**呼叫**、
-> 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響：它降階成 if/else，兩個編譯器都吃區塊。
+> 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響，理由值得記清楚：`match` 的 arm 必須
+> **產出**該次 match 的值，而 `select` 不產出值、它的 arm 是**執行**。所以 select arm 的 body 是一個**敘述**
+> （GRAMMAR group 9）——`done => break` 在那裡很平常，裸的 `print` 也站得住，區塊只是眾多敘述中的一種。
 
 ## 關閉——自動發生在最後一個 sender，必須提早時才用 `close(ch)`
 
@@ -277,7 +283,8 @@ receive arm 綁定的型別與一般 receive 相同——`Result[T]`：有值時
 
 ## Timer 與 cancellation
 
-**timeout** 與 **cancellation** 都從 channel 與 `select` 掉出來——沒有新 primitive。
+**timeout** 與 **cancellation** 都從 channel 與 `select` 掉出來——沒有新 primitive。本節的完整可執行版本是
+[`examples/13_cancel.zg`](../../examples/13_cancel.zg)，`make examples` 會用 `zerg` 建置它**並執行**。
 
 - **timer 就是一條 channel。** `time.after(d)` 回傳一條 receive-only channel，在 `d` 之後**一次**變成可接收
   （`time.ticker(d)` 則重複觸發）；`select` 對它的一個 receive arm 就是 **timeout**。`d` 是以**奈秒**為單位的
@@ -335,6 +342,8 @@ fn main() {
 
 ## 共享狀態——actor pattern
 
+本節的完整可執行版本是 [`examples/12_actor.zg`](../../examples/12_actor.zg)，由 `make examples` 建置並執行。
+
 Zerg 沒有鎖、也沒有共享可變狀態，但真實程式需要協調的可變 state——counter、cache、registry。答案是一個
 **pattern**、不是新原語：一個 **actor** 就是一個**獨佔**某份 `mut` state 的 coroutine，只能經由 channel 上的訊息
 觸及。單一 coroutine 一次處理一則 mailbox 訊息，所以寫入**無鎖地序列化**；又因為沒有別人握著那份 state，不會有
@@ -380,8 +389,12 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 
 對單一共享純量，較低階的替代是用不可變 `:=` 持有一個 stdlib **`Atomic`**（綁定不可變，atomic 內部可變——見
 [Module 與 Program](../runtime/package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `swap` /
-`fetch_add` / `compare_swap`。今日 **[implemented]** 的是僅 **sequential-consistency** ordering 的
+`fetch_add` / `compare_swap`。在**種子**上 **[implemented]** 的是僅 **sequential-consistency** ordering 的
 **`Atomic[int]`**；顯式的 **memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
+
+> **[not yet]** 在**出貨的 `zerg`** 上，而且原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而
+> `zerg` 沒有 `Ref[T]`。它會指名拒絕整個模組——_no type named `Ref` (field `Atomic.cell`)_——而不是吐出一個沒人
+> 宣告的型別，所以 `import "std/atomic"` 在那裡是一則乾淨的診斷；上面的 actor 才是**兩個編譯器**都成立的做法。
 
 ## producer——generator pattern
 
@@ -422,8 +435,13 @@ for v in range(0, 10) { use(v) }   # drain 到 StopIteration
 refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**不會遺失**：以最後 sender 身分關閉 channel 時會帶著
 崩潰的 `Err`，consumer 讀到 `Right(err)`（乾淨結束則帶 `StopIteration`）。
 
-在源頭，這個死亡此外是**無聲的**。一個**可選的 compiler flag** 會**另外**把每一次未處理的 abort——`Err`、哪個
-coroutine、backtrace——報到 `stderr`。它**純觀察**：開或不開，行為完全一致，且預設 build 不帶開銷。
+runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
+消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴
+它。**[implemented]**
+
+> **[not yet]** 這則回報只有訊息，沒有別的。指出它來自**哪個 coroutine**、印出 **backtrace**、以及用一個
+> **compiler flag** 決定要不要印，三者都尚未建置——所以一個有很多 coroutine 的程式拿得到原因，卻沒有對應的
+> `spawn` 位置可以掛上去。
 
 要回報*結構化*的結果——部分結果、特定錯誤、或不會關掉受監看 channel 的失敗——coroutine 仍會 `guard` 並送進
 channel。讓一個死亡變得*致命*是觀察者的職責（對 `Right(err)` 反應並 abort），絕不是 `spawn` 的事。

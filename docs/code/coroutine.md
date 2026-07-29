@@ -82,7 +82,9 @@ A channel is a typed, by-ref conduit whose payloads are **copied** through it. I
 **reference-counted value** — the built-in implementer of `Ref` (alongside `Ref[T]`; see
 [Values & Memory](../core/memory.md)), the exception to scope-owning: freed when its last holder's scope
 exits, and copying a value refcount-bumps any `Ref` value it contains while deep-copying the rest. A
-channel is **FIFO** and **first-class** (it can be sent over another channel).
+channel is **FIFO** and **first-class**: it can be held in a struct field, carried as an enum
+payload — which is how an actor's ask carries its reply channel — and sent over another
+channel. **[implemented]**, in both compilers.
 
 ```text
 ch := chan[int]()      # unbuffered — every send rendezvous with a receive
@@ -94,7 +96,8 @@ Capacity is the only knob; **send blocks when full, receive blocks when empty**.
 one synchronization primitive.
 
 The whole channel core in this chapter — buffered and unbuffered blocking, a close signalling the
-receiver, a send on a closed channel aborting, and the last sender auto-closing — is **[implemented]**.
+receiver, a send on a closed channel aborting, the last sender auto-closing, and a payload
+**deep-copied at the send** so a receiver never shares the sender's storage — is **[implemented]**.
 Both channel error kinds are **reified and nameable**: a send on a closed channel raises
 `SendOnClosedError`, `DeadlockError` is the clean, catchable abort described under Termination &
 deadlock, and each answers an ordinary `err is …` test (see [Errors](errors.md)).
@@ -147,11 +150,14 @@ match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 Because closed is the `Right` side, `chan[U?]` is unambiguous: a **sent `nil`** is `Left(nil)`, a
 **closed** channel is `Right`.
 
-> **[not yet]** Every operator above is built **except `?`**. `?` early-returns the `Right` from the
-> **enclosing** function, which requires `Result[T]` to survive in a **signature** — the error model
-> of [Errors](errors.md), not a channel feature. Both compilers refuse it cleanly (_`?` can only be
-> used in a function returning Either, Result, or an optional_), so nothing is mis-emitted; until it
-> lands, propagate with `(<-ch)!` or absorb with `??`.
+> **[not yet]** In the **shipped `zerg`**, and this is the one place on this chapter where the **seed
+> is the wider of the two**. Every operator above is built in both compilers except `?`, which the
+> **seed builds**: `v := (<-ch)?` early-returns the `Right` from the enclosing function, and a
+> `Result[T]` survives in the seed's **signatures** to carry it. `zerg` refuses it by name (_the `?`
+> operator — it early-returns the Err from the enclosing function, which needs `Result[T]` in a
+> signature_), so nothing is mis-emitted; until it lands there, propagate with `(<-ch)!` or absorb
+> with `??`. What `?` needs is the error model of [Errors](errors.md) rather than anything about a
+> channel — a `Result[T]` a signature can name.
 
 The `match` line above also carries a restriction, and it is the one most likely to bite: what may
 stand in an arm.
@@ -161,7 +167,10 @@ stand in an arm.
 > **not**: `c_match` lowers to a ternary chain, which cannot hold a block, and the arm is refused
 > (_a block used as an expression_) — so a statement such as `print` may not stand in an arm there.
 > The workaround is to make the arm a **call** whose value is the arm's value, as the actor example
-> below does. `select` arms are unaffected: they lower to if/else and take blocks in both compilers.
+> below does. `select` arms are unaffected, and for a reason worth keeping straight: a `match` arm
+> must **yield** the match's value, while a `select` yields nothing and its arm **runs**. So a select
+> arm's body is a **statement** (GRAMMAR group 9) — `done => break` is ordinary there, a bare `print`
+> stands in an arm, and a block is just one statement among them.
 
 ## Closing — automatic on the last sender, `close(ch)` when it must be early
 
@@ -323,7 +332,9 @@ hangs rather than misbehaves:
 
 ## Timers & cancellation
 
-**Timeouts** and **cancellation** both fall out of channels and `select` — no new primitive.
+**Timeouts** and **cancellation** both fall out of channels and `select` — no new primitive. The
+worked version of this section is [`examples/13_cancel.zg`](../../examples/13_cancel.zg), which
+`make examples` builds with `zerg` **and runs**.
 
 - **A timer is a channel.** `time.after(d)` yields a receive-only channel that becomes ready **once**
   after `d` (`time.ticker(d)` fires repeatedly); a `select` receive arm on it is a **timeout**. `d` is
@@ -386,6 +397,9 @@ a loop.
 
 ## Shared state — the actor pattern
 
+The worked version of this section is [`examples/12_actor.zg`](../../examples/12_actor.zg), built and
+run by `make examples`.
+
 Zerg has no locks and no shared mutable state, yet real programs need coordinated mutable state — a
 counter, a cache, a registry. The answer is a **pattern**, not a new primitive: an **actor** is a
 coroutine that **exclusively owns** some `mut` state, reachable only by messages on a channel. One
@@ -435,9 +449,14 @@ must be serialized (a non-thread-safe `Ref[handle]`) is likewise owned by one ac
 
 For a single shared scalar, the lower-level alternative is a stdlib **`Atomic`** held behind an immutable
 `:=` (the binding is immutable; the atomic's interior is not — see [Modules & Programs](../runtime/package.md)). It
-provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`. **[implemented]** today for
-**`Atomic[int]`** with **sequential-consistency** ordering only; the explicit **memory-ordering argument**
-and a **generic `Atomic[T]`** are **[not yet]**.
+provides lock-free `load` / `store` / `swap` / `fetch_add` / `compare_swap`. **[implemented]** in the
+**seed** for **`Atomic[int]`** with **sequential-consistency** ordering only; the explicit
+**memory-ordering argument** and a **generic `Atomic[T]`** are **[not yet]**.
+
+> **[not yet]** In the **shipped `zerg`**, and not because of anything about atomics: an `Atomic[int]`
+> IS a `Ref[int]`, and `zerg` has no `Ref[T]`. It refuses the module by name — _no type named `Ref`
+> (field `Atomic.cell`)_ — rather than emitting a type nothing declares, so `import "std/atomic"` is a
+> clean diagnostic there and the actor above is the pattern that works in **both** compilers.
 
 ## A producer — the generator pattern
 
@@ -481,9 +500,14 @@ unwinds (freeing scopes, decrementing channel refcounts) while everything else r
 fire-and-forget, but the failure is **not lost**: closing a channel as the last sender carries the
 crash `Err`, which the consumer reads as `Right(err)` (a clean finish carries `StopIteration` instead).
 
-At the source the death is otherwise **silent**. An **optional compiler flag** additionally reports
-each unhandled abort — the `Err`, the coroutine, a backtrace — to `stderr`. It is **purely
-observational**: behaviour is identical with or without it, and default builds carry no overhead.
+The runtime **reports it on `stderr`** — the `Err`'s message, as an abort at the top level prints one
+— and then that coroutine is gone and the program runs on. The report is **purely observational**:
+it is what the unwind already knows, printed on its way past, and nothing about the program's
+behaviour depends on it. **[implemented]**
+
+> **[not yet]** The report is the message and nothing more. Naming the **coroutine** it came from,
+> printing a **backtrace**, and a **compiler flag** to choose whether any of it is printed are all
+> unbuilt — so a program with many coroutines gets a reason without a `spawn` site to attach it to.
 
 For a _structured_ outcome — partial results, a specific error, or a failure that wouldn't otherwise
 close a watched channel — the coroutine still `guard`s and sends over a channel. Making a death

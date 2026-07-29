@@ -180,7 +180,41 @@ fn parse_type(mut &p: Parser) -> Ty {
 		return TInt
 	}
 	return TNil if name == "nil"
+
+	# A generic ARGUMENT list on a user type — `Ref[int]`, `Atomic[int]`, `B[T]`. The four
+	# built-in generics above read their own brackets; every other name reached this line
+	# with the `[` still in the stream, and nothing downstream wanted a `[`. The caller went
+	# on reading types as if the list were not there: `-> Ref[int] {` left the body's brace
+	# behind, a parameter list read `[` as the next parameter's name, and the file after it
+	# lowered to C full of identifiers named `zg_[` and `zg_->`. `expect` is silent on a
+	# mismatch, so none of that was reported — the first complaint came from cc, about a
+	# generated file.
+	#
+	# The arguments are READ AND DROPPED, which is what this compiler already does with
+	# `Result[T]`: it erases generics, so a type's identity is its name. What matters is
+	# that the brackets are CONSUMED.
+	skip_ty_args(p)
 	return TNamed(name)
+}
+
+# skip_ty_args consumes a balanced `[ … ]` type-argument list, if one is next. Nesting is
+# counted rather than assumed one deep, so `Pair[list[int], B[T]]` leaves the stream on the
+# token after the outer `]`.
+fn skip_ty_args(mut &p: Parser) {
+	if not p_at(p, LBrack) {
+		return
+	}
+	p_advance(p) # '['
+	mut depth := 1
+	for depth > 0 and not p_at(p, Eof) {
+		if p_at(p, LBrack) {
+			depth = depth + 1
+		}
+		if p_at(p, RBrack) {
+			depth = depth - 1
+		}
+		p_advance(p)
+	}
 }
 
 # is_conv reports whether a callee name is a scalar type conversion.
@@ -374,28 +408,16 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 # write in an arm and `print` is a statement here. Reading it as an expression consumed
 # nothing, and the arm loop then read the rest of the body as further arms.
 #
-# A bare REASSIGNMENT is the one statement refused, because it is the one that reads as
-# something else: `done => running = false` looks like an arm binding a name, and GRAMMAR
-# makes an arm body an `expr` while a reassignment is a `simple-stmt` — the Go seed reads
-# the same source and rejects it. The braced form says what was meant and is grammatical,
-# because a block IS a primary. Nothing depends on the looseness: the corpus already
-# writes `done => { running = false }`.
+# A bare REASSIGNMENT used to be refused here, on the grounds that GRAMMAR made an arm body
+# an `expr` while a reassignment is a `simple-stmt`, and that the seed rejected it too. The
+# grammar settled the other way — an arm RUNS rather than yields, so its body is a stmt —
+# and the seed reads one now, so `v := <-work => total = total + v!` is an ordinary arm and
+# no longer needs braces to say what it plainly says.
 fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
 	return parse_block(p) if p_at(p, LBrace)
 	mut one: list[Stmt] = []
-	st := parse_stmt(p)
-	if is_assign_stmt(st) {
-		raise "a select arm's body is an expression, not a reassignment: write `=> { … }` around it"
-	}
-	one.append(st)
+	one.append(parse_stmt(p))
 	return one
-}
-
-fn is_assign_stmt(s: Stmt) -> bool {
-	return match s {
-		SAssign(_, _) => true
-		_ => false
-	}
 }
 
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
@@ -607,6 +629,10 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	p_advance(p) # 'struct'
 	name := cur(p).lexeme
 	p_advance(p) # name
+	# `struct B[T] { … }` — the parameter list is read and dropped for the same reason a
+	# generic argument list is: this compiler erases generics, and a `[` left in the stream
+	# would be read as the body's opening brace.
+	skip_ty_args(p)
 	expect(p, LBrace)
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
@@ -1084,6 +1110,39 @@ fn parse_try(mut &p: Parser) -> Expr {
 		}
 		p_advance(p)
 		e = EForce(e)
+
+		# What follows a `!` belongs to the value it produced. `(<-ch)![0]` indexes the list
+		# the receive answered with, and `(<-ch)!.field` reads a field of it — the receive-
+		# and-force idiom the chapter is written in, applied to a payload that is not a
+		# scalar. Because the `!` level sits above parse_postfix, the chain had already been
+		# read and finished, so the `[0]` was simply DROPPED: the emitted C printed the whole
+		# list and only cc objected, against generated code.
+		e = parse_chain_tail(p, e)
+	}
+	return e
+}
+
+# parse_chain_tail continues a postfix chain on an expression that is already built: a
+# field, a method call, an index. A bare `(` is deliberately not here — a free call needs
+# an identifier for its name, and the thing to the left of one of these is a value.
+fn parse_chain_tail(mut &p: Parser, e0: Expr) -> Expr {
+	mut e := e0
+	for p_at(p, Dot) or p_at(p, LBrack) {
+		if p_at(p, LBrack) {
+			p_advance(p) # '['
+			idx := parse_expr(p)
+			expect(p, RBrack)
+			e = EIndex(e, idx)
+		} else {
+			p_advance(p) # '.'
+			fld := cur(p).lexeme
+			p_advance(p)
+			if p_at(p, LParen) {
+				e = EMethod(e, fld, parse_call_args(p))
+			} else {
+				e = EField(e, fld)
+			}
+		}
 	}
 	return e
 }

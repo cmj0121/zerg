@@ -130,7 +130,15 @@ jobs:
       - name: Build the self-hosting compiler with the seed
         run: make build
 
-      # --- 7. the corpus the self-hosting compiler owns --------------------------
+      # --- 7. the programs the toolchain must turn away --------------------------
+      # It runs here, right after the compilers are built, because it needs both of them
+      # and no corpus. What it pins is that a refusal comes from the compiler, naming the
+      # source, rather than from cc naming generated C — which a build gate cannot see,
+      # since a program that reaches cc and is rejected there still "fails".
+      - name: Every program that must be refused, is
+        run: make refuse
+
+      # --- 8. the corpus the self-hosting compiler owns --------------------------
       # Best-effort: the corpus is a submodule declared over SSH, so a fork without
       # access skips it rather than failing.
       - name: Fetch test-data submodule (best-effort, over HTTPS)

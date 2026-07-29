@@ -90,14 +90,20 @@ scope，所以 `token.zg`/`lexer.zg`/`parser.zg` 可以共用 `Kind` 與 AST 的
 
 ```sh
 make corpus     # 先建 zerg，然後拿它跑過 test-data/codegen/
+make refuse     # 每一支必須被拒絕的程式，都要由編譯器指名拒絕
 ```
 
 每個案例是一支 `.zg` 程式，旁邊放著它必須印出的 stdout。Makefile 的 `CORPUS_PASS` 是 `zerg`
 今天做對的那一組，而且是**閘門**：一個案例掉出這組就是 regression，會讓 target 失敗。其餘案例
-只回報、不強制——其中八個需要泛型、`derive`、spec bound 或 `#[dyn]`，而自舉編譯器目前一個都
-沒有。有一個不是缺功能而是 **BUG**：`countdown`——`mut n := n` 遮蔽一個參數會 emit 出
-`int64_t zg_n = zg_n;`，C 會以重複定義拒絕它。種子會給每個區域變數一個唯一的 C 名稱；這個
-emitter 不會。至少它是大聲的：C 編譯器會拒絕。
+只回報、不強制——剩下的八個需要泛型**函式**定義、把泛型型別參數當成欄位型別、`derive`、spec
+bound 或 `#[dyn]`，而自舉編譯器目前一個都沒有。每一個都是**指名**拒絕——`gen_struct` 回答的是
+_no type named `T` (field `Box.val`)_——而不是誤譯。
+
+`make refuse` 是同一件事的另一面。這裡每一道閘門問的都是工具鏈**建得出什麼**，而一則拒絕真正
+需要被釘住的性質，不是「壞程式會失敗」——它一直都會——而是**誰**說的。編譯器照樣 emit 出去的
+程式會走到 cc，由 cc 對著 `.zerg-cache` 底下的產生碼、在一個程式設計者打不開的行號上報一個真實
+的錯。所以 `scripts/refuse-check.sh` 的每個案例都斷言三件事：非零 exit、預期的句子，以及輸出裡
+**沒有**那個 cache。
 
 每個開始通過的案例，就是一次修正或一個功能落地，然後它會被搬進那份清單。
 
@@ -198,9 +204,16 @@ desugar 成這個形式本來被定義成的那條 `+` 鏈，所以 AST 與 emit
 | `map[K,V]`、`{k: v}`、`{:}`       | POD 的 key 與 value                     |
 | `defer f(args)`                   | 在所在區塊的出口，引數以值捕獲          |
 
-仍然缺少的，而且在 parser 分辨得出來的地方都是**指名**拒絕、而不是 emit 出錯的東西：closure
-與 `fn` 值、`spawn` / `chan` / `select`、泛型**函式**定義、slicing `xs[a..b]`（它需要一個目前
-還不存在的 runtime leaf），以及 command literal。
+並行在這裡是完整的，而且這是這個編譯器目前**比較寬**的地方：`chan[T](cap)`、`ch <- v`、真正
+回傳 `Result[T]` 的 `<-ch`、`close(ch)` 與 `defer close(ch)`、四種 arm 形狀俱全且 arm body 可以
+是敘述的 `select`、`for v in ch`、方向端 `<-chan[T]` / `chan[T]<-`、被呼叫者為方法或帶命名空間
+函式的 `spawn`，以及 stdlib 的 timer。channel 在這裡也是一等值——放進 struct 欄位、當成 enum
+payload 攜帶、送進另一條 channel——而且 payload 在送出當下深拷貝，所以 receiver 絕不會共享
+sender 的緩衝區。
+
+仍然缺少的，而且每一個都是**指名**拒絕、不是誤譯：`Ref[T]`（它會一併帶走 `std/atomic`）、`?`
+運算子、`match` arm body 用區塊、泛型**函式**定義、把泛型型別參數當成欄位型別、具名引數的
+struct 建構 `T(a: 1)`，以及 command literal。
 
 ## 效能：平行與快取（M7）
 

@@ -1,0 +1,59 @@
+# 12 — The actor: mutable state owned by one coroutine, reached only by messages.
+#
+# Zerg has no locks and no shared mutable state, yet a counter, a cache and a
+# registry all need coordinated writes. The answer is a pattern rather than a
+# primitive: one coroutine OWNS the state, and everyone else talks to it over a
+# channel. Because only the owner touches it, the writes serialize with nothing
+# to lock, and there is no data race to have.
+#
+# Two things travel over the inbox. `Add` is a TELL — send it and move on. `Get`
+# is an ASK: it carries a reply channel of its own, so the answer comes back to
+# the one caller that wanted it rather than to whoever happens to receive next.
+#
+# Teardown is the ordinary channel rule and nothing more. When the last client
+# lets go of its send end the inbox closes, the owner's `for` ends, and its
+# state is freed with the scope.
+#
+# beyond-the-seed: a directional channel end. The bootstrap seed refuses one by
+# name rather than approximate the per-direction refcount, so this example is
+# built by `zerg` — which is what `make examples` uses.
+
+enum Cmd {
+	Add(int) # a write
+	Get(chan[int]<-) # a read — carries the channel to answer on
+}
+
+# answer replies on the caller's channel and leaves the state as it was. It
+# exists because a `match` arm's body is an expression and a send is not, so the
+# reply travels through a call whose VALUE is the state to keep — which has the
+# pleasant effect of making the state writable in exactly one place.
+fn answer(rep: chan[int]<-, n: int) -> int {
+	rep <- n
+	return n
+}
+
+fn counter(inbox: <-chan[Cmd]) {
+	mut n := 0 # the state: a plain mut int, owned here alone
+
+	# drains until the last sender leaves
+	for cmd in inbox {
+		n = match cmd {
+			Add(d) => n + d
+			Get(rep) => answer(rep, n)
+		}
+	}
+}
+
+fn main() {
+	inbox := chan[Cmd](4)
+	spawn counter(inbox)
+
+	inbox <- Add(5)
+	inbox <- Add(7)
+
+	# ask: a fresh reply channel goes in with the message, and `rep` narrows to
+	# send-only on the way — the caller keeps the receive end it blocks on.
+	rep := chan[int](1)
+	inbox <- Get(rep)
+	print (<-rep)!
+}

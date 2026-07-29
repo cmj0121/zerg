@@ -46,6 +46,34 @@ func TestChannelDirectionNarrowing(t *testing.T) {
 		})
 	}
 
+	// The direction is the whole subject of these messages, so each must SPELL it. It used
+	// to be dropped on the way out: every one of them named a `chan[int]`, which is the type
+	// that does not break the rule being enforced, and the binding case below named the same
+	// type on both sides of a mismatch it was reporting.
+	t.Run("a refusal spells the direction it is enforcing", func(t *testing.T) {
+		for _, tc := range []struct{ src, substr string }{
+			{"fn f(ch: <-chan[int]) {\n  ch <- 1\n}", "receive-only channel <-chan[int]"},
+			{"fn f(ch: chan[int]<-) -> int {\n  x := <-ch\n  return 0\n}", "send-only channel chan[int]<-"},
+			{"fn f(ch: <-chan[int]) {\n  close(ch)\n}", "receive-only channel <-chan[int]"},
+			{"fn f(ch: <-chan[int]) {\n  bad: chan[int] = ch\n}", "cannot bind <-chan[int] to a chan[int]"},
+		} {
+			file, pdiags := parser.Parse(tc.src)
+			if len(pdiags) != 0 {
+				t.Fatalf("unexpected parse errors: %v", pdiags)
+			}
+			_, diags := Check(file)
+			found := false
+			for _, d := range diags {
+				if strings.Contains(d.Msg, tc.substr) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("want a diagnostic containing %q, got %v", tc.substr, diags)
+			}
+		}
+	})
+
 	// a bidirectional channel accepts both a send and a receive with no diagnostic.
 	t.Run("bidirectional allows send and receive", func(t *testing.T) {
 		const src = "fn f(ch: chan[int]) -> int {\n  ch <- 1\n  x := <-ch\n  return 0\n}"

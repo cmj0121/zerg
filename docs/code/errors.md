@@ -31,17 +31,22 @@ fn load() -> Result[Config] {
 ```
 
 > **[deviation]** `?` is defined on any `Either[X, Y]` — unwrap the `Left`, early-return the `Right`
-> unchanged — but the bootstrap threads only `Result[T]` faithfully. On a **general `Either`** the right
-> payload is currently **dropped** (a silent miscompile), and `?` on a **`Result[nil]`** reaches the
-> backend as a `void`-typed binding rather than propagating cleanly (a fail-loud sema gap). The intended
-> behavior threads the `Right` value unchanged in every case.
+> unchanged — and the two compilers cover different halves of it. The **seed** threads `Result[T]`:
+> on a general `Either` the right payload is **dropped** (a silent miscompile), and `?` on a
+> **`Result[nil]`** reaches the backend as a `void`-typed binding (a fail-loud sema gap). The shipped
+> **`zerg`** threads **`T?`** instead — the absence early-returns, and the enclosing function must
+> answer a `T?` to carry it — and refuses the `Result` half **by name**, because `Result[T]` does not
+> survive in a signature there yet. The intended behavior threads the `Right` value unchanged in
+> every case.
 
 **`??` — default.** `a ?? b` yields `a`'s left value if present, else `b` (right discarded); it
 short-circuits, chains right-to-left, and works on any `Either`.
 
 **`?.` — optional chain (`T?` only).** `a?.b` reads `.b` when `a` has a value, else short-circuits
 the chain to `nil` in place (unlike `?`, never returns from the function); use on any non-`T?` type
-is a compile error.
+is a compile error. A field that is **itself optional flattens** — the chain answers that field's
+type rather than a nested `T??`, which is not a type the language can write. **[implemented]**, in
+both compilers.
 
 **`!` — force-unwrap (value → abort).** `x!` unwraps the left value or **raises** on an absent optional —
 the deliberate "I know it's set" hatch, a crossing from the value tier into an abort. (Logical negation is

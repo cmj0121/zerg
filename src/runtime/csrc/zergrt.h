@@ -615,11 +615,48 @@ void zrt_ctx_init(zrt_ctx *c, void *stack_base, size_t size, void (*entry)(void 
  * returned. It saves only callee-saved state (no signal mask), so it is cheap. */
 void zrt_ctx_swap(zrt_ctx *from, zrt_ctx *to);
 
+/* ZRT_THREAD_LOCAL marks a variable each OS thread gets its own copy of — the
+ * scheduler's "which coroutine is running here" and "where do I swap back to" are
+ * per-worker once there is more than one worker. With thread_none.c there is only
+ * ever one thread, so the qualifier is empty and the variable is an ordinary global,
+ * which is exactly what it was before M:N. */
+#if defined(_MSC_VER)
+#define ZRT_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+#define ZRT_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+#define ZRT_THREAD_LOCAL __thread
+#else
+#define ZRT_THREAD_LOCAL /* single-threaded host: an ordinary global */
+#endif
+
+typedef struct zrt_thread { void *slots[4]; } zrt_thread;
+typedef struct zrt_mutex  { void *slots[10]; } zrt_mutex;
+typedef struct zrt_cond   { void *slots[10]; } zrt_cond;
+
 /* zrt_coro_state is a coroutine's scheduling state. RUNNABLE sits on the run queue;
  * BLOCKED is parked on a channel wait queue (1e channels, C2); DONE has finished its
  * thunk and awaits reclamation by the scheduler. */
 typedef enum {
 	ZRT_CORO_RUNNABLE,
+	/* RUNNING is "on a CPU right now", and it is distinct from RUNNABLE because a wake
+	 * has to tell the two apart. Waking a RUNNABLE coroutine is a no-op — it is already
+	 * queued and will run. Waking a RUNNING one cannot be, and cannot queue it either:
+	 * the wake has to be REMEMBERED, so that the park this coroutine is on its way to
+	 * does not block on news that already arrived.
+	 *
+	 * A select is what makes that window reachable. It pushes a waiter onto every
+	 * channel it watches, and can only hold one channel lock at a time, so the moment
+	 * the first waiter is visible a counterparty can claim it — while the select is
+	 * still RUNNING, several statements away from parking. */
+	ZRT_CORO_RUNNING,
+	/* PARKING is the instant between "I have decided to block" and "I am off the CPU".
+	 * It exists only because M > 1: a coroutine that announced BLOCKED while still
+	 * running could be woken, queued, and picked up by a second worker before it
+	 * finished switching away — the same coroutine on two stacks at once. A parking
+	 * coroutine is invisible to zrt_sched_wake; the worker that swapped it out is what
+	 * turns it into BLOCKED, under the scheduler lock, once the switch is complete. */
+	ZRT_CORO_PARKING,
 	ZRT_CORO_BLOCKED,
 	ZRT_CORO_DONE,
 } zrt_coro_state;
@@ -636,8 +673,98 @@ typedef struct zrt_coro {
 	void           (*thunk)(void *env); /* the marshalled call (spawn trampoline body) */
 	void            *env;               /* heap-owned argument environment; thunk frees it */
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
+	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
+	bool             woken;              /* a wake arrived while PARKING; see sched.c */
+	void            *tsan_fiber;        /* ZRT_TSAN only; NULL otherwise. See below. */
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
+
+/* --- ThreadSanitizer -----------------------------------------------------------
+ *
+ * TSan tracks happens-before per THREAD, and a coroutine is not one: zrt_ctx_swap
+ * moves the machine to another stack behind its back, so it attributes one
+ * coroutine's accesses to whichever coroutine ran there before. Built naively, a
+ * TSan binary of this runtime does not merely report noise — it takes a fatal
+ * signal walking a stack it has the wrong shadow for.
+ *
+ * TSan answers this with the fiber API: a fiber is a shadow-state handle, and
+ * announcing a switch moves the tracking with the machine. Every context switch
+ * this scheduler makes is bracketed by one, which is what makes a TSan build both
+ * possible and meaningful — and a fiber may be resumed on a different thread than
+ * it parked on, which is exactly what M:N requires.
+ *
+ * All of it compiles to nothing when TSan is off, so the non-instrumented build
+ * carries no field it does not use and no call it does not make. */
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+#define ZRT_TSAN 1
+void *__tsan_get_current_fiber(void);
+void *__tsan_create_fiber(unsigned flags);
+void  __tsan_destroy_fiber(void *fiber);
+void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
+#define ZRT_TSAN_FIBER_SELF()      __tsan_get_current_fiber()
+#define ZRT_TSAN_FIBER_NEW()       __tsan_create_fiber(0)
+#define ZRT_TSAN_FIBER_FREE(f)     __tsan_destroy_fiber(f)
+#define ZRT_TSAN_FIBER_SWITCH(f)   __tsan_switch_to_fiber((f), 0)
+#else
+#define ZRT_TSAN_FIBER_SELF()      NULL
+#define ZRT_TSAN_FIBER_NEW()       NULL
+#define ZRT_TSAN_FIBER_FREE(f)     ((void)(f))
+#define ZRT_TSAN_FIBER_SWITCH(f)   ((void)(f))
+#endif
+
+/* --- threads: the M of M:N ---------------------------------------------------
+ *
+ * zrt_thread / zrt_mutex / zrt_cond are a SHIM over the host's threading, in exactly
+ * the shape zrt_ctx is a shim over the host's context switch: an opaque slot array
+ * big enough for every backend, and one implementation per platform selected at
+ * build time (thread_pthread.c, thread_win32.c, or thread_none.c as the floor).
+ *
+ * thread_none.c is not a stub — it is the SEMANTICS the other two must match with
+ * M = 1. On a host without threads (a freestanding target, a wasm build) the
+ * scheduler runs every coroutine on the calling thread, which is precisely what it
+ * did before M:N existed. A program's OUTPUT must not depend on which backend it
+ * got; only whether two coroutines can occupy two CPUs at once.
+ *
+ * The slot counts are sized for the largest known layout: pthread_mutex_t is 64
+ * bytes on macOS and 40 on glibc, pthread_cond_t 48, and a Win32 CRITICAL_SECTION
+ * 40 — so 10 pointers (80 bytes) clears all of them. A backend static_asserts its
+ * own type fits.
+ */
+
+/* zrt_thread_supported reports whether this build can actually run more than one
+ * OS thread. The scheduler asks once, to decide how many workers to start. */
+bool zrt_thread_supported(void);
+
+/* zrt_cpu_count is the host's usable parallelism, or 1 when it cannot be told. */
+size_t zrt_cpu_count(void);
+
+/* zrt_thread_start runs fn(arg) on a new OS thread; false means the thread could not
+ * be created and the caller must run the work itself. zrt_thread_join waits for one
+ * started thread. */
+bool zrt_thread_start(zrt_thread *t, void (*fn)(void *arg), void *arg);
+void zrt_thread_join(zrt_thread *t);
+
+/* The mutex is NOT recursive: the scheduler and the channels each take one lock at a
+ * time and never re-enter. zrt_cond_wait atomically releases m and blocks until a
+ * signal or broadcast, then re-acquires it. */
+void zrt_mutex_init(zrt_mutex *m);
+void zrt_mutex_destroy(zrt_mutex *m);
+void zrt_mutex_lock(zrt_mutex *m);
+void zrt_mutex_unlock(zrt_mutex *m);
+
+void zrt_cond_init(zrt_cond *c);
+void zrt_cond_destroy(zrt_cond *c);
+void zrt_cond_wait(zrt_cond *c, zrt_mutex *m);
+void zrt_cond_signal(zrt_cond *c);
+void zrt_cond_broadcast(zrt_cond *c);
+
+/* zrt_atomic_claim atomically moves *flag from false to true, answering whether THIS
+ * call was the one that moved it. It exists for select: one select parks a waiter on
+ * every channel it watches, all sharing a single "already fired" flag, and each of
+ * those channels is guarded by its OWN lock — so two workers can reach the flag under
+ * two different locks at the same instant. No lock can order that; only an atomic can.
+ * With no threads it is a plain read-then-write, which is what it always was. */
+bool zrt_atomic_claim(bool *flag);
 
 /* ZRT_CORO_STACK is the fixed per-coroutine stack size (Fork-B: fixed size + guard
  * page, not growable). Kept in one place so a later phase can retune it or move to a
@@ -680,6 +807,14 @@ zrt_coro *zrt_sched_current(void);
  * queue and the scheduler resumes it. A no-op outside a coroutine. It is the single
  * blocking primitive the channel send/recv paths (C2) park on. */
 void zrt_sched_park(void);
+
+/* zrt_sched_park_unlock is zrt_sched_park for a caller holding a lock that guards the
+ * wait queue it just joined. Releasing that lock before switching away would open the
+ * window PARKING exists to close, so the lock is handed to the scheduler: the worker
+ * releases it once the coroutine is off the CPU and marked BLOCKED, both under the
+ * scheduler lock. Every channel operation blocks through this, never through the bare
+ * park. */
+void zrt_sched_park_unlock(zrt_mutex *m);
 
 /* zrt_sched_wake marks a BLOCKED coroutine RUNNABLE and pushes it onto the run queue,
  * so the scheduler resumes it. The channel send/recv/close paths call it to hand a
@@ -780,6 +915,9 @@ typedef struct {
  * independently value-ready when a `done` arm is present — it routes to `done` — so a
  * `select`-loop over producers terminates via `done` once every producer's channel has
  * auto-closed rather than spinning on Right. */
+/* zrt_chan_select_init prepares select's own lock; the scheduler calls it at start. */
+void zrt_chan_select_init(void);
+
 int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done);
 #define ZRT_SEL_DEFAULT (-1)
 #define ZRT_SEL_DONE (-2)

@@ -107,6 +107,14 @@ struct Emitter {
 	res_names: list[str]
 	res_decls: list[str]
 
+	# fn_ret / fn_has_ret are the return type of the function currently being emitted. A
+	# `return` is a place a value fills a DECLARED slot, so it is one of the sites where a
+	# channel direction has to be checked — and the declared type is nowhere near the
+	# statement, so it rides here. c_fn saves and restores the pair, which is what keeps a
+	# lambda's own return type from leaking into the function it sits inside.
+	fn_ret: Ty
+	fn_has_ret: bool
+
 	# op_n numbers the temporaries the Result operators need. It is DELIBERATELY not
 	# dfn_n: that counter names the defer thunks, the spawn envs and the block marks, and
 	# a new operator drawing from it would renumber every one of them downstream — a
@@ -589,6 +597,7 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # properly sized runtime list from the destination field's element type (a bare `[]`
 # alone has no type context and would otherwise emit a malformed zero list).
 fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
+	c_chan_check(c_infer(em, arg), fty, "field")
 	if c_is_list(fty) and c_is_listlit(arg) {
 		em.used_rt = true
 		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}))"
@@ -1318,6 +1327,7 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
 	return f"&({c_expr(em, a, sb)})" if row >= 0 and em.pr_ref[row]
 	return c_expr(em, a, sb) if row < 0
 
+	c_chan_check(c_infer(em, a), em.pr_ty[row], "argument " + strconv.to_string(idx, 10) + " of `" + fname + "`")
 	return c_copied(em, em.pr_ty[row], a, sb)
 }
 
@@ -1866,10 +1876,132 @@ fn c_chan_elem(t: Ty) -> Ty {
 	}
 }
 
+# --- channel direction ------------------------------------------------------------
+#
+# A direction is a purely COMPILE-TIME property: `chan[T]`, `chan[T]<-` and `<-chan[T]`
+# are all one `zrt_chan*`, so nothing below decides a C type. What it decides is two
+# things — which operations a name may perform, and which of the runtime's two reference
+# counts a handle joins when it is handed over (c_spawn, c_del).
+
+# c_chan_dir is a channel end's direction: 0 bidirectional, 1 send-only (`chan[T]<-`),
+# 2 receive-only (`<-chan[T]`). Anything that is not a channel answers 0, so a caller may
+# ask without testing first.
+fn c_chan_dir(t: Ty) -> int {
+	return match t {
+		TChan(_, d) => d
+		_ => 0
+	}
+}
+
+# c_chan_dir_ok reports whether an end of direction `have` may fill a slot declared
+# `want`. Narrowing is the spec's one-way built-in upcast: a bidirectional end becomes
+# either single direction, and a single direction never goes back and never crosses.
+fn c_chan_dir_ok(have: int, want: int) -> bool {
+	return true if want == have
+	return true if have == 0
+	return false
+}
+
+# c_chan_check is the narrowing check at every place a channel end fills a declared slot:
+# a call argument, a `return`, a typed binding, a struct or variant field. It emits
+# nothing — a direction costs no code — so this is the whole of it.
+fn c_chan_check(have: Ty, want: Ty, site: str) {
+	if c_is_chan(have) and c_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want)) {
+		raise "a channel direction only narrows: a " + ty_name(have) + " cannot fill a " + ty_name(want) + " (" + site + ")"
+	}
+}
+
+# --- what a direction does to the two reference counts -----------------------------
+#
+# The runtime keeps two counts on a channel (src/runtime/csrc/chan.c): `rc`, the holder
+# count, whose last holder frees the object; and `senders`, the count of SEND-CAPABLE
+# holders, whose reaching zero is what CLOSES the channel. There are two pairs of
+# operations over them:
+#
+#     zrt_chan_copy(c)            rc++
+#     zrt_chan_release(c)         rc--                       (frees at zero)
+#     zrt_chan_sender_copy(c)     rc++, senders++
+#     zrt_chan_sender_release(c)  senders--  (closes at zero), then rc--
+#
+# So per-direction counting is not a new mechanism — it is choosing which pair to call.
+# A handle's direction says whether it is send-capable, and therefore whether it counts
+# toward the close:
+#
+#   handle's direction        handed over (copy)     that handle dropped (release)
+#   ------------------------  ---------------------  ------------------------------
+#   bidirectional chan[T]     zrt_chan_sender_copy   zrt_chan_sender_release
+#   send-only     chan[T]<-   zrt_chan_sender_copy   zrt_chan_sender_release
+#   receive-only  <-chan[T]   zrt_chan_copy          zrt_chan_release
+#
+# and `del name`, which is what a program uses to say it is done sending. `del` gives up
+# the SEND CAPABILITY and never a holder:
+#
+#   bidirectional chan[T]     zrt_chan_copy(x); zrt_chan_sender_release(x);
+#   send-only     chan[T]<-   zrt_chan_copy(x); zrt_chan_sender_release(x);
+#                             — net: senders--, rc unchanged.
+#   receive-only  <-chan[T]   nothing — a receiver was never a sender, and giving up a
+#                             holder is the one thing `del` must not do.
+#
+# Keeping the holder is not a nicety, it is what makes `del` safe on a NARROWED NAME. The
+# spec's early-close idiom writes `out: chan[T]<- = ch`, and this emitter lowers that to a
+# second name for ONE handle — no copy, because there is no copy discipline for channels
+# anywhere in it (c_needs_copy answers false for TChan). A `del out` that dropped a holder
+# would drop one `ch` never took: `ch`'s count reaches zero while main is still receiving
+# on it, the channel is freed under a live loop, and the leak this emitter accepts
+# everywhere becomes a use-after-free. That is the same argument that rules out releasing
+# at scope exit, and it applies here for the same reason.
+#
+# Close timing is unaffected by the choice: `senders` moves identically either way, so
+# auto-close is exactly as precise and the cost is a holder that is never reclaimed — which
+# is what every other allocation in this emitter already does.
+#
+# Now the paths an end can travel, and what each does:
+#
+#   a `spawn` argument   the ONE place a handle is duplicated. The new handle's direction
+#                        is the CALLEE PARAMETER's, not the caller variable's — that is
+#                        the whole point: `spawn consumer(ch)` where consumer takes a
+#                        `<-chan[T]` must not add a sender. Copy on capture, release in
+#                        the spawn thunk's defer (which runs on the crash path too).
+#   `del name`           the three-way table above.
+#   a plain call argument  no copy and no release. The callee borrows the caller's handle
+#                        for the duration of a call the caller is blocked inside, so the
+#                        counts cannot move under it and there is nothing to balance.
+#   a parameter          same: it is the borrowed handle, dropped by doing nothing.
+#   a return             same: the handle travels out, still counted once.
+#   a typed binding      `out: chan[T]<- = ch` is a second NAME for one handle, not a
+#                        second handle. No count moves; `del out` and `del ch` would each
+#                        move it once, which is why narrowing does not release the origin.
+#   scope exit           NOTHING. Deliberate, and the cost is stated: this emitter has no
+#                        copy/move discipline for channels at all (c_needs_copy answers
+#                        false for TChan), so releasing at scope exit would double-release
+#                        `b := a` and free a returned channel before its caller saw it —
+#                        turning a leak into a use-after-free. The spec's "close early by
+#                        narrowing the scope" therefore needs an explicit `del`; that is a
+#                        deviation for the docs to name, not something to approximate here.
+#
+# The single rule underneath all of it: a count moves only where a HANDLE moves, and a
+# handle moves in exactly two places — a spawn capture and a `del`.
+
+fn c_chan_copy_fn(dir: int) -> str {
+	return "zrt_chan_copy" if dir == 2
+	return "zrt_chan_sender_copy"
+}
+
+fn c_chan_release_fn(dir: int) -> str {
+	return "zrt_chan_release" if dir == 2
+	return "zrt_chan_sender_release"
+}
+
 fn c_recv(mut &em: Emitter, ch: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	elem := c_chan_elem(c_infer(em, ch))
+	cty := c_infer(em, ch)
+
+	# the guarantee the send-only end exists for: it cannot receive (steal) values
+	if c_chan_dir(cty) == 1 {
+		raise "cannot receive on a send-only " + ty_name(cty)
+	}
+	elem := c_chan_elem(cty)
 	return f"{c_recv_helper(em, elem)}({c_expr(em, ch, sb)})"
 }
 
@@ -1903,7 +2035,11 @@ fn c_recv_helper(mut &em: Emitter, elem: Ty) -> str {
 fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	elem := c_chan_elem(c_infer(em, ch))
+	cty := c_infer(em, ch)
+	if c_chan_dir(cty) == 2 {
+		raise "cannot send on a receive-only " + ty_name(cty)
+	}
+	elem := c_chan_elem(cty)
 	ct := c_type(elem)
 	return ind + "{ " + ct + " zg_sv = " + c_expr(em, v, c_nosub()) + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
 }
@@ -1915,16 +2051,14 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
-	name := c_call_name(x)
-	if name == "" {
-		raise "NotImplemented: spawn of anything but a direct function call"
-	}
-	args := c_call_args_of(x)
+	cal := c_callee_of(em, x, "spawn")
+	args := cal.args
+	c_spawn_no_borrow(em, cal)
 	idx := em.dfn_n
 	em.dfn_n = idx + 1
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
-		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
 		return ind + "zrt_spawn(zg_spawn_" + tag + ", NULL);\n"
 	}
 	mut fields := ""
@@ -1943,14 +2077,20 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_spawnenv_" + tag + ";\n")
-	# A channel argument is a HANDLE, not a value: the coroutine gets its own sender
-	# handle, and drops it when it returns. Without that the channel's sender count never
-	# moves and it can never close — every `done` arm waits forever.
+	# A channel argument is a HANDLE, not a value: the coroutine gets its own handle and
+	# drops it when it returns. Without that the channel's counts never move and it can
+	# never close — every `done` arm waits forever.
+	#
+	# WHICH handle is decided by the CALLEE PARAMETER's direction, not by the caller's
+	# variable. A consumer declared `<-chan[T]` takes a holder and not a sender, so it does
+	# not hold the channel open; before this every spawned argument took a sender, and a
+	# consumer you spawned counted as a producer that never finished.
 	mut drops := ""
 	mut m := 0
 	for m < args.len() {
 		if c_is_chan(c_infer(em, args[m])) {
-			drops = drops + " zrt_chan_sender_release(e->f" + strconv.to_string(m, 10) + ");"
+			rel := c_chan_release_fn(c_chan_dir(c_param_ty(em, cal.key, m)))
+			drops = drops + " " + rel + "(e->f" + strconv.to_string(m, 10) + ");"
 		}
 		m = m + 1
 	}
@@ -1969,19 +2109,48 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.dfn_decls.append(dd)
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
 	th = th + " zrt_defer(" + dropfn + ", p);"
-	th = th + " zg_" + name + "(" + call + "); }\n"
+	th = th + " " + cal.cname + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
 	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
 	mut j := 0
 	for j < args.len() {
 		mut v := c_expr(em, args[j], c_nosub())
 		if c_is_chan(c_infer(em, args[j])) {
-			v = "zrt_chan_sender_copy(" + v + ")"
+			cp := c_chan_copy_fn(c_chan_dir(c_param_ty(em, cal.key, j)))
+			v = cp + "(" + v + ")"
 		}
 		out = out + ind + "zg_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
 	}
 	return out + ind + "zrt_spawn(zg_spawn_" + tag + ", zg_se" + tag + ");\n"
+}
+
+# c_spawn_no_borrow refuses a `mut &` argument crossing a spawn. GRAMMAR says a borrow
+# cannot ESCAPE — be captured by a spawn — and the reason is concrete: a `mut &` lowers to
+# a pointer into the CALLER's frame, and a coroutine outlives the statement that started
+# it, so the frame it points into may be gone before it is written through. Until now this
+# reached cc and died there on a type mismatch, which is a diagnostic about generated C.
+#
+# The test is the callee's `mut &` MARK, never "is this argument a pointer in C" — which is
+# precisely what leaves the legal captures alone. A channel argument is a `zrt_chan*` and a
+# `Ref[T]` is a pointer too, but neither carries the mark, and neither is a borrow of a
+# frame: they are handles onto the heap, which is what makes them safe to send.
+#
+# Only the CALLEE side is checked, which is a departure from the design's two-sided rule.
+# The caller-side half — "this argument names the enclosing function's own `mut &`
+# parameter" — would be a false refusal here: c_ident_val dereferences a `mut &` name on
+# every use, so `spawn f(x)` inside `fn g(mut &x: int)` captures x's VALUE and no pointer
+# escapes. Taking the address is only written `mut &x` at the call site, and that requires a
+# callee declaring `mut &`, which the check below already catches.
+fn c_spawn_no_borrow(mut &em: Emitter, cal: Callee) {
+	mut i := 0
+	for i < cal.args.len() {
+		row := c_param_row(em, cal.key, i)
+		if row >= 0 and em.pr_ref[row] {
+			raise "a `mut &` argument cannot cross a `spawn`: a borrow may not escape the frame it points into"
+		}
+		i = i + 1
+	}
 }
 
 # c_del lowers `del name`. A channel has no explicit close in this language: it closes
@@ -1998,11 +2167,14 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	}
 	em.used_rt = true
 	em.used_conc = true
-	# A handle is a holder AND a sender, and sender_release drops both — so a bare
-	# release would free the channel out from under a name that still receives on it.
-	# `del ch` is a DOWNGRADE: keep the holder, give up the sender. The copy first is
-	# what keeps the holder count where it was.
 	cn := c_var_cname(em, name)
+
+	# a receive-only end has no send capability to give up, and giving up its holder is the
+	# one thing `del` must not do (see the table above)
+	return ind + "/* del " + name + " — a receive-only end is not a sender */\n" if c_chan_dir(t) == 2
+
+	# sender_release drops the sender AND the holder, so the copy in front puts the holder
+	# back: `del ch` is a DOWNGRADE, not a handoff
 	return ind + "zrt_chan_copy(" + cn + "); zrt_chan_sender_release(" + cn + ");\n"
 }
 
@@ -2048,7 +2220,11 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	mut idx := 0
 	for a in arms {
 		if a.op == 0 {
-			elem := c_chan_elem(c_infer(em, a.ch))
+			cty := c_infer(em, a.ch)
+			if c_chan_dir(cty) == 1 {
+				raise "cannot receive on a send-only " + ty_name(cty)
+			}
+			elem := c_chan_elem(cty)
 			nm := "zg_rv" + tag + "_" + strconv.to_string(idx, 10)
 			out = out + in2 + c_type(elem) + " " + nm + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_RECV;\n"
@@ -2057,7 +2233,11 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].closed = 0;\n"
 			idx = idx + 1
 		} else if a.op == 1 {
-			elem := c_chan_elem(c_infer(em, a.ch))
+			cty := c_infer(em, a.ch)
+			if c_chan_dir(cty) == 2 {
+				raise "cannot send on a receive-only " + ty_name(cty)
+			}
+			elem := c_chan_elem(cty)
 			nm := "zg_sv" + tag + "_" + strconv.to_string(idx, 10)
 			out = out + in2 + c_type(elem) + " " + nm + " = " + c_expr(em, a.val, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
@@ -2220,18 +2400,15 @@ fn c_name_in(names: list[str], name: str) -> bool {
 # so a later reassignment of an argument does not change what the deferred call sees.
 fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
-	name := c_call_name(x)
-	if name == "" {
-		raise "NotImplemented: defer of anything but a direct function call"
-	}
-	args := c_call_args_of(x)
+	cal := c_callee_of(em, x, "defer")
+	args := cal.args
 	idx := em.dfn_n
 	em.dfn_n = idx + 1
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
 		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
 		# better as concatenation
-		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
 		return ind + "zrt_defer(zg_dfn_" + tag + ", NULL);\n"
 	}
 	mut fields := ""
@@ -2250,9 +2427,90 @@ fn c_defer(mut &em: Emitter, x: Expr, ind: str) -> str {
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
-	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; zg_" + name + "(" + call + "); }\n")
+	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
 	mut out := ind + "zg_denv_" + tag + " zg_de" + tag + " = { " + vals + " };\n"
 	return out + ind + "zrt_defer(zg_dfn_" + tag + ", &zg_de" + tag + ");\n"
+}
+
+# Callee is the three things a `spawn` and a `defer` each need about what they are about
+# to call: the C symbol, the arguments in the order that symbol takes them, and the key
+# its row in the parameter table is under.
+#
+# Both statements build the same per-site env struct and the same thunk that unpacks it,
+# so the question "what is being called" is asked in one place. Before this they each had
+# their own copy of it, and each copy knew only about a direct call.
+struct Callee {
+	cname: str
+	args: list[Expr]
+	key: str
+}
+
+# c_callee_of answers that question, or refuses by name. `what` is the statement asking,
+# so the diagnostic says `spawn` or `defer` rather than describing both.
+#
+# The three shapes the spec gives are a plain function `f(a)`, a method `obj.run()`, and a
+# namespaced function `mod.work()`. A closure literal is NOT among them and cannot be: a
+# lambda here may capture nothing (c_lambda refuses it), so there would be no environment
+# to hand a coroutine even if the shape were accepted.
+fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
+	n := c_call_name(x)
+	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
+	if not c_is_method_expr(x) {
+		raise "NotImplemented: " + what + " of anything but a function, a method, or a namespaced function"
+	}
+	tgt := c_meth_target_of(x)
+	m := c_meth_name_of(x)
+	margs := c_meth_args_of(x)
+	recv := c_named_of(c_infer(em, tgt))
+
+	if not c_has_method(em, recv, m) {
+		# `mod.work()` — a module namespace flattens into the one program-wide function
+		# space, so a namespaced callee IS the free function of that name, exactly as an
+		# ordinary `mod.work()` call is lowered
+		if not c_name_in(em.sig_names, m) {
+			raise "NotImplemented: " + what + " of `" + m + "` — not a function, a method, or a namespaced function"
+		}
+		return Callee(c_fn_cname("", m), margs, m)
+	}
+
+	# a method's receiver is parameter 0 — the parser put `this` there when it flattened the
+	# impl block — so it leads the argument list and the parameter table lines up with no
+	# shift. It is captured BY VALUE, like every other argument.
+	mut all: list[Expr] = []
+	all.append(tgt)
+	for a in margs {
+		all.append(a)
+	}
+	return Callee(c_fn_cname(recv, m), all, c_sig_key(recv, m))
+}
+
+fn c_is_method_expr(e: Expr) -> bool {
+	return match e {
+		EMethod(_, _, _) => true
+		_ => false
+	}
+}
+
+fn c_meth_target_of(e: Expr) -> Expr {
+	return match e {
+		EMethod(t, _, _) => t
+		_ => ENil
+	}
+}
+
+fn c_meth_name_of(e: Expr) -> str {
+	return match e {
+		EMethod(_, m, _) => m
+		_ => ""
+	}
+}
+
+fn c_meth_args_of(e: Expr) -> list[Expr] {
+	mut none: list[Expr] = []
+	return match e {
+		EMethod(_, _, a) => a
+		_ => none
+	}
 }
 
 fn c_call_name(e: Expr) -> str {
@@ -2640,6 +2898,9 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 # would keep the failure while losing the reason for it.
 fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], ind: str) -> str {
 	em.used_conc = true
+	if c_chan_dir(t) == 1 {
+		raise "cannot receive on a send-only " + ty_name(t)
+	}
 	elem := c_chan_elem(t)
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
@@ -2689,7 +2950,9 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
 	mut eff := ty
-	if not has_type {
+	if has_type {
+		c_chan_check(c_infer(em, ival), ty, "binding `" + name + "`")
+	} else {
 		eff = c_infer(em, ival)
 	}
 	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
@@ -2745,6 +3008,9 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		pre = f"{ind}zrt_unwind_to({em.fn_mark});\n"
 	}
 	if has_val and not c_is_nil_expr(e) {
+		if em.fn_has_ret {
+			c_chan_check(c_infer(em, e), em.fn_ret, "return")
+		}
 		v := c_expr(em, e, c_nosub())
 		return f"{ind}return {v};\n" if pre == ""
 		rt := c_type(c_infer(em, e))
@@ -2961,6 +3227,13 @@ fn c_proto(fn_d: FnDecl) -> str {
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	c_reset_env(em)
+
+	# a lambda is emitted through here in the middle of an enclosing function's expression,
+	# so the enclosing return type is put back on the way out
+	saved_ret := em.fn_ret
+	saved_hasret := em.fn_has_ret
+	em.fn_ret = fn_d.ret
+	em.fn_has_ret = fn_d.has_ret
 	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
@@ -2982,7 +3255,10 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 		}
 	}
 	sig = sig + ") {\n"
-	return sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+	out := sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+	em.fn_ret = saved_ret
+	em.fn_has_ret = saved_hasret
+	return out
 }
 
 # The entry point is the FREE function `main`; a method named `main` is an ordinary method
@@ -2991,6 +3267,25 @@ fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
 		return true if f.fns[i].name == "main" and f.fns[i].recv == ""
+		i = i + 1
+	}
+	return false
+}
+
+# c_main_ret_is_int reports whether the entry point answers an `int`, which is the one
+# return shape that becomes the process exit code. `-> Result[nil]` is not one of these:
+# parse_type still erases it to nil, so it emits a void main and takes the nil path, which
+# is the same shim the seed picks for it.
+fn c_main_ret_is_int(f: File) -> bool {
+	mut i := 0
+	for i < f.fns.len() {
+		fn_i := f.fns[i]
+		if fn_i.name == "main" and fn_i.recv == "" and fn_i.has_ret {
+			return match fn_i.ret {
+				TInt => true
+				_ => false
+			}
+		}
 		i = i + 1
 	}
 	return false
@@ -3102,7 +3397,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, false, 0)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -3155,7 +3450,18 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 			em.used_rt = true
 			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
 			if em.used_conc {
+				# the scheduler's program-entry shims all take a NULLARY function pointer
+				# (zergrt.h) — there is no shape that carries an argument — so running
+				# main(args) as coroutine 0 needs a runtime shim that does not exist yet
 				raise "NotImplemented: main(args) in a program that uses concurrency"
+			}
+		} else if c_main_ret_is_int(own) {
+			# main's value IS the exit code. Calling an `int64_t (*)(void)` through the
+			# `void (*)(void)` shim was undefined behaviour AND threw the code away, so
+			# every concurrent `fn main() -> int` exited 0 whatever it returned.
+			mainw = "int main(void) {\n" + inits + "    return (int)zg_main();\n}\n"
+			if em.used_conc {
+				mainw = "int main(void) {\n" + inits + "    return (int)zrt_sched_main_int(zg_main);\n}\n"
 			}
 		} else {
 			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"

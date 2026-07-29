@@ -90,6 +90,13 @@ struct Emitter {
 	# and lam_n numbers them.
 	lam_defs: list[str]
 	lam_n: int
+
+	# rcv_names / rcv_decls are the per-element-type receive helpers, and used_conc
+	# records that this program touched a channel or a spawn — which is what decides
+	# whether main runs under the scheduler and whether the concurrency units link.
+	rcv_names: list[str]
+	rcv_decls: list[str]
+	used_conc: bool
 	fn_mark: str
 	loop_mark: str
 }
@@ -131,6 +138,7 @@ fn c_type(t: Ty) -> str {
 		TFn(_, _) => "zg_fnptr"
 		TTuple(ts) => c_tuple_cname(ts)
 		TMap(_, _) => "zrt_map"
+		TChan(_) => "zrt_chan*"
 		_ => "int64_t"
 	}
 }
@@ -838,6 +846,8 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		ETuple(elems) => c_tuple_lit(em, elems, sb)
 		EMapLit(ks, vs) => c_map_lit(em, ks, vs, sb)
 		EFn(ps, has_ret, ret, body) => c_lambda(em, ps, has_ret, ret, body)
+		EChanNew(t, cap) => c_chan_new(em, t, cap, sb)
+		ERecv(ch) => c_recv(em, ch, sb)
 	}
 }
 
@@ -1356,6 +1366,8 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ETuple(elems) => c_tuple_ty(em, elems)
 		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 		EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
+		EChanNew(t, cap) => TChan(t)
+		ERecv(ch) => c_chan_elem(c_infer(em, ch))
 	}
 }
 
@@ -1489,6 +1501,10 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SGuard(body) => c_block(em, body, ind)
 		SRaise(x) => c_raise(em, x, ind)
 		SDefer(x) => c_defer(em, x, ind)
+		SSpawn(x) => c_spawn(em, x, ind)
+		SSend(ch, v) => c_send(em, ch, v, ind)
+		SSelect(arms) => c_select(em, arms, ind)
+		SDel(n) => c_del(em, n, ind)
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
@@ -1626,6 +1642,243 @@ fn c_init_calls(f: File) -> str {
 	}
 	return out
 }
+
+# --- concurrency ----------------------------------------------------------------
+#
+# A channel is the runtime's zrt_chan by pointer, and the three operations map onto the
+# runtime one for one. Both send and receive need the value's ADDRESS — the runtime
+# copies elemsz bytes through it — so each goes through a temp: a literal has no
+# address, and neither does a call result.
+#
+# A receive needs one helper per element type because zrt_chan_recv reports closure
+# through its return value while writing the element through a pointer, and an
+# expression has to be one or the other. The helper aborts on a closed channel, which
+# is the happy path this compiler implements: reading a Result[T] back at the surface
+# needs the Result carrier the subset does not have yet.
+fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	return f"zrt_chan_new(sizeof({c_type(t)}), (size_t)({c_expr(em, cap, sb)}))"
+}
+
+fn c_chan_elem(t: Ty) -> Ty {
+	return match t {
+		TChan(e) => e
+		_ => TUnknown
+	}
+}
+
+fn c_recv(mut &em: Emitter, ch: Expr, sb: Subst) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	elem := c_chan_elem(c_infer(em, ch))
+	return f"{c_recv_helper(em, elem)}({c_expr(em, ch, sb)})"
+}
+
+# c_recv_helper registers one element type's receive helper and answers its name.
+fn c_recv_helper(mut &em: Emitter, elem: Ty) -> str {
+	ct := c_type(elem)
+	name := "zg_recv_" + c_ident_safe(ct)
+	for n in em.rcv_names {
+		return name if n == name
+	}
+	em.rcv_names.append(name)
+	mut d := "static " + ct + " " + name + "(zrt_chan *ch) {\n"
+	d = d + "    " + ct + " v;\n"
+	d = d + "    if (zrt_chan_recv(ch, &v) != 0) { zrt_abort(\"receive on a closed channel\"); }\n"
+	d = d + "    return v;\n}\n"
+	em.rcv_decls.append(d)
+	return name
+}
+
+fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	elem := c_chan_elem(c_infer(em, ch))
+	ct := c_type(elem)
+	return ind + "{ " + ct + " zg_sv = " + c_expr(em, v, c_nosub()) + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
+}
+
+# c_spawn lowers `spawn f(args)`. It is the same shape as a defer — a per-site env
+# struct and a thunk that unpacks it — with two differences: the env outlives the
+# statement, so it is heap-allocated and freed by the thunk, and the call runs on a
+# coroutine of its own rather than at scope exit.
+fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	name := c_call_name(x)
+	if name == "" {
+		raise "NotImplemented: spawn of anything but a direct function call"
+	}
+	args := c_call_args_of(x)
+	idx := em.dfn_n
+	em.dfn_n = idx + 1
+	tag := strconv.to_string(idx, 10)
+	if args.len() == 0 {
+		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; zg_" + name + "(); }\n")
+		return ind + "zrt_spawn(zg_spawn_" + tag + ", NULL);\n"
+	}
+	mut fields := ""
+	mut vals := ""
+	mut call := ""
+	mut i := 0
+	for i < args.len() {
+		ft := c_type(c_infer(em, args[i]))
+		fields = fields + " " + ft + " f" + strconv.to_string(i, 10) + ";"
+		if i > 0 {
+			vals = vals + ", "
+			call = call + ", "
+		}
+		vals = vals + c_expr(em, args[i], c_nosub())
+		call = call + "e->f" + strconv.to_string(i, 10)
+		i = i + 1
+	}
+	em.dfn_decls.append("typedef struct {" + fields + " } zg_spawnenv_" + tag + ";\n")
+	# A channel argument is a HANDLE, not a value: the coroutine gets its own sender
+	# handle, and drops it when it returns. Without that the channel's sender count never
+	# moves and it can never close — every `done` arm waits forever.
+	mut drops := ""
+	mut m := 0
+	for m < args.len() {
+		if c_is_chan(c_infer(em, args[m])) {
+			drops = drops + " zrt_chan_sender_release(e->f" + strconv.to_string(m, 10) + ");"
+		}
+		m = m + 1
+	}
+	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
+	th = th + " zg_" + name + "(" + call + ");" + drops + " zrt_free(p); }\n"
+	em.dfn_decls.append(th)
+	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
+	mut j := 0
+	for j < args.len() {
+		mut v := c_expr(em, args[j], c_nosub())
+		if c_is_chan(c_infer(em, args[j])) {
+			v = "zrt_chan_sender_copy(" + v + ")"
+		}
+		out = out + ind + "zg_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
+		j = j + 1
+	}
+	return out + ind + "zrt_spawn(zg_spawn_" + tag + ", zg_se" + tag + ");\n"
+}
+
+# c_del lowers `del name`. A channel has no explicit close in this language: it closes
+# when its last SENDER handle goes, so `del ch` drops one. That is what lets a receiver
+# ever see the end of a stream — the creator is a sender too, and until it says
+# otherwise the channel can never reach zero.
+#
+# For anything that is not a channel this is a no-op today: revoking a plain name's
+# access needs the ownership tracking the subset does not have.
+fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
+	t := c_lookup_var(em, name)
+	if not c_is_chan(t) {
+		return ind + "/* del " + name + " */\n"
+	}
+	em.used_rt = true
+	em.used_conc = true
+	# A handle is a holder AND a sender, and sender_release drops both — so a bare
+	# release would free the channel out from under a name that still receives on it.
+	# `del ch` is a DOWNGRADE: keep the holder, give up the sender. The copy first is
+	# what keeps the holder count where it was.
+	cn := c_var_cname(em, name)
+	return ind + "zrt_chan_copy(" + cn + "); zrt_chan_sender_release(" + cn + ");\n"
+}
+
+fn c_is_chan(t: Ty) -> bool {
+	return match t {
+		TChan(_) => true
+		_ => false
+	}
+}
+
+# c_select lowers `select { … }` onto zrt_select: an array of case descriptors, one call
+# that picks a ready arm (or parks on all of them), and an if-chain on what it returned.
+#
+# A receive arm's value has to land somewhere the runtime can write BEFORE the call — it
+# takes an address — so each recv arm declares its variable up front and hands over its
+# address. That is also what makes `v := <-ch => …` bind: the arm body sees the same
+# variable, already filled by the time its branch runs.
+#
+# `done` and `_` are not cases. They are flags on the call and constants in the answer,
+# which is exactly how the runtime models them.
+fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	in2 := ind + "    "
+	mut n := 0
+	mut has_def := "false"
+	mut has_done := "false"
+	for a in arms {
+		if a.op == 0 or a.op == 1 {
+			n = n + 1
+		} else if a.op == 2 {
+			has_done = "true"
+		} else {
+			has_def = "true"
+		}
+	}
+	tag := strconv.to_string(em.dfn_n, 10)
+	em.dfn_n = em.dfn_n + 1
+	cs := "zg_cs" + tag
+	mut out := ind + "{\n" + in2 + "zrt_sel_case " + cs + "[" + strconv.to_string(n, 10) + "];\n"
+
+	# the case array, and a slot for every receive arm's value
+	mut idx := 0
+	for a in arms {
+		if a.op == 0 {
+			elem := c_chan_elem(c_infer(em, a.ch))
+			nm := "zg_rv" + tag + "_" + strconv.to_string(idx, 10)
+			out = out + in2 + c_type(elem) + " " + nm + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_RECV;\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+			idx = idx + 1
+		} else if a.op == 1 {
+			elem := c_chan_elem(c_infer(em, a.ch))
+			nm := "zg_sv" + tag + "_" + strconv.to_string(idx, 10)
+			out = out + in2 + c_type(elem) + " " + nm + " = " + c_expr(em, a.val, c_nosub()) + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+			idx = idx + 1
+		}
+	}
+	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_done + ");\n"
+
+	# the dispatch. Each recv arm's binding is already in scope, so its body just runs.
+	mut first := true
+	mut k := 0
+	for a in arms {
+		mut cond := ""
+		if a.op == 0 or a.op == 1 {
+			cond = "zg_pick" + tag + " == " + strconv.to_string(k, 10)
+			k = k + 1
+		} else if a.op == 2 {
+			cond = "zg_pick" + tag + " == ZRT_SEL_DONE"
+		} else {
+			cond = "zg_pick" + tag + " == ZRT_SEL_DEFAULT"
+		}
+		# the arm's name is bound to ITS OWN slot, right before its body — every recv arm
+		# may call the variable `v`, and binding them all up front would leave each body
+		# reading the last one's slot
+		if a.op == 0 and a.bind != "" {
+			em.env_names.append(a.bind)
+			em.env_tys.append(c_chan_elem(c_infer(em, a.ch)))
+			em.env_cnames.append("zg_rv" + tag + "_" + strconv.to_string(k - 1, 10))
+		}
+		mut kw := "} else if ("
+		if first {
+			kw = "if ("
+			first = false
+			out = out + in2
+		}
+		out = out + kw + cond + ") {\n" + c_block(em, a.body, in2 + "    ")
+	}
+	if not first {
+		out = out + in2 + "}\n"
+	}
+	return out + ind + "}\n"
+}
+
 
 # --- lambdas ----------------------------------------------------------------------
 #
@@ -2499,7 +2752,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, "", "")
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "")
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -2551,8 +2804,16 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 			# main(args): build the arg list from argv via the runtime
 			em.used_rt = true
 			mainw = "int main(int argc, char** argv) {\n" + inits + "    zg_main(zrt_os_args(argc, argv));\n    return 0;\n}\n"
+			if em.used_conc {
+				raise "NotImplemented: main(args) in a program that uses concurrency"
+			}
 		} else {
 			mainw = "int main(void) {\n" + inits + "    zg_main();\n    return 0;\n}\n"
+			if em.used_conc {
+				# a concurrent program runs main AS COROUTINE 0 — the scheduler drains
+				# the run queue afterwards, so a fire-and-forget spawn still finishes
+				mainw = "int main(void) {\n" + inits + "    return zrt_sched_main_nil(zg_main);\n}\n"
+			}
 		}
 	}
 
@@ -2592,6 +2853,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
+	for d in em.rcv_decls {
+		dfns = dfns + d
+	}
 	for d in em.dfn_decls {
 		dfns = dfns + d
 	}

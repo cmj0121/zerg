@@ -33,6 +33,7 @@ enum Ty {
 	TFn(list[Ty], Ty)
 	TTuple(list[Ty])
 	TMap(Ty, Ty)
+	TChan(Ty)
 }
 
 # Expr is an expression node.
@@ -69,6 +70,11 @@ enum Expr {
 	# EFn is `fn(p: T) -> R { … }` in expression position. It carries what a FnDecl does
 	# minus the name, because that is what it is: a function with nowhere to put its name.
 	EFn(list[Param], bool, Ty, list[Stmt])
+
+	# EChanNew is `chan[T](cap)`, and ERecv is the prefix `<-ch`. A send is a STATEMENT
+	# (GRAMMAR: it yields no value), so it is in Stmt rather than here.
+	EChanNew(Ty, Expr)
+	ERecv(Expr)
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -107,6 +113,29 @@ enum Stmt {
 	# SDefer is `defer f(a)`. GRAMMAR runs it at the enclosing BLOCK's exit, on every path
 	# out, last-scheduled-first.
 	SDefer(Expr)
+
+	# SSpawn is `spawn f(a)` — fire-and-forget. SSend is `ch <- v`.
+	SSpawn(Expr)
+	SSend(Expr, Expr)
+
+	# SSelect is `select { … }`. Its arms are a struct rather than four Stmt variants
+	# because every arm carries the same four things in different combinations.
+	SSelect(list[SelArm])
+
+	# SDel is `del name`. For a channel it drops a SENDER handle, which is how a channel
+	# closes — the language has no explicit close.
+	SDel(str)
+}
+
+# SelArm is one select arm. `op` is 0 recv, 1 send, 2 done, 3 default — the same order
+# the runtime's ZRT_SEL_* constants use for the first two, so the emitter maps rather
+# than translates. `bind` is the receive arm's optional name ("" when absent or `_`).
+pub struct SelArm {
+	op: int
+	bind: str
+	ch: Expr
+	val: Expr
+	body: list[Stmt]
 }
 
 # Param is one function parameter: its name, declared type, whether it is a mutable
@@ -308,6 +337,8 @@ fn expr_kind(e: Expr) -> str {
 		ETuple(elems) => "tuple"
 		EMapLit(ks, vs) => "map-literal"
 		EFn(ps, has_ret, ret, body) => "fn-expr"
+		EChanNew(t, cap) => "chan-new"
+		ERecv(ch) => "recv"
 		_ => "?"
 	}
 }

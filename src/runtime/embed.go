@@ -32,6 +32,7 @@ const csrcDir = "csrc"
 //
 //go:embed csrc/zergrt.h csrc/alloc.c csrc/ref.c csrc/list.c csrc/map.c csrc/unwind.c csrc/entry.c csrc/sys.c csrc/fmt.c csrc/conv.c csrc/str.c
 //go:embed csrc/sched.c csrc/chan.c csrc/ctx_arm64.S csrc/ctx_x86_64.S csrc/ctx_ucontext.c
+//go:embed csrc/thread_pthread.c csrc/thread_win32.c csrc/thread_none.c
 //go:embed csrc/zrt_test.h csrc/zrt_test.c
 var Files embed.FS
 
@@ -39,10 +40,11 @@ var Files embed.FS
 // runtime is needed (fmt.c carries the Phase 1f display/Format helpers). The
 // concurrency units (sched.c + a context switch) are added separately by
 // ConcurrencyCUnits.
-// map.c is NOT here: no compiler can emit a map value today (both reject the literal),
-// so linking it put ~9KB of unreachable code in every binary. The source stays — the
-// feature is specified — but nothing links it until something can call it.
-var coreCUnits = []string{"alloc.c", "ref.c", "list.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"}
+// map.c is back: it was dropped while no compiler could emit a map value, which put
+// ~9KB of unreachable code in every binary for nothing. The self-hosted compiler emits
+// one now — `map[K,V]`, `{k: v}` and `{:}` all lower to the zrt_map family — so the
+// unit has a caller again.
+var coreCUnits = []string{"alloc.c", "ref.c", "list.c", "map.c", "unwind.c", "entry.c", "sys.c", "fmt.c", "conv.c", "str.c"}
 
 // Materialize writes the whole embedded runtime tree (header, core units, and the
 // concurrency sources) into dir and returns the paths of the CORE C translation
@@ -97,5 +99,26 @@ func ConcurrencyCUnits(dir, arch string) []string {
 	case "amd64":
 		ctx = "ctx_x86_64.S"
 	}
-	return []string{filepath.Join(dir, "sched.c"), filepath.Join(dir, "chan.c"), filepath.Join(dir, ctx)}
+	return []string{
+		filepath.Join(dir, "sched.c"),
+		filepath.Join(dir, "chan.c"),
+		filepath.Join(dir, ctx),
+		filepath.Join(dir, ThreadCUnit(goruntime.GOOS)),
+	}
+}
+
+// ThreadCUnit is the zrt_thread backend for an OS: pthreads on anything POSIX, the
+// Win32 set on Windows, and the no-thread floor otherwise. The floor is a correct
+// build rather than a degraded one — with no threads the scheduler runs every
+// coroutine on the calling thread, which is what it did before M:N, so what is lost
+// is CPU parallelism and never behaviour.
+func ThreadCUnit(goos string) string {
+	switch goos {
+	case "windows":
+		return "thread_win32.c"
+	case "js", "wasip1", "plan9":
+		return "thread_none.c"
+	default:
+		return "thread_pthread.c"
+	}
 }

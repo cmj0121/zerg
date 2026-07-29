@@ -24,14 +24,22 @@
 /* the current unwind bundle: the one cleanup stack (grown on demand) and the
  * innermost abort handler. For a non-concurrent program this is the whole program's
  * state; under the scheduler it is whichever coroutine is currently running. */
-static zrt_tls g_tls;
+/* PER-WORKER. This is the bundle of whichever coroutine this thread is running right
+ * now — the scheduler loads it before a switch in and snapshots it back after. With one
+ * worker that is one global, exactly as before; with M workers, a process-global would
+ * mean two coroutines sharing one cleanup stack and one abort handler, and each would
+ * unwind through the other's defers. The bundle belongs to the coroutine (zrt_coro.tls);
+ * this is only the slot for the one currently mounted on this thread. */
+static ZRT_THREAD_LOCAL zrt_tls g_tls;
 
 /* g_crashing is true only while zrt_abort unwinds an UNHANDLED coroutine crash (its
  * target handler is the coroutine's outermost one). chan.c reads it through
  * zrt_crash_active as the crash unwind runs the coroutine's sender releases, so a
  * channel auto-closed by a crashing last sender carries a crash Err (Fork-C). It is
- * self-scoped: each zrt_abort sets it for the duration of that unwind and clears it. */
-static bool g_crashing;
+ * self-scoped: each zrt_abort sets it for the duration of that unwind and clears it,
+ * and it is per-worker for the same reason g_tls is — one coroutine's crash must not be
+ * visible to a channel another coroutine is releasing on a different thread. */
+static ZRT_THREAD_LOCAL bool g_crashing;
 
 bool zrt_crash_active(void) {
 	return g_crashing;

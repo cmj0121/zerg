@@ -3911,8 +3911,48 @@ fn c_proto(fn_d: FnDecl) -> str {
 	return f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}({c_param_types(fn_d)});\n"
 }
 
+# c_check_loop_jump refuses a `break` or a `continue` that belongs to no loop. Without it
+# the jump lowered to a bare C `break;` and the first complaint came from cc, about a file
+# under .zerg-cache the programmer never wrote — `'break' statement not in loop or switch
+# statement`, at a line number in generated C. The seed has always named it at the source.
+#
+# A `select` arm is NOT a loop: it lowers to if/else, so an arm INHERITS whatever loop it
+# is written in. That is what keeps the shape the concurrency chapter is written in legal —
+# `for { select { … done => break } }` — while the same arm outside a `for` is refused.
+fn c_check_loop_jump(body: list[Stmt], in_loop: bool) {
+	for s in body {
+		match s {
+			SBreak => c_loop_jump_err("break", in_loop)
+			SContinue => c_loop_jump_err("continue", in_loop)
+			SIf(cond, then_b, has_else, else_b) => c_check_loop_jump_two(then_b, else_b, in_loop)
+			SIfLet(nm, v, then_b, has_else, else_b) => c_check_loop_jump_two(then_b, else_b, in_loop)
+			SFor(is_cond, cond, body_b) => c_check_loop_jump(body_b, true)
+			SForIn(nm, it, body_b) => c_check_loop_jump(body_b, true)
+			SSelect(arms) => c_check_loop_jump_sel(arms, in_loop)
+			_ => c_skip()
+		}
+	}
+}
+
+fn c_check_loop_jump_two(a: list[Stmt], b: list[Stmt], in_loop: bool) {
+	c_check_loop_jump(a, in_loop)
+	c_check_loop_jump(b, in_loop)
+}
+
+fn c_check_loop_jump_sel(arms: list[SelArm], in_loop: bool) {
+	for a in arms {
+		c_check_loop_jump(a.body, in_loop)
+	}
+}
+
+fn c_loop_jump_err(kw: str, in_loop: bool) {
+	return if in_loop
+	raise "`" + kw + "` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
+}
+
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	c_reset_env(em)
+	c_check_loop_jump(fn_d.body, false)
 
 	# a lambda is emitted through here in the middle of an enclosing function's expression,
 	# so the enclosing return type is put back on the way out

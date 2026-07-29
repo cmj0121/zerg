@@ -1503,6 +1503,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SDefer(x) => c_defer(em, x, ind)
 		SSpawn(x) => c_spawn(em, x, ind)
 		SSend(ch, v) => c_send(em, ch, v, ind)
+		SSelect(arms) => c_select(em, arms, ind)
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
@@ -1743,6 +1744,96 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	}
 	return out + ind + "zrt_spawn(zg_spawn_" + tag + ", zg_se" + tag + ");\n"
 }
+
+# c_select lowers `select { … }` onto zrt_select: an array of case descriptors, one call
+# that picks a ready arm (or parks on all of them), and an if-chain on what it returned.
+#
+# A receive arm's value has to land somewhere the runtime can write BEFORE the call — it
+# takes an address — so each recv arm declares its variable up front and hands over its
+# address. That is also what makes `v := <-ch => …` bind: the arm body sees the same
+# variable, already filled by the time its branch runs.
+#
+# `done` and `_` are not cases. They are flags on the call and constants in the answer,
+# which is exactly how the runtime models them.
+fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
+	em.used_rt = true
+	em.used_conc = true
+	in2 := ind + "    "
+	mut n := 0
+	mut has_def := "false"
+	mut has_done := "false"
+	for a in arms {
+		if a.op == 0 or a.op == 1 {
+			n = n + 1
+		} else if a.op == 2 {
+			has_done = "true"
+		} else {
+			has_def = "true"
+		}
+	}
+	tag := strconv.to_string(em.dfn_n, 10)
+	em.dfn_n = em.dfn_n + 1
+	cs := "zg_cs" + tag
+	mut out := ind + "{\n" + in2 + "zrt_sel_case " + cs + "[" + strconv.to_string(n, 10) + "];\n"
+
+	# the case array, and a slot for every receive arm's value
+	mut idx := 0
+	for a in arms {
+		if a.op == 0 {
+			elem := c_chan_elem(c_infer(em, a.ch))
+			nm := "zg_rv" + tag + "_" + strconv.to_string(idx, 10)
+			out = out + in2 + c_type(elem) + " " + nm + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_RECV;\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+			idx = idx + 1
+		} else if a.op == 1 {
+			elem := c_chan_elem(c_infer(em, a.ch))
+			nm := "zg_sv" + tag + "_" + strconv.to_string(idx, 10)
+			out = out + in2 + c_type(elem) + " " + nm + " = " + c_expr(em, a.val, c_nosub()) + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
+			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+			idx = idx + 1
+		}
+	}
+	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_done + ");\n"
+
+	# the dispatch. Each recv arm's binding is already in scope, so its body just runs.
+	mut first := true
+	mut k := 0
+	for a in arms {
+		mut cond := ""
+		if a.op == 0 or a.op == 1 {
+			cond = "zg_pick" + tag + " == " + strconv.to_string(k, 10)
+			k = k + 1
+		} else if a.op == 2 {
+			cond = "zg_pick" + tag + " == ZRT_SEL_DONE"
+		} else {
+			cond = "zg_pick" + tag + " == ZRT_SEL_DEFAULT"
+		}
+		# the arm's name is bound to ITS OWN slot, right before its body — every recv arm
+		# may call the variable `v`, and binding them all up front would leave each body
+		# reading the last one's slot
+		if a.op == 0 and a.bind != "" {
+			em.env_names.append(a.bind)
+			em.env_tys.append(c_chan_elem(c_infer(em, a.ch)))
+			em.env_cnames.append("zg_rv" + tag + "_" + strconv.to_string(k - 1, 10))
+		}
+		mut kw := "} else if ("
+		if first {
+			kw = "if ("
+			first = false
+			out = out + in2
+		}
+		out = out + kw + cond + ") {\n" + c_block(em, a.body, in2 + "    ")
+	}
+	if not first {
+		out = out + in2 + "}\n"
+	}
+	return out + ind + "}\n"
+}
+
 
 # --- lambdas ----------------------------------------------------------------------
 #

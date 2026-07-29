@@ -271,6 +271,79 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 	return EFn(params, has_ret, ret, parse_block(p))
 }
 
+# parse_select reads `select { … }` and its four arm shapes:
+#
+#     v := <-ch => body      a receive that names what it received
+#        <-ch => body        a receive that discards it
+#     ch <- v => body        a send
+#     done => body           every watched receive channel has closed
+#     _ => body              nothing was ready (non-blocking)
+#
+# `done` and `_` are CONTEXTUAL — GRAMMAR makes them special only as an arm head, so
+# they arrive as ordinary identifiers and are recognised by position, not by the lexer.
+fn parse_select(mut &p: Parser) -> Stmt {
+	p_advance(p) # 'select'
+	expect(p, LBrace)
+	skip_semis(p)
+	mut arms: list[SelArm] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		arms.append(parse_sel_arm(p))
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return SSelect(arms)
+}
+
+fn parse_sel_arm(mut &p: Parser) -> SelArm {
+	# `done` / `_` heads: an identifier immediately followed by `=>`
+	if p_at(p, Ident) and peek_kind(p, 1) == FatArrow {
+		head := cur(p).lexeme
+		p_advance(p)
+		p_advance(p) # '=>'
+		mut op := 3
+		if head == "done" {
+			op = 2
+		}
+		return SelArm(op, "", ENil, ENil, parse_sel_body(p))
+	}
+	# `v := <-ch => …` — a named receive
+	mut bind := ""
+	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
+		bind = cur(p).lexeme
+		if bind == "_" {
+			bind = ""
+		}
+		p_advance(p)
+		p_advance(p) # ':='
+	}
+	if p_at(p, LArrow) {
+		p_advance(p)
+		ch := parse_expr(p)
+		expect(p, FatArrow)
+		return SelArm(0, bind, ch, ENil, parse_sel_body(p))
+	}
+	# `ch <- v => …` — a send
+	ch := parse_expr(p)
+	expect(p, LArrow)
+	v := parse_expr(p)
+	expect(p, FatArrow)
+	return SelArm(1, "", ch, v, parse_sel_body(p))
+}
+
+# parse_sel_body reads an arm's body. GRAMMAR says an arm is followed by an expression
+# and a block IS one, but this parser has no block-expression — so a `{` is read as a
+# block and anything else as a single STATEMENT.
+#
+# A statement rather than an expression, because `print v` is the most obvious thing to
+# write in an arm and `print` is a statement here. Reading it as an expression consumed
+# nothing, and the arm loop then read the rest of the body as further arms.
+fn parse_sel_body(mut &p: Parser) -> list[Stmt] {
+	return parse_block(p) if p_at(p, LBrace)
+	mut one: list[Stmt] = []
+	one.append(parse_stmt(p))
+	return one
+}
+
 # parse_map_lit reads `{k: v, …}` and the empty `{:}`.
 #
 # The `:` is what makes a map literal unambiguous: GRAMMAR gives the empty map the
@@ -645,7 +718,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		return SSpawn(parse_expr(p))
 	}
 	if k == Select {
-		raise "NotImplemented: select"
+		return parse_select(p)
 	}
 	if k == With {
 		raise "NotImplemented: with"

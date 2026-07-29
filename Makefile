@@ -1,4 +1,4 @@
-SUBDIR := editors src/bootstrap
+SUBDIR := editors src/bootstrap src/runtime
 
 # The self-hosting compiler is `zerg`; the Go seed that builds it is `zerg0`. Both
 # resolve `import` themselves, so either builds the compiler from the entry file alone.

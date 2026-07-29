@@ -88,6 +88,7 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 			SIf(cond, then_b, has_else, else_b) => collect_binds_if(then_b, else_b, names)
 			SFor(is_cond, cond, body_b) => collect_binds(body_b, names)
 			SForIn(name, iter, body_b) => collect_binds(body_b, names)
+			SIfLet(name, value, then_b, has_else, else_b) => collect_binds_iflet(name, then_b, else_b, names)
 			SGuard(body_b) => collect_binds(body_b, names)
 			_ => skip()
 		}
@@ -99,6 +100,14 @@ fn collect_binds_let(name: str, mut &names: list[str]) {
 }
 
 fn collect_binds_if(then_b: list[Stmt], else_b: list[Stmt], mut &names: list[str]) {
+	collect_binds(then_b, names)
+	collect_binds(else_b, names)
+}
+
+# collect_binds_iflet records the name `if v := e` binds as well as the blocks', since
+# the binding is the whole reason the form exists and an unread one is still dead.
+fn collect_binds_iflet(name: str, then_b: list[Stmt], else_b: list[Stmt], mut &names: list[str]) {
+	names.append(name)
 	collect_binds(then_b, names)
 	collect_binds(else_b, names)
 }
@@ -115,6 +124,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SReturnIf(value, cond) => walk_pair(value, cond, ids, calls, ns)
 			SExpr(x) => walk_expr(x, ids, calls, ns)
 			SIf(cond, then_b, has_else, else_b) => walk_if(cond, then_b, else_b, ids, calls, ns)
+			SIfLet(name, value, then_b, has_else, else_b) => walk_if(value, then_b, else_b, ids, calls, ns)
 			SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
 			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
 			SGuard(body_b) => walk_body(body_b, ids, calls, ns)
@@ -178,8 +188,18 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EFn(ps, has_ret, ret, body) => walk_body(body, ids, calls, ns)
 		EChanNew(t, cap) => walk_expr(cap, ids, calls, ns)
 		ERecv(ch) => walk_expr(ch, ids, calls, ns)
+		EForce(x) => walk_expr(x, ids, calls, ns)
+		ECoalesce(a, b, jump) => walk_coalesce(a, b, jump, ids, calls, ns)
 		_ => skip()
 	}
+}
+
+# walk_coalesce reaches both halves of `a ?? b`: the fallback is either an expression or
+# a divergent statement, and only one of the two is ever populated.
+fn walk_coalesce(a: Expr, b: Expr, jump: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(a, ids, calls, ns)
+	walk_expr(b, ids, calls, ns)
+	walk_body(jump, ids, calls, ns)
 }
 
 fn walk_call(name: str, args: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {

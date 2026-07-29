@@ -2,9 +2,9 @@ package sema
 
 import "testing"
 
-// TestIfBindHeadTypes covers the `if x := opt` binding head (GRAMMAR group 6): an
-// optional operand binds its unwrapped element in the then-block (statement and
-// expression forms), and a non-optional operand is a clean error.
+// TestIfBindHeadTypes covers the `if x := e` binding head (GRAMMAR group 6): an optional
+// or a Result operand binds its unwrapped element in the then-block (statement and
+// expression forms), and anything else is a clean error.
 func TestIfBindHeadTypes(t *testing.T) {
 	const g = "fn g() -> int? { return 5 }\n"
 	wantOK(t, g+"fn f() {\n\tif x := g() {\n\t\tprint x\n\t}\n}\n")
@@ -12,8 +12,12 @@ func TestIfBindHeadTypes(t *testing.T) {
 	// the else-branch does not see x.
 	wantErr(t, g+"fn f() {\n\tif x := g() {\n\t\tprint x\n\t} else {\n\t\tprint x\n\t}\n}\n",
 		"undefined name")
-	// a non-optional head is rejected.
-	wantErr(t, "fn f() {\n\tif x := 5 {\n\t\tprint x\n\t}\n}\n", "requires an optional value")
+	// a Result head binds its Left — the same tag-0 slot an optional carries its value in,
+	// and what makes `if v := <-ch { … }` read a channel receive.
+	const r = "fn r() -> Result[int] { return 5 }\n"
+	wantOK(t, r+"fn f() {\n\tif x := r() {\n\t\tprint x\n\t}\n}\n")
+	// a head that is neither is rejected.
+	wantErr(t, "fn f() {\n\tif x := 5 {\n\t\tprint x\n\t}\n}\n", "requires an optional or a Result value")
 }
 
 // TestDestructuringBindTypes covers the destructuring bind targets '(a, b) := e' and

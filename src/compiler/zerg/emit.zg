@@ -1745,8 +1745,22 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		}
 		m = m + 1
 	}
+	# The teardown is a DEFER, not a statement after the call, because a coroutine can
+	# leave without returning. An unhandled abort longjmps straight past everything
+	# following the call, and what got skipped was the sender release — so the channel
+	# kept a sender that no longer existed, never reached zero, never closed, and every
+	# receiver waiting on it blocked forever. A crash became a deadlock.
+	#
+	# A defer runs on both exits, which is exactly the difference: on the ordinary one it
+	# is the coroutine giving up its handles, and on the crash one it is what lets the
+	# close carry the crash Err a receiver is meant to see (Fork-C).
+	dropfn := "zg_spawndrop_" + tag
+	mut dd := "static void " + dropfn + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p; (void)e;"
+	dd = dd + drops + " zrt_free(p); }\n"
+	em.dfn_decls.append(dd)
 	mut th := "static void zg_spawn_" + tag + "(void *p) { zg_spawnenv_" + tag + " *e = (zg_spawnenv_" + tag + "*)p;"
-	th = th + " zg_" + name + "(" + call + ");" + drops + " zrt_free(p); }\n"
+	th = th + " zrt_defer(" + dropfn + ", p);"
+	th = th + " zg_" + name + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
 	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
 	mut j := 0

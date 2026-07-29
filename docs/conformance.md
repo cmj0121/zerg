@@ -45,9 +45,11 @@ one documented per-feature here; the shipped `zerg`'s own subset is described in
 **[implemented]** may therefore be one `zerg` does not accept yet.
 
 The seed is **no longer uniformly the wider of the two**. It is wider on most of the
-language — closures and function values, `map[K, V]`, `impl` methods, a block as a `match`
-arm body — and **narrower on concurrency**, where `zerg` lowers directional channel ends,
-method and namespaced `spawn` callees and the stdlib timers that the seed refuses. The
+language — closures and function values, `map[K, V]`, `impl` methods, `Ref[T]`, a block as
+a `match` arm body — and **mostly narrower on concurrency**, where `zerg` lowers directional
+channel ends, method and namespaced `spawn` callees and the stdlib timers that the seed
+refuses; the receive operator `?` runs the other way, built in the seed and refused by
+`zerg`. The
 `is` type test is now **the same in both**: an error kind against an `Err`, and a named
 refusal for anything else. Where the difference matters
 to a program, the chapter says which compiler it is talking about, and a **[deviation]**
@@ -60,12 +62,16 @@ the seed rejects them with a diagnostic, which is exactly what that marker promi
 
 **Concurrency is the exception, and a narrower claim.** Coroutines, channels and `select`
 were removed and then restored: the seed lowers the **happy path** — `chan[T](cap)`,
-`ch <- v`, `<-ch` as a real `Result[T]`, `close(ch)`, `spawn f(args)`, `select` with all
-four arm shapes, and `for v in ch` — and refuses **six shapes** by name rather than
-mis-emitting them: a **directional channel type**, a `spawn` whose callee is a **method**,
-a **namespaced** function or a **closure**, a **`mut &`** argument crossing a `spawn`, and
-a **`main(args)`** in a concurrent program. Each is a clean diagnostic and a nonzero exit.
-See [Coroutines](code/coroutine.md).
+`ch <- v`, `<-ch` as a real `Result[T]`, `close(ch)` and `defer close(ch)`, `spawn f(args)`,
+`select` with all four arm shapes, and `for v in ch` — and refuses **five shapes** by name
+rather than mis-emitting them: a **directional channel type**, and a `spawn` whose callee is
+a **method**, a **namespaced** function, a **closure**, or carries a **`mut &`** argument.
+Each is a clean diagnostic and a nonzero exit. See [Coroutines](code/coroutine.md).
+
+Two more belong to **neither** compiler rather than to the seed. A **`main(args)`** in a
+concurrent program is refused by both — the scheduler's entry shims take a nullary function
+pointer — and the receive operator **`?`** is the one concurrency feature where the seed is
+the **wider** of the two: it builds it, and `zerg` refuses it by name.
 
 A section with no marker inherits the marker of its enclosing feature; a paragraph may override with its
 own. A **[deviation]** always states both the specified behavior and what the implementation does instead.

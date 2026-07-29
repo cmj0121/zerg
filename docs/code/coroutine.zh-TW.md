@@ -129,17 +129,21 @@ match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 
 因為關閉落在 `Right`，`chan[U?]` 不再含糊：**送了一個 `nil`** 是 `Left(nil)`，**關閉**是 `Right`。
 
-> **[not yet]** 上面每一個運算子都已建置，**只有 `?` 除外**。`?` 會把 `Right` 從**外圍函式**提早 return 出去，
-> 這需要 `Result[T]` 能在**簽章**裡存活——那是 [錯誤處理](errors.zh-TW.md) 的錯誤模型，不是 channel 特性。兩個編
-> 譯器都乾淨地拒絕它（_`?` can only be used in a function returning Either, Result, or an optional_），不會誤譯；
-> 在它落地前，用 `(<-ch)!` 往上傳、或用 `??` 吸收。
+> **[not yet]** 在**出貨的 `zerg`** 上；而且這是本章唯一一處**種子比較寬**的地方。上面每一個運算子在兩個編譯器
+> 都已建置，只有 `?` 例外，而 `?` 是**種子有做**的：`v := (<-ch)?` 會把 `Right` 從外圍函式提早 return 出去，而
+> `Result[T]` 在種子的**簽章**裡活得下來、載得住它。`zerg` 則指名拒絕（_the `?` operator — it early-returns the
+> Err from the enclosing function, which needs `Result[T]` in a signature_），不會誤譯；在它於該處落地前，用
+> `(<-ch)!` 往上傳、或用 `??` 吸收。`?` 需要的是 [錯誤處理](errors.zh-TW.md) 的錯誤模型，而不是任何 channel 特
+> 性——一個簽章叫得出名字的 `Result[T]`。
 
 上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
 
 > **[deviation]** 規格讓 `match` arm 的 body 是一個運算式，而區塊**本身就是**運算式，所以 `Left(v) => { … }` 合
 > 文法，種子也接受。出貨的 `zerg` 則**不**：`c_match` 降階成三元運算鏈，容不下一個區塊，於是那條 arm 被拒絕
 > （_a block used as an expression_）——因此像 `print` 這種敘述不能站在那裡。變通做法是把 arm 寫成一次**呼叫**、
-> 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響：它降階成 if/else，兩個編譯器都吃區塊。
+> 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響，理由值得記清楚：`match` 的 arm 必須
+> **產出**該次 match 的值，而 `select` 不產出值、它的 arm 是**執行**。所以 select arm 的 body 是一個**敘述**
+> （GRAMMAR group 9）——`done => break` 在那裡很平常，裸的 `print` 也站得住，區塊只是眾多敘述中的一種。
 
 ## 關閉——自動發生在最後一個 sender，必須提早時才用 `close(ch)`
 
@@ -383,8 +387,12 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 
 對單一共享純量，較低階的替代是用不可變 `:=` 持有一個 stdlib **`Atomic`**（綁定不可變，atomic 內部可變——見
 [Module 與 Program](../runtime/package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `swap` /
-`fetch_add` / `compare_swap`。今日 **[implemented]** 的是僅 **sequential-consistency** ordering 的
+`fetch_add` / `compare_swap`。在**種子**上 **[implemented]** 的是僅 **sequential-consistency** ordering 的
 **`Atomic[int]`**；顯式的 **memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
+
+> **[not yet]** 在**出貨的 `zerg`** 上，而且原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而
+> `zerg` 沒有 `Ref[T]`。它會指名拒絕整個模組——_no type named `Ref` (field `Atomic.cell`)_——而不是吐出一個沒人
+> 宣告的型別，所以 `import "std/atomic"` 在那裡是一則乾淨的診斷；上面的 actor 才是**兩個編譯器**都成立的做法。
 
 ## producer——generator pattern
 
@@ -425,8 +433,13 @@ for v in range(0, 10) { use(v) }   # drain 到 StopIteration
 refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**不會遺失**：以最後 sender 身分關閉 channel 時會帶著
 崩潰的 `Err`，consumer 讀到 `Right(err)`（乾淨結束則帶 `StopIteration`）。
 
-在源頭，這個死亡此外是**無聲的**。一個**可選的 compiler flag** 會**另外**把每一次未處理的 abort——`Err`、哪個
-coroutine、backtrace——報到 `stderr`。它**純觀察**：開或不開，行為完全一致，且預設 build 不帶開銷。
+runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
+消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴
+它。**[implemented]**
+
+> **[not yet]** 這則回報只有訊息，沒有別的。指出它來自**哪個 coroutine**、印出 **backtrace**、以及用一個
+> **compiler flag** 決定要不要印，三者都尚未建置——所以一個有很多 coroutine 的程式拿得到原因，卻沒有對應的
+> `spawn` 位置可以掛上去。
 
 要回報*結構化*的結果——部分結果、特定錯誤、或不會關掉受監看 channel 的失敗——coroutine 仍會 `guard` 並送進
 channel。讓一個死亡變得*致命*是觀察者的職責（對 `Right(err)` 反應並 abort），絕不是 `spawn` 的事。

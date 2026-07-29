@@ -75,6 +75,12 @@ enum Expr {
 	# PLACE — the result is itself an optional, which is what lets a chain keep going
 	# without a test at every link.
 	EOptChain(Expr, str)
+
+	# ETry is `x?` (GRAMMAR group 8): unwrap the payload, or early-return the absent side
+	# from the ENCLOSING function. It is the one operator that is a control transfer wearing
+	# an expression's clothes, which is why the function's own result type decides whether
+	# it can be written at all.
+	ETry(Expr)
 	EIndex(Expr, Expr)
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
@@ -398,6 +404,7 @@ fn expr_kind(e: Expr) -> str {
 		ECall(name, args) => "call " + name
 		EField(target, name) => "field ." + name
 		EOptChain(target, name) => "optional chain ?." + name
+		ETry(x) => "try `?`"
 		EIndex(target, idx) => "index"
 		EMethod(target, meth, args) => "method ." + meth
 		EListLit(elems) => "list-literal"

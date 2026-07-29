@@ -188,6 +188,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		ECall(name, args) => walk_call(name, args, ids, calls, ns)
 		EField(target, name) => walk_expr(target, ids, calls, ns)
 		EOptChain(target, name) => walk_expr(target, ids, calls, ns)
+		ETry(x) => walk_expr(x, ids, calls, ns)
 		EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
 		EMethod(target, meth, args) => walk_method(target, meth, args, ids, calls, ns)
 		EListLit(elems) => walk_all(elems, ids, calls, ns)

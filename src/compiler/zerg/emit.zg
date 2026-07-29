@@ -1159,6 +1159,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EForce(x) => c_force(em, x, sb)
 		ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
 		EGuard(body) => c_guard(em, body, sb)
+		EIs(x, name) => c_is_test(em, x, name, sb)
 	}
 }
 
@@ -1391,6 +1392,25 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	return f"({c_expr(em, a, sb)} {c_binop(oper)} {c_expr(em, b, sb)})"
 }
 
+# c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime
+# type tag — its `kind` — so an error-kind test is a comparison of that tag, exactly as the
+# seed lowers it. Every other `x is T` is a general runtime type test, which needs tags no
+# value carries this phase; it is refused BY NAME here rather than lowered to something
+# that reads as a bool. Both refusals matter more than they look: until this function
+# existed the `is` token was consumed by nobody and dropped, so a test emitted a stray `0;`
+# and an undeclared `zg_<Name>` — C that cannot be traced back to the Zerg that meant it.
+fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
+	t := c_infer(em, x)
+	kind := c_err_kind(name)
+	if kind == 0 {
+		raise "NotImplemented: `is " + name + "` — only the built-in error kinds can be named in an `is` test"
+	}
+	if not c_is_err_ty(t) {
+		raise "`is " + name + "` wants an Err on its left, found a " + ty_name(t)
+	}
+	return f"(({c_expr(em, x, sb)}).kind == {kind})"
+}
+
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
 fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 	nm := c_named_of(t)
@@ -1606,6 +1626,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# this it reads as a struct constructor and emits a compound literal of a type nothing
 	# declared — which cc rejects, loudly but a long way from the source that meant it.
 	if c_err_kind(name) > 0 {
+		if not c_err_constructible(name) {
+			raise "`" + name + "` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish"
+		}
 		em.used_rt = true
 		return f"zrt_err_new_kind({c_err_kind(name)}, {c_args(em, args, sb)})"
 	}
@@ -1936,6 +1959,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EForce(x) => c_result_elem(c_infer(em, x))
 		ECoalesce(a, b, jump) => c_result_elem(c_infer(em, a))
 		EGuard(body) => TResult(c_guard_elem(c_guard_val_ty(em, body)))
+		EIs(x, name) => TBool
 	}
 }
 
@@ -3727,6 +3751,15 @@ fn c_err_kind(name: str) -> int {
 		i = i + 1
 	}
 	return 0
+}
+
+# c_err_constructible splits the table in the one place it is not symmetric: every kind can
+# be NAMED on the right of `is`, but StopIteration cannot be CALLED. It is the sentinel a
+# clean close carries, so a program able to build one could hand a consumer a crash wearing
+# the marker for an ordinary ending — and `err is StopIteration` would answer yes. Testing
+# by kind is only worth more than comparing the message because this asymmetry holds.
+fn c_err_constructible(name: str) -> bool {
+	return name != "StopIteration"
 }
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {

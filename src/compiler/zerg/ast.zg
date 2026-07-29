@@ -109,6 +109,13 @@ enum Expr {
 	# the abort tier, which is why it carries a whole block rather than an expression — the
 	# thing being guarded is usually several statements.
 	EGuard(list[Stmt])
+
+	# EIs is the type test `x is Name` (GRAMMAR:219, at the comparison level and equally
+	# non-associative). The right side is held as a NAME rather than a parsed Ty because
+	# the grammar spells it `type-name` and nothing resolves it here — the emitter decides
+	# what a name means. This phase answers only the built-in error kinds, which are the
+	# one taxonomy carrying a runtime tag to compare.
+	EIs(Expr, str)
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -393,6 +400,7 @@ fn expr_kind(e: Expr) -> str {
 		EForce(x) => "force"
 		ECoalesce(a, b, jump) => "coalesce"
 		EGuard(body) => "guard"
+		EIs(x, name) => "is " + name
 		_ => "?"
 	}
 }

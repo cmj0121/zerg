@@ -58,3 +58,35 @@ func TestChannelDirectionNarrowing(t *testing.T) {
 		}
 	})
 }
+
+// TestCloseBuiltin covers `close(ch)` — the channel's one built-in (docs/code/coroutine.md).
+// It says THIS HOLDER IS DONE SENDING, so it wants a channel that has a send end to give up,
+// and it leaves the name usable: giving up your send end and then draining what the producer
+// sends is the shape every concurrent program is written in.
+func TestCloseBuiltin(t *testing.T) {
+	// a send-capable end closes, and the name stays live afterwards.
+	wantOK(t, "fn produce(ch: chan[int]) {\n ch <- 1\n}\nfn main() {\n ch := chan[int](1)\n spawn produce(ch)\n close(ch)\n print (<-ch)!\n}")
+
+	// anything that is not a channel names the type it got.
+	wantErr(t, "fn main() {\n x := 3\n close(x)\n}", "close requires a channel, found int")
+
+	// a receive-only end never had a send capability to give up, so asking is a bug rather
+	// than a no-op — the one place `close` is stricter than the old `del ch` was.
+	wantErr(t, "fn f(rx: <-chan[int]) {\n close(rx)\n}",
+		"cannot close a receive-only channel <-chan[int]")
+
+	// exactly one argument: the channel.
+	wantErr(t, "fn main() {\n ch := chan[int](1)\n close(ch, 1)\n}", "close takes exactly one argument")
+}
+
+// TestDelRevokesAChannelToo pins the other half of the split: with `close` carrying "done
+// sending", `del` means what it means everywhere else — this name is gone. It used to be a
+// channel-shaped exception, which let `ch <- v` typecheck on a handle whose send end had
+// already been given up.
+func TestDelRevokesAChannelToo(t *testing.T) {
+	wantErr(t, "fn main() {\n ch := chan[int](1)\n del ch\n print (<-ch)!\n}", "used after del")
+	wantErr(t, "fn main() {\n ch := chan[int](1)\n del ch\n ch <- 1\n}", "used after del")
+
+	// a `del` with nothing after it is still fine.
+	wantOK(t, "fn main() {\n ch := chan[int](1)\n ch <- 1\n del ch\n}")
+}

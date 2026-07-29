@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	runtime "github.com/cmj0121/zerg/src/runtime"
@@ -70,17 +69,22 @@ func runConcProgram(t *testing.T, src string, wantAbort bool) []string {
 	return outs
 }
 
-// TestRecvCleanCloseIsStopIterationByKind is the Receive table's first row: a channel
-// whose last sender left normally answers `Right(StopIteration)`, and a receiver tells
-// that from a crash by KIND — never by comparing the message. When the Right was built
-// from a message string this printed `false`, which is the string-matching the spec
-// forbids.
+// TestRecvCleanCloseIsStopIterationByKind is the Receive table's first row: a channel that
+// has closed cleanly answers `Right(StopIteration)`, and a receiver tells that from a crash
+// by KIND — never by comparing the message. When the Right was built from a message string
+// this printed `false`, which is the string-matching the spec forbids.
+//
+// The close here is the EXPLICIT one, which is the only close a seed program can arrange
+// deliberately: an auto-close needs the LAST send-capable handle to go, and the seed refuses
+// the directional binding that would let main stop being a sender while it is still reading.
+// The kind on the Right is the same either way — it is the channel's, not the statement's.
 func TestRecvCleanCloseIsStopIterationByKind(t *testing.T) {
-	outs := runConcProgram(t, "fn produce(ch: chan[int]) {\n\tch <- 1\n}\n"+
+	outs := runConcProgram(t, "fn produce(ch: chan[int]) {\n\tnop\n}\n"+
 		"fn main() {\n"+
 		"\tch := chan[int](2)\n"+
 		"\tspawn produce(ch)\n"+
-		"\tdel ch\n"+
+		"\tch <- 1\n"+
+		"\tclose(ch)\n"+
 		"\tprint (<-ch)!\n"+
 		"\tmatch <-ch {\n"+
 		"\t\tLeft(v) => { print v }\n"+
@@ -93,32 +97,44 @@ func TestRecvCleanCloseIsStopIterationByKind(t *testing.T) {
 	}
 }
 
-// TestRecvCrashCloseCarriesTheCrashsOwnErr is the table's second row: a channel closed by
-// a crashing last sender answers that coroutine's OWN Err. Its kind reaches the receiver
-// (`e is ValueError`, so the close is NOT StopIteration), and re-raising it reproduces the
-// crash's own message rather than a stand-in string.
-func TestRecvCrashCloseCarriesTheCrashsOwnErr(t *testing.T) {
-	outs := runConcProgram(t, "fn produce(ch: chan[int]) {\n"+
-		"\tch <- 7\n"+
-		"\traise ValueError(\"producer died\")\n}\n"+
+// TestCloseDrainsThenEnds pins the other half of what `close` means: it is a flag on the
+// channel and moves no count, so the handle stays perfectly usable — a receive after it
+// hands over everything already buffered, IN ORDER, and only then answers the Right. A
+// close that discarded the buffer, or that freed the handle, would fail here rather than in
+// a later program that quietly lost values.
+func TestCloseDrainsThenEnds(t *testing.T) {
+	outs := runConcProgram(t, "fn produce(ch: chan[int]) {\n\tnop\n}\n"+
 		"fn main() {\n"+
-		"\tch := chan[int](2)\n"+
+		"\tch := chan[int](4)\n"+
 		"\tspawn produce(ch)\n"+
-		"\tdel ch\n"+
-		"\tprint (<-ch)!\n"+
-		"\tmatch <-ch {\n"+
-		"\t\tLeft(v) => { print v }\n"+
-		"\t\tRight(e) => {\n"+
-		"\t\t\tprint e is StopIteration\n"+
-		"\t\t\tprint e is ValueError\n"+
-		"\t\t\traise e\n"+
-		"\t\t}\n"+
-		"\t}\n}\n", true)
+		"\tch <- 1\n"+
+		"\tch <- 2\n"+
+		"\tclose(ch)\n"+
+		"\tclose(ch)\n"+
+		"\tfor v in ch {\n\t\tprint v\n\t}\n"+
+		"\tprint 9\n}\n", false)
 	for _, got := range outs {
-		for _, want := range []string{"7\n", "false\ntrue\n", "producer died"} {
-			if !strings.Contains(got, want) {
-				t.Fatalf("crash close: output missing %q\n%s", want, got)
-			}
+		if want := "1\n2\n9\n"; got != want {
+			t.Fatalf("close drains then ends: got %q, want %q", got, want)
 		}
 	}
+}
+
+// TestRecvCrashCloseCarriesTheCrashsOwnErr is the Receive table's second row: a channel
+// closed by a CRASHING last sender answers that coroutine's OWN Err — kind, message and
+// cause intact — so the reason it died reaches the receiver rather than a stand-in string.
+//
+// It cannot be written for the seed any more, and the reason is worth stating rather than
+// deleting the test over. The crash has to reach the receiver through the AUTO-close, which
+// fires when the last send-capable handle goes; so the receiver must not itself be a sender.
+// Saying that needs a receive-only binding (`rx: <-chan[int] = ch`, or a `-> <-chan[int]`
+// return), and rejectDirectionalChans refuses every directional type in the seed — a
+// deliberate line drawn in Unit 3. `close(ch)` is no substitute: it is a flag on the
+// channel, first close wins, and an explicit one records StopIteration BEFORE the producer
+// dies, which is exactly the trade being pinned here in reverse.
+//
+// The property itself is not untested: test-data/codegen/conc_crash.zg is this program,
+// under the self-hosted compiler, which does lower a directional end.
+func TestRecvCrashCloseCarriesTheCrashsOwnErr(t *testing.T) {
+	t.Skip("needs a receive-only binding, which the seed refuses; covered by test-data/codegen/conc_crash.zg")
 }

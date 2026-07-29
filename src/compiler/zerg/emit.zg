@@ -847,14 +847,22 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 	return TUnknown
 }
 
-# c_field_init emits a constructor argument, initialising an empty-list `[]` to a
-# properly sized runtime list from the destination field's element type (a bare `[]`
-# alone has no type context and would otherwise emit a malformed zero list).
+# c_field_init emits a constructor argument, initialising an EMPTY list `[]` to a properly
+# sized runtime list from the destination field's element type (a bare `[]` carries no
+# element type of its own, and would otherwise emit a malformed zero list).
+#
+# The emptiness test is the whole point of it, and it used to be missing: any list literal
+# took this branch, so `Bag([1, 2, 3])` built a struct whose field was an EMPTY list and
+# said nothing. That is the same defect c_list_lit's comment describes for a call argument
+# — a program that runs and is simply not what was written — and it survived here because
+# a struct field's list is usually appended to afterwards, which hides a length that
+# started at the wrong number. A non-empty literal has its own element type and its own
+# elements, so it takes the ordinary path.
 fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 	if ty_is_chan(fty) {
 		c_chan_check(c_infer(em, arg), fty, "field")
 	}
-	if c_is_list(fty) and c_is_listlit(arg) {
+	if c_is_list(fty) and c_is_empty_listlit(arg) {
 		em.used_rt = true
 		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}))"
 	}
@@ -2206,6 +2214,15 @@ fn c_is_guard(e: Expr) -> bool {
 fn c_is_listlit(e: Expr) -> bool {
 	return match e {
 		EListLit(_) => true
+		_ => false
+	}
+}
+
+# c_is_empty_listlit is `[]` and only `[]` — the literal that carries no element type and
+# needs one from the declaration it initializes. A literal WITH elements carries both.
+fn c_is_empty_listlit(e: Expr) -> bool {
+	return match e {
+		EListLit(elems) => elems.len() == 0
 		_ => false
 	}
 }

@@ -180,7 +180,41 @@ fn parse_type(mut &p: Parser) -> Ty {
 		return TInt
 	}
 	return TNil if name == "nil"
+
+	# A generic ARGUMENT list on a user type — `Ref[int]`, `Atomic[int]`, `B[T]`. The four
+	# built-in generics above read their own brackets; every other name reached this line
+	# with the `[` still in the stream, and nothing downstream wanted a `[`. The caller went
+	# on reading types as if the list were not there: `-> Ref[int] {` left the body's brace
+	# behind, a parameter list read `[` as the next parameter's name, and the file after it
+	# lowered to C full of identifiers named `zg_[` and `zg_->`. `expect` is silent on a
+	# mismatch, so none of that was reported — the first complaint came from cc, about a
+	# generated file.
+	#
+	# The arguments are READ AND DROPPED, which is what this compiler already does with
+	# `Result[T]`: it erases generics, so a type's identity is its name. What matters is
+	# that the brackets are CONSUMED.
+	skip_ty_args(p)
 	return TNamed(name)
+}
+
+# skip_ty_args consumes a balanced `[ … ]` type-argument list, if one is next. Nesting is
+# counted rather than assumed one deep, so `Pair[list[int], B[T]]` leaves the stream on the
+# token after the outer `]`.
+fn skip_ty_args(mut &p: Parser) {
+	if not p_at(p, LBrack) {
+		return
+	}
+	p_advance(p) # '['
+	mut depth := 1
+	for depth > 0 and not p_at(p, Eof) {
+		if p_at(p, LBrack) {
+			depth = depth + 1
+		}
+		if p_at(p, RBrack) {
+			depth = depth - 1
+		}
+		p_advance(p)
+	}
 }
 
 # is_conv reports whether a callee name is a scalar type conversion.
@@ -607,6 +641,10 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	p_advance(p) # 'struct'
 	name := cur(p).lexeme
 	p_advance(p) # name
+	# `struct B[T] { … }` — the parameter list is read and dropped for the same reason a
+	# generic argument list is: this compiler erases generics, and a `[` left in the stream
+	# would be read as the body's opening brace.
+	skip_ty_args(p)
 	expect(p, LBrace)
 	skip_semis(p)
 	mut fields: list[FieldDef] = []

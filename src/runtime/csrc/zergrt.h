@@ -675,7 +675,42 @@ typedef struct zrt_coro {
 	zrt_tls          tls;               /* this coroutine's own cleanup stack + handler */
 	zrt_mutex       *park_lock;          /* released by the worker AFTER the switch out */
 	bool             woken;              /* a wake arrived while PARKING; see sched.c */
+	void            *tsan_fiber;        /* ZRT_TSAN only; NULL otherwise. See below. */
+	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
+
+/* --- ThreadSanitizer -----------------------------------------------------------
+ *
+ * TSan tracks happens-before per THREAD, and a coroutine is not one: zrt_ctx_swap
+ * moves the machine to another stack behind its back, so it attributes one
+ * coroutine's accesses to whichever coroutine ran there before. Built naively, a
+ * TSan binary of this runtime does not merely report noise — it takes a fatal
+ * signal walking a stack it has the wrong shadow for.
+ *
+ * TSan answers this with the fiber API: a fiber is a shadow-state handle, and
+ * announcing a switch moves the tracking with the machine. Every context switch
+ * this scheduler makes is bracketed by one, which is what makes a TSan build both
+ * possible and meaningful — and a fiber may be resumed on a different thread than
+ * it parked on, which is exactly what M:N requires.
+ *
+ * All of it compiles to nothing when TSan is off, so the non-instrumented build
+ * carries no field it does not use and no call it does not make. */
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+#define ZRT_TSAN 1
+void *__tsan_get_current_fiber(void);
+void *__tsan_create_fiber(unsigned flags);
+void  __tsan_destroy_fiber(void *fiber);
+void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
+#define ZRT_TSAN_FIBER_SELF()      __tsan_get_current_fiber()
+#define ZRT_TSAN_FIBER_NEW()       __tsan_create_fiber(0)
+#define ZRT_TSAN_FIBER_FREE(f)     __tsan_destroy_fiber(f)
+#define ZRT_TSAN_FIBER_SWITCH(f)   __tsan_switch_to_fiber((f), 0)
+#else
+#define ZRT_TSAN_FIBER_SELF()      NULL
+#define ZRT_TSAN_FIBER_NEW()       NULL
+#define ZRT_TSAN_FIBER_FREE(f)     ((void)(f))
+#define ZRT_TSAN_FIBER_SWITCH(f)   ((void)(f))
+#endif
 
 /* --- threads: the M of M:N ---------------------------------------------------
  *

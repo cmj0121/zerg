@@ -440,6 +440,51 @@ static bool sel_all_recv_closed(const zrt_sel_case *cases, size_t n) {
 	return true;
 }
 
+/* sel_ready_locked answers whether a scan of this one case would find something to do,
+ * without doing it. Read-only, and the caller must hold the channel's lock.
+ *
+ * It is deliberately generous: a wait queue holding nothing but another select's stale
+ * waiter reads as ready here, because telling that apart means consuming it. The cost of
+ * saying yes wrongly is one extra scan before parking again; the cost of saying no
+ * wrongly would be a hang, so the error is taken in the harmless direction. */
+static bool sel_ready_locked(const zrt_sel_case *c) {
+	const zrt_chan *ch = c->ch;
+	if (c->op == ZRT_SEL_RECV) {
+		/* a buffered value, a sender to take one from, or a close to report */
+		return ch->len > 0 || ch->sendq_head != NULL || ch->closed;
+	}
+	/* room in the buffer, a receiver to hand to, or a close (which aborts, but is
+	 * something this select must proceed to rather than sleep through) */
+	return ch->len < ch->cap || ch->recvq_head != NULL || ch->closed;
+}
+
+/* sel_unlink ends a select's park. It claims the shared flag first, so that from here on
+ * no counterparty can hand off to any of these waiters, then takes every one of them back
+ * out of its queue before the stack frame they live on is reused. It answers the arm a
+ * counterparty did hand off to, or -1 if none did — at most one, because the claim inside
+ * wq_take is atomic and only one taker can win it. */
+static int sel_unlink(zrt_sel_case *cases, zrt_waiter *ws, size_t n, bool *claimed) {
+	zrt_atomic_claim(claimed);
+	int fired = -1;
+	for (size_t i = 0; i < n; i++) {
+		zrt_mutex_lock(&cases[i].ch->lock);
+		/* `done` and the value beside it are written by the counterparty under THIS lock,
+		 * so reading them under it is what orders the two — the select lock the caller
+		 * holds is a different lock and orders nothing against them. An unsynchronised
+		 * read here can see a stale false and lose a value already counted as sent. */
+		if (ws[i].done) {
+			fired = (int)i;
+		}
+		if (cases[i].op == ZRT_SEL_RECV) {
+			wq_remove(&cases[i].ch->recvq_head, &cases[i].ch->recvq_tail, &ws[i]);
+		} else {
+			wq_remove(&cases[i].ch->sendq_head, &cases[i].ch->sendq_tail, &ws[i]);
+		}
+		zrt_mutex_unlock(&cases[i].ch->lock);
+	}
+	return fired;
+}
+
 int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 	zrt_mutex_lock(&g_sel_lock);
 	for (;;) {
@@ -509,26 +554,45 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 			}
 			zrt_mutex_unlock(&cases[i].ch->lock);
 		}
+		/* RE-SCAN, now that the waiters are enqueued, and this is not an optimisation —
+		 * without it the select can sleep on a value that is already sitting in a buffer.
+		 * The scan above released each channel's lock to move to the next, and a sender
+		 * arriving in that gap finds an empty recvq, drops its value into the ring, and
+		 * returns: correct, and it wakes nobody, because at that instant there is nobody
+		 * to wake. The waiter goes up afterwards, against a channel that will never be
+		 * touched again.
+		 *
+		 * Enqueueing first and re-reading second closes it, whichever order the two
+		 * threads take: a sender that arrives after the push finds the waiter and hands
+		 * off, and one that arrived before it left its value where this read, under the
+		 * same channel lock, is bound to see it. */
+		bool ready = false;
+		for (size_t i = 0; i < n && !ready; i++) {
+			zrt_mutex_lock(&cases[i].ch->lock);
+			ready = sel_ready_locked(&cases[i]);
+			zrt_mutex_unlock(&cases[i].ch->lock);
+		}
+		if (ready) {
+			/* Take the waiters back down and go round again rather than parking. If a
+			 * counterparty got in first, its hand-off is the answer and is returned here;
+			 * otherwise the top of the loop consumes whatever this read saw.
+			 *
+			 * A wake may already be pending against this coroutine from that hand-off. It
+			 * is left standing: the token is one-shot, and the park it is spent on simply
+			 * returns early to a scan that finds nothing and parks again. */
+			int early = sel_unlink(cases, ws, n, &claimed);
+			if (early >= 0) {
+				cases[early].closed = 0; /* a hand-off delivered a real value (Left) */
+				zrt_mutex_unlock(&g_sel_lock);
+				return early;
+			}
+			continue;
+		}
 		/* the select lock goes to the scheduler, released once this coroutine is off the
 		 * CPU — the same hand-off a plain recv makes with the channel lock. */
 		zrt_sched_park_unlock(&g_sel_lock);
 		zrt_mutex_lock(&g_sel_lock);
-		/* woken. Claim ourselves so no late hand-off consumes another waiter, then unlink
-		 * every waiter before this stack frame (which they live on) is reused. */
-		zrt_atomic_claim(&claimed); /* no late hand-off may consume another waiter */
-		int fired = -1;
-		for (size_t i = 0; i < n; i++) {
-			if (ws[i].done) {
-				fired = (int)i;
-			}
-			zrt_mutex_lock(&cases[i].ch->lock);
-			if (cases[i].op == ZRT_SEL_RECV) {
-				wq_remove(&cases[i].ch->recvq_head, &cases[i].ch->recvq_tail, &ws[i]);
-			} else {
-				wq_remove(&cases[i].ch->sendq_head, &cases[i].ch->sendq_tail, &ws[i]);
-			}
-			zrt_mutex_unlock(&cases[i].ch->lock);
-		}
+		int fired = sel_unlink(cases, ws, n, &claimed);
 		if (fired >= 0) {
 			cases[fired].closed = 0; /* a hand-off delivered a real value (Left) */
 			zrt_mutex_unlock(&g_sel_lock);

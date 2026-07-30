@@ -221,6 +221,83 @@ fn main() {
 }
 EOF
 
+# A match lowers to a chain of ternaries whose LAST arm is the final `else`, untested. So a
+# match missing a case never failed — it answered the last arm's body for everything nothing
+# else matched: `C` came back "b" below, and `f(3)` came back "b" in the int case. A wrong
+# answer with no diagnostic is the outcome this repo does not tolerate, and the seed has
+# refused both since it had enums.
+expect "$ZERG" non-exhaustive-enum-match "missing variant K.C" <<'EOF'
+enum K {
+	A
+	B
+	C
+}
+
+fn name(k: K) -> str {
+	return match k {
+		A => "a"
+		B => "b"
+	}
+}
+
+fn main() {
+	print name(A)
+}
+EOF
+
+expect "$ZERG" non-exhaustive-int-match "missing a catch-all" <<'EOF'
+fn f(n: int) -> str {
+	return match n {
+		1 => "a"
+		2 => "b"
+	}
+}
+
+fn main() {
+	print f(3)
+}
+EOF
+
+# A guard makes an arm conditional, so it covers nothing: the compiler cannot prove the guard
+# holds (GRAMMAR:410), and `A` below is uncovered even though it is named.
+expect "$ZERG" guarded-arm-covers-nothing "missing variant K.A" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn f(k: K) -> str {
+	return match k {
+		A if true => "a"
+		B => "b"
+	}
+}
+
+fn main() {
+	print f(A)
+}
+EOF
+
+# An arm after an unguarded catch-all is dead, and worse: the lowering hands the LAST arm the
+# `else`, so the arm that can never match is the one that runs by default.
+expect "$ZERG" arm-after-the-catch-all "makes the following arms unreachable" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn f(k: K) -> str {
+	return match k {
+		_ => "rest"
+		A => "a"
+	}
+}
+
+fn main() {
+	print f(B)
+}
+EOF
+
 # An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
 # reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
 # back empty, both in silence.

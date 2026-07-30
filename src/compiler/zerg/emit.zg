@@ -932,11 +932,30 @@ fn c_fn_cname(recv: str, name: str) -> str {
 	return f"zg_{recv}_{name}"
 }
 
+# c_sig_seen is `c_name_in(em.sig_names, key)` without the copy. `c_name_in` takes its list
+# BY VALUE, and this question is asked once per function — 788 of them in a self-build — so
+# the copy alone was ~310k element copies per unit for a scan that needs none.
+fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
+	mut i := 0
+	for i < em.sig_names.len() {
+		return true if em.sig_names[i] == key
+		i = i + 1
+	}
+	return false
+}
+
 fn c_build_sigs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.fns.len() {
 		fn_i := f.fns[i]
 		key := c_sig_key(fn_i.recv, fn_i.name)
+
+		# Every module of a program flattens into ONE scope here, so two modules that define
+		# the same function name mangle to the same C symbol. That used to be reported by the
+		# LINKER — `duplicate symbol '_zg_name'`, with no file and no line — which is one
+		# reporter further away than cc. The collision is named here instead, where the two
+		# declarations are both in hand.
+		raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_sig_seen(em, key)
 		em.sig_names.append(key)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
@@ -1027,23 +1046,161 @@ fn c_is_ctor(name: str) -> bool {
 	return ascii.is_upper(b[0])
 }
 
-# c_scan_fnptr decides up front whether the program spells a function type anywhere in a
-# DECLARATION — a struct field, a parameter, a result. It has to run before anything is
-# emitted, because those declarations are written out before any body is: a struct typedef
-# naming `zg_fnptr` would otherwise reach the C compiler ahead of the typedef that defines
-# it. (A body that merely holds a function in a local sets the flag as it goes; by then the
-# header has not been assembled yet.)
-# c_check_named_types refuses a DECLARATION that names a type nothing declares. Every
-# other named type resolves to a C typedef this unit writes; one that resolves to nothing
-# was still spelled `zg_<Name>` and handed to cc, which rejected it against a line of
-# generated C under .zerg-cache — the same "loudly, but a long way from the source" the
-# error-constructor case above already names. `Ref[T]` is the one that matters today: the
-# self-hosted compiler has no Ref, so `std/atomic` reached cc as `zg_Ref` rather than being
-# turned away here.
+# c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
+# the structs, and the carriers over them. C needs the complete type of everything a
+# declaration holds BY VALUE ahead of it, and all three kinds hold each other — a struct
+# field may be an enum, an enum's payload may be a struct, and a carrier holds whichever it
+# wraps. Three fixed passes could only ever be right by luck, and were not: enums went first
+# on the assumption that "a struct is never held by an enum", which `enum E { Wrap(Later) }`
+# is not. Each sweep here emits whatever has all of its dependencies already out.
 #
-# It runs over DECLARATIONS only — struct fields, parameters, results — because those are
-# written out before any body is, so this is the earliest point where the whole program's
-# type names are known and nothing has been emitted yet.
+# A group that can never be emitted is a CYCLE — `struct A { b: B }` with `struct B { a: A }`
+# — a type of infinite size rather than an ordering problem, and it is named as such.
+fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
+	mut out := ""
+
+	# EVERY name this pass will emit, collected ONCE. It is what "does this dependency have
+	# to wait?" is asked against, and the answer cannot change while the sweep runs — so
+	# deriving it per dependency was waste, and expensive waste: the lists it came from were
+	# reached through a by-value `File`, which is the whole program's AST. That copy, taken
+	# twice per dependency per sweep, was a fifth of every compile.
+	mut all: list[str] = []
+	for ed in f.enums {
+		all.append(ed.name)
+	}
+	for sd in f.structs {
+		all.append(sd.name)
+	}
+	for c in carriers {
+		all.append(c_carrier_ty_cname(c))
+	}
+
+	mut done: list[str] = []
+	mut es := f.enums
+	mut ss := f.structs
+	mut cs := carriers
+
+	for es.len() > 0 or ss.len() > 0 or cs.len() > 0 {
+		# `done` is the only thing a sweep moves, so its length before and after IS whether
+		# progress was made — and a sweep that emits nothing never will
+		n0 := done.len()
+
+		mut es2: list[EnumDecl] = []
+		for ed in es {
+			if c_deps_done(c_enum_deps(ed), ed.name, done, all) {
+				out = out + c_enum_typedef(ed)
+				done.append(ed.name)
+			} else {
+				es2.append(ed)
+			}
+		}
+		es = es2
+
+		mut ss2: list[StructDecl] = []
+		for sd in ss {
+			if c_deps_done(c_struct_deps(sd), sd.name, done, all) {
+				out = out + c_struct_typedef(sd)
+				done.append(sd.name)
+			} else {
+				ss2.append(sd)
+			}
+		}
+		ss = ss2
+
+		mut cs2: list[Ty] = []
+		for c in cs {
+			cn := c_carrier_ty_cname(c)
+			if c_deps_done(c_carrier_deps(c), cn, done, all) {
+				out = out + c_carrier_decl(c)
+				em.res_names.append(cn)
+				em.used_rt = true
+				done.append(cn)
+			} else {
+				cs2.append(c)
+			}
+		}
+		cs = cs2
+
+		raise f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
+	}
+	return out
+}
+
+# c_deps_done reports whether every DECLARED type a declaration names by value is already
+# out. A name this program does not declare — a scalar, a runtime container — needs nothing
+# ahead of it, and a SELF reference is boxed rather than held.
+fn c_deps_done(deps: list[str], own: str, mut &done: list[str], mut &all: list[str]) -> bool {
+	for dep in deps {
+		if dep != own and c_name_in(all, dep) {
+			return false if not c_name_in(done, dep)
+		}
+	}
+	return true
+}
+
+fn c_struct_deps(sd: StructDecl) -> list[str] {
+	mut deps: list[str] = []
+	for fd in sd.fields {
+		c_ty_struct_deps(fd.ty, deps)
+	}
+	return deps
+}
+
+fn c_enum_deps(ed: EnumDecl) -> list[str] {
+	mut deps: list[str] = []
+	for v in ed.variants {
+		for t in v.fields {
+			c_ty_struct_deps(t, deps)
+		}
+	}
+	return deps
+}
+
+fn c_carrier_deps(c: Ty) -> list[str] {
+	mut deps: list[str] = []
+	if c_is_opt(c) {
+		c_ty_struct_deps(c_opt_elem(c), deps)
+	} else {
+		c_ty_struct_deps(c_either_left(c), deps)
+		c_ty_struct_deps(c_either_right(c), deps)
+	}
+	return deps
+}
+
+# c_ty_struct_deps collects the declared type names a type needs COMPLETE where it is used
+# by value. A carrier holds its payload by value, so `Y?` and `Result[Y]` need Y as surely
+# as a bare `Y` does — which is why the ordering could not be read off a field's own name.
+# A `list[Y]` needs nothing: the runtime container holds its elements behind a pointer.
+fn c_ty_struct_deps(t: Ty, mut &out: list[str]) {
+	match t {
+		TNamed(nm)    => out.append(nm)
+		TOpt(el)      => out.append(c_carrier_ty_cname(TOpt(el)))
+		TEither(l, r) => out.append(c_carrier_ty_cname(TEither(l, r)))
+		TTuple(ts)    => c_ty_struct_deps_list(ts, out)
+		_             => c_skip()
+	}
+}
+
+fn c_ty_struct_deps_list(ts: list[Ty], mut &out: list[str]) {
+	for t in ts {
+		c_ty_struct_deps(t, out)
+	}
+}
+
+# c_stuck_name names one member of the group that could not be emitted, for the diagnostic.
+fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
+	for ed in es {
+		return ed.name
+	}
+	for sd in ss {
+		return sd.name
+	}
+	for c in cs {
+		return c_carrier_ty_cname(c)
+	}
+	return "?"
+}
+
 # c_carrier_decl_types collects every CARRIER a declaration spells — a struct field, a
 # parameter, a result. Those carriers have to exist before the struct typedefs that name
 # them, and one registered while a body is emitted lands after them: a struct holding a
@@ -1103,40 +1260,17 @@ fn c_carrier_seen(c: Ty, mut &out: list[Ty]) {
 	out.append(c)
 }
 
-# c_carrier_typedefs_for emits the carriers whose LAST declared-struct payload is `owner` —
-# the empty name meaning "no payload is a declared type at all", which needs no struct ahead
-# of it. Each is registered, so the on-demand path does not write it twice.
-fn c_carrier_typedefs_for(mut &em: Emitter, want: str, cs: list[Ty], structs: list[StructDecl]) -> str {
-	mut out := ""
-	for c in cs {
-		if c_carrier_owner(c, structs) == want and not c_name_in(em.res_names, c_carrier_ty_cname(c)) {
-			em.res_names.append(c_carrier_ty_cname(c))
-			em.used_rt = true
-			out = out + c_carrier_decl(c)
-		}
-	}
-	return out
-}
-
-# c_carrier_owner is the declared struct among a carrier's payloads that is declared LAST,
-# or "" when none is one. A carrier's typedef names both of its payloads, so it can only be
-# written after the last of them — which is what decides where in the run of struct typedefs
-# it goes.
-fn c_carrier_owner(c: Ty, structs: list[StructDecl]) -> str {
-	mut owner := ""
-	for sd in structs {
-		if c_carrier_has_payload(c, sd.name) {
-			owner = sd.name
-		}
-	}
-	return owner
-}
-
-fn c_carrier_has_payload(c: Ty, name: str) -> bool {
-	return c_named_of(c_opt_elem(c)) == name if c_is_opt(c)
-	return c_named_of(c_either_left(c)) == name or c_named_of(c_either_right(c)) == name
-}
-
+# c_check_named_types refuses a DECLARATION that names a type nothing declares. Every
+# other named type resolves to a C typedef this unit writes; one that resolves to nothing
+# was still spelled `zg_<Name>` and handed to cc, which rejected it against a line of
+# generated C under .zerg-cache — the same "loudly, but a long way from the source" the
+# error-constructor case above already names. `Ref[T]` is the one that matters today: the
+# self-hosted compiler has no Ref, so `std/atomic` reached cc as `zg_Ref` rather than being
+# turned away here.
+#
+# It runs over DECLARATIONS only — struct fields, parameters, results — because those are
+# written out before any body is, so this is the earliest point where the whole program's
+# type names are known and nothing has been emitted yet.
 fn c_check_named_types(mut &em: Emitter, f: File) {
 	for s in f.structs {
 		for fd in s.fields {
@@ -1199,6 +1333,12 @@ fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
 	return false
 }
 
+# c_scan_fnptr decides up front whether the program spells a function type anywhere in a
+# DECLARATION — a struct field, a parameter, a result. It has to run before anything is
+# emitted, because those declarations are written out before any body is: a struct typedef
+# naming `zg_fnptr` would otherwise reach the C compiler ahead of the typedef that defines
+# it. (A body that merely holds a function in a local sets the flag as it goes; by then the
+# header has not been assembled yet.)
 fn c_scan_fnptr(mut &em: Emitter, f: File) {
 	for s in f.structs {
 		for fd in s.fields {
@@ -1883,7 +2023,15 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	}
 
 	# enum equality compares the tag (the subset only == tag-only enums like Kind)
-	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=")
+	eq := oper == "==" or oper == "!="
+	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and eq
+
+	# EVERY OTHER AGGREGATE. C has no `==` for a struct, a list, a map or a tuple, so the
+	# operator used to reach cc as `invalid operands to binary expression` against generated
+	# code — including on a `#[derive(Eq)]` struct, whose decorator this compiler reads and
+	# drops because it generates no impls. What is missing is named where it is missed.
+	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the `Eq` impl `#[derive(Eq)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
+
 	return f"({c_expr(em, a, sb)} {c_binop(oper)} {c_expr(em, b, sb)})"
 }
 
@@ -1902,6 +2050,13 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	raise f"`is {name}` wants an Err on its left, found a {ty_name(t)}" if not c_is_err_ty(t)
 
 	return f"(({c_expr(em, x, sb)}).kind == {kind})"
+}
+
+# c_is_aggregate reports the types C cannot compare with `==`: a declared struct, and the
+# runtime containers. An enum is not one — its tag is compared above — and neither is a
+# carrier, whose `==` is refused by the null-safety rules before it reaches here.
+fn c_is_aggregate(mut &em: Emitter, t: Ty) -> bool {
+	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t)
 }
 
 # c_is_enum_ty reports whether a type is a declared enum (a TNamed matching an enum).
@@ -1997,6 +2152,30 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)zrt_list_at(&zg_ix, " + ix + ")); })"
 }
 
+# c_is_place is c_is_lvalue WITH TYPES: an expression that names storage a caller can take
+# the address of. `m[k]` is the one that needs them — it looks like an index and lowers to a
+# statement expression, so it is a value however much it reads as a place. c_is_lvalue is
+# type-blind and cannot tell the two indexes apart.
+fn c_is_place(mut &em: Emitter, e: Expr) -> bool {
+	return false if not c_is_lvalue(e)
+	return false if c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
+
+	return true
+}
+
+# c_place_why names what an expression is, for the diagnostic above.
+fn c_place_why(mut &em: Emitter, e: Expr) -> str {
+	return "a map index" if c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
+	return "a slice" if c_is_index(e)
+
+	return "a call result"
+}
+
+# c_meth_mutates reports the list methods that write through their receiver.
+fn c_meth_mutates(meth: str) -> bool {
+	return meth == "append"
+}
+
 fn c_is_lvalue(e: Expr) -> bool {
 	return match e {
 		EIdent(_) => true
@@ -2065,9 +2244,18 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
 
-	# every list method takes the list's ADDRESS, and a slice or a call result has none —
-	# it is materialised into a temp first so `xs[a..b].len()` is addressable
-	return c_list_method_rv(em, target, meth, args, tty, sb) if not c_is_lvalue(target)
+	# every list method takes the list's ADDRESS, and a slice, a call result or a map index
+	# has none — it is materialised into a temp first so `xs[a..b].len()` is addressable.
+	#
+	# A method that MUTATES cannot be served that way: the temp is a copy, so the edit
+	# lands on it and is lost. `m["a"].append(3)` did exactly that — it compiled, and the
+	# append silently did nothing. A read-only method on a copy is the same answer as on
+	# the original; a mutating one is not, and is refused rather than dropped.
+	if not c_is_place(em, target) {
+		raise f"NotImplemented: `{meth}` MUTATES its list, and `{c_place_why(em, target)}` is a value rather than a place — bind it to a name first" if c_meth_mutates(meth)
+
+		return c_list_method_rv(em, target, meth, args, tty, sb)
+	}
 	return c_list_method_on(em, c_expr(em, target, sb), meth, args, tty, sb)
 }
 
@@ -2216,12 +2404,25 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		raise f"no type named `{name}` to construct" if not c_is_struct_name(em, name)
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
+
+	# NOTHING DECLARES THIS FUNCTION. It used to be spelled `zg_<name>(…)` and handed to
+	# cc, which reported a call to an undeclared function against a file under .zerg-cache
+	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
+	# is exactly the answer this should be giving by name.
+	raise f"undefined function `{name}`" if not c_is_free_fn(em, name)
+
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"
 }
 
 # c_struct_args emits a struct constructor's arguments, giving each field's type as
 # context so an empty-list argument is initialised correctly.
 fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> str {
+	# MORE arguments than the struct has fields reached cc as an "excess elements in struct
+	# initializer" WARNING, so it compiled and the extra values were dropped. Too few has
+	# been named since c_struct_rest existed; this is the same question from the other side.
+	n := c_struct_field_n(em, sname)
+	raise f"`{sname}` has {strconv.to_string(n, 10)} fields and this gives {strconv.to_string(args.len(), 10)}" if args.len() > n
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
@@ -2410,6 +2611,15 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		em.used_fnptr = true
 		return f"((zg_fnptr)zg_{n})"
 	}
+
+	# NOTHING IN SCOPE ANSWERS TO THIS NAME. It used to be spelled `zg_<n>` and handed to
+	# cc, which reported "use of undeclared identifier" against a file under .zerg-cache —
+	# for the commonest mistake anyone makes, a typo. The seed has said `undefined name`
+	# all along.
+	#
+	# A module constant, a struct name and a variant are all bound by the time a body is
+	# emitted, so the check is one question: did anything bind it?
+	raise f"undefined name `{n}`" if not c_is_bound(em, n) and not c_is_struct_name(em, n)
 
 	# every read of a binding funnels through here, which is what makes this the one place
 	# a use after `del` has to be caught
@@ -2995,21 +3205,24 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 	return f"{ind}{lv} = {c_copied(em, lt, rhs, c_nosub())};\n"
 }
 
-# c_pushes emits a zrt_list_push per element of a list literal.
-# c_elem_exprs renders a list literal's elements in the CURRENT scope, before a binding
-# that would shadow one of the names they mention enters it.
-fn c_elem_exprs(mut &em: Emitter, lit: Expr) -> list[str] {
+# c_elem_exprs renders a list literal's elements AT the element type the declaration gives,
+# and in the CURRENT scope — before a binding that would shadow one of the names they
+# mention enters it.
+# Rendering them at their own types put a bare int into a slot whose C type is an optional's
+# carrier — `xs: list[int?] = [nil, 1]` — so the tag it was read back through was whatever
+# the value's first bytes happened to be, when it compiled at all.
+fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 	mut out: list[str] = []
 	match lit {
-		EListLit(elems) => c_elem_exprs_into(em, elems, out)
+		EListLit(elems) => c_elem_exprs_into(em, elems, elem, out)
 		_ => c_skip()
 	}
 	return out
 }
 
-fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], mut &out: list[str]) {
+fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], elem: Ty, mut &out: list[str]) {
 	for e in elems {
-		out.append(c_expr(em, e, c_nosub()))
+		out.append(c_fit_copied(em, elem, e, c_nosub()))
 	}
 }
 
@@ -3026,6 +3239,7 @@ fn c_pushes_strs(target: str, et: str, vals: list[str], ind: str) -> str {
 	return out
 }
 
+# c_pushes emits a zrt_list_push per element of a list literal.
 fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
 	return match lit {
 		EListLit(elems) => c_pushes_of(em, target, et, elems, ind)
@@ -3915,20 +4129,40 @@ fn c_map_lit_ty(mut &em: Emitter, ks: list[Expr], vs: list[Expr]) -> Ty {
 	return TMap(c_infer(em, ks[0]), c_infer(em, vs[0]))
 }
 
-# c_map_lit builds the map in a statement expression: init, then one set per entry, in
-# the order they were written.
-fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str {
-	em.used_rt = true
+fn c_is_maplit(e: Expr) -> bool {
+	return match e {
+		EMapLit(_, _) => true
+		_             => false
+	}
+}
 
+# c_map_lit_as builds a map literal AT a declared type, so an empty one is still the map
+# the declaration says it is.
+fn c_map_lit_as(mut &em: Emitter, want: Ty, lit: Expr, sb: Subst) -> str {
+	return match lit {
+		EMapLit(ks, vs) => c_map_lit_at(em, c_map_key_ty(want), c_map_val_ty(want), ks, vs, sb)
+		_ => ""
+	}
+}
+
+fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str {
 	kt := c_map_key_ty(c_map_lit_ty(em, ks, vs))
 	vt := c_map_val_ty(c_map_lit_ty(em, ks, vs))
+	return c_map_lit_at(em, kt, vt, ks, vs, sb)
+}
+
+# c_map_lit builds the map in a statement expression: init, then one set per entry, in
+# the order they were written.
+fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr], sb: Subst) -> str {
+	em.used_rt = true
+
 	vtn := c_map_vt(em, kt, vt)
 	kc := c_type(kt)
 	vc := c_type(vt)
 	mut out := f"({{ zrt_map zg_mm; zrt_map_init(&zg_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
 	mut i := 0
 	for i < ks.len() {
-		out = out + f" {{ {kc} zg_mk = {c_expr(em, ks[i], sb)}; {vc} zg_mv = {c_expr(em, vs[i], sb)}; zrt_map_set(&zg_mm, &zg_mk, &zg_mv); }}"
+		out = out + f" {{ {kc} zg_mk = {c_expr(em, ks[i], sb)}; {vc} zg_mv = {c_fit_copied(em, vt, vs[i], sb)}; zrt_map_set(&zg_mm, &zg_mk, &zg_mv); }}"
 		i = i + 1
 	}
 	return out + " zg_mm; })"
@@ -3974,7 +4208,7 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 	vc := c_type(c_map_val_ty(tty))
 	tgt := c_expr(em, target, c_nosub())
 	k := c_expr(em, idx, c_nosub())
-	v := c_expr(em, rhs, c_nosub())
+	v := c_fit_copied(em, c_map_val_ty(tty), rhs, c_nosub())
 	return f"{ind}{{ {kc} zg_mk = {k}; {vc} zg_mv = {v}; zrt_map_set(&({tgt}), &zg_mk, &zg_mv); }}\n"
 }
 
@@ -4134,7 +4368,15 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	return f"{tgt}.f{fld}" if c_all_digits(fld)
 
 	# an Err's fields are the runtime's own, so they carry no `zg_` mangling
-	return f"{tgt}.{fld}" if c_is_err_ty(c_infer(em, target))
+	tt := c_infer(em, target)
+	return f"{tgt}.{fld}" if c_is_err_ty(tt)
+
+	# A FIELD THE TYPE DOES NOT HAVE was spelled `zg_<fld>` and handed to cc, which reported
+	# "no member named 'zg_z' in 'zg_P'" against generated code — the same class as an
+	# undefined name, and answerable from the same tables. A target whose type inference
+	# could not name is left alone: guessing there would refuse a working program.
+	nm := c_named_of(tt)
+	raise f"no field `{fld}` on {nm}" if nm != "" and c_is_struct_name(em, nm) and c_is_unknown(c_field_ty(em, nm, fld))
 	return f"{tgt}.zg_{fld}"
 }
 
@@ -4272,6 +4514,11 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	ct := c_infer(em, iter)
 	return c_forchan(em, var, iter, ct, body, ind) if ty_is_chan(ct)
 
+	# A MAP binds the KEY, walked in insertion order (docs/code/collections.md) — the value
+	# is reached with `m[k]`. It used to fall through to the list path below, which handed
+	# cc a `zrt_map` where a `zrt_list` was declared.
+	return c_formap(em, var, iter, ct, body, ind) if c_is_map(ct)
+
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
@@ -4289,6 +4536,26 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	return out + ind + "}\n"
 }
 
+# c_formap is the list loop over a map's KEYS, on the runtime's insertion-ordered accessor.
+# The map is materialised into a local for the same reason the list is: a call result has no
+# address, and two sequential loops must not clash on the temp name.
+fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], ind: str) -> str {
+	kt := c_map_key_ty(ct)
+	kc := c_type(kt)
+	it := c_expr(em, iter, c_nosub())
+	c_add_var(em, var, kt)
+
+	cv := c_var_cname(em, var)
+
+	in2 := ind + "    "
+	mut out := ind + "{\n" + in2 + "zrt_map zg_mit = " + it + ";\n"
+	out = out + in2 + "for (size_t zg_i = 0; zg_i < zrt_map_len(&zg_mit); zg_i++) {\n"
+	out = out + in2 + "    " + kc + " " + cv + " = (*(" + kc + "*)zrt_map_key_at(&zg_mit, zg_i));\n"
+	out = out + c_loop_block(em, body, in2 + "    ")
+	out = out + in2 + "}\n"
+	return out + ind + "}\n"
+}
+
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
 	mut eff := ty
 	if has_type {
@@ -4297,6 +4564,15 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 		}
 	} else {
 		eff = c_infer(em, ival)
+	}
+
+	# A MAP LITERAL takes its shape from the declaration. `c_map_lit_ty` reads the entries,
+	# so an EMPTY `{:}` sized its value slot as int64_t: `mut m: map[str, P] = {:}` then
+	# `m["a"] = P(3,4)` silently read back a TRUNCATED value, and a carrier value was a cc
+	# error instead. The declared type is what the map is built with when one is written.
+	if has_type and c_is_map(eff) and c_is_maplit(ival) {
+		c_add_var(em, name, eff)
+		return f"{ind}zrt_map {c_var_cname(em, name)} = {c_map_lit_as(em, eff, ival, c_nosub())};\n"
 	}
 
 	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
@@ -4408,7 +4684,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 	# as in c_let: the initializer names what was in scope BEFORE this binding
 	if c_is_listlit(ival) {
 		et := c_type(c_list_elem(eff))
-		vals := c_elem_exprs(em, ival)
+		vals := c_elem_exprs(em, ival, c_list_elem(eff))
 		c_add_var(em, name, eff)
 		cname := c_var_cname(em, name)
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &zg_listvt);\n"
@@ -4843,9 +5119,43 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 		}
 	}
 	sig = sig + ") {\n"
-	out := sig + c_block(em, fn_d.body, "    ") + "}\n\n"
+
+	# A BLOCK'S VALUE IS ITS LAST STATEMENT'S (docs/surface/grammar.md:396), and a function
+	# body is a block. Written without a `return`, the value used to be computed and thrown
+	# away: `fn(a: int) -> int { a + 5 }` emitted `(zg_a + 5);` and then fell off the end of
+	# a non-void C function, so the call answered whatever was in the return register.
+	#
+	# Only a trailing EXPRESSION statement is a value. A body ending in anything else while
+	# declaring a result is a missing return, and is refused below rather than given one.
+	mut body := fn_d.body
+	if fn_d.has_ret {
+		last := body.len() - 1
+		if body.len() == 0 or not c_stmt_diverges(body[last]) {
+			raise f"`{fn_d.name}` is declared to answer {ty_name(fn_d.ret)}, and its body falls off the end — a block's value is its last statement's, so end it with a `return` or with the expression it answers" if body.len() == 0 or not c_is_expr_stmt(body[last])
+
+			body[last] = SReturn(true, c_expr_stmt_of(body[last]))
+		}
+	}
+	out := sig + c_block(em, body, "    ") + "}\n\n"
 	em.fn_ret = saved_ret
 	return out
+}
+
+# c_body_diverges reports whether a body's last statement leaves the function — a `return`
+# (unconditional), a `raise`, or an `if` whose branches all do. It is what decides whether a
+# declared result still needs one.
+fn c_body_diverges(body: list[Stmt]) -> bool {
+	return false if body.len() == 0
+	return c_stmt_diverges(body[body.len() - 1])
+}
+
+fn c_stmt_diverges(s: Stmt) -> bool {
+	return match s {
+		SReturn(_, _) => true
+		SRaise(_, _, _) => true
+		SIf(_, t, has_else, e) => has_else and c_body_diverges(t) and c_body_diverges(e)
+		_ => false
+	}
 }
 
 # The entry point is the FREE function `main`; a method named `main` is an ordinary method
@@ -4991,14 +5301,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	c_check_named_types(em, f)
 	c_scan_fnptr(em, f)
 
-	# enums first: a struct may hold an enum by value (a struct is never held by an enum
-	# except through an opaque zrt_list), so enum typedefs must precede struct typedefs.
 	mut types := ""
-	mut i := 0
-	for i < f.enums.len() {
-		types = types + c_enum_typedef(f.enums[i])
-		i = i + 1
-	}
 
 	# the carriers a DECLARATION names, ahead of what names them: a payload that is not a
 	# declared type needs nothing before it, and one that is a struct follows that struct.
@@ -5010,14 +5313,8 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if carriers.len() > 0 {
 		types = types + c_carrier_prelude()
 	}
-	types = types + c_carrier_typedefs_for(em, "", carriers, f.structs)
-	i = 0
-	for i < f.structs.len() {
-		types = types + c_struct_typedef(f.structs[i])
-		types = types + c_carrier_typedefs_for(em, f.structs[i].name, carriers, f.structs)
-		i = i + 1
-	}
-	i = 0
+	types = types + c_type_decls(em, f, carriers)
+	mut i := 0
 	for i < f.enums.len() {
 		types = types + c_refbox_helpers(f.enums[i])
 		i = i + 1

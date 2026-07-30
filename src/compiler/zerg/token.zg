@@ -377,7 +377,14 @@ pub fn no_bound_follows(k: Kind) -> bool {
 		Semi     => true
 		Comment  => true
 		Eof      => true
-		_        => false
+
+		# a closer: `xs[1..]` and `f(a..)` end the range where the bracket does. It used to
+		# be absent because the fallback in parse_primary answered nil for the `]` it then
+		# read as the bound — the open-ended slice arrived shaped correctly by accident, and
+		# stopped doing so the moment that fallback became a diagnostic.
+		RBrack => true
+		RParen => true
+		_      => false
 	}
 }
 

@@ -54,13 +54,15 @@ func TestResultCarrierLowering(t *testing.T) {
 			},
 		},
 		{
-			name: "fallthrough-return-is-zeroed-carrier",
-			// a Result[int] fn whose body only raises still needs a type-correct
-			// trailing return: a zeroed carrier struct, never the scalar `0`.
+			name: "a-body-that-only-raises-gets-no-trailing-return",
+			// `raise` DIVERGES, so the trailing return is unreachable. It used to be
+			// emitted anyway — as a zeroed carrier here, and as the scalar `0` for a
+			// nominal result, which is a C type error. Nothing follows the raise now.
 			src: "fn boom() -> Result[int] { raise \"bad\" }\n" +
 				"fn main() {\n  g := guard { boom()! }\n  print g ?? -1\n}",
 			wantResult:  true,
-			wantContain: []string{"return (zg_result_0){0};"},
+			wantContain: []string{"zrt_raise_err("},
+			wantAbsent:  []string{"return (zg_result_0){0};"},
 		},
 		{
 			name: "raise-carries-err",

@@ -361,6 +361,20 @@ fn main() {
 }
 EOF
 
+# A carrier is not a value to convert: `int(k)` over a `K?` cast the carrier STRUCT, which
+# cc rejected against generated code. The unwrap belongs to the programmer.
+expect "$ZERG" conversion-of-a-carrier "may not have one" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn main() {
+	k := K.of(1)
+	print int(k)
+}
+EOF
+
 # An enum's ONE conversion is `int`, its discriminant. Every other one fell through to a
 # plain C cast of the tagged-union STRUCT.
 expect "$ZERG" non-int-conversion-of-an-enum "converts to \`int\`" <<'EOF'

@@ -274,7 +274,9 @@ func (e *emitter) raiseStmt(n *ast.RaiseStmt) {
 	if isErrType(e.cur.ExprType(e.info, n.Value)) {
 		err := e.expr(n.Value)
 		if n.From != nil {
-			err = fmt.Sprintf("zrt_err_with_cause((%s).msg, %s)", e.expr(n.Value), e.raiseCause(n.From))
+			// chain onto the Err VALUE, so it keeps its kind: `raise IOError("x") from c`
+			// is still an IOError on the far side of a guard.
+			err = fmt.Sprintf("zrt_err_chain(%s, %s)", e.expr(n.Value), e.raiseCause(n.From))
 		}
 		e.line(fmt.Sprintf("zrt_raise_err(%s);", err))
 		return

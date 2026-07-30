@@ -411,7 +411,7 @@ func (e *emitter) rightLiteral(ret sema.Type, errExpr string, op *carrier) strin
 	}
 	c, ok := e.carrierFor(ret)
 	if !ok {
-		return "0"
+		return e.systemError(nil, "no carrier for the result type %s", ret)
 	}
 	if c.kind == carrierResult {
 		return fmt.Sprintf("(%s){ .tag = 1, .err = %s }", c.name, errVal)

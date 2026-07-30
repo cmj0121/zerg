@@ -27,8 +27,8 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | `a ?? b` / `a?.m` / `e!`              | default;optional chain 成 `nil`;force-unwrap 否則 raise          |
 | `del ch`                              | 撤銷名字**並**放掉這個持有者（要結束 stream 請用 `close(ch)`）   |
 
-**狀態。** 上表每一列皆為 **[implemented]**，唯 f-string 內插有兩處例外。自述的 `f"{x=}"` 為 **[not yet]**——已被
-解析，但在程式碼生成時被拒絕。`!r`（debug）與 `!a`（ascii）轉換是 **[deviation]**：兩者目前皆**別名到 `display`**
+**狀態。** 上表每一列皆可用，唯 f-string 的洞裡只有純 `{x}` 形式可用。**轉換**（`!r` / `!s` / `!a`）、
+**format spec**（`{x:.2f}`）與自述的 `f"{x=}"` 各自皆為 **[not yet]**,會被指名拒絕。`!r`（debug）與 `!a`（ascii）轉換是 **[deviation]**：兩者目前皆**別名到 `display`**
 （即渲染得與 `!s` 相同），待獨立的 `debug`／ASCII 渲染。純 `{x}` 洞、format spec `{x:spec}` 與 `!s` 已對純量與
 `str` 實作；**複合值**洞（`struct`、`list`、`map`）仍被拒絕，故結構化渲染為 **[not yet]**——見
 [格式化與文字](../runtime/format.zh-TW.md)。內插命令字面量 `` f`…` ``（屬文法、未列於此）同樣為 **[not yet]**。上表其餘各

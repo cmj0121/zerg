@@ -10,7 +10,6 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 
 | 標記                         | 意義                                           |
 | ---------------------------- | ---------------------------------------------- |
-| **[implemented]**            | bootstrap 編譯器一如規格實作。                 |
 | **[not yet: Phase N]**       | 已規範、尚未建置；使用它是一個乾淨的編譯錯誤。 |
 | **[implementation-defined]** | 規格不釘定；conforming 實作自行選擇。          |
 | **[deviation]**              | bootstrap 當前行為與規格不符（一個 bug）。     |
@@ -82,7 +81,7 @@ Phase-1 bootstrap 實作其子集，所以每個特性都帶一個**狀態標記
 Zerg 如何抽象行為。**`spec`** 是唯一機制——一個 nominal 介面,同時扮演泛型 **bound**、型別所宣告的 **conformance**,以及
 **型別本身**（heap-boxed、動態 dispatch 的 existential）。涵蓋內建 spec（`Eq`、`Ord`、`Hash`、`Error`、運算子——
 **沒有 auto-implement 的 `Object` spec**、也沒有隱式 `==`：相等與排序是經 `derive(Eq)` / `derive(Ord)` 或手寫 impl
-**opt-in**）、迭代協定,以及 `is` 型別測試（對 existential 的 `x is T` 為 **[implemented]**；對任意值的一般 `x is T`
+**opt-in**）、迭代協定,以及 `is` 型別測試（對錯誤種類的 `x is T` 可用；對任意值的一般 `x is T`
 為 **[not yet]**）。見 **[Spec 與 Generics](core/specs.zh-TW.md)**。
 
 ## Decorator 與 compiler 代寫的行為

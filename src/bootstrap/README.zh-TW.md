@@ -78,26 +78,29 @@ cc 對著產生的 C。
 
 ## 第二層——種子指名拒絕什麼
 
-以下沒有一項出現在自舉鏈裡；每一項都是**驗證過不存在**，不是假設。`狀態`欄說明種子今天是否已
-經拒絕它——那一欄就是工作清單，而一列離開這張表的方式只有「被拒絕」，絕不是「被安靜丟掉」。
+**這張表就是「語言規格為什麼不提種子」的理由。** 種子拒絕的形式不是 Zerg 的缺口——出貨的 `zerg`
+降階得了它——所以 `docs/` 對這裡的任何一項都不標註,寫 Zerg 的讀者也永遠碰不到。它們是種子自己的
+契約,而這裡就是記載它們的地方。
 
-| 形式                                                                  | 狀態   |
-| --------------------------------------------------------------------- | ------ |
-| `map[K, V]` 與 map 字面值                                             | 已拒絕 |
-| closure／一等 `fn` 值                                                 | 已拒絕 |
-| `#[dyn]` dispatch                                                     | 已拒絕 |
-| `spec` / `impl Spec for T`                                            | 待拒絕 |
-| 泛型**函式**定義 `fn f[T]`                                            | 待拒絕 |
-| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 已拒絕 |
-| optional `T?`、`??`、`?.`、`!`                                        | 待拒絕 |
-| `with`、`defer`、`del`                                                | 待拒絕 |
-| tuple `(a, b)` 與 `t.0`                                               | 待拒絕 |
-| range `a..b` 當值或當 `for` 的可迭代對象                              | 待拒絕 |
-| slicing `xs[a..b]`                                                    | 待拒絕 |
-| decorator，含 `#[derive]`                                             | 待拒絕 |
-| 模組層級 `const`、`init()`                                            | 待拒絕 |
-| `unsafe`、`asm`、`ptr[T]`                                             | 已拒絕 |
-| command literal                                                       | 已拒絕 |
+以下沒有一項出現在自舉鏈裡；每一項都是**驗證過不存在**，不是假設。以 `zerg0` 於 2026-07-31 量測。
+
+| 形式                                                                  | 那是什麼           |
+| --------------------------------------------------------------------- | ------------------ |
+| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 整章並行           |
+| `map[K, V]`——字面值，以及複製一個                                     | 那個容器           |
+| 當成值用的 **closure literal**                                        | 具名的 `fn` 值可用 |
+| slicing `xs.slice(a, b)` / `xs[a..b]`                                 | 子範圍             |
+| 模組層級 `const`                                                      | 函式外的 binding   |
+| `#[dyn]` dispatch                                                     | 那個 decorator     |
+| `unsafe`、`asm`、`ptr[T]`                                             | 通往裸機的那道門   |
+| command literal `` `git status` ``                                    | 行程代換字面值     |
+| `for k in m` 走訪一張 map                                             | 那個迭代           |
+
+其餘語言有的，種子都有：`defer`、`del`、`with`、tuple 與 `t.0`、range 當值與當可迭代對象、optional
+與整組 group-8 運算子、`init()`、`spec` / `impl`（含 provided method）、泛型函式定義、
+`#[derive(Eq, Ord)]`、`Ref[T]`、struct 與 tuple pattern、block 當 `match` arm body，以及
+`for c in s` 走訪一個 str 的 code point。在其中幾項上種子是兩個編譯器中**較寬**的那個——那是關於
+種子的事實，不是關於語言的。
 
 **前端還剖析得動**不等於支援：拒絕可能落在 sema，也可能落在 emitter 門口。收窄 parser 是另一趟
 獨立的工作，而且不急——真正重要的是第一層以外的東西不會抵達 C。

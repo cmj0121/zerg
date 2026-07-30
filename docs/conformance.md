@@ -24,59 +24,35 @@ rejects every ill-formed program per the stated rules, and reproduces the specif
 implementation-defined. A conforming implementation need not emit C, nor match the reference compiler's
 generated code, mangling, or memory layout.
 
-## The language versus this bootstrap
+## The language versus this compiler
 
-Zerg is specified as a whole; the Phase-1 bootstrap implements a subset. Rather than describe only what
-ships, each chapter specifies the intended feature and tags its current status, so the specification is a
-stable target and the gaps are explicit. Every feature carries one of:
+Zerg is specified as a whole; the compiler that ships implements a subset. Rather than
+document only what ships, each chapter specifies the intended feature and marks what is
+missing, so the specification is a stable target and the gaps are explicit.
+
+**The default is that a feature works.** Prose with no marker describes something `zerg`
+implements as specified — that is the ordinary case, and it is not annotated. Only these
+carry a marker:
 
 | Marker                       | Meaning                                                                          |
 | ---------------------------- | -------------------------------------------------------------------------------- |
-| **[implemented]**            | The SEED (`zerg0`) implements this as specified.                                 |
-| **[not yet: Phase N]**       | Specified, not yet built. Using it is a clean compile error today.               |
+| **[not yet]**                | Specified, not built. Using it raises `NotImplemented` — a clean compile error.  |
 | **[implementation-defined]** | The spec deliberately does not pin this; a conforming implementation may choose. |
-| **[deviation]**              | An implementation's behavior does **not** match this spec; a tracked bug.        |
+| **[deviation]**              | The behaviour does **not** match this spec; a tracked bug.                       |
 
-**Which compiler a marker refers to.** There are two: `zerg0`, the Go-hosted seed whose
-only job is building the compiler, and `zerg`, the self-hosted compiler that ships. The
-markers in this specification are measured against the **seed**, and its subset is the
-one documented per-feature here; the shipped `zerg`'s own subset is described in
-[`src/compiler/README.md`](../src/compiler/README.md). A feature marked
-**[implemented]** may therefore be one `zerg` does not accept yet.
+The distinction that matters is between the second marker and the third. A **[not yet]**
+is honest: the compiler says the form's name and stops. A **[deviation]** is a program
+that compiles and behaves differently from what is written here — and the project's
+standing rule is that a form is implemented or refused by name, never silently wrong, so a
+deviation is a bug with a fix owed, not a documented state.
 
-The seed is **no longer uniformly the wider of the two**. It is wider on most of the
-language — closures and function values, `map[K, V]`, `impl` methods, `Ref[T]`, a block as
-a `match` arm body — and **mostly narrower on concurrency**, where `zerg` lowers directional
-channel ends, method and namespaced `spawn` callees and the stdlib timers that the seed
-refuses; the receive operator `?` runs the other way, built in the seed and refused by
-`zerg`. The
-`is` type test is now **the same in both**: an error kind against an `Err`, and a named
-refusal for anything else. Where the difference matters
-to a program, the chapter says which compiler it is talking about, and a **[deviation]**
-names its subject when that subject is not the seed.
-
-Some features were specified, built in the seed, and then REMOVED from it when the seed
-was cut down to its one job — closures and function values, `map[K, V]`, `#[dyn]`
-dispatch, and `unsafe` pointers and inline assembly. Those are marked **[not yet]** again:
-the seed rejects them with a diagnostic, which is exactly what that marker promises.
-
-**Concurrency belongs to `zerg` alone.** The seed lowers none of it — `spawn`, `chan[T]`,
-`select`, a send, a receive, `close` and `for v in ch` are each refused by name, with a
-nonzero exit and no C. That is not a gap being tracked: it is the seed's contract (see
-[`src/bootstrap/README.md`](../src/bootstrap/README.md)), which says the seed supports the
-slice of the language the self-hosting compiler's own sources are written in, and refuses
-the rest. The self-host chain contains no concurrency at all.
-
-The reason is worth stating, because it is the argument for the whole contract. A compiler
-that lowers a chapter it is not the authority on is a SECOND implementation that can
-DISAGREE — and every gap this specification has had to close on the concurrency chapter was
-one of those disagreements. A refusal cannot disagree. See [Coroutines](code/coroutine.md)
-for what the shipped compiler does, which is all of it.
-
-One item belongs to **neither** compiler: a **`main(args)`** in a concurrent program, whose
-scheduler entry shims take a nullary function pointer. And the receive operator **`?`** is
-where the seed is still the **wider** of the two — it threads `Result[T]`, and `zerg`
-refuses that half by name.
+**Which compiler.** The markers are measured against **`zerg`**, the self-hosting compiler
+that ships and the one a `make` build puts in `bin/`. The other, `zerg0`, is a Go-hosted
+seed whose only job is building `zerg`; it supports a narrower slice — the part the
+compiler's own sources are written in — and refuses the rest by name. **The seed's gaps are
+not marked here.** They are not gaps in the language, and a reader writing Zerg never meets
+them; they are listed in [`src/bootstrap/README.md`](../src/bootstrap/README.md), which is
+the seed's own contract.
 
 A section with no marker inherits the marker of its enclosing feature; a paragraph may override with its
 own. A **[deviation]** always states both the specified behavior and what the implementation does instead.

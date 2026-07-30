@@ -16,21 +16,21 @@
 **存在**時跑區塊——一個持有值的 optional、一個收到值的 `<-ch`(一個 `Left`)——並把**解包後的值**綁成 `x`、**僅在
 then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是「值存在」測試的單臂 `match` 語法糖(`if v := <-ch
 { use(v) }` 只在 `Left` 時觸發),並在 **`if` 能出現的任何位置**都可用——作為 statement、作為運算式(帶尾隨 `else`)、
-以及作為被回傳的 if 運算式(`return if x := opt { use(x) } else { fallback }`)。if-let 綁定形式是
-**[implemented]**,包含 non-POD 的 `str?`——解包後的 `str` 僅綁在 then 區塊內。
+以及作為被回傳的 if 運算式(`return if x := opt { use(x) } else { fallback }`)。它也載得住 non-POD 的
+`str?`——解包後的 `str` 僅綁在 then 區塊內。
 
 **`for`**——唯一的迴圈關鍵字、三種形式：**`for { … }`** 無窮（用 `break` / `return` 離開）、
 **`for x in it { … }`** 走訪 `it: Iterable`，每一輪以 **copy** 綁定 `x`（**`for mut x`** 就地綁定，僅當 `it` 為
 `mut`；迭代協定——`StopIteration` 乾淨結束、其他 error re-raise——見 [迭代](../core/specs.zh-TW.md)）、以及 **`for cond { … }`**
 即 **while** 形式——當 `cond`（一個 `bool`）成立時反覆執行。**沒有 `while` 關鍵字**（裸 `for cond` 就是 while 迴圈）、
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
-**`map`**（綁每個 **key**）或一個 **`str`**（綁每個 **`rune`**）都是 **[implemented]**；**`for mut x` 走訪 non-POD
-元素**——一個 `list[str]`、或遞迴／裝箱型別的元素——是 **[not yet]**。把 **range 當成值**、以及用 **`v in range`**
-測試成員關係（`x in 0..n` → `bool`）都是 **[implemented]**。
+**`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**,那需要 UTF-8 解碼——**[not yet]**;
+要走 byte 就用 `list[byte](s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
+**`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用;把 **range 當成值**用在別處則是 **[not yet]**。
 
 **`break` / `continue`** 作用於**最內層的 `for`**；**沒有 label**（要跳出外層就把內層抽成函式再 `return`）。語法糖
-**`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`，兩者皆
-**[implemented]**：
+**`break if cond`** / **`continue if cond`** 完全等於 `if cond { break }` / `if cond { continue }`。同一個
+後綴 `if` 也載得住 `return` 與 `raise`：
 
 ```text
 for {
@@ -63,7 +63,7 @@ statement。覆蓋是**必需**的——漏掉某個 case 的 `match` 是**編�
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；
 或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、以及一個 **range** arm（`1..=2 =>`，以
-containment 比對）都是 **[implemented]**。一個 **or-pattern**（`A | B =>`，以及各分支綁同名同型的綁定形式
+containment 比對）都會觸發。一個 **or-pattern**（`A | B =>`，以及各分支綁同名同型的綁定形式
 `A(x) | B(x) =>`）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR` 兩者皆導得出，list pattern 連型別
 檢查都過。
 
@@ -87,9 +87,9 @@ msg := match ev {
 值，如此而已；它對 existential 唯一允許的，是布林的 **`is`** 測試（見 [Spec 與 Generics](../core/specs.zh-TW.md)），用作**條件**、絕不作為交回
 具體值的綁定。一個 **product pattern** 能**依欄位**解構一個 `struct`（`Div{q, r}`）、或**依位置**解構一個 tuple（`(a, b)`），每一
 部分以 copy 綁定；它在 `match` arm 與普通的 `:=` 綁定（`(q, r) := divmod(x, y)`，也就是多重回傳被消費的方式）都可用；
-product pattern 是 **[implemented]**。**guard 條件**是 **[implemented]**：一個 arm 可在 pattern 之後帶一個
+product pattern 是 **[not yet]**:用 `.0` / `.1` 與欄位存取來解構。**guard 條件**可用:一個 arm 可在 pattern 之後帶一個
 **`if expr`**（`Left(v) if v > 0`），它也必須成立該 arm 才觸發；guard 看得到 pattern 的**綁定**，而在 `A | B if c`
 上（待 or-pattern 落地——見上）涵蓋**整個 or-pattern**。帶 guard 的 arm **不**計入 exhaustiveness，所以帶 guard 的
 case 仍需要一個無 guard 的 arm 或 `_`。一個 **range arm**（`200..300 =>`、`400..=499 =>`、`500.. =>`）是 match 專屬的
 語法糖，等同 `_ if _ in <range>`——它以**range 包含關係**比對（不是值相等）、**不綁定**任何值、同樣不計入覆蓋（要綁值
-就寫 `x if x in <range>`）；它是 **[implemented]**。
+就寫 `x if x in <range>`）。

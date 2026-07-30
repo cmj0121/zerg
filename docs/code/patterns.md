@@ -8,8 +8,8 @@ small core it already gives you. Part of the [Language Reference](../language.md
 
 Zerg's anonymous function `fn(…) -> R { … }` **is** the closure — first-class, capturing only immutable
 values and channels, by copy (see [Functions & Closures](functions.md)). Capturing an **immutable** value —
-a scalar, or a non-POD `str` / `list` / `map` / `Ref` — is **[implemented]**; capturing a **`mut`** binding
-is **[not yet]** (snapshot it into an immutable binding first). There is deliberately **no terser
+a scalar, or a non-POD `str` / `list` / `map` / `Ref` — is **[not yet]**, and so is capturing a **`mut`**
+binding: a closure today may use only its own parameters. There is deliberately **no terser
 `|x|` lambda**: a little verbosity nudges you toward Zerg's procedural-first style rather than deep
 functional chains. Three ways to keep closures readable, in order of preference:
 
@@ -86,9 +86,10 @@ To mutate the builder in place instead, use a `mut fn` method on a `mut` binding
 ## Destructuring & pattern support
 
 Destructuring binds directly at a `:=`: a tuple `(a, b) := e` and a struct `P{x, y} := e` both unpack in one
-step **[implemented]** — the everyday way a multiple return or a small record is consumed. In a `match` (see
-[Control Flow](control-flow.md)) the **struct**, **tuple**, **variant**, **wildcard `_`**, **`as`**,
-**range**, and **negative-literal** patterns, together with their **nesting**, are **[implemented]**. Two
+step — the everyday way a multiple return or a small record is consumed; both are **[not yet]**, as are the
+**struct**, **tuple** and **`as`** patterns in a `match`. Read a tuple back by static index (`.0` / `.1`)
+and a struct by field. What a `match` does destructure is the **variant**, **wildcard `_`**, **range**, and
+**negative-literal** patterns, together with their **nesting**. Two more
 forms `GRAMMAR` allows are **[not yet]**: an **or-pattern** (`A | B =>`, binding or not) and a **list
 pattern** (`[h, ..t]`). Both are rejected at code generation: the list pattern after type-checking, the
 or-pattern because `|` there is read as the bitwise operator and an arm that matched the wrong value in

@@ -30,12 +30,8 @@ fn load() -> Result[Config] {
 }
 ```
 
-> **[deviation]** `?` is defined on any `Either[X, Y]` — unwrap the `Left`, early-return the `Right`
-> unchanged. The shipped **`zerg`** does exactly that for every carrier: the enclosing function must
-> answer one with the **same right**, and the right travels unchanged, so an `Err` keeps its kind
-> across the propagation. The **seed** threads `Result[T]` only: on a general `Either` the right
-> payload is **dropped** (a silent miscompile), and `?` on a **`Result[nil]`** reaches the backend as
-> a `void`-typed binding (a fail-loud sema gap).
+`?` works on every carrier: the enclosing function must answer one with the **same right**, and the
+right travels unchanged, so an `Err` keeps its kind across the propagation.
 
 **`??` — default.** `a ?? b` yields `a`'s left value if present, else `b` (right discarded); it
 short-circuits, chains right-to-left, and works on any `Either`.
@@ -43,7 +39,7 @@ short-circuits, chains right-to-left, and works on any `Either`.
 **`?.` — optional chain (`T?` only).** `a?.b` reads `.b` when `a` has a value, else short-circuits
 the chain to `nil` in place (unlike `?`, never returns from the function); use on any non-`T?` type
 is a compile error. A field that is **itself optional flattens** — the chain answers that field's
-type rather than a nested `T??`, which is not a type the language can write. **[implemented]**, in
+type rather than a nested `T??`, which is not a type the language can write. This holds in
 both compilers.
 
 **`!` — force-unwrap (value → abort).** `x!` unwraps the left value or **raises** on an absent optional —
@@ -70,7 +66,7 @@ other diverge takes — `raise e if c`, and `raise e from cause if c` — which 
 and is what the formatter's `F401` rewrites the block form into. It is the statement form only: a `raise`
 on the right of a `??` takes no trailing `if`, since the guard would read as the coalesce's.
 
-**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds **[implemented]** —
+**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds —
 **`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**
 — and you **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the **`Error`** spec —
 `message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](../core/specs.md)) is **not yet
@@ -88,7 +84,7 @@ contract itself — the message written to stderr, exit status 1, the `Kind: mes
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
 expected failure. Of the fault names this chapter uses, nine reify as `is`-testable **kinds** today:
 `ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, plus the three the
-concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration` (**[implemented]**).
+concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration`.
 The rest cannot be **named** at the surface yet: `UnwrapError`, `DivideByZeroError`, `MatchError` and
 `AliasError` are **[not yet]** — writing `err is AliasError` is a clean, named compile error in **both**
 compilers, the name not being one of the nine — and the abort carries no distinct reified kind for them,
@@ -183,7 +179,7 @@ match guard { work() } {
 
 `is` yields only a `bool`, so a branch may use the **`Error` interface** (`message` / `code` / `unwrap`)
 but **not the concrete type's own fields** — the value was erased and is never re-constructed. This phase `is`
-is implemented **for the error taxonomy** (**[implemented]**) — the six built-in kinds and any built-in
+is built **for the error taxonomy** — the six built-in kinds and any built-in
 abort a `guard` reifies; the general existential test `x is T` for a **non-error** type is **[not yet]**.
 The set of errors reachable here is treated as **open** for coverage, so an `is`-chain can never be
 exhaustive: a **catch-all is mandatory**. An unmatched error would abort like any uncovered `match` — but

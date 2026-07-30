@@ -7,7 +7,7 @@ Also in [繁體中文](README.zh-TW.md).
 - **[Language Reference](language.md)** — the index. Every chapter, grouped, with a line
   on what each covers. If you do not yet know which chapter you want, start here.
 - **[Conformance](conformance.md)** — how to read the specification: the status markers
-  (`[implemented]`, `[not yet]`, `[deviation]`), and what a diagnostic or an abort
+  (`[not yet]`, `[deviation]`), and what a diagnostic or an abort
   promises. Read once; it changes how everything else reads.
 
 ## What is in each directory

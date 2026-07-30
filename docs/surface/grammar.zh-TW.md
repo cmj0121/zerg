@@ -272,8 +272,7 @@ literal** `` f`…` ``（group 3 的 command literal，**[not yet]**）：它經
 （`{x:raw}` 可退出），使值以單一安全引數插入。
 
 - **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
-  `!s` 為 **[implemented]**；`!r` 與 `!a` 為 **[deviation]**——目前**別名到 `display`**，而非獨立的 debug／ASCII
-  渲染（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——
+  三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——
   **[not yet]**，已被解析但在程式碼生成時被拒絕。
 - **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
@@ -636,8 +635,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   裸機逃生口（page table 與觸碰它的函式，放在一起）。**沒有 `unsafe mut` 前綴**、無 `static` 關鍵字。可變全域為
   **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
-  memory-ordering 參數。今日 **[implemented]** 的僅 **sequential consistency** 的 **`Atomic[int]`**；
-  **memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
+  memory-ordering 參數。**[not yet]**——它需要 `Ref[T]`；**memory-ordering 引數**與泛型 **`Atomic[T]`** 亦然。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該
   位址定型到 pointee `T`（同寬——`[T]` 只為 load/store/offset 提供型別）。因 `T` 為任意型別，**函式指標**免費得到
   ——`ptr[fn(int) -> nil]`（interrupt vector）——`ptr[ptr[T]]` 與裸 `ptr` 亦然。`ptr` **本就可空**（位址 `0`）且與

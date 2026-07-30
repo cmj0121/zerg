@@ -42,7 +42,7 @@ mutability 屬於**實例（instance）**——也就是 binding——不是型�
 
 > **[deviation]** bootstrap 目前只把 **literal 的元素**依左到右排序；**函式呼叫的引數與二元運算元**沿用 C 的
 > unspecified 順序，所以 `add(f(1), g(2))` 可能先算 `g(2)` 再算 `f(1)`。**短路**運算子——`and`、`or`、`??`、`?.`,
-> 以及 `?` unwrap——**確實**依左到右生效：先求值左運算元，當左邊已決定結果時就跳過右邊 **[implemented]**。
+> 以及 `?` unwrap——**確實**依左到右生效：先求值左運算元，當左邊已決定結果時就跳過右邊。
 > [Conformance](../conformance.zh-TW.md) 把「呼叫引數／運算元的順序」列為 implementation-defined 之點，直到預期的
 > 左到右規則被強制為止。
 
@@ -65,10 +65,10 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
 
 - **值型別（value type）**——每個 scalar、一個 `struct`、一個 tuple，以及 heap 容器 `list` 與 `map`——都是
   **被複製**的。scalar、`struct`、tuple 以 inline 複製；`list` 或 `map` 則**深拷貝**，其元素依同一條規則複製。所以
-  值型別的兩個名字**永不 alias**：透過其一寫入，只改變那個持有者自己的 copy。**[implemented]**
+  值型別的兩個名字**永不 alias**：透過其一寫入，只改變那個持有者自己的 copy。
 - **Reference-counted 值**——一個 `str`、一個 `chan`、一個 `Ref[T]`，以及**遞迴型別的自動裝箱子節點**——是
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
-  一次變動，會經由該 tail 的每個持有者都看得見**。**[implemented]**
+  一次變動，會經由該 tail 的每個持有者都看得見**。
 
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
@@ -87,10 +87,10 @@ n.next!.value = 99                # 觸及共享的 tail——m.next!.value 也�
 
 ## 釋放順序（Drop order）
 
-離開 scope 時，local 依**建構的逆序**釋放——最後建構的最先釋放——於是拆解鏡射建構 **[implemented]**。順序在
-**聚合體內部**也被釘住：一個 `struct` 的欄位與一個 `enum` payload 的槽依**宣告的逆序**釋放 **[implemented]**。一個
+離開 scope 時，local 依**建構的逆序**釋放——最後建構的最先釋放——於是拆解鏡射建構。順序在
+**聚合體內部**也被釘住：一個 `struct` 的欄位與一個 `enum` payload 的槽依**宣告的逆序**釋放。一個
 `defer` 在 block 退出時、於**每一條**路徑上執行，**包含 abort-unwind 路徑**；一個 block 內多個 `defer` 以
-**後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯 **[implemented]**。
+**後登記先跑（LIFO）**執行，與同一逆序的 scope-owned 釋放及 `Ref` drop 交錯。
 
 ## `Ref[T]`——逃出自身 scope 的資源
 
@@ -143,7 +143,7 @@ mut x := x           # 再次遮蔽——這次可變，並以前一份 copy 為
 | channel、`Ref[T]`              | refcounted   | 撤銷名字**並**放掉這個 holder（refcount--）；最後 holder 跑 **`drop`** |
 
 > **狀態。** `del` 一個 `Ref` 值——一個 `chan` 或一個 `Ref[T]`——放掉一個 holder（並在最後一個跑 `drop`）是
-> **[implemented]**。`del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是
+> 可用。`del` 一個**擁有**的值——一個 local `struct`、`list`、或 `map`——以**提早**釋放其儲存是
 > **[not yet]**：今天這樣的 `del` 會撤銷名字的存取，但儲存是在一般的 scope 退出時回收、而非在 `del` 當下。所以
 > 上表「釋放儲存」那一列，對擁有值而言是預期行為、尚非 bootstrap 現況。
 

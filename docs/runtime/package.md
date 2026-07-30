@@ -58,17 +58,17 @@ constant is ready before any constant whose initializer reads it — a topologic
 graph; if they form a cycle, that's a compile error. Where the graph leaves two constants unordered
 (neither reads the other), the tie is broken **deterministically**: by **canonical module name**, then by
 **source order** within a module. This whole ordering — topological, with the module-name-then-source
-tie-break — is **[implemented]**.
+tie-break — holds.
 
 A module may also define **`init()`** functions (**multiple allowed**) — its **lazy** one-time setup.
 They run **exactly once**, the **first time the module is used** (later uses skip them; concurrent
 first-uses still run them once), in **declaration (FIFO) order** within a module and in **dependency
 order** across modules (a module's imports initialize first), before any of that module's own code and
-before `main`. That each `init()` runs **exactly once, in FIFO order, before `main`** is **[implemented]**.
+before `main`: each one runs **exactly once, in FIFO order, before `main`**.
 `init()` carries multi-step or effectful startup (open a resource, register, seed) rather than hiding it in
 a constant's initializer, and readies the module's immutable state. There is still **no mutable global**:
 shared mutable state travels by value or through channels, never a module-level variable — a top-level
-binding may not be `mut` outside a module-level `unsafe { … }` group (**[implemented]**).
+binding may not be `mut` outside a module-level `unsafe { … }` group.
 
 If an `init()` **aborts**, the abort propagates from the **first-use site** that triggered it — guardable
 there, or else crashing that stack like any uncaught abort (the main stack ends the program, a coroutine
@@ -168,7 +168,7 @@ and the prelude (see The prelude & std). What you import depends on the distance
 Because every dependency is written down, the import graph is explicit — which is what lets module and
 package **cycles be rejected**.
 
-> **[implemented].** The surface these sections describe is wired today: **string-path imports**
+> **Status.** The surface these sections describe is wired today: **string-path imports**
 > (`import "util/text"`), **parenthesized import groups** (`import ( … )`), and **one-level `import pub`
 > re-export** onto the root module's public surface. (The re-export is one level: `import pub` exposes the
 > named module on this module's surface; it does not transitively re-export what that module itself

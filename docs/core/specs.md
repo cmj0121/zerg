@@ -33,7 +33,7 @@ inherent methods are invisible. So:
   What _every_ value has, with no spec bound at all, are the **structural memory operations** the memory
   model guarantees — copy, `del`, pass, store, send over a channel — because those are properties of the
   representation, not behavior a spec abstracts. The compiler-owned **structural derivation** that backs
-  `derive` (`Eq` / `Ord` **[implemented]**, `Hash` / `Encode` / `Decode` **[not yet]**) is the
+  `derive` (**[not yet]** for every trait in the blessed set) is the
   [Derive & Default Behavior](derive.md) reference.
 
 A `spec` may also be used **as a type**, not only a bound: a spec-typed value holds any implementing
@@ -152,7 +152,7 @@ on "is this a `T`?", but to read a `T`'s own fields you must **already hold the 
 never boxed. It composes as an ordinary `bool` — in an `if`, under `not` / `and` / `or`, or as a `match`
 guard — needing no new pattern form. Its main use is dispatching on an **erased error's** type (see
 [Null-safety & Errors](../code/errors.md)). This phase, **that is the only implemented use** — `is` works on the
-built-in error taxonomy (**[implemented]**), while the general existential test `x is T` for a
+built-in error taxonomy, while the general existential test `x is T` for a
 **non-error** type is **[not yet]**.
 
 ## Methods, `this` / `This`, and default bodies
@@ -191,7 +191,8 @@ method reaches the type's override (a defaulted `count` built on `next` uses an 
 `next`) — there is **no static-dispatch exception for defaults**. The mechanism is the one already
 defined — a concrete-bound generic **monomorphizes** to the actual impl, a spec used as a type dispatches
 through its **vtable** to the actual impl. This holds for a **direct call on a concrete value** as well
-(**[implemented]**): `c.provided()` runs the type's **override** if it has one, else the spec's **default
+(**[not yet]** — a provided method is refused by name):
+`c.provided()` runs the type's **override** if it has one, else the spec's **default
 body** — with no `#[dyn]` and no boxing needed, so a provided method is not confined to the
 dynamic-dispatch path.
 
@@ -244,7 +245,7 @@ else is a spec a type **opts into**, a generic bound gating on it:
 
 - **`Eq`** — structural equality, driving `==` / `!=`, gained by `#[derive(Eq)]` or a hand-written
   `impl Eq`; a channel or `fn` field compares by identity. A type with **no `Eq` impl cannot be
-  compared** — `==` on it is a compile error, never a silent structural default. **[implemented]**
+  compared** — `==` on it is a compile error, never a silent structural default.
 
 Zerg has **no instance-identity test** between two values: under copy-by-value distinct values are
 distinct instances and there's no aliasing, so "same instance?" would be meaningful only for a channel —
@@ -260,7 +261,7 @@ generic bound gates on it:
   `min` / `max` / `clamp` are ordinary stdlib helpers over an `Ord` bound — there is **no three-way
   `Ordering`** value, only `less` and `Eq`. `str` orders **lexicographically by code point** (== byte
   order, its UTF-8 being valid — not locale collation, a separate stdlib concern); `float` opts out of
-  both `Ord` and `Hash` (rationale below). **[implemented]**
+  both `Ord` and `Hash` (rationale below).
 - **`Hash`** — `map` / `set` keys, with `equal ⇒ same hash`. `str`, being immutable, is a natural key.
   **[not yet]**
 - **`Iterator`** / **`Iterable`** — the iteration protocol (**Iteration**, below).

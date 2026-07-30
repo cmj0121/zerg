@@ -210,6 +210,10 @@ Preferring the sugar is the general rule, not a special case for `return`: **whe
 language offers a shorter surface for exactly what is written, the canonical form is the
 shorter one**, and a reader stops having to notice that the two are the same thing.
 
+A jump that ALREADY carries its own guard keeps its block. There is no single `if` that says
+what `if m { return 0 if n < 0 }` says, and writing `return 0 if n < 0 if m` would be source
+no compiler parses — so the rule declines rather than inventing one.
+
 Note what this postfix `if` is NOT. It attaches to a jump, not to an expression — Zerg has
 no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:
 `x := if c { 1 } else { 2 }`.

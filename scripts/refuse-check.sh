@@ -487,7 +487,257 @@ fn f(n: int) -> Either[int, int] {
 fn main() { print 1 }
 EOF
 
+# --- every form is HANDLED: implemented, or refused by name ------------------------
+#
+# `parse_primary` used to end `p_advance(p); return ENil` — an unread token was consumed and
+# the expression became nil, which emits `0`. So every form this parser did not know became
+# the number zero, in silence. These are the forms that landed there, plus the ones that
+# reached cc or the linker instead. None of them may do either now.
+
+expect "$ZERG" unread-token-in-an-expression "is not an expression this compiler reads" <<'EOF'
+fn main() {
+	print 1 as 2
+}
+EOF
+
+expect "$ZERG" non-ascii-rune-literal "non-ASCII rune literal" <<'EOF'
+fn main() {
+	print int('\u{20AC}')
+}
+EOF
+
+expect "$ZERG" mut-fn-method "receiver is not written back" <<'EOF'
+struct C {
+	n: int
+}
+
+impl C {
+	mut fn bump() {
+		this.n = this.n + 1
+	}
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" generic-enum "a generic enum" <<'EOF'
+enum E[T] {
+	A(T)
+	B
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" associated-value-binding "an associated value binding" <<'EOF'
+struct B {
+	n: int
+}
+
+impl B {
+	LIMIT := 5
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" unknown-decorator "the decorator" <<'EOF'
+#[dyn]
+struct P {
+	x: int
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" equality-on-an-aggregate "which this compiler does not generate" <<'EOF'
+#[derive(Eq)]
+struct P {
+	x: int
+}
+
+fn main() {
+	print P(1) == P(1)
+}
+EOF
+
+expect "$ZERG" field-default "a default on field" <<'EOF'
+struct P {
+	x: int = 7
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" nested-block-statement "block as a statement" <<'EOF'
+fn main() {
+	{
+		print 1
+	}
+}
+EOF
+
+expect "$ZERG" struct-pattern-binding "a struct pattern" <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	P{x} := P(3)
+	print x
+}
+EOF
+
+expect "$ZERG" for-mut-binding "the mutable loop binding" <<'EOF'
+fn main() {
+	for mut v in [1, 2] {
+		print v
+	}
+}
+EOF
+
+# A body that declares a result and falls off the end used to emit a C function with no
+# return: the call answered whatever was in the return register.
+expect "$ZERG" body-falls-off-the-end "falls off the end" <<'EOF'
+fn f(n: int) -> int {
+	if n > 0 {
+		return 1
+	}
+}
+
+fn main() { print f(1) }
+EOF
+
+expect "$ZERG" struct-cycle-by-value "part of a cycle of by-value declarations" <<'EOF'
+struct A {
+	b: B
+}
+
+struct B {
+	a: A
+}
+
+fn main() { print 1 }
+EOF
+
+# A NAME NOTHING BINDS is the commonest mistake anyone makes, and it used to be spelled
+# `zg_<n>` and handed to cc. So did a call to a function nothing declares — which is also
+# how the specified-but-unbuilt raw-pointer builtins arrived.
+expect "$ZERG" undefined-name "undefined name" <<'EOF'
+fn main() {
+	print nope
+}
+EOF
+
+expect "$ZERG" undefined-function "undefined function" <<'EOF'
+fn main() {
+	print nope(1)
+}
+EOF
+
+expect "$ZERG" raw-pointer-builtin "undefined function \`addr\`" <<'EOF'
+fn main() {
+	mut n := 1
+	print addr(n)
+}
+EOF
+
+# `expect` used to advance on a match and say NOTHING otherwise, so every truncated form
+# derailed quietly and whatever the parser built from the wreckage reached the emitter.
+expect "$ZERG" truncated-guard "expected \`{\`" <<'EOF'
+fn main() {
+	print guard
+}
+EOF
+
+expect "$ZERG" truncated-fn "expected \`(\`" <<'EOF'
+fn main() {
+	print fn
+}
+EOF
+
+expect "$ZERG" truncated-chan-type "found \`print\`" <<'EOF'
+fn main() {
+	chan
+	print 1
+}
+EOF
+
+expect "$ZERG" associated-type-binding "an associated type binding" <<'EOF'
+struct B {
+	n: int
+}
+
+impl B {
+	type Item = int
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" impl-item-that-is-not-a-method "as an \`impl\` item" <<'EOF'
+struct B {
+	n: int
+}
+
+impl B {
+	print 1
+}
+
+fn main() { print 1 }
+EOF
+
+# A method that MUTATES its receiver cannot be served from a materialised temp: the edit
+# lands on the copy and is lost. `m["a"].append(3)` compiled and silently did nothing.
+expect "$ZERG" mutating-method-on-a-map-index "MUTATES its list" <<'EOF'
+fn main() {
+	mut m: map[str, list[int]] = {:}
+	m["a"] = [1, 2]
+	m["a"].append(3)
+	print m["a"].len()
+}
+EOF
+
+# A field the type does not have was spelled `zg_<fld>` and handed to cc — the same class
+# as an undefined name, answerable from the same tables.
+expect "$ZERG" field-the-struct-does-not-have "no field" <<'EOF'
+struct P {
+	n: int
+}
+
+fn main() {
+	p := P(1)
+	print p.z
+}
+EOF
+
+# Too FEW constructor arguments has been named for a while; too many reached cc as an
+# "excess elements" WARNING, so it compiled and the extra values were dropped.
+expect "$ZERG" too-many-constructor-arguments "fields and this gives" <<'EOF'
+struct P {
+	n: int
+}
+
+fn main() {
+	print P(1, 2).n
+}
+EOF
+
 # --- the seed ---------------------------------------------------------------------
+
+# The seed TYPES a map for-in (it binds the key) and does not lower one. The unchecked
+# assertion that followed was a nil dereference: it crashed with a Go stack trace instead
+# of reporting anything.
+expect "$ZERG0" seed-map-for-in "does not lower a for-in over" <<'EOF'
+fn main() {
+	mut m: map[str, int] = {:}
+	m["a"] = 1
+	for k in m {
+		print k
+	}
+}
+EOF
+
 
 # Tier 2 of src/bootstrap/README.md: the seed carries no opinion about concurrency, because
 # the self-host chain contains none of it and a compiler that lowers what it is not the

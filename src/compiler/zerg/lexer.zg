@@ -648,6 +648,44 @@ fn is_eof(k: Kind) -> bool {
 	}
 }
 
+# int_value is what an integer lexeme is WORTH: decimal, `0x` / `0o` / `0b`, with `_` groups
+# anywhere between digits (GRAMMAR, group 2). It lives here because that is a LEXICAL fact
+# about the literal rather than a fact about the program — the emitter renders C from it and
+# the formatter compares two of them to tell `1 | 2` from `1 | 3`, and a second implementation
+# of the same base-prefix rules is one that will disagree with this one eventually.
+#
+# It reads a bare magnitude: a leading `-` is a separate token, so no lexeme reaches here with
+# a sign on it.
+pub fn int_value(lex: str) -> int {
+	b := list[byte](lex)
+	n := b.len()
+	mut base := 10
+	mut start := 0
+	if n >= 2 and b[0] == b'0' {
+		c := b[1]
+		if c == b'x' or c == b'X' {
+			base = 16
+			start = 2
+		} else if c == b'o' or c == b'O' {
+			base = 8
+			start = 2
+		} else if c == b'b' or c == b'B' {
+			base = 2
+			start = 2
+		}
+	}
+	mut val := 0
+	mut i := start
+	for i < n {
+		ch := b[i]
+		if ch != b'_' {
+			val = val * base + ascii.hex_val(ch)
+		}
+		i = i + 1
+	}
+	return val
+}
+
 # token_category classifies a kind for rendering: 1 -> NAME(lexeme), 2 -> NAME(quoted
 # value), 0 -> the bare kind name.
 fn token_category(k: Kind) -> int {

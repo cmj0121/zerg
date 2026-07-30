@@ -1409,35 +1409,11 @@ fn c_unop(oper: str) -> str {
 # --- integer literal normalisation ---------------------------------------------
 
 # c_int_dec renders an integer lexeme (decimal / 0x / 0o / 0b, with '_' groups) as a
-# plain decimal string, matching how the bootstrap lowers integer literals.
+# plain decimal string, matching how the bootstrap lowers integer literals. What a lexeme is
+# WORTH is a lexical fact and lives with the lexer, so the formatter can ask the same question
+# without a second implementation of it (F408 needs it to tell `1 | 2` from `1 | 3`).
 fn c_int_dec(lex: str) -> str {
-	b := list[byte](lex)
-	n := b.len()
-	mut base := 10
-	mut start := 0
-	if n >= 2 and b[0] == b'0' {
-		c := b[1]
-		if c == b'x' or c == b'X' {
-			base = 16
-			start = 2
-		} else if c == b'o' or c == b'O' {
-			base = 8
-			start = 2
-		} else if c == b'b' or c == b'B' {
-			base = 2
-			start = 2
-		}
-	}
-	mut val := 0
-	mut i := start
-	for i < n {
-		ch := b[i]
-		if ch != b'_' {
-			val = val * base + ascii.hex_val(ch)
-		}
-		i = i + 1
-	}
-	return strconv.to_string(val, 10)
+	return strconv.to_string(int_value(lex), 10)
 }
 
 fn c_bool(b: bool) -> str {

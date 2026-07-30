@@ -302,6 +302,18 @@ func (e *emitter) zeroValueC(t sema.Type) string {
 	if c, ok := e.tupleFor(t); ok {
 		return fmt.Sprintf("(%s){0}", c.name)
 	}
+	// A struct or enum has no scalar zero: `return 0;` is a C type error, not a value. A
+	// body that DIVERGES needs no trailing return at all (endsWithDiverge), so this is only
+	// reached by a genuine fallthrough — a missing return, which gets a type-correct
+	// placeholder rather than an error against generated code.
+	//
+	// The test is on the CONCRETE node: a struct is *types.Struct and an enum *types.Enum.
+	// Testing *types.Named matched neither — Named is the strong-typedef node, and
+	// Underlying unwraps it — so the branch never fired and the case it names stayed broken.
+	switch types.Underlying(t).(type) {
+	case *types.Struct, *types.Enum:
+		return fmt.Sprintf("(%s){0}", e.ctype(t))
+	}
 	return zeroValue(t)
 }
 

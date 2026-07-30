@@ -958,8 +958,6 @@ func (e *emitter) emitRefHelpers() {
 	// no thunk and a value-only program stays byte-identical.
 	e.emitOptDropHelpers()
 	e.emitDeferHelpers()
-	e.emitSpawnHelpers()
-	e.emitChanHelpers()
 	// Result/Either/optional force helpers (Phase 1f U0); emits nothing when the
 	// program registered no carrier.
 	e.emitResultHelpers()
@@ -1241,19 +1239,9 @@ func (e *emitter) fieldCopy(t sema.Type, access string) string {
 	if e.isBoxedOpt(t) {
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
 	}
-	switch x := t.(type) {
+	switch t.(type) {
 	case *types.Ref:
 		return fmt.Sprintf("zrt_ref_copy(%s)", access)
-	case *types.Chan:
-		// a channel FIELD retains by its own direction, exactly as a channel value does
-		// (the value-level twin is in refCopyExpr): a send-capable handle bumps the sender
-		// count, a receive-only one only the holder count. Without this arm a struct or an
-		// enum holding a channel fell through to unsupportedRef and could not be BUILT at
-		// all — which is the shape of an actor's message type, `Get(chan[int]<-)`.
-		if x.Dir == types.ChanRecv {
-			return fmt.Sprintf("zrt_chan_copy(%s)", access)
-		}
-		return fmt.Sprintf("zrt_chan_sender_copy(%s)", access)
 	case *types.List:
 		// a list field / element deep-copies through its instance's value copy helper.
 		return fmt.Sprintf("%s(%s)", e.listCopyFn(t), access)
@@ -1314,18 +1302,12 @@ func (e *emitter) fieldDrop(t sema.Type, access string) string {
 	if e.isBoxedOpt(t) {
 		return fmt.Sprintf("zrt_release(%s);", access)
 	}
-	switch x := t.(type) {
+	switch t.(type) {
 	case *types.Fn:
 		// a function-value field/element releases its refcounted environment box (managed).
 		return fmt.Sprintf("zrt_release((%s).env);", access)
 	case *types.Ref:
 		return fmt.Sprintf("zrt_release(%s);", access)
-	case *types.Chan:
-		// the balance of the retain above, by the same direction: releasing a send-capable
-		// handle is what can CLOSE the channel, so a struct holding a send end ends the
-		// stream when the struct's last holder goes — the ordinary auto-close rule,
-		// reached through a field.
-		return fmt.Sprintf("%s(%s);", e.chanReleaseFn(x), access)
 	case *types.List:
 		return fmt.Sprintf("zrt_list_drop(&(%s));", access)
 	case *types.Map:

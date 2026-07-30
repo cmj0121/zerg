@@ -107,14 +107,9 @@ func (e *emitter) registerDrop(cname string, typ sema.Type, at ast.Node) {
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
 		return
 	}
-	switch t := typ.(type) {
+	switch typ.(type) {
 	case *types.Ref:
 		e.line(fmt.Sprintf("zrt_defer(zg_ref_drop, &%s);", cname))
-	case *types.Chan:
-		// a channel handle releases at scope exit through a slot guard (so a later `del`
-		// nulls the slot); a send-capable handle releases as a sender, which is what closes
-		// the channel when the last one leaves — the language has no explicit close.
-		e.line(fmt.Sprintf("zrt_defer(%s, &%s);", e.chanDropThunk(t), cname))
 	case *types.Enum:
 		// a recursive/non-POD enum local (S1) frees its boxed payload cells at scope exit
 		// through its generated drop-env thunk, like a struct.
@@ -169,8 +164,6 @@ func (e *emitter) emitInlineDrop(it dropItem) {
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.List:
 		e.line(fmt.Sprintf("zrt_list_drop(&%s);", it.cname))
-	case *types.Chan:
-		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), it.cname))
 	case *types.Struct:
 		e.line(fmt.Sprintf("%s(&%s);", e.dropHelperName(it.typ), it.cname))
 	case *types.Opt:
@@ -208,19 +201,13 @@ func (e *emitter) delStmt(n *ast.DelStmt) {
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 		return
 	}
-	switch t := it.typ.(type) {
+	switch it.typ.(type) {
 	case *types.Ref:
 		// Release now and null the slot. The scope-exit guard reads the slot, so it
 		// skips a nulled binding — the box is freed exactly once whether or not the
 		// `del` is reached on a given path (flow-consistent, and safe under a
 		// conditional del because zrt_release(NULL) is a no-op).
 		e.line(fmt.Sprintf("zrt_release(%s);", cname))
-		e.line(fmt.Sprintf("%s = NULL;", cname))
-	case *types.Chan:
-		// `del ch` revokes the name like any other owning binding: the handle it owned goes
-		// with it, send capability and hold together. Giving up only the send end is what
-		// `close(ch)` is for, and the two are no longer the same statement.
-		e.line(fmt.Sprintf("%s(%s);", e.chanReleaseFn(t), cname))
 		e.line(fmt.Sprintf("%s = NULL;", cname))
 	default:
 		e.diags.Add(n.Span(), "del of an owning %s value is not supported in Phase 1d", it.typ)
@@ -341,18 +328,6 @@ func (e *emitter) deferStmt(n *ast.DeferStmt) {
 		return
 	}
 	call, _ := n.Call.(*ast.Call)
-	// `defer close(ch)` is the one non-expression form defer takes (GRAMMAR group 11).
-	// It captures the channel and nothing else: close marks the CHANNEL rather than a
-	// holder, so no count moves and there is no receiver to own.
-	if isCloseCall(call) {
-		if len(call.Args) != 1 {
-			return // sema reported the arity
-		}
-		env := e.freshName("denv")
-		e.line(fmt.Sprintf("zg_deferenv_%d %s = { %s };", idx, env, e.expr(call.Args[0].Value)))
-		e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, &%s);", idx, env))
-		return
-	}
 	_, recv, _, _ := e.capturedCall(call)
 	if recv == nil && len(call.Args) == 0 {
 		e.line(fmt.Sprintf("zrt_defer(zg_deferfn_%d, NULL);", idx))
@@ -382,19 +357,6 @@ func (e *emitter) emitDeferHelpers() {
 			}
 			call, ok := d.Call.(*ast.Call)
 			if !ok {
-				return
-			}
-			// close is a keyword and names no function, so it has no call target to
-			// resolve; its thunk is written here rather than routed through capturedCall,
-			// which refuses a close for the two statements that may NOT take one — a
-			// `spawn`, and an expression.
-			if isCloseCall(call) {
-				if len(call.Args) != 1 {
-					return
-				}
-				idx := len(e.deferIdx)
-				e.deferIdx[d] = idx
-				e.emitDeferCloseThunk(idx)
 				return
 			}
 			target, recv, recvT, ok := e.capturedCall(call)
@@ -460,9 +422,6 @@ func (e *emitter) emitDeferThunk(idx int, target string, recv ast.Expr, recvT se
 // methodCall). It returns ok=false for any other callee (e.g. a call through a function
 // value), which leaves deferIdx unset so the site reports the loud stub.
 func (e *emitter) capturedCall(call *ast.Call) (target string, recv ast.Expr, recvT sema.Type, ok bool) {
-	if e.closeOutOfStatement(call) {
-		return "", nil, nil, false
-	}
 	switch callee := call.Callee.(type) {
 	case *ast.Ident:
 		return e.callTarget(call, callee), nil, nil, true

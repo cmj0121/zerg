@@ -253,6 +253,9 @@ func (e *emitter) program() {
 
 	// prototypes first, so declaration order does not constrain calls
 	for _, inst := range e.prog.Funcs {
+		if e.skipBundledConcurrency(inst) {
+			continue
+		}
 		e.line(e.prototype(inst) + ";")
 	}
 	// per-module init function prototypes (Phase 1g S3); none for a no-init program.
@@ -265,6 +268,9 @@ func (e *emitter) program() {
 	e.emitRefHelpers()
 
 	for _, inst := range e.prog.Funcs {
+		if e.skipBundledConcurrency(inst) {
+			continue
+		}
 		e.function(inst)
 		e.blank()
 	}
@@ -746,12 +752,6 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.delStmt(n)
 	case *ast.DeferStmt:
 		e.deferStmt(n)
-	case *ast.SpawnStmt:
-		e.spawnStmt(n)
-	case *ast.SendStmt:
-		e.sendStmt(n)
-	case *ast.SelectStmt:
-		e.selectStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:
@@ -759,9 +759,6 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.ExprStmt:
 		// `close(ch)` is a statement rather than a value (closeCallStmt says why), so it is
 		// taken here before the expression dispatch ever sees the call.
-		if e.closeCallStmt(n.X) {
-			return
-		}
 		e.line(e.expr(n.X) + ";")
 	default:
 		// The statement half of the anti-silence net the expression dispatch already
@@ -1159,10 +1156,6 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	}
 	// A channel: the loop IS the receive, and the close is what ends it. A channel is the
 	// other thing iterated without being a container (docs/code/coroutine.md).
-	if ct, ok := e.cur.ExprType(e.info, n.Iter).(*types.Chan); ok {
-		e.forInChan(n, ct)
-		return
-	}
 	// A str: iterate its code points. Materialize the runes into a temporary list and
 	// walk it, so the body's loop variable binds each rune (docs/code/collections.md).
 	if e.cur.ExprType(e.info, n.Iter) == sema.Str {
@@ -1563,10 +1556,6 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.tupleLit(n)
 	case *ast.TupleIndex:
 		return e.tupleIndex(n)
-	case *ast.ChanNew:
-		return e.chanNew(n)
-	case *ast.Recv:
-		return e.recvExpr(n)
 	case *ast.Force:
 		return e.forceExpr(n)
 	case *ast.Try:
@@ -2130,9 +2119,6 @@ func (e *emitter) variantTag(subjT sema.Type, name string) int {
 
 func (e *emitter) call(n *ast.Call) string {
 	// `close(ch)` reaching the expression dispatch is a `close` where a statement cannot go.
-	if e.closeOutOfStatement(n) {
-		return ""
-	}
 	// a primitive conversion `T(x)`.
 	if s, ok := e.convCallEmit(n); ok {
 		return s

@@ -638,6 +638,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	skip_semis(p)
 
 	mut variants: list[VariantDef] = []
+	mut spelled: list[str] = []
 	mut next := 0
 	mut payload := false
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
@@ -664,6 +665,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 		if p_at(p, Assign) {
 			p_advance(p)
 			tag = parse_discriminant(p)
+			spelled.append(vname)
 		}
 		raise f"an enum discriminant is distinct across variants, and `{vname} = {tag}` repeats one already given" if tag_taken(variants, tag)
 		next = tag + 1
@@ -674,13 +676,10 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 
 	# GRAMMAR:573 — a discriminant belongs to a C-style integer enum, and only to one: a
 	# payload enum's tag is opaque and match-only, so there is nothing for a value to be.
-	if payload {
-		mut i := 0
-		for i < variants.len() {
-			raise f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (`{variants[i].name} = {variants[i].tag}`) belongs to an enum whose every variant is fieldless" if variants[i].tag != i
-			i = i + 1
-		}
-	}
+	# The spelled list is what makes this exact: a variant whose declared value HAPPENS to
+	# equal its position was indistinguishable from one that declared nothing, so `P(int) = 0`
+	# had its discriminant read and then quietly dropped.
+	raise f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (on `{spelled[0]}`) belongs to an enum whose every variant is fieldless" if payload and spelled.len() > 0
 	return EnumDecl(name, variants)
 }
 

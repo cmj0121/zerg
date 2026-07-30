@@ -283,6 +283,11 @@ fn c_either_wrap(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	rt := c_either_right(want)
 	cn := c_carrier_name(em, lt, rt)
 
+	# a `Left`/`Right` with the wrong arity is that form used wrongly, not a value whose type
+	# happens to be unknown — saying so beats "this is Left", which is what the bare-value
+	# path below reports for it
+	c_check_ctor_arity(e)
+
 	side := c_ctor_side(e)
 	if side >= 0 {
 		inner := c_call_args_of(e)[0]
@@ -306,6 +311,19 @@ fn c_ctor_side(e: Expr) -> int {
 		ECall(nm, args) => c_ctor_side_of(nm, args.len())
 		_ => 0 - 1
 	}
+}
+
+# c_check_ctor_arity refuses `Left()` / `Right(a, b)`: each side of an Either holds exactly
+# one value.
+fn c_check_ctor_arity(e: Expr) {
+	match e {
+		ECall(nm, args) => c_check_ctor_arity_of(nm, args.len())
+		_ => c_skip()
+	}
+}
+
+fn c_check_ctor_arity_of(nm: str, n: int) {
+	raise f"`{nm}(…)` names one side of an `Either`, which holds exactly one value — this has {strconv.to_string(n, 10)}" if (nm == "Left" or nm == "Right") and n != 1
 }
 
 fn c_ctor_side_of(nm: str, n: int) -> int {
@@ -1438,13 +1456,15 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 # environment with their field types, so type inference inside the arm resolves them.
 fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
 	if a.pat == 3 and c_is_either(st) {
-		# a Result's payload types are not in the variant table: Left carries the value,
-		# Right carries an Err
+		# an Either's sides are not in the variant table: they are the TYPE's own two, so the
+		# binding takes whichever the pattern names. Answering `Err` for every Right is what a
+		# Result-shaped assumption looks like — a `Right(b)` over an `Either[A, B]` then had
+		# type Err, and `b.s` reached cc as an unmangled member of the wrong struct.
 		if a.binds.len() > 0 {
 			if c_result_tag(a.ctor) == 0 {
-				c_add_var(em, a.binds[0], c_result_elem(st))
+				c_add_var(em, a.binds[0], c_either_left(st))
 			} else {
-				c_add_var(em, a.binds[0], TErr)
+				c_add_var(em, a.binds[0], c_either_right(st))
 			}
 		}
 	} else if a.pat == 3 {
@@ -1929,8 +1949,14 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	# not the value, which is a struct. Casting the struct is what this used to emit, and C
 	# rejected it against a file in .zerg-cache that nobody wrote.
 	xt := c_infer(em, x)
-	if c_is_int(ty) and c_name_in(em.enum_names, c_named_of(xt)) {
+	if c_name_in(em.enum_names, c_named_of(xt)) {
 		raise f"enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
+
+		# `int(v)` is the ONE conversion an enum has. Every other one fell through to a plain
+		# C cast OF THE STRUCT, which cc rejected against generated code — the report this
+		# compiler exists to get in front of.
+		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{ty_name(ty)}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
+
 		return f"((int64_t)({inner}).tag)"
 	}
 	return f"(({c_type(ty)})({inner}))"

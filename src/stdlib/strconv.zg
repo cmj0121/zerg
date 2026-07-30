@@ -32,9 +32,7 @@ fn digit_char(d: int) -> byte {
 
 # check_base raises unless base is a legal radix, 2..36. Module-private.
 fn check_base(base: int) {
-	if base < 2 or base > 36 {
-		raise "strconv: base out of range (2..36)"
-	}
+	raise "strconv: base out of range (2..36)" if base < 2 or base > 36
 }
 
 # parse_int parses a signed integer written in the given base, with an optional leading
@@ -44,9 +42,7 @@ pub fn parse_int(s: str, base: int) -> int {
 	check_base(base)
 	b := list[byte](s)
 	n := b.len()
-	if n == 0 {
-		raise "strconv.parse_int: empty string"
-	}
+	raise "strconv.parse_int: empty string" if n == 0
 	mut i := 0
 	mut neg := false
 	if b[0] == byte(43) {
@@ -55,15 +51,11 @@ pub fn parse_int(s: str, base: int) -> int {
 		neg = true
 		i = 1
 	}
-	if i >= n {
-		raise "strconv.parse_int: no digits"
-	}
+	raise "strconv.parse_int: no digits" if i >= n
 	mut val := 0
 	for i < n {
 		d := digit_for(b[i])
-		if d < 0 or d >= base {
-			raise "strconv.parse_int: invalid digit for base"
-		}
+		raise "strconv.parse_int: invalid digit for base" if d < 0 or d >= base
 		val = val * base + d
 		i = i + 1
 	}
@@ -79,23 +71,17 @@ pub fn parse_uint(s: str, base: int) -> uint {
 	check_base(base)
 	b := list[byte](s)
 	n := b.len()
-	if n == 0 {
-		raise "strconv.parse_uint: empty string"
-	}
+	raise "strconv.parse_uint: empty string" if n == 0
 	mut i := 0
 	if b[0] == byte(43) {
 		i = 1
 	}
-	if i >= n {
-		raise "strconv.parse_uint: no digits"
-	}
+	raise "strconv.parse_uint: no digits" if i >= n
 	mut val: uint = 0
 	ubase := uint(base)
 	for i < n {
 		d := digit_for(b[i])
-		if d < 0 or d >= base {
-			raise "strconv.parse_uint: invalid digit for base"
-		}
+		raise "strconv.parse_uint: invalid digit for base" if d < 0 or d >= base
 		val = val * ubase + uint(d)
 		i = i + 1
 	}

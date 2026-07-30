@@ -98,9 +98,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	if p_at(p, LArrow) {
 		p_advance(p)
 		inner := parse_type(p)
-		if not ty_is_chan(inner) {
-			raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type"
-		}
+		raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type" if not ty_is_chan(inner)
 		return TChan(ty_chan_elem(inner), 2)
 	}
 
@@ -307,9 +305,7 @@ pub fn imports_of(src: str) -> list[str] {
 fn parse_fill(mut &p: Parser, v: Expr) -> Expr {
 	n := cur(p)
 	mut out: list[Expr] = []
-	if n.kind != Int {
-		raise "NotImplemented: a fill count that is not an integer literal"
-	}
+	raise "NotImplemented: a fill count that is not an integer literal" if n.kind != Int
 	p_advance(p)
 	expect(p, RBrack)
 	mut i := 0
@@ -389,9 +385,7 @@ fn parse_sel_arms(mut &p: Parser) -> list[SelArm] {
 
 	# GRAMMAR says `select-arm+`. An empty one has nothing to wait FOR, so it would park on
 	# no channel at all and never wake — a hang with no cause to find.
-	if arms.len() == 0 {
-		raise "a select needs at least one arm — an empty one waits on nothing and never wakes"
-	}
+	raise "a select needs at least one arm — an empty one waits on nothing and never wakes" if arms.len() == 0
 	return arms
 }
 
@@ -399,18 +393,14 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 	# There is no terminal arm. A select PICKS a ready arm; ENDING is the loop's job, and
 	# `for select { … }` is the loop that owns it. `close` here is refused by name rather
 	# than quietly parsed, because it was an arm until this change.
-	if p_at(p, Close) and peek_kind(p, 1) == FatArrow {
-		raise "`close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has"
-	}
+	raise "`close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has" if p_at(p, Close) and peek_kind(p, 1) == FatArrow
 
 	# `_ => …` — the non-blocking arm, and the ONLY bare identifier a select arm may open with.
 	# Anything else here is refused by name: it used to become this arm silently, which turned a
 	# typo into a select that no longer blocks and no longer ends.
 	if p_at(p, Ident) and peek_kind(p, 1) == FatArrow {
 		head := cur(p).lexeme
-		if head != "_" {
-			raise f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has"
-		}
+		raise f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has" if head != "_"
 		p_advance(p)
 		p_advance(p) # '=>'
 		return SelArm(3, "", ENil, ENil, parse_sel_body(p))
@@ -483,9 +473,7 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 		# block expression. It used to read on regardless and build a map out of whatever
 		# the block's statements happened to parse as — a match arm written
 		# `Right(e) => { report(e); stop() }` came out as a one-entry map and ran neither.
-		if not p_at(p, Colon) {
-			raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here"
-		}
+		raise "NotImplemented: a block used as an expression — a `{ … }` with no `:` is a block, and only a map literal may stand here" if not p_at(p, Colon)
 		p_advance(p)
 		vs.append(parse_expr(p))
 		break if not p_at(p, Comma)
@@ -635,6 +623,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	p_advance(p) # name
 	expect(p, LBrace)
 	skip_semis(p)
+
 	mut variants: list[VariantDef] = []
 	mut next := 0
 	mut payload := false
@@ -663,9 +652,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 			p_advance(p)
 			tag = parse_discriminant(p)
 		}
-		if tag_taken(variants, tag) {
-			raise f"an enum discriminant is distinct across variants, and `{vname} = {tag}` repeats one already given"
-		}
+		raise f"an enum discriminant is distinct across variants, and `{vname} = {tag}` repeats one already given" if tag_taken(variants, tag)
 		next = tag + 1
 		variants.append(VariantDef(vname, fields, tag))
 		skip_semis(p)
@@ -677,9 +664,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	if payload {
 		mut i := 0
 		for i < variants.len() {
-			if variants[i].tag != i {
-				raise f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (`{variants[i].name} = {variants[i].tag}`) belongs to an enum whose every variant is fieldless"
-			}
+			raise f"enum `{name}` carries a payload, so its tag is opaque — a discriminant (`{variants[i].name} = {variants[i].tag}`) belongs to an enum whose every variant is fieldless" if variants[i].tag != i
 			i = i + 1
 		}
 	}
@@ -703,9 +688,7 @@ fn parse_discriminant(mut &p: Parser) -> int {
 		neg = true
 	}
 	t := cur(p)
-	if t.kind != Int {
-		raise f"an enum discriminant is a constant integer, not `{t.lexeme}`"
-	}
+	raise f"an enum discriminant is a constant integer, not `{t.lexeme}`" if t.kind != Int
 	p_advance(p)
 	v := int_value(t.lexeme)
 	return 0 - v if neg
@@ -801,9 +784,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 	p_advance(p) # name
 	# `fn f[T](x: T)` — the bracket group was read as the parameter list, so `[T]` became
 	# two parameters named `[` and `]` and the C came out unparseable
-	if p_at(p, LBrack) {
-		raise "NotImplemented: a generic function definition"
-	}
+	raise "NotImplemented: a generic function definition" if p_at(p, LBrack)
 	expect(p, LParen)
 	mut params: list[Param] = []
 	if recv != "" {
@@ -905,10 +886,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SSpawn(parse_expr(p))
 	}
+
 	return parse_select(p) if k == Select
-	if k == With {
-		raise "NotImplemented: with"
-	}
+	raise "NotImplemented: with" if k == With
+
 	if k == Del {
 		p_advance(p)
 		name := cur(p).lexeme
@@ -1159,9 +1140,7 @@ fn parse_cmp(mut &p: Parser) -> Expr {
 		# The right side is a bare name, not an expression: reading it as one would make
 		# `e is StopIteration` an ident lookup for a name nothing declares. Refusing here
 		# is what keeps a malformed test from reaching the emitter as something else.
-		if not p_at(p, Ident) {
-			raise f"`is` wants a type name on its right, found `{cur(p).lexeme}`"
-		}
+		raise f"`is` wants a type name on its right, found `{cur(p).lexeme}`" if not p_at(p, Ident)
 		name := cur(p).lexeme
 		p_advance(p)
 		return EIs(left, name)
@@ -1425,9 +1404,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# its statements never ran
 		raise "NotImplemented: unsafe"
 	}
-	if k == Asm {
-		raise "NotImplemented: asm"
-	}
+	raise "NotImplemented: asm" if k == Asm
 	if k == Cmd {
 		# A command literal runs a process, and what the EXPRESSION is worth — an exit
 		# code, the output, a process handle — is a stdlib question GRAMMAR deliberately
@@ -1500,9 +1477,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# first thing anyone writes — where the statement used to be consumed as NOTHING: the
 	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
 	# that compiles and is not the one that was written, so it is named instead.
-	if is_stmt_kw(k) {
-		raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here"
-	}
+	raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here" if is_stmt_kw(k)
 	p_advance(p)
 	return ENil
 }
@@ -1597,12 +1572,9 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# `= n + d` behind, and the arm loop then read the wreckage as further arms and emitted
 	# C that only cc could object to. A leftover `=` or `<-` after a body is exactly that
 	# situation, and it is now said in Zerg's own words.
-	if p_at(p, Assign) {
-		raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower"
-	}
-	if p_at(p, LArrow) {
-		raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower"
-	}
+	raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, Assign)
+	raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, LArrow)
+
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }
 
@@ -1773,9 +1745,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
-	if not p_at(hp, Eof) and not p_at(hp, Semi) {
-		raise "f-string: a hole must be a single expression: {" + hole + "}"
-	}
+	raise "f-string: a hole must be a single expression: {" + hole + "}" if not p_at(hp, Eof) and not p_at(hp, Semi)
 	return EConv(TStr, e)
 }
 
@@ -1808,9 +1778,7 @@ fn fstr_reject(hole: str) {
 			i = i + 1
 		}
 	}
-	if fstr_is_selfdoc(b) {
-		raise "NotImplemented: the f-string '{expr=}' self-documenting form — {" + hole + "}"
-	}
+	raise "NotImplemented: the f-string '{expr=}' self-documenting form — {" + hole + "}" if fstr_is_selfdoc(b)
 }
 
 fn fstr_is_conv(c: byte) -> bool {

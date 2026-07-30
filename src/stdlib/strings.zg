@@ -66,9 +66,7 @@ pub fn split(s: str, sep: str) -> list[str] {
 	hay := list[byte](s)
 	sepb := list[byte](sep)
 	m := sepb.len()
-	if m == 0 {
-		raise "strings.split: empty separator"
-	}
+	raise "strings.split: empty separator" if m == 0
 
 	mut out: list[str] = []
 	mut cur: list[byte] = []
@@ -115,9 +113,7 @@ pub fn join(parts: list[str], sep: str) -> str {
 # string). A negative count raises ValueError. It decodes s once and appends its bytes,
 # so the build is linear in the output length rather than the quadratic re-copy of `+`.
 pub fn repeat(s: str, count: int) -> str {
-	if count < 0 {
-		raise "strings.repeat: negative count"
-	}
+	raise "strings.repeat: negative count" if count < 0
 
 	sb := list[byte](s)
 	mut out: list[byte] = []
@@ -181,9 +177,7 @@ pub fn count(s: str, sub: str) -> int {
 	hay := list[byte](s)
 	nee := list[byte](sub)
 	m := nee.len()
-	if m == 0 {
-		raise "strings.count: empty substring"
-	}
+	raise "strings.count: empty substring" if m == 0
 
 	n := hay.len()
 	mut c := 0
@@ -204,9 +198,7 @@ pub fn count(s: str, sub: str) -> int {
 pub fn replace(s: str, old: str, new: str) -> str {
 	oldb := list[byte](old)
 	m := oldb.len()
-	if m == 0 {
-		raise "strings.replace: empty target"
-	}
+	raise "strings.replace: empty target" if m == 0
 
 	hay := list[byte](s)
 	newb := list[byte](new)

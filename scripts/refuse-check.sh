@@ -298,6 +298,70 @@ fn main() {
 }
 EOF
 
+# A discriminant belongs to a C-style integer enum, and only to one (GRAMMAR:573): a payload
+# enum's tag is opaque and match-only, so neither direction of the reading is offered on it.
+expect "$ZERG" discriminant-of-a-payload-enum "tag is opaque" <<'EOF'
+enum E {
+	P(int)
+	Q
+}
+
+fn main() {
+	print int(Q)
+}
+EOF
+
+expect "$ZERG" reverse-of-a-payload-enum "tag is opaque" <<'EOF'
+enum E {
+	P(int)
+	Q
+}
+
+fn main() {
+	print E.of(1) ?? Q
+}
+EOF
+
+expect "$ZERG" discriminant-on-a-payload-declaration "a discriminant" <<'EOF'
+enum E {
+	P(int) = 3
+	Q
+}
+
+fn main() {
+	print "x"
+}
+EOF
+
+expect "$ZERG" repeated-discriminant "repeats one already given" <<'EOF'
+enum K {
+	A = 1
+	B = 1
+}
+
+fn main() {
+	print int(A)
+}
+EOF
+
+# Every carrier in this backend has a `tag`, so a variant pattern applied to the wrong type
+# COMPILED and compared unrelated numbers. Over a `K?` the optional's present-tag is 0 and
+# the first variant's tag is 0, so this took the `A` arm for every present value.
+expect "$ZERG" variant-pattern-on-an-optional "cannot match a subject of type" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn main() {
+	k := K.of(1)
+	print match k {
+		A => "a"
+		_ => "other"
+	}
+}
+EOF
+
 # An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
 # reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
 # back empty, both in silence.

@@ -824,7 +824,17 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	}
 	if k == Raise {
 		p_advance(p)
-		return SRaise(parse_expr(p))
+		e := parse_expr(p)
+
+		# GRAMMAR gives the postfix `if` to the three JUMPS — `return x if c`, `break if c`,
+		# `continue if c` — and `raise` is not among them. It was ACCEPTED here and emitted as
+		# a mangled lambda that only cc objected to, in a file the programmer cannot open; the
+		# seed refused it all along, so the two compilers disagreed about the language. Write
+		# the block form, which is what the sugar would have meant.
+		if p_at(p, If) {
+			raise "`raise … if c` is not a form — the postfix `if` belongs to `return`, `break` and `continue`. Write `if c { raise … }`"
+		}
+		return SRaise(e)
 	}
 	return parse_return(p) if k == Return
 	if k == Break {

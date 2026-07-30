@@ -104,6 +104,54 @@ EOF
 # that was sent" and "the stream is over".
 # GRAMMAR says `select-arm+`, and the reason is not pedantry: an empty select parks on no
 # channel, so it never wakes — a hang with no cause to find. Both compilers say so.
+# The postfix `if` belongs to the three JUMPS. `raise … if c` was accepted here and emitted
+# as a mangled lambda that only cc objected to, in a file the programmer cannot open — while
+# the seed refused it all along, so the two compilers disagreed about the language.
+expect "$ZERG" postfix-if-on-a-raise "postfix \`if\` belongs to" <<'EOF'
+fn boom(n: int) -> int {
+	raise "ValueError: nope" if n < 0
+	return n * 2
+}
+
+fn main() {
+	print boom(3)
+}
+EOF
+
+# A jump out of a guard would leave its handler installed on a frame that has returned.
+expect "$ZERG" jump-out-of-a-guard "leaving a \`guard\` block" <<'EOF'
+fn f() -> int {
+	r := guard {
+		return 1
+	}
+	return r ?? -1
+}
+
+fn main() {
+	print f()
+}
+EOF
+
+# The seed LOWERS guard, so it has to agree about this one. It used to accept the jump and
+# emit a program that printed the right answer while leaving the handler installed on a frame
+# that had returned — the next abort anywhere in the caller would longjmp into a stack frame
+# that is gone.
+expect "$ZERG0" seed-jump-out-of-a-guard "leaving a \`guard\` block" <<'EOF'
+fn f(n: int) -> int {
+	r := guard {
+		if n > 0 {
+			return 99
+		}
+		n
+	}
+	return r ?? -1
+}
+
+fn main() {
+	print f(5)
+}
+EOF
+
 expect "$ZERG" empty-select "at least one arm" <<'EOF'
 fn main() {
 	for select {

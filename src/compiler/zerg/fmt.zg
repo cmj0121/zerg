@@ -219,7 +219,14 @@ fn fmt_is_lone_jump(mut &toks: list[Token], lb: int, rb: int) -> bool {
 	mut i := r + 1
 	for i < rb {
 		k := toks[i].kind
-		return false if is_comment(k) or is_lbrace(k)
+
+		# an `if` here is the jump's OWN postfix guard, and two of them is not a form: this
+		# rule used to produce `return 0 if n < 0 if m` from `if m { return 0 if n < 0 }` —
+		# source the compiler cannot parse, written by the tool that is supposed to preserve
+		# meaning. There is no single guard that says what the nesting says, so the block
+		# stays a block. (An if-EXPRESSION being returned is already declined by the `{`.)
+		return false if is_comment(k) or is_lbrace(k) or k == If
+
 		if is_semi(k) and fmt_more_after(toks, i, rb) {
 			return false # a second statement
 		}
@@ -2609,8 +2616,8 @@ fn fmt_before(a: str, b: str) -> bool {
 	return x.len() < y.len()
 }
 
-# is_jump reports the three statements that leave the block they are in, and so are the
-# ones the postfix guard is defined for.
+# is_jump reports the statements that DIVERGE — leave the block they are in without
+# producing a value — which is exactly the set GRAMMAR's postfix guard is defined for.
 fn is_jump(k: Kind) -> bool {
-	return k == Return or k == Break or k == Continue
+	return k == Return or k == Break or k == Continue or k == Raise
 }

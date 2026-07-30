@@ -200,8 +200,8 @@ with no way to tell them apart by looking.
 | `F407` | a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`             | on      |
 | `F408` | an or-pattern over consecutive integers becomes the range it is                | on      |
 
-`GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
-`if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
+`GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
+for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the
 same thing and one of them says it in four lines. The formatter picks the short one, which
 is what a guard clause is for: the exceptional exit stops interrupting the shape of the
 code it guards. A bare early exit works the same way — `return if c`.
@@ -209,6 +209,10 @@ code it guards. A bare early exit works the same way — `return if c`.
 Preferring the sugar is the general rule, not a special case for `return`: **where the
 language offers a shorter surface for exactly what is written, the canonical form is the
 shorter one**, and a reader stops having to notice that the two are the same thing.
+
+A jump that ALREADY carries its own guard keeps its block. There is no single `if` that says
+what `if m { return 0 if n < 0 }` says, and writing `return 0 if n < 0 if m` would be source
+no compiler parses — so the rule declines rather than inventing one.
 
 Note what this postfix `if` is NOT. It attaches to a jump, not to an expression — Zerg has
 no `A if X else B`. The conditional EXPRESSION is the block form, with a mandatory `else`:

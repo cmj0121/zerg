@@ -439,9 +439,7 @@ impl Command {
 	# sub-command may have its own.
 	pub fn sub(s: Command) -> This {
 		for x in this.subs {
-			if x.name == s.name {
-				raise ValueError(f"cli: sub-command {s.name} is declared twice")
-			}
+			raise ValueError(f"cli: sub-command {s.name} is declared twice") if x.name == s.name
 		}
 		mut ss := this.subs
 		ss.append(s)
@@ -456,22 +454,14 @@ impl Command {
 	# person, and only sometimes.
 	fn reject_duplicate(a: Argument) {
 		for x in this.args {
-			if a.short != "" and x.short == a.short {
-				raise ValueError(f"cli: -{a.short} is declared twice on {this.name}")
-			}
-			if a.long != "" and x.long == a.long {
-				raise ValueError(f"cli: --{a.long} is declared twice on {this.name}")
-			}
+			raise ValueError(f"cli: -{a.short} is declared twice on {this.name}") if a.short != "" and x.short == a.short
+			raise ValueError(f"cli: --{a.long} is declared twice on {this.name}") if a.long != "" and x.long == a.long
 		}
 		if this.auto_help {
-			if a.short == "h" or a.long == "help" {
-				raise ValueError(f"cli: -h/--help is automatic on {this.name} (use .no_help() to take it back)")
-			}
+			raise ValueError(f"cli: -h/--help is automatic on {this.name} (use .no_help() to take it back)") if a.short == "h" or a.long == "help"
 		}
 		if this.ver != "" {
-			if a.short == "V" or a.long == "version" {
-				raise ValueError("cli: -V/--version is declared by .version() on " + this.name)
-			}
+			raise ValueError("cli: -V/--version is declared by .version() on " + this.name) if a.short == "V" or a.long == "version"
 		}
 	}
 }

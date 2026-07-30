@@ -104,17 +104,16 @@ EOF
 # that was sent" and "the stream is over".
 # GRAMMAR says `select-arm+`, and the reason is not pedantry: an empty select parks on no
 # channel, so it never wakes — a hang with no cause to find. Both compilers say so.
-# The postfix `if` belongs to the three JUMPS. `raise … if c` was accepted here and emitted
-# as a mangled lambda that only cc objected to, in a file the programmer cannot open — while
-# the seed refused it all along, so the two compilers disagreed about the language.
-expect "$ZERG" postfix-if-on-a-raise "postfix \`if\` belongs to" <<'EOF'
-fn boom(n: int) -> int {
-	raise "ValueError: nope" if n < 0
-	return n * 2
+# A cause chain is made of Errs. The `from` operand used to be read as whatever C type it
+# happened to be and handed straight to the runtime, which takes a pointer — so an int cause
+# came out as a cc warning about a generated file, not a Zerg diagnostic.
+expect "$ZERG" from-cause-that-is-not-an-err "a \`from\` cause is an \`Err\`" <<'EOF'
+fn f(n: int) -> int {
+	raise ValueError("x") from n
 }
 
 fn main() {
-	print boom(3)
+	print f(1)
 }
 EOF
 
@@ -221,6 +220,212 @@ fn main() {
 }
 EOF
 
+# A match lowers to a chain of ternaries whose LAST arm is the final `else`, untested. So a
+# match missing a case never failed — it answered the last arm's body for everything nothing
+# else matched: `C` came back "b" below, and `f(3)` came back "b" in the int case. A wrong
+# answer with no diagnostic is the outcome this repo does not tolerate, and the seed has
+# refused both since it had enums.
+expect "$ZERG" non-exhaustive-enum-match "missing variant K.C" <<'EOF'
+enum K {
+	A
+	B
+	C
+}
+
+fn name(k: K) -> str {
+	return match k {
+		A => "a"
+		B => "b"
+	}
+}
+
+fn main() {
+	print name(A)
+}
+EOF
+
+expect "$ZERG" non-exhaustive-int-match "missing a catch-all" <<'EOF'
+fn f(n: int) -> str {
+	return match n {
+		1 => "a"
+		2 => "b"
+	}
+}
+
+fn main() {
+	print f(3)
+}
+EOF
+
+# An arm's guard goes BEFORE the `=>` (GRAMMAR:422). Written after the body it was silently
+# DROPPED, so the arm compiled unconditional AND counted toward exhaustiveness as if it had
+# no guard — the two halves of the guard rule, both wrong, from one easy typo.
+expect "$ZERG" arm-guard-after-the-body "goes before the \`=>\`" <<'EOF'
+fn f(n: int) -> str {
+	return match n {
+		1 => "one" if n > 0
+		_ => "rest"
+	}
+}
+
+fn main() {
+	print f(1)
+}
+EOF
+
+# A guard makes an arm conditional, so it covers nothing: the compiler cannot prove the guard
+# holds (GRAMMAR:410), and `A` below is uncovered even though it is named.
+expect "$ZERG" guarded-arm-covers-nothing "missing variant K.A" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn f(k: K) -> str {
+	return match k {
+		A if true => "a"
+		B => "b"
+	}
+}
+
+fn main() {
+	print f(A)
+}
+EOF
+
+# An arm after an unguarded catch-all is dead, and worse: the lowering hands the LAST arm the
+# `else`, so the arm that can never match is the one that runs by default.
+expect "$ZERG" arm-after-the-catch-all "makes the following arms unreachable" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn f(k: K) -> str {
+	return match k {
+		_ => "rest"
+		A => "a"
+	}
+}
+
+fn main() {
+	print f(B)
+}
+EOF
+
+# A discriminant belongs to a C-style integer enum, and only to one (GRAMMAR:573): a payload
+# enum's tag is opaque and match-only, so neither direction of the reading is offered on it.
+expect "$ZERG" discriminant-of-a-payload-enum "tag is opaque" <<'EOF'
+enum E {
+	P(int)
+	Q
+}
+
+fn main() {
+	print int(Q)
+}
+EOF
+
+expect "$ZERG" reverse-of-a-payload-enum "tag is opaque" <<'EOF'
+enum E {
+	P(int)
+	Q
+}
+
+fn main() {
+	print E.of(1) ?? Q
+}
+EOF
+
+expect "$ZERG" discriminant-on-a-payload-declaration "a discriminant" <<'EOF'
+enum E {
+	P(int) = 3
+	Q
+}
+
+fn main() {
+	print "x"
+}
+EOF
+
+# ...including one whose declared value HAPPENS to equal its position, which is otherwise
+# indistinguishable from declaring nothing — so it was read and then quietly dropped.
+expect "$ZERG" discriminant-that-looks-like-its-position "a discriminant" <<'EOF'
+enum E {
+	P(int) = 0
+	Q = 1
+}
+
+fn main() {
+	print "x"
+}
+EOF
+
+# A carrier is not a value to convert: `int(k)` over a `K?` cast the carrier STRUCT, which
+# cc rejected against generated code. The unwrap belongs to the programmer.
+expect "$ZERG" conversion-of-a-carrier "may not have one" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn main() {
+	k := K.of(1)
+	print int(k)
+}
+EOF
+
+# An enum's ONE conversion is `int`, its discriminant. Every other one fell through to a
+# plain C cast of the tagged-union STRUCT.
+expect "$ZERG" non-int-conversion-of-an-enum "converts to \`int\`" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn main() {
+	print float(A)
+}
+EOF
+
+# Each side of an Either holds exactly one value.
+expect "$ZERG" either-side-with-two-values "holds exactly one value" <<'EOF'
+fn f() -> Result[int] {
+	return Left(1, 2)
+}
+
+fn main() { print f() ?? 0 }
+EOF
+
+expect "$ZERG" repeated-discriminant "repeats one already given" <<'EOF'
+enum K {
+	A = 1
+	B = 1
+}
+
+fn main() {
+	print int(A)
+}
+EOF
+
+# Every carrier in this backend has a `tag`, so a variant pattern applied to the wrong type
+# COMPILED and compared unrelated numbers. Over a `K?` the optional's present-tag is 0 and
+# the first variant's tag is 0, so this took the `A` arm for every present value.
+expect "$ZERG" variant-pattern-on-an-optional "cannot match a subject of type" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn main() {
+	k := K.of(1)
+	print match k {
+		A => "a"
+		_ => "other"
+	}
+}
+EOF
+
 # An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
 # reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
 # back empty, both in silence.
@@ -263,13 +468,23 @@ struct B[T] {
 fn main() { print "x" }
 EOF
 
-# Left and Right name the two sides of the carrier a receive answers with, and neither
-# compiler offers them as constructors: a Result[T] comes from `<-ch` or from `guard`.
-expect "$ZERG" carrier-is-not-a-constructor "no type named \`Left\` to construct" <<'EOF'
-fn f() -> Result[int] {
-	return Left(1)
+# Left and Right name the two SIDES of an Either and have no type of their own, so they are
+# read where the wanted type is known. Written where there is none, the compiler says which
+# of the two problems it is — a form used without its context, not a form that does not exist.
+expect "$ZERG" carrier-constructor-without-a-context "needs a declared one to be" <<'EOF'
+fn main() {
+	x := Left(1)
+	print 1
 }
-fn main() { print "x" }
+EOF
+
+# The two sides of an Either must DIFFER: an injection could otherwise reach both, and
+# nothing at the match would tell which one it took.
+expect "$ZERG" either-with-equal-sides "has the same type on both sides" <<'EOF'
+fn f(n: int) -> Either[int, int] {
+	return Left(n)
+}
+fn main() { print 1 }
 EOF
 
 # --- the seed ---------------------------------------------------------------------
@@ -345,7 +560,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" try-without-an-optional-result "must answer a \`T?\`" <<'EOF'
+expect "$ZERG" try-without-a-carrier-result "must answer a carrier with the same right" <<'EOF'
 fn head(x: int?) -> int {
 	return x?
 }

@@ -31,13 +31,11 @@ fn load() -> Result[Config] {
 ```
 
 > **[deviation]** `?` is defined on any `Either[X, Y]` — unwrap the `Left`, early-return the `Right`
-> unchanged — and the two compilers cover different halves of it. The **seed** threads `Result[T]`:
-> on a general `Either` the right payload is **dropped** (a silent miscompile), and `?` on a
-> **`Result[nil]`** reaches the backend as a `void`-typed binding (a fail-loud sema gap). The shipped
-> **`zerg`** threads **`T?`** instead — the absence early-returns, and the enclosing function must
-> answer a `T?` to carry it — and refuses the `Result` half **by name**, because `Result[T]` does not
-> survive in a signature there yet. The intended behavior threads the `Right` value unchanged in
-> every case.
+> unchanged. The shipped **`zerg`** does exactly that for every carrier: the enclosing function must
+> answer one with the **same right**, and the right travels unchanged, so an `Err` keeps its kind
+> across the propagation. The **seed** threads `Result[T]` only: on a general `Either` the right
+> payload is **dropped** (a silent miscompile), and `?` on a **`Result[nil]`** reaches the backend as
+> a `void`-typed binding (a fail-loud sema gap).
 
 **`??` — default.** `a ?? b` yields `a`'s left value if present, else `b` (right discarded); it
 short-circuits, chains right-to-left, and works on any `Either`.
@@ -67,7 +65,10 @@ in the signature) for **expected, recoverable** failure; `raise` is for the **un
 invariant, a failed assertion, a "can't happen" — so it enters no signature and is caught only by `guard`.
 A **`raise e from cause`** form records `cause` as `e`'s `unwrap()` — a **nested** abort that wraps a
 lower-level `Err` in a higher-level one without losing it, feeding the same cause chain every `Error`
-exposes; a bare `raise e` carries `e` unchanged.
+exposes; a bare `raise e` carries `e` unchanged. A `raise` **statement** takes the **postfix guard** every
+other diverge takes — `raise e if c`, and `raise e from cause if c` — which is sugar for `if c { raise e }`
+and is what the formatter's `F401` rewrites the block form into. It is the statement form only: a `raise`
+on the right of a `??` takes no trailing `if`, since the guard would read as the coalesce's.
 
 **The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds **[implemented]** —
 **`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**

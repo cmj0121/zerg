@@ -164,8 +164,9 @@ interface 約束**——所以 `io.read_file` 走的是 runtime 的 syscall leaf
 Zerg 是 Phase-1 MVP，而現在有**兩個**編譯器——任何狀態說法都必須對照它們來讀：
 
 - **`zerg`**——以 Zerg 寫成、實際出貨的那個。它能編譯自己，而它接受的語言是兩者中較小的：struct、enum
-  （payload 與遞迴）、`match`、`list[T]`、字串與 byte、`mut &` 參數、`guard` / `raise`，以及模組。它**還
-  沒有**泛型、`spec` / `impl`、`derive` 或 optional。
+  （payload、遞迴,以及可觀察的 discriminant）、帶窮盡性檢查的 `match`、`list[T]`、字串與 byte、`mut &` 參數、
+  optional、完整的 value tier（`Either[X, Y]` / `Result[T]` / `Left` / `Right`）、`guard` / `raise`,以及模組。
+  它**還沒有**泛型、`spec` / `impl` 或 `derive`。
 - **`zerg0`**——以 Go 實作的種子，唯一職責是建出 `zerg`。它支援 `Zerg-boot` 子集（以文法寫在
   [`src/bootstrap/README.md`](src/bootstrap/README.md)），其餘一律大聲拒絕，而不是誤編譯。
 
@@ -192,9 +193,8 @@ reference-counted）、tuple、`defer`、range、f-string，以及帶 `pub` 可�
 （目前算術降成純 C）；`Eq` / `Ord` 以外的完整 `derive` 集（`Hash` / `Encode` / `Decode`）；`set[T]`；
 `list` / `map` 的相等比較；command literal（`` `git status` ``）；非-error 型別的 `is` 測試；排程器的**搶佔**
 （**M:N** 排程器本身已經在了——但還沒有任何東西能在一條 coroutine 自己 park 之前把它從 worker 上拿下來，所以一個
-CPU-bound 的 coroutine 會佔住一條 worker，數量到達 worker 數就讓整個程式停擺）；`Result[T]` 能在**簽章**裡存活，
-那也是施於 `Result` 的 `?` 還在等的東西；`Reader` / `stdin` I/O 介面；generic type alias；以及規格狀態標記所追蹤的一批較小的
-形式。
+CPU-bound 的 coroutine 會佔住一條 worker，數量到達 worker 數就讓整個程式停擺）；`Reader` / `stdin` I/O 介面；
+generic type alias；以及規格狀態標記所追蹤的一批較小的形式。
 
 **已知偏差（規格對照目前行為記錄的 bug）。** 有少數可觀察行為尚未符合意圖語意——bootstrap 目前 emit `-std=c11`
 而非規格所定的 C17 預設 / C99 fallback；call 引數與運算元的左到右求值順序尚未強制；以及 named integer 型別的

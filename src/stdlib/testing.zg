@@ -10,9 +10,7 @@
 # assert succeeds when cond holds; otherwise it raises so the failure is observable
 # (an enclosing `guard` catches it, or it aborts the program).
 pub fn assert(cond: bool) -> Result[nil] {
-	if not cond {
-		raise "assertion failed"
-	}
+	raise "assertion failed" if not cond
 	return nil
 }
 
@@ -20,17 +18,13 @@ pub fn assert(cond: bool) -> Result[nil] {
 # spec / a `#[derive(Eq)]` from Phase 1c); otherwise it raises. Generic over any
 # `T: Eq`, so it serves the primitive scalars and any user type that derives Eq.
 pub fn assert_eq[T: Eq](a: T, b: T) -> Result[nil] {
-	if a != b {
-		raise "assert_eq failed: values are not equal"
-	}
+	raise "assert_eq failed: values are not equal" if a != b
 	return nil
 }
 
 # assert_ne is the negation: it succeeds when a and b differ, and raises when they
 # compare equal.
 pub fn assert_ne[T: Eq](a: T, b: T) -> Result[nil] {
-	if a == b {
-		raise "assert_ne failed: values are equal"
-	}
+	raise "assert_ne failed: values are equal" if a == b
 	return nil
 }

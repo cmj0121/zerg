@@ -228,9 +228,11 @@ func (c *checker) inferChanNew(n *ast.ChanNew) Type {
 	return &types.Chan{Elem: elem, Dir: types.ChanBidi}
 }
 
-// inferRecv types a channel receive '<-ch' (GRAMMAR group 9): it yields Result[T]
-// (Left = a received value, Right = the channel closed, carrying StopIteration or a
-// crash Err). Receiving from a send-only channel is rejected (directional narrowing).
+// inferRecv types a channel receive '<-ch' (GRAMMAR group 9): it yields T? — nil once the
+// stream is over, and over for good. A CLEAN close is an absence and that is what an
+// optional is for; a CRASH close is a failure and is RAISED instead, carrying the
+// producer's own Err, so the reason cannot be lost by a receiver that was not looking for
+// it. Receiving from a send-only channel is rejected (directional narrowing).
 func (c *checker) inferRecv(n *ast.Recv) Type {
 	xt := c.synth(n.X)
 	ch, ok := xt.(*types.Chan)
@@ -243,7 +245,7 @@ func (c *checker) inferRecv(n *ast.Recv) Type {
 	if ch.Dir == types.ChanSend {
 		c.errorf(n.Span(), "cannot receive from a send-only channel %s", ch)
 	}
-	return resultType(ch.Elem)
+	return &types.Opt{Elem: ch.Elem}
 }
 
 func (c *checker) inferIdent(n *ast.Ident) Type {
@@ -783,7 +785,7 @@ func (c *checker) assignable(want Type, e ast.Expr, vt Type) bool {
 	// of the same element type (GRAMMAR group 9: 'chan[T]' narrows to '<-chan[T]' /
 	// 'chan[T]<-'). Directional narrowing is what lets a program hand a send-capable copy
 	// to a producer while keeping a receive-only handle — so the channel can auto-close
-	// when the last sender leaves and a 'select' can observe 'done'.
+	// when the last sender leaves and a 'select' can observe it as its 'close' arm.
 	if want, ok := want.(*types.Chan); ok {
 		if vt, ok := vt.(*types.Chan); ok {
 			return vt.Dir == types.ChanBidi && types.Identical(want.Elem, vt.Elem)

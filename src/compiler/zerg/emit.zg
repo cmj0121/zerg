@@ -2389,7 +2389,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)
 		EFn(ps, has_ret, ret, body) => c_lambda_ty(ps, has_ret, ret)
 		EChanNew(t, cap) => TChan(t, 0)
-		ERecv(ch) => TResult(ty_chan_elem(c_infer(em, ch)))
+		ERecv(ch) => TOpt(ty_chan_elem(c_infer(em, ch)))
 		EForce(x) => c_carrier_elem(c_infer(em, x))
 		ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
 		EGuard(body) => TResult(c_guard_elem(c_guard_val_ty(em, body)))
@@ -2727,7 +2727,19 @@ fn c_init_calls(f: File) -> str {
 fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	em.used_conc = true
+	c_chan_elem_check(t)
 	return f"zrt_chan_new(sizeof({c_type(t)}), (size_t)({c_expr(em, cap, sb)}))"
+}
+
+# c_chan_elem_check refuses `chan[T?]`, and it is the price of the receive answering `T?`.
+# `T?` does not nest, so a receive on a channel of optionals would answer nil for two
+# different facts — "the value that was sent is absent" and "the stream is over" — with no
+# way to tell them apart. One loud rule is worth more than that ambiguity; a value that
+# might be absent travels in a struct, or as a sentinel the receiver agrees on.
+fn c_chan_elem_check(t: Ty) {
+	if c_is_opt(t) {
+		raise "a channel of optionals is refused — a receive answers `T?`, so `nil` would mean both the value and the end of the stream. Wrap it in a struct, or send a sentinel"
+	}
 }
 
 # --- channel direction ------------------------------------------------------------
@@ -2861,20 +2873,27 @@ fn c_recv(mut &em: Emitter, ch: Expr, sb: Subst) -> str {
 # RETURN value while writing the element through a pointer, and a C expression can be one
 # of those or the other, not both. The helper is where the two become one `Result[T]`.
 #
-# The Right carries WHY, which is the entire reason a receive answers a Result rather
-# than an optional. zrt_chan_close_err hands back the whole Err — a clean close under the
-# StopIteration kind, a crash close carrying the dead coroutine's own message, cause and
-# kind. Reading the KIND is how the two are told apart; nothing here matches on a string,
-# and nothing invents a stand-in for a reason the channel already knows.
+# A CLEAN close is an ABSENCE and a CRASH close is a FAILURE, and the language already has
+# a different answer for each: `T?` for the first, `raise` for the second. So the receive
+# hands back `T?` — nil once the stream is over, and over for good — while a crash close
+# raises the producer's own Err, message, cause and kind intact.
+#
+# That split is what makes the reason impossible to drop. A Result made the caller ask
+# WHICH kind of Right it had before it could tell "the stream ended" from "the producer
+# died"; anyone who forgot lost the death. Here the two cannot be confused, because they
+# do not arrive by the same route.
 fn c_recv_helper(mut &em: Emitter, elem: Ty) -> str {
-	cn := c_carrier_name(em, elem)
+	cn := c_opt_name(em, elem)
 	name := "zg_recv_" + c_ident_safe(c_type(elem))
 	return name if c_name_in(em.rcv_names, name)
 	em.rcv_names.append(name)
 	mut d := "static " + cn + " " + name + "(zrt_chan *ch) {\n"
 	d = d + "    " + cn + " r = {0};\n"
 	d = d + "    " + c_res_tag("r") + " = (int32_t)zrt_chan_recv(ch, &" + c_res_ok("r") + ");\n"
-	d = d + "    if (" + c_res_is_right("r") + ") { " + c_res_err("r") + " = zrt_chan_close_err(ch); }\n"
+	d = d + "    if (" + c_res_is_right("r") + ") {\n"
+	d = d + "        zrt_err e = zrt_chan_close_err(ch);\n"
+	d = d + "        if (e.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(e); }\n"
+	d = d + "    }\n"
 	d = d + "    return r;\n}\n"
 	em.rcv_decls.append(d)
 	return name

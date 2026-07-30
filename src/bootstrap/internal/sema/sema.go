@@ -952,8 +952,9 @@ func (c *checker) checkStmt(s ast.Stmt) {
 // It runs for effect (it yields no value). Each arm is checked in its own scope: a recv
 // arm's channel must be a receivable channel and its '(id :=)' bind takes Result[T]
 // (Left = a received value, Right = the channel closed) like a bare '<-ch'; a send arm
-// type-checks 'ch <- v' as a send statement does; the 'done' and '_' arms carry only a
-// body. Both 'done' and '_' are contextual — special only as an arm head here.
+// type-checks 'ch <- v' as a send statement does; the '_' arm carries only a body and is
+// the only bare identifier an arm may open with. There is no terminal arm — 'for select'
+// is what ends.
 func (c *checker) checkSelect(n *ast.SelectStmt) {
 	for i := range n.Arms {
 		arm := &n.Arms[i]
@@ -965,8 +966,11 @@ func (c *checker) checkSelect(n *ast.SelectStmt) {
 				if ch.Dir == types.ChanSend {
 					c.errorf(arm.Chan.Span(), "cannot receive from a send-only channel %s", ch)
 				}
+				// the arm binds the VALUE: an arm that fires has one by construction,
+				// since a cleanly closed channel drops out of the wait and a crash close
+				// raises. Neither reaches a body, so neither needs a carrier around it.
 				if arm.HasBind && arm.Bind != "" && arm.Bind != "_" {
-					c.declare(arm.Span(), arm.Bind, resultType(ch.Elem), false)
+					c.declare(arm.Span(), arm.Bind, ch.Elem, false)
 				}
 			} else if !bad(ct) {
 				c.errorf(arm.Chan.Span(), "receive '<-' requires a channel, found %s", ct)
@@ -984,7 +988,7 @@ func (c *checker) checkSelect(n *ast.SelectStmt) {
 			} else if !bad(ct) {
 				c.errorf(arm.Chan.Span(), "send '<-' requires a channel, found %s", ct)
 			}
-		case ast.SelectDone, ast.SelectDefault:
+		case ast.SelectDefault:
 		}
 		// The arm body runs for effect. A '{ … }' block body is checked statement by
 		// statement (synthExpr alone would treat a block as Unknown without descending),

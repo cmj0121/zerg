@@ -40,14 +40,15 @@ enum Ty {
 	# rather than as three variants that would triple every match over Ty.
 	TChan(Ty, int)
 
-	# TResult is `Result[T]`, the carrier a receive answers with: Left(v) is a value,
-	# Right(err) is why there will not be one. It is produced by INFERENCE — from `<-ch`
-	# and from a select receive arm — rather than by a type annotation, because parse_type
-	# still erases `Result[T]` in a signature; making a signature carry one is a separate
-	# unit, and it drags the whole error model in with it.
+	# TEither is `Either[X, Y]`, the one sum type of the value tier: a Left that is the
+	# value, or a Right that is what gets propagated instead. `Result[T]` is the case whose
+	# Right is `Err`, and it is spelled that way rather than held as a variant of its own —
+	# two representations of one type is how an operator comes to handle a Result and miss
+	# the Either it is.
 	#
-	# TErr is `Err` itself, the Right payload. It is the runtime's zrt_err by value.
-	TResult(Ty)
+	# TErr is `Err` itself, the Right payload of a Result. It is the runtime's zrt_err by
+	# value.
+	TEither(Ty, Ty)
 
 	# TOpt is `T?`, the optional. GRAMMAR group 8 defines it as `Either[T, nil]` — the same
 	# shape as a Result with `nil` where the Err would be — so it lowers to a carrier with
@@ -442,6 +443,20 @@ fn expr_kind(e: Expr) -> str {
 }
 
 # ty_name spells a type the way the source does.
+# either_name spells an Either the way it is written: the one whose Right is `Err` is
+# `Result[T]`, which is the name the language gives that case.
+fn either_name(l: Ty, r: Ty) -> str {
+	return f"Result[{ty_name(l)}]" if is_err_ty(r)
+	return f"Either[{ty_name(l)}, {ty_name(r)}]"
+}
+
+fn is_err_ty(t: Ty) -> bool {
+	return match t {
+		TErr => true
+		_    => false
+	}
+}
+
 fn ty_name(t: Ty) -> str {
 	return match t {
 		TInt          => "int"
@@ -455,7 +470,7 @@ fn ty_name(t: Ty) -> str {
 		TList(e)      => f"list[{ty_name(e)}]"
 		TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"
 		TChan(e, dir) => chan_ty_name(e, dir)
-		TResult(e)    => f"Result[{ty_name(e)}]"
+		TEither(l, r) => either_name(l, r)
 		TOpt(e)       => f"{ty_name(e)}?"
 		TErr          => "Err"
 		_             => "?"

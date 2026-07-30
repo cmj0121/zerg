@@ -177,22 +177,22 @@ fn c_extend(sb: Subst, name: str, repl: str) -> Subst {
 # c_type maps a value type to its C spelling.
 fn c_type(t: Ty) -> str {
 	return match t {
-		TInt        => "int64_t"
-		TFloat      => "double"
-		TStr        => "const char*"
-		TBool       => "bool"
-		TVoid       => "void"
-		TByte       => "uint8_t"
-		TNamed(nm)  => "zg_" + nm
-		TList(_)    => "zrt_list"
-		TFn(_, _)   => "zg_fnptr"
-		TTuple(ts)  => c_tuple_cname(ts)
-		TMap(_, _)  => "zrt_map"
-		TChan(_, _) => "zrt_chan*"
-		TResult(el) => c_carrier_cname(el)
-		TOpt(el)    => c_opt_cname(el)
-		TErr        => "zrt_err"
-		_           => "int64_t"
+		TInt          => "int64_t"
+		TFloat        => "double"
+		TStr          => "const char*"
+		TBool         => "bool"
+		TVoid         => "void"
+		TByte         => "uint8_t"
+		TNamed(nm)    => "zg_" + nm
+		TList(_)      => "zrt_list"
+		TFn(_, _)     => "zg_fnptr"
+		TTuple(ts)    => c_tuple_cname(ts)
+		TMap(_, _)    => "zrt_map"
+		TChan(_, _)   => "zrt_chan*"
+		TEither(l, r) => c_carrier_cname(l, r)
+		TOpt(el)      => c_opt_cname(el)
+		TErr          => "zrt_err"
+		_             => "int64_t"
 	}
 }
 
@@ -213,8 +213,9 @@ fn c_type(t: Ty) -> str {
 # Two payloads whose C type coincides — `Result[list[int]]` and `Result[list[str]]` are
 # both `zrt_list` — share one carrier. That is harmless: the C is identical, and the
 # tuple carriers have behaved this way since they existed.
-fn c_carrier_cname(elem: Ty) -> str {
-	return "zg_res_" + c_ident_safe(c_type(elem))
+fn c_carrier_cname(left: Ty, right: Ty) -> str {
+	return "zg_res_" + c_ident_safe(c_type(left)) if c_is_err_ty(right)
+	return f"zg_eit_{c_ident_safe(c_type(left))}_{c_ident_safe(c_type(right))}"
 }
 
 # c_opt_cname is the C name of `T?`'s carrier. It is DISTINCT from the Result's even
@@ -225,22 +226,11 @@ fn c_opt_cname(elem: Ty) -> str {
 	return "zg_opt_" + c_ident_safe(c_type(elem))
 }
 
-# c_opt_name is c_opt_cname plus the typedef and force helper, registered once per shape —
-# the optional's half of what c_carrier_name does for a Result. The layout matches the
-# Result's tag/value prefix so every accessor is shared; the err field is not there,
-# because the absent side of an optional carries nothing.
+# c_opt_name registers the carrier for `T?` and answers its C name — the optional's half of
+# what c_carrier_name does for an Either.
 fn c_opt_name(mut &em: Emitter, elem: Ty) -> str {
-	name := c_opt_cname(elem)
-	return name if c_name_in(em.res_names, name)
-	em.used_rt = true
-	em.res_names.append(name)
-	ct := c_type(elem)
-	mut d := f"typedef struct {{ int32_t tag; {ct} ok; }} {name};\n"
-	d = d + "static " + ct + " zg_force_" + name + "(" + name + " r) {\n"
-	d = d + "    if (" + c_res_is_right("r") + ") { zrt_raise_err(zrt_err_new(\"force-unwrap of nil\")); }\n"
-	d = d + "    return " + c_res_ok("r") + ";\n}\n"
-	em.res_decls.append(d)
-	return name
+	c_carrier_register(em, TOpt(elem))
+	return c_opt_cname(elem)
 }
 
 # c_opt_wrap builds a `T?` from something that is not one yet: `nil` is the ABSENT value
@@ -260,11 +250,57 @@ fn c_is_nil_lit(e: Expr) -> bool {
 	}
 }
 
-# c_opt_fit renders `e` where a `T?` is wanted: an optional passes through, anything else
-# is wrapped. Every place a declared optional meets a value goes through it.
-fn c_opt_fit(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
-	return c_expr(em, e, sb) if c_is_opt(c_infer(em, e))
-	return c_opt_wrap(em, c_opt_elem(want), e, sb)
+# c_carrier_fit renders `e` where a CARRIER is wanted — a `T?`, a `Result[T]`, an
+# `Either[X, Y]`. One of the same shape passes through; anything else is injected into it.
+# Every place a declared carrier meets a value goes through here, which is what makes a
+# declaration mean what it says: `-> Result[nil] { return nil }` returns a Left, not a bare
+# nil that the caller then reads a tag out of.
+fn c_carrier_fit(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+	return c_expr(em, e, sb) if c_carrier_ty_cname(c_infer(em, e)) == c_carrier_ty_cname(want)
+	return c_opt_wrap(em, c_opt_elem(want), e, sb) if c_is_opt(want)
+
+	return c_either_wrap(em, want, e, sb)
+}
+
+# c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
+# explicitly — they are CONTEXT-TYPED, having no type of their own to be — and a bare value
+# picks the side its type matches. The sides of an Either differ (parse_type refuses
+# `Either[T, T]`), which is what makes that unambiguous.
+fn c_either_wrap(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+	lt := c_either_left(want)
+	rt := c_either_right(want)
+	cn := c_carrier_name(em, lt, rt)
+
+	side := c_ctor_side(e)
+	if side >= 0 {
+		inner := c_call_args_of(e)[0]
+		return "(" + cn + "){ .tag = 0, .ok = " + c_copied(em, lt, inner, sb) + " }" if side == 0
+		return "(" + cn + "){ .tag = 1, .err = " + c_copied(em, rt, inner, sb) + " }"
+	}
+
+	et := c_infer(em, e)
+
+	return "(" + cn + "){ .tag = 1, .err = " + c_copied(em, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
+	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Left(…)` or `Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
+
+	return "(" + cn + "){ .tag = 0, .ok = " + c_copied(em, lt, e, sb) + " }"
+}
+
+# c_ctor_side is which side of an Either a `Left(v)` / `Right(e)` call names — 0, 1, or -1
+# for anything that is not one. They are the only calls whose meaning depends on where they
+# are written, which is why they are read here rather than in c_call.
+fn c_ctor_side(e: Expr) -> int {
+	return match e {
+		ECall(nm, args) => c_ctor_side_of(nm, args.len())
+		_ => 0 - 1
+	}
+}
+
+fn c_ctor_side_of(nm: str, n: int) -> int {
+	return 0 if nm == "Left" and n == 1
+	return 1 if nm == "Right" and n == 1
+
+	return 0 - 1
 }
 
 # c_optchain lowers `a?.b` (GRAMMAR group 8): read `.b` when `a` is present, else nil IN
@@ -321,12 +357,16 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 
-	raise f"NotImplemented: `?` on a {ty_name(t)} — it early-returns the absent side from the enclosing function, which needs a `T?` result (a `Result[T]` in a signature is a unit of its own)" if not c_is_opt(t)
-	raise "`?` early-returns the absent side, so the enclosing function must answer a `T?` — this one answers " + ty_name(em.fn_ret) if not c_is_opt(em.fn_ret)
+	raise f"NotImplemented: `?` on a {ty_name(t)} — it unwraps the Left of a carrier, and that is a `T?`, a `Result[T]` or an `Either[X, Y]`" if not c_is_carrier(t)
+	raise f"`?` early-returns the RIGHT of {ty_name(t)}, so the enclosing function must answer a carrier with the same right — this one answers {ty_name(em.fn_ret)}" if not c_is_carrier(em.fn_ret)
 
-	elem := c_opt_elem(t)
-	src := c_opt_name(em, elem)
-	rcn := c_opt_name(em, c_opt_elem(em.fn_ret))
+	# the two rights must MATCH: `?` hands the operand's right side straight out of the
+	# function, so a `Result[T]` cannot propagate out of one answering `int?` — there would
+	# be no Err to put in the absent side, and no absence to make of an Err.
+	raise f"`?` propagates the right of {ty_name(t)} out of a function answering {ty_name(em.fn_ret)}, and the two rights differ — convert first (`opt.ok_or(err)`, `res.ok()`)" if not c_right_matches(t, em.fn_ret)
+
+	src := c_carrier_of(em, t)
+	rcn := c_carrier_of(em, em.fn_ret)
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 	tv := "zg_tr" + tag
@@ -336,7 +376,23 @@ fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 		out = out + " zrt_unwind_to(" + em.fn_mark + ");"
 	}
 	out = out + " " + c_release_from(em, 0, "")
-	return out + " return (" + rcn + "){ .tag = 1 }; } " + c_res_ok(tv) + "; })"
+
+	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
+	# carries the value that is the whole reason the early return happened
+	mut right := f"({rcn}){{ .tag = 1 }}"
+	if not c_is_opt(em.fn_ret) {
+		right = f"({rcn}){{ .tag = 1, .err = {c_res_err(tv)} }}"
+	}
+	return out + " return " + right + "; } " + c_res_ok(tv) + "; })"
+}
+
+# c_right_matches reports whether two carriers propagate the same thing: an optional's
+# right is `nil` and carries nothing, and an Either's is its declared right type.
+fn c_right_matches(a: Ty, b: Ty) -> bool {
+	return c_is_opt(b) if c_is_opt(a)
+	return false if c_is_opt(b)
+
+	return ty_name(c_either_right(a)) == ty_name(c_either_right(b))
 }
 
 fn c_optchain_ty(mut &em: Emitter, target: Expr, fld: str) -> Ty {
@@ -368,7 +424,7 @@ fn c_opt_elem(t: Ty) -> Ty {
 # Result: `??`, `!` and `if v := …` read a tag and a value, and both carriers have those.
 # The two only part company where the absent side is built or explained.
 fn c_is_carrier(t: Ty) -> bool {
-	return c_is_result(t) or c_is_opt(t)
+	return c_is_either(t) or c_is_opt(t)
 }
 
 fn c_carrier_elem(t: Ty) -> Ty {
@@ -379,20 +435,37 @@ fn c_carrier_elem(t: Ty) -> Ty {
 # c_carrier_of registers whichever carrier a type is and answers its C name.
 fn c_carrier_of(mut &em: Emitter, t: Ty) -> str {
 	return c_opt_name(em, c_opt_elem(t)) if c_is_opt(t)
-	return c_carrier_name(em, c_result_elem(t))
+	return c_carrier_name(em, c_either_left(t), c_either_right(t))
 }
 
+# c_is_result is the Either whose Right is `Err` — the shape `guard` and a receive answer
+# with, and the one `?` propagates out of a function. c_is_either is any of them.
 fn c_is_result(t: Ty) -> bool {
+	return c_is_either(t) and c_is_err_ty(c_either_right(t))
+}
+
+fn c_is_either(t: Ty) -> bool {
 	return match t {
-		TResult(_) => true
-		_          => false
+		TEither(_, _) => true
+		_             => false
 	}
 }
 
 fn c_result_elem(t: Ty) -> Ty {
+	return c_either_left(t)
+}
+
+fn c_either_left(t: Ty) -> Ty {
 	return match t {
-		TResult(e) => e
-		_          => TUnknown
+		TEither(l, _) => l
+		_             => TUnknown
+	}
+}
+
+fn c_either_right(t: Ty) -> Ty {
+	return match t {
+		TEither(_, r) => r
+		_             => TUnknown
 	}
 }
 
@@ -446,25 +519,67 @@ fn c_res_mark_right(r: str) -> str {
 	return c_res_tag(r) + " = 1;"
 }
 
-# c_carrier_name is c_carrier_cname plus the typedef and the force helper it needs,
-# registered once per shape. Every operator that reads a Result back goes through the
-# accessors above rather than writing `.ok` / `.err` itself, which is what will let a
-# second kind of carrier — an optional, an either — be added by giving it its own set
-# instead of by revisiting each operator.
-fn c_carrier_name(mut &em: Emitter, elem: Ty) -> str {
-	name := c_carrier_cname(elem)
-	return name if c_name_in(em.res_names, name)
+# c_carrier_name registers the carrier for `Either[L, R]` and answers its C name. Every
+# operator that reads one back goes through the accessors above rather than writing `.ok` /
+# `.err` itself, which is what lets an optional and an either share the whole set.
+fn c_carrier_name(mut &em: Emitter, left: Ty, right: Ty) -> str {
+	c_carrier_register(em, TEither(left, right))
+	return c_carrier_cname(left, right)
+}
 
-	# the carrier embeds a zrt_err, so the runtime header has to be there
+# c_carrier_register registers a carrier TYPE once per shape and appends its declaration
+# where the ordinary on-demand path wants it. c_carrier_decl is the declaration itself,
+# split out because the pre-pass below needs the same text placed somewhere else — in
+# declaration order, ahead of the struct typedefs that name it.
+fn c_carrier_register(mut &em: Emitter, c: Ty) {
+	name := c_carrier_ty_cname(c)
+	return if c_name_in(em.res_names, name)
+
 	em.used_rt = true
 	em.res_names.append(name)
-	ct := c_type(elem)
-	mut d := f"typedef struct {{ int32_t tag; {ct} ok; zrt_err err; }} {name};\n"
+	em.res_decls.append(c_carrier_decl(c))
+}
+
+# c_carrier_decl writes ONE carrier: a tag, the Left, and — unless it is an optional, whose
+# absent side carries nothing — the Right. The field names are the same for all three, so
+# every accessor and every operator works on any of them without asking which it is.
+#
+# The layout has to stay byte-compatible with the Go seed's emit_result.go, because the same
+# program built by either toolchain has to behave the same way.
+fn c_carrier_decl(c: Ty) -> str {
+	name := c_carrier_ty_cname(c)
+	left := c_carrier_left(c)
+	ct := c_type(left)
+
+	mut d := f"typedef struct {{ int32_t tag; {ct} ok; }} {name};\n"
+	if not c_is_opt(c) {
+		d = f"typedef struct {{ int32_t tag; {ct} ok; {c_type(c_either_right(c))} err; }} {name};\n"
+	}
 	d = d + "static " + ct + " zg_force_" + name + "(" + name + " r) {\n"
-	d = d + "    if (" + c_res_is_right("r") + ") { zg_force_fail(" + c_res_err("r") + "); }\n"
-	d = d + "    return " + c_res_ok("r") + ";\n}\n"
-	em.res_decls.append(d)
-	return name
+
+	# forcing a Right RE-RAISES it when it is an Err — the reason it is there is in it. An
+	# optional's absent side and a general Either's Right carry no abort, so forcing one
+	# raises a message of its own.
+	mut fail := "zrt_raise_err(zrt_err_new(\"force-unwrap of a Right\"));"
+	if c_is_opt(c) {
+		fail = "zrt_raise_err(zrt_err_new(\"force-unwrap of nil\"));"
+	} else if c_is_err_ty(c_either_right(c)) {
+		fail = "zg_force_fail(" + c_res_err("r") + ");"
+	}
+	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
+	return d + "    return " + c_res_ok("r") + ";\n}\n"
+}
+
+# c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
+# without the caller having to know which of the two it holds.
+fn c_carrier_ty_cname(c: Ty) -> str {
+	return c_opt_cname(c_opt_elem(c)) if c_is_opt(c)
+	return c_carrier_cname(c_either_left(c), c_either_right(c))
+}
+
+fn c_carrier_left(c: Ty) -> Ty {
+	return c_opt_elem(c) if c_is_opt(c)
+	return c_either_left(c)
 }
 
 # c_carrier_prelude is what every force helper lands on: an Err that was never meant to
@@ -899,74 +1014,97 @@ fn c_is_ctor(name: str) -> bool {
 # It runs over DECLARATIONS only — struct fields, parameters, results — because those are
 # written out before any body is, so this is the earliest point where the whole program's
 # type names are known and nothing has been emitted yet.
-# c_opt_decl_types collects the PAYLOAD of every `T?` spelled in a declaration — a struct
-# field, a parameter, a result. Those carriers have to exist before the struct typedefs
-# that name them, and a carrier registered while a body is emitted lands after them: a
-# struct holding a `Q?` reached cc as `unknown type name 'zg_opt_zg_Q'`.
-fn c_opt_decl_types(mut &em: Emitter, f: File) -> list[Ty] {
+# c_carrier_decl_types collects every CARRIER a declaration spells — a struct field, a
+# parameter, a result. Those carriers have to exist before the struct typedefs that name
+# them, and one registered while a body is emitted lands after them: a struct holding a
+# `Q?` reached cc as `unknown type name 'zg_opt_zg_Q'`.
+#
+# It gathers optionals AND eithers, which is what a `-> Result[nil]` in the stdlib needs:
+# the type is spelled in one module's prototype and the carrier registered in another, so a
+# caller compiled on its own had the name and not the typedef.
+fn c_carrier_decl_types(mut &em: Emitter, f: File) -> list[Ty] {
 	mut out: list[Ty] = []
 	for st in f.structs {
 		for fd in st.fields {
-			c_opt_collect(fd.ty, out)
+			c_carrier_collect(fd.ty, out)
 		}
 	}
 	for fn_i in f.fns {
-		c_opt_collect(fn_i.ret, out)
+		c_carrier_collect(fn_i.ret, out)
 		for pm in fn_i.params {
-			c_opt_collect(pm.ty, out)
+			c_carrier_collect(pm.ty, out)
 		}
 	}
 	return out
 }
 
-# c_opt_collect walks a type to its optionals. A container is transparent: `list[T?]` needs
-# the same carrier a bare `T?` does.
-fn c_opt_collect(t: Ty, mut &out: list[Ty]) {
+# c_carrier_collect walks a type to the carriers inside it. A container is transparent:
+# `list[T?]` needs the same carrier a bare `T?` does.
+fn c_carrier_collect(t: Ty, mut &out: list[Ty]) {
 	match t {
-		TOpt(el)     => c_opt_seen(el, out)
-		TList(el)    => c_opt_collect(el, out)
-		TChan(el, _) => c_opt_collect(el, out)
-		TResult(el)  => c_opt_collect(el, out)
-		TMap(k, v)   => c_opt_collect_two(k, v, out)
-		_            => c_skip()
+		TOpt(el)      => c_carrier_seen(TOpt(el), out)
+		TEither(l, r) => c_carrier_seen(TEither(l, r), out)
+		TList(el)     => c_carrier_collect(el, out)
+		TChan(el, _)  => c_carrier_collect(el, out)
+		TMap(k, v)    => c_carrier_collect_two(k, v, out)
+		_             => c_skip()
 	}
 }
 
-fn c_opt_collect_two(a: Ty, b: Ty, mut &out: list[Ty]) {
-	c_opt_collect(a, out)
-	c_opt_collect(b, out)
+fn c_carrier_collect_two(a: Ty, b: Ty, mut &out: list[Ty]) {
+	c_carrier_collect(a, out)
+	c_carrier_collect(b, out)
 }
 
-fn c_opt_seen(el: Ty, mut &out: list[Ty]) {
-	nm := c_opt_cname(el)
+# c_carrier_seen adds a carrier once per SHAPE, then descends into its payloads — a
+# `Result[T?]` needs the optional's carrier written before its own.
+fn c_carrier_seen(c: Ty, mut &out: list[Ty]) {
+	nm := c_carrier_ty_cname(c)
 	mut i := 0
 	for i < out.len() {
-		return if c_opt_cname(out[i]) == nm
+		return if c_carrier_ty_cname(out[i]) == nm
 		i = i + 1
 	}
-	out.append(el)
-	c_opt_collect(el, out)
+	if c_is_opt(c) {
+		c_carrier_collect(c_opt_elem(c), out)
+	} else {
+		c_carrier_collect_two(c_either_left(c), c_either_right(c), out)
+	}
+	out.append(c)
 }
 
-# c_opt_typedefs_for emits the carriers whose payload is `owner` — the empty name meaning
-# "a payload that is not a declared type at all", which needs no struct ahead of it. Each
-# one is marked registered, so the ordinary on-demand path does not write it twice.
-fn c_opt_typedefs_for(mut &em: Emitter, want: str, els: list[Ty]) -> str {
+# c_carrier_typedefs_for emits the carriers whose LAST declared-struct payload is `owner` —
+# the empty name meaning "no payload is a declared type at all", which needs no struct ahead
+# of it. Each is registered, so the on-demand path does not write it twice.
+fn c_carrier_typedefs_for(mut &em: Emitter, want: str, cs: list[Ty], structs: list[StructDecl]) -> str {
 	mut out := ""
-	for el in els {
-		if c_named_of(el) == want {
-			name := c_opt_cname(el)
-			if not c_name_in(em.res_names, name) {
-				em.res_names.append(name)
-				em.used_rt = true
-				out = out + f"typedef struct {{ int32_t tag; {c_type(el)} ok; }} {name};\n"
-				out = out + "static " + c_type(el) + " zg_force_" + name + "(" + name + " r) {\n"
-				out = out + "    if (" + c_res_is_right("r") + ") { zrt_raise_err(zrt_err_new(\"force-unwrap of nil\")); }\n"
-				out = out + "    return " + c_res_ok("r") + ";\n}\n"
-			}
+	for c in cs {
+		if c_carrier_owner(c, structs) == want and not c_name_in(em.res_names, c_carrier_ty_cname(c)) {
+			em.res_names.append(c_carrier_ty_cname(c))
+			em.used_rt = true
+			out = out + c_carrier_decl(c)
 		}
 	}
 	return out
+}
+
+# c_carrier_owner is the declared struct among a carrier's payloads that is declared LAST,
+# or "" when none is one. A carrier's typedef names both of its payloads, so it can only be
+# written after the last of them — which is what decides where in the run of struct typedefs
+# it goes.
+fn c_carrier_owner(c: Ty, structs: list[StructDecl]) -> str {
+	mut owner := ""
+	for sd in structs {
+		if c_carrier_has_payload(c, sd.name) {
+			owner = sd.name
+		}
+	}
+	return owner
+}
+
+fn c_carrier_has_payload(c: Ty, name: str) -> bool {
+	return c_named_of(c_opt_elem(c)) == name if c_is_opt(c)
+	return c_named_of(c_either_left(c)) == name or c_named_of(c_either_right(c)) == name
 }
 
 fn c_check_named_types(mut &em: Emitter, f: File) {
@@ -987,15 +1125,15 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 # name that fails to resolve is just as unspellable inside a `list[…]` or a `chan[…]`.
 fn c_check_named_ty(mut &em: Emitter, t: Ty, site: str) {
 	match t {
-		TNamed(nm)   => c_check_type_name(em, nm, site)
-		TList(el)    => c_check_named_ty(em, el, site)
-		TChan(el, _) => c_check_named_ty(em, el, site)
-		TMap(k, v)   => c_check_named_ty_two(em, k, v, site)
-		TResult(el)  => c_check_named_ty(em, el, site)
-		TOpt(el)     => c_check_named_ty(em, el, site)
-		TTuple(ts)   => c_check_named_ty_list(em, ts, site)
-		TFn(ps, r)   => c_check_named_fn(em, ps, r, site)
-		_            => c_skip()
+		TNamed(nm)    => c_check_type_name(em, nm, site)
+		TList(el)     => c_check_named_ty(em, el, site)
+		TChan(el, _)  => c_check_named_ty(em, el, site)
+		TMap(k, v)    => c_check_named_ty_two(em, k, v, site)
+		TEither(l, r) => c_check_named_ty_two(em, l, r, site)
+		TOpt(el)      => c_check_named_ty(em, el, site)
+		TTuple(ts)    => c_check_named_ty_list(em, ts, site)
+		TFn(ps, r)    => c_check_named_fn(em, ps, r, site)
+		_             => c_skip()
 	}
 }
 
@@ -1109,7 +1247,7 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 
 	# a declared `T?` field takes a bare value or `nil` and wraps it, so `P(nil)` builds an
 	# ABSENT field rather than a present one holding whatever `nil` lowered to
-	return c_opt_fit(em, fty, arg, sb) if c_is_opt(fty)
+	return c_carrier_fit(em, fty, arg, sb) if c_is_carrier(fty)
 	if c_is_list(fty) and c_is_empty_listlit(arg) {
 		em.used_rt = true
 		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}))"
@@ -1287,7 +1425,7 @@ fn c_variant_field_ty(mut &em: Emitter, variant: str, idx: int) -> Ty {
 # c_bind_env registers an enum constructor arm's payload names in the variable
 # environment with their field types, so type inference inside the arm resolves them.
 fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
-	if a.pat == 3 and c_is_result(st) {
+	if a.pat == 3 and c_is_either(st) {
 		# a Result's payload types are not in the variant table: Left carries the value,
 		# Right carries an Err
 		if a.binds.len() > 0 {
@@ -1564,7 +1702,7 @@ fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 	c_guard_no_jump(body, false)
 
 	vt := c_guard_val_ty(em, body)
-	cn := c_carrier_name(em, c_guard_elem(vt))
+	cn := c_carrier_name(em, c_guard_elem(vt), TErr)
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
 
@@ -2023,13 +2161,15 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
 
+		# `Left(v)` and `Right(e)` are CONTEXT-TYPED: they name a side of an Either and have
+		# no type of their own, so they are read where the wanted type is known (c_either_wrap)
+		# and reaching here means there was no such place. Saying that is the difference
+		# between a form used wrongly and a form that does not exist.
+		raise f"`{name}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected" if c_ctor_side_of(name, args.len()) >= 0
+
 		# A PascalCase call that names no declared type is not a constructor of anything.
-		# It used to emit a compound literal of that name anyway — `Left(1)` became
-		# `(zg_Left){1}` — which cc rejected against generated C. `Left` and `Right` are the
-		# ones a reader reaches for: they are the two sides of the carrier a receive answers
-		# with, and both compilers describe them, but neither offers them as CONSTRUCTORS.
-		# A `Result[T]` is produced by `<-ch` and by `guard`, never written by hand, so the
-		# refusal is the accurate answer rather than a missing feature.
+		# It used to emit a compound literal of that name anyway, which cc rejected against
+		# generated C.
 		raise f"no type named `{name}` to construct" if not c_is_struct_name(em, name)
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
@@ -2136,7 +2276,7 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
 	if ty_is_chan(em.pr_ty[row]) {
 		c_chan_check(c_infer(em, a), em.pr_ty[row], f"argument {idx} of `{fname}`")
 	}
-	return c_opt_fit(em, em.pr_ty[row], a, sb) if c_is_opt(em.pr_ty[row])
+	return c_carrier_fit(em, em.pr_ty[row], a, sb) if c_is_carrier(em.pr_ty[row])
 	return c_copied(em, em.pr_ty[row], a, sb)
 }
 
@@ -2302,7 +2442,7 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 	# a subject inference could not name has nothing to check the pattern against; guessing
 	# would turn a typing gap into a refusal of a working program
-	return if c_is_unknown(st) or c_is_result(st)
+	return if c_is_unknown(st) or c_is_either(st)
 
 	mut i := 0
 	for i < arms.len() {
@@ -2338,8 +2478,8 @@ fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
 		return
 	}
 
-	# a Result has exactly two sides, and naming both is exhaustive
-	if c_is_result(st) {
+	# an Either has exactly two sides, and naming both is exhaustive
+	if c_is_either(st) {
 		raise "non-exhaustive match: missing the Left case" if not c_arm_covers(arms, "Left")
 		raise "non-exhaustive match: missing the Right case" if not c_arm_covers(arms, "Right")
 
@@ -2441,7 +2581,7 @@ fn c_result_tag(ctor: str) -> int {
 # constructor arm aliases each payload name to its `s.u.Var.fK` field access.
 fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> Subst {
 	return c_extend(sb, a.bind, s) if a.pat == 1
-	if a.pat == 3 and c_is_result(st) {
+	if a.pat == 3 and c_is_either(st) {
 		# `Left(v)` reads the value, `Right(e)` the Err; neither is a tagged union of the
 		# kind the variant table describes, so the field is named directly
 		return sb if a.binds.len() == 0
@@ -2484,7 +2624,7 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 
 	if a.pat == 3 {
 		mut base := f"({s}.tag == {c_variant_tag(em, a.ctor)})"
-		if c_is_result(st) {
+		if c_is_either(st) {
 			base = f"({c_res_tag(s)} == {c_result_tag(a.ctor)})"
 		}
 		return f"({base} && {c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
@@ -2576,7 +2716,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ERecv(ch) => TOpt(ty_chan_elem(c_infer(em, ch)))
 		EForce(x) => c_carrier_elem(c_infer(em, x))
 		ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
-		EGuard(body) => TResult(c_guard_elem(c_guard_val_ty(em, body)))
+		EGuard(body) => TEither(c_guard_elem(c_guard_val_ty(em, body)), TErr)
 		EIs(x, name) => TBool
 	}
 }
@@ -2798,7 +2938,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 
 	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it
 	# absent, `x = 5` present. Without it the C compiler saw an int where a carrier goes.
-	return f"{ind}{lv} = {c_opt_fit(em, lt, rhs, c_nosub())};\n" if c_is_opt(lt)
+	return f"{ind}{lv} = {c_carrier_fit(em, lt, rhs, c_nosub())};\n" if c_is_carrier(lt)
 	if c_is_list(lt) and c_is_listlit(rhs) {
 		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
@@ -3109,7 +3249,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	ct := c_type(elem)
 	mut sv := c_copied(em, elem, v, c_nosub())
 	if c_is_opt(elem) {
-		sv = c_opt_fit(em, elem, v, c_nosub())
+		sv = c_carrier_fit(em, elem, v, c_nosub())
 	}
 	return ind + "{ " + ct + " zg_sv = " + sv + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zg_sv); }\n"
 }
@@ -4124,9 +4264,9 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	raise f"`{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`" if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival))
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one
-	if has_type and c_is_opt(eff) {
+	if has_type and c_is_carrier(eff) {
 		c_add_var(em, name, eff)
-		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {c_opt_fit(em, eff, ival, c_nosub())};\n"
+		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {c_carrier_fit(em, eff, ival, c_nosub())};\n"
 	}
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
@@ -4271,6 +4411,11 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# (which may still name one) and after the return value has been computed. The whole
 	# list goes: a `return` leaves the FUNCTION, and c_reset_env starts each one empty.
 	pre = pre + c_release_from(em, 0, ind)
+
+	# `return nil` is a RETURN WITH NO VALUE everywhere except where the declared result is
+	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
+	# the nil is a value there and has to travel the value path below.
+	return f"{pre}{ind}return {c_carrier_fit(em, em.fn_ret, e, c_nosub())};\n" if has_val and c_is_nil_expr(e) and c_is_carrier(em.fn_ret)
 	if has_val and not c_is_nil_expr(e) {
 		# the returned expression's type is wanted on two conditions that rarely coincide —
 		# a channel return type, and a defer to unwind past — so it is inferred once, and
@@ -4283,9 +4428,15 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		if ret_chan {
 			c_chan_check(et, em.fn_ret, "return")
 		}
-		mut v := c_expr(em, e, c_nosub())
-		if c_is_opt(em.fn_ret) {
-			v = c_opt_fit(em, em.fn_ret, e, c_nosub())
+
+		# a carrier result FITS the value rather than rendering it: `Left(v)` and `Right(e)`
+		# have no type of their own to render as, so the declared result is what decides what
+		# they mean — and asking c_expr first would refuse them before that happened
+		mut v := ""
+		if c_is_carrier(em.fn_ret) {
+			v = c_carrier_fit(em, em.fn_ret, e, c_nosub())
+		} else {
+			v = c_expr(em, e, c_nosub())
 		}
 
 		# A channel travelling OUT is a handle the caller will own, so it carries a reference
@@ -4452,9 +4603,7 @@ fn c_err_value(mut &em: Emitter, x: Expr) -> str {
 # made of — and anything else is refused by name here rather than handed to the runtime as
 # whatever C type it happened to be.
 fn c_err_cause(mut &em: Emitter, cause: Expr) -> str {
-	if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause)) {
-		raise f"a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)"
-	}
+	raise f"a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)" if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause))
 	return c_expr(em, cause, c_nosub())
 }
 
@@ -4808,14 +4957,21 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 		i = i + 1
 	}
 
-	# the optionals a DECLARATION names, ahead of what names them: a payload that is not a
+	# the carriers a DECLARATION names, ahead of what names them: a payload that is not a
 	# declared type needs nothing before it, and one that is a struct follows that struct.
-	optels := c_opt_decl_types(em, f)
-	types = types + c_opt_typedefs_for(em, "", optels)
+	carriers := c_carrier_decl_types(em, f)
+
+	# the force helpers land on zg_force_fail, so it goes ahead of the FIRST carrier
+	# wherever that is — here when a declaration named one, with the on-demand carriers
+	# below otherwise. Exactly one of the two writes it.
+	if carriers.len() > 0 {
+		types = types + c_carrier_prelude()
+	}
+	types = types + c_carrier_typedefs_for(em, "", carriers, f.structs)
 	i = 0
 	for i < f.structs.len() {
 		types = types + c_struct_typedef(f.structs[i])
-		types = types + c_opt_typedefs_for(em, f.structs[i].name, optels)
+		types = types + c_carrier_typedefs_for(em, f.structs[i].name, carriers, f.structs)
 		i = i + 1
 	}
 	i = 0
@@ -4915,7 +5071,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	# or map, a struct, an enum, a tuple. Everything it could name has been written by
 	# here. The force helpers ride along with them, ahead of the bodies that call them.
 	mut ress := ""
-	if em.res_decls.len() > 0 {
+	if em.res_decls.len() > 0 and carriers.len() == 0 {
 		ress = c_carrier_prelude()
 	}
 	for d in em.res_decls {

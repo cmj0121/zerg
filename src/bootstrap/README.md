@@ -39,88 +39,96 @@ only has to produce an intermediate good enough to build the real one. That keep
 off the delivery path, and it means every build exercises the self-host path. After that,
 the seed is only needed to re-derive `zerg` on a machine that has no `zerg` yet.
 
-## What the seed supports
+## The contract: three tiers, and nothing in between
 
-Every entry below is exercised by the self-host source (`src/compiler/zergc.zg`,
-`src/compiler/zerg/*.zg`) or by the stdlib modules it imports (`io`, `ascii`, `strconv`, `cli`),
-which is why it is still here.
+The seed has one job — build the self-hosting compiler — so what it MUST support is not a
+taste question. It is whatever `src/compiler/zergc.zg`, `src/compiler/zerg/*.zg` and the
+stdlib modules those import (`io`, `ascii`, `strconv`, `cli`) are actually written in. Every
+form the language has falls into exactly one of three tiers.
 
-| Feature                         | Notes                                                             |
-| ------------------------------- | ----------------------------------------------------------------- |
-| value structs                   | declaration, construction, field access, nesting                  |
-| enums — plain and payload       | tagged unions; a variant is constructed by its **bare** name      |
-| recursive enums                 | self-referential payloads, auto-boxed (`Expr`, `Stmt`)            |
-| `match`                         | expression arms, newline-separated, with destructuring            |
-| `list[T]`                       | `append` / `len` / `x[i]` read and write, `for … in`              |
-| `str` and `byte`                | concatenation, `str(bytes)` / `list[byte](str)`, f-strings        |
-| `Result[nil]`, `guard`, `raise` | the error path the driver and `strconv` use                       |
-| `mut &` parameters              | by-reference receivers (`fn at(mut &l: Lex, …)`)                  |
-| generics                        | monomorphized at compile time                                     |
-| tuples, optionals, `defer`      | retained: cheap, and still reachable from the subset              |
-| `spec` / `impl` methods         | statically dispatched                                             |
-| modules                         | `import "path"`, module-qualified calls, whole-program flattening |
-| `__zrt_*` intrinsics            | the runtime floor, including `__zrt_exec` (how `zerg` runs `cc`)  |
+**Tier 1 — supported.** The `Zerg-boot` subset. Lowered to C, and covered by the seed's own
+unit suites.
 
-## The grammar the seed lowers
+**Tier 2 — `NotImplemented`.** Valid Zerg the self-host source does not use. Refused BY NAME,
+with a nonzero exit, before anything is emitted. The seed is not a smaller Zerg — it is a
+compiler for one program, and everything else is somebody else's job.
 
-`Zerg-boot` in W3C-style EBNF, using the notation and production names of the full
-[`GRAMMAR`](../../GRAMMAR). This is the backend's view: what the C emitter has a lowering
-for. The front-end still parses more than this — anything below is what actually reaches C.
+**Tier 3 — `SystemError`.** A state the seed cannot classify at all: an AST shape with no
+lowering, a type that resolved to nothing, a call whose target never bound. These are not
+the programmer's mistake, they are the seed's — and they must ABORT saying so, never fall
+through to `0` and hand cc a program nobody wrote. Tier 3 is what makes tiers 1 and 2 a
+closed set rather than two lists with a silent gap between them.
 
-```ebnf
-program        ::= stmt-list
-statement      ::= simple-stmt | compound-stmt | decorated-decl
-simple-stmt    ::= nop | binding | reassign | print | return | raise | break | continue
-                 | del | defer | expr-stmt
-compound-stmt  ::= block | if-stmt | for-stmt | with-stmt
-decorated-decl ::= decorator* declaration
-declaration    ::= fn-decl | struct-decl | enum-decl | spec-decl | impl-decl | import-decl
+`make refuse` gates tiers 2 and 3: a case asserts a non-zero exit, the expected sentence, and
+that the message came from the seed rather than from cc against generated C.
 
-binding        ::= 'mut'? identifier ( ':' type )? ( ':=' | '=' ) expr
-reassign       ::= lvalue '=' expr
-lvalue         ::= identifier ( '.' identifier | '[' expr ']' )*
+## Tier 1 — what the seed supports
 
-fn-decl        ::= 'pub'? 'fn' identifier type-params? '(' param-list? ')' ( '->' type )? block
-param          ::= ( 'mut' '&' )? identifier ':' type
-struct-decl    ::= 'struct' identifier '{' ( identifier ':' type stmt-sep )* '}'
-enum-decl      ::= 'enum' identifier '{' ( variant stmt-sep )* '}'
-variant        ::= identifier ( '(' type ( ',' type )* ')' )?
-import-decl    ::= 'import' str-lit
+Every entry is exercised by the self-host chain, which is why it is still here. The counts
+are code lines in that chain as of 2026-07-30, comments and string literals excluded.
 
-type           ::= 'int' | 'uint' | 'float' | 'bool' | 'byte' | 'str' | 'nil'
-                 | identifier | 'list' '[' type ']' | 'Result' '[' type ']' | type '?'
+| Feature                             | Notes                                                             |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `fn`, incl. `mut &` parameters      | by-reference receivers (296 uses)                                 |
+| value structs                       | declaration, construction, field access, nesting                  |
+| enums — plain, payload, RECURSIVE   | tagged unions, auto-boxed self-reference (`Ty`, `Expr`, `Stmt`)   |
+| inherent `impl T` + `This`          | value receiver, flattened to a `this: T` first parameter (25)     |
+| `match`                             | expression arms, newline-separated, with destructuring (104)      |
+| `list[T]`                           | `append` / `len` / `x[i]` read and write, `for … in` (520)        |
+| `str`, `byte`, **f-strings**        | concatenation, `str(bytes)` / `list[byte](str)`, `f"…"` (162)     |
+| `Result[T]`, `guard`, `raise`       | the error path the driver, `io` and `strconv` use                 |
+| `return e if c`                     | the postfix conditional return — 385 uses, the most-used sugar    |
+| `if` / `else`, `for` in three forms | `for cond`, bare `for`, `for x in xs`; `break`, `continue`, `nop` |
+| `import`, `pub`                     | module-qualified calls, whole-program flattening                  |
+| `__zrt_*` intrinsics                | the runtime floor, including `__zrt_exec` (how `zerg` runs `cc`)  |
 
-expr           ::= or-expr | coalesce-expr | range-expr | match-expr | guard-expr | if-expr
-primary        ::= literal | fstr-lit | fcmd-lit | cmd-lit | identifier | list-lit
-                 | tuple-lit | block | '(' expr ')'
-postfix        ::= '.' identifier | '.' dec-int | '[' expr ']' | '(' arg-list? ')'
-                 | '?' | '!' | '?.' identifier
-match-expr     ::= 'match' expr '{' ( pattern '=>' expr stmt-sep )* '}'
-pattern        ::= identifier ( '(' identifier ( ',' identifier )* ')' )? | '_'
-```
+Types: `int`, `uint`, `float`, `bool`, `byte`, `str`, `nil`, `list[T]`, a named struct or
+enum, `Result[T]`, and `This` inside an `impl`.
 
-Two shapes differ from what the full grammar allows, and the self-host source is written to
-match: an enum variant is constructed by its **bare** name (`EBinary("or", a, b)`, not
-`Expr.EBinary(…)`), and `match` arms and enum variants are separated by a **line break**,
-not a comma.
+## Tier 2 — what the seed refuses by name
 
-## What the seed does not support
+None of these appears in the self-host chain; each was verified absent, not assumed. `state`
+says whether the seed refuses it today or still lowers it — the second column is the work
+list, and a row leaves it by being refused, never by being quietly dropped.
 
-These were removed because the self-host source uses none of them. Each is rejected loudly
-— a diagnostic and a nonzero exit, never a silently dropped construct.
+| Form                                                                   | State     |
+| ---------------------------------------------------------------------- | --------- |
+| `map[K, V]` and map literals                                           | refused   |
+| closures / first-class `fn` values                                     | refused   |
+| `#[dyn]` dispatch                                                      | refused   |
+| `spec` / `impl Spec for T`                                             | to refuse |
+| generic **function** definitions `fn f[T]`                             | to refuse |
+| coroutines: `spawn`, `chan[T]`, `select`, `<-`, `close`, `for v in ch` | refused   |
+| optionals `T?`, `??`, `?.`, `!`                                        | to refuse |
+| `with`, `defer`, `del`                                                 | to refuse |
+| tuples `(a, b)` and `t.0`                                              | to refuse |
+| ranges `a..b` as a value or `for` iterable                             | to refuse |
+| slicing `xs[a..b]`                                                     | to refuse |
+| decorators, incl. `#[derive]`                                          | to refuse |
+| module-level `const`, `init()`                                         | to refuse |
+| `unsafe`, `asm`, `ptr[T]`                                              | refused   |
+| command literals                                                       | refused   |
 
-| Removed             | What happens now                                       |
-| ------------------- | ------------------------------------------------------ |
-| `map[K, V]`         | rejected                                               |
-| closures            | `a closure used as a value is not yet supported`       |
-| channels            | rejected                                               |
-| `spawn`, `select`   | `statement not supported by the bootstrap seed`        |
-| `#[dyn]` dispatch   | `#[dyn] is not yet supported`                          |
-| `zerg test` backend | gone — running Zerg tests is the Zerg toolchain's job  |
-| `--emit tokens/ast` | gone — `--emit c` and a linked binary are what remains |
+A form the FRONT END still parses is not thereby supported: the refusal may land in sema or
+at the emitter's door. Narrowing the parser is a separate pass, and not an urgent one — what
+matters is that nothing outside tier 1 reaches C.
 
-The front-end still _parses_ some of this syntax; the rejection happens when the backend is
-asked to lower it. Narrowing the parser is a separate pass.
+## Tier 3 — what the seed reports as its own failure
+
+`SystemError` is for the cases above neither tier covers, and it exists because the
+alternative is what the seed used to do: fall through a `switch` to `"0"` and emit C naming
+an identifier nothing declared. cc then reports a real error against a file under
+`.zerg-cache` that the programmer cannot open — a diagnostic pointing at the wrong program.
+
+| Situation                                       | What must happen                        |
+| ----------------------------------------------- | --------------------------------------- |
+| an AST node with no lowering                    | `SystemError: no lowering for <node>`   |
+| a type that resolved to nothing                 | `SystemError: <site> has no type`       |
+| a call whose target never bound                 | `SystemError: unresolved call <name>`   |
+| a carrier / helper the emitter never registered | `SystemError: <helper> was not emitted` |
+
+The rule: **the seed may refuse a program, and it may fail — but it may never be wrong
+quietly.**
 
 ## Layout
 

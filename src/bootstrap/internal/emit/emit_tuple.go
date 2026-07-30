@@ -221,7 +221,7 @@ func (e *emitter) tupleLit(n *ast.TupleLit) string {
 	tt := e.cur.ExprType(e.info, n)
 	c, ok := e.tupleFor(tt)
 	if !ok {
-		return "0" // an un-modelled tuple shape: leave a scalar rather than bad C
+		return e.systemError(n, "no carrier for the tuple shape %s", tt)
 	}
 	var b string
 	for i, el := range n.Elems {

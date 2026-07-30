@@ -74,7 +74,7 @@ func TestCommandLiteralGate(t *testing.T) {
 	if len(diags) == 0 || code != "" {
 		t.Fatalf("a command literal should be gated, got code=%q diags=%v", code, diags)
 	}
-	if !strings.Contains(diags[0].Msg, "command literal is not yet supported") {
+	if !strings.Contains(diags[0].Msg, "does not lower a command literal") {
 		t.Fatalf("expected the command-literal gate diagnostic, got: %v", diags)
 	}
 }

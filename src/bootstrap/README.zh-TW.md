@@ -33,82 +33,89 @@ zerg build --emit bin -o bin/zerg src/compiler/zergc.zg
 出貨的編譯器是由「以 Zerg 寫成的編譯器」建出的，不是由種子——種子只需要造出一個夠好的中繼。這讓種子離開
 交付路徑，也讓每一次建置都走過自舉路徑。在那之後，種子只在「機器上還沒有 `zerg`」時，才需要重新推導出它。
 
-## 種子支援什麼
+## 契約：三層，中間沒有灰色地帶
 
-以下每一項都被自舉原始碼（`src/compiler/zergc.zg`、`src/compiler/zerg/*.zg`）或它匯入的 stdlib 模組（`io`、
-`ascii`、`strconv`、`cli`）實際用到——這就是它們還在的理由。
+種子只有一件工作——建出自舉編譯器——所以它**必須**支援什麼不是品味問題，而是
+`src/compiler/zergc.zg`、`src/compiler/zerg/*.zg` 以及它們 import 的 stdlib 模組
+（`io`、`ascii`、`strconv`、`cli`）實際用什麼寫成。語言的每一種形式都恰好落在三層之一。
 
-| 特性                            | 說明                                                  |
-| ------------------------------- | ----------------------------------------------------- |
-| value struct                    | 宣告、建構、欄位存取、巢狀                            |
-| enum——plain 與 payload          | tagged union；變體以**裸名**建構                      |
-| 遞迴 enum                       | 自我指涉的 payload，自動 boxing（`Expr`、`Stmt`）     |
-| `match`                         | 運算式 arm、以換行分隔，支援解構                      |
-| `list[T]`                       | `append` / `len` / `x[i]` 讀寫、`for … in`            |
-| `str` 與 `byte`                 | 串接、`str(bytes)` / `list[byte](str)`、f-string      |
-| `Result[nil]`、`guard`、`raise` | driver 與 `strconv` 使用的錯誤路徑                    |
-| `mut &` 參數                    | by-reference 接收者（`fn at(mut &l: Lex, …)`）        |
-| 泛型                            | 編譯期單態化                                          |
-| tuple、optional、`defer`        | 保留：成本低，且從子集內仍可觸及                      |
-| `spec` / `impl` method          | 靜態分派                                              |
-| 模組                            | `import "path"`、模組限定呼叫、whole-program 攤平     |
-| `__zrt_*` intrinsic             | runtime 底層，含 `__zrt_exec`（`zerg` 藉此執行 `cc`） |
+**第一層——支援。** `Zerg-boot` 子集。降階成 C，並由種子自己的單元測試涵蓋。
 
-## 種子能 lower 的文法
+**第二層——`NotImplemented`。** 合法的 Zerg，但自舉原始碼不使用。**指名拒絕**、非零 exit，
+而且發生在產出任何東西之前。種子不是一個小一號的 Zerg——它是**一支程式的編譯器**，其餘都是別
+人的工作。
 
-`Zerg-boot` 以 W3C-style EBNF 表示，沿用完整 [`GRAMMAR`](../../GRAMMAR) 的標記法與 production 名稱。這是**後端
-視角**：C emitter 有對應 lowering 的部分。前端解析得比這更多——下面列的才是真正抵達 C 的。
+**第三層——`SystemError`。** 種子完全無法歸類的狀態：沒有降階的 AST 形狀、解析不到任何東西的
+型別、從未綁定的呼叫目標。這些不是程式設計者的錯，是**種子自己的**錯——它必須這樣說出來並中止，
+而不是掉進 `0`、把一支沒人寫過的程式交給 cc。第三層的存在，才讓前兩層是一個**封閉集合**，而不
+是中間留著無聲縫隙的兩份清單。
 
-```ebnf
-program        ::= stmt-list
-statement      ::= simple-stmt | compound-stmt | decorated-decl
-simple-stmt    ::= nop | binding | reassign | print | return | raise | break | continue
-                 | del | defer | expr-stmt
-compound-stmt  ::= block | if-stmt | for-stmt | with-stmt
-decorated-decl ::= decorator* declaration
-declaration    ::= fn-decl | struct-decl | enum-decl | spec-decl | impl-decl | import-decl
+`make refuse` 守住第二、三層：一個案例斷言非零 exit、預期的句子，以及那句話來自種子本身、而不是
+cc 對著產生的 C。
 
-binding        ::= 'mut'? identifier ( ':' type )? ( ':=' | '=' ) expr
-reassign       ::= lvalue '=' expr
-lvalue         ::= identifier ( '.' identifier | '[' expr ']' )*
+## 第一層——種子支援什麼
 
-fn-decl        ::= 'pub'? 'fn' identifier type-params? '(' param-list? ')' ( '->' type )? block
-param          ::= ( 'mut' '&' )? identifier ':' type
-struct-decl    ::= 'struct' identifier '{' ( identifier ':' type stmt-sep )* '}'
-enum-decl      ::= 'enum' identifier '{' ( variant stmt-sep )* '}'
-variant        ::= identifier ( '(' type ( ',' type )* ')' )?
-import-decl    ::= 'import' str-lit
+每一項都被自舉鏈實際用到，這是它還留著的理由。數字是 2026-07-30 當下該鏈的程式碼行數，已排除註解
+與字串字面值。
 
-type           ::= 'int' | 'uint' | 'float' | 'bool' | 'byte' | 'str' | 'nil'
-                 | identifier | 'list' '[' type ']' | 'Result' '[' type ']' | type '?'
+| 功能                             | 說明                                                            |
+| -------------------------------- | --------------------------------------------------------------- |
+| `fn`，含 `mut &` 參數            | 傳參考的接收者（296 處）                                        |
+| value struct                     | 宣告、建構、欄位存取、巢狀                                      |
+| enum——一般、帶 payload、**遞迴** | tagged union，自我參照自動裝箱（`Ty`、`Expr`、`Stmt`）          |
+| 固有 `impl T` 與 `This`          | 值接收者，攤平成第一個參數 `this: T`（25 處）                   |
+| `match`                          | arm 是運算式、以換行分隔、可解構（104 處）                      |
+| `list[T]`                        | `append` / `len` / `x[i]` 讀寫、`for … in`（520 處）            |
+| `str`、`byte`、**f-string**      | 串接、`str(bytes)` / `list[byte](str)`、`f"…"`（162 處）        |
+| `Result[T]`、`guard`、`raise`    | driver、`io` 與 `strconv` 走的錯誤路徑                          |
+| `return e if c`                  | 後置條件 return——385 處，用得最多的糖                           |
+| `if` / `else`、三種 `for`        | `for cond`、裸 `for`、`for x in xs`；`break`、`continue`、`nop` |
+| `import`、`pub`                  | 帶命名空間的呼叫、整程式攤平                                    |
+| `__zrt_*` intrinsic              | runtime 地板，含 `__zrt_exec`（`zerg` 就是這樣呼叫 cc 的）      |
 
-expr           ::= or-expr | coalesce-expr | range-expr | match-expr | guard-expr | if-expr
-primary        ::= literal | fstr-lit | fcmd-lit | cmd-lit | identifier | list-lit
-                 | tuple-lit | block | '(' expr ')'
-postfix        ::= '.' identifier | '.' dec-int | '[' expr ']' | '(' arg-list? ')'
-                 | '?' | '!' | '?.' identifier
-match-expr     ::= 'match' expr '{' ( pattern '=>' expr stmt-sep )* '}'
-pattern        ::= identifier ( '(' identifier ( ',' identifier )* ')' )? | '_'
-```
+型別：`int`、`uint`、`float`、`bool`、`byte`、`str`、`nil`、`list[T]`、具名 struct 或 enum、
+`Result[T]`，以及 `impl` 內的 `This`。
 
-有兩處與完整文法允許的寫法不同，自舉原始碼即依此撰寫：enum 變體以**裸名**建構（`EBinary("or", a, b)`，而非
-`Expr.EBinary(…)`），且 `match` arm 與 enum 變體之間以**換行**分隔，不是逗號。
+## 第二層——種子指名拒絕什麼
 
-## 種子不支援什麼
+以下沒有一項出現在自舉鏈裡；每一項都是**驗證過不存在**，不是假設。`狀態`欄說明種子今天是否已
+經拒絕它——那一欄就是工作清單，而一列離開這張表的方式只有「被拒絕」，絕不是「被安靜丟掉」。
 
-以下都因自舉原始碼完全沒用到而被移除。每一項都會大聲拒絕——一則診斷加非零 exit，絕不靜默丟棄語法。
+| 形式                                                                  | 狀態   |
+| --------------------------------------------------------------------- | ------ |
+| `map[K, V]` 與 map 字面值                                             | 已拒絕 |
+| closure／一等 `fn` 值                                                 | 已拒絕 |
+| `#[dyn]` dispatch                                                     | 已拒絕 |
+| `spec` / `impl Spec for T`                                            | 待拒絕 |
+| 泛型**函式**定義 `fn f[T]`                                            | 待拒絕 |
+| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 已拒絕 |
+| optional `T?`、`??`、`?.`、`!`                                        | 待拒絕 |
+| `with`、`defer`、`del`                                                | 待拒絕 |
+| tuple `(a, b)` 與 `t.0`                                               | 待拒絕 |
+| range `a..b` 當值或當 `for` 的可迭代對象                              | 待拒絕 |
+| slicing `xs[a..b]`                                                    | 待拒絕 |
+| decorator，含 `#[derive]`                                             | 待拒絕 |
+| 模組層級 `const`、`init()`                                            | 待拒絕 |
+| `unsafe`、`asm`、`ptr[T]`                                             | 已拒絕 |
+| command literal                                                       | 已拒絕 |
 
-| 已移除              | 現在的行為                                       |
-| ------------------- | ------------------------------------------------ |
-| `map[K, V]`         | 拒絕                                             |
-| 閉包                | `a closure used as a value is not yet supported` |
-| channel             | 拒絕                                             |
-| `spawn`、`select`   | `statement not supported by the bootstrap seed`  |
-| `#[dyn]` 動態分派   | `#[dyn] is not yet supported`                    |
-| `zerg test` 後端    | 移除——執行 Zerg 測試是 Zerg 工具鏈的職責         |
-| `--emit tokens/ast` | 移除——只留 `--emit c` 與連結出的執行檔           |
+**前端還剖析得動**不等於支援：拒絕可能落在 sema，也可能落在 emitter 門口。收窄 parser 是另一趟
+獨立的工作，而且不急——真正重要的是第一層以外的東西不會抵達 C。
 
-前端仍會**解析**其中部分語法；拒絕發生在後端被要求 lower 它的時候。收窄 parser 是另一輪的工作。
+## 第三層——種子把自己的失敗說出來
+
+`SystemError` 給的是前兩層都蓋不到的情況，它存在的理由是：另一個選項就是種子過去做的事——從
+`switch` 掉進 `"0"`，然後 emit 出一支引用了沒人宣告的識別字的 C。接著 cc 會對著 `.zerg-cache`
+底下、程式設計者打不開的檔案報一個真實的錯——一則指著錯誤程式的診斷。
+
+| 情況                               | 必須發生什麼                            |
+| ---------------------------------- | --------------------------------------- |
+| 沒有降階的 AST 節點                | `SystemError: no lowering for <node>`   |
+| 解析不到任何東西的型別             | `SystemError: <site> has no type`       |
+| 從未綁定的呼叫目標                 | `SystemError: unresolved call <name>`   |
+| emitter 從未註冊的 carrier／helper | `SystemError: <helper> was not emitted` |
+
+規則是：**種子可以拒絕一支程式，也可以失敗——但它永遠不可以無聲地錯。**
 
 ## 佈局
 

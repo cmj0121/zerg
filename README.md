@@ -212,8 +212,8 @@ wrapping `+%` operators (today arithmetic lowers to plain C); the full `derive` 
 (`Hash` / `Encode` / `Decode`); `set[T]`; `list` / `map` equality; command literals (`` `git status` ``);
 the `is` type-test for non-error types; scheduler **preemption** (the **M:N** scheduler itself is here —
 nothing yet takes a coroutine off its worker until it parks, so a CPU-bound coroutine occupies one worker
-and as many of them as there are workers stop the program); `guard { … }` bound to a name, which waits on `Result[T]`
-surviving in a signature; the `Reader` / `stdin` I/O surface; generic type aliases; and a handful of
+and as many of them as there are workers stop the program); `Result[T]` surviving in a SIGNATURE, which is
+what `?` on a `Result` still waits on; the `Reader` / `stdin` I/O surface; generic type aliases; and a handful of
 smaller forms tracked in the spec's status markers.
 
 **Known deviations (bugs the spec records against current behavior).** A few observable behaviors do not

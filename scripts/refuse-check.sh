@@ -77,6 +77,43 @@ fn main() {
 }
 EOF
 
+# GRAMMAR derives an or-pattern; neither compiler lowers one, and `|` in pattern position is
+# read as the bitwise operator — so `1 | 2` folded to `3` and the arm matched neither side,
+# compiled and run. Refusing it is the whole difference between a gap and a wrong answer.
+expect "$ZERG" or-pattern-in-a-match-arm "an or-pattern" <<'EOF'
+fn f(n: int) -> str {
+	return match n {
+		1 | 2 => "lo"
+		_ => "hi"
+	}
+}
+
+fn main() {
+	print f(3)
+}
+EOF
+
+# An open-ended range is a legal RANGE ARM (`20.. =>`), and nothing else yet. The missing bound
+# reads as nil, and `c_expr(ENil)` is "0" — so a `for` over one ran zero times and a slice came
+# back empty, both in silence.
+expect "$ZERG" open-range-in-a-for "needs an upper bound" <<'EOF'
+fn main() {
+	mut n := 0
+	for i in 20.. {
+		n = n + i
+	}
+	print n
+}
+EOF
+
+expect "$ZERG" open-range-in-a-slice "needs an upper bound" <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	ys := xs[1..]
+	print ys.len()
+}
+EOF
+
 expect "$ZERG" undeclared-type-in-result "no type named \`Ref\`" <<'EOF'
 fn mk(v: int) -> Ref[int] {
 	return Ref(v)

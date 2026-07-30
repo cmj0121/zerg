@@ -356,6 +356,31 @@ fn lookup_keyword(w: str) -> Kind {
 	return Ident
 }
 
+# no_bound_follows reports that a kind cannot begin a range's upper bound, which is what tells
+# the OPEN-ENDED range `500..` from one whose bound simply follows. GRAMMAR makes that bound
+# optional after `..`, and nothing in the token itself says whether one is coming.
+#
+# It is a NEGATIVE list on purpose. Naming what can begin a bound means naming every literal,
+# prefix and opener, and missing one of those turns a legal bound into a parse error; missing
+# one HERE only leaves today's behaviour — a bound is read where none was written. The `if` in
+# it is the case that made the rule: an if-expression is a legal bound expression, so the guard
+# of `500.. if c =>` was read as the bound, and the arm silently tested `n < (c ? … : …)`.
+#
+# The formatter asks the same question for the same reason: printed tight, `20.. =>` becomes
+# `20..=>`, which lexes as `20`, `..=`, `>`.
+pub fn no_bound_follows(k: Kind) -> bool {
+	return match k {
+		FatArrow => true
+		If       => true
+		LBrace   => true
+		RBrace   => true
+		Semi     => true
+		Comment  => true
+		Eof      => true
+		_        => false
+	}
+}
+
 # ends_item reports whether a token of this kind can end a grammatical item, which
 # is what lets the lexer insert a ';' at a following line break (GRAMMAR group 2,
 # ASI).

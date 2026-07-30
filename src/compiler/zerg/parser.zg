@@ -1089,6 +1089,12 @@ fn parse_range(mut &p: Parser) -> Expr {
 	k := cur_kind(p)
 	return lo if k != DotDot and k != DotDotEq
 	p_advance(p)
+
+	# `500..` — GRAMMAR makes the upper bound optional after `..`, and what tells "there is no
+	# bound" from "the bound follows" is whether the next token could begin one. Without this
+	# the guard of `500.. if c =>` was read AS the bound, since an if-expression is a legal
+	# bound expression, and the arm silently tested `n < (c ? … : …)`.
+	return ERange(lo, ENil, false) if k == DotDot and no_bound_follows(cur_kind(p))
 	return ERange(lo, parse_add(p), k == DotDotEq)
 }
 

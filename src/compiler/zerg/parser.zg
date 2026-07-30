@@ -167,17 +167,30 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		expect(p, RBrack)
 		return TList(elem)
 	}
+
+	# `Result[T]` is `Either[T, Err]` — the language says so (docs/code/errors.md), and the
+	# two spellings therefore parse to ONE type rather than to a special case beside it. The
+	# annotation used to be ERASED to its happy path, so a function declared `-> Result[int]`
+	# returned a plain int and `??`, `!` and `?` on the far side of it had nothing to read.
 	if name == "Result" and p_at(p, LBrack) {
-		# A SIGNATURE's Result is still erased to its happy path. The carrier this unit
-		# builds is produced by inference — from `<-ch` — and stops there on purpose: a
-		# `Result[T]` in a signature is what `?` needs, and `?` early-returns the Right from
-		# the ENCLOSING function, which turns every `io.*` return type in this compiler's
-		# own sources into a carrier and drags `guard` and `raise` along with it. That is
-		# the error model, not a channel feature, so it is a unit of its own.
 		p_advance(p)
 		inner := parse_type(p)
 		expect(p, RBrack)
-		return inner
+		return TEither(inner, TErr)
+	}
+	if name == "Either" and p_at(p, LBrack) {
+		p_advance(p)
+		lt := parse_type(p)
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+		rt := parse_type(p)
+		expect(p, RBrack)
+
+		# the sides must DIFFER: an injection that could reach both is not a construction
+		# anyone can read, so the type is refused rather than the ambiguity resolved
+		raise f"`Either[{ty_name(lt)}, {ty_name(rt)}]` has the same type on both sides — a value could be either, and nothing could tell which" if ty_name(lt) == ty_name(rt)
+		return TEither(lt, rt)
 	}
 
 	# `Err` is the Right payload made nameable, which is what lets a `Right(e)` be passed

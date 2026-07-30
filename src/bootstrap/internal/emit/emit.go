@@ -1388,6 +1388,24 @@ func (e *emitter) resolve(name string) string {
 	return "zg_" + name // unreachable for a checked program
 }
 
+// systemError reports a state the seed cannot classify — not the programmer's mistake but
+// the SEED's. It is tier 3 of the contract in README.md, and it exists because the
+// alternative is what these sites used to do: fall through to "0" and emit C naming
+// something nothing declared, after which cc reports a real error against a file under
+// .zerg-cache that the programmer cannot open.
+//
+// It returns a placeholder so the pass keeps walking and one run reports everything it
+// found; the DIAGNOSTIC is what stops the C from being written. The rule it enforces: the
+// seed may refuse a program, and it may fail, but it may never be wrong quietly.
+func (e *emitter) systemError(at ast.Node, format string, args ...any) string {
+	span := token.Span{}
+	if at != nil {
+		span = at.Span()
+	}
+	e.diags.Add(span, "SystemError: "+format, args...)
+	return "0"
+}
+
 // --- expressions --------------------------------------------------------------
 
 func (e *emitter) expr(x ast.Expr) string {
@@ -1498,7 +1516,7 @@ func (e *emitter) expr(x ast.Expr) string {
 				return fmt.Sprintf("((uint64_t)%s(%s))", op, e.ctype(args[0]))
 			}
 		}
-		return "0"
+		return e.systemError(n, "no lowering for this call")
 	case *ast.ListLit:
 		// A list literal in fixed-array position ([int; N] = [a, b, …]) lowers to a C
 		// array initializer, which is what the surrounding binding's array type consumes.
@@ -2077,7 +2095,7 @@ func (e *emitter) eitherPatternWalk(p *ast.VariantPattern, place string, placeT 
 	ei := placeT.(*types.Either)
 	c, ok := e.carrierFor(placeT)
 	if !ok {
-		return "0" // an un-modelled Either carrier (e.g. a channel recv): leave it
+		return e.systemError(p, "no carrier for %s in a pattern", placeT)
 	}
 	var tag int
 	var member string
@@ -2376,7 +2394,7 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 		return m
 	}
 	if id == nil {
-		return "0"
+		return e.systemError(n, "unresolved call target")
 	}
 	return e.prog.CallTarget(id.Name)
 }
@@ -2703,7 +2721,7 @@ func (e *emitter) assignTarget(t ast.AssignTarget) string {
 	if lv, ok := t.(*ast.LValueTarget); ok {
 		return e.expr(lv.X)
 	}
-	return "0"
+	return e.systemError(nil, "no lowering for this assignment target")
 }
 
 // --- lowering helpers ---------------------------------------------------------

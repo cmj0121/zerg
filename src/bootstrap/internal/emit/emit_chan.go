@@ -381,7 +381,7 @@ func isCloseCall(call *ast.Call) bool {
 func (e *emitter) chanNew(n *ast.ChanNew) string {
 	ch, ok := e.cur.ExprType(e.info, n).(*types.Chan)
 	if !ok {
-		return "0"
+		return e.systemError(n, "a chan[T] constructor with no channel type")
 	}
 	capExpr := "0"
 	if n.Cap != nil {
@@ -408,11 +408,11 @@ func (e *emitter) sendStmt(n *ast.SendStmt) {
 func (e *emitter) recvExpr(n *ast.Recv) string {
 	ei, ok := e.cur.ExprType(e.info, n).(*types.Either)
 	if !ok {
-		return "0"
+		return e.systemError(n, "a receive whose result is not a carrier")
 	}
 	idx, ok := e.recvIdx[ei.Left.String()]
 	if !ok {
-		return "0"
+		return e.systemError(n, "the receive helper for %s was not emitted", ei.Left)
 	}
 	return fmt.Sprintf("zg_chanrecv_%d(%s)", idx, e.expr(n.X))
 }

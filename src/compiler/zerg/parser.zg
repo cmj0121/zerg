@@ -861,10 +861,24 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	if k == Raise {
 		p_advance(p)
 
+		e := parse_expr(p)
+
+		# `from cause` records the cause as the new Err's `unwrap()` (GRAMMAR:616). It was
+		# never read here: `parse_expr` stopped at the `from`, and the rest of the line was
+		# skipped by parse_stmt's fallback — so the cause was DROPPED, silently, and the
+		# chain a `guard` reads back had a link missing.
+		mut cause := ENil
+		mut has_cause := false
+		if p_at(p, From) {
+			p_advance(p)
+			cause = parse_expr(p)
+			has_cause = true
+		}
+
 		# `raise e if c` — the postfix guard, on the fourth of GRAMMAR's diverges. It reads as
 		# the same sugar the other three carry and is desugared into exactly the block form it
 		# is defined as (`if c { raise e }`), so the emitter needs to know nothing about it.
-		return parse_jump_guard(p, SRaise(parse_expr(p)))
+		return parse_jump_guard(p, SRaise(e, has_cause, cause))
 	}
 	return parse_return(p) if k == Return
 	if k == Break {

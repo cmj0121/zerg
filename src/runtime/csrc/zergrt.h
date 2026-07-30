@@ -349,9 +349,16 @@ zrt_err zrt_err_new(const char *msg);
  * no cause — the value a `raise ValueError("…")` carries. */
 zrt_err zrt_err_new_kind(int kind, const char *msg);
 
-/* zrt_err_with_cause builds an Err chained to a cause: `raise e from c` records c
- * so a handler can walk the chain. The cause is copied to the heap (the caller's
- * cause value is a stack temporary), leaked for the MVP like every other box. */
+/* zrt_err_chain attaches a cause to an Err ALREADY BUILT: `raise e from c` records c
+ * so a handler can walk the chain, and e keeps everything else it is — its KIND above
+ * all. Chaining used to go through a message-only constructor, so `raise IOError("x")
+ * from c` came out kind-less and an `e is IOError` on the far side answered false. The
+ * cause is copied to the heap (the caller's is a stack temporary), leaked for the MVP
+ * like every other box. */
+zrt_err zrt_err_chain(zrt_err e, zrt_err cause);
+
+/* zrt_err_with_cause is zrt_err_chain over a bare message — the kind-less Err a
+ * `raise "…" from c` carries. */
 zrt_err zrt_err_with_cause(const char *msg, zrt_err cause);
 
 /* zrt_raise_err aborts carrying an Err VALUE: it stashes e (so a `guard`/`?` reads

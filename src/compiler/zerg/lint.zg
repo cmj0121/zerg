@@ -276,7 +276,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SIfLet(name, value, then_b, has_else, else_b) => walk_if(value, then_b, else_b, ids, calls, ns)
 			SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
 			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
-			SRaise(x) => walk_expr(x, ids, calls, ns)
+			SRaise(x, hc, c) => walk_raise(x, hc, c, ids, calls, ns)
 			SDefer(x) => walk_expr(x, ids, calls, ns)
 			SSpawn(x) => walk_expr(x, ids, calls, ns)
 			SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
@@ -317,6 +317,15 @@ fn walk_sel(arms: list[SelArm], mut &ids: list[str], mut &calls: list[str], mut 
 fn walk_two_lists(a: list[Expr], b: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	walk_all(a, ids, calls, ns)
 	walk_all(b, ids, calls, ns)
+}
+
+# walk_raise visits a raise's Err and, when it has one, its `from` cause — both are
+# ordinary expressions, and a name used only as a cause is still a name used.
+fn walk_raise(x: Expr, has_cause: bool, cause: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
+	walk_expr(x, ids, calls, ns)
+	if has_cause {
+		walk_expr(cause, ids, calls, ns)
+	}
 }
 
 fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {

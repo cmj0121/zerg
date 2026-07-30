@@ -2733,7 +2733,7 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SIfLet(name, value, then_body, has_else, else_body) => c_iflet(em, name, value, then_body, has_else, else_body, ind)
 		SFor(has_cond, cond, body) => c_for(em, has_cond, cond, body, ind)
 		SForIn(var, iter, body) => c_forin(em, var, iter, body, ind)
-		SRaise(x) => c_raise(em, x, ind)
+		SRaise(x, hc, c) => c_raise(em, x, hc, c, ind)
 		SDefer(x) => c_defer(em, x, ind)
 		SSpawn(x) => c_spawn(em, x, ind)
 		SSend(ch, v) => c_send(em, ch, v, ind)
@@ -4425,15 +4425,37 @@ fn c_is_wrapped(s: str) -> bool {
 	return true
 }
 
-fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
+fn c_raise(mut &em: Emitter, x: Expr, has_cause: bool, cause: Expr, ind: str) -> str {
 	em.used_rt = true
 
 	# `raise ValueError("…")` already names an Err, and so does an Err VALUE — the `e` a
 	# `Right(e)` handed over. Only a bare message needs one built around it; wrapping
 	# either of the others would make an Err whose payload is an Err, and re-raising a
 	# caught one is the whole point of being able to bind it.
-	return f"{ind}zrt_raise_err({c_expr(em, x, c_nosub())});\n" if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
-	return f"{ind}zrt_raise_err(zrt_err_new({c_expr(em, x, c_nosub())}));\n"
+	err := c_err_value(em, x)
+
+	# `from cause` chains: the new Err records the cause as its `unwrap()`, so a `guard`
+	# reads back the whole chain rather than only its last link. The runtime builds it from
+	# a MESSAGE and a cause, so an Err-valued operand hands over its message.
+	return f"{ind}zrt_raise_err(zrt_err_chain({err}, {c_err_cause(em, cause)}));\n" if has_cause
+	return f"{ind}zrt_raise_err({err});\n"
+}
+
+# c_err_value renders an expression AS an Err: one that already is an Err passes through,
+# and anything else — a bare message — has one built around it.
+fn c_err_value(mut &em: Emitter, x: Expr) -> str {
+	return c_expr(em, x, c_nosub()) if c_is_err_ctor(em, x) or c_is_err_ty(c_infer(em, x))
+	return f"zrt_err_new({c_expr(em, x, c_nosub())})"
+}
+
+# c_err_cause renders the `from` operand. A cause is an Err — that is what a cause chain is
+# made of — and anything else is refused by name here rather than handed to the runtime as
+# whatever C type it happened to be.
+fn c_err_cause(mut &em: Emitter, cause: Expr) -> str {
+	if not c_is_err_ctor(em, cause) and not c_is_err_ty(c_infer(em, cause)) {
+		raise f"a `from` cause is an `Err`, and {ty_name(c_infer(em, cause))} is not one — bind the Err a `guard` gave back (`Right(e) => raise … from e`)"
+	}
+	return c_expr(em, cause, c_nosub())
 }
 
 fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {

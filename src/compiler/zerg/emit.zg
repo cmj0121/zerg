@@ -932,6 +932,18 @@ fn c_fn_cname(recv: str, name: str) -> str {
 	return f"zg_{recv}_{name}"
 }
 
+# c_sig_seen is `c_name_in(em.sig_names, key)` without the copy. `c_name_in` takes its list
+# BY VALUE, and this question is asked once per function — 788 of them in a self-build — so
+# the copy alone was ~310k element copies per unit for a scan that needs none.
+fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
+	mut i := 0
+	for i < em.sig_names.len() {
+		return true if em.sig_names[i] == key
+		i = i + 1
+	}
+	return false
+}
+
 fn c_build_sigs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.fns.len() {
@@ -943,7 +955,7 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		# LINKER — `duplicate symbol '_zg_name'`, with no file and no line — which is one
 		# reporter further away than cc. The collision is named here instead, where the two
 		# declarations are both in hand.
-		raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_name_in(em.sig_names, key)
+		raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_sig_seen(em, key)
 		em.sig_names.append(key)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
@@ -1063,20 +1075,38 @@ fn c_is_ctor(name: str) -> bool {
 # — a type of infinite size rather than an ordering problem, and it is named as such.
 fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 	mut out := ""
+
+	# EVERY name this pass will emit, collected ONCE. It is what "does this dependency have
+	# to wait?" is asked against, and the answer cannot change while the sweep runs — so
+	# deriving it per dependency was waste, and expensive waste: the lists it came from were
+	# reached through a by-value `File`, which is the whole program's AST. That copy, taken
+	# twice per dependency per sweep, was a fifth of every compile.
+	mut all: list[str] = []
+	for ed in f.enums {
+		all.append(ed.name)
+	}
+	for sd in f.structs {
+		all.append(sd.name)
+	}
+	for c in carriers {
+		all.append(c_carrier_ty_cname(c))
+	}
+
 	mut done: list[str] = []
 	mut es := f.enums
 	mut ss := f.structs
 	mut cs := carriers
 
 	for es.len() > 0 or ss.len() > 0 or cs.len() > 0 {
-		mut moved := false
+		# `done` is the only thing a sweep moves, so its length before and after IS whether
+		# progress was made — and a sweep that emits nothing never will
+		n0 := done.len()
 
 		mut es2: list[EnumDecl] = []
 		for ed in es {
-			if c_deps_done(c_enum_deps(ed), ed.name, done, f, carriers) {
+			if c_deps_done(c_enum_deps(ed), ed.name, done, all) {
 				out = out + c_enum_typedef(ed)
 				done.append(ed.name)
-				moved = true
 			} else {
 				es2.append(ed)
 			}
@@ -1085,10 +1115,9 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 
 		mut ss2: list[StructDecl] = []
 		for sd in ss {
-			if c_deps_done(c_struct_deps(sd), sd.name, done, f, carriers) {
+			if c_deps_done(c_struct_deps(sd), sd.name, done, all) {
 				out = out + c_struct_typedef(sd)
 				done.append(sd.name)
-				moved = true
 			} else {
 				ss2.append(sd)
 			}
@@ -1097,17 +1126,19 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 
 		mut cs2: list[Ty] = []
 		for c in cs {
-			if c_deps_done(c_carrier_deps(c), c_carrier_ty_cname(c), done, f, carriers) {
-				out = out + c_carrier_emit(em, c)
-				done.append(c_carrier_ty_cname(c))
-				moved = true
+			cn := c_carrier_ty_cname(c)
+			if c_deps_done(c_carrier_deps(c), cn, done, all) {
+				out = out + c_carrier_decl(c)
+				em.res_names.append(cn)
+				em.used_rt = true
+				done.append(cn)
 			} else {
 				cs2.append(c)
 			}
 		}
 		cs = cs2
 
-		raise f"`{c_stuck_name(es, ss)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if not moved
+		raise f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
 	}
 	return out
 }
@@ -1115,9 +1146,9 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 # c_deps_done reports whether every DECLARED type a declaration names by value is already
 # out. A name this program does not declare — a scalar, a runtime container — needs nothing
 # ahead of it, and a SELF reference is boxed rather than held.
-fn c_deps_done(deps: list[str], own: str, done: list[str], f: File, carriers: list[Ty]) -> bool {
+fn c_deps_done(deps: list[str], own: str, mut &done: list[str], mut &all: list[str]) -> bool {
 	for dep in deps {
-		if dep != own and c_ty_declared(dep, f, carriers) {
+		if dep != own and c_name_in(all, dep) {
 			return false if not c_name_in(done, dep)
 		}
 	}
@@ -1153,36 +1184,8 @@ fn c_carrier_deps(c: Ty) -> list[str] {
 	return deps
 }
 
-# c_ty_declared reports whether a dependency name is one this pass will EMIT — a struct or
-# enum of this program, or a carrier it collected. Anything else (a scalar, a runtime
-# container, a type from another unit) needs nothing ahead of it.
-fn c_ty_declared(name: str, f: File, carriers: list[Ty]) -> bool {
-	return true if c_is_declared_ty(name, f)
-	for c in carriers {
-		return true if c_carrier_ty_cname(c) == name
-	}
-	return false
-}
 
-# c_carrier_emit writes one carrier's declaration and marks it registered, so the on-demand
-# path does not write it a second time.
-fn c_carrier_emit(mut &em: Emitter, c: Ty) -> str {
-	name := c_carrier_ty_cname(c)
-	return "" if c_name_in(em.res_names, name)
-	em.res_names.append(name)
-	em.used_rt = true
-	return c_carrier_decl(c)
-}
 
-fn c_is_declared_ty(name: str, f: File) -> bool {
-	for sd in f.structs {
-		return true if sd.name == name
-	}
-	for ed in f.enums {
-		return true if ed.name == name
-	}
-	return false
-}
 
 # c_ty_struct_deps collects the declared type names a type needs COMPLETE where it is used
 # by value. A carrier holds its payload by value, so `Y?` and `Result[Y]` need Y as surely
@@ -1205,12 +1208,15 @@ fn c_ty_struct_deps_list(ts: list[Ty], mut &out: list[str]) {
 }
 
 # c_stuck_name names one member of the group that could not be emitted, for the diagnostic.
-fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl]) -> str {
+fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
 	for ed in es {
 		return ed.name
 	}
 	for sd in ss {
 		return sd.name
+	}
+	for c in cs {
+		return c_carrier_ty_cname(c)
 	}
 	return "?"
 }
@@ -5096,11 +5102,12 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	# Only a trailing EXPRESSION statement is a value. A body ending in anything else while
 	# declaring a result is a missing return, and is refused below rather than given one.
 	mut body := fn_d.body
-	if fn_d.has_ret and not c_body_diverges(body) {
-		if body.len() > 0 and c_is_expr_stmt(body[body.len() - 1]) {
-			body[body.len() - 1] = SReturn(true, c_expr_of_stmt(body[body.len() - 1]))
-		} else {
-			raise f"`{fn_d.name}` is declared to answer {ty_name(fn_d.ret)}, and its body falls off the end — a block's value is its last statement's, so end it with a `return` or with the expression it answers"
+	if fn_d.has_ret {
+		last := body.len() - 1
+		if body.len() == 0 or not c_stmt_diverges(body[last]) {
+			raise f"`{fn_d.name}` is declared to answer {ty_name(fn_d.ret)}, and its body falls off the end — a block's value is its last statement's, so end it with a `return` or with the expression it answers" if body.len() == 0 or not c_is_expr_stmt(body[last])
+
+			body[last] = SReturn(true, c_expr_stmt_of(body[last]))
 		}
 	}
 	out := sig + c_block(em, body, "    ") + "}\n\n"
@@ -5125,12 +5132,6 @@ fn c_stmt_diverges(s: Stmt) -> bool {
 	}
 }
 
-fn c_expr_of_stmt(s: Stmt) -> Expr {
-	return match s {
-		SExpr(e) => e
-		_        => ENil
-	}
-}
 
 # The entry point is the FREE function `main`; a method named `main` is an ordinary method
 # of its type and must not be mistaken for it, which is what the receiver test rules out.

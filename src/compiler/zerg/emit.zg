@@ -2220,6 +2220,7 @@ fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
 # type to be declared with, and guessing one would turn a typing gap into wrong C.
 fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 	st := c_infer(em, scrut)
+	c_check_exhaustive(em, arms, st)
 	s := c_expr(em, scrut, sb)
 	return c_arms(em, arms, 0, s, st, sb) if c_is_lvalue(scrut) or c_is_unknown(st)
 
@@ -2227,6 +2228,118 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 	em.op_n = em.op_n + 1
 	tmp := "zg_ms" + tag
 	return f"({{ {c_type(st)} {tmp} = {s}; {c_arms(em, arms, 0, tmp, st, sb)}; }})"
+}
+
+# c_check_exhaustive refuses a `match` that does not cover its scrutinee. The lowering below
+# uses the LAST arm as the final `else` without testing its condition, so a match missing a
+# case did not fail — it answered the last arm's body for every value nothing else matched.
+# `match k { A => "a"; B => "b" }` over a three-variant enum returned "b" for `C`, and for a
+# scrutinee with no enum behind it `match n { 1 => "a"; 2 => "b" }` returned "b" for 3. That
+# is a wrong answer with no diagnostic anywhere, which is the one outcome the repo does not
+# tolerate; the seed has refused both since it had enums, so this is the shipped compiler
+# catching up to it, message included.
+#
+# A GUARDED arm does not count toward coverage (GRAMMAR:410 — the compiler cannot prove the
+# guard holds), so `A if c => …` still leaves `A` uncovered.
+fn c_check_exhaustive(mut &em: Emitter, arms: list[Arm], st: Ty) {
+	# an unguarded catch-all covers whatever the arms above it did not
+	ca := c_catchall_at(arms)
+	if ca >= 0 {
+		# every arm after it is dead code AND breaks the lowering, which would hand the
+		# trailing arm the `else` the catch-all was written to take
+		if ca < arms.len() - 1 {
+			raise "this catch-all arm makes the following arms unreachable"
+		}
+		return
+	}
+
+	# a Result has exactly two sides, and naming both is exhaustive
+	if c_is_result(st) {
+		if not c_arm_covers(arms, "Left") {
+			raise "non-exhaustive match: missing the Left case"
+		}
+		if not c_arm_covers(arms, "Right") {
+			raise "non-exhaustive match: missing the Right case"
+		}
+		return
+	}
+
+	# an enum is exhaustive when every variant is named
+	en := c_named_of(st)
+	if en != "" and c_name_in(em.enum_names, en) {
+		mut i := 0
+		for i < em.var_name.len() {
+			if em.var_enum[i] == en and not c_arm_covers(arms, em.var_name[i]) {
+				raise f"non-exhaustive match: missing variant {en}.{em.var_name[i]}"
+			}
+			i = i + 1
+		}
+		return
+	}
+
+	# a bool has two values, and they are literal arms rather than constructors
+	if c_is_bool_ty(st) {
+		if not c_arm_covers_bool(arms, true) {
+			raise "non-exhaustive match: missing the `true` case"
+		}
+		if not c_arm_covers_bool(arms, false) {
+			raise "non-exhaustive match: missing the `false` case"
+		}
+		return
+	}
+
+	# anything else — an int, a str, a type inference could not name — has a domain no arm
+	# list can cover, so it takes a catch-all
+	raise "non-exhaustive match: missing a catch-all `_` arm"
+}
+
+# c_catchall_at is the index of the first UNGUARDED catch-all arm (`_` or a binding), or -1.
+fn c_catchall_at(arms: list[Arm]) -> int {
+	mut i := 0
+	for i < arms.len() {
+		a := arms[i]
+		return i if (a.pat == 1 or a.pat == 2) and not a.has_guard
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+# c_arm_covers reports whether some UNGUARDED constructor arm names `ctor`.
+fn c_arm_covers(arms: list[Arm], ctor: str) -> bool {
+	mut i := 0
+	for i < arms.len() {
+		a := arms[i]
+		return true if a.pat == 3 and not a.has_guard and a.ctor == ctor
+		i = i + 1
+	}
+	return false
+}
+
+fn c_is_bool_ty(t: Ty) -> bool {
+	return match t {
+		TBool => true
+		_     => false
+	}
+}
+
+# c_arm_covers_bool reports whether some UNGUARDED literal arm names the truth value `v`.
+fn c_arm_covers_bool(arms: list[Arm], v: bool) -> bool {
+	mut i := 0
+	for i < arms.len() {
+		a := arms[i]
+		if a.pat == 0 and not a.has_guard and c_is_bool_lit(a.lit, v) {
+			return true
+		}
+		i = i + 1
+	}
+	return false
+}
+
+fn c_is_bool_lit(e: Expr, v: bool) -> bool {
+	return match e {
+		EBool(b) => b == v
+		_        => false
+	}
 }
 
 fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, st: Ty, sb: Subst) -> str {

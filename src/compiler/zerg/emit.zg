@@ -2456,6 +2456,14 @@ fn c_list_method_ret(meth: str) -> Ty {
 fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
 	return c_intrinsic_ret(name) if c_is_intrinsic(name)
 	return TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
+
+	# a BUILT-IN ERROR constructor answers an `Err`, not a type of its own name. It reads as
+	# a constructor and it is PascalCase, so the ctor rule below would have typed
+	# `e := ValueError("x")` as `zg_ValueError` — a C type nobody declares, which cc reported
+	# against generated code the programmer cannot open. The whole taxonomy is one runtime
+	# type with a kind tag, which is what makes `e is ValueError` a comparison rather than a
+	# cast, and what lets a bound Err be re-raised or handed to `from`.
+	return TErr if c_err_kind(name) > 0
 	return TNamed(name) if c_is_ctor(name)
 
 	return c_lookup_sig_ret(em, name)

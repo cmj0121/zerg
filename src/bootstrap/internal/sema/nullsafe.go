@@ -108,8 +108,40 @@ func (c *checker) inferForce(n *ast.Force) Type {
 // inferGuard types the guard expression 'guard { block }' (DESIGN-1b §6): it
 // demotes any abort inside the block back to a value, so it yields 'Result[T]'
 // where T is the block's value type.
+//
+// A JUMP out of the block is refused, in the shipped compiler's own words. The guard's
+// handler is pushed before the block and popped after it, so a 'return' or a 'break'
+// that leaves in between takes the frame away and leaves the handler installed on it:
+// the next abort anywhere in the caller longjmps into a stack frame that is gone. The
+// seed lowered it happily — the program even printed the right answer — which is the
+// worst shape for a defect to have.
 func (c *checker) inferGuard(n *ast.GuardExpr) Type {
+	c.guardNoJump(n.Body)
 	return resultType(c.synthBlock(n.Body))
+}
+
+// guardNoJump walks the guarded block for a jump that would leave it. It does not descend
+// into a nested loop, whose 'break' and 'continue' belong to that loop and never cross the
+// guard, nor into a nested guard, which answers for its own block.
+func (c *checker) guardNoJump(b *ast.Block) {
+	if b == nil {
+		return
+	}
+	for _, st := range b.Stmts {
+		switch n := st.(type) {
+		case *ast.ReturnStmt:
+			c.errorf(n.Span(), "`return` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned")
+		case *ast.BreakStmt:
+			c.errorf(n.Span(), "`break` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned")
+		case *ast.ContinueStmt:
+			c.errorf(n.Span(), "`continue` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned")
+		case *ast.IfStmt:
+			for _, br := range n.Branches {
+				c.guardNoJump(br.Body)
+			}
+			c.guardNoJump(n.Else)
+		}
+	}
 }
 
 // synthDiverge types a control-flow escape ('break', 'continue', 'return e?', or

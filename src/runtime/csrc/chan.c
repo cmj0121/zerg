@@ -668,6 +668,22 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_exit) {
 			zrt_sched_deadlock();
 		}
 
+		/* `_` — the NON-BLOCKING arm. Nothing is ready and nothing has ended the wait, so
+		 * the caller's own answer for "nothing yet" is what runs. It never parks, and a
+		 * loop around it would therefore hold the one worker it is on for as long as it
+		 * spins, so it yields first: a `for select` with a `_` arm stays cooperative.
+		 *
+		 * This step was MISSING. has_default arrived, was named in the signature, and was
+		 * never read — so a select with a `_` arm parked like one without, and a one-shot
+		 * select on an idle channel deadlocked instead of taking the arm that exists for
+		 * exactly that. It is placed here, after crash and exhaustion, because those two
+		 * are answers about the STREAM and `_` is only ever about this instant. */
+		if (has_default) {
+			zrt_mutex_unlock(&g_sel_lock);
+			zrt_yield();
+			return ZRT_SEL_DEFAULT;
+		}
+
 		/* park on EVERY case's channel at once; wake when any becomes ready. The waiters
 		 * share one `claimed` flag so at most one hand-off fires this select. */
 		bool claimed = false;

@@ -2263,9 +2263,20 @@ fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> Subst {
 fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	c_bind_env(em, a, st)
 	if a.pat == 0 {
+		return c_arm_range(em, a, s, sb) if c_is_range(a.lit)
+
+		# `A | B =>` is an OR-PATTERN in GRAMMAR and a bitwise-or to this parser, so the arm
+		# would be compared against `A | B` folded into one value — matching neither side, and
+		# saying nothing about it. Refusing is the repo's rule for exactly this shape: a program
+		# the compiler cannot lower is turned away by name rather than emitted wrong.
+		if c_is_or_pattern(a.lit) {
+			raise "NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each"
+		}
+
 		# literal pattern: scrutinee equals the literal
 		return f"({s} == {c_expr(em, a.lit, sb)})"
 	}
+
 	if a.pat == 3 {
 		mut base := f"({s}.tag == {c_variant_tag(em, a.ctor)})"
 		if c_is_result(st) {
@@ -2276,6 +2287,55 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	}
 	return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb)) if a.has_guard
 	return "1"
+}
+
+# c_range_needs_hi refuses an OPEN-ENDED range where the lowering has no length to put in place
+# of the missing bound. `c_range_hi` answers nil there and `c_expr(ENil)` is `"0"`, so the loop
+# or the slice silently ran zero times — the shape the arm path now handles deliberately, and
+# these two do not handle at all.
+fn c_range_needs_hi(e: Expr, what: str) {
+	if c_is_range(e) and c_is_nil_expr(c_range_hi(e)) {
+		raise "NotImplemented: an open-ended range has no upper bound here — " + what
+	}
+}
+
+# c_arm_range lowers a RANGE arm's test. GRAMMAR defines `200..300 =>` as match-only sugar for
+# the guard `_ if _ in 200..300`, so it matches by CONTAINMENT rather than by `equal` — and it
+# lowers to the same two comparisons a slice bound does, from the same three accessors.
+#
+# Reaching this at all used to be an emitter crash. `c_arm_cond` asked `c_expr` for the arm's
+# "literal", a range has no value to be, and the answer was the `c_range_unsupported` raise —
+# so a form GRAMMAR has had all along was refused with "a range used as a value".
+#
+# The scrutinee appears twice, which is what `c_match`'s temp is for: an expression scrutinee
+# is materialised before the arms are laid out, so nothing is evaluated a second time here.
+fn c_is_or_pattern(e: Expr) -> bool {
+	return match e {
+		EBinary(oper, x, y) => oper == "|"
+		_ => false
+	}
+}
+
+fn c_arm_range(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+	lo := c_expr(em, c_range_lo(a.lit), sb)
+	mut base := f"({s} >= {lo})"
+	if not c_is_nil_expr(c_range_hi(a.lit)) {
+		hi := c_expr(em, c_range_hi(a.lit), sb)
+		mut cmp := " < "
+		if c_range_incl(a.lit) {
+			cmp = " <= "
+		}
+		base = f"(({s} >= {lo}) && ({s}{cmp}{hi}))"
+	} else if c_range_incl(a.lit) {
+		# `500..=` is not a range: GRAMMAR gives '..=' a mandatory bound, and the parser
+		# reads the missing one as nil rather than saying so
+		raise "NotImplemented: `..=` with no upper bound is not a range — write `500..` for open-ended"
+	}
+
+	# a guard on a range arm is AND-ed on, the way a constructor pattern's is: the range says
+	# which values reach the guard, and the guard has the last word
+	return f"({base} && {c_expr(em, a.guard_expr, sb)})" if a.has_guard
+	return base
 }
 
 fn c_arm_body(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
@@ -3462,6 +3522,7 @@ fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str
 # and the runtime has no slice primitive to alias with anyway. The source is materialised
 # into a temp first, so a call result is indexed once rather than per element.
 fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
+	c_range_needs_hi(idx, "a slice needs an upper bound — `xs[a..xs.len()]`")
 	et := c_type(c_list_elem(tty))
 	src := c_expr(em, target, sb)
 	lo := c_expr(em, c_range_lo(idx), sb)
@@ -3713,6 +3774,7 @@ fn c_range_incl(e: Expr) -> bool {
 # upper bound is read once into a temp, so an expression bound is not re-evaluated on
 # every iteration the way a C `for` header would.
 fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
+	c_range_needs_hi(iter, "a `for … in` needs an upper bound")
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
 	c_add_var(em, var, TInt)

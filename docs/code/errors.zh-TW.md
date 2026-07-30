@@ -57,6 +57,9 @@ addr := config?.server?.host ?? "localhost"
 **不可回復**者——壞掉的 invariant、失敗的 assertion、一個「不可能發生」——因此不進任何簽章、只被 `guard` 攔下。
 一個 **`raise e from cause`** 形式會把 `cause` 記成 `e` 的 `unwrap()`——一個 **nested** abort,把底層 `Err` 包進更高
 層的一個、而不遺失它,餵的是每個 `Error` 都有的那條 cause chain;裸的 `raise e` 則原封不動攜帶 `e`。
+`raise` **語句**帶有每一種 diverge 都有的**後綴 guard**——`raise e if c`,以及 `raise e from cause if c`
+——它是 `if c { raise e }` 的糖,也正是格式化器的 `F401` 會把 block 形式改寫成的樣子。它只屬於語句形式:
+`??` 右側的 `raise` 不接尾隨 `if`,否則那個 guard 會讀成 coalesce 的。
 
 **內建的錯誤分類。** 這個階段提供**固定的六種**錯誤 **[implemented]**:**`ValueError`**、**`OverflowError`**、
 **`IOError`**、**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec

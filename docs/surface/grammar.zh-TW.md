@@ -308,7 +308,7 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # clos
   （`for x in xs { sum = sum + x }`）、把**狀態**放進帶 `mut fn` 的 `struct`、用 `chan` 傳遞**並行**狀態。
 - **Return。** `return expr` 帶值離開，單獨 `return` 則不帶值。**省略 `-> type`** 表示函式回傳 `nil`。**尾隨
   `if`** 使其條件化——`return MAX if v > MAX` 是 `if v > MAX { return MAX }` 的 sugar（亦可 bare `return if done`），
-  與 `break if` / `continue if` 同一個後置 `if`;條件為 false 時直接落下。開頭的 `if` _帶 block_ 則是回傳一個
+  與 `break if` / `continue if` / `raise e if` 同一個後置 `if`;條件為 false 時直接落下。開頭的 `if` _帶 block_ 則是回傳一個
   if-expression（`return if c { a } else { b }`）;條件式 return 的 `if` 只取裸條件、不帶 block。
 - **參數。** 參數**以值傳遞**（copy），可帶**預設值** `= expr`。call 端的 **named argument** 是 `name: value`
   （group 4 的 `arg` 形式）：positional 參數在前，之後任一個可具名，一旦具名其餘也須具名——這正是能跳過有預設值

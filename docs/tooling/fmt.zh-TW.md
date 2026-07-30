@@ -179,8 +179,8 @@ Idempotence 仍然是 printer 的。兩個 token 之間的空白不是 token，�
 | `F407` | 丟棄用的 receive binder 直接刪——`_ := <-ch =>` 就是 `<-ch =>` | 啟用 |
 | `F408` | 連續整數的 or-pattern 收成它本來就是的 range                  | 啟用 |
 
-`GRAMMAR` 把 `return x if c`、`break if c`、`continue if c` **定義為** `if c { … }` 包住同一個
-跳轉的糖——一個後綴 `if`，三種跳轉。兩種寫法說的是同一件事，而其中一個用四行說。格式化器選短的
+`GRAMMAR` 把 `return x if c`、`break if c`、`continue if c` 與 `raise e if c` **定義為** `if c { … }`
+包住同一個跳轉的糖——一個後綴 `if`，涵蓋每一種 **diverge**。兩種寫法說的是同一件事，而其中一個用四行說。格式化器選短的
 那個——那正是 guard clause 的用途：例外的出口不再打斷它所守護的那段程式的形狀。裸的提早返回也
 一樣：`return if c`。
 

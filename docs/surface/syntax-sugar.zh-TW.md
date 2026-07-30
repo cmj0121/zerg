@@ -8,6 +8,7 @@ Zerg 保持一個**精簡核心**,在其上疊了幾個方便的表面寫法—�
 | 語法糖                                | Desugar 成                                                       |
 | ------------------------------------- | ---------------------------------------------------------------- |
 | `break if c` / `continue if c`        | `if c { break }` / `if c { continue }`                           |
+| `raise e if c`                        | `if c { raise e }`——同一個後綴 guard，用在第四種 diverge         |
 | `if x := e { … }`                     | 對 `e` 的 one-arm `match`——`x` 存在時才執行區塊                  |
 | `with e as y { … }`                   | `{ y := e; defer y 的 Scoped teardown; … }`(每條離開路徑都跑)    |
 | `f"…{x}…"`                            | 編譯期把各段 `str` 串接,每個洞 `x.display()`                     |

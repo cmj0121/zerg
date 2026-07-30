@@ -67,7 +67,10 @@ in the signature) for **expected, recoverable** failure; `raise` is for the **un
 invariant, a failed assertion, a "can't happen" — so it enters no signature and is caught only by `guard`.
 A **`raise e from cause`** form records `cause` as `e`'s `unwrap()` — a **nested** abort that wraps a
 lower-level `Err` in a higher-level one without losing it, feeding the same cause chain every `Error`
-exposes; a bare `raise e` carries `e` unchanged.
+exposes; a bare `raise e` carries `e` unchanged. A `raise` **statement** takes the **postfix guard** every
+other diverge takes — `raise e if c`, and `raise e from cause if c` — which is sugar for `if c { raise e }`
+and is what the formatter's `F401` rewrites the block form into. It is the statement form only: a `raise`
+on the right of a `??` takes no trailing `if`, since the guard would read as the coalesce's.
 
 **The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds **[implemented]** —
 **`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**

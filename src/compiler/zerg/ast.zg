@@ -428,21 +428,21 @@ fn expr_kind(e: Expr) -> str {
 # ty_name spells a type the way the source does.
 fn ty_name(t: Ty) -> str {
 	return match t {
-		TInt => "int"
-		TFloat => "float"
-		TStr => "str"
-		TBool => "bool"
-		TNil => "nil"
-		TVoid => "void"
-		TByte => "byte"
-		TNamed(n) => n
-		TList(e) => f"list[{ty_name(e)}]"
-		TFn(ps, r) => f"fn({ty_names(ps)}) -> {ty_name(r)}"
+		TInt          => "int"
+		TFloat        => "float"
+		TStr          => "str"
+		TBool         => "bool"
+		TNil          => "nil"
+		TVoid         => "void"
+		TByte         => "byte"
+		TNamed(n)     => n
+		TList(e)      => f"list[{ty_name(e)}]"
+		TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"
 		TChan(e, dir) => chan_ty_name(e, dir)
-		TResult(e) => f"Result[{ty_name(e)}]"
-		TOpt(e) => f"{ty_name(e)}?"
-		TErr => "Err"
-		_ => "?"
+		TResult(e)    => f"Result[{ty_name(e)}]"
+		TOpt(e)       => f"{ty_name(e)}?"
+		TErr          => "Err"
+		_             => "?"
 	}
 }
 
@@ -453,14 +453,14 @@ fn ty_name(t: Ty) -> str {
 fn ty_is_chan(t: Ty) -> bool {
 	return match t {
 		TChan(_, _) => true
-		_ => false
+		_           => false
 	}
 }
 
 fn ty_chan_elem(t: Ty) -> Ty {
 	return match t {
 		TChan(e, _) => e
-		_ => TUnknown
+		_           => TUnknown
 	}
 }
 
@@ -469,6 +469,7 @@ fn ty_chan_elem(t: Ty) -> Ty {
 fn chan_ty_name(elem: Ty, dir: int) -> str {
 	return f"chan[{ty_name(elem)}]<-" if dir == 1
 	return f"<-chan[{ty_name(elem)}]" if dir == 2
+
 	return f"chan[{ty_name(elem)}]"
 }
 

@@ -54,7 +54,7 @@ pub fn write_int(n: int) -> Result[nil] {
 	for {
 		d := v % 10
 		digit := if d < 0 {
-			- d
+			-d
 		} else {
 			d
 		}

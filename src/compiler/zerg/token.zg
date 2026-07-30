@@ -152,112 +152,112 @@ struct Token {
 # `--emit tokens` output matches byte-for-byte.
 fn kind_name(k: Kind) -> str {
 	return match k {
-		Eof => "EOF"
-		Illegal => "ILLEGAL"
-		Semi => ";"
-		Ident => "IDENT"
-		Int => "INT"
-		Float => "FLOAT"
-		Str => "STR"
-		RawStr => "RAWSTR"
-		Rune => "RUNE"
-		Byte => "BYTE"
-		Cmd => "CMD"
-		FStr => "FSTR"
+		Eof       => "EOF"
+		Illegal   => "ILLEGAL"
+		Semi      => ";"
+		Ident     => "IDENT"
+		Int       => "INT"
+		Float     => "FLOAT"
+		Str       => "STR"
+		RawStr    => "RAWSTR"
+		Rune      => "RUNE"
+		Byte      => "BYTE"
+		Cmd       => "CMD"
+		FStr      => "FSTR"
 		FStrBegin => "FSTR_BEGIN"
-		FStrText => "FSTR_TEXT"
-		FStrEnd => "FSTR_END"
+		FStrText  => "FSTR_TEXT"
+		FStrEnd   => "FSTR_END"
 		FCmdBegin => "FCMD_BEGIN"
-		FCmdText => "FCMD_TEXT"
-		FCmdEnd => "FCMD_END"
-		Conv => "CONV"
-		FmtSpec => "FMTSPEC"
-		Hash => "#["
-		Fn => "fn"
-		Return => "return"
-		If => "if"
-		Else => "else"
-		For => "for"
-		In => "in"
-		Break => "break"
-		Continue => "continue"
-		Nop => "nop"
-		Mut => "mut"
-		Const => "const"
-		True => "true"
-		False => "false"
-		Nil => "nil"
-		Print => "print"
-		And => "and"
-		Or => "or"
-		Not => "not"
-		Is => "is"
-		This => "this"
-		As => "as"
-		Pub => "pub"
-		Import => "import"
-		From => "from"
-		Match => "match"
-		Spawn => "spawn"
-		Select => "select"
-		Struct => "struct"
-		Enum => "enum"
-		Spec => "spec"
-		Chan => "chan"
-		Type => "type"
-		Impl => "impl"
-		Package => "package"
-		Init => "init"
-		Defer => "defer"
-		Del => "del"
-		Close => "close"
-		Raise => "raise"
-		Guard => "guard"
-		With => "with"
-		Unsafe => "unsafe"
-		Ptr => "ptr"
-		Asm => "asm"
-		Plus => "+"
-		Minus => "-"
-		Star => "*"
-		Slash => "/"
-		Percent => "%"
-		PlusMod => "+%"
-		MinusMod => "-%"
-		StarMod => "*%"
-		Amp => "&"
-		Pipe => "|"
-		Caret => "^"
-		Tilde => "~"
-		Shl => "<<"
-		Shr => ">>"
-		EqEq => "=="
-		Ne => "!="
-		Lt => "<"
-		Gt => ">"
-		Le => "<="
-		Ge => ">="
-		Assign => "="
-		Walrus => ":="
-		Colon => ":"
-		Arrow => "->"
-		FatArrow => "=>"
-		LArrow => "<-"
-		Coalesce => "??"
-		Question => "?"
-		Bang => "!"
-		OptDot => "?."
-		Dot => "."
-		DotDot => ".."
-		DotDotEq => "..="
-		Comma => ","
-		LParen => "("
-		RParen => ")"
-		LBrack => "["
-		RBrack => "]"
-		LBrace => "{"
-		Comment => "COMMENT"
-		_ => "}"
+		FCmdText  => "FCMD_TEXT"
+		FCmdEnd   => "FCMD_END"
+		Conv      => "CONV"
+		FmtSpec   => "FMTSPEC"
+		Hash      => "#["
+		Fn        => "fn"
+		Return    => "return"
+		If        => "if"
+		Else      => "else"
+		For       => "for"
+		In        => "in"
+		Break     => "break"
+		Continue  => "continue"
+		Nop       => "nop"
+		Mut       => "mut"
+		Const     => "const"
+		True      => "true"
+		False     => "false"
+		Nil       => "nil"
+		Print     => "print"
+		And       => "and"
+		Or        => "or"
+		Not       => "not"
+		Is        => "is"
+		This      => "this"
+		As        => "as"
+		Pub       => "pub"
+		Import    => "import"
+		From      => "from"
+		Match     => "match"
+		Spawn     => "spawn"
+		Select    => "select"
+		Struct    => "struct"
+		Enum      => "enum"
+		Spec      => "spec"
+		Chan      => "chan"
+		Type      => "type"
+		Impl      => "impl"
+		Package   => "package"
+		Init      => "init"
+		Defer     => "defer"
+		Del       => "del"
+		Close     => "close"
+		Raise     => "raise"
+		Guard     => "guard"
+		With      => "with"
+		Unsafe    => "unsafe"
+		Ptr       => "ptr"
+		Asm       => "asm"
+		Plus      => "+"
+		Minus     => "-"
+		Star      => "*"
+		Slash     => "/"
+		Percent   => "%"
+		PlusMod   => "+%"
+		MinusMod  => "-%"
+		StarMod   => "*%"
+		Amp       => "&"
+		Pipe      => "|"
+		Caret     => "^"
+		Tilde     => "~"
+		Shl       => "<<"
+		Shr       => ">>"
+		EqEq      => "=="
+		Ne        => "!="
+		Lt        => "<"
+		Gt        => ">"
+		Le        => "<="
+		Ge        => ">="
+		Assign    => "="
+		Walrus    => ":="
+		Colon     => ":"
+		Arrow     => "->"
+		FatArrow  => "=>"
+		LArrow    => "<-"
+		Coalesce  => "??"
+		Question  => "?"
+		Bang      => "!"
+		OptDot    => "?."
+		Dot       => "."
+		DotDot    => ".."
+		DotDotEq  => "..="
+		Comma     => ","
+		LParen    => "("
+		RParen    => ")"
+		LBrack    => "["
+		RBrack    => "]"
+		LBrace    => "{"
+		Comment   => "COMMENT"
+		_         => "}"
 	}
 }
 
@@ -356,27 +356,52 @@ fn lookup_keyword(w: str) -> Kind {
 	return Ident
 }
 
+# no_bound_follows reports that a kind cannot begin a range's upper bound, which is what tells
+# the OPEN-ENDED range `500..` from one whose bound simply follows. GRAMMAR makes that bound
+# optional after `..`, and nothing in the token itself says whether one is coming.
+#
+# It is a NEGATIVE list on purpose. Naming what can begin a bound means naming every literal,
+# prefix and opener, and missing one of those turns a legal bound into a parse error; missing
+# one HERE only leaves today's behaviour — a bound is read where none was written. The `if` in
+# it is the case that made the rule: an if-expression is a legal bound expression, so the guard
+# of `500.. if c =>` was read as the bound, and the arm silently tested `n < (c ? … : …)`.
+#
+# The formatter asks the same question for the same reason: printed tight, `20.. =>` becomes
+# `20..=>`, which lexes as `20`, `..=`, `>`.
+pub fn no_bound_follows(k: Kind) -> bool {
+	return match k {
+		FatArrow => true
+		If       => true
+		LBrace   => true
+		RBrace   => true
+		Semi     => true
+		Comment  => true
+		Eof      => true
+		_        => false
+	}
+}
+
 # ends_item reports whether a token of this kind can end a grammatical item, which
 # is what lets the lexer insert a ';' at a following line break (GRAMMAR group 2,
 # ASI).
 fn ends_item(k: Kind) -> bool {
 	return match k {
-		Ident => true
-		Int => true
-		Float => true
-		Str => true
-		RawStr => true
-		Rune => true
-		Byte => true
-		Cmd => true
-		FStr => true
-		FStrEnd => true
-		FCmdEnd => true
-		RParen => true
-		RBrack => true
-		RBrace => true
+		Ident    => true
+		Int      => true
+		Float    => true
+		Str      => true
+		RawStr   => true
+		Rune     => true
+		Byte     => true
+		Cmd      => true
+		FStr     => true
+		FStrEnd  => true
+		FCmdEnd  => true
+		RParen   => true
+		RBrack   => true
+		RBrace   => true
 		Question => true
-		Bang => true
+		Bang     => true
 
 		# `chan[T]<-` — the send-only direction marker is the one `<-` that ENDS something
 		# rather than pointing at what follows it, and a struct field or a `type` alias
@@ -389,15 +414,15 @@ fn ends_item(k: Kind) -> bool {
 		# The cost is that a SEND may no longer be split after its arrow — `ch <-` then the
 		# value on the next line is now two statements. Nothing in this tree writes that, and
 		# the formatter never produces it, so the marker wins the token.
-		LArrow => true
-		True => true
-		False => true
-		Nil => true
-		This => true
-		Return => true
-		Break => true
+		LArrow   => true
+		True     => true
+		False    => true
+		Nil      => true
+		This     => true
+		Return   => true
+		Break    => true
 		Continue => true
-		Nop => true
-		_ => false
+		Nop      => true
+		_        => false
 	}
 }

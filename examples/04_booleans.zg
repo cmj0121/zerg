@@ -3,10 +3,10 @@
 # Conditions are always `bool` — Zerg has no truthiness. The keyword
 # operators `and`, `or`, `not` combine bool values.
 fn main() {
-	print 3 < 5 # true
-	print 3 == 5 # false
-	print true and false # false
-	print true or false # true
-	print not true # false
+	print 3 < 5             # true
+	print 3 == 5            # false
+	print true and false    # false
+	print true or false     # true
+	print not true          # false
 	print 1 <= 1 and 2 != 3 # true
 }

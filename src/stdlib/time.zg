@@ -33,8 +33,8 @@ pub fn monotonic() -> int {
 # progress, so a `select` waiting on a timer is not killed for waiting.
 #
 #     select {
-#         v := <-work            => handle(v!)
-#         _ := <-time.after(500) => give_up()      # 500ns; a timeout, with no new syntax
+#         v := <-work       => handle(v!)
+#         <-time.after(500) => give_up()      # 500ns; a timeout, with no new syntax
 #     }
 #
 # THE COST IS A COROUTINE. Each live timer is one, and a coroutine owns a 256KB stack, so

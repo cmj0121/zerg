@@ -49,7 +49,7 @@ statement      ::= simple-stmt | compound-stmt | decorated-decl
 simple-stmt    ::= nop | binding | reassign | print | return | raise | break
                  | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
                  | del-stmt | close-stmt | expr-stmt
-compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt
+compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt | for-select
 
 # A declaration introduces a name — a type, a function, or a module item. A DECORATOR
 # prefix (group 7) may lead ANY declaration and binds to it; which decorators are
@@ -622,9 +622,26 @@ guard-expr    ::= 'guard' block                     # yields Result[T]; T = the 
 # Concurrency is coroutines + channels only (CSP). 'spawn f(args)' starts a
 # fire-and-forget coroutine (no handle, no join). A channel is built with
 # 'chan[T](cap?)' (capacity 0 = unbuffered rendezvous); 'ch <- v' sends, '<-ch'
-# receives yielding Result[T] (Right = closed, carrying StopIteration or a crash
-# Err). A bare 'chan[T]' is bidirectional and narrows to '<-chan[T]' / 'chan[T]<-'
-# via a type annotation. There is NO 'yield'. 'select' is the only multi-way wait.
+# receives yielding 'T?'. A bare 'chan[T]' is bidirectional and narrows to
+# '<-chan[T]' / 'chan[T]<-' via a type annotation. There is NO 'yield'. 'select' is
+# the only multi-way wait.
+#
+# A receive answers 'T?' because the two ways a stream can end are two different things
+# in this language, and each already has its own: the stream ENDING is an ABSENCE, so it
+# is nil — and nil for good, however many times it is asked; the producer DYING is a
+# FAILURE, so it is RAISED, carrying that producer's own Err. Nothing has to ask which
+# kind of ending it is holding, because the two do not arrive by the same route.
+#
+# 'chan[T?]' is REFUSED for that reason: nil would mean both the value that was sent and
+# the end of the stream, and no operator can tell those apart. Wrap it in a struct, or
+# agree on a sentinel.
+#
+# The four operators of group 8 are therefore the receive's operators too:
+#     v := <-ch ?? d      d when the stream is over
+#     if v := <-ch { … }  v is a T inside the block; else is the end
+#     v := <-ch!          insist: abort if it is over
+#     v := <-ch?          hand the absence back (this function answers a 'T?')
+#     for v in ch { … }   v is a T; the loop ends when the stream does
 #
 # A channel closes BY ITSELF when its last sender leaves — that is the everyday form,
 # and the only one a crashing producer can take (its unwind is what carries the crash
@@ -642,17 +659,29 @@ close-stmt   ::= 'close' '(' expr ')'          # end this stream early; expr is 
 chan-new     ::= 'chan' '[' type ']' '(' expr? ')'   # constructor; optional capacity
 
 # 'select' watches several send/receive arms, runs the first ready one (fair ties).
-# 'done' fires once when every watched receive channel has closed; '_' fires when
-# nothing is ready (non-blocking). Both 'done' and '_' are contextual — special only
-# as a select-arm head.
+# A select PICKS; it does not END. There is no terminal arm: 'for select { … }' is the
+# same wait as a LOOP — one ready arm per round — and it ends when every watched receive
+# channel has. A one-shot 'select' whose channels are all finished has nowhere to go and
+# raises DeadlockError, which is what waiting for something that cannot happen deserves.
+#
+# '_' fires when nothing is ready (non-blocking), and it is NOT an answer to an exhausted
+# select: "nothing yet" would be a lie once nothing can ever be ready. It is contextual,
+# special only as a select-arm head, and the ONLY bare identifier an arm may open with —
+# anything else there is an error, not another spelling of it.
+#
+# A CLEAN close is an ABSENCE: the arm is dropped from the wait and never fires, so an arm
+# that fires has a VALUE and 'v := <-ch => …' binds a plain T. A CRASH close is a FAILURE
+# and is RAISED, carrying the producer's own Err — it never reaches an arm body, which is
+# what makes the reason impossible to run over.
 #
 # An arm's body is a STATEMENT, not an expression: 'select' is a statement and yields
-# nothing, so an arm RUNS rather than yields — which is what lets 'done => break' and
+# nothing, so an arm RUNS rather than yields — which is what lets 'break' and
 # 'v := <-ch => print v!' mean what they read as. A block is a statement like any other,
 # so '=> { … }' is the multi-statement form. The contrast is a 'match' arm (group 4),
 # whose body must YIELD the match's value and is therefore an expression.
-select-stmt  ::= 'select' '{' select-arm+ '}'
-select-arm   ::= recv-arm | send-arm | 'done' '=>' stmt | '_' '=>' stmt
+select-stmt  ::= 'select' '{' select-arm+ '}'          # picks one ready arm
+for-select   ::= 'for' 'select' '{' select-arm+ '}'   # one per round, until every recv arm has ended
+select-arm   ::= recv-arm | send-arm | '_' '=>' stmt
 recv-arm     ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' stmt
 send-arm     ::= expr '<-' expr '=>' stmt    # '=>' separates the arm head from its body
 

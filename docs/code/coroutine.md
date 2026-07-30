@@ -122,42 +122,56 @@ never yields a value — it completes, blocks, or aborts:
 
 ### Receive — `<-ch`
 
-Receive yields **`Result[T]`**: `Left(v)` is a value; `Right(err)` means the channel is **closed and
-drained**, `err` being _why_ — so a crash reason is never lost. It never means "empty, wait" (that
-blocks).
+Receive yields **`T?`**. The two ways a stream can end are two different things in this language,
+and each already had its own: the stream **ending** is an **absence**, so it is `nil`; the producer
+**dying** is a **failure**, so it is **raised**, carrying that producer's own `Err`. Nothing has to
+ask which kind of ending it is holding, because the two do not arrive by the same route.
 
-| Channel state                            | `<-ch : Result[T]`                                  |
-| ---------------------------------------- | --------------------------------------------------- |
-| open, has a value                        | `Left(v)`                                           |
-| open, empty                              | **blocks**                                          |
-| closed, values still buffered            | `Left(v)` — **drains first**, no data lost          |
-| closed clean (last sender left normally) | `Right(StopIteration)` — the end-of-stream sentinel |
-| closed by crash (last sender aborted)    | `Right(err)` — the propagated crash `Err`           |
+| Channel state                            | `<-ch : T?`                                           |
+| ---------------------------------------- | ----------------------------------------------------- |
+| open, has a value                        | the value                                             |
+| open, empty                              | **blocks**                                            |
+| closed, values still buffered            | the value — **drains first**, no data lost            |
+| closed clean (last sender left normally) | `nil`, and `nil` every time after — the end is sticky |
+| closed by crash (last sender aborted)    | **raises** the producer's `Err`, message and kind     |
 
-Most code treats **any `Right` as "stop"**, inspecting `err` only when it needs the reason. Every
-need falls out of existing operators — the **receiver** chooses:
+That split is the whole reason the reason cannot be lost. A `Result` made the receiver ask _which_
+kind of `Right` it was holding before it could tell an ending from a death; anyone who forgot lost
+the death. Nobody can forget now.
+
+`chan[T?]` is **refused** for the same reason it is now unnecessary: `nil` would mean both the value
+that was sent and the end of the stream, and no operator can tell those apart. Wrap it in a struct,
+or agree on a sentinel.
+
+Every need falls out of the four operators `T?` already had — the **receiver** chooses:
 
 ```text
-v := (<-ch)?               # propagate the close reason up (a crash cascades)
-v := (<-ch)!               # force: a crash Err re-raises as an abort here
-v := (<-ch) ?? fallback    # default on any close
-if v := <-ch { … }         # run the block only on a value (Left)
-for { v := <-ch ?? break }               # drain until any close
-for v in ch { use(v) }                   # the same drain, ending on a clean close
-match <-ch { Left(v) => use(v)  Right(e) => report(e) }
+v := <-ch ?? fallback      # the stream is over → fallback
+if v := <-ch { … }         # v is a T inside the block; else is the end
+v := <-ch!                 # insist: abort if it is over
+v := <-ch?                 # hand the absence back (this function answers a T? too)
+for { v := <-ch ?? break }               # drain until the end
+for v in ch { use(v) }                   # the same drain, ending where the stream does
 ```
 
-Because closed is the `Right` side, `chan[U?]` is unambiguous: a **sent `nil`** is `Left(nil)`, a
-**closed** channel is `Right`.
+A **crash** close is in none of those lines, and that is the point: it raises. A receiver that wants
+to read the reason and keep going demotes it with `guard { <-ch }`, the same way it would any other
+failure.
 
-> **[not yet]** In the **shipped `zerg`**, and this is the one place on this chapter where the **seed
-> is the wider of the two**. Every operator above is built in both compilers except `?`, which the
-> **seed builds**: `v := (<-ch)?` early-returns the `Right` from the enclosing function, and a
-> `Result[T]` survives in the seed's **signatures** to carry it. `zerg` refuses it by name (_the `?`
-> operator — it early-returns the Err from the enclosing function, which needs `Result[T]` in a
-> signature_), so nothing is mis-emitted; until it lands there, propagate with `(<-ch)!` or absorb
-> with `??`. What `?` needs is the error model of [Errors](errors.md) rather than anything about a
-> channel — a `Result[T]` a signature can name.
+> **[not yet]** A receiver **already parked on an empty channel** when its last sender crashes is
+> woken as a deadlock rather than with the reason: the program reports the producer's abort and then
+> `DeadlockError`, and the `Err` never reaches the receive. A receiver that still has values to drain
+> gets the reason as promised (that is what `conc_crash` pins). The hole is in the runtime's close
+> wake-up, not in the language, and it predates the receive answering `T?`.
+>
+> **[not yet]** `guard { <-ch }` — a `guard` bound to a name is not built in the shipped `zerg` yet
+> (it works as a statement, which swallows the failure but yields nothing). Until it lands, a crash
+> close aborts the receiver with the producer's reason on stderr, which is the honest outcome for a
+> program that did not say what to do about it.
+>
+> `?` on a receive now needs only what any `T?` needs — the absence is an ordinary optional, so the
+> `Result[T]`-in-a-signature problem this note used to describe is no longer on the channel path at
+> all.
 
 The `match` line above also carries a restriction, and it is the one most likely to bite: what may
 stand in an arm.
@@ -169,8 +183,8 @@ stand in an arm.
 > The workaround is to make the arm a **call** whose value is the arm's value, as the actor example
 > below does. `select` arms are unaffected, and for a reason worth keeping straight: a `match` arm
 > must **yield** the match's value, while a `select` yields nothing and its arm **runs**. So a select
-> arm's body is a **statement** (GRAMMAR group 9) — `done => break` is ordinary there, a bare `print`
-> stands in an arm, and a block is just one statement among them.
+> arm's body is a **statement** (GRAMMAR group 9) — `break` is ordinary there, a bare `print` stands
+> in an arm, and a block is just one statement among them.
 
 ## Closing — automatic on the last sender, `close(ch)` when it must be early
 
@@ -295,40 +309,48 @@ rotor** (the same fairness applied to a single wait), but a conforming implement
 ready arm, so no program may depend on which one wins.
 
 ```text
-select {
-    v := <-a => use(v)      # receive arm: ready when open with a value
+select {                    # picks ONE ready arm and runs it
+    v := <-a => use(v)      # receive arm: ready when open with a value; v is a T
     b <- x   => sent()      # send arm: ready when the send can proceed
-    done     => break       # all watched receive channels closed → fires once
     _        => tick()      # nothing ready now → non-blocking
 }
+
+for select {                # the same wait as a LOOP: one ready arm per round …
+    v := <-a => use(v)
+    v := <-b => use(v)
+}                           # … and it ENDS when every watched receive channel has
 ```
 
-A receive arm binds the same `Result[T]` as a plain receive — `Left(v)` on a value, `Right(err)` on a
-crash close:
+**A select picks; it does not end.** Ending is the loop's job, and `for select` is the loop that owns
+it — no terminal arm, no counter, no flag, and the exit sits in the head where a reader looks for it.
 
-- A **cleanly** closed receive arm is **dropped** (never fires, never spins) and feeds `done`; a
-  **crash**-closed arm instead **surfaces** `Right(err)` — a crash is never silently dropped.
+- A receive arm binds a plain **`T`**. An arm that fires has a value by construction: a **cleanly**
+  closed channel is an absence, so its arm is **dropped from the wait** — it never fires and never
+  competes, which is what stops a finished producer from starving a live one.
+- A **crash** close **raises** out of the select, carrying the producer's `Err`. It never reaches an
+  arm body, so no receiver can run over it without noticing.
 - A **send arm** on a closed channel **aborts** when chosen (send-on-closed is a bug).
-- **`done`** fires **once** when every watched receive channel has closed (the select is _exhausted_)
-  — clean fan-in termination without a join or a manual countdown.
-- **`_`** fires when no arm is ready now, making `select` non-blocking.
-- All closed with **no `done` and no `_`** → **aborts** (`DeadlockError`), a safety net for a
-  forgotten shutdown. `done` precedes `_`.
+- **`_`** fires when no arm is ready **now**, making `select` non-blocking. It is **not** an answer
+  to an exhausted select: "nothing yet" would be a lie once nothing can ever be ready, and a loop
+  around that lie spins. It yields to the scheduler before it runs, so a poll loop cannot starve the
+  worker it is on.
+- A **one-shot** `select` whose watched receive channels have all ended has nowhere to go and
+  **aborts** (`DeadlockError`) — waiting for something that cannot happen, named. `for select` ends
+  instead; that is the difference between the two spellings.
 
-The granularity is deliberate: a single receive surfaces closure per value; `select` aggregates a
-clean close into one `done` while still surfacing a crash — so a clean close never joins the "has
-data" race and nothing spins.
+The granularity is deliberate: a single receive answers the end per value, as `nil`; a `select` drops
+the ended arm instead, so a clean close never joins the "has data" race and nothing spins.
 
 Two consequences of the drop rule are worth stating outright, because a `select` that ignores them
 hangs rather than misbehaves:
 
 - **Closing a channel does not fire its own arm.** A clean close removes that arm from the wait; it
-  never becomes ready. Whatever a close is meant to signal must arrive through `done`, or be **sent**
-  as a value.
-- **`done` needs _every_ watched receive channel closed.** One channel that stays open — a cancel
-  channel the canceller still holds, a mailbox nobody has finished with — keeps `done` from ever
-  firing. If the remaining arms then close, the `select` has nothing left that can become ready, and
-  the runtime reports it where the program's outcome is decided: `DeadlockError`, raised on `main`.
+  never becomes ready. Whatever a close is meant to signal must be **sent** as a value, or be the end
+  that `for select` waits for.
+- **The loop ends only when _every_ watched receive channel has.** One channel that stays open — a cancel
+  channel the canceller still holds, a mailbox nobody has finished with — keeps the loop running. A
+  one-shot `select` in the same position has nothing left that can become ready, and the runtime
+  reports it where the program's outcome is decided: `DeadlockError`, raised on `main`.
 
 ## Timers & cancellation
 
@@ -346,24 +368,22 @@ worked version of this section is [`examples/13_cancel.zg`](../../examples/13_ca
   observing a cancel or timeout arm and choosing to stop.
 
 **Cancel by sending, not by closing.** A close is an end-of-stream, not an event: a cleanly closed
-receive arm is _dropped_, so closing `cancel` never fires the `cancel` arm. Closing it feeds `done`
-instead — and `done` waits for **every** watched receive channel, so it fires only once the work is
-finished too. The two are complementary rather than interchangeable: **send** to stop early, **close**
-(or simply let the last holder go) to say "there will be no cancellation", which is what lets `done`
-fire when the work runs out.
+receive arm is _dropped_, so closing `cancel` never fires the `cancel` arm. Closing it instead feeds
+the LOOP's ending — which waits for **every** watched receive channel, so it comes only once the work
+is finished too. The two are complementary rather than interchangeable: **send** to stop early,
+**close** (or simply let the last holder go) to say "there will be no cancellation", which is what
+lets the loop end when the work runs out.
 
 ```text
 fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
     mut total := 0
 
-    for {
-        select {
-            v := <-work           => { total = total + v! }
-            <-cancel              => { out <- total  return }   # stopped early — a value was SENT
-            <-time.after(1000000) => { out <- total  return }   # timeout — 1ms, in nanoseconds
-            done                  => { out <- total  return }   # work and cancel both closed
-        }
+    for select {
+        v := <-work           => { total = total + v }          # v is an int: an arm that fires has a value
+        <-cancel              => { out <- total  return }       # stopped early — a value was SENT
+        <-time.after(1000000) => { out <- total  return }       # timeout — 1ms, in nanoseconds
     }
+    out <- total                                                # work and cancel both ended
 }
 
 fn main() {
@@ -373,14 +393,14 @@ fn main() {
     spawn stage(source(3), cancel, out)
 
     cancel <- 1        # stop it now …
-    # close(cancel)    # … or: no cancellation — let the work finish and `done` fire
+    # close(cancel)    # … or: no cancellation — let the work finish and the loop end
 
     print (<-out)!
 }
 ```
 
-The `done` arm is not decoration. Without it — and without a `_` — a `select` whose channels have all
-closed aborts with `DeadlockError`, which is how a forgotten shutdown announces itself.
+The loop is not decoration. A one-shot `select` whose channels have all ended — and with no `_` —
+aborts with `DeadlockError`, which is how a forgotten shutdown announces itself.
 
 **A timer costs a coroutine.** `after` and `ticker` are ordinary Zerg over one runtime leaf that parks
 a coroutine until a monotonic deadline, so **each live timer is a coroutine with its own 256KB stack**.

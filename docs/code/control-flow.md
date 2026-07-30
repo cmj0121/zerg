@@ -75,10 +75,16 @@ earlier arm already covers) is a warning.
 A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bound **by copy**, like
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`, or a negative literal) —
 matched by value; a **nested** pattern (`Left(Some(v))`); or the **wildcard `_`**, matching anything and
-binding nothing. These, together with a **product pattern** (below), are **[implemented]**. An **or-pattern
-that binds** (`A(x) | B(x) =>`, its alternatives binding the same names at the same types) and a **list
-pattern** (`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both — the list pattern even type-checks — but
-the code generator rejects them today, so do not reach for either yet.
+binding nothing. These, together with a **product pattern** (below) and a **range** arm (`1..=2 =>`, which
+matches by containment), are **[implemented]**. An **or-pattern** (`A | B =>`, and the binding form
+`A(x) | B(x) =>` whose alternatives bind the same names at the same types) and a **list pattern**
+(`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both, and the list pattern even type-checks.
+
+> **An or-pattern is refused, by name.** `|` in pattern position is read as the bitwise operator, so
+> `1 | 2 =>` would fold to `3 =>` and match neither 1 nor 2 — it used to compile and be silently wrong, and
+> that is exactly what a compiler must not do, so the arm is now turned away instead. `zerg fmt` rewrites
+> the one case that has a working spelling (consecutive integers become the range `1..=2`, rule `F408`);
+> everything else waits on the language work.
 
 ```text
 msg := match ev {

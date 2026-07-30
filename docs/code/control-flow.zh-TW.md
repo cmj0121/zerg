@@ -62,9 +62,14 @@ statement。覆蓋是**必需**的——漏掉某個 case 的 `match` 是**編�
 
 一個 **pattern** 是下列之一：**帶 payload 綁定的 variant**（`Left(v)`）——以 **copy** 綁定，一如 `?`/`return`、來源
 永不失效；**literal**（`0`、`"y"`、`true`、或負數 literal）——以值比對；**nested** pattern（`Left(Some(v))`）；
-或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern** 都是 **[implemented]**。一個**帶綁定的
-or-pattern**（`A(x) | B(x) =>`，各分支綁同名、同型）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR`
-兩者皆導得出——list pattern 連型別檢查都過——但今天 code generator 會拒絕它們,所以兩者都先別用。
+或**萬用 `_`**，比對任何值、不綁定。這些連同下面的 **product pattern**、以及一個 **range** arm（`1..=2 =>`，以
+containment 比對）都是 **[implemented]**。一個 **or-pattern**（`A | B =>`，以及各分支綁同名同型的綁定形式
+`A(x) | B(x) =>`）與一個 **list pattern**（`[h, ..t]`）是 **[not yet]**：`GRAMMAR` 兩者皆導得出，list pattern 連型別
+檢查都過。
+
+> **or-pattern 會被明確拒絕。** pattern 位置上的 `|` 被讀成位元運算子，所以 `1 | 2 =>` 會折成 `3 =>`，1 和 2
+> 都不中——它以前編得過而且靜默地錯，那正是編譯器最不該做的事，所以現在直接turn away。`zerg fmt` 會改寫唯一有可用
+> 寫法的那個情況（連續整數收成 range `1..=2`，規則 `F408`），其餘的都等語言層面的工作。
 
 ```text
 msg := match ev {

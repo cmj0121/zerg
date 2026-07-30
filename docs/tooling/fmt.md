@@ -38,6 +38,8 @@ input would produce, so formatting formatted source changes nothing.
 | `F103` | a wrapped expression continues one level in per open bracket            |
 | `F104` | a run of blank lines survives as exactly one, inside a group too        |
 | `F105` | a group that spans lines closes on its own line                         |
+| `F106` | a run of arms lands every `=>` in one column                            |
+| `F107` | a run of trailing comments lands every `#` in one column                |
 
 `F105` is what gives a wrapped chain a visible end:
 
@@ -74,19 +76,77 @@ A line break after `)` ends the statement (see the ASI rule in [`GRAMMAR`](../..
 and no `;` is inserted inside an unclosed `(`, so the parentheses are what hold the chain
 together.
 
+`F106` reads a match over a small closed set as what it is — a **lookup table** — and lays
+its arms out as rows:
+
+```zerg
+Eof       => "EOF"
+Illegal   => "ILLEGAL"
+FStrBegin => "FSTR_BEGIN"
+```
+
+rather than as a ragged left edge with the answers scattered along it. `F107` is the same
+pass over a different mark, because a column of notes beside a column of code is read the
+same way:
+
+```zerg
+kind: int   # what the lexer decided this is
+lexeme: str # the source spelling, kept verbatim
+line: int   # 1-based, for a diagnostic
+```
+
+A **run** is consecutive lines, at the same indent, that each carry the mark. Everything
+else ends it, and the edges are most of the rule:
+
+- a blank line, or a comment on its own line — what follows is a new paragraph, and a
+  paragraph brings its own column;
+- a **guarded** arm — `n if n > 99 =>` is a sentence rather than a row, so it lines up with
+  nothing and ends the run it meets;
+- an arm whose body is a **block**, or that puts its body on the next line;
+- a head more than **12 columns** wider than the run's narrowest.
+
+That last one is the budget, and it bounds the padding any one line takes: without it a run
+creeps wider one arm at a time and a three-character pattern ends up half a line from its
+answer. 12 is measured off a `select`, whose arm heads are four different shapes —
+`v := <-work`, `out <- total`, `done`, `_` — and 8 cut the `_` arm out of its own table.
+
+The padding is **spaces** while the indent stays **tabs**, so the column holds at any tab
+width: the tabs are identical across a run and cancel out. A line may pass the column
+`F403` wraps at by as much as the budget, which is the price of the table.
+
+The marks come from the printer rather than from a scan of the finished text, and that is
+load-bearing rather than incidental: once the tokens are gone, a `=>` inside a string
+literal reads exactly like an arm's, and padding that one would not lay out a table — it
+would rewrite the string.
+
+Idempotence is still the printer's. Whitespace between two tokens is not a token, so a
+second pass lexes the padded source to the same stream, prints the same single space, and
+pads it back to the same column — which is why `F201` reads "at least one space".
+
 ### F2xx — spacing
 
-| Code   | Rule                                                                      |
-| ------ | ------------------------------------------------------------------------- |
-| `F201` | one space around a binary operator, after a comma, and around `=>`        |
-| `F202` | no space after `(` `[`, before `)` `]` `,`, or between a name and its `(` |
-| `F203` | a prefix operator is tight to its operand — `-1`, `&x`, `<-ch`            |
+| Code   | Rule                                                                        |
+| ------ | --------------------------------------------------------------------------- |
+| `F201` | one space around a binary operator, after a comma, at least one around `=>` |
+| `F202` | no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`   |
+| `F203` | a prefix operator is tight to its operand — `-1`, `&x`, `<-ch`              |
+| `F204` | a range operator is tight to both its bounds — `0..n`, `a..=b`              |
 
 `F203` is decided by what is to the LEFT, not by which token it is. `-` is a negation and a
 subtraction, `<-` is a receive and a send and a direction marker; each is prefix exactly
 when nothing before it could be an operand. Getting one backwards reprints to a STABLE
 wrong answer — `-1` became `- 1`, and stayed that way on the second pass — so an
 idempotence check cannot see it and only a case containing the shape can.
+
+`F204` is the same lesson learned twice. The range operators are binary, so the default said
+yes and `xs[1..3]` came back as `xs[1 .. 3]` — but a range reads as a **constructor** rather
+than as an operation, and every range in this tree, in `GRAMMAR` and in these docs is written
+tight. It survived because no fmt case contained a range at all.
+
+Two exceptions, both real. A comma keeps the space it owes, so a list pattern's rest marker is
+`[h, ..t]`. And a token that cannot begin a bound keeps the space in front of it, because
+`20.. =>` printed tight is `20..=>` — which lexes as `20`, `..=`, `>`. The formatter would have
+rewritten a working arm into a parse error.
 
 ### F3xx — trivia
 
@@ -137,6 +197,8 @@ with no way to tell them apart by looking.
 | `F404` | two or more imports become one parenthesized group                             | on      |
 | `F405` | a string built with `+` becomes the f-string it already is                     | on      |
 | `F406` | a blank line where one is load-bearing: guard runs, declaration runs, comments | on      |
+| `F407` | a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`             | on      |
+| `F408` | an or-pattern over consecutive integers becomes the range it is                | on      |
 
 `GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
 `if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
@@ -371,6 +433,52 @@ and a blank that is already there.
 What it deliberately does **not** do is put a blank after a nested block's `}`. That is 683
 places in this tree — not a rule about readability but a rewrite of the tree.
 
+`F407` drops the binder from a select arm that discards what it receives:
+
+```zerg
+_ := <-cancel => { … }    →    <-cancel => { … }
+```
+
+`GRAMMAR` makes a recv-arm's binder **optional** — `<-ch => stmt` is the whole form — so
+`_ := <-ch =>` names the received value only in order to say it has no name. Go needs `_ =`
+because an unused variable is an error there; Zerg has no such rule, so the binder buys
+nothing and costs the next reader the question "where is `_` read?". This is `F401`'s
+principle again: where the language offers a shorter surface for exactly what is written,
+the canonical form is the shorter one.
+
+It fires only where an `=>` proves a select arm. A **statement** `_ := <-ch` is a binding,
+and dropping its binder would leave a bare receive standing where a statement was; that case
+is `L104`'s, which suggests rather than rewrites.
+
+`F408` is that principle a third time, over a match arm's pattern:
+
+```zerg
+4 | 5 | 6 | 7 => "mid"    →    4..=7 => "mid"
+```
+
+`GRAMMAR` gives an arm a **range** form that is sugar for the guard `_ if _ in 4..=7`, so it
+says exactly what the or-pattern says and says it once however many values there are.
+
+Here the shorter form is also the only one that **builds**. `|` in pattern position is read as
+the bitwise operator, so `1 | 2` would fold to `3` and match neither 1 nor 2 — which is why the
+compiler now refuses an or-pattern outright rather than emitting it. This rule is what turns
+that refusal into working code for the one case that has a working spelling; every other
+or-pattern waits on the language work.
+
+That order matters for what a formatter is allowed to be. `zerg fmt` does not change what a
+working program does here — the program it rewrites does not compile.
+
+The shape it accepts is narrow, and each part of it is load-bearing:
+
+- the whole arm **head** is integer literals separated by `|`, and nothing else. A token pass
+  has no other way to know a `|` is in pattern position, and `out <- a | b => …` is a select
+  send arm whose value happens to hold one;
+- the values **ascend by one** — `1 | 3` is not `1..=3`, which would take 2 with it;
+- two or more alternatives, and no guard.
+
+Each bound keeps its own **lexeme**, so `0x10 | 0x11` becomes `0x10..=0x11` rather than being
+restated in decimal. A literal's surface is the author's.
+
 ### Which rules can be switched off
 
 `F1xx`–`F3xx` are not negotiable: they are what "canonical" means, and a formatter with
@@ -398,12 +506,19 @@ exit makes `zerg lint` usable as a gate rather than as decoration.
 | `L101` | unused import                 | read, parsed and merged in for nothing, and it lies about what this file needs |
 | `L102` | private function never called | a public one is a module's interface; a private one with no caller is dead     |
 | `L103` | binding never read            | the value was computed for nobody                                              |
+| `L104` | `_ := expr`                   | the expression is already a statement, so the binder is what nothing reaches   |
 
 ```text
 L101 unused import "strconv"
 L102 private function `never` is never called
 L103 binding `unused` in `main` is never read
+L104 `_ :=` in `main` — the expression is already a statement, so the binder says nothing
 ```
+
+`L104` is why `L103` says nothing about `_`: an unread `_` is what `_` **means**, so "never
+read" is the one thing there is no point saying about it. The select-arm spelling of the same
+redundancy is `F407`'s, because `GRAMMAR` makes that binder optional and
+dropping it leaves an arm. A statement's binder has no such spelling.
 
 ### L2xx — null safety
 

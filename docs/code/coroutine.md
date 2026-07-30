@@ -358,10 +358,10 @@ fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
 
     for {
         select {
-            v := <-work                => { total = total + v! }
-            _ := <-cancel              => { out <- total  return }   # stopped early — a value was SENT
-            _ := <-time.after(1000000) => { out <- total  return }   # timeout — 1ms, in nanoseconds
-            done                       => { out <- total  return }   # work and cancel both closed
+            v := <-work           => { total = total + v! }
+            <-cancel              => { out <- total  return }   # stopped early — a value was SENT
+            <-time.after(1000000) => { out <- total  return }   # timeout — 1ms, in nanoseconds
+            done                  => { out <- total  return }   # work and cancel both closed
         }
     }
 }

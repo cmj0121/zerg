@@ -104,17 +104,16 @@ EOF
 # that was sent" and "the stream is over".
 # GRAMMAR says `select-arm+`, and the reason is not pedantry: an empty select parks on no
 # channel, so it never wakes — a hang with no cause to find. Both compilers say so.
-# The postfix `if` belongs to the three JUMPS. `raise … if c` was accepted here and emitted
-# as a mangled lambda that only cc objected to, in a file the programmer cannot open — while
-# the seed refused it all along, so the two compilers disagreed about the language.
-expect "$ZERG" postfix-if-on-a-raise "postfix \`if\` belongs to" <<'EOF'
-fn boom(n: int) -> int {
-	raise "ValueError: nope" if n < 0
-	return n * 2
+# A cause chain is made of Errs. The `from` operand used to be read as whatever C type it
+# happened to be and handed straight to the runtime, which takes a pointer — so an int cause
+# came out as a cc warning about a generated file, not a Zerg diagnostic.
+expect "$ZERG" from-cause-that-is-not-an-err "a \`from\` cause is an \`Err\`" <<'EOF'
+fn f(n: int) -> int {
+	raise ValueError("x") from n
 }
 
 fn main() {
-	print boom(3)
+	print f(1)
 }
 EOF
 

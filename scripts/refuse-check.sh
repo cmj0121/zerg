@@ -332,6 +332,41 @@ fn main() {
 }
 EOF
 
+# ...including one whose declared value HAPPENS to equal its position, which is otherwise
+# indistinguishable from declaring nothing — so it was read and then quietly dropped.
+expect "$ZERG" discriminant-that-looks-like-its-position "a discriminant" <<'EOF'
+enum E {
+	P(int) = 0
+	Q = 1
+}
+
+fn main() {
+	print "x"
+}
+EOF
+
+# An enum's ONE conversion is `int`, its discriminant. Every other one fell through to a
+# plain C cast of the tagged-union STRUCT.
+expect "$ZERG" non-int-conversion-of-an-enum "converts to \`int\`" <<'EOF'
+enum K {
+	A
+	B
+}
+
+fn main() {
+	print float(A)
+}
+EOF
+
+# Each side of an Either holds exactly one value.
+expect "$ZERG" either-side-with-two-values "holds exactly one value" <<'EOF'
+fn f() -> Result[int] {
+	return Left(1, 2)
+}
+
+fn main() { print f() ?? 0 }
+EOF
+
 expect "$ZERG" repeated-discriminant "repeats one already given" <<'EOF'
 enum K {
 	A = 1

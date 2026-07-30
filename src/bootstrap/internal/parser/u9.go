@@ -70,6 +70,11 @@ func (p *parser) parseSelect() ast.Stmt {
 		arms = append(arms, arm)
 	}
 	end := p.expect(token.RBrace).Span.End
+	// GRAMMAR says 'select-arm+'. An empty one has nothing to wait FOR: it would park on no
+	// channel at all and never wake, which is a hang with no cause to find.
+	if len(arms) == 0 {
+		p.errorf(span(start, end), "a select needs at least one arm — an empty one waits on nothing and never wakes")
+	}
 	return spanned(&ast.SelectStmt{Arms: arms}, span(start, end))
 }
 
@@ -90,20 +95,28 @@ func (p *parser) trySelectArm() (arm ast.SelectArm, ok bool) {
 	return p.parseSelectArm(), true
 }
 
-// parseSelectArm parses one select arm: 'done => e', '_ => e', a recv arm
-// '((id|_) :=)? <- e => e', or a send arm 'e <- e => e'. 'done' and '_' are
-// contextual — special only as an arm head immediately before '=>'.
+// parseSelectArm parses one select arm: '_ => e', a recv arm
+// '((id|_) :=)? <- e => e', or a send arm 'e <- e => e'.
+//
+// There is no terminal arm: a select PICKS a ready arm, and 'for select { … }' is the loop
+// that ENDS when every watched receive channel has. '_' is the only bare identifier an arm
+// may open with, and it stays contextual because it is punctuation.
 func (p *parser) parseSelectArm() ast.SelectArm {
 	start := p.cur().Span.Start
-	// contextual 'done' / '_' heads (only when directly before '=>')
+	// The one bare head. `_` is matched on the spelling because this lexer's keyword table
+	// does not reserve it, and ANYTHING else here is refused by name — including `close`,
+	// which was the terminal arm until it was replaced by `for select`. A head that is not
+	// understood used to become the `_` arm silently, which turned a typo into a select that
+	// no longer blocks and no longer ends.
 	if p.at(token.Ident) && p.peek(1).Kind == token.FatArrow {
-		switch p.cur().Lexeme {
-		case "done":
-			return p.finishSelectHead(start, ast.SelectDone)
-		case "_":
+		if p.cur().Lexeme == "_" {
 			return p.finishSelectHead(start, ast.SelectDefault)
 		}
+		p.fail(p.cur().Span, "`%s` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has", p.cur().Lexeme)
 	}
+	// `close` is a keyword to the shipped compiler and an ordinary name here, so it arrives
+	// as an Ident and is caught above — except when it opens a call, which is the statement
+	// `close(ch)` and belongs to a body rather than to a head.
 	// recv arm with a bind target '(id|_) := <- e => e'
 	if p.at(token.Ident) && p.peek(1).Kind == token.Walrus {
 		bind := p.advance().Lexeme
@@ -130,7 +143,7 @@ func (p *parser) parseSelectArm() ast.SelectArm {
 // both compilers lower an arm to if/else, which is exactly what can hold a statement — the
 // contrast is a `match` arm, whose body must yield the match's value.
 //
-// It was an expression, so the two spellings the chapter itself uses — `done => break` and
+// It was an expression, so the two spellings the chapter itself uses — `<-quit => break` and
 // a bare `_ => tick()` beside `v := <-a => print v!` — did not parse here, while the
 // shipped compiler took them. A body that already is an expression stays one, so a call or
 // a `{ … }` block is unchanged; anything else becomes a one-statement block, which is the
@@ -145,9 +158,9 @@ func (p *parser) parseSelectArmBody() ast.Expr {
 	return b
 }
 
-// finishSelectHead parses the '=> body' of a bare 'done'/'_' arm.
+// finishSelectHead parses the '=> body' of the bare '_' arm.
 func (p *parser) finishSelectHead(start token.Pos, kind ast.SelectArmKind) ast.SelectArm {
-	p.advance() // 'done' or '_'
+	p.advance() // '_'
 	p.expect(token.FatArrow)
 	body := p.parseSelectArmBody()
 	arm := ast.SelectArm{Kind: kind, Body: body}

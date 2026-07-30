@@ -58,9 +58,9 @@ func TestChanNew(t *testing.T) {
 // TestSelectArms checks each select-arm shape parses to the right kind and binds.
 func TestSelectArms(t *testing.T) {
 	sel := firstStmt(t, "select {\nx := <-ch => a()\n<-q => b()\nout <- v => c()\n"+
-		"done => d()\n_ => e()\n}").(*ast.SelectStmt)
-	if len(sel.Arms) != 5 {
-		t.Fatalf("got %d arms, want 5", len(sel.Arms))
+		"_ => e()\n}").(*ast.SelectStmt)
+	if len(sel.Arms) != 4 {
+		t.Fatalf("got %d arms, want 4", len(sel.Arms))
 	}
 	want := []struct {
 		kind    ast.SelectArmKind
@@ -70,7 +70,6 @@ func TestSelectArms(t *testing.T) {
 		{ast.SelectRecv, "x", true},
 		{ast.SelectRecv, "", false},
 		{ast.SelectSend, "", false},
-		{ast.SelectDone, "", false},
 		{ast.SelectDefault, "", false},
 	}
 	for i, w := range want {

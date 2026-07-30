@@ -952,11 +952,16 @@ bool zrt_crash_active(void);
 /* --- concurrency: select (chan.c) -------------------------------------------
  *
  * `select { arm+ }` (GRAMMAR group 9) is the one multi-way wait. The backend lowers a
- * select to an array of case descriptors (one per recv/send arm; the `done` and `_`
- * arms are passed as the has_done / has_default flags), one zrt_select call to pick and
- * perform a ready arm, then a switch on the returned index to run the chosen arm body.
- * zrt_select owns readiness, fairness, the non-blocking `_`, the all-closed `done`, and
- * parking on every watched channel at once. */
+ * select to an array of case descriptors (one per recv/send arm; the `close` and `_` arms
+ * are passed as the has_exit / has_default flags), one zrt_select call to pick and perform
+ * a ready arm, then a switch on the returned index to run the chosen arm body. zrt_select
+ * owns readiness, fairness, the non-blocking `_`, the exhausted select, and parking on
+ * every watched channel at once.
+ *
+ * It divides a closed channel the way the language does. A CLEAN close is an ABSENCE: the
+ * arm is dropped from the wait, never fires, and when every recv arm is gone the select is
+ * exhausted. A CRASH close is a FAILURE: it is RAISED, carrying the producer's own Err, so
+ * the reason cannot be lost by a receiver that was not looking for it. */
 
 /* zrt_sel_op tags a select case's direction: a receive arm (`(id :=)? <-ch => …`) or a
  * send arm (`ch <- v => …`). */
@@ -965,37 +970,38 @@ typedef enum {
 	ZRT_SEL_SEND,
 } zrt_sel_op;
 
-/* zrt_sel_case is one recv/send arm's descriptor. `ch` is the arm's channel; `val` is
- * the receive target (recv) or the value to send (send). `closed` is an OUTPUT the recv
- * path sets to 1 when the chosen arm fired as the Right of Result[T] (a closed channel
- * with no `done` arm to absorb it), else 0. */
+/* zrt_sel_case is one recv/send arm's descriptor. `ch` is the arm's channel; `val` is the
+ * receive target (recv) or the value to send (send).
+ *
+ * There is no `closed` output any more: an arm that fires has a VALUE, always. A clean
+ * close drops the arm, and a crash close raises — neither reaches an arm body, so nothing
+ * downstream has to ask whether the value it was handed is real. */
 typedef struct {
 	zrt_sel_op op;
 	zrt_chan  *ch;
 	void      *val;
-	int        closed;
 } zrt_sel_case;
 
 /* zrt_select scans the n cases for a ready one and performs it, returning its index
  * (0..n-1). A recv case is value-ready when its channel has a buffered value or a parked
- * sender; a send case is ready when its channel has room or a parked receiver (sending
- * on a closed channel aborts). Ties among ready cases are broken fairly by a rotating
- * start so no arm starves. When no case is value-ready it resolves in this order:
- *   - has_done and every watched recv channel is closed-and-drained -> ZRT_SEL_DONE;
- *   - no `done` arm and a recv channel closed by a CRASH -> that recv fires as Right;
- *   - no `done` arm, no `_`, and every watched recv channel cleanly closed -> the select
- *     can never fire again, so it raises DeadlockError (a clean, catchable abort);
- *   - no `done` arm and some recv channel is closed -> that recv fires as Right (closed);
- *   - has_default -> ZRT_SEL_DEFAULT (the non-blocking `_`, never parks);
+ * sender; a send case is ready when its channel has room or a parked receiver (sending on
+ * a closed channel aborts). Ties among ready cases are broken fairly by a rotating start
+ * so no arm starves. When no case is value-ready it resolves in this order:
+ *   - a recv channel closed by a CRASH -> RAISE its Err (the reason is never dropped);
+ *   - every watched recv channel closed-and-drained, and there is at least one -> the
+ *     select is exhausted: ZRT_SEL_DONE when has_exit (a `close` arm, or the `for select`
+ *     that ends there), else DeadlockError, because waiting is now waiting for something
+ *     that cannot happen;
+ *   - has_default -> yield, then ZRT_SEL_DEFAULT (the non-blocking `_`, which never parks
+ *     and therefore must not hold the one worker it is running on);
  *   - otherwise PARK on every case's channel at once and re-scan when any wakes it.
- * Note (refines DESIGN-1e §4.2): a closed-and-drained recv channel is NOT treated as
- * independently value-ready when a `done` arm is present — it routes to `done` — so a
- * `select`-loop over producers terminates via `done` once every producer's channel has
- * auto-closed rather than spinning on Right. */
+ * A cleanly closed recv arm is never value-ready and never fires: it is an absence, so it
+ * leaves the wait instead of competing in it. That is what stops a finished producer from
+ * starving a live one, and what lets `for select` end rather than spin. */
 /* zrt_chan_select_init prepares select's own lock; the scheduler calls it at start. */
 void zrt_chan_select_init(void);
 
-int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done);
+int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_exit);
 #define ZRT_SEL_DEFAULT (-1)
 #define ZRT_SEL_DONE (-2)
 

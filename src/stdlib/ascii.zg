@@ -71,7 +71,7 @@ pub fn to_lower(b: byte) -> byte {
 pub fn digit_val(b: byte) -> int {
 	v := int(b)
 	return v - 48 if v >= 48 and v <= 57
-	return - 1
+	return -1
 }
 
 # hex_val returns the numeric value 0..15 of an ASCII hexadecimal digit (either case),
@@ -83,5 +83,5 @@ pub fn hex_val(b: byte) -> int {
 	return v - 87 if v >= 97 and v <= 102
 	return v - 55 if v >= 65 and v <= 70
 
-	return - 1
+	return -1
 }

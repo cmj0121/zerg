@@ -59,7 +59,7 @@ fn skip_semis(mut &p: Parser) {
 fn ident_name(e: Expr) -> str {
 	return match e {
 		EIdent(n) => n
-		_ => ""
+		_         => ""
 	}
 }
 
@@ -144,6 +144,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		p_advance(p)
 		elem := parse_type(p)
 		expect(p, RBrack)
+
 		# the trailing `<-` — and ONLY here, right after the `]` that closed a channel's
 		# element type, so nothing else that a `<-` may follow is ever eaten
 		if p_at(p, LArrow) {
@@ -218,9 +219,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 # counted rather than assumed one deep, so `Pair[list[int], B[T]]` leaves the stream on the
 # token after the outer `]`.
 fn skip_ty_args(mut &p: Parser) {
-	if not p_at(p, LBrack) {
-		return
-	}
+	return if not p_at(p, LBrack)
 	p_advance(p) # '['
 	mut depth := 1
 	for depth > 0 and not p_at(p, Eof) {
@@ -393,6 +392,7 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 		}
 		return SelArm(op, "", ENil, ENil, parse_sel_body(p))
 	}
+
 	# `v := <-ch => …` — a named receive
 	mut bind := ""
 	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
@@ -409,6 +409,7 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 		expect(p, FatArrow)
 		return SelArm(0, bind, ch, ENil, parse_sel_body(p))
 	}
+
 	# `ch <- v => …` — a send
 	ch := parse_expr(p)
 	expect(p, LArrow)
@@ -822,9 +823,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SSpawn(parse_expr(p))
 	}
-	if k == Select {
-		return parse_select(p)
-	}
+	return parse_select(p) if k == Select
 	if k == With {
 		raise "NotImplemented: with"
 	}
@@ -834,9 +833,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return SDel(name)
 	}
-	if k == Close {
-		return parse_close(p, false)
-	}
+	return parse_close(p, false) if k == Close
 	if k == Defer {
 		p_advance(p)
 
@@ -953,6 +950,7 @@ fn parse_if(mut &p: Parser) -> Stmt {
 		}
 		return SIfLet(name, value, then_body, has_else_l, else_body_l)
 	}
+
 	cond := parse_expr(p)
 	then_body := parse_block(p)
 	mut has_else := false
@@ -1308,9 +1306,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIdent(t.lexeme)
 	}
-	if k == Fn {
-		return parse_fn_expr(p)
-	}
+	return parse_fn_expr(p) if k == Fn
 	if k == Chan {
 		# `chan[T](cap)` — the capacity is optional and defaults to an unbuffered
 		# rendezvous, which is what a bare `chan[T]()` means
@@ -1368,15 +1364,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		expect(p, RParen)
 		return ETuple(elems)
 	}
-	if k == LBrace {
-		return parse_map_lit(p)
-	}
+	return parse_map_lit(p) if k == LBrace
 	if k == LBrack {
 		# list literal: [] or [a, b, ...], or the FILL form [v; N]
 		p_advance(p)
 		mut elems: list[Expr] = []
 		for not p_at(p, RBrack) and not p_at(p, Eof) {
 			elems.append(parse_expr(p))
+
 			# `[v; N]` is N copies of v. The `;` is the lexer's statement separator
 			# elsewhere, which is exactly why it needs handling here: without it the
 			# count was read as a second ELEMENT and the list came out the wrong length.
@@ -1416,7 +1411,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
 	# that compiles and is not the one that was written, so it is named instead.
 	if is_stmt_kw(k) {
-		raise "NotImplemented: `" + t.lexeme + "` is a statement, and an expression is wanted here"
+		raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here"
 	}
 	p_advance(p)
 	return ENil
@@ -1440,6 +1435,7 @@ fn parse_close(mut &p: Parser, at_exit: bool) -> Stmt {
 fn is_stmt_kw(k: Kind) -> bool {
 	return true if k == Print or k == Raise or k == Return or k == Nop
 	return true if k == Break or k == Continue or k == Del or k == Defer or k == Close
+
 	return k == Spawn or k == Select or k == For or k == With
 }
 

@@ -644,7 +644,7 @@ fn lex_with(src: str, keep: bool) -> list[Token] {
 fn is_eof(k: Kind) -> bool {
 	return match k {
 		Eof => true
-		_ => false
+		_   => false
 	}
 }
 
@@ -690,22 +690,22 @@ pub fn int_value(lex: str) -> int {
 # value), 0 -> the bare kind name.
 fn token_category(k: Kind) -> int {
 	return match k {
-		Int => 1
-		Float => 1
-		Ident => 1
-		Str => 2
-		FStr => 2
-		RawStr => 2
-		Rune => 2
-		Byte => 2
-		Cmd => 2
+		Int       => 1
+		Float     => 1
+		Ident     => 1
+		Str       => 2
+		FStr      => 2
+		RawStr    => 2
+		Rune      => 2
+		Byte      => 2
+		Cmd       => 2
 		FStrBegin => 2
-		FStrText => 2
+		FStrText  => 2
 		FCmdBegin => 2
-		FCmdText => 2
-		Conv => 2
-		FmtSpec => 2
-		_ => 0
+		FCmdText  => 2
+		Conv      => 2
+		FmtSpec   => 2
+		_         => 0
 	}
 }
 

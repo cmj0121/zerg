@@ -48,13 +48,13 @@ fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
 			v := <-work => total = total + v!
 
 			# stopped early: a value was SENT on cancel
-			_ := <-cancel => {
+			<-cancel => {
 				out <- total
 				return
 			}
 
 			# timed out — 1ms, in nanoseconds
-			_ := <-time.after(1000000) => {
+			<-time.after(1000000) => {
 				out <- total
 				return
 			}

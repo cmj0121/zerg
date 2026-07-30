@@ -240,10 +240,10 @@ fn fmt_jump_at(mut &toks: list[Token], lb: int) -> int {
 		} else if is_jump(k) {
 			return i
 		} else {
-			return - 1
+			return -1
 		}
 	}
-	return - 1
+	return -1
 }
 
 fn fmt_more_after(mut &toks: list[Token], at: int, rb: int) -> bool {
@@ -614,7 +614,7 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 	if toks[i].kind == Mut {
 		i = i + 1
 	}
-	return - 1 if toks[i].kind != Ident
+	return -1 if toks[i].kind != Ident
 	i = i + 1
 	if toks[i].kind == Colon {
 		# `x: T = e` — step over the type to the `=` that opens the value
@@ -629,14 +629,14 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 			} else if d == 0 and k == Assign {
 				break
 			} else if is_semi(k) or is_lbrace(k) or is_comment(k) {
-				return - 1
+				return -1
 			}
 			j = j + 1
 		}
-		return - 1 if j >= toks.len()
+		return -1 if j >= toks.len()
 		i = j
 	} else if toks[i].kind != Walrus {
-		return - 1
+		return -1
 	}
 	mut depth := 0
 	mut j := i + 1
@@ -647,15 +647,15 @@ fn fmt_decl_end(mut &toks: list[Token], at: int) -> int {
 		} else if is_close(k) {
 			depth = depth - 1
 		} else if is_lbrace(k) and depth == 0 {
-			return - 1
+			return -1
 		} else if is_semi(k) and depth == 0 {
 			return j
 		} else if is_comment(k) or is_eof(k) {
-			return - 1
+			return -1
 		}
 		j = j + 1
 	}
-	return - 1
+	return -1
 }
 
 # fmt_blank_lead reports whether a blank belongs in FRONT of a run: there has to be code
@@ -692,7 +692,7 @@ fn fmt_blank_here(mut &toks: list[Token], at: int) -> bool {
 # tells it from `return if c { 1 } else { 2 }` — a jump whose VALUE is an if-expression,
 # which is a statement of a different shape and not part of any table.
 fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
-	return - 1 if not is_jump(toks[at].kind)
+	return -1 if not is_jump(toks[at].kind)
 
 	mut depth := 0
 	mut seen := false
@@ -700,7 +700,7 @@ fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
 	for i < toks.len() {
 		k := toks[i].kind
 		if is_lbrace(k) {
-			return - 1 if depth == 0
+			return -1 if depth == 0
 			depth = depth + 1
 		} else if is_bracket(k) {
 			depth = depth + 1
@@ -708,15 +708,15 @@ fn fmt_guard_end(mut &toks: list[Token], at: int) -> int {
 			depth = depth - 1
 		} else if is_semi(k) and depth == 0 {
 			return i if seen
-			return - 1
+			return -1
 		} else if is_comment(k) or is_eof(k) {
-			return - 1
+			return -1
 		} else if k == If and depth == 0 {
 			seen = true
 		}
 		i = i + 1
 	}
-	return - 1
+	return -1
 }
 
 # fmt_next_code is the next token that is not a separator. The `;`s are skipped because
@@ -727,7 +727,7 @@ fn fmt_next_code(mut &toks: list[Token], at: int) -> int {
 		return i if not is_semi(toks[i].kind)
 		i = i + 1
 	}
-	return - 1
+	return -1
 }
 
 fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {
@@ -736,7 +736,7 @@ fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {
 		return i if not is_semi(toks[i].kind)
 		i = i - 1
 	}
-	return - 1
+	return -1
 }
 
 # --- rule F405: a string built with `+` becomes the f-string it already is -------------------
@@ -795,7 +795,7 @@ fn fmt_fstr(mut &toks: list[Token]) -> list[Token] {
 	mut head: list[int] = []
 	mut i := 0
 	for i < toks.len() {
-		head.append(- 1)
+		head.append(-1)
 		i = i + 1
 	}
 	fmt_fstr_mark(toks, head)
@@ -837,20 +837,20 @@ fn fmt_fstr_mark(mut &toks: list[Token], mut &head: list[int]) {
 # get wrong. Inside a bracket anything goes — the walk only tests at depth zero.
 fn fmt_fstr_atom(k: Kind) -> bool {
 	return match k {
-		Ident => true
-		Str => true
-		Int => true
-		Float => true
-		True => true
-		False => true
-		Nil => true
-		This => true
-		Dot => true
+		Ident  => true
+		Str    => true
+		Int    => true
+		Float  => true
+		True   => true
+		False  => true
+		Nil    => true
+		This   => true
+		Dot    => true
 		LParen => true
 		RParen => true
 		LBrack => true
 		RBrack => true
-		_ => false
+		_      => false
 	}
 }
 
@@ -1489,9 +1489,9 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut arrow: list[int] = []
 	mut trail: list[int] = []
 	mut depth := 0
-	mut col := 0 # bytes written on the current line
+	mut col := 0      # bytes written on the current line
 	mut prev2 := Semi # the one before it — `<-` needs a token of context on each side
-	mut prev := Semi # the last token that mattered for spacing
+	mut prev := Semi  # the last token that mattered for spacing
 	mut prev_line := 0
 
 	# One entry per open `(` or `[`: the source line it opened on, and the block depth its
@@ -2070,7 +2070,7 @@ fn ends_operand(k: Kind) -> bool {
 fn is_minus(k: Kind) -> bool {
 	return match k {
 		Minus => true
-		_ => false
+		_     => false
 	}
 }
 
@@ -2104,7 +2104,7 @@ fn closes_chan_type(mut &toks: list[Token], i: int) -> bool {
 fn is_chan(k: Kind) -> bool {
 	return match k {
 		Chan => true
-		_ => false
+		_    => false
 	}
 }
 
@@ -2114,16 +2114,16 @@ fn is_chan(k: Kind) -> bool {
 # `print v !` — an operator adrift from the thing it operates on.
 fn is_postfix(k: Kind) -> bool {
 	return match k {
-		Bang => true
+		Bang     => true
 		Question => true
-		_ => false
+		_        => false
 	}
 }
 
 fn is_larrow(k: Kind) -> bool {
 	return match k {
 		LArrow => true
-		_ => false
+		_      => false
 	}
 }
 
@@ -2145,20 +2145,20 @@ fn is_range_op(k: Kind) -> bool {
 # rather than a grouping — the difference between `f(x)` and `if (x)`.
 fn binds_tight(k: Kind) -> bool {
 	return match k {
-		Ident => true
+		Ident  => true
 		RParen => true
 		RBrack => true
-		Str => true
-		Int => true
+		Str    => true
+		Int    => true
 
 		# `chan[T]` and `ptr[T]` are the two type constructors spelled with a KEYWORD rather
 		# than a name, so the Ident case above does not reach them and `chan [int]` came out
 		# with a space no other type has. `close(ch)` is the third: a statement whose
 		# argument is parenthesized, written the way the call it used to be was.
-		Chan => true
-		Ptr => true
+		Chan  => true
+		Ptr   => true
 		Close => true
-		_ => false
+		_     => false
 	}
 }
 
@@ -2166,8 +2166,8 @@ fn is_open(k: Kind) -> bool {
 	return match k {
 		LParen => true
 		LBrack => true
-		Hash => true
-		_ => false
+		Hash   => true
+		_      => false
 	}
 }
 
@@ -2175,7 +2175,7 @@ fn is_close(k: Kind) -> bool {
 	return match k {
 		RParen => true
 		RBrack => true
-		_ => false
+		_      => false
 	}
 }
 
@@ -2185,21 +2185,21 @@ fn is_bracket(k: Kind) -> bool {
 	return match k {
 		LParen => true
 		LBrack => true
-		_ => false
+		_      => false
 	}
 }
 
 fn is_hash(k: Kind) -> bool {
 	return match k {
 		Hash => true
-		_ => false
+		_    => false
 	}
 }
 
 fn is_comma(k: Kind) -> bool {
 	return match k {
 		Comma => true
-		_ => false
+		_     => false
 	}
 }
 
@@ -2207,16 +2207,16 @@ fn is_comma(k: Kind) -> bool {
 # binds exactly as tightly. Without the second, `b?.value` came back as `b ?. value`.
 fn is_dot(k: Kind) -> bool {
 	return match k {
-		Dot => true
+		Dot    => true
 		OptDot => true
-		_ => false
+		_      => false
 	}
 }
 
 fn is_colon(k: Kind) -> bool {
 	return match k {
 		Colon => true
-		_ => false
+		_     => false
 	}
 }
 
@@ -2226,35 +2226,35 @@ fn is_colon(k: Kind) -> bool {
 fn is_unary_prefix(k: Kind) -> bool {
 	return match k {
 		Amp => true
-		_ => false
+		_   => false
 	}
 }
 
 fn is_semi(k: Kind) -> bool {
 	return match k {
 		Semi => true
-		_ => false
+		_    => false
 	}
 }
 
 fn is_lbrace(k: Kind) -> bool {
 	return match k {
 		LBrace => true
-		_ => false
+		_      => false
 	}
 }
 
 fn is_rbrace(k: Kind) -> bool {
 	return match k {
 		RBrace => true
-		_ => false
+		_      => false
 	}
 }
 
 fn is_comment(k: Kind) -> bool {
 	return match k {
 		Comment => true
-		_ => false
+		_       => false
 	}
 }
 
@@ -2320,7 +2320,7 @@ fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[
 	out.append(Token(LParen, "(", "", ln, 0))
 
 	mut cur := ln
-	mut src := - 1
+	mut src := -1
 	mut i := first
 	for i <= last {
 		if toks[i].kind == Import {
@@ -2352,21 +2352,21 @@ fn fmt_emit_group(mut &toks: list[Token], first: int, last: int, mut &out: list[
 # at `first`, or -1 when the run holds something this rule will not fold up.
 fn fmt_group_run_end(mut &toks: list[Token], first: int) -> int {
 	mut i := first
-	mut last := - 1
+	mut last := -1
 	for i < toks.len() {
 		k := toks[i].kind
 		if k == Import {
 			# already a group: folding a fold is what would make this rule non-idempotent
-			return - 1 if toks[i + 1].kind == LParen
+			return -1 if toks[i + 1].kind == LParen
 			mut j := i + 1
 			if toks[j].kind == Pub {
 				j = j + 1
 			}
-			return - 1 if toks[j].kind != Str
+			return -1 if toks[j].kind != Str
 			j = j + 1
 			if toks[j].kind == As {
 				j = j + 1
-				return - 1 if toks[j].kind != Ident
+				return -1 if toks[j].kind != Ident
 				j = j + 1
 			}
 			last = j - 1
@@ -2378,7 +2378,7 @@ fn fmt_group_run_end(mut &toks: list[Token], first: int) -> int {
 			# a comment BETWEEN imports: it belongs to the one it sits on and the fold has
 			# nowhere to put it back. A comment after the run is just the next
 			# declaration's, and ends the run rather than declining it.
-			return - 1
+			return -1
 		} else {
 			return last
 		}
@@ -2556,18 +2556,18 @@ fn fmt_first_import(mut &toks: list[Token]) -> int {
 		return i if toks[i].kind == Import
 		i = i + 1
 	}
-	return - 1
+	return -1
 }
 
 # fmt_import_run_end is the index of the last token of the run of plain imports starting at
 # `first`, or -1 when the run holds anything this pass will not reorder.
 fn fmt_import_run_end(mut &toks: list[Token], first: int) -> int {
 	mut i := first
-	mut last := - 1
+	mut last := -1
 	for i < toks.len() {
 		k := toks[i].kind
 		if k == Import {
-			return - 1 if toks[i + 1].kind != Str
+			return -1 if toks[i + 1].kind != Str
 			last = i + 1
 			i = i + 2
 		} else if is_semi(k) {

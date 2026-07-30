@@ -177,22 +177,22 @@ fn c_extend(sb: Subst, name: str, repl: str) -> Subst {
 # c_type maps a value type to its C spelling.
 fn c_type(t: Ty) -> str {
 	return match t {
-		TInt => "int64_t"
-		TFloat => "double"
-		TStr => "const char*"
-		TBool => "bool"
-		TVoid => "void"
-		TByte => "uint8_t"
-		TNamed(nm) => "zg_" + nm
-		TList(_) => "zrt_list"
-		TFn(_, _) => "zg_fnptr"
-		TTuple(ts) => c_tuple_cname(ts)
-		TMap(_, _) => "zrt_map"
+		TInt        => "int64_t"
+		TFloat      => "double"
+		TStr        => "const char*"
+		TBool       => "bool"
+		TVoid       => "void"
+		TByte       => "uint8_t"
+		TNamed(nm)  => "zg_" + nm
+		TList(_)    => "zrt_list"
+		TFn(_, _)   => "zg_fnptr"
+		TTuple(ts)  => c_tuple_cname(ts)
+		TMap(_, _)  => "zrt_map"
 		TChan(_, _) => "zrt_chan*"
 		TResult(el) => c_carrier_cname(el)
-		TOpt(el) => c_opt_cname(el)
-		TErr => "zrt_err"
-		_ => "int64_t"
+		TOpt(el)    => c_opt_cname(el)
+		TErr        => "zrt_err"
+		_           => "int64_t"
 	}
 }
 
@@ -256,7 +256,7 @@ fn c_opt_wrap(mut &em: Emitter, elem: Ty, e: Expr, sb: Subst) -> str {
 fn c_is_nil_lit(e: Expr) -> bool {
 	return match e {
 		ENil => true
-		_ => false
+		_    => false
 	}
 }
 
@@ -277,13 +277,14 @@ fn c_opt_fit(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	t := c_infer(em, target)
 	if not c_is_opt(t) {
-		raise "`?.` reads through an optional, and " + ty_name(t) + " is not one — use `.` for a value that is always there"
+		raise f"`?.` reads through an optional, and {ty_name(t)} is not one — use `.` for a value that is always there"
 	}
 	inner := c_opt_elem(t)
 	ft := c_field_ty(em, c_named_of(inner), fld)
 	if c_is_unknown(ft) {
-		raise "no field `" + fld + "` on " + ty_name(inner) + " (optional chain `?." + fld + "`)"
+		raise f"no field `{fld}` on {ty_name(inner)} (optional chain `?.{fld}`)"
 	}
+
 	# a field that is ALREADY optional flattens: `T??` is not a type — GRAMMAR's
 	# `type ::= base-type '?'?` allows exactly one marker — and "nil in place" means the
 	# chain answers the same shape whether the absence came from the operand or the field.
@@ -291,18 +292,20 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	if c_is_opt(ft) {
 		oft = c_opt_elem(ft)
 	}
+
 	src := c_opt_name(em, inner)
 	dst := c_opt_name(em, oft)
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
+
 	tv := "zg_oc" + tag
 	rv := "zg_ocr" + tag
 	mut out := f"({{ {src} {tv} = {c_expr(em, target, sb)}; {dst} {rv};"
-	acc := c_res_ok(tv) + ".zg_" + fld
-	mut take := c_res_mark_left(rv) + " " + c_res_ok(rv) + " = " + acc + ";"
+	acc := f"{c_res_ok(tv)}.zg_{fld}"
+	mut take := f"{c_res_mark_left(rv)} {c_res_ok(rv)} = {acc};"
 	if c_is_opt(ft) {
 		# the field carries its own tag, so the answer IS the field
-		take = rv + " = " + acc + ";"
+		take = f"{rv} = {acc};"
 	}
 	out = out + " if (" + c_res_is_left(tv) + ") { " + take + " }"
 	return out + " else { " + c_res_mark_right(rv) + " } " + rv + "; })"
@@ -322,11 +325,12 @@ fn c_optchain(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 	if not c_is_opt(t) {
-		raise "NotImplemented: `?` on a " + ty_name(t) + " — it early-returns the absent side from the enclosing function, which needs a `T?` result (a `Result[T]` in a signature is a unit of its own)"
+		raise f"NotImplemented: `?` on a {ty_name(t)} — it early-returns the absent side from the enclosing function, which needs a `T?` result (a `Result[T]` in a signature is a unit of its own)"
 	}
 	if not c_is_opt(em.fn_ret) {
 		raise "`?` early-returns the absent side, so the enclosing function must answer a `T?` — this one answers " + ty_name(em.fn_ret)
 	}
+
 	elem := c_opt_elem(t)
 	src := c_opt_name(em, elem)
 	rcn := c_opt_name(em, c_opt_elem(em.fn_ret))
@@ -346,22 +350,24 @@ fn c_optchain_ty(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	t := c_infer(em, target)
 	return TUnknown if not c_is_opt(t)
 	ft := c_field_ty(em, c_named_of(c_opt_elem(t)), fld)
+
 	return TUnknown if c_is_unknown(ft)
 	return ft if c_is_opt(ft)
+
 	return TOpt(ft)
 }
 
 fn c_is_opt(t: Ty) -> bool {
 	return match t {
 		TOpt(_) => true
-		_ => false
+		_       => false
 	}
 }
 
 fn c_opt_elem(t: Ty) -> Ty {
 	return match t {
 		TOpt(e) => e
-		_ => TUnknown
+		_       => TUnknown
 	}
 }
 
@@ -386,21 +392,21 @@ fn c_carrier_of(mut &em: Emitter, t: Ty) -> str {
 fn c_is_result(t: Ty) -> bool {
 	return match t {
 		TResult(_) => true
-		_ => false
+		_          => false
 	}
 }
 
 fn c_result_elem(t: Ty) -> Ty {
 	return match t {
 		TResult(e) => e
-		_ => TUnknown
+		_          => TUnknown
 	}
 }
 
 fn c_is_err_ty(t: Ty) -> bool {
 	return match t {
 		TErr => true
-		_ => false
+		_    => false
 	}
 }
 
@@ -455,6 +461,7 @@ fn c_res_mark_right(r: str) -> str {
 fn c_carrier_name(mut &em: Emitter, elem: Ty) -> str {
 	name := c_carrier_cname(elem)
 	return name if c_name_in(em.res_names, name)
+
 	# the carrier embeds a zrt_err, so the runtime header has to be there
 	em.used_rt = true
 	em.res_names.append(name)
@@ -508,7 +515,7 @@ fn c_fnptr_typedef() -> str {
 fn c_fnptr_cast(t: Ty) -> str {
 	return match t {
 		TFn(ps, r) => f"({c_type(r)} (*)({c_ptypes(ps)}))"
-		_ => ""
+		_          => ""
 	}
 }
 
@@ -529,28 +536,28 @@ fn c_ptypes(ps: list[Ty]) -> str {
 fn c_is_fn(t: Ty) -> bool {
 	return match t {
 		TFn(_, _) => true
-		_ => false
+		_         => false
 	}
 }
 
 fn c_fn_ret(t: Ty) -> Ty {
 	return match t {
 		TFn(_, r) => r
-		_ => TUnknown
+		_         => TUnknown
 	}
 }
 
 fn c_is_unknown(t: Ty) -> bool {
 	return match t {
 		TUnknown => true
-		_ => false
+		_        => false
 	}
 }
 
 fn c_is_str(t: Ty) -> bool {
 	return match t {
 		TStr => true
-		_ => false
+		_    => false
 	}
 }
 
@@ -558,21 +565,21 @@ fn c_is_str(t: Ty) -> bool {
 fn c_list_elem(t: Ty) -> Ty {
 	return match t {
 		TList(e) => e
-		_ => TUnknown
+		_        => TUnknown
 	}
 }
 
 fn c_is_list(t: Ty) -> bool {
 	return match t {
 		TList(_) => true
-		_ => false
+		_        => false
 	}
 }
 
 fn c_is_float(t: Ty) -> bool {
 	return match t {
 		TFloat => true
-		_ => false
+		_      => false
 	}
 }
 
@@ -705,10 +712,10 @@ fn c_live_use(mut &em: Emitter, name: str) {
 	idx := c_live_idx(em, name)
 	return if idx < 0
 	if em.env_dead[idx] == 1 {
-		raise "`" + name + "` is used after del"
+		raise f"`{name}` is used after del"
 	}
 	if em.env_dead[idx] == 2 {
-		raise "`" + name + "` is used after del on some paths"
+		raise f"`{name}` is used after del on some paths"
 	}
 }
 
@@ -761,6 +768,7 @@ fn c_live_merge(mut &em: Emitter, other: list[int]) {
 fn c_live_join(a: int, b: int) -> int {
 	return 0 if a == 0 and b == 0
 	return 1 if a == 1 and b == 1
+
 	return 2
 }
 
@@ -823,11 +831,11 @@ fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 			seen = true
 		} else if seen {
 			# past the function's own block: it has no parameter idx
-			return - 1
+			return -1
 		}
 		i = i + 1
 	}
-	return - 1
+	return -1
 }
 
 fn c_is_ref_name(mut &em: Emitter, name: str) -> bool {
@@ -918,12 +926,12 @@ fn c_opt_decl_types(mut &em: Emitter, f: File) -> list[Ty] {
 # the same carrier a bare `T?` does.
 fn c_opt_collect(t: Ty, mut &out: list[Ty]) {
 	match t {
-		TOpt(el) => c_opt_seen(el, out)
-		TList(el) => c_opt_collect(el, out)
+		TOpt(el)     => c_opt_seen(el, out)
+		TList(el)    => c_opt_collect(el, out)
 		TChan(el, _) => c_opt_collect(el, out)
-		TResult(el) => c_opt_collect(el, out)
-		TMap(k, v) => c_opt_collect_two(k, v, out)
-		_ => c_skip()
+		TResult(el)  => c_opt_collect(el, out)
+		TMap(k, v)   => c_opt_collect_two(k, v, out)
+		_            => c_skip()
 	}
 }
 
@@ -967,13 +975,13 @@ fn c_opt_typedefs_for(mut &em: Emitter, want: str, els: list[Ty]) -> str {
 fn c_check_named_types(mut &em: Emitter, f: File) {
 	for s in f.structs {
 		for fd in s.fields {
-			c_check_named_ty(em, fd.ty, "field `" + s.name + "." + fd.name + "`")
+			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`")
 		}
 	}
 	for fn_i in f.fns {
-		c_check_named_ty(em, fn_i.ret, "the result of `" + fn_i.name + "`")
+		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {
-			c_check_named_ty(em, pm.ty, "parameter `" + pm.name + "` of `" + fn_i.name + "`")
+			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`")
 		}
 	}
 }
@@ -982,15 +990,15 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 # name that fails to resolve is just as unspellable inside a `list[…]` or a `chan[…]`.
 fn c_check_named_ty(mut &em: Emitter, t: Ty, site: str) {
 	match t {
-		TNamed(nm) => c_check_type_name(em, nm, site)
-		TList(el) => c_check_named_ty(em, el, site)
+		TNamed(nm)   => c_check_type_name(em, nm, site)
+		TList(el)    => c_check_named_ty(em, el, site)
 		TChan(el, _) => c_check_named_ty(em, el, site)
-		TMap(k, v) => c_check_named_ty_two(em, k, v, site)
-		TResult(el) => c_check_named_ty(em, el, site)
-		TOpt(el) => c_check_named_ty(em, el, site)
-		TTuple(ts) => c_check_named_ty_list(em, ts, site)
-		TFn(ps, r) => c_check_named_fn(em, ps, r, site)
-		_ => c_skip()
+		TMap(k, v)   => c_check_named_ty_two(em, k, v, site)
+		TResult(el)  => c_check_named_ty(em, el, site)
+		TOpt(el)     => c_check_named_ty(em, el, site)
+		TTuple(ts)   => c_check_named_ty_list(em, ts, site)
+		TFn(ps, r)   => c_check_named_fn(em, ps, r, site)
+		_            => c_skip()
 	}
 }
 
@@ -1013,7 +1021,8 @@ fn c_check_named_fn(mut &em: Emitter, ps: list[Ty], r: Ty, site: str) {
 fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
 	return if c_is_struct_name(em, nm)
 	return if c_is_enum_ty(em, TNamed(nm))
-	raise "no type named `" + nm + "` (" + site + ")"
+
+	raise f"no type named `{nm}` ({site})"
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
@@ -1100,11 +1109,10 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 	if ty_is_chan(fty) {
 		c_chan_check(c_infer(em, arg), fty, "field")
 	}
+
 	# a declared `T?` field takes a bare value or `nil` and wraps it, so `P(nil)` builds an
 	# ABSENT field rather than a present one holding whatever `nil` lowered to
-	if c_is_opt(fty) {
-		return c_opt_fit(em, fty, arg, sb)
-	}
+	return c_opt_fit(em, fty, arg, sb) if c_is_opt(fty)
 	if c_is_list(fty) and c_is_empty_listlit(arg) {
 		em.used_rt = true
 		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}))"
@@ -1210,7 +1218,7 @@ fn c_struct_typedef(sd: StructDecl) -> str {
 fn c_named_of(t: Ty) -> str {
 	return match t {
 		TNamed(nm) => nm
-		_ => ""
+		_          => ""
 	}
 }
 
@@ -1446,6 +1454,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EConv(ty, x) => c_conv(em, ty, x, sb)
 		EIf(cond, then_e, else_e) => f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
+
 		# A range reaching HERE is one used as a value — a slice bound or a match arm —
 		# rather than as a `for`'s iterable, which c_forin takes before this point. Those
 		# forms have no lowering yet, and saying so is better than emitting something that
@@ -1471,7 +1480,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 fn c_force(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 	if not c_is_carrier(t) {
-		raise "NotImplemented: `!` on a " + ty_name(t) + " — it forces a Result[T] or a T?"
+		raise f"NotImplemented: `!` on a {ty_name(t)} — it forces a Result[T] or a T?"
 	}
 	name := c_carrier_of(em, t)
 	return f"zg_force_{name}({c_expr(em, x, sb)})"
@@ -1489,8 +1498,9 @@ fn c_force(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -> str {
 	t := c_infer(em, a)
 	if not c_is_carrier(t) {
-		raise "NotImplemented: `??` on a " + ty_name(t) + " — its left side is a Result[T] or a T?"
+		raise f"NotImplemented: `??` on a {ty_name(t)} — its left side is a Result[T] or a T?"
 	}
+
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)
 	tag := strconv.to_string(em.op_n, 10)
@@ -1541,10 +1551,12 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 	em.used_rt = true
 	c_guard_no_jump(body, false)
+
 	vt := c_guard_val_ty(em, body)
 	cn := c_carrier_name(em, c_guard_elem(vt))
 	tag := strconv.to_string(em.op_n, 10)
 	em.op_n = em.op_n + 1
+
 	fr := "zg_gf" + tag
 	res := "zg_gr" + tag
 
@@ -1578,11 +1590,11 @@ fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, s
 
 	# FLATTENING: a block that already yields a Result IS the answer. An abort inside and a
 	# Right handed back are the same ending, so they must not nest (docs/code/errors.md).
-	return res + " = " + val + ";" if c_is_result(vt)
+	return f"{res} = {val};" if c_is_result(vt)
 
 	# a value-less last expression still has to RUN — it was written for its effect
-	return val + "; " + c_res_mark_left(res) if c_is_nil_ty(vt)
-	return c_res_mark_left(res) + " " + c_res_ok(res) + " = " + val + ";"
+	return f"{val}; {c_res_mark_left(res)}" if c_is_nil_ty(vt)
+	return f"{c_res_mark_left(res)} {c_res_ok(res)} = {val};"
 }
 
 # c_guard_val_ty is the guarded BLOCK's value type. GRAMMAR gives a block the value of its
@@ -1596,8 +1608,10 @@ fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, s
 # rather than typed as whatever `int64_t` would make of it.
 fn c_guard_val_ty(mut &em: Emitter, body: list[Stmt]) -> Ty {
 	n := body.len()
+
 	return TNil if n == 0
 	return TNil if not c_is_expr_stmt(body[n - 1])
+
 	t := c_infer(em, c_expr_stmt_of(body[n - 1]))
 	if c_is_unknown(t) {
 		raise "NotImplemented: a `guard` whose block ends in a name bound inside it — give the block a call or a literal as its value"
@@ -1616,14 +1630,14 @@ fn c_guard_elem(vt: Ty) -> Ty {
 fn c_is_expr_stmt(s: Stmt) -> bool {
 	return match s {
 		SExpr(_) => true
-		_ => false
+		_        => false
 	}
 }
 
 fn c_expr_stmt_of(s: Stmt) -> Expr {
 	return match s {
 		SExpr(x) => x
-		_ => ENil
+		_        => ENil
 	}
 }
 
@@ -1669,7 +1683,7 @@ fn c_guard_loop_jump(kw: str, in_loop: bool) {
 }
 
 fn c_guard_jump_err(kw: str) {
-	raise "NotImplemented: `" + kw + "` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
+	raise f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
@@ -1703,10 +1717,10 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	t := c_infer(em, x)
 	kind := c_err_kind(name)
 	if kind == 0 {
-		raise "NotImplemented: `is " + name + "` — only the built-in error kinds can be named in an `is` test"
+		raise f"NotImplemented: `is {name}` — only the built-in error kinds can be named in an `is` test"
 	}
 	if not c_is_err_ty(t) {
-		raise "`is " + name + "` wants an Err on its left, found a " + ty_name(t)
+		raise f"`is {name}` wants an Err on its left, found a {ty_name(t)}"
 	}
 	return f"(({c_expr(em, x, sb)}).kind == {kind})"
 }
@@ -1759,10 +1773,10 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 # integer one — where the C cast is what reports it, rather than this pass guessing.
 fn c_display(t: Ty, inner: str) -> str {
 	return match t {
-		TBool => f"zrt_display_bool({inner})"
+		TBool  => f"zrt_display_bool({inner})"
 		TFloat => f"zrt_display_float((double)({inner}))"
-		TByte => f"zrt_display_uint((uint64_t)({inner}))"
-		_ => f"zrt_display_int((int64_t)({inner}))"
+		TByte  => f"zrt_display_uint((uint64_t)({inner}))"
+		_      => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
 
@@ -1771,6 +1785,7 @@ fn c_display(t: Ty, inner: str) -> str {
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	tty := c_infer(em, target)
+
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
 
@@ -1834,16 +1849,17 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
-		MList => c_list_method(em, target, meth, args, tty, sb)
-		MMap => c_map_method(em, target, meth, tty, sb)
-		MRecv => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
+		MList    => c_list_method(em, target, meth, args, tty, sb)
+		MMap     => c_map_method(em, target, meth, tty, sb)
+		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
 		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
-		_ => c_free_method(em, target, meth, args, sb)
+		_        => c_free_method(em, target, meth, args, sb)
 	}
 }
 
 fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
+
 	# every list method takes the list's ADDRESS, and a slice or a call result has none —
 	# it is materialised into a temp first so `xs[a..b].len()` is addressable
 	return c_list_method_rv(em, target, meth, args, tty, sb) if not c_is_lvalue(target)
@@ -1871,7 +1887,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 # methods here, and the message now says so at the Zerg level.
 fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
 	if not c_name_in(em.sig_names, meth) {
-		raise "NotImplemented: the method `" + meth + "` on a " + ty_name(c_infer(em, target))
+		raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}"
 	}
 	return f"zg_{meth}({c_call_args(em, meth, args, sb)})"
 }
@@ -1929,7 +1945,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# declared — which cc rejects, loudly but a long way from the source that meant it.
 	if c_err_kind(name) > 0 {
 		if not c_err_constructible(name) {
-			raise "`" + name + "` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish"
+			raise f"`{name}` is testable but not constructible: a sender able to raise the end-of-stream sentinel would close its channel wearing it, and its consumer would read the crash as a clean finish"
 		}
 		em.used_rt = true
 		return f"zrt_err_new_kind({c_err_kind(name)}, {c_args(em, args, sb)})"
@@ -1941,6 +1957,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args(em, args, sb)})" if c_is_fn(bt)
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
+
 		# A PascalCase call that names no declared type is not a constructor of anything.
 		# It used to emit a compound literal of that name anyway — `Left(1)` became
 		# `(zg_Left){1}` — which cc rejected against generated C. `Left` and `Right` are the
@@ -1949,7 +1966,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# A `Result[T]` is produced by `<-ch` and by `guard`, never written by hand, so the
 		# refusal is the accurate answer rather than a missing feature.
 		if not c_is_struct_name(em, name) {
-			raise "no type named `" + name + "` to construct"
+			raise f"no type named `{name}` to construct"
 		}
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
@@ -1987,7 +2004,7 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 	for i < c_struct_field_n(em, sname) {
 		ft := c_struct_field_ty_at(em, sname, i)
 		if not c_is_opt(ft) {
-			raise "`" + sname + "` needs a value for field " + strconv.to_string(i, 10) + " (" + ty_name(ft) + "): only a `T?` field has an implicit default, and it is `nil`"
+			raise f"`{sname}` needs a value for field {i} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`"
 		}
 		if sep {
 			out = out + ", "
@@ -2056,7 +2073,7 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
 	# unless it is a channel, and the c_infer it would otherwise take walks the argument's
 	# whole tree — on every argument of every call — only to be thrown away.
 	if ty_is_chan(em.pr_ty[row]) {
-		c_chan_check(c_infer(em, a), em.pr_ty[row], "argument " + strconv.to_string(idx, 10) + " of `" + fname + "`")
+		c_chan_check(c_infer(em, a), em.pr_ty[row], f"argument {idx} of `{fname}`")
 	}
 	return c_opt_fit(em, em.pr_ty[row], a, sb) if c_is_opt(em.pr_ty[row])
 	return c_copied(em, em.pr_ty[row], a, sb)
@@ -2228,7 +2245,8 @@ fn c_arms(mut &em: Emitter, arms: list[Arm], i: int, s: str, st: Ty, sb: Subst) 
 fn c_result_tag(ctor: str) -> int {
 	return 0 if ctor == "Left"
 	return 1 if ctor == "Right"
-	raise "NotImplemented: the pattern `" + ctor + "` on a Result[T] — it has Left and Right"
+
+	raise f"NotImplemented: the pattern `{ctor}` on a Result[T] — it has Left and Right"
 }
 
 # c_arm_subst extends sb with an arm's bindings: a bind arm aliases the scrutinee; an enum
@@ -2240,6 +2258,7 @@ fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> Subst {
 		# kind the variant table describes, so the field is named directly
 		return sb if a.binds.len() == 0
 		return c_extend(sb, a.binds[0], c_res_ok(s)) if c_result_tag(a.ctor) == 0
+
 		return c_extend(sb, a.binds[0], c_res_err(s))
 	}
 	if a.pat == 3 {
@@ -2280,7 +2299,7 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	if a.pat == 3 {
 		mut base := f"({s}.tag == {c_variant_tag(em, a.ctor)})"
 		if c_is_result(st) {
-			base = "(" + c_res_tag(s) + " == " + strconv.to_string(c_result_tag(a.ctor), 10) + ")"
+			base = f"({c_res_tag(s)} == {c_result_tag(a.ctor)})"
 		}
 		return f"({base} && {c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
 		return base
@@ -2395,20 +2414,22 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
-		MList => c_list_method_ret(meth)
-		MMap => c_map_method_ret(meth)
-		MRecv => c_lookup_sig_ret(em, c_sig_key(recv, meth))
+		MList    => c_list_method_ret(meth)
+		MMap     => c_map_method_ret(meth)
+		MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
-		_ => c_lookup_sig_ret(em, meth)
+		_        => c_lookup_sig_ret(em, meth)
 	}
 }
 
 # c_elem_ty is what `x[i]` yields: a map indexes to its VALUE type, a list to its element.
 fn c_elem_ty(mut &em: Emitter, target: Expr, idx: Expr) -> Ty {
 	t := c_infer(em, target)
+
 	# a slice is the same kind of container as what it came from
 	return t if c_is_range(idx)
 	return c_map_val_ty(t) if c_is_map(t)
+
 	return c_list_elem(t)
 }
 
@@ -2423,6 +2444,7 @@ fn c_list_method_rv(mut &em: Emitter, target: Expr, meth: str, args: list[Expr],
 fn c_map_method_ret(meth: str) -> Ty {
 	return TInt if meth == "len"
 	return TBool if meth == "has"
+
 	return TNil
 }
 
@@ -2542,14 +2564,14 @@ fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
 fn c_is_guard(e: Expr) -> bool {
 	return match e {
 		EGuard(_) => true
-		_ => false
+		_         => false
 	}
 }
 
 fn c_is_listlit(e: Expr) -> bool {
 	return match e {
 		EListLit(_) => true
-		_ => false
+		_           => false
 	}
 }
 
@@ -2576,11 +2598,10 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 	}
 	lt := c_infer(em, lhs)
 	lv := c_expr(em, lhs, c_nosub())
+
 	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it
 	# absent, `x = 5` present. Without it the C compiler saw an int where a carrier goes.
-	if c_is_opt(lt) {
-		return f"{ind}{lv} = {c_opt_fit(em, lt, rhs, c_nosub())};\n"
-	}
+	return f"{ind}{lv} = {c_opt_fit(em, lt, rhs, c_nosub())};\n" if c_is_opt(lt)
 	if c_is_list(lt) and c_is_listlit(rhs) {
 		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
@@ -2722,7 +2743,7 @@ fn c_chan_new(mut &em: Emitter, t: Ty, cap: Expr, sb: Subst) -> str {
 fn c_chan_dir(t: Ty) -> int {
 	return match t {
 		TChan(_, d) => d
-		_ => 0
+		_           => 0
 	}
 }
 
@@ -2732,6 +2753,7 @@ fn c_chan_dir(t: Ty) -> int {
 fn c_chan_dir_ok(have: int, want: int) -> bool {
 	return true if want == have
 	return true if have == 0
+
 	return false
 }
 
@@ -2740,7 +2762,7 @@ fn c_chan_dir_ok(have: int, want: int) -> bool {
 # nothing — a direction costs no code — so this is the whole of it.
 fn c_chan_check(have: Ty, want: Ty, site: str) {
 	if ty_is_chan(have) and ty_is_chan(want) and not c_chan_dir_ok(c_chan_dir(have), c_chan_dir(want)) {
-		raise "a channel direction only narrows: a " + ty_name(have) + " cannot fill a " + ty_name(want) + " (" + site + ")"
+		raise f"a channel direction only narrows: a {ty_name(have)} cannot fill a {ty_name(want)} ({site})"
 	}
 }
 
@@ -2759,7 +2781,7 @@ fn c_chan_op_check(t: Ty, op: int) {
 		raise "cannot send on a receive-only " + ty_name(t)
 	}
 	if op == 2 and dir == 2 {
-		raise "cannot close a receive-only channel " + ty_name(t) + ": a consumer may not end a stream on the producers' behalf"
+		raise f"cannot close a receive-only channel {ty_name(t)}: a consumer may not end a stream on the producers' behalf"
 	}
 }
 
@@ -2873,6 +2895,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 	em.used_conc = true
 	cty := c_infer(em, ch)
 	c_chan_op_check(cty, 1)
+
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
 	mut sv := c_copied(em, elem, v, c_nosub())
@@ -2897,8 +2920,9 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	tag := strconv.to_string(idx, 10)
 	if args.len() == 0 {
 		em.dfn_decls.append("static void zg_spawn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		return ind + "zrt_spawn(zg_spawn_" + tag + ", NULL);\n"
+		return f"{ind}zrt_spawn(zg_spawn_{tag}, NULL);\n"
 	}
+
 	# ONE pass over the arguments for everything the env struct needs to know: each one's
 	# type, its field, its place in the call, and — for a channel — the direction it is
 	# captured and released at. Each answer is asked for once. Nothing here renders an
@@ -2937,6 +2961,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 		i = i + 1
 	}
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_spawnenv_" + tag + ";\n")
+
 	# The teardown is a DEFER, not a statement after the call, because a coroutine can
 	# leave without returning. An unhandled abort longjmps straight past everything
 	# following the call, and what got skipped was the sender release — so the channel
@@ -2954,17 +2979,17 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	th = th + " zrt_defer(" + dropfn + ", p);"
 	th = th + " " + cal.cname + "(" + call + "); }\n"
 	em.dfn_decls.append(th)
-	mut out := ind + "zg_spawnenv_" + tag + " *zg_se" + tag + " = (zg_spawnenv_" + tag + "*)zrt_alloc(sizeof(zg_spawnenv_" + tag + "));\n"
+	mut out := f"{ind}zg_spawnenv_{tag} *zg_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
 	mut j := 0
 	for j < args.len() {
 		mut v := c_expr(em, args[j], c_nosub())
 		if dirs[j] >= 0 {
-			v = c_chan_copy_fn(dirs[j]) + "(" + v + ")"
+			v = f"{c_chan_copy_fn(dirs[j])}({v})"
 		}
 		out = out + ind + "zg_se" + tag + "->f" + strconv.to_string(j, 10) + " = " + v + ";\n"
 		j = j + 1
 	}
-	return out + ind + "zrt_spawn(zg_spawn_" + tag + ", zg_se" + tag + ");\n"
+	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zg_se{tag});\n"
 }
 
 # c_spawn_no_borrow refuses a `mut &` argument crossing a spawn. GRAMMAR says a borrow
@@ -3020,7 +3045,7 @@ fn c_spawn_no_borrow(mut &em: Emitter, cal: Callee) {
 fn c_close(mut &em: Emitter, ch: Expr, at_exit: bool, ind: str) -> str {
 	cal := c_close_callee(em, ch)
 	return c_defer_of(em, cal, ind) if at_exit
-	return ind + cal.cname + "(" + c_expr(em, ch, c_nosub()) + ");\n"
+	return f"{ind}{cal.cname}({c_expr(em, ch, c_nosub())});\n"
 }
 
 # c_close_callee is `close(ch)` as a CALLEE — the runtime function and its one argument —
@@ -3050,7 +3075,7 @@ fn c_close_callee(mut &em: Emitter, ch: Expr) -> Callee {
 # early is `close(ch)`, a statement of its own, and it keeps its holder on purpose.
 fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 	c_live_del(em, name)
-	return ind + "/* del " + name + " */\n"
+	return f"{ind}/* del {name} */\n"
 }
 
 # c_select lowers `select { … }` onto zrt_select: an array of case descriptors, one call
@@ -3066,6 +3091,7 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
+
 	in2 := ind + "    "
 	mut n := 0
 	mut has_def := "false"
@@ -3096,7 +3122,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 			c_chan_op_check(cty, 0)
 			elem := ty_chan_elem(cty)
 			elems.append(elem)
-			nm := "zg_rv" + tag + "_" + strconv.to_string(idx, 10)
+			nm := f"zg_rv{tag}_{idx}"
 			out = out + in2 + c_type(elem) + " " + nm + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_RECV;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
@@ -3108,15 +3134,16 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 			c_chan_op_check(cty, 1)
 			elem := ty_chan_elem(cty)
 			elems.append(elem)
-			nm := "zg_sv" + tag + "_" + strconv.to_string(idx, 10)
+			nm := f"zg_sv{tag}_{idx}"
 			out = out + in2 + c_type(elem) + " " + nm + " = " + c_expr(em, a.val, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
+
 			# `closed` is an OUTPUT the runtime writes on the receive path only, and it is
 			# read below without asking which arm won — so a send case's slot has to start
 			# at a defined value rather than at whatever the stack held
-			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].closed = 0;\n"
+			out = f"{out}{in2}{cs}[{idx}].closed = 0;\n"
 			idx = idx + 1
 		}
 	}
@@ -3136,12 +3163,12 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	for a in arms {
 		mut cond := ""
 		if a.op == 0 or a.op == 1 {
-			cond = "zg_pick" + tag + " == " + strconv.to_string(k, 10)
+			cond = f"zg_pick{tag} == {k}"
 			k = k + 1
 		} else if a.op == 2 {
-			cond = "zg_pick" + tag + " == ZRT_SEL_DONE"
+			cond = f"zg_pick{tag} == ZRT_SEL_DONE"
 		} else {
-			cond = "zg_pick" + tag + " == ZRT_SEL_DEFAULT"
+			cond = f"zg_pick{tag} == ZRT_SEL_DEFAULT"
 		}
 		mut kw := "} else if ("
 		if first {
@@ -3166,8 +3193,8 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 		if a.op == 0 and a.bind != "" {
 			elem := elems[k - 1]
 			cn := c_carrier_name(em, elem)
-			slot := cs + "[" + strconv.to_string(k - 1, 10) + "]"
-			rr := "zg_rr" + tag + "_" + strconv.to_string(k - 1, 10)
+			slot := f"{cs}[{k - 1}]"
+			rr := f"zg_rr{tag}_{k - 1}"
 			in3 := in2 + "    "
 			out = out + in3 + cn + " " + rr + " = {0};\n"
 			out = out + in3 + c_res_tag(rr) + " = (int32_t)" + slot + ".closed;\n"
@@ -3197,7 +3224,6 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	return out + ind + "}\n"
 }
 
-
 # --- lambdas ----------------------------------------------------------------------
 #
 # A `fn(x: T) -> R { … }` in expression position is LIFTED to a top-level C function and
@@ -3212,7 +3238,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: list[Stmt]) -> str {
 	free := c_lambda_free(em, ps, body)
 	if free != "" {
-		raise "NotImplemented: a closure capturing `" + free + "` — a lambda may only use its parameters"
+		raise f"NotImplemented: a closure capturing `{free}` — a lambda may only use its parameters"
 	}
 	tag := strconv.to_string(em.lam_n, 10)
 	em.lam_n = em.lam_n + 1
@@ -3239,7 +3265,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.loop_rel = saved_loop_rel
 	em.ref_names = saved_refs
 	em.used_fnptr = true
-	return "((zg_fnptr)zg_" + name + ")"
+	return f"((zg_fnptr)zg_{name})"
 }
 
 fn c_lambda_ty(ps: list[Param], has_ret: bool, ret: Ty) -> Ty {
@@ -3268,9 +3294,7 @@ fn c_lambda_free(mut &em: Emitter, ps: list[Param], body: list[Stmt]) -> str {
 	}
 	collect_binds(body, bound)
 	for id in ids {
-		if not c_name_in(bound, id) and not c_name_in(em.k_names, id) and not c_name_in(em.sig_names, id) {
-			return id
-		}
+		return id if not c_name_in(bound, id) and not c_name_in(em.k_names, id) and not c_name_in(em.sig_names, id)
 	}
 	return ""
 }
@@ -3309,8 +3333,9 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
 		# better as concatenation
 		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
-		return ind + "zrt_defer(zg_dfn_" + tag + ", NULL);\n"
+		return f"{ind}zrt_defer(zg_dfn_{tag}, NULL);\n"
 	}
+
 	mut fields := ""
 	mut vals := ""
 	mut call := ""
@@ -3329,7 +3354,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
 	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
 	mut out := ind + "zg_denv_" + tag + " zg_de" + tag + " = { " + vals + " };\n"
-	return out + ind + "zrt_defer(zg_dfn_" + tag + ", &zg_de" + tag + ");\n"
+	return f"{out}{ind}zrt_defer(zg_dfn_{tag}, &zg_de{tag});\n"
 }
 
 # Callee is the three things a `spawn` and a `defer` each need about what they are about
@@ -3356,8 +3381,9 @@ fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	n := c_call_name(x)
 	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
 	if not c_is_method_expr(x) {
-		raise "NotImplemented: " + what + " of anything but a function, a method, or a namespaced function"
+		raise f"NotImplemented: {what} of anything but a function, a method, or a namespaced function"
 	}
+
 	tgt := c_meth_target_of(x)
 	m := c_meth_name_of(x)
 	margs := c_meth_args_of(x)
@@ -3368,7 +3394,7 @@ fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
 		# space, so a namespaced callee IS the free function of that name, exactly as an
 		# ordinary `mod.work()` call is lowered
 		if not c_name_in(em.sig_names, m) {
-			raise "NotImplemented: " + what + " of `" + m + "` — not a function, a method, or a namespaced function"
+			raise f"NotImplemented: {what} of `{m}` — not a function, a method, or a namespaced function"
 		}
 		return Callee(c_fn_cname("", m), margs, m)
 	}
@@ -3416,7 +3442,7 @@ fn c_meth_args_of(e: Expr) -> list[Expr] {
 fn c_call_name(e: Expr) -> str {
 	return match e {
 		ECall(n, _) => n
-		_ => ""
+		_           => ""
 	}
 }
 
@@ -3424,7 +3450,7 @@ fn c_call_args_of(e: Expr) -> list[Expr] {
 	mut none: list[Expr] = []
 	return match e {
 		ECall(_, a) => a
-		_ => none
+		_           => none
 	}
 }
 
@@ -3485,6 +3511,7 @@ fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
 		eq = "zrt_eq_str"
 	}
 	em.mvt_names.append(name)
+
 	# NULL copy/drop is the runtime's memcpy fast path, which is what a POD key or value
 	# wants; a key or value that owns storage is not supported yet.
 	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, NULL, NULL, NULL, NULL }};\n")
@@ -3500,6 +3527,7 @@ fn c_map_lit_ty(mut &em: Emitter, ks: list[Expr], vs: list[Expr]) -> Ty {
 # the order they were written.
 fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str {
 	em.used_rt = true
+
 	kt := c_map_key_ty(c_map_lit_ty(em, ks, vs))
 	vt := c_map_val_ty(c_map_lit_ty(em, ks, vs))
 	vtn := c_map_vt(em, kt, vt)
@@ -3523,6 +3551,7 @@ fn c_map_lit(mut &em: Emitter, ks: list[Expr], vs: list[Expr], sb: Subst) -> str
 # into a temp first, so a call result is indexed once rather than per element.
 fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str {
 	c_range_needs_hi(idx, "a slice needs an upper bound — `xs[a..xs.len()]`")
+
 	et := c_type(c_list_elem(tty))
 	src := c_expr(em, target, sb)
 	lo := c_expr(em, c_range_lo(idx), sb)
@@ -3560,50 +3589,52 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 fn c_map_method(mut &em: Emitter, target: Expr, meth: str, tty: Ty, sb: Subst) -> str {
 	em.used_rt = true
 	tgt := c_expr(em, target, sb)
+
 	return f"((int64_t)zrt_map_len(&({tgt})))" if meth == "len"
 	return f"zrt_map_has(&({tgt}), &zg_mk)" if meth == "has"
+
 	raise f"NotImplemented: the map method `{meth}`"
 }
 
 fn c_index_target(e: Expr) -> Expr {
 	return match e {
 		EIndex(t, _) => t
-		_ => ENil
+		_            => ENil
 	}
 }
 
 fn c_index_key(e: Expr) -> Expr {
 	return match e {
 		EIndex(_, i) => i
-		_ => ENil
+		_            => ENil
 	}
 }
 
 fn c_is_index(e: Expr) -> bool {
 	return match e {
 		EIndex(_, _) => true
-		_ => false
+		_            => false
 	}
 }
 
 fn c_is_map(t: Ty) -> bool {
 	return match t {
 		TMap(_, _) => true
-		_ => false
+		_          => false
 	}
 }
 
 fn c_map_key_ty(t: Ty) -> Ty {
 	return match t {
 		TMap(k, _) => k
-		_ => TUnknown
+		_          => TUnknown
 	}
 }
 
 fn c_map_val_ty(t: Ty) -> Ty {
 	return match t {
 		TMap(_, v) => v
-		_ => TUnknown
+		_          => TUnknown
 	}
 }
 
@@ -3666,6 +3697,7 @@ fn c_tuple_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 	for e in elems {
 		tys.append(c_infer(em, e))
 	}
+
 	name := c_tuple_name(em, tys)
 	mut out := f"({name}){{"
 	mut i := 0
@@ -3686,18 +3718,21 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
+
 		# `int(s)` is a CAST here, not a parse — the index has to come from strconv
 		i := strconv.parse_int(fld, 10)
 		return ts[i] if i >= 0 and i < ts.len()
 		return TUnknown
 	}
+
 	# An Err is a RUNTIME struct, not a declared one, so its two readable fields are
 	# answered here. They are deliberately the whole set: a message to report and a kind
 	# to compare, which is what `Right(e)` needs to be worth binding.
 	if c_is_err_ty(t) {
 		return TStr if fld == "msg"
 		return TInt if fld == "kind"
-		raise "NotImplemented: the field `" + fld + "` on an Err — it has `msg` and `kind`"
+
+		raise f"NotImplemented: the field `{fld}` on an Err — it has `msg` and `kind`"
 	}
 	return c_field_ty(em, c_named_of(t), fld)
 }
@@ -3723,7 +3758,7 @@ fn c_all_digits(s: str) -> bool {
 fn c_is_tuple(t: Ty) -> bool {
 	return match t {
 		TTuple(_) => true
-		_ => false
+		_         => false
 	}
 }
 
@@ -3731,7 +3766,7 @@ fn c_tuple_tys(t: Ty) -> list[Ty] {
 	mut none: list[Ty] = []
 	return match t {
 		TTuple(ts) => ts
-		_ => none
+		_          => none
 	}
 }
 
@@ -3778,6 +3813,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
 	c_add_var(em, var, TInt)
+
 	# the C name the binding actually took: a second loop over the same source name is a
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zg_v`
 	cv := c_var_cname(em, var)
@@ -3813,6 +3849,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], ind: str) -> str {
 	em.used_conc = true
 	c_chan_op_check(t, 0)
+
 	elem := ty_chan_elem(t)
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
@@ -3864,18 +3901,19 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	mut eff := ty
 	if has_type {
 		if ty_is_chan(ty) {
-			c_chan_check(c_infer(em, ival), ty, "binding `" + name + "`")
+			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
 		}
 	} else {
 		eff = c_infer(em, ival)
 	}
+
 	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
 	return c_let_chan(em, name, eff, ival, ind) if ty_is_chan(eff)
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
 	if has_type and not c_is_opt(eff) and c_is_opt(c_infer(em, ival)) {
-		raise "`" + name + "` is declared " + ty_name(eff) + " and the value is " + ty_name(c_infer(em, ival)) + ": unwrap it with `?? …`, `!` or `if " + name + " := …`"
+		raise f"`{name}` is declared {ty_name(eff)} and the value is {ty_name(c_infer(em, ival))}: unwrap it with `?? …`, `!` or `if {name} := …`"
 	}
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one
@@ -3912,7 +3950,7 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 	dir := c_chan_dir(eff)
 	mut val := c_expr(em, ival, c_nosub())
 	if c_is_lvalue(ival) {
-		val = c_chan_copy_fn(dir) + "(" + val + ")"
+		val = f"{c_chan_copy_fn(dir)}({val})"
 	}
 	c_add_var(em, name, eff)
 	cn := c_var_cname(em, name)
@@ -3996,21 +4034,23 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	ty := c_infer(em, e)
+
 	# An optional has no display of its own: it is a value that may not be there, and what
 	# to show for the absent side is the program's decision. `print x ?? "…"` or `print x!`
 	# says which one was meant; printing the carrier itself used to reach cc as an integer
 	# cast of a struct.
 	if c_is_opt(ty) {
-		raise "`print` needs a value, and " + ty_name(ty) + " may not have one — say which with `?? …` or `!`"
+		raise f"`print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`"
 	}
 	ex := c_expr(em, e, c_nosub())
 	return match ty {
 		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
+
 		# an Err shows as what went wrong; the kind is there to be compared, not read out
-		TErr => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
+		TErr   => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
 		TFloat => f"{ind}printf(\"%g\\n\", {ex});\n"
-		TBool => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
-		_ => f"{ind}printf(\"%lld\\n\", (long long)({ex}));\n"
+		TBool  => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
+		_      => f"{ind}printf(\"%lld\\n\", (long long)({ex}));\n"
 	}
 }
 
@@ -4051,19 +4091,19 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		# take the count the caller is about to rely on.
 		if ret_chan and c_is_lvalue(e) {
 			em.used_conc = true
-			v = c_chan_copy_fn(c_chan_dir(em.fn_ret)) + "(" + v + ")"
+			v = f"{c_chan_copy_fn(c_chan_dir(em.fn_ret))}({v})"
 		}
 		return f"{ind}return {v};\n" if pre == ""
 		rt := c_type(et)
 		return ind + "{ " + rt + " zg_rv = " + v + ";\n" + pre + ind + "return zg_rv; }\n"
 	}
-	return pre + ind + "return;\n"
+	return f"{pre}{ind}return;\n"
 }
 
 fn c_is_nil_expr(e: Expr) -> bool {
 	return match e {
 		ENil => true
-		_ => false
+		_    => false
 	}
 }
 
@@ -4093,8 +4133,9 @@ fn c_if(mut &em: Emitter, cond: Expr, then_body: list[Stmt], has_else: bool, els
 fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_else: bool, else_body: list[Stmt], ind: str) -> str {
 	t := c_infer(em, value)
 	if not c_is_carrier(t) {
-		raise "NotImplemented: `if " + name + " := …` over a " + ty_name(t) + " — it binds the Left of a Result[T] or a T?"
+		raise f"NotImplemented: `if {name} := …` over a {ty_name(t)} — it binds the Left of a Result[T] or a T?"
 	}
+
 	elem := c_carrier_elem(t)
 	cn := c_carrier_of(em, t)
 	tag := strconv.to_string(em.op_n, 10)
@@ -4104,6 +4145,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	# the initializer is rendered BEFORE the binding enters scope, as in c_let
 	val := c_expr(em, value, c_nosub())
 	c_add_var(em, name, elem)
+
 	cv := c_var_cname(em, name)
 	in2 := ind + "    "
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
@@ -4194,7 +4236,7 @@ fn c_raise(mut &em: Emitter, x: Expr, ind: str) -> str {
 fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 	return match x {
 		ECall(nm, _) => c_err_kind(nm) > 0
-		_ => false
+		_            => false
 	}
 }
 
@@ -4287,9 +4329,9 @@ fn c_ret_type(fn_d: FnDecl) -> str {
 
 fn c_is_nil_ty(t: Ty) -> bool {
 	return match t {
-		TNil => true
+		TNil  => true
 		TVoid => true
-		_ => false
+		_     => false
 	}
 }
 
@@ -4352,7 +4394,7 @@ fn c_check_loop_jump_sel(arms: list[SelArm], in_loop: bool) {
 
 fn c_loop_jump_err(kw: str, in_loop: bool) {
 	return if in_loop
-	raise "`" + kw + "` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
+	raise f"`{kw}` outside of a loop: it belongs to a `for`, and a `select` arm is not one — it inherits the loop it is written in"
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
@@ -4411,7 +4453,7 @@ fn c_main_ret_is_int(f: File) -> bool {
 		if fn_i.name == "main" and fn_i.recv == "" and fn_i.has_ret {
 			return match fn_i.ret {
 				TInt => true
-				_ => false
+				_    => false
 			}
 		}
 		i = i + 1
@@ -4540,6 +4582,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 		types = types + c_enum_typedef(f.enums[i])
 		i = i + 1
 	}
+
 	# the optionals a DECLARATION names, ahead of what names them: a payload that is not a
 	# declared type needs nothing before it, and one that is a struct follows that struct.
 	optels := c_opt_decl_types(em, f)
@@ -4631,6 +4674,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if em.used_str {
 		hdr = hdr + c_str_helpers()
 	}
+
 	# the tuple carriers are collected while the bodies are lowered, so they are gathered
 	# here — after defs, emitted before them
 	mut tups := ""
@@ -4640,6 +4684,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.mvt_decls {
 		tups = tups + d
 	}
+
 	# The Result carriers come LAST of the typedefs, because a carrier holds its payload
 	# BY VALUE and the payload may be any of the shapes above it: a scalar, a runtime list
 	# or map, a struct, an enum, a tuple. Everything it could name has been written by
@@ -4651,6 +4696,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.res_decls {
 		ress = ress + d
 	}
+
 	# the defer thunks go AFTER the prototypes — each one calls a program function — and
 	# before the bodies that schedule them
 	mut dfns := ""
@@ -4660,6 +4706,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	for d in em.dfn_decls {
 		dfns = dfns + d
 	}
+
 	# a lifted lambda is a whole function, emitted BEFORE the bodies that name it: the
 	# prototypes above cover the program's own functions, not one this pass invented, so
 	# the definition has to be what the use sees

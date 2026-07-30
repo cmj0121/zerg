@@ -19,7 +19,7 @@
 # built by `zerg` — which is what `make examples` uses.
 
 enum Cmd {
-	Add(int) # a write
+	Add(int)         # a write
 	Get(chan[int]<-) # a read — carries the channel to answer on
 }
 
@@ -38,7 +38,7 @@ fn counter(inbox: <-chan[Cmd]) {
 	# drains until the last sender leaves
 	for cmd in inbox {
 		n = match cmd {
-			Add(d) => n + d
+			Add(d)   => n + d
 			Get(rep) => answer(rep, n)
 		}
 	}

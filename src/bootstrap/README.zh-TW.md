@@ -97,7 +97,7 @@ cc 對著產生的 C。
 | decorator，含 `#[derive]`                                             | 待拒絕 |
 | 模組層級 `const`、`init()`                                            | 待拒絕 |
 | `unsafe`、`asm`、`ptr[T]`                                             | 已拒絕 |
-| command literal                                                       | 待拒絕 |
+| command literal                                                       | 已拒絕 |
 
 **前端還剖析得動**不等於支援：拒絕可能落在 sema，也可能落在 emitter 門口。收窄 parser 是另一趟
 獨立的工作，而且不急——真正重要的是第一層以外的東西不會抵達 C。

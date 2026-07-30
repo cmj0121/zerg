@@ -59,6 +59,57 @@ func (e *emitter) prepareChannels() {
 	e.rejectConcurrency()
 }
 
+// rejectOutOfSubset refuses the tier-2 forms that are not concurrency, by the same rule and
+// for the same reason: the self-host chain does not use them, so the seed has nothing to
+// build with them and no business having an opinion about them.
+//
+// One door, one walk, one diagnostic per program — a program written in a dialect the seed
+// does not read is not improved by forty messages. Scoped to the program's OWN module, like
+// every other refusal here: a bundled stdlib module may spell a form the program never
+// reaches, and refusing over that would stop a program that asked for nothing.
+//
+// Which rows are here is decided by what the seed's OWN suite still asserts, and that is a
+// real constraint rather than a compromise: a test is the claim being withdrawn, so a form
+// cannot be refused until its tests go with it. `with` and the command literals had none —
+// nothing in the seed ever exercised them — so they leave the list now.
+//
+// Deliberately still absent: `defer`, `del`, tuples, `?.` and `?` (48 seed tests across 15
+// files, woven through the end-to-end suites rather than isolated), `with` (5 tests across 4
+// files, each mixed with tests of other things), and generic function
+// definitions plus `init()` / module-level `const` — `examples/modules` needs the first and
+// `examples/1g/init` the second, and the shipped compiler builds neither, so the seed is
+// still their only compiler.
+func (e *emitter) rejectOutOfSubset() {
+	for _, inst := range e.prog.Funcs {
+		if inst.Origin == nil || inst.Origin.Module != "" || inst.Origin.Body == nil {
+			continue
+		}
+		if at, what := firstOutOfSubset(inst.Origin.Body); what != "" {
+			e.diags.Add(at, "the bootstrap seed does not lower %s: it builds the self-hosting "+
+				"compiler, which is written without it", what)
+			return
+		}
+	}
+}
+
+// firstOutOfSubset names the first tier-2 form in a body the way the source writes it.
+func firstOutOfSubset(b *ast.Block) (token.Span, string) {
+	var at token.Span
+	var what string
+	walkBlockExprs(b, func(x ast.Expr) {
+		if what != "" {
+			return
+		}
+		switch n := x.(type) {
+		case *ast.CmdLit:
+			at, what = n.Span(), "a command literal"
+		case *ast.FCmd:
+			at, what = n.Span(), "an interpolating command literal"
+		}
+	})
+	return at, what
+}
+
 // programUsesConcurrency reports whether the program uses concurrency: any function body
 // contains a `spawn`/send/`select`, any binding, expression, or signature type transitively
 // holds a channel, or the program lowers a scheduler-floor intrinsic. It is the single

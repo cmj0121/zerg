@@ -163,6 +163,11 @@ enum Stmt {
 	SIf(Expr, list[Stmt], bool, list[Stmt])
 	SFor(bool, Expr, list[Stmt])
 	SForIn(str, Expr, list[Stmt])
+
+	# `for select { … }` — the multi-way wait as a LOOP: one ready arm per round, and the
+	# loop ends when every watched receive channel has. It is its own node rather than an
+	# SFor around an SSelect because the ending is the loop's, not the select's.
+	SForSelect(list[SelArm])
 	SRaise(Expr)
 	SBreak
 	SContinue
@@ -203,7 +208,7 @@ enum Stmt {
 	SIfLet(str, Expr, list[Stmt], bool, list[Stmt])
 }
 
-# SelArm is one select arm. `op` is 0 recv, 1 send, 2 done, 3 default — the same order
+# SelArm is one select arm. `op` is 0 recv, 1 send, 3 default — the same order
 # the runtime's ZRT_SEL_* constants use for the first two, so the emitter maps rather
 # than translates. `bind` is the receive arm's optional name ("" when absent or `_`).
 pub struct SelArm {
@@ -375,6 +380,7 @@ fn dump_stmt(s: Stmt, ind: str) -> str {
 		SIfLet(name, value, then_b, has_else, else_b) => ind + "if-let " + name + "\n" + dump_block(then_b, ind + "\t") + dump_block(else_b, ind + "\t")
 		SFor(is_cond, cond, body_b) => ind + "for " + expr_kind(cond) + "\n" + dump_block(body_b, ind + "\t")
 		SForIn(name, iter, body_b) => ind + "for " + name + " in " + expr_kind(iter) + "\n" + dump_block(body_b, ind + "\t")
+		SForSelect(arms) => ind + "for-select\n"
 		SRaise(x) => f"{ind}raise {expr_kind(x)}\n"
 		SBreak => ind + "break\n"
 		SContinue => ind + "continue\n"

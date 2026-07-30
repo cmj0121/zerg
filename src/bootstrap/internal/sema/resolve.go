@@ -419,7 +419,7 @@ func (r *resolver) resolveStmt(s ast.Stmt) {
 // resolveSelect resolves a 'select { arm+ }' (GRAMMAR group 9). Each arm gets its own
 // scope: a recv arm's channel and body resolve there, with its '(id :=)' bind (unless
 // the wildcard '_') declared so the body may read it; a send arm resolves its channel,
-// value, and body; the 'done' and '_' arms resolve only their body.
+// value, and body; the '_' arm resolves only its body.
 func (r *resolver) resolveSelect(n *ast.SelectStmt) {
 	for i := range n.Arms {
 		arm := &n.Arms[i]
@@ -433,7 +433,7 @@ func (r *resolver) resolveSelect(n *ast.SelectStmt) {
 		case ast.SelectSend:
 			r.resolveExpr(arm.Chan)
 			r.resolveExpr(arm.Value)
-		case ast.SelectDone, ast.SelectDefault:
+		case ast.SelectDefault:
 		}
 		r.resolveExpr(arm.Body)
 		r.pop()

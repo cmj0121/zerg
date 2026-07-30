@@ -1724,7 +1724,7 @@ fn fmt_line_has_code(mut &out: list[byte]) -> bool {
 #
 # 12 is measured off a select, not a match. A match's patterns are names of one kind and run
 # 3 to 9 columns, but a select's arm heads are four different shapes — `v := <-work`,
-# `out <- total`, `done`, `_` — and 8 cut the `_` out of its own table. The rule is that a
+# `<-quit`, `out <- total`, `_` — and 8 cut the `_` out of its own table. The rule is that a
 # table a reader sees as one table stays one, so the budget is set where the widest of those
 # shapes still reaches the narrowest.
 fn fmt_align_gap() -> int {

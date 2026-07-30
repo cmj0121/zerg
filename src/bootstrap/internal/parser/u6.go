@@ -126,6 +126,13 @@ func (p *parser) parseFor() ast.Stmt {
 		body := p.parseBlock()
 		return spanned(&ast.ForStmt{Body: body}, span(start, body.Span().End))
 	}
+	// 'for select { … }': the multi-way wait as a loop. A condition cannot begin with
+	// 'select', so one token of lookahead separates the two with no ambiguity.
+	if p.at(token.Select) {
+		sel := p.parseSelect().(*ast.SelectStmt)
+		sel.Loop = true
+		return sel
+	}
 	if p.at(token.Mut) || (p.at(token.Ident) && p.peek(1).Kind == token.In) {
 		mut := p.accept(token.Mut)
 		v := p.expect(token.Ident)

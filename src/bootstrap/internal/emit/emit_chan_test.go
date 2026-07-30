@@ -69,7 +69,8 @@ func TestConcurrencyIsRefused(t *testing.T) {
 		{"send", "fn main() {\n  ch := chan[int](1)\n  ch <- 1\n}"},
 		{"receive", "fn main() {\n  ch := chan[int](1)\n  print (<-ch)!\n}"},
 		{"spawn", "fn work() {\n  print 1\n}\nfn main() {\n  ch := chan[int](1)\n  spawn work()\n  print (<-ch)!\n}"},
-		{"select", "fn main() {\n  ch := chan[int](1)\n  select {\n    v := <-ch => { print v! }\n  }\n}"},
+		{"select", "fn main() {\n  ch := chan[int](1)\n  select {\n    v := <-ch => { print v }\n  }\n}"},
+		{"for-select", "fn main() {\n  ch := chan[int](1)\n  for select {\n    v := <-ch => { print v }\n  }\n}"},
 		{"for-in-a-channel", "fn main() {\n  ch := chan[int](1)\n  for v in ch {\n    print v\n  }\n}"},
 		{"close", "fn main() {\n  ch := chan[int](1)\n  close(ch)\n}"},
 	}

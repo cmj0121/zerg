@@ -105,38 +105,49 @@ send 與 receive **不對稱**：關閉是 producer 的決定，所以它一定�
 
 ### 接收——`<-ch`
 
-receive 回傳 **`Result[T]`**：`Left(v)` 是值；`Right(err)` 代表 channel **已 close 且排空**，`err` 是**原因**——
-所以崩潰的原因永遠不會遺失。它**不**代表「空、等一下」（那是 block）。
+receive 回傳 **`T?`**。一條串流會結束的兩種方式，在這個語言裡本來就是兩件不同的事，而且各自早就有自己的機制：
+串流**結束**是**缺席**，所以是 `nil`；生產者**死掉**是**失敗**，所以會 **raise**，帶著那個生產者自己的 `Err`。
+沒有人需要問「我手上這個結束是哪一種」，因為兩者根本不從同一條路來。
 
-| channel 狀態                     | `<-ch : Result[T]`                         |
-| -------------------------------- | ------------------------------------------ |
-| 開、有值                         | `Left(v)`                                  |
-| 開、空                           | **block**                                  |
-| 已 close、仍有 buffered 值       | `Left(v)`——**先排空**，不丟資料            |
-| 乾淨關閉（最後 sender 正常離場） | `Right(StopIteration)`——end-of-stream 哨兵 |
-| 崩潰關閉（最後 sender abort）    | `Right(err)`——傳播過來的崩潰 `Err`         |
+| channel 狀態                     | `<-ch : T?`                                 |
+| -------------------------------- | ------------------------------------------- |
+| 開、有值                         | 那個值                                      |
+| 開、空                           | **block**                                   |
+| 已 close、仍有 buffered 值       | 那個值——**先排空**，不丟資料                |
+| 乾淨關閉（最後 sender 正常離場） | `nil`，而且之後每次都是 `nil`——結束是黏著的 |
+| 崩潰關閉（最後 sender abort）    | **raise** 生產者的 `Err`，訊息與 kind 都在  |
 
-多數程式把**任一 `Right` 當「停」**，只有需要原因時才檢視 `err`。每種需求都由既有運算子掉出來——由 **receiver**
-決定：
+這個分家正是「原因不會遺失」的全部理由。`Result` 逼收方先問「我拿到的 `Right` 是哪一種」才分得出結束與死亡；
+忘了問的人就把死亡弄丟了。現在沒有人忘得掉。
+
+`chan[T?]` 因此被**拒絕**，理由跟它變得不必要是同一個：`nil` 會同時代表「送出來的那個值」和「串流結束了」，
+沒有任何運算子分得開。包進一個 struct，或約定一個哨兵值。
+
+每種需求都由 `T?` 本來就有的四個運算子掉出來——由 **receiver** 決定：
 
 ```text
-v := (<-ch)?               # 把關閉原因往上傳（崩潰會級聯）
-v := (<-ch)!               # force：崩潰 Err 在此 re-raise 成 abort
-v := (<-ch) ?? fallback    # 任一關閉都給預設值
-if v := <-ch { … }         # 只有有值（Left）時才跑區塊
-for { v := <-ch ?? break }               # 逐一收，任一關閉就跳出
-for v in ch { use(v) }                   # 同一種 drain，乾淨關閉時結束
-match <-ch { Left(v) => use(v)  Right(e) => report(e) }
+v := <-ch ?? fallback      # 串流結束了 → 用預設值
+if v := <-ch { … }         # 區塊內 v 是 T；else 就是結束
+v := <-ch!                 # 堅持：已經結束就中止
+v := <-ch?                 # 把缺席交回給呼叫者（這個函式也答 T?）
+for { v := <-ch ?? break }               # 逐一收，結束就跳出
+for v in ch { use(v) }                   # 同一種 drain，串流結束處就是迴圈結束處
 ```
 
-因為關閉落在 `Right`，`chan[U?]` 不再含糊：**送了一個 `nil`** 是 `Left(nil)`，**關閉**是 `Right`。
+**崩潰**關閉不在上面任何一行裡，而那正是重點：它 raise。想讀原因又要繼續跑的接收端，用 `guard { <-ch }` 把它
+降階，跟處理其他任何失敗一樣。
 
-> **[not yet]** 在**出貨的 `zerg`** 上；而且這是本章唯一一處**種子比較寬**的地方。上面每一個運算子在兩個編譯器
-> 都已建置，只有 `?` 例外，而 `?` 是**種子有做**的：`v := (<-ch)?` 會把 `Right` 從外圍函式提早 return 出去，而
-> `Result[T]` 在種子的**簽章**裡活得下來、載得住它。`zerg` 則指名拒絕（_the `?` operator — it early-returns the
-> Err from the enclosing function, which needs `Result[T]` in a signature_），不會誤譯；在它於該處落地前，用
-> `(<-ch)!` 往上傳、或用 `??` 吸收。`?` 需要的是 [錯誤處理](errors.zh-TW.md) 的錯誤模型，而不是任何 channel 特
-> 性——一個簽章叫得出名字的 `Result[T]`。
+> **[not yet]** 接收端如果在最後一個 sender 崩潰時**已經停在一條空的 channel 上**，它會被當成死鎖喚醒而不是拿到
+> 原因：程式先報生產者的 abort，接著報 `DeadlockError`，那個 `Err` 到不了 receive。還有值可以排空的接收端則如
+> 承諾拿得到原因（`conc_crash` 盯的就是這件事）。這個洞在 runtime 的關閉喚醒路徑上，不在語言裡，而且早於「receive
+> 回傳 `T?`」這個改動。
+>
+> **[not yet]** `guard { <-ch }`——綁到名字上的 `guard` 在出貨的 `zerg` 尚未實作（當敘述用是好的，會吞掉失敗但
+> 不產出值）。在它落地前，崩潰關閉會讓接收端中止，並把生產者的原因印在 stderr 上——對一個沒說要怎麼處理的程式
+> 來說，那是誠實的結果。
+>
+> `?` 用在 receive 上現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以這條註記原本描述的
+> 「`Result[T]` 活不進簽章」問題，已經完全不在 channel 這條路上了。
 
 上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
 
@@ -145,7 +156,7 @@ match <-ch { Left(v) => use(v)  Right(e) => report(e) }
 > （_a block used as an expression_）——因此像 `print` 這種敘述不能站在那裡。變通做法是把 arm 寫成一次**呼叫**、
 > 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響，理由值得記清楚：`match` 的 arm 必須
 > **產出**該次 match 的值，而 `select` 不產出值、它的 arm 是**執行**。所以 select arm 的 body 是一個**敘述**
-> （GRAMMAR group 9）——`done => break` 在那裡很平常，裸的 `print` 也站得住，區塊只是眾多敘述中的一種。
+> （GRAMMAR group 9）——`break` 在那裡很平常，裸的 `print` 也站得住，區塊只是眾多敘述中的一種。
 
 ## 關閉——自動發生在最後一個 sender，必須提早時才用 `close(ch)`
 
@@ -252,33 +263,41 @@ arm 同時 ready** 時，勝出者是 **[implementation-defined]**——規格�
 conforming 實作可任選一條 ready arm，所以任何程式都不得依賴哪條勝出。
 
 ```text
-select {
-    v := <-a => use(v)      # receive arm：開著且有值才 ready
+select {                    # 挑「一條」ready 的 arm 跑
+    v := <-a => use(v)      # receive arm：開著且有值才 ready；v 是 T
     b <- x   => sent()      # send arm：送得出去才 ready
-    done     => break       # 所盯的 receive channel 全部關閉 → 觸發一次
     _        => tick()      # 此刻沒人 ready → 非阻塞
 }
+
+for select {                # 同一種等待，但是 LOOP：一圈跑一條 ready 的 arm……
+    v := <-a => use(v)
+    v := <-b => use(v)
+}                           # ……而且在所盯的 receive channel 全部結束時結束
 ```
 
-receive arm 綁定的型別與一般 receive 相同——`Result[T]`：有值時是 `Left(v)`、崩潰關閉時是 `Right(err)`：
+**select 負責挑，不負責結束。** 結束是迴圈的事，`for select` 就是擁有它的那個迴圈——沒有終局 arm、沒有計數器、
+沒有旗標，而且出口寫在迴圈頭，也就是讀者會去找的地方。
 
-- **乾淨關閉**的 receive arm 被**除名**（不觸發、不空轉）並計入 `done`；**崩潰關閉**的 arm 則**浮現** `Right(err)`
-  ——崩潰絕不被默默丟棄。
+- receive arm 綁的是一個普通的 **`T`**。會觸發的 arm 一定有值：**乾淨關閉**是缺席，那條 arm 會被**從等待中除名**
+  ——不觸發、也不參賽，這正是「結束的生產者不會餓死還活著的那條」的原因。
+- **崩潰關閉**會從 select **raise** 出去，帶著生產者的 `Err`。它永遠不會抵達任何 arm body，所以沒有接收端能在
+  沒注意到的情況下跨過它。
 - 落在已 close channel 上的 **send arm** 被選到時 **abort**（send-on-closed 是 bug）。
-- **`done`** 在所盯的 receive channel **全部關閉**（select _耗盡_）時**觸發一次**——沒有 join、沒有手動倒數的乾淨
-  fan-in 結束。
-- **`_`** 在此刻沒有任何 arm ready 時觸發，使 `select` **非阻塞**。
-- 全關且**沒有 `done`、也沒有 `_`** → **abort**（`DeadlockError`），給忘記安排結束的安全網。`done` 優先於 `_`。
+- **`_`** 在此刻沒有任何 arm ready 時觸發，使 `select` **非阻塞**。它**不是**耗盡狀態的答案：一旦不可能再有東西
+  ready，「現在還沒有」就是謊話，而繞著那個謊話的迴圈會空轉。它在執行前會先讓出排程器，所以輪詢迴圈不會餓死它
+  所在的那個 worker。
+- **一次性**的 `select`，若所盯的 receive channel 全部結束，就無處可去，於是 **abort**（`DeadlockError`）——等待
+  一件不可能發生的事，被指名。`for select` 則是結束；這就是兩種拼法的差別。
 
-粒度是刻意的：單一 receive 逐值呈現關閉；`select` 把乾淨關閉聚合成一個 `done`、同時仍讓崩潰浮現——於是乾淨關閉
-永不混進「有資料」的競賽，也就不空轉。
+粒度是刻意的：單一 receive 逐值把結束回答成 `nil`；`select` 則把結束的那條 arm 除名——於是乾淨關閉永不混進
+「有資料」的競賽，也就不空轉。
 
 除名規則有兩個後果值得明講，因為忽略它們的 `select` 是**卡死**、不是行為怪異：
 
 - **關閉一條 channel 不會觸發它自己的 arm。** 乾淨關閉只是把那條 arm 從等待中移除，它永遠不會 ready。一次 close
-  想表達的東西，必須改由 `done` 抵達、或是以一個**值 send** 出來。
-- **`done` 需要*每一條*被監看的 receive channel 都關閉。** 只要有一條還開著——取消方仍握著的 cancel channel、還沒
-  有人結束的 mailbox——`done` 就永遠不會觸發。若其餘的 arm 這時關閉了，這個 `select` 就再也沒有任何東西可能 ready，
+  想表達的東西，必須以一個**值 send** 出來，或者就是 `for select` 在等的那個結束。
+- **迴圈只在*每一條*被監看的 receive channel 都結束時才結束。** 只要有一條還開著——取消方仍握著的 cancel channel、
+  還沒有人結束的 mailbox——迴圈就繼續。一次性的 `select` 在同樣處境下再也沒有任何東西可能 ready，
   runtime 會在決定程式結果的地方回報它：`DeadlockError`，raise 在 `main` 上。
 
 ## Timer 與 cancellation
@@ -295,22 +314,20 @@ receive arm 綁定的型別與一般 receive 相同——`Result[T]`：有值時
   **合作式**的：一個 coroutine 只會因 return、或因察覺 cancel/timeout arm 而選擇停下才結束。
 
 **用 send 取消，不要用 close。** close 是「stream 結束」而不是一個事件：乾淨關閉的 receive arm 會被*除名*，所以
-close 掉 `cancel` 永遠不會觸發 `cancel` 那條 arm。close 它是餵給 `done`——而 `done` 要等**每一條**被監看的 receive
-channel，所以它只有在工作也做完之後才觸發。兩者互補而非可互換：**send** 用來提早停下，**close**（或單純讓最後一個
-持有者離場）用來宣告「不會有取消了」，那正是讓工作跑完時 `done` 得以觸發的條件。
+close 掉 `cancel` 永遠不會觸發 `cancel` 那條 arm。close 它是餵給**迴圈的結束**——而那要等**每一條**被監看的 receive
+channel，所以它只有在工作也做完之後才來。兩者互補而非可互換：**send** 用來提早停下，**close**（或單純讓最後一個
+持有者離場）用來宣告「不會有取消了」，那正是讓工作跑完時迴圈得以結束的條件。
 
 ```text
 fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
     mut total := 0
 
-    for {
-        select {
-            v := <-work           => { total = total + v! }
-            <-cancel              => { out <- total  return }   # 提早停——有人 SEND 了一個值
-            <-time.after(1000000) => { out <- total  return }   # timeout——1ms，單位是奈秒
-            done                  => { out <- total  return }   # work 與 cancel 都關閉了
-        }
+    for select {
+        v := <-work           => { total = total + v }          # v 是 int：會觸發的 arm 一定有值
+        <-cancel              => { out <- total  return }       # 提早停——有人 SEND 了一個值
+        <-time.after(1000000) => { out <- total  return }       # timeout——1ms，單位是奈秒
     }
+    out <- total                                                # work 與 cancel 都結束了
 }
 
 fn main() {
@@ -320,14 +337,14 @@ fn main() {
     spawn stage(source(3), cancel, out)
 
     cancel <- 1        # 現在就停它……
-    # close(cancel)    # ……或者：不取消，讓工作跑完並讓 `done` 觸發
+    # close(cancel)    # ……或者：不取消，讓工作跑完、迴圈自己結束
 
     print (<-out)!
 }
 ```
 
-`done` 那條 arm 不是裝飾。少了它——而且也沒有 `_`——一個 channel 全部關閉的 `select` 會以 `DeadlockError` abort，
-那正是「忘了安排結束」對外宣告自己的方式。
+迴圈不是裝飾。一個 channel 全部結束、又沒有 `_` 的一次性 `select` 會以 `DeadlockError` abort，那就是一個被
+忘記的收尾自報家門的方式。
 
 **一個 timer 要花掉一條 coroutine。** `after` 與 `ticker` 是疊在「把 coroutine 停到某個 monotonic deadline」這唯一
 一個 runtime leaf 之上的普通 Zerg，所以**每一個活著的 timer 就是一條 coroutine、帶著自己的 256KB stack**。放在迴圈

@@ -79,6 +79,7 @@ fn lint_opt_body(body: list[Stmt], fname: str, ret_opt: bool, mut &out: list[str
 			SFor(hc, c, b) => lint_opt_body(b, fname, ret_opt, out)
 			SForIn(nm, it, b) => lint_opt_body(b, fname, ret_opt, out)
 			SSelect(arms) => lint_opt_arms(arms, fname, ret_opt, out)
+			SForSelect(arms) => lint_opt_arms(arms, fname, ret_opt, out)
 			_ => lint_skip()
 		}
 	}
@@ -213,6 +214,7 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 			SIfLet(name, value, then_b, has_else, else_b) => collect_binds_iflet(name, then_b, else_b, names)
 			SExpr(x) => collect_binds_expr(x, names)
 			SSelect(arms) => collect_binds_arms(arms, names)
+			SForSelect(arms) => collect_binds_arms(arms, names)
 			_ => skip()
 		}
 	}
@@ -279,6 +281,7 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SSpawn(x) => walk_expr(x, ids, calls, ns)
 			SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
 			SSelect(arms) => walk_sel(arms, ids, calls, ns)
+			SForSelect(arms) => walk_sel(arms, ids, calls, ns)
 			SDel(n) => ids.append(n)
 			SClose(ch, at_exit) => walk_expr(ch, ids, calls, ns)
 			_ => skip()

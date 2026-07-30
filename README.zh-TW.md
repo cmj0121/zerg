@@ -181,8 +181,8 @@ reference-counted）、tuple、`defer`、range、f-string，以及帶 `pub` 可�
 `#[dyn]` 動態分派、`unsafe` 下的 raw pointer 與 inline assembly，以及 `zerg test` 執行器。種子對每一項都以
 診斷訊息與非零 exit 拒絕。
 
-**並行回來了，而且兩個編譯器並不相同。** `zerg` 實作了整章——回傳 `Result[T]` 的 receive、directional channel 端
-（`<-chan[T]` / `chan[T]<-`）、`close(ch)` 與 `defer close(ch)`、scope 離開時歸還、帶 `done` 的 `select`，以及
+**並行回來了，而且兩個編譯器並不相同。** `zerg` 實作了整章——回傳 `T?` 的 receive、directional channel 端
+（`<-chan[T]` / `chan[T]<-`）、`close(ch)` 與 `defer close(ch)`、scope 離開時歸還、`select` 與 `for select`，以及
 `time.after` / `time.ticker`。**種子**帶的是 happy path——`chan[T](cap)`、`ch <- v`、`<-ch`、`close(ch)`、
 `spawn f(args)`、`select`、`for v in ch`——並**指名拒絕六種形狀**：directional channel 型別、被呼叫者為方法／帶
 命名空間的函式／closure 的 `spawn`、跨越 `spawn` 的 `mut &` 引數，以及並行程式裡的 `main(args)`。有一個缺口方向

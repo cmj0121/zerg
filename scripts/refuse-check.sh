@@ -71,8 +71,88 @@ fn main() {
 	a := chan[int](1)
 	spawn gen(a)
 	select {
-		v := <-a => { print v! }
-		done     => { break }
+		v := <-a => { print v }
+		_        => { break }
+	}
+}
+EOF
+
+# The terminal arm is gone: a select PICKS a ready arm and the loop ENDS. `close` in that
+# position was an arm until this change, so it is refused by name rather than read as
+# something else — and the message names the form that replaced it.
+expect "$ZERG" terminal-arm-in-a-select "is not a select arm head" <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	select {
+		v := <-ch => print v
+		close => print 0
+	}
+}
+EOF
+
+expect "$ZERG0" seed-terminal-arm-in-a-select "is not a select arm head" <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	select {
+		v := <-ch => print v
+		close => print 0
+	}
+}
+EOF
+
+# A receive answers `T?`, so a channel of optionals would make `nil` mean both "the value
+# that was sent" and "the stream is over".
+# GRAMMAR says `select-arm+`, and the reason is not pedantry: an empty select parks on no
+# channel, so it never wakes — a hang with no cause to find. Both compilers say so.
+expect "$ZERG" empty-select "at least one arm" <<'EOF'
+fn main() {
+	for select {
+	}
+}
+EOF
+
+expect "$ZERG0" seed-empty-select "at least one arm" <<'EOF'
+fn main() {
+	select {
+	}
+}
+EOF
+
+expect "$ZERG" channel-of-optionals "a channel of optionals is refused" <<'EOF'
+fn main() {
+	ch := chan[int?](1)
+	print 1
+}
+EOF
+
+# A select arm head is `_`, a receive or a send — and nothing else. This used to be
+# accepted: ANY identifier before `=>` became the `_` arm, so a typo (or the old `done`
+# spelling) silently made the select non-blocking AND dropped its terminal arm. Both compilers
+# refuse it now, which is why it is checked twice.
+expect "$ZERG" select-arm-head-typo "is not a select arm head" <<'EOF'
+fn gen(out: chan[int]<-) { out <- 1 }
+fn main() {
+	a := chan[int](1)
+	spawn gen(a)
+	for {
+		select {
+			v := <-a => print v!
+			closed => break
+		}
+	}
+}
+EOF
+
+expect "$ZERG0" seed-select-arm-head-typo "is not a select arm head" <<'EOF'
+fn gen(out: chan[int]<-) { out <- 1 }
+fn main() {
+	a := chan[int](1)
+	spawn gen(a)
+	for {
+		select {
+			v := <-a => print v!
+			closed => break
+		}
 	}
 }
 EOF

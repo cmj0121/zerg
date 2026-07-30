@@ -533,16 +533,18 @@ typedef struct {
 	bool all;   /* every watched recv arm is finished (vacuously true with none) */
 	int  first; /* first finished recv arm in fair order, or -1 */
 	int  crash; /* first finished recv arm whose close carried a crash Err, or -1 */
+	size_t recvs; /* how many recv arms this select has at all */
 } sel_shut;
 
 static sel_shut sel_shut_scan(const zrt_sel_case *cases, bool *shut, size_t n, size_t start) {
-	sel_shut r = {true, -1, -1};
+	sel_shut r = {true, -1, -1, 0};
 	for (size_t k = 0; k < n; k++) {
 		size_t i = (start + k) % n;
 		shut[i] = false;
 		if (cases[i].op != ZRT_SEL_RECV) {
 			continue;
 		}
+		r.recvs++;
 		zrt_mutex_lock(&cases[i].ch->lock);
 		bool over = cases[i].ch->closed && cases[i].ch->len == 0 && cases[i].ch->sendq_head == NULL;
 		bool crashed = over && cases[i].ch->err.kind != ZRT_ERR_STOP_ITERATION;
@@ -613,7 +615,7 @@ static int sel_unlink(zrt_sel_case *cases, zrt_waiter *ws, size_t n, bool *claim
 	return fired;
 }
 
-int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
+int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_exit) {
 	zrt_mutex_lock(&g_sel_lock);
 	for (;;) {
 		size_t start = g_sel_rot++;
@@ -623,7 +625,6 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 			zrt_sel_case *c = &cases[i];
 			if (c->op == ZRT_SEL_RECV) {
 				if (sel_try_recv(c->ch, c->val)) {
-					c->closed = 0;
 					zrt_mutex_unlock(&g_sel_lock);
 					return (int)i;
 				}
@@ -639,41 +640,34 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 		 * follows, and shut[] is kept for the re-scan after the park. */
 		bool shut[n];
 		sel_shut sh = sel_shut_scan(cases, shut, n, start);
-		if (has_done && sh.all) {
+
+		/* A CRASH close is a FAILURE, and a failure is raised — it is not an absence and it
+		 * is not an arm. The reason travels with it: the producer's own message, cause and
+		 * kind, read from the channel that carries it. This is the one thing the select
+		 * must never swallow, so it outranks the ending below (it does NOT outrank a
+		 * value-ready arm above: data that was sent is data, whoever died afterwards). */
+		if (sh.crash >= 0) {
+			zrt_err e = zrt_chan_close_err(cases[sh.crash].ch);
 			zrt_mutex_unlock(&g_sel_lock);
-			return ZRT_SEL_DONE; /* the select is exhausted: every producer has finished */
+			zrt_raise_err(e); /* never comes back */
 		}
-		if (!has_done) {
-			if (sh.crash >= 0) {
-				/* a crash close is news, not an ending: it outranks both the clean closes
-				 * beside it and the deadlock below, because the one thing this select must
-				 * never do is swallow the error its producer died of. */
-				cases[sh.crash].closed = 1;
-				zrt_mutex_unlock(&g_sel_lock);
-				return sh.crash;
-			}
-			if (sh.all && sh.first >= 0 && !has_default) {
-				/* every channel this select watches has closed cleanly, and the select has
-				 * neither a `done` to end on nor a `_` to fall through to — so it is waiting
-				 * for something that can no longer happen. Raising is the safety net for a
-				 * forgotten shutdown arm; the alternative is a select that runs an arm over
-				 * a value nobody sent, or one that sleeps for good. */
-				zrt_mutex_unlock(&g_sel_lock);
-				zrt_sched_deadlock();
-			}
-			if (sh.first >= 0) {
-				/* some arms are still open, so this is not the end of the select — but with
-				 * no `done` to route it to, closure is reported per arm as the Right. */
-				cases[sh.first].closed = 1;
-				zrt_mutex_unlock(&g_sel_lock);
-				return sh.first;
-			}
-		}
-		/* the non-blocking `_`: nothing ready, so run its arm without parking. */
-		if (has_default) {
+
+		/* A cleanly finished recv arm is an ABSENCE: it is dropped from the wait, never
+		 * fires, and never competes. When they are all gone the select is EXHAUSTED — and
+		 * `recvs > 0` is what keeps that from being vacuously true for a select that
+		 * watches nothing but sends, where a full buffer used to read as "everything has
+		 * closed" and run the terminal arm. */
+		if (sh.recvs > 0 && sh.all) {
 			zrt_mutex_unlock(&g_sel_lock);
-			return ZRT_SEL_DEFAULT;
+			if (has_exit) {
+				return ZRT_SEL_DONE; /* `close => …`, or the `for select` that ends here */
+			}
+			/* nothing can ever become ready again and the caller named nowhere to go:
+			 * waiting is waiting for something that cannot happen. `_` is deliberately NOT
+			 * an answer here — "nothing yet" would be a lie, and a loop around it spins. */
+			zrt_sched_deadlock();
 		}
+
 		/* park on EVERY case's channel at once; wake when any becomes ready. The waiters
 		 * share one `claimed` flag so at most one hand-off fires this select. */
 		bool claimed = false;
@@ -721,7 +715,6 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 			 * returns early to a scan that finds nothing and parks again. */
 			int early = sel_unlink(cases, ws, n, &claimed);
 			if (early >= 0) {
-				cases[early].closed = 0; /* a hand-off delivered a real value (Left) */
 				zrt_mutex_unlock(&g_sel_lock);
 				return early;
 			}
@@ -733,7 +726,6 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_done) {
 		zrt_mutex_lock(&g_sel_lock);
 		int fired = sel_unlink(cases, ws, n, &claimed);
 		if (fired >= 0) {
-			cases[fired].closed = 0; /* a hand-off delivered a real value (Left) */
 			zrt_mutex_unlock(&g_sel_lock);
 			return fired;
 		}

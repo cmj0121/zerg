@@ -532,7 +532,8 @@ chan-type   ::= 'chan' '[' type ']'           # 雙向
               | 'chan' '[' type ']' '<-'      # send-only（送出方），Go 風格
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+for-select  ::= 'for' 'select' '{' select-arm+ '}'
+select-arm  ::= recv-arm | send-arm | '_' '=>' expr
 recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
 send-arm    ::= expr '<-' expr '=>' expr
 ```
@@ -541,11 +542,14 @@ send-arm    ::= expr '<-' expr '=>' expr
   觀察。capture 限 immutable 值與 channel。
 - **`chan[T](cap?)`** 建立 channel——容量 `0`（預設）是無緩衝 **rendezvous**。裸 `chan[T]` 為雙向,可透過型別標註
   窄化成 `<-chan[T]` / `chan[T]<-`。
-- **`ch <- v`** 送出（無值;對已關閉 channel 會 abort）。**`<-ch`** 接收,產出 `Result[T]`——`Right` 表示已關閉且排空
-  （攜 `StopIteration` 或 crash `Err`）。receive 先綁定,故 `(<-ch)?`、`<-ch!`、`<-ch ?? d` 與 group-8 運算子組合。
-- **`select { … }`** 是唯一的多路等待:跑第一個 ready 的 arm（公平 tie）。**`done`** 在所有被監看的 receive channel
-  都關閉時觸發一次;**`_`** 在此刻無 arm ready 時觸發（non-blocking）——兩者皆**contextual**,只在 select-arm 開頭
-  特殊。**沒有 `yield`**。
+- **`ch <- v`** 送出（無值；對已關閉 channel 會 abort）。**`<-ch`** 接收，產出 **`T?`**——串流結束後就是 `nil`，
+  而且之後每次都是。**崩潰**關閉是失敗而不是缺席，會**raise**，帶著生產者自己的 `Err`。所以 `<-ch ?? d`、`<-ch!`、
+  `<-ch?` 與 `if v := <-ch { … }` 就是 receive 的運算子，而 **`chan[T?]` 被拒絕**——否則 `nil` 會同時代表值與結束。
+- **`select { … }`** 是唯一的多路等待：它**挑**一條 ready 的 arm（公平 tie）並執行；receive arm 綁的是一個普通的
+  **`T`**，因為乾淨結束的 channel 會退出等待而不是觸發。**`for select { … }`** 是同一種等待的迴圈形式——一圈一條
+  ready 的 arm——並在所盯的 receive channel 全部結束時結束。**沒有終局 arm**。**`_`** 在此刻沒有 arm ready 時觸發
+  （非阻塞），而且不是耗盡狀態的答案；它是 **contextual**、只在 arm 開頭特殊，也是 arm 唯一能開頭的裸識別字。
+  **沒有 `yield`**。
 - **`close(ch)`** 用來**提早**結束一條 stream。channel 平常會在最後一個 sender 離開時**自己**關閉——那是日常形式，
   也是崩潰中的 producer 唯一能走的那條。`close` 是**敘述、不是呼叫**：它是關鍵字，不指涉任何函式、也不產生值，
   所以不能被傳遞、綁定或 spawn；`defer` 把它列為唯一一個非運算式的形式（**`defer close(ch)`**）。它標記的是

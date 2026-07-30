@@ -46,15 +46,18 @@ Zerg 是以整體來規範；Phase-1 bootstrap 實作其中一個子集。與其
 `#[dyn]` dispatch、以及 `unsafe` 指標與 inline assembly。它們重新被標為 **[not yet]**：種子會以一則診斷拒絕它們，
 而那正是這個標記所承諾的。
 
-**並行是例外，而且是一個更窄的主張。** coroutine、channel 與 `select` 曾被移除、之後又復原：種子降階**happy
-path**——`chan[T](cap)`、`ch <- v`、真正回傳 `Result[T]` 的 `<-ch`、`close(ch)` 與 `defer close(ch)`、
-`spawn f(args)`、四種 arm 形狀俱全的 `select`，以及 `for v in ch`——並**指名拒絕五種形狀**而不是誤譯它們：
-**directional channel 型別**，以及被呼叫者為**方法**／**帶命名空間的函式**／**closure**、或帶著跨越 `spawn` 的
-**`mut &`** 引數的 `spawn`。每一種都是乾淨的診斷加上非零的 exit code。見 [Coroutines](code/coroutine.zh-TW.md)。
+**並行完全屬於 `zerg`。** 種子一項都不降階——`spawn`、`chan[T]`、`select`、送出、接收、`close`
+與 `for v in ch` 全部指名拒絕，非零 exit、不產出任何 C。這不是一個被追蹤的缺口，而是種子的**契約**
+（見 [`src/bootstrap/README.md`](../src/bootstrap/README.md)）：種子支援自舉編譯器原始碼實際用到的
+那一片語言，其餘一律拒絕。而自舉鏈裡完全沒有並行。
 
-另有兩項屬於**兩個編譯器都沒有**，而不是種子獨有。並行程式裡的 **`main(args)`** 兩邊都拒絕——scheduler 的進入
-點 shim 只吃無參數的函式指標；而接收運算子 **`?`** 是並行這一塊唯一**種子比較寬**的地方：種子有做，`zerg` 指名
-拒絕。
+這個理由值得寫下來，因為它就是整份契約的論據：**一個去降階自己並非權威的章節的編譯器，就是第二
+個會不合的實作**——而本規格在並行這一章需要收掉的每一個落差，都是那種不合。拒絕不會不合。出貨的
+編譯器做了什麼，見 [Coroutines](code/coroutine.zh-TW.md)——它做了全部。
+
+有一項屬於**兩個編譯器都沒有**：並行程式裡的 **`main(args)`**，因為 scheduler 的進入點 shim 只吃
+無參數的函式指標。而接收運算子 **`?`** 是種子仍然**比較寬**的地方——它穿引 `Result[T]`，`zerg`
+指名拒絕那一半。
 
 沒有標記的小節沿用其外層特性的標記；段落可用自己的標記覆寫。**[deviation]** 一律同時陳述「規格所定行為」與
 「該實作實際的作法」。

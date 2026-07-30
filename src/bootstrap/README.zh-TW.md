@@ -88,7 +88,7 @@ cc 對著產生的 C。
 | `#[dyn]` dispatch                                                     | 已拒絕 |
 | `spec` / `impl Spec for T`                                            | 待拒絕 |
 | 泛型**函式**定義 `fn f[T]`                                            | 待拒絕 |
-| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 待拒絕 |
+| coroutine：`spawn`、`chan[T]`、`select`、`<-`、`close`、`for v in ch` | 已拒絕 |
 | optional `T?`、`??`、`?.`、`!`                                        | 待拒絕 |
 | `with`、`defer`、`del`                                                | 待拒絕 |
 | tuple `(a, b)` 與 `t.0`                                               | 待拒絕 |

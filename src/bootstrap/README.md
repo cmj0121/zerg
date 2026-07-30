@@ -98,7 +98,7 @@ list, and a row leaves it by being refused, never by being quietly dropped.
 | `#[dyn]` dispatch                                                      | refused   |
 | `spec` / `impl Spec for T`                                             | to refuse |
 | generic **function** definitions `fn f[T]`                             | to refuse |
-| coroutines: `spawn`, `chan[T]`, `select`, `<-`, `close`, `for v in ch` | to refuse |
+| coroutines: `spawn`, `chan[T]`, `select`, `<-`, `close`, `for v in ch` | refused   |
 | optionals `T?`, `??`, `?.`, `!`                                        | to refuse |
 | `with`, `defer`, `del`                                                 | to refuse |
 | tuples `(a, b)` and `t.0`                                              | to refuse |

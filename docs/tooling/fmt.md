@@ -200,8 +200,8 @@ with no way to tell them apart by looking.
 | `F407` | a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`             | on      |
 | `F408` | an or-pattern over consecutive integers becomes the range it is                | on      |
 
-`GRAMMAR` defines `return x if c`, `break if c` and `continue if c` **as** sugar for
-`if c { … }` around the same jump — one postfix `if`, three jumps. So the two forms say the
+`GRAMMAR` defines `return x if c`, `break if c`, `continue if c` and `raise e if c` **as** sugar
+for `if c { … }` around the same jump — one postfix `if`, every **diverge**. So the two forms say the
 same thing and one of them says it in four lines. The formatter picks the short one, which
 is what a guard clause is for: the exceptional exit stops interrupting the shape of the
 code it guards. A bare early exit works the same way — `return if c`.

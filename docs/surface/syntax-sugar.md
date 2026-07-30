@@ -9,6 +9,7 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 | Sugar                                    | Desugars to                                                             |
 | ---------------------------------------- | ----------------------------------------------------------------------- |
 | `break if c` / `continue if c`           | `if c { break }` / `if c { continue }`                                  |
+| `raise e if c`                           | `if c { raise e }` — the same postfix guard, on the fourth diverge      |
 | `if x := e { … }`                        | a one-arm `match` on `e` — the block runs only when `x` is present      |
 | `with e as y { … }`                      | `{ y := e; defer y's Scoped teardown; … }` (runs on every exit)         |
 | `f"…{x}…"`                               | compile-time `str` concatenation, each hole `x.display()`               |

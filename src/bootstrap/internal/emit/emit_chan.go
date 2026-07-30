@@ -141,6 +141,9 @@ func (e *emitter) prepareChannels() {
 	if !e.concurrency {
 		return
 	}
+	if e.rejectConcurrency() {
+		return
+	}
 	e.rejectDirectionalChans()
 
 	seen := map[string]sema.Type{}
@@ -217,6 +220,68 @@ func (e *emitter) prepareChannels() {
 	// name a function nothing defined and cc would say so, which is the seed's whole
 	// contract. No stdlib module drops a receive-only handle today.
 	e.needChanDrop = false
+}
+
+// rejectConcurrency refuses every concurrency form, by name, reporting whether it did.
+//
+// Tier 2 of the contract in ../../README.md: the self-host chain contains no `spawn`, no
+// `chan[T]`, no `select` and no `<-`, so the seed has nothing to build with them and
+// carries no opinion about them. That silence is the point — a compiler that lowers a
+// feature it is not the authority on is a second implementation that can DISAGREE, and
+// every gap closed on the concurrency chapter was one of those disagreements.
+//
+// One refusal per program rather than per site: a concurrent program is concurrent
+// throughout, and a reader who writes one wants to be told where the line is, not handed
+// forty diagnostics. It is scoped to the program's OWN module, like the directional-type
+// refusal below and for the same reason — a bundled stdlib module may name a channel in a
+// signature the program never reaches.
+func (e *emitter) rejectConcurrency() bool {
+	for _, inst := range e.prog.Funcs {
+		if inst.Origin == nil || inst.Origin.Module != "" || inst.Origin.Body == nil {
+			continue
+		}
+		if at, what := firstConcurrency(inst.Origin.Body); what != "" {
+			e.diags.Add(at, "the bootstrap seed does not lower %s: concurrency belongs to the "+
+				"self-hosting compiler, which implements the whole chapter", what)
+			return true
+		}
+	}
+	return false
+}
+
+// firstConcurrency finds the first concurrency form in a body and names it the way the
+// source writes it, so the diagnostic points at what the programmer typed.
+func firstConcurrency(b *ast.Block) (token.Span, string) {
+	var at token.Span
+	var what string
+	walkStmts(b, func(s ast.Stmt) {
+		if what != "" {
+			return
+		}
+		switch n := s.(type) {
+		case *ast.SpawnStmt:
+			at, what = n.Span(), "`spawn`"
+		case *ast.SelectStmt:
+			at, what = n.Span(), "`select`"
+		case *ast.SendStmt:
+			at, what = n.Span(), "a send `ch <- v`"
+		}
+	})
+	if what != "" {
+		return at, what
+	}
+	walkBlockExprs(b, func(x ast.Expr) {
+		if what != "" {
+			return
+		}
+		switch n := x.(type) {
+		case *ast.ChanNew:
+			at, what = n.Span(), "`chan[T]`"
+		case *ast.Recv:
+			at, what = n.Span(), "a receive `<-ch`"
+		}
+	})
+	return at, what
 }
 
 // rejectDirectionalChans refuses a receive-only / send-only channel type in a signature

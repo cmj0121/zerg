@@ -109,6 +109,20 @@ EOF
 
 # --- the seed ---------------------------------------------------------------------
 
+# Tier 2 of src/bootstrap/README.md: the seed carries no opinion about concurrency, because
+# the self-host chain contains none of it and a compiler that lowers what it is not the
+# authority on is a second implementation that can disagree.
+expect "$ZERG0" seed-concurrency "the bootstrap seed does not lower" <<'EOF'
+fn feed(o: chan[int]) {
+	o <- 1
+}
+fn main() {
+	ch := chan[int](1)
+	spawn feed(ch)
+	print (<-ch)!
+}
+EOF
+
 expect "$ZERG0" seed-close-on-receive-only "cannot close a receive-only channel <-chan[int]" <<'EOF'
 fn bad(rx: <-chan[int]) {
 	defer close(rx)
@@ -126,20 +140,7 @@ fn bad(tx: chan[int]<-) { print (<-tx)! }
 fn main() { print "x" }
 EOF
 
-expect "$ZERG0" seed-close-behind-a-spawn "'close' is a statement, not a value" <<'EOF'
-fn main() {
-	ch := chan[int](1)
-	spawn close(ch)
-}
-EOF
 
-expect "$ZERG0" seed-directional-type "does not lower a directional channel type chan[int]<-" <<'EOF'
-fn gen(out: chan[int]<-) { out <- 1 }
-fn main() {
-	ch := chan[int](1)
-	spawn gen(ch)
-}
-EOF
 
 # --- null safety: an optional says what it is at every edge ------------------------
 

@@ -403,13 +403,23 @@ struct B[T] {
 fn main() { print "x" }
 EOF
 
-# Left and Right name the two sides of the carrier a receive answers with, and neither
-# compiler offers them as constructors: a Result[T] comes from `<-ch` or from `guard`.
-expect "$ZERG" carrier-is-not-a-constructor "no type named \`Left\` to construct" <<'EOF'
-fn f() -> Result[int] {
-	return Left(1)
+# Left and Right name the two SIDES of an Either and have no type of their own, so they are
+# read where the wanted type is known. Written where there is none, the compiler says which
+# of the two problems it is — a form used without its context, not a form that does not exist.
+expect "$ZERG" carrier-constructor-without-a-context "needs a declared one to be" <<'EOF'
+fn main() {
+	x := Left(1)
+	print 1
 }
-fn main() { print "x" }
+EOF
+
+# The two sides of an Either must DIFFER: an injection could otherwise reach both, and
+# nothing at the match would tell which one it took.
+expect "$ZERG" either-with-equal-sides "has the same type on both sides" <<'EOF'
+fn f(n: int) -> Either[int, int] {
+	return Left(n)
+}
+fn main() { print 1 }
 EOF
 
 # --- the seed ---------------------------------------------------------------------
@@ -485,7 +495,7 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" try-without-an-optional-result "must answer a \`T?\`" <<'EOF'
+expect "$ZERG" try-without-a-carrier-result "must answer a carrier with the same right" <<'EOF'
 fn head(x: int?) -> int {
 	return x?
 }

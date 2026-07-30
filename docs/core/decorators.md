@@ -8,12 +8,12 @@ is never silently ignored. Each decorator binds to the declaration that follows 
 
 ## The set
 
-One decorator is **[implemented]** today — `#[derive]`. `#[dyn]` and `#[test]` are
-**[not yet]**: both were built and then removed when the seed was cut down to building the
-compiler, and using either is a clean error (`#[dyn] is not yet supported`).
+`#[derive]` is the only decorator the compiler reads. Every other one — `#[dyn]`, `#[test]`,
+`#[sealed]`, the layout directives — is **[not yet]** and refused by name.
 
 - **`#[derive(Spec, …)]`** — on a `struct` / `enum`. Generates the canonical impl of each named blessed spec
-  from the type's **structure**. The blessed set is **`Eq`** and **`Ord`** (**[implemented]**), with
+  from the type's **structure**. The blessed set is **`Eq`** and **`Ord`** (**[not yet]** — the decorator
+  is read and dropped, and `==` / `<` on a composite is refused by name), with
   **`Hash`**, **`Encode`**, and **`Decode`** specified but **[not yet]**; there is **no auto-derived
   `Object`**. A user spec can never be derived (`#[derive(MySpec)]` is a compile error). See
   **[Derive & Default Behavior](derive.md)**.

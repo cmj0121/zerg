@@ -87,27 +87,32 @@ enum, `Result[T]`, and `This` inside an `impl`.
 
 ## Tier 2 — what the seed refuses by name
 
-None of these appears in the self-host chain; each was verified absent, not assumed. `state`
-says whether the seed refuses it today or still lowers it — the second column is the work
-list, and a row leaves it by being refused, never by being quietly dropped.
+**This table is why the language specification does not mention the seed.** A form the seed
+refuses is not a gap in Zerg — the shipped `zerg` lowers it — so `docs/` marks nothing here,
+and a reader writing Zerg never meets these. They are the seed's own contract, and this is
+where they are recorded.
 
-| Form                                                                   | State     |
-| ---------------------------------------------------------------------- | --------- |
-| `map[K, V]` and map literals                                           | refused   |
-| closures / first-class `fn` values                                     | refused   |
-| `#[dyn]` dispatch                                                      | refused   |
-| `spec` / `impl Spec for T`                                             | to refuse |
-| generic **function** definitions `fn f[T]`                             | to refuse |
-| coroutines: `spawn`, `chan[T]`, `select`, `<-`, `close`, `for v in ch` | refused   |
-| optionals `T?`, `??`, `?.`, `!`                                        | to refuse |
-| `with`, `defer`, `del`                                                 | to refuse |
-| tuples `(a, b)` and `t.0`                                              | to refuse |
-| ranges `a..b` as a value or `for` iterable                             | to refuse |
-| slicing `xs[a..b]`                                                     | to refuse |
-| decorators, incl. `#[derive]`                                          | to refuse |
-| module-level `const`, `init()`                                         | to refuse |
-| `unsafe`, `asm`, `ptr[T]`                                              | refused   |
-| command literals                                                       | refused   |
+Nothing in this table appears in the self-host chain; each was verified absent, not assumed.
+Measured against `zerg0` on 2026-07-31.
+
+| Form                                                                   | What it is                       |
+| ---------------------------------------------------------------------- | -------------------------------- |
+| coroutines: `spawn`, `chan[T]`, `select`, `<-`, `close`, `for v in ch` | the whole concurrency chapter    |
+| `map[K, V]` — literals, and copying one                                | the container                    |
+| a **closure literal** used as a value                                  | a named `fn` value is supported  |
+| slicing `xs.slice(a, b)` / `xs[a..b]`                                  | the subrange                     |
+| module-level `const`                                                   | a binding outside a function     |
+| `#[dyn]` dispatch                                                      | the decorator                    |
+| `unsafe`, `asm`, `ptr[T]`                                              | the bare-metal door              |
+| command literals `` `git status` ``                                    | the process-substitution literal |
+| `for k in m` over a map                                                | the iteration                    |
+
+Everything else the language has, the seed has: `defer`, `del`, `with`, tuples and `t.0`,
+ranges as a value and as an iterable, optionals and the whole group-8 operator set, `init()`,
+`spec` / `impl` including provided methods, generic function definitions, `#[derive(Eq, Ord)]`,
+`Ref[T]`, struct and tuple patterns, a block as a `match` arm body, and `for c in s` over a
+str's code points. On several of those the seed is the **wider** of the two compilers, which
+is a fact about the seed and not about the language.
 
 A form the FRONT END still parses is not thereby supported: the refusal may land in sema or
 at the emitter's door. Narrowing the parser is a separate pass, and not an urgent one — what

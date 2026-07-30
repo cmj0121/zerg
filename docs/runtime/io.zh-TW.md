@@ -11,7 +11,7 @@ text）——把一個值寫到 stdout 的免 import 捷徑。三個想法承載
 - **handle** 是 `Ref[T]`——檔案或 socket，scope-owned、恰好關一次；
 - **失敗是值**——會失敗的呼叫回 `Result[T]`、以 `?` 傳播；EOF 不算。
 
-> **狀態。** bootstrap 只出貨這個面的**子集**。**[implemented]：** 整檔讀取——
+> **狀態。** 編譯器只出貨這個面的**子集**。已建置的部分:整檔讀取——
 > `io.read_file(path) -> list[byte]`（檔案不存在或不可讀會 raise **`IOError`**，可用 `guard { io.read_file(p) }`
 > 降級為 `Result`；內容為文字時以 `str(…)` 解碼）——以及一組最小的 stdout 寫出器（`io.write` / `io.println` /
 > `io.write_int`）加上 `print` 關鍵字。**`Reader` / `Writer` spec 面**——下文的 `read_bytes` / `read()` / `write`

@@ -7,7 +7,7 @@
 - **[語言參考](language.zh-TW.md)** —— 索引。所有章節、已分組，各附一行說明涵蓋什麼。
   如果你還不知道要看哪一章，從這裡開始。
 - **[Conformance](conformance.zh-TW.md)** —— 如何閱讀本規格：狀態標記
-  （`[implemented]`、`[not yet]`、`[deviation]`）的意義，以及一則 diagnostic 或一次 abort
+  （`[not yet]`、`[deviation]`）的意義，以及一則 diagnostic 或一次 abort
   各自承諾了什麼。讀一次就好，但它會改變你讀其餘所有內容的方式。
 
 ## 各目錄裝什麼

@@ -7,11 +7,12 @@
 
 ## 集合
 
-目前 **[implemented]** 的只有一個——`#[derive]`。`#[dyn]` 與 `#[test]` 是 **[not yet]**：兩者都曾建成，
-又在種子被裁減到「只建編譯器」時移除，使用任一個都會得到乾淨的錯誤（`#[dyn] is not yet supported`）:
+`#[derive]` 是編譯器唯一會讀的 decorator。其餘每一個——`#[dyn]`、`#[test]`、`#[sealed]`、版面指示——
+皆為 **[not yet]**,會被指名拒絕:
 
 - **`#[derive(Spec, …)]`** — 掛在 `struct` / `enum`。依型別的**結構**生成每個所列 blessed spec 的 canonical impl。
-  受祝福集合是 **`Eq`** 與 **`Ord`**（**[implemented]**），而 **`Hash`**、**`Encode`**、**`Decode`** 已規範、但
+  受祝福集合是 **`Eq`** 與 **`Ord`**（**[not yet]**——decorator 被讀進來然後丟掉,而複合值上的 `==` / `<`
+  會被指名拒絕），而 **`Hash`**、**`Encode`**、**`Decode`** 已規範、但
   **[not yet]**;**沒有自動 derive 的 `Object`**。使用者 spec 不可被 derive（`#[derive(MySpec)]` 為編譯錯誤）。見
   **[Derive & Default Behavior](derive.zh-TW.md)**。
 - **`#[dyn]`** — 掛在泛型 `fn`。把泛型編成**一份共享的 witness-table body**,而非依型別引數各自 monomorphize——以

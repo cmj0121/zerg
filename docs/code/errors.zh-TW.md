@@ -25,17 +25,14 @@ fn load() -> Result[Config] {
 }
 ```
 
-> **[deviation]** `?` 定義在任何 `Either[X, Y]` 上——拆出 `Left`、把 `Right` 原封不動提早 return。出貨的
-> **`zerg`** 對每一種 carrier 都正是如此:外圍函式必須回答一個**右側相同**的 carrier,而右側原封不動地穿過去,
-> 所以 `Err` 在傳播後仍保有它的 kind。**種子**則只穿引 `Result[T]`:在**一般的 `Either`** 上右側 payload 被
-> **丟棄**（一次靜默的誤編譯）,而對 **`Result[nil]`** 的 `?` 抵達後端時是一個 `void` 型別的 binding（一個
-> fail-loud 的 sema 缺口）。
+`?` 對每一種 carrier 都可用:外圍函式必須回答一個**右側相同**的 carrier,而右側原封不動地穿過去,所以
+`Err` 在傳播後仍保有它的 kind。
 
 **`??`——預設值。** `a ?? b`：`a` 有左值就用它，否則用 `b`（右值被丟棄）；短路、右結合可串接，適用任何 `Either`。
 
 **`?.`——optional chain（只限 `T?`）。** `a?.b`：`a` 有值就取 `.b`，否則整串在原地短路成 `nil`（與 `?` 不同，
 不會從函式 return）；用在任何非 `T?` 型別都是 compile error。若該欄位**本身就是 optional 就會壓平**——整串回答的
-是那個欄位的型別，而不是巢狀的 `T??`（那不是這個語言寫得出來的型別）。**[implemented]**，兩個編譯器皆然。
+是那個欄位的型別，而不是巢狀的 `T??`（那不是這個語言寫得出來的型別）。
 
 **`!`——force-unwrap（值 → abort）。** `x!` 拆出左值，否則對一個缺席的 optional **raise**——刻意的「我確定它有值」
 逃生口，是從值那層跨進 abort 的一種入口。（邏輯否定用關鍵字 `not`，所以 postfix `!` 空出來給它。）
@@ -58,7 +55,7 @@ addr := config?.server?.host ?? "localhost"
 ——它是 `if c { raise e }` 的糖,也正是格式化器的 `F401` 會把 block 形式改寫成的樣子。它只屬於語句形式:
 `??` 右側的 `raise` 不接尾隨 `if`,否則那個 guard 會讀成 coalesce 的。
 
-**內建的錯誤分類。** 這個階段提供**固定的六種**錯誤 **[implemented]**:**`ValueError`**、**`OverflowError`**、
+**內建的錯誤分類。** 這個階段提供**固定的六種**錯誤:**`ValueError`**、**`OverflowError`**、
 **`IOError`**、**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
 ——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](../core/specs.zh-TW.md)——的 `struct` / `enum`)
 **尚未支援**。每一種都是完整的 `Err`:帶訊息建構(`raise ValueError("bad input")`)、放進 `Result` 右側、**也**可被
@@ -72,7 +69,7 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
 用到的 fault 名稱裡,今天有九個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
 `EncodingError`、`IndexError`、`KeyError`，再加上並行那章指名的三個——`SendOnClosedError`、`DeadlockError` 與
-`StopIteration`（**[implemented]**）。其餘在語言表面還**叫不出名字**:`UnwrapError`、`DivideByZeroError`、
+`StopIteration`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`DivideByZeroError`、
 `MatchError` 與 `AliasError` 是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯
 錯誤（那個名字不在這九個之列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
 
@@ -152,7 +149,7 @@ match guard { work() } {
 ```
 
 `is` 只產出 `bool`，所以一個分支能用 **`Error` 介面**（`message` / `code` / `unwrap`）、但**碰不到具體型別自己的欄位**
-——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**（**[implemented]**）——那六種內建錯誤,以及任何被
+——值已被抹除、永不重新建構。這個階段 `is` 實作**於錯誤分類**——那六種內建錯誤,以及任何被
 `guard` 具現化的內建 abort;對**非錯誤**型別的一般存在性測試 `x is T` 是 **[not yet]**。這裡可達的錯誤集合在覆蓋上被
 視為**開放**,所以 `is` 串永遠無法窮盡:**catch-all 必備**。未命中的錯誤會像任何未覆蓋的 `match` 一樣 abort——但
 `MatchError` 是 **[not yet]** 的具現化種類,且因為最後一個 `match` arm 一律無條件,compiler 今天永不 emit 一個(catch-all

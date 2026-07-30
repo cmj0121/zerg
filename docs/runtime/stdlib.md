@@ -151,10 +151,6 @@ consumer slows the ticker instead of building a backlog.
 `after` inside a loop allocates one per iteration. There is **no stop**: a sleep cannot be cancelled, so a
 `ticker`'s coroutine lives until the program does — put one at the top of a program, not in a loop.
 
-> **[not yet]** In the **seed**. `after` and `ticker` return a **receive-only** channel, which is one of
-> the shapes the seed refuses by name, so only `now` and `monotonic` are reachable from a seed-built
-> program.
-
 ## `math`
 
 Numeric helpers over the primitives, plus **pure-Zerg** transcendentals (numerical algorithms, never a

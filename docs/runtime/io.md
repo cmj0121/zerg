@@ -13,7 +13,7 @@ each reusing an existing model:
 - a **handle** is a `Ref[T]` — a file or socket, scope-owned and closed exactly once;
 - **failure is a value** — a fallible call returns `Result[T]`, `?`-propagated; EOF is not one.
 
-> **Status.** The bootstrap ships a **subset** of this surface. **[implemented]:** whole-file read —
+> **Status.** The compiler ships a **subset** of this surface. What is built: whole-file read —
 > `io.read_file(path) -> list[byte]` (a missing or unreadable file raises **`IOError`**, which
 > `guard { io.read_file(p) }` demotes to a `Result`; decode with `str(…)` when the bytes are text) — and a
 > minimal set of stdout writers (`io.write` / `io.println` / `io.write_int`) plus the `print` keyword. The

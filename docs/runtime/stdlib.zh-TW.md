@@ -146,9 +146,6 @@ channel**——`after` 與 `ticker` 回傳 receive-only channel，所以對它�
 的 `after` 會每一輪配置一個。而且**沒有 stop**：一次 sleep 無法取消，所以 `ticker` 的 coroutine 會活到程式結束
 ——請把它放在程式頂端，不要放在迴圈裡。
 
-> **[not yet]** 在**種子**上。`after` 與 `ticker` 回傳的是 **receive-only** channel，而那正是種子指名拒絕的形狀之
-> 一，所以種子建置出來的程式只碰得到 `now` 與 `monotonic`。
-
 ## `math`
 
 primitive 上的數值輔助，加上**純 Zerg** transcendentals（數值演算法，絕非綁 libm）。domain 錯誤（如 `sqrt` 負數）

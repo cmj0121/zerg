@@ -614,7 +614,6 @@ const stressC = `
 
 static zrt_chan *chans[NCHAN];
 static long total;
-static int closed_seen;
 
 typedef struct { zrt_chan *ch; } prod_env;
 
@@ -649,16 +648,12 @@ static void prog(void) {
             cs[i].op = ZRT_SEL_RECV;
             cs[i].ch = chans[i];
             cs[i].val = &vals[i];
-            cs[i].closed = 0;
         }
         int pick = zrt_select(cs, NCHAN, false, true);
         if (pick == ZRT_SEL_DONE) {
             break;
         }
-        if (cs[pick].closed) {
-            closed_seen++;
-            continue;
-        }
+        /* an arm that fires has a VALUE: a clean close drops the arm instead of firing it */
         total += vals[pick];
     }
     for (int i = 0; i < NCHAN; i++) {
@@ -904,21 +899,21 @@ int main(void) { return zrt_sched_main_nil(prog); }
 `
 
 // TestSelectResolvesClosedChannels pins how `select` ends when the channels it watches
-// stop producing. The three answers are different on purpose (docs/code/coroutine.md,
-// the `select` section):
+// stop producing. The three answers follow the language's own split between an ABSENCE and
+// a FAILURE (docs/code/coroutine.md, the `select` section):
 //
-//   - every watched receive channel closed CLEANLY, with no `done` and no `_` to say so:
-//     the select is waiting for something that can no longer happen, so it raises
-//     DeadlockError — the safety net for a forgotten shutdown arm. Before this it returned
-//     a case index and the arm ran over a stale value;
-//   - a channel closed by a CRASH still surfaces as that arm's Right, even when everything
-//     else is shut, because the one thing a select must never do is swallow the error its
-//     producer died of — and the Err it surfaces is the producer's own, message and all;
-//   - a `_` arm means the select never waits, so there is no deadlock to raise: the closed
-//     arm resolves as its Right instead, which is the same order the runtime already used.
+//   - every watched receive channel closed CLEANLY, with no `close` arm and no `_`: each
+//     arm is an absence, so each is dropped from the wait, and a select with nothing left
+//     to wait for is waiting for something that cannot happen -> DeadlockError;
+//   - a channel closed by a CRASH is a failure, so it is RAISED carrying the producer's own
+//     Err, message and kind and all. It is never handed to an arm, which is what makes it
+//     impossible for a receiver to run over it without noticing;
+//   - a `_` arm does NOT absorb an exhausted select: "nothing ready yet" would be a lie
+//     once nothing can ever be ready, and a loop around that lie spins. The clean-close
+//     case therefore still raises, `_` or no `_`.
 func TestSelectResolvesClosedChannels(t *testing.T) {
 	bin := buildConcurrent(t, "select_closed", selectClosedC)
-	want := "all-clean: kind=7\ncrash: closed=1 msg=producer died kind=3\ndefault: pick=0 closed=1\n"
+	want := "all-clean: kind=7\ncrash: msg=producer died kind=3\ndefault: kind=7\n"
 	for _, w := range workerModes {
 		out, code := runBounded(t, bin, w, 20*time.Second)
 		if out != want || code != 0 {
@@ -972,11 +967,11 @@ static void case_all_clean(void) {
     zrt_chan *a = closed_by(quiet), *b = closed_by(quiet);
     wait_shut(a); wait_shut(b);
     long v;
-    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, a, &v, 0}, {ZRT_SEL_RECV, b, &v, 0}};
+    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, a, &v}, {ZRT_SEL_RECV, b, &v}};
     zrt_frame f;
     zrt_handler_push_catch(&f);
     if (setjmp(f.buf) == 0) {
-        int pick = zrt_select(cs, 2, false, false);   /* no done, no _ */
+        int pick = zrt_select(cs, 2, false, false);   /* no close arm, no _ */
         zrt_handler_pop(&f);
         printf("all-clean: no raise, pick=%d (WRONG)\n", pick);
     } else {
@@ -986,24 +981,43 @@ static void case_all_clean(void) {
     zrt_chan_release(a); zrt_chan_release(b);
 }
 
+/* the crash is RAISED, so it is caught rather than returned */
 static void case_crash(void) {
     zrt_chan *a = closed_by(quiet), *b = closed_by(crasher);
     wait_shut(a); wait_shut(b);
     long v;
-    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, a, &v, 0}, {ZRT_SEL_RECV, b, &v, 0}};
-    int pick = zrt_select(cs, 2, false, false);
-    zrt_err e = zrt_chan_close_err(cs[pick].ch);
-    printf("crash: closed=%d msg=%s kind=%d\n", cs[pick].closed, e.msg, e.kind);
+    zrt_sel_case cs[2] = {{ZRT_SEL_RECV, a, &v}, {ZRT_SEL_RECV, b, &v}};
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) {
+        int pick = zrt_select(cs, 2, false, false);
+        zrt_handler_pop(&f);
+        printf("crash: no raise, pick=%d (WRONG)\n", pick);
+    } else {
+        zrt_handler_pop(&f);
+        zrt_err e = zrt_taken_err();
+        printf("crash: msg=%s kind=%d\n", e.msg, e.kind);
+    }
     zrt_chan_release(a); zrt_chan_release(b);
 }
 
+/* the non-blocking arm is about "nothing ready YET", so it does not answer an
+ * exhausted select: once nothing can be ready, that answer would be a lie */
 static void case_default(void) {
     zrt_chan *a = closed_by(quiet);
     wait_shut(a);
     long v;
-    zrt_sel_case cs[1] = {{ZRT_SEL_RECV, a, &v, 0}};
-    int pick = zrt_select(cs, 1, true, false);   /* has _, so no DeadlockError */
-    printf("default: pick=%d closed=%d\n", pick, pick >= 0 ? cs[pick].closed : 0);
+    zrt_sel_case cs[1] = {{ZRT_SEL_RECV, a, &v}};
+    zrt_frame f;
+    zrt_handler_push_catch(&f);
+    if (setjmp(f.buf) == 0) {
+        int pick = zrt_select(cs, 1, true, false);
+        zrt_handler_pop(&f);
+        printf("default: no raise, pick=%d (WRONG)\n", pick);
+    } else {
+        zrt_handler_pop(&f);
+        printf("default: kind=%d\n", zrt_taken_err().kind);
+    }
     zrt_chan_release(a);
 }
 

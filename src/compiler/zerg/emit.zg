@@ -2541,7 +2541,8 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SDefer(x) => c_defer(em, x, ind)
 		SSpawn(x) => c_spawn(em, x, ind)
 		SSend(ch, v) => c_send(em, ch, v, ind)
-		SSelect(arms) => c_select(em, arms, ind)
+		SSelect(arms) => c_select(em, arms, ind, false)
+		SForSelect(arms) => c_for_select(em, arms, ind)
 		SDel(n) => c_del(em, n, ind)
 		SClose(ch, at_exit) => c_close(em, ch, at_exit, ind)
 		SBreak => c_jump(em, "break", ind)
@@ -2951,7 +2952,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	#
 	# A channel argument is a HANDLE, not a value: the coroutine gets its own handle and
 	# drops it when it returns. Without that the channel's counts never move and it can
-	# never close — every `done` arm waits forever.
+	# never close — every `for select` waits forever.
 	#
 	# WHICH handle is decided by the CALLEE PARAMETER's direction, not by the caller's
 	# variable. A consumer declared `<-chan[T]` takes a holder and not a sender, so it does
@@ -3105,21 +3106,25 @@ fn c_del(mut &em: Emitter, name: str, ind: str) -> str {
 # The arm's BINDING is assembled from that slot later, inside the branch that won, because
 # a `Result[T]` needs the `closed` flag the call has not set yet.
 #
-# `done` and `_` are not cases. They are flags on the call and constants in the answer,
+# `close` and `_` are not cases. They are flags on the call and constants in the answer,
 # which is exactly how the runtime models them.
-fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
+fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 	em.used_rt = true
 	em.used_conc = true
 
 	in2 := ind + "    "
 	mut n := 0
 	mut has_def := "false"
-	mut has_done := "false"
+
+	# the LOOP is the only exit an exhausted select has: `for select` ends there, and a
+	# one-shot select has nowhere to go, which is what DeadlockError says
+	mut has_exit := "false"
+	if loop {
+		has_exit = "true"
+	}
 	for a in arms {
 		if a.op == 0 or a.op == 1 {
 			n = n + 1
-		} else if a.op == 2 {
-			has_done = "true"
 		} else {
 			has_def = "true"
 		}
@@ -3146,7 +3151,6 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_RECV;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
-			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].closed = 0;\n"
 			idx = idx + 1
 		} else if a.op == 1 {
 			cty := c_infer(em, a.ch)
@@ -3158,15 +3162,10 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
-
-			# `closed` is an OUTPUT the runtime writes on the receive path only, and it is
-			# read below without asking which arm won — so a send case's slot has to start
-			# at a defined value rather than at whatever the stack held
-			out = f"{out}{in2}{cs}[{idx}].closed = 0;\n"
 			idx = idx + 1
 		}
 	}
-	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_done + ");\n"
+	out = out + in2 + "int zg_pick" + tag + " = zrt_select(" + cs + ", " + strconv.to_string(n, 10) + ", " + has_def + ", " + has_exit + ");\n"
 
 	# the dispatch. Each recv arm's binding is already in scope, so its body just runs.
 	#
@@ -3184,8 +3183,6 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 		if a.op == 0 or a.op == 1 {
 			cond = f"zg_pick{tag} == {k}"
 			k = k + 1
-		} else if a.op == 2 {
-			cond = f"zg_pick{tag} == ZRT_SEL_DONE"
 		} else {
 			cond = f"zg_pick{tag} == ZRT_SEL_DEFAULT"
 		}
@@ -3197,35 +3194,25 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 		}
 		out = out + kw + cond + ") {\n"
 
-		# A receive arm binds the same `Result[T]` a plain `<-ch` yields, and it is built
-		# HERE — inside the branch that won — from the two things the runtime already
-		# answered: the value it wrote into the slot, and the `closed` flag beside it.
+		# A receive arm binds the VALUE — a plain `T`, not a carrier. An arm that fires has
+		# a value by construction: a cleanly closed channel is an absence, so the runtime
+		# drops that arm rather than firing it, and a crash close is a failure, so it is
+		# raised rather than handed over. Neither can reach a body, so nothing here has to
+		# ask whether what it was handed is real.
 		#
-		# This is the fix for the one silent wrong answer in the chapter. The flag was
-		# never read, so an arm that fired because its channel had closed ran over the slot
-		# from the PREVIOUS receive: the program printed a value that was never sent, as
-		# many times as the loop went round, and exited 0. A crash close reached nobody.
-		#
-		# Calling the receive helper again instead would take a second value off the
-		# channel; and the reason is read from the descriptor's own `ch`, never by
-		# re-rendering the arm's channel expression, which may be a call or an index.
+		# That is the whole of the fix for the chapter's one silent wrong answer, which used
+		# to be a `closed` flag nobody read: an arm that fired on a closed channel ran over
+		# the slot from the PREVIOUS receive and printed a value nobody sent. There is no
+		# flag now because there is no such arm.
 		if a.op == 0 and a.bind != "" {
 			elem := elems[k - 1]
-			cn := c_carrier_name(em, elem)
-			slot := f"{cs}[{k - 1}]"
-			rr := f"zg_rr{tag}_{k - 1}"
-			in3 := in2 + "    "
-			out = out + in3 + cn + " " + rr + " = {0};\n"
-			out = out + in3 + c_res_tag(rr) + " = (int32_t)" + slot + ".closed;\n"
-			out = out + in3 + "if (" + c_res_is_right(rr) + ") { " + c_res_err(rr) + " = zrt_chan_close_err(" + slot + ".ch); }\n"
-			out = out + in3 + "else { " + c_res_ok(rr) + " = zg_rv" + tag + "_" + strconv.to_string(k - 1, 10) + "; }\n"
 
 			# bound right before the body, not up front: every recv arm may call its
 			# variable `v`, and one environment entry per arm would leave each body
 			# reading the last one's
 			em.env_names.append(a.bind)
-			em.env_tys.append(TResult(elem))
-			em.env_cnames.append(rr)
+			em.env_tys.append(elem)
+			em.env_cnames.append(f"zg_rv{tag}_{k - 1}")
 			em.env_dead.append(0)
 		}
 		c_live_restore(em, entry)
@@ -3240,7 +3227,30 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	if not first {
 		out = out + in2 + "}\n"
 	}
+	if loop {
+		# an exhausted `for select` leaves the loop: every watched receive channel has ended
+		out = out + in2 + f"if (zg_pick{tag} == ZRT_SEL_DONE) {{ break; }}\n"
+	}
 	return out + ind + "}\n"
+}
+
+# c_for_select lowers `for select { … }`: the same wait, one ready arm per round, wrapped in
+# the loop whose end it owns. `break` and `continue` inside an arm are this loop's, which is
+# what makes the C `for (;;)` the honest lowering rather than a flag.
+fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
+	# the same two things c_loop_block does for an ordinary loop body, and for the same
+	# reasons: a `break` or a `continue` in an arm must release what the BODY owns and no
+	# more — without the mark it released the enclosing function's channels on its way round
+	# the loop, which closed a channel the loop was still reading and deadlocked — and a loop
+	# may run zero times, so the body's end state joins the entry state rather than replacing
+	# it.
+	entry := c_live_save(em)
+	outer_rel := em.loop_rel
+	em.loop_rel = em.rel_cnames.len()
+	body := c_select(em, arms, ind + "    ", true)
+	em.loop_rel = outer_rel
+	c_live_merge(em, entry)
+	return ind + "for (;;) {\n" + body + ind + "}\n"
 }
 
 # --- lambdas ----------------------------------------------------------------------
@@ -4384,7 +4394,7 @@ fn c_proto(fn_d: FnDecl) -> str {
 #
 # A `select` arm is NOT a loop: it lowers to if/else, so an arm INHERITS whatever loop it
 # is written in. That is what keeps the shape the concurrency chapter is written in legal —
-# `for { select { … done => break } }` — while the same arm outside a `for` is refused.
+# `for select { … <-quit => break }` — while the same arm outside a loop is refused.
 fn c_check_loop_jump(body: list[Stmt], in_loop: bool) {
 	for s in body {
 		match s {

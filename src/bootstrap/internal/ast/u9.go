@@ -47,23 +47,27 @@ const (
 	SelectRecv SelectArmKind = iota
 	// SelectSend is a send arm 'expr <- expr => expr'.
 	SelectSend
-	// SelectDone is the 'done => expr' arm (fires when every watched channel closed).
-	SelectDone
-	// SelectDefault is the '_ => expr' arm (fires when nothing is ready).
+	// SelectDefault is the '_ => expr' arm (fires when nothing is ready). There is no
+	// terminal arm: a select PICKS, and 'for select { … }' is the loop that ENDS when
+	// every watched receive channel has.
 	SelectDefault
 )
 
 // SelectStmt is 'select { arm+ }' (GRAMMAR group 9): the one multi-way wait, it
-// runs the first ready arm.
+// runs the first ready arm. Loop marks the 'for select { arm+ }' spelling, which is
+// the same wait as a LOOP — one ready arm per round, ending when every watched
+// receive channel has. The seed does not lower either (tier 2), but it parses both
+// so a program using one is refused by name rather than by a parse error.
 type SelectStmt struct {
 	base
 	Arms []SelectArm
+	Loop bool
 }
 
 // SelectArm is one arm of a select. Kind picks the shape: a recv arm carries the
 // channel in Chan and an optional bind (Bind, HasBind — Bind is "_" for the
 // '_ := <-ch' wild bind); a send arm carries the channel in Chan and the value
-// in Value; the 'done' and '_' arms carry only Body. It embeds base so each arm
+// in Value; the '_' arm carries only Body. It embeds base so each arm
 // keeps its own line's lead/trail trivia (like a match arm).
 type SelectArm struct {
 	base

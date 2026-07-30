@@ -362,13 +362,22 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 #     v := <-ch => body      a receive that names what it received
 #        <-ch => body        a receive that discards it
 #     ch <- v => body        a send
-#     done => body           every watched receive channel has closed
 #     _ => body              nothing was ready (non-blocking)
 #
-# `done` and `_` are CONTEXTUAL — GRAMMAR makes them special only as an arm head, so
-# they arrive as ordinary identifiers and are recognised by position, not by the lexer.
+# The terminal arm is spelled with the RESERVED `close`, which is what makes it impossible to
+# misread or to mistype: `close` is already the keyword that ends a stream (`close(ch)`), and a
+# keyword cannot also be the name of something in scope. It used to be the contextual word
+# `done`, and contextual meant this parser took ANY identifier before `=>` as an arm head and
+# silently made everything but `done` the `_` arm — so `closed => …` compiled, and turned the
+# whole select non-blocking. `_` stays contextual because it is punctuation: nothing can be
+# named `_` that a reader would confuse with the wildcard.
 fn parse_select(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'select'
+	return SSelect(parse_sel_arms(p))
+}
+
+# parse_sel_arms reads the `{ arm+ }` both spellings share.
+fn parse_sel_arms(mut &p: Parser) -> list[SelArm] {
 	expect(p, LBrace)
 	skip_semis(p)
 	mut arms: list[SelArm] = []
@@ -377,20 +386,34 @@ fn parse_select(mut &p: Parser) -> Stmt {
 		skip_semis(p)
 	}
 	expect(p, RBrace)
-	return SSelect(arms)
+
+	# GRAMMAR says `select-arm+`. An empty one has nothing to wait FOR, so it would park on
+	# no channel at all and never wake — a hang with no cause to find.
+	if arms.len() == 0 {
+		raise "a select needs at least one arm — an empty one waits on nothing and never wakes"
+	}
+	return arms
 }
 
 fn parse_sel_arm(mut &p: Parser) -> SelArm {
-	# `done` / `_` heads: an identifier immediately followed by `=>`
+	# There is no terminal arm. A select PICKS a ready arm; ENDING is the loop's job, and
+	# `for select { … }` is the loop that owns it. `close` here is refused by name rather
+	# than quietly parsed, because it was an arm until this change.
+	if p_at(p, Close) and peek_kind(p, 1) == FatArrow {
+		raise "`close` is not a select arm head — a select picks a ready arm, and `for select { … }` is the loop that ends when every watched channel has"
+	}
+
+	# `_ => …` — the non-blocking arm, and the ONLY bare identifier a select arm may open with.
+	# Anything else here is refused by name: it used to become this arm silently, which turned a
+	# typo into a select that no longer blocks and no longer ends.
 	if p_at(p, Ident) and peek_kind(p, 1) == FatArrow {
 		head := cur(p).lexeme
+		if head != "_" {
+			raise f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has"
+		}
 		p_advance(p)
 		p_advance(p) # '=>'
-		mut op := 3
-		if head == "done" {
-			op = 2
-		}
-		return SelArm(op, "", ENil, ENil, parse_sel_body(p))
+		return SelArm(3, "", ENil, ENil, parse_sel_body(p))
 	}
 
 	# `v := <-ch => …` — a named receive
@@ -971,6 +994,14 @@ fn parse_if(mut &p: Parser) -> Stmt {
 fn parse_for(mut &p: Parser) -> Stmt {
 	p_advance(p) # 'for'
 	return SFor(false, ENil, parse_block(p)) if p_at(p, LBrace)
+
+	# `for select { … }` — one ready arm per round, until every watched channel has ended.
+	# A condition cannot begin with `select`, so one token of lookahead separates it from
+	# `for <cond> { … }` with no ambiguity at all.
+	if p_at(p, Select) {
+		p_advance(p) # 'select'
+		return SForSelect(parse_sel_arms(p))
+	}
 
 	# for-in: `for name in iterable { ... }`
 	if p_at(p, Ident) and peek_kind(p, 1) == In {

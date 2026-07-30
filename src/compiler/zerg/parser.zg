@@ -1601,6 +1601,11 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	raise "NotImplemented: a match arm's body is an expression — a reassignment in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, Assign)
 	raise "NotImplemented: a match arm's body is an expression — a send in an arm needs a block body, which this emitter cannot yet lower" if p_at(p, LArrow)
 
+	# An arm's guard goes BEFORE the `=>` (GRAMMAR:422). Written after the body it was
+	# silently DROPPED — `Right(e) => 0 if e is ValueError` compiled to an unconditional arm,
+	# and the arm counted toward exhaustiveness as if it had no guard at all.
+	raise "a match arm's guard goes before the `=>` — write `pattern if cond => body`" if p_at(p, If)
+
 	return Arm(pat, lit, bind, ctor, binds, has_guard, grd, body)
 }
 

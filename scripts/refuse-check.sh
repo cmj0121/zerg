@@ -723,6 +723,54 @@ fn main() {
 }
 EOF
 
+# Five forms the specification described as working that the shipped compiler does not have.
+# Each reached cc, or named a symptom two steps from what was written.
+expect "$ZERG" for-in-over-a-str "binds each code point" <<'EOF'
+fn main() {
+	for c in "ab" {
+		print 1
+	}
+}
+EOF
+
+expect "$ZERG" ordering-on-an-aggregate "does not generate" <<'EOF'
+#[derive(Ord)]
+struct P {
+	x: int
+}
+
+fn main() {
+	print P(1) < P(2)
+}
+EOF
+
+expect "$ZERG" rendering-a-composite "as text" <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	print str(P(1))
+}
+EOF
+
+expect "$ZERG" unknown-list-method "the list method" <<'EOF'
+fn main() {
+	xs := [1, 2, 3]
+	print xs.slice(0, 2).len()
+}
+EOF
+
+expect "$ZERG" tuple-pattern-in-an-arm "a tuple pattern in a" <<'EOF'
+fn main() {
+	t := (1, 2)
+	print match t {
+		(a, b) => a
+		_      => 0
+	}
+}
+EOF
+
 # --- the seed ---------------------------------------------------------------------
 
 # The seed TYPES a map for-in (it binds the key) and does not lower one. The unchecked

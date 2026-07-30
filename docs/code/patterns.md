@@ -89,8 +89,11 @@ Destructuring binds directly at a `:=`: a tuple `(a, b) := e` and a struct `P{x,
 step **[implemented]** — the everyday way a multiple return or a small record is consumed. In a `match` (see
 [Control Flow](control-flow.md)) the **struct**, **tuple**, **variant**, **wildcard `_`**, **`as`**,
 **range**, and **negative-literal** patterns, together with their **nesting**, are **[implemented]**. Two
-forms `GRAMMAR` allows are **[not yet]**: an **or-pattern that binds** (`A(x) | B(x) =>`) and a **list
-pattern** (`[h, ..t]`) — the list pattern parses and type-checks but is rejected at code generation.
+forms `GRAMMAR` allows are **[not yet]**: an **or-pattern** (`A | B =>`, binding or not) and a **list
+pattern** (`[h, ..t]`). Both are rejected at code generation: the list pattern after type-checking, the
+or-pattern because `|` there is read as the bitwise operator and an arm that matched the wrong value in
+silence is worse than one that does not build. See [Control Flow](control-flow.md) for what `zerg fmt` can
+do about the contiguous-integer case.
 
 ## Deliberately not added
 

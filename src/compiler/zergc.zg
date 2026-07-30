@@ -634,6 +634,7 @@ fn rt_units() -> list[str] {
 fn ctx_unit() -> str {
 	# the intrinsic carries no signature, so the type is named here rather than inferred
 	a: str = __zrt_arch()
+
 	return "ctx_arm64.S" if a == "arm64"
 	return "ctx_x86_64.S" if a == "x86_64"
 
@@ -645,6 +646,7 @@ fn ctx_unit() -> str {
 # parallel.
 fn thread_unit() -> str {
 	p: str = __zrt_platform()
+
 	return "thread_win32.c" if p == "windows"
 	return "thread_pthread.c" if p == "linux" or p == "darwin" or p == "freebsd" or p == "openbsd" or p == "netbsd"
 

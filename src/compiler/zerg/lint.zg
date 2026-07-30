@@ -11,6 +11,8 @@
 #   L102  an unused private function — a public one is a module's interface and may have
 #         no caller in this program, but a private one with no caller is simply dead
 #   L103  a binding that is never read — the value was computed for nobody
+#   L104  `_ := expr` — a discard binder over an expression that is ALREADY a statement, so
+#         the binder is the one part of the line nothing reaches
 #
 # `L2xx` is NULL SAFETY: an optional handled in a way that works but says the wrong thing.
 # Nothing here is a compile error — each of these programs runs — which is exactly why a
@@ -60,7 +62,7 @@ fn c_ret_is_opt(fd: FnDecl) -> bool {
 	return false if not fd.has_ret
 	return match fd.ret {
 		TOpt(_) => true
-		_ => false
+		_       => false
 	}
 }
 
@@ -137,7 +139,7 @@ fn lint_opt_force(x: Expr, fname: str, ret_opt: bool, mut &out: list[str]) {
 fn is_nil_expr(e: Expr) -> bool {
 	return match e {
 		ENil => true
-		_ => false
+		_    => false
 	}
 }
 
@@ -172,11 +174,21 @@ fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str])
 # function that declared it. It is deliberately per-function and name-based: the subset
 # has no shadowing rules to model, and a name that reappears anywhere in the body is
 # enough to call the binding read.
+#
+# `_` is answered here too, as L104, and not by a walk of its own: this loop is already handed
+# every name a function binds, `_` among them. An unread `_` is what `_` MEANS, so "never read"
+# is the one thing there is no point saying about it — what is worth saying is that the BINDER
+# has no reader, and that is the same fact this walk already has in hand.
 fn lint_unread_bindings(f: File, mut &out: list[str]) {
 	for fd in f.fns {
 		mut names: list[str] = []
 		collect_binds(fd.body, names)
 		for n in names {
+			if n == "_" {
+				out.append(f"L104 `_ :=` in `{fd.name}` — the expression is already a statement, so the binder says nothing")
+				continue
+			}
+
 			mut ids: list[str] = []
 			mut calls: list[str] = []
 			mut ns: list[str] = []
@@ -200,8 +212,17 @@ fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 			SForIn(name, iter, body_b) => collect_binds(body_b, names)
 			SIfLet(name, value, then_b, has_else, else_b) => collect_binds_iflet(name, then_b, else_b, names)
 			SExpr(x) => collect_binds_expr(x, names)
+			SSelect(arms) => collect_binds_arms(arms, names)
 			_ => skip()
 		}
+	}
+}
+
+# collect_binds_arms reaches the bindings inside a select's arm bodies. Without it a binding
+# made in an arm was invisible to L103 and L104 both — an arm body is a block like any other.
+fn collect_binds_arms(arms: list[SelArm], mut &names: list[str]) {
+	for a in arms {
+		collect_binds(a.body, names)
 	}
 }
 
@@ -216,6 +237,11 @@ fn collect_binds_let(name: str, value: Expr, mut &names: list[str]) {
 fn collect_binds_expr(e: Expr, mut &names: list[str]) {
 	match e {
 		EGuard(body_b) => collect_binds(body_b, names)
+
+		# a closure's body is a block too, and `walk_body` already counts the reads inside one
+		# — so without this the bindings in a closure were collected by nobody and answered to
+		# neither rule
+		EFn(ps, has_ret, ret, body_b) => collect_binds(body_b, names)
 		_ => skip()
 	}
 }
@@ -249,12 +275,12 @@ fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &
 			SFor(is_cond, cond, body_b) => walk_loop(cond, body_b, ids, calls, ns)
 			SForIn(name, iter, body_b) => walk_loop(iter, body_b, ids, calls, ns)
 			SRaise(x) => walk_expr(x, ids, calls, ns)
-		SDefer(x) => walk_expr(x, ids, calls, ns)
-		SSpawn(x) => walk_expr(x, ids, calls, ns)
-		SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
-		SSelect(arms) => walk_sel(arms, ids, calls, ns)
-		SDel(n) => ids.append(n)
-		SClose(ch, at_exit) => walk_expr(ch, ids, calls, ns)
+			SDefer(x) => walk_expr(x, ids, calls, ns)
+			SSpawn(x) => walk_expr(x, ids, calls, ns)
+			SSend(ch, v) => walk_pair(ch, v, ids, calls, ns)
+			SSelect(arms) => walk_sel(arms, ids, calls, ns)
+			SDel(n) => ids.append(n)
+			SClose(ch, at_exit) => walk_expr(ch, ids, calls, ns)
 			_ => skip()
 		}
 	}
@@ -318,7 +344,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		# only the SUBJECT is a name the program bound — the right side of `is` is an error
 		# kind, so counting it as a use would keep an unused import alive.
 		EIs(x, name) => walk_expr(x, ids, calls, ns)
-		_ => skip()
+		_            => skip()
 	}
 }
 
@@ -346,7 +372,7 @@ fn walk_call(name: str, args: list[Expr], mut &ids: list[str], mut &calls: list[
 fn walk_method(target: Expr, meth: str, args: list[Expr], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	match target {
 		EIdent(name) => ns.append(name)
-		_ => skip()
+		_            => skip()
 	}
 	calls.append(meth)
 	walk_expr(target, ids, calls, ns)

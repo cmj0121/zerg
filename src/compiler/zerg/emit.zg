@@ -2216,6 +2216,13 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		raise f"no type named `{name}` to construct" if not c_is_struct_name(em, name)
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
+
+	# NOTHING DECLARES THIS FUNCTION. It used to be spelled `zg_<name>(…)` and handed to
+	# cc, which reported a call to an undeclared function against a file under .zerg-cache
+	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
+	# is exactly the answer this should be giving by name.
+	raise f"undefined function `{name}`" if not c_is_free_fn(em, name)
+
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"
 }
 
@@ -2410,6 +2417,15 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		em.used_fnptr = true
 		return f"((zg_fnptr)zg_{n})"
 	}
+
+	# NOTHING IN SCOPE ANSWERS TO THIS NAME. It used to be spelled `zg_<n>` and handed to
+	# cc, which reported "use of undeclared identifier" against a file under .zerg-cache —
+	# for the commonest mistake anyone makes, a typo. The seed has said `undefined name`
+	# all along.
+	#
+	# A module constant, a struct name and a variant are all bound by the time a body is
+	# emitted, so the check is one question: did anything bind it?
+	raise f"undefined name `{n}`" if not c_is_bound(em, n) and not c_is_struct_name(em, n)
 
 	# every read of a binding funnels through here, which is what makes this the one place
 	# a use after `del` has to be caught

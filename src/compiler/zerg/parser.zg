@@ -42,10 +42,16 @@ fn p_advance(mut &p: Parser) {
 
 # expect consumes the current token when it is of the wanted kind; on a mismatch it
 # leaves the cursor put (the subset corpus is well-formed, so this is a no-op there).
+# expect consumes the token the grammar requires, and REPORTS when it is not there.
+#
+# It used to advance on a match and say nothing otherwise, so a malformed construct was not
+# reported at all — the parser derailed quietly and whatever it built from the wreckage
+# reached the emitter. Every truncated form went that way: `print guard`, a `fn` with no
+# name, a `chan` with no element type, an unclosed `{`. The first complaint came from cc,
+# about a file under .zerg-cache, and it named nothing the programmer had written.
 fn expect(mut &p: Parser, k: Kind) {
-	if p_at(p, k) {
-		p_advance(p)
-	}
+	raise f"expected `{kind_name(k)}`, found `{cur(p).lexeme}`" if not p_at(p, k)
+	p_advance(p)
 }
 
 fn skip_semis(mut &p: Parser) {

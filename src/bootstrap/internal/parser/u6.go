@@ -167,7 +167,12 @@ func (p *parser) parseGuard() ast.Expr {
 	return spanned(&ast.GuardExpr{Body: body}, span(start, body.Span().End))
 }
 
-// parseRaise parses the simple statement 'raise e (from c)?' (GRAMMAR group 8).
+// parseRaise parses the simple statement 'raise e (from c)? (if cond)?' (GRAMMAR
+// group 8). A 'raise' is one of GRAMMAR's four diverges, and every one of them
+// carries the postfix guard: 'raise e if c' is sugar for 'if c { raise e }', and
+// is desugared into exactly that here so nothing downstream has to know the form.
+// The seed has no formatter to round-trip through, which is what makes desugaring
+// in the parser the whole of the change.
 func (p *parser) parseRaise() ast.Stmt {
 	start := p.expect(token.Raise).Span.Start
 	r := &ast.RaiseStmt{Value: p.parseExpr()}
@@ -176,7 +181,14 @@ func (p *parser) parseRaise() ast.Stmt {
 		r.From = p.parseExpr()
 		end = r.From.Span().End
 	}
-	return spanned(r, span(start, end))
+	stmt := spanned(r, span(start, end))
+	if !p.accept(token.If) {
+		return stmt
+	}
+	cond := p.parseExpr()
+	sp := span(start, cond.Span().End)
+	body := spanned(&ast.Block{Stmts: []ast.Stmt{stmt}}, sp)
+	return spanned(&ast.IfStmt{Branches: []ast.IfBranch{{Cond: cond, Body: body}}}, sp)
 }
 
 // parseBreakContinue parses 'break'/'continue' with an optional trailing 'if'

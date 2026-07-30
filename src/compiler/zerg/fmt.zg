@@ -2609,8 +2609,8 @@ fn fmt_before(a: str, b: str) -> bool {
 	return x.len() < y.len()
 }
 
-# is_jump reports the three statements that leave the block they are in, and so are the
-# ones the postfix guard is defined for.
+# is_jump reports the statements that DIVERGE — leave the block they are in without
+# producing a value — which is exactly the set GRAMMAR's postfix guard is defined for.
 fn is_jump(k: Kind) -> bool {
-	return k == Return or k == Break or k == Continue
+	return k == Return or k == Break or k == Continue or k == Raise
 }

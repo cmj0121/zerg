@@ -257,6 +257,22 @@ fn main() {
 }
 EOF
 
+# An arm's guard goes BEFORE the `=>` (GRAMMAR:422). Written after the body it was silently
+# DROPPED, so the arm compiled unconditional AND counted toward exhaustiveness as if it had
+# no guard — the two halves of the guard rule, both wrong, from one easy typo.
+expect "$ZERG" arm-guard-after-the-body "goes before the \`=>\`" <<'EOF'
+fn f(n: int) -> str {
+	return match n {
+		1 => "one" if n > 0
+		_ => "rest"
+	}
+}
+
+fn main() {
+	print f(1)
+}
+EOF
+
 # A guard makes an arm conditional, so it covers nothing: the compiler cannot prove the guard
 # holds (GRAMMAR:410), and `A` below is uncovered even though it is named.
 expect "$ZERG" guarded-arm-covers-nothing "missing variant K.A" <<'EOF'

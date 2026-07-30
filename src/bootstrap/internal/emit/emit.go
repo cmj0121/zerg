@@ -253,6 +253,9 @@ func (e *emitter) program() {
 
 	// prototypes first, so declaration order does not constrain calls
 	for _, inst := range e.prog.Funcs {
+		if e.skipBundledConcurrency(inst) {
+			continue
+		}
 		e.line(e.prototype(inst) + ";")
 	}
 	// per-module init function prototypes (Phase 1g S3); none for a no-init program.
@@ -265,6 +268,9 @@ func (e *emitter) program() {
 	e.emitRefHelpers()
 
 	for _, inst := range e.prog.Funcs {
+		if e.skipBundledConcurrency(inst) {
+			continue
+		}
 		e.function(inst)
 		e.blank()
 	}
@@ -746,12 +752,6 @@ func (e *emitter) stmt(s ast.Stmt) {
 		e.delStmt(n)
 	case *ast.DeferStmt:
 		e.deferStmt(n)
-	case *ast.SpawnStmt:
-		e.spawnStmt(n)
-	case *ast.SendStmt:
-		e.sendStmt(n)
-	case *ast.SelectStmt:
-		e.selectStmt(n)
 	case *ast.WithStmt:
 		e.withStmt(n)
 	case *ast.RaiseStmt:
@@ -759,9 +759,6 @@ func (e *emitter) stmt(s ast.Stmt) {
 	case *ast.ExprStmt:
 		// `close(ch)` is a statement rather than a value (closeCallStmt says why), so it is
 		// taken here before the expression dispatch ever sees the call.
-		if e.closeCallStmt(n.X) {
-			return
-		}
 		e.line(e.expr(n.X) + ";")
 	default:
 		// The statement half of the anti-silence net the expression dispatch already
@@ -1159,10 +1156,6 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	}
 	// A channel: the loop IS the receive, and the close is what ends it. A channel is the
 	// other thing iterated without being a container (docs/code/coroutine.md).
-	if ct, ok := e.cur.ExprType(e.info, n.Iter).(*types.Chan); ok {
-		e.forInChan(n, ct)
-		return
-	}
 	// A str: iterate its code points. Materialize the runes into a temporary list and
 	// walk it, so the body's loop variable binds each rune (docs/code/collections.md).
 	if e.cur.ExprType(e.info, n.Iter) == sema.Str {
@@ -1388,6 +1381,24 @@ func (e *emitter) resolve(name string) string {
 	return "zg_" + name // unreachable for a checked program
 }
 
+// systemError reports a state the seed cannot classify — not the programmer's mistake but
+// the SEED's. It is tier 3 of the contract in README.md, and it exists because the
+// alternative is what these sites used to do: fall through to "0" and emit C naming
+// something nothing declared, after which cc reports a real error against a file under
+// .zerg-cache that the programmer cannot open.
+//
+// It returns a placeholder so the pass keeps walking and one run reports everything it
+// found; the DIAGNOSTIC is what stops the C from being written. The rule it enforces: the
+// seed may refuse a program, and it may fail, but it may never be wrong quietly.
+func (e *emitter) systemError(at ast.Node, format string, args ...any) string {
+	span := token.Span{}
+	if at != nil {
+		span = at.Span()
+	}
+	e.diags.Add(span, "SystemError: "+format, args...)
+	return "0"
+}
+
 // --- expressions --------------------------------------------------------------
 
 func (e *emitter) expr(x ast.Expr) string {
@@ -1498,7 +1509,7 @@ func (e *emitter) expr(x ast.Expr) string {
 				return fmt.Sprintf("((uint64_t)%s(%s))", op, e.ctype(args[0]))
 			}
 		}
-		return "0"
+		return e.systemError(n, "no lowering for this call")
 	case *ast.ListLit:
 		// A list literal in fixed-array position ([int; N] = [a, b, …]) lowers to a C
 		// array initializer, which is what the surrounding binding's array type consumes.
@@ -1545,10 +1556,6 @@ func (e *emitter) expr(x ast.Expr) string {
 		return e.tupleLit(n)
 	case *ast.TupleIndex:
 		return e.tupleIndex(n)
-	case *ast.ChanNew:
-		return e.chanNew(n)
-	case *ast.Recv:
-		return e.recvExpr(n)
 	case *ast.Force:
 		return e.forceExpr(n)
 	case *ast.Try:
@@ -2077,7 +2084,7 @@ func (e *emitter) eitherPatternWalk(p *ast.VariantPattern, place string, placeT 
 	ei := placeT.(*types.Either)
 	c, ok := e.carrierFor(placeT)
 	if !ok {
-		return "0" // an un-modelled Either carrier (e.g. a channel recv): leave it
+		return e.systemError(p, "no carrier for %s in a pattern", placeT)
 	}
 	var tag int
 	var member string
@@ -2112,9 +2119,6 @@ func (e *emitter) variantTag(subjT sema.Type, name string) int {
 
 func (e *emitter) call(n *ast.Call) string {
 	// `close(ch)` reaching the expression dispatch is a `close` where a statement cannot go.
-	if e.closeOutOfStatement(n) {
-		return ""
-	}
 	// a primitive conversion `T(x)`.
 	if s, ok := e.convCallEmit(n); ok {
 		return s
@@ -2376,7 +2380,7 @@ func (e *emitter) callTarget(n *ast.Call, id *ast.Ident) string {
 		return m
 	}
 	if id == nil {
-		return "0"
+		return e.systemError(n, "unresolved call target")
 	}
 	return e.prog.CallTarget(id.Name)
 }
@@ -2703,7 +2707,7 @@ func (e *emitter) assignTarget(t ast.AssignTarget) string {
 	if lv, ok := t.(*ast.LValueTarget); ok {
 		return e.expr(lv.X)
 	}
-	return "0"
+	return e.systemError(nil, "no lowering for this assignment target")
 }
 
 // --- lowering helpers ---------------------------------------------------------

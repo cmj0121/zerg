@@ -60,18 +60,23 @@ was cut down to its one job — closures and function values, `map[K, V]`, `#[dy
 dispatch, and `unsafe` pointers and inline assembly. Those are marked **[not yet]** again:
 the seed rejects them with a diagnostic, which is exactly what that marker promises.
 
-**Concurrency is the exception, and a narrower claim.** Coroutines, channels and `select`
-were removed and then restored: the seed lowers the **happy path** — `chan[T](cap)`,
-`ch <- v`, `<-ch` as a real `Result[T]`, `close(ch)` and `defer close(ch)`, `spawn f(args)`,
-`select` with all four arm shapes, and `for v in ch` — and refuses **five shapes** by name
-rather than mis-emitting them: a **directional channel type**, and a `spawn` whose callee is
-a **method**, a **namespaced** function, a **closure**, or carries a **`mut &`** argument.
-Each is a clean diagnostic and a nonzero exit. See [Coroutines](code/coroutine.md).
+**Concurrency belongs to `zerg` alone.** The seed lowers none of it — `spawn`, `chan[T]`,
+`select`, a send, a receive, `close` and `for v in ch` are each refused by name, with a
+nonzero exit and no C. That is not a gap being tracked: it is the seed's contract (see
+[`src/bootstrap/README.md`](../src/bootstrap/README.md)), which says the seed supports the
+slice of the language the self-hosting compiler's own sources are written in, and refuses
+the rest. The self-host chain contains no concurrency at all.
 
-Two more belong to **neither** compiler rather than to the seed. A **`main(args)`** in a
-concurrent program is refused by both — the scheduler's entry shims take a nullary function
-pointer — and the receive operator **`?`** is the one concurrency feature where the seed is
-the **wider** of the two: it builds it, and `zerg` refuses it by name.
+The reason is worth stating, because it is the argument for the whole contract. A compiler
+that lowers a chapter it is not the authority on is a SECOND implementation that can
+DISAGREE — and every gap this specification has had to close on the concurrency chapter was
+one of those disagreements. A refusal cannot disagree. See [Coroutines](code/coroutine.md)
+for what the shipped compiler does, which is all of it.
+
+One item belongs to **neither** compiler: a **`main(args)`** in a concurrent program, whose
+scheduler entry shims take a nullary function pointer. And the receive operator **`?`** is
+where the seed is still the **wider** of the two — it threads `Result[T]`, and `zerg`
+refuses that half by name.
 
 A section with no marker inherits the marker of its enclosing feature; a paragraph may override with its
 own. A **[deviation]** always states both the specified behavior and what the implementation does instead.

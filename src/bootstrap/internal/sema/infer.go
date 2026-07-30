@@ -768,12 +768,32 @@ func (c *checker) enumVariantSym(sym *Symbol, name string) *Symbol {
 	return nil
 }
 
+// allOptional reports whether every type in ts is a `T?` — the one field kind GRAMMAR
+// gives an implicit default, and therefore the one a construction may leave off.
+func allOptional(ts []Type) bool {
+	for _, t := range ts {
+		if _, ok := t.(*types.Opt); !ok {
+			return false
+		}
+	}
+	return len(ts) > 0
+}
+
 // bindCallArgs binds call arguments to declared parameters and checks each. The
 // pure-positional call with no defaults keeps the Phase-0 arity/type messages; a
 // call using named arguments or defaults goes through the general matcher.
 func (c *checker) bindCallArgs(name string, n *ast.Call, pnames []string, ptypes []Type, defaults []bool) {
 	if !hasNamedArg(n.Args) && !anyTrue(defaults) {
 		if len(n.Args) != len(ptypes) {
+			// GRAMMAR group 7 gives a `T?` field one implicit default — `nil`, its natural
+			// absent state — so a construction may leave those off. The seed does not build
+			// it, and the difference matters to a reader: an arity error says they typed the
+			// wrong number of arguments, when what they did was use a form of the language
+			// this compiler stops at. Tier 2 of the contract in src/bootstrap/README.md.
+			if len(n.Args) < len(ptypes) && allOptional(ptypes[len(n.Args):]) {
+				c.errorf(n.Span(), "the bootstrap seed does not supply the implicit `nil` for an omitted `T?` field; pass it explicitly")
+				return
+			}
 			c.errorf(n.Span(), "function %q expects %d argument(s), got %d", name, len(ptypes), len(n.Args))
 		}
 		for i, a := range n.Args {

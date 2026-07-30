@@ -1491,6 +1491,18 @@ struct Printed {
 	trail: list[int]
 }
 
+# fmt_pop_int drops a list's last element. The subset has no `pop`, and a stack is what the
+# brace nesting needs, so the drop is written here once rather than at each use.
+fn fmt_pop_int(xs: list[int]) -> list[int] {
+	mut out: list[int] = []
+	mut i := 0
+	for i < xs.len() - 1 {
+		out.append(xs[i])
+		i = i + 1
+	}
+	return out
+}
+
 fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut out: list[byte] = []
 	mut arrow: list[int] = []
@@ -1521,10 +1533,35 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut pline: list[int] = []
 	mut pind: list[int] = []
 	mut psp := 0
+
+	# bsave is the bracket depth the INNERMOST open `{` was seen at, and bstack the ones
+	# outside it. A `;` counts as the fill separator only while the bracket depth is deeper
+	# than that — which is the lexer's rule for where it stops inserting one.
+	mut bsave := 0
+	mut bstack: list[int] = []
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
 		break if is_eof(t.kind)
+
+		# A `;` INSIDE BRACKETS is not a statement separator: it is the fill/array form's
+		# own separator (GRAMMAR:475's `[type ';' const-expr]`, and `[v; N]`). Breaking the
+		# line there turned `[0; 8]` — eight zeros — into `[0` / `8]`, a list of TWO, which
+		# is the one thing a formatter may never do: change what the program means.
+		#
+		# "Inside brackets" is the LEXER's question, and the answer is the lexer's rule: a
+		# `{` RESETS the depth (lexer.zg's brace_push) because a block inside a call's
+		# parens is a statement list again, and ASI resumes there. Asking `psp > 0` alone
+		# printed the inserted `;` of every closure body written inside a call.
+		if is_semi(t.kind) and psp > bsave {
+			fmt_write(out, fmt_text(t))
+			col = col + 1
+			prev2 = prev
+			prev = t.kind
+			prev_line = t.line
+			i = i + 1
+			continue
+		}
 		if is_semi(t.kind) {
 			if col > 0 {
 				out.append(byte(10))
@@ -1578,6 +1615,10 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
 			# fires at bracket depth 0 — so block structure is the formatter's own rule.
 			if is_rbrace(t.kind) {
+				if bstack.len() > 0 {
+					bsave = bstack[bstack.len() - 1]
+					bstack = fmt_pop_int(bstack)
+				}
 				if depth > 0 {
 					depth = depth - 1
 				}
@@ -1637,6 +1678,8 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 
 			# a `{` opens a block: whatever follows starts on its own line, one deeper
 			if is_lbrace(t.kind) {
+				bstack.append(bsave)
+				bsave = psp
 				depth = depth + 1
 				out.append(byte(10))
 				col = 0

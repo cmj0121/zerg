@@ -230,6 +230,7 @@ func (e *emitter) prepareRuntime() {
 	// select recv arm — whose bind is declared into the arm's scope rather than recorded as
 	// an expression type — this pass is the only place that type is known.
 	e.prepareChannels()
+	e.rejectOutOfSubset()
 	// Number the general Result/Either/optional carriers (Phase 1f U0). Sets
 	// needsResult/needsRuntime only when a carrier is found.
 	e.prepareResults()

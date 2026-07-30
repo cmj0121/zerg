@@ -107,7 +107,7 @@ list, and a row leaves it by being refused, never by being quietly dropped.
 | decorators, incl. `#[derive]`                                          | to refuse |
 | module-level `const`, `init()`                                         | to refuse |
 | `unsafe`, `asm`, `ptr[T]`                                              | refused   |
-| command literals                                                       | to refuse |
+| command literals                                                       | refused   |
 
 A form the FRONT END still parses is not thereby supported: the refusal may land in sema or
 at the emitter's door. Narrowing the parser is a separate pass, and not an urgent one — what

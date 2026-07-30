@@ -1949,6 +1949,11 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	# not the value, which is a struct. Casting the struct is what this used to emit, and C
 	# rejected it against a file in .zerg-cache that nobody wrote.
 	xt := c_infer(em, x)
+
+	# a CARRIER is not a value to convert: `int(k)` where k is a `K?` used to cast the
+	# carrier struct, which cc rejected against generated code. The unwrap is the language's
+	# and has to be written.
+	raise f"`{ty_name(ty)}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
 	if c_name_in(em.enum_names, c_named_of(xt)) {
 		raise f"enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
 

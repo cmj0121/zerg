@@ -600,7 +600,7 @@ func (e *emitter) function(inst *mono.Instance) {
 	// On fallthrough, unwind the function's cleanup stack (running param drops and any
 	// top-level defers/drops) before the trailing return; an explicit final return
 	// already unwound.
-	if !endsWithReturn(fn.Body) {
+	if !endsWithDiverge(fn.Body) {
 		if e.fnMark != "" {
 			e.line(fmt.Sprintf("zrt_unwind_to(%s);", e.fnMark))
 		}
@@ -617,14 +617,25 @@ func (e *emitter) function(inst *mono.Instance) {
 	e.popScope()
 }
 
-// endsWithReturn reports whether a block's last statement is an unconditional
-// return (a 'return ... if c' may fall through, so it does not count).
-func endsWithReturn(b *ast.Block) bool {
+// endsWithDiverge reports whether a block's last statement leaves the function
+// without falling through — an unconditional 'return', or a 'raise', which aborts.
+// A 'return ... if c' may fall through, so it does not count; a postfix-guarded
+// 'raise e if c' is desugared into an IfStmt by the parser and so is not one either.
+//
+// The raise case matters because the fallthrough return below is typed from the
+// signature: a function whose body ENDS in a raise needs no trailing return at all,
+// and emitting one spelled `return 0;` is a C type error for every non-scalar result.
+func endsWithDiverge(b *ast.Block) bool {
 	if len(b.Stmts) == 0 {
 		return false
 	}
-	r, ok := b.Stmts[len(b.Stmts)-1].(*ast.ReturnStmt)
-	return ok && r.Cond == nil
+	switch s := b.Stmts[len(b.Stmts)-1].(type) {
+	case *ast.ReturnStmt:
+		return s.Cond == nil
+	case *ast.RaiseStmt:
+		return true
+	}
+	return false
 }
 
 // cMain wraps zg_main in a C entry point. A nil/int main keeps the Phase 0
@@ -1164,7 +1175,18 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	}
 	// A fixed array [T; N]: index it and copy each element into a `T v` local the body
 	// reads. The loop var and the body share one name scope and teardown frame.
-	arr, _ := e.cur.ExprType(e.info, n.Iter).(*types.Array)
+	//
+	// Anything else reaching here is a shape sema TYPED but this pass does not lower — a
+	// map is the one that exists today (`for k in m` binds the key). The assertion below
+	// used to be unchecked, so it was a nil dereference: the seed CRASHED with a Go panic
+	// and a stack trace instead of reporting anything. A form the compiler cannot lower is
+	// refused by name, which is the whole contract; it is never a crash.
+	arr, ok := e.cur.ExprType(e.info, n.Iter).(*types.Array)
+	if !ok {
+		e.diags.Add(n.Iter.Span(), "NotImplemented: the bootstrap seed does not lower a for-in over %s: "+
+			"it builds the self-hosting compiler, which does", e.cur.ExprType(e.info, n.Iter))
+		return
+	}
 	iv := e.freshName("i")
 	e.line(fmt.Sprintf("for (size_t %s = 0; %s < %d; %s++) {", iv, iv, arr.N.I, iv))
 	e.indent++

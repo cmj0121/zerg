@@ -82,8 +82,10 @@ q := new_query().where("age > 18").order("name").limit(10)
 解構可直接在 `:=` 綁定:一個 tuple `(a, b) := e` 與一個 struct `P{x, y} := e` 都一步解開 **[implemented]**——這是消費
 多重回傳或小型 record 的日常方式。在 `match`(見 [控制流](control-flow.zh-TW.md))中,**struct**、**tuple**、
 **variant**、**萬用 `_`**、**`as`**、**range**、與**負數 literal** pattern,連同它們的**巢狀**,都是
-**[implemented]**。`GRAMMAR` 允許但 **[not yet]** 的有兩種:一個**帶綁定的 or-pattern**(`A(x) | B(x) =>`)與一個
-**list pattern**(`[h, ..t]`)——list pattern 會 parse 且通過型別檢查,但在 code generation 被拒絕。
+**[implemented]**。`GRAMMAR` 允許但 **[not yet]** 的有兩種:一個 **or-pattern**(`A | B =>`,綁不綁都算)與一個
+**list pattern**(`[h, ..t]`)。兩者都在 code generation 被拒絕:list pattern 在型別檢查之後,or-pattern 則是因為那裡的
+`|` 被讀成位元運算子,而一個靜默比對到錯的值的 arm,比一個編不過的 arm 更糟。`zerg fmt` 對「連續整數」那個情況能做
+什麼,見 [控制流](control-flow.zh-TW.md)。
 
 ## 刻意不加的
 

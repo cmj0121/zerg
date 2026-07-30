@@ -305,10 +305,10 @@ fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
 
     for {
         select {
-            v := <-work                => { total = total + v! }
-            _ := <-cancel              => { out <- total  return }   # 提早停——有人 SEND 了一個值
-            _ := <-time.after(1000000) => { out <- total  return }   # timeout——1ms，單位是奈秒
-            done                       => { out <- total  return }   # work 與 cancel 都關閉了
+            v := <-work           => { total = total + v! }
+            <-cancel              => { out <- total  return }   # 提早停——有人 SEND 了一個值
+            <-time.after(1000000) => { out <- total  return }   # timeout——1ms，單位是奈秒
+            done                  => { out <- total  return }   # work 與 cancel 都關閉了
         }
     }
 }

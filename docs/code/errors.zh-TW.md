@@ -118,6 +118,15 @@ fn read_config(s: str) -> Result[Config] {
 }
 ```
 
+> **被 guard 的區塊有兩條限制，而且都是大聲的。** 從區塊裡 `return`、`break` 或 `continue` > **離開**，兩個編譯器都拒絕：handler 在區塊前推入、區塊後彈出，中途跳走會把 frame 帶走、
+> 把 handler 留在上面。區塊的值若是**在區塊內綁定的名字**也被拒絕，因為 C 規定在 `setjmp`
+> 與落點之間被修改的自動變數，除非是 `volatile` 否則其值不確定（C99 7.13.2.1）——把區塊的
+> 值寫成一次呼叫或一個常值，那本來也是日常寫法。
+>
+> **[not yet]** 上面 `read_config` 那個範例需要 `Result[T]` 能在**簽章**裡存活，而出貨的
+> `zerg` 會把它抹掉——guard 本身沒問題，是回傳型別不行。在那件事落地前，把 `Result` 直接
+> 交給呼叫端的 `??` / `match`，而不是回傳它。
+
 `Result` **恆被壓平**：因為被 raise 的錯誤本身就是 `Err`，對一個已經產出 `Result[U]` 的區塊 `guard`，結果仍是
 `Result[U]`——內部 abort 與回傳的 `Right(err)` 收斂成同一個 `Right(err)`。`guard` 只攔**當前 stack** 上的 abort；
 在區塊內 `spawn` 出去的 coroutine 有自己的 stack，不受影響。

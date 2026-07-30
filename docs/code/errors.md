@@ -140,6 +140,18 @@ fn read_config(s: str) -> Result[Config] {
 }
 ```
 
+> **Two limits on what a guarded block may be, both loud.** A `return`, `break` or `continue`
+> that LEAVES the block is refused in both compilers: the handler is pushed before the block and
+> popped after it, so a jump in between takes the frame away and leaves the handler installed on
+> it. And a block whose value is a name BOUND INSIDE it is refused, because C makes an automatic
+> variable modified between `setjmp` and the landing pad indeterminate unless it is `volatile`
+> (C99 7.13.2.1) — give the block a call or a literal as its value, which is the everyday shape
+> anyway.
+>
+> **[not yet]** The `read_config` example above needs `Result[T]` to survive in a SIGNATURE, which
+> the shipped `zerg` erases — the guard itself is fine, the return type is not. Until that lands,
+> hand the `Result` straight to `??` / `match` at the call site instead of returning it.
+
 The `Result` is **always flattened**: because a raised error is itself an `Err`, guarding a block
 that already yields `Result[U]` still yields `Result[U]` — an internal abort and a returned
 `Right(err)` collapse to the same `Right(err)`. `guard` catches only aborts on the **current** stack;

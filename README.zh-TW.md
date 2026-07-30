@@ -192,8 +192,8 @@ reference-counted）、tuple、`defer`、range、f-string，以及帶 `pub` 可�
 （目前算術降成純 C）；`Eq` / `Ord` 以外的完整 `derive` 集（`Hash` / `Encode` / `Decode`）；`set[T]`；
 `list` / `map` 的相等比較；command literal（`` `git status` ``）；非-error 型別的 `is` 測試；排程器的**搶佔**
 （**M:N** 排程器本身已經在了——但還沒有任何東西能在一條 coroutine 自己 park 之前把它從 worker 上拿下來，所以一個
-CPU-bound 的 coroutine 會佔住一條 worker，數量到達 worker 數就讓整個程式停擺）；施於 receive 的 `?`，它要等
-`Result[T]` 能在簽章裡存活；`Reader` / `stdin` I/O 介面；generic type alias；以及規格狀態標記所追蹤的一批較小的
+CPU-bound 的 coroutine 會佔住一條 worker，數量到達 worker 數就讓整個程式停擺）；`Result[T]` 能在**簽章**裡存活，
+那也是施於 `Result` 的 `?` 還在等的東西；`Reader` / `stdin` I/O 介面；generic type alias；以及規格狀態標記所追蹤的一批較小的
 形式。
 
 **已知偏差（規格對照目前行為記錄的 bug）。** 有少數可觀察行為尚未符合意圖語意——bootstrap 目前 emit `-std=c11`

@@ -159,19 +159,17 @@ to read the reason and keep going demotes it with `guard { <-ch }`, the same way
 failure.
 
 > **[not yet]** A receiver **already parked on an empty channel** when its last sender crashes is
-> woken as a deadlock rather than with the reason: the program reports the producer's abort and then
-> `DeadlockError`, and the `Err` never reaches the receive. A receiver that still has values to drain
+> woken as a deadlock rather than with the reason — a plain `<-ch` and a `select` alike.
+> The program reports the producer's abort and then `DeadlockError`, and the `Err` never
+> reaches the receive. A receiver that still has values to drain
 > gets the reason as promised (that is what `conc_crash` pins). The hole is in the runtime's close
 > wake-up, not in the language, and it predates the receive answering `T?`.
->
-> **[not yet]** `guard { <-ch }` — a `guard` bound to a name is not built in the shipped `zerg` yet
-> (it works as a statement, which swallows the failure but yields nothing). Until it lands, a crash
-> close aborts the receiver with the producer's reason on stderr, which is the honest outcome for a
-> program that did not say what to do about it.
->
-> `?` on a receive now needs only what any `T?` needs — the absence is an ordinary optional, so the
-> `Result[T]`-in-a-signature problem this note used to describe is no longer on the channel path at
-> all.
+
+`guard { <-ch }` is **[implemented]**: it hands back `Right(err)` carrying the producer's own Err,
+and the receiver runs on. That is the whole of what a crash close asks of a program — decide, once,
+whether this stream ending badly is your business — and `guard` is where that decision is written.
+`?` on a receive, meanwhile, now needs only what any `T?` needs: the absence is an ordinary optional,
+so the `Result[T]`-in-a-signature problem this note used to describe is off the channel path.
 
 The `match` line above also carries a restriction, and it is the one most likely to bite: what may
 stand in an arm.

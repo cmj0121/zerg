@@ -20,7 +20,9 @@
 #   F103  a wrapped expression continues one level in per open bracket
 #   F104  a run of blank lines survives as exactly one
 #   F105  a group that spans lines closes on its own line
-#   F201  one space around a binary operator, after a comma, around `=>`
+#   F106  a run of arms lands every `=>` in one column
+#   F107  a run of trailing comments lands every `#` in one column
+#   F201  one space around a binary operator, after a comma, at least one around `=>`
 #   F202  no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
 #   F301  a comment keeps its text, on its own line or trailing the code it followed
 #   F401  a one-jump if-block becomes the postfix guard it is sugar for —
@@ -261,6 +263,14 @@ fn fmt_has_else(mut &toks: list[Token], rb: int) -> bool {
 fn fmt_is_else_if(mut &out: list[Token]) -> bool {
 	return false if out.len() == 0
 	return out[out.len() - 1].kind == Else
+}
+
+# fmt_stmt_start reports whether the token at `at` begins a statement — nothing but a
+# separator, a brace or a comment stands in front of it.
+fn fmt_stmt_start(mut &toks: list[Token], at: int) -> bool {
+	return true if at == 0
+	k := toks[at - 1].kind
+	return is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
 }
 
 # --- rule F406: a blank line where one is load-bearing ---------------------------------------
@@ -1294,8 +1304,30 @@ fn fmt_wrap_relines(mut &toks: list[Token], mut &brk: list[int], mut &drop: list
 
 # --- printing -------------------------------------------------------------------------
 
+# fmt_toks prints the tokens and then lines up the columns a run shares (F106, F107).
 fn fmt_toks(mut &toks: list[Token], no_close: bool) -> str {
+	mut p := fmt_print(toks, no_close)
+	return fmt_align(p)
+}
+
+# Printed is what the printer hands the aligner: the text it wrote, plus the byte offset of
+# every token a run could align on — a match or select arm's `=>`, and a comment that TRAILS
+# code rather than standing on its own line.
+#
+# The offsets come from the printer rather than from a scan of the finished text, and that is
+# the load-bearing part. Once the tokens are gone a `=>` inside a string literal reads
+# exactly like an arm's, and padding that one would not lay out a table — it would rewrite
+# the string.
+struct Printed {
+	text: str
+	arrow: list[int]
+	trail: list[int]
+}
+
+fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut out: list[byte] = []
+	mut arrow: list[int] = []
+	mut trail: list[int] = []
 	mut depth := 0
 	mut col := 0 # bytes written on the current line
 	mut prev2 := Semi # the one before it — `<-` needs a token of context on each side
@@ -1414,6 +1446,13 @@ fn fmt_toks(mut &toks: list[Token], no_close: bool) -> str {
 				out.append(b' ')
 				col = col + 1
 			}
+
+			# where a column a run shares would go, recorded before the token lands on it
+			if t.kind == FatArrow and not fmt_arm_guarded(toks, i) {
+				arrow.append(out.len())
+			} else if is_comment(t.kind) and fmt_line_has_code(out) {
+				trail.append(out.len())
+			}
 			fmt_write(out, fmt_text(t))
 			col = col + 1
 			if is_open(t.kind) {
@@ -1448,6 +1487,322 @@ fn fmt_toks(mut &toks: list[Token], no_close: bool) -> str {
 		}
 	}
 	if col > 0 {
+		out.append(byte(10))
+	}
+	return Printed(str(out), arrow, trail)
+}
+
+# fmt_arm_guarded reports whether the arm this `=>` closes carries a GUARD — an `if expr`
+# between the pattern and the arrow. A guarded arm's head is a sentence rather than a name,
+# so it does not join a run and does not widen one: it ends the run it meets.
+fn fmt_arm_guarded(mut &toks: list[Token], at: int) -> bool {
+	mut i := at - 1
+	for i >= 0 {
+		k := toks[i].kind
+
+		break if is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
+		return true if k == If
+
+		i = i - 1
+	}
+	return false
+}
+
+# fmt_line_has_code reports whether anything but indentation has been written on the line the
+# printer is on. It is what tells a TRAILING comment from one standing on its own line, and
+# `col` cannot: a line already indented has a nonzero column with no code on it yet.
+#
+# The buffer comes by reference and nothing is written through it. A list argument arrives by
+# value otherwise, and copying the whole output to look at its last few bytes — once per
+# comment in the file — is the difference between reading a line and reading the file again.
+fn fmt_line_has_code(mut &out: list[byte]) -> bool {
+	mut i := out.len() - 1
+	for i >= 0 {
+		c := out[i]
+
+		return false if c == byte(10)
+		return true if c != b' ' and c != byte(9)
+
+		i = i - 1
+	}
+	return false
+}
+
+# --- rules F106 / F107: a run shares one column ------------------------------------------
+#
+# A match over a small closed set is a LOOKUP TABLE, and the arms of one read as rows:
+#
+#     Eof       => "EOF"
+#     Illegal   => "ILLEGAL"
+#     FStrBegin => "FSTR_BEGIN"
+#
+# rather than as a ragged left edge with the answers scattered along it. Trailing comments
+# line up for the same reason and by the same machinery — a run of them is a column of notes
+# on a column of code.
+#
+# A RUN is consecutive lines, at the same indent, that each carry the same kind of mark.
+# Anything else ends it: a blank line, a comment on its own line, a guarded arm, an arm whose
+# body is a block or continues on the next line. So an arm never lines up with something that
+# is not its neighbour in the same table.
+#
+# The padding is SPACES while the indent is TABS, which is what makes the column hold at any
+# tab width — the tabs are identical across a run and cancel out, and only spaces are counted
+# into the column itself.
+#
+# This is layout rather than a rewrite: it decides where a token an author already wrote goes.
+# So it is not switchable, and F201's "one space around `=>`" becomes "at least one" — the
+# printer still writes exactly one, and the column is what the padding adds to it.
+#
+# Idempotence is the printer's, not this pass's: whitespace between two tokens is not a token,
+# so a second run lexes the padded source to the same stream, prints the same single space,
+# and pads it again to the same column.
+
+# fmt_align_gap is how far apart two heads may be and still share a column. It bounds the
+# padding any one line takes, which is the whole reason a run has a budget: without it a run
+# creeps wider one arm at a time and a three-character pattern ends up half a line from its
+# answer.
+#
+# 12 is measured off a select, not a match. A match's patterns are names of one kind and run
+# 3 to 9 columns, but a select's arm heads are four different shapes — `v := <-work`,
+# `out <- total`, `done`, `_` — and 8 cut the `_` out of its own table. The rule is that a
+# table a reader sees as one table stays one, so the budget is set where the widest of those
+# shapes still reaches the narrowest.
+fn fmt_align_gap() -> int {
+	return 12
+}
+
+fn fmt_align(mut &p: Printed) -> str {
+	mut lens: list[int] = []
+	mut lines := fmt_split_lines(p.text, lens)
+	mut arrow := fmt_line_marks(lens, p.arrow)
+	mut trail := fmt_line_marks(lens, p.trail)
+	mut none: list[int] = []
+
+	# the arrows go first: a `=>` that moves is to the LEFT of a trailing comment on the same
+	# line, so the comment's mark is handed on already shifted
+	fmt_align_marks(lines, arrow, trail, true)
+	fmt_align_marks(lines, trail, none, false)
+	return fmt_join_lines(lines)
+}
+
+# fmt_align_marks lines up every run of one kind of mark. `also` is the OTHER kind on the same
+# lines, which moves when the padding pushes past it; the pass that has nothing after it hands
+# in an empty list.
+fn fmt_align_marks(mut &lines: list[str], mut &mark: list[int], mut &also: list[int], arms: bool) {
+	mut i := 0
+	for i < lines.len() {
+		if fmt_align_row(lines, mark, also, i, arms) {
+			i = fmt_align_run(lines, mark, also, i, arms)
+		} else {
+			i = i + 1
+		}
+	}
+}
+
+# fmt_align_row reports whether a line is a ROW of a table: it carries a mark, and — for a run
+# of arms — the arm is one a row can hold.
+fn fmt_align_row(mut &lines: list[str], mut &mark: list[int], mut &also: list[int], i: int, arms: bool) -> bool {
+	return false if mark[i] < 0
+	return true if not arms
+
+	return fmt_arm_flat(lines[i], mark[i], fmt_mark_at(also, i))
+}
+
+fn fmt_mark_at(mut &marks: list[int], i: int) -> int {
+	return -1 if i >= marks.len()
+	return marks[i]
+}
+
+# fmt_align_run measures the run starting at `at`, lines it up, and answers with the line after
+# it. A run is consecutive rows at one indent. A comment on its own line is TRANSPARENT — it
+# does not end the table it sits inside — and anything else ends the run.
+#
+# The budget is ALL OR NOTHING: if the run's widest and narrowest heads are more than the gap
+# apart, nothing in it is padded and every line keeps its single space. Cutting the run at the
+# first head that overruns instead — which is what this did first — turns one `match` into three
+# or four tables in three or four columns, which reads worse than the ragged edge it replaced.
+# A table is one thing or it is not a table.
+fn fmt_align_run(mut &lines: list[str], mut &mark: list[int], mut &also: list[int], at: int, arms: bool) -> int {
+	tabs := fmt_indent_of(lines[at])
+	mut lo := fmt_head_width(lines[at], mark[at])
+	mut hi := lo
+	mut end := at + 1
+	for end < lines.len() {
+		break if fmt_indent_of(lines[end]) != tabs
+		break if not fmt_align_row(lines, mark, also, end, arms)
+
+		w := fmt_head_width(lines[end], mark[end])
+		if w < lo {
+			lo = w
+		}
+		if w > hi {
+			hi = w
+		}
+		end = end + 1
+	}
+	return end if hi - lo > fmt_align_gap()
+
+	want := hi + 1 # the column every mark in the run lands in: one past its widest head
+	mut i := at
+	for i < end {
+		if want != mark[i] {
+			w := fmt_head_width(lines[i], mark[i])
+			lines[i] = fmt_set_gap(lines[i], w, mark[i], hi - w + 1)
+
+			# the other mark moves only if it stood to the RIGHT of the gap, and it is asked
+			# BEFORE this line's own mark moves — a wide pad would otherwise carry the arrow
+			# past a trailing comment and leave the comment behind
+			if i < also.len() and also[i] > mark[i] {
+				also[i] = also[i] + want - mark[i]
+			}
+			mark[i] = want
+		}
+		i = i + 1
+	}
+	return end
+}
+
+# fmt_arm_flat reports whether the arm on this line is one a row can hold: its body is on the
+# line, and it is not a block. A line that ends in `{` opened a body, and one that ends at its
+# arrow put the body on the next line; either way the arm is a shape rather than a row.
+#
+# `cut` is where a trailing comment starts, and the line is read only up to there — a comment
+# ending in `{` is prose, not a body, and looking at the whole line let one shatter the table
+# around it.
+fn fmt_arm_flat(s: str, at: int, cut: int) -> bool {
+	b := list[byte](s)
+	mut i := b.len() - 1
+	if cut >= 0 {
+		i = cut - 1
+	}
+	for i >= 0 {
+		c := b[i]
+		if c != b' ' and c != byte(9) {
+			return false if c == b'{'
+			return i > at + 1
+		}
+		i = i - 1
+	}
+	return false
+}
+
+# fmt_head_width is what stands to the left of the mark: the column the last byte of code
+# before it ends at, with the space the printer put in front of the mark not counted.
+fn fmt_head_width(s: str, at: int) -> int {
+	b := list[byte](s)
+	mut i := at - 1
+	for i >= 0 {
+		return i + 1 if b[i] != b' ' and b[i] != byte(9)
+		i = i - 1
+	}
+	return 0
+}
+
+fn fmt_indent_of(s: str) -> int {
+	b := list[byte](s)
+	mut n := 0
+	for n < b.len() {
+		break if b[n] != byte(9)
+		n = n + 1
+	}
+	return n
+}
+
+# fmt_set_gap rewrites the whitespace between the code ending at `end` and the mark at `at` to
+# exactly `n` spaces.
+#
+# It SETS the gap rather than adding to it, so the column does not depend on what the printer
+# put there. Padding an assumed single space is off by one wherever the spacing rules print
+# none — which is exactly what `20.. =>` does — and a rule that has to agree with another rule
+# to be right is one that will be wrong later.
+fn fmt_set_gap(s: str, end: int, at: int, n: int) -> str {
+	b := list[byte](s)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < end {
+		out.append(b[i])
+		i = i + 1
+	}
+	mut k := 0
+	for k < n {
+		out.append(b' ')
+		k = k + 1
+	}
+	mut j := at
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# fmt_line_marks turns offsets into the whole text into an offset within one line: one entry per
+# line, -1 for "nothing to align here". A line that collects TWO marks aligns on neither —
+# padding the first would leave the second's column a function of it.
+#
+# It is given the line LENGTHS rather than the lines: the only thing it needs from a line is
+# where the next one starts, and rebuilding each line as a byte list to ask its length was the
+# pass's largest single cost.
+fn fmt_line_marks(mut &lens: list[int], mut &offs: list[int]) -> list[int] {
+	mut mark: list[int] = []
+	mut i := 0
+	for i < lens.len() {
+		mark.append(-1)
+		i = i + 1
+	}
+	mut at := 0 # first byte of line `i`
+	mut k := 0
+	i = 0
+	for i < lens.len() {
+		end := at + lens[i]
+		mut dup := false
+		for k < offs.len() and offs[k] < end {
+			if mark[i] < 0 {
+				mark[i] = offs[k] - at
+			} else {
+				dup = true
+			}
+			k = k + 1
+		}
+		if dup {
+			mark[i] = -1
+		}
+		at = end + 1
+		i = i + 1
+	}
+	return mark
+}
+
+# fmt_split_lines splits the printed text at its line breaks, filling `lens` with each line's
+# length as it goes — the aligner needs both and this pass already knows both. The empty piece
+# after the last break is dropped; the printer always ends a line, and fmt_join_lines puts every
+# break back.
+fn fmt_split_lines(text: str, mut &lens: list[int]) -> list[str] {
+	b := list[byte](text)
+	mut out: list[str] = []
+	mut cur: list[byte] = []
+	mut i := 0
+	for i < b.len() {
+		if b[i] == byte(10) {
+			lens.append(cur.len())
+			out.append(str(cur))
+			cur = []
+		} else {
+			cur.append(b[i])
+		}
+		i = i + 1
+	}
+	if cur.len() > 0 {
+		lens.append(cur.len())
+		out.append(str(cur))
+	}
+	return out
+}
+
+fn fmt_join_lines(mut &lines: list[str]) -> str {
+	mut out: list[byte] = []
+	for ln in lines {
+		fmt_write(out, ln)
 		out.append(byte(10))
 	}
 	return str(out)

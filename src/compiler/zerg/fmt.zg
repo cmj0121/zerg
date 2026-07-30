@@ -32,6 +32,7 @@
 #   F404  two or more imports become one parenthesized group
 #   F405  a string built with `+` becomes the f-string it already is
 #   F406  a blank line where one is load-bearing — guard runs, declaration runs, comments
+#   F407  a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -55,6 +56,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	mut toks := tokenize_trivia(src)
 	if not fmt_is_off(off, "F401") {
 		toks = fmt_guards(toks)
+	}
+	if not fmt_is_off(off, "F407") {
+		toks = fmt_discards(toks)
 	}
 	if not fmt_is_off(off, "F402") {
 		toks = fmt_imports(toks)
@@ -271,6 +275,63 @@ fn fmt_stmt_start(mut &toks: list[Token], at: int) -> bool {
 	return true if at == 0
 	k := toks[at - 1].kind
 	return is_semi(k) or is_lbrace(k) or is_rbrace(k) or is_comment(k)
+}
+
+# --- rule F407: a discarded receive binder drops ----------------------------------------------
+#
+# GRAMMAR makes a recv-arm's binder OPTIONAL — `<-ch => stmt` is the whole form — so
+# `_ := <-ch => stmt` names the received value only in order to say it has no name. Go needs
+# `_ =` because an unused variable is an error there; Zerg has no such rule, so the binder
+# buys nothing and costs the next reader the question "where is `_` read?".
+#
+# It fires only where an `=>` proves a select arm. A STATEMENT `_ := <-ch` is a binding, and
+# dropping its binder would leave a bare receive standing where a statement was; that case
+# belongs to the linter (L104), which suggests rather than rewrites.
+fn fmt_discards(mut &toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		if fmt_is_discard_arm(toks, i) {
+			i = i + 2 # the `_` and its `:=`; the receive that follows stays
+		} else {
+			out.append(toks[i])
+			i = i + 1
+		}
+	}
+	return out
+}
+
+# fmt_is_discard_arm reports whether `at` opens the head of a select arm that binds the
+# discard: `_ :=` at the start of a statement, a receive after it, and an `=>` closing the
+# head. Every reason to decline is here, in one place.
+fn fmt_is_discard_arm(mut &toks: list[Token], at: int) -> bool {
+	return false if at + 2 >= toks.len()
+	return false if toks[at].kind != Ident or toks[at].lexeme != "_"
+	return false if toks[at + 1].kind != Walrus or not is_larrow(toks[at + 2].kind)
+	return false if not fmt_stmt_start(toks, at)
+
+	return fmt_arm_head_ends(toks, at + 3)
+}
+
+# fmt_arm_head_ends reports whether a `=>` closes the head that starts at `at`, before the
+# statement itself ends. That arrow is what tells a select arm from a plain binding.
+fn fmt_arm_head_ends(mut &toks: list[Token], at: int) -> bool {
+	mut depth := 0
+	mut i := at
+	for i < toks.len() {
+		k := toks[i].kind
+
+		return false if is_semi(k) or is_comment(k) or is_lbrace(k)
+		return true if k == FatArrow and depth == 0
+
+		if is_bracket(k) {
+			depth = depth + 1
+		} else if is_close(k) {
+			depth = depth - 1
+		}
+		i = i + 1
+	}
+	return false
 }
 
 # --- rule F406: a blank line where one is load-bearing ---------------------------------------

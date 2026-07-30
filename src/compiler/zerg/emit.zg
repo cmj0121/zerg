@@ -1051,67 +1051,151 @@ fn c_is_ctor(name: str) -> bool {
 # It runs over DECLARATIONS only — struct fields, parameters, results — because those are
 # written out before any body is, so this is the earliest point where the whole program's
 # type names are known and nothing has been emitted yet.
-# c_sorted_structs orders struct declarations so every struct follows the ones it NAMES BY
-# VALUE. It is a plain repeated sweep rather than a real topological sort: the set is small,
-# and each pass emits whatever has all of its dependencies already out.
+# c_type_decls writes every type declaration a unit needs, IN DEPENDENCY ORDER: the enums,
+# the structs, and the carriers over them. C needs the complete type of everything a
+# declaration holds BY VALUE ahead of it, and all three kinds hold each other — a struct
+# field may be an enum, an enum's payload may be a struct, and a carrier holds whichever it
+# wraps. Three fixed passes could only ever be right by luck, and were not: enums went first
+# on the assumption that "a struct is never held by an enum", which `enum E { Wrap(Later) }`
+# is not. Each sweep here emits whatever has all of its dependencies already out.
 #
 # A group that can never be emitted is a CYCLE — `struct A { b: B }` with `struct B { a: A }`
-# — which is a type of infinite size, not an ordering problem, and is named as such.
-fn c_sorted_structs(structs: list[StructDecl]) -> list[StructDecl] {
-	mut out: list[StructDecl] = []
+# — a type of infinite size rather than an ordering problem, and it is named as such.
+fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
+	mut out := ""
 	mut done: list[str] = []
-	mut left := structs
-	for left.len() > 0 {
-		mut next: list[StructDecl] = []
+	mut es := f.enums
+	mut ss := f.structs
+	mut cs := carriers
+
+	for es.len() > 0 or ss.len() > 0 or cs.len() > 0 {
 		mut moved := false
-		for sd in left {
-			if c_struct_ready(sd, done, structs) {
-				out.append(sd)
+
+		mut es2: list[EnumDecl] = []
+		for ed in es {
+			if c_deps_done(c_enum_deps(ed), ed.name, done, f, carriers) {
+				out = out + c_enum_typedef(ed)
+				done.append(ed.name)
+				moved = true
+			} else {
+				es2.append(ed)
+			}
+		}
+		es = es2
+
+		mut ss2: list[StructDecl] = []
+		for sd in ss {
+			if c_deps_done(c_struct_deps(sd), sd.name, done, f, carriers) {
+				out = out + c_struct_typedef(sd)
 				done.append(sd.name)
 				moved = true
 			} else {
-				next.append(sd)
+				ss2.append(sd)
 			}
 		}
-		raise f"struct `{next[0].name}` is part of a cycle of by-value fields — a struct holding itself, however indirectly, has no size; hold it behind a `list` or make the field an enum payload" if not moved
-		left = next
+		ss = ss2
+
+		mut cs2: list[Ty] = []
+		for c in cs {
+			if c_deps_done(c_carrier_deps(c), c_carrier_ty_cname(c), done, f, carriers) {
+				out = out + c_carrier_emit(em, c)
+				done.append(c_carrier_ty_cname(c))
+				moved = true
+			} else {
+				cs2.append(c)
+			}
+		}
+		cs = cs2
+
+		raise f"`{c_stuck_name(es, ss)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if not moved
 	}
 	return out
 }
 
-# c_struct_ready reports whether every struct `sd` names by value has already been emitted.
-# A name that is not a struct of this program at all — a scalar, a runtime container, an
-# enum — needs nothing ahead of it.
-fn c_struct_ready(sd: StructDecl, done: list[str], structs: list[StructDecl]) -> bool {
-	mut deps: list[str] = []
-	for fd in sd.fields {
-		c_ty_struct_deps(fd.ty, deps)
-	}
+# c_deps_done reports whether every DECLARED type a declaration names by value is already
+# out. A name this program does not declare — a scalar, a runtime container — needs nothing
+# ahead of it, and a SELF reference is boxed rather than held.
+fn c_deps_done(deps: list[str], own: str, done: list[str], f: File, carriers: list[Ty]) -> bool {
 	for dep in deps {
-		if dep != sd.name and c_is_declared_struct(dep, structs) {
+		if dep != own and c_ty_declared(dep, f, carriers) {
 			return false if not c_name_in(done, dep)
 		}
 	}
 	return true
 }
 
-# c_ty_struct_deps collects the struct names a type needs COMPLETE where it is used by
-# value. A carrier holds its payload by value, so `Y?` and `Result[Y]` need Y as surely as
-# a bare `Y` does — which is why the ordering could not be read off the field's name alone.
+fn c_struct_deps(sd: StructDecl) -> list[str] {
+	mut deps: list[str] = []
+	for fd in sd.fields {
+		c_ty_struct_deps(fd.ty, deps)
+	}
+	return deps
+}
+
+fn c_enum_deps(ed: EnumDecl) -> list[str] {
+	mut deps: list[str] = []
+	for v in ed.variants {
+		for t in v.fields {
+			c_ty_struct_deps(t, deps)
+		}
+	}
+	return deps
+}
+
+fn c_carrier_deps(c: Ty) -> list[str] {
+	mut deps: list[str] = []
+	if c_is_opt(c) {
+		c_ty_struct_deps(c_opt_elem(c), deps)
+	} else {
+		c_ty_struct_deps(c_either_left(c), deps)
+		c_ty_struct_deps(c_either_right(c), deps)
+	}
+	return deps
+}
+
+# c_ty_declared reports whether a dependency name is one this pass will EMIT — a struct or
+# enum of this program, or a carrier it collected. Anything else (a scalar, a runtime
+# container, a type from another unit) needs nothing ahead of it.
+fn c_ty_declared(name: str, f: File, carriers: list[Ty]) -> bool {
+	return true if c_is_declared_ty(name, f)
+	for c in carriers {
+		return true if c_carrier_ty_cname(c) == name
+	}
+	return false
+}
+
+# c_carrier_emit writes one carrier's declaration and marks it registered, so the on-demand
+# path does not write it a second time.
+fn c_carrier_emit(mut &em: Emitter, c: Ty) -> str {
+	name := c_carrier_ty_cname(c)
+	return "" if c_name_in(em.res_names, name)
+	em.res_names.append(name)
+	em.used_rt = true
+	return c_carrier_decl(c)
+}
+
+fn c_is_declared_ty(name: str, f: File) -> bool {
+	for sd in f.structs {
+		return true if sd.name == name
+	}
+	for ed in f.enums {
+		return true if ed.name == name
+	}
+	return false
+}
+
+# c_ty_struct_deps collects the declared type names a type needs COMPLETE where it is used
+# by value. A carrier holds its payload by value, so `Y?` and `Result[Y]` need Y as surely
+# as a bare `Y` does — which is why the ordering could not be read off a field's own name.
 # A `list[Y]` needs nothing: the runtime container holds its elements behind a pointer.
 fn c_ty_struct_deps(t: Ty, mut &out: list[str]) {
 	match t {
 		TNamed(nm)    => out.append(nm)
-		TOpt(el)      => c_ty_struct_deps(el, out)
-		TEither(l, r) => c_ty_struct_deps_two(l, r, out)
+		TOpt(el)      => out.append(c_carrier_ty_cname(TOpt(el)))
+		TEither(l, r) => out.append(c_carrier_ty_cname(TEither(l, r)))
 		TTuple(ts)    => c_ty_struct_deps_list(ts, out)
 		_             => c_skip()
 	}
-}
-
-fn c_ty_struct_deps_two(a: Ty, b: Ty, mut &out: list[str]) {
-	c_ty_struct_deps(a, out)
-	c_ty_struct_deps(b, out)
 }
 
 fn c_ty_struct_deps_list(ts: list[Ty], mut &out: list[str]) {
@@ -1120,11 +1204,15 @@ fn c_ty_struct_deps_list(ts: list[Ty], mut &out: list[str]) {
 	}
 }
 
-fn c_is_declared_struct(name: str, structs: list[StructDecl]) -> bool {
-	for sd in structs {
-		return true if sd.name == name
+# c_stuck_name names one member of the group that could not be emitted, for the diagnostic.
+fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl]) -> str {
+	for ed in es {
+		return ed.name
 	}
-	return false
+	for sd in ss {
+		return sd.name
+	}
+	return "?"
 }
 
 # c_carrier_decl_types collects every CARRIER a declaration spells — a struct field, a
@@ -1184,40 +1272,6 @@ fn c_carrier_seen(c: Ty, mut &out: list[Ty]) {
 		c_carrier_collect_two(c_either_left(c), c_either_right(c), out)
 	}
 	out.append(c)
-}
-
-# c_carrier_typedefs_for emits the carriers whose LAST declared-struct payload is `owner` —
-# the empty name meaning "no payload is a declared type at all", which needs no struct ahead
-# of it. Each is registered, so the on-demand path does not write it twice.
-fn c_carrier_typedefs_for(mut &em: Emitter, want: str, cs: list[Ty], structs: list[StructDecl]) -> str {
-	mut out := ""
-	for c in cs {
-		if c_carrier_owner(c, structs) == want and not c_name_in(em.res_names, c_carrier_ty_cname(c)) {
-			em.res_names.append(c_carrier_ty_cname(c))
-			em.used_rt = true
-			out = out + c_carrier_decl(c)
-		}
-	}
-	return out
-}
-
-# c_carrier_owner is the declared struct among a carrier's payloads that is declared LAST,
-# or "" when none is one. A carrier's typedef names both of its payloads, so it can only be
-# written after the last of them — which is what decides where in the run of struct typedefs
-# it goes.
-fn c_carrier_owner(c: Ty, structs: list[StructDecl]) -> str {
-	mut owner := ""
-	for sd in structs {
-		if c_carrier_has_payload(c, sd.name) {
-			owner = sd.name
-		}
-	}
-	return owner
-}
-
-fn c_carrier_has_payload(c: Ty, name: str) -> bool {
-	return c_named_of(c_opt_elem(c)) == name if c_is_opt(c)
-	return c_named_of(c_either_left(c)) == name or c_named_of(c_either_right(c)) == name
 }
 
 fn c_check_named_types(mut &em: Emitter, f: File) {
@@ -2101,6 +2155,13 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)zrt_list_at(&zg_ix, " + ix + ")); })"
 }
 
+# c_is_map_index reports `m[k]` — an index whose TARGET is a map. The lowering is a
+# statement expression, so it is an rvalue however much it looks like a place.
+fn c_is_map_index(mut &em: Emitter, e: Expr) -> bool {
+	return false if not c_is_index(e)
+	return c_is_map(c_infer(em, c_index_target(e)))
+}
+
 fn c_is_lvalue(e: Expr) -> bool {
 	return match e {
 		EIdent(_) => true
@@ -2170,8 +2231,13 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 	em.used_rt = true
 
 	# every list method takes the list's ADDRESS, and a slice or a call result has none —
-	# it is materialised into a temp first so `xs[a..b].len()` is addressable
-	return c_list_method_rv(em, target, meth, args, tty, sb) if not c_is_lvalue(target)
+	# it is materialised into a temp first so `xs[a..b].len()` is addressable.
+	#
+	# A MAP INDEX is one of those: `m[k]` lowers to a statement expression, which has no
+	# address either, so `m["a"].len()` used to reach cc as "cannot take the address of an
+	# rvalue". c_is_lvalue cannot tell the two indexes apart — it has no types — so the
+	# question is asked here, where the target's type is in hand.
+	return c_list_method_rv(em, target, meth, args, tty, sb) if not c_is_lvalue(target) or c_is_map_index(em, target)
 	return c_list_method_on(em, c_expr(em, target, sb), meth, args, tty, sb)
 }
 
@@ -5209,23 +5275,10 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	c_check_named_types(em, f)
 	c_scan_fnptr(em, f)
 
-	# enums first: a struct may hold an enum by value (a struct is never held by an enum
-	# except through an opaque zrt_list), so enum typedefs must precede struct typedefs.
 	mut types := ""
-	mut i := 0
-	for i < f.enums.len() {
-		types = types + c_enum_typedef(f.enums[i])
-		i = i + 1
-	}
 
 	# the carriers a DECLARATION names, ahead of what names them: a payload that is not a
 	# declared type needs nothing before it, and one that is a struct follows that struct.
-	# STRUCTS IN DEPENDENCY ORDER. A struct holds its fields BY VALUE, so C needs the
-	# complete type of every struct it names before it: `struct X { y: Y }` with Y declared
-	# after X reached cc as `unknown type name 'zg_Y'` — an error against generated code for
-	# a program whose only sin was the order its author wrote two declarations in.
-	structs := c_sorted_structs(f.structs)
-
 	carriers := c_carrier_decl_types(em, f)
 
 	# the force helpers land on zg_force_fail, so it goes ahead of the FIRST carrier
@@ -5234,14 +5287,8 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	if carriers.len() > 0 {
 		types = types + c_carrier_prelude()
 	}
-	types = types + c_carrier_typedefs_for(em, "", carriers, structs)
-	i = 0
-	for i < structs.len() {
-		types = types + c_struct_typedef(structs[i])
-		types = types + c_carrier_typedefs_for(em, structs[i].name, carriers, structs)
-		i = i + 1
-	}
-	i = 0
+	types = types + c_type_decls(em, f, carriers)
+	mut i := 0
 	for i < f.enums.len() {
 		types = types + c_refbox_helpers(f.enums[i])
 		i = i + 1

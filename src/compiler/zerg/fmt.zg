@@ -35,6 +35,7 @@
 #   F405  a string built with `+` becomes the f-string it already is
 #   F406  a blank line where one is load-bearing — guard runs, declaration runs, comments
 #   F407  a discarded receive binder drops — `_ := <-ch => …` is `<-ch => …`
+#   F408  an or-pattern over consecutive integers becomes the range it is — `1 | 2` is `1..=2`
 #
 # F1xx-F3xx are not negotiable: they are what "canonical" means, and a formatter with
 # options for them is a formatter two people configure differently. F4xx is different —
@@ -61,6 +62,9 @@ pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	}
 	if not fmt_is_off(off, "F407") {
 		toks = fmt_discards(toks)
+	}
+	if not fmt_is_off(off, "F408") {
+		toks = fmt_ranges(toks)
 	}
 	if not fmt_is_off(off, "F402") {
 		toks = fmt_imports(toks)
@@ -334,6 +338,99 @@ fn fmt_arm_head_ends(mut &toks: list[Token], at: int) -> bool {
 		i = i + 1
 	}
 	return false
+}
+
+# --- rule F408: an or-pattern over consecutive integers becomes the range it is ---------------
+#
+# GRAMMAR gives a match arm a RANGE form — `1..=2 =>`, match-only sugar for the guard
+# `_ if _ in 1..=2` — so it says exactly what `1 | 2 =>` says, and says it once however many
+# values there are. This is F401's and F405's principle a third time: where the language offers
+# a shorter surface for exactly what is written, the canonical form is the shorter one.
+#
+# Here the shorter one is also the only one that WORKS. `|` in pattern position is read as the
+# bitwise operator by both compilers, so `1 | 2` folds to 3 and the arm matches neither 1 nor 2
+# — silently. The rule does not exist to paper over that (an or-pattern of anything else is
+# still wrong and still needs the language work), but for the contiguous-integer case it turns
+# a wrong answer into a right one on the way past.
+#
+# The shape it accepts is deliberately narrow, and each part of it is load-bearing:
+#
+#   * the whole arm HEAD is integer literals separated by `|`, and nothing else. `|` is also a
+#     binary operator, and a token pass has no other way to know one is in pattern position —
+#     `out <- a | b => …` is a select send arm whose VALUE happens to contain one.
+#   * the values ASCEND BY ONE. `1 | 3` is not a range: `1..=3` would take 2 with it.
+#   * two or more alternatives, and no guard.
+#
+# Each bound keeps its own LEXEME, so `0x10 | 0x11` becomes `0x10..=0x11` rather than being
+# rewritten in decimal. A literal's surface is the author's.
+fn fmt_ranges(mut &toks: list[Token]) -> list[Token] {
+	mut out: list[Token] = []
+	mut i := 0
+	for i < toks.len() {
+		shut := fmt_or_pat_end(toks, i)
+		if shut > 0 {
+			fmt_emit_range(toks, i, shut, out)
+			i = shut
+		} else {
+			out.append(toks[i])
+			i = i + 1
+		}
+	}
+	return out
+}
+
+# fmt_or_pat_end answers with the index of the `=>` closing a rewritable or-pattern head at
+# `at`, or 0 when the shape is anything else at all.
+fn fmt_or_pat_end(mut &toks: list[Token], at: int) -> int {
+	return 0 if not fmt_stmt_start(toks, at)
+
+	mut i := at
+	mut prev := 0
+	mut n := 0
+	for i < toks.len() {
+		mut neg := false
+		if toks[i].kind == Minus {
+			neg = true
+			i = i + 1
+			return 0 if i >= toks.len()
+		}
+		return 0 if toks[i].kind != Int
+		mut v := int_value(toks[i].lexeme)
+		if neg {
+			v = 0 - v
+		}
+		return 0 if n > 0 and v != prev + 1
+		prev = v
+		n = n + 1
+		i = i + 1
+		return 0 if i >= toks.len()
+
+		k := toks[i].kind
+		if k == FatArrow {
+			return i if n >= 2
+			return 0
+		}
+		return 0 if k != Pipe
+		i = i + 1
+		return 0 if i >= toks.len()
+	}
+	return 0
+}
+
+# fmt_emit_range writes `lo..=hi` from the FIRST and LAST alternative of the head, dropping
+# everything between them — the middle values are what the range now states.
+fn fmt_emit_range(mut &toks: list[Token], at: int, shut: int, mut &out: list[Token]) {
+	ln := toks[at].line
+	col := toks[at].col
+	out.append(toks[at])
+	if toks[at].kind == Minus {
+		out.append(toks[at + 1])
+	}
+	out.append(Token(DotDotEq, "..=", "", ln, col))
+	if toks[shut - 2].kind == Minus {
+		out.append(toks[shut - 2])
+	}
+	out.append(toks[shut - 1])
 }
 
 # --- rule F406: a blank line where one is load-bearing ---------------------------------------

@@ -98,7 +98,7 @@ line: int   # 1-based, for a diagnostic
 
 最後一條是預算，它限制了任何單一行會吃到的 padding：沒有它，一個 run 會一個 arm 一個 arm 地愈長愈
 寬，最後一個三個字元的 pattern 離它的答案有半行遠。12 是以 `select` 量出來的——它的 arm head 有四
-種不同形狀：`v := <-work`、`out <- total`、`done`、`_`，而 8 會把 `_` 那一行切出自己的表。
+種不同形狀：`v := <-work`、`<-quit`、`out <- total`、`_`，而 8 會把 `_` 那一行切出自己的表。
 
 padding 用**空白**、縮排仍然是 **tab**，所以這一欄在任何 tab width 下都成立：run 內的 tab 完全相同，
 會互相抵消。一行可能因此超出 `F403` 換行的欄位，最多超出一個預算的量——這是換來一張表的代價。

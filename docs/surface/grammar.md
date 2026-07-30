@@ -610,7 +610,8 @@ chan-type   ::= 'chan' '[' type ']'           # bidirectional
               | 'chan' '[' type ']' '<-'      # send-only (a sender), Go-style
 recv-base   ::= '<-' recv-base | primary
 select-stmt ::= 'select' '{' select-arm+ '}'
-select-arm  ::= recv-arm | send-arm | 'done' '=>' expr | '_' '=>' expr
+for-select  ::= 'for' 'select' '{' select-arm+ '}'
+select-arm  ::= recv-arm | send-arm | '_' '=>' expr
 recv-arm    ::= ( ( identifier | '_' ) ':=' )? '<-' expr '=>' expr
 send-arm    ::= expr '<-' expr '=>' expr
 ```
@@ -620,11 +621,16 @@ send-arm    ::= expr '<-' expr '=>' expr
 - **`chan[T](cap?)`** builds a channel — capacity `0` (the default) is an unbuffered **rendezvous**. A bare
   `chan[T]` is bidirectional and narrows to `<-chan[T]` / `chan[T]<-` via a type annotation.
 - **`ch <- v`** sends (no value; blocks or aborts on a closed channel). **`<-ch`** receives, yielding
-  `Result[T]` — `Right` means closed and drained (carrying `StopIteration` or a crash `Err`). The receive
-  binds first, so `(<-ch)?`, `<-ch!`, and `<-ch ?? d` compose with the group-8 operators.
-- **`select { … }`** is the only multi-way wait: it runs the first ready arm (fair ties). **`done`** fires
-  once when every watched receive channel has closed; **`_`** fires when nothing is ready (non-blocking) —
-  both are **contextual**, special only as a select-arm head. There is **no `yield`**.
+  **`T?`** — `nil` once the stream has ended, and `nil` every time after. A **crash** close is a failure
+  rather than an absence and is **raised**, carrying the producer's own `Err`. So `<-ch ?? d`, `<-ch!`,
+  `<-ch?` and `if v := <-ch { … }` are the receive's operators, and **`chan[T?]` is refused** — `nil` would
+  otherwise mean both the value and the end.
+- **`select { … }`** is the only multi-way wait: it PICKS one ready arm (fair ties) and runs it; a receive
+  arm binds a plain **`T`**, because a cleanly ended channel drops out of the wait instead of firing.
+  **`for select { … }`** is the same wait as a loop — one ready arm per round — and it ENDS when every
+  watched receive channel has. There is no terminal arm. **`_`** fires when nothing is ready **now**
+  (non-blocking) and is not an answer to an exhausted select; it is **contextual**, special only as an arm
+  head, and the only bare identifier an arm may open with. There is **no `yield`**.
 - **`close(ch)`** ends a stream **early**. A channel normally closes **by itself** when its last sender
   leaves — the everyday form, and the only one a crashing producer can take. `close` is a **statement and
   not a call**: it is a keyword, names no function and yields no value, so it cannot be passed, bound or

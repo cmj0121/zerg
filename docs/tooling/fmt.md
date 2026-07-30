@@ -108,7 +108,7 @@ else ends it, and the edges are most of the rule:
 That last one is the budget, and it bounds the padding any one line takes: without it a run
 creeps wider one arm at a time and a three-character pattern ends up half a line from its
 answer. 12 is measured off a `select`, whose arm heads are four different shapes —
-`v := <-work`, `out <- total`, `done`, `_` — and 8 cut the `_` arm out of its own table.
+`v := <-work`, `<-quit`, `out <- total`, `_` — and 8 cut the `_` arm out of its own table.
 
 The padding is **spaces** while the indent stays **tabs**, so the column holds at any tab
 width: the tabs are identical across a run and cancel out. A line may pass the column

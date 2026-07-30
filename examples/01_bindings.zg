@@ -6,14 +6,14 @@
 #   const name := expr  a shadow-proof constant
 fn main() {
 	greeting := "welcome" # inferred as str
-	mut count := 3 # a mutable int
-	ratio: float = 2 # typed float; the int literal 2 becomes 2.0
-	const limit := 10 # a constant
+	mut count := 3        # a mutable int
+	ratio: float = 2      # typed float; the int literal 2 becomes 2.0
+	const limit := 10     # a constant
 
 	count = count + 1 # only a `mut` binding may be reassigned
 
 	print greeting # welcome
-	print count # 4
-	print ratio # 2
-	print limit # 10
+	print count    # 4
+	print ratio    # 2
+	print limit    # 10
 }

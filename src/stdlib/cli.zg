@@ -506,7 +506,7 @@ struct Scan {
 # about which flags exist.
 fn scan(c: Command, argv: list[str]) -> Scan {
 	opts := all_args(c)
-	mut s := Scan([], [], [], "", - 1)
+	mut s := Scan([], [], [], "", -1)
 	mut only_args := false
 	mut i := 0
 	for i < argv.len() {

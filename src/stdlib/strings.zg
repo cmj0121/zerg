@@ -51,7 +51,7 @@ pub fn index_of(s: str, sub: str) -> int {
 		return i if match_at(hay, nee, i)
 		i = i + 1
 	}
-	return - 1
+	return -1
 }
 
 # contains reports whether sub occurs anywhere in s. An empty sub is always contained.

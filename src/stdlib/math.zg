@@ -13,13 +13,13 @@
 
 # abs returns the absolute value of the integer x.
 pub fn abs(x: int) -> int {
-	return - x if x < 0
+	return -x if x < 0
 	return x
 }
 
 # fabs returns the absolute value of the float x.
 pub fn fabs(x: float) -> float {
-	return - x if x < 0.0
+	return -x if x < 0.0
 	return x
 }
 
@@ -50,7 +50,7 @@ pub fn sqrt(x: float) -> float {
 		next := (guess + x / guess) / 2.0
 		diff := next - guess
 		adiff := if diff < 0.0 {
-			- diff
+			-diff
 		} else {
 			diff
 		}
@@ -70,7 +70,7 @@ pub fn pow(base: float, exp: int) -> float {
 		if base == 0.0 {
 			raise "math.pow: domain error (zero base, negative exponent)"
 		}
-		return 1.0 / pow(base, - exp)
+		return 1.0 / pow(base, -exp)
 	}
 
 	mut result := 1.0
@@ -120,7 +120,7 @@ pub fn ceil(x: float) -> float {
 # round returns x rounded to the nearest integer, with a half rounded away from zero:
 # round(2.5) is 3.0 and round(-2.5) is -3.0.
 pub fn round(x: float) -> float {
-	return - floor(- x + 0.5) if x < 0.0
+	return -floor(-x + 0.5) if x < 0.0
 	return floor(x + 0.5)
 }
 

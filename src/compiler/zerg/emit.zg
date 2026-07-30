@@ -240,7 +240,7 @@ fn c_opt_name(mut &em: Emitter, elem: Ty) -> str {
 fn c_opt_wrap(mut &em: Emitter, elem: Ty, e: Expr, sb: Subst) -> str {
 	cn := c_opt_name(em, elem)
 	return "(" + cn + "){ .tag = 1 }" if c_is_nil_lit(e)
-	return "(" + cn + "){ .tag = 0, .ok = " + c_copied(em, elem, e, sb) + " }"
+	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, elem, e, sb) + " }"
 }
 
 fn c_is_nil_lit(e: Expr) -> bool {
@@ -256,10 +256,22 @@ fn c_is_nil_lit(e: Expr) -> bool {
 # declaration mean what it says: `-> Result[nil] { return nil }` returns a Left, not a bare
 # nil that the caller then reads a tag out of.
 fn c_carrier_fit(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
-	return c_expr(em, e, sb) if c_carrier_ty_cname(c_infer(em, e)) == c_carrier_ty_cname(want)
+	et := c_infer(em, e)
+
+	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
 	return c_opt_wrap(em, c_opt_elem(want), e, sb) if c_is_opt(want)
 
 	return c_either_wrap(em, want, e, sb)
+}
+
+# c_fit_copied is what every site where a DECLARED type meets a value calls: a carrier is
+# filled, anything else is copied. Filling has to be part of the copy rather than beside it,
+# because a carrier's payload may itself be one — `Result[int?]` used to take the bare int
+# into a field whose type is the optional's carrier, so the tag it was read back through was
+# whatever the value's first bytes happened to be.
+fn c_fit_copied(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+	return c_carrier_fit(em, want, e, sb) if c_is_carrier(want)
+	return c_copied(em, want, e, sb)
 }
 
 # c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
@@ -274,16 +286,16 @@ fn c_either_wrap(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	side := c_ctor_side(e)
 	if side >= 0 {
 		inner := c_call_args_of(e)[0]
-		return "(" + cn + "){ .tag = 0, .ok = " + c_copied(em, lt, inner, sb) + " }" if side == 0
-		return "(" + cn + "){ .tag = 1, .err = " + c_copied(em, rt, inner, sb) + " }"
+		return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, lt, inner, sb) + " }" if side == 0
+		return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, rt, inner, sb) + " }"
 	}
 
 	et := c_infer(em, e)
 
-	return "(" + cn + "){ .tag = 1, .err = " + c_copied(em, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
+	return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
 	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Left(…)` or `Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
 
-	return "(" + cn + "){ .tag = 0, .ok = " + c_copied(em, lt, e, sb) + " }"
+	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, lt, e, sb) + " }"
 }
 
 # c_ctor_side is which side of an Either a `Left(v)` / `Right(e)` call names — 0, 1, or -1
@@ -2036,7 +2048,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		# the element is copied INTO the list, so the list owns it and the caller's name
 		# for it goes on being its own
 		et := c_type(c_list_elem(tty))
-		el := c_copied(em, c_list_elem(tty), args[0], sb)
+		el := c_fit_copied(em, c_list_elem(tty), args[0], sb)
 		return "({ " + et + " zg_le = " + el + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 	}
 	return tgt
@@ -3247,7 +3259,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
-	mut sv := c_copied(em, elem, v, c_nosub())
+	mut sv := c_fit_copied(em, elem, v, c_nosub())
 	if c_is_opt(elem) {
 		sv = c_carrier_fit(em, elem, v, c_nosub())
 	}

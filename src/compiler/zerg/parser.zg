@@ -297,6 +297,8 @@ pub fn parse(src: str) -> File {
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
 			parse_impl(p, fns)
+		} else if p_at(p, Hash) {
+			parse_decorator(p)
 		} else {
 			p_advance(p)
 		}
@@ -634,6 +636,11 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	p_advance(p) # 'enum'
 	name := cur(p).lexeme
 	p_advance(p) # name
+
+	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
+	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
+	# field types go through c_check_named_ty; a variant's did not.
+	raise f"NotImplemented: a generic enum `{name}[…]` — this compiler erases type parameters, and a variant's payload names one" if p_at(p, LBrack)
 	expect(p, LBrace)
 	skip_semis(p)
 
@@ -737,6 +744,11 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		p_advance(p)
 		expect(p, Colon)
 		fty := parse_type(p)
+
+		# `x: int = 7` — a field DEFAULT (GRAMMAR:571), which feeds the constructor. It was
+		# not read here, so the `=` began the next field: the struct gained a field named `=`
+		# of type `7`, and the error named those instead of the form that was written.
+		raise f"NotImplemented: a default on field `{fname}` — this compiler's constructor takes every field positionally, so a default has nowhere to be filled in from" if p_at(p, Assign)
 		fields.append(FieldDef(fname, fty))
 		skip_semis(p)
 	}
@@ -751,6 +763,30 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 # rule reads all three spellings the grammar allows — `impl T`, `impl T[A]`, and the spec
 # form `impl Spec for T` — and lands on T in every one of them, which matters because the
 # methods belong to T in all three.
+# parse_decorator reads `#[ … ]` as ONE item (GRAMMAR:532). It used to reach the top-level
+# fallback, which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate
+# items and anything inside it that happened to parse as a declaration was read as one. The
+# brackets are counted rather than assumed one deep.
+#
+# `derive` is READ AND DROPPED: this compiler generates no impls, and what a missing one
+# costs is reported where the operator is used (`==` on a struct), not here. Every other
+# decorator is named, because a decorator that changes what a declaration MEANS cannot be
+# ignored without changing the program.
+fn parse_decorator(mut &p: Parser) {
+	p_advance(p) # '#['
+	name := cur(p).lexeme
+	raise f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
+	mut depth := 1
+	for depth > 0 and not p_at(p, Eof) {
+		if p_at(p, LBrack) or p_at(p, Hash) {
+			depth = depth + 1
+		} else if p_at(p, RBrack) {
+			depth = depth - 1
+		}
+		p_advance(p)
+	}
+}
+
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	p_advance(p) # 'impl'
 	mut target := ""
@@ -778,11 +814,22 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 			p_advance(p)
 			is_pub = true
 		}
+		if p_at(p, Mut) {
+			# `mut fn` marks a method that mutates `this` IN PLACE (GRAMMAR:299). A receiver
+			# here is passed BY VALUE, so the write-back never happened: the method ran, the
+			# copy changed, and the caller's value did not. The seed has refused it all along.
+			raise "NotImplemented: a `mut fn` method's receiver is not written back — its `this` is a copy here, so the mutation would be lost"
+		}
 		if p_at(p, Fn) {
 			fns.append(parse_fn(p, is_pub, target))
+		} else if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
+			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR:495). It was skipped a token
+			# at a time, so the name reached the emitter undeclared and cc reported it.
+			raise f"NotImplemented: an associated value binding `{cur(p).lexeme} := …` in an `impl`"
+		} else if p_at(p, Type) {
+			raise "NotImplemented: an associated type binding `type … = …` in an `impl`"
 		} else {
-			# an associated binding or any other impl item is outside the subset
-			p_advance(p)
+			raise f"NotImplemented: `{cur(p).lexeme}` as an `impl` item — this compiler reads methods and nothing else"
 		}
 		skip_semis(p)
 	}
@@ -862,6 +909,15 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 
 fn parse_stmt(mut &p: Parser) -> Stmt {
 	k := cur_kind(p)
+
+	# A bare `{ … }` is a NESTED SCOPE (GRAMMAR:52's `compound-stmt ::= block`). Reaching
+	# the expression parser instead, it was read as a map literal or as whatever its first
+	# statement made of it, and the message named that.
+	raise "NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == LBrace
+
+	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR:200). The `{` after a type
+	# name reached the expression parser, which reported a block used as an expression.
+	raise f"NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == LBrace
 	if k == Nop {
 		p_advance(p)
 		return SNop
@@ -1068,6 +1124,11 @@ fn parse_for(mut &p: Parser) -> Stmt {
 		p_advance(p) # 'select'
 		return SForSelect(parse_sel_arms(p))
 	}
+
+	# `for mut v in xs` binds the element MUTABLY and writes the edit back to its slot
+	# (GRAMMAR:393). The `mut` was not read here, so it fell into the condition expression
+	# and was reported as whatever that made of it.
+	raise "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
 
 	# for-in: `for name in iterable { ... }`
 	if p_at(p, Ident) and peek_kind(p, 1) == In {
@@ -1357,6 +1418,16 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EInt(strconv.to_string(int(list[byte](t.value)[0]), 10))
 	}
+	if k == Rune {
+		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
+		# before, so `'A'` was the number zero — a wrong answer with no diagnostic. A
+		# multi-byte code point needs a UTF-8 decode this compiler does not have, and is
+		# named rather than truncated to its first byte.
+		p_advance(p)
+		bs := list[byte](t.value)
+		raise f"NotImplemented: a non-ASCII rune literal `{t.lexeme}` — its code point needs a UTF-8 decode this compiler does not have" if bs.len() != 1
+		return EInt(strconv.to_string(int(bs[0]), 10))
+	}
 	if k == Float {
 		p_advance(p)
 		return EFloat(t.lexeme)
@@ -1504,8 +1575,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# arm yielded 0, and the tokens after it were read as a further arm. That is a program
 	# that compiles and is not the one that was written, so it is named instead.
 	raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here" if is_stmt_kw(k)
-	p_advance(p)
-	return ENil
+
+	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
+	# and the expression became nil, which emits `0`. So every form this parser does not
+	# know became the number zero, silently: a rune literal `'A'` was 0, and so was anything
+	# else that ever reached here. A form the compiler cannot read is named; it is never a
+	# value it did not write.
+	raise f"NotImplemented: `{t.lexeme}` is not an expression this compiler reads"
 }
 
 # parse_close reads `close ( expr )`, the channel's one built-in statement. `at_exit` is

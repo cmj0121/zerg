@@ -31,13 +31,11 @@ fn load() -> Result[Config] {
 ```
 
 > **[deviation]** `?` is defined on any `Either[X, Y]` — unwrap the `Left`, early-return the `Right`
-> unchanged — and the two compilers cover different halves of it. The **seed** threads `Result[T]`:
-> on a general `Either` the right payload is **dropped** (a silent miscompile), and `?` on a
-> **`Result[nil]`** reaches the backend as a `void`-typed binding (a fail-loud sema gap). The shipped
-> **`zerg`** threads **`T?`** instead — the absence early-returns, and the enclosing function must
-> answer a `T?` to carry it — and refuses the `Result` half **by name**, because `Result[T]` does not
-> survive in a signature there yet. The intended behavior threads the `Right` value unchanged in
-> every case.
+> unchanged. The shipped **`zerg`** does exactly that for every carrier: the enclosing function must
+> answer one with the **same right**, and the right travels unchanged, so an `Err` keeps its kind
+> across the propagation. The **seed** threads `Result[T]` only: on a general `Either` the right
+> payload is **dropped** (a silent miscompile), and `?` on a **`Result[nil]`** reaches the backend as
+> a `void`-typed binding (a fail-loud sema gap).
 
 **`??` — default.** `a ?? b` yields `a`'s left value if present, else `b` (right discarded); it
 short-circuits, chains right-to-left, and works on any `Either`.

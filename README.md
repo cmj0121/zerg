@@ -175,9 +175,11 @@ Zerg is a Phase-1 MVP, and there are now **two** compilers, which is what any st
 has to be read against:
 
 - **`zerg`** — the compiler written in Zerg, the one that ships. It compiles itself, and
-  the language it accepts is the smaller of the two: structs, enums (payload and
-  recursive), `match`, `list[T]`, strings and bytes, `mut &` parameters, `guard` / `raise`,
-  and modules. It does **not** yet have generics, `spec` / `impl`, `derive`, or optionals.
+  the language it accepts is the smaller of the two: structs, enums (payload, recursive, and
+  with observable discriminants), `match` with exhaustiveness, `list[T]`, strings and bytes,
+  `mut &` parameters, optionals, the whole value tier (`Either[X, Y]` / `Result[T]` /
+  `Left` / `Right`), `guard` / `raise`, and modules. It does **not** yet have generics,
+  `spec` / `impl`, or `derive`.
 - **`zerg0`** — the Go-hosted seed, whose only job is building `zerg`. It supports the
   `Zerg-boot` subset, written down as a grammar in
   [`src/bootstrap/README.md`](src/bootstrap/README.md), and rejects everything else
@@ -212,9 +214,8 @@ wrapping `+%` operators (today arithmetic lowers to plain C); the full `derive` 
 (`Hash` / `Encode` / `Decode`); `set[T]`; `list` / `map` equality; command literals (`` `git status` ``);
 the `is` type-test for non-error types; scheduler **preemption** (the **M:N** scheduler itself is here —
 nothing yet takes a coroutine off its worker until it parks, so a CPU-bound coroutine occupies one worker
-and as many of them as there are workers stop the program); `Result[T]` surviving in a SIGNATURE, which is
-what `?` on a `Result` still waits on; the `Reader` / `stdin` I/O surface; generic type aliases; and a handful of
-smaller forms tracked in the spec's status markers.
+and as many of them as there are workers stop the program); the `Reader` / `stdin` I/O surface; generic type
+aliases; and a handful of smaller forms tracked in the spec's status markers.
 
 **Known deviations (bugs the spec records against current behavior).** A few observable behaviors do not
 yet match the intended semantics — the bootstrap emits `-std=c11` rather than the specified C17-default /

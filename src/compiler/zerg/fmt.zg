@@ -24,6 +24,8 @@
 #   F107  a run of trailing comments lands every `#` in one column
 #   F201  one space around a binary operator, after a comma, at least one around `=>`
 #   F202  no space after `(` `[`, before `)` `]` `,`, or between a name and its `(`
+#   F203  a prefix operator is tight to its operand — `-1`, `&x`, `<-ch`
+#   F204  a range operator is tight to both its bounds — `0..n`, `a..=b`
 #   F301  a comment keeps its text, on its own line or trailing the code it followed
 #   F401  a one-jump if-block becomes the postfix guard it is sugar for —
 #         `return x if c`, `break if c`, `continue if c`
@@ -1932,13 +1934,19 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 	if is_postfix(k) {
 		return false # `v!`, `x?` — a postfix operator belongs to the operand on its left
 	}
+	if is_range_op(k) and not is_comma(prev) {
+		return false # `0..n`, `a..=b` — a range binds its bounds
+	}
+	if is_range_op(prev) and not no_bound_follows(k) {
+		return false # the other side of the same fact, and `[h, ..t]`'s rest marker
+	}
 	if is_larrow(k) and closes_chan_type(toks, i - 1) {
 		return false # `chan[int]<-` — the arrow ends a send-only type
 	}
-	if is_larrow(prev) and not ends_item(prev2) {
+	if is_larrow(prev) and not ends_operand(prev2) {
 		return false # `<-ch`, `<-chan[int]` — the arrow leads what follows it
 	}
-	if is_minus(prev) and not ends_item(prev2) {
+	if is_minus(prev) and not ends_operand(prev2) {
 		# `-1`, `3 + -1`, `x ?? -1` — a NEGATION leads what follows it, and is told from the
 		# subtraction `a - b` the same way the two arrows are told apart: by whether anything
 		# to its left could be an operand. It cannot go in is_unary_prefix, which asks only
@@ -1946,6 +1954,20 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 		return false
 	}
 	return true
+}
+
+# ends_operand reports whether a token could be the END of an operand, which is the question
+# both `<-` and `-` are told apart by: each is a prefix exactly when nothing to its left could
+# have been operated on.
+#
+# It is NOT `ends_item`. That one answers the lexer's question — can a line break here insert a
+# `;` — and `return`, `break`, `continue` and `nop` end a STATEMENT while being no kind of
+# operand at all. Asking the lexer's predicate printed `return -1` as `return - 1` (and would
+# print `return <-ch` as `return <- ch`), which is the negation rule F203 states, backwards, in
+# the one position where a negative literal is most common.
+fn ends_operand(k: Kind) -> bool {
+	return false if is_jump(k) or k == Nop
+	return ends_item(k)
 }
 
 fn is_minus(k: Kind) -> bool {
@@ -2005,6 +2027,20 @@ fn is_larrow(k: Kind) -> bool {
 	return match k {
 		LArrow => true
 		_ => false
+	}
+}
+
+# is_range_op names the two range operators. They are BINARY — so the spacing default said
+# yes and `xs[1..3]` came back as `xs[1 .. 3]` — but they read as a constructor rather than as
+# an operation: every range in this tree, in GRAMMAR and in the docs is written tight, and
+# `0 .. n` is the one spelling nobody writes. The same tokens spell a list pattern's rest
+# marker (`[h, ..t]`), where being tight to what FOLLOWS is equally what is wanted — so the
+# space a comma owes is the one exception on the left.
+fn is_range_op(k: Kind) -> bool {
+	return match k {
+		DotDot   => true
+		DotDotEq => true
+		_        => false
 	}
 }
 

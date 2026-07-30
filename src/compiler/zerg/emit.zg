@@ -583,6 +583,13 @@ fn c_is_float(t: Ty) -> bool {
 	}
 }
 
+fn c_is_int(t: Ty) -> bool {
+	return match t {
+		TInt => true
+		_    => false
+	}
+}
+
 # c_is_bool_op reports whether a binary operator yields a bool (comparisons and the
 # logical connectives).
 fn c_is_bool_op(oper: str) -> bool {
@@ -1232,7 +1239,7 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 			v := ed.variants[j]
 			em.var_name.append(v.name)
 			em.var_enum.append(ed.name)
-			em.var_tag.append(j)
+			em.var_tag.append(v.tag)
 			mut k := 0
 			for k < v.fields.len() {
 				em.vf_variant.append(v.name)
@@ -1247,6 +1254,24 @@ fn c_build_enums(mut &em: Emitter, f: File) {
 		}
 		i = i + 1
 	}
+}
+
+# c_is_flat_enum reports whether a name is a declared enum whose every variant is tag-only.
+# That is the enum GRAMMAR:573 gives an observable integer value to — `int(v)` reads it and
+# `E.of(n)` reverses it; a payload enum's tag is opaque and match-only.
+#
+# It is read off the tables already there rather than recorded beside the name: vf_variant
+# holds exactly the variants that HAVE a payload field, so an enum is flat when none of its
+# variants is in it.
+fn c_is_flat_enum(mut &em: Emitter, en: str) -> bool {
+	return false if not c_name_in(em.enum_names, en)
+
+	mut i := 0
+	for i < em.vf_variant.len() {
+		return false if c_variant_enum(em, em.vf_variant[i]) == en
+		i = i + 1
+	}
+	return true
 }
 
 # c_is_boxed reports whether payload field `idx` of variant `variant` is a ref-boxed
@@ -1765,6 +1790,17 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 		em.used_rt = true
 		return f"zgs_to_bytes({inner})"
 	}
+
+	# `int(v)` over an enum reads its DISCRIMINANT (GRAMMAR:577), which is the tag field —
+	# not the value, which is a struct. Casting the struct is what this used to emit, and C
+	# rejected it against a file in .zerg-cache that nobody wrote.
+	xt := c_infer(em, x)
+	if c_is_int(ty) and c_name_in(em.enum_names, c_named_of(xt)) {
+		if not c_is_flat_enum(em, c_named_of(xt)) {
+			raise f"enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless"
+		}
+		return f"((int64_t)({inner}).tag)"
+	}
 	return f"(({c_type(ty)})({inner}))"
 }
 
@@ -1846,6 +1882,14 @@ fn c_meth_kind(mut &em: Emitter, tty: Ty, meth: str) -> MethKind {
 }
 
 fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	# `E.of(n)` is not a method on a value: the target NAMES A TYPE. It is answered before
+	# inference is asked anything, because an enum name is not a binding and infers to
+	# nothing — which is why this used to come out as "the method `of` on a ?".
+	en := c_ident_name(target)
+	if en != "" and c_name_in(em.enum_names, en) {
+		return c_enum_of(em, en, meth, args, sb)
+	}
+
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {
@@ -1878,6 +1922,56 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		return "({ " + et + " zg_le = " + el + "; zrt_list_push(&(" + tgt + "), &zg_le); })"
 	}
 	return tgt
+}
+
+# c_ident_name is the name a bare identifier expression spells, or "" for anything else.
+fn c_ident_name(e: Expr) -> str {
+	return match e {
+		EIdent(n) => n
+		_         => ""
+	}
+}
+
+# c_enum_of lowers `E.of(n)` (GRAMMAR:578): the variant whose discriminant is `n`, or nil.
+# It answers a `E?` rather than an `E` because the reverse is PARTIAL — an integer that no
+# variant claims has no variant to be, and the language's way of saying so is an optional.
+#
+# The discriminants are compile-time constants, so the membership test is written out as a
+# chain of comparisons against them; the tag itself is the number, which is what makes the
+# reverse a test and not a table.
+fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) -> str {
+	if meth != "of" {
+		raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)`, which reverses a discriminant into a `{en}?`"
+	}
+	if args.len() != 1 {
+		raise f"`{en}.of(n)` takes one integer — the discriminant to reverse"
+	}
+	if not c_is_flat_enum(em, en) {
+		raise f"enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless"
+	}
+
+	cn := c_opt_name(em, TNamed(en))
+	n := c_expr(em, args[0], sb)
+	tag := strconv.to_string(em.op_n, 10)
+	em.op_n = em.op_n + 1
+	v := "zg_ofv" + tag
+	r := "zg_ofr" + tag
+
+	mut test := ""
+	mut i := 0
+	for i < em.var_name.len() {
+		if em.var_enum[i] == en {
+			if test != "" {
+				test = test + " || "
+			}
+			test = test + v + " == " + strconv.to_string(em.var_tag[i], 10)
+		}
+		i = i + 1
+	}
+
+	mut out := f"({{ int64_t {v} = {n}; {cn} {r};"
+	out = out + f" if ({test}) {{ {c_res_mark_left(r)} {c_res_ok(r)} = (zg_{en}){{ .tag = (int32_t){v} }}; }}"
+	return out + f" else {{ {c_res_mark_right(r)} }} {r}; }})"
 }
 
 # c_free_method is the last resort: a `target.meth(…)` whose target type carries no such
@@ -2220,6 +2314,7 @@ fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
 # type to be declared with, and guessing one would turn a typing gap into wrong C.
 fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 	st := c_infer(em, scrut)
+	c_check_arm_pats(em, arms, st)
 	c_check_exhaustive(em, arms, st)
 	s := c_expr(em, scrut, sb)
 	return c_arms(em, arms, 0, s, st, sb) if c_is_lvalue(scrut) or c_is_unknown(st)
@@ -2228,6 +2323,34 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 	em.op_n = em.op_n + 1
 	tmp := "zg_ms" + tag
 	return f"({{ {c_type(st)} {tmp} = {s}; {c_arms(em, arms, 0, tmp, st, sb)}; }})"
+}
+
+# c_check_arm_pats refuses a constructor pattern that names a variant the subject cannot be.
+# The arm's test is `s.tag == <the variant's tag>`, and every carrier in this backend has a
+# `tag` — so the test COMPILED against the wrong type and compared unrelated numbers. Over a
+# `K?` it was worse than wrong: the optional's present-tag is 0 and the first variant's tag
+# is 0, so `match K.of(1) { A => … }` took the `A` arm whenever the value was present at all,
+# whichever variant it held. `c_variant_tag` answering 0 for a name it does not know made an
+# undeclared variant match the same way.
+fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
+	# a subject inference could not name has nothing to check the pattern against; guessing
+	# would turn a typing gap into a refusal of a working program
+	return if c_is_unknown(st) or c_is_result(st)
+
+	mut i := 0
+	for i < arms.len() {
+		a := arms[i]
+		if a.pat == 3 {
+			en := c_variant_enum(em, a.ctor)
+			if en == "" {
+				raise f"no variant named `{a.ctor}` — a constructor pattern names a variant of the subject's enum"
+			}
+			if c_named_of(st) != en {
+				raise f"variant pattern `{a.ctor}` cannot match a subject of type {ty_name(st)}"
+			}
+		}
+		i = i + 1
+	}
 }
 
 # c_check_exhaustive refuses a `match` that does not cover its scrutinee. The lowering below
@@ -2524,6 +2647,12 @@ fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 }
 
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
+	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
+	en := c_ident_name(target)
+	if en != "" and meth == "of" and c_name_in(em.enum_names, en) {
+		return TOpt(TNamed(en))
+	}
+
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
 	return match c_meth_kind(em, tty, meth) {

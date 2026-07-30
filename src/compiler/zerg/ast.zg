@@ -269,11 +269,17 @@ struct StructDecl {
 	fields: list[FieldDef]
 }
 
-# VariantDef is one enum variant: its name and its payload field types (empty for a
-# tag-only variant). The variant's tag is its position in the enum.
+# VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
+# variant), and its DISCRIMINANT — the integer the variant is, which defaults to the
+# previous one plus one (from 0) and so is its position until a declaration says otherwise.
+#
+# It is a field rather than the position it used to be because GRAMMAR:572 lets a fieldless
+# enum spell its own values (`A = 3`), and those values are OBSERVABLE: `int(v)` reads one
+# back and `E.of(n)` reverses it. A payload enum keeps its tag opaque and may not spell one.
 struct VariantDef {
 	name: str
 	fields: list[Ty]
+	tag: int
 }
 
 # EnumDecl is an enum type declaration: its name and variants in source (tag) order.

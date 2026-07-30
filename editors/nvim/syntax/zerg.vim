@@ -33,6 +33,12 @@ syntax region zergDecorator matchgroup=zergDecorator start="#\[" end="\]"
 syntax keyword zergStatement nop return if else break continue match with
 syntax keyword zergStatement spawn select defer del raise guard import impl print
 
+" `close` was missing from this list entirely — the statement that ends a stream has never
+" been coloured. It is a reserved word, so nothing named `close` can exist to be miscoloured,
+" and one unconditional keyword is the whole rule. (It briefly headed a select's terminal arm
+" too; that arm is gone — `for select { … }` is what ends now.)
+syntax keyword zergStatement close
+
 " `for` is a match (not a keyword) so the `impl … for` override below can win.
 syntax match zergStatement "\<for\>"
 " In `impl X for Y`, `for` is a plain keyword, not the loop keyword. The match must

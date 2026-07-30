@@ -199,8 +199,8 @@ pointers and inline assembly under `unsafe`, and the `zerg test` runner. The see
 each with a diagnostic and a nonzero exit.
 
 **Concurrency is back, and the two compilers differ.** `zerg` implements the whole chapter
-— `Result[T]` receives, directional channel ends (`<-chan[T]` / `chan[T]<-`), `close(ch)`
-and `defer close(ch)`, scope-exit release, `select` with `done`, and `time.after` /
+— `T?` receives, directional channel ends (`<-chan[T]` / `chan[T]<-`), `close(ch)`
+and `defer close(ch)`, scope-exit release, `select` and `for select`, and `time.after` /
 `time.ticker`. The **seed** carries the happy path — `chan[T](cap)`, `ch <- v`, `<-ch`,
 `close(ch)`, `spawn f(args)`, `select`, `for v in ch` — and refuses **six shapes** by name:
 a directional channel type, a `spawn` whose callee is a method, a namespaced function or a
@@ -212,7 +212,7 @@ wrapping `+%` operators (today arithmetic lowers to plain C); the full `derive` 
 (`Hash` / `Encode` / `Decode`); `set[T]`; `list` / `map` equality; command literals (`` `git status` ``);
 the `is` type-test for non-error types; scheduler **preemption** (the **M:N** scheduler itself is here —
 nothing yet takes a coroutine off its worker until it parks, so a CPU-bound coroutine occupies one worker
-and as many of them as there are workers stop the program); `?` on a receive, which waits on `Result[T]`
+and as many of them as there are workers stop the program); `guard { … }` bound to a name, which waits on `Result[T]`
 surviving in a signature; the `Reader` / `stdin` I/O surface; generic type aliases; and a handful of
 smaller forms tracked in the spec's status markers.
 

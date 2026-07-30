@@ -7,9 +7,9 @@
 #
 # Sending is the part worth remembering. A close is an end-of-stream, not an
 # event: a cleanly closed receive arm is DROPPED rather than fired, so closing
-# `cancel` would never fire the cancel arm. It feeds `done` instead — which
+# `cancel` would never fire the cancel arm. It feeds `close` instead — which
 # waits for every watched receive channel — so closing it means "there will be
-# no cancellation", which is exactly what lets `done` fire when the work runs
+# no cancellation", which is exactly what lets `close` fire when the work runs
 # out. Send to stop early; close to say you never will.
 #
 # `spawn` is fire-and-forget with no handle, so there is nothing to kill: a
@@ -42,30 +42,26 @@ fn source(n: int) -> <-chan[int] {
 fn stage(work: <-chan[int], cancel: <-chan[int], out: chan[int]<-) {
 	mut total := 0
 
-	for {
-		select {
-			# a value arrived — the arm body is a plain reassignment
-			v := <-work => total = total + v!
+	# `for select` ends when every watched receive channel has ended, so "the work finished"
+	# needs no arm of its own — the loop falls out and the total goes out below it.
+	for select {
+		# a value arrived — the arm body is a plain reassignment, and `v` is an `int`:
+		# a closed channel never fires an arm, so there is nothing to unwrap
+		v := <-work => total = total + v
 
-			# stopped early: a value was SENT on cancel
-			<-cancel => {
-				out <- total
-				return
-			}
+		# stopped early: a value was SENT on cancel
+		<-cancel => {
+			out <- total
+			return
+		}
 
-			# timed out — 1ms, in nanoseconds
-			<-time.after(1000000) => {
-				out <- total
-				return
-			}
-
-			# work and cancel have both closed
-			done => {
-				out <- total
-				return
-			}
+		# timed out — 1ms, in nanoseconds
+		<-time.after(1000000) => {
+			out <- total
+			return
 		}
 	}
+	out <- total
 }
 
 fn main() {
@@ -75,7 +71,7 @@ fn main() {
 	spawn stage(source(3), cancel, out)
 
 	cancel <- 1 # stop it now …
-	# close(cancel)  # … or: no cancellation — let the work finish and `done` fire
+	# close(cancel)  # … or: no cancellation — let the work finish and `close` fire
 
 	print (<-out)!
 }

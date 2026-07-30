@@ -25,14 +25,11 @@ fn load() -> Result[Config] {
 }
 ```
 
-> **[deviation]** `?` 定義在任何 `Either[X, Y]` 上——拆出 `Left`、把 `Right` 原封不動提早 return——而兩個編譯器
-> 各覆蓋其中一半。**種子**穿引 `Result[T]`：在**一般的 `Either`** 上右側 payload 被**丟棄**（一次靜默的誤編譯），
-> 而對 **`Result[nil]`** 的 `?` 抵達後端時是一個 `void` 型別的 binding（一個 fail-loud 的 sema 缺口）。
->
-> 出貨的 **`zerg`** 穿引的則是 **`T?`**：缺席會提早 return，外圍函式必須回答一個 `T?` 才載得住它。
-> `Result` 那一半在那裡被**指名拒絕**，因為 `Result[T]` 還無法存活於簽章。
->
-> 意圖中的行為是在每種情形都把 `Right` 值原封不動穿引。
+> **[deviation]** `?` 定義在任何 `Either[X, Y]` 上——拆出 `Left`、把 `Right` 原封不動提早 return。出貨的
+> **`zerg`** 對每一種 carrier 都正是如此:外圍函式必須回答一個**右側相同**的 carrier,而右側原封不動地穿過去,
+> 所以 `Err` 在傳播後仍保有它的 kind。**種子**則只穿引 `Result[T]`:在**一般的 `Either`** 上右側 payload 被
+> **丟棄**（一次靜默的誤編譯）,而對 **`Result[nil]`** 的 `?` 抵達後端時是一個 `void` 型別的 binding（一個
+> fail-loud 的 sema 缺口）。
 
 **`??`——預設值。** `a ?? b`：`a` 有左值就用它，否則用 `b`（右值被丟棄）；短路、右結合可串接，適用任何 `Either`。
 
@@ -57,6 +54,9 @@ addr := config?.server?.host ?? "localhost"
 **不可回復**者——壞掉的 invariant、失敗的 assertion、一個「不可能發生」——因此不進任何簽章、只被 `guard` 攔下。
 一個 **`raise e from cause`** 形式會把 `cause` 記成 `e` 的 `unwrap()`——一個 **nested** abort,把底層 `Err` 包進更高
 層的一個、而不遺失它,餵的是每個 `Error` 都有的那條 cause chain;裸的 `raise e` 則原封不動攜帶 `e`。
+`raise` **語句**帶有每一種 diverge 都有的**後綴 guard**——`raise e if c`,以及 `raise e from cause if c`
+——它是 `if c { raise e }` 的糖,也正是格式化器的 `F401` 會把 block 形式改寫成的樣子。它只屬於語句形式:
+`??` 右側的 `raise` 不接尾隨 `if`,否則那個 guard 會讀成 coalesce 的。
 
 **內建的錯誤分類。** 這個階段提供**固定的六種**錯誤 **[implemented]**:**`ValueError`**、**`OverflowError`**、
 **`IOError`**、**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec

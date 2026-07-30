@@ -349,9 +349,7 @@ fn scan_fstring(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		# ENil, so a malformed literal would compile to a program that silently lacks it.
 		# The forms below cannot be recovered from either — an unclosed hole has no end to
 		# guess at — so the lexer is where they stop.
-		if eof(l) or at(l, 0) == byte(10) {
-			raise "f-string: unterminated literal: " + lexeme_from(l, soff)
-		}
+		raise "f-string: unterminated literal: " + lexeme_from(l, soff) if eof(l) or at(l, 0) == byte(10)
 		c := at(l, 0)
 		if depth > 0 {
 			if c == b'{' {

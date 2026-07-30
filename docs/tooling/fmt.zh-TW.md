@@ -179,13 +179,17 @@ Idempotence 仍然是 printer 的。兩個 token 之間的空白不是 token，�
 | `F407` | 丟棄用的 receive binder 直接刪——`_ := <-ch =>` 就是 `<-ch =>` | 啟用 |
 | `F408` | 連續整數的 or-pattern 收成它本來就是的 range                  | 啟用 |
 
-`GRAMMAR` 把 `return x if c`、`break if c`、`continue if c` **定義為** `if c { … }` 包住同一個
-跳轉的糖——一個後綴 `if`，三種跳轉。兩種寫法說的是同一件事，而其中一個用四行說。格式化器選短的
+`GRAMMAR` 把 `return x if c`、`break if c`、`continue if c` 與 `raise e if c` **定義為** `if c { … }`
+包住同一個跳轉的糖——一個後綴 `if`，涵蓋每一種 **diverge**。兩種寫法說的是同一件事，而其中一個用四行說。格式化器選短的
 那個——那正是 guard clause 的用途：例外的出口不再打斷它所守護的那段程式的形狀。裸的提早返回也
 一樣：`return if c`。
 
 「優先使用糖」是這裡的通則，不是為 `return` 開的特例：**只要語言為「已經寫下的東西」提供了更短
 的表面形式，標準形就是短的那個**，讀者也就不必再去注意兩者是同一件事。
+
+**已經帶著自己 guard 的跳轉**會留在它的區塊裡。沒有任何單一的 `if` 說得出 `if m { return 0 if n < 0 }`
+所說的事,而寫成 `return 0 if n < 0 if m` 會是任何編譯器都無法解析的原始碼——所以這條規則選擇放手,
+而不是自己發明一個。
 
 要注意這個後綴 `if` **不是**什麼：它掛在跳轉上，不掛在運算式上——Zerg 沒有 `A if X else B`。
 條件**運算式**是區塊形式，而且 `else` 是強制的：`x := if c { 1 } else { 2 }`。

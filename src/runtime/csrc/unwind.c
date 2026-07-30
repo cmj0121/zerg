@@ -160,11 +160,12 @@ zrt_err zrt_err_new_kind(int kind, const char *msg) {
 }
 
 zrt_err zrt_err_with_cause(const char *msg, zrt_err cause) {
-	zrt_err e;
-	e.msg = msg;
+	return zrt_err_chain(zrt_err_new(msg), cause);
+}
+
+zrt_err zrt_err_chain(zrt_err e, zrt_err cause) {
 	e.cause = (zrt_err *)zrt_alloc(sizeof(zrt_err));
 	*e.cause = cause;
-	e.kind = ZRT_ERR_NONE;
 	return e;
 }
 

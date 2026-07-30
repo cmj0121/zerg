@@ -337,7 +337,7 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': t
 - **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
   function returns `nil`. A **trailing `if`** makes it conditional — `return MAX if v > MAX` is sugar for
   `if v > MAX { return MAX }` (and bare `return if done`), the same postfix `if` as `break if` / `continue
-if`; on a false condition control falls through. A leading `if` _with a block_ is instead an if-expression
+if` / `raise e if`; on a false condition control falls through. A leading `if` _with a block_ is instead an if-expression
   being returned (`return if c { a } else { b }`); the conditional-return `if` takes a bare condition, no block.
 - **Parameters.** A parameter passes **by value** (a copy) and may carry a **default** `= expr`. A **named
   argument** at the call is `name: value` (the `arg` form from group 4): positional arguments come first,

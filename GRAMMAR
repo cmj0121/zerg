@@ -46,7 +46,7 @@ stmt-sep  ::= NEWLINE | ';'       # ';' is valid but the formatter splits onto l
 # prefix). 'nop' is the smallest simple statement; the rest are filled in by later
 # groups.
 statement      ::= simple-stmt | compound-stmt | decorated-decl
-simple-stmt    ::= nop | binding | reassign | print | return | raise | break
+simple-stmt    ::= nop | binding | reassign | print | return | raise-stmt | break
                  | continue | spawn-stmt | send-stmt | import-stmt | defer-stmt
                  | del-stmt | close-stmt | expr-stmt
 compound-stmt  ::= block | with-stmt | if-stmt | for-stmt | select-stmt | for-select
@@ -286,7 +286,8 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # captures. 'return' exits, optionally with a value; an absent '-> type' means the
 # function returns nil. A trailing 'if' makes it CONDITIONAL — 'return expr if cond' is sugar
 # for 'if cond { return expr }' (and 'return if cond' for a bare early exit), the same postfix
-# 'if' as 'break if' / 'continue if' (group 6); on a false cond, control falls through.
+# 'if' as 'break if' / 'continue if' (group 6) and 'raise e if' (group 8) — EVERY diverge
+# carries it; on a false cond, control falls through.
 # DISAMBIGUATION: a leading 'if' whose condition is followed by a '{' block is instead an
 # if-EXPRESSION being returned ('return if c { a } else { b }' yields a value); the conditional-
 # return 'if' takes a bare condition and NO block. A parameter passes BY VALUE (a copy); 'mut &x' instead passes a
@@ -609,10 +610,14 @@ fn-sig       ::= 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' 
 #   guard { … }   demote an abort in the block back to a value → Result[T] (abort → value)
 # The '??' right side may DIVERGE instead of giving a value — 'x ?? break', 'v ?? return
 # nil', 'p ?? raise Err' — because break/continue/return/raise never produce a value.
+# The postfix 'if' guard belongs to the STATEMENT form of a diverge ('raise-stmt', group 1),
+# so 'p ?? raise Err' takes no trailing 'if': the guard would read as the coalesce's, not
+# the raise's.
 
 coalesce-expr ::= or-expr ( '??' coalesce-rhs )?    # '??': loosest binary, right-assoc
 coalesce-rhs  ::= coalesce-expr | diverge
 diverge       ::= 'break' | 'continue' | return | raise
+raise-stmt    ::= raise ( 'if' expr )?               # the postfix guard, as on every other diverge
 raise         ::= 'raise' expr ( 'from' expr )?     # 'from c' records c as e's cause
 guard-expr    ::= 'guard' block                     # yields Result[T]; T = the block's value
 

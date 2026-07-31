@@ -15,6 +15,9 @@ struct Parser {
 	toks: list[Token]
 	pos: int
 	impl_ty: str
+
+	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
+	path: str
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -266,9 +269,18 @@ fn conv_ty(name: str) -> Ty {
 
 # parse turns source into a File. Imports, structs, enums, functions, and `impl` blocks
 # are recognised at the top level; any other top-level token is skipped.
+# parse reads a source with no path. Everything a diagnostic says about it will name the
+# line and the column and no file — which is what `--emit ast` and the import scan want,
+# since neither reports anything.
 pub fn parse(src: str) -> File {
+	return parse_at(src, "")
+}
+
+# parse_at reads a source that came from `path`, which every function it declares carries
+# so a diagnostic can name the file it was written in.
+pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "")
+	mut p := Parser(toks, 0, "", path)
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -553,7 +565,7 @@ fn parse_init(mut &p: Parser, at: int) -> FnDecl {
 	expect(p, RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, TVoid, body, false)
+	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path)
 }
 
 pub fn init_name(at: int) -> str {
@@ -891,7 +903,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		has_ret = true
 	}
 	body := parse_block(p)
-	return FnDecl(name, recv, params, has_ret, ret, body, is_pub)
+	return FnDecl(name, recv, params, has_ret, ret, body, is_pub, p.path)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {
@@ -899,6 +911,10 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 	mut body: list[Stmt] = []
 	skip_semis(p)
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		# the marker carries where the statement STARTS, read before it is parsed, so a
+		# diagnostic about anything in it has a line and a column to name
+		t := cur(p)
+		body.append(SAt(t.line, t.col))
 		body.append(parse_stmt(p))
 		skip_semis(p)
 	}
@@ -1856,7 +1872,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty)
+	mut hp := Parser(toks, 0, p.impl_ty, p.path)
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

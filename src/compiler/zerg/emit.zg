@@ -180,6 +180,13 @@ struct Emitter {
 	# separate from every other counter here because they must not renumber anything: a
 	# scope id never reaches the emitted C, so drawing these from dfn_n or op_n would move
 	# temp names for a change that emits nothing.
+	# at_line / at_col are where the statement being emitted STARTS, updated by the SAt
+	# marker the parser puts before each one. Every diagnostic reads them, which is what
+	# turns a message into a message with a place.
+	at_path: str
+	at_line: int
+	at_col: int
+
 	scope_n: int
 	scope_cur: int
 
@@ -3289,6 +3296,9 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
+
+		# a marker, not a statement: it records where the next one starts and emits nothing
+		SAt(l, c) => c_at(em, l, c)
 	}
 }
 
@@ -3297,6 +3307,14 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 # but the C it lowers to is a statement expression, and one whose value is discarded draws
 # a -Wunused-value. Writing the discard down as a cast says the same thing to the reader
 # and keeps the build log free of nine warnings nobody should have to learn to ignore.
+# c_at records the position the SAt marker carries. It answers "" because a marker is not
+# code — it is the only statement in the language that a reader never wrote.
+fn c_at(mut &em: Emitter, l: int, c: int) -> str {
+	em.at_line = l
+	em.at_col = c
+	return ""
+}
+
 fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
 	rendered := c_expr(em, e, c_nosub())
 	return f"{ind}(void)({rendered});\n" if c_is_guard(e)
@@ -4025,7 +4043,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_rel_fns := em.rel_fns
 	saved_loop_rel := em.loop_rel
 	saved_refs := em.ref_names
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false)))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path)))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
@@ -5320,6 +5338,7 @@ fn c_loop_jump_err(kw: str, in_loop: bool) {
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
+	em.at_path = fn_d.path
 	c_reset_env(em)
 	c_check_loop_jump(fn_d.body, false)
 
@@ -5440,6 +5459,15 @@ pub fn emit_c(src: str) -> str {
 # returns them as one File, declarations in source order. The whole-program view every
 # pass wants: the emitter lowers it, the linter walks it.
 pub fn merge_files(srcs: list[str]) -> File {
+	mut none: list[str] = []
+	return merge_files_at(srcs, none)
+}
+
+# merge_files_at is merge_files with each source's PATH beside it, so every function it
+# declares remembers the file it was written in. A whole program is one File by the time
+# anything is emitted, and a diagnostic that cannot name the file is half an address; a
+# short `paths` list simply leaves the rest unnamed rather than being an error.
+pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -5447,7 +5475,11 @@ pub fn merge_files(srcs: list[str]) -> File {
 	mut consts: list[Stmt] = []
 	mut i := 0
 	for i < srcs.len() {
-		f := parse(srcs[i])
+		mut path := ""
+		if i < paths.len() {
+			path = paths[i]
+		}
+		f := parse_at(srcs[i], path)
 		for im in f.imports {
 			imports.append(im)
 		}
@@ -5471,7 +5503,13 @@ pub fn merge_files(srcs: list[str]) -> File {
 # emit_files lowers several sources to one C translation unit — the whole program in one
 # object, which is what a single `zerg build` of an entry file produces.
 pub fn emit_files(srcs: list[str]) -> str {
-	return c_emit_file(merge_files(srcs))
+	mut none: list[str] = []
+	return emit_files_at(srcs, none)
+}
+
+# emit_files_at is emit_files with the sources' paths, which the diagnostics need.
+pub fn emit_files_at(srcs: list[str], paths: list[str]) -> str {
+	return c_emit_file(merge_files_at(srcs, paths))
 }
 
 # emit_unit lowers ONE module for separate compilation, from ALREADY PARSED input: `prog`
@@ -5528,7 +5566,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, 0, 0, [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

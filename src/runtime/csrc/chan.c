@@ -63,6 +63,20 @@ struct zrt_chan {
 	size_t         senders; /* send-capable handles; zero -> auto-close */
 	bool           closed;  /* set once senders reaches zero */
 	zrt_err        err;     /* why it closed; see chan_close. Valid from construction. */
+
+	/* What this channel will close WITH: the Err of the first sender that crashed, or the
+	 * clean end it starts as. The crash used to be read at the instant the count hit zero,
+	 * so it travelled only if the dying sender happened to be the LAST handle — and with
+	 * several workers a producer that died while another handle was outstanding closed the
+	 * channel as an ordinary end. conc_crash printed `1 2 99` about one run in twenty, `99`
+	 * being the line the crash was supposed to make unreachable. Which handle goes last is
+	 * a scheduling accident; whether a producer died is not.
+	 *
+	 * One field, not a flag beside it: StopIteration is the sentinel this file already
+	 * uses to tell a clean end from a crash (see the `crashed` local in the select drain),
+	 * and it is sound for the reason chan_stop_iteration gives — no Zerg program can raise
+	 * that kind, so no crash Err wears it by accident. */
+	zrt_err        crash_err;
 	size_t         elemsz;  /* element size in bytes (memcpy unit) */
 	size_t         cap;     /* ring capacity; 0 = unbuffered rendezvous */
 	size_t         head;    /* ring read cursor */
@@ -168,6 +182,7 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 	ch->senders = 1; /* the new bidirectional handle is a sender */
 	ch->closed = false;
 	ch->err = chan_stop_iteration(); /* zrt_alloc is malloc: never leave the reason garbage */
+	ch->crash_err = ch->err; /* a clean end until a sender says otherwise */
 	ch->elemsz = elemsz;
 	ch->cap = cap;
 	ch->head = ch->tail = ch->len = 0;
@@ -240,6 +255,11 @@ void zrt_chan_release(zrt_chan *ch) {
 
 void zrt_chan_sender_release(zrt_chan *ch) {
 	zrt_mutex_lock(&ch->lock);
+	/* remembered BEFORE the count is tested: this handle may not be the one that takes it
+	 * to zero, and the crash has to outlive the difference */
+	if (ch->crash_err.kind == ZRT_ERR_STOP_ITERATION && zrt_crash_active()) {
+		ch->crash_err = zrt_taken_err();
+	}
 	if (--ch->senders == 0) {
 		/* the last sender left: auto-close. A crashing sender (Fork-C) hands the channel
 		 * its OWN in-flight Err — message, cause and kind intact — so the receiver reads
@@ -247,7 +267,7 @@ void zrt_chan_sender_release(zrt_chan *ch) {
 		 * receiver cannot read is a crash reason lost. chan_close wakes the parked
 		 * receivers, so it runs with the lock held — waking takes the scheduler lock,
 		 * which is the allowed order. */
-		chan_close(ch, zrt_crash_active() ? zrt_taken_err() : chan_stop_iteration());
+		chan_close(ch, ch->crash_err);
 	}
 	bool last = (--ch->rc == 0);
 	zrt_mutex_unlock(&ch->lock);

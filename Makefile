@@ -30,7 +30,7 @@ CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_ch
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject docs-links lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -109,6 +109,13 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
 	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
 
+# A target of its own, because CI does not run fmt-corpus — hanging this off it meant the
+# gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.
+fmt-tokens:                     # formatting changes spacing, never the token stream
+	$(MAKE) build
+	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@./scripts/fmt-tokens.sh
+
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
@@ -173,6 +180,32 @@ refuse:                         # every program that must be turned away, is —
 reject:                         # every program that is not Zerg is rejected — by the compiler
 	$(MAKE) build
 	./scripts/reject-check.sh
+
+# Two Linux-only defects reached main this month — a preprocessor `#if` no GCC before 14
+# can parse, and a `MAP_ANONYMOUS` glibc hides under `-std=c11` — and neither was visible
+# from macOS. The docker flow that found them was driven by hand every time; this is it,
+# written down. It is not part of any other target: it needs docker, and a developer
+# without it should still be able to run everything else.
+linux-ci:                       # run the Linux gates in a container, as CI does
+	@docker info >/dev/null 2>&1 || { echo "linux-ci: docker is not running"; exit 1; }
+	docker run --rm -v "$(PWD):/src:ro" $(LINUX_IMAGE) bash -c '\
+		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && \
+		for t in $(LINUX_GATES); do printf "linux %-14s " $$t; \
+			make $$t >/dev/null 2>&1 && echo OK || { echo FAIL; exit 1; }; \
+		done'
+
+LINUX_IMAGE ?= golang:1.26-bookworm
+LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus fmt-tokens lint fixpoint docs-links sanitize-conc
+
+# `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
+# the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
+# and holds the result to the standing contract — refused by the compiler, never by cc. It
+# found two things on its first run: an enum payload whose type was not a type name, and
+# how many refusals still carry no position.
+reject-fuzz:                    # break the corpus's working programs and hold the contract
+	$(MAKE) build
+	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	./scripts/reject-fuzz.sh
 
 docs-links:                     # every docs path the repo cites must resolve
 	@fail=0; \

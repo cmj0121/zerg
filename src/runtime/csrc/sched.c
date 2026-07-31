@@ -141,6 +141,58 @@ static size_t g_live_running;
  * sleeping one is. */
 static zrt_coro *g_timerq;
 
+/* --- the schedule seed --------------------------------------------------------
+ *
+ * ZRT_SEED turns the run queue's order from ONE schedule into a sampled space of them,
+ * and — this is the whole point — a REPRODUCIBLE one.
+ *
+ * A cooperative scheduler this program owns has a property a preemptive one does not:
+ * with a single worker the interleaving is entirely decided here, so a seed makes a run
+ * a pure function of (program, seed).
+ *
+ * It samples the RUN QUEUE and nothing else. A channel's wait queues are FIFO, so which
+ * parked receiver a hand-off goes to is still fixed, and timers fire by deadline before
+ * the pop. Calling this "every schedule" would stop the next person widening it.
+ *
+ * That matters because a concurrency bug in this
+ * runtime has, until now, been found only by CI and only by chance — the last one showed
+ * up one run in several hundred, was fixed by reading the code, and could not be verified
+ * at all, because nothing could make it happen twice.
+ *
+ * The default is 0, which is the FIFO order the shipped runtime has always used: a build
+ * that does not ask for a seed behaves exactly as before, down to the schedule.
+ *
+ * It only exhausts the space under ZRT_WORKERS=1. With several workers the OS decides
+ * things this cannot, so a seed there widens the search without making it repeatable —
+ * still useful, still not a repro. */
+static uint64_t g_seed;
+static uint64_t g_rng;
+
+/* rng_next is xorshift64*, chosen because it is eight lines and needs nothing. The
+ * quality wanted here is "spreads the choices", not cryptographic. */
+static uint64_t rng_next(void) {
+	g_rng ^= g_rng >> 12;
+	g_rng ^= g_rng << 25;
+	g_rng ^= g_rng >> 27;
+	return g_rng * 2685821657736338717ULL;
+}
+
+static void seed_init(void) {
+	const char *s = getenv("ZRT_SEED");
+	if (s == NULL || *s == '\0') {
+		return;
+	}
+	uint64_t v = 0;
+	for (const char *p = s; *p >= '0' && *p <= '9'; p++) {
+		v = v * 10 + (uint64_t)(*p - '0');
+	}
+	if (v == 0) {
+		return; /* ZRT_SEED=0 asks for the ordinary order, and says so */
+	}
+	g_seed = v;
+	g_rng = v;
+}
+
 /* runq_push / runq_pop assume g_lock is HELD. They are the only two places the queue
  * is touched, which is what keeps the locking discipline reviewable in one screen. */
 static void runq_push(zrt_coro *co) {
@@ -153,7 +205,12 @@ static void runq_push(zrt_coro *co) {
 	g_runq_tail = co;
 }
 
+static zrt_coro *runq_pop_seeded(void);
+
 static zrt_coro *runq_pop(void) {
+	if (g_seed != 0) {
+		return runq_pop_seeded();
+	}
 	zrt_coro *co = g_runq_head;
 	if (co != NULL) {
 		g_runq_head = co->qnext;
@@ -162,6 +219,34 @@ static zrt_coro *runq_pop(void) {
 		}
 		co->qnext = NULL;
 	}
+	return co;
+}
+
+/* runq_pop_seeded takes the k-th runnable coroutine rather than the first. A linear walk
+ * twice over a queue whose length is the number of RUNNABLE coroutines — not of all of
+ * them, since a parked one is not here — which is small, and this path is only taken by a
+ * build that asked for it. */
+static zrt_coro *runq_pop_seeded(void) {
+	size_t n = 0;
+	for (zrt_coro *c = g_runq_head; c != NULL; c = c->qnext) {
+		n++;
+	}
+	if (n == 0) {
+		return NULL;
+	}
+	size_t k = (size_t)(rng_next() % (uint64_t)n);
+	zrt_coro **link = &g_runq_head;
+	zrt_coro *prev = NULL;
+	for (size_t i = 0; i < k; i++) {
+		prev = *link;
+		link = &(*link)->qnext;
+	}
+	zrt_coro *co = *link;
+	*link = co->qnext;
+	if (co == g_runq_tail) {
+		g_runq_tail = prev;
+	}
+	co->qnext = NULL;
 	return co;
 }
 
@@ -289,10 +374,12 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	co->tsan_fiber = ZRT_TSAN_FIBER_NEW(); /* NULL, and free, unless this is a TSan build */
 	co->thunk = thunk;
 	co->env = env;
-	co->tls.stack = NULL;
-	co->tls.len = 0;
-	co->tls.cap = 0;
-	co->tls.handler = NULL;
+	/* the WHOLE bundle, not four of its fields. Initialising it member by member left
+	 * `taken` uninitialised from the day it was added, and adding `crashing` beside it
+	 * made that visible: UBSan reported a `_Bool` holding 190 on the first sender release
+	 * of almost every concurrent program. A field added to zrt_tls must not need an edit
+	 * here to be safe. */
+	co->tls = (zrt_tls){0};
 	co->qnext = NULL;
 	zrt_ctx_init(&co->ctx, co->stack, co->stack_size, coro_trampoline, co);
 	zrt_mutex_lock(&g_lock);
@@ -578,6 +665,7 @@ static void sched_drain(void) {
 	/* ZRT_WORKERS=1 forces the single-worker path on a host that has threads. It is how
 	 * a concurrency failure is told apart: if it survives with one worker it is a bug in
 	 * the scheduler's logic, and if it only appears with several it is a race. */
+	seed_init();
 	if (zrt_thread_supported() && getenv("ZRT_WORKERS") == NULL) {
 		want = zrt_cpu_count();
 		if (want > ZRT_MAX_WORKERS) {

@@ -1386,6 +1386,19 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`")
 		}
 	}
+	# A VARIANT'S PAYLOAD is a type position like any other, and it was the one this pass
+	# did not walk — so `Leaf(int, 1)` declared a payload of type `1`, and the emitter wrote
+	# `zg_1` into a union member for cc to complain about. Found by the mutation fuzzer,
+	# which is the first thing that ever put a wrong type there.
+	for e in f.enums {
+		for v in e.variants {
+			mut i := 0
+			for i < v.fields.len() {
+				c_check_named_ty(em, v.fields[i], f"payload {strconv.to_string(i, 10)} of `{e.name}.{v.name}`")
+				i = i + 1
+			}
+		}
+	}
 	for fn_i in f.fns {
 		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {
@@ -3017,7 +3030,7 @@ fn c_arm_guard(mut &em: Emitter, a: Arm, sb: Subst) -> str {
 fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	c_bind_env(em, a, st)
 	if a.pat == 0 {
-		return c_arm_range(em, a, s, sb) if c_is_range(a.lit)
+		return c_arm_range(em, a, s, st, sb) if c_is_range(a.lit)
 
 		# `A | B =>` is an OR-PATTERN in GRAMMAR and a bitwise-or to this parser, so the arm
 		# would be compared against `A | B` folded into one value — matching neither side, and
@@ -3025,7 +3038,11 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# the compiler cannot lower is turned away by name rather than emitted wrong.
 		raise "NotImplemented: an or-pattern — `|` in a pattern is read as the bitwise operator here, so the arm would match neither side. Write consecutive integers as a range (`1..=2`), or one arm each" if c_is_or_pattern(a.lit)
 
-		# literal pattern: scrutinee equals the literal
+		# literal pattern: scrutinee equals the literal. The equality is SYNTHESISED here as
+		# text rather than built as an EBinary, so it reached no operand rule — and
+		# `match x { nil => … }` over an optional lowered to a comparison with 0 exactly as
+		# `x == nil` used to, in the file next door. One rule, two spellings.
+		chk_binary(em, "==", st, c_infer(em, a.lit))
 		return f"({s} == {c_expr(em, a.lit, sb)})"
 	}
 
@@ -3066,7 +3083,11 @@ fn c_is_or_pattern(e: Expr) -> bool {
 	}
 }
 
-fn c_arm_range(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+# c_arm_range lowers `1..=2 =>`. Like the literal arm below it, the comparisons are built
+# as TEXT and so meet no operand rule of their own — a third spelling of the same equality
+# problem, eight lines from the comment that said there were two.
+fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)))
 	lo := c_expr(em, c_range_lo(a.lit), sb)
 	mut base := f"({s} >= {lo})"
 	if not c_is_nil_expr(c_range_hi(a.lit)) {
@@ -4199,6 +4220,19 @@ struct Callee {
 # lambda here may capture nothing (c_lambda refuses it), so there would be no environment
 # to hand a coroutine even if the shape were accepted.
 fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
+	cal := c_callee_raw(em, x, what)
+
+	# `spawn` and `defer` resolve a callee and render its arguments with a loop of their
+	# own, so neither has ever passed through c_args_from — the one place every other call
+	# is measured against its signature. `spawn work(1)` on a two-parameter function
+	# reached cc, which reported "too few arguments" about a thunk this compiler wrote.
+	# They are also the two forms whose bad arguments are hardest to read back from
+	# generated C, since the call the programmer wrote is not the call cc sees.
+	chk_callsite(em, cal.key, cal.args)
+	return cal
+}
+
+fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	n := c_call_name(x)
 
 	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""

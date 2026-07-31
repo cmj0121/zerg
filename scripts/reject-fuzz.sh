@@ -124,6 +124,15 @@ if [ $fail -ne 0 ]; then
 	echo "reject-fuzz: $fail mutation(s) reached cc instead of being refused by the compiler"
 	exit 1
 fi
+
+# A FLOOR, because every assertion below is of the form "not too many": if the mutator
+# stopped applying — an awk change, a corpus rename, a $CORPUS that resolves to nothing —
+# every count is zero, every ceiling is satisfied, and the gate reports success for having
+# measured nothing at all.
+if [ "$((pass + noplace))" -lt "${MIN_REFUSED:-40}" ]; then
+	echo "reject-fuzz: only $((pass + noplace)) mutations were refused — the mutator is not applying"
+	exit 1
+fi
 echo "reject-fuzz: $pass+$noplace mutated programs refused by the compiler, none left to cc"
 echo "reject-fuzz: $noplace of them said no place ($skip mutations did not apply, $unbuildable sources skipped)"
 

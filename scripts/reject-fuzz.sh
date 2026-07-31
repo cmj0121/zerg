@@ -43,14 +43,24 @@ unbuildable=0
 # How many refusals may still carry no place: every one of them is from the parser or the
 # emitter, which do not report through chk_at yet.
 #
-# It is a function of the corpus AND the mutation set, so a change to either makes the
-# scalar incomparable across it — `missing-arg` took it 37 → 51, then teaching that kind to
-# skip declarations and comments took it 51 → 53 while cutting its own share 18 → 7, and a
-# corpus case added in the same change took it to 54. All three are wider or truer
-# measurements rather than regressions, and none of them is visible in the total. The
-# PER-KIND breakdown printed at the end is what a raise has to be argued from; this number
-# only stops the total from drifting silently between such changes.
-NOPLACE_MAX=${NOPLACE_MAX:-54}
+# PER KIND, and one kind is deliberately not capped. A single scalar over six mutation
+# kinds and a growing corpus had to be raised for reasons that were not regressions —
+# 37 -> 51 for a new kind, -> 53 for teaching that kind to skip declarations, -> 54, 56, 57
+# for corpus cases — and each raise buried whatever else moved. Worse, one kind losing
+# places while another gained them keeps the total flat, which is the one thing the total
+# cannot see.
+#
+# `extra-arg` is REPORTED and not capped. It is dominated by the parser's and the emitter's
+# `NotImplemented` refusals, which are a known gap tracked as a whole rather than through
+# this gate, and it grows by about one per corpus file — so a ceiling on it measures how
+# many test programs exist. The other five are the check.zg rules, which DO report a place,
+# and there the number is small, meaningful, and may only go down.
+
+NOPLACE_MAX_missing_arg=${NOPLACE_MAX_missing_arg:-7}
+NOPLACE_MAX_wrong_type=${NOPLACE_MAX_wrong_type:-0}
+NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-3}
+NOPLACE_MAX_int_condition=${NOPLACE_MAX_int_condition:-1}
+NOPLACE_MAX_mixed_operands=${NOPLACE_MAX_mixed_operands:-0}
 
 # mutate writes the mutated program to stdout, or exits non-zero when the mutation does not
 # apply to this source. It is awk rather than sed because the patterns need the indentation
@@ -126,9 +136,15 @@ for kind in extra-arg missing-arg wrong-type write-immutable int-condition mixed
 done
 
 # A RATCHET, in the shape CORPUS_PASS uses. A count that is only printed drifts: 37 becomes
-# 60 and the gate still says OK. This can only go down, and the day it reaches zero the
+# 60 and the gate still says OK. These can only go down, and the day they reach zero the
 # report above becomes an assertion.
-if [ "$noplace" -gt "$NOPLACE_MAX" ]; then
-	echo "reject-fuzz: $noplace refusals say no place, and the ceiling is $NOPLACE_MAX"
-	exit 1
-fi
+rc=0
+for kind in missing-arg wrong-type write-immutable int-condition mixed-operands; do
+	eval "n=\${noplace_${kind//-/_}:-0}"
+	eval "cap=\${NOPLACE_MAX_${kind//-/_}}"
+	if [ "$n" -gt "$cap" ]; then
+		echo "reject-fuzz: $kind has $n refusals with no place, and its ceiling is $cap"
+		rc=1
+	fi
+done
+exit $rc

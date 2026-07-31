@@ -119,17 +119,25 @@ jobs:
         run: make refuse
 
       # --- 8. the corpus the self-hosting compiler owns --------------------------
-      # Best-effort: the corpus is a submodule declared over SSH, so a fork without
-      # access skips it rather than failing.
-      - name: Fetch test-data submodule (best-effort, over HTTPS)
+      # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot
+      # reach it and the fetch fails. Under `continue-on-error` that failure was reported
+      # as a SUCCESSFUL step while `outcome` kept `failure` — and the gate read `outcome`,
+      # so `make corpus` has been skipped on every run since this job was written, inside
+      # a job that went green. A gate nobody can tell is not running is worse than no
+      # gate: it reads as coverage it never had.
+      #
+      # The fetch now says which world it is in. With TESTDATA_TOKEN configured the corpus
+      # is REQUIRED and a broken fetch fails the job. Without it — a fork, or this repo
+      # before the secret exists — the run carries a warning annotation naming the gate
+      # that did not run, so a green check no longer implies the corpus passed.
+      - name: Fetch test-data submodule
         id: corpus_fetch
-        continue-on-error: true
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule update --init --recursive
+        env:
+          TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
+        run: ./scripts/ci-fetch-testdata.sh corpus
 
       - name: Run the corpus with the self-hosting compiler
-        if: steps.corpus_fetch.outcome == 'success'
+        if: steps.corpus_fetch.outputs.available == 'true'
         run: make corpus
 
   # The compiler compiles itself, so a codegen change that makes it emit subtly different
@@ -181,15 +189,16 @@ jobs:
           go-version-file: src/bootstrap/go.mod
           cache-dependency-path: src/bootstrap/go.sum
 
-      # Same best-effort as the corpus above, and for the same reason: the cases live in a
-      # submodule declared over SSH. Without them there is nothing to sanitize.
-      - name: Fetch test-data submodule (best-effort, over HTTPS)
+      # Same fetch as the corpus above, and the same history: this gate has never run.
+      # It matters more here than there, because LeakSanitizer does not exist on macOS —
+      # this job is the ONLY leak signal the concurrency path has, and it has been
+      # reporting success without building a single case.
+      - name: Fetch test-data submodule
         id: corpus_fetch
-        continue-on-error: true
-        run: |
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git submodule update --init --recursive
+        env:
+          TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
+        run: ./scripts/ci-fetch-testdata.sh sanitize-conc
 
       - name: Build every conc_* case with the sanitizers on, and run it
-        if: steps.corpus_fetch.outcome == 'success'
+        if: steps.corpus_fetch.outputs.available == 'true'
         run: make sanitize-conc

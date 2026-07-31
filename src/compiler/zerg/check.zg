@@ -316,6 +316,18 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	return if c_is_unknown(ta) or c_is_unknown(tb)
 
+	# An OPTIONAL is not an operand of ANY of them. `x == nil` is the first thing a person
+	# reaches for to test one, and it lowered to a comparison between the carrier struct
+	# and `0` — but so did `x > 0`, `x + 1`, `x & 1` and `x and true`, because a carrier is
+	# not a scalar and every family's own test answers "not my business" for it. Putting
+	# this under the equality branch, which is where it went first, closed one family of
+	# five. The language's answer is the binding form, which is also the only one that
+	# hands over the value when there is one.
+	if c_is_opt(ta) or c_is_opt(tb) {
+		chk_at(em, f"an optional is not an operand of `{oper}` — unwrap it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
+		return
+	}
+
 	if chk_is_logical(oper) {
 		if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb) {
 			chk_at(em, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
@@ -350,16 +362,6 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	}
 
 	if chk_is_equality(oper) {
-		# An OPTIONAL is not comparable, and `x == nil` is the first thing a person reaches
-		# for to test one. It used to lower to a comparison between the carrier struct and
-		# `0`, which cc rejected — a real error about generated C, for the most natural
-		# spelling of the most ordinary question. The language's answer is the binding form,
-		# which is also the only one that hands over the value when there is one.
-		if c_is_opt(ta) or c_is_opt(tb) {
-			chk_at(em, f"an optional is not compared with `{oper}` — test it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
-			return
-		}
-
 		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
 
 		# int and float compare: they are one family, and the language already mixes them
@@ -451,6 +453,12 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 	# and refusing it here would turn every gap in inference into a rejected program
 	return if c_is_unknown(t)
 
+	# an optional gets the binding advice ALONE: `x != 0` is a program the operand rule
+	# refuses, so following this diagnostic would earn a second one
+	if c_is_opt(t) {
+		chk_at(em, f"the condition of {site} must be bool, and this one is {ty_name(t)} — bind it with `if v := x {{ … }}`, which also hands over what it holds")
+		return
+	}
 	chk_at(em, f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)")
 }
 

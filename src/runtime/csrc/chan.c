@@ -365,10 +365,26 @@ int zrt_chan_recv(zrt_chan *ch, void *out) {
 		if (w.done) {
 			return 0; /* a sender rendezvoused straight into *out. */
 		}
-		/* Woken by close, or spuriously. Re-take the lock and re-check everything: with
-		 * several workers the state that woke us may already have been taken by another
-		 * receiver, which is exactly why this is a loop and not an if. */
+		/* Woken by close, or spuriously. Re-take the lock, UNLINK, and re-check everything:
+		 * with several workers the state that woke us may already have been taken by
+		 * another receiver, which is exactly why this is a loop and not an if.
+		 *
+		 * The unlink is the half this was missing, and the send path above has always had
+		 * it. A close pops every waiter on its way past and a sender's wq_take pops the one
+		 * it hands to — but a SPURIOUS wake pops nothing, so the loop went back to the top
+		 * with this waiter still on the queue. Two of the paths there return: a buffered
+		 * value, and a parked sender to take one from. Either way the coroutine leaves with
+		 * a waiter on the channel's recvq that lives on ITS OWN STACK, and the next thing
+		 * to walk that queue — chan_close, when the last sender goes away — reads a
+		 * `zrt_waiter` out of a stack that is gone.
+		 *
+		 * That is the SEGV in wq_pop that CI found, one run in several hundred: the crash
+		 * is in the channel's close path and the fault is here, in a receiver that returned
+		 * cleanly a long time earlier. wq_remove is a no-op when the waiter is not on the
+		 * queue, which is the ordinary case, so this costs a walk of a queue that is almost
+		 * always empty. */
 		zrt_mutex_lock(&ch->lock);
+		wq_remove(&ch->recvq_head, &ch->recvq_tail, &w);
 	}
 }
 

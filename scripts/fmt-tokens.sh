@@ -8,13 +8,20 @@
 # and the output is still not what the person wrote. That is how `fn main( {` came back as
 # `fn main({` and `print("hi")` as `print ("hi")` with nothing said.
 #
-# This is the property that catches it. The token stream a source produces must survive
-# being formatted — same kinds, same lexemes, same order. Only the POSITIONS may move,
-# which is what formatting is, so the line:col column is dropped before comparing.
+# The property: the token stream a source produces must survive being formatted — same
+# kinds, same lexemes, same order. Only the POSITIONS may move, which is what formatting is,
+# so the line:col column is dropped before comparing.
 #
-# It runs over every corpus this repo has, not only the fmt cases: the codegen programs are
-# the wider surface, and a spacing rule that mangles a form no fmt case contains is exactly
-# the shape of the two defects this gate exists for.
+# WHAT THAT DOES NOT COVER, since the header used to claim otherwise. A change that only
+# moves whitespace — `print("hi")` into `print ( "hi" )` — produces the same tokens and is
+# invisible here; so is a rule that eats a COMMENT, because a comment is not a token at
+# all. The two defects above are of the first kind. What this does catch is a token
+# retexted, merged, dropped or reordered, and a formatted source that no longer lexes —
+# the class where formatting changes what a program MEANS.
+#
+# It runs over the fmt cases, the codegen programs and the numbered examples: the wider
+# surface matters, because a spacing rule that mangles a form no fmt case contains is
+# exactly the shape those two defects had.
 
 set -u
 
@@ -28,6 +35,10 @@ trap 'rm -rf "$tmp"' EXIT
 
 fail=0
 n=0
+
+# how many sources must actually be measured. Raise it when the corpus grows; a gate that
+# measures nothing looks exactly like a gate that found nothing.
+MIN_SOURCES=${MIN_SOURCES:-100}
 
 for src in test-data/fmt/*.zg test-data/codegen/*.zg examples/[0-9][0-9]_*.zg; do
 	[ -f "$src" ] || continue
@@ -70,6 +81,13 @@ done
 
 if [ $fail -ne 0 ]; then
 	echo "fmt-tokens: formatting changed what a source MEANS, not only how it looks"
+	exit 1
+fi
+# A FLOOR, for the reason reject-fuzz has a ceiling: a count that is only printed drifts.
+# Every `|| continue` above is silent, so a formatter that began refusing a whole class of
+# source would shrink this number and still exit 0.
+if [ "$n" -lt "$MIN_SOURCES" ]; then
+	echo "fmt-tokens: only $n sources were measured, and the floor is $MIN_SOURCES"
 	exit 1
 fi
 echo "fmt-tokens: $n sources format without moving a token"

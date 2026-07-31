@@ -29,8 +29,15 @@ expect() {
 	local src="$tmp/$name.zg"
 	cat >"$src"
 
+	# `--emit bin`, not `--emit c`. The C stage stops BEFORE cc, so under it the two
+	# assertions below about cc can NEVER FIRE — a program the compiler emits anyway and
+	# only cc rejects looks ACCEPTED, and the cache path this script was written to watch
+	# for cannot appear because cc never runs. That was true of all 75 cases here from the
+	# day the script was written, and it was only noticed when reject-check.sh was written
+	# beside it and had to answer the same question. Linking for real costs nothing while
+	# the gate is green: a program the compiler refuses never reaches cc at all.
 	local out status
-	out=$("$cc" build --emit c "$src" 2>&1 >/dev/null)
+	out=$("$cc" build --emit bin -o "$tmp/$name.bin" "$src" 2>&1 >/dev/null)
 	status=$?
 
 	if [ $status -eq 0 ]; then
@@ -53,6 +60,16 @@ expect() {
 		return
 		;;
 	esac
+
+	# The cache path is not the only shape a cc error takes: a build given `-o` puts its
+	# intermediate C beside the output instead, so a cc diagnostic can carry no cache path
+	# at all and still be one. reject-check.sh has had this assertion since it was written.
+	if echo "$out" | grep -qE '\.c:[0-9]+:[0-9]+: (error|warning)'; then
+		echo "VIA CC    $name — the message is a cc diagnostic about generated C"
+		fail=$((fail + 1))
+		return
+	fi
+
 	pass=$((pass + 1))
 }
 

@@ -31,7 +31,13 @@ RT="src/runtime/csrc"
 # is a function of its source AND of an interleaving the scheduler picks fresh each run, so
 # one clean run says very little. The sanitizers make each run slower, not slow — these are
 # millisecond programs.
-REPS="${REPS:-10}"
+# SCHEDULES is how many seeded single-worker interleavings each case is run under, and RUNS
+# how many unseeded multi-worker ones. They are separate numbers because they buy different
+# things: a schedule is a repro and a run is a search, and 10 of either was not enough — the
+# day this went to 150 it found three runtime bugs, one of which failed about one run in
+# twenty and had passed every CI run this project had ever done.
+SCHEDULES="${SCHEDULES:-${REPS:-60}}"
+RUNS="${RUNS:-${REPS:-10}}"
 
 [ -x "$ZERG" ] || {
 	printf 'sanitize-conc: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -75,7 +81,7 @@ esac
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zerg-sanitize.XXXXXX")" || exit 2
 
-printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-worker schedules + %s multi-worker runs per case\n\n' "$LEAKS" "$REPS" "$REPS"
+printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-worker schedules + %s multi-worker runs per case\n\n' "$LEAKS" "$SCHEDULES" "$RUNS"
 
 fail=0
 cases=0
@@ -114,7 +120,11 @@ for src in test-data/codegen/conc_*.zg; do
 	# reading the code and never made to happen twice.
 	for mode in many one; do
 		n=0
-		while [ "$n" -lt "$REPS" ]; do
+		reps=$RUNS
+		if [ "$mode" = one ]; then
+			reps=$SCHEDULES
+		fi
+		while [ "$n" -lt "$reps" ]; do
 			seed=$((n + 1))
 			if [ "$mode" = one ]; then
 				got="$(ZRT_WORKERS=1 ZRT_SEED="$seed" "$WORK/$name.bin" 2>"$WORK/$name.err")"
@@ -160,4 +170,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 rm -rf "$WORK"
-printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean\n' "$cases" "$REPS" "$REPS"
+printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean\n' "$cases" "$SCHEDULES" "$RUNS"

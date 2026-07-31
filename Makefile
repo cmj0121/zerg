@@ -30,7 +30,7 @@ CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_ch
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject reject-fuzz linux-ci docs-links lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -108,7 +108,12 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
 	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
-	./scripts/fmt-tokens.sh
+
+# A target of its own, because CI does not run fmt-corpus — hanging this off it meant the
+# gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.
+fmt-tokens:                     # formatting changes spacing, never the token stream
+	$(MAKE) build
+	@./scripts/fmt-tokens.sh
 
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
@@ -149,16 +154,9 @@ fixpoint:                       # prove the compiler still emits the same C for 
 # correctly and leaves the damage behind. Deliberate rather than in `test`, again: it
 # rebuilds every case against the sanitizers, and on Linux it is the only leak gate the
 # concurrency path has (LeakSanitizer does not exist on macOS).
-# REPS is how many SCHEDULES each case is run under, and 10 was not enough to be a gate.
-# Three runtime bugs were found the day it went to 150: a crash flag held per worker
-# instead of per coroutine, an unwind bundle initialised field by field, and a crash Err
-# that only travelled when the dying sender happened to be the last handle — that last one
-# failed about one run in twenty and had sailed through every CI run before.
-SANITIZE_REPS ?= 60
-
 sanitize-conc:                  # run the concurrency corpus under address/UB/leak sanitizers
 	$(MAKE) build
-	REPS=$(SANITIZE_REPS) ./scripts/sanitize-conc.sh
+	./scripts/sanitize-conc.sh
 
 # Every other gate here asks what the toolchain BUILDS. This one asks what it turns away,
 # and the property it pins is not that a bad program fails — it always did — but WHO says
@@ -196,7 +194,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 		done'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
-LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus lint fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus fmt-tokens lint fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

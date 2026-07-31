@@ -133,6 +133,12 @@ jobs:
       - name: Break the working programs and hold the contract
         run: make reject-fuzz
 
+      # --- 7d. formatting changes spacing, never meaning ------------------------
+      # `fmt --check` and idempotence are both blind to a rule that is stably WRONG. This
+      # is the property that is not: the token stream must survive being formatted.
+      - name: Formatting does not move a token
+        run: make fmt-tokens
+
       # --- 8. the corpus the self-hosting compiler owns --------------------------
       # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot
       # reach it and the fetch fails. Under `continue-on-error` that failure was reported

@@ -59,8 +59,13 @@ file:line:col: message
 拒絕——但**哪些**程式被拒絕則是 normative（見各章規則；reject list 為 normative，訊息文字則否）。`fmt` 與 `lint`
 工具僅供參考，永不改變程式的意義。
 
-> **[deviation]** `zerg` 印出訊息，但**不含 `file:line:col` 前綴**：它的 AST 不帶原始碼位置，因此沒有任何
-> pass 報得出來。種子則有。本規範所列的每一個拒絕都由編譯器做出、並指名該形式；但沒有一個指得出行號。
+診斷之後**可以**附上它所指的原始碼行、以及一個標記該行上何處的 caret；`zerg` 會算繪一個。conforming 實作不必
+如此，其形狀也非 normative。一個格式不良的程式**應該**在一次執行中報出所有找得到的診斷，而不是停在第一個 ——
+`zerg` 對它所檢查的規則就是如此。
+
+> **[deviation]** `file:line:col` 前綴出現在 `zerg` **檢查**的規則上，而在它**拒絕**的形式上缺席：來自 parser
+> 或 emitter 的 `NotImplemented` 仍然只報形式名稱、不報位置。`zerg` 記錄的位置是**逐語句**的，所以欄位指的是
+> 語句的起點；當訊息引用了該行上的某個 token 時，caret 會收斂到那個 token。
 
 ## Runtime abort 契約
 

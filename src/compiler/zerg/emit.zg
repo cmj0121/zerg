@@ -4856,6 +4856,8 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# the nil is a value there and has to travel the value path below.
 	return f"{pre}{ind}return {c_carrier_fit(em, em.fn_ret, e, c_nosub())};\n" if has_val and c_is_nil_expr(e) and c_is_carrier(em.fn_ret)
 	if has_val and not c_is_nil_expr(e) {
+		chk_returned(em, e)
+
 		# the returned expression's type is wanted on two conditions that rarely coincide —
 		# a channel return type, and a defer to unwind past — so it is inferred once, and
 		# only when one of them holds. The ordinary `return x` infers nothing.

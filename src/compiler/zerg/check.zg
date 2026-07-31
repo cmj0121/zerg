@@ -74,6 +74,37 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 
 
 
+
+# --- returned value ---------------------------------------------------------------
+#
+# A signature is a promise, and `-> int` with `return "nope"` reached cc as an
+# incompatible-pointer conversion. The declared type is on the function and the `return`
+# may be forty lines away, which is exactly why nobody notices without a check.
+#
+# Same shape as chk_binding, and the same narrowness: a carrier RESHAPES what it is given
+# (`-> int?` takes a bare int, `-> Result[T]` takes a T), so those are not mismatches.
+
+# chk_returned raises when a returned value is not the type the signature declares.
+fn chk_returned(mut &em: Emitter, e: Expr) {
+	declared := em.fn_ret
+	return if c_is_unknown(declared) or c_is_carrier(declared) or ty_is_chan(declared)
+
+	got := c_infer(em, e)
+	return if c_is_unknown(got)
+
+	if c_is_list(declared) and c_is_list(got) {
+		de := c_list_elem(declared)
+		ge := c_list_elem(got)
+		return if c_is_unknown(de) or c_is_unknown(ge)
+		raise f"this function answers {ty_name(declared)} and the value is {ty_name(got)}" if chk_is_scalar(de) and chk_is_scalar(ge) and ty_name(de) != ty_name(ge)
+		return
+	}
+
+	return if not chk_is_scalar(declared) or not chk_is_scalar(got)
+	return if c_is_float(declared) and c_is_int(got)
+	raise f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}" if ty_name(declared) != ty_name(got)
+}
+
 # --- declared type versus value ---------------------------------------------------
 #
 # `x: int = "hello"` reached cc as an incompatible-pointer conversion. `b: bool = 1`

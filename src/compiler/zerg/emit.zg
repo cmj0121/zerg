@@ -4126,7 +4126,12 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			elem := ty_chan_elem(cty)
 			elems.append(elem)
 			nm := f"zgt_sv{tag}_{idx}"
-			out = out + in2 + c_type(elem) + " " + nm + " = " + c_expr(em, a.val, c_nosub()) + ";\n"
+
+			# COPIED, like `ch <- v` — the payload is snapshotted at the send. This arm
+			# rendered the value with c_expr, so a `list` handed to a select send was the
+			# sender's own buffer under the receiver's name, with no reference taken, on
+			# two worker threads at once.
+			out = f"{out}{in2}{c_type(elem)} {nm} = {c_fit_copied(em, elem, a.val, c_nosub())};\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
@@ -5045,7 +5050,11 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	cv := c_var_cname(em, var)
 
 	in2 := ind + "    "
-	mut out := ind + "{\n" + in2 + "zrt_map zgt_mit = " + it + ";\n"
+
+	# COPIED, for the reason c_forin gives: a bare header meant the loop pointed into a
+	# buffer it had taken no reference to, so an insert in the body reallocated `entries`
+	# and the loop read on from the free'd block
+	mut out := ind + "{\n" + in2 + "zrt_map zgt_mit = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
 	out = out + in2 + "for (size_t zgt_i = 0; zgt_i < zrt_map_len(&zgt_mit); zgt_i++) {\n"
 	out = out + in2 + "    " + kc + " " + cv + " = (*(" + kc + "*)zrt_map_key_at(&zgt_mit, zgt_i));\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
@@ -5269,11 +5278,17 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		# a carrier result FITS the value rather than rendering it: `Left(v)` and `Right(e)`
 		# have no type of their own to render as, so the declared result is what decides what
 		# they mean — and asking c_expr first would refuse them before that happened
+		# c_fit_copied, not c_expr: the caller OWNS what it is handed. c_arg copies into a
+		# call so that returning a by-value local needn't copy again — but a borrowed one is
+		# not a local, and `fn leak(mut &xs: list[int]) -> list[int] { return xs }` handed
+		# back a second name for the caller's own buffer. It is also the site that gives a
+		# bare `return []` the declared element type; without it the list had elemsz 0 and
+		# every later append memcpy'd nothing.
 		mut v := ""
-		if c_is_carrier(em.fn_ret) {
-			v = c_carrier_fit(em, em.fn_ret, e, c_nosub())
-		} else {
+		if ret_chan {
 			v = c_expr(em, e, c_nosub())
+		} else {
+			v = c_fit_copied(em, em.fn_ret, e, c_nosub())
 		}
 
 		# A channel travelling OUT is a handle the caller will own, so it carries a reference
@@ -6067,7 +6082,7 @@ fn c_str_helpers() -> str {
 	out = out + "static char* zgs_from_bytes(zrt_list bs) {\n"
 	out = out + "    size_t n = zrt_list_len(&bs);\n"
 	out = out + "    char* r = (char*)malloc(n + 1);\n"
-	out = out + "    for (size_t i = 0; i < n; i++) r[i] = (char)(*(uint8_t*)zrt_list_at(&bs, i));\n"
+	out = out + "    for (size_t i = 0; i < n; i++) r[i] = (char)(*(uint8_t*)zrt_list_at_ref(&bs, i));\n"
 	out = out + "    r[n] = 0;\n    return r;\n}\n"
 	out = out + "static zrt_list zgs_to_bytes(const char* s) {\n"
 	out = out + "    zrt_list l; zrt_list_init(&l, sizeof(uint8_t), &zg_listvt);\n"

@@ -154,13 +154,14 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		units := load_units(files[0])
 		mut trees: list[zerg.File] = []
 		for u in units {
-			trees.append(zerg.merge_files(u.srcs))
+			trees.append(zerg.merge_files_at(u.srcs, u.paths))
 		}
 		compile_to(zerg.emit_unit(zerg.merge_asts(trees), trees[trees.len() - 1]), output + ".o", true)
 		return
 	}
-	srcs := load_sources(files)
-	code := zerg.emit_files(srcs)
+	mut paths: list[str] = []
+	srcs := load_sources_at(files, paths)
+	code := zerg.emit_files_at(srcs, paths)
 	if emit == "c" {
 		guard {
 			io.write(code)
@@ -187,7 +188,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	# compiler did.
 	mut trees: list[zerg.File] = []
 	for u in units {
-		trees.append(zerg.merge_files(u.srcs))
+		trees.append(zerg.merge_files_at(u.srcs, u.paths))
 	}
 
 	prog := zerg.merge_asts(trees)
@@ -385,6 +386,12 @@ fn drop_ext(path: str) -> str {
 struct Unit {
 	name: str
 	srcs: list[str]
+
+	# paths is where each of `srcs` was read from, in the same order. A unit is what a
+	# build compiles, so this is the only place the file a statement came from is still
+	# known — by the time the trees are merged into a whole-program view, nothing else
+	# remembers.
+	paths: list[str]
 }
 
 # load_units returns every unit of the program, dependencies before dependents, the entry
@@ -404,9 +411,11 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	}
 	seen.append(name)
 	mut srcs: list[str] = []
+	mut paths: list[str] = []
 	for f in files {
 		guard {
 			srcs.append(str(io.read_file(f)))
+			paths.append(f)
 		}
 	}
 	for src in srcs {
@@ -417,16 +426,25 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 			}
 		}
 	}
-	units.append(Unit(name, srcs))
+	units.append(Unit(name, srcs, paths))
 }
 
 # load_sources loads every named entry with its imports, keeping one copy of a module
 # that several entries share.
 fn load_sources(files: list[str]) -> list[str] {
+	mut paths: list[str] = []
+	return load_sources_at(files, paths)
+}
+
+# load_sources_at is load_sources with the PATH of each source collected beside it, in the
+# same order. A diagnostic names the file it is about, and by the time anything is emitted
+# the whole program is one merged tree — so the path has to travel with the source from
+# here, or nothing downstream can say where a statement came from.
+fn load_sources_at(files: list[str], mut &paths: list[str]) -> list[str] {
 	mut seen: list[str] = []
 	mut srcs: list[str] = []
 	for f in files {
-		load_into(f, dir_of(f), seen, srcs)
+		load_into(f, dir_of(f), seen, srcs, paths)
 	}
 	return srcs
 }
@@ -587,7 +605,7 @@ fn path_tail(path: str) -> str {
 	return str(out)
 }
 
-fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str]) {
+fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str], mut &paths: list[str]) {
 	for s in seen {
 		return if s == file
 	}
@@ -595,10 +613,15 @@ fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	src := str(io.read_file(file))
 	for im in zerg.imports_of(src) {
 		for dep in module_files(im, from_dir) {
-			load_into(dep, from_dir, seen, srcs)
+			load_into(dep, from_dir, seen, srcs, paths)
 		}
 	}
 	srcs.append(src)
+
+	# appended HERE, not beside `seen`: a module's imports are loaded first, so `seen` is
+	# in discovery order and `srcs` in dependency order, and only the second is the one a
+	# path has to line up with
+	paths.append(file)
 }
 
 # cc_argv builds the cc command line: compile cpath into output over the always-linked,

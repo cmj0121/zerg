@@ -29,6 +29,30 @@
 # scripts/reject-check.sh is the gate, and it holds every rule here to both halves: the
 # compiler must refuse the program, and the refusal must not come from cc.
 
+# --- where a diagnostic happened --------------------------------------------------
+#
+# Every rule below reports through `chk_at`, which puts the place in front of the message.
+# The position comes from the SAt marker the parser leaves before each statement, so it is
+# where the STATEMENT starts rather than the exact token — the honest thing to say about
+# that is that the line is always right and the column points at the beginning of the
+# statement the error is in. Marking the token itself is what a span on every expression
+# would buy, and what `chk_at` will hand over the moment one exists.
+
+# chk_at raises `msg` with the file, line and column of the statement being emitted.
+fn chk_at(mut &em: Emitter, msg: str) {
+	raise f"{chk_place(em)}{msg}"
+}
+
+# chk_place is the `file:line:col: ` prefix, or "" when nothing is known — a source parsed
+# without a path (the import scan, `--emit ast`) still reports, it just cannot say where.
+fn chk_place(mut &em: Emitter) -> str {
+	return "" if em.at_line == 0
+	line := strconv.to_string(em.at_line, 10)
+	col := strconv.to_string(em.at_col, 10)
+	return f"{line}:{col}: " if em.at_path == ""
+	return f"{em.at_path}:{line}:{col}: "
+}
+
 # --- mutability ------------------------------------------------------------------
 #
 # A binding is immutable unless it says `mut`. That is not a diagnostic nicety — the
@@ -57,12 +81,16 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	# A `const` is not an immutable binding that could have been written `mut`; it is a
 	# module constant, and there is no spelling of it that a program may write. Telling
 	# the reader to declare it `mut` would be advice that cannot be taken.
-	raise f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one" if chk_is_const(em, idx)
+	if chk_is_const(em, idx) {
+		chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+	}
 
 	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
 	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
-	raise f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write" if c_ident_name(lhs) != ""
-	raise f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`"
+	if c_ident_name(lhs) != "" {
+		chk_at(em, f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write")
+	}
+	chk_at(em, f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`")
 }
 
 # chk_is_const is whether an environment slot is one of the module constants. c_reset_env
@@ -89,8 +117,12 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 
 	given := base + argc
 
-	raise f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given > em.sig_nparams[row]
-	raise f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given < em.sig_nreq[row]
+	if given > em.sig_nparams[row] {
+		chk_at(em, f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}")
+	}
+	if given < em.sig_nreq[row] {
+		chk_at(em, f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}")
+	}
 }
 
 # chk_call_name spells a signature key the way a reader wrote the call. A free function's
@@ -161,7 +193,9 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 	declared := em.fn_ret
 	got := c_infer(em, e)
-	raise f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}" if not chk_fits(em, declared, got)
+	if not chk_fits(em, declared, got) {
+		chk_at(em, f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}")
+	}
 	return got
 }
 
@@ -174,7 +208,9 @@ fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 # chk_binding raises when a declaration and its initializer are different types.
 fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	got := c_infer(em, ival)
-	raise f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`" if not chk_fits(em, declared, got)
+	if not chk_fits(em, declared, got) {
+		chk_at(em, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
+	}
 }
 
 # --- assigned value ---------------------------------------------------------------
@@ -186,7 +222,9 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 # chk_assigned raises when a value does not fit the storage it is assigned to.
 fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
 	got := c_infer(em, rhs)
-	raise f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}" if not chk_fits(em, want, got)
+	if not chk_fits(em, want, got) {
+		chk_at(em, f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}")
+	}
 }
 
 # chk_target_name names an assignment target the way it was written — the binding for a
@@ -218,7 +256,9 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 
 	want := em.pr_ty[row]
 	got := c_infer(em, arg)
-	raise f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}" if not chk_fits(em, want, got)
+	if not chk_fits(em, want, got) {
+		chk_at(em, f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}")
+	}
 }
 
 # --- operands ---------------------------------------------------------------------
@@ -250,26 +290,34 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	return if c_is_unknown(ta) or c_is_unknown(tb)
 
 	if chk_is_logical(oper) {
-		raise f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb)
+		if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb) {
+			chk_at(em, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+		}
 		return
 	}
 
 	if chk_is_bitwise(oper) {
-		raise f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb)
+		if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb) {
+			chk_at(em, f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+		}
 		return
 	}
 
 	if chk_is_arith(oper) {
 		# `+` is the one arithmetic operator a str also answers, and only for two of them
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
-		raise f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
+			chk_at(em, f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+		}
 
 		return
 	}
 
 	if chk_is_order(oper) {
 		return if c_is_str(ta) and c_is_str(tb)
-		raise f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
+			chk_at(em, f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
+		}
 
 		return
 	}
@@ -280,7 +328,9 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		# int and float compare: they are one family, and the language already mixes them
 		# in arithmetic
 		return if chk_is_num(ta) and chk_is_num(tb)
-		raise f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value" if ty_name(ta) != ty_name(tb)
+		if ty_name(ta) != ty_name(tb) {
+			chk_at(em, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value")
+		}
 	}
 }
 
@@ -289,9 +339,15 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	t := c_infer(em, x)
 
 	return if c_is_unknown(t)
-	raise f"operator `not` takes a bool operand, and this one is {ty_name(t)}" if oper == "not" and chk_scalar_wrong_bool(t)
-	raise f"operator `-` takes a numeric operand, and this one is {ty_name(t)}" if oper == "-" and chk_scalar_wrong_num(t)
-	raise f"operator `~` takes an int operand, and this one is {ty_name(t)}" if oper == "~" and chk_scalar_wrong_int(t)
+	if oper == "not" and chk_scalar_wrong_bool(t) {
+		chk_at(em, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
+	}
+	if oper == "-" and chk_scalar_wrong_num(t) {
+		chk_at(em, f"operator `-` takes a numeric operand, and this one is {ty_name(t)}")
+	}
+	if oper == "~" and chk_scalar_wrong_int(t) {
+		chk_at(em, f"operator `~` takes an int operand, and this one is {ty_name(t)}")
+	}
 }
 
 # The three "wrong" predicates each answer the same shape of question: is this a scalar
@@ -358,7 +414,7 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 	# and refusing it here would turn every gap in inference into a rejected program
 	return if c_is_unknown(t)
 
-	raise f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)"
+	chk_at(em, f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)")
 }
 
 # --- redeclaration ----------------------------------------------------------------
@@ -388,7 +444,9 @@ fn chk_fresh_binding(mut &em: Emitter, name: str) {
 	idx := c_live_idx(em, name)
 
 	return if idx < 0
-	raise f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it" if em.env_scope[idx] == em.scope_cur
+	if em.env_scope[idx] == em.scope_cur {
+		chk_at(em, f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it")
+	}
 }
 
 # chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,

@@ -214,6 +214,21 @@ enum Stmt {
 	# condition expression because the binding only exists inside the then-branch, which no
 	# condition can express.
 	SIfLet(str, Expr, list[Stmt], bool, list[Stmt])
+
+	# SAt is a POSITION MARKER, not a statement anybody wrote: the parser puts one before
+	# each statement of a block, carrying that statement's line and column. It emits
+	# nothing.
+	#
+	# It exists because a diagnostic without a line number is half a diagnostic, and the
+	# alternative — a span field on all 21 Stmt variants and all 28 Expr ones — is 239
+	# match arms across this compiler for one answer. A marker travels WITH the statement
+	# through every list that holds one, which a parallel table indexed by source order
+	# could not: a lambda's body is emitted at a different time from where it was written,
+	# and a match arm's statements are visited more than once.
+	#
+	# It goes BEFORE its statement, never after, so the last element of a block is still
+	# the statement whose value the block answers.
+	SAt(int, int)
 }
 
 # SelArm is one select arm. `op` is 0 recv, 1 send, 3 default — the same order
@@ -263,6 +278,14 @@ struct FnDecl {
 	ret: Ty
 	body: list[Stmt]
 	is_pub: bool
+
+	# path is the file this function was READ FROM. A diagnostic needs it, and a whole
+	# program is merged into one File before emission, so by then nothing else remembers
+	# which module a statement came from. It rides here rather than on the SAt marker
+	# because a function comes wholly from one file — one field instead of one per
+	# statement — and rides on a STRUCT rather than an enum, so it costs its construction
+	# sites and no match arm anywhere.
+	path: str
 }
 
 # FieldDef is one struct field: its name and declared type.

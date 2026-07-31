@@ -348,7 +348,7 @@ fn main() {
 }
 EOF
 
-reject bind-int-list-to-str-list 'is declared list[str] and the value is list[int]' <<'EOF'
+reject bind-int-list-to-str-list 'cannot bind list[int] to a list[str] binding' <<'EOF'
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
@@ -444,6 +444,51 @@ impl P {
 fn main() {
 	p := P(3)
 	print(f"{p.add(1, 2)}")
+}
+EOF
+
+# --- argument versus parameter ----------------------------------------------------
+#
+# The method case pins the two numbers apart: its receiver fills parameter 0 without being
+# written, so the parameter index and the argument's place on the line differ by one, and
+# the message says the one the reader can count.
+
+reject float-argument-into-int-parameter '`f` takes int as argument 1, and this gives float' <<'EOF'
+fn f(a: int) -> int {
+	return a
+}
+
+fn main() {
+	print(f"{f(1.5)}")
+}
+EOF
+
+reject str-argument-into-int-parameter '`add` takes int as argument 2, and this gives str' <<'EOF'
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn main() {
+	s := "x"
+	print(f"{add(1, s)}")
+}
+EOF
+
+reject str-argument-into-a-method '`P.add` takes int as argument 1, and this gives str' <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn add(k: int) -> int {
+		return this.x + k
+	}
+}
+
+fn main() {
+	p := P(3)
+	s := "z"
+	print(f"{p.add(s)}")
 }
 EOF
 

@@ -101,6 +101,36 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_names.len()
 }
 
+# --- a default is a property of the declaration ------------------------------------
+#
+# A default is judged ONCE, where the signature is read, rather than at the calls that
+# happen to omit it. That is not tidiness: `spawn` and `defer` capture the defaults they
+# backfill, so a bad one used to be diagnosed only when spawned — and the message named an
+# argument the programmer never wrote.
+
+# chk_param_defaults raises on a default that could never be legal at any call.
+fn chk_param_defaults(mut &em: Emitter, key: str, fn_d: FnDecl) {
+	# the declaration's own place: this runs before any statement is emitted, so the SAt
+	# markers have said nothing and `em.at_*` still holds whatever the last unit left there
+	em.at_path = fn_d.path
+	em.at_line = fn_d.line
+	em.at_col = fn_d.col
+
+	mut i := 0
+	for i < fn_d.params.len() {
+		pm := fn_d.params[i]
+		if pm.has_def {
+			# a `mut &` takes the ADDRESS of a caller's variable; a default has none to take
+			if pm.is_ref {
+				chk_at(em, f"parameter `{pm.name}` of `{chk_call_name(key)}` is a `mut &` and cannot have a default — a reference needs a caller's variable to point at")
+			} else if not chk_fits(em, pm.ty, c_infer(em, pm.def)) {
+				chk_at(em, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ty_name(c_infer(em, pm.def))}, and the parameter is {ty_name(pm.ty)}")
+			}
+		}
+		i = i + 1
+	}
+}
+
 # --- a pattern binds what the variant holds ----------------------------------------
 
 # chk_variant_binds raises when a constructor pattern names more values than the variant
@@ -111,6 +141,15 @@ fn chk_variant_binds(mut &em: Emitter, ctor: str, n: int) {
 	held := chk_variant_arity(em, ctor)
 	return if n <= held
 	chk_at(em, f"`{ctor}` carries {chk_args(held)} and this pattern binds {strconv.to_string(n, 10)}")
+}
+
+# chk_variant_args raises when a CONSTRUCTION gives a variant more than it carries. It is
+# the same disagreement chk_variant_binds reports, from the other side of the enum: one is
+# `Line(w, h) =>` against `Line(int)`, the other is `Line(7, 8)`.
+fn chk_variant_args(mut &em: Emitter, ctor: str, n: int) {
+	held := chk_variant_arity(em, ctor)
+	return if n <= held
+	chk_at(em, f"`{ctor}` carries {chk_args(held)} and this gives {strconv.to_string(n, 10)}")
 }
 
 # chk_variant_arity is how many payload values a variant carries. The table holds one row

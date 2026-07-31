@@ -560,12 +560,13 @@ fn skip_to_block_end(mut &p: Parser) {
 # The name is not one a program can write (`init` is a keyword), which is what keeps it
 # from colliding with anything the source declares.
 fn parse_init(mut &p: Parser, at: int) -> FnDecl {
+	kw := cur(p)
 	p_advance(p) # 'init'
 	expect(p, LParen)
 	expect(p, RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path)
+	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path, kw.line, kw.col)
 }
 
 pub fn init_name(at: int) -> str {
@@ -851,6 +852,9 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 }
 
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
+	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
+	# signature is made before any statement is emitted, so no SAt marker has spoken yet
+	kw := cur(p)
 	p_advance(p) # 'fn'
 	name := cur(p).lexeme
 	p_advance(p) # name
@@ -903,7 +907,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		has_ret = true
 	}
 	body := parse_block(p)
-	return FnDecl(name, recv, params, has_ret, ret, body, is_pub, p.path)
+	return FnDecl(name, recv, params, has_ret, ret, body, is_pub, p.path, kw.line, kw.col)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {

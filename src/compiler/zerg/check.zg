@@ -251,6 +251,29 @@ fn c_is_fieldref(e: Expr) -> bool {
 	}
 }
 
+# chk_arm_types raises when a `match` USED AS A VALUE has arms that answer different types.
+#
+# The whole match takes its type from the FIRST arm, which is the only one anything looked
+# at: a later arm answering something else was rendered into the same conditional and cc
+# reported the mismatch — as a WARNING under clang, so the program linked. Every arm has to
+# be typed with its OWN payload bound, which is why this is a walk and not a comparison.
+fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
+	return if arms.len() < 2
+
+	want := c_infer_arm_body(em, arms[0], st)
+	return if c_is_unknown(want) or ty_eq(want, TVoid)
+
+	mut i := 1
+	for i < arms.len() {
+		got := c_infer_arm_body(em, arms[i], st)
+		if not c_is_unknown(got) and not ty_eq(got, TVoid) and not chk_fits(em, want, got) {
+			chk_at(em, f"a `match` answers ONE type, and its arms give {ty_name(want)} and {ty_name(got)}")
+			return
+		}
+		i = i + 1
+	}
+}
+
 # chk_ref_arg raises when a `mut &` argument is not a PLACE. A borrow is the caller's own
 # storage handed over to be written, and `m["k"]` is a value however much it reads as one:
 # it lowers to a statement expression, so `&` on it reached cc as "cannot take the address

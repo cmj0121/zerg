@@ -955,6 +955,16 @@ fn main() { print forced(2) ?? -1 }
 EOF
 
 
+# `print` has no two-argument form, so `print(a, b)` builds a TUPLE and prints that. A
+# composite has no rendering — the structural one is `Display`'s job and this compiler
+# generates none — and the cast reached cc as "operand of type 'zg_tup_...' where
+# arithmetic or pointer type is required". The mutation fuzzer is what found it.
+expect "$ZERG" print-a-tuple "rendering a (int, int) as text" <<'EOF'
+fn main() {
+	print(1, 2)
+}
+EOF
+
 # L301: the snapshot semantics of a captured argument. It is here rather than in the reject
 # list because the program is CORRECT — this is the one thing in the language a competent
 # reader has to ask about, so the tool answers instead of waiting to be asked.

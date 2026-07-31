@@ -42,6 +42,15 @@ struct Emitter {
 	# being unwritable unless it says otherwise, and nothing was holding the other end.
 	env_mut: list[bool]
 
+	# env_scope is the id of the BLOCK each binding was made in, in the same order. A
+	# binding is not popped when its block ends — the C names already handed out have to
+	# stay reserved — so "already declared here" cannot be read off the list's shape, and
+	# depth alone would make two SIBLING blocks look like one scope. A fresh id per block
+	# entry is what tells `x := 1; x := 2` (an error) from the same two lines in different
+	# `if` arms (fine) and from shadowing an outer binding or a parameter (fine, and
+	# `mut n := n` is the ordinary way to get a writable copy of one).
+	env_scope: list[int]
+
 	# rel_cnames / rel_fns are the PENDING RELEASES: every binding in scope that owns what
 	# it holds, in declaration order, paired with the runtime function that gives it back.
 	# Today only channel bindings are on it — a channel binding owns a holder count, and a
@@ -157,6 +166,13 @@ struct Emitter {
 	# whole-file diff for a change that touched one expression, and the first thing a
 	# fixpoint failure would show.
 	op_n: int
+
+	# scope_n hands out block ids and scope_cur is the block being emitted. They are
+	# separate from every other counter here because they must not renumber anything: a
+	# scope id never reaches the emitted C, so drawing these from dfn_n or op_n would move
+	# temp names for a change that emits nothing.
+	scope_n: int
+	scope_cur: int
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -751,6 +767,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_cnames = []
 	em.env_dead = []
 	em.env_mut = []
+	em.env_scope = []
 	em.rel_cnames = []
 	em.rel_fns = []
 	em.loop_rel = 0
@@ -768,6 +785,10 @@ fn c_reset_env(mut &em: Emitter) {
 		# a `const` is the one binding the language never lets anyone write, so this is
 		# the only entry here whose answer is fixed rather than read off a declaration
 		em.env_mut.append(false)
+
+		# scope 0 is the module: a constant is in scope in every function, and a local
+		# that shadows one is in a block of its own and so is not a redeclaration
+		em.env_scope.append(0)
 		i = i + 1
 	}
 }
@@ -783,6 +804,7 @@ fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool) {
 	em.env_cnames.append(cname)
 	em.env_dead.append(0)
 	em.env_mut.append(is_mut)
+	em.env_scope.append(em.scope_cur)
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -3837,6 +3859,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			em.env_cnames.append(f"zg_rv{tag}_{k - 1}")
 			em.env_dead.append(0)
 			em.env_mut.append(false)
+			em.env_scope.append(em.scope_cur)
 		}
 		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")
@@ -3902,6 +3925,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_cnames := em.env_cnames
 	saved_dead := em.env_dead
 	saved_mut := em.env_mut
+	saved_scope := em.env_scope
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_loop_rel := em.loop_rel
@@ -3912,6 +3936,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.env_cnames = saved_cnames
 	em.env_dead = saved_dead
 	em.env_mut = saved_mut
+	em.env_scope = saved_scope
 	em.rel_cnames = saved_rel_cnames
 	em.rel_fns = saved_rel_fns
 	em.loop_rel = saved_loop_rel
@@ -4605,6 +4630,8 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 }
 
 fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival: Expr, ind: str) -> str {
+	chk_fresh_binding(em, name)
+
 	mut eff := ty
 	if has_type {
 		if ty_is_chan(ty) {
@@ -5023,6 +5050,14 @@ fn c_err_constructible(name: str) -> bool {
 
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	keep := em.rel_cnames.len()
+
+	# a fresh id, so a name bound here is a REDECLARATION only against the other bindings
+	# of this same block — not against an outer one it shadows, and not against a sibling
+	# block that happens to use the same name
+	outer_scope := em.scope_cur
+	em.scope_n = em.scope_n + 1
+	em.scope_cur = em.scope_n
+
 	mut out := ""
 	if c_has_defer(body) {
 		out = c_block_marked(em, body, ind)
@@ -5033,6 +5068,8 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 			i = i + 1
 		}
 	}
+
+	em.scope_cur = outer_scope
 
 	# a binding made in this block gives its reference back here. A `return` inside the
 	# block already released everything on its way out, so what follows one is dead C.
@@ -5342,7 +5379,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

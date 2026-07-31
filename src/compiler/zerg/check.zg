@@ -71,6 +71,32 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_names.len()
 }
 
+# --- redeclaration ----------------------------------------------------------------
+#
+# A name is bound once per block. Shadowing across blocks is not only legal but load
+# bearing — `mut n := n` is how a function gets a writable copy of a parameter, and it is
+# written that way throughout this compiler — so the rule is about ONE block, not about
+# the name being visible.
+
+# chk_fresh_binding raises when `name` is already bound in the block being emitted.
+fn chk_fresh_binding(mut &em: Emitter, name: str) {
+	# `_` is the discard: it binds nothing a later statement can name, so writing it twice
+	# in a block says "ignore this" twice rather than naming one thing two ways
+	return if name == "_"
+
+	mut i := em.env_names.len() - 1
+	for i >= 0 {
+		if em.env_names[i] == name and em.env_scope[i] == em.scope_cur {
+			raise f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it"
+		}
+
+		# the whole list is walked rather than stopping at the first foreign scope. A
+		# block that has ENDED leaves its bindings behind — their C names stay reserved —
+		# so this block's own earlier bindings sit UNDER them, not above.
+		i = i - 1
+	}
+}
+
 # chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,
 # `p.x`, `p.x.y`, `xs[0]` and `m["k"].f` alike. Anything that does not bottom out in a
 # name answers "".

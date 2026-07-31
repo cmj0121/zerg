@@ -64,8 +64,14 @@ expect() {
 	# The cache path is not the only shape a cc error takes: a build given `-o` puts its
 	# intermediate C beside the output instead, so a cc diagnostic can carry no cache path
 	# at all and still be one. reject-check.sh has had this assertion since it was written.
-	if echo "$out" | grep -qE '\.c:[0-9]+:[0-9]+: (error|warning)'; then
-		echo "VIA CC    $name — the message is a cc diagnostic about generated C"
+	# A cc diagnostic and one of ours are told apart by SHAPE, not by the path in them.
+	# `#line` directives now point cc at the `.zg`, so a cc error can name the source file
+	# the programmer wrote — which is better for a user and blinds the older test, since
+	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
+	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
+	# the place on an indented `-->` line beneath it.
+	if echo "$out" | grep -qE '^[^ ].*:[0-9]+:[0-9]+: (error|warning):'; then
+		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
 		fail=$((fail + 1))
 		return
 	fi

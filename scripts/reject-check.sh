@@ -22,7 +22,7 @@
 #   1. a non-zero exit
 #   2. the expected sentence
 #   3. no mention of .zerg-cache
-#   4. nothing shaped like a cc diagnostic (`<file>.c:LINE:COL: error`)
+#   4. nothing shaped like a cc diagnostic (`<file>:LINE:COL: error:` opening a line)
 #   5. a `--> file:line:col` line, so the reader is told WHERE
 #   6. the SEED refuses it too
 #
@@ -101,8 +101,14 @@ reject() {
 		return
 		;;
 	esac
-	if echo "$out" | grep -qE '\.c:[0-9]+:[0-9]+: (error|warning)'; then
-		echo "VIA CC    $name — the message is a cc diagnostic about generated C"
+	# A cc diagnostic and one of ours are told apart by SHAPE, not by the path in them.
+	# `#line` directives now point cc at the `.zg`, so a cc error can name the source file
+	# the programmer wrote — which is better for a user and blinds the older test, since
+	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
+	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
+	# the place on an indented `-->` line beneath it.
+	if echo "$out" | grep -qE '^[^ ].*:[0-9]+:[0-9]+: (error|warning):'; then
+		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
 		fail=$((fail + 1))
 		return
 	fi

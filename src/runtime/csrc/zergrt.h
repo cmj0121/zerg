@@ -286,6 +286,13 @@ typedef struct {
 	zrt_frame   *handler; /* the innermost abort handler (was g_handler) */
 	zrt_err      taken;   /* the in-flight Err an abort/raise carries; a `guard` reads
 	                       * it with zrt_taken_err on the abort landing (Decision D). */
+
+	/* crashing is true only while THIS coroutine unwinds an unhandled crash, which is
+	 * what makes a channel auto-closed by its last sender carry a crash Err rather than
+	 * a clean end. It lives in the bundle, not beside it: a coroutine MIGRATES, and the
+	 * unwind that sets this runs cleanups that can hand the CPU over, so a flag held per
+	 * WORKER is left behind on the thread the crash started on. */
+	bool         crashing;
 } zrt_tls;
 
 /* zrt_tls_save snapshots the current unwind state into out; zrt_tls_load makes in

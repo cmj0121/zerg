@@ -71,6 +71,26 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_names.len()
 }
 
+
+# --- conditions -------------------------------------------------------------------
+#
+# Zerg has no truthiness: a condition is a bool or it is a mistake. `if 1` compiled to C's
+# own rule that non-zero is true, which is a rule this language does not have, and `while
+# xs` did the same for a pointer.
+
+# chk_condition raises unless `x` is a bool. `site` names the form, since "the condition"
+# alone leaves a reader hunting through a line with three of them.
+fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
+	t := c_infer(em, x)
+	return if c_is_bool_ty(t)
+
+	# an expression whose type this compiler cannot work out is not evidence of anything,
+	# and refusing it here would turn every gap in inference into a rejected program
+	return if c_is_unknown(t)
+
+	raise f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)"
+}
+
 # --- redeclaration ----------------------------------------------------------------
 #
 # A name is bound once per block. Shadowing across blocks is not only legal but load

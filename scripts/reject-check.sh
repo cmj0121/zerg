@@ -319,6 +319,42 @@ fn main() {
 }
 EOF
 
+# --- declared type versus value ---------------------------------------------------
+#
+# `b: bool = 1` is the one that reached nothing at all: a bool and an int are both
+# int64_t in C, so it compiled and printed `true`. The others reached cc.
+#
+# The legal neighbours are NOT here — `x: float = 1` widens, `x: int? = 5` wraps,
+# `xs: list[str] = []` has nothing to disagree with — because those must run.
+
+reject bind-str-to-int 'cannot bind str to a int binding' <<'EOF'
+fn main() {
+	x: int = "hello"
+	print(f"{x}")
+}
+EOF
+
+reject bind-int-to-bool 'cannot bind int to a bool binding' <<'EOF'
+fn main() {
+	b: bool = 1
+	print(f"{b}")
+}
+EOF
+
+reject bind-float-to-int 'cannot bind float to a int binding' <<'EOF'
+fn main() {
+	x: int = 1.5
+	print(f"{x}")
+}
+EOF
+
+reject bind-int-list-to-str-list 'is declared list[str] and the value is list[int]' <<'EOF'
+fn main() {
+	ys: list[str] = [1, 2]
+	print(f"{ys[0]}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

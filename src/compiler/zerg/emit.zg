@@ -3030,7 +3030,7 @@ fn c_arm_guard(mut &em: Emitter, a: Arm, sb: Subst) -> str {
 fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	c_bind_env(em, a, st)
 	if a.pat == 0 {
-		return c_arm_range(em, a, s, sb) if c_is_range(a.lit)
+		return c_arm_range(em, a, s, st, sb) if c_is_range(a.lit)
 
 		# `A | B =>` is an OR-PATTERN in GRAMMAR and a bitwise-or to this parser, so the arm
 		# would be compared against `A | B` folded into one value — matching neither side, and
@@ -3083,7 +3083,11 @@ fn c_is_or_pattern(e: Expr) -> bool {
 	}
 }
 
-fn c_arm_range(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
+# c_arm_range lowers `1..=2 =>`. Like the literal arm below it, the comparisons are built
+# as TEXT and so meet no operand rule of their own — a third spelling of the same equality
+# problem, eight lines from the comment that said there were two.
+fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)))
 	lo := c_expr(em, c_range_lo(a.lit), sb)
 	mut base := f"({s} >= {lo})"
 	if not c_is_nil_expr(c_range_hi(a.lit)) {

@@ -71,6 +71,10 @@ is not normative — two implementations may phrase the same rejection different
 are rejected is (see each chapter's rules; the reject list is normative, the message text is not). The
 `fmt` and `lint` tools are advisory and never change a program's meaning.
 
+> **[deviation]** `zerg` prints the message but **not the `file:line:col` prefix**: its AST carries no
+> source position, so no pass can report one. The seed does. Every rejection named in this specification is
+> made by the compiler and names the form; none of them yet names the line.
+
 ## Runtime abort contract
 
 An **uncaught error** ends the program deterministically: a `raise` that reaches `main` uncaught, a failed

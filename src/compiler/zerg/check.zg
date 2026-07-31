@@ -1,0 +1,387 @@
+# check.zg — the rules a program must satisfy, apart from the code that emits it.
+#
+# Every other file here answers "what C does this become". This one answers "is this a
+# Zerg program at all", and it is separate for a reason that is not tidiness: for most of
+# this compiler's life the answer was nobody's job. The seed has a semantic-analysis pass
+# and the self-hosting compiler was written without one, so `x := 1` followed by `x = 2`
+# compiled, `1 + "s"` produced pointer arithmetic, and a type error reached `cc` — which
+# reported it against generated C under `.zerg-cache`, at a line the programmer cannot
+# open. Each of those is the thing the project's standing rule forbids: a form is
+# implemented, or refused BY NAME, and never silently wrong.
+#
+# The rules live here rather than in a pass of their own because the knowledge they need
+# already exists in the emitter — `c_infer` computes a type for every expression and the
+# environment already tracks every binding in scope. A separate pass today would mean a
+# second walk and a second copy of inference, and the second copy is the one that drifts.
+# So these functions take the Emitter and are called from the emission walk at the points
+# that already know the answer. Collecting them in one file is what keeps the RULES
+# readable as a set, and it is what makes lifting them into a real pass later a move
+# rather than a rewrite — which is what has to happen when the AST learns to carry source
+# positions, since a diagnostic without a line number is only half of one.
+#
+# What a message here looks like, and why it differs from the rest of the compiler:
+#
+#   `NotImplemented: …`  a form this compiler does not build yet. It disappears when the
+#                        feature lands. Those live in emit.zg beside the form.
+#   a plain sentence     an ill-formed PROGRAM. It is permanent and it is the language's
+#                        answer, not this compiler's. Those live here.
+#
+# scripts/reject-check.sh is the gate, and it holds every rule here to both halves: the
+# compiler must refuse the program, and the refusal must not come from cc.
+
+# --- mutability ------------------------------------------------------------------
+#
+# A binding is immutable unless it says `mut`. That is not a diagnostic nicety — the
+# memory model's "no shared mutable Zerg state" and its whole aliasing story rest on it,
+# and until the environment carried `env_mut` there was nothing holding the other end of
+# that promise.
+#
+# The check is on the ROOT of the assignment target, because writing `p.x` or `xs[0]`
+# writes the binding `p` or `xs`: a value is owned by its binding and reaching into it
+# does not create a second, more permissive one.
+
+# chk_assignable raises unless `lhs` names storage this scope may write.
+fn chk_assignable(mut &em: Emitter, lhs: Expr) {
+	root := chk_root_name(lhs)
+
+	# not a name at all — an index into a call's result, say. There is no binding to ask
+	# about, and emit has its own words for the shapes it cannot store through.
+	return if root == ""
+
+	idx := c_live_idx(em, root)
+	return if idx < 0
+
+	return if em.env_mut[idx]
+
+	# A `const` is not an immutable binding that could have been written `mut`; it is a
+	# module constant, and there is no spelling of it that a program may write. Telling
+	# the reader to declare it `mut` would be advice that cannot be taken.
+	raise f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one" if chk_is_const(em, idx)
+
+	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
+	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
+	raise f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write" if c_ident_name(lhs) != ""
+	raise f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`"
+}
+
+# chk_is_const is whether an environment slot is one of the module constants. c_reset_env
+# seeds every function's environment with them FIRST, so they hold exactly the lowest
+# indices; a local that shadows one binds above it and c_live_idx answers the inner one.
+fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
+	return idx < em.k_names.len()
+}
+
+# --- call shape -------------------------------------------------------------------
+#
+# `add(1)` on a two-parameter function reached cc as "too few arguments to function call",
+# which is a true statement about generated C and no help at all: the C prototype it names
+# is one this compiler wrote. The count is knowable here, where both the call and the
+# signature are in hand.
+
+# chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for
+# a method, whose receiver already fills parameter 0, and 0 for a free call.
+fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
+	# a key nothing registered is not a call this rule knows anything about — an
+	# intrinsic, a constructor, a binding holding a function. Emit names those itself.
+	row := c_sig_row(em, key)
+	return if row < 0
+
+	given := base + argc
+	raise f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given > em.sig_nparams[row]
+	raise f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given < em.sig_nreq[row]
+}
+
+# chk_call_name spells a signature key the way a reader wrote the call. A free function's
+# key IS its name; a method's is `Type#name` internally, and `Type.name` on the page —
+# both halves are worth printing, but the separator is an implementation detail nobody
+# should have to meet in a diagnostic.
+fn chk_call_name(key: str) -> str {
+	bs := list[byte](key)
+	mut out: list[byte] = []
+	for b in bs {
+		if b == b'#' {
+			out.append(b'.')
+		} else {
+			out.append(b)
+		}
+	}
+	return str(out)
+}
+
+# --- does a value fit a slot ------------------------------------------------------
+#
+# Three rules ask this one question — a declaration against its initializer, a `return`
+# against its signature, an argument against its parameter — and the answer has to be the
+# same in all three or the language has three type systems. It lives here once.
+#
+# It is deliberately CONSERVATIVE: it answers no only where a mismatch is unambiguous, and
+# yes for everything it is unsure of. A slot whose type RESHAPES what it is given — an
+# optional wrapping a bare value, a channel with its own direction check, a map literal
+# taking its type from the declaration — is never a mismatch, and `float` takes an `int`
+# because the language mixes the two in arithmetic.
+
+# chk_fits is whether a value of type `got` may fill a slot declared `want`.
+fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return true if c_is_unknown(want) or c_is_unknown(got)
+	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
+
+	if c_is_list(want) and c_is_list(got) {
+		we := c_list_elem(want)
+		ge := c_list_elem(got)
+		return true if c_is_unknown(we) or c_is_unknown(ge)
+		return true if not chk_is_scalar(we) or not chk_is_scalar(ge)
+		return ty_name(we) == ty_name(ge)
+	}
+
+	return true if not chk_is_scalar(want) or not chk_is_scalar(got)
+	return true if c_is_float(want) and c_is_int(got)
+	return ty_name(want) == ty_name(got)
+}
+
+# --- returned value ---------------------------------------------------------------
+#
+# A signature is a promise, and `-> int` with `return "nope"` reached cc as an
+# incompatible-pointer conversion. The declared type is on the function and the `return`
+# may be forty lines away, which is exactly why nobody notices without a check.
+
+# chk_returned raises when a returned value is not the type the signature declares, and
+# ANSWERS the type it inferred — c_return wants the same one, and inferring it twice walks
+# the expression twice for every value return in the program.
+fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
+	declared := em.fn_ret
+	got := c_infer(em, e)
+	raise f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}" if not chk_fits(em, declared, got)
+	return got
+}
+
+# --- declared type versus value ---------------------------------------------------
+#
+# `x: int = "hello"` reached cc as an incompatible-pointer conversion. `b: bool = 1`
+# reached nothing at all: both are int64_t in C, so the program compiled and printed
+# `true`. An annotation that the compiler does not check is a comment.
+
+# chk_binding raises when a declaration and its initializer are different types.
+fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
+	got := c_infer(em, ival)
+	raise f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`" if not chk_fits(em, declared, got)
+}
+
+# --- assigned value ---------------------------------------------------------------
+#
+# An assignment is the FOURTH slot a value enters, and it was the one this rule set left
+# out: `mut b: bool = true` followed by `b = 1` compiled and printed `true`, which is the
+# same defect as the declaration it was written to catch, one statement later.
+
+# chk_assigned raises when a value does not fit the storage it is assigned to.
+fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
+	got := c_infer(em, rhs)
+	raise f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}" if not chk_fits(em, want, got)
+}
+
+# chk_target_name names an assignment target the way it was written — the binding for a
+# bare name, and the binding plus what it was reached through otherwise, since a field or
+# an element has no name of its own to print.
+fn chk_target_name(lhs: Expr) -> str {
+	root := chk_root_name(lhs)
+	return "this target" if root == ""
+	return f"`{root}`" if c_ident_name(lhs) != ""
+	return f"that part of `{root}`"
+}
+
+# --- argument versus parameter ----------------------------------------------------
+#
+# `f(1.5)` into an `int` parameter reached cc, which reported an implicit conversion
+# against a prototype this compiler wrote. The parameter table has held every type all
+# along — c_arg already reads the same row to decide whether to pass an address.
+
+# chk_argument raises when an argument is not the type its parameter takes. `row` is the
+# parameter table's row, which c_arg has already found for its own use — looking it up
+# again would be the walk its comment exists to prevent — and `pos` is where the argument
+# stands as WRITTEN, counting from one, which is the only number a reader can find on the
+# line they are looking at. A row of -1 is a call this rule knows nothing about: an
+# intrinsic, a constructor, a binding holding a function. Emit names those itself.
+fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
+	return if row < 0
+
+	want := em.pr_ty[row]
+	got := c_infer(em, arg)
+	raise f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}" if not chk_fits(em, want, got)
+}
+
+# --- operands ---------------------------------------------------------------------
+#
+# An operator says what it takes. `1 + "s"` compiled to C pointer arithmetic and printed
+# an address; `true + 1` printed 2; `not 1` printed false. Each is C answering a question
+# in C's terms for a language that does not ask it that way.
+#
+# The rules are the seed's, which is where they were already written down: arithmetic
+# takes numbers (and `+` takes two strs), the bitwise operators take ints, `and` / `or`
+# take bools, an ordering takes two numbers or two strs, and an equality takes two things
+# of one kind.
+#
+# Only the SCALAR families are judged, and that is a LIMIT rather than a boundary. The
+# reason is `ty_name`: it is the diagnostic spelling of a type, and using it as an equality
+# relation is only safe where the spelling is unique, which is exactly the scalars — it
+# collapses TUnknown, TTuple and TMap onto one name. So `[1] and true` and a struct bound
+# to the wrong struct are still cc's to report, which is the failure this file exists to
+# remove; closing it needs a real `ty_eq` over the Ty enum, and that is owed.
+#
+# A `nil` on either side of an equality is how an optional is tested and is never a
+# mismatch, which the same restriction gives for free.
+
+# chk_binary raises when an operator's operands are not what it takes. It is given the
+# operand TYPES rather than the expressions: c_binexpr infers the left one for its own
+# reasons, and an f-string desugars into a left-nested `+` chain, so re-inferring here
+# would walk the whole left spine again at every link of it.
+fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
+	return if c_is_unknown(ta) or c_is_unknown(tb)
+
+	if chk_is_logical(oper) {
+		raise f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb)
+		return
+	}
+
+	if chk_is_bitwise(oper) {
+		raise f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb)
+		return
+	}
+
+	if chk_is_arith(oper) {
+		# `+` is the one arithmetic operator a str also answers, and only for two of them
+		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
+		raise f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+		return
+	}
+
+	if chk_is_order(oper) {
+		return if c_is_str(ta) and c_is_str(tb)
+		raise f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+		return
+	}
+
+	if chk_is_equality(oper) {
+		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
+
+		# int and float compare: they are one family, and the language already mixes them
+		# in arithmetic
+		return if chk_is_num(ta) and chk_is_num(tb)
+		raise f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value" if ty_name(ta) != ty_name(tb)
+	}
+}
+
+# chk_unary raises when a prefix operator's operand is not what it takes.
+fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
+	t := c_infer(em, x)
+	return if c_is_unknown(t)
+	raise f"operator `not` takes a bool operand, and this one is {ty_name(t)}" if oper == "not" and chk_scalar_wrong_bool(t)
+	raise f"operator `-` takes a numeric operand, and this one is {ty_name(t)}" if oper == "-" and chk_scalar_wrong_num(t)
+	raise f"operator `~` takes an int operand, and this one is {ty_name(t)}" if oper == "~" and chk_scalar_wrong_int(t)
+}
+
+# The three "wrong" predicates each answer the same shape of question: is this a scalar
+# the operator cannot take. A non-scalar answers false — it is not this rule's business.
+fn chk_scalar_wrong_bool(t: Ty) -> bool {
+	return chk_is_scalar(t) and not c_is_bool_ty(t)
+}
+
+fn chk_scalar_wrong_int(t: Ty) -> bool {
+	return chk_is_scalar(t) and not c_is_int(t)
+}
+
+fn chk_scalar_wrong_num(t: Ty) -> bool {
+	return chk_is_scalar(t) and not chk_is_num(t)
+}
+
+fn chk_is_scalar(t: Ty) -> bool {
+	return c_is_int(t) or c_is_float(t) or c_is_str(t) or c_is_bool_ty(t)
+}
+
+fn chk_is_num(t: Ty) -> bool {
+	return c_is_int(t) or c_is_float(t)
+}
+
+# chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not
+# c_is_bool_op, which asks whether an operator YIELDS one and so includes every comparison.
+fn chk_is_logical(oper: str) -> bool {
+	return oper == "and" or oper == "or"
+}
+
+# The WRAPPING forms are arithmetic as much as the checked ones — `+%` differs from `+`
+# in what it does on overflow, not in what it takes — and leaving them out let
+# `true +% 1` walk straight past the rule the others obey.
+fn chk_is_arith(oper: str) -> bool {
+	return true if oper == "+%" or oper == "-%" or oper == "*%"
+	return oper == "+" or oper == "-" or oper == "*" or oper == "/" or oper == "%"
+}
+
+fn chk_is_bitwise(oper: str) -> bool {
+	return oper == "&" or oper == "|" or oper == "^" or oper == "<<" or oper == ">>"
+}
+
+fn chk_is_order(oper: str) -> bool {
+	return oper == "<" or oper == ">" or oper == "<=" or oper == ">="
+}
+
+fn chk_is_equality(oper: str) -> bool {
+	return oper == "==" or oper == "!="
+}
+
+# --- conditions -------------------------------------------------------------------
+#
+# Zerg has no truthiness: a condition is a bool or it is a mistake. `if 1` compiled to C's
+# own rule that non-zero is true, which is a rule this language does not have, and `while
+# xs` did the same for a pointer.
+
+# chk_condition raises unless `x` is a bool. `site` names the form, since "the condition"
+# alone leaves a reader hunting through a line with three of them.
+fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
+	t := c_infer(em, x)
+	return if c_is_bool_ty(t)
+
+	# an expression whose type this compiler cannot work out is not evidence of anything,
+	# and refusing it here would turn every gap in inference into a rejected program
+	return if c_is_unknown(t)
+
+	raise f"the condition of {site} must be bool, and this one is {ty_name(t)} — Zerg has no truthiness, so compare it (`x != 0`) or bind it (`if x := …`)"
+}
+
+# --- redeclaration ----------------------------------------------------------------
+#
+# A name is bound once per block. Shadowing across blocks is not only legal but load
+# bearing — `mut n := n` is how a function gets a writable copy of a parameter, and it is
+# written that way throughout this compiler — so the rule is about ONE block, not about
+# the name being visible.
+#
+# It hangs off `c_let`, the DECLARATION, rather than off `c_add_var`, which every binding
+# passes through. That looks like the weaker hook and is the right one: a match arm's
+# binds are re-entered once per arm ON PURPOSE — every recv arm may call its variable `v`
+# — so the choke point for "a name entered the environment" is not the choke point for
+# "a program declared a name twice". A loop variable and an `if let` binding are covered
+# by their construct opening its own scope instead, which is what they always wanted.
+
+# chk_fresh_binding raises when `name` is already bound in the block being emitted.
+fn chk_fresh_binding(mut &em: Emitter, name: str) {
+	# `_` is the discard: it binds nothing a later statement can name, so writing it twice
+	# in a block says "ignore this" twice rather than naming one thing two ways
+	return if name == "_"
+
+	# c_live_idx answers the innermost binding STILL IN SCOPE, so this is a redeclaration
+	# exactly when that binding belongs to the block being emitted. A binding it finds in
+	# an enclosing block is one this declaration shadows, which is legal; one in a block
+	# that has ended is not visible to it at all.
+	idx := c_live_idx(em, name)
+	return if idx < 0
+	raise f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it" if em.env_scope[idx] == em.scope_cur
+}
+
+# chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,
+# `p.x`, `p.x.y`, `xs[0]` and `m["k"].f` alike. Anything that does not bottom out in a
+# name answers "".
+fn chk_root_name(e: Expr) -> str {
+	return match e {
+		EIdent(n) => n
+		EField(t, _) => chk_root_name(t)
+		EIndex(t, _) => chk_root_name(t)
+		_ => ""
+	}
+}

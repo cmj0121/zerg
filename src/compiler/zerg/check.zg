@@ -38,9 +38,15 @@
 # statement the error is in. Marking the token itself is what a span on every expression
 # would buy, and what `chk_at` will hand over the moment one exists.
 
-# chk_at raises `msg` with the file, line and column of the statement being emitted.
+# chk_at RECORDS `msg` against the file, line and column of the statement being emitted,
+# and lets emission carry on so the rest of the program is checked too. What it does not
+# do is end the process, which is what every one of these rules used to do — a file with
+# three mistakes reported one, and the second was a surprise waiting after the first fix.
+#
+# Carrying on is safe because the C built after a finding is thrown away: the driver hands
+# nothing to cc once this list is non-empty. What it buys is every finding in one run.
 fn chk_at(mut &em: Emitter, msg: str) {
-	raise f"{chk_place(em)}{msg}"
+	em.diags.append(f"{chk_place(em)}{msg}")
 }
 
 # chk_place is the `file:line:col: ` prefix, or "" when nothing is known — a source parsed
@@ -81,14 +87,19 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	# A `const` is not an immutable binding that could have been written `mut`; it is a
 	# module constant, and there is no spelling of it that a program may write. Telling
 	# the reader to declare it `mut` would be advice that cannot be taken.
+	# ONE of the three sentences, never two. `raise` used to say that by leaving; a rule
+	# that records instead has to say it with a `return`, and forgetting to is how the
+	# first run of this reported the same assignment twice in two different words.
 	if chk_is_const(em, idx) {
 		chk_at(em, f"cannot assign to `{root}`: it is a module `const`, and a constant is never written — bind a `mut` copy of it if this function needs one")
+		return
 	}
 
 	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
 	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
 	if c_ident_name(lhs) != "" {
 		chk_at(em, f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write")
+		return
 	}
 	chk_at(em, f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`")
 }
@@ -119,6 +130,7 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 
 	if given > em.sig_nparams[row] {
 		chk_at(em, f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}")
+		return
 	}
 	if given < em.sig_nreq[row] {
 		chk_at(em, f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}")

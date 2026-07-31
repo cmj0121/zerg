@@ -40,9 +40,14 @@ skip=0
 noplace=0
 unbuildable=0
 
-# how many refusals may still carry no place: every one of them is from the parser or the
-# emitter, which do not report through chk_at yet. Lower it, never raise it.
-NOPLACE_MAX=${NOPLACE_MAX:-37}
+# How many refusals may still carry no place: every one of them is from the parser or the
+# emitter, which do not report through chk_at yet.
+#
+# It is a function of the corpus AND the mutation set, so ADDING A MUTATION KIND may raise
+# it once — `missing-arg` took it from 37 to 51, by producing refusals the other five never
+# reached. That is a wider measurement, not a regression. Fixing a refusal to carry a place
+# lowers it, and nothing else may.
+NOPLACE_MAX=${NOPLACE_MAX:-51}
 
 # mutate writes the mutated program to stdout, or exits non-zero when the mutation does not
 # apply to this source. It is awk rather than sed because the patterns need the indentation
@@ -59,7 +64,7 @@ for src in "$CORPUS"/*.zg; do
 	# about what it does with a broken one
 	"$ZERG" build --emit c "$src" >/dev/null 2>&1 || { unbuildable=$((unbuildable + 1)); continue; }
 
-	for kind in extra-arg wrong-type write-immutable int-condition mixed-operands; do
+	for kind in extra-arg missing-arg wrong-type write-immutable int-condition mixed-operands; do
 		out_zg="$tmp/$name.$kind.zg"
 		if ! mutate "$src" "$kind" >"$out_zg"; then
 			skip=$((skip + 1))

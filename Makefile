@@ -21,7 +21,7 @@ JOBS ?= 4
 CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_crash \
 	conc_defer_close conc_fanin conc_for_select conc_forin conc_payload_copy conc_select conc_spawn select_default countdown default_params either_result every_form_handled enum_basic enum_discriminant enum_guard factorial \
 	fib fizzbuzz floats gcd fn_value guard_expr hello list_basic list_literal list_str match_range method_chain null_safety power raise_guard raise_kind \
-	rec_expr rec_tree str_bytes struct_basic struct_nested sumto value_semantics
+	rec_expr rec_tree shadowing str_bytes struct_basic struct_nested sumto value_semantics
 
 # A `conc_` case is run more than once. Every other case is a function of its source, so
 # one run answers the question; a concurrent one is a function of its source AND of an
@@ -30,7 +30,7 @@ CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_ch
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc docs-links lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject docs-links lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -165,6 +165,18 @@ sanitize-conc:                  # run the concurrency corpus under address/UB/le
 refuse:                         # every program that must be turned away, is — by the compiler
 	$(MAKE) build
 	./scripts/refuse-check.sh
+
+# `refuse` asks about forms this compiler has not built; this one asks about programs that
+# are not Zerg, and the difference is a lifetime. A refusal disappears when the feature
+# lands. A rejection is the LANGUAGE's answer and never does — so the two lists stay
+# apart, or neither reads as a contract.
+#
+# It exists because every other gate here only ever compiles WELL-FORMED programs, and the
+# whole class of ill-formed ones was therefore invisible: the self-hosting compiler shipped
+# without the seed's semantic analysis, and nothing in ten targets could see it.
+reject:                         # every program that is not Zerg is rejected — by the compiler
+	$(MAKE) build
+	./scripts/reject-check.sh
 
 docs-links:                     # every docs path the repo cites must resolve
 	@fail=0; \

@@ -59,6 +59,9 @@ file:line:col: message
 拒絕——但**哪些**程式被拒絕則是 normative（見各章規則；reject list 為 normative，訊息文字則否）。`fmt` 與 `lint`
 工具僅供參考，永不改變程式的意義。
 
+> **[deviation]** `zerg` 印出訊息，但**不含 `file:line:col` 前綴**：它的 AST 不帶原始碼位置，因此沒有任何
+> pass 報得出來。種子則有。本規範所列的每一個拒絕都由編譯器做出、並指名該形式；但沒有一個指得出行號。
+
 ## Runtime abort 契約
 
 一個**未捕捉的錯誤**會確定性地結束程式：一個 `raise` 未被捕捉而抵達 `main`、對缺席 optional 的 force `!` 失敗，或

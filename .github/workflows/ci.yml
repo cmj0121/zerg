@@ -118,6 +118,14 @@ jobs:
       - name: Every program that must be refused, is
         run: make refuse
 
+      # --- 7b. the programs that are not Zerg at all -----------------------------
+      # `refuse` covers forms this compiler has not built. This covers programs the
+      # LANGUAGE rejects — a write to an immutable binding, and the rest of the rules the
+      # self-hosting compiler shipped without. Every other job here compiles well-formed
+      # programs only, which is why that whole class went unseen.
+      - name: Every program that is not Zerg, is rejected
+        run: make reject
+
       # --- 8. the corpus the self-hosting compiler owns --------------------------
       # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot
       # reach it and the fetch fails. Under `continue-on-error` that failure was reported

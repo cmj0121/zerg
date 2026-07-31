@@ -62,6 +62,7 @@ fn build_cmd() -> cli.Command {
 fn fmt_cmd() -> cli.Command {
 	return (
 		cli.command("fmt", "rewrite sources in the canonical style")
+		.flag("c", "check", "report what is not canonical and change nothing")
 		.add(cli.argument("O", "off", "a rule code to leave alone, e.g. F401; repeatable").repeated())
 		.add(cli.positional("file.zg", "the sources to rewrite").required().repeated())
 		.run(do_fmt)
@@ -104,6 +105,7 @@ fn do_build(c: cli.Ctx) -> int {
 }
 
 fn do_fmt(c: cli.Ctx) -> int {
+	return run_fmt_check(c.args(), c.all("off")) if c.has("check")
 	run_fmt(c.args(), c.all("off"))
 	return 0
 }
@@ -950,6 +952,27 @@ fn run_fmt(files: list[str], off: list[str]) {
 			io.write(f + "\n")
 		}
 	}
+}
+
+# run_fmt_check answers the question a CI job asks — is this tree already canonical — and
+# answers it without touching anything. Before it existed `make fmt-corpus` did the same
+# thing by copying each case to a temp file, formatting the copy and running `cmp`: the
+# tool knew the answer and had no way to say it, so the Makefile reimplemented it in
+# shell. A formatter that cannot be asked is a formatter every CI reinvents.
+fn run_fmt_check(files: list[str], off: list[str]) -> int {
+	mut bad := 0
+	for f in files {
+		src := str(io.read_file(f))
+		if not zerg.fmt_balanced(src) {
+			io.ewrite(f"{f}: unbalanced brackets, so it cannot be formatted\n")
+			bad = bad + 1
+		} else if zerg.fmt_src_off(src, off) != src {
+			io.ewrite(f"{f}: not in canonical form (run `zerg fmt`)\n")
+			bad = bad + 1
+		}
+	}
+	return 1 if bad > 0
+	return 0
 }
 
 # run_lint reports every finding in the loaded program and RETURNS a nonzero status when

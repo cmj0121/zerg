@@ -2955,6 +2955,15 @@ fn c_arm_subst(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> Subst {
 	return sb
 }
 
+# c_arm_guard renders a match arm's `if …`. It is one function for the three places that
+# render it because a guard is a CONDITION — it lands in a C `&&`, where C's truthiness
+# rule would answer a question this language does not ask that way — and three renders
+# meant three chances to forget that.
+fn c_arm_guard(mut &em: Emitter, a: Arm, sb: Subst) -> str {
+	chk_condition(em, a.guard_expr, "a match arm's guard")
+	return c_expr(em, a.guard_expr, sb)
+}
+
 fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	c_bind_env(em, a, st)
 	if a.pat == 0 {
@@ -2975,10 +2984,10 @@ fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		if c_is_either(st) {
 			base = f"({c_res_tag(s)} == {c_result_tag(a.ctor)})"
 		}
-		return f"({base} && {c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
+		return f"({base} && {c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb))})" if a.has_guard
 		return base
 	}
-	return c_expr(em, a.guard_expr, c_arm_subst(em, a, s, st, sb)) if a.has_guard
+	return c_arm_guard(em, a, c_arm_subst(em, a, s, st, sb)) if a.has_guard
 	return "1"
 }
 
@@ -3025,7 +3034,7 @@ fn c_arm_range(mut &em: Emitter, a: Arm, s: str, sb: Subst) -> str {
 
 	# a guard on a range arm is AND-ed on, the way a constructor pattern's is: the range says
 	# which values reach the guard, and the guard has the last word
-	return f"({base} && {c_expr(em, a.guard_expr, sb)})" if a.has_guard
+	return f"({base} && {c_arm_guard(em, a, sb)})" if a.has_guard
 	return base
 }
 
@@ -3286,6 +3295,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 		}
 	}
 	lt := c_infer(em, lhs)
+	chk_assigned(em, lhs, lt, rhs)
 	lv := c_expr(em, lhs, c_nosub())
 
 	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it

@@ -73,6 +73,44 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 
 
 
+
+# --- declared type versus value ---------------------------------------------------
+#
+# `x: int = "hello"` reached cc as an incompatible-pointer conversion. `b: bool = 1`
+# reached nothing at all: both are int64_t in C, so the program compiled and printed
+# `true`. An annotation that the compiler does not check is a comment.
+#
+# The rule is narrow on purpose. It judges the SCALARS, where a mismatch is unambiguous,
+# and a list against a list, where it is equally so. It stays out of everything a
+# declaration is allowed to RESHAPE — an optional wraps the value it is given, a channel
+# has its own direction check, a map literal takes its type from the declaration — because
+# a rule that fires there would be rejecting programs the language allows.
+
+# chk_binding raises when a declaration and its initializer are different types.
+fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
+	got := c_infer(em, ival)
+	return if c_is_unknown(got) or c_is_unknown(declared)
+
+	# a declaration that reshapes what it is given is not a mismatch
+	return if c_is_carrier(declared) or ty_is_chan(declared) or c_is_map(declared)
+
+	if c_is_list(declared) and c_is_list(got) {
+		de := c_list_elem(declared)
+		ge := c_list_elem(got)
+		return if c_is_unknown(de) or c_is_unknown(ge)
+		raise f"`{name}` is declared {ty_name(declared)} and the value is {ty_name(got)}" if chk_is_scalar(de) and chk_is_scalar(ge) and ty_name(de) != ty_name(ge)
+		return
+	}
+
+	return if not chk_is_scalar(declared) or not chk_is_scalar(got)
+
+	# an int literal fills a float slot — the language mixes the two in arithmetic and a
+	# declaration is the same widening
+	return if c_is_float(declared) and c_is_int(got)
+
+	raise f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`" if ty_name(declared) != ty_name(got)
+}
+
 # --- operands ---------------------------------------------------------------------
 #
 # An operator says what it takes. `1 + "s"` compiled to C pointer arithmetic and printed

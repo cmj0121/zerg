@@ -4668,6 +4668,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 
 	mut eff := ty
 	if has_type {
+		chk_binding(em, name, ty, ival)
 		if ty_is_chan(ty) {
 			c_chan_check(c_infer(em, ival), ty, f"binding `{name}`")
 		}

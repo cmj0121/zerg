@@ -64,11 +64,16 @@ bottom-up 建構,沒有辦法讓一個既存的 `Ref` 回頭指向後建的值�
 兩個名字是否共享儲存，由一條界線決定，畫在兩個互斥的類別之間：
 
 - **值型別（value type）**——每個 scalar、一個 `struct`、一個 tuple，以及 heap 容器 `list` 與 `map`——都是
-  **被複製**的。scalar、`struct`、tuple 以 inline 複製；`list` 或 `map` 則**深拷貝**，其元素依同一條規則複製。所以
+  **被複製**的。scalar、`struct`、tuple 以 inline 複製；`list` 或 `map` 則**逐元素**依同一條規則複製。所以
   值型別的兩個名字**永不 alias**：透過其一寫入，只改變那個持有者自己的 copy。
 - **Reference-counted 值**——一個 `str`、一個 `chan`、一個 `Ref[T]`，以及**遞迴型別的自動裝箱子節點**——是
   **共享**的：複製會 retain 既有 cell（refcount++）而非複製它，最後持有者才釋放。所以透過**共享遞迴 tail 可達的
   一次變動，會經由該 tail 的每個持有者都看得見**。
+
+  `list` 的 buffer 以 **copy-on-write** 實現這個複製 —— 複製時共用它，元素則由**第一個寫入**的持有者複製出來。
+  這是 **[implementation detail]**，意義與 slicing 那節給的相同：沒有任何程式分辨得出來，因為複製發生在另一個
+  持有者可能看見的任何寫入之前。它換到的是：把 collection 傳給只讀它的函式、或交給一個 coroutine，成本是一次
+  遞增而不是整個 buffer。
 
 複製一個複合值時，逐欄位套用這條規則——它的值型別部分被複製，而它（遞迴）包含的任何 reference-counted 部分被
 retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯一能觀察到共享變動之處，就是一個 **`mut`
@@ -76,7 +81,7 @@ retain。因為 `str` immutable、`Ref[T]` 的 referent 在建構時固定，唯
 
 ```text
 mut a := [1, 2, 3]                # 值型別
-b := a                            # 深拷貝——b 是獨立的 list
+b := a                            # 複製——b 是獨立的 list
 a[0] = 9                          # a 是 [9, 2, 3]；b 仍是 [1, 2, 3]——無 alias
 
 struct Node { value: int; next: Node? }

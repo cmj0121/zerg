@@ -21,7 +21,7 @@ hold a NUL); `str` stays a separate immutable primitive (below).
 ## Values, not references
 
 A collection is a **scope-owned value**: **copy-by-value** (the compiler elides or moves when safe), freed
-at scope exit, **no aliasing** — copying **deep-copies** the elements and **retains** (refcount-bumps) any
+at scope exit, **no aliasing** — copying **duplicates** the elements and **retains** (refcount-bumps) any
 **reference-counted** element it holds: a `chan`, a `Ref[T]`, a `str`, or the boxed tail of a recursive
 type. That is exactly the memory rule — the value-type parts are copied, the reference-counted parts shared
 (see [Values & Memory](../core/memory.md#copy-vs-reference-semantics)). There's no shared container hiding behind two

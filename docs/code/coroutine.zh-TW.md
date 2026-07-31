@@ -15,7 +15,9 @@ obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `def
 > 所以就算接受了那個形狀,也沒有環境可以交給一條 coroutine。
 
 - **引數是一份快照**——在 `spawn` **被寫下**的那一行取得，不是在呼叫執行的那一刻。之後才寫入的 `mut` 綁定
-  不會被 coroutine 看到（它可能根本還沒開始跑）；`list`、`map`、`struct` 在那一刻深拷貝。**channel 是對照，
+  不會被 coroutine 看到（它可能根本還沒開始跑）；`list`、`map`、`struct` 在那一刻成為 coroutine **自己的值**。
+  （`list` 是以 copy-on-write 實現的，所以捕獲的成本是一次遞增，buffer 由先寫入的那一方複製出來 —— 這是
+  [implementation detail]，不是比較弱的保證，見 [Values & Memory](../core/memory.md)。）**channel 是對照，
   也是重點**：它是一個 **handle**，coroutine 拿到的是同一條 channel 的另一個 handle，之後送出的東西**看得到**。
   `defer` 以同樣方式捕獲，在 `defer` 那一行。**值被快照，handle 被共享** —— `zerg lint` 以 `L301` 說出這件事。
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。

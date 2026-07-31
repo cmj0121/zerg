@@ -920,6 +920,26 @@ expect_lint() {
 	esac
 }
 
+# expect_no_lint is the other half. A rule with only positive cases can be widened until it
+# fires on everything and every case still passes — which is how L301 came to report
+# `show(k)`, a READ, as a write. What a rule refuses to say is as much its definition as
+# what it says.
+expect_no_lint() {
+	local name=$1 unwanted=$2
+	local src="$tmp/$name.zg"
+	cat >"$src"
+
+	local out
+	out=$("$ZERG" lint "$src" 2>&1)
+	case $out in
+	*"$unwanted"*)
+		echo "FALSE     $name — lint said $unwanted about a program it should be quiet about: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		;;
+	*) pass=$((pass + 1)) ;;
+	esac
+}
+
 expect_lint coalesce-with-nil "L201" <<'EOF'
 fn keep(x: int?) -> int? {
 	return x ?? nil
@@ -959,6 +979,89 @@ fn main() {
 	mut j := 1
 	defer show(j)
 	j = 2
+}
+EOF
+
+# What L301 is, said from both sides. A method that writes through its receiver is a write
+# — a captured `list` is snapshotted by deep copy, so an append after the capture is exactly
+# the misreading — and a REBINDING of a channel is a write, because after it the coroutine
+# holds the old handle. A read, a send, and a write BEFORE the capture are not.
+
+expect_lint spawn-captures-a-list-then-appends "L301" <<'EOF'
+fn take(xs: list[int]) {
+	print(f"{xs[0]}")
+}
+
+fn main() {
+	mut xs: list[int] = [1]
+	spawn take(xs)
+	xs.append(2)
+}
+EOF
+
+expect_lint spawn-captures-a-channel-then-rebinds-it "L301" <<'EOF'
+fn work(ch: chan[int]) {
+	print("w")
+}
+
+fn main() {
+	mut ch := chan[int](1)
+	spawn work(ch)
+	ch = chan[int](1)
+}
+EOF
+
+expect_lint spawn-inside-a-closure "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn run(f: fn()) {
+	f()
+}
+
+fn main() {
+	run(fn() {
+		mut k := 5
+		spawn show(k)
+		k = 99
+	})
+}
+EOF
+
+expect_no_lint a-read-after-the-capture "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut k := 5
+	spawn show(k)
+	show(k)
+}
+EOF
+
+expect_no_lint a-send-after-the-capture "L301" <<'EOF'
+fn work(ch: chan[int]<-) {
+	ch <- 1
+}
+
+fn main() {
+	mut ch := chan[int](1)
+	spawn work(ch)
+	ch <- 2
+}
+EOF
+
+expect_no_lint a-write-before-the-capture "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut k := 5
+	k = 99
+	spawn show(k)
 }
 EOF
 

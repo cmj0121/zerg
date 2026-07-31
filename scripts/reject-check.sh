@@ -72,7 +72,7 @@ fail=0
 #                          the rest of the file is read as one string.
 #   contains both          rephrase the assertion to a substring that has only one.
 reject() {
-	local name=$1 want=$2
+	local name=$1 want=$2 seed=${3:-}
 	local src="$tmp/$name.zg"
 	cat >"$src"
 
@@ -129,8 +129,17 @@ reject() {
 	# A third argument names a rule the SEED does not enforce yet, and says which. The
 	# oracle is worth having and the seed is not perfect; recording the exception beside the
 	# case is better than dropping the case or weakening the assertion for everything.
-	if [ "${3:-}" = "seed-gap" ]; then
-		pass=$((pass + 1))
+	#
+	# It asserts the OPPOSITE, so the exception retires itself: an xfail that merely returns
+	# `pass` can never report an unexpected pass, and the day the seed learns the rule the
+	# marker and its entry in the seed's README would rot with nothing to say so.
+	if [ "$seed" = "seed-gap" ]; then
+		if "$ZERG0" build "$src" -o "$tmp/$name.seed.o" >/dev/null 2>&1; then
+			pass=$((pass + 1))
+		else
+			echo "SEED GAP CLOSED  $name — the seed now rejects this; drop the seed-gap marker and its src/bootstrap/README.md entry"
+			fail=$((fail + 1))
+		fi
 		return
 	fi
 
@@ -791,7 +800,7 @@ EOF
 # `spawn` refused it in a pass of its own and `defer`, which the same sentence covers,
 # reached cc — so the refusal moved to the choke point both of them share.
 
-reject spawn-captures-a-borrow 'a `mut &` argument cannot cross a `spawn`' <<'EOF'
+reject spawn-captures-a-borrow 'is a `mut &` and cannot cross a `spawn`' <<'EOF'
 fn bump(mut &n: int) {
 	n = n + 1
 }
@@ -803,7 +812,7 @@ fn main() {
 }
 EOF
 
-reject defer-captures-a-borrow 'a `mut &` argument cannot cross a `defer`' <<'EOF'
+reject defer-captures-a-borrow 'is a `mut &` and cannot cross a `defer`' <<'EOF'
 fn bump(mut &n: int) {
 	n = n + 1
 }
@@ -855,6 +864,36 @@ fn area(s: Shape) -> int {
 	return match s {
 		Line(n, m) => n
 		_          => 0
+	}
+}
+
+fn main() {
+	print(f"{area(Dot)}")
+}
+EOF
+
+reject a-construction-that-gives-too-few '`Line` carries 2 arguments and this gives 1' <<'EOF'
+enum Shape {
+	Line(int, int)
+	Dot
+}
+
+fn main() {
+	s := Line(7)
+	print("built")
+}
+EOF
+
+reject a-pattern-that-binds-too-few '`Line` carries 2 arguments and this pattern binds 1' <<'EOF'
+enum Shape {
+	Line(int, int)
+	Dot
+}
+
+fn area(s: Shape) -> int {
+	return match s {
+		Line(n) => n
+		_       => 0
 	}
 }
 

@@ -1630,13 +1630,13 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 	# rvalue of type 'zrt_list'", against C nobody wrote. Binding costs one header copy,
 	# which is a handful of words, and it makes the addressability question go away rather
 	# than answering it at each call site.
-	if c_is_list(t) {
+	if c_is_list(t) or c_is_map(t) {
 		em.used_rt = true
-		return "({ zrt_list zgt_cs = (" + x + "); zrt_list zgt_cp; zrt_list_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
-	}
-	if c_is_map(t) {
-		em.used_rt = true
-		return "({ zrt_map zgt_cs = (" + x + "); zrt_map zgt_cp; zrt_map_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
+
+		# `c_type` of either is exactly the runtime type name, and the copy is that plus
+		# `_copy` — so the two containers are one template rather than two spellings of it
+		ct := c_type(t)
+		return "({ " + ct + " zgt_cs = (" + x + "); " + ct + " zgt_cp; " + ct + "_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
 	}
 	return f"{c_tuple_cname(ty_tuple_elems(t))}_copy({x})" if c_is_tuple(t)
 	return f"zg_copy_{c_named_of(t)}({x})"
@@ -1649,7 +1649,7 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for sd in f.structs {
 		if c_needs_copy(em, TNamed(sd.name)) {
-			out = out + c_copy_helper(em, sd) + c_elem_vt_helper(sd.name)
+			out = out + c_copy_helper(em, sd) + c_elem_vt_helper(em, sd.name)
 		}
 	}
 	return out
@@ -1668,12 +1668,12 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 # A nested LIST needs no per-type vtable: `zrt_list_copy` copies a header, and the header
 # carries its own elemsz and its own vt, so one thunk serves every element type.
 fn c_elem_vt(mut &em: Emitter, t: Ty) -> str {
-	return "zg_listvt_list" if c_is_list(t)
-	return "zg_listvt_map" if c_is_map(t)
-	return f"{c_tuple_cname(ty_tuple_elems(t))}_listvt" if c_is_tuple(t) and c_needs_copy(em, t)
-	return f"zg_listvt_{c_named_of(t)}" if c_needs_copy(em, t)
+	k := c_elem_kind(em, t)
 
-	return "zg_listvt"
+	return "zg_listvt" if k == ""
+	return k + "_listvt" if c_is_tuple(t)
+
+	return "zg_listvt_" + k
 }
 
 # c_elem_copy_fn is the thunk itself, for a table that takes one rather than a whole
@@ -1681,20 +1681,36 @@ fn c_elem_vt(mut &em: Emitter, t: Ty) -> str {
 # `copy` has, so the same thunks serve both — a `map[str, list[int]]` duplicates its
 # values through the function a `list[list[int]]` duplicates its elements through.
 fn c_elem_copy_fn(mut &em: Emitter, t: Ty) -> str {
-	return "zg_elemcopy_list" if c_is_list(t)
-	return "zg_elemcopy_map" if c_is_map(t)
-	return f"{c_tuple_cname(ty_tuple_elems(t))}_elemcopy" if c_is_tuple(t) and c_needs_copy(em, t)
-	return f"zg_elemcopy_{c_named_of(t)}" if c_needs_copy(em, t)
+	k := c_elem_kind(em, t)
 
-	return "NULL"
+	return "NULL" if k == ""
+	return k + "_elemcopy" if c_is_tuple(t)
+
+	return "zg_elemcopy_" + k
+}
+
+# c_elem_kind is the one dispatch behind both: which FAMILY of thunk a type needs, or ""
+# for a POD that takes the memcpy path. The two above spell it — `zg_listvt_` and
+# `zg_elemcopy_` — and had the four-way decision written out twice, so a kind added to one
+# gave maps a memcpy copy of a type lists copied properly, which is the bug this whole
+# mechanism exists to prevent.
+fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
+	return "list" if c_is_list(t)
+	return "map" if c_is_map(t)
+	return "" if not c_needs_copy(em, t)
+	return c_tuple_cname(ty_tuple_elems(t)) if c_is_tuple(t)
+
+	return c_named_of(t)
 }
 
 # The vtable carries a COPY and no drop: this emitter is leak-style, so nothing generates
 # a teardown for a struct, and a drop thunk here would be the only one — freeing halves of
 # values whose other halves nobody frees.
-fn c_elem_vt_helper(nm: str) -> str {
+fn c_elem_vt_helper(mut &em: Emitter, nm: str) -> str {
+	ct := "zg_" + nm
+	cp := c_copy_of(em, TNamed(nm), f"*(const {ct}*)src")
 	mut out := "static void zg_elemcopy_" + nm + "(void *dst, const void *src) {\n"
-	out = out + "    *(zg_" + nm + "*)dst = zg_copy_" + nm + "(*(const zg_" + nm + "*)src);\n}\n"
+	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
 	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", NULL};\n\n"
 }
 
@@ -2407,9 +2423,13 @@ fn c_list_at_fn(write: bool) -> str {
 # mode on, which is where the mode belongs: an assignment target is the only thing that
 # knows it is one, and it is exactly one node above the indexes that need to know.
 fn c_lvalue(mut &em: Emitter, e: Expr, sb: Subst) -> str {
+	# saved and RESTORED, the discipline c_index thirty lines up already follows. Clobbering
+	# to false is correct only while nothing lowers an lvalue inside one, which is a
+	# property of today's callers rather than of this function.
+	w := em.lv_write
 	em.lv_write = true
 	out := c_expr(em, e, sb)
-	em.lv_write = false
+	em.lv_write = w
 	return out
 }
 

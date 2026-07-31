@@ -207,6 +207,17 @@ struct Emitter {
 	# `x := 1` then `if … { x := 2 }` then a read of `x` resolved to the inner binding's
 	# C name, which C has already closed the brace on.
 	open_scopes: list[int]
+
+	# lv_write is set while the ASSIGNMENT TARGET of a statement is being lowered, and it
+	# is what tells `xs[0] = 9` from `x := xs[0]`. A list's buffer is copy-on-write, so a
+	# read takes the slot as it is and a write must first make the buffer this list's
+	# alone; the two are the same expression on the page and differ only in which side of
+	# an `=` they sit on, which no expression node records.
+	#
+	# It travels DOWN a target — through a field and through an index — because every list
+	# on the path is written into: `xs[0].ys[1] = 9` stores into the struct that lives in
+	# `xs`'s buffer, so unsharing `ys` alone would edit a header other holders can see.
+	lv_write: bool
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1543,7 +1554,7 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 	return c_carrier_fit(em, fty, arg, sb) if c_is_carrier(fty)
 	if c_is_list(fty) and c_is_empty_listlit(arg) {
 		em.used_rt = true
-		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}))"
+		return f"zg_empty_list(sizeof({c_type(c_list_elem(fty))}), &{c_elem_vt(em, c_list_elem(fty))})"
 	}
 	return c_copied(em, fty, arg, sb)
 }
@@ -1607,15 +1618,44 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 }
 
 # c_copy_helpers emits one `zg_copy_<T>` per struct that holds a list, after the typedefs
-# and before anything that calls them.
+# and before anything that calls them, and the ELEMENT VTABLE that lets a list of that
+# struct use it.
 fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for sd in f.structs {
 		if c_needs_copy(em, TNamed(sd.name)) {
-			out = out + c_copy_helper(em, sd)
+			out = out + c_copy_helper(em, sd) + c_elem_vt_helper(sd.name)
 		}
 	}
 	return out
+}
+
+# c_elem_vt is the element vtable a `list[T]` is built with — how the runtime duplicates
+# one element when it copies a buffer.
+#
+# Every list was built with `zg_listvt`, which is {NULL, NULL} — the memcpy fast path,
+# correct for a scalar and wrong for anything holding a heap buffer. A `list[Row]` where
+# `Row` holds a `list[int]` copied its Rows bit for bit, so both lists' Rows named ONE
+# inner buffer and `h[0].ys[0] = 8` was read back through `g`. The mechanism to say
+# otherwise has been in the runtime header since the container was written; nothing ever
+# supplied it.
+#
+# A nested LIST needs no per-type vtable: `zrt_list_copy` copies a header, and the header
+# carries its own elemsz and its own vt, so one thunk serves every element type.
+fn c_elem_vt(mut &em: Emitter, t: Ty) -> str {
+	return "zg_listvt_list" if c_is_list(t)
+	return f"zg_listvt_{c_named_of(t)}" if c_needs_copy(em, t)
+
+	return "zg_listvt"
+}
+
+# The vtable carries a COPY and no drop: this emitter is leak-style, so nothing generates
+# a teardown for a struct, and a drop thunk here would be the only one — freeing halves of
+# values whose other halves nobody frees.
+fn c_elem_vt_helper(nm: str) -> str {
+	mut out := "static void zg_elemcopy_" + nm + "(void *dst, const void *src) {\n"
+	out = out + "    *(zg_" + nm + "*)dst = zg_copy_" + nm + "(*(const zg_" + nm + "*)src);\n}\n"
+	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", NULL};\n\n"
 }
 
 fn c_copy_helper(mut &em: Emitter, sd: StructDecl) -> str {
@@ -2292,12 +2332,40 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
 
 	ct := c_type(c_list_elem(tty))
+
+	# the TARGET keeps the write mode and the INDEX does not: `xs[js[0]] = 9` writes into
+	# `xs` and reads `js`, and unsharing `js` for it would be a copy nobody asked for
+	w := em.lv_write
 	tgt := c_expr(em, target, sb)
+	em.lv_write = false
 	ix := c_expr(em, idx, sb)
-	return f"(*({ct}*)zrt_list_at(&({tgt}), {ix}))" if c_is_lvalue(target)
+	em.lv_write = w
+
+	at := c_list_at_fn(w)
+	return f"(*({ct}*){at}(&({tgt}), {ix}))" if c_is_lvalue(target)
 
 	# a call/conversion result is an rvalue; materialise it so its address is taken
-	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)zrt_list_at(&zg_ix, " + ix + ")); })"
+	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)" + at + "(&zg_ix, " + ix + ")); })"
+}
+
+# c_list_at_fn picks the runtime slot accessor. They differ by exactly one thing — the
+# write one unshares the buffer first — and choosing between them is the whole of what
+# the compiler owes copy-on-write. Getting it wrong the safe way (always unsharing) makes
+# every indexed read duplicate a buffer; getting it wrong the other way lets a write
+# through one name be seen through another, which is the language's value semantics.
+fn c_list_at_fn(write: bool) -> str {
+	return "zrt_list_at_mut" if write
+	return "zrt_list_at"
+}
+
+# c_lvalue lowers an expression that is being WRITTEN to. It is c_expr with the write
+# mode on, which is where the mode belongs: an assignment target is the only thing that
+# knows it is one, and it is exactly one node above the indexes that need to know.
+fn c_lvalue(mut &em: Emitter, e: Expr, sb: Subst) -> str {
+	em.lv_write = true
+	out := c_expr(em, e, sb)
+	em.lv_write = false
+	return out
 }
 
 # c_is_place is c_is_lvalue WITH TYPES: an expression that names storage a caller can take
@@ -2404,6 +2472,13 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 
 		return c_list_method_rv(em, target, meth, args, tty, sb)
 	}
+
+	# A MUTATING METHOD reaches its receiver the way an assignment reaches its target, and
+	# for the same reason: `d[0].append(5)` edits the inner list's HEADER, and that header
+	# lives inside `d`'s buffer. Lowering the receiver as a read left the buffer shared, so
+	# the header `c` sees grew a element too — the append went through `zrt_list_push`,
+	# which unshares the INNER buffer and knows nothing about the outer one it sits in.
+	return c_list_method_on(em, c_lvalue(em, target, sb), meth, args, tty, sb) if c_meth_mutates(meth)
 	return c_list_method_on(em, c_expr(em, target, sb), meth, args, tty, sb)
 }
 
@@ -2508,8 +2583,9 @@ fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 	return "(zrt_list){0}" if elems.len() == 0
 	em.used_rt = true
 
-	et := c_type(c_infer(em, elems[0]))
-	mut out := "({ zrt_list zg_ll = zg_empty_list(sizeof(" + et + "));"
+	ety := c_infer(em, elems[0])
+	et := c_type(ety)
+	mut out := "({ zrt_list zg_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + ");"
 	mut i := 0
 	for i < elems.len() {
 		tmp := "zg_ll" + strconv.to_string(i, 10)
@@ -3446,7 +3522,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 	}
 	lt := c_infer(em, lhs)
 	chk_assigned(em, lhs, lt, rhs)
-	lv := c_expr(em, lhs, c_nosub())
+	lv := c_lvalue(em, lhs, c_nosub())
 
 	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it
 	# absent, `x = 5` present. Without it the C compiler saw an int where a carrier goes.
@@ -3455,7 +3531,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
 		et := c_type(c_list_elem(lt))
-		mut out := f"{ind}zrt_list_init(&({lv}), sizeof({et}), &zg_listvt);\n"
+		mut out := f"{ind}zrt_list_init(&({lv}), sizeof({et}), &{c_elem_vt(em, c_list_elem(lt))});\n"
 		return out + c_pushes(em, f"({lv})", et, rhs, ind)
 	}
 
@@ -4476,7 +4552,7 @@ fn c_slice(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) -> str
 		cmp = " <= "
 	}
 	mut out := "({ zrt_list zg_ss = " + src + "; zrt_list zg_sl;"
-	out = out + " zrt_list_init(&zg_sl, sizeof(" + et + "), &zg_listvt);"
+	out = out + " zrt_list_init(&zg_sl, sizeof(" + et + "), &" + c_elem_vt(em, c_list_elem(tty)) + ");"
 	out = out + " for (size_t zg_si = (size_t)(" + lo + "); zg_si" + cmp + "(size_t)(" + hi + "); zg_si++)"
 	out = out + " zrt_list_push(&zg_sl, zrt_list_at(&zg_ss, zg_si));"
 	return out + " zg_sl; })"
@@ -5005,7 +5081,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 		vals := c_elem_exprs(em, ival, c_list_elem(eff))
 		c_add_var(em, name, eff, is_mut)
 		cname := c_var_cname(em, name)
-		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &zg_listvt);\n"
+		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"
 		return out + c_pushes_strs(cname, et, vals, ind)
 	}
 
@@ -5695,7 +5771,7 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # only the driver does.
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], false)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -5798,7 +5874,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	hdr = hdr + "\n"
 	if em.used_rt {
 		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
-		hdr = hdr + "static zrt_list zg_empty_list(size_t esz) { zrt_list l; zrt_list_init(&l, esz, &zg_listvt); return l; }\n\n"
+		hdr = hdr + "static void zg_elemcopy_list(void *dst, const void *src) { zrt_list_copy((zrt_list*)dst, (const zrt_list*)src); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, NULL};\n"
+		hdr = hdr + "static zrt_list zg_empty_list(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
 	}
 	if em.used_str {
 		hdr = hdr + c_str_helpers()

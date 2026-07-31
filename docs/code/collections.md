@@ -4,12 +4,12 @@ Zerg's built-in containers — **`list`**, **`map`**, **`set`**, plus the fixed-
 one canonical type per role, no variant zoo. They're just ordinary **scope-owned values**, built on the
 [Language Reference](../language.md). Also in [繁體中文](collections.zh-TW.md).
 
-| Type        | Role                        | Element / key requirement | Iteration order     | Status            |
-| ----------- | --------------------------- | ------------------------- | ------------------- | ----------------- |
-| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         | **[implemented]** |
-| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order | **[not yet]**     |
-| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]**     |
-| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         | **[implemented]** |
+| Type        | Role                        | Element / key requirement | Iteration order     | Status        |
+| ----------- | --------------------------- | ------------------------- | ------------------- | ------------- |
+| `list[T]`   | an **ordered sequence**     | any `T` (no bound)        | index order         |               |
+| `map[K, V]` | an **associative** table    | `K: Eq + Hash`            | **insertion** order |               |
+| `set[T]`    | a **unique-membership** set | `T: Eq + Hash`            | **insertion** order | **[not yet]** |
+| `[T; N]`    | a **fixed-size array**      | any `T` (no bound)        | index order         | **[not yet]** |
 
 The `map` key requirement above is the intended one; this phase a key is restricted to **`int`** or **`str`**
 (see [Keys](#keys--eq-free-hash-explicit) below), and `set[T]` is **[not yet]** in both type and value
@@ -26,8 +26,7 @@ at scope exit, **no aliasing** — copying **deep-copies** the elements and **re
 type. That is exactly the memory rule — the value-type parts are copied, the reference-counted parts shared
 (see [Values & Memory](../core/memory.md#copy-vs-reference-semantics)). There's no shared container hiding behind two
 names: you share for **reading** with an immutable pass, for **mutation** with a `mut &` parameter; a
-collection sent over a channel is copied like any other payload. `list` and `map` value semantics are
-**[implemented]**.
+collection sent over a channel is copied like any other payload.
 
 ## Mutability — one per-binding knob
 
@@ -165,7 +164,8 @@ of the rules already stated for `list`:
   (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
   compare (and hash) element-wise. There is **no** blanket auto-derived `Object`; equality comes only from
   `derive(Eq)` on the element. `a.slice(p, q)` is intended to yield a **read-only `list[T]`** view — the COW
-  bridge from an array back into the list family — but slicing is **[not yet]** (see [Slicing](#slicing--read-only-subranges)).
+  bridge from an array back into the list family — but slicing is **[not yet]** (see
+  [Slicing](#slicing--read-only-subranges)).
 
 ## Strings & bytes
 

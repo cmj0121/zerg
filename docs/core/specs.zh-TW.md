@@ -22,8 +22,8 @@ Zerg 如何抽象行為——`spec` 介面、泛型 bound、spec 當型別用的
   **`#[derive(Eq)]`** 或手寫 `impl Eq` 才取得結構化相等（`==` / `!=`）,透過 `derive(Ord)` 取得全序,透過
   `derive(Hash)` 取得雜湊（**[not yet]**）;比較兩個沒有 `Eq` impl 的型別的值是編譯錯誤。*每個*值不靠任何 spec bound
   就有的,是記憶體模型保證的**結構性記憶體操作**——copy、`del`、傳參、存起來、送進 channel——因為那些是表徵的性質、
-  不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（`Eq` / `Ord` **[implemented]**、`Hash` /
-  `Encode` / `Decode` **[not yet]**）見 [Derive 與預設行為](derive.zh-TW.md) 參考。
+  不是 spec 抽象的行為。撐起 `derive` 的那套 compiler 擁有的**結構化衍生**（受祝福集合中每一個 trait 皆為
+  **[not yet]**）見 [Derive 與預設行為](derive.zh-TW.md) 參考。
 
 `spec` 也可**當型別用**，不只是 bound：spec-typed 的值可持有任何實作它的型別——heap-boxed、single-owner、
 scope-owned，並**動態 dispatch**（實際要跑哪個 method，在執行期依值的真實型別決定）。抹除是**對值單向**的——一旦
@@ -112,7 +112,7 @@ reinterpret（見 [型別轉換](types.zh-TW.md)）。`T` 必須實作 `x` 所�
 因為 `is` 永不交出具體值，它只能驅動**控制流、不是資料存取**：你可以就「它是不是 `T`」分支，但要讀 `T` 自己的欄位，
 你必須**一開始就握著具體型別**、從未 box 它。它就是個普通 `bool`——用在 `if`、搭 `not` / `and` / `or`、或當 `match`
 guard——不需要任何新的 pattern 形式。它的主要用途是對**被抹除的錯誤**依型別分派(見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md))
-——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類（**[implemented]**）,而對**非錯誤**型別的一般
+——而**這個階段那也是唯一已實作的用途**:`is` 可用於內建的錯誤分類,而對**非錯誤**型別的一般
 存在性測試 `x is T` 是 **[not yet]**。
 
 ## Method、`this` / `This` 與 default body
@@ -144,7 +144,7 @@ spec 的 method 分兩種：
 覆寫、否則用 default。所以一個 default body 呼叫另一個 spec method 時，會叫到型別的覆寫（用 `next` 定義的 default
 `count`，會用被覆寫的 `next`）；**default 沒有靜態分派的例外**。機制沿用既有——concrete-bound generic
 **monomorphize** 到實際 impl，spec 當型別用則經 **vtable** 分派到實際 impl。這對**直接在具體值上呼叫**也成立
-（**[implemented]**）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑 spec 的 **default body**——不需要 `#[dyn]`、
+（**[not yet]**——provided method 會被指名拒絕）:`c.provided()` 有覆寫就跑該型別的**覆寫**、否則跑 spec 的 **default body**——不需要 `#[dyn]`、
 也不需要裝箱,所以 provided method 並不侷限於動態分派那條路徑。
 
 ## Associated type 與 associated value
@@ -186,7 +186,7 @@ function。
 **[not yet]**。其餘一切都是型別 **opt-in** 的 spec、由泛型 bound 把關:
 
 - **`Eq`**——結構化相等,驅動 `==` / `!=`,靠 `#[derive(Eq)]` 或手寫 `impl Eq` 取得;channel 或 `fn` 欄位以 identity
-  比較。一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。**[implemented]**
+  比較。一個**沒有 `Eq` impl 的型別不能被比較**——對它用 `==` 是編譯錯誤、絕非靜默的結構化 default。
 
 Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值的副本本就是不同 instance、且無 aliasing，
 「同一個 instance？」只對 channel 有意義——太 narrow、不值得一個運算子。相等在型別 opt-in 之處是**結構性**的 `Eq`。
@@ -198,7 +198,7 @@ Zerg **不設兩值之間的 instance-identity 測試**：copy-by-value 下值�
 - **`Ord`**——一個與 `Eq` 一致的 **total** order,由**單一必需的 `less`**(`<`)定義、並要求 `Eq` 為 super-spec
   (`spec Ord: Eq`);`<=` `>` `>=` 與 sort 都由它配 `Eq` 導出,而 `min` / `max` / `clamp` 是建在 `Ord` bound 上的普通
   stdlib helper——**沒有三路 `Ordering`** 值,只有 `less` 與 `Eq`。`str` 依 **code point 字典序**排序(＝ byte 序,因其
-  UTF-8 有效——非 locale collation,那是另一個 stdlib 功能);`float` 同時退出 `Ord` 與 `Hash`(理由見下)。**[implemented]**
+  UTF-8 有效——非 locale collation,那是另一個 stdlib 功能);`float` 同時退出 `Ord` 與 `Hash`(理由見下)。
 - **`Hash`**——`map` / `set` 的 key，`equal ⇒ same hash`。`str` 不可變、是天然的 key。**[not yet]**
 - **`Iterator`** / **`Iterable`**——迭代協定（見下方 **迭代**）。
 - **`Error`（`Err`）**——錯誤層：`message() -> str`、`unwrap() -> Err?`（底層 cause、無則 `nil`）、

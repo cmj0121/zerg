@@ -28,12 +28,10 @@ full treatment is in the [Language Reference](../language.md). Also in [繁體�
 | `a ?? b` / `a?.m` / `e!`                 | default; optional chain to `nil`; force-unwrap or raise `UnwrapError`   |
 | `del ch`                                 | revoke the name **and** drop this holder (to end a stream: `close(ch)`) |
 
-**Status.** Every row above is **[implemented]** with two exceptions inside f-string interpolation. The
-self-documenting `f"{x=}"` is **[not yet]** — it is parsed but rejected at code generation. The `!r`
-(debug) and `!a` (ascii) conversions are a **[deviation]**: both are currently **aliased to `display`**
-(that is, they render as `!s`), pending the distinct `debug`/ASCII renderings. Plain holes `{x}`, the
-format spec `{x:spec}`, and `!s` are implemented for scalars and `str`; a **composite** hole (a `struct`,
-`list`, or `map`) is still rejected, so structural rendering is **[not yet]** — see
+**Status.** Every row above works except inside an f-string hole, where only the plain `{x}` form does.
+A **conversion** (`!r` / `!s` / `!a`), a **format spec** (`{x:.2f}`), and the self-documenting `f"{x=}"`
+are each **[not yet]** and refused by name. A **composite** hole (a `struct`, `list`, or `map`) is
+rejected too, so structural rendering is **[not yet]** — see
 [Formatting & Text](../runtime/format.md). The interpolating command literal `` f`…` `` (grammar, not listed here) is
 likewise **[not yet]**. Each desugaring above is otherwise exactly as written.
 

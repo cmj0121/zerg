@@ -167,7 +167,7 @@ byte-lit    ::= 'b' "'" ( byte-char | byte-escape ) "'"
 str-lit     ::= '"' ( str-char | escape )* '"'
               | '"""' ( ml-str-char | escape )* '"""'    # multiline; line breaks are literal
 raw-str-lit ::= 'r' '"' raw-char* '"'
-cmd-lit     ::= '`' cmd-char* '`'                        # a COMMAND literal (run directly, no shell); f-form in group 5
+cmd-lit     ::= '`' cmd-char* '`'                        # a COMMAND literal (run directly, no shell)
 cmd-char    ::= < any code point except '`' or a line break >   # no escapes (raw)
 
 escape      ::= '\' ( 'n' | 't' | 'r' | '0' | '\' | "'" | '"' | 'u' '{' hex-digit+ '}' )
@@ -196,7 +196,7 @@ raw-char    ::= < any code point except '"' or a line break >   # no escapes
 # properties are independent — 'const' is only about shadowing.
 
 binding      ::= ( 'mut' | 'const' )? bind-target ':=' expr          # inferred; 'const' = shadow-proof (bidirectional)
-             | ( 'mut' | 'const' )? identifier ':' type '=' expr      # type-ANNOTATED; the ':' before '=' picks this over reassign
+             | ( 'mut' | 'const' )? identifier ':' type '=' expr      # type-ANNOTATED; the ':' picks this form
 bind-target  ::= identifier | tuple-pat | struct-pat   # destructuring: group 6 (inferred ':=' only)
 reassign     ::= assign-target '=' expr
 expr-stmt    ::= expr
@@ -295,8 +295,8 @@ type-name    ::= identifier            # a spec or enum-variant name (groups 6, 
 # positionally, then by name. ('type' is defined in group 7 (Types); referenced here.)
 
 fn-decl      ::= 'pub'? 'unsafe'? 'mut'? 'fn' identifier generics? '(' param-list? ')' ret-type? block
-fn-expr      ::= 'fn' '(' closure-param-list? ')' ret-type? block  # anonymous / closure — never generic, never unsafe; param types may be inferred
-fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a function's type; 'unsafe fn' for ptr[unsafe fn…]
+fn-expr      ::= 'fn' '(' closure-param-list? ')' ret-type? block  # anonymous / closure — never generic or unsafe
+fn-type      ::= 'unsafe'? 'fn' '(' param-type-list? ')' ret-type?   # a function's type; 'unsafe fn' for a ptr
 
 # 'mut fn' marks a METHOD that mutates its implicit receiver 'this' in place — exactly the
 # 'mut &this' case. It is meaningful only on a method (a 'fn' in an 'impl' or 'spec'); the
@@ -470,7 +470,7 @@ type         ::= base-type '?'?                        # a trailing '?' makes it
 base-type    ::= type-name type-args? ( '.' identifier )*   # int, list[int]; 'I.Item' PROJECTS an
                | tuple-type | array-type | chan-type | fn-type | ptr-type   # associated type — chainable: 'I.Item.Sub'
 type-args    ::= '[' generic-arg ( ',' generic-arg )* ']'
-generic-arg  ::= type | const-expr   # a type, or a const-expr filling a value generic param (resolved by name resolution)
+generic-arg  ::= type | const-expr   # a type, or a const-expr filling a value generic param (by name)
 tuple-type   ::= '(' type ( ',' type )+ ')'            # 2+ elements
 array-type   ::= '[' type ';' const-expr ']'           # [T; N] — the ';' array position; N is a const-expr
 chan-type    ::= 'chan' '[' type ']'           # bidirectional

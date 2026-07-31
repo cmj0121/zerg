@@ -155,6 +155,9 @@ struct Arm {
 # Stmt is a statement node. Blocks are plain list[Stmt]; the `has_*` flags stand in for
 # the optional parts the subset's flat enums cannot express as optionals.
 enum Stmt {
+	# SLet is a binding: the name, its declared type, whether one was WRITTEN, whether it
+	# is `mut`, and the initializer. The two bools are in that order — has_type first —
+	# which is worth saying because they are the same type and a swap type-checks.
 	SLet(str, Ty, bool, bool, Expr)
 	SAssign(Expr, Expr)
 	SPrint(Expr)
@@ -381,7 +384,7 @@ fn dump_block(body: list[Stmt], ind: str) -> str {
 
 fn dump_stmt(s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, is_mut, has_ty, value) => f"{ind}let {name} = {expr_kind(value)}\n"
+		SLet(name, ty, has_ty, is_mut, value) => f"{ind}let {name} = {expr_kind(value)}\n"
 		SAssign(target, value) => f"{ind}assign {expr_kind(target)} = {expr_kind(value)}\n"
 		SPrint(x) => f"{ind}print {expr_kind(x)}\n"
 		SReturn(has_value, value) => f"{ind}return {expr_kind(value)}\n"

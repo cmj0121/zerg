@@ -156,17 +156,17 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		for u in units {
 			trees.append(zerg.merge_files_at(u.srcs, u.paths))
 		}
-		mut diags: list[str] = []
+		mut diags: list[zerg.Diag] = []
 		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], diags)
-		report_diags(diags)
+		report_diags(diags, unit_srcs(units), unit_paths(units))
 		compile_to(obj_code, output + ".o", true)
 		return
 	}
 	mut paths: list[str] = []
 	srcs := load_sources_at(files, paths)
-	mut diags: list[str] = []
+	mut diags: list[zerg.Diag] = []
 	code := zerg.emit_files_diag(srcs, paths, diags)
-	report_diags(diags)
+	report_diags(diags, srcs, paths)
 	if emit == "c" {
 		guard {
 			io.write(code)
@@ -181,6 +181,28 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	__zrt_exit(2)
 }
 
+# unit_srcs / unit_paths flatten a build's units back into the two parallel lists the
+# renderer looks a source up in. A unit knows its own files; a finding knows one path.
+fn unit_srcs(units: list[Unit]) -> list[str] {
+	mut out: list[str] = []
+	for u in units {
+		for s in u.srcs {
+			out.append(s)
+		}
+	}
+	return out
+}
+
+fn unit_paths(units: list[Unit]) -> list[str] {
+	mut out: list[str] = []
+	for u in units {
+		for p in u.paths {
+			out.append(p)
+		}
+	}
+	return out
+}
+
 # report_diags ends the run when the program is ill-formed, having said EVERYTHING that is
 # wrong with it. Nothing reaches cc after this: the C was built out of a program that does
 # not typecheck, so any complaint cc had about it would be a second-hand account of a
@@ -189,12 +211,180 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 # It exits rather than returning a status because it is called from the middle of a build,
 # where the alternative is threading "did it work" back through every stage for a question
 # with one answer.
-fn report_diags(diags: list[str]) {
+fn report_diags(diags: list[zerg.Diag], srcs: list[str], paths: list[str]) {
 	return if diags.len() == 0
 	for d in diags {
-		io.ewrite(d + "\n")
+		io.ewrite(render_diag(d, diag_source(d.path, srcs, paths)))
+	}
+	n := strconv.to_string(diags.len(), 10)
+	if diags.len() > 1 {
+		io.ewrite(f"zerg: {n} error(s)\n")
 	}
 	__zrt_exit(1)
+}
+
+# render_diag draws one finding the way a person reads it: what is wrong first, then where,
+# then the line itself with a caret under the thing it is about.
+#
+#     error: cannot assign to `x`: it is immutable — declare it `mut x := …`
+#      --> examples/foo.zg:3:2
+#       |
+#     3 |     x = 2
+#       |     ^
+#
+# The source line is omitted when the file cannot be found — a diagnostic is still a
+# diagnostic without it, and guessing at a line nobody read would be worse than saying
+# less.
+fn render_diag(d: zerg.Diag, src: str) -> str {
+	mut out := f"error: {d.msg}\n"
+	line_s := strconv.to_string(d.line, 10)
+	if d.line > 0 {
+		out = out + f"  --> {diag_place(d)}\n"
+	}
+
+	text := source_line(src, d.line)
+	return out if text == "" or d.line == 0
+
+	gutter := blanks(list[byte](line_s).len())
+	out = out + f" {gutter} |\n"
+	out = out + f" {line_s} | {text}\n"
+
+	# the caret marks the TOKEN when the message names one in backticks and it is on this
+	# line at or after the statement's column; otherwise it marks where the statement
+	# starts, which is all the position this compiler records. A quoted name that is a type
+	# rather than a token — or one that appears twice — falls back rather than mislead.
+	col := caret_col(text, d)
+	return out + f" {gutter} | {caret_pad(text, col)}^\n"
+}
+
+# caret_pad is the run of whitespace that puts the caret under column `col` of `text`. It
+# COPIES the source's own indentation rather than emitting spaces: a line indented with
+# tabs renders one tab as many columns, so a caret padded with spaces lands short of the
+# thing it points at by however much the terminal decided a tab was worth.
+fn caret_pad(text: str, col: int) -> str {
+	b := list[byte](text)
+	mut out: list[byte] = []
+	mut i := 0
+	for i < col - 1 {
+		if i < b.len() and b[i] == b'\t' {
+			out.append(b'\t')
+		} else {
+			out.append(b' ')
+		}
+		i = i + 1
+	}
+	return str(out)
+}
+
+fn diag_place(d: zerg.Diag) -> str {
+	l := strconv.to_string(d.line, 10)
+	c := strconv.to_string(d.col, 10)
+	return f"{l}:{c}" if d.path == ""
+	return f"{d.path}:{l}:{c}"
+}
+
+# caret_col is the 1-based column the caret goes under.
+fn caret_col(text: str, d: zerg.Diag) -> int {
+	q := first_quoted(d.msg)
+	return d.col if q == ""
+	at := index_from(text, q, d.col - 1)
+	return d.col if at < 0
+	return at + 1
+}
+
+# first_quoted is the first `…` run in a message, which is how every rule in this compiler
+# names the thing it is talking about.
+fn first_quoted(msg: str) -> str {
+	b := list[byte](msg)
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'`' {
+			mut j := i + 1
+			for j < b.len() and b[j] != b'`' {
+				j = j + 1
+			}
+			return "" if j >= b.len()
+			mut out: list[byte] = []
+			mut k := i + 1
+			for k < j {
+				out.append(b[k])
+				k = k + 1
+			}
+			return str(out)
+		}
+		i = i + 1
+	}
+	return ""
+}
+
+# index_from is where `needle` first occurs in `hay` at or after `from`, or -1.
+fn index_from(hay: str, needle: str, start: int) -> int {
+	h := list[byte](hay)
+	n := list[byte](needle)
+	return -1 if n.len() == 0 or n.len() > h.len()
+	mut i := start
+	if i < 0 {
+		i = 0
+	}
+	for i <= h.len() - n.len() {
+		mut j := 0
+		for j < n.len() and h[i + j] == n[j] {
+			j = j + 1
+		}
+		return i if j == n.len()
+		i = i + 1
+	}
+	return -1
+}
+
+# source_line is the 1-based `n`th line of `src`, or "" when there is no such line.
+fn source_line(src: str, n: int) -> str {
+	return "" if n < 1
+	b := list[byte](src)
+	mut at := 1
+	mut start := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'\n' {
+			return line_slice(b, start, i) if at == n
+			at = at + 1
+			start = i + 1
+		}
+		i = i + 1
+	}
+	return line_slice(b, start, b.len()) if at == n
+	return ""
+}
+
+fn line_slice(b: list[byte], at: int, to: int) -> str {
+	mut out: list[byte] = []
+	mut i := at
+	for i < to {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
+fn blanks(n: int) -> str {
+	mut out := ""
+	mut i := 0
+	for i < n {
+		out = out + " "
+		i = i + 1
+	}
+	return out
+}
+
+# diag_source is the text of the file a finding is about, found by its path among the
+# sources already loaded — the compiler does not read it again.
+fn diag_source(path: str, srcs: list[str], paths: list[str]) -> str {
+	mut i := 0
+	for i < paths.len() and i < srcs.len() {
+		return srcs[i] if paths[i] == path
+		i = i + 1
+	}
+	return ""
 }
 
 # link_program builds a program the way a project is built: every unit compiled to its
@@ -213,7 +403,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 	}
 
 	prog := zerg.merge_asts(trees)
-	mut diags: list[str] = []
+	mut diags: list[zerg.Diag] = []
 	mut objs: list[str] = []
 	mut todo_c: list[str] = []
 	mut todo_o: list[str] = []
@@ -235,7 +425,7 @@ fn link_program(entry: str, output: str, jobs: int) {
 
 	# every unit is emitted before anything is reported, so one run answers for the whole
 	# program rather than for its first bad module
-	report_diags(diags)
+	report_diags(diags, unit_srcs(units), unit_paths(units))
 
 	# The runtime is compiled the same way, and cached the same way. It changes far less
 	# often than the program does, so recompiling its ten translation units on every link

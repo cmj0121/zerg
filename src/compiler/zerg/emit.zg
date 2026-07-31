@@ -2683,6 +2683,24 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -
 	return c_copied(em, em.pr_ty[row], a, sb)
 }
 
+# c_captured renders the value a `spawn` or a `defer` stores in its env — the same value
+# the callee would OWN at an ordinary call, which is why it is copied. c_arg is the wrong
+# tool for it: that one renders straight into an argument list and re-runs the checks
+# chk_callsite has already made, so calling it here would say everything twice. The COPY is
+# not optional, and both statements skipped it: `defer take(xs)` handed the callee the
+# caller's own buffer, so a later `xs[0] = 99` was seen by a call that is documented to
+# have taken a snapshot. An ordinary `take(xs)` copied all along — the two disagreed.
+#
+# A CHANNEL is the exception the language draws on purpose: a handle is shared, and the
+# capture takes its own reference rather than a copy. `spawn`'s loop does that above; a
+# copy here would be a second, wrong answer to the same question.
+fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
+	row := c_param_row(em, key, idx)
+	return c_expr(em, a, c_nosub()) if row < 0 or ty_is_chan(em.pr_ty[row])
+	return c_carrier_fit(em, em.pr_ty[row], a, c_nosub()) if c_is_carrier(em.pr_ty[row])
+	return c_copied(em, em.pr_ty[row], a, c_nosub())
+}
+
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
 	row := c_param_row(em, fname, idx)
 	return TUnknown if row < 0
@@ -2697,16 +2715,21 @@ fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
 # — a parameter without one is mandatory, and a call missing it is a call that is wrong.
 # Emitting the arguments it DOES have and no more would produce C that cc rejects, which
 # is the failure this compiler wants when a program is wrong.
-# c_defaults_from is the default EXPRESSIONS of every parameter from `at` onward — the one
-# encoding of the language rule that defaults are trailing-only and stop at the first
-# parameter without one. It was written twice, once to render them for an ordinary call and
-# once to append them for a spawn, and the two disagreed about the receiver shift.
+#
+# c_defaults_from is the one encoding of that rule: the default EXPRESSIONS of every
+# parameter from `at` onward. It was written twice — once to render them for an ordinary
+# call, once to append them for a spawn — and the two disagreed about the receiver shift.
+#
+# The row is read directly, for the reason c_arg gives: two answers about one parameter,
+# and the per-column helpers would scan the whole program's parameter table for each.
 fn c_defaults_from(mut &em: Emitter, key: str, at: int) -> list[Expr] {
 	mut out: list[Expr] = []
 	mut i := at
-	for c_param_has_def(em, key, i) {
-		out.append(c_param_def(em, key, i))
+	mut row := c_param_row(em, key, i)
+	for row >= 0 and em.pr_hasdef[row] {
+		out.append(em.pr_def[row])
 		i = i + 1
+		row = c_param_row(em, key, i)
 	}
 	return out
 }
@@ -2722,18 +2745,6 @@ fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 		out = out + c_expr(em, d, c_nosub())
 	}
 	return out
-}
-
-fn c_param_has_def(mut &em: Emitter, fname: str, idx: int) -> bool {
-	row := c_param_row(em, fname, idx)
-	return false if row < 0
-	return em.pr_hasdef[row]
-}
-
-fn c_param_def(mut &em: Emitter, fname: str, idx: int) -> Expr {
-	row := c_param_row(em, fname, idx)
-	return ENil if row < 0
-	return em.pr_def[row]
 }
 
 # c_variant_ctor builds `(zg_Enum){.tag = N, .u.Var = {.f0 = a, ...}}` (the payload part
@@ -3833,7 +3844,7 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	mut out := f"{ind}zg_spawnenv_{tag} *zg_se{tag} = (zg_spawnenv_{tag}*)zrt_alloc(sizeof(zg_spawnenv_{tag}));\n"
 	mut j := 0
 	for j < args.len() {
-		mut v := c_expr(em, args[j], c_nosub())
+		mut v := c_captured(em, cal.key, j, args[j])
 		if dirs[j] >= 0 {
 			v = f"{c_chan_copy_fn(dirs[j])}({v})"
 		}
@@ -4186,7 +4197,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 			vals = vals + ", "
 			call = call + ", "
 		}
-		vals = vals + c_expr(em, args[i], c_nosub())
+		vals = vals + c_captured(em, cal.key, i, args[i])
 		call = call + "e->f" + strconv.to_string(i, 10)
 		i = i + 1
 	}
@@ -4249,10 +4260,8 @@ fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
 # left off the end appended. A key nothing registered has no parameters to ask about, so
 # an intrinsic or a constructor comes back unchanged.
 fn c_with_defaults(mut &em: Emitter, key: str, args: list[Expr]) -> list[Expr] {
-	mut out: list[Expr] = []
-	for a in args {
-		out.append(a)
-	}
+	# a `list` parameter is by value in this compiler, so `out` is already this call's own
+	mut out := args
 	for d in c_defaults_from(em, key, out.len()) {
 		out.append(d)
 	}

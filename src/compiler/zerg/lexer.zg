@@ -83,6 +83,18 @@ fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
 	return Token(k, lexeme, "", line, col)
 }
 
+# bad emits an ILLEGAL token that says what is wrong with it. The lexer has always marked
+# the token it could not read; what it never did was give a reason, so the only thing that
+# ever spoke about one was parse_primary's fallback — "`b'b` is not an expression this
+# compiler reads", which names the wrong layer, the wrong problem, and a lexeme that is a
+# fragment of what the person wrote.
+#
+# The reason rides in the token's VALUE, which an Illegal has no other use for, and
+# `lex_diags` turns every one of them into a diagnostic with a place and a code.
+fn bad(mut &l: Lex, code: str, why: str, line: int, col: int, lexeme: str) -> Token {
+	return emit_val(l, Illegal, line, col, lexeme, code + " " + why)
+}
+
 fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {
 	l.prev = k
 	return Token(k, lexeme, value, line, col)
@@ -214,7 +226,14 @@ fn scan_number(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		base := at(l, 1)
 		advance(l) # 0
 		advance(l) # x/o/b
+
+		# a based literal needs at least one DIGIT. `0x` on its own consumed nothing, was
+		# emitted as an Int, and lowered to a C `0x` — which cc read as the number zero, so
+		# a malformed literal compiled and answered 0. The prefix without digits is not a
+		# number, and saying so is the only way anyone finds out.
+		digits := l.offs
 		consume_based(l, base)
+		return bad(l, "E108", "a based number needs at least one digit after its prefix", sline, scol, lexeme_from(l, soff)) if l.offs == digits
 		return emit(l, Int, sline, scol, lexeme_from(l, soff))
 	}
 
@@ -311,7 +330,7 @@ fn scan_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening "
 	mut sb: list[byte] = []
 	for true {
-		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, "E101", "a string literal is not closed before the end of the line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		c := at(l, 0)
 		if c == b'"' {
 			advance(l)
@@ -421,7 +440,7 @@ fn scan_triple_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening """
 	mut sb: list[byte] = []
 	for true {
-		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l)
+		return bad(l, "E105", "a triple-quoted string is never closed", sline, scol, lexeme_from(l, soff)) if eof(l)
 		if at(l, 0) == b'"' and at(l, 1) == b'"' and at(l, 2) == b'"' {
 			advance(l)
 			advance(l)
@@ -444,7 +463,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening "
 	mut sb: list[byte] = []
 	for true {
-		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
+		return bad(l, "E106", "a raw string has no closing quote on this line", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10)
 		break if at(l, 0) == b'"'
 
 		sb.append(advance(l))
@@ -458,7 +477,7 @@ fn scan_raw_string(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening '
 	mut sb: list[byte] = []
-	return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
+	return bad(l, "E102", "a rune literal is empty — it holds exactly one character", sline, scol, lexeme_from(l, soff)) if eof(l) or at(l, 0) == byte(10) or at(l, 0) == b'\''
 	if at(l, 0) == b'\\' {
 		for e in decode_escape(l, byte_mode) {
 			sb.append(e)
@@ -466,7 +485,19 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 	} else {
 		sb.append(advance(l))
 	}
-	return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if at(l, 0) != b'\''
+	if at(l, 0) != b'\'' {
+		# EAT THE REST OF IT before reporting. Returning from where the scan gave up left the
+		# lexer standing inside the literal, so `b'ba'` was read as one bad token and then
+		# as a SECOND rune literal starting at the surviving quote — one mistake, two
+		# messages, the second of them nonsense. A recovery point is part of a diagnostic.
+		for not eof(l) and at(l, 0) != b'\'' and at(l, 0) != byte(10) {
+			advance(l)
+		}
+		if at(l, 0) == b'\'' {
+			advance(l)
+		}
+		return bad(l, "E103", "a rune literal holds exactly one character, and this holds more", sline, scol, lexeme_from(l, soff))
+	}
 	advance(l) # closing '
 	return emit_val(l, kind, sline, scol, lexeme_from(l, soff), str(sb))
 }
@@ -475,7 +506,7 @@ fn scan_cmd(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 	advance(l) # opening `
 	mut sb: list[byte] = []
 	for true {
-		return emit(l, Illegal, sline, scol, lexeme_from(l, soff)) if eof(l)
+		return bad(l, "E107", "a command literal has no closing backtick", sline, scol, lexeme_from(l, soff)) if eof(l)
 		if at(l, 0) == b'`' {
 			advance(l)
 			break
@@ -592,7 +623,7 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		return op(l, RBrace, sline, scol, soff, 0)
 	}
 	return op(l, Semi, sline, scol, soff, 0) if c == b';'
-	return op(l, Illegal, sline, scol, soff, 0)
+	return bad(l, "E104", "this character is not part of any Zerg token", sline, scol, lexeme_from(l, soff))
 }
 
 # brace_push saves the enclosing paren/bracket depth and resets it, so ASI resumes
@@ -623,6 +654,24 @@ fn tokenize(src: str) -> list[Token] {
 }
 
 # tokenize_trivia lexes with comments retained, for the formatter.
+# lex_diags is every LEXICAL error in a source: one per token the lexer could not read,
+# each with the reason it recorded and the place it recorded it at.
+#
+# It is a pass of its own, run before anything is parsed, because these are errors about
+# TEXT and nothing further along can say anything true about them. Without it an illegal
+# token reached parse_primary's fallback, which answered "`b'b` is not an expression this
+# compiler reads" — the wrong layer, the wrong problem, and a lexeme that is a fragment of
+# what the person wrote.
+pub fn lex_diags(src: str, path: str) -> list[Diag] {
+	mut out: list[Diag] = []
+	for t in tokenize(src) {
+		if t.kind == Illegal {
+			out.append(Diag(path, t.line, t.col, t.value))
+		}
+	}
+	return out
+}
+
 pub fn tokenize_trivia(src: str) -> list[Token] {
 	return lex_with(src, true)
 }

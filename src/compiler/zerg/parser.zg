@@ -875,10 +875,15 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		mut is_ref := false
 		if p_at(p, Mut) {
 			p_advance(p)
-			if p_at(p, Amp) {
-				p_advance(p)
-				is_ref = true
-			}
+
+			# `mut x: T` is NOT a parameter form (GRAMMAR:316): a by-value parameter is the
+			# callee's own copy and writing to it changes nothing the caller can see, so the
+			# `mut` reads as a promise the language does not make. It was accepted and the
+			# keyword dropped, and a write in the body then said `cannot assign through b:
+			# it is immutable` — a true sentence about a parameter the programmer marked mut.
+			raise "a parameter is `mut &` or nothing — a plain `mut` parameter is a copy the caller never sees written, so the `mut` would promise what it cannot give; bind a `mut` copy in the body instead" if not p_at(p, Amp)
+			p_advance(p)
+			is_ref = true
 		}
 		pname := cur(p).lexeme
 		p_advance(p)

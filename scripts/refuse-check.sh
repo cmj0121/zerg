@@ -955,6 +955,23 @@ fn main() { print forced(2) ?? -1 }
 EOF
 
 
+# GRAMMAR:316 — "There is NO plain `mut x` parameter". It was accepted and the keyword
+# dropped, so a write in the body said `cannot assign through b: it is immutable` about a
+# parameter the programmer had marked `mut`.
+expect "$ZERG" a-plain-mut-parameter "a parameter is \`mut &\` or nothing" <<'EOF'
+struct Bag {
+	n: int
+}
+
+fn f(mut b: Bag) {
+	print(f"{b.n}")
+}
+
+fn main() {
+	f(Bag(1))
+}
+EOF
+
 # An INDEX needs a list or a map. `a[0]` on a `list[int]?` handed the runtime the carrier
 # struct where a header goes, which cc reported as a WARNING — so the program linked and
 # segfaulted. A warning is not a gate.

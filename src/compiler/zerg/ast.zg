@@ -286,6 +286,13 @@ struct FnDecl {
 	# statement — and rides on a STRUCT rather than an enum, so it costs its construction
 	# sites and no match arm anywhere.
 	path: str
+
+	# line / col are where the declaration begins. A diagnostic about the SIGNATURE — a
+	# default that cannot fit its parameter, a `mut &` given one — is made before any
+	# statement is emitted, so the SAt markers have not said anything yet and there is no
+	# other position to report.
+	line: int
+	col: int
 }
 
 # Diag is one finding about an ill-formed program: what is wrong, and where. It is a

@@ -134,22 +134,34 @@ reject() {
 	# `pass` can never report an unexpected pass, and the day the seed learns the rule the
 	# marker and its entry in the seed's README would rot with nothing to say so.
 	if [ "$seed" = "seed-gap" ]; then
-		if "$ZERG0" build "$src" -o "$tmp/$name.seed.o" >/dev/null 2>&1; then
-			pass=$((pass + 1))
-		else
+		if seed_refuses "$name" "$src"; then
 			echo "SEED GAP CLOSED  $name — the seed now rejects this; drop the seed-gap marker and its src/bootstrap/README.md entry"
 			fail=$((fail + 1))
+		else
+			pass=$((pass + 1))
 		fi
 		return
 	fi
 
-	if "$ZERG0" build "$src" -o "$tmp/$name.seed.o" >/dev/null 2>&1; then
-		echo "SEED      $name — the seed ACCEPTED a program the language rejects"
+	if ! seed_refuses "$name" "$src"; then
+		echo "SEED      $name — the seed did not reject a program the language rejects"
 		fail=$((fail + 1))
 		return
 	fi
 
 	pass=$((pass + 1))
+}
+
+# seed_refuses is whether the SEED itself turned the program away — not whether its build
+# failed somehow. The difference is a whole platform: `defer poke(k)` on a `mut &` produced
+# C that clang rejects (`-Wint-conversion` is an error there) and gcc only warns about, so
+# this gate read as green on macOS and red on Linux for one program and one seed. A cc
+# diagnostic is the seed EMITTING the program, which is the thing being asserted against.
+seed_refuses() {
+	local name=$1 src=$2 out
+	out=$("$ZERG0" build "$src" -o "$tmp/$name.seed.o" 2>&1 >/dev/null)
+	[ $? -ne 0 ] || return 1
+	! is_cc_diag "$out"
 }
 
 # --- mutability -------------------------------------------------------------------
@@ -781,7 +793,7 @@ fn main() {
 }
 EOF
 
-reject match-an-optional-against-a-range 'an optional is not an operand of `>=`' <<'EOF'
+reject match-an-optional-against-a-range 'an optional is not an operand of `>=`' seed-gap <<'EOF'
 fn f(x: int?) -> int {
 	return match x {
 		1..=2 => 10
@@ -812,7 +824,7 @@ fn main() {
 }
 EOF
 
-reject defer-captures-a-borrow 'is a `mut &` and cannot cross a `defer`' <<'EOF'
+reject defer-captures-a-borrow 'is a `mut &` and cannot cross a `defer`' seed-gap <<'EOF'
 fn bump(mut &n: int) {
 	n = n + 1
 }
@@ -832,7 +844,7 @@ EOF
 # `defer` capture the defaults they backfill, so a bad one was diagnosed only when spawned,
 # with a message naming an argument nobody wrote.
 
-reject a-default-that-does-not-fit 'the default for `b` of `f` is int, and the parameter is str' <<'EOF'
+reject a-default-that-does-not-fit 'the default for `b` of `f` is int, and the parameter is str' seed-gap <<'EOF'
 fn f(a: int, b: str = 1) {
 	print(f"{a}{b}")
 }
@@ -945,7 +957,7 @@ fn main() {
 }
 EOF
 
-reject store-through-a-call-result 'cannot store through a call result' <<'EOF'
+reject store-through-a-call-result 'cannot store through a call result' seed-gap <<'EOF'
 fn get() -> list[int] {
 	return [1, 2]
 }

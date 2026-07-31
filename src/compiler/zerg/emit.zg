@@ -4555,6 +4555,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	c_range_needs_hi(iter, "a `for … in` needs an upper bound")
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
+	outer_scope := c_scope_open(em)
 	c_add_var(em, var, TInt, false)
 
 	# the C name the binding actually took: a second loop over the same source name is a
@@ -4569,6 +4570,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + cmp + "zg_hi; " + cv + "++) {\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
 }
 
@@ -4596,6 +4598,7 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	elem := ty_chan_elem(t)
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
+	outer_scope := c_scope_open(em)
 	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
 
@@ -4609,6 +4612,7 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	out = out + in2 + "}\n"
 	out = out + in2 + "{ zrt_err zg_ce = zrt_chan_close_err(zg_cit);\n"
 	out = out + in2 + "  if (zg_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zg_ce); } }\n"
+	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
 }
 
@@ -4636,6 +4640,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
+	outer_scope := c_scope_open(em)
 	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
 
@@ -4647,6 +4652,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at(&zg_it, zg_i));\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
 }
 
@@ -4657,6 +4663,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	kt := c_map_key_ty(ct)
 	kc := c_type(kt)
 	it := c_expr(em, iter, c_nosub())
+	outer_scope := c_scope_open(em)
 	c_add_var(em, var, kt, false)
 
 	cv := c_var_cname(em, var)
@@ -4667,6 +4674,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	out = out + in2 + "    " + kc + " " + cv + " = (*(" + kc + "*)zrt_map_key_at(&zg_mit, zg_i));\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
+	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
 }
 
@@ -4783,14 +4791,16 @@ fn c_scope_end(mut &em: Emitter, keep: int, ind: str) -> str {
 	return out
 }
 
-fn c_ints_take(xs: list[int], n: int) -> list[int] {
+# c_ints_drop_last removes the last element IN PLACE. Taking the list by value and
+# answering a fresh one would copy the stack twice to lose one element, on every block.
+fn c_ints_drop_last(mut &xs: list[int]) {
 	mut out: list[int] = []
 	mut i := 0
-	for i < n {
+	for i < xs.len() - 1 {
 		out.append(xs[i])
 		i = i + 1
 	}
-	return out
+	xs = out
 }
 
 fn c_strs_take(xs: list[str], n: int) -> list[str] {
@@ -4946,6 +4956,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 
 	# the initializer is rendered BEFORE the binding enters scope, as in c_let
 	val := c_expr(em, value, c_nosub())
+	outer_scope := c_scope_open(em)
 	c_add_var(em, name, elem, false)
 
 	cv := c_var_cname(em, name)
@@ -4962,6 +4973,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 		out = out + " else {\n" + c_block(em, else_body, in2 + "    ") + in2 + "}"
 	}
 	c_live_merge(em, then_end)
+	c_scope_close(em, outer_scope)
 	return out + "\n" + ind + "}\n"
 }
 
@@ -5110,16 +5122,32 @@ fn c_err_constructible(name: str) -> bool {
 	return name != "StopIteration"
 }
 
+# c_scope_open starts a scope and answers the one to go back to. Every construct that
+# BINDS A NAME opens one, not only `c_block`: a loop variable, an `if let` binding and a
+# match arm's binds all belong to their own construct, and leaving them in the enclosing
+# block made them outlive it — the same defect c_in_scope exists to fix, one construct
+# over — and made a later `i := …` collide with a `for i in …` that had already ended.
+fn c_scope_open(mut &em: Emitter) -> int {
+	outer := em.scope_cur
+	em.scope_n = em.scope_n + 1
+	em.scope_cur = em.scope_n
+	em.open_scopes.append(em.scope_cur)
+	return outer
+}
+
+# c_scope_close ends the scope c_scope_open started, given what it answered.
+fn c_scope_close(mut &em: Emitter, outer: int) {
+	em.scope_cur = outer
+	c_ints_drop_last(em.open_scopes)
+}
+
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	keep := em.rel_cnames.len()
 
 	# a fresh id, so a name bound here is a REDECLARATION only against the other bindings
 	# of this same block — not against an outer one it shadows, and not against a sibling
 	# block that happens to use the same name
-	outer_scope := em.scope_cur
-	em.scope_n = em.scope_n + 1
-	em.scope_cur = em.scope_n
-	em.open_scopes.append(em.scope_cur)
+	outer_scope := c_scope_open(em)
 
 	mut out := ""
 	if c_has_defer(body) {
@@ -5132,8 +5160,7 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 		}
 	}
 
-	em.scope_cur = outer_scope
-	em.open_scopes = c_ints_take(em.open_scopes, em.open_scopes.len() - 1)
+	c_scope_close(em, outer_scope)
 
 	# a binding made in this block gives its reference back here. A `return` inside the
 	# block already released everything on its way out, so what follows one is dead C.
@@ -5250,9 +5277,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 
 	# the parameters bind in a scope between the module and the body, so a parameter may
 	# shadow a module constant and the body may shadow a parameter — `mut n := n`
-	em.scope_n = em.scope_n + 1
-	em.scope_cur = em.scope_n
-	em.open_scopes.append(em.scope_cur)
+	c_scope_open(em)
 
 	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {

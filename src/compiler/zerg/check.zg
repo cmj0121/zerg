@@ -345,6 +345,13 @@ fn chk_condition(mut &em: Emitter, x: Expr, site: str) {
 # bearing — `mut n := n` is how a function gets a writable copy of a parameter, and it is
 # written that way throughout this compiler — so the rule is about ONE block, not about
 # the name being visible.
+#
+# It hangs off `c_let`, the DECLARATION, rather than off `c_add_var`, which every binding
+# passes through. That looks like the weaker hook and is the right one: a match arm's
+# binds are re-entered once per arm ON PURPOSE — every recv arm may call its variable `v`
+# — so the choke point for "a name entered the environment" is not the choke point for
+# "a program declared a name twice". A loop variable and an `if let` binding are covered
+# by their construct opening its own scope instead, which is what they always wanted.
 
 # chk_fresh_binding raises when `name` is already bound in the block being emitted.
 fn chk_fresh_binding(mut &em: Emitter, name: str) {

@@ -2573,6 +2573,8 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str
 # once here rather than in each caller, because getting it wrong passes a `mut &` argument
 # by value into the slot after the one that wanted its address.
 fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bool, sb: Subst) -> str {
+	chk_call_arity(em, key, base, args.len())
+
 	mut out := ""
 	mut i := 0
 	for i < args.len() {

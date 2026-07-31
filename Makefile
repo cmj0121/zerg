@@ -18,8 +18,8 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_capture_snapshot conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_crash \
-	conc_defer_close conc_fanin conc_for_select conc_forin conc_payload_copy conc_select conc_spawn conc_spawn_defaults select_default countdown default_params either_result every_form_handled enum_basic enum_discriminant enum_guard factorial \
+CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_capture_snapshot conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_cow_shared conc_crash \
+	conc_defer_close conc_fanin conc_for_select conc_forin conc_payload_copy conc_select conc_spawn conc_spawn_defaults select_default countdown cow_value_semantics default_params either_result every_form_handled enum_basic enum_discriminant enum_guard factorial \
 	fib fizzbuzz floats gcd fn_value guard_expr hello list_basic list_literal list_str match_range method_chain null_safety power raise_guard raise_kind \
 	rec_expr rec_tree shadowing str_bytes struct_basic struct_nested sumto value_semantics
 

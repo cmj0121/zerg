@@ -69,6 +69,7 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 
 # chk_assignable raises unless `lhs` names storage this scope may write.
 fn chk_assignable(mut &em: Emitter, lhs: Expr) {
+	chk_store_path(em, lhs)
 	root := chk_root_name(lhs)
 
 	# not a name at all — an index into a call's result, say. There is no binding to ask
@@ -213,6 +214,40 @@ fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr], what: str) {
 			chk_at(em, f"argument {strconv.to_string(i + 1, 10)} of `{chk_call_name(key)}` is a `mut &` and cannot cross a `{what}`: a borrow may not be captured, and this one would outlive the call it is valid for")
 		}
 		i = i + 1
+	}
+}
+
+# chk_store_path raises when a WRITE has to pass through something that is not storage.
+#
+# `chk_root_name` only asks what the target is rooted at. The steps between are the ones
+# that reached cc: `d["k"][0] = 7`, `n["a"]["b"] = 5` and `get()[0] = 99` each store into a
+# value that C has no address for, and cc said "expression is not assignable" about a
+# statement expression this compiler wrote. Every index on the path has to be a place,
+# which is the same question `mut &` asks of an argument and a mutating method asks of its
+# receiver — a write to a copy is not a write, and all three are that sentence.
+fn chk_store_path(mut &em: Emitter, e: Expr) {
+	tgt := chk_store_target(e)
+	return if not c_is_index(e) and not c_is_fieldref(e)
+
+	if c_is_index(e) and not c_is_place(em, tgt) {
+		chk_at(em, f"cannot store through {c_place_why(em, tgt)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
+		return
+	}
+	chk_store_path(em, tgt)
+}
+
+fn chk_store_target(e: Expr) -> Expr {
+	return match e {
+		EIndex(t, _) => t
+		EField(t, _) => t
+		_            => e
+	}
+}
+
+fn c_is_fieldref(e: Expr) -> bool {
+	return match e {
+		EField(_, _) => true
+		_            => false
 	}
 }
 

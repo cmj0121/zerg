@@ -2551,7 +2551,13 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 # and rvalue paths spell a method exactly the same way.
 fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	return f"((int64_t)zrt_list_len(&({tgt})))" if meth == "len"
-	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if meth != "append"
+
+	# the guard asks `c_meth_mutates`, so the two cannot drift: a method added there and not
+	# here raises rather than silently doing nothing, and one added here without being named
+	# there cannot get past this line. `len` is the only read-only method, so everything
+	# that reaches this point writes through its receiver — which is what decides whether
+	# the receiver is lowered as a place.
+	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if not c_meth_mutates(meth)
 
 	if meth == "append" {
 		# the element is copied INTO the list, so the list owns it and the caller's name

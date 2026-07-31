@@ -194,6 +194,28 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	raise f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`" if not chk_fits(em, declared, got)
 }
 
+# --- assigned value ---------------------------------------------------------------
+#
+# An assignment is the FOURTH slot a value enters, and it was the one this rule set left
+# out: `mut b: bool = true` followed by `b = 1` compiled and printed `true`, which is the
+# same defect as the declaration it was written to catch, one statement later.
+
+# chk_assigned raises when a value does not fit the storage it is assigned to.
+fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
+	got := c_infer(em, rhs)
+	raise f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}" if not chk_fits(em, want, got)
+}
+
+# chk_target_name names an assignment target the way it was written — the binding for a
+# bare name, and the binding plus what it was reached through otherwise, since a field or
+# an element has no name of its own to print.
+fn chk_target_name(lhs: Expr) -> str {
+	root := chk_root_name(lhs)
+	return "this target" if root == ""
+	return f"`{root}`" if chk_is_ident(lhs)
+	return f"that part of `{root}`"
+}
+
 # --- argument versus parameter ----------------------------------------------------
 #
 # `f(1.5)` into an `int` parameter reached cc, which reported an implicit conversion
@@ -304,7 +326,11 @@ fn chk_is_logical(oper: str) -> bool {
 	return oper == "and" or oper == "or"
 }
 
+# The WRAPPING forms are arithmetic as much as the checked ones — `+%` differs from `+`
+# in what it does on overflow, not in what it takes — and leaving them out let
+# `true +% 1` walk straight past the rule the others obey.
 fn chk_is_arith(oper: str) -> bool {
+	return true if oper == "+%" or oper == "-%" or oper == "*%"
 	return oper == "+" or oper == "-" or oper == "*" or oper == "/" or oper == "%"
 }
 

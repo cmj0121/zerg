@@ -20,7 +20,8 @@ immutable primitive（見下）。
 ## 是值，不是 reference
 
 collection 是 **scope-owned 值**：**copy-by-value**（compiler 安全時 elide 或 move）、scope 一結束就釋放、**無
-aliasing**——複製會**深拷貝**元素、並對它持有的任何 **reference-counted** 元素做 **retain**（refcount-bump）：一個
+aliasing**——複製會讓持有者拿到**自己的**元素、並對它持有的任何 **reference-counted** 元素做 **retain**
+（refcount-bump）：一個
 `chan`、一個 `Ref[T]`、一個 `str`、或一個遞迴型別的裝箱 tail。這正是那條記憶體規則——值型別的部分被複製、
 reference-counted 的部分被共享（見 [值與記憶體](../core/memory.zh-TW.md#複製語意-vs-參照語意)）。不會有「兩個名字共用一個
 容器」這種事：要共享來讀就用不可變傳參，要共享來改就用 `mut &` param；經 channel 傳送的 collection 跟其他 payload

@@ -23,6 +23,14 @@
 #   L202  `x!` inside a function whose result is a `T?` — the absence can be HANDED BACK
 #         with `?` instead of turned into an abort, and `!` is the easier key to reach
 #
+# `L3xx` is CAPTURE: what a coroutine or a deferred call actually took.
+#
+#   L301  a `mut` binding captured by `spawn` / `defer` and WRITTEN after the capture —
+#         the arguments are a snapshot taken where the statement is written, so the later
+#         value is not the one the call sees. A channel is reported too, and only for a
+#         REBINDING: a send is not a write, and after `ch = <another>` the coroutine holds
+#         the old channel.
+#
 # Findings come back as plain strings in source order. The driver prints them and exits
 # nonzero, so `zerg lint` is usable as a gate rather than as decoration.
 
@@ -43,6 +51,7 @@ pub fn lint_files(srcs: list[str]) -> list[str] {
 	lint_imports(f, ns, ids, out)
 	lint_dead_fns(f, calls, ids, out)
 	lint_unread_bindings(f, out)
+	lint_captures(f, out)
 	lint_optionals(f, out)
 	return out
 }
@@ -146,6 +155,196 @@ fn is_nil_expr(e: Expr) -> bool {
 
 fn lint_skip() {
 	return
+}
+
+# --- L3xx: what a coroutine and a deferred call actually captured ------------------
+#
+# `spawn f(k)` and `defer f(k)` take their arguments as a SNAPSHOT, at the line they are
+# written on. A write to `k` afterwards is not seen by the call — the coroutine may not
+# even have started, and the deferred call has not run. That is the right semantics and it
+# is the single most misreadable thing in this language: an experienced reader has to ask.
+#
+# So the tool answers instead of waiting to be asked. It is a lint and not an error because
+# the program is correct and the snapshot is often exactly what was wanted.
+#
+# It looks WITHIN ONE BLOCK, at the statements after the capture. A write from a nested
+# block, or from a later call, is not reported: this reports the shape that misleads,
+# rather than every shape that could.
+fn lint_captures(f: File, mut &out: list[str]) {
+	refs := lint_ref_params(f)
+	for fd in f.fns {
+		mut muts: list[str] = []
+		lint_captures_body(fd.body, fd.name, refs, muts, out)
+	}
+}
+
+# lint_ref_params is `name#idx` for every `mut &` parameter in the program. A call is a
+# WRITE to the variable it passes only in those slots, and the declaration is the only
+# place that says which — without it, `show(k)` (a read) was reported as a write.
+fn lint_ref_params(f: File) -> list[str] {
+	mut refs: list[str] = []
+	for fd in f.fns {
+		mut j := 0
+		for j < fd.params.len() {
+			if fd.params[j].is_ref {
+				refs.append(f"{fd.name}#{strconv.to_string(j, 10)}")
+			}
+			j = j + 1
+		}
+	}
+	return refs
+}
+
+# `muts` is INHERITED by a nested block rather than reset in it. Resetting made the rule
+# block-scoped by DECLARATION when the documented rule is block-scoped by STATEMENT: a
+# `mut k` declared in a function and captured-then-written inside an `if` was silent, even
+# though the capture and the write sat next to each other.
+fn lint_captures_body(body: list[Stmt], fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
+	mut i := 0
+	for i < body.len() {
+		match body[i] {
+			SLet(nm, ty, has_ty, is_mut, v) => lint_captures_let(nm, is_mut, v, fname, refs, muts, out)
+			SExpr(e) => lint_captures_expr(e, fname, refs, muts, out)
+			SSpawn(x) => lint_capture_at(body, i, x, "spawn", fname, refs, muts, out)
+			SDefer(x) => lint_capture_at(body, i, x, "defer", fname, refs, muts, out)
+			SIf(c, tb, he, eb) => lint_captures_two(tb, eb, fname, refs, muts, out)
+			SIfLet(nm, v, tb, he, eb) => lint_captures_two(tb, eb, fname, refs, muts, out)
+			SFor(hc, c, b) => lint_captures_body(b, fname, refs, muts, out)
+			SForIn(nm, it, b) => lint_captures_body(b, fname, refs, muts, out)
+
+			# a select arm's body is a block like any other, and it is where coroutines
+			# actually live — the other two walks in this file grew an `_arms` helper for
+			# the same reason, and this one was written without it
+			SSelect(arms) => lint_captures_arms(arms, fname, refs, muts, out)
+			SForSelect(arms) => lint_captures_arms(arms, fname, refs, muts, out)
+			_ => lint_skip()
+		}
+		i = i + 1
+	}
+}
+
+fn lint_captures_two(a: list[Stmt], b: list[Stmt], fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
+	lint_captures_body(a, fname, refs, muts, out)
+	lint_captures_body(b, fname, refs, muts, out)
+}
+
+fn lint_captures_arms(arms: list[SelArm], fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
+	for a in arms {
+		lint_captures_body(a.body, fname, refs, muts, out)
+	}
+}
+
+fn lint_captures_let(nm: str, is_mut: bool, v: Expr, fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
+	lint_note_mut(nm, is_mut, muts)
+	lint_captures_expr(v, fname, refs, muts, out)
+}
+
+# A closure's body and a `guard`'s are blocks no STATEMENT holds — they hang off an
+# expression, so a walk that dispatches on statements alone never reaches them and this rule
+# was silent inside every closure. `collect_binds_expr` grew the same descent for the same
+# reason. A closure is reached through a call's arguments too, since `run(fn() { … })` is
+# the shape they are actually written in.
+fn lint_captures_expr(e: Expr, fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
+	match e {
+		EGuard(b) => lint_captures_body(b, fname, refs, muts, out)
+		EFn(ps, has_ret, ret, b) => lint_captures_body(b, fname, refs, muts, out)
+		ECall(nm, args) => lint_captures_each(args, fname, refs, muts, out)
+		EMethod(t, m, args) => lint_captures_each(args, fname, refs, muts, out)
+		_ => lint_skip()
+	}
+}
+
+fn lint_captures_each(args: list[Expr], fname: str, refs: list[str], mut &muts: list[str], mut &out: list[str]) {
+	for a in args {
+		lint_captures_expr(a, fname, refs, muts, out)
+	}
+}
+
+# lint_note_mut records a `mut` binding.
+#
+# A channel binding used to be EXEMPT, on the reasoning that a handle is shared and a later
+# send is seen. The reasoning is right and the exemption was still wrong: a send is `ch <-
+# v`, which is not an assignment and was never reported. The only thing that reaches this
+# rule is `ch = <another channel>` — a REBINDING, after which the coroutine holds the old
+# channel and everything sent on the new one goes nowhere near it. So the exemption
+# suppressed nothing but correct reports.
+fn lint_note_mut(nm: str, is_mut: bool, mut &muts: list[str]) {
+	return if not is_mut
+	muts.append(nm)
+}
+
+# lint_capture_at reports every `mut` name this statement captured that a LATER statement
+# in the same block writes to.
+fn lint_capture_at(body: list[Stmt], at: int, x: Expr, kw: str, fname: str, refs: list[str], muts: list[str], mut &out: list[str]) {
+	# `spawn f(k, k)` and `f(k + k)` reach walk_expr as two occurrences of one name, and the
+	# finding is about the NAME — reporting it twice would say the same thing twice
+	mut said: list[str] = []
+	for n in expr_idents(x) {
+		if has_str(muts, n) and not has_str(said, n) and assigned_after(body, at, n, refs) {
+			said.append(n)
+			out.append(f"L301 `{n}` is captured by the `{kw}` in `{fname}` as it is HERE, and written after it — the call sees the value at the capture, not the later one")
+		}
+	}
+}
+
+# expr_idents is the names an expression reads. walk_expr collects three kinds at once
+# because its other callers want all three; this one wants the first.
+fn expr_idents(x: Expr) -> list[str] {
+	mut names: list[str] = []
+	mut calls: list[str] = []
+	mut ns: list[str] = []
+	walk_expr(x, names, calls, ns)
+	return names
+}
+
+# assigned_after is whether any statement after `at` assigns to `n`, in this block.
+fn assigned_after(body: list[Stmt], at: int, n: str, refs: list[str]) -> bool {
+	mut i := at + 1
+	for i < body.len() {
+		return true if assigns_to(body[i], n, refs)
+		i = i + 1
+	}
+	return false
+}
+
+# assigns_to is whether a statement WRITES `n` — which is not only an assignment. A
+# captured `list` is snapshotted by deep copy, so `xs.append(2)` after the capture is
+# exactly the misreading this rule exists for, and it is a method call rather than an
+# `SAssign`. `chk_root_name` is the checker's walk of an assignment target; this file had a
+# verbatim copy of it, which meant the set of shapes that count as a target was written
+# down twice.
+fn assigns_to(s: Stmt, n: str, refs: list[str]) -> bool {
+	return match s {
+		SAssign(lhs, rhs) => chk_root_name(lhs) == n
+		SExpr(e) => mutates_expr(e, n, refs)
+		_ => false
+	}
+}
+
+# mutates_expr is whether a bare expression statement writes `n`: a method that writes
+# through its receiver, or a call passing it to a `mut &` parameter. Neither is an
+# assignment and both are writes — but neither is EVERY call, which is what the first
+# version of this said. `show(k)` is a read, and it was reported.
+#
+# `c_meth_mutates` is the emitter's one statement of which methods write through their
+# receiver, and `refs` is read off the declarations. Both facts are asked of their owner
+# rather than guessed at here, so a method or a signature added later is seen for free.
+fn mutates_expr(e: Expr, n: str, refs: list[str]) -> bool {
+	return match e {
+		EMethod(t, m, args) => c_meth_mutates(m) and chk_root_name(t) == n
+		ECall(nm, args) => ref_arg(nm, args, n, refs)
+		_ => false
+	}
+}
+
+# ref_arg is whether `nm` takes `n` in a `mut &` slot.
+fn ref_arg(nm: str, args: list[Expr], n: str, refs: list[str]) -> bool {
+	mut i := 0
+	for i < args.len() {
+		return true if chk_root_name(args[i]) == n and has_str(refs, f"{nm}#{strconv.to_string(i, 10)}")
+		i = i + 1
+	}
+	return false
 }
 
 # lint_imports reports an import whose namespace nothing reaches through.

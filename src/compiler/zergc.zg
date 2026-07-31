@@ -167,6 +167,7 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		compile_to(obj_code, output + ".o", true)
 		return
 	}
+
 	mut paths: list[str] = []
 	srcs := load_sources_at(files, paths)
 	mut diags: list[zerg.Diag] = []
@@ -378,6 +379,7 @@ fn index_from(hay: str, needle: str, start: int) -> int {
 # source_line is the 1-based `n`th line of `src`, or "" when there is no such line.
 fn source_line(src: str, n: int) -> str {
 	return "" if n < 1
+
 	b := list[byte](src)
 	mut at := 1
 	mut start := 0

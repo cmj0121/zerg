@@ -560,12 +560,13 @@ fn skip_to_block_end(mut &p: Parser) {
 # The name is not one a program can write (`init` is a keyword), which is what keeps it
 # from colliding with anything the source declares.
 fn parse_init(mut &p: Parser, at: int) -> FnDecl {
+	kw := cur(p)
 	p_advance(p) # 'init'
 	expect(p, LParen)
 	expect(p, RParen)
 	mut params: list[Param] = []
 	body := parse_block(p)
-	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path)
+	return FnDecl(init_name(at), "", params, false, TVoid, body, false, p.path, kw.line, kw.col)
 }
 
 pub fn init_name(at: int) -> str {
@@ -851,6 +852,9 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 }
 
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
+	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
+	# signature is made before any statement is emitted, so no SAt marker has spoken yet
+	kw := cur(p)
 	p_advance(p) # 'fn'
 	name := cur(p).lexeme
 	p_advance(p) # name
@@ -871,10 +875,15 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		mut is_ref := false
 		if p_at(p, Mut) {
 			p_advance(p)
-			if p_at(p, Amp) {
-				p_advance(p)
-				is_ref = true
-			}
+
+			# `mut x: T` is NOT a parameter form (GRAMMAR:316): a by-value parameter is the
+			# callee's own copy and writing to it changes nothing the caller can see, so the
+			# `mut` reads as a promise the language does not make. It was accepted and the
+			# keyword dropped, and a write in the body then said `cannot assign through b:
+			# it is immutable` — a true sentence about a parameter the programmer marked mut.
+			raise "a parameter is `mut &` or nothing — a plain `mut` parameter is a copy the caller never sees written, so the `mut` would promise what it cannot give; bind a `mut` copy in the body instead" if not p_at(p, Amp)
+			p_advance(p)
+			is_ref = true
 		}
 		pname := cur(p).lexeme
 		p_advance(p)
@@ -903,7 +912,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		has_ret = true
 	}
 	body := parse_block(p)
-	return FnDecl(name, recv, params, has_ret, ret, body, is_pub, p.path)
+	return FnDecl(name, recv, params, has_ret, ret, body, is_pub, p.path, kw.line, kw.col)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {

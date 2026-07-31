@@ -24,7 +24,8 @@
 #   3. no mention of .zerg-cache
 #   4. nothing shaped like a cc diagnostic (`<file>:LINE:COL: error:` opening a line)
 #   5. a `--> file:line:col` line, so the reader is told WHERE
-#   6. the SEED refuses it too
+#   6. the SEED refuses it too — unless the case says `seed-gap`, naming a rule the seed
+#      does not enforce (its gaps are its own contract, in src/bootstrap/README.md)
 #
 # The fourth is not redundant with the third. A build given `-o` puts its intermediate C
 # beside the output rather than in the cache, so a cc error can carry no cache path at all
@@ -71,7 +72,7 @@ fail=0
 #                          the rest of the file is read as one string.
 #   contains both          rephrase the assertion to a substring that has only one.
 reject() {
-	local name=$1 want=$2
+	local name=$1 want=$2 seed=${3:-}
 	local src="$tmp/$name.zg"
 	cat >"$src"
 
@@ -125,13 +126,42 @@ reject() {
 		return
 	fi
 
-	if "$ZERG0" build "$src" -o "$tmp/$name.seed.o" >/dev/null 2>&1; then
-		echo "SEED      $name — the seed ACCEPTED a program the language rejects"
+	# A third argument names a rule the SEED does not enforce yet, and says which. The
+	# oracle is worth having and the seed is not perfect; recording the exception beside the
+	# case is better than dropping the case or weakening the assertion for everything.
+	#
+	# It asserts the OPPOSITE, so the exception retires itself: an xfail that merely returns
+	# `pass` can never report an unexpected pass, and the day the seed learns the rule the
+	# marker and its entry in the seed's README would rot with nothing to say so.
+	if [ "$seed" = "seed-gap" ]; then
+		if seed_refuses "$name" "$src"; then
+			echo "SEED GAP CLOSED  $name — the seed now rejects this; drop the seed-gap marker and its src/bootstrap/README.md entry"
+			fail=$((fail + 1))
+		else
+			pass=$((pass + 1))
+		fi
+		return
+	fi
+
+	if ! seed_refuses "$name" "$src"; then
+		echo "SEED      $name — the seed did not reject a program the language rejects"
 		fail=$((fail + 1))
 		return
 	fi
 
 	pass=$((pass + 1))
+}
+
+# seed_refuses is whether the SEED itself turned the program away — not whether its build
+# failed somehow. The difference is a whole platform: `defer poke(k)` on a `mut &` produced
+# C that clang rejects (`-Wint-conversion` is an error there) and gcc only warns about, so
+# this gate read as green on macOS and red on Linux for one program and one seed. A cc
+# diagnostic is the seed EMITTING the program, which is the thing being asserted against.
+seed_refuses() {
+	local name=$1 src=$2 out
+	out=$("$ZERG0" build "$src" -o "$tmp/$name.seed.o" 2>&1 >/dev/null)
+	[ $? -ne 0 ] || return 1
+	! is_cc_diag "$out"
 }
 
 # --- mutability -------------------------------------------------------------------
@@ -763,7 +793,7 @@ fn main() {
 }
 EOF
 
-reject match-an-optional-against-a-range 'an optional is not an operand of `>=`' <<'EOF'
+reject match-an-optional-against-a-range 'an optional is not an operand of `>=`' seed-gap <<'EOF'
 fn f(x: int?) -> int {
 	return match x {
 		1..=2 => 10
@@ -773,6 +803,186 @@ fn f(x: int?) -> int {
 
 fn main() {
 	print(f"{f(nil)}")
+}
+EOF
+
+# --- a borrow may not be captured --------------------------------------------------
+#
+# GRAMMAR:314: a `mut &` "cannot ESCAPE (be captured by a spawn or stored past the call)".
+# `spawn` refused it in a pass of its own and `defer`, which the same sentence covers,
+# reached cc — so the refusal moved to the choke point both of them share.
+
+reject spawn-captures-a-borrow 'is a `mut &` and cannot cross a `spawn`' <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	mut k := 1
+	spawn bump(k)
+	print(f"{k}")
+}
+EOF
+
+reject defer-captures-a-borrow 'is a `mut &` and cannot cross a `defer`' seed-gap <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	mut k := 1
+	defer bump(k)
+	print(f"{k}")
+}
+EOF
+
+# --- a variant's arity, from both sides, and a default judged where it is written ---
+#
+# `Line(w, h) =>` against a `Line(int)` and `Line(7, 8)` are the same disagreement between
+# an arm and a declaration, and both used to write a union member that was never declared.
+# A DEFAULT is judged at the signature rather than at the calls that omit it: `spawn` and
+# `defer` capture the defaults they backfill, so a bad one was diagnosed only when spawned,
+# with a message naming an argument nobody wrote.
+
+reject a-default-that-does-not-fit 'the default for `b` of `f` is int, and the parameter is str' seed-gap <<'EOF'
+fn f(a: int, b: str = 1) {
+	print(f"{a}{b}")
+}
+
+fn main() {
+	f(2)
+}
+EOF
+
+# seed-gap: zerg0 accepts this, and a call that USES the default segfaults — it emits the
+# literal where a pointer goes. Recorded in src/bootstrap/README.md.
+reject a-mut-ref-with-a-default 'is a `mut &` and cannot have a default' seed-gap <<'EOF'
+fn f(a: int, mut &b: int = 0) {
+	b = a
+}
+
+fn main() {
+	print("declared")
+}
+EOF
+
+reject a-pattern-that-binds-too-much '`Line` carries 1 argument and this pattern binds 2' <<'EOF'
+enum Shape {
+	Line(int)
+	Dot
+}
+
+fn area(s: Shape) -> int {
+	return match s {
+		Line(n, m) => n
+		_          => 0
+	}
+}
+
+fn main() {
+	print(f"{area(Dot)}")
+}
+EOF
+
+reject a-construction-that-gives-too-few '`Line` carries 2 arguments and this gives 1' <<'EOF'
+enum Shape {
+	Line(int, int)
+	Dot
+}
+
+fn main() {
+	s := Line(7)
+	print("built")
+}
+EOF
+
+reject a-pattern-that-binds-too-few '`Line` carries 2 arguments and this pattern binds 1' <<'EOF'
+enum Shape {
+	Line(int, int)
+	Dot
+}
+
+fn area(s: Shape) -> int {
+	return match s {
+		Line(n) => n
+		_       => 0
+	}
+}
+
+fn main() {
+	print(f"{area(Dot)}")
+}
+EOF
+
+reject a-construction-that-gives-too-much '`Line` carries 1 argument and this gives 2' <<'EOF'
+enum Shape {
+	Line(int)
+	Dot
+}
+
+fn main() {
+	s := Line(7, 8)
+	print("built")
+}
+EOF
+
+# --- a borrow needs a place ------------------------------------------------------
+#
+# A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads
+# like one and is not: it lowers to a statement expression, so `&` on it reached cc.
+
+reject a-borrow-of-a-map-index 'is a `mut &`, and a map index is a value rather than a place' <<'EOF'
+fn poke(mut &n: int) {
+	n = 5
+}
+
+fn main() {
+	mut m: map[str, int] = {"k": 1}
+	poke(m["k"])
+	print(f"{m["k"]}")
+}
+EOF
+
+# --- a write needs storage all the way down -------------------------------------
+#
+# `chk_root_name` asks what the target is rooted at; these are the STEPS between. Each of
+# them stores into a value C has no address for, and cc said "expression is not assignable"
+# about a statement expression this compiler wrote.
+
+reject store-through-a-map-index 'cannot store through a map index' <<'EOF'
+fn main() {
+	mut d: map[str, list[int]] = {"k": [1, 2]}
+	d["k"][0] = 7
+	print("x")
+}
+EOF
+
+reject store-through-a-call-result 'cannot store through a call result' seed-gap <<'EOF'
+fn get() -> list[int] {
+	return [1, 2]
+}
+
+fn main() {
+	get()[0] = 99
+	print("x")
+}
+EOF
+
+# --- a match answers one type ----------------------------------------------------
+#
+# The whole match took its type from the FIRST arm, the only one anything looked at, so a
+# later arm answering something else went to cc — as a WARNING under clang, which links.
+
+reject match-arms-disagree 'its arms give int and str' <<'EOF'
+fn pick(n: int) -> int {
+	return match n {
+		0 => 1
+		_ => "other"
+	}
+}
+
+fn main() {
+	print(pick(0))
 }
 EOF
 

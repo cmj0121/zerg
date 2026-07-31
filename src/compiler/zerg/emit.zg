@@ -1047,7 +1047,6 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		em.sig_hasret.append(fn_i.has_ret)
 		em.sig_nparams.append(fn_i.params.len())
 		em.sig_nreq.append(c_required_params(fn_i))
-		chk_param_defaults(em, key, fn_i)
 		mut j := 0
 		for j < fn_i.params.len() {
 			em.pr_fn.append(key)
@@ -1387,6 +1386,7 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`")
 		}
 	}
+
 	# A VARIANT'S PAYLOAD is a type position like any other, and it was the one this pass
 	# did not walk — so `Leaf(int, 1)` declared a payload of type `1`, and the emitter wrote
 	# `zg_1` into a union member for cc to complain about. Found by the mutation fuzzer,
@@ -2696,8 +2696,10 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -
 # copy here would be a second, wrong answer to the same question.
 fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
 	row := c_param_row(em, key, idx)
+
 	return c_expr(em, a, c_nosub()) if row < 0 or ty_is_chan(em.pr_ty[row])
 	return c_carrier_fit(em, em.pr_ty[row], a, c_nosub()) if c_is_carrier(em.pr_ty[row])
+
 	return c_copied(em, em.pr_ty[row], a, c_nosub())
 }
 
@@ -2753,7 +2755,7 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 	# the same disagreement as a pattern that binds too much, from the other side: `Line(7,
 	# 8)` on a `Line(int)` wrote a union member that was never declared, and cc reported it
 	# against generated C
-	chk_variant_args(em, name, args.len())
+	chk_variant_arity(em, name, args.len(), "gives")
 
 	en := c_variant_enum(em, name)
 	mut out := "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, name), 10)
@@ -2896,7 +2898,7 @@ fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
 			# HERE and not in c_bind_env, which is a lowering helper: c_arms calls it from
 			# both c_arm_cond and c_arm_body, so a check hung there fired twice for every
 			# arm but the last — the count of a diagnostic depended on where the arm sat.
-			chk_variant_binds(em, a.ctor, a.binds.len())
+			chk_variant_arity(em, a.ctor, a.binds.len(), "pattern binds")
 		}
 		i = i + 1
 	}
@@ -3775,6 +3777,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
+
 	cal := c_callee_of(em, x, "spawn")
 	args := cal.args
 	idx := em.dfn_n
@@ -3853,7 +3856,6 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	}
 	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zg_se{tag});\n"
 }
-
 
 # c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL
 # no-longer-sendable. That is a property of the channel and not of a holder, so it moves
@@ -4244,7 +4246,13 @@ fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# The default's expression is captured at the `spawn` / `defer` statement like every
 	# other argument, which is the semantics both forms already have — arguments are a
 	# snapshot taken where the statement is written, not where the call runs.
-	cal := Callee(raw.cname, c_with_defaults(em, raw.key, raw.args), raw.key)
+	# checked BEFORE the backfill, against the arguments the programmer actually wrote. A
+	# default is judged at the declaration, so re-judging it here said the same thing twice
+	# — and the second copy named "argument 2" of a call whose source has one argument.
+	chk_callsite(em, raw.key, raw.args, what)
+
+	mut cal := raw
+	cal.args = c_with_defaults(em, cal.key, cal.args)
 
 	# `spawn` and `defer` resolve a callee and render its arguments with a loop of their
 	# own, so neither has ever passed through c_args_from — the one place every other call
@@ -4252,7 +4260,6 @@ fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# reached cc, which reported "too few arguments" about a thunk this compiler wrote.
 	# They are also the two forms whose bad arguments are hardest to read back from
 	# generated C, since the call the programmer wrote is not the call cc sees.
-	chk_callsite(em, cal.key, cal.args, what)
 	return cal
 }
 
@@ -5694,6 +5701,13 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	c_build_enums(em, f)
 	c_check_named_types(em, f)
 	c_scan_fnptr(em, f)
+
+	# AFTER the tables, not inside the walk that fills them. A default is an expression, so
+	# judging it asks c_infer, and c_infer asks the signature, struct and enum tables — from
+	# inside c_build_sigs it would see only the declarations that happen to come EARLIER in
+	# the file. `b: str = later()` was refused or accepted depending on whether `later` was
+	# written above or below, which is the order-dependence the rule exists to remove.
+	c_check_defaults(em, f)
 
 	mut types := ""
 

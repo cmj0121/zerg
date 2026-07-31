@@ -71,11 +71,6 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_names.len()
 }
 
-
-
-
-
-
 # --- call shape -------------------------------------------------------------------
 #
 # `add(1)` on a two-parameter function reached cc as "too few arguments to function call",
@@ -144,34 +139,47 @@ fn chk_call_name(key: str) -> str {
 	return str(out)
 }
 
+# --- does a value fit a slot ------------------------------------------------------
+#
+# Three rules ask this one question — a declaration against its initializer, a `return`
+# against its signature, an argument against its parameter — and the answer has to be the
+# same in all three or the language has three type systems. It lives here once.
+#
+# It is deliberately CONSERVATIVE: it answers no only where a mismatch is unambiguous, and
+# yes for everything it is unsure of. A slot whose type RESHAPES what it is given — an
+# optional wrapping a bare value, a channel with its own direction check, a map literal
+# taking its type from the declaration — is never a mismatch, and `float` takes an `int`
+# because the language mixes the two in arithmetic.
+
+# chk_fits is whether a value of type `got` may fill a slot declared `want`.
+fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	return true if c_is_unknown(want) or c_is_unknown(got)
+	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
+
+	if c_is_list(want) and c_is_list(got) {
+		we := c_list_elem(want)
+		ge := c_list_elem(got)
+		return true if c_is_unknown(we) or c_is_unknown(ge)
+		return true if not chk_is_scalar(we) or not chk_is_scalar(ge)
+		return ty_name(we) == ty_name(ge)
+	}
+
+	return true if not chk_is_scalar(want) or not chk_is_scalar(got)
+	return true if c_is_float(want) and c_is_int(got)
+	return ty_name(want) == ty_name(got)
+}
+
 # --- returned value ---------------------------------------------------------------
 #
 # A signature is a promise, and `-> int` with `return "nope"` reached cc as an
 # incompatible-pointer conversion. The declared type is on the function and the `return`
 # may be forty lines away, which is exactly why nobody notices without a check.
-#
-# Same shape as chk_binding, and the same narrowness: a carrier RESHAPES what it is given
-# (`-> int?` takes a bare int, `-> Result[T]` takes a T), so those are not mismatches.
 
 # chk_returned raises when a returned value is not the type the signature declares.
 fn chk_returned(mut &em: Emitter, e: Expr) {
 	declared := em.fn_ret
-	return if c_is_unknown(declared) or c_is_carrier(declared) or ty_is_chan(declared)
-
 	got := c_infer(em, e)
-	return if c_is_unknown(got)
-
-	if c_is_list(declared) and c_is_list(got) {
-		de := c_list_elem(declared)
-		ge := c_list_elem(got)
-		return if c_is_unknown(de) or c_is_unknown(ge)
-		raise f"this function answers {ty_name(declared)} and the value is {ty_name(got)}" if chk_is_scalar(de) and chk_is_scalar(ge) and ty_name(de) != ty_name(ge)
-		return
-	}
-
-	return if not chk_is_scalar(declared) or not chk_is_scalar(got)
-	return if c_is_float(declared) and c_is_int(got)
-	raise f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}" if ty_name(declared) != ty_name(got)
+	raise f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}" if not chk_fits(em, declared, got)
 }
 
 # --- declared type versus value ---------------------------------------------------
@@ -179,36 +187,30 @@ fn chk_returned(mut &em: Emitter, e: Expr) {
 # `x: int = "hello"` reached cc as an incompatible-pointer conversion. `b: bool = 1`
 # reached nothing at all: both are int64_t in C, so the program compiled and printed
 # `true`. An annotation that the compiler does not check is a comment.
-#
-# The rule is narrow on purpose. It judges the SCALARS, where a mismatch is unambiguous,
-# and a list against a list, where it is equally so. It stays out of everything a
-# declaration is allowed to RESHAPE — an optional wraps the value it is given, a channel
-# has its own direction check, a map literal takes its type from the declaration — because
-# a rule that fires there would be rejecting programs the language allows.
 
 # chk_binding raises when a declaration and its initializer are different types.
 fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	got := c_infer(em, ival)
-	return if c_is_unknown(got) or c_is_unknown(declared)
+	raise f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`" if not chk_fits(em, declared, got)
+}
 
-	# a declaration that reshapes what it is given is not a mismatch
-	return if c_is_carrier(declared) or ty_is_chan(declared) or c_is_map(declared)
+# --- argument versus parameter ----------------------------------------------------
+#
+# `f(1.5)` into an `int` parameter reached cc, which reported an implicit conversion
+# against a prototype this compiler wrote. The parameter table has held every type all
+# along — c_arg already reads the same row to decide whether to pass an address.
 
-	if c_is_list(declared) and c_is_list(got) {
-		de := c_list_elem(declared)
-		ge := c_list_elem(got)
-		return if c_is_unknown(de) or c_is_unknown(ge)
-		raise f"`{name}` is declared {ty_name(declared)} and the value is {ty_name(got)}" if chk_is_scalar(de) and chk_is_scalar(ge) and ty_name(de) != ty_name(ge)
-		return
-	}
+# chk_argument raises when an argument is not the type its parameter takes. `idx` indexes
+# the PARAMETER — the receiver shift already applied by the caller — and `pos` is where the
+# argument stands as WRITTEN, counting from one, which is the only number a reader can find
+# on the line they are looking at.
+fn chk_argument(mut &em: Emitter, key: str, idx: int, pos: int, arg: Expr) {
+	return if not c_name_in(em.sig_names, key)
+	return if c_param_row(em, key, idx) < 0
 
-	return if not chk_is_scalar(declared) or not chk_is_scalar(got)
-
-	# an int literal fills a float slot — the language mixes the two in arithmetic and a
-	# declaration is the same widening
-	return if c_is_float(declared) and c_is_int(got)
-
-	raise f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`" if ty_name(declared) != ty_name(got)
+	want := c_param_ty(em, key, idx)
+	got := c_infer(em, arg)
+	raise f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}" if not chk_fits(em, want, got)
 }
 
 # --- operands ---------------------------------------------------------------------

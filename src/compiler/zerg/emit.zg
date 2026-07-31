@@ -3318,12 +3318,30 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 # but the C it lowers to is a statement expression, and one whose value is discarded draws
 # a -Wunused-value. Writing the discard down as a cast says the same thing to the reader
 # and keeps the build log free of nine warnings nobody should have to learn to ignore.
-# c_at records the position the SAt marker carries. It answers "" because a marker is not
-# code — it is the only statement in the language that a reader never wrote.
+# c_at records the position the SAt marker carries, and hands cc the same answer as a
+# `#line` directive.
+#
+# That directive is what makes the C a DETAIL rather than a place a programmer has to go.
+# Everything downstream of this compiler — a cc diagnostic about generated C, a debugger
+# stopping in it, a profiler naming a function — spoke in terms of a file under
+# `.zerg-cache` that nobody wrote. With `#line` they all name the `.zg` the person is
+# editing, for the cost of one directive per statement.
+#
+# It must start at column 0, and it is emitted with a newline on BOTH sides rather than
+# only after: a `guard` lowers to a GNU statement-expression that puts its statements
+# inline, so a directive with no leading break landed mid-line and cc read it as an
+# expression. A statement whose C spans several lines has only its
+# first line mapped exactly; the rest are attributed to the lines after it, which is the
+# ordinary trade every transpiler that emits these makes.
+#
+# A source with no path gets no directive: pointing cc at "" would be worse than leaving it
+# pointing at the C it can actually open.
 fn c_at(mut &em: Emitter, l: int, c: int) -> str {
 	em.at_line = l
 	em.at_col = c
-	return ""
+	return "" if em.at_path == ""
+	ls := strconv.to_string(l, 10)
+	return f"\n#line {ls} \"{em.at_path}\"\n"
 }
 
 fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {

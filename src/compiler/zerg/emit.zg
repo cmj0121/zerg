@@ -187,6 +187,17 @@ struct Emitter {
 	at_line: int
 	at_col: int
 
+	# diags is every ILL-FORMED-PROGRAM finding this emission has made, rendered, in the
+	# order they were found. They are COLLECTED rather than raised because an error was a
+	# process death: a file with three mistakes in it reported one, and the programmer
+	# learned about the second only after fixing the first.
+	#
+	# A checking rule can carry on where an emitting one cannot, which is why only the
+	# check.zg rules are on this list. Emit's own `NotImplemented` refusals still raise:
+	# they mean this compiler cannot lower the form at all, so there is nothing to carry
+	# on with. The C built after a finding is discarded, never handed to cc.
+	diags: list[str]
+
 	scope_n: int
 	scope_cur: int
 
@@ -5509,7 +5520,13 @@ pub fn emit_files(srcs: list[str]) -> str {
 
 # emit_files_at is emit_files with the sources' paths, which the diagnostics need.
 pub fn emit_files_at(srcs: list[str], paths: list[str]) -> str {
-	return c_emit_file(merge_files_at(srcs, paths))
+	mut diags: list[str] = []
+	return emit_files_diag(srcs, paths, diags)
+}
+
+# emit_files_diag is emit_files_at that also reports what it found.
+pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[str]) -> str {
+	return c_emit_file_at(merge_files_at(srcs, paths), diags)
 }
 
 # emit_unit lowers ONE module for separate compilation, from ALREADY PARSED input: `prog`
@@ -5522,7 +5539,14 @@ pub fn emit_files_at(srcs: list[str], paths: list[str]) -> str {
 # the whole program again for each of them made a six-module build parse six times, and
 # that, not the C compiler, was where its time went.
 pub fn emit_unit(prog: File, own: File) -> str {
-	return c_emit_unit(prog, own, false)
+	mut diags: list[str] = []
+	return emit_unit_at(prog, own, diags)
+}
+
+# emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
+# C to cc when this list comes back non-empty.
+pub fn emit_unit_at(prog: File, own: File, mut &diags: list[str]) -> str {
+	return c_emit_unit(prog, own, false, diags)
 }
 
 # merge_asts joins already-parsed files into the whole-program view, in order.
@@ -5556,7 +5580,12 @@ pub fn merge_asts(fs: list[File]) -> File {
 # em.used_rt), then the header is assembled with the runtime include and the shared list
 # vtable added only when the program needs them.
 fn c_emit_file(f: File) -> str {
-	return c_emit_unit(f, f, true)
+	mut diags: list[str] = []
+	return c_emit_file_at(f, diags)
+}
+
+fn c_emit_file_at(f: File, mut &diags: list[str]) -> str {
+	return c_emit_unit(f, f, true, diags)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -5564,9 +5593,14 @@ fn c_emit_file(f: File) -> str {
 # the module whose function bodies this unit actually defines. Passing the same File as
 # both is the whole-program build; passing a module as `own` is separate compilation, and
 # the difference is the only thing that keeps two objects from defining the same symbol.
-fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
+# c_emit_unit lowers a unit and REPORTS what it found: `diags` collects every ill-formed
+# program finding, so a caller can refuse the whole build rather than hand cc a C file
+# built out of a program that does not typecheck. It is an out-parameter rather than a
+# second return value because the C is what every caller wants and the findings are what
+# only the driver does.
+fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[str]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, 0, 0, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -5706,6 +5740,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	mut lams := ""
 	for d in em.lam_defs {
 		lams = lams + d
+	}
+	for d in em.diags {
+		diags.append(d)
 	}
 	return f"{hdr}{types}{tups}{ress}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }

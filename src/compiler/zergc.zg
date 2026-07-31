@@ -156,12 +156,17 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		for u in units {
 			trees.append(zerg.merge_files_at(u.srcs, u.paths))
 		}
-		compile_to(zerg.emit_unit(zerg.merge_asts(trees), trees[trees.len() - 1]), output + ".o", true)
+		mut diags: list[str] = []
+		obj_code := zerg.emit_unit_at(zerg.merge_asts(trees), trees[trees.len() - 1], diags)
+		report_diags(diags)
+		compile_to(obj_code, output + ".o", true)
 		return
 	}
 	mut paths: list[str] = []
 	srcs := load_sources_at(files, paths)
-	code := zerg.emit_files_at(srcs, paths)
+	mut diags: list[str] = []
+	code := zerg.emit_files_diag(srcs, paths, diags)
+	report_diags(diags)
 	if emit == "c" {
 		guard {
 			io.write(code)
@@ -174,6 +179,22 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	}
 	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, c, lib, or bin)\n")
 	__zrt_exit(2)
+}
+
+# report_diags ends the run when the program is ill-formed, having said EVERYTHING that is
+# wrong with it. Nothing reaches cc after this: the C was built out of a program that does
+# not typecheck, so any complaint cc had about it would be a second-hand account of a
+# mistake already reported here, against a file the programmer cannot open.
+#
+# It exits rather than returning a status because it is called from the middle of a build,
+# where the alternative is threading "did it work" back through every stage for a question
+# with one answer.
+fn report_diags(diags: list[str]) {
+	return if diags.len() == 0
+	for d in diags {
+		io.ewrite(d + "\n")
+	}
+	__zrt_exit(1)
 }
 
 # link_program builds a program the way a project is built: every unit compiled to its
@@ -192,12 +213,13 @@ fn link_program(entry: str, output: str, jobs: int) {
 	}
 
 	prog := zerg.merge_asts(trees)
+	mut diags: list[str] = []
 	mut objs: list[str] = []
 	mut todo_c: list[str] = []
 	mut todo_o: list[str] = []
 	mut ui := 0
 	for ui < units.len() {
-		code := zerg.emit_unit(prog, trees[ui])
+		code := zerg.emit_unit_at(prog, trees[ui], diags)
 		obj := cache_path(unit_key(code))
 		objs.append(obj)
 		if not __zrt_exists(obj) {
@@ -210,6 +232,10 @@ fn link_program(entry: str, output: str, jobs: int) {
 		}
 		ui = ui + 1
 	}
+
+	# every unit is emitted before anything is reported, so one run answers for the whole
+	# program rather than for its first bad module
+	report_diags(diags)
 
 	# The runtime is compiled the same way, and cached the same way. It changes far less
 	# often than the program does, so recompiling its ten translation units on every link

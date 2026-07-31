@@ -33,12 +33,21 @@
 
 /* The buffer's refcount header sits immediately BEFORE `data`, so sharing costs no
  * second allocation and `data` stays the element pointer every reader already uses.
- * The union with max_align_t is what keeps `data` suitably aligned for any element
- * type: a bare int64_t prefix would be 8 bytes and misalign a 16-byte element. */
+ *
+ * `data` must stay suitably aligned for any element type, and the prefix is what decides
+ * that. The union with max_align_t is not enough on its own: `max_align_t` is 8 bytes on
+ * Apple silicon and 16 on x86-64 Linux, so the same source gives a different guarantee per
+ * target — and the one platform where it is weaker is the one this is developed on, which
+ * is the worst way to find out. The assertion says what is actually required. Every
+ * element type today (scalars, a list or map header, structs of those) needs 8, so the
+ * floor is 8 and it is checked rather than assumed. */
 typedef union {
 	int64_t     rc;
 	max_align_t align;
 } zrt_buf_hdr;
+
+_Static_assert(sizeof(zrt_buf_hdr) >= 8 && sizeof(zrt_buf_hdr) % 8 == 0,
+               "a list buffer's prefix must keep `data` 8-byte aligned");
 
 static zrt_buf_hdr *buf_hdr(const zrt_list *l) {
 	return (zrt_buf_hdr *)(void *)(l->data - sizeof(zrt_buf_hdr));

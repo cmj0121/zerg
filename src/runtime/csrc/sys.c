@@ -378,7 +378,7 @@ int64_t zrt_proc_spawn(zrt_list argv) {
 		return -1;
 	}
 	for (size_t i = 0; i < n; i++) {
-		av[i] = *(char **)zrt_list_at(&argv, i);
+		av[i] = *(char **)zrt_list_at_ref(&argv, i);
 	}
 	av[n] = NULL;
 	pid_t pid = fork();

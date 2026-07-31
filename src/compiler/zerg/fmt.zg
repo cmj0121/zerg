@@ -48,6 +48,38 @@
 # that MOVES code is a pre-pass over the tokens, so the printer stays one straight walk
 # and the rewrite is not tangled through it.
 
+# fmt_balanced is whether a source's brackets close, which is the one structural fact
+# every spacing rule below leans on. It is the gate the driver applies BEFORE writing,
+# because fmt reads the token stream rather than the tree: without it a file with a syntax
+# error came back reformatted, exit 0, nothing said — `fn main( {` as `fn main({` and
+# `print("hi")` as `print ("hi")`, the tokens intact but the spacing decided by rules that
+# had nothing true to work from.
+#
+# It is deliberately NOT a parse. A formatter has to work on source the compiler cannot
+# COMPILE — that is exactly when a person reaches for one — and this parser refuses 26
+# forms the language has and this compiler has not built. So this asks the weaker question
+# fmt actually depends on, and it says so: a file that balances but is still ill-formed
+# (`x := = 1`) is formatted as before. The stronger gate becomes available when a syntax
+# error and a NotImplemented refusal stop being the same kind of abort.
+pub fn fmt_balanced(src: str) -> bool {
+	mut depth := 0
+	for t in tokenize_trivia(src) {
+		# `Hash` is `#[`, ONE token that opens a bracket the matching `]` closes as an
+		# ordinary RBrack — so a decorator reads as one close too many unless it is counted
+		# here. Every `#[derive(…)]` in the tree tripped this on the first attempt.
+		if t.kind == LParen or t.kind == LBrack or t.kind == LBrace or t.kind == Hash {
+			depth = depth + 1
+		}
+		if t.kind == RParen or t.kind == RBrack or t.kind == RBrace {
+			depth = depth - 1
+
+			# a close with nothing open: the rest of the file cannot be read either
+			return false if depth < 0
+		}
+	}
+	return depth == 0
+}
+
 # fmt_src returns src rewritten in canonical form, every rule enabled.
 pub fn fmt_src(src: str) -> str {
 	mut none: list[str] = []

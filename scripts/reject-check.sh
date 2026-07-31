@@ -50,6 +50,12 @@ fail=0
 # compilers: `zerg` must answer with the wanted sentence, and the seed must merely refuse
 # it, since the two word their diagnostics differently and only the reject list is
 # normative.
+#
+# SINGLE-quote a wanted string that contains a backtick. Inside double quotes bash reads
+# it as command substitution, which does not fail — it silently shortens the string being
+# matched, so the case reports a MESSAGE mismatch against a sentence that is in fact
+# correct. Every message this compiler prints quotes source in backticks, so this is the
+# usual shape rather than the exception.
 reject() {
 	local name=$1 want=$2
 	local src="$tmp/$name.zg"
@@ -185,6 +191,59 @@ fn main() {
 	}
 	a := 3
 	print(f"{a}")
+}
+EOF
+
+# --- conditions -------------------------------------------------------------------
+#
+# Zerg has no truthiness. Every form that asks a question asks it of a bool.
+
+reject int-as-if-condition "must be bool, and this one is int" <<'EOF'
+fn main() {
+	if 1 {
+		print("yes")
+	}
+}
+EOF
+
+reject str-as-if-condition "must be bool, and this one is str" <<'EOF'
+fn main() {
+	s := "abc"
+	if s {
+		print("yes")
+	}
+}
+EOF
+
+reject int-as-for-condition 'the condition of a `for` must be bool' <<'EOF'
+fn main() {
+	mut n := 3
+	for n {
+		n = n - 1
+	}
+	print(f"{n}")
+}
+EOF
+
+reject int-as-conditional-return 'the condition of a conditional `return` must be bool' <<'EOF'
+fn f() -> int {
+	return 1 if 2
+	return 0
+}
+
+fn main() {
+	print(f"{f()}")
+}
+EOF
+
+reject int-as-if-expression-condition 'the condition of an `if` expression must be bool' <<'EOF'
+fn main() {
+	x := if 5 {
+		1
+	} else {
+		2
+	}
+	print(f"{x}")
 }
 EOF
 

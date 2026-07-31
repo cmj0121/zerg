@@ -87,7 +87,11 @@ typedef struct {
  * of `cap` slots each `elemsz` bytes, `len` of them live, and `vt` teaches the
  * runtime how to copy/drop an element. The header itself is embedded inline in its
  * holder (a local/field/element), so copying/dropping the header is the compiler's
- * job; this runtime owns only the buffer. The layout is INTERNAL (never FFI-frozen). */
+ * job; this runtime owns only the buffer. The layout is INTERNAL (never FFI-frozen).
+ *
+ * The BUFFER is copy-on-write and holds an atomic refcount just before `data` (see
+ * list.c). The HEADER is never shared between holders — that is what makes the rest
+ * sound — so every field here may be read and written without synchronization. */
 typedef struct {
 	uint8_t          *data;
 	size_t            len;
@@ -106,12 +110,25 @@ void zrt_list_init(zrt_list *l, size_t elemsz, const zrt_elem_vt *vt);
  * grow relocates the live prefix with a bit-move, not vt->copy. */
 void zrt_list_push(zrt_list *l, const void *elem);
 
-/* zrt_list_at returns a pointer to element i's slot, aborting ("index out of range")
- * when i is past the end — the `xs[i]` force path (IndexError). */
+/* zrt_list_at returns a pointer to element i's slot to be WRITTEN through, aborting
+ * ("index out of range") when i is past the end — the `xs[i]` force path (IndexError).
+ * It unshares first, so the pointer names storage this list alone owns.
+ *
+ * The WRITE one keeps the plain name on purpose. Copy-on-write needs a caller to say
+ * which it wants, and a caller that does not say must get the safe answer: the Go seed
+ * shares this runtime, has no notion of the split, and would otherwise have started
+ * writing into buffers its own `zrt_list_copy` had just shared. The cost of the safe
+ * default is a duplicate on a read; the cost of the other one is silent aliasing in a
+ * client nobody remembered to update. */
 void *zrt_list_at(zrt_list *l, size_t i);
 
+/* zrt_list_at_ref is the same slot for READING, and does not unshare — so nothing may be
+ * written through it. It is the whole point of copy-on-write: a read that unshared would
+ * duplicate every buffer anybody ever indexed, which is the cost this exists to avoid. */
+void *zrt_list_at_ref(zrt_list *l, size_t i);
+
 /* zrt_list_set overwrites element i: it drops the old element (vt->drop) then
- * memcpys *elem in. Aborts on a bad index, like zrt_list_at. */
+ * memcpys *elem in. Aborts on a bad index, like zrt_list_at. Unshares. */
 void zrt_list_set(zrt_list *l, size_t i, const void *elem);
 
 /* zrt_list_len returns the live element count. */
@@ -121,13 +138,27 @@ size_t zrt_list_len(const zrt_list *l);
  * abort) — the checked `.get(i)` path. */
 void *zrt_list_get(zrt_list *l, size_t i);
 
-/* zrt_list_copy deep-copies src into dst: a fresh buffer, then per-element vt->copy
- * (POD elements — NULL vt or copy — take a single memcpy). It is the value-semantics
- * copy the compiler inserts wherever a list is bound/passed/returned by value. */
+/* zrt_list_copy gives dst its own view of src's elements. It is the value-semantics
+ * copy the compiler inserts wherever a list is bound/passed/returned by value, and it
+ * is O(1): the buffer is SHARED and its refcount incremented, and the elements are
+ * duplicated later, by whichever holder writes first (zrt_list_unshare). Nothing
+ * observable changes — a write through one name is never seen through another. */
 void zrt_list_copy(zrt_list *dst, const zrt_list *src);
 
-/* zrt_list_drop drops every live element (vt->drop) and frees the buffer, leaving an
- * empty header. It is the scope-exit teardown the compiler schedules for a list. */
+/* zrt_list_slice fills dst with src's elements [lo, hi), each duplicated the way a copy
+ * duplicates one. Aborts (IndexError) when the range is not within src. It is a function
+ * rather than a loop the compiler emits because the duplication rule — vt->copy, or a
+ * memcpy for a POD — is the one this file already states twice. */
+void zrt_list_slice(zrt_list *dst, const zrt_list *src, size_t lo, size_t hi);
+
+/* zrt_list_unshare gives l a buffer no other holder has, so a caller may write into it
+ * directly. Every mutating entry point above calls it; it is exported for the compiler
+ * to reach a slot it writes through by other means. A sole owner pays one atomic load. */
+void zrt_list_unshare(zrt_list *l);
+
+/* zrt_list_drop releases this holder's reference to the buffer, leaving an empty
+ * header. The holder that brings the refcount to zero drops every live element
+ * (vt->drop) and frees. It is the scope-exit teardown the compiler schedules. */
 void zrt_list_drop(zrt_list *l);
 
 /* --- map[K, V]: by-value insertion-ordered hash table (map.c) ------------ */

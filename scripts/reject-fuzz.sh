@@ -40,9 +40,27 @@ skip=0
 noplace=0
 unbuildable=0
 
-# how many refusals may still carry no place: every one of them is from the parser or the
-# emitter, which do not report through chk_at yet. Lower it, never raise it.
-NOPLACE_MAX=${NOPLACE_MAX:-37}
+# How many refusals may still carry no place: every one of them is from the parser or the
+# emitter, which do not report through chk_at yet.
+#
+# PER KIND, and one kind is deliberately not capped. A single scalar over six mutation
+# kinds and a growing corpus had to be raised for reasons that were not regressions —
+# 37 -> 51 for a new kind, -> 53 for teaching that kind to skip declarations, -> 54, 56, 57
+# for corpus cases — and each raise buried whatever else moved. Worse, one kind losing
+# places while another gained them keeps the total flat, which is the one thing the total
+# cannot see.
+#
+# `extra-arg` is REPORTED and not capped. It is dominated by the parser's and the emitter's
+# `NotImplemented` refusals, which are a known gap tracked as a whole rather than through
+# this gate, and it grows by about one per corpus file — so a ceiling on it measures how
+# many test programs exist. The other five are the check.zg rules, which DO report a place,
+# and there the number is small, meaningful, and may only go down.
+
+NOPLACE_MAX_missing_arg=${NOPLACE_MAX_missing_arg:-7}
+NOPLACE_MAX_wrong_type=${NOPLACE_MAX_wrong_type:-0}
+NOPLACE_MAX_write_immutable=${NOPLACE_MAX_write_immutable:-3}
+NOPLACE_MAX_int_condition=${NOPLACE_MAX_int_condition:-1}
+NOPLACE_MAX_mixed_operands=${NOPLACE_MAX_mixed_operands:-0}
 
 # mutate writes the mutated program to stdout, or exits non-zero when the mutation does not
 # apply to this source. It is awk rather than sed because the patterns need the indentation
@@ -59,7 +77,7 @@ for src in "$CORPUS"/*.zg; do
 	# about what it does with a broken one
 	"$ZERG" build --emit c "$src" >/dev/null 2>&1 || { unbuildable=$((unbuildable + 1)); continue; }
 
-	for kind in extra-arg wrong-type write-immutable int-condition mixed-operands; do
+	for kind in extra-arg missing-arg wrong-type write-immutable int-condition mixed-operands; do
 		out_zg="$tmp/$name.$kind.zg"
 		if ! mutate "$src" "$kind" >"$out_zg"; then
 			skip=$((skip + 1))
@@ -95,6 +113,7 @@ for src in "$CORPUS"/*.zg; do
 
 		if ! has_place "$out"; then
 			noplace=$((noplace + 1))
+			eval "noplace_${kind//-/_}=\$(( \${noplace_${kind//-/_}:-0} + 1 ))"
 			continue
 		fi
 		pass=$((pass + 1))
@@ -105,13 +124,41 @@ if [ $fail -ne 0 ]; then
 	echo "reject-fuzz: $fail mutation(s) reached cc instead of being refused by the compiler"
 	exit 1
 fi
+
+# A FLOOR, because every assertion below is of the form "not too many": if the mutator
+# stopped applying — an awk change, a corpus rename, a $CORPUS that resolves to nothing —
+# every count is zero, every ceiling is satisfied, and the gate reports success for having
+# measured nothing at all.
+if [ "$((pass + noplace))" -lt "${MIN_REFUSED:-40}" ]; then
+	echo "reject-fuzz: only $((pass + noplace)) mutations were refused — the mutator is not applying"
+	exit 1
+fi
 echo "reject-fuzz: $pass+$noplace mutated programs refused by the compiler, none left to cc"
 echo "reject-fuzz: $noplace of them said no place ($skip mutations did not apply, $unbuildable sources skipped)"
 
+# PER KIND, because a single scalar over six kinds hides an offset: one kind losing places
+# while another gains them keeps the total flat, and the total is the only thing the ceiling
+# below can see. The breakdown is what a raise has to be argued from.
+for kind in extra-arg missing-arg wrong-type write-immutable int-condition mixed-operands; do
+	eval "n=\${noplace_${kind//-/_}:-0}"
+	echo "reject-fuzz:   $kind $n"
+done
+
 # A RATCHET, in the shape CORPUS_PASS uses. A count that is only printed drifts: 37 becomes
-# 60 and the gate still says OK. This can only go down, and the day it reaches zero the
+# 60 and the gate still says OK. These can only go down, and the day they reach zero the
 # report above becomes an assertion.
-if [ "$noplace" -gt "$NOPLACE_MAX" ]; then
-	echo "reject-fuzz: $noplace refusals say no place, and the ceiling is $NOPLACE_MAX"
-	exit 1
-fi
+rc=0
+for kind in missing-arg wrong-type write-immutable int-condition mixed-operands; do
+	eval "n=\${noplace_${kind//-/_}:-0}"
+	eval "cap=\${NOPLACE_MAX_${kind//-/_}:--1}"
+	if [ "$cap" -lt 0 ]; then
+		echo "reject-fuzz: $kind has no ceiling declared — add NOPLACE_MAX_${kind//-/_}"
+		rc=1
+		continue
+	fi
+	if [ "$n" -gt "$cap" ]; then
+		echo "reject-fuzz: $kind has $n refusals with no place, and its ceiling is $cap"
+		rc=1
+	fi
+done
+exit $rc

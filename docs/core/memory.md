@@ -80,9 +80,16 @@ collected and leaks** (a bounded, documented MVP gap, the cost of allowing self-
 Whether two names share storage is decided by one line, drawn between two disjoint categories:
 
 - A **value type** — every scalar, a `struct`, a tuple, and the heap containers `list` and `map` — is
-  **copied**. A scalar, `struct`, or tuple is copied inline; a `list` or `map` is **deep-copied**, its
-  elements copied by this same rule. Two names of a value type therefore **never alias**: writing through
-  one changes only that holder's own copy.
+  **copied**. A scalar, `struct`, or tuple is copied inline; a `list` or `map` is copied **elementwise**, by
+  this same rule. Two names of a value type therefore **never alias**: writing through one changes only that
+  holder's own copy.
+
+  A `list`'s buffer realizes that copy as **copy-on-write** — the copy shares it and the elements are
+  duplicated by whichever holder writes first. That is an **implementation detail**: no program can tell,
+  because the duplication happens before any write the other holder could see. What it buys is that passing
+  a collection to a function that only reads it, or handing one to a coroutine, costs an increment rather
+  than the whole buffer.
+
 - A **reference-counted value** — a `str`, a `chan`, a `Ref[T]`, and the **auto-boxed sub-nodes of a
   recursive type** — is **shared**: copying retains the existing cell (refcount++) instead of duplicating
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
@@ -95,7 +102,7 @@ auto-boxed cell of a **`mut` recursive** binding:
 
 ```text
 mut a := [1, 2, 3]                # value type
-b := a                            # deep copy — b is an independent list
+b := a                            # a copy — b is an independent list
 a[0] = 9                          # a is [9, 2, 3]; b stays [1, 2, 3] — no alias
 
 struct Node { value: int; next: Node? }

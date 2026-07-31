@@ -46,7 +46,14 @@
 # Carrying on is safe because the C built after a finding is thrown away: the driver hands
 # nothing to cc once this list is non-empty. What it buys is every finding in one run.
 fn chk_at(mut &em: Emitter, msg: str) {
-	em.diags.append(Diag(em.at_path, em.at_line, em.at_col, msg))
+	chk_at_place(em, em.at_path, em.at_line, em.at_col, msg)
+}
+
+# chk_at_place is the same, for a rule that KNOWS its place rather than reading the marker
+# the emission walk left. A rule about a signature is one: it runs before any statement is
+# emitted, so there is no marker yet to read.
+fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
+	em.diags.append(Diag(path, line, col, msg))
 }
 
 # --- mutability ------------------------------------------------------------------
@@ -62,6 +69,7 @@ fn chk_at(mut &em: Emitter, msg: str) {
 
 # chk_assignable raises unless `lhs` names storage this scope may write.
 fn chk_assignable(mut &em: Emitter, lhs: Expr) {
+	chk_store_path(em, lhs)
 	root := chk_root_name(lhs)
 
 	# not a name at all — an index into a call's result, say. There is no binding to ask
@@ -101,6 +109,76 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_names.len()
 }
 
+# --- a default is a property of the declaration ------------------------------------
+#
+# A default is judged ONCE, where the signature is read, rather than at the calls that
+# happen to omit it. That is not tidiness: `spawn` and `defer` capture the defaults they
+# backfill, so a bad one used to be diagnosed only when spawned — and the message named an
+# argument the programmer never wrote.
+
+# c_check_defaults judges every declared default in the program.
+fn c_check_defaults(mut &em: Emitter, f: File) {
+	for fn_d in f.fns {
+		key := c_sig_key(fn_d.recv, fn_d.name)
+		for pm in fn_d.params {
+			chk_param_default(em, key, pm, fn_d.path, fn_d.line, fn_d.col)
+		}
+	}
+}
+
+# chk_param_default raises on a default that could never be legal at any call. It takes the
+# declaration's PLACE rather than the declaration: this runs before any statement is
+# emitted, so the SAt markers have said nothing and `em.at_*` still holds whatever the last
+# unit left there.
+fn chk_param_default(mut &em: Emitter, key: str, pm: Param, path: str, line: int, col: int) {
+	return if not pm.has_def
+
+	# a `mut &` takes the ADDRESS of a caller's variable; a default has none to take
+	if pm.is_ref {
+		chk_at_place(em, path, line, col, f"parameter `{pm.name}` of `{chk_call_name(key)}` is a `mut &` and cannot have a default — a reference needs a caller's variable to point at")
+		return
+	}
+
+	got := c_infer(em, pm.def)
+	return if chk_fits(em, pm.ty, got)
+	chk_at_place(em, path, line, col, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ty_name(got)}, and the parameter is {ty_name(pm.ty)}")
+}
+
+# --- a pattern binds, and a construction gives, what the variant holds --------------
+
+# chk_variant_arity raises when a constructor pattern or a construction names more values
+# than the variant carries. `Rect(w, h)` against a `Rect(int)` emitted a read of a union
+# member that was never declared, and cc reported it against generated C — the arm and the
+# declaration disagree, and only one of them is on the screen the programmer is looking at.
+# `Line(7, 8)` is that same disagreement from the other side of the enum, so `what` is the
+# only thing that differs between them.
+#
+# BOTH directions, like chk_call_arity. Too FEW is the quieter half and the worse one:
+# `Line(7)` against a `Line(int, int)` left `.f1` reading whatever zero-initialisation put
+# there, and `Line(n) =>` bound one of two without a word.
+fn chk_variant_arity(mut &em: Emitter, ctor: str, n: int, what: str) {
+	held := chk_variant_held(em, ctor)
+	return if n == held
+	chk_at(em, f"`{ctor}` carries {chk_args(held)} and this {what} {strconv.to_string(n, 10)}")
+}
+
+# chk_variant_held is how many payload values a variant carries. The table holds one row per
+# payload field and c_build_enums appends a variant's rows CONTIGUOUSLY, so the count ends
+# where the run ends — the same early exit c_param_row makes over the parameter table.
+fn chk_variant_held(mut &em: Emitter, ctor: str) -> int {
+	mut n := 0
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_variant[i] == ctor {
+			n = n + 1
+		} else if n > 0 {
+			return n
+		}
+		i = i + 1
+	}
+	return n
+}
+
 # --- call shape -------------------------------------------------------------------
 #
 # `add(1)` on a two-parameter function reached cc as "too few arguments to function call",
@@ -116,13 +194,94 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 # `base` is 0 for all three callee shapes: a method's receiver leads the argument list here
 # (the parser put `this` at parameter 0 when it flattened the impl block), so the parameter
 # table lines up with no shift.
-fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr]) {
+#
+# `what` is the statement asking, so the borrow refusal says `spawn` or `defer` rather than
+# describing both. The row is read once and answers both questions about the parameter,
+# which is why the borrow check lives here rather than in a walk of its own.
+fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr], what: str) {
 	chk_call_arity(em, key, 0, args.len())
 	mut i := 0
 	for i < args.len() {
-		chk_argument(em, key, c_param_row(em, key, i), i + 1, args[i])
+		row := c_param_row(em, key, i)
+		chk_argument(em, key, row, i + 1, args[i])
+
+		# A `mut &` may not be CAPTURED. GRAMMAR:314 says a borrow "cannot ESCAPE (be
+		# captured by a spawn or stored past the call)", and both of these statements store
+		# their arguments in an env to be used later — a spawn's may outlive the frame the
+		# reference points into entirely. `spawn` refused this in a pass of its own;
+		# `defer`, which the same sentence covers, reached cc.
+		if row >= 0 and em.pr_ref[row] {
+			chk_at(em, f"argument {strconv.to_string(i + 1, 10)} of `{chk_call_name(key)}` is a `mut &` and cannot cross a `{what}`: a borrow may not be captured, and this one would outlive the call it is valid for")
+		}
 		i = i + 1
 	}
+}
+
+# chk_store_path raises when a WRITE has to pass through something that is not storage.
+#
+# `chk_root_name` only asks what the target is rooted at. The steps between are the ones
+# that reached cc: `d["k"][0] = 7`, `n["a"]["b"] = 5` and `get()[0] = 99` each store into a
+# value that C has no address for, and cc said "expression is not assignable" about a
+# statement expression this compiler wrote. Every index on the path has to be a place,
+# which is the same question `mut &` asks of an argument and a mutating method asks of its
+# receiver — a write to a copy is not a write, and all three are that sentence.
+fn chk_store_path(mut &em: Emitter, e: Expr) {
+	tgt := chk_store_target(e)
+	return if not c_is_index(e) and not c_is_fieldref(e)
+
+	if c_is_index(e) and not c_is_place(em, tgt) {
+		chk_at(em, f"cannot store through {c_place_why(em, tgt)} — it is a value rather than a place, so the write would land on a copy; bind it to a name first")
+		return
+	}
+	chk_store_path(em, tgt)
+}
+
+fn chk_store_target(e: Expr) -> Expr {
+	return match e {
+		EIndex(t, _) => t
+		EField(t, _) => t
+		_            => e
+	}
+}
+
+fn c_is_fieldref(e: Expr) -> bool {
+	return match e {
+		EField(_, _) => true
+		_            => false
+	}
+}
+
+# chk_arm_types raises when a `match` USED AS A VALUE has arms that answer different types.
+#
+# The whole match takes its type from the FIRST arm, which is the only one anything looked
+# at: a later arm answering something else was rendered into the same conditional and cc
+# reported the mismatch — as a WARNING under clang, so the program linked. Every arm has to
+# be typed with its OWN payload bound, which is why this is a walk and not a comparison.
+fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
+	return if arms.len() < 2
+
+	want := c_infer_arm_body(em, arms[0], st)
+	return if c_is_unknown(want) or ty_eq(want, TVoid)
+
+	mut i := 1
+	for i < arms.len() {
+		got := c_infer_arm_body(em, arms[i], st)
+		if not c_is_unknown(got) and not ty_eq(got, TVoid) and not chk_fits(em, want, got) {
+			chk_at(em, f"a `match` answers ONE type, and its arms give {ty_name(want)} and {ty_name(got)}")
+			return
+		}
+		i = i + 1
+	}
+}
+
+# chk_ref_arg raises when a `mut &` argument is not a PLACE. A borrow is the caller's own
+# storage handed over to be written, and `m["k"]` is a value however much it reads as one:
+# it lowers to a statement expression, so `&` on it reached cc as "cannot take the address
+# of an rvalue". The same sentence the mutating-method path uses, for the same reason —
+# writing to a copy is not writing.
+fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
+	return if c_is_place(em, a)
+	chk_at(em, f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
 }
 
 # chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for

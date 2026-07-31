@@ -92,7 +92,7 @@ fn emit(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str) -> Token {
 # The reason rides in the token's VALUE, which an Illegal has no other use for, and
 # `lex_diags` turns every one of them into a diagnostic with a place and a code.
 fn bad(mut &l: Lex, code: str, why: str, line: int, col: int, lexeme: str) -> Token {
-	return emit_val(l, Illegal, line, col, lexeme, code + " " + why)
+	return emit_val(l, Illegal, line, col, lexeme, f"{code} {why}")
 }
 
 fn emit_val(mut &l: Lex, k: Kind, line: int, col: int, lexeme: str, value: str) -> Token {

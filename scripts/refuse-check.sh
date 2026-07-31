@@ -920,6 +920,26 @@ expect_lint() {
 	esac
 }
 
+# expect_no_lint is the other half. A rule with only positive cases can be widened until it
+# fires on everything and every case still passes — which is how L301 came to report
+# `show(k)`, a READ, as a write. What a rule refuses to say is as much its definition as
+# what it says.
+expect_no_lint() {
+	local name=$1 unwanted=$2
+	local src="$tmp/$name.zg"
+	cat >"$src"
+
+	local out
+	out=$("$ZERG" lint "$src" 2>&1)
+	case $out in
+	*"$unwanted"*)
+		echo "FALSE     $name — lint said $unwanted about a program it should be quiet about: $(echo "$out" | head -1)"
+		fail=$((fail + 1))
+		;;
+	*) pass=$((pass + 1)) ;;
+	esac
+}
+
 expect_lint coalesce-with-nil "L201" <<'EOF'
 fn keep(x: int?) -> int? {
 	return x ?? nil
@@ -932,6 +952,165 @@ fn forced(x: int?) -> int? {
 	return x!
 }
 fn main() { print forced(2) ?? -1 }
+EOF
+
+
+# GRAMMAR:316 — "There is NO plain `mut x` parameter". It was accepted and the keyword
+# dropped, so a write in the body said `cannot assign through b: it is immutable` about a
+# parameter the programmer had marked `mut`.
+expect "$ZERG" a-plain-mut-parameter "a parameter is \`mut &\` or nothing" <<'EOF'
+struct Bag {
+	n: int
+}
+
+fn f(mut b: Bag) {
+	print(f"{b.n}")
+}
+
+fn main() {
+	f(Bag(1))
+}
+EOF
+
+# An INDEX needs a list or a map. `a[0]` on a `list[int]?` handed the runtime the carrier
+# struct where a header goes, which cc reported as a WARNING — so the program linked and
+# segfaulted. A warning is not a gate.
+expect "$ZERG" index-an-optional "may not have one" <<'EOF'
+fn main() {
+	a: list[int]? = [1, 2, 3]
+	print(a[0])
+}
+EOF
+
+# `str(…)` over a list is the BYTE bridge. Without the element check it reinterpreted any
+# buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
+# and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a
+# composite; this let the same value out through an f-string hole.
+expect "$ZERG" render-a-list-of-ints "the BYTE bridge" <<'EOF'
+fn main() {
+	xs: list[int] = [65, 66, 67]
+	print(f"{xs}")
+}
+EOF
+
+# `print` has no two-argument form, so `print(a, b)` builds a TUPLE and prints that. A
+# composite has no rendering — the structural one is `Display`'s job and this compiler
+# generates none — and the cast reached cc as "operand of type 'zg_tup_...' where
+# arithmetic or pointer type is required". The mutation fuzzer is what found it.
+expect "$ZERG" print-a-tuple "rendering a (int, int) as text" <<'EOF'
+fn main() {
+	print(1, 2)
+}
+EOF
+
+# L301: the snapshot semantics of a captured argument. It is here rather than in the reject
+# list because the program is CORRECT — this is the one thing in the language a competent
+# reader has to ask about, so the tool answers instead of waiting to be asked.
+expect_lint spawn-captures-a-value-then-writes-it "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut k := 5
+	spawn show(k)
+	k = 99
+}
+EOF
+
+expect_lint defer-captures-a-value-then-writes-it "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut j := 1
+	defer show(j)
+	j = 2
+}
+EOF
+
+# What L301 is, said from both sides. A method that writes through its receiver is a write
+# — a captured `list` is snapshotted by deep copy, so an append after the capture is exactly
+# the misreading — and a REBINDING of a channel is a write, because after it the coroutine
+# holds the old handle. A read, a send, and a write BEFORE the capture are not.
+
+expect_lint spawn-captures-a-list-then-appends "L301" <<'EOF'
+fn take(xs: list[int]) {
+	print(f"{xs[0]}")
+}
+
+fn main() {
+	mut xs: list[int] = [1]
+	spawn take(xs)
+	xs.append(2)
+}
+EOF
+
+expect_lint spawn-captures-a-channel-then-rebinds-it "L301" <<'EOF'
+fn work(ch: chan[int]) {
+	print("w")
+}
+
+fn main() {
+	mut ch := chan[int](1)
+	spawn work(ch)
+	ch = chan[int](1)
+}
+EOF
+
+expect_lint spawn-inside-a-closure "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn run(f: fn()) {
+	f()
+}
+
+fn main() {
+	run(fn() {
+		mut k := 5
+		spawn show(k)
+		k = 99
+	})
+}
+EOF
+
+expect_no_lint a-read-after-the-capture "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut k := 5
+	spawn show(k)
+	show(k)
+}
+EOF
+
+expect_no_lint a-send-after-the-capture "L301" <<'EOF'
+fn work(ch: chan[int]<-) {
+	ch <- 1
+}
+
+fn main() {
+	mut ch := chan[int](1)
+	spawn work(ch)
+	ch <- 2
+}
+EOF
+
+expect_no_lint a-write-before-the-capture "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut k := 5
+	k = 99
+	spawn show(k)
+}
 EOF
 
 if [ $fail -ne 0 ]; then

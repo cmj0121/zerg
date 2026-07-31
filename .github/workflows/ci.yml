@@ -125,6 +125,14 @@ jobs:
       # programs only, which is why that whole class went unseen.
       - name: Every program that is not Zerg, is rejected
         run: make reject
+
+      # --- 7b'. the compiler's own sources are canonical -------------------------
+      # fmt-corpus and fmt-tokens both need the private corpus, so the formatter's rules
+      # were never checked against the largest body of Zerg that exists — the compiler.
+      # Three deviations landed in one branch before this ran anywhere.
+      - name: The compiler and the stdlib are fmt's fixpoint
+        run: make fmt-self
+
       - name: Fetch test-data submodule
         id: corpus_fetch
         env:

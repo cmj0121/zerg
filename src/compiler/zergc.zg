@@ -632,7 +632,6 @@ fn rt_units() -> list[str] {
 # ctx_unit is the context switch for this target: a hand-written one where there is
 # one, else the portable ucontext floor.
 fn ctx_unit() -> str {
-	# the intrinsic carries no signature, so the type is named here rather than inferred
 	a: str = __zrt_arch()
 
 	return "ctx_arm64.S" if a == "arm64"

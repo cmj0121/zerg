@@ -14,6 +14,7 @@ is by **what a rule does**, not by which pass implements it.
 | `F3xx` | trivia    | what happens to what a person wrote for a person |
 | `F4xx` | rewrites  | the rules that MOVE code rather than space it    |
 | `L1xx` | dead code | things written that nothing reaches              |
+| `E1xx` | lexical   | text that is not a token                         |
 
 ## `zerg fmt`
 
@@ -505,6 +506,31 @@ sits in layout rather than in rewrites because it only decides where an existing
 goes; `F403` is a rewrite for the same reason in reverse — it inserts line breaks nobody
 wrote and drops a token a joined list no longer needs, and `F406` writes a line nobody
 wrote at all.
+
+## E1xx — lexical
+
+These are not advisory. A source that does not lex is not a program, so each is a **compile
+error** the build stops on — they carry codes because they are about TEXT and a reader
+looking one up is looking up a rule, not a type error.
+
+| Code   | Rule                                                            |
+| ------ | --------------------------------------------------------------- |
+| `E101` | a string literal is not closed before the end of the line       |
+| `E102` | a rune literal is empty — it holds exactly one character        |
+| `E103` | a rune literal holds exactly one character, and this holds more |
+| `E104` | this character is not part of any Zerg token                    |
+| `E105` | a triple-quoted string is never closed                          |
+| `E106` | a raw string has no closing quote on this line                  |
+| `E107` | a command literal has no closing backtick                       |
+| `E108` | a based number needs at least one digit after its prefix        |
+
+They are reported the moment a file is **read**, before its imports are scanned — scanning
+them parses, and a parser handed unreadable text can only say something untrue about it.
+That is what it used to say: `` `b'b` is not an expression this compiler reads ``, which
+names the wrong layer, the wrong problem, and a fragment of what the person wrote.
+
+`E108` had no message at all. `0x` lowered to a C `0x`, which cc read as zero, so a
+malformed literal compiled and the program answered 0.
 
 ## `zerg lint`
 

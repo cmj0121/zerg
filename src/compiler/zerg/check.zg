@@ -75,6 +75,75 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 
 
 
+
+# --- call shape -------------------------------------------------------------------
+#
+# `add(1)` on a two-parameter function reached cc as "too few arguments to function call",
+# which is a true statement about generated C and no help at all: the C prototype it names
+# is one this compiler wrote. The count is knowable here, where both the call and the
+# signature are in hand.
+
+# chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for
+# a method, whose receiver already fills parameter 0, and 0 for a free call.
+fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
+	# a key nothing registered is not a call this rule knows anything about — an
+	# intrinsic, a constructor, a binding holding a function. Emit names those itself.
+	return if not c_name_in(em.sig_names, key)
+
+	total := chk_param_count(em, key)
+	given := base + argc
+	raise f"`{chk_call_name(key)}` takes {strconv.to_string(total, 10)} arguments and this gives {strconv.to_string(given, 10)}" if given > total
+
+	need := chk_required_count(em, key)
+	raise f"`{chk_call_name(key)}` needs {strconv.to_string(need, 10)} arguments and this gives {strconv.to_string(given, 10)}" if given < need
+}
+
+# chk_param_count is how many parameters a registered function has. c_build_sigs appends
+# one row per parameter, so counting the rows that name the key counts the parameters.
+fn chk_param_count(mut &em: Emitter, key: str) -> int {
+	mut n := 0
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == key {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n
+}
+
+# chk_required_count is how many a CALL must supply: every parameter up to the last one
+# without a default. A default may only follow other defaults, so this is the count of
+# parameters before the first defaulted one.
+fn chk_required_count(mut &em: Emitter, key: str) -> int {
+	mut n := 0
+	mut i := 0
+	for i < em.pr_fn.len() {
+		if em.pr_fn[i] == key and not em.pr_hasdef[i] {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n
+}
+
+# chk_call_name spells a signature key the way a reader wrote the call. A free function's
+# key IS its name; a method's is `Type#name` internally, and `Type.name` on the page —
+# both halves are worth printing, but the separator is an implementation detail nobody
+# should have to meet in a diagnostic.
+fn chk_call_name(key: str) -> str {
+	bs := list[byte](key)
+	mut out: list[byte] = []
+	for b in bs {
+		if b == b'#' {
+			out.append(b'.')
+		} else {
+			out.append(b)
+		}
+	}
+	return str(out)
+}
+
 # --- returned value ---------------------------------------------------------------
 #
 # A signature is a promise, and `-> int` with `return "nope"` reached cc as an

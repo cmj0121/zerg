@@ -23,8 +23,8 @@ the grammar:
 | `nil`   | the placeholder value of `T?`                        |
 
 - **Integer overflow and division by zero raise** (`OverflowError`, `DivideByZeroError`) — an
-  **abort**, not a value (see [Null-safety & Errors](../code/errors.md)); `int`/`uint`/`byte`/`rune` never wrap (opt into roll-over
-  with `+%`/`-%`/`*%`, below).
+  **abort**, not a value (see [Null-safety & Errors](../code/errors.md)); `int`/`uint`/`byte`/`rune` never
+  wrap (opt into roll-over with `+%`/`-%`/`*%`, below).
 - **`float` is IEEE-754:** overflow → `±Inf`, invalid → `NaN`, neither raises; `NaN` is unequal to
   everything (including itself).
 - **`str` iterates as `rune` and is not indexable** — convert it to `list[byte]` (see
@@ -37,7 +37,8 @@ the grammar:
   `>>` is **arithmetic** on signed `int` (sign-extends) and **logical** on unsigned `uint`/`byte`
   (zero-fills) — the type's sign decides, so no separate logical-shift operator exists; a shift by **≥ the
   type width** raises (`OverflowError`). These desugar to specs (a user type may overload them — see
-  [Built-in specs](specs.md)), and the bitwise **symbols** never collide with the logical **keywords** `not`/`and`/`or`.
+  [Built-in specs](specs.md)), and the bitwise **symbols** never collide with the logical **keywords**
+  `not`/`and`/`or`.
 - **Wrapping** — `+`, `-`, `*` raise on overflow; the **`%`-suffixed** `+%`, `-%`, `*%` (and unary `-%`)
   instead **wrap modulo 2^n** — for hashing, checksums, and bit-mixing where roll-over is the intent. The
   **checked** form is already `guard { a + b }` → `Result` (no `checked_*` API); **saturating** is deferred.
@@ -110,8 +111,8 @@ Its MVP limits (a `mut`-built cycle leaks; a long chain frees in O(depth)) are t
 reference.
 
 `Either`, `Result[T]`, and `T?` aren't special — they're ordinary stdlib types built on `enum`
-(see [Null-safety & Errors](../code/errors.md)). An `enum`'s **variants share the type's visibility** — a `pub enum` exposes every
-variant, to construct and to `match`; there is no per-variant privacy.
+(see [Null-safety & Errors](../code/errors.md)). An `enum`'s **variants share the type's visibility** — a
+`pub enum` exposes every variant, to construct and to `match`; there is no per-variant privacy.
 
 An `enum`'s **discriminant behaves differently for a fieldless enum than for a payload one** — the split
 turns on whether _every_ variant is fieldless. A **fieldless** `enum` may give a variant an explicit
@@ -225,4 +226,5 @@ rules:
   typed parameter; never an inferred `:=`.
 
 This is how a value, an `Err`, or `nil` flows into an `Either` at a typed binding or return without
-explicit wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value, never a reinterpret.
+explicit wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value,
+never a reinterpret.

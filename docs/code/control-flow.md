@@ -101,7 +101,8 @@ msg := match ev {
 
 A `match` **pattern** never inspects an existential's real type — a spec used as a type erases the value
 one-way, with no downcast — it destructures variants and compares values, nothing more; the one query it
-allows on an existential is the boolean **`is`** test ([Specs & Generics](../core/specs.md)), used as a **condition**, never
+allows on an existential is the boolean **`is`** test ([Specs & Generics](../core/specs.md)), used as a
+**condition**, never
 as a binding that hands the concrete value back. A **product pattern** destructures
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple

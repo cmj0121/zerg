@@ -115,7 +115,7 @@ fn read_config(s: str) -> Result[Config] {
 }
 ```
 
-> **被 guard 的區塊有兩條限制，而且都是大聲的。** 從區塊裡 `return`、`break` 或 `continue` > **離開**，兩個編譯器都拒絕：handler 在區塊前推入、區塊後彈出，中途跳走會把 frame 帶走、
+> **被 guard 的區塊有兩條限制，而且都是大聲的。** 從區塊裡 `return`、`break` 或 `continue` > **離開**會被拒絕：handler 在區塊前推入、區塊後彈出，中途跳走會把 frame 帶走、
 > 把 handler 留在上面。區塊的值若是**在區塊內綁定的名字**也被拒絕，因為 C 規定在 `setjmp`
 > 與落點之間被修改的自動變數，除非是 `volatile` 否則其值不確定（C99 7.13.2.1）——把區塊的
 > 值寫成一次呼叫或一個常值，那本來也是日常寫法。

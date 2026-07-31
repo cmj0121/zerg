@@ -8,12 +8,12 @@ error models in the [Language Reference](../language.md). Also in [繁體中文]
 Source is organized in four nested roles — from the whole program down to a single file — each owning
 one concern:
 
-| Layer       | What it is                                  | The boundary it draws                                        |
-| ----------- | ------------------------------------------- | ------------------------------------------------------------ |
-| **program** | a build rooted at an entry file with `main` | the run — the root of the dependency graph                   |
-| **package** | a tree of modules                           | the **distribution / dependency / version** and **API** unit |
-| **module**  | a directory                                 | the default **privacy** and **namespace** unit               |
-| **file**    | a physical slice of one module              | none — files in a module share one namespace                 |
+| Layer       | What it is                                  | The boundary it draws                           |
+| ----------- | ------------------------------------------- | ----------------------------------------------- |
+| **program** | a build rooted at an entry file with `main` | the run — the root of the dependency graph      |
+| **package** | a tree of modules                           | the **distribution / version** and **API** unit |
+| **module**  | a directory                                 | the default **privacy** and **namespace** unit  |
+| **file**    | a physical slice of one module              | none — files in a module share one namespace    |
 
 Keeping encapsulation/naming (`module`) and distribution/API (`package`) in two layers is what gives
 `pub` a precise meaning.

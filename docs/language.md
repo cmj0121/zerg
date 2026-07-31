@@ -41,14 +41,14 @@ other chapter relies on. Read it first.
 
 ### Writing code
 
-| Chapter                                                 | Covers                                                      |
-| ------------------------------------------------------- | ----------------------------------------------------------- |
-| [Control Flow & Pattern Matching](code/control-flow.md) | `if`, `for`, `match`, and patterns                          |
-| [Functions & Closures](code/functions.md)               | first-class functions, defaults, named args, closures       |
-| [Null-safety & Errors](code/errors.md)                  | `Result[T]` / `T?`, `?` `??` `?.` `!` `raise` `guard`       |
-| [Collections](code/collections.md)                      | `list`, `map`, `set`, the fixed-size `[T; N]` array         |
-| [Coroutines & Channels](code/coroutine.md)              | `spawn`, channels, `select`, scheduling                     |
-| [Patterns & Idioms](code/patterns.md)                   | closures, pipelines, builders — the Zerg way, no new syntax |
+| Chapter                                                 | Covers                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| [Control Flow & Pattern Matching](code/control-flow.md) | `if`, `for`, `match`, and patterns                      |
+| [Functions & Closures](code/functions.md)               | first-class functions, defaults, named args, closures   |
+| [Null-safety & Errors](code/errors.md)                  | `Result[T]` / `T?`, `?` `??` `?.` `!` `raise` `guard`   |
+| [Collections](code/collections.md)                      | `list`, `map`, `set`, the fixed-size `[T; N]` array     |
+| [Coroutines & Channels](code/coroutine.md)              | `spawn`, channels, `select`, scheduling                 |
+| [Patterns & Idioms](code/patterns.md)                   | closures, pipelines, builders — the Zerg way, no syntax |
 
 ### The surface
 
@@ -59,14 +59,14 @@ other chapter relies on. Read it first.
 
 ### Programs, and the world outside them
 
-| Chapter                                            | Covers                                                          |
-| -------------------------------------------------- | --------------------------------------------------------------- |
-| [Modules, Packages & Programs](runtime/package.md) | organization, visibility, coherence, program start              |
-| [Process & I/O](runtime/io.md)                     | streams, files, stdio, processes — the `io` package             |
-| [Formatting & Text](runtime/format.md)             | `display` / `debug` rendering, `f"…"`, `print`                  |
-| [Built-in Functions](runtime/builtins.md)          | the fixed no-import functions — `Ref`, conversions, error kinds |
-| [Standard Library](runtime/stdlib.md)              | the bundled `import` packages — io, fs, os, time, math, rand, … |
-| [FFI](runtime/ffi.md)                              | the C ABI boundary — `pub` export, unsafe foreign import        |
+| Chapter                                            | Covers                                                    |
+| -------------------------------------------------- | --------------------------------------------------------- |
+| [Modules, Packages & Programs](runtime/package.md) | organization, visibility, coherence, program start        |
+| [Process & I/O](runtime/io.md)                     | streams, files, stdio, processes — the `io` package       |
+| [Formatting & Text](runtime/format.md)             | `display` / `debug` rendering, `f"…"`, `print`            |
+| [Built-in Functions](runtime/builtins.md)          | the fixed no-import functions — conversions, error kinds  |
+| [Standard Library](runtime/stdlib.md)              | the bundled `import` packages — io, fs, os, time, math, … |
+| [FFI](runtime/ffi.md)                              | the C ABI boundary — `pub` export, unsafe foreign import  |
 
 ### Tooling
 
@@ -97,8 +97,8 @@ The compiler can **write an implementation for you** from a type's **structure**
 **decorator** on the type: `#[derive(Encode, Decode)]` on a `struct`/`enum` generates the canonical,
 field-by-field (and variant-by-variant) impls. What it derives is a **fixed, compiler-owned set of blessed
 specs** — all **opt-in**: `Eq`, `Ord`, `Hash`, `Encode`, `Decode` (there is no always-derived `Object`).
-A **user spec can never be derived** (`#[derive(MySpec)]` is a compile error): generating from structure needs code that reads
-fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
+A **user spec can never be derived** (`#[derive(MySpec)]` is a compile error): generating from structure
+needs code that reads fields, which only the compiler may do — there are **no macros**. For anything custom, hand-write
 `impl X for Y`. Decorators are Zerg's one channel for such compiler directives, and it stays closed (users
 cannot define new ones). `derive` is one of a small fixed set — `#[dyn]`, `#[sealed]`, and more — listed in
 **[Decorators](core/decorators.md)**. See also **[Derive & Default Behavior](core/derive.md)**.
@@ -143,7 +143,8 @@ the language itself provides. A user cannot add to the set.
 Everything else that looks callable is **not** a built-in function: `print` / `raise` / `guard` / `spawn`
 / `defer` / `del` are **keywords**; `list.len()` / `map.get()` are **methods** on a built-in type; and
 `math.sqrt` / `io.read_file` are **stdlib** functions reached with `import`. The per-function detail is in
-**[Built-in Functions](runtime/builtins.md)**; the importable packages are in **[Standard Library](runtime/stdlib.md)**.
+**[Built-in Functions](runtime/builtins.md)**; the importable packages are in
+**[Standard Library](runtime/stdlib.md)**.
 
 ## Formatting & Text
 

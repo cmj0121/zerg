@@ -193,8 +193,8 @@ commit.
 A **binding** introduces a name; a reassignment updates one:
 
 ```text
-binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr        # inferred; 'const' = shadow-proof; bind-target: id/pattern
-              | ( 'mut' | 'const' )? identifier ':' type '=' expr    # type-annotated; the ':' before '=' picks this over reassign
+binding       ::= ( 'mut' | 'const' )? bind-target ':=' expr        # inferred; 'const' = shadow-proof
+              | ( 'mut' | 'const' )? identifier ':' type '=' expr    # type-annotated; the ':' picks this over reassign
 reassign      ::= assign-target '=' expr
 expr-stmt     ::= expr
 lvalue        ::= identifier ( '.' identifier | '.' dec-int | '[' expr ']' )*   # '.0' = tuple element
@@ -336,7 +336,8 @@ closure-param ::= ( 'mut' '&' )? identifier ( ':' type )? ( '=' expr )?   # ': t
 - **Return.** `return expr` exits with a value, `return` alone with none. An **absent `-> type`** means the
   function returns `nil`. A **trailing `if`** makes it conditional — `return MAX if v > MAX` is sugar for
   `if v > MAX { return MAX }` (and bare `return if done`), the same postfix `if` as `break if` / `continue
-if` / `raise e if`; on a false condition control falls through. A leading `if` _with a block_ is instead an if-expression
+if` / `raise e if`; on a false condition control falls through. A leading `if` _with a block_ is instead
+  an if-expression
   being returned (`return if c { a } else { b }`); the conditional-return `if` takes a bare condition, no block.
 - **Parameters.** A parameter passes **by value** (a copy) and may carry a **default** `= expr`. A **named
   argument** at the call is `name: value` (the `arg` form from group 4): positional arguments come first,
@@ -562,7 +563,8 @@ deco-arg    ::= type-name | const-expr        # derive(Encode, Decode), align(16
   **fixed, compiler-owned set** — users cannot define new ones (Zerg has no macros); an **unknown or
   misspelled decorator is a compile error**, never silently dropped. `#[derive]` is the one the compiler
   reads; `#[dyn]`, `#[test]`, `#[sealed]` and the layout directives (`#[repr]` / `#[packed]` /
-  `#[align]`) are reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a comment — the lexer
+  `#[align]`) are reserved names, recognized-and-rejected until built. `#[` is the one `#` that is not a
+  comment — the lexer
   peeks one
   character.
 
@@ -729,7 +731,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   is **module-private** (never `pub`). Prefer the **safe** alternative — an immutable `:=` holding a stdlib
   **`Atomic[T]`** — which shares mutable global state across cores with no `unsafe` (the binding is
   immutable; the `Atomic`'s interior is not). **Atomics are stdlib, not grammar**: `Atomic[T]` with `load` /
-  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** — it needs `Ref[T]`, for
+  `store` / `swap` / `fetch_add` / `compare_swap` and a memory-ordering argument. **[not yet]** — it needs
+  `Ref[T]`, for
   **`Atomic[int]`** with **sequential consistency**; the **memory-ordering argument** and a **generic
   `Atomic[T]`** are **[not yet]**.
 - **Raw pointers (`ptr` / `ptr[T]`).** `ptr` is a platform-width raw **address** (C's `void*` / `uintptr`);

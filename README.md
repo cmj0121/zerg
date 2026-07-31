@@ -16,20 +16,20 @@ binary. Programs are fast to write, easy to read, and overwhelmingly straightfor
 
 ## Design Principles
 
-| Principle        | Description                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| small and crisp  | minimal syntax                                                                                        |
-| safe by default  | immutable and private unless explicitly `mut` / `pub`                                                 |
-| null-safe        | optionals instead of null; no billion-dollar mistake                                                  |
-| concurrent       | built-in coroutines and channels (a cooperative, non-preemptive **M:N** scheduler in this phase)      |
-| procedural-first | straightforward, top-down control flow                                                                |
-| scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are                       |
-|                  | reference-counted                                                                                     |
-| strongly typed   | catch errors at compile time                                                                          |
-| explicit casts   | no implicit conversion by default; a value converts by re-construction (`T(x)`)                       |
-| copy-by-value    | value types are copied on assignment; a reference-counted value is shared                             |
-| zero-dependency  | like Go — no third-party library. The **runtime** (fixed by spec + its C impl) is the only floor      |
-|                  | reaching the OS; the **stdlib** is pure Zerg over it, an implementation detail bound by its interface |
+| Principle        | Description                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------ |
+| small and crisp  | minimal syntax                                                                                   |
+| safe by default  | immutable and private unless explicitly `mut` / `pub`                                            |
+| null-safe        | optionals instead of null; no billion-dollar mistake                                             |
+| concurrent       | built-in coroutines and channels (a cooperative, non-preemptive **M:N** scheduler in this phase) |
+| procedural-first | straightforward, top-down control flow                                                           |
+| scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are                  |
+|                  | reference-counted                                                                                |
+| strongly typed   | catch errors at compile time                                                                     |
+| explicit casts   | no implicit conversion by default; a value converts by re-construction (`T(x)`)                  |
+| copy-by-value    | value types are copied on assignment; a reference-counted value is shared                        |
+| zero-dependency  | like Go — no third-party library. The **runtime** (fixed by spec + its C impl) is the floor      |
+|                  | reaching the OS; the **stdlib** is pure Zerg over it, bound only by its interface                |
 
 Full semantics — primitive & user types, conversions, the memory model, concurrency, and null-safety —
 are in the **[Language Specification](docs/language.md)**, with companion chapters for

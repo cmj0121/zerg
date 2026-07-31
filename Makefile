@@ -204,7 +204,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 		done'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
-LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus fmt-tokens lint fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus fmt-tokens fmt-self lint fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

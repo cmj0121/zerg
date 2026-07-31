@@ -157,14 +157,28 @@ src/bootstrap/
 ## Known gaps
 
 The seed is deliberately the narrower compiler, and it refuses most of what it has not
-built. These are the places it does NOT — where it accepts a program the language rejects,
-so `zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
+built. These are the places it does NOT — where it does not turn a program away ITSELF, so
+`zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
+
+"Itself" is the whole of it. Three of the four below were counted as refusals for a year
+because the seed emitted C that **clang** rejected: `-Wint-conversion` and
+`-Waddress-of-temporary` are errors there and warnings under gcc, so the same seed and the
+same program read as green on macOS and red on Linux. A cc diagnostic is the seed emitting
+the program, which is what the assertion exists to catch.
 
 - **A `mut &` parameter with a DEFAULT is accepted, and a call that uses the default
   segfaults.** GRAMMAR:314 makes a `mut &` valid only for the call and its argument a `mut`
   lvalue; a default has no caller variable to point at. The seed emits the default
   expression where a pointer goes, so `f(5)` on `fn f(a: int, mut &b: int = 0)` dereferences
   a literal. `zerg` refuses it at the declaration.
+- **A `mut &` argument crossing a `defer` is accepted.** GRAMMAR:314 says a borrow cannot
+  escape; the seed hands the deferred thunk the value where a pointer goes. `zerg` refuses
+  it at the callsite.
+- **A default that cannot fit its parameter is accepted.** `fn f(a: int, b: str = 1)` is
+  emitted as written and cc reports the type. `zerg` judges a default at the declaration.
+- **A store through a value is accepted.** `get()[0] = 99` takes the address of a call's
+  result. `zerg` refuses any write whose path is not storage all the way down.
+- **`match` of an optional against a range is accepted.** `zerg` refuses the arm.
 
 ## Changing the seed
 

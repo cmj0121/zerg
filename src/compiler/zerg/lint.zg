@@ -69,7 +69,7 @@ fn c_ret_is_opt(fd: FnDecl) -> bool {
 fn lint_opt_body(body: list[Stmt], fname: str, ret_opt: bool, mut &out: list[str]) {
 	for s in body {
 		match s {
-			SLet(nm, ty, im, ht, v) => lint_opt_expr(v, fname, ret_opt, out)
+			SLet(nm, ty, ht, im, v) => lint_opt_expr(v, fname, ret_opt, out)
 			SAssign(lhs, rhs) => lint_opt_expr(rhs, fname, ret_opt, out)
 			SPrint(v) => lint_opt_expr(v, fname, ret_opt, out)
 			SReturn(hv, v) => lint_opt_expr(v, fname, ret_opt, out)
@@ -207,7 +207,7 @@ fn lint_unread_bindings(f: File, mut &out: list[str]) {
 fn collect_binds(body: list[Stmt], mut &names: list[str]) {
 	for s in body {
 		match s {
-			SLet(name, ty, is_mut, has_ty, value) => collect_binds_let(name, value, names)
+			SLet(name, ty, has_ty, is_mut, value) => collect_binds_let(name, value, names)
 			SIf(cond, then_b, has_else, else_b) => collect_binds_if(then_b, else_b, names)
 			SFor(is_cond, cond, body_b) => collect_binds(body_b, names)
 			SForIn(name, iter, body_b) => collect_binds(body_b, names)
@@ -266,7 +266,7 @@ fn collect_binds_iflet(name: str, then_b: list[Stmt], else_b: list[Stmt], mut &n
 fn walk_body(body: list[Stmt], mut &ids: list[str], mut &calls: list[str], mut &ns: list[str]) {
 	for s in body {
 		match s {
-			SLet(name, ty, is_mut, has_ty, value) => walk_expr(value, ids, calls, ns)
+			SLet(name, ty, has_ty, is_mut, value) => walk_expr(value, ids, calls, ns)
 			SAssign(target, value) => walk_pair(target, value, ids, calls, ns)
 			SPrint(x) => walk_expr(x, ids, calls, ns)
 			SReturn(has_value, value) => walk_expr(value, ids, calls, ns)

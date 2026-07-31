@@ -3074,6 +3074,8 @@ fn c_match(mut &em: Emitter, scrut: Expr, arms: list[Arm], sb: Subst) -> str {
 # whichever variant it held. `c_variant_tag` answering 0 for a name it does not know made an
 # undeclared variant match the same way.
 fn c_check_arm_pats(mut &em: Emitter, arms: list[Arm], st: Ty) {
+	chk_arm_types(em, arms, st)
+
 	# a subject inference could not name has nothing to check the pattern against; guessing
 	# would turn a typing gap into a refusal of a working program
 	return if c_is_unknown(st) or c_is_either(st)
@@ -3256,7 +3258,14 @@ fn c_arm_guard(mut &em: Emitter, a: Arm, sb: Subst) -> str {
 }
 
 fn c_arm_cond(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	outer := c_scope_open(em)
 	c_bind_env(em, a, st)
+	out := c_arm_cond_in(em, a, s, st, sb)
+	c_scope_close(em, outer)
+	return out
+}
+
+fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	if a.pat == 0 {
 		return c_arm_range(em, a, s, st, sb) if c_is_range(a.lit)
 
@@ -3337,12 +3346,47 @@ fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	return base
 }
 
+# An arm's bindings belong to the ARM. Nothing popped them, so `match b { A(x) => x … }`
+# left `x` bound for the rest of the block — shadowing an outer `x` with a name that is a
+# SUBSTITUTION into `v.u.A.f0` and never a C variable, so the outer one came back as
+# `use of undeclared identifier 'zg_x__2'` from cc. The seed gets this right, which is how
+# it was found.
 fn c_arm_body(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
+	outer := c_scope_open(em)
 	c_bind_env(em, a, st)
-	return c_expr(em, a.body, c_arm_subst(em, a, s, st, sb))
+
+	# COPIED, because a match used as a value hands its answer to whoever asked. An arm's
+	# payload binding is a SUBSTITUTION into the scrutinee's own field, so `mut ys := match
+	# b { One(q) => q … }` handed back the enum's own list header and a write through `ys`
+	# was read back through `b`. It is the carrier extraction's rule, one shape along.
+	out := c_copied(em, c_infer(em, a.body), a.body, c_arm_subst(em, a, s, st, sb))
+	c_scope_close(em, outer)
+	return out
 }
 
 # --- type inference ------------------------------------------------------------
+
+# c_infer_match types a match from its FIRST arm, with that arm's payload bound — which is
+# what c_arm_body does before lowering one, and what this did not do before inferring one.
+# `xs := match b { One(q) => q … }` answered TUnknown, so the binding it initialised was
+# never declared and the error surfaced somewhere else; where the answer was merely WRONG
+# rather than unknown, the argument and return checks went blind and cc reported it.
+#
+# The bindings are popped again: inference must not leave anything behind.
+fn c_infer_match(mut &em: Emitter, scrut: Expr, arms: list[Arm]) -> Ty {
+	return TUnknown if arms.len() == 0
+
+	return c_infer_arm_body(em, arms[0], c_infer(em, scrut))
+}
+
+# c_infer_arm_body types ONE arm's body with that arm's payload bound, and pops it again.
+fn c_infer_arm_body(mut &em: Emitter, a: Arm, st: Ty) -> Ty {
+	outer := c_scope_open(em)
+	c_bind_env(em, a, st)
+	t := c_infer(em, a.body)
+	c_scope_close(em, outer)
+	return t
+}
 
 fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 	return match e {
@@ -3363,7 +3407,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EListLit(elems) => c_infer_listlit(em, elems)
 		EConv(ty, x) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
-		EMatch(scrut, arms) => c_infer(em, arms[0].body)
+		EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 		ERange(lo, hi, inclusive) => TUnknown
 		ETuple(elems) => c_tuple_ty(em, elems)
 		EMapLit(ks, vs) => c_map_lit_ty(em, ks, vs)

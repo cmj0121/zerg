@@ -508,9 +508,7 @@ fn is_err_ty(t: Ty) -> bool {
 # for the job, and `ty_name` is the DIAGNOSTIC SPELLING of a type: it collapsed TUnknown,
 # TTuple and TMap all onto `"?"`, so `ty_name(a) == ty_name(b)` answered yes for a tuple
 # and a map, and for two tuples of different shapes. The two composites are spelled out
-# now, but the objection stands and is not about those two: a spelling is for a reader, and
-# every TUnknown still shares one — a type the compiler could not work out is not evidence
-# that two things are the same.
+# now, but the objection was never about those two — it is about the one below.
 #
 # TUnknown equals NOTHING, including itself. A type the compiler could not work out is not
 # evidence that two things are the same; a caller that wants to let an unknown through says

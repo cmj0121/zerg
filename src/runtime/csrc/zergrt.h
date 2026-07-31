@@ -707,9 +707,25 @@ typedef struct zrt_coro {
  * it parked on, which is exactly what M:N requires.
  *
  * All of it compiles to nothing when TSan is off, so the non-instrumented build
- * carries no field it does not use and no call it does not make. */
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+ * carries no field it does not use and no call it does not make.
+ *
+ * The probe is NESTED rather than one '||' expression, because the two spellings
+ * cannot share a line. GCC before 14 has no '__has_feature' at all, and a '#if'
+ * expression is PARSED whole before any operator short-circuits: an undefined
+ * identifier becomes 0, so '__has_feature(thread_sanitizer)' reads as '0(...)' and
+ * the preprocessor stops at "missing binary operator before token (" — on every
+ * translation unit, TSan or not. Guarding the inner '#if' with an outer one is
+ * what keeps the clang spelling out of a preprocessor that cannot read it. */
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
 #define ZRT_TSAN 1
+#endif
+#endif
+#if defined(__SANITIZE_THREAD__)
+#define ZRT_TSAN 1
+#endif
+
+#ifdef ZRT_TSAN
 void *__tsan_get_current_fiber(void);
 void *__tsan_create_fiber(unsigned flags);
 void  __tsan_destroy_fiber(void *fiber);

@@ -374,10 +374,12 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	co->tsan_fiber = ZRT_TSAN_FIBER_NEW(); /* NULL, and free, unless this is a TSan build */
 	co->thunk = thunk;
 	co->env = env;
-	co->tls.stack = NULL;
-	co->tls.len = 0;
-	co->tls.cap = 0;
-	co->tls.handler = NULL;
+	/* the WHOLE bundle, not four of its fields. Initialising it member by member left
+	 * `taken` uninitialised from the day it was added, and adding `crashing` beside it
+	 * made that visible: UBSan reported a `_Bool` holding 190 on the first sender release
+	 * of almost every concurrent program. A field added to zrt_tls must not need an edit
+	 * here to be safe. */
+	co->tls = (zrt_tls){0};
 	co->qnext = NULL;
 	zrt_ctx_init(&co->ctx, co->stack, co->stack_size, coro_trampoline, co);
 	zrt_mutex_lock(&g_lock);

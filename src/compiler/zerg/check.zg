@@ -108,6 +108,23 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 # is one this compiler wrote. The count is knowable here, where both the call and the
 # signature are in hand.
 
+# chk_callsite measures a whole resolved call against its signature — the arity and every
+# argument. It exists for the calls that are not EXPRESSIONS: `spawn f(…)` and `defer f(…)`
+# resolve a callee themselves and render its arguments with their own loop, so neither ever
+# reaches c_args_from, where every other call is checked.
+#
+# `base` is 0 for all three callee shapes: a method's receiver leads the argument list here
+# (the parser put `this` at parameter 0 when it flattened the impl block), so the parameter
+# table lines up with no shift.
+fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr]) {
+	chk_call_arity(em, key, 0, args.len())
+	mut i := 0
+	for i < args.len() {
+		chk_argument(em, key, c_param_row(em, key, i), i + 1, args[i])
+		i = i + 1
+	}
+}
+
 # chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for
 # a method, whose receiver already fills parameter 0, and 0 for a free call.
 fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
@@ -333,6 +350,16 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	}
 
 	if chk_is_equality(oper) {
+		# An OPTIONAL is not comparable, and `x == nil` is the first thing a person reaches
+		# for to test one. It used to lower to a comparison between the carrier struct and
+		# `0`, which cc rejected — a real error about generated C, for the most natural
+		# spelling of the most ordinary question. The language's answer is the binding form,
+		# which is also the only one that hands over the value when there is one.
+		if c_is_opt(ta) or c_is_opt(tb) {
+			chk_at(em, f"an optional is not compared with `{oper}` — test it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
+			return
+		}
+
 		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
 
 		# int and float compare: they are one family, and the language already mixes them

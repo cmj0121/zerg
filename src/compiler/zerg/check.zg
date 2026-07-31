@@ -49,6 +49,7 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 	return if root == ""
 
 	idx := c_live_idx(em, root)
+
 	return if idx < 0
 
 	return if em.env_mut[idx]
@@ -87,6 +88,7 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 	return if row < 0
 
 	given := base + argc
+
 	raise f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given > em.sig_nparams[row]
 	raise f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given < em.sig_nreq[row]
 }
@@ -138,9 +140,7 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits
 	# an optional slot. Recursing here rather than deferring to ty_eq is what keeps the
 	# reshaping above true at every depth instead of only at the top.
-	if c_is_list(want) and c_is_list(got) {
-		return chk_fits(em, c_list_elem(want), c_list_elem(got))
-	}
+	return chk_fits(em, c_list_elem(want), c_list_elem(got)) if c_is_list(want) and c_is_list(got)
 
 	# an optional handed to a value slot is a real mistake, and emit already has a better
 	# sentence for it than this rule can write — it names the three ways to unwrap one
@@ -194,8 +194,10 @@ fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
 # an element has no name of its own to print.
 fn chk_target_name(lhs: Expr) -> str {
 	root := chk_root_name(lhs)
+
 	return "this target" if root == ""
 	return f"`{root}`" if c_ident_name(lhs) != ""
+
 	return f"that part of `{root}`"
 }
 
@@ -261,12 +263,14 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		# `+` is the one arithmetic operator a str also answers, and only for two of them
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
 		raise f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+
 		return
 	}
 
 	if chk_is_order(oper) {
 		return if c_is_str(ta) and c_is_str(tb)
 		raise f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+
 		return
 	}
 
@@ -283,6 +287,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 # chk_unary raises when a prefix operator's operand is not what it takes.
 fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	t := c_infer(em, x)
+
 	return if c_is_unknown(t)
 	raise f"operator `not` takes a bool operand, and this one is {ty_name(t)}" if oper == "not" and chk_scalar_wrong_bool(t)
 	raise f"operator `-` takes a numeric operand, and this one is {ty_name(t)}" if oper == "-" and chk_scalar_wrong_num(t)
@@ -381,6 +386,7 @@ fn chk_fresh_binding(mut &em: Emitter, name: str) {
 	# an enclosing block is one this declaration shadows, which is legal; one in a block
 	# that has ended is not visible to it at all.
 	idx := c_live_idx(em, name)
+
 	return if idx < 0
 	raise f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it" if em.env_scope[idx] == em.scope_cur
 }
@@ -390,9 +396,9 @@ fn chk_fresh_binding(mut &em: Emitter, name: str) {
 # name answers "".
 fn chk_root_name(e: Expr) -> str {
 	return match e {
-		EIdent(n) => n
+		EIdent(n)    => n
 		EField(t, _) => chk_root_name(t)
 		EIndex(t, _) => chk_root_name(t)
-		_ => ""
+		_            => ""
 	}
 }

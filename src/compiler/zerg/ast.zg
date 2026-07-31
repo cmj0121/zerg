@@ -528,7 +528,7 @@ fn ty_eq_chan(ae: Ty, ad: int, b: Ty) -> bool {
 fn ty_eq_either(al: Ty, ar: Ty, b: Ty) -> bool {
 	return match b {
 		TEither(bl, br) => ty_eq(al, bl) and ty_eq(ar, br)
-		_               => false
+		_ => false
 	}
 }
 

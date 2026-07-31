@@ -31,6 +31,7 @@ src/compiler/
     lexer.zg      # source text -> token stream (comments kept on request)
     ast.zg        # recursive AST node types (enum payloads)
     parser.zg     # tokens -> AST
+    check.zg      # the rules a PROGRAM must satisfy, apart from the code that emits it
     emit.zg       # AST -> C, with the minimal typecheck emit needs
     fmt.zg        # tokens -> canonical source
     lint.zg       # AST -> findings
@@ -103,7 +104,8 @@ none of it.
 
 ```sh
 make corpus     # build zerg, then run it over test-data/codegen/
-make refuse     # every program that must be turned away, is — by the compiler
+make refuse     # every form this compiler has not built is named, not emitted
+make reject     # every program that is not Zerg is rejected — by the compiler, not by cc
 ```
 
 Each case is a `.zg` program beside the stdout it must produce. The Makefile's
@@ -113,6 +115,34 @@ they need generic **function** definitions, a generic type parameter as a field'
 `derive`, spec bounds, or `#[dyn]`, none of which the self-hosting compiler has yet. Each
 is refused by name — `gen_struct` answers _no type named `T` (field `Box.val`)_ — rather
 than mis-emitted.
+
+## What a program has to be, and who says so
+
+The seed has a semantic-analysis pass; this compiler was written without one, and for most
+of its life nothing asked whether a program was well formed. `x := 1` followed by `x = 2`
+compiled and ran. `1 + "s"` became C pointer arithmetic and printed an address. `b: bool =
+1` printed `true`, because both are `int64_t` once lowered. A type error that C could see
+reached **cc**, which reported it against generated C under `.zerg-cache`.
+
+`check.zg` holds those rules — mutability, one binding per block, bool conditions (every
+form that asks a question, including a match arm's guard), operand types, and the four
+slots a value enters: a declaration, an assignment, a `return` against its signature, and
+an argument against its parameter, plus a call's argument count. They are a file rather
+than a pass because the knowledge they need already exists in the emitter: `c_infer` types every expression and the environment
+tracks every binding. A separate pass today would mean a second walk and a second copy of
+inference, and the second copy is the one that drifts. Collecting them apart from the
+emission that calls them is what keeps the rules readable as a set, and what makes lifting
+them into a real pass later a move rather than a rewrite — which is what has to happen when
+the AST learns to carry source positions.
+
+Two kinds of message, and the difference is a lifetime:
+
+| message           | means                                              | lives in   |
+| ----------------- | -------------------------------------------------- | ---------- |
+| `NotImplemented:` | a form this compiler has not built yet             | `emit.zg`  |
+| a plain sentence  | a program that is not Zerg — the language's answer | `check.zg` |
+
+`make refuse` and `make reject` are the two gates, one per column.
 
 `make refuse` is the other side of that. Every gate here asks what the toolchain BUILDS,
 and the property a refusal needs is not that a bad program fails — it always did — but WHO

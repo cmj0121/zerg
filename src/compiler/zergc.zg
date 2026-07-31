@@ -154,6 +154,9 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 		# separate compilation: the unit DECLARES the whole program but DEFINES only this
 		# module, so its object can be linked beside the objects of the modules it imports.
 		units := load_units(files[0])
+		mut lex: list[zerg.Diag] = []
+		lex_diags_of(unit_srcs(units), unit_paths(units), lex)
+		report_diags(lex, unit_srcs(units), unit_paths(units))
 		mut trees: list[zerg.File] = []
 		for u in units {
 			trees.append(zerg.merge_files_at(u.srcs, u.paths))
@@ -167,6 +170,8 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	mut paths: list[str] = []
 	srcs := load_sources_at(files, paths)
 	mut diags: list[zerg.Diag] = []
+	lex_diags_of(srcs, paths, diags)
+	report_diags(diags, srcs, paths)
 	code := zerg.emit_files_diag(srcs, paths, diags)
 	report_diags(diags, srcs, paths)
 	if emit == "c" {
@@ -181,6 +186,37 @@ fn build_stage(files: list[str], emit: str, out: str, jobs: int) {
 	}
 	io.ewrite(f"zerg: unknown stage {emit} (want tokens, ast, c, lib, or bin)\n")
 	__zrt_exit(2)
+}
+
+# lex_check ends the run when a source has a token the lexer could not read. It is called
+# the moment a file is READ — before its imports are scanned, since scanning them parses,
+# and a parser handed unreadable text can only say something untrue about it. That is what
+# the old answer was: "`b'b` is not an expression this compiler reads", naming the wrong
+# layer, the wrong problem, and a fragment of what the person wrote.
+fn lex_check(src: str, path: str) {
+	mut one_src: list[str] = []
+	mut one_path: list[str] = []
+	one_src.append(src)
+	one_path.append(path)
+	report_diags(zerg.lex_diags(src, path), one_src, one_path)
+}
+
+# lex_diags_of collects the LEXICAL errors of every source, which are reported before
+# anything is parsed: a token the lexer could not read is an error about text, and no later
+# pass can say anything true about it — the one that used to try answered "not an
+# expression", about the wrong layer and a fragment of what was written.
+fn lex_diags_of(srcs: list[str], paths: list[str], mut &diags: list[zerg.Diag]) {
+	mut i := 0
+	for i < srcs.len() {
+		mut path := ""
+		if i < paths.len() {
+			path = paths[i]
+		}
+		for d in zerg.lex_diags(srcs[i], path) {
+			diags.append(d)
+		}
+		i = i + 1
+	}
 }
 
 # unit_srcs / unit_paths flatten a build's units back into the two parallel lists the
@@ -395,6 +431,12 @@ fn diag_source(path: str, srcs: list[str], paths: list[str]) -> str {
 # one module and leave the rest exactly as they were.
 fn link_program(entry: str, output: str, jobs: int) {
 	units := load_units(entry)
+
+	# BEFORE anything is parsed: a token the lexer could not read is an error about text,
+	# and a parser handed the wreckage can only say something untrue about it
+	mut lex: list[zerg.Diag] = []
+	lex_diags_of(unit_srcs(units), unit_paths(units), lex)
+	report_diags(lex, unit_srcs(units), unit_paths(units))
 
 	# Parse each unit ONCE, then build the whole-program view from those trees: emitting N
 	# units used to re-parse the whole program N times, which cost more than the C
@@ -632,7 +674,9 @@ fn load_unit(files: list[str], name: str, from_dir: str, mut &seen: list[str], m
 	mut paths: list[str] = []
 	for f in files {
 		guard {
-			srcs.append(str(io.read_file(f)))
+			src := str(io.read_file(f))
+			lex_check(src, f)
+			srcs.append(src)
 			paths.append(f)
 		}
 	}
@@ -829,6 +873,7 @@ fn load_into(file: str, from_dir: str, mut &seen: list[str], mut &srcs: list[str
 	}
 	seen.append(file)
 	src := str(io.read_file(file))
+	lex_check(src, file)
 	for im in zerg.imports_of(src) {
 		for dep in module_files(im, from_dir) {
 			load_into(dep, from_dir, seen, srcs, paths)

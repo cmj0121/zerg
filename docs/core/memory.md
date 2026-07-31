@@ -85,10 +85,10 @@ Whether two names share storage is decided by one line, drawn between two disjoi
   holder's own copy.
 
   A `list`'s buffer realizes that copy as **copy-on-write** — the copy shares it and the elements are
-  duplicated by whichever holder writes first. That is an **[implementation detail]**, in the sense the
-  slicing section already gives it: no program can tell, because the duplication happens before any write
-  the other holder could see. What it buys is that passing a collection to a function that only reads it,
-  or handing one to a coroutine, costs an increment rather than the whole buffer.
+  duplicated by whichever holder writes first. That is an **implementation detail**: no program can tell,
+  because the duplication happens before any write the other holder could see. What it buys is that passing
+  a collection to a function that only reads it, or handing one to a coroutine, costs an increment rather
+  than the whole buffer.
 
 - A **reference-counted value** — a `str`, a `chan`, a `Ref[T]`, and the **auto-boxed sub-nodes of a
   recursive type** — is **shared**: copying retains the existing cell (refcount++) instead of duplicating

@@ -1631,9 +1631,8 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
 	# message named a symptom two steps from the form that was written.
-	if p_at(p, LParen) {
-		raise "NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`"
-	}
+	raise "NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`" if p_at(p, LParen)
+
 	mut pat := 0
 	mut lit := ENil
 	mut bind := ""

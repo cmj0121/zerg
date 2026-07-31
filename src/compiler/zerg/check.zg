@@ -46,17 +46,7 @@
 # Carrying on is safe because the C built after a finding is thrown away: the driver hands
 # nothing to cc once this list is non-empty. What it buys is every finding in one run.
 fn chk_at(mut &em: Emitter, msg: str) {
-	em.diags.append(f"{chk_place(em)}{msg}")
-}
-
-# chk_place is the `file:line:col: ` prefix, or "" when nothing is known — a source parsed
-# without a path (the import scan, `--emit ast`) still reports, it just cannot say where.
-fn chk_place(mut &em: Emitter) -> str {
-	return "" if em.at_line == 0
-	line := strconv.to_string(em.at_line, 10)
-	col := strconv.to_string(em.at_col, 10)
-	return f"{line}:{col}: " if em.at_path == ""
-	return f"{em.at_path}:{line}:{col}: "
+	em.diags.append(Diag(em.at_path, em.at_line, em.at_col, msg))
 }
 
 # --- mutability ------------------------------------------------------------------

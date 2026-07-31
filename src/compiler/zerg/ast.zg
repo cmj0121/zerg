@@ -288,6 +288,20 @@ struct FnDecl {
 	path: str
 }
 
+# Diag is one finding about an ill-formed program: what is wrong, and where. It is a
+# VALUE rather than an abort because a compiler that dies on the first mistake makes a
+# person find the second one by fixing the first — and because a renderer cannot draw a
+# source line under a message that has already killed the process.
+#
+# `line` and `col` are 1-based and are where the STATEMENT starts; `path` is "" for a
+# source parsed without one, and the renderer then says the line and column alone.
+pub struct Diag {
+	path: str
+	line: int
+	col: int
+	msg: str
+}
+
 # FieldDef is one struct field: its name and declared type.
 struct FieldDef {
 	name: str

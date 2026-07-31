@@ -196,7 +196,7 @@ struct Emitter {
 	# check.zg rules are on this list. Emit's own `NotImplemented` refusals still raise:
 	# they mean this compiler cannot lower the form at all, so there is nothing to carry
 	# on with. The C built after a finding is discarded, never handed to cc.
-	diags: list[str]
+	diags: list[Diag]
 
 	scope_n: int
 	scope_cur: int
@@ -5520,12 +5520,12 @@ pub fn emit_files(srcs: list[str]) -> str {
 
 # emit_files_at is emit_files with the sources' paths, which the diagnostics need.
 pub fn emit_files_at(srcs: list[str], paths: list[str]) -> str {
-	mut diags: list[str] = []
+	mut diags: list[Diag] = []
 	return emit_files_diag(srcs, paths, diags)
 }
 
 # emit_files_diag is emit_files_at that also reports what it found.
-pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[str]) -> str {
+pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]) -> str {
 	return c_emit_file_at(merge_files_at(srcs, paths), diags)
 }
 
@@ -5539,13 +5539,13 @@ pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[str])
 # the whole program again for each of them made a six-module build parse six times, and
 # that, not the C compiler, was where its time went.
 pub fn emit_unit(prog: File, own: File) -> str {
-	mut diags: list[str] = []
+	mut diags: list[Diag] = []
 	return emit_unit_at(prog, own, diags)
 }
 
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
 # C to cc when this list comes back non-empty.
-pub fn emit_unit_at(prog: File, own: File, mut &diags: list[str]) -> str {
+pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
 	return c_emit_unit(prog, own, false, diags)
 }
 
@@ -5580,11 +5580,11 @@ pub fn merge_asts(fs: list[File]) -> File {
 # em.used_rt), then the header is assembled with the runtime include and the shared list
 # vtable added only when the program needs them.
 fn c_emit_file(f: File) -> str {
-	mut diags: list[str] = []
+	mut diags: list[Diag] = []
 	return c_emit_file_at(f, diags)
 }
 
-fn c_emit_file_at(f: File, mut &diags: list[str]) -> str {
+fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 	return c_emit_unit(f, f, true, diags)
 }
 
@@ -5598,7 +5598,7 @@ fn c_emit_file_at(f: File, mut &diags: list[str]) -> str {
 # built out of a program that does not typecheck. It is an out-parameter rather than a
 # second return value because the C is what every caller wants and the findings are what
 # only the driver does.
-fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[str]) -> str {
+fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
 	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [])
 	c_build_sigs(em, f)

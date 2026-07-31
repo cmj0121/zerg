@@ -101,6 +101,32 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 	return idx < em.k_names.len()
 }
 
+# --- a pattern binds what the variant holds ----------------------------------------
+
+# chk_variant_binds raises when a constructor pattern names more values than the variant
+# carries. `Rect(w, h)` against a `Rect(int)` emitted a read of a union member that was
+# never declared, and cc reported it against generated C — the arm and the declaration
+# disagree, and only one of them is on the screen the programmer is looking at.
+fn chk_variant_binds(mut &em: Emitter, ctor: str, n: int) {
+	held := chk_variant_arity(em, ctor)
+	return if n <= held
+	chk_at(em, f"`{ctor}` carries {chk_args(held)} and this pattern binds {strconv.to_string(n, 10)}")
+}
+
+# chk_variant_arity is how many payload values a variant carries. The table holds one row
+# per payload field, so counting the rows that name the variant counts them.
+fn chk_variant_arity(mut &em: Emitter, ctor: str) -> int {
+	mut n := 0
+	mut i := 0
+	for i < em.vf_variant.len() {
+		if em.vf_variant[i] == ctor {
+			n = n + 1
+		}
+		i = i + 1
+	}
+	return n
+}
+
 # --- call shape -------------------------------------------------------------------
 #
 # `add(1)` on a two-parameter function reached cc as "too few arguments to function call",
@@ -116,11 +142,25 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 # `base` is 0 for all three callee shapes: a method's receiver leads the argument list here
 # (the parser put `this` at parameter 0 when it flattened the impl block), so the parameter
 # table lines up with no shift.
-fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr]) {
+#
+# `what` is the statement asking, so the borrow refusal says `spawn` or `defer` rather than
+# describing both. The row is read once and answers both questions about the parameter,
+# which is why the borrow check lives here rather than in a walk of its own.
+fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr], what: str) {
 	chk_call_arity(em, key, 0, args.len())
 	mut i := 0
 	for i < args.len() {
-		chk_argument(em, key, c_param_row(em, key, i), i + 1, args[i])
+		row := c_param_row(em, key, i)
+		chk_argument(em, key, row, i + 1, args[i])
+
+		# A `mut &` may not be CAPTURED. GRAMMAR:314 says a borrow "cannot ESCAPE (be
+		# captured by a spawn or stored past the call)", and both of these statements store
+		# their arguments in an env to be used later — a spawn's may outlive the frame the
+		# reference points into entirely. `spawn` refused this in a pass of its own;
+		# `defer`, which the same sentence covers, reached cc.
+		if row >= 0 and em.pr_ref[row] {
+			chk_at(em, f"a `mut &` argument cannot cross a `{what}`: a borrow may not be captured, and this one would outlive the call it is valid for")
+		}
 		i = i + 1
 	}
 }

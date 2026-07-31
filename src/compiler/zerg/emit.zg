@@ -1730,6 +1730,7 @@ fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
 			}
 		}
 	} else if a.pat == 3 {
+		chk_variant_binds(em, a.ctor, a.binds.len())
 		mut i := 0
 		for i < a.binds.len() {
 			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i), false)
@@ -3743,7 +3744,6 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	em.used_conc = true
 	cal := c_callee_of(em, x, "spawn")
 	args := cal.args
-	c_spawn_no_borrow(em, cal)
 	idx := em.dfn_n
 	em.dfn_n = idx + 1
 	tag := strconv.to_string(idx, 10)
@@ -3821,31 +3821,6 @@ fn c_spawn(mut &em: Emitter, x: Expr, ind: str) -> str {
 	return f"{out}{ind}zrt_spawn(zg_spawn_{tag}, zg_se{tag});\n"
 }
 
-# c_spawn_no_borrow refuses a `mut &` argument crossing a spawn. GRAMMAR says a borrow
-# cannot ESCAPE — be captured by a spawn — and the reason is concrete: a `mut &` lowers to
-# a pointer into the CALLER's frame, and a coroutine outlives the statement that started
-# it, so the frame it points into may be gone before it is written through. Until now this
-# reached cc and died there on a type mismatch, which is a diagnostic about generated C.
-#
-# The test is the callee's `mut &` MARK, never "is this argument a pointer in C" — which is
-# precisely what leaves the legal captures alone. A channel argument is a `zrt_chan*` and a
-# `Ref[T]` is a pointer too, but neither carries the mark, and neither is a borrow of a
-# frame: they are handles onto the heap, which is what makes them safe to send.
-#
-# Only the CALLEE side is checked, which is a departure from the design's two-sided rule.
-# The caller-side half — "this argument names the enclosing function's own `mut &`
-# parameter" — would be a false refusal here: c_ident_val dereferences a `mut &` name on
-# every use, so `spawn f(x)` inside `fn g(mut &x: int)` captures x's VALUE and no pointer
-# escapes. Taking the address is only written `mut &x` at the call site, and that requires a
-# callee declaring `mut &`, which the check below already catches.
-fn c_spawn_no_borrow(mut &em: Emitter, cal: Callee) {
-	mut i := 0
-	for i < cal.args.len() {
-		row := c_param_row(em, cal.key, i)
-		raise "a `mut &` argument cannot cross a `spawn`: a borrow may not escape the frame it points into" if row >= 0 and em.pr_ref[row]
-		i = i + 1
-	}
-}
 
 # c_close lowers `close(ch)` — the one built-in a channel has. It marks the CHANNEL
 # no-longer-sendable. That is a property of the channel and not of a holder, so it moves
@@ -4220,7 +4195,23 @@ struct Callee {
 # lambda here may capture nothing (c_lambda refuses it), so there would be no environment
 # to hand a coroutine even if the shape were accepted.
 fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
-	cal := c_callee_raw(em, x, what)
+	raw := c_callee_raw(em, x, what)
+
+	# The DEFAULTS a call left off are filled in HERE, before anything else sees the
+	# argument list. An ordinary call backfills them in c_args_from; `spawn` and `defer`
+	# render their arguments with a loop of their own, so neither did — `spawn work(5)` on
+	# `fn work(a: int, b: int = 10)` reached cc as "too few arguments to function call"
+	# against a thunk this compiler wrote, while the same call unspawned compiled and
+	# printed 15.
+	#
+	# Filling them in at the callee, rather than in each of the two statements, is what
+	# makes the divergence impossible rather than merely fixed: the env struct, the borrow
+	# refusal and the argument check all read one list, and it is the whole list.
+	#
+	# The default's expression is captured at the `spawn` / `defer` statement like every
+	# other argument, which is the semantics both forms already have — arguments are a
+	# snapshot taken where the statement is written, not where the call runs.
+	cal := Callee(raw.cname, c_with_defaults(em, raw.key, raw.args), raw.key)
 
 	# `spawn` and `defer` resolve a callee and render its arguments with a loop of their
 	# own, so neither has ever passed through c_args_from — the one place every other call
@@ -4228,8 +4219,24 @@ fn c_callee_of(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	# reached cc, which reported "too few arguments" about a thunk this compiler wrote.
 	# They are also the two forms whose bad arguments are hardest to read back from
 	# generated C, since the call the programmer wrote is not the call cc sees.
-	chk_callsite(em, cal.key, cal.args)
+	chk_callsite(em, cal.key, cal.args, what)
 	return cal
+}
+
+# c_with_defaults answers `args` with the default expressions of every parameter the call
+# left off the end appended. A key nothing registered has no parameters to ask about, so
+# an intrinsic or a constructor comes back unchanged.
+fn c_with_defaults(mut &em: Emitter, key: str, args: list[Expr]) -> list[Expr] {
+	mut out: list[Expr] = []
+	for a in args {
+		out.append(a)
+	}
+	mut i := out.len()
+	for c_param_has_def(em, key, i) {
+		out.append(c_param_def(em, key, i))
+		i = i + 1
+	}
+	return out
 }
 
 fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {

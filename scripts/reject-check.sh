@@ -43,6 +43,9 @@
 
 set -u
 
+# shellcheck source=scripts/lib/diag.sh
+. "$(dirname "$0")/lib/diag.sh"
+
 ZERG=${ZERG:-./bin/zerg}
 ZERG0=${ZERG0:-./bin/zerg0}
 
@@ -107,7 +110,7 @@ reject() {
 	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
 	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
 	# the place on an indented `-->` line beneath it.
-	if echo "$out" | grep -qE '^[^ ].*:[0-9]+:[0-9]+: (error|warning):'; then
+	if is_cc_diag "$out"; then
 		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
 		fail=$((fail + 1))
 		return
@@ -116,7 +119,7 @@ reject() {
 	# every rule in check.zg reports through chk_at, which knows the statement's place —
 	# so a case that comes back without one is a rule that lost it, and nothing else here
 	# would notice: the sentence would still match.
-	if ! echo "$out" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'; then
+	if ! has_place "$out"; then
 		echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
 		fail=$((fail + 1))
 		return

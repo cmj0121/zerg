@@ -72,7 +72,7 @@ behavioral default；結構這一層是封閉的。
 ## 可 derive 的 spec 清單
 
 這組受祝福的 spec——每個都有一份 compiler 擁有的 canonical 結構解讀。每一個都經由 `derive` **opt-in**;
-**沒有自動 derive 的相等**、也沒有隱式的 `Object`。只有 **`Eq`** 與 **`Ord`** 是 **[implemented]**;**`Hash`**、
+**沒有自動 derive 的相等**、也沒有隱式的 `Object`。**`Eq`** 與 **`Ord`** 皆為 **[not yet]**;**`Hash`**、
 **`Encode`**、**`Decode`** 在此規範、但 **[not yet: Phase 2]**——今天在 `#[derive(…)]` 裡指名其一是一個乾淨的
 編譯錯誤。
 

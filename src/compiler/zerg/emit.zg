@@ -2023,14 +2023,17 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	}
 
 	# enum equality compares the tag (the subset only == tag-only enums like Kind)
-	eq := oper == "==" or oper == "!="
-	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and eq
+	# `==` and `<` ask the same question of an aggregate: C has no answer for either, and
+	# the impl that would (`Eq`, `Ord`) is what `#[derive]` stands for and this compiler does
+	# not generate. Guarding only equality left `<` to reach cc.
+	eq := c_is_cmp_op(oper)
+	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=")
 
 	# EVERY OTHER AGGREGATE. C has no `==` for a struct, a list, a map or a tuple, so the
 	# operator used to reach cc as `invalid operands to binary expression` against generated
 	# code — including on a `#[derive(Eq)]` struct, whose decorator this compiler reads and
 	# drops because it generates no impls. What is missing is named where it is missed.
-	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the `Eq` impl `#[derive(Eq)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
+	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the impl `#[derive(Eq)]` / `#[derive(Ord)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
 
 	return f"({c_expr(em, a, sb)} {c_binop(oper)} {c_expr(em, b, sb)})"
 }
@@ -2055,6 +2058,11 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 # c_is_aggregate reports the types C cannot compare with `==`: a declared struct, and the
 # runtime containers. An enum is not one — its tag is compared above — and neither is a
 # carrier, whose `==` is refused by the null-safety rules before it reaches here.
+# c_is_cmp_op is the operators whose meaning on an aggregate comes from a derived impl.
+fn c_is_cmp_op(oper: str) -> bool {
+	return oper == "==" or oper == "!=" or oper == "<" or oper == ">" or oper == "<=" or oper == ">="
+}
+
 fn c_is_aggregate(mut &em: Emitter, t: Ty) -> bool {
 	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t)
 }
@@ -2085,6 +2093,7 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 # display leaves are already in the runtime header for the seed's f-strings.
 fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	inner := c_expr(em, x, sb)
+	xt0 := c_infer(em, x)
 	if c_is_str(ty) {
 		em.used_str = true
 		em.used_rt = true
@@ -2092,7 +2101,8 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 		return inner if c_is_str(c_infer(em, x))
 		return f"zgs_from_bytes({inner})" if c_is_list(c_infer(em, x))
 
-		return c_display(c_infer(em, x), inner)
+		c_display_check(em, xt0)
+		return c_display(xt0, inner)
 	}
 	if c_is_list(ty) {
 		em.used_str = true
@@ -2125,6 +2135,13 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
 # through the unsigned one, and anything whose type did not survive inference falls to the
 # integer one — where the C cast is what reports it, rather than this pass guessing.
+# c_display is the runtime leaf that renders one SCALAR. A composite has no rendering here
+# — the structural one is `Display`'s job and there is no derive for it — so it is named
+# rather than cast, which is what reached cc as "operand of type 'zg_P'".
+fn c_display_check(mut &em: Emitter, t: Ty) {
+	raise f"NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
+}
+
 fn c_display(t: Ty, inner: str) -> str {
 	return match t {
 		TBool  => f"zrt_display_bool({inner})"
@@ -2263,6 +2280,7 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 # and rvalue paths spell a method exactly the same way.
 fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	return f"((int64_t)zrt_list_len(&({tgt})))" if meth == "len"
+	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if meth != "append"
 	if meth == "append" {
 		# the element is copied INTO the list, so the list owns it and the caller's name
 		# for it goes on being its own
@@ -3031,6 +3049,8 @@ fn c_map_method_ret(meth: str) -> Ty {
 
 fn c_list_method_ret(meth: str) -> Ty {
 	return TInt if meth == "len"
+	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if meth != "append"
+
 	return TNil
 }
 
@@ -4518,6 +4538,11 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# is reached with `m[k]`. It used to fall through to the list path below, which handed
 	# cc a `zrt_map` where a `zrt_list` was declared.
 	return c_formap(em, var, iter, ct, body, ind) if c_is_map(ct)
+
+	# `for c in s` walks a str's CODE POINTS, which needs the UTF-8 decode this compiler
+	# does not have. It used to fall through to the list path, handing cc a `const char*`
+	# where a `zrt_list` was declared.
+	raise "NotImplemented: `for c in <str>` binds each code point, which needs the UTF-8 decode this compiler does not have — walk `list[byte](s)` for the bytes" if c_is_str(ct)
 
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)

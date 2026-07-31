@@ -27,21 +27,21 @@ declaration is **FFI-safe** when every type it mentions is FFI-safe; the FFI-saf
 primitives, `list[T]` over an FFI-safe `T`, opaque foreign handles, a non-capturing top-level `fn`, and
 any **non-recursive** `struct`/`enum` built transitively from those.
 
-| Zerg                           | C representation                    | Notes                                             |
-| ------------------------------ | ----------------------------------- | ------------------------------------------------- |
-| `bool`                         | `bool` (`<stdbool.h>`)              |                                                   |
-| `byte`                         | `uint8_t`                           | Zerg's char / a raw octet                         |
-| `rune`                         | `int32_t`                           | a Unicode **code point** (a scalar, not UTF-8)    |
-| `int`                          | `int64_t`                           | overflow still aborts inside Zerg (see Errors)    |
-| `uint`                         | `uint64_t`                          | unsigned; overflow still aborts inside Zerg       |
-| `float`                        | `double`                            | pure IEEE-754, unchanged                          |
-| `str`                          | `const char*`                       | NUL-terminated UTF-8; copied in / borrowed out    |
-| `list[T]` (FFI-safe `T`)       | `T*` **+** `size_t` length          | a fat value (pointer + length); copied in         |
-| non-capturing top-level `fn`   | C function pointer                  | a `mut &` parameter lowers to a pointer parameter |
-| `struct` (all fields FFI-safe) | C `struct`, by value                | field-for-field; a `list`/`str` field is fat      |
-| `enum` (FFI-safe payloads)     | tagged union `{ tag; union {…}; }`  | discriminant + payload (layout deferred, below)   |
-| `T?`                           | tagged union — **except** see below | pointer-shaped `T` → a nullable pointer           |
-| opaque handle                  | opaque `typedef` (pointer-shaped)   | a foreign resource — never dereferenced by Zerg   |
+| Zerg                           | C representation                  | Notes                                          |
+| ------------------------------ | --------------------------------- | ---------------------------------------------- |
+| `bool`                         | `bool` (`<stdbool.h>`)            |                                                |
+| `byte`                         | `uint8_t`                         | Zerg's char / a raw octet                      |
+| `rune`                         | `int32_t`                         | a Unicode **code point** (a scalar, not UTF-8) |
+| `int`                          | `int64_t`                         | overflow still aborts inside Zerg (see Errors) |
+| `uint`                         | `uint64_t`                        | unsigned; overflow still aborts inside Zerg    |
+| `float`                        | `double`                          | pure IEEE-754, unchanged                       |
+| `str`                          | `const char*`                     | NUL-terminated UTF-8; copied in / borrowed out |
+| `list[T]` (FFI-safe `T`)       | `T*` **+** `size_t` length        | a fat value (pointer + length); copied in      |
+| non-capturing top-level `fn`   | C function pointer                | a `mut &` parameter lowers to a pointer        |
+| `struct` (all fields FFI-safe) | C `struct`, by value              | field-for-field; a `list`/`str` field is fat   |
+| `enum` (FFI-safe payloads)     | tagged union `{ tag; union … }`   | discriminant + payload (layout deferred below) |
+| `T?`                           | tagged union — except see below   | pointer-shaped `T` → a nullable pointer        |
+| opaque handle                  | opaque `typedef` (pointer-shaped) | a foreign resource, never dereferenced by Zerg |
 
 A **`T?` whose `T` is pointer-shaped** (an opaque handle, or a `fn`) does **not** grow a tag: `nil` is
 the **null pointer** and the value is the bare pointer. Only a `T?` over a non-pointer `T` (e.g. `int?`)

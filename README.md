@@ -16,20 +16,20 @@ binary. Programs are fast to write, easy to read, and overwhelmingly straightfor
 
 ## Design Principles
 
-| Principle        | Description                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| small and crisp  | minimal syntax                                                                                        |
-| safe by default  | immutable and private unless explicitly `mut` / `pub`                                                 |
-| null-safe        | optionals instead of null; no billion-dollar mistake                                                  |
-| concurrent       | built-in coroutines and channels (a cooperative, non-preemptive **M:N** scheduler in this phase)      |
-| procedural-first | straightforward, top-down control flow                                                                |
-| scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are                       |
-|                  | reference-counted                                                                                     |
-| strongly typed   | catch errors at compile time                                                                          |
-| explicit casts   | no implicit conversion by default; a value converts by re-construction (`T(x)`)                       |
-| copy-by-value    | value types are copied on assignment; a reference-counted value is shared                             |
-| zero-dependency  | like Go — no third-party library. The **runtime** (fixed by spec + its C impl) is the only floor      |
-|                  | reaching the OS; the **stdlib** is pure Zerg over it, an implementation detail bound by its interface |
+| Principle        | Description                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------ |
+| small and crisp  | minimal syntax                                                                                   |
+| safe by default  | immutable and private unless explicitly `mut` / `pub`                                            |
+| null-safe        | optionals instead of null; no billion-dollar mistake                                             |
+| concurrent       | built-in coroutines and channels (a cooperative, non-preemptive **M:N** scheduler in this phase) |
+| procedural-first | straightforward, top-down control flow                                                           |
+| scope-owned      | no tracing GC — values are freed at scope exit; recursive types and strings are                  |
+|                  | reference-counted                                                                                |
+| strongly typed   | catch errors at compile time                                                                     |
+| explicit casts   | no implicit conversion by default; a value converts by re-construction (`T(x)`)                  |
+| copy-by-value    | value types are copied on assignment; a reference-counted value is shared                        |
+| zero-dependency  | like Go — no third-party library. The **runtime** (fixed by spec + its C impl) is the floor      |
+|                  | reaching the OS; the **stdlib** is pure Zerg over it, bound only by its interface                |
 
 Full semantics — primitive & user types, conversions, the memory model, concurrency, and null-safety —
 are in the **[Language Specification](docs/language.md)**, with companion chapters for
@@ -171,57 +171,42 @@ leaves and `math.sqrt` is a Zerg algorithm, never a libc / libm binding. See
 
 ## Status & Limitations
 
-Zerg is a Phase-1 MVP, and there are now **two** compilers, which is what any status claim
-has to be read against:
+Zerg is a Phase-1 MVP. The compiler that ships is **`zerg`**, written in Zerg and compiled
+by itself; **`zerg0`** is a Go-hosted seed whose only job is building it. Every status claim
+below — and every marker in the specification — is about **`zerg`**, the one a `make` build
+puts in `bin/`. The seed's narrower subset is its own contract, in
+[`src/bootstrap/README.md`](src/bootstrap/README.md), and a reader writing Zerg never meets it.
 
-- **`zerg`** — the compiler written in Zerg, the one that ships. It compiles itself, and
-  the language it accepts is the smaller of the two: structs, enums (payload, recursive, and
-  with observable discriminants), `match` with exhaustiveness, `list[T]`, strings and bytes,
-  `mut &` parameters, optionals, the whole value tier (`Either[X, Y]` / `Result[T]` /
-  `Left` / `Right`), `guard` / `raise`, and modules. It does **not** yet have generics,
-  `spec` / `impl`, or `derive`.
-- **`zerg0`** — the Go-hosted seed, whose only job is building `zerg`. It supports the
-  `Zerg-boot` subset, written down as a grammar in
-  [`src/bootstrap/README.md`](src/bootstrap/README.md), and rejects everything else
-  loudly rather than miscompiling it.
+**The contract.** A form is either lowered correctly or refused **by name** at compile time.
+It is never a crash, never a silently wrong answer, and never an error reported by the C
+compiler or the linker against generated code nobody wrote. Where the specification marks a
+feature **[not yet]**, using it raises `NotImplemented` and stops.
 
-The specification below describes the whole intended language and marks each feature's
-status. Those markers describe the LANGUAGE as designed, not either compiler's current
-reach — the two lists above are the reach.
+**What is built.** Structs and enums (payload, recursive, and with observable
+discriminants), `match` with exhaustiveness checking, `list[T]` and `map[K, V]`, strings and
+bytes, `mut &` parameters, optionals with `?` / `??` / `?.` / `!`, the whole value tier
+(`Either[X, Y]` / `Result[T]` / `Left` / `Right`), `guard` / `raise` with cause chaining,
+`defer` and `del`, ranges, f-strings, inherent `impl` and `spec` / `impl Spec for T`,
+modules with `pub` and `init()`, and the whole concurrency chapter — `spawn`, `chan[T]`,
+directional ends, `close`, `select` and `for select` with the non-blocking `_` arm, and
+`time.after` / `time.ticker`.
 
-**Implemented in the seed (and so buildable today).** Value & reference types, structs,
-enums with payloads, generics + monomorphization, `spec` / `impl` with provided methods,
-`derive(Eq, Ord)`, pattern matching, optionals with `?` / `??` / `!` / `guard`, a fixed
-built-in error taxonomy, recursive types (auto-boxed, reference-counted), tuples, `defer`,
-ranges, f-strings, and modules with `pub` visibility and `init()`.
+**Not yet (each refused by name).** Generics and generic type aliases; `derive`, and with it
+`==` / `<` on a composite; `spec` provided methods; closures that capture; `set[T]`; fixed
+arrays `[T; N]`; slicing; `list` / `map` equality; tuple, struct and list patterns, and
+or-patterns; a block as a `match` arm body; f-string conversions (`!r` / `!s` / `!a`), format
+specs and `{x=}`; structural rendering of a composite; `for c in <str>`; `Ref[T]` and the
+`atomic` module; command literals; `unsafe`, raw pointers and inline assembly; the `is`
+type-test for non-error types; the `Reader` / `stdin` I/O surface; and the `zerg test` runner.
 
-**Removed from the toolchain** (designed, specified, and not currently built by either
-compiler): closures and function values, `map[K, V]`, `#[dyn]` dynamic dispatch, raw
-pointers and inline assembly under `unsafe`, and the `zerg test` runner. The seed rejects
-each with a diagnostic and a nonzero exit.
-
-**Concurrency is back, and the two compilers differ.** `zerg` implements the whole chapter
-— `T?` receives, directional channel ends (`<-chan[T]` / `chan[T]<-`), `close(ch)`
-and `defer close(ch)`, scope-exit release, `select` and `for select`, and `time.after` /
-`time.ticker`. The **seed** carries the happy path — `chan[T](cap)`, `ch <- v`, `<-ch`,
-`close(ch)`, `spawn f(args)`, `select`, `for v in ch` — and refuses **six shapes** by name:
-a directional channel type, a `spawn` whose callee is a method, a namespaced function or a
-closure, a `mut &` argument crossing a `spawn`, and a `main(args)` in a concurrent program.
-One gap runs the other way: `zerg` has no block as a `match` arm body, which the seed has.
-
-**Not yet (defined, marked in the spec).** Arithmetic that traps on overflow / division-by-zero and the
-wrapping `+%` operators (today arithmetic lowers to plain C); the full `derive` set beyond `Eq` / `Ord`
-(`Hash` / `Encode` / `Decode`); `set[T]`; `list` / `map` equality; command literals (`` `git status` ``);
-the `is` type-test for non-error types; scheduler **preemption** (the **M:N** scheduler itself is here —
-nothing yet takes a coroutine off its worker until it parks, so a CPU-bound coroutine occupies one worker
-and as many of them as there are workers stop the program); the `Reader` / `stdin` I/O surface; generic type
-aliases; and a handful of smaller forms tracked in the spec's status markers.
-
-**Known deviations (bugs the spec records against current behavior).** A few observable behaviors do not
-yet match the intended semantics — the bootstrap emits `-std=c11` rather than the specified C17-default /
-C99-fallback; left-to-right evaluation order of call arguments and operands is not yet enforced; and
-out-of-range literals for the named integer types are not yet rejected. Each is marked where it appears in
-the spec.
+**Known deviations (bugs the spec records against current behavior).** Arithmetic lowers to
+plain C, so overflow and division-by-zero do not trap and the wrapping `+%` operators are
+the same as `+`; out-of-range literals for the named integer types are not rejected; the
+bootstrap emits `-std=c11` rather than the specified C17-default / C99-fallback;
+left-to-right evaluation order of call arguments and operands is not enforced; and the
+scheduler is **cooperative, not preemptive** — nothing takes a coroutine off its worker
+until it parks, so a CPU-bound coroutine occupies one, and as many of them as there are
+workers stop the program. Each is marked where it appears in the spec.
 
 ## DDD (Dream-Driven Development)
 

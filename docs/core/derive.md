@@ -79,7 +79,7 @@ error). The extensible tier is the behavioral default above; the structural tier
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
 via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. Only **`Eq`** and
-**`Ord`** are **[implemented]**; **`Hash`**, **`Encode`**, and **`Decode`** are specified here but **[not
+**`Ord`**, **`Hash`**, **`Encode`**, and **`Decode`** are all specified here but **[not
 yet: Phase 2]** — naming one in a `#[derive(…)]` is a clean compile error today.
 
 | Spec     | Structural rule                               | Requires (each field) | Excludes                 |

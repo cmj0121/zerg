@@ -20,8 +20,7 @@ Zerg 是一門**編譯式、通用型程式語言**。編譯器會把你的 Zerg
 | null-safe        | 以 optional 取代 null；沒有那個造成十億美元損失的錯誤                                       |
 | concurrent       | 內建 coroutine 與 channel（本階段為 cooperative、非搶佔的 **M:N** 排程）                    |
 | procedural-first | 直白、由上而下的控制流程                                                                    |
-| scope-owned      | 無 tracing GC——值在離開 scope 時釋放；recursive 型別與字串採                                |
-|                  | reference counting                                                                          |
+| scope-owned      | 無 tracing GC——值在離開 scope 時釋放；recursive 型別與字串採 reference counting             |
 | strongly typed   | 在編譯期就抓出錯誤                                                                          |
 | explicit casts   | 預設無隱式轉換；值以 re-construction（`T(x)`）轉換                                          |
 | copy-by-value    | value 型別在指派時複製；reference-counted 的值則共享                                        |
@@ -161,44 +160,34 @@ interface 約束**——所以 `io.read_file` 走的是 runtime 的 syscall leaf
 
 ## 狀態與限制
 
-Zerg 是 Phase-1 MVP，而現在有**兩個**編譯器——任何狀態說法都必須對照它們來讀：
+Zerg 處於 Phase-1 MVP。出貨的編譯器是 **`zerg`**——以 Zerg 寫成、由自己編譯;**`zerg0`** 是 Go 主導的種子,
+唯一的工作是建置它。以下每一項狀態聲明、以及規格裡的每一個標記,講的都是 **`zerg`**,也就是 `make` 之後放進
+`bin/` 的那一個。種子較窄的子集是它自己的契約,記在
+[`src/bootstrap/README.md`](src/bootstrap/README.md),寫 Zerg 的讀者永遠碰不到。
 
-- **`zerg`**——以 Zerg 寫成、實際出貨的那個。它能編譯自己，而它接受的語言是兩者中較小的：struct、enum
-  （payload、遞迴,以及可觀察的 discriminant）、帶窮盡性檢查的 `match`、`list[T]`、字串與 byte、`mut &` 參數、
-  optional、完整的 value tier（`Either[X, Y]` / `Result[T]` / `Left` / `Right`）、`guard` / `raise`,以及模組。
-  它**還沒有**泛型、`spec` / `impl` 或 `derive`。
-- **`zerg0`**——以 Go 實作的種子，唯一職責是建出 `zerg`。它支援 `Zerg-boot` 子集（以文法寫在
-  [`src/bootstrap/README.md`](src/bootstrap/README.md)），其餘一律大聲拒絕，而不是誤編譯。
+**契約。** 一個形式不是被正確降階、就是在編譯期被**指名**拒絕。它絕不崩潰、絕不靜默給錯答案,也絕不由 C
+編譯器或 linker 對著沒人寫過的產生碼報錯。規格標為 **[not yet]** 的特性,使用它會 raise `NotImplemented`
+然後停下。
 
-下面的規格書描述的是**設計中的整個語言**，每項的標記說的是語言本身，不是任一編譯器目前的觸及範圍——上面
-那兩份清單才是。
+**已建置的部分。** struct 與 enum(payload、遞迴,以及可觀察的 discriminant)、帶窮盡性檢查的 `match`、
+`list[T]` 與 `map[K, V]`、字串與 byte、`mut &` 參數、帶 `?` / `??` / `?.` / `!` 的 optional、完整的
+value tier(`Either[X, Y]` / `Result[T]` / `Left` / `Right`)、`guard` / `raise` 與 cause 串接、`defer`
+與 `del`、range、f-string、inherent `impl` 與 `spec` / `impl Spec for T`、帶 `pub` 與 `init()` 的模組,
+以及整章並行——`spawn`、`chan[T]`、有向端點、`close`、`select` 與 `for select`(含非阻塞的 `_` arm),
+還有 `time.after` / `time.ticker`。
 
-**種子已實作（因此今天建得出來）。** value 與 reference 型別、struct、帶 payload 的 enum、generics +
-monomorphization、帶 provided method 的 `spec` / `impl`、`derive(Eq, Ord)`、pattern matching、帶
-`?` / `??` / `!` / `guard` 的 optional、固定的內建 error taxonomy、recursive 型別（auto-boxed、
-reference-counted）、tuple、`defer`、range、f-string，以及帶 `pub` 可見性與 `init()` 的 module。
+**尚未實作(每一項都被指名拒絕)。** 泛型與 generic type alias;`derive`,以及隨之而來的複合值 `==` / `<`;
+`spec` 的 provided method;會捕獲的 closure;`set[T]`;定長陣列 `[T; N]`;slicing;`list` / `map` 的相等
+比較;tuple、struct 與 list pattern,以及 or-pattern;block 當 `match` arm body;f-string 的轉換
+(`!r` / `!s` / `!a`)、format spec 與 `{x=}`;複合值的結構化渲染;`for c in <str>`;`Ref[T]` 與 `atomic`
+模組;command literal;`unsafe`、裸指標與內嵌組語;非錯誤型別的 `is` 測試;`Reader` / `stdin` I/O 介面;
+以及 `zerg test` runner。
 
-**已從工具鏈移除**（已設計、已寫入規格，但目前兩個編譯器都不支援）：closure 與函式值、`map[K, V]`、
-`#[dyn]` 動態分派、`unsafe` 下的 raw pointer 與 inline assembly，以及 `zerg test` 執行器。種子對每一項都以
-診斷訊息與非零 exit 拒絕。
-
-**並行回來了，而且兩個編譯器並不相同。** `zerg` 實作了整章——回傳 `T?` 的 receive、directional channel 端
-（`<-chan[T]` / `chan[T]<-`）、`close(ch)` 與 `defer close(ch)`、scope 離開時歸還、`select` 與 `for select`，以及
-`time.after` / `time.ticker`。**種子**帶的是 happy path——`chan[T](cap)`、`ch <- v`、`<-ch`、`close(ch)`、
-`spawn f(args)`、`select`、`for v in ch`——並**指名拒絕六種形狀**：directional channel 型別、被呼叫者為方法／帶
-命名空間的函式／closure 的 `spawn`、跨越 `spawn` 的 `mut &` 引數，以及並行程式裡的 `main(args)`。有一個缺口方向
-相反：`zerg` 的 `match` arm body 不能是區塊，而種子可以。
-
-**尚未實作（Not yet，規格中已定義並標註）。** 溢位／除零會 trap 的算術與 wrapping 的 `+%` 系列運算子
-（目前算術降成純 C）；`Eq` / `Ord` 以外的完整 `derive` 集（`Hash` / `Encode` / `Decode`）；`set[T]`；
-`list` / `map` 的相等比較；command literal（`` `git status` ``）；非-error 型別的 `is` 測試；排程器的**搶佔**
-（**M:N** 排程器本身已經在了——但還沒有任何東西能在一條 coroutine 自己 park 之前把它從 worker 上拿下來，所以一個
-CPU-bound 的 coroutine 會佔住一條 worker，數量到達 worker 數就讓整個程式停擺）；`Reader` / `stdin` I/O 介面；
-generic type alias；以及規格狀態標記所追蹤的一批較小的形式。
-
-**已知偏差（規格對照目前行為記錄的 bug）。** 有少數可觀察行為尚未符合意圖語意——bootstrap 目前 emit `-std=c11`
-而非規格所定的 C17 預設 / C99 fallback；call 引數與運算元的左到右求值順序尚未強制；以及 named integer 型別的
-超範圍字面量尚未被拒絕。每一項都在規格對應處標註。
+**已知偏差(規格對照目前行為記錄的 bug)。** 算術降階為純 C,所以溢位與除零不會 trap、wrapping 的 `+%`
+系列等同 `+`;named integer 型別的超範圍字面量不會被拒絕;bootstrap 目前 emit `-std=c11` 而非規格所定的
+C17 預設 / C99 fallback;call 引數與運算元的左到右求值順序尚未強制;排程器是**協作式、非搶佔式**——在一條
+coroutine 自己 park 之前沒有東西能把它從 worker 上拿下來,所以一個 CPU-bound 的 coroutine 會佔住一條,
+數量到達 worker 數就讓整個程式停擺。每一項都在規格對應處標註。
 
 ## DDD（Dream-Driven Development）
 

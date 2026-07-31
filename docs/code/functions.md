@@ -7,8 +7,7 @@ named arguments, and closure capture. Part of the [Language Reference](../langua
 A function is a **first-class value**: it has a type, and can be passed as an argument, returned,
 stored in a field, and bound to a variable. This holds **across modules** too — a function named through
 another module is an ordinary value: `f := other.helper` binds it, then `f(x)` calls it, exactly as for a
-local function. Binding a **bare top-level function** as a value, and doing so **across modules**, are both
-**[implemented]**. A **generic** function is **not first-class until instantiated**: the un-instantiated
+local function. A **generic** function is **not first-class until instantiated**: the un-instantiated
 generic name is not itself a value — it becomes one only once its type arguments are fixed at a use site.
 A function type is written `fn(P...) -> R`; a parameter's
 `mut &` is **part of the type**, so `fn(mut &int) -> bool` and `fn(int) -> bool` are distinct types (they

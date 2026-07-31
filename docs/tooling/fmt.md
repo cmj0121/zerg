@@ -505,12 +505,12 @@ exit makes `zerg lint` usable as a gate rather than as decoration.
 
 ### L1xx — dead code
 
-| Code   | Finding                       | Why it is worth a line                                                         |
-| ------ | ----------------------------- | ------------------------------------------------------------------------------ |
-| `L101` | unused import                 | read, parsed and merged in for nothing, and it lies about what this file needs |
-| `L102` | private function never called | a public one is a module's interface; a private one with no caller is dead     |
-| `L103` | binding never read            | the value was computed for nobody                                              |
-| `L104` | `_ := expr`                   | the expression is already a statement, so the binder is what nothing reaches   |
+| Code   | Finding                       | Why it is worth a line                                                     |
+| ------ | ----------------------------- | -------------------------------------------------------------------------- |
+| `L101` | unused import                 | read, parsed and merged in for nothing, and it lies about what is needed   |
+| `L102` | private function never called | a public one is a module's interface; a private one with no caller is dead |
+| `L103` | binding never read            | the value was computed for nobody                                          |
+| `L104` | `_ := expr`                   | the expression is already a statement; the binder is what nothing reaches  |
 
 ```text
 L101 unused import "strconv"
@@ -530,10 +530,10 @@ Nothing here is a compile error: each of these programs runs, and does something
 other than what it says. That is what makes them a linter's business rather than the
 compiler's.
 
-| Code   | Finding                               | Why it is worth a line                                                |
-| ------ | ------------------------------------- | --------------------------------------------------------------------- |
-| `L201` | `?? nil`                              | the fallback IS the absent value, so the `??` changes nothing         |
-| `L202` | `!` in a function that answers a `T?` | `?` hands the absence back; `!` aborts instead, and is easier to type |
+| Code   | Finding                            | Why it is worth a line                                                |
+| ------ | ---------------------------------- | --------------------------------------------------------------------- |
+| `L201` | `?? nil`                           | the fallback IS the absent value, so the `??` changes nothing         |
+| `L202` | `!` in a function answering a `T?` | `?` hands the absence back; `!` aborts instead, and is easier to type |
 
 ```text
 L201 `?? nil` in `keep` changes nothing — the result is optional either way

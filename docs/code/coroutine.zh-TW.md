@@ -11,11 +11,8 @@ join/await；結果與完成**只能靠 channel** 觀察。被呼叫者可以是
 obj.run()`)、或一個**帶命名空間**的函式(`spawn mod.work()`),與 `defer` 一致,後者接受相同的被呼叫者形式
 (`defer f.close()`)。
 
-> **[not yet]** 這條只針對**種子**：它只對**直接的函式呼叫**降階 `spawn`，方法、帶命名空間的函式與 closure 都會
-> 被**指名拒絕**（_the bootstrap seed lowers `spawn` only on a direct function call_），絕不誤譯。出貨的
-> `zerg` 三種規格形式都降階——`spawn f(a)`、`spawn obj.run(a)` 與 `spawn mod.work(a)`；方法的 receiver 就跟其他
-> 引數一樣，以**傳值**的方式被捕獲跨越邊界。**closure 字面量**不在這三種之列，兩個編譯器都指名拒絕它——這個階段的
-> lambda 不能捕獲任何東西，所以就算接受了這個形式，也沒有環境可以交給 coroutine。
+> 一個 **closure literal** 不在那三種 callee 形式之列,會被指名拒絕:這個階段的 lambda 什麼都捕獲不了,
+> 所以就算接受了那個形狀,也沒有環境可以交給一條 coroutine。
 
 - **Fire-and-forget**——runtime 從不追蹤或 join 該 coroutine；要得知結果，它必須把結果送進一條觀察者持有的 channel。
 - **捕獲受限**於 **immutable 值與 `Ref` 值**（channel、`Ref[T]`）——`mut` ref 無法跨越 `spawn`，所以 coroutine 不會
@@ -45,7 +42,7 @@ coroutine 本身永遠不會被某個 scope 回收。（必須是 send、不是 
 
 > **一個 channel 的 `send` happens-before 對應的 `receive` 完成。**
 
-這條 happens-before 邊是 **[implemented]**，兩個編譯器皆然。接收端因此看到的是**完整建構好**的 payload（在 send
+接收端因此看到的是**完整建構好**的 payload（在 send
 當下快照）；
 除此之外沒有任何跨 coroutine 的 ordering 存在、也不需要。這就是 memory model 的全部。任何**超出**這條邊的
 ordering——ready coroutine 被恢復的 run-queue 順序、未同步 coroutine 之間的交錯——都是
@@ -72,7 +69,7 @@ channel 是一條型別化的 by-ref 管道，payload **複製**流過它。它�
 實作者（與 `Ref[T]` 並列；見 [值與記憶體](../core/memory.zh-TW.md)），scope-owning 的例外：在最後一個持有者的 scope 結束時
 free，複製一個值會 bump 它所含 `Ref` 值的 refcount、其餘深拷貝。channel 是 **FIFO** 且為**一等值**：
 可以放進 struct 欄位、當成 enum payload 攜帶——actor 的 ask 就是這樣攜帶它的回覆 channel——也可以
-送進另一條 channel。**[implemented]**，兩個編譯器皆然。
+送進另一條 channel。
 
 ```text
 ch := chan[int]()      # unbuffered——每次 send 與一次 receive rendezvous
@@ -84,7 +81,7 @@ receiver 取走值時才完成，也是 Zerg 唯一的同步原語。
 
 本章的整個 channel 核心——buffered 與 unbuffered 的 block、close 通知 receiver、對已關閉 channel 的 send
 abort、最後 sender 自動 close，以及 payload 在**送出當下深拷貝**、使 receiver 絕不共享 sender 的儲存
-——皆為 **[implemented]**。兩個 channel 錯誤種類都已**具現化且叫得出名字**：對已關閉 channel
+。兩個 channel 錯誤種類都已**具現化且叫得出名字**：對已關閉 channel
 的 send 以 `SendOnClosedError` raise，`DeadlockError` 則是「收尾與 deadlock」所述的乾淨、可攔截 abort，兩者都能用
 一般的 `err is …` 測試（見 [錯誤處理](errors.zh-TW.md)）。
 
@@ -142,15 +139,15 @@ for v in ch { use(v) }                   # 同一種 drain，串流結束處就�
 > 承諾拿得到原因（`conc_crash` 盯的就是這件事）。這個洞在 runtime 的關閉喚醒路徑上，不在語言裡，而且早於「receive
 > 回傳 `T?`」這個改動。
 
-`guard { <-ch }` 是 **[implemented]**：它交回帶著生產者自己 `Err` 的 `Right(err)`，接收端繼續跑。那就是崩潰關閉
+`guard { <-ch }` 交回帶著生產者自己 `Err` 的 `Right(err)`，接收端繼續跑。那就是崩潰關閉
 對一支程式的全部要求——決定一次，這條串流以壞的方式結束是不是你的事——而 `guard` 就是那個決定被寫下來的地方。
 至於施於 receive 的 `?`，它現在只需要任何 `T?` 都需要的東西：缺席就是一個普通的 optional，所以這條註記原本描述的
 「`Result[T]` 活不進簽章」問題，已經不在 channel 這條路上了。
 
 上面那行 `match` 另外帶著一條限制，而且是最容易踩到的一條：arm 裡可以放什麼。
 
-> **[deviation]** 規格讓 `match` arm 的 body 是一個運算式，而區塊**本身就是**運算式，所以 `Left(v) => { … }` 合
-> 文法，種子也接受。出貨的 `zerg` 則**不**：`c_match` 降階成三元運算鏈，容不下一個區塊，於是那條 arm 被拒絕
+> **[not yet]** 規格讓 `match` arm 的 body 是一個運算式，而區塊**本身就是**運算式，所以 `Left(v) => { … }` 合
+> 文法——但 `c_match` 降階成三元運算鏈，容不下一個區塊，於是那條 arm 被拒絕
 > （_a block used as an expression_）——因此像 `print` 這種敘述不能站在那裡。變通做法是把 arm 寫成一次**呼叫**、
 > 讓它的值就是 arm 的值，如下方 actor 範例所示。`select` 的 arm 不受影響，理由值得記清楚：`match` 的 arm 必須
 > **產出**該次 match 的值，而 `select` 不產出值、它的 arm 是**執行**。所以 select arm 的 body 是一個**敘述**
@@ -164,7 +161,7 @@ channel 在其**最後一個 send 能力持有者離場時自己**關閉——re
 - **完全無持有者 ⇒ free**。
 
 **一個持有者在它的 binding scope 離開時離場**，且是**每一條**離開路徑：區塊結尾、`return`、`break` 或 `continue`、
-以及 abort unwind。**[implemented]**
+以及 abort unwind。
 
 這是日常形式，也是崩潰中的 producer **唯一**能走的那條：abort 到不了任何敘述，所以正是 unwind 放掉它的 send 端在
 攜帶原因。因此正常結束與崩潰走**同一條路徑**關閉——**帶原因**：乾淨離場給 `StopIteration`、abort 給崩潰的 `Err`。
@@ -305,7 +302,7 @@ for select {                # 同一種等待，但是 LOOP：一圈跑一條 re
 
 - **timer 就是一條 channel。** `time.after(d)` 回傳一條 receive-only channel，在 `d` 之後**一次**變成可接收
   （`time.ticker(d)` 則重複觸發）；`select` 對它的一個 receive arm 就是 **timeout**。`d` 是以**奈秒**為單位的
-  stdlib duration、clock 是 ambient-OS 的 stdlib 設施（如 `env`），都不是 primitive。**[implemented]**——見
+  stdlib duration、clock 是 ambient-OS 的 stdlib 設施（如 `env`），都不是 primitive。——見
   [標準函式庫](../runtime/stdlib.zh-TW.md)。
 - **cancellation 也是一條 channel。** 給 coroutine 一條 **cancel channel**、讓它在自己的 `select` 裡監看，並用
   **送一個值**來取消。因為 `spawn` 是 fire-and-forget、**無 handle，所以沒有 preemptive kill**——cancellation 是
@@ -350,10 +347,8 @@ fn main() {
 **`ticker` 停不下來**：沒有東西能取消一次 sleep，所以它的 coroutine 會活到程式結束。ticker 該放在程式頂端，不是放
 在迴圈裡。
 
-> **[not yet]** 在**種子**上。`after` 與 `ticker` 回傳的是 **receive-only** channel，而 directional channel 型別正
-> 是種子指名拒絕的形狀之一，所以種子建置出來的程式無法呼叫這兩者——它能碰到的只有 `now` 與 `monotonic` 這兩個 clock
-> 函式。scheduler 那一半在 runtime 裡對兩者都已建置：閒置的 worker 會睡到最近的 deadline 而不是空轉，而一次待決的
-> sleep 絕不會被當成 deadlock。
+排程器那一半在 runtime 兩者都建好了:閒置的 worker 會睡到最近的截止時間而不是空轉,而一次待決的睡眠
+永遠不會被當成 deadlock。
 
 ## 共享狀態——actor pattern
 
@@ -404,8 +399,7 @@ inbox 是個 `Ref` 值，所以**分享 actor 就是分享 inbox**（refcount-bu
 
 對單一共享純量，較低階的替代是用不可變 `:=` 持有一個 stdlib **`Atomic`**（綁定不可變，atomic 內部可變——見
 [Module 與 Program](../runtime/package.zh-TW.md)）。它提供 lock-free 的 `load` / `store` / `swap` /
-`fetch_add` / `compare_swap`。在**種子**上 **[implemented]** 的是僅 **sequential-consistency** ordering 的
-**`Atomic[int]`**；顯式的 **memory-ordering 引數**與泛型 **`Atomic[T]`** 為 **[not yet]**。
+`fetch_add` / `compare_swap`。
 
 > **[not yet]** 在**出貨的 `zerg`** 上，而且原因與 atomic 本身無關：`Atomic[int]` **就是**一個 `Ref[int]`，而
 > `zerg` 沒有 `Ref[T]`。它會指名拒絕整個模組——_no type named `Ref` (field `Atomic.cell`)_——而不是吐出一個沒人
@@ -452,7 +446,7 @@ refcount），其餘一切照常運行。這就是 fire-and-forget，但失敗**
 
 runtime 會把它**報在 `stderr`** 上——就是那個 `Err` 的訊息，如同頂層 abort 也會印出一則——然後該 coroutine 就
 消失，程式繼續跑。這則回報是**純觀察**的：它是 unwind 本來就知道的東西，順路印出來而已，程式行為完全不依賴
-它。**[implemented]**
+它。
 
 > **[not yet]** 這則回報只有訊息，沒有別的。指出它來自**哪個 coroutine**、印出 **backtrace**、以及用一個
 > **compiler flag** 決定要不要印，三者都尚未建置——所以一個有很多 coroutine 的程式拿得到原因，卻沒有對應的

@@ -22,8 +22,8 @@ value, a `<-ch` that received (a `Left`) — and **binds the unwrapped value** a
 only**: `x` is not in scope in the `else`, nor after the `if`. It is the one-arm-`match` sugar for a "value
 present" test (`if v := <-ch { use(v) }` fires only on a `Left`), and works **wherever an `if` does** — as a
 statement, as an expression (with a trailing `else`), and as a returned if-expression (`return if x := opt {
-use(x) } else { fallback }`). The if-let binding form is **[implemented]**, including a non-POD `str?` — the
-unwrapped `str` binds in the then-block only.
+use(x) } else { fallback }`). It carries a non-POD `str?` too — the unwrapped `str` binds in the
+then-block only.
 
 **`for`** — the one loop keyword, three forms: **`for { … }`** infinite (leave via `break` / `return`),
 **`for x in it { … }`** over an `it: Iterable`, binding `x` **by copy** each round (**`for mut x`** binds
@@ -31,14 +31,14 @@ in place, only when `it` is `mut`; the iteration protocol — clean `StopIterati
 re-raised — is [Iteration](../core/specs.md)), and **`for cond { … }`** the **while** form — repeat while `cond`
 (a `bool`) holds. There is **no `while` keyword** (bare `for cond` is the while loop) and **no C-style
 three-clause `for`**. The infinite form, the while form, and `for x in it` over a **range**, a **`list`**, a
-**`map`** (binding each **key**), or a **`str`** (binding each **`rune`**) are all **[implemented]**;
-**`for mut x` over non-POD elements** — a `list[str]`, or elements of a recursive / boxed type — is
-**[not yet]**. Treating a **range as a value** and testing membership with **`v in range`** (`x in 0..n` →
-`bool`) are **[implemented]**.
+**`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`**, which needs a UTF-8
+decode — **[not yet]**; walk `list[byte](s)` for the bytes. **`for mut x`**, the mutable loop binding that
+writes each edited element back to its slot, is **[not yet]**. Testing membership with **`v in range`**
+(`x in 0..n` → `bool`) works; treating a **range as a value** anywhere else is **[not yet]**.
 
 **`break` / `continue`** act on the **nearest `for`**; there are **no labels** (leave an outer loop by
 extracting a function and `return`). The sugar **`break if cond`** / **`continue if cond`** is exactly
-`if cond { break }` / `if cond { continue }`, and both are **[implemented]**:
+`if cond { break }` / `if cond { continue }`. The same postfix `if` carries a `return` and a `raise`:
 
 ```text
 for {
@@ -76,7 +76,7 @@ A **pattern** is one of: a **variant with a payload binding** (`Left(v)`) — bo
 `?`/`return`, the source never invalidated; a **literal** (`0`, `"y"`, `true`, or a negative literal) —
 matched by value; a **nested** pattern (`Left(Some(v))`); or the **wildcard `_`**, matching anything and
 binding nothing. These, together with a **product pattern** (below) and a **range** arm (`1..=2 =>`, which
-matches by containment), are **[implemented]**. An **or-pattern** (`A | B =>`, and the binding form
+matches by containment), all fire. An **or-pattern** (`A | B =>`, and the binding form
 `A(x) | B(x) =>` whose alternatives bind the same names at the same types) and a **list pattern**
 (`[h, ..t]`) are **[not yet]**: `GRAMMAR` derives both, and the list pattern even type-checks.
 
@@ -101,15 +101,16 @@ msg := match ev {
 
 A `match` **pattern** never inspects an existential's real type — a spec used as a type erases the value
 one-way, with no downcast — it destructures variants and compares values, nothing more; the one query it
-allows on an existential is the boolean **`is`** test ([Specs & Generics](../core/specs.md)), used as a **condition**, never
+allows on an existential is the boolean **`is`** test ([Specs & Generics](../core/specs.md)), used as a
+**condition**, never
 as a binding that hands the concrete value back. A **product pattern** destructures
 a `struct` **by field** (`Div{q, r}`) or a tuple **positionally** (`(a, b)`), binding each part by copy;
 it works both in a `match` arm and at a plain `:=` binding (`(q, r) := divmod(x, y)`) — the way a multiple
-return is consumed; the product pattern is **[implemented]**. **Guard conditions** are **[implemented]**: an
+return is consumed. The product pattern is **[not yet]**: destructure with `.0` / `.1` and field access.
+**Guard conditions** work — an
 arm may carry an **`if expr`** after its pattern (`Left(v) if v > 0`) that must also hold for the arm to
 fire; the guard sees the pattern's **bindings**, and on `A | B if c` (once or-patterns land — see above)
 covers the **whole or-pattern**. A guarded arm does **not** count toward exhaustiveness, so a guarded case
 still needs an unguarded arm or `_`. A **range arm** (`200..300 =>`, `400..=499 =>`, `500.. =>`) is a
 match-only sugar for `_ if _ in <range>` — it matches by **range containment** (not value equality), binds
-**nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value); it is
-**[implemented]**.
+**nothing**, and likewise doesn't count toward coverage (write `x if x in <range>` to bind the value).

@@ -918,6 +918,9 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 
 	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR:200). The `{` after a type
 	# name reached the expression parser, which reported a block used as an expression.
+	#
+	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
+	# EXPRESSION, so the names in it came out undefined rather than bound.
 	raise f"NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == LBrace
 	if k == Nop {
 		p_advance(p)
@@ -1625,6 +1628,12 @@ fn parse_match(mut &p: Parser) -> Expr {
 # scrutinee (or is the `_` wildcard); anything else is a literal pattern matched by
 # equality.
 fn parse_arm(mut &p: Parser) -> Arm {
+	# A TUPLE or LIST pattern in arm position — `(a, b) =>`, `[a, ..r] =>`. Both read as an
+	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
+	# message named a symptom two steps from the form that was written.
+	if p_at(p, LParen) {
+		raise "NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`"
+	}
 	mut pat := 0
 	mut lit := ENil
 	mut bind := ""

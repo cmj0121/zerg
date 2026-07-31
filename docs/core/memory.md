@@ -55,7 +55,7 @@ is unspecified.
 > arguments and binary operands** inherit C's unspecified order, so `add(f(1), g(2))` may evaluate `g(2)`
 > before `f(1)`. The **short-circuit** operators — `and`, `or`, `??`, `?.`, and the `?` unwrap — **are**
 > honored left-to-right: the left operand is evaluated first and the right is skipped when the left decides
-> the result **[implemented]**. [Conformance](../conformance.md) lists the call-argument / operand order as an
+> the result. [Conformance](../conformance.md) lists the call-argument / operand order as an
 > implementation-defined point until the intended left-to-right rule is enforced.
 
 **Reference-counted values** are scope-owning's one exception: a value whose type implements **`Ref`** —
@@ -82,11 +82,11 @@ Whether two names share storage is decided by one line, drawn between two disjoi
 - A **value type** — every scalar, a `struct`, a tuple, and the heap containers `list` and `map` — is
   **copied**. A scalar, `struct`, or tuple is copied inline; a `list` or `map` is **deep-copied**, its
   elements copied by this same rule. Two names of a value type therefore **never alias**: writing through
-  one changes only that holder's own copy. **[implemented]**
+  one changes only that holder's own copy.
 - A **reference-counted value** — a `str`, a `chan`, a `Ref[T]`, and the **auto-boxed sub-nodes of a
   recursive type** — is **shared**: copying retains the existing cell (refcount++) instead of duplicating
   it, and the last holder frees it. A mutation reachable **through a shared recursive tail is therefore
-  visible via every holder** of that tail. **[implemented]**
+  visible via every holder** of that tail.
 
 Copying a composite applies the rule field by field — its value-type parts are copied and any
 reference-counted part it contains (transitively) is retained. Because a `str` is immutable and a
@@ -107,11 +107,11 @@ n.next!.value = 99                # reaches the shared tail — m.next!.value re
 ## Drop order
 
 At scope exit, locals drop in **reverse construction order** — last constructed, first freed — so teardown
-mirrors setup **[implemented]**. The order is pinned **inside an aggregate** too: a `struct`'s fields and an
-`enum` payload's slots drop in **reverse declaration order** **[implemented]**. A `defer` runs at block exit
+mirrors setup. The order is pinned **inside an aggregate** too: a `struct`'s fields and an
+`enum` payload's slots drop in **reverse declaration order**. A `defer` runs at block exit
 on **every** path, **including the abort-unwind path**, and several `defer`s in a block run
 **last-scheduled-first (LIFO)**, interleaved with the scope-owned frees and `Ref` drops of that same reverse
-order **[implemented]**.
+order.
 
 ## `Ref[T]` — a resource that outlives its scope
 
@@ -164,15 +164,15 @@ only a _consequence_: it happens when the revoked access was the **owning** one 
 remains; otherwise `del` merely ends this name's (or this borrow's) access early and the owner keeps
 the storage.
 
-| `del` target                          | Own? | Effect                                                                |
-| ------------------------------------- | ---- | --------------------------------------------------------------------- |
-| local, by-value param, captured copy  | yes  | last access → **storage freed**                                       |
-| `mut &` param (borrows caller's var)  | no   | ends this call's borrow → **not freed**; caller keeps it              |
-| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it        |
-| channel, `Ref[T]`                     | ref  | revokes the name and drops a holder (refcount--); last holder `drop`s |
+| `del` target                          | Own? | Effect                                                          |
+| ------------------------------------- | ---- | --------------------------------------------------------------- |
+| local, by-value param, captured copy  | yes  | last access → **storage freed**                                 |
+| `mut &` param (borrows caller's var)  | no   | ends this call's borrow → **not freed**; caller keeps it        |
+| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
+| channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
 > **Status.** `del` of a `Ref` value — a `chan` or a `Ref[T]` — dropping a holder (and running `drop` at
-> the last one) is **[implemented]**. `del` of an **owning** value — a local `struct`, `list`, or `map` —
+> the last one) works. `del` of an **owning** value — a local `struct`, `list`, or `map` —
 > to free its storage **early** is **[not yet]**: today such a `del` revokes the name's access, but the
 > storage is reclaimed at ordinary scope exit rather than at the `del`. The "storage freed" row above is
 > thus the intended behavior, not yet the bootstrap's for owning values.

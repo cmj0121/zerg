@@ -931,6 +931,31 @@ fn main() {
 }
 EOF
 
+# --- a write needs storage all the way down -------------------------------------
+#
+# `chk_root_name` asks what the target is rooted at; these are the STEPS between. Each of
+# them stores into a value C has no address for, and cc said "expression is not assignable"
+# about a statement expression this compiler wrote.
+
+reject store-through-a-map-index 'cannot store through a map index' <<'EOF'
+fn main() {
+	mut d: map[str, list[int]] = {"k": [1, 2]}
+	d["k"][0] = 7
+	print("x")
+}
+EOF
+
+reject store-through-a-call-result 'cannot store through a call result' <<'EOF'
+fn get() -> list[int] {
+	return [1, 2]
+}
+
+fn main() {
+	get()[0] = 99
+	print("x")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

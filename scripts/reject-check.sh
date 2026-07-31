@@ -542,6 +542,73 @@ fn main() {
 }
 EOF
 
+# --- the aggregates ty_name could not tell apart ------------------------------------
+#
+# `chk_fits` compared with `ty_name`, which is the DIAGNOSTIC SPELLING of a type and
+# collapses TUnknown, TTuple and TMap onto one name — so every caller had to restrict
+# itself to the scalars, and a struct bound to the wrong struct went to cc. `ty_eq` is a
+# real comparison over the Ty enum, and these are the shapes it reaches that the spelling
+# could not: two unrelated structs through all three slots, and a nested list whose
+# elements differ two levels down.
+
+reject bind-a-struct-to-another-struct 'cannot bind B to a A binding' <<'EOF'
+struct A {
+	x: int
+}
+
+struct B {
+	y: int
+}
+
+fn main() {
+	a: A = B(1)
+	print(f"{a.x}")
+}
+EOF
+
+reject pass-a-struct-where-another-goes '`take` takes A as argument 1, and this gives B' <<'EOF'
+struct A {
+	x: int
+}
+
+struct B {
+	y: int
+}
+
+fn take(v: A) -> int {
+	return v.x
+}
+
+fn main() {
+	print(f"{take(B(1))}")
+}
+EOF
+
+reject return-a-struct-the-signature-does-not-name 'this function answers A, and this returns B' <<'EOF'
+struct A {
+	x: int
+}
+
+struct B {
+	y: int
+}
+
+fn f() -> A {
+	return B(1)
+}
+
+fn main() {
+	print(f"{f().x}")
+}
+EOF
+
+reject bind-a-nested-list-of-the-wrong-element 'cannot bind list[list[int]] to a list[list[str]] binding' <<'EOF'
+fn main() {
+	xs: list[list[str]] = [[1]]
+	print(f"{xs.len()}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

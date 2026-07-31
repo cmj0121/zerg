@@ -147,30 +147,27 @@ void zrt_list_push(zrt_list *l, const void *elem) {
 	l->len++;
 }
 
-void *zrt_list_at(zrt_list *l, size_t i) {
+void *zrt_list_at_ref(zrt_list *l, size_t i) {
 	if (i >= l->len) {
 		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: index out of range");
 	}
 	return l->data + i * l->elemsz;
 }
 
-void *zrt_list_at_mut(zrt_list *l, size_t i) {
+void *zrt_list_at(zrt_list *l, size_t i) {
 	/* the bound is checked BEFORE unsharing: `xs[9] = 1` on a two-element list is an
 	 * IndexError, and duplicating a shared buffer on the way to reporting it would be
 	 * work done for a program that is about to abort */
-	if (i >= l->len) {
-		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: index out of range");
+	void *slot = zrt_list_at_ref(l, i);
+	if (l->data == NULL || zrt_atomic_load(&buf_hdr(l)->rc) == 1) {
+		return slot;
 	}
 	zrt_list_unshare(l);
 	return l->data + i * l->elemsz;
 }
 
 void zrt_list_set(zrt_list *l, size_t i, const void *elem) {
-	if (i >= l->len) {
-		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: index out of range");
-	}
-	zrt_list_unshare(l);
-	uint8_t *slot = l->data + i * l->elemsz;
+	uint8_t *slot = (uint8_t *)zrt_list_at(l, i);
 	if (l->vt != NULL && l->vt->drop != NULL) {
 		l->vt->drop(slot);
 	}
@@ -186,6 +183,34 @@ void *zrt_list_get(zrt_list *l, size_t i) {
 		return NULL;
 	}
 	return l->data + i * l->elemsz;
+}
+
+/* zrt_list_slice builds a fresh list of src's elements [lo, hi), duplicating each one the
+ * way a copy does — vt->copy, or a memcpy for a POD element.
+ *
+ * The emitter used to open-code this loop and push raw SLOTS, which is a memcpy whatever
+ * the element type: `a[0..2]` on a `list[list[int]]` gave the slice inner headers naming
+ * a's buffers, with no reference taken, so `b[0][0] = 99` was read back through `a`. The
+ * loop belongs here, beside zrt_list_unshare, which is the same walk.
+ *
+ * A range outside the list is an IndexError, the same answer `xs[i]` gives. */
+void zrt_list_slice(zrt_list *dst, const zrt_list *src, size_t lo, size_t hi) {
+	if (hi > src->len || lo > hi) {
+		zrt_abort_kind(ZRT_ERR_INDEX, "IndexError: slice out of range");
+	}
+	zrt_list_init(dst, src->elemsz, src->vt);
+	for (size_t i = lo; i < hi; i++) {
+		const uint8_t *slot = src->data + i * src->elemsz;
+		if (src->vt == NULL || src->vt->copy == NULL) {
+			zrt_list_push(dst, slot);
+			continue;
+		}
+		if (dst->len == dst->cap) {
+			zrt_list_grow(dst, dst->len + 1);
+		}
+		src->vt->copy(dst->data + dst->len * dst->elemsz, slot);
+		dst->len++;
+	}
 }
 
 void zrt_list_copy(zrt_list *dst, const zrt_list *src) {

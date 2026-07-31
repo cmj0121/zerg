@@ -25,6 +25,9 @@
 
 set -u
 
+# shellcheck source=scripts/lib/diag.sh
+. "$(dirname "$0")/lib/diag.sh"
+
 ZERG=${ZERG:-./bin/zerg}
 CORPUS=${CORPUS:-test-data/codegen}
 
@@ -36,8 +39,10 @@ fail=0
 skip=0
 noplace=0
 
-# mutate <file> <kind> writes the mutated program to stdout, or nothing when the mutation
-# does not apply to this source.
+# how many refusals may still carry no place: every one of them is from the parser or the
+# emitter, which do not report through chk_at yet. Lower it, never raise it.
+NOPLACE_MAX=${NOPLACE_MAX:-37}
+
 # mutate writes the mutated program to stdout, or exits non-zero when the mutation does not
 # apply to this source. It is awk rather than sed because the patterns need the indentation
 # and the optional `mut` in the same expression, and every attempt to write that as nested
@@ -67,7 +72,7 @@ for src in "$CORPUS"/*.zg; do
 			continue
 		fi
 
-		if echo "$out" | grep -qE '^[^ ].*:[0-9]+:[0-9]+: (error|warning):'; then
+		if is_cc_diag "$out"; then
 			echo "VIA CC    $name/$kind — cc reported it, not the compiler"
 			echo "$out" | head -3
 			fail=$((fail + 1))
@@ -78,7 +83,7 @@ for src in "$CORPUS"/*.zg; do
 		# gate that fails on a known gap is not a gate, and a gate that says nothing about
 		# it lets the gap grow. The count is the thing to watch: when it reaches zero this
 		# becomes an assertion.
-		if ! echo "$out" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'; then
+		if ! has_place "$out"; then
 			noplace=$((noplace + 1))
 			continue
 		fi
@@ -92,3 +97,11 @@ if [ $fail -ne 0 ]; then
 fi
 echo "reject-fuzz: $pass+$noplace mutated programs refused by the compiler, none left to cc"
 echo "reject-fuzz: $noplace of them said no place ($skip mutations did not apply)"
+
+# A RATCHET, in the shape CORPUS_PASS uses. A count that is only printed drifts: 37 becomes
+# 60 and the gate still says OK. This can only go down, and the day it reaches zero the
+# report above becomes an assertion.
+if [ "$noplace" -gt "$NOPLACE_MAX" ]; then
+	echo "reject-fuzz: $noplace refusals say no place, and the ceiling is $NOPLACE_MAX"
+	exit 1
+fi

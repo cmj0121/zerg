@@ -18,7 +18,10 @@ mirroring `defer`, which takes the same callee forms (`defer f.close()`).
 
 - **Arguments are a snapshot** — taken where the `spawn` is **written**, not where the call runs. A
   `mut` binding written afterwards is not seen by the coroutine, which may not have started; a `list`,
-  `map` or `struct` is deep-copied at that point. A **channel** is the contrast and the point: it is a
+  `map` or `struct` becomes the coroutine's **own value** at that point. (For a `list` that is realized as
+  copy-on-write, so the capture costs an increment and the buffer is duplicated by whichever side writes
+  first — an [implementation detail], not a weaker guarantee: see [Values & Memory](../core/memory.md).)
+  A **channel** is the contrast and the point: it is a
   **handle**, so the coroutine gets its own handle to the same channel and everything sent afterwards
   **is** seen. `defer` captures the same way, at the `defer`. **Values are snapshotted, handles are
   shared** — `zerg lint` says so as `L301`.

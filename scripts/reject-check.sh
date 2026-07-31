@@ -686,14 +686,14 @@ EOF
 # every other call is measured — and they are the two forms whose bad arguments are
 # hardest to read back from generated C, since the call cc sees is a thunk.
 
-reject compare-an-optional-with-nil 'an optional is not compared with `==`' <<'EOF'
+reject compare-an-optional-with-nil 'an optional is not an operand of `==`' <<'EOF'
 fn main() {
 	x: int? = nil
 	print(f"{x == nil}")
 }
 EOF
 
-reject compare-an-optional-with-a-value 'an optional is not compared with `==`' <<'EOF'
+reject compare-an-optional-with-a-value 'an optional is not an operand of `==`' <<'EOF'
 fn main() {
 	x: int? = 1
 	print(f"{x == 1}")
@@ -718,6 +718,61 @@ fn note(s: str) {
 fn main() {
 	defer note(1)
 	print("body")
+}
+EOF
+
+# --- an optional is nobody's operand -----------------------------------------------
+#
+# The first version of this rule went under the EQUALITY branch and closed one operator
+# family of five: a carrier is not a scalar, so every other family's own test answered
+# "not my business" and `x > 0`, `x + 1`, `x & 1` and `x and true` all still reached cc.
+# And a match arm builds its comparison as TEXT, so `nil =>` and `1..=2 =>` are two more
+# spellings that meet no rule of their own unless one is hung there.
+
+reject order-an-optional 'an optional is not an operand of `>`' <<'EOF'
+fn main() {
+	x: int? = 1
+	print(f"{x > 0}")
+}
+EOF
+
+reject add-to-an-optional 'an optional is not an operand of `+`' <<'EOF'
+fn main() {
+	x: int? = 1
+	print(f"{x + 1}")
+}
+EOF
+
+reject and-an-optional 'an optional is not an operand of `and`' <<'EOF'
+fn main() {
+	x: bool? = true
+	print(f"{x and true}")
+}
+EOF
+
+reject match-an-optional-against-nil 'an optional is not an operand of `==`' <<'EOF'
+fn f(x: int?) -> int {
+	return match x {
+		nil => 0
+		_   => 1
+	}
+}
+
+fn main() {
+	print(f"{f(nil)}")
+}
+EOF
+
+reject match-an-optional-against-a-range 'an optional is not an operand of `>=`' <<'EOF'
+fn f(x: int?) -> int {
+	return match x {
+		1..=2 => 10
+		_     => 0
+	}
+}
+
+fn main() {
+	print(f"{f(nil)}")
 }
 EOF
 

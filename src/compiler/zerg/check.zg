@@ -216,6 +216,16 @@ fn chk_callsite(mut &em: Emitter, key: str, args: list[Expr], what: str) {
 	}
 }
 
+# chk_ref_arg raises when a `mut &` argument is not a PLACE. A borrow is the caller's own
+# storage handed over to be written, and `m["k"]` is a value however much it reads as one:
+# it lowers to a statement expression, so `&` on it reached cc as "cannot take the address
+# of an rvalue". The same sentence the mutating-method path uses, for the same reason —
+# writing to a copy is not writing.
+fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
+	return if c_is_place(em, a)
+	chk_at(em, f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+}
+
 # chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for
 # a method, whose receiver already fills parameter 0, and 0 for a free call.
 fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {

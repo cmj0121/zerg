@@ -634,6 +634,14 @@ fn ty_name(t: Ty) -> str {
 # they live here — beside the spelling — because both the parser and the emitter ask them.
 # The parser needs them to read the directional forms and the emitter needs them on nearly
 # every lowering path; a type is a type, and one pair is what keeps the two from drifting.
+# ty_tuple_elems is a tuple's element types, or an empty list for anything else.
+fn ty_tuple_elems(t: Ty) -> list[Ty] {
+	return match t {
+		TTuple(es) => es
+		_          => []
+	}
+}
+
 fn ty_is_chan(t: Ty) -> bool {
 	return match t {
 		TChan(_, _) => true

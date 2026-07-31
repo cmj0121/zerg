@@ -126,6 +126,13 @@ jobs:
       - name: Every program that is not Zerg, is rejected
         run: make reject
 
+      # --- 7c. and the ones nobody wrote by hand ---------------------------------
+      # The reject list holds the mistakes somebody thought of. This breaks the corpus's
+      # working programs and holds the results to the same contract, which is how an enum
+      # payload whose type was not a type name was found.
+      - name: Break the working programs and hold the contract
+        run: make reject-fuzz
+
       # --- 8. the corpus the self-hosting compiler owns --------------------------
       # `test-data` is a PRIVATE repository, so the anonymous HTTPS rewrite below cannot
       # reach it and the fetch fails. Under `continue-on-error` that failure was reported

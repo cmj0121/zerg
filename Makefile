@@ -30,7 +30,7 @@ CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_ch
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject docs-links lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject reject-fuzz linux-ci docs-links lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -108,6 +108,7 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
 	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
+	./scripts/fmt-tokens.sh
 
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
@@ -148,9 +149,16 @@ fixpoint:                       # prove the compiler still emits the same C for 
 # correctly and leaves the damage behind. Deliberate rather than in `test`, again: it
 # rebuilds every case against the sanitizers, and on Linux it is the only leak gate the
 # concurrency path has (LeakSanitizer does not exist on macOS).
+# REPS is how many SCHEDULES each case is run under, and 10 was not enough to be a gate.
+# Three runtime bugs were found the day it went to 150: a crash flag held per worker
+# instead of per coroutine, an unwind bundle initialised field by field, and a crash Err
+# that only travelled when the dying sender happened to be the last handle — that last one
+# failed about one run in twenty and had sailed through every CI run before.
+SANITIZE_REPS ?= 60
+
 sanitize-conc:                  # run the concurrency corpus under address/UB/leak sanitizers
 	$(MAKE) build
-	./scripts/sanitize-conc.sh
+	REPS=$(SANITIZE_REPS) ./scripts/sanitize-conc.sh
 
 # Every other gate here asks what the toolchain BUILDS. This one asks what it turns away,
 # and the property it pins is not that a bad program fails — it always did — but WHO says
@@ -173,6 +181,31 @@ refuse:                         # every program that must be turned away, is —
 reject:                         # every program that is not Zerg is rejected — by the compiler
 	$(MAKE) build
 	./scripts/reject-check.sh
+
+# Two Linux-only defects reached main this month — a preprocessor `#if` no GCC before 14
+# can parse, and a `MAP_ANONYMOUS` glibc hides under `-std=c11` — and neither was visible
+# from macOS. The docker flow that found them was driven by hand every time; this is it,
+# written down. It is not part of any other target: it needs docker, and a developer
+# without it should still be able to run everything else.
+linux-ci:                       # run the Linux gates in a container, as CI does
+	@docker info >/dev/null 2>&1 || { echo "linux-ci: docker is not running"; exit 1; }
+	docker run --rm -v "$(PWD):/src:ro" $(LINUX_IMAGE) bash -c '\
+		mkdir -p /w && cp -a /src/. /w/ && cd /w && rm -rf bin .zerg-cache && \
+		for t in $(LINUX_GATES); do printf "linux %-14s " $$t; \
+			make $$t >/dev/null 2>&1 && echo OK || { echo FAIL; exit 1; }; \
+		done'
+
+LINUX_IMAGE ?= golang:1.26-bookworm
+LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus lint fixpoint docs-links sanitize-conc
+
+# `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
+# the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
+# and holds the result to the standing contract — refused by the compiler, never by cc. It
+# found two things on its first run: an enum payload whose type was not a type name, and
+# how many refusals still carry no position.
+reject-fuzz:                    # break the corpus's working programs and hold the contract
+	$(MAKE) build
+	./scripts/reject-fuzz.sh
 
 docs-links:                     # every docs path the repo cites must resolve
 	@fail=0; \

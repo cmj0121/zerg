@@ -119,12 +119,20 @@ fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 	given := base + argc
 
 	if given > em.sig_nparams[row] {
-		chk_at(em, f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}")
+		chk_at(em, f"`{chk_call_name(key)}` takes {chk_args(em.sig_nparams[row])} and this gives {strconv.to_string(given, 10)}")
 		return
 	}
 	if given < em.sig_nreq[row] {
-		chk_at(em, f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}")
+		chk_at(em, f"`{chk_call_name(key)}` needs {chk_args(em.sig_nreq[row])} and this gives {strconv.to_string(given, 10)}")
 	}
+}
+
+# chk_args counts arguments in words a reader does not trip over. "takes 1 arguments" is
+# the kind of thing that makes a tool feel unfinished, and a message printed for someone
+# else's mistake is the worst place to look unfinished.
+fn chk_args(n: int) -> str {
+	return "1 argument" if n == 1
+	return strconv.to_string(n, 10) + " arguments"
 }
 
 # chk_call_name spells a signature key the way a reader wrote the call. A free function's

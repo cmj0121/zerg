@@ -505,11 +505,12 @@ fn is_err_ty(t: Ty) -> bool {
 }
 
 # ty_eq is whether two types are THE SAME type. It exists because `ty_name` was being used
-# for the job, and `ty_name` is the DIAGNOSTIC SPELLING of a type: it collapses TUnknown,
-# TTuple and TMap onto `"?"`, so `ty_name(a) == ty_name(b)` answers yes for a tuple and a
-# map, and for two tuples of different shapes. That is only safe where the spelling is
-# unique — the scalars — which is why every caller of it as an equality had to restrict
-# itself to those, and why a struct bound to the wrong struct still reached cc.
+# for the job, and `ty_name` is the DIAGNOSTIC SPELLING of a type: it collapsed TUnknown,
+# TTuple and TMap all onto `"?"`, so `ty_name(a) == ty_name(b)` answered yes for a tuple
+# and a map, and for two tuples of different shapes. The two composites are spelled out
+# now, but the objection stands and is not about those two: a spelling is for a reader, and
+# every TUnknown still shares one — a type the compiler could not work out is not evidence
+# that two things are the same.
 #
 # TUnknown equals NOTHING, including itself. A type the compiler could not work out is not
 # evidence that two things are the same; a caller that wants to let an unknown through says
@@ -618,7 +619,14 @@ fn ty_name(t: Ty) -> str {
 		TEither(l, r) => either_name(l, r)
 		TOpt(e)       => f"{ty_name(e)}?"
 		TErr          => "Err"
-		_             => "?"
+		TMap(k, v)    => f"map[{ty_name(k)}, {ty_name(v)}]"
+
+		# spelled, because a diagnostic that says "a ?" tells the reader nothing — and
+		# `print(a, b)` reaches one, since there is no two-argument `print` and the pair
+		# builds a tuple. Only TUnknown is left as `?`, which is the honest spelling of a
+		# type this compiler could not work out.
+		TTuple(es) => f"({ty_names(es)})"
+		_          => "?"
 	}
 }
 

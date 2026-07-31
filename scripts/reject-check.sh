@@ -675,6 +675,49 @@ fn main() {
 }
 EOF
 
+# --- the forms that used to escape to cc -------------------------------------------
+#
+# `x == nil` is the first thing anyone reaches for to test an optional, and it lowered to a
+# comparison between the carrier struct and 0. `spawn` and `defer` resolve a callee and
+# render its arguments with a loop of their own, so neither passed through the one place
+# every other call is measured — and they are the two forms whose bad arguments are
+# hardest to read back from generated C, since the call cc sees is a thunk.
+
+reject compare-an-optional-with-nil 'an optional is not compared with `==`' <<'EOF'
+fn main() {
+	x: int? = nil
+	print(f"{x == nil}")
+}
+EOF
+
+reject compare-an-optional-with-a-value 'an optional is not compared with `==`' <<'EOF'
+fn main() {
+	x: int? = 1
+	print(f"{x == 1}")
+}
+EOF
+
+reject spawn-with-too-few-arguments '`work` needs 2 arguments and this gives 1' <<'EOF'
+fn work(a: int, b: int) {
+	print(f"{a + b}")
+}
+
+fn main() {
+	spawn work(1)
+}
+EOF
+
+reject defer-with-the-wrong-argument-type '`note` takes str as argument 1, and this gives int' <<'EOF'
+fn note(s: str) {
+	print(s)
+}
+
+fn main() {
+	defer note(1)
+	print("body")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

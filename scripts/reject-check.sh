@@ -161,6 +161,33 @@ fn main() {
 }
 EOF
 
+
+# --- redeclaration ----------------------------------------------------------------
+#
+# A name is bound once per block. Shadowing across blocks is legal and load bearing, so
+# the sibling and nested cases below are NOT here — they belong to the corpus, which is
+# where programs that must run live.
+
+reject redeclare-in-one-block "already declared in this block" <<'EOF'
+fn main() {
+	x := 1
+	x := 2
+	print(f"{x}")
+}
+EOF
+
+reject redeclare-after-inner-block "already declared in this block" <<'EOF'
+fn main() {
+	a := 1
+	if true {
+		b := 2
+		print(f"{b}")
+	}
+	a := 3
+	print(f"{a}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

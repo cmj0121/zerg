@@ -45,6 +45,17 @@
  * caught by a bottom handler its trampoline installs, so a crash is contained to
  * that coroutine and does not tear down the whole process.
  */
+/* A coroutine stack comes from mmap, and MAP_ANONYMOUS is in NEITHER ISO C nor POSIX:
+ * glibc puts it behind __USE_MISC, which every `-std=c11` in this repo (the seed's cc
+ * argv, the shipped compiler's, and every test) turns OFF. Without this the header
+ * hides MAP_ANONYMOUS *and* MAP_ANON, so the fallback below has nothing to fall back
+ * to and stack_alloc does not compile — on Linux only, which is why a macOS tree never
+ * saw it. It must precede every #include, feature-test macros being read at the first
+ * one. thread_pthread.c and sys.c already carry the POSIX half of the same knob. */
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include "zergrt.h"
 
 #include <stdlib.h>

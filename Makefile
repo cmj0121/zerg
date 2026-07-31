@@ -100,18 +100,14 @@ examples:                       # build every example with zerg itself, and run 
 	[ $$fail -eq 0 ] || { echo "examples: an example no longer builds, or no longer runs"; exit 1; }; \
 	echo "examples: $$n examples built and run"
 
+# `zerg fmt --check` is the tool answering its own question. This target used to copy each
+# case to a temp file, format the copy and `cmp` — the Makefile reimplementing in shell
+# something the formatter knew and had no way to say.
 fmt-corpus:                     # every test-data/fmt case must already be canonical
 	$(MAKE) build
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
-	@fail=0; tmp=$$(mktemp -d); \
-	for src in test-data/fmt/*.zg; do \
-		cp $$src $$tmp/case.zg; \
-		./bin/zerg fmt $$tmp/case.zg >/dev/null; \
-		cmp -s $$src $$tmp/case.zg || { echo "FMT    $$(basename $$src)"; fail=1; }; \
-	done; \
-	rm -rf $$tmp; \
-	[ $$fail -eq 0 ] || { echo "fmt-corpus: a case is not in canonical form — the formatter changed it"; exit 1; }; \
-	echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
+	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
+	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
 
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build

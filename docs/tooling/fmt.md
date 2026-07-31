@@ -19,6 +19,7 @@ is by **what a rule does**, not by which pass implements it.
 
 ```sh
 zerg fmt <file.zg>...              # rewrite in place; prints the files it changed
+zerg fmt --check <file.zg>...      # report what is not canonical, change nothing
 zerg fmt --off F401 <file.zg>...   # leave one rule alone (repeatable)
 ```
 
@@ -28,6 +29,18 @@ formatter that eats those is one nobody runs twice.
 
 It is **idempotent by construction** — the output is built from the same token stream the
 input would produce, so formatting formatted source changes nothing.
+
+`--check` is the question a CI job asks — is this tree already canonical — answered without
+touching anything, non-zero when it is not. It exists because the gate that asks it was
+otherwise written in shell: copy each file, format the copy, `cmp`. A formatter that cannot
+be asked is one every CI reinvents.
+
+**It will not rewrite a file whose brackets do not close.** Reading tokens means fmt will
+reformat anything that lexes, and a file with a syntax error came back reformatted and
+exit 0 — the tokens intact, but the spacing decided by rules that had nothing true to work
+from. The gate is bracket balance rather than a parse, deliberately: a formatter has to
+work on source the compiler cannot **compile**, which is exactly when a person reaches for
+one. A file that balances and is still ill-formed is formatted as before.
 
 ### F1xx — layout
 

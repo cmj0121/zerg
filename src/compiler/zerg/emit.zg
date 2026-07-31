@@ -180,6 +180,24 @@ struct Emitter {
 	# separate from every other counter here because they must not renumber anything: a
 	# scope id never reaches the emitted C, so drawing these from dfn_n or op_n would move
 	# temp names for a change that emits nothing.
+	# at_line / at_col are where the statement being emitted STARTS, updated by the SAt
+	# marker the parser puts before each one. Every diagnostic reads them, which is what
+	# turns a message into a message with a place.
+	at_path: str
+	at_line: int
+	at_col: int
+
+	# diags is every ILL-FORMED-PROGRAM finding this emission has made, rendered, in the
+	# order they were found. They are COLLECTED rather than raised because an error was a
+	# process death: a file with three mistakes in it reported one, and the programmer
+	# learned about the second only after fixing the first.
+	#
+	# A checking rule can carry on where an emitting one cannot, which is why only the
+	# check.zg rules are on this list. Emit's own `NotImplemented` refusals still raise:
+	# they mean this compiler cannot lower the form at all, so there is nothing to carry
+	# on with. The C built after a finding is discarded, never handed to cc.
+	diags: list[Diag]
+
 	scope_n: int
 	scope_cur: int
 
@@ -3289,6 +3307,9 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 		SBreak => c_jump(em, "break", ind)
 		SContinue => c_jump(em, "continue", ind)
 		SNop => ""
+
+		# a marker, not a statement: it records where the next one starts and emits nothing
+		SAt(l, c) => c_at(em, l, c)
 	}
 }
 
@@ -3297,6 +3318,32 @@ fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 # but the C it lowers to is a statement expression, and one whose value is discarded draws
 # a -Wunused-value. Writing the discard down as a cast says the same thing to the reader
 # and keeps the build log free of nine warnings nobody should have to learn to ignore.
+# c_at records the position the SAt marker carries, and hands cc the same answer as a
+# `#line` directive.
+#
+# That directive is what makes the C a DETAIL rather than a place a programmer has to go.
+# Everything downstream of this compiler — a cc diagnostic about generated C, a debugger
+# stopping in it, a profiler naming a function — spoke in terms of a file under
+# `.zerg-cache` that nobody wrote. With `#line` they all name the `.zg` the person is
+# editing, for the cost of one directive per statement.
+#
+# It must start at column 0, and it is emitted with a newline on BOTH sides rather than
+# only after: a `guard` lowers to a GNU statement-expression that puts its statements
+# inline, so a directive with no leading break landed mid-line and cc read it as an
+# expression. A statement whose C spans several lines has only its
+# first line mapped exactly; the rest are attributed to the lines after it, which is the
+# ordinary trade every transpiler that emits these makes.
+#
+# A source with no path gets no directive: pointing cc at "" would be worse than leaving it
+# pointing at the C it can actually open.
+fn c_at(mut &em: Emitter, l: int, c: int) -> str {
+	em.at_line = l
+	em.at_col = c
+	return "" if em.at_path == ""
+	ls := strconv.to_string(l, 10)
+	return f"\n#line {ls} \"{em.at_path}\"\n"
+}
+
 fn c_expr_stmt(mut &em: Emitter, e: Expr, ind: str) -> str {
 	rendered := c_expr(em, e, c_nosub())
 	return f"{ind}(void)({rendered});\n" if c_is_guard(e)
@@ -4025,7 +4072,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_rel_fns := em.rel_fns
 	saved_loop_rel := em.loop_rel
 	saved_refs := em.ref_names
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false)))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path)))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
@@ -5320,6 +5367,7 @@ fn c_loop_jump_err(kw: str, in_loop: bool) {
 }
 
 fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
+	em.at_path = fn_d.path
 	c_reset_env(em)
 	c_check_loop_jump(fn_d.body, false)
 
@@ -5440,6 +5488,15 @@ pub fn emit_c(src: str) -> str {
 # returns them as one File, declarations in source order. The whole-program view every
 # pass wants: the emitter lowers it, the linter walks it.
 pub fn merge_files(srcs: list[str]) -> File {
+	mut none: list[str] = []
+	return merge_files_at(srcs, none)
+}
+
+# merge_files_at is merge_files with each source's PATH beside it, so every function it
+# declares remembers the file it was written in. A whole program is one File by the time
+# anything is emitted, and a diagnostic that cannot name the file is half an address; a
+# short `paths` list simply leaves the rest unnamed rather than being an error.
+pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -5447,7 +5504,11 @@ pub fn merge_files(srcs: list[str]) -> File {
 	mut consts: list[Stmt] = []
 	mut i := 0
 	for i < srcs.len() {
-		f := parse(srcs[i])
+		mut path := ""
+		if i < paths.len() {
+			path = paths[i]
+		}
+		f := parse_at(srcs[i], path)
 		for im in f.imports {
 			imports.append(im)
 		}
@@ -5471,7 +5532,19 @@ pub fn merge_files(srcs: list[str]) -> File {
 # emit_files lowers several sources to one C translation unit — the whole program in one
 # object, which is what a single `zerg build` of an entry file produces.
 pub fn emit_files(srcs: list[str]) -> str {
-	return c_emit_file(merge_files(srcs))
+	mut none: list[str] = []
+	return emit_files_at(srcs, none)
+}
+
+# emit_files_at is emit_files with the sources' paths, which the diagnostics need.
+pub fn emit_files_at(srcs: list[str], paths: list[str]) -> str {
+	mut diags: list[Diag] = []
+	return emit_files_diag(srcs, paths, diags)
+}
+
+# emit_files_diag is emit_files_at that also reports what it found.
+pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]) -> str {
+	return c_emit_file_at(merge_files_at(srcs, paths), diags)
 }
 
 # emit_unit lowers ONE module for separate compilation, from ALREADY PARSED input: `prog`
@@ -5484,7 +5557,14 @@ pub fn emit_files(srcs: list[str]) -> str {
 # the whole program again for each of them made a six-module build parse six times, and
 # that, not the C compiler, was where its time went.
 pub fn emit_unit(prog: File, own: File) -> str {
-	return c_emit_unit(prog, own, false)
+	mut diags: list[Diag] = []
+	return emit_unit_at(prog, own, diags)
+}
+
+# emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
+# C to cc when this list comes back non-empty.
+pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
+	return c_emit_unit(prog, own, false, diags)
 }
 
 # merge_asts joins already-parsed files into the whole-program view, in order.
@@ -5518,7 +5598,12 @@ pub fn merge_asts(fs: list[File]) -> File {
 # em.used_rt), then the header is assembled with the runtime include and the shared list
 # vtable added only when the program needs them.
 fn c_emit_file(f: File) -> str {
-	return c_emit_unit(f, f, true)
+	mut diags: list[Diag] = []
+	return c_emit_file_at(f, diags)
+}
+
+fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
+	return c_emit_unit(f, f, true, diags)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -5526,9 +5611,14 @@ fn c_emit_file(f: File) -> str {
 # the module whose function bodies this unit actually defines. Passing the same File as
 # both is the whole-program build; passing a module as `own` is separate compilation, and
 # the difference is the only thing that keeps two objects from defining the same symbol.
-fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
+# c_emit_unit lowers a unit and REPORTS what it found: `diags` collects every ill-formed
+# program finding, so a caller can refuse the whole build rather than hand cc a C file
+# built out of a program that does not typecheck. It is an out-parameter rather than a
+# second return value because the C is what every caller wants and the findings are what
+# only the driver does.
+fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -5668,6 +5758,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	mut lams := ""
 	for d in em.lam_defs {
 		lams = lams + d
+	}
+	for d in em.diags {
+		diags.append(d)
 	}
 	return f"{hdr}{types}{tups}{ress}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }

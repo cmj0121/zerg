@@ -71,9 +71,15 @@ is not normative — two implementations may phrase the same rejection different
 are rejected is (see each chapter's rules; the reject list is normative, the message text is not). The
 `fmt` and `lint` tools are advisory and never change a program's meaning.
 
-> **[deviation]** `zerg` prints the message but **not the `file:line:col` prefix**: its AST carries no
-> source position, so no pass can report one. The seed does. Every rejection named in this specification is
-> made by the compiler and names the form; none of them yet names the line.
+A diagnostic MAY be followed by the source line it is about and a caret marking what on that line it
+concerns; `zerg` renders one. A conforming implementation need not, and the shape of it is not normative.
+An ill-formed program SHOULD report every diagnostic it can find in one run rather than stopping at the
+first — `zerg` does, for the rules it checks.
+
+> **[deviation]** The `file:line:col` prefix is present on the rules `zerg` CHECKS, and absent on the forms
+> it REFUSES: a `NotImplemented` from the parser or the emitter still reports the form's name with no place.
+> The position `zerg` records is per STATEMENT, so a column names where the statement begins; the caret
+> narrows to the token when the message quotes one that is on that line.
 
 ## Runtime abort contract
 

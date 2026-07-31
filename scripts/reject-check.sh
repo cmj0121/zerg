@@ -22,14 +22,20 @@
 #   1. a non-zero exit
 #   2. the expected sentence
 #   3. no mention of .zerg-cache
-#   4. nothing shaped like a cc diagnostic (`<file>.c:LINE:COL: error`)
-#   5. the SEED refuses it too
+#   4. nothing shaped like a cc diagnostic (`<file>:LINE:COL: error:` opening a line)
+#   5. a `--> file:line:col` line, so the reader is told WHERE
+#   6. the SEED refuses it too
 #
 # The fourth is not redundant with the third. A build given `-o` puts its intermediate C
 # beside the output rather than in the cache, so a cc error can carry no cache path at all
 # and still be a cc error — which is exactly the failure this gate exists to catch.
 #
-# The fifth makes zerg0 the ORACLE. The seed has had a semantic-analysis pass all along
+# The fifth is what this branch's diagnostics work bought: every rule in check.zg reports
+# through one place that knows the statement's file, line and column, so a rule that loses
+# its position is caught here rather than noticed by a user. Nothing else would see it —
+# the sentence still matches.
+#
+# The sixth makes zerg0 the ORACLE. The seed has had a semantic-analysis pass all along
 # and diagnoses every rule here; a rule it enforces and `zerg` does not is a rule `zerg`
 # LOST on the way to self-hosting, which is how this whole class went unnoticed. Only the
 # sentence `zerg` prints is normative — the seed merely has to say no — because the two
@@ -95,8 +101,23 @@ reject() {
 		return
 		;;
 	esac
-	if echo "$out" | grep -qE '\.c:[0-9]+:[0-9]+: (error|warning)'; then
-		echo "VIA CC    $name — the message is a cc diagnostic about generated C"
+	# A cc diagnostic and one of ours are told apart by SHAPE, not by the path in them.
+	# `#line` directives now point cc at the `.zg`, so a cc error can name the source file
+	# the programmer wrote — which is better for a user and blinds the older test, since
+	# neither `.zerg-cache` nor a `.c:` appears. What still differs is the layout: cc opens
+	# a line with `path:line:col: error:`, and this compiler opens with `error:` and puts
+	# the place on an indented `-->` line beneath it.
+	if echo "$out" | grep -qE '^[^ ].*:[0-9]+:[0-9]+: (error|warning):'; then
+		echo "VIA CC    $name — the message is a cc diagnostic, not this compiler's"
+		fail=$((fail + 1))
+		return
+	fi
+
+	# every rule in check.zg reports through chk_at, which knows the statement's place —
+	# so a case that comes back without one is a rule that lost it, and nothing else here
+	# would notice: the sentence would still match.
+	if ! echo "$out" | grep -qE '^  --> .*:[0-9]+:[0-9]+$'; then
+		echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
 		fail=$((fail + 1))
 		return
 	fi

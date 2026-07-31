@@ -32,17 +32,23 @@
  * this is only the slot for the one currently mounted on this thread. */
 static ZRT_THREAD_LOCAL zrt_tls g_tls;
 
-/* g_crashing is true only while zrt_abort unwinds an UNHANDLED coroutine crash (its
- * target handler is the coroutine's outermost one). chan.c reads it through
- * zrt_crash_active as the crash unwind runs the coroutine's sender releases, so a
- * channel auto-closed by a crashing last sender carries a crash Err (Fork-C). It is
- * self-scoped: each zrt_abort sets it for the duration of that unwind and clears it,
- * and it is per-worker for the same reason g_tls is — one coroutine's crash must not be
- * visible to a channel another coroutine is releasing on a different thread. */
-static ZRT_THREAD_LOCAL bool g_crashing;
-
+/* The crash flag is true only while a coroutine unwinds an UNHANDLED crash (its target
+ * handler is its outermost one). chan.c reads it through zrt_crash_active as that unwind
+ * runs the coroutine's sender releases, so a channel auto-closed by a crashing last
+ * sender carries a crash Err (Fork-C) rather than a clean end.
+ *
+ * It lives in g_tls, the bundle the scheduler saves and loads around every switch, and
+ * NOT beside it as a per-worker flag — which is what it was, with a comment arguing that
+ * per-worker was per-coroutine enough. It is not: a coroutine MIGRATES, and the unwind
+ * that sets this runs cleanups that wake other coroutines and can hand the CPU over. When
+ * that happened the crash flag stayed on the worker the crash started on, the releases
+ * that ran afterwards saw it clear, and the channel closed with StopIteration — so a
+ * consumer's `for v in ch` ended cleanly and the statement after it, the one the crash
+ * was supposed to make unreachable, ran.
+ *
+ * conc_crash, one run in a hundred and twenty, printed `1 2 99`. */
 bool zrt_crash_active(void) {
-	return g_crashing;
+	return g_tls.crashing;
 }
 
 void zrt_tls_save(zrt_tls *out) {
@@ -122,9 +128,9 @@ static _Noreturn void zrt_unwind_abort(const char *msg) {
 		 * (the trampoline's, whose prev is NULL); mark it so the sender releases run
 		 * during this unwind close their channels with a crash Err. A handled abort
 		 * (an inner user handler, prev != NULL) is not a crash and leaves the flag off. */
-		g_crashing = (h->prev == NULL);
+		g_tls.crashing = (h->prev == NULL);
 		zrt_unwind_to(h->mark);
-		g_crashing = false;
+		g_tls.crashing = false;
 		longjmp(h->buf, 1);
 	}
 	/* no handler installed (e.g. abort before program entry): last resort. Under the

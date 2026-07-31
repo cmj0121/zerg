@@ -914,6 +914,23 @@ fn main() {
 }
 EOF
 
+# --- a borrow needs a place ------------------------------------------------------
+#
+# A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads
+# like one and is not: it lowers to a statement expression, so `&` on it reached cc.
+
+reject a-borrow-of-a-map-index 'is a `mut &`, and a map index is a value rather than a place' <<'EOF'
+fn poke(mut &n: int) {
+	n = 5
+}
+
+fn main() {
+	mut m: map[str, int] = {"k": 1}
+	poke(m["k"])
+	print(f"{m["k"]}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

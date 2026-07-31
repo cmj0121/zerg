@@ -51,11 +51,16 @@ fail=0
 # it, since the two word their diagnostics differently and only the reject list is
 # normative.
 #
-# SINGLE-quote a wanted string that contains a backtick. Inside double quotes bash reads
-# it as command substitution, which does not fail — it silently shortens the string being
-# matched, so the case reports a MESSAGE mismatch against a sentence that is in fact
-# correct. Every message this compiler prints quotes source in backticks, so this is the
-# usual shape rather than the exception.
+# Quoting a wanted string, which is fiddlier than it looks because these sentences carry
+# both backticks and apostrophes:
+#
+#   contains a backtick    SINGLE-quote it. In double quotes bash reads a backtick as
+#                          command substitution, which does NOT fail — it silently shortens
+#                          the string being matched, so a correct message reports as a
+#                          mismatch. Most messages here quote source in backticks.
+#   contains an apostrophe DOUBLE-quote it, or the apostrophe closes the single quote and
+#                          the rest of the file is read as one string.
+#   contains both          rephrase the assertion to a substring that has only one.
 reject() {
 	local name=$1 want=$2
 	local src="$tmp/$name.zg"
@@ -489,6 +494,51 @@ fn main() {
 	p := P(3)
 	s := "z"
 	print(f"{p.add(s)}")
+}
+EOF
+
+# --- the shapes a review found, after the eight rules were written -----------------
+#
+# A match arm's GUARD is a condition and reached no checker — it is rendered in three
+# places and none of them was c_cond. The WRAPPING arithmetic operators (`+%`, `-%`, `*%`)
+# differ from the checked ones in what they do on overflow, not in what they take, and the
+# family list had been retyped rather than derived. And an ASSIGNMENT is the fourth slot a
+# value enters: `mut b: bool = true` then `b = 1` is the declaration bug one statement
+# later, and the rule set had covered the other three.
+
+reject int-as-match-arm-guard "the condition of a match arm's guard must be bool" <<'EOF'
+fn main() {
+	n := 1
+	print(match n {
+		_ if 1 => "yes"
+		_      => "no"
+	})
+}
+EOF
+
+reject wrapping-operator-on-a-bool 'operator `+%` takes numeric operands' <<'EOF'
+fn main() {
+	print(f"{true +% 1}")
+}
+EOF
+
+reject assign-int-to-a-bool-binding 'cannot assign int to `b`, which holds bool' <<'EOF'
+fn main() {
+	mut b: bool = true
+	b = 1
+	print(f"{b}")
+}
+EOF
+
+reject assign-str-to-an-int-field 'cannot assign str to that part of `p`, which holds int' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	mut p := P(1)
+	p.x = "s"
+	print(f"{p.x}")
 }
 EOF
 

@@ -1386,6 +1386,19 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`")
 		}
 	}
+	# A VARIANT'S PAYLOAD is a type position like any other, and it was the one this pass
+	# did not walk — so `Leaf(int, 1)` declared a payload of type `1`, and the emitter wrote
+	# `zg_1` into a union member for cc to complain about. Found by the mutation fuzzer,
+	# which is the first thing that ever put a wrong type there.
+	for e in f.enums {
+		for v in e.variants {
+			mut i := 0
+			for i < v.fields.len() {
+				c_check_named_ty(em, v.fields[i], f"payload {strconv.to_string(i, 10)} of `{e.name}.{v.name}`")
+				i = i + 1
+			}
+		}
+	}
 	for fn_i in f.fns {
 		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {

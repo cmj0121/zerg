@@ -173,6 +173,13 @@ struct Emitter {
 	# temp names for a change that emits nothing.
 	scope_n: int
 	scope_cur: int
+
+	# open_scopes is the ids of the blocks currently being emitted, outermost first. A
+	# binding is NOT popped when its block ends, so without this a name resolves to the
+	# innermost binding that ever existed rather than the innermost one still in scope:
+	# `x := 1` then `if … { x := 2 }` then a read of `x` resolved to the inner binding's
+	# C name, which C has already closed the brace on.
+	open_scopes: list[int]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -768,6 +775,11 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_dead = []
 	em.env_mut = []
 	em.env_scope = []
+
+	# scope 0 is the module: the constants below live there and it is open in every
+	# function. c_fn opens one more for the parameters, and the body block one after that.
+	em.scope_cur = 0
+	em.open_scopes = [0]
 	em.rel_cnames = []
 	em.rel_fns = []
 	em.loop_rel = 0
@@ -820,6 +832,15 @@ fn c_fresh_cname(mut &em: Emitter, name: str) -> str {
 	return cand
 }
 
+# c_in_scope is whether a binding's block is still open. A closed block's bindings stay in
+# the environment — their C names must not be handed out twice — but nothing may NAME them.
+fn c_in_scope(mut &em: Emitter, idx: int) -> bool {
+	for id in em.open_scopes {
+		return true if em.env_scope[idx] == id
+	}
+	return false
+}
+
 fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
 	for c in em.env_cnames {
 		return true if c == cand
@@ -832,7 +853,7 @@ fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
 fn c_var_cname(mut &em: Emitter, name: str) -> str {
 	mut i := em.env_names.len() - 1
 	for i >= 0 {
-		return em.env_cnames[i] if em.env_names[i] == name
+		return em.env_cnames[i] if em.env_names[i] == name and c_in_scope(em, i)
 		i = i - 1
 	}
 	return "zg_" + name
@@ -841,7 +862,7 @@ fn c_var_cname(mut &em: Emitter, name: str) -> str {
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 	mut i := em.env_names.len() - 1
 	for i >= 0 {
-		return em.env_tys[i] if em.env_names[i] == name
+		return em.env_tys[i] if em.env_names[i] == name and c_in_scope(em, i)
 		i = i - 1
 	}
 	return TUnknown
@@ -867,7 +888,7 @@ fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 fn c_live_idx(mut &em: Emitter, name: str) -> int {
 	mut i := em.env_names.len() - 1
 	for i >= 0 {
-		return i if em.env_names[i] == name
+		return i if em.env_names[i] == name and c_in_scope(em, i)
 		i = i - 1
 	}
 	return -1
@@ -3926,6 +3947,8 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_dead := em.env_dead
 	saved_mut := em.env_mut
 	saved_scope := em.env_scope
+	saved_open := em.open_scopes
+	saved_cur := em.scope_cur
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_loop_rel := em.loop_rel
@@ -3937,6 +3960,8 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.env_dead = saved_dead
 	em.env_mut = saved_mut
 	em.env_scope = saved_scope
+	em.open_scopes = saved_open
+	em.scope_cur = saved_cur
 	em.rel_cnames = saved_rel_cnames
 	em.rel_fns = saved_rel_fns
 	em.loop_rel = saved_loop_rel
@@ -4741,6 +4766,16 @@ fn c_scope_end(mut &em: Emitter, keep: int, ind: str) -> str {
 	return out
 }
 
+fn c_ints_take(xs: list[int], n: int) -> list[int] {
+	mut out: list[int] = []
+	mut i := 0
+	for i < n {
+		out.append(xs[i])
+		i = i + 1
+	}
+	return out
+}
+
 fn c_strs_take(xs: list[str], n: int) -> list[str] {
 	mut out: list[str] = []
 	mut i := 0
@@ -5057,6 +5092,7 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	outer_scope := em.scope_cur
 	em.scope_n = em.scope_n + 1
 	em.scope_cur = em.scope_n
+	em.open_scopes.append(em.scope_cur)
 
 	mut out := ""
 	if c_has_defer(body) {
@@ -5070,6 +5106,7 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	}
 
 	em.scope_cur = outer_scope
+	em.open_scopes = c_ints_take(em.open_scopes, em.open_scopes.len() - 1)
 
 	# a binding made in this block gives its reference back here. A `return` inside the
 	# block already released everything on its way out, so what follows one is dead C.
@@ -5183,6 +5220,13 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	# so the enclosing return type is put back on the way out
 	saved_ret := em.fn_ret
 	em.fn_ret = fn_d.ret
+
+	# the parameters bind in a scope between the module and the body, so a parameter may
+	# shadow a module constant and the body may shadow a parameter — `mut n := n`
+	em.scope_n = em.scope_n + 1
+	em.scope_cur = em.scope_n
+	em.open_scopes.append(em.scope_cur)
+
 	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
@@ -5379,7 +5423,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0, [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

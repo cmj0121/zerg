@@ -3214,12 +3214,26 @@ fn c_intrinsic(name: str) -> str {
 }
 
 # c_intrinsic_ret gives the result type of the intrinsics the compiler's I/O uses.
+# c_intrinsic_ret is what a runtime leaf answers. An intrinsic carries NO SIGNATURE — it
+# is a name the emitter lowers directly — so this table is the only place its result type
+# is written down, and an entry missing here is a leaf this compiler believes answers
+# nothing. That was harmless while nothing compared types and stopped being harmless the
+# moment `chk_fits` did: `a: str = __zrt_arch()` became "cannot bind nil to a str binding",
+# for a leaf that has returned a `const char *` since it was written.
+#
+# Every leaf whose result a program BINDS belongs here. The fallback stays `TNil` rather
+# than TUnknown because that is what a leaf answering nothing really is, and the emitter
+# reads it as such; a leaf that answers something and is missing is a bug in this table,
+# which is now a bug that a binding will report.
 fn c_intrinsic_ret(name: str) -> Ty {
 	return TList(TByte) if name == "__zrt_read"
 	return TList(TStr) if name == "__zrt_listdir"
 	return TInt if name == "__zrt_open" or name == "__zrt_exec" or name == "__zrt_proc_spawn" or name == "__zrt_proc_wait"
-	return TStr if name == "__zrt_getenv"
-	return TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir"
+	return TInt if name == "__zrt_open_write"
+	return TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
+	return TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
+	return TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform"
+	return TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" or name == "__zrt_atomic_cas"
 
 	return TNil
 }

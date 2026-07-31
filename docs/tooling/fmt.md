@@ -7,14 +7,15 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group     | Is                                               |
-| ------ | --------- | ------------------------------------------------ |
-| `F1xx` | layout    | where the line breaks and how far it is indented |
-| `F2xx` | spacing   | where a space goes between two tokens            |
-| `F3xx` | trivia    | what happens to what a person wrote for a person |
-| `F4xx` | rewrites  | the rules that MOVE code rather than space it    |
-| `L1xx` | dead code | things written that nothing reaches              |
-| `E1xx` | lexical   | text that is not a token                         |
+| Prefix | Group     | Is                                                |
+| ------ | --------- | ------------------------------------------------- |
+| `F1xx` | layout    | where the line breaks and how far it is indented  |
+| `F2xx` | spacing   | where a space goes between two tokens             |
+| `F3xx` | trivia    | what happens to what a person wrote for a person  |
+| `F4xx` | rewrites  | the rules that MOVE code rather than space it     |
+| `L1xx` | dead code | things written that nothing reaches               |
+| `L3xx` | capture   | what a coroutine or a deferred call actually took |
+| `E1xx` | lexical   | text that is not a token                          |
 
 ## `zerg fmt`
 
@@ -584,6 +585,45 @@ shape, and so is a `!` inside a function whose declared result carries an absenc
 needs a type nobody wrote down.
 
 `main` is never reported by `L102`: the runtime calls it, whatever the source says.
+
+### L3xx — capture
+
+| Code   | Rule                                                                        |
+| ------ | --------------------------------------------------------------------------- |
+| `L301` | a `mut` binding captured by `spawn` / `defer` and written after the capture |
+
+`spawn f(k)` and `defer f(k)` take their arguments as a **snapshot**, at the line they are
+written on. A write to `k` afterwards is not seen by the call — the coroutine may not have
+started, and the deferred call has not run:
+
+```zerg
+mut k := 5
+spawn show(k)      # captures 5
+k = 99
+# the coroutine prints 5
+```
+
+That is the right semantics and it is the single most misreadable thing in the language.
+It is a **lint** and not an error because the program is correct and the snapshot is
+usually what was wanted — the tool says what happened rather than refusing it.
+
+A **channel** is reported too, and only for a **rebinding**. A channel is a `Ref`-like
+**handle**, not a value: the coroutine gets its own handle to the same channel and
+everything sent afterwards **is** seen — but a send is `ch <- v`, which is not a write and
+was never a candidate. What reaches the rule is `ch = <another channel>`, after which the
+coroutine holds the **old** one. An earlier version exempted channels entirely and so
+suppressed nothing but correct findings.
+
+A **write** is not only an assignment: `xs.append(2)` after capturing `xs` is exactly the
+misreading this rule exists for, since a captured `list` is snapshotted by deep copy. It is
+not **every** call either — `show(k)` after the capture is a read. A call counts when it
+passes the binding to a `mut &` parameter, and a method when it writes through its receiver;
+both are read off the declaration rather than guessed at.
+
+It looks within one block, at the statements after the capture — including the block a
+closure or a `guard` carries, which hangs off an expression rather than a statement. A write
+from a **different** block is not reported: the rule reports the shape that misleads rather
+than every shape that could.
 
 ## Adding a rule
 

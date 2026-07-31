@@ -16,6 +16,12 @@ mirroring `defer`, which takes the same callee forms (`defer f.close()`).
 > capture nothing this phase, so there would be no environment to hand a coroutine even if the shape
 > were accepted.
 
+- **Arguments are a snapshot** — taken where the `spawn` is **written**, not where the call runs. A
+  `mut` binding written afterwards is not seen by the coroutine, which may not have started; a `list`,
+  `map` or `struct` is deep-copied at that point. A **channel** is the contrast and the point: it is a
+  **handle**, so the coroutine gets its own handle to the same channel and everything sent afterwards
+  **is** seen. `defer` captures the same way, at the `defer`. **Values are snapshotted, handles are
+  shared** — `zerg lint` says so as `L301`.
 - **Fire-and-forget** — the runtime never tracks or joins the coroutine; to learn an outcome it must
   send it over a channel the observer holds.
 - **Captures are restricted** to **immutable values and `Ref` values** (channels, `Ref[T]`) — a `mut`

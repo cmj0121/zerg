@@ -604,6 +604,16 @@ fn c_res_ok(r: str) -> str {
 	return r + ".ok"
 }
 
+# c_res_taken is a carrier's payload TAKEN OUT as a value of its own. A carrier is a value
+# holding a value, so the thing extracted from one is a copy of it — `mut c := a ?? []` on
+# a `list[int]?` handed back the carrier's own header, uncounted, and a write through `c`
+# was read back through `a`. The temp the payload comes out of is about to die, so the copy
+# is what gives the result a reference of its own.
+fn c_res_taken(mut &em: Emitter, r: str, elem: Ty) -> str {
+	return c_res_ok(r) if not c_needs_copy(em, elem)
+	return c_copy_of(em, elem, c_res_ok(r))
+}
+
 fn c_res_err(r: str) -> str {
 	return r + ".err"
 }
@@ -645,7 +655,7 @@ fn c_carrier_register(mut &em: Emitter, c: Ty) {
 
 	em.used_rt = true
 	em.res_names.append(name)
-	em.res_decls.append(c_carrier_decl(c))
+	em.res_decls.append(c_carrier_decl(em, c))
 }
 
 # c_carrier_decl writes ONE carrier: a tag, the Left, and — unless it is an optional, whose
@@ -654,7 +664,7 @@ fn c_carrier_register(mut &em: Emitter, c: Ty) {
 #
 # The layout has to stay byte-compatible with the Go seed's emit_result.go, because the same
 # program built by either toolchain has to behave the same way.
-fn c_carrier_decl(c: Ty) -> str {
+fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	name := c_carrier_ty_cname(c)
 	left := c_carrier_left(c)
 	ct := c_type(left)
@@ -675,7 +685,11 @@ fn c_carrier_decl(c: Ty) -> str {
 		fail = "zg_force_fail(" + c_res_err("r") + ");"
 	}
 	d = d + "    if (" + c_res_is_right("r") + ") { " + fail + " }\n"
-	return d + "    return " + c_res_ok("r") + ";\n}\n"
+
+	# the payload is TAKEN OUT, so it comes out as a value of its own — `r` is a by-value
+	# parameter about to die, and returning its header uncounted made `a!` a second name
+	# for the carrier's buffer
+	return d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
 }
 
 # c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
@@ -767,6 +781,13 @@ fn c_is_unknown(t: Ty) -> bool {
 	return match t {
 		TUnknown => true
 		_        => false
+	}
+}
+
+fn c_is_byte(t: Ty) -> bool {
+	return match t {
+		TByte => true
+		_     => false
 	}
 }
 
@@ -1240,7 +1261,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 		for c in cs {
 			cn := c_carrier_ty_cname(c)
 			if c_deps_done(c_carrier_deps(c), cn, done, all) {
-				out = out + c_carrier_decl(c)
+				out = out + c_carrier_decl(em, c)
 				em.res_names.append(cn)
 				em.used_rt = true
 				done.append(cn)
@@ -2047,11 +2068,11 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 	em.op_n = em.op_n + 1
 	tmp := "zgt_co" + tag
 	head := f"({{ {cn} {tmp} = {c_expr(em, a, sb)};"
-	return head + " " + c_res_is_left(tmp) + " ? " + c_res_ok(tmp) + " : (" + c_expr(em, b, sb) + "); })" if jump.len() == 0
+	return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if jump.len() == 0
 
 	val := "zgt_cov" + tag
 	mut out := f"{head} {c_type(elem)} {val};"
-	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_ok(tmp) + "; } else { "
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, tmp, elem) + "; } else { "
 	for s in jump {
 		out = out + c_stmt(em, s, "")
 	}
@@ -2326,7 +2347,14 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 		em.used_rt = true
 
 		return inner if c_is_str(c_infer(em, x))
-		return f"zgs_from_bytes({inner})" if c_is_list(c_infer(em, x))
+		if c_is_list(xt0) {
+			# ONLY a `list[byte]`. The bridge reinterprets the buffer as characters, so
+			# `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
+			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
+			# a composite; this hole let the same value out through an f-string hole.
+			raise f"`str(…)` over a list is the BYTE bridge, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
+			return f"zgs_from_bytes({inner})"
+		}
 
 		c_display_check(em, xt0)
 		return c_display(xt0, inner)
@@ -2383,6 +2411,12 @@ fn c_display(t: Ty, inner: str) -> str {
 fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.used_rt = true
 	tty := c_infer(em, target)
+
+	# a CARRIER is not a thing to index: `a[0]` on a `list[int]?` handed the runtime the
+	# carrier struct where a list header goes, which cc reported as a WARNING — so the
+	# program linked and segfaulted. The unwrap is the language's and has to be written.
+	raise f"`[…]` indexes a value, and {ty_name(tty)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(tty)
+	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_str(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
@@ -2851,9 +2885,8 @@ fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
 	row := c_param_row(em, key, idx)
 
 	return c_expr(em, a, c_nosub()) if row < 0 or ty_is_chan(em.pr_ty[row])
-	return c_carrier_fit(em, em.pr_ty[row], a, c_nosub()) if c_is_carrier(em.pr_ty[row])
 
-	return c_copied(em, em.pr_ty[row], a, c_nosub())
+	return c_fit_copied(em, em.pr_ty[row], a, c_nosub())
 }
 
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
@@ -2892,12 +2925,18 @@ fn c_defaults_from(mut &em: Emitter, key: str, at: int) -> list[Expr] {
 fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 	mut out := ""
 	mut lead := sep
+	mut i := given
 	for d in c_defaults_from(em, fname, given) {
 		if lead {
 			out = out + ", "
 		}
 		lead = true
-		out = out + c_expr(em, d, c_nosub())
+
+		# a default is an argument, so it meets its parameter's type like any other — which
+		# is what gives `fn take(xs: list[int] = [])` an element size. Rendered with c_expr
+		# it was the bare `(zrt_list){0}`, and every append into it memcpy'd nothing.
+		out = out + c_fit_copied(em, c_param_ty(em, fname, i), d, c_nosub())
+		i = i + 1
 	}
 	return out
 }
@@ -5357,7 +5396,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	in2 := ind + "    "
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
 	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
-	out = out + in2 + "    " + c_type(elem) + " " + cv + " = " + c_res_ok(tmp) + ";\n"
+	out = out + in2 + "    " + c_type(elem) + " " + cv + " = " + c_res_taken(em, tmp, elem) + ";\n"
 	entry := c_live_save(em)
 	out = out + c_block(em, then_body, in2 + "    ")
 	then_end := c_live_save(em)

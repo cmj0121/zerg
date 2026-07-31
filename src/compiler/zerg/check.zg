@@ -72,6 +72,114 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 }
 
 
+
+# --- operands ---------------------------------------------------------------------
+#
+# An operator says what it takes. `1 + "s"` compiled to C pointer arithmetic and printed
+# an address; `true + 1` printed 2; `not 1` printed false. Each is C answering a question
+# in C's terms for a language that does not ask it that way.
+#
+# The rules are the seed's, which is where they were already written down: arithmetic
+# takes numbers (and `+` takes two strs), the bitwise operators take ints, `and` / `or`
+# take bools, an ordering takes two numbers or two strs, and an equality takes two things
+# of one kind.
+#
+# Only the SCALAR families are judged. A list, a map, a struct, an optional or a channel
+# is left to the emitter, which has its own words for what it cannot lower — and a `nil`
+# on either side of an equality is how an optional is tested, so it is never a mismatch.
+
+# chk_binary raises when an operator's operands are not what it takes.
+fn chk_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) {
+	ta := c_infer(em, a)
+	tb := c_infer(em, b)
+	return if c_is_unknown(ta) or c_is_unknown(tb)
+
+	if chk_is_logical(oper) {
+		raise f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb)
+		return
+	}
+
+	if chk_is_bitwise(oper) {
+		raise f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb)
+		return
+	}
+
+	if chk_is_arith(oper) {
+		# `+` is the one arithmetic operator a str also answers, and only for two of them
+		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
+		raise f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+		return
+	}
+
+	if chk_is_order(oper) {
+		return if c_is_str(ta) and c_is_str(tb)
+		raise f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}" if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb)
+		return
+	}
+
+	if chk_is_equality(oper) {
+		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
+
+		# int and float compare: they are one family, and the language already mixes them
+		# in arithmetic
+		return if chk_is_num(ta) and chk_is_num(tb)
+		raise f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value" if ty_name(ta) != ty_name(tb)
+	}
+}
+
+# chk_unary raises when a prefix operator's operand is not what it takes.
+fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
+	t := c_infer(em, x)
+	return if c_is_unknown(t)
+	raise f"operator `not` takes a bool operand, and this one is {ty_name(t)}" if oper == "not" and chk_scalar_wrong_bool(t)
+	raise f"operator `-` takes a numeric operand, and this one is {ty_name(t)}" if oper == "-" and chk_scalar_wrong_num(t)
+	raise f"operator `~` takes an int operand, and this one is {ty_name(t)}" if oper == "~" and chk_scalar_wrong_int(t)
+}
+
+# The three "wrong" predicates each answer the same shape of question: is this a scalar
+# the operator cannot take. A non-scalar answers false — it is not this rule's business.
+fn chk_scalar_wrong_bool(t: Ty) -> bool {
+	return chk_is_scalar(t) and not c_is_bool_ty(t)
+}
+
+fn chk_scalar_wrong_int(t: Ty) -> bool {
+	return chk_is_scalar(t) and not c_is_int(t)
+}
+
+fn chk_scalar_wrong_num(t: Ty) -> bool {
+	return chk_is_scalar(t) and not chk_is_num(t)
+}
+
+fn chk_is_scalar(t: Ty) -> bool {
+	return c_is_int(t) or c_is_float(t) or c_is_str(t) or c_is_bool_ty(t)
+}
+
+fn chk_is_num(t: Ty) -> bool {
+	return c_is_int(t) or c_is_float(t)
+}
+
+# chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not
+# c_is_bool_op, which asks whether an operator YIELDS one and so includes every comparison.
+fn chk_is_logical(oper: str) -> bool {
+	return oper == "and" or oper == "or"
+}
+
+fn chk_is_arith(oper: str) -> bool {
+	return oper == "+" or oper == "-" or oper == "*" or oper == "/" or oper == "%"
+}
+
+fn chk_is_bitwise(oper: str) -> bool {
+	return oper == "&" or oper == "|" or oper == "^" or oper == "<<" or oper == ">>"
+}
+
+fn chk_is_order(oper: str) -> bool {
+	return oper == "<" or oper == ">" or oper == "<=" or oper == ">="
+}
+
+fn chk_is_equality(oper: str) -> bool {
+	return oper == "==" or oper == "!="
+}
+
 # --- conditions -------------------------------------------------------------------
 #
 # Zerg has no truthiness: a condition is a bool or it is a mistake. `if 1` compiled to C's

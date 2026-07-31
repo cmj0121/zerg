@@ -1828,7 +1828,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EBool(b) => c_bool(b)
 		ENil => "0"
 		EIdent(n) => c_ident_val(em, n, sb)
-		EUnary(oper, x) => f"({c_unop(oper)}{c_expr(em, x, sb)})"
+		EUnary(oper, x) => c_unexpr(em, oper, x, sb)
 		EBinary(oper, a, b) => c_binexpr(em, oper, a, b, sb)
 		ECall(name, args) => c_call(em, name, args, sb)
 		EField(target, fld) => c_fieldref(em, target, fld, sb)
@@ -2070,7 +2070,16 @@ fn c_guard_jump_err(kw: str) {
 
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
+# c_unexpr lowers a prefix operator. Like c_ternary it is a function only so its operand
+# can be checked before it is rendered, a match arm having nowhere to put a statement.
+fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
+	chk_unary(em, oper, x)
+	return f"({c_unop(oper)}{c_expr(em, x, sb)})"
+}
+
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
+	chk_binary(em, oper, a, b)
+
 	ta := c_infer(em, a)
 	if c_is_str(ta) {
 		if oper == "+" {

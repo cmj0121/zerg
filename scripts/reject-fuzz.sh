@@ -150,7 +150,12 @@ done
 rc=0
 for kind in missing-arg wrong-type write-immutable int-condition mixed-operands; do
 	eval "n=\${noplace_${kind//-/_}:-0}"
-	eval "cap=\${NOPLACE_MAX_${kind//-/_}}"
+	eval "cap=\${NOPLACE_MAX_${kind//-/_}:--1}"
+	if [ "$cap" -lt 0 ]; then
+		echo "reject-fuzz: $kind has no ceiling declared — add NOPLACE_MAX_${kind//-/_}"
+		rc=1
+		continue
+	fi
 	if [ "$n" -gt "$cap" ]; then
 		echo "reject-fuzz: $kind has $n refusals with no place, and its ceiling is $cap"
 		rc=1

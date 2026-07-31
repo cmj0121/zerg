@@ -968,6 +968,24 @@ fn main() {
 }
 EOF
 
+# --- a match answers one type ----------------------------------------------------
+#
+# The whole match took its type from the FIRST arm, the only one anything looked at, so a
+# later arm answering something else went to cc — as a WARNING under clang, which links.
+
+reject match-arms-disagree 'its arms give int and str' <<'EOF'
+fn pick(n: int) -> int {
+	return match n {
+		0 => 1
+		_ => "other"
+	}
+}
+
+fn main() {
+	print(pick(0))
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

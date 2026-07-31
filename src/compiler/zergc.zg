@@ -690,6 +690,19 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 fn run_fmt(files: list[str], off: list[str]) {
 	for f in files {
 		src := str(io.read_file(f))
+
+		# fmt works on the TOKEN STREAM, not the tree, so it will reformat anything that
+		# lexes — including a file with a syntax error, silently, exit 0. `fn main( {` came
+		# back as `fn main({` and `print("hi")` as `print ("hi")`: the tokens survive, but
+		# the spacing rules are applied to a shape they cannot mean anything about, so the
+		# user's broken file comes back broken AND misformatted, with nothing said.
+		#
+		# The gate is NOT `parse`. A formatter has to work on source the compiler cannot
+		# COMPILE — that is exactly when a person reaches for one — and this parser refuses
+		# 26 forms the language has and this compiler has not built, `src/stdlib/testing.zg`
+		# among them. Balance is what fmt's own rules actually depend on; see fmt_balanced.
+		raise f"`{f}` has unbalanced brackets, so it cannot be formatted — the file is left as it is" if not zerg.fmt_balanced(src)
+
 		out := zerg.fmt_src_off(src, off)
 		if out != src {
 			guard {

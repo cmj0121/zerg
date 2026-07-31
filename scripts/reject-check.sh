@@ -355,6 +355,42 @@ fn main() {
 }
 EOF
 
+# --- returned value ---------------------------------------------------------------
+#
+# A signature is a promise. The conditional `return` is here on its own because it takes a
+# different path through the emitter than the plain one.
+
+reject return-str-from-int-fn 'this function answers int, and this returns str' <<'EOF'
+fn f() -> int {
+	return "nope"
+}
+
+fn main() {
+	print(f"{f()}")
+}
+EOF
+
+reject return-int-from-bool-fn 'this function answers bool, and this returns int' <<'EOF'
+fn f() -> bool {
+	return 1
+}
+
+fn main() {
+	print(f"{f()}")
+}
+EOF
+
+reject conditional-return-wrong-type 'this function answers int, and this returns str' <<'EOF'
+fn f(n: int) -> int {
+	return "x" if n > 0
+	return 0
+}
+
+fn main() {
+	print(f"{f(1)}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

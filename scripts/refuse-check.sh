@@ -955,6 +955,27 @@ fn main() { print forced(2) ?? -1 }
 EOF
 
 
+# An INDEX needs a list or a map. `a[0]` on a `list[int]?` handed the runtime the carrier
+# struct where a header goes, which cc reported as a WARNING — so the program linked and
+# segfaulted. A warning is not a gate.
+expect "$ZERG" index-an-optional "may not have one" <<'EOF'
+fn main() {
+	a: list[int]? = [1, 2, 3]
+	print(a[0])
+}
+EOF
+
+# `str(…)` over a list is the BYTE bridge. Without the element check it reinterpreted any
+# buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
+# and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a
+# composite; this let the same value out through an f-string hole.
+expect "$ZERG" render-a-list-of-ints "the BYTE bridge" <<'EOF'
+fn main() {
+	xs: list[int] = [65, 66, 67]
+	print(f"{xs}")
+}
+EOF
+
 # `print` has no two-argument form, so `print(a, b)` builds a TUPLE and prints that. A
 # composite has no rendering — the structural one is `Display`'s job and this compiler
 # generates none — and the cast reached cc as "operand of type 'zg_tup_...' where

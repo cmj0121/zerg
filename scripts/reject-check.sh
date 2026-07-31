@@ -247,6 +247,78 @@ fn main() {
 }
 EOF
 
+# --- operands ---------------------------------------------------------------------
+#
+# An operator says what it takes, and C's answer to the same question is not this
+# language's: `1 + "s"` was pointer arithmetic and printed an address, `true + 1` printed
+# 2, `not 1` printed false. A str operand is BOUND first rather than written inline: a
+# quote inside an f-string hole is its own unrelated argument.
+
+reject int-plus-str 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	s := "s"
+	print(f"{1 + s}")
+}
+EOF
+
+reject str-plus-int 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	s := "s"
+	print(f"{s + 1}")
+}
+EOF
+
+reject bool-plus-int 'operator `+` takes numeric operands' <<'EOF'
+fn main() {
+	print(f"{true + 1}")
+}
+EOF
+
+reject int-as-logical-operand 'operator `and` takes bool operands' <<'EOF'
+fn main() {
+	print(f"{1 and 2}")
+}
+EOF
+
+reject order-int-against-str 'orders two numbers or two strs' <<'EOF'
+fn main() {
+	s := "s"
+	print(f"{1 < s}")
+}
+EOF
+
+reject compare-int-with-str 'cannot compare int and str' <<'EOF'
+fn main() {
+	s := "s"
+	print(f"{1 == s}")
+}
+EOF
+
+reject bitwise-on-float 'operator `&` takes int operands' <<'EOF'
+fn main() {
+	print(f"{3.0 & 1}")
+}
+EOF
+
+reject bitwise-on-bool 'operator `&` takes int operands' <<'EOF'
+fn main() {
+	print(f"{true & 1}")
+}
+EOF
+
+reject negate-a-str 'operator `-` takes a numeric operand' <<'EOF'
+fn main() {
+	s := "a"
+	print(f"{-s}")
+}
+EOF
+
+reject not-an-int 'operator `not` takes a bool operand' <<'EOF'
+fn main() {
+	print(f"{not 1}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

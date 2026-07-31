@@ -391,6 +391,62 @@ fn main() {
 }
 EOF
 
+# --- call shape -------------------------------------------------------------------
+#
+# The counts are knowable where the call and the signature are both in hand. They used to
+# be cc's answer, about a C prototype this compiler wrote.
+#
+# The METHOD case is here because its receiver already fills parameter 0, so the count a
+# call is measured against is shifted by one — and the message says `P.add`, which is what
+# was written, not the `P#add` the signature table keys on.
+
+reject call-with-too-few-arguments '`add` needs 2 arguments and this gives 1' <<'EOF'
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn main() {
+	print(f"{add(1)}")
+}
+EOF
+
+reject call-with-too-many-arguments '`add` takes 2 arguments and this gives 3' <<'EOF'
+fn add(a: int, b: int) -> int {
+	return a + b
+}
+
+fn main() {
+	print(f"{add(1, 2, 3)}")
+}
+EOF
+
+reject call-past-a-default '`scale` takes 2 arguments and this gives 3' <<'EOF'
+fn scale(n: int, by: int = 2) -> int {
+	return n * by
+}
+
+fn main() {
+	print(f"{scale(5, 3, 9)}")
+}
+EOF
+
+reject method-with-too-many-arguments '`P.add` takes 2 arguments and this gives 3' <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn add(k: int) -> int {
+		return this.x + k
+	}
+}
+
+fn main() {
+	p := P(3)
+	print(f"{p.add(1, 2)}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

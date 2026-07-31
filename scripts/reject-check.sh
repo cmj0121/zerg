@@ -630,6 +630,51 @@ fn main() {
 }
 EOF
 
+# --- the text the lexer could not read ---------------------------------------------
+#
+# These are LEXICAL errors and used to be reported by the parser, as "`b'b` is not an
+# expression this compiler reads" — the wrong layer, the wrong problem, and a lexeme that
+# is a fragment of what was written. `0x` did not report at all: it lowered to a C `0x`,
+# which cc read as zero, so a malformed literal compiled and answered 0.
+#
+# `b'ba'` is here beside `'ba'` because a bad rune literal used to leave the lexer standing
+# INSIDE it, and the surviving quote opened a second one — one mistake, two messages.
+
+reject rune-with-two-characters 'E103 a rune literal holds exactly one character' <<'EOF'
+fn main() {
+	c := 'ba'
+	print(f"{c}")
+}
+EOF
+
+reject byte-with-two-characters 'E103 a rune literal holds exactly one character' <<'EOF'
+fn main() {
+	c := b'ba'
+	print(f"{c}")
+}
+EOF
+
+reject string-that-never-closes 'E101 a string literal is not closed' <<'EOF'
+fn main() {
+	s := "no closing quote
+	print(s)
+}
+EOF
+
+reject a-character-no-token-uses 'E104 this character is not part of any Zerg token' <<'EOF'
+fn main() {
+	x := 1 @ 2
+	print(f"{x}")
+}
+EOF
+
+reject based-number-with-no-digits 'E108 a based number needs at least one digit' <<'EOF'
+fn main() {
+	n := 0x
+	print(f"{n}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

@@ -34,6 +34,14 @@ struct Emitter {
 	# happily for every type, and the statement was a comment with a keyword in front.
 	env_dead: list[int]
 
+	# env_mut is whether each binding may be WRITTEN, in the same order. The parser has
+	# always read `mut`, and until now nothing carried it past the AST: `x := 1` followed
+	# by `x = 2` compiled, and so did a write to a parameter, to a field of an immutable
+	# binding, and to a module `const`. That is not a missing diagnostic but a missing
+	# GUARANTEE — the memory model's "no shared mutable Zerg state" rests on a binding
+	# being unwritable unless it says otherwise, and nothing was holding the other end.
+	env_mut: list[bool]
+
 	# rel_cnames / rel_fns are the PENDING RELEASES: every binding in scope that owns what
 	# it holds, in declaration order, paired with the runtime function that gives it back.
 	# Today only channel bindings are on it — a channel binding owns a holder count, and a
@@ -742,6 +750,7 @@ fn c_reset_env(mut &em: Emitter) {
 	em.env_tys = []
 	em.env_cnames = []
 	em.env_dead = []
+	em.env_mut = []
 	em.rel_cnames = []
 	em.rel_fns = []
 	em.loop_rel = 0
@@ -755,16 +764,25 @@ fn c_reset_env(mut &em: Emitter) {
 		em.env_tys.append(em.k_tys[i])
 		em.env_cnames.append("zg_" + em.k_names[i])
 		em.env_dead.append(0)
+
+		# a `const` is the one binding the language never lets anyone write, so this is
+		# the only entry here whose answer is fixed rather than read off a declaration
+		em.env_mut.append(false)
 		i = i + 1
 	}
 }
 
-fn c_add_var(mut &em: Emitter, name: str, t: Ty) {
+# c_add_var binds a name. `is_mut` is whether it may be written afterwards, and every
+# caller answers it from the form it is emitting rather than from a default: a `mut`
+# binding and a `mut &` parameter say yes; a plain binding, a by-value parameter, a loop
+# variable and a pattern binding all say no.
+fn c_add_var(mut &em: Emitter, name: str, t: Ty, is_mut: bool) {
 	cname := c_fresh_cname(em, name)
 	em.env_names.append(name)
 	em.env_tys.append(t)
 	em.env_cnames.append(cname)
 	em.env_dead.append(0)
+	em.env_mut.append(is_mut)
 }
 
 # c_fresh_cname is the C name a new binding takes: `zg_<name>`, or `zg_<name>__<n>` when
@@ -1602,15 +1620,15 @@ fn c_bind_env(mut &em: Emitter, a: Arm, st: Ty) {
 		# type Err, and `b.s` reached cc as an unmangled member of the wrong struct.
 		if a.binds.len() > 0 {
 			if c_result_tag(a.ctor) == 0 {
-				c_add_var(em, a.binds[0], c_either_left(st))
+				c_add_var(em, a.binds[0], c_either_left(st), false)
 			} else {
-				c_add_var(em, a.binds[0], c_either_right(st))
+				c_add_var(em, a.binds[0], c_either_right(st), false)
 			}
 		}
 	} else if a.pat == 3 {
 		mut i := 0
 		for i < a.binds.len() {
-			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i))
+			c_add_var(em, a.binds[i], c_variant_field_ty(em, a.ctor, i), false)
 			i = i + 1
 		}
 	}
@@ -3136,7 +3154,7 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 
 fn c_stmt(mut &em: Emitter, s: Stmt, ind: str) -> str {
 	return match s {
-		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, ival, ind)
+		SLet(name, ty, has_type, is_mut, ival) => c_let(em, name, ty, has_type, is_mut, ival, ind)
 		SAssign(lhs, rhs) => c_assign(em, lhs, rhs, ind)
 		SPrint(e) => c_print(em, e, ind)
 		SReturn(has_val, e) => c_return(em, has_val, e, ind)
@@ -3198,6 +3216,8 @@ fn c_is_empty_listlit(e: Expr) -> bool {
 # list (leak-style: the old buffer is abandoned); otherwise the lhs (a name, field, or
 # index) is emitted as a C lvalue.
 fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
+	chk_assignable(em, lhs)
+
 	# `m[k] = v` INSERTS, so it is a set rather than a store through the index
 	if c_is_index(lhs) {
 		tt := c_infer(em, c_index_target(lhs))
@@ -3816,6 +3836,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			em.env_tys.append(elem)
 			em.env_cnames.append(f"zg_rv{tag}_{k - 1}")
 			em.env_dead.append(0)
+			em.env_mut.append(false)
 		}
 		c_live_restore(em, entry)
 		out = out + c_block(em, a.body, in2 + "    ")
@@ -3880,6 +3901,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_tys := em.env_tys
 	saved_cnames := em.env_cnames
 	saved_dead := em.env_dead
+	saved_mut := em.env_mut
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_loop_rel := em.loop_rel
@@ -3889,6 +3911,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
 	em.env_dead = saved_dead
+	em.env_mut = saved_mut
 	em.rel_cnames = saved_rel_cnames
 	em.rel_fns = saved_rel_fns
 	em.loop_rel = saved_loop_rel
@@ -4466,7 +4489,7 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	c_range_needs_hi(iter, "a `for … in` needs an upper bound")
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
-	c_add_var(em, var, TInt)
+	c_add_var(em, var, TInt, false)
 
 	# the C name the binding actually took: a second loop over the same source name is a
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zg_v`
@@ -4507,7 +4530,7 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	elem := ty_chan_elem(t)
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
-	c_add_var(em, var, elem)
+	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
 
 	# a block, so the handle and the loop variable are scoped to the loop and sequential
@@ -4547,7 +4570,7 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
 	it := c_expr(em, iter, c_nosub())
-	c_add_var(em, var, elem)
+	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
 
 	# wrap in a block and materialize the iterable into a local so a call-result rvalue is
@@ -4568,7 +4591,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	kt := c_map_key_ty(ct)
 	kc := c_type(kt)
 	it := c_expr(em, iter, c_nosub())
-	c_add_var(em, var, kt)
+	c_add_var(em, var, kt, false)
 
 	cv := c_var_cname(em, var)
 
@@ -4581,7 +4604,7 @@ fn c_formap(mut &em: Emitter, var: str, iter: Expr, ct: Ty, body: list[Stmt], in
 	return out + ind + "}\n"
 }
 
-fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: str) -> str {
+fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival: Expr, ind: str) -> str {
 	mut eff := ty
 	if has_type {
 		if ty_is_chan(ty) {
@@ -4596,12 +4619,12 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	# `m["a"] = P(3,4)` silently read back a TRUNCATED value, and a carrier value was a cc
 	# error instead. The declared type is what the map is built with when one is written.
 	if has_type and c_is_map(eff) and c_is_maplit(ival) {
-		c_add_var(em, name, eff)
+		c_add_var(em, name, eff, is_mut)
 		return f"{ind}zrt_map {c_var_cname(em, name)} = {c_map_lit_as(em, eff, ival, c_nosub())};\n"
 	}
 
-	return c_let_list(em, name, eff, ival, ind) if c_is_list(eff)
-	return c_let_chan(em, name, eff, ival, ind) if ty_is_chan(eff)
+	return c_let_list(em, name, eff, is_mut, ival, ind) if c_is_list(eff)
+	return c_let_chan(em, name, eff, is_mut, ival, ind) if ty_is_chan(eff)
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
@@ -4609,7 +4632,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one
 	if has_type and c_is_carrier(eff) {
-		c_add_var(em, name, eff)
+		c_add_var(em, name, eff, is_mut)
 		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {c_carrier_fit(em, eff, ival, c_nosub())};\n"
 	}
 
@@ -4617,7 +4640,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 	# right-hand side names the OUTER n, and resolving it after would make the new
 	# variable initialize itself.
 	val := c_copied(em, eff, ival, c_nosub())
-	c_add_var(em, name, eff)
+	c_add_var(em, name, eff, is_mut)
 	return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {val};\n"
 }
 
@@ -4635,7 +4658,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, ival: Expr, ind: s
 # handle up, so `senders` never reached zero on its own and every stream needed a statement
 # to end it. With both halves the counts move only where a handle moves, and every handle
 # has exactly one owner.
-fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
+fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 	em.used_conc = true
 	dir := c_chan_dir(eff)
@@ -4643,7 +4666,7 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 	if c_is_lvalue(ival) {
 		val = f"{c_chan_copy_fn(dir)}({val})"
 	}
-	c_add_var(em, name, eff)
+	c_add_var(em, name, eff, is_mut)
 	cn := c_var_cname(em, name)
 	c_pend_release(em, cn, c_chan_release_fn(dir))
 	return f"{ind}zrt_chan *{cn} = {val};\n"
@@ -4703,14 +4726,14 @@ fn c_strs_take(xs: list[str], n: int) -> list[str] {
 
 # c_let_list declares a list binding: a list-literal initializer becomes an init plus a
 # push per element; any other initializer (a call or another list) is a plain copy.
-fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str {
+fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 
 	# as in c_let: the initializer names what was in scope BEFORE this binding
 	if c_is_listlit(ival) {
 		et := c_type(c_list_elem(eff))
 		vals := c_elem_exprs(em, ival, c_list_elem(eff))
-		c_add_var(em, name, eff)
+		c_add_var(em, name, eff, is_mut)
 		cname := c_var_cname(em, name)
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &zg_listvt);\n"
 		return out + c_pushes_strs(cname, et, vals, ind)
@@ -4719,7 +4742,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, ival: Expr, ind: str) -> str
 	# Anything else — another list, a call's result — binds through the one copy rule, the
 	# same one every other site uses.
 	val := c_copied(em, eff, ival, c_nosub())
-	c_add_var(em, name, eff)
+	c_add_var(em, name, eff, is_mut)
 	return f"{ind}zrt_list {c_var_cname(em, name)} = {val};\n"
 }
 
@@ -4842,7 +4865,7 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 
 	# the initializer is rendered BEFORE the binding enters scope, as in c_let
 	val := c_expr(em, value, c_nosub())
-	c_add_var(em, name, elem)
+	c_add_var(em, name, elem, false)
 
 	cv := c_var_cname(em, name)
 	in2 := ind + "    "
@@ -5133,7 +5156,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 				sig = sig + ", "
 			}
 			pm := fn_d.params[i]
-			c_add_var(em, pm.name, pm.ty)
+			c_add_var(em, pm.name, pm.ty, pm.is_ref)
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
 				sig = sig + c_type(pm.ty) + "* zg_" + pm.name
@@ -5319,7 +5342,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

@@ -113,6 +113,7 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 # gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.
 fmt-tokens:                     # formatting changes spacing, never the token stream
 	$(MAKE) build
+	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./scripts/fmt-tokens.sh
 
 corpus:                         # run zerg against the test-data corpus it now owns
@@ -203,6 +204,7 @@ LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus f
 # how many refusals still carry no position.
 reject-fuzz:                    # break the corpus's working programs and hold the contract
 	$(MAKE) build
+	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	./scripts/reject-fuzz.sh
 
 docs-links:                     # every docs path the repo cites must resolve

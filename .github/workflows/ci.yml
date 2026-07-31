@@ -125,18 +125,25 @@ jobs:
       # programs only, which is why that whole class went unseen.
       - name: Every program that is not Zerg, is rejected
         run: make reject
+      - name: Fetch test-data submodule
+        id: corpus_fetch
+        env:
+          TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
+        run: ./scripts/ci-fetch-testdata.sh corpus
 
       # --- 7c. and the ones nobody wrote by hand ---------------------------------
       # The reject list holds the mistakes somebody thought of. This breaks the corpus's
       # working programs and holds the results to the same contract, which is how an enum
       # payload whose type was not a type name was found.
       - name: Break the working programs and hold the contract
+        if: steps.corpus_fetch.outputs.available == 'true'
         run: make reject-fuzz
 
       # --- 7d. formatting changes spacing, never meaning ------------------------
       # `fmt --check` and idempotence are both blind to a rule that is stably WRONG. This
       # is the property that is not: the token stream must survive being formatted.
       - name: Formatting does not move a token
+        if: steps.corpus_fetch.outputs.available == 'true'
         run: make fmt-tokens
 
       # --- 8. the corpus the self-hosting compiler owns --------------------------
@@ -151,11 +158,6 @@ jobs:
       # is REQUIRED and a broken fetch fails the job. Without it — a fork, or this repo
       # before the secret exists — the run carries a warning annotation naming the gate
       # that did not run, so a green check no longer implies the corpus passed.
-      - name: Fetch test-data submodule
-        id: corpus_fetch
-        env:
-          TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
-        run: ./scripts/ci-fetch-testdata.sh corpus
 
       - name: Run the corpus with the self-hosting compiler
         if: steps.corpus_fetch.outputs.available == 'true'

@@ -38,6 +38,7 @@ pass=0
 fail=0
 skip=0
 noplace=0
+unbuildable=0
 
 # how many refusals may still carry no place: every one of them is from the parser or the
 # emitter, which do not report through chk_at yet. Lower it, never raise it.
@@ -56,7 +57,7 @@ for src in "$CORPUS"/*.zg; do
 
 	# only programs this compiler already accepts: a case it cannot build says nothing
 	# about what it does with a broken one
-	"$ZERG" build --emit c "$src" >/dev/null 2>&1 || continue
+	"$ZERG" build --emit c "$src" >/dev/null 2>&1 || { unbuildable=$((unbuildable + 1)); continue; }
 
 	for kind in extra-arg wrong-type write-immutable int-condition mixed-operands; do
 		out_zg="$tmp/$name.$kind.zg"
@@ -83,6 +84,15 @@ for src in "$CORPUS"/*.zg; do
 		# gate that fails on a known gap is not a gate, and a gate that says nothing about
 		# it lets the gap grow. The count is the thing to watch: when it reaches zero this
 		# becomes an assertion.
+		# a refusal SAYS something. An internal abort, a panic, an empty message — none has
+		# a place either, so without this they would land in `noplace` and pass under a
+		# ceiling that exists to watch a different thing entirely.
+		if [ -z "$out" ]; then
+			echo "SILENT    $name/$kind — non-zero exit and nothing said"
+			fail=$((fail + 1))
+			continue
+		fi
+
 		if ! has_place "$out"; then
 			noplace=$((noplace + 1))
 			continue
@@ -96,7 +106,7 @@ if [ $fail -ne 0 ]; then
 	exit 1
 fi
 echo "reject-fuzz: $pass+$noplace mutated programs refused by the compiler, none left to cc"
-echo "reject-fuzz: $noplace of them said no place ($skip mutations did not apply)"
+echo "reject-fuzz: $noplace of them said no place ($skip mutations did not apply, $unbuildable sources skipped)"
 
 # A RATCHET, in the shape CORPUS_PASS uses. A count that is only printed drifts: 37 becomes
 # 60 and the gate still says OK. This can only go down, and the day it reaches zero the

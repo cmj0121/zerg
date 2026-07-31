@@ -31,7 +31,13 @@ RT="src/runtime/csrc"
 # is a function of its source AND of an interleaving the scheduler picks fresh each run, so
 # one clean run says very little. The sanitizers make each run slower, not slow — these are
 # millisecond programs.
-REPS="${REPS:-10}"
+# SCHEDULES is how many seeded single-worker interleavings each case is run under, and RUNS
+# how many unseeded multi-worker ones. They are separate numbers because they buy different
+# things: a schedule is a repro and a run is a search, and 10 of either was not enough — the
+# day this went to 150 it found three runtime bugs, one of which failed about one run in
+# twenty and had passed every CI run this project had ever done.
+SCHEDULES="${SCHEDULES:-${REPS:-60}}"
+RUNS="${RUNS:-${REPS:-10}}"
 
 [ -x "$ZERG" ] || {
 	printf 'sanitize-conc: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -75,7 +81,7 @@ esac
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zerg-sanitize.XXXXXX")" || exit 2
 
-printf 'sanitize-conc: address + undefined, leak detection %s, 2 worker modes x %s runs per case\n\n' "$LEAKS" "$REPS"
+printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-worker schedules + %s multi-worker runs per case\n\n' "$LEAKS" "$SCHEDULES" "$RUNS"
 
 fail=0
 cases=0
@@ -106,13 +112,28 @@ for src in test-data/codegen/conc_*.zg; do
 	# gives (src/runtime/README.md): a bug in the scheduler's logic survives with one
 	# worker while a race needs several, and one worker is the harsher of the two, because
 	# nothing else is running to paper over a coroutine that never yields.
+	# One worker is run under a SEED, and each repetition uses a different one. That turns
+	# the repetitions from N runs of the same schedule — which is what they were, since a
+	# cooperative scheduler with one worker is deterministic — into N DIFFERENT schedules,
+	# each of which can be run again. A failure now comes with the command that reproduces
+	# it, which the last concurrency bug this project found did not: it was fixed by
+	# reading the code and never made to happen twice.
 	for mode in many one; do
 		n=0
-		while [ "$n" -lt "$REPS" ]; do
+		reps=$RUNS
+		if [ "$mode" = one ]; then
+			reps=$SCHEDULES
+		fi
+		while [ "$n" -lt "$reps" ]; do
+			seed=$((n + 1))
 			if [ "$mode" = one ]; then
-				got="$(ZRT_WORKERS=1 "$WORK/$name.bin" 2>"$WORK/$name.err")"
+				got="$(ZRT_WORKERS=1 ZRT_SEED="$seed" "$WORK/$name.bin" 2>"$WORK/$name.err")"
+				repro="ZRT_WORKERS=1 ZRT_SEED=$seed"
 			else
-				got="$(env -u ZRT_WORKERS "$WORK/$name.bin" 2>"$WORK/$name.err")"
+				# several workers: the OS decides things a seed cannot, so this half stays
+				# unseeded and is a search rather than a repro
+				got="$(env -u ZRT_WORKERS -u ZRT_SEED "$WORK/$name.bin" 2>"$WORK/$name.err")"
+				repro="(several workers — not reproducible)"
 			fi
 
 			# The exit status is NOT the signal: conc_crash ends in an abort and leaves
@@ -125,14 +146,14 @@ for src in test-data/codegen/conc_*.zg; do
 			# artifact of fibers, not a finding. Widening this to match it would gate on
 			# the runtime's normal behaviour.
 			if grep -Eq 'ERROR: .*Sanitizer|runtime error:' "$WORK/$name.err"; then
-				printf 'SAN    %s (%s workers, run %s)\n' "$name" "$mode" "$n"
+				printf 'SAN    %s (%s workers, run %s) — %s\n' "$name" "$mode" "$n" "$repro"
 				head -20 "$WORK/$name.err"
 				fail=1
 				break 2
 			fi
 			if [ "$got" != "$want" ]; then
-				printf 'OUTPUT %s (%s workers, run %s) — wanted %s, got %s\n' \
-					"$name" "$mode" "$n" "$(echo "$want" | tr '\n' ' ')" "$(echo "$got" | tr '\n' ' ')"
+				printf 'OUTPUT %s (%s workers, run %s) — %s — wanted %s, got %s\n' \
+					"$name" "$mode" "$n" "$repro" "$(echo "$want" | tr '\n' ' ')" "$(echo "$got" | tr '\n' ' ')"
 				fail=1
 				break 2
 			fi
@@ -149,4 +170,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 rm -rf "$WORK"
-printf '\nsanitize-conc: %s cases x 2 worker modes x %s runs, clean\n' "$cases" "$REPS"
+printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean\n' "$cases" "$SCHEDULES" "$RUNS"

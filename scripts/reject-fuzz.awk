@@ -17,6 +17,11 @@ BEGIN { done = 0 }
       ind = line; sub(/[^ \t].*/, "", ind); line = ind "if 1 {"; done = 1
     } else if (KIND == "extra-arg" && match(line, /[a-z_][a-z_0-9]*\([a-z_0-9][^()]*\)/)) {
       sub(/\)/, ", 1)", line); done = 1
+    } else if (KIND == "missing-arg" && match(line, /[a-z_][a-z_0-9]*\([a-z_0-9][^(),]*, [^()]*\)/)) {
+      # the mirror of extra-arg. Its absence is why `spawn work(5)` on a defaulted
+      # parameter reached cc unnoticed: every mutation ADDED an argument, so a call
+      # short of one was a shape this gate never produced.
+      sub(/, [^()]*\)/, ")", line); done = 1
     }
   }
   print line

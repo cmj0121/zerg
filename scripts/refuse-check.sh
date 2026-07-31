@@ -934,6 +934,34 @@ fn forced(x: int?) -> int? {
 fn main() { print forced(2) ?? -1 }
 EOF
 
+
+# L301: the snapshot semantics of a captured argument. It is here rather than in the reject
+# list because the program is CORRECT — this is the one thing in the language a competent
+# reader has to ask about, so the tool answers instead of waiting to be asked.
+expect_lint spawn-captures-a-value-then-writes-it "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut k := 5
+	spawn show(k)
+	k = 99
+}
+EOF
+
+expect_lint defer-captures-a-value-then-writes-it "L301" <<'EOF'
+fn show(n: int) {
+	print(f"{n}")
+}
+
+fn main() {
+	mut j := 1
+	defer show(j)
+	j = 2
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

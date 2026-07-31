@@ -776,6 +776,36 @@ fn main() {
 }
 EOF
 
+# --- a borrow may not be captured --------------------------------------------------
+#
+# GRAMMAR:314: a `mut &` "cannot ESCAPE (be captured by a spawn or stored past the call)".
+# `spawn` refused it in a pass of its own and `defer`, which the same sentence covers,
+# reached cc — so the refusal moved to the choke point both of them share.
+
+reject spawn-captures-a-borrow 'a `mut &` argument cannot cross a `spawn`' <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	mut k := 1
+	spawn bump(k)
+	print(f"{k}")
+}
+EOF
+
+reject defer-captures-a-borrow 'a `mut &` argument cannot cross a `defer`' <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	mut k := 1
+	defer bump(k)
+	print(f"{k}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

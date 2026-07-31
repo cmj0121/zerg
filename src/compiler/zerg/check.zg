@@ -60,7 +60,7 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 
 	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
 	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
-	raise f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write" if chk_is_ident(lhs)
+	raise f"cannot assign to `{root}`: it is immutable — declare it `mut {root} := …` to allow a write" if c_ident_name(lhs) != ""
 	raise f"cannot assign through `{root}`: it is immutable — a write to a field or element writes the binding, so declare it `mut {root} := …`"
 }
 
@@ -83,43 +83,12 @@ fn chk_is_const(mut &em: Emitter, idx: int) -> bool {
 fn chk_call_arity(mut &em: Emitter, key: str, base: int, argc: int) {
 	# a key nothing registered is not a call this rule knows anything about — an
 	# intrinsic, a constructor, a binding holding a function. Emit names those itself.
-	return if not c_name_in(em.sig_names, key)
+	row := c_sig_row(em, key)
+	return if row < 0
 
-	total := chk_param_count(em, key)
 	given := base + argc
-	raise f"`{chk_call_name(key)}` takes {strconv.to_string(total, 10)} arguments and this gives {strconv.to_string(given, 10)}" if given > total
-
-	need := chk_required_count(em, key)
-	raise f"`{chk_call_name(key)}` needs {strconv.to_string(need, 10)} arguments and this gives {strconv.to_string(given, 10)}" if given < need
-}
-
-# chk_param_count is how many parameters a registered function has. c_build_sigs appends
-# one row per parameter, so counting the rows that name the key counts the parameters.
-fn chk_param_count(mut &em: Emitter, key: str) -> int {
-	mut n := 0
-	mut i := 0
-	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == key {
-			n = n + 1
-		}
-		i = i + 1
-	}
-	return n
-}
-
-# chk_required_count is how many a CALL must supply: every parameter up to the last one
-# without a default. A default may only follow other defaults, so this is the count of
-# parameters before the first defaulted one.
-fn chk_required_count(mut &em: Emitter, key: str) -> int {
-	mut n := 0
-	mut i := 0
-	for i < em.pr_fn.len() {
-		if em.pr_fn[i] == key and not em.pr_hasdef[i] {
-			n = n + 1
-		}
-		i = i + 1
-	}
-	return n
+	raise f"`{chk_call_name(key)}` takes {strconv.to_string(em.sig_nparams[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given > em.sig_nparams[row]
+	raise f"`{chk_call_name(key)}` needs {strconv.to_string(em.sig_nreq[row], 10)} arguments and this gives {strconv.to_string(given, 10)}" if given < em.sig_nreq[row]
 }
 
 # chk_call_name spells a signature key the way a reader wrote the call. A free function's
@@ -175,11 +144,14 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 # incompatible-pointer conversion. The declared type is on the function and the `return`
 # may be forty lines away, which is exactly why nobody notices without a check.
 
-# chk_returned raises when a returned value is not the type the signature declares.
-fn chk_returned(mut &em: Emitter, e: Expr) {
+# chk_returned raises when a returned value is not the type the signature declares, and
+# ANSWERS the type it inferred — c_return wants the same one, and inferring it twice walks
+# the expression twice for every value return in the program.
+fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 	declared := em.fn_ret
 	got := c_infer(em, e)
 	raise f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}" if not chk_fits(em, declared, got)
+	return got
 }
 
 # --- declared type versus value ---------------------------------------------------
@@ -212,7 +184,7 @@ fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
 fn chk_target_name(lhs: Expr) -> str {
 	root := chk_root_name(lhs)
 	return "this target" if root == ""
-	return f"`{root}`" if chk_is_ident(lhs)
+	return f"`{root}`" if c_ident_name(lhs) != ""
 	return f"that part of `{root}`"
 }
 
@@ -222,15 +194,16 @@ fn chk_target_name(lhs: Expr) -> str {
 # against a prototype this compiler wrote. The parameter table has held every type all
 # along — c_arg already reads the same row to decide whether to pass an address.
 
-# chk_argument raises when an argument is not the type its parameter takes. `idx` indexes
-# the PARAMETER — the receiver shift already applied by the caller — and `pos` is where the
-# argument stands as WRITTEN, counting from one, which is the only number a reader can find
-# on the line they are looking at.
-fn chk_argument(mut &em: Emitter, key: str, idx: int, pos: int, arg: Expr) {
-	return if not c_name_in(em.sig_names, key)
-	return if c_param_row(em, key, idx) < 0
+# chk_argument raises when an argument is not the type its parameter takes. `row` is the
+# parameter table's row, which c_arg has already found for its own use — looking it up
+# again would be the walk its comment exists to prevent — and `pos` is where the argument
+# stands as WRITTEN, counting from one, which is the only number a reader can find on the
+# line they are looking at. A row of -1 is a call this rule knows nothing about: an
+# intrinsic, a constructor, a binding holding a function. Emit names those itself.
+fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
+	return if row < 0
 
-	want := c_param_ty(em, key, idx)
+	want := em.pr_ty[row]
 	got := c_infer(em, arg)
 	raise f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}" if not chk_fits(em, want, got)
 }
@@ -246,14 +219,21 @@ fn chk_argument(mut &em: Emitter, key: str, idx: int, pos: int, arg: Expr) {
 # take bools, an ordering takes two numbers or two strs, and an equality takes two things
 # of one kind.
 #
-# Only the SCALAR families are judged. A list, a map, a struct, an optional or a channel
-# is left to the emitter, which has its own words for what it cannot lower — and a `nil`
-# on either side of an equality is how an optional is tested, so it is never a mismatch.
+# Only the SCALAR families are judged, and that is a LIMIT rather than a boundary. The
+# reason is `ty_name`: it is the diagnostic spelling of a type, and using it as an equality
+# relation is only safe where the spelling is unique, which is exactly the scalars — it
+# collapses TUnknown, TTuple and TMap onto one name. So `[1] and true` and a struct bound
+# to the wrong struct are still cc's to report, which is the failure this file exists to
+# remove; closing it needs a real `ty_eq` over the Ty enum, and that is owed.
+#
+# A `nil` on either side of an equality is how an optional is tested and is never a
+# mismatch, which the same restriction gives for free.
 
-# chk_binary raises when an operator's operands are not what it takes.
-fn chk_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) {
-	ta := c_infer(em, a)
-	tb := c_infer(em, b)
+# chk_binary raises when an operator's operands are not what it takes. It is given the
+# operand TYPES rather than the expressions: c_binexpr infers the left one for its own
+# reasons, and an f-string desugars into a left-nested `+` chain, so re-inferring here
+# would walk the whole left spine again at every link of it.
+fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	return if c_is_unknown(ta) or c_is_unknown(tb)
 
 	if chk_is_logical(oper) {
@@ -385,17 +365,13 @@ fn chk_fresh_binding(mut &em: Emitter, name: str) {
 	# in a block says "ignore this" twice rather than naming one thing two ways
 	return if name == "_"
 
-	mut i := em.env_names.len() - 1
-	for i >= 0 {
-		if em.env_names[i] == name and em.env_scope[i] == em.scope_cur {
-			raise f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it"
-		}
-
-		# the whole list is walked rather than stopping at the first foreign scope. A
-		# block that has ENDED leaves its bindings behind — their C names stay reserved —
-		# so this block's own earlier bindings sit UNDER them, not above.
-		i = i - 1
-	}
+	# c_live_idx answers the innermost binding STILL IN SCOPE, so this is a redeclaration
+	# exactly when that binding belongs to the block being emitted. A binding it finds in
+	# an enclosing block is one this declaration shadows, which is legal; one in a block
+	# that has ended is not visible to it at all.
+	idx := c_live_idx(em, name)
+	return if idx < 0
+	raise f"`{name}` is already declared in this block — a name is bound once per block, though an inner block may shadow it" if em.env_scope[idx] == em.scope_cur
 }
 
 # chk_root_name walks an assignment target down to the binding it writes: `p` for `p`,
@@ -407,15 +383,5 @@ fn chk_root_name(e: Expr) -> str {
 		EField(t, _) => chk_root_name(t)
 		EIndex(t, _) => chk_root_name(t)
 		_ => ""
-	}
-}
-
-# chk_is_ident is whether the target is the bare name, which only decides which of the two
-# sentences above reads better — `x = 1` and `p.x = 1` are the same mistake with different
-# shapes, and saying so in the same words twice would explain neither.
-fn chk_is_ident(e: Expr) -> bool {
-	return match e {
-		EIdent(_) => true
-		_ => false
 	}
 }

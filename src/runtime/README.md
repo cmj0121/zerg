@@ -15,7 +15,8 @@ Zerg**.
 - **`csrc/`** — the runtime **itself**, in C plus a small per-architecture assembly core. This is what `cc` links
   into a program: allocator, reference counting, collections, strings, formatting, the scheduler, channels, the
   syscall floor, and the unwind mechanism. See [`csrc/README.md`](csrc/README.md) for the file-by-file map.
-- **`embed.go`** — Go glue (not shipped into a program). It `go:embed`s the `csrc/` tree into the `zerg0` SEED binary so
+- **`embed.go`** — Go glue (not shipped into a program). It `go:embed`s the `csrc/` tree into the `zerg0`
+  SEED binary so
   `zerg build` can materialize the sources next to the emitted C for `cc`.
 - **`runtime_test.go`** — Go tests that compile and exercise the C runtime directly (via `csrc/zrt_test.*`).
 - **`go.mod`** — the runtime's Go module, wired into the root `go.work`.

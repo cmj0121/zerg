@@ -164,12 +164,12 @@ only a _consequence_: it happens when the revoked access was the **owning** one 
 remains; otherwise `del` merely ends this name's (or this borrow's) access early and the owner keeps
 the storage.
 
-| `del` target                          | Own? | Effect                                                                |
-| ------------------------------------- | ---- | --------------------------------------------------------------------- |
-| local, by-value param, captured copy  | yes  | last access → **storage freed**                                       |
-| `mut &` param (borrows caller's var)  | no   | ends this call's borrow → **not freed**; caller keeps it              |
-| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it        |
-| channel, `Ref[T]`                     | ref  | revokes the name and drops a holder (refcount--); last holder `drop`s |
+| `del` target                          | Own? | Effect                                                          |
+| ------------------------------------- | ---- | --------------------------------------------------------------- |
+| local, by-value param, captured copy  | yes  | last access → **storage freed**                                 |
+| `mut &` param (borrows caller's var)  | no   | ends this call's borrow → **not freed**; caller keeps it        |
+| captured value, inside a closure body | no   | ends **this invocation's** access only; next call still has it  |
+| channel, `Ref[T]`                     | ref  | revokes the name, drops a holder (refcount--); last one `drop`s |
 
 > **Status.** `del` of a `Ref` value — a `chan` or a `Ref[T]` — dropping a holder (and running `drop` at
 > the last one) works. `del` of an **owning** value — a local `struct`, `list`, or `map` —

@@ -164,7 +164,8 @@ of the rules already stated for `list`:
   (and, when built, `Hash` / `Encode`) exactly when its element type `T` does — two same-type arrays then
   compare (and hash) element-wise. There is **no** blanket auto-derived `Object`; equality comes only from
   `derive(Eq)` on the element. `a.slice(p, q)` is intended to yield a **read-only `list[T]`** view — the COW
-  bridge from an array back into the list family — but slicing is **[not yet]** (see [Slicing](#slicing--read-only-subranges)).
+  bridge from an array back into the list family — but slicing is **[not yet]** (see
+  [Slicing](#slicing--read-only-subranges)).
 
 ## Strings & bytes
 

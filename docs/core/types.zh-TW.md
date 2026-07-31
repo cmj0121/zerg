@@ -93,7 +93,8 @@ Expr) }`——**不需 pointer**:編譯器把那個自我參照的槽自動裝�
 參照**(refcount 共享),不是深拷貝。它的 MVP 限制(以 `mut` 建出的循環會洩漏;長鏈以 O(depth) 釋放)見
 [值與記憶體](memory.zh-TW.md)。
 
-其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別（見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）。一個 `enum`
+其實 `Either`、`Result[T]`、`T?` 並不特殊——它們就是建立在 `enum` 上面的普通 stdlib 型別
+（見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）。一個 `enum`
 的 **variant 隨型別的可見性**——`pub enum` 公開它的每一個 variant（可建構、可 `match`）；沒有 per-variant 的私有。
 
 一個 `enum` 的 **discriminant 對「fieldless enum」與「payload enum」行為不同**——分界在於是否*每一個* variant 都無

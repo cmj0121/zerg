@@ -195,7 +195,8 @@ field-target  ::= identifier ( ':' assign-target )?
 `:=` 綁定一個**全新、immutable** 的名字並**推斷**其型別；`mut x := …` 使其可重綁；`const x := …` 是 immutable
 **且 shadow-proof**（沒有任何綁定可遮蔽它，它也不可遮蔽既有可見名字——兩向皆 error）。**帶型別註記**的綁定寫成
 `name: T = expr`——它固定型別並**依語境定型** RHS（裸 `[…]` 成為 `list`，或對 `[T; N]` 目標成為陣列）；開頭的 `:`
-正是它有別於 `=` **reassign**（更新既有 `mut` 綁定或 field／元素）之處。單獨一個 expression——一次 call，或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
+正是它有別於 `=` **reassign**（更新既有 `mut` 綁定或 field／元素）之處。單獨一個 expression——一次 call，
+或為副作用而跑的 `match`——就是一個 statement。`:=` 可**解構**成
 新名字（`(q, r) := divmod(x, y)`，group 6），而 `=` **對映到既有 lvalue**——`(a, b) = swap(a, b)`、
 `Div{q, r} = divmod(x, y)`——每個葉子可以是任意 lvalue（`(a, obj.f) = …`）。
 
@@ -272,7 +273,8 @@ literal** `` f`…` ``（group 3 的 command literal，**[not yet]**）：它經
 （`{x:raw}` 可退出），使值以單一安全引數插入。
 
 - **`{x}`** 透過 `display` 渲染。**`{x!r}`** / **`{x!s}`** / **`{x!a}`** 先轉換——`debug` / `display` / ascii。
-  三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——
+  三者皆為 **[not yet]**——洞裡的轉換會被指名拒絕（[Format](../runtime/format.zh-TW.md)）。**`{x=}`** 自述：
+  輸出運算式原文與 `=`，再接值（`f"{n=}"` → `n=42`）——
   **[not yet]**，已被解析但在程式碼生成時被拒絕。
 - **`{x:spec}`** 把 `spec` 交給型別的 **`Format`** protocol——`f"{pi:.2f}"`、`f"{n:04d}"`、`f"{p:>10}"`。spec
   **字串的意義由型別決定**（stdlib 數字/`str` 讀常見的 fill/align/sign/`#`/`0`/width/`.precision`/type）；文法
@@ -633,7 +635,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   只能從另一個 `unsafe` context **呼叫**。
 - **全域可變狀態。** _無可變全域_（group 10）的唯一例外，是**在 module 層級 `unsafe { … }` 分組內**的 `mut` 綁定——
   裸機逃生口（page table 與觸碰它的函式，放在一起）。**沒有 `unsafe mut` 前綴**、無 `static` 關鍵字。可變全域為
-  **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
+  **module-private**（不可 `pub`）。優先用**安全**替代——不可變 `:=` 持有 stdlib **`Atomic[T]`**——跨核共享
+  可變全域而無需 `unsafe`（綁定不可變、Atomic 內部可變）。
   **atomics 是 stdlib、非文法**：`Atomic[T]` 提供 `load` / `store` / `swap` / `fetch_add` / `compare_swap` 與
   memory-ordering 參數。**[not yet]**——它需要 `Ref[T]`；**memory-ordering 引數**與泛型 **`Atomic[T]`** 亦然。
 - **Raw pointer（`ptr` / `ptr[T]`）。** `ptr` 是平台字寬的原始**位址**（C 的 `void*` / `uintptr`）；`ptr[T]` 把該

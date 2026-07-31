@@ -68,7 +68,8 @@ on the right of a `??` takes no trailing `if`, since the guard would read as the
 
 **The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds —
 **`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**
-— and you **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the **`Error`** spec —
+— and you **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
+**`Error`** spec —
 `message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](../core/specs.md)) is **not yet
 supported**. Each kind is a full `Err`: construct one with a message (`raise ValueError("bad input")`), let it
 sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`, and have

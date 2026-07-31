@@ -18,7 +18,7 @@ ZERG_STAGE1 := ./bin/.zerg-stage1
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_crash \
+CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_capture_snapshot conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_crash \
 	conc_defer_close conc_fanin conc_for_select conc_forin conc_payload_copy conc_select conc_spawn conc_spawn_defaults select_default countdown default_params either_result every_form_handled enum_basic enum_discriminant enum_guard factorial \
 	fib fizzbuzz floats gcd fn_value guard_expr hello list_basic list_literal list_str match_range method_chain null_safety power raise_guard raise_kind \
 	rec_expr rec_tree shadowing str_bytes struct_basic struct_nested sumto value_semantics
@@ -30,7 +30,7 @@ CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_ch
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -108,6 +108,15 @@ fmt-corpus:                     # every test-data/fmt case must already be canon
 	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
 	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
 	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
+
+# The compiler's OWN sources, which no gate covered. That is how three fresh deviations
+# landed in one branch: `zerg fmt` would have silently reverted four lines of it. This
+# needs no submodule, so it runs everywhere.
+fmt-self:                       # the compiler and the stdlib are canonical too
+	$(MAKE) build
+	@./bin/zerg fmt --check src/compiler/*.zg src/compiler/zerg/*.zg src/stdlib/*.zg \
+		|| { echo "fmt-self: a compiler or stdlib source is not in canonical form"; exit 1; }
+	@echo "fmt-self: $$(ls src/compiler/*.zg src/compiler/zerg/*.zg src/stdlib/*.zg | wc -l | tr -d ' ') sources are fmt's fixpoint"
 
 # A target of its own, because CI does not run fmt-corpus — hanging this off it meant the
 # gate written to catch `fn main( {` -> `fn main({` ran only from a hand-typed make.

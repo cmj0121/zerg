@@ -66,6 +66,15 @@ struct Emitter {
 	rel_cnames: list[str]
 	rel_fns: list[str]
 	sig_names: list[str]
+
+	# sig_nparams / sig_nreq are how many arguments a call to each signature MAY give and
+	# must give — the parameter count, and the count before the first defaulted one. They
+	# are recorded here rather than counted on demand because the question is asked once
+	# per CALL SITE, and counting means walking the whole program's parameter table: two
+	# scans of ~1.7k rows at every call in the program, for two integers that are fixed
+	# the moment the signature is read.
+	sig_nparams: list[int]
+	sig_nreq: list[int]
 	sig_rets: list[Ty]
 	sig_hasret: list[bool]
 	struct_names: list[str]
@@ -848,22 +857,24 @@ fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
 	return false
 }
 
-# c_var_cname resolves a source name to the C name its binding took — the innermost one,
-# so a shadowing binding wins from its declaration onward.
+# c_var_cname resolves a source name to the C name its binding took — the innermost one
+# STILL IN SCOPE, so a shadowing binding wins from its declaration until its block ends.
+#
+# It and c_lookup_var both defer to c_live_idx rather than repeating its walk. They used to
+# be three copies of one loop, which meant the scoping rule had three homes: adding
+# `c_in_scope` to it was one edit made three times, and the next rule would be too.
 fn c_var_cname(mut &em: Emitter, name: str) -> str {
-	mut i := em.env_names.len() - 1
-	for i >= 0 {
-		return em.env_cnames[i] if em.env_names[i] == name and c_in_scope(em, i)
-		i = i - 1
+	idx := c_live_idx(em, name)
+	if idx >= 0 {
+		return em.env_cnames[idx]
 	}
 	return "zg_" + name
 }
 
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
-	mut i := em.env_names.len() - 1
-	for i >= 0 {
-		return em.env_tys[i] if em.env_names[i] == name and c_in_scope(em, i)
-		i = i - 1
+	idx := c_live_idx(em, name)
+	if idx >= 0 {
+		return em.env_tys[idx]
 	}
 	return TUnknown
 }
@@ -1020,6 +1031,8 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		em.sig_names.append(key)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
+		em.sig_nparams.append(fn_i.params.len())
+		em.sig_nreq.append(c_required_params(fn_i))
 		mut j := 0
 		for j < fn_i.params.len() {
 			em.pr_fn.append(key)
@@ -1044,6 +1057,27 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 # function's parameter 0 sits at fixes every other one; the scan below stops as soon as it
 # is past that block, which is what keeps a fully-applied call — nearly every call — from
 # walking the whole program's parameters to learn it has no default to backfill.
+# c_required_params is how many arguments a call to this function must give: every
+# parameter up to the first one with a default, since a default may only follow defaults.
+fn c_required_params(fn_d: FnDecl) -> int {
+	mut n := 0
+	for pm in fn_d.params {
+		return n if pm.has_def
+		n = n + 1
+	}
+	return n
+}
+
+# c_sig_row is a signature's index in the sig_* columns, or -1 when nothing registered it.
+fn c_sig_row(mut &em: Emitter, key: str) -> int {
+	mut i := 0
+	for i < em.sig_names.len() {
+		return i if em.sig_names[i] == key
+		i = i + 1
+	}
+	return -1
+}
+
 fn c_param_row(mut &em: Emitter, fname: str, idx: int) -> int {
 	mut i := 0
 	mut seen := false
@@ -2070,17 +2104,9 @@ fn c_guard_jump_err(kw: str) {
 
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
-# c_unexpr lowers a prefix operator. Like c_ternary it is a function only so its operand
-# can be checked before it is rendered, a match arm having nowhere to put a statement.
-fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
-	chk_unary(em, oper, x)
-	return f"({c_unop(oper)}{c_expr(em, x, sb)})"
-}
-
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
-	chk_binary(em, oper, a, b)
-
 	ta := c_infer(em, a)
+	chk_binary(em, oper, ta, c_infer(em, b))
 	if c_is_str(ta) {
 		if oper == "+" {
 			em.used_str = true
@@ -2106,6 +2132,13 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the impl `#[derive(Eq)]` / `#[derive(Ord)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
 
 	return f"({c_expr(em, a, sb)} {c_binop(oper)} {c_expr(em, b, sb)})"
+}
+
+# c_unexpr lowers a prefix operator. Like c_ternary it is a function only so its operand
+# can be checked before it is rendered, a match arm having nowhere to put a statement.
+fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
+	chk_unary(em, oper, x)
+	return f"({c_unop(oper)}{c_expr(em, x, sb)})"
 }
 
 # c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime
@@ -2599,12 +2632,14 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bo
 # by one on a method, whose receiver fills parameter 0 without appearing at the call. The
 # first is what reads the parameter table; the second is what a diagnostic may say out loud.
 fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -> str {
-	chk_argument(em, fname, idx, pos, a)
-
 	# the one place that reads the row directly rather than through the per-column
 	# helpers: it needs two answers about the same parameter, and asking twice would walk
 	# the whole program's parameter table twice for every argument of every call
 	row := c_param_row(em, fname, idx)
+
+	# the check is handed the row's TYPE rather than the name and index it would look the
+	# row up from — the scan above is the one this function exists not to repeat
+	chk_argument(em, fname, row, pos, a)
 
 	return f"&({c_expr(em, a, sb)})" if row >= 0 and em.pr_ref[row]
 	return c_expr(em, a, sb) if row < 0
@@ -4883,16 +4918,12 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# the nil is a value there and has to travel the value path below.
 	return f"{pre}{ind}return {c_carrier_fit(em, em.fn_ret, e, c_nosub())};\n" if has_val and c_is_nil_expr(e) and c_is_carrier(em.fn_ret)
 	if has_val and not c_is_nil_expr(e) {
-		chk_returned(em, e)
-
-		# the returned expression's type is wanted on two conditions that rarely coincide —
-		# a channel return type, and a defer to unwind past — so it is inferred once, and
-		# only when one of them holds. The ordinary `return x` infers nothing.
+		# the returned expression's type is wanted twice — once to check it against the
+		# signature, and again on the two conditions that rarely coincide, a channel return
+		# type and a defer to unwind past. chk_returned answers with what it inferred, so
+		# the walk happens once rather than once per asker.
+		et := chk_returned(em, e)
 		ret_chan := ty_is_chan(em.fn_ret)
-		mut et := TUnknown
-		if ret_chan or pre != "" {
-			et = c_infer(em, e)
-		}
 		if ret_chan {
 			c_chan_check(et, em.fn_ret, "return")
 		}
@@ -5019,18 +5050,18 @@ fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 # parenthesized, and wrapping those again produces `if ((a == b))` — which the C compiler
 # warns about, 112 times in one build of this compiler. That noise is not free: it is what
 # a real warning has to be spotted among, and one nearly was not.
-# c_ternary lowers `a if c else b`. It is its own function only so the condition can be
-# checked before it is rendered — a match arm has nowhere to put a statement.
-fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst) -> str {
-	chk_condition(em, cond, "an `if` expression")
-	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
-}
-
 fn c_cond(mut &em: Emitter, x: Expr, site: str) -> str {
 	chk_condition(em, x, site)
 	rendered := c_expr(em, x, c_nosub())
 	return rendered if c_is_wrapped(rendered)
 	return f"({rendered})"
+}
+
+# c_ternary lowers `a if c else b`. It is its own function only so the condition can be
+# checked before it is rendered — a match arm has nowhere to put a statement.
+fn c_ternary(mut &em: Emitter, cond: Expr, then_e: Expr, else_e: Expr, sb: Subst) -> str {
+	chk_condition(em, cond, "an `if` expression")
+	return f"({c_expr(em, cond, sb)} ? {c_expr(em, then_e, sb)} : {c_expr(em, else_e, sb)})"
 }
 
 # c_is_wrapped reports whether s is enclosed by ONE pair of parentheses — its first
@@ -5485,7 +5516,7 @@ fn c_emit_file(f: File) -> str {
 # the difference is the only thing that keeps two objects from defining the same symbol.
 fn c_emit_unit(prog: File, own: File, whole: bool) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0, [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, 0, 0, [])
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

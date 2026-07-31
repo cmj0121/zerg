@@ -154,6 +154,18 @@ src/bootstrap/
     diag/          # diagnostics
 ```
 
+## Known gaps
+
+The seed is deliberately the narrower compiler, and it refuses most of what it has not
+built. These are the places it does NOT — where it accepts a program the language rejects,
+so `zerg` is the stricter one and `scripts/reject-check.sh` marks the case `seed-gap`.
+
+- **A `mut &` parameter with a DEFAULT is accepted, and a call that uses the default
+  segfaults.** GRAMMAR:314 makes a `mut &` valid only for the call and its argument a `mut`
+  lvalue; a default has no caller variable to point at. The seed emits the default
+  expression where a pointer goes, so `f(5)` on `fn f(a: int, mut &b: int = 0)` dereferences
+  a literal. `zerg` refuses it at the declaration.
+
 ## Changing the seed
 
 The invariant that makes a change safe to make: **the C emitted for the self-host source

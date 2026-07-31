@@ -135,6 +135,12 @@ emission that calls them is what keeps the rules readable as a set, and what mak
 them into a real pass later a move rather than a rewrite — which is what has to happen when
 the AST learns to carry source positions.
 
+Types are compared by `ty_eq` (in `ast.zg`), which is structural over the `Ty` enum — not
+by `ty_name`, which is the diagnostic SPELLING and collapses `TUnknown`, `TTuple` and
+`TMap` onto one name. Fitting is not equality, so `chk_fits` keeps its own structure on
+top: a slot whose type reshapes what it is given is never a mismatch, and a list fits a
+list when its elements fit.
+
 Two kinds of message, and the difference is a lifetime:
 
 | message           | means                                              | lives in   |

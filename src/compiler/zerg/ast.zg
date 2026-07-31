@@ -460,6 +460,104 @@ fn is_err_ty(t: Ty) -> bool {
 	}
 }
 
+# ty_eq is whether two types are THE SAME type. It exists because `ty_name` was being used
+# for the job, and `ty_name` is the DIAGNOSTIC SPELLING of a type: it collapses TUnknown,
+# TTuple and TMap onto `"?"`, so `ty_name(a) == ty_name(b)` answers yes for a tuple and a
+# map, and for two tuples of different shapes. That is only safe where the spelling is
+# unique — the scalars — which is why every caller of it as an equality had to restrict
+# itself to those, and why a struct bound to the wrong struct still reached cc.
+#
+# TUnknown equals NOTHING, including itself. A type the compiler could not work out is not
+# evidence that two things are the same; a caller that wants to let an unknown through says
+# so itself, which is what makes this answer mean one thing.
+fn ty_eq(a: Ty, b: Ty) -> bool {
+	return match a {
+		TNamed(an)      => ty_eq_named(an, b)
+		TList(ae)       => ty_eq_list(ae, b)
+		TOpt(ae)        => ty_eq_opt(ae, b)
+		TMap(ak, av)    => ty_eq_map(ak, av, b)
+		TChan(ae, ad)   => ty_eq_chan(ae, ad, b)
+		TEither(al, ar) => ty_eq_either(al, ar, b)
+		TFn(aps, ar)    => ty_eq_fn(aps, ar, b)
+		TTuple(aes)     => ty_eq_tuple(aes, b)
+		TUnknown        => false
+
+		# every remaining variant is a scalar with a spelling of its own, so the name IS
+		# the identity there — the one place the shortcut this function replaces was right
+		_ => ty_name(a) == ty_name(b)
+	}
+}
+
+fn ty_eq_named(an: str, b: Ty) -> bool {
+	return match b {
+		TNamed(bn) => an == bn
+		_          => false
+	}
+}
+
+fn ty_eq_list(ae: Ty, b: Ty) -> bool {
+	return match b {
+		TList(be) => ty_eq(ae, be)
+		_         => false
+	}
+}
+
+fn ty_eq_opt(ae: Ty, b: Ty) -> bool {
+	return match b {
+		TOpt(be) => ty_eq(ae, be)
+		_        => false
+	}
+}
+
+fn ty_eq_map(ak: Ty, av: Ty, b: Ty) -> bool {
+	return match b {
+		TMap(bk, bv) => ty_eq(ak, bk) and ty_eq(av, bv)
+		_            => false
+	}
+}
+
+# A DIRECTION is part of a channel's type: `chan[int]<-` and `<-chan[int]` are not
+# interchangeable, and the emitter has its own direction check that says so more precisely.
+fn ty_eq_chan(ae: Ty, ad: int, b: Ty) -> bool {
+	return match b {
+		TChan(be, bd) => ad == bd and ty_eq(ae, be)
+		_             => false
+	}
+}
+
+fn ty_eq_either(al: Ty, ar: Ty, b: Ty) -> bool {
+	return match b {
+		TEither(bl, br) => ty_eq(al, bl) and ty_eq(ar, br)
+		_               => false
+	}
+}
+
+fn ty_eq_fn(aps: list[Ty], ar: Ty, b: Ty) -> bool {
+	return match b {
+		TFn(bps, br) => ty_eq(ar, br) and ty_eq_all(aps, bps)
+		_            => false
+	}
+}
+
+fn ty_eq_tuple(aes: list[Ty], b: Ty) -> bool {
+	return match b {
+		TTuple(bes) => ty_eq_all(aes, bes)
+		_           => false
+	}
+}
+
+# ty_eq_all compares two type lists element-wise. A length mismatch is answered first, so
+# the loop never indexes past either one.
+fn ty_eq_all(xs: list[Ty], ys: list[Ty]) -> bool {
+	return false if xs.len() != ys.len()
+	mut i := 0
+	for i < xs.len() {
+		return false if not ty_eq(xs[i], ys[i])
+		i = i + 1
+	}
+	return true
+}
+
 fn ty_name(t: Ty) -> str {
 	return match t {
 		TInt          => "int"

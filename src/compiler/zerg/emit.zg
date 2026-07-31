@@ -865,17 +865,13 @@ fn c_cname_taken(mut &em: Emitter, cand: str) -> bool {
 # `c_in_scope` to it was one edit made three times, and the next rule would be too.
 fn c_var_cname(mut &em: Emitter, name: str) -> str {
 	idx := c_live_idx(em, name)
-	if idx >= 0 {
-		return em.env_cnames[idx]
-	}
+	return em.env_cnames[idx] if idx >= 0
 	return "zg_" + name
 }
 
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
 	idx := c_live_idx(em, name)
-	if idx >= 0 {
-		return em.env_tys[idx]
-	}
+	return em.env_tys[idx] if idx >= 0
 	return TUnknown
 }
 
@@ -2384,6 +2380,7 @@ fn c_list_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tt
 fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
 	return f"((int64_t)zrt_list_len(&({tgt})))" if meth == "len"
 	raise f"NotImplemented: the list method `{meth}` — this compiler has `len` and `append`" if meth != "append"
+
 	if meth == "append" {
 		# the element is copied INTO the list, so the list owns it and the caller's name
 		# for it goes on being its own
@@ -4612,6 +4609,7 @@ fn c_range_incl(e: Expr) -> bool {
 # every iteration the way a C `for` header would.
 fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -> str {
 	c_range_needs_hi(iter, "a `for … in` needs an upper bound")
+
 	lo := c_expr(em, c_range_lo(iter), c_nosub())
 	hi := c_expr(em, c_range_hi(iter), c_nosub())
 	outer_scope := c_scope_open(em)

@@ -1579,7 +1579,7 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 
 # c_needs_copy reports whether copying a value of this type has to do more than a C `=`.
 fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
-	return true if c_is_list(t)
+	return true if c_is_list(t) or c_is_map(t)
 	nm := c_named_of(t)
 	return false if nm == ""
 
@@ -1610,9 +1610,19 @@ fn c_copied(mut &em: Emitter, t: Ty, e: Expr, sb: Subst) -> str {
 # what a deep copy IS lives in one function, and a second kind of type that needs one is
 # added here alone.
 fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
+	# the source is BOUND before its address is taken, because `&(x)` needs x to be a place
+	# and not everything copied is one. `m[k]` lowers to a statement expression, so reading
+	# a list out of a map — `v := c["k"]` — reached cc as "cannot take the address of an
+	# rvalue of type 'zrt_list'", against C nobody wrote. Binding costs one header copy,
+	# which is a handful of words, and it makes the addressability question go away rather
+	# than answering it at each call site.
 	if c_is_list(t) {
 		em.used_rt = true
-		return "({ zrt_list zg_cp; zrt_list_copy(&zg_cp, &(" + x + ")); zg_cp; })"
+		return "({ zrt_list zg_cs = (" + x + "); zrt_list zg_cp; zrt_list_copy(&zg_cp, &zg_cs); zg_cp; })"
+	}
+	if c_is_map(t) {
+		em.used_rt = true
+		return "({ zrt_map zg_cs = (" + x + "); zrt_map zg_cp; zrt_map_copy(&zg_cp, &zg_cs); zg_cp; })"
 	}
 	return f"zg_copy_{c_named_of(t)}({x})"
 }
@@ -1644,9 +1654,22 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 # carries its own elemsz and its own vt, so one thunk serves every element type.
 fn c_elem_vt(mut &em: Emitter, t: Ty) -> str {
 	return "zg_listvt_list" if c_is_list(t)
+	return "zg_listvt_map" if c_is_map(t)
 	return f"zg_listvt_{c_named_of(t)}" if c_needs_copy(em, t)
 
 	return "zg_listvt"
+}
+
+# c_elem_copy_fn is the thunk itself, for a table that takes one rather than a whole
+# vtable. A map's `key_copy` / `val_copy` have exactly the signature a list element's
+# `copy` has, so the same thunks serve both — a `map[str, list[int]]` duplicates its
+# values through the function a `list[list[int]]` duplicates its elements through.
+fn c_elem_copy_fn(mut &em: Emitter, t: Ty) -> str {
+	return "zg_elemcopy_list" if c_is_list(t)
+	return "zg_elemcopy_map" if c_is_map(t)
+	return f"zg_elemcopy_{c_named_of(t)}" if c_needs_copy(em, t)
+
+	return "NULL"
 }
 
 # The vtable carries a COPY and no drop: this emitter is leak-style, so nothing generates
@@ -2342,7 +2365,12 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	em.lv_write = w
 
 	at := c_list_at_fn(w)
-	return f"(*({ct}*){at}(&({tgt}), {ix}))" if c_is_lvalue(target)
+
+	# c_is_PLACE and not c_is_lvalue: the type-blind question calls `m[k]` an lvalue, and
+	# it is not — it lowers to a statement expression, so `c["k"][0]` took the address of
+	# an rvalue and cc said so about C nobody wrote. c_is_place is the same question with
+	# the types that tell them apart, and it is what the mutating-method path already asks.
+	return f"(*({ct}*){at}(&({tgt}), {ix}))" if c_is_place(em, target)
 
 	# a call/conversion result is an rvalue; materialise it so its address is taken
 	return "({ zrt_list zg_ix = " + tgt + "; (*(" + ct + "*)" + at + "(&zg_ix, " + ix + ")); })"
@@ -4483,9 +4511,13 @@ fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
 	}
 	em.mvt_names.append(name)
 
-	# NULL copy/drop is the runtime's memcpy fast path, which is what a POD key or value
-	# wants; a key or value that owns storage is not supported yet.
-	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, NULL, NULL, NULL, NULL }};\n")
+	# NULL copy is the runtime's memcpy fast path, which is what a POD key or value wants.
+	# A key or value that OWNS storage gets the same thunk a list element of that type
+	# gets: without one, `zrt_map_copy` bit-copied a `list` value and both maps' entries
+	# named one buffer. The drops stay NULL — this emitter is leak-style throughout.
+	kc := c_elem_copy_fn(em, kt)
+	vc := c_elem_copy_fn(em, vt)
+	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, NULL, {vc}, NULL }};\n")
 	return name
 }
 
@@ -4571,7 +4603,11 @@ fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) ->
 fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind: str) -> str {
 	kc := c_type(c_map_key_ty(tty))
 	vc := c_type(c_map_val_ty(tty))
-	tgt := c_expr(em, target, c_nosub())
+
+	# `m[k] = v` INSERTS, so the map is WRITTEN and its target is an assignment target like
+	# any other: `h[0]["z"] = 3` edits a map header that lives inside `h`'s buffer, and
+	# lowering `h[0]` as a read left that buffer shared with `g`.
+	tgt := c_lvalue(em, target, c_nosub())
 	k := c_expr(em, idx, c_nosub())
 	v := c_fit_copied(em, c_map_val_ty(tty), rhs, c_nosub())
 	return f"{ind}{{ {kc} zg_mk = {k}; {vc} zg_mv = {v}; zrt_map_set(&({tgt}), &zg_mk, &zg_mv); }}\n"
@@ -5100,6 +5136,13 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# says which one was meant; printing the carrier itself used to reach cc as an integer
 	# cast of a struct.
 	raise f"`print` needs a value, and {ty_name(ty)} may not have one — say which with `?? …` or `!`" if c_is_opt(ty)
+
+	# A COMPOSITE has no rendering: the structural one is `Display`'s job and this compiler
+	# generates none, so the arm below cast a struct, a list or a tuple to `long long` and
+	# cc reported it against C nobody wrote. `print(a, b)` is the way into this that a
+	# reader does not see coming — there is no two-argument `print`, so it builds a TUPLE
+	# and prints that. c_display_check is the same refusal `str(…)` already makes.
+	c_display_check(em, ty)
 	ex := c_expr(em, e, c_nosub())
 	return match ty {
 		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
@@ -5876,6 +5919,8 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
 		hdr = hdr + "static void zg_elemcopy_list(void *dst, const void *src) { zrt_list_copy((zrt_list*)dst, (const zrt_list*)src); }\n"
 		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, NULL};\n"
+		hdr = hdr + "static void zg_elemcopy_map(void *dst, const void *src) { zrt_map_copy((zrt_map*)dst, (const zrt_map*)src); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, NULL};\n"
 		hdr = hdr + "static zrt_list zg_empty_list(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
 	}
 	if em.used_str {

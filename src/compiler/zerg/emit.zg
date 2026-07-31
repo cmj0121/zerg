@@ -2581,7 +2581,7 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bo
 		if lead or i > 0 {
 			out = out + ", "
 		}
-		out = out + c_arg(em, key, base + i, args[i], sb)
+		out = out + c_arg(em, key, base + i, i + 1, args[i], sb)
 		i = i + 1
 	}
 	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
@@ -2595,7 +2595,12 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bo
 # once the callee's copy is its own, returning it aliases nothing, and a call's result can
 # go on being treated as nobody else's. Copying at the return instead would have to copy a
 # local that is about to die, which is pure waste and needs escape analysis to avoid.
-fn c_arg(mut &em: Emitter, fname: str, idx: int, a: Expr, sb: Subst) -> str {
+# `idx` is the PARAMETER's index and `pos` is the argument's place as written — they differ
+# by one on a method, whose receiver fills parameter 0 without appearing at the call. The
+# first is what reads the parameter table; the second is what a diagnostic may say out loud.
+fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -> str {
+	chk_argument(em, fname, idx, pos, a)
+
 	# the one place that reads the row directly rather than through the per-column
 	# helpers: it needs two answers about the same parameter, and asking twice would walk
 	# the whole program's parameter table twice for every argument of every call

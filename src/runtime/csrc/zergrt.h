@@ -110,16 +110,22 @@ void zrt_list_init(zrt_list *l, size_t elemsz, const zrt_elem_vt *vt);
  * grow relocates the live prefix with a bit-move, not vt->copy. */
 void zrt_list_push(zrt_list *l, const void *elem);
 
-/* zrt_list_at returns a pointer to element i's slot for READING, aborting ("index out
- * of range") when i is past the end — the `xs[i]` force path (IndexError). The slot may
- * belong to a buffer other holders share, so nothing may be written through it. */
+/* zrt_list_at returns a pointer to element i's slot to be WRITTEN through, aborting
+ * ("index out of range") when i is past the end — the `xs[i]` force path (IndexError).
+ * It unshares first, so the pointer names storage this list alone owns.
+ *
+ * The WRITE one keeps the plain name on purpose. Copy-on-write needs a caller to say
+ * which it wants, and a caller that does not say must get the safe answer: the Go seed
+ * shares this runtime, has no notion of the split, and would otherwise have started
+ * writing into buffers its own `zrt_list_copy` had just shared. The cost of the safe
+ * default is a duplicate on a read; the cost of the other one is silent aliasing in a
+ * client nobody remembered to update. */
 void *zrt_list_at(zrt_list *l, size_t i);
 
-/* zrt_list_at_mut is the same slot for WRITING: it unshares first, so the pointer names
- * storage this list alone owns. The two are separate functions because the difference
- * is the whole of copy-on-write — a read that unshared would duplicate every buffer any
- * reader ever indexed, which is the cost this exists to avoid. */
-void *zrt_list_at_mut(zrt_list *l, size_t i);
+/* zrt_list_at_ref is the same slot for READING, and does not unshare — so nothing may be
+ * written through it. It is the whole point of copy-on-write: a read that unshared would
+ * duplicate every buffer anybody ever indexed, which is the cost this exists to avoid. */
+void *zrt_list_at_ref(zrt_list *l, size_t i);
 
 /* zrt_list_set overwrites element i: it drops the old element (vt->drop) then
  * memcpys *elem in. Aborts on a bad index, like zrt_list_at. Unshares. */
@@ -138,6 +144,12 @@ void *zrt_list_get(zrt_list *l, size_t i);
  * duplicated later, by whichever holder writes first (zrt_list_unshare). Nothing
  * observable changes — a write through one name is never seen through another. */
 void zrt_list_copy(zrt_list *dst, const zrt_list *src);
+
+/* zrt_list_slice fills dst with src's elements [lo, hi), each duplicated the way a copy
+ * duplicates one. Aborts (IndexError) when the range is not within src. It is a function
+ * rather than a loop the compiler emits because the duplication rule — vt->copy, or a
+ * memcpy for a POD — is the one this file already states twice. */
+void zrt_list_slice(zrt_list *dst, const zrt_list *src, size_t lo, size_t hi);
 
 /* zrt_list_unshare gives l a buffer no other holder has, so a caller may write into it
  * directly. Every mutating entry point above calls it; it is exported for the compiler

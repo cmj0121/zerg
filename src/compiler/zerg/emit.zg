@@ -2382,8 +2382,8 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 # every indexed read duplicate a buffer; getting it wrong the other way lets a write
 # through one name be seen through another, which is the language's value semantics.
 fn c_list_at_fn(write: bool) -> str {
-	return "zrt_list_at_mut" if write
-	return "zrt_list_at"
+	return "zrt_list_at" if write
+	return "zrt_list_at_ref"
 }
 
 # c_lvalue lowers an expression that is being WRITTEN to. It is c_expr with the write

@@ -92,43 +92,23 @@ jobs:
       - name: Test the runtime
         run: make -C src/runtime test
 
-      # --- 4 + 5. build every MVP example WITH the bootstrap, then run it ---------
-      - name: Build & run all examples
-        shell: bash
-        run: |
-          set -uo pipefail
-          examples=(
-            examples/[0-9][0-9]_*.zg
-            examples/modules/main.zg
-            examples/1g/init/main.zg
-            examples/1g/reexport/main.zg
-          )
-          workdir="$(mktemp -d)"
-          fail=0
-          for src in "${examples[@]}"; do
-            bin="$workdir/$(printf '%s' "$src" | tr '/' '_').bin"
-            printf ':: %s\n' "$src"
-            if ! ./bin/zerg0 build "$src" -o "$bin"; then
-              printf '   BUILD FAILED\n'
-              fail=1
-              continue
-            fi
-            if ! "$bin"; then
-              printf '   RUN FAILED (exit %d)\n' "$?"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            printf '\nOne or more examples failed to build or run.\n' >&2
-            exit 1
-          fi
-          printf '\nAll %d examples built and ran cleanly.\n' "${#examples[@]}"
-
-      # --- 6. the seed's actual contract: it builds the self-hosting compiler ----
+      # --- 4. the seed's actual contract: it builds the self-hosting compiler ----
       # Nothing else in this pipeline exercises src/compiler/, so a seed change that
       # breaks the one thing the seed exists for would otherwise pass CI.
       - name: Build the self-hosting compiler with the seed
         run: make build
+
+      # --- 5. build every example with the compiler that SHIPS, then run it ------
+      # This step used to inline its own loop and drive `zerg0`, which made it a
+      # gate on the SEED — and the seed is deliberately the narrower compiler. Four
+      # examples say so in their own header comment (`11_coroutines`, `12_actor`,
+      # `13_cancel` are concurrency, `14_optional` needs the implicit `nil` for an
+      # omitted `T?` field), so the loop failed on exactly the examples that were
+      # right. `make examples` is the same corpus built by `zerg`, with the two
+      # demos `zerg` cannot build yet named there rather than here — one list, in
+      # the Makefile, where the reasons are written down.
+      - name: Build & run all examples
+        run: make examples
 
       # --- 7. the programs the toolchain must turn away --------------------------
       # It runs here, right after the compilers are built, because it needs both of them

@@ -753,6 +753,30 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   operand list; `in` is already a keyword). The constraint string (`"rax"`, `"r"`, `"m"`, …) is opaque here —
   its meaning is the target backend's. `asm` is `unsafe`-only; a **syscall** is issued this way.
 
+## What is specified and not built
+
+Every form below is **[not yet]**: the grammar defines it, `zerg` refuses it **by its own
+name**, and no program that uses one compiles into something else. This list is not prose —
+`scripts/refuse-check.sh` holds a case for each, so a form that quietly starts working, or
+quietly starts failing differently, fails the gate.
+
+| Group | Form                                                                                    |
+| ----- | --------------------------------------------------------------------------------------- |
+| 2     | command literal `` `…` `` and its interpolating form `` f`…` ``                         |
+| 3     | destructuring binding `(a, b) := …`                                                     |
+| 5     | f-string `{x!r}` / `{x=}` / `{x:spec}`                                                  |
+| 6     | generic `fn` / `struct` / `enum`; a closure that captures; an untyped closure parameter |
+| 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`        |
+| 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body        |
+| 8     | associated function `Type.f(…)`; an associated type or value in an `impl`               |
+| 8     | every decorator but `#[derive(…)]`                                                      |
+| 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                          |
+| 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                 |
+
+A `spec`'s **required members are enforced** on an `impl … for …` even though nothing
+dispatches on the spec — that much a declared interface means. Everything else about `spec`
+is on the list.
+
 ## Editor tooling
 
 Syntax highlighting for Neovim lives under [`editors/nvim/`](../../editors/nvim) as classic Vim syntax files:

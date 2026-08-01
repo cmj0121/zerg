@@ -18,6 +18,18 @@ struct Parser {
 
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	path: str
+
+	# spec_name / spec_reqs are the required members of each `spec` read so far, one entry
+	# per spec, its members joined by `,`. A spec is otherwise read and DROPPED — it is not
+	# a type and nothing dispatches on it — and that made `impl Show for P { }` compile with
+	# no `show` at all. Enforcing the members is the least a declared interface can mean.
+	spec_name: list[str]
+	spec_reqs: list[str]
+
+	# impl_spec / impl_type are the `impl S for T` heads seen, checked after the whole file
+	# is read: a member may be supplied by a separate inherent block anywhere in it.
+	impl_spec: list[str]
+	impl_type: list[str]
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -56,6 +68,18 @@ fn p_advance(mut &p: Parser) {
 # The worst of them reached cc: a method already has `this` at parameter 0, so writing one
 # gave `zg_P_get(zg_P zg_this, int64_t zg_this)` and clang reported the redefinition
 # against generated C.
+# p_names_here reports whether the token at `at` is a name a BINDING position is about to
+# take — an identifier, or a reserved word somebody used as one. The three positions that
+# bind through a `:=` / `in` guard themselves with `p_at(p, Ident)`, which is right about
+# what they accept and silent about why: a keyword there is not "some other statement", it
+# is a binding whose name is reserved, and saying so is what every other naming position
+# now does.
+fn p_names_here(mut &p: Parser, at: int) -> bool {
+	k := p.toks[at].kind
+	return true if k == Ident
+	return lookup_keyword(p.toks[at].lexeme) != Ident
+}
+
 fn p_name(mut &p: Parser, what: str) -> str {
 	lx := cur(p).lexeme
 
@@ -125,6 +149,12 @@ fn parse_type(mut &p: Parser) -> Ty {
 }
 
 fn parse_base_type(mut &p: Parser) -> Ty {
+	# `[T; N]` — an ARRAY TYPE (GRAMMAR:459). It is not built, and it was not turned away
+	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
+	# `=`, found `int`` and `fn f(xs: [int; 3])` reported `expected `:`, found `;`` — two
+	# different tokens, neither of them the form.
+	raise "NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, LBrack)
+
 	if p_at(p, LArrow) {
 		p_advance(p)
 		inner := parse_type(p)
@@ -303,7 +333,7 @@ pub fn parse(src: str) -> File {
 # so a diagnostic can name the file it was written in.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path)
+	mut p := Parser(toks, 0, "", path, [], [], [], [])
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -349,6 +379,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		}
 		skip_semis(p)
 	}
+	chk_impl_covers(p, fns)
 	return File(imports, structs, enums, fns, consts)
 }
 
@@ -394,6 +425,13 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 			}
 		}
 		pname := p_name(p, "a parameter")
+
+		# A CLOSURE parameter may omit its `: type` (GRAMMAR:328) — the compiler infers it
+		# from the function type the closure is checked against. This one does not infer,
+		# and it did not say so: the `expect` below reported `expected `:`, found `)``,
+		# which reads as a typo in a form the grammar allows.
+		raise f"NotImplemented: a closure parameter without a type — GRAMMAR lets `{pname}` take its type from the function type the closure is checked against, and this compiler does not infer it; write `{pname}: T`" if not p_at(p, Colon)
+
 		expect(p, Colon)
 		pty := parse_type(p)
 		params.append(Param(pname, pty, is_ref, false, ENil))
@@ -457,22 +495,20 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 	# `_ => …` — the non-blocking arm, and the ONLY bare identifier a select arm may open with.
 	# Anything else here is refused by name: it used to become this arm silently, which turned a
 	# typo into a select that no longer blocks and no longer ends.
-	if p_at(p, Ident) and peek_kind(p, 1) == FatArrow {
-		head := cur(p).lexeme
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == FatArrow {
+		head := p_name(p, "a select arm's binding")
 		raise f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has" if head != "_"
-		p_advance(p)
 		p_advance(p) # '=>'
 		return SelArm(3, "", ENil, ENil, parse_sel_body(p))
 	}
 
 	# `v := <-ch => …` — a named receive
 	mut bind := ""
-	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
-		bind = cur(p).lexeme
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Walrus {
+		bind = p_name(p, "a select arm's binding")
 		if bind == "_" {
 			bind = ""
 		}
-		p_advance(p)
 		p_advance(p) # ':='
 	}
 	if p_at(p, LArrow) {
@@ -565,10 +601,16 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 # not, which is the shape this compiler turns away by name everywhere else.
 fn parse_spec(mut &p: Parser) {
 	p_advance(p) # 'spec'
+	mut sname := ""
 	for not p_at(p, LBrace) and not p_at(p, Eof) {
+		if p_at(p, Ident) and sname == "" {
+			sname = cur(p).lexeme
+		}
 		p_advance(p)
 	}
 	return if p_at(p, Eof)
+
+	mut reqs := ""
 
 	p_advance(p) # '{'
 	mut depth := 1
@@ -576,6 +618,12 @@ fn parse_spec(mut &p: Parser) {
 	for not p_at(p, Eof) {
 		if p_at(p, Fn) {
 			in_sig = true
+			if peek_kind(p, 1) == Ident {
+				if reqs != "" {
+					reqs = reqs + ","
+				}
+				reqs = reqs + p.toks[p.pos + 1].lexeme
+			}
 		} else if p_at(p, LBrace) {
 			raise "NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature and write the body in each `impl`" if in_sig and depth == 1
 			depth = depth + 1
@@ -583,6 +631,8 @@ fn parse_spec(mut &p: Parser) {
 			depth = depth - 1
 			if depth == 0 {
 				p_advance(p)
+				p.spec_name.append(sname)
+				p.spec_reqs.append(reqs)
 				return
 			}
 		} else if p_at(p, Semi) {
@@ -590,6 +640,17 @@ fn parse_spec(mut &p: Parser) {
 		}
 		p_advance(p)
 	}
+}
+
+# p_spec_reqs is what a spec requires, or "" for a name no `spec` in this file declared —
+# one from another module, which this compiler cannot see and does not guess about.
+fn p_spec_reqs(mut &p: Parser, name: str) -> str {
+	mut i := 0
+	for i < p.spec_name.len() {
+		return p.spec_reqs[i] if p.spec_name[i] == name
+		i = i + 1
+	}
+	return ""
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
@@ -782,10 +843,11 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	p_advance(p) # 'struct'
 	name := p_name(p, "a struct")
 
-	# `struct B[T] { … }` — the parameter list is read and dropped for the same reason a
-	# generic argument list is: this compiler erases generics, and a `[` left in the stream
-	# would be read as the body's opening brace.
-	skip_ty_args(p)
+	# `struct B[T] { … }` — READ AND DROPPED, so a field of type `T` then reported
+	# `no type named T`: a message about the consequence, from two steps away, for a form
+	# the compiler had already decided not to support. A generic ENUM has been refused by
+	# name since it was written; this is the same refusal for the other declaration.
+	raise f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one" if p_at(p, LBrack)
 	expect(p, LBrace)
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
@@ -838,9 +900,30 @@ fn parse_decorator(mut &p: Parser) {
 # rule reads all three spellings the grammar allows — `impl T`, `impl T[A]`, and the spec
 # form `impl Spec for T` — and lands on T in every one of them, which matters because the
 # methods belong to T in all three.
+# p_for_after_args reports whether a `for` follows the bracket group starting at the next
+# token — `impl Show[int] for P`, where the spec name carries type arguments.
+fn p_for_after_args(mut &p: Parser) -> bool {
+	mut i := p.pos + 1
+	mut d := 0
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		if k == LBrack {
+			d = d + 1
+		} else if k == RBrack {
+			d = d - 1
+			return p.toks[i + 1].kind == For if d == 0
+		} else if k == LBrace or k == Eof {
+			return false
+		}
+		i = i + 1
+	}
+	return false
+}
+
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	p_advance(p) # 'impl'
 	mut target := ""
+	mut sp := ""
 	mut depth := 0
 	for not p_at(p, Eof) and not (p_at(p, LBrace) and depth == 0) {
 		if p_at(p, LBrack) {
@@ -848,6 +931,15 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 		} else if p_at(p, RBrack) {
 			depth = depth - 1
 		} else if depth == 0 and p_at(p, Ident) {
+			# `impl Spec for T` — the LAST name is the target, and the spec is the name
+			# `for` follows. The same one rule reads `impl T` and `impl T[A]`, where there
+			# is no `for` and so no spec.
+			# the spec is the name `for` follows — across its TYPE ARGUMENTS if it has
+			# any. Asking only about the next token dropped `impl Show[int] for P` back to
+			# no spec at all, so the member check was skipped for it entirely.
+			if peek_kind(p, 1) == For or (peek_kind(p, 1) == LBrack and p_for_after_args(p)) {
+				sp = cur(p).lexeme
+			}
 			target = cur(p).lexeme
 		}
 		p_advance(p)
@@ -892,6 +984,60 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	}
 	expect(p, RBrace)
 	p.impl_ty = outer
+
+	# the impl is RECORDED and checked once the whole file is read. Checking it here made
+	# the answer depend on declaration order: a member supplied by a separate inherent
+	# block later in the file had not been parsed yet, so a valid program was refused for
+	# where its blocks happened to sit.
+	if sp != "" {
+		p.impl_spec.append(sp)
+		p.impl_type.append(target)
+	}
+}
+
+# chk_impl_covers raises when an `impl Spec for T` leaves one of the spec's members out. A
+# spec this file never declared is left alone: it is from another module, which this
+# compiler cannot see and does not guess about.
+fn chk_impl_covers(mut &p: Parser, mut &fns: list[FnDecl]) {
+	mut i := 0
+	for i < p.impl_spec.len() {
+		sp := p.impl_spec[i]
+		target := p.impl_type[i]
+		reqs := p_spec_reqs(p, sp)
+
+		# a spec this file never declared is left alone: it is from another module, which
+		# this compiler cannot see, and guessing there would refuse a working program
+		if reqs != "" {
+			for want in split_commas(reqs) {
+				raise f"`{target}` does not implement `{want}`, which `{sp}` requires" if not impl_has(fns, target, want)
+			}
+		}
+		i = i + 1
+	}
+}
+
+fn impl_has(mut &fns: list[FnDecl], target: str, name: str) -> bool {
+	for f in fns {
+		return true if f.recv == target and f.name == name
+	}
+	return false
+}
+
+fn split_commas(s: str) -> list[str] {
+	mut out: list[str] = []
+	mut cur := ""
+	for b in list[byte](s) {
+		if b == b',' {
+			out.append(cur)
+			cur = ""
+		} else {
+			cur = cur + str([b])
+		}
+	}
+	if cur != "" {
+		out.append(cur)
+	}
+	return out
 }
 
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
@@ -975,12 +1121,56 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 
 # --- statements ----------------------------------------------------------------
 
+# p_starts_destructure reports whether the statement beginning here is a destructuring
+# form: a `(` — optionally after `mut` or `const` — whose group is followed by `:=` or `=`.
+# A parenthesised EXPRESSION statement looks the same up to the closing paren, so the
+# separator is what tells them apart.
+fn p_starts_destructure(mut &p: Parser) -> bool {
+	mut i := p.pos
+	if p.toks[i].kind == Mut or p.toks[i].kind == Const {
+		i = i + 1
+	}
+	return false if i >= p.toks.len() or p.toks[i].kind != LParen
+
+	mut depth := 0
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		if k == LParen {
+			depth = depth + 1
+		} else if k == RParen {
+			depth = depth - 1
+			if depth == 0 {
+				nxt := p.toks[i + 1].kind
+				return nxt == Walrus or nxt == Assign
+			}
+		} else if k == Semi or k == Eof {
+			return false
+		}
+		i = i + 1
+	}
+	return false
+}
+
 fn parse_stmt(mut &p: Parser) -> Stmt {
 	k := cur_kind(p)
 
 	# A bare `{ … }` is a NESTED SCOPE (GRAMMAR:52's `compound-stmt ::= block`). Reaching
 	# the expression parser instead, it was read as a map literal or as whatever its first
 	# statement made of it, and the message named that.
+	# A RESERVED WORD IN THE NAME SLOT is checked before the statement keywords below, or
+	# the one that owns the keyword answers first: `print := 1` reached the `print`
+	# statement arm, read `:= 1` as the thing to print, and reported it from the expression
+	# fallback. A `:=` after any keyword is a binding somebody meant to write.
+	# `:=` or `: T =` after something that is not a name. A RESERVED WORD is the case worth
+	# naming — `print := 1` reached the `print` statement arm, read `:= 1` as the thing to
+	# print, and was reported from the expression fallback — but `5 := 1` is not a reserved
+	# word and calling it one is a sentence the reader cannot act on. Both spellings are
+	# checked, since only the walrus one used to be and the two diverged.
+	if k != Ident and (peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and is_stmt_kw(k))) {
+		raise f"`{cur(p).lexeme}` is a reserved word and cannot name a binding" if lookup_keyword(cur(p).lexeme) != Ident
+		raise f"a binding needs a name, and `{cur(p).lexeme}` is not one"
+	}
+
 	raise "NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == LBrace
 
 	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR:200). The `{` after a type
@@ -989,6 +1179,15 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
 	# EXPRESSION, so the names in it came out undefined rather than bound.
 	raise f"NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == LBrace
+
+	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `(a, b) = e`
+	# (GRAMMAR:196, :198, :201). It is named HERE, where the `(` that opens it is the first
+	# token of a statement, because each spelling failed differently otherwise: the `:=` one
+	# reached the expression fallback and was named after its walrus, the `mut` one reported
+	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
+	# evaluated, assigned to no one, and the program printed the values it started with.
+	raise "NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if p_starts_destructure(p)
+
 	if k == Nop {
 		p_advance(p)
 		return SNop
@@ -1066,7 +1265,14 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return parse_binding(p, false)
 	}
-	return parse_binding(p, false) if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon)
+
+	# A BINDING is `name := …` or `name: T = …`, and it is recognised by that shape — so a
+	# RESERVED WORD in the name slot did not match, fell through every arm below, and was
+	# reported from the expression fallback as `` `:=` is not an expression``: the token
+	# after the name rather than the reserved word in it. `print := 1` and `this := 1` both
+	# arrived that way. Reaching parse_binding is what puts them in front of `p_name`.
+	return parse_binding(p, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
+	return parse_binding(p, false) if k == Ident and peek_kind(p, 1) == Colon
 
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
@@ -1086,8 +1292,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 # parse_binding parses `name := e` (inferred) or `name: T = e` (typed). const is folded
 # into an immutable let (is_mut false); the emitter treats both as a plain C local.
 fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
-	name := cur(p).lexeme
-	p_advance(p)
+	# the last naming position that still read whatever token was there: `print := 1` and
+	# `this := 1` were carried past and reported from the expression fallback, as `` `:=` is
+	# not an expression`` — the token after the name rather than the reserved word in it.
+	name := p_name(p, "a binding")
 	if p_at(p, Walrus) {
 		p_advance(p)
 		return SLet(name, TUnknown, false, is_mut, parse_expr(p))
@@ -1146,9 +1354,8 @@ fn parse_if(mut &p: Parser) -> Stmt {
 	# `:=` alone, one token of lookahead, because no condition may contain one. Without
 	# this the `:=` was read as the start of a second expression and the rest of the
 	# function came apart, silently.
-	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
-		name := cur(p).lexeme
-		p_advance(p) # name
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Walrus {
+		name := p_name(p, "an `if let` binding")
 		p_advance(p) # ':='
 		value := parse_expr(p)
 		then_body := parse_block(p)
@@ -1201,9 +1408,8 @@ fn parse_for(mut &p: Parser) -> Stmt {
 	raise "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
 
 	# for-in: `for name in iterable { ... }`
-	if p_at(p, Ident) and peek_kind(p, 1) == In {
-		vname := cur(p).lexeme
-		p_advance(p) # name
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == In {
+		vname := p_name(p, "a loop binding")
 		p_advance(p) # 'in'
 		iter := parse_expr(p)
 		return SForIn(vname, iter, parse_block(p))
@@ -1454,6 +1660,13 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			name := ident_name(e)
 			args := parse_call_args(p)
 			if is_conv(name) {
+				# A CONVERSION TAKES A VALUE. `int()` and `list[int]()` read as a call and
+				# then indexed an empty argument list, so the COMPILER aborted with its own
+				# `IndexError: index out of range` — no place, no form named, and a stack
+				# trace of the compiler rather than a diagnostic about the program.
+				raise f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
+				raise f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+
 				e = EConv(conv_ty(name), args[0])
 			} else {
 				e = ECall(name, args)
@@ -1484,9 +1697,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EInt(t.lexeme)
 	}
 	if k == Byte {
-		# a byte literal b'x' becomes its decimal code point
+		# a byte literal `b'x'` is its code point AS A BYTE. It used to be a bare EInt, so it
+		# inferred as `int` — and `c: byte = b'J'` was refused as "cannot bind int to a byte
+		# binding", about the one literal in the language whose whole point is that it is a
+		# byte. The conversion node is the type the emitter already knows how to carry, and
+		# `byte(74)` has always worked; this is that, written the way a reader writes it.
 		p_advance(p)
-		return EInt(strconv.to_string(int(list[byte](t.value)[0]), 10))
+		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)))
 	}
 	if k == Rune {
 		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
@@ -1529,6 +1746,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIdent("this")
 	}
+
+	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
+	# so the parser saw a call with a stray token after it and said `expected `)`, found
+	# ``echo {n}```. GRAMMAR:284 makes it a form of its own — one that runs through a shell
+	# and shell-quotes each hole — and it is refused as one.
+	raise "NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme if k == Ident and t.lexeme == "f" and peek_kind(p, 1) == Cmd
+
 	if k == Ident {
 		# list[T](x) — a list-type conversion (e.g. list[byte](s))
 		if t.lexeme == "list" and peek_kind(p, 1) == LBrack {
@@ -1537,6 +1761,10 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			elem := parse_type(p)
 			expect(p, RBrack)
 			args := parse_call_args(p)
+
+			raise "`list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
+			raise f"`list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+
 			return EConv(TList(elem), args[0])
 		}
 		p_advance(p)
@@ -1646,6 +1874,16 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# that compiles and is not the one that was written, so it is named instead.
 	raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here" if is_stmt_kw(k)
 
+	# TWO TOKENS ARRIVE HERE AS THE SIGN OF A FORM, not as themselves. A `:=` means the
+	# line was a DESTRUCTURING binding — `(a, b) := (1, 2)` — whose left side read as a
+	# tuple expression before the walrus was reached; a `..` in a pattern means a LIST
+	# pattern. Naming the token names the wreckage rather than what was written.
+
+	# A bare `..` is a RANGE with nothing on its left (GRAMMAR:265): `xs[..2]` is the open
+	# form of a slice. It was named as a list pattern, which is a different form the same
+	# token opens — advice about something nobody wrote.
+	raise "NotImplemented: a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have" if k == DotDot
+
 	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
 	# and the expression became nil, which emits `0`. So every form this parser does not
 	# know became the number zero, silently: a rune literal `'A'` was 0, and so was anything
@@ -1698,6 +1936,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
 	# message named a symptom two steps from the form that was written.
 	raise "NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`" if p_at(p, LParen)
+	raise "NotImplemented: a list pattern in a `match` arm — this compiler destructures a list with indexing and `.slice`" if p_at(p, LBrack)
 
 	mut pat := 0
 	mut lit := ENil
@@ -1716,6 +1955,13 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			p_advance(p)
 			name = p_name(p, "a variant pattern")
 		}
+
+		# `Move{x, y} =>` — a STRUCT PATTERN (GRAMMAR:390). `P{…}` after a name in arm
+		# position is that and nothing else, and it fell through to the arrow check, so the
+		# message was `expected `=>`, found `{`` — the token after the form rather than the
+		# form. The tuple and list patterns beside it are already refused by name.
+		raise f"NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern" if p_at(p, LBrace)
+
 		if name == "_" {
 			pat = 2
 		} else if is_pascal(name) {
@@ -1739,6 +1985,12 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	} else {
 		lit = parse_expr(p)
 	}
+
+	# `pattern as name` — the AS BINDING (GRAMMAR:388), which binds the whole matched value
+	# while the pattern keeps destructuring. It fell through to the arrow check, so the
+	# message named `as` rather than the form it opens.
+	raise "NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value, which this compiler does not carry alongside the destructured parts" if p_at(p, As)
+
 	mut has_guard := false
 	mut grd := ENil
 	if p_at(p, If) {
@@ -1930,7 +2182,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path)
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, [], [], [], [])
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

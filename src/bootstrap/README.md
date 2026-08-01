@@ -179,6 +179,10 @@ the program, which is what the assertion exists to catch.
 - **A store through a value is accepted.** `get()[0] = 99` takes the address of a call's
   result. `zerg` refuses any write whose path is not storage all the way down.
 - **`match` of an optional against a range is accepted.** `zerg` refuses the arm.
+- **An `int` narrowed to a `byte` parameter is accepted.** `take(1000)` on a `fn take(b:
+byte)` compiles to a truncation and cc warns about the generated C. `zerg` refuses it: a
+  `byte` WIDENS to an `int` and nothing goes the other way, because byte arithmetic stays
+  in `byte` and so nothing needs it to.
 
 ## Changing the seed
 

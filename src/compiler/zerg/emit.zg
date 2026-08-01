@@ -1880,6 +1880,18 @@ fn c_needs_runtime(mut &em: Emitter) -> bool {
 	return false
 }
 
+# c_qualified_variant answers the enum name when `target.fld` is `Enum.Variant`, and "" for
+# every other field access. The variant has to belong to THAT enum: `Color.Apple` names a
+# variant of another one, and answering it would make the qualification decorative.
+fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
+	en := c_ident_name(target)
+
+	return "" if en == "" or not c_name_in(em.enum_names, en)
+	return "" if not c_is_variant(em, fld) or c_variant_enum(em, fld) != en
+
+	return en
+}
+
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
 	for i < em.var_name.len() {
@@ -2641,7 +2653,12 @@ fn c_ident_name(e: Expr) -> str {
 # chain of comparisons against them; the tag itself is the number, which is what makes the
 # reverse a test and not a table.
 fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) -> str {
-	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)`, which reverses a discriminant into a `{en}?`" if meth != "of"
+	# `Shape.Line(5)` — a variant CONSTRUCTOR named by its enum, the payload-carrying half
+	# of `Color.Red`. It arrives here rather than at c_fieldref because a call is a method
+	# shape, and `of` is the other thing an enum name answers.
+	return c_variant_ctor(em, meth, args, sb) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+
+	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither" if meth != "of"
 	raise f"`{en}.of(n)` takes one integer — the discriminant to reverse" if args.len() != 1
 	raise f"enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, en)
 
@@ -3492,7 +3509,13 @@ fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
 	en := c_ident_name(target)
-	return TOpt(TNamed(en)) if en != "" and meth == "of" and c_name_in(em.enum_names, en)
+	if en != "" and c_name_in(em.enum_names, en) {
+		return TOpt(TNamed(en)) if meth == "of"
+
+		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
+		# variant is named rather than looked up, so there is nothing to fail.
+		return TNamed(en) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+	}
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
@@ -4963,6 +4986,12 @@ fn c_tuple_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 # reads a tuple back by static index, `t.0`, and the parser gives that the same EField node
 # a struct field gets, so the number is what tells them apart.
 fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
+	# `Color.Red` is a value of `Color`, and it is answered here for the same reason
+	# c_fieldref answers it: an enum name infers to nothing, so asking about the target
+	# first would lose the shape.
+	en := c_qualified_variant(em, target, fld)
+	return TNamed(en) if en != ""
+
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
@@ -4986,6 +5015,23 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 }
 
 fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
+	# `Color.Red` — a variant NAMED BY ITS ENUM. The bare `Red` is what the grammar makes
+	# normative (a bare name is a variant when it resolves to one, GRAMMAR:428), and it
+	# stays; this is the same value said unambiguously, which is what a reader reaches for
+	# when two enums are in scope and the bare names do not say which is meant. It is
+	# answered before inference for the reason `E.of(n)` is: an enum name is not a binding,
+	# so `c_infer` has nothing to say about it and the message was `undefined name `Color``.
+	en := c_qualified_variant(em, target, fld)
+	return "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, fld), 10) + "}" if en != ""
+
+	# the enum is named and the field is not one of ITS variants. Falling through said
+	# `undefined name `Color`` — about the one name in the expression that IS defined.
+	tn := c_ident_name(target)
+	if tn != "" and c_name_in(em.enum_names, tn) {
+		raise f"`{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
+		raise f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
+	}
+
 	tgt := c_expr(em, target, sb)
 	return f"{tgt}.f{fld}" if c_all_digits(fld)
 

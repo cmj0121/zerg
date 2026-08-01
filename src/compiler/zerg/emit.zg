@@ -4811,6 +4811,16 @@ fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
 	for n in em.mvt_names {
 		return name if n == name
 	}
+
+	# A KEY NEEDS `Hash`, and this compiler has two: int and str (GRAMMAR — a map key needs
+	# both equality and a hash, and neither is automatic). A `byte` key took the INT hash
+	# and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}` built, and the lookup
+	# that followed raised `KeyError` for a key that was right there. The seed has refused
+	# this all along; `zerg` reached it by inference the day a byte literal carried its type.
+	# a key whose type inference could not name is left alone, as every other rule here
+	# does: guessing turns a typing gap into a refusal of a working program
+	raise f"NotImplemented: a map key of type {ty_name(kt)} — a key needs `Hash`, and this compiler has one for `int` and for `str`" if not c_is_int(kt) and not c_is_str(kt) and not c_is_unknown(kt)
+
 	mut hash := "zrt_hash_int"
 	mut eq := "zrt_eq_int"
 	if c_is_str(kt) {
@@ -5148,6 +5158,10 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 		# is the rule the CALL path has followed since it was written (`ascii.is_digit`).
 		return c_var_cname(em, fld)
 	}
+
+	# a REAL module and a member it does not have. Falling through lowered `lib` as a value
+	# and said `undefined name lib` — about the qualifier, which is the part that is right.
+	raise f"module `{ns}` has no `{fld}`" if c_name_in(em.mod_names, ns)
 
 	tgt := c_expr(em, target, sb)
 	return f"{tgt}.f{fld}" if c_all_digits(fld)

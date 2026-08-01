@@ -1064,6 +1064,16 @@ EOF
 # It needs two modules, which this harness writes one file for, so the case lives in the
 # multi-module example instead: see examples/1g/reexport.
 
+# A KEY NEEDS `Hash`, and this compiler has one for `int` and one for `str`. A `byte` key
+# took the INT hash and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}` built
+# and the lookup that followed raised `KeyError` for a key that was right there.
+expect "$ZERG" map-key-without-a-hash "a key needs \`Hash\`" <<'EOF'
+fn main() {
+	m := {b'a': 1}
+	print m.len()
+}
+EOF
+
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.

@@ -1161,7 +1161,15 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# the one that owns the keyword answers first: `print := 1` reached the `print`
 	# statement arm, read `:= 1` as the thing to print, and reported it from the expression
 	# fallback. A `:=` after any keyword is a binding somebody meant to write.
-	raise f"`{cur(p).lexeme}` is a reserved word and cannot name a binding" if k != Ident and peek_kind(p, 1) == Walrus
+	# `:=` or `: T =` after something that is not a name. A RESERVED WORD is the case worth
+	# naming — `print := 1` reached the `print` statement arm, read `:= 1` as the thing to
+	# print, and was reported from the expression fallback — but `5 := 1` is not a reserved
+	# word and calling it one is a sentence the reader cannot act on. Both spellings are
+	# checked, since only the walrus one used to be and the two diverged.
+	if k != Ident and (peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and is_stmt_kw(k))) {
+		raise f"`{cur(p).lexeme}` is a reserved word and cannot name a binding" if lookup_keyword(cur(p).lexeme) != Ident
+		raise f"a binding needs a name, and `{cur(p).lexeme}` is not one"
+	}
 
 	raise "NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == LBrace
 

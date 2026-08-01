@@ -43,6 +43,29 @@ fn p_advance(mut &p: Parser) {
 	p.pos = p.pos + 1
 }
 
+# p_name reads the NAME a declaration or a binding introduces, and refuses anything that is
+# not an identifier.
+#
+# Every naming position used to take `cur(p).lexeme` — whatever token happened to be there —
+# so a RESERVED WORD passed straight through as a name. `this` went through all of them:
+# `fn f(this: int)`, `struct P { this: int }`, `fn this()`, `struct this`, `enum E { this }`,
+# `A(this) =>`. GRAMMAR:117 lists it as a keyword and GRAMMAR:330 says outright that `this`
+# is NOT a parameter; `print` and `with` were turned away only because the parser routes
+# them as statements somewhere else, which is not a rule about names at all.
+#
+# The worst of them reached cc: a method already has `this` at parameter 0, so writing one
+# gave `zg_P_get(zg_P zg_this, int64_t zg_this)` and clang reported the redefinition
+# against generated C.
+fn p_name(mut &p: Parser, what: str) -> str {
+	lx := cur(p).lexeme
+
+	raise f"`{lx}` is a reserved word and cannot name {what}" if not p_at(p, Ident) and lookup_keyword(lx) != Ident
+	raise f"{what} needs a name, and `{lx}` is not one" if not p_at(p, Ident)
+
+	p_advance(p)
+	return lx
+}
+
 # expect consumes the token the grammar requires, and REPORTS when it is not there.
 #
 # It used to advance on a match and say nothing otherwise, so a malformed construct was not
@@ -364,8 +387,7 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 				is_ref = true
 			}
 		}
-		pname := cur(p).lexeme
-		p_advance(p)
+		pname := p_name(p, "a parameter")
 		expect(p, Colon)
 		pty := parse_type(p)
 		params.append(Param(pname, pty, is_ref, false, ENil))
@@ -651,8 +673,7 @@ fn parse_import_spec(mut &p: Parser) -> str {
 
 fn parse_enum(mut &p: Parser) -> EnumDecl {
 	p_advance(p) # 'enum'
-	name := cur(p).lexeme
-	p_advance(p) # name
+	name := p_name(p, "an enum")
 
 	# `enum E[T] { A(T) }` — the parameter list was read and dropped the way a struct's is,
 	# but an enum's payload NAMES it, so `T` reached cc as a type nothing declares. A struct's
@@ -666,8 +687,7 @@ fn parse_enum(mut &p: Parser) -> EnumDecl {
 	mut next := 0
 	mut payload := false
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
-		vname := cur(p).lexeme
-		p_advance(p)
+		vname := p_name(p, "an enum variant")
 		mut fields: list[Ty] = []
 		if p_at(p, LParen) {
 			p_advance(p)
@@ -742,8 +762,8 @@ fn is_pascal(s: str) -> bool {
 
 fn parse_struct(mut &p: Parser) -> StructDecl {
 	p_advance(p) # 'struct'
-	name := cur(p).lexeme
-	p_advance(p) # name
+	name := p_name(p, "a struct")
+
 	# `struct B[T] { … }` — the parameter list is read and dropped for the same reason a
 	# generic argument list is: this compiler erases generics, and a `[` left in the stream
 	# would be read as the body's opening brace.
@@ -757,8 +777,7 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 		if p_at(p, Pub) {
 			p_advance(p)
 		}
-		fname := cur(p).lexeme
-		p_advance(p)
+		fname := p_name(p, "a struct field")
 		expect(p, Colon)
 		fty := parse_type(p)
 
@@ -856,8 +875,8 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
 	p_advance(p) # 'fn'
-	name := cur(p).lexeme
-	p_advance(p) # name
+	name := p_name(p, "a function")
+
 	# `fn f[T](x: T)` — the bracket group was read as the parameter list, so `[T]` became
 	# two parameters named `[` and `]` and the C came out unparseable
 	raise "NotImplemented: a generic function definition" if p_at(p, LBrack)
@@ -885,8 +904,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 			p_advance(p)
 			is_ref = true
 		}
-		pname := cur(p).lexeme
-		p_advance(p)
+		pname := p_name(p, "a parameter")
 		expect(p, Colon)
 		pty := parse_type(p)
 
@@ -1003,8 +1021,7 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 
 	if k == Del {
 		p_advance(p)
-		name := cur(p).lexeme
-		p_advance(p)
+		name := p_name(p, "a `del`")
 		return SDel(name)
 	}
 	return parse_close(p, false) if k == Close
@@ -1675,8 +1692,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			if p_at(p, LParen) {
 				p_advance(p)
 				for not p_at(p, RParen) and not p_at(p, Eof) {
-					binds.append(cur(p).lexeme)
-					p_advance(p)
+					binds.append(p_name(p, "a pattern binding"))
 					if p_at(p, Comma) {
 						p_advance(p)
 					}

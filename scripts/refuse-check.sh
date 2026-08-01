@@ -725,6 +725,33 @@ fn main() {
 }
 EOF
 
+# A NAMED ARGUMENT is GRAMMAR:239 and the sanctioned way to skip a defaulted parameter in
+# the middle (docs/code/functions.md). This compiler is positional-only, and the `:` used to
+# reach parse_primary, which answered "`:` is not an expression this compiler reads" — a
+# token, about a form the language specifies and the seed builds.
+
+expect "$ZERG" named-argument-in-a-call "NotImplemented: the named argument \`b:\`" <<'EOF'
+fn f(a: int, b: int) -> int {
+	return a - b
+}
+
+fn main() {
+	print f(b: 1, a: 5)
+}
+EOF
+
+expect "$ZERG" named-field-in-a-construction "NotImplemented: the named argument \`y:\`" <<'EOF'
+struct P {
+	x: int
+	y: int
+}
+
+fn main() {
+	p := P(y: 2, x: 1)
+	print p.x
+}
+EOF
+
 expect "$ZERG" optional-method-call "NotImplemented: calling optional chain ?.get" <<'EOF'
 struct P {
 	x: int

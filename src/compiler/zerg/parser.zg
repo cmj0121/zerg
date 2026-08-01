@@ -1658,6 +1658,19 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 		} else {
 			# free call: name(args), or a scalar type conversion like int(x)
 			name := ident_name(e)
+
+			# A CALLEE THAT IS NOT A NAME. Three forms reach here and all three used to be
+			# built as `ECall("", args)`, which the emitter reported as ``undefined function
+			# ` ``` — an empty name, naming nothing, for a program with no typo in it:
+			#
+			#   f[T](x)    explicit type arguments (GRAMMAR:236, group 7)
+			#   fs[0](x)   a call through a function VALUE held in a container
+			#   p?.get()   an optional method call
+			#
+			# The shape is still in hand here, which is why the refusal belongs in the parser
+			# rather than downstream of the name it threw away.
+			raise f"NotImplemented: calling {expr_kind(e)} — a callee is a plain name in this compiler, so `f[T](…)` (an explicit type argument), `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are all unbuilt" if name == ""
+
 			args := parse_call_args(p)
 			if is_conv(name) {
 				# A CONVERSION TAKES A VALUE. `int()` and `list[int]()` read as a call and

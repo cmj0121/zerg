@@ -25,6 +25,11 @@ struct Parser {
 	# no `show` at all. Enforcing the members is the least a declared interface can mean.
 	spec_name: list[str]
 	spec_reqs: list[str]
+
+	# impl_spec / impl_type are the `impl S for T` heads seen, checked after the whole file
+	# is read: a member may be supplied by a separate inherent block anywhere in it.
+	impl_spec: list[str]
+	impl_type: list[str]
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -316,7 +321,7 @@ pub fn parse(src: str) -> File {
 # so a diagnostic can name the file it was written in.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path, [], [])
+	mut p := Parser(toks, 0, "", path, [], [], [], [])
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -362,6 +367,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		}
 		skip_semis(p)
 	}
+	chk_impl_covers(p, fns)
 	return File(imports, structs, enums, fns, consts)
 }
 
@@ -946,24 +952,34 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	expect(p, RBrace)
 	p.impl_ty = outer
 
-	# A SPEC'S REQUIRED MEMBERS have to be there. A spec is otherwise read and dropped — it
-	# is not a type and nothing dispatches on it — so `impl Show for P { }` with no `show`
-	# compiled and ran, and the declared interface meant nothing at all. Enforcing the
-	# members is the least it can mean, and it is the half a reader relies on.
-	chk_impl_covers(p, sp, target, fns)
+	# the impl is RECORDED and checked once the whole file is read. Checking it here made
+	# the answer depend on declaration order: a member supplied by a separate inherent
+	# block later in the file had not been parsed yet, so a valid program was refused for
+	# where its blocks happened to sit.
+	if sp != "" {
+		p.impl_spec.append(sp)
+		p.impl_type.append(target)
+	}
 }
 
 # chk_impl_covers raises when an `impl Spec for T` leaves one of the spec's members out. A
 # spec this file never declared is left alone: it is from another module, which this
 # compiler cannot see and does not guess about.
-fn chk_impl_covers(mut &p: Parser, sp: str, target: str, mut &fns: list[FnDecl]) {
-	return if sp == ""
+fn chk_impl_covers(mut &p: Parser, mut &fns: list[FnDecl]) {
+	mut i := 0
+	for i < p.impl_spec.len() {
+		sp := p.impl_spec[i]
+		target := p.impl_type[i]
+		reqs := p_spec_reqs(p, sp)
 
-	reqs := p_spec_reqs(p, sp)
-	return if reqs == ""
-
-	for want in split_commas(reqs) {
-		raise f"`{target}` does not implement `{want}`, which `{sp}` requires" if not impl_has(fns, target, want)
+		# a spec this file never declared is left alone: it is from another module, which
+		# this compiler cannot see, and guessing there would refuse a working program
+		if reqs != "" {
+			for want in split_commas(reqs) {
+				raise f"`{target}` does not implement `{want}`, which `{sp}` requires" if not impl_has(fns, target, want)
+			}
+		}
+		i = i + 1
 	}
 }
 
@@ -2069,7 +2085,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path, [], [])
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, [], [], [], [])
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

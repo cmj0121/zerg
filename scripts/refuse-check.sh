@@ -518,6 +518,25 @@ impl Show for P {
 fn main() { print "x" }
 EOF
 
+# and the other half: a member supplied by a SEPARATE inherent block, declared after the
+# spec impl. Checking at the `impl` made the answer depend on where the blocks sat.
+expect "$ZERG" impl-misses-one-of-two "does not implement \`tag\`" <<'EOF'
+struct P {
+	n: int
+}
+
+spec Show {
+	fn show() -> int
+	fn tag() -> int
+}
+
+impl Show for P {
+	fn show() -> int { return this.n }
+}
+
+fn main() { print "x" }
+EOF
+
 # Left and Right name the two SIDES of an Either and have no type of their own, so they are
 # read where the wanted type is known. Written where there is none, the compiler says which
 # of the two problems it is — a form used without its context, not a form that does not exist.

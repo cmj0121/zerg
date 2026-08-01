@@ -305,6 +305,13 @@ fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	idx := c_live_idx(em, root)
 	return if idx < 0 or em.env_mut[idx]
 
+	# `this` is never DECLARED, so `mut this := …` is advice the grammar has no spelling
+	# for. A plain method holds its receiver by value; the half that is missing is on the
+	# ENCLOSING method, and `mut fn` is how it is supplied.
+	if root == "this" {
+		chk_at(em, f"{chk_arg_says(key, pos)} writes back to `this`, and the enclosing method holds its receiver by value — declare that one `mut fn` too, or the mutation lands on a copy")
+		return
+	}
 	chk_at(em, f"{chk_arg_says(key, pos)} writes back to `{root}`, which is not `mut` — a caller-visible mutation needs both halves, so declare it `mut {root} := …`")
 }
 
@@ -579,6 +586,17 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	}
 
 	if chk_is_equality(oper) {
+		# AN ENUM IS NOT A SCALAR, so it fell straight through this branch and the tags were
+		# compared as whatever C made of them. Two of them answered by tag alone: `Red ==
+		# Apple`, one variant of each of two unrelated enums, was `true` because both are
+		# tag 0. And an enum against an int reached cc, which read the tagged union as a
+		# number. Same enum is the one comparison that means anything.
+		if c_is_enum_ty(em, ta) or c_is_enum_ty(em, tb) {
+			return if c_is_enum_ty(em, ta) and c_is_enum_ty(em, tb) and ty_eq(ta, tb)
+			chk_at(em, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — a variant is a value of ITS enum, and its discriminant is not a number to compare with")
+			return
+		}
+
 		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
 
 		# int and float compare: they are one family, and the language already mixes them

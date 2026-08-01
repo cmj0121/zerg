@@ -1700,6 +1700,44 @@ fn main() {
 }
 EOF
 
+# and one level down, where the same question has the same answer and three more ways of
+# going wrong: a repeated FIELD and a repeated PARAMETER both reached cc as a C redefinition
+# against .zerg-cache, and a repeated VARIANT was accepted — the second took the next
+# discriminant, so it was unreachable, and a `match` naming the first was "exhaustive" over
+# an enum that had two.
+
+reject a-field-declared-twice 'declares a field named `v` twice' no-place seed-gap <<'EOF'
+struct A {
+	v: int
+	v: str
+}
+
+fn main() {
+	print("x")
+}
+EOF
+
+reject a-variant-declared-twice 'declares a variant named `X` twice' no-place seed-gap <<'EOF'
+enum E {
+	X
+	X
+}
+
+fn main() {
+	print(f"{int(E.X)}")
+}
+EOF
+
+reject a-parameter-declared-twice 'declares a parameter named `a` twice' no-place <<'EOF'
+fn f(a: int, a: int) -> int {
+	return a
+}
+
+fn main() {
+	print(f"{f(1, 2)}")
+}
+EOF
+
 # --- a reserved word cannot name a binding either -------------------------------
 #
 # The last naming position that read whatever token was there. A binding is recognised by

@@ -85,7 +85,7 @@ $(SUBDIR):
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
-	for src in examples/[0-9][0-9]_*.zg examples/1g/reexport/main.zg examples/1g/modconst/main.zg; do \
+	for src in examples/[0-9][0-9]_*.zg examples/1g/reexport/main.zg examples/1g/modconst/main.zg examples/1g/spec/main.zg; do \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		$$out >/dev/null 2>&1 || { echo "RUN    $$src"; fail=1; continue; }; \

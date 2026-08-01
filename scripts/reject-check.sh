@@ -1626,6 +1626,80 @@ fn main() {
 }
 EOF
 
+# --- a type name is one name -----------------------------------------------------
+#
+# A struct, an enum and a spec share one namespace — every module flattens into one scope
+# here, which is the argument that already refuses a duplicate function and a duplicate
+# module constant. Nothing checked it, and the shapes failed four different ways: two
+# structs MERGED into one of both their fields, two of the same reached cc as a "typedef
+# redefinition" against .zerg-cache, and two specs were simply accepted.
+
+reject a-struct-declared-twice 'is declared twice' no-place <<'EOF'
+struct A {
+	v: int
+}
+
+struct A {
+	w: str
+}
+
+fn main() {
+	print(f"{A(7).v}")
+}
+EOF
+
+reject an-enum-declared-twice 'is declared twice' no-place seed-gap <<'EOF'
+enum E {
+	X
+}
+
+enum E {
+	Y
+}
+
+fn main() {
+	print(f"{int(E.X)}")
+}
+EOF
+
+reject a-spec-declared-twice 'is declared twice' no-place seed-gap <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+spec Tag {
+	fn other() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print(f"{A(1).tag()}")
+}
+EOF
+
+reject a-struct-and-a-spec-share-a-name 'once as a struct, once as a spec' no-place seed-gap <<'EOF'
+struct A {
+	v: int
+}
+
+spec A {
+	fn f() -> int
+}
+
+fn main() {
+	print(f"{A(1).v}")
+}
+EOF
+
 # --- a reserved word cannot name a binding either -------------------------------
 #
 # The last naming position that read whatever token was there. A binding is recognised by

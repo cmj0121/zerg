@@ -68,6 +68,18 @@ fn p_advance(mut &p: Parser) {
 # The worst of them reached cc: a method already has `this` at parameter 0, so writing one
 # gave `zg_P_get(zg_P zg_this, int64_t zg_this)` and clang reported the redefinition
 # against generated C.
+# p_names_here reports whether the token at `at` is a name a BINDING position is about to
+# take — an identifier, or a reserved word somebody used as one. The three positions that
+# bind through a `:=` / `in` guard themselves with `p_at(p, Ident)`, which is right about
+# what they accept and silent about why: a keyword there is not "some other statement", it
+# is a binding whose name is reserved, and saying so is what every other naming position
+# now does.
+fn p_names_here(mut &p: Parser, at: int) -> bool {
+	k := p.toks[at].kind
+	return true if k == Ident
+	return lookup_keyword(p.toks[at].lexeme) != Ident
+}
+
 fn p_name(mut &p: Parser, what: str) -> str {
 	lx := cur(p).lexeme
 
@@ -483,22 +495,20 @@ fn parse_sel_arm(mut &p: Parser) -> SelArm {
 	# `_ => …` — the non-blocking arm, and the ONLY bare identifier a select arm may open with.
 	# Anything else here is refused by name: it used to become this arm silently, which turned a
 	# typo into a select that no longer blocks and no longer ends.
-	if p_at(p, Ident) and peek_kind(p, 1) == FatArrow {
-		head := cur(p).lexeme
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == FatArrow {
+		head := p_name(p, "a select arm's binding")
 		raise f"`{head}` is not a select arm head — a select picks a ready arm, and `for select {{ … }}` is the loop that ends when every watched channel has" if head != "_"
-		p_advance(p)
 		p_advance(p) # '=>'
 		return SelArm(3, "", ENil, ENil, parse_sel_body(p))
 	}
 
 	# `v := <-ch => …` — a named receive
 	mut bind := ""
-	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
-		bind = cur(p).lexeme
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Walrus {
+		bind = p_name(p, "a select arm's binding")
 		if bind == "_" {
 			bind = ""
 		}
-		p_advance(p)
 		p_advance(p) # ':='
 	}
 	if p_at(p, LArrow) {
@@ -1336,9 +1346,8 @@ fn parse_if(mut &p: Parser) -> Stmt {
 	# `:=` alone, one token of lookahead, because no condition may contain one. Without
 	# this the `:=` was read as the start of a second expression and the rest of the
 	# function came apart, silently.
-	if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
-		name := cur(p).lexeme
-		p_advance(p) # name
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == Walrus {
+		name := p_name(p, "an `if let` binding")
 		p_advance(p) # ':='
 		value := parse_expr(p)
 		then_body := parse_block(p)
@@ -1391,9 +1400,8 @@ fn parse_for(mut &p: Parser) -> Stmt {
 	raise "NotImplemented: `for mut v in …` — the mutable loop binding writes each edited element back to its slot, which this compiler does not do" if p_at(p, Mut)
 
 	# for-in: `for name in iterable { ... }`
-	if p_at(p, Ident) and peek_kind(p, 1) == In {
-		vname := cur(p).lexeme
-		p_advance(p) # name
+	if p_names_here(p, p.pos) and peek_kind(p, 1) == In {
+		vname := p_name(p, "a loop binding")
 		p_advance(p) # 'in'
 		iter := parse_expr(p)
 		return SForIn(vname, iter, parse_block(p))

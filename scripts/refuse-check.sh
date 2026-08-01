@@ -490,10 +490,31 @@ fn load(a: Ref[int]) -> int {
 fn main() { print "x" }
 EOF
 
-expect "$ZERG" generic-field-type "no type named \`T\`" <<'EOF'
+# A generic ENUM has been refused by name since it was written; a generic STRUCT was read
+# and dropped, so a field of type `T` reported `no type named T` — a message about the
+# consequence, two steps from the form the compiler had already decided not to support.
+expect "$ZERG" generic-struct "a generic struct" <<'EOF'
 struct B[T] {
 	n: T
 }
+fn main() { print "x" }
+EOF
+
+# A `spec` is read and DROPPED — it is not a type and nothing dispatches on it — so this
+# compiled and ran with no `show` at all, and the declared interface meant nothing.
+# Enforcing the required members is the least it can mean.
+expect "$ZERG" impl-misses-a-required-member "does not implement \`show\`" <<'EOF'
+struct P {
+	n: int
+}
+
+spec Show {
+	fn show() -> int
+}
+
+impl Show for P {
+}
+
 fn main() { print "x" }
 EOF
 

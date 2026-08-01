@@ -1617,6 +1617,43 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 	for sp in f.specs {
 		c_check_type_dup(seen, kind, sp.name, "a spec")
 	}
+
+	# and one level down, where the same question has the same answer and three more ways
+	# of going wrong: a repeated FIELD and a repeated PARAMETER both reached cc as a C
+	# redefinition against .zerg-cache, and a repeated VARIANT was accepted — the second
+	# took the next discriminant, so it was unreachable, and a `match` naming the first was
+	# "exhaustive" over an enum that had two.
+	for sd in f.structs {
+		mut fnames: list[str] = []
+		for fd in sd.fields {
+			fnames.append(fd.name)
+		}
+		c_check_names_distinct(fnames, "a field", sd.name)
+	}
+	for ed in f.enums {
+		mut vnames: list[str] = []
+		for v in ed.variants {
+			vnames.append(v.name)
+		}
+		c_check_names_distinct(vnames, "a variant", ed.name)
+	}
+	for fn_i in f.fns {
+		mut pnames: list[str] = []
+		for pm in fn_i.params {
+			pnames.append(pm.name)
+		}
+		c_check_names_distinct(pnames, "a parameter", fn_i.name)
+	}
+}
+
+fn c_check_names_distinct(names: list[str], what: str, whose: str) {
+	mut seen: list[str] = []
+	for n in names {
+		for s in seen {
+			raise f"`{whose}` declares {what} named `{n}` twice" if s == n
+		}
+		seen.append(n)
+	}
 }
 
 fn c_check_type_dup(mut &seen: list[str], mut &kind: list[str], name: str, what: str) {

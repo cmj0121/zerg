@@ -120,7 +120,19 @@ reject() {
 	# every rule in check.zg reports through chk_at, which knows the statement's place —
 	# so a case that comes back without one is a rule that lost it, and nothing else here
 	# would notice: the sentence would still match.
-	if ! has_place "$out"; then
+	#
+	# A rule the PARSER enforces is the exception, and it is marked. The parser has no diag
+	# channel — it raises — so none of its refusals carries a place; that is one gap, owed
+	# once, and `reject-fuzz` counts the whole class. Marking the case keeps a permanent
+	# LANGUAGE rule in this file, where its lifetime says it belongs, instead of filing it
+	# with the not-yet-built forms next door to dodge one assertion.
+	if [ "$seed" = "no-place" ]; then
+		if has_place "$out"; then
+			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"
+			fail=$((fail + 1))
+			return
+		fi
+	elif ! has_place "$out"; then
 		echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
 		fail=$((fail + 1))
 		return
@@ -983,6 +995,118 @@ fn pick(n: int) -> int {
 
 fn main() {
 	print(pick(0))
+}
+EOF
+
+# --- `this` is a method's receiver, and nothing else -----------------------------
+#
+# GRAMMAR:117 makes `this` a reserved word, :330 says it is NOT a parameter, :332 that a
+# `fn` whose body uses it with no instance bound is a compile error, and :333 that the self
+# type is `This`. The seed enforces all of it. `zerg` enforced none of it: every naming
+# position read `cur(p).lexeme` — whatever token was there — so `this` passed as a
+# parameter, a field, a function, a type, a variant, a pattern binding. In a METHOD it
+# reached cc, because the parser has already put a `this` at parameter 0.
+
+reject this-as-a-parameter 'is a reserved word and cannot name a parameter' no-place <<'EOF'
+fn f(this: int) -> int {
+	return this
+}
+
+fn main() {
+	print(f(7))
+}
+EOF
+
+reject this-as-a-method-parameter 'is a reserved word and cannot name a parameter' no-place <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn get(this: int) -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject this-as-a-field 'is a reserved word and cannot name a struct field' no-place <<'EOF'
+struct P {
+	this: int
+}
+
+fn main() {
+	p := P(1)
+	print(p.this)
+}
+EOF
+
+reject this-as-a-function 'is a reserved word and cannot name a function' no-place <<'EOF'
+fn this() -> int {
+	return 1
+}
+
+fn main() {
+	print(this())
+}
+EOF
+
+reject this-as-a-type 'is a reserved word and cannot name a struct' no-place <<'EOF'
+struct this {
+	x: int
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject this-as-a-variant 'is a reserved word and cannot name an enum variant' no-place <<'EOF'
+enum E {
+	this
+	B
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject this-as-a-pattern-binding 'is a reserved word and cannot name a pattern binding' no-place <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(7)
+	print(match e {
+		A(this) => this
+		_ => 0
+	})
+}
+EOF
+
+reject this-outside-a-method "a method's receiver, and this function has none" <<'EOF'
+fn f() -> int {
+	return this
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject self-type-outside-an-impl "is the self type" <<'EOF'
+fn f() -> This {
+	return 1
+}
+
+fn main() {
+	print(1)
 }
 EOF
 

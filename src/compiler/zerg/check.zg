@@ -256,6 +256,172 @@ fn chk_store_path(mut &em: Emitter, e: Expr) {
 # A LANGUAGE rule, so it is checked rather than refused: it carries a place, and the seed
 # has rejected it all along. The caller has already established the type, so this takes
 # none — the question is asked in exactly one place.
+# --- specs -----------------------------------------------------------------------
+#
+# What a `spec` guarantees is a SIGNATURE, so what an `impl` must supply is a signature.
+# The check used to compare names, and only within one file:
+#
+#   fn tag() -> str          satisfied   fn tag(n: int) -> int
+#   spec Ord: Eq             required     nothing of Eq
+#   impl Nope for A          named        a spec that does not exist
+#
+# All three came from the same place — the spec was read by a token scanner into a
+# comma-joined list of member names, held on the Parser, and checked when one file finished.
+# A spec is now parsed, rides on the File, and is checked over the WHOLE program, which is
+# the view the driver already builds before anything is emitted.
+#
+# What is compared, per docs/core/specs.md ("A spec bound is the complete interface to a
+# generic type") and docs/code/functions.md ("the name is part of the function's contract"):
+# arity, and at each POSITION the parameter's name, type and `mut &`, and whether it has a
+# default — plus the return type. Position matters because Zerg has positional calls: if the
+# order were free, every call through a spec would have to be written with named arguments.
+#
+# What is NOT compared is the default's VALUE. A default's presence decides which calls are
+# legal, so it is interface; the value is what runs, and what runs is what an impl provides.
+fn chk_spec_impls(mut &em: Emitter, f: File) {
+	for ip in f.impls {
+		si := chk_spec_index(f, ip.on)
+		if si < 0 {
+			chk_at_place(em, ip.path, ip.line, ip.col, f"no spec named `{ip.on}` — an `impl … for …` names the interface it supplies, and nothing in this program declares one by that name")
+			continue
+		}
+		mut seen: list[str] = []
+		chk_impl_covers(em, f, ip, si, seen)
+	}
+}
+
+fn chk_spec_index(f: File, name: str) -> int {
+	mut i := 0
+	for i < f.specs.len() {
+		return i if f.specs[i].name == name
+		i = i + 1
+	}
+	return 0 - 1
+}
+
+# chk_impl_covers checks one `impl` against one spec AND every spec that one extends.
+#
+# `spec Ord: Eq` makes an `impl Ord` also require `Eq` (GRAMMAR:544), and the whole clause
+# used to be swallowed by the scan for `{`. `seen` is what keeps a diamond — two supers
+# extending one spec — from being checked twice, and a cycle from not terminating.
+fn chk_impl_covers(mut &em: Emitter, f: File, ip: ImplDecl, si: int, mut &seen: list[str]) {
+	sp := f.specs[si]
+	for s in seen {
+		return if s == sp.name
+	}
+	seen.append(sp.name)
+
+	for req in sp.reqs {
+		chk_impl_member(em, f, ip, sp, req)
+	}
+	for sup in sp.supers {
+		up := chk_spec_index(f, sup)
+		if up < 0 {
+			chk_at_place(em, sp.path, sp.line, sp.col, f"`{sp.name}` extends `{sup}`, and nothing in this program declares a spec by that name")
+			continue
+		}
+		chk_impl_covers(em, f, ip, up, seen)
+	}
+}
+
+# chk_impl_member finds what the impl supplies for one required member, and compares it.
+fn chk_impl_member(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl, req: FnDecl) {
+	for sup in f.fns {
+		if sup.recv == ip.target and sup.name == req.name {
+			why := chk_sig_differs(sp, ip, req, sup)
+			if why != "" {
+				chk_at_place(em, sup.path, sup.line, sup.col, f"`{ip.target}.{req.name}` does not match what `{sp.name}` requires: {why}")
+			}
+			return
+		}
+	}
+	chk_at_place(em, ip.path, ip.line, ip.col, f"`{ip.target}` does not implement `{req.name}`, which `{sp.name}` requires")
+}
+
+# chk_sig_differs answers WHY two signatures differ, or "" when they do not.
+#
+# The required signature is read with no receiver — a spec member's `this` is the
+# implementing type, which is not known where the spec is written — so the supplied one
+# carries an extra first parameter and the two are compared offset by it.
+fn chk_sig_differs(sp: SpecDecl, ip: ImplDecl, req: FnDecl, sup: FnDecl) -> str {
+	want := req.params.len() + 1
+	return f"it takes {chk_args(sup.params.len() - 1)}, and the spec declares {chk_args(req.params.len())}" if sup.params.len() != want
+
+	mut i := 0
+	for i < req.params.len() {
+		w := req.params[i]
+		g := sup.params[i + 1]
+		at := strconv.to_string(i + 1, 10)
+
+		return f"parameter {at} is named `{g.name}`, and the spec names it `{w.name}` — a named argument selects by that name, so it is part of the contract" if w.name != g.name
+
+		wt := chk_spec_subst(w.ty, sp, ip)
+
+		return f"parameter `{g.name}` is {ty_name(g.ty)}, and the spec declares {ty_name(wt)}" if not ty_eq(wt, g.ty)
+		return f"parameter `{g.name}` is `mut &` and the spec's is not" if g.is_ref and not w.is_ref
+		return f"parameter `{g.name}` is not `mut &` and the spec's is" if w.is_ref and not g.is_ref
+		return f"parameter `{g.name}` has a default and the spec declares none — whether one may be omitted is the spec's to say" if g.has_def and not w.has_def
+		return f"parameter `{g.name}` has no default and the spec declares one" if w.has_def and not g.has_def
+
+		i = i + 1
+	}
+
+	return "it returns nothing, and the spec declares a result" if req.has_ret and not sup.has_ret
+	return "it returns a value, and the spec declares none" if sup.has_ret and not req.has_ret
+
+	rt := chk_spec_subst(req.ret, sp, ip)
+	return f"it returns {ty_name(sup.ret)}, and the spec declares {ty_name(rt)}" if req.has_ret and not ty_eq(rt, sup.ret)
+
+	return ""
+}
+
+# chk_spec_subst turns a type written in a SPEC into the type it means for one `impl`.
+#
+# Two things in a required signature are not concrete types yet. `This` is the implementing
+# type — inside an `impl` the parser already resolves it (parser.zg), so the supplied
+# signature holds the target and the required one must be brought to meet it. And a
+# parameterized spec's own `K` is whatever `impl Ix[int]` bound it to, which is why the
+# impl's type arguments are kept rather than skipped.
+fn chk_spec_subst(t: Ty, sp: SpecDecl, ip: ImplDecl) -> Ty {
+	return match t {
+		TNamed(n)     => chk_subst_named(n, sp, ip)
+		TList(e)      => TList(chk_spec_subst(e, sp, ip))
+		TOpt(e)       => TOpt(chk_spec_subst(e, sp, ip))
+		TMap(k, v)    => TMap(chk_spec_subst(k, sp, ip), chk_spec_subst(v, sp, ip))
+		TChan(e, d)   => TChan(chk_spec_subst(e, sp, ip), d)
+		TEither(l, r) => TEither(chk_spec_subst(l, sp, ip), chk_spec_subst(r, sp, ip))
+		TTuple(es)    => TTuple(chk_subst_all(es, sp, ip))
+		TFn(ps, r)    => TFn(chk_subst_all(ps, sp, ip), chk_spec_subst(r, sp, ip))
+		_             => t
+	}
+}
+
+fn chk_subst_named(n: str, sp: SpecDecl, ip: ImplDecl) -> Ty {
+	return TNamed(ip.target) if n == "This"
+
+	mut i := 0
+	for i < sp.params.len() {
+		if sp.params[i] == n {
+			# an argument the impl did not give leaves the parameter as it stands, so the
+			# mismatch is reported about the type the reader wrote rather than about a
+			# substitution that did not happen
+			return ip.args[i] if i < ip.args.len()
+
+			return TNamed(n)
+		}
+		i = i + 1
+	}
+	return TNamed(n)
+}
+
+fn chk_subst_all(ts: list[Ty], sp: SpecDecl, ip: ImplDecl) -> list[Ty] {
+	mut out: list[Ty] = []
+	for t in ts {
+		out.append(chk_spec_subst(t, sp, ip))
+	}
+	return out
+}
+
 # chk_int_literal rejects an integer literal that does not fit an i64.
 #
 # docs/core/types.md: "A literal that does not fit its required type is a COMPILE ERROR …

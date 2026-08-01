@@ -1442,6 +1442,11 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 		}
 	}
 	for fn_i in f.fns {
+		# the declaration's own place: this pass runs before any statement is emitted, so
+		# the SAt markers have said nothing and `em.at_*` still holds the last unit's
+		em.at_path = fn_i.path
+		em.at_line = fn_i.line
+		em.at_col = fn_i.col
 		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {
 			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`")
@@ -1485,6 +1490,14 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
 	return if c_is_struct_name(em, nm)
 	return if c_is_enum_ty(em, TNamed(nm))
 
+	# `This` is the SELF TYPE (GRAMMAR:333), so it names something only where there is a
+	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
+	# means there was none, and saying "no type named `This`" invites the reader to go and
+	# declare one. Checked rather than refused, for the reason c_ident gives.
+	if nm == "This" {
+		chk_at(em, f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
+		return
+	}
 	raise f"no type named `{nm}` ({site})"
 }
 
@@ -3000,6 +3013,19 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	#
 	# A module constant, a struct name and a variant are all bound by the time a body is
 	# emitted, so the check is one question: did anything bind it?
+	# `this` is not an ordinary unknown name. GRAMMAR:330 says it is not a parameter and
+	# GRAMMAR:332 that a `fn` whose body uses it with no instance bound is a compile error —
+	# so the thing to say is which rule was broken, not that the name is unknown. It is
+	# bound exactly when the enclosing `fn` was declared in an `impl` or a `spec`, because
+	# that is where the parser puts the receiver.
+	#
+	# A CHECKED rule rather than a refusal, so it carries the place every other rule does:
+	# it is a statement about a program the language rejects, not a form this compiler has
+	# not built, and the C emitted after a finding is discarded.
+	if n == "this" and not c_is_bound(em, n) {
+		chk_at(em, "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
+		return "0"
+	}
 	raise f"undefined name `{n}`" if not c_is_bound(em, n) and not c_is_struct_name(em, n)
 
 	# every read of a binding funnels through here, which is what makes this the one place

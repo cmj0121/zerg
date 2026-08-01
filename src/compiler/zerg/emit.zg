@@ -1590,6 +1590,49 @@ fn c_scan_fnptr(mut &em: Emitter, f: File) {
 	}
 }
 
+# c_build_type_names refuses a NAME DECLARED TWICE at the type level.
+#
+# A `struct`, an `enum` and a `spec` share one namespace — every module of a program
+# flattens into one scope here, which is the same argument that already refuses a duplicate
+# function and a duplicate module constant. Nothing checked it, and the four shapes failed
+# four different ways:
+#
+#   struct A {v} + struct A {w}   MERGED into one struct of two fields; `A(7)` then wanted
+#                                 two arguments, a wrong answer with no diagnostic
+#   struct A {v} + struct A {v}   cc: "typedef redefinition", against .zerg-cache
+#   enum E + enum E               the same cc error
+#   spec T + spec T               silently ignored; the second's members required nothing
+#
+# It runs before the tables are built, so a later pass never sees the second declaration
+# and cannot be confused by it.
+fn c_build_type_names(mut &em: Emitter, f: File) {
+	mut seen: list[str] = []
+	mut kind: list[str] = []
+	for sd in f.structs {
+		c_check_type_dup(seen, kind, sd.name, "a struct")
+	}
+	for ed in f.enums {
+		c_check_type_dup(seen, kind, ed.name, "an enum")
+	}
+	for sp in f.specs {
+		c_check_type_dup(seen, kind, sp.name, "a spec")
+	}
+}
+
+fn c_check_type_dup(mut &seen: list[str], mut &kind: list[str], name: str, what: str) {
+	mut i := 0
+	for i < seen.len() {
+		if seen[i] == name {
+			raise f"`{name}` is declared twice — once as {kind[i]}, once as {what}" if kind[i] != what
+
+			raise f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
+		}
+		i = i + 1
+	}
+	seen.append(name)
+	kind.append(what)
+}
+
 fn c_build_structs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.structs.len() {
@@ -6541,6 +6584,7 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
 	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false)
+	c_build_type_names(em, f)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)

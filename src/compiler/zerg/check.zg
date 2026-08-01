@@ -285,9 +285,27 @@ fn chk_spec_impls(mut &em: Emitter, f: File) {
 			chk_at_place(em, ip.path, ip.line, ip.col, f"no spec named `{ip.on}` — an `impl … for …` names the interface it supplies, and nothing in this program declares one by that name")
 			continue
 		}
+		sp := f.specs[si]
+		if sp.params.len() != ip.args.len() {
+			# without this the mismatch surfaces one member at a time, as "parameter `k` is
+			# int, and the spec declares K" — true, and about the wrong thing. What went
+			# wrong is that the impl never said what `K` is.
+			chk_at_place(em, ip.path, ip.line, ip.col, f"`{ip.on}` is parameterized by {ty_names(chk_param_tys(sp))}, and this `impl` gives {strconv.to_string(ip.args.len(), 10)} type argument(s) — a parameterized spec is implemented once per argument, as `impl {ip.on}[…] for {ip.target}`")
+			continue
+		}
 		mut seen: list[str] = []
 		chk_impl_covers(em, f, ip, si, seen)
 	}
+}
+
+# chk_param_tys is a spec's own type parameters as types, for a message that shows the
+# shape the `impl` was supposed to give.
+fn chk_param_tys(sp: SpecDecl) -> list[Ty] {
+	mut out: list[Ty] = []
+	for n in sp.params {
+		out.append(TNamed(n))
+	}
+	return out
 }
 
 fn chk_spec_index(f: File, name: str) -> int {

@@ -2325,6 +2325,12 @@ fn c_is_cmp_op(oper: str) -> bool {
 }
 
 fn c_is_aggregate(mut &em: Emitter, t: Ty) -> bool {
+	# an ENUM is a composite too, and it was the one this predicate did not name: `f"{c}"`
+	# on a `Color` cast the tagged union to int64_t and cc reported it against generated C.
+	# Its rendering is `int(c)` — the discriminant — which the programmer has to write,
+	# because a NAME for the variant is what `Display` would give and there is none.
+	return true if c_is_enum_ty(em, t)
+
 	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t)
 }
 
@@ -2407,6 +2413,9 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 # — the structural one is `Display`'s job and there is no derive for it — so it is named
 # rather than cast, which is what reached cc as "operand of type 'zg_P'".
 fn c_display_check(mut &em: Emitter, t: Ty) {
+	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
+	# reader can actually write is the discriminant
+	raise f"NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
 	raise f"NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
 }
 
@@ -2667,7 +2676,17 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) 
 # compiler pointing at generated code. `s.len()` is the common way in: a str has no
 # methods here, and the message now says so at the Zerg level.
 fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR:490) — the named-constructor form,
+	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the
+	# answer used to be "the method `make` on a ?": the target is a type rather than a
+	# value, so inference had nothing to name and the message pointed at the hole rather
+	# than at the form. The parser gives every `fn` in an `impl` a receiver, so there is no
+	# such function to call yet — which is a thing to say, not a `?`.
+	tn := c_ident_name(target)
+
+	raise f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type" if tn != "" and c_is_struct_name(em, tn)
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
+
 	return f"zg_{meth}({c_call_args(em, meth, args, sb)})"
 }
 

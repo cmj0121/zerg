@@ -359,7 +359,10 @@ enum E {
 }
 
 fn main() {
-	print E.of(1) ?? Q
+	# not `print` of the enum itself: a composite has no rendering, and that rule now
+	# answers first, which would make this case measure the wrong refusal
+	e := E.of(1) ?? Q
+	print 1
 }
 EOF
 
@@ -955,6 +958,27 @@ fn f(mut b: Bag) {
 
 fn main() {
 	f(Bag(1))
+}
+EOF
+
+# GRAMMAR:490 — `Type.f(…)` is an ASSOCIATED FUNCTION, the named-constructor form
+# (`User.from_json(…)`). The parser gives every `fn` in an `impl` a receiver, so there is
+# no such function to call; the answer used to be "the method `make` on a ?", which points
+# at inference having nothing to say rather than at the form.
+expect "$ZERG" associated-function "is an associated function" <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn make(n: int) -> P {
+		return P(n)
+	}
+}
+
+fn main() {
+	p := P.make(7)
+	print(f"{p.x}")
 }
 EOF
 

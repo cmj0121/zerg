@@ -22,6 +22,7 @@ fn main() {
 
 	# a narrowing conversion that does not fit raises, and `guard` demotes it
 	check("byte fits", int(byte(200)), 200)
+	check("uint(-5) raises", int(guard { uint(0 - 5) } ?? 7), 7)
 	check("byte(300) raises", int(guard { byte(300) } ?? 7), 7)
 	check("int(1e30) raises", guard { int(1e30) } ?? 7, 7)
 

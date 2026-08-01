@@ -2572,13 +2572,17 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	# carrier struct where a list header goes, which cc reported as a WARNING — so the
 	# program linked and segfaulted. The unwrap is the language's and has to be written.
 	raise f"`[…]` indexes a value, and {ty_name(tty)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(tty)
-	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_str(tty) and not c_is_unknown(tty)
 
+	# A `str` was whitelisted by the guard below and rejected by the statement after it —
+	# one rule about one type, held in two places that said opposite things. It is asked
+	# once, here, and the guard no longer mentions it.
 	if c_is_str(tty) {
-		chk_indexable(em, tty)
+		chk_str_not_indexable(em)
 
 		return "0"
 	}
+
+	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)

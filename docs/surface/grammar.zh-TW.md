@@ -668,7 +668,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member           |
 | 8     | associated function `Type.f(…)`;`impl` 內的 associated type 或 value         |
 | 8     | 除 `#[derive(…)]` 以外的所有 decorator                                       |
-| 10    | 模組限定的**常數** —— `pub fn` 跨得過模組邊界,`const` 跨不過                 |
+| 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                            |
 | 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                       |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的

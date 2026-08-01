@@ -36,8 +36,19 @@ RT="src/runtime/csrc"
 # things: a schedule is a repro and a run is a search, and 10 of either was not enough — the
 # day this went to 150 it found three runtime bugs, one of which failed about one run in
 # twenty and had passed every CI run this project had ever done.
+#
+# THE TWO NUMBERS ARE NOT INTERCHANGEABLE, and the split hid a whole class. 60 of the 70
+# runs a case gets are `ZRT_WORKERS=1` — a seeded schedule IS single-worker, that is what
+# makes it a repro — so only 10 of them can reach a bug that needs two threads at once. CI
+# found a SEGV in `wq_pop` that way, on run 3 of 10, and 1560 runs here never saw it again:
+# a loaded CI runner with fewer cores preempts where an idle desktop does not.
+#
+# So the unseeded half is the one that searches, and it is the one that was small. PARALLEL
+# runs the multi-worker half several instances at once, which is the pressure that made the
+# difference — an oversubscribed CPU, not more repetitions of an idle one.
 SCHEDULES="${SCHEDULES:-${REPS:-60}}"
-RUNS="${RUNS:-${REPS:-10}}"
+RUNS="${RUNS:-${REPS:-30}}"
+PARALLEL="${PARALLEL:-4}"
 
 [ -x "$ZERG" ] || {
 	printf 'sanitize-conc: %s is not built — run `make build` first\n' "$ZERG" >&2
@@ -85,7 +96,10 @@ printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-
 
 fail=0
 cases=0
-for src in test-data/codegen/conc_*.zg; do
+# CASES narrows the sweep to one or a few cases, which is what a rare multi-worker race
+# needs: the seeded half is single-worker by construction, so the only runs that can reach
+# an interleaving bug are the unseeded ones, and hammering one case is the way to get them.
+for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 	name="$(basename "$src" .zg)"
 	cases=$((cases + 1))
 
@@ -131,9 +145,21 @@ for src in test-data/codegen/conc_*.zg; do
 				repro="ZRT_WORKERS=1 ZRT_SEED=$seed"
 			else
 				# several workers: the OS decides things a seed cannot, so this half stays
-				# unseeded and is a search rather than a repro
+				# unseeded and is a search rather than a repro.
+				#
+				# PARALLEL-1 SIBLINGS run alongside it, oversubscribing the CPU. That is
+				# the pressure a loaded CI runner has and an idle desktop does not, and it
+				# is what this half was missing: the SEGV that prompted this appeared on a
+				# runner in 3 runs and never once in 1560 here. Their output is thrown
+				# away — they are load, and the run being measured is the one below.
+				mut_extra=0
+				while [ "$mut_extra" -lt "$((PARALLEL - 1))" ]; do
+					(env -u ZRT_WORKERS -u ZRT_SEED "$WORK/$name.bin" >/dev/null 2>&1) &
+					mut_extra=$((mut_extra + 1))
+				done
 				got="$(env -u ZRT_WORKERS -u ZRT_SEED "$WORK/$name.bin" 2>"$WORK/$name.err")"
-				repro="(several workers — not reproducible)"
+				wait
+				repro="(several workers under load — not reproducible)"
 			fi
 
 			# The exit status is NOT the signal: conc_crash ends in an abort and leaves

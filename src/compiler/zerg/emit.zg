@@ -3580,6 +3580,14 @@ fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
 	return TErr if c_err_kind(name) > 0
 	return TNamed(name) if c_is_ctor(name)
 
+	# A BINDING HOLDING A FUNCTION answers the function type's result. `g := double; n :=
+	# g(21)` typed the call from the SIGNATURE table, which has no `g` in it, so the answer
+	# was unknown, `n` was never declared, and the error arrived at the next line as
+	# `undefined name n`. A binding always wins over a declared name here, which is the
+	# ordinary scoping rule and the one c_ident already follows.
+	bt := c_lookup_var(em, name)
+	return c_fn_ret(bt) if c_is_fn(bt)
+
 	return c_lookup_sig_ret(em, name)
 }
 
@@ -5035,6 +5043,24 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# so `c_infer` has nothing to say about it and the message was `undefined name `Color``.
 	en := c_qualified_variant(em, target, fld)
 	return "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, fld), 10) + "}" if en != ""
+
+	# `lib.LIMIT` — a MODULE-QUALIFIED name. A module flattens into this unit, so the
+	# qualifier says where the name came from and the last segment IS the name — which is
+	# the rule the CALL path has followed since it was written (`ascii.is_digit`). The
+	# field path did not, so it lowered `lib` as a value and reported `undefined name lib`:
+	# about the qualifier, which is the one part of the expression that is not a name.
+	ns := c_ident_name(target)
+	if ns != "" and not c_is_bound(em, ns) and not c_is_struct_name(em, ns) and c_is_bound(em, fld) {
+		# RESOLVING it is not enough. A module constant is emitted as a `static` in the unit
+		# that declares it and assigned once at start-up, and a program is built as several
+		# units — so the reader's unit gets its own zeroed copy and the assignment lands in
+		# the other one. `lib.LIMIT` then compiles and reads 0, which is worse than the
+		# `undefined name lib` it used to give: a silent wrong value instead of a loud stop.
+		#
+		# The CALL path has no such problem — a function is one symbol — which is why
+		# `lib.helper()` has always worked and this looked like the same rule missing.
+		raise f"NotImplemented: `{ns}.{fld}` — a module constant is a `static` in the unit that declares it, so another unit reads a zero; bind it through a `pub fn` for now"
+	}
 
 	# the enum is named and the field is not one of ITS variants. Falling through said
 	# `undefined name `Color`` — about the one name in the expression that IS defined.

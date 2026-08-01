@@ -1183,6 +1183,65 @@ fn main() {
 }
 EOF
 
+# --- an enum is a strong type, and a qualification must be true ------------------
+#
+# `Red == Apple` — one variant of each of two unrelated enums — answered `true`, because an
+# enum is not a scalar and the equality branch returned early for it, leaving the tags to be
+# compared as whatever C made of them. Both are tag 0.
+
+reject compare-two-enums 'cannot compare Color and Fruit' <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+enum Fruit {
+	Apple
+}
+
+fn main() {
+	print(f"{Red == Apple}")
+}
+EOF
+
+reject compare-an-enum-and-an-int 'cannot compare Color and int' <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Red
+	print(f"{c == 0}")
+}
+EOF
+
+reject qualify-with-the-wrong-enum 'is a variant of `Fruit`, not of `Color`' no-place <<'EOF'
+enum Color {
+	Red
+}
+
+enum Fruit {
+	Apple
+}
+
+fn main() {
+	c := Color.Apple
+	print(f"{int(c)}")
+}
+EOF
+
+reject qualify-a-name-that-is-not-a-variant 'is not a variant of `Color`' no-place <<'EOF'
+enum Color {
+	Red
+}
+
+fn main() {
+	c := Color.Purple
+	print(f"{int(c)}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

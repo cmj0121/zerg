@@ -441,6 +441,10 @@ list-pat-elem ::= pattern | '..' identifier?
 - **Variant vs binding** is decided by **name resolution**: a bare name is a variant when it resolves to a
   known type or enum variant in scope, and a fresh binding otherwise. Names are **case-free**, so this is
   resolution, not capitalization — the same name resolution the postfix `[…]` uses (group 4).
+- **Qualified variant.** A variant may also be named **by its enum** — `Color.Red`, `Shape.Line(5)`, and the
+  same in pattern position. It is the identical value; what it adds is that the reader is told **which** enum
+  without resolving the name, which the bare form asks of them. The qualification must be **true**:
+  `Color.Apple` names a variant of another enum and is an error, not a fresh binding.
 - **`as` binding.** `pattern as name` also binds the **whole** matched value to `name` while the pattern keeps
   destructuring — `Move{x, y} as m`, `[first, ..] as all`, nested `Some(inner as v)`. It reads like `with` /
   `import`: `<thing> as <name>`. On an or-pattern `as` binds the nearest alternative (`A | B as m` is

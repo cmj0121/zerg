@@ -1193,6 +1193,32 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 	return not c_is_unknown(c_lookup_sig_ret(em, n))
 }
 
+# c_unbuilt_builtin names the documented built-ins this compiler has not built, and says
+# nothing about any other name.
+#
+# The built-in set is CLOSED (docs/runtime/builtins.md) — a user cannot add to it — so a
+# program naming one of these has not made a typo, and answering "undefined name `sizeof`"
+# tells a reader the language does not have it when the documentation says it does. Every
+# one of them is built by the SEED, which is what makes the wording matter: the form exists,
+# this compiler is the one that is behind.
+#
+# The three report sites below all funnel through here, so the answer does not depend on
+# whether the name was reached as a call, as a constructor or as a bare value.
+fn c_unbuilt_builtin(n: str) -> str {
+	return "a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
+	return f"the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
+	return f"the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+
+	return ""
+}
+
+# c_builtin_check raises for a documented built-in this compiler has not built, and returns
+# for every other name so the caller reports whatever it was going to.
+fn c_builtin_check(n: str) {
+	why := c_unbuilt_builtin(n)
+	raise f"NotImplemented: {why}" if why != ""
+}
+
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
 # call — Zerg types are PascalCase and functions snake_case, so an uppercase first
 # letter is the tell.
@@ -2424,6 +2450,12 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# emitted as `zgs_to_bytes(x)` and reported by cc — `list[int]([1,2,3])` as
 		# "passing 'zrt_list' to parameter of incompatible type 'const char *'".
 		raise f"`list[…](…)` converts a `str` to its bytes, and this is {ty_name(xt0)} — a list is built with `[…]`, not converted into" if not c_is_str(xt0)
+
+		# `list[rune](s)` is the OTHER documented bridge (docs/runtime/builtins.md) and the
+		# runtime has it — `zrt_str_runes` decodes the code points, and the seed emits it.
+		# What this compiler lacks is `rune` as a type at all, which is why the form is
+		# named rather than described as a rule about what a str's bytes are.
+		raise "NotImplemented: `list[rune](s)` decodes a str's code points — this compiler has no `rune` type, only `list[byte](s)`" if c_named_of(c_list_elem(ty)) == "rune"
 		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — the bytes of a `str` are `list[byte]`" if not c_is_byte(c_list_elem(ty))
 
 		return f"zgs_to_bytes({inner})"
@@ -2893,7 +2925,11 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# A PascalCase call that names no declared type is not a constructor of anything.
 		# It used to emit a compound literal of that name anyway, which cc rejected against
 		# generated C.
-		raise f"no type named `{name}` to construct" if not c_is_struct_name(em, name)
+		if not c_is_struct_name(em, name) {
+			c_builtin_check(name)
+
+			raise f"no type named `{name}` to construct"
+		}
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
 
@@ -2901,7 +2937,11 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# cc, which reported a call to an undeclared function against a file under .zerg-cache
 	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
 	# is exactly the answer this should be giving by name.
-	raise f"undefined function `{name}`" if not c_is_free_fn(em, name)
+	if not c_is_free_fn(em, name) {
+		c_builtin_check(name)
+
+		raise f"undefined function `{name}`"
+	}
 
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"
 }
@@ -3180,7 +3220,11 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		chk_at(em, "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
 		return "0"
 	}
-	raise f"undefined name `{n}`" if not c_is_bound(em, n) and not c_is_struct_name(em, n)
+	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
+		c_builtin_check(n)
+
+		raise f"undefined name `{n}`"
+	}
 
 	# every read of a binding funnels through here, which is what makes this the one place
 	# a use after `del` has to be caught

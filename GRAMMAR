@@ -429,6 +429,12 @@ range-bound  ::= '-'? literal | identifier          # a compile-time constant bo
 # enum variant in scope, and a 'binding-pat' (a fresh name) otherwise — the same name
 # resolution the postfix grammar uses for index-vs-type-arguments (group 4). Names are
 # case-free, so this is decided by resolution, not by capitalization.
+#
+# A variant may also be named BY ITS ENUM — 'Color.Red', 'Shape.Line(5)', and the same in
+# pattern position. It is the identical value; what it adds is that the reader is told which
+# enum without having to resolve the name, which the bare form asks of them. The
+# qualification must be TRUE: 'Color.Apple' names a variant of another enum and is an error,
+# not a fresh binding.
 pattern      ::= sub-pattern ( '|' sub-pattern )*       # or-pattern binds same names
 # A struct pattern must list EVERY field, or end with '..' to ignore the rest ('Div{q, r}'
 # lists all; 'Div{q, ..}' ignores the rest; 'Div{..}' matches any). A list pattern may

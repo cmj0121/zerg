@@ -72,7 +72,13 @@ fail=0
 #                          the rest of the file is read as one string.
 #   contains both          rephrase the assertion to a substring that has only one.
 reject() {
-	local name=$1 want=$2 seed=${3:-}
+	local name=$1 want=$2
+	shift 2
+
+	# the markers COMPOSE: a case can be both a seed gap and a place the parser owes, and
+	# reading one `$3` silently dropped the second — the gate then failed on an exception
+	# that was declared right beside the one it honoured.
+	local flags=" $* "
 	local src="$tmp/$name.zg"
 	cat >"$src"
 
@@ -120,11 +126,27 @@ reject() {
 	# every rule in check.zg reports through chk_at, which knows the statement's place —
 	# so a case that comes back without one is a rule that lost it, and nothing else here
 	# would notice: the sentence would still match.
-	if ! has_place "$out"; then
-		echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
-		fail=$((fail + 1))
-		return
-	fi
+	#
+	# A rule the PARSER enforces is the exception, and it is marked. The parser has no diag
+	# channel — it raises — so none of its refusals carries a place; that is one gap, owed
+	# once, and `reject-fuzz` counts the whole class. Marking the case keeps a permanent
+	# LANGUAGE rule in this file, where its lifetime says it belongs, instead of filing it
+	# with the not-yet-built forms next door to dodge one assertion.
+	case $flags in *" no-place "*)
+		if has_place "$out"; then
+			echo "PLACE GAINED  $name — it says where now; drop the no-place marker"
+			fail=$((fail + 1))
+			return
+		fi
+		;;
+	*)
+		if ! has_place "$out"; then
+			echo "NO PLACE  $name — the message does not say where: $(echo "$out" | head -1)"
+			fail=$((fail + 1))
+			return
+		fi
+		;;
+	esac
 
 	# A third argument names a rule the SEED does not enforce yet, and says which. The
 	# oracle is worth having and the seed is not perfect; recording the exception beside the
@@ -133,7 +155,7 @@ reject() {
 	# It asserts the OPPOSITE, so the exception retires itself: an xfail that merely returns
 	# `pass` can never report an unexpected pass, and the day the seed learns the rule the
 	# marker and its entry in the seed's README would rot with nothing to say so.
-	if [ "$seed" = "seed-gap" ]; then
+	if [ "${flags#* seed-gap }" != "$flags" ]; then
 		if seed_refuses "$name" "$src"; then
 			echo "SEED GAP CLOSED  $name — the seed now rejects this; drop the seed-gap marker and its src/bootstrap/README.md entry"
 			fail=$((fail + 1))
@@ -983,6 +1005,240 @@ fn pick(n: int) -> int {
 
 fn main() {
 	print(pick(0))
+}
+EOF
+
+# --- `this` is a method's receiver, and nothing else -----------------------------
+#
+# GRAMMAR:117 makes `this` a reserved word, :330 says it is NOT a parameter, :332 that a
+# `fn` whose body uses it with no instance bound is a compile error, and :333 that the self
+# type is `This`. The seed enforces all of it. `zerg` enforced none of it: every naming
+# position read `cur(p).lexeme` — whatever token was there — so `this` passed as a
+# parameter, a field, a function, a type, a variant, a pattern binding. In a METHOD it
+# reached cc, because the parser has already put a `this` at parameter 0.
+
+reject this-as-a-parameter 'is a reserved word and cannot name a parameter' no-place <<'EOF'
+fn f(this: int) -> int {
+	return this
+}
+
+fn main() {
+	print(f(7))
+}
+EOF
+
+reject this-as-a-method-parameter 'is a reserved word and cannot name a parameter' no-place <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn get(this: int) -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject this-as-a-field 'is a reserved word and cannot name a struct field' no-place <<'EOF'
+struct P {
+	this: int
+}
+
+fn main() {
+	p := P(1)
+	print(p.this)
+}
+EOF
+
+reject this-as-a-function 'is a reserved word and cannot name a function' no-place <<'EOF'
+fn this() -> int {
+	return 1
+}
+
+fn main() {
+	print(this())
+}
+EOF
+
+reject this-as-a-type 'is a reserved word and cannot name a struct' no-place <<'EOF'
+struct this {
+	x: int
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject this-as-a-variant 'is a reserved word and cannot name an enum variant' no-place <<'EOF'
+enum E {
+	this
+	B
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject this-as-a-pattern-binding 'is a reserved word and cannot name a pattern binding' no-place <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(7)
+	print(match e {
+		A(this) => this
+		_ => 0
+	})
+}
+EOF
+
+reject this-outside-a-method "a method's receiver, and this function has none" <<'EOF'
+fn f() -> int {
+	return this
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+reject self-type-outside-an-impl "is the self type" <<'EOF'
+fn f() -> This {
+	return 1
+}
+
+fn main() {
+	print(1)
+}
+EOF
+
+# --- a borrow needs both halves, and may not alias -------------------------------
+#
+# GRAMMAR:308-313 — "the CALLER decides whether its variable is `mut`, the CALLEE decides
+# via `mut &` whether it writes back, so a caller-visible mutation needs BOTH", and a
+# borrow "cannot ALIAS (the same variable to two `mut &` in one call), which keeps it safe
+# with no borrow checker". Only the callee's half was ever read.
+
+reject mut-ref-of-an-immutable 'writes back to `k`, which is not `mut`' <<'EOF'
+fn bump(mut &n: int) {
+	n = n + 1
+}
+
+fn main() {
+	k := 1
+	bump(k)
+	print(f"{k}")
+}
+EOF
+
+reject mut-ref-aliased 'is given to two `mut &` parameters' <<'EOF'
+fn two(mut &a: int, mut &b: int) {
+	a = a + 1
+	b = b + 10
+}
+
+fn main() {
+	mut k := 0
+	two(k, k)
+	print(f"{k}")
+}
+EOF
+
+reject mut-fn-on-an-immutable-receiver 'which is a `mut fn`, writes back to `p`' <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	mut fn bump() {
+		this.x = this.x + 1
+	}
+}
+
+fn main() {
+	p := P(1)
+	p.bump()
+	print(f"{p.x}")
+}
+EOF
+
+# GRAMMAR:301-304 — `mut fn` is meaningful only on a method; "a free function or closure
+# has no receiver, so it is never `mut fn`". The token fell into the top-level skip, so the
+# `mut` was swallowed and the function compiled as if it had never been written.
+reject mut-fn-free-function 'a free function is never `mut fn`' no-place seed-gap <<'EOF'
+mut fn f() -> int {
+	return 1
+}
+
+fn main() {
+	print(f())
+}
+EOF
+
+# --- an enum is a strong type, and a qualification must be true ------------------
+#
+# `Red == Apple` — one variant of each of two unrelated enums — answered `true`, because an
+# enum is not a scalar and the equality branch returned early for it, leaving the tags to be
+# compared as whatever C made of them. Both are tag 0.
+
+reject compare-two-enums 'cannot compare Color and Fruit' <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+enum Fruit {
+	Apple
+}
+
+fn main() {
+	print(f"{Red == Apple}")
+}
+EOF
+
+reject compare-an-enum-and-an-int 'cannot compare Color and int' <<'EOF'
+enum Color {
+	Red
+	Green
+}
+
+fn main() {
+	c := Red
+	print(f"{c == 0}")
+}
+EOF
+
+reject qualify-with-the-wrong-enum 'is a variant of `Fruit`, not of `Color`' no-place <<'EOF'
+enum Color {
+	Red
+}
+
+enum Fruit {
+	Apple
+}
+
+fn main() {
+	c := Color.Apple
+	print(f"{int(c)}")
+}
+EOF
+
+reject qualify-a-name-that-is-not-a-variant 'is not a variant of `Color`' no-place <<'EOF'
+enum Color {
+	Red
+}
+
+fn main() {
+	c := Color.Purple
+	print(f"{int(c)}")
 }
 EOF
 

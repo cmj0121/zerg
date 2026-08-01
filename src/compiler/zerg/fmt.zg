@@ -1634,9 +1634,16 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 				if t.line > prev_line + 1 {
 					out.append(byte(10))
 				}
+
+				# `depth` and not the opener's block depth: a group may OPEN A BLOCK inside
+				# itself — `print(match n { … })` — and the arms belong to that block, one
+				# level in from the `match` line. Measuring from the opener's depth alone
+				# left them level with it, and the closing `}` to the left of what it
+				# closed. Where a group opens no block the two are the same number, which
+				# is why every other wrapped shape is unchanged.
 				mut ci := depth + 1
 				if psp > 0 {
-					ci = pind[psp - 1] + psp
+					ci = depth + psp
 				}
 				fmt_indent(out, ci)
 				col = ci
@@ -1670,9 +1677,14 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 				# still open it belongs at the group's indent all the same — otherwise a
 				# comment among a wrapped list's elements dropped the element after it back
 				# to the statement's own level.
+				# measured from the CURRENT block depth, not the opener's: a group may open a
+				# block inside itself — `print(match n { … })` — and its contents belong to
+				# that block, one level in from the line the `match` is on. Where a group
+				# opens no block the two are the same number, which is why every other
+				# wrapped shape is unchanged.
 				mut ci := depth
 				if psp > 0 {
-					ci = pind[psp - 1] + psp
+					ci = depth + psp
 					if is_close(t.kind) {
 						ci = ci - 1
 					}

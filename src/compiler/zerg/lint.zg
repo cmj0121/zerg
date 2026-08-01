@@ -23,6 +23,14 @@
 #   L202  `x!` inside a function whose result is a `T?` — the absence can be HANDED BACK
 #         with `?` instead of turned into an abort, and `!` is the easier key to reach
 #
+# `L4xx` is RESOLUTION: a name that answers to more than one thing.
+#
+#   L402  a `mut fn` that never writes through `this` — it makes every call site hold the
+#         instance in a `mut` binding and gives nothing back
+#   L401  a variant name TWO enums declare — a bare use of it resolves to whichever was
+#         declared first, so moving an `enum` changes what the program means. The
+#         qualified `Enum.Variant` says which one is meant.
+#
 # `L3xx` is CAPTURE: what a coroutine or a deferred call actually took.
 #
 #   L301  a `mut` binding captured by `spawn` / `defer` and WRITTEN after the capture —
@@ -53,7 +61,94 @@ pub fn lint_files(srcs: list[str]) -> list[str] {
 	lint_unread_bindings(f, out)
 	lint_captures(f, out)
 	lint_optionals(f, out)
+	lint_ambiguous_variants(f, out)
+	lint_idle_mut_fn(f, out)
 	return out
+}
+
+# lint_idle_mut_fn reports a `mut fn` whose body never writes through `this`.
+#
+# `mut fn` is not a hint: it makes the receiver a `mut &`, so EVERY call site has to hold
+# the instance in a `mut` binding (GRAMMAR:302). A method that only reads charges its
+# callers that and gives nothing back — and the caller cannot see why, because the
+# signature is the whole contract and `mut fn` is all it says.
+#
+# The test is a WRITE to `this`, not a mention of it: a `mut fn` that reads `this` is the
+# ordinary case, and one that passes it to a `mut &` parameter is writing through it.
+fn lint_idle_mut_fn(f: File, mut &out: list[str]) {
+	refs := lint_ref_params(f)
+	for fd in f.fns {
+		if fd.recv != "" and lint_recv_is_mut(fd) and not writes_this(fd.body, refs) {
+			out.append(f"L402 `{fd.recv}.{fd.name}` is a `mut fn` and never writes through `this` — every call site has to hold the instance in a `mut` binding for nothing; make it a plain `fn`")
+		}
+	}
+}
+
+fn lint_recv_is_mut(fd: FnDecl) -> bool {
+	return false if fd.params.len() == 0
+	return fd.params[0].is_ref
+}
+
+# writes_this is assigns_to over a whole body, including the blocks a statement carries.
+fn writes_this(body: list[Stmt], refs: list[str]) -> bool {
+	mut i := 0
+	for i < body.len() {
+		return true if assigns_to(body[i], "this", refs) or writes_this_in(body[i], refs)
+		i = i + 1
+	}
+	return false
+}
+
+fn writes_this_in(s: Stmt, refs: list[str]) -> bool {
+	return match s {
+		SIf(c, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
+		SIfLet(nm, v, tb, he, eb) => writes_this(tb, refs) or writes_this(eb, refs)
+		SFor(hc, c, b) => writes_this(b, refs)
+		SForIn(nm, it, b) => writes_this(b, refs)
+		SSelect(arms) => writes_this_arms(arms, refs)
+		SForSelect(arms) => writes_this_arms(arms, refs)
+		_ => false
+	}
+}
+
+fn writes_this_arms(arms: list[SelArm], refs: list[str]) -> bool {
+	for a in arms {
+		return true if writes_this(a.body, refs)
+	}
+	return false
+}
+
+# --- L4xx: a name that resolves to more than one thing ------------------------------
+
+# lint_ambiguous_variants reports a variant name that TWO enums declare.
+#
+# A bare name is a variant when it resolves to one (GRAMMAR:428), and resolution takes the
+# FIRST declaration — silently. Two enums that both have a `Red` make `c := Red` a coin
+# toss decided by declaration order, and moving an `enum` in the file changes what the
+# program means with nothing said.
+#
+# It is a lint and not an error because the program is well formed and the answer is
+# defined; what it is not is READABLE. The qualified form says which — `Color.Red` — and
+# the rule exists to point at it.
+fn lint_ambiguous_variants(f: File, mut &out: list[str]) {
+	for e in f.enums {
+		for v in e.variants {
+			owner := lint_first_enum_of(f, v.name)
+			if owner != e.name {
+				out.append(f"L401 `{v.name}` is a variant of both `{owner}` and `{e.name}`, so a bare `{v.name}` resolves to `{owner}` by declaration order alone — name it `{e.name}.{v.name}` where you mean this one")
+			}
+		}
+	}
+}
+
+# lint_first_enum_of is the enum a bare name resolves to: the first that declares it.
+fn lint_first_enum_of(f: File, name: str) -> str {
+	for e in f.enums {
+		for v in e.variants {
+			return e.name if v.name == name
+		}
+	}
+	return ""
 }
 
 # --- L2xx: null safety -------------------------------------------------------------------

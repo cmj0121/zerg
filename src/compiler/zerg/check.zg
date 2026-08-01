@@ -93,6 +93,14 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		return
 	}
 
+	# `this` is the third of these: it is never DECLARED, so `mut this := …` is advice the
+	# grammar has no spelling for. A method's receiver is a copy (GRAMMAR:301) and the form
+	# that writes through it is `mut fn`, which is what the reader has to reach for.
+	if root == "this" {
+		chk_at(em, "cannot assign to `this`: a method's receiver is a copy, and the form that writes through it is `mut fn` — the one that marks a method as mutating the instance it is called on")
+		return
+	}
+
 	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
 	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
 	if c_ident_name(lhs) != "" {
@@ -280,8 +288,65 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 # of an rvalue". The same sentence the mutating-method path uses, for the same reason —
 # writing to a copy is not writing.
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
-	return if c_is_place(em, a)
-	chk_at(em, f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+	if not c_is_place(em, a) {
+		chk_at(em, f"{chk_arg_says(key, pos)} is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+		return
+	}
+
+	# TWO INDEPENDENT CONTROLS MEET HERE (GRAMMAR:308-313): the CALLER decides whether its
+	# variable is `mut`, the CALLEE decides via `mut &` whether it writes back, and "a
+	# caller-visible mutation needs BOTH". Only the callee's half was read, so `bump(k)` on
+	# an immutable `k` wrote through it and printed the changed value — a write to a binding
+	# the reader declared unwritable, with nothing said. There is no call-site marker to
+	# warn them either: the signature is the whole contract.
+	root := chk_root_name(a)
+	return if root == ""
+
+	idx := c_live_idx(em, root)
+	return if idx < 0 or em.env_mut[idx]
+
+	# `this` is never DECLARED, so `mut this := …` is advice the grammar has no spelling
+	# for. A plain method holds its receiver by value; the half that is missing is on the
+	# ENCLOSING method, and `mut fn` is how it is supplied.
+	if root == "this" {
+		chk_at(em, f"{chk_arg_says(key, pos)} writes back to `this`, and the enclosing method holds its receiver by value — declare that one `mut fn` too, or the mutation lands on a copy")
+		return
+	}
+	chk_at(em, f"{chk_arg_says(key, pos)} writes back to `{root}`, which is not `mut` — a caller-visible mutation needs both halves, so declare it `mut {root} := …`")
+}
+
+# chk_arg_says names the slot a borrow rule is about. A method's RECEIVER has no written
+# position, so numbering it would point at nothing on the page: `mut fn` is how it was
+# declared and "the receiver" is what a reader calls it.
+fn chk_arg_says(key: str, pos: int) -> str {
+	return f"the receiver of `{chk_call_name(key)}`, which is a `mut fn`," if pos == 0
+	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &` and"
+}
+
+# chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
+#
+# GRAMMAR:313 — a `mut &` "cannot ALIAS (the same variable to two `mut &` in one call),
+# which keeps it safe with no borrow checker". That sentence is the reason there is no
+# borrow checker, and nothing was holding it: `two(k, k)` passed one address twice, so the
+# callee's two names were one variable and the second write landed on top of the first.
+fn chk_ref_alias(mut &em: Emitter, key: str, args: list[Expr]) {
+	mut i := 0
+	for i < args.len() {
+		row := c_param_row(em, key, i)
+		if row >= 0 and em.pr_ref[row] {
+			ni := chk_root_name(args[i])
+			mut j := i + 1
+			for j < args.len() {
+				rj := c_param_row(em, key, j)
+				if ni != "" and rj >= 0 and em.pr_ref[rj] and chk_root_name(args[j]) == ni {
+					chk_at(em, f"`{ni}` is given to two `mut &` parameters of `{chk_call_name(key)}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
+					return
+				}
+				j = j + 1
+			}
+		}
+		i = i + 1
+	}
 }
 
 # chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for
@@ -521,6 +586,17 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	}
 
 	if chk_is_equality(oper) {
+		# AN ENUM IS NOT A SCALAR, so it fell straight through this branch and the tags were
+		# compared as whatever C made of them. Two of them answered by tag alone: `Red ==
+		# Apple`, one variant of each of two unrelated enums, was `true` because both are
+		# tag 0. And an enum against an int reached cc, which read the tagged union as a
+		# number. Same enum is the one comparison that means anything.
+		if c_is_enum_ty(em, ta) or c_is_enum_ty(em, tb) {
+			return if c_is_enum_ty(em, ta) and c_is_enum_ty(em, tb) and ty_eq(ta, tb)
+			chk_at(em, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — a variant is a value of ITS enum, and its discriminant is not a number to compare with")
+			return
+		}
+
 		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
 
 		# int and float compare: they are one family, and the language already mixes them

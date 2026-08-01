@@ -1268,6 +1268,80 @@ fn main() {
 }
 EOF
 
+# --- and it takes a value it can READ --------------------------------------------
+#
+# `int(s)`, `uint(s)` and `float(s)` parse a number out of a str; no other target does
+# (docs/runtime/builtins.md, "Parsing a string"). `bool(s)` and `byte(s)` fell through to
+# a C cast OF THE POINTER, so `bool(s)` was every non-empty string's `true` and `byte(s)`
+# was an address's low octet — both silent, both wrong.
+#
+# A composite is not a scalar to re-construct at all, and that one reached cc.
+
+reject parse-a-str-as-a-bool 'does not parse a `str`' no-place <<'EOF'
+fn main() {
+	print(f"{bool("1")}")
+}
+EOF
+
+reject parse-a-str-as-a-byte 'does not parse a `str`' no-place <<'EOF'
+fn main() {
+	print(f"{byte("65")}")
+}
+EOF
+
+reject convert-a-list-to-an-int 'converts a scalar, and list[int] is not one' no-place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print(f"{int(xs)}")
+}
+EOF
+
+# --- and a str is not a container to subscript -----------------------------------
+#
+# docs/core/types.md: a str "iterates as `rune` and is NOT indexable" — it is UTF-8, so a
+# subscript would name a byte and not a character. The emitter named every other
+# non-container and let a str through to the LIST path: `s[0]` read a `const char*` as a
+# list header and printed a different number every run, and `s[1..3]` reached cc.
+
+reject index-a-str 'a `str` is not indexable' <<'EOF'
+fn main() {
+	s := "hello"
+	print(f"{s[0]}")
+}
+EOF
+
+reject slice-a-str 'a `str` is not indexable' <<'EOF'
+fn main() {
+	s := "hello"
+	print(s[1..3])
+}
+EOF
+
+# --- and a literal is a value the type can hold -----------------------------------
+#
+# docs/core/types.md: "A literal that does not fit its required type is a COMPILE ERROR …
+# never a runtime overflow", and the chapter's own deviation note says an int literal past
+# i64 "is still rejected". It was not: the lexer accumulated the digits in a wrapping i64,
+# so three literals gave three wrong numbers with no diagnostic anywhere.
+
+reject int-literal-past-i64 'does not fit an `int`' <<'EOF'
+fn main() {
+	print(f"{9223372036854775808}")
+}
+EOF
+
+reject int-literal-far-past-i64 'does not fit an `int`' <<'EOF'
+fn main() {
+	print(f"{99999999999999999999999}")
+}
+EOF
+
+reject hex-literal-past-i64 'does not fit an `int`' <<'EOF'
+fn main() {
+	print(f"{0xFFFFFFFFFFFFFFFFF}")
+}
+EOF
+
 # --- a declared interface means its members exist -------------------------------
 #
 # A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —

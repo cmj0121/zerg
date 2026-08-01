@@ -2186,8 +2186,17 @@ func (e *emitter) call(n *ast.Call) string {
 		}
 	}
 	byref := e.calleeByRefArgs(id)
+	// A NAMED argument selects its parameter by name (docs/code/functions.md), so the
+	// emitted order is the PARAMETER's and not the source's. This loop read `n.Args`
+	// positionally and never looked at `a.Name`, so `f(b: 1, a: 5)` emitted `zg_f(1, 5)`
+	// — the arguments swapped, silently, in a form sema had already bound correctly.
+	callArgs := n.Args
+	reordered := e.namedArgSlots(id, n)
+	if reordered != nil {
+		callArgs = reordered
+	}
 	var args strings.Builder
-	for i, a := range n.Args {
+	for i, a := range callArgs {
 		if i > 0 {
 			args.WriteString(", ")
 		}
@@ -2210,14 +2219,91 @@ func (e *emitter) call(n *ast.Call) string {
 	// expressions, in declaration order, so a `fn f(a, b = 10)` called as `f(1)`
 	// still passes the default. A fully-applied call has no trailing defaults and
 	// stays byte-identical.
-	provided := len(n.Args)
-	for i, def := range e.trailingDefaults(id, provided) {
-		if args.Len() > 0 || i > 0 {
-			args.WriteString(", ")
+	// namedArgSlots has already filled every parameter, defaults included, so there is
+	// nothing trailing to backfill for a call that used one.
+	provided := len(callArgs)
+	if reordered == nil {
+		for i, def := range e.trailingDefaults(id, provided) {
+			if args.Len() > 0 || i > 0 {
+				args.WriteString(", ")
+			}
+			args.WriteString(e.paramDefaultArg(id, provided+i, def))
 		}
-		args.WriteString(e.paramDefaultArg(id, provided+i, def))
 	}
 	return fmt.Sprintf("%s(%s)", e.callTarget(n, id), args.String())
+}
+
+// namedArgSlots reorders a call's arguments into PARAMETER order, filling each omitted
+// defaulted parameter, and returns nil for a call that names none — which is every call
+// the seed emitted before this existed, so a positional call stays byte-identical.
+//
+// Sema already binds names to parameters (matchArgs) and reports a duplicate, an unknown
+// name or a missing argument, so this only has to follow the same rule: positional
+// arguments fill left to right, a named one goes to its own parameter, and what is left
+// takes its declared default.
+func (e *emitter) namedArgSlots(id *ast.Ident, n *ast.Call) []ast.Arg {
+	if id == nil || !hasNamedArg(n.Args) {
+		return nil
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok {
+		return nil
+	}
+	fd, ok := sym.Decl.(*ast.FuncDecl)
+	if !ok {
+		return nil
+	}
+	return slotsByName(n.Args, len(fd.Params), func(i int) (string, ast.Expr) {
+		return fd.Params[i].Name, fd.Params[i].Default
+	})
+}
+
+// slotsByName is the rule both of them follow (docs/code/functions.md): positional
+// arguments fill left to right, a named one goes to its own slot, and what is left takes
+// its declared default. `decl(i)` answers the i-th slot's name and default.
+//
+// It answers nil when a slot ends up with neither an argument nor a default — sema has
+// already reported that call, and emitting a hole for it would be worse than emitting the
+// original order for code that is about to be discarded.
+func slotsByName(args []ast.Arg, n int, decl func(i int) (string, ast.Expr)) []ast.Arg {
+	slots := make([]ast.Arg, n)
+	pos := 0
+	for _, a := range args {
+		if a.Name == "" {
+			if pos < n {
+				slots[pos] = a
+			}
+			pos++
+			continue
+		}
+		for i := 0; i < n; i++ {
+			if nm, _ := decl(i); nm == a.Name {
+				slots[i] = ast.Arg{Value: a.Value}
+			}
+		}
+	}
+	for i := range slots {
+		if slots[i].Value != nil {
+			continue
+		}
+		_, def := decl(i)
+		if def == nil {
+			return nil
+		}
+		slots[i] = ast.Arg{Value: def}
+	}
+	return slots
+}
+
+// hasNamedArg reports whether any argument was passed by name. sema has its own copy for
+// the same question; this package cannot see it.
+func hasNamedArg(args []ast.Arg) bool {
+	for _, a := range args {
+		if a.Name != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // trailingDefaults returns the default expressions for the parameters a call omits —
@@ -2463,18 +2549,52 @@ func (e *emitter) construct(n *ast.Call) string {
 	t := e.cur.ExprType(e.info, n)
 	name := e.ctype(t)
 	si := e.prog.StructInstance(t)
+	// A named argument selects its FIELD by name, exactly as it selects a parameter in a
+	// call, so the emitted order is the declaration's. This read `n.Args` positionally, so
+	// `P(y: 2, x: 1)` built `{2, 1}` — the fields swapped with no diagnostic.
+	ctorArgs := n.Args
+	reordered := e.namedFieldSlots(n)
+	if reordered != nil {
+		ctorArgs = reordered
+	}
 	var parts []string
-	for i, a := range n.Args {
+	for i, a := range ctorArgs {
 		parts = append(parts, e.fieldSlot(si, i, a.Value))
 	}
 	// A5: backfill trailing omitted fields with their (constant) default expressions,
 	// in field-declaration order. A fully-specified construction has none and stays
-	// byte-identical.
-	provided := len(n.Args)
-	for j, def := range e.trailingFieldDefaults(n, provided) {
-		parts = append(parts, e.fieldDefaultSlot(si, provided+j, def))
+	// byte-identical; a construction that named a field has every slot filled already.
+	provided := len(ctorArgs)
+	if reordered == nil {
+		for j, def := range e.trailingFieldDefaults(n, provided) {
+			parts = append(parts, e.fieldDefaultSlot(si, provided+j, def))
+		}
 	}
 	return "((" + name + "){" + strings.Join(parts, ", ") + "})"
+}
+
+// namedFieldSlots is namedArgSlots for a struct construction: it reorders the arguments
+// into FIELD-declaration order and fills each omitted defaulted field, answering nil for
+// a construction that names none — so a positional one stays byte-identical.
+func (e *emitter) namedFieldSlots(n *ast.Call) []ast.Arg {
+	if !hasNamedArg(n.Args) {
+		return nil
+	}
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	sym, ok := e.info.Refs[id]
+	if !ok {
+		return nil
+	}
+	sd, ok := sym.Decl.(*ast.StructDecl)
+	if !ok {
+		return nil
+	}
+	return slotsByName(n.Args, len(sd.Fields), func(i int) (string, ast.Expr) {
+		return sd.Fields[i].Name, sd.Fields[i].Default
+	})
 }
 
 // fieldSlot renders one struct-construction field value. A non-POD or boxed field

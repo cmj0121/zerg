@@ -1,0 +1,39 @@
+# 15 — Primitive conversions.
+#
+# `T(x)` RE-CONSTRUCTS x's value as a T — never a reinterpretation of its bits — so
+# a value that does not fit the target raises OverflowError, and `int(s)` / `uint(s)`
+# / `float(s)` over a `str` PARSE the number's text instead, raising ValueError on a
+# malformed one. `guard { … } ?? d` demotes either failure to a value.
+#
+# This example ASSERTS its answers rather than printing them, because `make examples`
+# gates on the exit status: a wrong conversion raises here and the gate goes red. Every
+# value reaches `check` as an `int` so that the SEED compiles it too — it types `uint`
+# and `byte` as their own types, and `make oracle` needs both compilers to build this.
+fn check(what: str, got: int, want: int) {
+	raise f"{what}: got {got}, want {want}" if got != want
+}
+
+fn main() {
+	# a str is parsed, not reinterpreted
+	check("int(str)", int("42"), 42)
+	check("int(str) is a value", int("7") + 1, 8)
+	check("uint(str)", int(uint("9")), 9)
+	raise "float(str)" if float("3.5") != 3.5
+
+	# a narrowing conversion that does not fit raises, and `guard` demotes it
+	check("byte fits", int(byte(200)), 200)
+	check("uint(-5) raises", int(guard { uint(0 - 5) } ?? 7), 7)
+	check("byte(300) raises", int(guard { byte(300) } ?? 7), 7)
+	check("int(1e30) raises", guard { int(1e30) } ?? 7, 7)
+
+	# float -> int truncates toward zero, and 255.7 still fits a byte
+	check("truncation", int(3.9), 3)
+	check("truncation is toward zero", int(0.0 - 3.9), -3)
+	check("byte(255.7)", int(byte(255.7)), 255)
+	check("byte(256.0) raises", int(guard { byte(256.0) } ?? 7), 7)
+
+	# a malformed string is a ValueError, not a zero
+	check("a malformed str raises", guard { int("nope") } ?? 7, 7)
+
+	print "conversions: ok"
+}

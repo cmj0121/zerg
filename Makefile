@@ -20,7 +20,7 @@ JOBS ?= 4
 
 CORPUS_PASS := arithmetic bitwise booleans conc_actor conc_break_release conc_capture_snapshot conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_cow_shared conc_crash \
 	conc_defer_close conc_fanin conc_for_select conc_forin conc_payload_copy conc_select conc_spawn conc_spawn_defaults select_default countdown cow_carriers cow_value_semantics default_params either_result every_form_handled enum_basic enum_discriminant enum_guard factorial \
-	fib fizzbuzz floats gcd fn_value guard_expr hello list_basic list_literal list_str map_value_semantics match_arm_binding match_range method_chain null_safety power raise_guard raise_kind \
+	fib fizzbuzz floats gcd fn_value guard_expr hello list_basic list_literal list_str map_value_semantics match_arm_binding match_range mut_fn method_chain null_safety power raise_guard raise_kind \
 	rec_expr rec_tree shadowing str_bytes struct_basic struct_nested this_receiver sumto value_semantics
 
 # A `conc_` case is run more than once. Every other case is a function of its source, so

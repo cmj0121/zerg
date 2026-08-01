@@ -2067,7 +2067,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		EListLit(elems) => c_list_lit(em, elems, sb)
-		EConv(ty, x) => c_conv(em, ty, x, sb)
+		EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
 		EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 
@@ -2396,7 +2396,7 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 # bridge unconditionally handed `zgs_from_bytes` an `int64_t`, so `str(n)` was not a thing
 # anyone could write — a cc type error with no Zerg diagnostic in front of it. The three
 # display leaves are already in the runtime header for the seed's f-strings.
-fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
+fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	inner := c_expr(em, x, sb)
 	xt0 := c_infer(em, x)
 	if c_is_str(ty) {
@@ -2437,14 +2437,14 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	# a CARRIER is not a value to convert: `int(k)` where k is a `K?` used to cast the
 	# carrier struct, which cc rejected against generated code. The unwrap is the language's
 	# and has to be written.
-	raise f"`{ty_name(ty)}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
+	raise f"`{nm}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
 	if c_name_in(em.enum_names, c_named_of(xt)) {
 		raise f"enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
 
 		# `int(v)` is the ONE conversion an enum has. Every other one fell through to a plain
 		# C cast OF THE STRUCT, which cc rejected against generated code — the report this
 		# compiler exists to get in front of.
-		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{ty_name(ty)}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
+		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{nm}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
 
 		return f"((int64_t)({inner}).tag)"
 	}
@@ -2461,15 +2461,16 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	if c_is_str(xt) {
 		em.used_rt = true
 
+		return f"((int64_t)zrt_parse_uint({inner}))" if nm == "uint"
 		return f"zrt_parse_int({inner})" if c_is_int(ty)
 		return f"zrt_parse_float({inner})" if c_is_float(ty)
 
-		raise f"`{ty_name(ty)}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
+		raise f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
 	}
 
-	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if c_is_aggregate(em, xt) or c_is_fn(xt)
+	raise f"`{nm}(…)` converts a scalar, and {ty_name(xt)} is not one" if c_is_aggregate(em, xt) or c_is_fn(xt)
 
-	return c_conv_scalar(em, ty, xt, inner)
+	return c_conv_scalar(em, ty, xt, nm, inner)
 }
 
 # c_conv_scalar lowers `T(x)` between two scalars. Zerg converts by RE-CONSTRUCTION and a
@@ -2484,7 +2485,16 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 #
 # [deviation] `uint` is `int64_t` in this compiler (parser.zg), so a `uint` target is an
 # `int` target here and the documented `uint(-1)` does not raise.
-fn c_conv_scalar(mut &em: Emitter, ty: Ty, xt: Ty, inner: str) -> str {
+fn c_conv_scalar(mut &em: Emitter, ty: Ty, xt: Ty, nm: str, inner: str) -> str {
+	# `uint(x)` is `int64_t` here, so the RANGE it rejects is the one this compiler can
+	# still see: a negative. The documented `uint(-5)` raises again, which the seed has
+	# always done and this had stopped doing; a uint above i64 remains unrepresentable.
+	if nm == "uint" and not c_is_float(xt) {
+		em.used_rt = true
+
+		return f"((int64_t)zrt_conv_u_from_i((int64_t)({inner}), INT64_MAX))"
+	}
+
 	# float -> integer truncates toward zero, and the helper's bounds are the TRUNCATED
 	# value's, so 255.7 converts to 255 while 256.0 raises. NaN and the infinities fail the
 	# same comparisons and abort on the same path.
@@ -3575,7 +3585,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EIndex(target, idx) => c_elem_ty(em, target, idx)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)
-		EConv(ty, x) => ty
+		EConv(ty, x, nm) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 		ERange(lo, hi, inclusive) => TUnknown

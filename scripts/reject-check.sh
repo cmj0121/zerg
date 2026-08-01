@@ -1268,6 +1268,34 @@ fn main() {
 }
 EOF
 
+# --- and it takes a value it can READ --------------------------------------------
+#
+# `int(s)`, `uint(s)` and `float(s)` parse a number out of a str; no other target does
+# (docs/runtime/builtins.md, "Parsing a string"). `bool(s)` and `byte(s)` fell through to
+# a C cast OF THE POINTER, so `bool(s)` was every non-empty string's `true` and `byte(s)`
+# was an address's low octet — both silent, both wrong.
+#
+# A composite is not a scalar to re-construct at all, and that one reached cc.
+
+reject parse-a-str-as-a-bool 'does not parse a `str`' no-place <<'EOF'
+fn main() {
+	print(f"{bool("1")}")
+}
+EOF
+
+reject parse-a-str-as-a-byte 'does not parse a `str`' no-place <<'EOF'
+fn main() {
+	print(f"{byte("65")}")
+}
+EOF
+
+reject convert-a-list-to-an-int 'converts a scalar, and list[int] is not one' no-place <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print(f"{int(xs)}")
+}
+EOF
+
 # --- a declared interface means its members exist -------------------------------
 #
 # A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —

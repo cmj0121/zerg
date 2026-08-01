@@ -1147,6 +1147,12 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# A bare `{ … }` is a NESTED SCOPE (GRAMMAR:52's `compound-stmt ::= block`). Reaching
 	# the expression parser instead, it was read as a map literal or as whatever its first
 	# statement made of it, and the message named that.
+	# A RESERVED WORD IN THE NAME SLOT is checked before the statement keywords below, or
+	# the one that owns the keyword answers first: `print := 1` reached the `print`
+	# statement arm, read `:= 1` as the thing to print, and reported it from the expression
+	# fallback. A `:=` after any keyword is a binding somebody meant to write.
+	raise f"`{cur(p).lexeme}` is a reserved word and cannot name a binding" if k != Ident and peek_kind(p, 1) == Walrus
+
 	raise "NotImplemented: a nested `{ … }` block as a statement — this compiler gives every binding the enclosing function's scope, so a block of its own would not free anything at its `}`" if k == LBrace
 
 	# `P{x} := p` — a STRUCT PATTERN in binding position (GRAMMAR:200). The `{` after a type
@@ -1241,7 +1247,14 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 		p_advance(p)
 		return parse_binding(p, false)
 	}
-	return parse_binding(p, false) if k == Ident and (peek_kind(p, 1) == Walrus or peek_kind(p, 1) == Colon)
+
+	# A BINDING is `name := …` or `name: T = …`, and it is recognised by that shape — so a
+	# RESERVED WORD in the name slot did not match, fell through every arm below, and was
+	# reported from the expression fallback as `` `:=` is not an expression``: the token
+	# after the name rather than the reserved word in it. `print := 1` and `this := 1` both
+	# arrived that way. Reaching parse_binding is what puts them in front of `p_name`.
+	return parse_binding(p, false) if peek_kind(p, 1) == Walrus or (peek_kind(p, 1) == Colon and k != Ident)
+	return parse_binding(p, false) if k == Ident and peek_kind(p, 1) == Colon
 
 	# expression statement or reassignment (the target may be a name, field, or index)
 	e := parse_expr(p)
@@ -1261,8 +1274,10 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 # parse_binding parses `name := e` (inferred) or `name: T = e` (typed). const is folded
 # into an immutable let (is_mut false); the emitter treats both as a plain C local.
 fn parse_binding(mut &p: Parser, is_mut: bool) -> Stmt {
-	name := cur(p).lexeme
-	p_advance(p)
+	# the last naming position that still read whatever token was there: `print := 1` and
+	# `this := 1` were carried past and reported from the expression fallback, as `` `:=` is
+	# not an expression`` — the token after the name rather than the reserved word in it.
+	name := p_name(p, "a binding")
 	if p_at(p, Walrus) {
 		p_advance(p)
 		return SLet(name, TUnknown, false, is_mut, parse_expr(p))

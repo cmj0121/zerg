@@ -1296,6 +1296,27 @@ fn main() {
 }
 EOF
 
+# --- and a str is not a container to subscript -----------------------------------
+#
+# docs/core/types.md: a str "iterates as `rune` and is NOT indexable" — it is UTF-8, so a
+# subscript would name a byte and not a character. The emitter named every other
+# non-container and let a str through to the LIST path: `s[0]` read a `const char*` as a
+# list header and printed a different number every run, and `s[1..3]` reached cc.
+
+reject index-a-str 'a `str` is not indexable' <<'EOF'
+fn main() {
+	s := "hello"
+	print(f"{s[0]}")
+}
+EOF
+
+reject slice-a-str 'a `str` is not indexable' <<'EOF'
+fn main() {
+	s := "hello"
+	print(s[1..3])
+}
+EOF
+
 # --- a declared interface means its members exist -------------------------------
 #
 # A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —

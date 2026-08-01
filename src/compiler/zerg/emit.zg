@@ -2496,14 +2496,120 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		raise f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
 	}
 
-	raise f"`{nm}(…)` converts a scalar, and {ty_name(xt)} is not one" if c_is_aggregate(em, xt) or c_is_fn(xt)
+	# THE TARGET'S SHAPE COMES FROM THE SPELLING, and only for `uint`. This compiler models
+	# `uint` as `int64_t` (parser.zg), so `ty` is TInt for both `int(x)` and `uint(x)` and
+	# the type genuinely cannot tell them apart — it is the one scalar property the Ty
+	# carries no room for. Supplying it here keeps `c_conv_scalar` a lowering over shapes
+	# rather than over spellings, and it is where a `TUint` would plug in if `uint` ever
+	# becomes its own type. [deviation] The same flattening means `x: uint = -5` and a
+	# `uint` parameter are still unchecked; only the conversion is.
+	mut dc := c_scalar_class(ty)
+	mut db := c_scalar_bits(ty)
+	if nm == "uint" {
+		dc = SC_UNSIGNED
+		db = 64
+	}
+	return c_conv_scalar(em, dc, db, xt, ty, inner)
+}
 
-	return c_conv_scalar(em, ty, xt, nm, inner)
+# The conversion-relevant SHAPE of a scalar: what the value is, independent of how wide it
+# is. This is the seed's `sema.ScalarClass` (src/bootstrap/internal/sema/convert.go), ported
+# rather than re-derived — the two compilers have to agree about which conversions are
+# lossless, and stating the rule twice in two shapes is how they stop agreeing.
+const SC_NONE := 0
+const SC_SIGNED := 1
+const SC_UNSIGNED := 2
+const SC_FLOAT := 3
+const SC_BOOL := 4
+
+# c_scalar_class answers a type's scalar class, or SC_NONE for a type that is not a
+# convertible scalar. A `str` deliberately has none: it is PARSED, which c_conv handles
+# above, and a value is built from it with `list[byte](s)` rather than cast.
+fn c_scalar_class(t: Ty) -> int {
+	return SC_SIGNED if c_is_int(t)
+	return SC_UNSIGNED if c_is_byte(t)
+	return SC_FLOAT if c_is_float(t)
+	return SC_BOOL if c_is_bool_ty(t)
+
+	return SC_NONE
+}
+
+fn c_scalar_bits(t: Ty) -> int {
+	return 8 if c_is_byte(t)
+	return 1 if c_is_bool_ty(t)
+
+	return 64
+}
+
+# c_lossless reports whether every value of the source shape is representable in the
+# target's, which is what lets the conversion stay a plain C cast with no range check and
+# no runtime call. It is the seed's `sema.Lossless`, rule for rule.
+fn c_lossless(sc: int, sb: int, dc: int, db: int) -> bool {
+	# `bool(x)` is a zero test and never out of range; widening INTO a float never raises,
+	# because an out-of-range float is ±Inf, which docs/core/types.md makes an IEEE value
+	# rather than an abort.
+	return true if dc == SC_BOOL or dc == SC_FLOAT
+	return true if sc == SC_BOOL
+
+	if dc == SC_SIGNED {
+		return sb <= db if sc == SC_SIGNED
+
+		# an unsigned source needs one more bit than it has, for the sign
+		return sb < db if sc == SC_UNSIGNED
+	}
+	if dc == SC_UNSIGNED {
+		return sb <= db if sc == SC_UNSIGNED
+
+		# a signed source may be negative, which no unsigned target holds
+		return false if sc == SC_SIGNED
+	}
+	return false
+}
+
+# The target's bounds, rendered as C. The 64-bit ends use <stdint.h>'s macros: the decimal
+# spelling of INT64_MIN is not a C integer constant — it parses as a negation of a value one
+# past INT64_MAX — and UINT64_MAX needs a suffix to stay unsigned. The float forms are the
+# same bounds as doubles, where the 64-bit text rounds to 2^63 / 2^64, which is what the
+# helper's open-interval test wants.
+
+fn c_signed_lo(bits: int) -> str {
+	return "INT64_MIN" if bits >= 64
+
+	return "-128"
+}
+
+fn c_signed_hi(bits: int) -> str {
+	return "INT64_MAX" if bits >= 64
+
+	return "127"
+}
+
+fn c_unsigned_hi(bits: int) -> str {
+	return "UINT64_MAX" if bits >= 64
+
+	return "255"
+}
+
+fn c_float_lo(bits: int) -> str {
+	return "-9223372036854775808.0" if bits >= 64
+
+	return "-128.0"
+}
+
+fn c_float_hi(dc: int, bits: int) -> str {
+	if dc == SC_UNSIGNED {
+		return "18446744073709551615.0" if bits >= 64
+
+		return "255.0"
+	}
+	return "9223372036854775807.0" if bits >= 64
+
+	return "127.0"
 }
 
 # c_conv_scalar lowers `T(x)` between two scalars. Zerg converts by RE-CONSTRUCTION and a
 # value that does not fit the target ABORTS with OverflowError (docs/runtime/builtins.md),
-# so a NARROWING conversion goes through the runtime's checked helper while one the types
+# so a NARROWING conversion goes through the runtime's checked helper while one the shapes
 # prove lossless stays a plain C cast and costs nothing.
 #
 # Every conversion here used to be that plain cast, whatever the widths, which is C's
@@ -2511,33 +2617,38 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 # behaviour that happened to print INT64_MAX. Both are the OverflowError the documentation
 # promises and the seed already raises.
 #
-# [deviation] `uint` is `int64_t` in this compiler (parser.zg), so a `uint` target is an
-# `int` target here and the documented `uint(-1)` does not raise.
-fn c_conv_scalar(mut &em: Emitter, ty: Ty, xt: Ty, nm: str, inner: str) -> str {
-	# `uint(x)` is `int64_t` here, so the RANGE it rejects is the one this compiler can
-	# still see: a negative. The documented `uint(-5)` raises again, which the seed has
-	# always done and this had stopped doing; a uint above i64 remains unrepresentable.
-	if nm == "uint" and not c_is_float(xt) {
-		em.used_rt = true
+# The target's shape arrives as (dc, db) rather than being read off `ty`, because `uint`
+# has no Ty of its own here; `ty` is still needed for the C type the result is cast to.
+fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str) -> str {
+	sc := c_scalar_class(xt)
 
-		return f"((int64_t)zrt_conv_u_from_i((int64_t)({inner}), INT64_MAX))"
-	}
+	# NOT A SCALAR ON EITHER SIDE. Naming only the aggregates left `TChan`, `TErr` and an
+	# unresolved `TNamed` falling through to the cast below — the same class this whole
+	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
+	# inference could not work out is not evidence the program is wrong.
+	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xt)
+
+	return f"(({c_type(ty)})({inner}))" if sc == SC_NONE or c_lossless(sc, c_scalar_bits(xt), dc, db)
+
+	em.used_rt = true
+	ct := c_type(ty)
 
 	# float -> integer truncates toward zero, and the helper's bounds are the TRUNCATED
 	# value's, so 255.7 converts to 255 while 256.0 raises. NaN and the infinities fail the
 	# same comparisons and abort on the same path.
-	if c_is_float(xt) {
-		em.used_rt = true
+	if sc == SC_FLOAT {
+		return f"(({ct})zrt_conv_u_from_f((double)({inner}), {c_float_hi(dc, db)}))" if dc == SC_UNSIGNED
 
-		return f"((int64_t)zrt_conv_i_from_f((double)({inner}), -9223372036854775808.0, 9223372036854775807.0))" if c_is_int(ty)
-		return f"((uint8_t)zrt_conv_u_from_f((double)({inner}), 255.0))" if c_is_byte(ty)
+		return f"(({ct})zrt_conv_i_from_f((double)({inner}), {c_float_lo(db)}, {c_float_hi(dc, db)}))"
 	}
-	if c_is_byte(ty) and c_is_int(xt) {
-		em.used_rt = true
+	if dc == SC_UNSIGNED {
+		return f"(({ct})zrt_conv_u_from_u((uint64_t)({inner}), {c_unsigned_hi(db)}))" if sc == SC_UNSIGNED
 
-		return f"((uint8_t)zrt_conv_u_from_i((int64_t)({inner}), 255))"
+		return f"(({ct})zrt_conv_u_from_i((int64_t)({inner}), {c_unsigned_hi(db)}))"
 	}
-	return f"(({c_type(ty)})({inner}))"
+	return f"(({ct})zrt_conv_i_from_u((uint64_t)({inner}), {c_signed_hi(db)}))" if sc == SC_UNSIGNED
+
+	return f"(({ct})zrt_conv_i_from_i((int64_t)({inner}), {c_signed_lo(db)}, {c_signed_hi(db)}))"
 }
 
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes

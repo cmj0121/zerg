@@ -2448,6 +2448,57 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 
 		return f"((int64_t)({inner}).tag)"
 	}
+
+	# A `str` SOURCE is PARSED, never re-constructed: `int(s)` / `uint(s)` / `float(s)` read
+	# the number's text through the runtime, raising ValueError on a malformed string and
+	# OverflowError on one out of range (docs/runtime/builtins.md, "Parsing a string").
+	#
+	# Falling through to the cast below reinterpreted the str's POINTER as the target, and
+	# the two halves of that failed differently: `int("42")` printed an address with no
+	# diagnostic at all, while `float("3.5")` was reported by cc against generated C. The
+	# runtime helpers have existed since the seed emitted them; this compiler simply never
+	# reached them.
+	if c_is_str(xt) {
+		em.used_rt = true
+
+		return f"zrt_parse_int({inner})" if c_is_int(ty)
+		return f"zrt_parse_float({inner})" if c_is_float(ty)
+
+		raise f"`{ty_name(ty)}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
+	}
+
+	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if c_is_aggregate(em, xt) or c_is_fn(xt)
+
+	return c_conv_scalar(em, ty, xt, inner)
+}
+
+# c_conv_scalar lowers `T(x)` between two scalars. Zerg converts by RE-CONSTRUCTION and a
+# value that does not fit the target ABORTS with OverflowError (docs/runtime/builtins.md),
+# so a NARROWING conversion goes through the runtime's checked helper while one the types
+# prove lossless stays a plain C cast and costs nothing.
+#
+# Every conversion here used to be that plain cast, whatever the widths, which is C's
+# truncation wearing Zerg's syntax: `byte(300)` gave 44, and `int(1e30)` was undefined
+# behaviour that happened to print INT64_MAX. Both are the OverflowError the documentation
+# promises and the seed already raises.
+#
+# [deviation] `uint` is `int64_t` in this compiler (parser.zg), so a `uint` target is an
+# `int` target here and the documented `uint(-1)` does not raise.
+fn c_conv_scalar(mut &em: Emitter, ty: Ty, xt: Ty, inner: str) -> str {
+	# float -> integer truncates toward zero, and the helper's bounds are the TRUNCATED
+	# value's, so 255.7 converts to 255 while 256.0 raises. NaN and the infinities fail the
+	# same comparisons and abort on the same path.
+	if c_is_float(xt) {
+		em.used_rt = true
+
+		return f"((int64_t)zrt_conv_i_from_f((double)({inner}), -9223372036854775808.0, 9223372036854775807.0))" if c_is_int(ty)
+		return f"((uint8_t)zrt_conv_u_from_f((double)({inner}), 255.0))" if c_is_byte(ty)
+	}
+	if c_is_byte(ty) and c_is_int(xt) {
+		em.used_rt = true
+
+		return f"((uint8_t)zrt_conv_u_from_i((int64_t)({inner}), 255))"
+	}
 	return f"(({c_type(ty)})({inner}))"
 }
 

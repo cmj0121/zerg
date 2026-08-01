@@ -288,8 +288,58 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 # of an rvalue". The same sentence the mutating-method path uses, for the same reason —
 # writing to a copy is not writing.
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
-	return if c_is_place(em, a)
-	chk_at(em, f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+	if not c_is_place(em, a) {
+		chk_at(em, f"{chk_arg_says(key, pos)} is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+		return
+	}
+
+	# TWO INDEPENDENT CONTROLS MEET HERE (GRAMMAR:308-313): the CALLER decides whether its
+	# variable is `mut`, the CALLEE decides via `mut &` whether it writes back, and "a
+	# caller-visible mutation needs BOTH". Only the callee's half was read, so `bump(k)` on
+	# an immutable `k` wrote through it and printed the changed value — a write to a binding
+	# the reader declared unwritable, with nothing said. There is no call-site marker to
+	# warn them either: the signature is the whole contract.
+	root := chk_root_name(a)
+	return if root == ""
+
+	idx := c_live_idx(em, root)
+	return if idx < 0 or em.env_mut[idx]
+
+	chk_at(em, f"{chk_arg_says(key, pos)} writes back to `{root}`, which is not `mut` — a caller-visible mutation needs both halves, so declare it `mut {root} := …`")
+}
+
+# chk_arg_says names the slot a borrow rule is about. A method's RECEIVER has no written
+# position, so numbering it would point at nothing on the page: `mut fn` is how it was
+# declared and "the receiver" is what a reader calls it.
+fn chk_arg_says(key: str, pos: int) -> str {
+	return f"the receiver of `{chk_call_name(key)}`, which is a `mut fn`," if pos == 0
+	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &` and"
+}
+
+# chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
+#
+# GRAMMAR:313 — a `mut &` "cannot ALIAS (the same variable to two `mut &` in one call),
+# which keeps it safe with no borrow checker". That sentence is the reason there is no
+# borrow checker, and nothing was holding it: `two(k, k)` passed one address twice, so the
+# callee's two names were one variable and the second write landed on top of the first.
+fn chk_ref_alias(mut &em: Emitter, key: str, args: list[Expr]) {
+	mut i := 0
+	for i < args.len() {
+		row := c_param_row(em, key, i)
+		if row >= 0 and em.pr_ref[row] {
+			ni := chk_root_name(args[i])
+			mut j := i + 1
+			for j < args.len() {
+				rj := c_param_row(em, key, j)
+				if ni != "" and rj >= 0 and em.pr_ref[rj] and chk_root_name(args[j]) == ni {
+					chk_at(em, f"`{ni}` is given to two `mut &` parameters of `{chk_call_name(key)}` in one call — a borrow may not alias, which is what keeps it safe without a borrow checker")
+					return
+				}
+				j = j + 1
+			}
+		}
+		i = i + 1
+	}
 }
 
 # chk_call_arity raises when a call passes too few or too many arguments. `base` is 1 for

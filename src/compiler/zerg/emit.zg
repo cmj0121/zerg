@@ -2676,10 +2676,14 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 # index 0 there — get that wrong and a `mut &` argument is passed by value to the slot
 # after the one that wanted its address.
 fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: Subst) -> str {
-	# the receiver is parameter 0 and is passed by value, so it is copied like any other;
-	# the written arguments then start at 1, and there is always a leading one to separate
-	# from, which a free call cannot assume
-	recv := c_copied(em, c_param_ty(em, key, 0), target, sb)
+	# the receiver is parameter 0 and goes through c_arg like any other argument: a plain
+	# method takes it BY VALUE, so it is copied, and a `mut fn` declared it `mut &`, so it
+	# takes the caller's variable itself. Routing it here rather than copying it outright is
+	# what makes `mut fn` work at all — and it brings the borrow's own rules with it, which
+	# GRAMMAR:302 asks for by name: "the call site must hold the receiver in a `mut`
+	# binding". `pos` is 0 because a receiver has no written position; chk_ref_arg says
+	# "the receiver" rather than an argument number for it.
+	recv := c_arg(em, key, 0, 0, target, sb)
 	return recv + c_args_from(em, key, 1, args, true, sb)
 }
 
@@ -2830,6 +2834,12 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str
 # by value into the slot after the one that wanted its address.
 fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bool, sb: Subst) -> str {
 	chk_call_arity(em, key, base, args.len())
+
+	# the aliasing rule is about a CALL rather than an argument, so it is asked once here
+	# and not inside the per-argument walk below
+	if base == 0 {
+		chk_ref_alias(em, key, args)
+	}
 
 	mut out := ""
 	mut i := 0

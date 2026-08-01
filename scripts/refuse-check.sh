@@ -1003,6 +1003,88 @@ fn main() {
 }
 EOF
 
+# EIGHT FORMS whose refusal named a TOKEN and not the form. A reader could not tell "this
+# is not built" from "you made a typo", which is the whole of the implemented-or-named
+# contract — every one of these is in GRAMMAR and none of them was being turned away by
+# the name GRAMMAR gives it.
+expect "$ZERG" array-type "an array type" <<'EOF'
+fn main() {
+	xs: [int; 3] = [1, 2, 3]
+	print xs[0]
+}
+EOF
+
+expect "$ZERG" array-type-parameter "an array type" <<'EOF'
+fn f(xs: [int; 3]) -> int {
+	return xs[0]
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" struct-pattern "a struct pattern" <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P(1)
+	print match p {
+		P{x: a} => a
+		_ => 0
+	}
+}
+EOF
+
+expect "$ZERG" as-binding-in-an-arm "an \`as\` binding" <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(5)
+	print match e {
+		A(n) as whole => n
+		_ => 0
+	}
+}
+EOF
+
+expect "$ZERG" interpolating-command-literal "an interpolating command literal" <<'EOF'
+fn main() {
+	n := "hi"
+	print f`echo {n}`
+}
+EOF
+
+expect "$ZERG" closure-parameter-without-a-type "a closure parameter without a type" <<'EOF'
+fn apply(f: fn(int) -> int, v: int) -> int {
+	return f(v)
+}
+
+fn main() {
+	print apply(fn(x) { return x + 1 }, 5)
+}
+EOF
+
+expect "$ZERG" destructuring-binding "a destructuring binding" <<'EOF'
+fn main() {
+	(a, b) := (1, 2)
+	print a + b
+}
+EOF
+
+expect "$ZERG" list-pattern "a list pattern" <<'EOF'
+fn main() {
+	xs: list[int] = [1, 2, 3]
+	print match xs {
+		[a, ..] => a
+		_ => 0
+	}
+}
+EOF
+
 # An INDEX needs a list or a map. `a[0]` on a `list[int]?` handed the runtime the carrier
 # struct where a header goes, which cc reported as a WARNING — so the program linked and
 # segfaulted. A warning is not a gate.

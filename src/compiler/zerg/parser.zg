@@ -132,6 +132,12 @@ fn parse_type(mut &p: Parser) -> Ty {
 }
 
 fn parse_base_type(mut &p: Parser) -> Ty {
+	# `[T; N]` — an ARRAY TYPE (GRAMMAR:459). It is not built, and it was not turned away
+	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
+	# `=`, found `int`` and `fn f(xs: [int; 3])` reported `expected `:`, found `;`` — two
+	# different tokens, neither of them the form.
+	raise "NotImplemented: an array type `[T; N]` — this compiler has `list[T]`, whose length is not part of its type" if p_at(p, LBrack)
+
 	if p_at(p, LArrow) {
 		p_advance(p)
 		inner := parse_type(p)
@@ -401,6 +407,13 @@ fn parse_fn_expr(mut &p: Parser) -> Expr {
 			}
 		}
 		pname := p_name(p, "a parameter")
+
+		# A CLOSURE parameter may omit its `: type` (GRAMMAR:328) — the compiler infers it
+		# from the function type the closure is checked against. This one does not infer,
+		# and it did not say so: the `expect` below reported `expected `:`, found `)``,
+		# which reads as a typo in a form the grammar allows.
+		raise f"NotImplemented: a closure parameter without a type — GRAMMAR lets `{pname}` take its type from the function type the closure is checked against, and this compiler does not infer it; write `{pname}: T`" if not p_at(p, Colon)
+
 		expect(p, Colon)
 		pty := parse_type(p)
 		params.append(Param(pname, pty, is_ref, false, ENil))
@@ -1620,6 +1633,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIdent("this")
 	}
+
+	# The INTERPOLATING form, `` f`…` ``, lexes as a bare `f` and then the command literal,
+	# so the parser saw a call with a stray token after it and said `expected `)`, found
+	# ``echo {n}```. GRAMMAR:284 makes it a form of its own — one that runs through a shell
+	# and shell-quotes each hole — and it is refused as one.
+	raise "NotImplemented: an interpolating command literal — " + p.toks[p.pos + 1].lexeme if k == Ident and t.lexeme == "f" and peek_kind(p, 1) == Cmd
+
 	if k == Ident {
 		# list[T](x) — a list-type conversion (e.g. list[byte](s))
 		if t.lexeme == "list" and peek_kind(p, 1) == LBrack {
@@ -1741,6 +1761,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# that compiles and is not the one that was written, so it is named instead.
 	raise f"NotImplemented: `{t.lexeme}` is a statement, and an expression is wanted here" if is_stmt_kw(k)
 
+	# TWO TOKENS ARRIVE HERE AS THE SIGN OF A FORM, not as themselves. A `:=` means the
+	# line was a DESTRUCTURING binding — `(a, b) := (1, 2)` — whose left side read as a
+	# tuple expression before the walrus was reached; a `..` in a pattern means a LIST
+	# pattern. Naming the token names the wreckage rather than what was written.
+	raise "NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if k == Walrus
+	raise "NotImplemented: a list pattern `[a, ..rest]` — this compiler destructures a list with indexing and `.slice`" if k == DotDot
+
 	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
 	# and the expression became nil, which emits `0`. So every form this parser does not
 	# know became the number zero, silently: a rune literal `'A'` was 0, and so was anything
@@ -1811,6 +1838,13 @@ fn parse_arm(mut &p: Parser) -> Arm {
 			p_advance(p)
 			name = p_name(p, "a variant pattern")
 		}
+
+		# `Move{x, y} =>` — a STRUCT PATTERN (GRAMMAR:390). `P{…}` after a name in arm
+		# position is that and nothing else, and it fell through to the arrow check, so the
+		# message was `expected `=>`, found `{`` — the token after the form rather than the
+		# form. The tuple and list patterns beside it are already refused by name.
+		raise f"NotImplemented: a struct pattern `{name}{{…}}` in a `match` arm — this compiler destructures a struct with field access, not with a pattern" if p_at(p, LBrace)
+
 		if name == "_" {
 			pat = 2
 		} else if is_pascal(name) {
@@ -1834,6 +1868,12 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	} else {
 		lit = parse_expr(p)
 	}
+
+	# `pattern as name` — the AS BINDING (GRAMMAR:388), which binds the whole matched value
+	# while the pattern keeps destructuring. It fell through to the arrow check, so the
+	# message named `as` rather than the form it opens.
+	raise "NotImplemented: an `as` binding in a `match` arm — `pattern as name` binds the whole matched value, which this compiler does not carry alongside the destructured parts" if p_at(p, As)
+
 	mut has_guard := false
 	mut grd := ENil
 	if p_at(p, If) {

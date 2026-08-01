@@ -208,6 +208,12 @@ struct Emitter {
 	# C name, which C has already closed the brace on.
 	open_scopes: list[int]
 
+	# mod_names is the NAMESPACE of every module this program imports — the last segment of
+	# each import path. Without it a qualified name could not be told from a typo: `foo.n`
+	# with no `foo` anywhere got the advice written for `lib.LIMIT`, because the guard was
+	# "nothing else answers to this name" and a misspelling answers to nothing either.
+	mod_names: list[str]
+
 	# lv_write is set while the ASSIGNMENT TARGET of a statement is being lowered, and it
 	# is what tells `xs[0] = 9` from `x := xs[0]`. A list's buffer is copy-on-write, so a
 	# read takes the slot as it is and a write must first make the buffer this list's
@@ -1892,6 +1898,26 @@ fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
 	return en
 }
 
+# c_last_segment is a module path's namespace: `util/text` is reached as `text`.
+fn c_last_segment(path: str) -> str {
+	b := list[byte](path)
+	mut cut := 0
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i + 1
+		}
+		i = i + 1
+	}
+	mut out: list[byte] = []
+	mut j := cut
+	for j < b.len() {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
 	mut i := 0
 	for i < em.var_name.len() {
@@ -2393,6 +2419,13 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	if c_is_list(ty) {
 		em.used_str = true
 		em.used_rt = true
+
+		# `list[T](x)` is the str -> bytes BRIDGE and nothing else. Anything but a str was
+		# emitted as `zgs_to_bytes(x)` and reported by cc — `list[int]([1,2,3])` as
+		# "passing 'zrt_list' to parameter of incompatible type 'const char *'".
+		raise f"`list[…](…)` converts a `str` to its bytes, and this is {ty_name(xt0)} — a list is built with `[…]`, not converted into" if not c_is_str(xt0)
+		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — the bytes of a `str` are `list[byte]`" if not c_is_byte(c_list_elem(ty))
+
 		return f"zgs_to_bytes({inner})"
 	}
 
@@ -2519,9 +2552,17 @@ fn c_is_place(mut &em: Emitter, e: Expr) -> bool {
 }
 
 # c_place_why names what an expression is, for the diagnostic above.
+# It names the step of the path that is NOT storage, which is not always the expression it
+# was handed: `mk().xs[0] = 9` fails at `mk()`, and calling the whole thing "a call result"
+# is true of the call and not of the `mk().xs` this was asked about. c_is_place became a
+# whole-path question and this is its other half.
 fn c_place_why(mut &em: Emitter, e: Expr) -> str {
 	return "a map index" if c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
-	return "a slice" if c_is_index(e)
+	return "a slice" if c_is_index(e) and c_is_range(c_index_key(e))
+	return "a call result" if c_ident_name(e) == "" and not c_is_lvalue(e)
+
+	# an lvalue by SHAPE whose path stops being storage further down — name where it stops
+	return c_place_why(em, chk_store_target(e)) if c_is_lvalue(e) and c_ident_name(e) == ""
 
 	return "a call result"
 }
@@ -3848,16 +3889,38 @@ fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: s
 # c_reset_env can put it in scope. The VALUE is not written here: a C global's initializer
 # must be a constant expression and `const s = "a" + "b"` is not one, so the assignment
 # goes into main alongside the init() calls — which is also what makes the order defined.
-fn c_const_globals(mut &em: Emitter, f: File) -> str {
+# A module constant is ONE object, not one per unit. Every unit used to emit `static` for
+# every constant in the program, and the assignment was emitted only in the unit that has
+# `main` and only for the constants that unit declares — so a constant declared in an
+# imported module was never assigned ANYWHERE and every reader saw a zero. `lib.LIMIT` and
+# the `pub fn limit()` written to work around it both answered 0, silently, and `--emit c`
+# and `--emit bin` disagreed because the single-unit path has no other unit to be wrong in.
+#
+# The unit that DECLARES it defines it; every other unit declares it `extern`. `whole` is
+# the single-unit build, where own IS the program and `static` is right.
+fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	mut out := ""
 	for c in f.consts {
 		name := c_let_name(c)
 		ty := c_infer(em, c_let_value(c))
 		em.k_names.append(name)
 		em.k_tys.append(ty)
-		out = out + f"static {c_type(ty)} zg_{name};\n"
+		if whole {
+			out = out + f"static {c_type(ty)} zg_{name};\n"
+		} else if c_const_in(own, name) {
+			out = out + f"{c_type(ty)} zg_{name};\n"
+		} else {
+			out = out + f"extern {c_type(ty)} zg_{name};\n"
+		}
 	}
 	return out
+}
+
+fn c_const_in(f: File, name: str) -> bool {
+	for c in f.consts {
+		return true if c_let_name(c) == name
+	}
+	return false
 }
 
 # c_const_assigns is the constants' values, assigned before any init() runs.
@@ -5012,6 +5075,10 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 	en := c_qualified_variant(em, target, fld)
 	return TNamed(en) if en != ""
 
+	# `lib.LIMIT` — a module-qualified name is the name it ends with; see c_fieldref
+	ns := c_ident_name(target)
+	return c_lookup_var(em, fld) if c_name_in(em.mod_names, ns) and c_is_bound(em, fld)
+
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
@@ -5049,18 +5116,6 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	# the rule the CALL path has followed since it was written (`ascii.is_digit`). The
 	# field path did not, so it lowered `lib` as a value and reported `undefined name lib`:
 	# about the qualifier, which is the one part of the expression that is not a name.
-	ns := c_ident_name(target)
-	if ns != "" and not c_is_bound(em, ns) and not c_is_struct_name(em, ns) and c_is_bound(em, fld) {
-		# RESOLVING it is not enough. A module constant is emitted as a `static` in the unit
-		# that declares it and assigned once at start-up, and a program is built as several
-		# units — so the reader's unit gets its own zeroed copy and the assignment lands in
-		# the other one. `lib.LIMIT` then compiles and reads 0, which is worse than the
-		# `undefined name lib` it used to give: a silent wrong value instead of a loud stop.
-		#
-		# The CALL path has no such problem — a function is one symbol — which is why
-		# `lib.helper()` has always worked and this looked like the same rule missing.
-		raise f"NotImplemented: `{ns}.{fld}` — a module constant is a `static` in the unit that declares it, so another unit reads a zero; bind it through a `pub fn` for now"
-	}
 
 	# the enum is named and the field is not one of ITS variants. Falling through said
 	# `undefined name `Color`` — about the one name in the expression that IS defined.
@@ -5068,6 +5123,14 @@ fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
 	if tn != "" and c_name_in(em.enum_names, tn) {
 		raise f"`{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
 		raise f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
+	}
+
+	ns := c_ident_name(target)
+	if c_name_in(em.mod_names, ns) and c_is_bound(em, fld) {
+		# `lib.LIMIT` — a module-qualified NAME. A module flattens into this unit, so the
+		# qualifier says where the name came from and the last segment IS the name, which
+		# is the rule the CALL path has followed since it was written (`ascii.is_digit`).
+		return c_var_cname(em, fld)
 	}
 
 	tgt := c_expr(em, target, sb)
@@ -6134,12 +6197,15 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # only the driver does.
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 	c_check_named_types(em, f)
 	c_scan_fnptr(em, f)
+	for im in f.imports {
+		em.mod_names.append(c_last_segment(im))
+	}
 
 	# AFTER the tables, not inside the walk that fills them. A default is an expression, so
 	# judging it asks c_infer, and c_infer asks the signature, struct and enum tables — from
@@ -6172,7 +6238,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	types = types + c_copy_helpers(em, f)
 
 	# the constants are declared before the prototypes, so a body may name one
-	globals := c_const_globals(em, f)
+	globals := c_const_globals(em, f, own, whole)
 	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
@@ -6189,7 +6255,7 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	if c_has_main(own) {
 		# every `init()` runs before main, in the order it was declared — GRAMMAR's FIFO,
 		# each once
-		inits := c_const_assigns(em, own) + c_init_calls(own)
+		inits := c_const_assigns(em, f) + c_init_calls(own)
 		if c_main_has_args(own) {
 			# main(args): build the arg list from argv via the runtime
 			em.used_rt = true

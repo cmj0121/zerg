@@ -93,6 +93,14 @@ fn chk_assignable(mut &em: Emitter, lhs: Expr) {
 		return
 	}
 
+	# `this` is the third of these: it is never DECLARED, so `mut this := …` is advice the
+	# grammar has no spelling for. A method's receiver is a copy (GRAMMAR:301) and the form
+	# that writes through it is `mut fn`, which is what the reader has to reach for.
+	if root == "this" {
+		chk_at(em, "cannot assign to `this`: a method's receiver is a copy, and the form that writes through it is `mut fn` — the one that marks a method as mutating the instance it is called on")
+		return
+	}
+
 	# Everything else — a plain binding and a by-value parameter alike — is fixed the same
 	# way, and for a parameter `mut n := n` is the ordinary idiom rather than a workaround.
 	if c_ident_name(lhs) != "" {

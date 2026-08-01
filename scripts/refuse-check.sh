@@ -658,10 +658,45 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" raw-pointer-builtin "undefined function \`addr\`" <<'EOF'
+# THE BUILT-IN SET IS CLOSED (docs/runtime/builtins.md): a user cannot add to it, so a
+# program naming one of these has not made a typo, and "undefined name `sizeof`" told the
+# reader the language does not have a form the documentation describes and the SEED builds.
+# Every one of these was reported as an unknown name until the emitter learned the list.
+expect "$ZERG" raw-pointer-builtin "NotImplemented: the raw-pointer built-in \`addr\`" <<'EOF'
 fn main() {
 	mut n := 1
 	print addr(n)
+}
+EOF
+
+expect "$ZERG" refcounted-box-builtin "NotImplemented: a refcounted box" <<'EOF'
+fn main() {
+	r := Ref(7)
+	print deref(r)
+}
+EOF
+
+expect "$ZERG" deref-builtin "NotImplemented: a refcounted box" <<'EOF'
+fn main() {
+	print deref(7)
+}
+EOF
+
+expect "$ZERG" sizeof-builtin "NotImplemented: the compile-time built-in \`sizeof[T]\`" <<'EOF'
+fn main() {
+	print sizeof[int]
+}
+EOF
+
+expect "$ZERG" alignof-builtin "NotImplemented: the compile-time built-in \`alignof[T]\`" <<'EOF'
+fn main() {
+	print alignof[int]
+}
+EOF
+
+expect "$ZERG" rune-bridge "NotImplemented: \`list[rune](s)\`" <<'EOF'
+fn main() {
+	print list[rune]("Hi").len()
 }
 EOF
 

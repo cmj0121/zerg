@@ -3902,6 +3902,14 @@ fn c_const_globals(mut &em: Emitter, f: File, own: File, whole: bool) -> str {
 	mut out := ""
 	for c in f.consts {
 		name := c_let_name(c)
+
+		# Every module flattens into ONE namespace, so two that declare the same constant
+		# mangle to one symbol. The FUNCTION case has been refused by name since the tables
+		# were written; this one linked — two definitions of `zg_N`, tolerated by a linker
+		# that still allows a common symbol — and the reader got whichever the linker chose.
+		# On a toolchain with `-fno-common` it is a duplicate symbol instead.
+		raise f"NotImplemented: two modules both define `{name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_name_in(em.k_names, name)
+
 		ty := c_infer(em, c_let_value(c))
 		em.k_names.append(name)
 		em.k_tys.append(ty)

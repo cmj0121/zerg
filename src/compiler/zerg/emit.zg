@@ -1193,8 +1193,8 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 	return not c_is_unknown(c_lookup_sig_ret(em, n))
 }
 
-# c_unbuilt_builtin names the documented built-ins this compiler has not built, and says
-# nothing about any other name.
+# c_builtin_check raises for a documented built-in this compiler has not built, and returns
+# for every other name so the caller reports whatever it was going to.
 #
 # The built-in set is CLOSED (docs/runtime/builtins.md) — a user cannot add to it — so a
 # program naming one of these has not made a typo, and answering "undefined name `sizeof`"
@@ -1202,21 +1202,17 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 # one of them is built by the SEED, which is what makes the wording matter: the form exists,
 # this compiler is the one that is behind.
 #
-# The three report sites below all funnel through here, so the answer does not depend on
-# whether the name was reached as a call, as a constructor or as a bare value.
-fn c_unbuilt_builtin(n: str) -> str {
-	return "a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
-	return f"the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
-	return f"the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
-
-	return ""
-}
-
-# c_builtin_check raises for a documented built-in this compiler has not built, and returns
-# for every other name so the caller reports whatever it was going to.
+# The three report sites funnel through here, so the answer does not depend on whether the
+# name was reached as a call, as a constructor or as a bare value.
+#
+# This is one THIRD of that closed set. The conversions and the str/list bridges are decided
+# by `is_conv`/`conv_ty` in parser.zg, and the error constructors by `c_err_kinds` here — so
+# nothing can yet assert that every row of builtins.md is either built or named. Whoever
+# unifies the three should start from those two names.
 fn c_builtin_check(n: str) {
-	why := c_unbuilt_builtin(n)
-	raise f"NotImplemented: {why}" if why != ""
+	raise "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
+	raise f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
+	raise f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
 }
 
 # c_is_ctor reports whether a name denotes a type constructor rather than a function

@@ -503,40 +503,8 @@ EOF
 # A `spec` is read and DROPPED — it is not a type and nothing dispatches on it — so this
 # compiled and ran with no `show` at all, and the declared interface meant nothing.
 # Enforcing the required members is the least it can mean.
-expect "$ZERG" impl-misses-a-required-member "does not implement \`show\`" <<'EOF'
-struct P {
-	n: int
-}
-
-spec Show {
-	fn show() -> int
-}
-
-impl Show for P {
-}
-
-fn main() { print "x" }
-EOF
-
 # and the other half: a member supplied by a SEPARATE inherent block, declared after the
 # spec impl. Checking at the `impl` made the answer depend on where the blocks sat.
-expect "$ZERG" impl-misses-one-of-two "does not implement \`tag\`" <<'EOF'
-struct P {
-	n: int
-}
-
-spec Show {
-	fn show() -> int
-	fn tag() -> int
-}
-
-impl Show for P {
-	fn show() -> int { return this.n }
-}
-
-fn main() { print "x" }
-EOF
-
 # Left and Right name the two SIDES of an Either and have no type of their own, so they are
 # read where the wanted type is known. Written where there is none, the compiler says which
 # of the two problems it is — a form used without its context, not a form that does not exist.
@@ -1087,10 +1055,135 @@ fn main() {
 }
 EOF
 
+# THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
+# holds every entry; half of them had none, so the claim was the third unsynchronised copy
+# of a list that already lives in the parser's raises and in this file.
+expect "$ZERG" command-literal "a command literal" <<'EOF'
+fn main() {
+	c := `echo hi`
+	print c
+}
+EOF
+
+expect "$ZERG" fstring-conversion "conversion" <<'EOF'
+fn main() {
+	n := 42
+	print f"{n!r}"
+}
+EOF
+
+expect "$ZERG" fstring-self-documenting "self-documenting" <<'EOF'
+fn main() {
+	n := 42
+	print f"{n=}"
+}
+EOF
+
+expect "$ZERG" fstring-format-spec "format spec" <<'EOF'
+fn main() {
+	pi := 3.5
+	print f"{pi:.2f}"
+}
+EOF
+
+expect "$ZERG" generic-function "a generic function definition" <<'EOF'
+fn id[T](v: T) -> T {
+	return v
+}
+
+fn main() { print id(5) }
+EOF
+
+expect "$ZERG" closure-capture "a closure capturing" <<'EOF'
+fn run(f: fn() -> int) -> int {
+	return f()
+}
+
+fn main() {
+	k := 5
+	print run(fn() -> int { return k })
+}
+EOF
+
+expect "$ZERG" with-statement "with" <<'EOF'
+fn main() {
+	with 5 as n {
+		print n
+	}
+}
+EOF
+
+expect "$ZERG" if-let-over-an-enum "it binds the Left" <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(5)
+	if v := e {
+		print 1
+	}
+	print 2
+}
+EOF
+
+expect "$ZERG" spec-member-with-a-body "a \`spec\` member with a BODY" <<'EOF'
+spec Show {
+	fn show() -> int {
+		return 1
+	}
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" unsafe-block "unsafe" <<'EOF'
+fn main() {
+	n := unsafe {
+		5
+	}
+	print n
+}
+EOF
+
+expect "$ZERG" raw-pointer-type "no type named \`ptr\`" <<'EOF'
+fn f(p: ptr) -> int {
+	return 1
+}
+
+fn main() { print 1 }
+EOF
+
 expect "$ZERG" destructuring-binding "a destructuring binding" <<'EOF'
 fn main() {
 	(a, b) := (1, 2)
 	print a + b
+}
+EOF
+
+expect "$ZERG" destructuring-binding-mut "a destructuring binding" <<'EOF'
+fn main() {
+	mut (a, b) := (1, 2)
+	print a + b
+}
+EOF
+
+# the third spelling BUILT and did nothing: the tuple was evaluated, assigned to no one,
+# and the program printed the values it started with
+expect "$ZERG" destructuring-assignment "a destructuring binding" <<'EOF'
+fn main() {
+	mut a := 1
+	mut b := 2
+	(a, b) = (3, 4)
+	print a + b
+}
+EOF
+
+expect "$ZERG" open-range-with-no-lower-bound "a range with no lower bound" <<'EOF'
+fn main() {
+	xs: list[int] = [1, 2, 3]
+	print xs[..2].len()
 }
 EOF
 

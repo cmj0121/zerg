@@ -3,8 +3,10 @@
 #   zerg build examples/1g/reexport/main.zg
 # Expected output:
 #   7
+#   5
 import "mid"
 
 fn main() {
 	print mid.hello() # 7 — re-exported through mid from deep
+	print SEED        # 5 — a module constant is one object, wherever it is read
 }

@@ -634,7 +634,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		EIndex(target, idx) => walk_pair(target, idx, ids, calls, ns)
 		EMethod(target, meth, args) => walk_method(target, meth, args, ids, calls, ns)
 		EListLit(elems) => walk_all(elems, ids, calls, ns)
-		EConv(ty, x) => walk_expr(x, ids, calls, ns)
+		EConv(ty, x, nm) => walk_expr(x, ids, calls, ns)
 		EIf(cond, then_e, else_e) => walk_three(cond, then_e, else_e, ids, calls, ns)
 		EMatch(scrut, arms) => walk_match(scrut, arms, ids, calls, ns)
 		ERange(lo, hi, inclusive) => walk_pair(lo, hi, ids, calls, ns)

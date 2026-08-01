@@ -658,10 +658,114 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" raw-pointer-builtin "undefined function \`addr\`" <<'EOF'
+# THE BUILT-IN SET IS CLOSED (docs/runtime/builtins.md): a user cannot add to it, so a
+# program naming one of these has not made a typo, and "undefined name `sizeof`" told the
+# reader the language does not have a form the documentation describes and the SEED builds.
+# Every one of these was reported as an unknown name until the emitter learned the list.
+expect "$ZERG" raw-pointer-builtin "NotImplemented: the raw-pointer built-in \`addr\`" <<'EOF'
 fn main() {
 	mut n := 1
 	print addr(n)
+}
+EOF
+
+expect "$ZERG" refcounted-box-builtin "NotImplemented: a refcounted box" <<'EOF'
+fn main() {
+	r := Ref(7)
+	print deref(r)
+}
+EOF
+
+expect "$ZERG" deref-builtin "NotImplemented: a refcounted box" <<'EOF'
+fn main() {
+	print deref(7)
+}
+EOF
+
+expect "$ZERG" sizeof-builtin "NotImplemented: the compile-time built-in \`sizeof[T]\`" <<'EOF'
+fn main() {
+	print sizeof[int]
+}
+EOF
+
+expect "$ZERG" alignof-builtin "NotImplemented: the compile-time built-in \`alignof[T]\`" <<'EOF'
+fn main() {
+	print alignof[int]
+}
+EOF
+
+expect "$ZERG" rune-bridge "NotImplemented: \`list[rune](s)\`" <<'EOF'
+fn main() {
+	print list[rune]("Hi").len()
+}
+EOF
+
+# A CALLEE THAT IS NOT A NAME. Three forms reached the emitter as `ECall("", args)` and were
+# reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
+# no typo in it. They are one root cause and three separate unbuilt features.
+
+expect "$ZERG" call-with-explicit-type-args "NotImplemented: calling index" <<'EOF'
+fn id(x: int) -> int {
+	return x
+}
+
+fn main() {
+	print id[int](7)
+}
+EOF
+
+expect "$ZERG" call-a-fn-value-from-a-list "NotImplemented: calling index" <<'EOF'
+fn dbl(x: int) -> int {
+	return x * 2
+}
+
+fn main() {
+	fs := [dbl]
+	print fs[0](5)
+}
+EOF
+
+# A NAMED ARGUMENT is GRAMMAR:239 and the sanctioned way to skip a defaulted parameter in
+# the middle (docs/code/functions.md). This compiler is positional-only, and the `:` used to
+# reach parse_primary, which answered "`:` is not an expression this compiler reads" — a
+# token, about a form the language specifies and the seed builds.
+
+expect "$ZERG" named-argument-in-a-call "NotImplemented: the named argument \`b:\`" <<'EOF'
+fn f(a: int, b: int) -> int {
+	return a - b
+}
+
+fn main() {
+	print f(b: 1, a: 5)
+}
+EOF
+
+expect "$ZERG" named-field-in-a-construction "NotImplemented: the named argument \`y:\`" <<'EOF'
+struct P {
+	x: int
+	y: int
+}
+
+fn main() {
+	p := P(y: 2, x: 1)
+	print p.x
+}
+EOF
+
+expect "$ZERG" optional-method-call "NotImplemented: calling optional chain ?.get" <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn get() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	p: P? = P(3)
+	print p?.get() ?? 0
 }
 EOF
 

@@ -662,13 +662,16 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | ----- | ---------------------------------------------------------------------------- |
 | 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                            |
 | 3     | 解構繫結 `(a, b) := …`                                                       |
+| 4     | 不是名字的 callee —— `f[T](…)`、`fs[0](…)`、`p?.m(…)`                        |
 | 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                    |
+| 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                       |
 | 6     | 泛型 `fn` / `struct` / `enum`;會捕獲的 closure;省略型別的 closure 參數       |
 | 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>` |
 | 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member           |
 | 8     | associated function `Type.f(…)`;`impl` 內的 associated type 或 value         |
 | 8     | 除 `#[derive(…)]` 以外的所有 decorator                                       |
 | 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                            |
+| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`;橋接 `list[rune](s)`       |
 | 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                       |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的

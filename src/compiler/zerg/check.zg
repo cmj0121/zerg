@@ -244,6 +244,38 @@ fn chk_store_path(mut &em: Emitter, e: Expr) {
 	chk_store_path(em, tgt)
 }
 
+# chk_str_not_indexable is the language's rule that a str has no subscript.
+#
+# docs/core/types.md: a str "iterates as `rune` and is NOT indexable" — it is UTF-8, so a
+# subscript would name a byte rather than a character. The emitter named every other
+# non-container while letting a str past, and what it fell into was the LIST path: `s[0]`
+# read a `const char*` as a list header and printed whatever that came to, a different
+# number every run, and `s[1..3]` handed the same pointer to zrt_list_slice and was
+# reported by cc.
+#
+# A LANGUAGE rule, so it is checked rather than refused: it carries a place, and the seed
+# has rejected it all along. The caller has already established the type, so this takes
+# none — the question is asked in exactly one place.
+# chk_int_literal rejects an integer literal that does not fit an i64.
+#
+# docs/core/types.md: "A literal that does not fit its required type is a COMPILE ERROR …
+# never a runtime overflow", and the chapter's own deviation note says an int literal past
+# i64 "is still rejected". It was not: the lexer accumulated the digits in a wrapping i64
+# and handed the emitter whatever came out, so `9223372036854775808` printed
+# -9223372036854775808, `99999999999999999999999` printed 200376420520689663 and
+# `0xFFFFFFFFFFFFFFFFF` printed -1 — three wrong answers with no diagnostic anywhere.
+#
+# A LANGUAGE rule, so it carries a place. The seed has rejected all three all along.
+fn chk_int_literal(mut &em: Emitter, lex: str) {
+	if not int_fits(lex) {
+		chk_at(em, f"the integer literal `{lex}` does not fit an `int` — it is 64 bits wide, and a literal past it is a compile error rather than a value that wraps")
+	}
+}
+
+fn chk_str_not_indexable(mut &em: Emitter) {
+	chk_at(em, "a `str` is not indexable — it is UTF-8, so a subscript would name a byte and not a character; convert it first with `list[byte](s)`")
+}
+
 fn chk_store_target(e: Expr) -> Expr {
 	return match e {
 		EIndex(t, _) => t

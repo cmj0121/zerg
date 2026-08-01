@@ -1658,6 +1658,19 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 		} else {
 			# free call: name(args), or a scalar type conversion like int(x)
 			name := ident_name(e)
+
+			# A CALLEE THAT IS NOT A NAME. Three forms reach here and all three used to be
+			# built as `ECall("", args)`, which the emitter reported as ``undefined function
+			# ` ``` — an empty name, naming nothing, for a program with no typo in it:
+			#
+			#   f[T](x)    explicit type arguments (GRAMMAR:236, group 7)
+			#   fs[0](x)   a call through a function VALUE held in a container
+			#   p?.get()   an optional method call
+			#
+			# The shape is still in hand here, which is why the refusal belongs in the parser
+			# rather than downstream of the name it threw away.
+			raise f"NotImplemented: calling {expr_kind(e)} — a callee is a plain name in this compiler, so `f[T](…)` (an explicit type argument), `fs[0](…)` (a function value in a container) and `p?.m(…)` (an optional method call) are all unbuilt" if name == ""
+
 			args := parse_call_args(p)
 			if is_conv(name) {
 				# A CONVERSION TAKES A VALUE. `int()` and `list[int]()` read as a call and
@@ -1667,7 +1680,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 				raise f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
 				raise f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-				e = EConv(conv_ty(name), args[0])
+				e = EConv(conv_ty(name), args[0], name)
 			} else {
 				e = ECall(name, args)
 			}
@@ -1680,6 +1693,13 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 	p_advance(p) # '('
 	mut args: list[Expr] = []
 	for not p_at(p, RParen) and not p_at(p, Eof) {
+		# A NAMED ARGUMENT — `f(loud: true)`, GRAMMAR:239, and the sanctioned way to skip a
+		# defaulted parameter in the middle (docs/code/functions.md). This compiler is
+		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
+		# expression this compiler reads" — a token, about a form the language specifies and
+		# the seed builds. An argument list is where the form is recognizable.
+		raise f"NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Ident) and peek_kind(p, 1) == Colon
+
 		args.append(parse_expr(p))
 		if p_at(p, Comma) {
 			p_advance(p)
@@ -1703,7 +1723,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# byte. The conversion node is the type the emitter already knows how to carry, and
 		# `byte(74)` has always worked; this is that, written the way a reader writes it.
 		p_advance(p)
-		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)))
+		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
 	}
 	if k == Rune {
 		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
@@ -1765,7 +1785,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			raise "`list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
 			raise f"`list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-			return EConv(TList(elem), args[0])
+			return EConv(TList(elem), args[0], "list")
 		}
 		p_advance(p)
 		return EIdent(t.lexeme)
@@ -2188,7 +2208,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
 	raise "f-string: a hole must be a single expression: {" + hole + "}" if not p_at(hp, Eof) and not p_at(hp, Semi)
-	return EConv(TStr, e)
+	return EConv(TStr, e, "str")
 }
 
 # fstr_reject refuses the hole forms this compiler does not implement, naming which one.

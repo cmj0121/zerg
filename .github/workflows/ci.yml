@@ -139,6 +139,19 @@ jobs:
           TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
         run: ./scripts/ci-fetch-testdata.sh corpus
 
+      # --- 7b''. and the two compilers agree about the programs that ARE Zerg ----
+      # `reject` makes the seed the oracle for what must be turned away. Nothing asked the
+      # same question about what must be ACCEPTED, so `int("42")` parsed a string in the
+      # seed and cast the string's POINTER in the compiler that ships — two different
+      # answers to one program, under a full board of green gates.
+      #
+      # AFTER the fetch, and not before it: the target passes the corpus as a glob, so
+      # running it earlier compared the 12 examples and silently nothing else — three
+      # quarters of the programs it pays a rebuild for. It is deliberately not gated on
+      # `available`, because the examples half works on a fork with no corpus at all.
+      - name: The seed and the shipping compiler agree
+        run: make oracle
+
       # --- 7c. and the ones nobody wrote by hand ---------------------------------
       # The reject list holds the mistakes somebody thought of. This breaks the corpus's
       # working programs and holds the results to the same contract, which is how an enum

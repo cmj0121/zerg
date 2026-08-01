@@ -85,7 +85,15 @@ enum Expr {
 	EIndex(Expr, Expr)
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
-	EConv(Ty, Expr)
+
+	# EConv carries the NAME TO REPORT THIS NODE AS, beside the target type. `uint` is
+	# `int64_t` in this compiler, so the type alone cannot tell `int(x)` from `uint(x)` —
+	# and a diagnostic that read the type back named a form the programmer had not written.
+	#
+	# "to report as" rather than "as written": two construction sites synthesize it, `b'J'`
+	# as "byte" and an f-string hole as "str", because neither was spelled by the reader
+	# and those are the nearest true names for what the node does.
+	EConv(Ty, Expr, str)
 	EIf(Expr, Expr, Expr)
 	EMatch(Expr, list[Arm])
 
@@ -472,7 +480,7 @@ fn expr_kind(e: Expr) -> str {
 		EIndex(target, idx) => "index"
 		EMethod(target, meth, args) => "method ." + meth
 		EListLit(elems) => "list-literal"
-		EConv(ty, x) => "convert " + ty_name(ty)
+		EConv(ty, x, nm) => "convert " + nm
 		EIf(cond, then_e, else_e) => "if-expr"
 		EMatch(scrut, arms) => "match"
 		ERange(lo, hi, inclusive) => "range"

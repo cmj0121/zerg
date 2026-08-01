@@ -1,0 +1,34 @@
+# 16 — Text: a `str` is UTF-8.
+#
+# A string literal holds whatever code points the source does, and the compiler
+# lowers it to C without changing what it means. That is less obvious than it
+# sounds: C's `\xHH` escape has no length limit, so a non-ASCII byte written that
+# way runs into the character after it — `"aéb"` became `\xc3\xa9b`, one escape,
+# and the build failed on a string a reader would call ordinary.
+#
+# Like example 15 this ASSERTS rather than prints, because `make examples` gates
+# on the exit status, and `make oracle` builds it with both compilers.
+fn check(what: str, got: str, want: str) {
+	raise f"{what}: got {got}, want {want}" if got != want
+}
+
+fn main() {
+	# a non-ASCII byte followed by a hex digit — the case that failed to compile
+	check("latin-1 then a hex digit", "aéb", "aéb")
+	check("cjk", "日本語", "日本語")
+	check("emoji", "🦎", "🦎")
+
+	# the escapes, which must survive the round trip too
+	check("tab", "a\tb", "a	b")
+	check("quote", "q\"q", "q\"q")
+	check("backslash", "a\\b", "a\\b")
+
+	# a str's bytes are its UTF-8 octets, not its characters
+	raise "é is two octets" if list[byte]("é").len() != 2
+	raise "the bridge back" if str(list[byte]("aéb")) != "aéb"
+
+	# and an f-string hole sits in the middle of one
+	check("interpolation", f"héllo {1 + 1}", "héllo 2")
+
+	print "text: ok"
+}

@@ -1193,6 +1193,28 @@ fn c_is_free_fn(mut &em: Emitter, n: str) -> bool {
 	return not c_is_unknown(c_lookup_sig_ret(em, n))
 }
 
+# c_builtin_check raises for a documented built-in this compiler has not built, and returns
+# for every other name so the caller reports whatever it was going to.
+#
+# The built-in set is CLOSED (docs/runtime/builtins.md) — a user cannot add to it — so a
+# program naming one of these has not made a typo, and answering "undefined name `sizeof`"
+# tells a reader the language does not have it when the documentation says it does. Every
+# one of them is built by the SEED, which is what makes the wording matter: the form exists,
+# this compiler is the one that is behind.
+#
+# The three report sites funnel through here, so the answer does not depend on whether the
+# name was reached as a call, as a constructor or as a bare value.
+#
+# This is one THIRD of that closed set. The conversions and the str/list bridges are decided
+# by `is_conv`/`conv_ty` in parser.zg, and the error constructors by `c_err_kinds` here — so
+# nothing can yet assert that every row of builtins.md is either built or named. Whoever
+# unifies the three should start from those two names.
+fn c_builtin_check(n: str) {
+	raise "NotImplemented: a refcounted box `Ref(x)` / `deref(r)` — this compiler has no `Ref[T]` type" if n == "Ref" or n == "deref"
+	raise f"NotImplemented: the raw-pointer built-in `{n}` — bare-metal memory access, which is `unsafe`-only and not built here" if n == "addr" or n == "ptr"
+	raise f"NotImplemented: the compile-time built-in `{n}[T]` — this compiler does not compute a type's layout" if n == "sizeof" or n == "alignof"
+}
+
 # c_is_ctor reports whether a name denotes a type constructor rather than a function
 # call — Zerg types are PascalCase and functions snake_case, so an uppercase first
 # letter is the tell.
@@ -2036,7 +2058,50 @@ fn c_unop(oper: str) -> str {
 # plain decimal string, matching how the bootstrap lowers integer literals. What a lexeme is
 # WORTH is a lexical fact and lives with the lexer, so the formatter can ask the same question
 # without a second implementation of it (F408 needs it to tell `1 | 2` from `1 | 3`).
-fn c_int_dec(lex: str) -> str {
+# c_str_lit renders a Zerg str as a C string literal, escaping every byte outside
+# printable ASCII as a THREE-DIGIT OCTAL escape.
+#
+# Not `\xHH`, which is what `quote` (lexer.zg) emits for the token dump: C's hex escape
+# consumes as many hex digits as follow it, with no two-digit limit, so `"aéb"` came out as
+# `"a\xc3\xa9b"` and cc read `\xa9b` as one escape — "hex escape sequence out of range",
+# a build that fails on a string a reader would call ordinary. An octal escape is at most
+# three digits, so `\303\251b` cannot run on. The seed has emitted octal all along.
+fn c_str_lit(s: str) -> str {
+	mut out: list[byte] = []
+	out.append(byte(34)) # "
+	for c in list[byte](s) {
+		v := int(c)
+		if v == 34 {
+			out.append(byte(92))
+			out.append(byte(34))
+		} else if v == 92 {
+			out.append(byte(92))
+			out.append(byte(92))
+		} else if v == 10 {
+			out.append(byte(92))
+			out.append(b'n')
+		} else if v == 9 {
+			out.append(byte(92))
+			out.append(b't')
+		} else if v == 13 {
+			out.append(byte(92))
+			out.append(b'r')
+		} else if v >= 32 and v <= 126 {
+			out.append(c)
+		} else {
+			out.append(byte(92))
+			out.append(byte(48 + v / 64))
+			out.append(byte(48 + v / 8 % 8))
+			out.append(byte(48 + v % 8))
+		}
+	}
+	out.append(byte(34)) # "
+	return str(out)
+}
+
+fn c_int_dec(mut &em: Emitter, lex: str) -> str {
+	chk_int_literal(em, lex)
+
 	return strconv.to_string(int_value(lex), 10)
 }
 
@@ -2052,9 +2117,9 @@ fn c_bool(b: bool) -> str {
 # match arm's bound scrutinee name is spliced into its guard and body.
 fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
-		EInt(lex) => c_int_dec(lex)
+		EInt(lex) => c_int_dec(em, lex)
 		EFloat(lex) => lex
-		EStr(v) => quote(v)
+		EStr(v) => c_str_lit(v)
 		EBool(b) => c_bool(b)
 		ENil => "0"
 		EIdent(n) => c_ident_val(em, n, sb)
@@ -2067,7 +2132,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		EIndex(target, idx) => c_index(em, target, idx, sb)
 		EMethod(target, meth, args) => c_method(em, target, meth, args, sb)
 		EListLit(elems) => c_list_lit(em, elems, sb)
-		EConv(ty, x) => c_conv(em, ty, x, sb)
+		EConv(ty, x, nm) => c_conv(em, ty, x, nm, sb)
 		EIf(cond, then_e, else_e) => c_ternary(em, cond, then_e, else_e, sb)
 		EMatch(scrut, arms) => c_match(em, scrut, arms, sb)
 
@@ -2396,7 +2461,7 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 # bridge unconditionally handed `zgs_from_bytes` an `int64_t`, so `str(n)` was not a thing
 # anyone could write — a cc type error with no Zerg diagnostic in front of it. The three
 # display leaves are already in the runtime header for the seed's f-strings.
-fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
+fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	inner := c_expr(em, x, sb)
 	xt0 := c_infer(em, x)
 	if c_is_str(ty) {
@@ -2424,6 +2489,12 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 		# emitted as `zgs_to_bytes(x)` and reported by cc — `list[int]([1,2,3])` as
 		# "passing 'zrt_list' to parameter of incompatible type 'const char *'".
 		raise f"`list[…](…)` converts a `str` to its bytes, and this is {ty_name(xt0)} — a list is built with `[…]`, not converted into" if not c_is_str(xt0)
+
+		# `list[rune](s)` is the OTHER documented bridge (docs/runtime/builtins.md) and the
+		# runtime has it — `zrt_str_runes` decodes the code points, and the seed emits it.
+		# What this compiler lacks is `rune` as a type at all, which is why the form is
+		# named rather than described as a rule about what a str's bytes are.
+		raise "NotImplemented: `list[rune](s)` decodes a str's code points — this compiler has no `rune` type, only `list[byte](s)`" if c_named_of(c_list_elem(ty)) == "rune"
 		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — the bytes of a `str` are `list[byte]`" if not c_is_byte(c_list_elem(ty))
 
 		return f"zgs_to_bytes({inner})"
@@ -2437,18 +2508,190 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 	# a CARRIER is not a value to convert: `int(k)` where k is a `K?` used to cast the
 	# carrier struct, which cc rejected against generated code. The unwrap is the language's
 	# and has to be written.
-	raise f"`{ty_name(ty)}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
+	raise f"`{nm}(…)` converts a value, and {ty_name(xt)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(xt)
 	if c_name_in(em.enum_names, c_named_of(xt)) {
 		raise f"enum `{c_named_of(xt)}` carries a payload, so its tag is opaque and match-only — `int(v)` reads the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, c_named_of(xt))
 
 		# `int(v)` is the ONE conversion an enum has. Every other one fell through to a plain
 		# C cast OF THE STRUCT, which cc rejected against generated code — the report this
 		# compiler exists to get in front of.
-		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{ty_name(ty)}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
+		raise f"an enum converts to `int` — its discriminant — and to nothing else, so `{nm}(…)` over `{c_named_of(xt)}` is not a conversion the language has" if not c_is_int(ty)
 
 		return f"((int64_t)({inner}).tag)"
 	}
-	return f"(({c_type(ty)})({inner}))"
+
+	# A `str` SOURCE is PARSED, never re-constructed: `int(s)` / `uint(s)` / `float(s)` read
+	# the number's text through the runtime, raising ValueError on a malformed string and
+	# OverflowError on one out of range (docs/runtime/builtins.md, "Parsing a string").
+	#
+	# Falling through to the cast below reinterpreted the str's POINTER as the target, and
+	# the two halves of that failed differently: `int("42")` printed an address with no
+	# diagnostic at all, while `float("3.5")` was reported by cc against generated C. The
+	# runtime helpers have existed since the seed emitted them; this compiler simply never
+	# reached them.
+	if c_is_str(xt) {
+		em.used_rt = true
+
+		return f"((int64_t)zrt_parse_uint({inner}))" if nm == "uint"
+		return f"zrt_parse_int({inner})" if c_is_int(ty)
+		return f"zrt_parse_float({inner})" if c_is_float(ty)
+
+		raise f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
+	}
+
+	# THE TARGET'S SHAPE COMES FROM THE SPELLING, and only for `uint`. This compiler models
+	# `uint` as `int64_t` (parser.zg), so `ty` is TInt for both `int(x)` and `uint(x)` and
+	# the type genuinely cannot tell them apart — it is the one scalar property the Ty
+	# carries no room for. Supplying it here keeps `c_conv_scalar` a lowering over shapes
+	# rather than over spellings, and it is where a `TUint` would plug in if `uint` ever
+	# becomes its own type. [deviation] The same flattening means `x: uint = -5` and a
+	# `uint` parameter are still unchecked; only the conversion is.
+	mut dc := c_scalar_class(ty)
+	mut db := c_scalar_bits(ty)
+	if nm == "uint" {
+		dc = SC_UNSIGNED
+		db = 64
+	}
+	return c_conv_scalar(em, dc, db, xt, ty, inner)
+}
+
+# The conversion-relevant SHAPE of a scalar: what the value is, independent of how wide it
+# is. This is the seed's `sema.ScalarClass` (src/bootstrap/internal/sema/convert.go), ported
+# rather than re-derived — the two compilers have to agree about which conversions are
+# lossless, and stating the rule twice in two shapes is how they stop agreeing.
+const SC_NONE := 0
+const SC_SIGNED := 1
+const SC_UNSIGNED := 2
+const SC_FLOAT := 3
+const SC_BOOL := 4
+
+# c_scalar_class answers a type's scalar class, or SC_NONE for a type that is not a
+# convertible scalar. A `str` deliberately has none: it is PARSED, which c_conv handles
+# above, and a value is built from it with `list[byte](s)` rather than cast.
+fn c_scalar_class(t: Ty) -> int {
+	return SC_SIGNED if c_is_int(t)
+	return SC_UNSIGNED if c_is_byte(t)
+	return SC_FLOAT if c_is_float(t)
+	return SC_BOOL if c_is_bool_ty(t)
+
+	return SC_NONE
+}
+
+fn c_scalar_bits(t: Ty) -> int {
+	return 8 if c_is_byte(t)
+	return 1 if c_is_bool_ty(t)
+
+	return 64
+}
+
+# c_lossless reports whether every value of the source shape is representable in the
+# target's, which is what lets the conversion stay a plain C cast with no range check and
+# no runtime call. It is the seed's `sema.Lossless`, rule for rule.
+fn c_lossless(sc: int, sb: int, dc: int, db: int) -> bool {
+	# `bool(x)` is a zero test and never out of range; widening INTO a float never raises,
+	# because an out-of-range float is ±Inf, which docs/core/types.md makes an IEEE value
+	# rather than an abort.
+	return true if dc == SC_BOOL or dc == SC_FLOAT
+	return true if sc == SC_BOOL
+
+	if dc == SC_SIGNED {
+		return sb <= db if sc == SC_SIGNED
+
+		# an unsigned source needs one more bit than it has, for the sign
+		return sb < db if sc == SC_UNSIGNED
+	}
+	if dc == SC_UNSIGNED {
+		return sb <= db if sc == SC_UNSIGNED
+
+		# a signed source may be negative, which no unsigned target holds
+		return false if sc == SC_SIGNED
+	}
+	return false
+}
+
+# The target's bounds, rendered as C. The 64-bit ends use <stdint.h>'s macros: the decimal
+# spelling of INT64_MIN is not a C integer constant — it parses as a negation of a value one
+# past INT64_MAX — and UINT64_MAX needs a suffix to stay unsigned. The float forms are the
+# same bounds as doubles, where the 64-bit text rounds to 2^63 / 2^64, which is what the
+# helper's open-interval test wants.
+
+fn c_signed_lo(bits: int) -> str {
+	return "INT64_MIN" if bits >= 64
+
+	return "-128"
+}
+
+fn c_signed_hi(bits: int) -> str {
+	return "INT64_MAX" if bits >= 64
+
+	return "127"
+}
+
+fn c_unsigned_hi(bits: int) -> str {
+	return "UINT64_MAX" if bits >= 64
+
+	return "255"
+}
+
+fn c_float_lo(bits: int) -> str {
+	return "-9223372036854775808.0" if bits >= 64
+
+	return "-128.0"
+}
+
+fn c_float_hi(dc: int, bits: int) -> str {
+	if dc == SC_UNSIGNED {
+		return "18446744073709551615.0" if bits >= 64
+
+		return "255.0"
+	}
+	return "9223372036854775807.0" if bits >= 64
+
+	return "127.0"
+}
+
+# c_conv_scalar lowers `T(x)` between two scalars. Zerg converts by RE-CONSTRUCTION and a
+# value that does not fit the target ABORTS with OverflowError (docs/runtime/builtins.md),
+# so a NARROWING conversion goes through the runtime's checked helper while one the shapes
+# prove lossless stays a plain C cast and costs nothing.
+#
+# Every conversion here used to be that plain cast, whatever the widths, which is C's
+# truncation wearing Zerg's syntax: `byte(300)` gave 44, and `int(1e30)` was undefined
+# behaviour that happened to print INT64_MAX. Both are the OverflowError the documentation
+# promises and the seed already raises.
+#
+# The target's shape arrives as (dc, db) rather than being read off `ty`, because `uint`
+# has no Ty of its own here; `ty` is still needed for the C type the result is cast to.
+fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str) -> str {
+	sc := c_scalar_class(xt)
+
+	# NOT A SCALAR ON EITHER SIDE. Naming only the aggregates left `TChan`, `TErr` and an
+	# unresolved `TNamed` falling through to the cast below — the same class this whole
+	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
+	# inference could not work out is not evidence the program is wrong.
+	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xt)
+
+	return f"(({c_type(ty)})({inner}))" if sc == SC_NONE or c_lossless(sc, c_scalar_bits(xt), dc, db)
+
+	em.used_rt = true
+	ct := c_type(ty)
+
+	# float -> integer truncates toward zero, and the helper's bounds are the TRUNCATED
+	# value's, so 255.7 converts to 255 while 256.0 raises. NaN and the infinities fail the
+	# same comparisons and abort on the same path.
+	if sc == SC_FLOAT {
+		return f"(({ct})zrt_conv_u_from_f((double)({inner}), {c_float_hi(dc, db)}))" if dc == SC_UNSIGNED
+
+		return f"(({ct})zrt_conv_i_from_f((double)({inner}), {c_float_lo(db)}, {c_float_hi(dc, db)}))"
+	}
+	if dc == SC_UNSIGNED {
+		return f"(({ct})zrt_conv_u_from_u((uint64_t)({inner}), {c_unsigned_hi(db)}))" if sc == SC_UNSIGNED
+
+		return f"(({ct})zrt_conv_u_from_i((int64_t)({inner}), {c_unsigned_hi(db)}))"
+	}
+	return f"(({ct})zrt_conv_i_from_u((uint64_t)({inner}), {c_signed_hi(db)}))" if sc == SC_UNSIGNED
+
+	return f"(({ct})zrt_conv_i_from_i((int64_t)({inner}), {c_signed_lo(db)}, {c_signed_hi(db)}))"
 }
 
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
@@ -2483,7 +2726,17 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	# carrier struct where a list header goes, which cc reported as a WARNING — so the
 	# program linked and segfaulted. The unwrap is the language's and has to be written.
 	raise f"`[…]` indexes a value, and {ty_name(tty)} may not have one — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(tty)
-	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_str(tty) and not c_is_unknown(tty)
+
+	# A `str` was whitelisted by the guard below and rejected by the statement after it —
+	# one rule about one type, held in two places that said opposite things. It is asked
+	# once, here, and the guard no longer mentions it.
+	if c_is_str(tty) {
+		chk_str_not_indexable(em)
+
+		return "0"
+	}
+
+	raise f"`[…]` indexes a list or a map, and this is {ty_name(tty)}" if not c_is_list(tty) and not c_is_map(tty) and not c_is_unknown(tty)
 
 	return c_map_index(em, target, idx, tty, sb) if c_is_map(tty)
 	return c_slice(em, target, idx, tty, sb) if c_is_range(idx)
@@ -2832,7 +3085,11 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# A PascalCase call that names no declared type is not a constructor of anything.
 		# It used to emit a compound literal of that name anyway, which cc rejected against
 		# generated C.
-		raise f"no type named `{name}` to construct" if not c_is_struct_name(em, name)
+		if not c_is_struct_name(em, name) {
+			c_builtin_check(name)
+
+			raise f"no type named `{name}` to construct"
+		}
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
 
@@ -2840,7 +3097,11 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# cc, which reported a call to an undeclared function against a file under .zerg-cache
 	# — for a typo, or for one of the specified-but-unbuilt builtins (`addr`, `ptr`), which
 	# is exactly the answer this should be giving by name.
-	raise f"undefined function `{name}`" if not c_is_free_fn(em, name)
+	if not c_is_free_fn(em, name) {
+		c_builtin_check(name)
+
+		raise f"undefined function `{name}`"
+	}
 
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"
 }
@@ -3119,7 +3380,11 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 		chk_at(em, "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
 		return "0"
 	}
-	raise f"undefined name `{n}`" if not c_is_bound(em, n) and not c_is_struct_name(em, n)
+	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
+		c_builtin_check(n)
+
+		raise f"undefined name `{n}`"
+	}
 
 	# every read of a binding funnels through here, which is what makes this the one place
 	# a use after `del` has to be caught
@@ -3524,7 +3789,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EIndex(target, idx) => c_elem_ty(em, target, idx)
 		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)
-		EConv(ty, x) => ty
+		EConv(ty, x, nm) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
 		EMatch(scrut, arms) => c_infer_match(em, scrut, arms)
 		ERange(lo, hi, inclusive) => TUnknown

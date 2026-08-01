@@ -1055,6 +1055,15 @@ fn main() {
 }
 EOF
 
+# Every module flattens into ONE namespace, so two that declare the same constant mangle to
+# one symbol. The FUNCTION case has been refused since the tables were written; this one
+# LINKED — two definitions of `zg_N`, tolerated by a linker that still allows a common
+# symbol — and the reader got whichever one it chose. `-fno-common` makes it a duplicate
+# symbol instead, so the same program built two ways gave two answers and then an error.
+#
+# It needs two modules, which this harness writes one file for, so the case lives in the
+# multi-module example instead: see examples/1g/reexport.
+
 # THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
 # holds every entry; half of them had none, so the claim was the third unsynchronised copy
 # of a list that already lives in the parser's raises and in this file.

@@ -2058,7 +2058,9 @@ fn c_unop(oper: str) -> str {
 # plain decimal string, matching how the bootstrap lowers integer literals. What a lexeme is
 # WORTH is a lexical fact and lives with the lexer, so the formatter can ask the same question
 # without a second implementation of it (F408 needs it to tell `1 | 2` from `1 | 3`).
-fn c_int_dec(lex: str) -> str {
+fn c_int_dec(mut &em: Emitter, lex: str) -> str {
+	chk_int_literal(em, lex)
+
 	return strconv.to_string(int_value(lex), 10)
 }
 
@@ -2074,7 +2076,7 @@ fn c_bool(b: bool) -> str {
 # match arm's bound scrutinee name is spliced into its guard and body.
 fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
-		EInt(lex) => c_int_dec(lex)
+		EInt(lex) => c_int_dec(em, lex)
 		EFloat(lex) => lex
 		EStr(v) => quote(v)
 		EBool(b) => c_bool(b)

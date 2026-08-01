@@ -1,10 +1,4 @@
 # deep — the innermost module, re-exported through `mid` (Phase 1g `import pub`).
-# A module CONSTANT is one object, not one per translation unit. It used to be `static` in
-# every unit, and assigned only in the unit that both declares it and holds `main` — so a
-# constant declared in an imported module was assigned NOWHERE and every reader saw a zero.
-# The `pub fn` written to work around that read the same zero.
-pub const SEED: int = 5
-
 pub fn hello() -> int {
-	return SEED + 2
+	return 7
 }

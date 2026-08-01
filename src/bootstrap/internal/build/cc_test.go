@@ -30,6 +30,11 @@ func findCC() string {
 // to answer and none of them did: an example that reached a checked conversion or a
 // parse failed here as `'zergrt.h' file not found`, which reads as a broken example
 // rather than as a test that declined to link what the program needs.
+//
+// It does NOT link the scheduler, so a concurrency program does not belong here — the
+// callers that need one use runProgramRT, which adds runtime.ConcurrencyCUnits. The test
+// reads the include out of the emitted C because it is handed code rather than the
+// emit.Manifest that states the same thing; every caller has that manifest and discards it.
 func compileAndRun(t *testing.T, cc, code string) string {
 	t.Helper()
 	tmp := t.TempDir()
@@ -38,13 +43,13 @@ func compileAndRun(t *testing.T, cc, code string) string {
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {
 		t.Fatalf("write C: %v", err)
 	}
-	cargs := []string{"-std=c11", "-o", bpath, cpath}
+	cargs := []string{"-std=c11", "-I", tmp, "-o", bpath, cpath}
 	if strings.Contains(code, `#include "zergrt.h"`) {
 		cfiles, err := runtime.Materialize(tmp)
 		if err != nil {
 			t.Fatalf("materialize runtime: %v", err)
 		}
-		cargs = append([]string{"-std=c11", "-I", tmp, "-o", bpath, cpath}, cfiles...)
+		cargs = append(cargs, cfiles...)
 	}
 	if out, err := exec.Command(cc, cargs...).CombinedOutput(); err != nil {
 		t.Fatalf("cc failed: %v\n%s\n--- C ---\n%s", err, out, code)

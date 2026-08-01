@@ -2505,11 +2505,17 @@ fn c_lvalue(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 # the address of. `m[k]` is the one that needs them — it looks like an index and lowers to a
 # statement expression, so it is a value however much it reads as a place. c_is_lvalue is
 # type-blind and cannot tell the two indexes apart.
+# A place is a place ALL THE WAY DOWN. `mk().xs` is an lvalue by shape — a field access —
+# and its target is a call, which has no address, so `&(mk().xs)` reached cc. The question
+# is about the whole path and was asked only about the last step.
 fn c_is_place(mut &em: Emitter, e: Expr) -> bool {
 	return false if not c_is_lvalue(e)
 	return false if c_is_index(e) and c_is_map(c_infer(em, c_index_target(e)))
 
-	return true
+	# a bare name is where the recursion stops: it is storage, and it has no target
+	return true if c_ident_name(e) != ""
+
+	return c_is_place(em, chk_store_target(e))
 }
 
 # c_place_why names what an expression is, for the diagnostic above.
@@ -4813,7 +4819,13 @@ fn c_map_index(mut &em: Emitter, target: Expr, idx: Expr, tty: Ty, sb: Subst) ->
 	kc := c_type(c_map_key_ty(tty))
 	vc := c_type(c_map_val_ty(tty))
 	tgt := c_expr(em, target, sb)
-	return f"({{ {kc} zgt_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&({tgt}), &zgt_mk)); }})"
+
+	# the map is BOUND when it is not a place, for the reason c_index binds a list: a map
+	# index takes the map's ADDRESS, and `n["a"]["b"]` or `({"a": 9})["a"]` has none —
+	# which reached cc as "cannot take the address of an rvalue of type 'zrt_map'".
+	return f"({{ {kc} zgt_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&({tgt}), &zgt_mk)); }})" if c_is_place(em, target)
+
+	return f"({{ zrt_map zgt_mx = {tgt}; {kc} zgt_mk = {c_expr(em, idx, sb)}; (*({vc}*)zrt_map_index(&zgt_mx, &zgt_mk)); }})"
 }
 
 # c_map_set lowers `m[k] = v`. Both sides go through temps for the same reason.

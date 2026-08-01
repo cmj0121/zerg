@@ -54,12 +54,10 @@ for src in "$@"; do
 	# divergence. A refusal that names itself is counted and tolerated; any other way of
 	# failing a program the seed compiles is the loss this gate looks for.
 	if ! err=$("$ZERG" build --emit bin -o "$tmp/$name.1" "$src" 2>&1 >/dev/null); then
-		case $err in
-		*NotImplemented*)
+		if [ "${err#*NotImplemented}" != "$err" ]; then
 			named=$((named + 1))
 			continue
-			;;
-		esac
+		fi
 		echo "BUILD     $src — the seed built it and the shipping compiler did not, without naming a form"
 		echo "  $(echo "$err" | head -1)"
 		fail=$((fail + 1))

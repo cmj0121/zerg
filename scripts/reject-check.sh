@@ -953,7 +953,7 @@ EOF
 # A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads
 # like one and is not: it lowers to a statement expression, so `&` on it reached cc.
 
-reject a-borrow-of-a-map-index 'is a `mut &`, and a map index is a value rather than a place' <<'EOF'
+reject a-borrow-of-a-map-index 'borrows a map index, which is a value rather than a place' <<'EOF'
 fn poke(mut &n: int) {
 	n = 5
 }
@@ -1239,6 +1239,144 @@ enum Color {
 fn main() {
 	c := Color.Purple
 	print(f"{int(c)}")
+}
+EOF
+
+# --- a place is a place all the way down, and a conversion takes a value ---------
+#
+# Four shapes reached cc as "cannot take the address of an rvalue": `c_is_place` asked
+# about the LAST step of a path, and the map-index lowering never bound a non-place at all.
+# `list[int]()` was worse — the parser indexed an empty argument list, so the COMPILER
+# aborted with its own IndexError, no place and no form named.
+
+reject convert-nothing-to-a-list 'converts a VALUE and was given none' no-place <<'EOF'
+fn main() {
+	xs := list[int]()
+	print(f"{xs.len()}")
+}
+EOF
+
+reject convert-nothing-to-an-int 'converts a VALUE and was given none' no-place <<'EOF'
+fn main() {
+	print(f"{int()}")
+}
+EOF
+
+reject convert-two-values 'converts one value, and this gives 2' no-place <<'EOF'
+fn main() {
+	print(f"{int(1, 2)}")
+}
+EOF
+
+# --- a declared interface means its members exist -------------------------------
+#
+# A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —
+# so `impl Show for P { }` with no `show` compiled and ran, and the declared interface meant
+# nothing at all. This is a LANGUAGE rule and no future feature makes it legal, which is why
+# it lives here and not with the not-yet-built forms next door.
+
+reject impl-misses-a-required-member 'does not implement `show`' no-place seed-gap <<'EOF'
+struct P {
+	n: int
+}
+
+spec Show {
+	fn show() -> int
+}
+
+impl Show for P {
+}
+
+fn main() {
+	print("x")
+}
+EOF
+
+reject impl-misses-one-of-two 'does not implement `tag`' no-place seed-gap <<'EOF'
+struct P {
+	n: int
+}
+
+spec Show {
+	fn show() -> int
+	fn tag() -> int
+}
+
+impl Show for P {
+	fn show() -> int {
+		return this.n
+	}
+}
+
+fn main() {
+	print("x")
+}
+EOF
+
+# --- a reserved word cannot name a binding either -------------------------------
+#
+# The last naming position that read whatever token was there. A binding is recognised by
+# the SHAPE `name := …`, so a keyword in the name slot matched no arm, fell through to the
+# expression fallback, and was reported as `` `:=` is not an expression`` — the token after
+# the name rather than the reserved word in it. `print := 1` never even got that far: the
+# `print` statement arm answered first and read `:= 1` as the thing to print.
+
+reject reserved-word-as-a-binding 'is a reserved word and cannot name a binding' no-place <<'EOF'
+fn main() {
+	this := 1
+	print(f"{this}")
+}
+EOF
+
+reject reserved-word-as-a-loop-binding 'cannot name a loop binding' no-place <<'EOF'
+fn main() {
+	xs: list[int] = [1, 2]
+	for this in xs {
+		print(f"{this}")
+	}
+}
+EOF
+
+reject reserved-word-as-an-if-let-binding 'cannot name an `if let` binding' no-place <<'EOF'
+fn main() {
+	o: int? = 5
+	if this := o {
+		print(f"{this}")
+	}
+	print("x")
+}
+EOF
+
+reject statement-keyword-as-a-binding 'is a reserved word and cannot name a binding' no-place <<'EOF'
+fn main() {
+	print := 1
+	print(f"{print}")
+}
+EOF
+
+# --- a byte widens; a list of them does not -------------------------------------
+#
+# A `byte` fits an `int` slot, in the direction the language already mixes `int` into
+# `float`. A `list[byte]` does NOT fit a `list[int]`: a buffer's stride is its element's
+# size, so reading one as the other walks 8 bytes per 1-byte slot. `ys: list[int] =
+# list[byte]("Hi")` printed 26952 and a longer string read past the end.
+
+reject bind-a-byte-list-to-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
+fn main() {
+	ys: list[int] = list[byte]("Hi")
+	print(f"{ys[0]}")
+}
+EOF
+
+# and the narrowing the other way is not a fit either: `take(1000)` on a `byte` parameter
+# compiled to a truncation, and cc printed its own warning about generated C to say so
+reject narrow-an-int-to-a-byte '`take` takes byte as argument 1, and this gives int' seed-gap <<'EOF'
+fn take(b: byte) -> int {
+	return int(b)
+}
+
+fn main() {
+	print(f"{take(1000)}")
 }
 EOF
 

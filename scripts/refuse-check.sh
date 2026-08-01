@@ -490,13 +490,21 @@ fn load(a: Ref[int]) -> int {
 fn main() { print "x" }
 EOF
 
-expect "$ZERG" generic-field-type "no type named \`T\`" <<'EOF'
+# A generic ENUM has been refused by name since it was written; a generic STRUCT was read
+# and dropped, so a field of type `T` reported `no type named T` — a message about the
+# consequence, two steps from the form the compiler had already decided not to support.
+expect "$ZERG" generic-struct "a generic struct" <<'EOF'
 struct B[T] {
 	n: T
 }
 fn main() { print "x" }
 EOF
 
+# A `spec` is read and DROPPED — it is not a type and nothing dispatches on it — so this
+# compiled and ran with no `show` at all, and the declared interface meant nothing.
+# Enforcing the required members is the least it can mean.
+# and the other half: a member supplied by a SEPARATE inherent block, declared after the
+# spec impl. Checking at the `impl` made the answer depend on where the blocks sat.
 # Left and Right name the two SIDES of an Either and have no type of their own, so they are
 # read where the wanted type is known. Written where there is none, the compiler says which
 # of the two problems it is — a form used without its context, not a form that does not exist.
@@ -979,6 +987,232 @@ impl P {
 fn main() {
 	p := P.make(7)
 	print(f"{p.x}")
+}
+EOF
+
+# EIGHT FORMS whose refusal named a TOKEN and not the form. A reader could not tell "this
+# is not built" from "you made a typo", which is the whole of the implemented-or-named
+# contract — every one of these is in GRAMMAR and none of them was being turned away by
+# the name GRAMMAR gives it.
+expect "$ZERG" array-type "an array type" <<'EOF'
+fn main() {
+	xs: [int; 3] = [1, 2, 3]
+	print xs[0]
+}
+EOF
+
+expect "$ZERG" array-type-parameter "an array type" <<'EOF'
+fn f(xs: [int; 3]) -> int {
+	return xs[0]
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" struct-pattern "a struct pattern" <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P(1)
+	print match p {
+		P{x: a} => a
+		_ => 0
+	}
+}
+EOF
+
+expect "$ZERG" as-binding-in-an-arm "an \`as\` binding" <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(5)
+	print match e {
+		A(n) as whole => n
+		_ => 0
+	}
+}
+EOF
+
+expect "$ZERG" interpolating-command-literal "an interpolating command literal" <<'EOF'
+fn main() {
+	n := "hi"
+	print f`echo {n}`
+}
+EOF
+
+expect "$ZERG" closure-parameter-without-a-type "a closure parameter without a type" <<'EOF'
+fn apply(f: fn(int) -> int, v: int) -> int {
+	return f(v)
+}
+
+fn main() {
+	print apply(fn(x) { return x + 1 }, 5)
+}
+EOF
+
+# Every module flattens into ONE namespace, so two that declare the same constant mangle to
+# one symbol. The FUNCTION case has been refused since the tables were written; this one
+# LINKED — two definitions of `zg_N`, tolerated by a linker that still allows a common
+# symbol — and the reader got whichever one it chose. `-fno-common` makes it a duplicate
+# symbol instead, so the same program built two ways gave two answers and then an error.
+#
+# It needs two modules, which this harness writes one file for, so the case lives in the
+# multi-module example instead: see examples/1g/reexport.
+
+# A KEY NEEDS `Hash`, and this compiler has one for `int` and one for `str`. A `byte` key
+# took the INT hash and eq, which read 8 bytes out of a 1-byte slot — so `{b'a': 1}` built
+# and the lookup that followed raised `KeyError` for a key that was right there.
+expect "$ZERG" map-key-without-a-hash "a key needs \`Hash\`" <<'EOF'
+fn main() {
+	m := {b'a': 1}
+	print m.len()
+}
+EOF
+
+# THE REST OF THE `[not yet]` TABLE in docs/surface/grammar.md. That table claims a case
+# holds every entry; half of them had none, so the claim was the third unsynchronised copy
+# of a list that already lives in the parser's raises and in this file.
+expect "$ZERG" command-literal "a command literal" <<'EOF'
+fn main() {
+	c := `echo hi`
+	print c
+}
+EOF
+
+expect "$ZERG" fstring-conversion "conversion" <<'EOF'
+fn main() {
+	n := 42
+	print f"{n!r}"
+}
+EOF
+
+expect "$ZERG" fstring-self-documenting "self-documenting" <<'EOF'
+fn main() {
+	n := 42
+	print f"{n=}"
+}
+EOF
+
+expect "$ZERG" fstring-format-spec "format spec" <<'EOF'
+fn main() {
+	pi := 3.5
+	print f"{pi:.2f}"
+}
+EOF
+
+expect "$ZERG" generic-function "a generic function definition" <<'EOF'
+fn id[T](v: T) -> T {
+	return v
+}
+
+fn main() { print id(5) }
+EOF
+
+expect "$ZERG" closure-capture "a closure capturing" <<'EOF'
+fn run(f: fn() -> int) -> int {
+	return f()
+}
+
+fn main() {
+	k := 5
+	print run(fn() -> int { return k })
+}
+EOF
+
+expect "$ZERG" with-statement "with" <<'EOF'
+fn main() {
+	with 5 as n {
+		print n
+	}
+}
+EOF
+
+expect "$ZERG" if-let-over-an-enum "it binds the Left" <<'EOF'
+enum E {
+	A(int)
+	B
+}
+
+fn main() {
+	e := A(5)
+	if v := e {
+		print 1
+	}
+	print 2
+}
+EOF
+
+expect "$ZERG" spec-member-with-a-body "a \`spec\` member with a BODY" <<'EOF'
+spec Show {
+	fn show() -> int {
+		return 1
+	}
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" unsafe-block "unsafe" <<'EOF'
+fn main() {
+	n := unsafe {
+		5
+	}
+	print n
+}
+EOF
+
+expect "$ZERG" raw-pointer-type "no type named \`ptr\`" <<'EOF'
+fn f(p: ptr) -> int {
+	return 1
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" destructuring-binding "a destructuring binding" <<'EOF'
+fn main() {
+	(a, b) := (1, 2)
+	print a + b
+}
+EOF
+
+expect "$ZERG" destructuring-binding-mut "a destructuring binding" <<'EOF'
+fn main() {
+	mut (a, b) := (1, 2)
+	print a + b
+}
+EOF
+
+# the third spelling BUILT and did nothing: the tuple was evaluated, assigned to no one,
+# and the program printed the values it started with
+expect "$ZERG" destructuring-assignment "a destructuring binding" <<'EOF'
+fn main() {
+	mut a := 1
+	mut b := 2
+	(a, b) = (3, 4)
+	print a + b
+}
+EOF
+
+expect "$ZERG" open-range-with-no-lower-bound "a range with no lower bound" <<'EOF'
+fn main() {
+	xs: list[int] = [1, 2, 3]
+	print xs[..2].len()
+}
+EOF
+
+expect "$ZERG" list-pattern "a list pattern" <<'EOF'
+fn main() {
+	xs: list[int] = [1, 2, 3]
+	print match xs {
+		[a, ..] => a
+		_ => 0
+	}
 }
 EOF
 

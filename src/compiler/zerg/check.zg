@@ -289,7 +289,7 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 # writing to a copy is not writing.
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	if not c_is_place(em, a) {
-		chk_at(em, f"{chk_arg_says(key, pos)} is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+		chk_at(em, f"{chk_arg_says(key, pos)} borrows {c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
 		return
 	}
 
@@ -319,7 +319,13 @@ fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 # position, so numbering it would point at nothing on the page: `mut fn` is how it was
 # declared and "the receiver" is what a reader calls it.
 fn chk_arg_says(key: str, pos: int) -> str {
+	# The SLOT and the fact that it borrows, as one clause — because the two read differently
+	# and only one of them mentions `mut &`: a receiver borrows because the METHOD is a `mut
+	# fn`, and an argument because its parameter says so. This used to hand back one
+	# caller's half and have the other append its own, which read "argument 1 of `f` is a
+	# `mut &` and is a `mut &`, and …".
 	return f"the receiver of `{chk_call_name(key)}`, which is a `mut fn`," if pos == 0
+
 	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &` and"
 }
 
@@ -419,11 +425,34 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
 	return true if c_is_float(want) and c_is_int(got)
 
+	# A `byte` WIDENS to an `int`, in the direction the language already mixes `int` into
+	# `float` above. Making the byte literal carry its type — so that `c: byte = b'J'`
+	# works — turned every other use of one into an error: `f(b'a')` on an `int` parameter,
+	# `[b'a', b'b']` as a `list[int]`, `return b'a'` from an `-> int`.
+	#
+	# ONE DIRECTION ONLY. The other is a NARROWING, and it is not a fit: `take(1000)` on a
+	# `byte` parameter compiled to a truncation, and cc printed its own warning about
+	# generated C to say 1000 had become 232. Byte arithmetic stays in `byte` instead (see
+	# c_infer_binary), which is what `mut n := b'a'; n = n + 1` needs and all it needs.
+	return true if c_is_int(want) and c_is_byte(got)
+
 	# a list fits a list when its ELEMENTS fit, which is not the same as their being equal:
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits
 	# an optional slot. Recursing here rather than deferring to ty_eq is what keeps the
 	# reshaping above true at every depth instead of only at the top.
-	return chk_fits(em, c_list_elem(want), c_list_elem(got)) if c_is_list(want) and c_is_list(got)
+	if c_is_list(want) and c_is_list(got) {
+		we := c_list_elem(want)
+		ge := c_list_elem(got)
+
+		# a `list[byte]` is NOT a `list[int]` even though a byte widens to an int. The
+		# buffer's stride is its ELEMENT's size, so reading one as the other walks 8 bytes
+		# per 1-byte slot: `ys: list[int] = list[byte]("Hi")` printed 26952 and a longer
+		# string read past the end. A widening is about one value; a container is about how
+		# far apart they are.
+		return false if c_is_byte(we) != c_is_byte(ge)
+
+		return chk_fits(em, we, ge)
+	}
 
 	# an optional handed to a value slot is a real mistake, and emit already has a better
 	# sentence for it than this rule can write — it names the three ways to unwrap one
@@ -459,6 +488,21 @@ fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 # chk_binding raises when a declaration and its initializer are different types.
 fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	got := c_infer(em, ival)
+
+	# A LIST LITERAL is built INTO its destination, element by element, with the declared
+	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer
+	# and not a `list[int]` reinterpreted. The stride rule in chk_fits is about a container
+	# that already EXISTS; a literal is not one yet.
+	#
+	# Only the byte/int pair, and only one level down. The elements still have to fit —
+	# `xs: list[list[str]] = [[1]]` is not a stride question and was accepted by a broader
+	# version of this, which is the whole class the rule below exists to catch.
+	if c_is_list(declared) and c_is_listlit(ival) and c_is_list(got) {
+		we := c_list_elem(declared)
+		ge := c_list_elem(got)
+		return if c_is_byte(we) != c_is_byte(ge) and chk_is_numish(we) and chk_is_numish(ge)
+	}
+
 	if not chk_fits(em, declared, got) {
 		chk_at(em, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
 	}
@@ -644,6 +688,14 @@ fn chk_is_scalar(t: Ty) -> bool {
 
 fn chk_is_num(t: Ty) -> bool {
 	return c_is_int(t) or c_is_float(t)
+}
+
+# chk_is_numish is chk_is_num plus `byte`, which is the one place the difference matters: a
+# list literal is written with its DESTINATION's element type, so `[1, 2]` into a
+# `list[byte]` and `[b'a']` into a `list[int]` are both two numbers written at the right
+# stride. `chk_is_num` deliberately excludes byte because the arithmetic rules do.
+fn chk_is_numish(t: Ty) -> bool {
+	return chk_is_num(t) or c_is_byte(t)
 }
 
 # chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not

@@ -1313,6 +1313,28 @@ fn main() {
 }
 EOF
 
+# --- a reserved word cannot name a binding either -------------------------------
+#
+# The last naming position that read whatever token was there. A binding is recognised by
+# the SHAPE `name := …`, so a keyword in the name slot matched no arm, fell through to the
+# expression fallback, and was reported as `` `:=` is not an expression`` — the token after
+# the name rather than the reserved word in it. `print := 1` never even got that far: the
+# `print` statement arm answered first and read `:= 1` as the thing to print.
+
+reject reserved-word-as-a-binding 'is a reserved word and cannot name a binding' no-place <<'EOF'
+fn main() {
+	this := 1
+	print(f"{this}")
+}
+EOF
+
+reject statement-keyword-as-a-binding 'is a reserved word and cannot name a binding' no-place <<'EOF'
+fn main() {
+	print := 1
+	print(f"{print}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

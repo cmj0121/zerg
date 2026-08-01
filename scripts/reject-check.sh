@@ -953,7 +953,7 @@ EOF
 # A `mut &` argument is the caller's own storage handed over to be written. `m["k"]` reads
 # like one and is not: it lowers to a statement expression, so `&` on it reached cc.
 
-reject a-borrow-of-a-map-index 'is a `mut &`, and a map index is a value rather than a place' <<'EOF'
+reject a-borrow-of-a-map-index 'borrows a map index, which is a value rather than a place' <<'EOF'
 fn poke(mut &n: int) {
 	n = 5
 }
@@ -1265,6 +1265,51 @@ EOF
 reject convert-two-values 'converts one value, and this gives 2' no-place <<'EOF'
 fn main() {
 	print(f"{int(1, 2)}")
+}
+EOF
+
+# --- a declared interface means its members exist -------------------------------
+#
+# A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —
+# so `impl Show for P { }` with no `show` compiled and ran, and the declared interface meant
+# nothing at all. This is a LANGUAGE rule and no future feature makes it legal, which is why
+# it lives here and not with the not-yet-built forms next door.
+
+reject impl-misses-a-required-member 'does not implement `show`' no-place seed-gap <<'EOF'
+struct P {
+	n: int
+}
+
+spec Show {
+	fn show() -> int
+}
+
+impl Show for P {
+}
+
+fn main() {
+	print("x")
+}
+EOF
+
+reject impl-misses-one-of-two 'does not implement `tag`' no-place seed-gap <<'EOF'
+struct P {
+	n: int
+}
+
+spec Show {
+	fn show() -> int
+	fn tag() -> int
+}
+
+impl Show for P {
+	fn show() -> int {
+		return this.n
+	}
+}
+
+fn main() {
+	print("x")
 }
 EOF
 

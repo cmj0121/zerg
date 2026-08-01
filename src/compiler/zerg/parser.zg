@@ -1693,6 +1693,13 @@ fn parse_call_args(mut &p: Parser) -> list[Expr] {
 	p_advance(p) # '('
 	mut args: list[Expr] = []
 	for not p_at(p, RParen) and not p_at(p, Eof) {
+		# A NAMED ARGUMENT — `f(loud: true)`, GRAMMAR:239, and the sanctioned way to skip a
+		# defaulted parameter in the middle (docs/code/functions.md). This compiler is
+		# positional-only, and the `:` reached parse_primary, which answered "`:` is not an
+		# expression this compiler reads" — a token, about a form the language specifies and
+		# the seed builds. An argument list is where the form is recognizable.
+		raise f"NotImplemented: the named argument `{cur(p).lexeme}:` — this compiler binds arguments by position only" if p_at(p, Ident) and peek_kind(p, 1) == Colon
+
 		args.append(parse_expr(p))
 		if p_at(p, Comma) {
 			p_advance(p)

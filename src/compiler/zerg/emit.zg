@@ -6432,12 +6432,6 @@ pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
 		for ip in f.impls {
 			impls.append(ip)
 		}
-		for sp in f.specs {
-			specs.append(sp)
-		}
-		for ip in f.impls {
-			impls.append(ip)
-		}
 		for fnd in f.fns {
 			fns.append(fnd)
 		}
@@ -6508,6 +6502,12 @@ pub fn merge_asts(fs: list[File]) -> File {
 		}
 		for e in f.enums {
 			enums.append(e)
+		}
+		for sp in f.specs {
+			specs.append(sp)
+		}
+		for ip in f.impls {
+			impls.append(ip)
 		}
 		for fnd in f.fns {
 			fns.append(fnd)

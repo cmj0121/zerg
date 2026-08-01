@@ -289,7 +289,7 @@ fn chk_arm_types(mut &em: Emitter, arms: list[Arm], st: Ty) {
 # writing to a copy is not writing.
 fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 	if not c_is_place(em, a) {
-		chk_at(em, f"{chk_arg_says(key, pos)} is a `mut &`, and {c_place_why(em, a)} is a value rather than a place — bind it to a name first")
+		chk_at(em, f"{chk_arg_says(key, pos)} borrows {c_place_why(em, a)}, which is a value rather than a place — bind it to a name first")
 		return
 	}
 
@@ -319,7 +319,13 @@ fn chk_ref_arg(mut &em: Emitter, key: str, pos: int, a: Expr) {
 # position, so numbering it would point at nothing on the page: `mut fn` is how it was
 # declared and "the receiver" is what a reader calls it.
 fn chk_arg_says(key: str, pos: int) -> str {
+	# The SLOT and the fact that it borrows, as one clause — because the two read differently
+	# and only one of them mentions `mut &`: a receiver borrows because the METHOD is a `mut
+	# fn`, and an argument because its parameter says so. This used to hand back one
+	# caller's half and have the other append its own, which read "argument 1 of `f` is a
+	# `mut &` and is a `mut &`, and …".
 	return f"the receiver of `{chk_call_name(key)}`, which is a `mut fn`," if pos == 0
+
 	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &` and"
 }
 
@@ -418,6 +424,15 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_unknown(want) or c_is_unknown(got)
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
 	return true if c_is_float(want) and c_is_int(got)
+
+	# `byte` and `int` are ONE INTEGER FAMILY, in the direction the language already mixes
+	# `int` into `float` above. Making the byte literal carry its type — so that `c: byte =
+	# b'J'` works — turned every other use of one into an error: `f(b'a')` on an `int`
+	# parameter, `[b'a', b'b']` as a `list[int]`, and worst, `mut n := b'a'; n = n + 1`,
+	# where `n + 1` types `int` and nothing could be stored back. A type with no arithmetic
+	# out of it and no way back in is not a type, it is a trap.
+	return true if c_is_int(want) and c_is_byte(got)
+	return true if c_is_byte(want) and c_is_int(got)
 
 	# a list fits a list when its ELEMENTS fit, which is not the same as their being equal:
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits

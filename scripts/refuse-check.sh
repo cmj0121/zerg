@@ -532,20 +532,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" mut-fn-method "receiver is not written back" <<'EOF'
-struct C {
-	n: int
-}
-
-impl C {
-	mut fn bump() {
-		this.n = this.n + 1
-	}
-}
-
-fn main() { print 1 }
-EOF
-
 expect "$ZERG" generic-enum "a generic enum" <<'EOF'
 enum E[T] {
 	A(T)

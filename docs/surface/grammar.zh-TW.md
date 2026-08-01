@@ -652,6 +652,28 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
   `out` / `inout` / `clobber` 為 **contextual**（只在 asm operand list 內特殊；`in` 本就是 keyword）。constraint 字串
   （`"rax"`、`"r"`、`"m"` …）在此不透明——其意義屬目標 backend。`asm` 僅限 `unsafe`；**syscall** 由此發出。
 
+## 已規範但未實作
+
+以下每個形式都是 **[not yet]**:文法定義了它,`zerg` **以它自己的名字**拒絕它,沒有任何用到它的程式會被編譯成
+別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一條都有對應案例,所以一個形式若悄悄開始能動、或悄悄
+換了失敗方式,gate 就會擋下來。
+
+| Group | 形式                                                                         |
+| ----- | ---------------------------------------------------------------------------- |
+| 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                            |
+| 3     | 解構繫結 `(a, b) := …`                                                       |
+| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                    |
+| 6     | 泛型 `fn` / `struct` / `enum`;會捕獲的 closure;省略型別的 closure 參數       |
+| 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>` |
+| 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member           |
+| 8     | associated function `Type.f(…)`;`impl` 內的 associated type 或 value         |
+| 8     | 除 `#[derive(…)]` 以外的所有 decorator                                       |
+| 10    | 模組限定的**常數** —— `pub fn` 跨得過模組邊界,`const` 跨不過                 |
+| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                       |
+
+即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的
+介面至少該有這個意思。`spec` 的其餘部分都在清單上。
+
 ## 編輯器工具（Editor tooling）
 
 Neovim 的語法高亮放在 [`editors/nvim/`](../../editors/nvim)，是經典的 Vim syntax 檔：

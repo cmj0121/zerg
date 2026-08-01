@@ -190,6 +190,18 @@ reject:                         # every program that is not Zerg is rejected —
 	$(MAKE) build
 	./scripts/reject-check.sh
 
+# `reject` makes the seed the oracle for programs that must be turned away. This asks the
+# same question about programs that must be ACCEPTED: two compilers of one language may not
+# disagree about what a valid program prints.
+#
+# Nothing else could see that class. `build` needs only that the compiler compile itself,
+# and its own source does not write every form; `examples` gates on the exit status, which
+# a wrong number leaves at 0; the corpus is compiled by `zerg` alone. `int("42")` printed a
+# POINTER for a whole release under a full board of green gates.
+oracle:                         # the seed and the shipping compiler agree about a valid program
+	$(MAKE) build
+	@./scripts/oracle-check.sh examples/[0-9][0-9]_*.zg $$(ls test-data/codegen/*.zg 2>/dev/null)
+
 # Two Linux-only defects reached main this month — a preprocessor `#if` no GCC before 14
 # can parse, and a `MAP_ANONYMOUS` glibc hides under `-std=c11` — and neither was visible
 # from macOS. The docker flow that found them was driven by hand every time; this is it,
@@ -204,7 +216,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 		done'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
-LINUX_GATES ?= build test examples corpus refuse reject reject-fuzz fmt-corpus fmt-tokens fmt-self lint fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,

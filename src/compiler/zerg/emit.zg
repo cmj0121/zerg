@@ -3705,6 +3705,14 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	return TStr if oper == "+" and c_is_str(c_infer(em, a))
 	return TFloat if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b))
 
+	# BYTE ARITHMETIC STAYS IN BYTE. `mut n := b'a'; n = n + 1` is the ordinary thing to
+	# write and `n + 1` typed `int`, so nothing could be stored back — a type with no
+	# arithmetic out of it and no way in. Answering `byte` is what lets the value return to
+	# where it came from, and it is why a narrowing `int` -> `byte` is NOT a fit: nothing
+	# needs one, and admitting it turned `take(1000)` on a `byte` parameter into a silent
+	# truncation that cc warned about in generated C.
+	return TByte if c_is_byte(c_infer(em, a)) and not c_is_float(c_infer(em, b))
+
 	return TInt
 }
 

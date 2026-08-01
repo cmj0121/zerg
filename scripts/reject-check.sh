@@ -1606,6 +1606,26 @@ fn main() {
 }
 EOF
 
+reject impl-does-not-bind-a-spec-parameter 'is parameterized by K' <<'EOF'
+spec Ix[K] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Ix for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
 # --- a reserved word cannot name a binding either -------------------------------
 #
 # The last naming position that read whatever token was there. A binding is recognised by

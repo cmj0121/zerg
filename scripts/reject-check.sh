@@ -1242,6 +1242,32 @@ fn main() {
 }
 EOF
 
+# --- a place is a place all the way down, and a conversion takes a value ---------
+#
+# Four shapes reached cc as "cannot take the address of an rvalue": `c_is_place` asked
+# about the LAST step of a path, and the map-index lowering never bound a non-place at all.
+# `list[int]()` was worse — the parser indexed an empty argument list, so the COMPILER
+# aborted with its own IndexError, no place and no form named.
+
+reject convert-nothing-to-a-list 'converts a VALUE and was given none' no-place <<'EOF'
+fn main() {
+	xs := list[int]()
+	print(f"{xs.len()}")
+}
+EOF
+
+reject convert-nothing-to-an-int 'converts a VALUE and was given none' no-place <<'EOF'
+fn main() {
+	print(f"{int()}")
+}
+EOF
+
+reject convert-two-values 'converts one value, and this gives 2' no-place <<'EOF'
+fn main() {
+	print(f"{int(1, 2)}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

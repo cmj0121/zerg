@@ -1667,7 +1667,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 				raise f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
 				raise f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-				e = EConv(conv_ty(name), args[0])
+				e = EConv(conv_ty(name), args[0], name)
 			} else {
 				e = ECall(name, args)
 			}
@@ -1703,7 +1703,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		# byte. The conversion node is the type the emitter already knows how to carry, and
 		# `byte(74)` has always worked; this is that, written the way a reader writes it.
 		p_advance(p)
-		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)))
+		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
 	}
 	if k == Rune {
 		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
@@ -1765,7 +1765,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			raise "`list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
 			raise f"`list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
-			return EConv(TList(elem), args[0])
+			return EConv(TList(elem), args[0], "list")
 		}
 		p_advance(p)
 		return EIdent(t.lexeme)
@@ -2188,7 +2188,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the
 	# silent wrong answer this path exists to avoid
 	raise "f-string: a hole must be a single expression: {" + hole + "}" if not p_at(hp, Eof) and not p_at(hp, Semi)
-	return EConv(TStr, e)
+	return EConv(TStr, e, "str")
 }
 
 # fstr_reject refuses the hole forms this compiler does not implement, naming which one.

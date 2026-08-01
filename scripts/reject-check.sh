@@ -1328,6 +1328,25 @@ fn main() {
 }
 EOF
 
+reject reserved-word-as-a-loop-binding 'cannot name a loop binding' no-place <<'EOF'
+fn main() {
+	xs: list[int] = [1, 2]
+	for this in xs {
+		print(f"{this}")
+	}
+}
+EOF
+
+reject reserved-word-as-an-if-let-binding 'cannot name an `if let` binding' no-place <<'EOF'
+fn main() {
+	o: int? = 5
+	if this := o {
+		print(f"{this}")
+	}
+	print("x")
+}
+EOF
+
 reject statement-keyword-as-a-binding 'is a reserved word and cannot name a binding' no-place <<'EOF'
 fn main() {
 	print := 1

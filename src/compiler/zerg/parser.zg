@@ -1588,9 +1588,13 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EInt(t.lexeme)
 	}
 	if k == Byte {
-		# a byte literal b'x' becomes its decimal code point
+		# a byte literal `b'x'` is its code point AS A BYTE. It used to be a bare EInt, so it
+		# inferred as `int` — and `c: byte = b'J'` was refused as "cannot bind int to a byte
+		# binding", about the one literal in the language whose whole point is that it is a
+		# byte. The conversion node is the type the emitter already knows how to carry, and
+		# `byte(74)` has always worked; this is that, written the way a reader writes it.
 		p_advance(p)
-		return EInt(strconv.to_string(int(list[byte](t.value)[0]), 10))
+		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)))
 	}
 	if k == Rune {
 		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below

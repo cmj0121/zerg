@@ -1317,6 +1317,31 @@ fn main() {
 }
 EOF
 
+# --- and a literal is a value the type can hold -----------------------------------
+#
+# docs/core/types.md: "A literal that does not fit its required type is a COMPILE ERROR …
+# never a runtime overflow", and the chapter's own deviation note says an int literal past
+# i64 "is still rejected". It was not: the lexer accumulated the digits in a wrapping i64,
+# so three literals gave three wrong numbers with no diagnostic anywhere.
+
+reject int-literal-past-i64 'does not fit an `int`' <<'EOF'
+fn main() {
+	print(f"{9223372036854775808}")
+}
+EOF
+
+reject int-literal-far-past-i64 'does not fit an `int`' <<'EOF'
+fn main() {
+	print(f"{99999999999999999999999}")
+}
+EOF
+
+reject hex-literal-past-i64 'does not fit an `int`' <<'EOF'
+fn main() {
+	print(f"{0xFFFFFFFFFFFFFFFFF}")
+}
+EOF
+
 # --- a declared interface means its members exist -------------------------------
 #
 # A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —

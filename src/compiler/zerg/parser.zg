@@ -1454,6 +1454,13 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 			name := ident_name(e)
 			args := parse_call_args(p)
 			if is_conv(name) {
+				# A CONVERSION TAKES A VALUE. `int()` and `list[int]()` read as a call and
+				# then indexed an empty argument list, so the COMPILER aborted with its own
+				# `IndexError: index out of range` — no place, no form named, and a stack
+				# trace of the compiler rather than a diagnostic about the program.
+				raise f"`{name}(…)` converts a VALUE and was given none — a conversion is not a constructor; `[]` builds an empty list" if args.len() == 0
+				raise f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+
 				e = EConv(conv_ty(name), args[0])
 			} else {
 				e = ECall(name, args)
@@ -1537,6 +1544,10 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			elem := parse_type(p)
 			expect(p, RBrack)
 			args := parse_call_args(p)
+
+			raise "`list[T](…)` converts a VALUE and was given none — it is the byte/str bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
+			raise f"`list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
+
 			return EConv(TList(elem), args[0])
 		}
 		p_advance(p)

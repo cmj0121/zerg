@@ -1,0 +1,12 @@
+# unit — a module whose CONSTANT is read from another translation unit.
+#
+# A module constant used to be `static` in every unit and assigned only in the unit that
+# both declares it and holds `main` — so one declared in an imported module was assigned
+# NOWHERE and every reader saw a zero. The `pub fn` written to work around that read the
+# same zero, and `--emit c` disagreed with `--emit bin` because a single-unit build has no
+# other unit to be wrong in.
+pub const SEED: int = 5
+
+pub fn seeded() -> int {
+	return SEED + 2
+}

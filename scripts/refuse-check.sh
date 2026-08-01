@@ -700,6 +700,48 @@ fn main() {
 }
 EOF
 
+# A CALLEE THAT IS NOT A NAME. Three forms reached the emitter as `ECall("", args)` and were
+# reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
+# no typo in it. They are one root cause and three separate unbuilt features.
+
+expect "$ZERG" call-with-explicit-type-args "NotImplemented: calling index" <<'EOF'
+fn id(x: int) -> int {
+	return x
+}
+
+fn main() {
+	print id[int](7)
+}
+EOF
+
+expect "$ZERG" call-a-fn-value-from-a-list "NotImplemented: calling index" <<'EOF'
+fn dbl(x: int) -> int {
+	return x * 2
+}
+
+fn main() {
+	fs := [dbl]
+	print fs[0](5)
+}
+EOF
+
+expect "$ZERG" optional-method-call "NotImplemented: calling optional chain ?.get" <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn get() -> int {
+		return this.x
+	}
+}
+
+fn main() {
+	p: P? = P(3)
+	print p?.get() ?? 0
+}
+EOF
+
 # `expect` used to advance on a match and say NOTHING otherwise, so every truncated form
 # derailed quietly and whatever the parser built from the wreckage reached the emitter.
 expect "$ZERG" truncated-guard "expected \`{\`" <<'EOF'

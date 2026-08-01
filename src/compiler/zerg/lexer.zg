@@ -787,6 +787,11 @@ fn token_category(k: Kind) -> int {
 
 # quote renders s the way Go's %q does for the common cases: wrapped in double quotes
 # with the standard escapes and an '\xHH' fallback for other control bytes.
+#
+# This is the TOKEN DUMP's spelling — `--emit tokens` is diff-tested byte for byte against
+# the seed's, which renders Go's %q. It is NOT a C string literal: C's '\x' consumes as
+# many hex digits as follow it, so a non-ASCII byte before one runs on. `c_str_lit` in
+# emit.zg is the C one, and it uses octal for exactly that reason.
 fn quote(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "

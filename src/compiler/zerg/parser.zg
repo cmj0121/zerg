@@ -18,6 +18,13 @@ struct Parser {
 
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	path: str
+
+	# spec_name / spec_reqs are the required members of each `spec` read so far, one entry
+	# per spec, its members joined by `,`. A spec is otherwise read and DROPPED — it is not
+	# a type and nothing dispatches on it — and that made `impl Show for P { }` compile with
+	# no `show` at all. Enforcing the members is the least a declared interface can mean.
+	spec_name: list[str]
+	spec_reqs: list[str]
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -303,7 +310,7 @@ pub fn parse(src: str) -> File {
 # so a diagnostic can name the file it was written in.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path)
+	mut p := Parser(toks, 0, "", path, [], [])
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
@@ -565,10 +572,16 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 # not, which is the shape this compiler turns away by name everywhere else.
 fn parse_spec(mut &p: Parser) {
 	p_advance(p) # 'spec'
+	mut sname := ""
 	for not p_at(p, LBrace) and not p_at(p, Eof) {
+		if p_at(p, Ident) and sname == "" {
+			sname = cur(p).lexeme
+		}
 		p_advance(p)
 	}
 	return if p_at(p, Eof)
+
+	mut reqs := ""
 
 	p_advance(p) # '{'
 	mut depth := 1
@@ -576,6 +589,12 @@ fn parse_spec(mut &p: Parser) {
 	for not p_at(p, Eof) {
 		if p_at(p, Fn) {
 			in_sig = true
+			if peek_kind(p, 1) == Ident {
+				if reqs != "" {
+					reqs = reqs + ","
+				}
+				reqs = reqs + p.toks[p.pos + 1].lexeme
+			}
 		} else if p_at(p, LBrace) {
 			raise "NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature and write the body in each `impl`" if in_sig and depth == 1
 			depth = depth + 1
@@ -583,6 +602,8 @@ fn parse_spec(mut &p: Parser) {
 			depth = depth - 1
 			if depth == 0 {
 				p_advance(p)
+				p.spec_name.append(sname)
+				p.spec_reqs.append(reqs)
 				return
 			}
 		} else if p_at(p, Semi) {
@@ -590,6 +611,17 @@ fn parse_spec(mut &p: Parser) {
 		}
 		p_advance(p)
 	}
+}
+
+# p_spec_reqs is what a spec requires, or "" for a name no `spec` in this file declared —
+# one from another module, which this compiler cannot see and does not guess about.
+fn p_spec_reqs(mut &p: Parser, name: str) -> str {
+	mut i := 0
+	for i < p.spec_name.len() {
+		return p.spec_reqs[i] if p.spec_name[i] == name
+		i = i + 1
+	}
+	return ""
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
@@ -782,10 +814,11 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 	p_advance(p) # 'struct'
 	name := p_name(p, "a struct")
 
-	# `struct B[T] { … }` — the parameter list is read and dropped for the same reason a
-	# generic argument list is: this compiler erases generics, and a `[` left in the stream
-	# would be read as the body's opening brace.
-	skip_ty_args(p)
+	# `struct B[T] { … }` — READ AND DROPPED, so a field of type `T` then reported
+	# `no type named T`: a message about the consequence, from two steps away, for a form
+	# the compiler had already decided not to support. A generic ENUM has been refused by
+	# name since it was written; this is the same refusal for the other declaration.
+	raise f"NotImplemented: a generic struct `{name}[…]` — this compiler erases type parameters, and a field names one" if p_at(p, LBrack)
 	expect(p, LBrace)
 	skip_semis(p)
 	mut fields: list[FieldDef] = []
@@ -841,6 +874,7 @@ fn parse_decorator(mut &p: Parser) {
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	p_advance(p) # 'impl'
 	mut target := ""
+	mut sp := ""
 	mut depth := 0
 	for not p_at(p, Eof) and not (p_at(p, LBrace) and depth == 0) {
 		if p_at(p, LBrack) {
@@ -848,6 +882,12 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 		} else if p_at(p, RBrack) {
 			depth = depth - 1
 		} else if depth == 0 and p_at(p, Ident) {
+			# `impl Spec for T` — the LAST name is the target, and the spec is the name
+			# `for` follows. The same one rule reads `impl T` and `impl T[A]`, where there
+			# is no `for` and so no spec.
+			if peek_kind(p, 1) == For {
+				sp = cur(p).lexeme
+			}
 			target = cur(p).lexeme
 		}
 		p_advance(p)
@@ -892,6 +932,50 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	}
 	expect(p, RBrace)
 	p.impl_ty = outer
+
+	# A SPEC'S REQUIRED MEMBERS have to be there. A spec is otherwise read and dropped — it
+	# is not a type and nothing dispatches on it — so `impl Show for P { }` with no `show`
+	# compiled and ran, and the declared interface meant nothing at all. Enforcing the
+	# members is the least it can mean, and it is the half a reader relies on.
+	chk_impl_covers(p, sp, target, fns)
+}
+
+# chk_impl_covers raises when an `impl Spec for T` leaves one of the spec's members out. A
+# spec this file never declared is left alone: it is from another module, which this
+# compiler cannot see and does not guess about.
+fn chk_impl_covers(mut &p: Parser, sp: str, target: str, mut &fns: list[FnDecl]) {
+	return if sp == ""
+
+	reqs := p_spec_reqs(p, sp)
+	return if reqs == ""
+
+	for want in split_commas(reqs) {
+		raise f"`{target}` does not implement `{want}`, which `{sp}` requires" if not impl_has(fns, target, want)
+	}
+}
+
+fn impl_has(mut &fns: list[FnDecl], target: str, name: str) -> bool {
+	for f in fns {
+		return true if f.recv == target and f.name == name
+	}
+	return false
+}
+
+fn split_commas(s: str) -> list[str] {
+	mut out: list[str] = []
+	mut cur := ""
+	for b in list[byte](s) {
+		if b == b',' {
+			out.append(cur)
+			cur = ""
+		} else {
+			cur = cur + str([b])
+		}
+	}
+	if cur != "" {
+		out.append(cur)
+	}
+	return out
 }
 
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
@@ -1941,7 +2025,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path)
+	mut hp := Parser(toks, 0, p.impl_ty, p.path, [], [])
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

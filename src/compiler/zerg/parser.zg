@@ -317,10 +317,10 @@ pub fn parse_at(src: str, path: str) -> File {
 			# `pub` binds to the declaration that follows it
 			p_advance(p)
 			if p_at(p, Fn) {
-				fns.append(parse_fn(p, true, ""))
+				fns.append(parse_fn(p, true, "", false))
 			}
 		} else if p_at(p, Fn) {
-			fns.append(parse_fn(p, false, ""))
+			fns.append(parse_fn(p, false, "", false))
 		} else if p_at(p, Struct) {
 			structs.append(parse_struct(p))
 		} else if p_at(p, Enum) {
@@ -338,6 +338,12 @@ pub fn parse_at(src: str, path: str) -> File {
 			parse_impl(p, fns)
 		} else if p_at(p, Hash) {
 			parse_decorator(p)
+		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
+			# GRAMMAR:301-304 — `mut fn` marks a METHOD that mutates its receiver, and "a
+			# free function or closure has no receiver, so it is never `mut fn`". The token
+			# fell into the skip below, so the `mut` was swallowed and the function compiled
+			# as if it had never been written.
+			raise "a free function is never `mut fn` — `mut fn` marks a method that mutates the instance it is called on, and a free function has no receiver"
 		} else {
 			p_advance(p)
 		}
@@ -847,14 +853,20 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 			p_advance(p)
 			is_pub = true
 		}
+		mut recv_mut := false
 		if p_at(p, Mut) {
-			# `mut fn` marks a method that mutates `this` IN PLACE (GRAMMAR:299). A receiver
-			# here is passed BY VALUE, so the write-back never happened: the method ran, the
-			# copy changed, and the caller's value did not. The seed has refused it all along.
-			raise "NotImplemented: a `mut fn` method's receiver is not written back — its `this` is a copy here, so the mutation would be lost"
+			# `mut fn` marks a method that mutates `this` IN PLACE — exactly the `mut &this`
+			# case (GRAMMAR:301). So the receiver becomes a `mut &` parameter and everything
+			# below the parser follows: the body writes through it, the call site is checked
+			# for a `mut` binding, and the borrow cannot escape or alias. A receiver passed
+			# BY VALUE is what made this impossible before — the method ran, the copy
+			# changed, and the caller's value did not.
+			p_advance(p)
+			raise "`mut` before a declaration in an `impl` marks a `mut fn` method, and this is not a `fn`" if not p_at(p, Fn)
+			recv_mut = true
 		}
 		if p_at(p, Fn) {
-			fns.append(parse_fn(p, is_pub, target))
+			fns.append(parse_fn(p, is_pub, target, recv_mut))
 		} else if p_at(p, Ident) and peek_kind(p, 1) == Walrus {
 			# `LIMIT := 5` — an associated VALUE binding (GRAMMAR:495). It was skipped a token
 			# at a time, so the name reached the emitter undeclared and cc reported it.
@@ -870,7 +882,7 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	p.impl_ty = outer
 }
 
-fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
+fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
 	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
@@ -887,7 +899,7 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str) -> FnDecl {
 		# added here. From this point on a method is an ordinary function whose first
 		# argument happens to be called `this`, which is why nothing below the parser needs
 		# a notion of methods at all.
-		params.append(Param("this", TNamed(recv), false, false, ENil))
+		params.append(Param("this", TNamed(recv), recv_mut, false, ENil))
 	}
 	for not p_at(p, RParen) and not p_at(p, Eof) {
 		# an optional `mut &` prefix marks a mutable-reference parameter

@@ -890,6 +890,26 @@ fn parse_decorator(mut &p: Parser) {
 # rule reads all three spellings the grammar allows — `impl T`, `impl T[A]`, and the spec
 # form `impl Spec for T` — and lands on T in every one of them, which matters because the
 # methods belong to T in all three.
+# p_for_after_args reports whether a `for` follows the bracket group starting at the next
+# token — `impl Show[int] for P`, where the spec name carries type arguments.
+fn p_for_after_args(mut &p: Parser) -> bool {
+	mut i := p.pos + 1
+	mut d := 0
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		if k == LBrack {
+			d = d + 1
+		} else if k == RBrack {
+			d = d - 1
+			return p.toks[i + 1].kind == For if d == 0
+		} else if k == LBrace or k == Eof {
+			return false
+		}
+		i = i + 1
+	}
+	return false
+}
+
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	p_advance(p) # 'impl'
 	mut target := ""
@@ -904,7 +924,10 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 			# `impl Spec for T` — the LAST name is the target, and the spec is the name
 			# `for` follows. The same one rule reads `impl T` and `impl T[A]`, where there
 			# is no `for` and so no spec.
-			if peek_kind(p, 1) == For {
+			# the spec is the name `for` follows — across its TYPE ARGUMENTS if it has
+			# any. Asking only about the next token dropped `impl Show[int] for P` back to
+			# no spec at all, so the member check was skipped for it entirely.
+			if peek_kind(p, 1) == For or (peek_kind(p, 1) == LBrack and p_for_after_args(p)) {
 				sp = cur(p).lexeme
 			}
 			target = cur(p).lexeme
@@ -1088,6 +1111,36 @@ fn parse_block(mut &p: Parser) -> list[Stmt] {
 
 # --- statements ----------------------------------------------------------------
 
+# p_starts_destructure reports whether the statement beginning here is a destructuring
+# form: a `(` — optionally after `mut` or `const` — whose group is followed by `:=` or `=`.
+# A parenthesised EXPRESSION statement looks the same up to the closing paren, so the
+# separator is what tells them apart.
+fn p_starts_destructure(mut &p: Parser) -> bool {
+	mut i := p.pos
+	if p.toks[i].kind == Mut or p.toks[i].kind == Const {
+		i = i + 1
+	}
+	return false if i >= p.toks.len() or p.toks[i].kind != LParen
+
+	mut depth := 0
+	for i < p.toks.len() {
+		k := p.toks[i].kind
+		if k == LParen {
+			depth = depth + 1
+		} else if k == RParen {
+			depth = depth - 1
+			if depth == 0 {
+				nxt := p.toks[i + 1].kind
+				return nxt == Walrus or nxt == Assign
+			}
+		} else if k == Semi or k == Eof {
+			return false
+		}
+		i = i + 1
+	}
+	return false
+}
+
 fn parse_stmt(mut &p: Parser) -> Stmt {
 	k := cur_kind(p)
 
@@ -1102,6 +1155,15 @@ fn parse_stmt(mut &p: Parser) -> Stmt {
 	# A TUPLE pattern is the same form one bracket over: `(a, b) := f()` read as a tuple
 	# EXPRESSION, so the names in it came out undefined rather than bound.
 	raise f"NotImplemented: a struct pattern `{cur(p).lexeme}{{…}}` — this compiler destructures with field access, not with a pattern" if k == Ident and is_pascal(cur(p).lexeme) and peek_kind(p, 1) == LBrace
+
+	# A DESTRUCTURING BINDING OR ASSIGNMENT — `(a, b) := e`, `mut (a, b) := e`, `(a, b) = e`
+	# (GRAMMAR:196, :198, :201). It is named HERE, where the `(` that opens it is the first
+	# token of a statement, because each spelling failed differently otherwise: the `:=` one
+	# reached the expression fallback and was named after its walrus, the `mut` one reported
+	# `expected `:`, found `a``, and the `=` one BUILT AND DID NOTHING — the tuple was
+	# evaluated, assigned to no one, and the program printed the values it started with.
+	raise "NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if p_starts_destructure(p)
+
 	if k == Nop {
 		p_advance(p)
 		return SNop
@@ -1571,7 +1633,7 @@ fn parse_postfix(mut &p: Parser) -> Expr {
 				# then indexed an empty argument list, so the COMPILER aborted with its own
 				# `IndexError: index out of range` — no place, no form named, and a stack
 				# trace of the compiler rather than a diagnostic about the program.
-				raise f"`{name}(…)` converts a VALUE and was given none — a conversion is not a constructor; `[]` builds an empty list" if args.len() == 0
+				raise f"`{name}(…)` converts a VALUE and was given none — a conversion reads one thing as another, so there has to be a thing" if args.len() == 0
 				raise f"`{name}(…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
 				e = EConv(conv_ty(name), args[0])
@@ -1669,7 +1731,7 @@ fn parse_primary(mut &p: Parser) -> Expr {
 			expect(p, RBrack)
 			args := parse_call_args(p)
 
-			raise "`list[T](…)` converts a VALUE and was given none — it is the byte/str bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
+			raise "`list[T](…)` converts a VALUE and was given none — it is the str-to-bytes bridge, not a constructor; `[]` builds an empty list" if args.len() == 0
 			raise f"`list[T](…)` converts one value, and this gives {strconv.to_string(args.len(), 10)}" if args.len() > 1
 
 			return EConv(TList(elem), args[0])
@@ -1785,8 +1847,11 @@ fn parse_primary(mut &p: Parser) -> Expr {
 	# line was a DESTRUCTURING binding — `(a, b) := (1, 2)` — whose left side read as a
 	# tuple expression before the walrus was reached; a `..` in a pattern means a LIST
 	# pattern. Naming the token names the wreckage rather than what was written.
-	raise "NotImplemented: a destructuring binding `(a, b) := …` — this compiler binds one name at a time" if k == Walrus
-	raise "NotImplemented: a list pattern `[a, ..rest]` — this compiler destructures a list with indexing and `.slice`" if k == DotDot
+
+	# A bare `..` is a RANGE with nothing on its left (GRAMMAR:265): `xs[..2]` is the open
+	# form of a slice. It was named as a list pattern, which is a different form the same
+	# token opens — advice about something nobody wrote.
+	raise "NotImplemented: a range with no lower bound — write `xs[0..n]`; a list PATTERN `[a, ..rest]` is a different form this compiler also does not have" if k == DotDot
 
 	# ANY OTHER TOKEN. This used to be `p_advance(p); return ENil` — the token was consumed
 	# and the expression became nil, which emits `0`. So every form this parser does not
@@ -1840,6 +1905,7 @@ fn parse_arm(mut &p: Parser) -> Arm {
 	# EXPRESSION here, so the names in them came out undefined rather than bound, and the
 	# message named a symptom two steps from the form that was written.
 	raise "NotImplemented: a tuple pattern in a `match` arm — this compiler destructures a tuple with `.0` / `.1`" if p_at(p, LParen)
+	raise "NotImplemented: a list pattern in a `match` arm — this compiler destructures a list with indexing and `.slice`" if p_at(p, LBrack)
 
 	mut pat := 0
 	mut lit := ENil

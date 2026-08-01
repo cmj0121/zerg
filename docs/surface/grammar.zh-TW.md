@@ -393,6 +393,9 @@ list-pat-elem ::= pattern | '..' identifier?
   丟棄（struct 的 `..` 只忽略、不綁）。pattern 位置的 `..` 是 **rest**,與值層的 range `..` 不同。
 - **variant 或 binding** 由 **name resolution** 決定:裸名字在 scope 內解析到已知 type/variant 就是 variant,否則是
   新的 binding。名字**大小寫自由**,所以靠解析、非大小寫——與 postfix `[…]` 用的是同一套 name resolution（group 4）。
+- **限定 variant。** variant 也可以**由它的 enum 指名**——`Color.Red`、`Shape.Line(5)`,pattern 位置同樣可寫。
+  它是同一個值;多出來的是讀者不必自己解析名字就知道是**哪個** enum,而裸名形式要求他們自己解。這個限定必須為
+  **真**:`Color.Apple` 指的是另一個 enum 的 variant,那是錯誤,不是一個新的 binding。
 - **`as` 綁定。** `pattern as name` 在 pattern 繼續解構的同時,把**整個**被比對的值綁到 `name`——`Move{x, y} as m`、
   `[first, ..] as all`、巢狀 `Some(inner as v)`。讀法同 `with` / `import`:`<東西> as <名字>`。在 or-pattern 上,`as`
   綁最近的 alternative（`A | B as m` 即 `A | (B as m)`）;兩側都要綁就寫 `A as m | B as m`。

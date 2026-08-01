@@ -7,15 +7,16 @@ A rule has a **code** so it can be named — in a diagnostic, in a review, on a 
 that turns it off. The prefix groups them the way a Python linter's does, and the grouping
 is by **what a rule does**, not by which pass implements it.
 
-| Prefix | Group     | Is                                                |
-| ------ | --------- | ------------------------------------------------- |
-| `F1xx` | layout    | where the line breaks and how far it is indented  |
-| `F2xx` | spacing   | where a space goes between two tokens             |
-| `F3xx` | trivia    | what happens to what a person wrote for a person  |
-| `F4xx` | rewrites  | the rules that MOVE code rather than space it     |
-| `L1xx` | dead code | things written that nothing reaches               |
-| `L3xx` | capture   | what a coroutine or a deferred call actually took |
-| `E1xx` | lexical   | text that is not a token                          |
+| Prefix | Group      | Is                                                |
+| ------ | ---------- | ------------------------------------------------- |
+| `F1xx` | layout     | where the line breaks and how far it is indented  |
+| `F2xx` | spacing    | where a space goes between two tokens             |
+| `F3xx` | trivia     | what happens to what a person wrote for a person  |
+| `F4xx` | rewrites   | the rules that MOVE code rather than space it     |
+| `L1xx` | dead code  | things written that nothing reaches               |
+| `L3xx` | capture    | what a coroutine or a deferred call actually took |
+| `L4xx` | resolution | a name that answers to more than one thing        |
+| `E1xx` | lexical    | text that is not a token                          |
 
 ## `zerg fmt`
 
@@ -624,6 +625,24 @@ It looks within one block, at the statements after the capture — including the
 closure or a `guard` carries, which hangs off an expression rather than a statement. A write
 from a **different** block is not reported: the rule reports the shape that misleads rather
 than every shape that could.
+
+### `L4xx` — resolution
+
+| Code   | Rule                                        |
+| ------ | ------------------------------------------- |
+| `L401` | a variant name **two** enums declare        |
+| `L402` | a `mut fn` that never writes through `this` |
+
+A bare name is a variant when it resolves to one, and resolution takes the **first**
+declaration — silently. Two enums that both have a `Red` make `c := Red` a coin toss
+decided by declaration order, and moving an `enum` in the file changes what the program
+means with nothing said. The program is well formed and the answer is defined; what it is
+not is readable. `Color.Red` says which.
+
+`mut fn` is not a hint: it makes the receiver a `mut &`, so **every** call site has to hold
+the instance in a `mut` binding. A method that only reads charges its callers that and gives
+nothing back — and they cannot see why, because the signature is the whole contract and
+`mut fn` is all of it. The test is a **write** to `this`, not a mention of it.
 
 ## Adding a rule
 

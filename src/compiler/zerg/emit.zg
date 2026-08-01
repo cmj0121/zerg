@@ -1442,6 +1442,11 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 		}
 	}
 	for fn_i in f.fns {
+		# the declaration's own place: this pass runs before any statement is emitted, so
+		# the SAt markers have said nothing and `em.at_*` still holds the last unit's
+		em.at_path = fn_i.path
+		em.at_line = fn_i.line
+		em.at_col = fn_i.col
 		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {
 			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`")
@@ -1485,6 +1490,14 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
 	return if c_is_struct_name(em, nm)
 	return if c_is_enum_ty(em, TNamed(nm))
 
+	# `This` is the SELF TYPE (GRAMMAR:333), so it names something only where there is a
+	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
+	# means there was none, and saying "no type named `This`" invites the reader to go and
+	# declare one. Checked rather than refused, for the reason c_ident gives.
+	if nm == "This" {
+		chk_at(em, f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
+		return
+	}
 	raise f"no type named `{nm}` ({site})"
 }
 
@@ -1865,6 +1878,18 @@ fn c_needs_runtime(mut &em: Emitter) -> bool {
 		i = i + 1
 	}
 	return false
+}
+
+# c_qualified_variant answers the enum name when `target.fld` is `Enum.Variant`, and "" for
+# every other field access. The variant has to belong to THAT enum: `Color.Apple` names a
+# variant of another one, and answering it would make the qualification decorative.
+fn c_qualified_variant(mut &em: Emitter, target: Expr, fld: str) -> str {
+	en := c_ident_name(target)
+
+	return "" if en == "" or not c_name_in(em.enum_names, en)
+	return "" if not c_is_variant(em, fld) or c_variant_enum(em, fld) != en
+
+	return en
 }
 
 fn c_is_variant(mut &em: Emitter, name: str) -> bool {
@@ -2312,6 +2337,12 @@ fn c_is_cmp_op(oper: str) -> bool {
 }
 
 fn c_is_aggregate(mut &em: Emitter, t: Ty) -> bool {
+	# an ENUM is a composite too, and it was the one this predicate did not name: `f"{c}"`
+	# on a `Color` cast the tagged union to int64_t and cc reported it against generated C.
+	# Its rendering is `int(c)` — the discriminant — which the programmer has to write,
+	# because a NAME for the variant is what `Display` would give and there is none.
+	return true if c_is_enum_ty(em, t)
+
 	return c_is_struct_name(em, c_named_of(t)) or c_is_list(t) or c_is_map(t) or c_is_tuple(t)
 }
 
@@ -2394,6 +2425,9 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, sb: Subst) -> str {
 # — the structural one is `Display`'s job and there is no derive for it — so it is named
 # rather than cast, which is what reached cc as "operand of type 'zg_P'".
 fn c_display_check(mut &em: Emitter, t: Ty) {
+	# an ENUM's advice is not a struct's: it has variants and not fields, and the thing a
+	# reader can actually write is the discriminant
+	raise f"NotImplemented: rendering a {ty_name(t)} as text — an enum has no name for its variant without the structural `Display` this compiler does not generate; `int(v)` gives its discriminant, or `match` it" if c_is_enum_ty(em, t)
 	raise f"NotImplemented: rendering a {ty_name(t)} as text — a composite needs the structural `Display` this compiler does not generate; render its fields" if c_is_aggregate(em, t) or c_is_carrier(t)
 }
 
@@ -2619,7 +2653,12 @@ fn c_ident_name(e: Expr) -> str {
 # chain of comparisons against them; the tag itself is the number, which is what makes the
 # reverse a test and not a table.
 fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) -> str {
-	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)`, which reverses a discriminant into a `{en}?`" if meth != "of"
+	# `Shape.Line(5)` — a variant CONSTRUCTOR named by its enum, the payload-carrying half
+	# of `Color.Red`. It arrives here rather than at c_fieldref because a call is a method
+	# shape, and `of` is the other thing an enum name answers.
+	return c_variant_ctor(em, meth, args, sb) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+
+	raise f"NotImplemented: `{en}.{meth}(…)` — an enum type answers `of(n)` and its own variants, and `{meth}` is neither" if meth != "of"
 	raise f"`{en}.of(n)` takes one integer — the discriminant to reverse" if args.len() != 1
 	raise f"enum `{en}` carries a payload, so its tag is opaque and match-only — `of(n)` reverses the discriminant of an enum whose every variant is fieldless" if not c_is_flat_enum(em, en)
 
@@ -2654,7 +2693,17 @@ fn c_enum_of(mut &em: Emitter, en: str, meth: str, args: list[Expr], sb: Subst) 
 # compiler pointing at generated code. `s.len()` is the common way in: a str has no
 # methods here, and the message now says so at the Zerg level.
 fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Subst) -> str {
+	# `Type.f(…)` is an ASSOCIATED FUNCTION (GRAMMAR:490) — the named-constructor form,
+	# `User.from_json(…)`. A TYPE NAME on the left is how a reader spells one, and the
+	# answer used to be "the method `make` on a ?": the target is a type rather than a
+	# value, so inference had nothing to name and the message pointed at the hole rather
+	# than at the form. The parser gives every `fn` in an `impl` a receiver, so there is no
+	# such function to call yet — which is a thing to say, not a `?`.
+	tn := c_ident_name(target)
+
+	raise f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type" if tn != "" and c_is_struct_name(em, tn)
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
+
 	return f"zg_{meth}({c_call_args(em, meth, args, sb)})"
 }
 
@@ -2663,10 +2712,14 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 # index 0 there — get that wrong and a `mut &` argument is passed by value to the slot
 # after the one that wanted its address.
 fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: Subst) -> str {
-	# the receiver is parameter 0 and is passed by value, so it is copied like any other;
-	# the written arguments then start at 1, and there is always a leading one to separate
-	# from, which a free call cannot assume
-	recv := c_copied(em, c_param_ty(em, key, 0), target, sb)
+	# the receiver is parameter 0 and goes through c_arg like any other argument: a plain
+	# method takes it BY VALUE, so it is copied, and a `mut fn` declared it `mut &`, so it
+	# takes the caller's variable itself. Routing it here rather than copying it outright is
+	# what makes `mut fn` work at all — and it brings the borrow's own rules with it, which
+	# GRAMMAR:302 asks for by name: "the call site must hold the receiver in a `mut`
+	# binding". `pos` is 0 because a receiver has no written position; chk_ref_arg says
+	# "the receiver" rather than an argument number for it.
+	recv := c_arg(em, key, 0, 0, target, sb)
 	return recv + c_args_from(em, key, 1, args, true, sb)
 }
 
@@ -2817,6 +2870,12 @@ fn c_call_args(mut &em: Emitter, fname: str, args: list[Expr], sb: Subst) -> str
 # by value into the slot after the one that wanted its address.
 fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bool, sb: Subst) -> str {
 	chk_call_arity(em, key, base, args.len())
+
+	# the aliasing rule is about a CALL rather than an argument, so it is asked once here
+	# and not inside the per-argument walk below
+	if base == 0 {
+		chk_ref_alias(em, key, args)
+	}
 
 	mut out := ""
 	mut i := 0
@@ -3000,6 +3059,19 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	#
 	# A module constant, a struct name and a variant are all bound by the time a body is
 	# emitted, so the check is one question: did anything bind it?
+	# `this` is not an ordinary unknown name. GRAMMAR:330 says it is not a parameter and
+	# GRAMMAR:332 that a `fn` whose body uses it with no instance bound is a compile error —
+	# so the thing to say is which rule was broken, not that the name is unknown. It is
+	# bound exactly when the enclosing `fn` was declared in an `impl` or a `spec`, because
+	# that is where the parser puts the receiver.
+	#
+	# A CHECKED rule rather than a refusal, so it carries the place every other rule does:
+	# it is a statement about a program the language rejects, not a form this compiler has
+	# not built, and the C emitted after a finding is discarded.
+	if n == "this" and not c_is_bound(em, n) {
+		chk_at(em, "`this` is a method's receiver, and this function has none — a `fn` outside an `impl` or a `spec` is not called on an instance")
+		return "0"
+	}
 	raise f"undefined name `{n}`" if not c_is_bound(em, n) and not c_is_struct_name(em, n)
 
 	# every read of a binding funnels through here, which is what makes this the one place
@@ -3437,7 +3509,13 @@ fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
 	en := c_ident_name(target)
-	return TOpt(TNamed(en)) if en != "" and meth == "of" and c_name_in(em.enum_names, en)
+	if en != "" and c_name_in(em.enum_names, en) {
+		return TOpt(TNamed(en)) if meth == "of"
+
+		# `Shape.Line(5)` is a value of `Shape`. It is total where `of` is partial: the
+		# variant is named rather than looked up, so there is nothing to fail.
+		return TNamed(en) if c_is_variant(em, meth) and c_variant_enum(em, meth) == en
+	}
 
 	tty := c_infer(em, target)
 	recv := c_named_of(tty)
@@ -4908,6 +4986,12 @@ fn c_tuple_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 # reads a tuple back by static index, `t.0`, and the parser gives that the same EField node
 # a struct field gets, so the number is what tells them apart.
 fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
+	# `Color.Red` is a value of `Color`, and it is answered here for the same reason
+	# c_fieldref answers it: an enum name infers to nothing, so asking about the target
+	# first would lose the shape.
+	en := c_qualified_variant(em, target, fld)
+	return TNamed(en) if en != ""
+
 	t := c_infer(em, target)
 	if c_is_tuple(t) and c_all_digits(fld) {
 		ts := c_tuple_tys(t)
@@ -4931,6 +5015,23 @@ fn c_field_ty_of(mut &em: Emitter, target: Expr, fld: str) -> Ty {
 }
 
 fn c_fieldref(mut &em: Emitter, target: Expr, fld: str, sb: Subst) -> str {
+	# `Color.Red` — a variant NAMED BY ITS ENUM. The bare `Red` is what the grammar makes
+	# normative (a bare name is a variant when it resolves to one, GRAMMAR:428), and it
+	# stays; this is the same value said unambiguously, which is what a reader reaches for
+	# when two enums are in scope and the bare names do not say which is meant. It is
+	# answered before inference for the reason `E.of(n)` is: an enum name is not a binding,
+	# so `c_infer` has nothing to say about it and the message was `undefined name `Color``.
+	en := c_qualified_variant(em, target, fld)
+	return "(zg_" + en + "){.tag = " + strconv.to_string(c_variant_tag(em, fld), 10) + "}" if en != ""
+
+	# the enum is named and the field is not one of ITS variants. Falling through said
+	# `undefined name `Color`` — about the one name in the expression that IS defined.
+	tn := c_ident_name(target)
+	if tn != "" and c_name_in(em.enum_names, tn) {
+		raise f"`{fld}` is not a variant of `{tn}`" if not c_is_variant(em, fld)
+		raise f"`{fld}` is a variant of `{c_variant_enum(em, fld)}`, not of `{tn}`"
+	}
+
 	tgt := c_expr(em, target, sb)
 	return f"{tgt}.f{fld}" if c_all_digits(fld)
 

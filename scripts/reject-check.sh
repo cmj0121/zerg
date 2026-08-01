@@ -1354,6 +1354,32 @@ fn main() {
 }
 EOF
 
+# --- a byte widens; a list of them does not -------------------------------------
+#
+# A `byte` fits an `int` slot, in the direction the language already mixes `int` into
+# `float`. A `list[byte]` does NOT fit a `list[int]`: a buffer's stride is its element's
+# size, so reading one as the other walks 8 bytes per 1-byte slot. `ys: list[int] =
+# list[byte]("Hi")` printed 26952 and a longer string read past the end.
+
+reject bind-a-byte-list-to-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
+fn main() {
+	ys: list[int] = list[byte]("Hi")
+	print(f"{ys[0]}")
+}
+EOF
+
+# and the narrowing the other way is not a fit either: `take(1000)` on a `byte` parameter
+# compiled to a truncation, and cc printed its own warning about generated C to say so
+reject narrow-an-int-to-a-byte '`take` takes byte as argument 1, and this gives int' seed-gap <<'EOF'
+fn take(b: byte) -> int {
+	return int(b)
+}
+
+fn main() {
+	print(f"{take(1000)}")
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

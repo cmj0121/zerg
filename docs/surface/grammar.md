@@ -770,15 +770,20 @@ quietly starts failing differently, fails the gate.
 | 6     | generic `fn` / `struct` / `enum`; a closure that captures; an untyped closure parameter |
 | 7     | `with`; struct, list, tuple and or-patterns; `pattern as name`; `if v := <enum>`        |
 | 8     | array type `[T; N]`; `spec` as a type or a dispatch; a `spec` member with a body        |
-| 8     | associated function `Type.f(…)`; an associated type or value in an `impl`               |
+| 8     | associated function `Type.f(…)`; an associated type or value, in a `spec` or an `impl`  |
+| 8     | an `impl` on a built-in type (`impl Tag for int`)                                       |
 | 8     | every decorator but `#[derive(…)]`                                                      |
 | 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                          |
 | 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`; the bridge `list[rune](s)`  |
 | 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                 |
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing
-dispatches on the spec — that much a declared interface means. Everything else about `spec`
-is on the list.
+dispatches on the spec — that much a declared interface means. What is enforced is the
+**signature**: arity, and at each position the parameter's name, type and `mut &`, and
+whether it has a default, plus the return type. **Position** matters because Zerg has
+positional calls; the default's **value** does not, because its presence is interface and
+its value is what runs. A **super-spec** (`spec Ord: Eq`) is required too, and an `impl`
+naming a spec no file declares is an error. Everything else about `spec` is on the list.
 
 ## Editor tooling
 

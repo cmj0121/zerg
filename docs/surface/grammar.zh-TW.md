@@ -658,24 +658,28 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 別的東西。這份清單不是散文 —— `scripts/refuse-check.sh` 每一條都有對應案例,所以一個形式若悄悄開始能動、或悄悄
 換了失敗方式,gate 就會擋下來。
 
-| Group | 形式                                                                         |
-| ----- | ---------------------------------------------------------------------------- |
-| 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                            |
-| 3     | 解構繫結 `(a, b) := …`                                                       |
-| 4     | 不是名字的 callee —— `f[T](…)`、`fs[0](…)`、`p?.m(…)`                        |
-| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                    |
-| 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                       |
-| 6     | 泛型 `fn` / `struct` / `enum`;會捕獲的 closure;省略型別的 closure 參數       |
-| 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>` |
-| 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member           |
-| 8     | associated function `Type.f(…)`;`impl` 內的 associated type 或 value         |
-| 8     | 除 `#[derive(…)]` 以外的所有 decorator                                       |
-| 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                            |
-| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`;橋接 `list[rune](s)`       |
-| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                       |
+| Group | 形式                                                                          |
+| ----- | ----------------------------------------------------------------------------- |
+| 2     | command literal `` `…` `` 及其內插形式 `` f`…` ``                             |
+| 3     | 解構繫結 `(a, b) := …`                                                        |
+| 4     | 不是名字的 callee —— `f[T](…)`、`fs[0](…)`、`p?.m(…)`                         |
+| 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                     |
+| 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                        |
+| 6     | 泛型 `fn` / `struct` / `enum`;會捕獲的 closure;省略型別的 closure 參數        |
+| 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>`  |
+| 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member            |
+| 8     | associated function `Type.f(…)`;`spec` 或 `impl` 內的 associated type / value |
+| 8     | 對內建型別的 `impl`（`impl Tag for int`）                                     |
+| 8     | 除 `#[derive(…)]` 以外的所有 decorator                                        |
+| 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                             |
+| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`;橋接 `list[rune](s)`        |
+| 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                        |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的
-介面至少該有這個意思。`spec` 的其餘部分都在清單上。
+介面至少該有這個意思。被強制的是**簽章**:arity,以及每個位置上參數的名字、型別、`mut &`,和它有沒有預設值,
+再加上回傳型別。**位置**有意義,因為 Zerg 有位置呼叫;預設值的**內容**沒有,因為它的存在是介面、它的值是會跑的
+東西。**super-spec**(`spec Ord: Eq`)同樣被要求,而一個 `impl` 指名沒有任何檔案宣告過的 spec 是錯誤。
+`spec` 的其餘部分都在清單上。
 
 ## 編輯器工具（Editor tooling）
 

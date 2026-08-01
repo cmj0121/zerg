@@ -183,6 +183,10 @@ the program, which is what the assertion exists to catch.
 byte)` compiles to a truncation and cc warns about the generated C. `zerg` refuses it: a
   `byte` WIDENS to an `int` and nothing goes the other way, because byte arithmetic stays
   in `byte` and so nothing needs it to.
+- **A FIELD or a VARIANT declared twice is accepted.** `struct A { v: int; v: str }` and
+  `enum E { X; X }` both build and run under the seed. `zerg` refuses both — the second
+  variant is unreachable, so a `match` naming the first reads as exhaustive over an enum
+  that has two. (A repeated PARAMETER the seed does catch.)
 - **A TYPE NAME declared twice is accepted.** A `struct`, an `enum` and a `spec` share one
   namespace, and every module of a program flattens into one scope in both compilers — so
   `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for

@@ -177,9 +177,15 @@ func (e *emitter) programUsesCheckedConv() bool {
 		if !ok || dstS.Class == sema.ScalarBool {
 			continue
 		}
-		// `int(s)` parses through the runtime, which can raise.
-		if id.Name == "int" && e.info.ExprTypes[call.Args[0].Value] == sema.Str {
-			return true
+		// `int(s)` / `uint(s)` / `float(s)` parse through the runtime, which can raise.
+		// Naming only `int` here left the other two emitting a zrt_parse_* call into a
+		// translation unit with no runtime in it, and cc reported the undeclared function
+		// against generated C — for two forms the documentation promises.
+		if e.info.ExprTypes[call.Args[0].Value] == sema.Str {
+			switch id.Name {
+			case "int", "uint", "float":
+				return true
+			}
 		}
 		srcS, ok := sema.ScalarOf(e.info.ExprTypes[call.Args[0].Value])
 		if ok && !sema.Lossless(srcS, dstS) {

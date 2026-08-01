@@ -126,6 +126,15 @@ jobs:
       - name: Every program that is not Zerg, is rejected
         run: make reject
 
+      # --- 7b''. and the two compilers agree about the programs that ARE Zerg ----
+      # `reject` makes the seed the oracle for what must be turned away. Nothing asked the
+      # same question about what must be ACCEPTED, so `int("42")` parsed a string in the
+      # seed and cast the string's POINTER in the compiler that ships — two different
+      # answers to one program, under a full board of green gates. This runs before the
+      # corpus fetch so it covers the examples even on a fork.
+      - name: The seed and the shipping compiler agree
+        run: make oracle
+
       # --- 7b'. the compiler's own sources are canonical -------------------------
       # fmt-corpus and fmt-tokens both need the private corpus, so the formatter's rules
       # were never checked against the largest body of Zerg that exists — the compiler.

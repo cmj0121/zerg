@@ -365,6 +365,7 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	zrt_coro *co = (zrt_coro *)zrt_alloc(sizeof(*co));
 	size_t total = 0;
 	co->stack = stack_alloc(ZRT_CORO_STACK, &total);
+	ZRT_TRACE_STACK_ON(co->stack, total);
 	co->stack_size = total;
 	co->state = ZRT_CORO_RUNNABLE;
 	co->woken = false; /* zrt_alloc is malloc, not calloc: an unset flag is a stray wake */

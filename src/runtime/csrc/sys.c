@@ -510,6 +510,67 @@ bool zrt_trace_waiter_live(void *w) {
 	return live;
 }
 
+/* --- live coroutine stacks (ZRT_TRACE only) -----------------------------------
+ *
+ * The waiter registry cannot answer "is this pointer still alive?", and it never could: a
+ * `zrt_waiter *` is a STACK address, coroutine stacks are unmapped and remapped where they
+ * were, so a dead pointer aliases a live registration and every address-keyed test says
+ * yes. That is why two rounds of this instrument stayed silent while CI kept crashing.
+ *
+ * A stack RANGE does not alias: it is live exactly between its mmap and its munmap. So the
+ * question a queue can actually answer is "does this waiter lie inside a stack that is
+ * still mapped?" — and the answer is no precisely when dereferencing it would fault. */
+#define ZRT_TRACE_MAX_STACKS 128
+static void      *g_ts_lo[ZRT_TRACE_MAX_STACKS];
+static size_t     g_ts_len[ZRT_TRACE_MAX_STACKS];
+
+void zrt_trace_stack_on(void *lo, size_t len) {
+	tw_ensure();
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
+		if (g_ts_lo[i] == NULL) {
+			g_ts_lo[i] = lo;
+			g_ts_len[i] = len;
+			break;
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
+static void ts_off(void *lo) {
+	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
+		if (g_ts_lo[i] == lo) {
+			g_ts_lo[i] = NULL;
+			g_ts_len[i] = 0;
+			return;
+		}
+	}
+}
+
+/* zrt_trace_waiter_mapped reports whether w lies in a stack that is still mapped. The
+ * scheduler's own stack is not one of these — a waiter only ever lives on a coroutine's —
+ * so an address outside every range is a dead one. */
+bool zrt_trace_waiter_mapped(void *w) {
+	tw_ensure();
+	zrt_mutex_lock(&g_tw_lock);
+	bool ok = false;
+	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
+		char *lo = (char *)g_ts_lo[i];
+		if (lo != NULL && (char *)w >= lo && (char *)w < lo + g_ts_len[i]) {
+			ok = true;
+			break;
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+	return ok;
+}
+
+void zrt_trace_dead_waiter(void *q, void *w) {
+	fprintf(stderr, "[zrt] DEAD WAITER q=%p w=%p — the queue head is on a stack that is no longer mapped\n", q, w);
+	fflush(stderr);
+	abort();
+}
+
 void zrt_trace_stale(void *q, void *w) {
 	fprintf(stderr, "[zrt] STALE QUEUE HEAD q=%p w=%p — the head names a waiter no queue holds\n", q, w);
 	fflush(stderr);
@@ -520,6 +581,7 @@ void zrt_trace_stale(void *q, void *w) {
 void zrt_trace_stack_free(void *lo, size_t len) {
 	tw_ensure();
 	zrt_mutex_lock(&g_tw_lock);
+	ts_off(lo);
 	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
 		char *w = (char *)g_tw[i];
 		if (w != NULL && w >= (char *)lo && w < (char *)lo + len) {

@@ -1704,7 +1704,7 @@ fn main() {
 }
 EOF
 
-reject a-spec-declared-twice 'is declared twice' no-place seed-gap <<'EOF'
+reject a-spec-declared-twice 'is declared twice' seed-gap <<'EOF'
 spec Tag {
 	fn tag() -> int
 }
@@ -1728,7 +1728,7 @@ fn main() {
 }
 EOF
 
-reject a-struct-and-a-spec-share-a-name 'once as a struct, once as a spec' no-place seed-gap <<'EOF'
+reject a-struct-and-a-spec-share-a-name 'once as a struct, once as a spec' seed-gap <<'EOF'
 struct A {
 	v: int
 }
@@ -1770,7 +1770,7 @@ fn main() {
 }
 EOF
 
-reject a-parameter-declared-twice 'declares a parameter named `a` twice' no-place <<'EOF'
+reject a-parameter-declared-twice 'declares a parameter named `a` twice' <<'EOF'
 fn f(a: int, a: int) -> int {
 	return a
 }

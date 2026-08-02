@@ -1612,13 +1612,21 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 	mut seen: list[str] = []
 	mut kind: list[str] = []
 	for sd in f.structs {
-		c_check_type_dup(seen, kind, sd.name, "a struct")
+		c_check_type_dup(em, seen, kind, sd.name, "a struct", "", 0, 0)
 	}
 	for ed in f.enums {
-		c_check_type_dup(seen, kind, ed.name, "an enum")
+		c_check_type_dup(em, seen, kind, ed.name, "an enum", "", 0, 0)
 	}
 	for sp in f.specs {
-		c_check_type_dup(seen, kind, sp.name, "a spec")
+		# a SpecDecl knows WHERE it was written, and a rule that has a place uses it: it says
+		# where, and it accumulates rather than ending the run at the first finding. A
+		# struct, an enum, a field and a variant carry no place, so those still raise —
+		# `reject-check.sh` marks each of those cases `no-place`, which is the debt declared.
+		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
+
+		# the spec table, filled by the walk that is already here rather than by a second
+		# pass over the same list
+		em.spec_names.append(sp.name)
 	}
 
 	# and one level down, where the same question has the same answer and three more ways
@@ -1641,36 +1649,49 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 		c_check_names_distinct(vnames, "a variant", ed.name)
 	}
 	for fn_i in f.fns {
-		mut pnames: list[str] = []
+		# a FnDecl knows where it was written too
+		mut pseen: list[str] = []
 		for pm in fn_i.params {
-			pnames.append(pm.name)
+			if c_name_in(pseen, pm.name) {
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.name}` declares a parameter named `{pm.name}` twice")
+			}
+			pseen.append(pm.name)
 		}
-		c_check_names_distinct(pnames, "a parameter", fn_i.name)
 	}
 }
 
 fn c_check_names_distinct(names: list[str], what: str, whose: str) {
 	mut seen: list[str] = []
 	for n in names {
-		for s in seen {
-			raise f"`{whose}` declares {what} named `{n}` twice" if s == n
-		}
+		raise f"`{whose}` declares {what} named `{n}` twice" if c_name_in(seen, n)
+
 		seen.append(n)
 	}
 }
 
-fn c_check_type_dup(mut &seen: list[str], mut &kind: list[str], name: str, what: str) {
+fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str], name: str, what: str, path: str, line: int, col: int) {
 	mut i := 0
 	for i < seen.len() {
 		if seen[i] == name {
-			raise f"`{name}` is declared twice — once as {kind[i]}, once as {what}" if kind[i] != what
-
-			raise f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
+			msg := c_dup_msg(name, kind[i], what)
+			if path != "" {
+				chk_at_place(em, path, line, col, msg)
+				return
+			}
+			raise msg
 		}
 		i = i + 1
 	}
 	seen.append(name)
 	kind.append(what)
+}
+
+# c_dup_msg is the one sentence, so a declaration that knows its place and one that does not
+# say the same thing about the same rule.
+fn c_dup_msg(name: str, prev: str, what: str) -> str {
+	return f"`{name}` is declared twice — once as {prev}, once as {what}" if prev != what
+
+	return f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
 }
 
 fn c_build_structs(mut &em: Emitter, f: File) {
@@ -1914,12 +1935,6 @@ fn c_named_of(t: Ty) -> str {
 	return match t {
 		TNamed(nm) => nm
 		_          => ""
-	}
-}
-
-fn c_build_specs(mut &em: Emitter, f: File) {
-	for sp in f.specs {
-		em.spec_names.append(sp.name)
 	}
 }
 
@@ -6601,7 +6616,6 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
-	c_build_specs(em, f)
 	c_check_named_types(em, f)
 	c_scan_fnptr(em, f)
 	for im in f.imports {

@@ -827,6 +827,7 @@ void zrt_trace_stack_dead(void *lo, size_t len, void *co);
 void zrt_trace_check_dead(void *q, void *w);
 void zrt_trace_coro_dead(void *co);
 void zrt_trace_check_owner(void *q, void *w);
+void zrt_trace_check_coro(void *co, const char *where);
 void zrt_trace_stack_free(void *lo, size_t len);
 #define ZRT_TRACE_ON()          zrt_trace_on()
 #define ZRT_TRACE_WAITER_ON(w, co) zrt_trace_waiter_on((w), (co))
@@ -839,6 +840,7 @@ void zrt_trace_stack_free(void *lo, size_t len);
 #define ZRT_TRACE_CHECK_DEAD(q, w) zrt_trace_check_dead((q), (w))
 #define ZRT_TRACE_CORO_DEAD(co)    zrt_trace_coro_dead(co)
 #define ZRT_TRACE_CHECK_OWNER(q, w) zrt_trace_check_owner((q), (w))
+#define ZRT_TRACE_CHECK_CORO(co, w) zrt_trace_check_coro((co), (w))
 #define ZRT_TRACE_WAITER_OFF(w) zrt_trace_waiter_off(w)
 #define ZRT_TRACE_STACK_FREE(lo, n) zrt_trace_stack_free((lo), (n))
 #define ZRT_TRACEF(...)                      \
@@ -862,6 +864,7 @@ void zrt_trace_stack_free(void *lo, size_t len);
 #define ZRT_TRACE_CHECK_DEAD(q, w) ((void)0)
 #define ZRT_TRACE_CORO_DEAD(co)    ((void)0)
 #define ZRT_TRACE_CHECK_OWNER(q, w) ((void)0)
+#define ZRT_TRACE_CHECK_CORO(co, w) ((void)0)
 #define ZRT_TRACE_WAITER_OFF(w) ((void)0)
 #define ZRT_TRACE_STACK_FREE(lo, n) ((void)0)
 #endif

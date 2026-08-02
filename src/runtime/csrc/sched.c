@@ -457,6 +457,7 @@ _Noreturn void zrt_sched_deadlock(void) {
 }
 
 void zrt_sched_wake(zrt_coro *co) {
+	ZRT_TRACE_CHECK_CORO(co, "zrt_sched_wake");
 	/* Idempotent: only a still-parked coroutine is re-enqueued. A select parks on
 	 * several channels at once, so more than one counterparty (or a close) may try to
 	 * wake it; waking only a BLOCKED coroutine keeps it on the run queue exactly once.
@@ -578,6 +579,7 @@ static void sched_run(void) {
 		 * precisely that several workers are in here at once. The unwind bundle brackets
 		 * the swap because it belongs to the COROUTINE: it parked on some worker and may
 		 * resume on this one. */
+		ZRT_TRACE_CHECK_CORO(co, "sched_run/resume");
 		t_current = co;
 		zrt_tls_load(&co->tls);
 		/* the two announcements bracketing the switch are what let ThreadSanitizer follow

@@ -642,6 +642,30 @@ void zrt_trace_coro_dead(void *co) {
 	zrt_mutex_unlock(&g_tw_lock);
 }
 
+/* zrt_trace_check_coro aborts when this coroutine has been freed. It is the one check
+ * upstream of every fault signature seen: a waiter left on a queue is woken by chan_close
+ * through `zrt_sched_wake(w->co)`, that reads `co->state` out of freed memory, and if the
+ * bytes happen to read as BLOCKED the coroutine is put back on the run queue — after which
+ * a worker swaps into a context whose stack is unmapped. Whatever it touches next faults:
+ * its own `zrt_frame` in `zrt_handler_pop`, a local in generated code, or the next waiter
+ * in `wq_pop`. One cause, three places to notice it. */
+void zrt_trace_check_coro(void *co, const char *where) {
+	if (co == NULL) {
+		return;
+	}
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_DEAD_CORO; i++) {
+		if (g_dc[i] != co) {
+			continue;
+		}
+		fprintf(stderr, "[zrt] FREED COROUTINE TOUCHED at %s co=%p\n", where, co);
+		zrt_mutex_unlock(&g_tw_lock);
+		fflush(stderr);
+		abort();
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
 /* zrt_trace_check_owner aborts when the waiter at this address was pushed by a coroutine
  * that has since been freed. The waiter is never dereferenced: the owner comes from the
  * registry entry made at the push. */

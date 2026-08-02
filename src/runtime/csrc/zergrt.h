@@ -781,6 +781,18 @@ void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
 
 /* --- ZRT_TRACE: a debug-only log, compiled out by default ---------------------
  *
+ * A NOTE ON WHAT WAS TRIED AND DOES NOT WORK, so it is not tried again: checking that a
+ * queued `zrt_waiter *` lies inside a live coroutine stack. It looks sound — a waiter is a
+ * local of the parking function, so it must be on that coroutine's stack — and it is wrong
+ * under AddressSanitizer. ASan moves a local whose address escapes into a heap-backed FAKE
+ * STACK frame, which is nowhere near the mmap'd coroutine stack, so the test fails for
+ * every waiter. GCC enables that by default and clang does not, which is exactly the shape
+ * of "green on the developer's machine, red on CI for reasons that are not the bug".
+ *
+ * The right tool for a waiter that outlives its frame is ASan itself:
+ * `detect_stack_use_after_return=1` reports it with the frame it was allocated in and the
+ * frame that reclaimed it. scripts/sanitize-conc.sh turns it on.
+ *
  * A race in the scheduler or the channels is a question about ORDER, and the two tools
  * that can see it cannot answer that one: AddressSanitizer names the instruction that
  * faulted and the allocation it touched, and a debugger stops the world the race needs.

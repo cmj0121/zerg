@@ -409,3 +409,86 @@ int64_t zrt_proc_wait(int64_t pid) {
 	}
 	return -1;
 }
+
+#ifdef ZRT_TRACE
+/* zrt_trace_on reads ZRG_TRACE once and remembers it. Once, because the answer cannot
+ * change during a run and because getenv is not something to call from inside the
+ * interleaving under study. Not atomic: two threads racing here both compute the same
+ * value from the same environment. */
+bool zrt_trace_on(void) {
+	static int on = -1;
+	if (on < 0) {
+		const char *v = getenv("ZRG_TRACE");
+		on = (v != NULL && v[0] != '\0' && v[0] != '0') ? 1 : 0;
+	}
+	return on == 1;
+}
+#endif
+
+#ifdef ZRT_TRACE
+/* --- the live-waiter registry (ZRT_TRACE only) --------------------------------
+ *
+ * A `zrt_waiter` lives on the stack of the coroutine that parked, so a queue still
+ * pointing at one whose coroutine has been freed is a hand-off into unmapped memory. That
+ * is a SEGV in wq_pop, and it happens a long way from the mistake and one run in several
+ * hundred — the shape that costs days to find by waiting for it.
+ *
+ * So it is turned into an INVARIANT that every run can check: every waiter that is on a
+ * queue is registered here, and freeing a coroutine's stack asserts that none of them
+ * lies inside it. A run that would have crashed later fails HERE instead, on the run that
+ * made the mistake rather than the run that tripped over it — and a run that never
+ * crashes still proves the property.
+ *
+ * Under -DZRT_TRACE only: it takes a lock the shipped runtime does not have, and it holds
+ * a global the shipped runtime does not have either. */
+#define ZRT_TRACE_MAX_WAITERS 256
+static void        *g_tw[ZRT_TRACE_MAX_WAITERS];
+static zrt_mutex    g_tw_lock;
+static bool         g_tw_init;
+
+static void tw_ensure(void) {
+	if (!g_tw_init) {
+		zrt_mutex_init(&g_tw_lock);
+		g_tw_init = true;
+	}
+}
+
+void zrt_trace_waiter_on(void *w) {
+	tw_ensure();
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
+		if (g_tw[i] == NULL) {
+			g_tw[i] = w;
+			break;
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
+void zrt_trace_waiter_off(void *w) {
+	tw_ensure();
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
+		if (g_tw[i] == w) {
+			g_tw[i] = NULL;
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
+/* zrt_trace_stack_free is the assertion: nothing still queued may live in this stack. */
+void zrt_trace_stack_free(void *lo, size_t len) {
+	tw_ensure();
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
+		char *w = (char *)g_tw[i];
+		if (w != NULL && w >= (char *)lo && w < (char *)lo + len) {
+			fprintf(stderr, "[zrt] LEAKED WAITER %p is still on a queue, and its stack [%p,%p) is being freed\n",
+			        (void *)w, lo, (void *)((char *)lo + len));
+			fflush(stderr);
+			abort();
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+#endif

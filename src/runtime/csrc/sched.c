@@ -607,6 +607,8 @@ static void sched_run(void) {
 		switch (co->state) {
 		case ZRT_CORO_DONE: {
 			bool was_main = co->is_main;
+			ZRT_TRACEF("co_free  co=%p stack=[%p,%p) main=%d", (void *)co, co->stack, (void *)((char *)co->stack + co->stack_size), (int)was_main);
+			ZRT_TRACE_STACK_FREE(co->stack, co->stack_size);
 			zrt_tls_free(&co->tls);
 			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
 			munmap(co->stack, co->stack_size);

@@ -779,6 +779,54 @@ void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
 #define ZRT_TSAN_FIBER_SWITCH(f)   ((void)(f))
 #endif
 
+/* --- ZRT_TRACE: a debug-only log, compiled out by default ---------------------
+ *
+ * A race in the scheduler or the channels is a question about ORDER, and the two tools
+ * that can see it cannot answer that one: AddressSanitizer names the instruction that
+ * faulted and the allocation it touched, and a debugger stops the world the race needs.
+ * What is missing is the sequence — which coroutine parked on which queue, on which
+ * worker, and what happened to that waiter afterwards.
+ *
+ * So: a line per event, to stderr, guarded by a compile-time flag AND a runtime one.
+ *
+ *   cc -DZRT_TRACE …        compile the calls in
+ *   ZRG_TRACE=1 ./prog      turn them on for a run
+ *
+ * Without -DZRT_TRACE this expands to nothing at all — not a branch, not a symbol — so a
+ * shipped build is byte-identical to one from a tree that never had this. That is the
+ * whole contract: a debug facility that changes the program it is debugging is worth
+ * less than no facility, and one that changes the program it is NOT debugging is worse.
+ *
+ * It writes with a single fprintf per line because stderr is unbuffered and line-atomic
+ * enough for this, and because taking a lock to log would change the very interleaving
+ * the log exists to show. */
+#ifdef ZRT_TRACE
+#include <stdio.h>
+
+bool zrt_trace_on(void);
+void zrt_trace_waiter_on(void *w);
+void zrt_trace_waiter_off(void *w);
+void zrt_trace_stack_free(void *lo, size_t len);
+#define ZRT_TRACE_ON()          zrt_trace_on()
+#define ZRT_TRACE_WAITER_ON(w)  zrt_trace_waiter_on(w)
+#define ZRT_TRACE_WAITER_OFF(w) zrt_trace_waiter_off(w)
+#define ZRT_TRACE_STACK_FREE(lo, n) zrt_trace_stack_free((lo), (n))
+#define ZRT_TRACEF(...)                      \
+	do {                                     \
+		if (zrt_trace_on()) {                \
+			fprintf(stderr, "[zrt] ");       \
+			fprintf(stderr, __VA_ARGS__);    \
+			fputc('\n', stderr);             \
+		}                                    \
+	} while (0)
+#else
+#define ZRT_TRACE_ON() false
+#define ZRT_TRACEF(...) ((void)0)
+#define ZRT_TRACE_WAITER_ON(w)  ((void)0)
+#define ZRT_TRACE_WAITER_OFF(w) ((void)0)
+#define ZRT_TRACE_STACK_FREE(lo, n) ((void)0)
+#endif
+
 /* --- threads: the M of M:N ---------------------------------------------------
  *
  * zrt_thread / zrt_mutex / zrt_cond are a SHIM over the host's threading, in exactly

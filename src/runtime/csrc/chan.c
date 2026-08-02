@@ -90,6 +90,8 @@ struct zrt_chan {
 /* --- wait queues (FIFO, intrusive via waiter->next) -------------------------- */
 
 static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
+	ZRT_TRACEF("wq_push  q=%p w=%p co=%p", (void *)head, (void *)w, (void *)w->co);
+	ZRT_TRACE_WAITER_ON(w);
 	w->next = NULL;
 	if (*tail != NULL) {
 		(*tail)->next = w;
@@ -101,12 +103,14 @@ static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 
 static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 	zrt_waiter *w = *head;
+	ZRT_TRACEF("wq_pop   q=%p w=%p", (void *)head, (void *)w);
 	if (w != NULL) {
 		*head = w->next;
 		if (*head == NULL) {
 			*tail = NULL;
 		}
 		w->next = NULL;
+		ZRT_TRACE_WAITER_OFF(w);
 	}
 	return w;
 }
@@ -115,6 +119,7 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
  * select removes its remaining waiters from every queue once it fires, before its stack
  * (which the waiters live on) is reused. */
 static void wq_remove(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
+	ZRT_TRACEF("wq_remove q=%p w=%p", (void *)head, (void *)w);
 	zrt_waiter *prev = NULL;
 	for (zrt_waiter *cur = *head; cur != NULL; prev = cur, cur = cur->next) {
 		if (cur != w) {
@@ -128,6 +133,7 @@ static void wq_remove(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 		if (*tail == cur) {
 			*tail = prev;
 		}
+		ZRT_TRACE_WAITER_OFF(cur);
 		cur->next = NULL;
 		return;
 	}
@@ -212,6 +218,7 @@ static void chan_free(zrt_chan *ch) {
  * coroutine that crashed is unwinding as this runs, and by the time a receiver reads
  * the Err that coroutine is gone. */
 static void chan_close(zrt_chan *ch, zrt_err err) {
+	ZRT_TRACEF("close    ch=%p closed=%d recvq=%p sendq=%p", (void *)ch, (int)ch->closed, (void *)ch->recvq_head, (void *)ch->sendq_head);
 	if (ch->closed) {
 		return;
 	}
@@ -255,6 +262,7 @@ void zrt_chan_release(zrt_chan *ch) {
 
 void zrt_chan_sender_release(zrt_chan *ch) {
 	zrt_mutex_lock(&ch->lock);
+	ZRT_TRACEF("srel     ch=%p senders=%zu rc=%zu co=%p", (void *)ch, ch->senders, ch->rc, (void *)zrt_sched_current());
 	/* remembered BEFORE the count is tested: this handle may not be the one that takes it
 	 * to zero, and the crash has to outlive the difference */
 	if (ch->crash_err.kind == ZRT_ERR_STOP_ITERATION && zrt_crash_active()) {

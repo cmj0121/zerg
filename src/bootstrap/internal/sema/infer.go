@@ -128,7 +128,7 @@ func (c *checker) builtinCall(n *ast.Call) (Type, bool) {
 			return c.nullaryIntrinsic(n, Int), true
 		case "__zrt_sleep_ns":
 			return c.unaryIntrinsic(n, Int, Nil), true
-		case "__zrt_platform", "__zrt_arch":
+		case "__zrt_platform", "__zrt_arch", "__zrt_exe_path":
 			return c.nullaryIntrinsic(n, Str), true
 		case "__zrt_getenv":
 			return c.unaryIntrinsic(n, Str, Str), true

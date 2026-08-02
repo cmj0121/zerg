@@ -46,6 +46,15 @@ RT="src/runtime/csrc"
 # So the unseeded half is the one that searches, and it is the one that was small. PARALLEL
 # runs the multi-worker half several instances at once, which is the pressure that made the
 # difference — an oversubscribed CPU, not more repetitions of an idle one.
+# A `zrt_waiter` is a LOCAL of the parking function that gets linked into a queue the
+# function then leaves behind, so "does a waiter outlive its frame?" is the question this
+# corpus most needs asked — and it is exactly what detect_stack_use_after_return answers.
+# ASan moves such a local into a heap-backed fake frame and poisons it on return, so a
+# queue still holding it is reported with BOTH frames: where it was allocated and what
+# reclaimed it. Off by default in ASan, and the reason a real bug here reads as a plain
+# SEGV a long way downstream.
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_stack_use_after_return=1}"
+
 SCHEDULES="${SCHEDULES:-${REPS:-60}}"
 RUNS="${RUNS:-${REPS:-30}}"
 PARALLEL="${PARALLEL:-4}"

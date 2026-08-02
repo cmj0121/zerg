@@ -1483,12 +1483,16 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return e.resolve(n.Name)
 	case *ast.Unary:
+		// rendered ONCE: e.expr mints fresh names and sets the needs* flags, so a
+		// rendering that is then discarded burns counter values and — because every
+		// level re-renders its whole subtree — costs 2^depth.
+		x := e.expr(n.X)
 		if n.Op == token.Minus {
-			if s, ok := e.checkedNeg(e.cur.ExprType(e.info, n), n.X, e.expr(n.X)); ok {
+			if s, ok := e.checkedNeg(e.cur.ExprType(e.info, n), n.X, x); ok {
 				return s
 			}
 		}
-		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
+		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), x)
 	case *ast.Binary:
 		if md, ok := e.cur.OpCalls[n]; ok {
 			// The right operand is a by-value ARGUMENT the impl method consumes (drops), so an
@@ -1510,10 +1514,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		if s, ok := e.strBinary(n); ok {
 			return s
 		}
-		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, e.expr(n.L), e.expr(n.R)); ok {
+		l, r := e.expr(n.L), e.expr(n.R)
+		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, l, r); ok {
 			return s
 		}
-		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
+		return fmt.Sprintf("(%s %s %s)", l, binaryOp(n.Op), r)
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:

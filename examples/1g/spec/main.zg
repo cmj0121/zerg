@@ -1,0 +1,28 @@
+# 1g/spec — a `spec` declared in one module, implemented in another.
+#
+# The required-member check used to run when a FILE finished parsing, so a spec it
+# had not itself read was left alone — which is why `impl Nope for A` compiled. The
+# driver already loads every unit before anything is emitted, and the check runs
+# over that whole-program view, so this `impl` is held to a signature written in a
+# different module.
+#
+# The SEED cannot build this — it answers `unknown spec "Tag"`, because its own spec
+# table is per-module too. That is the seed being the narrower compiler, and it is why
+# `make oracle` skips this file rather than comparing it.
+import "proto"
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag(n: int) -> int {
+		return this.v + n
+	}
+}
+
+fn main() {
+	raise "cross-module spec" if A(1).tag(2) != 3
+
+	print "spec: ok"
+}

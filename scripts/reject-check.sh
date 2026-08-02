@@ -1780,6 +1780,23 @@ fn main() {
 }
 EOF
 
+# --- a tuple type has two elements ------------------------------------------------
+#
+# GRAMMAR:480 says two or more. `(T)` is a grouped type everywhere else in the language and
+# `()` is not a type at all — a function with no result returns nothing, which `-> ` says by
+# being absent. The whole tuple TYPE was unparsed until this branch, so every position that
+# wanted one reported whatever token came next instead: five positions, five messages.
+
+reject a-one-element-tuple-type 'a tuple type has two elements or more' no-place <<'EOF'
+fn f() -> (int) {
+	return 1
+}
+
+fn main() {
+	print(f())
+}
+EOF
+
 # --- a reserved word cannot name a binding either -------------------------------
 #
 # The last naming position that read whatever token was there. A binding is recognised by

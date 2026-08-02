@@ -243,14 +243,6 @@ jobs:
           TESTDATA_TOKEN: ${{ secrets.TESTDATA_TOKEN }}
         run: ./scripts/ci-fetch-testdata.sh sanitize-conc
 
-      # EXPERIMENT (this branch only, revert before merge): 1 MB coroutine stacks.
-      # The SEGVs this branch chases have the shape of a stack hitting its guard page
-      # under GCC ASan's frame inflation — fault far below sp, page-aligned, a different
-      # function every time, CI-only. If several rolls at 1 MB stay green where 256 KB
-      # failed every other roll, that is the diagnosis; if they still crash, an eighth
-      # hypothesis dies for the price of a constant.
       - name: Build every conc_* case with the sanitizers on, and run it
         if: steps.corpus_fetch.outputs.available == 'true'
         run: make sanitize-conc
-        env:
-          CORO_STACK: ((size_t)(1024*1024))

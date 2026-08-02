@@ -517,6 +517,32 @@ static inline int64_t zrt_mod_i64(int64_t a, int64_t b) {
 	return r;
 }
 
+/* A shift by a distance OUTSIDE the type's width raises (docs/core/types.md). In C both
+ * ends are undefined: `1 << 64` on a 64-bit type, and any negative distance.
+ *
+ * The width is passed by the caller because it is the SOURCE type's, not the helper's: a
+ * `byte` shifts within 8 even though the value travels here as an i64.
+ *
+ * `>>` is arithmetic on a signed operand and logical on an unsigned one — the type's sign
+ * decides, which is why there is no separate logical-shift operator. C already does exactly
+ * that for the C type the value arrives in, so the shift itself is left to it. */
+static inline int64_t zrt_shl_i64(int64_t a, int64_t n, int64_t width) {
+	if (n < 0 || n >= width) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+	}
+	/* the shift is done on the UNSIGNED bit pattern: a left shift that moves bits into or
+	 * past the sign is undefined on a signed operand in C, and wrapping is what a bit-level
+	 * operator is for once the distance itself has been checked */
+	return (int64_t)((uint64_t)a << (uint64_t)n);
+}
+
+static inline int64_t zrt_shr_i64(int64_t a, int64_t n, int64_t width) {
+	if (n < 0 || n >= width) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+	}
+	return a >> n;
+}
+
 /* unary `-`. Its one overflow is the type's minimum, which has no positive counterpart. */
 static inline int64_t zrt_neg_i64(int64_t a) {
 	if (a == INT64_MIN) {

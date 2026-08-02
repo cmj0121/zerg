@@ -475,6 +475,48 @@ static inline int64_t zrt_mul_i64(int64_t a, int64_t b) {
 	return r;
 }
 
+/* `/` and `%` are EUCLIDEAN (docs/core/types.md): the remainder is never negative, so
+ * `0 <= a % b < |b|` and `a == (a / b) * b + a % b` holds for every sign — which is what
+ * makes `a % n` a valid index or bucket whatever the sign of `a`.
+ *
+ * C truncates toward zero instead, so it answered `-7 % 3 == -1` where the language says
+ * `2`, and `-7 / 3 == -2` where the language says `-3`. That difference never announces
+ * itself: it turns a modulo into a negative index.
+ *
+ * The correction is one branch on a remainder that C already computed, and it is skipped
+ * whenever the remainder came out non-negative — the common case, which is every loop over
+ * a non-negative counter.
+ *
+ * A zero divisor and `INT64_MIN / -1` are both undefined in C, and both are checked before
+ * the division rather than after. */
+static inline int64_t zrt_div_i64(int64_t a, int64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: division by zero");
+	}
+	if (a == INT64_MIN && b == -1) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer division overflowed");
+	}
+	int64_t q = a / b;
+	if (a % b < 0) {
+		q = (b > 0) ? q - 1 : q + 1;
+	}
+	return q;
+}
+
+static inline int64_t zrt_mod_i64(int64_t a, int64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: remainder by zero");
+	}
+	if (a == INT64_MIN && b == -1) {
+		return 0; /* the quotient overflows; the remainder is exactly zero */
+	}
+	int64_t r = a % b;
+	if (r < 0) {
+		r += (b > 0) ? b : -b;
+	}
+	return r;
+}
+
 /* unary `-`. Its one overflow is the type's minimum, which has no positive counterpart. */
 static inline int64_t zrt_neg_i64(int64_t a) {
 	if (a == INT64_MIN) {

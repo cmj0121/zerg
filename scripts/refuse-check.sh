@@ -767,6 +767,7 @@ fn main() {
 }
 EOF
 
+
 expect "$ZERG" parameterized-super-spec "NotImplemented: a parameterized \`Eq[…]\` as a super-spec" <<'EOF'
 spec Eq[T] {
 	fn eq(o: T) -> bool

@@ -566,31 +566,6 @@ static void ts_off(void *lo) {
 	}
 }
 
-/* zrt_trace_waiter_mapped reports whether w lies in a stack that is still mapped. The
- * scheduler's own stack is not one of these — a waiter only ever lives on a coroutine's —
- * so an address outside every range is a dead one. */
-bool zrt_trace_waiter_mapped(void *w) {
-	tw_ensure();
-	zrt_mutex_lock(&g_tw_lock);
-	bool ok = false;
-	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
-		char *lo = (char *)g_ts_lo[i];
-		if (lo != NULL && (char *)w >= lo && (char *)w < lo + g_ts_len[i]) {
-			ok = true;
-			break;
-		}
-	}
-	zrt_mutex_unlock(&g_tw_lock);
-	return ok;
-}
-
-/* zrt_trace_dead_waiter prints the ranges it checked against, not just the verdict.
- *
- * "This pointer is in no live stack" has two readings and the verdict alone cannot separate
- * them: the waiter really is dead, or the registry never learned about its stack. The
- * ranges say which — a plausible set with the waiter outside all of them is the first, and
- * a set that is obviously too small is the second. Bounded output: one line per live
- * coroutine, and a program that has hundreds is telling you something too. */
 /* --- a queue's recent history (ZRT_TRACE only) --------------------------------
  *
  * The head holds a pointer that is in no coroutine stack: not a stale waiter, a WILD value.
@@ -633,25 +608,6 @@ static void hist_dump(void *q) {
 	if (shown == 0) {
 		fprintf(stderr, "[zrt]   ... NO operation was ever recorded on this queue\n");
 	}
-}
-
-void zrt_trace_dead_waiter(void *q, void *w) {
-	fprintf(stderr, "[zrt] DEAD WAITER q=%p w=%p — the queue head is in no live coroutine stack\n", q, w);
-	zrt_mutex_lock(&g_tw_lock);
-	int n = 0;
-	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
-		if (g_ts_lo[i] != NULL) {
-			fprintf(stderr, "[zrt]   live stack [%p,%p)\n", g_ts_lo[i],
-			        (void *)((char *)g_ts_lo[i] + g_ts_len[i]));
-			n++;
-		}
-	}
-	fprintf(stderr, "[zrt]   %d live stacks registered; the waiter is in none of them\n", n);
-	fprintf(stderr, "[zrt]   most recent operations on this queue, newest first:\n");
-	hist_dump(q);
-	zrt_mutex_unlock(&g_tw_lock);
-	fflush(stderr);
-	abort();
 }
 
 void zrt_trace_stale(void *q, void *w) {

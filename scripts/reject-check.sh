@@ -1349,7 +1349,7 @@ EOF
 # nothing at all. This is a LANGUAGE rule and no future feature makes it legal, which is why
 # it lives here and not with the not-yet-built forms next door.
 
-reject impl-misses-a-required-member 'does not implement `show`' no-place seed-gap <<'EOF'
+reject impl-misses-a-required-member 'does not implement `show`' seed-gap <<'EOF'
 struct P {
 	n: int
 }
@@ -1366,7 +1366,7 @@ fn main() {
 }
 EOF
 
-reject impl-misses-one-of-two 'does not implement `tag`' no-place seed-gap <<'EOF'
+reject impl-misses-one-of-two 'does not implement `tag`' seed-gap <<'EOF'
 struct P {
 	n: int
 }
@@ -1384,6 +1384,399 @@ impl Show for P {
 
 fn main() {
 	print("x")
+}
+EOF
+
+# --- and a member that is there but is not the one the spec asked for -------------
+#
+# A spec guarantees a SIGNATURE. The check compared NAMES — a spec was a token scan into a
+# comma-joined list of them — so every one of these compiled and ran:
+#
+#   fn tag() -> str          satisfying   fn tag(n: int) -> int
+#   spec Ord: Eq             requiring    nothing at all of Eq
+#   impl Nope for A          naming       a spec that does not exist
+#
+# Position matters because Zerg has positional calls: if the order were free, every call
+# through a spec would have to be written with named arguments.
+
+reject impl-returns-the-wrong-type 'it returns str, and the spec declares int' seed-gap <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag() -> str {
+		return "x"
+	}
+}
+
+fn main() {
+	print(A(1).tag())
+}
+EOF
+
+reject impl-takes-the-wrong-count 'it takes 0 arguments, and the spec declares 1' seed-gap <<'EOF'
+spec Tag {
+	fn tag(n: int) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print(A(1).tag())
+}
+EOF
+
+reject impl-renames-a-parameter 'a named argument selects by that name' seed-gap <<'EOF'
+spec Tag {
+	fn tag(n: int) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag(m: int) -> int {
+		return m
+	}
+}
+
+fn main() {
+	print(A(1).tag(2))
+}
+EOF
+
+reject impl-drops-the-by-ref 'is not `mut &` and the spec' seed-gap <<'EOF'
+spec Tag {
+	fn tag(mut &n: int) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag(n: int) -> int {
+		return n
+	}
+}
+
+fn main() {
+	mut k := 1
+	print(A(1).tag(k))
+}
+EOF
+
+reject impl-adds-a-default 'has a default and the spec declares none' seed-gap <<'EOF'
+spec Tag {
+	fn tag(n: int) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag(n: int = 5) -> int {
+		return n
+	}
+}
+
+fn main() {
+	print(A(1).tag(2))
+}
+EOF
+
+reject impl-drops-the-mut-fn 'it is not a `mut fn` and the spec' seed-gap <<'EOF'
+spec Bump {
+	mut fn bump() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Bump for A {
+	fn bump() -> int {
+		return 2
+	}
+}
+
+fn main() {
+	mut a := A(1)
+	print(f"{a.bump()}")
+}
+EOF
+
+reject impl-adds-a-mut-fn 'it is a `mut fn` and the spec' <<'EOF'
+spec Bump {
+	fn bump() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Bump for A {
+	mut fn bump() -> int {
+		return 2
+	}
+}
+
+fn main() {
+	mut a := A(1)
+	print(f"{a.bump()}")
+}
+EOF
+
+reject impl-breaks-the-self-type 'parameter `other` is int, and the spec declares A' seed-gap <<'EOF'
+spec Eq {
+	fn eq(other: This) -> bool
+}
+
+struct A {
+	v: int
+}
+
+impl Eq for A {
+	fn eq(other: int) -> bool {
+		return this.v == other
+	}
+}
+
+fn main() {
+	print(A(1).eq(1))
+}
+EOF
+
+reject impl-breaks-a-spec-parameter 'parameter `k` is str, and the spec declares int' <<'EOF'
+spec Ix[K] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Ix[int] for A {
+	fn at(k: str) -> int {
+		return this.v
+	}
+}
+
+fn main() {
+	print(A(1).at("x"))
+}
+EOF
+
+reject super-spec-is-not-satisfied 'does not implement `eq`, which `Eq` requires' <<'EOF'
+spec Eq {
+	fn eq() -> bool
+}
+
+spec Ord: Eq {
+	fn lt() -> bool
+}
+
+struct A {
+	v: int
+}
+
+impl Ord for A {
+	fn lt() -> bool {
+		return false
+	}
+}
+
+fn main() {
+	print(A(1).lt())
+}
+EOF
+
+reject impl-of-a-spec-that-does-not-exist 'no spec named `Nope`' <<'EOF'
+struct A {
+	v: int
+}
+
+impl Nope for A {
+	fn f() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print(A(1).f())
+}
+EOF
+
+reject a-type-declares-a-method-twice 'declares `tag` twice' no-place <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag() -> int {
+		return 1
+	}
+}
+
+impl Tag for A {
+	fn tag() -> int {
+		return 2
+	}
+}
+
+fn main() {
+	print(A(1).tag())
+}
+EOF
+
+reject impl-does-not-bind-a-spec-parameter 'is parameterized by K' <<'EOF'
+spec Ix[K] {
+	fn at(k: K) -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Ix for A {
+	fn at(k: int) -> int {
+		return k
+	}
+}
+
+fn main() {
+	print(A(1).at(2))
+}
+EOF
+
+# --- a type name is one name -----------------------------------------------------
+#
+# A struct, an enum and a spec share one namespace — every module flattens into one scope
+# here, which is the argument that already refuses a duplicate function and a duplicate
+# module constant. Nothing checked it, and the shapes failed four different ways: two
+# structs MERGED into one of both their fields, two of the same reached cc as a "typedef
+# redefinition" against .zerg-cache, and two specs were simply accepted.
+
+reject a-struct-declared-twice 'is declared twice' no-place <<'EOF'
+struct A {
+	v: int
+}
+
+struct A {
+	w: str
+}
+
+fn main() {
+	print(f"{A(7).v}")
+}
+EOF
+
+reject an-enum-declared-twice 'is declared twice' no-place seed-gap <<'EOF'
+enum E {
+	X
+}
+
+enum E {
+	Y
+}
+
+fn main() {
+	print(f"{int(E.X)}")
+}
+EOF
+
+reject a-spec-declared-twice 'is declared twice' seed-gap <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+spec Tag {
+	fn other() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print(f"{A(1).tag()}")
+}
+EOF
+
+reject a-struct-and-a-spec-share-a-name 'once as a struct, once as a spec' seed-gap <<'EOF'
+struct A {
+	v: int
+}
+
+spec A {
+	fn f() -> int
+}
+
+fn main() {
+	print(f"{A(1).v}")
+}
+EOF
+
+# and one level down, where the same question has the same answer and three more ways of
+# going wrong: a repeated FIELD and a repeated PARAMETER both reached cc as a C redefinition
+# against .zerg-cache, and a repeated VARIANT was accepted — the second took the next
+# discriminant, so it was unreachable, and a `match` naming the first was "exhaustive" over
+# an enum that had two.
+
+reject a-field-declared-twice 'declares a field named `v` twice' no-place seed-gap <<'EOF'
+struct A {
+	v: int
+	v: str
+}
+
+fn main() {
+	print("x")
+}
+EOF
+
+reject a-variant-declared-twice 'declares a variant named `X` twice' no-place seed-gap <<'EOF'
+enum E {
+	X
+	X
+}
+
+fn main() {
+	print(f"{int(E.X)}")
+}
+EOF
+
+reject a-parameter-declared-twice 'declares a parameter named `a` twice' <<'EOF'
+fn f(a: int, a: int) -> int {
+	return a
+}
+
+fn main() {
+	print(f"{f(1, 2)}")
 }
 EOF
 

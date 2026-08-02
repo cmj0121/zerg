@@ -1,0 +1,5 @@
+# The spec lives in its own module, so the `impl` next door is checked against a
+# declaration the file it is written in cannot see.
+pub spec Tag {
+	fn tag(n: int) -> int
+}

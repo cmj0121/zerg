@@ -352,10 +352,49 @@ struct EnumDecl {
 # function declarations in source order. Imports are kept (rather than skipped with the
 # rest of the out-of-subset surface) because the driver resolves them into the source
 # list it compiles, and the linter reports the ones nothing uses.
+# SpecDecl is a `spec` declaration: the name, its own type parameters, the specs it
+# extends, and the members it requires — as FULL SIGNATURES, parsed by the same code that
+# parses an `impl`'s.
+#
+# It used to be a comma-joined string of member NAMES, produced by a token scanner that
+# read the body as soup: the super-spec after `:` was swallowed whole, and a required
+# member was satisfied by anything sharing its name, so `fn tag() -> str` satisfied
+# `fn tag(n: int) -> int`. A signature is what a spec promises, so a signature is what it
+# has to carry.
+#
+# `reqs` are FnDecls with an empty body, because that is exactly what a `fn-sig` is.
+struct SpecDecl {
+	name: str
+	params: list[str]
+	supers: list[str]
+	reqs: list[FnDecl]
+
+	path: str
+	line: int
+	col: int
+}
+
+# ImplDecl is an `impl Spec[args] for Target` head. The ARGS are kept: a parameterized
+# spec counts its parameters into the (spec, type) pair (docs/core/specs.md), so they are
+# both what the coherence key needs and what says which type the spec's `K` stands for
+# when a required signature is compared against what the impl supplies.
+struct ImplDecl {
+	# `spec` is a keyword, so the field cannot be called that
+	on: str
+	args: list[Ty]
+	target: str
+
+	path: str
+	line: int
+	col: int
+}
+
 pub struct File {
 	imports: list[str]
 	structs: list[StructDecl]
 	enums: list[EnumDecl]
+	specs: list[SpecDecl]
+	impls: list[ImplDecl]
 	fns: list[FnDecl]
 
 	# consts are the module-level `const` bindings, each an SLet. They are not statements

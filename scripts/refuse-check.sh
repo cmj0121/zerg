@@ -700,6 +700,101 @@ fn main() {
 }
 EOF
 
+# A `spec` HAS three roles (docs/core/specs.md): the bound on a generic parameter, the
+# interface a type conforms to, and a TYPE in its own right. The third is not built, and
+# saying "no type named `Tag`" about a spec declared three lines above invited the reader to
+# go and declare it again. An `impl` on a primitive is the same shape of answer.
+
+expect "$ZERG" spec-used-as-a-type "NotImplemented: the \`spec\` \`Tag\` used as a TYPE" <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Tag for A {
+	fn tag() -> int {
+		return this.v
+	}
+}
+
+fn show(t: Tag) -> int {
+	return t.tag()
+}
+
+fn main() {
+	print show(A(7))
+}
+EOF
+
+expect "$ZERG" impl-on-a-primitive "NotImplemented: an \`impl\` on the built-in type \`int\`" <<'EOF'
+spec Tag {
+	fn tag() -> int
+}
+
+impl Tag for int {
+	fn tag() -> int {
+		return 1
+	}
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" associated-type-in-a-spec "NotImplemented: an associated type in a \`spec\`" <<'EOF'
+spec It {
+	type Item
+
+	fn get() -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" associated-value-in-a-spec "NotImplemented: an associated value in a \`spec\`" <<'EOF'
+spec Bits {
+	BITS: int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" parameterized-super-spec "NotImplemented: a parameterized \`Eq[…]\` as a super-spec" <<'EOF'
+spec Eq[T] {
+	fn eq(o: T) -> bool
+}
+
+spec Ord: Eq[int] {
+	fn lt() -> bool
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" parameterized-bound "NotImplemented: a parameterized \`Eq[…]\` as a type parameter" <<'EOF'
+spec Eq[T] {
+	fn eq(o: T) -> bool
+}
+
+spec Ix[K: Eq[int]] {
+	fn at(k: K) -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # A CALLEE THAT IS NOT A NAME. Three forms reached the emitter as `ECall("", args)` and were
 # reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
 # no typo in it. They are one root cause and three separate unbuilt features.

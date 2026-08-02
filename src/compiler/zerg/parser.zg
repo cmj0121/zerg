@@ -19,17 +19,6 @@ struct Parser {
 	# path is the file being read, stamped onto every FnDecl so a diagnostic can name it
 	path: str
 
-	# spec_name / spec_reqs are the required members of each `spec` read so far, one entry
-	# per spec, its members joined by `,`. A spec is otherwise read and DROPPED — it is not
-	# a type and nothing dispatches on it — and that made `impl Show for P { }` compile with
-	# no `show` at all. Enforcing the members is the least a declared interface can mean.
-	spec_name: list[str]
-	spec_reqs: list[str]
-
-	# impl_spec / impl_type are the `impl S for T` heads seen, checked after the whole file
-	# is read: a member may be supplied by a separate inherent block anywhere in it.
-	impl_spec: list[str]
-	impl_type: list[str]
 }
 
 fn cur(mut &p: Parser) -> Token {
@@ -286,6 +275,46 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	return TNamed(name)
 }
 
+# parse_bound reads a `bound` — `Spec` or `A + B + C` (GRAMMAR:545) — into the spec names
+# it conjoins, dropping each one's type arguments. It is the same production after a type
+# parameter's `:` and after a spec's, which is why one function reads both.
+fn parse_bound(mut &p: Parser, whose: str) -> list[str] {
+	mut out: list[str] = []
+	for p_at(p, Ident) {
+		name := cur(p).lexeme
+		p_advance(p)
+
+		# A super's or a bound's own TYPE ARGUMENTS are not carried. Dropping them silently
+		# left the named spec's parameters unsubstituted, so `spec Ord: Eq[int]` refused
+		# every correct `impl Ord` with "parameter `o` is int, and the spec declares T" —
+		# a valid program turned away for a reason that is about the compiler.
+		raise f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl`, so it has nothing to substitute the parameters with here" if p_at(p, LBrack)
+
+		out.append(name)
+		return out if not p_at(p, Plus)
+
+		p_advance(p) # '+'
+	}
+	return out
+}
+
+# parse_ty_args reads a `[ T, … ]` type-argument list into the types it names, leaving the
+# stream on the token after the `]`. skip_ty_args below consumes the same shape and answers
+# nothing, which is right where the arguments are erased; an `impl`'s are not.
+fn parse_ty_args(mut &p: Parser) -> list[Ty] {
+	mut out: list[Ty] = []
+	return out if not p_at(p, LBrack)
+	p_advance(p) # '['
+	for not p_at(p, RBrack) and not p_at(p, Eof) {
+		out.append(parse_type(p))
+		if p_at(p, Comma) {
+			p_advance(p)
+		}
+	}
+	expect(p, RBrack)
+	return out
+}
+
 # skip_ty_args consumes a balanced `[ … ]` type-argument list, if one is next. Nesting is
 # counted rather than assumed one deep, so `Pair[list[int], B[T]]` leaves the stream on the
 # token after the outer `]`.
@@ -333,10 +362,12 @@ pub fn parse(src: str) -> File {
 # so a diagnostic can name the file it was written in.
 pub fn parse_at(src: str, path: str) -> File {
 	toks := tokenize(src)
-	mut p := Parser(toks, 0, "", path, [], [], [], [])
+	mut p := Parser(toks, 0, "", path)
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
+	mut specs: list[SpecDecl] = []
+	mut impls: list[ImplDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
 	skip_semis(p)
@@ -356,7 +387,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Enum) {
 			enums.append(parse_enum(p))
 		} else if p_at(p, Spec) {
-			parse_spec(p)
+			specs.append(parse_spec(p))
 		} else if p_at(p, Const) {
 			# `const` at the top level is a module constant, not a statement: it becomes a
 			# C global rather than a local of any function
@@ -365,7 +396,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Init) {
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
-			parse_impl(p, fns)
+			parse_impl(p, fns, impls)
 		} else if p_at(p, Hash) {
 			parse_decorator(p)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
@@ -379,8 +410,13 @@ pub fn parse_at(src: str, path: str) -> File {
 		}
 		skip_semis(p)
 	}
-	chk_impl_covers(p, fns)
-	return File(imports, structs, enums, fns, consts)
+
+	# The `impl` check is NOT here. A spec may be declared in another file of the same
+	# module, or in an imported one, and this function sees one file — so checking here had
+	# to skip any spec it had not itself read, which is why `impl Nope for A` compiled. The
+	# driver already builds the whole-program view (`merge_asts`), and that is where the
+	# question can be answered; see chk_spec_impls.
+	return File(imports, structs, enums, specs, impls, fns, consts)
 }
 
 # imports_of returns just the import paths of a source, for the driver's module loader:
@@ -587,70 +623,94 @@ fn parse_map_lit(mut &p: Parser) -> Expr {
 # top-level function with no block; the emitter then wrote a non-void C function with an
 # empty body, which is undefined behaviour that only warns.
 #
-# Provided default methods inside a spec are not supported yet and are skipped with the
-# rest of the block.
-# A `spec` is READ AND DROPPED: its required members are not enforced on an `impl`, its
-# associated types and values are not bound, and it is not a type. That is one unbuilt
-# feature and it is quiet, which the corpus records — `dyn_witness` and `spec_bound` are
-# among the cases awaiting it.
+# parse_spec reads a `spec` declaration — its name, its own type parameters, the specs it
+# extends, and each required member's SIGNATURE.
 #
-# A PROVIDED member is the half that cannot stay quiet. A signature that is dropped loses
-# enforcement; a BODY that is dropped is code on the page that is never compiled, so
-# nothing in it is checked — a `this.x` naming a field no implementor has, a call to a
-# function that does not exist, a type error. It reads like the method that will run and is
-# not, which is the shape this compiler turns away by name everywhere else.
-fn parse_spec(mut &p: Parser) {
+# It used to be a token scanner. The header loop ran to the `{` keeping the first Ident as
+# the name, which swallowed the super-spec after `:` whole; the body loop kept the Ident
+# after each `fn` and dropped everything else. So a spec was a name and a list of method
+# names, and every guarantee beyond "something with this name exists" was imaginary:
+# `fn tag() -> str` satisfied `fn tag(n: int) -> int`, and `spec Ord: Eq` required nothing
+# of `Eq`.
+#
+# The members are read by parse_fn_head — the same code an `impl`'s methods go through — so
+# what a spec requires and what an impl supplies are the same kind of object.
+#
+# A PROVIDED member (a signature carrying a body) is still refused. A signature that is
+# dropped loses enforcement; a BODY that is dropped is code on the page that is never
+# compiled, so nothing in it is checked — a `this.x` naming a field no implementor has, a
+# call to a function that does not exist, a type error. It reads like the method that will
+# run and is not, which is the shape this compiler turns away by name everywhere else.
+fn parse_spec(mut &p: Parser) -> SpecDecl {
+	kw := cur(p)
 	p_advance(p) # 'spec'
-	mut sname := ""
-	for not p_at(p, LBrace) and not p_at(p, Eof) {
-		if p_at(p, Ident) and sname == "" {
-			sname = cur(p).lexeme
-		}
+	name := p_name(p, "a spec")
+
+	# `spec Ix[K]` and `spec Ix[K: Ord]` — the spec's OWN type parameters. They are what a
+	# required signature's `K` stands for, and an `impl Ix[int]` says which type that is.
+	#
+	# The BOUND is read and dropped: nothing here checks that the argument satisfies it, and
+	# collecting every bare identifier instead made `[K: Ord]` two parameters, so a correct
+	# `impl Ix[int] for A` was told the spec is "parameterized by K, Ord".
+	mut params: list[str] = []
+	if p_at(p, LBrack) {
 		p_advance(p)
-	}
-	return if p_at(p, Eof)
-
-	mut reqs := ""
-
-	p_advance(p) # '{'
-	mut depth := 1
-	mut in_sig := false
-	for not p_at(p, Eof) {
-		if p_at(p, Fn) {
-			in_sig = true
-			if peek_kind(p, 1) == Ident {
-				if reqs != "" {
-					reqs = reqs + ","
-				}
-				reqs = reqs + p.toks[p.pos + 1].lexeme
-			}
-		} else if p_at(p, LBrace) {
-			raise "NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature and write the body in each `impl`" if in_sig and depth == 1
-			depth = depth + 1
-		} else if p_at(p, RBrace) {
-			depth = depth - 1
-			if depth == 0 {
+		for not p_at(p, RBrack) and not p_at(p, Eof) {
+			params.append(p_name(p, "a spec's type parameter"))
+			if p_at(p, Colon) {
 				p_advance(p)
-				p.spec_name.append(sname)
-				p.spec_reqs.append(reqs)
-				return
+				parse_bound(p, "a type parameter's bound")
 			}
-		} else if p_at(p, Semi) {
-			in_sig = false
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
 		}
-		p_advance(p)
+		expect(p, RBrack)
 	}
-}
 
-# p_spec_reqs is what a spec requires, or "" for a name no `spec` in this file declared —
-# one from another module, which this compiler cannot see and does not guess about.
-fn p_spec_reqs(mut &p: Parser, name: str) -> str {
-	mut i := 0
-	for i < p.spec_name.len() {
-		return p.spec_reqs[i] if p.spec_name[i] == name
-		i = i + 1
+	# `spec Ord: Eq + Hash` — a SUPER-SPEC (GRAMMAR:544), a conjunction. An `impl Ord` must
+	# satisfy every one of them; the whole clause used to be swallowed by the scan for `{`.
+	#
+	# `spec Ord: Eq[int]` used to make `int` a SECOND super, so the impl was told `Ord`
+	# extends a spec named `int`. It is named rather than dropped — see parse_bound.
+	mut supers: list[str] = []
+	if p_at(p, Colon) {
+		p_advance(p)
+		supers = parse_bound(p, "a super-spec")
 	}
-	return ""
+
+	expect(p, LBrace)
+	skip_semis(p)
+	mut reqs: list[FnDecl] = []
+	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		# `mut fn` is part of a fn-sig (GRAMMAR:599), and it is INTERFACE: a `mut fn` method
+		# mutates its receiver, so calling it needs a `mut` binding. Dropping the token made
+		# the requirement silent in both directions — a spec asking for `mut fn` was
+		# satisfied by a plain one, and a plain one by a `mut fn`.
+		mut recv_mut := false
+		if p_at(p, Mut) and peek_kind(p, 1) == Fn {
+			p_advance(p)
+			recv_mut = true
+		}
+		if p_at(p, Fn) {
+			# The receiver is `This` — the implementing type, which is not known here. Giving
+			# it a name makes a required signature the same SHAPE as a supplied one, so the
+			# two are compared position for position with nothing to offset.
+			sig := parse_fn_head(p, false, "This", recv_mut)
+			raise f"NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`" if p_at(p, LBrace)
+
+			reqs.append(sig)
+		} else if p_at(p, Type) {
+			raise "NotImplemented: an associated type in a `spec` — `type Item` names a type each impl chooses, and nothing here binds one"
+		} else if p_at(p, Ident) and peek_kind(p, 1) == Colon {
+			raise f"NotImplemented: an associated value in a `spec` — `{cur(p).lexeme}: T` asks each impl for a compile-time constant, and nothing here binds one"
+		} else {
+			p_advance(p)
+		}
+		skip_semis(p)
+	}
+	expect(p, RBrace)
+	return SpecDecl(name, params, supers, reqs, p.path, kw.line, kw.col)
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
@@ -893,56 +953,31 @@ fn parse_decorator(mut &p: Parser) {
 	expect(p, RBrack)
 }
 
-# parse_impl reads an `impl T { … }` block and appends its methods to the file's flat
-# function list, each carrying `T` as its receiver.
-#
-# The type is taken as the LAST type name before the `{`, at bracket depth zero. That one
-# rule reads all three spellings the grammar allows — `impl T`, `impl T[A]`, and the spec
-# form `impl Spec for T` — and lands on T in every one of them, which matters because the
-# methods belong to T in all three.
-# p_for_after_args reports whether a `for` follows the bracket group starting at the next
-# token — `impl Show[int] for P`, where the spec name carries type arguments.
-fn p_for_after_args(mut &p: Parser) -> bool {
-	mut i := p.pos + 1
-	mut d := 0
-	for i < p.toks.len() {
-		k := p.toks[i].kind
-		if k == LBrack {
-			d = d + 1
-		} else if k == RBrack {
-			d = d - 1
-			return p.toks[i + 1].kind == For if d == 0
-		} else if k == LBrace or k == Eof {
-			return false
-		}
-		i = i + 1
-	}
-	return false
-}
-
-fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
+fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
+	kw := cur(p)
 	p_advance(p) # 'impl'
-	mut target := ""
+
+	# THE HEAD IS PARSED, not scanned. It used to be a loop counting brackets to find the
+	# name that `for` follows, with a second lookahead (`p_for_after_args`) to fake the
+	# question "are these type arguments, and does a `for` come after them?" — which a parse
+	# simply answers by reading them.
+	#
+	# `impl Spec[args] for Target` and `impl Target` are the same three steps: a name, an
+	# optional type-argument list, and then `for` deciding which of the two the name was.
+	mut first := p_name(p, "an `impl`")
+	mut args := parse_ty_args(p)
 	mut sp := ""
-	mut depth := 0
-	for not p_at(p, Eof) and not (p_at(p, LBrace) and depth == 0) {
-		if p_at(p, LBrack) {
-			depth = depth + 1
-		} else if p_at(p, RBrack) {
-			depth = depth - 1
-		} else if depth == 0 and p_at(p, Ident) {
-			# `impl Spec for T` — the LAST name is the target, and the spec is the name
-			# `for` follows. The same one rule reads `impl T` and `impl T[A]`, where there
-			# is no `for` and so no spec.
-			# the spec is the name `for` follows — across its TYPE ARGUMENTS if it has
-			# any. Asking only about the next token dropped `impl Show[int] for P` back to
-			# no spec at all, so the member check was skipped for it entirely.
-			if peek_kind(p, 1) == For or (peek_kind(p, 1) == LBrack and p_for_after_args(p)) {
-				sp = cur(p).lexeme
-			}
-			target = cur(p).lexeme
-		}
+	mut target := first
+	if p_at(p, For) {
 		p_advance(p)
+		sp = first
+
+		# the TARGET's own arguments are erased, as every type's are here
+		target = p_name(p, "an `impl … for …` target")
+		skip_ty_args(p)
+	}
+	if sp != "" {
+		impls.append(ImplDecl(sp, args, target, p.path, kw.line, kw.col))
 	}
 	expect(p, LBrace)
 	skip_semis(p)
@@ -984,63 +1019,20 @@ fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl]) {
 	}
 	expect(p, RBrace)
 	p.impl_ty = outer
-
-	# the impl is RECORDED and checked once the whole file is read. Checking it here made
-	# the answer depend on declaration order: a member supplied by a separate inherent
-	# block later in the file had not been parsed yet, so a valid program was refused for
-	# where its blocks happened to sit.
-	if sp != "" {
-		p.impl_spec.append(sp)
-		p.impl_type.append(target)
-	}
-}
-
-# chk_impl_covers raises when an `impl Spec for T` leaves one of the spec's members out. A
-# spec this file never declared is left alone: it is from another module, which this
-# compiler cannot see and does not guess about.
-fn chk_impl_covers(mut &p: Parser, mut &fns: list[FnDecl]) {
-	mut i := 0
-	for i < p.impl_spec.len() {
-		sp := p.impl_spec[i]
-		target := p.impl_type[i]
-		reqs := p_spec_reqs(p, sp)
-
-		# a spec this file never declared is left alone: it is from another module, which
-		# this compiler cannot see, and guessing there would refuse a working program
-		if reqs != "" {
-			for want in split_commas(reqs) {
-				raise f"`{target}` does not implement `{want}`, which `{sp}` requires" if not impl_has(fns, target, want)
-			}
-		}
-		i = i + 1
-	}
-}
-
-fn impl_has(mut &fns: list[FnDecl], target: str, name: str) -> bool {
-	for f in fns {
-		return true if f.recv == target and f.name == name
-	}
-	return false
-}
-
-fn split_commas(s: str) -> list[str] {
-	mut out: list[str] = []
-	mut cur := ""
-	for b in list[byte](s) {
-		if b == b',' {
-			out.append(cur)
-			cur = ""
-		} else {
-			cur = cur + str([b])
-		}
-	}
-	if cur != "" {
-		out.append(cur)
-	}
-	return out
 }
 
 fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
+	head := parse_fn_head(p, is_pub, recv, recv_mut)
+	body := parse_block(p)
+
+	return FnDecl(head.name, head.recv, head.params, head.has_ret, head.ret, body, head.is_pub, head.path, head.line, head.col)
+}
+
+# parse_fn_head reads a function's SIGNATURE and stops before its body, answering a FnDecl
+# whose body is empty. That is exactly a `fn-sig`, which is what a `spec` member is — so a
+# spec's requirement and an impl's supply are read by one piece of code, and a comparison
+# between them is a comparison of like with like rather than of two parsers' opinions.
+fn parse_fn_head(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
 	# where the declaration BEGINS, read before anything is consumed: a diagnostic about the
 	# signature is made before any statement is emitted, so no SAt marker has spoken yet
 	kw := cur(p)
@@ -1099,8 +1091,8 @@ fn parse_fn(mut &p: Parser, is_pub: bool, recv: str, recv_mut: bool) -> FnDecl {
 		ret = parse_type(p)
 		has_ret = true
 	}
-	body := parse_block(p)
-	return FnDecl(name, recv, params, has_ret, ret, body, is_pub, p.path, kw.line, kw.col)
+	mut none: list[Stmt] = []
+	return FnDecl(name, recv, params, has_ret, ret, none, is_pub, p.path, kw.line, kw.col)
 }
 
 fn parse_block(mut &p: Parser) -> list[Stmt] {
@@ -2202,7 +2194,7 @@ fn fstr_hole(mut &p: Parser, hole: str) -> Expr {
 	fstr_reject(hole)
 
 	toks := tokenize(hole)
-	mut hp := Parser(toks, 0, p.impl_ty, p.path, [], [], [], [])
+	mut hp := Parser(toks, 0, p.impl_ty, p.path)
 	e := parse_expr(hp)
 
 	# a hole is ONE expression; emitting just the prefix of something longer is exactly the

@@ -82,6 +82,10 @@ struct Emitter {
 	fld_name: list[str]
 	fld_ty: list[Ty]
 	enum_names: list[str]
+
+	# spec_names is every `spec` the program declares, so a name that fails to resolve as a
+	# TYPE can say which of the two it is: a spec used where a type goes, or a typo.
+	spec_names: list[str]
 	var_name: list[str]
 	var_enum: list[str]
 	var_tag: list[int]
@@ -1083,12 +1087,23 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 		fn_i := f.fns[i]
 		key := c_sig_key(fn_i.recv, fn_i.name)
 
-		# Every module of a program flattens into ONE scope here, so two modules that define
-		# the same function name mangle to the same C symbol. That used to be reported by the
-		# LINKER — `duplicate symbol '_zg_name'`, with no file and no line — which is one
-		# reporter further away than cc. The collision is named here instead, where the two
-		# declarations are both in hand.
-		raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart" if c_sig_seen(em, key)
+		# A NAME DECLARED TWICE, and the two halves of that are different rules.
+		#
+		# On a TYPE it is the language's: "Every method and associated fn on a type shares
+		# one namespace, spec or inherent alike; a duplicate is an error" (GRAMMAR:498) —
+		# which is also how a second `impl Spec for T` arrives, since a type has one
+		# canonical implementation of a spec (docs/core/specs.md). It used to be reported as
+		# two modules colliding, about one module and one type.
+		#
+		# For a FREE function it is this compiler's: every module flattens into one scope
+		# here, so two modules declaring one name mangle to the same C symbol. That used to
+		# be reported by the LINKER — `duplicate symbol '_zg_name'`, no file, no line — one
+		# reporter further away than cc.
+		if c_sig_seen(em, key) {
+			raise f"`{fn_i.recv}` declares `{fn_i.name}` twice — every method on a type shares one namespace, spec or inherent alike, and a type has one canonical implementation of a spec" if fn_i.recv != ""
+
+			raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart"
+		}
 		em.sig_names.append(key)
 		em.sig_rets.append(fn_i.ret)
 		em.sig_hasret.append(fn_i.has_ret)
@@ -1475,6 +1490,13 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 		em.at_path = fn_i.path
 		em.at_line = fn_i.line
 		em.at_col = fn_i.col
+
+		# an `impl` on a PRIMITIVE arrives as a synthesized `this` of that type, and that is
+		# knowable here and nowhere below: `c_check_type_name` sees a name and a site string,
+		# so it had to claim "an `impl` on the built-in type" for any site and then print the
+		# site it was given — `… `int` (parameter `this` of `tag`)`.
+		raise f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver" if fn_i.recv != "" and is_conv(fn_i.recv)
+
 		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {
 			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`")
@@ -1526,6 +1548,13 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
 		chk_at(em, f"`This` is the self type, and {site} is outside an `impl` — there is no type for it to name")
 		return
 	}
+
+	# A `spec` IS a type in the language — the third of the three roles docs/core/specs.md
+	# gives it, beside the bound and the interface — and this compiler has not built that
+	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
+	# invites them to go and declare it again.
+	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
+
 	raise f"no type named `{nm}` ({site})"
 }
 
@@ -1562,6 +1591,107 @@ fn c_scan_fnptr(mut &em: Emitter, f: File) {
 			}
 		}
 	}
+}
+
+# c_build_type_names refuses a NAME DECLARED TWICE at the type level.
+#
+# A `struct`, an `enum` and a `spec` share one namespace — every module of a program
+# flattens into one scope here, which is the same argument that already refuses a duplicate
+# function and a duplicate module constant. Nothing checked it, and the four shapes failed
+# four different ways:
+#
+#   struct A {v} + struct A {w}   MERGED into one struct of two fields; `A(7)` then wanted
+#                                 two arguments, a wrong answer with no diagnostic
+#   struct A {v} + struct A {v}   cc: "typedef redefinition", against .zerg-cache
+#   enum E + enum E               the same cc error
+#   spec T + spec T               silently ignored; the second's members required nothing
+#
+# It runs before the tables are built, so a later pass never sees the second declaration
+# and cannot be confused by it.
+fn c_build_type_names(mut &em: Emitter, f: File) {
+	mut seen: list[str] = []
+	mut kind: list[str] = []
+	for sd in f.structs {
+		c_check_type_dup(em, seen, kind, sd.name, "a struct", "", 0, 0)
+	}
+	for ed in f.enums {
+		c_check_type_dup(em, seen, kind, ed.name, "an enum", "", 0, 0)
+	}
+	for sp in f.specs {
+		# a SpecDecl knows WHERE it was written, and a rule that has a place uses it: it says
+		# where, and it accumulates rather than ending the run at the first finding. A
+		# struct, an enum, a field and a variant carry no place, so those still raise —
+		# `reject-check.sh` marks each of those cases `no-place`, which is the debt declared.
+		c_check_type_dup(em, seen, kind, sp.name, "a spec", sp.path, sp.line, sp.col)
+
+		# the spec table, filled by the walk that is already here rather than by a second
+		# pass over the same list
+		em.spec_names.append(sp.name)
+	}
+
+	# and one level down, where the same question has the same answer and three more ways
+	# of going wrong: a repeated FIELD and a repeated PARAMETER both reached cc as a C
+	# redefinition against .zerg-cache, and a repeated VARIANT was accepted — the second
+	# took the next discriminant, so it was unreachable, and a `match` naming the first was
+	# "exhaustive" over an enum that had two.
+	for sd in f.structs {
+		mut fnames: list[str] = []
+		for fd in sd.fields {
+			fnames.append(fd.name)
+		}
+		c_check_names_distinct(fnames, "a field", sd.name)
+	}
+	for ed in f.enums {
+		mut vnames: list[str] = []
+		for v in ed.variants {
+			vnames.append(v.name)
+		}
+		c_check_names_distinct(vnames, "a variant", ed.name)
+	}
+	for fn_i in f.fns {
+		# a FnDecl knows where it was written too
+		mut pseen: list[str] = []
+		for pm in fn_i.params {
+			if c_name_in(pseen, pm.name) {
+				chk_at_place(em, fn_i.path, fn_i.line, fn_i.col, f"`{fn_i.name}` declares a parameter named `{pm.name}` twice")
+			}
+			pseen.append(pm.name)
+		}
+	}
+}
+
+fn c_check_names_distinct(names: list[str], what: str, whose: str) {
+	mut seen: list[str] = []
+	for n in names {
+		raise f"`{whose}` declares {what} named `{n}` twice" if c_name_in(seen, n)
+
+		seen.append(n)
+	}
+}
+
+fn c_check_type_dup(mut &em: Emitter, mut &seen: list[str], mut &kind: list[str], name: str, what: str, path: str, line: int, col: int) {
+	mut i := 0
+	for i < seen.len() {
+		if seen[i] == name {
+			msg := c_dup_msg(name, kind[i], what)
+			if path != "" {
+				chk_at_place(em, path, line, col, msg)
+				return
+			}
+			raise msg
+		}
+		i = i + 1
+	}
+	seen.append(name)
+	kind.append(what)
+}
+
+# c_dup_msg is the one sentence, so a declaration that knows its place and one that does not
+# say the same thing about the same rule.
+fn c_dup_msg(name: str, prev: str, what: str) -> str {
+	return f"`{name}` is declared twice — once as {prev}, once as {what}" if prev != what
+
+	return f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
 }
 
 fn c_build_structs(mut &em: Emitter, f: File) {
@@ -6371,36 +6501,17 @@ pub fn merge_files(srcs: list[str]) -> File {
 # anything is emitted, and a diagnostic that cannot name the file is half an address; a
 # short `paths` list simply leaves the rest unnamed rather than being an error.
 pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
-	mut imports: list[str] = []
-	mut structs: list[StructDecl] = []
-	mut enums: list[EnumDecl] = []
-	mut fns: list[FnDecl] = []
-	mut consts: list[Stmt] = []
+	mut fs: list[File] = []
 	mut i := 0
 	for i < srcs.len() {
 		mut path := ""
 		if i < paths.len() {
 			path = paths[i]
 		}
-		f := parse_at(srcs[i], path)
-		for im in f.imports {
-			imports.append(im)
-		}
-		for s in f.structs {
-			structs.append(s)
-		}
-		for e in f.enums {
-			enums.append(e)
-		}
-		for fnd in f.fns {
-			fns.append(fnd)
-		}
-		for c in f.consts {
-			consts.append(c)
-		}
+		fs.append(parse_at(srcs[i], path))
 		i = i + 1
 	}
-	return File(imports, structs, enums, fns, consts)
+	return merge_asts(fs)
 }
 
 # emit_files lowers several sources to one C translation unit — the whole program in one
@@ -6446,6 +6557,8 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut imports: list[str] = []
 	mut structs: list[StructDecl] = []
 	mut enums: list[EnumDecl] = []
+	mut specs: list[SpecDecl] = []
+	mut impls: list[ImplDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
 	for f in fs {
@@ -6461,11 +6574,17 @@ pub fn merge_asts(fs: list[File]) -> File {
 		for e in f.enums {
 			enums.append(e)
 		}
+		for sp in f.specs {
+			specs.append(sp)
+		}
+		for ip in f.impls {
+			impls.append(ip)
+		}
 		for fnd in f.fns {
 			fns.append(fnd)
 		}
 	}
-	return File(imports, structs, enums, fns, consts)
+	return File(imports, structs, enums, specs, impls, fns, consts)
 }
 
 # c_emit_file lowers a parsed File. The body is generated first (so list use sets
@@ -6492,7 +6611,8 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # only the driver does.
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false)
+	c_build_type_names(em, f)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
@@ -6508,6 +6628,10 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	# the file. `b: str = later()` was refused or accepted depending on whether `later` was
 	# written above or below, which is the order-dependence the rule exists to remove.
 	c_check_defaults(em, f)
+
+	# and the specs, which need the same whole-program view for the same reason: an `impl`
+	# in one file names a spec declared in another, and the driver has already merged them
+	chk_spec_impls(em, f)
 
 	mut types := ""
 

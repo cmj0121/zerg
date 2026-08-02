@@ -389,6 +389,7 @@ var sysFloorIntrinsics = map[string]bool{
 	"__zrt_time_mono":  true,
 	"__zrt_platform":   true,
 	"__zrt_arch":       true,
+	"__zrt_exe_path":   true,
 	"__zrt_getenv":     true,
 	"__zrt_has_env":    true,
 	"__zrt_exit":       true,
@@ -417,6 +418,7 @@ var strProducingIntrinsics = map[string]bool{
 	"__zrt_getenv":   true,
 	"__zrt_platform": true,
 	"__zrt_arch":     true,
+	"__zrt_exe_path": true,
 }
 
 // programCallsIntrinsic reports whether the program lowers any intrinsic whose spelling
@@ -641,6 +643,8 @@ func (e *emitter) sysIntrinsicEmit(n *ast.Call) (string, bool) {
 			return "zrt_platform()", true
 		case "__zrt_arch":
 			return "zrt_arch()", true
+		case "__zrt_exe_path":
+			return "zrt_exe_path()", true
 		}
 		return "", false
 	}

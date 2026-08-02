@@ -106,8 +106,8 @@ The specification uses these terms precisely:
 - **Undefined behavior (UB)** — the spec places no requirement on the result. A conforming program must
   avoid it; a conforming implementation may do anything, including crash. Zerg's design goal is to have
   **no reachable UB from safe code**; where the bootstrap currently admits UB, the chapter marks it a
-  **[deviation]** (for example, integer overflow and division by zero lower to plain C today rather than
-  trapping — see [Types](core/types.md)).
+  **[deviation]** (for example, a coroutine stack overflow is a hardware fault rather than a clean
+  `StackOverflowError` — see [Errors](code/errors.md)).
 - **Implementation-defined** — the result is one of a set the implementation documents but the spec does
   not fix. A conforming program should not depend on a particular choice. Current implementation-defined
   points, each detailed in its chapter, include: the evaluation order of call arguments and operator

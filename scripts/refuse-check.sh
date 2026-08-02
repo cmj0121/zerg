@@ -767,6 +767,34 @@ fn main() {
 }
 EOF
 
+expect "$ZERG" parameterized-super-spec "NotImplemented: a parameterized \`Eq[…]\` as a super-spec" <<'EOF'
+spec Eq[T] {
+	fn eq(o: T) -> bool
+}
+
+spec Ord: Eq[int] {
+	fn lt() -> bool
+}
+
+fn main() {
+	print 1
+}
+EOF
+
+expect "$ZERG" parameterized-bound "NotImplemented: a parameterized \`Eq[…]\` as a type parameter" <<'EOF'
+spec Eq[T] {
+	fn eq(o: T) -> bool
+}
+
+spec Ix[K: Eq[int]] {
+	fn at(k: K) -> int
+}
+
+fn main() {
+	print 1
+}
+EOF
+
 # A CALLEE THAT IS NOT A NAME. Three forms reached the emitter as `ECall("", args)` and were
 # reported as ``undefined function ` ``` — an empty name, naming nothing, for a program with
 # no typo in it. They are one root cause and three separate unbuilt features.

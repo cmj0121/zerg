@@ -275,6 +275,29 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	return TNamed(name)
 }
 
+# parse_bound reads a `bound` — `Spec` or `A + B + C` (GRAMMAR:545) — into the spec names
+# it conjoins, dropping each one's type arguments. It is the same production after a type
+# parameter's `:` and after a spec's, which is why one function reads both.
+fn parse_bound(mut &p: Parser, whose: str) -> list[str] {
+	mut out: list[str] = []
+	for p_at(p, Ident) {
+		name := cur(p).lexeme
+		p_advance(p)
+
+		# A super's or a bound's own TYPE ARGUMENTS are not carried. Dropping them silently
+		# left the named spec's parameters unsubstituted, so `spec Ord: Eq[int]` refused
+		# every correct `impl Ord` with "parameter `o` is int, and the spec declares T" —
+		# a valid program turned away for a reason that is about the compiler.
+		raise f"NotImplemented: a parameterized `{name}[…]` as {whose} — this compiler carries a spec's type arguments only on an `impl`, so it has nothing to substitute the parameters with here" if p_at(p, LBrack)
+
+		out.append(name)
+		return out if not p_at(p, Plus)
+
+		p_advance(p) # '+'
+	}
+	return out
+}
+
 # parse_ty_args reads a `[ T, … ]` type-argument list into the types it names, leaving the
 # stream on the token after the `]`. skip_ty_args below consumes the same shape and answers
 # nothing, which is right where the arguments are erased; an `impl`'s are not.
@@ -623,31 +646,37 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	p_advance(p) # 'spec'
 	name := p_name(p, "a spec")
 
-	# `spec Ix[K]` — the spec's OWN type parameters. They are what a required signature's
-	# `K` stands for, and an `impl Ix[int]` says which type that is.
+	# `spec Ix[K]` and `spec Ix[K: Ord]` — the spec's OWN type parameters. They are what a
+	# required signature's `K` stands for, and an `impl Ix[int]` says which type that is.
+	#
+	# The BOUND is read and dropped: nothing here checks that the argument satisfies it, and
+	# collecting every bare identifier instead made `[K: Ord]` two parameters, so a correct
+	# `impl Ix[int] for A` was told the spec is "parameterized by K, Ord".
 	mut params: list[str] = []
 	if p_at(p, LBrack) {
 		p_advance(p)
 		for not p_at(p, RBrack) and not p_at(p, Eof) {
-			if p_at(p, Ident) {
-				params.append(cur(p).lexeme)
+			params.append(p_name(p, "a spec's type parameter"))
+			if p_at(p, Colon) {
+				p_advance(p)
+				parse_bound(p, "a type parameter's bound")
 			}
-			p_advance(p)
+			if p_at(p, Comma) {
+				p_advance(p)
+			}
 		}
 		expect(p, RBrack)
 	}
 
 	# `spec Ord: Eq + Hash` — a SUPER-SPEC (GRAMMAR:544), a conjunction. An `impl Ord` must
 	# satisfy every one of them; the whole clause used to be swallowed by the scan for `{`.
+	#
+	# `spec Ord: Eq[int]` used to make `int` a SECOND super, so the impl was told `Ord`
+	# extends a spec named `int`. It is named rather than dropped — see parse_bound.
 	mut supers: list[str] = []
 	if p_at(p, Colon) {
 		p_advance(p)
-		for not p_at(p, LBrace) and not p_at(p, Eof) {
-			if p_at(p, Ident) {
-				supers.append(cur(p).lexeme)
-			}
-			p_advance(p)
-		}
+		supers = parse_bound(p, "a super-spec")
 	}
 
 	expect(p, LBrace)
@@ -924,68 +953,28 @@ fn parse_decorator(mut &p: Parser) {
 	expect(p, RBrack)
 }
 
-# parse_impl reads an `impl T { … }` block and appends its methods to the file's flat
-# function list, each carrying `T` as its receiver.
-#
-# The type is taken as the LAST type name before the `{`, at bracket depth zero. That one
-# rule reads all three spellings the grammar allows — `impl T`, `impl T[A]`, and the spec
-# form `impl Spec for T` — and lands on T in every one of them, which matters because the
-# methods belong to T in all three.
-# p_for_after_args reports whether a `for` follows the bracket group starting at the next
-# token — `impl Show[int] for P`, where the spec name carries type arguments.
-fn p_for_after_args(mut &p: Parser) -> bool {
-	mut i := p.pos + 1
-	mut d := 0
-	for i < p.toks.len() {
-		k := p.toks[i].kind
-		if k == LBrack {
-			d = d + 1
-		} else if k == RBrack {
-			d = d - 1
-			return p.toks[i + 1].kind == For if d == 0
-		} else if k == LBrace or k == Eof {
-			return false
-		}
-		i = i + 1
-	}
-	return false
-}
-
 fn parse_impl(mut &p: Parser, mut &fns: list[FnDecl], mut &impls: list[ImplDecl]) {
 	kw := cur(p)
 	p_advance(p) # 'impl'
-	mut target := ""
-	mut sp := ""
-	mut args: list[Ty] = []
-	mut depth := 0
-	for not p_at(p, Eof) and not (p_at(p, LBrace) and depth == 0) {
-		if p_at(p, LBrack) {
-			depth = depth + 1
-		} else if p_at(p, RBrack) {
-			depth = depth - 1
-		} else if depth == 0 and p_at(p, Ident) {
-			# `impl Spec for T` — the LAST name is the target, and the spec is the name
-			# `for` follows. The same one rule reads `impl T` and `impl T[A]`, where there
-			# is no `for` and so no spec.
-			# the spec is the name `for` follows — across its TYPE ARGUMENTS if it has
-			# any. Asking only about the next token dropped `impl Show[int] for P` back to
-			# no spec at all, so the member check was skipped for it entirely.
-			if peek_kind(p, 1) == For or (peek_kind(p, 1) == LBrack and p_for_after_args(p)) {
-				sp = cur(p).lexeme
 
-				# and its TYPE ARGUMENTS, which the depth counting above exists to skip
-				# over. They are what the spec's own `K` stands for in a required
-				# signature, and they belong in the coherence key — `Indexable[int]` and
-				# `Indexable[Range]` are distinct pairs (docs/core/specs.md).
-				if peek_kind(p, 1) == LBrack {
-					p_advance(p) # the spec's name
-					args = parse_ty_args(p)
-					continue
-				}
-			}
-			target = cur(p).lexeme
-		}
+	# THE HEAD IS PARSED, not scanned. It used to be a loop counting brackets to find the
+	# name that `for` follows, with a second lookahead (`p_for_after_args`) to fake the
+	# question "are these type arguments, and does a `for` come after them?" — which a parse
+	# simply answers by reading them.
+	#
+	# `impl Spec[args] for Target` and `impl Target` are the same three steps: a name, an
+	# optional type-argument list, and then `for` deciding which of the two the name was.
+	mut first := p_name(p, "an `impl`")
+	mut args := parse_ty_args(p)
+	mut sp := ""
+	mut target := first
+	if p_at(p, For) {
 		p_advance(p)
+		sp = first
+
+		# the TARGET's own arguments are erased, as every type's are here
+		target = p_name(p, "an `impl … for …` target")
+		skip_ty_args(p)
 	}
 	if sp != "" {
 		impls.append(ImplDecl(sp, args, target, p.path, kw.line, kw.col))

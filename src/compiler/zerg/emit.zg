@@ -6388,7 +6388,18 @@ fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 # channel close carries — a kind rather than a message, which is what lets a receiver tell
 # an ordinary ending from a crash without matching on text.
 fn c_err_kinds() -> list[str] {
-	return ["ValueError", "OverflowError", "IOError", "EncodingError", "IndexError", "KeyError", "DeadlockError", "SendOnClosedError", "StopIteration"]
+	return [
+		"ValueError",
+		"OverflowError",
+		"IOError",
+		"EncodingError",
+		"IndexError",
+		"KeyError",
+		"DeadlockError",
+		"SendOnClosedError",
+		"StopIteration",
+		"DivideByZeroError"
+	]
 }
 
 fn c_err_kind(name: str) -> int {

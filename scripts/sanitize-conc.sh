@@ -111,7 +111,18 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 	fi
 
 	# shellcheck disable=SC2046  # the source list is one path per line and has no spaces
-	if ! $CC -std=c11 -g -fno-omit-frame-pointer \
+	# -DZRT_TRACE, ON by default here, arms the runtime's LIVE-WAITER INVARIANT: a waiter
+	# lives on the stack of the coroutine that parked, so a queue still pointing at one
+	# whose stack is being freed is a hand-off into unmapped memory. That is the SEGV in
+	# wq_pop CI has reported three times and no local run has reproduced — and the
+	# invariant catches the run that MAKES the mistake rather than the one that trips over
+	# it, which is a different and much larger set of runs.
+	#
+	# It prints nothing unless it fires; the verbose per-event log is a second switch,
+	# `ZRG_TRACE=1` in the environment, for reading an interleaving back. TRACE=0 turns the
+	# whole thing off, and a shipped build never has it: without the define every macro
+	# expands to nothing, not even a branch.
+	if ! $CC -std=c11 -g -fno-omit-frame-pointer $([ "${TRACE:-1}" = 0 ] || echo -DZRT_TRACE) \
 		-fsanitize=address,undefined -fno-sanitize-recover=all \
 		-I "$RT" -o "$WORK/$name.bin" "$WORK/$name.c" $(rt_sources) 2>"$WORK/$name.cc.log"; then
 		printf 'CC     %s\n' "$name"

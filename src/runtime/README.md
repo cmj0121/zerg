@@ -89,3 +89,31 @@ output about a model that does not fit, not findings — each one lands on a lin
 
 So the stress test is the gate and TSan is a tool to reach for deliberately. Making it a gate needs the hand-off
 described to TSan rather than hidden from it, and that is not done.
+
+## Debugging a race: `ZRT_TRACE`
+
+A race in the scheduler or the channels is a question about **order**, and the two tools
+that can answer most questions cannot answer that one: AddressSanitizer names the
+instruction that faulted and the allocation it touched, and a debugger stops the world the
+race needs. What is missing is the sequence.
+
+`-DZRT_TRACE` compiles in two things, and a build without it has **neither** — every macro
+expands to nothing, not even a branch, so a shipped binary is byte-identical to one from a
+tree that never had this.
+
+- **The live-waiter invariant**, armed whenever the define is present. A `zrt_waiter` lives
+  on the stack of the coroutine that parked, so a queue still pointing at one whose stack is
+  being freed is a hand-off into unmapped memory — the SEGV in `wq_pop`. Every waiter on a
+  queue is registered; freeing a coroutine's stack asserts none of them lies inside it. It
+  catches the run that MAKES the mistake rather than the one that trips over it, which is a
+  far larger set of runs, and it prints nothing unless it fires.
+- **A per-event log**, additionally gated at runtime by `ZRG_TRACE=1`, one line per
+  queue push/pop/remove, per close, per sender release and per stack free.
+
+`make sanitize-conc` arms the invariant by default; `TRACE=0` turns it off, and `ZRG_TRACE=1`
+in the environment adds the log:
+
+```sh
+make sanitize-conc                                   # invariant on, no output
+CASES=test-data/codegen/conc_actor.zg TRACE=0 make sanitize-conc
+```

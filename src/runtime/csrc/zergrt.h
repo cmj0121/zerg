@@ -808,6 +808,7 @@ void zrt_trace_waiter_on(void *w, void *co);
 void zrt_trace_waiter_off(void *w);
 bool zrt_trace_waiter_live(void *w);
 void zrt_trace_stale(void *q, void *w);
+void zrt_trace_init(void);
 void zrt_trace_stack_on(void *lo, size_t len);
 bool zrt_trace_waiter_mapped(void *w);
 void zrt_trace_dead_waiter(void *q, void *w);
@@ -817,6 +818,7 @@ void zrt_trace_stack_free(void *lo, size_t len);
 #define ZRT_TRACE_WAITER_LIVE(w)   zrt_trace_waiter_live(w)
 #define ZRT_TRACE_STALE(q, w)      zrt_trace_stale((q), (w))
 #define ZRT_TRACE_STACK_ON(lo, n)  zrt_trace_stack_on((lo), (n))
+#define ZRT_TRACE_INIT()           zrt_trace_init()
 #define ZRT_TRACE_CHECK_MAPPED(q, w)                     \
 	do {                                                 \
 		if ((w) != NULL && !zrt_trace_waiter_mapped(w)) { \
@@ -840,6 +842,7 @@ void zrt_trace_stack_free(void *lo, size_t len);
 #define ZRT_TRACE_WAITER_LIVE(w)   true
 #define ZRT_TRACE_STALE(q, w)      ((void)0)
 #define ZRT_TRACE_STACK_ON(lo, n)  ((void)0)
+#define ZRT_TRACE_INIT()           ((void)0)
 #define ZRT_TRACE_CHECK_MAPPED(q, w) ((void)0)
 #define ZRT_TRACE_WAITER_OFF(w) ((void)0)
 #define ZRT_TRACE_STACK_FREE(lo, n) ((void)0)

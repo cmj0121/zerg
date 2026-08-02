@@ -447,11 +447,22 @@ static void        *g_tw_co[ZRT_TRACE_MAX_WAITERS];
 static zrt_mutex    g_tw_lock;
 static bool         g_tw_init;
 
-static void tw_ensure(void) {
+/* zrt_trace_init is called ONCE from sched_init, before any worker exists.
+ *
+ * It used to be a lazy `if (!inited) init()` at every entry point, which is a data race on
+ * the guard: several workers reach it at once, more than one calls zrt_mutex_init, and the
+ * rest take a lock that is being initialised under them. The registry then answered
+ * nonsense and the range check aborted every MULTI-WORKER run of every case — the seeded
+ * single-worker half stayed green, which is exactly the shape that says "the bug is in the
+ * thing doing the measuring". */
+void zrt_trace_init(void) {
 	if (!g_tw_init) {
 		zrt_mutex_init(&g_tw_lock);
 		g_tw_init = true;
 	}
+}
+
+static void tw_ensure(void) {
 }
 
 /* A waiter's ADDRESS repeats: a coroutine stack is unmapped and the next one is mapped

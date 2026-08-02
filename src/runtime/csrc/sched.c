@@ -499,6 +499,7 @@ void zrt_sched_wake(zrt_coro *co) {
 /* --- the scheduler loop ------------------------------------------------------ */
 
 static void sched_init(void) {
+	ZRT_TRACE_INIT();
 	zrt_mutex_init(&g_lock);
 	zrt_cond_init(&g_cond);
 	zrt_chan_select_init();

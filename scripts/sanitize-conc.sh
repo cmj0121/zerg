@@ -191,6 +191,15 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 			if [ "$got" != "$want" ]; then
 				printf 'OUTPUT %s (%s workers, run %s) — %s — wanted %s, got %s\n' \
 					"$name" "$mode" "$n" "$repro" "$(echo "$want" | tr '\n' ' ')" "$(echo "$got" | tr '\n' ' ')"
+				# and WHAT IT SAID. A program that aborted prints nothing on stdout, so the
+				# mismatch above is "got nothing" and the reason is on stderr — which this
+				# threw away, because the only thing that ever read it was the narrow
+				# sanitizer pattern above. An abort from the runtime's own assertions, a
+				# glibc message, a stack trace: all of it landed in a file nobody printed.
+				if [ -s "$WORK/$name.err" ]; then
+					echo "--- stderr:"
+					head -20 "$WORK/$name.err"
+				fi
 				fail=1
 				break 2
 			fi

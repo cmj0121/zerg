@@ -2665,9 +2665,32 @@ fn c_arith_narrow(t: Ty, call: str) -> str {
 
 # c_unexpr lowers a prefix operator. Like c_ternary it is a function only so its operand
 # can be checked before it is rendered, a match arm having nowhere to put a statement.
+# c_is_int_lit reports whether an expression is an integer literal written out in the
+# source, which is what makes `-1` a constant rather than a negation.
+fn c_is_int_lit(x: Expr) -> bool {
+	return match x {
+		EInt(_) => true
+		_       => false
+	}
+}
+
 fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 	chk_unary(em, oper, x)
-	return f"({c_unop(oper)}{c_expr(em, x, sb)})"
+	inner := c_expr(em, x, sb)
+
+	# unary `-` has exactly one overflow — the type's minimum, which has no positive
+	# counterpart — and negating it is undefined in C. `-%` is the wrapping form and stays
+	# the bare operator, the same pairing the binary three have.
+	# `-1` is the SPELLING of a negative constant, not an operation on 1 — the literal is
+	# already range-checked, and routing it through the runtime would pull the checked
+	# helper into every program that writes a negative number.
+	t := c_infer(em, x)
+	if oper == "-" and (c_is_int(t) or c_is_byte(t)) and not c_is_int_lit(x) {
+		em.used_rt = true
+
+		return c_arith_narrow(t, f"zrt_neg_i64({inner})")
+	}
+	return f"({c_unop(oper)}{inner})"
 }
 
 # c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime

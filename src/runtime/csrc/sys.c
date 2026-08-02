@@ -618,6 +618,62 @@ void zrt_trace_stack_dead(void *lo, size_t len, void *co) {
 	zrt_mutex_unlock(&g_tw_lock);
 }
 
+/* --- freed coroutines (ZRT_TRACE only) ----------------------------------------
+ *
+ * Keyed on the COROUTINE, not on its stack, and that is the whole point. A stack address is
+ * handed straight back by mmap, so "is this waiter in a released stack?" has to forget a
+ * range the moment it is reused — and forgets the true positive along with the false ones.
+ * A `zrt_coro *` is a heap object that ASan's quarantine does not hand back nearly as fast,
+ * and the registry already records which coroutine pushed each waiter, so the question can
+ * be asked WITHOUT dereferencing the waiter — which is the very read that faults.
+ *
+ * That matters twice over: `chan_close` wakes `w->co` for every waiter it pops, so a waiter
+ * outliving its coroutine is also a `zrt_sched_wake` on a freed coroutine, and the
+ * scheduler then swaps into a stack that is not there. The SEGVs in `zrt_handler_pop` and
+ * in generated user code are that second face of it. */
+#define ZRT_TRACE_DEAD_CORO 128
+static void *g_dc[ZRT_TRACE_DEAD_CORO];
+static int   g_dc_at;
+
+void zrt_trace_coro_dead(void *co) {
+	zrt_mutex_lock(&g_tw_lock);
+	g_dc[g_dc_at % ZRT_TRACE_DEAD_CORO] = co;
+	g_dc_at++;
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
+/* zrt_trace_check_owner aborts when the waiter at this address was pushed by a coroutine
+ * that has since been freed. The waiter is never dereferenced: the owner comes from the
+ * registry entry made at the push. */
+void zrt_trace_check_owner(void *q, void *w) {
+	if (w == NULL) {
+		return;
+	}
+	zrt_mutex_lock(&g_tw_lock);
+	void *co = NULL;
+	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
+		if (g_tw[i] == w) {
+			co = g_tw_co[i];
+			break;
+		}
+	}
+	if (co != NULL) {
+		for (int i = 0; i < ZRT_TRACE_DEAD_CORO; i++) {
+			if (g_dc[i] != co) {
+				continue;
+			}
+			fprintf(stderr, "[zrt] WAITER OUTLIVED ITS COROUTINE q=%p w=%p co=%p — freed, and still queued\n",
+			        q, w, co);
+			fprintf(stderr, "[zrt]   operations on this waiter, newest first:\n");
+			hist_dump_w(w);
+			zrt_mutex_unlock(&g_tw_lock);
+			fflush(stderr);
+			abort();
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
 /* zrt_trace_check_dead aborts when w lies in a stack that was released. */
 void zrt_trace_check_dead(void *q, void *w) {
 	if (w == NULL) {

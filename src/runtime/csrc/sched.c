@@ -615,6 +615,7 @@ static void sched_run(void) {
 			zrt_tls_free(&co->tls);
 			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
 			munmap(co->stack, co->stack_size);
+			ZRT_TRACE_CORO_DEAD(co);
 			zrt_free(co);
 			if (was_main) {
 				/* main is over, so the program is. Every other worker is either idle or

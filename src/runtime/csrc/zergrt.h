@@ -551,6 +551,63 @@ static inline int64_t zrt_neg_i64(int64_t a) {
 	return -a;
 }
 
+/* The same seven for an UNSIGNED 64-bit operand. `uint` is not int64's range, so
+ * routing it through the signed helpers would raise on values that are perfectly
+ * representable; and unsigned division is already Euclidean, because neither operand
+ * can be negative. What is left is the zero divisor and the wrap. */
+
+static inline uint64_t zrt_add_u64(uint64_t a, uint64_t b) {
+	uint64_t r;
+	if (__builtin_add_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer addition overflowed");
+	}
+	return r;
+}
+
+static inline uint64_t zrt_sub_u64(uint64_t a, uint64_t b) {
+	uint64_t r;
+	if (__builtin_sub_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer subtraction overflowed");
+	}
+	return r;
+}
+
+static inline uint64_t zrt_mul_u64(uint64_t a, uint64_t b) {
+	uint64_t r;
+	if (__builtin_mul_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer multiplication overflowed");
+	}
+	return r;
+}
+
+static inline uint64_t zrt_div_u64(uint64_t a, uint64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: division by zero");
+	}
+	return a / b;
+}
+
+static inline uint64_t zrt_mod_u64(uint64_t a, uint64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: remainder by zero");
+	}
+	return a % b;
+}
+
+static inline uint64_t zrt_shl_u64(uint64_t a, uint64_t n, int64_t width) {
+	if (n >= (uint64_t)width) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+	}
+	return a << n;
+}
+
+static inline uint64_t zrt_shr_u64(uint64_t a, uint64_t n, int64_t width) {
+	if (n >= (uint64_t)width) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+	}
+	return a >> n;
+}
+
 /* --- checked primitive conversions (conv.c, docs/core/types.md) ------------------
  *
  * `T(x)` converts by re-construction; a narrowing conversion whose value does not

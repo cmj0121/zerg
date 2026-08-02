@@ -46,25 +46,21 @@ RT="src/runtime/csrc"
 # So the unseeded half is the one that searches, and it is the one that was small. PARALLEL
 # runs the multi-worker half several instances at once, which is the pressure that made the
 # difference — an oversubscribed CPU, not more repetitions of an idle one.
-# ASan's FAKE STACK is switched OFF, for the same reason ThreadSanitizer is not run at all
-# (see .github/workflows/ci.yml): it models a world this runtime does not live in.
+# ASan's FAKE STACK is deliberately left at the compiler's default, and the reason is a
+# theory that was TESTED AND DISPROVEN — written down so it is not tried again.
 #
-# With it on, ASan moves a local whose address escapes into a heap-backed frame drawn from a
-# PER-THREAD pool. This scheduler is M:N — a coroutine parks on one worker and resumes on
-# another — so a `zrt_waiter` or a `zrt_frame` allocated in worker 1's fake stack is read
-# from worker 2, and worker 1 is free to recycle or release it meanwhile. That is a SEGV
-# reading an escaping local, anywhere one is read after a migration: `wq_pop` on a queued
-# waiter, `zrt_handler_pop` on an unwind frame, `ring_put` on a send.
+# With it on, ASan moves a local whose address escapes into a heap-backed frame from a
+# PER-THREAD pool. This scheduler is M:N, so a `zrt_waiter` allocated in one worker's fake
+# stack is read from another, and that looked like a complete explanation for the SEGVs CI
+# reports: always multi-worker, never on the seeded single-worker half where nothing
+# migrates, never under clang (whose ASan leaves this off) and always under GCC (whose
+# turns it on).
 #
-# Which is exactly the set of crashes CI has been reporting — always multi-worker, never on
-# the seeded single-worker half where nothing migrates, and never under clang, whose ASan
-# leaves this off while GCC's turns it on.
-#
-# What is given up is real: a genuine waiter-outlives-its-frame bug is one this would catch.
-# It is given up because with fibers it cannot tell that from an ordinary migration, and a
-# gate that cannot tell a finding from its own model is not a gate. ASan's other halves —
-# heap, globals, UB — are unaffected and still run.
-export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_stack_use_after_return=0}"
+# It is not the explanation. With `detect_stack_use_after_return=0` set explicitly, CI still
+# SEGVs in `wq_pop` from the same `chan_close` on the same case. What the fake stack DID
+# explain is the false positives from this repo's own instrument: a check that a queued
+# waiter lies inside a live coroutine stack is meaningless when ASan has put the waiter on
+# the heap, and that check has been removed (see zergrt.h).
 
 SCHEDULES="${SCHEDULES:-${REPS:-60}}"
 RUNS="${RUNS:-${REPS:-30}}"

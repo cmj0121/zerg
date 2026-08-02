@@ -302,6 +302,7 @@ enum {
 	ZRT_ERR_DEADLOCK       = 7, /* DeadlockError (docs/code/coroutine.md) */
 	ZRT_ERR_SEND_ON_CLOSED = 8, /* SendOnClosedError */
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
+	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
 };
 
 typedef struct zrt_err {
@@ -407,6 +408,80 @@ _Noreturn void zrt_raise_err(zrt_err e);
 /* zrt_taken_err returns the Err the current abort/raise carried, read on a `guard`
  * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
 zrt_err zrt_taken_err(void);
+
+/* --- checked integer ARITHMETIC (docs/core/types.md) -----------------------------
+ *
+ * `+`, `-`, `*` RAISE on overflow; `/` and `%` raise on a zero divisor and follow the
+ * EUCLIDEAN definition (the remainder is never negative); a shift by a distance outside
+ * the type's width raises. The `%`-suffixed `+%`, `-%`, `*%` are the wrapping forms and go
+ * on emitting the bare C operator — that pairing is the whole point of having two.
+ *
+ * Every one of these was the plain C operator, which is not merely a different answer: a
+ * signed overflow, a division by zero and a shift past the width are all UNDEFINED
+ * BEHAVIOUR in C. `+` and `+%` emitted identical code, so a program that chose the checked
+ * form got the wrapping one.
+ *
+ * `static inline` in the header, over `__builtin_*_overflow`, so a check costs an
+ * add-and-branch-on-overflow rather than a call — the compiler builds itself with these,
+ * and an out-of-line call per arithmetic operator would be felt. The fallback path is for a
+ * host compiler without the builtins; GCC has had them since 5 and Clang since 3.8.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define ZRT_HAS_OVERFLOW_BUILTINS 1
+#endif
+
+static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
+	int64_t r;
+#ifdef ZRT_HAS_OVERFLOW_BUILTINS
+	if (__builtin_add_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer addition overflowed");
+	}
+#else
+	if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer addition overflowed");
+	}
+	r = (int64_t)((uint64_t)a + (uint64_t)b);
+#endif
+	return r;
+}
+
+static inline int64_t zrt_sub_i64(int64_t a, int64_t b) {
+	int64_t r;
+#ifdef ZRT_HAS_OVERFLOW_BUILTINS
+	if (__builtin_sub_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer subtraction overflowed");
+	}
+#else
+	if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer subtraction overflowed");
+	}
+	r = (int64_t)((uint64_t)a - (uint64_t)b);
+#endif
+	return r;
+}
+
+static inline int64_t zrt_mul_i64(int64_t a, int64_t b) {
+	int64_t r;
+#ifdef ZRT_HAS_OVERFLOW_BUILTINS
+	if (__builtin_mul_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer multiplication overflowed");
+	}
+#else
+	r = (int64_t)((uint64_t)a * (uint64_t)b);
+	if (a != 0 && (r / a != b || (a == -1 && b == INT64_MIN))) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer multiplication overflowed");
+	}
+#endif
+	return r;
+}
+
+/* unary `-`. Its one overflow is the type's minimum, which has no positive counterpart. */
+static inline int64_t zrt_neg_i64(int64_t a) {
+	if (a == INT64_MIN) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer negation overflowed");
+	}
+	return -a;
+}
 
 /* --- checked primitive conversions (conv.c, docs/core/types.md) ------------------
  *

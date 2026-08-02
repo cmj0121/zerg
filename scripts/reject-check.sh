@@ -1500,6 +1500,48 @@ fn main() {
 }
 EOF
 
+reject impl-drops-the-mut-fn 'it is not a `mut fn` and the spec' seed-gap <<'EOF'
+spec Bump {
+	mut fn bump() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Bump for A {
+	fn bump() -> int {
+		return 2
+	}
+}
+
+fn main() {
+	mut a := A(1)
+	print(f"{a.bump()}")
+}
+EOF
+
+reject impl-adds-a-mut-fn 'it is a `mut fn` and the spec' <<'EOF'
+spec Bump {
+	fn bump() -> int
+}
+
+struct A {
+	v: int
+}
+
+impl Bump for A {
+	mut fn bump() -> int {
+		return 2
+	}
+}
+
+fn main() {
+	mut a := A(1)
+	print(f"{a.bump()}")
+}
+EOF
+
 reject impl-breaks-the-self-type 'parameter `other` is int, and the spec declares A' seed-gap <<'EOF'
 spec Eq {
 	fn eq(other: This) -> bool

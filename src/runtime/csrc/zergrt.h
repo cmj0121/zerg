@@ -804,11 +804,15 @@ void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
 #include <stdio.h>
 
 bool zrt_trace_on(void);
-void zrt_trace_waiter_on(void *w);
+void zrt_trace_waiter_on(void *w, void *co);
 void zrt_trace_waiter_off(void *w);
+bool zrt_trace_waiter_live(void *w);
+void zrt_trace_stale(void *q, void *w);
 void zrt_trace_stack_free(void *lo, size_t len);
 #define ZRT_TRACE_ON()          zrt_trace_on()
-#define ZRT_TRACE_WAITER_ON(w)  zrt_trace_waiter_on(w)
+#define ZRT_TRACE_WAITER_ON(w, co) zrt_trace_waiter_on((w), (co))
+#define ZRT_TRACE_WAITER_LIVE(w)   zrt_trace_waiter_live(w)
+#define ZRT_TRACE_STALE(q, w)      zrt_trace_stale((q), (w))
 #define ZRT_TRACE_WAITER_OFF(w) zrt_trace_waiter_off(w)
 #define ZRT_TRACE_STACK_FREE(lo, n) zrt_trace_stack_free((lo), (n))
 #define ZRT_TRACEF(...)                      \
@@ -822,7 +826,9 @@ void zrt_trace_stack_free(void *lo, size_t len);
 #else
 #define ZRT_TRACE_ON() false
 #define ZRT_TRACEF(...) ((void)0)
-#define ZRT_TRACE_WAITER_ON(w)  ((void)0)
+#define ZRT_TRACE_WAITER_ON(w, co) ((void)0)
+#define ZRT_TRACE_WAITER_LIVE(w)   true
+#define ZRT_TRACE_STALE(q, w)      ((void)0)
 #define ZRT_TRACE_WAITER_OFF(w) ((void)0)
 #define ZRT_TRACE_STACK_FREE(lo, n) ((void)0)
 #endif

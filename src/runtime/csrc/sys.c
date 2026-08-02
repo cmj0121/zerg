@@ -441,8 +441,9 @@ bool zrt_trace_on(void) {
  *
  * Under -DZRT_TRACE only: it takes a lock the shipped runtime does not have, and it holds
  * a global the shipped runtime does not have either. */
-#define ZRT_TRACE_MAX_WAITERS 256
+#define ZRT_TRACE_MAX_WAITERS 512
 static void        *g_tw[ZRT_TRACE_MAX_WAITERS];
+static void        *g_tw_co[ZRT_TRACE_MAX_WAITERS];
 static zrt_mutex    g_tw_lock;
 static bool         g_tw_init;
 
@@ -453,16 +454,30 @@ static void tw_ensure(void) {
 	}
 }
 
-void zrt_trace_waiter_on(void *w) {
+/* A waiter's ADDRESS repeats: a coroutine stack is unmapped and the next one is mapped
+ * where it was, so the same `zrt_waiter *` names a different waiter minutes apart. The
+ * registry therefore holds one ENTRY per push, never a set keyed on the address — and
+ * removing one entry may not remove the others. Getting that wrong is what made the first
+ * version of this silent: `off` cleared every slot matching the address, so a live waiter
+ * at a recycled address vanished from the invariant along with the dead one it shared a
+ * number with. */
+void zrt_trace_waiter_on(void *w, void *co) {
 	tw_ensure();
 	zrt_mutex_lock(&g_tw_lock);
 	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
 		if (g_tw[i] == NULL) {
 			g_tw[i] = w;
-			break;
+			g_tw_co[i] = co;
+			zrt_mutex_unlock(&g_tw_lock);
+			return;
 		}
 	}
 	zrt_mutex_unlock(&g_tw_lock);
+	/* dropping one would make the invariant quietly weaker, which is worse than failing */
+	fprintf(stderr, "[zrt] TRACE REGISTRY FULL at %d live waiters — raise ZRT_TRACE_MAX_WAITERS\n",
+	        ZRT_TRACE_MAX_WAITERS);
+	fflush(stderr);
+	abort();
 }
 
 void zrt_trace_waiter_off(void *w) {
@@ -471,9 +486,34 @@ void zrt_trace_waiter_off(void *w) {
 	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
 		if (g_tw[i] == w) {
 			g_tw[i] = NULL;
+			g_tw_co[i] = NULL;
+			break; /* ONE entry, not every slot sharing this address */
 		}
 	}
 	zrt_mutex_unlock(&g_tw_lock);
+}
+
+/* zrt_trace_waiter_live reports whether this pointer is on some queue. A queue head that
+ * is not is a STALE head — the pointer was popped or removed already, and dereferencing it
+ * is the SEGV. Checking here names it one instruction before it happens. */
+bool zrt_trace_waiter_live(void *w) {
+	tw_ensure();
+	zrt_mutex_lock(&g_tw_lock);
+	bool live = false;
+	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
+		if (g_tw[i] == w) {
+			live = true;
+			break;
+		}
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+	return live;
+}
+
+void zrt_trace_stale(void *q, void *w) {
+	fprintf(stderr, "[zrt] STALE QUEUE HEAD q=%p w=%p — the head names a waiter no queue holds\n", q, w);
+	fflush(stderr);
+	abort();
 }
 
 /* zrt_trace_stack_free is the assertion: nothing still queued may live in this stack. */
@@ -483,8 +523,8 @@ void zrt_trace_stack_free(void *lo, size_t len) {
 	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
 		char *w = (char *)g_tw[i];
 		if (w != NULL && w >= (char *)lo && w < (char *)lo + len) {
-			fprintf(stderr, "[zrt] LEAKED WAITER %p is still on a queue, and its stack [%p,%p) is being freed\n",
-			        (void *)w, lo, (void *)((char *)lo + len));
+			fprintf(stderr, "[zrt] LEAKED WAITER %p (co %p) is still on a queue, and its stack [%p,%p) is being freed\n",
+			        (void *)w, g_tw_co[i], lo, (void *)((char *)lo + len));
 			fflush(stderr);
 			abort();
 		}

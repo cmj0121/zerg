@@ -91,7 +91,7 @@ struct zrt_chan {
 
 static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 	ZRT_TRACEF("wq_push  q=%p w=%p co=%p", (void *)head, (void *)w, (void *)w->co);
-	ZRT_TRACE_WAITER_ON(w);
+	ZRT_TRACE_WAITER_ON(w, w->co);
 	w->next = NULL;
 	if (*tail != NULL) {
 		(*tail)->next = w;
@@ -104,6 +104,12 @@ static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 	zrt_waiter *w = *head;
 	ZRT_TRACEF("wq_pop   q=%p w=%p", (void *)head, (void *)w);
+	if (w != NULL && !ZRT_TRACE_WAITER_LIVE(w)) {
+		/* the head names a waiter no queue is holding: it was popped or removed already,
+		 * and `w->next` on the next line is the read that faults. Naming it here says WHAT
+		 * went wrong instead of where it was noticed. */
+		ZRT_TRACE_STALE(head, w);
+	}
 	if (w != NULL) {
 		*head = w->next;
 		if (*head == NULL) {

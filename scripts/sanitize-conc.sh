@@ -46,14 +46,25 @@ RT="src/runtime/csrc"
 # So the unseeded half is the one that searches, and it is the one that was small. PARALLEL
 # runs the multi-worker half several instances at once, which is the pressure that made the
 # difference — an oversubscribed CPU, not more repetitions of an idle one.
-# A `zrt_waiter` is a LOCAL of the parking function that gets linked into a queue the
-# function then leaves behind, so "does a waiter outlive its frame?" is the question this
-# corpus most needs asked — and it is exactly what detect_stack_use_after_return answers.
-# ASan moves such a local into a heap-backed fake frame and poisons it on return, so a
-# queue still holding it is reported with BOTH frames: where it was allocated and what
-# reclaimed it. Off by default in ASan, and the reason a real bug here reads as a plain
-# SEGV a long way downstream.
-export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_stack_use_after_return=1}"
+# ASan's FAKE STACK is switched OFF, for the same reason ThreadSanitizer is not run at all
+# (see .github/workflows/ci.yml): it models a world this runtime does not live in.
+#
+# With it on, ASan moves a local whose address escapes into a heap-backed frame drawn from a
+# PER-THREAD pool. This scheduler is M:N — a coroutine parks on one worker and resumes on
+# another — so a `zrt_waiter` or a `zrt_frame` allocated in worker 1's fake stack is read
+# from worker 2, and worker 1 is free to recycle or release it meanwhile. That is a SEGV
+# reading an escaping local, anywhere one is read after a migration: `wq_pop` on a queued
+# waiter, `zrt_handler_pop` on an unwind frame, `ring_put` on a send.
+#
+# Which is exactly the set of crashes CI has been reporting — always multi-worker, never on
+# the seeded single-worker half where nothing migrates, and never under clang, whose ASan
+# leaves this off while GCC's turns it on.
+#
+# What is given up is real: a genuine waiter-outlives-its-frame bug is one this would catch.
+# It is given up because with fibers it cannot tell that from an ordinary migration, and a
+# gate that cannot tell a finding from its own model is not a gate. ASan's other halves —
+# heap, globals, UB — are unaffected and still run.
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_stack_use_after_return=0}"
 
 SCHEDULES="${SCHEDULES:-${REPS:-60}}"
 RUNS="${RUNS:-${REPS:-30}}"

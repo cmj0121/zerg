@@ -1249,7 +1249,7 @@ fn c_is_ctor(name: str) -> bool {
 #
 # A group that can never be emitted is a CYCLE — `struct A { b: B }` with `struct B { a: A }`
 # — a type of infinite size rather than an ordering problem, and it is named as such.
-fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
+fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty]) -> str {
 	mut out := ""
 
 	# EVERY name this pass will emit, collected ONCE. It is what "does this dependency have
@@ -1267,13 +1267,17 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 	for c in carriers {
 		all.append(c_carrier_ty_cname(c))
 	}
+	for t in tuples {
+		all.append(c_tuple_cname(ty_tuple_elems(t)))
+	}
 
 	mut done: list[str] = []
 	mut es := f.enums
 	mut ss := f.structs
 	mut cs := carriers
+	mut ts := tuples
 
-	for es.len() > 0 or ss.len() > 0 or cs.len() > 0 {
+	for es.len() > 0 or ss.len() > 0 or cs.len() > 0 or ts.len() > 0 {
 		# `done` is the only thing a sweep moves, so its length before and after IS whether
 		# progress was made — and a sweep that emits nothing never will
 		n0 := done.len()
@@ -1313,6 +1317,23 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty]) -> str {
 			}
 		}
 		cs = cs2
+
+		# the same arm again for TUPLES. A tuple is a typedef like a carrier is, it names
+		# the declared types its elements hold, and a struct field of tuple type depends on
+		# it — so it belongs in the sweep rather than in a block emitted before or after it,
+		# which is where it was and why `pair: (Q, int)` had to be turned away.
+		mut ts2: list[Ty] = []
+		for t in ts {
+			elems := ty_tuple_elems(t)
+			tn := c_tuple_cname(elems)
+			if c_deps_done(c_ty_list_deps(elems), tn, done, all) {
+				out = out + c_tuple_decl(em, elems)
+				done.append(tn)
+			} else {
+				ts2.append(t)
+			}
+		}
+		ts = ts2
 
 		raise f"`{c_stuck_name(es, ss, cs)}` is part of a cycle of by-value declarations — a type holding itself, however indirectly, has no size; hold it behind a `list`, or box it as a self-recursive enum payload" if done.len() == n0
 	}
@@ -1369,9 +1390,17 @@ fn c_ty_struct_deps(t: Ty, mut &out: list[str]) {
 		TNamed(nm)    => out.append(nm)
 		TOpt(el)      => out.append(c_carrier_ty_cname(TOpt(el)))
 		TEither(l, r) => out.append(c_carrier_ty_cname(TEither(l, r)))
-		TTuple(ts)    => c_ty_struct_deps_list(ts, out)
+		TTuple(ts)    => out.append(c_tuple_cname(ts))
 		_             => c_skip()
 	}
+}
+
+# c_ty_list_deps is the declared types a list of types names, which is what a tuple's
+# elements are.
+fn c_ty_list_deps(ts: list[Ty]) -> list[str] {
+	mut out: list[str] = []
+	c_ty_struct_deps_list(ts, out)
+	return out
 }
 
 fn c_ty_struct_deps_list(ts: list[Ty], mut &out: list[str]) {
@@ -1402,6 +1431,53 @@ fn c_stuck_name(es: list[EnumDecl], ss: list[StructDecl], cs: list[Ty]) -> str {
 # It gathers optionals AND eithers, which is what a `-> Result[nil]` in the stdlib needs:
 # the type is spelled in one module's prototype and the carrier registered in another, so a
 # caller compiled on its own had the name and not the typedef.
+fn c_tuple_decl_types(mut &em: Emitter, f: File) -> list[Ty] {
+	mut out: list[Ty] = []
+	for st in f.structs {
+		for fd in st.fields {
+			c_tuple_collect(fd.ty, out)
+		}
+	}
+	for fn_i in f.fns {
+		c_tuple_collect(fn_i.ret, out)
+		for pm in fn_i.params {
+			c_tuple_collect(pm.ty, out)
+		}
+	}
+	return out
+}
+
+# c_tuple_collect walks a type to the tuples inside it, innermost first, so a tuple holding
+# a tuple is registered after the one it holds. A container is transparent, exactly as it is
+# for a carrier.
+fn c_tuple_collect(t: Ty, mut &out: list[Ty]) {
+	match t {
+		TTuple(ts)    => c_tuple_collect_tuple(ts, out)
+		TList(el)     => c_tuple_collect(el, out)
+		TOpt(el)      => c_tuple_collect(el, out)
+		TChan(el, _)  => c_tuple_collect(el, out)
+		TMap(k, v)    => c_tuple_collect_two(k, v, out)
+		TEither(l, r) => c_tuple_collect_two(l, r, out)
+		_             => c_skip()
+	}
+}
+
+fn c_tuple_collect_two(a: Ty, b: Ty, mut &out: list[Ty]) {
+	c_tuple_collect(a, out)
+	c_tuple_collect(b, out)
+}
+
+fn c_tuple_collect_tuple(ts: list[Ty], mut &out: list[Ty]) {
+	for t in ts {
+		c_tuple_collect(t, out)
+	}
+	name := c_tuple_cname(ts)
+	for t in out {
+		return if c_tuple_cname(ty_tuple_elems(t)) == name
+	}
+	out.append(TTuple(ts))
+}
+
 fn c_carrier_decl_types(mut &em: Emitter, f: File) -> list[Ty] {
 	mut out: list[Ty] = []
 	for st in f.structs {
@@ -4068,7 +4144,7 @@ fn c_intrinsic_ret(name: str) -> Ty {
 	return TInt if name == "__zrt_open_write"
 	return TInt if name == "__zrt_time_unix" or name == "__zrt_time_mono"
 	return TInt if name == "__zrt_atomic_load" or name == "__zrt_atomic_store" or name == "__zrt_atomic_swap" or name == "__zrt_atomic_add"
-	return TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform"
+	return TStr if name == "__zrt_getenv" or name == "__zrt_arch" or name == "__zrt_platform" or name == "__zrt_exe_path"
 	return TBool if name == "__zrt_has_env" or name == "__zrt_exists" or name == "__zrt_mkdir" or name == "__zrt_atomic_cas"
 
 	return TNil
@@ -5429,10 +5505,24 @@ fn c_tuple_cname(tys: list[Ty]) -> str {
 
 # c_tuple_name is c_tuple_cname plus the typedef it needs. A C identifier cannot hold `*`
 # or a space, so each element type is flattened into one.
-fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
+# c_tuple_decl registers a tuple shape and answers its DECLARATION TEXT — the typedef, plus
+# the copy helper a tuple owes when it holds a list, a map or another such tuple (without
+# it the tuple's field named the source's buffer). A shape already registered answers "".
+#
+# The ELEMENTS are registered first, depth first. `c_type` of a tuple element is a pure
+# function of its shape and registers nothing, so `(1, (2, 3))` used to emit the outer
+# typedef naming an inner one that no pass had written — cc reported `unknown type name`
+# against generated C for a program with a tuple inside a tuple.
+fn c_tuple_decl(mut &em: Emitter, tys: list[Ty]) -> str {
+	mut out := ""
+	for t in tys {
+		if c_is_tuple(t) {
+			out = out + c_tuple_decl(em, ty_tuple_elems(t))
+		}
+	}
 	name := c_tuple_cname(tys)
 	for n in em.tup_names {
-		return name if n == name
+		return out if n == name
 	}
 	mut decl := "typedef struct {"
 	mut i := 0
@@ -5441,14 +5531,23 @@ fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
 		i = i + 1
 	}
 	em.tup_names.append(name)
-	em.tup_decls.append(decl + f" }} {name};\n")
-
-	# a tuple that holds a list, a map or another such tuple owes a COPY, for the reason
-	# c_needs_copy gives: without it the tuple's field named the source's buffer
+	out = out + decl + f" }} {name};\n"
 	if c_needs_copy(em, TTuple(tys)) {
-		em.tup_decls.append(c_tuple_copy_helper(em, name, tys))
+		out = out + c_tuple_copy_helper(em, name, tys)
 	}
-	return name
+	return out
+}
+
+# c_tuple_name is c_tuple_decl for a tuple first met while a BODY is lowered: the text goes
+# into the on-demand block, which is emitted after the declarations. c_type_decls calls
+# c_tuple_decl directly instead, so a tuple a DECLARATION names is placed among the other
+# typedefs in dependency order.
+fn c_tuple_name(mut &em: Emitter, tys: list[Ty]) -> str {
+	d := c_tuple_decl(em, tys)
+	if d != "" {
+		em.tup_decls.append(d)
+	}
+	return c_tuple_cname(tys)
 }
 
 fn c_ident_safe(s: str) -> str {
@@ -6446,7 +6545,11 @@ fn c_stmt_diverges(s: Stmt) -> bool {
 
 # The entry point is the FREE function `main`; a method named `main` is an ordinary method
 # of its type and must not be mistaken for it, which is what the receiver test rules out.
-fn c_has_main(f: File) -> bool {
+# c_has_main reports whether a File declares the program entry. It is `pub` because the
+# DRIVER asks the same question to choose what to build — a source is a module until
+# something asks it to be a program — and two answers to "is this a program" would let the
+# driver emit a library while the emitter writes a main wrapper.
+pub fn c_has_main(f: File) -> bool {
 	mut i := 0
 	for i < f.fns.len() {
 		return true if f.fns[i].name == "main" and f.fns[i].recv == ""
@@ -6639,13 +6742,18 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	# declared type needs nothing before it, and one that is a struct follows that struct.
 	carriers := c_carrier_decl_types(em, f)
 
+	# the tuples a DECLARATION names go through the same dependency sweep as the enums,
+	# structs and carriers: a struct field of tuple type reaches no tuple literal, and a
+	# tuple holding a declared type has to come out after it
+	tuples := c_tuple_decl_types(em, f)
+
 	# the force helpers land on zg_force_fail, so it goes ahead of the FIRST carrier
 	# wherever that is — here when a declaration named one, with the on-demand carriers
 	# below otherwise. Exactly one of the two writes it.
 	if carriers.len() > 0 {
 		types = types + c_carrier_prelude()
 	}
-	types = types + c_type_decls(em, f, carriers)
+	types = types + c_type_decls(em, f, carriers, tuples)
 	mut i := 0
 	for i < f.enums.len() {
 		types = types + c_refbox_helpers(f.enums[i])
@@ -6732,8 +6840,10 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 		hdr = hdr + c_str_helpers()
 	}
 
-	# the tuple carriers are collected while the bodies are lowered, so they are gathered
-	# here — after defs, emitted before them
+	# the tuple carriers found while the bodies were lowered. The ones a DECLARATION names
+	# went through the type sweep instead, in dependency order among the enums, structs and
+	# result carriers — c_tuple_decl registers the shape either way, so a tuple is emitted
+	# exactly once whichever of the two first met it.
 	mut tups := ""
 	for d in em.tup_decls {
 		tups = tups + d

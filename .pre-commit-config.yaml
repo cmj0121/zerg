@@ -3,8 +3,14 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-yaml
+      # LICENSES/ holds VERBATIM copies of canonical license texts, fetched from the
+      # bodies that publish them. A formatting hook that "fixes" one of those is editing a
+      # legal document to match a house style, and a license text that differs from the
+      # canonical one is worth less than no copy at all.
       - id: end-of-file-fixer
+        exclude: ^LICENSES/
       - id: trailing-whitespace
+        exclude: ^LICENSES/
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.47.0
     hooks:

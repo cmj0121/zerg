@@ -63,9 +63,9 @@ func TestAsciiSpaceSet(t *testing.T) {
 func TestAsciiFoldAndValue(t *testing.T) {
 	got := runProgramRT(t, "import \"ascii\"\n"+
 		"fn main() {\n"+
-		"\tprint int(ascii.to_upper(byte(97)))\n"+ // 'a' -> 'A' = 65
-		"\tprint int(ascii.to_lower(byte(90)))\n"+ // 'Z' -> 'z' = 122
-		"\tprint int(ascii.to_upper(byte(35)))\n"+ // '#' unchanged = 35
+		"\tprint int(ascii.fold_upper(byte(97)))\n"+ // 'a' -> 'A' = 65
+		"\tprint int(ascii.fold_lower(byte(90)))\n"+ // 'Z' -> 'z' = 122
+		"\tprint int(ascii.fold_upper(byte(35)))\n"+ // '#' unchanged = 35
 		"\tprint ascii.digit_val(byte(55))\n"+ // '7' -> 7
 		"\tprint ascii.digit_val(byte(65))\n"+ // 'A' -> -1
 		"\tprint ascii.hex_val(byte(97))\n"+ // 'a' -> 10

@@ -1,0 +1,56 @@
+# 1g/strings — the standard library's `strings`, exercised end to end.
+#
+# It ASSERTS rather than prints, because `make examples` gates on the exit status.
+# It also exists because nothing else imported `strings` at all: the module composes
+# over `ascii`, both declared `to_upper`, and this compiler flattens every module into
+# one namespace — so `import "strings"` refused to build and no gate noticed.
+import "strings"
+
+fn check(what: str, got: str, want: str) {
+	raise f"{what}: got {got}, want {want}" if got != want
+}
+
+fn check_i(what: str, got: int, want: int) {
+	raise f"{what}: got {got}, want {want}" if got != want
+}
+
+fn main() {
+	# case folding, the pair that used to collide with `ascii`
+	check("to_upper", strings.to_upper("aBc1é"), "ABC1é")
+	check("to_lower", strings.to_lower("AbC1é"), "abc1é")
+
+	raise "equal_fold" if not strings.equal_fold("AbC", "aBc")
+	raise "equal_fold length" if strings.equal_fold("ab", "abc")
+
+	# searching
+	check_i("index_of", strings.index_of("a,b,c", ","), 1)
+	check_i("last_index_of", strings.last_index_of("a,b,c", ","), 3)
+	check_i("index_of absent", strings.index_of("abc", "z"), -1)
+	check_i("last_index_of absent", strings.last_index_of("abc", "z"), -1)
+
+	raise "contains" if not strings.contains("hello", "ell")
+	raise "has_prefix" if not strings.has_prefix("hello", "he")
+	raise "has_suffix" if not strings.has_suffix("hello", "lo")
+
+	# splitting and joining round-trip
+	check("split/join", strings.join(strings.split("a,b,c", ","), "-"), "a-b-c")
+	check_i("split keeps empties", strings.split("a,,b", ",").len(), 3)
+	check_i("fields drops them", strings.fields("  a   b  ").len(), 2)
+
+	# trimming, each side and both
+	check("trim", strings.trim("  hi  "), "hi")
+	check("trim_left", strings.trim_left("  hi  "), "hi  ")
+	check("trim_right", strings.trim_right("  hi  "), "  hi")
+	check("trim_prefix", strings.trim_prefix("prefix-x", "prefix-"), "x")
+	check("trim_suffix", strings.trim_suffix("x-suffix", "-suffix"), "x")
+
+	# building
+	check("repeat", strings.repeat("ab", 3), "ababab")
+	check("replace", strings.replace("a.b.c", ".", "/"), "a/b/c")
+	check_i("count", strings.count("banana", "na"), 2)
+	check("pad_start", strings.pad_start("7", 3, "0"), "007")
+	check("pad_end", strings.pad_end("7", 3, "."), "7..")
+	check("pad_start is a floor", strings.pad_start("abcd", 3, "0"), "abcd")
+
+	print "strings: ok"
+}

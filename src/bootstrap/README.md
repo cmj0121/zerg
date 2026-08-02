@@ -187,6 +187,12 @@ byte)` compiles to a truncation and cc warns about the generated C. `zerg` refus
   `enum E { X; X }` both build and run under the seed. `zerg` refuses both — the second
   variant is unreachable, so a `match` naming the first reads as exhaustive over an enum
   that has two. (A repeated PARAMETER the seed does catch.)
+- **An optional TUPLE `(A, B)?` was emitted as `void`.** The carrier scan asks `ctype()` of
+  the element before tuple C types are named, so `Opt[Tuple]` was not recognised as a
+  carrier and the function silently returned nothing; cc reported "variable has incomplete
+  type 'void'" against generated C. It is refused by name now — a plain `(A, B)` return
+  works, and `zerg` builds both. This is why the STDLIB may not use an optional tuple: it
+  is compiled by the seed as well, which is the same reason nothing there uses slicing.
 - **A TYPE NAME declared twice is accepted.** A `struct`, an `enum` and a `spec` share one
   namespace, and every module of a program flattens into one scope in both compilers — so
   `enum E` twice, `spec T` twice, and a `struct A` beside a `spec A` are all one name for

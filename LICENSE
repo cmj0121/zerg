@@ -1,0 +1,74 @@
+# Licensing
+
+Zerg is licensed in **layers**, because the parts of it stand in different relationships to
+the programs you write. The rule behind every line below is one question:
+
+> **Does this code end up inside the binary you ship?**
+
+What ends up in your binary is permissive, so that Zerg can be used to build anything,
+including closed and commercial software. What does not — the compiler that produced it,
+and the documents that define the language — is licensed to keep the language itself
+coherent.
+
+## The layers
+
+| Part                                | Path                                | License                          |
+| ----------------------------------- | ----------------------------------- | -------------------------------- |
+| **Runtime**                         | `src/runtime/`                      | MIT                              |
+| **Standard library**                | `src/stdlib/`                       | MIT                              |
+| **Compiler** (self-hosted and seed) | `src/compiler/`, `src/bootstrap/`   | GPL-3.0-or-later                 |
+| **Specification & grammar**         | `docs/`, `GRAMMAR`                  | CC-BY-SA-4.0                     |
+| **Everything else**                 | `examples/`, `scripts/`, `editors/` | MIT                              |
+
+Full texts are in [`LICENSES/`](LICENSES). Each directory above carries its own `LICENSE`
+file naming which one applies there.
+
+## What this means for a program you write in Zerg
+
+**Your program is yours.** Compiling with Zerg does not place any license on your source
+or on the binary you produce. The compiler being GPL does not reach your output — output
+is not a derivative work of the compiler that produced it, exactly as it is not for GCC or
+Clang.
+
+**The runtime is linked into your binary, and it is MIT.** Every Zerg program contains the
+runtime, so this is the layer that decides whether Zerg is usable at all for closed or
+commercial work. MIT means: it is, with attribution and no further obligation. The same is
+true of any standard-library module your program imports.
+
+So: **write what you like, ship it how you like.**
+
+## What this means if you change Zerg itself
+
+**Changing the compiler and distributing it makes your changes GPL-3.0.** If you fix a bug
+in `src/compiler/`, extend the emitter, or fork the toolchain and give the result to
+someone else, that work carries the same license and must be offered as source. Using the
+compiler does not trigger this — only redistributing a modified one does.
+
+**Changing the runtime or the standard library carries no such obligation.** They are MIT:
+fork them, vendor them, embed them, keep your changes to yourself.
+
+**The specification is CC-BY-SA-4.0.** Quote it, translate it, teach from it, build a
+different implementation against it — with attribution, and with derivative documents under
+the same license.
+
+## The name
+
+"Zerg" as the name of this language, and the specification in `docs/` and `GRAMMAR` as its
+definition, are the project's to steward. The licenses above grant rights to the code and to
+the documents; they do not grant the right to call a different language "Zerg", or to
+present a modified specification as this one. An independent implementation of the language
+is welcome and needs no permission — it simply needs its own name, or a clear statement of
+what it is.
+
+This is the ordinary arrangement: the code is open, and the identity is not a free-for-all,
+so that "written in Zerg" keeps meaning one thing.
+
+## Contributing
+
+A contribution is offered under the license of the directory it lands in — MIT for the
+runtime, the standard library and the examples; GPL-3.0-or-later for the compiler;
+CC-BY-SA-4.0 for the specification. There is no separate contributor agreement.
+
+---
+
+Copyright (c) 2026 cmj

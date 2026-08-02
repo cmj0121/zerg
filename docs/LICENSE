@@ -1,0 +1,12 @@
+The Zerg language specification — Creative Commons Attribution-ShareAlike 4.0
+International.
+
+This directory, together with the GRAMMAR file at the repository root, is the
+definition of the language. It is licensed CC-BY-SA-4.0; the full text is in
+LICENSES/CC-BY-SA-4.0.txt.
+
+Quote it, translate it, teach from it, and implement against it — with
+attribution, and with derivative documents under the same license. See LICENSE at
+the root for the one thing this does not grant: the name.
+
+SPDX-License-Identifier: CC-BY-SA-4.0

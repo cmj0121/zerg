@@ -14,6 +14,21 @@ binary. Programs are fast to write, easy to read, and overwhelmingly straightfor
 > See **[Status & Limitations](#status--limitations)** for the headline gaps, and the
 > **[Language Specification](docs/language.md)** for the per-feature detail.
 
+## License
+
+Zerg is licensed in **layers**, on one question: does this code end up inside the binary you
+ship?
+
+| Part                                | License          | What it means                                            |
+| ----------------------------------- | ---------------- | -------------------------------------------------------- |
+| runtime, standard library, examples | MIT              | linked into your program — ship it however you like      |
+| compiler (self-hosted and seed)     | GPL-3.0-or-later | changing and redistributing the toolchain is share-alike |
+| specification and `GRAMMAR`         | CC-BY-SA-4.0     | quote, translate, reimplement — with attribution         |
+
+**A program you write in Zerg is yours.** The compiler's license does not reach its output,
+and the runtime that IS linked into your binary is MIT. See **[LICENSE](LICENSE)** for the
+whole arrangement, including what it does not grant: the name.
+
 ## Design Principles
 
 | Principle        | Description                                                                                      |

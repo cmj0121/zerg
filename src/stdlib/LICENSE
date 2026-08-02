@@ -1,0 +1,8 @@
+The Zerg standard library — MIT License.
+
+This directory is licensed under the MIT License; the full text is in
+LICENSES/MIT.txt at the repository root. See LICENSE at the root for why this
+layer is permissive: it is linked into every program built with Zerg, so it must
+not place obligations on what you ship.
+
+SPDX-License-Identifier: MIT

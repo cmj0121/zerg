@@ -146,7 +146,9 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 	# `ZRG_TRACE=1` in the environment, for reading an interleaving back. TRACE=0 turns the
 	# whole thing off, and a shipped build never has it: without the define every macro
 	# expands to nothing, not even a branch.
-	if ! $CC -std=c11 -g -fno-omit-frame-pointer $([ "${TRACE:-1}" = 0 ] || echo -DZRT_TRACE) \
+	# CORO_STACK=<bytes> overrides the coroutine stack size for the stack-overflow
+	# experiment the zergrt.h comment describes; unset, the runtime's own constant stands.
+	if ! $CC -std=c11 -g -fno-omit-frame-pointer $([ "${TRACE:-1}" = 0 ] || echo -DZRT_TRACE) ${CORO_STACK:+-DZRT_CORO_STACK=$CORO_STACK} \
 		-fsanitize=address,undefined -fno-sanitize-recover=all \
 		-I "$RT" -o "$WORK/$name.bin" "$WORK/$name.c" $(rt_sources) 2>"$WORK/$name.cc.log"; then
 		printf 'CC     %s\n' "$name"

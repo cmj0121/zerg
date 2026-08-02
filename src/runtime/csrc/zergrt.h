@@ -951,8 +951,17 @@ bool zrt_atomic_claim(bool *flag);
 
 /* ZRT_CORO_STACK is the fixed per-coroutine stack size (Fork-B: fixed size + guard
  * page, not growable). Kept in one place so a later phase can retune it or move to a
- * growable stack without the backend re-emitting anything. */
+ * growable stack without the backend re-emitting anything.
+ *
+ * Overridable for ONE experiment: the CI SEGVs whose fault addresses sit far below sp,
+ * page-aligned, in a different function every time, have the shape of a stack hitting its
+ * guard — and GCC's ASan inflates frames (a redzone per local) far more than clang's, which
+ * would make it CI-only. `-DZRT_CORO_STACK=…` from the build line settles it: if the
+ * crashes vanish at 1 MB the 256 KB floor is too low under instrumentation; if they do not,
+ * an eighth hypothesis dies for the price of a constant. */
+#ifndef ZRT_CORO_STACK
 #define ZRT_CORO_STACK ((size_t)(256 * 1024))
+#endif
 
 /* zrt_spawn allocates a coroutine (stack + guard page), arms it to run thunk(env) on
  * its own stack, and enqueues it on the run queue. Fire-and-forget: no handle, no

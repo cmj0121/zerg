@@ -423,55 +423,46 @@ zrt_err zrt_taken_err(void);
  *
  * `static inline` in the header, over `__builtin_*_overflow`, so a check costs an
  * add-and-branch-on-overflow rather than a call — the compiler builds itself with these,
- * and an out-of-line call per arithmetic operator would be felt. The fallback path is for a
- * host compiler without the builtins; GCC has had them since 5 and Clang since 3.8.
+ * and an out-of-line call per arithmetic operator would be felt.
+ *
+ * There is no fallback for a host without the builtins, because there is no such host
+ * here: sys.c and thread_pthread.c already use __atomic_* unguarded, so a compiler that
+ * cannot build these cannot build the runtime at all. A guarded second spelling of the
+ * overflow rule would be code no configuration ever compiles.
  */
-#if defined(__GNUC__) || defined(__clang__)
-#define ZRT_HAS_OVERFLOW_BUILTINS 1
-#endif
+
+/* One message per fault, named once: each helper below is `static inline` in a header, so
+ * a repeated literal is re-emitted per translation unit as well as re-typed per edit. */
+#define ZRT_MSG_ADD_OVERFLOW "OverflowError: integer addition overflowed"
+#define ZRT_MSG_SUB_OVERFLOW "OverflowError: integer subtraction overflowed"
+#define ZRT_MSG_MUL_OVERFLOW "OverflowError: integer multiplication overflowed"
+#define ZRT_MSG_NEG_OVERFLOW "OverflowError: integer negation overflowed"
+#define ZRT_MSG_DIV_OVERFLOW "OverflowError: integer division overflowed"
+#define ZRT_MSG_SHIFT_WIDTH  "OverflowError: shift distance outside the type width"
+#define ZRT_MSG_DIV_ZERO     "DivideByZeroError: division by zero"
+#define ZRT_MSG_MOD_ZERO     "DivideByZeroError: remainder by zero"
 
 static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
 	int64_t r;
-#ifdef ZRT_HAS_OVERFLOW_BUILTINS
 	if (__builtin_add_overflow(a, b, &r)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer addition overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_ADD_OVERFLOW);
 	}
-#else
-	if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer addition overflowed");
-	}
-	r = (int64_t)((uint64_t)a + (uint64_t)b);
-#endif
 	return r;
 }
 
 static inline int64_t zrt_sub_i64(int64_t a, int64_t b) {
 	int64_t r;
-#ifdef ZRT_HAS_OVERFLOW_BUILTINS
 	if (__builtin_sub_overflow(a, b, &r)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer subtraction overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SUB_OVERFLOW);
 	}
-#else
-	if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer subtraction overflowed");
-	}
-	r = (int64_t)((uint64_t)a - (uint64_t)b);
-#endif
 	return r;
 }
 
 static inline int64_t zrt_mul_i64(int64_t a, int64_t b) {
 	int64_t r;
-#ifdef ZRT_HAS_OVERFLOW_BUILTINS
 	if (__builtin_mul_overflow(a, b, &r)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer multiplication overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_MUL_OVERFLOW);
 	}
-#else
-	r = (int64_t)((uint64_t)a * (uint64_t)b);
-	if (a != 0 && (r / a != b || (a == -1 && b == INT64_MIN))) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer multiplication overflowed");
-	}
-#endif
 	return r;
 }
 
@@ -491,10 +482,10 @@ static inline int64_t zrt_mul_i64(int64_t a, int64_t b) {
  * the division rather than after. */
 static inline int64_t zrt_div_i64(int64_t a, int64_t b) {
 	if (b == 0) {
-		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: division by zero");
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_DIV_ZERO);
 	}
 	if (a == INT64_MIN && b == -1) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer division overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_DIV_OVERFLOW);
 	}
 	int64_t q = a / b;
 	if (a % b < 0) {
@@ -505,7 +496,7 @@ static inline int64_t zrt_div_i64(int64_t a, int64_t b) {
 
 static inline int64_t zrt_mod_i64(int64_t a, int64_t b) {
 	if (b == 0) {
-		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: remainder by zero");
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_MOD_ZERO);
 	}
 	if (a == INT64_MIN && b == -1) {
 		return 0; /* the quotient overflows; the remainder is exactly zero */
@@ -528,7 +519,7 @@ static inline int64_t zrt_mod_i64(int64_t a, int64_t b) {
  * that for the C type the value arrives in, so the shift itself is left to it. */
 static inline int64_t zrt_shl_i64(int64_t a, int64_t n, int64_t width) {
 	if (n < 0 || n >= width) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
 	}
 	/* the shift is done on the UNSIGNED bit pattern: a left shift that moves bits into or
 	 * past the sign is undefined on a signed operand in C, and wrapping is what a bit-level
@@ -538,7 +529,7 @@ static inline int64_t zrt_shl_i64(int64_t a, int64_t n, int64_t width) {
 
 static inline int64_t zrt_shr_i64(int64_t a, int64_t n, int64_t width) {
 	if (n < 0 || n >= width) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
 	}
 	return a >> n;
 }
@@ -546,7 +537,7 @@ static inline int64_t zrt_shr_i64(int64_t a, int64_t n, int64_t width) {
 /* unary `-`. Its one overflow is the type's minimum, which has no positive counterpart. */
 static inline int64_t zrt_neg_i64(int64_t a) {
 	if (a == INT64_MIN) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer negation overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_NEG_OVERFLOW);
 	}
 	return -a;
 }
@@ -559,7 +550,7 @@ static inline int64_t zrt_neg_i64(int64_t a) {
 static inline uint64_t zrt_add_u64(uint64_t a, uint64_t b) {
 	uint64_t r;
 	if (__builtin_add_overflow(a, b, &r)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer addition overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_ADD_OVERFLOW);
 	}
 	return r;
 }
@@ -567,7 +558,7 @@ static inline uint64_t zrt_add_u64(uint64_t a, uint64_t b) {
 static inline uint64_t zrt_sub_u64(uint64_t a, uint64_t b) {
 	uint64_t r;
 	if (__builtin_sub_overflow(a, b, &r)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer subtraction overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SUB_OVERFLOW);
 	}
 	return r;
 }
@@ -575,35 +566,35 @@ static inline uint64_t zrt_sub_u64(uint64_t a, uint64_t b) {
 static inline uint64_t zrt_mul_u64(uint64_t a, uint64_t b) {
 	uint64_t r;
 	if (__builtin_mul_overflow(a, b, &r)) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: integer multiplication overflowed");
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_MUL_OVERFLOW);
 	}
 	return r;
 }
 
 static inline uint64_t zrt_div_u64(uint64_t a, uint64_t b) {
 	if (b == 0) {
-		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: division by zero");
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_DIV_ZERO);
 	}
 	return a / b;
 }
 
 static inline uint64_t zrt_mod_u64(uint64_t a, uint64_t b) {
 	if (b == 0) {
-		zrt_abort_kind(ZRT_ERR_DIVZERO, "DivideByZeroError: remainder by zero");
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_MOD_ZERO);
 	}
 	return a % b;
 }
 
-static inline uint64_t zrt_shl_u64(uint64_t a, uint64_t n, int64_t width) {
-	if (n >= (uint64_t)width) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+static inline uint64_t zrt_shl_u64(uint64_t a, uint64_t n) {
+	if (n >= 64) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
 	}
 	return a << n;
 }
 
-static inline uint64_t zrt_shr_u64(uint64_t a, uint64_t n, int64_t width) {
-	if (n >= (uint64_t)width) {
-		zrt_abort_kind(ZRT_ERR_OVERFLOW, "OverflowError: shift distance outside the type width");
+static inline uint64_t zrt_shr_u64(uint64_t a, uint64_t n) {
+	if (n >= 64) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
 	}
 	return a >> n;
 }

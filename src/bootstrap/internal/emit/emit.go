@@ -1146,13 +1146,30 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	if rng, ok := n.Iter.(*ast.Range); ok {
 		e.pushScope()
 		cv := e.declareName(n.Var)
-		op := "<"
+		// The bound is evaluated ONCE. Emitting it in the condition ran it per
+		// iteration, so a `for i in 0..xs.len()` walked the list to measure it on every
+		// step and a bound with an effect had that effect N times.
+		hi := e.freshName("hi")
+		e.line("{")
+		e.indent++
+		e.line(fmt.Sprintf("int64_t %s = %s;", hi, e.expr(rng.Hi)))
 		if rng.Inclusive {
-			op = "<="
+			// An INCLUSIVE range whose high end is the type's maximum has no value to
+			// step to after it: `v++` there overflows, which is undefined in C and in
+			// practice loops forever. The step is the condition instead — 1 while there
+			// is another value, 0 at the last one — so the loop ends without ever
+			// computing a value outside the range. Testing `!=` rather than `<` is safe
+			// because the loop variable is IMMUTABLE: the body cannot move it off the
+			// sequence, so the only way to reach `hi` is to step to it.
+			more := e.freshName("more")
+			e.line(fmt.Sprintf("for (int64_t %s = %s, %s = (%s <= %s); %s; %s = (%s != %s), %s += %s) {",
+				cv, e.expr(rng.Lo), more, cv, hi, more, more, cv, hi, cv, more))
+		} else {
+			e.line(fmt.Sprintf("for (int64_t %s = %s; %s < %s; %s++) {", cv, e.expr(rng.Lo), cv, hi, cv))
 		}
-		e.line(fmt.Sprintf("for (int64_t %s = %s; %s %s %s; %s++) {",
-			cv, e.expr(rng.Lo), cv, op, e.expr(rng.Hi), cv))
 		e.body(n.Body, true)
+		e.line("}")
+		e.indent--
 		e.line("}")
 		e.popScope()
 		return

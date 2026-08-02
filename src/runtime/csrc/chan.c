@@ -91,6 +91,7 @@ struct zrt_chan {
 
 static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 	ZRT_TRACEF("wq_push  q=%p w=%p co=%p", (void *)head, (void *)w, (void *)w->co);
+	ZRT_TRACE_QOP(head, w, "push");
 	ZRT_TRACE_WAITER_ON(w, w->co);
 	w->next = NULL;
 	if (*tail != NULL) {
@@ -107,6 +108,7 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 	/* the head must lie in a stack that is still mapped: `w->next` on the next line is the
 	 * read that faults otherwise. Asking here says WHAT went wrong instead of where it was
 	 * noticed — and it asks about a RANGE, which cannot alias the way an address does. */
+	ZRT_TRACE_QOP(head, w, "pop");
 	ZRT_TRACE_CHECK_MAPPED(head, w);
 	if (w != NULL) {
 		*head = w->next;
@@ -124,6 +126,7 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
  * (which the waiters live on) is reused. */
 static void wq_remove(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 	ZRT_TRACEF("wq_remove q=%p w=%p", (void *)head, (void *)w);
+	ZRT_TRACE_QOP(head, w, "remove");
 	zrt_waiter *prev = NULL;
 	for (zrt_waiter *cur = *head; cur != NULL; prev = cur, cur = cur->next) {
 		if (cur != w) {

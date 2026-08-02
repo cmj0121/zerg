@@ -583,6 +583,50 @@ bool zrt_trace_waiter_mapped(void *w) {
  * ranges say which — a plausible set with the waiter outside all of them is the first, and
  * a set that is obviously too small is the second. Bounded output: one line per live
  * coroutine, and a program that has hundreds is telling you something too. */
+/* --- a queue's recent history (ZRT_TRACE only) --------------------------------
+ *
+ * The head holds a pointer that is in no coroutine stack: not a stale waiter, a WILD value.
+ * A pointer like that was written by somebody, and the only writers are the four queue
+ * operations — so the question is which of them ran last on this queue, and with what.
+ *
+ * A fixed ring, keyed on nothing: it records every operation on every queue and the report
+ * filters by the queue that went bad. Cheap enough to leave on for a whole run, and it does
+ * not have to be exact under a race — the last few entries for one queue are the story. */
+#define ZRT_TRACE_HIST 4096
+static void       *g_h_q[ZRT_TRACE_HIST];
+static void       *g_h_w[ZRT_TRACE_HIST];
+static const char *g_h_op[ZRT_TRACE_HIST];
+static int         g_h_at;
+
+void zrt_trace_qop(void *q, void *w, const char *op) {
+	zrt_mutex_lock(&g_tw_lock);
+	int i = g_h_at % ZRT_TRACE_HIST;
+	g_h_q[i] = q;
+	g_h_w[i] = w;
+	g_h_op[i] = op;
+	g_h_at++;
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
+/* hist_dump prints the last operations recorded for one queue, oldest first. */
+static void hist_dump(void *q) {
+	int n = g_h_at < ZRT_TRACE_HIST ? g_h_at : ZRT_TRACE_HIST;
+	int shown = 0;
+	for (int k = n - 1; k >= 0 && shown < 12; k--) {
+		int i = (g_h_at - 1 - (n - 1 - k)) % ZRT_TRACE_HIST;
+		if (i < 0) {
+			i += ZRT_TRACE_HIST;
+		}
+		if (g_h_q[i] == q) {
+			fprintf(stderr, "[zrt]   ... %-9s w=%p\n", g_h_op[i], g_h_w[i]);
+			shown++;
+		}
+	}
+	if (shown == 0) {
+		fprintf(stderr, "[zrt]   ... NO operation was ever recorded on this queue\n");
+	}
+}
+
 void zrt_trace_dead_waiter(void *q, void *w) {
 	fprintf(stderr, "[zrt] DEAD WAITER q=%p w=%p — the queue head is in no live coroutine stack\n", q, w);
 	zrt_mutex_lock(&g_tw_lock);
@@ -595,6 +639,8 @@ void zrt_trace_dead_waiter(void *q, void *w) {
 		}
 	}
 	fprintf(stderr, "[zrt]   %d live stacks registered; the waiter is in none of them\n", n);
+	fprintf(stderr, "[zrt]   most recent operations on this queue, newest first:\n");
+	hist_dump(q);
 	zrt_mutex_unlock(&g_tw_lock);
 	fflush(stderr);
 	abort();

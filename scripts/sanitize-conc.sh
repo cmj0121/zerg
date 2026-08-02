@@ -46,7 +46,13 @@ RT="src/runtime/csrc"
 # So the unseeded half is the one that searches, and it is the one that was small. PARALLEL
 # runs the multi-worker half several instances at once, which is the pressure that made the
 # difference — an oversubscribed CPU, not more repetitions of an idle one.
-# ASan's FAKE STACK is deliberately left at the compiler's default, and the reason is a
+# ASan's FAKE STACK is turned OFF while the runtime's own trace is compiled in, because the
+# trace reasons about STACKS and the fake stack puts locals on the heap — a waiter that ASan
+# has moved is one the instrument cannot say anything true about. This is a precondition of
+# the measurement, not a fix: see below.
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_stack_use_after_return=0}"
+
+# The fake stack was once believed to BE the bug, and the reason is a
 # theory that was TESTED AND DISPROVEN — written down so it is not tried again.
 #
 # With it on, ASan moves a local whose address escapes into a heap-backed frame from a

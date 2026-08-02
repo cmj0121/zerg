@@ -581,6 +581,49 @@ static void       *g_h_w[ZRT_TRACE_HIST];
 static const char *g_h_op[ZRT_TRACE_HIST];
 static int         g_h_at;
 
+/* --- recently FREED stacks (ZRT_TRACE only) -----------------------------------
+ *
+ * The live-range test could not answer the question; this one can. A stack that has just
+ * been unmapped is remembered with the coroutine it belonged to, so a queue head landing
+ * inside one is a complete diagnosis: this waiter belongs to that coroutine, whose stack
+ * was released at that point. It does not depend on the live set being complete, which is
+ * where the earlier attempt went wrong. */
+#define ZRT_TRACE_DEAD_STACKS 64
+static void  *g_ds_lo[ZRT_TRACE_DEAD_STACKS];
+static size_t g_ds_len[ZRT_TRACE_DEAD_STACKS];
+static void  *g_ds_co[ZRT_TRACE_DEAD_STACKS];
+static int    g_ds_at;
+
+void zrt_trace_stack_dead(void *lo, size_t len, void *co) {
+	zrt_mutex_lock(&g_tw_lock);
+	int i = g_ds_at % ZRT_TRACE_DEAD_STACKS;
+	g_ds_lo[i] = lo;
+	g_ds_len[i] = len;
+	g_ds_co[i] = co;
+	g_ds_at++;
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
+/* zrt_trace_check_dead aborts when w lies in a stack that was released. */
+void zrt_trace_check_dead(void *q, void *w) {
+	if (w == NULL) {
+		return;
+	}
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_DEAD_STACKS; i++) {
+		char *lo = (char *)g_ds_lo[i];
+		if (lo == NULL || (char *)w < lo || (char *)w >= lo + g_ds_len[i]) {
+			continue;
+		}
+		fprintf(stderr, "[zrt] WAITER ON A RELEASED STACK q=%p w=%p — co %p, stack [%p,%p)\n",
+		        q, w, g_ds_co[i], lo, (void *)(lo + g_ds_len[i]));
+		zrt_mutex_unlock(&g_tw_lock);
+		fflush(stderr);
+		abort();
+	}
+	zrt_mutex_unlock(&g_tw_lock);
+}
+
 void zrt_trace_qop(void *q, void *w, const char *op) {
 	zrt_mutex_lock(&g_tw_lock);
 	int i = g_h_at % ZRT_TRACE_HIST;

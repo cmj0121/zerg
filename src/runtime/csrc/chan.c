@@ -106,6 +106,7 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 	zrt_waiter *w = *head;
 	ZRT_TRACEF("wq_pop   q=%p w=%p", (void *)head, (void *)w);
 	ZRT_TRACE_QOP(head, w, "pop");
+	ZRT_TRACE_CHECK_DEAD(head, w);
 	if (w != NULL) {
 		*head = w->next;
 		if (*head == NULL) {

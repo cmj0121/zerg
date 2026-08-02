@@ -464,6 +464,9 @@ int64_t zrt_time_mono(void);
  * unset; zrt_exit terminates the process (does not return). */
 const char *zrt_platform(void);
 const char *zrt_arch(void);
+/* zrt_exe_path is the running executable's path, or "" when the host will not say — how a
+ * toolchain finds the files it was installed beside. See sys.c for why argv[0] is not it. */
+const char *zrt_exe_path(void);
 const char *zrt_getenv(const char *key);
 bool        zrt_has_env(const char *key);
 void        zrt_exit(int64_t code);

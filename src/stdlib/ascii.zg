@@ -52,16 +52,22 @@ pub fn is_space(b: byte) -> bool {
 	return v >= 9 and v <= 13
 }
 
-# to_upper folds an ASCII lowercase letter to its uppercase form; every other byte
+# fold_upper folds an ASCII lowercase letter to its uppercase form; every other byte
 # (including all non-ASCII) is returned unchanged.
-pub fn to_upper(b: byte) -> byte {
+#
+# `fold_*` and not `to_*`, for two reasons. A byte's case is FOLDED, not converted — `T(x)`
+# is what converts in this language, and a name that reads like one invites the wrong
+# mental model. And `strings` composes over this module, so a shared `to_upper` would be
+# one name for two functions: this compiler flattens every module into one namespace, and
+# `import "strings"` refused to build because of it.
+pub fn fold_upper(b: byte) -> byte {
 	return byte(int(b) - 32) if is_lower(b)
 	return b
 }
 
-# to_lower folds an ASCII uppercase letter to its lowercase form; every other byte
+# fold_lower folds an ASCII uppercase letter to its lowercase form; every other byte
 # (including all non-ASCII) is returned unchanged.
-pub fn to_lower(b: byte) -> byte {
+pub fn fold_lower(b: byte) -> byte {
 	return byte(int(b) + 32) if is_upper(b)
 	return b
 }

@@ -26,6 +26,15 @@ func (c *checker) resolveType(t ast.Type) types.Type {
 			c.errorf(t.Span(), "a raw pointer type may not be optional; a raw pointer is nullable — test with p == 0")
 			return elem
 		}
+		if _, ok := elem.(*types.Tuple); ok {
+			// The carrier scan asks ctype() of the element before tuple C types are named,
+			// so an Opt[Tuple] is not recognised as a carrier and the whole thing is
+			// emitted as `void` — a function silently returning nothing. Named rather than
+			// left to cc, which reports "variable has incomplete type 'void'" about
+			// generated C. A plain `(A, B)` return works; it is the optional that does not.
+			c.errorf(t.Span(), "an optional tuple `(…)?` is not yet supported by the bootstrap seed; return the tuple and use a sentinel, or a struct")
+			return elem
+		}
 		return &types.Opt{Elem: elem}
 	case *ast.TupleType:
 		elems := make([]types.Type, len(n.Elems))

@@ -133,6 +133,8 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 	fi
 
 	# shellcheck disable=SC2046  # the source list is one path per line and has no spaces
+	# NOTE the -DZRT_TRACE path is compiled ONLY here: `make -C src/runtime build` does not
+	# define it, so a trace-only mistake reads as a green runtime build and a red gate.
 	# -DZRT_TRACE, ON by default here, arms the runtime's LIVE-WAITER INVARIANT: a waiter
 	# lives on the stack of the coroutine that parked, so a queue still pointing at one
 	# whose stack is being freed is a hand-off into unmapped memory. That is the SEGV in

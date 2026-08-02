@@ -441,6 +441,12 @@ bool zrt_trace_on(void) {
  *
  * Under -DZRT_TRACE only: it takes a lock the shipped runtime does not have, and it holds
  * a global the shipped runtime does not have either. */
+#define ZRT_TRACE_DEAD_STACKS 64
+static void  *g_ds_lo[ZRT_TRACE_DEAD_STACKS];
+static size_t g_ds_len[ZRT_TRACE_DEAD_STACKS];
+static void  *g_ds_co[ZRT_TRACE_DEAD_STACKS];
+static int    g_ds_at;
+
 #define ZRT_TRACE_MAX_WAITERS 512
 static void        *g_tw[ZRT_TRACE_MAX_WAITERS];
 static void        *g_tw_co[ZRT_TRACE_MAX_WAITERS];
@@ -538,6 +544,17 @@ static size_t     g_ts_len[ZRT_TRACE_MAX_STACKS];
 void zrt_trace_stack_on(void *lo, size_t len) {
 	tw_ensure();
 	zrt_mutex_lock(&g_tw_lock);
+	/* A RELEASED range is only dead until the same address is mapped again, and mmap hands
+	 * the same range back constantly — so a dead entry that outlives its own address turns
+	 * the next coroutine's perfectly good waiter into a finding. Forget it here, which is
+	 * the only moment that knows. */
+	for (int d = 0; d < ZRT_TRACE_DEAD_STACKS; d++) {
+		if (g_ds_lo[d] == lo) {
+			g_ds_lo[d] = NULL;
+			g_ds_len[d] = 0;
+			g_ds_co[d] = NULL;
+		}
+	}
 	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
 		if (g_ts_lo[i] == NULL) {
 			g_ts_lo[i] = lo;
@@ -581,6 +598,9 @@ static void       *g_h_w[ZRT_TRACE_HIST];
 static const char *g_h_op[ZRT_TRACE_HIST];
 static int         g_h_at;
 
+static void hist_dump(void *q);
+static void hist_dump_w(void *w);
+
 /* --- recently FREED stacks (ZRT_TRACE only) -----------------------------------
  *
  * The live-range test could not answer the question; this one can. A stack that has just
@@ -588,12 +608,6 @@ static int         g_h_at;
  * inside one is a complete diagnosis: this waiter belongs to that coroutine, whose stack
  * was released at that point. It does not depend on the live set being complete, which is
  * where the earlier attempt went wrong. */
-#define ZRT_TRACE_DEAD_STACKS 64
-static void  *g_ds_lo[ZRT_TRACE_DEAD_STACKS];
-static size_t g_ds_len[ZRT_TRACE_DEAD_STACKS];
-static void  *g_ds_co[ZRT_TRACE_DEAD_STACKS];
-static int    g_ds_at;
-
 void zrt_trace_stack_dead(void *lo, size_t len, void *co) {
 	zrt_mutex_lock(&g_tw_lock);
 	int i = g_ds_at % ZRT_TRACE_DEAD_STACKS;
@@ -617,6 +631,10 @@ void zrt_trace_check_dead(void *q, void *w) {
 		}
 		fprintf(stderr, "[zrt] WAITER ON A RELEASED STACK q=%p w=%p — co %p, stack [%p,%p)\n",
 		        q, w, g_ds_co[i], lo, (void *)(lo + g_ds_len[i]));
+		fprintf(stderr, "[zrt]   operations on this queue, newest first:\n");
+		hist_dump(q);
+		fprintf(stderr, "[zrt]   operations on THIS WAITER, newest first:\n");
+		hist_dump_w(w);
 		zrt_mutex_unlock(&g_tw_lock);
 		fflush(stderr);
 		abort();
@@ -632,6 +650,26 @@ void zrt_trace_qop(void *q, void *w, const char *op) {
 	g_h_op[i] = op;
 	g_h_at++;
 	zrt_mutex_unlock(&g_tw_lock);
+}
+
+/* hist_dump_w is hist_dump keyed on the WAITER instead of the queue: it shows every queue
+ * this waiter was put on and taken off, which is what says who leaked it. */
+static void hist_dump_w(void *w) {
+	int n = g_h_at < ZRT_TRACE_HIST ? g_h_at : ZRT_TRACE_HIST;
+	int shown = 0;
+	for (int k = 0; k < n && shown < 16; k++) {
+		int i = (g_h_at - 1 - k) % ZRT_TRACE_HIST;
+		if (i < 0) {
+			i += ZRT_TRACE_HIST;
+		}
+		if (g_h_w[i] == w) {
+			fprintf(stderr, "[zrt]   ... %-9s q=%p\n", g_h_op[i], g_h_q[i]);
+			shown++;
+		}
+	}
+	if (shown == 0) {
+		fprintf(stderr, "[zrt]   ... nothing recorded for this waiter\n");
+	}
 }
 
 /* hist_dump prints the last operations recorded for one queue, oldest first. */

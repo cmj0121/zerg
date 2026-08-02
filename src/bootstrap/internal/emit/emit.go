@@ -1466,6 +1466,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return e.resolve(n.Name)
 	case *ast.Unary:
+		if n.Op == token.Minus {
+			if s, ok := e.checkedNeg(e.cur.ExprType(e.info, n), n.X, e.expr(n.X)); ok {
+				return s
+			}
+		}
 		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
 	case *ast.Binary:
 		if md, ok := e.cur.OpCalls[n]; ok {
@@ -1486,6 +1491,9 @@ func (e *emitter) expr(x ast.Expr) string {
 		// `str` is not a native C operand: '+' concatenates through the runtime and a
 		// comparison goes through strcmp (see emit_str.go).
 		if s, ok := e.strBinary(n); ok {
+			return s
+		}
+		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, e.expr(n.L), e.expr(n.R)); ok {
 			return s
 		}
 		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))

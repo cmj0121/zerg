@@ -137,6 +137,28 @@ fn parse_type(mut &p: Parser) -> Ty {
 	return t
 }
 
+# parse_paren_types reads `( type, … )` into the types it names, leaving the stream on the
+# token after the `)`. A tuple type and a function type's parameter list are the same
+# production with different meanings, and keeping them one loop is what keeps their
+# trailing-comma and end-of-input recovery from drifting apart.
+fn parse_paren_types(mut &p: Parser) -> list[Ty] {
+	expect(p, LParen)
+	mut out: list[Ty] = []
+	for not p_at(p, RParen) and not p_at(p, Eof) {
+		out.append(parse_type(p))
+
+		# the comma is REQUIRED between elements and absent before the `)`. Advancing on one
+		# only when it is there made it optional, so `(int int)` parsed as a two-element
+		# tuple and `(int, int,)` as a two-element one with a stray comma — neither is
+		# GRAMMAR:480, and both said nothing.
+		if not p_at(p, RParen) {
+			expect(p, Comma)
+		}
+	}
+	expect(p, RParen)
+	return out
+}
+
 fn parse_base_type(mut &p: Parser) -> Ty {
 	# `[T; N]` — an ARRAY TYPE (GRAMMAR:459). It is not built, and it was not turned away
 	# either: the `[` fell through to the name below, so `xs: [int; 3]` reported `expected
@@ -149,6 +171,22 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 		inner := parse_type(p)
 		raise "a `<-` prefix is a channel direction: only `<-chan[T]` is a type" if not ty_is_chan(inner)
 		return TChan(ty_chan_elem(inner), 2)
+	}
+
+	# `(A, B)` — a TUPLE TYPE (GRAMMAR:480), two elements or more. The value form has
+	# always worked, so `t := (1, "a")` was fine and there was simply no way to WRITE the
+	# type it has: every position that wants one — a typed binding, a parameter, a return,
+	# a field, a list element — fell through to the name below and reported whatever token
+	# came next. Five positions, five different messages, none of them the form.
+	if p_at(p, LParen) {
+		elems := parse_paren_types(p)
+
+		# GRAMMAR says two or more. One element in parentheses is a grouped type everywhere
+		# else in the language, and a zero-element tuple is not a thing Zerg has — `nil` is
+		# what a function with no result returns.
+		raise "a tuple type has two elements or more — `()` is not a type, and `(T)` is just `T`" if elems.len() < 2
+
+		return TTuple(elems)
 	}
 
 	mut name := cur(p).lexeme
@@ -171,15 +209,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 
 	# A function type, `fn(P, ...) -> R`. A result is optional: `fn(int)` returns nothing.
 	if name == "fn" and p_at(p, LParen) {
-		p_advance(p)
-		mut ptys: list[Ty] = []
-		for not p_at(p, RParen) and not p_at(p, Eof) {
-			ptys.append(parse_type(p))
-			if p_at(p, Comma) {
-				p_advance(p)
-			}
-		}
-		expect(p, RParen)
+		ptys := parse_paren_types(p)
 		mut fret := TVoid
 		if p_at(p, Arrow) {
 			p_advance(p)

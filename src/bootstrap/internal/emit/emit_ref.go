@@ -296,6 +296,10 @@ func (e *emitter) prepareRuntime() {
 	if e.programUsesCheckedConv() {
 		e.needsRuntime = true
 	}
+	// The same for an arithmetic operation that can overflow or divide by zero.
+	if e.programUsesCheckedArith() {
+		e.needsRuntime = true
+	}
 	// Deterministically number the Ref construction element types (sorted by their
 	// source spelling), so the emitted helper names are stable run to run.
 	seen := map[string]sema.Type{}

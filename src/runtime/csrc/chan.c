@@ -58,6 +58,14 @@ typedef struct zrt_waiter {
  * a buffered channel (cap > 0); an unbuffered channel (cap == 0) hands off directly
  * between a sender and a receiver. */
 struct zrt_chan {
+#ifdef ZRT_TRACE
+	/* A LIVENESS WORD, trace builds only. A freed channel whose block ASan has already
+	 * handed to someone else reads as valid memory holding another object's bytes — no
+	 * use-after-free report, just a `recvq_head` that is somebody else's data. That is the
+	 * one remaining explanation for a queue head that is neither a released stack nor a
+	 * freed coroutine's waiter, and this is how to tell. */
+	uint64_t       magic;
+#endif
 	zrt_mutex      lock;    /* guards every field below, and both wait queues */
 	size_t         rc;      /* holder count; last holder frees */
 	size_t         senders; /* send-capable handles; zero -> auto-close */
@@ -86,6 +94,23 @@ struct zrt_chan {
 	zrt_waiter    *sendq_head, *sendq_tail; /* coroutines parked in send */
 	zrt_waiter    *recvq_head, *recvq_tail; /* coroutines parked in recv */
 };
+
+#ifdef ZRT_TRACE
+#define ZRT_CHAN_MAGIC 0x5A455247434841ULL /* "ZERGCHA" */
+
+static void chan_check(const zrt_chan *ch, const char *where) {
+	if (ch->magic == ZRT_CHAN_MAGIC) {
+		return;
+	}
+	fprintf(stderr, "[zrt] CHANNEL USED AFTER FREE at %s ch=%p magic=%llx\n", where, (const void *)ch,
+	        (unsigned long long)ch->magic);
+	fflush(stderr);
+	abort();
+}
+#define ZRT_CHAN_CHECK(ch, where) chan_check((ch), (where))
+#else
+#define ZRT_CHAN_CHECK(ch, where) ((void)0)
+#endif
 
 /* --- wait queues (FIFO, intrusive via waiter->next) -------------------------- */
 
@@ -188,6 +213,9 @@ static zrt_err chan_stop_iteration(void) {
 
 zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 	zrt_chan *ch = (zrt_chan *)zrt_alloc(sizeof(*ch));
+#ifdef ZRT_TRACE
+	ch->magic = ZRT_CHAN_MAGIC;
+#endif
 	zrt_mutex_init(&ch->lock);
 	ch->rc = 1;
 	ch->senders = 1; /* the new bidirectional handle is a sender */
@@ -204,6 +232,9 @@ zrt_chan *zrt_chan_new(size_t elemsz, size_t cap) {
 }
 
 static void chan_free(zrt_chan *ch) {
+#ifdef ZRT_TRACE
+	ch->magic = 0;
+#endif
 	zrt_mutex_destroy(&ch->lock);
 	if (ch->buf != NULL) {
 		zrt_free(ch->buf);
@@ -223,6 +254,7 @@ static void chan_free(zrt_chan *ch) {
  * coroutine that crashed is unwinding as this runs, and by the time a receiver reads
  * the Err that coroutine is gone. */
 static void chan_close(zrt_chan *ch, zrt_err err) {
+	ZRT_CHAN_CHECK(ch, "chan_close");
 	ZRT_TRACEF("close    ch=%p closed=%d recvq=%p sendq=%p", (void *)ch, (int)ch->closed, (void *)ch->recvq_head, (void *)ch->sendq_head);
 	if (ch->closed) {
 		return;
@@ -238,6 +270,7 @@ static void chan_close(zrt_chan *ch, zrt_err err) {
 }
 
 zrt_chan *zrt_chan_copy(zrt_chan *ch) {
+	ZRT_CHAN_CHECK(ch, "copy");
 	zrt_mutex_lock(&ch->lock);
 	ch->rc++;
 	zrt_mutex_unlock(&ch->lock);
@@ -245,6 +278,7 @@ zrt_chan *zrt_chan_copy(zrt_chan *ch) {
 }
 
 zrt_chan *zrt_chan_sender_copy(zrt_chan *ch) {
+	ZRT_CHAN_CHECK(ch, "sender_copy");
 	zrt_mutex_lock(&ch->lock);
 	ch->rc++;
 	ch->senders++;
@@ -253,6 +287,7 @@ zrt_chan *zrt_chan_sender_copy(zrt_chan *ch) {
 }
 
 void zrt_chan_release(zrt_chan *ch) {
+	ZRT_CHAN_CHECK(ch, "release/entry");
 	/* the count must drop under the lock, but chan_free must NOT run under it — it
 	 * destroys the lock it would be holding. So the decision is made inside and acted
 	 * on outside, which is also why the last holder is the only one that can free: no
@@ -266,7 +301,9 @@ void zrt_chan_release(zrt_chan *ch) {
 }
 
 void zrt_chan_sender_release(zrt_chan *ch) {
+	ZRT_CHAN_CHECK(ch, "sender_release/entry");
 	zrt_mutex_lock(&ch->lock);
+	ZRT_CHAN_CHECK(ch, "sender_release/locked");
 	ZRT_TRACEF("srel     ch=%p senders=%zu rc=%zu co=%p", (void *)ch, ch->senders, ch->rc, (void *)zrt_sched_current());
 	/* remembered BEFORE the count is tested: this handle may not be the one that takes it
 	 * to zero, and the crash has to outlive the difference */

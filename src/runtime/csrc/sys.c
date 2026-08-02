@@ -642,6 +642,34 @@ void zrt_trace_coro_dead(void *co) {
 	zrt_mutex_unlock(&g_tw_lock);
 }
 
+/* zrt_trace_check_head aborts when a queue head is not a waiter any queue is holding.
+ *
+ * Address aliasing makes this test miss things — a recycled address answers "registered"
+ * for the wrong waiter — but it cannot make it fire wrongly: a head that matches NOTHING
+ * was never pushed, or was already popped, and either way `w->next` is not a read to make.
+ * Everything else has passed while the read still faults, which leaves this.
+ */
+void zrt_trace_check_head(void *q, void *w) {
+	if (w == NULL) {
+		return;
+	}
+	zrt_mutex_lock(&g_tw_lock);
+	for (int i = 0; i < ZRT_TRACE_MAX_WAITERS; i++) {
+		if (g_tw[i] == w) {
+			zrt_mutex_unlock(&g_tw_lock);
+			return;
+		}
+	}
+	fprintf(stderr, "[zrt] STALE QUEUE HEAD q=%p w=%p — no queue is holding this waiter\n", q, w);
+	fprintf(stderr, "[zrt]   operations on this queue, newest first:\n");
+	hist_dump(q);
+	fprintf(stderr, "[zrt]   operations on this waiter, newest first:\n");
+	hist_dump_w(w);
+	zrt_mutex_unlock(&g_tw_lock);
+	fflush(stderr);
+	abort();
+}
+
 /* zrt_trace_check_coro aborts when this coroutine has been freed. It is the one check
  * upstream of every fault signature seen: a waiter left on a queue is woken by chan_close
  * through `zrt_sched_wake(w->co)`, that reads `co->state` out of freed memory, and if the

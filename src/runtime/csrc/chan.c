@@ -133,6 +133,7 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 	ZRT_TRACE_QOP(head, w, "pop");
 	ZRT_TRACE_CHECK_DEAD(head, w);
 	ZRT_TRACE_CHECK_OWNER(head, w);
+	ZRT_TRACE_CHECK_HEAD(head, w);
 	if (w != NULL) {
 		*head = w->next;
 		if (*head == NULL) {

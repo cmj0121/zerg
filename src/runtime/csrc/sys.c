@@ -544,12 +544,15 @@ static size_t     g_ts_len[ZRT_TRACE_MAX_STACKS];
 void zrt_trace_stack_on(void *lo, size_t len) {
 	tw_ensure();
 	zrt_mutex_lock(&g_tw_lock);
-	/* A RELEASED range is only dead until the same address is mapped again, and mmap hands
-	 * the same range back constantly — so a dead entry that outlives its own address turns
-	 * the next coroutine's perfectly good waiter into a finding. Forget it here, which is
-	 * the only moment that knows. */
+	/* A RELEASED range is only dead until its addresses are mapped again, and mmap hands
+	 * them back constantly — so a dead entry that outlives its addresses turns the next
+	 * coroutine's perfectly good waiter into a finding. Pruned by OVERLAP, not by equal
+	 * base: a fresh mapping need not start where the old one did, and matching the base
+	 * alone left overlapping remaps in the dead list — which fired on a live select waiter
+	 * and read, for half a day, as the leak this instrument exists to find. */
 	for (int d = 0; d < ZRT_TRACE_DEAD_STACKS; d++) {
-		if (g_ds_lo[d] == lo) {
+		char *dlo = (char *)g_ds_lo[d];
+		if (dlo != NULL && dlo < (char *)lo + len && (char *)lo < dlo + g_ds_len[d]) {
 			g_ds_lo[d] = NULL;
 			g_ds_len[d] = 0;
 			g_ds_co[d] = NULL;
@@ -732,6 +735,16 @@ void zrt_trace_check_dead(void *q, void *w) {
 		return;
 	}
 	zrt_mutex_lock(&g_tw_lock);
+	/* the LIVE table is authoritative: with ASan's fake stack off, a waiter is on some
+	 * coroutine's real stack, so an address inside a live range is a live waiter whatever
+	 * the dead list still remembers about those addresses */
+	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
+		char *lo = (char *)g_ts_lo[i];
+		if (lo != NULL && (char *)w >= lo && (char *)w < lo + g_ts_len[i]) {
+			zrt_mutex_unlock(&g_tw_lock);
+			return;
+		}
+	}
 	for (int i = 0; i < ZRT_TRACE_DEAD_STACKS; i++) {
 		char *lo = (char *)g_ds_lo[i];
 		if (lo == NULL || (char *)w < lo || (char *)w >= lo + g_ds_len[i]) {

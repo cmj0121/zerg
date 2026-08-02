@@ -1490,6 +1490,13 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 		em.at_path = fn_i.path
 		em.at_line = fn_i.line
 		em.at_col = fn_i.col
+
+		# an `impl` on a PRIMITIVE arrives as a synthesized `this` of that type, and that is
+		# knowable here and nowhere below: `c_check_type_name` sees a name and a site string,
+		# so it had to claim "an `impl` on the built-in type" for any site and then print the
+		# site it was given — `… `int` (parameter `this` of `tag`)`.
+		raise f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver" if fn_i.recv != "" and is_conv(fn_i.recv)
+
 		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
 		for pm in fn_i.params {
 			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`")
@@ -1547,10 +1554,6 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
 	# one. Saying "no type named `Tag`" about a spec the reader declared three lines above
 	# invites them to go and declare it again.
 	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
-
-	# a PRIMITIVE names a type perfectly well; what is missing is the ability to hang an
-	# `impl` on it, which is where `this` comes from
-	raise f"NotImplemented: an `impl` on the built-in type `{nm}` ({site}) — this compiler gives a method a declared struct or enum receiver" if is_conv(nm)
 
 	raise f"no type named `{nm}` ({site})"
 }
@@ -6483,44 +6486,17 @@ pub fn merge_files(srcs: list[str]) -> File {
 # anything is emitted, and a diagnostic that cannot name the file is half an address; a
 # short `paths` list simply leaves the rest unnamed rather than being an error.
 pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
-	mut imports: list[str] = []
-	mut structs: list[StructDecl] = []
-	mut enums: list[EnumDecl] = []
-	mut specs: list[SpecDecl] = []
-	mut impls: list[ImplDecl] = []
-	mut fns: list[FnDecl] = []
-	mut consts: list[Stmt] = []
+	mut fs: list[File] = []
 	mut i := 0
 	for i < srcs.len() {
 		mut path := ""
 		if i < paths.len() {
 			path = paths[i]
 		}
-		f := parse_at(srcs[i], path)
-		for im in f.imports {
-			imports.append(im)
-		}
-		for s in f.structs {
-			structs.append(s)
-		}
-		for e in f.enums {
-			enums.append(e)
-		}
-		for sp in f.specs {
-			specs.append(sp)
-		}
-		for ip in f.impls {
-			impls.append(ip)
-		}
-		for fnd in f.fns {
-			fns.append(fnd)
-		}
-		for c in f.consts {
-			consts.append(c)
-		}
+		fs.append(parse_at(srcs[i], path))
 		i = i + 1
 	}
-	return File(imports, structs, enums, specs, impls, fns, consts)
+	return merge_asts(fs)
 }
 
 # emit_files lowers several sources to one C translation unit — the whole program in one

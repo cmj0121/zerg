@@ -352,6 +352,16 @@ static void coro_trampoline(void *arg) {
 		 * and reported its message; contain the crash to this coroutine. */
 		zrt_handler_pop(&frame);
 	}
+	/* THE INVARIANT, enforced where it can still be attributed. A waiter lives on this
+	 * coroutine's stack; one still linked into a channel queue here becomes, the moment
+	 * that stack is unmapped, a freed-stack read for whoever walks the queue next and a
+	 * zrt_sched_wake on a freed zrt_coro after that — the SEGV then surfaces in wq_pop,
+	 * in zrt_handler_pop or in generated code, none of which is where the mistake was.
+	 * chan.c has stated the rule all along ("take your waiter out before you unwind");
+	 * this is the rule being checked, on every finish, in every build. */
+	if (zrt_atomic_add(&co->linked_waiters, 0) != 0) {
+		zrt_abort("internal: a coroutine finished with a waiter still on a channel queue");
+	}
 	co->state = ZRT_CORO_DONE;
 	zrt_ctx_swap(&co->ctx, &t_sched_ctx); /* back to THIS worker's loop; never returns */
 }
@@ -369,6 +379,7 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	co->stack_size = total;
 	co->state = ZRT_CORO_RUNNABLE;
 	co->woken = false; /* zrt_alloc is malloc, not calloc: an unset flag is a stray wake */
+	co->linked_waiters = 0;
 	co->is_main = is_main;
 	co->deadlocked = false;
 	co->deadline = 0;

@@ -118,6 +118,9 @@ static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 	ZRT_TRACEF("wq_push  q=%p w=%p co=%p", (void *)head, (void *)w, (void *)w->co);
 	ZRT_TRACE_QOP(head, w, "push");
 	ZRT_TRACE_WAITER_ON(w, w->co);
+	if (w->co != NULL) {
+		zrt_atomic_add(&w->co->linked_waiters, 1);
+	}
 	w->next = NULL;
 	if (*tail != NULL) {
 		(*tail)->next = w;
@@ -141,6 +144,9 @@ static zrt_waiter *wq_pop(zrt_waiter **head, zrt_waiter **tail) {
 		}
 		w->next = NULL;
 		ZRT_TRACE_WAITER_OFF(w);
+		if (w->co != NULL) {
+			zrt_atomic_add(&w->co->linked_waiters, -1);
+		}
 	}
 	return w;
 }
@@ -165,6 +171,9 @@ static void wq_remove(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 			*tail = prev;
 		}
 		ZRT_TRACE_WAITER_OFF(cur);
+		if (cur->co != NULL) {
+			zrt_atomic_add(&cur->co->linked_waiters, -1);
+		}
 		cur->next = NULL;
 		return;
 	}

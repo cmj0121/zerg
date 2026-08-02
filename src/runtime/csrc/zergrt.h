@@ -727,6 +727,20 @@ typedef struct zrt_coro {
 	bool             deadlocked;        /* resumed to raise DeadlockError; see sched.c */
 	int64_t          deadline;          /* zrt_sleep_ns wake time (zrt_time_mono); 0 = none */
 	void            *tsan_fiber;        /* ZRT_TSAN only; NULL otherwise. See below. */
+
+	/* linked_waiters counts this coroutine's zrt_waiters currently ON a channel queue:
+	 * +1 at wq_push, -1 wherever one comes off (pop, take, remove). A waiter lives on this
+	 * coroutine's STACK, so the invariant chan.c already states — "take your waiter out
+	 * before you unwind" — is exactly `linked_waiters == 0` whenever this coroutine is off
+	 * every queue, and MUST be zero by the time it finishes: a waiter that outlives its
+	 * coroutine is a freed-stack read for whoever walks that queue next, and a
+	 * zrt_sched_wake on a freed zrt_coro after that. Atomic because a counterparty's
+	 * wq_take decrements it from another worker.
+	 *
+	 * It rides in every build — one atomic add per park is noise against a context switch
+	 * — so the DONE-time check can be a shipping assertion once the leak it exists to
+	 * catch is found and fixed. */
+	int64_t          linked_waiters;
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
 

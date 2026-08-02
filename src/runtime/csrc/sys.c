@@ -576,8 +576,26 @@ bool zrt_trace_waiter_mapped(void *w) {
 	return ok;
 }
 
+/* zrt_trace_dead_waiter prints the ranges it checked against, not just the verdict.
+ *
+ * "This pointer is in no live stack" has two readings and the verdict alone cannot separate
+ * them: the waiter really is dead, or the registry never learned about its stack. The
+ * ranges say which — a plausible set with the waiter outside all of them is the first, and
+ * a set that is obviously too small is the second. Bounded output: one line per live
+ * coroutine, and a program that has hundreds is telling you something too. */
 void zrt_trace_dead_waiter(void *q, void *w) {
-	fprintf(stderr, "[zrt] DEAD WAITER q=%p w=%p — the queue head is on a stack that is no longer mapped\n", q, w);
+	fprintf(stderr, "[zrt] DEAD WAITER q=%p w=%p — the queue head is in no live coroutine stack\n", q, w);
+	zrt_mutex_lock(&g_tw_lock);
+	int n = 0;
+	for (int i = 0; i < ZRT_TRACE_MAX_STACKS; i++) {
+		if (g_ts_lo[i] != NULL) {
+			fprintf(stderr, "[zrt]   live stack [%p,%p)\n", g_ts_lo[i],
+			        (void *)((char *)g_ts_lo[i] + g_ts_len[i]));
+			n++;
+		}
+	}
+	fprintf(stderr, "[zrt]   %d live stacks registered; the waiter is in none of them\n", n);
+	zrt_mutex_unlock(&g_tw_lock);
 	fflush(stderr);
 	abort();
 }

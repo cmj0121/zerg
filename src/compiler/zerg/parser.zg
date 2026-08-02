@@ -654,10 +654,20 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	skip_semis(p)
 	mut reqs: list[FnDecl] = []
 	for not p_at(p, RBrace) and not p_at(p, Eof) {
+		# `mut fn` is part of a fn-sig (GRAMMAR:599), and it is INTERFACE: a `mut fn` method
+		# mutates its receiver, so calling it needs a `mut` binding. Dropping the token made
+		# the requirement silent in both directions — a spec asking for `mut fn` was
+		# satisfied by a plain one, and a plain one by a `mut fn`.
+		mut recv_mut := false
+		if p_at(p, Mut) and peek_kind(p, 1) == Fn {
+			p_advance(p)
+			recv_mut = true
+		}
 		if p_at(p, Fn) {
-			# a spec member is read with NO receiver: `this` is the implementing type, which
-			# is not known here. The comparison substitutes it in from the impl's target.
-			sig := parse_fn_head(p, false, "", false)
+			# The receiver is `This` — the implementing type, which is not known here. Giving
+			# it a name makes a required signature the same SHAPE as a supplied one, so the
+			# two are compared position for position with nothing to offset.
+			sig := parse_fn_head(p, false, "This", recv_mut)
 			raise f"NotImplemented: a `spec` member with a BODY — a provided method's body is read and dropped here, so nothing in it is checked and it is not the method that runs; declare the signature `{sig.name}` and write the body in each `impl`" if p_at(p, LBrace)
 
 			reqs.append(sig)

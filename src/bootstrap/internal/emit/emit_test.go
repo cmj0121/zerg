@@ -252,14 +252,16 @@ func compileAndRun(t *testing.T, cc, code string) string {
 	// integers now includes "zergrt.h" — the runtime is materialized and linked here
 	// exactly as the driver does it, rather than each case being written to avoid
 	// arithmetic.
-	args := []string{"-std=c11", "-o", bpath, cpath}
+	args := []string{"-std=c11"}
+	var cfiles []string
 	if strings.Contains(code, "zergrt.h") {
-		cfiles, err := runtime.Materialize(dir)
-		if err != nil {
+		var err error
+		if cfiles, err = runtime.Materialize(dir); err != nil {
 			t.Fatalf("materialize runtime: %v", err)
 		}
-		args = append([]string{"-std=c11", "-I", dir, "-o", bpath, cpath}, cfiles...)
+		args = append(args, "-I", dir)
 	}
+	args = append(append(args, "-o", bpath, cpath), cfiles...)
 	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		t.Fatalf("cc failed: %v\n%s\n--- C ---\n%s", err, out, code)
 	}

@@ -42,9 +42,25 @@ func TestManifest(t *testing.T) {
 	}{
 		{
 			name:         "value-only-nil-main",
-			src:          "fn main() {\n  print 1 + 2\n}",
+			src:          "fn main() {\n  print 3\n}",
 			wantRuntime:  false,
 			wantContains: []string{"void zg_main(void)", "zg_main();"},
+			wantAbsent:   []string{"zergrt.h", "zrt_"},
+		},
+		{
+			// checked arithmetic raises through zrt_abort, so `1 + 2` — which used to be
+			// the value-only case above — now needs the runtime. A wrapping `+%` does not:
+			// that is the difference the suffix buys.
+			name:         "checked-arithmetic-needs-runtime",
+			src:          "fn main() {\n  print 1 + 2\n}",
+			wantRuntime:  true,
+			wantContains: []string{"zrt_add_i64"},
+		},
+		{
+			name:         "wrapping-arithmetic-does-not",
+			src:          "fn main() {\n  print 1 +% 2\n}",
+			wantRuntime:  false,
+			wantContains: []string{"(1 + 2)"},
 			wantAbsent:   []string{"zergrt.h", "zrt_"},
 		},
 		{

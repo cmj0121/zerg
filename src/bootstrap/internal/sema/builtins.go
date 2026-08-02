@@ -60,6 +60,7 @@ var errKinds = map[string]errKind{
 	"DeadlockError":     {7, true},
 	"SendOnClosedError": {8, true},
 	"StopIteration":     {9, false},
+	"DivideByZeroError": {10, true},
 }
 
 // ErrKind reports the built-in error kind a name denotes and whether it is one, so the

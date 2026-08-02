@@ -43,12 +43,8 @@
   皆非負時完全 elide**（最常見、零成本）。`a / 0` 與 `a % 0` raise `DivideByZeroError`，`INT_MIN / -1` 溢位
   （`OverflowError`）；truncating 與 flooring 變體屬 stdlib（延後）。
 
-> **[deviation]** 上述整套整數算術安全契約——checked 的 `+`/`-`/`*` raise `OverflowError`、`/` 與 `%` 的 Euclidean
-> 正負號、`a/0` 與 `a%0` raise `DivideByZeroError`、位移量 `≥` 型別寬度 raise `OverflowError`——是**意圖中**的語意、
-> 但**尚未強制**。今天每一個都降成純 C 運算子:`+` 與 `+%` 產生**相同**的碼(都環繞)、signed 溢位與除以零是 C 的
-> **undefined behavior** 而非乾淨的 abort、`%` 是 C 的 truncation(號隨被除數)而非 Euclidean。`DivideByZeroError`
-> 本身也是 **[not yet]** 的錯誤種類——它**不在**六種內建種類之列（見 [Errors](../code/errors.zh-TW.md)）,所以即使檢查落地,
-> 該 abort 目前也沒有獨立的具現化種類。
+> **[deviation]** 讓 `/` 與 `%` 成為 Euclidean 的那個修正是**無條件**產生的,並未在兩個運算元都可證明非負時
+> elide——上面說的「最常見情況零成本」是意圖中的 codegen、不是今天的。語意不受影響:那是成本、不是錯的答案。
 
 ### 數值字面量（Numeric literals）
 

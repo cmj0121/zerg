@@ -2634,6 +2634,8 @@ fn c_arith_fn(oper: str) -> str {
 	return "zrt_add_i64" if oper == "+"
 	return "zrt_sub_i64" if oper == "-"
 	return "zrt_mul_i64" if oper == "*"
+	return "zrt_div_i64" if oper == "/"
+	return "zrt_mod_i64" if oper == "%"
 
 	return ""
 }

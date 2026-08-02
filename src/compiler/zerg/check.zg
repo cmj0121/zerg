@@ -290,7 +290,7 @@ fn chk_spec_impls(mut &em: Emitter, f: File) {
 			# without this the mismatch surfaces one member at a time, as "parameter `k` is
 			# int, and the spec declares K" — true, and about the wrong thing. What went
 			# wrong is that the impl never said what `K` is.
-			chk_at_place(em, ip.path, ip.line, ip.col, f"`{ip.on}` is parameterized by {ty_names(chk_param_tys(sp))}, and this `impl` gives {strconv.to_string(ip.args.len(), 10)} type argument(s) — a parameterized spec is implemented once per argument, as `impl {ip.on}[…] for {ip.target}`")
+			chk_at_place(em, ip.path, ip.line, ip.col, f"`{ip.on}` is parameterized by {chk_join(sp.params)}, and this `impl` gives {strconv.to_string(ip.args.len(), 10)} type argument(s) — a parameterized spec is implemented once per argument, as `impl {ip.on}[…] for {ip.target}`")
 			continue
 		}
 		mut seen: list[str] = []
@@ -298,12 +298,15 @@ fn chk_spec_impls(mut &em: Emitter, f: File) {
 	}
 }
 
-# chk_param_tys is a spec's own type parameters as types, for a message that shows the
-# shape the `impl` was supposed to give.
-fn chk_param_tys(sp: SpecDecl) -> list[Ty] {
-	mut out: list[Ty] = []
-	for n in sp.params {
-		out.append(TNamed(n))
+# chk_join renders a spec's type-parameter names for a message. ty_names wants a list[Ty],
+# and building TNamed leaves purely to join them is a list to make one sentence.
+fn chk_join(ns: list[str]) -> str {
+	mut out := ""
+	for n in ns {
+		if out != "" {
+			out = out + ", "
+		}
+		out = out + n
 	}
 	return out
 }
@@ -314,7 +317,7 @@ fn chk_spec_index(f: File, name: str) -> int {
 		return i if f.specs[i].name == name
 		i = i + 1
 	}
-	return 0 - 1
+	return -1
 }
 
 # chk_impl_covers checks one `impl` against one spec AND every spec that one extends.
@@ -324,9 +327,8 @@ fn chk_spec_index(f: File, name: str) -> int {
 # extending one spec — from being checked twice, and a cycle from not terminating.
 fn chk_impl_covers(mut &em: Emitter, f: File, ip: ImplDecl, si: int, mut &seen: list[str]) {
 	sp := f.specs[si]
-	for s in seen {
-		return if s == sp.name
-	}
+	return if c_name_in(seen, sp.name)
+
 	seen.append(sp.name)
 
 	for req in sp.reqs {
@@ -426,14 +428,11 @@ fn chk_subst_named(n: str, sp: SpecDecl, ip: ImplDecl) -> Ty {
 
 	mut i := 0
 	for i < sp.params.len() {
-		if sp.params[i] == n {
-			# an argument the impl did not give leaves the parameter as it stands, so the
-			# mismatch is reported about the type the reader wrote rather than about a
-			# substitution that did not happen
-			return ip.args[i] if i < ip.args.len()
+		# an argument the impl did not give leaves the parameter as it stands, so the
+		# mismatch is reported about the type the reader wrote rather than about a
+		# substitution that did not happen
+		return ip.args[i] if sp.params[i] == n and i < ip.args.len()
 
-			return TNamed(n)
-		}
 		i = i + 1
 	}
 	return TNamed(n)

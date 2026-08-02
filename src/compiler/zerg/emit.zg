@@ -2618,6 +2618,20 @@ fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
 	# on the way past a non-arithmetic operator withdrew a claim somebody else had made —
 	# the list element vtables went undeclared and cc reported them.
 	if c_is_int(t) or c_is_byte(t) {
+		# a SHIFT carries the source type's width, because that is what bounds the
+		# distance: a byte shifts within 8 even though the value travels as an i64
+		if oper == "<<" or oper == ">>" {
+			em.used_rt = true
+			mut w := "64"
+			if c_is_byte(t) {
+				w = "8"
+			}
+			mut sf := "zrt_shr_i64"
+			if oper == "<<" {
+				sf = "zrt_shl_i64"
+			}
+			return c_arith_narrow(t, f"{sf}({a}, {b}, {w})")
+		}
 		fn_name := c_arith_fn(oper)
 		if fn_name != "" {
 			em.used_rt = true

@@ -92,6 +92,12 @@ struct zrt_chan {
 static void wq_push(zrt_waiter **head, zrt_waiter **tail, zrt_waiter *w) {
 	ZRT_TRACEF("wq_push  q=%p w=%p co=%p", (void *)head, (void *)w, (void *)w->co);
 	ZRT_TRACE_QOP(head, w, "push");
+	/* the same question at the OTHER end. A waiter that is already outside every live stack
+	 * when it is pushed means the registry never learned about its stack; one that passes
+	 * here and fails at the pop means the stack was freed in between, and the assertion at
+	 * the free did not run. Those are the two halves of the contradiction the report showed
+	 * — pushed, never popped, registered, and in no live range — and this separates them. */
+	ZRT_TRACE_CHECK_MAPPED(head, w);
 	ZRT_TRACE_WAITER_ON(w, w->co);
 	w->next = NULL;
 	if (*tail != NULL) {

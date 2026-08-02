@@ -542,10 +542,18 @@ void zrt_trace_stack_on(void *lo, size_t len) {
 		if (g_ts_lo[i] == NULL) {
 			g_ts_lo[i] = lo;
 			g_ts_len[i] = len;
-			break;
+			zrt_mutex_unlock(&g_tw_lock);
+			return;
 		}
 	}
 	zrt_mutex_unlock(&g_tw_lock);
+	/* the last place in this instrument that could still lose a fact quietly: a dropped
+	 * range makes every waiter on that stack look dead, which is exactly the false positive
+	 * this whole hunt has been trying to tell apart from a finding */
+	fprintf(stderr, "[zrt] TRACE STACK TABLE FULL at %d — raise ZRT_TRACE_MAX_STACKS\n",
+	        ZRT_TRACE_MAX_STACKS);
+	fflush(stderr);
+	abort();
 }
 
 static void ts_off(void *lo) {

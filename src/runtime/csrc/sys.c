@@ -17,6 +17,10 @@
 
 #include "zergrt.h"
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h> /* _NSGetExecutablePath, for zrt_exe_path */
+#endif
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -216,6 +220,41 @@ const char *zrt_platform(void) {
 	return sys_str_cell("freebsd");
 #else
 	return sys_str_cell("unknown");
+#endif
+}
+
+/* zrt_exe_path answers the path of the RUNNING executable, or "" when the host will not
+ * say. It is how a toolchain finds the files it was installed beside — its runtime C
+ * sources and its standard library — without being told where it lives by an environment
+ * variable or by the current directory, neither of which the user set.
+ *
+ * argv[0] is not enough and is deliberately not used: it is whatever the caller passed,
+ * which is a bare name when the binary came off PATH. Each host has one call that answers
+ * the real thing, and a host with none answers "" — the caller falls back rather than
+ * guessing from a name.
+ */
+const char *zrt_exe_path(void) {
+#if defined(__APPLE__)
+	char     buf[4096];
+	uint32_t n = (uint32_t)sizeof(buf);
+	if (_NSGetExecutablePath(buf, &n) != 0) {
+		return sys_str_cell("");
+	}
+	char real[4096];
+	if (realpath(buf, real) == NULL) {
+		return sys_str_cell(buf);
+	}
+	return sys_str_cell(real);
+#elif defined(__linux__)
+	char    buf[4096];
+	ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+	if (n <= 0) {
+		return sys_str_cell("");
+	}
+	buf[n] = '\0';
+	return sys_str_cell(buf);
+#else
+	return sys_str_cell("");
 #endif
 }
 

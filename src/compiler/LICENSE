@@ -1,0 +1,11 @@
+The self-hosted Zerg compiler — GNU General Public License v3.0 or later.
+
+This directory is licensed under GPL-3.0-or-later; the full text is in
+LICENSES/GPL-3.0.txt at the repository root.
+
+This covers the COMPILER, not what it produces. A program you compile with Zerg
+carries no license from this directory: its output is not a derivative work of
+the compiler, and the runtime that IS linked into it is MIT. Distributing a
+MODIFIED compiler is what this license asks something of.
+
+SPDX-License-Identifier: GPL-3.0-or-later

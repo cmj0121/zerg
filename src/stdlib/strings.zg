@@ -127,6 +127,20 @@ pub fn repeat(s: str, count: int) -> str {
 	return str(out)
 }
 
+# slice_str copies b[lo..hi) into a str. Written out rather than `str(b[lo..hi])` because
+# this module is compiled by the SEED as well — it builds the compiler that has slicing —
+# and the seed answers `cannot use range[int] as int`. Every other function here predates
+# slicing for the same reason.
+fn slice_str(b: list[byte], lo: int, hi: int) -> str {
+	mut out: list[byte] = []
+	mut i := lo
+	for i < hi {
+		out.append(b[i])
+		i = i + 1
+	}
+	return str(out)
+}
+
 # trim removes leading and trailing ASCII whitespace (the `ascii.is_space` set — space,
 # tab, LF, VT, FF, CR) from s.
 pub fn trim(s: str) -> str {
@@ -140,33 +154,27 @@ pub fn trim(s: str) -> str {
 	for hi > lo and ascii.is_space(b[hi - 1]) {
 		hi = hi - 1
 	}
-	mut out: list[byte] = []
-	mut i := lo
-	for i < hi {
-		out.append(b[i])
-		i = i + 1
-	}
-	return str(out)
+	return slice_str(b, lo, hi)
 }
 
 # to_upper returns s with every ASCII lowercase letter folded to uppercase; every other
 # byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
-# `ascii.to_upper`.
+# `ascii.fold_upper`.
 pub fn to_upper(s: str) -> str {
 	mut out: list[byte] = []
 	for c in list[byte](s) {
-		out.append(ascii.to_upper(c))
+		out.append(ascii.fold_upper(c))
 	}
 	return str(out)
 }
 
 # to_lower returns s with every ASCII uppercase letter folded to lowercase; every other
 # byte (including all non-ASCII) is passed through unchanged. Per-byte folding is
-# `ascii.to_lower`.
+# `ascii.fold_lower`.
 pub fn to_lower(s: str) -> str {
 	mut out: list[byte] = []
 	for c in list[byte](s) {
-		out.append(ascii.to_lower(c))
+		out.append(ascii.fold_lower(c))
 	}
 	return str(out)
 }
@@ -226,13 +234,8 @@ pub fn trim_prefix(s: str, prefix: str) -> str {
 	b := list[byte](s)
 	p := list[byte](prefix)
 	return s if not match_at(b, p, 0)
-	mut out: list[byte] = []
-	mut i := p.len()
-	for i < b.len() {
-		out.append(b[i])
-		i = i + 1
-	}
-	return str(out)
+
+	return slice_str(b, p.len(), b.len())
 }
 
 # trim_suffix returns s without a single trailing suffix; if s does not end with
@@ -243,13 +246,8 @@ pub fn trim_suffix(s: str, suffix: str) -> str {
 	sf := list[byte](suffix)
 	hi := b.len() - sf.len()
 	return s if not match_at(b, sf, hi)
-	mut out: list[byte] = []
-	mut i := 0
-	for i < hi {
-		out.append(b[i])
-		i = i + 1
-	}
-	return str(out)
+
+	return slice_str(b, 0, hi)
 }
 
 # fields splits s around each run of ASCII whitespace, returning the non-empty pieces
@@ -276,4 +274,87 @@ pub fn fields(s: str) -> list[str] {
 		out.append(str(cur))
 	}
 	return out
+}
+
+# last_index_of returns the BYTE offset of the LAST occurrence of sub in s, or -1 when
+# sub is absent. An empty sub is found at the end, which is where the last one is — the
+# mirror of index_of finding it at 0.
+pub fn last_index_of(s: str, sub: str) -> int {
+	hay := list[byte](s)
+	nee := list[byte](sub)
+	mut i := hay.len() - nee.len()
+	for i >= 0 {
+		return i if match_at(hay, nee, i)
+		i = i - 1
+	}
+	return -1
+}
+
+# trim_left removes leading ASCII whitespace only; trim_right removes trailing only.
+# `trim` is both, and is the one to reach for unless a side matters.
+pub fn trim_left(s: str) -> str {
+	b := list[byte](s)
+	n := b.len()
+	mut lo := 0
+	for lo < n and ascii.is_space(b[lo]) {
+		lo = lo + 1
+	}
+	return slice_str(b, lo, n)
+}
+
+pub fn trim_right(s: str) -> str {
+	b := list[byte](s)
+	mut hi := b.len()
+	for hi > 0 and ascii.is_space(b[hi - 1]) {
+		hi = hi - 1
+	}
+	return slice_str(b, 0, hi)
+}
+
+# equal_fold reports whether a and b are equal ignoring ASCII case. Not `to_lower(a) ==
+# to_lower(b)`: that builds two strings to answer a question about bytes, and it stops at
+# the first difference rather than after two allocations.
+pub fn equal_fold(a: str, b: str) -> bool {
+	x := list[byte](a)
+	y := list[byte](b)
+	return false if x.len() != y.len()
+
+	mut i := 0
+	for i < x.len() {
+		return false if ascii.fold_lower(x[i]) != ascii.fold_lower(y[i])
+
+		i = i + 1
+	}
+	return true
+}
+
+# pad_start / pad_end return s padded with `fill` to at least `width` BYTES. A string
+# already that wide is returned unchanged, and a fill that is not exactly one byte raises —
+# a multi-byte fill cannot land on a byte width without cutting a code point in half.
+#
+# The padding itself is `repeat`, which is what it is: the early return is what keeps the
+# count it is given non-negative, so nothing here has to restate that rule.
+pub fn pad_start(s: str, width: int, fill: str) -> str {
+	n := pad_count(s, width, fill)
+	return s if n == 0
+
+	return repeat(fill, n) + s
+}
+
+pub fn pad_end(s: str, width: int, fill: str) -> str {
+	n := pad_count(s, width, fill)
+	return s if n == 0
+
+	return s + repeat(fill, n)
+}
+
+# pad_count validates the fill and answers how many of it are missing — never negative, so
+# a string already at or past the width pads with none.
+fn pad_count(s: str, width: int, fill: str) -> int {
+	raise "strings.pad: the fill is one byte" if list[byte](fill).len() != 1
+
+	n := width - list[byte](s).len()
+	return 0 if n < 0
+
+	return n
 }

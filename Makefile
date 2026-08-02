@@ -51,9 +51,28 @@ build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, t
 	$(ZERG_STAGE1) build --emit bin -j $(JOBS) -o ./bin/zerg $(ZERG_ENTRY)
 	@rm -f $(ZERG_STAGE1) $(ZERG_STAGE1).c
 
-install: $(SUBDIR)              # install editor integrations (nvim syntax) locally
+# PREFIX is where a release lands. The layout is the one `zerg` looks for when it is not
+# running from its own source tree: the binary at <prefix>/bin, and the two source trees a
+# build needs — the runtime C and the standard library — at <prefix>/lib/zerg. The compiler
+# finds them from its OWN path (zrt_exe_path), so nothing has to be exported and no
+# directory has to be the current one.
+PREFIX ?= /usr/local
 
-uninstall: $(SUBDIR)            # remove editor integrations installed by `make install`
+# `build` runs as a recipe line, not a prerequisite: as a prerequisite it would race the
+# submodule work under `make -j`, and what is installed must be the binary this run built.
+install: $(SUBDIR)              # install the toolchain into $(PREFIX), and the editor integrations
+	$(MAKE) build
+	@install -d "$(PREFIX)/bin" "$(PREFIX)/lib/zerg/csrc" "$(PREFIX)/lib/zerg/stdlib"
+	install -m 0755 bin/zerg "$(PREFIX)/bin/zerg"
+	@# zrt_test.* is the C suite's harness and belongs to no program; the others are the
+	@# per-platform slots the driver picks between, and it needs all of them present.
+	@cp $(filter-out %/zrt_test.c,$(wildcard src/runtime/csrc/*.c)) $(filter-out %/zrt_test.h,$(wildcard src/runtime/csrc/*.h)) src/runtime/csrc/*.S "$(PREFIX)/lib/zerg/csrc/"
+	@cp src/stdlib/*.zg "$(PREFIX)/lib/zerg/stdlib/"
+	@echo "installed: $(PREFIX)/bin/zerg with its runtime and stdlib under $(PREFIX)/lib/zerg"
+
+uninstall: $(SUBDIR)            # remove what `make install` put in $(PREFIX)
+	rm -f "$(PREFIX)/bin/zerg"
+	rm -rf "$(PREFIX)/lib/zerg"
 
 upgrade:			            # upgrade all the necessary packages
 	pre-commit autoupdate
@@ -85,7 +104,7 @@ $(SUBDIR):
 examples:                       # build every example with zerg itself, and run it
 	$(MAKE) build
 	@fail=0; n=0; mkdir -p bin/examples; \
-	for src in examples/[0-9][0-9]_*.zg examples/1g/reexport/main.zg examples/1g/modconst/main.zg examples/1g/spec/main.zg; do \
+	for src in examples/[0-9][0-9]_*.zg examples/1g/reexport/main.zg examples/1g/modconst/main.zg examples/1g/spec/main.zg examples/1g/strings/main.zg; do \
 		out=bin/examples/$$(echo $$src | sed 's|^examples/||; s|/|_|g; s|\.zg$$||'); \
 		./bin/zerg build $$src --emit bin -o $$out >/dev/null 2>&1 || { echo "BUILD  $$src"; fail=1; continue; }; \
 		$$out >/dev/null 2>&1 || { echo "RUN    $$src"; fail=1; continue; }; \

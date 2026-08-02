@@ -358,19 +358,26 @@ fn chk_impl_member(mut &em: Emitter, f: File, ip: ImplDecl, sp: SpecDecl, req: F
 
 # chk_sig_differs answers WHY two signatures differ, or "" when they do not.
 #
-# The required signature is read with no receiver — a spec member's `this` is the
-# implementing type, which is not known where the spec is written — so the supplied one
-# carries an extra first parameter and the two are compared offset by it.
+# Both signatures carry their receiver as the first parameter — a required one gets `This`,
+# which chk_spec_subst turns into the target — so the two are the same shape and are
+# compared position for position with nothing to offset. That is also what makes `mut fn`
+# comparable: it rides as the receiver's `mut &`, exactly like any other parameter's.
 fn chk_sig_differs(sp: SpecDecl, ip: ImplDecl, req: FnDecl, sup: FnDecl) -> str {
-	want := req.params.len() + 1
-	return f"it takes {chk_args(sup.params.len() - 1)}, and the spec declares {chk_args(req.params.len())}" if sup.params.len() != want
+	return f"it takes {chk_args(sup.params.len() - 1)}, and the spec declares {chk_args(req.params.len() - 1)}" if sup.params.len() != req.params.len()
 
 	mut i := 0
 	for i < req.params.len() {
 		w := req.params[i]
-		g := sup.params[i + 1]
-		at := strconv.to_string(i + 1, 10)
+		g := sup.params[i]
+		at := strconv.to_string(i, 10)
 
+		if i == 0 {
+			return "it is a `mut fn` and the spec's is not — a `mut fn` mutates its receiver, so calling it needs a `mut` binding" if g.is_ref and not w.is_ref
+			return "it is not a `mut fn` and the spec's is" if w.is_ref and not g.is_ref
+
+			i = i + 1
+			continue
+		}
 		return f"parameter {at} is named `{g.name}`, and the spec names it `{w.name}` — a named argument selects by that name, so it is part of the contract" if w.name != g.name
 
 		wt := chk_spec_subst(w.ty, sp, ip)

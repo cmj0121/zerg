@@ -92,9 +92,9 @@ enum Expr {
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
 
-	# EConv carries the NAME TO REPORT THIS NODE AS, beside the target type. `uint` is
-	# `int64_t` in this compiler, so the type alone cannot tell `int(x)` from `uint(x)` —
-	# and a diagnostic that read the type back named a form the programmer had not written.
+	# EConv carries the NAME TO REPORT THIS NODE AS, beside the target type — a diagnostic
+	# that reads the type back names a form in the compiler's spelling rather than the
+	# programmer's, and the two are not always the same word.
 	#
 	# "to report as" rather than "as written": two construction sites synthesize it, `b'J'`
 	# as "byte" and an f-string hole as "str", because neither was spelled by the reader

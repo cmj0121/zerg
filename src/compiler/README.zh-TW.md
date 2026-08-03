@@ -134,6 +134,45 @@ release，ref-box 配置了就不釋放，list 帶一個 `{NULL,NULL}` 的元素
 回收。這仍然遵守「emit C、重用 runtime」這個決定——runtime 的資料結構確實被重用了——同時砍掉了
 Go emit 大部分的複雜度。決定性（M5 唯一需要的性質）不受洩漏影響。
 
+**而那個理由已經超出它自己的範圍了。** 它推論的是**一個**程式：這個編譯器，編譯它自己，然後結束。
+但這是**出貨用的後端**：同一份 emit 編譯的是每一個有人用 Zerg 寫出來的程式，而那些程式沒有一個
+答應過自己是批次工具。一個用 `zerg build` 建出來的 Zerg 服務，會漏掉它格式化過的每個字串、建過的
+每個 list，只要它還在跑就一直漏。語言裡沒有任何一句話這樣說，工具鏈也不會警告。
+
+它之所以一直沒被量到，是因為唯一的 sanitizer gate 是 `make sanitize-conc`，而在 ASan 的 fiber
+標註落地之前，LeakSanitizer 掃的是錯的範圍找 root，於是什麼都不報。第一次誠實的執行才把它叫出來。
+
+每個擁有者今天做到哪裡，還剩下什麼：
+
+| 擁有者         | 今天                                                  | 還剩下什麼                   |
+| -------------- | ----------------------------------------------------- | ---------------------------- |
+| `chan`         | binding，以及沒被 bind 的 handle                      | ——                           |
+| `list` / `map` | binding、參數、元素 vtable、rvalue 暫存值             | ——                           |
+| `str`          | refcount cell；binding、參數、每一次 join             | ——                           |
+| struct         | `zg_drop_<T>` 就寫在 `zg_copy_<T>` 旁邊，走同一組欄位 | ——                           |
+| carrier        | `!` / `??` 讀進來的那個暫存值有 drop 了               | 還缺 copy，binding 才能 drop |
+| tuple          | 有 copy helper，沒有 drop                             | 在 copy 旁邊補上 drop        |
+| ref-box        | 每個節點一次 `zrt_ref_alloc`，從來不釋放              | 遞迴型別的 drop              |
+| 以上全部       | 在宣告處註冊，靠 unwind 還回去                        | ——                           |
+
+concurrency corpus 現在是 **0 筆洩漏報告**（從 39 筆），而 `scripts/sanitize-conc.sh` 已經打開
+`detect_leaks=1`——那裡再出現洩漏就是 regression，不是已知欠債。`str` 那一列本來不是「多 emit
+一些程式碼」就能解決的，因為 literal 是靜態儲存、concat 回傳的是 `malloc`，在執行期一個 `char*`
+沒辦法告訴你它拿的是哪一種；它換成了 refcount cell，並把 literal emit 成 IMMORTAL cell，讓
+refcount 的兩半在它身上都是 no-op。
+
+最後一列就是把 abort 那條路關掉的東西。釋放現在是**在 binding 宣告的地方註冊**，靠 unwind 到一個
+mark 還回去——那本來就是其他每一條出口都會走的同一條路，包括 runtime 自己展開的那次 abort。
+`c_release_from` 原本的論證（defer 會握著一個可能先結束的區塊裡的 C 區域變數位址）並不成立：
+`zrt_unwind_abort` 是先 unwind 才 `longjmp`，所以 frame 還活著；而任何會註冊東西的區塊都會拿自己
+的 mark、在自己結束的地方 unwind。
+
+**還沒被量到的**是 corpus 的其餘部分。`sanitize-conc` 跑的是 17 個 concurrency case；我對另外 48
+個做了一次性的掃描，13 個裡面總共 47 筆，而且都是 concurrency case 碰不到的類別——一連串的
+rvalue index、map 暫存值、expression 裡的 `str(bytes)`，以及 ref-box 的遞迴型別（就是 `ref-box`
+那一列，它從設計上就沒有被釋放過）。下一步需要的是一個涵蓋整個 corpus 的洩漏 gate，因為沒有東西
+在跑的類別，就是沒有東西在量的類別。
+
 **通往 M5 的增量階梯**（每一階都端到端測過，然後才 commit）：
 
 1. struct——宣告、建構、欄位存取、`mut &` 參數、欄位變更 _（不需 runtime）_

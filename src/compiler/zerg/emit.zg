@@ -6260,6 +6260,16 @@ fn c_strs_take(xs: list[str], n: int) -> list[str] {
 
 # c_let_list declares a list binding: a list-literal initializer becomes an init plus a
 # push per element; any other initializer (a call or another list) is a plain copy.
+# c_let_list declares a LIST binding, which owns its buffer and gives it back at scope exit
+# (c_pend_release) exactly as a channel binding gives back its handle.
+#
+# The address is what is registered, because zrt_list_drop takes the header by pointer — the
+# pending list holds text and a function, so `&name` is all "by reference" has to mean here.
+#
+# A list is REFCOUNTED underneath (copy-on-write), which is what makes the drop safe at every
+# site a list leaves this scope by: `return xs` copies, and so does pushing one into a
+# channel, a struct field or a `spawn` capture. Each of those retains, so the holder dropped
+# here is never the last one when somebody else is still reading.
 fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 
@@ -6269,6 +6279,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 		vals := c_elem_exprs(em, ival, c_list_elem(eff))
 		c_add_var(em, name, eff, is_mut)
 		cname := c_var_cname(em, name)
+		c_pend_release(em, "&" + cname, "zrt_list_drop")
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"
 		return out + c_pushes_strs(cname, et, vals, ind)
 	}
@@ -6277,7 +6288,9 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	# same one every other site uses.
 	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff, is_mut)
-	return f"{ind}zrt_list {c_var_cname(em, name)} = {val};\n"
+	cn := c_var_cname(em, name)
+	c_pend_release(em, "&" + cn, "zrt_list_drop")
+	return f"{ind}zrt_list {cn} = {val};\n"
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {

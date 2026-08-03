@@ -2600,12 +2600,25 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 
 	ca := c_expr(em, a, sb)
 	cb := c_expr(em, b, sb)
+	return c_floordiv(em, ta, c_infer(em, b), ca, cb) if oper == "//"
+
 	# The RESULT's type decides whether this operation can overflow, not the left operand's.
 	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
 	# adopting the context (docs/core/types.md); handing `c_arith` the left type sent it
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_floordiv lowers `a // b`. Its result is always an `int`, so the operand types decide
+# only HOW: two integers are the integer division the language already has — already
+# Euclidean, already checked — and a float pair goes through the helper that divides as a
+# double and lands in int64 through the same range check `int(x)` is.
+fn c_floordiv(mut &em: Emitter, ta: Ty, tb: Ty, a: str, b: str) -> str {
+	em.used_rt = true
+	return f"(zrt_floordiv_f((double)({a}), (double)({b})))" if c_is_float(ta) or c_is_float(tb)
+
+	return f"(zrt_div_i64((int64_t)({a}), (int64_t)({b})))"
 }
 
 # c_arith lowers a binary operator that has a CHECK, and every other one as the bare C
@@ -4263,6 +4276,11 @@ fn c_infer_unary(mut &em: Emitter, oper: str, x: Expr) -> Ty {
 
 fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	return TBool if c_is_bool_op(oper)
+
+	# `//` is the language's ONE integer division, spelled so the reader sees an integer
+	# whatever the operands are (docs/core/types.md) — so it answers `int` before the
+	# float and byte rules below get a say. That IS the operator.
+	return TInt if oper == "//"
 	return TStr if oper == "+" and c_is_str(c_infer(em, a))
 	return TFloat if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b))
 

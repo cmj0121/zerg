@@ -1261,13 +1261,13 @@ zrt_chan *zrt_chan_sender_copy(zrt_chan *ch);
 void zrt_chan_release(zrt_chan *ch);
 void zrt_chan_sender_release(zrt_chan *ch);
 
-/* zrt_defer_* are the `void (*)(void *)` adapters a compiled program registers its
- * bindings' releases with. The env is always the ADDRESS of the binding's storage, so
- * the cleanup reads what the binding holds at unwind time. A generated drop — a struct's
- * or a carrier's — already has a thunk of this shape beside it. */
-void zrt_defer_list_drop(void *p);
-void zrt_defer_map_drop(void *p);
-void zrt_defer_str_release(void *p);
+/* zrt_defer_chan_release / _sender_release are the `void (*)(void *)` adapters a compiled
+ * program registers a channel binding's release with. The ENV is always the ADDRESS of the
+ * binding's storage, never its value, so the cleanup reads what the binding holds at unwind
+ * time — a reassigned binding gives back what it ends up with.
+ *
+ * Only channels. Every other owning type is a list ELEMENT somewhere, so the emitter
+ * already generates a thunk of this shape for it (`zg_elemdrop_<kind>`) and registers that. */
 void zrt_defer_chan_release(void *p);
 void zrt_defer_chan_sender_release(void *p);
 

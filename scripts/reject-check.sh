@@ -471,7 +471,7 @@ fn main() {
 }
 EOF
 
-reject bind-int-list-to-str-list 'cannot bind int to a str element' <<'EOF'
+reject bind-int-list-to-str-list 'cannot bind list[int] to a list[str] binding' <<'EOF'
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
@@ -505,7 +505,28 @@ fn main() {
 }
 EOF
 
-reject byte-value-element-in-an-int-list 'cannot bind byte to a int element' <<'EOF'
+reject byte-value-element-in-a-returned-int-list 'this function answers list[int]' <<'EOF'
+fn g() -> list[int] {
+	return [b'a']
+}
+
+fn main() {
+	print(f"{g()[0]}")
+}
+EOF
+
+reject int-value-element-in-a-float-list-argument '`h` takes list[float] as argument 1' <<'EOF'
+fn h(ys: list[float]) -> int {
+	return ys.len()
+}
+
+fn main() {
+	i := 2
+	print(f"{h([i])}")
+}
+EOF
+
+reject byte-value-element-in-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
 fn main() {
 	xs: list[int] = [b'a', b'b']
 	print(f"{xs[0]}")
@@ -814,7 +835,7 @@ fn main() {
 }
 EOF
 
-reject bind-a-nested-list-of-the-wrong-element 'cannot bind list[int] to a list[str] element' <<'EOF'
+reject bind-a-nested-list-of-the-wrong-element 'cannot bind list[list[int]] to a list[list[str]] binding' <<'EOF'
 fn main() {
 	xs: list[list[str]] = [[1]]
 	print(f"{xs.len()}")

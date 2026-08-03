@@ -1013,8 +1013,14 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
 
 		# int and float compare: they are one family, and the language already mixes them
-		# in arithmetic
-		return if chk_is_num(ta) and chk_is_num(tb)
+		# in arithmetic. `int` and `uint` are NOT that family — the trap the mixing rule
+		# names is a comparison trap first (in C the signed side converts, so `-1 == 1u` is
+		# not what it reads as), and asking it only for `<` would have caught the operator
+		# where the answer looks wrong and missed the one where it looks right.
+		if chk_is_num(ta) and chk_is_num(tb) {
+			chk_mixed_sign(em, oper, ta, tb, ea, eb)
+			return
+		}
 		if ty_name(ta) != ty_name(tb) {
 			chk_at(em, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value")
 		}

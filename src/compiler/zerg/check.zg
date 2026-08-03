@@ -657,15 +657,114 @@ fn chk_call_name(key: str) -> str {
 # The pair `_expr` / plain is this file's existing shape for one question asked two ways —
 # c_is_nil_lit and c_is_nil_expr are the same twins.
 fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
-	return chk_int_lit(e) if chk_int_to_float(want, got)
+	return chk_lit_fits(want, e) if chk_adopts_int_lit(want) and c_is_int(got)
 
 	return chk_fits(em, want, got)
 }
 
-# chk_int_to_float names the ONE widening whose answer depends on which of the two asks. It
-# is written here rather than twice because chk_fits accepts it and chk_fits_expr intercepts
-# it: two spellings of one pair drift apart silently, since the accepting one is the line
-# the intercepting one falls through to.
+# chk_adopts_int_lit is every target an untyped integer literal may adopt. docs/core/types.md
+# states the rule over literals generally rather than over one pair — "it adopts the type its
+# context demands" — so this is a list of targets and not a list of pairs, and a new numeric
+# type joins by being named here once.
+#
+# What each of them refuses is the already-typed `int` VALUE, which is the whole point:
+# `x: float = 1` and `u: uint = 0` are the literal adopting its context, and `y: float = i`
+# and `u: uint = i` need `float(i)` and `uint(i)`.
+fn chk_adopts_int_lit(want: Ty) -> bool {
+	return c_is_float(want) or c_is_uint(want) or c_is_byte(want)
+}
+
+# chk_lit_fits is the second half of adoption, and it is not optional: a literal adopts the
+# type its context demands ONLY if it is a value of that type. docs/core/types.md — "A
+# literal that does not fit its required type is a compile error (`byte = 300`, `uint = -1`)
+# — never a runtime overflow."
+#
+# Adoption without the range check is strictly worse than no adoption: `take(1000)` on a
+# `byte` parameter would go from a diagnostic to a silent truncation, which is the trade the
+# byte-widening comment in chk_fits already refused once.
+fn chk_lit_fits(want: Ty, e: Expr) -> bool {
+	return false if not chk_int_lit(e)
+	return true if c_is_float(want)
+
+	return chk_lit_in_range(want, e, false)
+}
+
+# chk_lit_in_range walks down to the literal, `neg` recording whether an odd number of
+# minuses stands above it — the sign is a unary node rather than part of the lexeme, so it
+# is carried down instead of parsed. It answers on the VALUE, so `-0` is in range for a
+# `uint` and `-1` is not.
+fn chk_lit_in_range(want: Ty, e: Expr, neg: bool) -> bool {
+	return match e {
+		EUnary(o, x) => chk_lit_minus(want, o, x, neg)
+		EInt(lex)    => chk_int_in_range(want, chk_lit_value(lex), neg)
+		_            => false
+	}
+}
+
+# a match arm takes no guard, so the `-` test is its own function rather than a condition on
+# the arm above
+fn chk_lit_minus(want: Ty, o: str, x: Expr, neg: bool) -> bool {
+	return false if o != "-"
+
+	return chk_lit_in_range(want, x, not neg)
+}
+
+# chk_lit_value reads a literal's lexeme as a number. A literal node keeps its lexeme
+# verbatim, so the base prefixes the language writes (`0x` / `0o` / `0b`) and the `_`
+# separators it allows inside one are still in the text and are read off here.
+fn chk_lit_value(lex: str) -> int {
+	mut digits: list[byte] = []
+	for ch in list[byte](lex) {
+		if ch != b'_' {
+			digits.append(ch)
+		}
+	}
+
+	return 0 if digits.len() == 0
+	return strconv.parse_int(str(digits), 10) if digits.len() < 3 or digits[0] != b'0'
+
+	base := chk_lit_base(ascii.fold_lower(digits[1]))
+	return strconv.parse_int(str(digits), 10) if base == 10
+
+	return strconv.parse_int(str(chk_lit_after(digits, 2)), base)
+}
+
+fn chk_lit_base(marker: byte) -> int {
+	return 16 if marker == b'x'
+	return 8 if marker == b'o'
+	return 2 if marker == b'b'
+
+	return 10
+}
+
+fn chk_lit_after(digits: list[byte], at: int) -> list[byte] {
+	mut out: list[byte] = []
+	mut i := at
+	for i < digits.len() {
+		out.append(digits[i])
+		i = i + 1
+	}
+	return out
+}
+
+# chk_int_in_range is the bounds themselves. A `byte` is 0..255 and a `uint` has no negative
+# side; an `int` past i64 is the LEXER's to refuse, because a value it cannot represent is
+# not one this can compare.
+fn chk_int_in_range(want: Ty, v: int, neg: bool) -> bool {
+	if c_is_byte(want) {
+		return false if neg and v != 0
+
+		return v <= 255
+	}
+	return not neg or v == 0 if c_is_uint(want)
+
+	return true
+}
+
+# chk_int_to_float names the ONE widening chk_fits accepts on the type alone. It is written
+# here rather than twice because chk_fits accepts it and chk_fits_expr intercepts it: two
+# spellings of one pair drift apart silently, since the accepting one is the line the
+# intercepting one falls through to.
 fn chk_int_to_float(want: Ty, got: Ty) -> bool {
 	return c_is_float(want) and c_is_int(got)
 }
@@ -881,8 +980,10 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
 		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+			return
 		}
 
+		chk_mixed_sign(em, oper, ta, tb)
 		return
 	}
 
@@ -890,8 +991,10 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		return if c_is_str(ta) and c_is_str(tb)
 		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
+			return
 		}
 
+		chk_mixed_sign(em, oper, ta, tb)
 		return
 	}
 
@@ -952,8 +1055,25 @@ fn chk_is_scalar(t: Ty) -> bool {
 	return c_is_int(t) or c_is_float(t) or c_is_str(t) or c_is_bool_ty(t)
 }
 
+# chk_mixed_sign refuses a signed operand beside an unsigned one. docs/core/types.md:
+# "Mixed `int`/`uint` is never implicit — `int + uint` is a compile error (no implicit
+# conversion, which also sidesteps C's signed/unsigned comparison traps); cast one side."
+#
+# The trap is the reason the rule is worth its inconvenience, and it is a COMPARISON trap as
+# much as an arithmetic one: in C the signed operand converts to unsigned, so `-1 < 1u` is
+# false. Both families ask, which is why this is a function rather than a line.
+#
+# A `byte` is unsigned too, but it WIDENS to an int by a rule of its own and is left out
+# here: `n + 1` on a byte is the ordinary thing to write and has never been ambiguous, since
+# every byte value is an int value. `uint` is the pair where neither side contains the other.
+fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
+	if c_is_uint(ta) != c_is_uint(tb) and chk_is_num(ta) and chk_is_num(tb) {
+		chk_at(em, f"operator `{oper}` mixes {ty_name(ta)} and {ty_name(tb)}, and the two never convert implicitly — cast one side, as `int(u) {oper} i` or `u {oper} uint(i)`")
+	}
+}
+
 fn chk_is_num(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t)
+	return c_is_int(t) or c_is_float(t) or c_is_uint(t)
 }
 
 # chk_is_numish is chk_is_num plus `byte`, which is the one place the difference matters: a

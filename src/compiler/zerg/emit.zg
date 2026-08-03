@@ -3274,8 +3274,26 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	# the types that tell them apart, and it is what the mutating-method path already asks.
 	return f"(*({ct}*){at}(&({tgt}), {ix}))" if c_is_place(em, target)
 
-	# a call/conversion result is an rvalue; materialise it so its address is taken
-	return "({ zrt_list zgt_ix = " + tgt + "; (*(" + ct + "*)" + at + "(&zgt_ix, " + ix + ")); })"
+	# A CALL OR CONVERSION RESULT IS AN RVALUE: it is materialised so its address can be
+	# taken, and — because nothing else will ever name it — given back here. `print
+	# (<-lists)![0]` receives a whole list, reads one element out of it and used to walk away
+	# from the rest.
+	#
+	# The element is read out BEFORE the drop and copied if it owns anything, because it is a
+	# slot in the buffer that is about to be freed. The temporaries are numbered from em.tmp_n
+	# rather than fixed, so `f()[g()[0]]` cannot shadow the name the outer one is holding.
+	em.tmp_n = em.tmp_n + 1
+	ln := f"zgt_t{em.tmp_n}"
+	em.tmp_n = em.tmp_n + 1
+
+	vn := f"zgt_t{em.tmp_n}"
+	et := c_list_elem(tty)
+	slot := f"(*({ct}*){at}(&{ln}, {ix}))"
+	mut val := slot
+	if c_needs_copy(em, et) {
+		val = c_copy_of(em, et, slot)
+	}
+	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; zrt_list_drop(&{ln}); {vn}; }})"
 }
 
 # c_list_at_fn picks the runtime slot accessor. They differ by exactly one thing — the
@@ -4498,9 +4516,22 @@ fn c_elem_ty(mut &em: Emitter, target: Expr, idx: Expr) -> Ty {
 # c_list_method_rv is a list method on an RVALUE: bind it, then call the method on the
 # binding, so the whole thing is still one expression.
 fn c_list_method_rv(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	em.tmp_n = em.tmp_n + 1
+
+	ln := f"zgt_t{em.tmp_n}"
 	src := c_expr(em, target, sb)
-	inner := c_list_method_on(em, "zgt_rv", meth, args, tty, sb)
-	return "({ zrt_list zgt_rv = " + src + "; " + inner + "; })"
+	inner := c_list_method_on(em, ln, meth, args, tty, sb)
+
+	# and give it back: this list is an rvalue, so nothing else will ever name it. `print
+	# Bag([4, 5, 6, 7]).xs.len()` built a list, counted it and dropped the buffer on the floor.
+	# `len` is the only list method that answers a value, and it answers an int — so the
+	# result is held across the drop, and everything else is a statement whose value is the
+	# drop itself.
+	return f"({{ zrt_list {ln} = {src}; {inner}; zrt_list_drop(&{ln}); }})" if meth != "len"
+
+	em.tmp_n = em.tmp_n + 1
+	rn := f"zgt_t{em.tmp_n}"
+	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; zrt_list_drop(&{ln}); {rn}; }})"
 }
 
 fn c_map_method_ret(meth: str) -> Ty {

@@ -1448,7 +1448,7 @@ fn is_add_op(k: Kind) -> bool {
 }
 
 fn is_mul_op(k: Kind) -> bool {
-	return k == Star or k == Slash or k == Percent or k == StarMod or k == Shl or k == Shr or k == Amp
+	return k == Star or k == Slash or k == SlashDiv or k == Percent or k == StarMod or k == Shl or k == Shr or k == Amp
 }
 
 fn is_cmp_op(k: Kind) -> bool {

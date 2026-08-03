@@ -37,7 +37,13 @@ fn check_base(base: int) {
 
 # parse_int parses a signed integer written in the given base, with an optional leading
 # '+' or '-'. It raises ValueError on an empty string, a missing digit, or a digit that
-# is not valid for the base.
+# is not valid for the base, and OverflowError on a value outside `int`'s range.
+#
+# The accumulator runs NEGATIVE. The negative side of two's complement is one wider than
+# the positive, so building the magnitude up and negating it at the end cannot represent
+# the minimum — "-9223372036854775808" is a legal `int` whose positive form is not one.
+# Building downward reaches every value in range, and the single negation at the end
+# raises exactly when a positive literal is the one that does not fit.
 pub fn parse_int(s: str, base: int) -> int {
 	check_base(base)
 	b := list[byte](s)
@@ -56,17 +62,18 @@ pub fn parse_int(s: str, base: int) -> int {
 	for i < n {
 		d := digit_for(b[i])
 		raise "strconv.parse_int: invalid digit for base" if d < 0 or d >= base
-		val = val * base + d
+		val = val * base - d
 		i = i + 1
 	}
-	return -val if neg
-	return val
+	return val if neg
+	return -val
 }
 
 # parse_uint parses an unsigned integer written in the given base, with an optional
 # leading '+'. It raises ValueError on an empty string, a missing digit, a leading '-', or
-# a digit that is not valid for the base. Use this (not parse_int) for a value that fills
-# the top bit, e.g. a 64-bit hex mask.
+# a digit that is not valid for the base, and OverflowError on a value past the range —
+# which used to wrap into a different number in silence. Use this (not parse_int) for a
+# value that fills the top bit, e.g. a 64-bit hex mask.
 pub fn parse_uint(s: str, base: int) -> uint {
 	check_base(base)
 	b := list[byte](s)

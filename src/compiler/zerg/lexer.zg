@@ -718,6 +718,34 @@ pub fn int_value(lex: str) -> int {
 	return v
 }
 
+# rune_value decodes ONE Unicode code point from the UTF-8 bytes a rune literal holds. It
+# lives here for the reason int_value does: what a lexeme is worth is a fact about the
+# lexeme, and a second decoder somewhere else is one that will disagree with this one.
+#
+# A rune literal is exactly one code point by construction — the scanner has already refused
+# a literal holding more than one character — so this reads the first and stops.
+pub fn rune_value(text: str) -> int {
+	bs := list[byte](text)
+	return 0 if bs.len() == 0
+
+	b0 := int(bs[0])
+
+	return b0 if b0 < 0x80
+	return rune_tail(bs, b0 - 0xC0, 1, 2) if b0 >= 0xC0 and b0 < 0xE0
+	return rune_tail(bs, b0 - 0xE0, 1, 3) if b0 >= 0xE0 and b0 < 0xF0
+	return rune_tail(bs, b0 - 0xF0, 1, 4) if b0 >= 0xF0
+
+	# a continuation byte with no lead is not a code point; the scanner does not produce one
+	return 0
+}
+
+# rune_tail folds the continuation bytes onto the lead byte's payload, six bits each.
+fn rune_tail(bs: list[byte], acc: int, at: int, width: int) -> int {
+	return acc if at >= width or at >= bs.len()
+
+	return rune_tail(bs, acc * 64 + (int(bs[at]) - 0x80), at + 1, width)
+}
+
 # int_fits reports whether an integer literal is representable in an i64. A literal that
 # does not fit its required type is a COMPILE ERROR and never a runtime overflow
 # (docs/core/types.md) — which the seed has always enforced and this compiler had not, so

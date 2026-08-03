@@ -675,8 +675,12 @@ fn chk_adopts_int_lit(mut &em: Emitter, want: Ty) -> bool {
 
 	# every numeric scalar that is not `int` itself — asked of the scalar TABLE rather than
 	# by name, so the fixed-width ladder docs/core/types.md adds as stdlib types joins by
-	# being given a width in c_scalar_bits and nothing else
-	return not c_is_int(want) and chk_is_num(want)
+	# being given a width in c_scalar_bits and nothing else.
+	#
+	# chk_is_numISH, which is the one that counts `byte`. chk_is_num leaves it out because
+	# the ARITHMETIC rules do, and adoption is not an arithmetic rule: `xs: list[byte] =
+	# [1, 2]` is two literals becoming bytes, which is the spec's own example.
+	return not c_is_int(want) and chk_is_numish(want)
 }
 
 # chk_lit_fits is the second half of adoption, and it is not optional: a literal adopts the
@@ -771,16 +775,21 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
 	return true if chk_int_to_float(want, got)
 
-	# A `byte` WIDENS to an `int`, in the direction the language already mixes `int` into
-	# `float` above. Making the byte literal carry its type — so that `c: byte = b'J'`
-	# works — turned every other use of one into an error: `f(b'a')` on an `int` parameter,
-	# `[b'a', b'b']` as a `list[int]`, `return b'a'` from an `-> int`.
+	# A `byte` DOES NOT WIDEN TO AN `int`. `b'J'` is a byte, and a byte goes where a byte
+	# goes — `int(b)` is how it becomes a number, the same explicit re-construction every
+	# other conversion is.
 	#
-	# ONE DIRECTION ONLY. The other is a NARROWING, and it is not a fit: `take(1000)` on a
-	# `byte` parameter compiled to a truncation, and cc printed its own warning about
-	# generated C to say 1000 had become 232. Byte arithmetic stays in `byte` instead (see
-	# c_infer_binary), which is what `mut n := b'a'; n = n + 1` needs and all it needs.
-	return true if c_is_int(want) and c_is_byte(got)
+	# It used to widen, for a reason worth recording: making the byte literal carry its type
+	# turned every other use of one into an error — `f(b'a')` on an `int` parameter,
+	# `[b'a', b'b']` as a `list[int]`, `return b'a'` from an `-> int`. Widening made those
+	# compile again. But it made them compile by giving up the distinction the type exists
+	# for, and the seed rejected all of them all along; those uses are not a reason to widen,
+	# they are four places that owe an `int(…)`.
+	#
+	# What a byte literal still does is ADOPT, like every untyped literal: `xs: list[byte] =
+	# [1, 2]` writes two bytes, and `mut n := b'a'; n = n + 1` stays in byte because the `1`
+	# adopts it (c_infer_binary). Adoption is about a literal with no type yet; widening was
+	# about a value that has one.
 
 	# a list fits a list when its ELEMENTS fit, which is not the same as their being equal:
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits
@@ -836,21 +845,41 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	got := c_infer(em, ival)
 
 	# A LIST LITERAL is built INTO its destination, element by element, with the declared
-	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer
-	# and not a `list[int]` reinterpreted. The stride rule in chk_fits is about a container
-	# that already EXISTS; a literal is not one yet.
+	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer and
+	# not a `list[int]` reinterpreted. The stride rule in chk_fits is about a container that
+	# already EXISTS; a literal is not one yet.
 	#
-	# Only the byte/int pair, and only one level down. The elements still have to fit —
-	# `xs: list[list[str]] = [[1]]` is not a stride question and was accepted by a broader
-	# version of this, which is the whole class the rule below exists to catch.
+	# Each ELEMENT is asked, against the declared element type. It used to be asked of the
+	# two element TYPES instead, which cannot tell an untyped literal adopting `byte` from a
+	# byte VALUE being widened — so `xs: list[int] = [b'a', b'b']` came through the same hole
+	# that let `[1, 2]` in, and it is the hole that let `xs: list[float] = [i]` in as well.
 	if c_is_list(declared) and c_is_listlit(ival) and c_is_list(got) {
-		we := c_list_elem(declared)
-		ge := c_list_elem(got)
-		return if c_is_byte(we) != c_is_byte(ge) and chk_is_numish(we) and chk_is_numish(ge)
+		chk_elems_fit(em, name, c_list_elem(declared), ival)
+		return
 	}
 
 	if not chk_fits_expr(em, declared, got, ival) {
 		chk_at(em, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
+	}
+}
+
+# chk_elems_fit asks every element of a list literal to fit the DECLARED element type, and
+# reports against the binding when one does not. It is chk_fits_expr per element, which is
+# the same question the five value slots ask — a literal element adopts, a typed value does
+# not — so a list literal is not a place the rules are weaker.
+fn chk_elems_fit(mut &em: Emitter, name: str, want: Ty, ival: Expr) {
+	for e in chk_listlit_elems(ival) {
+		if not chk_fits_expr(em, want, c_infer(em, e), e) {
+			chk_at(em, f"cannot bind {ty_name(c_infer(em, e))} to a {ty_name(want)} element of `{name}`")
+			return
+		}
+	}
+}
+
+fn chk_listlit_elems(e: Expr) -> list[Expr] {
+	return match e {
+		EListLit(elems) => elems
+		_ => []
 	}
 }
 

@@ -28,6 +28,12 @@ enum Ty {
 	TVoid
 	TUnknown
 	TByte
+
+	# TUint is `uint`, the unsigned 64-bit integer. It is a type of its OWN and not a mode of
+	# TInt: docs/core/types.md makes `int + uint` a compile error, and `>>` arithmetic on the
+	# signed one and logical on the unsigned — neither of which can be said if the two share a
+	# variant. It used to, and both rules were unsayable.
+	TUint
 	TNamed(str)
 	TList(Ty)
 	TFn(list[Ty], Ty)
@@ -657,6 +663,7 @@ fn ty_name(t: Ty) -> str {
 		TNil          => "nil"
 		TVoid         => "void"
 		TByte         => "byte"
+		TUint         => "uint"
 		TNamed(n)     => n
 		TList(e)      => f"list[{ty_name(e)}]"
 		TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"

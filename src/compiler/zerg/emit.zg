@@ -280,6 +280,7 @@ fn c_type(t: Ty) -> str {
 		TBool         => "bool"
 		TVoid         => "void"
 		TByte         => "uint8_t"
+		TUint         => "uint64_t"
 		TNamed(nm)    => "zg_" + nm
 		TList(_)      => "zrt_list"
 		TFn(_, _)     => "zg_fnptr"
@@ -858,6 +859,17 @@ fn c_is_unknown(t: Ty) -> bool {
 fn c_is_byte(t: Ty) -> bool {
 	return match t {
 		TByte => true
+		_     => false
+	}
+}
+
+# c_is_uint is `uint` alone. It is deliberately NOT folded into c_is_int: the two are the
+# pair docs/core/types.md refuses to mix, so every rule that says "an integer" has to say
+# which one it means, and a predicate covering both would let the mixing back in by the
+# side door.
+fn c_is_uint(t: Ty) -> bool {
+	return match t {
+		TUint => true
 		_     => false
 	}
 }
@@ -3178,11 +3190,11 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	# becomes its own type. [deviation] The same flattening means `x: uint = -5` and a
 	# `uint` parameter are still unchecked; only the conversion is.
 	mut dc := c_scalar_class(ty)
-	mut db := c_scalar_bits(ty)
-	if nm == "uint" {
-		dc = SC_UNSIGNED
-		db = 64
-	}
+	db := c_scalar_bits(ty)
+
+	# `uint` used to be read off the NAME here, because the type it parsed to was TInt and
+	# the class table could not tell the two apart. It is TUint now, so c_scalar_class
+	# answers for it like every other scalar and the special case is gone.
 	return c_conv_scalar(em, dc, db, xt, ty, inner)
 }
 
@@ -3201,7 +3213,7 @@ const SC_BOOL := 4
 # above, and a value is built from it with `list[byte](s)` rather than cast.
 fn c_scalar_class(t: Ty) -> int {
 	return SC_SIGNED if c_is_int(t)
-	return SC_UNSIGNED if c_is_byte(t)
+	return SC_UNSIGNED if c_is_byte(t) or c_is_uint(t)
 	return SC_FLOAT if c_is_float(t)
 	return SC_BOOL if c_is_bool_ty(t)
 
@@ -3343,6 +3355,7 @@ fn c_display(t: Ty, inner: str) -> str {
 		TBool  => f"zrt_display_bool({inner})"
 		TFloat => f"zrt_display_float((double)({inner}))"
 		TByte  => f"zrt_display_uint((uint64_t)({inner}))"
+		TUint  => f"zrt_display_uint((uint64_t)({inner}))"
 		_      => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
@@ -4775,6 +4788,12 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	# needs one, and admitting it turned `take(1000)` on a `byte` parameter into a silent
 	# truncation that cc warned about in generated C.
 	return TByte if c_is_byte(c_infer(em, a)) and not c_is_float(c_infer(em, b))
+
+	# UINT ARITHMETIC STAYS IN UINT, for the reason byte arithmetic does: `mut n: uint = 0;
+	# n = n * 10 + d` is the ordinary thing to write, and answering `int` gives the type no
+	# way back into its own storage. The two operands cannot disagree — chk_binary refuses a
+	# mixed pair — so one side being uint settles it.
+	return TUint if c_is_uint(c_infer(em, a)) or c_is_uint(c_infer(em, b))
 
 	return TInt
 }

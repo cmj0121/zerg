@@ -283,10 +283,7 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	return TBool if name == "bool"
 	return TByte if name == "byte"
 
-	if name == "uint" {
-		# the subset models uint as int64_t (it never parses top-bit values)
-		return TInt
-	}
+	return TUint if name == "uint"
 	return TNil if name == "nil"
 
 	# A generic ARGUMENT list on a user type — `Ref[int]`, `Atomic[int]`, `B[T]`. The four
@@ -369,7 +366,8 @@ fn is_conv(name: str) -> bool {
 }
 
 fn conv_ty(name: str) -> Ty {
-	return TInt if name == "int" or name == "uint"
+	return TInt if name == "int"
+	return TUint if name == "uint"
 	return TByte if name == "byte"
 	return TFloat if name == "float"
 	return TBool if name == "bool"

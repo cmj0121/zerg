@@ -672,7 +672,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 8     | 對內建型別的 `impl`（`impl Tag for int`）                                     |
 | 8     | 除 `#[derive(…)]` 以外的所有 decorator                                        |
 | 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                             |
-| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`;橋接 `list[rune](s)`        |
+| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                             |
 | 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                        |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的

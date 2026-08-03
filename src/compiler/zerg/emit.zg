@@ -1311,6 +1311,7 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 				# it is what keeps that order from deciding whether the C compiles.
 				if c_needs_copy(em, TNamed(sd.name)) {
 					out = out + f"static zg_{sd.name} zg_copy_{sd.name}(zg_{sd.name} v);\n"
+					out = out + f"static void zg_drop_{sd.name}(zg_{sd.name} *v);\n"
 				}
 				done.append(sd.name)
 			} else {
@@ -1942,7 +1943,7 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for sd in f.structs {
 		if c_needs_copy(em, TNamed(sd.name)) {
-			out = out + c_copy_helper(em, sd) + c_elem_vt_helper(em, sd.name)
+			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, sd.name)
 		}
 	}
 	return out
@@ -1990,21 +1991,85 @@ fn c_elem_copy_fn(mut &em: Emitter, t: Ty) -> str {
 fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
 	return "list" if c_is_list(t)
 	return "map" if c_is_map(t)
+
+	# A str is a refcounted CELL, so a list of them holds references and owes them back. It
+	# reached c_named_of below and answered "" — the memcpy path — so `list[str]` retained
+	# each element as it was pushed, released none of them, and an unshared copy of the buffer
+	# gave two buffers one reference between them.
+	return "str" if c_is_str(t)
 	return "" if not c_needs_copy(em, t)
 	return c_tuple_cname(ty_tuple_elems(t)) if c_is_tuple(t)
 
 	return c_named_of(t)
 }
 
-# The vtable carries a COPY and no drop: this emitter is leak-style, so nothing generates
-# a teardown for a struct, and a drop thunk here would be the only one — freeing halves of
-# values whose other halves nobody frees.
+# The vtable carries BOTH halves. It used to carry only the copy, with the note that a drop
+# thunk would be the only teardown in a leak-style emitter and so would free halves of
+# values whose other halves nobody frees. That is no longer true — a struct binding, a
+# by-value parameter and a list buffer all give themselves back now — and the copy without
+# the drop is the asymmetry: a `list[Row]` deep-copied every Row it duplicated and released
+# none of them, so the copying was itself what leaked.
 fn c_elem_vt_helper(mut &em: Emitter, nm: str) -> str {
 	ct := "zg_" + nm
 	cp := c_copy_of(em, TNamed(nm), f"*(const {ct}*)src")
 	mut out := "static void zg_elemcopy_" + nm + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
-	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", NULL};\n\n"
+	out = out + "static void zg_elemdrop_" + nm + "(void *elem) { zg_drop_" + nm + "((" + ct + "*)elem); }\n"
+	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", zg_elemdrop_" + nm + "};\n\n"
+}
+
+# c_drop_helper is c_copy_helper read backwards, and the two are written next to each other
+# so they stay that way: a field the copy retains and the drop does not release is a leak,
+# and a field the drop releases and the copy did not retain is a use-after-free. Both walk
+# the same fields under the same c_needs_copy test, which is the only reason that holds.
+#
+# It takes the value BY POINTER — a drop is a statement about storage, not about a value —
+# and it does not clear what it drops. Every caller is at the end of that storage's life.
+fn c_drop_helper(mut &em: Emitter, sd: StructDecl) -> str {
+	nm := "zg_" + sd.name
+	mut out := "static void zg_drop_" + sd.name + "(" + nm + " *v) {\n"
+	for fd in sd.fields {
+		if c_needs_copy(em, fd.ty) {
+			out = out + "    " + c_drop_stmt(em, fd.ty, "v->zg_" + fd.name) + "\n"
+		}
+	}
+	return out + "}\n\n"
+}
+
+# c_drop_stmt spells one give-back as a C statement, given the PLACE holding the value. It
+# is the single encoding of "how is a T given back", the way c_copy_of is the single
+# encoding of how one is copied — a new owning type is added in these two and nowhere else.
+#
+# A type that owns nothing answers with a `(void)` cast rather than with nothing, so a
+# caller can write the statement unconditionally; c_drop_fn is the question to ask when the
+# answer has to be a function name.
+fn c_drop_stmt(mut &em: Emitter, t: Ty, place: str) -> str {
+	f := c_drop_fn(em, t)
+	return f"(void)({place});" if f == ""
+	return f"{f}({c_drop_arg(em, t, place)});"
+}
+
+# c_drop_fn is what gives a value of this type back, or "" for one that owes nothing. A
+# TUPLE is deliberately "" — it has a copy helper and no drop, so a tuple holding a list
+# still leaks it, which is a leak and not a corruption and is named in the README table.
+fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
+	return "zrt_list_drop" if c_is_list(t)
+	return "zrt_map_drop" if c_is_map(t)
+	return "zrt_str_release" if c_is_str(t)
+
+	nm := c_named_of(t)
+
+	return "" if nm == "" or not c_is_struct_name(em, nm)
+	return "" if not c_needs_copy(em, t)
+
+	return "zg_drop_" + nm
+}
+
+# c_drop_arg spells what the give-back is handed: a list, a map and a struct are all given
+# back through the address of their storage, a str by its own value.
+fn c_drop_arg(mut &em: Emitter, t: Ty, place: str) -> str {
+	return place if c_is_str(t)
+	return "&" + place
 }
 
 fn c_copy_helper(mut &em: Emitter, sd: StructDecl) -> str {
@@ -3965,14 +4030,15 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 # through a function value, an intrinsic, an error constructor. c_arg is the wrong tool —
 # it reads the table by name and index, and there is no name to read.
 #
-# `ftys` is what the declared function TYPE says the parameters are, and it is what makes
-# each argument a copy like every other call's. A callee owns what it is given, so handing
-# it the caller's own storage was a second name for one buffer: `this.action(ctx)` in the
-# stdlib's cli passed a struct holding two lists without copying it, and `c.args[0] = …`
-# inside a command's action would have been read back through the caller's own Ctx.
+# `ftys` is what the declared function type says the parameters are, and it is what makes
+# each argument a COPY like every other call's: a callee owns what it is given and gives it
+# back at its own scope end, so handing it the caller's own storage instead was a double
+# drop. `this.action(ctx)` did exactly that — it was the one call in the whole stdlib that
+# passed a struct without copying it, and the drop the callee now owes turned a
+# long-standing value-semantics gap into a use-after-free.
 #
 # A call with no declared type to read — an intrinsic, an err constructor — passes an empty
-# list, and every argument goes through unchanged, which is what those want.
+# list and every argument goes through unchanged, which is what those want.
 fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
@@ -6328,7 +6394,15 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	# variable initialize itself.
 	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff, is_mut)
-	return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {val};\n"
+	cn := c_var_cname(em, name)
+
+	# A STRUCT holding a list, a map or a str owns those, and this is where it says so. The
+	# three that have their own c_let_ above say it there because they have more to say; a
+	# struct, a map and a tuple all arrive here, and c_pend_drop knows which of them owes
+	# anything. A CARRIER — `T?`, `Result[T]` — is not registered: nothing generates a drop
+	# for one, so it leaks its payload, which the README table names.
+	c_pend_drop(em, eff, cn)
+	return f"{ind}{c_type(eff)} {cn} = {val};\n"
 }
 
 # c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:
@@ -6359,29 +6433,25 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	return f"{ind}zrt_chan *{cn} = {val};\n"
 }
 
-# c_param_release_fn answers what a by-value parameter of this type owes back, or "" for a
-# type that owns nothing. It is the parameter side of the rule c_needs_copy states for the
-# call side, and the two have to agree: a parameter is released here exactly when the call
-# copied it there, or the callee gives back a reference the caller never handed over.
+# c_pend_drop registers a BINDING of an owning type, so that what it holds is given back
+# when its scope ends. It is c_drop_fn asked at the one place that acts on the answer, and
+# it is what a struct binding and a by-value parameter both go through — "does this type own
+# anything" is answered once, in c_drop_fn, rather than once per kind of binding. It is also
+# the parameter side of the rule c_needs_copy states for the call side, and the two have to
+# agree: a parameter is released here exactly when the call copied it there, or the callee
+# gives back a reference the caller never handed over.
 #
-# A CHANNEL is deliberately absent. Passing a handle moves no count (docs/code/coroutine.md,
-# pinned by conc_chan_dir) — a channel parameter is a borrow, which is why c_arg does not
-# copy one either. The temporary that borrow leaves behind is the caller's problem and is
-# where c_owned_args comes in.
-fn c_param_release_fn(t: Ty) -> str {
-	return "zrt_str_release" if c_is_str(t)
-	return "zrt_list_drop" if c_is_list(t)
-	return "zrt_map_drop" if c_is_map(t)
+# A CHANNEL is deliberately not one of these. Passing a handle moves no count
+# (docs/code/coroutine.md, pinned by conc_chan_dir), so a channel parameter is a borrow —
+# which is why c_arg does not copy one either — and a channel BINDING has a release with a
+# direction in it, which c_let_chan registers itself. The temporary a borrow leaves behind
+# is the caller's problem, and is where c_owned_args comes in.
+fn c_pend_drop(mut &em: Emitter, t: Ty, cname: str) {
+	f := c_drop_fn(em, t)
+	return if f == ""
 
-	return ""
-}
-
-# c_param_release_of spells the ARGUMENT the release takes: a list and a map are given back
-# through their header's address, a str by its own value. The pending list holds text, so
-# "by reference" has nowhere to live but the text.
-fn c_param_release_of(t: Ty, cname: str) -> str {
-	return "&" + cname if c_is_list(t) or c_is_map(t)
-	return cname
+	em.used_rt = true
+	c_pend_release(em, c_drop_arg(em, t, cname), f)
 }
 
 # c_pend_release records that `cname` owns something `relfn` gives back, until its scope
@@ -6995,11 +7065,7 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			# reference — so the callee dropping it is what frees the capture, and the two
 			# together are why a captured list is not leaked by either.
 			if not pm.is_ref {
-				rel := c_param_release_fn(pm.ty)
-				if rel != "" {
-					em.used_rt = true
-					c_pend_release(em, c_param_release_of(pm.ty, "zg_" + pm.name), rel)
-				}
+				c_pend_drop(em, pm.ty, "zg_" + pm.name)
 			}
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
@@ -7353,9 +7419,14 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	if em.used_rt {
 		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
 		hdr = hdr + "static void zg_elemcopy_list(void *dst, const void *src) { zrt_list_copy((zrt_list*)dst, (const zrt_list*)src); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, NULL};\n"
+		hdr = hdr + "static void zg_elemdrop_list(void *elem) { zrt_list_drop((zrt_list*)elem); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, zg_elemdrop_list};\n"
 		hdr = hdr + "static void zg_elemcopy_map(void *dst, const void *src) { zrt_map_copy((zrt_map*)dst, (const zrt_map*)src); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, NULL};\n"
+		hdr = hdr + "static void zg_elemdrop_map(void *elem) { zrt_map_drop((zrt_map*)elem); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, zg_elemdrop_map};\n"
+		hdr = hdr + "static void zg_elemcopy_str(void *dst, const void *src) { *(const char**)dst = zrt_str_retain(*(const char* const*)src); }\n"
+		hdr = hdr + "static void zg_elemdrop_str(void *elem) { zrt_str_release(*(const char**)elem); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_str = {zg_elemcopy_str, zg_elemdrop_str};\n"
 		hdr = hdr + "static zrt_list zg_empty_list(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
 	}
 

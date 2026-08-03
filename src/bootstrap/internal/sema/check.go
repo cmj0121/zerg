@@ -569,6 +569,8 @@ func (c *checker) inferBinary(n *ast.Binary) Type {
 		return c.inferNominalCompare(n, lt, rt)
 	}
 	switch {
+	case n.Op == token.SlashDiv:
+		return c.floorDivResult(n, lt, rt)
 	case isArithOp(n.Op):
 		// `str` implements Add (docs/code/collections.md): `a + b` concatenates into a new
 		// str. Only '+' joins two strings — the rest of the arithmetic family stays
@@ -710,6 +712,18 @@ func (c *checker) numericResult(n *ast.Binary, lt, rt Type) Type {
 	}
 	c.errorf(n.Span(), "operator %q requires matching numeric operands, found %s and %s", n.Op, lt, rt)
 	return Invalid
+}
+
+// floorDivResult checks `a // b`. It is the language's ONE integer division, spelled so
+// the reader sees an integer whatever the operands are (docs/core/types.md): the operands
+// are any matching numeric pair and the result is always `int`. Sharing numericResult's
+// operand rule is what keeps the two spellings answering to the same lattice; only the
+// RESULT type differs, because that is the whole point of the operator.
+func (c *checker) floorDivResult(n *ast.Binary, lt, rt Type) Type {
+	if bad(c.numericResult(n, lt, rt)) {
+		return Invalid
+	}
+	return Int
 }
 
 // bitResult checks a bitwise operation: both operands must be integral.

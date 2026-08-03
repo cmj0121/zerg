@@ -92,6 +92,7 @@ const (
 	Minus    // -
 	Star     // *
 	Slash    // /
+	SlashDiv // // — floor division, always an integer
 	Percent  // %
 	PlusMod  // +%
 	MinusMod // -%
@@ -166,7 +167,7 @@ var names = map[Kind]string{
 	Package: "package", Init: "init", Defer: "defer", Del: "del", Raise: "raise",
 	Guard: "guard", With: "with", Unsafe: "unsafe", Ptr: "ptr", Asm: "asm",
 
-	Plus: "+", Minus: "-", Star: "*", Slash: "/", Percent: "%",
+	Plus: "+", Minus: "-", Star: "*", Slash: "/", SlashDiv: "//", Percent: "%",
 	PlusMod: "+%", MinusMod: "-%", StarMod: "*%",
 	Amp: "&", Pipe: "|", Caret: "^", Tilde: "~", Shl: "<<", Shr: ">>",
 	EqEq: "==", Ne: "!=", Lt: "<", Gt: ">", Le: "<=", Ge: ">=",

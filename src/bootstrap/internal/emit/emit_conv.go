@@ -238,6 +238,18 @@ func arithHelper(k token.Kind, unsigned bool) string {
 	return "zrt_" + name + "_i64"
 }
 
+// floorDiv renders `a // b`. Its result is always an `int`, so the operand types decide
+// only HOW: two integers are the language's one integer division, already Euclidean and
+// already checked, and a float pair goes through the helper that divides as a double and
+// lands in int64 through the same range check `int(x)` is.
+func (e *emitter) floorDiv(operand sema.Type, l, r string) string {
+	e.needsRuntime = true
+	if s, ok := sema.ScalarOf(operand); ok && s.Class == sema.ScalarFloat {
+		return fmt.Sprintf("(zrt_floordiv_f((double)(%s), (double)(%s)))", l, r)
+	}
+	return fmt.Sprintf("(zrt_div_i64((int64_t)(%s), (int64_t)(%s)))", l, r)
+}
+
 // checkedArith renders a checked integer operation, or reports false when this
 // expression is not one — a float, a bool, a str, or an operator that cannot fail.
 func (e *emitter) checkedArith(t sema.Type, k token.Kind, l, r string) (string, bool) {
@@ -314,6 +326,9 @@ func (e *emitter) programUsesCheckedArith() bool {
 		case *ast.Binary:
 			if opCalls[n] {
 				continue // an operator an impl provides is a call, not arithmetic
+			}
+			if n.Op == token.SlashDiv {
+				return true
 			}
 			if _, ok := e.checkedArith(t, n.Op, "0", "0"); ok {
 				return true

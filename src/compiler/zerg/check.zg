@@ -931,6 +931,8 @@ fn chk_is_logical(oper: str) -> bool {
 # `true +% 1` walk straight past the rule the others obey.
 fn chk_is_arith(oper: str) -> bool {
 	return true if oper == "+%" or oper == "-%" or oper == "*%"
+	return true if oper == "//"
+
 	return oper == "+" or oper == "-" or oper == "*" or oper == "/" or oper == "%"
 }
 

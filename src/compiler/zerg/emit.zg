@@ -6268,6 +6268,31 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	return f"{ind}zrt_chan *{cn} = {val};\n"
 }
 
+# c_param_release_fn answers what a by-value parameter of this type owes back, or "" for a
+# type that owns nothing. It is the parameter side of the rule c_needs_copy states for the
+# call side, and the two have to agree: a parameter is released here exactly when the call
+# copied it there, or the callee gives back a reference the caller never handed over.
+#
+# A CHANNEL is deliberately absent. Passing a handle moves no count (docs/code/coroutine.md,
+# pinned by conc_chan_dir) — a channel parameter is a borrow, which is why c_arg does not
+# copy one either. The temporary that borrow leaves behind is the caller's problem and is
+# where c_owned_args comes in.
+fn c_param_release_fn(t: Ty) -> str {
+	return "zrt_str_release" if c_is_str(t)
+	return "zrt_list_drop" if c_is_list(t)
+	return "zrt_map_drop" if c_is_map(t)
+
+	return ""
+}
+
+# c_param_release_of spells the ARGUMENT the release takes: a list and a map are given back
+# through their header's address, a str by its own value. The pending list holds text, so
+# "by reference" has nowhere to live but the text.
+fn c_param_release_of(t: Ty, cname: str) -> str {
+	return "&" + cname if c_is_list(t) or c_is_map(t)
+	return cname
+}
+
 # c_pend_release records that `cname` owns something `relfn` gives back, until its scope
 # ends. It is the ONE way onto the pending-release list, so a type that starts owning its
 # storage joins by calling this and needs no exit path of its own.
@@ -6868,17 +6893,22 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty, pm.is_ref)
 
-			# A BY-VALUE str PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
-			# hands over (c_arg, through c_copied), and for a str that copy is a retain — so
-			# the callee holds a reference of its own and owes it back, exactly as a binding
-			# made in the body does. A `mut &` parameter is the CALLER's storage handed over
-			# to be written, and owns nothing.
+			# A BY-VALUE PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
+			# hands over (c_arg, through c_copied) — for a str that copy is a retain, for a
+			# list or a map a copy-on-write handle — so the callee holds a reference of its
+			# own and owes it back, exactly as a binding made in the body does. A `mut &`
+			# parameter is the CALLER's storage handed over to be written, and owns nothing.
 			#
-			# Only str. A list or map parameter is an owned copy too and will join here, but
-			# a drop for those has to arrive with the element teardown that makes it whole.
-			if c_is_str(pm.ty) and not pm.is_ref {
-				em.used_rt = true
-				c_pend_release(em, "zg_" + pm.name, "zrt_str_release")
+			# A `spawn`/`defer` env is the same rule read from the other side: the env field
+			# is handed over WITHOUT a further copy, because the env is giving up its own
+			# reference — so the callee dropping it is what frees the capture, and the two
+			# together are why a captured list is not leaked by either.
+			if not pm.is_ref {
+				rel := c_param_release_fn(pm.ty)
+				if rel != "" {
+					em.used_rt = true
+					c_pend_release(em, c_param_release_of(pm.ty, "zg_" + pm.name), rel)
+				}
 			}
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
@@ -6907,7 +6937,22 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			body[last] = SReturn(true, c_expr_stmt_of(body[last]))
 		}
 	}
-	out := sig + c_block(em, body, "    ") + "}\n\n"
+
+	# The PARAMETERS' own releases are emitted here rather than by c_block. A block takes its
+	# mark from the pending list as it finds it, so the entries registered above are already
+	# below the body's mark and the body cannot give them back — which is what silently made
+	# the str-parameter half of this rule emit nothing at all. Every OTHER way out of a
+	# function releases the whole list already (`return` and `raise` both pass 0), so falling
+	# off the end was the one path missing, and only a body that does not divert takes it.
+	# The body is rendered FIRST and the tail after it, in that order and not the other way
+	# round: c_scope_end empties the list it renders, so asking for the tail early would take
+	# the parameters off it before a `return` inside the body could release them.
+	rendered := c_block(em, body, "    ")
+	mut tail := ""
+	if not c_body_diverges(body) {
+		tail = c_scope_end(em, 0, "    ")
+	}
+	out := sig + rendered + tail + "}\n\n"
 	em.fn_ret = saved_ret
 	return out
 }

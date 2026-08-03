@@ -2893,7 +2893,7 @@ fn c_is_strlit(e: Expr) -> bool {
 # (which are not C operators on const char*).
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	ta := c_infer(em, a)
-	chk_binary(em, oper, ta, c_infer(em, b))
+	chk_binary(em, oper, ta, c_infer(em, b), a, b)
 	if c_is_str(ta) {
 		if oper == "+" {
 			em.used_str = true
@@ -4459,7 +4459,10 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 		# text rather than built as an EBinary, so it reached no operand rule — and
 		# `match x { nil => … }` over an optional lowered to a comparison with 0 exactly as
 		# `x == nil` used to, in the file next door. One rule, two spellings.
-		chk_binary(em, "==", st, c_infer(em, a.lit))
+		# the PATTERN is handed as both operands: this comparison is a scrutinee against a
+		# literal, and a literal pattern is always the one adopting the scrutinee's type, so
+		# there is no mixed pair to find and no scrutinee Expr in scope to look for one with
+		chk_binary(em, "==", st, c_infer(em, a.lit), a.lit, a.lit)
 		return f"({s} == {c_expr(em, a.lit, sb)})"
 	}
 
@@ -4504,7 +4507,7 @@ fn c_is_or_pattern(e: Expr) -> bool {
 # as TEXT and so meet no operand rule of their own — a third spelling of the same equality
 # problem, eight lines from the comment that said there were two.
 fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
-	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)))
+	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
 	lo := c_expr(em, c_range_lo(a.lit), sb)
 	mut base := f"({s} >= {lo})"
 	if not c_is_nil_expr(c_range_hi(a.lit)) {

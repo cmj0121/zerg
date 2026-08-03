@@ -946,7 +946,7 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 # operand TYPES rather than the expressions: c_binexpr infers the left one for its own
 # reasons, and an f-string desugars into a left-nested `+` chain, so re-inferring here
 # would walk the whole left spine again at every link of it.
-fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
+fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	return if c_is_unknown(ta) or c_is_unknown(tb)
 
 	# An OPTIONAL is not an operand of ANY of them. `x == nil` is the first thing a person
@@ -983,7 +983,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 			return
 		}
 
-		chk_mixed_sign(em, oper, ta, tb)
+		chk_mixed_sign(em, oper, ta, tb, ea, eb)
 		return
 	}
 
@@ -994,7 +994,7 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 			return
 		}
 
-		chk_mixed_sign(em, oper, ta, tb)
+		chk_mixed_sign(em, oper, ta, tb, ea, eb)
 		return
 	}
 
@@ -1066,7 +1066,13 @@ fn chk_is_scalar(t: Ty) -> bool {
 # A `byte` is unsigned too, but it WIDENS to an int by a rule of its own and is left out
 # here: `n + 1` on a byte is the ordinary thing to write and has never been ambiguous, since
 # every byte value is an int value. `uint` is the pair where neither side contains the other.
-fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
+fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
+	# THE OTHER OPERAND OF A TYPED EXPRESSION is one of the contexts a literal adopts —
+	# docs/core/types.md lists it beside the typed binding, the parameter and the `return`.
+	# So `n * 10` where `n` is a `uint` is the literal becoming a uint, not a mixed pair, and
+	# without this the rule made `mut n: uint = 1; n = n * 10 + 2` unwritable.
+	return if chk_int_lit(ea) or chk_int_lit(eb)
+
 	if c_is_uint(ta) != c_is_uint(tb) and chk_is_num(ta) and chk_is_num(tb) {
 		chk_at(em, f"operator `{oper}` mixes {ty_name(ta)} and {ty_name(tb)}, and the two never convert implicitly — cast one side, as `int(u) {oper} i` or `u {oper} uint(i)`")
 	}

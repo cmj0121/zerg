@@ -273,7 +273,7 @@ map-entry    ::= expr ':' expr
 
 cmp-op       ::= '==' | '!=' | '<' | '>' | '<=' | '>='
 add-op       ::= '+' | '-' | '+%' | '-%' | '|' | '^'
-mul-op       ::= '*' | '/' | '%' | '*%' | '<<' | '>>' | '&'
+mul-op       ::= '*' | '/' | '//' | '%' | '*%' | '<<' | '>>' | '&'
 unary-op     ::= 'not' | '~' | '-' | '-%'
 
 type-name    ::= identifier            # a spec or enum-variant name (groups 6, 7)

@@ -349,6 +349,17 @@ fn main() {
 }
 EOF
 
+# `//` is the floor-division operator, so its operands are numbers like the rest of the
+# arithmetic family — a str is not one. It matters more than the others that this is said:
+# `//` opens a comment in most languages a reader arrives from, and silently accepting
+# `a // b` on two strings would be the worst possible way to learn that Zerg's is `#`.
+reject floor-div-on-str 'operator `//` takes numeric operands' <<'EOF'
+fn main() {
+	s := "s"
+	print s // s
+}
+EOF
+
 reject bool-plus-int 'operator `+` takes numeric operands' <<'EOF'
 fn main() {
 	print(f"{true + 1}")

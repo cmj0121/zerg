@@ -89,3 +89,28 @@ output about a model that does not fit, not findings — each one lands on a lin
 
 So the stress test is the gate and TSan is a tool to reach for deliberately. Making it a gate needs the hand-off
 described to TSan rather than hidden from it, and that is not done.
+
+## AddressSanitizer needs the same telling, and it is not optional
+
+`make sanitize-conc` is a gate, and the annotation it needs is not a nicety the way TSan's report quality is. Told
+nothing, TSan reports noise; told nothing, **ASan breaks the program it is checking**, and it does so silently for
+hundreds of runs at a time.
+
+The mechanism is `detect_stack_use_after_return`. With it on — which is the default in some compilers and not others,
+so the gate now asks for it by name — an instrumented frame is not on the stack at all: ASan hands it out of a
+per-thread arena elsewhere in the address space. That relocates the one thing this runtime's channels are built on.
+`chan.c` parks a `zrt_waiter` that lives on the parked coroutine's own stack, and heap-allocates no queue node,
+because a suspended stack does not move. Under the gate, that waiter is really in the fake stack of whichever
+**worker thread** ran the frame — and a worker's arena is unmapped when the worker exits, which happens as soon as
+main's coroutine ends while other coroutines are still running. The waiter becomes a hole in the address space, and
+the next walk of that queue takes a SEGV that ASan has nothing to say about, because the address belongs to neither
+the heap it tracks nor any stack it knows.
+
+`__sanitizer_start_switch_fiber` / `__sanitizer_finish_switch_fiber` bracket every `zrt_ctx_swap` in `sched.c` for
+exactly this: the fake stack then belongs to the COROUTINE and dies when the coroutine does. The bounds of the worker
+to return to are learned from the finishing half and kept in `zrt_coro`, never in a thread-local — a coroutine
+resumes on whichever worker took it, and a TLS base cached across a switch is the one thing it may not trust.
+
+The tripwire is `WARNING: ASan is ignoring requested __asan_handle_no_return`. It means ASan measured the running
+stack against bounds that are not this coroutine's; a negative size in that line is the whole bug in one number. It
+was tolerated as an artifact of fibers for as long as the SEGV went unexplained. It now fails the gate.

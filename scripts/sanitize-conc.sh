@@ -76,16 +76,29 @@ rt_sources() {
 	esac
 }
 
+# detect_stack_use_after_return is ASKED FOR rather than inherited, and it is the harshest
+# option this gate sets. With it on, an instrumented frame does not live on the stack at
+# all: ASan hands it out of a per-thread arena elsewhere in the address space. That is the
+# configuration under which a coroutine's locals — `zrt_waiter w`, which chan.c parks on a
+# wait queue precisely because a suspended stack does not move — stop being on the
+# coroutine's stack, and it is the configuration the runtime's fiber annotations
+# (ZRT_ASAN_SWITCH_TO/DONE) exist to survive.
+#
+# It is written down here because the DEFAULT is not the same everywhere: the CI compiler
+# had it on and this developer's did not, so the gate checked a weaker program locally than
+# it did on the runner — which is how a SEGV came to be reproducible only on CI, and stayed
+# unexplained for two days. A gate whose strength depends on the host is not one gate.
+#
 # LeakSanitizer does not exist on macOS — asking for it there aborts the process before
 # main. So the leak half of this gate is the Linux half, and the macOS run is an
 # address/UB run that says as much rather than pretending to check for leaks.
 case "$(uname -s)" in
 Linux)
-	export ASAN_OPTIONS="detect_leaks=1"
+	export ASAN_OPTIONS="detect_leaks=1:detect_stack_use_after_return=1"
 	LEAKS="on"
 	;;
 *)
-	export ASAN_OPTIONS="detect_leaks=0"
+	export ASAN_OPTIONS="detect_leaks=0:detect_stack_use_after_return=1"
 	LEAKS="off — LeakSanitizer is not available on $(uname -s)"
 	;;
 esac
@@ -166,12 +179,18 @@ for src in ${CASES:-test-data/codegen/conc_*.zg}; do
 			# with 1 on a healthy day. A sanitizer says so in its own words instead, on
 			# stderr.
 			#
-			# The pattern is deliberately narrow. An aborting coroutine makes ASan print
-			# `WARNING: ASan is ignoring requested __asan_handle_no_return` — it followed
-			# the unwind onto a stack it has no shadow for — and that warning is an
-			# artifact of fibers, not a finding. Widening this to match it would gate on
-			# the runtime's normal behaviour.
-			if grep -Eq 'ERROR: .*Sanitizer|runtime error:' "$WORK/$name.err"; then
+			# `WARNING: ASan is ignoring requested __asan_handle_no_return` IS a finding,
+			# and this gate spent two days believing the opposite. It means ASan measured
+			# the running stack against bounds that are not this coroutine's, gave up on
+			# cleaning the shadow, and — the part no warning says out loud — is keeping
+			# that coroutine's frames in a fake stack belonging to a WORKER THREAD, which
+			# is unmapped the moment that worker stands down. A waiter parked on a channel
+			# then sits in a hole in the address space, and the next walk of the queue
+			# takes a SEGV with nothing for ASan to say about it.
+			#
+			# So it is matched, and a run that prints it fails. The annotations in sched.c
+			# are what keep it quiet; if it comes back, they have been lost.
+			if grep -Eq 'ERROR: .*Sanitizer|runtime error:|ASan is ignoring' "$WORK/$name.err"; then
 				printf 'SAN    %s (%s workers, run %s) — %s\n' "$name" "$mode" "$n" "$repro"
 				head -20 "$WORK/$name.err"
 				fail=1

@@ -1515,6 +1515,10 @@ func (e *emitter) expr(x ast.Expr) string {
 			return s
 		}
 		l, r := e.expr(n.L), e.expr(n.R)
+		if n.Op == token.SlashDiv {
+			// the OPERAND type picks the lowering; the result is an int either way
+			return e.floorDiv(e.cur.ExprType(e.info, n.L), l, r)
+		}
 		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, l, r); ok {
 			return s
 		}

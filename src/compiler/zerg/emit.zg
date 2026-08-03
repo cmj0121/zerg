@@ -59,10 +59,9 @@ struct Emitter {
 	# list is deliberately type-agnostic: a `str`, `list` or `map` binding joins it by
 	# registering a name and a release function, and every exit path already handles it.
 	#
-	# The list is consumed at the THREE places control leaves a block, and all three go
-	# through c_release_from: falling off its end (c_block), `return` (c_return), and
-	# `break`/`continue` (c_jump). A fourth exit gets one place to call, which is the whole
-	# reason the pair is not shaped like the thing it releases.
+	# The list is not READ any more, only counted: a release is registered on the runtime's
+	# cleanup stack where the binding is declared, and every exit gives it back by unwinding
+	# to a mark. What the depth still decides is whether a block needs a mark at all.
 	rel_cnames: list[str]
 	rel_fns: list[str]
 	sig_names: list[str]
@@ -151,11 +150,6 @@ struct Emitter {
 	fn_mark: str
 	loop_mark: str
 
-	# loop_rel is the pending-release depth at the innermost enclosing loop BODY's entry —
-	# what a `break` or a `continue` has to release on its way out. c_loop_block saves and
-	# restores it, so a nested loop cannot leave its own depth visible to the outer one.
-	loop_rel: int
-
 	# res_names / res_decls are the `Result[T]` CARRIERS — one C struct per distinct
 	# payload shape, plus the `zg_force_*` helper that reads it back. They are registered
 	# exactly the way tup_names / tup_decls are, and for the same reason: the name is a
@@ -228,6 +222,30 @@ struct Emitter {
 	# on the path is written into: `xs[0].ys[1] = 9` stores into the struct that lives in
 	# `xs`'s buffer, so unsharing `ys` alone would edit a header other holders can see.
 	lv_write: bool
+
+	# tmp_n numbers the temporaries a call has to hold on to because the CALLER owns them
+	# (c_call_releasing). Its own counter, for the reason op_n has one: a name that reaches
+	# the emitted C must not renumber because something unrelated grew a thunk, or every
+	# fixpoint failure starts with a whole-file diff to read past.
+	tmp_n: int
+
+	# fn_mark_used records that something in this function's body unwound to the function's
+	# mark, which is what decides whether the mark is declared at all. It cannot be known
+	# before the body is walked and the mark's NAME cannot be known after, so the name is
+	# handed out up front and the declaration is prepended once the walk has answered.
+	fn_mark_used: bool
+
+	# force_mark hands the next c_block the mark NAME to use instead of minting its own. A
+	# loop body needs that, because a `break` inside it unwinds to that name and the jump is
+	# rendered before the block has finished deciding whether it needs a mark at all.
+	force_mark: str
+
+	# loop_keep is the pending-release depth at the loop BODY's entry and loop_mark_used
+	# whether a jump inside it actually emitted an unwind. Together they are what keeps a
+	# loop that owns nothing from paying a scope mark and an unwind EVERY ITERATION: the
+	# jump asks the depth, and the block asks whether the jump spoke.
+	loop_keep: int
+	loop_mark_used: bool
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -490,10 +508,10 @@ fn c_try(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	tv := "zgt_tr" + tag
 	mut out := f"({{ {src} {tv} = {c_expr(em, x, sb)};"
 	out = out + " if (" + c_res_is_right(tv) + ") {"
-	if em.fn_mark != "" {
+	if c_needs_fn_unwind(em) {
+		em.fn_mark_used = true
 		out = out + " zrt_unwind_to(" + em.fn_mark + ");"
 	}
-	out = out + " " + c_release_from(em, 0, "")
 
 	# the right side travels UNCHANGED — an optional's carries nothing, and an Either's
 	# carries the value that is the whole reason the early return happened
@@ -624,6 +642,28 @@ fn c_res_taken(mut &em: Emitter, r: str, elem: Ty) -> str {
 	return c_copy_of(em, elem, c_res_ok(r))
 }
 
+# c_carrier_temp_drop names the drop for a carrier THIS EXPRESSION OWNS, or "" for one it
+# only borrows. `!`, `??` and `if x := …` all materialise the carrier they read, because
+# each reads it twice — the tag, then the value — and each copies the payload out; a carrier
+# that named no storage is then left holding the other reference with nothing to give it
+# back. The three used to ask that in three spellings, which is three chances to get the
+# polarity backwards.
+#
+# The lvalue test comes FIRST because it is a match on the expression's own tag, where
+# c_carrier_drop_fn walks the struct table and registers the carrier.
+fn c_carrier_temp_drop(mut &em: Emitter, t: Ty, e: Expr) -> str {
+	return "" if not c_owns_value(e)
+
+	return c_carrier_drop_fn(em, t)
+}
+
+# c_carrier_drop_fn names the drop c_carrier_decl generated for this carrier, or "" when
+# the payload owns nothing and none was generated.
+fn c_carrier_drop_fn(mut &em: Emitter, t: Ty) -> str {
+	return "" if c_drop_fn(em, c_carrier_elem(t)) == ""
+	return "zg_drop_" + c_carrier_of(em, t)
+}
+
 fn c_res_err(r: str) -> str {
 	return r + ".err"
 }
@@ -699,7 +739,18 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# the payload is TAKEN OUT, so it comes out as a value of its own — `r` is a by-value
 	# parameter about to die, and returning its header uncounted made `a!` a second name
 	# for the carrier's buffer
-	return d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
+	d = d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
+
+	# and the DROP, for a carrier whose payload owns something. A carrier is not registered
+	# as a binding — it has no copy helper, so two names for one would each drop it — so this
+	# exists for the TEMPORARY a `!`, a `??` or an `if x := …` materialises: `(<-bags)!` copies
+	# the payload out and left the received carrier holding the other reference forever.
+	df := c_drop_stmt(em, left, "r->ok")
+	return d if df == "(void)(r->ok);"
+
+	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n"
+	d = d + "    if (" + c_res_is_left("(*r)") + ") { " + df + " }\n"
+	return d + "}\n"
 }
 
 # c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
@@ -787,6 +838,16 @@ fn c_fn_ret(t: Ty) -> Ty {
 	}
 }
 
+# c_fn_params is c_fn_ret's other half — a function TYPE's parameter list, or an empty one
+# from anything else. It lives here rather than beside its caller so the two halves of one
+# destructuring are read together.
+fn c_fn_params(t: Ty) -> list[Ty] {
+	return match t {
+		TFn(ps, _) => ps
+		_          => []
+	}
+}
+
 fn c_is_unknown(t: Ty) -> bool {
 	return match t {
 		TUnknown => true
@@ -860,7 +921,11 @@ fn c_reset_env(mut &em: Emitter) {
 	em.open_scopes = [0]
 	em.rel_cnames = []
 	em.rel_fns = []
-	em.loop_rel = 0
+	em.loop_keep = 0
+	em.loop_mark_used = false
+	em.loop_mark = ""
+	em.force_mark = ""
+	em.fn_mark_used = false
 	em.ref_names = []
 
 	# a module constant is a global: in scope everywhere, so every function body starts
@@ -936,6 +1001,31 @@ fn c_var_cname(mut &em: Emitter, name: str) -> str {
 	idx := c_live_idx(em, name)
 	return em.env_cnames[idx] if idx >= 0
 	return "zg_" + name
+}
+
+# c_tmp mints a fresh C name for a temporary this emitter has to hold on to. Every use of
+# it is a name that must not collide with one still live — a call nested in another call's
+# argument, an index inside an index — so the counter is global to the unit rather than to
+# the site. Getting that wrong shadows a live temporary and produces C that compiles and is
+# wrong, which is why the increment is not left to twelve call sites to remember.
+fn c_tmp(mut &em: Emitter, pfx: str) -> str {
+	em.tmp_n = em.tmp_n + 1
+	return pfx + strconv.to_string(em.tmp_n, 10)
+}
+
+# c_needs_fn_unwind is whether a `return` — or a `?` taking its early exit — has anything to
+# give back on its way out. The pending list is exactly what is live AT THIS POINT, so a
+# `return` written above a binding owes it nothing, and a `defer` scheduled earlier sets the
+# flag because it puts a record on the same stack without passing through the list.
+fn c_needs_fn_unwind(mut &em: Emitter) -> bool {
+	return em.rel_cnames.len() > 0 or em.fn_mark_used
+}
+
+# c_new_mark is the same for a cleanup-stack mark: a name for a `size_t` holding the depth
+# a scope was entered at, which every exit from that scope unwinds back to.
+fn c_new_mark(mut &em: Emitter) -> str {
+	em.dfn_n = em.dfn_n + 1
+	return "zgt_mk" + strconv.to_string(em.dfn_n, 10)
 }
 
 fn c_lookup_var(mut &em: Emitter, name: str) -> Ty {
@@ -1297,6 +1387,16 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		for sd in ss {
 			if c_deps_done(c_struct_deps(sd), sd.name, done, all) {
 				out = out + c_struct_typedef(sd)
+
+				# the copy helper's PROTOTYPE, here rather than with its body: this sweep
+				# emits carriers and structs in dependency order, so a carrier's force
+				# helper — which copies the value it unwraps — can be emitted before the
+				# struct's helper is. A prototype needs only the typedef just written, and
+				# it is what keeps that order from deciding whether the C compiles.
+				if c_needs_copy(em, TNamed(sd.name)) {
+					out = out + f"static zg_{sd.name} zg_copy_{sd.name}(zg_{sd.name} v);\n"
+					out = out + f"static void zg_drop_{sd.name}(zg_{sd.name} *v);\n"
+				}
 				done.append(sd.name)
 			} else {
 				ss2.append(sd)
@@ -1855,6 +1955,12 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	return true if c_is_list(t) or c_is_map(t)
 
+	# A str is a refcounted cell (c_str_cell), so giving one a second name is a COPY like
+	# any other — a retain, which is what makes the two names' releases balance. A literal's
+	# cell is immortal, so retain and release both no-op on it and a program that holds
+	# nothing but literals behaves exactly as it did.
+	return true if c_is_str(t)
+
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
@@ -1907,6 +2013,10 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 		return "({ " + ct + " zgt_cs = (" + x + "); " + ct + " zgt_cp; " + ct + "_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
 	}
 	return f"{c_tuple_cname(ty_tuple_elems(t))}_copy({x})" if c_is_tuple(t)
+	if c_is_str(t) {
+		em.used_rt = true
+		return f"zrt_str_retain({x})"
+	}
 	return f"zg_copy_{c_named_of(t)}({x})"
 }
 
@@ -1917,7 +2027,7 @@ fn c_copy_helpers(mut &em: Emitter, f: File) -> str {
 	mut out := ""
 	for sd in f.structs {
 		if c_needs_copy(em, TNamed(sd.name)) {
-			out = out + c_copy_helper(em, sd) + c_elem_vt_helper(em, sd.name)
+			out = out + c_copy_helper(em, sd) + c_drop_helper(em, sd) + c_elem_vt_helper(em, sd.name)
 		}
 	}
 	return out
@@ -1965,21 +2075,85 @@ fn c_elem_copy_fn(mut &em: Emitter, t: Ty) -> str {
 fn c_elem_kind(mut &em: Emitter, t: Ty) -> str {
 	return "list" if c_is_list(t)
 	return "map" if c_is_map(t)
+
+	# A str is a refcounted CELL, so a list of them holds references and owes them back. It
+	# reached c_named_of below and answered "" — the memcpy path — so `list[str]` retained
+	# each element as it was pushed, released none of them, and an unshared copy of the buffer
+	# gave two buffers one reference between them.
+	return "str" if c_is_str(t)
 	return "" if not c_needs_copy(em, t)
 	return c_tuple_cname(ty_tuple_elems(t)) if c_is_tuple(t)
 
 	return c_named_of(t)
 }
 
-# The vtable carries a COPY and no drop: this emitter is leak-style, so nothing generates
-# a teardown for a struct, and a drop thunk here would be the only one — freeing halves of
-# values whose other halves nobody frees.
+# The vtable carries BOTH halves. It used to carry only the copy, with the note that a drop
+# thunk would be the only teardown in a leak-style emitter and so would free halves of
+# values whose other halves nobody frees. That is no longer true — a struct binding, a
+# by-value parameter and a list buffer all give themselves back now — and the copy without
+# the drop is the asymmetry: a `list[Row]` deep-copied every Row it duplicated and released
+# none of them, so the copying was itself what leaked.
 fn c_elem_vt_helper(mut &em: Emitter, nm: str) -> str {
 	ct := "zg_" + nm
 	cp := c_copy_of(em, TNamed(nm), f"*(const {ct}*)src")
 	mut out := "static void zg_elemcopy_" + nm + "(void *dst, const void *src) {\n"
 	out = out + "    *(" + ct + "*)dst = " + cp + ";\n}\n"
-	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", NULL};\n\n"
+	out = out + "static void zg_elemdrop_" + nm + "(void *elem) { zg_drop_" + nm + "((" + ct + "*)elem); }\n"
+	return out + "static const zrt_elem_vt zg_listvt_" + nm + " = {zg_elemcopy_" + nm + ", zg_elemdrop_" + nm + "};\n\n"
+}
+
+# c_drop_helper is c_copy_helper read backwards, and the two are written next to each other
+# so they stay that way: a field the copy retains and the drop does not release is a leak,
+# and a field the drop releases and the copy did not retain is a use-after-free. Both walk
+# the same fields under the same c_needs_copy test, which is the only reason that holds.
+#
+# It takes the value BY POINTER — a drop is a statement about storage, not about a value —
+# and it does not clear what it drops. Every caller is at the end of that storage's life.
+fn c_drop_helper(mut &em: Emitter, sd: StructDecl) -> str {
+	nm := "zg_" + sd.name
+	mut out := "static void zg_drop_" + sd.name + "(" + nm + " *v) {\n"
+	for fd in sd.fields {
+		if c_needs_copy(em, fd.ty) {
+			out = out + "    " + c_drop_stmt(em, fd.ty, "v->zg_" + fd.name) + "\n"
+		}
+	}
+	return out + "}\n\n"
+}
+
+# c_drop_stmt spells one give-back as a C statement, given the PLACE holding the value. It
+# is the single encoding of "how is a T given back", the way c_copy_of is the single
+# encoding of how one is copied — a new owning type is added in these two and nowhere else.
+#
+# A type that owns nothing answers with a `(void)` cast rather than with nothing, so a
+# caller can write the statement unconditionally; c_drop_fn is the question to ask when the
+# answer has to be a function name.
+fn c_drop_stmt(mut &em: Emitter, t: Ty, place: str) -> str {
+	f := c_drop_fn(em, t)
+	return f"(void)({place});" if f == ""
+	return f"{f}({c_drop_arg(em, t, place)});"
+}
+
+# c_drop_fn is what gives a value of this type back, or "" for one that owes nothing. A
+# TUPLE is deliberately "" — it has a copy helper and no drop, so a tuple holding a list
+# still leaks it, which is a leak and not a corruption and is named in the README table.
+fn c_drop_fn(mut &em: Emitter, t: Ty) -> str {
+	return "zrt_list_drop" if c_is_list(t)
+	return "zrt_map_drop" if c_is_map(t)
+	return "zrt_str_release" if c_is_str(t)
+
+	nm := c_named_of(t)
+
+	return "" if nm == "" or not c_is_struct_name(em, nm)
+	return "" if not c_needs_copy(em, t)
+
+	return "zg_drop_" + nm
+}
+
+# c_drop_arg spells what the give-back is handed: a list, a map and a struct are all given
+# back through the address of their storage, a str by its own value.
+fn c_drop_arg(mut &em: Emitter, t: Ty, place: str) -> str {
+	return place if c_is_str(t)
+	return "&" + place
 }
 
 fn c_copy_helper(mut &em: Emitter, sd: StructDecl) -> str {
@@ -2272,6 +2446,29 @@ fn c_unop(oper: str) -> str {
 # `"a\xc3\xa9b"` and cc read `\xa9b` as one escape — "hex escape sequence out of range",
 # a build that fails on a string a reader would call ordinary. An octal escape is at most
 # three digits, so `\303\251b` cannot run on. The seed has emitted octal all along.
+# c_str_cell renders a str LITERAL as the managed-str value every other str now is: the
+# payload of a cell, not a bare `char*`.
+#
+# It has to be, because a release cannot ask what it is holding. A managed str is a pointer
+# INTO `[zrt_ref_hdr | bytes]` and giving one back means stepping back one header — which on
+# a plain C literal reads whatever the linker put in front of the string. Nothing at runtime
+# tells the two apart, so either every str is a cell or none can ever be freed. That is the
+# row src/compiler/README.md calls a representation change rather than more emitted code.
+#
+# The cell is `static` and IMMORTAL: file lifetime, so the statement expression's value
+# outlives it nowhere, and a refcount zrt_retain/zrt_release both no-op on, so a literal
+# flows through retain, release and comparison exactly as a heap string does. The seed has
+# emitted this shape since S2 (emit_str.go, strLiteral); this is the same cell.
+fn c_str_cell(mut &em: Emitter, s: str) -> str {
+	em.used_rt = true
+	nm := c_tmp(em, "zgt_sl")
+
+	# C counts DECODED bytes, so the array is sized from the value and not from the escaped
+	# spelling c_str_lit produces
+	n := list[byte](s).len() + 1
+	return f"({{ static struct {{ zrt_ref_hdr h; char b[{n}]; }} {nm} = {{{{ZRT_RC_IMMORTAL, NULL}}, {c_str_lit(s)}}}; (const char *)zrt_ref_payload(&{nm}); }})"
+}
+
 fn c_str_lit(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "
@@ -2325,7 +2522,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
 		EInt(lex) => c_int_dec(em, lex)
 		EFloat(lex) => lex
-		EStr(v) => c_str_lit(v)
+		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
 		ENil => "0"
 		EIdent(n) => c_ident_val(em, n, sb)
@@ -2367,8 +2564,21 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 fn c_force(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 	raise f"NotImplemented: `!` on a {ty_name(t)} — it forces a Result[T] or a T?" if not c_is_carrier(t)
+
 	name := c_carrier_of(em, t)
-	return f"zg_force_{name}({c_expr(em, x, sb)})"
+	rendered := c_expr(em, x, sb)
+	df := c_carrier_temp_drop(em, t, x)
+
+	# A carrier that NAMES storage is somebody else's and is only read here. One that does
+	# not — a receive, a call's result — is this expression's own, and the force copies its
+	# payload out and leaves the carrier holding a second reference nothing will ever give
+	# back. The drop is after the force, because the force is what raises on a Right.
+	return f"zg_force_{name}({rendered})" if df == ""
+
+	cn := c_tmp(em, "zgt_t")
+	vn := c_tmp(em, "zgt_t")
+	et := c_type(c_carrier_elem(t))
+	return f"({{ {name} {cn} = {rendered}; {et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
 }
 
 # c_coalesce lowers `a ?? b`: the Left of `a`, or the fallback. The operand is bound to a
@@ -2390,11 +2600,28 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 	em.op_n = em.op_n + 1
 	tmp := "zgt_co" + tag
 	head := f"({{ {cn} {tmp} = {c_expr(em, a, sb)};"
-	return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if jump.len() == 0
+
+	# the carrier is bound here whether or not it is somebody else's, because it is READ
+	# TWICE. Giving it back is the other question, and it is asked the way c_force asks it:
+	# only a carrier that names no storage is this expression's own. The drop is a no-op on
+	# the fallback side by construction — there is no payload to give back on a Right — so it
+	# can sit after the choice rather than inside one arm of it.
+	df := c_carrier_temp_drop(em, t, a)
+	if jump.len() == 0 {
+		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if df == ""
+
+		v0 := "zgt_cov" + tag
+		pick := f"{c_res_is_left(tmp)} ? {c_res_taken(em, tmp, elem)} : ({c_fit_copied(em, elem, b, sb)})"
+		return f"{head} {c_type(elem)} {v0} = {pick}; {df}(&{tmp}); {v0}; }})"
+	}
 
 	val := "zgt_cov" + tag
 	mut out := f"{head} {c_type(elem)} {val};"
-	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, tmp, elem) + "; } else { "
+	mut give := ""
+	if df != "" {
+		give = f" {df}(&{tmp});"
+	}
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, tmp, elem) + ";" + give + " } else { "
 	for s in jump {
 		out = out + c_stmt(em, s, "")
 	}
@@ -2448,6 +2675,18 @@ fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 	if n > 0 and c_is_expr_stmt(body[n - 1]) {
 		upto = n - 1
 	}
+
+	# A GUARDED BLOCK IS A BLOCK, and this is the one that walks its statements itself
+	# rather than through c_block — so it has to do by hand the half c_block does for every
+	# other one: remember how tall the pending-release list was, and give back what the body
+	# added before the braces close.
+	#
+	# Without it the entries outlive the C block their names are declared in, and the next
+	# `return` renders them where nothing of that name exists: cc, `use of undeclared
+	# identifier`, against generated C. It stayed invisible while channels were the only
+	# thing on that list — no corpus case opens one inside a `guard` — and surfaced the day
+	# a second type joined.
+	keep := em.rel_cnames.len()
 	mut inner := ""
 	mut i := 0
 	for i < upto {
@@ -2455,6 +2694,12 @@ fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 		i = i + 1
 	}
 	inner = inner + c_guard_ok(em, body, upto, vt, res, sb)
+
+	# The guard's own frame mark is what gives its bindings back, on BOTH ways out: the
+	# normal path unwinds to it below, and the catch path is unwound by the runtime before
+	# the longjmp lands here. So there is nothing to render — only the pending entries to
+	# forget, since they belong to a scope that has ended.
+	c_scope_forget(em, keep)
 
 	mut out := "({ zrt_frame " + fr + "; " + cn + " " + res + " = {0}; zrt_handler_push_catch(&" + fr + ");"
 	out = out + " if (setjmp(" + fr + ".buf) == 0) { " + inner
@@ -2477,7 +2722,11 @@ fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, s
 
 	# a value-less last expression still has to RUN — it was written for its effect
 	return f"{val}; {c_res_mark_left(res)}" if c_is_nil_ty(vt)
-	return f"{c_res_mark_left(res)} {c_res_ok(res)} = {val};"
+
+	# COPIED, not aliased: the answer outlives the block, and the block now gives back what
+	# its bindings own on the way out. `guard { xs := […]; xs }` handed the result a second
+	# name for a buffer the release below was about to free.
+	return f"{c_res_mark_left(res)} {c_res_ok(res)} = {c_copied(em, vt, c_expr_stmt_of(body[upto]), sb)};"
 }
 
 # c_guard_val_ty is the guarded BLOCK's value type. GRAMMAR gives a block the value of its
@@ -2569,6 +2818,65 @@ fn c_guard_jump_err(kw: str) {
 	raise f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
+# c_str_concat joins two strings and gives back whichever operand it OWNS.
+#
+# zrt_str_concat reads both operands and answers a fresh cell, holding on to neither — so an
+# operand that was itself fresh has nothing naming it once the call returns. That is EVERY
+# interpolation in an f-string: `f"caller {x} {n}"` lowers to a chain of `+` over `display()`
+# results, and each of those cells was leaked the moment it was joined. It is the largest
+# single leak this emitter had, because it is one per interpolated value per f-string.
+#
+# So a fresh operand is held in a temporary and released after the join — the same statement
+# expression shape c_call_releasing uses, for the same reason: the release has to happen
+# after the call and an expression has nowhere else to put it. A LITERAL is fresh by this
+# test and is deliberately skipped: its cell is immortal, so holding it would only make the
+# emitted C longer. An operand that NAMES storage is somebody else's, and is borrowed.
+fn c_str_concat(mut &em: Emitter, a: Expr, b: Expr, sb: Subst) -> str {
+	ra := c_expr(em, a, sb)
+	rb := c_expr(em, b, sb)
+	oa := c_owns_value(a)
+	ob := c_owns_value(b)
+	return f"zrt_str_concat({ra}, {rb})" if not oa and not ob
+
+	mut decls := ""
+	mut frees := ""
+	mut la := ra
+	mut lb := rb
+	if oa {
+		la = c_tmp(em, "zgt_t")
+		decls = decls + f"const char *{la} = {ra}; "
+		frees = frees + f"zrt_str_release({la}); "
+	}
+	if ob {
+		lb = c_tmp(em, "zgt_t")
+		decls = decls + f"const char *{lb} = {rb}; "
+		frees = frees + f"zrt_str_release({lb}); "
+	}
+	rn := c_tmp(em, "zgt_t")
+	return f"({{ {decls}const char *{rn} = zrt_str_concat({la}, {lb}); {frees}{rn}; }})"
+}
+
+# c_owns_value is THE ownership invariant this whole teardown rests on: an expression that
+# names no storage hands over a value nobody else is holding, so whoever takes it owes it
+# back. It is asked wherever a value is used and then has nowhere to go — a concat operand,
+# a printed string, a carrier a `!` unwraps, a channel handed to a call, a `for … in`.
+#
+# The one carve-out is a string LITERAL. Its cell is immortal, so both halves of a refcount
+# are no-ops on it and holding it in a temporary only makes the emitted C longer. That
+# exemption used to live at one of the six sites that ask this question, which is why
+# `print "hi"` bound a temporary and released an immortal cell.
+fn c_owns_value(e: Expr) -> bool {
+	return false if c_is_strlit(e)
+	return not c_is_lvalue(e)
+}
+
+fn c_is_strlit(e: Expr) -> bool {
+	return match e {
+		EStr(_) => true
+		_       => false
+	}
+}
+
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
@@ -2578,7 +2886,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		if oper == "+" {
 			em.used_str = true
 			em.used_rt = true
-			return f"zgs_concat({c_expr(em, a, sb)}, {c_expr(em, b, sb)})"
+			return c_str_concat(em, a, b, sb)
 		}
 
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) == 0)" if oper == "=="
@@ -2777,14 +3085,28 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		em.used_str = true
 		em.used_rt = true
 
-		return inner if c_is_str(c_infer(em, x))
+		# `str(s)` on a str is the identity, and the identity of a BORROW is a borrow — but
+		# the expression it came from is a call, and every rule downstream reads a call as a
+		# value nobody else holds. `s2 := str(s)` therefore bound a cell it had never taken a
+		# reference to, and both names released it; an f-string's `{s}` lowers through here
+		# too, so the same one-line hole was under every interpolated string. Copying makes
+		# the answer match the shape: what leaves here is owned, as from any other call.
+		return c_copied(em, xt0, x, sb) if c_is_str(xt0)
 		if c_is_list(xt0) {
 			# ONLY a `list[byte]`. The bridge reinterprets the buffer as characters, so
 			# `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
 			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
 			# a composite; this hole let the same value out through an f-string hole.
 			raise f"`str(…)` over a list is the BYTE bridge, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
-			return f"zgs_from_bytes({inner})"
+
+			# zrt_str_from_bytes CONSUMES the list — it drops it on the success path and on
+			# the raise, so a caller passing a temporary owes no post-call drop that an
+			# unwind would skip. That means it must be handed a list nobody else holds: a
+			# fresh rvalue goes straight in, and one that NAMES storage is copied first.
+			# The old zgs_from_bytes borrowed instead, so substituting one for the other
+			# without this dropped the caller's own list out from under it — a double drop
+			# the moment the binding's own release ran, and heap corruption before that.
+			return f"zrt_str_from_bytes({c_copied(em, xt0, x, sb)})"
 		}
 
 		c_display_check(em, xt0)
@@ -2806,7 +3128,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		raise "NotImplemented: `list[rune](s)` decodes a str's code points — this compiler has no `rune` type, only `list[byte](s)`" if c_named_of(c_list_elem(ty)) == "rune"
 		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — the bytes of a `str` are `list[byte]`" if not c_is_byte(c_list_elem(ty))
 
-		return f"zgs_to_bytes({inner})"
+		return f"zrt_str_bytes({inner})"
 	}
 
 	# `int(v)` over an enum reads its DISCRIMINANT (GRAMMAR:577), which is the tag field —
@@ -3068,8 +3390,23 @@ fn c_index(mut &em: Emitter, target: Expr, idx: Expr, sb: Subst) -> str {
 	# the types that tell them apart, and it is what the mutating-method path already asks.
 	return f"(*({ct}*){at}(&({tgt}), {ix}))" if c_is_place(em, target)
 
-	# a call/conversion result is an rvalue; materialise it so its address is taken
-	return "({ zrt_list zgt_ix = " + tgt + "; (*(" + ct + "*)" + at + "(&zgt_ix, " + ix + ")); })"
+	# A CALL OR CONVERSION RESULT IS AN RVALUE: it is materialised so its address can be
+	# taken, and — because nothing else will ever name it — given back here. `print
+	# (<-lists)![0]` receives a whole list, reads one element out of it and used to walk away
+	# from the rest.
+	#
+	# The element is read out BEFORE the drop and copied if it owns anything, because it is a
+	# slot in the buffer that is about to be freed. The temporaries are numbered from em.tmp_n
+	# rather than fixed, so `f()[g()[0]]` cannot shadow the name the outer one is holding.
+	ln := c_tmp(em, "zgt_t")
+	vn := c_tmp(em, "zgt_t")
+	et := c_list_elem(tty)
+	slot := f"(*({ct}*){at}(&{ln}, {ix}))"
+	mut val := slot
+	if c_needs_copy(em, et) {
+		val = c_copy_of(em, et, slot)
+	}
+	return f"({{ zrt_list {ln} = {tgt}; {ct} {vn} = {val}; zrt_list_drop(&{ln}); {vn}; }})"
 }
 
 # c_list_at_fn picks the runtime slot accessor. They differ by exactly one thing — the
@@ -3194,7 +3531,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 		MList    => c_list_method(em, target, meth, args, tty, sb)
 		MMap     => c_map_method(em, target, meth, tty, sb)
 		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
-		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
+		MFnField => c_fnfield_call(em, recv, meth, target, args, sb)
 		_        => c_free_method(em, target, meth, args, sb)
 	}
 }
@@ -3381,7 +3718,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args(em, args, sb)})" if c_is_fn(bt)
+	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
 
@@ -3411,6 +3748,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 
 		raise f"undefined function `{name}`"
 	}
+
+	rels := c_owned_args(em, name, 0, args)
+	return c_call_releasing(em, f"zg_{name}", name, args, rels, sb) if c_any_owned(rels)
 
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"
 }
@@ -3504,6 +3844,107 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bo
 		i = i + 1
 	}
 	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+}
+
+# c_owned_args answers WHICH of a call's arguments hand it something the CALLER has to give
+# back, as one release function per written argument and "" for the rest.
+#
+# A plain call argument is a BORROW — the language says so (docs/code/coroutine.md, and
+# conc_chan_dir pins it): passing a handle moves no count, which is why a callee neither
+# copies its channel parameter nor releases it. That is exactly right for `f(ch)`, where the
+# caller's binding is still holding one. It leaves a hole for `f(source())`: the argument is
+# a freshly built handle carrying one reference, the callee borrows it, and when the call
+# returns there is no name left anywhere that could give it back.
+#
+# So the caller keeps it and releases it after the call (c_call_releasing). "Freshly built"
+# is the same test c_let_chan makes — anything that is not existing storage — and the answer
+# is a release FUNCTION rather than a bool because the type decides which one: a send-capable
+# handle gives back a send count as well as a holder count, and the two are not the same
+# release. That is also what makes this list the place the other owning types join when they
+# grow a drop, rather than a channel-shaped question asked in a channel-shaped way.
+fn c_owned_args(mut &em: Emitter, key: str, base: int, args: list[Expr]) -> list[str] {
+	mut rels: list[str] = []
+	mut i := 0
+	for i < args.len() {
+		# the lvalue test FIRST: it is a match on the expression's own tag, and c_param_row
+		# walks the whole program's parameter table. Asking them the other way round put a
+		# second full scan on every argument of every call, which is the cost c_arg exists
+		# not to pay twice.
+		mut rel := ""
+		mut row := -1
+		if c_owns_value(args[i]) {
+			row = c_param_row(em, key, base + i)
+		}
+		if row >= 0 and ty_is_chan(em.pr_ty[row]) {
+			# a `mut &` parameter takes the caller's own storage, which is a name and so
+			# never one of these — but say it here rather than rely on the lvalue test to
+			# have covered it, because the two questions are different ones
+			if not em.pr_ref[row] {
+				rel = c_chan_release_fn(c_chan_dir(em.pr_ty[row]))
+			}
+		}
+		rels.append(rel)
+		i = i + 1
+	}
+	return rels
+}
+
+# c_any_owned is whether c_owned_args found anything at all — the common answer is no, and
+# a call with nothing to give back must render exactly the C it rendered before.
+fn c_any_owned(rels: list[str]) -> bool {
+	for r in rels {
+		return true if r != ""
+	}
+	return false
+}
+
+# c_call_releasing renders a call that is handed something the caller has to give back. It
+# is a STATEMENT EXPRESSION — the same shape this emitter already uses to index a map —
+# because the release has to happen after the call and an expression has nowhere else to put
+# it:
+#
+#     ({ zrt_chan *zgt_t0 = source(); int64_t zgt_tr = zg_drain(zgt_t0);
+#        zrt_chan_release(zgt_t0); zgt_tr; })
+#
+# The result is held in a temporary of its own so the release lands BETWEEN the call and the
+# value: releasing first would hand the caller a value read out of a channel it had already
+# given back, and releasing after the whole expression is what there is no place to write.
+# A call that answers nothing skips that temporary, because C has no `void` object to
+# declare — the statement expression's value is then the release, which is what a discarded
+# call wants anyway.
+#
+# Every temporary is numbered from em.tmp_n rather than from its position, so a call nested
+# in another call's argument cannot shadow the name the outer one is still holding.
+fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[Expr], rels: list[str], sb: Subst) -> str {
+	chk_call_arity(em, key, 0, args.len())
+	chk_ref_alias(em, key, args)
+
+	mut decls := ""
+	mut call := cfn + "("
+	mut frees := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			call = call + ", "
+		}
+		rendered := c_arg(em, key, i, i + 1, args[i], sb)
+		if rels[i] == "" {
+			call = call + rendered
+		} else {
+			tn := c_tmp(em, "zgt_t")
+			decls = decls + f"zrt_chan *{tn} = {rendered}; "
+			call = call + tn
+			frees = frees + f"{rels[i]}({tn}); "
+		}
+		i = i + 1
+	}
+	call = call + c_default_args(em, key, args.len(), args.len() > 0) + ")"
+
+	ret := c_lookup_sig_ret(em, key)
+	return f"({{ {decls}{call}; {frees}}})" if ty_eq(ret, TVoid)
+
+	rn := c_tmp(em, "zgt_t")
+	return f"({{ {decls}{c_type(ret)} {rn} = {call}; {frees}{rn}; }})"
 }
 
 # c_arg renders ONE argument against the parameter it fills. A `mut &` parameter takes the
@@ -3721,18 +4162,51 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 	return TFn(ptys, c_lookup_sig_ret(em, n))
 }
 
-fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
+# c_args renders the arguments of a call this emitter has no PARAMETER TABLE for: a call
+# through a function value, an intrinsic, an error constructor. c_arg is the wrong tool —
+# it reads the table by name and index, and there is no name to read.
+#
+# `ftys` is what the declared function type says the parameters are, and it is what makes
+# each argument a COPY like every other call's: a callee owns what it is given and gives it
+# back at its own scope end, so handing it the caller's own storage instead was a double
+# drop. `this.action(ctx)` did exactly that — it was the one call in the whole stdlib that
+# passed a struct without copying it, and the drop the callee now owes turned a
+# long-standing value-semantics gap into a use-after-free.
+#
+# A call with no declared type to read — an intrinsic, an err constructor — passes an empty
+# list and every argument goes through unchanged, which is what those want.
+fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_expr(em, args[i], sb)
+		if i < ftys.len() {
+			out = out + c_fit_copied(em, ftys[i], args[i], sb)
+		} else {
+			out = out + c_expr(em, args[i], sb)
+		}
 		i = i + 1
 	}
 	return out
 }
+
+# c_fnfield_call lowers `this.action(c)` — a call through a FIELD holding a function. The
+# field's type is wanted twice, for the cast and for the parameter list, and c_field_ty is a
+# scan of every field of every struct in the program; asking once is the whole reason this
+# is a function and not an arm of the match that calls it.
+fn c_fnfield_call(mut &em: Emitter, recv: str, meth: str, target: Expr, args: list[Expr], sb: Subst) -> str {
+	fty := c_field_ty(em, recv, meth)
+	return f"({c_fnptr_cast(fty)}{c_expr(em, target, sb)}.zg_{meth})({c_args_typed(em, c_fn_params(fty), args, sb)})"
+}
+
+fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
+	mut none: list[Ty] = []
+	return c_args_typed(em, none, args, sb)
+}
+
+# c_fn_params reads a function TYPE's parameter list, or an empty one from anything else.
 
 # c_match lowers a match expression to a right-nested C ternary, the last arm as the
 # final else (the subset requires an exhaustive catch-all last arm).
@@ -4163,9 +4637,19 @@ fn c_elem_ty(mut &em: Emitter, target: Expr, idx: Expr) -> Ty {
 # c_list_method_rv is a list method on an RVALUE: bind it, then call the method on the
 # binding, so the whole thing is still one expression.
 fn c_list_method_rv(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], tty: Ty, sb: Subst) -> str {
+	ln := c_tmp(em, "zgt_t")
 	src := c_expr(em, target, sb)
-	inner := c_list_method_on(em, "zgt_rv", meth, args, tty, sb)
-	return "({ zrt_list zgt_rv = " + src + "; " + inner + "; })"
+	inner := c_list_method_on(em, ln, meth, args, tty, sb)
+
+	# and give it back: this list is an rvalue, so nothing else will ever name it. `print
+	# Bag([4, 5, 6, 7]).xs.len()` built a list, counted it and dropped the buffer on the floor.
+	# `len` is the only list method that answers a value, and it answers an int — so the
+	# result is held across the drop, and everything else is a statement whose value is the
+	# drop itself.
+	return f"({{ zrt_list {ln} = {src}; {inner}; zrt_list_drop(&{ln}); }})" if meth != "len"
+
+	rn := c_tmp(em, "zgt_t")
+	return f"({{ zrt_list {ln} = {src}; int64_t {rn} = {inner}; zrt_list_drop(&{ln}); {rn}; }})"
 }
 
 fn c_map_method_ret(meth: str) -> Ty {
@@ -4654,8 +5138,8 @@ fn c_chan_op_check(t: Ty, op: int) {
 # Now the paths an end can travel, and what each does:
 #
 #   a BINDING            takes a reference of its OWN, by its own direction, and gives it
-#                        back when its scope ends (c_let_chan registers it on the
-#                        pending-release list; c_release_from is what spends it). An
+#                        back when its scope ends (c_let_chan registers it on the runtime's
+#                        cleanup stack, and the block's unwind is what spends it). An
 #                        initializer naming existing storage is copied; a freshly built
 #                        handle already carries exactly one reference and is taken over.
 #                        This is what makes "close early by narrowing the scope" work with
@@ -4687,6 +5171,13 @@ fn c_chan_copy_fn(dir: int) -> str {
 fn c_chan_release_fn(dir: int) -> str {
 	return "zrt_chan_release" if dir == 2
 	return "zrt_chan_sender_release"
+}
+
+# c_chan_defer_thunk is the same choice in the `void (*)(void *)` shape the cleanup stack
+# takes. The two are one decision, so they are written next to each other.
+fn c_chan_defer_thunk(dir: int) -> str {
+	return "zrt_defer_chan_release" if dir == 2
+	return "zrt_defer_chan_sender_release"
 }
 
 fn c_recv(mut &em: Emitter, ch: Expr, sb: Subst) -> str {
@@ -5053,10 +5544,7 @@ fn c_for_select(mut &em: Emitter, arms: list[SelArm], ind: str) -> str {
 	# may run zero times, so the body's end state joins the entry state rather than replacing
 	# it.
 	entry := c_live_save(em)
-	outer_rel := em.loop_rel
-	em.loop_rel = em.rel_cnames.len()
 	body := c_select(em, arms, ind + "    ", true)
-	em.loop_rel = outer_rel
 	c_live_merge(em, entry)
 	return ind + "for (;;) {\n" + body + ind + "}\n"
 }
@@ -5092,7 +5580,6 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_cur := em.scope_cur
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
-	saved_loop_rel := em.loop_rel
 	saved_refs := em.ref_names
 	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col)))
 	em.env_names = saved_names
@@ -5105,7 +5592,6 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	em.scope_cur = saved_cur
 	em.rel_cnames = saved_rel_cnames
 	em.rel_fns = saved_rel_fns
-	em.loop_rel = saved_loop_rel
 	em.ref_names = saved_refs
 	em.used_fnptr = true
 	return f"((zg_fnptr)zg_{name})"
@@ -5176,6 +5662,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 		# a C brace in an f-string has to be doubled, and a line that is mostly braces reads
 		# better as concatenation
 		em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { (void)p; " + cal.cname + "(); }\n")
+		em.fn_mark_used = true
 		return f"{ind}zrt_defer(zg_dfn_{tag}, NULL);\n"
 	}
 
@@ -5197,6 +5684,7 @@ fn c_defer_of(mut &em: Emitter, cal: Callee, ind: str) -> str {
 	em.dfn_decls.append("typedef struct {" + fields + " } zg_denv_" + tag + ";\n")
 	em.dfn_decls.append("static void zg_dfn_" + tag + "(void *p) { zg_denv_" + tag + " *e = (zg_denv_" + tag + "*)p; " + cal.cname + "(" + call + "); }\n")
 	mut out := ind + "zg_denv_" + tag + " zgt_de" + tag + " = { " + vals + " };\n"
+	em.fn_mark_used = true
 	return f"{out}{ind}zrt_defer(zg_dfn_{tag}, &zgt_de{tag});\n"
 }
 
@@ -5372,12 +5860,15 @@ fn c_return_if(mut &em: Emitter, val: Expr, cond: Expr, ind: str) -> str {
 # leave a sender behind: the channel never reached zero, never closed, and the deadlock
 # that followed surfaced on main, nowhere near the `break`.
 #
-# The releases stop at em.loop_rel rather than at zero: a binding made OUTSIDE the loop is
-# still in scope after the jump, and its own block releases it.
+# The unwind goes to the LOOP BODY's mark rather than to zero: a binding made outside the
+# loop is still in scope after the jump, and its own block gives it back.
 fn c_jump(mut &em: Emitter, kw: str, ind: str) -> str {
-	rel := c_release_from(em, em.loop_rel, ind)
-	return rel + f"{ind}{kw};\n" if em.loop_mark == ""
-	return f"{ind}zrt_unwind_to({em.loop_mark});\n" + rel + f"{ind}{kw};\n"
+	return f"{ind}{kw};\n" if em.loop_mark == "" or em.rel_cnames.len() <= em.loop_keep
+
+	# saying so is what lets the block declare the mark: a loop body is handed a name before
+	# it is walked, and this is the only thing that can ever name it
+	em.loop_mark_used = true
+	return f"{ind}zrt_unwind_to({em.loop_mark});\n" + f"{ind}{kw};\n"
 }
 
 # --- maps -----------------------------------------------------------------------
@@ -5411,7 +5902,9 @@ fn c_map_vt(mut &em: Emitter, kt: Ty, vt: Ty) -> str {
 	# NULL copy is the runtime's memcpy fast path, which is what a POD key or value wants.
 	# A key or value that OWNS storage gets the same thunk a list element of that type
 	# gets: without one, `zrt_map_copy` bit-copied a `list` value and both maps' entries
-	# named one buffer. The drops stay NULL — this emitter is leak-style throughout.
+	# named one buffer. The DROPS are still NULL, which is the one container teardown that
+	# has not been built: a map's own drop frees its tables, and its keys and values go
+	# with it only once these are filled in.
 	kc := c_elem_copy_fn(em, kt)
 	vc := c_elem_copy_fn(em, vt)
 	em.mvt_decls.append(f"static const zrt_map_vt {name} = {{ {hash}, {eq}, {kc}, NULL, {vc}, NULL }};\n")
@@ -5904,15 +6397,55 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
 
+	# The loop's handle OWNS what it holds when the iterable was not already storage. `for v
+	# in ch` borrows the binding `ch` and gives nothing back; `for v in source()` is handed a
+	# freshly built handle carrying exactly one reference, and this loop is the only thing
+	# that will ever be in a position to return it. It is the same rule c_let_chan states for
+	# a binding — a name takes a reference and gives it back — reaching the one holder that
+	# is not a name.
+	#
+	# The handle is NUMBERED when it owns, because the release then joins the pending list
+	# and a `return` inside the body renders every pending name at the return site: two
+	# nested loops both spelling their handle `zgt_cit` would release the inner one twice and
+	# the outer one never. The number is the pending list's own height, which is unique among
+	# the entries that can be live together and moves only when the program does. A borrowed
+	# handle registers nothing, so it keeps the plain name and its C is unchanged.
+	keep := em.rel_cnames.len()
+	owns := c_owns_value(iter)
+	mut cit := "zgt_cit"
+	if owns {
+		cit = f"zgt_cit_{keep}"
+	}
+
 	# a block, so the handle and the loop variable are scoped to the loop and sequential
 	# or nested `for … in ch` loops cannot collide on the name
 	in2 := ind + "    "
-	mut out := ind + "{\n" + in2 + "zrt_chan *zgt_cit = " + it + ";\n"
+	mut mark := ""
+	if owns {
+		mark = c_new_mark(em)
+	}
+	mut out := ind + "{\n"
+	if owns {
+		out = out + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	}
+	out = out + in2 + "zrt_chan *" + cit + " = " + it + ";\n"
+	if owns {
+		out = out + c_pend_release(em, cit, c_chan_defer_thunk(c_chan_dir(t)), in2)
+	}
 	out = out + in2 + et + " " + cv + ";\n"
-	out = out + in2 + "while (zrt_chan_recv(zgt_cit, &" + cv + ") == 0) {\n"
+	out = out + in2 + "while (zrt_chan_recv(" + cit + ", &" + cv + ") == 0) {\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
-	out = out + in2 + "{ zrt_err zgt_ce = zrt_chan_close_err(zgt_cit);\n"
+
+	# The close reason is read BEFORE the handle is given back, and the release sits between
+	# the read and the raise: zrt_chan_close_err answers by value, so the Err outlives the
+	# handle, and putting the release here is what keeps the crash path from being the one
+	# path that leaks.
+	out = out + in2 + "{ zrt_err zgt_ce = zrt_chan_close_err(" + cit + ");\n"
+	c_scope_forget(em, keep)
+	if owns {
+		out = out + in2 + f"  zrt_unwind_to({mark});\n"
+	}
 	out = out + in2 + "  if (zgt_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zgt_ce); } }\n"
 	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
@@ -6013,6 +6546,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 
 	return c_let_list(em, name, eff, is_mut, ival, ind) if c_is_list(eff)
 	return c_let_chan(em, name, eff, is_mut, ival, ind) if ty_is_chan(eff)
+	return c_let_str(em, name, eff, is_mut, ival, ind) if c_is_str(eff)
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
@@ -6029,7 +6563,15 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	# variable initialize itself.
 	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff, is_mut)
-	return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {val};\n"
+	cn := c_var_cname(em, name)
+
+	# A STRUCT holding a list, a map or a str owns those, and this is where it says so. The
+	# three that have their own c_let_ above say it there because they have more to say; a
+	# struct, a map and a tuple all arrive here, and c_pend_drop knows which of them owes
+	# anything. A CARRIER — `T?`, `Result[T]` — is not registered: nothing generates a drop
+	# for one, so it leaks its payload, which the README table names.
+	give := c_pend_drop(em, eff, cn, ind)
+	return f"{ind}{c_type(eff)} {cn} = {val};\n" + give
 }
 
 # c_let_chan declares a CHANNEL binding, which owns what it holds. Two halves:
@@ -6056,50 +6598,77 @@ fn c_let_chan(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	}
 	c_add_var(em, name, eff, is_mut)
 	cn := c_var_cname(em, name)
-	c_pend_release(em, cn, c_chan_release_fn(dir))
-	return f"{ind}zrt_chan *{cn} = {val};\n"
+	give := c_pend_release(em, cn, c_chan_defer_thunk(dir), ind)
+	return f"{ind}zrt_chan *{cn} = {val};\n" + give
+}
+
+# c_pend_drop registers a BINDING of an owning type, so that what it holds is given back
+# when its scope ends. It is c_drop_fn asked at the one place that acts on the answer, and
+# it is what a struct binding and a by-value parameter both go through — "does this type own
+# anything" is answered once, in c_drop_fn, rather than once per kind of binding. It is also
+# the parameter side of the rule c_needs_copy states for the call side, and the two have to
+# agree: a parameter is released here exactly when the call copied it there, or the callee
+# gives back a reference the caller never handed over.
+#
+# A CHANNEL is deliberately not one of these. Passing a handle moves no count
+# (docs/code/coroutine.md, pinned by conc_chan_dir), so a channel parameter is a borrow —
+# which is why c_arg does not copy one either — and a channel BINDING has a release with a
+# direction in it, which c_let_chan registers itself. The temporary a borrow leaves behind
+# is the caller's problem, and is where c_owned_args comes in.
+fn c_pend_drop(mut &em: Emitter, t: Ty, cname: str, ind: str) -> str {
+	th := c_drop_thunk(em, t)
+	return "" if th == ""
+
+	return c_pend_release(em, cname, th, ind)
 }
 
 # c_pend_release records that `cname` owns something `relfn` gives back, until its scope
 # ends. It is the ONE way onto the pending-release list, so a type that starts owning its
 # storage joins by calling this and needs no exit path of its own.
-fn c_pend_release(mut &em: Emitter, cname: str, relfn: str) {
-	em.rel_cnames.append(cname)
-	em.rel_fns.append(relfn)
+fn c_pend_release(mut &em: Emitter, local: str, thunk: str, ind: str) -> str {
+	em.used_rt = true
+	em.rel_cnames.append(local)
+	em.rel_fns.append(thunk)
+	return f"{ind}zrt_defer({thunk}, &{local});\n"
 }
 
-# c_release_from renders the release of every pending binding at index `keep` or above,
-# innermost first. It is what every exit from a block goes through — falling off the end,
-# a `return`, a `break` or a `continue` — and it only RENDERS: dropping the entries is the
-# business of the one exit that actually ends the scope (c_scope_end). A `return` and a
-# jump are each one path out of several, and the block still has to release on its own.
+# c_drop_thunk is the `void (*)(void *)` a value of this type is given back through — the
+# shape zrt_defer takes, which no release has: some take an address and some the value.
 #
-# Releases are emitted rather than deferred, which is the one thing this does not share
-# with the seed. The cost is a binding in a frame that ABORTS: its release is skipped and
-# the handle leaks, as everything else in this emitter does on that path. It buys not
-# having to hand the runtime the address of a C local whose block may end before the
-# cleanup stack is unwound, which would be a use-after-free rather than a leak. A
-# coroutine's own handle is unaffected either way: `spawn` releases its capture from the
-# thunk's defer, which does run on the crash path, and that is what closes a channel whose
-# producer died.
-fn c_release_from(mut &em: Emitter, keep: int, ind: str) -> str {
-	mut out := ""
-	mut i := em.rel_cnames.len() - 1
-	for i >= keep {
-		out = out + ind + em.rel_fns[i] + "(" + em.rel_cnames[i] + ");\n"
-		i = i - 1
-	}
-	return out
+# Every one of them already exists, because a list ELEMENT vtable needs exactly this
+# signature: `zg_elemdrop_<kind>` is emitted in the prelude for list, map and str, and
+# beside the generated drop for a struct. So this is not a fourth dispatch — it is
+# c_elem_kind, the one that exists so the decision is not written out twice, plus a prefix.
+# It was a longhand copy, and the copy is how a kind gets added to one and not the other.
+#
+# A TUPLE is the exception: it has an element vtable under a different naming scheme and no
+# drop at all, which is the leak the README table names.
+fn c_drop_thunk(mut &em: Emitter, t: Ty) -> str {
+	k := c_elem_kind(em, t)
+
+	return "" if k == "" or c_is_tuple(t)
+
+	return "zg_elemdrop_" + k
 }
 
-# c_scope_end is c_release_from for the exit that ends the scope: it renders the releases
-# and then drops them, so the statements after the block no longer see them.
-fn c_scope_end(mut &em: Emitter, keep: int, ind: str) -> str {
-	return "" if em.rel_cnames.len() <= keep
-	out := c_release_from(em, keep, ind)
+# c_scope_forget drops the pending-release ENTRIES for a scope that has ended. Nothing is
+# rendered here, and that is the whole of this design: a release is registered on the
+# runtime's cleanup stack where it is declared (c_pend_release), and every exit gives it
+# back by unwinding to a mark rather than by naming it again.
+#
+# Releases used to be EMITTED at each exit instead, with the argument that deferring one
+# would hand the runtime the address of a C local whose block may end before the cleanup
+# stack is unwound. That is not what happens: zrt_unwind_abort runs zrt_unwind_to(h->mark)
+# BEFORE the longjmp, so the frames are still live, and a block that registers anything
+# takes a mark and unwinds at its own end — so a cleanup can never outlive the storage it
+# names. What the emitted form cost was every release on a frame that ABORTS, which is the
+# path `guard` catches and carries on from.
+#
+# The list is still kept, for one reason: it is how a block knows whether it registered
+# anything at all, which is what decides whether it needs a mark.
+fn c_scope_forget(mut &em: Emitter, keep: int) {
 	em.rel_cnames = c_strs_take(em.rel_cnames, keep)
 	em.rel_fns = c_strs_take(em.rel_fns, keep)
-	return out
 }
 
 # c_ints_drop_last removes the last element IN PLACE. Taking the list by value and
@@ -6124,8 +6693,30 @@ fn c_strs_take(xs: list[str], n: int) -> list[str] {
 	return out
 }
 
-# c_let_list declares a list binding: a list-literal initializer becomes an init plus a
-# push per element; any other initializer (a call or another list) is a plain copy.
+# c_let_str declares a STR binding, which owns a reference to its cell and gives it back at
+# scope exit — the two halves c_let_chan states for a handle and c_let_list for a buffer. An
+# initializer that NAMES storage is somebody else's cell, so this binding takes a reference
+# of its own (c_copied, which for a str is zrt_str_retain); a freshly produced one — a
+# concat, an f-string, a `str(bytes)`, a call's result — already carries exactly one and
+# this binding takes it over. A literal's cell is immortal, so both halves are no-ops on it.
+fn c_let_str(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
+	em.used_rt = true
+	val := c_copied(em, eff, ival, c_nosub())
+	c_add_var(em, name, eff, is_mut)
+	cn := c_var_cname(em, name)
+	give := c_pend_drop(em, eff, cn, ind)
+	return f"{ind}const char* {cn} = {val};\n" + give
+}
+
+# c_let_list declares a LIST binding: a list-literal initializer becomes an init plus a push
+# per element, and any other initializer — a call, another list — is a plain copy. Either way
+# it owns its buffer and gives it back at scope exit, exactly as a channel binding gives back
+# its handle.
+#
+# A list is REFCOUNTED underneath (copy-on-write), which is what makes the drop safe at every
+# site a list leaves this scope by: `return xs` copies, and so does pushing one into a
+# channel, a struct field or a `spawn` capture. Each of those retains, so the holder dropped
+# here is never the last one when somebody else is still reading.
 fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 
@@ -6136,6 +6727,7 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 		c_add_var(em, name, eff, is_mut)
 		cname := c_var_cname(em, name)
 		mut out := f"{ind}zrt_list {cname}; zrt_list_init(&{cname}, sizeof({et}), &{c_elem_vt(em, c_list_elem(eff))});\n"
+		out = out + c_pend_drop(em, eff, cname, ind)
 		return out + c_pushes_strs(cname, et, vals, ind)
 	}
 
@@ -6143,7 +6735,9 @@ fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, in
 	# same one every other site uses.
 	val := c_copied(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff, is_mut)
-	return f"{ind}zrt_list {c_var_cname(em, name)} = {val};\n"
+	cn := c_var_cname(em, name)
+	give := c_pend_drop(em, eff, cn, ind)
+	return f"{ind}zrt_list {cn} = {val};\n" + give
 }
 
 fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
@@ -6162,6 +6756,15 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# and prints that. c_display_check is the same refusal `str(…)` already makes.
 	c_display_check(em, ty)
 	ex := c_expr(em, e, c_nosub())
+
+	# A FRESH string is nobody's: `print f"{x}"` builds a cell, shows it, and had nothing
+	# left anywhere to give it back. Printing is one statement, so the release goes straight
+	# after the printf. A str that NAMES storage is somebody else's and is only borrowed
+	# here, which is why this asks the expression and not the type.
+	if c_is_str(ty) and c_owns_value(e) {
+		em.used_rt = true
+		return f"{ind}{{ const char* zgt_ps = {ex}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
+	}
 	return match ty {
 		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
 
@@ -6177,14 +6780,14 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# the value is computed BEFORE the defers run, which is what makes `defer` unable to
 	# change what is returned
 	mut pre := ""
-	if em.fn_mark != "" {
+
+	# the value is computed BEFORE this, which is what makes `defer` unable to change what is
+	# returned; c_needs_fn_unwind is what keeps a function that owns nothing from paying for
+	# the machinery at all.
+	if c_needs_fn_unwind(em) {
+		em.fn_mark_used = true
 		pre = f"{ind}zrt_unwind_to({em.fn_mark});\n"
 	}
-
-	# every binding in scope gives its reference back on this path too, after the defers
-	# (which may still name one) and after the return value has been computed. The whole
-	# list goes: a `return` leaves the FUNCTION, and c_reset_env starts each one empty.
-	pre = pre + c_release_from(em, 0, ind)
 
 	# `return nil` is a RETURN WITH NO VALUE everywhere except where the declared result is
 	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
@@ -6228,7 +6831,11 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 			v = f"{c_chan_copy_fn(c_chan_dir(em.fn_ret))}({v})"
 		}
 		return f"{ind}return {v};\n" if pre == ""
-		rt := c_type(et)
+
+		# the temporary takes the DECLARED result type, not the expression's: a bare value
+		# returned from `-> int?` is FITTED into the carrier by c_fit_copied above, so typing
+		# the temporary from what was written declares an int64_t and assigns a carrier to it
+		rt := c_type(em.fn_ret)
 		return ind + "{ " + rt + " zgt_rv = " + v + ";\n" + pre + ind + "return zgt_rv; }\n"
 	}
 	return f"{pre}{ind}return;\n"
@@ -6284,6 +6891,14 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
 	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
 	out = out + in2 + "    " + c_type(elem) + " " + cv + " = " + c_res_taken(em, tmp, elem) + ";\n"
+
+	# the payload has been copied out, so the carrier this statement materialised has nothing
+	# left to say. Only one that names no storage is this statement's to give back, and only
+	# the Left side has a payload — which is why the drop sits inside this branch.
+	df := c_carrier_temp_drop(em, t, value)
+	if df != "" {
+		out = out + in2 + "    " + df + "(&" + tmp + ");\n"
+	}
 	entry := c_live_save(em)
 	out = out + c_block(em, then_body, in2 + "    ")
 	then_end := c_live_save(em)
@@ -6312,10 +6927,22 @@ fn c_for(mut &em: Emitter, has_cond: bool, cond: Expr, body: list[Stmt], ind: st
 # the body's own.
 fn c_loop_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	entry := c_live_save(em)
-	outer_rel := em.loop_rel
-	em.loop_rel = em.rel_cnames.len()
+
+	# The loop BODY always takes a mark, unlike every other block, because a `break` or a
+	# `continue` unwinds to it — and whether the body registers anything is not known when
+	# the jump inside it is rendered. It is also the mark that keeps a loop from growing the
+	# cleanup stack: an iteration gives back what it took before the next one starts.
+	outer_mark := em.loop_mark
+	outer_keep := em.loop_keep
+	outer_used := em.loop_mark_used
+	em.loop_mark = c_new_mark(em)
+	em.loop_keep = em.rel_cnames.len()
+	em.loop_mark_used = false
+	em.force_mark = em.loop_mark
 	out := c_block(em, body, ind)
-	em.loop_rel = outer_rel
+	em.loop_mark = outer_mark
+	em.loop_keep = outer_keep
+	em.loop_mark_used = outer_used
 	c_live_merge(em, entry)
 	return out
 }
@@ -6472,6 +7099,16 @@ fn c_scope_close(mut &em: Emitter, outer: int) {
 	c_ints_drop_last(em.open_scopes)
 }
 
+# c_block renders a block, and gives back whatever the block took on: a mark on entry and
+# an unwind at the end, which is the ONE exit every other one goes through as well — the
+# runtime unwinds past this mark on an abort, a `return` unwinds past it to the function's,
+# and a jump unwinds to the loop body's.
+#
+# The mark is emitted only where it is needed, and whether it is needed cannot be known
+# until the body has been walked — a binding registers itself as it is declared. So the
+# NAME is handed out first, the body is rendered into a string, and the declaration is
+# prepended afterwards. A `defer` statement counts as needing one for the same reason a
+# binding does: it puts a record on the same stack.
 fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	keep := em.rel_cnames.len()
 
@@ -6480,44 +7117,30 @@ fn c_block(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
 	# block that happens to use the same name
 	outer_scope := c_scope_open(em)
 
+	forced := em.force_mark
+	em.force_mark = ""
+
 	mut out := ""
-	if c_has_defer(body) {
-		out = c_block_marked(em, body, ind)
-	} else {
-		mut i := 0
-		for i < body.len() {
-			out = out + c_stmt(em, body[i], ind)
-			i = i + 1
-		}
-	}
-
-	c_scope_close(em, outer_scope)
-
-	# a binding made in this block gives its reference back here. A `return` inside the
-	# block already released everything on its way out, so what follows one is dead C.
-	return out + c_scope_end(em, keep, ind)
-}
-
-# c_block_marked wraps a block that schedules a defer: a mark on entry, an unwind on the
-# way out. The mark's NAME is what a return or a jump inside unwinds to, so it is saved
-# and restored around the body — an inner block must not leave its own mark visible to the
-# statements that follow it.
-fn c_block_marked(mut &em: Emitter, body: list[Stmt], ind: str) -> str {
-	tag := strconv.to_string(em.dfn_n, 10)
-	mark := f"zgt_mk{tag}"
-	em.dfn_n = em.dfn_n + 1
-	outer_fn := em.fn_mark
-	if em.fn_mark == "" {
-		em.fn_mark = mark
-	}
-	mut out := f"{ind}size_t {mark} = zrt_scope_mark();\n"
 	mut i := 0
 	for i < body.len() {
 		out = out + c_stmt(em, body[i], ind)
 		i = i + 1
 	}
-	em.fn_mark = outer_fn
-	return out + f"{ind}zrt_unwind_to({mark});\n"
+
+	c_scope_close(em, outer_scope)
+	needs := c_has_defer(body) or em.rel_cnames.len() > keep or (forced != "" and em.loop_mark_used)
+	c_scope_forget(em, keep)
+	return out if not needs
+
+	# the name is minted HERE and not before the walk, because most blocks never need one:
+	# the counter bump and the concatenation were paid per block in the program to be thrown
+	# away. A forced block was handed its name already — that one a jump inside it may name.
+	mut mark := forced
+	if mark == "" {
+		mark = c_new_mark(em)
+	}
+	em.used_rt = true
+	return f"{ind}size_t {mark} = zrt_scope_mark();\n" + out + f"{ind}zrt_unwind_to({mark});\n"
 }
 
 # --- declaration emission ------------------------------------------------------
@@ -6611,6 +7234,18 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 	# shadow a module constant and the body may shadow a parameter — `mut n := n`
 	c_scope_open(em)
 
+	# The FUNCTION's own mark, and the parameters registered against it. A parameter lives
+	# for the whole call, so it belongs above the body block's mark rather than in it — and a
+	# `return` from anywhere inside unwinds to this one, which gives back everything the body
+	# took as well. The name is handed out before the body is walked because c_return needs
+	# it; whether it is DECLARED is answered after, by whether anything used it.
+	fmark := c_new_mark(em)
+	outer_fn_mark := em.fn_mark
+	outer_used := em.fn_mark_used
+	em.fn_mark = fmark
+	em.fn_mark_used = false
+	mut pdefer := ""
+
 	mut sig := f"{c_ret_type(fn_d)} {c_fn_cname(fn_d.recv, fn_d.name)}("
 	if fn_d.params.len() == 0 {
 		sig = sig + "void"
@@ -6622,6 +7257,20 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			}
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty, pm.is_ref)
+
+			# A BY-VALUE PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
+			# hands over (c_arg, through c_copied) — for a str that copy is a retain, for a
+			# list or a map a copy-on-write handle — so the callee holds a reference of its
+			# own and owes it back, exactly as a binding made in the body does. A `mut &`
+			# parameter is the CALLER's storage handed over to be written, and owns nothing.
+			#
+			# A `spawn`/`defer` env is the same rule read from the other side: the env field
+			# is handed over WITHOUT a further copy, because the env is giving up its own
+			# reference — so the callee dropping it is what frees the capture, and the two
+			# together are why a captured list is not leaked by either.
+			if not pm.is_ref {
+				pdefer = pdefer + c_pend_drop(em, pm.ty, "zg_" + pm.name, "    ")
+			}
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
 				sig = sig + c_type(pm.ty) + "* zg_" + pm.name
@@ -6649,7 +7298,25 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			body[last] = SReturn(true, c_expr_stmt_of(body[last]))
 		}
 	}
-	out := sig + c_block(em, body, "    ") + "}\n\n"
+
+	rendered := c_block(em, body, "    ")
+
+	# Falling off the end is the one exit that renders nothing of its own, so it is the one
+	# that needs the unwind written out — but only when a parameter put something on the
+	# stack, since the body block has already unwound its own.
+	mut tail := ""
+	if pdefer != "" and not c_body_diverges(body) {
+		tail = f"    zrt_unwind_to({fmark});\n"
+	}
+	mut head := ""
+	if pdefer != "" or em.fn_mark_used {
+		em.used_rt = true
+		head = f"    size_t {fmark} = zrt_scope_mark();\n"
+	}
+	c_scope_forget(em, 0)
+	em.fn_mark = outer_fn_mark
+	em.fn_mark_used = outer_used
+	out := sig + head + pdefer + rendered + tail + "}\n\n"
 	em.fn_ret = saved_ret
 	return out
 }
@@ -6842,7 +7509,7 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # only the driver does.
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false)
 	c_build_type_names(em, f)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)
@@ -6946,9 +7613,6 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	rt := c_needs_runtime(em) or em.used_rt or not whole
 	mut hdr := "// Generated by zergc (self-host). Do not edit.\n"
 	hdr = hdr + "#include <stdio.h>\n#include <stdint.h>\n#include <stdbool.h>\n#include <string.h>\n"
-	if em.used_str {
-		hdr = hdr + "#include <stdlib.h>\n"
-	}
 	if em.used_fnptr {
 		hdr = hdr + c_fnptr_typedef()
 	}
@@ -6959,13 +7623,15 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	if em.used_rt {
 		hdr = hdr + "static const zrt_elem_vt zg_listvt = {NULL, NULL};\n"
 		hdr = hdr + "static void zg_elemcopy_list(void *dst, const void *src) { zrt_list_copy((zrt_list*)dst, (const zrt_list*)src); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, NULL};\n"
+		hdr = hdr + "static void zg_elemdrop_list(void *elem) { zrt_list_drop((zrt_list*)elem); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_list = {zg_elemcopy_list, zg_elemdrop_list};\n"
 		hdr = hdr + "static void zg_elemcopy_map(void *dst, const void *src) { zrt_map_copy((zrt_map*)dst, (const zrt_map*)src); }\n"
-		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, NULL};\n"
+		hdr = hdr + "static void zg_elemdrop_map(void *elem) { zrt_map_drop((zrt_map*)elem); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, zg_elemdrop_map};\n"
+		hdr = hdr + "static void zg_elemcopy_str(void *dst, const void *src) { *(const char**)dst = zrt_str_retain(*(const char* const*)src); }\n"
+		hdr = hdr + "static void zg_elemdrop_str(void *elem) { zrt_str_release(*(const char**)elem); }\n"
+		hdr = hdr + "static const zrt_elem_vt zg_listvt_str = {zg_elemcopy_str, zg_elemdrop_str};\n"
 		hdr = hdr + "static zrt_list zg_empty_list(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
-	}
-	if em.used_str {
-		hdr = hdr + c_str_helpers()
 	}
 
 	# the tuple carriers found while the bodies were lowered. The ones a DECLARATION names
@@ -7013,25 +7679,4 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 		diags.append(d)
 	}
 	return f"{hdr}{types}{tups}{ress}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
-}
-
-# c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,
-# concatenation and byte<->str conversion malloc fresh buffers that are never freed (a
-# batch compiler exits and the OS reclaims).
-fn c_str_helpers() -> str {
-	mut out := "static char* zgs_concat(const char* a, const char* b) {\n"
-	out = out + "    size_t la = strlen(a), lb = strlen(b);\n"
-	out = out + "    char* r = (char*)malloc(la + lb + 1);\n"
-	out = out + "    memcpy(r, a, la); memcpy(r + la, b, lb); r[la + lb] = 0;\n"
-	out = out + "    return r;\n}\n"
-	out = out + "static char* zgs_from_bytes(zrt_list bs) {\n"
-	out = out + "    size_t n = zrt_list_len(&bs);\n"
-	out = out + "    char* r = (char*)malloc(n + 1);\n"
-	out = out + "    for (size_t i = 0; i < n; i++) r[i] = (char)(*(uint8_t*)zrt_list_at_ref(&bs, i));\n"
-	out = out + "    r[n] = 0;\n    return r;\n}\n"
-	out = out + "static zrt_list zgs_to_bytes(const char* s) {\n"
-	out = out + "    zrt_list l; zrt_list_init(&l, sizeof(uint8_t), &zg_listvt);\n"
-	out = out + "    for (size_t i = 0; s[i]; i++) { uint8_t b = (uint8_t)s[i]; zrt_list_push(&l, &b); }\n"
-	out = out + "    return l;\n}\n\n"
-	return out
 }

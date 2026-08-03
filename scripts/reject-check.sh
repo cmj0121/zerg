@@ -386,6 +386,22 @@ fn main() {
 }
 EOF
 
+reject add-an-int-to-a-uint 'mixes int and uint' <<'EOF'
+fn main() {
+	i: int = 3
+	u: uint = 5
+	print(f"{i + u}")
+}
+EOF
+
+reject compare-an-int-with-a-uint 'mixes int and uint' <<'EOF'
+fn main() {
+	i: int = -1
+	u: uint = 1
+	print(f"{i < u}")
+}
+EOF
+
 reject bitwise-on-float 'operator `&` takes int operands' <<'EOF'
 fn main() {
 	print(f"{3.0 & 1}")
@@ -451,6 +467,28 @@ reject bind-int-list-to-str-list 'cannot bind list[int] to a list[str] binding' 
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
+}
+EOF
+
+reject bind-oversized-literal-to-byte 'cannot bind int to a byte binding' seed-gap <<'EOF'
+fn main() {
+	b: byte = 300
+	print(f"{b}")
+}
+EOF
+
+reject bind-negative-literal-to-uint 'cannot bind int to a uint binding' seed-gap <<'EOF'
+fn main() {
+	u: uint = -1
+	print(f"{u}")
+}
+EOF
+
+reject bind-int-value-to-uint 'cannot bind int to a uint binding' <<'EOF'
+fn main() {
+	i := 2
+	u: uint = i
+	print(f"{u}")
 }
 EOF
 

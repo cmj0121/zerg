@@ -537,12 +537,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" non-ascii-rune-literal "non-ASCII rune literal" <<'EOF'
-fn main() {
-	print int('\u{20AC}')
-}
-EOF
-
 expect "$ZERG" generic-enum "a generic enum" <<'EOF'
 enum E[T] {
 	A(T)
@@ -691,12 +685,6 @@ EOF
 expect "$ZERG" alignof-builtin "NotImplemented: the compile-time built-in \`alignof[T]\`" <<'EOF'
 fn main() {
 	print alignof[int]
-}
-EOF
-
-expect "$ZERG" rune-bridge "NotImplemented: \`list[rune](s)\`" <<'EOF'
-fn main() {
-	print list[rune]("Hi").len()
 }
 EOF
 
@@ -943,16 +931,6 @@ struct P {
 
 fn main() {
 	print P(1, 2).n
-}
-EOF
-
-# Five forms the specification described as working that the shipped compiler does not have.
-# Each reached cc, or named a symptom two steps from what was written.
-expect "$ZERG" for-in-over-a-str "binds each code point" <<'EOF'
-fn main() {
-	for c in "ab" {
-		print 1
-	}
 }
 EOF
 
@@ -1426,11 +1404,11 @@ fn main() {
 }
 EOF
 
-# `str(…)` over a list is the BYTE bridge. Without the element check it reinterpreted any
+# `str(…)` over a list bridges bytes or code points. Without the element check it reinterpreted any
 # buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
 # and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a
 # composite; this let the same value out through an f-string hole.
-expect "$ZERG" render-a-list-of-ints "the BYTE bridge" <<'EOF'
+expect "$ZERG" render-a-list-of-ints "bridges bytes or code points" <<'EOF'
 fn main() {
 	xs: list[int] = [65, 66, 67]
 	print(f"{xs}")

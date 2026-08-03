@@ -21,15 +21,17 @@ pub fn seed(n: uint) -> uint {
 }
 
 # next advances the generator g IN PLACE (three xor-shifts) and returns the next 64-bit
-# value (the state scrambled by a multiply — the `*` of xorshift64*). Uses `uint`
-# throughout, whose overflow wraps by definition, never a trap.
+# value (the state scrambled by a multiply — the `*` of xorshift64*). That multiply is
+# `*%`: an integer overflow RAISES in Zerg, `uint` included (docs/core/types.md), and the
+# scrambler wants the product mod 2^64 rather than an answer that fits. This is precisely
+# what the `%`-suffixed forms are for — the chapter names bit-mixing as the case.
 pub fn next(mut &g: uint) -> uint {
 	mut x := g
 	x = x ^ (x >> 12)
 	x = x ^ (x << 25)
 	x = x ^ (x >> 27)
 	g = x
-	return x * 0x2545F4914F6CDD1D
+	return x *% 0x2545F4914F6CDD1D
 }
 
 # below advances g and returns a value in [0, n). n must be positive; a non-positive n

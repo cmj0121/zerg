@@ -2,10 +2,12 @@ package emit
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/cmj0121/zerg/src/bootstrap/internal/ast"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
+	"github.com/cmj0121/zerg/src/bootstrap/internal/token"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/types"
 )
 
@@ -193,4 +195,150 @@ func (e *emitter) programUsesCheckedConv() bool {
 		}
 	}
 	return false
+}
+
+// --- checked integer arithmetic (docs/core/types.md) -----------------------------
+//
+// `+`, `-`, `*`, `/`, `%`, the shifts and unary `-` all have inputs for which the
+// mathematical answer is not representable, and C's answer for each of those is
+// either a silent wrap or undefined behaviour. Zerg's is an OverflowError (a
+// DivideByZeroError for a zero divisor) — that is what makes `+%`, `-%` and `*%`
+// worth having, and while both spellings emitted the same C the pair meant nothing.
+//
+// A narrower target computes in 64 bits and then narrows through the SAME checked
+// conversion helper `byte(x)` uses, so `byte(200) + byte(100)` raises rather than
+// giving 44 — one rule, stated once, for every width the language has.
+
+// arithHelper names the runtime helper for an operator, or "" when the operator has
+// no failure mode (the bitwise three, and the `%`-suffixed wrapping forms, which are
+// the whole point of the suffix).
+func arithHelper(k token.Kind, unsigned bool) string {
+	var name string
+	switch k {
+	case token.Plus:
+		name = "add"
+	case token.Minus:
+		name = "sub"
+	case token.Star:
+		name = "mul"
+	case token.Slash:
+		name = "div"
+	case token.Percent:
+		name = "mod"
+	case token.Shl:
+		name = "shl"
+	case token.Shr:
+		name = "shr"
+	default:
+		return ""
+	}
+	if unsigned {
+		return "zrt_" + name + "_u64"
+	}
+	return "zrt_" + name + "_i64"
+}
+
+// checkedArith renders a checked integer operation, or reports false when this
+// expression is not one — a float, a bool, a str, or an operator that cannot fail.
+func (e *emitter) checkedArith(t sema.Type, k token.Kind, l, r string) (string, bool) {
+	s, ok := sema.ScalarOf(t)
+	if !ok || (s.Class != sema.ScalarSigned && s.Class != sema.ScalarUnsigned) {
+		return "", false
+	}
+	// a sub-64-bit unsigned operand fits int64 exactly, so it computes there and
+	// narrows back; only a full-width unsigned needs the u64 helpers.
+	unsigned := s.Class == sema.ScalarUnsigned && s.Bits >= 64
+	helper := arithHelper(k, unsigned)
+	if helper == "" {
+		return "", false
+	}
+	wide := "int64_t"
+	if unsigned {
+		wide = "uint64_t"
+	}
+	var call string
+	if (k == token.Shl || k == token.Shr) && !unsigned {
+		// the shift's limit is the OPERAND's width, not the width it computes in; the
+		// unsigned helpers are only ever chosen at 64 bits, so they take no width
+		call = fmt.Sprintf("%s((%s)(%s), (%s)(%s), %d)", helper, wide, l, wide, r, s.Bits)
+	} else {
+		call = fmt.Sprintf("%s((%s)(%s), (%s)(%s))", helper, wide, l, wide, r)
+	}
+	return e.narrowArith(t, call), true
+}
+
+// checkedNeg renders unary `-`. Its one overflow is the type's minimum, which has no
+// positive counterpart; `-%` is the wrapping form and stays the bare operator.
+func (e *emitter) checkedNeg(t sema.Type, operand ast.Expr, x string) (string, bool) {
+	// `-1` is the SPELLING of a negative constant, not an operation on 1 — the literal
+	// is already range-checked by sema, and routing it through the runtime would pull
+	// zergrt.h into every program that writes a negative number.
+	if lit, ok := operand.(*ast.IntLit); ok && lit.Value != math.MinInt64 {
+		return "", false
+	}
+	s, ok := sema.ScalarOf(t)
+	if !ok {
+		return "", false
+	}
+	// An UNSIGNED target has no negative values at all, so every negation but `-0`
+	// leaves its range — which the narrowing conversion is already the check for. Only
+	// a full-width unsigned is left alone: it does not fit the int64 the helper takes,
+	// and `uint` is the one width where that matters.
+	signed := s.Class == sema.ScalarSigned
+	narrowUnsigned := s.Class == sema.ScalarUnsigned && s.Bits < 64
+	if !signed && !narrowUnsigned {
+		return "", false
+	}
+	return e.narrowArith(t, fmt.Sprintf("zrt_neg_i64((int64_t)(%s))", x)), true
+}
+
+// narrowArith brings a 64-bit result back to a narrower target through the checked
+// conversion, which is what makes the overflow of a `byte` a byte's overflow.
+func (e *emitter) narrowArith(t sema.Type, call string) string {
+	s, ok := sema.ScalarOf(t)
+	if !ok || s.Bits >= 64 {
+		return "(" + call + ")"
+	}
+	return e.convExpr(s, sema.Scalar{Class: sema.ScalarSigned, Bits: 64}, e.ctype(t), call)
+}
+
+// programUsesCheckedArith reports whether the program has an arithmetic operation
+// that can raise. It mirrors programUsesCheckedConv: the "zergrt.h" include is
+// decided before any expression is rendered, so the question has to be asked of the
+// type overlay rather than answered while lowering. A program whose every operator
+// is bitwise, wrapping, or floating-point stays byte-identical.
+func (e *emitter) programUsesCheckedArith() bool {
+	opCalls := e.opCallNodes()
+	for node, t := range e.info.ExprTypes {
+		switch n := node.(type) {
+		case *ast.Binary:
+			if opCalls[n] {
+				continue // an operator an impl provides is a call, not arithmetic
+			}
+			if _, ok := e.checkedArith(t, n.Op, "0", "0"); ok {
+				return true
+			}
+		case *ast.Unary:
+			if n.Op != token.Minus {
+				continue
+			}
+			if _, ok := e.checkedNeg(t, n.X, "0"); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// opCallNodes is every operator ANY instance lowers to a method an impl provides.
+// Dispatch is recorded per instance and this question is asked before any instance is
+// current, so all of them are consulted — once, rather than per node.
+func (e *emitter) opCallNodes() map[*ast.Binary]bool {
+	all := map[*ast.Binary]bool{}
+	for _, in := range e.prog.Funcs {
+		for n := range in.OpCalls {
+			all[n] = true
+		}
+	}
+	return all
 }

@@ -302,6 +302,7 @@ enum {
 	ZRT_ERR_DEADLOCK       = 7, /* DeadlockError (docs/code/coroutine.md) */
 	ZRT_ERR_SEND_ON_CLOSED = 8, /* SendOnClosedError */
 	ZRT_ERR_STOP_ITERATION = 9, /* StopIteration: the end-of-stream sentinel, not a failure */
+	ZRT_ERR_DIVZERO        = 10, /* DivideByZeroError (docs/core/types.md) */
 };
 
 typedef struct zrt_err {
@@ -407,6 +408,196 @@ _Noreturn void zrt_raise_err(zrt_err e);
 /* zrt_taken_err returns the Err the current abort/raise carried, read on a `guard`
  * setjmp!=0 landing. It is an empty Err (msg NULL) when nothing was stashed. */
 zrt_err zrt_taken_err(void);
+
+/* --- checked integer ARITHMETIC (docs/core/types.md) -----------------------------
+ *
+ * `+`, `-`, `*` RAISE on overflow; `/` and `%` raise on a zero divisor and follow the
+ * EUCLIDEAN definition (the remainder is never negative); a shift by a distance outside
+ * the type's width raises. The `%`-suffixed `+%`, `-%`, `*%` are the wrapping forms and go
+ * on emitting the bare C operator — that pairing is the whole point of having two.
+ *
+ * Every one of these was the plain C operator, which is not merely a different answer: a
+ * signed overflow, a division by zero and a shift past the width are all UNDEFINED
+ * BEHAVIOUR in C. `+` and `+%` emitted identical code, so a program that chose the checked
+ * form got the wrapping one.
+ *
+ * `static inline` in the header, over `__builtin_*_overflow`, so a check costs an
+ * add-and-branch-on-overflow rather than a call — the compiler builds itself with these,
+ * and an out-of-line call per arithmetic operator would be felt.
+ *
+ * There is no fallback for a host without the builtins, because there is no such host
+ * here: sys.c and thread_pthread.c already use __atomic_* unguarded, so a compiler that
+ * cannot build these cannot build the runtime at all. A guarded second spelling of the
+ * overflow rule would be code no configuration ever compiles.
+ */
+
+/* One message per fault, named once: each helper below is `static inline` in a header, so
+ * a repeated literal is re-emitted per translation unit as well as re-typed per edit. */
+#define ZRT_MSG_ADD_OVERFLOW "OverflowError: integer addition overflowed"
+#define ZRT_MSG_SUB_OVERFLOW "OverflowError: integer subtraction overflowed"
+#define ZRT_MSG_MUL_OVERFLOW "OverflowError: integer multiplication overflowed"
+#define ZRT_MSG_NEG_OVERFLOW "OverflowError: integer negation overflowed"
+#define ZRT_MSG_DIV_OVERFLOW "OverflowError: integer division overflowed"
+#define ZRT_MSG_SHIFT_WIDTH  "OverflowError: shift distance outside the type width"
+#define ZRT_MSG_DIV_ZERO     "DivideByZeroError: division by zero"
+#define ZRT_MSG_MOD_ZERO     "DivideByZeroError: remainder by zero"
+
+static inline int64_t zrt_add_i64(int64_t a, int64_t b) {
+	int64_t r;
+	if (__builtin_add_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_ADD_OVERFLOW);
+	}
+	return r;
+}
+
+static inline int64_t zrt_sub_i64(int64_t a, int64_t b) {
+	int64_t r;
+	if (__builtin_sub_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SUB_OVERFLOW);
+	}
+	return r;
+}
+
+static inline int64_t zrt_mul_i64(int64_t a, int64_t b) {
+	int64_t r;
+	if (__builtin_mul_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_MUL_OVERFLOW);
+	}
+	return r;
+}
+
+/* `/` and `%` are EUCLIDEAN (docs/core/types.md): the remainder is never negative, so
+ * `0 <= a % b < |b|` and `a == (a / b) * b + a % b` holds for every sign — which is what
+ * makes `a % n` a valid index or bucket whatever the sign of `a`.
+ *
+ * C truncates toward zero instead, so it answered `-7 % 3 == -1` where the language says
+ * `2`, and `-7 / 3 == -2` where the language says `-3`. That difference never announces
+ * itself: it turns a modulo into a negative index.
+ *
+ * The correction is one branch on a remainder that C already computed, and it is skipped
+ * whenever the remainder came out non-negative — the common case, which is every loop over
+ * a non-negative counter.
+ *
+ * A zero divisor and `INT64_MIN / -1` are both undefined in C, and both are checked before
+ * the division rather than after. */
+static inline int64_t zrt_div_i64(int64_t a, int64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_DIV_ZERO);
+	}
+	if (a == INT64_MIN && b == -1) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_DIV_OVERFLOW);
+	}
+	int64_t q = a / b;
+	if (a % b < 0) {
+		q = (b > 0) ? q - 1 : q + 1;
+	}
+	return q;
+}
+
+static inline int64_t zrt_mod_i64(int64_t a, int64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_MOD_ZERO);
+	}
+	if (a == INT64_MIN && b == -1) {
+		return 0; /* the quotient overflows; the remainder is exactly zero */
+	}
+	int64_t r = a % b;
+	if (r < 0) {
+		r += (b > 0) ? b : -b;
+	}
+	return r;
+}
+
+/* A shift by a distance OUTSIDE the type's width raises (docs/core/types.md). In C both
+ * ends are undefined: `1 << 64` on a 64-bit type, and any negative distance.
+ *
+ * The width is passed by the caller because it is the SOURCE type's, not the helper's: a
+ * `byte` shifts within 8 even though the value travels here as an i64.
+ *
+ * `>>` is arithmetic on a signed operand and logical on an unsigned one — the type's sign
+ * decides, which is why there is no separate logical-shift operator. C already does exactly
+ * that for the C type the value arrives in, so the shift itself is left to it. */
+static inline int64_t zrt_shl_i64(int64_t a, int64_t n, int64_t width) {
+	if (n < 0 || n >= width) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
+	}
+	/* the shift is done on the UNSIGNED bit pattern: a left shift that moves bits into or
+	 * past the sign is undefined on a signed operand in C, and wrapping is what a bit-level
+	 * operator is for once the distance itself has been checked */
+	return (int64_t)((uint64_t)a << (uint64_t)n);
+}
+
+static inline int64_t zrt_shr_i64(int64_t a, int64_t n, int64_t width) {
+	if (n < 0 || n >= width) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
+	}
+	return a >> n;
+}
+
+/* unary `-`. Its one overflow is the type's minimum, which has no positive counterpart. */
+static inline int64_t zrt_neg_i64(int64_t a) {
+	if (a == INT64_MIN) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_NEG_OVERFLOW);
+	}
+	return -a;
+}
+
+/* The same seven for an UNSIGNED 64-bit operand. `uint` is not int64's range, so
+ * routing it through the signed helpers would raise on values that are perfectly
+ * representable; and unsigned division is already Euclidean, because neither operand
+ * can be negative. What is left is the zero divisor and the wrap. */
+
+static inline uint64_t zrt_add_u64(uint64_t a, uint64_t b) {
+	uint64_t r;
+	if (__builtin_add_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_ADD_OVERFLOW);
+	}
+	return r;
+}
+
+static inline uint64_t zrt_sub_u64(uint64_t a, uint64_t b) {
+	uint64_t r;
+	if (__builtin_sub_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SUB_OVERFLOW);
+	}
+	return r;
+}
+
+static inline uint64_t zrt_mul_u64(uint64_t a, uint64_t b) {
+	uint64_t r;
+	if (__builtin_mul_overflow(a, b, &r)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_MUL_OVERFLOW);
+	}
+	return r;
+}
+
+static inline uint64_t zrt_div_u64(uint64_t a, uint64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_DIV_ZERO);
+	}
+	return a / b;
+}
+
+static inline uint64_t zrt_mod_u64(uint64_t a, uint64_t b) {
+	if (b == 0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_MOD_ZERO);
+	}
+	return a % b;
+}
+
+static inline uint64_t zrt_shl_u64(uint64_t a, uint64_t n) {
+	if (n >= 64) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
+	}
+	return a << n;
+}
+
+static inline uint64_t zrt_shr_u64(uint64_t a, uint64_t n) {
+	if (n >= 64) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_SHIFT_WIDTH);
+	}
+	return a >> n;
+}
 
 /* --- checked primitive conversions (conv.c, docs/core/types.md) ------------------
  *

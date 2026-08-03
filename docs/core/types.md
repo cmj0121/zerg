@@ -52,14 +52,9 @@ the grammar:
   `a % 0` raise `DivideByZeroError`, and `INT_MIN / -1` overflows (`OverflowError`); truncating and
   flooring variants are stdlib (deferred).
 
-> **[deviation]** The whole integer arithmetic-safety contract above — checked `+`/`-`/`*` raising
-> `OverflowError`, the Euclidean sign of `/` and `%`, `a/0` and `a%0` raising `DivideByZeroError`, and a
-> shift `≥` the type width raising `OverflowError` — is the **intended** semantics but is **not yet
-> enforced**. Today each of these lowers to the plain C operator: `+` and `+%` emit **identical** code
-> (both wrap), signed overflow and division by zero are C **undefined behavior** rather than a clean
-> abort, and `%` is C truncation (sign-of-dividend), not Euclidean. `DivideByZeroError` is itself **[not yet]**
-> an error kind — not one of the six built-in kinds ([Errors](../code/errors.md)) — so even once the checks land the
-> abort has no distinct reified kind yet.
+> **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
+> elided when both operands are provably non-negative — the "zero overhead in the common case" above is
+> the intended codegen, not today's. The semantics are unaffected: it is a cost, not a wrong answer.
 
 ### Numeric literals
 

@@ -23,9 +23,12 @@ func TestConformanceMultiModule(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("multi-module corpus should compile, got diagnostics: %v", diags)
 	}
-	// A value-only program needs no runtime; its C stays a single-unit cc link.
-	if manifest.NeedsRuntime {
-		t.Fatalf("value-only corpus should need no runtime, got %+v", manifest)
+	// The corpus does arithmetic, and arithmetic raises on overflow through the runtime
+	// (docs/core/types.md), so it links one. What this case is actually about is the
+	// module mangling below — a program with no runtime FEATURE is covered by the emit
+	// package's manifest tests, which name the arithmetic explicitly.
+	if !manifest.NeedsRuntime {
+		t.Fatalf("the corpus computes, so it needs the runtime, got %+v", manifest)
 	}
 	// The imported modules are canonical-path mangled; no bare imported name leaks.
 	for _, want := range []string{"zg_geom__make", "zg_geom__Point", "zg_app__base"} {

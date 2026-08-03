@@ -228,6 +228,12 @@ struct Emitter {
 	# on the path is written into: `xs[0].ys[1] = 9` stores into the struct that lives in
 	# `xs`'s buffer, so unsharing `ys` alone would edit a header other holders can see.
 	lv_write: bool
+
+	# tmp_n numbers the temporaries a call has to hold on to because the CALLER owns them
+	# (c_call_releasing). Its own counter, for the reason op_n has one: a name that reaches
+	# the emitted C must not renumber because something unrelated grew a thunk, or every
+	# fixpoint failure starts with a whole-file diff to read past.
+	tmp_n: int
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3412,6 +3418,9 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		raise f"undefined function `{name}`"
 	}
 
+	rels := c_owned_args(em, name, 0, args)
+	return c_call_releasing(em, f"zg_{name}", name, args, rels, sb) if c_any_owned(rels)
+
 	return f"zg_{name}({c_call_args(em, name, args, sb)})"
 }
 
@@ -3504,6 +3513,102 @@ fn c_args_from(mut &em: Emitter, key: str, base: int, args: list[Expr], lead: bo
 		i = i + 1
 	}
 	return out + c_default_args(em, key, base + args.len(), lead or args.len() > 0)
+}
+
+# c_owned_args answers WHICH of a call's arguments hand it something the CALLER has to give
+# back, as one release function per written argument and "" for the rest.
+#
+# A plain call argument is a BORROW — the language says so (docs/code/coroutine.md, and
+# conc_chan_dir pins it): passing a handle moves no count, which is why a callee neither
+# copies its channel parameter nor releases it. That is exactly right for `f(ch)`, where the
+# caller's binding is still holding one. It leaves a hole for `f(source())`: the argument is
+# a freshly built handle carrying one reference, the callee borrows it, and when the call
+# returns there is no name left anywhere that could give it back.
+#
+# So the caller keeps it and releases it after the call (c_call_releasing). "Freshly built"
+# is the same test c_let_chan makes — anything that is not existing storage — and the answer
+# is a release FUNCTION rather than a bool because the type decides which one: a send-capable
+# handle gives back a send count as well as a holder count, and the two are not the same
+# release. That is also what makes this list the place the other owning types join when they
+# grow a drop, rather than a channel-shaped question asked in a channel-shaped way.
+fn c_owned_args(mut &em: Emitter, key: str, base: int, args: list[Expr]) -> list[str] {
+	mut rels: list[str] = []
+	mut i := 0
+	for i < args.len() {
+		row := c_param_row(em, key, base + i)
+		mut rel := ""
+		if row >= 0 and ty_is_chan(em.pr_ty[row]) and not c_is_lvalue(args[i]) {
+			# a `mut &` parameter takes the caller's own storage, which is a name and so
+			# never one of these — but say it here rather than rely on the lvalue test to
+			# have covered it, because the two questions are different ones
+			if not em.pr_ref[row] {
+				rel = c_chan_release_fn(c_chan_dir(em.pr_ty[row]))
+			}
+		}
+		rels.append(rel)
+		i = i + 1
+	}
+	return rels
+}
+
+# c_any_owned is whether c_owned_args found anything at all — the common answer is no, and
+# a call with nothing to give back must render exactly the C it rendered before.
+fn c_any_owned(rels: list[str]) -> bool {
+	for r in rels {
+		return true if r != ""
+	}
+	return false
+}
+
+# c_call_releasing renders a call that is handed something the caller has to give back. It
+# is a STATEMENT EXPRESSION — the same shape this emitter already uses to index a map —
+# because the release has to happen after the call and an expression has nowhere else to put
+# it:
+#
+#     ({ zrt_chan *zgt_t0 = source(); int64_t zgt_tr = zg_drain(zgt_t0);
+#        zrt_chan_release(zgt_t0); zgt_tr; })
+#
+# The result is held in a temporary of its own so the release lands BETWEEN the call and the
+# value: releasing first would hand the caller a value read out of a channel it had already
+# given back, and releasing after the whole expression is what there is no place to write.
+# A call that answers nothing skips that temporary, because C has no `void` object to
+# declare — the statement expression's value is then the release, which is what a discarded
+# call wants anyway.
+#
+# Every temporary is numbered from em.tmp_n rather than from its position, so a call nested
+# in another call's argument cannot shadow the name the outer one is still holding.
+fn c_call_releasing(mut &em: Emitter, cfn: str, key: str, args: list[Expr], rels: list[str], sb: Subst) -> str {
+	chk_call_arity(em, key, 0, args.len())
+	chk_ref_alias(em, key, args)
+
+	mut decls := ""
+	mut call := cfn + "("
+	mut frees := ""
+	mut i := 0
+	for i < args.len() {
+		if i > 0 {
+			call = call + ", "
+		}
+		rendered := c_arg(em, key, i, i + 1, args[i], sb)
+		if rels[i] == "" {
+			call = call + rendered
+		} else {
+			em.tmp_n = em.tmp_n + 1
+			tn := f"zgt_t{em.tmp_n}"
+			decls = decls + f"zrt_chan *{tn} = {rendered}; "
+			call = call + tn
+			frees = frees + f"{rels[i]}({tn}); "
+		}
+		i = i + 1
+	}
+	call = call + c_default_args(em, key, args.len(), args.len() > 0) + ")"
+
+	ret := c_lookup_sig_ret(em, key)
+	return f"({{ {decls}{call}; {frees}}})" if ty_eq(ret, TVoid)
+
+	em.tmp_n = em.tmp_n + 1
+	rn := f"zgt_t{em.tmp_n}"
+	return f"({{ {decls}{c_type(ret)} {rn} = {call}; {frees}{rn}; }})"
 }
 
 # c_arg renders ONE argument against the parameter it fills. A `mut &` parameter takes the
@@ -5904,15 +6009,44 @@ fn c_forchan(mut &em: Emitter, var: str, iter: Expr, t: Ty, body: list[Stmt], in
 	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
 
+	# The loop's handle OWNS what it holds when the iterable was not already storage. `for v
+	# in ch` borrows the binding `ch` and gives nothing back; `for v in source()` is handed a
+	# freshly built handle carrying exactly one reference, and this loop is the only thing
+	# that will ever be in a position to return it. It is the same rule c_let_chan states for
+	# a binding — a name takes a reference and gives it back — reaching the one holder that
+	# is not a name.
+	#
+	# The handle is NUMBERED when it owns, because the release then joins the pending list
+	# and a `return` inside the body renders every pending name at the return site: two
+	# nested loops both spelling their handle `zgt_cit` would release the inner one twice and
+	# the outer one never. The number is the pending list's own height, which is unique among
+	# the entries that can be live together and moves only when the program does. A borrowed
+	# handle registers nothing, so it keeps the plain name and its C is unchanged.
+	keep := em.rel_cnames.len()
+	owns := not c_is_lvalue(iter)
+	mut cit := "zgt_cit"
+	if owns {
+		cit = f"zgt_cit_{keep}"
+	}
+
 	# a block, so the handle and the loop variable are scoped to the loop and sequential
 	# or nested `for … in ch` loops cannot collide on the name
 	in2 := ind + "    "
-	mut out := ind + "{\n" + in2 + "zrt_chan *zgt_cit = " + it + ";\n"
+	mut out := ind + "{\n" + in2 + "zrt_chan *" + cit + " = " + it + ";\n"
+	if owns {
+		c_pend_release(em, cit, c_chan_release_fn(c_chan_dir(t)))
+	}
 	out = out + in2 + et + " " + cv + ";\n"
-	out = out + in2 + "while (zrt_chan_recv(zgt_cit, &" + cv + ") == 0) {\n"
+	out = out + in2 + "while (zrt_chan_recv(" + cit + ", &" + cv + ") == 0) {\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
-	out = out + in2 + "{ zrt_err zgt_ce = zrt_chan_close_err(zgt_cit);\n"
+
+	# The close reason is read BEFORE the handle is given back, and the release sits between
+	# the read and the raise: zrt_chan_close_err answers by value, so the Err outlives the
+	# handle, and putting the release here is what keeps the crash path from being the one
+	# path that leaks.
+	out = out + in2 + "{ zrt_err zgt_ce = zrt_chan_close_err(" + cit + ");\n"
+	out = out + c_scope_end(em, keep, in2 + "  ")
 	out = out + in2 + "  if (zgt_ce.kind != ZRT_ERR_STOP_ITERATION) { zrt_raise_err(zgt_ce); } }\n"
 	c_scope_close(em, outer_scope)
 	return out + ind + "}\n"
@@ -6842,7 +6976,7 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # only the driver does.
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", 0, [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0)
 	c_build_type_names(em, f)
 	c_build_sigs(em, f)
 	c_build_structs(em, f)

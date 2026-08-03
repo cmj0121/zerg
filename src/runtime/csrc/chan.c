@@ -794,11 +794,12 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_exit) {
 	}
 }
 
-/* zrt_defer_* is the `void (*)(void *)` shape the cleanup stack takes, and a release does
- * not have it: some take the value and some its address, and none take a `void *`. The
- * adapter lives beside the release it adapts rather than with zrt_defer, so a program that
- * links no channels does not pull chan.c in through the cleanup stack. The ENV is always
- * the ADDRESS of the binding's storage, so a cleanup reads what the binding holds at
- * unwind time — a reassigned binding gives back what it ends up with. */
+/* The two channel adapters for the cleanup stack. zrt_defer takes a `void (*)(void *)` and
+ * a release does not have that shape, so every owning type needs one — but for a list, a
+ * map, a str and a struct the EMITTER already generates it (`zg_elemdrop_<kind>`), because
+ * a list element vtable takes the same signature. A channel is never a list element, so
+ * these two have no generated counterpart and live here instead. They stay in chan.c and
+ * not in unwind.c so a program that links no channels does not pull this unit in through
+ * the cleanup stack. See zergrt.h for what the env is. */
 void zrt_defer_chan_release(void *p) { zrt_chan_release(*(zrt_chan **)p); }
 void zrt_defer_chan_sender_release(void *p) { zrt_chan_sender_release(*(zrt_chan **)p); }

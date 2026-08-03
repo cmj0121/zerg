@@ -275,11 +275,3 @@ bool zrt_eq_str(const void *a, const void *b) {
 	}
 	return strcmp(x, y) == 0;
 }
-
-/* zrt_defer_* is the `void (*)(void *)` shape the cleanup stack takes, and a release does
- * not have it: some take the value and some its address, and none take a `void *`. The
- * adapter lives beside the release it adapts rather than with zrt_defer, so a program that
- * links no channels does not pull chan.c in through the cleanup stack. The ENV is always
- * the ADDRESS of the binding's storage, so a cleanup reads what the binding holds at
- * unwind time — a reassigned binding gives back what it ends up with. */
-void zrt_defer_map_drop(void *p) { zrt_map_drop((zrt_map *)p); }

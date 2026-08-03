@@ -3266,58 +3266,72 @@ fn c_lossless(sc: int, sb: int, dc: int, db: int) -> bool {
 # same bounds as doubles, where the 64-bit text rounds to 2^63 / 2^64, which is what the
 # helper's open-interval test wants.
 
-# The three of them are a function of the WIDTH, not a list of the widths that happen to
-# exist today. They used to answer for 64 and then fall through to the 8-bit bound for
-# everything else, which was invisible while `byte` was the only narrow type — and then
-# `rune` arrived at 32 bits, took the byte bounds, and `rune('é')` raised OverflowError on a
-# value every rune holds. The fixed-width ladder docs/core/types.md adds as stdlib types is
-# the same question again, so these answer it once.
+# ALL FIVE OF THESE ARE ONE TABLE, asked five ways: the C text of a bound for the integer
+# paths, the C text of the same bound as a double for the float paths, and the NUMBER for
+# the rule in check.zg that compares a literal against it at compile time.
+#
+# They used to answer for 64 and then fall through to the 8-bit bound for everything else,
+# which was a correct table while `byte` was the only narrow type — and then `rune` arrived
+# at 32 bits, took the byte bounds, and `rune('é') raised OverflowError on a value every rune
+# holds. A range check whose range is wrong is worse than none, because it is trusted.
+#
+# The integer forms are <stdint.h>'s own names, which the emitted header already includes.
+# That is not only shorter than a decimal: `INT32_MAX` in generated C says which width was
+# meant, where `2147483647` leaves the reader to count digits. The fixed-width ladder
+# docs/core/types.md adds as stdlib types needs nothing here but a c_scalar_bits arm.
 fn c_signed_lo(bits: int) -> str {
-	return "INT64_MIN" if bits >= 64
-
-	return f"(-{c_pow2(bits - 1)})"
+	return f"INT{strconv.to_string(bits, 10)}_MIN"
 }
 
 fn c_signed_hi(bits: int) -> str {
-	return "INT64_MAX" if bits >= 64
-
-	return c_pow2(bits - 1) + " - 1"
+	return f"INT{strconv.to_string(bits, 10)}_MAX"
 }
 
 fn c_unsigned_hi(bits: int) -> str {
-	return "UINT64_MAX" if bits >= 64
-
-	return c_pow2(bits) + " - 1"
+	return f"UINT{strconv.to_string(bits, 10)}_MAX"
 }
 
-# c_pow2 renders 2^n as a decimal C constant. It is spelled out rather than shifted because
-# the result is compared against a value of the SOURCE's type, and a shift written into the
-# emitted C would be done in whatever type C picked for it.
-fn c_pow2(n: int) -> str {
-	mut v := 1
-	mut i := 0
-	for i < n {
-		v = v * 2
-		i = i + 1
-	}
-	return strconv.to_string(v, 10)
-}
-
+# The float pair cannot use those names — the comparison is done as a double, so the bound
+# has to arrive as one — so they render the number and add the point. `c_bound_*` is what
+# keeps them the same bound as the three above rather than a second opinion about it.
 fn c_float_lo(bits: int) -> str {
-	return "-9223372036854775808.0" if bits >= 64
-
-	return "-128.0"
+	return strconv.to_string(c_bound_lo(SC_SIGNED, bits), 10) + ".0"
 }
 
 fn c_float_hi(dc: int, bits: int) -> str {
-	if dc == SC_UNSIGNED {
-		return "18446744073709551615.0" if bits >= 64
-
-		return "255.0"
-	}
+	return "18446744073709551615.0" if dc == SC_UNSIGNED and bits >= 64
 	return "9223372036854775807.0" if bits >= 64
 
-	return "127.0"
+	return strconv.to_string(c_bound_hi(dc, bits), 10) + ".0"
+}
+
+# c_bound_lo / c_bound_hi are the bounds as NUMBERS, for the rule that compares a literal
+# against them at compile time rather than emitting a comparison into C. A literal the
+# checker says fits and the conversion says does not is exactly the drift these exist to
+# prevent, so both read this.
+fn c_bound_lo(cls: int, bits: int) -> int {
+	return 0 if cls == SC_UNSIGNED
+
+	return 0 - c_pow2(bits - 1)
+}
+
+fn c_bound_hi(cls: int, bits: int) -> int {
+	return c_pow2(bits) - 1 if cls == SC_UNSIGNED
+
+	return c_pow2(bits - 1) - 1
+}
+
+# c_pow2 is 2^n, stopping at the last one an i64 holds. The 64-bit bounds never come through
+# here — they are named rather than computed, because INT64_MIN has no spelling as a C
+# integer constant: written out it parses as the negation of a value one past INT64_MAX.
+fn c_pow2(n: int) -> int {
+	mut v := 1
+	mut i := 0
+	for i < n and i < 62 {
+		v = v * 2
+		i = i + 1
+	}
+	return v
 }
 
 # c_conv_scalar lowers `T(x)` between two scalars. Zerg converts by RE-CONSTRUCTION and a
@@ -3384,7 +3398,6 @@ fn c_display(t: Ty, inner: str) -> str {
 		TFloat => f"zrt_display_float((double)({inner}))"
 		TByte  => f"zrt_display_uint((uint64_t)({inner}))"
 		TUint  => f"zrt_display_uint({inner})"
-		TRune  => f"zrt_display_int((int64_t)({inner}))"
 		_      => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
@@ -6536,7 +6549,6 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)
-	it := c_expr(em, iter, c_nosub())
 	outer_scope := c_scope_open(em)
 	c_add_var(em, var, elem, false)
 	cv := c_var_cname(em, var)
@@ -6548,14 +6560,24 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# from the free'd one. ASan called it a heap-use-after-free; without it the loop simply
 	# read rubbish. A copy is what the language says a loop iterates anyway — the sequence
 	# as it was when the loop started — and under copy-on-write it costs an increment.
+	# The iterable is COPIED into a local when it names storage, and TAKEN OVER when it does
+	# not — `for v in xs` must iterate the sequence as it was when the loop started, and
+	# `for c in s` builds its list of code points here and owns the only reference to it.
+	# Copying that one as well left the fresh list at two references and dropped neither, so
+	# every execution of the loop leaked its whole buffer.
 	in2 := ind + "    "
-	mut out := ind + "{\n" + in2 + "zrt_list zgt_it = " + c_copy_of(em, c_infer(em, iter), it) + ";\n"
+	keep := em.rel_cnames.len()
+	mark := c_new_mark(em)
+	mut out := ind + "{\n" + in2 + f"size_t {mark} = zrt_scope_mark();\n"
+	out = out + in2 + "zrt_list zgt_it = " + c_copied(em, c_infer(em, iter), iter, c_nosub()) + ";\n"
+	out = out + c_pend_drop(em, TList(elem), "zgt_it", in2)
 	out = out + in2 + "for (size_t zgt_i = 0; zgt_i < zrt_list_len(&zgt_it); zgt_i++) {\n"
 	out = out + in2 + "    " + et + " " + cv + " = (*(" + et + "*)zrt_list_at_ref(&zgt_it, zgt_i));\n"
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
-	return out + ind + "}\n"
+	c_scope_forget(em, keep)
+	return out + in2 + f"zrt_unwind_to({mark});\n" + ind + "}\n"
 }
 
 # c_formap is the list loop over a map's KEYS, on the runtime's insertion-ordered accessor.

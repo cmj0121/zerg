@@ -1748,10 +1748,6 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
 	}
 	if k == Rune {
-		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
-		# before, so `'A'` was the number zero — a wrong answer with no diagnostic. A
-		# multi-byte code point needs a UTF-8 decode this compiler does not have, and is
-		# named rather than truncated to its first byte.
 		p_advance(p)
 
 		# The literal's VALUE is its code point, decoded from the UTF-8 the source is written

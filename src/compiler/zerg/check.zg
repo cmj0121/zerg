@@ -657,7 +657,7 @@ fn chk_call_name(key: str) -> str {
 # The pair `_expr` / plain is this file's existing shape for one question asked two ways —
 # c_is_nil_lit and c_is_nil_expr are the same twins.
 fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
-	return chk_lit_fits(want, e) if chk_adopts_int_lit(want) and c_is_int(got)
+	return chk_lit_fits(em, want, e) if chk_adopts_int_lit(em, want) and c_is_int(got)
 
 	return chk_fits(em, want, got)
 }
@@ -670,8 +670,13 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 # What each of them refuses is the already-typed `int` VALUE, which is the whole point:
 # `x: float = 1` and `u: uint = 0` are the literal adopting its context, and `y: float = i`
 # and `u: uint = i` need `float(i)` and `uint(i)`.
-fn chk_adopts_int_lit(want: Ty) -> bool {
-	return c_is_float(want) or c_is_uint(want) or c_is_byte(want)
+fn chk_adopts_int_lit(mut &em: Emitter, want: Ty) -> bool {
+	return true if c_is_float(want)
+
+	# every numeric scalar that is not `int` itself — asked of the scalar TABLE rather than
+	# by name, so the fixed-width ladder docs/core/types.md adds as stdlib types joins by
+	# being given a width in c_scalar_bits and nothing else
+	return not c_is_int(want) and chk_is_num(want)
 }
 
 # chk_lit_fits is the second half of adoption, and it is not optional: a literal adopts the
@@ -682,46 +687,59 @@ fn chk_adopts_int_lit(want: Ty) -> bool {
 # Adoption without the range check is strictly worse than no adoption: `take(1000)` on a
 # `byte` parameter would go from a diagnostic to a silent truncation, which is the trade the
 # byte-widening comment in chk_fits already refused once.
-fn chk_lit_fits(want: Ty, e: Expr) -> bool {
+fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
 	# a float takes any literal, so it needs only the SHAPE test; every other target needs
 	# the walk anyway, and chk_lit_in_range accepts exactly the expressions chk_int_lit does
 	return chk_int_lit(e) if c_is_float(want)
 
-	return chk_lit_in_range(want, e, false)
+	return chk_lit_in_range(em, want, e, false)
 }
 
 # chk_lit_in_range walks down to the literal, `neg` recording whether an odd number of
 # minuses stands above it — the sign is a unary node rather than part of the lexeme, so it
 # is carried down instead of parsed. It answers on the VALUE, so `-0` is in range for a
 # `uint` and `-1` is not.
-fn chk_lit_in_range(want: Ty, e: Expr, neg: bool) -> bool {
+fn chk_lit_in_range(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> bool {
 	return match e {
-		EUnary(o, x) => chk_lit_minus(want, o, x, neg)
-		EInt(lex)    => chk_int_in_range(want, int_value(lex), neg)
+		EUnary(o, x) => chk_lit_minus(em, want, o, x, neg)
+		EInt(lex)    => chk_int_in_range(em, want, int_value(lex), neg)
 		_            => false
 	}
 }
 
 # a match arm takes no guard, so the `-` test is its own function rather than a condition on
 # the arm above
-fn chk_lit_minus(want: Ty, o: str, x: Expr, neg: bool) -> bool {
+fn chk_lit_minus(mut &em: Emitter, want: Ty, o: str, x: Expr, neg: bool) -> bool {
 	return false if o != "-"
 
-	return chk_lit_in_range(want, x, not neg)
+	return chk_lit_in_range(em, want, x, not neg)
 }
 
-# chk_int_in_range is the bounds themselves. A `byte` is 0..255 and a `uint` has no negative
-# side; an `int` past i64 is the LEXER's to refuse, because a value it cannot represent is
-# not one this can compare.
-fn chk_int_in_range(want: Ty, v: int, neg: bool) -> bool {
-	if c_is_byte(want) {
-		return false if neg and v != 0
+# chk_int_in_range asks the SCALAR TABLE for the bounds rather than listing them. It used to
+# spell `255` and "no negative side" by hand, which is the second copy of what
+# c_signed_lo / c_unsigned_hi render into C — and a literal the checker says fits while the
+# conversion says it does not is exactly the drift one table prevents. It also meant a `rune`
+# had no arm at all, so nothing range-checked one.
+#
+# An `int` at full width is left alone: a literal past i64 is the LEXER's to refuse, because
+# a value this cannot represent is not one it can compare.
+fn chk_int_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
+	cls := c_scalar_class(want)
 
-		return v <= 255
-	}
-	return not neg or v == 0 if c_is_uint(want)
+	return true if cls != SC_SIGNED and cls != SC_UNSIGNED
 
-	return true
+	# THE SIGN QUESTION IS NOT A QUESTION ABOUT WIDTH. An unsigned target has no negative
+	# side at any width, so asking the width first let `uint = -1` through — `uint` is 64
+	# bits, which is exactly where the magnitude check stops having anything to say.
+	return v == 0 if neg and cls == SC_UNSIGNED
+
+	bits := c_scalar_bits(want)
+
+	return true if bits >= 64
+
+	return v <= c_bound_hi(cls, bits) if not neg
+
+	return 0 - v >= c_bound_lo(cls, bits)
 }
 
 # chk_int_to_float names the ONE widening chk_fits accepts on the type alone. It is written
@@ -1048,7 +1066,7 @@ fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Exp
 	# "is it a literal": `n * 300` where n is a `byte` is out of range here exactly as
 	# `b: byte = 300` is, and asking the weaker question would have made the operand slot the
 	# one place a literal adopts a type it is not a value of.
-	return if chk_lit_fits(ta, eb) or chk_lit_fits(tb, ea)
+	return if chk_lit_fits(em, ta, eb) or chk_lit_fits(em, tb, ea)
 
 	chk_at(em, f"operator `{oper}` mixes {ty_name(ta)} and {ty_name(tb)}, and the two never convert implicitly — cast one side, as `int(u) {oper} i` or `u {oper} uint(i)`")
 }
@@ -1058,7 +1076,7 @@ fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Exp
 # it let a `uint` reach the arithmetic and ordering diagnostics through the not-a-scalar hole
 # instead of the numeric path the mixing rule assumes.
 fn chk_is_num(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t) or c_is_uint(t)
+	return c_is_int(t) or c_is_float(t) or c_is_uint(t) or c_is_rune(t)
 }
 
 # chk_is_numish is chk_is_num plus `byte`, which is the one place the difference matters: a

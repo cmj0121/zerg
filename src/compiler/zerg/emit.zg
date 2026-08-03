@@ -4936,11 +4936,20 @@ fn c_is_listlit(e: Expr) -> bool {
 
 # c_is_empty_listlit is `[]` and only `[]` — the literal that carries no element type and
 # needs one from the declaration it initializes. A literal WITH elements carries both.
-fn c_is_empty_listlit(e: Expr) -> bool {
+# c_listlit_elems is a list literal's ELEMENTS, or an empty list from anything else. It is
+# the one place `EListLit` is taken apart: the arm was written out at four sites across two
+# files, and the day the node grows a payload — an inferred element type is the obvious
+# candidate — four arms need editing and the one in check.zg is the one a reader of this file
+# will not find.
+fn c_listlit_elems(e: Expr) -> list[Expr] {
 	return match e {
-		EListLit(elems) => elems.len() == 0
-		_ => false
+		EListLit(elems) => elems
+		_ => []
 	}
+}
+
+fn c_is_empty_listlit(e: Expr) -> bool {
+	return c_is_listlit(e) and c_listlit_elems(e).len() == 0
 }
 
 # c_assign lowers `lhs = rhs`. Re-assigning a list literal to a name re-initialises the
@@ -4985,10 +4994,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 # the value's first bytes happened to be, when it compiled at all.
 fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 	mut out: list[str] = []
-	match lit {
-		EListLit(elems) => c_elem_exprs_into(em, elems, elem, out)
-		_ => c_skip()
-	}
+	c_elem_exprs_into(em, c_listlit_elems(lit), elem, out)
 	return out
 }
 
@@ -5013,10 +5019,7 @@ fn c_pushes_strs(target: str, et: str, vals: list[str], ind: str) -> str {
 
 # c_pushes emits a zrt_list_push per element of a list literal.
 fn c_pushes(mut &em: Emitter, target: str, et: str, lit: Expr, ind: str) -> str {
-	return match lit {
-		EListLit(elems) => c_pushes_of(em, target, et, elems, ind)
-		_ => ""
-	}
+	return c_pushes_of(em, target, et, c_listlit_elems(lit), ind)
 }
 
 fn c_pushes_of(mut &em: Emitter, target: str, et: str, elems: list[Expr], ind: str) -> str {

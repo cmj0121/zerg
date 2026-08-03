@@ -2278,6 +2278,30 @@ fn c_unop(oper: str) -> str {
 # `"a\xc3\xa9b"` and cc read `\xa9b` as one escape — "hex escape sequence out of range",
 # a build that fails on a string a reader would call ordinary. An octal escape is at most
 # three digits, so `\303\251b` cannot run on. The seed has emitted octal all along.
+# c_str_cell renders a str LITERAL as the managed-str value every other str now is: the
+# payload of a cell, not a bare `char*`.
+#
+# It has to be, because a release cannot ask what it is holding. A managed str is a pointer
+# INTO `[zrt_ref_hdr | bytes]` and giving one back means stepping back one header — which on
+# a plain C literal reads whatever the linker put in front of the string. Nothing at runtime
+# tells the two apart, so either every str is a cell or none can ever be freed. That is the
+# row src/compiler/README.md calls a representation change rather than more emitted code.
+#
+# The cell is `static` and IMMORTAL: file lifetime, so the statement expression's value
+# outlives it nowhere, and a refcount zrt_retain/zrt_release both no-op on, so a literal
+# flows through retain, release and comparison exactly as a heap string does. The seed has
+# emitted this shape since S2 (emit_str.go, strLiteral); this is the same cell.
+fn c_str_cell(mut &em: Emitter, s: str) -> str {
+	em.used_rt = true
+	em.tmp_n = em.tmp_n + 1
+	nm := f"zgt_sl{em.tmp_n}"
+
+	# C counts DECODED bytes, so the array is sized from the value and not from the escaped
+	# spelling c_str_lit produces
+	n := list[byte](s).len() + 1
+	return f"({{ static struct {{ zrt_ref_hdr h; char b[{n}]; }} {nm} = {{{{ZRT_RC_IMMORTAL, NULL}}, {c_str_lit(s)}}}; (const char *)zrt_ref_payload(&{nm}); }})"
+}
+
 fn c_str_lit(s: str) -> str {
 	mut out: list[byte] = []
 	out.append(byte(34)) # "
@@ -2331,7 +2355,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 	return match e {
 		EInt(lex) => c_int_dec(em, lex)
 		EFloat(lex) => lex
-		EStr(v) => c_str_lit(v)
+		EStr(v) => c_str_cell(em, v)
 		EBool(b) => c_bool(b)
 		ENil => "0"
 		EIdent(n) => c_ident_val(em, n, sb)
@@ -2584,7 +2608,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		if oper == "+" {
 			em.used_str = true
 			em.used_rt = true
-			return f"zgs_concat({c_expr(em, a, sb)}, {c_expr(em, b, sb)})"
+			return f"zrt_str_concat({c_expr(em, a, sb)}, {c_expr(em, b, sb)})"
 		}
 
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) == 0)" if oper == "=="
@@ -2790,7 +2814,17 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
 			# a composite; this hole let the same value out through an f-string hole.
 			raise f"`str(…)` over a list is the BYTE bridge, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
-			return f"zgs_from_bytes({inner})"
+
+			# zrt_str_from_bytes CONSUMES the list — it drops it on the success path and on
+			# the raise, so a caller passing a temporary owes no post-call drop that an
+			# unwind would skip. That means it must be handed a list nobody else holds: a
+			# fresh rvalue goes straight in, and one that NAMES storage is copied first.
+			# The old zgs_from_bytes borrowed instead, so substituting one for the other
+			# without this dropped the caller's own list out from under it — a double drop
+			# the moment the binding's own release ran, and heap corruption before that.
+			return f"zrt_str_from_bytes({c_copied(em, xt0, x, sb)})" if c_is_lvalue(x)
+
+			return f"zrt_str_from_bytes({inner})"
 		}
 
 		c_display_check(em, xt0)
@@ -2812,7 +2846,7 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		raise "NotImplemented: `list[rune](s)` decodes a str's code points — this compiler has no `rune` type, only `list[byte](s)`" if c_named_of(c_list_elem(ty)) == "rune"
 		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — the bytes of a `str` are `list[byte]`" if not c_is_byte(c_list_elem(ty))
 
-		return f"zgs_to_bytes({inner})"
+		return f"zrt_str_bytes({inner})"
 	}
 
 	# `int(v)` over an enum reads its DISCRIMINANT (GRAMMAR:577), which is the tag field —
@@ -7111,9 +7145,6 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 		hdr = hdr + "static const zrt_elem_vt zg_listvt_map = {zg_elemcopy_map, NULL};\n"
 		hdr = hdr + "static zrt_list zg_empty_list(size_t esz, const zrt_elem_vt *vt) { zrt_list l; zrt_list_init(&l, esz, vt); return l; }\n\n"
 	}
-	if em.used_str {
-		hdr = hdr + c_str_helpers()
-	}
 
 	# the tuple carriers found while the bodies were lowered. The ones a DECLARATION names
 	# went through the type sweep instead, in dependency order among the enums, structs and
@@ -7160,25 +7191,4 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 		diags.append(d)
 	}
 	return f"{hdr}{types}{tups}{ress}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
-}
-
-# c_str_helpers is the leak-style string prelude: str is a plain NUL-terminated char*,
-# concatenation and byte<->str conversion malloc fresh buffers that are never freed (a
-# batch compiler exits and the OS reclaims).
-fn c_str_helpers() -> str {
-	mut out := "static char* zgs_concat(const char* a, const char* b) {\n"
-	out = out + "    size_t la = strlen(a), lb = strlen(b);\n"
-	out = out + "    char* r = (char*)malloc(la + lb + 1);\n"
-	out = out + "    memcpy(r, a, la); memcpy(r + la, b, lb); r[la + lb] = 0;\n"
-	out = out + "    return r;\n}\n"
-	out = out + "static char* zgs_from_bytes(zrt_list bs) {\n"
-	out = out + "    size_t n = zrt_list_len(&bs);\n"
-	out = out + "    char* r = (char*)malloc(n + 1);\n"
-	out = out + "    for (size_t i = 0; i < n; i++) r[i] = (char)(*(uint8_t*)zrt_list_at_ref(&bs, i));\n"
-	out = out + "    r[n] = 0;\n    return r;\n}\n"
-	out = out + "static zrt_list zgs_to_bytes(const char* s) {\n"
-	out = out + "    zrt_list l; zrt_list_init(&l, sizeof(uint8_t), &zg_listvt);\n"
-	out = out + "    for (size_t i = 0; s[i]; i++) { uint8_t b = (uint8_t)s[i]; zrt_list_push(&l, &b); }\n"
-	out = out + "    return l;\n}\n\n"
-	return out
 }

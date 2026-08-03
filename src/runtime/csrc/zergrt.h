@@ -1051,6 +1051,11 @@ void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
 #ifdef ZRT_ASAN
 void __sanitizer_start_switch_fiber(void **fake_stack_save, const void *bottom, size_t size);
 void __sanitizer_finish_switch_fiber(void *fake_stack_save, const void **bottom_old, size_t *size_old);
+void __lsan_register_root_region(const void *p, size_t size);
+void __lsan_unregister_root_region(const void *p, size_t size);
+/* a live coroutine's stack is a ROOT, exactly as a thread's stack is one */
+#define ZRT_LSAN_ROOT_ADD(p, n) __lsan_register_root_region((p), (n))
+#define ZRT_LSAN_ROOT_DEL(p, n) __lsan_unregister_root_region((p), (n))
 /* leaving this stack for [bottom, bottom+size); `save` is NULL when it is not coming back */
 #define ZRT_ASAN_SWITCH_TO(save, bottom, size) __sanitizer_start_switch_fiber((save), (bottom), (size))
 /* arrived: restore this fiber's fake stack and read back the stack we came FROM */
@@ -1058,6 +1063,8 @@ void __sanitizer_finish_switch_fiber(void *fake_stack_save, const void **bottom_
 #else
 #define ZRT_ASAN_SWITCH_TO(save, bottom, size)     ((void)(save), (void)(bottom), (void)(size))
 #define ZRT_ASAN_SWITCH_DONE(save, obottom, osize) ((void)(save), (void)(obottom), (void)(osize))
+#define ZRT_LSAN_ROOT_ADD(p, n)                    ((void)(p), (void)(n))
+#define ZRT_LSAN_ROOT_DEL(p, n)                    ((void)(p), (void)(n))
 #endif
 
 /* --- threads: the M of M:N ---------------------------------------------------

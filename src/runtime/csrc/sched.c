@@ -391,6 +391,13 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	size_t total = 0;
 	co->stack = stack_alloc(ZRT_CORO_STACK, &total);
 	co->stack_size = total;
+	/* LeakSanitizer scans thread stacks and globals, and a coroutine stack is neither. A
+	 * coroutine ABANDONED at program end (the language's `spawn` lifetime — sched.c's
+	 * header says why) still holds everything its frames point at, and every one of those
+	 * read as leaked with nothing left pointing at them. Registering the stack says what is
+	 * true: this is a root while the coroutine lives. A genuine leak — an object no live
+	 * coroutine can still reach — is reported exactly as before. */
+	ZRT_LSAN_ROOT_ADD(co->stack, co->stack_size);
 	co->state = ZRT_CORO_RUNNABLE;
 	co->woken = false; /* zrt_alloc is malloc, not calloc: an unset flag is a stray wake */
 	co->is_main = is_main;
@@ -642,6 +649,7 @@ static void sched_run(void) {
 			bool was_main = co->is_main;
 			zrt_tls_free(&co->tls);
 			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
+			ZRT_LSAN_ROOT_DEL(co->stack, co->stack_size);
 			munmap(co->stack, co->stack_size);
 			zrt_free(co);
 			if (was_main) {

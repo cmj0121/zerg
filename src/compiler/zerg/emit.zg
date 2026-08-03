@@ -2598,7 +2598,14 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# drops because it generates no impls. What is missing is named where it is missed.
 	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the impl `#[derive(Eq)]` / `#[derive(Ord)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
 
-	return c_arith(em, oper, ta, c_expr(em, a, sb), c_expr(em, b, sb))
+	ca := c_expr(em, a, sb)
+	cb := c_expr(em, b, sb)
+	# The RESULT's type decides whether this operation can overflow, not the left operand's.
+	# `0 - 7.5` is a float subtraction whose left side is an untyped integer literal
+	# adopting the context (docs/core/types.md); handing `c_arith` the left type sent it
+	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
+	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
+	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
 }
 
 # c_arith lowers a binary operator that has a CHECK, and every other one as the bare C

@@ -1303,6 +1303,15 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 		for sd in ss {
 			if c_deps_done(c_struct_deps(sd), sd.name, done, all) {
 				out = out + c_struct_typedef(sd)
+
+				# the copy helper's PROTOTYPE, here rather than with its body: this sweep
+				# emits carriers and structs in dependency order, so a carrier's force
+				# helper — which copies the value it unwraps — can be emitted before the
+				# struct's helper is. A prototype needs only the typedef just written, and
+				# it is what keeps that order from deciding whether the C compiles.
+				if c_needs_copy(em, TNamed(sd.name)) {
+					out = out + f"static zg_{sd.name} zg_copy_{sd.name}(zg_{sd.name} v);\n"
+				}
 				done.append(sd.name)
 			} else {
 				ss2.append(sd)
@@ -1861,6 +1870,12 @@ fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
 fn c_needs_copy(mut &em: Emitter, t: Ty) -> bool {
 	return true if c_is_list(t) or c_is_map(t)
 
+	# A str is a refcounted cell (c_str_cell), so giving one a second name is a COPY like
+	# any other — a retain, which is what makes the two names' releases balance. A literal's
+	# cell is immortal, so retain and release both no-op on it and a program that holds
+	# nothing but literals behaves exactly as it did.
+	return true if c_is_str(t)
+
 	# A TUPLE is the third composite, and it was missing: `mut t := (a, 0)` bit-copied the
 	# list `a`, so `t.0[0] = 99` was read back through `a`. Its elements are a list of
 	# types, so the same question is asked of each.
@@ -1913,6 +1928,10 @@ fn c_copy_of(mut &em: Emitter, t: Ty, x: str) -> str {
 		return "({ " + ct + " zgt_cs = (" + x + "); " + ct + " zgt_cp; " + ct + "_copy(&zgt_cp, &zgt_cs); zgt_cp; })"
 	}
 	return f"{c_tuple_cname(ty_tuple_elems(t))}_copy({x})" if c_is_tuple(t)
+	if c_is_str(t) {
+		em.used_rt = true
+		return f"zrt_str_retain({x})"
+	}
 	return f"zg_copy_{c_named_of(t)}({x})"
 }
 
@@ -6201,6 +6220,7 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 
 	return c_let_list(em, name, eff, is_mut, ival, ind) if c_is_list(eff)
 	return c_let_chan(em, name, eff, is_mut, ival, ind) if ty_is_chan(eff)
+	return c_let_str(em, name, eff, is_mut, ival, ind) if c_is_str(eff)
 
 	# an optional does not fit a declaration that promised a value: there is no implicit
 	# unwrap in the language, and letting one through emitted a carrier where a scalar went
@@ -6324,6 +6344,21 @@ fn c_strs_take(xs: list[str], n: int) -> list[str] {
 # site a list leaves this scope by: `return xs` copies, and so does pushing one into a
 # channel, a struct field or a `spawn` capture. Each of those retains, so the holder dropped
 # here is never the last one when somebody else is still reading.
+# c_let_str declares a STR binding, which owns a reference to its cell and gives it back at
+# scope exit — the two halves c_let_chan states for a handle and c_let_list for a buffer. An
+# initializer that NAMES storage is somebody else's cell, so this binding takes a reference
+# of its own (c_copied, which for a str is zrt_str_retain); a freshly produced one — a
+# concat, an f-string, a `str(bytes)`, a call's result — already carries exactly one and
+# this binding takes it over. A literal's cell is immortal, so both halves are no-ops on it.
+fn c_let_str(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
+	em.used_rt = true
+	val := c_copied(em, eff, ival, c_nosub())
+	c_add_var(em, name, eff, is_mut)
+	cn := c_var_cname(em, name)
+	c_pend_release(em, cn, "zrt_str_release")
+	return f"{ind}const char* {cn} = {val};\n"
+}
+
 fn c_let_list(mut &em: Emitter, name: str, eff: Ty, is_mut: bool, ival: Expr, ind: str) -> str {
 	em.used_rt = true
 
@@ -6823,6 +6858,19 @@ fn c_fn(mut &em: Emitter, fn_d: FnDecl) -> str {
 			}
 			pm := fn_d.params[i]
 			c_add_var(em, pm.name, pm.ty, pm.is_ref)
+
+			# A BY-VALUE str PARAMETER IS THIS FUNCTION'S OWN. Every call site copies what it
+			# hands over (c_arg, through c_copied), and for a str that copy is a retain — so
+			# the callee holds a reference of its own and owes it back, exactly as a binding
+			# made in the body does. A `mut &` parameter is the CALLER's storage handed over
+			# to be written, and owns nothing.
+			#
+			# Only str. A list or map parameter is an owned copy too and will join here, but
+			# a drop for those has to arrive with the element teardown that makes it whole.
+			if c_is_str(pm.ty) and not pm.is_ref {
+				em.used_rt = true
+				c_pend_release(em, "zg_" + pm.name, "zrt_str_release")
+			}
 			if pm.is_ref {
 				em.ref_names.append(pm.name)
 				sig = sig + c_type(pm.ty) + "* zg_" + pm.name

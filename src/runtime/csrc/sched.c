@@ -76,6 +76,11 @@ static ZRT_THREAD_LOCAL zrt_ctx t_sched_ctx;
 /* this worker's own fiber handle, so a switch back out of a coroutine can name where it
  * is going. NULL, and never read, outside a ThreadSanitizer build. */
 static ZRT_THREAD_LOCAL void *t_sched_fiber;
+
+/* where AddressSanitizer parks this WORKER's fake stack while a coroutine has the CPU.
+ * NULL, and never read, outside an AddressSanitizer build. It may live in a thread-local
+ * where the coroutine's may not: a worker always resumes on the thread it left. */
+static ZRT_THREAD_LOCAL void *t_sched_fake;
 static ZRT_THREAD_LOCAL zrt_coro *t_current;
 
 /* SHARED, under g_lock: the one FIFO run queue every worker drains and the
@@ -332,6 +337,22 @@ static void *stack_alloc(size_t size, size_t *total_out) {
 
 /* --- the spawned coroutine's entry ------------------------------------------- */
 
+/* coro_swap_out is the COROUTINE half of every switch back to the scheduler: park,
+ * yield, and the end of the trampoline all leave through here, which is what keeps the
+ * sanitizer bracket in one place rather than at four call sites that must not drift.
+ *
+ * `finished` says this coroutine is not coming back, so its fake stack is destroyed
+ * rather than saved — and the line after the switch is unreachable on that path.
+ *
+ * The stack to announce is the one in `co`, refreshed by the finishing half below on
+ * every resume. It is deliberately not read from a thread-local: this function returns
+ * on whichever worker resumed the coroutine, which need not be the one it left. */
+static void coro_swap_out(zrt_coro *co, bool finished) {
+	ZRT_ASAN_SWITCH_TO(finished ? NULL : &co->asan_fake, co->asan_sched_stack, co->asan_sched_stack_size);
+	zrt_ctx_swap(&co->ctx, &t_sched_ctx);
+	ZRT_ASAN_SWITCH_DONE(co->asan_fake, &co->asan_sched_stack, &co->asan_sched_stack_size);
+}
+
 /* coro_trampoline is where every coroutine begins, on its own stack. It installs a
  * bottom abort handler in this coroutine's (already current) unwind bundle, runs the
  * marshalled thunk, and unwinds its cleanup stack on the normal path. If the thunk
@@ -342,6 +363,10 @@ static void *stack_alloc(size_t size, size_t *total_out) {
 static void coro_trampoline(void *arg) {
 	zrt_coro *co = (zrt_coro *)arg;
 	zrt_frame frame;
+	/* the finishing half of the switch that STARTED this coroutine. There is no saved
+	 * fake stack to restore — this stack has never run — and the answer is the stack of
+	 * the worker that started us, which is where the end of this function goes back to. */
+	ZRT_ASAN_SWITCH_DONE(NULL, &co->asan_sched_stack, &co->asan_sched_stack_size);
 	zrt_handler_push(&frame);
 	if (setjmp(frame.buf) == 0) {
 		co->thunk(co->env);
@@ -353,7 +378,7 @@ static void coro_trampoline(void *arg) {
 		zrt_handler_pop(&frame);
 	}
 	co->state = ZRT_CORO_DONE;
-	zrt_ctx_swap(&co->ctx, &t_sched_ctx); /* back to THIS worker's loop; never returns */
+	coro_swap_out(co, true); /* back to THIS worker's loop; never returns */
 }
 
 /* --- spawn ------------------------------------------------------------------- */
@@ -366,12 +391,22 @@ static void spawn_coro(void (*thunk)(void *env), void *env, bool is_main) {
 	size_t total = 0;
 	co->stack = stack_alloc(ZRT_CORO_STACK, &total);
 	co->stack_size = total;
+	/* LeakSanitizer scans thread stacks and globals, and a coroutine stack is neither. A
+	 * coroutine ABANDONED at program end (the language's `spawn` lifetime — sched.c's
+	 * header says why) still holds everything its frames point at, and every one of those
+	 * read as leaked with nothing left pointing at them. Registering the stack says what is
+	 * true: this is a root while the coroutine lives. A genuine leak — an object no live
+	 * coroutine can still reach — is reported exactly as before. */
+	ZRT_LSAN_ROOT_ADD(co->stack, co->stack_size);
 	co->state = ZRT_CORO_RUNNABLE;
 	co->woken = false; /* zrt_alloc is malloc, not calloc: an unset flag is a stray wake */
 	co->is_main = is_main;
 	co->deadlocked = false;
 	co->deadline = 0;
 	co->tsan_fiber = ZRT_TSAN_FIBER_NEW(); /* NULL, and free, unless this is a TSan build */
+	co->asan_fake = NULL;                  /* ASan only; the first switch out fills it in */
+	co->asan_sched_stack = NULL;           /* learned from the worker that starts us */
+	co->asan_sched_stack_size = 0;
 	co->thunk = thunk;
 	co->env = env;
 	/* the WHOLE bundle, not four of its fields. Initialising it member by member left
@@ -401,7 +436,7 @@ void zrt_yield(void) {
 		return; /* not inside a coroutine */
 	}
 	co->state = ZRT_CORO_RUNNABLE;
-	zrt_ctx_swap(&co->ctx, &t_sched_ctx);
+	coro_swap_out(co, false);
 }
 
 /* --- park / wake (channel blocking primitives, used by chan.c) --------------- */
@@ -429,7 +464,7 @@ bool zrt_sched_park_unlock(zrt_mutex *m) {
 	}
 	co->park_lock = m;
 	co->state = ZRT_CORO_PARKING;
-	zrt_ctx_swap(&co->ctx, &t_sched_ctx);
+	coro_swap_out(co, false);
 	/* Resumed by some worker — not necessarily the one we left. */
 	return park_resumed(co);
 }
@@ -441,7 +476,7 @@ void zrt_sched_park(void) {
 	}
 	co->park_lock = NULL;
 	co->state = ZRT_CORO_PARKING;
-	zrt_ctx_swap(&co->ctx, &t_sched_ctx);
+	coro_swap_out(co, false);
 	/* Resumed. A wake re-enqueued us and SOME worker swapped us back in — not
 	 * necessarily the one we parked on, which is why nothing here may cache a worker.
 	 *
@@ -581,7 +616,12 @@ static void sched_run(void) {
 		/* the two announcements bracketing the switch are what let ThreadSanitizer follow
 		 * a coroutine across stacks and across workers; both vanish in a normal build. */
 		ZRT_TSAN_FIBER_SWITCH(co->tsan_fiber);
+		/* the ASan bracket names the stack the machine is about to stand on, and parks this
+		 * worker's own fake stack for the duration; without it every instrumented frame the
+		 * coroutine runs is allocated out of THIS thread's arena and dies with it. */
+		ZRT_ASAN_SWITCH_TO(&t_sched_fake, co->stack, co->stack_size);
 		zrt_ctx_swap(&t_sched_ctx, &co->ctx); /* run it until it yields, parks, or finishes */
+		ZRT_ASAN_SWITCH_DONE(t_sched_fake, NULL, NULL);
 		ZRT_TSAN_FIBER_SWITCH(t_sched_fiber);
 		zrt_tls_save(&co->tls);
 		t_current = NULL;
@@ -609,6 +649,7 @@ static void sched_run(void) {
 			bool was_main = co->is_main;
 			zrt_tls_free(&co->tls);
 			ZRT_TSAN_FIBER_FREE(co->tsan_fiber);
+			ZRT_LSAN_ROOT_DEL(co->stack, co->stack_size);
 			munmap(co->stack, co->stack_size);
 			zrt_free(co);
 			if (was_main) {

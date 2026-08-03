@@ -2846,7 +2846,13 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		em.used_str = true
 		em.used_rt = true
 
-		return inner if c_is_str(c_infer(em, x))
+		# `str(s)` on a str is the identity, and the identity of a BORROW is a borrow — but
+		# the expression it came from is a call, and every rule downstream reads a call as a
+		# value nobody else holds. `s2 := str(s)` therefore bound a cell it had never taken a
+		# reference to, and both names released it; an f-string's `{s}` lowers through here
+		# too, so the same one-line hole was under every interpolated string. Copying makes
+		# the answer match the shape: what leaves here is owned, as from any other call.
+		return c_copied(em, xt0, x, sb) if c_is_str(xt0)
 		if c_is_list(xt0) {
 			# ONLY a `list[byte]`. The bridge reinterprets the buffer as characters, so
 			# `f"{xs}"` on a `list[int]` printed the low byte of each element and on a

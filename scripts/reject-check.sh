@@ -402,6 +402,14 @@ fn main() {
 }
 EOF
 
+reject equate-an-int-with-a-uint 'mixes int and uint' <<'EOF'
+fn main() {
+	i: int = -1
+	u: uint = 1
+	print(f"{i == u}")
+}
+EOF
+
 reject bitwise-on-float 'operator `&` takes int operands' <<'EOF'
 fn main() {
 	print(f"{3.0 & 1}")

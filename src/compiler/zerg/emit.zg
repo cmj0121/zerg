@@ -2478,6 +2478,18 @@ fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 	if n > 0 and c_is_expr_stmt(body[n - 1]) {
 		upto = n - 1
 	}
+
+	# A GUARDED BLOCK IS A BLOCK, and this is the one that walks its statements itself
+	# rather than through c_block — so it has to do by hand the half c_block does for every
+	# other one: remember how tall the pending-release list was, and give back what the body
+	# added before the braces close.
+	#
+	# Without it the entries outlive the C block their names are declared in, and the next
+	# `return` renders them where nothing of that name exists: cc, `use of undeclared
+	# identifier`, against generated C. It stayed invisible while channels were the only
+	# thing on that list — no corpus case opens one inside a `guard` — and surfaced the day
+	# a second type joined.
+	keep := em.rel_cnames.len()
 	mut inner := ""
 	mut i := 0
 	for i < upto {
@@ -2485,6 +2497,10 @@ fn c_guard(mut &em: Emitter, body: list[Stmt], sb: Subst) -> str {
 		i = i + 1
 	}
 	inner = inner + c_guard_ok(em, body, upto, vt, res, sb)
+
+	# after the value has been taken, and inside the braces: the answer is copied out by
+	# c_guard_ok, so releasing here cannot take storage the result is still naming
+	inner = inner + c_scope_end(em, keep, " ")
 
 	mut out := "({ zrt_frame " + fr + "; " + cn + " " + res + " = {0}; zrt_handler_push_catch(&" + fr + ");"
 	out = out + " if (setjmp(" + fr + ".buf) == 0) { " + inner
@@ -2507,7 +2523,11 @@ fn c_guard_ok(mut &em: Emitter, body: list[Stmt], upto: int, vt: Ty, res: str, s
 
 	# a value-less last expression still has to RUN — it was written for its effect
 	return f"{val}; {c_res_mark_left(res)}" if c_is_nil_ty(vt)
-	return f"{c_res_mark_left(res)} {c_res_ok(res)} = {val};"
+
+	# COPIED, not aliased: the answer outlives the block, and the block now gives back what
+	# its bindings own on the way out. `guard { xs := […]; xs }` handed the result a second
+	# name for a buffer the release below was about to free.
+	return f"{c_res_mark_left(res)} {c_res_ok(res)} = {c_copied(em, vt, c_expr_stmt_of(body[upto]), sb)};"
 }
 
 # c_guard_val_ty is the guarded BLOCK's value type. GRAMMAR gives a block the value of its

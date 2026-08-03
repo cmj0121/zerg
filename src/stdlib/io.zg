@@ -52,14 +52,24 @@ pub fn write_int(n: int) -> Result[nil] {
 	mut v := n
 	neg := v < 0
 	for {
-		d := v % 10
-		digit := if d < 0 {
-			-d
-		} else {
-			d
+		# `/` and `%` are EUCLIDEAN (docs/core/types.md): the remainder is never negative
+		# and the quotient floors, so for a negative `v` neither is the digit-and-rest this
+		# conversion wants. `-42 % 10` is 8, not 2, and `-42 / 10` is -5, not -4 — and
+		# `-1 / 10` is -1, so a loop written against truncation never reaches zero.
+		#
+		# The two differ only when `v` is negative and the remainder is non-zero, and then
+		# by exactly one step: the digit is `10 - r` and the rest is `q + 1`. Deriving it
+		# this way is what lets INT_MIN convert — negating `v` to work in positives is the
+		# one operation that has no answer at the bottom of the range.
+		r := v % 10
+		mut q := v / 10
+		mut digit := r
+		if neg and r != 0 {
+			digit = 10 - r
+			q = q + 1
 		}
 		digits.append(byte(48 + digit)) # 48 == '0'
-		v = v / 10
+		v = q
 		break if v == 0
 	}
 	if neg {

@@ -89,8 +89,8 @@ pub fn parse_uint(s: str, base: int) -> uint {
 }
 
 # to_string renders n in the given base, lowercase, with a leading '-' for a negative
-# value. Digits are peeled off with `% base` / `/ base` — the single digit is negated,
-# never the whole value, so INT_MIN never overflows — and reversed into the result.
+# value. Digits are peeled off with `% base` / `/ base` — the whole value is never
+# negated, so INT_MIN renders like any other — and reversed into the result.
 pub fn to_string(n: int, base: int) -> str {
 	check_base(base)
 
@@ -98,14 +98,20 @@ pub fn to_string(n: int, base: int) -> str {
 	mut v := n
 	neg := v < 0
 	for {
-		d := v % base
-		mag := if d < 0 {
-			-d
-		} else {
-			d
+		# `/` and `%` are EUCLIDEAN (docs/core/types.md): the remainder is never negative
+		# and the quotient floors, so for a negative `v` neither is the digit-and-rest this
+		# conversion wants — and `-1 / 10` being -1 means a loop written against truncation
+		# never reaches zero. They differ only when `v` is negative and the remainder is
+		# non-zero, and then by exactly one step. Same derivation as io.write_int.
+		r := v % base
+		mut q := v / base
+		mut mag := r
+		if neg and r != 0 {
+			mag = base - r
+			q = q + 1
 		}
 		digits.append(digit_char(mag))
-		v = v / base
+		v = q
 		break if v == 0
 	}
 	if neg {

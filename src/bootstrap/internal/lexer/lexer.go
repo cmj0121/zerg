@@ -591,6 +591,10 @@ func (l *Lexer) scanOperator(start token.Pos) token.Token {
 		}
 		return emit(token.Star, 0)
 	case '/':
+		// `//` is floor division, not a comment: Zerg comments start with '#'.
+		if two == '/' {
+			return emit(token.SlashDiv, 1)
+		}
 		return emit(token.Slash, 0)
 	case '%':
 		return emit(token.Percent, 0)

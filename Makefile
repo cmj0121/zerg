@@ -11,17 +11,26 @@ ZERG_ENTRY := src/compiler/zergc.zg
 ZERG_STAGE1 := ./bin/.zerg-stage1
 
 # The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
-# which is what `zerg` is growing toward, while the seed is covered by its own unit
-# tests. CORPUS_PASS is the set `zerg` compiles and runs correctly today — the gate. The
-# rest of test-data/codegen/ is reported but not enforced: each case that starts passing
-# is a feature landing, and moves into this list.
+# which is what `zerg` is growing toward, while the seed is covered by its own unit tests.
+#
+# The gate is EVERY case except the ones named below, and it is that way round on purpose.
+# An allowlist makes "not gated" the default for a new case: adding one and forgetting to
+# register it leaves it silently unenforced, which is the one failure a test corpus must
+# not have. Naming what CANNOT pass instead makes a new case gated the moment it exists,
+# and gives the list an end state — it shrinks toward empty as the features land, rather
+# than growing forever.
+#
 # JOBS is how many units the self-hosted compiler builds at once.
 JOBS ?= 4
 
-CORPUS_PASS := arithmetic arithmetic_checked arithmetic_euclid bitwise booleans byte_and_fnvalue conc_actor conc_break_release conc_capture_snapshot conc_chan_buffer conc_chan_dir conc_close conc_close_kind conc_cow_shared conc_crash \
-	conc_defer_close conc_fanin conc_for_select conc_forin conc_payload_copy conc_select conc_spawn conc_spawn_defaults select_default countdown cow_carriers cow_value_semantics default_params either_result every_form_handled enum_basic enum_discriminant enum_qualified enum_guard factorial \
-	fib fizzbuzz floats gcd fn_value guard_expr hello index_rvalue list_basic list_literal list_str map_value_semantics match_arm_binding match_range mut_fn method_chain null_safety power raise_guard raise_kind \
-	rec_expr rec_tree shadowing str_bytes struct_basic struct_nested this_receiver sumto value_semantics
+# Cases awaiting a feature `zerg` does not have. Delete a name when its feature lands;
+# that deletion IS the gate for the feature.
+CORPUS_SKIP := \
+	derive_enum derive_ord \
+	dyn_witness spec_bound \
+	gen_enum gen_enum2 gen_identity gen_struct
+
+CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 
 # A `conc_` case is run more than once. Every other case is a function of its source, so
 # one run answers the question; a concurrent one is a function of its source AND of an

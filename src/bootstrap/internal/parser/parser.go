@@ -1096,7 +1096,7 @@ func isAddOp(k token.Kind) bool {
 
 func isMulOp(k token.Kind) bool {
 	switch k {
-	case token.Star, token.Slash, token.Percent, token.StarMod, token.Shl, token.Shr, token.Amp:
+	case token.Star, token.Slash, token.SlashDiv, token.Percent, token.StarMod, token.Shl, token.Shr, token.Amp:
 		return true
 	}
 	return false

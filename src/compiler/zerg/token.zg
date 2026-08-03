@@ -96,6 +96,7 @@ enum Kind {
 	Minus
 	Star
 	Slash
+	SlashDiv
 	Percent
 	PlusMod
 	MinusMod
@@ -221,6 +222,7 @@ fn kind_name(k: Kind) -> str {
 		Minus     => "-"
 		Star      => "*"
 		Slash     => "/"
+		SlashDiv  => "//"
 		Percent   => "%"
 		PlusMod   => "+%"
 		MinusMod  => "-%"

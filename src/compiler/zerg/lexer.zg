@@ -546,7 +546,12 @@ fn scan_operator(mut &l: Lex, sline: int, scol: int, soff: int) -> Token {
 		return op(l, Star, sline, scol, soff, 0)
 	}
 
-	return op(l, Slash, sline, scol, soff, 0) if c == b'/'
+	# `//` is floor division, not a comment: a Zerg comment starts with '#'.
+	if c == b'/' {
+		return op(l, SlashDiv, sline, scol, soff, 1) if two == b'/'
+		return op(l, Slash, sline, scol, soff, 0)
+	}
+
 	return op(l, Percent, sline, scol, soff, 0) if c == b'%'
 	return op(l, Amp, sline, scol, soff, 0) if c == b'&'
 	return op(l, Pipe, sline, scol, soff, 0) if c == b'|'

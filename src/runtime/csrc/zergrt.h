@@ -618,6 +618,28 @@ uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi);
 int64_t  zrt_conv_i_from_f(double v, double lo, double hi);
 uint64_t zrt_conv_u_from_f(double v, double hi);
 
+/* `a // b` is floor division whose result is always an `int` (docs/core/types.md). For
+ * two integers that IS zrt_div_i64 — the language has one integer division and `//` is
+ * the spelling that says so. The float form is the one that needs a helper: it divides
+ * as a double, applies the same Euclidean correction, and lands in int64 through the
+ * same range check `int(x)` is, so a quotient that does not fit raises rather than
+ * being undefined. NaN and the infinities fail those comparisons and abort on it too. */
+
+static inline int64_t zrt_floordiv_f(double a, double b) {
+	if (b == 0.0) {
+		zrt_abort_kind(ZRT_ERR_DIVZERO, ZRT_MSG_DIV_ZERO);
+	}
+	/* zrt_conv_i_from_f truncates toward zero and range-checks, which is exactly the
+	 * quotient C's `/` would give; the correction below turns that into the Euclidean
+	 * one. Doing it AFTER the conversion keeps the arithmetic in int64, where a step of
+	 * one is exact — a double near the top of the range cannot represent `f - 1`. */
+	int64_t t = zrt_conv_i_from_f(a / b, -9223372036854775808.0, 9223372036854775807.0);
+	if (a - (double)t * b < 0.0) {
+		t = (b > 0.0) ? zrt_sub_i64(t, 1) : zrt_add_i64(t, 1);
+	}
+	return t;
+}
+
 /* --- str <-> list bridge (str.c, docs/code/collections.md) ----------------------
  *
  * A str bridges to a list[byte] (raw octets) or list[rune] (code points) for scanning

@@ -187,6 +187,28 @@ fn main() {
 		7
 	)
 
+	# `//` is the same Euclidean division, spelled so the reader sees an integer whatever
+	# the operands are. On two ints it IS `/` — one integer division, not two rules — and
+	# on two floats it lands in `int` without an `int(...)` round trip.
+	check("7 // 2", 7 // 2, 7 / 2)
+	check("a negative dividend", a // 3, a / 3)
+	check("a negative divisor", 7 // b, 7 / b)
+
+	mut f75 := 7.5
+	mut f2 := 2.0
+	mut fneg2 := 0.0 - 2.0
+	check("7.5 // 2.0", f75 // f2, 3)
+	check("-7.5 // 2.0", (0.0 - f75) // f2, 0 - 4)
+	check("7.5 // -2.0", f75 // fneg2, 0 - 3)
+	check("-7.5 // -2.0", (0.0 - f75) // fneg2, 4)
+	check("a zero divisor still raises", guard {
+			7 // zero
+		} ?? 7, 7)
+	mut fzero := 0.0
+	check("a zero float divisor raises", guard {
+			f75 // fzero
+		} ?? 7, 7)
+
 	# mixed operands: an untyped integer literal adopts the float context, and the
 	# operation is the float one. Handing the emitter the LEFT operand's type instead of
 	# the result's sent this through the checked integer path, which truncated the 7.5 on

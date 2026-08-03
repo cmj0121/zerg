@@ -943,6 +943,13 @@ typedef struct zrt_coro {
 	bool             deadlocked;        /* resumed to raise DeadlockError; see sched.c */
 	int64_t          deadline;          /* zrt_sleep_ns wake time (zrt_time_mono); 0 = none */
 	void            *tsan_fiber;        /* ZRT_TSAN only; NULL otherwise. See below. */
+	/* ZRT_ASAN only, and NULL/0 otherwise. asan_fake is where AddressSanitizer parks this
+	 * coroutine's fake stack while it is suspended, and asan_sched_* is the stack of the
+	 * WORKER that last resumed it — which is where this coroutine switches back to, so it
+	 * is learned on every resume and kept here rather than in a thread-local. See below. */
+	void            *asan_fake;
+	const void      *asan_sched_stack;
+	size_t           asan_sched_stack_size;
 	struct zrt_coro *qnext;             /* intrusive run-queue link */
 } zrt_coro;
 
@@ -993,6 +1000,64 @@ void  __tsan_switch_to_fiber(void *fiber, unsigned flags);
 #define ZRT_TSAN_FIBER_NEW()       NULL
 #define ZRT_TSAN_FIBER_FREE(f)     ((void)(f))
 #define ZRT_TSAN_FIBER_SWITCH(f)   ((void)(f))
+#endif
+
+/* --- AddressSanitizer --------------------------------------------------------
+ *
+ * ASan has the same blind spot TSan has, and it is the more dangerous of the two
+ * because it is not a reporting problem — it CRASHES the program it is checking.
+ *
+ * ASan keeps two things per THREAD which this scheduler moves per COROUTINE. The
+ * first is the thread's stack bounds, used to decide how much shadow to clean when
+ * a function that never returns is about to unwind: with a coroutine on an mmap'd
+ * stack those bounds name someone else's memory, and ASan says so —
+ *
+ *     WARNING: ASan is ignoring requested __asan_handle_no_return: ... size: -37670944
+ *
+ * The second is the FAKE STACK, and it is the one that kills. With use-after-return
+ * detection on (the default in the compilers CI runs), an instrumented frame does not
+ * live on the stack at all: ASan allocates it from a per-thread arena megabytes away,
+ * so `zrt_waiter w` in zrt_chan_recv — a local, on the parked coroutine's own stack by
+ * the design in chan.c — is really in the fake stack of whichever WORKER first ran that
+ * frame. That arena is unmapped when its thread exits. A coroutine parked on a channel
+ * therefore had its waiter torn out from under it by an unrelated worker standing down,
+ * and the next walk of that wait queue read a `zrt_waiter` out of a hole in the address
+ * space: SEGV in wq_pop, no shadow to explain it, one run in several hundred, and only
+ * ever with several workers. That is the CI failure this annotation closes, and it was
+ * never a bug in the channel or in the stack lifetime it was hunted as.
+ *
+ * The fiber API answers both: a switch announces the stack it is going to, and the
+ * fake stack travels with the COROUTINE instead of staying with the thread. The
+ * bounds of the worker to switch back to are learned from the finishing half (it
+ * reports the stack that resumed us) and kept in zrt_coro rather than in a thread-
+ * local, so nothing here reads thread-local state after a switch — the one place a
+ * migrating coroutine cannot trust a cached TLS base.
+ *
+ * A coroutine that is ENDING passes NULL as its save slot, which is how ASan is told
+ * to destroy that fake stack rather than leave it for a coroutine that will never
+ * resume.
+ *
+ * All of it compiles to nothing when ASan is off. The '__has_feature' guard is nested
+ * for the reason the TSan probe above gives. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define ZRT_ASAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define ZRT_ASAN 1
+#endif
+
+#ifdef ZRT_ASAN
+void __sanitizer_start_switch_fiber(void **fake_stack_save, const void *bottom, size_t size);
+void __sanitizer_finish_switch_fiber(void *fake_stack_save, const void **bottom_old, size_t *size_old);
+/* leaving this stack for [bottom, bottom+size); `save` is NULL when it is not coming back */
+#define ZRT_ASAN_SWITCH_TO(save, bottom, size) __sanitizer_start_switch_fiber((save), (bottom), (size))
+/* arrived: restore this fiber's fake stack and read back the stack we came FROM */
+#define ZRT_ASAN_SWITCH_DONE(save, obottom, osize) __sanitizer_finish_switch_fiber((save), (obottom), (osize))
+#else
+#define ZRT_ASAN_SWITCH_TO(save, bottom, size)     ((void)(save), (void)(bottom), (void)(size))
+#define ZRT_ASAN_SWITCH_DONE(save, obottom, osize) ((void)(save), (void)(obottom), (void)(osize))
 #endif
 
 /* --- threads: the M of M:N ---------------------------------------------------

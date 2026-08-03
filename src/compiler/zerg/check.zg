@@ -148,7 +148,7 @@ fn chk_param_default(mut &em: Emitter, key: str, pm: Param, path: str, line: int
 	}
 
 	got := c_infer(em, pm.def)
-	return if chk_fits(em, pm.ty, got)
+	return if chk_fits_expr(em, pm.ty, got, pm.def)
 	chk_at_place(em, path, line, col, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ty_name(got)}, and the parameter is {ty_name(pm.ty)}")
 }
 
@@ -641,11 +641,55 @@ fn chk_call_name(key: str) -> str {
 # wrong struct, a tuple to a map, and a `list[str]` to a `map` all went past this rule and
 # reached cc, which is the failure this file exists to remove.
 
+# chk_fits_expr is chk_fits asked of the EXPRESSION rather than of its type alone, and there
+# is exactly one question that needs the difference: an untyped integer literal adopts a
+# `float` context and an already-typed `int` VALUE does not (docs/core/types.md, "Numeric
+# literals"). `x: float = 1` is the literal adopting its context like any other; `y: float
+# = i` would be a silent widening of a value that already has a type, and the language says
+# that needs `float(i)` — because the conversion is the place a lost bit is visible.
+#
+# The type-only chk_fits cannot tell those apart: both are TInt by the time it is asked. So
+# the five slots a value enters ask this one — a binding, an assignment, a `return`, an
+# argument, and a parameter's default. What still asks the type alone is the list-ELEMENT
+# recursion, which has no expression to pass (it recurses on types pulled out of a
+# container), and chk_arm_types, which compares two arms rather than a value against a slot.
+#
+# The pair `_expr` / plain is this file's existing shape for one question asked two ways —
+# c_is_nil_lit and c_is_nil_expr are the same twins.
+fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
+	return chk_int_lit(e) if chk_int_to_float(want, got)
+
+	return chk_fits(em, want, got)
+}
+
+# chk_int_to_float names the ONE widening whose answer depends on which of the two asks. It
+# is written here rather than twice because chk_fits accepts it and chk_fits_expr intercepts
+# it: two spellings of one pair drift apart silently, since the accepting one is the line
+# the intercepting one falls through to.
+fn chk_int_to_float(want: Ty, got: Ty) -> bool {
+	return c_is_float(want) and c_is_int(got)
+}
+
+# chk_int_lit is whether an expression is an UNTYPED integer literal — the literal itself,
+# or one behind a unary minus, which is how a negative one is written. Anything else is a
+# value with a type of its own, however small the expression is.
+#
+# The literal itself is c_is_int_lit's question, and it is asked there: the emitter already
+# has to know which spellings are one, to tell `-1` the constant from `-x` the negation, and
+# a second copy here would disagree with it the day a base prefix or a digit separator is
+# added.
+fn chk_int_lit(e: Expr) -> bool {
+	return match e {
+		EUnary(o, x) => o == "-" and chk_int_lit(x)
+		_            => c_is_int_lit(e)
+	}
+}
+
 # chk_fits is whether a value of type `got` may fill a slot declared `want`.
 fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_unknown(want) or c_is_unknown(got)
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
-	return true if c_is_float(want) and c_is_int(got)
+	return true if chk_int_to_float(want, got)
 
 	# A `byte` WIDENS to an `int`, in the direction the language already mixes `int` into
 	# `float` above. Making the byte literal carry its type — so that `c: byte = b'J'`
@@ -695,7 +739,7 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 	declared := em.fn_ret
 	got := c_infer(em, e)
-	if not chk_fits(em, declared, got) {
+	if not chk_fits_expr(em, declared, got, e) {
 		chk_at(em, f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}")
 	}
 	return got
@@ -725,7 +769,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 		return if c_is_byte(we) != c_is_byte(ge) and chk_is_numish(we) and chk_is_numish(ge)
 	}
 
-	if not chk_fits(em, declared, got) {
+	if not chk_fits_expr(em, declared, got, ival) {
 		chk_at(em, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
 	}
 }
@@ -739,7 +783,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 # chk_assigned raises when a value does not fit the storage it is assigned to.
 fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
 	got := c_infer(em, rhs)
-	if not chk_fits(em, want, got) {
+	if not chk_fits_expr(em, want, got, rhs) {
 		chk_at(em, f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}")
 	}
 }
@@ -773,7 +817,7 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 
 	want := em.pr_ty[row]
 	got := c_infer(em, arg)
-	if not chk_fits(em, want, got) {
+	if not chk_fits_expr(em, want, got, arg) {
 		chk_at(em, f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}")
 	}
 }

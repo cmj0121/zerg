@@ -683,8 +683,9 @@ fn chk_adopts_int_lit(want: Ty) -> bool {
 # `byte` parameter would go from a diagnostic to a silent truncation, which is the trade the
 # byte-widening comment in chk_fits already refused once.
 fn chk_lit_fits(want: Ty, e: Expr) -> bool {
-	return false if not chk_int_lit(e)
-	return true if c_is_float(want)
+	# a float takes any literal, so it needs only the SHAPE test; every other target needs
+	# the walk anyway, and chk_lit_in_range accepts exactly the expressions chk_int_lit does
+	return chk_int_lit(e) if c_is_float(want)
 
 	return chk_lit_in_range(want, e, false)
 }
@@ -696,7 +697,7 @@ fn chk_lit_fits(want: Ty, e: Expr) -> bool {
 fn chk_lit_in_range(want: Ty, e: Expr, neg: bool) -> bool {
 	return match e {
 		EUnary(o, x) => chk_lit_minus(want, o, x, neg)
-		EInt(lex)    => chk_int_in_range(want, chk_lit_value(lex), neg)
+		EInt(lex)    => chk_int_in_range(want, int_value(lex), neg)
 		_            => false
 	}
 }
@@ -707,44 +708,6 @@ fn chk_lit_minus(want: Ty, o: str, x: Expr, neg: bool) -> bool {
 	return false if o != "-"
 
 	return chk_lit_in_range(want, x, not neg)
-}
-
-# chk_lit_value reads a literal's lexeme as a number. A literal node keeps its lexeme
-# verbatim, so the base prefixes the language writes (`0x` / `0o` / `0b`) and the `_`
-# separators it allows inside one are still in the text and are read off here.
-fn chk_lit_value(lex: str) -> int {
-	mut digits: list[byte] = []
-	for ch in list[byte](lex) {
-		if ch != b'_' {
-			digits.append(ch)
-		}
-	}
-
-	return 0 if digits.len() == 0
-	return strconv.parse_int(str(digits), 10) if digits.len() < 3 or digits[0] != b'0'
-
-	base := chk_lit_base(ascii.fold_lower(digits[1]))
-	return strconv.parse_int(str(digits), 10) if base == 10
-
-	return strconv.parse_int(str(chk_lit_after(digits, 2)), base)
-}
-
-fn chk_lit_base(marker: byte) -> int {
-	return 16 if marker == b'x'
-	return 8 if marker == b'o'
-	return 2 if marker == b'b'
-
-	return 10
-}
-
-fn chk_lit_after(digits: list[byte], at: int) -> list[byte] {
-	mut out: list[byte] = []
-	mut i := at
-	for i < digits.len() {
-		out.append(digits[i])
-		i = i + 1
-	}
-	return out
 }
 
 # chk_int_in_range is the bounds themselves. A `byte` is 0..255 and a `uint` has no negative
@@ -1058,7 +1021,7 @@ fn chk_scalar_wrong_num(t: Ty) -> bool {
 }
 
 fn chk_is_scalar(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t) or c_is_str(t) or c_is_bool_ty(t)
+	return chk_is_num(t) or c_is_str(t) or c_is_bool_ty(t)
 }
 
 # chk_mixed_sign refuses a signed operand beside an unsigned one. docs/core/types.md:
@@ -1073,17 +1036,27 @@ fn chk_is_scalar(t: Ty) -> bool {
 # here: `n + 1` on a byte is the ordinary thing to write and has never been ambiguous, since
 # every byte value is an int value. `uint` is the pair where neither side contains the other.
 fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
-	# THE OTHER OPERAND OF A TYPED EXPRESSION is one of the contexts a literal adopts —
-	# docs/core/types.md lists it beside the typed binding, the parameter and the `return`.
-	# So `n * 10` where `n` is a `uint` is the literal becoming a uint, not a mixed pair, and
-	# without this the rule made `mut n: uint = 1; n = n * 10 + 2` unwritable.
-	return if chk_int_lit(ea) or chk_int_lit(eb)
+	# the cheap question first: this is asked of every binary expression in the program, and
+	# in one that names no `uint` at all the answer is no before anything is walked
+	return if c_is_uint(ta) == c_is_uint(tb) or not chk_is_num(ta) or not chk_is_num(tb)
 
-	if c_is_uint(ta) != c_is_uint(tb) and chk_is_num(ta) and chk_is_num(tb) {
-		chk_at(em, f"operator `{oper}` mixes {ty_name(ta)} and {ty_name(tb)}, and the two never convert implicitly — cast one side, as `int(u) {oper} i` or `u {oper} uint(i)`")
-	}
+	# THE OTHER OPERAND OF A TYPED EXPRESSION is one of the contexts a literal adopts —
+	# docs/core/types.md lists it beside the typed binding, the parameter and the `return` —
+	# so `n * 10` where `n` is a `uint` is the literal becoming a uint, not a mixed pair.
+	#
+	# It adopts on the SAME terms as the other four, which is chk_lit_fits and not merely
+	# "is it a literal": `n * 300` where n is a `byte` is out of range here exactly as
+	# `b: byte = 300` is, and asking the weaker question would have made the operand slot the
+	# one place a literal adopts a type it is not a value of.
+	return if chk_lit_fits(ta, eb) or chk_lit_fits(tb, ea)
+
+	chk_at(em, f"operator `{oper}` mixes {ty_name(ta)} and {ty_name(tb)}, and the two never convert implicitly — cast one side, as `int(u) {oper} i` or `u {oper} uint(i)`")
 }
 
+# chk_is_num is THE list of numeric types, and chk_is_scalar builds on it rather than
+# re-enumerating: adding `uint` to a second copy is an edit that is easy to miss, and missing
+# it let a `uint` reach the arithmetic and ordering diagnostics through the not-a-scalar hole
+# instead of the numeric path the mixing rule assumes.
 fn chk_is_num(t: Ty) -> bool {
 	return c_is_int(t) or c_is_float(t) or c_is_uint(t)
 }

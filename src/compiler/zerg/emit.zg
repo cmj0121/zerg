@@ -3175,27 +3175,18 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 	if c_is_str(xt) {
 		em.used_rt = true
 
-		return f"((int64_t)zrt_parse_uint({inner}))" if nm == "uint"
+		return f"zrt_parse_uint({inner})" if c_is_uint(ty)
 		return f"zrt_parse_int({inner})" if c_is_int(ty)
 		return f"zrt_parse_float({inner})" if c_is_float(ty)
 
 		raise f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
 	}
 
-	# THE TARGET'S SHAPE COMES FROM THE SPELLING, and only for `uint`. This compiler models
-	# `uint` as `int64_t` (parser.zg), so `ty` is TInt for both `int(x)` and `uint(x)` and
-	# the type genuinely cannot tell them apart — it is the one scalar property the Ty
-	# carries no room for. Supplying it here keeps `c_conv_scalar` a lowering over shapes
-	# rather than over spellings, and it is where a `TUint` would plug in if `uint` ever
-	# becomes its own type. [deviation] The same flattening means `x: uint = -5` and a
-	# `uint` parameter are still unchecked; only the conversion is.
-	mut dc := c_scalar_class(ty)
-	db := c_scalar_bits(ty)
-
-	# `uint` used to be read off the NAME here, because the type it parsed to was TInt and
-	# the class table could not tell the two apart. It is TUint now, so c_scalar_class
-	# answers for it like every other scalar and the special case is gone.
-	return c_conv_scalar(em, dc, db, xt, ty, inner)
+	# The target's shape comes from its TYPE. It used to come from the SPELLING for `uint`
+	# alone, because the type it parsed to was TInt and the class table could not tell the
+	# two apart — a `uint` was a spelling rather than a type, and the deviation that admitted
+	# it stood right here. TUint answers for itself now.
+	return c_conv_scalar(em, c_scalar_class(ty), c_scalar_bits(ty), xt, ty, inner)
 }
 
 # The conversion-relevant SHAPE of a scalar: what the value is, independent of how wide it
@@ -3303,8 +3294,9 @@ fn c_float_hi(dc: int, bits: int) -> str {
 # behaviour that happened to print INT64_MAX. Both are the OverflowError the documentation
 # promises and the seed already raises.
 #
-# The target's shape arrives as (dc, db) rather than being read off `ty`, because `uint`
-# has no Ty of its own here; `ty` is still needed for the C type the result is cast to.
+# The target's shape arrives as (dc, db) rather than being read off `ty`, so this stays a
+# lowering over SHAPES — a width and a signedness — and the fixed-width ladder the spec adds
+# as stdlib types needs nothing here. `ty` is still passed for the C type to cast to.
 fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str) -> str {
 	sc := c_scalar_class(xt)
 
@@ -3355,7 +3347,7 @@ fn c_display(t: Ty, inner: str) -> str {
 		TBool  => f"zrt_display_bool({inner})"
 		TFloat => f"zrt_display_float((double)({inner}))"
 		TByte  => f"zrt_display_uint((uint64_t)({inner}))"
-		TUint  => f"zrt_display_uint((uint64_t)({inner}))"
+		TUint  => f"zrt_display_uint({inner})"
 		_      => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
@@ -4781,8 +4773,17 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	# whatever the operands are (docs/core/types.md) — so it answers `int` before the
 	# float and byte rules below get a say. That IS the operator.
 	return TInt if oper == "//"
-	return TStr if oper == "+" and c_is_str(c_infer(em, a))
-	return TFloat if c_is_float(c_infer(em, a)) or c_is_float(c_infer(em, b))
+
+	# BOTH OPERANDS ARE INFERRED ONCE, here, and every rule below reads the answer. c_infer
+	# has no memo and its leaves scan the environment, so asking it again per rule made the
+	# work EXPONENTIAL in the depth of an arithmetic chain — the left operand of `a * b * c`
+	# is itself a binary node, so each extra rule multiplied the whole subtree again rather
+	# than adding to it. Four asks about `a` on the `+` path meant 4^depth leaf inferences.
+	ta := c_infer(em, a)
+	tb := c_infer(em, b)
+
+	return TStr if oper == "+" and c_is_str(ta)
+	return TFloat if c_is_float(ta) or c_is_float(tb)
 
 	# BYTE ARITHMETIC STAYS IN BYTE. `mut n := b'a'; n = n + 1` is the ordinary thing to
 	# write and `n + 1` typed `int`, so nothing could be stored back — a type with no
@@ -4790,13 +4791,13 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	# where it came from, and it is why a narrowing `int` -> `byte` is NOT a fit: nothing
 	# needs one, and admitting it turned `take(1000)` on a `byte` parameter into a silent
 	# truncation that cc warned about in generated C.
-	return TByte if c_is_byte(c_infer(em, a)) and not c_is_float(c_infer(em, b))
+	return TByte if c_is_byte(ta) and not c_is_float(tb)
 
 	# UINT ARITHMETIC STAYS IN UINT, for the reason byte arithmetic does: `mut n: uint = 0;
 	# n = n * 10 + d` is the ordinary thing to write, and answering `int` gives the type no
 	# way back into its own storage. The two operands cannot disagree — chk_binary refuses a
 	# mixed pair — so one side being uint settles it.
-	return TUint if c_is_uint(c_infer(em, a)) or c_is_uint(c_infer(em, b))
+	return TUint if c_is_uint(ta) or c_is_uint(tb)
 
 	return TInt
 }

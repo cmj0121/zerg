@@ -190,6 +190,51 @@ element vtable. The OS reclaims on exit. This still honours the "emit C, reuse t
 decision — the runtime data structures are reused — while cutting the bulk of the Go
 emit's complexity. Determinism (the only property M5 needs) is unaffected by leaking.
 
+**And that justification has outgrown itself.** It reasons about ONE program — this
+compiler, compiling itself, exiting. But this is the shipping backend: the same emit
+compiles every program anybody writes in Zerg, and none of them promised to be a batch
+tool. A Zerg service built with `zerg build` leaks every string it formats and every list
+it builds, for as long as it runs. Nothing in the language says so, and nothing in the
+toolchain warns.
+
+It went unmeasured because the only sanitizer gate is `make sanitize-conc`, and until the
+ASan fiber annotations landed LeakSanitizer was scanning the wrong range for roots and
+reporting nothing at all. The first honest run named it.
+
+What each owner does today, and what is left:
+
+| owner          | today                                           | what is left                  |
+| -------------- | ----------------------------------------------- | ----------------------------- |
+| `chan`         | binding, and a handle nobody binds              | —                             |
+| `list` / `map` | binding, parameter, element vtable, rvalue temp | —                             |
+| `str`          | refcounted cell; binding, parameter, every join | —                             |
+| struct         | `zg_drop_<T>` beside `zg_copy_<T>`, same fields | —                             |
+| carrier        | a drop for the temporary a `!` / `??` reads     | a copy, so a binding can drop |
+| tuple          | copy helper, no drop                            | the drop beside the copy      |
+| ref-box        | `zrt_ref_alloc` per node, never released        | a drop for a recursive type   |
+| all of them    | registered where declared, given back by unwind | —                             |
+
+The concurrency corpus is at **0 leak reports**, from 39, and `scripts/sanitize-conc.sh`
+runs with `detect_leaks=1` — a leak there is now a regression rather than a known debt. The
+`str` row was the one that was not a matter of emitting more code, since a literal is static
+storage and a concat is `malloc` and at runtime a `char*` cannot say which it is holding; it
+moved to the refcounted cell, with a literal emitted as an IMMORTAL cell so both halves of
+the count no-op on it.
+
+The last row is what closed the abort path. A release is now REGISTERED where the binding is
+declared and given back by unwinding to a mark — the one exit every other one already goes
+through, including the abort the runtime unwinds itself. `c_release_from`'s old argument,
+that a defer would hold the address of a C local whose block might end first, does not hold:
+`zrt_unwind_abort` unwinds BEFORE the `longjmp`, so the frames are still live, and a block
+that registers anything takes its own mark and unwinds at its own end.
+
+**Where it has not been measured** is the rest of the corpus. `sanitize-conc` runs the
+seventeen concurrency cases; a one-off sweep of the other forty-eight found 47 reports in
+thirteen of them, in classes the concurrency cases do not reach — a chain of rvalue indexes,
+a map temporary, `str(bytes)` in an expression, and the ref-boxed recursive types, which are
+the `ref-box` row and were never freed by design. A leak gate over the whole corpus is what
+this needs next, because a class nothing runs is a class nothing measures.
+
 **Increment ladder toward M5** (each end-to-end tested, then committed):
 
 1. structs — decl, construction, field access, `mut &` params, field mutation _(no runtime)_

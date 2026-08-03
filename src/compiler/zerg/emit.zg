@@ -6398,6 +6398,15 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 	# and prints that. c_display_check is the same refusal `str(…)` already makes.
 	c_display_check(em, ty)
 	ex := c_expr(em, e, c_nosub())
+
+	# A FRESH string is nobody's: `print f"{x}"` builds a cell, shows it, and had nothing
+	# left anywhere to give it back. Printing is one statement, so the release goes straight
+	# after the printf. A str that NAMES storage is somebody else's and is only borrowed
+	# here, which is why this asks the expression and not the type.
+	if c_is_str(ty) and not c_is_lvalue(e) {
+		em.used_rt = true
+		return f"{ind}{{ const char* zgt_ps = {ex}; printf(\"%s\\n\", zgt_ps); zrt_str_release(zgt_ps); }}\n"
+	}
 	return match ty {
 		TStr => f"{ind}printf(\"%s\\n\", {ex});\n"
 

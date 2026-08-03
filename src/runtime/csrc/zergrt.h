@@ -1261,6 +1261,16 @@ zrt_chan *zrt_chan_sender_copy(zrt_chan *ch);
 void zrt_chan_release(zrt_chan *ch);
 void zrt_chan_sender_release(zrt_chan *ch);
 
+/* zrt_defer_chan_release / _sender_release are the `void (*)(void *)` adapters a compiled
+ * program registers a channel binding's release with. The ENV is always the ADDRESS of the
+ * binding's storage, never its value, so the cleanup reads what the binding holds at unwind
+ * time — a reassigned binding gives back what it ends up with.
+ *
+ * Only channels. Every other owning type is a list ELEMENT somewhere, so the emitter
+ * already generates a thunk of this shape for it (`zg_elemdrop_<kind>`) and registers that. */
+void zrt_defer_chan_release(void *p);
+void zrt_defer_chan_sender_release(void *p);
+
 /* zrt_chan_send copies *val (elemsz bytes) into ch: it hands off directly to a waiting
  * receiver, else buffers it when there is room, else PARKS the caller on the send queue
  * until a receiver takes it. Sending on a closed channel aborts (a dead-letter is a

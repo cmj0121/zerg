@@ -478,6 +478,61 @@ fn main() {
 }
 EOF
 
+reject bind-byte-value-to-int 'cannot bind byte to a int binding' <<'EOF'
+fn main() {
+	n: int = b'J'
+	print(f"{n}")
+}
+EOF
+
+reject byte-value-argument-into-int-parameter '`f` takes int as argument 1, and this gives byte' <<'EOF'
+fn f(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print(f"{f(b'a')}")
+}
+EOF
+
+reject return-byte-value-as-int 'this function answers int, and this returns byte' <<'EOF'
+fn g() -> int {
+	return b'a'
+}
+
+fn main() {
+	print(f"{g()}")
+}
+EOF
+
+reject byte-value-element-in-a-returned-int-list 'this function answers list[int]' <<'EOF'
+fn g() -> list[int] {
+	return [b'a']
+}
+
+fn main() {
+	print(f"{g()[0]}")
+}
+EOF
+
+reject int-value-element-in-a-float-list-argument '`h` takes list[float] as argument 1' <<'EOF'
+fn h(ys: list[float]) -> int {
+	return ys.len()
+}
+
+fn main() {
+	i := 2
+	print(f"{h([i])}")
+}
+EOF
+
+reject byte-value-element-in-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
+fn main() {
+	xs: list[int] = [b'a', b'b']
+	print(f"{xs[0]}")
+}
+EOF
+
 reject bind-oversized-literal-to-byte 'cannot bind int to a byte binding' seed-gap <<'EOF'
 fn main() {
 	b: byte = 300

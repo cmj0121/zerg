@@ -85,6 +85,14 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
   could lose precision). A fractional or exponent literal (`1.0`, `1e3`) is a `float` from the start and
   never an `int`.
 
+- **The same rule holds for every numeric target, and `byte` is the one worth saying out loud.** An
+  untyped literal adopts it — `b: byte = 5` and `xs: list[byte] = [1, 2]` are bytes written as bytes —
+  and a **`byte` value never widens to an `int`**: `b'J'` is a `byte`, so `n: int = b'J'`, `f(b'a')` on
+  an `int` parameter, `return b'a'` from an `-> int`, and `[b'a']` into a `list[int]` are all errors, and
+  `int(b)` is how one becomes a number. That a `byte` fits in an `int` is not a reason to convert it
+  silently; it is the reason the conversion is cheap. **Adoption is about a literal with no type yet,
+  widening is about a value that has one**, and only the first happens on its own.
+
 ## User-Defined Types
 
 Declare your own **product types** (`struct`) and **sum types** (`enum`), each generic over `[...]`.

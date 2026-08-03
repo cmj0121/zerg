@@ -630,6 +630,13 @@ fn c_res_taken(mut &em: Emitter, r: str, elem: Ty) -> str {
 	return c_copy_of(em, elem, c_res_ok(r))
 }
 
+# c_carrier_drop_fn names the drop c_carrier_decl generated for this carrier, or "" when
+# the payload owns nothing and none was generated.
+fn c_carrier_drop_fn(mut &em: Emitter, t: Ty) -> str {
+	return "" if c_drop_fn(em, c_carrier_elem(t)) == ""
+	return "zg_drop_" + c_carrier_of(em, t)
+}
+
 fn c_res_err(r: str) -> str {
 	return r + ".err"
 }
@@ -705,7 +712,18 @@ fn c_carrier_decl(mut &em: Emitter, c: Ty) -> str {
 	# the payload is TAKEN OUT, so it comes out as a value of its own — `r` is a by-value
 	# parameter about to die, and returning its header uncounted made `a!` a second name
 	# for the carrier's buffer
-	return d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
+	d = d + "    return " + c_res_taken(em, "r", left) + ";\n}\n"
+
+	# and the DROP, for a carrier whose payload owns something. A carrier is not registered
+	# as a binding — it has no copy helper, so two names for one would each drop it — so this
+	# exists for the TEMPORARY a `!`, a `??` or an `if x := …` materialises: `(<-bags)!` copies
+	# the payload out and left the received carrier holding the other reference forever.
+	df := c_drop_stmt(em, left, "r->ok")
+	return d if df == "(void)(r->ok);"
+
+	d = d + "static void zg_drop_" + name + "(" + name + " *r) {\n"
+	d = d + "    if (" + c_res_is_left("(*r)") + ") { " + df + " }\n"
+	return d + "}\n"
 }
 
 # c_carrier_ty_cname / c_carrier_left read a carrier TYPE — an optional or an either —
@@ -2481,8 +2499,23 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 fn c_force(mut &em: Emitter, x: Expr, sb: Subst) -> str {
 	t := c_infer(em, x)
 	raise f"NotImplemented: `!` on a {ty_name(t)} — it forces a Result[T] or a T?" if not c_is_carrier(t)
+
 	name := c_carrier_of(em, t)
-	return f"zg_force_{name}({c_expr(em, x, sb)})"
+	rendered := c_expr(em, x, sb)
+	df := c_carrier_drop_fn(em, t)
+
+	# A carrier that NAMES storage is somebody else's and is only read here. One that does
+	# not — a receive, a call's result — is this expression's own, and the force copies its
+	# payload out and leaves the carrier holding a second reference nothing will ever give
+	# back. The drop is after the force, because the force is what raises on a Right.
+	return f"zg_force_{name}({rendered})" if df == "" or c_is_lvalue(x)
+
+	em.tmp_n = em.tmp_n + 1
+	cn := f"zgt_t{em.tmp_n}"
+	em.tmp_n = em.tmp_n + 1
+	vn := f"zgt_t{em.tmp_n}"
+	et := c_type(c_carrier_elem(t))
+	return f"({{ {name} {cn} = {rendered}; {et} {vn} = zg_force_{name}({cn}); {df}(&{cn}); {vn}; }})"
 }
 
 # c_coalesce lowers `a ?? b`: the Left of `a`, or the fallback. The operand is bound to a
@@ -2504,11 +2537,31 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 	em.op_n = em.op_n + 1
 	tmp := "zgt_co" + tag
 	head := f"({{ {cn} {tmp} = {c_expr(em, a, sb)};"
-	return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if jump.len() == 0
+
+	# the carrier is bound here whether or not it is somebody else's, because it is READ
+	# TWICE. Giving it back is the other question, and it is asked the way c_force asks it:
+	# only a carrier that names no storage is this expression's own. The drop is a no-op on
+	# the fallback side by construction — there is no payload to give back on a Right — so it
+	# can sit after the choice rather than inside one arm of it.
+	mut df := c_carrier_drop_fn(em, t)
+	if c_is_lvalue(a) {
+		df = ""
+	}
+	if jump.len() == 0 {
+		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if df == ""
+
+		v0 := "zgt_cov" + tag
+		pick := f"{c_res_is_left(tmp)} ? {c_res_taken(em, tmp, elem)} : ({c_fit_copied(em, elem, b, sb)})"
+		return f"{head} {c_type(elem)} {v0} = {pick}; {df}(&{tmp}); {v0}; }})"
+	}
 
 	val := "zgt_cov" + tag
 	mut out := f"{head} {c_type(elem)} {val};"
-	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, tmp, elem) + "; } else { "
+	mut give := ""
+	if df != "" {
+		give = f" {df}(&{tmp});"
+	}
+	out = out + " if (" + c_res_is_left(tmp) + ") { " + val + " = " + c_res_taken(em, tmp, elem) + ";" + give + " } else { "
 	for s in jump {
 		out = out + c_stmt(em, s, "")
 	}
@@ -6746,6 +6799,14 @@ fn c_iflet(mut &em: Emitter, name: str, value: Expr, then_body: list[Stmt], has_
 	mut out := f"{ind}{{\n{in2}{cn} {tmp} = {val};\n"
 	out = out + in2 + "if (" + c_res_is_left(tmp) + ") {\n"
 	out = out + in2 + "    " + c_type(elem) + " " + cv + " = " + c_res_taken(em, tmp, elem) + ";\n"
+
+	# the payload has been copied out, so the carrier this statement materialised has nothing
+	# left to say. Only one that names no storage is this statement's to give back, and only
+	# the Left side has a payload — which is why the drop sits inside this branch.
+	df := c_carrier_drop_fn(em, t)
+	if df != "" and not c_is_lvalue(value) {
+		out = out + in2 + "    " + df + "(&" + tmp + ");\n"
+	}
 	entry := c_live_save(em)
 	out = out + c_block(em, then_body, in2 + "    ")
 	then_end := c_live_save(em)

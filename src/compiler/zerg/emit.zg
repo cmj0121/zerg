@@ -2598,14 +2598,97 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# drops because it generates no impls. What is missing is named where it is missed.
 	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the impl `#[derive(Eq)]` / `#[derive(Ord)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
 
-	return f"({c_expr(em, a, sb)} {c_binop(oper)} {c_expr(em, b, sb)})"
+	return c_arith(em, oper, ta, c_expr(em, a, sb), c_expr(em, b, sb))
+}
+
+# c_arith lowers a binary operator that has a CHECK, and every other one as the bare C
+# operator it always was.
+#
+# docs/core/types.md: `+`, `-`, `*` raise OverflowError; `/` and `%` raise DivideByZeroError
+# on a zero divisor; a shift by a distance outside the type's width raises. The
+# `%`-suffixed `+%`, `-%`, `*%` are the wrapping forms and keep the bare operator — that
+# pairing is the reason there are two of each, and it meant nothing while both emitted the
+# same C.
+#
+# It is not only a different answer from the specified one. A signed overflow, a division by
+# zero and a shift past the width are all UNDEFINED BEHAVIOUR in C, so the old lowering had
+# no answer at all to stand behind.
+fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
+	return f"({a} {c_binop(oper)} {b})" if not (c_is_int(t) or c_is_byte(t))
+
+	fn_name := c_arith_fn(oper)
+	return f"({a} {c_binop(oper)} {b})" if fn_name == ""
+
+	# `used_rt` is only ever RAISED. It says the program needs the runtime, and clearing it
+	# on the way past a non-arithmetic operator withdrew a claim somebody else had made —
+	# the list element vtables went undeclared and cc reported them.
+	em.used_rt = true
+
+	# a SHIFT carries the OPERAND's width, because that is what bounds the distance: a byte
+	# shifts within 8 even though the value travels as an i64.
+	return c_arith_narrow(em, t, f"{fn_name}({a}, {b}, {c_scalar_bits(t)})") if oper == "<<" or oper == ">>"
+	return c_arith_narrow(em, t, f"{fn_name}({a}, {b})")
+}
+
+# c_arith_fn names the runtime checker for an operator, or "" for one that has none. The
+# wrapping `+%` / `-%` / `*%` are deliberately absent: they ARE the bare operator.
+fn c_arith_fn(oper: str) -> str {
+	return "zrt_add_i64" if oper == "+"
+	return "zrt_sub_i64" if oper == "-"
+	return "zrt_mul_i64" if oper == "*"
+	return "zrt_div_i64" if oper == "/"
+	return "zrt_mod_i64" if oper == "%"
+	return "zrt_shl_i64" if oper == "<<"
+	return "zrt_shr_i64" if oper == ">>"
+
+	return ""
+}
+
+# c_arith_narrow keeps a narrow result narrow. The helpers work in i64 — a byte's operands
+# promote to one in C anyway — so the result comes back through the SAME checked conversion
+# `byte(x)` is, and `byte(255) + byte(255)` is the 510 that raises rather than the 254 it
+# silently wrapped to. Going through c_conv_scalar rather than spelling the call out is what
+# keeps the target's bound stated in one place.
+fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
+	return f"({call})" if not c_is_byte(t)
+
+	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), TInt, t, call)
+}
+
+# c_is_int_lit reports whether an expression is an integer literal written out in the
+# source, which is what makes `-1` a constant rather than a negation.
+fn c_is_int_lit(x: Expr) -> bool {
+	return match x {
+		EInt(_) => true
+		_       => false
+	}
 }
 
 # c_unexpr lowers a prefix operator. Like c_ternary it is a function only so its operand
 # can be checked before it is rendered, a match arm having nowhere to put a statement.
 fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 	chk_unary(em, oper, x)
-	return f"({c_unop(oper)}{c_expr(em, x, sb)})"
+	inner := c_expr(em, x, sb)
+
+	# unary `-` has exactly one overflow — the type's minimum, which has no positive
+	# counterpart — and negating it is undefined in C. `-%` is the wrapping form and stays
+	# the bare operator, the same pairing the binary three have.
+	#
+	# `-1` is the SPELLING of a negative constant, not an operation on 1 — the literal is
+	# already range-checked, and routing it through the runtime would pull the checked
+	# helper into every program that writes a negative number.
+	#
+	# The type is asked for only here: c_infer walks the operand's whole subtree and opens a
+	# scope on the way, and every `not` in the program would otherwise pay for it.
+	if oper == "-" and not c_is_int_lit(x) {
+		t := c_infer(em, x)
+		if c_is_int(t) or c_is_byte(t) {
+			em.used_rt = true
+
+			return c_arith_narrow(em, t, f"zrt_neg_i64({inner})")
+		}
+	}
+	return f"({c_unop(oper)}{inner})"
 }
 
 # c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime
@@ -5746,13 +5829,22 @@ fn c_forrange(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str
 	# the C name the binding actually took: a second loop over the same source name is a
 	# SHADOWING binding, and c_add_var gives it `zg_v__1` rather than `zgt_v`
 	cv := c_var_cname(em, var)
-	mut cmp := " < "
-	if c_range_incl(iter) {
-		cmp = " <= "
-	}
 	in2 := ind + "    "
 	mut out := ind + "{\n" + in2 + "int64_t zgt_hi = " + hi + ";\n"
-	out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + cmp + "zgt_hi; " + cv + "++) {\n"
+
+	# An INCLUSIVE range whose high end is the type's maximum has no value to step to after
+	# it: `v++` there overflows, which is undefined in C and in practice loops forever. The
+	# step is the condition instead — 1 while there is another value, 0 at the last one — so
+	# the loop ends without ever computing a value outside the range.
+	#
+	# Testing `!=` rather than `<` is safe because the loop variable is IMMUTABLE — the
+	# body cannot move it off the sequence, so the only way to reach `hi` is to step to it.
+	if c_range_incl(iter) {
+		head := f"for (int64_t {cv} = {lo}, zgt_more = ({cv} <= zgt_hi); zgt_more; "
+		out = out + in2 + head + "zgt_more = (" + cv + " != zgt_hi), " + cv + " += zgt_more) {\n"
+	} else {
+		out = out + in2 + "for (int64_t " + cv + " = " + lo + "; " + cv + " < zgt_hi; " + cv + "++) {\n"
+	}
 	out = out + c_loop_block(em, body, in2 + "    ")
 	out = out + in2 + "}\n"
 	c_scope_close(em, outer_scope)
@@ -6303,7 +6395,18 @@ fn c_is_err_ctor(mut &em: Emitter, x: Expr) -> bool {
 # channel close carries — a kind rather than a message, which is what lets a receiver tell
 # an ordinary ending from a crash without matching on text.
 fn c_err_kinds() -> list[str] {
-	return ["ValueError", "OverflowError", "IOError", "EncodingError", "IndexError", "KeyError", "DeadlockError", "SendOnClosedError", "StopIteration"]
+	return [
+		"ValueError",
+		"OverflowError",
+		"IOError",
+		"EncodingError",
+		"IndexError",
+		"KeyError",
+		"DeadlockError",
+		"SendOnClosedError",
+		"StopIteration",
+		"DivideByZeroError"
+	]
 }
 
 fn c_err_kind(name: str) -> int {

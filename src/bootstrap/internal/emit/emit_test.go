@@ -10,6 +10,7 @@ import (
 	"github.com/cmj0121/zerg/src/bootstrap/internal/mono"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/parser"
 	"github.com/cmj0121/zerg/src/bootstrap/internal/sema"
+	runtime "github.com/cmj0121/zerg/src/runtime"
 )
 
 // emitC parses, checks, and emits C for src, failing on any diagnostic.
@@ -35,7 +36,7 @@ func TestEmitShape(t *testing.T) {
 	for _, want := range []string{
 		"#include <stdio.h>",
 		"void zg_main(void)",
-		"int64_t zg_x = (1 + 2);",
+		"int64_t zg_x = (zrt_add_i64((int64_t)(1), (int64_t)(2)));",
 		"printf(\"%lld\\n\", (long long)(zg_x));",
 		"int main(void) {",
 		"zg_main();",
@@ -247,7 +248,21 @@ func compileAndRun(t *testing.T, cc, code string) string {
 	if err := os.WriteFile(cpath, []byte(code), 0o644); err != nil {
 		t.Fatalf("write C: %v", err)
 	}
-	if out, err := exec.Command(cc, "-std=c11", "-o", bpath, cpath).CombinedOutput(); err != nil {
+	// Checked arithmetic raises through zrt_abort, so any program that adds two
+	// integers now includes "zergrt.h" — the runtime is materialized and linked here
+	// exactly as the driver does it, rather than each case being written to avoid
+	// arithmetic.
+	args := []string{"-std=c11"}
+	var cfiles []string
+	if strings.Contains(code, "zergrt.h") {
+		var err error
+		if cfiles, err = runtime.Materialize(dir); err != nil {
+			t.Fatalf("materialize runtime: %v", err)
+		}
+		args = append(args, "-I", dir)
+	}
+	args = append(append(args, "-o", bpath, cpath), cfiles...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		t.Fatalf("cc failed: %v\n%s\n--- C ---\n%s", err, out, code)
 	}
 	out, err := exec.Command(bpath).CombinedOutput()

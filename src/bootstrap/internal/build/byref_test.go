@@ -112,7 +112,7 @@ func TestByRefLowering(t *testing.T) {
 	for _, want := range []string{
 		"void zg_bump(int64_t*);",
 		"void zg_bump(int64_t* zg_n)",
-		"(*zg_n) = ((*zg_n) + 1);",
+		"(*zg_n) = (zrt_add_i64((int64_t)((*zg_n)), (int64_t)(1)));",
 		"zg_bump(&zg_x);",
 	} {
 		if !strings.Contains(code, want) {

@@ -83,13 +83,13 @@ contract itself — the message written to stderr, exit status 1, the `Kind: mes
 [Conformance](../conformance.md).
 
 **Aborts.** An abort — a built-in runtime fault or any `Err` you `raise` — marks a **bug**, not an
-expected failure. Of the fault names this chapter uses, nine reify as `is`-testable **kinds** today:
-`ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, plus the three the
-concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration`.
-The rest cannot be **named** at the surface yet: `UnwrapError`, `DivideByZeroError`, `MatchError` and
-`AliasError` are **[not yet]** — writing `err is AliasError` is a clean, named compile error in **both**
-compilers, the name not being one of the nine — and the abort carries no distinct reified kind for them,
-only a generic message.
+expected failure. Of the fault names this chapter uses, ten reify as `is`-testable **kinds** today:
+`ValueError`, `OverflowError`, `IOError`, `EncodingError`, `IndexError`, `KeyError`, `DivideByZeroError`,
+plus the three the concurrency chapter names — `SendOnClosedError`, `DeadlockError` and `StopIteration`.
+The rest cannot be **named** at the surface yet: `UnwrapError`, `MatchError` and `AliasError` are
+**[not yet]** — writing `err is AliasError` is a clean, named compile error in **both** compilers, the
+name not being one of the ten — and the abort carries no distinct reified kind for them, only a generic
+message.
 
 **`StopIteration` is testable but not constructible.** It is the one name a program may put on the right
 of `is` and may **not** call: `raise StopIteration("…")` is a compile error in **both** compilers. A

@@ -88,7 +88,8 @@ taxonomy 錯誤的 `Kind:` 前綴則是。內建錯誤種類與哪些操作會�
 
 - **Undefined behavior（UB）**——規格對結果不作任何要求。conforming 程式必須避免它；conforming implementation 則
   可做任何事，包含崩潰。Zerg 的設計目標是**從 safe code 無法觸及任何 UB**；凡 bootstrap 目前仍容許 UB 之處，該章
-  會標為 **[deviation]**（例如整數溢位與除以零今天降成純 C，而非 trap——見 [Types](core/types.zh-TW.md)）。
+  會標為 **[deviation]**（例如 coroutine 的 stack overflow 今天是一次硬體 fault、而非乾淨的
+  `StackOverflowError`——見 [Errors](code/errors.zh-TW.md)）。
 - **Implementation-defined**——結果是實作所記錄的一組選項之一，但規格不釘死。conforming 程式不應依賴特定選擇。
   目前的 implementation-defined 點（各於其章節詳述）包含：call 引數與運算元的求值順序（[Memory Model](core/memory.zh-TW.md)
   ——規格意圖的左到右順序**[not yet]** 尚未強制）；`select` 在多個就緒 arm 間的勝出 arm（[Coroutines](code/coroutine.zh-TW.md)）；

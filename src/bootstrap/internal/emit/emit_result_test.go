@@ -73,8 +73,9 @@ func TestResultCarrierLowering(t *testing.T) {
 			wantAbsent:  []string{"zg_result_", "zrt_abort("},
 		},
 		{
+			// no carrier and no checked arithmetic: nothing here reaches the runtime.
 			name:        "value-only-byte-identical",
-			src:         "fn main() {\n  print 1 + 2\n}",
+			src:         "fn main() {\n  print 3\n}",
 			wantResult:  false,
 			wantContain: []string{"void zg_main(void)"},
 			wantAbsent:  []string{"zg_result_", "zg_opt_", "zg_either_", "zrt_", "zergrt.h"},

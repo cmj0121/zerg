@@ -67,11 +67,11 @@ UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺�
 寫到 stderr 的訊息、exit 狀態 1、`Kind: message` 那一行——見 [Conformance](../conformance.zh-TW.md)。
 
 **Aborts。** 一次 abort——一個內建 runtime fault 或任何你 `raise` 的 `Err`——代表 **bug**，不是預期內的失敗。本章
-用到的 fault 名稱裡,今天有九個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
-`EncodingError`、`IndexError`、`KeyError`，再加上並行那章指名的三個——`SendOnClosedError`、`DeadlockError` 與
-`StopIteration`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`DivideByZeroError`、
-`MatchError` 與 `AliasError` 是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯
-錯誤（那個名字不在這九個之列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
+用到的 fault 名稱裡,今天有十個具現化成可 `is` 測試的**種類**:`ValueError`、`OverflowError`、`IOError`、
+`EncodingError`、`IndexError`、`KeyError`、`DivideByZeroError`，再加上並行那章指名的三個——`SendOnClosedError`、
+`DeadlockError` 與 `StopIteration`。其餘在語言表面還**叫不出名字**:`UnwrapError`、`MatchError` 與 `AliasError`
+是 **[not yet]**——寫 `err is AliasError` 在**兩個編譯器**裡都是一則乾淨、指名的編譯錯誤（那個名字不在這十個之
+列）——而它們的 abort 也不帶獨立具現化種類、只有一般訊息。
 
 **`StopIteration` 可測試，卻無法建構。** 它是唯一一個程式可以放在 `is` 右邊、卻**不可以**呼叫的名字:
 `raise StopIteration("…")` 在**兩個編譯器**裡都是編譯錯誤。channel 的乾淨關閉以它作為**種類**、而非訊息字串

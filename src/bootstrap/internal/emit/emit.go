@@ -1146,13 +1146,30 @@ func (e *emitter) forInStmt(n *ast.ForStmt) {
 	if rng, ok := n.Iter.(*ast.Range); ok {
 		e.pushScope()
 		cv := e.declareName(n.Var)
-		op := "<"
+		// The bound is evaluated ONCE. Emitting it in the condition ran it per
+		// iteration, so a `for i in 0..xs.len()` walked the list to measure it on every
+		// step and a bound with an effect had that effect N times.
+		hi := e.freshName("hi")
+		e.line("{")
+		e.indent++
+		e.line(fmt.Sprintf("int64_t %s = %s;", hi, e.expr(rng.Hi)))
 		if rng.Inclusive {
-			op = "<="
+			// An INCLUSIVE range whose high end is the type's maximum has no value to
+			// step to after it: `v++` there overflows, which is undefined in C and in
+			// practice loops forever. The step is the condition instead — 1 while there
+			// is another value, 0 at the last one — so the loop ends without ever
+			// computing a value outside the range. Testing `!=` rather than `<` is safe
+			// because the loop variable is IMMUTABLE: the body cannot move it off the
+			// sequence, so the only way to reach `hi` is to step to it.
+			more := e.freshName("more")
+			e.line(fmt.Sprintf("for (int64_t %s = %s, %s = (%s <= %s); %s; %s = (%s != %s), %s += %s) {",
+				cv, e.expr(rng.Lo), more, cv, hi, more, more, cv, hi, cv, more))
+		} else {
+			e.line(fmt.Sprintf("for (int64_t %s = %s; %s < %s; %s++) {", cv, e.expr(rng.Lo), cv, hi, cv))
 		}
-		e.line(fmt.Sprintf("for (int64_t %s = %s; %s %s %s; %s++) {",
-			cv, e.expr(rng.Lo), cv, op, e.expr(rng.Hi), cv))
 		e.body(n.Body, true)
+		e.line("}")
+		e.indent--
 		e.line("}")
 		e.popScope()
 		return
@@ -1466,7 +1483,16 @@ func (e *emitter) expr(x ast.Expr) string {
 		}
 		return e.resolve(n.Name)
 	case *ast.Unary:
-		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), e.expr(n.X))
+		// rendered ONCE: e.expr mints fresh names and sets the needs* flags, so a
+		// rendering that is then discarded burns counter values and — because every
+		// level re-renders its whole subtree — costs 2^depth.
+		x := e.expr(n.X)
+		if n.Op == token.Minus {
+			if s, ok := e.checkedNeg(e.cur.ExprType(e.info, n), n.X, x); ok {
+				return s
+			}
+		}
+		return fmt.Sprintf("(%s%s)", unaryOp(n.Op), x)
 	case *ast.Binary:
 		if md, ok := e.cur.OpCalls[n]; ok {
 			// The right operand is a by-value ARGUMENT the impl method consumes (drops), so an
@@ -1488,7 +1514,11 @@ func (e *emitter) expr(x ast.Expr) string {
 		if s, ok := e.strBinary(n); ok {
 			return s
 		}
-		return fmt.Sprintf("(%s %s %s)", e.expr(n.L), binaryOp(n.Op), e.expr(n.R))
+		l, r := e.expr(n.L), e.expr(n.R)
+		if s, ok := e.checkedArith(e.cur.ExprType(e.info, n), n.Op, l, r); ok {
+			return s
+		}
+		return fmt.Sprintf("(%s %s %s)", l, binaryOp(n.Op), r)
 	case *ast.Call:
 		return e.call(n)
 	case *ast.Field:

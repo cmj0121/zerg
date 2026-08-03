@@ -80,7 +80,7 @@ func foldBinary(op token.Kind, l, r types.ConstVal) (types.ConstVal, bool) {
 		return intConst(l.I - r.I), true
 	case token.StarMod:
 		return intConst(l.I * r.I), true
-	case token.Slash:
+	case token.Slash, token.SlashDiv:
 		if r.I == 0 || (l.I == math.MinInt64 && r.I == -1) {
 			return types.ConstVal{}, false
 		}

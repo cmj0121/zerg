@@ -793,3 +793,12 @@ int zrt_select(zrt_sel_case *cases, size_t n, bool has_default, bool has_exit) {
 		 * `done` or fires as Right per the resolution order above. */
 	}
 }
+
+/* zrt_defer_* is the `void (*)(void *)` shape the cleanup stack takes, and a release does
+ * not have it: some take the value and some its address, and none take a `void *`. The
+ * adapter lives beside the release it adapts rather than with zrt_defer, so a program that
+ * links no channels does not pull chan.c in through the cleanup stack. The ENV is always
+ * the ADDRESS of the binding's storage, so a cleanup reads what the binding holds at
+ * unwind time — a reassigned binding gives back what it ends up with. */
+void zrt_defer_chan_release(void *p) { zrt_chan_release(*(zrt_chan **)p); }
+void zrt_defer_chan_sender_release(void *p) { zrt_chan_sender_release(*(zrt_chan **)p); }

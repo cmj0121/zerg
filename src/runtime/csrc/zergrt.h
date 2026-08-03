@@ -1261,6 +1261,16 @@ zrt_chan *zrt_chan_sender_copy(zrt_chan *ch);
 void zrt_chan_release(zrt_chan *ch);
 void zrt_chan_sender_release(zrt_chan *ch);
 
+/* zrt_defer_* are the `void (*)(void *)` adapters a compiled program registers its
+ * bindings' releases with. The env is always the ADDRESS of the binding's storage, so
+ * the cleanup reads what the binding holds at unwind time. A generated drop — a struct's
+ * or a carrier's — already has a thunk of this shape beside it. */
+void zrt_defer_list_drop(void *p);
+void zrt_defer_map_drop(void *p);
+void zrt_defer_str_release(void *p);
+void zrt_defer_chan_release(void *p);
+void zrt_defer_chan_sender_release(void *p);
+
 /* zrt_chan_send copies *val (elemsz bytes) into ch: it hands off directly to a waiting
  * receiver, else buffers it when there is room, else PARKS the caller on the send queue
  * until a receiver takes it. Sending on a closed channel aborts (a dead-letter is a

@@ -2638,6 +2638,62 @@ fn c_guard_jump_err(kw: str) {
 	raise f"NotImplemented: `{kw}` leaving a `guard` block — the guard's handler would stay installed on a frame that has returned"
 }
 
+# c_str_concat joins two strings and gives back whichever operand it OWNS.
+#
+# zrt_str_concat reads both operands and answers a fresh cell, holding on to neither — so an
+# operand that was itself fresh has nothing naming it once the call returns. That is EVERY
+# interpolation in an f-string: `f"caller {x} {n}"` lowers to a chain of `+` over `display()`
+# results, and each of those cells was leaked the moment it was joined. It is the largest
+# single leak this emitter had, because it is one per interpolated value per f-string.
+#
+# So a fresh operand is held in a temporary and released after the join — the same statement
+# expression shape c_call_releasing uses, for the same reason: the release has to happen
+# after the call and an expression has nowhere else to put it. A LITERAL is fresh by this
+# test and is deliberately skipped: its cell is immortal, so holding it would only make the
+# emitted C longer. An operand that NAMES storage is somebody else's, and is borrowed.
+fn c_str_concat(mut &em: Emitter, a: Expr, b: Expr, sb: Subst) -> str {
+	ra := c_expr(em, a, sb)
+	rb := c_expr(em, b, sb)
+	oa := c_str_owns(a)
+	ob := c_str_owns(b)
+	return f"zrt_str_concat({ra}, {rb})" if not oa and not ob
+
+	mut decls := ""
+	mut frees := ""
+	mut la := ra
+	mut lb := rb
+	if oa {
+		em.tmp_n = em.tmp_n + 1
+		la = f"zgt_t{em.tmp_n}"
+		decls = decls + f"const char *{la} = {ra}; "
+		frees = frees + f"zrt_str_release({la}); "
+	}
+	if ob {
+		em.tmp_n = em.tmp_n + 1
+		lb = f"zgt_t{em.tmp_n}"
+		decls = decls + f"const char *{lb} = {rb}; "
+		frees = frees + f"zrt_str_release({lb}); "
+	}
+	em.tmp_n = em.tmp_n + 1
+	rn := f"zgt_t{em.tmp_n}"
+	return f"({{ {decls}const char *{rn} = zrt_str_concat({la}, {lb}); {frees}{rn}; }})"
+}
+
+# c_str_owns is whether a str expression hands over a cell nobody else is holding. It is
+# c_is_lvalue's question — does this NAME storage — with the literal carved out, because a
+# literal's cell is immortal and neither half of a refcount does anything to it.
+fn c_str_owns(e: Expr) -> bool {
+	return false if c_is_strlit(e)
+	return not c_is_lvalue(e)
+}
+
+fn c_is_strlit(e: Expr) -> bool {
+	return match e {
+		EStr(_) => true
+		_       => false
+	}
+}
+
 # c_binexpr lowers a binary expression, special-casing string concatenation and equality
 # (which are not C operators on const char*).
 fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
@@ -2647,7 +2703,7 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		if oper == "+" {
 			em.used_str = true
 			em.used_rt = true
-			return f"zrt_str_concat({c_expr(em, a, sb)}, {c_expr(em, b, sb)})"
+			return c_str_concat(em, a, b, sb)
 		}
 
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) == 0)" if oper == "=="

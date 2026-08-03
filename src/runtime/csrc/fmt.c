@@ -359,3 +359,11 @@ const char *zrt_fmt_str(const char *s, const char *spec) {
 	zrt_str_release(body);                       /* so the dup_n intermediate is ours to free */
 	return out;
 }
+
+/* zrt_defer_* is the `void (*)(void *)` shape the cleanup stack takes, and a release does
+ * not have it: some take the value and some its address, and none take a `void *`. The
+ * adapter lives beside the release it adapts rather than with zrt_defer, so a program that
+ * links no channels does not pull chan.c in through the cleanup stack. The ENV is always
+ * the ADDRESS of the binding's storage, so a cleanup reads what the binding holds at
+ * unwind time — a reassigned binding gives back what it ends up with. */
+void zrt_defer_str_release(void *p) { zrt_str_release(*(const char **)p); }

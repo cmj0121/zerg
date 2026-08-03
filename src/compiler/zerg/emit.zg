@@ -3335,7 +3335,7 @@ fn c_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb: Sub
 		MList    => c_list_method(em, target, meth, args, tty, sb)
 		MMap     => c_map_method(em, target, meth, tty, sb)
 		MRecv    => f"{c_fn_cname(recv, meth)}({c_recv_args(em, c_sig_key(recv, meth), target, args, sb)})"
-		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args(em, args, sb)})"
+		MFnField => f"({c_fnptr_cast(c_field_ty(em, recv, meth))}{c_expr(em, target, sb)}.zg_{meth})({c_args_typed(em, c_fn_params(c_field_ty(em, recv, meth)), args, sb)})"
 		_        => c_free_method(em, target, meth, args, sb)
 	}
 }
@@ -3522,7 +3522,7 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 	# calling a BINDING that holds a function: cast the stored generic pointer back to the
 	# signature its type carries, then call through it
 	bt := c_lookup_var(em, name)
-	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args(em, args, sb)})" if c_is_fn(bt)
+	return f"({c_fnptr_cast(bt)}{c_ident_val(em, name, sb)})({c_args_typed(em, c_fn_params(bt), args, sb)})" if c_is_fn(bt)
 	if c_is_ctor(name) {
 		return c_variant_ctor(em, name, args, sb) if c_is_variant(em, name)
 
@@ -3961,17 +3961,46 @@ fn c_fn_ty_of(mut &em: Emitter, n: str) -> Ty {
 	return TFn(ptys, c_lookup_sig_ret(em, n))
 }
 
-fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
+# c_args renders the arguments of a call this emitter has no PARAMETER TABLE for: a call
+# through a function value, an intrinsic, an error constructor. c_arg is the wrong tool —
+# it reads the table by name and index, and there is no name to read.
+#
+# `ftys` is what the declared function TYPE says the parameters are, and it is what makes
+# each argument a copy like every other call's. A callee owns what it is given, so handing
+# it the caller's own storage was a second name for one buffer: `this.action(ctx)` in the
+# stdlib's cli passed a struct holding two lists without copying it, and `c.args[0] = …`
+# inside a command's action would have been read back through the caller's own Ctx.
+#
+# A call with no declared type to read — an intrinsic, an err constructor — passes an empty
+# list, and every argument goes through unchanged, which is what those want.
+fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -> str {
 	mut out := ""
 	mut i := 0
 	for i < args.len() {
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_expr(em, args[i], sb)
+		if i < ftys.len() {
+			out = out + c_fit_copied(em, ftys[i], args[i], sb)
+		} else {
+			out = out + c_expr(em, args[i], sb)
+		}
 		i = i + 1
 	}
 	return out
+}
+
+fn c_args(mut &em: Emitter, args: list[Expr], sb: Subst) -> str {
+	mut none: list[Ty] = []
+	return c_args_typed(em, none, args, sb)
+}
+
+# c_fn_params reads a function TYPE's parameter list, or an empty one from anything else.
+fn c_fn_params(t: Ty) -> list[Ty] {
+	return match t {
+		TFn(ps, _) => ps
+		_          => []
+	}
 }
 
 # c_match lowers a match expression to a right-nested C ternary, the last arm as the

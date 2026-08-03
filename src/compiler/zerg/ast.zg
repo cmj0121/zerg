@@ -34,6 +34,12 @@ enum Ty {
 	# signed one and logical on the unsigned — neither of which can be said if the two share a
 	# variant. It used to, and both rules were unsayable.
 	TUint
+
+	# TRune is `rune`, a single Unicode CODE POINT — docs/core/types.md's third named integer
+	# beside `int` and `uint`. It is what a `str` iterates as, which is the whole reason it is
+	# a type and not a spelling of `int`: a str is UTF-8, so the thing a loop hands you is a
+	# code point and not a byte, and a language that called both `int` could not say which.
+	TRune
 	TNamed(str)
 	TList(Ty)
 	TFn(list[Ty], Ty)
@@ -664,6 +670,7 @@ fn ty_name(t: Ty) -> str {
 		TVoid         => "void"
 		TByte         => "byte"
 		TUint         => "uint"
+		TRune         => "rune"
 		TNamed(n)     => n
 		TList(e)      => f"list[{ty_name(e)}]"
 		TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"

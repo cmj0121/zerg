@@ -281,6 +281,7 @@ fn c_type(t: Ty) -> str {
 		TVoid         => "void"
 		TByte         => "uint8_t"
 		TUint         => "uint64_t"
+		TRune         => "int32_t"
 		TNamed(nm)    => "zg_" + nm
 		TList(_)      => "zrt_list"
 		TFn(_, _)     => "zg_fnptr"
@@ -870,6 +871,15 @@ fn c_is_byte(t: Ty) -> bool {
 fn c_is_uint(t: Ty) -> bool {
 	return match t {
 		TUint => true
+		_     => false
+	}
+}
+
+# c_is_rune is `rune` alone — a code point, which is a signed 32-bit value because that is
+# what holds every one of them with room to say "not a character" at -1.
+fn c_is_rune(t: Ty) -> bool {
+	return match t {
+		TRune => true
 		_     => false
 	}
 }
@@ -3105,11 +3115,17 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# the answer match the shape: what leaves here is owned, as from any other call.
 		return c_copied(em, xt0, x, sb) if c_is_str(xt0)
 		if c_is_list(xt0) {
-			# ONLY a `list[byte]`. The bridge reinterprets the buffer as characters, so
-			# `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
+			# THE WAY BACK from the code points, and the mirror of `list[rune](s)`: these two
+			# round-trip, where the byte bridge round-trips only what was valid UTF-8 to
+			# begin with. It takes the list by value like the byte bridge below, and for the
+			# same reason.
+			return f"zrt_str_from_runes({c_copied(em, xt0, x, sb)})" if c_is_rune(c_list_elem(xt0))
+
+			# Otherwise ONLY a `list[byte]`. The bridge reinterprets the buffer as characters,
+			# so `f"{xs}"` on a `list[int]` printed the low byte of each element and on a
 			# `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses
 			# a composite; this hole let the same value out through an f-string hole.
-			raise f"`str(…)` over a list is the BYTE bridge, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
+			raise f"`str(…)` over a list bridges bytes or code points, and this is {ty_name(xt0)} — a composite has no rendering of its own, so render its elements" if not c_is_byte(c_list_elem(xt0))
 
 			# zrt_str_from_bytes CONSUMES the list — it drops it on the success path and on
 			# the raise, so a caller passing a temporary owes no post-call drop that an
@@ -3133,12 +3149,12 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		# "passing 'zrt_list' to parameter of incompatible type 'const char *'".
 		raise f"`list[…](…)` converts a `str` to its bytes, and this is {ty_name(xt0)} — a list is built with `[…]`, not converted into" if not c_is_str(xt0)
 
-		# `list[rune](s)` is the OTHER documented bridge (docs/runtime/builtins.md) and the
-		# runtime has it — `zrt_str_runes` decodes the code points, and the seed emits it.
-		# What this compiler lacks is `rune` as a type at all, which is why the form is
-		# named rather than described as a rule about what a str's bytes are.
-		raise "NotImplemented: `list[rune](s)` decodes a str's code points — this compiler has no `rune` type, only `list[byte](s)`" if c_named_of(c_list_elem(ty)) == "rune"
-		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — the bytes of a `str` are `list[byte]`" if not c_is_byte(c_list_elem(ty))
+		# THE TWO BRIDGES OUT OF A STR, and they answer different questions: `list[byte](s)`
+		# is the raw octets and `list[rune](s)` the code points it is UTF-8 for. A str with
+		# any non-ASCII in it has different lengths under the two, which is the whole reason
+		# the language spells both rather than picking one.
+		return f"zrt_str_runes({inner})" if c_is_rune(c_list_elem(ty))
+		raise f"`list[{ty_name(c_list_elem(ty))}](…)` — a `str` bridges to its bytes as `list[byte]` or its code points as `list[rune]`" if not c_is_byte(c_list_elem(ty))
 
 		return f"zrt_str_bytes({inner})"
 	}
@@ -3203,7 +3219,7 @@ const SC_BOOL := 4
 # convertible scalar. A `str` deliberately has none: it is PARSED, which c_conv handles
 # above, and a value is built from it with `list[byte](s)` rather than cast.
 fn c_scalar_class(t: Ty) -> int {
-	return SC_SIGNED if c_is_int(t)
+	return SC_SIGNED if c_is_int(t) or c_is_rune(t)
 	return SC_UNSIGNED if c_is_byte(t) or c_is_uint(t)
 	return SC_FLOAT if c_is_float(t)
 	return SC_BOOL if c_is_bool_ty(t)
@@ -3213,6 +3229,7 @@ fn c_scalar_class(t: Ty) -> int {
 
 fn c_scalar_bits(t: Ty) -> int {
 	return 8 if c_is_byte(t)
+	return 32 if c_is_rune(t)
 	return 1 if c_is_bool_ty(t)
 
 	return 64
@@ -3348,6 +3365,7 @@ fn c_display(t: Ty, inner: str) -> str {
 		TFloat => f"zrt_display_float((double)({inner}))"
 		TByte  => f"zrt_display_uint((uint64_t)({inner}))"
 		TUint  => f"zrt_display_uint({inner})"
+		TRune  => f"zrt_display_int((int64_t)({inner}))"
 		_      => f"zrt_display_int((int64_t)({inner}))"
 	}
 }
@@ -6490,10 +6508,12 @@ fn c_forin(mut &em: Emitter, var: str, iter: Expr, body: list[Stmt], ind: str) -
 	# cc a `zrt_map` where a `zrt_list` was declared.
 	return c_formap(em, var, iter, ct, body, ind) if c_is_map(ct)
 
-	# `for c in s` walks a str's CODE POINTS, which needs the UTF-8 decode this compiler
-	# does not have. It used to fall through to the list path, handing cc a `const char*`
-	# where a `zrt_list` was declared.
-	raise "NotImplemented: `for c in <str>` binds each code point, which needs the UTF-8 decode this compiler does not have — walk `list[byte](s)` for the bytes" if c_is_str(ct)
+	# `for c in s` walks a str's CODE POINTS (docs/core/types.md: a str "iterates as `rune`
+	# and is not indexable"), so it is the rune bridge and then the ordinary list walk. It
+	# is written as that rewrite rather than as a loop of its own because the two ARE the
+	# same loop — the only question a str raises is what its elements are, and the answer is
+	# a `list[rune]`, which every rule below already knows how to walk.
+	return c_forin(em, var, EConv(TList(TRune), iter, "list"), body, ind) if c_is_str(ct)
 
 	elem := c_list_elem(c_infer(em, iter))
 	et := c_type(elem)

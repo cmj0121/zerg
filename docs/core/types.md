@@ -51,6 +51,14 @@ the grammar:
   negative and **elides it when both are non-negative** (the common case, zero overhead). `a / 0` and
   `a % 0` raise `DivideByZeroError`, and `INT_MIN / -1` overflows (`OverflowError`); truncating and
   flooring variants are stdlib (deferred).
+- **`//` always yields an `int`** — `a // b` is that same Euclidean division, spelled so the reader
+  sees an integer whatever the operands are. On two integers it _is_ `/`: the language has **one**
+  integer division, and a second rule for negative divisors would be a trap rather than a feature. On
+  two `float`s it divides as a double and lands in `int` through the same range check `int(x)` is, so
+  `7.5 // 2.0` is `3` and `-7.5 // 2.0` is `-4` with no `int(...)` round trip. `/` is unchanged and
+  stays type-driven — `int / int` is an `int`, `float / float` is a `float` — because an already-typed
+  `int` value never becomes a `float` implicitly (see "Numeric literals" below). `//` does **not**
+  open a comment — a Zerg comment starts with `#`.
 
 > **[deviation]** The correction that makes `/` and `%` Euclidean is emitted **unconditionally**, not
 > elided when both operands are provably non-negative — the "zero overhead in the common case" above is

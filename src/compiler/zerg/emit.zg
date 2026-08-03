@@ -3266,22 +3266,41 @@ fn c_lossless(sc: int, sb: int, dc: int, db: int) -> bool {
 # same bounds as doubles, where the 64-bit text rounds to 2^63 / 2^64, which is what the
 # helper's open-interval test wants.
 
+# The three of them are a function of the WIDTH, not a list of the widths that happen to
+# exist today. They used to answer for 64 and then fall through to the 8-bit bound for
+# everything else, which was invisible while `byte` was the only narrow type — and then
+# `rune` arrived at 32 bits, took the byte bounds, and `rune('é')` raised OverflowError on a
+# value every rune holds. The fixed-width ladder docs/core/types.md adds as stdlib types is
+# the same question again, so these answer it once.
 fn c_signed_lo(bits: int) -> str {
 	return "INT64_MIN" if bits >= 64
 
-	return "-128"
+	return f"(-{c_pow2(bits - 1)})"
 }
 
 fn c_signed_hi(bits: int) -> str {
 	return "INT64_MAX" if bits >= 64
 
-	return "127"
+	return c_pow2(bits - 1) + " - 1"
 }
 
 fn c_unsigned_hi(bits: int) -> str {
 	return "UINT64_MAX" if bits >= 64
 
-	return "255"
+	return c_pow2(bits) + " - 1"
+}
+
+# c_pow2 renders 2^n as a decimal C constant. It is spelled out rather than shifted because
+# the result is compared against a value of the SOURCE's type, and a shift written into the
+# emitted C would be done in whatever type C picked for it.
+fn c_pow2(n: int) -> str {
+	mut v := 1
+	mut i := 0
+	for i < n {
+		v = v * 2
+		i = i + 1
+	}
+	return strconv.to_string(v, 10)
 }
 
 fn c_float_lo(bits: int) -> str {

@@ -688,6 +688,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		# only the SUBJECT is a name the program bound — the right side of `is` is an error
 		# kind, so counting it as a use would keep an unused import alive.
 		EIs(x, name) => walk_expr(x, ids, calls, ns)
+		EIn(x, set)  => walk_pair(x, set, ids, calls, ns)
 		_            => skip()
 	}
 }

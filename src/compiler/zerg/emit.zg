@@ -2734,6 +2734,7 @@ fn c_expr(mut &em: Emitter, e: Expr, sb: Subst) -> str {
 		ECoalesce(a, b, jump) => c_coalesce(em, a, b, jump, sb)
 		EGuard(body) => c_guard(em, body, sb)
 		EIs(x, name) => c_is_test(em, x, name, sb)
+		EIn(x, set) => c_in_test(em, x, set, sb)
 	}
 }
 
@@ -3219,9 +3220,55 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	# has to be true of an OverflowError — docs/code/errors.md — and `.kind == N` made it false
 	# of every checked conversion in the language. zrt_err_is walks the parents and the cause
 	# chain both, which is what `is` is documented to see.
+	# EXACTLY THIS KIND. `is` asks what a value IS, and the built-in taxonomy is not part of
+	# that question — `e in ValueError` is, and it is a different operator at the same
+	# precedence. Asking one of them both ways is how `is` stopped being able to tell an
+	# IOError from something an IOError was raised from.
+	return f"(({c_expr(em, x, sb)}).kind == {kind})"
+}
+
+# c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
+#
+# What a set is depends on what names it, and docs/surface/grammar.md gives `in` one rule for
+# all of them: a container names its elements, a range names its members, and an ERROR KIND
+# names itself and everything below it in the taxonomy. That last one is what this compiler
+# reads; the other two are named below rather than emitted, because a membership test that
+# silently answered about the wrong set would be worse than one that says it is not built.
+#
+# It is the SUBJECT on the left, like `is` — `e in ValueError`, never `ValueError in e`. The
+# reversed spelling reads as "this error has a ValueError inside it", which is the CAUSE chain,
+# and telling those two apart is the whole reason `in` exists separately from `is`.
+# c_set_says names the set on the right of an `in` for a diagnostic. A RANGE is asked about by
+# SHAPE rather than by type: nothing infers one yet, so asking c_infer answered `?` and the
+# refusal named nothing a reader had written.
+fn c_set_says(mut &em: Emitter, set: Expr) -> str {
+	return "a range" if c_is_range_expr(set)
+
+	return ty_name(c_infer(em, set))
+}
+
+fn c_is_range_expr(e: Expr) -> bool {
+	return match e {
+		ERange(_, _, _) => true
+		_ => false
+	}
+}
+
+fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
+	name := c_ident_name(set)
+	kind := c_err_kind(name)
+
+	# WHAT SET IS THIS. A name the taxonomy knows is one; anything else is asked what its TYPE
+	# is, so the refusal names the set the reader wrote rather than the one branch that
+	# happened to be taken — `1 in xs` said "`xs` names no set", which is exactly backwards.
+	raise f"NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over an error kind, which names itself and everything below it in the taxonomy" if kind == 0
+
+	t := c_infer(em, x)
+	raise f"`in {name}` wants an Err on its left, found a {ty_name(t)}" if not c_is_err_ty(t)
+
 	em.used_rt = true
 
-	return f"zrt_err_is({c_expr(em, x, sb)}, {kind})"
+	return f"zrt_err_in({c_expr(em, x, sb)}, {kind})"
 }
 
 # c_is_aggregate reports the types C cannot compare with `==`: a declared struct, and the
@@ -4878,6 +4925,7 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		ECoalesce(a, b, jump) => c_infer_coalesce(em, a, b)
 		EGuard(body) => TEither(c_guard_elem(c_guard_val_ty(em, body)), TErr)
 		EIs(x, name) => TBool
+		EIn(x, set) => TBool
 	}
 }
 

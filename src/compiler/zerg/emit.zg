@@ -3961,7 +3961,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 			out = out + ", "
 		}
 		ft := c_struct_field_ty_at(em, sname, i)
-		chk_field_init(em, sname, i, ft, args[i])
+		chk_field_init(em, sname, i + 1, ft, args[i])
 		out = out + c_field_init(em, ft, args[i], sb)
 		i = i + 1
 	}
@@ -3983,7 +3983,7 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 	mut sep := lead
 	for i < c_struct_field_n(em, sname) {
 		ft := c_struct_field_ty_at(em, sname, i)
-		raise f"`{sname}` needs a value for field {i} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`" if not c_is_opt(ft)
+		raise f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`" if not c_is_opt(ft)
 		if sep {
 			out = out + ", "
 		}

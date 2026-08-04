@@ -478,6 +478,52 @@ fn main() {
 }
 EOF
 
+reject typedef-value-into-its-underlying '`f` takes int as argument 1, and this gives Celsius' <<'EOF'
+type Celsius = int
+
+fn f(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print(f"{f(Celsius(20))}")
+}
+EOF
+
+reject arithmetic-on-a-typedef 'a `type … = …` keeps its own identity' <<'EOF'
+type Celsius = int
+
+fn main() {
+	c := Celsius(20)
+	print(f"{c + 1}")
+}
+EOF
+
+reject typedef-declared-twice 'is declared twice' seed-gap <<'EOF'
+type Celsius = int
+type Celsius = float
+
+fn main() {
+	print(f"{int(Celsius(1))}")
+}
+EOF
+
+reject typedef-over-an-undeclared-type 'names no type' <<'EOF'
+type Celsius = Nope
+
+fn main() {
+	print(f"{int(Celsius(1))}")
+}
+EOF
+
+reject typedef-conversion-takes-one-value 'converts ONE value' <<'EOF'
+type Celsius = int
+
+fn main() {
+	print(f"{int(Celsius(1, 2))}")
+}
+EOF
+
 reject bind-byte-value-to-int 'cannot bind byte to a int binding' <<'EOF'
 fn main() {
 	n: int = b'J'

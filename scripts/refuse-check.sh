@@ -588,6 +588,29 @@ fn main() {
 }
 EOF
 
+# A CHANNEL AND A CARRIER are not values to compare, and both used to slip past the guard —
+# a `chan` fell to the numeric path and compared two POINTERS. They are here beside the
+# container because one predicate answers all three, and it is the same one `T: Eq` asks.
+
+expect "$ZERG" equality-on-a-channel "is an identity rather than a value" <<'EOF'
+fn main() {
+	c := chan[int](1)
+	d := chan[int](1)
+	print c == d
+}
+EOF
+
+expect "$ZERG" generic-bound-on-a-carrier "does not implement" <<'EOF'
+fn same[T: Eq](a: T, b: T) -> bool {
+	return a == b
+}
+
+fn main() {
+	x: int? = 1
+	print same(x, x)
+}
+EOF
+
 expect "$ZERG" payload-enum-equality "it carries a payload" <<'EOF'
 #[derive(Eq)]
 enum Shape {

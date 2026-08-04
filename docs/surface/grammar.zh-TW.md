@@ -666,7 +666,8 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 4     | 不是名字的 callee —— `f[T](…)`、`fs[0](…)`、`p?.m(…)`                         |
 | 5     | f-string 的 `{x!r}` / `{x=}` / `{x:spec}`                                     |
 | 5     | 具名引數 `f(b: 1)` —— 引數只依位置繫結                                        |
-| 6     | 泛型 `fn` / `struct` / `enum`;會捕獲的 closure;省略型別的 closure 參數        |
+| 6     | 泛型 `struct` / `enum`;泛型 METHOD;指名兩個 spec 的 bound(`T: Eq + Ord`)      |
+| 6     | 會捕獲的 closure;省略型別的 closure 參數                                      |
 | 7     | `with`;struct / list / tuple / or-pattern;`pattern as name`;`if v := <enum>`  |
 | 8     | array type `[T; N]`;`spec` 當型別或做分派;有 body 的 `spec` member            |
 | 8     | associated function `Type.f(…)`;`spec` 或 `impl` 內的 associated type / value |

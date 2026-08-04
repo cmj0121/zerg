@@ -774,7 +774,7 @@ quietly starts failing differently, fails the gate.
 | 8     | an `impl` on a built-in type (`impl Tag for int`)                                       |
 | 8     | every decorator but `#[derive(…)]`                                                      |
 | 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                          |
-| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`; the bridge `list[rune](s)`  |
+| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                              |
 | 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                 |
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing

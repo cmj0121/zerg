@@ -78,9 +78,13 @@ error). The extensible tier is the behavioral default above; the structural tier
 ## The derivable specs
 
 The blessed set — each with a canonical structural reading the compiler owns. Every one is **opt-in**
-via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. Only **`Eq`** and
-**`Ord`**, **`Hash`**, **`Encode`**, and **`Decode`** are all specified here but **[not
-yet: Phase 2]** — naming one in a `#[derive(…)]` is a clean compile error today.
+via `derive`; there is **no auto-derived equality** and no implicit `Object` spec. **`Eq`** is built;
+**`Ord`**, **`Hash`**, **`Encode`** and **`Decode`** are specified here and **[not yet: Phase 2]** —
+naming one in a `#[derive(…)]` is a clean compile error today.
+
+> **[not yet]** `#[derive(Eq)]` on a **payload** `enum` is unbuilt and refused by name. Its rule needs
+> the tag **and** the payload matched on both sides at once; a fieldless `enum` derives, because its
+> variants differ exactly as their discriminants do. Hand-write `impl Eq` with a `match` meanwhile.
 
 | Spec     | Structural rule                               | Requires (each field) | Excludes                 |
 | -------- | --------------------------------------------- | --------------------- | ------------------------ |
@@ -123,9 +127,9 @@ Cross-cutting cases fall out of the existing memory model, no new rule:
 ## Serialization — the worked example
 
 > **[not yet: Phase 2]** `Encode` / `Decode` — and the `Sink` / `Source` specs used below — are specified
-> but not implemented; `#[derive(Encode, Decode)]` is a compile error today, since the blessed derivable
-> set is exactly `Eq` and `Ord`. The example below illustrates the **intended** shape of structural
-> derivation for when they land.
+> but not implemented; `#[derive(Encode, Decode)]` is a compile error today, since the only derive this
+> compiler writes is `Eq`. The example below illustrates the **intended** shape of structural derivation
+> for when they land.
 
 Serialization is the case structural derive exists to serve: a mechanical, field-by-field mapping no
 one should hand-write per type, yet one that needs neither reflection nor a macro.

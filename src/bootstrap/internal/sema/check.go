@@ -954,17 +954,35 @@ func (c *checker) checkSignedLit(n *ast.Unary, want Type) (Type, bool) {
 // compile-time literal bound here. When neg is set the literal carries a leading
 // '-'.
 func (c *checker) checkIntRange(lit *ast.IntLit, want Type, neg bool) {
-	f, ok := want.(*types.Fixed)
-	if !ok || f.Float {
-		return
-	}
 	v := lit.Value
 	if neg {
 		v = -v
 	}
+	// A RUNE is asked its own question. Its values are not a range — the surrogates
+	// U+D800..U+DFFF are UTF-16 machinery and not characters — so the width test below
+	// would admit one, while zrt_conv_rune, the RUN-TIME half of this same rule,
+	// refuses it. A literal the checker admits and the conversion rejects is the drift
+	// these two halves exist to avoid.
+	if s, ok := ScalarOf(want); ok && s.Rune {
+		if !IsRune(v) {
+			c.errorf(lit.Span(), "literal %d is not a Unicode code point, so no rune holds it", v)
+		}
+		return
+	}
+	f, ok := want.(*types.Fixed)
+	if !ok || f.Float {
+		return
+	}
 	if !fitsFixed(v, f) {
 		c.errorf(lit.Span(), "literal %d overflows %s", v, want)
 	}
+}
+
+// IsRune is "a single valid Unicode code point" (docs/core/types.md), the compile-time
+// half of the runtime's zrt_is_rune. The surrogate pair is what makes it a predicate
+// rather than a bound.
+func IsRune(v int64) bool {
+	return v >= 0 && v <= 0x10FFFF && (v < 0xD800 || v > 0xDFFF)
 }
 
 // fitsFixed reports whether the value v is representable in the fixed-width

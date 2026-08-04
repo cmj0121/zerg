@@ -908,6 +908,14 @@ fn chk_int_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 
 	return true if cls != SC_SIGNED and cls != SC_UNSIGNED
 
+	# A RUNE is asked its own question, because its values are not a range: the width test
+	# below would accept a surrogate, and `zrt_conv_rune` — the run-time half of this very
+	# rule — refuses one. A literal the checker admits and the conversion rejects is exactly
+	# the drift the shared bound functions exist to prevent, so the two halves of the rune
+	# answer are stated together (chk_rune_ok here, zrt_is_rune there).
+	return chk_rune_ok(v) if not neg and c_is_rune(c_repr_of(em, want))
+	return v == 0 if c_is_rune(c_repr_of(em, want))
+
 	# THE SIGN QUESTION IS NOT A QUESTION ABOUT WIDTH. An unsigned target has no negative
 	# side at any width, so asking the width first let `uint = -1` through — `uint` is 64
 	# bits, which is exactly where the magnitude check stops having anything to say.
@@ -920,6 +928,15 @@ fn chk_int_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
 	return v <= c_bound_hi(cls, bits) if not neg
 
 	return 0 - v >= c_bound_lo(cls, bits)
+}
+
+# chk_rune_ok is "a single valid Unicode code point" (docs/core/types.md), the compile-time
+# half of the runtime's zrt_is_rune. The surrogate pair is what makes it a predicate rather
+# than a bound: U+D800..U+DFFF are UTF-16 machinery and are not characters.
+fn chk_rune_ok(v: int) -> bool {
+	return false if v < 0 or v > 1114111
+
+	return v < 55296 or v > 57343
 }
 
 # chk_int_to_float names the ONE widening chk_fits accepts on the type alone. It is written
@@ -1296,7 +1313,23 @@ fn chk_scalar_wrong_bool(t: Ty) -> bool {
 }
 
 fn chk_scalar_wrong_int(t: Ty) -> bool {
-	return chk_is_scalar(t) and not c_is_int(t)
+	return chk_is_scalar(t) and not chk_is_bitwise_operand(t)
+}
+
+# chk_is_bitwise_operand is docs/core/types.md's list for `&` `|` `^` `~` `<<` `>>`, and the
+# page names three: `int`, `uint`, `byte`. So it is the integer classes, with `rune` taken
+# back out — a rune is a CHARACTER, and masking a character's bits is not an operation on
+# one. That exclusion is the spec's, which is why it is the only name here.
+#
+# It was `c_is_int` alone, which refused `uint` in the teeth of the page. `byte` slipped
+# through by a second accident — chk_is_num did not list it, so a byte was not a scalar at
+# all and no operand rule had anything to say about it. Two wrongs that looked like one
+# working rule.
+fn chk_is_bitwise_operand(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+	return false if c_is_rune(t)
+
+	return cls == SC_SIGNED or cls == SC_UNSIGNED
 }
 
 fn chk_scalar_wrong_num(t: Ty) -> bool {
@@ -1378,8 +1411,14 @@ fn chk_is_typedef_operand(mut &em: Emitter, t: Ty) -> bool {
 	return c_is_typedef(em, nm)
 }
 
+# chk_is_num is every NUMBER, which is every scalar class but bool — asked of the table
+# rather than listed, because the list left `byte` out. That omission did not show as a
+# wrong answer: it made a byte not a scalar, so every operand rule below skipped it and the
+# rules that happened to want a byte admitted one. A type nothing checks looks exactly like
+# a type everything permits.
 fn chk_is_num(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t) or c_is_uint(t) or c_is_rune(t)
+	cls := c_scalar_class(t)
+	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
 }
 
 # chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not

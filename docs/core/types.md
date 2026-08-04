@@ -30,6 +30,12 @@ the grammar:
 - **`str` iterates as `rune` and is not indexable** — convert it to `list[byte]` (see
   [Collections](../code/collections.md)) when you want raw bytes (or
   binary that may contain a NUL, which a `str` never holds).
+- **A `rune`'s values are not a range**, which makes it the one scalar whose bound is a
+  **predicate**: a code point is `0..=0x10FFFF` **minus** the UTF-16 surrogates `0xD800..=0xDFFF`, which
+  are not characters. So `rune(0xD800)` raises `OverflowError` even though the number fits the type's
+  32 bits comfortably, and `r: rune = 0xD800` is the compile error the same rule makes of a known
+  value. This is also why `rune` is not a width in the fixed-width ladder below: `i32` is a range and a
+  `rune` is not.
 
 ### Integer operations
 

@@ -66,16 +66,26 @@ IndexError            索引落在容器外
 KeyError              沒有任何 map 持有這個 key
 ```
 
-**`is` 會觀察這棵樹。** `e is ValueError` 對一個 `OverflowError` 為真,所以處理者可以**粗略地接**(「值不對,我不在
-乎為什麼」)或**精確地接**,而粗略的那個不是謊話。Zerg 沒有繼承,這也不是繼承:這個關係搭的是 `raise … from cause`
-本來就在建的那條 **`unwrap()` 鏈**,而 `is` 走它。對讀者來說值得直說的是 —— 內建分類的連結是 **is-a**,不是
-**was-caused-by**,所以從一個 `OverflowError` unwrap 出來的 `ValueError`,是同一個錯誤被更概略地描述,而不是它底下
-的第二個錯誤。
+**讀這棵樹的是 `in`,不是 `is`。** 這裡有三個關係,而每一個都有自己的拼法:
+
+| 要問的                       | 怎麼寫       | 對一個 `OverflowError` |
+| ---------------------------- | ------------ | ---------------------- |
+| 它**正好**是不是這個 kind    | `e is X`     | `is OverflowError`     |
+| 它是不是這個 kind 的**成員** | `e in X`     | `in ValueError` 也成立 |
+| 它是**從什麼** raise 出來的  | `e.unwrap()` | `from` 指的那一個      |
+
+所以處理者用 `e in ValueError` **粗略地接**(「值不對,我不在乎為什麼」),或用 `e is OverflowError` **精確地接**,而
+粗略的那個不是謊話。Zerg 沒有繼承,這也不是繼承:這棵樹是內建 kind 之間一個固定的關係,而且**只往上讀**——每一個
+`OverflowError` 都**在** `ValueError` 裡,而手寫 raise 出來的 `ValueError` **不是** `OverflowError`。
+
+把它們分開不是為了整齊。一個同時回答其中兩者的述詞,等於兩者都分不出來:
+`raise IOError("outer") from ValueError("inner")` 必須仍然跟一個本來就是 `ValueError` 的錯誤有所區別,而它之所以區
+別得出來,只因為「問 cause」是另一個問題。
 
 你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
 ——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](../core/specs.zh-TW.md)——的 `struct` / `enum`)
 **尚未支援**。每一種都是完整的 `Err`:帶訊息建構(`raise ValueError("bad input")`)、放進 `Result` 右側、**也**可被
-`raise`、讀 `err.message()`、用 `err is ValueError` 測試,而 `guard` 會把它還原成 `Right(err)`、message／cause／code
+`raise`、讀 `err.message()`、用 `err is ValueError` 與 `err in ValueError` 測試,而 `guard` 會把它還原成 `Right(err)`、message／cause／code
 完整。runtime **自身的內建失敗也 raise 對應的種類**,使 library 與 runtime 的錯誤共用一套詞彙:整數解析失敗是
 `ValueError`(超出範圍→`OverflowError`)、一次 checked 收窄轉換是 `OverflowError`、I/O 失敗是 `IOError`、對無效
 UTF-8 的 `str` 橋接是 `EncodingError`、越界索引是 `IndexError`、缺少的 `map` 鍵是 `KeyError`。`Result` / `Either`

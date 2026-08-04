@@ -1548,6 +1548,77 @@ fn main() {
 }
 EOF
 
+# --- a second `Into` on one type ------------------------------------------------
+#
+# The language means for a type to have several: the built-in matrix has four out of `int`
+# alone. This compiler keys a method by its NAME, so one type carries one `into` — and the
+# collision reported itself as two methods sharing a namespace, which is true and about the
+# wrong thing. Named here until a spec method is keyed by (spec, arguments), which is also
+# what would let a written-out `x.into()` say which one is meant.
+
+expect "$ZERG" a-second-into-on-one-type 'a second `impl Into[' <<'EOF'
+struct Celsius {
+	deg: int
+}
+
+struct Kelvin {
+	deg: int
+}
+
+impl Into[int] for Celsius {
+	fn into() -> int {
+		return this.deg
+	}
+}
+
+impl Into[Kelvin] for Celsius {
+	fn into() -> Kelvin {
+		return Kelvin(this.deg + 273)
+	}
+}
+
+fn main() {
+	c := Celsius(20)
+	n: int = c
+	print n
+}
+EOF
+
+# --- `in` over a set this compiler does not read ---------------------------------
+#
+# `in` tests MEMBERSHIP, and what a set is depends on what names it: a container names its
+# elements, a range its members, an error kind itself and everything below it. A RANGE is the
+# one that is not built — the grammar makes `v in 0..10` sugar for `r.contains(v)` over stdlib
+# machinery that does not exist — so it is named rather than left to be read as something else,
+# and the message says which set was written.
+
+# an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
+# makes `in` refuse a str looked for among ints rather than compare a pointer to a number
+expect "$ZERG" in-over-a-list-of-the-wrong-element 'the value looked for by `in` is int' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print str("a" in xs)
+}
+EOF
+
+# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
+expect "$ZERG" in-over-a-list-of-structs 'compared with `==`' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	ps := [P(1)]
+	print str(P(2) in ps)
+}
+EOF
+
+expect "$ZERG" in-over-a-range '`in` over a range' <<'EOF'
+fn main() {
+	print str(3 in 0..10)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

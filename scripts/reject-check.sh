@@ -248,7 +248,6 @@ fn main() {
 }
 EOF
 
-
 # --- redeclaration ----------------------------------------------------------------
 #
 # A name is bound once per block. Shadowing across blocks is legal and load bearing, so
@@ -386,7 +385,7 @@ fn main() {
 }
 EOF
 
-reject add-an-int-to-a-uint 'mixes int and uint' <<'EOF'
+reject add-an-int-to-a-uint 'has int on one side and uint on the other' <<'EOF'
 fn main() {
 	i: int = 3
 	u: uint = 5
@@ -394,7 +393,7 @@ fn main() {
 }
 EOF
 
-reject compare-an-int-with-a-uint 'mixes int and uint' <<'EOF'
+reject compare-an-int-with-a-uint 'has int on one side and uint on the other' <<'EOF'
 fn main() {
 	i: int = -1
 	u: uint = 1
@@ -402,7 +401,7 @@ fn main() {
 }
 EOF
 
-reject equate-an-int-with-a-uint 'mixes int and uint' <<'EOF'
+reject equate-an-int-with-a-uint 'has int on one side and uint on the other' <<'EOF'
 fn main() {
 	i: int = -1
 	u: uint = 1
@@ -615,30 +614,7 @@ fn main() {
 }
 EOF
 
-reject byte-value-into-an-int-struct-field 'field 1 of `P` is int, and this gives byte' <<'EOF'
-struct P {
-	x: int
-}
-
-fn main() {
-	p := P(b'a')
-	print(f"{p.x}")
-}
-EOF
-
-reject int-value-into-a-float-struct-field 'field 1 of `P` is float, and this gives int' <<'EOF'
-struct P {
-	x: float
-}
-
-fn main() {
-	i := 2
-	p := P(i)
-	print(f"{p.x}")
-}
-EOF
-
-reject oversized-literal-into-a-byte-struct-field 'field 1 of `P` is byte, and this gives int' seed-gap <<'EOF'
+reject oversized-literal-into-a-byte-struct-field '`300` is not a value a byte holds' seed-gap <<'EOF'
 struct P {
 	x: byte
 }
@@ -649,88 +625,17 @@ fn main() {
 }
 EOF
 
-reject bind-byte-value-to-int 'cannot bind byte to a int binding' <<'EOF'
-fn main() {
-	n: int = b'J'
-	print(f"{n}")
-}
-EOF
-
-reject byte-value-argument-into-int-parameter '`f` takes int as argument 1, and this gives byte' <<'EOF'
-fn f(n: int) -> int {
-	return n
-}
-
-fn main() {
-	print(f"{f(b'a')}")
-}
-EOF
-
-reject return-byte-value-as-int 'this function answers int, and this returns byte' <<'EOF'
-fn g() -> int {
-	return b'a'
-}
-
-fn main() {
-	print(f"{g()}")
-}
-EOF
-
-reject byte-value-element-in-a-returned-int-list 'this function answers list[int]' <<'EOF'
-fn g() -> list[int] {
-	return [b'a']
-}
-
-fn main() {
-	print(f"{g()[0]}")
-}
-EOF
-
-reject int-value-element-in-a-float-list-argument '`h` takes list[float] as argument 1' <<'EOF'
-fn h(ys: list[float]) -> int {
-	return ys.len()
-}
-
-fn main() {
-	i := 2
-	print(f"{h([i])}")
-}
-EOF
-
-reject byte-value-element-in-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
-fn main() {
-	xs: list[int] = [b'a', b'b']
-	print(f"{xs[0]}")
-}
-EOF
-
-reject bind-oversized-literal-to-byte 'cannot bind int to a byte binding' seed-gap <<'EOF'
+reject bind-oversized-literal-to-byte '`300` is not a value a byte holds' seed-gap <<'EOF'
 fn main() {
 	b: byte = 300
 	print(f"{b}")
 }
 EOF
 
-reject bind-negative-literal-to-uint 'cannot bind int to a uint binding' seed-gap <<'EOF'
+reject bind-negative-literal-to-uint '`-1` is not a value a uint holds' seed-gap <<'EOF'
 fn main() {
 	u: uint = -1
 	print(f"{u}")
-}
-EOF
-
-reject bind-int-value-to-uint 'cannot bind int to a uint binding' <<'EOF'
-fn main() {
-	i := 2
-	u: uint = i
-	print(f"{u}")
-}
-EOF
-
-reject bind-int-value-to-float 'cannot bind int to a float binding' <<'EOF'
-fn main() {
-	i := 2
-	y: float = i
-	print(f"{y}")
 }
 EOF
 
@@ -738,16 +643,6 @@ EOF
 #
 # A signature is a promise. The conditional `return` is here on its own because it takes a
 # different path through the emitter than the plain one.
-
-reject return-int-value-as-float 'this function answers float' <<'EOF'
-fn half(n: int) -> float {
-	return n
-}
-
-fn main() {
-	print(f"{half(4)}")
-}
-EOF
 
 reject return-str-from-int-fn 'this function answers int, and this returns str' <<'EOF'
 fn f() -> int {
@@ -842,17 +737,6 @@ EOF
 # written, so the parameter index and the argument's place on the line differ by one, and
 # the message says the one the reader can count.
 
-reject int-value-argument-into-float-parameter '`f` takes float as argument 1' <<'EOF'
-fn f(x: float) -> float {
-	return x
-}
-
-fn main() {
-	i := 2
-	print(f"{f(i)}")
-}
-EOF
-
 reject float-argument-into-int-parameter '`f` takes int as argument 1, and this gives float' <<'EOF'
 fn f(a: int) -> int {
 	return a
@@ -914,15 +798,6 @@ EOF
 reject wrapping-operator-on-a-bool 'operator `+%` takes numeric operands' <<'EOF'
 fn main() {
 	print(f"{true +% 1}")
-}
-EOF
-
-reject assign-int-value-to-float 'cannot assign int to' <<'EOF'
-fn main() {
-	i := 2
-	mut y: float = 0.0
-	y = i
-	print(f"{y}")
 }
 EOF
 
@@ -2166,12 +2041,14 @@ fn main() {
 }
 EOF
 
-# --- a byte widens; a list of them does not -------------------------------------
+# --- a byte converts; a LIST of them does not ------------------------------------
 #
-# A `byte` fits an `int` slot, in the direction the language already mixes `int` into
-# `float`. A `list[byte]` does NOT fit a `list[int]`: a buffer's stride is its element's
-# size, so reading one as the other walks 8 bytes per 1-byte slot. `ys: list[int] =
-# list[byte]("Hi")` printed 26952 and a longer string read past the end.
+# `Into` carries a `byte` into an `int` slot one value at a time. A `list[byte]` does not
+# become a `list[int]`, and that is not an omission from the matrix — a conversion BUILDS the
+# target value, and a container handed over whole is not built, it is reinterpreted. The
+# buffer's stride is its element's size, so reading one as the other walks 8 bytes per 1-byte
+# slot: `ys: list[int] = list[byte]("Hi")` printed 26952, and a longer string read past the
+# end. Convert the elements, or take the bytes as bytes.
 
 reject bind-a-byte-list-to-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
 fn main() {
@@ -2180,9 +2057,10 @@ fn main() {
 }
 EOF
 
-# and the narrowing the other way is not a fit either: `take(1000)` on a `byte` parameter
-# compiled to a truncation, and cc printed its own warning about generated C to say so
-reject narrow-an-int-to-a-byte '`take` takes byte as argument 1, and this gives int' seed-gap <<'EOF'
+# `take(1000)` on a `byte` parameter is the CONSTANT layer of Into: `int -> byte` is a real
+# conversion, so it type-checks, and then the compiler evaluates it and reports the value
+# rather than emitting the truncation cc used to complain about.
+reject narrow-an-int-to-a-byte '`1000` is not a value a byte holds' seed-gap <<'EOF'
 fn take(b: byte) -> int {
 	return int(b)
 }
@@ -2254,24 +2132,6 @@ EOF
 # the two that RAN. An int64_t into a double field and an int64_t into a uint8_t are both
 # legal C, so neither cc nor any gate had anything to say — the program simply answered
 # something other than what it was written to answer.
-reject int-value-into-an-optional-float 'the binding `x` is float, and this gives int' <<'EOF'
-fn main() {
-	i := 5
-	x: float? = i
-	print x!
-}
-EOF
-
-reject int-value-into-a-result-byte 'what this function answers is byte, and this gives int' <<'EOF'
-fn f() -> Result[byte] {
-	i := 300
-	return Left(i)
-}
-
-fn main() {
-	print "ok"
-}
-EOF
 
 # --- report ------------------------------------------------------------------------
 

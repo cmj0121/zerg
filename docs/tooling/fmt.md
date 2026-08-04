@@ -644,6 +644,24 @@ the instance in a `mut` binding. A method that only reads charges its callers th
 nothing back — and they cannot see why, because the signature is the whole contract and
 `mut fn` is all of it. The test is a **write** to `this`, not a mention of it.
 
+### `L5xx` — conversion
+
+| Code   | Rule                                          |
+| ------ | --------------------------------------------- |
+| `L501` | a **value** converted — `f: float = i`        |
+| `L502` | a **literal** took a type that is not its own |
+
+Every implicit conversion is a finding, literals included
+([Types](../core/types.md#into--the-conversion-that-happens-on-its-own)) — so `1.5 + 1` is
+reported and `1.5 + 1.0` is not. None of it is an error: the language allows every one, and
+what the rule says is that the page does not show what the program means. `1` and `1.0` should
+be different types to a **reader**, not only to the compiler.
+
+These two are the only rules the linter does not answer from the parsed tree. A conversion is a
+fact about **types**, so the lowering walk records it and `zerg lint` asks the walk — the C it
+produces is thrown away. A program that does not compile reports none of them, which is right:
+there is nothing to advise about the types of a program whose types are wrong.
+
 ## Adding a rule
 
 A new SURFACE FORM needs a case in `test-data/fmt/` in the same change, not only a rule.
@@ -651,6 +669,12 @@ The formatter's failures are stable — a form printed wrongly is printed the sa
 on the second pass — so `make fmt-corpus` is green until some case actually contains the
 shape. Both spacing defects found so far (`chan[T]<-` and friends, then `-1`) hid in forms
 no case had.
+
+A new LINT rule needs a program in `scripts/lint-check.sh` that makes it fire, for the reason
+`make lint` cannot supply one: it runs over the compiler and the stdlib, which are clean, so a
+rule that stopped working looks exactly like a rule with nothing to say. That script also fails
+when a code documented in `lint.zg` has no case, so the pairing is checked rather than
+remembered.
 
 Give it the next number in the group its EFFECT belongs to, add it to the table in
 [`src/compiler/zerg/fmt.zg`](../../src/compiler/zerg/fmt.zg) or

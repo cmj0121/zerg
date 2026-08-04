@@ -1558,6 +1558,15 @@ fn parse_cmp(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIs(left, name)
 	}
+
+	# `in` takes an EXPRESSION on its right where `is` takes a name, and that is the difference
+	# between the two: `is` asks what something IS and names a type, `in` asks what something is
+	# a MEMBER of and names a set. parse_range, not parse_add, so `v in 0..10` reads as
+	# `v in (0..10)` — which is the reading the range level exists to give.
+	if p_at(p, In) {
+		p_advance(p)
+		return EIn(left, parse_range(p))
+	}
 	return left
 }
 

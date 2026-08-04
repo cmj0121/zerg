@@ -64,7 +64,9 @@ collection 也能拿來當 key。
 - **`xs[i]` / `m[k]`**——元素**值**；碰到壞索引或缺 key 就 **abort**（`IndexError` / `KeyError`）。壞索引就是 **bug**，
   跟 overflow 一樣。
 - **`xs.get(i)` / `m.get(k)`**——檢查路徑 → **`T?`** / **`V?`**，給那種你本來就預期可能不存在的情況用。
-- **`x in s` / `k in m`** → `bool`；在 `mut` collection 上 **`xs[i] = v`** 就地設定。
+- **`x in xs` / `x in s` / `k in m`** → `bool`；在 `mut` collection 上 **`xs[i] = v`** 就地設定。list 是**掃描**、
+  map 是**雜湊**——同一個問題、不同的代價——而被找的那個值會像進入任何其他
+  [有型別的位置](../core/types.zh-TW.md#typed-positions)一樣去符合元素型別，所以 `72 in list[byte](…)` 是一個 byte。
 
 ```text
 first := xs[0]                 # 空的話 abort

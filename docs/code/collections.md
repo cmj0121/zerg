@@ -69,7 +69,10 @@ Indexing mirrors the force-vs-check split of `!` / `?`:
 - **`xs[i]` / `m[k]`** — the element **by value**; **aborts** on a bad index or missing key
   (`IndexError` / `KeyError`). A bad index is a **bug**, just like overflow.
 - **`xs.get(i)` / `m.get(k)`** — the checked path → **`T?`** / **`V?`**, for when you expect absence.
-- **`x in s` / `k in m`** → `bool`; on a `mut` collection **`xs[i] = v`** sets in place.
+- **`x in xs` / `x in s` / `k in m`** → `bool`; on a `mut` collection **`xs[i] = v`** sets in place. A list
+  is **scanned** and a map **hashes** — same question, different cost — and the value looked for meets the
+  element type like a value entering any other [typed position](../core/types.md#typed-positions), so
+  `72 in list[byte](…)` is a byte.
 
 ```text
 first := xs[0]                 # aborts if empty

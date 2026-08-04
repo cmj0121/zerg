@@ -120,26 +120,23 @@ Unconstrained, an integer literal defaults to `int` and a fractional/exponent li
 `float`; the non-decimal bases `0x…` / `0o…` / `0b…` are ordinary integer literals.
 
 - A literal that **does not fit** its required type is a **compile error** (`byte = 300`, `uint = -1`, an
-  `int` literal past i64) — never a runtime overflow.
+  `int` literal past i64) — never a runtime overflow. This is the **constant** half of
+  [`Into`](#into--the-conversion-that-happens-on-its-own): the target's type is known, the value is
+  known, so the answer is known now.
 
-  > **[deviation]** The fit-check today covers only the **fixed-width ladder** (`i8` / `u16` / … ). The
-  > **named** primitives `int` / `uint` / `byte` / `rune` are **not** range-checked, so `byte = 300` and
-  > `uint = -1` are currently **accepted** (an `int` literal past i64 is still rejected). The rule stands
-  > as specified; the bootstrap does not yet enforce it for the named primitives.
+- **A typed `float` context accepts an untyped integer literal**: `x: float = 1` is legal, and so is
+  `x: float = i` for an `int` value — the first adopts, the second converts, and `int → float` is one of
+  the built-in `Into`s. They differ in **when** the answer is reached, not in whether it is allowed: the
+  literal is settled at compile time, the value at run time. A fractional or exponent literal (`1.0`,
+  `1e3`) is a `float` from the start and never an `int`.
 
-- **A typed `float` context accepts an untyped integer literal**: `x: float = 1` is legal — the `1` adopts
-  `float` like any untyped literal adopting its context. What never happens implicitly is an
-  already-typed **`int` value** becoming a `float`; that needs `float(i)` (no silent int→float, which
-  could lose precision). A fractional or exponent literal (`1.0`, `1e3`) is a `float` from the start and
-  never an `int`.
+- **A literal adopts where a value converts, and the two are worth telling apart.** `b: byte = 5` writes
+  a byte with no conversion at all; `b: byte = n` for an `int` value writes the conversion, which may
+  raise. So `b: byte = 300` is a **compile error** — the constant is known not to fit — while
+  `b: byte = n` with `n == 300` is an **`OverflowError`** at run time. Same rule, two moments.
 
-- **The same rule holds for every numeric target, and `byte` is the one worth saying out loud.** An
-  untyped literal adopts it — `b: byte = 5` and `xs: list[byte] = [1, 2]` are bytes written as bytes —
-  and a **`byte` value never widens to an `int`**: `b'J'` is a `byte`, so `n: int = b'J'`, `f(b'a')` on
-  an `int` parameter, `return b'a'` from an `-> int`, and `[b'a']` into a `list[int]` are all errors, and
-  `int(b)` is how one becomes a number. That a `byte` fits in an `int` is not a reason to convert it
-  silently; it is the reason the conversion is cheap. **Adoption is about a literal with no type yet,
-  widening is about a value that has one**, and only the first happens on its own.
+  Every one of the conversions is a **lint** finding (`L5xx`), because the reader of `xs: list[byte] =
+[1, 2]` should be able to see bytes on the page rather than infer them from the declaration.
 
 ## User-Defined Types
 
@@ -352,6 +349,11 @@ it; `if false { b: byte = 300 }` is the same error.
 and `1.5 + 1.0` is not. It is advisory, not a rule of the language: the point is that `1` and `1.0`
 should mean different types on the page, so a reader never has to infer a literal's type from its
 surroundings.
+
+> **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
+> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name — while the
+> built-in matrix has four out of `int` alone. Reaching several needs a spec method keyed by the spec
+> and its arguments, which is also what would let a written-out `x.into()` say which one is meant.
 
 This is also how a value, an `Err`, or `nil` flows into an `Either` at a typed position without explicit
 wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value, never a

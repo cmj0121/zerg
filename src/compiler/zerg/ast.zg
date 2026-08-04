@@ -440,6 +440,14 @@ pub struct File {
 	# consts are the module-level `const` bindings, each an SLet. They are not statements
 	# of any function: they become C globals, assigned once before anything runs.
 	consts: list[Stmt]
+
+	# derive_on / derive_spec are the `#[derive(X)]` decorators, as a pair of lists: the type
+	# the decorator sat above and the spec it named. They are kept as PAIRS rather than on the
+	# declaration because a decorator is its own top-level item here — it is read before the
+	# declaration it applies to exists — and because what consumes them is one pass that wants
+	# them all, not a walk over two kinds of declaration.
+	derive_on: list[str]
+	derive_spec: list[str]
 }
 
 # --- rendering ---------------------------------------------------------------------------

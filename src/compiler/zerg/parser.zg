@@ -405,6 +405,13 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
+
+	# pending are the specs named by a `#[derive(…)]` that has been read and whose
+	# declaration has not been reached yet. A decorator is its own top-level item, so the
+	# name it applies to is one iteration away.
+	mut pending: list[str] = []
+	mut derive_on: list[str] = []
+	mut derive_spec: list[str] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Import) {
@@ -420,9 +427,13 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p, false, "", false))
 		} else if p_at(p, Struct) {
-			structs.append(parse_struct(p))
+			sd := parse_struct(p)
+			p_take_derives(sd.name, pending, derive_on, derive_spec)
+			structs.append(sd)
 		} else if p_at(p, Enum) {
-			enums.append(parse_enum(p))
+			ed := parse_enum(p)
+			p_take_derives(ed.name, pending, derive_on, derive_spec)
+			enums.append(ed)
 		} else if p_at(p, Spec) {
 			specs.append(parse_spec(p))
 		} else if p_at(p, Const) {
@@ -437,7 +448,7 @@ pub fn parse_at(src: str, path: str) -> File {
 		} else if p_at(p, Type) {
 			types.append(parse_typedecl(p, false))
 		} else if p_at(p, Hash) {
-			parse_decorator(p)
+			parse_decorator(p, pending)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
 			# GRAMMAR:301-304 — `mut fn` marks a METHOD that mutates its receiver, and "a
 			# free function or closure has no receiver, so it is never `mut fn`". The token
@@ -455,7 +466,21 @@ pub fn parse_at(src: str, path: str) -> File {
 	# to skip any spec it had not itself read, which is why `impl Nope for A` compiled. The
 	# driver already builds the whole-program view (`merge_asts`), and that is where the
 	# question can be answered; see chk_spec_impls.
-	return File(imports, structs, enums, specs, impls, fns, types, consts)
+	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
+	# same contract every other unsupported form has: what is written is either implemented
+	# or named, never quietly dropped.
+	raise f"`#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
+
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+}
+
+# p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
+fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &specs: list[str]) {
+	for nm in pending {
+		on.append(name)
+		specs.append(nm)
+	}
+	pending = []
 }
 
 # imports_of returns just the import paths of a source, for the driver's module loader:
@@ -998,18 +1023,23 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 # fallback, which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate
 # items and anything inside it that happened to parse as a declaration was read as one.
 #
-# `derive` is READ AND DROPPED: this compiler generates no impls, and what a missing one
-# costs is reported where the operator is used (`==` on a struct), not here. Every other
-# decorator is named, because a decorator that changes what a declaration MEANS cannot be
-# ignored without changing the program.
-fn parse_decorator(mut &p: Parser) {
+# `derive`'s ARGUMENTS ARE KEPT, on `pending`, for the declaration one iteration away. They
+# used to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a
+# type meant nothing, so `==` on it either was refused or — on an enum — silently compared
+# tags. Every other decorator is named, because a decorator that changes what a declaration
+# MEANS cannot be ignored without changing the program.
+fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	p_advance(p) # '#['
 	name := cur(p).lexeme
 	raise f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
 
 	# `#[` is ONE token (the lexer joins it), and a decorator's arguments are names and
-	# const-exprs — neither opens a bracket — so the group ends at the first `]`.
+	# const-exprs — neither opens a bracket — so the group ends at the first `]`. An argument
+	# is an identifier, which is what tells a spec name from the punctuation around it.
 	for not p_at(p, RBrack) and not p_at(p, Eof) {
+		if p_at(p, Ident) and cur(p).lexeme != "derive" {
+			pending.append(cur(p).lexeme)
+		}
 		p_advance(p)
 	}
 	expect(p, RBrack)

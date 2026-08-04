@@ -552,6 +552,58 @@ fn main() {
 }
 EOF
 
+reject str-sent-on-an-int-channel 'the value sent on this channel is int' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- "hi"
+	print(f"{(<-ch)!}")
+}
+EOF
+
+reject str-appended-to-an-int-list 'the element `append` adds is int' <<'EOF'
+fn main() {
+	mut xs: list[int] = []
+	xs.append("hi")
+	print(f"{xs.len()}")
+}
+EOF
+
+reject str-written-into-an-int-map 'the value written into this map is int' <<'EOF'
+fn main() {
+	mut m: map[str, int] = {:}
+	m["a"] = "hi"
+	print(f"{m.len()}")
+}
+EOF
+
+reject str-among-a-map-literals-ints 'a value of this map literal is int' <<'EOF'
+fn main() {
+	m := {"a": 1, "b": "hi"}
+	print(f"{m.len()}")
+}
+EOF
+
+reject str-as-an-int-coalesce-fallback 'the `??` fallback is int' <<'EOF'
+fn main() {
+	x: int? = 1
+	print(f"{x ?? "no"}")
+}
+EOF
+
+reject str-into-an-int-variant-payload 'payload 1 of `Line` is int' <<'EOF'
+enum Shape {
+	Line(int)
+}
+
+fn take(s: Shape) -> int {
+	return 0
+}
+
+fn main() {
+	print(f"{take(Shape.Line("hi"))}")
+}
+EOF
+
 reject str-into-an-int-struct-field 'field 1 of `P` is int, and this gives str' <<'EOF'
 struct P {
 	x: int

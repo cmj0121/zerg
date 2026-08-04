@@ -66,9 +66,26 @@ other diverge takes — `raise e if c`, and `raise e from cause if c` — which 
 and is what the formatter's `F401` rewrites the block form into. It is the statement form only: a `raise`
 on the right of a `??` takes no trailing `if`, since the guard would read as the coalesce's.
 
-**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds —
-**`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**
-— and you **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
+**The built-in error taxonomy is a TREE.** This phase ships a **fixed set of six** error kinds, and some
+of them are **kinds of** others:
+
+```text
+ValueError            a value was not one this could accept
+├── OverflowError     …because it was outside the range          int(u), byte(300), a + b
+└── EncodingError     …because it was not valid text             a str bridge over bad UTF-8
+IOError               the world would not cooperate
+IndexError            an index outside a container
+KeyError              a key no map holds
+```
+
+**`is` observes the tree.** `e is ValueError` is true of an `OverflowError`, so a handler may catch coarsely
+("the value was wrong, I do not care why") or precisely, and the coarse one is not a lie. Zerg has no
+inheritance and this is not it: the relation rides the same **`unwrap()` chain** that `raise … from cause`
+builds, and `is` walks it. What that means for a reader is worth saying plainly — a built-in taxonomy link is
+an **is-a**, not a **was-caused-by**, so a `ValueError` reached by unwrapping an `OverflowError` is the same
+error described more generally, not a second one underneath it.
+
+You **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
 **`Error`** spec —
 `message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](../core/specs.md)) is **not yet
 supported**. Each kind is a full `Err`: construct one with a message (`raise ValueError("bad input")`), let it

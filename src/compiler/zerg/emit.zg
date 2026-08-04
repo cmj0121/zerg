@@ -2030,7 +2030,12 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # a struct field's list is usually appended to afterwards, which hides a length that
 # started at the wrong number. A non-empty literal has its own element type and its own
 # elements, so it takes the ordinary path.
-fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
+# `where` names the slot for a diagnostic — "field 2 of `P`", "payload 1 of `Shape.Line`".
+# The CHECK lives here rather than at the callers because there are two of them and they were
+# not both remembering: a struct literal's field was checked and an enum variant's payload was
+# not, though they are the same slot lowered by the same function twelve lines apart.
+fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> str {
+	chk_slot_fits(em, where, fty, arg)
 	if ty_is_chan(fty) {
 		c_chan_check(c_infer(em, arg), fty, "field")
 	}
@@ -2717,6 +2722,7 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 	# can sit after the choice rather than inside one arm of it.
 	df := c_carrier_temp_drop(em, t, a)
 	if jump.len() == 0 {
+		chk_slot_fits(em, "the `??` fallback", elem, b)
 		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if df == ""
 
 		v0 := "zgt_cov" + tag
@@ -3755,6 +3761,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		# the element is copied INTO the list, so the list owns it and the caller's name
 		# for it goes on being its own
 		et := c_type(c_list_elem(tty))
+		chk_slot_fits(em, f"the element `{meth}` adds", c_list_elem(tty), args[0])
 		el := c_fit_copied(em, c_list_elem(tty), args[0], sb)
 		return "({ " + et + " zgt_le = " + el + "; zrt_list_push(&(" + tgt + "), &zgt_le); })"
 	}
@@ -3960,9 +3967,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		if i > 0 {
 			out = out + ", "
 		}
-		ft := c_struct_field_ty_at(em, sname, i)
-		chk_field_init(em, sname, i + 1, ft, args[i])
-		out = out + c_field_init(em, ft, args[i], sb)
+		out = out + c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb)
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
@@ -4267,7 +4272,7 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 			if i > 0 {
 				out = out + ", "
 			}
-			mut val := c_field_init(em, c_variant_field_ty(em, name, i), args[i], sb)
+			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, name, i), args[i], sb)
 			if c_is_boxed(em, name, i) {
 				# box a self-recursive payload into a leaked ref cell
 				val = f"zg_refnew_{en}({val})"
@@ -4375,6 +4380,7 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 			out = out + ", "
 		}
 		if i < ftys.len() {
+			chk_slot_fits(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i])
 			out = out + c_fit_copied(em, ftys[i], args[i], sb)
 		} else {
 			out = out + c_expr(em, args[i], sb)
@@ -5137,6 +5143,7 @@ fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 
 fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], elem: Ty, mut &out: list[str]) {
 	for e in elems {
+		chk_slot_fits(em, "an element of this list literal", elem, e)
 		out.append(c_fit_copied(em, elem, e, c_nosub()))
 	}
 }
@@ -5453,6 +5460,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
+	chk_slot_fits(em, "the value sent on this channel", elem, v)
 	mut sv := c_fit_copied(em, elem, v, c_nosub())
 	if c_is_opt(elem) {
 		sv = c_carrier_fit(em, elem, v, c_nosub())
@@ -5668,6 +5676,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			# rendered the value with c_expr, so a `list` handed to a select send was the
 			# sender's own buffer under the receiver's name, with no reference taken, on
 			# two worker threads at once.
+			chk_slot_fits(em, "the value sent on this channel", elem, a.val)
 			out = f"{out}{in2}{c_type(elem)} {nm} = {c_fit_copied(em, elem, a.val, c_nosub())};\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
@@ -6162,6 +6171,8 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 	mut out := f"({{ zrt_map zgt_mm; zrt_map_init(&zgt_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
 	mut i := 0
 	for i < ks.len() {
+		chk_slot_fits(em, "a key of this map literal", kt, ks[i])
+		chk_slot_fits(em, "a value of this map literal", vt, vs[i])
 		out = out + f" {{ {kc} zgt_mk = {c_expr(em, ks[i], sb)}; {vc} zgt_mv = {c_fit_copied(em, vt, vs[i], sb)}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
 		i = i + 1
 	}
@@ -6220,6 +6231,7 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 	# lowering `h[0]` as a read left that buffer shared with `g`.
 	tgt := c_lvalue(em, target, c_nosub())
 	k := c_expr(em, idx, c_nosub())
+	chk_slot_fits(em, "the value written into this map", c_map_val_ty(tty), rhs)
 	v := c_fit_copied(em, c_map_val_ty(tty), rhs, c_nosub())
 	return f"{ind}{{ {kc} zgt_mk = {k}; {vc} zgt_mv = {v}; zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
 }

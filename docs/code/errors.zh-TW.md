@@ -55,8 +55,24 @@ addr := config?.server?.host ?? "localhost"
 ——它是 `if c { raise e }` 的糖,也正是格式化器的 `F401` 會把 block 形式改寫成的樣子。它只屬於語句形式:
 `??` 右側的 `raise` 不接尾隨 `if`,否則那個 guard 會讀成 coalesce 的。
 
-**內建的錯誤分類。** 這個階段提供**固定的六種**錯誤:**`ValueError`**、**`OverflowError`**、
-**`IOError`**、**`EncodingError`**、**`IndexError`**、**`KeyError`**——你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
+**內建的錯誤分類是一棵樹。** 這個階段提供**固定的六種**錯誤,而其中有些**是另一些的一種**:
+
+```text
+ValueError            這個值不是這裡能接受的
+├── OverflowError     ……因為它超出了範圍          int(u)、byte(300)、a + b
+└── EncodingError     ……因為它不是合法的文字      str 橋接到不合法的 UTF-8
+IOError               外界不配合
+IndexError            索引落在容器外
+KeyError              沒有任何 map 持有這個 key
+```
+
+**`is` 會觀察這棵樹。** `e is ValueError` 對一個 `OverflowError` 為真,所以處理者可以**粗略地接**(「值不對,我不在
+乎為什麼」)或**精確地接**,而粗略的那個不是謊話。Zerg 沒有繼承,這也不是繼承:這個關係搭的是 `raise … from cause`
+本來就在建的那條 **`unwrap()` 鏈**,而 `is` 走它。對讀者來說值得直說的是 —— 內建分類的連結是 **is-a**,不是
+**was-caused-by**,所以從一個 `OverflowError` unwrap 出來的 `ValueError`,是同一個錯誤被更概略地描述,而不是它底下
+的第二個錯誤。
+
+你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
 ——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](../core/specs.zh-TW.md)——的 `struct` / `enum`)
 **尚未支援**。每一種都是完整的 `Err`:帶訊息建構(`raise ValueError("bad input")`)、放進 `Result` 右側、**也**可被
 `raise`、讀 `err.message()`、用 `err is ValueError` 測試,而 `guard` 會把它還原成 `Right(err)`、message／cause／code

@@ -1444,11 +1444,26 @@ fn c_instantiate(mut &em: Emitter, name: str, args: list[Expr]) -> str {
 
 	c_check_solved(em, tpl, sol)
 	c_check_bounds(em, tpl, sol)
+	c_check_inst_budget(em, name)
 	inst := subst_fn(tpl, sol)
 	em.inst_names.append(key)
 	em.inst_fns.append(inst)
 	c_add_sig(em, inst)
 	return key
+}
+
+# ZG_MAX_INSTANTIATIONS bounds monomorphization, and the bound is not a tuning knob: it is
+# the only thing standing between the compiler and a program it cannot finish.
+#
+# POLYMORPHIC RECURSION is the shape that needs it — a template calling itself at a LARGER
+# type, `fn deep[T](x: T, n: int) { deep([x], n - 1) }`, whose instantiations are `int`,
+# `list[int]`, `list[list[int]]`, … forever. Whether it terminates depends on `n`, which is a
+# runtime value, so no compiler can answer it by looking; every monomorphizing language stops
+# at a depth instead. This one used to spin until it was killed, saying nothing.
+const ZG_MAX_INSTANTIATIONS := 512
+
+fn c_check_inst_budget(mut &em: Emitter, name: str) {
+	raise f"`{name}` has been instantiated {strconv.to_string(ZG_MAX_INSTANTIATIONS, 10)} times and is still asking for more — a generic that calls itself at a LARGER type (`f([x])` inside `f[T]`) has no finite set of specializations, and monomorphization cannot end. Give the recursion a concrete type" if em.inst_names.len() >= ZG_MAX_INSTANTIATIONS
 }
 
 # c_check_solved refuses a call that leaves a type parameter unanswered. Guessing one would

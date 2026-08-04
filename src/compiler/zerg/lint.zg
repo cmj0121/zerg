@@ -39,6 +39,19 @@
 #         REBINDING: a send is not a write, and after `ch = <another>` the coroutine holds
 #         the old channel.
 #
+# `L5xx` is CONVERSION: a value that changed type, or a literal that took one, without the
+# source saying so. docs/core/types.md asks for it over `Into` — "every implicit conversion is
+# a lint finding, literals included" — and the reason is a reading one: `1` and `1.0` should
+# mean different types on the page, so `1.5 + 1` is reported and `1.5 + 1.0` is not.
+#
+#   L501  a VALUE converted — `f: float = i` for an `int` binding. It is legal, it is one
+#         step, and it is invisible; `float(i)` says the same thing out loud
+#   L502  a LITERAL took a type that is not its own — `b: byte = 5`, or the `1` in `1.5 + 1`
+#
+# THESE TWO ARE NOT ANSWERED HERE, and they are the only ones that are not. Everything above
+# comes from the parsed File; a conversion is a fact about TYPES, so the LOWERING WALK records
+# it and lint_conversions (emit.zg) hands it back. The driver asks both and prints both.
+#
 # Findings come back as plain strings in source order. The driver prints them and exits
 # nonzero, so `zerg lint` is usable as a gate rather than as decoration.
 

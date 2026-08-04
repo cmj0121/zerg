@@ -271,6 +271,12 @@ struct Emitter {
 	# `diags` because they must not fail a build: the language allows every one of them, and
 	# what a lint says is that the page does not show what the program means.
 	lints: list[Diag]
+
+	# eq_types are the types carrying an `impl Eq for X`, derived or hand-written.
+	# docs/core/derive.md makes `Eq` the SOLE source of `==` / `!=` on a struct or an enum —
+	# there is no auto-derived equality and no implicit `Object` — so this list is both where
+	# the operator's implementation is found and the answer to whether it exists at all.
+	eq_types: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3106,18 +3112,24 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) {oper} 0)" if c_is_cmp_op(oper)
 	}
 
-	# enum equality compares the tag (the subset only == tag-only enums like Kind)
-	# `==` and `<` ask the same question of an aggregate: C has no answer for either, and
-	# the impl that would (`Eq`, `Ord`) is what `#[derive]` stands for and this compiler does
-	# not generate. Guarding only equality left `<` to reach cc.
+	# AN AGGREGATE HAS NO C OPERATOR, and `Eq` is where its `==` comes from. C has no `==` for
+	# a struct, an enum, a list, a map or a tuple, so the operator used to reach cc as
+	# `invalid operands to binary expression` against code nobody wrote.
+	#
+	# An enum used to be answered here by comparing the two TAGS, which is right for a
+	# fieldless enum and WRONG for a payload one: `Circle(1) == Circle(2)` answered true. It
+	# was also equality with no impl behind it, which docs/core/derive.md rules out — there is
+	# no auto-derived equality — and the seed refuses exactly that.
 	eq := c_is_cmp_op(oper)
-	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=")
+	if eq and c_is_aggregate(em, ta) {
+		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
 
-	# EVERY OTHER AGGREGATE. C has no `==` for a struct, a list, a map or a tuple, so the
-	# operator used to reach cc as `invalid operands to binary expression` against generated
-	# code — including on a `#[derive(Eq)]` struct, whose decorator this compiler reads and
-	# drops because it generates no impls. What is missing is named where it is missed.
-	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the impl `#[derive(Eq)]` / `#[derive(Ord)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
+		# ONLY WHEN THE TWO SIDES ARE THE SAME TYPE. `Color == Fruit` and `Color == 1` are
+		# already reported by chk_binary above, and they are the better sentence — what is
+		# wrong there is the pair, not a missing impl. Raising here as well replaced a
+		# diagnostic about the program with one about a spec the program never mentioned.
+		raise c_eq_says(em, oper, ta) if ty_name(ta) == ty_name(c_infer(em, b))
+	}
 
 	ca := c_expr(em, a, sb)
 	cb := c_expr(em, b, sb)
@@ -3129,6 +3141,30 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_eq_call lowers `a == b` / `a != b` on a type with an Eq impl as the CALL THE PROGRAMMER
+# COULD HAVE WRITTEN. `eq` and `ne` are ordinary methods, so rewriting the expression and
+# handing it back to c_expr gets the receiver copy, the name mangling and the argument rules
+# from the one place that already has them — the same move `Into` makes for `.into()`.
+fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
+	return c_expr(em, EMethod(a, "eq", [b]), sb) if oper == "=="
+
+	return c_expr(em, EMethod(a, "ne", [b]), sb)
+}
+
+# c_eq_says names what is missing, and there are three different sentences under one gap.
+#
+# An ORDERING is `Ord`'s and this compiler generates none. Equality on a CONTAINER is
+# docs/code/collections.md's `[not yet]` — a container is not a declaration, so there is
+# nothing to decorate and no impl a program could write for it. Equality on a NAMED type
+# exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
+# it is the only one of the three that tells the reader what to type.
+fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
+	return f"NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
+	return f"NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
+
+	return f"`{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
 }
 
 # c_floordiv lowers `a // b`. Its result is always an `int`, so the operand types decide
@@ -3154,44 +3190,80 @@ fn c_floordiv(mut &em: Emitter, ta: Ty, tb: Ty, a: str, b: str) -> str {
 # It is not only a different answer from the specified one. A signed overflow, a division by
 # zero and a shift past the width are all UNDEFINED BEHAVIOUR in C, so the old lowering had
 # no answer at all to stand behind.
+#
+# Which types are covered is asked of the SCALAR TABLE, never of a list of names. The gate
+# here read `c_is_int(t) or c_is_byte(t)` — and c_is_int is TInt alone — so `uint` and `rune`
+# took the bare operator: `u - 2` wrapped where the page says it raises, and `u / 0` was
+# undefined behaviour that happened to print 0 while `i / 0` on the next line raised. The
+# table already knew both were integers; nobody asked it.
 fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
-	return f"({a} {c_binop(oper)} {b})" if not (c_is_int(t) or c_is_byte(t))
+	cls := c_scalar_class(t)
+	return f"({a} {c_binop(oper)} {b})" if cls != SC_SIGNED and cls != SC_UNSIGNED
 
-	fn_name := c_arith_fn(oper)
+	# Only a FULL-WIDTH unsigned needs the u64 family. A narrower one (a `byte`) fits an
+	# int64 exactly, so it computes there and narrows back, which is what lets one set of
+	# helpers cover every width the language has. `uint` is the one that does not fit: sent
+	# through the signed helpers it would raise on values it holds perfectly well.
+	unsigned := cls == SC_UNSIGNED and c_scalar_bits(t) >= 64
+	fn_name := c_arith_fn(oper, unsigned)
 	return f"({a} {c_binop(oper)} {b})" if fn_name == ""
 
 	# `used_rt` is only ever RAISED. It says the program needs the runtime, and clearing it
 	# on the way past a non-arithmetic operator withdrew a claim somebody else had made —
 	# the list element vtables went undeclared and cc reported them.
 	em.used_rt = true
+	wide := c_arith_wide(unsigned)
 
 	# a SHIFT carries the OPERAND's width, because that is what bounds the distance: a byte
-	# shifts within 8 even though the value travels as an i64.
-	return c_arith_narrow(em, t, f"{fn_name}({a}, {b}, {c_scalar_bits(t)})") if oper == "<<" or oper == ">>"
-	return c_arith_narrow(em, t, f"{fn_name}({a}, {b})")
+	# shifts within 8 even though the value travels as an i64. The unsigned helpers are only
+	# ever chosen at 64 bits, so they take no width argument.
+	return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}), {c_scalar_bits(t)})") if (oper == "<<" or oper == ">>") and not unsigned
+	return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}))")
+}
+
+# c_arith_wide is the C type the helpers compute in.
+fn c_arith_wide(unsigned: bool) -> str {
+	return "uint64_t" if unsigned
+
+	return "int64_t"
 }
 
 # c_arith_fn names the runtime checker for an operator, or "" for one that has none. The
-# wrapping `+%` / `-%` / `*%` are deliberately absent: they ARE the bare operator.
-fn c_arith_fn(oper: str) -> str {
-	return "zrt_add_i64" if oper == "+"
-	return "zrt_sub_i64" if oper == "-"
-	return "zrt_mul_i64" if oper == "*"
-	return "zrt_div_i64" if oper == "/"
-	return "zrt_mod_i64" if oper == "%"
-	return "zrt_shl_i64" if oper == "<<"
-	return "zrt_shr_i64" if oper == ">>"
+# wrapping `+%` / `-%` / `*%` are deliberately absent: they ARE the bare operator, and so are
+# the bitwise three, which cannot fail.
+fn c_arith_fn(oper: str, unsigned: bool) -> str {
+	stem := c_arith_stem(oper)
+
+	return "" if stem == ""
+
+	return f"zrt_{stem}_u64" if unsigned
+
+	return f"zrt_{stem}_i64"
+}
+
+fn c_arith_stem(oper: str) -> str {
+	return "add" if oper == "+"
+	return "sub" if oper == "-"
+	return "mul" if oper == "*"
+	return "div" if oper == "/"
+	return "mod" if oper == "%"
+	return "shl" if oper == "<<"
+	return "shr" if oper == ">>"
 
 	return ""
 }
 
-# c_arith_narrow keeps a narrow result narrow. The helpers work in i64 — a byte's operands
-# promote to one in C anyway — so the result comes back through the SAME checked conversion
-# `byte(x)` is, and `byte(255) + byte(255)` is the 510 that raises rather than the 254 it
-# silently wrapped to. Going through c_conv_scalar rather than spelling the call out is what
-# keeps the target's bound stated in one place.
+# c_arith_narrow keeps a narrow result narrow. The helpers work in 64 bits — a byte's or a
+# rune's operands promote there in C anyway — so the result comes back through the SAME
+# checked conversion `byte(x)` is, and `byte(255) + byte(255)` is the 510 that raises rather
+# than the 254 it silently wrapped to. Going through c_conv_scalar rather than spelling the
+# call out is what keeps the target's bound stated in one place.
+#
+# The question is the WIDTH, not the name: every scalar under 64 bits narrows, so a `rune`
+# arriving here is covered by the same sentence a `byte` is. Asking `c_is_byte` instead let
+# a rune multiply overflow its int32 storage in silence.
 fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
-	return f"({call})" if not c_is_byte(t)
+	return f"({call})" if c_scalar_bits(t) >= 64
 
 	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), TInt, t, call)
 }
@@ -3223,13 +3295,30 @@ fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 	# scope on the way, and every `not` in the program would otherwise pay for it.
 	if oper == "-" and not c_is_int_lit(x) {
 		t := c_infer(em, x)
-		if c_is_int(t) or c_is_byte(t) {
+		if c_neg_checked(t) {
 			em.used_rt = true
 
-			return c_arith_narrow(em, t, f"zrt_neg_i64({inner})")
+			return c_arith_narrow(em, t, c_neg_call(t, inner))
 		}
 	}
 	return f"({c_unop(oper)}{inner})"
+}
+
+# c_neg_checked reports whether unary `-` on this type goes through a checked helper: every
+# integer does, and `float` and `bool` do not.
+fn c_neg_checked(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+	return cls == SC_SIGNED or cls == SC_UNSIGNED
+}
+
+# c_neg_call picks the helper. An UNSIGNED type has no negative values at all, so ZERO is
+# the only one it can negate — a narrow unsigned reaches that answer through the i64 helper
+# and the narrowing check after it, and `uint` cannot, because its top half is not int64's.
+# Left with C's wrap, it gave `-u` the answer `-%u` is the way to ask for.
+fn c_neg_call(t: Ty, inner: str) -> str {
+	return f"zrt_neg_u64((uint64_t)({inner}))" if c_scalar_class(t) == SC_UNSIGNED and c_scalar_bits(t) >= 64
+
+	return f"zrt_neg_i64((int64_t)({inner}))"
 }
 
 # c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime
@@ -3706,6 +3795,20 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str)
 	em.used_rt = true
 	ct := c_type(ty)
 
+	# A RUNE's values are NOT A RANGE. U+D800..U+DFFF are surrogates — they exist only
+	# inside UTF-16 and are not characters — so a rune is the one scalar target a (lo, hi)
+	# pair cannot state, and the one that needs a predicate. zrt_conv_rune is that
+	# predicate's only spelling in the emitted C, and it is the same zrt_is_rune the UTF-8
+	# validator and the encoder ask: "a single valid Unicode code point" is one sentence.
+	#
+	# Without it a rune target took the generic signed-32 check, so `rune(0xD800)` and
+	# `rune(0x110000)` both answered with a value that is not a character — caught much
+	# later, at whatever str it was put into, or never.
+	#
+	# A widening source never reaches here (byte -> rune is lossless above, and correctly
+	# so: no byte is a surrogate), which leaves only the sources that can actually miss.
+	return f"(({ct})zrt_conv_rune({c_conv_to_i64(sc, inner)}))" if c_is_rune(c_repr_of(em, ty))
+
 	# float -> integer truncates toward zero, and the helper's bounds are the TRUNCATED
 	# value's, so 255.7 converts to 255 while 256.0 raises. NaN and the infinities fail the
 	# same comparisons and abort on the same path.
@@ -3722,6 +3825,16 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str)
 	return f"(({ct})zrt_conv_i_from_u((uint64_t)({inner}), {c_signed_hi(db)}))" if sc == SC_UNSIGNED
 
 	return f"(({ct})zrt_conv_i_from_i((int64_t)({inner}), {c_signed_lo(db)}, {c_signed_hi(db)}))"
+}
+
+# c_conv_to_i64 brings a scalar to the int64 a bound test reads it as. A float cannot be
+# cast there directly — an out-of-range double is undefined in C — so it goes through the
+# same truncating range check `int(x)` is, and NaN and the infinities abort on that path
+# rather than on the one after it.
+fn c_conv_to_i64(sc: int, inner: str) -> str {
+	return f"zrt_conv_i_from_f((double)({inner}), {c_float_lo(64)}, {c_float_hi(SC_SIGNED, 64)})" if sc == SC_FLOAT
+
+	return f"(int64_t)({inner})"
 }
 
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes
@@ -7275,8 +7388,22 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 		TErr   => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
 		TFloat => f"{ind}printf(\"%g\\n\", {ex});\n"
 		TBool  => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
-		_      => f"{ind}printf(\"%lld\\n\", (long long)({ex}));\n"
+		_      => f"{ind}{c_print_number(ty, ex)}\n"
 	}
+}
+
+# c_print_number renders a NUMBER, and asks the scalar table which one it is rather than
+# carrying a list of the types that are signed.
+#
+# The arm above was a `_` catch-all that cast everything left to `long long`, so a `uint`
+# printed as a negative number while `str(u)` and `f"{u}"` — which both go through c_display,
+# and c_display HAS a TUint arm — printed the value. Three spellings of "show me this", one
+# disagreeing. A type with no scalar class at all still lands here, and the signed form is
+# what the C cast reports against, rather than this pass guessing.
+fn c_print_number(t: Ty, ex: str) -> str {
+	return f"printf(\"%llu\\n\", (unsigned long long)({ex}));" if c_scalar_class(t) == SC_UNSIGNED
+
+	return f"printf(\"%lld\\n\", (long long)({ex}));"
 }
 
 fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
@@ -7948,6 +8075,8 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
 	mut types: list[TypeDecl] = []
+	mut derive_on: list[str] = []
+	mut derive_spec: list[str] = []
 	for f in fs {
 		for c in f.consts {
 			consts.append(c)
@@ -7973,8 +8102,17 @@ pub fn merge_asts(fs: list[File]) -> File {
 		for td in f.types {
 			types.append(td)
 		}
+
+		# the two derive lists are PARALLEL, so they are appended together — walking one and
+		# indexing the other would be a second place their lengths have to agree
+		mut i := 0
+		for i < f.derive_on.len() {
+			derive_on.append(f.derive_on[i])
+			derive_spec.append(f.derive_spec[i])
+			i = i + 1
+		}
 	}
-	return File(imports, structs, enums, specs, impls, fns, types, consts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
 }
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
@@ -8000,31 +8138,151 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # point of doing it this way — a hand-built one is a second spelling of what the parser
 # produces, and the two drift the day a spec grows a field. Three lines through the real
 # parser cannot disagree with the real parser.
-const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n"
+const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n\nspec Eq {\n\tfn eq(o: This) -> bool\n\tfn ne(o: This) -> bool\n}\n"
 
 # c_with_builtin_specs adds them to a program that does not declare them itself. A program IS
-# allowed to declare its own `Into` — the check is by name, so a spec by that name wins, and
-# nothing is injected on top of it.
+# allowed to declare its own `Into` or `Eq` — the check is by name, so a spec by that name
+# wins and nothing is injected on top of it.
 pub fn c_with_builtin_specs(prog: File) -> File {
-	for s in prog.specs {
-		return prog if s.name == "Into"
-	}
-
 	# the parse is BOUND before it is walked: `for s in parse_at(…).specs` takes the address of
 	# an rvalue, which the seed lowers to C that cc refuses
 	bi := parse_at(ZG_BUILTIN_SPECS, "<builtin>")
 
 	mut out := prog
 	for s in bi.specs {
-		out.specs.append(s)
+		if not c_declares_spec(prog, s.name) {
+			out.specs.append(s)
+		}
 	}
 	return out
+}
+
+# c_declares_spec is whether the program already has a spec by this name. It is asked PER
+# BUILTIN rather than once for the whole set: a program declaring its own `Into` used to
+# suppress `Eq` as well, which is a rule about one name reaching a name it never mentioned.
+fn c_declares_spec(prog: File, name: str) -> bool {
+	for s in prog.specs {
+		return true if s.name == name
+	}
+	return false
+}
+
+# --- structural derive (docs/core/derive.md) ----------------------------------------------
+#
+# `#[derive(X)]` asks the COMPILER to write the canonical `(T, X)` impl by reading T's
+# structure. It is a compiler privilege and not sugar for an empty impl: a spec is
+# field-blind, so no spec could write this body.
+#
+# It is generated AS SOURCE and handed to the real parser, for the same reason the builtin
+# specs are: an impl built out of AST nodes here would be a second spelling of what
+# `impl Eq for P { … }` already parses to, and the two drift the day either side grows a
+# field. What comes back is an ordinary ImplDecl, so it registers in the method namespace,
+# meets the duplicate-impl check, and emits — with nothing downstream knowing it was derived.
+
+# c_with_derived expands every `#[derive(…)]` into the impl it stands for.
+pub fn c_with_derived(prog: File) -> File {
+	mut out := prog
+	mut i := 0
+	for i < prog.derive_on.len() {
+		src := c_derive_src(prog, prog.derive_on[i], prog.derive_spec[i])
+		gen := parse_at(src, "<derive>")
+		for ip in gen.impls {
+			out.impls.append(ip)
+		}
+		for fnd in gen.fns {
+			out.fns.append(fnd)
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# c_derive_src writes the impl for one `(type, spec)` pair. Only the BLESSED set may be
+# named — the derivable set is compiler-owned and a user spec in a `#[derive(…)]` is an
+# error, because generating an impl from structure needs code that reads structure, and
+# nothing user-authored may.
+fn c_derive_src(prog: File, target: str, nm: str) -> str {
+	raise f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt" if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
+	raise f"cannot derive `{nm}`: the derivable specs are compiler-owned, and a `spec` you write is never one of them — write `impl {nm} for {target}` instead" if nm != "Eq"
+
+	return c_derive_eq(prog, target)
+}
+
+# c_derive_eq is Eq's structural rule: a product compares FIELD BY FIELD, a sum by its
+# variant. `ne` is written over `eq` rather than beside it — one negation cannot disagree
+# with itself, and two generated bodies could.
+fn c_derive_eq(prog: File, target: str) -> str {
+	body := c_derive_eq_body(prog, target)
+	return f"impl Eq for {target} {{\n\tfn eq(o: {target}) -> bool {{\n\t\treturn {body}\n\t}}\n\n\tfn ne(o: {target}) -> bool {{\n\t\treturn not this.eq(o)\n\t}}\n}}\n"
+}
+
+fn c_derive_eq_body(prog: File, target: str) -> str {
+	for sd in prog.structs {
+		return c_derive_fields(sd.fields) if sd.name == target
+	}
+	for ed in prog.enums {
+		return c_derive_variants(ed, target) if ed.name == target
+	}
+
+	raise f"cannot derive `Eq` for `{target}` — a derive reads a type's structure, and no struct or enum by that name is declared here"
+}
+
+# c_derive_fields is the conjunction of the fields' own equalities, recursing into each
+# field's `Eq` by simply writing `==` and letting the same rule apply one level down. A
+# FIELDLESS struct is equal to itself: there is nothing that could differ.
+fn c_derive_fields(fields: list[FieldDef]) -> str {
+	return "true" if fields.len() == 0
+
+	mut out := f"this.{fields[0].name} == o.{fields[0].name}"
+	mut i := 1
+	for i < fields.len() {
+		out = out + f" and this.{fields[i].name} == o.{fields[i].name}"
+		i = i + 1
+	}
+	return out
+}
+
+# c_derive_variants is the sum's rule. A FIELDLESS enum has a native integer repr, so its
+# variants differ exactly as their discriminants do and `int(v)` — the reading the language
+# already gives — is the whole comparison.
+#
+# A PAYLOAD enum needs the tag AND the payload, matched on both sides at once, and that is
+# named rather than written: comparing tags alone is the wrong answer this derive exists to
+# replace, and half of it is worse than none.
+fn c_derive_variants(ed: EnumDecl, target: str) -> str {
+	for v in ed.variants {
+		raise f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match`" if v.fields.len() > 0
+	}
+	return "int(this) == int(o)"
 }
 
 # c_build_intos records every `impl Into[T] for S`. It is a pass of its own rather than a scan
 # at each use, for the reason every other table here exists: a typed position asks this
 # question once per value, and answering it by walking the program's impls would make the cost
 # of a conversion the size of the program.
+# c_build_eqs records every type with an `impl Eq for X`. It is the same shape as the Into
+# registry and for the same reason: `==` asks this question at every use, and answering it by
+# walking the program's impls would make the cost of a comparison the size of the program.
+fn c_build_eqs(mut &em: Emitter, f: File) {
+	for ip in f.impls {
+		if ip.on == "Eq" {
+			em.eq_types.append(ip.target)
+		}
+	}
+}
+
+# c_has_eq is whether the type carries an Eq impl. It reads through a `type X = Y` the way
+# every other question about a named type does — the typedef takes on Y's impls.
+fn c_has_eq(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	return false if nm == ""
+
+	for n in em.eq_types {
+		return true if n == nm
+	}
+	return false
+}
+
 fn c_build_intos(mut &em: Emitter, f: File) {
 	for ip in f.impls {
 		if ip.on == "Into" and ip.args.len() == 1 {
@@ -8065,15 +8323,25 @@ pub fn c_into_user(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return false
 }
 
-fn c_emit_unit(prog0: File, own: File, whole: bool, want_lints: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
-	f := c_with_builtin_specs(prog0)
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [])
+fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+	# the derive expansion runs over the program the builtin specs are already in, because
+	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
+	#
+	# BOTH VIEWS ARE EXPANDED. `f` is the whole program, which is what declares the method and
+	# proves the call; `own` is this unit, which is what WRITES THE BODY. Expanding only the
+	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
+	# a function the program never spells. Each expands from its own derive list, so the unit
+	# gets exactly the impls whose decorators are in it.
+	f := c_with_derived(c_with_builtin_specs(prog0))
+	own := c_with_derived(own0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [])
 	c_build_type_names(em, f)
 
 	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
 	# is exactly that collision, and the sentence about method namespaces is true and about
 	# the wrong thing. The pass that knows what the pair was gets to say it first.
 	c_build_intos(em, f)
+	c_build_eqs(em, f)
 	c_build_sigs(em, f)
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)

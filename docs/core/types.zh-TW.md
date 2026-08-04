@@ -25,6 +25,11 @@
 - **`float` 依 IEEE-754：** 溢位 → `±Inf`、無效運算 → `NaN`，兩者都不 raise；`NaN` 與任何值（含自己）都不相等。
 - **`str` 以 `rune` 迭代、不可索引**——想要原始位元組，就轉成 `list[byte]`
   （見 [Collection](../code/collections.zh-TW.md)；可能含 NUL 的二進位也用它，`str` 永遠不含 NUL）。
+- **`rune` 的值域不是一個區間**，這讓它成為唯一以**述詞**（predicate）而非上下界界定的 scalar：一個碼位是
+  `0..=0x10FFFF` **扣掉** UTF-16 的 surrogate 區間 `0xD800..=0xDFFF`，那些不是字元。所以 `rune(0xD800)` 會
+  raise `OverflowError`，即使那個數字綽綽有餘地放得進這個型別的 32 bit；而 `r: rune = 0xD800` 是同一條規則
+  對一個已知值給出的編譯錯誤。這也是 `rune` 不屬於下方 fixed-width ladder 的原因：`i32` 是一個區間，`rune`
+  不是。
 
 ### 整數運算（Integer operations）
 

@@ -124,8 +124,8 @@ static int utf8_ok(const uint8_t *b, size_t n) {
 			}
 			cp = (cp << 6) | (cc & 0x3F);
 		}
-		if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
-			return 0; /* overlong, out of range, or a surrogate */
+		if (cp < min || !zrt_is_rune((int64_t)cp)) {
+			return 0; /* overlong, or not a code point at all */
 		}
 		i += (size_t)len;
 	}
@@ -157,7 +157,9 @@ const char *zrt_str_from_bytes(zrt_list bytes) {
 /* enc_len returns the UTF-8 byte length of a code point (1..4), or 0 when the code point
  * cannot be a str: a surrogate, past U+10FFFF, negative, or U+0000 (its byte is a NUL). */
 static int enc_len(int32_t cp) {
-	if (cp <= 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+	/* the str invariant is zrt_is_rune's PLUS one: U+0000 is a perfectly good code
+	 * point and a perfectly impossible byte in a NUL-terminated str */
+	if (cp == 0 || !zrt_is_rune(cp)) {
 		return 0;
 	}
 	if (cp < 0x80) {

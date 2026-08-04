@@ -88,6 +88,15 @@ func (e *emitter) convExpr(dst, src sema.Scalar, ctype, x string) string {
 	if sema.Lossless(src, dst) {
 		return fmt.Sprintf("(%s)(%s)", ctype, x)
 	}
+	// A RUNE's values are not a range, so no (lo, hi) pair states them: U+D800..U+DFFF
+	// are surrogates, which exist only inside UTF-16 and are not characters. It is the
+	// one target with a predicate of its own, and zrt_conv_rune is that predicate — the
+	// same zrt_is_rune the UTF-8 validator and the encoder ask, so "a single valid
+	// Unicode code point" is one sentence rather than three. A widening source never
+	// reaches here (byte -> rune is Lossless above, and no byte is a surrogate).
+	if dst.Rune {
+		return fmt.Sprintf("(%s)zrt_conv_rune(%s)", ctype, toInt64(src, x))
+	}
 	if src.Class == sema.ScalarFloat {
 		if dst.Class == sema.ScalarSigned {
 			return fmt.Sprintf("(%s)zrt_conv_i_from_f((double)(%s), %s, %s)",
@@ -105,6 +114,17 @@ func (e *emitter) convExpr(dst, src sema.Scalar, ctype, x string) string {
 	default:
 		return fmt.Sprintf("(%s)zrt_conv_u_from_u((uint64_t)(%s), %s)", ctype, x, unsignedHi(dst))
 	}
+}
+
+// toInt64 brings a scalar to the int64 a bound test reads it as. A float cannot be
+// cast there directly — an out-of-range double is undefined in C — so it goes through
+// the same truncating range check `int(x)` is, and NaN and the infinities abort on that
+// path rather than on the one after it.
+func toInt64(src sema.Scalar, x string) string {
+	if src.Class == sema.ScalarFloat {
+		return fmt.Sprintf("zrt_conv_i_from_f((double)(%s), -9223372036854775808.0, 9223372036854775807.0)", x)
+	}
+	return fmt.Sprintf("(int64_t)(%s)", x)
 }
 
 // The target bounds, rendered as C. The 64-bit ends use <stdint.h>'s macros: the
@@ -296,10 +316,14 @@ func (e *emitter) checkedNeg(t sema.Type, operand ast.Expr, x string) (string, b
 	// leaves its range — which the narrowing conversion is already the check for. Only
 	// a full-width unsigned is left alone: it does not fit the int64 the helper takes,
 	// and `uint` is the one width where that matters.
-	signed := s.Class == sema.ScalarSigned
-	narrowUnsigned := s.Class == sema.ScalarUnsigned && s.Bits < 64
-	if !signed && !narrowUnsigned {
+	if s.Class != sema.ScalarSigned && s.Class != sema.ScalarUnsigned {
 		return "", false
+	}
+	// A full-width unsigned takes a helper of its own: its top half is not int64's, so
+	// the one above would raise on values it holds. Left with C's wrap it gave `-u` the
+	// answer `-%u` is the way to ask for.
+	if s.Class == sema.ScalarUnsigned && s.Bits >= 64 {
+		return e.narrowArith(t, fmt.Sprintf("zrt_neg_u64((uint64_t)(%s))", x)), true
 	}
 	return e.narrowArith(t, fmt.Sprintf("zrt_neg_i64((int64_t)(%s))", x)), true
 }

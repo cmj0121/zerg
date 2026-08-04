@@ -677,7 +677,14 @@ fn chk_call_name(key: str) -> str {
 # The pair `_expr` / plain is this file's existing shape for one question asked two ways —
 # c_is_nil_lit and c_is_nil_expr are the same twins.
 fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
-	return chk_lit_fits(em, want, e) if chk_adopts_int_lit(em, want) and c_is_int(got)
+	# THE TWO LAYERS OF `Into`, and they are two sentences in docs/core/types.md rather than
+	# one. `x: byte = 300` is WELL-TYPED — `int → byte` is in the matrix, so it type-checks —
+	# and then fails as a CONSTANT, because the compiler knows the value and knows the
+	# conversion raises. `x: byte = i` for a binding is the same well-typedness with the
+	# failure left to run. So a literal is decided here and anything else is let through to
+	# the conversion the emitter writes.
+	return chk_const_into(em, want, e) if chk_into_builtin(want, got) and chk_int_lit(e)
+	return true if chk_into_builtin(want, got)
 
 	# A LIST LITERAL is built INTO its destination, element by element, with the declared
 	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer and
@@ -707,31 +714,81 @@ fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
 	return true
 }
 
-# chk_adopts_int_lit is every target an untyped integer literal may adopt. docs/core/types.md
-# states the rule over literals generally rather than over one pair — "it adopts the type its
-# context demands" — so this is a list of targets and not a list of pairs, and a new numeric
-# type joins by being named here once.
+# chk_into_builtin is the built-in `Into` matrix — docs/core/types.md's table of seven pairs,
+# written as the shape it has rather than as seven rows.
 #
-# What each of them refuses is the already-typed `int` VALUE, which is the whole point:
-# `x: float = 1` and `u: uint = 0` are the literal adopting its context, and `y: float = i`
-# and `u: uint = i` need `float(i)` and `uint(i)`.
-fn chk_adopts_int_lit(mut &em: Emitter, want: Ty) -> bool {
-	return true if c_is_float(want)
+# THE SHAPE IS A HUB, AND THE HUB IS `int`. Every pair in that table has `int` on one side:
+# out of it go `int → float`, `int → byte`, `int → rune`, `int → uint`, and into it come
+# `byte → int`, `rune → int`, `uint → int`. That is not a coincidence in the table — it IS the
+# one-step rule. `byte → float` is absent precisely because it would be `byte → int → float`,
+# and a spec that forbids chaining cannot then ship one.
+#
+# So there are two clauses and no list, and the fixed-width ladder the spec adds as stdlib
+# types joins by being given a class and a width in c_scalar_class / c_scalar_bits and nothing
+# else — which is what docs/core/types.md means by adding a width "without touching the
+# grammar".
+#
+# `float → int` is the one asymmetry, and it is the spec's: dropping a fraction is a decision,
+# so it is written `int(x)` or taken with `//`.
+fn chk_into_builtin(want: Ty, got: Ty) -> bool {
+	return false if not chk_into_side(want) or not chk_into_side(got)
 
-	# every numeric scalar that is not `int` itself — asked of the scalar TABLE rather than
-	# by name, so the fixed-width ladder docs/core/types.md adds as stdlib types joins by
-	# being given a width in c_scalar_bits and nothing else.
-	#
-	# The scalar TABLE, not a list of names — so a fixed-width type joins by being given a
-	# class and a width in c_scalar_class / c_scalar_bits and nothing else, which is what
-	# docs/core/types.md means by adding a width "without touching the grammar".
-	#
-	# It deliberately includes `byte`, which the ARITHMETIC list (chk_is_num) leaves out:
-	# adoption is not an arithmetic rule, and `xs: list[byte] = [1, 2]` is two literals
-	# becoming bytes, which is the spec's own example.
-	cls := c_scalar_class(want)
+	return true if c_is_int(got) and not c_is_int(want)
 
-	return not c_is_int(want) and (cls == SC_SIGNED or cls == SC_UNSIGNED)
+	return c_is_int(want) and not c_is_float(got)
+}
+
+# chk_const_into is the CONSTANT layer of `Into`, and it has a sentence of its own because it
+# is not a type error. `b: byte = 300` type-checks — `int → byte` is a conversion this language
+# has — and what is wrong with it is the VALUE. Saying "cannot bind int to a byte binding"
+# there was true before Into existed and is misleading now: it points at the annotation, when
+# the fix is the number.
+#
+# It is reported at compile time rather than left to raise because the compiler has the value
+# in its hand. Reachability does not enter into it — `if false { b: byte = 300 }` is the same
+# error — for the reason Go gives about the same construct: a constant that cannot exist is
+# not made acceptable by not being reached.
+fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) -> bool {
+	return true if chk_lit_fits(em, want, e)
+
+	chk_at(em, f"`{chk_lit_says(e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+
+	# ANSWERS YES, having already said no. Diagnostics in this compiler accumulate rather than
+	# stop, so a `false` here would be read by the caller as "the types do not fit" and earn a
+	# second sentence about the same number — `b: byte = 300` reported both the value and
+	# "cannot bind int to a byte binding", and the second one is the reading Into just made
+	# untrue. The build is already failing; what is left to decide is only how many times to
+	# say why.
+	return true
+}
+
+# chk_lit_says renders an integer literal the way it was WRITTEN, minus and all. The lexeme is
+# on the node (every literal keeps its surface text so `fmt` can print it back verbatim), so
+# this reads it rather than re-rendering the parsed value — `0x1_00` in the source should be
+# `0x1_00` in the diagnostic, not `256`.
+fn chk_lit_says(e: Expr, neg: bool) -> str {
+	return match e {
+		EUnary(_, x) => chk_lit_says(x, not neg)
+		EInt(lex)    => chk_lit_sign(lex, neg)
+		_            => "this"
+	}
+}
+
+fn chk_lit_sign(lex: str, neg: bool) -> str {
+	return f"-{lex}" if neg
+
+	return lex
+}
+
+# chk_into_side is whether a type may stand on either side of a built-in Into. A NUMERIC
+# scalar may. `bool` is a scalar and may not — `bool(8)` is a zero test rather than a widening,
+# and nothing about it is the value being carried across. A `type X = Y` may not either, and
+# that is the whole point of a strong typedef: c_scalar_class answers about the NAME, not the
+# representation, so a `Celsius` is not an `int` here however it is stored.
+fn chk_into_side(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+
+	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
 }
 
 # chk_lit_fits is the second half of adoption, and it is not optional: a literal adopts the
@@ -826,21 +883,19 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
 	return true if chk_int_to_float(want, got)
 
-	# A `byte` DOES NOT WIDEN TO AN `int`. `b'J'` is a byte, and a byte goes where a byte
-	# goes — `int(b)` is how it becomes a number, the same explicit re-construction every
-	# other conversion is.
+	# NO SCALAR WIDENS HERE, and that is the division of labour rather than a rule. This
+	# function is asked of TYPES alone, and a conversion between two scalars is `Into`'s —
+	# chk_fits_expr asks chk_into_builtin above, at a POSITION, which is the only place a
+	# conversion is allowed to happen at all. Answering yes here as well would let one in
+	# where there is no position to hang it on: chk_arm_types compares two match arms, and a
+	# `byte` arm beside an `int` arm is two answers to one question, not a value entering a
+	# slot.
 	#
-	# It used to widen, for a reason worth recording: making the byte literal carry its type
-	# turned every other use of one into an error — `f(b'a')` on an `int` parameter,
-	# `[b'a', b'b']` as a `list[int]`, `return b'a'` from an `-> int`. Widening made those
-	# compile again. But it made them compile by giving up the distinction the type exists
-	# for, and the seed rejected all of them all along; those uses are not a reason to widen,
-	# they are four places that owe an `int(…)`.
-	#
-	# What a byte literal still does is ADOPT, like every untyped literal: `xs: list[byte] =
-	# [1, 2]` writes two bytes, and `mut n := b'a'; n = n + 1` stays in byte because the `1`
-	# adopts it (c_infer_binary). Adoption is about a literal with no type yet; widening was
-	# about a value that has one.
+	# The history is worth keeping, because it is the argument for putting it there. A byte
+	# used to widen right here, on the type alone; then it stopped, because widening a VALUE
+	# silently is what `int(b)` exists to make visible; and now it converts again — but by a
+	# named mechanism, at an enumerated position, with a lint finding on it. The three states
+	# differ in WHERE the rule lives, not in whether a byte can reach an int.
 
 	# a list fits a list when its ELEMENTS fit, which is not the same as their being equal:
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits

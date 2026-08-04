@@ -350,9 +350,9 @@ and `1.5 + 1.0` is not. It is advisory, not a rule of the language: the point is
 should mean different types on the page, so a reader never has to infer a literal's type from its
 surroundings.
 
-> **[deviation]** The `L5xx` family is **not implemented**. Every conversion above happens; none of them
-> is reported. Nor is the spec side of `Into` — `impl Into[T] for S` is not accepted, so the built-in
-> matrix is the whole of it, and `x.into()` written by hand is not a call this compiler knows.
+> **[deviation]** The **spec side** of `Into` is not implemented: `impl Into[T] for S` is not accepted,
+> so the built-in matrix is the whole of it, and `x.into()` written by hand is not a call this compiler
+> knows. The `L5xx` family is — see [`zerg lint`](../tooling/fmt.md#l5xx--conversion).
 
 This is also how a value, an `Err`, or `nil` flows into an `Either` at a typed position without explicit
 wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value, never a

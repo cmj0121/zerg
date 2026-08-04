@@ -5041,20 +5041,32 @@ fn c_infer_binary(mut &em: Emitter, oper: str, a: Expr, b: Expr) -> Ty {
 	tb := c_infer(em, b)
 
 	return TStr if oper == "+" and c_is_str(ta)
+
+	# WHAT AN EXPRESSION'S TYPE IS, IS DECIDED BY ITS OPERANDS — docs/core/types.md, and the
+	# rule is the one every typed position uses: the same type stays itself, and two different
+	# ones take the LARGEST both reach in one step.
+	#
+	# What stood here instead was three rules, each written to keep a type's arithmetic inside
+	# its own storage: float wins, byte stays byte, uint stays uint. Together they answered
+	# `byte` for `b + i` where `i` is an `int` — so `b'A' + 200` is 265, which is not a byte,
+	# and the ordinary sum of a byte and an int RAISED. The byte rule was right about the case
+	# it was written for and wrong about the reason: what keeps `n = n + 1` in byte is the `1`
+	# adopting byte, not the addition being special.
+	return ta if ty_eq(ta, tb) and not c_is_unknown(ta)
+
+	# A LITERAL ADOPTS THE OTHER OPERAND, which is what makes the other operand a typed
+	# position. It adopts on chk_lit_fits' terms and not merely by being a literal, so
+	# `n * 300` for a byte `n` is out of range here exactly as `b: byte = 300` is.
+	return ta if chk_lit_fits(em, ta, b)
+	return tb if chk_lit_fits(em, tb, a)
+
+	mx := chk_into_max(ta, tb)
+	return mx if not c_is_unknown(mx)
+
+	# NO LARGEST TYPE — `int` beside `uint`, `byte` beside `float`. chk_binary has already
+	# said so; these three keep the old answer so that the rest of the walk has a type to
+	# carry, and so that a pair with an UNKNOWN in it answers as it always did.
 	return TFloat if c_is_float(ta) or c_is_float(tb)
-
-	# BYTE ARITHMETIC STAYS IN BYTE. `mut n := b'a'; n = n + 1` is the ordinary thing to
-	# write and `n + 1` typed `int`, so nothing could be stored back — a type with no
-	# arithmetic out of it and no way in. Answering `byte` is what lets the value return to
-	# where it came from, and it is why a narrowing `int` -> `byte` is NOT a fit: nothing
-	# needs one, and admitting it turned `take(1000)` on a `byte` parameter into a silent
-	# truncation that cc warned about in generated C.
-	return TByte if c_is_byte(ta) and not c_is_float(tb)
-
-	# UINT ARITHMETIC STAYS IN UINT, for the reason byte arithmetic does: `mut n: uint = 0;
-	# n = n * 10 + d` is the ordinary thing to write, and answering `int` gives the type no
-	# way back into its own storage. The two operands cannot disagree — chk_binary refuses a
-	# mixed pair — so one side being uint settles it.
 	return TUint if c_is_uint(ta) or c_is_uint(tb)
 
 	return TInt

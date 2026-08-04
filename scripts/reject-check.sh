@@ -1545,6 +1545,25 @@ fn main() {
 }
 EOF
 
+# A RUNE's bound is not a width, so a literal meets a predicate rather than a range: `rune`
+# is "a single valid Unicode code point" (docs/core/types.md), and U+D800..U+DFFF are UTF-16
+# surrogates, which are not characters. The second case is the one a width test cannot see —
+# 55296 fits an i32 comfortably, and no rune holds it.
+
+reject rune-literal-past-the-last-code-point 'is not a value a rune holds' <<'EOF'
+fn main() {
+	r: rune = 1114112
+	print(f"{int(r)}")
+}
+EOF
+
+reject rune-literal-inside-the-surrogates 'is not a value a rune holds' <<'EOF'
+fn main() {
+	r: rune = 55296
+	print(f"{int(r)}")
+}
+EOF
+
 # --- a declared interface means its members exist -------------------------------
 #
 # A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —

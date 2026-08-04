@@ -2030,7 +2030,12 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # a struct field's list is usually appended to afterwards, which hides a length that
 # started at the wrong number. A non-empty literal has its own element type and its own
 # elements, so it takes the ordinary path.
-fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
+# `where` names the slot for a diagnostic — "field 2 of `P`", "payload 1 of `Shape.Line`".
+# The CHECK lives here rather than at the callers because there are two of them and they were
+# not both remembering: a struct literal's field was checked and an enum variant's payload was
+# not, though they are the same slot lowered by the same function twelve lines apart.
+fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> str {
+	chk_slot_fits(em, where, fty, arg)
 	if ty_is_chan(fty) {
 		c_chan_check(c_infer(em, arg), fty, "field")
 	}
@@ -3960,9 +3965,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		if i > 0 {
 			out = out + ", "
 		}
-		ft := c_struct_field_ty_at(em, sname, i)
-		chk_field_init(em, sname, i + 1, ft, args[i])
-		out = out + c_field_init(em, ft, args[i], sb)
+		out = out + c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb)
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
@@ -4267,7 +4270,7 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 			if i > 0 {
 				out = out + ", "
 			}
-			mut val := c_field_init(em, c_variant_field_ty(em, name, i), args[i], sb)
+			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, name, i), args[i], sb)
 			if c_is_boxed(em, name, i) {
 				# box a self-recursive payload into a leaked ref cell
 				val = f"zg_refnew_{en}({val})"

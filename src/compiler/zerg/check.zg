@@ -914,8 +914,11 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 	return td.under
 }
 
-# chk_field_init is a value entering a STRUCT LITERAL's field — the sixth slot, and the one
-# that had no rule at all. `P("hi")` on an `x: int` field put a pointer where an int64_t goes
+# chk_slot_fits is a value entering a POSITIONAL slot named by `where` — a struct literal's
+# field, an enum variant's payload. It takes the label rather than deriving it, because the
+# two callers name their slot differently and the rule is the same for both.
+#
+# It began as the struct field alone — the sixth slot, and the one that had no rule at all. `P("hi")` on an `x: int` field put a pointer where an int64_t goes
 # and compiled; `P(b'a')` on an `x: int` and `P(i)` on an `x: float` were the byte and float
 # rules going quiet in the one place nothing asked them.
 #
@@ -923,10 +926,10 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 # not, and a list-literal field is checked element by element. The position is what the
 # sentence names, because a struct literal gives its fields in order and has no other handle
 # on the one that is wrong.
-fn chk_field_init(mut &em: Emitter, sname: str, pos: int, want: Ty, arg: Expr) {
+fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
 	got := c_infer(em, arg)
 	if not chk_fits_expr(em, want, got, arg) {
-		chk_at(em, f"{chk_field_says(sname, pos)} is {ty_name(want)}, and this gives {ty_name(got)}")
+		chk_at(em, f"{where} is {ty_name(want)}, and this gives {ty_name(got)}")
 	}
 }
 

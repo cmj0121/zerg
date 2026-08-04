@@ -407,7 +407,33 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 		em.used_rt = true
 		return f"zg_empty_list(sizeof({c_type(c_list_elem(want))}), &{c_elem_vt(em, c_list_elem(want))})"
 	}
-	return c_copied(em, want, e, sb)
+
+	# A LIST LITERAL IS BUILT AT THE DECLARED ELEMENT TYPE, element by element — the same
+	# thing a `list` binding has always done, now done wherever the literal lands. Without it
+	# the buffer's stride, vtable and every element came from the FIRST element's type, so
+	# `f([i, 2, 3])` on a `list[float]` parameter wrote int64_t bit patterns into a buffer read
+	# back as doubles. Each element is a typed position of its own, which is also where `Into`
+	# fires on it.
+	return c_list_lit_vals(em, c_list_elem(want), c_elem_exprs(em, e, c_list_elem(want))) if c_is_list(want) and c_is_listlit(e)
+	return c_into(em, want, e, sb)
+}
+
+# c_into is where the compiler WRITES the `.into()` docs/core/types.md says it writes. A
+# typed position knows the target type, chk_into_builtin has already said the value's type
+# reaches it in one step, and this is the step: the same checked conversion `byte(x)` emits,
+# because `x: byte = i` and `byte(i)` are the same conversion and must fail the same way.
+#
+# A LITERAL is not converted, it ADOPTS. `x: byte = 5` is a byte written as a byte, and the
+# fit was decided at compile time by chk_lit_fits — emitting a runtime range check for a
+# constant the checker has already proved would be a test of something known. `x: byte = 300`
+# never arrives here at all; it is a compile error two layers up.
+fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+	return c_copied(em, want, e, sb) if chk_int_lit(e)
+
+	got := c_infer(em, e)
+	return c_copied(em, want, e, sb) if not chk_into_builtin(want, got)
+
+	return c_conv_scalar(em, c_scalar_class(want), c_scalar_bits(want), got, want, c_expr(em, e, sb))
 }
 
 # c_either_wrap injects a value into an Either. `Left(v)` and `Right(e)` say which side
@@ -3887,17 +3913,36 @@ fn c_recv_args(mut &em: Emitter, key: str, target: Expr, args: list[Expr], sb: S
 # An empty literal keeps the zeroed form. It carries no element type of its own, so the
 # one that fits comes from the declaration it initializes, and the binding and field paths
 # already supply it.
+# It takes its element type from the FIRST element, which is what a literal with no
+# destination has to do. Where there IS a destination the declared type is better, and
+# c_fit_copied supplies it — see c_list_lit_vals.
 fn c_list_lit(mut &em: Emitter, elems: list[Expr], sb: Subst) -> str {
 	return "(zrt_list){0}" if elems.len() == 0
+
+	mut vals: list[str] = []
+	for e in elems {
+		vals.append(c_expr(em, e, sb))
+	}
+	return c_list_lit_vals(em, c_infer(em, elems[0]), vals)
+}
+
+# c_list_lit_vals assembles the literal from ALREADY-RENDERED elements, so that the two
+# callers can disagree about how an element is rendered while agreeing about everything else.
+# They do disagree, and it matters: one has a declared element type to render AT and the other
+# only has the elements. `xs: list[float] = [i, 2, 3]` for an `int` binding `i` built a buffer
+# of int64_t bit patterns and read them back as doubles — it printed 5.92879e-323 — because
+# the sizeof, the element vtable and every push came from the first element's type instead of
+# the one the declaration named.
+fn c_list_lit_vals(mut &em: Emitter, ety: Ty, vals: list[str]) -> str {
+	return "(zrt_list){0}" if vals.len() == 0
 	em.used_rt = true
 
-	ety := c_infer(em, elems[0])
 	et := c_type(ety)
 	mut out := "({ zrt_list zgt_ll = zg_empty_list(sizeof(" + et + "), &" + c_elem_vt(em, ety) + ");"
 	mut i := 0
-	for i < elems.len() {
+	for i < vals.len() {
 		tmp := "zgt_ll" + strconv.to_string(i, 10)
-		out = out + " " + et + " " + tmp + " = " + c_expr(em, elems[i], sb) + ";"
+		out = out + " " + et + " " + tmp + " = " + vals[i] + ";"
 		out = out + " zrt_list_push(&zgt_ll, &" + tmp + ");"
 		i = i + 1
 	}
@@ -5145,8 +5190,10 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 	}
 
 	# Every other assignment copies through the one rule — including a list, which used to
-	# have its own branch here saying the same thing a second way.
-	return f"{ind}{lv} = {c_copied(em, lt, rhs, c_nosub())};\n"
+	# have its own branch here saying the same thing a second way. c_into, not c_copied: the
+	# storage has a DECLARED type, which makes this a typed position, and `b = i` for a `byte`
+	# binding truncated rather than raising.
+	return f"{ind}{lv} = {c_into(em, lt, rhs, c_nosub())};\n"
 }
 
 # c_elem_exprs renders a list literal's elements AT the element type the declaration gives,
@@ -6818,7 +6865,13 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
 	# right-hand side names the OUTER n, and resolving it after would make the new
 	# variable initialize itself.
-	val := c_copied(em, eff, ival, c_nosub())
+	#
+	# c_into, not c_copied: a DECLARED binding is a typed position, and this is the one place
+	# a declaration meets a value that does not lower through c_fit_copied — `c: byte = big`
+	# stored 44 instead of raising, which is the truncation `byte(300)` was written to refuse.
+	# `eff` is the INFERRED type when nothing was declared, and c_into is a no-op there
+	# because the value already has it.
+	val := c_into(em, eff, ival, c_nosub())
 	c_add_var(em, name, eff, is_mut)
 	cn := c_var_cname(em, name)
 

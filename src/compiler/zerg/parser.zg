@@ -283,10 +283,8 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	return TBool if name == "bool"
 	return TByte if name == "byte"
 
-	if name == "uint" {
-		# the subset models uint as int64_t (it never parses top-bit values)
-		return TInt
-	}
+	return TUint if name == "uint"
+	return TRune if name == "rune"
 	return TNil if name == "nil"
 
 	# A generic ARGUMENT list on a user type — `Ref[int]`, `Atomic[int]`, `B[T]`. The four
@@ -364,12 +362,18 @@ fn skip_ty_args(mut &p: Parser) {
 }
 
 # is_conv reports whether a callee name is a scalar type conversion.
+#
+# `rune` was the one primitive missing here while conv_ty below already had an arm for it —
+# so `rune(65)` was "undefined function `rune`", the only one of the seven that could not be
+# written. The answer had been written and the question was never asked.
 fn is_conv(name: str) -> bool {
-	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool" or name == "uint"
+	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool" or name == "uint" or name == "rune"
 }
 
 fn conv_ty(name: str) -> Ty {
-	return TInt if name == "int" or name == "uint"
+	return TInt if name == "int"
+	return TUint if name == "uint"
+	return TRune if name == "rune"
 	return TByte if name == "byte"
 	return TFloat if name == "float"
 	return TBool if name == "bool"
@@ -398,8 +402,16 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut enums: list[EnumDecl] = []
 	mut specs: list[SpecDecl] = []
 	mut impls: list[ImplDecl] = []
+	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
+
+	# pending are the specs named by a `#[derive(…)]` that has been read and whose
+	# declaration has not been reached yet. A decorator is its own top-level item, so the
+	# name it applies to is one iteration away.
+	mut pending: list[str] = []
+	mut derive_on: list[str] = []
+	mut derive_spec: list[str] = []
 	skip_semis(p)
 	for not p_at(p, Eof) {
 		if p_at(p, Import) {
@@ -409,13 +421,19 @@ pub fn parse_at(src: str, path: str) -> File {
 			p_advance(p)
 			if p_at(p, Fn) {
 				fns.append(parse_fn(p, true, "", false))
+			} else if p_at(p, Type) {
+				types.append(parse_typedecl(p, true))
 			}
 		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p, false, "", false))
 		} else if p_at(p, Struct) {
-			structs.append(parse_struct(p))
+			sd := parse_struct(p)
+			p_take_derives(sd.name, pending, derive_on, derive_spec)
+			structs.append(sd)
 		} else if p_at(p, Enum) {
-			enums.append(parse_enum(p))
+			ed := parse_enum(p)
+			p_take_derives(ed.name, pending, derive_on, derive_spec)
+			enums.append(ed)
 		} else if p_at(p, Spec) {
 			specs.append(parse_spec(p))
 		} else if p_at(p, Const) {
@@ -427,8 +445,10 @@ pub fn parse_at(src: str, path: str) -> File {
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
 			parse_impl(p, fns, impls)
+		} else if p_at(p, Type) {
+			types.append(parse_typedecl(p, false))
 		} else if p_at(p, Hash) {
-			parse_decorator(p)
+			parse_decorator(p, pending)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
 			# GRAMMAR:301-304 — `mut fn` marks a METHOD that mutates its receiver, and "a
 			# free function or closure has no receiver, so it is never `mut fn`". The token
@@ -446,7 +466,21 @@ pub fn parse_at(src: str, path: str) -> File {
 	# to skip any spec it had not itself read, which is why `impl Nope for A` compiled. The
 	# driver already builds the whole-program view (`merge_asts`), and that is where the
 	# question can be answered; see chk_spec_impls.
-	return File(imports, structs, enums, specs, impls, fns, consts)
+	# A decorator with no declaration under it is a decorator on nothing. Naming it is the
+	# same contract every other unsupported form has: what is written is either implemented
+	# or named, never quietly dropped.
+	raise f"`#[derive({pending[0]})]` has no declaration under it — a decorator applies to the struct or enum that follows it" if pending.len() > 0
+
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
+}
+
+# p_take_derives moves the pending derive names onto the declaration just parsed, as pairs.
+fn p_take_derives(name: str, mut &pending: list[str], mut &on: list[str], mut &specs: list[str]) {
+	for nm in pending {
+		on.append(name)
+		specs.append(nm)
+	}
+	pending = []
 }
 
 # imports_of returns just the import paths of a source, for the driver's module loader:
@@ -743,6 +777,29 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	return SpecDecl(name, params, supers, reqs, p.path, kw.line, kw.col)
 }
 
+# parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
+# and keeps an identity of its own (docs/core/types.md). It used to reach the top level's
+# final `else`, which advances ONE token, so the four tokens of a declaration were swallowed
+# one at a time and the type simply did not exist: `Celsius(20)` answered "no type named
+# `Celsius` to construct" and a `-> Celsius` answered the same, with nothing pointing at the
+# declaration that had been dropped.
+#
+# A GENERIC one is `[not yet]` and says so. It is read far enough to know that is what it is,
+# because refusing at the `[` with the parser's ordinary message would name a bracket rather
+# than the feature.
+fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
+	kw := cur(p)
+	p_advance(p)
+
+	name := cur(p).lexeme
+	expect(p, Ident)
+	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, LBrack)
+
+	expect(p, Assign)
+
+	return TypeDecl(name, parse_type(p), is_pub, p.path, kw.line, kw.col)
+}
+
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so
 # nothing downstream needs a second notion of a callable. GRAMMAR allows MANY of them and
 # runs each once in declaration order, so the name carries the position it was read at —
@@ -966,18 +1023,23 @@ fn parse_struct(mut &p: Parser) -> StructDecl {
 # fallback, which advances a single token — so `#[derive(Eq)]` was skipped as SIX separate
 # items and anything inside it that happened to parse as a declaration was read as one.
 #
-# `derive` is READ AND DROPPED: this compiler generates no impls, and what a missing one
-# costs is reported where the operator is used (`==` on a struct), not here. Every other
-# decorator is named, because a decorator that changes what a declaration MEANS cannot be
-# ignored without changing the program.
-fn parse_decorator(mut &p: Parser) {
+# `derive`'s ARGUMENTS ARE KEPT, on `pending`, for the declaration one iteration away. They
+# used to be scanned past and dropped, which cost more than it looks: `#[derive(Eq)]` on a
+# type meant nothing, so `==` on it either was refused or — on an enum — silently compared
+# tags. Every other decorator is named, because a decorator that changes what a declaration
+# MEANS cannot be ignored without changing the program.
+fn parse_decorator(mut &p: Parser, mut &pending: list[str]) {
 	p_advance(p) # '#['
 	name := cur(p).lexeme
 	raise f"NotImplemented: the decorator `#[{name}]` — this compiler reads `#[derive(…)]` and no other" if name != "derive"
 
 	# `#[` is ONE token (the lexer joins it), and a decorator's arguments are names and
-	# const-exprs — neither opens a bracket — so the group ends at the first `]`.
+	# const-exprs — neither opens a bracket — so the group ends at the first `]`. An argument
+	# is an identifier, which is what tells a spec name from the punctuation around it.
 	for not p_at(p, RBrack) and not p_at(p, Eof) {
+		if p_at(p, Ident) and cur(p).lexeme != "derive" {
+			pending.append(cur(p).lexeme)
+		}
 		p_advance(p)
 	}
 	expect(p, RBrack)
@@ -1530,6 +1592,15 @@ fn parse_cmp(mut &p: Parser) -> Expr {
 		p_advance(p)
 		return EIs(left, name)
 	}
+
+	# `in` takes an EXPRESSION on its right where `is` takes a name, and that is the difference
+	# between the two: `is` asks what something IS and names a type, `in` asks what something is
+	# a MEMBER of and names a set. parse_range, not parse_add, so `v in 0..10` reads as
+	# `v in (0..10)` — which is the reading the range level exists to give.
+	if p_at(p, In) {
+		p_advance(p)
+		return EIn(left, parse_range(p))
+	}
 	return left
 }
 
@@ -1748,14 +1819,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
 	}
 	if k == Rune {
-		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
-		# before, so `'A'` was the number zero — a wrong answer with no diagnostic. A
-		# multi-byte code point needs a UTF-8 decode this compiler does not have, and is
-		# named rather than truncated to its first byte.
 		p_advance(p)
-		bs := list[byte](t.value)
-		raise f"NotImplemented: a non-ASCII rune literal `{t.lexeme}` — its code point needs a UTF-8 decode this compiler does not have" if bs.len() != 1
-		return EInt(strconv.to_string(int(bs[0]), 10))
+
+		# The literal's VALUE is its code point, decoded from the UTF-8 the source is written
+		# in — `'A'` is 65 and `'é'` is 233. It used to reach the fallback below, so `'A'` was
+		# the number zero with no diagnostic; then it was one byte only, so a multi-byte code
+		# point was named rather than read. rune_value is the lexer's, beside int_value, for
+		# the reason that one gives: what a lexeme is worth is a fact about the LEXEME.
+		return EConv(TRune, EInt(strconv.to_string(rune_value(t.value), 10)), "rune")
 	}
 	if k == Float {
 		p_advance(p)

@@ -56,6 +56,38 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 	em.diags.append(Diag(path, line, col, msg))
 }
 
+# chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
+# every implicit conversion is a lint finding, and every one of them is also a legal program,
+# so it goes on a list that does not fail the build.
+#
+# It is here rather than in lint.zg because lint.zg answers from the parsed File alone — "no
+# types, no flow analysis, which keeps it honest about what it can claim" — and a conversion
+# is a fact about types. So the lowering walk, which has them, records it, and the linter asks
+# the walk. That is the first rule in either file that needed more than the tree.
+#
+# NOTHING IS RECORDED UNLESS SOMEBODY ASKED. A build passes a `lints` list it then throws
+# away, so without this flag every build paid the whole cost below for output nobody reads —
+# and the cost is quadratic.
+#
+# DEDUPED BY PLACE, which is that cost: c_infer has no memo, so an expression is walked more
+# than once and a rule that appends per walk reported the same conversion three times on a
+# nested arithmetic chain. The scan is linear in what has been recorded, so the pass is
+# quadratic in the number of findings — measured at 25% of `zerg lint`'s runtime on a program
+# with eight thousand of them. Tolerated because it only runs when the answer is wanted, and
+# because a program with thousands of findings has a bigger problem than the wait.
+#
+# It keys on the STATEMENT's place, which is all `chk_at`'s marker carries — so two conversions
+# on one line collapse into one finding. That under-reports rather than over-reports, and the
+# second appears once the first is fixed.
+fn chk_note(mut &em: Emitter, msg: str) {
+	return if not em.want_lints
+
+	for d in em.lints {
+		return if d.line == em.at_line and d.col == em.at_col and d.path == em.at_path and d.msg == msg
+	}
+	em.lints.append(Diag(em.at_path, em.at_line, em.at_col, msg))
+}
+
 # --- mutability ------------------------------------------------------------------
 #
 # A binding is immutable unless it says `mut`. That is not a diagnostic nicety — the
@@ -148,7 +180,7 @@ fn chk_param_default(mut &em: Emitter, key: str, pm: Param, path: str, line: int
 	}
 
 	got := c_infer(em, pm.def)
-	return if chk_fits(em, pm.ty, got)
+	return if chk_fits_expr(em, pm.ty, got, pm.def)
 	chk_at_place(em, path, line, col, f"the default for `{pm.name}` of `{chk_call_name(key)}` is {ty_name(got)}, and the parameter is {ty_name(pm.ty)}")
 }
 
@@ -548,8 +580,28 @@ fn chk_arg_says(key: str, pos: int) -> str {
 	# `mut &` and is a `mut &`, and …".
 	return f"the receiver of `{chk_call_name(key)}`, which is a `mut fn`," if pos == 0
 
-	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &` and"
+	return f"{chk_slot_says(key, pos)} is a `mut &` and"
 }
+
+# chk_slot_says names an argument BY POSITION, the way chk_field_says names a struct's field.
+# It is the plain name of the slot, with no clause about what is wrong with it, so a borrow
+# rule and a fit rule can each finish the sentence their own way.
+pub fn chk_slot_says(key: str, pos: int) -> str {
+	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}`"
+}
+
+# chk_binding_says names a binding as a slot. chk_binding has a sentence of its own that reads
+# better ("cannot bind str to a int binding: `n`"), and this is what the FLOOR in c_fit_copied
+# says on the paths that reach it without passing that one — a carrier's payload, which is
+# fitted below the declaration rather than at it.
+pub fn chk_binding_says(name: str) -> str {
+	return f"the binding `{name}`"
+}
+
+# CHK_ANSWER names the `return` slot. A returned value has no position and no name to give,
+# so what the sentence can point at is the SIGNATURE — which is also what chk_returned says
+# above it, in its own better words.
+const CHK_ANSWER := "what this function answers"
 
 # chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
 #
@@ -641,22 +693,294 @@ fn chk_call_name(key: str) -> str {
 # wrong struct, a tuple to a map, and a `list[str]` to a `map` all went past this rule and
 # reached cc, which is the failure this file exists to remove.
 
+# chk_fits_expr is chk_fits asked of the EXPRESSION rather than of its type alone, and there
+# is exactly one question that needs the difference: an untyped integer literal adopts a
+# `float` context and an already-typed `int` VALUE does not (docs/core/types.md, "Numeric
+# literals"). `x: float = 1` is the literal adopting its context like any other; `y: float
+# = i` would be a silent widening of a value that already has a type, and the language says
+# that needs `float(i)` — because the conversion is the place a lost bit is visible.
+#
+# The type-only chk_fits cannot tell those apart: both are TInt by the time it is asked. So
+# the SIX slots a value enters ask this one — a binding, an assignment, a `return`, an
+# argument, a parameter's default, and a struct literal's field. What still asks the type alone is the list-ELEMENT
+# recursion, which has no expression to pass (it recurses on types pulled out of a
+# container), and chk_arm_types, which compares two arms rather than a value against a slot.
+#
+# The pair `_expr` / plain is this file's existing shape for one question asked two ways —
+# c_is_nil_lit and c_is_nil_expr are the same twins.
+fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
+	# THE TWO LAYERS OF `Into`, and they are two sentences in docs/core/types.md rather than
+	# one. `x: byte = 300` is WELL-TYPED — `int → byte` is in the matrix, so it type-checks —
+	# and then fails as a CONSTANT, because the compiler knows the value and knows the
+	# conversion raises. `x: byte = i` for a binding is the same well-typedness with the
+	# failure left to run. So a literal is decided here and anything else is let through to
+	# the conversion the emitter writes.
+	if chk_into_builtin(want, got) {
+		if chk_int_lit(e) {
+			chk_const_into(em, want, e)
+		}
+		return true
+	}
+
+	# A USER `Into` reaches this position too, and by the same rule — one step, declared, at a
+	# place where the target type is known. The built-in matrix is over scalars and this is
+	# over whatever anyone wrote `impl Into[T] for S` for; nothing else about them differs.
+	return true if c_into_user(em, want, got)
+
+	# A LIST LITERAL is built INTO its destination, element by element, with the declared
+	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer and
+	# not a `list[int]` reinterpreted. The stride rule in chk_fits is about a container that
+	# already EXISTS; a literal is not one yet.
+	#
+	# It is asked HERE and not at the binding, which is where it used to live: a list literal
+	# also arrives as an argument, a return, an assignment and a parameter's default, and at
+	# those four `f([1, 2])` on a `list[byte]` parameter was refused while the binding spelling
+	# of the same thing was allowed. One rule, six slots — the same shape this file has now
+	# had to fix three times.
+	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
+
+	return chk_fits(em, want, got)
+}
+
+# chk_elems_fit is whether every element of a list literal fits the declared element type. It
+# asks chk_fits_expr per element, which is the same question the value slots ask — a literal
+# element adopts, a typed value does not — so a list literal is not a place the rules go
+# quiet. Asking the two element TYPES instead, which is what this replaced, cannot tell an
+# untyped literal adopting `byte` from a byte VALUE being widened.
+fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
+	we := c_list_elem(want)
+	for e in c_listlit_elems(ival) {
+		return false if not chk_fits_expr(em, we, c_infer(em, e), e)
+	}
+	return true
+}
+
+# chk_into_builtin is the built-in `Into` matrix — docs/core/types.md's table of seven pairs,
+# written as the shape it has rather than as seven rows.
+#
+# THE SHAPE IS A HUB, AND THE HUB IS `int`. Every pair in that table has `int` on one side:
+# out of it go `int → float`, `int → byte`, `int → rune`, `int → uint`, and into it come
+# `byte → int`, `rune → int`, `uint → int`. That is not a coincidence in the table — it IS the
+# one-step rule. `byte → float` is absent precisely because it would be `byte → int → float`,
+# and a spec that forbids chaining cannot then ship one.
+#
+# So there are two clauses and no list, and the fixed-width ladder the spec adds as stdlib
+# types joins by being given a class and a width in c_scalar_class / c_scalar_bits and nothing
+# else — which is what docs/core/types.md means by adding a width "without touching the
+# grammar".
+#
+# `float → int` is the one asymmetry, and it is the spec's: dropping a fraction is a decision,
+# so it is written `int(x)` or taken with `//`.
+fn chk_into_builtin(want: Ty, got: Ty) -> bool {
+	return false if not chk_into_side(want) or not chk_into_side(got)
+
+	# out of the hub, and INTO it — "every OTHER numeric scalar" both times. `int` on both
+	# sides is not a conversion, and the clause below said it was: every `int` reaching an
+	# `int` slot went through a lowering that casts it to itself, and L501 reported 1583
+	# findings of which most read "int converts to int".
+	return true if c_is_int(got) and not c_is_int(want)
+
+	return c_is_int(want) and not c_is_int(got) and not c_is_float(got)
+}
+
+# chk_const_into is the CONSTANT layer of `Into`, and it has a sentence of its own because it
+# is not a type error. `b: byte = 300` type-checks — `int → byte` is a conversion this language
+# has — and what is wrong with it is the VALUE. Saying "cannot bind int to a byte binding"
+# there was true before Into existed and is misleading now: it points at the annotation, when
+# the fix is the number.
+#
+# It is reported at compile time rather than left to raise because the compiler has the value
+# in its hand. Reachability does not enter into it — `if false { b: byte = 300 }` is the same
+# error — for the reason Go gives about the same construct: a constant that cannot exist is
+# not made acceptable by not being reached.
+fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) {
+	return if chk_lit_adopts(em, want, e)
+
+	chk_at(em, f"`{chk_lit_says(e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
+}
+
+# chk_lit_says renders an integer literal the way it was WRITTEN, minus and all. The lexeme is
+# on the node (every literal keeps its surface text so `fmt` can print it back verbatim), so
+# this reads it rather than re-rendering the parsed value — `0x1_00` in the source should be
+# `0x1_00` in the diagnostic, not `256`.
+fn chk_lit_says(e: Expr, neg: bool) -> str {
+	return match e {
+		EUnary(_, x) => chk_lit_says(x, not neg)
+		EInt(lex)    => chk_lit_sign(lex, neg)
+		_            => "this"
+	}
+}
+
+fn chk_lit_sign(lex: str, neg: bool) -> str {
+	return f"-{lex}" if neg
+
+	return lex
+}
+
+# chk_lit_note is `L502` — the literal took a type the page does not show. It is the half of
+# `L5xx` that is about ADOPTION rather than conversion, and the spec asks for it deliberately:
+# the point is that `1` and `1.0` should always mean different types in the source, so a reader
+# never has to infer a literal's type from its surroundings. `1.5 + 1` is reported and
+# `1.5 + 1.0` is not.
+#
+# An integer literal reaching an `int` is not adoption — that is the type it already had — and
+# a fractional literal never reaches here at all, because chk_lit_fits only answers about
+# integer ones.
+fn chk_lit_note(mut &em: Emitter, want: Ty, e: Expr) {
+	return if c_is_int(want)
+
+	chk_note(em, f"L502 the literal `{chk_lit_says(e, false)}` is a {ty_name(want)} here, and the page does not show it")
+}
+
+# chk_lit_adopts is the fit AND the finding, because a literal that takes a type is L502
+# wherever it happens and the two are never wanted apart. Written as three separate pairs, a
+# fourth adoption position added later would have silently reported nothing.
+fn chk_lit_adopts(mut &em: Emitter, want: Ty, e: Expr) -> bool {
+	return false if not chk_lit_fits(em, want, e)
+
+	chk_lit_note(em, want, e)
+	return true
+}
+
+# chk_into_side is whether a type may stand on either side of a built-in Into. A NUMERIC
+# scalar may. `bool` is a scalar and may not — `bool(8)` is a zero test rather than a widening,
+# and nothing about it is the value being carried across. A `type X = Y` may not either, and
+# that is the whole point of a strong typedef: c_scalar_class answers about the NAME, not the
+# representation, so a `Celsius` is not an `int` here however it is stored.
+fn chk_into_side(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+
+	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
+}
+
+# chk_lit_fits is the second half of adoption, and it is not optional: a literal adopts the
+# type its context demands ONLY if it is a value of that type. docs/core/types.md — "A
+# literal that does not fit its required type is a compile error (`byte = 300`, `uint = -1`)
+# — never a runtime overflow."
+#
+# Adoption without the range check is strictly worse than no adoption: `take(1000)` on a
+# `byte` parameter would go from a diagnostic to a silent truncation, which is the trade the
+# byte-widening comment in chk_fits already refused once.
+fn chk_lit_fits(mut &em: Emitter, want: Ty, e: Expr) -> bool {
+	# ONLY A NUMERIC SCALAR IS A TYPE A NUMBER ADOPTS. Without this line the range check fell
+	# through to "no bounds to test" for everything that is not one, so an `int?` ACCEPTED the
+	# literal `1` — and the moment c_infer_binary started asking, `x + 1` for an `int?` typed
+	# itself `int?` and the diagnostic became one about printing a carrier.
+	return false if not chk_into_side(want)
+
+	# a float takes any literal, so it needs only the SHAPE test; every other target needs
+	# the walk anyway, and chk_lit_in_range accepts exactly the expressions chk_int_lit does
+	return chk_int_lit(e) if c_is_float(want)
+
+	return chk_lit_in_range(em, want, e, false)
+}
+
+# chk_lit_in_range walks down to the literal, `neg` recording whether an odd number of
+# minuses stands above it — the sign is a unary node rather than part of the lexeme, so it
+# is carried down instead of parsed. It answers on the VALUE, so `-0` is in range for a
+# `uint` and `-1` is not.
+fn chk_lit_in_range(mut &em: Emitter, want: Ty, e: Expr, neg: bool) -> bool {
+	return match e {
+		EUnary(o, x) => chk_lit_minus(em, want, o, x, neg)
+		EInt(lex)    => chk_int_in_range(em, want, int_value(lex), neg)
+		_            => false
+	}
+}
+
+# a match arm takes no guard, so the `-` test is its own function rather than a condition on
+# the arm above
+fn chk_lit_minus(mut &em: Emitter, want: Ty, o: str, x: Expr, neg: bool) -> bool {
+	return false if o != "-"
+
+	return chk_lit_in_range(em, want, x, not neg)
+}
+
+# chk_int_in_range asks the SCALAR TABLE for the bounds rather than listing them. It used to
+# spell `255` and "no negative side" by hand, which is the second copy of what
+# c_signed_lo / c_unsigned_hi render into C — and a literal the checker says fits while the
+# conversion says it does not is exactly the drift one table prevents. It also meant a `rune`
+# had no arm at all, so nothing range-checked one.
+#
+# An `int` at full width is left alone: a literal past i64 is the LEXER's to refuse, because
+# a value this cannot represent is not one it can compare.
+fn chk_int_in_range(mut &em: Emitter, want: Ty, v: int, neg: bool) -> bool {
+	cls := c_scalar_class(want)
+
+	return true if cls != SC_SIGNED and cls != SC_UNSIGNED
+
+	# A RUNE is asked its own question, because its values are not a range: the width test
+	# below would accept a surrogate, and `zrt_conv_rune` — the run-time half of this very
+	# rule — refuses one. A literal the checker admits and the conversion rejects is exactly
+	# the drift the shared bound functions exist to prevent, so the two halves of the rune
+	# answer are stated together (chk_rune_ok here, zrt_is_rune there).
+	return chk_rune_ok(v) if not neg and c_is_rune(c_repr_of(em, want))
+	return v == 0 if c_is_rune(c_repr_of(em, want))
+
+	# THE SIGN QUESTION IS NOT A QUESTION ABOUT WIDTH. An unsigned target has no negative
+	# side at any width, so asking the width first let `uint = -1` through — `uint` is 64
+	# bits, which is exactly where the magnitude check stops having anything to say.
+	return v == 0 if neg and cls == SC_UNSIGNED
+
+	bits := c_scalar_bits(want)
+
+	return true if bits >= 64
+
+	return v <= c_bound_hi(cls, bits) if not neg
+
+	return 0 - v >= c_bound_lo(cls, bits)
+}
+
+# chk_rune_ok is "a single valid Unicode code point" (docs/core/types.md), the compile-time
+# half of the runtime's zrt_is_rune. The surrogate pair is what makes it a predicate rather
+# than a bound: U+D800..U+DFFF are UTF-16 machinery and are not characters.
+fn chk_rune_ok(v: int) -> bool {
+	return false if v < 0 or v > 1114111
+
+	return v < 55296 or v > 57343
+}
+
+# chk_int_to_float names the ONE widening chk_fits accepts on the type alone. It is written
+# here rather than twice because chk_fits accepts it and chk_fits_expr intercepts it: two
+# spellings of one pair drift apart silently, since the accepting one is the line the
+# intercepting one falls through to.
+fn chk_int_to_float(want: Ty, got: Ty) -> bool {
+	return c_is_float(want) and c_is_int(got)
+}
+
+# chk_int_lit is whether an expression is an UNTYPED integer literal — the literal itself,
+# or one behind a unary minus, which is how a negative one is written. Anything else is a
+# value with a type of its own, however small the expression is.
+#
+# The literal itself is c_is_int_lit's question, and it is asked there: the emitter already
+# has to know which spellings are one, to tell `-1` the constant from `-x` the negation, and
+# a second copy here would disagree with it the day a base prefix or a digit separator is
+# added.
+fn chk_int_lit(e: Expr) -> bool {
+	return match e {
+		EUnary(o, x) => o == "-" and chk_int_lit(x)
+		_            => c_is_int_lit(e)
+	}
+}
+
 # chk_fits is whether a value of type `got` may fill a slot declared `want`.
 fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return true if c_is_unknown(want) or c_is_unknown(got)
 	return true if c_is_carrier(want) or ty_is_chan(want) or c_is_map(want)
-	return true if c_is_float(want) and c_is_int(got)
+	return true if chk_int_to_float(want, got)
 
-	# A `byte` WIDENS to an `int`, in the direction the language already mixes `int` into
-	# `float` above. Making the byte literal carry its type — so that `c: byte = b'J'`
-	# works — turned every other use of one into an error: `f(b'a')` on an `int` parameter,
-	# `[b'a', b'b']` as a `list[int]`, `return b'a'` from an `-> int`.
+	# NO SCALAR WIDENS HERE, and that is the division of labour rather than a rule. This
+	# function is asked of TYPES alone, and a conversion between two scalars is `Into`'s —
+	# chk_fits_expr asks chk_into_builtin above, at a POSITION, which is the only place a
+	# conversion is allowed to happen at all. Answering yes here as well would let one in
+	# where there is no position to hang it on: chk_arm_types compares two match arms, and a
+	# `byte` arm beside an `int` arm is two answers to one question, not a value entering a
+	# slot.
 	#
-	# ONE DIRECTION ONLY. The other is a NARROWING, and it is not a fit: `take(1000)` on a
-	# `byte` parameter compiled to a truncation, and cc printed its own warning about
-	# generated C to say 1000 had become 232. Byte arithmetic stays in `byte` instead (see
-	# c_infer_binary), which is what `mut n := b'a'; n = n + 1` needs and all it needs.
-	return true if c_is_int(want) and c_is_byte(got)
+	# The history is worth keeping, because it is the argument for putting it there. A byte
+	# used to widen right here, on the type alone; then it stopped, because widening a VALUE
+	# silently is what `int(b)` exists to make visible; and now it converts again — but by a
+	# named mechanism, at an enumerated position, with a lint finding on it. The three states
+	# differ in WHERE the rule lives, not in whether a byte can reach an int.
 
 	# a list fits a list when its ELEMENTS fit, which is not the same as their being equal:
 	# `xs: list[int?] = [nil, 1]` infers `list[nil]` from its first element, and `nil` fits
@@ -666,11 +990,15 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 		we := c_list_elem(want)
 		ge := c_list_elem(got)
 
-		# a `list[byte]` is NOT a `list[int]` even though a byte widens to an int. The
-		# buffer's stride is its ELEMENT's size, so reading one as the other walks 8 bytes
-		# per 1-byte slot: `ys: list[int] = list[byte]("Hi")` printed 26952 and a longer
-		# string read past the end. A widening is about one value; a container is about how
-		# far apart they are.
+		# A `list[byte]` IS NOT A `list[int]`, whatever the elements would do one at a time.
+		# The buffer's stride is its ELEMENT's size, so reading one as the other walks 8
+		# bytes per 1-byte slot: `ys: list[int] = list[byte]("Hi")` printed 26952, and a
+		# longer string read past the end.
+		#
+		# Both orderings now fall out of the recursion below as well, since a byte no longer
+		# widens — but this stays ahead of it, because the escapes further down (an unknown
+		# element, an optional one) would let a mismatched stride through on their way to a
+		# better sentence about something else.
 		return false if c_is_byte(we) != c_is_byte(ge)
 
 		return chk_fits(em, we, ge)
@@ -695,7 +1023,7 @@ fn chk_fits(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 	declared := em.fn_ret
 	got := c_infer(em, e)
-	if not chk_fits(em, declared, got) {
+	if not chk_fits_expr(em, declared, got, e) {
 		chk_at(em, f"this function answers {ty_name(declared)}, and this returns {ty_name(got)}")
 	}
 	return got
@@ -711,23 +1039,68 @@ fn chk_returned(mut &em: Emitter, e: Expr) -> Ty {
 fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	got := c_infer(em, ival)
 
-	# A LIST LITERAL is built INTO its destination, element by element, with the declared
-	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer
-	# and not a `list[int]` reinterpreted. The stride rule in chk_fits is about a container
-	# that already EXISTS; a literal is not one yet.
-	#
-	# Only the byte/int pair, and only one level down. The elements still have to fit —
-	# `xs: list[list[str]] = [[1]]` is not a stride question and was accepted by a broader
-	# version of this, which is the whole class the rule below exists to catch.
-	if c_is_list(declared) and c_is_listlit(ival) and c_is_list(got) {
-		we := c_list_elem(declared)
-		ge := c_list_elem(got)
-		return if c_is_byte(we) != c_is_byte(ge) and chk_is_numish(we) and chk_is_numish(ge)
-	}
-
-	if not chk_fits(em, declared, got) {
+	if not chk_fits_expr(em, declared, got, ival) {
 		chk_at(em, f"cannot bind {ty_name(got)} to a {ty_name(declared)} binding: `{name}`")
 	}
+}
+
+# chk_typedef is what a `type X = Y` declaration must satisfy. The name is a TYPE name, so
+# it collides with the same things a struct or an enum name would, and the underlying type
+# has to be one that exists — a `type X = Nope` used to be dropped on the floor along with
+# the whole declaration, so nothing said anything at all.
+fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
+	# A NAME COLLISION is not asked here. c_build_typedefs runs before the struct and enum
+	# registries exist, so asking would always answer no — c_build_type_names is the pass
+	# that already asks it of every kind of type name at once, and the typedef joins it.
+	#
+	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
+	# catching here rather than at the first use of it
+	nm := c_named_of(td.under)
+	if nm != "" and not c_is_type_name(em, nm) {
+		chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
+		return TUnknown
+	}
+
+	# A SCALAR UNDERNEATH, this phase. docs/core/types.md records the deviation, and the seed
+	# refuses the same thing — but it is worth naming rather than emitting, because a
+	# `type Label = str` looked like it worked: a str is a refcounted cell, and the typedef
+	# name is not a str to c_is_str, so nothing retained it, nothing released it, and
+	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
+	# that says it is not built.
+	if c_scalar_class(td.under) == SC_NONE {
+		chk_at_place(em, td.path, td.line, td.col, f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		return TUnknown
+	}
+	return td.under
+}
+
+# chk_slot_fits is a value entering a POSITIONAL slot named by `where` — a struct literal's
+# field, an enum variant's payload. It takes the label rather than deriving it, because the
+# two callers name their slot differently and the rule is the same for both.
+#
+# It began as the struct field alone — the sixth slot, and the one that had no rule at all. `P("hi")` on an `x: int` field put a pointer where an int64_t goes
+# and compiled; `P(b'a')` on an `x: int` and `P(i)` on an `x: float` were the byte and float
+# rules going quiet in the one place nothing asked them.
+#
+# It asks chk_fits_expr like the other five, so a literal field adopts and a typed value does
+# not, and a list-literal field is checked element by element. The position is what the
+# sentence names, because a struct literal gives its fields in order and has no other handle
+# on the one that is wrong.
+fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
+	got := c_infer(em, arg)
+	if not chk_fits_expr(em, want, got, arg) {
+		chk_at(em, f"{where} is {ty_name(want)}, and this gives {ty_name(got)}")
+	}
+}
+
+# chk_field_says names a struct's field BY POSITION, the way chk_arg_says names an argument,
+# and it is shared with the emitter's missing-field diagnostic — because the two disagreed
+# about the numbering. One counted from 1 and the other from 0, so the same field of the same
+# struct was "field 1" or "field 0" depending on which mistake you made.
+#
+# `pos` arrives 1-based, which is chk_arg_says' convention.
+pub fn chk_field_says(sname: str, pos: int) -> str {
+	return f"field {strconv.to_string(pos, 10)} of `{sname}`"
 }
 
 # --- assigned value ---------------------------------------------------------------
@@ -739,7 +1112,7 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 # chk_assigned raises when a value does not fit the storage it is assigned to.
 fn chk_assigned(mut &em: Emitter, lhs: Expr, want: Ty, rhs: Expr) {
 	got := c_infer(em, rhs)
-	if not chk_fits(em, want, got) {
+	if not chk_fits_expr(em, want, got, rhs) {
 		chk_at(em, f"cannot assign {ty_name(got)} to {chk_target_name(lhs)}, which holds {ty_name(want)}")
 	}
 }
@@ -773,7 +1146,7 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 
 	want := em.pr_ty[row]
 	got := c_infer(em, arg)
-	if not chk_fits(em, want, got) {
+	if not chk_fits_expr(em, want, got, arg) {
 		chk_at(em, f"`{chk_call_name(key)}` takes {ty_name(want)} as argument {strconv.to_string(pos, 10)}, and this gives {ty_name(got)}")
 	}
 }
@@ -803,7 +1176,7 @@ fn chk_argument(mut &em: Emitter, key: str, row: int, pos: int, arg: Expr) {
 # operand TYPES rather than the expressions: c_binexpr infers the left one for its own
 # reasons, and an f-string desugars into a left-nested `+` chain, so re-inferring here
 # would walk the whole left spine again at every link of it.
-fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
+fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 	return if c_is_unknown(ta) or c_is_unknown(tb)
 
 	# An OPTIONAL is not an operand of ANY of them. `x == nil` is the first thing a person
@@ -815,6 +1188,30 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 	# hands over the value when there is one.
 	if c_is_opt(ta) or c_is_opt(tb) {
 		chk_at(em, f"an optional is not an operand of `{oper}` — unwrap it with `if v := x {{ … }} else {{ … }}`, which also binds what it holds")
+		return
+	}
+
+	# A `type X = Y` IS NOT A Y HERE. docs/core/types.md: X takes on Y's representation and
+	# keeps an identity of its own, and this compiler does not carry Y's arithmetic or spec
+	# impls across — so a `Celsius` has no `+` until somebody writes `int(c)`, which is the
+	# explicit step the whole feature is for.
+	#
+	# AHEAD of every family, and that is not a detail: it sat between them once, after the
+	# logical and bitwise blocks, which return unconditionally — so `f1 and f2` on a
+	# `type Flag = bool` and `m & 1` on a `type Mask = int` were accepted and lowered to
+	# working C, which is the underlying type's operators being inherited by exactly the
+	# rule that says they are not.
+	#
+	# EQUALITY IS THE EXCEPTION, between two values of the SAME one. The deviation the doc
+	# records is about arithmetic and spec impls, and `==` is neither; an enum is nominal and
+	# inherits nothing either, and gets same-enum `==` twelve lines below. Refusing
+	# `uid1 == uid2` would take away the one operation a `UserId` exists to support — and
+	# would leave `if flag` on a `type Flag = bool` told to "compare it (`x != 0`)" by a rule
+	# that then refuses the comparison.
+	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
+		return if chk_is_equality(oper) and ty_eq(ta, tb)
+
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
 
@@ -837,8 +1234,10 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		return if oper == "+" and c_is_str(ta) and c_is_str(tb)
 		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` takes numeric operands, and these are {ty_name(ta)} and {ty_name(tb)}")
+			return
 		}
 
+		chk_operand_pair(em, oper, ta, tb, ea, eb)
 		return
 	}
 
@@ -846,8 +1245,10 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		return if c_is_str(ta) and c_is_str(tb)
 		if chk_scalar_wrong_num(ta) or chk_scalar_wrong_num(tb) {
 			chk_at(em, f"operator `{oper}` orders two numbers or two strs, and these are {ty_name(ta)} and {ty_name(tb)}")
+			return
 		}
 
+		chk_operand_pair(em, oper, ta, tb, ea, eb)
 		return
 	}
 
@@ -866,8 +1267,14 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty) {
 		return if not chk_is_scalar(ta) or not chk_is_scalar(tb)
 
 		# int and float compare: they are one family, and the language already mixes them
-		# in arithmetic
-		return if chk_is_num(ta) and chk_is_num(tb)
+		# in arithmetic. `int` and `uint` are NOT that family — the trap the mixing rule
+		# names is a comparison trap first (in C the signed side converts, so `-1 == 1u` is
+		# not what it reads as), and asking it only for `<` would have caught the operator
+		# where the answer looks wrong and missed the one where it looks right.
+		if chk_is_num(ta) and chk_is_num(tb) {
+			chk_operand_pair(em, oper, ta, tb, ea, eb)
+			return
+		}
 		if ty_name(ta) != ty_name(tb) {
 			chk_at(em, f"cannot compare {ty_name(ta)} and {ty_name(tb)} with `{oper}` — they are different kinds of value")
 		}
@@ -879,6 +1286,15 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	t := c_infer(em, x)
 
 	return if c_is_unknown(t)
+
+	# the same rule the binary families get, and for the same reason: `not f` on a
+	# `type Flag = bool` and `-c` on a `Celsius` are the underlying type's operators, which a
+	# typedef does not take on. The scalar predicates below all answer no for a TNamed, so
+	# without this the prefix operators were the one family that let a typedef through.
+	if chk_is_typedef_operand(em, t) {
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		return
+	}
 	if oper == "not" and chk_scalar_wrong_bool(t) {
 		chk_at(em, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}
@@ -897,7 +1313,23 @@ fn chk_scalar_wrong_bool(t: Ty) -> bool {
 }
 
 fn chk_scalar_wrong_int(t: Ty) -> bool {
-	return chk_is_scalar(t) and not c_is_int(t)
+	return chk_is_scalar(t) and not chk_is_bitwise_operand(t)
+}
+
+# chk_is_bitwise_operand is docs/core/types.md's list for `&` `|` `^` `~` `<<` `>>`, and the
+# page names three: `int`, `uint`, `byte`. So it is the integer classes, with `rune` taken
+# back out — a rune is a CHARACTER, and masking a character's bits is not an operation on
+# one. That exclusion is the spec's, which is why it is the only name here.
+#
+# It was `c_is_int` alone, which refused `uint` in the teeth of the page. `byte` slipped
+# through by a second accident — chk_is_num did not list it, so a byte was not a scalar at
+# all and no operand rule had anything to say about it. Two wrongs that looked like one
+# working rule.
+fn chk_is_bitwise_operand(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+	return false if c_is_rune(t)
+
+	return cls == SC_SIGNED or cls == SC_UNSIGNED
 }
 
 fn chk_scalar_wrong_num(t: Ty) -> bool {
@@ -905,19 +1337,88 @@ fn chk_scalar_wrong_num(t: Ty) -> bool {
 }
 
 fn chk_is_scalar(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t) or c_is_str(t) or c_is_bool_ty(t)
+	return chk_is_num(t) or c_is_str(t) or c_is_bool_ty(t)
 }
 
+# chk_operand_pair is docs/core/types.md's rule for two operands: the same type stays itself,
+# and two different ones take the LARGEST both reach in one step — a compile error if there is
+# none, because then there is no type the expression could be.
+#
+# IT REPLACES chk_mixed_sign, and that is the point of it. `int + uint` is still refused, and
+# it is refused now because the general rule finds no answer rather than because a line was
+# written about that one pair: both directions exist in the matrix, and neither type's values
+# contain the other's. The special case was the spec's own prediction — "that falls out rather
+# than being a rule of its own".
+#
+# What it also catches, which the special case could not, is `byte + float`: there is no
+# one-step `byte -> float` (that would be `byte -> int -> float`), so the pair has no type.
+# It used to answer 66.5.
+#
+# The C signed/unsigned trap is still the reason the `int`/`uint` half is worth its
+# inconvenience — in C the signed operand converts to unsigned, so `-1 < 1u` is false — and it
+# is why the ORDER family asks this as well as the arithmetic one.
+fn chk_operand_pair(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
+	# the cheap questions first: this is asked of every binary expression in the program
+	return if ty_eq(ta, tb) or c_is_unknown(ta) or c_is_unknown(tb)
+
+	# THE OTHER OPERAND OF A TYPED EXPRESSION is one of the typed positions — the list names
+	# it — so `n * 10` where `n` is a `uint` is the literal becoming a uint, not a mixed pair.
+	#
+	# It adopts on the SAME terms as the other thirteen, which is chk_lit_fits and not merely
+	# "is it a literal": `n * 300` where n is a `byte` is out of range here exactly as
+	# `b: byte = 300` is, and asking the weaker question would have made the operand slot the
+	# one place a literal adopts a type it is not a value of.
+	return if chk_lit_adopts(em, ta, eb) or chk_lit_adopts(em, tb, ea)
+
+	return if not c_is_unknown(chk_into_max(ta, tb))
+
+	chk_at(em, f"operator `{oper}` has {ty_name(ta)} on one side and {ty_name(tb)} on the other, and neither reaches the other in one step — so there is no type this expression could be; convert one side with `{ty_name(ta)}(…)` or `{ty_name(tb)}(…)`")
+}
+
+# chk_into_max is the type two operands both reach, or TUnknown when there is none. LARGEST
+# means the one whose values include the other's, which docs/core/types.md notes is also the
+# direction that cannot fail — so both halves of the question are already answered elsewhere,
+# by chk_into_builtin (the one step) and c_lossless (the containment).
+pub fn chk_into_max(ta: Ty, tb: Ty) -> Ty {
+	return tb if chk_into_widens(ta, tb)
+	return ta if chk_into_widens(tb, ta)
+
+	return TUnknown
+}
+
+# chk_into_widens is `src` reaching `dst` in ONE step and losing nothing on the way. Two types
+# can never widen to each other, which is what makes chk_into_max's answer unique when it has
+# one: `int` and `uint` each reach the other and neither contains it, so there is none.
+#
+# `from` would be the word, and it is a keyword — `raise … from cause`.
+fn chk_into_widens(src: Ty, dst: Ty) -> bool {
+	return false if not chk_into_builtin(dst, src)
+
+	return c_lossless(c_scalar_class(src), c_scalar_bits(src), c_scalar_class(dst), c_scalar_bits(dst))
+}
+
+# chk_is_num is THE list of numeric types, and chk_is_scalar builds on it rather than
+# re-enumerating: adding `uint` to a second copy is an edit that is easy to miss, and missing
+# it let a `uint` reach the arithmetic and ordering diagnostics through the not-a-scalar hole
+# instead of the numeric path the mixing rule assumes.
+# chk_is_typedef_operand is whether an operand is a `type X = Y` name. It asks the emitter's
+# registry rather than the type's shape, because the shape is precisely what a typedef shares
+# with its underlying type and precisely what must not be read through here.
+fn chk_is_typedef_operand(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	return false if nm == ""
+
+	return c_is_typedef(em, nm)
+}
+
+# chk_is_num is every NUMBER, which is every scalar class but bool — asked of the table
+# rather than listed, because the list left `byte` out. That omission did not show as a
+# wrong answer: it made a byte not a scalar, so every operand rule below skipped it and the
+# rules that happened to want a byte admitted one. A type nothing checks looks exactly like
+# a type everything permits.
 fn chk_is_num(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t)
-}
-
-# chk_is_numish is chk_is_num plus `byte`, which is the one place the difference matters: a
-# list literal is written with its DESTINATION's element type, so `[1, 2]` into a
-# `list[byte]` and `[b'a']` into a `list[int]` are both two numbers written at the right
-# stride. `chk_is_num` deliberately excludes byte because the arithmetic rules do.
-fn chk_is_numish(t: Ty) -> bool {
-	return chk_is_num(t) or c_is_byte(t)
+	cls := c_scalar_class(t)
+	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
 }
 
 # chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not

@@ -66,6 +66,18 @@ int64_t zrt_conv_i_from_f(double v, double lo, double hi) {
 	return (int64_t)v;
 }
 
+/* `rune(n)` is the one conversion whose target is not a range. Every other integer
+ * target is [lo, hi] and the two helpers above say so; a code point additionally
+ * excludes the UTF-16 surrogates, so the test is zrt_is_rune's rather than a pair of
+ * comparisons written here. The failure is OverflowError, which is what the Into
+ * matrix in docs/core/types.md names for `int -> rune`. */
+int32_t zrt_conv_rune(int64_t v) {
+	if (!zrt_is_rune(v)) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, kRangeMsg);
+	}
+	return (int32_t)v;
+}
+
 uint64_t zrt_conv_u_from_f(double v, double hi) {
 	if (!(v > -1.0 && v < hi + 1.0)) {
 		zrt_abort_kind(ZRT_ERR_OVERFLOW, kFloatMsg);

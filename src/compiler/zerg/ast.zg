@@ -28,6 +28,18 @@ enum Ty {
 	TVoid
 	TUnknown
 	TByte
+
+	# TUint is `uint`, the unsigned 64-bit integer. It is a type of its OWN and not a mode of
+	# TInt: docs/core/types.md makes `int + uint` a compile error, and `>>` arithmetic on the
+	# signed one and logical on the unsigned — neither of which can be said if the two share a
+	# variant. It used to, and both rules were unsayable.
+	TUint
+
+	# TRune is `rune`, a single Unicode CODE POINT — docs/core/types.md's third named integer
+	# beside `int` and `uint`. It is what a `str` iterates as, which is the whole reason it is
+	# a type and not a spelling of `int`: a str is UTF-8, so the thing a loop hands you is a
+	# code point and not a byte, and a language that called both `int` could not say which.
+	TRune
 	TNamed(str)
 	TList(Ty)
 	TFn(list[Ty], Ty)
@@ -86,9 +98,9 @@ enum Expr {
 	EMethod(Expr, str, list[Expr])
 	EListLit(list[Expr])
 
-	# EConv carries the NAME TO REPORT THIS NODE AS, beside the target type. `uint` is
-	# `int64_t` in this compiler, so the type alone cannot tell `int(x)` from `uint(x)` —
-	# and a diagnostic that read the type back named a form the programmer had not written.
+	# EConv carries the NAME TO REPORT THIS NODE AS, beside the target type — a diagnostic
+	# that reads the type back names a form in the compiler's spelling rather than the
+	# programmer's, and the two are not always the same word.
 	#
 	# "to report as" rather than "as written": two construction sites synthesize it, `b'J'`
 	# as "byte" and an f-string hole as "str", because neither was spelled by the reader
@@ -143,6 +155,13 @@ enum Expr {
 	# what a name means. This phase answers only the built-in error kinds, which are the
 	# one taxonomy carrying a runtime tag to compare.
 	EIs(Expr, str)
+
+	# EIn is the membership test `x in s` (GRAMMAR:226, beside `is` and equally
+	# non-associative). The right side is a SET, and what a set is depends on what is named:
+	# an error KIND names itself and everything below it in the taxonomy, a container names its
+	# elements, a range names its members. One rule — "is this a member of that" — which is
+	# what keeps `in` one operator rather than two sharing a spelling.
+	EIn(Expr, Expr)
 }
 
 # Arm is one match arm. `pat` selects the pattern shape: 0 = literal (match `lit` by
@@ -329,6 +348,22 @@ struct StructDecl {
 	fields: list[FieldDef]
 }
 
+# TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
+# (docs/core/types.md). X takes on Y's representation, so a monomorphic one costs nothing at
+# runtime; what it does not take on is Y's identity. There is no cast between them, and a
+# value crosses by re-construction — `X(y)` and `Y(x)` — like any other conversion.
+#
+# It carries its position because the checks about it are the ordinary declaration ones: a
+# name declared twice, a name that is also a struct, an underlying type nothing declares.
+pub struct TypeDecl {
+	name: str
+	under: Ty
+	is_pub: bool
+	path: str
+	line: int
+	col: int
+}
+
 # VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
 # variant), and its DISCRIMINANT — the integer the variant is, which defaults to the
 # previous one plus one (from 0) and so is its position until a declaration says otherwise.
@@ -397,9 +432,22 @@ pub struct File {
 	impls: list[ImplDecl]
 	fns: list[FnDecl]
 
+	# types are the `type X = Y` declarations — strong typedefs, kept apart from structs
+	# because they have no fields and from enums because they have no variants; what they
+	# have is one underlying type and an identity of their own.
+	types: list[TypeDecl]
+
 	# consts are the module-level `const` bindings, each an SLet. They are not statements
 	# of any function: they become C globals, assigned once before anything runs.
 	consts: list[Stmt]
+
+	# derive_on / derive_spec are the `#[derive(X)]` decorators, as a pair of lists: the type
+	# the decorator sat above and the spec it named. They are kept as PAIRS rather than on the
+	# declaration because a decorator is its own top-level item here — it is read before the
+	# declaration it applies to exists — and because what consumes them is one pass that wants
+	# them all, not a walk over two kinds of declaration.
+	derive_on: list[str]
+	derive_spec: list[str]
 }
 
 # --- rendering ---------------------------------------------------------------------------
@@ -532,6 +580,7 @@ fn expr_kind(e: Expr) -> str {
 		ECoalesce(a, b, jump) => "coalesce"
 		EGuard(body) => "guard"
 		EIs(x, name) => "is " + name
+		EIn(x, set) => "in"
 		_ => "?"
 	}
 }
@@ -657,6 +706,8 @@ fn ty_name(t: Ty) -> str {
 		TNil          => "nil"
 		TVoid         => "void"
 		TByte         => "byte"
+		TUint         => "uint"
+		TRune         => "rune"
 		TNamed(n)     => n
 		TList(e)      => f"list[{ty_name(e)}]"
 		TFn(ps, r)    => f"fn({ty_names(ps)}) -> {ty_name(r)}"

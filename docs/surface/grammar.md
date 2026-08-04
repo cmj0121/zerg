@@ -230,7 +230,9 @@ non-associative** — `a < b < c` does not parse, by design.
 The `%`-suffixed `+%` `-%` `*%` are the **wrapping** arithmetic operators; `~` is bitwise complement.
 Bitwise `&` `<<` `>>` sit with the multiplicatives and `\|` `^` with the additives — one notch tighter
 than comparison, so `a & b == c` reads as `(a & b) == c`, sidestepping C's precedence trap. `is` tests an
-existential against a spec or variant name (full form in groups 6–7); `in` tests **membership**. A sign is
+existential against a spec or variant name (full form in groups 6–7); `in` tests **membership**, and what a
+set is depends on what names it — a container names its elements, a range its members, and an **error kind
+names itself and everything below it** in the taxonomy ([Errors](../code/errors.md)). A sign is
 an operator, not part of a literal. A **range** binds one notch tighter than comparison so `v in 0..10`
 reads `v in (0..10)`: `x..y` is **sugar** for `range(x, y)`, `x..=y` for `range(x, y + 1)`, `x..` for an
 open range, and `v in r` for `r.contains(v)` — the `Range` / `contains` machinery is stdlib. (`??` from
@@ -774,7 +776,7 @@ quietly starts failing differently, fails the gate.
 | 8     | an `impl` on a built-in type (`impl Tag for int`)                                       |
 | 8     | every decorator but `#[derive(…)]`                                                      |
 | 8     | a map key that is not an `int` or a `str` — a key needs `Hash`                          |
-| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`; the bridge `list[rune](s)`  |
+| 8     | the built-ins `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                              |
 | 12    | `unsafe` block, `asm`, `ptr` / `ptr[T]`                                                 |
 
 A `spec`'s **required members are enforced** on an `impl … for …` even though nothing

@@ -39,13 +39,29 @@
 #         REBINDING: a send is not a write, and after `ch = <another>` the coroutine holds
 #         the old channel.
 #
+# `L5xx` is CONVERSION: a value that changed type, or a literal that took one, without the
+# source saying so. docs/core/types.md asks for it over `Into` — "every implicit conversion is
+# a lint finding, literals included" — and the reason is a reading one: `1` and `1.0` should
+# mean different types on the page, so `1.5 + 1` is reported and `1.5 + 1.0` is not.
+#
+#   L501  a VALUE converted — `f: float = i` for an `int` binding. It is legal, it is one
+#         step, and it is invisible; `float(i)` says the same thing out loud
+#   L502  a LITERAL took a type that is not its own — `b: byte = 5`, or the `1` in `1.5 + 1`
+#
+# THESE TWO ARE NOT ANSWERED HERE, and they are the only ones that are not. Everything above
+# comes from the parsed File; a conversion is a fact about TYPES, so the LOWERING WALK records
+# it and lint_conversions (emit.zg) hands it back. The driver asks both and prints both.
+#
 # Findings come back as plain strings in source order. The driver prints them and exits
 # nonzero, so `zerg lint` is usable as a gate rather than as decoration.
 
 # lint_files reports every finding across a loaded program (the entry file plus the
 # modules it imports, as the driver resolved them).
 pub fn lint_files(srcs: list[str]) -> list[str] {
-	f := merge_files(srcs)
+	# THE BUILT-IN SPECS TOO, and through the same function the lowering walk uses: `Into` is
+	# declared by the language, so a program that implements it declares no spec by that name
+	# — and L102 read the resulting `into` as a private function nobody calls.
+	f := c_with_builtin_specs(merge_files(srcs))
 	mut out: list[str] = []
 
 	# Names used ANYWHERE in the program: a private function called from another module
@@ -455,14 +471,36 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 # lint_dead_fns reports a private function nothing calls. `main` is the program's entry —
 # the runtime calls it, so it is never "unused" no matter what the source says.
 fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str]) {
+	reqs := spec_required_names(f)
 	for fd in f.fns {
 		# `init` is called by the generated main, the same way the runtime calls `main`
 		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
+			continue_marker()
+		} else if has_str(reqs, fd.name) {
+			# A METHOD THAT SATISFIES A SPEC IS AN INTERFACE, the way a `pub` function is: what
+			# calls it may be another program, or — for `Into` — the compiler, at a typed
+			# position where nothing in the source spells the call at all. `impl Into[int] for
+			# Celsius` reported its own `into` as dead code in a program that converted four
+			# times.
 			continue_marker()
 		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
 			out.append(f"L102 private function `{fd.name}` is never called")
 		}
 	}
+}
+
+# spec_required_names is every method name some spec in the program declares. It is asked of
+# the SPECS rather than of the impls, and deliberately: a name is checked here, not a (type,
+# name) pair, and matching more loosely errs toward saying nothing — which is the right
+# direction for a rule whose finding is "delete this".
+fn spec_required_names(f: File) -> list[str] {
+	mut out: list[str] = []
+	for sp in f.specs {
+		for r in sp.reqs {
+			out.append(r.name)
+		}
+	}
+	return out
 }
 
 # lint_unread_bindings reports a binding whose name is never mentioned again inside the
@@ -478,17 +516,22 @@ fn lint_unread_bindings(f: File, mut &out: list[str]) {
 	for fd in f.fns {
 		mut names: list[str] = []
 		collect_binds(fd.body, names)
+
+		# THE BODY IS WALKED ONCE PER FUNCTION, not once per binding. The walk does not depend
+		# on `n`, and it sat inside the loop — so a function with forty bindings walked its own
+		# body forty times, and the rule cost the square of what it needed to.
+		mut ids: list[str] = []
+		mut calls: list[str] = []
+		mut ns: list[str] = []
+		walk_body(fd.body, ids, calls, ns)
+
 		for n in names {
 			if n == "_" {
 				out.append(f"L104 `_ :=` in `{fd.name}` — the expression is already a statement, so the binder says nothing")
 				continue
 			}
 
-			mut ids: list[str] = []
-			mut calls: list[str] = []
-			mut ns: list[str] = []
-			walk_body(fd.body, ids, calls, ns)
-			if count_str(ids, n) == 0 {
+			if not has_str(ids, n) {
 				out.append(f"L103 binding `{n}` in `{fd.name}` is never read")
 			}
 		}
@@ -650,6 +693,7 @@ fn walk_expr(e: Expr, mut &ids: list[str], mut &calls: list[str], mut &ns: list[
 		# only the SUBJECT is a name the program bound — the right side of `is` is an error
 		# kind, so counting it as a use would keep an unused import alive.
 		EIs(x, name) => walk_expr(x, ids, calls, ns)
+		EIn(x, set)  => walk_pair(x, set, ids, calls, ns)
 		_            => skip()
 	}
 }
@@ -737,16 +781,6 @@ fn has_str(xs: list[str], want: str) -> bool {
 		return true if x == want
 	}
 	return false
-}
-
-fn count_str(xs: list[str], want: str) -> int {
-	mut n := 0
-	for x in xs {
-		if x == want {
-			n = n + 1
-		}
-	}
-	return n
 }
 
 # skip is the no-op a match arm needs: an arm is an EXPRESSION, so a case with nothing to

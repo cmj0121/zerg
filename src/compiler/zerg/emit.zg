@@ -1524,7 +1524,7 @@ fn c_check_bounds(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
 # on two ints is the operator and not an impl — and a declared one meets it by having the
 # impl, which is the same list `==` on an aggregate reads.
 fn c_satisfies(mut &em: Emitter, t: Ty, bound: str) -> bool {
-	return c_has_eq(em, t) or not c_is_aggregate(em, t) if bound == "Eq"
+	return c_eq_legal(em, t) if bound == "Eq"
 
 	return c_impls(em, c_named_of(t), bound)
 }
@@ -3364,15 +3364,21 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# fieldless enum and WRONG for a payload one: `Circle(1) == Circle(2)` answered true. It
 	# was also equality with no impl behind it, which docs/core/derive.md rules out — there is
 	# no auto-derived equality — and the seed refuses exactly that.
-	eq := c_is_cmp_op(oper)
-	if eq and c_is_aggregate(em, ta) {
+	if c_is_cmp_op(oper) {
 		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
 
+		# EQUALITY and ORDERING are two questions. `c_eq_legal` answers the first — and is
+		# the same answer the `T: Eq` bound gives, which is the point of it being one
+		# function. An ORDERING additionally has nothing on any aggregate, `Ord` being what
+		# would supply it, so a `#[derive(Eq)]` struct answers `==` and still not `<`.
+		#
 		# ONLY WHEN THE TWO SIDES ARE THE SAME TYPE. `Color == Fruit` and `Color == 1` are
 		# already reported by chk_binary above, and they are the better sentence — what is
 		# wrong there is the pair, not a missing impl. Raising here as well replaced a
 		# diagnostic about the program with one about a spec the program never mentioned.
-		raise c_eq_says(em, oper, ta) if ty_name(ta) == ty_name(c_infer(em, b))
+		if not c_eq_legal(em, ta) or c_is_aggregate(em, ta) {
+			raise c_eq_says(em, oper, ta) if ty_name(ta) == ty_name(c_infer(em, b))
+		}
 	}
 
 	ca := c_expr(em, a, sb)
@@ -3385,6 +3391,23 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_eq_legal is "does `==` mean anything on this type" — ONE predicate, asked by the operator
+# that lowers it and by the bound that promises it. The two used to be separate expressions of
+# one rule and they had already drifted: `T: Eq` admitted an `int?`, whose `==` the operator
+# refuses, so the diagnostic landed on a line inside the TEMPLATE that the caller never wrote;
+# and it admitted a `chan[int]`, which the operator did not refuse either — it fell past the
+# aggregate guard to the numeric path and compared two POINTERS.
+#
+# A scalar and a `str` have it from the language. A declared type has it from an `Eq` impl,
+# derived or written. Nothing else does: a carrier is not a value until it is unwrapped, and a
+# channel is an identity the language never gave an equality to.
+fn c_eq_legal(mut &em: Emitter, t: Ty) -> bool {
+	return false if c_is_carrier(t) or ty_is_chan(t) or c_is_fn(t)
+	return c_has_eq(em, t) if c_is_aggregate(em, t)
+
+	return true
 }
 
 # c_eq_call lowers `a == b` / `a != b` on a type with an Eq impl as the CALL THE PROGRAMMER
@@ -3406,6 +3429,8 @@ fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 # it is the only one of the three that tells the reader what to type.
 fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
 	return f"NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
+	return f"a {ty_name(t)} is an identity rather than a value, and the language gives it no equality — compare something it carries" if ty_is_chan(t) or c_is_fn(t)
+	return f"a {ty_name(t)} may hold no value, so `{oper}` has nothing to compare — unwrap it first with `??`, `!` or `if v := …`" if c_is_carrier(t)
 	return f"NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
 
 	return f"`{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"

@@ -1313,7 +1313,23 @@ fn chk_scalar_wrong_bool(t: Ty) -> bool {
 }
 
 fn chk_scalar_wrong_int(t: Ty) -> bool {
-	return chk_is_scalar(t) and not c_is_int(t)
+	return chk_is_scalar(t) and not chk_is_bitwise_operand(t)
+}
+
+# chk_is_bitwise_operand is docs/core/types.md's list for `&` `|` `^` `~` `<<` `>>`, and the
+# page names three: `int`, `uint`, `byte`. So it is the integer classes, with `rune` taken
+# back out — a rune is a CHARACTER, and masking a character's bits is not an operation on
+# one. That exclusion is the spec's, which is why it is the only name here.
+#
+# It was `c_is_int` alone, which refused `uint` in the teeth of the page. `byte` slipped
+# through by a second accident — chk_is_num did not list it, so a byte was not a scalar at
+# all and no operand rule had anything to say about it. Two wrongs that looked like one
+# working rule.
+fn chk_is_bitwise_operand(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+	return false if c_is_rune(t)
+
+	return cls == SC_SIGNED or cls == SC_UNSIGNED
 }
 
 fn chk_scalar_wrong_num(t: Ty) -> bool {
@@ -1395,8 +1411,14 @@ fn chk_is_typedef_operand(mut &em: Emitter, t: Ty) -> bool {
 	return c_is_typedef(em, nm)
 }
 
+# chk_is_num is every NUMBER, which is every scalar class but bool — asked of the table
+# rather than listed, because the list left `byte` out. That omission did not show as a
+# wrong answer: it made a byte not a scalar, so every operand rule below skipped it and the
+# rules that happened to want a byte admitted one. A type nothing checks looks exactly like
+# a type everything permits.
 fn chk_is_num(t: Ty) -> bool {
-	return c_is_int(t) or c_is_float(t) or c_is_uint(t) or c_is_rune(t)
+	cls := c_scalar_class(t)
+	return cls == SC_SIGNED or cls == SC_UNSIGNED or cls == SC_FLOAT
 }
 
 # chk_is_logical is `and` / `or` — the operators that TAKE bools. It is deliberately not

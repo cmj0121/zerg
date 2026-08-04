@@ -1584,6 +1584,26 @@ fn main() {
 }
 EOF
 
+# --- `in` over a set this compiler does not read ---------------------------------
+#
+# `in` tests MEMBERSHIP, and what a set is depends on what names it: a container names its
+# elements, a range its members, an error kind itself and everything below it. Only the last
+# is built. The other two are grammar-declared, so they are named rather than left to be read
+# as something else — and the message says which set was written, not which branch was taken.
+
+expect "$ZERG" in-over-a-list '`in` over list[int]' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print str(1 in xs)
+}
+EOF
+
+expect "$ZERG" in-over-a-range '`in` over a range' <<'EOF'
+fn main() {
+	print str(3 in 0..10)
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

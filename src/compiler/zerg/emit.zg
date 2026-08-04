@@ -3215,7 +3215,13 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	raise f"NotImplemented: `is {name}` — only the built-in error kinds can be named in an `is` test" if kind == 0
 	raise f"`is {name}` wants an Err on its left, found a {ty_name(t)}" if not c_is_err_ty(t)
 
-	return f"(({c_expr(em, x, sb)}).kind == {kind})"
+	# THE TAXONOMY IS A TREE, so this is a runtime call and not a comparison. `e is ValueError`
+	# has to be true of an OverflowError — docs/code/errors.md — and `.kind == N` made it false
+	# of every checked conversion in the language. zrt_err_is walks the parents and the cause
+	# chain both, which is what `is` is documented to see.
+	em.used_rt = true
+
+	return f"zrt_err_is({c_expr(em, x, sb)}, {kind})"
 }
 
 # c_is_aggregate reports the types C cannot compare with `==`: a declared struct, and the

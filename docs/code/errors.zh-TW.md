@@ -67,10 +67,14 @@ KeyError              沒有任何 map 持有這個 key
 ```
 
 **`is` 會觀察這棵樹。** `e is ValueError` 對一個 `OverflowError` 為真,所以處理者可以**粗略地接**(「值不對,我不在
-乎為什麼」)或**精確地接**,而粗略的那個不是謊話。Zerg 沒有繼承,這也不是繼承:這個關係搭的是 `raise … from cause`
-本來就在建的那條 **`unwrap()` 鏈**,而 `is` 走它。對讀者來說值得直說的是 —— 內建分類的連結是 **is-a**,不是
-**was-caused-by**,所以從一個 `OverflowError` unwrap 出來的 `ValueError`,是同一個錯誤被更概略地描述,而不是它底下
-的第二個錯誤。
+乎為什麼」)或**精確地接**,而粗略的那個不是謊話。Zerg 沒有繼承,這也不是繼承:這棵樹是內建 kind 之間一個固定的關
+係,而且**只往上讀**——每一個 `OverflowError` 都是 `ValueError`,而手寫 raise 出來的 `ValueError` 不是
+`OverflowError`。
+
+**cause 不是 parent,而 `is` 看不見 cause。** `raise X from y` 記的是「什麼導致了 `X`」;要問那個,用的是
+`unwrap()`。這兩個關係是刻意分開的:分類的連結是 **is-a**,而 cause 是**底下的另一個錯誤**,一個同時回答兩者的述詞
+等於兩者都分不出來——`raise IOError("outer") from ValueError("inner")` 會變得跟一個本來就是 `ValueError` 的錯誤無從
+區別。
 
 你**從中挑選**;**自訂**錯誤型別(一個實作 **`Error`** spec
 ——`message() -> str`、`unwrap() -> Err?`、`code() -> byte?`,見 [內建 spec](../core/specs.zh-TW.md)——的 `struct` / `enum`)

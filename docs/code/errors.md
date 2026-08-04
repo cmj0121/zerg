@@ -80,10 +80,14 @@ KeyError              a key no map holds
 
 **`is` observes the tree.** `e is ValueError` is true of an `OverflowError`, so a handler may catch coarsely
 ("the value was wrong, I do not care why") or precisely, and the coarse one is not a lie. Zerg has no
-inheritance and this is not it: the relation rides the same **`unwrap()` chain** that `raise … from cause`
-builds, and `is` walks it. What that means for a reader is worth saying plainly — a built-in taxonomy link is
-an **is-a**, not a **was-caused-by**, so a `ValueError` reached by unwrapping an `OverflowError` is the same
-error described more generally, not a second one underneath it.
+inheritance and this is not it: the tree is a fixed relation between the built-in kinds, read **upward only**
+— every `OverflowError` is a `ValueError`, and a `ValueError` raised by hand is not an `OverflowError`.
+
+**A cause is not a parent, and `is` does not see one.** `raise X from y` records what led to `X`; `unwrap()`
+is how that is asked about. The two relations are deliberately separate: a taxonomy link is an **is-a** and a
+cause is **another error underneath**, and a predicate answering both would distinguish neither —
+`raise IOError("outer") from ValueError("inner")` would stop being tellable from an error that simply is a
+`ValueError`.
 
 You **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
 **`Error`** spec —

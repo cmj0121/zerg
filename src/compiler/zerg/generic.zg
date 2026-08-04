@@ -17,20 +17,30 @@
 # types by matching the template's declared parameter types against them, which is what
 # makes `assert_eq(1, 1)` legal without spelling `assert_eq[int]`.
 
-# gen_ty_key is a type as a name fragment, and it has to tell any two distinct types apart.
-# `ty_name` already does; this only makes the result spellable, and it REPLACES what it
-# cannot spell rather than dropping it — `c_ident_safe` drops, which maps `list[int]` and a
-# type actually named `listint` onto one fragment.
+# gen_ty_key is a type as a name fragment, and it has to tell ANY two distinct types apart —
+# a key that collides hands the second call the first's specialization, which is the wrong
+# function body with no diagnostic anywhere.
+#
+# So the encoding is INJECTIVE, and getting there took two tries. Dropping what cannot be
+# spelled maps `list[int]` and a type named `listint` together; replacing each such byte with
+# `_` maps `Foo?` and a type named `Foo_` together. What works is escaping: `_` doubles, and
+# every other byte becomes `_<hex>_`, so the escape character can never be confused with
+# itself and two distinct `ty_name`s can never meet.
 fn gen_ty_key(t: Ty) -> str {
-	mut out: list[byte] = []
+	mut out := ""
 	for b in list[byte](ty_name(t)) {
-		if is_ident(b) {
-			out.append(b)
-		} else {
-			out.append(b'_')
-		}
+		out = out + gen_key_byte(b)
 	}
-	return str(out)
+	return out
+}
+
+fn gen_key_byte(b: byte) -> str {
+	return "__" if b == b'_'
+	return f"_{strconv.to_string(int(b), 16)}_" if not is_ident(b)
+
+	mut one: list[byte] = []
+	one.append(b)
+	return str(one)
 }
 
 # gen_mangle is the C-visible name of one specialization. The type arguments go into the

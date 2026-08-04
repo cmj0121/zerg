@@ -478,6 +478,177 @@ fn main() {
 }
 EOF
 
+reject typedef-value-into-its-underlying '`f` takes int as argument 1, and this gives Celsius' <<'EOF'
+type Celsius = int
+
+fn f(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print(f"{f(Celsius(20))}")
+}
+EOF
+
+reject logical-operator-on-a-typedef 'has no meaning on Flag and Flag' <<'EOF'
+type Flag = bool
+
+fn main() {
+	f := Flag(true)
+	g := Flag(false)
+	print(f"{f and g}")
+}
+EOF
+
+reject bitwise-operator-on-a-typedef 'has no meaning on Mask and int' <<'EOF'
+type Mask = int
+
+fn main() {
+	m := Mask(3)
+	print(f"{m & 1}")
+}
+EOF
+
+reject prefix-operator-on-a-typedef 'has no meaning on Flag' <<'EOF'
+type Flag = bool
+
+fn main() {
+	f := Flag(true)
+	print(f"{not f}")
+}
+EOF
+
+reject arithmetic-on-a-typedef 'a `type … = …` keeps its own identity' <<'EOF'
+type Celsius = int
+
+fn main() {
+	c := Celsius(20)
+	print(f"{c + 1}")
+}
+EOF
+
+reject typedef-declared-twice 'is declared twice' seed-gap <<'EOF'
+type Celsius = int
+type Celsius = float
+
+fn main() {
+	print(f"{int(Celsius(1))}")
+}
+EOF
+
+reject typedef-over-an-undeclared-type 'names no type' <<'EOF'
+type Celsius = Nope
+
+fn main() {
+	print(f"{int(Celsius(1))}")
+}
+EOF
+
+reject typedef-conversion-takes-one-value 'converts ONE value' <<'EOF'
+type Celsius = int
+
+fn main() {
+	print(f"{int(Celsius(1, 2))}")
+}
+EOF
+
+reject str-sent-on-an-int-channel 'the value sent on this channel is int' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- "hi"
+	print(f"{(<-ch)!}")
+}
+EOF
+
+reject str-appended-to-an-int-list 'the element `append` adds is int' <<'EOF'
+fn main() {
+	mut xs: list[int] = []
+	xs.append("hi")
+	print(f"{xs.len()}")
+}
+EOF
+
+reject str-written-into-an-int-map 'the value written into this map is int' <<'EOF'
+fn main() {
+	mut m: map[str, int] = {:}
+	m["a"] = "hi"
+	print(f"{m.len()}")
+}
+EOF
+
+reject str-among-a-map-literals-ints 'a value of this map literal is int' <<'EOF'
+fn main() {
+	m := {"a": 1, "b": "hi"}
+	print(f"{m.len()}")
+}
+EOF
+
+reject str-as-an-int-coalesce-fallback 'the `??` fallback is int' <<'EOF'
+fn main() {
+	x: int? = 1
+	print(f"{x ?? "no"}")
+}
+EOF
+
+reject str-into-an-int-variant-payload 'payload 1 of `Line` is int' <<'EOF'
+enum Shape {
+	Line(int)
+}
+
+fn take(s: Shape) -> int {
+	return 0
+}
+
+fn main() {
+	print(f"{take(Shape.Line("hi"))}")
+}
+EOF
+
+reject str-into-an-int-struct-field 'field 1 of `P` is int, and this gives str' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P("hi")
+	print(f"{p.x}")
+}
+EOF
+
+reject byte-value-into-an-int-struct-field 'field 1 of `P` is int, and this gives byte' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P(b'a')
+	print(f"{p.x}")
+}
+EOF
+
+reject int-value-into-a-float-struct-field 'field 1 of `P` is float, and this gives int' <<'EOF'
+struct P {
+	x: float
+}
+
+fn main() {
+	i := 2
+	p := P(i)
+	print(f"{p.x}")
+}
+EOF
+
+reject oversized-literal-into-a-byte-struct-field 'field 1 of `P` is byte, and this gives int' seed-gap <<'EOF'
+struct P {
+	x: byte
+}
+
+fn main() {
+	p := P(300)
+	print(f"{int(p.x)}")
+}
+EOF
+
 reject bind-byte-value-to-int 'cannot bind byte to a int binding' <<'EOF'
 fn main() {
 	n: int = b'J'

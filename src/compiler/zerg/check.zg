@@ -884,6 +884,28 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	}
 }
 
+# chk_typedef is what a `type X = Y` declaration must satisfy. The name is a TYPE name, so
+# it collides with the same things a struct or an enum name would, and the underlying type
+# has to be one that exists — a `type X = Nope` used to be dropped on the floor along with
+# the whole declaration, so nothing said anything at all.
+fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) {
+	if c_is_struct_name(em, td.name) or c_is_enum_ty(em, TNamed(td.name)) {
+		chk_at_place(em, td.path, td.line, td.col, f"`{td.name}` is already a type in this program — `type {td.name} = …` declares a new one, and two declarations of one name have no order to be read in")
+		return
+	}
+	if c_is_typedef(em, td.name) {
+		chk_at_place(em, td.path, td.line, td.col, f"`{td.name}` is declared twice")
+		return
+	}
+
+	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
+	# catching here rather than at the first use of it
+	nm := c_named_of(td.under)
+	return if nm == "" or c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
+
+	chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
+}
+
 # --- assigned value ---------------------------------------------------------------
 #
 # An assignment is the FOURTH slot a value enters, and it was the one this rule set left
@@ -983,6 +1005,16 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb) {
 			chk_at(em, f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
+		return
+	}
+
+	# A `type X = Y` IS NOT A Y HERE. docs/core/types.md: X takes on Y's representation and
+	# keeps an identity of its own, and this compiler does not carry Y's impls across — so a
+	# `Celsius` has no `+` until somebody writes `int(c)`, which is the explicit step the
+	# whole feature is for. Saying it once, ahead of the families, is what keeps it from
+	# being four rules that each have to remember.
+	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
 
@@ -1105,6 +1137,16 @@ fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Exp
 # re-enumerating: adding `uint` to a second copy is an edit that is easy to miss, and missing
 # it let a `uint` reach the arithmetic and ordering diagnostics through the not-a-scalar hole
 # instead of the numeric path the mixing rule assumes.
+# chk_is_typedef_operand is whether an operand is a `type X = Y` name. It asks the emitter's
+# registry rather than the type's shape, because the shape is precisely what a typedef shares
+# with its underlying type and precisely what must not be read through here.
+fn chk_is_typedef_operand(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	return false if nm == ""
+
+	return c_is_typedef(em, nm)
+}
+
 fn chk_is_num(t: Ty) -> bool {
 	return c_is_int(t) or c_is_float(t) or c_is_uint(t) or c_is_rune(t)
 }

@@ -341,6 +341,22 @@ struct StructDecl {
 	fields: list[FieldDef]
 }
 
+# TypeDecl is `type X = Y` — a NEW, DISTINCT type, not a transparent alias
+# (docs/core/types.md). X takes on Y's representation, so a monomorphic one costs nothing at
+# runtime; what it does not take on is Y's identity. There is no cast between them, and a
+# value crosses by re-construction — `X(y)` and `Y(x)` — like any other conversion.
+#
+# It carries its position because the checks about it are the ordinary declaration ones: a
+# name declared twice, a name that is also a struct, an underlying type nothing declares.
+pub struct TypeDecl {
+	name: str
+	under: Ty
+	is_pub: bool
+	path: str
+	line: int
+	col: int
+}
+
 # VariantDef is one enum variant: its name, its payload field types (empty for a tag-only
 # variant), and its DISCRIMINANT — the integer the variant is, which defaults to the
 # previous one plus one (from 0) and so is its position until a declaration says otherwise.
@@ -408,6 +424,11 @@ pub struct File {
 	specs: list[SpecDecl]
 	impls: list[ImplDecl]
 	fns: list[FnDecl]
+
+	# types are the `type X = Y` declarations — strong typedefs, kept apart from structs
+	# because they have no fields and from enums because they have no variants; what they
+	# have is one underlying type and an identity of their own.
+	types: list[TypeDecl]
 
 	# consts are the module-level `const` bindings, each an SLet. They are not statements
 	# of any function: they become C globals, assigned once before anything runs.

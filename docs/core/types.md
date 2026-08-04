@@ -64,10 +64,48 @@ the grammar:
 > elided when both operands are provably non-negative — the "zero overhead in the common case" above is
 > the intended codegen, not today's. The semantics are unaffected: it is a cost, not a wrong answer.
 
+### Typed positions
+
+Several rules below are about **a value meeting a declared type** — what fits, what a literal adopts,
+what converts. They all need the same answer to one question, so it is given once, here, and each of
+them refers to it: **a typed position** is a place where the language already knows what type is wanted.
+
+They are these, and the list is **exhaustive**:
+
+| position                      | example                       |
+| ----------------------------- | ----------------------------- |
+| a typed binding               | `x: byte = e`                 |
+| an assignment                 | `x = e` where `x` is declared |
+| a `return`                    | `return e`                    |
+| an argument                   | `f(e)`                        |
+| a parameter's default         | `fn f(x: byte = e)`           |
+| a struct literal's field      | `P(e)`                        |
+| an enum variant's payload     | `Shape.Line(e)`               |
+| a list literal's element      | `xs: list[byte] = [e]`        |
+| a map literal's key and value | `{e: e}`                      |
+| a map write                   | `m[k] = e`                    |
+| a container method's argument | `xs.append(e)`                |
+| a channel send                | `ch <- e`, and a `select` arm |
+| a `??` fallback               | `x ?? e`                      |
+| the other operand             | `a + e`                       |
+
+A position is **structural**, not syntactic: it is what the expression IS to the construct around it, not
+how it is written. **Grouping parentheses are not a position** — `(e)` is the same position `e` was —
+which is what keeps a rule stated over positions from being defeated by typing more brackets.
+
+**A position takes at most one conversion.** Where a rule below converts a value to reach the declared
+type, it does so in one step per position; a value that crosses two positions may be converted at each.
+
+> **[deviation]** The list is the contract; the compiler reached it incrementally, and each position it
+> had not yet been told about was a value lowered into a type it did not fit — silently. The list exists
+> because that kept happening: it was written as four examples in a parenthesis, and the four grew to
+> fourteen one miscompile at a time. A new syntactic form owes an answer to "is this a typed position",
+> and that answer belongs here rather than in whichever rule notices first.
+
 ### Numeric literals
 
-A numeric literal is **untyped** — it adopts the type its context demands (a typed binding `x: uint = 5`,
-a typed parameter, a `return`, or the other operand of a typed expression), checked **at compile time**.
+A numeric literal is **untyped** — it adopts the type its context demands, at any **typed position**
+above — checked **at compile time**.
 Unconstrained, an integer literal defaults to `int` and a fractional/exponent literal (`1.0`, `1e3`) to
 `float`; the non-decimal bases `0x…` / `0o…` / `0b…` are ordinary integer literals.
 

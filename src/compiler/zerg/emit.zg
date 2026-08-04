@@ -1360,8 +1360,39 @@ fn c_build_generics(mut &em: Emitter, f: File) {
 	for fn_i in f.fns {
 		if c_is_template(fn_i) {
 			raise f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace" if fn_i.recv != ""
+			c_check_gen_dup(em, f, fn_i)
 			em.gen_names.append(fn_i.name)
 			em.gen_tpls.append(fn_i)
+		}
+	}
+}
+
+# c_check_gen_dup is the DUPLICATE-DECLARATION rule for a template. It has to be made here
+# because a template is removed from the program before c_build_sigs runs, so the two rules
+# that pass holds — a method declared twice, and two modules defining one name — never see
+# one. Every collision a template can be in was therefore silent, and the template WON:
+#
+#   fn to_string[T](x: T, base: int) -> str { return "HIJACKED" }
+#   print strconv.to_string(42, 10)          # printed HIJACKED
+#
+# because a module's names flatten into the one program-wide function space here, so the
+# stdlib's `to_string` and a local template of that name are the same name — and `c_call`
+# asks `c_is_generic` before it asks anything else. The seed refuses the same program.
+fn c_check_gen_dup(mut &em: Emitter, f: File, tpl: FnDecl) {
+	name := tpl.name
+
+	# REPORTED at the declaration, not raised. This pass runs before any statement is
+	# emitted, so the SAt markers have said nothing and the declaration's own place is the
+	# only one there is — which the reject gate insists on, and rightly: a rule that cannot
+	# say where is a rule the reader has to go and find.
+	if c_name_in(em.gen_names, name) {
+		chk_at_place(em, tpl.path, tpl.line, tpl.col, f"`{name}` is declared twice, once as a generic — a template shares the one flat function namespace with every module of the program, so a second declaration of that name cannot be told apart from it")
+		return
+	}
+	for other in f.fns {
+		if other.name == name and other.recv == "" and not c_is_template(other) {
+			chk_at_place(em, tpl.path, tpl.line, tpl.col, f"`{name}` is declared both as a generic and as a plain function — a template shares the one flat function namespace, so the two cannot be told apart; rename one")
+			return
 		}
 	}
 }
@@ -6574,9 +6605,29 @@ fn c_with_defaults(mut &em: Emitter, key: str, args: list[Expr]) -> list[Expr] {
 	return out
 }
 
+# c_callee_gen is a Callee naming one SPECIALIZATION. The mangled key is both the C symbol
+# (through c_fn_cname) and the signature key the argument rules read, which is what makes a
+# deferred generic call checked exactly as a direct one is.
+fn c_callee_gen(mut &em: Emitter, key: str, x: Expr) -> Callee {
+	return Callee(c_fn_cname("", key), c_callee_args_of(x), key)
+}
+
+# c_callee_args_of is the argument list of either call form, since c_callee_raw reaches this
+# from both and they spell it differently.
+fn c_callee_args_of(x: Expr) -> list[Expr] {
+	return c_call_args_of(x) if c_call_name(x) != ""
+
+	return c_meth_args_of(x)
+}
+
 fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	n := c_call_name(x)
 
+	# A GENERIC CALLEE is instantiated here too. The thunk names a C symbol directly rather
+	# than going through c_call, so a template's name reached cc as an undeclared function —
+	# it has no symbol, having been taken out of the program. `chk_callsite` was looking up
+	# the same absent key, so the arity and argument rules were skipped as well.
+	return c_callee_gen(em, c_instantiate(em, n, c_call_args_of(x)), x) if n != "" and c_is_generic(em, n)
 	return Callee(c_fn_cname("", n), c_call_args_of(x), n) if n != ""
 	raise f"NotImplemented: {what} of anything but a function, a method, or a namespaced function" if not c_is_method_expr(x)
 
@@ -6586,6 +6637,10 @@ fn c_callee_raw(mut &em: Emitter, x: Expr, what: str) -> Callee {
 	recv := c_named_of(c_infer(em, tgt))
 
 	if not c_has_method(em, recv, m) {
+		# a NAMESPACED generic, `spawn mod.work(x)` — the same flattening, so the same
+		# instantiation the direct form gets
+		return c_callee_gen(em, c_instantiate(em, m, margs), x) if c_is_generic(em, m)
+
 		# `mod.work()` — a module namespace flattens into the one program-wide function
 		# space, so a namespaced callee IS the free function of that name, exactly as an
 		# ordinary `mod.work()` call is lowered

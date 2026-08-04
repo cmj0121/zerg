@@ -664,6 +664,12 @@ fn chk_call_name(key: str) -> str {
 	bs := list[byte](key)
 	mut out: list[byte] = []
 	for b in bs {
+		# a SPECIALIZATION's key carries its type arguments after a `$`, and the reader wrote
+		# none of that — `two(1, "x")` was answered with "`two$int` takes int as argument 2".
+		# The mangling is how the compiler tells two instantiations apart; it is not a name
+		# any program contains, so it stops here, at the one place a key becomes a sentence.
+		break if b == b'$'
+
 		if b == b'#' {
 			out.append(b'.')
 		} else {

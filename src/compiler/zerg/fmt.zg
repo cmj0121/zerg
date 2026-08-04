@@ -799,7 +799,13 @@ fn fmt_opens_block(mut &toks: list[Token], at: int) -> bool {
 # another `{` — while the places an expression is expected are countable, and a new one joins
 # by being named here.
 fn fmt_wants_value(k: Kind) -> bool {
-	return k == Walrus or k == Assign or k == Colon or k == Comma or k == LParen or k == LBrack or k == Return
+	return true if k == Walrus or k == Assign or k == Colon or k == Comma or k == LParen or k == LBrack
+
+	# `return {…}`, `x in {…}`, `ch <- {…}` — the keyword and the two operators that take a
+	# value on their right and can find a literal there. `in` and `<-` were missed when this
+	# list was first written, and the miss reproduced the very defect the list exists to fix,
+	# one token class over: `found := "a" in {"a": 1}` came back as a block.
+	return k == Return or k == In or k == LArrow
 }
 
 fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {
@@ -1264,7 +1270,7 @@ fn fmt_wrap_scan(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bo
 			col = depth * fmt_wrap_tab()
 			i = i + 1
 		} else {
-			if is_rbrace(t.kind) and depth > 0 {
+			if is_rbrace(t.kind) and depth > 0 and fmt_rbrace_closes_block(toks, i) {
 				depth = depth - 1
 			}
 			if brk[i] > 0 or i == 0 {
@@ -1556,14 +1562,21 @@ struct Printed {
 	trail: list[int]
 }
 
-# fmt_pop_int drops a list's last element. The subset has no `pop`, and a stack is what the
-# brace nesting needs, so the drop is written here once rather than at each use.
-# fmt_closes_block asks what the `}` about to be written is closing. An empty stack answers
-# YES: a `}` with no opener is a program the formatter cannot understand, and treating it as a
-# block is what it did before this rule existed.
-# fmt_brace_open is the index of the `{` the `}` at `at` closes. The spacing pass sees one
-# token at a time and has no stack, so it walks back — which is affordable because the only
-# caller asks it of a `}`, and a map literal is a short thing to walk.
+# fmt_rbrace_closes_block is fmt_opens_block asked of the `}` end of the pair: it finds the
+# brace this one closes and asks what THAT one opened.
+#
+# IT REPLACES A STACK, and that is the point of it. Three passes need this answer and they walk
+# the token list three different ways, so the first version kept a per-brace stack in the one
+# pass that had a loop to hang it on — whereupon the pass with no stack asked the question a
+# second way, and the THIRD pass, the wrap scanner, did not ask it at all and popped a level
+# that a map literal had never pushed. One function all three call cannot drift like that.
+fn fmt_rbrace_closes_block(mut &toks: list[Token], at: int) -> bool {
+	return fmt_opens_block(toks, fmt_brace_open(toks, at))
+}
+
+# fmt_brace_open is the index of the `{` the `}` at `at` closes, walking back. The formatter
+# has no tree and each pass sees one token at a time, so the pairing is re-derived where it is
+# wanted rather than carried.
 fn fmt_brace_open(mut &toks: list[Token], at: int) -> int {
 	mut depth := 0
 	mut i := at
@@ -1579,12 +1592,8 @@ fn fmt_brace_open(mut &toks: list[Token], at: int) -> int {
 	return 0
 }
 
-fn fmt_closes_block(bkind: list[int]) -> bool {
-	return true if bkind.len() == 0
-
-	return bkind[bkind.len() - 1] == 1
-}
-
+# fmt_pop_int drops a list's last element. The subset has no `pop`, and a stack is what the
+# brace nesting needs, so the drop is written here once rather than at each use.
 fn fmt_pop_int(xs: list[int]) -> list[int] {
 	mut out: list[int] = []
 	mut i := 0
@@ -1632,11 +1641,6 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	mut bsave := 0
 	mut bstack: list[int] = []
 
-	# bkind records, for every `{` still open, whether it opened a BLOCK — 1 — or a map
-	# literal — 0. It is pushed on every brace and popped on every `}`, so the two always
-	# pair; bstack is only pushed for a block, and asking IT which kind closed would have
-	# read the wrong entry the moment a literal sat inside a block.
-	mut bkind: list[int] = []
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
@@ -1719,8 +1723,7 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			# A `}` closes its block: it dedents before it is written, and it always starts
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
 			# fires at bracket depth 0 — so block structure is the formatter's own rule.
-			if is_rbrace(t.kind) and fmt_closes_block(bkind) {
-				bkind = fmt_pop_int(bkind)
+			if is_rbrace(t.kind) and fmt_rbrace_closes_block(toks, i) {
 				if bstack.len() > 0 {
 					bsave = bstack[bstack.len() - 1]
 					bstack = fmt_pop_int(bstack)
@@ -1732,8 +1735,6 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 					out.append(byte(10))
 					col = 0
 				}
-			} else if is_rbrace(t.kind) {
-				bkind = fmt_pop_int(bkind)
 			}
 			if col == 0 {
 				# a blank line in the source survives, but only one
@@ -1791,17 +1792,12 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 
 			# a `{` opens a block: whatever follows starts on its own line, one deeper. A map
 			# literal's brace is not one and stays on its line — fmt_opens_block.
-			if is_lbrace(t.kind) {
-				if fmt_opens_block(toks, i) {
-					bkind.append(1)
-					bstack.append(bsave)
-					bsave = psp
-					depth = depth + 1
-					out.append(byte(10))
-					col = 0
-				} else {
-					bkind.append(0)
-				}
+			if is_lbrace(t.kind) and fmt_opens_block(toks, i) {
+				bstack.append(bsave)
+				bsave = psp
+				depth = depth + 1
+				out.append(byte(10))
+				col = 0
 			}
 
 			# a comment runs to end of line: close the line so nothing joins it
@@ -2190,7 +2186,7 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 	# stand apart from the head that opens them. Same token, two rules, told apart by what is
 	# in front of the `{` (fmt_opens_block) and, for the `}`, by what its own opener was.
 	return false if is_lbrace(prev) and not fmt_opens_block(toks, i - 1)
-	return false if is_rbrace(k) and not fmt_opens_block(toks, fmt_brace_open(toks, i))
+	return false if is_rbrace(k) and not fmt_rbrace_closes_block(toks, i)
 
 	if is_open(k) and binds_tight(prev) {
 		return false # `f(`, `xs[`, `chan[`

@@ -567,8 +567,12 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" equality-on-an-aggregate "which this compiler does not generate" <<'EOF'
-#[derive(Eq)]
+# `#[derive(Eq)]` + `==` used to be refused here. It is a FEATURE now, and what a working
+# form owes is a program that runs, so it moved to the codegen corpus. What is left refused
+# on this subject is the derive this compiler still does not write — see
+# derive-of-an-unbuilt-spec and payload-enum-equality below.
+
+expect "$ZERG" equality-with-no-eq "needs an \`Eq\`" <<'EOF'
 struct P {
 	x: int
 }
@@ -576,6 +580,41 @@ struct P {
 fn main() {
 	print P(1) == P(1)
 }
+EOF
+
+expect "$ZERG" equality-over-a-container "over a container is unbuilt" <<'EOF'
+fn main() {
+	print [1, 2] == [1, 2]
+}
+EOF
+
+expect "$ZERG" payload-enum-equality "it carries a payload" <<'EOF'
+#[derive(Eq)]
+enum Shape {
+	Circle(int)
+}
+
+fn main() {
+	print Shape.Circle(1) == Shape.Circle(1)
+}
+EOF
+
+expect "$ZERG" derive-of-a-user-spec "the derivable specs are compiler-owned" <<'EOF'
+spec Show {
+	fn show() -> str
+}
+
+#[derive(Show)]
+struct P {
+	x: int
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" derive-with-no-declaration "has no declaration under it" <<'EOF'
+#[derive(Eq)]
+fn main() { print 1 }
 EOF
 
 expect "$ZERG" field-default "a default on field" <<'EOF'
@@ -934,8 +973,19 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" ordering-on-an-aggregate "does not generate" <<'EOF'
+expect "$ZERG" derive-of-an-unbuilt-spec "specified and unbuilt" <<'EOF'
 #[derive(Ord)]
+struct P {
+	x: int
+}
+
+fn main() {
+	print P(1) < P(2)
+}
+EOF
+
+expect "$ZERG" ordering-on-an-aggregate "an ordering comes from" <<'EOF'
+#[derive(Eq)]
 struct P {
 	x: int
 }

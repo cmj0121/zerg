@@ -203,7 +203,7 @@ EOF
 
 # --- every documented rule has a case ----------------------------------------------
 
-for code in $(grep -oE '^#   L[0-9]{3}' "$LINT_SRC" | grep -oE 'L[0-9]{3}' | sort -u); do
+for code in $(sed -n 's/^#   \(L[0-9][0-9][0-9]\).*/\1/p' "$LINT_SRC" | sort -u); do
 	case " $seen " in
 	*" $code "*) ;;
 	*)

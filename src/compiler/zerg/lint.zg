@@ -516,17 +516,22 @@ fn lint_unread_bindings(f: File, mut &out: list[str]) {
 	for fd in f.fns {
 		mut names: list[str] = []
 		collect_binds(fd.body, names)
+
+		# THE BODY IS WALKED ONCE PER FUNCTION, not once per binding. The walk does not depend
+		# on `n`, and it sat inside the loop — so a function with forty bindings walked its own
+		# body forty times, and the rule cost the square of what it needed to.
+		mut ids: list[str] = []
+		mut calls: list[str] = []
+		mut ns: list[str] = []
+		walk_body(fd.body, ids, calls, ns)
+
 		for n in names {
 			if n == "_" {
 				out.append(f"L104 `_ :=` in `{fd.name}` — the expression is already a statement, so the binder says nothing")
 				continue
 			}
 
-			mut ids: list[str] = []
-			mut calls: list[str] = []
-			mut ns: list[str] = []
-			walk_body(fd.body, ids, calls, ns)
-			if count_str(ids, n) == 0 {
+			if not has_str(ids, n) {
 				out.append(f"L103 binding `{n}` in `{fd.name}` is never read")
 			}
 		}
@@ -776,16 +781,6 @@ fn has_str(xs: list[str], want: str) -> bool {
 		return true if x == want
 	}
 	return false
-}
-
-fn count_str(xs: list[str], want: str) -> int {
-	mut n := 0
-	for x in xs {
-		if x == want {
-			n = n + 1
-		}
-	}
-	return n
 }
 
 # skip is the no-op a match arm needs: an arm is an EXPRESSION, so a case with nothing to

@@ -4900,7 +4900,7 @@ fn c_arm_cond_in(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 # or the slice silently ran zero times — the shape the arm path now handles deliberately, and
 # these two do not handle at all.
 fn c_range_needs_hi(e: Expr, what: str) {
-	raise "NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_expr(c_range_hi(e))
+	raise "NotImplemented: an open-ended range has no upper bound here — " + what if c_is_range(e) and c_is_nil_lit(c_range_hi(e))
 }
 
 # c_arm_range lowers a RANGE arm's test. GRAMMAR defines `200..300 =>` as match-only sugar for
@@ -4927,7 +4927,7 @@ fn c_arm_range(mut &em: Emitter, a: Arm, s: str, st: Ty, sb: Subst) -> str {
 	chk_binary(em, ">=", st, c_infer(em, c_range_lo(a.lit)), a.lit, a.lit)
 	lo := c_expr(em, c_range_lo(a.lit), sb)
 	mut base := f"({s} >= {lo})"
-	if not c_is_nil_expr(c_range_hi(a.lit)) {
+	if not c_is_nil_lit(c_range_hi(a.lit)) {
 		hi := c_expr(em, c_range_hi(a.lit), sb)
 		mut cmp := " < "
 		if c_range_incl(a.lit) {
@@ -7292,11 +7292,11 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# `return nil` is a RETURN WITH NO VALUE everywhere except where the declared result is
 	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
 	# the nil is a value there and has to travel the value path below.
-	if has_val and c_is_nil_expr(e) and c_is_carrier(em.fn_ret) {
+	if has_val and c_is_nil_lit(e) and c_is_carrier(em.fn_ret) {
 		nv := c_carrier_fit(em, CHK_ANSWER, em.fn_ret, e, c_nosub())
 		return f"{pre}{ind}return {nv};\n"
 	}
-	if has_val and not c_is_nil_expr(e) {
+	if has_val and not c_is_nil_lit(e) {
 		# the returned expression's type is wanted twice — once to check it against the
 		# signature, and again on the two conditions that rarely coincide, a channel return
 		# type and a defer to unwind past. chk_returned answers with what it inferred, so
@@ -7342,13 +7342,6 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		return ind + "{ " + rt + " zgt_rv = " + v + ";\n" + pre + ind + "return zgt_rv; }\n"
 	}
 	return f"{pre}{ind}return;\n"
-}
-
-fn c_is_nil_expr(e: Expr) -> bool {
-	return match e {
-		ENil => true
-		_    => false
-	}
 }
 
 # Each branch is analysed from the SAME entry liveness and the two ends are joined, so a
@@ -7884,11 +7877,6 @@ fn c_main_has_args(f: File) -> bool {
 	return false
 }
 
-# emit_c lowers one Zerg source file to a complete C translation unit.
-pub fn emit_c(src: str) -> str {
-	return c_emit_file(parse(src))
-}
-
 # merge_files parses several sources (a flattened module and its imported modules) and
 # returns them as one File, declarations in source order. The whole-program view every
 # pass wants: the emitter lowers it, the linter walks it.
@@ -7915,36 +7903,9 @@ pub fn merge_files_at(srcs: list[str], paths: list[str]) -> File {
 	return merge_asts(fs)
 }
 
-# emit_files lowers several sources to one C translation unit — the whole program in one
-# object, which is what a single `zerg build` of an entry file produces.
-pub fn emit_files(srcs: list[str]) -> str {
-	mut none: list[str] = []
-	return emit_files_at(srcs, none)
-}
-
-# emit_files_at is emit_files with the sources' paths, which the diagnostics need.
-pub fn emit_files_at(srcs: list[str], paths: list[str]) -> str {
-	mut diags: list[Diag] = []
-	return emit_files_diag(srcs, paths, diags)
-}
-
 # emit_files_diag is emit_files_at that also reports what it found.
 pub fn emit_files_diag(srcs: list[str], paths: list[str], mut &diags: list[Diag]) -> str {
 	return c_emit_file_at(merge_files_at(srcs, paths), diags)
-}
-
-# emit_unit lowers ONE module for separate compilation, from ALREADY PARSED input: `prog`
-# is the whole program, `own` the module whose bodies this unit defines. The result
-# declares the program but defines only the module, so the objects of two modules that
-# share an import can be linked together — which whole-program emission cannot do, since
-# each object would carry its own copy of the shared module.
-#
-# It takes trees rather than sources because a build emits one unit per module: parsing
-# the whole program again for each of them made a six-module build parse six times, and
-# that, not the C compiler, was where its time went.
-pub fn emit_unit(prog: File, own: File) -> str {
-	mut diags: list[Diag] = []
-	return emit_unit_at(prog, own, diags)
 }
 
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
@@ -8011,14 +7972,6 @@ pub fn merge_asts(fs: list[File]) -> File {
 		}
 	}
 	return File(imports, structs, enums, specs, impls, fns, types, consts)
-}
-
-# c_emit_file lowers a parsed File. The body is generated first (so list use sets
-# em.used_rt), then the header is assembled with the runtime include and the shared list
-# vtable added only when the program needs them.
-fn c_emit_file(f: File) -> str {
-	mut diags: list[Diag] = []
-	return c_emit_file_at(f, diags)
 }
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {

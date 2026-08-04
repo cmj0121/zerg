@@ -188,17 +188,15 @@ static int zrt_err_parent(int kind) {
 	}
 }
 
-/* zrt_err_is answers `e is Kind`, up the TAXONOMY and no further. `e.kind == kind` was the
- * whole test before, so `e is ValueError` was false of every OverflowError the runtime raises
- * — which is every checked conversion in the language.
+/* zrt_err_in answers `e in Kind` — is this error a member of that kind's subtree? It walks the
+ * taxonomy upward and no further.
  *
- * IT DOES NOT WALK THE CAUSE CHAIN, and that is the decision worth recording. Doing both was
- * tried: `raise IOError("outer") from inner` for a ValueError `inner` then answered `is
- * ValueError`, so `is` could no longer tell "this IS an IOError" from "this was CAUSED BY a
- * ValueError". Those are the two relations docs/code/errors.md is at pains to separate — a
- * built-in link is an is-a, a cause is another error underneath — and one predicate that
- * answers both distinguishes neither. unwrap() is how a cause is asked about. */
-int zrt_err_is(zrt_err e, int kind) {
+ * THREE RELATIONS, THREE SPELLINGS, and that is the whole design. `is` asks identity and stays
+ * a kind comparison; `in` asks the taxonomy and is this; unwrap() asks what an error was
+ * raised FROM. One predicate answering two of them distinguishes neither — which is what
+ * happened when `is` walked the cause chain and `raise IOError("outer") from inner` for a
+ * ValueError `inner` stopped being tellable from an error that simply is a ValueError. */
+int zrt_err_in(zrt_err e, int kind) {
 	int k = e.kind;
 	while (k != ZRT_ERR_NONE) {
 		if (k == kind) {

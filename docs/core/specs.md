@@ -62,9 +62,15 @@ offers precisely what dispatches through `this` alone — re-boxing a `This`-ret
 
 Concrete-bound generics are **monomorphized** in the emitted C — the compiler emits a separate
 specialized version for each concrete type — while a spec used as a type is the one place codegen uses
-dynamic dispatch. There is **no subtyping** between concrete types, so generics are **invariant**:
-`list[Cat]` is not a `list[Animal]` — abstract over a family with a spec bound (`[T: X]`), not subtype
-substitution.
+dynamic dispatch. **Type arguments are solved from the call**, structurally: a `list[T]` parameter given a
+`list[int]` decides `T`, so `max(a, b)` needs no `[int]` written. A parameter no argument mentions is a
+compile error rather than a guess, and a **bound is checked at the instantiation** — that is where a
+concrete type first exists to check it against. There is **no subtyping** between concrete types, so
+generics are **invariant**: `list[Cat]` is not a `list[Animal]` — abstract over a family with a spec bound
+(`[T: X]`), not subtype substitution.
+
+> **[not yet]** A generic **`fn`** is built. A generic **`struct`** or **`enum`**, a generic **method**, and
+> a bound naming more than one spec (`T: Eq + Ord`) are each refused by name.
 
 An **implementation** (a type satisfying a spec) carries no visibility marker of its own: coherence
 requires a `(type, spec)` pair — parameters included — to resolve to the same implementation everywhere,

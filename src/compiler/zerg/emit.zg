@@ -3099,8 +3099,11 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 			return c_str_concat(em, a, b, sb)
 		}
 
-		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) == 0)" if oper == "=="
-		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) != 0)" if oper == "!="
+		# EVERY comparison on two strs is strcmp's, not just the two equalities. `<` `>` `<=`
+		# `>=` fell through to the numeric path below and compared the two POINTERS: `"zzz" <
+		# "aaa"` answered TRUE, silently, and the seed answered false. An ordering is what a
+		# sort is built on, so the wrong answer does not stay local.
+		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) {oper} 0)" if c_is_cmp_op(oper)
 	}
 
 	# enum equality compares the tag (the subset only == tag-only enums like Kind)

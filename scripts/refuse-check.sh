@@ -1398,6 +1398,20 @@ fn same[T: Eq](a: T, b: T) -> bool {
 fn main() { print same(P(1), P(1)) }
 EOF
 
+# POLYMORPHIC RECURSION — a template calling itself at a LARGER type. Its specializations are
+# `int`, `list[int]`, `list[list[int]]`, … without end, and whether the program stops depends
+# on `n`, a runtime value. No monomorphizing compiler can answer that by looking, so each
+# stops at a depth; this one used to spin until it was killed, saying nothing at all.
+expect "$ZERG" generic-polymorphic-recursion "has no finite set of specializations" <<'EOF'
+fn deep[T](x: T, n: int) {
+	if n > 0 {
+		deep([x], n - 1)
+	}
+}
+
+fn main() { deep(1, 3) }
+EOF
+
 expect "$ZERG" closure-capture "a closure capturing" <<'EOF'
 fn run(f: fn() -> int) -> int {
 	return f()

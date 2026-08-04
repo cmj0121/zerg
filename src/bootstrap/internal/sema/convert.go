@@ -39,6 +39,13 @@ const (
 type Scalar struct {
 	Class ScalarClass
 	Bits  int
+	// Rune marks the one scalar whose values are NOT A RANGE: a rune is a single
+	// valid Unicode code point (docs/core/types.md), and U+D800..U+DFFF are
+	// surrogates — UTF-16 machinery that is not a character. Class and Bits describe
+	// its storage, which is an i32 and would admit both a surrogate and a value past
+	// U+10FFFF. Containment (Lossless) reads the storage and is right to; a
+	// CONVERSION INTO one has to ask IsRune.
+	Rune bool
 }
 
 // ScalarOf reports a type's scalar shape, and whether it has one at all. `str` and
@@ -52,26 +59,26 @@ func ScalarOf(t Type) (Scalar, bool) {
 	case *types.Primitive:
 		switch x.Kind() {
 		case types.KInt:
-			return Scalar{ScalarSigned, 64}, true
+			return Scalar{Class: ScalarSigned, Bits: 64}, true
 		case types.KUint:
-			return Scalar{ScalarUnsigned, 64}, true
+			return Scalar{Class: ScalarUnsigned, Bits: 64}, true
 		case types.KRune:
-			return Scalar{ScalarSigned, 32}, true
+			return Scalar{Class: ScalarSigned, Bits: 32, Rune: true}, true
 		case types.KByte:
-			return Scalar{ScalarUnsigned, 8}, true
+			return Scalar{Class: ScalarUnsigned, Bits: 8}, true
 		case types.KFloat:
-			return Scalar{ScalarFloat, 64}, true
+			return Scalar{Class: ScalarFloat, Bits: 64}, true
 		case types.KBool:
-			return Scalar{ScalarBool, 1}, true
+			return Scalar{Class: ScalarBool, Bits: 1}, true
 		}
 	case *types.Fixed:
 		switch {
 		case x.Float:
-			return Scalar{ScalarFloat, x.Bits}, true
+			return Scalar{Class: ScalarFloat, Bits: x.Bits}, true
 		case x.Signed:
-			return Scalar{ScalarSigned, x.Bits}, true
+			return Scalar{Class: ScalarSigned, Bits: x.Bits}, true
 		default:
-			return Scalar{ScalarUnsigned, x.Bits}, true
+			return Scalar{Class: ScalarUnsigned, Bits: x.Bits}, true
 		}
 	}
 	return Scalar{}, false

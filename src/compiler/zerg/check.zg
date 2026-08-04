@@ -649,8 +649,8 @@ fn chk_call_name(key: str) -> str {
 # that needs `float(i)` — because the conversion is the place a lost bit is visible.
 #
 # The type-only chk_fits cannot tell those apart: both are TInt by the time it is asked. So
-# the five slots a value enters ask this one — a binding, an assignment, a `return`, an
-# argument, and a parameter's default. What still asks the type alone is the list-ELEMENT
+# the SIX slots a value enters ask this one — a binding, an assignment, a `return`, an
+# argument, a parameter's default, and a struct literal's field. What still asks the type alone is the list-ELEMENT
 # recursion, which has no expression to pass (it recurses on types pulled out of a
 # container), and chk_arm_types, which compares two arms rather than a value against a slot.
 #
@@ -667,7 +667,7 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# It is asked HERE and not at the binding, which is where it used to live: a list literal
 	# also arrives as an argument, a return, an assignment and a parameter's default, and at
 	# those four `f([1, 2])` on a `list[byte]` parameter was refused while the binding spelling
-	# of the same thing was allowed. One rule, five slots — the same shape this file has now
+	# of the same thing was allowed. One rule, six slots — the same shape this file has now
 	# had to fix three times.
 	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
 
@@ -923,13 +923,21 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 # not, and a list-literal field is checked element by element. The position is what the
 # sentence names, because a struct literal gives its fields in order and has no other handle
 # on the one that is wrong.
-fn chk_field_init(mut &em: Emitter, sname: str, idx: int, want: Ty, arg: Expr) {
-	return if c_is_unknown(want)
-
+fn chk_field_init(mut &em: Emitter, sname: str, pos: int, want: Ty, arg: Expr) {
 	got := c_infer(em, arg)
-	return if chk_fits_expr(em, want, got, arg)
+	if not chk_fits_expr(em, want, got, arg) {
+		chk_at(em, f"{chk_field_says(sname, pos)} is {ty_name(want)}, and this gives {ty_name(got)}")
+	}
+}
 
-	chk_at(em, f"field {strconv.to_string(idx + 1, 10)} of `{sname}` is {ty_name(want)}, and this gives {ty_name(got)}")
+# chk_field_says names a struct's field BY POSITION, the way chk_arg_says names an argument,
+# and it is shared with the emitter's missing-field diagnostic — because the two disagreed
+# about the numbering. One counted from 1 and the other from 0, so the same field of the same
+# struct was "field 1" or "field 0" depending on which mistake you made.
+#
+# `pos` arrives 1-based, which is chk_arg_says' convention.
+pub fn chk_field_says(sname: str, pos: int) -> str {
+	return f"field {strconv.to_string(pos, 10)} of `{sname}`"
 }
 
 # --- assigned value ---------------------------------------------------------------

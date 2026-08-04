@@ -58,7 +58,10 @@
 # lint_files reports every finding across a loaded program (the entry file plus the
 # modules it imports, as the driver resolved them).
 pub fn lint_files(srcs: list[str]) -> list[str] {
-	f := merge_files(srcs)
+	# THE BUILT-IN SPECS TOO, and through the same function the lowering walk uses: `Into` is
+	# declared by the language, so a program that implements it declares no spec by that name
+	# — and L102 read the resulting `into` as a private function nobody calls.
+	f := c_with_builtin_specs(merge_files(srcs))
 	mut out: list[str] = []
 
 	# Names used ANYWHERE in the program: a private function called from another module
@@ -468,14 +471,36 @@ fn lint_imports(f: File, ns: list[str], ids: list[str], mut &out: list[str]) {
 # lint_dead_fns reports a private function nothing calls. `main` is the program's entry —
 # the runtime calls it, so it is never "unused" no matter what the source says.
 fn lint_dead_fns(f: File, calls: list[str], ids: list[str], mut &out: list[str]) {
+	reqs := spec_required_names(f)
 	for fd in f.fns {
 		# `init` is called by the generated main, the same way the runtime calls `main`
 		if fd.is_pub or fd.name == "main" or is_init_name(fd.name) {
+			continue_marker()
+		} else if has_str(reqs, fd.name) {
+			# A METHOD THAT SATISFIES A SPEC IS AN INTERFACE, the way a `pub` function is: what
+			# calls it may be another program, or — for `Into` — the compiler, at a typed
+			# position where nothing in the source spells the call at all. `impl Into[int] for
+			# Celsius` reported its own `into` as dead code in a program that converted four
+			# times.
 			continue_marker()
 		} else if not has_str(calls, fd.name) and not has_str(ids, fd.name) {
 			out.append(f"L102 private function `{fd.name}` is never called")
 		}
 	}
+}
+
+# spec_required_names is every method name some spec in the program declares. It is asked of
+# the SPECS rather than of the impls, and deliberately: a name is checked here, not a (type,
+# name) pair, and matching more loosely errs toward saying nothing — which is the right
+# direction for a rule whose finding is "delete this".
+fn spec_required_names(f: File) -> list[str] {
+	mut out: list[str] = []
+	for sp in f.specs {
+		for r in sp.reqs {
+			out.append(r.name)
+		}
+	}
+	return out
 }
 
 # lint_unread_bindings reports a binding whose name is never mentioned again inside the

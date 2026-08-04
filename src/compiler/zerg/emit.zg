@@ -261,6 +261,11 @@ struct Emitter {
 	into_src: list[str]
 	into_dst: list[Ty]
 
+	# want_lints is whether anybody asked for the L5xx findings. A build does not — it passes a
+	# list it discards — and the dedupe below them is quadratic, so asking first is what keeps
+	# an ordinary build from paying for output nobody reads.
+	want_lints: bool
+
 	# lints are the ADVISORY findings the lowering walk notices — L5xx, every place a value
 	# converted or a literal adopted without the source saying so. They are kept apart from
 	# `diags` because they must not fail a build: the language allows every one of them, and
@@ -439,6 +444,28 @@ fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> s
 # fit was decided at compile time by chk_lit_fits — emitting a runtime range check for a
 # constant the checker has already proved would be a test of something known. `x: byte = 300`
 # never arrives here at all; it is a compile error two layers up.
+# c_into_says is L501's sentence. The two kinds of conversion differ only in what the reader
+# would write instead, so that is the parameter and the rest is said once.
+fn c_into_says(want: Ty, got: Ty, write: str) -> str {
+	return f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write {write} if that is what was meant"
+}
+
+# c_into_user_expr is the `.into()` a USER conversion means, as an EXPRESSION rather than as
+# rendered C — `e` unchanged when there is no such conversion.
+#
+# It exists apart from c_into because c_let needs the substitution made BEFORE it dispatches on
+# the type: a list, a str, a chan and a map literal each go down a path of their own and only
+# the last of them reaches c_into. So `s: str = c` for an `impl Into[str] for C` type-checked
+# and then emitted the receiver where a `const char *` goes, while the same conversion written
+# as an assignment worked — one declaration, two answers.
+fn c_into_user_expr(mut &em: Emitter, want: Ty, e: Expr) -> Expr {
+	got := c_infer(em, e)
+	return e if not c_into_user(em, want, got)
+
+	chk_note(em, c_into_says(want, got, "`.into()`"))
+	return EMethod(e, "into", [])
+}
+
 fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	return c_copied(em, want, e, sb) if chk_int_lit(e)
 
@@ -448,12 +475,12 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 		# method, so rewriting the expression and handing it back to c_expr gets the receiver
 		# copy, the name mangling and the argument rules from the one place that already has
 		# them — spelling `zg_{Target}_into(…)` here would be a second copy of all three.
-		chk_note(em, f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write `.into()` if that is what was meant")
+		chk_note(em, c_into_says(want, got, "`.into()`"))
 		return c_expr(em, EMethod(e, "into", []), sb)
 	}
 	return c_copied(em, want, e, sb) if not chk_into_builtin(want, got)
 
-	chk_note(em, f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write `{ty_name(want)}(…)` if that is what was meant")
+	chk_note(em, c_into_says(want, got, f"`{ty_name(want)}(…)`"))
 	return c_conv_scalar(em, c_scalar_class(want), c_scalar_bits(want), got, want, c_expr(em, e, sb))
 }
 
@@ -3216,10 +3243,6 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	raise f"NotImplemented: `is {name}` — only the built-in error kinds can be named in an `is` test" if kind == 0
 	raise f"`is {name}` wants an Err on its left, found a {ty_name(t)}" if not c_is_err_ty(t)
 
-	# THE TAXONOMY IS A TREE, so this is a runtime call and not a comparison. `e is ValueError`
-	# has to be true of an OverflowError — docs/code/errors.md — and `.kind == N` made it false
-	# of every checked conversion in the language. zrt_err_is walks the parents and the cause
-	# chain both, which is what `is` is documented to see.
 	# EXACTLY THIS KIND. `is` asks what a value IS, and the built-in taxonomy is not part of
 	# that question — `e in ValueError` is, and it is a different operator at the same
 	# precedence. Asking one of them both ways is how `is` stopped being able to tell an
@@ -3227,17 +3250,6 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 	return f"(({c_expr(em, x, sb)}).kind == {kind})"
 }
 
-# c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
-#
-# What a set is depends on what names it, and docs/surface/grammar.md gives `in` one rule for
-# all of them: a container names its elements, a range names its members, and an ERROR KIND
-# names itself and everything below it in the taxonomy. That last one is what this compiler
-# reads; the other two are named below rather than emitted, because a membership test that
-# silently answered about the wrong set would be worse than one that says it is not built.
-#
-# It is the SUBJECT on the left, like `is` — `e in ValueError`, never `ValueError in e`. The
-# reversed spelling reads as "this error has a ValueError inside it", which is the CAUSE chain,
-# and telling those two apart is the whole reason `in` exists separately from `is`.
 # c_in_container lowers `x in xs` and `k in m` — the two sets whose members are VALUES rather
 # than types. It is one function because they differ only in how the question is asked of the
 # runtime: a map hashes the key (zrt_map_has, which the runtime has carried since maps landed,
@@ -3254,11 +3266,7 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 fn c_in_container(mut &em: Emitter, x: Expr, set: Expr, st: Ty, sb: Subst) -> str {
 	em.used_rt = true
 
-	mut elem := c_map_key_ty(st)
-	if c_is_list(st) {
-		elem = c_list_elem(st)
-	}
-	chk_slot_fits(em, "the value looked for by `in`", elem, x)
+	elem := c_in_elem_ty(st)
 
 	# an AGGREGATE has no `==` of its own — the same refusal `a == b` gives, for the same
 	# reason: a structural comparison is what a derived impl would supply and none is generated
@@ -3271,35 +3279,37 @@ fn c_in_container(mut &em: Emitter, x: Expr, set: Expr, st: Ty, sb: Subst) -> st
 	bt := c_type(TBool)
 	et := c_type(elem)
 
-	mut give := ""
-	df := c_in_set_drop(em, set, st)
-	if df != "" {
-		give = f" {df}(&{sv});"
-	}
+	give := c_in_give(em, set, st, sv)
 
-	head := f"{c_in_set_type(st)} {sv} = {c_expr(em, set, sb)}; {et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)};"
+	head := f"{c_type(st)} {sv} = {c_expr(em, set, sb)}; {et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)};"
 
 	return f"({{ {head} {bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st)
 
 	iv := n + "i"
 	at := f"(*({et} *)zrt_list_at_ref(&{sv}, {iv}))"
 
-	return f"({{ {head} {bt} {rv} = false; for (size_t {iv} = 0; {iv} < zrt_list_len(&{sv}); {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+	nv := n + "n"
+
+	# the LENGTH is read once: zrt_list_len is a call into another translation unit, so asking
+	# it in the condition is one call per element rather than one for the loop
+	return f"({{ {head} {bt} {rv} = false; size_t {nv} = zrt_list_len(&{sv}); for (size_t {iv} = 0; {iv} < {nv}; {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
 }
 
-# c_in_set_drop is the drop the set owes, or "" when it names storage this expression did not
-# make. It is c_drop_fn behind c_owns_value, which is the pair every temporary here goes
-# through.
-fn c_in_set_drop(mut &em: Emitter, set: Expr, st: Ty) -> str {
+# c_in_elem_ty is what a member of this set is: a list's element, a map's KEY. `in` asks a map
+# about its keys, because that is what `m[k]` needs to know before it reads.
+fn c_in_elem_ty(st: Ty) -> Ty {
+	return c_list_elem(st) if c_is_list(st)
+
+	return c_map_key_ty(st)
+}
+
+# c_in_give is what the set owes on the way out, or "" when it names storage this expression did
+# not make. c_owns_value is the same polarity the carrier temporaries ask, and it answers the
+# whole question here rather than handing back a name the caller re-tests for "".
+fn c_in_give(mut &em: Emitter, set: Expr, st: Ty, sv: str) -> str {
 	return "" if not c_owns_value(set)
 
-	return c_drop_fn(em, st)
-}
-
-fn c_in_set_type(st: Ty) -> str {
-	return "zrt_map" if c_is_map(st)
-
-	return "zrt_list"
+	return f" {c_drop_fn(em, st)}(&{sv});"
 }
 
 # c_in_eq compares one element with the value looked for, the way `==` does it — a str through
@@ -3315,25 +3325,27 @@ fn c_in_eq(at: str, kv: str, elem: Ty) -> str {
 # SHAPE rather than by type: nothing infers one yet, so asking c_infer answered `?` and the
 # refusal named nothing a reader had written.
 fn c_set_says(mut &em: Emitter, set: Expr) -> str {
-	return "a range" if c_is_range_expr(set)
-
-	return ty_name(c_infer(em, set))
-}
-
-fn c_is_range_expr(e: Expr) -> bool {
-	return match e {
-		ERange(_, _, _) => true
-		_ => false
+	return match set {
+		ERange(_, _, _) => "a range"
+		_ => ty_name(c_infer(em, set))
 	}
 }
 
+# c_in_test lowers `x in s` — is `x` a MEMBER of the set `s`?
+#
+# What a set is depends on what names it, and docs/surface/grammar.md gives `in` one rule for
+# all of them: a container names its elements, a range names its members, and an ERROR KIND
+# names itself and everything below it in the taxonomy. A range is the one this compiler does
+# not read, and it is named rather than emitted — a membership test that silently answered
+# about the wrong set would be worse than one that says it is not built.
+#
+# It is the SUBJECT on the left, like `is` — `e in ValueError`, never `ValueError in e`. The
+# reversed spelling reads as "this error has a ValueError inside it", which is the CAUSE chain,
+# and telling those two apart is the whole reason `in` exists separately from `is`.
 fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
 	name := c_ident_name(set)
 	kind := c_err_kind(name)
 
-	# WHAT SET IS THIS. A name the taxonomy knows is one; anything else is asked what its TYPE
-	# is, so the refusal names the set the reader wrote rather than the one branch that
-	# happened to be taken — `1 in xs` said "`xs` names no set", which is exactly backwards.
 	# WHAT SET IS THIS. A name the taxonomy knows is one; a container is the other, and
 	# anything else is asked what its TYPE is so the refusal names the set the reader wrote
 	# rather than the branch that happened to be taken.
@@ -6405,11 +6417,15 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 	mut out := f"({{ zrt_map zgt_mm; zrt_map_init(&zgt_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
 	mut i := 0
 	for i < ks.len() {
-		# the KEY is the one typed position that does NOT lower through c_fit_copied — a key is
-		# hashed rather than owned, so it keeps its own check here
+		# The KEY does not lower through c_fit_copied — a key is HASHED rather than owned, so
+		# it wants the conversion without the copy, and that is exactly the split c_into makes
+		# available. It used to take chk_slot_fits and then `c_expr`, which checked the fit and
+		# then did not perform it: `{u: 1}` for a `map[int, int]` and a `uint` `u` wrote
+		# UINT64_MAX in as -1, while `x: int = u` one line down raised.
 		chk_slot_fits(em, "a key of this map literal", kt, ks[i])
+		mk := c_into(em, kt, ks[i], sb)
 		mv := c_fit_copied(em, "a value of this map literal", vt, vs[i], sb)
-		out = out + f" {{ {kc} zgt_mk = {c_expr(em, ks[i], sb)}; {vc} zgt_mv = {mv}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
+		out = out + f" {{ {kc} zgt_mk = {mk}; {vc} zgt_mv = {mv}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
 		i = i + 1
 	}
 	return out + " zgt_mm; })"
@@ -7005,6 +7021,12 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	} else {
 		eff = c_infer(em, ival)
 	}
+
+	# A USER `Into` IS RESOLVED HERE, ahead of every dispatch below. Each of the four type
+	# paths that follow — a map literal, a list, a chan, a str — renders the initializer its
+	# own way and only the last, general one reaches c_into, so a conversion decided by the
+	# DECLARED type has to be substituted before the declared type is used to choose a path.
+	ival := c_into_user_expr(em, eff, ival)
 
 	# A MAP LITERAL takes its shape from the declaration. `c_map_lit_ty` reads the entries,
 	# so an EMPTY `{:}` sized its value slot as int64_t: `mut m: map[str, P] = {:}` then
@@ -7929,7 +7951,7 @@ pub fn emit_unit(prog: File, own: File) -> str {
 # C to cc when this list comes back non-empty.
 pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
 	mut lints: list[Diag] = []
-	return c_emit_unit(prog, own, false, diags, lints)
+	return c_emit_unit(prog, own, false, false, diags, lints)
 }
 
 # lint_conversions is the L5xx family, and it is the one lint that cannot be answered from
@@ -7940,7 +7962,12 @@ pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
 pub fn lint_conversions(srcs: list[str], paths: list[str]) -> list[Diag] {
 	mut diags: list[Diag] = []
 	mut lints: list[Diag] = []
-	c_emit_unit(merge_files_at(srcs, paths), merge_files_at(srcs, paths), true, diags, lints)
+
+	# MERGED ONCE and handed over twice. emit_unit's own comment records that re-parsing the
+	# whole program per unit "is where its time went", and two calls in one argument list is
+	# that mistake at its smallest.
+	f := merge_files_at(srcs, paths)
+	c_emit_unit(f, f, true, true, diags, lints)
 
 	return [] if diags.len() > 0
 
@@ -7996,7 +8023,7 @@ fn c_emit_file(f: File) -> str {
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 	mut lints: list[Diag] = []
-	return c_emit_unit(f, f, true, diags, lints)
+	return c_emit_unit(f, f, true, false, diags, lints)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -8082,10 +8109,9 @@ pub fn c_into_user(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return false
 }
 
-fn c_emit_unit(prog0: File, own: File, whole: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
-	prog := c_with_builtin_specs(prog0)
-	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], [])
+fn c_emit_unit(prog0: File, own: File, whole: bool, want_lints: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+	f := c_with_builtin_specs(prog0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [])
 	c_build_type_names(em, f)
 
 	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`

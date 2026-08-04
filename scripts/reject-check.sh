@@ -385,7 +385,7 @@ fn main() {
 }
 EOF
 
-reject add-an-int-to-a-uint 'mixes int and uint' <<'EOF'
+reject add-an-int-to-a-uint 'has int on one side and uint on the other' <<'EOF'
 fn main() {
 	i: int = 3
 	u: uint = 5
@@ -393,7 +393,7 @@ fn main() {
 }
 EOF
 
-reject compare-an-int-with-a-uint 'mixes int and uint' <<'EOF'
+reject compare-an-int-with-a-uint 'has int on one side and uint on the other' <<'EOF'
 fn main() {
 	i: int = -1
 	u: uint = 1
@@ -401,7 +401,7 @@ fn main() {
 }
 EOF
 
-reject equate-an-int-with-a-uint 'mixes int and uint' <<'EOF'
+reject equate-an-int-with-a-uint 'has int on one side and uint on the other' <<'EOF'
 fn main() {
 	i: int = -1
 	u: uint = 1

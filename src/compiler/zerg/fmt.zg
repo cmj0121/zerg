@@ -80,12 +80,6 @@ pub fn fmt_balanced(src: str) -> bool {
 	return depth == 0
 }
 
-# fmt_src returns src rewritten in canonical form, every rule enabled.
-pub fn fmt_src(src: str) -> str {
-	mut none: list[str] = []
-	return fmt_src_off(src, none)
-}
-
 # fmt_src_off is fmt_src with the named rules switched off.
 pub fn fmt_src_off(src: str, off: list[str]) -> str {
 	mut toks := tokenize_trivia(src)

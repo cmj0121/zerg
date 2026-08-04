@@ -3181,9 +3181,7 @@ fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
 	# a SHIFT carries the OPERAND's width, because that is what bounds the distance: a byte
 	# shifts within 8 even though the value travels as an i64. The unsigned helpers are only
 	# ever chosen at 64 bits, so they take no width argument.
-	if (oper == "<<" or oper == ">>") and not unsigned {
-		return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}), {c_scalar_bits(t)})")
-	}
+	return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}), {c_scalar_bits(t)})") if (oper == "<<" or oper == ">>") and not unsigned
 	return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}))")
 }
 
@@ -3199,6 +3197,7 @@ fn c_arith_wide(unsigned: bool) -> str {
 # the bitwise three, which cannot fail.
 fn c_arith_fn(oper: str, unsigned: bool) -> str {
 	stem := c_arith_stem(oper)
+
 	return "" if stem == ""
 
 	return f"zrt_{stem}_u64" if unsigned
@@ -3755,6 +3754,20 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str)
 	em.used_rt = true
 	ct := c_type(ty)
 
+	# A RUNE's values are NOT A RANGE. U+D800..U+DFFF are surrogates — they exist only
+	# inside UTF-16 and are not characters — so a rune is the one scalar target a (lo, hi)
+	# pair cannot state, and the one that needs a predicate. zrt_conv_rune is that
+	# predicate's only spelling in the emitted C, and it is the same zrt_is_rune the UTF-8
+	# validator and the encoder ask: "a single valid Unicode code point" is one sentence.
+	#
+	# Without it a rune target took the generic signed-32 check, so `rune(0xD800)` and
+	# `rune(0x110000)` both answered with a value that is not a character — caught much
+	# later, at whatever str it was put into, or never.
+	#
+	# A widening source never reaches here (byte -> rune is lossless above, and correctly
+	# so: no byte is a surrogate), which leaves only the sources that can actually miss.
+	return f"(({ct})zrt_conv_rune({c_conv_to_i64(sc, inner)}))" if c_is_rune(c_repr_of(em, ty))
+
 	# float -> integer truncates toward zero, and the helper's bounds are the TRUNCATED
 	# value's, so 255.7 converts to 255 while 256.0 raises. NaN and the infinities fail the
 	# same comparisons and abort on the same path.
@@ -3771,6 +3784,16 @@ fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str)
 	return f"(({ct})zrt_conv_i_from_u((uint64_t)({inner}), {c_signed_hi(db)}))" if sc == SC_UNSIGNED
 
 	return f"(({ct})zrt_conv_i_from_i((int64_t)({inner}), {c_signed_lo(db)}, {c_signed_hi(db)}))"
+}
+
+# c_conv_to_i64 brings a scalar to the int64 a bound test reads it as. A float cannot be
+# cast there directly — an out-of-range double is undefined in C — so it goes through the
+# same truncating range check `int(x)` is, and NaN and the infinities abort on that path
+# rather than on the one after it.
+fn c_conv_to_i64(sc: int, inner: str) -> str {
+	return f"zrt_conv_i_from_f((double)({inner}), {c_float_lo(64)}, {c_float_hi(SC_SIGNED, 64)})" if sc == SC_FLOAT
+
+	return f"(int64_t)({inner})"
 }
 
 # c_display is the runtime leaf that renders one scalar as its display text. A `byte` goes

@@ -289,8 +289,9 @@ spec Into[T] {
 **每一次隱式轉換都是一個 lint finding**(`L5xx`),含字面量 —— 所以 `1.5 + 1` 會被報而 `1.5 + 1.0` 不會。它是建議
 而不是語言規則:重點在於 `1` 和 `1.0` 在紙面上就該是不同的型別,讀者不必從周圍推一個字面量是什麼。
 
-> **[deviation]** `L5xx` 這一族**尚未實作**。上面每一個轉換都會發生;沒有任何一個會被回報。`Into` 的 spec 那一面
-> 也還沒有:`impl Into[T] for S` 不被接受,所以內建矩陣就是它的全部,而手寫的 `x.into()` 不是這個編譯器認得的呼叫。
+> **[deviation]** `Into` 的 **spec 那一面**尚未實作:`impl Into[T] for S` 不被接受,所以內建矩陣就是它的全部,
+> 而手寫的 `x.into()` 不是這個編譯器認得的呼叫。`L5xx` 這一族已經有了——見
+> [`zerg lint`](../tooling/fmt.md#l5xx--conversion)。
 
 這也是讓一個值、一個 `Err` 或 `nil` 能在有型別的位置直接注入 `Either`、無需明確包裝的機制
 （見 [Null-safety 與錯誤處理](../code/errors.zh-TW.md)）——仍是建構出目標值，絕非 reinterpret。

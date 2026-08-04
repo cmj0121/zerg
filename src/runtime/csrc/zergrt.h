@@ -623,6 +623,20 @@ uint64_t zrt_conv_u_from_u(uint64_t v, uint64_t hi);
 int64_t  zrt_conv_i_from_f(double v, double lo, double hi);
 uint64_t zrt_conv_u_from_f(double v, double hi);
 
+/* A `rune` is A SINGLE VALID UNICODE CODE POINT (docs/core/types.md), and that is not a
+ * range: U+D800..U+DFFF are surrogates, which exist only inside UTF-16 and are not
+ * characters. So it is the one scalar whose bound a (lo, hi) pair cannot state, and the
+ * one that needs a predicate of its own.
+ *
+ * It is declared here rather than left inside str.c because THREE callers need the same
+ * answer: the UTF-8 validator, the encoder, and `rune(n)`. It was written twice and
+ * reachable from neither the type system nor a program. */
+static inline int zrt_is_rune(int64_t cp) {
+	return cp >= 0 && cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF);
+}
+
+int32_t zrt_conv_rune(int64_t v);
+
 /* `a // b` is floor division whose result is always an `int` (docs/core/types.md). For
  * two integers that IS zrt_div_i64 — the language has one integer division and `//` is
  * the spelling that says so. The float form is the one that needs a helper: it divides

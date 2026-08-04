@@ -1404,6 +1404,19 @@ fn main() {
 }
 EOF
 
+# A strong typedef is built over a SCALAR this phase, which docs/core/types.md records as a
+# deviation and the seed refuses too. It is named rather than emitted because it LOOKED like
+# it worked: a str is a refcounted cell and the typedef name is not a str to c_is_str, so
+# nothing retained it, nothing released it, and `str(l)` printed the pointer as a number.
+expect "$ZERG" typedef-over-a-str "over a non-scalar" <<'EOF'
+type Label = str
+
+fn main() {
+	print(f"{str(Label("hi"))}")
+}
+EOF
+
+
 # `str(…)` over a list bridges bytes or code points. Without the element check it reinterpreted any
 # buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
 # and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a

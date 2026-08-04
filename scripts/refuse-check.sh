@@ -1333,12 +1333,69 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" generic-function "a generic function definition" <<'EOF'
-fn id[T](v: T) -> T {
-	return v
+# A generic FUNCTION is built — it monomorphizes, one specialization per set of type
+# arguments — so its case moved to the codegen corpus, where a working form belongs. What
+# is still refused is everything around it, and each shape is here rather than one standing
+# for the rest: a generic TYPE, a generic METHOD, a bound this compiler cannot carry, a call
+# that decides nothing, and a bound the argument does not meet.
+
+expect "$ZERG" generic-struct "a generic struct" <<'EOF'
+struct Box[T] {
+	v: T
 }
 
-fn main() { print id(5) }
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" generic-enum "a generic enum" <<'EOF'
+enum Opt2[T] {
+	Some(T)
+	None
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" generic-method "a generic METHOD" <<'EOF'
+struct P {
+	x: int
+}
+
+impl P {
+	fn get[T](v: T) -> T {
+		return v
+	}
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" generic-multi-bound "more than one spec" <<'EOF'
+fn f[T: Eq + Ord](a: T) -> T {
+	return a
+}
+
+fn main() { print f(1) }
+EOF
+
+expect "$ZERG" generic-undecidable "is not decided by this call" <<'EOF'
+fn f[T](n: int) -> int {
+	return n
+}
+
+fn main() { print f(1) }
+EOF
+
+expect "$ZERG" generic-bound-unmet "does not implement" <<'EOF'
+struct P {
+	x: int
+}
+
+fn same[T: Eq](a: T, b: T) -> bool {
+	return a == b
+}
+
+fn main() { print same(P(1), P(1)) }
 EOF
 
 expect "$ZERG" closure-capture "a closure capturing" <<'EOF'

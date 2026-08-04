@@ -84,7 +84,7 @@ pub fn parse_uint(s: str, base: int) -> uint {
 		i = 1
 	}
 	raise "strconv.parse_uint: no digits" if i >= n
-	mut val: uint = 0
+	mut val := uint(0)
 	ubase := uint(base)
 	for i < n {
 		d := digit_for(b[i])

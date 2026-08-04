@@ -254,6 +254,12 @@ struct Emitter {
 	# `int` stay different types everywhere the program can see.
 	ty_names: list[str]
 	ty_unders: list[Ty]
+
+	# lints are the ADVISORY findings the lowering walk notices — L5xx, every place a value
+	# converted or a literal adopted without the source saying so. They are kept apart from
+	# `diags` because they must not fail a build: the language allows every one of them, and
+	# what a lint says is that the page does not show what the program means.
+	lints: list[Diag]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -433,6 +439,7 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	got := c_infer(em, e)
 	return c_copied(em, want, e, sb) if not chk_into_builtin(want, got)
 
+	chk_note(em, f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write `{ty_name(want)}(…)` if that is what was meant")
 	return c_conv_scalar(em, c_scalar_class(want), c_scalar_bits(want), got, want, c_expr(em, e, sb))
 }
 
@@ -7772,7 +7779,23 @@ pub fn emit_unit(prog: File, own: File) -> str {
 # emit_unit_at is emit_unit that also reports what it found. A build refuses to hand the
 # C to cc when this list comes back non-empty.
 pub fn emit_unit_at(prog: File, own: File, mut &diags: list[Diag]) -> str {
-	return c_emit_unit(prog, own, false, diags)
+	mut lints: list[Diag] = []
+	return c_emit_unit(prog, own, false, diags, lints)
+}
+
+# lint_conversions is the L5xx family, and it is the one lint that cannot be answered from
+# the parsed tree: a conversion is a fact about TYPES. So the linter asks the lowering walk,
+# which has them — the C it produces is thrown away, and what is kept is what the walk noticed
+# on the way past. A program that does not compile answers nothing, which is right: there is
+# no point advising about the types of a program whose types are wrong.
+pub fn lint_conversions(srcs: list[str], paths: list[str]) -> list[Diag] {
+	mut diags: list[Diag] = []
+	mut lints: list[Diag] = []
+	c_emit_unit(merge_files_at(srcs, paths), merge_files_at(srcs, paths), true, diags, lints)
+
+	return [] if diags.len() > 0
+
+	return lints
 }
 
 # merge_asts joins already-parsed files into the whole-program view, in order.
@@ -7823,7 +7846,8 @@ fn c_emit_file(f: File) -> str {
 }
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
-	return c_emit_unit(f, f, true, diags)
+	mut lints: list[Diag] = []
+	return c_emit_unit(f, f, true, diags, lints)
 }
 
 # c_emit_unit lowers ONE compilation unit. `prog` is the whole program — every type and
@@ -7836,9 +7860,9 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # built out of a program that does not typecheck. It is an out-parameter rather than a
 # second return value because the C is what every caller wants and the findings are what
 # only the driver does.
-fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
+fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [])
 	c_build_type_names(em, f)
 	c_build_sigs(em, f)
 	c_build_typedefs(em, f)
@@ -8007,6 +8031,9 @@ fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> st
 	}
 	for d in em.diags {
 		diags.append(d)
+	}
+	for d in em.lints {
+		lints.append(d)
 	}
 	return f"{hdr}{types}{tups}{ress}{globals}{protos}\n{dfns}{lams}{defs}{mainw}"
 }

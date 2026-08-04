@@ -56,6 +56,24 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 	em.diags.append(Diag(path, line, col, msg))
 }
 
+# chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
+# every implicit conversion is a lint finding, and every one of them is also a legal program,
+# so it goes on a list that does not fail the build.
+#
+# It is here rather than in lint.zg because lint.zg answers from the parsed File alone — "no
+# types, no flow analysis, which keeps it honest about what it can claim" — and a conversion
+# is a fact about types. So the lowering walk, which has them, records it, and the linter asks
+# the walk. That is the first rule in either file that needed more than the tree.
+#
+# DEDUPED BY PLACE. c_infer has no memo, so an expression is walked more than once, and a rule
+# that appends per walk reported the same conversion three times on a nested arithmetic chain.
+fn chk_note(mut &em: Emitter, msg: str) {
+	for d in em.lints {
+		return if d.line == em.at_line and d.col == em.at_col and d.path == em.at_path and d.msg == msg
+	}
+	em.lints.append(Diag(em.at_path, em.at_line, em.at_col, msg))
+}
+
 # --- mutability ------------------------------------------------------------------
 #
 # A binding is immutable unless it says `mut`. That is not a diagnostic nicety — the
@@ -733,9 +751,13 @@ fn chk_elems_fit(mut &em: Emitter, want: Ty, ival: Expr) -> bool {
 fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 	return false if not chk_into_side(want) or not chk_into_side(got)
 
+	# out of the hub, and INTO it — "every OTHER numeric scalar" both times. `int` on both
+	# sides is not a conversion, and the clause below said it was: every `int` reaching an
+	# `int` slot went through a lowering that casts it to itself, and L501 reported 1583
+	# findings of which most read "int converts to int".
 	return true if c_is_int(got) and not c_is_int(want)
 
-	return c_is_int(want) and not c_is_float(got)
+	return c_is_int(want) and not c_is_int(got) and not c_is_float(got)
 }
 
 # chk_const_into is the CONSTANT layer of `Into`, and it has a sentence of its own because it
@@ -749,7 +771,10 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 # error — for the reason Go gives about the same construct: a constant that cannot exist is
 # not made acceptable by not being reached.
 fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) -> bool {
-	return true if chk_lit_fits(em, want, e)
+	if chk_lit_fits(em, want, e) {
+		chk_lit_note(em, want, e)
+		return true
+	}
 
 	chk_at(em, f"`{chk_lit_says(e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
 
@@ -778,6 +803,21 @@ fn chk_lit_sign(lex: str, neg: bool) -> str {
 	return f"-{lex}" if neg
 
 	return lex
+}
+
+# chk_lit_note is `L502` — the literal took a type the page does not show. It is the half of
+# `L5xx` that is about ADOPTION rather than conversion, and the spec asks for it deliberately:
+# the point is that `1` and `1.0` should always mean different types in the source, so a reader
+# never has to infer a literal's type from its surroundings. `1.5 + 1` is reported and
+# `1.5 + 1.0` is not.
+#
+# An integer literal reaching an `int` is not adoption — that is the type it already had — and
+# a fractional literal never reaches here at all, because chk_lit_fits only answers about
+# integer ones.
+fn chk_lit_note(mut &em: Emitter, want: Ty, e: Expr) {
+	return if c_is_int(want)
+
+	chk_note(em, f"L502 the literal `{chk_lit_says(e, false)}` is a {ty_name(want)} here, and the page does not show it")
 }
 
 # chk_into_side is whether a type may stand on either side of a built-in Into. A NUMERIC
@@ -1273,7 +1313,14 @@ fn chk_operand_pair(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: E
 	# "is it a literal": `n * 300` where n is a `byte` is out of range here exactly as
 	# `b: byte = 300` is, and asking the weaker question would have made the operand slot the
 	# one place a literal adopts a type it is not a value of.
-	return if chk_lit_fits(em, ta, eb) or chk_lit_fits(em, tb, ea)
+	if chk_lit_fits(em, ta, eb) {
+		chk_lit_note(em, ta, eb)
+		return
+	}
+	if chk_lit_fits(em, tb, ea) {
+		chk_lit_note(em, tb, ea)
+		return
+	}
 
 	return if not c_is_unknown(chk_into_max(ta, tb))
 

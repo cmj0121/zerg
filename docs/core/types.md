@@ -350,9 +350,10 @@ and `1.5 + 1.0` is not. It is advisory, not a rule of the language: the point is
 should mean different types on the page, so a reader never has to infer a literal's type from its
 surroundings.
 
-> **[deviation]** The **spec side** of `Into` is not implemented: `impl Into[T] for S` is not accepted,
-> so the built-in matrix is the whole of it, and `x.into()` written by hand is not a call this compiler
-> knows. The `L5xx` family is — see [`zerg lint`](../tooling/fmt.md#l5xx--conversion).
+> **[deviation]** A type may have **one** `Into` in this compiler, not several. A method is keyed by its
+> NAME, so a second `impl Into[…] for X` collides with the first and is refused by name — while the
+> built-in matrix has four out of `int` alone. Reaching several needs a spec method keyed by the spec
+> and its arguments, which is also what would let a written-out `x.into()` say which one is meant.
 
 This is also how a value, an `Err`, or `nil` flows into an `Either` at a typed position without explicit
 wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value, never a

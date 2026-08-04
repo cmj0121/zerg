@@ -704,6 +704,11 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	return chk_const_into(em, want, e) if chk_into_builtin(want, got) and chk_int_lit(e)
 	return true if chk_into_builtin(want, got)
 
+	# A USER `Into` reaches this position too, and by the same rule — one step, declared, at a
+	# place where the target type is known. The built-in matrix is over scalars and this is
+	# over whatever anyone wrote `impl Into[T] for S` for; nothing else about them differs.
+	return true if c_into_user(em, want, got)
+
 	# A LIST LITERAL is built INTO its destination, element by element, with the declared
 	# element type — so `xs: list[byte] = [1, 2]` is two bytes written into a byte buffer and
 	# not a `list[int]` reinterpreted. The stride rule in chk_fits is about a container that

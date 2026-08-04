@@ -3238,6 +3238,79 @@ fn c_is_test(mut &em: Emitter, x: Expr, name: str, sb: Subst) -> str {
 # It is the SUBJECT on the left, like `is` — `e in ValueError`, never `ValueError in e`. The
 # reversed spelling reads as "this error has a ValueError inside it", which is the CAUSE chain,
 # and telling those two apart is the whole reason `in` exists separately from `is`.
+# c_in_container lowers `x in xs` and `k in m` — the two sets whose members are VALUES rather
+# than types. It is one function because they differ only in how the question is asked of the
+# runtime: a map hashes the key (zrt_map_has, which the runtime has carried since maps landed,
+# documented as "the `k in m` membership test" and called by nothing), and a list has to look.
+#
+# THE MEMBER MEETS THE ELEMENT TYPE like any other value entering a declared slot, through
+# chk_slot_fits — so `1 in xs` for a `list[byte]` is the literal adopting `byte`, and a `str`
+# looked for in a `list[int]` is refused with the sentence every other slot uses.
+#
+# THE SET IS DROPPED ONLY IF THIS EXPRESSION OWNS IT. `xs` names storage somebody else holds
+# and is read in place; `f()` hands back a list nobody else does, and without the drop every
+# `v in f()` leaked the whole buffer. c_owns_value is the same polarity the carrier temporaries
+# use, asked in one place rather than spelled again here.
+fn c_in_container(mut &em: Emitter, x: Expr, set: Expr, st: Ty, sb: Subst) -> str {
+	em.used_rt = true
+
+	mut elem := c_map_key_ty(st)
+	if c_is_list(st) {
+		elem = c_list_elem(st)
+	}
+	chk_slot_fits(em, "the value looked for by `in`", elem, x)
+
+	# an AGGREGATE has no `==` of its own — the same refusal `a == b` gives, for the same
+	# reason: a structural comparison is what a derived impl would supply and none is generated
+	raise f"NotImplemented: `in` over {ty_name(st)} — its elements are compared with `==`, and {ty_name(elem)} has none" if c_is_aggregate(em, elem)
+
+	n := c_tmp(em, "zgt_in")
+	sv := n + "s"
+	kv := n + "k"
+	rv := n + "r"
+	bt := c_type(TBool)
+	et := c_type(elem)
+
+	mut give := ""
+	df := c_in_set_drop(em, set, st)
+	if df != "" {
+		give = f" {df}(&{sv});"
+	}
+
+	head := f"{c_in_set_type(st)} {sv} = {c_expr(em, set, sb)}; {et} {kv} = {c_fit_copied(em, "the value looked for by `in`", elem, x, sb)};"
+
+	return f"({{ {head} {bt} {rv} = zrt_map_has(&{sv}, &{kv});{give} {rv}; }})" if c_is_map(st)
+
+	iv := n + "i"
+	at := f"(*({et} *)zrt_list_at_ref(&{sv}, {iv}))"
+
+	return f"({{ {head} {bt} {rv} = false; for (size_t {iv} = 0; {iv} < zrt_list_len(&{sv}); {iv}++) {{ if ({c_in_eq(at, kv, elem)}) {{ {rv} = true; break; }} }}{give} {rv}; }})"
+}
+
+# c_in_set_drop is the drop the set owes, or "" when it names storage this expression did not
+# make. It is c_drop_fn behind c_owns_value, which is the pair every temporary here goes
+# through.
+fn c_in_set_drop(mut &em: Emitter, set: Expr, st: Ty) -> str {
+	return "" if not c_owns_value(set)
+
+	return c_drop_fn(em, st)
+}
+
+fn c_in_set_type(st: Ty) -> str {
+	return "zrt_map" if c_is_map(st)
+
+	return "zrt_list"
+}
+
+# c_in_eq compares one element with the value looked for, the way `==` does it — a str through
+# strcmp, everything else with C's own `==`. Written here rather than routed through c_binexpr
+# because that one takes EXPRESSIONS and both sides of this are already-rendered C.
+fn c_in_eq(at: str, kv: str, elem: Ty) -> str {
+	return f"strcmp({at}, {kv}) == 0" if c_is_str(elem)
+
+	return f"{at} == {kv}"
+}
+
 # c_set_says names the set on the right of an `in` for a diagnostic. A RANGE is asked about by
 # SHAPE rather than by type: nothing infers one yet, so asking c_infer answered `?` and the
 # refusal named nothing a reader had written.
@@ -3261,7 +3334,15 @@ fn c_in_test(mut &em: Emitter, x: Expr, set: Expr, sb: Subst) -> str {
 	# WHAT SET IS THIS. A name the taxonomy knows is one; anything else is asked what its TYPE
 	# is, so the refusal names the set the reader wrote rather than the one branch that
 	# happened to be taken — `1 in xs` said "`xs` names no set", which is exactly backwards.
-	raise f"NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over an error kind, which names itself and everything below it in the taxonomy" if kind == 0
+	# WHAT SET IS THIS. A name the taxonomy knows is one; a container is the other, and
+	# anything else is asked what its TYPE is so the refusal names the set the reader wrote
+	# rather than the branch that happened to be taken.
+	if kind == 0 {
+		st := c_infer(em, set)
+		return c_in_container(em, x, set, st, sb) if c_is_list(st) or c_is_map(st)
+
+		raise f"NotImplemented: `in` over {c_set_says(em, set)} — this compiler reads `in` over a list, a map, or an error kind"
+	}
 
 	t := c_infer(em, x)
 	raise f"`in {name}` wants an Err on its left, found a {ty_name(t)}" if not c_is_err_ty(t)

@@ -272,11 +272,27 @@ struct Emitter {
 	# what a lint says is that the page does not show what the program means.
 	lints: list[Diag]
 
-	# eq_types are the types carrying an `impl Eq for X`, derived or hand-written.
-	# docs/core/derive.md makes `Eq` the SOLE source of `==` / `!=` on a struct or an enum —
-	# there is no auto-derived equality and no implicit `Object` — so this list is both where
-	# the operator's implementation is found and the answer to whether it exists at all.
-	eq_types: list[str]
+	# gen_names / gen_tpls are the GENERIC TEMPLATES — every `fn f[T](…)` in the program, by
+	# name. A template is not a function: it has no C symbol, no prototype and no body, and
+	# nothing but this table ever sees it. What reaches C is one specialization per distinct
+	# set of type arguments, below.
+	gen_names: list[str]
+	gen_tpls: list[FnDecl]
+
+	# inst_names / inst_fns are the specializations asked for so far, the mangled name beside
+	# the ordinary FnDecl that substitution produced. The list GROWS WHILE IT IS BEING WALKED
+	# — a specialized body may call another template — which is why the drain that emits them
+	# is a watermark loop rather than a `for`.
+	inst_names: list[str]
+	inst_fns: list[FnDecl]
+
+	# impl_on / impl_target are every `impl <Spec> for <Type>`, as a pair of lists. Two
+	# questions read it and they are the same question: whether `==` on an aggregate has an
+	# `Eq` behind it (docs/core/derive.md makes `Eq` the SOLE source of it), and whether a
+	# generic's type argument meets the bound its parameter carries. It was an Eq-only list
+	# until the second asker arrived and wanted the same rows.
+	impl_on: list[str]
+	impl_target: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1301,10 +1317,105 @@ fn c_sig_seen(mut &em: Emitter, key: str) -> bool {
 	return false
 }
 
+# c_build_generics records every generic TEMPLATE. It runs before c_build_sigs, which then
+# skips them: a template has no signature to record, because its parameter types name things
+# that are not types yet.
+fn c_build_generics(mut &em: Emitter, f: File) {
+	for fn_i in f.fns {
+		if fn_i.tparams.len() > 0 {
+			raise f"NotImplemented: a generic METHOD `{fn_i.recv}.{fn_i.name}[…]` — this compiler instantiates a free function, and a method's specializations would each need a name in its type's namespace" if fn_i.recv != ""
+			em.gen_names.append(fn_i.name)
+			em.gen_tpls.append(fn_i)
+		}
+	}
+}
+
+# c_is_generic is whether a name is a template rather than a function.
+fn c_is_generic(mut &em: Emitter, name: str) -> bool {
+	for n in em.gen_names {
+		return true if n == name
+	}
+	return false
+}
+
+fn c_generic_tpl(mut &em: Emitter, name: str) -> FnDecl {
+	mut i := 0
+	for i < em.gen_names.len() {
+		return em.gen_tpls[i] if em.gen_names[i] == name
+		i = i + 1
+	}
+	raise f"no generic template named `{name}`"
+}
+
+# c_instantiate answers the SPECIALIZATION's name for one call, creating it the first time.
+# The type arguments are solved from what the call actually passes, so `assert_eq(1, 1)`
+# needs no `[int]` written; the specialization is then an ordinary function and the call to
+# it is an ordinary call, checked against a signature with real types in it.
+fn c_instantiate(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
+	tpl := c_generic_tpl(em, name)
+	mut actuals: list[Ty] = []
+	for a in args {
+		actuals.append(c_infer(em, a))
+	}
+	mut decls: list[Ty] = []
+	for pm in tpl.params {
+		decls.append(pm.ty)
+	}
+	sol := gen_solve(tpl.tparams, decls, actuals)
+	c_check_solved(em, tpl, sol)
+	c_check_bounds(em, tpl, sol)
+
+	key := gen_mangle(name, sol)
+	for n in em.inst_names {
+		return key if n == key
+	}
+	inst := subst_fn(tpl, sol)
+	em.inst_names.append(key)
+	em.inst_fns.append(inst)
+	c_add_sig(em, inst)
+	return key
+}
+
+# c_check_solved refuses a call that leaves a type parameter unanswered. Guessing one would
+# make the program compile as something nobody wrote, and the parameter is unanswered
+# precisely because no argument mentions it — which is a call that has not said what it means.
+fn c_check_solved(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
+	mut i := 0
+	for i < sol.len() {
+		raise f"the type parameter `{tpl.tparams[i]}` of `{tpl.name}` is not decided by this call — no argument's type mentions it, so there is nothing to solve it from" if c_is_unknown(sol[i])
+		i = i + 1
+	}
+}
+
+# c_check_bounds is `[T: Eq]` — the specialization's type argument must implement the spec
+# the parameter is bounded by. It is checked HERE, at the instantiation, because that is
+# where a concrete type first exists to check; inside the template `T` implements whatever
+# the bound says and nothing more.
+fn c_check_bounds(mut &em: Emitter, tpl: FnDecl, sol: list[Ty]) {
+	mut i := 0
+	for i < sol.len() and i < tpl.tbounds.len() {
+		raise f"`{ty_name(sol[i])}` does not implement `{tpl.tbounds[i]}`, which `{tpl.name}`'s type parameter `{tpl.tparams[i]}` is bounded by" if tpl.tbounds[i] != "" and not c_satisfies(em, sol[i], tpl.tbounds[i])
+		i = i + 1
+	}
+}
+
+# c_satisfies is whether a type meets a bound. A BUILT-IN type meets `Eq` inherently — `==`
+# on two ints is the operator and not an impl — and a declared one meets it by having the
+# impl, which is the same list `==` on an aggregate reads.
+fn c_satisfies(mut &em: Emitter, t: Ty, bound: str) -> bool {
+	return c_has_eq(em, t) or not c_is_aggregate(em, t) if bound == "Eq"
+
+	return c_impls(em, c_named_of(t), bound)
+}
+
 fn c_build_sigs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.fns.len() {
 		fn_i := f.fns[i]
+		if fn_i.tparams.len() > 0 {
+			i = i + 1
+			continue
+		}
 		key := c_sig_key(fn_i.recv, fn_i.name)
 
 		# A NAME DECLARED TWICE, and the two halves of that are different rules.
@@ -1324,22 +1435,31 @@ fn c_build_sigs(mut &em: Emitter, f: File) {
 
 			raise f"NotImplemented: two modules both define `{fn_i.name}` — this compiler flattens every module into one namespace, so the two cannot be told apart"
 		}
-		em.sig_names.append(key)
-		em.sig_rets.append(fn_i.ret)
-		em.sig_hasret.append(fn_i.has_ret)
-		em.sig_nparams.append(fn_i.params.len())
-		em.sig_nreq.append(c_required_params(fn_i))
-		mut j := 0
-		for j < fn_i.params.len() {
-			em.pr_fn.append(key)
-			em.pr_idx.append(j)
-			em.pr_ref.append(fn_i.params[j].is_ref)
-			em.pr_ty.append(fn_i.params[j].ty)
-			em.pr_hasdef.append(fn_i.params[j].has_def)
-			em.pr_def.append(fn_i.params[j].def)
-			j = j + 1
-		}
+		c_add_sig(em, fn_i)
 		i = i + 1
+	}
+}
+
+# c_add_sig records one function's signature and its parameter rows. It is a function of its
+# own because a SPECIALIZATION arrives after this pass has run — it is created by the call
+# that asks for it — and has to reach the same tables by the same route, or the argument
+# rules would read a row that is not there.
+fn c_add_sig(mut &em: Emitter, fn_i: FnDecl) {
+	key := c_sig_key(fn_i.recv, fn_i.name)
+	em.sig_names.append(key)
+	em.sig_rets.append(fn_i.ret)
+	em.sig_hasret.append(fn_i.has_ret)
+	em.sig_nparams.append(fn_i.params.len())
+	em.sig_nreq.append(c_required_params(fn_i))
+	mut j := 0
+	for j < fn_i.params.len() {
+		em.pr_fn.append(key)
+		em.pr_idx.append(j)
+		em.pr_ref.append(fn_i.params[j].is_ref)
+		em.pr_ty.append(fn_i.params[j].ty)
+		em.pr_hasdef.append(fn_i.params[j].has_def)
+		em.pr_def.append(fn_i.params[j].def)
+		j = j + 1
 	}
 }
 
@@ -1790,7 +1910,7 @@ fn c_carrier_seen(c: Ty, mut &out: list[Ty]) {
 fn c_check_named_types(mut &em: Emitter, f: File) {
 	for s in f.structs {
 		for fd in s.fields {
-			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`")
+			c_check_named_ty(em, fd.ty, f"field `{s.name}.{fd.name}`", [])
 		}
 	}
 
@@ -1802,7 +1922,7 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 		for v in e.variants {
 			mut i := 0
 			for i < v.fields.len() {
-				c_check_named_ty(em, v.fields[i], f"payload {strconv.to_string(i, 10)} of `{e.name}.{v.name}`")
+				c_check_named_ty(em, v.fields[i], f"payload {strconv.to_string(i, 10)} of `{e.name}.{v.name}`", [])
 				i = i + 1
 			}
 		}
@@ -1820,47 +1940,57 @@ fn c_check_named_types(mut &em: Emitter, f: File) {
 		# site it was given — `… `int` (parameter `this` of `tag`)`.
 		raise f"NotImplemented: an `impl` on the built-in type `{fn_i.recv}` — this compiler gives a method a declared struct or enum receiver" if fn_i.recv != "" and is_conv(fn_i.recv)
 
-		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`")
+		# A TEMPLATE'S TYPE PARAMETERS ARE BOUND, and everything else in its signature is
+		# not: `fn f[T](x: T, y: Nope)` owes the same answer about `Nope` that a plain
+		# function does. So the bound names travel with the check rather than the template
+		# being skipped, which would have left an unknown type in a generic's signature to
+		# reach cc under whatever name a specialization gave it.
+		c_check_named_ty(em, fn_i.ret, f"the result of `{fn_i.name}`", fn_i.tparams)
 		for pm in fn_i.params {
-			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`")
+			c_check_named_ty(em, pm.ty, f"parameter `{pm.name}` of `{fn_i.name}`", fn_i.tparams)
 		}
 	}
 }
 
 # c_check_named_ty walks a type to its named leaves. A container is transparent here: the
 # name that fails to resolve is just as unspellable inside a `list[…]` or a `chan[…]`.
-fn c_check_named_ty(mut &em: Emitter, t: Ty, site: str) {
+fn c_check_named_ty(mut &em: Emitter, t: Ty, site: str, bound: list[str]) {
 	match t {
-		TNamed(nm)    => c_check_type_name(em, nm, site)
-		TList(el)     => c_check_named_ty(em, el, site)
-		TChan(el, _)  => c_check_named_ty(em, el, site)
-		TMap(k, v)    => c_check_named_ty_two(em, k, v, site)
-		TEither(l, r) => c_check_named_ty_two(em, l, r, site)
-		TOpt(el)      => c_check_named_ty(em, el, site)
-		TTuple(ts)    => c_check_named_ty_list(em, ts, site)
-		TFn(ps, r)    => c_check_named_fn(em, ps, r, site)
+		TNamed(nm)    => c_check_type_name(em, nm, site, bound)
+		TList(el)     => c_check_named_ty(em, el, site, bound)
+		TChan(el, _)  => c_check_named_ty(em, el, site, bound)
+		TMap(k, v)    => c_check_named_ty_two(em, k, v, site, bound)
+		TEither(l, r) => c_check_named_ty_two(em, l, r, site, bound)
+		TOpt(el)      => c_check_named_ty(em, el, site, bound)
+		TTuple(ts)    => c_check_named_ty_list(em, ts, site, bound)
+		TFn(ps, r)    => c_check_named_fn(em, ps, r, site, bound)
 		_             => c_skip()
 	}
 }
 
-fn c_check_named_ty_two(mut &em: Emitter, a: Ty, b: Ty, site: str) {
-	c_check_named_ty(em, a, site)
-	c_check_named_ty(em, b, site)
+fn c_check_named_ty_two(mut &em: Emitter, a: Ty, b: Ty, site: str, bound: list[str]) {
+	c_check_named_ty(em, a, site, bound)
+	c_check_named_ty(em, b, site, bound)
 }
 
-fn c_check_named_ty_list(mut &em: Emitter, ts: list[Ty], site: str) {
+fn c_check_named_ty_list(mut &em: Emitter, ts: list[Ty], site: str, bound: list[str]) {
 	for t in ts {
-		c_check_named_ty(em, t, site)
+		c_check_named_ty(em, t, site, bound)
 	}
 }
 
-fn c_check_named_fn(mut &em: Emitter, ps: list[Ty], r: Ty, site: str) {
-	c_check_named_ty_list(em, ps, site)
-	c_check_named_ty(em, r, site)
+fn c_check_named_fn(mut &em: Emitter, ps: list[Ty], r: Ty, site: str, bound: list[str]) {
+	c_check_named_ty_list(em, ps, site, bound)
+	c_check_named_ty(em, r, site, bound)
 }
 
-fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
+fn c_check_type_name(mut &em: Emitter, nm: str, site: str, bound: list[str]) {
 	return if c_is_type_name(em, nm)
+
+	# a TYPE PARAMETER of the template this signature belongs to. It names no declared type
+	# on purpose — that is what makes it a parameter — and it is gone by the time anything
+	# is emitted, because a specialization has a real type in its place.
+	return if gen_is_tparam(bound, nm)
 
 	# `This` is the SELF TYPE (GRAMMAR:333), so it names something only where there is a
 	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
@@ -4161,6 +4291,13 @@ fn c_free_method(mut &em: Emitter, target: Expr, meth: str, args: list[Expr], sb
 	tn := c_ident_name(target)
 
 	raise f"NotImplemented: `{tn}.{meth}(…)` is an associated function — this compiler gives every `fn` in an `impl` a receiver, so a method is reached through an instance (`x.{meth}(…)`) and never through its type" if tn != "" and c_is_struct_name(em, tn)
+
+	# A NAMESPACED GENERIC — `testing.assert_eq(1, 1)`. A module's names flatten into the
+	# one program-wide function space, so this IS the free function of that name, and a
+	# template reached this way has to be instantiated exactly as one reached directly.
+	# Asking the sig table first would have found nothing, a template having no signature.
+	return c_call(em, c_instantiate(em, meth, args, sb), args, sb) if c_is_generic(em, meth)
+
 	raise f"NotImplemented: the method `{meth}` on a {ty_name(c_infer(em, target))}" if not c_name_in(em.sig_names, meth)
 
 	return f"zg_{meth}({c_call_args(em, meth, args, sb)})"
@@ -4282,6 +4419,12 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		}
 		return "(zg_" + name + "){" + c_struct_args(em, name, args, sb) + "}"
 	}
+
+	# A GENERIC CALL. The template is not a function and has no C symbol; the SPECIALIZATION
+	# is, so the call is rewritten to name it and handed back to this same function — which
+	# then finds an ordinary free function and applies the argument rules to a signature with
+	# real types in it. Nothing below this line knows a generic was involved.
+	return c_call(em, c_instantiate(em, name, args, sb), args, sb) if c_is_generic(em, name)
 
 	# NOTHING DECLARES THIS FUNCTION. It used to be spelled `zg_<name>(…)` and handed to
 	# cc, which reported a call to an undeclared function against a file under .zerg-cache
@@ -5114,12 +5257,12 @@ fn c_infer(mut &em: Emitter, e: Expr) -> Ty {
 		EIdent(n) => c_infer_ident(em, n)
 		EUnary(oper, x) => c_infer_unary(em, oper, x)
 		EBinary(oper, a, b) => c_infer_binary(em, oper, a, b)
-		ECall(name, args) => c_infer_call(em, name)
+		ECall(name, args) => c_infer_call(em, name, args)
+		EMethod(target, meth, args) => c_infer_methcall(em, target, meth, args)
 		EField(target, fld) => c_field_ty_of(em, target, fld)
 		EOptChain(target, fld) => c_optchain_ty(em, target, fld)
 		ETry(x) => c_carrier_elem(c_infer(em, x))
 		EIndex(target, idx) => c_elem_ty(em, target, idx)
-		EMethod(target, meth, args) => c_infer_methcall(em, target, meth)
 		EListLit(elems) => c_infer_listlit(em, elems)
 		EConv(ty, x, nm) => ty
 		EIf(cond, then_e, else_e) => c_infer(em, then_e)
@@ -5151,7 +5294,7 @@ fn c_infer_coalesce(mut &em: Emitter, a: Expr, b: Expr) -> Ty {
 	return c_carrier_elem(c_infer(em, a))
 }
 
-fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
+fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str, args: list[Expr]) -> Ty {
 	# `E.of(n)` is partial, so it answers `E?` — see c_enum_of
 	en := c_ident_name(target)
 	if en != "" and c_name_in(em.enum_names, en) {
@@ -5169,7 +5312,10 @@ fn c_infer_methcall(mut &em: Emitter, target: Expr, meth: str) -> Ty {
 		MMap     => c_map_method_ret(meth)
 		MRecv    => c_lookup_sig_ret(em, c_sig_key(recv, meth))
 		MFnField => c_fn_ret(c_field_ty(em, recv, meth))
-		_        => c_lookup_sig_ret(em, meth)
+
+		# the `_` arm is the NAMESPACED call — a module's names are the one free-function
+		# space — so it answers what a free call of that name answers, generics included
+		_ => c_infer_call(em, meth, args)
 	}
 }
 
@@ -5216,7 +5362,14 @@ fn c_list_method_ret(meth: str) -> Ty {
 	return TNil
 }
 
-fn c_infer_call(mut &em: Emitter, name: str) -> Ty {
+fn c_infer_call(mut &em: Emitter, name: str, args: list[Expr]) -> Ty {
+	# A GENERIC CALL answers the SPECIALIZATION's result, never the template's. The template
+	# says `T`, which is not a type — so the answer used to fall through to the signature
+	# table, find nothing, and come back unknown: `print id("hi")` then took the integer path
+	# and showed a pointer. Instantiating is keyed by the mangled name and idempotent, so
+	# asking here costs the first ask and nothing after it.
+	return c_lookup_sig_ret(em, c_instantiate(em, name, args, c_nosub())) if c_is_generic(em, name)
+
 	return c_intrinsic_ret(name) if c_is_intrinsic(name)
 	return TNamed(c_variant_enum(em, name)) if c_is_variant(em, name)
 
@@ -6165,7 +6318,7 @@ fn c_lambda(mut &em: Emitter, ps: list[Param], has_ret: bool, ret: Ty, body: lis
 	saved_rel_cnames := em.rel_cnames
 	saved_rel_fns := em.rel_fns
 	saved_refs := em.ref_names
-	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col)))
+	em.lam_defs.append(c_fn(em, FnDecl(name, "", ps, has_ret, ret, body, false, em.at_path, em.at_line, em.at_col, [], [])))
 	em.env_names = saved_names
 	em.env_tys = saved_tys
 	em.env_cnames = saved_cnames
@@ -8260,15 +8413,25 @@ fn c_derive_variants(ed: EnumDecl, target: str) -> str {
 # at each use, for the reason every other table here exists: a typed position asks this
 # question once per value, and answering it by walking the program's impls would make the cost
 # of a conversion the size of the program.
-# c_build_eqs records every type with an `impl Eq for X`. It is the same shape as the Into
-# registry and for the same reason: `==` asks this question at every use, and answering it by
-# walking the program's impls would make the cost of a comparison the size of the program.
-fn c_build_eqs(mut &em: Emitter, f: File) {
+# c_build_impls records every `impl <Spec> for <Type>`. It is the same shape as the Into
+# registry and for the same reason: `==` asks this question at every use and a generic asks
+# it at every instantiation, and answering either by walking the program's impls would make
+# the cost the size of the program.
+fn c_build_impls(mut &em: Emitter, f: File) {
 	for ip in f.impls {
-		if ip.on == "Eq" {
-			em.eq_types.append(ip.target)
-		}
+		em.impl_on.append(ip.on)
+		em.impl_target.append(ip.target)
 	}
+}
+
+# c_impls reports whether a named type implements a named spec.
+fn c_impls(mut &em: Emitter, target: str, spec_nm: str) -> bool {
+	mut i := 0
+	for i < em.impl_on.len() {
+		return true if em.impl_on[i] == spec_nm and em.impl_target[i] == target
+		i = i + 1
+	}
+	return false
 }
 
 # c_has_eq is whether the type carries an Eq impl. It reads through a `type X = Y` the way
@@ -8277,10 +8440,7 @@ fn c_has_eq(mut &em: Emitter, t: Ty) -> bool {
 	nm := c_named_of(t)
 	return false if nm == ""
 
-	for n in em.eq_types {
-		return true if n == nm
-	}
-	return false
+	return c_impls(em, nm, "Eq")
 }
 
 fn c_build_intos(mut &em: Emitter, f: File) {
@@ -8334,14 +8494,15 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	# gets exactly the impls whose decorators are in it.
 	f := c_with_derived(c_with_builtin_specs(prog0))
 	own := c_with_derived(own0)
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [], [], [], [], [], [])
 	c_build_type_names(em, f)
 
 	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
 	# is exactly that collision, and the sentence about method namespaces is true and about
 	# the wrong thing. The pass that knows what the pair was gets to say it first.
 	c_build_intos(em, f)
-	c_build_eqs(em, f)
+	c_build_impls(em, f)
+	c_build_generics(em, f)
 	c_build_sigs(em, f)
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)
@@ -8396,14 +8557,34 @@ fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diag
 	mut protos := ""
 	i = 0
 	for i < f.fns.len() {
-		protos = protos + c_proto(f.fns[i])
+		if f.fns[i].tparams.len() == 0 {
+			protos = protos + c_proto(f.fns[i])
+		}
 		i = i + 1
 	}
 	mut defs := ""
 	i = 0
 	for i < own.fns.len() {
-		defs = defs + c_fn(em, own.fns[i])
+		if own.fns[i].tparams.len() == 0 {
+			defs = defs + c_fn(em, own.fns[i])
+		}
 		i = i + 1
+	}
+
+	# THE SPECIALIZATIONS, which only exist because a body above asked for one. The list
+	# grows while it is being walked — a specialized body may call another template, or the
+	# same one at a different type — so this is a watermark loop and not a `for`: a `for`
+	# takes the length once, and the arrivals after that would be declared and never defined.
+	#
+	# `protos` is still a string here, so appending to it now still lands ABOVE every body in
+	# the finished file. That is what lets a specialization discovered while lowering `main`
+	# be called from `main`.
+	mut done := 0
+	for done < em.inst_fns.len() {
+		inst := em.inst_fns[done]
+		protos = protos + c_proto(inst)
+		defs = defs + c_fn(em, inst)
+		done = done + 1
 	}
 	mut mainw := ""
 	if c_has_main(own) {

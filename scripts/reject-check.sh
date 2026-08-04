@@ -490,6 +490,34 @@ fn main() {
 }
 EOF
 
+reject logical-operator-on-a-typedef 'has no meaning on Flag and Flag' <<'EOF'
+type Flag = bool
+
+fn main() {
+	f := Flag(true)
+	g := Flag(false)
+	print(f"{f and g}")
+}
+EOF
+
+reject bitwise-operator-on-a-typedef 'has no meaning on Mask and int' <<'EOF'
+type Mask = int
+
+fn main() {
+	m := Mask(3)
+	print(f"{m & 1}")
+}
+EOF
+
+reject prefix-operator-on-a-typedef 'has no meaning on Flag' <<'EOF'
+type Flag = bool
+
+fn main() {
+	f := Flag(true)
+	print(f"{not f}")
+}
+EOF
+
 reject arithmetic-on-a-typedef 'a `type … = …` keeps its own identity' <<'EOF'
 type Celsius = int
 

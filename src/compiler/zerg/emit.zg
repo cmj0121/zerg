@@ -255,6 +255,12 @@ struct Emitter {
 	ty_names: list[str]
 	ty_unders: list[Ty]
 
+	# into_src / into_dst are the `impl Into[T] for S` declarations, as a pair of lists: the
+	# TARGET's name and the type argument. They are what makes a user conversion findable from
+	# a typed position, where all that is in hand is the two types.
+	into_src: list[str]
+	into_dst: list[Ty]
+
 	# lints are the ADVISORY findings the lowering walk notices — L5xx, every place a value
 	# converted or a literal adopted without the source saying so. They are kept apart from
 	# `diags` because they must not fail a build: the language allows every one of them, and
@@ -437,6 +443,14 @@ fn c_into(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	return c_copied(em, want, e, sb) if chk_int_lit(e)
 
 	got := c_infer(em, e)
+	if c_into_user(em, want, got) {
+		# LOWERED AS THE CALL THE PROGRAMMER COULD HAVE WRITTEN. `.into()` is an ordinary
+		# method, so rewriting the expression and handing it back to c_expr gets the receiver
+		# copy, the name mangling and the argument rules from the one place that already has
+		# them — spelling `zg_{Target}_into(…)` here would be a second copy of all three.
+		chk_note(em, f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write `.into()` if that is what was meant")
+		return c_expr(em, EMethod(e, "into", []), sb)
+	}
 	return c_copied(em, want, e, sb) if not chk_into_builtin(want, got)
 
 	chk_note(em, f"L501 {ty_name(got)} converts to {ty_name(want)} here, and the source does not say so — write `{ty_name(want)}(…)` if that is what was meant")
@@ -7860,10 +7874,89 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # built out of a program that does not typecheck. It is an out-parameter rather than a
 # second return value because the C is what every caller wants and the findings are what
 # only the driver does.
-fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+# ZG_BUILTIN_SPECS are the specs the LANGUAGE declares, as source. `Into` is one: every
+# program may write `impl Into[T] for S`, and none of them should have to copy the
+# declaration in first.
+#
+# It is a SOURCE STRING that gets parsed rather than a SpecDecl built by hand, and that is the
+# point of doing it this way — a hand-built one is a second spelling of what the parser
+# produces, and the two drift the day a spec grows a field. Three lines through the real
+# parser cannot disagree with the real parser.
+const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n"
+
+# c_with_builtin_specs adds them to a program that does not declare them itself. A program IS
+# allowed to declare its own `Into` — the check is by name, so a spec by that name wins, and
+# nothing is injected on top of it.
+pub fn c_with_builtin_specs(prog: File) -> File {
+	for s in prog.specs {
+		return prog if s.name == "Into"
+	}
+
+	# the parse is BOUND before it is walked: `for s in parse_at(…).specs` takes the address of
+	# an rvalue, which the seed lowers to C that cc refuses
+	bi := parse_at(ZG_BUILTIN_SPECS, "<builtin>")
+
+	mut out := prog
+	for s in bi.specs {
+		out.specs.append(s)
+	}
+	return out
+}
+
+# c_build_intos records every `impl Into[T] for S`. It is a pass of its own rather than a scan
+# at each use, for the reason every other table here exists: a typed position asks this
+# question once per value, and answering it by walking the program's impls would make the cost
+# of a conversion the size of the program.
+fn c_build_intos(mut &em: Emitter, f: File) {
+	for ip in f.impls {
+		if ip.on == "Into" and ip.args.len() == 1 {
+			# ONE `Into` PER TYPE, and it is a limit of this compiler rather than of the
+			# language: `into` is one method name, and every method on a type shares one
+			# namespace, so a second `impl Into[…] for X` collides with the first. The spec
+			# means for there to be several — the built-in matrix has four out of `int` alone
+			# — and reaching that needs a spec method to be keyed by (spec, arguments) rather
+			# than by name, which is also what would let `x.into()` written by hand say which
+			# one is meant. Named here, where the pair is in hand, rather than reported later
+			# as two methods with one name.
+			raise f"NotImplemented: a second `impl Into[…] for {ip.target}` — this compiler keys a method by its NAME, so one type carries one `into`; the language allows several, and reaching that needs the method keyed by the spec and its arguments" if c_into_user_from(em, ip.target)
+			em.into_src.append(ip.target)
+			em.into_dst.append(ip.args[0])
+		}
+	}
+}
+
+# c_into_user_from is whether the type already has an `Into` recorded, whatever its target.
+fn c_into_user_from(mut &em: Emitter, src: str) -> bool {
+	for n in em.into_src {
+		return true if n == src
+	}
+	return false
+}
+
+# c_into_user is whether the program declares `impl Into[want] for got`. The source is matched
+# by NAME because that is what an `impl` head carries, and the destination by type.
+pub fn c_into_user(mut &em: Emitter, want: Ty, got: Ty) -> bool {
+	src := ty_name(got)
+	return false if src == ""
+
+	mut i := 0
+	for i < em.into_src.len() {
+		return true if em.into_src[i] == src and ty_eq(em.into_dst[i], want)
+		i = i + 1
+	}
+	return false
+}
+
+fn c_emit_unit(prog0: File, own: File, whole: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+	prog := c_with_builtin_specs(prog0)
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [])
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], [])
 	c_build_type_names(em, f)
+
+	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
+	# is exactly that collision, and the sentence about method namespaces is true and about
+	# the wrong thing. The pass that knows what the pair was gets to say it first.
+	c_build_intos(em, f)
 	c_build_sigs(em, f)
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)

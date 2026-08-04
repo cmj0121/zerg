@@ -3154,44 +3154,81 @@ fn c_floordiv(mut &em: Emitter, ta: Ty, tb: Ty, a: str, b: str) -> str {
 # It is not only a different answer from the specified one. A signed overflow, a division by
 # zero and a shift past the width are all UNDEFINED BEHAVIOUR in C, so the old lowering had
 # no answer at all to stand behind.
+#
+# Which types are covered is asked of the SCALAR TABLE, never of a list of names. The gate
+# here read `c_is_int(t) or c_is_byte(t)` — and c_is_int is TInt alone — so `uint` and `rune`
+# took the bare operator: `u - 2` wrapped where the page says it raises, and `u / 0` was
+# undefined behaviour that happened to print 0 while `i / 0` on the next line raised. The
+# table already knew both were integers; nobody asked it.
 fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
-	return f"({a} {c_binop(oper)} {b})" if not (c_is_int(t) or c_is_byte(t))
+	cls := c_scalar_class(t)
+	return f"({a} {c_binop(oper)} {b})" if cls != SC_SIGNED and cls != SC_UNSIGNED
 
-	fn_name := c_arith_fn(oper)
+	# Only a FULL-WIDTH unsigned needs the u64 family. A narrower one (a `byte`) fits an
+	# int64 exactly, so it computes there and narrows back, which is what lets one set of
+	# helpers cover every width the language has. `uint` is the one that does not fit: sent
+	# through the signed helpers it would raise on values it holds perfectly well.
+	unsigned := cls == SC_UNSIGNED and c_scalar_bits(t) >= 64
+	fn_name := c_arith_fn(oper, unsigned)
 	return f"({a} {c_binop(oper)} {b})" if fn_name == ""
 
 	# `used_rt` is only ever RAISED. It says the program needs the runtime, and clearing it
 	# on the way past a non-arithmetic operator withdrew a claim somebody else had made —
 	# the list element vtables went undeclared and cc reported them.
 	em.used_rt = true
+	wide := c_arith_wide(unsigned)
 
 	# a SHIFT carries the OPERAND's width, because that is what bounds the distance: a byte
-	# shifts within 8 even though the value travels as an i64.
-	return c_arith_narrow(em, t, f"{fn_name}({a}, {b}, {c_scalar_bits(t)})") if oper == "<<" or oper == ">>"
-	return c_arith_narrow(em, t, f"{fn_name}({a}, {b})")
+	# shifts within 8 even though the value travels as an i64. The unsigned helpers are only
+	# ever chosen at 64 bits, so they take no width argument.
+	if (oper == "<<" or oper == ">>") and not unsigned {
+		return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}), {c_scalar_bits(t)})")
+	}
+	return c_arith_narrow(em, t, f"{fn_name}(({wide})({a}), ({wide})({b}))")
+}
+
+# c_arith_wide is the C type the helpers compute in.
+fn c_arith_wide(unsigned: bool) -> str {
+	return "uint64_t" if unsigned
+
+	return "int64_t"
 }
 
 # c_arith_fn names the runtime checker for an operator, or "" for one that has none. The
-# wrapping `+%` / `-%` / `*%` are deliberately absent: they ARE the bare operator.
-fn c_arith_fn(oper: str) -> str {
-	return "zrt_add_i64" if oper == "+"
-	return "zrt_sub_i64" if oper == "-"
-	return "zrt_mul_i64" if oper == "*"
-	return "zrt_div_i64" if oper == "/"
-	return "zrt_mod_i64" if oper == "%"
-	return "zrt_shl_i64" if oper == "<<"
-	return "zrt_shr_i64" if oper == ">>"
+# wrapping `+%` / `-%` / `*%` are deliberately absent: they ARE the bare operator, and so are
+# the bitwise three, which cannot fail.
+fn c_arith_fn(oper: str, unsigned: bool) -> str {
+	stem := c_arith_stem(oper)
+	return "" if stem == ""
+
+	return f"zrt_{stem}_u64" if unsigned
+
+	return f"zrt_{stem}_i64"
+}
+
+fn c_arith_stem(oper: str) -> str {
+	return "add" if oper == "+"
+	return "sub" if oper == "-"
+	return "mul" if oper == "*"
+	return "div" if oper == "/"
+	return "mod" if oper == "%"
+	return "shl" if oper == "<<"
+	return "shr" if oper == ">>"
 
 	return ""
 }
 
-# c_arith_narrow keeps a narrow result narrow. The helpers work in i64 — a byte's operands
-# promote to one in C anyway — so the result comes back through the SAME checked conversion
-# `byte(x)` is, and `byte(255) + byte(255)` is the 510 that raises rather than the 254 it
-# silently wrapped to. Going through c_conv_scalar rather than spelling the call out is what
-# keeps the target's bound stated in one place.
+# c_arith_narrow keeps a narrow result narrow. The helpers work in 64 bits — a byte's or a
+# rune's operands promote there in C anyway — so the result comes back through the SAME
+# checked conversion `byte(x)` is, and `byte(255) + byte(255)` is the 510 that raises rather
+# than the 254 it silently wrapped to. Going through c_conv_scalar rather than spelling the
+# call out is what keeps the target's bound stated in one place.
+#
+# The question is the WIDTH, not the name: every scalar under 64 bits narrows, so a `rune`
+# arriving here is covered by the same sentence a `byte` is. Asking `c_is_byte` instead let
+# a rune multiply overflow its int32 storage in silence.
 fn c_arith_narrow(mut &em: Emitter, t: Ty, call: str) -> str {
-	return f"({call})" if not c_is_byte(t)
+	return f"({call})" if c_scalar_bits(t) >= 64
 
 	return c_conv_scalar(em, c_scalar_class(t), c_scalar_bits(t), TInt, t, call)
 }
@@ -3223,13 +3260,25 @@ fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 	# scope on the way, and every `not` in the program would otherwise pay for it.
 	if oper == "-" and not c_is_int_lit(x) {
 		t := c_infer(em, x)
-		if c_is_int(t) or c_is_byte(t) {
+		if c_neg_checked(t) {
 			em.used_rt = true
 
-			return c_arith_narrow(em, t, f"zrt_neg_i64({inner})")
+			return c_arith_narrow(em, t, f"zrt_neg_i64((int64_t)({inner}))")
 		}
 	}
 	return f"({c_unop(oper)}{inner})"
+}
+
+# c_neg_checked reports whether unary `-` on this type goes through the checked helper. An
+# UNSIGNED target has no negative values at all, so every negation but `-0` leaves its range
+# — which the narrowing conversion is already the check for. Only a full-width unsigned is
+# left alone: it does not fit the int64 the helper takes, and `uint` is the one width where
+# that matters. This is the seed's rule, kept in step with it.
+fn c_neg_checked(t: Ty) -> bool {
+	cls := c_scalar_class(t)
+	return true if cls == SC_SIGNED
+
+	return cls == SC_UNSIGNED and c_scalar_bits(t) < 64
 }
 
 # c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime

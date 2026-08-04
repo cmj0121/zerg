@@ -1,29 +1,5 @@
 # emit — AST to C for the self-hosting Zerg compiler (M3).
 #
-# c_typedef_conv lowers `X(v)` for a `type X = Y`. The VALUE is converted to Y — with every
-# range check that conversion owes, since a `type Small = byte` narrows exactly as `byte`
-# does — and the result is then named X by the C typedef, which is a cast that changes no
-# bits because X and Y are the same representation.
-#
-# The distinctness is entirely in the type: nothing here makes an X behave differently from a
-# Y at runtime, and nothing should. What makes `Celsius` a type is that every rule in
-# check.zg sees TNamed("Celsius") and not TInt.
-fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
-	under := c_typedef_of(em, name)
-	inner := c_conv(em, under, x, ty_name(under), sb)
-
-	return f"(({c_type(TNamed(name))})({inner}))"
-}
-
-# chk_call_arity_exact is the one-argument rule a conversion has. A conversion takes the
-# value it converts and nothing else, so `Celsius()` and `Celsius(1, 2)` are both wrong, and
-# saying so here is what keeps args[0] from being read off an empty list.
-fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
-	return if n == 1
-
-	chk_at(em, f"`{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
-}
-
 # Lowers a parsed File to C over the same shape the Go bootstrap emits: an include
 # header, forward declarations, the function definitions with `zg_`-mangled names, and
 # an `int main` wrapper that calls `zg_main`. The bar is functional equivalence, not
@@ -1784,9 +1760,7 @@ fn c_check_named_fn(mut &em: Emitter, ps: list[Ty], r: Ty, site: str) {
 }
 
 fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
-	return if c_is_struct_name(em, nm)
-	return if c_is_enum_ty(em, TNamed(nm))
-	return if c_is_typedef(em, nm)
+	return if c_is_type_name(em, nm)
 
 	# `This` is the SELF TYPE (GRAMMAR:333), so it names something only where there is a
 	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
@@ -1822,8 +1796,10 @@ fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
 # underlying type nothing declares is registered as unknown so its uses stay quiet, and it is
 # still a declared type name — the mistake is in the declaration, which has already said so.
 fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
-	for n in em.ty_names {
-		return true if n == nm
+	mut i := 0
+	for i < em.ty_names.len() {
+		return true if em.ty_names[i] == nm
+		i = i + 1
 	}
 	return false
 }
@@ -1833,13 +1809,23 @@ fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
 # checker must never, because the distinctness is the feature.
 fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 	nm := c_named_of(t)
-	return t if nm == ""
-
-	# a typedef whose underlying type nothing declares answers UNKNOWN rather than itself:
-	# that is what keeps its uses quiet while the declaration carries the diagnostic
-	return c_typedef_of(em, nm) if c_is_typedef(em, nm)
-
+	mut i := 0
+	for i < em.ty_names.len() {
+		# a typedef whose underlying type nothing declares answers UNKNOWN rather than
+		# itself: that is what keeps its uses quiet while the declaration carries the
+		# diagnostic. One scan answers both "is it one" and "what is it".
+		return em.ty_unders[i] if em.ty_names[i] == nm
+		i = i + 1
+	}
 	return t
+}
+
+# c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
+# disjunction written out in three places — the typedef registry, the typedef's own check,
+# and c_check_type_name — so a fifth kind of type name would have been three edits with two
+# of them silent if missed.
+fn c_is_type_name(mut &em: Emitter, nm: str) -> bool {
+	return c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
@@ -1900,6 +1886,9 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 	}
 	for ed in f.enums {
 		c_check_type_dup(em, seen, kind, ed.name, "an enum", "", 0, 0)
+	}
+	for td in f.types {
+		c_check_type_dup(em, seen, kind, td.name, "a type declaration", td.path, td.line, td.col)
 	}
 	for sp in f.specs {
 		# a SpecDecl knows WHERE it was written, and a rule that has a place uses it: it says
@@ -1982,21 +1971,12 @@ fn c_dup_msg(name: str, prev: str, what: str) -> str {
 # struct field declared `Celsius` finds the name already known.
 fn c_build_typedefs(mut &em: Emitter, f: File) {
 	for td in f.types {
-		chk_typedef(em, td, f)
+		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
+		# recompute it: a typedef whose underlying type nothing declares is registered as
+		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
 		em.ty_names.append(td.name)
-
-		# a typedef whose underlying type nothing declares is registered as UNKNOWN. The
-		# declaration has already been reported; carrying the bad name forward would make
-		# every use of the type report again, about the use rather than about the cause.
-		em.ty_unders.append(c_typedef_under(em, td.under))
+		em.ty_unders.append(chk_typedef(em, td))
 	}
-}
-
-fn c_typedef_under(mut &em: Emitter, t: Ty) -> Ty {
-	nm := c_named_of(t)
-	return t if nm == "" or c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
-
-	return TUnknown
 }
 
 fn c_build_structs(mut &em: Emitter, f: File) {
@@ -3200,6 +3180,35 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 #
 # `str` is two conversions wearing one name. Over a `list[byte]` it is the bridge back to a
 # string — the meaning every `str(out)` in this tree relies on. Over anything else it is
+# c_typedef_conv lowers `X(v)` for a `type X = Y`. The VALUE is converted to Y — with every
+# range check that conversion owes, since a `type Small = byte` narrows exactly as `byte`
+# does — and the result is then named X by the C typedef, which is a cast that changes no
+# bits because X and Y are the same representation.
+#
+# The distinctness is entirely in the type: nothing here makes an X behave differently from a
+# Y at runtime, and nothing should. What makes `Celsius` a type is that every rule in
+# check.zg sees TNamed("Celsius") and not TInt.
+fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
+	under := c_typedef_of(em, name)
+
+	# a typedef this compiler could not make sense of — an underlying type nothing declares,
+	# or one it does not build over — renders as a plain cast. The DECLARATION has already
+	# said what is wrong; converting into it would raise about the use instead, which buries
+	# the cause under a consequence at every call site.
+	return f"(({c_type(TNamed(name))})({c_expr(em, x, sb)}))" if c_is_unknown(under)
+
+	return f"(({c_type(TNamed(name))})({c_conv(em, under, x, ty_name(under), sb)}))"
+}
+
+# chk_call_arity_exact is the one-argument rule a conversion has. A conversion takes the
+# value it converts and nothing else, so `Celsius()` and `Celsius(1, 2)` are both wrong, and
+# saying so here is what keeps args[0] from being read off an empty list.
+fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
+	return if n == 1
+
+	chk_at(em, f"`{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
+}
+
 # `display()`: the text a value shows as, which is what `print` writes and what an
 # f-string's `{x}` interpolates.
 #

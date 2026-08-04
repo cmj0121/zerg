@@ -888,23 +888,17 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 # it collides with the same things a struct or an enum name would, and the underlying type
 # has to be one that exists — a `type X = Nope` used to be dropped on the floor along with
 # the whole declaration, so nothing said anything at all.
-fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) {
-	if c_is_struct_name(em, td.name) or c_is_enum_ty(em, TNamed(td.name)) {
-		chk_at_place(em, td.path, td.line, td.col, f"`{td.name}` is already a type in this program — `type {td.name} = …` declares a new one, and two declarations of one name have no order to be read in")
-		return
-	}
-	if c_is_typedef(em, td.name) {
-		chk_at_place(em, td.path, td.line, td.col, f"`{td.name}` is declared twice")
-		return
-	}
-
+fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
+	# A NAME COLLISION is not asked here. c_build_typedefs runs before the struct and enum
+	# registries exist, so asking would always answer no — c_build_type_names is the pass
+	# that already asks it of every kind of type name at once, and the typedef joins it.
+	#
 	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
 	# catching here rather than at the first use of it
 	nm := c_named_of(td.under)
-	nm_ok := nm == "" or c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
-	if not nm_ok {
+	if nm != "" and not c_is_type_name(em, nm) {
 		chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
-		return
+		return TUnknown
 	}
 
 	# A SCALAR UNDERNEATH, this phase. docs/core/types.md records the deviation, and the seed
@@ -915,7 +909,9 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) {
 	# that says it is not built.
 	if c_scalar_class(td.under) == SC_NONE {
 		chk_at_place(em, td.path, td.line, td.col, f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		return TUnknown
 	}
+	return td.under
 }
 
 # --- assigned value ---------------------------------------------------------------
@@ -1006,6 +1002,30 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		return
 	}
 
+	# A `type X = Y` IS NOT A Y HERE. docs/core/types.md: X takes on Y's representation and
+	# keeps an identity of its own, and this compiler does not carry Y's arithmetic or spec
+	# impls across — so a `Celsius` has no `+` until somebody writes `int(c)`, which is the
+	# explicit step the whole feature is for.
+	#
+	# AHEAD of every family, and that is not a detail: it sat between them once, after the
+	# logical and bitwise blocks, which return unconditionally — so `f1 and f2` on a
+	# `type Flag = bool` and `m & 1` on a `type Mask = int` were accepted and lowered to
+	# working C, which is the underlying type's operators being inherited by exactly the
+	# rule that says they are not.
+	#
+	# EQUALITY IS THE EXCEPTION, between two values of the SAME one. The deviation the doc
+	# records is about arithmetic and spec impls, and `==` is neither; an enum is nominal and
+	# inherits nothing either, and gets same-enum `==` twelve lines below. Refusing
+	# `uid1 == uid2` would take away the one operation a `UserId` exists to support — and
+	# would leave `if flag` on a `type Flag = bool` told to "compare it (`x != 0`)" by a rule
+	# that then refuses the comparison.
+	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
+		return if chk_is_equality(oper) and ty_eq(ta, tb)
+
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		return
+	}
+
 	if chk_is_logical(oper) {
 		if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb) {
 			chk_at(em, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
@@ -1017,16 +1037,6 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		if chk_scalar_wrong_int(ta) or chk_scalar_wrong_int(tb) {
 			chk_at(em, f"operator `{oper}` takes int operands, and these are {ty_name(ta)} and {ty_name(tb)}")
 		}
-		return
-	}
-
-	# A `type X = Y` IS NOT A Y HERE. docs/core/types.md: X takes on Y's representation and
-	# keeps an identity of its own, and this compiler does not carry Y's impls across — so a
-	# `Celsius` has no `+` until somebody writes `int(c)`, which is the explicit step the
-	# whole feature is for. Saying it once, ahead of the families, is what keeps it from
-	# being four rules that each have to remember.
-	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
-		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
 		return
 	}
 
@@ -1087,6 +1097,15 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	t := c_infer(em, x)
 
 	return if c_is_unknown(t)
+
+	# the same rule the binary families get, and for the same reason: `not f` on a
+	# `type Flag = bool` and `-c` on a `Celsius` are the underlying type's operators, which a
+	# typedef does not take on. The scalar predicates below all answer no for a TNamed, so
+	# without this the prefix operators were the one family that let a typedef through.
+	if chk_is_typedef_operand(em, t) {
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		return
+	}
 	if oper == "not" and chk_scalar_wrong_bool(t) {
 		chk_at(em, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}

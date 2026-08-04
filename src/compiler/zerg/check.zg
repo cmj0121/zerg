@@ -65,9 +65,23 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 # is a fact about types. So the lowering walk, which has them, records it, and the linter asks
 # the walk. That is the first rule in either file that needed more than the tree.
 #
-# DEDUPED BY PLACE. c_infer has no memo, so an expression is walked more than once, and a rule
-# that appends per walk reported the same conversion three times on a nested arithmetic chain.
+# NOTHING IS RECORDED UNLESS SOMEBODY ASKED. A build passes a `lints` list it then throws
+# away, so without this flag every build paid the whole cost below for output nobody reads —
+# and the cost is quadratic.
+#
+# DEDUPED BY PLACE, which is that cost: c_infer has no memo, so an expression is walked more
+# than once and a rule that appends per walk reported the same conversion three times on a
+# nested arithmetic chain. The scan is linear in what has been recorded, so the pass is
+# quadratic in the number of findings — measured at 25% of `zerg lint`'s runtime on a program
+# with eight thousand of them. Tolerated because it only runs when the answer is wanted, and
+# because a program with thousands of findings has a bigger problem than the wait.
+#
+# It keys on the STATEMENT's place, which is all `chk_at`'s marker carries — so two conversions
+# on one line collapse into one finding. That under-reports rather than over-reports, and the
+# second appears once the first is fixed.
 fn chk_note(mut &em: Emitter, msg: str) {
+	return if not em.want_lints
+
 	for d in em.lints {
 		return if d.line == em.at_line and d.col == em.at_col and d.path == em.at_path and d.msg == msg
 	}
@@ -701,8 +715,12 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# conversion raises. `x: byte = i` for a binding is the same well-typedness with the
 	# failure left to run. So a literal is decided here and anything else is let through to
 	# the conversion the emitter writes.
-	return chk_const_into(em, want, e) if chk_into_builtin(want, got) and chk_int_lit(e)
-	return true if chk_into_builtin(want, got)
+	if chk_into_builtin(want, got) {
+		if chk_int_lit(e) {
+			chk_const_into(em, want, e)
+		}
+		return true
+	}
 
 	# A USER `Into` reaches this position too, and by the same rule — one step, declared, at a
 	# place where the target type is known. The built-in matrix is over scalars and this is
@@ -775,21 +793,10 @@ fn chk_into_builtin(want: Ty, got: Ty) -> bool {
 # in its hand. Reachability does not enter into it — `if false { b: byte = 300 }` is the same
 # error — for the reason Go gives about the same construct: a constant that cannot exist is
 # not made acceptable by not being reached.
-fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) -> bool {
-	if chk_lit_fits(em, want, e) {
-		chk_lit_note(em, want, e)
-		return true
-	}
+fn chk_const_into(mut &em: Emitter, want: Ty, e: Expr) {
+	return if chk_lit_adopts(em, want, e)
 
 	chk_at(em, f"`{chk_lit_says(e, false)}` is not a value a {ty_name(want)} holds — the conversion is known here, so it is reported now rather than raised")
-
-	# ANSWERS YES, having already said no. Diagnostics in this compiler accumulate rather than
-	# stop, so a `false` here would be read by the caller as "the types do not fit" and earn a
-	# second sentence about the same number — `b: byte = 300` reported both the value and
-	# "cannot bind int to a byte binding", and the second one is the reading Into just made
-	# untrue. The build is already failing; what is left to decide is only how many times to
-	# say why.
-	return true
 }
 
 # chk_lit_says renders an integer literal the way it was WRITTEN, minus and all. The lexeme is
@@ -823,6 +830,16 @@ fn chk_lit_note(mut &em: Emitter, want: Ty, e: Expr) {
 	return if c_is_int(want)
 
 	chk_note(em, f"L502 the literal `{chk_lit_says(e, false)}` is a {ty_name(want)} here, and the page does not show it")
+}
+
+# chk_lit_adopts is the fit AND the finding, because a literal that takes a type is L502
+# wherever it happens and the two are never wanted apart. Written as three separate pairs, a
+# fourth adoption position added later would have silently reported nothing.
+fn chk_lit_adopts(mut &em: Emitter, want: Ty, e: Expr) -> bool {
+	return false if not chk_lit_fits(em, want, e)
+
+	chk_lit_note(em, want, e)
+	return true
 }
 
 # chk_into_side is whether a type may stand on either side of a built-in Into. A NUMERIC
@@ -1318,14 +1335,7 @@ fn chk_operand_pair(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: E
 	# "is it a literal": `n * 300` where n is a `byte` is out of range here exactly as
 	# `b: byte = 300` is, and asking the weaker question would have made the operand slot the
 	# one place a literal adopts a type it is not a value of.
-	if chk_lit_fits(em, ta, eb) {
-		chk_lit_note(em, ta, eb)
-		return
-	}
-	if chk_lit_fits(em, tb, ea) {
-		chk_lit_note(em, tb, ea)
-		return
-	}
+	return if chk_lit_adopts(em, ta, eb) or chk_lit_adopts(em, tb, ea)
 
 	return if not c_is_unknown(chk_into_max(ta, tb))
 

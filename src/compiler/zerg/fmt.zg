@@ -769,6 +769,39 @@ fn fmt_next_code(mut &toks: list[Token], at: int) -> int {
 	return -1
 }
 
+# fmt_opens_block reports whether the `{` at `at` opens a BLOCK rather than a map literal.
+#
+# The formatter reads TOKENS, so it has to decide this the way a reader does: from what stands
+# in front of the brace. Where a VALUE is expected — after `:=`, `=`, `:`, `,`, `(`, `[`,
+# `return` — a `{` is a map literal and everything about it stays on the line it was written
+# on. Everywhere else it opens a block.
+#
+# Without this, `m := {"a": 1}` came back as
+#
+#     m := {
+#         "a": 1
+#     }
+#
+# which does not parse: the formatter turned a valid program into an invalid one. Nothing
+# caught it for the reason this file's failures usually hide — `make fmt-self` covers the
+# compiler and the stdlib, and neither of them writes a map literal, so the form the rule was
+# wrong about was a form no gated source contained. It is the third defect of that exact shape,
+# after `chan[T]<-` and `-1`.
+fn fmt_opens_block(mut &toks: list[Token], at: int) -> bool {
+	p := fmt_prev_code(toks, at)
+	return true if p < 0
+
+	return not fmt_wants_value(toks[p].kind)
+}
+
+# fmt_wants_value is every token a VALUE may follow. It is written as the smaller list on
+# purpose: the positions a block opens in are open-ended — after a `)`, a name, `else`, `=>`,
+# another `{` — while the places an expression is expected are countable, and a new one joins
+# by being named here.
+fn fmt_wants_value(k: Kind) -> bool {
+	return k == Walrus or k == Assign or k == Colon or k == Comma or k == LParen or k == LBrack or k == Return
+}
+
 fn fmt_prev_code(mut &toks: list[Token], at: int) -> int {
 	mut i := at - 1
 	for i >= 0 {
@@ -1242,7 +1275,7 @@ fn fmt_wrap_scan(mut &toks: list[Token], mut &brk: list[int], mut &drop: list[bo
 				col = r.col
 				i = r.next
 			} else {
-				if is_lbrace(t.kind) {
+				if is_lbrace(t.kind) and fmt_opens_block(toks, i) {
 					depth = depth + 1
 				}
 				col = col + wid[i]
@@ -1525,6 +1558,33 @@ struct Printed {
 
 # fmt_pop_int drops a list's last element. The subset has no `pop`, and a stack is what the
 # brace nesting needs, so the drop is written here once rather than at each use.
+# fmt_closes_block asks what the `}` about to be written is closing. An empty stack answers
+# YES: a `}` with no opener is a program the formatter cannot understand, and treating it as a
+# block is what it did before this rule existed.
+# fmt_brace_open is the index of the `{` the `}` at `at` closes. The spacing pass sees one
+# token at a time and has no stack, so it walks back — which is affordable because the only
+# caller asks it of a `}`, and a map literal is a short thing to walk.
+fn fmt_brace_open(mut &toks: list[Token], at: int) -> int {
+	mut depth := 0
+	mut i := at
+	for i >= 0 {
+		if is_rbrace(toks[i].kind) {
+			depth = depth + 1
+		} else if is_lbrace(toks[i].kind) {
+			depth = depth - 1
+			return i if depth == 0
+		}
+		i = i - 1
+	}
+	return 0
+}
+
+fn fmt_closes_block(bkind: list[int]) -> bool {
+	return true if bkind.len() == 0
+
+	return bkind[bkind.len() - 1] == 1
+}
+
 fn fmt_pop_int(xs: list[int]) -> list[int] {
 	mut out: list[int] = []
 	mut i := 0
@@ -1571,6 +1631,12 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 	# than that — which is the lexer's rule for where it stops inserting one.
 	mut bsave := 0
 	mut bstack: list[int] = []
+
+	# bkind records, for every `{` still open, whether it opened a BLOCK — 1 — or a map
+	# literal — 0. It is pushed on every brace and popped on every `}`, so the two always
+	# pair; bstack is only pushed for a block, and asking IT which kind closed would have
+	# read the wrong entry the moment a literal sat inside a block.
+	mut bkind: list[int] = []
 	mut i := 0
 	for i < toks.len() {
 		t := toks[i]
@@ -1653,7 +1719,8 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 			# A `}` closes its block: it dedents before it is written, and it always starts
 			# a line. The lexer's inserted `;` cannot be relied on for either — it only
 			# fires at bracket depth 0 — so block structure is the formatter's own rule.
-			if is_rbrace(t.kind) {
+			if is_rbrace(t.kind) and fmt_closes_block(bkind) {
+				bkind = fmt_pop_int(bkind)
 				if bstack.len() > 0 {
 					bsave = bstack[bstack.len() - 1]
 					bstack = fmt_pop_int(bstack)
@@ -1665,6 +1732,8 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 					out.append(byte(10))
 					col = 0
 				}
+			} else if is_rbrace(t.kind) {
+				bkind = fmt_pop_int(bkind)
 			}
 			if col == 0 {
 				# a blank line in the source survives, but only one
@@ -1720,13 +1789,19 @@ fn fmt_print(mut &toks: list[Token], no_close: bool) -> Printed {
 				psp = psp - 1
 			}
 
-			# a `{` opens a block: whatever follows starts on its own line, one deeper
+			# a `{` opens a block: whatever follows starts on its own line, one deeper. A map
+			# literal's brace is not one and stays on its line — fmt_opens_block.
 			if is_lbrace(t.kind) {
-				bstack.append(bsave)
-				bsave = psp
-				depth = depth + 1
-				out.append(byte(10))
-				col = 0
+				if fmt_opens_block(toks, i) {
+					bkind.append(1)
+					bstack.append(bsave)
+					bsave = psp
+					depth = depth + 1
+					out.append(byte(10))
+					col = 0
+				} else {
+					bkind.append(0)
+				}
 			}
 
 			# a comment runs to end of line: close the line so nothing joins it
@@ -2110,6 +2185,13 @@ fn fmt_space_between(mut &toks: list[Token], i: int, prev2: Kind, prev: Kind) ->
 	if is_close(k) or is_comma(k) {
 		return false # `x)`, `x]`, `x,`
 	}
+
+	# A MAP LITERAL'S BRACES HUG like a list's brackets — `{"a": 1}`, `{:}` — while a block's
+	# stand apart from the head that opens them. Same token, two rules, told apart by what is
+	# in front of the `{` (fmt_opens_block) and, for the `}`, by what its own opener was.
+	return false if is_lbrace(prev) and not fmt_opens_block(toks, i - 1)
+	return false if is_rbrace(k) and not fmt_opens_block(toks, fmt_brace_open(toks, i))
+
 	if is_open(k) and binds_tight(prev) {
 		return false # `f(`, `xs[`, `chan[`
 	}

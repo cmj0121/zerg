@@ -901,9 +901,21 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl, f: File) {
 	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
 	# catching here rather than at the first use of it
 	nm := c_named_of(td.under)
-	return if nm == "" or c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
+	nm_ok := nm == "" or c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
+	if not nm_ok {
+		chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
+		return
+	}
 
-	chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
+	# A SCALAR UNDERNEATH, this phase. docs/core/types.md records the deviation, and the seed
+	# refuses the same thing — but it is worth naming rather than emitting, because a
+	# `type Label = str` looked like it worked: a str is a refcounted cell, and the typedef
+	# name is not a str to c_is_str, so nothing retained it, nothing released it, and
+	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
+	# that says it is not built.
+	if c_scalar_class(td.under) == SC_NONE {
+		chk_at_place(em, td.path, td.line, td.col, f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+	}
 }
 
 # --- assigned value ---------------------------------------------------------------

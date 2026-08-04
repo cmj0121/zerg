@@ -1818,8 +1818,14 @@ fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
 	return TUnknown
 }
 
+# c_is_typedef asks the NAME list, not what the name is underneath: a typedef whose
+# underlying type nothing declares is registered as unknown so its uses stay quiet, and it is
+# still a declared type name — the mistake is in the declaration, which has already said so.
 fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
-	return not c_is_unknown(c_typedef_of(em, nm))
+	for n in em.ty_names {
+		return true if n == nm
+	}
+	return false
 }
 
 # c_repr_of is a type as its REPRESENTATION — itself, unless it is a typedef, in which case
@@ -1829,9 +1835,11 @@ fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
 	nm := c_named_of(t)
 	return t if nm == ""
 
-	u := c_typedef_of(em, nm)
-	return t if c_is_unknown(u)
-	return u
+	# a typedef whose underlying type nothing declares answers UNKNOWN rather than itself:
+	# that is what keeps its uses quiet while the declaration carries the diagnostic
+	return c_typedef_of(em, nm) if c_is_typedef(em, nm)
+
+	return t
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
@@ -1976,8 +1984,19 @@ fn c_build_typedefs(mut &em: Emitter, f: File) {
 	for td in f.types {
 		chk_typedef(em, td, f)
 		em.ty_names.append(td.name)
-		em.ty_unders.append(td.under)
+
+		# a typedef whose underlying type nothing declares is registered as UNKNOWN. The
+		# declaration has already been reported; carrying the bad name forward would make
+		# every use of the type report again, about the use rather than about the cause.
+		em.ty_unders.append(c_typedef_under(em, td.under))
 	}
+}
+
+fn c_typedef_under(mut &em: Emitter, t: Ty) -> Ty {
+	nm := c_named_of(t)
+	return t if nm == "" or c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
+
+	return TUnknown
 }
 
 fn c_build_structs(mut &em: Emitter, f: File) {
@@ -3438,14 +3457,18 @@ fn c_pow2(n: int) -> int {
 fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str) -> str {
 	# a `type X = Y` SOURCE converts as the Y it is represented by — `int(c)` on a `Celsius`
 	# is the way back out, and it is the only place the representation is looked through,
-	# because a conversion is exactly where the two types are meant to meet
-	sc := c_scalar_class(c_repr_of(em, xt))
+	# because a conversion is exactly where the two types are meant to meet. The REPR is what
+	# the guard below asks about too: a typedef whose underlying type nothing declares has
+	# already been reported at its declaration, and raising here as well would bury that
+	# sentence under one about the use.
+	xr := c_repr_of(em, xt)
+	sc := c_scalar_class(xr)
 
 	# NOT A SCALAR ON EITHER SIDE. Naming only the aggregates left `TChan`, `TErr` and an
 	# unresolved `TNamed` falling through to the cast below — the same class this whole
 	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
 	# inference could not work out is not evidence the program is wrong.
-	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xt)
+	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xr)
 
 	return f"(({c_type(ty)})({inner}))" if sc == SC_NONE or c_lossless(sc, c_scalar_bits(xt), dc, db)
 

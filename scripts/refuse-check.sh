@@ -1587,14 +1587,29 @@ EOF
 # --- `in` over a set this compiler does not read ---------------------------------
 #
 # `in` tests MEMBERSHIP, and what a set is depends on what names it: a container names its
-# elements, a range its members, an error kind itself and everything below it. Only the last
-# is built. The other two are grammar-declared, so they are named rather than left to be read
-# as something else — and the message says which set was written, not which branch was taken.
+# elements, a range its members, an error kind itself and everything below it. A RANGE is the
+# one that is not built — the grammar makes `v in 0..10` sugar for `r.contains(v)` over stdlib
+# machinery that does not exist — so it is named rather than left to be read as something else,
+# and the message says which set was written.
 
-expect "$ZERG" in-over-a-list '`in` over list[int]' <<'EOF'
+# an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
+# makes `in` refuse a str looked for among ints rather than compare a pointer to a number
+expect "$ZERG" in-over-a-list-of-the-wrong-element 'the value looked for by `in` is int' <<'EOF'
 fn main() {
 	xs := [1, 2]
-	print str(1 in xs)
+	print str("a" in xs)
+}
+EOF
+
+# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
+expect "$ZERG" in-over-a-list-of-structs 'compared with `==`' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	ps := [P(1)]
+	print str(P(2) in ps)
 }
 EOF
 

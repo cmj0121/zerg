@@ -556,6 +556,9 @@ fn link_objs_argv(objs: list[str], output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append("cc")
 	argv.append("-std=c11")
+
+	# LINK ONLY — no source is read here, so the dialect flags below belong to the two
+	# invocations that compile, not to this one.
 	argv.append("-o")
 	argv.append(output)
 	for o in objs {
@@ -1020,12 +1023,29 @@ fn thread_unit() -> str {
 	return "thread_none.c"
 }
 
+# cc_dialect narrows what the emitted C is allowed to be, and every flag here exists because
+# something got through without it.
+#
+# `-fno-dollars-in-identifiers` is the mangling invariant, made unforgeable. A specialization's
+# key carries `$`, which no Zerg identifier may hold — that is what makes it unforgeable at the
+# Zerg level — and `$` is not a C identifier character either. Both clang and gcc take it as an
+# EXTENSION and say nothing, so a `$` that reached the emitted C compiled on this machine and
+# on Linux CI, and would have failed on the first compiler that did not offer the extension.
+# It reached C once already, and no gate saw it: the flag is what makes the next one a build
+# error here rather than a bug report from somewhere else.
+#
+# It goes on the two invocations that COMPILE. The link-only one reads no source.
+fn cc_dialect(mut &argv: list[str]) {
+	argv.append("-fno-dollars-in-identifiers")
+}
+
 # cc_object_argv compiles the emitted C to an object without linking: a module is not a
 # program, so it has no entry to link against and no runtime to pull in yet.
 fn cc_object_argv(cpath: str, output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append("cc")
 	argv.append("-std=c11")
+	cc_dialect(argv)
 	argv.append("-I")
 	argv.append(rt_dir())
 	argv.append("-c")
@@ -1040,6 +1060,7 @@ fn cc_argv(cpath: str, output: str) -> list[str] {
 	mut argv: list[str] = []
 	argv.append("cc")
 	argv.append("-std=c11")
+	cc_dialect(argv)
 	argv.append("-I")
 	argv.append(rt)
 	argv.append("-o")

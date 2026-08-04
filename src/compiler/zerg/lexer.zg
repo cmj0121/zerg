@@ -483,7 +483,21 @@ fn scan_char_lit(mut &l: Lex, kind: Kind, byte_mode: bool, sline: int, scol: int
 			sb.append(e)
 		}
 	} else {
+		# ONE CHARACTER IS ONE CODE POINT, and in UTF-8 that is one to four BYTES. Taking a
+		# single byte made `'é'` two characters as far as this scanner was concerned, so a
+		# literal the language allows was reported as holding more than one — the source is
+		# UTF-8 and the rule is about what it spells, not about how wide the spelling is.
+		#
+		# A byte literal is the other rule and keeps the single byte: `b'…'` names an octet,
+		# which is exactly what the width of a code point is not.
 		sb.append(advance(l))
+		if not byte_mode {
+			mut more := rune_len(sb[0]) - 1
+			for more > 0 and not eof(l) and at(l, 0) != b'\'' {
+				sb.append(advance(l))
+				more = more - 1
+			}
+		}
 	}
 	if at(l, 0) != b'\'' {
 		# EAT THE REST OF IT before reporting. Returning from where the scan gave up left the
@@ -716,6 +730,35 @@ pub fn int_value(lex: str) -> int {
 	return 0 if v < 0
 
 	return v
+}
+
+# rune_len is how many BYTES the code point starting with this one occupies, read off the
+# lead byte the way UTF-8 encodes it. It is the scanner's half of the same fact rune_value
+# decodes, and they are written together so a change to one is read beside the other.
+fn rune_len(b0: byte) -> int {
+	n := int(b0)
+
+	return 1 if n < 0x80
+	return 2 if n >= 0xC0 and n < 0xE0
+	return 3 if n >= 0xE0 and n < 0xF0
+	return 4 if n >= 0xF0
+
+	return 1
+}
+
+# rune_value is the code point a rune literal holds. It DELEGATES: `list[rune](s)` is the
+# runtime's decoder (zrt_str_runes), which is the one the emitted programs use and the one
+# that rejects overlongs and surrogates. A hand-rolled continuation-byte fold here would be
+# a third UTF-8 decoder, one call away from the audited one, silently accepting what it
+# refuses — and every correctness fix would then have two homes with tests in one.
+#
+# A rune literal is exactly one code point by construction, the scanner having already
+# refused a literal holding more.
+pub fn rune_value(text: str) -> int {
+	rs := list[rune](text)
+	return 0 if rs.len() == 0
+
+	return int(rs[0])
 }
 
 # int_fits reports whether an integer literal is representable in an i64. A literal that

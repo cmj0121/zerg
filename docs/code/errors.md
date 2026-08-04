@@ -66,13 +66,41 @@ other diverge takes — `raise e if c`, and `raise e from cause if c` — which 
 and is what the formatter's `F401` rewrites the block form into. It is the statement form only: a `raise`
 on the right of a `??` takes no trailing `if`, since the guard would read as the coalesce's.
 
-**The built-in error taxonomy.** This phase ships a **fixed set of six** error kinds —
-**`ValueError`**, **`OverflowError`**, **`IOError`**, **`EncodingError`**, **`IndexError`**, **`KeyError`**
-— and you **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
+**The built-in error taxonomy is a TREE.** This phase ships a **fixed set of six** error kinds, and some
+of them are **kinds of** others:
+
+```text
+ValueError            a value was not one this could accept
+├── OverflowError     …because it was outside the range          int(u), byte(300), a + b
+└── EncodingError     …because it was not valid text             a str bridge over bad UTF-8
+IOError               the world would not cooperate
+IndexError            an index outside a container
+KeyError              a key no map holds
+```
+
+**`in` reads the tree; `is` does not.** There are three relations here and each has its own spelling:
+
+| Ask                             | Write        | Of an `OverflowError` |
+| ------------------------------- | ------------ | --------------------- |
+| is it **exactly** this kind     | `e is X`     | `is OverflowError`    |
+| is it a **member** of this kind | `e in X`     | `in ValueError` too   |
+| what was it **raised from**     | `e.unwrap()` | whatever `from` named |
+
+So a handler catches coarsely with `e in ValueError` ("the value was wrong, I do not care why") or precisely
+with `e is OverflowError`, and the coarse one is not a lie. Zerg has no inheritance and this is not it: the
+tree is a fixed relation between the built-in kinds, read **upward only** — every `OverflowError` is
+**in** `ValueError`, and a `ValueError` raised by hand **is not** an `OverflowError`.
+
+Keeping them apart is not tidiness. One predicate answering two of them distinguishes neither:
+`raise IOError("outer") from ValueError("inner")` must stay tellable from an error that simply is a
+`ValueError`, and it is only tellable while the question about causes is a different question.
+
+You **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
 **`Error`** spec —
 `message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](../core/specs.md)) is **not yet
 supported**. Each kind is a full `Err`: construct one with a message (`raise ValueError("bad input")`), let it
-sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`, and have
+sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`
+and `err in ValueError`, and have
 `guard` reify it back as `Right(err)` with message, cause, and code intact. The runtime's **own intrinsic
 failures raise the matching kind**, so library and runtime errors share one vocabulary: a failed integer parse
 is a `ValueError` (out of range → `OverflowError`), a checked narrowing conversion an `OverflowError`, an I/O

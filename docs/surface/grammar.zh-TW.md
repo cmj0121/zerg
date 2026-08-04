@@ -215,7 +215,8 @@ expression 是一條優先序 cascade。每個二元層級都是**左結合**；
 
 `%` 後綴的 `+%` `-%` `*%` 是**回繞（wrapping）**算術運算子；`~` 是 bitwise 補數。bitwise `&` `<<` `>>` 與乘法級
 同層、`\|` `^` 與加法級同層——都比比較緊一級，所以 `a & b == c` 讀作 `(a & b) == c`，避開 C 的優先序陷阱。`is`
-測試 existential;`in` 測試**成員資格（membership）**。正負號是運算子,不屬 literal。**range** 比比較緊一級,所以
+測試 existential;`in` 測試**成員資格（membership）**,而「集合」是什麼取決於誰在命名它——container 指涉它的元素、range 指涉它的成
+員,而一個 **error kind 指涉它自己加上它在分類樹底下的一切**（見[錯誤處理](../code/errors.zh-TW.md)）。正負號是運算子,不屬 literal。**range** 比比較緊一級,所以
 `v in 0..10` 讀作 `v in (0..10)`:`x..y` 是 `range(x, y)`、`x..=y` 是 `range(x, y + 1)`、`x..` 是開放 range、
 `v in r` 是 `r.contains(v)` 的**語法糖**——`Range` / `contains` 機制在 stdlib。（group 8 的 `??` 仍是唯一最鬆的二元
 運算子,比 `or` 更鬆。）
@@ -672,7 +673,7 @@ asm-operand ::= 'in' '(' str-lit ')' expr | 'out' '(' str-lit ')' lvalue
 | 8     | 對內建型別的 `impl`（`impl Tag for int`）                                     |
 | 8     | 除 `#[derive(…)]` 以外的所有 decorator                                        |
 | 8     | 不是 `int` 或 `str` 的 map key —— key 需要 `Hash`                             |
-| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`;橋接 `list[rune](s)`        |
+| 8     | 內建 `Ref` / `deref` / `sizeof[T]` / `alignof[T]`                             |
 | 12    | `unsafe` 區塊、`asm`、`ptr` / `ptr[T]`                                        |
 
 即使沒有東西在 `spec` 上做分派,一個 `spec` 的**required member 仍然被強制**於 `impl … for …` —— 一個宣告出來的

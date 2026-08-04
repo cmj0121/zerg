@@ -39,7 +39,7 @@ CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-d
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -244,7 +244,7 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 		done'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
-LINUX_GATES ?= build test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint fixpoint docs-links sanitize-conc
+LINUX_GATES ?= build test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -274,6 +274,12 @@ docs-links:                     # every docs path the repo cites must resolve
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build
 	./bin/zerg lint $(ZERG_ENTRY)
+
+# `lint` asks whether the compiler is clean, and it is — which is exactly why it cannot tell a
+# rule that finds nothing from a rule that is gone. This one makes every rule fire.
+lint-check:                     # every linter rule has a program that makes it fire
+	$(MAKE) build
+	./scripts/lint-check.sh
 
 fmt:                            # rewrite the compiler and stdlib in canonical style
 	$(MAKE) build

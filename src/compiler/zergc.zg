@@ -1107,10 +1107,23 @@ fn run_fmt_check(files: list[str], off: list[str]) -> int {
 # status rather than exiting on it because a sub-command's function is what decides the
 # process's exit, and it is the only thing that knows what the finding meant.
 fn run_lint(files: list[str]) -> int {
-	findings := zerg.lint_files(load_sources(files))
+	mut paths: list[str] = []
+	srcs := load_sources_at(files, paths)
+
+	findings := zerg.lint_files(srcs)
 	for f in findings {
 		io.write(f + "\n")
 	}
-	return 1 if findings.len() > 0
+
+	# THE L5xx FAMILY IS ASKED SEPARATELY, because it is the one that needs types: the
+	# lowering walk answers it and the C is thrown away. It carries a place, which the
+	# tree-only rules above do not, so it is printed like a diagnostic rather than like a
+	# bare sentence.
+	convs := zerg.lint_conversions(srcs, paths)
+	for d in convs {
+		io.write(f"{d.path}:{d.line}:{d.col}: {d.msg}\n")
+	}
+
+	return 1 if findings.len() + convs.len() > 0
 	return 0
 }

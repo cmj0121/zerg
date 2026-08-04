@@ -248,7 +248,6 @@ fn main() {
 }
 EOF
 
-
 # --- redeclaration ----------------------------------------------------------------
 #
 # A name is bound once per block. Shadowing across blocks is legal and load bearing, so
@@ -386,6 +385,30 @@ fn main() {
 }
 EOF
 
+reject add-an-int-to-a-uint 'has int on one side and uint on the other' <<'EOF'
+fn main() {
+	i: int = 3
+	u: uint = 5
+	print(f"{i + u}")
+}
+EOF
+
+reject compare-an-int-with-a-uint 'has int on one side and uint on the other' <<'EOF'
+fn main() {
+	i: int = -1
+	u: uint = 1
+	print(f"{i < u}")
+}
+EOF
+
+reject equate-an-int-with-a-uint 'has int on one side and uint on the other' <<'EOF'
+fn main() {
+	i: int = -1
+	u: uint = 1
+	print(f"{i == u}")
+}
+EOF
+
 reject bitwise-on-float 'operator `&` takes int operands' <<'EOF'
 fn main() {
 	print(f"{3.0 & 1}")
@@ -418,6 +441,13 @@ EOF
 #
 # The legal neighbours are NOT here — `x: float = 1` widens, `x: int? = 5` wraps,
 # `xs: list[str] = []` has nothing to disagree with — because those must run.
+#
+# `x: float = 1` and `y: float = i` are the pair worth reading together: the LITERAL adopts
+# its context like every untyped literal, and the already-typed int VALUE does not. That is
+# the line docs/core/types.md draws, and it is drawn inside one type pair rather than
+# between two, which is why the accepting half lives in the examples and the four rejecting
+# ones are below — a binding, an assignment, a return and an argument, because a rule that
+# holds in one slot and not the others is the shape this whole rule set exists to catch.
 
 reject bind-str-to-int 'cannot bind str to a int binding' <<'EOF'
 fn main() {
@@ -444,6 +474,168 @@ reject bind-int-list-to-str-list 'cannot bind list[int] to a list[str] binding' 
 fn main() {
 	ys: list[str] = [1, 2]
 	print(f"{ys[0]}")
+}
+EOF
+
+reject typedef-value-into-its-underlying '`f` takes int as argument 1, and this gives Celsius' <<'EOF'
+type Celsius = int
+
+fn f(n: int) -> int {
+	return n
+}
+
+fn main() {
+	print(f"{f(Celsius(20))}")
+}
+EOF
+
+reject logical-operator-on-a-typedef 'has no meaning on Flag and Flag' <<'EOF'
+type Flag = bool
+
+fn main() {
+	f := Flag(true)
+	g := Flag(false)
+	print(f"{f and g}")
+}
+EOF
+
+reject bitwise-operator-on-a-typedef 'has no meaning on Mask and int' <<'EOF'
+type Mask = int
+
+fn main() {
+	m := Mask(3)
+	print(f"{m & 1}")
+}
+EOF
+
+reject prefix-operator-on-a-typedef 'has no meaning on Flag' <<'EOF'
+type Flag = bool
+
+fn main() {
+	f := Flag(true)
+	print(f"{not f}")
+}
+EOF
+
+reject arithmetic-on-a-typedef 'a `type … = …` keeps its own identity' <<'EOF'
+type Celsius = int
+
+fn main() {
+	c := Celsius(20)
+	print(f"{c + 1}")
+}
+EOF
+
+reject typedef-declared-twice 'is declared twice' seed-gap <<'EOF'
+type Celsius = int
+type Celsius = float
+
+fn main() {
+	print(f"{int(Celsius(1))}")
+}
+EOF
+
+reject typedef-over-an-undeclared-type 'names no type' <<'EOF'
+type Celsius = Nope
+
+fn main() {
+	print(f"{int(Celsius(1))}")
+}
+EOF
+
+reject typedef-conversion-takes-one-value 'converts ONE value' <<'EOF'
+type Celsius = int
+
+fn main() {
+	print(f"{int(Celsius(1, 2))}")
+}
+EOF
+
+reject str-sent-on-an-int-channel 'the value sent on this channel is int' <<'EOF'
+fn main() {
+	ch := chan[int](1)
+	ch <- "hi"
+	print(f"{(<-ch)!}")
+}
+EOF
+
+reject str-appended-to-an-int-list 'the element `append` adds is int' <<'EOF'
+fn main() {
+	mut xs: list[int] = []
+	xs.append("hi")
+	print(f"{xs.len()}")
+}
+EOF
+
+reject str-written-into-an-int-map 'the value written into this map is int' <<'EOF'
+fn main() {
+	mut m: map[str, int] = {:}
+	m["a"] = "hi"
+	print(f"{m.len()}")
+}
+EOF
+
+reject str-among-a-map-literals-ints 'a value of this map literal is int' <<'EOF'
+fn main() {
+	m := {"a": 1, "b": "hi"}
+	print(f"{m.len()}")
+}
+EOF
+
+reject str-as-an-int-coalesce-fallback 'the `??` fallback is int' <<'EOF'
+fn main() {
+	x: int? = 1
+	print(f"{x ?? "no"}")
+}
+EOF
+
+reject str-into-an-int-variant-payload 'payload 1 of `Line` is int' <<'EOF'
+enum Shape {
+	Line(int)
+}
+
+fn take(s: Shape) -> int {
+	return 0
+}
+
+fn main() {
+	print(f"{take(Shape.Line("hi"))}")
+}
+EOF
+
+reject str-into-an-int-struct-field 'field 1 of `P` is int, and this gives str' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P("hi")
+	print(f"{p.x}")
+}
+EOF
+
+reject oversized-literal-into-a-byte-struct-field '`300` is not a value a byte holds' seed-gap <<'EOF'
+struct P {
+	x: byte
+}
+
+fn main() {
+	p := P(300)
+	print(f"{int(p.x)}")
+}
+EOF
+
+reject bind-oversized-literal-to-byte '`300` is not a value a byte holds' seed-gap <<'EOF'
+fn main() {
+	b: byte = 300
+	print(f"{b}")
+}
+EOF
+
+reject bind-negative-literal-to-uint '`-1` is not a value a uint holds' seed-gap <<'EOF'
+fn main() {
+	u: uint = -1
+	print(f"{u}")
 }
 EOF
 
@@ -1353,6 +1545,25 @@ fn main() {
 }
 EOF
 
+# A RUNE's bound is not a width, so a literal meets a predicate rather than a range: `rune`
+# is "a single valid Unicode code point" (docs/core/types.md), and U+D800..U+DFFF are UTF-16
+# surrogates, which are not characters. The second case is the one a width test cannot see —
+# 55296 fits an i32 comfortably, and no rune holds it.
+
+reject rune-literal-past-the-last-code-point 'is not a value a rune holds' <<'EOF'
+fn main() {
+	r: rune = 1114112
+	print(f"{int(r)}")
+}
+EOF
+
+reject rune-literal-inside-the-surrogates 'is not a value a rune holds' <<'EOF'
+fn main() {
+	r: rune = 55296
+	print(f"{int(r)}")
+}
+EOF
+
 # --- a declared interface means its members exist -------------------------------
 #
 # A `spec` is otherwise read and DROPPED — it is not a type and nothing dispatches on it —
@@ -1849,12 +2060,14 @@ fn main() {
 }
 EOF
 
-# --- a byte widens; a list of them does not -------------------------------------
+# --- a byte converts; a LIST of them does not ------------------------------------
 #
-# A `byte` fits an `int` slot, in the direction the language already mixes `int` into
-# `float`. A `list[byte]` does NOT fit a `list[int]`: a buffer's stride is its element's
-# size, so reading one as the other walks 8 bytes per 1-byte slot. `ys: list[int] =
-# list[byte]("Hi")` printed 26952 and a longer string read past the end.
+# `Into` carries a `byte` into an `int` slot one value at a time. A `list[byte]` does not
+# become a `list[int]`, and that is not an omission from the matrix — a conversion BUILDS the
+# target value, and a container handed over whole is not built, it is reinterpreted. The
+# buffer's stride is its element's size, so reading one as the other walks 8 bytes per 1-byte
+# slot: `ys: list[int] = list[byte]("Hi")` printed 26952, and a longer string read past the
+# end. Convert the elements, or take the bytes as bytes.
 
 reject bind-a-byte-list-to-an-int-list 'cannot bind list[byte] to a list[int] binding' <<'EOF'
 fn main() {
@@ -1863,9 +2076,10 @@ fn main() {
 }
 EOF
 
-# and the narrowing the other way is not a fit either: `take(1000)` on a `byte` parameter
-# compiled to a truncation, and cc printed its own warning about generated C to say so
-reject narrow-an-int-to-a-byte '`take` takes byte as argument 1, and this gives int' seed-gap <<'EOF'
+# `take(1000)` on a `byte` parameter is the CONSTANT layer of Into: `int -> byte` is a real
+# conversion, so it type-checks, and then the compiler evaluates it and reports the value
+# rather than emitting the truncation cc used to complain about.
+reject narrow-an-int-to-a-byte '`1000` is not a value a byte holds' seed-gap <<'EOF'
 fn take(b: byte) -> int {
 	return int(b)
 }
@@ -1874,6 +2088,69 @@ fn main() {
 	print(f"{take(1000)}")
 }
 EOF
+
+# --- a carrier's PAYLOAD is a typed position too ----------------------------------
+#
+# docs/core/types.md lists the positions where a value meets a declared type, and a
+# carrier's payload is one of them: `int?` and `Result[int]` both promise an int, one
+# indirection down. Nothing asked. The check was hand-attached at the positions somebody
+# thought of, and the payload is reached by a DIFFERENT route — the declaration is fitted
+# by c_carrier_fit, which lowers the payload through a second call that had no rule on it.
+#
+# Five of the seven below reached cc, which reported an int-conversion warning against
+# generated C. The last two compiled and RAN: an int in a `float?` printed `5`, and 300 in
+# a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
+# carrier, is where the declared type lives.
+
+reject str-into-an-optional-list-element 'an element of this list literal is int' <<'EOF'
+fn main() {
+	xs: list[int?] = ["a"]
+	print xs.len()
+}
+EOF
+
+reject str-into-an-optional-struct-field 'field 1 of `Box` is int' <<'EOF'
+struct Box {
+	v: int?
+}
+
+fn main() {
+	b := Box("hi")
+	print "ok"
+}
+EOF
+
+reject str-assigned-into-an-optional '`x` is int, and this gives str' <<'EOF'
+fn main() {
+	mut x: int? = 1
+	x = "hi"
+	print x!
+}
+EOF
+
+reject str-into-a-result-left 'what this function answers is int, and this gives str' <<'EOF'
+fn f() -> Result[int] {
+	return Left("hi")
+}
+
+fn main() {
+	print f()!
+}
+EOF
+
+reject int-into-an-either-right 'what this function answers is str, and this gives int' <<'EOF'
+fn f() -> Either[int, str] {
+	return Right(7)
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# the two that RAN. An int64_t into a double field and an int64_t into a uint8_t are both
+# legal C, so neither cc nor any gate had anything to say — the program simply answered
+# something other than what it was written to answer.
 
 # --- report ------------------------------------------------------------------------
 

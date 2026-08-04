@@ -537,12 +537,6 @@ fn main() {
 }
 EOF
 
-expect "$ZERG" non-ascii-rune-literal "non-ASCII rune literal" <<'EOF'
-fn main() {
-	print int('\u{20AC}')
-}
-EOF
-
 expect "$ZERG" generic-enum "a generic enum" <<'EOF'
 enum E[T] {
 	A(T)
@@ -573,8 +567,12 @@ struct P {
 fn main() { print 1 }
 EOF
 
-expect "$ZERG" equality-on-an-aggregate "which this compiler does not generate" <<'EOF'
-#[derive(Eq)]
+# `#[derive(Eq)]` + `==` used to be refused here. It is a FEATURE now, and what a working
+# form owes is a program that runs, so it moved to the codegen corpus. What is left refused
+# on this subject is the derive this compiler still does not write — see
+# derive-of-an-unbuilt-spec and payload-enum-equality below.
+
+expect "$ZERG" equality-with-no-eq "needs an \`Eq\`" <<'EOF'
 struct P {
 	x: int
 }
@@ -582,6 +580,41 @@ struct P {
 fn main() {
 	print P(1) == P(1)
 }
+EOF
+
+expect "$ZERG" equality-over-a-container "over a container is unbuilt" <<'EOF'
+fn main() {
+	print [1, 2] == [1, 2]
+}
+EOF
+
+expect "$ZERG" payload-enum-equality "it carries a payload" <<'EOF'
+#[derive(Eq)]
+enum Shape {
+	Circle(int)
+}
+
+fn main() {
+	print Shape.Circle(1) == Shape.Circle(1)
+}
+EOF
+
+expect "$ZERG" derive-of-a-user-spec "the derivable specs are compiler-owned" <<'EOF'
+spec Show {
+	fn show() -> str
+}
+
+#[derive(Show)]
+struct P {
+	x: int
+}
+
+fn main() { print 1 }
+EOF
+
+expect "$ZERG" derive-with-no-declaration "has no declaration under it" <<'EOF'
+#[derive(Eq)]
+fn main() { print 1 }
 EOF
 
 expect "$ZERG" field-default "a default on field" <<'EOF'
@@ -691,12 +724,6 @@ EOF
 expect "$ZERG" alignof-builtin "NotImplemented: the compile-time built-in \`alignof[T]\`" <<'EOF'
 fn main() {
 	print alignof[int]
-}
-EOF
-
-expect "$ZERG" rune-bridge "NotImplemented: \`list[rune](s)\`" <<'EOF'
-fn main() {
-	print list[rune]("Hi").len()
 }
 EOF
 
@@ -946,18 +973,19 @@ fn main() {
 }
 EOF
 
-# Five forms the specification described as working that the shipped compiler does not have.
-# Each reached cc, or named a symptom two steps from what was written.
-expect "$ZERG" for-in-over-a-str "binds each code point" <<'EOF'
+expect "$ZERG" derive-of-an-unbuilt-spec "specified and unbuilt" <<'EOF'
+#[derive(Ord)]
+struct P {
+	x: int
+}
+
 fn main() {
-	for c in "ab" {
-		print 1
-	}
+	print P(1) < P(2)
 }
 EOF
 
-expect "$ZERG" ordering-on-an-aggregate "does not generate" <<'EOF'
-#[derive(Ord)]
+expect "$ZERG" ordering-on-an-aggregate "an ordering comes from" <<'EOF'
+#[derive(Eq)]
 struct P {
 	x: int
 }
@@ -1426,11 +1454,24 @@ fn main() {
 }
 EOF
 
-# `str(…)` over a list is the BYTE bridge. Without the element check it reinterpreted any
+# A strong typedef is built over a SCALAR this phase, which docs/core/types.md records as a
+# deviation and the seed refuses too. It is named rather than emitted because it LOOKED like
+# it worked: a str is a refcounted cell and the typedef name is not a str to c_is_str, so
+# nothing retained it, nothing released it, and `str(l)` printed the pointer as a number.
+expect "$ZERG" typedef-over-a-str "over a non-scalar" <<'EOF'
+type Label = str
+
+fn main() {
+	print(f"{str(Label("hi"))}")
+}
+EOF
+
+
+# `str(…)` over a list bridges bytes or code points. Without the element check it reinterpreted any
 # buffer as characters: `f"{xs}"` on a `list[int]` printed the low byte of each element,
 # and on a `list[list[int]]` printed the low bytes of a heap POINTER. `print xs` refuses a
 # composite; this let the same value out through an f-string hole.
-expect "$ZERG" render-a-list-of-ints "the BYTE bridge" <<'EOF'
+expect "$ZERG" render-a-list-of-ints "bridges bytes or code points" <<'EOF'
 fn main() {
 	xs: list[int] = [65, 66, 67]
 	print(f"{xs}")
@@ -1554,6 +1595,77 @@ fn main() {
 	mut k := 5
 	k = 99
 	spawn show(k)
+}
+EOF
+
+# --- a second `Into` on one type ------------------------------------------------
+#
+# The language means for a type to have several: the built-in matrix has four out of `int`
+# alone. This compiler keys a method by its NAME, so one type carries one `into` — and the
+# collision reported itself as two methods sharing a namespace, which is true and about the
+# wrong thing. Named here until a spec method is keyed by (spec, arguments), which is also
+# what would let a written-out `x.into()` say which one is meant.
+
+expect "$ZERG" a-second-into-on-one-type 'a second `impl Into[' <<'EOF'
+struct Celsius {
+	deg: int
+}
+
+struct Kelvin {
+	deg: int
+}
+
+impl Into[int] for Celsius {
+	fn into() -> int {
+		return this.deg
+	}
+}
+
+impl Into[Kelvin] for Celsius {
+	fn into() -> Kelvin {
+		return Kelvin(this.deg + 273)
+	}
+}
+
+fn main() {
+	c := Celsius(20)
+	n: int = c
+	print n
+}
+EOF
+
+# --- `in` over a set this compiler does not read ---------------------------------
+#
+# `in` tests MEMBERSHIP, and what a set is depends on what names it: a container names its
+# elements, a range its members, an error kind itself and everything below it. A RANGE is the
+# one that is not built — the grammar makes `v in 0..10` sugar for `r.contains(v)` over stdlib
+# machinery that does not exist — so it is named rather than left to be read as something else,
+# and the message says which set was written.
+
+# an ELEMENT that the list cannot hold: the same rule every typed position uses, which is what
+# makes `in` refuse a str looked for among ints rather than compare a pointer to a number
+expect "$ZERG" in-over-a-list-of-the-wrong-element 'the value looked for by `in` is int' <<'EOF'
+fn main() {
+	xs := [1, 2]
+	print str("a" in xs)
+}
+EOF
+
+# and a STRUCT element, which has no `==` for the same reason `a == b` refuses one
+expect "$ZERG" in-over-a-list-of-structs 'compared with `==`' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	ps := [P(1)]
+	print str(P(2) in ps)
+}
+EOF
+
+expect "$ZERG" in-over-a-range '`in` over a range' <<'EOF'
+fn main() {
+	print str(3 in 0..10)
 }
 EOF
 

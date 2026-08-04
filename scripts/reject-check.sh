@@ -552,6 +552,51 @@ fn main() {
 }
 EOF
 
+reject str-into-an-int-struct-field 'field 1 of `P` is int, and this gives str' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P("hi")
+	print(f"{p.x}")
+}
+EOF
+
+reject byte-value-into-an-int-struct-field 'field 1 of `P` is int, and this gives byte' <<'EOF'
+struct P {
+	x: int
+}
+
+fn main() {
+	p := P(b'a')
+	print(f"{p.x}")
+}
+EOF
+
+reject int-value-into-a-float-struct-field 'field 1 of `P` is float, and this gives int' <<'EOF'
+struct P {
+	x: float
+}
+
+fn main() {
+	i := 2
+	p := P(i)
+	print(f"{p.x}")
+}
+EOF
+
+reject oversized-literal-into-a-byte-struct-field 'field 1 of `P` is byte, and this gives int' seed-gap <<'EOF'
+struct P {
+	x: byte
+}
+
+fn main() {
+	p := P(300)
+	print(f"{int(p.x)}")
+}
+EOF
+
 reject bind-byte-value-to-int 'cannot bind byte to a int binding' <<'EOF'
 fn main() {
 	n: int = b'J'

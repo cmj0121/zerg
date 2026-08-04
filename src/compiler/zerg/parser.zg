@@ -362,8 +362,12 @@ fn skip_ty_args(mut &p: Parser) {
 }
 
 # is_conv reports whether a callee name is a scalar type conversion.
+#
+# `rune` was the one primitive missing here while conv_ty below already had an arm for it —
+# so `rune(65)` was "undefined function `rune`", the only one of the seven that could not be
+# written. The answer had been written and the question was never asked.
 fn is_conv(name: str) -> bool {
-	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool" or name == "uint"
+	return name == "int" or name == "byte" or name == "str" or name == "float" or name == "bool" or name == "uint" or name == "rune"
 }
 
 fn conv_ty(name: str) -> Ty {

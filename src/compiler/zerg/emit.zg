@@ -271,6 +271,12 @@ struct Emitter {
 	# `diags` because they must not fail a build: the language allows every one of them, and
 	# what a lint says is that the page does not show what the program means.
 	lints: list[Diag]
+
+	# eq_types are the types carrying an `impl Eq for X`, derived or hand-written.
+	# docs/core/derive.md makes `Eq` the SOLE source of `==` / `!=` on a struct or an enum —
+	# there is no auto-derived equality and no implicit `Object` — so this list is both where
+	# the operator's implementation is found and the answer to whether it exists at all.
+	eq_types: list[str]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -3106,18 +3112,24 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 		return f"(strcmp({c_expr(em, a, sb)}, {c_expr(em, b, sb)}) {oper} 0)" if c_is_cmp_op(oper)
 	}
 
-	# enum equality compares the tag (the subset only == tag-only enums like Kind)
-	# `==` and `<` ask the same question of an aggregate: C has no answer for either, and
-	# the impl that would (`Eq`, `Ord`) is what `#[derive]` stands for and this compiler does
-	# not generate. Guarding only equality left `<` to reach cc.
+	# AN AGGREGATE HAS NO C OPERATOR, and `Eq` is where its `==` comes from. C has no `==` for
+	# a struct, an enum, a list, a map or a tuple, so the operator used to reach cc as
+	# `invalid operands to binary expression` against code nobody wrote.
+	#
+	# An enum used to be answered here by comparing the two TAGS, which is right for a
+	# fieldless enum and WRONG for a payload one: `Circle(1) == Circle(2)` answered true. It
+	# was also equality with no impl behind it, which docs/core/derive.md rules out — there is
+	# no auto-derived equality — and the seed refuses exactly that.
 	eq := c_is_cmp_op(oper)
-	return f"(({c_expr(em, a, sb)}).tag {oper} ({c_expr(em, b, sb)}).tag)" if c_is_enum_ty(em, ta) and (oper == "==" or oper == "!=")
+	if eq and c_is_aggregate(em, ta) {
+		return c_eq_call(em, oper, a, b, sb) if (oper == "==" or oper == "!=") and c_has_eq(em, ta)
 
-	# EVERY OTHER AGGREGATE. C has no `==` for a struct, a list, a map or a tuple, so the
-	# operator used to reach cc as `invalid operands to binary expression` against generated
-	# code — including on a `#[derive(Eq)]` struct, whose decorator this compiler reads and
-	# drops because it generates no impls. What is missing is named where it is missed.
-	raise f"NotImplemented: `{oper}` on a {ty_name(ta)} — it needs the impl `#[derive(Eq)]` / `#[derive(Ord)]` stands for, which this compiler does not generate" if eq and c_is_aggregate(em, ta)
+		# ONLY WHEN THE TWO SIDES ARE THE SAME TYPE. `Color == Fruit` and `Color == 1` are
+		# already reported by chk_binary above, and they are the better sentence — what is
+		# wrong there is the pair, not a missing impl. Raising here as well replaced a
+		# diagnostic about the program with one about a spec the program never mentioned.
+		raise c_eq_says(em, oper, ta) if ty_name(ta) == ty_name(c_infer(em, b))
+	}
 
 	ca := c_expr(em, a, sb)
 	cb := c_expr(em, b, sb)
@@ -3129,6 +3141,30 @@ fn c_binexpr(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
 	# through the checked INTEGER path, which truncated the 7.5 to 7 on the way into
 	# zrt_sub_i64 and printed a denormal. Silent, and in every mixed expression.
 	return c_arith(em, oper, c_infer_binary(em, oper, a, b), ca, cb)
+}
+
+# c_eq_call lowers `a == b` / `a != b` on a type with an Eq impl as the CALL THE PROGRAMMER
+# COULD HAVE WRITTEN. `eq` and `ne` are ordinary methods, so rewriting the expression and
+# handing it back to c_expr gets the receiver copy, the name mangling and the argument rules
+# from the one place that already has them — the same move `Into` makes for `.into()`.
+fn c_eq_call(mut &em: Emitter, oper: str, a: Expr, b: Expr, sb: Subst) -> str {
+	return c_expr(em, EMethod(a, "eq", [b]), sb) if oper == "=="
+
+	return c_expr(em, EMethod(a, "ne", [b]), sb)
+}
+
+# c_eq_says names what is missing, and there are three different sentences under one gap.
+#
+# An ORDERING is `Ord`'s and this compiler generates none. Equality on a CONTAINER is
+# docs/code/collections.md's `[not yet]` — a container is not a declaration, so there is
+# nothing to decorate and no impl a program could write for it. Equality on a NAMED type
+# exists the moment it has an `Eq`, so that one is an instruction rather than a refusal, and
+# it is the only one of the three that tells the reader what to type.
+fn c_eq_says(mut &em: Emitter, oper: str, t: Ty) -> str {
+	return f"NotImplemented: `{oper}` on a {ty_name(t)} — an ordering comes from `Ord`, which this compiler does not generate; compare the fields you mean to order by" if oper != "==" and oper != "!="
+	return f"NotImplemented: `{oper}` on a {ty_name(t)} — structural equality over a container is unbuilt, and a container has no declaration to derive it on; compare the elements you mean to compare" if not c_is_struct_name(em, c_named_of(t)) and not c_is_enum_ty(em, t)
+
+	return f"`{oper}` on a {ty_name(t)} needs an `Eq` — there is no structural equality by default, so add `#[derive(Eq)]` to the type or write `impl Eq for {ty_name(t)}`"
 }
 
 # c_floordiv lowers `a // b`. Its result is always an `int`, so the operand types decide
@@ -8039,6 +8075,8 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
 	mut types: list[TypeDecl] = []
+	mut derive_on: list[str] = []
+	mut derive_spec: list[str] = []
 	for f in fs {
 		for c in f.consts {
 			consts.append(c)
@@ -8064,8 +8102,17 @@ pub fn merge_asts(fs: list[File]) -> File {
 		for td in f.types {
 			types.append(td)
 		}
+
+		# the two derive lists are PARALLEL, so they are appended together — walking one and
+		# indexing the other would be a second place their lengths have to agree
+		mut i := 0
+		for i < f.derive_on.len() {
+			derive_on.append(f.derive_on[i])
+			derive_spec.append(f.derive_spec[i])
+			i = i + 1
+		}
 	}
-	return File(imports, structs, enums, specs, impls, fns, types, consts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts, derive_on, derive_spec)
 }
 
 fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
@@ -8091,31 +8138,151 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # point of doing it this way — a hand-built one is a second spelling of what the parser
 # produces, and the two drift the day a spec grows a field. Three lines through the real
 # parser cannot disagree with the real parser.
-const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n"
+const ZG_BUILTIN_SPECS := "spec Into[T] {\n\tfn into() -> T\n}\n\nspec Eq {\n\tfn eq(o: This) -> bool\n\tfn ne(o: This) -> bool\n}\n"
 
 # c_with_builtin_specs adds them to a program that does not declare them itself. A program IS
-# allowed to declare its own `Into` — the check is by name, so a spec by that name wins, and
-# nothing is injected on top of it.
+# allowed to declare its own `Into` or `Eq` — the check is by name, so a spec by that name
+# wins and nothing is injected on top of it.
 pub fn c_with_builtin_specs(prog: File) -> File {
-	for s in prog.specs {
-		return prog if s.name == "Into"
-	}
-
 	# the parse is BOUND before it is walked: `for s in parse_at(…).specs` takes the address of
 	# an rvalue, which the seed lowers to C that cc refuses
 	bi := parse_at(ZG_BUILTIN_SPECS, "<builtin>")
 
 	mut out := prog
 	for s in bi.specs {
-		out.specs.append(s)
+		if not c_declares_spec(prog, s.name) {
+			out.specs.append(s)
+		}
 	}
 	return out
+}
+
+# c_declares_spec is whether the program already has a spec by this name. It is asked PER
+# BUILTIN rather than once for the whole set: a program declaring its own `Into` used to
+# suppress `Eq` as well, which is a rule about one name reaching a name it never mentioned.
+fn c_declares_spec(prog: File, name: str) -> bool {
+	for s in prog.specs {
+		return true if s.name == name
+	}
+	return false
+}
+
+# --- structural derive (docs/core/derive.md) ----------------------------------------------
+#
+# `#[derive(X)]` asks the COMPILER to write the canonical `(T, X)` impl by reading T's
+# structure. It is a compiler privilege and not sugar for an empty impl: a spec is
+# field-blind, so no spec could write this body.
+#
+# It is generated AS SOURCE and handed to the real parser, for the same reason the builtin
+# specs are: an impl built out of AST nodes here would be a second spelling of what
+# `impl Eq for P { … }` already parses to, and the two drift the day either side grows a
+# field. What comes back is an ordinary ImplDecl, so it registers in the method namespace,
+# meets the duplicate-impl check, and emits — with nothing downstream knowing it was derived.
+
+# c_with_derived expands every `#[derive(…)]` into the impl it stands for.
+pub fn c_with_derived(prog: File) -> File {
+	mut out := prog
+	mut i := 0
+	for i < prog.derive_on.len() {
+		src := c_derive_src(prog, prog.derive_on[i], prog.derive_spec[i])
+		gen := parse_at(src, "<derive>")
+		for ip in gen.impls {
+			out.impls.append(ip)
+		}
+		for fnd in gen.fns {
+			out.fns.append(fnd)
+		}
+		i = i + 1
+	}
+	return out
+}
+
+# c_derive_src writes the impl for one `(type, spec)` pair. Only the BLESSED set may be
+# named — the derivable set is compiler-owned and a user spec in a `#[derive(…)]` is an
+# error, because generating an impl from structure needs code that reads structure, and
+# nothing user-authored may.
+fn c_derive_src(prog: File, target: str, nm: str) -> str {
+	raise f"NotImplemented: `#[derive({nm})]` — this compiler derives `Eq`; `Ord`, `Hash`, `Encode` and `Decode` are specified and unbuilt" if nm == "Ord" or nm == "Hash" or nm == "Encode" or nm == "Decode"
+	raise f"cannot derive `{nm}`: the derivable specs are compiler-owned, and a `spec` you write is never one of them — write `impl {nm} for {target}` instead" if nm != "Eq"
+
+	return c_derive_eq(prog, target)
+}
+
+# c_derive_eq is Eq's structural rule: a product compares FIELD BY FIELD, a sum by its
+# variant. `ne` is written over `eq` rather than beside it — one negation cannot disagree
+# with itself, and two generated bodies could.
+fn c_derive_eq(prog: File, target: str) -> str {
+	body := c_derive_eq_body(prog, target)
+	return f"impl Eq for {target} {{\n\tfn eq(o: {target}) -> bool {{\n\t\treturn {body}\n\t}}\n\n\tfn ne(o: {target}) -> bool {{\n\t\treturn not this.eq(o)\n\t}}\n}}\n"
+}
+
+fn c_derive_eq_body(prog: File, target: str) -> str {
+	for sd in prog.structs {
+		return c_derive_fields(sd.fields) if sd.name == target
+	}
+	for ed in prog.enums {
+		return c_derive_variants(ed, target) if ed.name == target
+	}
+
+	raise f"cannot derive `Eq` for `{target}` — a derive reads a type's structure, and no struct or enum by that name is declared here"
+}
+
+# c_derive_fields is the conjunction of the fields' own equalities, recursing into each
+# field's `Eq` by simply writing `==` and letting the same rule apply one level down. A
+# FIELDLESS struct is equal to itself: there is nothing that could differ.
+fn c_derive_fields(fields: list[FieldDef]) -> str {
+	return "true" if fields.len() == 0
+
+	mut out := f"this.{fields[0].name} == o.{fields[0].name}"
+	mut i := 1
+	for i < fields.len() {
+		out = out + f" and this.{fields[i].name} == o.{fields[i].name}"
+		i = i + 1
+	}
+	return out
+}
+
+# c_derive_variants is the sum's rule. A FIELDLESS enum has a native integer repr, so its
+# variants differ exactly as their discriminants do and `int(v)` — the reading the language
+# already gives — is the whole comparison.
+#
+# A PAYLOAD enum needs the tag AND the payload, matched on both sides at once, and that is
+# named rather than written: comparing tags alone is the wrong answer this derive exists to
+# replace, and half of it is worse than none.
+fn c_derive_variants(ed: EnumDecl, target: str) -> str {
+	for v in ed.variants {
+		raise f"NotImplemented: `#[derive(Eq)]` on `{target}` — it carries a payload (`{v.name}`), and this compiler derives equality for a fieldless enum, whose variants differ exactly as their discriminants do; write `impl Eq for {target}` with a `match`" if v.fields.len() > 0
+	}
+	return "int(this) == int(o)"
 }
 
 # c_build_intos records every `impl Into[T] for S`. It is a pass of its own rather than a scan
 # at each use, for the reason every other table here exists: a typed position asks this
 # question once per value, and answering it by walking the program's impls would make the cost
 # of a conversion the size of the program.
+# c_build_eqs records every type with an `impl Eq for X`. It is the same shape as the Into
+# registry and for the same reason: `==` asks this question at every use, and answering it by
+# walking the program's impls would make the cost of a comparison the size of the program.
+fn c_build_eqs(mut &em: Emitter, f: File) {
+	for ip in f.impls {
+		if ip.on == "Eq" {
+			em.eq_types.append(ip.target)
+		}
+	}
+}
+
+# c_has_eq is whether the type carries an Eq impl. It reads through a `type X = Y` the way
+# every other question about a named type does — the typedef takes on Y's impls.
+fn c_has_eq(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	return false if nm == ""
+
+	for n in em.eq_types {
+		return true if n == nm
+	}
+	return false
+}
+
 fn c_build_intos(mut &em: Emitter, f: File) {
 	for ip in f.impls {
 		if ip.on == "Into" and ip.args.len() == 1 {
@@ -8156,15 +8323,25 @@ pub fn c_into_user(mut &em: Emitter, want: Ty, got: Ty) -> bool {
 	return false
 }
 
-fn c_emit_unit(prog0: File, own: File, whole: bool, want_lints: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
-	f := c_with_builtin_specs(prog0)
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [])
+fn c_emit_unit(prog0: File, own0: File, whole: bool, want_lints: bool, mut &diags: list[Diag], mut &lints: list[Diag]) -> str {
+	# the derive expansion runs over the program the builtin specs are already in, because
+	# what it writes is `impl Eq for …` and the spec that names has to be there to meet it.
+	#
+	# BOTH VIEWS ARE EXPANDED. `f` is the whole program, which is what declares the method and
+	# proves the call; `own` is this unit, which is what WRITES THE BODY. Expanding only the
+	# first left `zg_ArgKind_eq` declared, called, and defined nowhere — a link error against
+	# a function the program never spells. Each expands from its own derive list, so the unit
+	# gets exactly the impls whose decorators are in it.
+	f := c_with_derived(c_with_builtin_specs(prog0))
+	own := c_with_derived(own0)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [], [], [], want_lints, [], [])
 	c_build_type_names(em, f)
 
 	# AHEAD of c_build_sigs, which raises on two methods of one name: a second `impl Into[…]`
 	# is exactly that collision, and the sentence about method namespaces is true and about
 	# the wrong thing. The pass that knows what the pair was gets to say it first.
 	c_build_intos(em, f)
+	c_build_eqs(em, f)
 	c_build_sigs(em, f)
 	c_build_typedefs(em, f)
 	c_build_structs(em, f)

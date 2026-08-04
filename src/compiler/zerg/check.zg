@@ -548,8 +548,28 @@ fn chk_arg_says(key: str, pos: int) -> str {
 	# `mut &` and is a `mut &`, and …".
 	return f"the receiver of `{chk_call_name(key)}`, which is a `mut fn`," if pos == 0
 
-	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}` is a `mut &` and"
+	return f"{chk_slot_says(key, pos)} is a `mut &` and"
 }
+
+# chk_slot_says names an argument BY POSITION, the way chk_field_says names a struct's field.
+# It is the plain name of the slot, with no clause about what is wrong with it, so a borrow
+# rule and a fit rule can each finish the sentence their own way.
+pub fn chk_slot_says(key: str, pos: int) -> str {
+	return f"argument {strconv.to_string(pos, 10)} of `{chk_call_name(key)}`"
+}
+
+# chk_binding_says names a binding as a slot. chk_binding has a sentence of its own that reads
+# better ("cannot bind str to a int binding: `n`"), and this is what the FLOOR in c_fit_copied
+# says on the paths that reach it without passing that one — a carrier's payload, which is
+# fitted below the declaration rather than at it.
+pub fn chk_binding_says(name: str) -> str {
+	return f"the binding `{name}`"
+}
+
+# CHK_ANSWER names the `return` slot. A returned value has no position and no name to give,
+# so what the sentence can point at is the SIGNATURE — which is also what chk_returned says
+# above it, in its own better words.
+const CHK_ANSWER := "what this function answers"
 
 # chk_ref_alias raises when one call hands the same variable to two `mut &` parameters.
 #

@@ -96,11 +96,21 @@ which is what keeps a rule stated over positions from being defeated by typing m
 **A position takes at most one conversion.** Where a rule below converts a value to reach the declared
 type, it does so in one step per position; a value that crosses two positions may be converted at each.
 
+**A carrier does not end a position — it moves it one level in.** Where the declared type is a `T?`, a
+`Result[T]` or an `Either[X, Y]`, what meets a value is the **payload**, and the payload is the same
+position: `x: int? = e` puts `e` at the binding's position against `int`, and `return Left(e)` puts it at
+the `return`'s. Every rule below reads `T` there, never the wrapper.
+
 > **[deviation]** The list is the contract; the compiler reached it incrementally, and each position it
 > had not yet been told about was a value lowered into a type it did not fit — silently. The list exists
 > because that kept happening: it was written as four examples in a parenthesis, and the four grew to
 > fourteen one miscompile at a time. A new syntactic form owes an answer to "is this a typed position",
 > and that answer belongs here rather than in whichever rule notices first.
+>
+> The carrier sentence is the same story from inside: the compiler fitted the WRAPPER and then lowered
+> its payload by another route, which no rule was attached to. `x: float? = i` for an `int` value printed
+> `5`, and `Left(i)` for `i = 300` into a `Result[byte]` truncated in silence — the same two mistakes the
+> same rules already refuse one level up.
 
 ### Numeric literals
 

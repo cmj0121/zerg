@@ -1,0 +1,20 @@
+# oracle-skips — the programs in examples/ that the SEED turns away, and why.
+#
+# oracle-check compares the two compilers on every program BOTH can build. What the seed
+# refuses is skipped, and this file is what stops that skip from being a place findings go to
+# hide: the seed is the narrower compiler on most of the language and the CORRECT one on some
+# of it, so "the seed refuses this and `zerg` does not" is either a gap the seed is allowed to
+# have or a rule `zerg` LOST on the way to self-hosting. One number at the bottom of a run
+# cannot tell those apart. A sentence beside each program can.
+#
+# Format is <path>TAB<the seed's own first line, with the file and position stripped>. The
+# gate fails on a program skipped that is not listed, on a listed program the seed now builds,
+# and on a listed program whose reason moved — the last being the one worth having, since a
+# seed that starts refusing something for a NEW rule is exactly the signal this is for.
+#
+# The private corpus keeps its own half of this file, inside the submodule.
+
+examples/11_coroutines.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
+examples/12_actor.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
+examples/13_cancel.zg	the bootstrap seed does not lower a send `ch <- v`: concurrency belongs to the self-hosting compiler, which implements the whole chapter
+examples/14_optional.zg	the bootstrap seed does not supply the implicit `nil` for an omitted `T?` field; pass it explicitly

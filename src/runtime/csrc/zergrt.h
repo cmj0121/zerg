@@ -396,6 +396,10 @@ zrt_err zrt_err_new_kind(int kind, const char *msg);
  * like every other box. */
 zrt_err zrt_err_chain(zrt_err e, zrt_err cause);
 
+/* zrt_err_is answers `e is Kind`, over the built-in taxonomy AND the cause chain: an
+ * OverflowError and an EncodingError are both kinds of ValueError (docs/code/errors.md). */
+int zrt_err_is(zrt_err e, int kind);
+
 /* zrt_err_with_cause is zrt_err_chain over a bare message — the kind-less Err a
  * `raise "…" from c` carries. */
 zrt_err zrt_err_with_cause(const char *msg, zrt_err cause);

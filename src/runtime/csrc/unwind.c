@@ -169,6 +169,46 @@ zrt_err zrt_err_with_cause(const char *msg, zrt_err cause) {
 	return zrt_err_chain(zrt_err_new(msg), cause);
 }
 
+/* zrt_err_parent is the built-in taxonomy, one link at a time (docs/code/errors.md). An
+ * OverflowError and an EncodingError are both KINDS OF ValueError — a value that was not one
+ * this could accept, said more precisely — so a handler may catch coarsely without the coarse
+ * answer being a lie.
+ *
+ * Zerg has no inheritance and this is not it: what a link means is IS-A, not was-caused-by,
+ * which is why it is a table here and not a second Err materialised under every overflow. The
+ * distinction matters to a reader of unwrap(): a cause is another error, and a parent is the
+ * same error described more generally. */
+static int zrt_err_parent(int kind) {
+	switch (kind) {
+	case ZRT_ERR_OVERFLOW:
+	case ZRT_ERR_ENCODING:
+		return ZRT_ERR_VALUE;
+	default:
+		return ZRT_ERR_NONE;
+	}
+}
+
+/* zrt_err_is answers `e is Kind`, up the TAXONOMY and no further. `e.kind == kind` was the
+ * whole test before, so `e is ValueError` was false of every OverflowError the runtime raises
+ * — which is every checked conversion in the language.
+ *
+ * IT DOES NOT WALK THE CAUSE CHAIN, and that is the decision worth recording. Doing both was
+ * tried: `raise IOError("outer") from inner` for a ValueError `inner` then answered `is
+ * ValueError`, so `is` could no longer tell "this IS an IOError" from "this was CAUSED BY a
+ * ValueError". Those are the two relations docs/code/errors.md is at pains to separate — a
+ * built-in link is an is-a, a cause is another error underneath — and one predicate that
+ * answers both distinguishes neither. unwrap() is how a cause is asked about. */
+int zrt_err_is(zrt_err e, int kind) {
+	int k = e.kind;
+	while (k != ZRT_ERR_NONE) {
+		if (k == kind) {
+			return 1;
+		}
+		k = zrt_err_parent(k);
+	}
+	return 0;
+}
+
 zrt_err zrt_err_chain(zrt_err e, zrt_err cause) {
 	e.cause = (zrt_err *)zrt_alloc(sizeof(zrt_err));
 	*e.cause = cause;

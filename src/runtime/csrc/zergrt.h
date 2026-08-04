@@ -547,6 +547,17 @@ static inline int64_t zrt_neg_i64(int64_t a) {
 	return -a;
 }
 
+/* An UNSIGNED type has no negative values at all, so ZERO is the only one it can negate.
+ * A narrow unsigned reaches that answer through the i64 helper and the narrowing check
+ * after it; `uint` cannot, because its top half is not int64's — which left it taking C's
+ * wrap, the very thing `-%` exists to ask for explicitly. */
+static inline uint64_t zrt_neg_u64(uint64_t a) {
+	if (a != 0) {
+		zrt_abort_kind(ZRT_ERR_OVERFLOW, ZRT_MSG_NEG_OVERFLOW);
+	}
+	return 0;
+}
+
 /* The same seven for an UNSIGNED 64-bit operand. `uint` is not int64's range, so
  * routing it through the signed helpers would raise on values that are perfectly
  * representable; and unsigned division is already Euclidean, because neither operand

@@ -316,10 +316,14 @@ func (e *emitter) checkedNeg(t sema.Type, operand ast.Expr, x string) (string, b
 	// leaves its range — which the narrowing conversion is already the check for. Only
 	// a full-width unsigned is left alone: it does not fit the int64 the helper takes,
 	// and `uint` is the one width where that matters.
-	signed := s.Class == sema.ScalarSigned
-	narrowUnsigned := s.Class == sema.ScalarUnsigned && s.Bits < 64
-	if !signed && !narrowUnsigned {
+	if s.Class != sema.ScalarSigned && s.Class != sema.ScalarUnsigned {
 		return "", false
+	}
+	// A full-width unsigned takes a helper of its own: its top half is not int64's, so
+	// the one above would raise on values it holds. Left with C's wrap it gave `-u` the
+	// answer `-%u` is the way to ask for.
+	if s.Class == sema.ScalarUnsigned && s.Bits >= 64 {
+		return e.narrowArith(t, fmt.Sprintf("zrt_neg_u64((uint64_t)(%s))", x)), true
 	}
 	return e.narrowArith(t, fmt.Sprintf("zrt_neg_i64((int64_t)(%s))", x)), true
 }

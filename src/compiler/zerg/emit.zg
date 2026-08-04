@@ -7324,8 +7324,22 @@ fn c_print(mut &em: Emitter, e: Expr, ind: str) -> str {
 		TErr   => f"{ind}printf(\"%s\\n\", ({ex}).msg);\n"
 		TFloat => f"{ind}printf(\"%g\\n\", {ex});\n"
 		TBool  => f"{ind}printf(\"%s\\n\", ({ex}) ? \"true\" : \"false\");\n"
-		_      => f"{ind}printf(\"%lld\\n\", (long long)({ex}));\n"
+		_      => f"{ind}{c_print_number(ty, ex)}\n"
 	}
+}
+
+# c_print_number renders a NUMBER, and asks the scalar table which one it is rather than
+# carrying a list of the types that are signed.
+#
+# The arm above was a `_` catch-all that cast everything left to `long long`, so a `uint`
+# printed as a negative number while `str(u)` and `f"{u}"` — which both go through c_display,
+# and c_display HAS a TUint arm — printed the value. Three spellings of "show me this", one
+# disagreeing. A type with no scalar class at all still lands here, and the signed form is
+# what the C cast reports against, rather than this pass guessing.
+fn c_print_number(t: Ty, ex: str) -> str {
+	return f"printf(\"%llu\\n\", (unsigned long long)({ex}));" if c_scalar_class(t) == SC_UNSIGNED
+
+	return f"printf(\"%lld\\n\", (long long)({ex}));"
 }
 
 fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {

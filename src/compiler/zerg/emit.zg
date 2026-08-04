@@ -3262,22 +3262,27 @@ fn c_unexpr(mut &em: Emitter, oper: str, x: Expr, sb: Subst) -> str {
 		if c_neg_checked(t) {
 			em.used_rt = true
 
-			return c_arith_narrow(em, t, f"zrt_neg_i64((int64_t)({inner}))")
+			return c_arith_narrow(em, t, c_neg_call(t, inner))
 		}
 	}
 	return f"({c_unop(oper)}{inner})"
 }
 
-# c_neg_checked reports whether unary `-` on this type goes through the checked helper. An
-# UNSIGNED target has no negative values at all, so every negation but `-0` leaves its range
-# — which the narrowing conversion is already the check for. Only a full-width unsigned is
-# left alone: it does not fit the int64 the helper takes, and `uint` is the one width where
-# that matters. This is the seed's rule, kept in step with it.
+# c_neg_checked reports whether unary `-` on this type goes through a checked helper: every
+# integer does, and `float` and `bool` do not.
 fn c_neg_checked(t: Ty) -> bool {
 	cls := c_scalar_class(t)
-	return true if cls == SC_SIGNED
+	return cls == SC_SIGNED or cls == SC_UNSIGNED
+}
 
-	return cls == SC_UNSIGNED and c_scalar_bits(t) < 64
+# c_neg_call picks the helper. An UNSIGNED type has no negative values at all, so ZERO is
+# the only one it can negate — a narrow unsigned reaches that answer through the i64 helper
+# and the narrowing check after it, and `uint` cannot, because its top half is not int64's.
+# Left with C's wrap, it gave `-u` the answer `-%u` is the way to ask for.
+fn c_neg_call(t: Ty, inner: str) -> str {
+	return f"zrt_neg_u64((uint64_t)({inner}))" if c_scalar_class(t) == SC_UNSIGNED and c_scalar_bits(t) >= 64
+
+	return f"zrt_neg_i64((int64_t)({inner}))"
 }
 
 # c_is_test lowers `x is Name`. An Err is the one value in the language carrying a runtime

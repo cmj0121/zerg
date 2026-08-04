@@ -2192,6 +2192,87 @@ fn main() {
 }
 EOF
 
+# --- a carrier's PAYLOAD is a typed position too ----------------------------------
+#
+# docs/core/types.md lists the positions where a value meets a declared type, and a
+# carrier's payload is one of them: `int?` and `Result[int]` both promise an int, one
+# indirection down. Nothing asked. The check was hand-attached at the positions somebody
+# thought of, and the payload is reached by a DIFFERENT route — the declaration is fitted
+# by c_carrier_fit, which lowers the payload through a second call that had no rule on it.
+#
+# Five of the seven below reached cc, which reported an int-conversion warning against
+# generated C. The last two compiled and RAN: an int in a `float?` printed `5`, and 300 in
+# a `Result[byte]` truncated in silence. Both are the same omission — the payload, not the
+# carrier, is where the declared type lives.
+
+reject str-into-an-optional-list-element 'an element of this list literal is int' <<'EOF'
+fn main() {
+	xs: list[int?] = ["a"]
+	print xs.len()
+}
+EOF
+
+reject str-into-an-optional-struct-field 'field 1 of `Box` is int' <<'EOF'
+struct Box {
+	v: int?
+}
+
+fn main() {
+	b := Box("hi")
+	print "ok"
+}
+EOF
+
+reject str-assigned-into-an-optional '`x` is int, and this gives str' <<'EOF'
+fn main() {
+	mut x: int? = 1
+	x = "hi"
+	print x!
+}
+EOF
+
+reject str-into-a-result-left 'what this function answers is int, and this gives str' <<'EOF'
+fn f() -> Result[int] {
+	return Left("hi")
+}
+
+fn main() {
+	print f()!
+}
+EOF
+
+reject int-into-an-either-right 'what this function answers is str, and this gives int' <<'EOF'
+fn f() -> Either[int, str] {
+	return Right(7)
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
+# the two that RAN. An int64_t into a double field and an int64_t into a uint8_t are both
+# legal C, so neither cc nor any gate had anything to say — the program simply answered
+# something other than what it was written to answer.
+reject int-value-into-an-optional-float 'the binding `x` is float, and this gives int' <<'EOF'
+fn main() {
+	i := 5
+	x: float? = i
+	print x!
+}
+EOF
+
+reject int-value-into-a-result-byte 'what this function answers is byte, and this gives int' <<'EOF'
+fn f() -> Result[byte] {
+	i := 300
+	return Left(i)
+}
+
+fn main() {
+	print "ok"
+}
+EOF
+
 # --- report ------------------------------------------------------------------------
 
 if [ $fail -ne 0 ]; then

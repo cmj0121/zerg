@@ -1520,6 +1520,39 @@ fn main() {
 }
 EOF
 
+# A TEMPLATE SHARES THE ONE FLAT FUNCTION NAMESPACE, and it used to skip the rules that say
+# so — it is removed from the program before the pass holding them runs. Every collision was
+# therefore silent AND the template won, including against a module: `strconv.to_string` and a
+# local `to_string[T]` are one name here, and the local one answered.
+
+reject generic-shadows-a-plain-function "declared both as a generic and as a plain function" <<'EOF'
+fn idg[T](x: T) -> T {
+	return x
+}
+
+fn idg(x: int) -> int {
+	return x + 100
+}
+
+fn main() {
+	print(f"{idg(1)}")
+}
+EOF
+
+reject generic-declared-twice "is declared twice, once as a generic" <<'EOF'
+fn idg[T](x: T) -> T {
+	return x
+}
+
+fn idg[U](x: U, y: U) -> U {
+	return y
+}
+
+fn main() {
+	print(f"{idg(1)}")
+}
+EOF
+
 # --- and a literal is a value the type can hold -----------------------------------
 #
 # docs/core/types.md: "A literal that does not fit its required type is a COMPILE ERROR …

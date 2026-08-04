@@ -64,10 +64,48 @@ the grammar:
 > elided when both operands are provably non-negative — the "zero overhead in the common case" above is
 > the intended codegen, not today's. The semantics are unaffected: it is a cost, not a wrong answer.
 
+### Typed positions
+
+Several rules below are about **a value meeting a declared type** — what fits, what a literal adopts,
+what converts. They all need the same answer to one question, so it is given once, here, and each of
+them refers to it: **a typed position** is a place where the language already knows what type is wanted.
+
+They are these, and the list is **exhaustive**:
+
+| position                      | example                       |
+| ----------------------------- | ----------------------------- |
+| a typed binding               | `x: byte = e`                 |
+| an assignment                 | `x = e` where `x` is declared |
+| a `return`                    | `return e`                    |
+| an argument                   | `f(e)`                        |
+| a parameter's default         | `fn f(x: byte = e)`           |
+| a struct literal's field      | `P(e)`                        |
+| an enum variant's payload     | `Shape.Line(e)`               |
+| a list literal's element      | `xs: list[byte] = [e]`        |
+| a map literal's key and value | `{e: e}`                      |
+| a map write                   | `m[k] = e`                    |
+| a container method's argument | `xs.append(e)`                |
+| a channel send                | `ch <- e`, and a `select` arm |
+| a `??` fallback               | `x ?? e`                      |
+| the other operand             | `a + e`                       |
+
+A position is **structural**, not syntactic: it is what the expression IS to the construct around it, not
+how it is written. **Grouping parentheses are not a position** — `(e)` is the same position `e` was —
+which is what keeps a rule stated over positions from being defeated by typing more brackets.
+
+**A position takes at most one conversion.** Where a rule below converts a value to reach the declared
+type, it does so in one step per position; a value that crosses two positions may be converted at each.
+
+> **[deviation]** The list is the contract; the compiler reached it incrementally, and each position it
+> had not yet been told about was a value lowered into a type it did not fit — silently. The list exists
+> because that kept happening: it was written as four examples in a parenthesis, and the four grew to
+> fourteen one miscompile at a time. A new syntactic form owes an answer to "is this a typed position",
+> and that answer belongs here rather than in whichever rule notices first.
+
 ### Numeric literals
 
-A numeric literal is **untyped** — it adopts the type its context demands (a typed binding `x: uint = 5`,
-a typed parameter, a `return`, or the other operand of a typed expression), checked **at compile time**.
+A numeric literal is **untyped** — it adopts the type its context demands, at any **typed position**
+above — checked **at compile time**.
 Unconstrained, an integer literal defaults to `int` and a fractional/exponent literal (`1.0`, `1e3`) to
 `float`; the non-decimal bases `0x…` / `0o…` / `0b…` are ordinary integer literals.
 
@@ -228,14 +266,83 @@ primitive.
 - **`float` → integer** drops the fractional part (`int(3.7)` is `3` — the intent, not a bug) but raises
   when the integer part is **out of range** or the float is `NaN` / `±Inf`.
 
-A **user type** may opt in to an **automatic** re-construction to another type, kept decidable by two
-rules:
+### `Into` — the conversion that happens on its own
 
-- **Single step only** — never chained (`X → Y`, `Y → Z` ⇏ `X → Z`); one step to one explicit
-  target, so no ambiguous multi-path choice arises.
-- **Only where the target type is explicit** — at a typed binding (`x: X = y`), a `return`, or a
-  typed parameter; never an inferred `:=`.
+`T(x)` is the conversion you **write**. `Into` is the one that happens **where the target type is
+already known** — at a [typed position](#typed-positions) — and it is nothing more than the compiler
+writing `.into()` for you:
 
-This is how a value, an `Err`, or `nil` flows into an `Either` at a typed binding or return without
-explicit wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value,
-never a reinterpret.
+```text
+x: float = 1.5 + 1          # what you write
+x: float = 1.5 + 1.into()   # what it means
+```
+
+**`Into` is an ordinary spec**, so a type opts in by implementing it, and the built-in types already do:
+
+```text
+spec Into[T] {
+    fn into() -> T
+}
+```
+
+- **It may raise, and the caller handles it.** Narrowing loses values — `int → byte` cannot always
+  succeed — so the built-in numeric impls raise `OverflowError`, the same failure and the same name
+  `byte(300)` already raises. A user impl raises whatever fits its own reason; `ValueError` is the
+  natural one, and `OverflowError` is a kind of it.
+- **One step, never chained** — `X → Y` and `Y → Z` do not give you `X → Z`. Write two steps, or
+  declare `X → Z` yourself.
+- **One step per position.** A value crossing two positions may convert at each, which is what makes
+  `demo: Z = x + y` legal for `x: X`, `y: Y`: `x` reaches `Y` at the operand position, and the sum
+  reaches `Z` at the binding. It is two positions, not a chain.
+- **`.into()` needs a target.** `x := 1.into()` is a compile error — there is nothing there to say
+  which `Into` was meant. Written by hand, it is legal exactly where the compiler would have written
+  it.
+
+**What an expression's type is, is decided by its operands alone** — never by what it is being assigned
+to. So the two operands of an operator agree first, and only then does the result meet the declared
+type:
+
+- Operands of the **same** type stay that type; nothing is converted.
+- **Different** types take the **largest type both reach in one step** — largest meaning the one whose
+  values include the other's, which is also the direction that cannot fail. `1.5 + 1` is a `float`
+  because `int → float` exists and `float → int` does not.
+- If there is no such type, or two that neither contains, the expression's type is **undetermined** — a
+  compile error, and the conversion has to be written.
+
+Because the target is never pushed down, `demo: Z = x + (y + z)` can be an error while
+`demo: Z = x + y + z` is not: the parentheses change which operands meet first, and each meeting is
+resolved on its own.
+
+The built-in impls are these, and no others — a pair that is absent is one you convert with `T(x)`:
+
+| from   | to      | can raise | note                                                |
+| ------ | ------- | --------- | --------------------------------------------------- |
+| `byte` | `int`   | no        | every byte is an int                                |
+| `rune` | `int`   | no        | every code point is an int                          |
+| `int`  | `float` | no        | never fails; may lose precision, and `L5xx` says so |
+| `int`  | `byte`  | yes       | out of range → `OverflowError`                      |
+| `int`  | `rune`  | yes       | not a code point → `OverflowError`                  |
+| `int`  | `uint`  | yes       | negative → `OverflowError`                          |
+| `uint` | `int`   | yes       | past the signed maximum → `OverflowError`           |
+
+**`int` and `uint` do not mix**, and that falls out rather than being a rule of its own: both
+directions exist, but neither type's values contain the other's, so `i + u` has no largest type and is
+undetermined. Cast one side — `int(u) + i` or `u + uint(i)`.
+
+There is no `float → int`: dropping a fraction is a decision, so it is written (`int(x)`, or `//` for
+the division that yields one). There is no `byte → float` either — that would be `byte → int → float`,
+which is the chain the one-step rule forbids.
+
+**A conversion the compiler can carry out is carried out.** `x: byte = 300` is well-formed — `int → byte`
+exists, so it type-checks — and then fails as a **constant**: the value is known, the conversion is known
+to raise, and it is reported at compile time rather than left to run. Reachability does not enter into
+it; `if false { b: byte = 300 }` is the same error.
+
+**Every implicit conversion is a lint finding** (`L5xx`), literals included — so `1.5 + 1` is reported
+and `1.5 + 1.0` is not. It is advisory, not a rule of the language: the point is that `1` and `1.0`
+should mean different types on the page, so a reader never has to infer a literal's type from its
+surroundings.
+
+This is also how a value, an `Err`, or `nil` flows into an `Either` at a typed position without explicit
+wrapping (see [Null-safety & Errors](../code/errors.md)) — still a build of the target value, never a
+reinterpret.

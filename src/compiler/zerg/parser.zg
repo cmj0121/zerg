@@ -398,6 +398,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	mut enums: list[EnumDecl] = []
 	mut specs: list[SpecDecl] = []
 	mut impls: list[ImplDecl] = []
+	mut types: list[TypeDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
 	skip_semis(p)
@@ -409,6 +410,8 @@ pub fn parse_at(src: str, path: str) -> File {
 			p_advance(p)
 			if p_at(p, Fn) {
 				fns.append(parse_fn(p, true, "", false))
+			} else if p_at(p, Type) {
+				types.append(parse_typedecl(p, true))
 			}
 		} else if p_at(p, Fn) {
 			fns.append(parse_fn(p, false, "", false))
@@ -427,6 +430,8 @@ pub fn parse_at(src: str, path: str) -> File {
 			fns.append(parse_init(p, fns.len()))
 		} else if p_at(p, Impl) {
 			parse_impl(p, fns, impls)
+		} else if p_at(p, Type) {
+			types.append(parse_typedecl(p, false))
 		} else if p_at(p, Hash) {
 			parse_decorator(p)
 		} else if p_at(p, Mut) and peek_kind(p, 1) == Fn {
@@ -446,7 +451,7 @@ pub fn parse_at(src: str, path: str) -> File {
 	# to skip any spec it had not itself read, which is why `impl Nope for A` compiled. The
 	# driver already builds the whole-program view (`merge_asts`), and that is where the
 	# question can be answered; see chk_spec_impls.
-	return File(imports, structs, enums, specs, impls, fns, consts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts)
 }
 
 # imports_of returns just the import paths of a source, for the driver's module loader:
@@ -741,6 +746,29 @@ fn parse_spec(mut &p: Parser) -> SpecDecl {
 	}
 	expect(p, RBrace)
 	return SpecDecl(name, params, supers, reqs, p.path, kw.line, kw.col)
+}
+
+# parse_typedecl reads `type X = Y` — a NEW, DISTINCT type that takes on Y's representation
+# and keeps an identity of its own (docs/core/types.md). It used to reach the top level's
+# final `else`, which advances ONE token, so the four tokens of a declaration were swallowed
+# one at a time and the type simply did not exist: `Celsius(20)` answered "no type named
+# `Celsius` to construct" and a `-> Celsius` answered the same, with nothing pointing at the
+# declaration that had been dropped.
+#
+# A GENERIC one is `[not yet]` and says so. It is read far enough to know that is what it is,
+# because refusing at the `[` with the parser's ordinary message would name a bracket rather
+# than the feature.
+fn parse_typedecl(mut &p: Parser, is_pub: bool) -> TypeDecl {
+	kw := cur(p)
+	p_advance(p)
+
+	name := cur(p).lexeme
+	expect(p, Ident)
+	raise f"NotImplemented: a generic `type {name}[…] = …` — a parameterized alias is one instantiation per argument, and this compiler erases type parameters" if p_at(p, LBrack)
+
+	expect(p, Assign)
+
+	return TypeDecl(name, parse_type(p), is_pub, p.path, kw.line, kw.col)
 }
 
 # parse_init reads `init() { … }`, the lazy-setup declaration, as an ordinary function so

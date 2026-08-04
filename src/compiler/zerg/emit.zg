@@ -246,6 +246,14 @@ struct Emitter {
 	# jump asks the depth, and the block asks whether the jump spoke.
 	loop_keep: int
 	loop_mark_used: bool
+
+	# ty_names / ty_unders are the `type X = Y` declarations: a name and the type it takes
+	# its REPRESENTATION from. They are not struct_names, because a typedef has no fields and
+	# is not constructed like one — `Celsius(20)` is a conversion, not a struct literal — and
+	# they are not a substitution table either, because the whole point is that `Celsius` and
+	# `int` stay different types everywhere the program can see.
+	ty_names: list[str]
+	ty_unders: list[Ty]
 }
 
 # Subst is an active set of identifier substitutions: an EIdent whose name appears in
@@ -1384,6 +1392,23 @@ fn c_type_decls(mut &em: Emitter, f: File, carriers: list[Ty], tuples: list[Ty])
 	}
 
 	mut done: list[str] = []
+
+	# THE TYPEDEFS COME FIRST, and they are a real C `typedef`: `type Celsius = int` is
+	# `typedef int64_t zg_Celsius;`, which is exactly what the language says it is — a new
+	# name over the same representation, costing nothing at runtime. Emitting one is also
+	# what keeps c_type unchanged: a typedef is a TNamed like any other, so the fifty-odd
+	# places that render a type do not have to learn about it.
+	#
+	# They precede the structs because a struct field may be declared with one, and they need
+	# no dependency sweep of their own: a typedef over a typedef is refused at declaration.
+	for td in f.types {
+		out = out + f"typedef {c_type(td.under)} zg_{td.name};\n"
+		done.append(td.name)
+	}
+	if f.types.len() > 0 {
+		out = out + "\n"
+	}
+
 	mut es := f.enums
 	mut ss := f.structs
 	mut cs := carriers
@@ -1735,8 +1760,7 @@ fn c_check_named_fn(mut &em: Emitter, ps: list[Ty], r: Ty, site: str) {
 }
 
 fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
-	return if c_is_struct_name(em, nm)
-	return if c_is_enum_ty(em, TNamed(nm))
+	return if c_is_type_name(em, nm)
 
 	# `This` is the SELF TYPE (GRAMMAR:333), so it names something only where there is a
 	# self — inside an `impl`, where c_impl_ty has already substituted it. Reaching here
@@ -1754,6 +1778,54 @@ fn c_check_type_name(mut &em: Emitter, nm: str, site: str) {
 	raise f"NotImplemented: the `spec` `{nm}` used as a TYPE ({site}) — a spec is a bound and an interface here, not yet a value's type; take the concrete type, or a generic parameter bounded by it" if c_name_in(em.spec_names, nm)
 
 	raise f"no type named `{nm}` ({site})"
+}
+
+# c_typedef_of answers what a `type X = Y` name is underneath, or TUnknown for a name that
+# is not one. It is the ONE place the representation is looked through: everywhere else the
+# two are different types, which is what a strong typedef means.
+fn c_typedef_of(mut &em: Emitter, nm: str) -> Ty {
+	mut i := 0
+	for i < em.ty_names.len() {
+		return em.ty_unders[i] if em.ty_names[i] == nm
+		i = i + 1
+	}
+	return TUnknown
+}
+
+# c_is_typedef asks the NAME list, not what the name is underneath: a typedef whose
+# underlying type nothing declares is registered as unknown so its uses stay quiet, and it is
+# still a declared type name — the mistake is in the declaration, which has already said so.
+fn c_is_typedef(mut &em: Emitter, nm: str) -> bool {
+	mut i := 0
+	for i < em.ty_names.len() {
+		return true if em.ty_names[i] == nm
+		i = i + 1
+	}
+	return false
+}
+
+# c_repr_of is a type as its REPRESENTATION — itself, unless it is a typedef, in which case
+# what it was declared over. Only the emitter asks this, and only where C needs a type: the
+# checker must never, because the distinctness is the feature.
+fn c_repr_of(mut &em: Emitter, t: Ty) -> Ty {
+	nm := c_named_of(t)
+	mut i := 0
+	for i < em.ty_names.len() {
+		# a typedef whose underlying type nothing declares answers UNKNOWN rather than
+		# itself: that is what keeps its uses quiet while the declaration carries the
+		# diagnostic. One scan answers both "is it one" and "what is it".
+		return em.ty_unders[i] if em.ty_names[i] == nm
+		i = i + 1
+	}
+	return t
+}
+
+# c_is_type_name is whether a name is a declared TYPE of any kind. It was the same four-term
+# disjunction written out in three places — the typedef registry, the typedef's own check,
+# and c_check_type_name — so a fifth kind of type name would have been three edits with two
+# of them silent if missed.
+fn c_is_type_name(mut &em: Emitter, nm: str) -> bool {
+	return c_is_struct_name(em, nm) or c_is_enum_ty(em, TNamed(nm)) or c_is_typedef(em, nm)
 }
 
 fn c_is_struct_name(mut &em: Emitter, nm: str) -> bool {
@@ -1814,6 +1886,9 @@ fn c_build_type_names(mut &em: Emitter, f: File) {
 	}
 	for ed in f.enums {
 		c_check_type_dup(em, seen, kind, ed.name, "an enum", "", 0, 0)
+	}
+	for td in f.types {
+		c_check_type_dup(em, seen, kind, td.name, "a type declaration", td.path, td.line, td.col)
 	}
 	for sp in f.specs {
 		# a SpecDecl knows WHERE it was written, and a rule that has a place uses it: it says
@@ -1892,6 +1967,18 @@ fn c_dup_msg(name: str, prev: str, what: str) -> str {
 	return f"`{name}` is declared twice — a type name is one name, and every module of a program flattens into one namespace here"
 }
 
+# c_build_typedefs registers the `type X = Y` declarations. It runs BEFORE the structs, so a
+# struct field declared `Celsius` finds the name already known.
+fn c_build_typedefs(mut &em: Emitter, f: File) {
+	for td in f.types {
+		# chk_typedef ANSWERS the underlying type it validated, so the registry does not
+		# recompute it: a typedef whose underlying type nothing declares is registered as
+		# UNKNOWN, which keeps every USE quiet while the declaration carries the diagnostic.
+		em.ty_names.append(td.name)
+		em.ty_unders.append(chk_typedef(em, td))
+	}
+}
+
 fn c_build_structs(mut &em: Emitter, f: File) {
 	mut i := 0
 	for i < f.structs.len() {
@@ -1943,7 +2030,12 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # a struct field's list is usually appended to afterwards, which hides a length that
 # started at the wrong number. A non-empty literal has its own element type and its own
 # elements, so it takes the ordinary path.
-fn c_field_init(mut &em: Emitter, fty: Ty, arg: Expr, sb: Subst) -> str {
+# `where` names the slot for a diagnostic — "field 2 of `P`", "payload 1 of `Shape.Line`".
+# The CHECK lives here rather than at the callers because there are two of them and they were
+# not both remembering: a struct literal's field was checked and an enum variant's payload was
+# not, though they are the same slot lowered by the same function twelve lines apart.
+fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> str {
+	chk_slot_fits(em, where, fty, arg)
 	if ty_is_chan(fty) {
 		c_chan_check(c_infer(em, arg), fty, "field")
 	}
@@ -2630,6 +2722,7 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 	# can sit after the choice rather than inside one arm of it.
 	df := c_carrier_temp_drop(em, t, a)
 	if jump.len() == 0 {
+		chk_slot_fits(em, "the `??` fallback", elem, b)
 		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if df == ""
 
 		v0 := "zgt_cov" + tag
@@ -3093,6 +3186,35 @@ fn c_is_enum_ty(mut &em: Emitter, t: Ty) -> bool {
 #
 # `str` is two conversions wearing one name. Over a `list[byte]` it is the bridge back to a
 # string — the meaning every `str(out)` in this tree relies on. Over anything else it is
+# c_typedef_conv lowers `X(v)` for a `type X = Y`. The VALUE is converted to Y — with every
+# range check that conversion owes, since a `type Small = byte` narrows exactly as `byte`
+# does — and the result is then named X by the C typedef, which is a cast that changes no
+# bits because X and Y are the same representation.
+#
+# The distinctness is entirely in the type: nothing here makes an X behave differently from a
+# Y at runtime, and nothing should. What makes `Celsius` a type is that every rule in
+# check.zg sees TNamed("Celsius") and not TInt.
+fn c_typedef_conv(mut &em: Emitter, name: str, x: Expr, sb: Subst) -> str {
+	under := c_typedef_of(em, name)
+
+	# a typedef this compiler could not make sense of — an underlying type nothing declares,
+	# or one it does not build over — renders as a plain cast. The DECLARATION has already
+	# said what is wrong; converting into it would raise about the use instead, which buries
+	# the cause under a consequence at every call site.
+	return f"(({c_type(TNamed(name))})({c_expr(em, x, sb)}))" if c_is_unknown(under)
+
+	return f"(({c_type(TNamed(name))})({c_conv(em, under, x, ty_name(under), sb)}))"
+}
+
+# chk_call_arity_exact is the one-argument rule a conversion has. A conversion takes the
+# value it converts and nothing else, so `Celsius()` and `Celsius(1, 2)` are both wrong, and
+# saying so here is what keeps args[0] from being read off an empty list.
+fn chk_call_arity_exact(mut &em: Emitter, name: str, n: int) {
+	return if n == 1
+
+	chk_at(em, f"`{name}(…)` converts ONE value — `type {name} = …` declares a type, and a conversion into it takes the value it is built from")
+}
+
 # `display()`: the text a value shows as, which is what `print` writes and what an
 # f-string's `{x}` interpolates.
 #
@@ -3348,13 +3470,20 @@ fn c_pow2(n: int) -> int {
 # lowering over SHAPES — a width and a signedness — and the fixed-width ladder the spec adds
 # as stdlib types needs nothing here. `ty` is still passed for the C type to cast to.
 fn c_conv_scalar(mut &em: Emitter, dc: int, db: int, xt: Ty, ty: Ty, inner: str) -> str {
-	sc := c_scalar_class(xt)
+	# a `type X = Y` SOURCE converts as the Y it is represented by — `int(c)` on a `Celsius`
+	# is the way back out, and it is the only place the representation is looked through,
+	# because a conversion is exactly where the two types are meant to meet. The REPR is what
+	# the guard below asks about too: a typedef whose underlying type nothing declares has
+	# already been reported at its declaration, and raising here as well would bury that
+	# sentence under one about the use.
+	xr := c_repr_of(em, xt)
+	sc := c_scalar_class(xr)
 
 	# NOT A SCALAR ON EITHER SIDE. Naming only the aggregates left `TChan`, `TErr` and an
 	# unresolved `TNamed` falling through to the cast below — the same class this whole
 	# function exists to close, one type-family over. TUnknown keeps the plain cast: a type
 	# inference could not work out is not evidence the program is wrong.
-	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xt)
+	raise f"`{ty_name(ty)}(…)` converts a scalar, and {ty_name(xt)} is not one" if sc == SC_NONE and not c_is_unknown(xr)
 
 	return f"(({c_type(ty)})({inner}))" if sc == SC_NONE or c_lossless(sc, c_scalar_bits(xt), dc, db)
 
@@ -3632,6 +3761,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		# the element is copied INTO the list, so the list owns it and the caller's name
 		# for it goes on being its own
 		et := c_type(c_list_elem(tty))
+		chk_slot_fits(em, f"the element `{meth}` adds", c_list_elem(tty), args[0])
 		el := c_fit_copied(em, c_list_elem(tty), args[0], sb)
 		return "({ " + et + " zgt_le = " + el + "; zrt_list_push(&(" + tgt + "), &zgt_le); })"
 	}
@@ -3783,6 +3913,18 @@ fn c_call(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> str {
 		# between a form used wrongly and a form that does not exist.
 		raise f"`{name}(…)` says which side of an `Either` a value is, so it needs a declared one to be — annotate the binding, or write it where a `Result`/`Either` result or parameter is expected" if c_ctor_side_of(name, args.len()) >= 0
 
+		# A TYPEDEF NAME IS A CONVERSION, not a construction. `Celsius(20)` builds a Celsius
+		# out of an int the way every conversion in this language builds its target — by
+		# re-construction, never by reinterpreting — and `int(c)` is the way back. It goes
+		# through the same c_conv the built-in scalars use, with the typedef's underlying
+		# type standing in for the shape, so the range checks a narrowing owes are the ones
+		# it already knows how to emit.
+		if c_is_typedef(em, name) {
+			chk_call_arity_exact(em, name, args.len())
+
+			return c_typedef_conv(em, name, args[0], sb)
+		}
+
 		# A PascalCase call that names no declared type is not a constructor of anything.
 		# It used to emit a compound literal of that name anyway, which cc rejected against
 		# generated C.
@@ -3825,7 +3967,7 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_field_init(em, c_struct_field_ty_at(em, sname, i), args[i], sb)
+		out = out + c_field_init(em, chk_field_says(sname, i + 1), c_struct_field_ty_at(em, sname, i), args[i], sb)
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)
@@ -3846,7 +3988,7 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 	mut sep := lead
 	for i < c_struct_field_n(em, sname) {
 		ft := c_struct_field_ty_at(em, sname, i)
-		raise f"`{sname}` needs a value for field {i} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`" if not c_is_opt(ft)
+		raise f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`" if not c_is_opt(ft)
 		if sep {
 			out = out + ", "
 		}
@@ -4130,7 +4272,7 @@ fn c_variant_ctor(mut &em: Emitter, name: str, args: list[Expr], sb: Subst) -> s
 			if i > 0 {
 				out = out + ", "
 			}
-			mut val := c_field_init(em, c_variant_field_ty(em, name, i), args[i], sb)
+			mut val := c_field_init(em, f"payload {strconv.to_string(i + 1, 10)} of `{name}`", c_variant_field_ty(em, name, i), args[i], sb)
 			if c_is_boxed(em, name, i) {
 				# box a self-recursive payload into a leaked ref cell
 				val = f"zg_refnew_{en}({val})"
@@ -4238,6 +4380,7 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 			out = out + ", "
 		}
 		if i < ftys.len() {
+			chk_slot_fits(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i])
 			out = out + c_fit_copied(em, ftys[i], args[i], sb)
 		} else {
 			out = out + c_expr(em, args[i], sb)
@@ -5000,6 +5143,7 @@ fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 
 fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], elem: Ty, mut &out: list[str]) {
 	for e in elems {
+		chk_slot_fits(em, "an element of this list literal", elem, e)
 		out.append(c_fit_copied(em, elem, e, c_nosub()))
 	}
 }
@@ -5316,6 +5460,7 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
+	chk_slot_fits(em, "the value sent on this channel", elem, v)
 	mut sv := c_fit_copied(em, elem, v, c_nosub())
 	if c_is_opt(elem) {
 		sv = c_carrier_fit(em, elem, v, c_nosub())
@@ -5531,6 +5676,7 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			# rendered the value with c_expr, so a `list` handed to a select send was the
 			# sender's own buffer under the receiver's name, with no reference taken, on
 			# two worker threads at once.
+			chk_slot_fits(em, "the value sent on this channel", elem, a.val)
 			out = f"{out}{in2}{c_type(elem)} {nm} = {c_fit_copied(em, elem, a.val, c_nosub())};\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
@@ -6025,6 +6171,8 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 	mut out := f"({{ zrt_map zgt_mm; zrt_map_init(&zgt_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
 	mut i := 0
 	for i < ks.len() {
+		chk_slot_fits(em, "a key of this map literal", kt, ks[i])
+		chk_slot_fits(em, "a value of this map literal", vt, vs[i])
 		out = out + f" {{ {kc} zgt_mk = {c_expr(em, ks[i], sb)}; {vc} zgt_mv = {c_fit_copied(em, vt, vs[i], sb)}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
 		i = i + 1
 	}
@@ -6083,6 +6231,7 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 	# lowering `h[0]` as a read left that buffer shared with `g`.
 	tgt := c_lvalue(em, target, c_nosub())
 	k := c_expr(em, idx, c_nosub())
+	chk_slot_fits(em, "the value written into this map", c_map_val_ty(tty), rhs)
 	v := c_fit_copied(em, c_map_val_ty(tty), rhs, c_nosub())
 	return f"{ind}{{ {kc} zgt_mk = {k}; {vc} zgt_mv = {v}; zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
 }
@@ -7546,6 +7695,7 @@ pub fn merge_asts(fs: list[File]) -> File {
 	mut impls: list[ImplDecl] = []
 	mut fns: list[FnDecl] = []
 	mut consts: list[Stmt] = []
+	mut types: list[TypeDecl] = []
 	for f in fs {
 		for c in f.consts {
 			consts.append(c)
@@ -7568,8 +7718,11 @@ pub fn merge_asts(fs: list[File]) -> File {
 		for fnd in f.fns {
 			fns.append(fnd)
 		}
+		for td in f.types {
+			types.append(td)
+		}
 	}
-	return File(imports, structs, enums, specs, impls, fns, consts)
+	return File(imports, structs, enums, specs, impls, fns, types, consts)
 }
 
 # c_emit_file lowers a parsed File. The body is generated first (so list use sets
@@ -7596,9 +7749,10 @@ fn c_emit_file_at(f: File, mut &diags: list[Diag]) -> str {
 # only the driver does.
 fn c_emit_unit(prog: File, own: File, whole: bool, mut &diags: list[Diag]) -> str {
 	f := prog
-	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false)
+	mut em := Emitter([], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], false, false, false, [], [], [], [], [], [], [], [], [], [], [], [], [], [], 0, [], 0, [], [], false, "", "", [], [], TVoid, 0, "", 0, 0, [], 0, 0, [], [], false, 0, false, "", 0, false, [], [])
 	c_build_type_names(em, f)
 	c_build_sigs(em, f)
+	c_build_typedefs(em, f)
 	c_build_structs(em, f)
 	c_build_enums(em, f)
 	c_check_named_types(em, f)

@@ -649,8 +649,8 @@ fn chk_call_name(key: str) -> str {
 # that needs `float(i)` — because the conversion is the place a lost bit is visible.
 #
 # The type-only chk_fits cannot tell those apart: both are TInt by the time it is asked. So
-# the five slots a value enters ask this one — a binding, an assignment, a `return`, an
-# argument, and a parameter's default. What still asks the type alone is the list-ELEMENT
+# the SIX slots a value enters ask this one — a binding, an assignment, a `return`, an
+# argument, a parameter's default, and a struct literal's field. What still asks the type alone is the list-ELEMENT
 # recursion, which has no expression to pass (it recurses on types pulled out of a
 # container), and chk_arm_types, which compares two arms rather than a value against a slot.
 #
@@ -667,7 +667,7 @@ fn chk_fits_expr(mut &em: Emitter, want: Ty, got: Ty, e: Expr) -> bool {
 	# It is asked HERE and not at the binding, which is where it used to live: a list literal
 	# also arrives as an argument, a return, an assignment and a parameter's default, and at
 	# those four `f([1, 2])` on a `list[byte]` parameter was refused while the binding spelling
-	# of the same thing was allowed. One rule, five slots — the same shape this file has now
+	# of the same thing was allowed. One rule, six slots — the same shape this file has now
 	# had to fix three times.
 	return chk_elems_fit(em, want, e) if c_is_list(want) and c_is_listlit(e) and c_is_list(got)
 
@@ -884,6 +884,65 @@ fn chk_binding(mut &em: Emitter, name: str, declared: Ty, ival: Expr) {
 	}
 }
 
+# chk_typedef is what a `type X = Y` declaration must satisfy. The name is a TYPE name, so
+# it collides with the same things a struct or an enum name would, and the underlying type
+# has to be one that exists — a `type X = Nope` used to be dropped on the floor along with
+# the whole declaration, so nothing said anything at all.
+fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
+	# A NAME COLLISION is not asked here. c_build_typedefs runs before the struct and enum
+	# registries exist, so asking would always answer no — c_build_type_names is the pass
+	# that already asks it of every kind of type name at once, and the typedef joins it.
+	#
+	# the underlying type is a TYPE, and a name that nothing declares is the mistake worth
+	# catching here rather than at the first use of it
+	nm := c_named_of(td.under)
+	if nm != "" and not c_is_type_name(em, nm) {
+		chk_at_place(em, td.path, td.line, td.col, f"`type {td.name} = {nm}` names no type — `{nm}` is not declared in this program")
+		return TUnknown
+	}
+
+	# A SCALAR UNDERNEATH, this phase. docs/core/types.md records the deviation, and the seed
+	# refuses the same thing — but it is worth naming rather than emitting, because a
+	# `type Label = str` looked like it worked: a str is a refcounted cell, and the typedef
+	# name is not a str to c_is_str, so nothing retained it, nothing released it, and
+	# `str(l)` printed the pointer as a number. A form that answers wrongly is worse than one
+	# that says it is not built.
+	if c_scalar_class(td.under) == SC_NONE {
+		chk_at_place(em, td.path, td.line, td.col, f"NotImplemented: `type {td.name} = {ty_name(td.under)}` over a non-scalar — this compiler builds a strong typedef over a scalar, where the new name costs nothing at runtime; a `str`, a container or a struct underneath needs the copy and drop rules to follow the name")
+		return TUnknown
+	}
+	return td.under
+}
+
+# chk_slot_fits is a value entering a POSITIONAL slot named by `where` — a struct literal's
+# field, an enum variant's payload. It takes the label rather than deriving it, because the
+# two callers name their slot differently and the rule is the same for both.
+#
+# It began as the struct field alone — the sixth slot, and the one that had no rule at all. `P("hi")` on an `x: int` field put a pointer where an int64_t goes
+# and compiled; `P(b'a')` on an `x: int` and `P(i)` on an `x: float` were the byte and float
+# rules going quiet in the one place nothing asked them.
+#
+# It asks chk_fits_expr like the other five, so a literal field adopts and a typed value does
+# not, and a list-literal field is checked element by element. The position is what the
+# sentence names, because a struct literal gives its fields in order and has no other handle
+# on the one that is wrong.
+fn chk_slot_fits(mut &em: Emitter, where: str, want: Ty, arg: Expr) {
+	got := c_infer(em, arg)
+	if not chk_fits_expr(em, want, got, arg) {
+		chk_at(em, f"{where} is {ty_name(want)}, and this gives {ty_name(got)}")
+	}
+}
+
+# chk_field_says names a struct's field BY POSITION, the way chk_arg_says names an argument,
+# and it is shared with the emitter's missing-field diagnostic — because the two disagreed
+# about the numbering. One counted from 1 and the other from 0, so the same field of the same
+# struct was "field 1" or "field 0" depending on which mistake you made.
+#
+# `pos` arrives 1-based, which is chk_arg_says' convention.
+pub fn chk_field_says(sname: str, pos: int) -> str {
+	return f"field {strconv.to_string(pos, 10)} of `{sname}`"
+}
+
 # --- assigned value ---------------------------------------------------------------
 #
 # An assignment is the FOURTH slot a value enters, and it was the one this rule set left
@@ -972,6 +1031,30 @@ fn chk_binary(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Expr) {
 		return
 	}
 
+	# A `type X = Y` IS NOT A Y HERE. docs/core/types.md: X takes on Y's representation and
+	# keeps an identity of its own, and this compiler does not carry Y's arithmetic or spec
+	# impls across — so a `Celsius` has no `+` until somebody writes `int(c)`, which is the
+	# explicit step the whole feature is for.
+	#
+	# AHEAD of every family, and that is not a detail: it sat between them once, after the
+	# logical and bitwise blocks, which return unconditionally — so `f1 and f2` on a
+	# `type Flag = bool` and `m & 1` on a `type Mask = int` were accepted and lowered to
+	# working C, which is the underlying type's operators being inherited by exactly the
+	# rule that says they are not.
+	#
+	# EQUALITY IS THE EXCEPTION, between two values of the SAME one. The deviation the doc
+	# records is about arithmetic and spec impls, and `==` is neither; an enum is nominal and
+	# inherits nothing either, and gets same-enum `==` twelve lines below. Refusing
+	# `uid1 == uid2` would take away the one operation a `UserId` exists to support — and
+	# would leave `if flag` on a `type Flag = bool` told to "compare it (`x != 0`)" by a rule
+	# that then refuses the comparison.
+	if chk_is_typedef_operand(em, ta) or chk_is_typedef_operand(em, tb) {
+		return if chk_is_equality(oper) and ty_eq(ta, tb)
+
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(ta)} and {ty_name(tb)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		return
+	}
+
 	if chk_is_logical(oper) {
 		if chk_scalar_wrong_bool(ta) or chk_scalar_wrong_bool(tb) {
 			chk_at(em, f"operator `{oper}` takes bool operands, and these are {ty_name(ta)} and {ty_name(tb)}")
@@ -1043,6 +1126,15 @@ fn chk_unary(mut &em: Emitter, oper: str, x: Expr) {
 	t := c_infer(em, x)
 
 	return if c_is_unknown(t)
+
+	# the same rule the binary families get, and for the same reason: `not f` on a
+	# `type Flag = bool` and `-c` on a `Celsius` are the underlying type's operators, which a
+	# typedef does not take on. The scalar predicates below all answer no for a TNamed, so
+	# without this the prefix operators were the one family that let a typedef through.
+	if chk_is_typedef_operand(em, t) {
+		chk_at(em, f"operator `{oper}` has no meaning on {ty_name(t)} — a `type … = …` keeps its own identity and does not take the underlying type's operators, so convert first")
+		return
+	}
 	if oper == "not" and chk_scalar_wrong_bool(t) {
 		chk_at(em, f"operator `not` takes a bool operand, and this one is {ty_name(t)}")
 	}
@@ -1105,6 +1197,16 @@ fn chk_mixed_sign(mut &em: Emitter, oper: str, ta: Ty, tb: Ty, ea: Expr, eb: Exp
 # re-enumerating: adding `uint` to a second copy is an edit that is easy to miss, and missing
 # it let a `uint` reach the arithmetic and ordering diagnostics through the not-a-scalar hole
 # instead of the numeric path the mixing rule assumes.
+# chk_is_typedef_operand is whether an operand is a `type X = Y` name. It asks the emitter's
+# registry rather than the type's shape, because the shape is precisely what a typedef shares
+# with its underlying type and precisely what must not be read through here.
+fn chk_is_typedef_operand(mut &em: Emitter, t: Ty) -> bool {
+	nm := c_named_of(t)
+	return false if nm == ""
+
+	return c_is_typedef(em, nm)
+}
+
 fn chk_is_num(t: Ty) -> bool {
 	return c_is_int(t) or c_is_float(t) or c_is_uint(t) or c_is_rune(t)
 }

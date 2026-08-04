@@ -283,10 +283,8 @@ fn parse_base_type(mut &p: Parser) -> Ty {
 	return TBool if name == "bool"
 	return TByte if name == "byte"
 
-	if name == "uint" {
-		# the subset models uint as int64_t (it never parses top-bit values)
-		return TInt
-	}
+	return TUint if name == "uint"
+	return TRune if name == "rune"
 	return TNil if name == "nil"
 
 	# A generic ARGUMENT list on a user type — `Ref[int]`, `Atomic[int]`, `B[T]`. The four
@@ -369,7 +367,9 @@ fn is_conv(name: str) -> bool {
 }
 
 fn conv_ty(name: str) -> Ty {
-	return TInt if name == "int" or name == "uint"
+	return TInt if name == "int"
+	return TUint if name == "uint"
+	return TRune if name == "rune"
 	return TByte if name == "byte"
 	return TFloat if name == "float"
 	return TBool if name == "bool"
@@ -1748,14 +1748,14 @@ fn parse_primary(mut &p: Parser) -> Expr {
 		return EConv(TByte, EInt(strconv.to_string(int(list[byte](t.value)[0]), 10)), "byte")
 	}
 	if k == Rune {
-		# a rune literal is its CODE POINT (GRAMMAR:165). It reached the fallback below
-		# before, so `'A'` was the number zero — a wrong answer with no diagnostic. A
-		# multi-byte code point needs a UTF-8 decode this compiler does not have, and is
-		# named rather than truncated to its first byte.
 		p_advance(p)
-		bs := list[byte](t.value)
-		raise f"NotImplemented: a non-ASCII rune literal `{t.lexeme}` — its code point needs a UTF-8 decode this compiler does not have" if bs.len() != 1
-		return EInt(strconv.to_string(int(bs[0]), 10))
+
+		# The literal's VALUE is its code point, decoded from the UTF-8 the source is written
+		# in — `'A'` is 65 and `'é'` is 233. It used to reach the fallback below, so `'A'` was
+		# the number zero with no diagnostic; then it was one byte only, so a multi-byte code
+		# point was named rather than read. rune_value is the lexer's, beside int_value, for
+		# the reason that one gives: what a lexeme is worth is a fact about the LEXEME.
+		return EConv(TRune, EInt(strconv.to_string(rune_value(t.value), 10)), "rune")
 	}
 	if k == Float {
 		p_advance(p)

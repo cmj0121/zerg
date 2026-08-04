@@ -31,8 +31,8 @@ in place, only when `it` is `mut`; the iteration protocol — clean `StopIterati
 re-raised — is [Iteration](../core/specs.md)), and **`for cond { … }`** the **while** form — repeat while `cond`
 (a `bool`) holds. There is **no `while` keyword** (bare `for cond` is the while loop) and **no C-style
 three-clause `for`**. The infinite form, the while form, and `for x in it` over a **range**, a **`list`**, a
-**`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`**, which needs a UTF-8
-decode — **[not yet]**; walk `list[byte](s)` for the bytes. **`for mut x`**, the mutable loop binding that
+**`map`** (binding each **key**) all work. Over a **`str`** it binds each **`rune`** — the code points, not
+the bytes; walk `list[byte](s)` when you want those. **`for mut x`**, the mutable loop binding that
 writes each edited element back to its slot, is **[not yet]**. Testing membership with **`v in range`**
 (`x in 0..n` → `bool`) works; treating a **range as a value** anywhere else is **[not yet]**.
 

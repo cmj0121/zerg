@@ -24,7 +24,7 @@ then 區塊內**:`x` 不在 `else` 的作用域、也不在 `if` 之後。它是
 `mut`；迭代協定——`StopIteration` 乾淨結束、其他 error re-raise——見 [迭代](../core/specs.zh-TW.md)）、以及 **`for cond { … }`**
 即 **while** 形式——當 `cond`（一個 `bool`）成立時反覆執行。**沒有 `while` 關鍵字**（裸 `for cond` 就是 while 迴圈）、
 也**沒有 C 式三段 `for`**。無窮形式、while 形式、以及 `for x in it` 走訪一個 **range**、一個 **`list`**、一個
-**`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**,那需要 UTF-8 解碼——**[not yet]**;
+**`map`**（綁每個 **key**）都可用。走訪一個 **`str`** 會綁每個 **`rune`**——是 code point 而不是 byte;
 要走 byte 就用 `list[byte](s)`。**`for mut x`**（把改過的元素寫回原槽的可變迴圈綁定）是 **[not yet]**。用
 **`v in range`** 測試成員關係（`x in 0..n` → `bool`）可用;把 **range 當成值**用在別處則是 **[not yet]**。
 

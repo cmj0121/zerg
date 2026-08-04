@@ -914,6 +914,24 @@ fn chk_typedef(mut &em: Emitter, td: TypeDecl) -> Ty {
 	return td.under
 }
 
+# chk_field_init is a value entering a STRUCT LITERAL's field — the sixth slot, and the one
+# that had no rule at all. `P("hi")` on an `x: int` field put a pointer where an int64_t goes
+# and compiled; `P(b'a')` on an `x: int` and `P(i)` on an `x: float` were the byte and float
+# rules going quiet in the one place nothing asked them.
+#
+# It asks chk_fits_expr like the other five, so a literal field adopts and a typed value does
+# not, and a list-literal field is checked element by element. The position is what the
+# sentence names, because a struct literal gives its fields in order and has no other handle
+# on the one that is wrong.
+fn chk_field_init(mut &em: Emitter, sname: str, idx: int, want: Ty, arg: Expr) {
+	return if c_is_unknown(want)
+
+	got := c_infer(em, arg)
+	return if chk_fits_expr(em, want, got, arg)
+
+	chk_at(em, f"field {strconv.to_string(idx + 1, 10)} of `{sname}` is {ty_name(want)}, and this gives {ty_name(got)}")
+}
+
 # --- assigned value ---------------------------------------------------------------
 #
 # An assignment is the FOURTH slot a value enters, and it was the one this rule set left

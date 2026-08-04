@@ -3960,7 +3960,9 @@ fn c_struct_args(mut &em: Emitter, sname: str, args: list[Expr], sb: Subst) -> s
 		if i > 0 {
 			out = out + ", "
 		}
-		out = out + c_field_init(em, c_struct_field_ty_at(em, sname, i), args[i], sb)
+		ft := c_struct_field_ty_at(em, sname, i)
+		chk_field_init(em, sname, i, ft, args[i])
+		out = out + c_field_init(em, ft, args[i], sb)
 		i = i + 1
 	}
 	return out + c_struct_rest(em, sname, args.len(), args.len() > 0)

@@ -1548,6 +1548,42 @@ fn main() {
 }
 EOF
 
+# --- a second `Into` on one type ------------------------------------------------
+#
+# The language means for a type to have several: the built-in matrix has four out of `int`
+# alone. This compiler keys a method by its NAME, so one type carries one `into` — and the
+# collision reported itself as two methods sharing a namespace, which is true and about the
+# wrong thing. Named here until a spec method is keyed by (spec, arguments), which is also
+# what would let a written-out `x.into()` say which one is meant.
+
+expect "$ZERG" a-second-into-on-one-type 'a second `impl Into[' <<'EOF'
+struct Celsius {
+	deg: int
+}
+
+struct Kelvin {
+	deg: int
+}
+
+impl Into[int] for Celsius {
+	fn into() -> int {
+		return this.deg
+	}
+}
+
+impl Into[Kelvin] for Celsius {
+	fn into() -> Kelvin {
+		return Kelvin(this.deg + 273)
+	}
+}
+
+fn main() {
+	c := Celsius(20)
+	n: int = c
+	print n
+}
+EOF
+
 if [ $fail -ne 0 ]; then
 	echo "refuse-check: $fail of $((pass + fail)) cases were not refused as they should be"
 	exit 1

@@ -2871,16 +2871,28 @@ fn c_refbox_helpers(ed: EnumDecl) -> str {
 
 # --- operators -----------------------------------------------------------------
 
-# c_binop maps a Zerg binary operator spelling to its C form; the wrapping operators
-# lower to the plain C operator (arithmetic does not yet trap).
+# c_binop maps a Zerg binary operator spelling to its C form. The WRAPPING operators are the
+# ones that need care: `+%` is a plain C `+`, and a plain C `+` on two signed operands is
+# UNDEFINED on overflow — which is the one input `+%` exists for. It gave the right answer at
+# -O2 on clang today and is exactly the construct a compiler is allowed to assume never
+# happens; UBSan says so out loud. They go through c_wrap_fn instead, where the arithmetic is
+# done on the unsigned bit pattern — the operation `+%` actually names — and cast back.
 fn c_binop(oper: str) -> str {
 	return "&&" if oper == "and"
 	return "||" if oper == "or"
-	return "*" if oper == "*%"
-	return "+" if oper == "+%"
-	return "-" if oper == "-%"
 
 	return oper
+}
+
+# c_wrap_fn names the runtime helper for a `%`-suffixed operator, or "" for one that is not
+# wrapping. It is beside c_arith_fn on purpose: those two are the two halves of every
+# arithmetic operator the language has, and a spelling missing from both is a bare C operator.
+fn c_wrap_fn(oper: str) -> str {
+	return "zrt_wrap_add" if oper == "+%"
+	return "zrt_wrap_sub" if oper == "-%"
+	return "zrt_wrap_mul" if oper == "*%"
+
+	return ""
 }
 
 fn c_unop(oper: str) -> str {
@@ -3467,6 +3479,16 @@ fn c_floordiv(mut &em: Emitter, ta: Ty, tb: Ty, a: str, b: str) -> str {
 # table already knew both were integers; nobody asked it.
 fn c_arith(mut &em: Emitter, oper: str, t: Ty, a: str, b: str) -> str {
 	cls := c_scalar_class(t)
+
+	# the WRAPPING three, which are the whole reason there are two spellings of each
+	# operator. They wrap on the unsigned bit pattern rather than on a signed C operator,
+	# whose overflow is undefined — see c_binop.
+	wrap := c_wrap_fn(oper)
+	if wrap != "" and (cls == SC_SIGNED or cls == SC_UNSIGNED) {
+		em.used_rt = true
+
+		return c_arith_narrow(em, t, f"{wrap}({a}, {b})")
+	}
 	return f"({a} {c_binop(oper)} {b})" if cls != SC_SIGNED and cls != SC_UNSIGNED
 
 	# Only a FULL-WIDTH unsigned needs the u64 family. A narrower one (a `byte`) fits an

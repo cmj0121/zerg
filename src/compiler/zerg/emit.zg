@@ -344,10 +344,10 @@ fn c_opt_name(mut &em: Emitter, elem: Ty) -> str {
 # and anything else is present. It is what makes a declared optional mean what it says —
 # `x: int? = nil` used to lower to `int64_t zgt_x = 0`, so absent and the number zero were
 # the same value and no diagnostic stood between them.
-fn c_opt_wrap(mut &em: Emitter, elem: Ty, e: Expr, sb: Subst) -> str {
+fn c_opt_wrap(mut &em: Emitter, where: str, elem: Ty, e: Expr, sb: Subst) -> str {
 	cn := c_opt_name(em, elem)
 	return "(" + cn + "){ .tag = 1 }" if c_is_nil_lit(e)
-	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, elem, e, sb) + " }"
+	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, elem, e, sb) + " }"
 }
 
 fn c_is_nil_lit(e: Expr) -> bool {
@@ -362,13 +362,13 @@ fn c_is_nil_lit(e: Expr) -> bool {
 # Every place a declared carrier meets a value goes through here, which is what makes a
 # declaration mean what it says: `-> Result[nil] { return nil }` returns a Left, not a bare
 # nil that the caller then reads a tag out of.
-fn c_carrier_fit(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+fn c_carrier_fit(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> str {
 	et := c_infer(em, e)
 
 	return c_expr(em, e, sb) if c_is_carrier(et) and c_carrier_ty_cname(et) == c_carrier_ty_cname(want)
-	return c_opt_wrap(em, c_opt_elem(want), e, sb) if c_is_opt(want)
+	return c_opt_wrap(em, where, c_opt_elem(want), e, sb) if c_is_opt(want)
 
-	return c_either_wrap(em, want, e, sb)
+	return c_either_wrap(em, where, want, e, sb)
 }
 
 # c_fit_copied is what every site where a DECLARED type meets a value calls: a carrier is
@@ -376,8 +376,28 @@ fn c_carrier_fit(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 # because a carrier's payload may itself be one — `Result[int?]` used to take the bare int
 # into a field whose type is the optional's carrier, so the tag it was read back through was
 # whatever the value's first bytes happened to be.
-fn c_fit_copied(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
-	return c_carrier_fit(em, want, e, sb) if c_is_carrier(want)
+#
+# `where` NAMES THE SLOT, and it is REQUIRED — which is the whole point of it. This function
+# is the enumeration of the typed positions docs/core/types.md lists: a value cannot reach a
+# declared type without passing through here, so making every caller name itself is what turns
+# "did anyone remember to check this one" into a question the compiler asks. It has eighteen
+# callers. The rule used to be attached at thirteen of them BY HAND, and the five it was not
+# are a carrier's payload — the recursion five lines below — which is why `x: float? = i` for
+# an `int` value printed `5`.
+#
+# "One rule, N slots, written at fewer" is the bug this file has now had to fix six times: the
+# empty list literal, the byte widening, the list element, the struct field, the enum payload,
+# the carrier payload. A slot that forgets the rule no longer compiles.
+#
+# The check here is a FLOOR, not the only rule. Five positions keep one of their own above it
+# — a binding, an assignment, a `return`, an argument, a parameter's default — because each
+# can say more than a positional label can ("cannot bind str to a int binding: `n`" names the
+# binding; this one could only say "the binding is int"). Those speak first and this never
+# speaks for them. What it speaks for is the position nobody thought to give a rule.
+fn c_fit_copied(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> str {
+	chk_slot_fits(em, where, want, e)
+
+	return c_carrier_fit(em, where, want, e, sb) if c_is_carrier(want)
 
 	# a bare `[]` carries NO element type of its own, so it takes the destination's. Without
 	# that it lowered to `(zrt_list){0}` — a list of zero-byte elements — and every later
@@ -394,7 +414,7 @@ fn c_fit_copied(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 # explicitly — they are CONTEXT-TYPED, having no type of their own to be — and a bare value
 # picks the side its type matches. The sides of an Either differ (parse_type refuses
 # `Either[T, T]`), which is what makes that unambiguous.
-fn c_either_wrap(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
+fn c_either_wrap(mut &em: Emitter, where: str, want: Ty, e: Expr, sb: Subst) -> str {
 	lt := c_either_left(want)
 	rt := c_either_right(want)
 	cn := c_carrier_name(em, lt, rt)
@@ -407,16 +427,16 @@ fn c_either_wrap(mut &em: Emitter, want: Ty, e: Expr, sb: Subst) -> str {
 	side := c_ctor_side(e)
 	if side >= 0 {
 		inner := c_call_args_of(e)[0]
-		return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, lt, inner, sb) + " }" if side == 0
-		return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, rt, inner, sb) + " }"
+		return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, inner, sb) + " }" if side == 0
+		return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, where, rt, inner, sb) + " }"
 	}
 
 	et := c_infer(em, e)
 
-	return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
+	return "(" + cn + "){ .tag = 1, .err = " + c_fit_copied(em, where, rt, e, sb) + " }" if ty_name(et) == ty_name(rt)
 	raise f"a {ty_name(want)} takes a {ty_name(lt)} or a {ty_name(rt)}, and this is {ty_name(et)} — say the side with `Left(…)` or `Right(…)`" if ty_name(et) != ty_name(lt) and not c_is_unknown(et)
 
-	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, lt, e, sb) + " }"
+	return "(" + cn + "){ .tag = 0, .ok = " + c_fit_copied(em, where, lt, e, sb) + " }"
 }
 
 # c_ctor_side is which side of an Either a `Left(v)` / `Right(e)` call names — 0, 1, or -1
@@ -2031,11 +2051,11 @@ fn c_struct_field_ty_at(mut &em: Emitter, sname: str, idx: int) -> Ty {
 # started at the wrong number. A non-empty literal has its own element type and its own
 # elements, so it takes the ordinary path.
 # `where` names the slot for a diagnostic — "field 2 of `P`", "payload 1 of `Shape.Line`".
-# The CHECK lives here rather than at the callers because there are two of them and they were
-# not both remembering: a struct literal's field was checked and an enum variant's payload was
-# not, though they are the same slot lowered by the same function twelve lines apart.
+# It is passed straight down to c_fit_copied, which is where the fit is CHECKED: a struct
+# literal's field was checked and an enum variant's payload was not, though they are the same
+# slot lowered by the same function twelve lines apart, and the label is now what carries the
+# difference between them rather than a second call nobody remembered to make.
 fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> str {
-	chk_slot_fits(em, where, fty, arg)
 	if ty_is_chan(fty) {
 		c_chan_check(c_infer(em, arg), fty, "field")
 	}
@@ -2044,7 +2064,7 @@ fn c_field_init(mut &em: Emitter, where: str, fty: Ty, arg: Expr, sb: Subst) -> 
 	# ABSENT field rather than a present one holding whatever `nil` lowered to; a bare `[]`
 	# takes the field's element type. Both are c_fit_copied's, which every destination-typed
 	# site asks — this one is only the chan check plus that.
-	return c_fit_copied(em, fty, arg, sb)
+	return c_fit_copied(em, where, fty, arg, sb)
 }
 
 # --- value semantics -----------------------------------------------------------------------
@@ -2722,11 +2742,11 @@ fn c_coalesce(mut &em: Emitter, a: Expr, b: Expr, jump: list[Stmt], sb: Subst) -
 	# can sit after the choice rather than inside one arm of it.
 	df := c_carrier_temp_drop(em, t, a)
 	if jump.len() == 0 {
-		chk_slot_fits(em, "the `??` fallback", elem, b)
-		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + c_fit_copied(em, elem, b, sb) + "); })" if df == ""
+		alt := c_fit_copied(em, "the `??` fallback", elem, b, sb)
+		return head + " " + c_res_is_left(tmp) + " ? " + c_res_taken(em, tmp, elem) + " : (" + alt + "); })" if df == ""
 
 		v0 := "zgt_cov" + tag
-		pick := f"{c_res_is_left(tmp)} ? {c_res_taken(em, tmp, elem)} : ({c_fit_copied(em, elem, b, sb)})"
+		pick := f"{c_res_is_left(tmp)} ? {c_res_taken(em, tmp, elem)} : ({alt})"
 		return f"{head} {c_type(elem)} {v0} = {pick}; {df}(&{tmp}); {v0}; }})"
 	}
 
@@ -3761,8 +3781,7 @@ fn c_list_method_on(mut &em: Emitter, tgt: str, meth: str, args: list[Expr], tty
 		# the element is copied INTO the list, so the list owns it and the caller's name
 		# for it goes on being its own
 		et := c_type(c_list_elem(tty))
-		chk_slot_fits(em, f"the element `{meth}` adds", c_list_elem(tty), args[0])
-		el := c_fit_copied(em, c_list_elem(tty), args[0], sb)
+		el := c_fit_copied(em, f"the element `{meth}` adds", c_list_elem(tty), args[0], sb)
 		return "({ " + et + " zgt_le = " + el + "; zrt_list_push(&(" + tgt + "), &zgt_le); })"
 	}
 	return tgt
@@ -4181,13 +4200,15 @@ fn c_arg(mut &em: Emitter, fname: str, idx: int, pos: int, a: Expr, sb: Subst) -
 	if ty_is_chan(em.pr_ty[row]) {
 		c_chan_check(c_infer(em, a), em.pr_ty[row], f"argument {idx} of `{fname}`")
 	}
-	return c_fit_copied(em, em.pr_ty[row], a, sb)
+	return c_fit_copied(em, chk_slot_says(fname, pos), em.pr_ty[row], a, sb)
 }
 
 # c_captured renders the value a `spawn` or a `defer` stores in its env — the same value
 # the callee would OWN at an ordinary call, which is why it is copied. c_arg is the wrong
-# tool for it: that one renders straight into an argument list and re-runs the checks
-# chk_callsite has already made, so calling it here would say everything twice. The COPY is
+# tool for it: that one renders straight into an argument list and asks the BORROW rules,
+# which chk_callsite has already asked of this call. The FIT is asked here, by c_fit_copied
+# like everywhere else, and it costs nothing to ask a second time — it either agrees with
+# chk_callsite or names a slot nobody had reached. The COPY is
 # not optional, and both statements skipped it: `defer take(xs)` handed the callee the
 # caller's own buffer, so a later `xs[0] = 99` was seen by a call that is documented to
 # have taken a snapshot. An ordinary `take(xs)` copied all along — the two disagreed.
@@ -4200,7 +4221,7 @@ fn c_captured(mut &em: Emitter, key: str, idx: int, a: Expr) -> str {
 
 	return c_expr(em, a, c_nosub()) if row < 0 or ty_is_chan(em.pr_ty[row])
 
-	return c_fit_copied(em, em.pr_ty[row], a, c_nosub())
+	return c_fit_copied(em, chk_slot_says(key, idx + 1), em.pr_ty[row], a, c_nosub())
 }
 
 fn c_param_ty(mut &em: Emitter, fname: str, idx: int) -> Ty {
@@ -4249,7 +4270,7 @@ fn c_default_args(mut &em: Emitter, fname: str, given: int, sep: bool) -> str {
 		# a default is an argument, so it meets its parameter's type like any other — which
 		# is what gives `fn take(xs: list[int] = [])` an element size. Rendered with c_expr
 		# it was the bare `(zrt_list){0}`, and every append into it memcpy'd nothing.
-		out = out + c_fit_copied(em, c_param_ty(em, fname, i), d, c_nosub())
+		out = out + c_fit_copied(em, f"the default for {chk_slot_says(fname, i + 1)}", c_param_ty(em, fname, i), d, c_nosub())
 		i = i + 1
 	}
 	return out
@@ -4380,8 +4401,7 @@ fn c_args_typed(mut &em: Emitter, ftys: list[Ty], args: list[Expr], sb: Subst) -
 			out = out + ", "
 		}
 		if i < ftys.len() {
-			chk_slot_fits(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i])
-			out = out + c_fit_copied(em, ftys[i], args[i], sb)
+			out = out + c_fit_copied(em, f"argument {strconv.to_string(i + 1, 10)} of this call", ftys[i], args[i], sb)
 		} else {
 			out = out + c_expr(em, args[i], sb)
 		}
@@ -5115,7 +5135,7 @@ fn c_assign(mut &em: Emitter, lhs: Expr, rhs: Expr, ind: str) -> str {
 
 	# assigning INTO an optional takes the same wrap a declaration does: `x = nil` makes it
 	# absent, `x = 5` present. Without it the C compiler saw an int where a carrier goes.
-	return f"{ind}{lv} = {c_carrier_fit(em, lt, rhs, c_nosub())};\n" if c_is_carrier(lt)
+	return f"{ind}{lv} = {c_carrier_fit(em, chk_target_name(lhs), lt, rhs, c_nosub())};\n" if c_is_carrier(lt)
 	if c_is_list(lt) and c_is_listlit(rhs) {
 		# re-init the (name or field) list to empty, then push any literal elements
 		em.used_rt = true
@@ -5143,8 +5163,7 @@ fn c_elem_exprs(mut &em: Emitter, lit: Expr, elem: Ty) -> list[str] {
 
 fn c_elem_exprs_into(mut &em: Emitter, elems: list[Expr], elem: Ty, mut &out: list[str]) {
 	for e in elems {
-		chk_slot_fits(em, "an element of this list literal", elem, e)
-		out.append(c_fit_copied(em, elem, e, c_nosub()))
+		out.append(c_fit_copied(em, "an element of this list literal", elem, e, c_nosub()))
 	}
 }
 
@@ -5460,11 +5479,11 @@ fn c_send(mut &em: Emitter, ch: Expr, v: Expr, ind: str) -> str {
 
 	elem := ty_chan_elem(cty)
 	ct := c_type(elem)
-	chk_slot_fits(em, "the value sent on this channel", elem, v)
-	mut sv := c_fit_copied(em, elem, v, c_nosub())
-	if c_is_opt(elem) {
-		sv = c_carrier_fit(em, elem, v, c_nosub())
-	}
+
+	# c_fit_copied wraps a carrier element itself — the `if c_is_opt(elem)` that used to stand
+	# here rendered the value a second time to reach the same answer, which is one temp and one
+	# walk of the expression per send
+	sv := c_fit_copied(em, "the value sent on this channel", elem, v, c_nosub())
 	return ind + "{ " + ct + " zgt_sv = " + sv + "; zrt_chan_send(" + c_expr(em, ch, c_nosub()) + ", &zgt_sv); }\n"
 }
 
@@ -5676,8 +5695,8 @@ fn c_select(mut &em: Emitter, arms: list[SelArm], ind: str, loop: bool) -> str {
 			# rendered the value with c_expr, so a `list` handed to a select send was the
 			# sender's own buffer under the receiver's name, with no reference taken, on
 			# two worker threads at once.
-			chk_slot_fits(em, "the value sent on this channel", elem, a.val)
-			out = f"{out}{in2}{c_type(elem)} {nm} = {c_fit_copied(em, elem, a.val, c_nosub())};\n"
+			sv := c_fit_copied(em, "the value sent on this channel", elem, a.val, c_nosub())
+			out = f"{out}{in2}{c_type(elem)} {nm} = {sv};\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].op = ZRT_SEL_SEND;\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].ch = " + c_expr(em, a.ch, c_nosub()) + ";\n"
 			out = out + in2 + cs + "[" + strconv.to_string(idx, 10) + "].val = &" + nm + ";\n"
@@ -6171,9 +6190,11 @@ fn c_map_lit_at(mut &em: Emitter, kt: Ty, vt: Ty, ks: list[Expr], vs: list[Expr]
 	mut out := f"({{ zrt_map zgt_mm; zrt_map_init(&zgt_mm, sizeof({kc}), sizeof({vc}), &{vtn});"
 	mut i := 0
 	for i < ks.len() {
+		# the KEY is the one typed position that does NOT lower through c_fit_copied — a key is
+		# hashed rather than owned, so it keeps its own check here
 		chk_slot_fits(em, "a key of this map literal", kt, ks[i])
-		chk_slot_fits(em, "a value of this map literal", vt, vs[i])
-		out = out + f" {{ {kc} zgt_mk = {c_expr(em, ks[i], sb)}; {vc} zgt_mv = {c_fit_copied(em, vt, vs[i], sb)}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
+		mv := c_fit_copied(em, "a value of this map literal", vt, vs[i], sb)
+		out = out + f" {{ {kc} zgt_mk = {c_expr(em, ks[i], sb)}; {vc} zgt_mv = {mv}; zrt_map_set(&zgt_mm, &zgt_mk, &zgt_mv); }}"
 		i = i + 1
 	}
 	return out + " zgt_mm; })"
@@ -6231,8 +6252,7 @@ fn c_map_set(mut &em: Emitter, target: Expr, idx: Expr, rhs: Expr, tty: Ty, ind:
 	# lowering `h[0]` as a read left that buffer shared with `g`.
 	tgt := c_lvalue(em, target, c_nosub())
 	k := c_expr(em, idx, c_nosub())
-	chk_slot_fits(em, "the value written into this map", c_map_val_ty(tty), rhs)
-	v := c_fit_copied(em, c_map_val_ty(tty), rhs, c_nosub())
+	v := c_fit_copied(em, "the value written into this map", c_map_val_ty(tty), rhs, c_nosub())
 	return f"{ind}{{ {kc} zgt_mk = {k}; {vc} zgt_mv = {v}; zrt_map_set(&({tgt}), &zgt_mk, &zgt_mv); }}\n"
 }
 
@@ -6791,7 +6811,8 @@ fn c_let(mut &em: Emitter, name: str, ty: Ty, has_type: bool, is_mut: bool, ival
 	# a declared `T?` takes the value the declaration promises, wrapping a bare one
 	if has_type and c_is_carrier(eff) {
 		c_add_var(em, name, eff, is_mut)
-		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {c_carrier_fit(em, eff, ival, c_nosub())};\n"
+		cval := c_carrier_fit(em, chk_binding_says(name), eff, ival, c_nosub())
+		return f"{ind}{c_type(eff)} {c_var_cname(em, name)} = {cval};\n"
 	}
 
 	# The initializer is rendered BEFORE the binding enters scope: in `mut n := n` the
@@ -7028,7 +7049,10 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 	# `return nil` is a RETURN WITH NO VALUE everywhere except where the declared result is
 	# a carrier: `-> Result[nil]` wants a Left holding nil, and `-> int?` an absent one, so
 	# the nil is a value there and has to travel the value path below.
-	return f"{pre}{ind}return {c_carrier_fit(em, em.fn_ret, e, c_nosub())};\n" if has_val and c_is_nil_expr(e) and c_is_carrier(em.fn_ret)
+	if has_val and c_is_nil_expr(e) and c_is_carrier(em.fn_ret) {
+		nv := c_carrier_fit(em, CHK_ANSWER, em.fn_ret, e, c_nosub())
+		return f"{pre}{ind}return {nv};\n"
+	}
 	if has_val and not c_is_nil_expr(e) {
 		# the returned expression's type is wanted twice — once to check it against the
 		# signature, and again on the two conditions that rarely coincide, a channel return
@@ -7053,7 +7077,7 @@ fn c_return(mut &em: Emitter, has_val: bool, e: Expr, ind: str) -> str {
 		if ret_chan {
 			v = c_expr(em, e, c_nosub())
 		} else {
-			v = c_fit_copied(em, em.fn_ret, e, c_nosub())
+			v = c_fit_copied(em, CHK_ANSWER, em.fn_ret, e, c_nosub())
 		}
 
 		# A channel travelling OUT is a handle the caller will own, so it carries a reference

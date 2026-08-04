@@ -78,22 +78,29 @@ IndexError            an index outside a container
 KeyError              a key no map holds
 ```
 
-**`is` observes the tree.** `e is ValueError` is true of an `OverflowError`, so a handler may catch coarsely
-("the value was wrong, I do not care why") or precisely, and the coarse one is not a lie. Zerg has no
-inheritance and this is not it: the tree is a fixed relation between the built-in kinds, read **upward only**
-— every `OverflowError` is a `ValueError`, and a `ValueError` raised by hand is not an `OverflowError`.
+**`in` reads the tree; `is` does not.** There are three relations here and each has its own spelling:
 
-**A cause is not a parent, and `is` does not see one.** `raise X from y` records what led to `X`; `unwrap()`
-is how that is asked about. The two relations are deliberately separate: a taxonomy link is an **is-a** and a
-cause is **another error underneath**, and a predicate answering both would distinguish neither —
-`raise IOError("outer") from ValueError("inner")` would stop being tellable from an error that simply is a
-`ValueError`.
+| Ask                             | Write        | Of an `OverflowError` |
+| ------------------------------- | ------------ | --------------------- |
+| is it **exactly** this kind     | `e is X`     | `is OverflowError`    |
+| is it a **member** of this kind | `e in X`     | `in ValueError` too   |
+| what was it **raised from**     | `e.unwrap()` | whatever `from` named |
+
+So a handler catches coarsely with `e in ValueError` ("the value was wrong, I do not care why") or precisely
+with `e is OverflowError`, and the coarse one is not a lie. Zerg has no inheritance and this is not it: the
+tree is a fixed relation between the built-in kinds, read **upward only** — every `OverflowError` is
+**in** `ValueError`, and a `ValueError` raised by hand **is not** an `OverflowError`.
+
+Keeping them apart is not tidiness. One predicate answering two of them distinguishes neither:
+`raise IOError("outer") from ValueError("inner")` must stay tellable from an error that simply is a
+`ValueError`, and it is only tellable while the question about causes is a different question.
 
 You **choose from these**; **defining your own** error type (a `struct` / `enum` implementing the
 **`Error`** spec —
 `message() -> str`, `unwrap() -> Err?`, `code() -> byte?`, see [Built-in specs](../core/specs.md)) is **not yet
 supported**. Each kind is a full `Err`: construct one with a message (`raise ValueError("bad input")`), let it
-sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`, and have
+sit in a `Result`'s right **and** be `raise`d, read `err.message()`, test it with `err is ValueError`
+and `err in ValueError`, and have
 `guard` reify it back as `Right(err)` with message, cause, and code intact. The runtime's **own intrinsic
 failures raise the matching kind**, so library and runtime errors share one vocabulary: a failed integer parse
 is a `ValueError` (out of range → `OverflowError`), a checked narrowing conversion an `OverflowError`, an I/O

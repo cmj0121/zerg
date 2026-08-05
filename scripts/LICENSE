@@ -1,0 +1,9 @@
+The Zerg build and gate scripts — MIT License.
+
+This directory is licensed under the MIT License; the full text is in
+LICENSES/MIT.txt at the repository root. See LICENSE at the root for why this
+layer is permissive: these scripts are neither the compiler nor the definition of
+the language — they are the harness that checks one implementation of it, and a
+harness is only useful if another implementation may take it and run.
+
+SPDX-License-Identifier: MIT

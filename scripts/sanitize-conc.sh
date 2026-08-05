@@ -123,6 +123,19 @@ printf 'sanitize-conc: address + undefined, leak detection %s, %s seeded single-
 
 fail=0
 cases=0
+
+# How many cases must actually be measured, checked at the bottom. The submodule guard above
+# catches an ABSENT test-data and nothing else: a shallow, partial or wrong-commit checkout
+# has the directory, the `conc_*.zg` glob below matches one case or none, and every assertion
+# in this script is of the form "this run was clean" — which is trivially true of a case that
+# was never built. The gate then prints `0 cases x 60 seeded schedules ... clean` and exits 0.
+#
+# 12 against the 17 conc_ cases there are today: room for one to be renamed or retired
+# without this needing a line, and well above what a broken checkout leaves behind. It is
+# overridable because a CASES-narrowed run is deliberately measuring one case — hammering a
+# rare multi-worker race is `CASES=... MIN_CASES=1`.
+MIN_CASES=${MIN_CASES:-12}
+
 # CASES narrows the sweep to one or a few cases, which is what a rare multi-worker race
 # needs: the seeded half is single-worker by construction, so the only runs that can reach
 # an interleaving bug are the unseeded ones, and hammering one case is the way to get them.
@@ -229,4 +242,8 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 rm -rf "$WORK"
+if [ "$cases" -lt "$MIN_CASES" ]; then
+	printf '\nsanitize-conc: only %s cases were measured, and the floor is %s\n' "$cases" "$MIN_CASES" >&2
+	exit 1
+fi
 printf '\nsanitize-conc: %s cases x %s seeded schedules + %s multi-worker runs, clean\n' "$cases" "$SCHEDULES" "$RUNS"

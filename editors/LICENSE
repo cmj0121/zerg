@@ -1,0 +1,8 @@
+The Zerg editor integration — MIT License.
+
+This directory is licensed under the MIT License; the full text is in
+LICENSES/MIT.txt at the repository root. See LICENSE at the root for why this
+layer is permissive: highlighting and folding rules end up inside somebody else's
+editor configuration, so they must carry no obligation into it.
+
+SPDX-License-Identifier: MIT

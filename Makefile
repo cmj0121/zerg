@@ -10,6 +10,23 @@ SUBDIR := editors src/bootstrap src/runtime
 ZERG_ENTRY := src/compiler/zergc.zg
 ZERG_STAGE1 := ./bin/.zerg-stage1
 
+# VERSION is the toolchain's version and the repo's VERSION file is the only place it is
+# written. Everything downstream is derived: the seed takes it through -ldflags, the shipping
+# compiler takes it through a generated src/compiler/zerg/version.zg, and `make version-check`
+# holds all three to each other.
+#
+# It is a file rather than a variable here because a version is also read by things that are
+# not make — a release script, a packager, a person — and `cat VERSION` is an interface all of
+# them already have. That is also why it holds a bare number and no comments.
+#
+# `tr`, not `cat`, and it is the same `tr` gen-version.sh and version-check.sh read the file
+# with. One tolerance shared by three readers, because two tolerances is a file that passes
+# the gate and breaks the build: `cat` keeps a leading space, which reaches the fan-out below
+# as `VERSION=  0.1.0` — an EMPTY version for the sub-make, silently falling the seed back to
+# 0.0.0-dev, and `0.1.0` left over as a goal make has no rule for. A leading space is exactly
+# what pre-commit's trailing-whitespace hook does not look at.
+VERSION := $(shell tr -d ' \t\n\r' <VERSION)
+
 # The test-data corpus belongs to the self-hosting compiler: it describes the LANGUAGE,
 # which is what `zerg` is growing toward, while the seed is covered by its own unit tests.
 #
@@ -32,6 +49,18 @@ CORPUS_SKIP := \
 
 CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-data/codegen/*.zg))))
 
+# A FLOOR under how many cases the gate has to have run, of the kind fmt-tokens and
+# reject-fuzz carry. The `[ -d test-data/codegen ]` guard in the recipe catches an ABSENT
+# submodule and nothing else; a shallow, partial or wrong-commit checkout leaves the
+# directory THERE with a handful of cases in it, the wildcard above shrinks to match, and the
+# gate reports `1/1 cases pass` and exits 0 — success for having measured almost nothing,
+# which is the one failure that still looks like a corpus.
+#
+# 60 against the 80 that pass today. The gap is room for cases to move into CORPUS_SKIP while
+# they wait for a feature, so that adding a case for something `zerg` cannot build yet is not
+# also a chore here; it is nowhere near the two or three a broken checkout leaves behind.
+CORPUS_MIN ?= 60
+
 # A `conc_` case is run more than once. Every other case is a function of its source, so
 # one run answers the question; a concurrent one is a function of its source AND of an
 # interleaving the scheduler picks fresh each time, and a race that shows up one run in
@@ -39,7 +68,7 @@ CORPUS_PASS := $(filter-out $(CORPUS_SKIP),$(basename $(notdir $(wildcard test-d
 # than a coin toss. They are milliseconds each, so the whole corpus stays quick.
 CORPUS_CONC_REPS ?= 10
 
-.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check fmt help $(SUBDIR)
+.PHONY: all clean test run build install uninstall upgrade examples corpus fmt-corpus fmt-self fixpoint sanitize-conc refuse reject reject-fuzz fmt-tokens linux-ci docs-links lint lint-check version-check fmt help $(SUBDIR)
 
 all: build                      # default action
 	@[ -f .git/hooks/pre-commit ] || pre-commit install --install-hooks
@@ -56,6 +85,10 @@ test: $(SUBDIR) examples        # run test (unit suites + the examples/ corpus)
 run: $(SUBDIR)                  # run in the local environment
 
 build: $(SUBDIR)                # build the toolchain: zerg0, an intermediate, then zerg
+	@# BEFORE the seed reads a line of the compiler: version.zg is one of the compiler's own
+	@# sources, so regenerating it afterwards would put the new number into the NEXT build and
+	@# leave this one quietly claiming the old one.
+	@./scripts/gen-version.sh
 	./bin/zerg0 build $(ZERG_ENTRY) -o $(ZERG_STAGE1)
 	$(ZERG_STAGE1) build --emit bin -j $(JOBS) -o ./bin/zerg $(ZERG_ENTRY)
 	@rm -f $(ZERG_STAGE1) $(ZERG_STAGE1).c
@@ -92,8 +125,12 @@ help:				            # show this message
 	@perl -nle 'print $$& if m{^[\w-]+:.*?#.*$$}' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?#"} {printf "    %-18s %s\n", $$1, $$2}'
 
+# VERSION rides along on the fan-out because the seed's Makefile stamps it into the binary,
+# and a sub-make inherits nothing that is not handed to it. It is passed to every
+# subdirectory rather than only to src/bootstrap: the ones with no use for it ignore it, and
+# a list of which subdirectory cares is a thing that goes stale the day another one starts to.
 $(SUBDIR):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
+	$(MAKE) -C $@ $(MAKECMDGOALS) VERSION=$(VERSION)
 
 # The examples are the corpus a reader meets first, so they are built by the compiler that
 # SHIPS — `zerg` — and they are RUN, not merely emitted. Until now the seed compiled them
@@ -128,14 +165,32 @@ examples:                       # build every example with zerg itself, and run 
 	[ $$fail -eq 0 ] || { echo "examples: an example no longer builds, or no longer runs"; exit 1; }; \
 	echo "examples: $$n examples built and run"
 
+# Where the fmt cases live, and a FLOOR under how many of them were checked. Same shape as
+# `corpus`: the directory guard below catches an absent submodule, and a checkout that has
+# test-data/fmt with two cases in it satisfies every assertion here — `zerg fmt --check` is
+# happy with an argument list of two, and the gate says `2 cases are fmt's fixpoint` and
+# exits 0.
+#
+# 24 against the 31 there are today, the same judgement fmt-tokens made with 100 against 137:
+# far enough below that retiring or renaming a case is not a chore, far enough above that a
+# corpus which lost most of itself cannot pass.
+#
+# The directory is a variable for the reason reject-fuzz's $CORPUS is one — a floor nobody
+# has watched fire is a floor nobody knows works, and watching this one fire means pointing
+# the gate at a directory holding fewer cases than test-data/fmt does.
+FMT_CORPUS ?= test-data/fmt
+FMT_CORPUS_MIN ?= 24
+
 # `zerg fmt --check` is the tool answering its own question. This target used to copy each
 # case to a temp file, format the copy and `cmp` — the Makefile reimplementing in shell
 # something the formatter knew and had no way to say.
 fmt-corpus:                     # every test-data/fmt case must already be canonical
 	$(MAKE) build
-	@[ -d test-data/fmt ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
-	@./bin/zerg fmt --check test-data/fmt/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
-	@echo "fmt-corpus: $$(ls test-data/fmt/*.zg | wc -l | tr -d ' ') cases are fmt's fixpoint"
+	@[ -d $(FMT_CORPUS) ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
+	@./bin/zerg fmt --check $(FMT_CORPUS)/*.zg || { echo "fmt-corpus: a case is not in canonical form"; exit 1; }
+	@n=$$(ls $(FMT_CORPUS)/*.zg | wc -l | tr -d ' '); \
+	[ $$n -ge $(FMT_CORPUS_MIN) ] || { echo "fmt-corpus: only $$n cases were checked, and the floor is $(FMT_CORPUS_MIN)"; exit 1; }; \
+	echo "fmt-corpus: $$n cases are fmt's fixpoint"
 
 # The compiler's OWN sources, which no gate covered. That is how three fresh deviations
 # landed in one branch: `zerg fmt` would have silently reverted four lines of it. This
@@ -156,7 +211,7 @@ fmt-tokens:                     # formatting changes spacing, never the token st
 corpus:                         # run zerg against the test-data corpus it now owns
 	$(MAKE) build
 	@[ -d test-data/codegen ] || { echo "test-data submodule not initialized (git submodule update --init)"; exit 1; }
-	@fail=0; \
+	@fail=0; ran=0; \
 	for name in $(CORPUS_PASS); do \
 		src=test-data/codegen/$$name.zg; \
 		./bin/zerg build --emit bin -o ./bin/corpus-case $$src >/dev/null 2>&1 || { echo "BUILD  $$name"; fail=1; continue; }; \
@@ -168,10 +223,12 @@ corpus:                         # run zerg against the test-data corpus it now o
 			[ "$$got" = "$$want" ] || { echo "OUTPUT $$name (run $$n)"; fail=1; break; }; \
 			n=$$((n+1)); \
 		done; \
+		if [ $$n -eq $$reps ]; then ran=$$((ran+1)); fi; \
 	done; \
 	rm -f ./bin/corpus-case ./bin/corpus-case.c; \
 	[ $$fail -eq 0 ] || { echo "corpus: a case that used to pass regressed"; exit 1; }; \
-	echo "corpus: $(words $(CORPUS_PASS))/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
+	[ $$ran -ge $(CORPUS_MIN) ] || { echo "corpus: only $$ran cases were run, and the floor is $(CORPUS_MIN)"; exit 1; }; \
+	echo "corpus: $$ran/$$(ls test-data/codegen/*.zg | wc -l | tr -d ' ') cases pass (the rest await features zerg does not have yet)"
 
 # The compiler compiles itself, so the one program big enough to find a rare emitter path
 # is the compiler — and until now nothing compared the two stages `build` already makes.
@@ -244,7 +301,8 @@ linux-ci:                       # run the Linux gates in a container, as CI does
 		done'
 
 LINUX_IMAGE ?= golang:1.26-bookworm
-LINUX_GATES ?= build test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
+# `version-check` sits straight after `build` because it reads bin/ rather than filling it.
+LINUX_GATES ?= build version-check test examples corpus refuse reject oracle reject-fuzz fmt-corpus fmt-tokens fmt-self lint lint-check fixpoint docs-links sanitize-conc
 
 # `reject` holds the mistakes somebody thought of; this holds the ones nobody did. It takes
 # the corpus's WELL-FORMED programs, breaks each in a way the language has a rule about,
@@ -270,6 +328,13 @@ docs-links:                     # every docs path the repo cites must resolve
 	done; \
 	[ $$fail -eq 0 ] || { echo "docs-links: a cited path does not exist"; exit 1; }; \
 	echo "docs-links: every cited docs path resolves"
+
+# No `$(MAKE) build` above the recipe, unlike almost everything else here, and that is the
+# one thing about this target worth knowing from the Makefile: it reads bin/ instead of
+# filling it, so it must be run after a build rather than instead of one. What it compares
+# and why nothing else can see it are set out in the script.
+version-check:                  # VERSION, the generated source, and both compilers agree
+	./scripts/version-check.sh
 
 lint:                           # lint the compiler and stdlib with zerg itself
 	$(MAKE) build

@@ -3913,7 +3913,12 @@ fn c_conv(mut &em: Emitter, ty: Ty, x: Expr, nm: str, sb: Subst) -> str {
 		return f"zrt_parse_int({inner})" if c_is_int(ty)
 		return f"zrt_parse_float({inner})" if c_is_float(ty)
 
-		raise f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one"
+		# A CHECKED rule rather than a refusal: which targets read a number out of a str is
+		# the language's answer and no future feature adds to it, so it belongs on the diag
+		# list with the place the conversion was written. `0` stands in for the value it
+		# would have built; the C after a finding is discarded.
+		chk_at(em, f"`{nm}(…)` does not parse a `str` — only `int(s)`, `uint(s)` and `float(s)` read a number out of one")
+		return "0"
 	}
 
 	# The target's shape comes from its TYPE. It used to come from the SPELLING for `uint`
@@ -4639,12 +4644,23 @@ fn c_struct_rest(mut &em: Emitter, sname: str, given: int, lead: bool) -> str {
 	mut sep := lead
 	for i < c_struct_field_n(em, sname) {
 		ft := c_struct_field_ty_at(em, sname, i)
-		raise f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`" if not c_is_opt(ft)
 		if sep {
 			out = out + ", "
 		}
 		sep = true
-		out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
+
+		# A CHECKED rule rather than a refusal, on the same argument as the rest of check.zg:
+		# a construction short of a required field is a program the LANGUAGE rejects, not a
+		# form this compiler has not built, so it owes the reader the place the construction
+		# was written. `0` stands in for the value the field never got, which keeps the
+		# initializer's shape so the walk carries on and names the fields after this one too;
+		# the C built after a finding is discarded.
+		if c_is_opt(ft) {
+			out = out + "(" + c_opt_name(em, c_opt_elem(ft)) + "){ .tag = 1 }"
+		} else {
+			chk_at(em, f"`{sname}` needs a value for {chk_field_says(sname, i + 1)} ({ty_name(ft)}): only a `T?` field has an implicit default, and it is `nil`")
+			out = out + "0"
+		}
 		i = i + 1
 	}
 	return out
@@ -4983,7 +4999,13 @@ fn c_ident_val(mut &em: Emitter, n: str, sb: Subst) -> str {
 	if not c_is_bound(em, n) and not c_is_struct_name(em, n) {
 		c_builtin_check(n)
 
-		raise f"undefined name `{n}`"
+		# The ordinary unknown name is the same kind of statement and takes the same channel.
+		# It was a bare `raise` for as long as it existed, which said the sentence and nothing
+		# else — and of every rule here this is the one that needs a place most, because the
+		# wording locates nothing: a typo names the misspelling and a file may hold four
+		# spellings of it, so the reader is told what is wrong and left to find where.
+		chk_at(em, f"undefined name `{n}`")
+		return "0"
 	}
 
 	# every read of a binding funnels through here, which is what makes this the one place

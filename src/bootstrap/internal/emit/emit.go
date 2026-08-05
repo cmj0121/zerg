@@ -638,12 +638,24 @@ func endsWithDiverge(b *ast.Block) bool {
 	return false
 }
 
-// cMain wraps zg_main in a C entry point. A nil/int main keeps the Phase 0
-// spelling exactly; a 'Result[nil]' main (additive) delegates to the runtime
-// entry shim zrt_run, which installs the root abort handler, runs main under a
-// root scope, and maps the Result to a process exit code.
+// cMain wraps zg_main in a C entry point.
+//
+// Whenever the runtime is linked, the entry runs under one of its root-handler shims
+// through a static WRAPPER carrying the top-level initialization. Two things follow from
+// the wrapper that did not before: an uncaught abort unwinds the top-level cleanup stack,
+// running every pending `defer`, instead of reaching zrt_unwind_abort with no handler at
+// all and taking its exit(1) last resort; and an `init()` or a module constant's
+// initializer is INSIDE that handler, where straight-line emission left it outside.
+//
+// A program that needs no runtime keeps the Phase 0 spelling exactly, byte for byte. It
+// has nothing for a handler to do: a `defer` needs the runtime and so does every raise, so
+// its cleanup stack cannot be non-empty.
 func (e *emitter) cMain(main *sema.FuncSig) {
 	takesArgs := len(main.Params) == 1
+	if e.needsRuntime {
+		e.cMainGuarded(main, takesArgs)
+		return
+	}
 	if takesArgs {
 		// A main that takes the command-line args needs argc/argv, so the C entry grows
 		// its parameters and builds the `list[str]` main receives by value.
@@ -657,15 +669,10 @@ func (e *emitter) cMain(main *sema.FuncSig) {
 	// entry stays byte-identical.
 	e.emitInitCalls()
 	if takesArgs {
-		// concurrency + args is rejected above, so only the non-scheduler shapes reach
-		// here. main owns the list as its by-value parameter and frees it at scope exit.
 		e.line("zrt_list zg_args = zrt_os_args(argc, argv);")
-		switch {
-		case isResultNil(main.Ret):
-			e.line("return zrt_run_args(zg_main, zg_args);")
-		case main.Ret == sema.Int:
+		if main.Ret == sema.Int {
 			e.line("return (int)zg_main(zg_args);")
-		default:
+		} else {
 			e.line("zg_main(zg_args);")
 			e.line("return 0;")
 		}
@@ -673,22 +680,93 @@ func (e *emitter) cMain(main *sema.FuncSig) {
 		e.line("}")
 		return
 	}
-	switch {
-	case e.concurrency:
-		// A concurrent program runs main as the first coroutine under the scheduler; the
-		// scheduler drains the run queue and maps main's outcome to the exit code. One shim
-		// per return shape, named from the same three-way question the plain entries ask.
-		e.line(fmt.Sprintf("return %s(zg_main);", schedEntry(main.Ret)))
-	case isResultNil(main.Ret):
-		e.line("return zrt_run(zg_main);")
-	case main.Ret == sema.Int:
+	if main.Ret == sema.Int {
 		e.line("return (int)zg_main();")
-	default:
+	} else {
 		e.line("zg_main();")
 		e.line("return 0;")
 	}
 	e.indent--
 	e.line("}")
+}
+
+// cMainGuarded is cMain for a program that links the runtime: a static wrapper holding the
+// initialization and the call to main, and the shim that runs it under the root handler.
+//
+// The shim is the ONLY thing that differs between a concurrent program and a plain one —
+// the scheduler's family runs the wrapper as coroutine 0 and drains the run queue
+// afterwards, entry.c's family runs it here — which is what keeps the two from drifting
+// apart again.
+func (e *emitter) cMainGuarded(main *sema.FuncSig, takesArgs bool) {
+	ret, call := "void", "zg_main"
+	switch {
+	case isResultNil(main.Ret):
+		ret = "zrt_result_nil"
+	case main.Ret == sema.Int:
+		ret = "int64_t"
+	}
+	param, arg := "void", ""
+	if takesArgs {
+		param, arg = "zrt_list zg_args", "zg_args"
+	}
+	e.line(fmt.Sprintf("static %s __zerg_entry(%s) {", ret, param))
+	e.indent++
+	e.emitInitCalls()
+	if ret == "void" {
+		e.line(fmt.Sprintf("%s(%s);", call, arg))
+	} else {
+		e.line(fmt.Sprintf("return %s(%s);", call, arg))
+	}
+	e.indent--
+	e.line("}")
+	e.line("")
+
+	if takesArgs {
+		// concurrency + args is rejected above, so only the non-scheduler shapes reach
+		// here. main owns the list as its by-value parameter and frees it at scope exit,
+		// so the unwind that runs on either path frees it too.
+		e.line("int main(int argc, char **argv) {")
+		e.indent++
+		e.line(fmt.Sprintf("return %s(__zerg_entry, zrt_os_args(argc, argv));", argsEntry(main.Ret)))
+		e.indent--
+		e.line("}")
+		return
+	}
+	e.line("int main(void) {")
+	e.indent++
+	e.line(fmt.Sprintf("return %s(__zerg_entry);", plainEntry(main.Ret, e.concurrency)))
+	e.indent--
+	e.line("}")
+}
+
+// plainEntry names the shim for a main taking no arguments: the scheduler's when the
+// program is concurrent, entry.c's when it is not, and one per return shape either way.
+func plainEntry(ret sema.Type, concurrency bool) string {
+	if concurrency {
+		return schedEntry(ret)
+	}
+	switch {
+	case isResultNil(ret):
+		return "zrt_run"
+	case ret == sema.Int:
+		return "zrt_main_run_int"
+	default:
+		return "zrt_main_run_nil"
+	}
+}
+
+// argsEntry is plainEntry for a main that takes the command-line args. There is no
+// scheduler shim that carries an argument, which is why concurrency + args is refused
+// before this is reached.
+func argsEntry(ret sema.Type) string {
+	switch {
+	case isResultNil(ret):
+		return "zrt_run_args"
+	case ret == sema.Int:
+		return "zrt_main_run_args_int"
+	default:
+		return "zrt_main_run_args"
+	}
 }
 
 // schedEntry names the scheduler program-entry shim for a main return shape (sched.c).

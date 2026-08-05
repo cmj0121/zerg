@@ -233,7 +233,7 @@ fn subst_expr(names: list[str], args: list[Ty], e: Expr) -> Expr {
 	return match e {
 		EUnary(o, x) => EUnary(o, subst_expr(names, args, x))
 		EBinary(o, a, b) => EBinary(o, subst_expr(names, args, a), subst_expr(names, args, b))
-		ECall(nm, xs) => ECall(nm, subst_exprs(names, args, xs))
+		ECall(nm, xs, ts) => ECall(nm, subst_exprs(names, args, xs), subst_tys(names, args, ts))
 		EField(x, f) => EField(subst_expr(names, args, x), f)
 		EOptChain(x, f) => EOptChain(subst_expr(names, args, x), f)
 		ETry(x) => ETry(subst_expr(names, args, x))

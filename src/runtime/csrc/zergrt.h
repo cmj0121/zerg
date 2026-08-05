@@ -712,6 +712,11 @@ static inline int64_t zrt_floordiv_f(double a, double b) {
  * raises EncodingError on violation, going FROM a str never fails. */
 zrt_list zrt_str_bytes(const char *s);
 zrt_list zrt_str_runes(const char *s);
+/* zrt_str_dup copies a C string into a managed cell. It is how an `Err`'s message is read:
+ * a zrt_err's msg may be a managed payload, an immortal literal cell, or a plain string
+ * literal the runtime raised with, and only a copy is correct for all three. */
+const char *zrt_str_dup(const char *s);
+
 const char *zrt_str_from_bytes(zrt_list bytes);
 const char *zrt_str_from_runes(zrt_list runes);
 
@@ -911,6 +916,17 @@ int zrt_run(zrt_main_fn fn);
 
 /* zrt_run_args is zrt_run for a main that takes the command-line args list. */
 int zrt_run_args(zrt_main_args_fn fn, zrt_list args);
+
+/* zrt_main_run_nil / _int / _args are zrt_run for the three entry shapes that answer no
+ * Result — `fn main()`, `fn main() -> int` and `fn main(args)`. Each arms the same root
+ * handler, so an uncaught abort unwinds the top-level cleanup stack (running every pending
+ * `defer`) and answers 1; the _int form carries main's own value out when it returns
+ * normally. The function they take is the emitter's entry WRAPPER, which is what puts the
+ * top-level constant initialization and every `init()` inside the handler too. */
+int zrt_main_run_nil(void (*fn)(void));
+int zrt_main_run_int(int64_t (*fn)(void));
+int zrt_main_run_args(void (*fn)(zrt_list), zrt_list args);
+int zrt_main_run_args_int(int64_t (*fn)(zrt_list), zrt_list args);
 
 /* zrt_os_args builds the `list[str]` a `fn main(args: list[str])` receives from the C
  * entry's argc/argv, skipping the program name (argv[0]). */

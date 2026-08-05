@@ -206,13 +206,6 @@ scope 上的副作用」的 procedural 工具——放鎖、flush buffer、關�
 }
 ```
 
-> **[deviation]** 一次到達 `main` 而未被捕捉的 abort,**不會**跑任何待決的 `defer`。
-> `fn main() { defer say("bye")  raise ValueError("boom") }` 把 `boom` 寫到標準錯誤、以 `1` 結束,而那個 `defer`
-> 什麼都沒印。其餘每一條離開路徑都有效:正常回傳、提早 `return`、迴圈的每一次迭代,以及——正是它把這個缺陷藏起來的
-> ——被外層 `guard` 捕捉的一次 `raise`,那條 unwind 路徑上的 defer 確實會跑。只有最後那一次 unwind、也就是離開
-> `main` 的那一次會跳過它們,所以一個會捕捉自己 abort 的測試看到的是規範中的行為,而一個不捕捉的程式根本沒機會把
-> 它看到的報出來。這也與 [Conformance](../conformance.zh-TW.md) 中 runtime abort 契約的第 2 步相牴觸。
-
 一個 block 內多個 `defer` 以**後登記先跑**執行，與 scope-owned 的釋放及 `Ref` 的 drop 交錯、依建構的逆序進行，於是
 拆解正好鏡射建構。三者共用一條軸——清理**何時**觸發：`del` **當下**撤銷一個名字；`defer` 在**本 block** 退出時
 觸發；`Ref[T]` 的 drop 在**最後一個持有者**退出時觸發。分界只有一個問題——資源會不會逃出它的 scope？**不會 →

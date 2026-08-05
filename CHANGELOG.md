@@ -28,8 +28,9 @@ program that reads Zerg and became a Zerg program that reads Zerg.
   while both spellings emitted the same C.
 - **Memory is scope-owned with no tracing GC.** Values are freed at scope exit on every path including an
   abort unwind caught by a `guard`; lists are copy-on-write behind an atomic refcount; two names of a value
-  type never alias. An uncaught abort leaving `main` is the one path that skips its `defer`s — a deviation,
-  not a design.
+  type never alias. Every exit that UNWINDS runs its pending `defer`s, including the uncaught abort that
+  leaves `main` — which for a long time was the one that did not. `os.exit` and a coroutine abandoned at
+  program end do not unwind, and say so where they are documented.
 - **A form is implemented or refused by name** — the standing contract, and this release is the first to
   MEASURE it rather than assert it. `make refuse` pins 141 refusals and `make reject` pins 159 ill-formed
   programs the compiler turns away itself. The measurement also found where the contract is broken today, and

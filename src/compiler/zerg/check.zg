@@ -56,6 +56,66 @@ fn chk_at_place(mut &em: Emitter, path: str, line: int, col: int, msg: str) {
 	em.diags.append(Diag(path, line, col, msg))
 }
 
+# --- visibility -------------------------------------------------------------------
+#
+# `pub` is the one visibility marker, and until now nothing read it. Every module flattens
+# into one namespace, so a call to another module's module-private function resolved exactly
+# as a call to its own — `pub` was parsed, carried on the declaration, and consulted by the
+# linter alone.
+#
+# A MODULE IS A DIRECTORY, so the question is answered by comparing the directory a
+# declaration was read from with the directory the reference is in. That is the whole of the
+# rule this compiler enforces: the package layer above it — package-internal versus
+# package-public, and the root module's re-export surface — needs a package to exist first,
+# and none does.
+#
+# The entry file's own directory is deliberately NOT a module here. A file beside the entry
+# is not compiled into the build at all, so nothing in it can be referenced and there is
+# nothing for this rule to say about it.
+fn c_mod_of(path: str) -> str {
+	b := list[byte](path)
+	mut cut := -1
+	mut i := 0
+	for i < b.len() {
+		if b[i] == b'/' {
+			cut = i
+		}
+		i = i + 1
+	}
+	return "" if cut < 0
+
+	mut out: list[byte] = []
+	mut j := 0
+	for j < cut {
+		out.append(b[j])
+		j = j + 1
+	}
+	return str(out)
+}
+
+# chk_visible is the rule. It is quiet on a `pub` declaration, on one from the module doing
+# the reading, and on one whose module is unknown — a generated declaration (a `derive`d
+# impl, a monomorphized specialization) carries the path of whatever asked for it, and a
+# rule that guessed there would refuse programs for a reason the reader cannot see.
+fn chk_visible(mut &em: Emitter, name: str, decl_mod: str, is_pub: bool) {
+	return if is_pub
+
+	# A declaration with no module is a GENERATED one — a `derive`d impl, a monomorphized
+	# specialization — carrying the path of whatever asked for it. There is no module a
+	# reader could have written, so there is nothing to refuse them for.
+	return if decl_mod == ""
+
+	here := c_mod_of(em.at_path)
+	return if here == decl_mod
+
+	# And the reading module is unknown where the code being emitted belongs to no statement
+	# of its own: a module constant's initializer is emitted into the ENTRY's wrapper, and
+	# c_const_assigns clears the path rather than let this rule answer with the entry's.
+	return if here == ""
+
+	chk_at(em, f"`{name}` is not a public member of module `{c_last_segment(decl_mod)}`")
+}
+
 # chk_note is chk_at for something that is NOT an error. `L5xx` is the family that needs it:
 # every implicit conversion is a lint finding, and every one of them is also a legal program,
 # so it goes on a list that does not fail the build.
